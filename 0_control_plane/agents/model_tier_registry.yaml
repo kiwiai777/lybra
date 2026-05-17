@@ -1,0 +1,125 @@
+---
+version: 0.2
+updated_at: 2026-05-01
+
+model_tiers:
+  L1:
+    name: lightweight_structured_work
+    purpose: High-frequency, low-risk, structured work with verifiable outputs.
+    use_for:
+      - entity extraction
+      - tagging and classification
+      - simple summarization
+      - inbox candidate generation
+      - low-risk content variants
+      - routine status scanning
+    default_write_targets:
+      - 4_inbox/
+      - candidate reports
+      - draft-only artifacts
+    formal_memory_write: false
+    external_action_allowed: false
+    forbidden_for:
+      - final strategic decisions
+      - formal memory commits or overwrites
+      - pricing recommendations
+      - key customer commitments
+      - production or deployment changes
+      - irreversible repository history changes
+    escalation_targets:
+      - L2
+      - L3
+
+  L2:
+    name: synthesis_and_review_drafts
+    purpose: Medium-risk synthesis, review drafts, and structured reasoning that may feed later decisions.
+    use_for:
+      - multi-source synthesis
+      - review drafts
+      - daily intelligence summaries
+      - customer issue grouping
+      - sales material drafts
+      - project summaries
+      - moderate technical review
+    default_write_targets:
+      - review artifacts
+      - draft reports
+      - candidate plans
+      - non-final project notes
+    formal_memory_write: false
+    external_action_allowed: false
+    forbidden_for:
+      - final strategic decisions
+      - final formal memory promotion
+      - final pricing decisions
+      - high-risk customer-facing commitments
+      - release or deployment approval
+    escalation_targets:
+      - L3
+
+  L3:
+    name: strategic_and_high_risk_reasoning
+    purpose: High-reliability reasoning for strategic, high-risk, formal conclusion, and major customer or repository decisions.
+    use_for:
+      - strategic reasoning
+      - formal conclusion candidates
+      - pricing recommendations
+      - key customer plans
+      - architecture decisions
+      - high-risk drafts
+      - complex code review
+      - release or git-risk review
+      - formal memory candidates
+    default_write_targets:
+      - formal memory candidates
+      - decision log candidates
+      - stage archive drafts
+      - strategic report drafts
+    formal_memory_write: candidate_only
+    external_action_allowed: owner_approval_required
+    forbidden_for:
+      - final formal commit without required Owner approval
+      - formal memory overwrite without required Owner approval
+      - external publication without required Owner approval
+      - live production action without required Owner approval
+    requires_owner_approval_for:
+      - formal memory commit
+      - formal memory overwrite
+      - external publication
+      - pricing commitment
+      - key customer commitment
+      - live deployment or production action
+      - destructive repository operation
+
+risk_defaults:
+  low:
+    minimum_model_tier: L1
+  medium:
+    minimum_model_tier: L2
+  high:
+    minimum_model_tier: L3
+  critical:
+    minimum_model_tier: L3
+    owner_approval_required: true
+
+escalation_defaults:
+  from_L1:
+    to:
+      - L2
+      - L3
+    triggers:
+      - low confidence
+      - source conflict
+      - customer impact detected
+      - formal memory candidate detected
+      - task exceeds structured low-risk scope
+  from_L2:
+    to:
+      - L3
+    triggers:
+      - strategic decision required
+      - production risk detected
+      - pricing or commitment involved
+      - final customer-facing output
+      - formal memory promotion candidate
+      - Owner requests high confidence

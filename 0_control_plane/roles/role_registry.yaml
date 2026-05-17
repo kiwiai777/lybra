@@ -1,0 +1,151 @@
+---
+version: 0.1
+updated_at: 2026-04-26
+roles:
+  - id: owner.kiwi
+    display_name: Kiwi
+    status: active
+    actor: human
+    availability: non_24h
+    environment: any
+    primary_role: commander
+    can_act_as:
+      - owner
+      - final_decider
+      - commander
+    requires_resume_on_exit: false
+
+  - id: assistant.chatgpt
+    display_name: Kiwi_gpt
+    status: active
+    actor: chatgpt
+    availability: non_24h
+    environment: web
+    primary_role: general_planner
+    can_act_as:
+      - general_planner
+      - task_card_writer
+      - strategy_helper
+      - cross_project_planner
+    requires_resume_on_exit: false
+
+  - id: assistant.claude_ai
+    display_name: Kiwi_claude
+    status: active
+    actor: claude.ai
+    availability: non_24h
+    environment: web
+    primary_role: project_planner
+    can_act_as:
+      - project_planner
+      - architecture_helper
+      - task_card_writer
+      - technical_planner
+    requires_resume_on_exit: false
+
+  - id: dev.claude_code.local
+    display_name: Dev_cc
+    status: active
+    actor: claude_code
+    availability: non_24h
+    environment: local_wsl_ubuntu
+    primary_role: engineering
+    can_act_as:
+      - coder
+      - reviewer
+      - auditor
+      - tester
+      - refactorer
+      - doc_updater
+    requires_resume_on_exit: true
+
+  - id: dev.codex.local
+    display_name: Dev_codex
+    status: active
+    actor: codex
+    availability: non_24h
+    environment: local_wsl_ubuntu
+    primary_role: engineering
+    can_act_as:
+      - coder
+      - reviewer
+      - auditor
+      - tester
+      - refactorer
+      - doc_updater
+    requires_resume_on_exit: true
+
+  - id: ops.openclaw.local
+    display_name: Con龙虾
+    status: active
+    actor: openclaw
+    availability: non_24h
+    environment: local_wsl_ubuntu
+    primary_role: configuration_operator
+    can_act_as:
+      - config_manager
+      - system_operator
+      - documentation_syncer
+      - agent_upgrade_operator
+      - model_quota_monitor
+      - non_code_content_operator
+      - article_operator
+      - ppt_operator
+      - image_operator
+      - video_operator
+      - material_production_operator
+      - operational_content_producer
+    requires_resume_on_exit: true
+
+  - id: project.hermes.local
+    display_name: Project爱马仕
+    status: active
+    actor: hermes
+    availability: non_24h
+    environment: local_wsl_ubuntu
+    primary_role: project_implementer
+    can_act_as:
+      - non_code_engineering_operator
+      - ai_integration_solution_operator
+      - domain_project_executor
+      - demo_builder
+    requires_resume_on_exit: true
+
+  - id: biz.openclaw.cloud
+    display_name: Biz龙虾
+    status: active
+    actor: openclaw
+    availability: 24h
+    environment: remote_tencent_cloud
+    host:
+      name: kiwiai.cloud
+      ssh_aliases:
+        - kiwiai.cloud
+        - smartup
+    primary_role: business_operator
+    can_act_as:
+      - operations_operator
+      - sales_operator
+      - project_growth_operator
+      - campaign_executor
+    requires_resume_on_exit: false
+
+  - id: info.hermes.cloud
+    display_name: Info爱马仕
+    status: active
+    actor: hermes
+    availability: 24h
+    environment: remote_tencent_cloud
+    host:
+      name: kiwiai.cloud
+      ssh_aliases:
+        - kiwiai.cloud
+        - smartup
+    primary_role: intelligence_and_customer_operator
+    can_act_as:
+      - intelligence_analyst
+      - research_operator
+      - presales_operator
+      - aftersales_operator
+      - long_running_researcher
+    requires_resume_on_exit: false

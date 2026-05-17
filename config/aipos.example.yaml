@@ -1,0 +1,33 @@
+# Example Lybra/AIPOS runtime config.
+# Copy this file outside the product repo and adjust local paths.
+
+product_root: /home/owner/lybra
+workspace_root: /home/owner/ai-project-os
+
+data_dirs:
+  projects: 2_projects
+  tasks: 5_tasks
+  queue: 5_tasks/queue
+  drafts: 5_tasks/drafts
+  records: 5_tasks/records
+  orchestration: 5_tasks/orchestration
+  context_packs: context_packs
+
+project_docs:
+  current_canonical: 2_projects/lybra
+  legacy_canonical: 2_projects/ai-project-os
+  migration_status: cutover_complete
+
+runtime:
+  board_host: 127.0.0.1
+  board_port: 8765
+  allow_autonomous_planner_runtime: false
+  allow_autonomous_git_push: false
+  require_owner_decision_gate: true
+  require_independent_audit: true
+
+deployment:
+  mode: owner_private
+  public_signup_enabled: false
+  multi_tenant_enabled: false
+  database_required: false

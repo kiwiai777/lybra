@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIPOS Board Local UI</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>AIPOS Board Local UI</h1>
+    <p>Local-only development/debugging.</p>
+    <nav class="mobile-review-nav" aria-label="Owner review shortcuts">
+      <a href="#owner-review-queue">Queue</a>
+      <a href="#owner-review-needs-owner">Needs Owner</a>
+      <a href="#owner-review-decisions">Decisions</a>
+      <a href="#owner-review-timeline">Timeline</a>
+      <a href="#owner-review-drafts">Drafts</a>
+      <a href="#owner-review-records">Records</a>
+      <a href="#owner-review-agents">Agents</a>
+    </nav>
+    <button id="refresh">Refresh All</button>
+  </header>
+
+  <main>
+    <section>
+      <h2>System Status</h2>
+      <button class="panel-refresh" data-route-id="health">Refresh Health</button>
+      <pre id="health">loading...</pre>
+    </section>
+
+    <section id="owner-review-queue" class="owner-review-section">
+      <h2>Task Queue Summary</h2>
+      <button class="panel-refresh" data-route-id="queue">Refresh Queue</button>
+      <div id="task-list" class="task-list"></div>
+      <pre id="queue">loading...</pre>
+    </section>
+
+    <section id="owner-review-needs-owner" class="owner-review-section">
+      <h2>Needs Owner Summary</h2>
+      <button class="panel-refresh" data-route-id="needs-owner">Refresh Needs Owner</button>
+      <div id="needs-owner-list" class="detail-list"></div>
+      <pre id="needs-owner">loading...</pre>
+    </section>
+
+    <section>
+      <h2>Validation Summary</h2>
+      <button class="panel-refresh" data-route-id="validate">Refresh Validate</button>
+      <div id="validation-list" class="detail-list"></div>
+      <pre id="validate">loading...</pre>
+    </section>
+
+    <section id="owner-review-agents" class="owner-review-section">
+      <h2>Agents Summary</h2>
+      <button class="panel-refresh" data-route-id="agents">Refresh Agents</button>
+      <div id="agents-list" class="detail-list"></div>
+      <pre id="agents">loading...</pre>
+    </section>
+
+    <section>
+      <h2>Drafts Summary</h2>
+      <button class="panel-refresh" data-route-id="drafts">Refresh Drafts</button>
+      <pre id="drafts">loading...</pre>
+    </section>
+
+    <section id="owner-review-drafts" class="owner-review-section">
+      <h2>Planner Draft Review Desk</h2>
+      <button class="panel-refresh" data-route-id="planner-drafts-review">Refresh Planner Drafts</button>
+      <div id="planner-drafts-review-list" class="planner-draft-list">loading...</div>
+      <pre id="planner-drafts-review">loading...</pre>
+      <pre id="planner-drafts-review-detail">Select a planner draft to review readiness.</pre>
+    </section>
+
+    <section id="owner-review-records" class="owner-review-section">
+      <h2>Records Summary</h2>
+      <button class="panel-refresh" data-route-id="records">Refresh Records</button>
+      <div id="records-list" class="detail-list"></div>
+      <pre id="records">loading...</pre>
+    </section>
+
+    <section id="owner-review-summary" class="owner-review-section">
+      <h2>Orchestration Summary Preview</h2>
+      <div class="toolbar">
+        <input id="orchestration-summary-id" type="text" placeholder="orchestration_id">
+        <button id="load-orchestration-summary">Preview Summary</button>
+      </div>
+      <div id="orchestration-summary-card" class="summary-card">Enter an orchestration id and preview.</div>
+      <pre id="orchestration-summary">Enter an orchestration id and preview.</pre>
+    </section>
+
+    <section id="owner-review-timeline" class="owner-review-section">
+      <h2>Orchestration Timeline</h2>
+      <div class="toolbar">
+        <input id="orchestration-timeline-id" type="text" placeholder="orchestration_id">
+        <button id="load-orchestration-timeline">Load Timeline</button>
+      </div>
+      <div id="orchestration-timeline-list" class="timeline-list">Enter an orchestration id and load timeline.</div>
+      <pre id="orchestration-timeline">Enter an orchestration id and load timeline.</pre>
+    </section>
+
+    <section id="owner-review-context" class="owner-review-section">
+      <h2>Context Pack Preview</h2>
+      <div class="draft-grid">
+        <select id="context-pack-source">
+          <option value="task_id">task_id</option>
+          <option value="path">path</option>
+          <option value="orchestration_id">orchestration_id</option>
+        </select>
+        <input id="context-pack-selector" type="text" placeholder="task id, path, or orchestration_id">
+      </div>
+      <div class="toolbar">
+        <button id="context-pack-load-selected">Use Selected Task</button>
+        <button id="context-pack-preview">Preview Context</button>
+      </div>
+      <div id="context-pack-card" class="context-pack-card">Select a task or enter a source to preview context.</div>
+      <pre id="context-pack-result">Context Pack preview is read-only.</pre>
+    </section>
+
+
+    <section>
+      <h2>Planner Loop Control Desk</h2>
+      <div class="toolbar">
+        <input id="planner-loop-id" type="text" placeholder="orchestration_id">
+        <input id="planner-loop-actor" type="text" value="owner" placeholder="actor">
+        <button id="load-planner-loop">Preview Loop Step</button>
+      </div>
+      <div id="planner-loop-card" class="planner-loop-card">Enter an orchestration id and preview the next safe step.</div>
+      <pre id="planner-loop-result">Enter an orchestration id and preview the next safe step.</pre>
+    </section>
+
+    <section id="owner-review-decisions" class="owner-review-section">
+      <h2>Owner Decision Gate</h2>
+      <button class="panel-refresh" data-route-id="owner-decisions-review">Refresh Decisions</button>
+      <div id="owner-decisions-list" class="owner-decision-list">loading...</div>
+      <pre id="owner-decisions-review">loading...</pre>
+      <pre id="owner-decisions-detail">Select an Owner decision request.</pre>
+    </section>
+
+
+    <section>
+      <h2>Owner Decision Resolution Review</h2>
+      <div class="draft-grid">
+        <input id="owner-resolution-request-id" type="text" placeholder="request_id">
+        <input id="owner-resolution-orchestration-id" type="text" placeholder="orchestration_id">
+        <input id="owner-resolution-actor" type="text" value="owner" placeholder="actor">
+        <input id="owner-resolution-forum-ref" type="text" placeholder="forum_thread_ref">
+        <input id="owner-resolution-evidence-ref" type="text" placeholder="owner decision evidence ref">
+        <input id="owner-resolution-decision-type" type="text" value="owner_review" placeholder="decision_type">
+        <input id="owner-resolution-related-task-id" type="text" placeholder="related_task_id">
+        <input id="owner-resolution-related-iteration-id" type="text" placeholder="related_iteration_id">
+      </div>
+      <select id="owner-resolution-decision">
+        <option value="approved">approved</option>
+        <option value="rejected">rejected</option>
+        <option value="scope_reduced">scope_reduced</option>
+        <option value="needs_revision">needs_revision</option>
+        <option value="deferred">deferred</option>
+      </select>
+      <textarea id="owner-resolution-reason" rows="4" placeholder="decision_reason"></textarea>
+      <div class="toolbar">
+        <button id="owner-resolution-load-selected">Load Selected Decision</button>
+        <button id="owner-resolution-review">Review Resolution</button>
+      </div>
+      <div id="owner-resolution-card" class="owner-resolution-card">Select an Owner decision request or fill the form.</div>
+      <pre id="owner-resolution-result">Review an Owner decision resolution plan.</pre>
+    </section>
+
+    <section>
+      <h2>Task Detail</h2>
+      <div class="toolbar">
+        <input id="task-selector" type="text" placeholder="task_id or repo-relative path">
+        <button id="load-task">Open</button>
+      </div>
+      <pre id="task-detail">Select a task.</pre>
+    </section>
+
+    <section>
+      <h2>Needs Owner Detail</h2>
+      <button id="needs-owner-load-task" class="secondary-action" disabled>Load Task Detail</button>
+      <pre id="needs-owner-detail">Select a needs-owner item.</pre>
+    </section>
+
+    <section>
+      <h2>Validation Detail</h2>
+      <button id="validation-load-task" class="secondary-action" disabled>Load Task Detail</button>
+      <pre id="validation-detail">Select a validation row.</pre>
+    </section>
+
+    <section>
+      <h2>Records Detail</h2>
+      <pre id="records-detail">Select a session record or claim log.</pre>
+    </section>
+
+    <section>
+      <h2>Agents Detail</h2>
+      <pre id="agents-detail">Select a profile or runtime instance.</pre>
+    </section>
+
+    <section>
+      <h2>Task Preview</h2>
+      <div class="toolbar">
+        <input id="preview-actor" type="text" value="planner.local.001" placeholder="actor">
+        <button id="load-preview">Preview</button>
+      </div>
+      <pre id="task-preview">Select a task and actor.</pre>
+    </section>
+
+    <section>
+      <h2>Controlled Execute</h2>
+      <div class="toolbar">
+        <button id="execute-dry-run">Dry-Run Claim</button>
+        <button id="execute-confirm" disabled>Execute</button>
+      </div>
+      <label class="confirm-row">
+        <input id="owner-confirmed" type="checkbox">
+        Owner confirmed
+      </label>
+      <pre id="execute-result">Run a claim dry-run first.</pre>
+    </section>
+
+    <section>
+      <h2>Draft Create</h2>
+      <div class="draft-grid">
+        <input id="draft-task-id" type="text" placeholder="task_id">
+        <input id="draft-title" type="text" placeholder="title">
+        <input id="draft-assigned-to" type="text" value="planner.local.001" placeholder="assigned_to">
+        <input id="draft-agent-instance" type="text" value="planner.local.001" placeholder="agent_instance">
+        <input id="draft-context-bundle" type="text" value="planner.local.001" placeholder="context_bundle">
+        <input id="draft-task-mode" type="text" value="code" placeholder="task_mode">
+        <input id="draft-model-tier" type="text" value="L2" placeholder="model_tier">
+        <input id="draft-output-target" type="text" value="web/board/" placeholder="output_target">
+        <input id="draft-artifact-policy" type="text" value="formal_write" placeholder="artifact_policy">
+      </div>
+      <textarea id="draft-body" rows="8">## Goal
+
+- Describe the task goal.
+
+## Acceptance Criteria
+
+- Define the observable outcome.</textarea>
+      <div class="toolbar">
+        <button id="draft-dry-run">Dry-Run Draft</button>
+        <button id="draft-create-confirm" disabled>Create Draft</button>
+      </div>
+      <pre id="draft-create-result">Fill the draft fields and run dry-run.</pre>
+    </section>
+
+    <section>
+      <h2>Draft Publish</h2>
+      <div class="toolbar">
+        <input id="draft-publish-path" type="text" placeholder="5_tasks/drafts/example.md">
+        <button id="draft-publish-dry-run">Dry-Run Publish</button>
+      </div>
+      <button id="draft-publish-confirm" disabled>Publish Draft</button>
+      <pre id="draft-publish-result">Enter a draft path and run dry-run.</pre>
+    </section>
+
+    <section>
+      <h2>Planner Draft Review</h2>
+      <div class="toolbar">
+        <input id="planner-draft-path" type="text" placeholder="5_tasks/drafts/planner/orchestration/subtask.md">
+        <button id="planner-draft-review">Review Planner Draft</button>
+      </div>
+      <button id="planner-draft-load-publish" disabled>Use In Draft Publish</button>
+      <pre id="planner-draft-result">Enter a planner draft path and review publish readiness.</pre>
+    </section>
+
+    <section>
+      <h2>Approved Planner Draft Publish</h2>
+      <div class="toolbar">
+        <input id="approved-planner-draft-path" type="text" placeholder="5_tasks/drafts/planner/orchestration/subtask.md">
+        <button id="approved-planner-draft-dry-run">Dry-Run Approved Publish</button>
+      </div>
+      <label class="confirm-row">
+        <input id="approved-planner-draft-confirmed" type="checkbox">
+        I reviewed Owner gates and the dry-run preview
+      </label>
+      <button id="approved-planner-draft-confirm" disabled>Confirm Approved Publish</button>
+      <pre id="approved-planner-draft-result">Select an approved planner draft and run dry-run.</pre>
+    </section>
+
+    <section>
+      <h2>Parent Requirement</h2>
+      <div class="draft-grid">
+        <input id="parent-title" type="text" placeholder="title">
+        <input id="parent-project" type="text" value="lybra" placeholder="project">
+        <input id="parent-forum-ref" type="text" placeholder="forum_thread_ref">
+        <input id="parent-planner-agent" type="text" value="planner_agent" placeholder="planner_agent">
+        <input id="parent-planner-instance" type="text" value="planner.local.001" placeholder="planner_agent_instance">
+        <input id="parent-runtime-profile" type="text" value="local_process" placeholder="planner_runtime_profile">
+        <input id="parent-model-tier" type="text" value="L3" placeholder="planner_model_tier">
+        <input id="parent-max-iterations" type="text" value="5" placeholder="max_iterations">
+      </div>
+      <textarea id="parent-owner-goal" rows="8">Describe the fuzzy Owner goal or parent requirement.</textarea>
+      <button id="parent-preview">Preview Parent Requirement</button>
+      <pre id="parent-preview-result">Fill the parent requirement fields and preview.</pre>
+    </section>
+
+    <section>
+      <h2>Planner Tick</h2>
+      <div class="draft-grid">
+        <input id="tick-orchestration-id" type="text" placeholder="orchestration_id">
+        <input id="tick-parent-task-id" type="text" placeholder="parent_task_id">
+        <input id="tick-forum-ref" type="text" placeholder="forum_thread_ref">
+        <input id="tick-planner-agent" type="text" value="planner_agent" placeholder="planner_agent">
+        <input id="tick-planner-instance" type="text" value="planner.local.001" placeholder="planner_agent_instance">
+        <input id="tick-model-tier" type="text" value="L3" placeholder="planner_model_tier">
+        <input id="tick-iteration-number" type="text" value="1" placeholder="iteration_number">
+        <input id="tick-decision" type="text" value="continue" placeholder="decision">
+        <input id="tick-next-action" type="text" placeholder="next_expected_action">
+      </div>
+      <label class="confirm-row">
+        <input id="tick-combined-mode" type="checkbox">
+        Combined planner/executor
+      </label>
+      <label class="confirm-row">
+        <input id="tick-audit-handoff" type="checkbox">
+        Audit handoff needed
+      </label>
+      <textarea id="tick-decision-reason" rows="4">Describe the planner decision reason.</textarea>
+      <textarea id="tick-inputs-read" rows="4">Parent requirement
+Queue summary
+Draft summary</textarea>
+      <textarea id="tick-observations" rows="4">Describe visible observations for this planner tick.</textarea>
+      <textarea id="tick-needs-owner" rows="4" placeholder="needs_owner_reasons, one per line"></textarea>
+      <textarea id="tick-publish-candidates" rows="4" placeholder="publish_candidates, one per line"></textarea>
+      <textarea id="tick-repair-recommendations" rows="4" placeholder="repair_recommendations, one per line"></textarea>
+      <textarea id="tick-stop-conditions" rows="4" placeholder="stop_condition_hits, one per line"></textarea>
+      <div class="toolbar">
+        <button id="planner-tick-preview">Preview Planner Tick</button>
+        <button id="manual-planner-tick-preview">Preview Manual Flow</button>
+      </div>
+      <div id="manual-planner-tick-card" class="manual-tick-card">Fill the planner tick fields and preview manual flow.</div>
+      <pre id="planner-tick-result">Fill the planner tick fields and preview.</pre>
+      <pre id="manual-planner-tick-result">Preview a manual planner tick flow.</pre>
+    </section>
+
+    <section>
+      <h2>Planner Loop Persistence</h2>
+      <div class="draft-grid">
+        <select id="planner-persist-operation">
+          <option value="planner_iteration_append">planner_iteration_append</option>
+          <option value="orchestration_event_append">orchestration_event_append</option>
+        </select>
+        <input id="planner-persist-actor" type="text" value="planner.local.001" placeholder="actor">
+      </div>
+      <div class="toolbar">
+        <button id="planner-persist-load-iteration">Use Manual Tick Iteration</button>
+        <button id="planner-persist-load-event">Use Manual Tick Event</button>
+      </div>
+      <textarea id="planner-persist-payload" rows="10" placeholder="append payload JSON"></textarea>
+      <div class="toolbar">
+        <button id="planner-persist-dry-run">Dry-Run Append</button>
+        <button id="planner-persist-confirm" disabled>Confirm Append</button>
+      </div>
+      <label class="confirm-row">
+        <input id="planner-persist-owner-confirmed" type="checkbox">
+        I reviewed the append dry-run and approve this planner loop persistence write
+      </label>
+      <button id="planner-persist-refresh-handoff" disabled>Refresh Handoff Views</button>
+      <div id="planner-persist-handoff-card" class="planner-persist-card">Run a planner loop persistence dry-run to prepare handoff refresh.</div>
+      <pre id="planner-persist-result">Load a manual tick payload or paste append JSON, then run dry-run.</pre>
+    </section>
+
+    <section>
+      <h2>Forum Event Review</h2>
+      <div class="draft-grid">
+        <input id="event-orchestration-id" type="text" placeholder="orchestration_id">
+        <input id="event-type" type="text" value="planner_verdict_recorded" placeholder="event_type">
+        <input id="event-severity" type="text" value="info" placeholder="severity">
+        <input id="event-actor" type="text" value="planner.local.001" placeholder="actor">
+        <input id="event-source" type="text" value="web_board_forum_event_review" placeholder="source">
+        <input id="event-forum-ref" type="text" placeholder="forum_thread_ref">
+        <input id="event-related-task-id" type="text" placeholder="related_task_id">
+        <input id="event-related-subtask-id" type="text" placeholder="related_subtask_id">
+        <input id="event-related-iteration-id" type="text" placeholder="related_iteration_id">
+      </div>
+      <textarea id="event-summary" rows="3">Describe the forum-visible event summary.</textarea>
+      <textarea id="event-details" rows="4" placeholder="details"></textarea>
+      <textarea id="event-refs" rows="4" placeholder="refs, one per line"></textarea>
+      <button id="forum-event-review">Review Forum Event</button>
+      <pre id="forum-event-result">Fill the forum event fields and review persistence readiness.</pre>
+    </section>
+
+    <section>
+      <h2>Adapter Response Debug Panel</h2>
+      <button id="debug-toggle" class="secondary-action" aria-expanded="false">Show Debug</button>
+      <pre id="debug" hidden>loading...</pre>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

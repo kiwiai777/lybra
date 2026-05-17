@@ -1,0 +1,24 @@
+[Unit]
+Description=Lybra owner-private Board service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=owner
+Group=owner
+WorkingDirectory=/home/owner/lybra
+EnvironmentFile=/etc/lybra/lybra-board.env
+ExecStart=/usr/bin/python3 /home/owner/lybra/web/board/app.py --host 127.0.0.1 --port 8765 --repo-root /home/owner/ai-project-os
+Restart=on-failure
+RestartSec=5
+
+# Keep the Board private by default. Expose it through SSH tunnel or a private network only.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/owner/ai-project-os
+
+[Install]
+WantedBy=multi-user.target

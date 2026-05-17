@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.env
+task_cards/
+
+.codex/
+.codex
+
+._*

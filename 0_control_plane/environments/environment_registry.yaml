@@ -1,0 +1,31 @@
+version: 0.1
+updated_at: 2026-05-15
+shared_policy_refs:
+  server_directory_policy: 0_control_plane/environments/server_directory_policy.md
+  sandbox_runtime_abstraction_protocol: 0_control_plane/environments/sandbox_runtime_abstraction_protocol.md
+environments:
+  - id: any
+    notes: "Abstract environment for cross-platform roles."
+  - id: web
+    notes: "Web browser based interaction (SaaS LLM interfaces)."
+  - id: local_wsl_ubuntu
+    availability: non_24h
+    canonical_repo_path: ~/ai-project-os
+    notes:
+      - "Primary development, configuration, and implementation environment."
+      - "Affected by Owner schedule and local machine power state."
+  - id: remote_tencent_cloud
+    availability: 24h
+    policy_refs:
+      - 0_control_plane/environments/server_directory_policy.md
+      - 0_control_plane/environments/sandbox_runtime_abstraction_protocol.md
+    host:
+      name: kiwiai.cloud
+      ssh_aliases:
+        - kiwiai.cloud
+        - smartup
+    notes:
+      - "Primary environment for operations, sales, and long-term intelligence."
+      - "Supports 24h continuous tasks."
+      - "Long-running Kiwiai production services should follow the shared /opt/kiwiai/ server directory policy."
+      - "Future sandbox runtime adapters must follow the provider-agnostic sandbox runtime abstraction protocol before any provider is enabled."
