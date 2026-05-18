@@ -20,9 +20,37 @@ Lybra is extracted from the AI Project OS control-plane work. AI Project OS rema
 |---|---|---|
 | CLI | Scripting, CI-friendly checks, headless workflows | Implemented |
 | Local Dashboard / Board UI | Human review in a browser | Implemented for read paths and selected controlled write paths |
-| MCP Server | MCP-aware clients | Protocol finalized in AIPOS-96; implementation pending |
+| MCP Server | MCP-aware clients | Stdio read-only MVP implemented; HTTP/SSE and write tools pending |
 
 No surface is privileged. Future surfaces should translate to the same backend semantics instead of bypassing them.
+
+### MCP Server MVP
+
+The current MCP MVP is a local stdio server with four read-only tools:
+
+- `lybra_queue_list`
+- `lybra_task_preview`
+- `lybra_validate`
+- `lybra_context_pack_build`
+
+Manual client configuration example:
+
+```json
+{
+  "mcpServers": {
+    "lybra": {
+      "command": "python3",
+      "args": ["-m", "tools.mcp_server", "serve"],
+      "cwd": "<product-repo>",
+      "env": {
+        "AIPOS_WORKSPACE_ROOT": "<workspace>"
+      }
+    }
+  }
+}
+```
+
+The MVP does not register itself with clients, expose HTTP/SSE, or provide write tools.
 
 ## Core Concepts
 
@@ -73,16 +101,17 @@ Implemented today:
 - Local Board read paths and selected controlled write paths
 - Context Pack read-only preview path
 - Product/workspace root separation through environment configuration
+- MCP stdio read-only MVP for queue, task preview, validation, and Context Pack tools
 
 Protocol finalized, implementation pending or partial:
 
-- MCP server boundary and tool model: AIPOS-96
+- MCP server boundary and tool model beyond the stdio read-only MVP: AIPOS-96
 - Sandbox runtime abstraction: AIPOS-90
 - SessionStore schema and credential boundary: AIPOS-92
 - Vendor-neutral role catalog: AIPOS-97
 - Planner autonomy tiers, session tree primitives, and related governance
 
-Lybra does not currently ship a public hosted service, managed cloud runtime, remote database, autonomous planner runtime, or implemented MCP server.
+Lybra does not currently ship a public hosted service, managed cloud runtime, remote database, autonomous planner runtime, HTTP/SSE MCP transport, or MCP write tools.
 
 ## Getting Started / Workspace Root
 
