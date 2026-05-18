@@ -52,6 +52,16 @@ Manual client configuration example:
 
 The MVP does not register itself with clients, expose HTTP/SSE, or provide write tools.
 
+### Local Docker Sandbox MVP
+
+The current sandbox runtime MVP is a local Docker adapter for one bounded ephemeral worker run:
+
+```bash
+python3 -m tools.sandbox_runtime local-docker run --dry-run --image <local-image> -- echo hello
+```
+
+The adapter requires an explicit image, uses `--pull never`, defaults to `--network none`, mounts any supplied workspace path read-only, injects no credentials, and returns an in-memory structured report. It does not create Dockerfiles, Docker Compose files, services, write mounts, scheduler loops, MCP bridges, or durable runtime records.
+
 ## Core Concepts
 
 - **Task cards** describe units of work under a workspace task queue.
@@ -102,11 +112,12 @@ Implemented today:
 - Context Pack read-only preview path
 - Product/workspace root separation through environment configuration
 - MCP stdio read-only MVP for queue, task preview, validation, and Context Pack tools
+- Local Docker sandbox runtime MVP for explicit, bounded, read-only ephemeral worker runs
 
 Protocol finalized, implementation pending or partial:
 
 - MCP server boundary and tool model beyond the stdio read-only MVP: AIPOS-96
-- Sandbox runtime abstraction: AIPOS-90
+- Sandbox runtime abstraction beyond the local Docker MVP: AIPOS-90
 - SessionStore schema and credential boundary: AIPOS-92
 - Vendor-neutral role catalog: AIPOS-97
 - Planner autonomy tiers, session tree primitives, and related governance
