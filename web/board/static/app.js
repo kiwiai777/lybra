@@ -2498,6 +2498,19 @@ function updateDebugPanel() {
   document.getElementById("debug").textContent = JSON.stringify(latestDebug, null, 2);
 }
 
+function setOrchestrationSummaryRawVisible(visible) {
+  const panel = document.getElementById("orchestration-summary");
+  const toggle = document.getElementById("orchestration-summary-raw-toggle");
+  panel.hidden = !visible;
+  toggle.textContent = visible ? "Hide Raw JSON" : "Show Raw JSON";
+  toggle.setAttribute("aria-expanded", String(visible));
+}
+
+function toggleOrchestrationSummaryRaw() {
+  const panel = document.getElementById("orchestration-summary");
+  setOrchestrationSummaryRawVisible(panel.hidden);
+}
+
 function toggleDebug() {
   const debug = document.getElementById("debug");
   const toggle = document.getElementById("debug-toggle");
@@ -2548,6 +2561,7 @@ for (const button of document.querySelectorAll(".panel-refresh")) {
 document.getElementById("load-task").addEventListener("click", loadTaskDetail);
 document.getElementById("load-preview").addEventListener("click", loadTaskPreview);
 document.getElementById("load-orchestration-summary").addEventListener("click", loadOrchestrationSummary);
+document.getElementById("orchestration-summary-raw-toggle").addEventListener("click", toggleOrchestrationSummaryRaw);
 document.getElementById("load-orchestration-timeline").addEventListener("click", loadOrchestrationTimeline);
 document.getElementById("load-planner-loop").addEventListener("click", loadPlannerLoopMvp);
 document.getElementById("context-pack-load-selected").addEventListener("click", loadSelectedTaskForContextPack);
