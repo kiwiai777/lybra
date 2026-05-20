@@ -58,6 +58,9 @@ class ValidatorRecordsJsonTests(unittest.TestCase):
             "approval_required",
             "owner_review_required",
             "risk_level",
+            "source_tag",
+            "client_tag",
+            "external_ref",
         )
         for key in optional_keys:
             if key in metadata and metadata[key] is not None:
@@ -96,6 +99,40 @@ class ValidatorRecordsJsonTests(unittest.TestCase):
         self.assertEqual(records_summary["tasks_with_record_issues"], 0)
         self.assertFalse(records_summary["records_root_exists"])
         self.assertEqual(report["records_diagnostics"], [])
+
+    def test_external_intake_metadata_is_optional_and_preserved(self) -> None:
+        self.write_task(
+            "AIPOS-107",
+            source_tag="external_owner_inbox",
+            client_tag="alpha_client",
+            external_ref="extmsg:abc123",
+        )
+
+        report = self.build_validate_json()
+        task = report["tasks"][0]
+
+        self.assertEqual(task["verdict"], "PASS")
+        self.assertEqual(task["source_tag"], "external_owner_inbox")
+        self.assertEqual(task["client_tag"], "alpha_client")
+        self.assertEqual(task["external_ref"], "extmsg:abc123")
+        self.assertEqual(task["warnings"], [])
+
+    def test_invalid_external_intake_metadata_warns_without_blocking(self) -> None:
+        self.write_task(
+            "AIPOS-107-WARN",
+            source_tag="External Owner Inbox",
+            client_tag="client-1",
+            external_ref="x" * 257,
+        )
+
+        report = self.build_validate_json()
+        task = report["tasks"][0]
+
+        self.assertEqual(task["verdict"], "WARN")
+        self.assertIn("Invalid source_tag format", task["warnings"])
+        self.assertIn("Invalid client_tag format", task["warnings"])
+        self.assertIn("Invalid external_ref format", task["warnings"])
+        self.assertEqual(task["blocking_reasons"], [])
 
     def test_validate_json_includes_per_task_record_ref_checks_for_existing_records(self) -> None:
         self.write_task(

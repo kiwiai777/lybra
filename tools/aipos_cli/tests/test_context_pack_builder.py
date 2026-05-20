@@ -74,6 +74,9 @@ class ContextPackBuilderTests(unittest.TestCase):
                     "context_isolation: strict",
                     "artifact_scope: tools/aipos_cli/",
                     "memory_scope: context pack tests",
+                    "source_tag: external_owner_inbox",
+                    "client_tag: alpha_client",
+                    "external_ref: extmsg:abc123",
                     "orchestration_id: orch_context_pack",
                     "forum_thread_ref: forum://aipos/78",
                     "---",
@@ -109,6 +112,9 @@ class ContextPackBuilderTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "WARN")
         self.assertEqual(result["scope"], "task")
         self.assertEqual(result["task"]["task_id"], "AIPOS-78-CONTEXT")
+        self.assertEqual(result["task"]["source_tag"], "external_owner_inbox")
+        self.assertEqual(result["task"]["client_tag"], "alpha_client")
+        self.assertEqual(result["task"]["external_ref"], "extmsg:abc123")
         self.assertTrue(result["context_bundle"]["found"])
         self.assertEqual(result["context_bundle"]["path"], "3_context_bundles/examples/dev.codex.local.md")
         self.assertFalse(result["writes_enabled"])

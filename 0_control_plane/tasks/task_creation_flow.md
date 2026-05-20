@@ -50,6 +50,16 @@ The `project` field is therefore optional.
 
 This allows queue tasks to support both structured project work and cross-project operational work.
 
+## External Intake Metadata
+
+Task cards may include optional external intake metadata when a request is created from a normalized external intake source approved by a future registry:
+
+- `source_tag`: Stable, functional source identifier defined by the external intake registry.
+- `client_tag`: Project routing tag supplied by the external client.
+- `external_ref`: Stable external evidence reference, such as a redacted message or approval evidence reference.
+
+These fields are optional. Missing values must not block ordinary task validation. They do not grant write authority, routing authority, Owner approval, audit authority, credential access, or permission to create projects. External intake writers, capability tokens, Owner approval evidence persistence, and controlled execute allowlist entries require separate Owner-approved implementation tasks.
+
 ## Context Bundle Selection
 
 Task cards should not copy large background context.

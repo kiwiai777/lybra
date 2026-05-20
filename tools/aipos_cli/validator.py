@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import re
 from typing import Any
 
 from tools.aipos_cli.agent_profiles import (
@@ -32,6 +33,8 @@ REQUIRED_FIELDS = [
     "artifact_policy",
 ]
 
+_EXTERNAL_TAG_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+
 
 def _is_missing(value: Any) -> bool:
     return value in (None, "")
@@ -49,6 +52,24 @@ def _valid_runtime_id(value: Any, prefix: str, task_id: Any) -> bool:
         return False
     task_text = str(task_id or "")
     return f"{prefix}_{task_text}_" in value
+
+
+def _validate_external_intake_metadata(metadata: dict[str, Any], warnings: list[str]) -> None:
+    for field in ("source_tag", "client_tag"):
+        value = metadata.get(field)
+        if _is_missing(value):
+            continue
+        if not isinstance(value, str) or not _EXTERNAL_TAG_PATTERN.fullmatch(value):
+            _add(warnings, f"Invalid {field} format")
+
+    external_ref = metadata.get("external_ref")
+    if _is_missing(external_ref):
+        return
+    if not isinstance(external_ref, str):
+        _add(warnings, "Invalid external_ref format")
+        return
+    if len(external_ref) > 256 or any(ord(char) < 32 for char in external_ref):
+        _add(warnings, "Invalid external_ref format")
 
 
 def _derive_verdict(
@@ -276,6 +297,8 @@ def validate_task(
         _add(warnings, "Missing artifact_scope")
     if _is_missing(metadata.get("memory_scope")):
         _add(warnings, "Missing memory_scope")
+
+    _validate_external_intake_metadata(metadata, warnings)
 
     if metadata.get("needs_owner") is True:
         _add(needs_owner_reasons, "needs_owner is true")
