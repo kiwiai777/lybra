@@ -186,6 +186,43 @@ pre {
   overflow-wrap: anywhere;
 }
 
+.governance-card {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.governance-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+.governance-chip,
+.governance-doc {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+.governance-doc h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+.governance-doc-meta {
+  margin: 0 0 8px;
+  color: #475569;
+  font-size: 0.85rem;
+}
+.governance-excerpt {
+  max-height: 340px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
 .timeline-list {
   display: grid;
   gap: 8px;

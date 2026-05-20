@@ -4,6 +4,7 @@ const ROUTES = [
   ["needs-owner", "/api/needs-owner"],
   ["validate", "/api/validate"],
   ["agents", "/api/agents"],
+  ["governance", "/api/governance"],
   ["drafts", "/api/drafts"],
   ["planner-drafts-review", "/api/planner-drafts/review"],
   ["owner-decisions-review", "/api/owner-decisions/review"],
@@ -105,6 +106,9 @@ async function loadRoute(id, path) {
     }
     if (id === "agents") {
       renderAgentsDetails(data);
+    }
+    if (id === "governance") {
+      renderGovernancePanel(data);
     }
     if (id === "planner-drafts-review") {
       renderPlannerDraftReviewDesk(data);
@@ -290,6 +294,46 @@ function renderAgentsDetails(data) {
     button.title = row?.agent_id || row?.agent_instance || "";
     button.addEventListener("click", () => selectAgent(row, button));
     list.appendChild(button);
+  }
+}
+
+function renderGovernancePanel(data) {
+  const card = document.getElementById("governance-card");
+  card.replaceChildren();
+  if (!data?.ok && !data?.data) {
+    card.textContent = "Governance files could not be loaded.";
+    return;
+  }
+  const docs = Array.isArray(data?.data?.documents) ? data.data.documents : [];
+  if (docs.length === 0) {
+    card.textContent = "No governance documents found for 2_projects/lybra/.";
+    return;
+  }
+  const meta = document.createElement("div");
+  meta.className = "governance-meta";
+  meta.append(
+    createTextBlock("governance-chip", "Project", data?.data?.project || "lybra"),
+    createTextBlock("governance-chip", "Present", `${data?.summary?.documents_present ?? 0}/${data?.summary?.documents_total ?? docs.length}`),
+    createTextBlock("governance-chip", "Writes", data?.data?.writes_enabled ? "enabled" : "disabled")
+  );
+  card.appendChild(meta);
+  for (const doc of docs) {
+    const section = document.createElement("article");
+    section.className = "governance-doc";
+    const title = document.createElement("h3");
+    title.textContent = doc.path || doc.name || "governance document";
+    const facts = document.createElement("p");
+    facts.className = "governance-doc-meta";
+    if (doc.exists && doc.is_file) {
+      facts.textContent = `${doc.line_count || 0} lines | ${doc.byte_size || 0} bytes${doc.truncated ? " | latest excerpt" : ""}`;
+    } else {
+      facts.textContent = "Missing";
+    }
+    const excerpt = document.createElement("pre");
+    excerpt.className = "governance-excerpt";
+    excerpt.textContent = doc.exists && doc.is_file ? (doc.excerpt || "(empty file)") : "File is not present in this workspace.";
+    section.append(title, facts, excerpt);
+    card.appendChild(section);
   }
 }
 

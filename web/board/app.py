@@ -28,6 +28,7 @@ from tools.aipos_cli.board_adapter import (
     get_context_pack_preview,
     get_drafts,
     get_health,
+    get_governance,
     get_needs_owner,
     get_orchestration_summary_preview,
     get_orchestration_timeline_preview,
@@ -64,6 +65,7 @@ def _content_type(path: Path) -> str:
 def _api_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, list[str]]], dict[str, Any]]]:
     return {
         "/api/health": lambda _params: get_health(repo_root=repo_root),
+        "/api/governance": lambda _params: get_governance(repo_root=repo_root),
         "/api/queue": lambda _params: get_queue(repo_root=repo_root),
         "/api/needs-owner": lambda _params: get_needs_owner(repo_root=repo_root),
         "/api/validate": lambda _params: get_validate(repo_root=repo_root),

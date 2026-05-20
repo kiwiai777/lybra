@@ -40,6 +40,12 @@ CONTROLLED_EXECUTE_NOTICE = (
     "draft_create, draft_publish, queue_claim, orchestration_event_append, planner_iteration_append."
 )
 HEALTH_NOTICE = "Local module adapter health check only. No CLI runtime bridge, server, or network behavior is used."
+GOVERNANCE_FILES = {
+    "decision_log": "2_projects/lybra/decision_log.md",
+    "project_status": "2_projects/lybra/project_status.md",
+    "roadmap": "2_projects/lybra/roadmap.md",
+}
+GOVERNANCE_EXCERPT_CHARS = 12000
 
 
 def _resolve_repo_root(repo_root: str | Path | None) -> Path:
@@ -79,6 +85,28 @@ def _target_file_state(repo_root: Path, target_path: Any) -> dict[str, Any]:
         return {"path": normalized, "exists": True, "sha256": None, "file": False}
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return {"path": normalized, "exists": True, "sha256": digest, "file": True}
+
+
+def _governance_doc(repo_root: Path, name: str, rel_path: str) -> dict[str, Any]:
+    path = repo_root / rel_path
+    doc: dict[str, Any] = {
+        "name": name,
+        "path": rel_path,
+        "exists": path.exists(),
+        "is_file": path.is_file() if path.exists() else False,
+        "byte_size": None,
+        "line_count": None,
+        "excerpt": "",
+        "truncated": False,
+    }
+    if not path.exists() or not path.is_file():
+        return doc
+    text = path.read_text(encoding="utf-8", errors="replace")
+    doc["byte_size"] = len(text.encode("utf-8"))
+    doc["line_count"] = len(text.splitlines())
+    doc["truncated"] = len(text) > GOVERNANCE_EXCERPT_CHARS
+    doc["excerpt"] = text[-GOVERNANCE_EXCERPT_CHARS:] if doc["truncated"] else text
+    return doc
 
 
 def _select_task_input(task_id: str | None, path: str | Path | None) -> tuple[str | None, str | None]:
@@ -274,6 +302,7 @@ def get_health(repo_root: str | Path | None = None) -> dict[str, Any]:
                 "public_endpoint_required": False,
                 "read_paths": [
                     "/api/health",
+                    "/api/governance",
                     "/api/queue",
                     "/api/agents",
                     "/api/records",
@@ -383,6 +412,44 @@ def get_agents(repo_root: str | Path | None = None) -> dict[str, Any]:
         resolved_root = _resolve_repo_root(repo_root)
         report = load_agent_profiles(resolved_root)
         return _response_from_validated_report(operation=operation, report=report)
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=False)
+
+
+def get_governance(repo_root: str | Path | None = None) -> dict[str, Any]:
+    operation = "get_governance"
+    try:
+        resolved_root = _resolve_repo_root(repo_root)
+        documents = [_governance_doc(resolved_root, name, rel_path) for name, rel_path in GOVERNANCE_FILES.items()]
+        missing = [doc["path"] for doc in documents if not doc["exists"] or not doc["is_file"]]
+        data = {
+            "project": "lybra",
+            "project_root": "2_projects/lybra",
+            "documents": documents,
+            "writes_enabled": False,
+            "raw_json_default_visible": False,
+        }
+        return make_response(
+            ok=True,
+            verdict="WARN" if missing else "PASS",
+            operation=operation,
+            dry_run=False,
+            data=data,
+            summary={
+                "project": "lybra",
+                "documents_total": len(documents),
+                "documents_present": len(documents) - len(missing),
+                "documents_missing": len(missing),
+                "missing": missing,
+            },
+            warnings=[f"Missing governance file: {path}" for path in missing],
+            blocking_reasons=[],
+            needs_owner_reasons=[],
+            owner_confirmation_required=False,
+            owner_confirmation_reasons=[],
+            safety_notice=READ_SAFETY_NOTICE,
+            errors=[],
+        )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=False)
 

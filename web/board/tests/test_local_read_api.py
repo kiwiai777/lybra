@@ -29,6 +29,7 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn("verdict", data)
         self.assertIn("remote_dogfood_readiness", data["data"])
         self.assertFalse(data["data"]["remote_dogfood_readiness"]["live_agent_connection_enabled"])
+        self.assertIn("/api/governance", data["data"]["remote_dogfood_readiness"]["read_paths"])
         self.assertIn("/api/orchestration/summary", data["data"]["remote_dogfood_readiness"]["read_paths"])
 
     def test_read_routes_return_json_envelopes(self) -> None:
@@ -36,6 +37,7 @@ class LocalReadApiTests(unittest.TestCase):
             "/api/queue",
             "/api/needs-owner",
             "/api/validate",
+            "/api/governance",
             "/api/agents",
             "/api/drafts",
             "/api/planner-drafts/review",
@@ -46,6 +48,42 @@ class LocalReadApiTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn("ok", data)
             self.assertIn("verdict", data)
+
+    def test_governance_route_reads_lybra_project_docs_without_writing(self) -> None:
+        project_dir = self.repo_root / "2_projects" / "lybra"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "decision_log.md").write_text("# Decision Log\n\n## DL-1\nAccepted.\n", encoding="utf-8")
+        (project_dir / "project_status.md").write_text("# Status\n\nHealthy.\n", encoding="utf-8")
+        (project_dir / "roadmap.md").write_text("# Roadmap\n\nNext.\n", encoding="utf-8")
+        before = self.data_paths()
+
+        status, data = dispatch_api_request(method="GET", path="/api/governance", routes=self.routes)
+        after = self.data_paths()
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["operation"], "get_governance")
+        self.assertEqual(data["verdict"], "PASS")
+        self.assertEqual(data["summary"]["documents_present"], 3)
+        self.assertFalse(data["data"]["writes_enabled"])
+        self.assertFalse(data["data"]["raw_json_default_visible"])
+        self.assertEqual([doc["path"] for doc in data["data"]["documents"]], [
+            "2_projects/lybra/decision_log.md",
+            "2_projects/lybra/project_status.md",
+            "2_projects/lybra/roadmap.md",
+        ])
+        self.assertIn("DL-1", data["data"]["documents"][0]["excerpt"])
+        self.assertEqual(before, after)
+
+    def test_governance_route_handles_missing_files_as_warn(self) -> None:
+        status, data = dispatch_api_request(method="GET", path="/api/governance", routes=self.routes)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["verdict"], "WARN")
+        self.assertEqual(data["summary"]["documents_missing"], 3)
+        self.assertEqual(len(data["warnings"]), 3)
+        self.assertFalse(data["data"]["documents"][0]["exists"])
 
     def test_unsupported_method_rejected(self) -> None:
         status, data = dispatch_api_request(method="POST", path="/api/queue", routes=self.routes)
