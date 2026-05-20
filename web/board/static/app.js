@@ -26,6 +26,7 @@ let latestApprovedPlannerDraftDryRun = null;
 let latestPlannerDraftReview = null;
 let latestOrchestrationSummary = null;
 let latestOrchestrationTimeline = null;
+let latestOrchestrationIndex = null;
 let latestPlannerLoopPreview = null;
 let latestContextPackPreview = null;
 let latestManualPlannerTickPreview = null;
@@ -334,6 +335,50 @@ function renderGovernancePanel(data) {
     excerpt.textContent = doc.exists && doc.is_file ? (doc.excerpt || "(empty file)") : "File is not present in this workspace.";
     section.append(title, facts, excerpt);
     card.appendChild(section);
+  }
+}
+
+function renderOrchestrationAvailability(data) {
+  latestOrchestrationIndex = data;
+  const entries = Array.isArray(data?.data?.entries) ? data.data.entries : [];
+  const targetIds = [
+    "orchestration-summary-availability",
+    "orchestration-timeline-availability",
+    "planner-loop-availability",
+  ];
+  const message = entries.length
+    ? `Available orchestration ids: ${entries.map((entry) => entry.orchestration_id).join(", ")}`
+    : "No orchestration ids found in 5_tasks/orchestration/. Summary, timeline, and planner loop previews can be skipped for this workspace until orchestration data exists.";
+  for (const id of targetIds) {
+    const el = document.getElementById(id);
+    el.textContent = message;
+    el.classList.toggle("warn", entries.length === 0);
+  }
+  if (entries.length === 1) {
+    const value = entries[0].orchestration_id;
+    for (const id of ["orchestration-summary-id", "orchestration-timeline-id", "planner-loop-id"]) {
+      const input = document.getElementById(id);
+      if (!input.value.trim()) {
+        input.placeholder = value;
+      }
+    }
+  }
+}
+
+async function loadOrchestrationIndex() {
+  try {
+    const response = await fetch("/api/orchestration/index", { cache: "no-store" });
+    const data = await response.json();
+    latestDebug["/api/orchestration/index"] = data;
+    renderOrchestrationAvailability(data);
+    updateDebugPanel();
+    return data;
+  } catch (err) {
+    const data = { ok: false, error: String(err) };
+    latestDebug["/api/orchestration/index"] = data;
+    renderOrchestrationAvailability(data);
+    updateDebugPanel();
+    return data;
   }
 }
 
@@ -2475,9 +2520,11 @@ function restoreActorInput() {
 
 async function refreshAll() {
   const debug = {};
+  await loadOrchestrationIndex();
   for (const [id, path] of ROUTES) {
     debug[path] = await loadRoute(id, path);
   }
+  debug["/api/orchestration/index"] = latestDebug["/api/orchestration/index"];
   latestDebug = debug;
   updateDebugPanel();
   if (selectedTask) {

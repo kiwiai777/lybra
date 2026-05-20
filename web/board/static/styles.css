@@ -123,6 +123,21 @@ h2 { margin: 0 0 8px; font-size: 1rem; }
 .panel-refresh {
   margin-bottom: 8px;
 }
+.empty-state {
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  color: #0c4a6e;
+  background: #f0f9ff;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+.empty-state.warn {
+  border-color: #fde68a;
+  color: #78350f;
+  background: #fffbeb;
+}
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;

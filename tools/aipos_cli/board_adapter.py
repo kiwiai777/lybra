@@ -307,6 +307,7 @@ def get_health(repo_root: str | Path | None = None) -> dict[str, Any]:
                     "/api/agents",
                     "/api/records",
                     "/api/drafts",
+                    "/api/orchestration/index",
                     "/api/orchestration/summary",
                     "/api/orchestration/timeline",
                     "/api/context-pack/preview",
@@ -443,6 +444,54 @@ def get_governance(repo_root: str | Path | None = None) -> dict[str, Any]:
                 "missing": missing,
             },
             warnings=[f"Missing governance file: {path}" for path in missing],
+            blocking_reasons=[],
+            needs_owner_reasons=[],
+            owner_confirmation_required=False,
+            owner_confirmation_reasons=[],
+            safety_notice=READ_SAFETY_NOTICE,
+            errors=[],
+        )
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=False)
+
+
+def get_orchestration_index(repo_root: str | Path | None = None) -> dict[str, Any]:
+    operation = "get_orchestration_index"
+    try:
+        resolved_root = _resolve_repo_root(repo_root)
+        orchestration_root = resolved_root / "5_tasks" / "orchestration"
+        entries: list[dict[str, Any]] = []
+        if orchestration_root.exists() and orchestration_root.is_dir():
+            for child in sorted(orchestration_root.iterdir()):
+                if not child.is_dir():
+                    continue
+                entries.append(
+                    {
+                        "orchestration_id": child.name,
+                        "path": f"5_tasks/orchestration/{child.name}",
+                        "has_events": (child / "orchestration_events.md").is_file(),
+                        "has_iterations": (child / "planner_iterations.md").is_file(),
+                    }
+                )
+        data = {
+            "orchestration_root": "5_tasks/orchestration",
+            "root_exists": orchestration_root.exists(),
+            "entries": entries,
+            "writes_enabled": False,
+        }
+        warnings = [] if entries else ["No orchestration ids found in this workspace."]
+        return make_response(
+            ok=True,
+            verdict="PASS" if entries else "WARN",
+            operation=operation,
+            dry_run=False,
+            data=data,
+            summary={
+                "root_exists": orchestration_root.exists(),
+                "orchestration_count": len(entries),
+                "first_orchestration_id": entries[0]["orchestration_id"] if entries else None,
+            },
+            warnings=warnings,
             blocking_reasons=[],
             needs_owner_reasons=[],
             owner_confirmation_required=False,

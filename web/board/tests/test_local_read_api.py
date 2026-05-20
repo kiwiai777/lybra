@@ -42,6 +42,7 @@ class LocalReadApiTests(unittest.TestCase):
             "/api/drafts",
             "/api/planner-drafts/review",
             "/api/owner-decisions/review",
+            "/api/orchestration/index",
             "/api/records",
         ):
             status, data = dispatch_api_request(method="GET", path=path, routes=self.routes)
@@ -84,6 +85,31 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertEqual(data["summary"]["documents_missing"], 3)
         self.assertEqual(len(data["warnings"]), 3)
         self.assertFalse(data["data"]["documents"][0]["exists"])
+
+    def test_orchestration_index_handles_missing_and_existing_orchestration_root(self) -> None:
+        status, data = dispatch_api_request(method="GET", path="/api/orchestration/index", routes=self.routes)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["operation"], "get_orchestration_index")
+        self.assertEqual(data["verdict"], "WARN")
+        self.assertFalse(data["data"]["root_exists"])
+        self.assertEqual(data["summary"]["orchestration_count"], 0)
+        self.assertFalse(data["data"]["writes_enabled"])
+
+        orch_dir = self.repo_root / "5_tasks" / "orchestration" / "orch_test_empty_state"
+        orch_dir.mkdir(parents=True, exist_ok=True)
+        (orch_dir / "orchestration_events.md").write_text("# events\n", encoding="utf-8")
+        status, data = dispatch_api_request(method="GET", path="/api/orchestration/index", routes=self.routes)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["verdict"], "PASS")
+        self.assertTrue(data["data"]["root_exists"])
+        self.assertEqual(data["summary"]["orchestration_count"], 1)
+        self.assertEqual(data["data"]["entries"][0]["orchestration_id"], "orch_test_empty_state")
+        self.assertTrue(data["data"]["entries"][0]["has_events"])
+        self.assertFalse(data["data"]["entries"][0]["has_iterations"])
 
     def test_unsupported_method_rejected(self) -> None:
         status, data = dispatch_api_request(method="POST", path="/api/queue", routes=self.routes)
