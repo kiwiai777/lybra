@@ -132,8 +132,18 @@ curl http://127.0.0.1:8765/api/queue
 curl http://127.0.0.1:8765/api/agents
 curl http://127.0.0.1:8765/api/records
 curl http://127.0.0.1:8765/api/drafts
-curl http://127.0.0.1:8765/api/orchestration/summary
-curl http://127.0.0.1:8765/api/orchestration/timeline
+```
+
+The orchestration routes require a concrete orchestration id. If the workspace has no
+`5_tasks/orchestration/` directory, or if that directory contains no orchestration ids,
+record the absence in the dogfood report and skip the two orchestration route checks.
+
+If an orchestration id exists, set it explicitly and verify the two routes:
+
+```bash
+ORCHESTRATION_ID=<existing-orchestration-id>
+curl "http://127.0.0.1:8765/api/orchestration/summary?orchestration_id=${ORCHESTRATION_ID}"
+curl "http://127.0.0.1:8765/api/orchestration/timeline?orchestration_id=${ORCHESTRATION_ID}"
 ```
 
 Expected health metadata should show no live agent connection, no autonomous runtime, no queue polling, and no public endpoint requirement.
