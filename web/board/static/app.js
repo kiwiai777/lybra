@@ -38,6 +38,7 @@ let selectedOwnerDecision = null;
 let selectedExternalIntake = null;
 let selectedOwnerDecisionRecord = null;
 let latestOwnerDecisionResolutionReview = null;
+let latestOwnerDecisionRecordDryRun = null;
 
 function writePanel(id, payload) {
   document.getElementById(id).textContent = JSON.stringify(payload, null, 2);
@@ -874,6 +875,85 @@ function ownerDecisionResolutionPayload() {
   };
 }
 
+function ownerRecordValue(id) {
+  return document.getElementById(id).value.trim();
+}
+
+function isoNow() {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function isoFuture(days) {
+  const value = new Date();
+  value.setDate(value.getDate() + days);
+  return value.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function ownerDecisionRecordPayload() {
+  const actor = ownerRecordValue("owner-record-actor");
+  const project = ownerRecordValue("owner-record-project");
+  const taskId = ownerRecordValue("owner-record-task-id");
+  const draftPath = ownerRecordValue("owner-record-draft-path");
+  const externalRef = ownerRecordValue("owner-record-external-ref");
+  const evidenceId = ownerRecordValue("owner-record-evidence-id");
+  const sourceTag = ownerRecordValue("owner-record-source-tag") || "board";
+  const decisionId = ownerRecordValue("owner-record-decision-id");
+  const decisionType = ownerRecordValue("owner-record-decision-type");
+  return {
+    operation: "owner_decision_record",
+    actor,
+    payload: {
+      decision_id: decisionId,
+      decision_type: decisionType,
+      decision_status: ownerRecordValue("owner-record-decision-status"),
+      decided_at: isoNow(),
+      decided_by_ref: ownerRecordValue("owner-record-decided-by"),
+      captured_by: actor,
+      capture_surface: "board",
+      decision_summary: ownerRecordValue("owner-record-summary"),
+      decision_rationale: ownerRecordValue("owner-record-rationale"),
+      applies_to: {
+        project,
+        task_id: taskId || null,
+        draft_path: draftPath || null,
+        orchestration_id: null,
+        iteration_id: null,
+        event_id: null,
+        external_ref: externalRef || null,
+      },
+      approval_scope: {
+        operation: "owner_decision_record",
+        authority_boundary: "Board controlled execute owner_decision_record only",
+        allowed_next_action: "review_external_intake_draft",
+        expires_at: isoFuture(30),
+      },
+      owner_approval_evidence: {
+        evidence_id: evidenceId,
+        source_tag: sourceTag,
+        client_tag: project,
+        external_ref: externalRef || evidenceId || decisionId,
+        approval_actor_ref: ownerRecordValue("owner-record-decided-by"),
+        approval_timestamp: isoNow(),
+        approval_intent: "record_owner_decision",
+        evidence_hash: `board-ui:${evidenceId || decisionId}`,
+        evidence_ref: evidenceId || externalRef || null,
+        captured_by: actor,
+        capture_method: "board_controlled_execute",
+        redaction_status: "redacted_or_normalized",
+        refs: [externalRef, draftPath, taskId].filter(Boolean),
+      },
+      refs: [externalRef, draftPath, taskId].filter(Boolean),
+      capability_scope: {
+        token_ref: "board_owner_decision_record",
+        operations: ["owner_decision_record"],
+        projects: project ? [project] : [],
+        expires_at: isoFuture(30),
+        evidence_ref: evidenceId || externalRef || null,
+      },
+    },
+  };
+}
+
 function setOwnerResolutionFields(values) {
   for (const [id, value] of Object.entries(values)) {
     const el = document.getElementById(id);
@@ -947,6 +1027,41 @@ function prefillOwnerResolutionFromDecisionRecord() {
     message: "Owner decision record copied into Owner Decision Resolution Review. Review before submitting.",
     decision_id: row.decision_id,
     path: row.path,
+  }, null, 2);
+}
+
+function loadOwnerRecordFromResolution() {
+  const requestId = document.getElementById("owner-resolution-request-id").value.trim();
+  const decisionType = document.getElementById("owner-resolution-decision-type").value.trim();
+  const decision = document.getElementById("owner-resolution-decision").value.trim();
+  const relatedTaskId = document.getElementById("owner-resolution-related-task-id").value.trim();
+  const evidenceRef = document.getElementById("owner-resolution-evidence-ref").value.trim();
+  const forumRef = document.getElementById("owner-resolution-forum-ref").value.trim();
+  const actor = document.getElementById("owner-resolution-actor").value.trim() || "owner";
+  const reason = document.getElementById("owner-resolution-reason").value.trim();
+  const normalizedStatus = decision === "deferred" || decision === "scope_reduced" ? "needs_revision" : decision;
+  const inferredProject = selectedExternalIntake?.client_tag || selectedOwnerDecisionRecord?.client_tag || selectedOwnerDecisionRecord?.project || "";
+  const inferredDraftPath = selectedExternalIntake?.path || selectedOwnerDecisionRecord?.draft_path || "";
+  const inferredExternalRef = selectedExternalIntake?.external_ref || selectedOwnerDecisionRecord?.external_ref || forumRef || evidenceRef;
+  setOwnerResolutionFields({
+    "owner-record-decision-id": requestId || `decision-${Date.now()}`,
+    "owner-record-decision-type": decisionType || "external_intake_review",
+    "owner-record-decision-status": normalizedStatus || "approved",
+    "owner-record-project": inferredProject,
+    "owner-record-task-id": relatedTaskId || selectedExternalIntake?.task_id || selectedOwnerDecisionRecord?.task_id || "",
+    "owner-record-draft-path": inferredDraftPath,
+    "owner-record-external-ref": inferredExternalRef,
+    "owner-record-evidence-id": evidenceRef || forumRef || requestId || "",
+    "owner-record-source-tag": selectedExternalIntake?.source_tag || selectedOwnerDecisionRecord?.source_tag || "board",
+    "owner-record-decided-by": actor,
+    "owner-record-actor": actor,
+    "owner-record-summary": reason || requestId || "Owner decision recorded from Board.",
+    "owner-record-rationale": reason,
+  });
+  document.getElementById("owner-record-result").textContent = JSON.stringify({
+    ok: true,
+    message: "Resolution fields copied into Owner Decision Record. Run dry-run before recording.",
+    request_id: requestId,
   }, null, 2);
 }
 
@@ -2704,6 +2819,88 @@ async function reviewOwnerDecisionResolution() {
   }
 }
 
+function summarizeOwnerDecisionRecordExecute(data) {
+  return {
+    ok: data?.ok,
+    verdict: data?.verdict,
+    operation: data?.operation,
+    actor: data?.actor?.actor,
+    dry_run_id: data?.dry_run_id,
+    dry_run_snapshot_hash: data?.dry_run_snapshot_hash,
+    execute_allowed: data?.execute_allowed,
+    decision_id: data?.summary?.decision_id || data?.data?.decision_id,
+    target_path: data?.summary?.target_path || data?.data?.target_path,
+    would_write: data?.summary?.would_write || data?.data?.would_write,
+    wrote: data?.summary?.wrote || data?.data?.wrote,
+    planned_writes: data?.planned_writes || [],
+    performed_writes: data?.performed_writes || [],
+    warnings: data?.warnings || [],
+    blocking_reasons: data?.blocking_reasons || [],
+    execute_blocking_reasons: data?.execute_blocking_reasons || [],
+    errors: data?.errors || [],
+  };
+}
+
+async function runOwnerDecisionRecordDryRun() {
+  const el = document.getElementById("owner-record-result");
+  const payload = ownerDecisionRecordPayload();
+  if (!payload.actor || !payload.payload.decision_id || !payload.payload.decision_summary || !payload.payload.applies_to.project || !payload.payload.owner_approval_evidence.evidence_id) {
+    el.textContent = JSON.stringify({ ok: false, message: "actor, decision_id, project, evidence_id, and decision_summary are required." }, null, 2);
+    return null;
+  }
+  latestOwnerDecisionRecordDryRun = null;
+  document.getElementById("owner-record-confirm").disabled = true;
+  setPanelLoading("owner-record-result");
+  try {
+    const response = await fetch("/api/execute/dry-run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    latestOwnerDecisionRecordDryRun = data;
+    latestDebug["/api/execute/dry-run:owner_decision_record"] = data;
+    document.getElementById("owner-record-confirm").disabled = !Boolean(data?.dry_run_id && data?.execute_allowed && data?.verdict !== "BLOCK");
+    el.textContent = JSON.stringify(summarizeOwnerDecisionRecordExecute(data), null, 2);
+    updateDebugPanel();
+    return data;
+  } catch (err) {
+    setPanelError("owner-record-result", err);
+    return { ok: false, error: String(err) };
+  }
+}
+
+async function confirmOwnerDecisionRecord() {
+  const el = document.getElementById("owner-record-result");
+  const actor = ownerRecordValue("owner-record-actor");
+  if (!latestOwnerDecisionRecordDryRun?.dry_run_id || !actor) {
+    el.textContent = JSON.stringify({ ok: false, message: "Owner decision record dry-run token and actor are required." }, null, 2);
+    return null;
+  }
+  document.getElementById("owner-record-confirm").disabled = true;
+  setPanelLoading("owner-record-result");
+  try {
+    const response = await fetch("/api/execute/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dry_run_id: latestOwnerDecisionRecordDryRun.dry_run_id,
+        actor,
+      }),
+    });
+    const data = await response.json();
+    latestDebug["/api/execute/confirm:owner_decision_record"] = data;
+    el.textContent = JSON.stringify(summarizeOwnerDecisionRecordExecute(data), null, 2);
+    updateDebugPanel();
+    await refreshPanel("owner-decision-records");
+    await refreshPanel("records");
+    return data;
+  } catch (err) {
+    setPanelError("owner-record-result", err);
+    return { ok: false, error: String(err) };
+  }
+}
+
 async function reviewForumEvent() {
   const el = document.getElementById("forum-event-result");
   const payload = forumEventReviewPayload();
@@ -2836,6 +3033,9 @@ document.getElementById("external-intake-prefill-resolution").addEventListener("
 document.getElementById("owner-decision-record-prefill-resolution").addEventListener("click", prefillOwnerResolutionFromDecisionRecord);
 document.getElementById("owner-resolution-load-selected").addEventListener("click", loadSelectedOwnerDecisionForResolution);
 document.getElementById("owner-resolution-review").addEventListener("click", reviewOwnerDecisionResolution);
+document.getElementById("owner-record-load-resolution").addEventListener("click", loadOwnerRecordFromResolution);
+document.getElementById("owner-record-dry-run").addEventListener("click", runOwnerDecisionRecordDryRun);
+document.getElementById("owner-record-confirm").addEventListener("click", confirmOwnerDecisionRecord);
 document.getElementById("forum-event-review").addEventListener("click", reviewForumEvent);
 document.getElementById("needs-owner-load-task").addEventListener("click", loadTaskFromNeedsOwner);
 document.getElementById("validation-load-task").addEventListener("click", loadTaskFromValidation);

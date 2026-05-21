@@ -42,6 +42,7 @@ from tools.aipos_cli.board_adapter import (
     get_task,
     get_validate,
     publish_draft,
+    record_owner_decision,
 )
 from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
 from tools.aipos_cli.draft_validator import validate_draft_file
@@ -1584,10 +1585,15 @@ def _execute_dry_run_route(payload: dict[str, Any], *, repo_root: Path | None) -
         if not isinstance(iteration_payload, dict):
             return _execute_error("planner_iteration_append", "payload object is required")
         return append_planner_iteration(iteration_payload, dry_run=True, repo_root=repo_root, actor=actor)
+    if operation == "owner_decision_record":
+        decision_payload = payload.get("payload")
+        if not isinstance(decision_payload, dict):
+            return _execute_error("owner_decision_record", "payload object is required")
+        return record_owner_decision(decision_payload, dry_run=True, repo_root=repo_root, actor=actor)
     if operation != "queue_claim":
         return _execute_error(
             "execute_dry_run",
-            "Only queue_claim, draft_create, draft_publish, orchestration_event_append, and planner_iteration_append are enabled in the controlled execute API",
+            "Only queue_claim, draft_create, draft_publish, orchestration_event_append, planner_iteration_append, and owner_decision_record are enabled in the controlled execute API",
         )
     task_id = str(payload.get("task_id") or "").strip() or None
     path = str(payload.get("path") or "").strip() or None

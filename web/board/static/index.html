@@ -200,6 +200,37 @@
     </section>
 
     <section>
+      <h2>Owner Decision Record</h2>
+      <div class="draft-grid">
+        <input id="owner-record-decision-id" type="text" placeholder="decision_id">
+        <input id="owner-record-decision-type" type="text" value="external_intake_review" placeholder="decision_type">
+        <select id="owner-record-decision-status">
+          <option value="approved">approved</option>
+          <option value="rejected">rejected</option>
+          <option value="needs_revision">needs_revision</option>
+          <option value="superseded">superseded</option>
+          <option value="expired">expired</option>
+        </select>
+        <input id="owner-record-project" type="text" placeholder="project / client_tag">
+        <input id="owner-record-task-id" type="text" placeholder="task_id">
+        <input id="owner-record-draft-path" type="text" placeholder="draft_path">
+        <input id="owner-record-external-ref" type="text" placeholder="external_ref">
+        <input id="owner-record-evidence-id" type="text" placeholder="evidence_id">
+        <input id="owner-record-source-tag" type="text" value="board" placeholder="source_tag">
+        <input id="owner-record-decided-by" type="text" value="owner" placeholder="decided_by_ref">
+        <input id="owner-record-actor" type="text" value="owner" placeholder="actor / captured_by">
+      </div>
+      <textarea id="owner-record-summary" rows="3" placeholder="decision_summary"></textarea>
+      <textarea id="owner-record-rationale" rows="3" placeholder="decision_rationale"></textarea>
+      <div class="toolbar">
+        <button id="owner-record-load-resolution">Load Resolution</button>
+        <button id="owner-record-dry-run">Dry-Run Record</button>
+      </div>
+      <button id="owner-record-confirm" class="secondary-action" disabled>Record Decision</button>
+      <pre id="owner-record-result">Fill the decision record fields and run dry-run.</pre>
+    </section>
+
+    <section>
       <h2>Task Detail</h2>
       <div class="toolbar">
         <input id="task-selector" type="text" placeholder="task_id or repo-relative path">

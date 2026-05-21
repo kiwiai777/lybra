@@ -215,6 +215,54 @@ class ControlledExecuteApiTests(unittest.TestCase):
             "audit_handoff_required": False,
         }
 
+    def owner_decision_payload(self, decision_id: str = "decision-web-001") -> dict[str, object]:
+        return {
+            "decision_id": decision_id,
+            "decision_type": "external_intake_review",
+            "decision_status": "approved",
+            "decided_at": "2026-05-21T00:00:00Z",
+            "decided_by_ref": "owner",
+            "captured_by": "owner",
+            "capture_surface": "board",
+            "decision_summary": "Approve external intake for review.",
+            "decision_rationale": "Owner approved from Board.",
+            "applies_to": {
+                "project": "client_alpha",
+                "task_id": "EXT-CLIENT-ALPHA-001",
+                "draft_path": "5_tasks/drafts/external_intake/example.md",
+                "external_ref": "chat://message/1",
+            },
+            "approval_scope": {
+                "operation": "owner_decision_record",
+                "authority_boundary": "Board controlled execute owner_decision_record only",
+                "allowed_next_action": "review_external_intake_draft",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            "owner_approval_evidence": {
+                "evidence_id": "evidence-web-001",
+                "source_tag": "board",
+                "client_tag": "client_alpha",
+                "external_ref": "chat://message/1",
+                "approval_actor_ref": "owner",
+                "approval_timestamp": "2026-05-21T00:00:00Z",
+                "approval_intent": "record_owner_decision",
+                "evidence_hash": "board-ui:evidence-web-001",
+                "evidence_ref": "chat://message/1",
+                "captured_by": "owner",
+                "capture_method": "board_controlled_execute",
+                "redaction_status": "redacted_or_normalized",
+                "refs": ["chat://message/1", "5_tasks/drafts/external_intake/example.md"],
+            },
+            "refs": ["chat://message/1", "5_tasks/drafts/external_intake/example.md"],
+            "capability_scope": {
+                "token_ref": "board_owner_decision_record",
+                "operations": ["owner_decision_record"],
+                "projects": ["client_alpha"],
+                "expires_at": "2099-01-01T00:00:00Z",
+                "evidence_ref": "chat://message/1",
+            },
+        }
+
     def test_execute_dry_run_draft_create_returns_token_without_writing(self) -> None:
         before = self.data_paths()
         status, data = self.post(
@@ -347,6 +395,53 @@ class ControlledExecuteApiTests(unittest.TestCase):
         self.assertEqual(executed["operation"], "planner_iteration_append")
         text = (self.repo_root / "5_tasks/orchestration/orch_web_controlled/planner_iterations.md").read_text(encoding="utf-8")
         self.assertIn("iteration_id: iter_web_controlled_001", text)
+
+    def test_execute_dry_run_owner_decision_record_returns_token_without_writing(self) -> None:
+        before = self.data_paths()
+        status, data = self.post(
+            "/api/execute/dry-run",
+            {
+                "operation": "owner_decision_record",
+                "actor": "owner",
+                "payload": self.owner_decision_payload(),
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["operation"], "owner_decision_record")
+        self.assertIn("dry_run_id", data)
+        self.assertTrue(data["execute_allowed"])
+        self.assertEqual(data["summary"]["target_path"], "5_tasks/records/owner_decisions/decision-web-001.md")
+        self.assertEqual(before, self.data_paths())
+
+    def test_execute_confirm_owner_decision_record_writes_record_only(self) -> None:
+        before = self.data_paths()
+        _status, dry = self.post(
+            "/api/execute/dry-run",
+            {
+                "operation": "owner_decision_record",
+                "actor": "owner",
+                "payload": self.owner_decision_payload("decision-web-confirm"),
+            },
+        )
+
+        status, executed = self.post(
+            "/api/execute/confirm",
+            {"dry_run_id": dry["dry_run_id"], "actor": "owner"},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(executed["ok"])
+        self.assertEqual(executed["operation"], "owner_decision_record")
+        record_path = self.repo_root / "5_tasks/records/owner_decisions/decision-web-confirm.md"
+        self.assertTrue(record_path.exists())
+        self.assertIn("record_type: owner_decision_record", record_path.read_text(encoding="utf-8"))
+        after = self.data_paths()
+        self.assertEqual(
+            sorted(before + ["5_tasks/records/owner_decisions", "5_tasks/records/owner_decisions/decision-web-confirm.md"]),
+            after,
+        )
 
     def test_execute_dry_run_blocks_non_claim_draft_create_or_draft_publish_operations(self) -> None:
         status, data = self.post(
