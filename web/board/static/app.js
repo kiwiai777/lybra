@@ -316,6 +316,8 @@ function renderExternalIntakeReview(data) {
   const rows = externalIntakeRows(data);
   list.replaceChildren();
   selectedExternalIntake = null;
+  renderExternalIntakeCard(null);
+  document.getElementById("external-intake-prefill-resolution").disabled = true;
   document.getElementById("external-intake-review-detail").textContent = rows.length === 0 ? "No external intake drafts found." : "Select an external intake draft.";
   for (const row of rows) {
     const button = document.createElement("button");
@@ -332,6 +334,8 @@ function renderOwnerDecisionRecords(data) {
   const rows = ownerDecisionRecordRows(data);
   list.replaceChildren();
   selectedOwnerDecisionRecord = null;
+  renderOwnerDecisionRecordCard(null);
+  document.getElementById("owner-decision-record-prefill-resolution").disabled = true;
   document.getElementById("owner-decision-records-detail").textContent = rows.length === 0 ? "No owner decision records found." : "Select an owner decision record.";
   for (const row of rows) {
     const button = document.createElement("button");
@@ -341,6 +345,45 @@ function renderOwnerDecisionRecords(data) {
     button.addEventListener("click", () => selectOwnerDecisionRecord(row, button));
     list.appendChild(button);
   }
+}
+
+function renderExternalIntakeCard(row) {
+  const card = document.getElementById("external-intake-review-card");
+  card.replaceChildren();
+  if (!row) {
+    card.textContent = "Select an external intake draft.";
+    return;
+  }
+  card.append(
+    createTextBlock("intake-review-chip", "Task", row.task_id),
+    createTextBlock("intake-review-chip", "Client", row.client_tag),
+    createTextBlock("intake-review-chip", "Source", row.source_tag),
+    createTextBlock("intake-review-chip", "External Ref", row.external_ref),
+    createTextBlock("intake-review-chip", "Priority", row.priority),
+    createTextBlock("intake-review-chip", "Needs Owner", row.needs_owner),
+    createTextBlock("intake-review-chip", "Verdict", row.verdict),
+    createTextBlock("intake-review-chip wide", "Title", row.title),
+    createTextBlock("intake-review-chip wide", "Path", row.path)
+  );
+}
+
+function renderOwnerDecisionRecordCard(row) {
+  const card = document.getElementById("owner-decision-records-card");
+  card.replaceChildren();
+  if (!row) {
+    card.textContent = "Select an owner decision record.";
+    return;
+  }
+  card.append(
+    createTextBlock("owner-decision-record-chip", "Decision", row.decision_id),
+    createTextBlock("owner-decision-record-chip", "Status", row.decision_status),
+    createTextBlock("owner-decision-record-chip", "Type", row.decision_type),
+    createTextBlock("owner-decision-record-chip", "Client", row.client_tag || row.project),
+    createTextBlock("owner-decision-record-chip", "Evidence", row.evidence_id),
+    createTextBlock("owner-decision-record-chip", "External Ref", row.external_ref),
+    createTextBlock("owner-decision-record-chip wide", "Draft", row.draft_path),
+    createTextBlock("owner-decision-record-chip wide", "Path", row.path)
+  );
 }
 
 function renderAgentsDetails(data) {
@@ -603,6 +646,8 @@ function selectExternalIntake(row, sourceButton) {
   clearSelected(document.getElementById("external-intake-review-list"));
   sourceButton?.classList?.add("selected");
   const envelope = latestDebug["/api/external-intake/review"] || {};
+  renderExternalIntakeCard(row);
+  document.getElementById("external-intake-prefill-resolution").disabled = false;
   document.getElementById("external-intake-review-detail").textContent = JSON.stringify(summarizeExternalIntake(row, envelope), null, 2);
 }
 
@@ -611,6 +656,8 @@ function selectOwnerDecisionRecord(row, sourceButton) {
   clearSelected(document.getElementById("owner-decision-records-list"));
   sourceButton?.classList?.add("selected");
   const envelope = latestDebug["/api/owner-decision-records"] || {};
+  renderOwnerDecisionRecordCard(row);
+  document.getElementById("owner-decision-record-prefill-resolution").disabled = false;
   document.getElementById("owner-decision-records-detail").textContent = JSON.stringify(summarizeOwnerDecisionRecord(row, envelope), null, 2);
 }
 
@@ -825,6 +872,82 @@ function ownerDecisionResolutionPayload() {
     decision: document.getElementById("owner-resolution-decision").value.trim(),
     decision_reason: document.getElementById("owner-resolution-reason").value.trim(),
   };
+}
+
+function setOwnerResolutionFields(values) {
+  for (const [id, value] of Object.entries(values)) {
+    const el = document.getElementById(id);
+    if (!el || value === undefined || value === null) {
+      continue;
+    }
+    el.value = String(value);
+  }
+}
+
+function prefillOwnerResolutionFromExternalIntake() {
+  const row = selectedExternalIntake;
+  const result = document.getElementById("owner-resolution-result");
+  if (!row) {
+    result.textContent = JSON.stringify({ ok: false, message: "Select an external intake draft first." }, null, 2);
+    return;
+  }
+  const evidenceRef = row.external_ref || row.path || row.task_id || "";
+  setOwnerResolutionFields({
+    "owner-resolution-request-id": row.task_id || row.path || "",
+    "owner-resolution-orchestration-id": "",
+    "owner-resolution-decision-type": "external_intake_review",
+    "owner-resolution-related-task-id": row.task_id || "",
+    "owner-resolution-related-iteration-id": "",
+    "owner-resolution-forum-ref": row.external_ref || row.path || "",
+    "owner-resolution-evidence-ref": evidenceRef ? `external_intake:${evidenceRef}` : "",
+    "owner-resolution-reason": [
+      row.title || "External intake draft selected.",
+      `client_tag=${valueOrDash(row.client_tag)}`,
+      `source_tag=${valueOrDash(row.source_tag)}`,
+      `path=${valueOrDash(row.path)}`,
+    ].join("\n"),
+  });
+  result.textContent = JSON.stringify({
+    ok: true,
+    source: "external_intake",
+    message: "External intake draft copied into Owner Decision Resolution Review. Review before submitting.",
+    task_id: row.task_id,
+    path: row.path,
+  }, null, 2);
+}
+
+function prefillOwnerResolutionFromDecisionRecord() {
+  const row = selectedOwnerDecisionRecord;
+  const result = document.getElementById("owner-resolution-result");
+  if (!row) {
+    result.textContent = JSON.stringify({ ok: false, message: "Select an owner decision record first." }, null, 2);
+    return;
+  }
+  const compatibleStatuses = new Set(["approved", "rejected", "needs_revision", "deferred"]);
+  const decision = compatibleStatuses.has(row.decision_status) ? row.decision_status : "approved";
+  setOwnerResolutionFields({
+    "owner-resolution-request-id": row.decision_id || row.path || "",
+    "owner-resolution-orchestration-id": row.orchestration_id || "",
+    "owner-resolution-decision-type": row.decision_type || "owner_decision_record_review",
+    "owner-resolution-related-task-id": row.task_id || "",
+    "owner-resolution-related-iteration-id": "",
+    "owner-resolution-forum-ref": row.external_ref || row.draft_path || row.path || "",
+    "owner-resolution-evidence-ref": row.evidence_id ? `owner_decision_record:${row.evidence_id}` : (row.external_ref || row.path || ""),
+    "owner-resolution-decision": decision,
+    "owner-resolution-reason": [
+      `Owner decision record ${valueOrDash(row.decision_id)} selected.`,
+      `status=${valueOrDash(row.decision_status)}`,
+      `type=${valueOrDash(row.decision_type)}`,
+      `path=${valueOrDash(row.path)}`,
+    ].join("\n"),
+  });
+  result.textContent = JSON.stringify({
+    ok: true,
+    source: "owner_decision_record",
+    message: "Owner decision record copied into Owner Decision Resolution Review. Review before submitting.",
+    decision_id: row.decision_id,
+    path: row.path,
+  }, null, 2);
 }
 
 function loadSelectedOwnerDecisionForResolution() {
@@ -2709,6 +2832,8 @@ document.getElementById("planner-persist-dry-run").addEventListener("click", run
 document.getElementById("planner-persist-confirm").addEventListener("click", confirmPlannerLoopPersistenceAppend);
 document.getElementById("planner-persist-owner-confirmed").addEventListener("change", updatePlannerLoopPersistenceConfirmState);
 document.getElementById("planner-persist-refresh-handoff").addEventListener("click", refreshPlannerLoopPersistenceHandoffViews);
+document.getElementById("external-intake-prefill-resolution").addEventListener("click", prefillOwnerResolutionFromExternalIntake);
+document.getElementById("owner-decision-record-prefill-resolution").addEventListener("click", prefillOwnerResolutionFromDecisionRecord);
 document.getElementById("owner-resolution-load-selected").addEventListener("click", loadSelectedOwnerDecisionForResolution);
 document.getElementById("owner-resolution-review").addEventListener("click", reviewOwnerDecisionResolution);
 document.getElementById("forum-event-review").addEventListener("click", reviewForumEvent);

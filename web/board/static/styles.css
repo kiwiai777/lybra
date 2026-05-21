@@ -426,6 +426,33 @@ pre {
   background: #f8fafc;
   overflow-wrap: anywhere;
 }
+.intake-review-card,
+.owner-decision-record-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+.intake-review-chip,
+.owner-decision-record-chip {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow-wrap: anywhere;
+}
+.intake-review-chip.wide,
+.owner-decision-record-chip.wide {
+  grid-column: 1 / -1;
+}
 .owner-resolution-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
