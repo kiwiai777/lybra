@@ -318,6 +318,8 @@ def get_health(repo_root: str | Path | None = None) -> dict[str, Any]:
                     "/api/agents",
                     "/api/records",
                     "/api/drafts",
+                    "/api/external-intake/review",
+                    "/api/owner-decision-records",
                     "/api/orchestration/index",
                     "/api/orchestration/summary",
                     "/api/orchestration/timeline",
@@ -595,6 +597,83 @@ def get_drafts(repo_root: str | Path | None = None) -> dict[str, Any]:
             dry_run=False,
             data=payload,
             summary={"total": report.get("total", 0)},
+            safety_notice=READ_SAFETY_NOTICE,
+            errors=[],
+        )
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=False)
+
+
+def get_external_intake_review(repo_root: str | Path | None = None) -> dict[str, Any]:
+    operation = "get_external_intake_review"
+    try:
+        resolved_root = _resolve_repo_root(repo_root)
+        report = list_drafts(resolved_root)
+        drafts = [
+            draft
+            for draft in report.get("drafts", [])
+            if str(draft.get("path") or "").startswith("5_tasks/drafts/external_intake/")
+        ]
+        data = {
+            "drafts_dir": "5_tasks/drafts/external_intake",
+            "drafts_dir_exists": (resolved_root / "5_tasks" / "drafts" / "external_intake").is_dir(),
+            "drafts": drafts,
+            "writes_enabled": False,
+        }
+        return make_response(
+            ok=True,
+            verdict="PASS" if drafts else "WARN",
+            operation=operation,
+            dry_run=False,
+            data=data,
+            summary={
+                "total": len(drafts),
+                "ready": sum(1 for item in drafts if item.get("verdict") == "PASS"),
+                "blocked": sum(1 for item in drafts if item.get("verdict") == "BLOCK"),
+                "needs_owner": sum(1 for item in drafts if item.get("needs_owner") is True),
+            },
+            warnings=[] if drafts else ["No external intake drafts found."],
+            blocking_reasons=[],
+            needs_owner_reasons=[],
+            owner_confirmation_required=False,
+            owner_confirmation_reasons=[],
+            safety_notice=READ_SAFETY_NOTICE,
+            errors=[],
+        )
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=False)
+
+
+def get_owner_decision_records(repo_root: str | Path | None = None) -> dict[str, Any]:
+    operation = "get_owner_decision_records"
+    try:
+        resolved_root = _resolve_repo_root(repo_root)
+        report = load_records(resolved_root)
+        records = list(report.get("owner_decisions", []))
+        data = {
+            "records_dir": "5_tasks/records/owner_decisions",
+            "records_dir_exists": bool(report.get("owner_decisions_root_exists")),
+            "records": records,
+            "writes_enabled": False,
+        }
+        return make_response(
+            ok=True,
+            verdict="PASS" if records else "WARN",
+            operation=operation,
+            dry_run=False,
+            data=data,
+            summary={
+                "total": len(records),
+                "approved": sum(1 for item in records if item.get("decision_status") == "approved"),
+                "needs_revision": sum(1 for item in records if item.get("decision_status") == "needs_revision"),
+                "rejected": sum(1 for item in records if item.get("decision_status") == "rejected"),
+                "parse_errors": sum(len(item.get("parse_errors", [])) for item in records),
+            },
+            warnings=[] if records else ["No owner decision records found."],
+            blocking_reasons=[],
+            needs_owner_reasons=[],
+            owner_confirmation_required=False,
+            owner_confirmation_reasons=[],
             safety_notice=READ_SAFETY_NOTICE,
             errors=[],
         )

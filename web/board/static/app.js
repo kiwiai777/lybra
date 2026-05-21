@@ -6,8 +6,10 @@ const ROUTES = [
   ["agents", "/api/agents"],
   ["governance", "/api/governance"],
   ["drafts", "/api/drafts"],
+  ["external-intake-review", "/api/external-intake/review"],
   ["planner-drafts-review", "/api/planner-drafts/review"],
   ["owner-decisions-review", "/api/owner-decisions/review"],
+  ["owner-decision-records", "/api/owner-decision-records"],
   ["records", "/api/records"],
 ];
 const ROUTE_BY_ID = Object.fromEntries(ROUTES);
@@ -33,6 +35,8 @@ let latestManualPlannerTickPreview = null;
 let latestPlannerLoopPersistenceDryRun = null;
 let latestPlannerLoopPersistenceResult = null;
 let selectedOwnerDecision = null;
+let selectedExternalIntake = null;
+let selectedOwnerDecisionRecord = null;
 let latestOwnerDecisionResolutionReview = null;
 
 function writePanel(id, payload) {
@@ -114,8 +118,14 @@ async function loadRoute(id, path) {
     if (id === "planner-drafts-review") {
       renderPlannerDraftReviewDesk(data);
     }
+    if (id === "external-intake-review") {
+      renderExternalIntakeReview(data);
+    }
     if (id === "owner-decisions-review") {
       renderOwnerDecisionGate(data);
+    }
+    if (id === "owner-decision-records") {
+      renderOwnerDecisionRecords(data);
     }
     return data;
   } catch (err) {
@@ -138,7 +148,18 @@ function envelopeRows(data) {
 function recordRows(data) {
   const sessions = Array.isArray(data?.data?.sessions) ? data.data.sessions.map((item) => ({ ...item, record_kind: "session" })) : [];
   const claims = Array.isArray(data?.data?.claims) ? data.data.claims.map((item) => ({ ...item, record_kind: "claim" })) : [];
-  return [...sessions, ...claims];
+  const ownerDecisions = Array.isArray(data?.data?.owner_decisions)
+    ? data.data.owner_decisions.map((item) => ({ ...item, record_kind: "owner_decision" }))
+    : [];
+  return [...ownerDecisions, ...sessions, ...claims];
+}
+
+function externalIntakeRows(data) {
+  return Array.isArray(data?.data?.drafts) ? data.data.drafts : [];
+}
+
+function ownerDecisionRecordRows(data) {
+  return Array.isArray(data?.data?.records) ? data.data.records : [];
 }
 
 function agentRows(data) {
@@ -217,8 +238,16 @@ function detailLabel(row) {
 }
 
 function recordLabel(row) {
-  const id = row?.session_id || row?.claim_id || row?.id || "-";
+  const id = row?.decision_id || row?.session_id || row?.claim_id || row?.id || "-";
   return [row?.record_kind, id, row?.task_id, row?.path].filter(Boolean).join(" | ");
+}
+
+function externalIntakeLabel(row) {
+  return [row?.task_id, row?.client_tag, row?.source_tag, row?.title, row?.path].filter(Boolean).join(" | ");
+}
+
+function ownerDecisionRecordLabel(row) {
+  return [row?.decision_id, row?.decision_status, row?.client_tag || row?.project, row?.draft_path || row?.task_id || row?.path].filter(Boolean).join(" | ");
 }
 
 function agentLabel(row) {
@@ -278,6 +307,38 @@ function renderRecordsDetails(data) {
     button.textContent = recordLabel(row);
     button.title = row?.path || row?.session_id || row?.claim_id || "";
     button.addEventListener("click", () => selectRecord(row, button));
+    list.appendChild(button);
+  }
+}
+
+function renderExternalIntakeReview(data) {
+  const list = document.getElementById("external-intake-review-list");
+  const rows = externalIntakeRows(data);
+  list.replaceChildren();
+  selectedExternalIntake = null;
+  document.getElementById("external-intake-review-detail").textContent = rows.length === 0 ? "No external intake drafts found." : "Select an external intake draft.";
+  for (const row of rows) {
+    const button = document.createElement("button");
+    button.className = "task-button";
+    button.textContent = externalIntakeLabel(row);
+    button.title = row?.path || row?.task_id || "";
+    button.addEventListener("click", () => selectExternalIntake(row, button));
+    list.appendChild(button);
+  }
+}
+
+function renderOwnerDecisionRecords(data) {
+  const list = document.getElementById("owner-decision-records-list");
+  const rows = ownerDecisionRecordRows(data);
+  list.replaceChildren();
+  selectedOwnerDecisionRecord = null;
+  document.getElementById("owner-decision-records-detail").textContent = rows.length === 0 ? "No owner decision records found." : "Select an owner decision record.";
+  for (const row of rows) {
+    const button = document.createElement("button");
+    button.className = "task-button";
+    button.textContent = ownerDecisionRecordLabel(row);
+    button.title = row?.path || row?.decision_id || "";
+    button.addEventListener("click", () => selectOwnerDecisionRecord(row, button));
     list.appendChild(button);
   }
 }
@@ -424,8 +485,12 @@ function summarizeRecord(row, envelope) {
     record_kind: valueOrDash(row?.record_kind),
     total_session_records: valueOrDash(summary.session_records),
     total_claim_logs: valueOrDash(summary.claim_logs),
+    total_owner_decision_records: valueOrDash(summary.owner_decision_records),
     parse_errors_count: valueOrDash(summary.parse_errors),
     warnings_count: Array.isArray(envelope?.warnings) ? envelope.warnings.length : 0,
+    decision_id: valueOrDash(row?.decision_id),
+    decision_status: valueOrDash(row?.decision_status),
+    decision_type: valueOrDash(row?.decision_type),
     session_id: valueOrDash(row?.session_id),
     claim_id: valueOrDash(row?.claim_id),
     task_id: valueOrDash(row?.task_id),
@@ -434,6 +499,48 @@ function summarizeRecord(row, envelope) {
     started_by: valueOrDash(row?.started_by),
     claimed_at: valueOrDash(row?.claimed_at),
     status: valueOrDash(row?.status),
+    path: valueOrDash(row?.path),
+  };
+}
+
+function summarizeExternalIntake(row, envelope) {
+  const summary = envelope?.summary || {};
+  return {
+    total_external_intake_drafts: valueOrDash(summary.total),
+    ready: valueOrDash(summary.ready),
+    blocked: valueOrDash(summary.blocked),
+    task_id: valueOrDash(row?.task_id),
+    title: row?.title || "-",
+    client_tag: valueOrDash(row?.client_tag),
+    source_tag: valueOrDash(row?.source_tag),
+    external_ref: valueOrDash(row?.external_ref),
+    priority: valueOrDash(row?.priority),
+    needs_owner: valueOrDash(row?.needs_owner),
+    verdict: valueOrDash(row?.verdict),
+    path: valueOrDash(row?.path),
+  };
+}
+
+function summarizeOwnerDecisionRecord(row, envelope) {
+  const summary = envelope?.summary || {};
+  return {
+    total_owner_decision_records: valueOrDash(summary.total),
+    approved: valueOrDash(summary.approved),
+    needs_revision: valueOrDash(summary.needs_revision),
+    rejected: valueOrDash(summary.rejected),
+    decision_id: valueOrDash(row?.decision_id),
+    decision_status: valueOrDash(row?.decision_status),
+    decision_type: valueOrDash(row?.decision_type),
+    decided_at: valueOrDash(row?.decided_at),
+    captured_by: valueOrDash(row?.captured_by),
+    capture_surface: valueOrDash(row?.capture_surface),
+    project: valueOrDash(row?.project),
+    task_id: valueOrDash(row?.task_id),
+    draft_path: valueOrDash(row?.draft_path),
+    external_ref: valueOrDash(row?.external_ref),
+    evidence_id: valueOrDash(row?.evidence_id),
+    source_tag: valueOrDash(row?.source_tag),
+    client_tag: valueOrDash(row?.client_tag),
     path: valueOrDash(row?.path),
   };
 }
@@ -489,6 +596,22 @@ function selectRecord(row, sourceButton) {
   sourceButton?.classList?.add("selected");
   const envelope = latestDebug["/api/records"] || {};
   document.getElementById("records-detail").textContent = JSON.stringify(summarizeRecord(row, envelope), null, 2);
+}
+
+function selectExternalIntake(row, sourceButton) {
+  selectedExternalIntake = row;
+  clearSelected(document.getElementById("external-intake-review-list"));
+  sourceButton?.classList?.add("selected");
+  const envelope = latestDebug["/api/external-intake/review"] || {};
+  document.getElementById("external-intake-review-detail").textContent = JSON.stringify(summarizeExternalIntake(row, envelope), null, 2);
+}
+
+function selectOwnerDecisionRecord(row, sourceButton) {
+  selectedOwnerDecisionRecord = row;
+  clearSelected(document.getElementById("owner-decision-records-list"));
+  sourceButton?.classList?.add("selected");
+  const envelope = latestDebug["/api/owner-decision-records"] || {};
+  document.getElementById("owner-decision-records-detail").textContent = JSON.stringify(summarizeOwnerDecisionRecord(row, envelope), null, 2);
 }
 
 function selectAgent(row, sourceButton) {

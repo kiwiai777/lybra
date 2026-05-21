@@ -40,8 +40,10 @@ class LocalReadApiTests(unittest.TestCase):
             "/api/governance",
             "/api/agents",
             "/api/drafts",
+            "/api/external-intake/review",
             "/api/planner-drafts/review",
             "/api/owner-decisions/review",
+            "/api/owner-decision-records",
             "/api/orchestration/index",
             "/api/records",
         ):
@@ -49,6 +51,102 @@ class LocalReadApiTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn("ok", data)
             self.assertIn("verdict", data)
+
+    def test_external_intake_review_route_lists_drafts_without_writing(self) -> None:
+        draft_dir = self.repo_root / "5_tasks" / "drafts" / "external_intake"
+        draft_dir.mkdir(parents=True, exist_ok=True)
+        (draft_dir / "abc123.md").write_text(
+            "\n".join(
+                [
+                    "---",
+                    "task_id: EXT-CLIENT-ABC123",
+                    "title: Review external intake: Example request",
+                    "project: client_alpha",
+                    "assigned_to: planner",
+                    "context_bundle: external_intake",
+                    "task_mode: planning",
+                    "priority: high",
+                    "status: pending",
+                    "created_by: bot.local",
+                    "needs_owner: true",
+                    "output_target: 5_tasks/drafts/external_intake",
+                    "artifact_policy: draft_only",
+                    "source_tag: chat",
+                    "client_tag: client_alpha",
+                    "external_ref: chat://message/1",
+                    "---",
+                    "",
+                    "## External Intake",
+                    "",
+                    "Example.",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        before = self.data_paths()
+
+        status, data = dispatch_api_request(method="GET", path="/api/external-intake/review", routes=self.routes)
+        after = self.data_paths()
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["operation"], "get_external_intake_review")
+        self.assertEqual(data["summary"]["total"], 1)
+        draft = data["data"]["drafts"][0]
+        self.assertEqual(draft["client_tag"], "client_alpha")
+        self.assertEqual(draft["source_tag"], "chat")
+        self.assertEqual(draft["external_ref"], "chat://message/1")
+        self.assertFalse(data["data"]["writes_enabled"])
+        self.assertEqual(before, after)
+
+    def test_owner_decision_records_route_lists_records_without_writing(self) -> None:
+        record_dir = self.repo_root / "5_tasks" / "records" / "owner_decisions"
+        record_dir.mkdir(parents=True, exist_ok=True)
+        (record_dir / "decision-001.md").write_text(
+            "\n".join(
+                [
+                    "---",
+                    "record_type: owner_decision_record",
+                    "decision_id: decision-001",
+                    "decision_type: intake_review",
+                    "decision_status: approved",
+                    "decided_at: 2026-05-20T12:00:00Z",
+                    "decided_by_ref: owner://local",
+                    "captured_by: bot.local",
+                    "capture_surface: mcp",
+                    "project: client_alpha",
+                    "task_id: EXT-CLIENT-ABC123",
+                    "draft_path: 5_tasks/drafts/external_intake/abc123.md",
+                    "external_ref: chat://message/1",
+                    "approval_operation: owner_decision_record",
+                    "allowed_next_action: review_external_intake_draft",
+                    "evidence_id: evidence-001",
+                    "evidence_hash: sha256:test",
+                    "source_tag: chat",
+                    "client_tag: client_alpha",
+                    "---",
+                    "",
+                    "# Owner Decision Record: decision-001",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        before = self.data_paths()
+
+        status, data = dispatch_api_request(method="GET", path="/api/owner-decision-records", routes=self.routes)
+        after = self.data_paths()
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["operation"], "get_owner_decision_records")
+        self.assertEqual(data["summary"]["total"], 1)
+        self.assertEqual(data["summary"]["approved"], 1)
+        record = data["data"]["records"][0]
+        self.assertEqual(record["decision_id"], "decision-001")
+        self.assertEqual(record["client_tag"], "client_alpha")
+        self.assertEqual(record["draft_path"], "5_tasks/drafts/external_intake/abc123.md")
+        self.assertFalse(data["data"]["writes_enabled"])
+        self.assertEqual(before, after)
 
     def test_governance_route_reads_lybra_project_docs_without_writing(self) -> None:
         project_dir = self.repo_root / "2_projects" / "lybra"
@@ -1128,6 +1226,8 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn("owner-review-needs-owner", html)
         self.assertIn("owner-review-decisions", html)
         self.assertIn("owner-review-timeline", html)
+        self.assertIn("owner-review-external-intake", html)
+        self.assertIn("owner-review-owner-decision-records", html)
         self.assertIn("owner-review-drafts", html)
         self.assertIn("owner-review-records", html)
         self.assertIn("owner-review-agents", html)
@@ -1139,6 +1239,12 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn("Planner Draft Review Desk", html)
         self.assertIn("planner-drafts-review-list", html)
         self.assertIn("planner-drafts-review-detail", html)
+        self.assertIn("External Intake Drafts", html)
+        self.assertIn("external-intake-review-list", html)
+        self.assertIn("external-intake-review-detail", html)
+        self.assertIn("Owner Decision Records", html)
+        self.assertIn("owner-decision-records-list", html)
+        self.assertIn("owner-decision-records-detail", html)
         self.assertIn("Parent Requirement", html)
         self.assertIn("Planner Tick", html)
         self.assertIn("Preview Manual Flow", html)
@@ -1182,8 +1288,12 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn("agents-list", html)
         self.assertIn("agents-detail", html)
         self.assertIn('["records", "/api/records"]', js)
+        self.assertIn('["external-intake-review", "/api/external-intake/review"]', js)
+        self.assertIn('["owner-decision-records", "/api/owner-decision-records"]', js)
         self.assertIn('["agents", "/api/agents"]', js)
         self.assertIn("renderRecordsDetails", js)
+        self.assertIn("renderExternalIntakeReview", js)
+        self.assertIn("renderOwnerDecisionRecords", js)
         self.assertIn("renderAgentsDetails", js)
         self.assertIn("draftCreatePayload", js)
         self.assertIn("draftPublishPayload", js)
@@ -1249,6 +1359,8 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn('data-route-id="validate"', html)
         self.assertIn('data-route-id="agents"', html)
         self.assertIn('data-route-id="drafts"', html)
+        self.assertIn('data-route-id="external-intake-review"', html)
+        self.assertIn('data-route-id="owner-decision-records"', html)
         self.assertIn('data-route-id="records"', html)
         self.assertIn("debug-toggle", html)
         self.assertIn("Show Debug", html)

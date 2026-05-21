@@ -276,6 +276,12 @@ def list_drafts(repo_root: Path) -> dict[str, Any]:
                 "status": frontmatter.get("status"),
                 "assigned_to": frontmatter.get("assigned_to"),
                 "project": frontmatter.get("project"),
+                "priority": frontmatter.get("priority"),
+                "needs_owner": frontmatter.get("needs_owner"),
+                "source_tag": frontmatter.get("source_tag"),
+                "client_tag": frontmatter.get("client_tag"),
+                "external_ref": frontmatter.get("external_ref"),
+                "draft_id": frontmatter.get("draft_id"),
                 "path": str(path.relative_to(repo_root)),
                 "verdict": validation["verdict"],
             }

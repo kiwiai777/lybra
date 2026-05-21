@@ -21,6 +21,7 @@ def _record_sort_key(record: dict[str, Any]) -> tuple[str, str]:
         metadata.get("created_at")
         or metadata.get("session_started_at")
         or metadata.get("claimed_at")
+        or metadata.get("decided_at")
         or ""
     )
     return (str(timestamp), str(record.get("path") or ""))
@@ -100,10 +101,67 @@ def _iter_record_files(root: Path) -> list[tuple[Path, str]]:
     return files
 
 
+def _build_owner_decision_record(path: Path, repo_root: Path) -> dict[str, Any]:
+    parse_errors: list[str] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        metadata: dict[str, Any] = {}
+        body = ""
+        parse_errors.append(f"Read failed: {exc}")
+    else:
+        metadata, body, parse_warnings = parse_markdown_frontmatter(text)
+        parse_errors.extend(parse_warnings)
+
+    decision_id = metadata.get("decision_id") or path.stem
+    warnings: list[str] = []
+    if metadata.get("decision_id") and metadata.get("decision_id") != path.stem:
+        warnings.append(
+            f"owner decision record filename mismatch: filename={path.stem} metadata={metadata.get('decision_id')}"
+        )
+    if metadata.get("record_type") not in (None, "owner_decision_record"):
+        warnings.append(f"owner decision record_type mismatch: {metadata.get('record_type')}")
+
+    return {
+        "record_type": "owner_decision_record",
+        "record_id": decision_id,
+        "decision_id": decision_id,
+        "decision_type": metadata.get("decision_type"),
+        "decision_status": metadata.get("decision_status"),
+        "decided_at": metadata.get("decided_at"),
+        "decided_by_ref": metadata.get("decided_by_ref"),
+        "captured_by": metadata.get("captured_by"),
+        "capture_surface": metadata.get("capture_surface"),
+        "project": metadata.get("project"),
+        "task_id": metadata.get("task_id"),
+        "draft_path": metadata.get("draft_path"),
+        "orchestration_id": metadata.get("orchestration_id"),
+        "external_ref": metadata.get("external_ref"),
+        "approval_operation": metadata.get("approval_operation"),
+        "allowed_next_action": metadata.get("allowed_next_action"),
+        "evidence_id": metadata.get("evidence_id"),
+        "evidence_hash": metadata.get("evidence_hash"),
+        "source_tag": metadata.get("source_tag"),
+        "client_tag": metadata.get("client_tag"),
+        "path": str(path.relative_to(repo_root)),
+        "metadata": metadata,
+        "body": body,
+        "parse_errors": parse_errors,
+        "warnings": warnings,
+    }
+
+
+def _iter_owner_decision_files(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    return sorted(path for path in root.iterdir() if path.is_file() and path.suffix == ".md")
+
+
 def load_records(repo_root: Path) -> dict[str, Any]:
     records_root = repo_root / "5_tasks" / "records"
     sessions_root = records_root / "sessions"
     claims_root = records_root / "claims"
+    owner_decisions_root = records_root / "owner_decisions"
     sessions = [
         _build_record(path, repo_root, "session", directory_task_id)
         for path, directory_task_id in _iter_record_files(sessions_root)
@@ -112,11 +170,16 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         _build_record(path, repo_root, "claim", directory_task_id)
         for path, directory_task_id in _iter_record_files(claims_root)
     ]
+    owner_decisions = [
+        _build_owner_decision_record(path, repo_root)
+        for path in _iter_owner_decision_files(owner_decisions_root)
+    ]
 
     warnings: list[str] = []
     parse_errors: list[str] = []
     session_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     claim_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    owner_decision_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_sessions: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_claims: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
@@ -134,6 +197,11 @@ def load_records(repo_root: Path) -> dict[str, Any]:
             task_claims[str(record["task_id"])].append(record)
         parse_errors.extend([f"{record['path']}: {item}" for item in record.get("parse_errors", [])])
         warnings.extend([f"{record['path']}: {item}" for item in record.get("warnings", [])])
+    for record in owner_decisions:
+        if record.get("decision_id"):
+            owner_decision_index[str(record["decision_id"])].append(record)
+        parse_errors.extend([f"{record['path']}: {item}" for item in record.get("parse_errors", [])])
+        warnings.extend([f"{record['path']}: {item}" for item in record.get("warnings", [])])
 
     for record_id, items in session_index.items():
         if len(items) > 1:
@@ -141,6 +209,9 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     for record_id, items in claim_index.items():
         if len(items) > 1:
             warnings.append(f"Duplicate claim_id found: {record_id}")
+    for record_id, items in owner_decision_index.items():
+        if len(items) > 1:
+            warnings.append(f"Duplicate decision_id found: {record_id}")
 
     for items in task_sessions.values():
         items.sort(key=_record_sort_key, reverse=True)
@@ -150,6 +221,7 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     summary = {
         "session_records": len(sessions),
         "claim_logs": len(claims),
+        "owner_decision_records": len(owner_decisions),
         "tasks_with_session_records": len(task_sessions),
         "tasks_with_claim_logs": len(task_claims),
         "parse_errors": len(parse_errors),
@@ -161,12 +233,15 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         "records_root_exists": records_root.exists(),
         "sessions_root_exists": sessions_root.exists(),
         "claims_root_exists": claims_root.exists(),
+        "owner_decisions_root_exists": owner_decisions_root.exists(),
         "sessions": sorted(sessions, key=_record_sort_key, reverse=True),
         "claims": sorted(claims, key=_record_sort_key, reverse=True),
+        "owner_decisions": sorted(owner_decisions, key=_record_sort_key, reverse=True),
         "warnings": warnings,
         "parse_errors": parse_errors,
         "session_index": dict(session_index),
         "claim_index": dict(claim_index),
+        "owner_decision_index": dict(owner_decision_index),
         "task_sessions": dict(task_sessions),
         "task_claims": dict(task_claims),
     }
