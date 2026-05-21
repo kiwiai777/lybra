@@ -224,7 +224,7 @@ Evidence may describe:
 - client_tag
 - approving actor reference
 
-AIPOS-106 does not define the final evidence schema and does not write evidence to records. Evidence field protocol and persistence are separate future tasks.
+AIPOS-106 does not define the final evidence schema and does not write evidence to records. AIPOS-110 defines the Owner approval evidence field protocol in `0_control_plane/board/owner_approval_evidence_protocol.md`; persistence remains a separate future task.
 
 ## Relationship To Existing Protocols
 

@@ -98,6 +98,7 @@ dry_run_expires_at:
 execute_requested_at:
 with_records:
 owner_confirmation_token:
+owner_approval_evidence:
 ```
 
 Input rules:
@@ -109,6 +110,7 @@ Input rules:
 - `dry_run_snapshot_hash` must match the reviewed dry-run snapshot
 - `execute_requested_at` records the caller intent timestamp
 - `owner_confirmation_token` is required only when owner confirmation is required
+- `owner_approval_evidence` is structured audit metadata when required by a future evidence-bearing operation; it does not replace the token, dry-run proof, actor check, or revalidation
 
 ## Required Outputs
 
