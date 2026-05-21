@@ -232,6 +232,7 @@ Required checks:
 - dry-run returns `write_snapshot_hash`
 - non-dry-run append requires matching `--expected-hash`
 - `owner_decision_recorded` includes Owner decision evidence in `refs`
+- future `owner_decision_recorded` events should align with AIPOS-111 `owner_decision_record` when they claim to resolve an Owner gate
 
 Planned writes or moves:
 

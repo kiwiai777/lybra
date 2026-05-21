@@ -229,7 +229,7 @@ AIPOS-109 does not require owner approval evidence for `intake_submit`; it write
 Recommended next slices:
 
 - add optional structured evidence parsing to controlled execute confirm envelopes
-- implement `owner_decision_record` as a controlled write with evidence required
+- define and implement `owner_decision_record` as a controlled write with evidence required
 - add MCP `owner_decision_record` dry-run and confirm tools using AIPOS-109 discipline
 - decide whether any Board or CLI review surface should display evidence summaries
 
@@ -240,6 +240,7 @@ Each slice requires its own Owner Decision Gate and independent audit.
 AIPOS-110 does not:
 
 - implement `owner_decision_record`
+- define the full `owner_decision_record` schema; AIPOS-111 owns that protocol
 - implement MCP write tools
 - implement HTTP/SSE transport
 - implement Board UI

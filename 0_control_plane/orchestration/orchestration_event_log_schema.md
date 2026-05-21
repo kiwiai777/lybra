@@ -131,6 +131,12 @@ AIPOS-62 defines future writer rules in `planner_loop_writer_forum_persistence_b
 
 Orchestration event persistence remains a future implementation. When implemented, event writes must be append-only by default, use only allowed event types and severities from this schema, preserve `refs` back to forum/control-plane evidence, and avoid hidden side effects. Networked forum posting, webhooks, database-backed forum services, and background broadcasters require separate Owner-approved implementation tasks.
 
+## AIPOS-111 Owner Decision Record
+
+AIPOS-111 defines the `owner_decision_record` protocol in `0_control_plane/board/owner_decision_record_protocol.md`.
+
+Future `owner_decision_recorded` events may cite an Owner decision record, but this schema does not implement the writer. Recording an Owner decision must not publish drafts, mutate queues, launch runtimes, bypass controlled execute, or resolve unrelated Owner gates.
+
 ## AIPOS-65 Append-Only Writer
 
 AIPOS-65 implements a narrow CLI append writer for this schema.
