@@ -12,7 +12,14 @@ from typing import Any
 DEFAULT_TTL_SECONDS = 600
 MAX_TTL_SECONDS = 1800
 OWNER_CONFIRMATION_TOKEN = "OWNER_CONFIRMED"
-SUPPORTED_OPERATIONS = {"draft_create", "draft_publish", "queue_claim", "orchestration_event_append", "planner_iteration_append"}
+SUPPORTED_OPERATIONS = {
+    "draft_create",
+    "draft_publish",
+    "queue_claim",
+    "orchestration_event_append",
+    "planner_iteration_append",
+    "intake_submit",
+}
 
 
 @dataclass
@@ -120,6 +127,7 @@ def build_snapshot_payload(operation: str, actor: str, plan: dict[str, Any]) -> 
         "target_path": _normalize_relpath(data.get("target_path")),
         "event_entry": _normalize_for_hash(data.get("event_entry")),
         "iteration_entry": _normalize_for_hash(data.get("iteration_entry")),
+        "original_payload": _normalize_for_hash(data.get("original_payload")),
         "write_snapshot_hash": data.get("write_snapshot_hash"),
         "target_file_state": _normalize_for_hash(data.get("target_file_state")),
         "with_records": bool(data.get("with_records", False)),

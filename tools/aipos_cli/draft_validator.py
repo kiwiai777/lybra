@@ -131,7 +131,7 @@ def iter_draft_paths(repo_root: Path) -> list[Path]:
     drafts_root = repo_root / DRAFTS_DIR
     if not drafts_root.exists():
         return []
-    return sorted(path for path in drafts_root.iterdir() if path.is_file() and path.suffix.lower() == ".md")
+    return sorted(path for path in drafts_root.rglob("*.md") if path.is_file())
 
 
 def _iter_collision_candidate_paths(repo_root: Path) -> list[Path]:
@@ -200,7 +200,10 @@ def validate_draft_metadata(
         target_path = expected_rel
         if actual_path is not None:
             actual_rel = str(actual_path.resolve().relative_to(repo_root.resolve()))
-            if _path_parts_lower(Path(actual_rel)) != _path_parts_lower(Path(expected_rel)):
+            actual_parts = _path_parts_lower(Path(actual_rel))
+            external_intake_parts = _path_parts_lower(DRAFTS_DIR / "external_intake")
+            is_external_intake_draft = actual_parts[: len(external_intake_parts)] == external_intake_parts
+            if not is_external_intake_draft and actual_parts != _path_parts_lower(Path(expected_rel)):
                 _add(blocking_reasons, f"Draft path does not match task_id slug: expected {expected_rel}")
         collisions = find_task_id_collisions(repo_root, task_id, ignore_path=actual_path)
         if collisions:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from typing import Any
 
 if __package__ in (None, ""):
@@ -26,6 +27,10 @@ from tools.aipos_cli.renderer import (
 )
 from tools.aipos_cli.agent_profiles import actor_matches_task, availability_for_actor, load_agent_profiles
 from tools.aipos_cli.context_pack_builder import build_context_pack_preview
+from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, make_response
+from tools.aipos_cli.board_adapter import execute_dry_run as execute_controlled_dry_run
+from tools.aipos_cli.board_adapter import submit_external_intake
+from tools.aipos_cli.controlled_execute import snapshot_hash, validate_owner_confirmation
 from tools.aipos_cli.draft_validator import list_drafts, validate_draft_file
 from tools.aipos_cli.draft_writer import (
     build_template_payload,
@@ -34,6 +39,7 @@ from tools.aipos_cli.draft_writer import (
     load_create_payload_from_json,
     publish_draft,
 )
+from tools.aipos_cli.external_intake_writer import build_external_intake_draft, load_intake_payload_from_json
 from tools.aipos_cli.orchestration_event_writer import append_orchestration_event, load_event_payload_from_json
 from tools.aipos_cli.orchestration_summary_preview import build_orchestration_summary_preview
 from tools.aipos_cli.planner_loop_mvp import build_planner_loop_mvp_preview
@@ -162,6 +168,136 @@ def _queue_mutation_arguments(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--json", action="store_true", help="Output JSON")
 
 
+def _load_json_object(path: str) -> dict[str, Any]:
+    from pathlib import Path
+
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("JSON input must be an object")
+    return data
+
+
+def _is_expired_iso(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return True
+    try:
+        expires_at = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) > expires_at
+
+
+def _execute_intake_from_dry_run_envelope(
+    repo_root: Any,
+    envelope: dict[str, Any],
+    actor: str,
+    *,
+    owner_confirmation_token: str | None = None,
+) -> dict[str, Any]:
+    operation = "controlled_execute_confirm"
+    if envelope.get("operation") != "intake_submit":
+        return blocked_response(
+            operation=operation,
+            dry_run=False,
+            category="UNSUPPORTED_OPERATION",
+            message="controlled-execute confirm --from-json supports only intake_submit in AIPOS-108",
+            actor={"actor": actor},
+            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+        )
+    if (envelope.get("actor") or {}).get("actor") != actor:
+        return blocked_response(
+            operation=operation,
+            dry_run=False,
+            category="ACTOR_MISMATCH",
+            message="confirm actor does not match dry-run actor",
+            actor={"actor": actor},
+            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+        )
+    if _is_expired_iso(envelope.get("dry_run_expires_at")):
+        return blocked_response(
+            operation=operation,
+            dry_run=False,
+            category="REVALIDATION_FAILED",
+            message="dry-run proof expired; run dry-run again",
+            actor={"actor": actor},
+            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+        )
+
+    source_data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+    payload = source_data.get("original_payload")
+    if not isinstance(payload, dict):
+        return blocked_response(
+            operation=operation,
+            dry_run=False,
+            category="BACKEND_CONTRACT_MISMATCH",
+            message="dry-run envelope is missing data.original_payload",
+            actor={"actor": actor},
+            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+        )
+
+    current = submit_external_intake(payload, dry_run=True, repo_root=repo_root, actor=actor)
+    current_hash = snapshot_hash("intake_submit", actor, current)
+    expected_hash = str(envelope.get("dry_run_snapshot_hash") or "")
+    if not expected_hash or current_hash != expected_hash:
+        return blocked_response(
+            operation=operation,
+            dry_run=False,
+            category="REVALIDATION_FAILED",
+            message="dry-run snapshot mismatch; run dry-run again",
+            actor={"actor": actor},
+            data={
+                "expected_dry_run_snapshot_hash": expected_hash,
+                "current_snapshot_hash": current_hash,
+                "recommended_action": "run dry-run again",
+            },
+            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+        )
+
+    ok_owner, owner_error = validate_owner_confirmation(
+        required=bool(envelope.get("owner_confirmation_required", False)),
+        owner_confirmation_token=owner_confirmation_token,
+    )
+    if not ok_owner:
+        return blocked_response(
+            operation=operation,
+            dry_run=False,
+            category="OWNER_CONFIRMATION_REQUIRED",
+            message=owner_error or "owner confirmation required",
+            actor={"actor": actor},
+            owner_confirmation_required=True,
+            owner_confirmation_reasons=list(envelope.get("owner_confirmation_reasons", [])),
+            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+        )
+
+    result = build_external_intake_draft(repo_root, payload, actor=actor, dry_run=False)
+    verdict = derive_verdict(
+        blocking_reasons=list(result.get("blocking_reasons", [])),
+        warnings=list(result.get("warnings", [])),
+    )
+    return make_response(
+        ok=bool(result.get("wrote", False)),
+        verdict=verdict,
+        operation="intake_submit",
+        dry_run=False,
+        actor={"actor": actor},
+        data=result,
+        summary={
+            "safe_id": result.get("safe_id"),
+            "task_id": result.get("task_id"),
+            "target_path": result.get("target_path"),
+            "wrote": result.get("wrote", False),
+        },
+        planned_writes=list(result.get("planned_writes", [])),
+        performed_writes=list(result.get("planned_writes", [])) if result.get("wrote") else [],
+        warnings=list(result.get("warnings", [])),
+        blocking_reasons=list(result.get("blocking_reasons", [])),
+        safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+        errors=[],
+    )
+
+
 def _resolve_task_selection(args: argparse.Namespace, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     if args.task_id:
         matches = [task for task in tasks if task.get("task_id") == args.task_id]
@@ -243,6 +379,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate_parser = subparsers.add_parser("validate", help="Run validator")
     validate_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    controlled_parser = subparsers.add_parser("controlled-execute", help="Local controlled execute dry-run/confirm")
+    controlled_subparsers = controlled_parser.add_subparsers(dest="controlled_command")
+    controlled_dry_run_parser = controlled_subparsers.add_parser("dry-run", help="Build a controlled execute dry-run proof")
+    controlled_dry_run_parser.add_argument("--operation", required=True, choices=["intake_submit"], help="Controlled execute operation")
+    controlled_dry_run_parser.add_argument("--actor", required=True, help="Actor requesting the dry-run")
+    controlled_dry_run_parser.add_argument("--from-json", required=True, help="Read normalized operation payload from JSON")
+    controlled_dry_run_parser.add_argument("--json", action="store_true", help="Output JSON")
+    controlled_confirm_parser = controlled_subparsers.add_parser("confirm", help="Confirm a controlled execute dry-run proof")
+    confirm_source = controlled_confirm_parser.add_mutually_exclusive_group(required=True)
+    confirm_source.add_argument("--dry-run-id", help="In-process dry-run id, for module-level integrations")
+    confirm_source.add_argument("--from-json", help="Read prior dry-run JSON envelope as stateless CLI proof")
+    controlled_confirm_parser.add_argument("--actor", required=True, help="Actor confirming the dry-run")
+    controlled_confirm_parser.add_argument("--owner-confirmation-token", help="Owner confirmation token if required")
+    controlled_confirm_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     records_parser = subparsers.add_parser("records", help="Render records summary")
     records_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -396,6 +547,39 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+    if args.command == "controlled-execute":
+        if not getattr(args, "controlled_command", None):
+            parser.print_help()
+            return 2
+        try:
+            if args.controlled_command == "dry-run":
+                payload = load_intake_payload_from_json(args.from_json)
+                result = submit_external_intake(payload, dry_run=True, repo_root=repo_root, actor=args.actor)
+            elif args.controlled_command == "confirm":
+                if getattr(args, "from_json", None):
+                    envelope = _load_json_object(args.from_json)
+                    result = _execute_intake_from_dry_run_envelope(
+                        repo_root,
+                        envelope,
+                        args.actor,
+                        owner_confirmation_token=args.owner_confirmation_token,
+                    )
+                else:
+                    result = execute_controlled_dry_run(
+                        args.dry_run_id,
+                        args.actor,
+                        owner_confirmation_token=args.owner_confirmation_token,
+                        repo_root=repo_root,
+                    )
+            else:
+                parser.print_help()
+                return 2
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(render_json(result))
+        return 0
 
     if args.command == "queue" and getattr(args, "queue_command", None) in {"claim", "block", "complete", "reopen"}:
         profiles = load_agent_profiles(repo_root)
