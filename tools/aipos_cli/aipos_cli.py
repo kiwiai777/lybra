@@ -29,6 +29,7 @@ from tools.aipos_cli.agent_profiles import actor_matches_task, availability_for_
 from tools.aipos_cli.context_pack_builder import build_context_pack_preview
 from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, make_response
 from tools.aipos_cli.board_adapter import execute_dry_run as execute_controlled_dry_run
+from tools.aipos_cli.board_adapter import record_owner_decision
 from tools.aipos_cli.board_adapter import submit_external_intake
 from tools.aipos_cli.controlled_execute import snapshot_hash, validate_owner_confirmation
 from tools.aipos_cli.draft_validator import list_drafts, validate_draft_file
@@ -42,6 +43,7 @@ from tools.aipos_cli.draft_writer import (
 from tools.aipos_cli.external_intake_writer import build_external_intake_draft, load_intake_payload_from_json
 from tools.aipos_cli.orchestration_event_writer import append_orchestration_event, load_event_payload_from_json
 from tools.aipos_cli.orchestration_summary_preview import build_orchestration_summary_preview
+from tools.aipos_cli.owner_decision_writer import build_owner_decision_record, load_owner_decision_payload_from_json
 from tools.aipos_cli.planner_loop_mvp import build_planner_loop_mvp_preview
 from tools.aipos_cli.planner_iteration_writer import append_planner_iteration, load_iteration_payload_from_json
 from tools.aipos_cli.preview import build_preview
@@ -189,7 +191,7 @@ def _is_expired_iso(value: Any) -> bool:
     return datetime.now(timezone.utc) > expires_at
 
 
-def _execute_intake_from_dry_run_envelope(
+def _execute_controlled_from_dry_run_envelope(
     repo_root: Any,
     envelope: dict[str, Any],
     actor: str,
@@ -197,14 +199,15 @@ def _execute_intake_from_dry_run_envelope(
     owner_confirmation_token: str | None = None,
 ) -> dict[str, Any]:
     operation = "controlled_execute_confirm"
-    if envelope.get("operation") != "intake_submit":
+    envelope_operation = str(envelope.get("operation") or "")
+    if envelope_operation not in {"intake_submit", "owner_decision_record"}:
         return blocked_response(
             operation=operation,
             dry_run=False,
             category="UNSUPPORTED_OPERATION",
-            message="controlled-execute confirm --from-json supports only intake_submit in AIPOS-108",
+            message="controlled-execute confirm --from-json supports only intake_submit and owner_decision_record",
             actor={"actor": actor},
-            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+            safety_notice="Local CLI controlled execute proof validation.",
         )
     if (envelope.get("actor") or {}).get("actor") != actor:
         return blocked_response(
@@ -213,7 +216,7 @@ def _execute_intake_from_dry_run_envelope(
             category="ACTOR_MISMATCH",
             message="confirm actor does not match dry-run actor",
             actor={"actor": actor},
-            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+            safety_notice="Local CLI controlled execute proof validation.",
         )
     if _is_expired_iso(envelope.get("dry_run_expires_at")):
         return blocked_response(
@@ -222,7 +225,7 @@ def _execute_intake_from_dry_run_envelope(
             category="REVALIDATION_FAILED",
             message="dry-run proof expired; run dry-run again",
             actor={"actor": actor},
-            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+            safety_notice="Local CLI controlled execute proof validation.",
         )
 
     source_data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
@@ -234,11 +237,14 @@ def _execute_intake_from_dry_run_envelope(
             category="BACKEND_CONTRACT_MISMATCH",
             message="dry-run envelope is missing data.original_payload",
             actor={"actor": actor},
-            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+            safety_notice="Local CLI controlled execute proof validation.",
         )
 
-    current = submit_external_intake(payload, dry_run=True, repo_root=repo_root, actor=actor)
-    current_hash = snapshot_hash("intake_submit", actor, current)
+    if envelope_operation == "intake_submit":
+        current = submit_external_intake(payload, dry_run=True, repo_root=repo_root, actor=actor)
+    else:
+        current = record_owner_decision(payload, dry_run=True, repo_root=repo_root, actor=actor)
+    current_hash = snapshot_hash(envelope_operation, actor, current)
     expected_hash = str(envelope.get("dry_run_snapshot_hash") or "")
     if not expected_hash or current_hash != expected_hash:
         return blocked_response(
@@ -252,7 +258,7 @@ def _execute_intake_from_dry_run_envelope(
                 "current_snapshot_hash": current_hash,
                 "recommended_action": "run dry-run again",
             },
-            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+            safety_notice="Local CLI controlled execute proof validation.",
         )
 
     ok_owner, owner_error = validate_owner_confirmation(
@@ -268,10 +274,24 @@ def _execute_intake_from_dry_run_envelope(
             actor={"actor": actor},
             owner_confirmation_required=True,
             owner_confirmation_reasons=list(envelope.get("owner_confirmation_reasons", [])),
-            safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+            safety_notice="Local CLI controlled execute proof validation.",
         )
 
-    result = build_external_intake_draft(repo_root, payload, actor=actor, dry_run=False)
+    if envelope_operation == "intake_submit":
+        result = build_external_intake_draft(repo_root, payload, actor=actor, dry_run=False)
+        summary = {
+            "safe_id": result.get("safe_id"),
+            "task_id": result.get("task_id"),
+            "target_path": result.get("target_path"),
+            "wrote": result.get("wrote", False),
+        }
+    else:
+        result = build_owner_decision_record(repo_root, payload, actor=actor, dry_run=False)
+        summary = {
+            "decision_id": result.get("decision_id"),
+            "target_path": result.get("target_path"),
+            "wrote": result.get("wrote", False),
+        }
     verdict = derive_verdict(
         blocking_reasons=list(result.get("blocking_reasons", [])),
         warnings=list(result.get("warnings", [])),
@@ -279,21 +299,16 @@ def _execute_intake_from_dry_run_envelope(
     return make_response(
         ok=bool(result.get("wrote", False)),
         verdict=verdict,
-        operation="intake_submit",
+        operation=envelope_operation,
         dry_run=False,
         actor={"actor": actor},
         data=result,
-        summary={
-            "safe_id": result.get("safe_id"),
-            "task_id": result.get("task_id"),
-            "target_path": result.get("target_path"),
-            "wrote": result.get("wrote", False),
-        },
+        summary=summary,
         planned_writes=list(result.get("planned_writes", [])),
         performed_writes=list(result.get("planned_writes", [])) if result.get("wrote") else [],
         warnings=list(result.get("warnings", [])),
         blocking_reasons=list(result.get("blocking_reasons", [])),
-        safety_notice="AIPOS-108 local CLI controlled execute proof validation.",
+        safety_notice="Local CLI controlled execute proof validation.",
         errors=[],
     )
 
@@ -383,7 +398,7 @@ def build_parser() -> argparse.ArgumentParser:
     controlled_parser = subparsers.add_parser("controlled-execute", help="Local controlled execute dry-run/confirm")
     controlled_subparsers = controlled_parser.add_subparsers(dest="controlled_command")
     controlled_dry_run_parser = controlled_subparsers.add_parser("dry-run", help="Build a controlled execute dry-run proof")
-    controlled_dry_run_parser.add_argument("--operation", required=True, choices=["intake_submit"], help="Controlled execute operation")
+    controlled_dry_run_parser.add_argument("--operation", required=True, choices=["intake_submit", "owner_decision_record"], help="Controlled execute operation")
     controlled_dry_run_parser.add_argument("--actor", required=True, help="Actor requesting the dry-run")
     controlled_dry_run_parser.add_argument("--from-json", required=True, help="Read normalized operation payload from JSON")
     controlled_dry_run_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -554,12 +569,16 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             if args.controlled_command == "dry-run":
-                payload = load_intake_payload_from_json(args.from_json)
-                result = submit_external_intake(payload, dry_run=True, repo_root=repo_root, actor=args.actor)
+                if args.operation == "intake_submit":
+                    payload = load_intake_payload_from_json(args.from_json)
+                    result = submit_external_intake(payload, dry_run=True, repo_root=repo_root, actor=args.actor)
+                else:
+                    payload = load_owner_decision_payload_from_json(args.from_json)
+                    result = record_owner_decision(payload, dry_run=True, repo_root=repo_root, actor=args.actor)
             elif args.controlled_command == "confirm":
                 if getattr(args, "from_json", None):
                     envelope = _load_json_object(args.from_json)
-                    result = _execute_intake_from_dry_run_envelope(
+                    result = _execute_controlled_from_dry_run_envelope(
                         repo_root,
                         envelope,
                         args.actor,

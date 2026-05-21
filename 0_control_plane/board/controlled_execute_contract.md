@@ -111,6 +111,7 @@ Input rules:
 - `execute_requested_at` records the caller intent timestamp
 - `owner_confirmation_token` is required only when owner confirmation is required
 - `owner_approval_evidence` is structured audit metadata when required by a future evidence-bearing operation; it does not replace the token, dry-run proof, actor check, or revalidation
+- AIPOS-112 requires `owner_approval_evidence` for `owner_decision_record` and writes only the scoped records artifact when confirmed
 
 ## Required Outputs
 

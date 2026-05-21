@@ -19,6 +19,7 @@ SUPPORTED_OPERATIONS = {
     "orchestration_event_append",
     "planner_iteration_append",
     "intake_submit",
+    "owner_decision_record",
 }
 
 

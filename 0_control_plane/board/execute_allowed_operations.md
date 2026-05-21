@@ -16,6 +16,7 @@ Recommended allowlist for future AIPOS-38:
 - `queue_reopen`
 - `orchestration_event_append`
 - `planner_iteration_append`
+- `owner_decision_record`
 
 These operations are allowed only with:
 
@@ -274,6 +275,34 @@ Post-state expectation:
 - planner iteration log has one additional append-only iteration entry
 - orchestration event logs and summary state files remain unchanged
 
+### `owner_decision_record`
+
+AIPOS-112 introduces this as a narrow controlled writer operation. It records a scoped Owner decision as a records artifact only.
+
+Required checks:
+
+- payload is explicit JSON
+- `decision_id` is present and path-safe
+- target resolves under `5_tasks/records/owner_decisions/<decision_id>.md`
+- duplicate `decision_id` is blocked
+- `owner_approval_evidence` is present and aligned with AIPOS-110
+- evidence `client_tag` matches `applies_to.project` when both are present
+- evidence `external_ref` matches `applies_to.external_ref` when both are present
+- capability scope includes `owner_decision_record`
+- capability scope includes `applies_to.project` when present
+- dry-run returns token and snapshot hash
+- confirm revalidates the same plan before writing
+
+Planned writes or moves:
+
+- write one markdown record under `5_tasks/records/owner_decisions/`
+- no moves
+
+Post-state expectation:
+
+- Owner decision record exists as source-of-truth records artifact
+- no draft publish, queue mutation, orchestration event append, SessionStore write, runtime launch, MCP side effect, or external client side effect occurs
+
 ## AIPOS-38 Execute Surface (2026-04-30)
 
 Enabled execute operations:
@@ -440,3 +469,32 @@ Still blocked:
 - records write UI
 - forum backend write/post
 - database, deployment, auth/RBAC, or git automation
+
+## AIPOS-112 Owner Decision Record Writer MVP (2026-05-21)
+
+AIPOS-112 expands the backend controlled execute allowlist only for scoped Owner decision record persistence:
+
+- `owner_decision_record`
+
+Required gate behavior:
+
+- dry-run token required
+- snapshot hash must cover the normalized decision record, evidence envelope, capability scope, planned write, and target path
+- execute actor must match dry-run actor
+- current dry-run must revalidate before writing
+- `owner_approval_evidence` is required
+- capability scope must include `owner_decision_record`
+- performed writes are reported only when the record file is created
+
+Still blocked:
+
+- MCP `owner_decision_record` tools
+- visible Board decision-record write controls
+- HTTP/SSE write routes
+- draft publish
+- queue mutation
+- orchestration event append side effects
+- SessionStore writes
+- runtime launch
+- token minting/signing/revocation
+- raw platform payload storage

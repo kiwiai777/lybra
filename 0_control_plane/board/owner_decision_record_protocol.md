@@ -163,16 +163,19 @@ request_revision
 supersede_decision
 ```
 
-This list is descriptive for future validators. AIPOS-111 does not implement validation.
+This list is descriptive for future validators. AIPOS-111 does not implement validation. AIPOS-112 implements the first narrow validator/writer slice for this record shape.
 
 ## Persistence Boundary
 
-Future implementations may persist Owner decision records only through a separately approved writer task.
+AIPOS-112 implements the first separately approved writer task for Owner decision records.
 
-Possible future persistence targets:
+The AIPOS-112 MVP persistence target is:
+
+- record artifact under `5_tasks/records/owner_decisions/<decision_id>.md`
+
+Other possible future persistence targets remain separate tasks:
 
 - append-only orchestration event with `event_type: owner_decision_recorded`
-- record artifact under `5_tasks/records/`
 - draft-only review artifact under `5_tasks/drafts/owner_decisions/`
 - project governance note under `2_projects/<project>/` only after a separate governance-write task
 
@@ -188,7 +191,7 @@ Persistence rules:
 
 ## Controlled Execute Integration
 
-A future `owner_decision_record` writer must preserve AIPOS-77 controlled execute discipline:
+AIPOS-112 implements the first `owner_decision_record` writer and preserves AIPOS-77 controlled execute discipline:
 
 - dry-run before write
 - planned writes listed explicitly
@@ -201,7 +204,7 @@ A future `owner_decision_record` writer must preserve AIPOS-77 controlled execut
 - blocking reasons remain blocking
 - write target is constrained to the approved persistence path
 
-The writer must not combine decision recording with draft publish, queue mutation, runtime launch, git automation, or other side effects.
+The writer must not combine decision recording with draft publish, queue mutation, orchestration event append, SessionStore write, runtime launch, git automation, or other side effects.
 
 ## MCP Integration
 
@@ -265,26 +268,21 @@ AIPOS-110 provides the evidence envelope used by this protocol. Owner decision r
 
 ## Future Implementation Notes
 
-Recommended sequence:
+Recommended sequence after AIPOS-112:
 
-1. Implement a narrow controlled writer for draft-only or append-only Owner decision records.
-2. Add tests for duplicate decision id, missing evidence, scope mismatch, and no side effects.
-3. Add MCP dry-run/confirm wrappers using AIPOS-109 discipline.
-4. Decide separately whether Board should display or create decision records.
+1. Add MCP dry-run/confirm wrappers using AIPOS-109 discipline.
+2. Decide separately whether Board should display or create decision records.
+3. Decide separately whether orchestration timeline events should cite records.
 
 Each step requires independent audit.
 
 ## Non-Goals
 
-AIPOS-111 does not:
+AIPOS-111 by itself does not:
 
-- implement a writer
 - add MCP tools
 - add HTTP/SSE transport
 - add Board UI
-- add CLI commands
-- expand controlled execute allowlist
-- write records
 - append orchestration events
 - write task cards or drafts
 - publish drafts

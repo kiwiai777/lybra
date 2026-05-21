@@ -23,6 +23,7 @@ from tools.aipos_cli.external_intake_writer import build_external_intake_draft a
 from tools.aipos_cli.orchestration_event_writer import append_orchestration_event as backend_append_orchestration_event
 from tools.aipos_cli.orchestration_summary_preview import build_orchestration_summary_preview
 from tools.aipos_cli.orchestration_timeline_preview import build_orchestration_timeline_preview
+from tools.aipos_cli.owner_decision_writer import build_owner_decision_record as backend_build_owner_decision_record
 from tools.aipos_cli.planner_iteration_writer import append_planner_iteration as backend_append_planner_iteration
 from tools.aipos_cli.planner_loop_mvp import build_planner_loop_mvp_preview
 from tools.aipos_cli.preview import build_preview
@@ -38,7 +39,8 @@ MUTATION_DRY_RUN_NOTICE = (
 )
 CONTROLLED_EXECUTE_NOTICE = (
     "AIPOS-38 controlled execute is local-only and limited to dry-run-linked operations: "
-    "draft_create, draft_publish, queue_claim, orchestration_event_append, planner_iteration_append, intake_submit."
+    "draft_create, draft_publish, queue_claim, orchestration_event_append, planner_iteration_append, intake_submit, "
+    "owner_decision_record."
 )
 HEALTH_NOTICE = "Local module adapter health check only. No CLI runtime bridge, server, or network behavior is used."
 GOVERNANCE_FILES = {
@@ -248,7 +250,15 @@ def _attach_controlled_execute_metadata(
         response["execute_allowed"] = False
         response["execute_blocking_reasons"] = ["actor is required for controlled execute dry-run token"]
         return response
-    if operation not in {"draft_create", "draft_publish", "queue_claim", "orchestration_event_append", "planner_iteration_append", "intake_submit"}:
+    if operation not in {
+        "draft_create",
+        "draft_publish",
+        "queue_claim",
+        "orchestration_event_append",
+        "planner_iteration_append",
+        "intake_submit",
+        "owner_decision_record",
+    }:
         response["execute_allowed"] = False
         response["execute_blocking_reasons"] = ["operation is not enabled for controlled execute"]
         return response
@@ -923,6 +933,66 @@ def submit_external_intake(
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
 
 
+def record_owner_decision(
+    payload: Mapping[str, Any],
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+    actor: str | None = None,
+) -> dict[str, Any]:
+    operation = "owner_decision_record"
+    try:
+        if not isinstance(payload, Mapping):
+            raise TypeError("payload must be a mapping")
+        if not dry_run:
+            return _blocked_execute(operation, actor=actor)
+        resolved_root = _resolve_repo_root(repo_root)
+        result = backend_build_owner_decision_record(
+            resolved_root,
+            dict(payload),
+            actor=actor,
+            dry_run=True,
+        )
+        verdict = derive_verdict(
+            blocking_reasons=list(result.get("blocking_reasons", [])),
+            warnings=list(result.get("warnings", [])),
+        )
+        data = {
+            "decision_id": result.get("decision_id"),
+            "target_path": result.get("target_path"),
+            "would_write": result.get("would_write", False),
+            "rendered_markdown": result.get("rendered_markdown"),
+            "original_payload": result.get("original_payload"),
+            "capability_scope": result.get("capability_scope"),
+        }
+        response = make_response(
+            ok=True,
+            verdict=verdict,
+            operation=operation,
+            dry_run=True,
+            actor=_actor_payload(actor),
+            data=data,
+            summary={
+                "decision_id": result.get("decision_id"),
+                "target_path": result.get("target_path"),
+                "would_write": result.get("would_write", False),
+            },
+            planned_writes=list(result.get("planned_writes", [])),
+            warnings=list(result.get("warnings", [])),
+            blocking_reasons=list(result.get("blocking_reasons", [])),
+            needs_owner_reasons=[],
+            safety_notice=CONTROLLED_EXECUTE_NOTICE,
+            errors=[],
+        )
+        return _attach_controlled_execute_metadata(
+            operation=operation,
+            actor=actor,
+            response=response,
+            execute_allowed=verdict != "BLOCK",
+        )
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
 def validate_draft(path: str | Path, repo_root: str | Path | None = None, actor: str | None = None) -> dict[str, Any]:
     operation = "draft_validate"
     try:
@@ -1225,7 +1295,15 @@ def execute_dry_run(
                 actor=_actor_payload(actor_text),
                 safety_notice=CONTROLLED_EXECUTE_NOTICE,
             )
-        if token.operation not in {"draft_create", "draft_publish", "queue_claim", "orchestration_event_append", "planner_iteration_append", "intake_submit"}:
+        if token.operation not in {
+            "draft_create",
+            "draft_publish",
+            "queue_claim",
+            "orchestration_event_append",
+            "planner_iteration_append",
+            "intake_submit",
+            "owner_decision_record",
+        }:
             return blocked_response(
                 operation=operation,
                 dry_run=False,
@@ -1283,6 +1361,9 @@ def execute_dry_run(
         elif op == "intake_submit":
             payload = source_data.get("original_payload") or {}
             current = submit_external_intake(payload, dry_run=True, repo_root=resolved_root, actor=actor_text)
+        elif op == "owner_decision_record":
+            payload = source_data.get("original_payload") or {}
+            current = record_owner_decision(payload, dry_run=True, repo_root=resolved_root, actor=actor_text)
         else:
             claim_task_id = source_data.get("task_id")
             claim_path = None if claim_task_id else source_data.get("source_path")
@@ -1452,6 +1533,38 @@ def execute_dry_run(
                 summary={
                     "safe_id": result.get("safe_id"),
                     "task_id": result.get("task_id"),
+                    "target_path": result.get("target_path"),
+                    "wrote": result.get("wrote", False),
+                },
+                planned_writes=list(result.get("planned_writes", [])),
+                performed_writes=list(result.get("planned_writes", [])) if result.get("wrote") else [],
+                warnings=list(result.get("warnings", [])),
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                errors=[],
+            )
+
+        if op == "owner_decision_record":
+            payload = source_data.get("original_payload") or {}
+            result = backend_build_owner_decision_record(
+                resolved_root,
+                payload,
+                actor=actor_text,
+                dry_run=False,
+            )
+            verdict = derive_verdict(
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                warnings=list(result.get("warnings", [])),
+            )
+            return make_response(
+                ok=bool(result.get("wrote", False)),
+                verdict=verdict,
+                operation=op,
+                dry_run=False,
+                actor=_actor_payload(actor_text),
+                data=result,
+                summary={
+                    "decision_id": result.get("decision_id"),
                     "target_path": result.get("target_path"),
                     "wrote": result.get("wrote", False),
                 },
