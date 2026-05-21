@@ -130,6 +130,12 @@ Reserved mutation tool names:
 
 ```yaml
 controlled_mutation_tools:
+  lybra_intake_submit:
+    operation: intake_submit
+    controlled_execute_required: true
+  lybra_owner_decision_record:
+    operation: owner_decision_record
+    controlled_execute_required: true
   lybra_queue_claim:
     operation: queue_claim
     controlled_execute_required: true
@@ -151,6 +157,22 @@ controlled_mutation_tools:
 ```
 
 Reserved names do not enable operations. They describe future mapping targets only.
+
+AIPOS-109 implements the first stdio MCP controlled write-tool pair for `intake_submit`:
+
+```text
+lybra_intake_submit_dry_run
+lybra_intake_submit_confirm
+```
+
+AIPOS-113 implements the stdio MCP controlled write-tool pair for `owner_decision_record` after AIPOS-112 enabled the backend writer:
+
+```text
+lybra_owner_decision_record_dry_run
+lybra_owner_decision_record_confirm
+```
+
+Both pairs remain scope-gated by `LYBRA_CAPABILITY_TOKEN`, preserve dry-run/confirm sequencing, and delegate to controlled execute. They do not enable HTTP/SSE transport, client auto-registration, publish tools, queue mutation tools, direct file writes, token minting, or credential verification.
 
 The MCP layer must not:
 
@@ -244,6 +266,9 @@ AIPOS-96 does not implement that domain, route traffic to it, configure DNS, con
 - AIPOS-91D defines the local Dashboard as a peer surface beside CLI and future MCP.
 - AIPOS-92 defines SessionStore protocol boundaries; MCP SessionStore tools remain future and must preserve those boundaries.
 - AIPOS-95 defines Anthropic SDK compatibility; MCP integration remains separate from SDK compatibility.
+- AIPOS-109 defines the first MCP-native controlled write-tool discipline through `intake_submit`.
+- AIPOS-112 defines the controlled `owner_decision_record` writer that AIPOS-113 exposes through MCP.
+- AIPOS-113 adds the stdio MCP `owner_decision_record` dry-run/confirm wrapper without adding HTTP/SSE, Board UI, or direct writes.
 
 ## Owner Decision Gates
 
@@ -253,8 +278,8 @@ Owner approval is required before:
 - enabling any transport
 - exposing HTTP/SSE beyond loopback
 - registering clients
-- adding MCP tools to runtime configuration
-- adding write-capable MCP tools
+- adding MCP tools to runtime configuration outside approved local stdio slices
+- adding write-capable MCP tools beyond approved controlled execute wrappers
 - expanding controlled execute allowlist
 - connecting MCP to cloud agents or remote clients
 - using `http://mcp.kiwiai.cloud`

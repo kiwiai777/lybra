@@ -121,6 +121,55 @@ class McpToolTests(unittest.TestCase):
         payload.update(overrides)
         return payload
 
+    def owner_decision_payload(self, **overrides: object) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "actor": "mcp.client",
+            "decision_id": "owner-decision-mcp-001",
+            "decision_type": "approve_intake",
+            "decision_status": "approved",
+            "decided_at": "2026-05-21T10:00:00Z",
+            "decided_by_ref": "owner_ref",
+            "captured_by": "mcp.client",
+            "capture_surface": "mcp",
+            "decision_summary": "Approve the external intake for review.",
+            "decision_rationale": "The request is within the client engagement scope.",
+            "applies_to": {
+                "project": "acme_client",
+                "task_id": "EXT-ACME-001",
+                "draft_path": "5_tasks/drafts/external_intake/example.md",
+                "external_ref": "chat:msg-113",
+            },
+            "approval_scope": {
+                "operation": "owner_decision_record",
+                "authority_boundary": "record decision only",
+                "allowed_next_action": "review_draft",
+            },
+            "owner_approval_evidence": {
+                "evidence_id": "evidence-113",
+                "source_tag": "wechat_bot",
+                "client_tag": "acme_client",
+                "external_ref": "chat:msg-113",
+                "approval_actor_ref": "owner_ref",
+                "approval_timestamp": "2026-05-21T10:00:00Z",
+                "approval_intent": "approve_owner_decision_record",
+                "evidence_hash": "sha256:mcp113",
+                "evidence_ref": "chat:redacted:msg-113",
+                "captured_by": "bot.local",
+                "capture_method": "external_client",
+                "redaction_status": "redacted",
+                "refs": ["5_tasks/drafts/external_intake/example.md"],
+            },
+            "refs": ["5_tasks/drafts/external_intake/example.md"],
+            "capability_scope": {
+                "token_ref": "cap_mcp_test",
+                "operations": ["owner_decision_record"],
+                "projects": ["acme_client"],
+                "expires_at": "2999-01-01T00:00:00Z",
+            },
+        }
+        payload.update(overrides)
+        return payload
+
     def list_tool_names(self, capability_token: str | None = None) -> list[str]:
         env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}
         if capability_token is not None:
@@ -168,18 +217,35 @@ class McpToolTests(unittest.TestCase):
         names_with_scope = self.list_tool_names(capability_token=self.capability_token())
         self.assertIn("lybra_intake_submit_dry_run", names_with_scope)
         self.assertIn("lybra_intake_submit_confirm", names_with_scope)
+        self.assertNotIn("lybra_owner_decision_record_dry_run", names_with_scope)
+
+        names_with_owner_scope = self.list_tool_names(capability_token=self.capability_token(operations=["owner_decision_record"]))
+        self.assertIn("lybra_owner_decision_record_dry_run", names_with_owner_scope)
+        self.assertIn("lybra_owner_decision_record_confirm", names_with_owner_scope)
+        self.assertNotIn("lybra_intake_submit_dry_run", names_with_owner_scope)
 
     def test_write_tool_descriptions_are_self_documenting(self) -> None:
-        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token()}
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["intake_submit", "owner_decision_record"]),
+        }
         with patch.dict(os.environ, env, clear=True):
             response = handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
         assert response is not None
         descriptions = {
             tool["name"]: tool["description"]
             for tool in response["result"]["tools"]  # type: ignore[index]
-            if tool["name"].startswith("lybra_intake_submit")
+            if tool["name"].startswith("lybra_intake_submit") or tool["name"].startswith("lybra_owner_decision_record")
         }
-        self.assertEqual(set(descriptions), {"lybra_intake_submit_dry_run", "lybra_intake_submit_confirm"})
+        self.assertEqual(
+            set(descriptions),
+            {
+                "lybra_intake_submit_dry_run",
+                "lybra_intake_submit_confirm",
+                "lybra_owner_decision_record_dry_run",
+                "lybra_owner_decision_record_confirm",
+            },
+        )
         for description in descriptions.values():
             self.assertIn("When to use", description)
             self.assertIn("Prerequisites", description)
@@ -297,6 +363,69 @@ class McpToolTests(unittest.TestCase):
             target_path.write_text("collision", encoding="utf-8")
             response = self.assert_tool_ok(
                 self.call_tool("lybra_intake_submit_confirm", {"dry_run_token": dry["dry_run_token"], "actor": "mcp.client"})
+            )
+        self.assertEqual(response["error_code"], "SNAPSHOT_MISMATCH")
+
+    def test_owner_decision_record_dry_run_and_confirm_happy_path(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["owner_decision_record"])}
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_owner_decision_record_dry_run", self.owner_decision_payload()))
+            self.assertEqual(dry["operation"], "owner_decision_record")
+            token = dry["dry_run_token"]
+            confirm = self.assert_tool_ok(
+                self.call_tool("lybra_owner_decision_record_confirm", {"dry_run_token": token, "actor": "mcp.client"})
+            )
+
+        self.assertEqual(confirm["operation"], "owner_decision_record")
+        self.assertTrue(confirm["data"]["wrote"])  # type: ignore[index]
+        self.assertTrue((self.repo_root / confirm["data"]["target_path"]).exists())  # type: ignore[index]
+        self.assertFalse((self.repo_root / "5_tasks" / "drafts").exists())
+        self.assertFalse((self.repo_root / "5_tasks" / "orchestration").exists())
+
+    def test_owner_decision_scope_denied_returns_structured_teaching_error(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=[])}
+        with patch.dict(os.environ, env, clear=True):
+            response = self.assert_tool_ok(self.call_tool("lybra_owner_decision_record_dry_run", self.owner_decision_payload()))
+        self.assertEqual(response["error_code"], "SCOPE_DENIED")
+        self.assertIn("owner_decision_record", response["suggested_next_action"])
+
+    def test_owner_decision_confirm_missing_token_returns_structured_teaching_error(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["owner_decision_record"])}
+        with patch.dict(os.environ, env, clear=True):
+            response = self.assert_tool_ok(self.call_tool("lybra_owner_decision_record_confirm", {}))
+        self.assertEqual(response["error_code"], "MISSING_DRY_RUN_TOKEN")
+        self.assertIn("lybra_owner_decision_record_dry_run", response["suggested_next_action"])
+
+    def test_owner_decision_missing_evidence_returns_structured_teaching_error(self) -> None:
+        payload = self.owner_decision_payload()
+        payload.pop("owner_approval_evidence")
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["owner_decision_record"])}
+        with patch.dict(os.environ, env, clear=True):
+            response = self.assert_tool_ok(self.call_tool("lybra_owner_decision_record_dry_run", payload))
+        self.assertEqual(response["error_code"], "MISSING_OWNER_APPROVAL_EVIDENCE")
+        self.assertIn("AIPOS-110", response["doc_ref"])
+
+    def test_owner_decision_confirm_expired_token_returns_structured_teaching_error(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["owner_decision_record"])}
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_owner_decision_record_dry_run", self.owner_decision_payload()))
+            token = get_dry_run(str(dry["dry_run_token"]))
+            assert token is not None
+            token.expires_at = "2000-01-01T00:00:00Z"
+            response = self.assert_tool_ok(
+                self.call_tool("lybra_owner_decision_record_confirm", {"dry_run_token": dry["dry_run_token"], "actor": "mcp.client"})
+            )
+        self.assertEqual(response["error_code"], "TOKEN_EXPIRED")
+
+    def test_owner_decision_confirm_snapshot_mismatch_returns_structured_teaching_error(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["owner_decision_record"])}
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_owner_decision_record_dry_run", self.owner_decision_payload()))
+            target_path = self.repo_root / dry["data"]["target_path"]  # type: ignore[index]
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text("collision", encoding="utf-8")
+            response = self.assert_tool_ok(
+                self.call_tool("lybra_owner_decision_record_confirm", {"dry_run_token": dry["dry_run_token"], "actor": "mcp.client"})
             )
         self.assertEqual(response["error_code"], "SNAPSHOT_MISMATCH")
 

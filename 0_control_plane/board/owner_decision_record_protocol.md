@@ -210,7 +210,7 @@ The writer must not combine decision recording with draft publish, queue mutatio
 
 AIPOS-109 defines the MCP-native discipline baseline.
 
-Future MCP wrapping for `owner_decision_record` must use a tool pair:
+AIPOS-113 implements MCP wrapping for `owner_decision_record` as a tool pair:
 
 ```text
 lybra_owner_decision_record_dry_run
@@ -268,11 +268,11 @@ AIPOS-110 provides the evidence envelope used by this protocol. Owner decision r
 
 ## Future Implementation Notes
 
-Recommended sequence after AIPOS-112:
+Recommended sequence after AIPOS-113:
 
-1. Add MCP dry-run/confirm wrappers using AIPOS-109 discipline.
-2. Decide separately whether Board should display or create decision records.
-3. Decide separately whether orchestration timeline events should cite records.
+1. Decide separately whether Board should display or create decision records.
+2. Decide separately whether orchestration timeline events should cite records.
+3. Decide separately whether HTTP/SSE transport or stronger capability-token infrastructure is needed.
 
 Each step requires independent audit.
 

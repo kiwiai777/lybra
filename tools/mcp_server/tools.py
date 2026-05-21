@@ -12,6 +12,7 @@ from tools.aipos_cli.board_adapter import (
     get_preview,
     get_queue,
     get_validate,
+    record_owner_decision,
     submit_external_intake,
 )
 from tools.aipos_cli.task_loader import find_repo_root
@@ -20,7 +21,8 @@ from tools.aipos_cli.task_loader import find_repo_root
 READ_ONLY_NOTICE = "Lybra MCP exposes read tools by default. Write tools are visible only with scoped capability."
 CAPABILITY_ENV_VAR = "LYBRA_CAPABILITY_TOKEN"
 INTAKE_SCOPE = "intake_submit"
-DISCIPLINE_DOC_REF = "AIPOS-109 MCP-native discipline; AIPOS-108 controlled external intake writer"
+OWNER_DECISION_SCOPE = "owner_decision_record"
+DISCIPLINE_DOC_REF = "AIPOS-109 MCP-native discipline"
 
 
 def _repo_root() -> Path:
@@ -114,10 +116,14 @@ def _capability_has_scope(scope: str) -> bool:
 
 
 def _scope_denied_result() -> dict[str, Any]:
+    return _scope_denied_result_for(INTAKE_SCOPE, "intake submit tools")
+
+
+def _scope_denied_result_for(scope: str, label: str) -> dict[str, Any]:
     return _teaching_error(
         "SCOPE_DENIED",
-        f"Connection capability does not include {INTAKE_SCOPE}; intake submit tools are not available.",
-        "Restart the MCP server with LYBRA_CAPABILITY_TOKEN containing operations: [\"intake_submit\"].",
+        f"Connection capability does not include {scope}; {label} are not available.",
+        f"Restart the MCP server with LYBRA_CAPABILITY_TOKEN containing operations: [\"{scope}\"].",
         doc_ref="AIPOS-109 capability token scope-gated tool visibility",
     )
 
@@ -126,7 +132,11 @@ def _intake_scope_allowed() -> bool:
     return _capability_has_scope(INTAKE_SCOPE)
 
 
-def _map_controlled_execute_error(response: dict[str, Any]) -> dict[str, Any]:
+def _owner_decision_scope_allowed() -> bool:
+    return _capability_has_scope(OWNER_DECISION_SCOPE)
+
+
+def _map_controlled_execute_error(response: dict[str, Any], *, dry_run_tool: str = "lybra_intake_submit_dry_run") -> dict[str, Any]:
     blocking = " ".join(str(item) for item in response.get("blocking_reasons", []))
     errors = response.get("errors") if isinstance(response.get("errors"), list) else []
     first_message = ""
@@ -137,18 +147,42 @@ def _map_controlled_execute_error(response: dict[str, Any]) -> dict[str, Any]:
         return _teaching_error(
             "TOKEN_EXPIRED",
             "The dry_run_token expired before confirm.",
-            "Run lybra_intake_submit_dry_run again and confirm with the new dry_run_token.",
+            f"Run {dry_run_tool} again and confirm with the new dry_run_token.",
         )
     if "snapshot mismatch" in text:
         return _teaching_error(
             "SNAPSHOT_MISMATCH",
             "The workspace state no longer matches the dry-run snapshot.",
-            "Run lybra_intake_submit_dry_run again before confirming.",
+            f"Run {dry_run_tool} again before confirming.",
         )
     return _teaching_error(
         "CONTROLLED_EXECUTE_REJECTED",
         first_message or blocking or "Controlled execute rejected the confirm request.",
-        "Inspect the dry-run response, then run lybra_intake_submit_dry_run again if appropriate.",
+        f"Inspect the dry-run response, then run {dry_run_tool} again if appropriate.",
+    )
+
+
+def _map_owner_decision_dry_run_error(response: dict[str, Any]) -> dict[str, Any]:
+    blocking = " ".join(str(item) for item in response.get("blocking_reasons", []))
+    if "owner_approval_evidence" in blocking:
+        return _teaching_error(
+            "MISSING_OWNER_APPROVAL_EVIDENCE",
+            "owner_decision_record requires structured owner_approval_evidence.",
+            "Add an AIPOS-110 owner_approval_evidence envelope, then call lybra_owner_decision_record_dry_run again.",
+            doc_ref="AIPOS-110 Owner Approval Evidence; AIPOS-111 Owner Decision Record; AIPOS-112 writer",
+        )
+    if "scope" in blocking.lower() or "must match" in blocking:
+        return _teaching_error(
+            "DECISION_SCOPE_MISMATCH",
+            "The decision record scope does not match its evidence or capability scope.",
+            "Align applies_to, owner_approval_evidence, and capability_scope, then call lybra_owner_decision_record_dry_run again.",
+            doc_ref="AIPOS-111 Owner Decision Record; AIPOS-112 writer",
+        )
+    return _teaching_error(
+        "INVALID_OWNER_DECISION_RECORD",
+        blocking or "owner_decision_record dry-run was rejected.",
+        "Inspect blocking_reasons, fix the payload, then call lybra_owner_decision_record_dry_run again.",
+        doc_ref="AIPOS-111 Owner Decision Record; AIPOS-112 writer",
     )
 
 
@@ -227,7 +261,40 @@ def lybra_intake_submit_confirm(arguments: dict[str, Any] | None = None) -> dict
         repo_root=_repo_root(),
     )
     if not response.get("ok", False):
-        return _map_controlled_execute_error(response)
+        return _map_controlled_execute_error(response, dry_run_tool="lybra_intake_submit_dry_run")
+    return _tool_result(response, is_error=False)
+
+
+def lybra_owner_decision_record_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _owner_decision_scope_allowed():
+        return _scope_denied_result_for(OWNER_DECISION_SCOPE, "owner decision record tools")
+    args = arguments or {}
+    response = record_owner_decision(args, dry_run=True, repo_root=_repo_root(), actor=str(args.get("actor") or "mcp.client"))
+    if response.get("verdict") == "BLOCK":
+        return _map_owner_decision_dry_run_error(response)
+    return _tool_result(response, is_error=not bool(response.get("ok", False)))
+
+
+def lybra_owner_decision_record_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _owner_decision_scope_allowed():
+        return _scope_denied_result_for(OWNER_DECISION_SCOPE, "owner decision record tools")
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    if not dry_run_token:
+        return _teaching_error(
+            "MISSING_DRY_RUN_TOKEN",
+            "lybra_owner_decision_record_confirm requires dry_run_token from a prior dry-run response.",
+            "Call lybra_owner_decision_record_dry_run first, then pass its dry_run_token to lybra_owner_decision_record_confirm.",
+            doc_ref="AIPOS-109 MCP-native discipline; AIPOS-112 owner_decision_record writer",
+        )
+    response = execute_dry_run(
+        dry_run_token,
+        str(args.get("actor") or "mcp.client"),
+        owner_confirmation_token=str(args.get("owner_confirmation_token") or "") or None,
+        repo_root=_repo_root(),
+    )
+    if not response.get("ok", False):
+        return _map_controlled_execute_error(response, dry_run_tool="lybra_owner_decision_record_dry_run")
     return _tool_result(response, is_error=False)
 
 
@@ -238,6 +305,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_context_pack_build": lybra_context_pack_build,
     "lybra_intake_submit_dry_run": lybra_intake_submit_dry_run,
     "lybra_intake_submit_confirm": lybra_intake_submit_confirm,
+    "lybra_owner_decision_record_dry_run": lybra_owner_decision_record_dry_run,
+    "lybra_owner_decision_record_confirm": lybra_owner_decision_record_confirm,
 }
 
 
@@ -347,13 +416,78 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "lybra_owner_decision_record_dry_run",
+        "description": (
+            "When to use: create a controlled execute preview for recording a scoped Owner decision after an Owner Decision Gate has explicit evidence. "
+            "Prerequisites: this MCP connection must have a capability_token with owner_decision_record scope; owner_approval_evidence is required and must align with applies_to; capability_scope must include owner_decision_record and the target project when present; this tool does not publish, mutate queues, append orchestration events, or execute follow-up work. "
+            "Return structure: a controlled execute envelope with verdict, planned_writes, dry_run_token, dry_run_snapshot_hash, dry_run_created_at, dry_run_expires_at, and rendered Owner decision record content. "
+            "Next-step hint: pass dry_run_token to lybra_owner_decision_record_confirm; confirm writes only a records artifact under 5_tasks/records/owner_decisions and no agent takes automatic follow-up action."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "actor": {"type": "string"},
+                "decision_id": {"type": "string"},
+                "decision_type": {"type": "string"},
+                "decision_status": {"type": "string"},
+                "decided_at": {"type": "string"},
+                "decided_by_ref": {"type": "string"},
+                "captured_by": {"type": "string"},
+                "capture_surface": {"type": "string"},
+                "decision_summary": {"type": "string"},
+                "decision_rationale": {"type": "string"},
+                "applies_to": {"type": "object"},
+                "approval_scope": {"type": "object"},
+                "owner_approval_evidence": {"type": "object"},
+                "refs": {"type": "array", "items": {"type": "string"}},
+                "capability_scope": {"type": "object"},
+            },
+            "required": [
+                "decision_id",
+                "decision_type",
+                "decision_status",
+                "decided_at",
+                "decided_by_ref",
+                "captured_by",
+                "capture_surface",
+                "decision_summary",
+                "applies_to",
+                "approval_scope",
+                "owner_approval_evidence",
+                "capability_scope",
+            ],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_owner_decision_record_confirm",
+        "description": (
+            "When to use: confirm a prior lybra_owner_decision_record_dry_run after reviewing its planned_writes and rendered Owner decision record. "
+            "Prerequisites: this MCP connection must have a capability_token with owner_decision_record scope; dry_run_token is required and must come from the immediately preceding dry-run flow; the dry-run token must be unexpired and its snapshot must still match. "
+            "Return structure: a controlled execute result with performed_writes when the Owner decision record is written, or a structured teaching error with error_code, message, suggested_next_action, and doc_ref. "
+            "Next-step hint: confirm only writes a record under 5_tasks/records/owner_decisions; it does not publish drafts, mutate queues, append orchestration events, or continue runtime execution."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run_token": {"type": "string"},
+                "actor": {"type": "string"},
+                "owner_confirmation_token": {"type": "string"},
+            },
+            "required": ["dry_run_token"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
 def visible_tool_descriptors() -> list[dict[str, Any]]:
     descriptors = list(READ_TOOL_DESCRIPTORS)
     if _intake_scope_allowed():
-        descriptors.extend(WRITE_TOOL_DESCRIPTORS)
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_intake_submit"))
+    if _owner_decision_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_owner_decision_record"))
     return descriptors
 
 

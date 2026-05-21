@@ -20,7 +20,7 @@ Lybra is extracted from the AI Project OS control-plane work. AI Project OS rema
 |---|---|---|
 | CLI | Scripting, CI-friendly checks, headless workflows | Implemented |
 | Local Dashboard / Board UI | Human review in a browser | Implemented for read paths and selected controlled write paths |
-| MCP Server | MCP-aware clients | Stdio read-only MVP implemented; HTTP/SSE and write tools pending |
+| MCP Server | MCP-aware clients | Stdio MVP implemented with read tools and selected controlled write tools; HTTP/SSE pending |
 
 No surface is privileged. Future surfaces should translate to the same backend semantics instead of bypassing them.
 
@@ -33,6 +33,13 @@ The current MCP MVP is a local stdio server with four read-only tools:
 - `lybra_validate`
 - `lybra_context_pack_build`
 
+It also exposes selected controlled write-tool pairs when `LYBRA_CAPABILITY_TOKEN` includes the matching operation scope:
+
+- `lybra_intake_submit_dry_run` / `lybra_intake_submit_confirm`
+- `lybra_owner_decision_record_dry_run` / `lybra_owner_decision_record_confirm`
+
+These tools wrap the same controlled execute path as the CLI: dry-run first, token proof, snapshot revalidation, then confirm. They do not publish drafts, mutate queues, append orchestration events as side effects, or launch runtimes.
+
 Manual client configuration example:
 
 ```json
@@ -43,14 +50,15 @@ Manual client configuration example:
       "args": ["-m", "tools.mcp_server", "serve"],
       "cwd": "<product-repo>",
       "env": {
-        "AIPOS_WORKSPACE_ROOT": "<workspace>"
+        "AIPOS_WORKSPACE_ROOT": "<workspace>",
+        "LYBRA_CAPABILITY_TOKEN": "{\"token_ref\":\"<token>\",\"operations\":[\"intake_submit\"],\"projects\":[\"<project>\"],\"expires_at\":\"<iso-timestamp>\"}"
       }
     }
   }
 }
 ```
 
-The MVP does not register itself with clients, expose HTTP/SSE, or provide write tools.
+The MVP does not register itself with clients, expose HTTP/SSE, mint tokens, verify signatures, or provide publish/queue/runtime tools.
 
 ### Local Docker Sandbox MVP
 
@@ -111,7 +119,7 @@ Implemented today:
 - Local Board read paths and selected controlled write paths
 - Context Pack read-only preview path
 - Product/workspace root separation through environment configuration
-- MCP stdio read-only MVP for queue, task preview, validation, and Context Pack tools
+- MCP stdio MVP for queue, task preview, validation, Context Pack tools, and selected controlled write-tool pairs
 - Local Docker sandbox runtime MVP for explicit, bounded, read-only ephemeral worker runs
 
 Protocol finalized, implementation pending or partial:
@@ -122,7 +130,7 @@ Protocol finalized, implementation pending or partial:
 - Vendor-neutral role catalog: AIPOS-97
 - Planner autonomy tiers, session tree primitives, and related governance
 
-Lybra does not currently ship a public hosted service, managed cloud runtime, remote database, autonomous planner runtime, HTTP/SSE MCP transport, or MCP write tools.
+Lybra does not currently ship a public hosted service, managed cloud runtime, remote database, autonomous planner runtime, HTTP/SSE MCP transport, MCP publish tools, or MCP queue mutation tools.
 
 ## Getting Started / Workspace Root
 
