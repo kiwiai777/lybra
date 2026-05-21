@@ -5,7 +5,7 @@ import json
 import sys
 from typing import Any, TextIO
 
-from .tools import READ_ONLY_NOTICE, TOOL_DESCRIPTORS, TOOL_HANDLERS
+from .tools import READ_ONLY_NOTICE, TOOL_HANDLERS, visible_tool_descriptors
 
 JSONRPC_VERSION = "2.0"
 SERVER_NAME = "lybra-mcp"
@@ -73,7 +73,7 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
     if method == "initialize":
         return _success(request_id, _initialize_result())
     if method == "tools/list":
-        return _success(request_id, {"tools": TOOL_DESCRIPTORS})
+        return _success(request_id, {"tools": visible_tool_descriptors()})
     if method == "tools/call":
         return _success(request_id, _handle_tools_call(params))
     if method == "ping":
@@ -122,4 +122,3 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
     return serve()
-

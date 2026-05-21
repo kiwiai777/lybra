@@ -8,6 +8,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from tools.aipos_cli.controlled_execute import clear_tokens, get_dry_run
 from tools.mcp_server.server import handle_request, serve
 from tools.mcp_server.tools import TOOL_DESCRIPTORS
 
@@ -18,6 +19,7 @@ class McpToolTests(unittest.TestCase):
         self.repo_root = Path(self.temp_dir.name)
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+        (self.repo_root / "2_projects" / "acme_client").mkdir(parents=True, exist_ok=True)
         (self.repo_root / "3_context_bundles" / "examples").mkdir(parents=True, exist_ok=True)
         (self.repo_root / "3_context_bundles" / "examples" / "dev.codex.local.md").write_text(
             "\n".join(
@@ -41,6 +43,7 @@ class McpToolTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.write_task()
+        clear_tokens()
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -88,6 +91,45 @@ class McpToolTests(unittest.TestCase):
         assert response is not None
         return response
 
+    def capability_token(self, operations: list[str] | None = None) -> str:
+        return json.dumps(
+            {
+                "token_ref": "cap_mcp_test",
+                "operations": operations if operations is not None else ["intake_submit"],
+                "projects": ["acme_client"],
+                "expires_at": "2999-01-01T00:00:00Z",
+            }
+        )
+
+    def intake_payload(self, **overrides: object) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "actor": "mcp.client",
+            "source_tag": "wechat_bot",
+            "client_tag": "acme_client",
+            "external_ref": "wechat:msg-109",
+            "title": "MCP intake test",
+            "body": "A normalized intake request from MCP.",
+            "submitted_at": "2026-05-21T10:00:00Z",
+            "submitter_ref": "contact_hash_109",
+            "capability_scope": {
+                "token_ref": "cap_mcp_test",
+                "operations": ["intake_submit"],
+                "projects": ["acme_client"],
+                "expires_at": "2999-01-01T00:00:00Z",
+            },
+        }
+        payload.update(overrides)
+        return payload
+
+    def list_tool_names(self, capability_token: str | None = None) -> list[str]:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}
+        if capability_token is not None:
+            env["LYBRA_CAPABILITY_TOKEN"] = capability_token
+        with patch.dict(os.environ, env, clear=True):
+            response = handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        assert response is not None
+        return [tool["name"] for tool in response["result"]["tools"]]  # type: ignore[index]
+
     def data_paths(self) -> list[str]:
         return sorted(path.relative_to(self.repo_root).as_posix() for path in self.repo_root.rglob("*"))
 
@@ -110,6 +152,39 @@ class McpToolTests(unittest.TestCase):
                 "lybra_context_pack_build",
             ],
         )
+
+    def test_tools_list_scope_gates_intake_write_tools(self) -> None:
+        names_without_scope = self.list_tool_names(capability_token=self.capability_token(operations=[]))
+        self.assertEqual(
+            names_without_scope,
+            [
+                "lybra_queue_list",
+                "lybra_task_preview",
+                "lybra_validate",
+                "lybra_context_pack_build",
+            ],
+        )
+
+        names_with_scope = self.list_tool_names(capability_token=self.capability_token())
+        self.assertIn("lybra_intake_submit_dry_run", names_with_scope)
+        self.assertIn("lybra_intake_submit_confirm", names_with_scope)
+
+    def test_write_tool_descriptions_are_self_documenting(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token()}
+        with patch.dict(os.environ, env, clear=True):
+            response = handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        assert response is not None
+        descriptions = {
+            tool["name"]: tool["description"]
+            for tool in response["result"]["tools"]  # type: ignore[index]
+            if tool["name"].startswith("lybra_intake_submit")
+        }
+        self.assertEqual(set(descriptions), {"lybra_intake_submit_dry_run", "lybra_intake_submit_confirm"})
+        for description in descriptions.values():
+            self.assertIn("When to use", description)
+            self.assertIn("Prerequisites", description)
+            self.assertIn("Return structure", description)
+            self.assertIn("Next-step hint", description)
 
     def test_queue_list_is_read_only(self) -> None:
         before = self.data_paths()
@@ -157,6 +232,73 @@ class McpToolTests(unittest.TestCase):
         response = json.loads(stdout.getvalue())
         self.assertIn("error", response)
         self.assertEqual(response["error"]["code"], -32601)  # type: ignore[index]
+
+    def test_intake_submit_dry_run_and_confirm_happy_path(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token()}
+        pending_before = self.data_paths()
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_intake_submit_dry_run", self.intake_payload()))
+            self.assertEqual(dry["operation"], "intake_submit")
+            token = dry["dry_run_token"]
+            confirm = self.assert_tool_ok(
+                self.call_tool("lybra_intake_submit_confirm", {"dry_run_token": token, "actor": "mcp.client"})
+            )
+
+        self.assertEqual(confirm["operation"], "intake_submit")
+        self.assertTrue(confirm["data"]["wrote"])  # type: ignore[index]
+        self.assertTrue((self.repo_root / confirm["data"]["target_path"]).exists())  # type: ignore[index]
+        pending_after = sorted(
+            path.relative_to(self.repo_root).as_posix()
+            for path in (self.repo_root / "5_tasks" / "queue" / "pending").iterdir()
+        )
+        self.assertEqual(pending_after, [path for path in pending_before if path.startswith("5_tasks/queue/pending/")])
+
+    def test_scope_denied_returns_structured_teaching_error(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=[])}
+        with patch.dict(os.environ, env, clear=True):
+            response = self.assert_tool_ok(self.call_tool("lybra_intake_submit_dry_run", self.intake_payload()))
+        self.assertEqual(response["error_code"], "SCOPE_DENIED")
+        self.assertIn("suggested_next_action", response)
+
+    def test_confirm_missing_token_returns_structured_teaching_error(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token()}
+        with patch.dict(os.environ, env, clear=True):
+            response = self.assert_tool_ok(self.call_tool("lybra_intake_submit_confirm", {}))
+        self.assertEqual(response["error_code"], "MISSING_DRY_RUN_TOKEN")
+        self.assertIn("lybra_intake_submit_dry_run", response["suggested_next_action"])
+
+    def test_dry_run_invalid_source_returns_structured_teaching_error(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token()}
+        with patch.dict(os.environ, env, clear=True):
+            response = self.assert_tool_ok(
+                self.call_tool("lybra_intake_submit_dry_run", self.intake_payload(source_tag="WeChat Bot"))
+            )
+        self.assertEqual(response["error_code"], "INVALID_SOURCE")
+        self.assertIn("doc_ref", response)
+
+    def test_confirm_expired_token_returns_structured_teaching_error(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token()}
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_intake_submit_dry_run", self.intake_payload()))
+            token = get_dry_run(str(dry["dry_run_token"]))
+            assert token is not None
+            token.expires_at = "2000-01-01T00:00:00Z"
+            response = self.assert_tool_ok(
+                self.call_tool("lybra_intake_submit_confirm", {"dry_run_token": dry["dry_run_token"], "actor": "mcp.client"})
+            )
+        self.assertEqual(response["error_code"], "TOKEN_EXPIRED")
+
+    def test_confirm_snapshot_mismatch_returns_structured_teaching_error(self) -> None:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token()}
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_intake_submit_dry_run", self.intake_payload()))
+            target_path = self.repo_root / dry["data"]["target_path"]  # type: ignore[index]
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text("collision", encoding="utf-8")
+            response = self.assert_tool_ok(
+                self.call_tool("lybra_intake_submit_confirm", {"dry_run_token": dry["dry_run_token"], "actor": "mcp.client"})
+            )
+        self.assertEqual(response["error_code"], "SNAPSHOT_MISMATCH")
 
 
 if __name__ == "__main__":
