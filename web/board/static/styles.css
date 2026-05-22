@@ -201,6 +201,37 @@ pre {
   overflow-wrap: anywhere;
 }
 
+.publish-review-card {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #2563eb;
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+.publish-review-header,
+.publish-review-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+.publish-review-chip {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow-wrap: anywhere;
+}
+.publish-review-chip.wide {
+  grid-column: span 2;
+}
+
 .governance-card {
   display: grid;
   gap: 10px;

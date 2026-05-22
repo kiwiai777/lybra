@@ -765,6 +765,60 @@ function summarizeExecute(data) {
   };
 }
 
+function formatPublishList(values) {
+  const rows = Array.isArray(values) ? values : [];
+  return rows.map((value) => {
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    return value.path || value.source_path || value.target_path || JSON.stringify(value);
+  });
+}
+
+function renderDraftPublishCard(data, phase) {
+  const card = document.getElementById("draft-publish-card");
+  card.replaceChildren();
+  if (!data) {
+    card.textContent = "Enter a draft path and run dry-run.";
+    return;
+  }
+  const summary = summarizeExecute(data);
+  const canExecute = Boolean(data?.dry_run_id && data?.execute_allowed && data?.verdict !== "BLOCK");
+  const status = phase === "confirm"
+    ? (data?.ok ? "published" : "confirm failed")
+    : (canExecute ? "ready for Owner confirm" : "blocked or needs review");
+  const header = document.createElement("div");
+  header.className = "publish-review-header";
+  header.append(
+    createTextBlock("publish-review-chip", "Status", status),
+    createTextBlock("publish-review-chip", "Verdict", summary.verdict),
+    createTextBlock("publish-review-chip", "Execute", summary.execute_allowed ? "allowed" : "blocked"),
+    createTextBlock("publish-review-chip", "Dry-run token", summary.dry_run_id)
+  );
+
+  const paths = document.createElement("div");
+  paths.className = "publish-review-grid";
+  paths.append(
+    createTextBlock("publish-review-chip wide", "Source", summary.source_path),
+    createTextBlock("publish-review-chip wide", "Target", summary.target_path),
+    createTextBlock("publish-review-chip", "Owner confirm", summary.owner_confirmation_required ? "required" : "not required"),
+    createTextBlock("publish-review-chip", "Snapshot", summary.dry_run_snapshot_hash)
+  );
+
+  const details = document.createElement("div");
+  details.className = "publish-review-grid";
+  details.append(
+    createListBlock("Blocking Reasons", summary.execute_blocking_reasons.concat(summary.blocking_reasons || [])),
+    createListBlock("Owner Confirmation Reasons", summary.owner_confirmation_reasons),
+    createListBlock("Planned Moves", formatPublishList(summary.planned_moves)),
+    createListBlock("Performed Moves", formatPublishList(summary.performed_moves)),
+    createListBlock("Warnings", summary.warnings),
+    createListBlock("Errors", summary.errors)
+  );
+
+  card.append(header, paths, details);
+}
+
 function draftValue(id) {
   return document.getElementById(id).value.trim();
 }
@@ -1008,6 +1062,14 @@ function loadExternalIntakeIntoDraftPublish() {
   document.getElementById("draft-publish-path").value = row.path;
   latestDraftPublishDryRun = null;
   document.getElementById("draft-publish-confirm").disabled = true;
+  renderDraftPublishCard({
+    ok: true,
+    verdict: "READY_FOR_DRY_RUN",
+    operation: "draft_publish",
+    data: { source_path: row.path },
+    execute_allowed: false,
+    execute_blocking_reasons: ["Run Draft Publish dry-run before confirming."],
+  }, "handoff");
   result.textContent = JSON.stringify({
     ok: true,
     source: "external_intake",
@@ -2353,12 +2415,27 @@ async function runDraftPublishDryRun() {
   const el = document.getElementById("draft-publish-result");
   const payload = draftPublishPayload();
   if (!payload.actor || !payload.path) {
+    renderDraftPublishCard({
+      ok: false,
+      verdict: "BLOCK",
+      operation: "draft_publish",
+      data: { source_path: payload.path },
+      execute_allowed: false,
+      execute_blocking_reasons: ["actor and draft path are required."],
+    }, "dry_run");
     el.textContent = JSON.stringify({ ok: false, message: "actor and draft path are required." }, null, 2);
     return null;
   }
   document.getElementById("draft-publish-confirm").disabled = true;
   latestDraftPublishDryRun = null;
   setPanelLoading("draft-publish-result");
+  renderDraftPublishCard({
+    ok: true,
+    verdict: "RUNNING",
+    operation: "draft_publish",
+    data: { source_path: payload.path },
+    execute_allowed: false,
+  }, "dry_run");
   try {
     const response = await fetch("/api/execute/dry-run", {
       method: "POST",
@@ -2370,11 +2447,18 @@ async function runDraftPublishDryRun() {
     latestDebug["/api/execute/dry-run:draft_publish"] = data;
     const canExecute = Boolean(data?.dry_run_id && data?.execute_allowed && data?.verdict !== "BLOCK");
     document.getElementById("draft-publish-confirm").disabled = !canExecute;
+    renderDraftPublishCard(data, "dry_run");
     el.textContent = JSON.stringify(summarizeExecute(data), null, 2);
     updateDebugPanel();
     return data;
   } catch (err) {
     setPanelError("draft-publish-result", err);
+    renderDraftPublishCard({
+      ok: false,
+      verdict: "ERROR",
+      operation: "draft_publish",
+      errors: [String(err)],
+    }, "dry_run");
     return { ok: false, error: String(err) };
   }
 }
@@ -2383,11 +2467,26 @@ async function confirmDraftPublish() {
   const el = document.getElementById("draft-publish-result");
   const actor = document.getElementById("preview-actor").value.trim();
   if (!latestDraftPublishDryRun?.dry_run_id || !actor) {
+    renderDraftPublishCard({
+      ok: false,
+      verdict: "BLOCK",
+      operation: "draft_publish",
+      dry_run_id: latestDraftPublishDryRun?.dry_run_id,
+      execute_allowed: false,
+      execute_blocking_reasons: ["Draft publish dry-run token and actor are required."],
+    }, "confirm");
     el.textContent = JSON.stringify({ ok: false, message: "Draft publish dry-run token and actor are required." }, null, 2);
     return null;
   }
   document.getElementById("draft-publish-confirm").disabled = true;
   setPanelLoading("draft-publish-result");
+  renderDraftPublishCard({
+    ok: true,
+    verdict: "CONFIRMING",
+    operation: "draft_publish",
+    dry_run_id: latestDraftPublishDryRun.dry_run_id,
+    execute_allowed: false,
+  }, "confirm");
   try {
     const response = await fetch("/api/execute/confirm", {
       method: "POST",
@@ -2400,6 +2499,7 @@ async function confirmDraftPublish() {
     });
     const data = await response.json();
     latestDebug["/api/execute/confirm:draft_publish"] = data;
+    renderDraftPublishCard(data, "confirm");
     el.textContent = JSON.stringify(summarizeExecute(data), null, 2);
     updateDebugPanel();
     await refreshPanel("drafts");
@@ -2408,6 +2508,12 @@ async function confirmDraftPublish() {
     return data;
   } catch (err) {
     setPanelError("draft-publish-result", err);
+    renderDraftPublishCard({
+      ok: false,
+      verdict: "ERROR",
+      operation: "draft_publish",
+      errors: [String(err)],
+    }, "confirm");
     return { ok: false, error: String(err) };
   }
 }
@@ -2974,6 +3080,19 @@ function toggleOrchestrationSummaryRaw() {
   setOrchestrationSummaryRawVisible(panel.hidden);
 }
 
+function setDraftPublishRawVisible(visible) {
+  const panel = document.getElementById("draft-publish-result");
+  const toggle = document.getElementById("draft-publish-raw-toggle");
+  panel.hidden = !visible;
+  toggle.textContent = visible ? "Hide Raw Publish JSON" : "Show Raw Publish JSON";
+  toggle.setAttribute("aria-expanded", String(visible));
+}
+
+function toggleDraftPublishRaw() {
+  const panel = document.getElementById("draft-publish-result");
+  setDraftPublishRawVisible(panel.hidden);
+}
+
 function toggleDebug() {
   const debug = document.getElementById("debug");
   const toggle = document.getElementById("debug-toggle");
@@ -3035,6 +3154,7 @@ document.getElementById("draft-dry-run").addEventListener("click", runDraftDryRu
 document.getElementById("draft-create-confirm").addEventListener("click", confirmDraftCreate);
 document.getElementById("draft-publish-dry-run").addEventListener("click", runDraftPublishDryRun);
 document.getElementById("draft-publish-confirm").addEventListener("click", confirmDraftPublish);
+document.getElementById("draft-publish-raw-toggle").addEventListener("click", toggleDraftPublishRaw);
 document.getElementById("planner-draft-review").addEventListener("click", reviewPlannerDraft);
 document.getElementById("planner-draft-load-publish").addEventListener("click", loadPlannerDraftIntoPublish);
 document.getElementById("approved-planner-draft-dry-run").addEventListener("click", runApprovedPlannerDraftDryRun);
