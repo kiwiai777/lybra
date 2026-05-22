@@ -319,6 +319,7 @@ function renderExternalIntakeReview(data) {
   selectedExternalIntake = null;
   renderExternalIntakeCard(null);
   document.getElementById("external-intake-prefill-resolution").disabled = true;
+  document.getElementById("external-intake-load-publish").disabled = true;
   document.getElementById("external-intake-review-detail").textContent = rows.length === 0 ? "No external intake drafts found." : "Select an external intake draft.";
   for (const row of rows) {
     const button = document.createElement("button");
@@ -649,6 +650,7 @@ function selectExternalIntake(row, sourceButton) {
   const envelope = latestDebug["/api/external-intake/review"] || {};
   renderExternalIntakeCard(row);
   document.getElementById("external-intake-prefill-resolution").disabled = false;
+  document.getElementById("external-intake-load-publish").disabled = false;
   document.getElementById("external-intake-review-detail").textContent = JSON.stringify(summarizeExternalIntake(row, envelope), null, 2);
 }
 
@@ -993,6 +995,24 @@ function prefillOwnerResolutionFromExternalIntake() {
     message: "External intake draft copied into Owner Decision Resolution Review. Review before submitting.",
     task_id: row.task_id,
     path: row.path,
+  }, null, 2);
+}
+
+function loadExternalIntakeIntoDraftPublish() {
+  const row = selectedExternalIntake;
+  const result = document.getElementById("draft-publish-result");
+  if (!row?.path) {
+    result.textContent = JSON.stringify({ ok: false, message: "Select an external intake draft first." }, null, 2);
+    return;
+  }
+  document.getElementById("draft-publish-path").value = row.path;
+  latestDraftPublishDryRun = null;
+  document.getElementById("draft-publish-confirm").disabled = true;
+  result.textContent = JSON.stringify({
+    ok: true,
+    source: "external_intake",
+    path: row.path,
+    message: "External intake draft path loaded. Run Draft Publish dry-run before confirming.",
   }, null, 2);
 }
 
@@ -3030,6 +3050,7 @@ document.getElementById("planner-persist-confirm").addEventListener("click", con
 document.getElementById("planner-persist-owner-confirmed").addEventListener("change", updatePlannerLoopPersistenceConfirmState);
 document.getElementById("planner-persist-refresh-handoff").addEventListener("click", refreshPlannerLoopPersistenceHandoffViews);
 document.getElementById("external-intake-prefill-resolution").addEventListener("click", prefillOwnerResolutionFromExternalIntake);
+document.getElementById("external-intake-load-publish").addEventListener("click", loadExternalIntakeIntoDraftPublish);
 document.getElementById("owner-decision-record-prefill-resolution").addEventListener("click", prefillOwnerResolutionFromDecisionRecord);
 document.getElementById("owner-resolution-load-selected").addEventListener("click", loadSelectedOwnerDecisionForResolution);
 document.getElementById("owner-resolution-review").addEventListener("click", reviewOwnerDecisionResolution);

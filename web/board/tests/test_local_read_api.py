@@ -1244,6 +1244,7 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn("external-intake-review-card", html)
         self.assertIn("external-intake-review-detail", html)
         self.assertIn("external-intake-prefill-resolution", html)
+        self.assertIn("external-intake-load-publish", html)
         self.assertIn("Owner Decision Records", html)
         self.assertIn("owner-decision-records-list", html)
         self.assertIn("owner-decision-records-card", html)
@@ -1305,6 +1306,7 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn("renderExternalIntakeReview", js)
         self.assertIn("renderExternalIntakeCard", js)
         self.assertIn("prefillOwnerResolutionFromExternalIntake", js)
+        self.assertIn("loadExternalIntakeIntoDraftPublish", js)
         self.assertIn("renderOwnerDecisionRecords", js)
         self.assertIn("renderOwnerDecisionRecordCard", js)
         self.assertIn("prefillOwnerResolutionFromDecisionRecord", js)
@@ -1382,6 +1384,7 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn('data-route-id="owner-decision-records"', html)
         self.assertIn('data-route-id="records"', html)
         self.assertIn("Prefill Resolution", html)
+        self.assertIn("Use In Draft Publish", html)
         self.assertIn("debug-toggle", html)
         self.assertIn("Show Debug", html)
 
