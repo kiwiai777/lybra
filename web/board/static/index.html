@@ -10,78 +10,51 @@
   <header>
     <h1>AIPOS Board Local UI</h1>
     <p>Local-only development/debugging.</p>
-    <nav class="mobile-review-nav" aria-label="Owner review shortcuts">
-      <a href="#owner-review-queue">Queue</a>
-      <a href="#owner-review-needs-owner">Needs Owner</a>
-      <a href="#owner-review-decisions">Decisions</a>
-      <a href="#owner-review-governance">Governance</a>
-      <a href="#owner-review-timeline">Timeline</a>
-      <a href="#owner-review-external-intake">Intake</a>
-      <a href="#owner-review-owner-decision-records">Decision Records</a>
-      <a href="#owner-review-drafts">Drafts</a>
-      <a href="#owner-review-records">Records</a>
-      <a href="#owner-review-agents">Agents</a>
+    <nav class="mobile-review-nav" aria-label="Owner workflow shortcuts">
+      <a href="#workflow-inbox">Today / Inbox</a>
+      <a href="#workflow-decision-desk">Decision Desk</a>
+      <a href="#workflow-publish-desk">Publish Desk</a>
+      <a href="#workflow-governance">Governance</a>
+      <a href="#workflow-advanced-debug">Advanced / Debug</a>
     </nav>
     <button id="refresh">Refresh All</button>
   </header>
 
   <main>
-    <section>
+    <details id="workflow-inbox" class="workflow-group" open>
+
+      <summary>Today / Inbox</summary>
+
+      <div class="workflow-grid">
+
+      <section>
       <h2>System Status</h2>
       <button class="panel-refresh" data-route-id="health">Refresh Health</button>
       <pre id="health">loading...</pre>
     </section>
 
-    <section id="owner-review-queue" class="owner-review-section">
+      <section id="owner-review-queue" class="owner-review-section">
       <h2>Task Queue Summary</h2>
       <button class="panel-refresh" data-route-id="queue">Refresh Queue</button>
       <div id="task-list" class="task-list"></div>
       <pre id="queue">loading...</pre>
     </section>
 
-    <section id="owner-review-needs-owner" class="owner-review-section">
+      <section id="owner-review-needs-owner" class="owner-review-section">
       <h2>Needs Owner Summary</h2>
       <button class="panel-refresh" data-route-id="needs-owner">Refresh Needs Owner</button>
       <div id="needs-owner-list" class="detail-list"></div>
       <pre id="needs-owner">loading...</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Validation Summary</h2>
       <button class="panel-refresh" data-route-id="validate">Refresh Validate</button>
       <div id="validation-list" class="detail-list"></div>
       <pre id="validate">loading...</pre>
     </section>
 
-    <section id="owner-review-agents" class="owner-review-section">
-      <h2>Agents Summary</h2>
-      <button class="panel-refresh" data-route-id="agents">Refresh Agents</button>
-      <div id="agents-list" class="detail-list"></div>
-      <pre id="agents">loading...</pre>
-    </section>
-
-    <section id="owner-review-governance" class="owner-review-section">
-      <h2>Governance Summary</h2>
-      <button class="panel-refresh" data-route-id="governance">Refresh Governance</button>
-      <div id="governance-card" class="governance-card">loading...</div>
-      <pre id="governance">loading...</pre>
-    </section>
-
-    <section>
-      <h2>Drafts Summary</h2>
-      <button class="panel-refresh" data-route-id="drafts">Refresh Drafts</button>
-      <pre id="drafts">loading...</pre>
-    </section>
-
-    <section id="owner-review-drafts" class="owner-review-section">
-      <h2>Planner Draft Review Desk</h2>
-      <button class="panel-refresh" data-route-id="planner-drafts-review">Refresh Planner Drafts</button>
-      <div id="planner-drafts-review-list" class="planner-draft-list">loading...</div>
-      <pre id="planner-drafts-review">loading...</pre>
-      <pre id="planner-drafts-review-detail">Select a planner draft to review readiness.</pre>
-    </section>
-
-    <section id="owner-review-external-intake" class="owner-review-section">
+      <section id="owner-review-external-intake" class="owner-review-section">
       <h2>External Intake Drafts</h2>
       <button class="panel-refresh" data-route-id="external-intake-review">Refresh Intake</button>
       <div id="external-intake-review-list" class="detail-list">loading...</div>
@@ -92,78 +65,17 @@
       <pre id="external-intake-review-detail">Select an external intake draft.</pre>
     </section>
 
-    <section id="owner-review-owner-decision-records" class="owner-review-section">
-      <h2>Owner Decision Records</h2>
-      <button class="panel-refresh" data-route-id="owner-decision-records">Refresh Decision Records</button>
-      <div id="owner-decision-records-list" class="detail-list">loading...</div>
-      <div id="owner-decision-records-card" class="owner-decision-record-card">Select an owner decision record.</div>
-      <button id="owner-decision-record-prefill-resolution" class="secondary-action" disabled>Prefill Resolution</button>
-      <pre id="owner-decision-records">loading...</pre>
-      <pre id="owner-decision-records-detail">Select an owner decision record.</pre>
-    </section>
-
-    <section id="owner-review-records" class="owner-review-section">
-      <h2>Records Summary</h2>
-      <button class="panel-refresh" data-route-id="records">Refresh Records</button>
-      <div id="records-list" class="detail-list"></div>
-      <pre id="records">loading...</pre>
-    </section>
-
-    <section id="owner-review-summary" class="owner-review-section">
-      <h2>Orchestration Summary Preview</h2>
-      <div id="orchestration-summary-availability" class="empty-state">Checking orchestration availability...</div>
-      <div class="toolbar">
-        <input id="orchestration-summary-id" type="text" placeholder="orchestration_id">
-        <button id="load-orchestration-summary">Preview Summary</button>
       </div>
-      <div id="orchestration-summary-card" class="summary-card">Enter an orchestration id and preview.</div>
-      <button id="orchestration-summary-raw-toggle" class="secondary-action raw-json-toggle" aria-expanded="false">Show Raw JSON</button>
-      <pre id="orchestration-summary" hidden>Enter an orchestration id and preview.</pre>
-    </section>
 
-    <section id="owner-review-timeline" class="owner-review-section">
-      <h2>Orchestration Timeline</h2>
-      <div id="orchestration-timeline-availability" class="empty-state">Checking orchestration availability...</div>
-      <div class="toolbar">
-        <input id="orchestration-timeline-id" type="text" placeholder="orchestration_id">
-        <button id="load-orchestration-timeline">Load Timeline</button>
-      </div>
-      <div id="orchestration-timeline-list" class="timeline-list">Enter an orchestration id and load timeline.</div>
-      <pre id="orchestration-timeline">Enter an orchestration id and load timeline.</pre>
-    </section>
+    </details>
 
-    <section id="owner-review-context" class="owner-review-section">
-      <h2>Context Pack Preview</h2>
-      <div class="draft-grid">
-        <select id="context-pack-source">
-          <option value="task_id">task_id</option>
-          <option value="path">path</option>
-          <option value="orchestration_id">orchestration_id</option>
-        </select>
-        <input id="context-pack-selector" type="text" placeholder="task id, path, or orchestration_id">
-      </div>
-      <div class="toolbar">
-        <button id="context-pack-load-selected">Use Selected Task</button>
-        <button id="context-pack-preview">Preview Context</button>
-      </div>
-      <div id="context-pack-card" class="context-pack-card">Select a task or enter a source to preview context.</div>
-      <pre id="context-pack-result">Context Pack preview is read-only.</pre>
-    </section>
+    <details id="workflow-decision-desk" class="workflow-group" open>
 
+      <summary>Decision Desk</summary>
 
-    <section>
-      <h2>Planner Loop Control Desk</h2>
-      <div id="planner-loop-availability" class="empty-state">Checking orchestration availability...</div>
-      <div class="toolbar">
-        <input id="planner-loop-id" type="text" placeholder="orchestration_id">
-        <input id="planner-loop-actor" type="text" value="owner" placeholder="actor">
-        <button id="load-planner-loop">Preview Loop Step</button>
-      </div>
-      <div id="planner-loop-card" class="planner-loop-card">Enter an orchestration id and preview the next safe step.</div>
-      <pre id="planner-loop-result">Enter an orchestration id and preview the next safe step.</pre>
-    </section>
+      <div class="workflow-grid">
 
-    <section id="owner-review-decisions" class="owner-review-section">
+      <section id="owner-review-decisions" class="owner-review-section">
       <h2>Owner Decision Gate</h2>
       <button class="panel-refresh" data-route-id="owner-decisions-review">Refresh Decisions</button>
       <div id="owner-decisions-list" class="owner-decision-list">loading...</div>
@@ -171,8 +83,7 @@
       <pre id="owner-decisions-detail">Select an Owner decision request.</pre>
     </section>
 
-
-    <section>
+      <section>
       <h2>Owner Decision Resolution Review</h2>
       <div class="draft-grid">
         <input id="owner-resolution-request-id" type="text" placeholder="request_id">
@@ -200,7 +111,7 @@
       <pre id="owner-resolution-result">Review an Owner decision resolution plan.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Owner Decision Record</h2>
       <div class="draft-grid">
         <input id="owner-record-decision-id" type="text" placeholder="decision_id">
@@ -231,7 +142,171 @@
       <pre id="owner-record-result">Fill the decision record fields and run dry-run.</pre>
     </section>
 
-    <section>
+      <section id="owner-review-owner-decision-records" class="owner-review-section">
+      <h2>Owner Decision Records</h2>
+      <button class="panel-refresh" data-route-id="owner-decision-records">Refresh Decision Records</button>
+      <div id="owner-decision-records-list" class="detail-list">loading...</div>
+      <div id="owner-decision-records-card" class="owner-decision-record-card">Select an owner decision record.</div>
+      <button id="owner-decision-record-prefill-resolution" class="secondary-action" disabled>Prefill Resolution</button>
+      <pre id="owner-decision-records">loading...</pre>
+      <pre id="owner-decision-records-detail">Select an owner decision record.</pre>
+    </section>
+
+      </div>
+
+    </details>
+
+    <details id="workflow-publish-desk" class="workflow-group" open>
+
+      <summary>Publish Desk</summary>
+
+      <div class="workflow-grid">
+
+      <section>
+      <h2>Drafts Summary</h2>
+      <button class="panel-refresh" data-route-id="drafts">Refresh Drafts</button>
+      <pre id="drafts">loading...</pre>
+    </section>
+
+      <section id="owner-review-drafts" class="owner-review-section">
+      <h2>Planner Draft Review Desk</h2>
+      <button class="panel-refresh" data-route-id="planner-drafts-review">Refresh Planner Drafts</button>
+      <div id="planner-drafts-review-list" class="planner-draft-list">loading...</div>
+      <pre id="planner-drafts-review">loading...</pre>
+      <pre id="planner-drafts-review-detail">Select a planner draft to review readiness.</pre>
+    </section>
+
+      <section>
+      <h2>Draft Publish</h2>
+      <div class="toolbar">
+        <input id="draft-publish-path" type="text" placeholder="5_tasks/drafts/example.md">
+        <button id="draft-publish-dry-run">Dry-Run Publish</button>
+      </div>
+      <button id="draft-publish-confirm" disabled>Publish Draft</button>
+      <div id="draft-publish-card" class="publish-review-card">Enter a draft path and run dry-run.</div>
+      <button id="draft-publish-raw-toggle" class="secondary-action" aria-expanded="false">Show Raw Publish JSON</button>
+      <pre id="draft-publish-result" hidden>Enter a draft path and run dry-run.</pre>
+    </section>
+
+      <section>
+      <h2>Planner Draft Review</h2>
+      <div class="toolbar">
+        <input id="planner-draft-path" type="text" placeholder="5_tasks/drafts/planner/orchestration/subtask.md">
+        <button id="planner-draft-review">Review Planner Draft</button>
+      </div>
+      <button id="planner-draft-load-publish" disabled>Use In Draft Publish</button>
+      <pre id="planner-draft-result">Enter a planner draft path and review publish readiness.</pre>
+    </section>
+
+      <section>
+      <h2>Approved Planner Draft Publish</h2>
+      <div class="toolbar">
+        <input id="approved-planner-draft-path" type="text" placeholder="5_tasks/drafts/planner/orchestration/subtask.md">
+        <button id="approved-planner-draft-dry-run">Dry-Run Approved Publish</button>
+      </div>
+      <label class="confirm-row">
+        <input id="approved-planner-draft-confirmed" type="checkbox">
+        I reviewed Owner gates and the dry-run preview
+      </label>
+      <button id="approved-planner-draft-confirm" disabled>Confirm Approved Publish</button>
+      <pre id="approved-planner-draft-result">Select an approved planner draft and run dry-run.</pre>
+    </section>
+
+      </div>
+
+    </details>
+
+    <details id="workflow-governance" class="workflow-group" open>
+
+      <summary>Governance</summary>
+
+      <div class="workflow-grid">
+
+      <section id="owner-review-governance" class="owner-review-section">
+      <h2>Governance Summary</h2>
+      <button class="panel-refresh" data-route-id="governance">Refresh Governance</button>
+      <div id="governance-card" class="governance-card">loading...</div>
+      <pre id="governance">loading...</pre>
+    </section>
+
+      <section id="owner-review-context" class="owner-review-section">
+      <h2>Context Pack Preview</h2>
+      <div class="draft-grid">
+        <select id="context-pack-source">
+          <option value="task_id">task_id</option>
+          <option value="path">path</option>
+          <option value="orchestration_id">orchestration_id</option>
+        </select>
+        <input id="context-pack-selector" type="text" placeholder="task id, path, or orchestration_id">
+      </div>
+      <div class="toolbar">
+        <button id="context-pack-load-selected">Use Selected Task</button>
+        <button id="context-pack-preview">Preview Context</button>
+      </div>
+      <div id="context-pack-card" class="context-pack-card">Select a task or enter a source to preview context.</div>
+      <pre id="context-pack-result">Context Pack preview is read-only.</pre>
+    </section>
+
+      </div>
+
+    </details>
+
+    <details id="workflow-advanced-debug" class="workflow-group">
+
+      <summary>Advanced / Debug</summary>
+
+      <div class="workflow-grid">
+
+      <section id="owner-review-agents" class="owner-review-section">
+      <h2>Agents Summary</h2>
+      <button class="panel-refresh" data-route-id="agents">Refresh Agents</button>
+      <div id="agents-list" class="detail-list"></div>
+      <pre id="agents">loading...</pre>
+    </section>
+
+      <section id="owner-review-records" class="owner-review-section">
+      <h2>Records Summary</h2>
+      <button class="panel-refresh" data-route-id="records">Refresh Records</button>
+      <div id="records-list" class="detail-list"></div>
+      <pre id="records">loading...</pre>
+    </section>
+
+      <section id="owner-review-summary" class="owner-review-section">
+      <h2>Orchestration Summary Preview</h2>
+      <div id="orchestration-summary-availability" class="empty-state">Checking orchestration availability...</div>
+      <div class="toolbar">
+        <input id="orchestration-summary-id" type="text" placeholder="orchestration_id">
+        <button id="load-orchestration-summary">Preview Summary</button>
+      </div>
+      <div id="orchestration-summary-card" class="summary-card">Enter an orchestration id and preview.</div>
+      <button id="orchestration-summary-raw-toggle" class="secondary-action raw-json-toggle" aria-expanded="false">Show Raw JSON</button>
+      <pre id="orchestration-summary" hidden>Enter an orchestration id and preview.</pre>
+    </section>
+
+      <section id="owner-review-timeline" class="owner-review-section">
+      <h2>Orchestration Timeline</h2>
+      <div id="orchestration-timeline-availability" class="empty-state">Checking orchestration availability...</div>
+      <div class="toolbar">
+        <input id="orchestration-timeline-id" type="text" placeholder="orchestration_id">
+        <button id="load-orchestration-timeline">Load Timeline</button>
+      </div>
+      <div id="orchestration-timeline-list" class="timeline-list">Enter an orchestration id and load timeline.</div>
+      <pre id="orchestration-timeline">Enter an orchestration id and load timeline.</pre>
+    </section>
+
+      <section>
+      <h2>Planner Loop Control Desk</h2>
+      <div id="planner-loop-availability" class="empty-state">Checking orchestration availability...</div>
+      <div class="toolbar">
+        <input id="planner-loop-id" type="text" placeholder="orchestration_id">
+        <input id="planner-loop-actor" type="text" value="owner" placeholder="actor">
+        <button id="load-planner-loop">Preview Loop Step</button>
+      </div>
+      <div id="planner-loop-card" class="planner-loop-card">Enter an orchestration id and preview the next safe step.</div>
+      <pre id="planner-loop-result">Enter an orchestration id and preview the next safe step.</pre>
+    </section>
+
+      <section>
       <h2>Task Detail</h2>
       <div class="toolbar">
         <input id="task-selector" type="text" placeholder="task_id or repo-relative path">
@@ -240,29 +315,29 @@
       <pre id="task-detail">Select a task.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Needs Owner Detail</h2>
       <button id="needs-owner-load-task" class="secondary-action" disabled>Load Task Detail</button>
       <pre id="needs-owner-detail">Select a needs-owner item.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Validation Detail</h2>
       <button id="validation-load-task" class="secondary-action" disabled>Load Task Detail</button>
       <pre id="validation-detail">Select a validation row.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Records Detail</h2>
       <pre id="records-detail">Select a session record or claim log.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Agents Detail</h2>
       <pre id="agents-detail">Select a profile or runtime instance.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Task Preview</h2>
       <div class="toolbar">
         <input id="preview-actor" type="text" value="planner.local.001" placeholder="actor">
@@ -271,7 +346,7 @@
       <pre id="task-preview">Select a task and actor.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Controlled Execute</h2>
       <div class="toolbar">
         <button id="execute-dry-run">Dry-Run Claim</button>
@@ -284,7 +359,7 @@
       <pre id="execute-result">Run a claim dry-run first.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Draft Create</h2>
       <div class="draft-grid">
         <input id="draft-task-id" type="text" placeholder="task_id">
@@ -311,43 +386,7 @@
       <pre id="draft-create-result">Fill the draft fields and run dry-run.</pre>
     </section>
 
-    <section>
-      <h2>Draft Publish</h2>
-      <div class="toolbar">
-        <input id="draft-publish-path" type="text" placeholder="5_tasks/drafts/example.md">
-        <button id="draft-publish-dry-run">Dry-Run Publish</button>
-      </div>
-      <button id="draft-publish-confirm" disabled>Publish Draft</button>
-      <div id="draft-publish-card" class="publish-review-card">Enter a draft path and run dry-run.</div>
-      <button id="draft-publish-raw-toggle" class="secondary-action" aria-expanded="false">Show Raw Publish JSON</button>
-      <pre id="draft-publish-result" hidden>Enter a draft path and run dry-run.</pre>
-    </section>
-
-    <section>
-      <h2>Planner Draft Review</h2>
-      <div class="toolbar">
-        <input id="planner-draft-path" type="text" placeholder="5_tasks/drafts/planner/orchestration/subtask.md">
-        <button id="planner-draft-review">Review Planner Draft</button>
-      </div>
-      <button id="planner-draft-load-publish" disabled>Use In Draft Publish</button>
-      <pre id="planner-draft-result">Enter a planner draft path and review publish readiness.</pre>
-    </section>
-
-    <section>
-      <h2>Approved Planner Draft Publish</h2>
-      <div class="toolbar">
-        <input id="approved-planner-draft-path" type="text" placeholder="5_tasks/drafts/planner/orchestration/subtask.md">
-        <button id="approved-planner-draft-dry-run">Dry-Run Approved Publish</button>
-      </div>
-      <label class="confirm-row">
-        <input id="approved-planner-draft-confirmed" type="checkbox">
-        I reviewed Owner gates and the dry-run preview
-      </label>
-      <button id="approved-planner-draft-confirm" disabled>Confirm Approved Publish</button>
-      <pre id="approved-planner-draft-result">Select an approved planner draft and run dry-run.</pre>
-    </section>
-
-    <section>
+      <section>
       <h2>Parent Requirement</h2>
       <div class="draft-grid">
         <input id="parent-title" type="text" placeholder="title">
@@ -364,7 +403,7 @@
       <pre id="parent-preview-result">Fill the parent requirement fields and preview.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Planner Tick</h2>
       <div class="draft-grid">
         <input id="tick-orchestration-id" type="text" placeholder="orchestration_id">
@@ -403,7 +442,7 @@ Draft summary</textarea>
       <pre id="manual-planner-tick-result">Preview a manual planner tick flow.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Planner Loop Persistence</h2>
       <div class="draft-grid">
         <select id="planner-persist-operation">
@@ -430,7 +469,7 @@ Draft summary</textarea>
       <pre id="planner-persist-result">Load a manual tick payload or paste append JSON, then run dry-run.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Forum Event Review</h2>
       <div class="draft-grid">
         <input id="event-orchestration-id" type="text" placeholder="orchestration_id">
@@ -450,11 +489,15 @@ Draft summary</textarea>
       <pre id="forum-event-result">Fill the forum event fields and review persistence readiness.</pre>
     </section>
 
-    <section>
+      <section>
       <h2>Adapter Response Debug Panel</h2>
       <button id="debug-toggle" class="secondary-action" aria-expanded="false">Show Debug</button>
       <pre id="debug" hidden>loading...</pre>
     </section>
+
+      </div>
+
+    </details>
   </main>
 
   <script src="/app.js"></script>
