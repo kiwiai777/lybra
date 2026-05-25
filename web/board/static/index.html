@@ -3,13 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AIPOS Board Local UI</title>
+  <title>Lybra Board Local UI</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header>
-    <h1>AIPOS Board Local UI</h1>
-    <p>Local-only development/debugging.</p>
+    <div class="brand-lockup">
+      <img src="/assets/lybra-logo.png" alt="Lybra logo" class="brand-logo">
+      <div>
+        <h1>Lybra Board</h1>
+        <p>Local-only development/debugging.</p>
+      </div>
+    </div>
     <nav class="mobile-review-nav" aria-label="Owner workflow shortcuts">
       <a href="#workflow-inbox">Today / Inbox</a>
       <a href="#workflow-decision-desk">Decision Desk</a>
@@ -54,6 +59,16 @@
       <pre id="validate">loading...</pre>
     </section>
 
+      </div>
+
+    </details>
+
+    <details id="workflow-decision-desk" class="workflow-group" open>
+
+      <summary>Decision Desk</summary>
+
+      <div class="workflow-grid">
+
       <section id="owner-review-external-intake" class="owner-review-section">
       <h2>External Intake Drafts</h2>
       <button class="panel-refresh" data-route-id="external-intake-review">Refresh Intake</button>
@@ -64,16 +79,6 @@
       <pre id="external-intake-review">loading...</pre>
       <pre id="external-intake-review-detail">Select an external intake draft.</pre>
     </section>
-
-      </div>
-
-    </details>
-
-    <details id="workflow-decision-desk" class="workflow-group" open>
-
-      <summary>Decision Desk</summary>
-
-      <div class="workflow-grid">
 
       <section id="owner-review-decisions" class="owner-review-section">
       <h2>Owner Decision Gate</h2>

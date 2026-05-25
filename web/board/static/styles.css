@@ -18,6 +18,24 @@ header {
   border-bottom: 1px solid var(--line);
   background: linear-gradient(90deg, #ffffff, #ecfeff);
 }
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.brand-logo {
+  width: 44px;
+  height: 50px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+.brand-lockup h1 {
+  margin-bottom: 4px;
+}
+.brand-lockup p {
+  margin: 0;
+}
 h1 { margin: 0 0 6px; font-size: 1.3rem; }
 header p { margin: 0 0 10px; }
 .mobile-review-nav {
