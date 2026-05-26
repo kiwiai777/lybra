@@ -109,16 +109,31 @@ def serve(input_stream: TextIO = sys.stdin, output_stream: TextIO = sys.stdout, 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Lybra MCP stdio server")
+    from .http_sse import DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, DEFAULT_KEEPALIVE_SECONDS
+
+    parser = argparse.ArgumentParser(description="Lybra MCP server")
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("serve", help="Run the read-only MCP server over stdio")
+    http_parser = subparsers.add_parser("serve-http", help="Run the MCP server over loopback HTTP/SSE")
+    http_parser.add_argument("--host", default=DEFAULT_HTTP_HOST, help="Bind host; defaults to 127.0.0.1")
+    http_parser.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT, help="Bind port; defaults to 8766")
+    http_parser.add_argument(
+        "--keepalive-seconds",
+        type=float,
+        default=DEFAULT_KEEPALIVE_SECONDS,
+        help="SSE ping interval; defaults to 30 seconds",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .http_sse import config_from_env, run_http_server
+
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command != "serve":
-        parser.print_help()
-        return 2
-    return serve()
+    if args.command == "serve":
+        return serve()
+    if args.command == "serve-http":
+        return run_http_server(config_from_env(str(args.host), int(args.port), float(args.keepalive_seconds)))
+    parser.print_help()
+    return 2
