@@ -88,6 +88,39 @@ python3 -m tools.sandbox_runtime local-docker run --dry-run --image <local-image
 
 The adapter requires an explicit image, uses `--pull never`, defaults to `--network none`, mounts any supplied workspace path read-only, injects no credentials, and returns an in-memory structured report. It does not create Dockerfiles, Docker Compose files, services, write mounts, scheduler loops, MCP bridges, or durable runtime records.
 
+### Workspace Templates
+
+Lybra includes local bundled workspace templates for starting a new file-authoritative project workflow:
+
+- `blank`
+- `consulting-engagement`
+- `software-development`
+
+Workspace init is a controlled execute operation. Dry-run previews every planned file, then confirm revalidates the snapshot before writing:
+
+```bash
+python3 tools/aipos_cli/aipos_cli.py workspace init \
+  --template blank \
+  --output <workspace> \
+  --actor <actor> \
+  --var project_id=<project> \
+  --dry-run \
+  --json
+```
+
+Confirm uses the prior dry-run envelope and explicit Owner confirmation:
+
+```bash
+python3 tools/aipos_cli/aipos_cli.py workspace init \
+  --confirm \
+  --from-json <dry-run-envelope.json> \
+  --actor <actor> \
+  --owner-confirmation-token OWNER_CONFIRMED \
+  --json
+```
+
+Templates are local product assets. Lybra does not fetch templates from remote URLs, run template scripts, provide a template marketplace, overwrite existing files, or initialize non-empty output directories.
+
 ## Core Concepts
 
 - **Task cards** describe units of work under a workspace task queue.
@@ -139,6 +172,7 @@ Implemented today:
 - Product/workspace root separation through environment configuration
 - MCP stdio and loopback HTTP/SSE MVPs for queue, task preview, validation, Context Pack tools, and selected controlled write-tool pairs
 - Local Docker sandbox runtime MVP for explicit, bounded, read-only ephemeral worker runs
+- Workspace Template MVP with local bundled templates and controlled execute initialization
 
 Protocol finalized, implementation pending or partial:
 
@@ -148,7 +182,7 @@ Protocol finalized, implementation pending or partial:
 - Vendor-neutral role catalog: AIPOS-97
 - Planner autonomy tiers, session tree primitives, and related governance
 
-Lybra does not currently ship a public hosted service, managed cloud runtime, remote database, autonomous planner runtime, remote MCP deployment profile, MCP publish tools, or MCP queue mutation tools.
+Lybra does not currently ship a public hosted service, managed cloud runtime, remote database, autonomous planner runtime, remote MCP deployment profile, MCP publish tools, MCP queue mutation tools, remote template registry, or template marketplace.
 
 ## Getting Started / Workspace Root
 

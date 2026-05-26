@@ -20,6 +20,7 @@ SUPPORTED_OPERATIONS = {
     "planner_iteration_append",
     "intake_submit",
     "owner_decision_record",
+    "workspace_init",
 }
 
 

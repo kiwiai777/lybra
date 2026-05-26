@@ -31,7 +31,7 @@ from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, m
 from tools.aipos_cli.board_adapter import execute_dry_run as execute_controlled_dry_run
 from tools.aipos_cli.board_adapter import record_owner_decision
 from tools.aipos_cli.board_adapter import submit_external_intake
-from tools.aipos_cli.controlled_execute import snapshot_hash, validate_owner_confirmation
+from tools.aipos_cli.controlled_execute import register_dry_run, snapshot_hash, validate_owner_confirmation
 from tools.aipos_cli.draft_validator import list_drafts, validate_draft_file
 from tools.aipos_cli.draft_writer import (
     build_template_payload,
@@ -55,6 +55,12 @@ from tools.aipos_cli.validator import (
     build_records_summary,
     validate_single_task,
     validate_tasks,
+)
+from tools.aipos_cli.workspace_templates import (
+    TEMPLATE_OPERATION,
+    build_workspace_init_plan,
+    execute_workspace_init,
+    parse_var_items,
 )
 
 
@@ -200,12 +206,12 @@ def _execute_controlled_from_dry_run_envelope(
 ) -> dict[str, Any]:
     operation = "controlled_execute_confirm"
     envelope_operation = str(envelope.get("operation") or "")
-    if envelope_operation not in {"intake_submit", "owner_decision_record"}:
+    if envelope_operation not in {"intake_submit", "owner_decision_record", TEMPLATE_OPERATION}:
         return blocked_response(
             operation=operation,
             dry_run=False,
             category="UNSUPPORTED_OPERATION",
-            message="controlled-execute confirm --from-json supports only intake_submit and owner_decision_record",
+            message="controlled-execute confirm --from-json supports only intake_submit, owner_decision_record, and workspace_init",
             actor={"actor": actor},
             safety_notice="Local CLI controlled execute proof validation.",
         )
@@ -242,8 +248,17 @@ def _execute_controlled_from_dry_run_envelope(
 
     if envelope_operation == "intake_submit":
         current = submit_external_intake(payload, dry_run=True, repo_root=repo_root, actor=actor)
-    else:
+    elif envelope_operation == "owner_decision_record":
         current = record_owner_decision(payload, dry_run=True, repo_root=repo_root, actor=actor)
+    else:
+        variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+        current = build_workspace_init_plan(
+            template=str(payload.get("template") or ""),
+            output=str(payload.get("output") or ""),
+            variables={str(key): str(value) for key, value in variables.items()},
+            actor=actor,
+            dry_run=True,
+        )
     current_hash = snapshot_hash(envelope_operation, actor, current)
     expected_hash = str(envelope.get("dry_run_snapshot_hash") or "")
     if not expected_hash or current_hash != expected_hash:
@@ -285,13 +300,22 @@ def _execute_controlled_from_dry_run_envelope(
             "target_path": result.get("target_path"),
             "wrote": result.get("wrote", False),
         }
-    else:
+    elif envelope_operation == "owner_decision_record":
         result = build_owner_decision_record(repo_root, payload, actor=actor, dry_run=False)
         summary = {
             "decision_id": result.get("decision_id"),
             "target_path": result.get("target_path"),
             "wrote": result.get("wrote", False),
         }
+    else:
+        variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
+        result = execute_workspace_init(
+            template=str(payload.get("template") or ""),
+            output=str(payload.get("output") or ""),
+            variables={str(key): str(value) for key, value in variables.items()},
+            actor=actor,
+        )
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
     verdict = derive_verdict(
         blocking_reasons=list(result.get("blocking_reasons", [])),
         warnings=list(result.get("warnings", [])),
@@ -409,6 +433,20 @@ def build_parser() -> argparse.ArgumentParser:
     controlled_confirm_parser.add_argument("--actor", required=True, help="Actor confirming the dry-run")
     controlled_confirm_parser.add_argument("--owner-confirmation-token", help="Owner confirmation token if required")
     controlled_confirm_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    workspace_parser = subparsers.add_parser("workspace", help="Workspace template operations")
+    workspace_subparsers = workspace_parser.add_subparsers(dest="workspace_command")
+    workspace_init_parser = workspace_subparsers.add_parser("init", help="Initialize a workspace from a bundled template")
+    workspace_init_mode = workspace_init_parser.add_mutually_exclusive_group(required=True)
+    workspace_init_mode.add_argument("--dry-run", action="store_true", help="Preview template writes and emit a dry-run proof")
+    workspace_init_mode.add_argument("--confirm", action="store_true", help="Confirm a prior dry-run envelope")
+    workspace_init_parser.add_argument("--template", help="Bundled template name")
+    workspace_init_parser.add_argument("--output", help="Target output path")
+    workspace_init_parser.add_argument("--var", action="append", default=[], help="Template variable in k=v form")
+    workspace_init_parser.add_argument("--from-json", help="Read prior workspace init dry-run envelope for confirm")
+    workspace_init_parser.add_argument("--actor", required=True, help="Actor requesting workspace init")
+    workspace_init_parser.add_argument("--owner-confirmation-token", help="Owner confirmation token if required")
+    workspace_init_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     records_parser = subparsers.add_parser("records", help="Render records summary")
     records_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -556,6 +594,48 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"Unknown draft command: {args.draft_command}", file=sys.stderr)
         return 2
+
+    if args.command == "workspace":
+        if not getattr(args, "workspace_command", None):
+            parser.print_help()
+            return 2
+        if args.workspace_command != "init":
+            parser.print_help()
+            return 2
+        try:
+            if args.dry_run:
+                if not args.template or not args.output:
+                    raise ValueError("--template and --output are required for workspace init --dry-run")
+                variables = parse_var_items(args.var)
+                result = build_workspace_init_plan(
+                    template=args.template,
+                    output=args.output,
+                    variables=variables,
+                    actor=args.actor,
+                    dry_run=True,
+                )
+                if result.get("execute_allowed"):
+                    token_meta = register_dry_run(operation=TEMPLATE_OPERATION, actor=args.actor, plan=result)
+                    result.update(token_meta)
+                    result["dry_run_token"] = token_meta["dry_run_id"]
+            else:
+                if not args.from_json:
+                    raise ValueError("--from-json is required for workspace init --confirm")
+                envelope = _load_json_object(args.from_json)
+                result = _execute_controlled_from_dry_run_envelope(
+                    None,
+                    envelope,
+                    args.actor,
+                    owner_confirmation_token=args.owner_confirmation_token,
+                )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" else 0
 
     try:
         repo_root = find_repo_root()
