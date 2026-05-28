@@ -129,6 +129,23 @@ section {
   scroll-margin-top: 12px;
 }
 h2 { margin: 0 0 8px; font-size: 1rem; }
+.operator-primary-action {
+  border-left: 4px solid #0f766e;
+}
+.raw-json-drawer {
+  margin-top: 8px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 8px;
+}
+.raw-json-drawer > summary {
+  cursor: pointer;
+  color: #475569;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+.raw-json-drawer pre {
+  margin-top: 8px;
+}
 .toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

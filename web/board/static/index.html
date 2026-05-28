@@ -76,8 +76,14 @@
       <div id="external-intake-review-card" class="intake-review-card">Select an external intake draft.</div>
       <button id="external-intake-prefill-resolution" class="secondary-action" disabled>Prefill Resolution</button>
       <button id="external-intake-load-publish" class="secondary-action" disabled>Use In Draft Publish</button>
-      <pre id="external-intake-review">loading...</pre>
-      <pre id="external-intake-review-detail">Select an external intake draft.</pre>
+      <details class="raw-json-drawer">
+        <summary>Raw intake list JSON</summary>
+        <pre id="external-intake-review">loading...</pre>
+      </details>
+      <details class="raw-json-drawer">
+        <summary>Selected intake JSON</summary>
+        <pre id="external-intake-review-detail">Select an external intake draft.</pre>
+      </details>
     </section>
 
       <section id="owner-review-decisions" class="owner-review-section">
@@ -147,14 +153,32 @@
       <pre id="owner-record-result">Fill the decision record fields and run dry-run.</pre>
     </section>
 
+      <section class="operator-primary-action">
+      <h2>Draft Publish</h2>
+      <div class="toolbar">
+        <input id="draft-publish-path" type="text" placeholder="5_tasks/drafts/example.md">
+        <button id="draft-publish-dry-run">Dry-Run Publish</button>
+      </div>
+      <button id="draft-publish-confirm" disabled>Publish Draft</button>
+      <div id="draft-publish-card" class="publish-review-card">Enter a draft path and run dry-run.</div>
+      <button id="draft-publish-raw-toggle" class="secondary-action" aria-expanded="false">Show Raw Publish JSON</button>
+      <pre id="draft-publish-result" hidden>Enter a draft path and run dry-run.</pre>
+    </section>
+
       <section id="owner-review-owner-decision-records" class="owner-review-section">
       <h2>Owner Decision Records</h2>
       <button class="panel-refresh" data-route-id="owner-decision-records">Refresh Decision Records</button>
       <div id="owner-decision-records-list" class="detail-list">loading...</div>
       <div id="owner-decision-records-card" class="owner-decision-record-card">Select an owner decision record.</div>
       <button id="owner-decision-record-prefill-resolution" class="secondary-action" disabled>Prefill Resolution</button>
-      <pre id="owner-decision-records">loading...</pre>
-      <pre id="owner-decision-records-detail">Select an owner decision record.</pre>
+      <details class="raw-json-drawer">
+        <summary>Raw decision records JSON</summary>
+        <pre id="owner-decision-records">loading...</pre>
+      </details>
+      <details class="raw-json-drawer">
+        <summary>Selected decision record JSON</summary>
+        <pre id="owner-decision-records-detail">Select an owner decision record.</pre>
+      </details>
     </section>
 
       </div>
@@ -179,18 +203,6 @@
       <div id="planner-drafts-review-list" class="planner-draft-list">loading...</div>
       <pre id="planner-drafts-review">loading...</pre>
       <pre id="planner-drafts-review-detail">Select a planner draft to review readiness.</pre>
-    </section>
-
-      <section>
-      <h2>Draft Publish</h2>
-      <div class="toolbar">
-        <input id="draft-publish-path" type="text" placeholder="5_tasks/drafts/example.md">
-        <button id="draft-publish-dry-run">Dry-Run Publish</button>
-      </div>
-      <button id="draft-publish-confirm" disabled>Publish Draft</button>
-      <div id="draft-publish-card" class="publish-review-card">Enter a draft path and run dry-run.</div>
-      <button id="draft-publish-raw-toggle" class="secondary-action" aria-expanded="false">Show Raw Publish JSON</button>
-      <pre id="draft-publish-result" hidden>Enter a draft path and run dry-run.</pre>
     </section>
 
       <section>
