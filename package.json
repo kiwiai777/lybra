@@ -2,7 +2,7 @@
   "name": "lybra",
   "version": "0.1.0",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "description": "Local-first, file-authoritative agent workbench with audit-first governance.",
   "bin": {
     "lybra": "bin/lybra"

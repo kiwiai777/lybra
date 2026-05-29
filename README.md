@@ -225,7 +225,7 @@ Without `AIPOS_WORKSPACE_ROOT` or `--repo-root`, CLI commands preserve legacy be
 
 Lybra can be packed locally as an npm command distribution. The npm package installs a `lybra` command that delegates to the bundled Python implementation, so Python must be available on `PATH`.
 
-The package is currently private and unlicensed for public registry publishing. Use it only for local smoke testing until Owner approves a public license and a separate publish gate.
+The package is currently private for public registry publishing. Use it only for local smoke testing until Owner approves a separate publish gate.
 
 ```bash
 npm pack
@@ -249,7 +249,7 @@ Use placeholders such as `<workspace>`, `<project>`, and `<product-repo>` in pub
 
 ## License
 
-License: TBD by Owner.
+License: Apache-2.0. See [LICENSE](LICENSE).
 
 ## Acknowledgements
 
