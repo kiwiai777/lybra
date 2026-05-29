@@ -221,11 +221,16 @@ python3 web/board/app.py --repo-root <workspace>
 
 Without `AIPOS_WORKSPACE_ROOT` or `--repo-root`, CLI commands preserve legacy behavior by searching upward from the current directory for `5_tasks/queue`.
 
-### npm Package Preview
+### npm Install
 
-Lybra can be packed locally as an npm command distribution. The npm package installs a `lybra` command that delegates to the bundled Python implementation, so Python must be available on `PATH`.
+Lybra can be installed as an npm command distribution. The npm package installs a `lybra` command that delegates to the bundled Python implementation, so Python must be available on `PATH`.
 
-The package is currently private for public registry publishing. Use it only for local smoke testing until Owner approves a separate publish gate.
+```bash
+npm install -g lybra
+lybra --help
+```
+
+Local tarball smoke for release validation:
 
 ```bash
 npm pack
