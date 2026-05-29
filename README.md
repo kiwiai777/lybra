@@ -193,6 +193,14 @@ python3 -m unittest discover -s tools/aipos_cli/tests
 python3 -m unittest discover -s web/board/tests
 ```
 
+For new local Lybra runtime workspaces, use:
+
+```text
+~/.lybra/workspaces/<workspace_id>/
+```
+
+This convention is for product runtime workspaces created or operated by Lybra. It does not replace an existing private project-management source of truth. For example, an Owner may keep durable private project records under a separate workspace such as `/home/kiwi/ai-project-os/2_projects/lybra/` while using `~/.lybra/workspaces/<workspace_id>/` for runtime dogfood and execution artifacts.
+
 Set `AIPOS_WORKSPACE_ROOT` when running from the product repo against a separate workspace:
 
 ```bash
