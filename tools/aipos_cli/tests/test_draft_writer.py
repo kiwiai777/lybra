@@ -233,6 +233,68 @@ class DraftWriterTests(unittest.TestCase):
         self.assertEqual(pending_path.read_text(encoding="utf-8"), source_text)
         self.assertEqual(source_path.read_text(encoding="utf-8"), source_text)
 
+    def test_publish_external_intake_draft_converts_to_execution_handoff(self) -> None:
+        draft_path = self.write_file(
+            "5_tasks/drafts/external_intake/sample.md",
+            "\n".join(
+                [
+                    "---",
+                    "task_id: EXT-ACME-1234",
+                    "title: 'Review external intake: Build the demo tool'",
+                    "project: acme_client",
+                    "task_type: one_shot",
+                    "assigned_to: planner",
+                    "agent_instance: planner",
+                    "context_bundle: external_intake",
+                    "task_mode: planning",
+                    "model_tier: L3",
+                    "priority: low",
+                    "status: pending",
+                    "created_by: bot.local",
+                    "needs_owner: true",
+                    "output_target: 5_tasks/drafts/external_intake",
+                    "artifact_policy: draft_only",
+                    "polling_mode: manual_owner_review",
+                    "claim_policy: owner_review_required",
+                    "report_mode: completion_summary",
+                    "recurrence: none",
+                    "draft_id: external_intake_sample",
+                    "draft_status: draft",
+                    "draft_created_by: bot.local",
+                    "draft_created_at: 2026-05-29T00:00:00Z",
+                    "draft_updated_at: 2026-05-29T00:00:00Z",
+                    "draft_publish_target: 5_tasks/queue/pending/",
+                    "source_tag: wechat_bot",
+                    "client_tag: acme_client",
+                    "external_ref: 'wechat:msg-1001'",
+                    "---",
+                    "## Normalized Request",
+                    "",
+                    "Build a tiny demo tool.",
+                    "",
+                ]
+            ),
+        )
+
+        dry = publish_draft(self.repo_root, draft_path.relative_to(self.repo_root), dry_run=True)
+        self.assertEqual(dry["verdict"], "PASS")
+        self.assertIn("assigned_to: dev.claude.cc.local", dry["rendered_markdown"])
+        self.assertIn("agent_instance: dev.claude.cc.local", dry["rendered_markdown"])
+        self.assertIn("context_bundle: external_intake_execution", dry["rendered_markdown"])
+        self.assertIn("task_mode: coding", dry["rendered_markdown"])
+        self.assertIn("needs_owner: false", dry["rendered_markdown"])
+        self.assertIn("output_target: workspace_artifacts/external_intake", dry["rendered_markdown"])
+        self.assertIn("artifact_policy: formal_write", dry["rendered_markdown"])
+        self.assertIn("title: Build the demo tool", dry["rendered_markdown"])
+
+        result = publish_draft(self.repo_root, draft_path.relative_to(self.repo_root))
+        pending = self.repo_root / "5_tasks/queue/pending/ext-acme-1234.md"
+        self.assertTrue(result["wrote"])
+        self.assertTrue(pending.exists())
+        text = pending.read_text(encoding="utf-8")
+        self.assertIn("assigned_to: dev.claude.cc.local", text)
+        self.assertIn("needs_owner: false", text)
+
     def test_publish_blocks_when_validation_fails(self) -> None:
         self.write_file(
             "5_tasks/drafts/aipos-30-invalid.md",

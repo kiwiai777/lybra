@@ -218,9 +218,13 @@ def _prepare_complete(metadata: dict[str, Any], actor: str, timestamp: str, repo
     updated["status"] = "completed"
     updated["completed_by"] = actor
     updated["completed_at"] = timestamp
+    updated["needs_owner"] = False
+    updated["approval_required"] = False
+    updated["owner_review_required"] = False
     if updated.get("active_session_id") not in (None, ""):
         updated["last_session_id"] = updated.get("active_session_id")
     updated.pop("active_session_id", None)
+    updated.pop("needs_owner_reasons", None)
     updated["artifact_links"] = _append_unique_list(updated.get("artifact_links"), report_link)
     return updated
 

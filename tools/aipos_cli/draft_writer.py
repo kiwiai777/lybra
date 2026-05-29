@@ -17,6 +17,9 @@ from tools.aipos_cli.draft_validator import (
     validate_draft_metadata,
 )
 
+EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "dev.claude.cc.local"
+EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET = "workspace_artifacts/external_intake"
+
 DEFAULT_TEMPLATE_VALUES = {
     "project": "ai-project-os",
     "status": "pending",
@@ -163,6 +166,38 @@ def _normalized_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _is_external_intake_draft(source_path: Path, repo_root: Path, metadata: dict[str, Any]) -> bool:
+    try:
+        rel_parts = source_path.resolve().relative_to((repo_root / DRAFTS_DIR / "external_intake").resolve()).parts
+        if rel_parts:
+            return True
+    except ValueError:
+        pass
+    return metadata.get("context_bundle") == "external_intake" or metadata.get("draft_id", "").startswith("external_intake_")
+
+
+def _external_intake_execution_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(metadata)
+    title = str(updated.get("title") or "")
+    prefix = "Review external intake: "
+    if title.startswith(prefix):
+        updated["title"] = title[len(prefix) :]
+    updated["assigned_to"] = updated.get("handoff_assigned_to") or EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO
+    updated["agent_instance"] = updated.get("handoff_agent_instance") or updated["assigned_to"]
+    updated["context_bundle"] = "external_intake_execution"
+    updated["task_mode"] = "coding"
+    updated["model_tier"] = updated.get("model_tier") or "L2"
+    updated["needs_owner"] = False
+    updated["output_target"] = updated.get("handoff_output_target") or EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET
+    updated["artifact_policy"] = "formal_write"
+    updated["polling_mode"] = "agent_polling"
+    updated["claim_policy"] = "assigned_agent_only"
+    updated["report_mode"] = "completion_summary"
+    updated["handoff_source"] = "external_intake"
+    updated["owner_review_completed"] = True
+    return updated
+
+
 def create_draft(
     repo_root: Path,
     metadata: dict[str, Any],
@@ -263,8 +298,11 @@ def publish_draft(
         result["wrote"] = False
         return result
 
-    metadata, _body, parse_errors = read_draft_markdown(source_path)
-    rendered_markdown = source_path.read_text(encoding="utf-8")
+    metadata, body, parse_errors = read_draft_markdown(source_path)
+    source_markdown = source_path.read_text(encoding="utf-8")
+    is_external_intake = _is_external_intake_draft(source_path, repo_root, metadata)
+    publish_metadata = _external_intake_execution_metadata(metadata) if is_external_intake else metadata
+    rendered_markdown = render_markdown_task_card(publish_metadata, body) if is_external_intake else source_markdown
     validation = validate_draft_metadata(repo_root, metadata, actual_path=source_path, parse_errors=parse_errors)
     result["task_id"] = validation["task_id"]
     result["warnings"] = list(validation["warnings"])
@@ -304,6 +342,7 @@ def publish_draft(
         "blocking_reasons": list(validation["blocking_reasons"]),
         "warnings": list(validation["warnings"]),
         "frontmatter": metadata,
+        "published_frontmatter": publish_metadata,
     }
     if dry_run:
         result["wrote"] = False

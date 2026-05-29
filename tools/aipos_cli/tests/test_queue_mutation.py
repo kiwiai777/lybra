@@ -259,6 +259,33 @@ class QueueMutationTests(unittest.TestCase):
         self.assertIn("- 'https://example.com/report'", text)
         self.assertNotIn("active_session_id:", text)
 
+    def test_complete_clears_stale_owner_attention_flags(self) -> None:
+        self.write_task(
+            "AIPOS-31-COMPLETE-OWNER",
+            queue_state="claimed",
+            needs_owner=True,
+            claim_id="claim_AIPOS-31-COMPLETE-OWNER_1_dev",
+            active_session_id="session_AIPOS-31-COMPLETE-OWNER_1_dev",
+            claimed_by="dev.codex.local",
+            claimed_at="2026-04-30T00:00:00Z",
+        )
+
+        result = mutate_queue_task(
+            self.repo_root,
+            "complete",
+            task_id="AIPOS-31-COMPLETE-OWNER",
+            actor="dev.codex.local",
+            report_link="https://example.com/report",
+        )
+        target = self.repo_root / "5_tasks/queue/completed/aipos-31-complete-owner.md"
+        text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("needs_owner: false", text)
+        self.assertIn("approval_required: false", text)
+        self.assertIn("owner_review_required: false", text)
+        self.assertNotIn("needs_owner_reasons:", text)
+
     def test_complete_requires_non_empty_report_link(self) -> None:
         self.write_task(
             "AIPOS-31-COMPLETE-REPORT",

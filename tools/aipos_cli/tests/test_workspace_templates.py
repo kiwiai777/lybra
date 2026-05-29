@@ -140,6 +140,29 @@ class WorkspaceTemplateTests(unittest.TestCase):
         self.assertTrue((output / "2_projects" / "acme_project" / "decision_log.md").exists())
         sample = output / "5_tasks" / "drafts" / "external_intake" / "sample-intake.md"
         self.assertIn("client_tag: acme_client", sample.read_text(encoding="utf-8"))
+        for state in ("pending", "claimed", "completed", "blocked"):
+            self.assertTrue((output / "5_tasks" / "queue" / state).is_dir())
+
+    def test_all_bundled_templates_create_queue_state_directories(self) -> None:
+        for template in ("blank", "consulting-engagement", "software-development"):
+            with self.subTest(template=template):
+                output = self.root / f"{template}-workspace"
+                variables = {
+                    "project_id": f"{template.replace('-', '_')}_project",
+                    "client_id": f"{template.replace('-', '_')}_client",
+                    "client_name": "Demo Client",
+                    "source_tag": "wechat_bot",
+                    "external_ref": "chat:redacted:001",
+                }
+                result = execute_workspace_init(
+                    template=template,
+                    output=output,
+                    variables=variables,
+                    actor="owner",
+                )
+                self.assertTrue(result["ok"])
+                for state in ("pending", "claimed", "completed", "blocked"):
+                    self.assertTrue((output / "5_tasks" / "queue" / state).is_dir())
 
     def _cli_json(self, args: list[str]) -> dict[str, object]:
         stdout = StringIO()
