@@ -1,0 +1,43 @@
+#!/usr/bin/env node
+"use strict";
+
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
+
+const packageRoot = path.resolve(__dirname, "..");
+const pythonPath = process.env.PYTHONPATH
+  ? `${packageRoot}${path.delimiter}${process.env.PYTHONPATH}`
+  : packageRoot;
+
+const candidates = process.env.LYBRA_PYTHON
+  ? [process.env.LYBRA_PYTHON]
+  : process.platform === "win32"
+    ? ["python.exe", "python3", "python"]
+    : ["python3", "python"];
+
+for (const python of candidates) {
+  const result = spawnSync(
+    python,
+    ["-m", "tools.aipos_cli.aipos_cli", ...process.argv.slice(2)],
+    {
+      cwd: packageRoot,
+      env: { ...process.env, PYTHONPATH: pythonPath },
+      stdio: "inherit"
+    }
+  );
+
+  if (result.error && result.error.code === "ENOENT") {
+    continue;
+  }
+  if (result.error) {
+    console.error(`lybra: failed to run ${python}: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.signal) {
+    process.kill(process.pid, result.signal);
+  }
+  process.exit(result.status === null ? 1 : result.status);
+}
+
+console.error("lybra: Python is required. Install python3 or set LYBRA_PYTHON to a Python executable.");
+process.exit(127);

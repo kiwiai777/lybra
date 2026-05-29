@@ -186,6 +186,8 @@ Lybra does not currently ship a public hosted service, managed cloud runtime, re
 
 ## Getting Started / Workspace Root
 
+### Source Checkout
+
 Run checks from the product repository:
 
 ```bash
@@ -218,6 +220,26 @@ python3 web/board/app.py --repo-root <workspace>
 ```
 
 Without `AIPOS_WORKSPACE_ROOT` or `--repo-root`, CLI commands preserve legacy behavior by searching upward from the current directory for `5_tasks/queue`.
+
+### npm Package Preview
+
+Lybra can be packed locally as an npm command distribution. The npm package installs a `lybra` command that delegates to the bundled Python implementation, so Python must be available on `PATH`.
+
+The package is currently private and unlicensed for public registry publishing. Use it only for local smoke testing until Owner approves a public license and a separate publish gate.
+
+```bash
+npm pack
+npm install -g ./lybra-0.1.0.tgz
+lybra --help
+```
+
+Local install smoke without global writes:
+
+```bash
+npm pack --pack-destination /tmp/lybra-pack
+npm install --global --prefix /tmp/lybra-install /tmp/lybra-pack/lybra-0.1.0.tgz
+/tmp/lybra-install/bin/lybra --help
+```
 
 ## Public Repo Boundary
 

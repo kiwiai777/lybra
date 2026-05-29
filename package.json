@@ -1,0 +1,42 @@
+{
+  "name": "lybra",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Local-first, file-authoritative agent workbench with audit-first governance.",
+  "bin": {
+    "lybra": "bin/lybra"
+  },
+  "files": [
+    "0_control_plane/",
+    "3_context_bundles/",
+    "bin/",
+    "config/",
+    "docs/",
+    "examples/",
+    "templates/",
+    "tools/",
+    "web/",
+    "README.md",
+    "package.json",
+    "!tools/**/tests/**",
+    "!web/**/tests/**",
+    "!**/__pycache__/**",
+    "!**/*.pyc",
+    "!**/.DS_Store",
+    "!**/._*",
+    "!**/task_cards/**",
+    "!.codex/**"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kiwiai777/lybra.git"
+  },
+  "homepage": "https://github.com/kiwiai777/lybra#readme",
+  "bugs": {
+    "url": "https://github.com/kiwiai777/lybra/issues"
+  }
+}

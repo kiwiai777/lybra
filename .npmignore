@@ -1,0 +1,14 @@
+.git/
+.codex/
+task_cards/
+node_modules/
+__pycache__/
+**/__pycache__/
+*.pyc
+**/*.pyc
+.DS_Store
+**/.DS_Store
+._*
+**/._*
+.env
+*.tgz
