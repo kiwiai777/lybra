@@ -274,6 +274,54 @@ def actor_matches_task(task: dict[str, Any], actor: str | None, profiles: dict[s
     )
 
 
+def required_specific_instance(metadata: dict[str, Any]) -> str:
+    owner_override = metadata.get("owner_override")
+    if isinstance(owner_override, dict) and str(owner_override.get("allowed_agent_instance") or "").strip():
+        return str(owner_override.get("allowed_agent_instance")).strip()
+    if str(metadata.get("agent_instance") or "").strip():
+        return str(metadata.get("agent_instance")).strip()
+    requirements = metadata.get("requirements")
+    if isinstance(requirements, dict) and str(requirements.get("preferred_agent_instance") or "").strip():
+        return str(requirements.get("preferred_agent_instance")).strip()
+    return ""
+
+
+def explicit_claimant_instance(actor: str | None, required_instance: str, profiles: dict[str, Any]) -> str:
+    actor_text = str(actor or "").strip()
+    if not actor_text:
+        return ""
+    if actor_text == required_instance:
+        return actor_text
+    if actor_text in profiles.get("instance_index", {}):
+        return actor_text
+    return ""
+
+
+def specific_instance_match_details(
+    metadata: dict[str, Any],
+    actor: str | None,
+    profiles: dict[str, Any],
+) -> dict[str, Any]:
+    required_instance = required_specific_instance(metadata)
+    claimant_instance = explicit_claimant_instance(actor, required_instance, profiles)
+    if not required_instance:
+        result = "missing_required"
+    elif not claimant_instance:
+        result = "missing_claimant"
+    elif claimant_instance == required_instance:
+        result = "exact"
+    else:
+        result = "mismatch"
+    return {
+        "matched": result == "exact",
+        "reason": "specific_instance_only",
+        "required_instance_id": required_instance or None,
+        "claimant_instance_id": claimant_instance or str(actor or "").strip() or None,
+        "instance_match_policy": "exact",
+        "instance_match_result": result,
+    }
+
+
 def actor_match_details(task: dict[str, Any], actor: str | None, profiles: dict[str, Any]) -> dict[str, Any]:
     metadata = task.get("metadata", {})
     assigned_to = task.get("assigned_to") or metadata.get("assigned_to")

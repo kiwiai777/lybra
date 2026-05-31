@@ -95,7 +95,7 @@ class TaskComplexityTests(unittest.TestCase):
         self.assertIn("Complex-class active orchestration missing continuity_planner_agent", result["blocking_reasons"])
         self.assertIn("Complex-class active orchestration missing continuity_planner_agent_instance", result["blocking_reasons"])
 
-    def test_complex_dependency_is_blocked_until_audit_pass(self) -> None:
+    def test_complex_dependency_audit_pass_blocks_until_pass(self) -> None:
         common = {
             "task_class": "complex",
             "planner_agent": "planner.local",
@@ -108,6 +108,73 @@ class TaskComplexityTests(unittest.TestCase):
         self.assertIn("Complex-class dependent task is blocked until dependency_audit_status is PASS", pending["blocking_reasons"])
         passed = validate_single_task(self.write_task(**common, dependency_audit_status="PASS"))
         self.assertEqual(passed["verdict"], "PASS")
+
+    def test_complex_dependency_executor_completion_uses_executor_status(self) -> None:
+        common = {
+            "task_class": "complex",
+            "planner_agent": "planner.local",
+            "reviewer": "review.local",
+            "audit_by": "audit.local",
+            "depends_on": ["AIPOS-139"],
+            "dependency_condition": "executor_completion",
+        }
+        pending = validate_single_task(self.write_task(**common, dependency_executor_status="pending"))
+        self.assertIn(
+            "Complex-class dependent task is blocked until dependency_executor_status is completed",
+            pending["blocking_reasons"],
+        )
+        completed = validate_single_task(self.write_task(**common, dependency_executor_status="completed"))
+        self.assertEqual(completed["verdict"], "PASS")
+
+    def test_complex_dependency_audit_readiness_uses_readiness_status(self) -> None:
+        common = {
+            "task_class": "complex",
+            "planner_agent": "planner.local",
+            "reviewer": "review.local",
+            "audit_by": "audit.local",
+            "depends_on": ["AIPOS-139"],
+            "dependency_condition": "audit_readiness",
+        }
+        not_ready = validate_single_task(self.write_task(**common, dependency_audit_readiness="not_ready"))
+        self.assertIn(
+            "Complex-class dependent task is blocked until dependency_audit_readiness is ready",
+            not_ready["blocking_reasons"],
+        )
+        ready = validate_single_task(self.write_task(**common, dependency_audit_readiness="ready"))
+        self.assertEqual(ready["verdict"], "PASS")
+
+    def test_complex_dependency_ambiguous_condition_blocks(self) -> None:
+        result = validate_single_task(
+            self.write_task(
+                task_class="complex",
+                planner_agent="planner.local",
+                reviewer="review.local",
+                audit_by="audit.local",
+                depends_on=["AIPOS-139"],
+                dependency_condition="owner_approved",
+            )
+        )
+
+        self.assertIn(
+            "Complex-class dependent task requires dependency_condition: executor_completion, audit_readiness, or audit_pass",
+            result["blocking_reasons"],
+        )
+
+    def test_complex_dependent_audit_task_can_publish_when_audit_ready(self) -> None:
+        metadata = self.metadata(
+            task_class="complex",
+            planner_agent="planner.local",
+            reviewer="review.local",
+            audit_by="audit.local",
+            depends_on=["AIPOS-139"],
+            dependency_condition="audit_readiness",
+            dependency_audit_readiness="ready",
+        )
+        created = create_draft(self.repo_root, metadata, "Body")
+        self.assertTrue(created["wrote"])
+        published = publish_draft(self.repo_root, str(created["target_path"]), dry_run=True)
+        self.assertNotEqual(published["verdict"], "BLOCK")
+        self.assertTrue(published["would_write"])
 
     def test_complex_dependent_draft_can_exist_but_cannot_publish_before_audit_pass(self) -> None:
         metadata = self.metadata(

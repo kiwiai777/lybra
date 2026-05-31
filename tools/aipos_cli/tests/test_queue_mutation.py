@@ -9,6 +9,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from tools.aipos_cli.aipos_cli import main
+from tools.aipos_cli.agent_profiles import load_agent_profiles
 from tools.aipos_cli.queue_mutation import mutate_queue_task
 
 
@@ -64,6 +65,7 @@ class QueueMutationTests(unittest.TestCase):
             "reopened_by",
             "reopened_at",
             "reopen_reason",
+            "claim_policy",
         ):
             if key in metadata and metadata[key] is not None:
                 lines.append(f"{key}: {metadata[key]}")
@@ -125,6 +127,76 @@ class QueueMutationTests(unittest.TestCase):
 
         self.assertEqual(result["verdict"], "BLOCK")
         self.assertIn("Current actor does not match assigned_to or agent_instance", result["blocking_reasons"])
+
+    def test_specific_instance_only_blocks_sibling_instance_dry_run(self) -> None:
+        self.write_task(
+            "AIPOS-145-SPECIFIC-BLOCK",
+            assigned_to="dev_claude",
+            agent_instance="dev.claude.cc.local",
+            claim_policy="specific_instance_only",
+        )
+        profiles = load_agent_profiles(self.repo_root)
+
+        result = mutate_queue_task(
+            self.repo_root,
+            "claim",
+            task_id="AIPOS-145-SPECIFIC-BLOCK",
+            actor="dev.claude.cc_glm.local",
+            dry_run=True,
+            profiles=profiles,
+        )
+
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertIn(
+            "specific_instance_only requires dev.claude.cc.local; current instance is dev.claude.cc_glm.local",
+            result["blocking_reasons"],
+        )
+        self.assertFalse(result["would_write"])
+        self.assertFalse(result["would_move"])
+
+    def test_specific_instance_only_allows_exact_target_instance_dry_run(self) -> None:
+        self.write_task(
+            "AIPOS-145-SPECIFIC-PASS",
+            assigned_to="dev_claude",
+            agent_instance="dev.claude.cc.local",
+            claim_policy="specific_instance_only",
+        )
+        profiles = load_agent_profiles(self.repo_root)
+
+        result = mutate_queue_task(
+            self.repo_root,
+            "claim",
+            task_id="AIPOS-145-SPECIFIC-PASS",
+            actor="dev.claude.cc.local",
+            dry_run=True,
+            profiles=profiles,
+        )
+
+        self.assertNotEqual(result["verdict"], "BLOCK")
+        self.assertTrue(result["would_write"])
+        self.assertTrue(result["would_move"])
+
+    def test_assigned_agent_only_keeps_alias_sibling_claim_behavior(self) -> None:
+        self.write_task(
+            "AIPOS-145-ASSIGNED-ALIAS",
+            assigned_to="dev_claude",
+            agent_instance="dev.claude.cc.local",
+            claim_policy="assigned_agent_only",
+        )
+        profiles = load_agent_profiles(self.repo_root)
+
+        result = mutate_queue_task(
+            self.repo_root,
+            "claim",
+            task_id="AIPOS-145-ASSIGNED-ALIAS",
+            actor="dev.claude.cc_glm.local",
+            dry_run=True,
+            profiles=profiles,
+        )
+
+        self.assertNotEqual(result["verdict"], "BLOCK")
+        self.assertTrue(result["would_write"])
+        self.assertTrue(result["would_move"])
 
     def test_claim_blocks_directory_status_mismatch(self) -> None:
         self.write_task("AIPOS-31-MISMATCH-STATE", queue_state="pending", status="claimed")

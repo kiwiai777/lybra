@@ -5,6 +5,7 @@ from typing import Any
 ALLOWED_TASK_CLASSES = {"simple", "complex"}
 CODE_TASK_MODES = {"code", "coding"}
 AUDIT_PASS_VALUES = {"pass", "passed"}
+DEPENDENCY_CONDITIONS = {"executor_completion", "audit_readiness", "audit_pass"}
 
 
 def _text(value: Any) -> str:
@@ -102,11 +103,26 @@ def validate_task_complexity(
     depends_on = _as_list(metadata.get("depends_on"))
     if enforce_dependency_gate and depends_on:
         dependency_condition = _lower(metadata.get("dependency_condition"))
-        dependency_audit_status = _lower(metadata.get("dependency_audit_status"))
-        if dependency_condition != "audit_pass":
-            blocking_reasons.append("Complex-class dependent task requires dependency_condition: audit_pass")
-        if dependency_audit_status not in AUDIT_PASS_VALUES:
-            blocking_reasons.append("Complex-class dependent task is blocked until dependency_audit_status is PASS")
+        if dependency_condition not in DEPENDENCY_CONDITIONS:
+            blocking_reasons.append(
+                "Complex-class dependent task requires dependency_condition: executor_completion, audit_readiness, or audit_pass"
+            )
+        elif dependency_condition == "executor_completion":
+            dependency_executor_status = _lower(metadata.get("dependency_executor_status"))
+            if dependency_executor_status != "completed":
+                blocking_reasons.append(
+                    "Complex-class dependent task is blocked until dependency_executor_status is completed"
+                )
+        elif dependency_condition == "audit_readiness":
+            dependency_audit_readiness = _lower(metadata.get("dependency_audit_readiness"))
+            if dependency_audit_readiness != "ready":
+                blocking_reasons.append(
+                    "Complex-class dependent task is blocked until dependency_audit_readiness is ready"
+                )
+        else:
+            dependency_audit_status = _lower(metadata.get("dependency_audit_status"))
+            if dependency_audit_status not in AUDIT_PASS_VALUES:
+                blocking_reasons.append("Complex-class dependent task is blocked until dependency_audit_status is PASS")
 
     return {
         "blocking_reasons": blocking_reasons,

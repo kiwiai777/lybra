@@ -9,6 +9,7 @@ from tools.aipos_cli.agent_profiles import (
     actor_matches_task,
     actor_matches_task_actor,
     availability_warning_for_actor,
+    specific_instance_match_details,
 )
 from tools.aipos_cli.records import check_task_record_refs, find_records_for_task
 from tools.aipos_cli.task_complexity import validate_task_complexity
@@ -315,17 +316,30 @@ def validate_task(
         _add(needs_owner_reasons, "owner_review_required is true")
 
     if current_actor:
-        actor_matches = (
-            actor_matches_task(task, current_actor, profiles or {})
-            if profiles is not None
-            else current_actor in {
-                metadata.get("assigned_to"),
-                metadata.get("agent_instance"),
-                metadata.get("claimed_by"),
-            }
-        )
+        claim_policy = str(metadata.get("claim_policy") or "").strip()
+        if claim_policy == "specific_instance_only":
+            match_details = specific_instance_match_details(metadata, current_actor, profiles or {})
+            actor_matches = bool(match_details.get("matched"))
+            if not actor_matches:
+                required = match_details.get("required_instance_id") or "<missing>"
+                claimant = match_details.get("claimant_instance_id") or "<missing>"
+                _add(
+                    blocking_reasons,
+                    f"specific_instance_only requires {required}; current instance is {claimant}",
+                )
+        else:
+            actor_matches = (
+                actor_matches_task(task, current_actor, profiles or {})
+                if profiles is not None
+                else current_actor in {
+                    metadata.get("assigned_to"),
+                    metadata.get("agent_instance"),
+                    metadata.get("claimed_by"),
+                }
+            )
         if profiles is not None:
-            match_details = actor_match_details(task, current_actor, profiles)
+            if claim_policy != "specific_instance_only":
+                match_details = actor_match_details(task, current_actor, profiles)
             availability_warning = availability_warning_for_actor(current_actor, profiles)
             if availability_warning:
                 _add(warnings, availability_warning)

@@ -32,14 +32,20 @@ class ControlledExecuteTests(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
         return path
 
-    def write_task(self, task_id: str, queue_state: str = "pending", needs_owner: bool = False) -> Path:
+    def write_task(
+        self,
+        task_id: str,
+        queue_state: str = "pending",
+        needs_owner: bool = False,
+        **metadata: object,
+    ) -> Path:
         lines = [
             "---",
             f"task_id: {task_id}",
             f"title: {task_id}",
             "project: ai-project-os",
-            "assigned_to: dev.codex.local",
-            "agent_instance: dev.codex.local",
+            f"assigned_to: {metadata.get('assigned_to', 'dev.codex.local')}",
+            f"agent_instance: {metadata.get('agent_instance', 'dev.codex.local')}",
             "context_bundle: dev.codex.local",
             "task_mode: code",
             "model_tier: L2",
@@ -53,10 +59,10 @@ class ControlledExecuteTests(unittest.TestCase):
             "context_isolation: strict",
             "artifact_scope: tools/aipos_cli/",
             "memory_scope: controlled execute tests",
-            "---",
-            "task body",
-            "",
         ]
+        if metadata.get("claim_policy"):
+            lines.append(f"claim_policy: {metadata['claim_policy']}")
+        lines.extend(["---", "task body", ""])
         return self.write_file(f"5_tasks/queue/{queue_state}/{task_id.lower()}.md", "\n".join(lines))
 
     def draft_payload(self, task_id: str = "AIPOS-38-DRAFT") -> dict[str, object]:
@@ -142,6 +148,30 @@ class ControlledExecuteTests(unittest.TestCase):
         self.assertTrue(executed["ok"])
         self.assertEqual(executed["operation"], "draft_create")
         self.assertTrue((self.repo_root / "5_tasks" / "drafts" / "aipos-38-create.md").exists())
+
+    def test_queue_claim_controlled_dry_run_blocks_wrong_specific_instance_without_token(self) -> None:
+        self.write_task(
+            "AIPOS-145-CLAIM-TOKEN-BLOCK",
+            assigned_to="dev_claude",
+            agent_instance="dev.claude.cc.local",
+            claim_policy="specific_instance_only",
+        )
+
+        dry = claim_task(
+            task_id="AIPOS-145-CLAIM-TOKEN-BLOCK",
+            actor="dev.claude.cc_glm.local",
+            dry_run=True,
+            repo_root=self.repo_root,
+        )
+
+        self.assertEqual(dry["verdict"], "BLOCK")
+        self.assertFalse(dry["execute_allowed"])
+        self.assertIsNone(dry["dry_run_id"])
+        self.assertIsNone(dry["dry_run_snapshot_hash"])
+        self.assertIn(
+            "specific_instance_only requires dev.claude.cc.local; current instance is dev.claude.cc_glm.local",
+            dry["blocking_reasons"],
+        )
 
     def test_execute_draft_create_rejects_expired(self) -> None:
         dry = create_draft(self.draft_payload("AIPOS-38-EXPIRED"), dry_run=True, repo_root=self.repo_root, actor="dev.codex.local")
