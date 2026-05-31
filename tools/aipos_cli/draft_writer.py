@@ -18,7 +18,7 @@ from tools.aipos_cli.draft_validator import (
 )
 from tools.aipos_cli.task_complexity import validate_task_complexity
 
-EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "dev.claude.cc.local"
+EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "agent-01"
 EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET = "workspace_artifacts/external_intake"
 
 DEFAULT_TEMPLATE_VALUES = {

@@ -45,7 +45,9 @@ Only instances matching `assigned_to`, the logical agent, or configured aliases 
 
 ### specific_instance_only
 
-Only the exact concrete instance named by `agent_instance` or an Owner override may claim.
+Only the exact canonical opaque instance named by `agent_instance` or an Owner override may claim.
+
+Historical IDs may resolve through explicit one-to-one `legacy_instance_ids` mappings before exact canonical comparison. Ambiguous mappings must block. Claim enforcement must not parse identifier strings or infer role, runtime, vendor, harness, model family, host, authority, or independence from names.
 
 ### first_matching_instance
 

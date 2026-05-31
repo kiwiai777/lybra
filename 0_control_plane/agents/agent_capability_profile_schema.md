@@ -10,10 +10,16 @@ Capability profiles are declarative visibility and matching inputs. They do not 
 
 ```yaml
 agent_instance:
+legacy_instance_ids: []
 logical_agent:
 role:
 runtime:
 runtime_profile:
+provenance:
+  vendor:
+  harness:
+  model_family:
+  host:
 agent_ui_host:
 execution_host:
 repo_host:
@@ -88,11 +94,13 @@ role_catalog:
 
 ## Field Definitions
 
-- `agent_instance`: Concrete instance identity, such as `dev.claude.local.001` or `dev.generic.local.001`.
+- `agent_instance`: Stable Owner-defined opaque concrete-instance key, such as `agent-01`. The system must not parse semantic meaning from the string.
+- `legacy_instance_ids`: Optional explicit historical-ID mappings used for additive compatibility. One legacy ID must not resolve ambiguously to multiple canonical IDs.
 - `logical_agent`: Stable logical agent identity, such as `dev_claude` or `dev_codex`.
 - `role`: Role family used for task assignment and policy matching.
 - `runtime`: Runtime family, such as `local_manual`, `cloud_24h`, `codex_cli`, `codex_mac`, or `claude_code`.
 - `runtime_profile`: Configured runtime profile name.
+- `provenance`: Optional descriptive metadata. `vendor`, `harness`, `model_family`, and `host` are open-vocabulary free-form strings, not closed enums. Provenance may support human-readable audit evidence and explicit independence checks but does not grant authority or replace capabilities.
 - `agent_ui_host`: Host where the agent UI or operator-facing session runs.
 - `execution_host`: Host where repository commands execute.
 - `repo_host`: Host where canonical repository state lives.

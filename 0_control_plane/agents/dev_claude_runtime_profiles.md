@@ -19,7 +19,14 @@ aliases:
   - dev.claude.command.local
 
 instances:
-  - agent_instance: dev.claude.cc.local
+  - agent_instance: agent-01
+    legacy_instance_ids:
+      - dev.claude.cc.local
+    provenance:
+      vendor: anthropic
+      harness: claude-code
+      model_family: claude
+      host: local
     runtime_profile: cc
     runtime_entrypoint: claude_code
     runtime_command: cc
@@ -32,7 +39,14 @@ instances:
     enabled: true
     availability_status: online
 
-  - agent_instance: dev.claude.cc_glm.local
+  - agent_instance: agent-02
+    legacy_instance_ids:
+      - dev.claude.cc_glm.local
+    provenance:
+      vendor: anthropic
+      harness: claude-code
+      model_family: glm
+      host: local
     runtime_profile: cc_glm
     runtime_entrypoint: claude_code
     runtime_command: cc
@@ -46,7 +60,14 @@ instances:
     enabled: true
     availability_status: unknown
 
-  - agent_instance: dev.claude.command.local
+  - agent_instance: agent-03
+    legacy_instance_ids:
+      - dev.claude.command.local
+    provenance:
+      vendor: anthropic
+      harness: claude-command
+      model_family: claude
+      host: local
     runtime_profile: claude_command
     runtime_entrypoint: claude_cli
     runtime_command: claude
@@ -62,7 +83,7 @@ runtime_profiles:
   - cc
   - cc_glm
   - claude_command
-default_instance: dev.claude.cc.local
+default_instance: agent-01
 default_runtime_profile: cc
 allowed_task_modes:
   - coding

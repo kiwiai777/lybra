@@ -16,28 +16,26 @@ A concrete agent instance is a runnable or manually selected execution identity 
 
 One logical role may have multiple concrete instances. This is especially important for remote 24h agents, where each persistent instance may be bound to one model tier.
 
-## Naming Convention
+## Opaque Instance IDs
 
-Recommended concrete instance ID format:
+Canonical concrete instance IDs are stable Owner-defined opaque keys.
 
-```text
-{domain}.{agent}.{runtime}.{tier}
-```
-
-Examples:
+Recommended format:
 
 ```text
-info.hermes.cloud.l1
-info.hermes.cloud.l2
-info.hermes.cloud.l3
-biz.lobster.cloud.l1
-biz.lobster.cloud.l2
-biz.lobster.cloud.l3
-dev.claude.local.l2
-dev.codex.local.l2
+^[a-z0-9][a-z0-9._-]{0,63}$
 ```
 
-Local manual agents may also use a stable non-tiered identity, such as `dev.codex.local`, when the task card records the selected `model_tier`.
+Example canonical IDs:
+
+```text
+agent-01
+agent-02
+```
+
+Separators are syntax only. Matching, claim enforcement, validation, and audit independence must not parse an instance ID to infer role, runtime, model tier, vendor, harness, host, authority, or trust level.
+
+Historical IDs such as `dev.codex.local` remain readable opaque values during additive migration. Explicit `legacy_instance_ids` mappings may resolve one historical ID to one canonical ID. Ambiguous mappings must block or route to Owner.
 
 ## Required Instance Fields
 
@@ -45,9 +43,15 @@ Concrete instance definitions should include:
 
 ```yaml
 id:
+legacy_instance_ids:
 role:
 runtime:
 runtime_profile:
+provenance:
+  vendor:
+  harness:
+  model_family:
+  host:
 model_tier:
 task_scope:
 write_target:
@@ -60,9 +64,11 @@ owner_approval_required:
 Field meanings:
 
 - `id`: Concrete instance ID.
+- `legacy_instance_ids`: Optional explicit additive migration references for historical IDs.
 - `role`: Logical role or agent family.
 - `runtime`: Runtime location or type, such as `local`, `cloud`, or `browser`.
 - `runtime_profile`: Runtime profile reference when one exists.
+- `provenance`: Optional descriptive open-vocabulary strings for `vendor`, `harness`, `model_family`, and `host`. Provenance does not grant authority.
 - `model_tier`: Bound model tier for this instance, or task-selected tier for local manual identities.
 - `task_scope`: Allowed task categories.
 - `write_target`: Allowed default output target or target family.

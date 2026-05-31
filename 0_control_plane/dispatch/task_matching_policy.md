@@ -101,7 +101,9 @@ An agent instance may attempt a claim only when all applicable hard rules pass.
 
 ### Instance Match
 
-- If `claim_policy: specific_instance_only`, the task `agent_instance` or `requirements.preferred_agent_instance` must exactly match the concrete agent instance.
+- If `claim_policy: specific_instance_only`, the task `agent_instance` or `requirements.preferred_agent_instance` must resolve explicitly to the same canonical opaque instance ID as the claimant.
+- Explicit one-to-one `legacy_instance_ids` mappings may preserve historical-ID compatibility. Ambiguous mappings must block or route to Owner.
+- Instance-ID strings must not be parsed to infer role, runtime, vendor, harness, model family, host, authority, or independence.
 - If `agent_instance` is present under another claim policy, it is a strong preference unless the policy explicitly makes it mandatory.
 
 ### Capability Match

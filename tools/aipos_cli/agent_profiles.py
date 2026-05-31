@@ -10,6 +10,15 @@ except Exception:  # pragma: no cover
     yaml = None
 
 ALLOWED_AVAILABILITY_STATUSES = {"online", "offline", "busy", "maintenance", "unknown"}
+INSTANCE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+PROVENANCE_FIELDS = ("vendor", "harness", "model_family", "host")
+INDEPENDENCE_DIMENSIONS = {
+    "distinct_runtime_profile": ("runtime_profile",),
+    "distinct_harness": ("provenance", "harness"),
+    "distinct_model_family": ("provenance", "model_family"),
+    "distinct_vendor": ("provenance", "vendor"),
+    "distinct_host": ("provenance", "host"),
+}
 
 FALLBACK_PROFILE = {
     "agent_id": "dev_claude",
@@ -26,7 +35,14 @@ FALLBACK_PROFILE = {
     ],
     "instances": [
         {
-            "agent_instance": "dev.claude.cc.local",
+            "agent_instance": "agent-01",
+            "legacy_instance_ids": ["dev.claude.cc.local"],
+            "provenance": {
+                "vendor": "anthropic",
+                "harness": "claude-code",
+                "model_family": "claude",
+                "host": "local",
+            },
             "runtime_profile": "cc",
             "runtime_entrypoint": "claude_code",
             "runtime_command": "cc",
@@ -38,7 +54,14 @@ FALLBACK_PROFILE = {
             "availability_status": "online",
         },
         {
-            "agent_instance": "dev.claude.cc_glm.local",
+            "agent_instance": "agent-02",
+            "legacy_instance_ids": ["dev.claude.cc_glm.local"],
+            "provenance": {
+                "vendor": "anthropic",
+                "harness": "claude-code",
+                "model_family": "glm",
+                "host": "local",
+            },
             "runtime_profile": "cc_glm",
             "runtime_entrypoint": "claude_code",
             "runtime_command": "cc",
@@ -53,7 +76,14 @@ FALLBACK_PROFILE = {
             "availability_status": "unknown",
         },
         {
-            "agent_instance": "dev.claude.command.local",
+            "agent_instance": "agent-03",
+            "legacy_instance_ids": ["dev.claude.command.local"],
+            "provenance": {
+                "vendor": "anthropic",
+                "harness": "claude-command",
+                "model_family": "claude",
+                "host": "local",
+            },
             "runtime_profile": "claude_command",
             "runtime_entrypoint": "claude_cli",
             "runtime_command": "claude",
@@ -66,7 +96,7 @@ FALLBACK_PROFILE = {
         },
     ],
     "runtime_profiles": ["cc", "cc_glm", "claude_command"],
-    "default_instance": "dev.claude.cc.local",
+    "default_instance": "agent-01",
     "default_runtime_profile": "cc",
     "allowed_task_modes": ["coding", "code_reviewer", "auditor"],
     "preferred_task_modes": ["coding", "code_reviewer"],
@@ -140,6 +170,9 @@ def _profile_copy(profile: dict[str, Any], source: str, source_path: str) -> dic
     runtime_profiles = list(copied.get("runtime_profiles", []) or [])
     for instance in copied["instances"]:
         instance.setdefault("agent_instance", None)
+        instance["legacy_instance_ids"] = list(dict.fromkeys(instance.get("legacy_instance_ids", []) or []))
+        provenance = instance.get("provenance")
+        instance["provenance"] = dict(provenance) if isinstance(provenance, dict) else {}
         instance.setdefault("runtime_profile", None)
         instance.setdefault("runtime_entrypoint", None)
         instance.setdefault("runtime_command", None)
@@ -196,6 +229,9 @@ def load_agent_profiles(repo_root: Path) -> dict[str, Any]:
     agents_by_id = {profile["agent_id"]: profile for profile in profiles if profile.get("agent_id")}
     alias_index: dict[str, str] = {}
     instance_index: dict[str, dict[str, Any]] = {}
+    legacy_instance_index: dict[str, list[dict[str, Any]]] = {}
+    seen_instance_ids: set[str] = set()
+    duplicate_instance_ids: set[str] = set()
     for profile in profiles:
         if not profile.get("enabled", True):
             continue
@@ -204,7 +240,35 @@ def load_agent_profiles(repo_root: Path) -> dict[str, Any]:
             alias_index[str(alias)] = agent_id
         for instance in profile.get("instances", []):
             if instance.get("enabled", True) and instance.get("agent_instance"):
-                instance_index[str(instance["agent_instance"])] = {"agent_id": agent_id, "instance": instance}
+                instance_id = str(instance["agent_instance"])
+                if not INSTANCE_ID_PATTERN.fullmatch(instance_id):
+                    profile["warnings"].append(f"Invalid canonical agent_instance ignored: {instance_id}")
+                    continue
+                if instance_id in seen_instance_ids:
+                    profile["warnings"].append(f"Duplicate canonical agent_instance ignored: {instance_id}")
+                    duplicate_instance_ids.add(instance_id)
+                    instance_index.pop(instance_id, None)
+                    continue
+                seen_instance_ids.add(instance_id)
+                instance_index[instance_id] = {"agent_id": agent_id, "instance": instance}
+                for legacy_id in instance.get("legacy_instance_ids", []):
+                    legacy_text = str(legacy_id or "").strip()
+                    if legacy_text:
+                        legacy_instance_index.setdefault(legacy_text, []).append(
+                            {"agent_id": agent_id, "instance": instance}
+                        )
+
+    for instance_id in duplicate_instance_ids:
+        instance_index.pop(instance_id, None)
+
+    ambiguous_legacy_instance_ids = sorted(
+        legacy_id for legacy_id, items in legacy_instance_index.items() if len(items) != 1
+    )
+    for legacy_id in ambiguous_legacy_instance_ids:
+        for item in legacy_instance_index[legacy_id]:
+            profile = agents_by_id.get(item["agent_id"])
+            if profile is not None:
+                profile["warnings"].append(f"Ambiguous legacy agent_instance mapping: {legacy_id}")
 
     return {
         "scope": "agents",
@@ -219,6 +283,98 @@ def load_agent_profiles(repo_root: Path) -> dict[str, Any]:
         "agents_by_id": agents_by_id,
         "alias_index": alias_index,
         "instance_index": instance_index,
+        "legacy_instance_index": legacy_instance_index,
+        "ambiguous_legacy_instance_ids": ambiguous_legacy_instance_ids,
+    }
+
+
+def resolve_instance_id(instance_id: str | None, profiles: dict[str, Any]) -> dict[str, Any]:
+    value = str(instance_id or "").strip()
+    if not value:
+        return {"input_instance_id": None, "canonical_instance_id": None, "resolution": "missing"}
+    if value in profiles.get("instance_index", {}):
+        return {"input_instance_id": value, "canonical_instance_id": value, "resolution": "canonical"}
+    legacy_matches = profiles.get("legacy_instance_index", {}).get(value, [])
+    if len(legacy_matches) == 1:
+        canonical = str(legacy_matches[0]["instance"].get("agent_instance") or "")
+        return {"input_instance_id": value, "canonical_instance_id": canonical, "resolution": "legacy"}
+    if len(legacy_matches) > 1:
+        return {"input_instance_id": value, "canonical_instance_id": None, "resolution": "ambiguous"}
+    return {"input_instance_id": value, "canonical_instance_id": value, "resolution": "unregistered"}
+
+
+def _resolved_instance_config(instance_id: str | None, profiles: dict[str, Any]) -> dict[str, Any] | None:
+    resolved = resolve_instance_id(instance_id, profiles)
+    canonical = resolved.get("canonical_instance_id")
+    if not canonical or resolved.get("resolution") == "ambiguous":
+        return None
+    return profiles.get("instance_index", {}).get(str(canonical), {}).get("instance")
+
+
+def _nested_value(data: dict[str, Any], path: tuple[str, ...]) -> str:
+    current: Any = data
+    for key in path:
+        if not isinstance(current, dict):
+            return ""
+        current = current.get(key)
+    return str(current or "").strip()
+
+
+def evaluate_instance_independence(
+    executor_instance_id: str | None,
+    auditor_instance_id: str | None,
+    profiles: dict[str, Any],
+    requirements: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    requested = {"distinct_instance": True, **(requirements or {})}
+    executor = resolve_instance_id(executor_instance_id, profiles)
+    auditor = resolve_instance_id(auditor_instance_id, profiles)
+    checks: dict[str, dict[str, Any]] = {}
+    blocking_reasons: list[str] = []
+
+    if executor["resolution"] == "ambiguous" or auditor["resolution"] == "ambiguous":
+        blocking_reasons.append("Independent instance resolution is ambiguous")
+    executor_canonical = executor.get("canonical_instance_id")
+    auditor_canonical = auditor.get("canonical_instance_id")
+    distinct_instance = bool(executor_canonical and auditor_canonical and executor_canonical != auditor_canonical)
+    checks["distinct_instance"] = {
+        "required": bool(requested.get("distinct_instance", True)),
+        "matched": distinct_instance,
+        "executor": executor_canonical,
+        "auditor": auditor_canonical,
+    }
+    if requested.get("distinct_instance", True) and not distinct_instance:
+        blocking_reasons.append("Independent auditor requires a distinct canonical instance")
+
+    executor_config = _resolved_instance_config(executor_instance_id, profiles)
+    auditor_config = _resolved_instance_config(auditor_instance_id, profiles)
+    for dimension, path in INDEPENDENCE_DIMENSIONS.items():
+        if not requested.get(dimension, False):
+            continue
+        executor_value = _nested_value(executor_config or {}, path)
+        auditor_value = _nested_value(auditor_config or {}, path)
+        known = bool(
+            executor_value
+            and auditor_value
+            and executor_value.lower() != "unknown"
+            and auditor_value.lower() != "unknown"
+        )
+        matched = known and executor_value != auditor_value
+        checks[dimension] = {
+            "required": True,
+            "matched": matched,
+            "executor": executor_value or None,
+            "auditor": auditor_value or None,
+        }
+        if not matched:
+            blocking_reasons.append(f"Independent auditor requirement failed: {dimension}")
+
+    return {
+        "matched": not blocking_reasons,
+        "executor": executor,
+        "auditor": auditor,
+        "checks": checks,
+        "blocking_reasons": blocking_reasons,
     }
 
 
@@ -230,6 +386,9 @@ def canonical_agent(actor: str | None, profiles: dict[str, Any]) -> str:
         return str(profiles["alias_index"][actor_text])
     if actor_text in profiles.get("instance_index", {}):
         return str(profiles["instance_index"][actor_text]["agent_id"])
+    legacy_matches = profiles.get("legacy_instance_index", {}).get(actor_text, [])
+    if len(legacy_matches) == 1:
+        return str(legacy_matches[0]["agent_id"])
     return actor_text
 
 
@@ -248,6 +407,9 @@ def actor_aliases(actor: str | None, profiles: dict[str, Any]) -> set[str]:
             for instance in profile.get("instances", [])
             if instance.get("enabled", True) and instance.get("agent_instance")
         )
+        for instance in profile.get("instances", []):
+            if instance.get("enabled", True):
+                aliases.update(str(item) for item in instance.get("legacy_instance_ids", []) if item)
     return aliases
 
 
@@ -290,10 +452,11 @@ def explicit_claimant_instance(actor: str | None, required_instance: str, profil
     actor_text = str(actor or "").strip()
     if not actor_text:
         return ""
-    if actor_text == required_instance:
-        return actor_text
-    if actor_text in profiles.get("instance_index", {}):
-        return actor_text
+    resolved = resolve_instance_id(actor_text, profiles)
+    if resolved.get("resolution") == "ambiguous":
+        return ""
+    if actor_text == required_instance or resolved.get("canonical_instance_id"):
+        return str(resolved.get("canonical_instance_id") or actor_text)
     return ""
 
 
@@ -303,12 +466,17 @@ def specific_instance_match_details(
     profiles: dict[str, Any],
 ) -> dict[str, Any]:
     required_instance = required_specific_instance(metadata)
+    required_resolution = resolve_instance_id(required_instance, profiles)
+    claimant_resolution = resolve_instance_id(actor, profiles)
+    required_canonical = required_resolution.get("canonical_instance_id")
     claimant_instance = explicit_claimant_instance(actor, required_instance, profiles)
     if not required_instance:
         result = "missing_required"
+    elif required_resolution.get("resolution") == "ambiguous" or claimant_resolution.get("resolution") == "ambiguous":
+        result = "ambiguous"
     elif not claimant_instance:
         result = "missing_claimant"
-    elif claimant_instance == required_instance:
+    elif claimant_instance == required_canonical:
         result = "exact"
     else:
         result = "mismatch"
@@ -316,7 +484,9 @@ def specific_instance_match_details(
         "matched": result == "exact",
         "reason": "specific_instance_only",
         "required_instance_id": required_instance or None,
-        "claimant_instance_id": claimant_instance or str(actor or "").strip() or None,
+        "required_canonical_instance_id": required_canonical,
+        "claimant_instance_id": str(actor or "").strip() or None,
+        "claimant_canonical_instance_id": claimant_resolution.get("canonical_instance_id"),
         "instance_match_policy": "exact",
         "instance_match_result": result,
     }
@@ -395,8 +565,9 @@ def runtime_config_for_actor(actor: str | None, profiles: dict[str, Any]) -> dic
         }
 
     matched_instance = None
+    resolved_actor_instance = resolve_instance_id(actor_text, profiles).get("canonical_instance_id")
     for instance in profile.get("instances", []):
-        if actor_text and actor_text == str(instance.get("agent_instance") or ""):
+        if resolved_actor_instance and resolved_actor_instance == str(instance.get("agent_instance") or ""):
             matched_instance = instance
             break
     if matched_instance is None and profile.get("default_instance"):

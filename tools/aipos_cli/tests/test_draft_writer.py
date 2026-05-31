@@ -278,8 +278,8 @@ class DraftWriterTests(unittest.TestCase):
 
         dry = publish_draft(self.repo_root, draft_path.relative_to(self.repo_root), dry_run=True)
         self.assertEqual(dry["verdict"], "PASS")
-        self.assertIn("assigned_to: dev.claude.cc.local", dry["rendered_markdown"])
-        self.assertIn("agent_instance: dev.claude.cc.local", dry["rendered_markdown"])
+        self.assertIn("assigned_to: agent-01", dry["rendered_markdown"])
+        self.assertIn("agent_instance: agent-01", dry["rendered_markdown"])
         self.assertIn("context_bundle: external_intake_execution", dry["rendered_markdown"])
         self.assertIn("task_mode: coding", dry["rendered_markdown"])
         self.assertIn("needs_owner: false", dry["rendered_markdown"])
@@ -292,7 +292,7 @@ class DraftWriterTests(unittest.TestCase):
         self.assertTrue(result["wrote"])
         self.assertTrue(pending.exists())
         text = pending.read_text(encoding="utf-8")
-        self.assertIn("assigned_to: dev.claude.cc.local", text)
+        self.assertIn("assigned_to: agent-01", text)
         self.assertIn("needs_owner: false", text)
 
     def test_publish_blocks_when_validation_fails(self) -> None:
