@@ -1,18 +1,60 @@
 # Lybra
 
-> Local-first, file-authoritative agent workbench with audit-first governance.
+> Local-first, file-authoritative agent harness for governed work.
 
-Lybra coordinates AI-assisted code, research, documentation, operations, and review. Its control plane keeps tasks, decisions, events, records, and handoffs visible as plain files.
+Lybra coordinates AI-assisted code, research, documentation, operations, and review without hiding operational state inside a model session. Tasks, decisions, events, records, and handoffs stay visible as plain files. Humans remain in the loop for consequential decisions.
+
+## Quick Start
+
+Prerequisites: Node.js 18+ and Python 3 available on `PATH`.
+
+```bash
+npm install -g lybra
+lybra --help
+```
+
+Create a local workspace through the controlled dry-run and confirm path:
+
+```bash
+WORKSPACE="$HOME/.lybra/workspaces/my-project"
+
+lybra workspace init \
+  --template blank \
+  --output "$WORKSPACE" \
+  --actor owner.local \
+  --var project_id=my-project \
+  --dry-run \
+  --json > /tmp/lybra-workspace-init.json
+
+lybra workspace init \
+  --confirm \
+  --from-json /tmp/lybra-workspace-init.json \
+  --actor owner.local \
+  --owner-confirmation-token OWNER_CONFIRMED \
+  --json
+
+export AIPOS_WORKSPACE_ROOT="$WORKSPACE"
+lybra validate --json
+lybra queue
+```
+
+Lybra uses `~/.lybra/workspaces/<workspace_id>/` for local runtime workspaces. Existing private project-management records may remain in a separate source-of-truth workspace.
+
+## Design Principles
+
+- **Files are authoritative.** Durable files and append-only records make state inspectable, recoverable, and portable across sessions.
+- **Authority stays separated.** Execution, independent audit, and human Owner decisions do not collapse into one actor.
+- **Workflow rigor follows complexity.** Simple tasks can close directly. Complex tasks use planning, independent audit, repair or re-audit when needed, and audit PASS before finalize.
+- **Writes cross controlled gates.** Approved mutations use dry-run preview, proof, snapshot revalidation, and explicit confirmation.
+- **Scope forks stop for the Owner.** Architecture, risk, credential, deployment, runtime, audit-boundary, and long-term direction changes remain explicit decisions.
+
+## Design Basis
+
+Lybra can be understood as a Governance + Verification + Observability-heavy agent harness using the ETCLOVG taxonomy from [*Agent Harness Engineering: A Survey*](https://picrew.github.io/LLM-Harness/). Its emphasis is governed, inspectable work rather than autonomous execution throughput.
+
+See the [ETCLOVG self-assessment](docs/positioning/etclovg_self_assessment.md) for the detailed map and deliberate product boundaries.
 
 Lybra is extracted from the AI Project OS control-plane work. AI Project OS remains the architecture and history name; Lybra is the product name and standalone repository.
-
-## Why Lybra
-
-- **Files are the source of truth.** Task cards, decisions, events, iterations, and records live in a workspace. Files remain authoritative.
-- **History is explicit.** Append-only logs plus derived state make changes reviewable.
-- **Authorities stay separated.** Execution, independent audit, and human Owner decision authority do not collapse into one actor.
-- **Writes cross controlled gates.** Approved mutations use dry-run preview, proof, revalidation, and explicit confirmation.
-- **Forks pause for Owner decisions.** Architecture, risk, credential, deployment, audit, runtime, and long-term direction changes are gated.
 
 ## Surfaces
 
@@ -162,7 +204,7 @@ The product repo holds reusable code, generic protocols, examples, and tests. Th
 
 ## Status
 
-Lybra is pre-MVP and protocol-heavy.
+Lybra is an early public release. The local-first governed-work foundation is implemented, while broader runtime and hosted-product capabilities remain intentionally limited.
 
 Implemented today:
 
@@ -201,7 +243,7 @@ For new local Lybra runtime workspaces, use:
 ~/.lybra/workspaces/<workspace_id>/
 ```
 
-This convention is for product runtime workspaces created or operated by Lybra. It does not replace an existing private project-management source of truth. For example, an Owner may keep durable private project records under a separate workspace such as `/home/kiwi/ai-project-os/2_projects/lybra/` while using `~/.lybra/workspaces/<workspace_id>/` for runtime dogfood and execution artifacts.
+This convention is for product runtime workspaces created or operated by Lybra. It does not replace an existing private project-management source of truth. For example, an Owner may keep durable private project records under a separate workspace such as `<private-workspace>/2_projects/<project>/` while using `~/.lybra/workspaces/<workspace_id>/` for runtime dogfood and execution artifacts.
 
 Set `AIPOS_WORKSPACE_ROOT` when running from the product repo against a separate workspace:
 
@@ -223,7 +265,7 @@ Without `AIPOS_WORKSPACE_ROOT` or `--repo-root`, CLI commands preserve legacy be
 
 ### npm Install
 
-Lybra can be installed as an npm command distribution. The npm package installs a `lybra` command that delegates to the bundled Python implementation, so Python must be available on `PATH`.
+Lybra can be installed as an npm command distribution. The npm package installs a `lybra` command that delegates to the bundled Python implementation, so Python must be available on `PATH`. See [Quick Start](#quick-start) for the first-workspace flow.
 
 ```bash
 npm install -g lybra
