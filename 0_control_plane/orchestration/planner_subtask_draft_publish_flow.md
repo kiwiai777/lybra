@@ -41,6 +41,8 @@ AIPOS-52 defines the protocol for these paths. It does not write files or create
 Planner-created subtask drafts must include:
 
 ```yaml
+task_class:
+complexity_note:
 draft_id:
 draft_status: planner_draft
 draft_created_by:
@@ -132,8 +134,9 @@ A draft may be published only when all required checks pass:
 - planner assignment is active and L3/L4 for planning decisions
 - draft has required metadata and task body sections
 - `assigned_to`, `reviewer`, and `audit_by` are explicit when required
-- planner is not the reviewer or auditor for its own planned coding work
+- planner is not the reviewer or auditor for its own planned complex-class work
 - dependencies are satisfied or explicitly represented
+- complex-class dependent work records `dependency_condition: audit_pass` and `dependency_audit_status: PASS` before publication
 - DAG node, edge, fanout, and join metadata is acyclic, internally consistent, and explicitly represented when present
 - downstream DAG nodes are not marked publish-ready until required upstream conditions are satisfied or represented as blocking
 - `max_open_subtasks`, `max_subtasks_total`, and `max_iterations` are not exceeded
@@ -174,7 +177,7 @@ That combined identity does not change publish safety:
 - the agent must not use combined mode to publish around an Owner decision gate
 - the agent must not audit its own planner-created or executed work
 - finalize still requires independent audit PASS when audit is required
-- code and non-code subtasks both preserve task-mode, output, artifact, and memory boundaries
+- code and non-code subtasks both preserve task-mode, task-class, output, artifact, and memory boundaries
 
 ## Publish Operation Boundary
 

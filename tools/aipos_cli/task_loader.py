@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.task_complexity import complexity_payload
 
 QUEUE_STATES = ("pending", "claimed", "completed", "blocked")
 
@@ -60,6 +61,7 @@ def _normalize_task(
         "agent_instance": metadata.get("agent_instance"),
         "claimed_by": metadata.get("claimed_by"),
         "task_mode": metadata.get("task_mode"),
+        **complexity_payload(metadata),
         "model_tier": metadata.get("model_tier"),
         "needs_owner": metadata.get("needs_owner"),
         "metadata": metadata,

@@ -11,6 +11,7 @@ from tools.aipos_cli.agent_profiles import (
     availability_warning_for_actor,
 )
 from tools.aipos_cli.records import check_task_record_refs, find_records_for_task
+from tools.aipos_cli.task_complexity import validate_task_complexity
 
 VERDICT_PRIORITY = {
     "PASS": 0,
@@ -299,6 +300,12 @@ def validate_task(
         _add(warnings, "Missing memory_scope")
 
     _validate_external_intake_metadata(metadata, warnings)
+    complexity = validate_task_complexity(metadata, enforce_dependency_gate=True)
+    for message in complexity["blocking_reasons"]:
+        _add(blocking_reasons, message)
+    classification_warnings = list(complexity["warnings"])
+    for message in complexity["needs_owner_reasons"]:
+        _add(needs_owner_reasons, message)
 
     if metadata.get("needs_owner") is True:
         _add(needs_owner_reasons, "needs_owner is true")
@@ -403,7 +410,8 @@ def validate_task(
         "status": metadata.get("status"),
         "verdict": verdict,
         "blocking_reasons": blocking_reasons,
-        "warnings": warnings,
+        "warnings": [*warnings, *classification_warnings],
+        "classification_warnings": classification_warnings,
         "needs_owner_reasons": needs_owner_reasons,
         "recommended_action": recommended_action,
         "record_links": record_links,

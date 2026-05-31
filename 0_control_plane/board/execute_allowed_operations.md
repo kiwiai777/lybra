@@ -94,7 +94,7 @@ Required checks:
 - no duplicate task_id
 - planner-created draft has no pending Owner decision
 - planner-created draft has explicit reviewer and audit_by when required
-- planner is not reviewer or auditor for its own planned coding work
+- planner is not reviewer or auditor for its own planned complex-class work
 
 Owner confirmation triggers:
 

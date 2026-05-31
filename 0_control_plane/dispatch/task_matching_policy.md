@@ -23,6 +23,8 @@ assigned_to:
 agent_instance:
 context_bundle:
 task_mode:
+task_class:
+complexity_note:
 model_tier:
 polling_mode:
 claim_policy:
@@ -230,6 +232,8 @@ audit_by:
 ```
 
 Planner recommendation does not bypass matching, atomic claim, review, audit, Owner approval, or write target policy.
+
+`task_class` is orthogonal to `task_mode`. Missing `task_class` defaults to effective `simple`. A complex-class task must preserve its planner, independent review, dependency-audit, and finalize gates during matching and claim.
 
 ## Owner Overrides
 

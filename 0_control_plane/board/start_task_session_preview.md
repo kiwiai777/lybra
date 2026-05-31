@@ -74,6 +74,8 @@ Preview must display at least:
 - `assigned_to`
 - `agent_instance`
 - `task_mode`
+- raw `task_class`, effective task class, and whether classification was explicit
+- optional `complexity_note`
 - `model_tier`
 - `context_bundle`
 - `priority`

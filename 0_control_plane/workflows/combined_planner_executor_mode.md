@@ -50,6 +50,8 @@ An execution authority agent may act as:
 
 These modes are task-scoped. They do not create permanent global planning, execution, audit, GitHub, OS, or Owner authority.
 
+`task_class` is orthogonal to `task_mode`. Complex-class work preserves the full governed closed loop even when planner and executor authority are combined.
+
 ## Audit Separation
 
 The auditor must be independent from the execution authority for work that requires audit.

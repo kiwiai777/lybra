@@ -37,6 +37,8 @@ owner_goal:
 created_by: Owner
 created_at:
 project:
+task_class: complex
+complexity_note:
 intake_status: received
 forum_thread_ref:
 visibility: forum_visible
@@ -94,7 +96,7 @@ planner_model_tier: L3
 
 L4 may satisfy the planner requirement if the model tier registry and Owner policy allow it. L1 or L2 may only format or summarize an already approved plan; they must not perform decomposition, architecture route selection, risk handling, subtask assignment, stop-condition evaluation, or handoff decisions.
 
-For code-class parent requirements, AIPOS-64 requires planner continuity after first active assignment. The assigned L3/L4 planner instance remains responsible for the parent requirement until completion, cancellation, supersession, or Owner-approved handoff.
+For complex-class parent requirements, AIPOS-64 requires planner continuity after first active assignment. The assigned L3/L4 planner instance remains responsible for the parent requirement until completion, cancellation, supersession, or Owner-approved handoff.
 
 This continuity applies to the parent-level planner role only. Coder, reviewer, and auditor agents for individual published subtasks may vary per subtask according to dispatch matching, session lease binding, reviewer separation, audit separation, task mode, model tier, and Owner gates.
 
@@ -136,7 +138,7 @@ Minimum intake flow:
 3. A planner assignment is proposed with `min_planner_model_tier: L3`.
 4. Owner confirms the planner when assignment is ambiguous, high-risk, or policy requires approval.
 5. Planner starts a planning Task Session bound to the parent requirement.
-6. For code-class parent requirements, AIPOS records the active planner as the continuity planner.
+6. For complex-class parent requirements, AIPOS records the active planner as the continuity planner.
 7. Planner asks clarifying questions only when required to avoid unsafe scope, architecture, risk, or authority assumptions.
 8. Planner emits a bounded plan and proposed subtask drafts.
 9. Subtasks remain drafts until AIPOS-52 planner subtask draft and publish policy allows queue publication.
@@ -213,7 +215,7 @@ AIPOS-53 defines combined planner/executor governance, Owner Decision Gate, and 
 
 AIPOS-54 defines the Minimal Planner Loop MVP as a manual, visible planner tick protocol. It does not implement autonomous queue polling, task writing, draft publishing, records writing, orchestration writing, CLI commands, Web UI behavior, or runtime launch.
 
-AIPOS-64 defines planner assignment continuity for code-class parent requirements. It keeps the parent-level planner stable after first active assignment while leaving coder, reviewer, and auditor assignment flexible per subtask.
+AIPOS-64 defines planner assignment continuity for complex-class parent requirements. It keeps the parent-level planner stable after first active assignment while leaving coder, reviewer, and auditor assignment flexible per subtask.
 
 ## Non-Goals
 

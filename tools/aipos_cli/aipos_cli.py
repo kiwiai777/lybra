@@ -96,6 +96,11 @@ def _task_summary(task: dict[str, Any]) -> dict[str, Any]:
         "source_tag": task.get("metadata", {}).get("source_tag"),
         "client_tag": task.get("metadata", {}).get("client_tag"),
         "external_ref": task.get("metadata", {}).get("external_ref"),
+        "task_mode": task.get("task_mode"),
+        "task_class": task.get("task_class"),
+        "effective_task_class": task.get("effective_task_class"),
+        "task_class_explicit": task.get("task_class_explicit"),
+        "complexity_note": task.get("complexity_note"),
         "verdict": task.get("verdict"),
         "blocking_reasons": task.get("blocking_reasons", []),
         "warnings": task.get("warnings", []),
@@ -369,6 +374,8 @@ def build_parser() -> argparse.ArgumentParser:
     draft_create_parser.add_argument("--agent-instance", help="agent_instance value")
     draft_create_parser.add_argument("--context-bundle", help="context_bundle value")
     draft_create_parser.add_argument("--task-mode", help="task_mode value")
+    draft_create_parser.add_argument("--task-class", choices=("simple", "complex"), help="task_class value")
+    draft_create_parser.add_argument("--complexity-note", help="Optional complexity_note")
     draft_create_parser.add_argument("--model-tier", help="model_tier value")
     draft_create_parser.add_argument("--priority", help="priority value")
     draft_create_parser.add_argument("--created-by", help="created_by value")
@@ -541,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
                             "agent_instance": args.agent_instance,
                             "context_bundle": args.context_bundle,
                             "task_mode": args.task_mode,
+                            "task_class": args.task_class,
+                            "complexity_note": args.complexity_note,
                             "model_tier": args.model_tier,
                             "priority": args.priority,
                             "created_by": args.created_by,

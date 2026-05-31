@@ -54,6 +54,8 @@ Required selectors for creating a dispatchable task:
 - `assigned_to`
 - `context_bundle`
 - `task_mode`
+- `task_class`
+- `complexity_note`
 - `priority`
 - `status`
 - `created_by`
@@ -69,7 +71,7 @@ Required or defaultable fields:
 - `report_mode`: default `forum_reply`
 - `recurrence`: default `none`
 
-Board UI should request project, but schema allows omission for cross-project or random work.
+Board UI should request project, but schema allows omission for cross-project or random work. It should expose `task_class: simple | complex`, default missing class to effective `simple`, and allow an optional advisory `complexity_note`.
 
 ## Optional Selectors
 

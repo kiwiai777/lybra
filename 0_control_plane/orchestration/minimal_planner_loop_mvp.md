@@ -40,7 +40,7 @@ A planner tick may run only when:
 - a parent requirement or parent orchestration task exists
 - `forum_thread_ref` or equivalent visible control-plane reference exists
 - planner assignment is active, task-scoped, and L3/L4 for planning decisions
-- for code-class parent requirements, the active planner matches the continuity planner or has Owner-approved handoff metadata
+- for complex-class parent requirements, the active planner matches the continuity planner or has Owner-approved handoff metadata
 - orchestration limits are declared
 - stop conditions are declared
 - Owner decision gates are clear

@@ -8,6 +8,15 @@ These fields are protocol metadata only. AIPOS-25 does not create live pending t
 
 Planner is a task-scoped optional role. Normal tasks do not require planner fields. A missing orchestration block is equivalent to `orchestration.enabled == false`.
 
+Task cards may independently select workflow rigor:
+
+```yaml
+task_class: simple
+complexity_note:
+```
+
+Missing `task_class` defaults to effective `simple`. Complex-class parent requirements and complex orchestrated tasks require the governed planner loop. `task_mode` remains orthogonal content or operation metadata.
+
 ## Parent Task Fields
 
 An orchestrated parent task should include:
@@ -144,12 +153,12 @@ failed
 - `orchestration.planner_assignment_status`: `proposed`, `active`, `paused`, `completed`, `cancelled`, or `superseded`.
 - `orchestration.planner_assignment_started_at`: When the task-scoped planner assignment became active.
 - `orchestration.planner_assignment_ends_at`: Planned or actual end of planner assignment authority.
-- `orchestration.planner_continuity_policy`: Continuity rule for the parent planner. Code-class parent requirements should use `sticky_until_parent_complete`.
+- `orchestration.planner_continuity_policy`: Continuity rule for the parent planner. Complex-class parent requirements should use `sticky_until_parent_complete`.
 - `orchestration.continuity_planner_agent`: Logical continuity planner identity after first active assignment.
 - `orchestration.continuity_planner_agent_instance`: Concrete planner instance expected to continue the parent requirement.
 - `orchestration.continuity_started_at`: When planner continuity became active.
 - `orchestration.continuity_ends_at`: When planner continuity ended, if terminal or handed off.
-- `orchestration.planner_handoff_policy`: Handoff rule. Code-class parent requirements should use `owner_approved_only`.
+- `orchestration.planner_handoff_policy`: Handoff rule. Complex-class parent requirements should use `owner_approved_only`.
 - `orchestration.planner_handoff_reason`: Reason for Owner-approved planner handoff.
 - `orchestration.previous_planner_agent`: Prior planner identity when handoff occurs.
 - `orchestration.previous_planner_agent_instance`: Prior concrete planner instance when handoff occurs.
@@ -172,7 +181,7 @@ Planner gating rules:
 - `orchestration.enabled: true` and `planner_required: true`: `planner_agent` and `planner_model_tier` required.
 - `orchestration.enabled: true` and `planner_required: false`: planner fields optional.
 - `orchestration.enabled: true` with automated or planner-driven subtask creation: `planner_agent` required.
-- code-class parent requirement with active planner assignment: continuity planner fields are expected.
+- complex-class parent requirement with active planner assignment: continuity planner fields are expected.
 - active planner identity change: requires Owner-approved handoff metadata.
 - autonomy tier above A0: requires Owner-approved autonomy metadata.
 - missing, ambiguous, or unapproved autonomy tier: treat as A0.
@@ -183,6 +192,8 @@ Planner gating rules:
 Planner-created subtasks must include:
 
 ```yaml
+task_class:
+complexity_note:
 orchestration_id:
 parent_task_id:
 created_by_planner: true
@@ -227,6 +238,8 @@ repair
 - `iteration`: Planner iteration that emitted this subtask.
 - `subtask_sequence`: Stable sequence number within parent task, used in `subtask_id`.
 - `subtask_type`: Work type for routing and audit rules.
+- `task_class`: `simple` or `complex`; complex-class subtasks preserve the governed planner and independent audit loop.
+- `complexity_note`: Optional advisory explanation for the selected task class.
 - `depends_on`: Prior subtasks or records that must complete first.
 - `dag_id`: Optional AIPOS-93 subtask DAG identifier scoped to the orchestration.
 - `dag_node_id`: Optional node id for this draft or published subtask inside the DAG.
@@ -277,6 +290,8 @@ role_continuity_preference:
   preference_status: advisory
 context_bundle:
 task_mode:
+task_class:
+complexity_note:
 model_tier:
 priority:
 status: pending
@@ -290,7 +305,7 @@ artifact_scope:
 memory_scope:
 ```
 
-Coding tasks must declare independent review fields such as `reviewer` and `audit_by`. Planner-created coding tasks must require audit before finalize.
+Complex-class tasks must declare independent review fields such as `reviewer` and `audit_by`. Planner-created complex-class tasks must require audit before finalize.
 
 `reviewer` and `audit_by` are separate field names for related independent review gates. `reviewer` usually covers process or artifact review; `audit_by` usually covers the formal PASS / REQUEST_CHANGES gate before finalize.
 

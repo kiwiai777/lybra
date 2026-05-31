@@ -16,6 +16,7 @@ from tools.aipos_cli.draft_validator import (
     resolve_pending_target_path,
     validate_draft_metadata,
 )
+from tools.aipos_cli.task_complexity import validate_task_complexity
 
 EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "dev.claude.cc.local"
 EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET = "workspace_artifacts/external_intake"
@@ -40,6 +41,8 @@ FRONTMATTER_ORDER = [
     "agent_instance",
     "context_bundle",
     "task_mode",
+    "task_class",
+    "complexity_note",
     "model_tier",
     "priority",
     "status",
@@ -152,6 +155,10 @@ def _normalized_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(metadata)
     normalized.setdefault("status", "pending")
     normalized.setdefault("needs_owner", False)
+    if normalized.get("task_class") in (None, ""):
+        normalized["task_class"] = "simple"
+    if normalized.get("complexity_note") in (None, ""):
+        normalized.pop("complexity_note", None)
     task_id = normalized.get("task_id")
     created_by = normalized.get("created_by")
     timestamp = _utc_now()
@@ -227,6 +234,7 @@ def create_draft(
         "verdict": validation["verdict"],
         "blocking_reasons": validation["blocking_reasons"],
         "warnings": validation["warnings"],
+        "classification_warnings": list(validation.get("classification_warnings", [])),
         "target_path": target_path,
         "planned_writes": planned_writes,
     }
@@ -304,6 +312,15 @@ def publish_draft(
     publish_metadata = _external_intake_execution_metadata(metadata) if is_external_intake else metadata
     rendered_markdown = render_markdown_task_card(publish_metadata, body) if is_external_intake else source_markdown
     validation = validate_draft_metadata(repo_root, metadata, actual_path=source_path, parse_errors=parse_errors)
+    publish_complexity = validate_task_complexity(publish_metadata, enforce_dependency_gate=True)
+    for reason in publish_complexity["blocking_reasons"]:
+        if reason not in validation["blocking_reasons"]:
+            validation["blocking_reasons"].append(reason)
+    for warning in publish_complexity["warnings"]:
+        if warning not in validation["warnings"]:
+            validation["warnings"].append(warning)
+        if warning not in validation.setdefault("classification_warnings", []):
+            validation["classification_warnings"].append(warning)
     result["task_id"] = validation["task_id"]
     result["warnings"] = list(validation["warnings"])
 
@@ -331,8 +348,11 @@ def publish_draft(
             elif target_file.exists():
                 validation["blocking_reasons"].append(f"Pending target already exists: {target_path}")
 
-    result["verdict"] = "BLOCK" if validation["blocking_reasons"] else ("WARN" if validation["warnings"] else "PASS")
+    classification_warnings = list(validation.get("classification_warnings", []))
+    verdict_warnings = [warning for warning in validation["warnings"] if warning not in classification_warnings]
+    result["verdict"] = "BLOCK" if validation["blocking_reasons"] else ("WARN" if verdict_warnings else "PASS")
     result["blocking_reasons"] = list(validation["blocking_reasons"])
+    result["classification_warnings"] = classification_warnings
     result["would_write"] = result["verdict"] != "BLOCK" and bool(result["target_path"])
     result["validation"] = {
         "action": "draft_validate",

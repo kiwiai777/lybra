@@ -44,6 +44,10 @@ Required when `scope: task`:
 - `assigned_to`
 - `agent_instance`
 - `task_mode`
+- raw `task_class`
+- `effective_task_class`
+- `task_class_explicit`
+- optional `complexity_note`
 - `model_tier`
 - `context_bundle_ref`
 - `artifact_scope`

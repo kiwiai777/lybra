@@ -538,6 +538,10 @@ def _get_planner_drafts_review_route(_params: dict[str, list[str]], *, repo_root
                 "planner_created": True,
                 "assigned_to": metadata.get("assigned_to"),
                 "agent_instance": metadata.get("agent_instance"),
+                "task_mode": metadata.get("task_mode"),
+                "task_class": metadata.get("task_class"),
+                "effective_task_class": str(metadata.get("task_class") or "simple").strip().lower(),
+                "complexity_note": metadata.get("complexity_note"),
                 "planner_agent": planner_agent or None,
                 "planner_agent_instance": metadata.get("planner_agent_instance"),
                 "planner_model_tier": planner_tier or None,
@@ -1045,6 +1049,9 @@ def _planner_draft_review_route(payload: dict[str, Any], *, repo_root: Path | No
 
     publish_blocking = list(publish_preview.get("blocking_reasons", []))
     publish_warnings = list(publish_preview.get("warnings", []))
+    classification_warnings = list(validation.get("classification_warnings", [])) + list(
+        publish_preview.get("classification_warnings", [])
+    )
     add_check(
         "controlled_publish_dry_run_compatible",
         str(publish_preview.get("verdict")) != "BLOCK",
@@ -1055,7 +1062,8 @@ def _planner_draft_review_route(payload: dict[str, Any], *, repo_root: Path | No
             warnings.append(warning)
 
     publish_eligible = not blocking_reasons and not needs_owner_reasons
-    verdict = "BLOCK" if blocking_reasons else ("NEEDS_OWNER" if needs_owner_reasons else ("WARN" if warnings else "PASS"))
+    verdict_warnings = [warning for warning in warnings if warning not in classification_warnings]
+    verdict = "BLOCK" if blocking_reasons else ("NEEDS_OWNER" if needs_owner_reasons else ("WARN" if verdict_warnings else "PASS"))
     return {
         "ok": verdict != "BLOCK",
         "verdict": verdict,
@@ -1078,6 +1086,7 @@ def _planner_draft_review_route(payload: dict[str, Any], *, repo_root: Path | No
                 "planned_writes": publish_preview.get("planned_writes", []),
                 "blocking_reasons": publish_blocking,
                 "warnings": publish_warnings,
+                "classification_warnings": classification_warnings,
             },
             "handoff_to_draft_publish": {
                 "enabled": publish_eligible,
@@ -1443,6 +1452,8 @@ def _parent_requirement_preview_route(payload: dict[str, Any], *, repo_root: Pat
         "created_by": "Owner",
         "created_at": timestamp,
         "project": project,
+        "task_class": "complex",
+        "complexity_note": "Parent requirement uses the governed planner closed loop.",
         "intake_status": "received",
         "forum_thread_ref": forum_thread_ref,
         "visibility": "forum_visible",

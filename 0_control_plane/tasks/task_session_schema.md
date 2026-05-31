@@ -19,6 +19,8 @@ project:
 assigned_to:
 agent_instance:
 task_mode:
+task_class:
+complexity_note:
 context_bundle:
 model_tier:
 artifact_scope:
@@ -97,6 +99,8 @@ context_isolation: strict
 - `assigned_to`: Role instance that owns the task assignment boundary.
 - `agent_instance`: Concrete agent instance selected for this session.
 - `task_mode`: Task-scoped execution mode used in this session.
+- `task_class`: Effective workflow classification, `simple` or `complex`.
+- `complexity_note`: Optional advisory explanation copied from the task card when present.
 - `context_bundle`: Context bundle reference used to inject environment and operating boundaries.
 - `model_tier`: Model tier selected for this session.
 - `artifact_scope`: Allowed artifact boundary for reading, drafting, or linking artifacts.

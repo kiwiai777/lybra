@@ -148,7 +148,7 @@ Recommended flow:
 
 1. Owner, GPT, Claude, or assigned planner produces a task proposal.
 2. For fuzzy goals, Owner creates a parent requirement and assigns an L3 planner.
-3. Planner selects project, assignee, context bundle, task mode, and model tier.
+3. Planner selects project, assignee, context bundle, task mode, task class, and model tier.
 4. Planner decides whether the task is one-shot, recurring, or a planner-created subtask draft.
 5. Task metadata is written into the task schema format.
 6. Publishing writes the task into `5_tasks/queue/pending/`.
@@ -179,7 +179,9 @@ Tasks should point to context, not duplicate it.
 
 Future UI or board views should expose task creation as structured form fields rather than free-form prompt dumping.
 
-The UI should support editable selectors for project, assignee, context bundle, task mode, model tier, and recurrence, while preserving the file-based queue as the source of truth.
+The UI should support editable selectors for project, assignee, context bundle, task mode, task class, optional complexity note, model tier, and recurrence, while preserving the file-based queue as the source of truth.
+
+`task_mode` describes content or operation type. `task_class: simple | complex` independently selects workflow rigor and defaults to effective `simple` when omitted. Complex-class work uses the governed planner, independent audit, repair/re-audit, and PASS-before-finalize loop defined in `task_complexity_class_protocol.md`.
 
 
 ## Planner Subtask Drafts

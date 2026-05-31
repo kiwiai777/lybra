@@ -26,6 +26,8 @@ reviewer: dev_claude
 audit_by: dev_claude
 context_bundle: dev.codex.local
 task_mode: docs
+task_class: simple
+complexity_note: README wording update is standalone.
 model_tier: L2
 priority: medium
 status: pending
@@ -50,6 +52,8 @@ reviewer: dev_claude
 audit_by: dev_claude
 context_bundle: dev.codex.local
 task_mode: design
+task_class: complex
+complexity_note: Parent orchestration coordinates implementation and independent audit.
 model_tier: L3
 priority: high
 status: pending
@@ -83,6 +87,12 @@ orchestration:
   planner_assignment_status: active
   planner_assignment_started_at: 2026-04-28T10:00:00Z
   planner_assignment_ends_at:
+  planner_continuity_policy: sticky_until_parent_complete
+  continuity_planner_agent: planner.claude.l3.local
+  continuity_planner_agent_instance: planner.claude.l3.local
+  continuity_started_at: 2026-04-28T10:00:00Z
+  continuity_ends_at:
+  planner_handoff_policy: owner_approved_only
   planner_permissions:
     can_create_subtasks: true
     can_recommend_handoff: true

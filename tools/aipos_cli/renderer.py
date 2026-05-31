@@ -8,17 +8,18 @@ def _task_line(task: dict[str, Any]) -> str:
     assigned = task.get("assigned_to") or "-"
     agent = task.get("agent_instance") or "-"
     mode = task.get("task_mode") or "-"
+    task_class = task.get("effective_task_class") or "simple"
     tier = task.get("model_tier") or "-"
     task_id = task.get("task_id") or "<missing-task-id>"
     title = task.get("title") or "<missing-title>"
     return (
         f"{task_id} | {task.get('queue_state')}/{task.get('status') or '-'} | {task.get('verdict')} | "
-        f"{assigned} | {agent} | {mode} | {tier} | {title} | {task.get('path')}"
+        f"{assigned} | {agent} | {mode} | {task_class} | {tier} | {title} | {task.get('path')}"
     )
 
 
 def render_queue_text(report: dict[str, Any]) -> str:
-    lines = ["Task Queue", "task_id | queue/status | verdict | assigned_to | agent_instance | task_mode | model_tier | title | path"]
+    lines = ["Task Queue", "task_id | queue/status | verdict | assigned_to | agent_instance | task_mode | task_class | model_tier | title | path"]
     if not report["tasks"]:
         lines.append("(no task files found)")
         return "\n".join(lines)
@@ -182,7 +183,7 @@ def render_draft_result_text(result: dict[str, Any]) -> str:
 
 
 def render_draft_list_text(result: dict[str, Any]) -> str:
-    lines = ["Draft List", "task_id | status | verdict | assigned_to | project | title | path"]
+    lines = ["Draft List", "task_id | status | verdict | assigned_to | project | task_class | title | path"]
     drafts = result.get("drafts", [])
     if not drafts:
         lines.append("(no draft files found)")
@@ -191,7 +192,7 @@ def render_draft_list_text(result: dict[str, Any]) -> str:
         lines.append(
             f"{draft.get('task_id') or '-'} | {draft.get('status') or '-'} | {draft.get('verdict') or '-'} | "
             f"{draft.get('assigned_to') or '-'} | {draft.get('project') or '-'} | "
-            f"{draft.get('title') or '-'} | {draft.get('path') or '-'}"
+            f"{draft.get('effective_task_class') or 'simple'} | {draft.get('title') or '-'} | {draft.get('path') or '-'}"
         )
     return "\n".join(lines)
 

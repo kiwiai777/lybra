@@ -6,6 +6,7 @@ from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_loader import QUEUE_STATES
+from tools.aipos_cli.task_complexity import complexity_payload, validate_task_complexity
 
 DRAFTS_DIR = Path("5_tasks/drafts")
 QUEUE_DIR = Path("5_tasks/queue")
@@ -215,12 +216,18 @@ def validate_draft_metadata(
         if _is_missing(metadata.get(field)):
             _add(warnings, f"Missing recommended field: {field}")
 
+    complexity = validate_task_complexity(metadata, enforce_dependency_gate=False)
+    for message in complexity["blocking_reasons"]:
+        _add(blocking_reasons, message)
+    classification_warnings = list(complexity["warnings"])
+
     verdict = "BLOCK" if blocking_reasons else ("WARN" if warnings else "PASS")
     return {
         "task_id": task_id,
         "verdict": verdict,
         "blocking_reasons": blocking_reasons,
-        "warnings": warnings,
+        "warnings": [*warnings, *classification_warnings],
+        "classification_warnings": classification_warnings,
         "frontmatter": metadata,
         "target_path": target_path,
     }
@@ -250,6 +257,7 @@ def validate_draft_file(repo_root: Path, provided_path: str | Path) -> dict[str,
         "verdict": result["verdict"],
         "blocking_reasons": result["blocking_reasons"],
         "warnings": result["warnings"],
+        "classification_warnings": result["classification_warnings"],
         "frontmatter": metadata,
     }
 
@@ -278,6 +286,7 @@ def list_drafts(repo_root: Path) -> dict[str, Any]:
                 "project": frontmatter.get("project"),
                 "priority": frontmatter.get("priority"),
                 "needs_owner": frontmatter.get("needs_owner"),
+                **complexity_payload(frontmatter),
                 "source_tag": frontmatter.get("source_tag"),
                 "client_tag": frontmatter.get("client_tag"),
                 "external_ref": frontmatter.get("external_ref"),

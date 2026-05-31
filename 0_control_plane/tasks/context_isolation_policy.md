@@ -29,7 +29,7 @@ If `project` is missing and the task is not clearly cross-project, the item shou
 
 ### Role / Task Mode Boundary
 
-`assigned_to` and `task_mode` are task-scoped execution boundaries.
+`assigned_to`, `task_mode`, and `task_class` are task-scoped execution boundaries. `task_mode` describes the work; `task_class` selects workflow rigor.
 
 The agent must not assume that a reviewer task for one project permits coder behavior for another project.
 

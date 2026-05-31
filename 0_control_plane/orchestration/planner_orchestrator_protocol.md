@@ -39,7 +39,7 @@ Planner assignment is tied to a specific parent orchestration task or orchestrat
 
 Planner authority ends when the parent orchestration task is completed, cancelled, superseded, or when Owner replaces the planner through an explicit handoff.
 
-For code-class parent requirements, AIPOS-64 adds a continuity rule: once a concrete L3/L4 planner instance reaches `planner_assignment_status: active`, that planner remains the continuity planner for the parent requirement until completion, cancellation, supersession, or Owner-approved handoff. This keeps the planning thread stable across planner ticks, subtask draft batches, audit cycles, repairs, and finalize recommendations.
+For complex-class parent requirements, AIPOS-64 adds a continuity rule: once a concrete L3/L4 planner instance reaches `planner_assignment_status: active`, that planner remains the continuity planner for the parent requirement until completion, cancellation, supersession, or Owner-approved handoff. This keeps the planning thread stable across planner ticks, subtask draft batches, audit cycles, repairs, and finalize recommendations.
 
 Planner continuity is parent-level only. It does not pin coder, reviewer, or auditor assignment on individual subtasks. Subtask execution and review remain governed by AIPOS-48 task matching, AIPOS-50 session lease binding, role policy, review separation, audit separation, and Owner gates.
 
@@ -131,7 +131,7 @@ Future validator and preview rules should use this gating:
 - planner_model_tier below L3 for planning decisions: NEEDS_OWNER or BLOCK
 - planner_agent same as audit_by for planner-created tasks: NEEDS_OWNER
 - planner_assignment_status completed or cancelled should prevent new planner-created subtasks
-- code-class parent requirement with active planner assignment but missing continuity planner fields: NEEDS_OWNER or BLOCK depending policy
+- complex-class parent requirement with active planner assignment but missing continuity planner fields: NEEDS_OWNER or BLOCK depending policy
 - active planner identity changes without Owner-approved handoff metadata: NEEDS_OWNER or BLOCK
 
 ## Planner Role
@@ -140,7 +140,7 @@ The planner may:
 
 - read AIPOS docs, queue state, reports, inbox summaries, shared memory, and records
 - create proposed subtask cards
-- recommend assignment, task_mode, model_tier, reviewer, and audit_by
+- recommend assignment, task_mode, task_class, complexity_note, model_tier, reviewer, and audit_by
 - recommend stop, pause, handoff, repair, or needs_owner escalation
 - summarize progress and open risks
 - evaluate whether planned subtasks satisfy the parent task
@@ -213,8 +213,8 @@ Rules:
 - planner_agent, coder_agent, and reviewer_agent are explicit fields on orchestration work.
 - planner cannot be the same logical agent as reviewer for its own plan.
 - coder and reviewer should be separate logical agents when possible.
-- planner-created coding tasks must declare reviewer and audit_by.
-- planner-created coding tasks require audit before finalize.
+- planner-created complex-class tasks must declare reviewer and audit_by.
+- planner-created complex-class tasks require audit before finalize.
 - reviewer must not be silently replaced by planner.
 - Owner may approve exceptions, but the exception must be visible in the task or loop state.
 

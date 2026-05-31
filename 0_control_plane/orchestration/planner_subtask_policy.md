@@ -8,7 +8,7 @@ AIPOS-25 defines protocol only. AIPOS-52 adds draft and publish flow policy. The
 
 Planner is task-scoped and optional. Normal tasks do not require planner fields. Planner assignment stays with the parent orchestration unless explicitly delegated.
 
-For code-class parent requirements, AIPOS-64 requires the active L3/L4 planner instance to remain the continuity planner until the parent requirement completes, is cancelled, is superseded, or receives an Owner-approved handoff.
+For complex-class parent requirements, AIPOS-64 requires the active L3/L4 planner instance to remain the continuity planner until the parent requirement completes, is cancelled, is superseded, or receives an Owner-approved handoff.
 
 ## Creation Limits
 
@@ -20,13 +20,14 @@ max_subtasks_total:
 max_iterations:
 ```
 
-Planner must not create the next coding task if a prior required audit is pending and the next task depends on that audit.
+Planner must not publish the next complex-class task if a prior required audit is pending and the next task depends on that audit.
 
 ## Required Subtask Metadata
 
 Each planner-created subtask or subtask draft must include:
 
 ```yaml
+task_class:
 orchestration_id:
 parent_task_id:
 created_by_planner: true
@@ -73,8 +74,9 @@ Planner must:
 
 - avoid ambiguous assignee
 - use task_mode and model_tier routing rules
-- declare independent review fields such as `reviewer` and `audit_by` for coding tasks
-- require audit before finalize for coding tasks
+- classify workflow rigor explicitly with `task_class`
+- declare independent review fields such as `reviewer` and `audit_by` for complex-class tasks
+- require audit before finalize for complex-class tasks
 - not assign tasks to offline or maintenance agent unless Owner allows
 - consider runtime_budget_policy before choosing executor
 - prefer lower-quota-sensitivity runtimes for lower-risk review tasks when configured
@@ -104,6 +106,15 @@ depends_on:
 ```
 
 Planner must not bypass dependencies by creating follow-on tasks as if prior subtasks were accepted.
+
+For complex-class dependent tasks, publication and execution require:
+
+```yaml
+dependency_condition: audit_pass
+dependency_audit_status: PASS
+```
+
+Planner may retain a blocked dependent draft while audit is pending or after `REQUEST_CHANGES`, but must not publish it as accepted-work follow-on execution.
 
 If dependency status is unclear, planner should pause or set needs_owner according to policy.
 

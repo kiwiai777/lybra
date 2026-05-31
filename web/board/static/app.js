@@ -212,7 +212,7 @@ function rowRecommendedAction(row) {
 }
 
 function taskLabel(task) {
-  return [task.task_id, task.metadata?.title || task.title, task.path].filter(Boolean).join(" | ");
+  return [task.task_id, task.effective_task_class || "simple", task.metadata?.title || task.title, task.path].filter(Boolean).join(" | ");
 }
 
 function renderTaskList(queueData) {
@@ -717,6 +717,10 @@ function summarizeTaskDetail(data) {
     status: task.metadata?.status,
     assigned_to: task.metadata?.assigned_to,
     agent_instance: task.metadata?.agent_instance,
+    task_mode: task.metadata?.task_mode,
+    task_class: task.metadata?.task_class,
+    effective_task_class: task.effective_task_class,
+    complexity_note: task.metadata?.complexity_note,
     warnings: data.warnings,
     blocking_reasons: data.blocking_reasons,
   };
@@ -735,6 +739,10 @@ function summarizePreview(data) {
     warnings: data.warnings,
     needs_owner_reasons: data.needs_owner_reasons,
     recommended_action: preview.recommended_action,
+    task_mode: preview.task_mode,
+    task_class: preview.task_class,
+    effective_task_class: preview.effective_task_class,
+    complexity_note: preview.complexity_note,
     availability_warning: preview.availability_warning,
   };
 }
@@ -833,6 +841,8 @@ function draftCreatePayload() {
     agent_instance: draftValue("draft-agent-instance"),
     context_bundle: draftValue("draft-context-bundle"),
     task_mode: draftValue("draft-task-mode"),
+    task_class: draftValue("draft-task-class"),
+    complexity_note: draftValue("draft-complexity-note"),
     model_tier: draftValue("draft-model-tier"),
     priority: "medium",
     status: "pending",

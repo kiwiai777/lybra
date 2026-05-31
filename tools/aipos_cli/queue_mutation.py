@@ -46,6 +46,8 @@ FRONTMATTER_ORDER = [
     "agent_instance",
     "context_bundle",
     "task_mode",
+    "task_class",
+    "complexity_note",
     "model_tier",
     "priority",
     "status",
@@ -274,6 +276,7 @@ def _base_result(source_path: Path, repo_root: Path, source_task: dict[str, Any]
         "verdict": "PASS",
         "blocking_reasons": [],
         "warnings": [],
+        "classification_warnings": [],
         "planned_writes": [],
         "planned_moves": [],
         "updated_frontmatter": {},
@@ -460,6 +463,7 @@ def mutate_queue_task(
         result["blocking_reasons"].extend(validation["blocking_reasons"])
     if validation["warnings"]:
         result["warnings"].extend(validation["warnings"])
+    result["classification_warnings"].extend(validation.get("classification_warnings", []))
     needs_owner_reasons: list[str] = []
 
     if source_task.get("queue_state") != from_state:
@@ -545,6 +549,9 @@ def mutate_queue_task(
     for warning_text in preview_validation["warnings"]:
         if warning_text not in result["warnings"]:
             result["warnings"].append(warning_text)
+    for warning_text in preview_validation.get("classification_warnings", []):
+        if warning_text not in result["classification_warnings"]:
+            result["classification_warnings"].append(warning_text)
     needs_owner_reasons.extend(
         reason_text
         for reason_text in preview_validation.get("needs_owner_reasons", [])
@@ -555,7 +562,7 @@ def mutate_queue_task(
         result["verdict"] = "BLOCK"
     elif needs_owner_reasons:
         result["verdict"] = "NEEDS_OWNER"
-    elif result["warnings"]:
+    elif [warning for warning in result["warnings"] if warning not in result["classification_warnings"]]:
         result["verdict"] = "WARN"
     else:
         result["verdict"] = "PASS"

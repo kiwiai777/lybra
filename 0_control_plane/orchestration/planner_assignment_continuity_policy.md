@@ -2,27 +2,25 @@
 
 ## Purpose
 
-AIPOS-64 defines continuity rules for code-class parent requirements after an L3/L4 planner accepts the planner role.
+AIPOS-64 defines continuity rules for complex-class parent requirements after an L3/L4 planner accepts the planner role.
 
 The goal is to keep one planner responsible for the parent requirement from first active assignment through completion, while allowing coder and independent review assignments to vary per subtask.
 
 This policy is protocol documentation only. It does not implement a planner runtime, queue polling, orchestration writer, session lease writer, task movement, Web UI behavior, CLI command, forum backend, database, server, deployment configuration, or agent launcher.
 
-## Code-Class Parent Requirement
+## Complex-Class Parent Requirement
 
-A code-class parent requirement is a parent requirement or orchestration parent task whose expected child work includes one or more of:
+A complex-class parent requirement is a parent requirement or orchestration parent task explicitly classified:
 
-- production code changes
-- tests or validation changes
-- code review or audit work
-- repository implementation planning
-- release, finalize, or repair work tied to code artifacts
+```yaml
+task_class: complex
+```
 
-Non-code parent requirements may also use planner continuity when Owner or task policy selects it, but AIPOS-64 makes continuity mandatory only for code-class parent requirements.
+Complex classification is orthogonal to `task_mode`. It may apply to code, docs, design, planning, research, operations, release, repair, or other task modes. AIPOS-64 makes continuity mandatory only for complex-class parent requirements.
 
 ## Continuity Rule
 
-When a code-class parent requirement reaches an active planner assignment, that planner becomes the continuity planner for the parent requirement.
+When a complex-class parent requirement reaches an active planner assignment, that planner becomes the continuity planner for the parent requirement.
 
 The continuity planner remains responsible until one of these terminal or explicit transition conditions occurs:
 
@@ -36,7 +34,7 @@ The continuity planner must not silently change between planner ticks, subtask d
 
 ## Required Metadata
 
-Code-class parent requirements should record:
+Complex-class parent requirements should record:
 
 ```yaml
 planner_continuity_policy: sticky_until_parent_complete
@@ -69,7 +67,7 @@ superseded
 
 ## Handoff Rule
 
-A planner handoff is an Owner decision gate for code-class parent requirements.
+A planner handoff is an Owner decision gate for complex-class parent requirements.
 
 The planner may recommend handoff when:
 
@@ -127,7 +125,7 @@ role_continuity_preference:
 
 ## Combined Planner/Executor Interaction
 
-When Owner permits combined planner/executor mode for a code-class parent requirement, the continuity planner may also execute selected subtasks only when the subtask card, claim policy, session lease policy, runtime profile, and Owner gates allow it.
+When Owner permits combined planner/executor mode for a complex-class parent requirement, the continuity planner may also execute selected subtasks only when the subtask card, claim policy, session lease policy, runtime profile, and Owner gates allow it.
 
 Combined planner/executor mode does not allow the continuity planner to:
 
@@ -142,7 +140,7 @@ Combined planner/executor mode does not allow the continuity planner to:
 
 Future validators and preview surfaces should treat these conditions as governance issues:
 
-- code-class parent requirement has `planner_assignment_status: active` but missing continuity planner fields
+- complex-class parent requirement has `planner_assignment_status: active` but missing continuity planner fields
 - active continuity planner differs from active `planner_agent_instance` without Owner-approved handoff metadata
 - planner tick is emitted by a different planner instance without `handoff_approved`
 - subtask draft batch changes planner identity without an Owner decision reference

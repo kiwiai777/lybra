@@ -13,6 +13,7 @@ The goal is to prevent role instances from being accidentally frozen into narrow
 - `primary_role` is the default orientation, not a hard limit.
 - `can_act_as` defines the allowed capability boundary.
 - `task_mode` is selected by each **task card**.
+- `task_class` independently selects simple or complex workflow governance.
 - The same agent may perform different modes across different tasks.
 - **Context Bundle** provides startup context and boundaries, not a fixed job description.
 
@@ -56,6 +57,8 @@ It defines the boundary of what modes a role instance may take on.
 ### Task Mode
 
 `task_mode` is the specific operational mode selected by a task card for a particular task.
+
+`task_mode` does not select closed-loop rigor. `task_class: simple | complex` is orthogonal, defaults to effective `simple` when omitted, and controls whether the full planner, independent audit, repair/re-audit, and PASS-before-finalize loop is required.
 
 For flexible roles, the task card must explicitly state the mode used, such as:
 - `Task Mode Used: documentation_syncer`

@@ -115,7 +115,7 @@ class ValidatorRecordsJsonTests(unittest.TestCase):
         self.assertEqual(task["source_tag"], "external_owner_inbox")
         self.assertEqual(task["client_tag"], "alpha_client")
         self.assertEqual(task["external_ref"], "extmsg:abc123")
-        self.assertEqual(task["warnings"], [])
+        self.assertIn("Code-mode task omits task_class and defaults to simple; review whether complex-class governance is required", task["warnings"])
 
     def test_invalid_external_intake_metadata_warns_without_blocking(self) -> None:
         self.write_task(
