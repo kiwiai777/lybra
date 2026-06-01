@@ -45,9 +45,9 @@
   .pull{background:var(--green-d);color:#fff;padding:40px 44px;font-size:28px;font-weight:700;border-left:11px solid var(--green-b);}
   .pull span{color:var(--mint2);}
   /* grid cards */
-  .grid{font-size:0;margin:0 -11px;}
-  .card{display:inline-block;vertical-align:top;width:50%;padding:0 11px;margin-bottom:22px;}
-  .card .inner{background:var(--mint);border:1px solid var(--border);border-left:5px solid var(--green);padding:24px 26px;height:100%;}
+  .grid{display:flex;flex-wrap:wrap;align-items:stretch;margin:0 -11px;}
+  .card{display:flex;vertical-align:top;width:50%;padding:0 11px;margin-bottom:22px;}
+  .card .inner{flex:1;background:var(--mint);border:1px solid var(--border);border-left:5px solid var(--green);padding:24px 26px;}
   .card h3{font-size:20px;margin:0 0 7px;}
   .card p{font-size:14.5px;color:var(--muted);margin:0;}
   /* surfaces + pipeline */
