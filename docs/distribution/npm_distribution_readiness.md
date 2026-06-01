@@ -6,7 +6,7 @@ Protocol for a future npm package implementation. This document does not impleme
 
 ## Current Product Shape
 
-Lybra is currently a Python-first product repository:
+Lybra is currently a Python-first product repository with an npm command-distribution layer:
 
 - CLI entrypoint: `python3 tools/aipos_cli/aipos_cli.py ...`
 - CLI module form: `python3 -m tools.aipos_cli.aipos_cli ...`
@@ -14,8 +14,8 @@ Lybra is currently a Python-first product repository:
 - Sandbox runtime entrypoint: `python3 -m tools.sandbox_runtime ...`
 - Board server entrypoint: `python3 web/board/app.py ...`
 - Bundled workspace templates live under `templates/`.
-
-The repository currently has no npm package metadata, no npm binary wrapper, no `.npmignore`, no npm `files` allowlist, and no finalized public license file.
+- The repository includes `package.json`, the `bin/lybra` wrapper, a `files` allowlist, and Apache-2.0 license metadata for the npm distribution.
+- Public-facing docs and release notes are maintained alongside the package metadata.
 
 ## Distribution Decision
 
@@ -36,19 +36,19 @@ The implementation task must verify registry availability or ownership before an
 
 The first npm package should be pre-1.0 unless Owner explicitly decides otherwise.
 
-Recommended initial version shape:
+Current release-line version shape:
 
 ```text
-0.1.0
+0.2.0
 ```
 
 If registry publication is delayed after implementation, the local package version may still be prepared but must not be published without Owner approval.
 
 ## License Gate
 
-The product README currently says `License: TBD by Owner`.
+The product README and package metadata now use `Apache-2.0`.
 
-No public npm publish should happen until Owner selects a license and the product repo contains an appropriate license file and package metadata license field. Package implementation may prepare a local package only if the package metadata clearly avoids claiming a finalized public license.
+No public npm publish should happen until the license file, package metadata, and release docs stay aligned with Owner approval. Package implementation may still be revised in a follow-up slice if the release boundary changes.
 
 ## Required Implementation Files
 
@@ -100,7 +100,7 @@ The package must exclude:
 
 ## README Install Contract
 
-The future README install section should distinguish three paths:
+The README install section should distinguish three paths:
 
 1. Source checkout for contributors:
 

@@ -2,12 +2,12 @@
 
 ## Status
 
-Release checklist for `lybra@0.1.0`. This document does not itself authorize `npm publish`.
+Release checklist for `lybra@0.2.0`. This document does not itself authorize `npm publish`.
 
 ## Registry Target
 
 - Package: `lybra`
-- Version: `0.1.0`
+- Version: `0.2.0`
 - Access: public
 - Tag: `latest`
 - Registry: `https://registry.npmjs.org/`
@@ -23,7 +23,7 @@ Registry preflight on 2026-05-30 showed:
 Before publishing:
 
 - Product package metadata names `lybra`.
-- Product package version is `0.1.0`.
+- Product package version is `0.2.0`.
 - Product package bin is `lybra`.
 - Product package license is `Apache-2.0`.
 - Product package is not marked `private`.
@@ -59,6 +59,6 @@ unset NPM_TOKEN NPM_CONFIG_USERCONFIG
 
 ```bash
 npm view lybra version dist-tags --registry=https://registry.npmjs.org/
-npm install --global --prefix /tmp/lybra-npm-public-smoke lybra@0.1.0
+npm install --global --prefix /tmp/lybra-npm-public-smoke lybra@0.2.0
 /tmp/lybra-npm-public-smoke/bin/lybra --help
 ```

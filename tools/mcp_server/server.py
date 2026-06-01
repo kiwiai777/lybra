@@ -9,7 +9,7 @@ from .tools import READ_ONLY_NOTICE, TOOL_HANDLERS, visible_tool_descriptors
 
 JSONRPC_VERSION = "2.0"
 SERVER_NAME = "lybra-mcp"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 

@@ -170,9 +170,8 @@
   <h2 data-i18n="wt">What's new</h2>
   <p class="tip" data-i18n="wnote">Update this section as major features ship — keep it aligned with GitHub Releases.</p>
   <div class="changelog">
-    <div class="entry"><span class="ver">Unreleased</span><span class="date" data-i18n="d0">in development</span><p data-i18n="e0">AI-assisted task authoring (preview): describe a task in natural language; an optional bring-your-own LLM drafts a standard, fully validated task card for your approval.</p></div>
-    <div class="entry"><span class="ver">vX.Y.Z</span><span class="date">2026</span><p data-i18n="e1">Generalized instance identity and custom agent profiles — describe any agent's vendor, harness and model in open, auditable fields.</p></div>
-    <div class="entry"><span class="ver">vX.Y.Z</span><span class="date">2026</span><p data-i18n="e2">Task complexity classes (simple / complex) with an enforced independent-audit loop for complex work.</p></div>
+    <div class="entry"><span class="ver">v0.2.0</span><span class="date">2026-06-01</span><p data-i18n="e0">Board now defaults to 7117, MCP HTTP/SSE to 7118, AI-assisted task authoring spans fixture-only Board flows and a live BYO-LLM CLI path, and custom agent identities use opaque IDs with explicit provenance.</p></div>
+    <div class="entry"><span class="ver">Unreleased</span><span class="date" data-i18n="d0">in development</span><p data-i18n="e1">Custom-profile Board UI, trace-native audit, state staleness hardening, and adaptive gate intensity remain in development.</p></div>
   </div>
 </div></section>
 
@@ -190,9 +189,8 @@ const I18N={
   qsh:"Quick start",qb:"Start the local Board (default port 7117):",qo:"Then open:",qt:"Access from another machine over SSH:",qm:"Connect an agent over MCP (HTTP/SSE default port 7118):",
   wk:"WHAT'S NEW",wt:"What's new",wnote:"Update this section as major features ship \u2014 keep it aligned with GitHub Releases.",
   d0:"in development",
-  e0:"AI-assisted task authoring (preview): describe a task in natural language; an optional bring-your-own LLM drafts a standard, fully validated task card for your approval.",
-  e1:"Generalized instance identity and custom agent profiles \u2014 describe any agent's vendor, harness and model in open, auditable fields.",
-  e2:"Task complexity classes (simple / complex) with an enforced independent-audit loop for complex work.",
+  e0:"Board now defaults to 7117, MCP HTTP/SSE to 7118, AI-assisted task authoring spans fixture-only Board flows and a live BYO-LLM CLI path, and custom agent identities use opaque IDs with explicit provenance.",
+  e1:"Custom-profile Board UI, trace-native audit, state staleness hardening, and adaptive gate intensity remain in development.",
   foot:"The accountability harness for AI agents."},
  zh:{nav_what:"\u662f\u4ec0\u4e48",nav_how:"\u5de5\u4f5c\u65b9\u5f0f",nav_why:"\u4e3a\u4ec0\u4e48\u662f\u73b0\u5728",nav_start:"\u5f00\u59cb\u4f7f\u7528",
   pk:"\u5f00\u59cb\u4f7f\u7528",pt:"\u5f00\u59cb\u4f7f\u7528",
@@ -201,9 +199,8 @@ const I18N={
   qsh:"\u5feb\u901f\u5f00\u59cb",qb:"\u542f\u52a8\u672c\u5730 Board\uff08\u9ed8\u8ba4\u7aef\u53e3 7117\uff09\uff1a",qo:"\u7136\u540e\u6253\u5f00\uff1a",qt:"\u901a\u8fc7 SSH \u4ece\u53e6\u4e00\u53f0\u673a\u5668\u8bbf\u95ee\uff1a",qm:"\u901a\u8fc7 MCP \u63a5\u5165 Agent\uff08HTTP/SSE \u9ed8\u8ba4\u7aef\u53e3 7118\uff09\uff1a",
   wk:"\u66f4\u65b0",wt:"\u66f4\u65b0\u65e5\u5fd7",wnote:"\u6bcf\u6b21\u5927\u529f\u80fd\u4e0a\u7ebf\u65f6\u66f4\u65b0\u6b64\u5904 \u2014 \u4e0e GitHub Releases \u4fdd\u6301\u4e00\u81f4\u3002",
   d0:"\u5f00\u53d1\u4e2d",
-  e0:"AI \u8f85\u52a9\u4efb\u52a1\u8d77\u8349\uff08\u9884\u89c8\uff09\uff1a\u7528\u81ea\u7136\u8bed\u8a00\u63cf\u8ff0\u4efb\u52a1\uff0c\u53ef\u9009 BYO-LLM \u8d77\u8349\u6210\u6807\u51c6\u3001\u7ecf\u5b8c\u6574\u6821\u9a8c\u7684\u4efb\u52a1\u5361\uff0c\u4ea4\u4f60\u5ba1\u6279\u3002",
-  e1:"\u5b9e\u4f8b\u8eab\u4efd\u901a\u7528\u5316\u4e0e\u81ea\u5b9a\u4e49 Agent \u6863\u6848 \u2014 \u7528\u5f00\u653e\u3001\u53ef\u5ba1\u8ba1\u7684\u5b57\u6bb5\u63cf\u8ff0\u4efb\u4f55 Agent \u7684\u5382\u5546\u3001harness \u4e0e\u6a21\u578b\u3002",
-  e2:"\u4efb\u52a1\u590d\u6742\u5ea6\u5206\u7ea7\uff08\u7b80\u5355 / \u590d\u6742\uff09\uff0c\u590d\u6742\u4efb\u52a1\u5f3a\u5236\u72ec\u7acb\u5ba1\u8ba1\u95ed\u73af\u3002",
+  e0:"Board \u73b0\u5df2\u9ed8\u8ba4\u542f\u52a8\u4e3a 7117\uff0cMCP HTTP/SSE \u9ed8\u8ba4\u4e3a 7118\uff0cAI \u8f85\u52a9\u4efb\u52a1\u8d77\u8349\u5df2\u5305\u62ec fixture-only Board \u6d41\u7a0b\u4ee5\u53ca live BYO-LLM CLI \u8def\u5f84\uff0c\u81ea\u5b9a\u4e49 Agent \u8eab\u4efd\u4f7f\u7528\u4e0d\u900f\u9732 ID \u548c\u663e\u5f0f provenance\u3002",
+  e1:"\u81ea\u5b9a\u4e49 Board UI\u3001trace-native \u5ba1\u8ba1\u3001state staleness \u786c\u5316\u4ee5\u53ca adaptive gate intensity \u4ecd\u5728\u5f00\u53d1\u4e2d\u3002",
   foot:"\u9762\u5411 AI Agent \u7684\u6cbb\u7406\u578b harness\u3002"}
 };
 function each(list,fn){for(var i=0;i<list.length;i++){fn(list[i]);}}

@@ -96,7 +96,7 @@ def _rpc_response(message: dict[str, Any]) -> dict[str, Any] | None:
 
 
 class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
-    server_version = "LybraMcpHttpSse/0.1"
+    server_version = "LybraMcpHttpSse/0.2.0"
 
     def log_message(self, format: str, *args: Any) -> None:
         # Keep stdout/stderr quiet by default and avoid logging bearer tokens.
