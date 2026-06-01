@@ -32,6 +32,7 @@
   .hero h1{font-size:64px;line-height:1.02;margin:0 0 18px;letter-spacing:-1px;}
   .hero .one{font-size:25px;font-weight:700;margin:0 0 10px;max-width:760px;}
   .hero .sub{font-size:17px;color:var(--muted-d);margin:0 0 34px;max-width:680px;}
+  .lang-zh .hero .chip{font-size:16px;letter-spacing:1.2px;padding:9px 18px;}
   .btn{display:inline-block;font-size:15px;font-weight:600;padding:13px 24px;margin-right:14px;border-radius:7px;cursor:pointer;}
   .btn-primary{background:#fff;color:var(--green);}
   .btn-outline{border:1px solid var(--muted-d);color:#fff;}
@@ -319,6 +320,7 @@ function each(list,fn){for(var i=0;i<list.length;i++){fn(list[i]);}}
 function setLang(lang){
   if(!I18N[lang]) lang="en";
   document.documentElement.lang = lang==="zh" ? "zh-CN" : "en";
+  document.body.classList.toggle("lang-zh", lang==="zh");
   each(document.querySelectorAll("[data-i18n]"),function(el){
     var k=el.getAttribute("data-i18n");
     if(I18N[lang][k]!==undefined) el.textContent=I18N[lang][k];
