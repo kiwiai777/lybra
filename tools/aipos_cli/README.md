@@ -469,6 +469,19 @@ python tools/aipos_cli/aipos_cli.py agent-profile inspect --agent-instance agent
 
 `display_name` is editable presentation metadata. `agent_instance` remains the stable opaque audit key. Capabilities and open-vocabulary provenance are explicit declarations. Supersession is additive. The writer does not update historical records, widen controlled execute allowlists, mutate queues, launch runtimes, or expose Board or MCP authoring behavior.
 
+### Fixture-Only AI-Assisted Authoring
+
+AIPOS-151 adds a CLI-only fixture adapter for deterministic AI-assisted authoring dry-runs:
+
+```bash
+python tools/aipos_cli/aipos_cli.py ai-author draft --intent-json intent.json --fixture standard-simple --actor owner --json
+python tools/aipos_cli/aipos_cli.py ai-author confirm --from-json authoring-preview.json --actor owner --owner-confirmation-token OWNER_CONFIRMED --json
+```
+
+The first slice performs no network call and reads no credential. It parses a bundled fixture proposal, converges on the ordinary draft validator and writer, requires explicit Owner confirmation, then writes a non-secret provenance sidecar under `5_tasks/records/authoring_provenance/`.
+
+Raw prompts and raw responses are not persisted. Retries are explicit new invocations with a visible `retry_of` relationship. Board, MCP, external-intake assist, provider fallback, background retry, runtime launch, and controlled execute allowlist expansion remain out of scope.
+
 ## Orchestration Protocol Status
 
 Planner-orchestrator protocol docs live under `0_control_plane/orchestration/`.

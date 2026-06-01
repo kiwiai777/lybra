@@ -1,0 +1,14 @@
+{
+  "fixture_id": "adapter-failure",
+  "status": "failed",
+  "adapter_id": "fixture-only-v1",
+  "endpoint_ref": "fixture://adapter-failure",
+  "model_ref": "fixture-model",
+  "request_config_ref": "fixture-failure",
+  "token_cost_estimate": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "estimated_cost": "fixture-only"
+  },
+  "failure_reason": "Fixture adapter failure for visible degradation testing."
+}

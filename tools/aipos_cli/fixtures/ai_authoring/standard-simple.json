@@ -1,0 +1,55 @@
+{
+  "fixture_id": "standard-simple",
+  "status": "drafted",
+  "adapter_id": "fixture-only-v1",
+  "endpoint_ref": "fixture://standard-simple",
+  "model_ref": "fixture-model",
+  "request_config_ref": "fixture-default",
+  "token_cost_estimate": {
+    "input_tokens": 120,
+    "output_tokens": 220,
+    "estimated_cost": "fixture-only"
+  },
+  "proposal": {
+    "frontmatter": {
+      "task_id": "FIXTURE-SIMPLE-01",
+      "title": "Prepare a concise project status summary",
+      "project": "demo_project",
+      "assigned_to": "agent-01",
+      "agent_instance": "agent-01",
+      "context_bundle": "default_dev",
+      "task_mode": "docs",
+      "task_class": "simple",
+      "complexity_note": "Standalone documentation summary with bounded output.",
+      "model_tier": "L1",
+      "priority": "medium",
+      "status": "pending",
+      "created_by": "ai-assisted-fixture",
+      "needs_owner": true,
+      "output_target": "workspace_artifacts/status-summary.md",
+      "artifact_policy": "formal_write",
+      "task_type": "one_shot",
+      "polling_mode": "agent_polling",
+      "claim_policy": "assigned_agent_only",
+      "report_mode": "completion_summary",
+      "recurrence": "none"
+    },
+    "body": "## Goal\n\nPrepare a concise project status summary from the Owner-reviewed requirement.\n\n## Context\n\nUse only the supplied project context and preserve unresolved questions.\n\n## Acceptance Criteria\n\n- Produce one concise status summary.\n- Keep assumptions visible.\n\n## Completion Report Instructions\n\n- Report the output path and unresolved questions.\n"
+  },
+  "triage": {
+    "recommended_task_class": "simple",
+    "rationale": "The requested output is bounded and independently completable.",
+    "confidence": "high",
+    "assumptions": [],
+    "missing_information": [],
+    "possible_owner_gates": []
+  },
+  "assignment_recommendations": {
+    "assigned_to": "agent-01",
+    "agent_instance": "agent-01",
+    "reviewer": null,
+    "audit_by": null,
+    "rationale": "Fixture recommendation only."
+  },
+  "warnings": []
+}
