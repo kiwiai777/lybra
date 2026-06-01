@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import Any
 from unittest.mock import patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 from tools.aipos_cli.ai_assisted_authoring import (
     build_authoring_draft,
@@ -379,6 +379,49 @@ class AiAssistedAuthoringTests(unittest.TestCase):
 
         self.assertEqual(result["verdict"], "BLOCK")
         self.assertIn("live adapter network failure", result["blocking_reasons"][0])
+        self.assertEqual(result["planned_writes"], [])
+        self.assertFalse((self.repo_root / "5_tasks" / "drafts").exists())
+
+    def test_live_adapter_http_error_is_visible_with_zero_writes(self) -> None:
+        with patch.dict(os.environ, {"LYBRA_LLM_API_KEY": "live-secret"}), patch(
+            "tools.aipos_cli.ai_assisted_authoring.urlopen",
+            side_effect=HTTPError(
+                url="http://127.0.0.1:65532/live-authoring",
+                code=502,
+                msg="bad gateway",
+                hdrs=None,
+                fp=None,
+            ),
+        ):
+            result = build_live_authoring_draft(
+                self.repo_root,
+                self.intent(intent_id="intent-live-http-error"),
+                endpoint_ref="http://127.0.0.1:65532/live-authoring",
+                credential_ref="env:LYBRA_LLM_API_KEY",
+                model_ref="demo-model",
+                actor="owner",
+            )
+
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertIn("live adapter HTTP 502: bad gateway", result["blocking_reasons"][0])
+        self.assertEqual(result["planned_writes"], [])
+        self.assertFalse((self.repo_root / "5_tasks" / "drafts").exists())
+
+    def test_live_adapter_timeout_is_visible_with_zero_writes(self) -> None:
+        with patch.dict(os.environ, {"LYBRA_LLM_API_KEY": "live-secret"}), patch(
+            "tools.aipos_cli.ai_assisted_authoring.urlopen", side_effect=TimeoutError("timed out")
+        ):
+            result = build_live_authoring_draft(
+                self.repo_root,
+                self.intent(intent_id="intent-live-timeout"),
+                endpoint_ref="http://127.0.0.1:65533/live-authoring",
+                credential_ref="env:LYBRA_LLM_API_KEY",
+                model_ref="demo-model",
+                actor="owner",
+            )
+
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertIn("live adapter timed out", result["blocking_reasons"][0])
         self.assertEqual(result["planned_writes"], [])
         self.assertFalse((self.repo_root / "5_tasks" / "drafts").exists())
 
