@@ -114,7 +114,7 @@ Start the Board bound to localhost only:
 ```bash
 python3 /home/owner/lybra/web/board/app.py \
   --host 127.0.0.1 \
-  --port 8765 \
+  --port 7117 \
   --repo-root /home/owner/ai-project-os
 ```
 
@@ -127,11 +127,11 @@ AIPOS-89 does not install or enable systemd. If the Owner chooses to use a servi
 On the remote host, verify the read paths:
 
 ```bash
-curl http://127.0.0.1:8765/api/health
-curl http://127.0.0.1:8765/api/queue
-curl http://127.0.0.1:8765/api/agents
-curl http://127.0.0.1:8765/api/records
-curl http://127.0.0.1:8765/api/drafts
+curl http://127.0.0.1:7117/api/health
+curl http://127.0.0.1:7117/api/queue
+curl http://127.0.0.1:7117/api/agents
+curl http://127.0.0.1:7117/api/records
+curl http://127.0.0.1:7117/api/drafts
 ```
 
 The orchestration routes require a concrete orchestration id. If the workspace has no
@@ -142,8 +142,8 @@ If an orchestration id exists, set it explicitly and verify the two routes:
 
 ```bash
 ORCHESTRATION_ID=<existing-orchestration-id>
-curl "http://127.0.0.1:8765/api/orchestration/summary?orchestration_id=${ORCHESTRATION_ID}"
-curl "http://127.0.0.1:8765/api/orchestration/timeline?orchestration_id=${ORCHESTRATION_ID}"
+curl "http://127.0.0.1:7117/api/orchestration/summary?orchestration_id=${ORCHESTRATION_ID}"
+curl "http://127.0.0.1:7117/api/orchestration/timeline?orchestration_id=${ORCHESTRATION_ID}"
 ```
 
 Expected health metadata should show no live agent connection, no autonomous runtime, no queue polling, and no public endpoint requirement.
@@ -153,19 +153,19 @@ Expected health metadata should show no live agent connection, no autonomous run
 From the Owner machine, open a private tunnel:
 
 ```bash
-ssh -N -L 8765:127.0.0.1:8765 owner@private-host
+ssh -N -L 7117:127.0.0.1:7117 owner@private-host
 ```
 
 Then verify:
 
 ```bash
-curl http://127.0.0.1:8765/api/health
+curl http://127.0.0.1:7117/api/health
 ```
 
 Open:
 
 ```text
-http://127.0.0.1:8765/
+http://127.0.0.1:7117/
 ```
 
 Confirm that the mobile Owner review path remains usable for read/review/approve/confirm surfaces already implemented before AIPOS-89. Do not use this run to add or expose new mutation controls.

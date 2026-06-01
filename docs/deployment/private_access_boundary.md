@@ -7,13 +7,13 @@ AIPOS-84 defaults to owner-only access over SSH tunnel or a private network.
 The Board service binds to:
 
 ```text
-127.0.0.1:8765
+127.0.0.1:7117
 ```
 
 The Owner accesses it through:
 
 ```text
-ssh -N -L 8765:127.0.0.1:8765 owner@private-host
+ssh -N -L 7117:127.0.0.1:7117 owner@private-host
 ```
 
 ## Required Properties

@@ -1789,7 +1789,7 @@ def make_handler(repo_root: Path | None = None) -> type[BaseHTTPRequestHandler]:
     return BoardHandler
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8765, repo_root: Path | None = None) -> None:
+def run_server(host: str = "127.0.0.1", port: int = 7117, repo_root: Path | None = None) -> None:
     handler = make_handler(repo_root=repo_root)
     with ThreadingHTTPServer((host, port), handler) as httpd:
         print(f"AIPOS board local UI listening on http://{host}:{port}")
@@ -1799,7 +1799,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8765, repo_root: Path | None
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local read-only board UI server")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=7117)
     parser.add_argument("--repo-root", default=None)
     return parser.parse_args()
 

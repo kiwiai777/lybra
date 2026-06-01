@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lybra — Get started</title>
+<style>
+  :root{
+    --green:#0D5A3B; --green-d:#083D28; --green-b:#1A7A52;
+    --mint:#E8F2EA; --mint2:#D6E8DC; --border:#C8DCCE;
+    --ink:#141414; --muted:#5F7268; --muted-d:#A7C6B6; --white:#fff;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{font-family:-apple-system,"Segoe UI",Roboto,"Noto Sans CJK SC","PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:#fff;line-height:1.6;-webkit-font-smoothing:antialiased;}
+  a{color:inherit;text-decoration:none;}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 28px;}
+  /* top bar */
+  .topbar{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.96);border-bottom:1px solid var(--border);}
+  .topbar .row{display:block;padding:14px 0;}
+  .topbar .brand{display:inline-block;vertical-align:middle;font-weight:700;font-size:20px;letter-spacing:.5px;}
+  .topbar .brand img{height:22px;vertical-align:middle;margin-right:9px;}
+  .topbar .nav{float:right;font-size:0;}
+  .topbar .nav a{font-size:14px;color:var(--muted);margin-left:22px;vertical-align:middle;}
+  .topbar .nav a:hover{color:var(--green);}
+  .lang{display:inline-block;margin-left:26px;vertical-align:middle;font-size:13px;border:1px solid var(--border);border-radius:6px;overflow:hidden;}
+  .lang button{font-size:13px;border:0;background:#fff;color:var(--muted);padding:5px 11px;cursor:pointer;font-family:inherit;}
+  .lang button.active{background:var(--green);color:#fff;}
+  /* hero */
+  .hero{background:var(--green);color:#fff;padding:74px 0 80px;}
+  .hero img.mark{height:74px;margin-bottom:26px;}
+  .chip{display:inline-block;background:var(--green-b);color:#fff;font-size:12px;font-weight:700;letter-spacing:1.5px;padding:7px 14px;margin-bottom:22px;}
+  .hero h1{font-size:64px;line-height:1.02;margin:0 0 18px;letter-spacing:-1px;}
+  .hero .one{font-size:25px;font-weight:700;margin:0 0 10px;max-width:760px;}
+  .hero .sub{font-size:17px;color:var(--muted-d);margin:0 0 34px;max-width:680px;}
+  .btn{display:inline-block;font-size:15px;font-weight:600;padding:13px 24px;margin-right:14px;border-radius:7px;cursor:pointer;}
+  .btn-primary{background:#fff;color:var(--green);}
+  .btn-outline{border:1px solid var(--muted-d);color:#fff;}
+  /* sections */
+  section{padding:64px 0;}
+  .kicker{font-size:13px;font-weight:700;letter-spacing:2px;color:var(--green-b);margin-bottom:12px;}
+  .kicker::before{content:"";display:inline-block;width:11px;height:11px;background:var(--green);margin-right:9px;vertical-align:middle;}
+  h2{font-size:30px;line-height:1.2;margin:0 0 8px;letter-spacing:-.4px;}
+  .lead{font-size:16px;color:var(--muted);max-width:780px;margin:0 0 34px;}
+  /* pull quote */
+  .pull{background:var(--green-d);color:#fff;padding:40px 44px;font-size:28px;font-weight:700;border-left:11px solid var(--green-b);}
+  .pull span{color:var(--mint2);}
+  /* grid cards */
+  .grid{font-size:0;margin:0 -11px;}
+  .card{display:inline-block;vertical-align:top;width:50%;padding:0 11px;margin-bottom:22px;}
+  .card .inner{background:var(--mint);border:1px solid var(--border);border-left:5px solid var(--green);padding:24px 26px;height:100%;}
+  .card h3{font-size:20px;margin:0 0 7px;}
+  .card p{font-size:14.5px;color:var(--muted);margin:0;}
+  /* surfaces + pipeline */
+  .surfaces{font-size:0;margin-bottom:18px;}
+  .surf{display:inline-block;width:33.33%;padding-right:14px;vertical-align:top;}
+  .surf:last-child{padding-right:0;}
+  .surf .b{background:var(--mint);border:1.5px solid var(--green);padding:16px;text-align:center;}
+  .surf .b strong{font-size:17px;color:var(--green);display:block;}
+  .surf .b span{font-size:12.5px;color:var(--muted);}
+  .pipe{font-size:0;margin-top:18px;}
+  .pstep{display:inline-block;vertical-align:middle;background:var(--mint2);border:1px solid var(--border);padding:14px 8px;text-align:center;font-size:13.5px;font-weight:600;width:17%;}
+  .pstep.strong{background:var(--green);color:#fff;border-color:var(--green);}
+  .parrow{display:inline-block;vertical-align:middle;width:3.75%;text-align:center;color:var(--muted);font-size:16px;font-weight:700;}
+  .note{font-size:13.5px;color:var(--muted);font-style:italic;margin-top:16px;}
+  /* dark band */
+  .dark{background:var(--green);color:#fff;}
+  .dark .kicker{color:var(--mint2);}
+  .dark .kicker::before{background:var(--mint2);}
+  .dark h2{color:#fff;}
+  .pcard .inner{background:var(--green-d);border:0;border-left:5px solid var(--green-b);}
+  .pcard h3{color:#fff;}
+  .pcard p{color:var(--muted-d);}
+  /* etclovg */
+  .erow{margin-bottom:11px;}
+  .erow .name{display:inline-block;width:170px;vertical-align:middle;font-weight:700;font-size:15px;}
+  .etrack{display:inline-block;vertical-align:middle;width:calc(100% - 290px);height:30px;background:#F0F5F2;border:1px solid #E6EEE9;position:relative;}
+  .efill{display:block;height:100%;background:var(--green);}
+  .efill.med{background:var(--green-b);}
+  .efill.low{background:var(--muted);}
+  .erow .tag{display:inline-block;vertical-align:middle;width:110px;text-align:left;padding-left:12px;font-size:12.5px;font-weight:700;color:var(--green);}
+  .erow .tag.dim{color:var(--muted);font-weight:400;}
+  /* loop */
+  .loop{font-size:0;}
+  .lstep{display:inline-block;vertical-align:middle;width:21.6%;background:var(--mint);border:1px solid var(--border);padding:18px 14px;}
+  .lstep.strong{background:var(--green);color:#fff;border-color:var(--green);}
+  .lstep .n{font-size:13px;font-weight:700;color:var(--green-b);}
+  .lstep.strong .n{color:var(--mint2);}
+  .lstep h4{margin:4px 0 2px;font-size:18px;}
+  .lstep small{font-size:11.5px;letter-spacing:.5px;color:var(--muted);}
+  .lstep.strong small{color:var(--muted-d);}
+  .larrow{display:inline-block;vertical-align:middle;width:4.5%;text-align:center;color:var(--muted);font-weight:700;}
+  /* demo */
+  .demo-frame{border:1px solid var(--border);background:var(--mint);padding:10px;}
+  .demo-frame img{display:block;width:100%;}
+  .demo-ph{display:flex;align-items:center;justify-content:center;height:340px;background:repeating-linear-gradient(45deg,#eef5f0,#eef5f0 12px,#e7f0ea 12px,#e7f0ea 24px);color:var(--muted);font-size:15px;font-weight:600;border:1.5px dashed var(--border);}
+  /* why now */
+  .why .inner{background:var(--mint);border:1px solid var(--border);border-left:5px solid var(--green);padding:22px 26px;margin-bottom:16px;}
+  .why h3{margin:0 0 5px;font-size:19px;}
+  .why p{margin:0;font-size:14.5px;color:var(--muted);}
+  /* investor band */
+  .invest{background:var(--green-d);color:#fff;text-align:center;padding:60px 0;}
+  .invest h2{color:#fff;font-size:30px;margin-bottom:8px;}
+  .invest p{color:var(--muted-d);margin:0 0 26px;}
+  /* footer */
+  footer{background:#0a3322;color:var(--muted-d);text-align:center;padding:34px 0;font-size:13px;}
+  footer .ft{font-weight:700;color:#fff;font-size:15px;margin-bottom:6px;}
+</style>
+<style>
+  pre{background:#0d2a1e;color:#d6e8dc;padding:15px 18px;border-radius:8px;overflow:auto;font-size:13.5px;line-height:1.7;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:8px 0 6px;}
+  pre .c{color:#7fb79a;}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+  .slim{background:var(--green);color:#fff;padding:46px 0 40px;}
+  .slim .kicker{color:var(--mint2);} .slim .kicker::before{background:var(--mint2);}
+  .slim h1{font-size:40px;margin:6px 0 0;letter-spacing:-.5px;}
+  .step-h{font-size:19px;font-weight:700;margin:26px 0 6px;}
+  .muted-line{font-size:14px;color:var(--muted);margin:0 0 4px;}
+  .tip{font-size:13px;color:var(--muted);font-style:italic;margin-top:4px;}
+  .changelog{margin-top:8px;}
+  .entry{border-left:3px solid var(--border);padding:2px 0 16px 20px;margin-left:3px;}
+  .entry .ver{font-weight:700;color:var(--green);font-size:15px;}
+  .entry .date{font-size:12.5px;color:var(--muted);margin-left:8px;}
+  .entry p{margin:5px 0 0;font-size:14.5px;color:var(--ink);}
+</style>
+</head>
+<body>
+
+<div class="topbar"><div class="wrap"><div class="row">
+  <a class="brand" href="index.html"><img src="assets/lybra-logo-black.png" alt="Lybra">Lybra</a>
+  <span class="nav">
+    <a href="index.html#what" data-i18n="nav_what">What</a>
+    <a href="index.html#how" data-i18n="nav_how">How</a>
+    <a href="index.html#why" data-i18n="nav_why">Why now</a>
+    <a href="start.html" data-i18n="nav_start" style="color:var(--green);font-weight:600;">Get started</a>
+    <span class="lang"><button data-lang="en">EN</button><button data-lang="zh">中文</button></span>
+  </span>
+</div></div></div>
+
+<div class="slim"><div class="wrap">
+  <div class="kicker" data-i18n="pk">GET STARTED</div>
+  <h1 data-i18n="pt">Get started</h1>
+</div></div>
+
+<section><div class="wrap">
+  <div class="kicker" data-i18n="ik">INSTALL</div>
+  <h2 data-i18n="it">Install</h2>
+  <p class="muted-line" data-i18n="ireq">Requirements: Node.js 18+ (and Python 3 for the local Board and MCP server).</p>
+  <pre><code>npm install -g lybra</code></pre>
+  <p class="tip" data-i18n="inote">Package name: lybra.</p>
+
+  <div class="step-h" data-i18n="clh">CLI entry point</div>
+  <pre><code>lybra --help</code></pre>
+  <pre><code>python3 -m tools.aipos_cli.aipos_cli --help</code></pre>
+  <p class="muted-line" data-i18n="csrc">Source checkout uses the Python module entry point above.</p>
+
+  <div class="step-h" data-i18n="qsh">Quick start</div>
+  <p class="muted-line" data-i18n="qb">Start the local Board (default port 7117):</p>
+  <pre><code>python3 web/board/app.py --host 127.0.0.1 --port 7117 --repo-root /path/to/your/workspace</code></pre>
+  <p class="muted-line" data-i18n="qo">Then open:</p>
+  <pre><code>http://127.0.0.1:7117</code></pre>
+  <p class="muted-line" data-i18n="qt">Access from another machine over SSH:</p>
+  <pre><code>ssh -N -L 7117:127.0.0.1:7117 user@your-host</code></pre>
+  <p class="muted-line" data-i18n="qm">Connect an agent over MCP (HTTP/SSE default port 7118):</p>
+  <pre><code>python3 -m tools.mcp_server serve-http --host 127.0.0.1 --port 7118</code></pre>
+  <pre><code>http://127.0.0.1:7118</code></pre>
+</div></section>
+
+<section style="background:#fafcfb;border-top:1px solid var(--border);border-bottom:1px solid var(--border);"><div class="wrap">
+  <div class="kicker" data-i18n="wk">WHAT'S NEW</div>
+  <h2 data-i18n="wt">What's new</h2>
+  <p class="tip" data-i18n="wnote">Update this section as major features ship — keep it aligned with GitHub Releases.</p>
+  <div class="changelog">
+    <div class="entry"><span class="ver">Unreleased</span><span class="date" data-i18n="d0">in development</span><p data-i18n="e0">AI-assisted task authoring (preview): describe a task in natural language; an optional bring-your-own LLM drafts a standard, fully validated task card for your approval.</p></div>
+    <div class="entry"><span class="ver">vX.Y.Z</span><span class="date">2026</span><p data-i18n="e1">Generalized instance identity and custom agent profiles — describe any agent's vendor, harness and model in open, auditable fields.</p></div>
+    <div class="entry"><span class="ver">vX.Y.Z</span><span class="date">2026</span><p data-i18n="e2">Task complexity classes (simple / complex) with an enforced independent-audit loop for complex work.</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="ft">KIWIAI</div>
+  <div data-i18n="foot">The accountability harness for AI agents.</div>
+</div></footer>
+
+<script>
+const I18N={
+ en:{nav_what:"What",nav_how:"How",nav_why:"Why now",nav_start:"Get started",
+  pk:"GET STARTED",pt:"Get started",
+  ik:"INSTALL",it:"Install",ireq:"Requirements: Node.js 18+ (and Python 3 for the local Board and MCP server).",inote:"Package name: lybra.",
+  clh:"CLI entry point",csrc:"Source checkout uses the Python module entry point above.",
+  qsh:"Quick start",qb:"Start the local Board (default port 7117):",qo:"Then open:",qt:"Access from another machine over SSH:",qm:"Connect an agent over MCP (HTTP/SSE default port 7118):",
+  wk:"WHAT'S NEW",wt:"What's new",wnote:"Update this section as major features ship \u2014 keep it aligned with GitHub Releases.",
+  d0:"in development",
+  e0:"AI-assisted task authoring (preview): describe a task in natural language; an optional bring-your-own LLM drafts a standard, fully validated task card for your approval.",
+  e1:"Generalized instance identity and custom agent profiles \u2014 describe any agent's vendor, harness and model in open, auditable fields.",
+  e2:"Task complexity classes (simple / complex) with an enforced independent-audit loop for complex work.",
+  foot:"The accountability harness for AI agents."},
+ zh:{nav_what:"\u662f\u4ec0\u4e48",nav_how:"\u5de5\u4f5c\u65b9\u5f0f",nav_why:"\u4e3a\u4ec0\u4e48\u662f\u73b0\u5728",nav_start:"\u5f00\u59cb\u4f7f\u7528",
+  pk:"\u5f00\u59cb\u4f7f\u7528",pt:"\u5f00\u59cb\u4f7f\u7528",
+  ik:"\u5b89\u88c5",it:"\u5b89\u88c5",ireq:"\u73af\u5883\u8981\u6c42\uff1aNode.js 18+\uff08\u672c\u5730 Board \u548c MCP \u90fd\u9700\u8981 Python 3\uff09\u3002",inote:"\u5305\u540d\uff1alybra\u3002",
+  clh:"CLI \u5165\u53e3",csrc:"\u672c\u5730\u6e90\u7801\u67e5\u51fa\u4f7f\u7528\u4e0a\u9762\u7684 Python \u6a21\u5757\u5165\u53e3\u3002",
+  qsh:"\u5feb\u901f\u5f00\u59cb",qb:"\u542f\u52a8\u672c\u5730 Board\uff08\u9ed8\u8ba4\u7aef\u53e3 7117\uff09\uff1a",qo:"\u7136\u540e\u6253\u5f00\uff1a",qt:"\u901a\u8fc7 SSH \u4ece\u53e6\u4e00\u53f0\u673a\u5668\u8bbf\u95ee\uff1a",qm:"\u901a\u8fc7 MCP \u63a5\u5165 Agent\uff08HTTP/SSE \u9ed8\u8ba4\u7aef\u53e3 7118\uff09\uff1a",
+  wk:"\u66f4\u65b0",wt:"\u66f4\u65b0\u65e5\u5fd7",wnote:"\u6bcf\u6b21\u5927\u529f\u80fd\u4e0a\u7ebf\u65f6\u66f4\u65b0\u6b64\u5904 \u2014 \u4e0e GitHub Releases \u4fdd\u6301\u4e00\u81f4\u3002",
+  d0:"\u5f00\u53d1\u4e2d",
+  e0:"AI \u8f85\u52a9\u4efb\u52a1\u8d77\u8349\uff08\u9884\u89c8\uff09\uff1a\u7528\u81ea\u7136\u8bed\u8a00\u63cf\u8ff0\u4efb\u52a1\uff0c\u53ef\u9009 BYO-LLM \u8d77\u8349\u6210\u6807\u51c6\u3001\u7ecf\u5b8c\u6574\u6821\u9a8c\u7684\u4efb\u52a1\u5361\uff0c\u4ea4\u4f60\u5ba1\u6279\u3002",
+  e1:"\u5b9e\u4f8b\u8eab\u4efd\u901a\u7528\u5316\u4e0e\u81ea\u5b9a\u4e49 Agent \u6863\u6848 \u2014 \u7528\u5f00\u653e\u3001\u53ef\u5ba1\u8ba1\u7684\u5b57\u6bb5\u63cf\u8ff0\u4efb\u4f55 Agent \u7684\u5382\u5546\u3001harness \u4e0e\u6a21\u578b\u3002",
+  e2:"\u4efb\u52a1\u590d\u6742\u5ea6\u5206\u7ea7\uff08\u7b80\u5355 / \u590d\u6742\uff09\uff0c\u590d\u6742\u4efb\u52a1\u5f3a\u5236\u72ec\u7acb\u5ba1\u8ba1\u95ed\u73af\u3002",
+  foot:"\u9762\u5411 AI Agent \u7684\u6cbb\u7406\u578b harness\u3002"}
+};
+function each(list,fn){for(var i=0;i<list.length;i++){fn(list[i]);}}
+function setLang(lang){
+  if(!I18N[lang]) lang="en";
+  document.documentElement.lang = lang==="zh" ? "zh-CN" : "en";
+  each(document.querySelectorAll("[data-i18n]"),function(el){var k=el.getAttribute("data-i18n");if(I18N[lang][k]!==undefined) el.textContent=I18N[lang][k];});
+  each(document.querySelectorAll("[data-lang]"),function(b){b.className=(b.getAttribute("data-lang")===lang)?"active":"";});
+  try{var sp=location.search.replace(/([?&])lang=[^&]*/,"$1lang="+lang);if(sp.indexOf("lang=")<0){sp=(sp?sp+"&":"?")+"lang="+lang;}history.replaceState({},"",location.pathname+sp+location.hash);}catch(e){}
+}
+each(document.querySelectorAll("[data-lang]"),function(b){b.onclick=function(){setLang(b.getAttribute("data-lang"));};});
+function qp(n){var m=location.search.match(new RegExp("[?&]"+n+"=([^&]+)"));return m?decodeURIComponent(m[1]):null;}
+setLang(qp("lang")==="zh"?"zh":"en");
+</script>
+
+</body>
+</html>

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from .server import JsonRpcError, _error, handle_request
 
 DEFAULT_HTTP_HOST = "127.0.0.1"
-DEFAULT_HTTP_PORT = 8766
+DEFAULT_HTTP_PORT = 7118
 DEFAULT_KEEPALIVE_SECONDS = 30.0
 TOKEN_ENV_VAR = "LYBRA_MCP_TOKEN"
 MCP_RPC_PATH = "/mcp"

@@ -1,326 +1,106 @@
-# Lybra
+<p align="center">
+  <img src="docs/assets/lybra-banner.png" alt="Lybra — the accountability harness for AI agents" width="880">
+</p>
 
-> Local-first, file-authoritative agent harness for governed work.
+<p align="center">
+  <b>The accountability harness for AI agents.</b><br/>
+  面向 AI Agent 的治理型 harness —— 文件为真相源，Owner 掌握每一道决策闸门，每一步皆可审计、可复现。
+</p>
 
-Lybra coordinates AI-assisted code, research, documentation, operations, and review without hiding operational state inside a model session. Tasks, decisions, events, records, and handoffs stay visible as plain files. Humans remain in the loop for consequential decisions.
+<p align="center">
+  <a href="https://www.npmjs.com/package/lybra"><img alt="npm" src="https://img.shields.io/npm/v/lybra?color=0D5A3B&amp;label=npm"></a>
+  <img alt="node" src="https://img.shields.io/node/v/lybra?color=0D5A3B">
+  <img alt="license" src="https://img.shields.io/github/license/kiwiai777/lybra?color=0D5A3B">
+  <img alt="status" src="https://img.shields.io/badge/status-early%20access-1A7A52">
+</p>
 
-## Quick Start
+---
 
-Prerequisites: Node.js 18+ and Python 3 available on `PATH`.
+## What is Lybra
+
+Lybra is a **local-first, file-authoritative control plane** for AI agents — a harness that puts **governance, verification, and observability first**.
+
+Most agent platforms optimize for **autonomy**. Lybra optimizes for **accountability**.
+
+- **Files are the single source of truth** — state lives in durable files, not in compressed conversation memory. State outlives the model.
+- **The owner holds every decision gate** — architecture, risk, and scope decisions are non-delegable.
+- **Independent audit is enforced** — an executor can never audit its own work.
+- **Agents come to Lybra (MCP-native)** — no autonomous runtime, no heartbeat polling.
+
+> The model isn't the bottleneck. The harness is.
+
+## Why it matters
+
+Enterprises need AI they can hold accountable — not a polished demo. If you can't assign responsibility, reproduce a result, or audit a decision, you can't put an agent into real business. Lybra moves AI agents **from demos to accountable, repeatable work**.
+
+## How it works
+
+Three peer surfaces share one permission-and-audit backend:
+
+| Surface | Role |
+|---------|------|
+| **CLI** | command-line operation |
+| **Board** | local dashboard for review |
+| **MCP** | any agent connects in |
+
+Every write to the workspace is forced through one path — no shortcuts:
+
+```
+dry-run  →  confirm  →  Owner Decision Gate  →  independent audit  →  written to files
+```
+
+## Where Lybra sits — ETCLOVG
+
+Against the seven-layer harness model (Execution · Tooling · Context · Lifecycle · Observability · Verification · Governance), Lybra is **deliberately heavy on Governance, Verification, and Observability**, and **deliberately does not do autonomous Execution or Lifecycle orchestration**. That's a stance, not a gap.
+
+See [`docs/positioning/etclovg_self_assessment.md`](docs/positioning/etclovg_self_assessment.md).
+
+## Install
 
 ```bash
 npm install -g lybra
 lybra --help
 ```
 
-Create a local workspace through the controlled dry-run and confirm path:
+Lybra needs Node.js 18+ and Python 3 available on `PATH`.
+
+For source checkout contributors:
 
 ```bash
-WORKSPACE="$HOME/.lybra/workspaces/my-project"
-
-lybra workspace init \
-  --template blank \
-  --output "$WORKSPACE" \
-  --actor owner.local \
-  --var project_id=my-project \
-  --dry-run \
-  --json > /tmp/lybra-workspace-init.json
-
-lybra workspace init \
-  --confirm \
-  --from-json /tmp/lybra-workspace-init.json \
-  --actor owner.local \
-  --owner-confirmation-token OWNER_CONFIRMED \
-  --json
-
-export AIPOS_WORKSPACE_ROOT="$WORKSPACE"
-lybra validate --json
-lybra queue
-```
-
-Lybra uses `~/.lybra/workspaces/<workspace_id>/` for local runtime workspaces. Existing private project-management records may remain in a separate source-of-truth workspace.
-
-## Design Principles
-
-- **Files are authoritative.** Durable files and append-only records make state inspectable, recoverable, and portable across sessions.
-- **Authority stays separated.** Execution, independent audit, and human Owner decisions do not collapse into one actor.
-- **Workflow rigor follows complexity.** Simple tasks can close directly. Complex tasks use planning, independent audit, repair or re-audit when needed, and audit PASS before finalize.
-- **Writes cross controlled gates.** Approved mutations use dry-run preview, proof, snapshot revalidation, and explicit confirmation.
-- **Scope forks stop for the Owner.** Architecture, risk, credential, deployment, runtime, audit-boundary, and long-term direction changes remain explicit decisions.
-
-## Design Basis
-
-Lybra can be understood as a Governance + Verification + Observability-heavy agent harness using the ETCLOVG taxonomy from [*Agent Harness Engineering: A Survey*](https://picrew.github.io/LLM-Harness/). Its emphasis is governed, inspectable work rather than autonomous execution throughput.
-
-See the [ETCLOVG self-assessment](docs/positioning/etclovg_self_assessment.md) for the detailed map and deliberate product boundaries.
-
-Lybra is extracted from the AI Project OS control-plane work. AI Project OS remains the architecture and history name; Lybra is the product name and standalone repository.
-
-## Surfaces
-
-| Surface | Audience | Status |
-|---|---|---|
-| CLI | Scripting, CI-friendly checks, headless workflows | Implemented |
-| Local Dashboard / Board UI | Human review in a browser | Implemented for read paths and selected controlled write paths |
-| MCP Server | MCP-aware clients | Stdio MVP and loopback HTTP/SSE MVP implemented with read tools and selected controlled write tools |
-
-No surface is privileged. Future surfaces should translate to the same backend semantics instead of bypassing them.
-
-### MCP Server MVP
-
-The current MCP MVP has two local transports:
-
-- stdio, for same-host MCP clients
-- loopback HTTP/SSE, bound to `127.0.0.1` by default on port `8766`
-
-Both transports expose the same tool registry. HTTP/SSE requires a static Bearer token from `LYBRA_MCP_TOKEN`; write-tool visibility still depends on `LYBRA_CAPABILITY_TOKEN`.
-
-Both transports include four read-only tools:
-
-- `lybra_queue_list`
-- `lybra_task_preview`
-- `lybra_validate`
-- `lybra_context_pack_build`
-
-It also exposes selected controlled write-tool pairs when `LYBRA_CAPABILITY_TOKEN` includes the matching operation scope:
-
-- `lybra_intake_submit_dry_run` / `lybra_intake_submit_confirm`
-- `lybra_owner_decision_record_dry_run` / `lybra_owner_decision_record_confirm`
-
-These tools wrap the same controlled execute path as the CLI: dry-run first, token proof, snapshot revalidation, then confirm. They do not publish drafts, mutate queues, append orchestration events as side effects, or launch runtimes.
-
-Manual client configuration example:
-
-```json
-{
-  "mcpServers": {
-    "lybra": {
-      "command": "python3",
-      "args": ["-m", "tools.mcp_server", "serve"],
-      "cwd": "<product-repo>",
-      "env": {
-        "AIPOS_WORKSPACE_ROOT": "<workspace>",
-        "LYBRA_CAPABILITY_TOKEN": "{\"token_ref\":\"<token>\",\"operations\":[\"intake_submit\"],\"projects\":[\"<project>\"],\"expires_at\":\"<iso-timestamp>\"}"
-      }
-    }
-  }
-}
-```
-
-Loopback HTTP/SSE startup example:
-
-```bash
-export AIPOS_WORKSPACE_ROOT=<workspace>
-export LYBRA_MCP_TOKEN=<local-http-token>
-export LYBRA_CAPABILITY_TOKEN='{"token_ref":"<token>","operations":["intake_submit"],"projects":["<project>"],"expires_at":"<iso-timestamp>"}'
-python3 -m tools.mcp_server serve-http --host 127.0.0.1 --port 8766
-```
-
-HTTP JSON-RPC requests are sent to `/mcp` with `Authorization: Bearer <local-http-token>`. The `/sse` endpoint emits keepalive ping events for local clients.
-
-The MVP does not register itself with clients, mint tokens, verify signatures, manage TLS, install service files, provide reverse proxy configuration, or provide publish/queue/runtime tools.
-
-### Local Docker Sandbox MVP
-
-The current sandbox runtime MVP is a local Docker adapter for one bounded ephemeral worker run:
-
-```bash
-python3 -m tools.sandbox_runtime local-docker run --dry-run --image <local-image> -- echo hello
-```
-
-The adapter requires an explicit image, uses `--pull never`, defaults to `--network none`, mounts any supplied workspace path read-only, injects no credentials, and returns an in-memory structured report. It does not create Dockerfiles, Docker Compose files, services, write mounts, scheduler loops, MCP bridges, or durable runtime records.
-
-### Workspace Templates
-
-Lybra includes local bundled workspace templates for starting a new file-authoritative project workflow:
-
-- `blank`
-- `consulting-engagement`
-- `software-development`
-
-Workspace init is a controlled execute operation. Dry-run previews every planned file, then confirm revalidates the snapshot before writing:
-
-```bash
-python3 tools/aipos_cli/aipos_cli.py workspace init \
-  --template blank \
-  --output <workspace> \
-  --actor <actor> \
-  --var project_id=<project> \
-  --dry-run \
-  --json
-```
-
-Confirm uses the prior dry-run envelope and explicit Owner confirmation:
-
-```bash
-python3 tools/aipos_cli/aipos_cli.py workspace init \
-  --confirm \
-  --from-json <dry-run-envelope.json> \
-  --actor <actor> \
-  --owner-confirmation-token OWNER_CONFIRMED \
-  --json
-```
-
-Templates are local product assets. Lybra does not fetch templates from remote URLs, run template scripts, provide a template marketplace, overwrite existing files, or initialize non-empty output directories.
-
-## Core Concepts
-
-- **Task cards** describe units of work under a workspace task queue.
-- **Context bundles** define role and environment boundaries for agent instances.
-- **Context Packs** are read-only briefing artifacts assembled from task cards, bundles, orchestration data, records, and source refs. The builder preview follows AIPOS-78.
-- **Orchestration events and planner iterations** are append-only coordination records.
-- **Records** capture formal session and claim history.
-- **Role catalog** is protocol-finalized in AIPOS-97. It separates vendor-neutral role templates from concrete agent instances and keeps template names functional.
-- **Coordinator contract** keeps Planner as a governance role rather than an ordinary worker template, preserving audit separation.
-
-## Project Context Contract
-
-Cross-agent startup needs one source of truth that can render project constraints for different agents without hand-maintaining one template per agent.
-
-Lybra is introducing this as a finalized protocol direction: a vendor-neutral master contract rendered through adapters. It is planned as a future Context Pack rendering extension, not a separate agent-initialization command, and is not implemented here yet.
-
-## Repository Layout
-
-```text
-<product-repo>/
-  tools/                 CLI and backend adapter code
-  web/                   Local dashboard / Board UI
-  0_control_plane/       Generic protocol and governance docs
-  3_context_bundles/     Generic role/context schemas
-  docs/                  Product, extraction, and deployment docs
-  config/                Example configuration
-  examples/              Non-private sample workspace data
-
-<workspace>/
-  2_projects/<project>/        Project docs, decision log, roadmap
-  5_tasks/queue/               Task queue
-  5_tasks/drafts/              Planner-created draft task cards
-  5_tasks/records/             Formal session and claim records
-  5_tasks/orchestration/<id>/  Append-only events and iterations
-  0_control_plane/             Workspace-specific control-plane configuration
-```
-
-The product repo holds reusable code, generic protocols, examples, and tests. The workspace holds project data. Product code reads workspace state through explicit root configuration.
-
-## Status
-
-Lybra is an early public release. The local-first governed-work foundation is implemented, while broader runtime and hosted-product capabilities remain intentionally limited.
-
-Implemented today:
-
-- CLI validation and queue/records/agent read surfaces
-- Local Board read paths and selected controlled write paths
-- Context Pack read-only preview path
-- Product/workspace root separation through environment configuration
-- MCP stdio and loopback HTTP/SSE MVPs for queue, task preview, validation, Context Pack tools, and selected controlled write-tool pairs
-- Local Docker sandbox runtime MVP for explicit, bounded, read-only ephemeral worker runs
-- Workspace Template MVP with local bundled templates and controlled execute initialization
-
-Protocol finalized, implementation pending or partial:
-
-- MCP server boundary and tool model beyond the stdio read-only MVP: AIPOS-96
-- Sandbox runtime abstraction beyond the local Docker MVP: AIPOS-90
-- SessionStore schema and credential boundary: AIPOS-92
-- Vendor-neutral role catalog: AIPOS-97
-- Planner autonomy tiers, session tree primitives, and related governance
-
-Lybra does not currently ship a public hosted service, managed cloud runtime, remote database, autonomous planner runtime, remote MCP deployment profile, MCP publish tools, MCP queue mutation tools, remote template registry, or template marketplace.
-
-## Getting Started / Workspace Root
-
-### Source Checkout
-
-Run checks from the product repository:
-
-```bash
+git clone <repo-url>
+cd lybra
 python3 -m unittest discover -s tools/aipos_cli/tests
 python3 -m unittest discover -s web/board/tests
 ```
 
-For new local Lybra runtime workspaces, use:
+Where the command needs a workspace root, use `AIPOS_WORKSPACE_ROOT` or `--repo-root` as applicable.
 
-```text
-~/.lybra/workspaces/<workspace_id>/
-```
-
-This convention is for product runtime workspaces created or operated by Lybra. It does not replace an existing private project-management source of truth. For example, an Owner may keep durable private project records under a separate workspace such as `<private-workspace>/2_projects/<project>/` while using `~/.lybra/workspaces/<workspace_id>/` for runtime dogfood and execution artifacts.
-
-Set `AIPOS_WORKSPACE_ROOT` when running from the product repo against a separate workspace:
+## Quick start
 
 ```bash
-export AIPOS_WORKSPACE_ROOT=<workspace>
-python3 tools/aipos_cli/aipos_cli.py validate --json
-python3 tools/aipos_cli/aipos_cli.py queue
-python3 tools/aipos_cli/aipos_cli.py agents --json
-python3 tools/aipos_cli/aipos_cli.py records --json
-```
-
-The Board server also accepts an explicit workspace path:
-
-```bash
-python3 web/board/app.py --repo-root <workspace>
-```
-
-Without `AIPOS_WORKSPACE_ROOT` or `--repo-root`, CLI commands preserve legacy behavior by searching upward from the current directory for `5_tasks/queue`.
-
-### npm Install
-
-Lybra can be installed as an npm command distribution. The npm package installs a `lybra` command that delegates to the bundled Python implementation, so Python must be available on `PATH`. See [Quick Start](#quick-start) for the first-workspace flow.
-
-```bash
-npm install -g lybra
 lybra --help
 ```
 
-Local tarball smoke for release validation:
+## The closed loop
 
-```bash
-npm pack
-npm install -g ./lybra-0.1.0.tgz
-lybra --help
+For complex work, every task runs the same accountable loop:
+
+```
+Plan  →  Execute  →  Independent Audit  →  Fix / Finalize
 ```
 
-Local install smoke without global writes:
+The executor and the auditor must be **different parties**; nothing is finalized without an audit pass. Simple tasks close in a single step — but still leave an auditable trail.
 
-```bash
-npm pack --pack-destination /tmp/lybra-pack
-npm install --global --prefix /tmp/lybra-install /tmp/lybra-pack/lybra-0.1.0.tgz
-/tmp/lybra-install/bin/lybra --help
-```
+## Contributing
 
-## Playwright Visual Smoke
+Changes that affect workflow gates, persistence boundaries, default ports, release surfaces, or audit rules should stay within the Owner decision flow and be validated before finalize. Keep product changes file-authoritative and narrowly scoped.
 
-Lybra supports headless visual checks from WSL or any other CLI-only environment.
+## About
 
-Install the test runner and the Chromium browser once:
+Built by **KIWIAI**.
 
-```bash
-npm install
-npm run test:visual:install
-```
-
-Run the desktop and mobile smoke tests:
-
-```bash
-npm run test:visual
-```
-
-Run a visible browser session when a desktop environment is available:
-
-```bash
-npm run test:visual:headed
-```
-
-## Public Repo Boundary
-
-Do not commit private workspace data, secrets, local task cards, generated caches, or operating-system metadata. Local task-card mirrors may exist under ignored `task_cards/`.
-
-Use placeholders such as `<workspace>`, `<project>`, and `<product-repo>` in public examples. Keep private hostnames, paths, endpoints, credentials, and runtime state outside the public repo.
+Lybra helps teams turn AI from a personal trial tool into a **manageable, reusable, traceable, and continuously improvable** enterprise-grade system.
 
 ## License
 
-License: Apache-2.0. See [LICENSE](LICENSE).
-
-## Acknowledgements
-
-Lybra draws on file-authoritative configuration, event sourcing, append-only logs, dry-run execution, human decision gates, and independent audit.
+Apache-2.0. See [LICENSE](LICENSE).

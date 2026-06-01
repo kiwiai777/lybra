@@ -122,7 +122,7 @@ class HttpSseTransportTests(unittest.TestCase):
 
     def test_default_bind_port_and_keepalive_values(self) -> None:
         self.assertEqual(DEFAULT_HTTP_HOST, "127.0.0.1")
-        self.assertEqual(DEFAULT_HTTP_PORT, 8766)
+        self.assertEqual(DEFAULT_HTTP_PORT, 7118)
         self.assertEqual(DEFAULT_KEEPALIVE_SECONDS, 30.0)
 
     def test_startup_requires_bearer_token_env_value(self) -> None:

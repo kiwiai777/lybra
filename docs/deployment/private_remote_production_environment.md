@@ -29,13 +29,13 @@ AIPOS_WORKSPACE_ROOT=/home/owner/ai-project-os
 Default access is through an owner-controlled private channel:
 
 ```text
-ssh -N -L 8765:127.0.0.1:8765 owner@private-host
+ssh -N -L 7117:127.0.0.1:7117 owner@private-host
 ```
 
 Then open:
 
 ```text
-http://127.0.0.1:8765/
+http://127.0.0.1:7117/
 ```
 
 Allowed private access patterns:
@@ -79,7 +79,7 @@ The Board process should bind to localhost on the remote host.
 ```bash
 python3 /home/owner/lybra/web/board/app.py \
   --host 127.0.0.1 \
-  --port 8765 \
+  --port 7117 \
   --repo-root /home/owner/ai-project-os
 ```
 
@@ -110,15 +110,15 @@ python3 tools/aipos_cli/aipos_cli.py validate --json
 With the service running locally on the remote host:
 
 ```bash
-curl http://127.0.0.1:8765/api/health
-curl http://127.0.0.1:8765/api/queue
-curl http://127.0.0.1:8765/api/agents
+curl http://127.0.0.1:7117/api/health
+curl http://127.0.0.1:7117/api/queue
+curl http://127.0.0.1:7117/api/agents
 ```
 
 From the Owner machine through SSH tunnel:
 
 ```bash
-curl http://127.0.0.1:8765/api/health
+curl http://127.0.0.1:7117/api/health
 ```
 
 ## Data Safety

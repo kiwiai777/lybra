@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("serve", help="Run the read-only MCP server over stdio")
     http_parser = subparsers.add_parser("serve-http", help="Run the MCP server over loopback HTTP/SSE")
     http_parser.add_argument("--host", default=DEFAULT_HTTP_HOST, help="Bind host; defaults to 127.0.0.1")
-    http_parser.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT, help="Bind port; defaults to 8766")
+    http_parser.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT, help="Bind port; defaults to 7118")
     http_parser.add_argument(
         "--keepalive-seconds",
         type=float,

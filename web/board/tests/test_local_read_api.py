@@ -3,8 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from web.board.app import _api_post_routes, _api_routes, dispatch_api_request
+from web.board.app import _api_post_routes, _api_routes, dispatch_api_request, parse_args
 
 WEB_ROOT = Path(__file__).resolve().parents[1]
 
@@ -218,6 +219,13 @@ class LocalReadApiTests(unittest.TestCase):
         status, data = dispatch_api_request(method="GET", path="/api/execute/dry-run", routes=self.routes)
         self.assertEqual(status, 404)
         self.assertEqual(data.get("error"), "NOT_FOUND")
+
+    def test_default_board_port_is_7117(self) -> None:
+        with patch("sys.argv", ["web.board.app"]):
+            args = parse_args()
+
+        self.assertEqual(args.host, "127.0.0.1")
+        self.assertEqual(args.port, 7117)
 
     def test_execute_dry_run_post_returns_envelope(self) -> None:
         status, data = dispatch_api_request(

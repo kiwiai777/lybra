@@ -17,14 +17,14 @@ module.exports = defineConfig({
   fullyParallel: true,
   retries: 0,
   use: {
-    baseURL: 'http://127.0.0.1:8765',
+    baseURL: 'http://127.0.0.1:7117',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: `python3 -m web.board.app --repo-root ${repoRoot} --host 127.0.0.1 --port 8765`,
+    command: `python3 -m web.board.app --repo-root ${repoRoot} --host 127.0.0.1 --port 7117`,
     cwd: repoRoot,
-    url: 'http://127.0.0.1:8765/',
+    url: 'http://127.0.0.1:7117/',
     reuseExistingServer: !process.env.CI,
     stdout: 'pipe',
     stderr: 'pipe',

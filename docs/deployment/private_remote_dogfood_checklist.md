@@ -23,14 +23,14 @@ The product repo and private workspace must remain separate.
 ## Board Service
 
 - Bind host: `127.0.0.1`
-- Port: `8765`
+- Port: `7117`
 - Workspace root: `/home/owner/ai-project-os`
 - Product root: `/home/owner/lybra`
 - Service user: non-root owner-controlled user
 
 ## Access Verification
 
-- Remote host can reach `http://127.0.0.1:8765/api/health`.
+- Remote host can reach `http://127.0.0.1:7117/api/health`.
 - Owner machine can reach the same API through SSH tunnel or private network.
 - No public internet client can reach the Board endpoint.
 - Future endpoint convention is documented as `https://www.kiwiai.cloud/lybra` without implementing routing in AIPOS-85.

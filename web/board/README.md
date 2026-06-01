@@ -27,12 +27,12 @@ This directory provides the owner-facing Board UI for local development and owne
 From repository root:
 
 ```bash
-python3 web/board/app.py --host 127.0.0.1 --port 8765
+python3 web/board/app.py --host 127.0.0.1 --port 7117
 ```
 
 Open:
 
-- `http://127.0.0.1:8765/`
+- `http://127.0.0.1:7117/`
 
 ## Owner-Private Remote Dogfood
 
@@ -41,7 +41,7 @@ AIPOS-84 documents private remote dogfood without changing the default bind addr
 The remote Board process should still bind to `127.0.0.1` and be reached through an Owner-approved private channel such as SSH local port forwarding:
 
 ```bash
-ssh -N -L 8765:127.0.0.1:8765 owner@private-host
+ssh -N -L 7117:127.0.0.1:7117 owner@private-host
 ```
 
 Deployment templates live under `config/deployment/` and are examples only. AIPOS-84 does not install or enable services.

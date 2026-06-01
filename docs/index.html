@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lybra — The accountability harness for AI agents</title>
+<style>
+  :root{
+    --green:#0D5A3B; --green-d:#083D28; --green-b:#1A7A52;
+    --mint:#E8F2EA; --mint2:#D6E8DC; --border:#C8DCCE;
+    --ink:#141414; --muted:#5F7268; --muted-d:#A7C6B6; --white:#fff;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{font-family:-apple-system,"Segoe UI",Roboto,"Noto Sans CJK SC","PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:#fff;line-height:1.6;-webkit-font-smoothing:antialiased;}
+  a{color:inherit;text-decoration:none;}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 28px;}
+  /* top bar */
+  .topbar{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.96);border-bottom:1px solid var(--border);}
+  .topbar .row{display:block;padding:14px 0;}
+  .topbar .brand{display:inline-block;vertical-align:middle;font-weight:700;font-size:20px;letter-spacing:.5px;}
+  .topbar .brand img{height:22px;vertical-align:middle;margin-right:9px;}
+  .topbar .nav{float:right;font-size:0;}
+  .topbar .nav a{font-size:14px;color:var(--muted);margin-left:22px;vertical-align:middle;}
+  .topbar .nav a:hover{color:var(--green);}
+  .lang{display:inline-block;margin-left:26px;vertical-align:middle;font-size:13px;border:1px solid var(--border);border-radius:6px;overflow:hidden;}
+  .lang button{font-size:13px;border:0;background:#fff;color:var(--muted);padding:5px 11px;cursor:pointer;font-family:inherit;}
+  .lang button.active{background:var(--green);color:#fff;}
+  /* hero */
+  .hero{background:var(--green);color:#fff;padding:74px 0 80px;}
+  .hero img.mark{height:74px;margin-bottom:26px;}
+  .chip{display:inline-block;background:var(--green-b);color:#fff;font-size:12px;font-weight:700;letter-spacing:1.5px;padding:7px 14px;margin-bottom:22px;}
+  .hero h1{font-size:64px;line-height:1.02;margin:0 0 18px;letter-spacing:-1px;}
+  .hero .one{font-size:25px;font-weight:700;margin:0 0 10px;max-width:760px;}
+  .hero .sub{font-size:17px;color:var(--muted-d);margin:0 0 34px;max-width:680px;}
+  .btn{display:inline-block;font-size:15px;font-weight:600;padding:13px 24px;margin-right:14px;border-radius:7px;cursor:pointer;}
+  .btn-primary{background:#fff;color:var(--green);}
+  .btn-outline{border:1px solid var(--muted-d);color:#fff;}
+  /* sections */
+  section{padding:64px 0;}
+  .kicker{font-size:13px;font-weight:700;letter-spacing:2px;color:var(--green-b);margin-bottom:12px;}
+  .kicker::before{content:"";display:inline-block;width:11px;height:11px;background:var(--green);margin-right:9px;vertical-align:middle;}
+  h2{font-size:30px;line-height:1.2;margin:0 0 8px;letter-spacing:-.4px;}
+  .lead{font-size:16px;color:var(--muted);max-width:780px;margin:0 0 34px;}
+  /* pull quote */
+  .pull{background:var(--green-d);color:#fff;padding:40px 44px;font-size:28px;font-weight:700;border-left:11px solid var(--green-b);}
+  .pull span{color:var(--mint2);}
+  /* grid cards */
+  .grid{font-size:0;margin:0 -11px;}
+  .card{display:inline-block;vertical-align:top;width:50%;padding:0 11px;margin-bottom:22px;}
+  .card .inner{background:var(--mint);border:1px solid var(--border);border-left:5px solid var(--green);padding:24px 26px;height:100%;}
+  .card h3{font-size:20px;margin:0 0 7px;}
+  .card p{font-size:14.5px;color:var(--muted);margin:0;}
+  /* surfaces + pipeline */
+  .surfaces{font-size:0;margin-bottom:18px;}
+  .surf{display:inline-block;width:33.33%;padding-right:14px;vertical-align:top;}
+  .surf:last-child{padding-right:0;}
+  .surf .b{background:var(--mint);border:1.5px solid var(--green);padding:16px;text-align:center;}
+  .surf .b strong{font-size:17px;color:var(--green);display:block;}
+  .surf .b span{font-size:12.5px;color:var(--muted);}
+  .pipe{font-size:0;margin-top:18px;}
+  .pstep{display:inline-block;vertical-align:middle;background:var(--mint2);border:1px solid var(--border);padding:14px 8px;text-align:center;font-size:13.5px;font-weight:600;width:17%;}
+  .pstep.strong{background:var(--green);color:#fff;border-color:var(--green);}
+  .parrow{display:inline-block;vertical-align:middle;width:3.75%;text-align:center;color:var(--muted);font-size:16px;font-weight:700;}
+  .note{font-size:13.5px;color:var(--muted);font-style:italic;margin-top:16px;}
+  /* dark band */
+  .dark{background:var(--green);color:#fff;}
+  .dark .kicker{color:var(--mint2);}
+  .dark .kicker::before{background:var(--mint2);}
+  .dark h2{color:#fff;}
+  .pcard .inner{background:var(--green-d);border:0;border-left:5px solid var(--green-b);}
+  .pcard h3{color:#fff;}
+  .pcard p{color:var(--muted-d);}
+  /* etclovg */
+  .erow{margin-bottom:11px;}
+  .erow .name{display:inline-block;width:170px;vertical-align:middle;font-weight:700;font-size:15px;}
+  .etrack{display:inline-block;vertical-align:middle;width:calc(100% - 290px);height:30px;background:#F0F5F2;border:1px solid #E6EEE9;position:relative;}
+  .efill{display:block;height:100%;background:var(--green);}
+  .efill.med{background:var(--green-b);}
+  .efill.low{background:var(--muted);}
+  .erow .tag{display:inline-block;vertical-align:middle;width:110px;text-align:left;padding-left:12px;font-size:12.5px;font-weight:700;color:var(--green);}
+  .erow .tag.dim{color:var(--muted);font-weight:400;}
+  /* loop */
+  .loop{font-size:0;}
+  .lstep{display:inline-block;vertical-align:middle;width:21.6%;background:var(--mint);border:1px solid var(--border);padding:18px 14px;}
+  .lstep.strong{background:var(--green);color:#fff;border-color:var(--green);}
+  .lstep .n{font-size:13px;font-weight:700;color:var(--green-b);}
+  .lstep.strong .n{color:var(--mint2);}
+  .lstep h4{margin:4px 0 2px;font-size:18px;}
+  .lstep small{font-size:11.5px;letter-spacing:.5px;color:var(--muted);}
+  .lstep.strong small{color:var(--muted-d);}
+  .larrow{display:inline-block;vertical-align:middle;width:4.5%;text-align:center;color:var(--muted);font-weight:700;}
+  /* demo */
+  .demo-frame{border:1px solid var(--border);background:var(--mint);padding:10px;}
+  .demo-frame img{display:block;width:100%;}
+  .demo-ph{display:flex;align-items:center;justify-content:center;height:340px;background:repeating-linear-gradient(45deg,#eef5f0,#eef5f0 12px,#e7f0ea 12px,#e7f0ea 24px);color:var(--muted);font-size:15px;font-weight:600;border:1.5px dashed var(--border);}
+  /* why now */
+  .why .inner{background:var(--mint);border:1px solid var(--border);border-left:5px solid var(--green);padding:22px 26px;margin-bottom:16px;}
+  .why h3{margin:0 0 5px;font-size:19px;}
+  .why p{margin:0;font-size:14.5px;color:var(--muted);}
+  /* investor band */
+  .invest{background:var(--green-d);color:#fff;text-align:center;padding:60px 0;}
+  .invest h2{color:#fff;font-size:30px;margin-bottom:8px;}
+  .invest p{color:var(--muted-d);margin:0 0 26px;}
+  /* footer */
+  footer{background:#0a3322;color:var(--muted-d);text-align:center;padding:34px 0;font-size:13px;}
+  footer .ft{font-weight:700;color:#fff;font-size:15px;margin-bottom:6px;}
+</style>
+</head>
+<body>
+
+<div class="topbar"><div class="wrap"><div class="row">
+  <a class="brand" href="#top"><img src="assets/lybra-logo-black.png" alt="Lybra">Lybra</a>
+  <span class="nav">
+    <a href="index.html#what" data-i18n="nav_what">What</a>
+    <a href="index.html#how" data-i18n="nav_how">How</a>
+    <a href="index.html#why" data-i18n="nav_why">Why now</a>
+    <a href="start.html" data-i18n="nav_start">Get started</a>
+    <span class="lang">
+      <button data-lang="en">EN</button><button data-lang="zh">中文</button>
+    </span>
+  </span>
+</div></div></div>
+
+<a id="top"></a>
+<div class="hero"><div class="wrap">
+  <img class="mark" src="assets/lybra-logo-white.png" alt="Lybra">
+  <div class="chip" data-i18n="chip">AI AGENT HARNESS · 智能体治理框架</div>
+  <h1>Lybra</h1>
+  <p class="one" data-i18n="hero_one">The accountability harness for AI agents.</p>
+  <p class="sub" data-i18n="hero_sub">Files are the source of truth. The owner holds every decision gate. Every step is auditable and reproducible.</p>
+  <a class="btn btn-primary" href="https://github.com/kiwiai777/lybra" data-i18n="cta_gh">View on GitHub</a>
+  <a class="btn btn-outline" href="#invest" data-i18n="cta_inv">For investors</a>
+</div></div>
+
+<section><div class="wrap">
+  <div class="pull"><span data-i18n="pull_a">The model isn't the bottleneck.</span> <span data-i18n="pull_b" style="color:var(--mint2)">The harness is.</span></div>
+</div></section>
+
+<section id="prob"><div class="wrap">
+  <div class="kicker" data-i18n="prob_k">THE PROBLEM</div>
+  <h2 data-i18n="prob_t">Stronger models, still no enterprise-grade delivery</h2>
+  <p class="lead" data-i18n="prob_l">Why a better model still doesn't make an agent you can put into real business.</p>
+  <div class="grid">
+    <div class="card"><div class="inner"><h3 data-i18n="p1t">State loss</h3><p data-i18n="p1d">A hallucination gets written into memory as fact, and the task quietly drifts off course.</p></div></div>
+    <div class="card"><div class="inner"><h3 data-i18n="p2t">Error propagation</h3><p data-i18n="p2d">Bad state is carried forward instead of being caught and corrected.</p></div></div>
+    <div class="card"><div class="inner"><h3 data-i18n="p3t">Not auditable</h3><p data-i18n="p3d">The demo looks good, but when something breaks you can't assign responsibility or reproduce it.</p></div></div>
+    <div class="card"><div class="inner"><h3 data-i18n="p4t">Not reusable</h3><p data-i18n="p4d">Every run is one-off; no reusable process assets accumulate.</p></div></div>
+  </div>
+</div></section>
+
+<section id="what" style="background:#fafcfb;border-top:1px solid var(--border);border-bottom:1px solid var(--border);"><div class="wrap">
+  <div class="kicker" data-i18n="what_k">WHAT IT IS</div>
+  <h2 data-i18n="what_t">A file-authoritative control plane</h2>
+  <p class="lead" data-i18n="what_l">Three peer surfaces share one permission-and-audit backend — no shortcuts.</p>
+  <div class="surfaces">
+    <div class="surf"><div class="b"><strong>CLI</strong><span data-i18n="s_cli">command line</span></div></div>
+    <div class="surf"><div class="b"><strong>Board</strong><span data-i18n="s_board">local dashboard</span></div></div>
+    <div class="surf"><div class="b"><strong>MCP</strong><span data-i18n="s_mcp">agents connect in</span></div></div>
+  </div>
+  <div class="pipe" id="how">
+    <div class="pstep" data-i18n="pipe1">dry-run</div><div class="parrow">&rarr;</div>
+    <div class="pstep" data-i18n="pipe2">confirm</div><div class="parrow">&rarr;</div>
+    <div class="pstep strong" data-i18n="pipe3">Owner Gate</div><div class="parrow">&rarr;</div>
+    <div class="pstep strong" data-i18n="pipe4">audit</div><div class="parrow">&rarr;</div>
+    <div class="pstep" data-i18n="pipe5">files</div>
+  </div>
+  <p class="note" data-i18n="pipe_note">Every write to the workspace is forced through this path.</p>
+</div></section>
+
+<section class="dark"><div class="wrap">
+  <div class="kicker" data-i18n="prin_k">CORE PRINCIPLES</div>
+  <h2 data-i18n="prin_t">Four core principles</h2>
+  <div style="height:18px"></div>
+  <div class="grid">
+    <div class="card pcard"><div class="inner"><h3 data-i18n="c1t">Files as source of truth</h3><p data-i18n="c1d">State lives in durable files, not compressed conversation memory — state outlives the model.</p></div></div>
+    <div class="card pcard"><div class="inner"><h3 data-i18n="c2t">The owner holds every gate</h3><p data-i18n="c2d">Architecture, risk and scope decisions are non-delegable.</p></div></div>
+    <div class="card pcard"><div class="inner"><h3 data-i18n="c3t">Independent audit, enforced</h3><p data-i18n="c3d">An executor can never audit its own work.</p></div></div>
+    <div class="card pcard"><div class="inner"><h3 data-i18n="c4t">Agents come to Lybra</h3><p data-i18n="c4d">MCP-native; no autonomous runtime, no heartbeat polling.</p></div></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="kicker" data-i18n="etc_k">ETCLOVG · POSITIONING</div>
+  <h2 data-i18n="etc_t">Lybra's place in the harness is deliberate</h2>
+  <div style="height:26px"></div>
+  <div class="erow"><span class="name">Execution</span><span class="etrack"><span class="efill low" style="width:28%"></span></span><span class="tag dim" data-i18n="t_light">light</span></div>
+  <div class="erow"><span class="name">Tooling</span><span class="etrack"><span class="efill low" style="width:34%"></span></span><span class="tag dim" data-i18n="t_thin">thin · MCP</span></div>
+  <div class="erow"><span class="name">Context</span><span class="etrack"><span class="efill med" style="width:60%"></span></span><span class="tag" data-i18n="t_file">file-based</span></div>
+  <div class="erow"><span class="name">Lifecycle</span><span class="etrack"></span><span class="tag dim" data-i18n="t_blank">deliberately blank</span></div>
+  <div class="erow"><span class="name">Observability</span><span class="etrack"><span class="efill" style="width:100%"></span></span><span class="tag" data-i18n="t_heavy">heavy</span></div>
+  <div class="erow"><span class="name">Verification</span><span class="etrack"><span class="efill" style="width:100%"></span></span><span class="tag" data-i18n="t_heavy2">heavy</span></div>
+  <div class="erow"><span class="name">Governance</span><span class="etrack"><span class="efill" style="width:100%"></span></span><span class="tag" data-i18n="t_heavy3">heavy</span></div>
+  <p class="note" data-i18n="etc_note">We are deliberately heavy on governance, verification and observability — and deliberately do not do autonomous execution or orchestration. That's a stance, not a gap.</p>
+</div></section>
+
+<section style="background:#fafcfb;border-top:1px solid var(--border);border-bottom:1px solid var(--border);"><div class="wrap">
+  <div class="kicker" data-i18n="loop_k">THE CLOSED LOOP</div>
+  <h2 data-i18n="loop_t">How a task gets done reliably</h2>
+  <div style="height:26px"></div>
+  <div class="loop">
+    <div class="lstep"><div class="n">1</div><h4 data-i18n="l1">Plan</h4><small>PLAN</small></div><div class="larrow">&rarr;</div>
+    <div class="lstep"><div class="n">2</div><h4 data-i18n="l2">Execute</h4><small>EXECUTE</small></div><div class="larrow">&rarr;</div>
+    <div class="lstep strong"><div class="n">3</div><h4 data-i18n="l3">Independent Audit</h4><small>AUDIT</small></div><div class="larrow">&rarr;</div>
+    <div class="lstep"><div class="n">4</div><h4 data-i18n="l4">Fix / Finalize</h4><small>FINALIZE</small></div>
+  </div>
+  <p class="note" data-i18n="loop_note">Executor and auditor must be different parties; nothing is finalized without an audit pass.</p>
+</div></section>
+
+<section><div class="wrap">
+  <div class="kicker" data-i18n="demo_k">SEE IT</div>
+  <h2 data-i18n="demo_t">Lybra in action</h2>
+  <div style="height:22px"></div>
+  <div class="demo-frame">
+    <img src="assets/demo.gif" alt="Lybra Board demo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+    <div class="demo-ph" style="display:none;" data-i18n="demo_ph">Product demo — add docs/assets/demo.gif</div>
+  </div>
+</div></section>
+
+<section id="why" class="dark"><div class="wrap">
+  <div class="kicker" data-i18n="why_k">WHY NOW</div>
+  <h2 data-i18n="why_t">Why now</h2>
+  <div style="height:24px"></div>
+  <div class="why">
+    <div class="inner" style="background:var(--green-d);border-color:var(--green-b);border-left-color:var(--mint2);"><h3 style="color:#fff" data-i18n="w1t">The harness era is just beginning</h3><p style="color:var(--muted-d)" data-i18n="w1d">In 2026 the field is shifting from racing on models to engineering the system around them. Governance, verification and observability are where the open ecosystem is thinnest.</p></div>
+    <div class="inner" style="background:var(--green-d);border-color:var(--green-b);border-left-color:var(--mint2);"><h3 style="color:#fff" data-i18n="w2t">Enterprises want accountable AI</h3><p style="color:var(--muted-d)" data-i18n="w2d">Not a polished demo. Only when you can assign responsibility, reproduce and audit can an agent go into real business.</p></div>
+    <div class="inner" style="background:var(--green-d);border-color:var(--green-b);border-left-color:var(--mint2);"><h3 style="color:#fff" data-i18n="w3t">SMBs need it most</h3><p style="color:var(--muted-d)" data-i18n="w3d">Turning AI from a personal trial tool into a manageable, reusable, traceable, continuously improvable enterprise system.</p></div>
+  </div>
+</div></section>
+
+<div id="invest" class="invest"><div class="wrap">
+  <h2 data-i18n="inv_t">Building accountable AI agents — let's talk.</h2>
+  <p data-i18n="inv_s">For investor and partnership inquiries.</p>
+  
+  <a class="btn btn-primary" href="mailto:kiwi.w.ai@gmail.com" data-i18n="inv_b">Get in touch</a>
+</div></div>
+
+<footer><div class="wrap">
+  <div class="ft">KIWIAI</div>
+  <div data-i18n="foot">The accountability harness for AI agents.</div>
+</div></footer>
+
+<script>
+const I18N={
+ en:{
+  nav_what:"What",nav_how:"How",nav_why:"Why now",nav_start:"Get started",
+  chip:"AI AGENT HARNESS",
+  hero_one:"The accountability harness for AI agents.",
+  hero_sub:"Files are the source of truth. The owner holds every decision gate. Every step is auditable and reproducible.",
+  cta_gh:"View on GitHub",cta_inv:"For investors",
+  pull_a:"The model isn't the bottleneck.",pull_b:"The harness is.",
+  prob_k:"THE PROBLEM",prob_t:"Stronger models, still no enterprise-grade delivery",
+  prob_l:"Why a better model still doesn't make an agent you can put into real business.",
+  p1t:"State loss",p1d:"A hallucination gets written into memory as fact, and the task quietly drifts off course.",
+  p2t:"Error propagation",p2d:"Bad state is carried forward instead of being caught and corrected.",
+  p3t:"Not auditable",p3d:"The demo looks good, but when something breaks you can't assign responsibility or reproduce it.",
+  p4t:"Not reusable",p4d:"Every run is one-off; no reusable process assets accumulate.",
+  what_k:"WHAT IT IS",what_t:"A file-authoritative control plane",
+  what_l:"Three peer surfaces share one permission-and-audit backend — no shortcuts.",
+  s_cli:"command line",s_board:"local dashboard",s_mcp:"agents connect in",
+  pipe1:"dry-run",pipe2:"confirm",pipe3:"Owner Gate",pipe4:"audit",pipe5:"files",
+  pipe_note:"Every write to the workspace is forced through this path.",
+  prin_k:"CORE PRINCIPLES",prin_t:"Four core principles",
+  c1t:"Files as source of truth",c1d:"State lives in durable files, not compressed conversation memory — state outlives the model.",
+  c2t:"The owner holds every gate",c2d:"Architecture, risk and scope decisions are non-delegable.",
+  c3t:"Independent audit, enforced",c3d:"An executor can never audit its own work.",
+  c4t:"Agents come to Lybra",c4d:"MCP-native; no autonomous runtime, no heartbeat polling.",
+  etc_k:"ETCLOVG · POSITIONING",etc_t:"Lybra's place in the harness is deliberate",
+  t_light:"light",t_thin:"thin · MCP",t_file:"file-based",t_blank:"deliberately blank",t_heavy:"heavy",t_heavy2:"heavy",t_heavy3:"heavy",
+  etc_note:"We are deliberately heavy on governance, verification and observability — and deliberately do not do autonomous execution or orchestration. That's a stance, not a gap.",
+  loop_k:"THE CLOSED LOOP",loop_t:"How a task gets done reliably",
+  l1:"Plan",l2:"Execute",l3:"Independent Audit",l4:"Fix / Finalize",
+  loop_note:"Executor and auditor must be different parties; nothing is finalized without an audit pass.",
+  demo_k:"SEE IT",demo_t:"Lybra in action",demo_ph:"Product demo — add docs/assets/demo.gif",
+  why_k:"WHY NOW",why_t:"Why now",
+  w1t:"The harness era is just beginning",w1d:"In 2026 the field is shifting from racing on models to engineering the system around them. Governance, verification and observability are where the open ecosystem is thinnest.",
+  w2t:"Enterprises want accountable AI",w2d:"Not a polished demo. Only when you can assign responsibility, reproduce and audit can an agent go into real business.",
+  w3t:"SMBs need it most",w3d:"Turning AI from a personal trial tool into a manageable, reusable, traceable, continuously improvable enterprise system.",
+  inv_t:"Building accountable AI agents — let's talk.",inv_s:"For investor and partnership inquiries.",inv_b:"Get in touch",
+  foot:"The accountability harness for AI agents."
+ },
+ zh:{
+  nav_what:"是什么",nav_how:"工作方式",nav_why:"为什么是现在",nav_start:"开始使用",
+  chip:"AI Agent 治理框架",
+  hero_one:"面向 AI Agent 的治理型 harness。",
+  hero_sub:"文件为真相源,Owner 掌握每一道决策闸门,每一步都可审计、可复现。",
+  cta_gh:"在 GitHub 查看",cta_inv:"投资人入口",
+  pull_a:"模型不是瓶颈,",pull_b:"harness 才是。",
+  prob_k:"问题",prob_t:"模型更强了,Agent 还是交付不了企业级工作",
+  prob_l:"为什么模型更强,还是做不出能放进真实业务的 Agent。",
+  p1t:"状态丢失",p1d:"把一次幻觉当成事实写进记忆,任务主线悄悄跑偏。",
+  p2t:"错误传播",p2d:"错误状态被继续使用,而不是被发现和纠正。",
+  p3t:"不可审计",p3d:"Demo 好看,出了问题无法定责、无法复现。",
+  p4t:"不可复用",p4d:"每次都是一次性工作,沉淀不下可复用的流程资产。",
+  what_k:"是什么",what_t:"一个文件为真相源的控制平面",
+  what_l:"三个并列界面共享同一套权限与审计后端;没有任何捷径能绕过这条链路。",
+  s_cli:"命令行",s_board:"本地看板",s_mcp:"Agent 主动接入",
+  pipe1:"试运行",pipe2:"确认",pipe3:"Owner 决策闸门",pipe4:"独立审计",pipe5:"落盘为文件",
+  pipe_note:"每一个对工作区的写操作,都强制走完这条链路。",
+  prin_k:"核心信条",prin_t:"四个核心信条",
+  c1t:"文件即真相源",c1d:"状态活在持久文件里,而非被压缩的对话记忆里 —— 状态比模型更长寿。",
+  c2t:"Owner 掌握每一道闸门",c2d:"架构、风险、范围等关键决策不可委托给 AI。",
+  c3t:"独立审计,强制执行",c3d:"执行者不能审计自己的工作。",
+  c4t:"Agent 主动接入",c4d:"MCP 原生;不做自主 runtime、不做心跳轮询。",
+  etc_k:"ETCLOVG · 定位",etc_t:"在 Harness 的七层里,Lybra 的位置是刻意的",
+  t_light:"轻",t_thin:"薄 · MCP",t_file:"文件态",t_blank:"刻意留白",t_heavy:"重",t_heavy2:"重",t_heavy3:"重",
+  etc_note:"我们刻意重治理、验证、可观测;刻意不做自主执行与编排。这是立场,不是缺口。",
+  loop_k:"闭环",loop_t:"一个任务,如何被可靠地完成",
+  l1:"规划",l2:"执行",l3:"独立审计",l4:"修复 / 定稿",
+  loop_note:"执行者与审计者必须是不同主体;审计不通过不得定稿。",
+  demo_k:"演示",demo_t:"Lybra 实际运行",demo_ph:"产品演示 — 放入 docs/assets/demo.gif",
+  why_k:"为什么是现在",why_t:"为什么是现在",
+  w1t:"Harness 时代刚刚开始",w1d:"2026 年,行业刚从“拼模型”转向“拼系统”。治理、验证、可观测,正是开源生态最薄弱、最有空间的地方。",
+  w2t:"企业要的是可问责的 AI",w2d:"不是好看的 Demo。能定责、能复现、能审计,才谈得上把 Agent 放进真实业务。",
+  w3t:"中小企业尤其需要",w3d:"把 AI 从“个人试用工具”升级为可管理、可复用、可追踪、可持续优化的企业级生产力系统。",
+  inv_t:"一起把 AI Agent 做成可问责的系统。",inv_s:"投资人与合作洽询。",inv_b:"联系我们",
+  foot:"面向 AI Agent 的治理型 harness。"
+ }
+};
+function each(list,fn){for(var i=0;i<list.length;i++){fn(list[i]);}}
+function setLang(lang){
+  if(!I18N[lang]) lang="en";
+  document.documentElement.lang = lang==="zh" ? "zh-CN" : "en";
+  each(document.querySelectorAll("[data-i18n]"),function(el){
+    var k=el.getAttribute("data-i18n");
+    if(I18N[lang][k]!==undefined) el.textContent=I18N[lang][k];
+  });
+  each(document.querySelectorAll("[data-lang]"),function(b){
+    if(b.getAttribute("data-lang")===lang){b.className="active";}else{b.className="";}
+  });
+  try{
+    var sp=location.search.replace(/([?&])lang=[^&]*/,"$1lang="+lang);
+    if(sp.indexOf("lang=")<0){sp=(sp?sp+"&":"?")+"lang="+lang;}
+    history.replaceState({},"",location.pathname+sp+location.hash);
+  }catch(e){}
+}
+each(document.querySelectorAll("[data-lang]"),function(b){
+  b.onclick=function(){setLang(b.getAttribute("data-lang"));};
+});
+function qp(n){var m=location.search.match(new RegExp("[?&]"+n+"=([^&]+)"));return m?decodeURIComponent(m[1]):null;}
+setLang(qp("lang")==="zh"?"zh":"en");
+</script>
+</body>
+</html>
