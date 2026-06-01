@@ -6,6 +6,14 @@
   "bin": {
     "lybra": "bin/lybra"
   },
+  "scripts": {
+    "test:visual": "playwright test --config tests/playwright/playwright.config.cjs",
+    "test:visual:headed": "playwright test --config tests/playwright/playwright.config.cjs --headed",
+    "test:visual:install": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": ">=1.40.0 <2.0.0"
+  },
   "files": [
     "0_control_plane/",
     "3_context_bundles/",

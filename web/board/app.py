@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.aipos_cli.adapter_response import blocked_response
+from tools.aipos_cli.ai_assisted_authoring import build_authoring_draft, confirm_authoring_draft
 from tools.aipos_cli.board_adapter import (
     append_orchestration_event,
     append_planner_iteration,
@@ -101,6 +102,8 @@ def _api_post_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, An
         "/api/forum-event/review": partial(_forum_event_review_route, repo_root=repo_root),
         "/api/owner-decision/resolve/review": partial(_owner_decision_resolution_review_route, repo_root=repo_root),
         "/api/planner-draft/publish/dry-run": partial(_planner_draft_publish_dry_run_route, repo_root=repo_root),
+        "/api/ai-author/preview": partial(_ai_author_preview_route, repo_root=repo_root),
+        "/api/ai-author/confirm": partial(_ai_author_confirm_route, repo_root=repo_root),
         "/api/execute/dry-run": partial(_execute_dry_run_route, repo_root=repo_root),
         "/api/execute/confirm": partial(_execute_confirm_route, repo_root=repo_root),
     }
@@ -336,7 +339,10 @@ def _get_owner_decisions_review_route(_params: dict[str, list[str]], *, repo_roo
     except Exception as exc:
         needs_owner = {"data": {"tasks": []}}
         warnings.append(f"Unable to read needs-owner tasks: {str(exc) or exc.__class__.__name__}")
-    for task in needs_owner.get("data", {}).get("tasks", []) or []:
+    needs_owner_data = needs_owner.get("data") if isinstance(needs_owner, dict) else {}
+    if not isinstance(needs_owner_data, dict):
+        needs_owner_data = {}
+    for task in needs_owner_data.get("tasks", []) or []:
         metadata = dict(task.get("metadata") or {})
         reasons = _dedupe_strings(list(task.get("needs_owner_reasons", [])) + list(metadata.get("needs_owner_reasons") or []))
         title = metadata.get("title") or task.get("title") or task.get("task_id") or task.get("path")
@@ -1569,6 +1575,41 @@ def _get_preview_route(params: dict[str, list[str]], *, repo_root: Path | None) 
     if bool(task_id) == bool(path):
         return _selector_error("get_preview", "Exactly one of task_id or path is required")
     return get_preview(task_id=task_id, path=path, actor=actor, repo_root=repo_root)
+
+
+def _ai_author_preview_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    actor = str(payload.get("actor") or "").strip()
+    fixture_id = str(payload.get("fixture_id") or "").strip()
+    intent = payload.get("intent")
+    if not actor:
+        return _execute_error("ai_assisted_fixture_authoring", "actor is required")
+    if not fixture_id:
+        return _execute_error("ai_assisted_fixture_authoring", "fixture_id is required")
+    if not isinstance(intent, dict):
+        return _execute_error("ai_assisted_fixture_authoring", "intent object is required")
+    try:
+        return build_authoring_draft(Path(repo_root or REPO_ROOT), intent, fixture_id=fixture_id, actor=actor)
+    except Exception as exc:
+        return _execute_error("ai_assisted_fixture_authoring", str(exc))
+
+
+def _ai_author_confirm_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    actor = str(payload.get("actor") or "").strip()
+    preview = payload.get("preview")
+    if not actor:
+        return _execute_error("ai_assisted_fixture_authoring", "actor is required")
+    if not isinstance(preview, dict):
+        return _execute_error("ai_assisted_fixture_authoring", "preview object is required")
+    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", False)) else None
+    try:
+        return confirm_authoring_draft(
+            Path(repo_root or REPO_ROOT),
+            preview,
+            actor=actor,
+            owner_confirmation_token=owner_token,
+        )
+    except Exception as exc:
+        return _execute_error("ai_assisted_fixture_authoring", str(exc))
 
 
 def _execute_dry_run_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:

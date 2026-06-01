@@ -10,3 +10,6 @@ task_cards/
 .codex
 
 ._*
+node_modules/
+playwright-report/
+test-results/

@@ -288,6 +288,29 @@ npm install --global --prefix /tmp/lybra-install /tmp/lybra-pack/lybra-0.1.0.tgz
 /tmp/lybra-install/bin/lybra --help
 ```
 
+## Playwright Visual Smoke
+
+Lybra supports headless visual checks from WSL or any other CLI-only environment.
+
+Install the test runner and the Chromium browser once:
+
+```bash
+npm install
+npm run test:visual:install
+```
+
+Run the desktop and mobile smoke tests:
+
+```bash
+npm run test:visual
+```
+
+Run a visible browser session when a desktop environment is available:
+
+```bash
+npm run test:visual:headed
+```
+
 ## Public Repo Boundary
 
 Do not commit private workspace data, secrets, local task cards, generated caches, or operating-system metadata. Local task-card mirrors may exist under ignored `task_cards/`.

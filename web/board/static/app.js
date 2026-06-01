@@ -39,6 +39,7 @@ let selectedExternalIntake = null;
 let selectedOwnerDecisionRecord = null;
 let latestOwnerDecisionResolutionReview = null;
 let latestOwnerDecisionRecordDryRun = null;
+let latestAiAuthorPreview = null;
 
 function writePanel(id, payload) {
   document.getElementById(id).textContent = JSON.stringify(payload, null, 2);
@@ -161,6 +162,197 @@ function externalIntakeRows(data) {
 
 function ownerDecisionRecordRows(data) {
   return Array.isArray(data?.data?.records) ? data.data.records : [];
+}
+
+function aiAuthorValue(id) {
+  return document.getElementById(id).value.trim();
+}
+
+function aiAuthorIntent() {
+  const intentId = aiAuthorValue("ai-author-intent-id") || `board-intent-${Date.now()}`;
+  return {
+    intent_id: intentId,
+    submitted_at: new Date().toISOString(),
+    submitted_by: aiAuthorValue("ai-author-actor"),
+    requirement: aiAuthorValue("ai-author-requirement"),
+    project_hint: aiAuthorValue("ai-author-project-hint"),
+    task_mode_hint: aiAuthorValue("ai-author-task-mode-hint"),
+    task_class_hint: aiAuthorValue("ai-author-task-class-hint"),
+    priority_hint: aiAuthorValue("ai-author-priority-hint"),
+    output_target_hint: aiAuthorValue("ai-author-output-target-hint"),
+    context_bundle_hint: aiAuthorValue("ai-author-context-bundle-hint"),
+    retry_of: aiAuthorValue("ai-author-retry-of"),
+  };
+}
+
+function summarizeAiAuthor(data) {
+  const attempt = data?.data?.attempt || {};
+  const intent = data?.data?.original_payload?.intent || {};
+  const proposal = data?.data?.proposal || {};
+  const frontmatter = proposal.frontmatter || {};
+  const triage = proposal.triage || {};
+  const assignment = proposal.assignment_recommendations || {};
+  return {
+    ok: data?.ok,
+    verdict: data?.verdict,
+    attempt_id: attempt.attempt_id,
+    attempt_status: attempt.attempt_status,
+    intent_id: attempt.intent_id,
+    adapter_id: attempt.adapter_id,
+    endpoint_ref: attempt.endpoint_ref,
+    model_ref: attempt.model_ref,
+    prompt_template_ref: data?.data?.attempt?.prompt_template_ref,
+    retry_of: attempt.retry_of,
+    requirement: intent.requirement,
+    title: frontmatter.title,
+    body: proposal.body,
+    task_id: frontmatter.task_id,
+    task_mode: frontmatter.task_mode,
+    recommended_task_class: triage.recommended_task_class || frontmatter.task_class,
+    complexity_note: frontmatter.complexity_note,
+    complexity_rationale: triage.rationale,
+    assigned_to: assignment.assigned_to || frontmatter.assigned_to,
+    agent_instance: assignment.agent_instance || frontmatter.agent_instance,
+    reviewer: assignment.reviewer,
+    audit_by: assignment.audit_by,
+    assumptions: triage.assumptions || [],
+    missing_information: triage.missing_information || [],
+    possible_owner_gates: triage.possible_owner_gates || [],
+    planned_writes: data?.planned_writes || [],
+    performed_writes: data?.performed_writes || [],
+    blocking_reasons: data?.blocking_reasons || [],
+    needs_owner_reasons: data?.needs_owner_reasons || [],
+    warnings: data?.warnings || [],
+  };
+}
+
+function renderAiAuthorCard(data) {
+  const card = document.getElementById("ai-author-card");
+  card.replaceChildren();
+  if (!data) {
+    card.textContent = "Enter a natural-language requirement and preview the fixture-only draft.";
+    return;
+  }
+  const summary = summarizeAiAuthor(data);
+  const grid = document.createElement("div");
+  grid.className = "ai-author-grid";
+  grid.append(
+    createTextBlock("ai-author-chip", "Verdict", summary.verdict),
+    createTextBlock("ai-author-chip", "Attempt", summary.attempt_id),
+    createTextBlock("ai-author-chip", "Task", summary.task_id),
+    createTextBlock("ai-author-chip", "Class", summary.recommended_task_class),
+    createTextBlock("ai-author-chip", "Assigned", summary.assigned_to),
+    createTextBlock("ai-author-chip", "Instance", summary.agent_instance),
+    createTextBlock("ai-author-chip", "Reviewer", summary.reviewer),
+    createTextBlock("ai-author-chip", "Auditor", summary.audit_by),
+    createTextBlock("ai-author-chip", "Adapter", summary.adapter_id),
+    createTextBlock("ai-author-chip", "Model", summary.model_ref),
+    createTextBlock("ai-author-chip", "Endpoint", summary.endpoint_ref),
+    createTextBlock("ai-author-chip", "Retry Of", summary.retry_of),
+    createTextBlock("ai-author-chip wide", "Original Requirement", summary.requirement),
+    createTextBlock("ai-author-chip wide", "Title", summary.title),
+    createTextBlock("ai-author-chip wide", "Complexity", summary.complexity_note),
+    createTextBlock("ai-author-chip wide", "Rationale", summary.complexity_rationale)
+  );
+  const body = document.createElement("pre");
+  body.className = "ai-author-body";
+  body.textContent = summary.body || "(no draft body)";
+  card.append(
+    grid,
+    body,
+    createListBlock("Assumptions", summary.assumptions),
+    createListBlock("Missing Information", summary.missing_information),
+    createListBlock("Possible Owner Gates", summary.possible_owner_gates),
+    createListBlock("Planned Writes", summary.planned_writes.map((row) => row.path || String(row))),
+    createListBlock("Performed Writes", summary.performed_writes.map((row) => row.path || String(row))),
+    createListBlock("Owner Attention", summary.needs_owner_reasons),
+    createListBlock("Safety Blocks", summary.blocking_reasons)
+  );
+}
+
+function updateAiAuthorConfirmState() {
+  document.getElementById("ai-author-confirm").disabled = !(
+    latestAiAuthorPreview?.dry_run_id
+    && latestAiAuthorPreview?.verdict !== "BLOCK"
+    && document.getElementById("ai-author-owner-confirmed").checked
+  );
+}
+
+function invalidateAiAuthorPreview() {
+  latestAiAuthorPreview = null;
+  document.getElementById("ai-author-owner-confirmed").checked = false;
+  document.getElementById("ai-author-confirm").disabled = true;
+  document.getElementById("ai-author-discard").disabled = true;
+  renderAiAuthorCard(null);
+  document.getElementById("ai-author-result").textContent = "Inputs changed. Run a fresh AI authoring preview.";
+}
+
+async function previewAiAuthorDraft() {
+  const requirement = aiAuthorValue("ai-author-requirement");
+  const actor = aiAuthorValue("ai-author-actor");
+  if (!requirement || !actor) {
+    document.getElementById("ai-author-result").textContent = JSON.stringify({ ok: false, message: "requirement and actor are required." }, null, 2);
+    return null;
+  }
+  latestAiAuthorPreview = null;
+  document.getElementById("ai-author-owner-confirmed").checked = false;
+  updateAiAuthorConfirmState();
+  try {
+    const response = await fetch("/api/ai-author/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actor,
+        fixture_id: aiAuthorValue("ai-author-fixture"),
+        intent: aiAuthorIntent(),
+      }),
+    });
+    const data = await response.json();
+    latestAiAuthorPreview = data?.dry_run_id ? data : null;
+    latestDebug["/api/ai-author/preview"] = data;
+    document.getElementById("ai-author-discard").disabled = !latestAiAuthorPreview;
+    document.getElementById("ai-author-result").textContent = JSON.stringify(data, null, 2);
+    renderAiAuthorCard(data);
+    updateAiAuthorConfirmState();
+    updateDebugPanel();
+    return data;
+  } catch (err) {
+    document.getElementById("ai-author-result").textContent = JSON.stringify({ ok: false, message: String(err) }, null, 2);
+    renderAiAuthorCard(null);
+    return { ok: false, error: String(err) };
+  }
+}
+
+async function confirmAiAuthorDraft() {
+  if (!latestAiAuthorPreview) {
+    return null;
+  }
+  document.getElementById("ai-author-confirm").disabled = true;
+  try {
+    const response = await fetch("/api/ai-author/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actor: aiAuthorValue("ai-author-actor"),
+        owner_confirmed: document.getElementById("ai-author-owner-confirmed").checked,
+        preview: latestAiAuthorPreview,
+      }),
+    });
+    const data = await response.json();
+    latestDebug["/api/ai-author/confirm"] = data;
+    document.getElementById("ai-author-result").textContent = JSON.stringify(data, null, 2);
+    renderAiAuthorCard(data);
+    latestAiAuthorPreview = null;
+    document.getElementById("ai-author-owner-confirmed").checked = false;
+    document.getElementById("ai-author-discard").disabled = true;
+    updateAiAuthorConfirmState();
+    updateDebugPanel();
+    await refreshPanel("drafts");
+    return data;
+  } catch (err) {
+    document.getElementById("ai-author-result").textContent = JSON.stringify({ ok: false, message: String(err) }, null, 2);
+    return { ok: false, error: String(err) };
+  }
 }
 
 function agentRows(data) {
@@ -3188,6 +3380,16 @@ document.getElementById("owner-record-load-resolution").addEventListener("click"
 document.getElementById("owner-record-dry-run").addEventListener("click", runOwnerDecisionRecordDryRun);
 document.getElementById("owner-record-confirm").addEventListener("click", confirmOwnerDecisionRecord);
 document.getElementById("forum-event-review").addEventListener("click", reviewForumEvent);
+document.getElementById("ai-author-preview").addEventListener("click", previewAiAuthorDraft);
+document.getElementById("ai-author-discard").addEventListener("click", invalidateAiAuthorPreview);
+document.getElementById("ai-author-owner-confirmed").addEventListener("change", updateAiAuthorConfirmState);
+document.getElementById("ai-author-confirm").addEventListener("click", confirmAiAuthorDraft);
+for (const input of document.querySelectorAll("#ai-task-authoring input, #ai-task-authoring select, #ai-task-authoring textarea")) {
+  if (input.id !== "ai-author-owner-confirmed") {
+    input.addEventListener("input", invalidateAiAuthorPreview);
+    input.addEventListener("change", invalidateAiAuthorPreview);
+  }
+}
 document.getElementById("needs-owner-load-task").addEventListener("click", loadTaskFromNeedsOwner);
 document.getElementById("validation-load-task").addEventListener("click", loadTaskFromValidation);
 document.getElementById("debug-toggle").addEventListener("click", toggleDebug);

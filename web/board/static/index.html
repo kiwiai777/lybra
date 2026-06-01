@@ -69,6 +69,45 @@
 
       <div class="workflow-grid">
 
+      <section id="ai-task-authoring" class="operator-primary-action">
+      <h2>AI Task Authoring</h2>
+      <textarea id="ai-author-requirement" rows="5" placeholder="Describe the task in plain language"></textarea>
+      <div class="draft-grid">
+        <input id="ai-author-actor" type="text" value="owner" placeholder="actor">
+        <select id="ai-author-fixture">
+          <option value="standard-simple">standard-simple</option>
+          <option value="injection-escalation">injection-escalation</option>
+          <option value="adapter-failure">adapter-failure</option>
+        </select>
+        <input id="ai-author-intent-id" type="text" placeholder="intent_id (optional)">
+        <input id="ai-author-project-hint" type="text" placeholder="project hint (optional)">
+        <input id="ai-author-task-mode-hint" type="text" placeholder="task mode hint (optional)">
+        <select id="ai-author-task-class-hint">
+          <option value="">task class hint (optional)</option>
+          <option value="simple">simple</option>
+          <option value="complex">complex</option>
+        </select>
+        <input id="ai-author-priority-hint" type="text" placeholder="priority hint (optional)">
+        <input id="ai-author-output-target-hint" type="text" placeholder="output target hint (optional)">
+        <input id="ai-author-context-bundle-hint" type="text" placeholder="context bundle hint (optional)">
+        <input id="ai-author-retry-of" type="text" placeholder="retry_of (optional)">
+      </div>
+      <div class="toolbar">
+        <button id="ai-author-preview">Preview Draft</button>
+        <button id="ai-author-discard" class="secondary-action" disabled>Discard Preview</button>
+      </div>
+      <label class="confirm-row">
+        <input id="ai-author-owner-confirmed" type="checkbox">
+        I reviewed the generated draft and approve this exact write
+      </label>
+      <button id="ai-author-confirm" disabled>Confirm Draft Write</button>
+      <div id="ai-author-card" class="ai-author-card">Enter a natural-language requirement and preview the fixture-only draft.</div>
+      <details class="raw-json-drawer">
+        <summary>Raw AI authoring JSON</summary>
+        <pre id="ai-author-result">No AI authoring preview yet.</pre>
+      </details>
+    </section>
+
       <section id="owner-review-external-intake" class="owner-review-section">
       <h2>External Intake Drafts</h2>
       <button class="panel-refresh" data-route-id="external-intake-review">Refresh Intake</button>
