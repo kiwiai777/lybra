@@ -449,6 +449,26 @@ Runtime configs are read-only and never executed by the CLI. `runtime_command`, 
 
 `enabled` is a configuration switch. `availability_status` is an operational visibility field. In AIPOS-22, availability does not hide tasks, does not block alias matching, and does not execute or stop runtimes. It is warning/visibility only in `agents`, `my-tasks`, and `preview`.
 
+### Workspace-Local Custom Profiles
+
+AIPOS-149 adds CLI-only authoring for workspace-local custom profiles:
+
+```text
+<workspace_root>/0_control_plane/agents/custom_agent_profiles.yaml
+```
+
+Prepare an `upsert`, `deactivate`, or `supersede` JSON payload, then use the explicit draft and confirm flow:
+
+```bash
+python tools/aipos_cli/aipos_cli.py agent-profile draft --from-json profile-change.json --actor owner --json
+python tools/aipos_cli/aipos_cli.py agent-profile confirm --from-json profile-draft.json --actor owner --owner-confirmation-token OWNER_CONFIRMED --json
+python tools/aipos_cli/aipos_cli.py agent-profile validate --json
+python tools/aipos_cli/aipos_cli.py agent-profile list --json
+python tools/aipos_cli/aipos_cli.py agent-profile inspect --agent-instance agent-04 --json
+```
+
+`display_name` is editable presentation metadata. `agent_instance` remains the stable opaque audit key. Capabilities and open-vocabulary provenance are explicit declarations. Supersession is additive. The writer does not update historical records, widen controlled execute allowlists, mutate queues, launch runtimes, or expose Board or MCP authoring behavior.
+
 ## Orchestration Protocol Status
 
 Planner-orchestrator protocol docs live under `0_control_plane/orchestration/`.

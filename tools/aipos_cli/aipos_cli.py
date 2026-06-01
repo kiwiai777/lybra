@@ -27,6 +27,12 @@ from tools.aipos_cli.renderer import (
 )
 from tools.aipos_cli.agent_profiles import actor_matches_task, availability_for_actor, load_agent_profiles
 from tools.aipos_cli.context_pack_builder import build_context_pack_preview
+from tools.aipos_cli.custom_agent_profiles import (
+    build_profile_draft,
+    confirm_profile_draft,
+    load_custom_registry,
+    validate_custom_registry,
+)
 from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, make_response
 from tools.aipos_cli.board_adapter import execute_dry_run as execute_controlled_dry_run
 from tools.aipos_cli.board_adapter import record_owner_decision
@@ -461,6 +467,25 @@ def build_parser() -> argparse.ArgumentParser:
     agents_parser = subparsers.add_parser("agents", help="Render agent profiles")
     agents_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
+    profile_subparsers = profile_parser.add_subparsers(dest="profile_command")
+    profile_draft_parser = profile_subparsers.add_parser("draft", help="Validate and preview a custom profile registry write")
+    profile_draft_parser.add_argument("--from-json", required=True, help="Read profile authoring payload from JSON")
+    profile_draft_parser.add_argument("--actor", required=True, help="Actor requesting the profile mutation preview")
+    profile_draft_parser.add_argument("--json", action="store_true", help="Output JSON")
+    profile_confirm_parser = profile_subparsers.add_parser("confirm", help="Confirm a prior custom profile draft")
+    profile_confirm_parser.add_argument("--from-json", required=True, help="Read prior custom profile draft envelope")
+    profile_confirm_parser.add_argument("--actor", required=True, help="Actor confirming the profile mutation")
+    profile_confirm_parser.add_argument("--owner-confirmation-token", required=True, help="Explicit Owner confirmation token")
+    profile_confirm_parser.add_argument("--json", action="store_true", help="Output JSON")
+    profile_validate_parser = profile_subparsers.add_parser("validate", help="Validate workspace-local custom profiles")
+    profile_validate_parser.add_argument("--json", action="store_true", help="Output JSON")
+    profile_list_parser = profile_subparsers.add_parser("list", help="List workspace-local custom profiles")
+    profile_list_parser.add_argument("--json", action="store_true", help="Output JSON")
+    profile_inspect_parser = profile_subparsers.add_parser("inspect", help="Inspect one workspace-local custom instance")
+    profile_inspect_parser.add_argument("--agent-instance", required=True, help="Canonical custom agent_instance")
+    profile_inspect_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     context_pack_parser = subparsers.add_parser("context-pack", help="Read-only context pack preview")
     context_pack_subparsers = context_pack_parser.add_subparsers(dest="context_pack_command")
     context_pack_preview_parser = context_pack_subparsers.add_parser("preview", help="Build a read-only context pack preview")
@@ -688,6 +713,44 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(render_json(result))
         return 0
+
+    if args.command == "agent-profile":
+        if not getattr(args, "profile_command", None):
+            parser.print_help()
+            return 2
+        try:
+            if args.profile_command == "draft":
+                result = build_profile_draft(repo_root, _load_json_object(args.from_json), actor=args.actor)
+            elif args.profile_command == "confirm":
+                result = confirm_profile_draft(
+                    repo_root,
+                    _load_json_object(args.from_json),
+                    actor=args.actor,
+                    owner_confirmation_token=args.owner_confirmation_token,
+                )
+            elif args.profile_command == "validate":
+                result = validate_custom_registry(repo_root)
+            elif args.profile_command == "list":
+                registry, blocking = load_custom_registry(repo_root)
+                result = {"scope": "custom_agent_profiles", "path": "0_control_plane/agents/custom_agent_profiles.yaml", "profiles": registry["profiles"], "blocking_reasons": blocking}
+            elif args.profile_command == "inspect":
+                registry, blocking = load_custom_registry(repo_root)
+                matches = [
+                    instance
+                    for profile in registry["profiles"]
+                    if isinstance(profile, dict)
+                    for instance in profile.get("instances", []) or []
+                    if isinstance(instance, dict) and instance.get("agent_instance") == args.agent_instance
+                ]
+                result = {"scope": "custom_agent_profile", "agent_instance": args.agent_instance, "instance": matches[0] if len(matches) == 1 else None, "blocking_reasons": [*blocking, *(["custom agent_instance not found or is ambiguous"] if len(matches) != 1 else [])]}
+            else:
+                parser.print_help()
+                return 2
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
 
     if args.command == "queue" and getattr(args, "queue_command", None) in {"claim", "block", "complete", "reopen"}:
         profiles = load_agent_profiles(repo_root)

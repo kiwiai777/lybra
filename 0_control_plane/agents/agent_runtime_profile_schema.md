@@ -46,7 +46,10 @@ Rules:
 - `assigned_to` is the logical agent identity
 - `agent_instance` is the concrete executable instance
 - `agent_instance` is an opaque canonical key; its string must not be parsed for role, vendor, harness, model, host, runtime, or authority
+- per-instance `display_name` is editable presentation metadata and does not become a claim identity or alias
 - `legacy_instance_ids` are explicit additive compatibility references for historical IDs
+- `supersedes_instance_ids` are explicit additive replacement links that do not rewrite historical records
+- `identity_status` describes the instance lifecycle as `active`, `inactive`, or `superseded`
 - `provenance.vendor`, `provenance.harness`, `provenance.model_family`, and `provenance.host` are optional open-vocabulary free-form strings
 - `runtime_profile` is the configurable profile name / UI selector name
 - `runtime_entrypoint` is the entrypoint type / tool family
@@ -123,7 +126,10 @@ aliases:
   - logical_alias
 instances:
   - agent_instance:
+    display_name:
     legacy_instance_ids: []
+    supersedes_instance_ids: []
+    identity_status: active
     provenance:
       vendor:
       harness:

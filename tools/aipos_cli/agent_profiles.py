@@ -12,6 +12,7 @@ except Exception:  # pragma: no cover
 ALLOWED_AVAILABILITY_STATUSES = {"online", "offline", "busy", "maintenance", "unknown"}
 INSTANCE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 PROVENANCE_FIELDS = ("vendor", "harness", "model_family", "host")
+CUSTOM_REGISTRY_RELATIVE_PATH = Path("0_control_plane/agents/custom_agent_profiles.yaml")
 INDEPENDENCE_DIMENSIONS = {
     "distinct_runtime_profile": ("runtime_profile",),
     "distinct_harness": ("provenance", "harness"),
@@ -170,7 +171,10 @@ def _profile_copy(profile: dict[str, Any], source: str, source_path: str) -> dic
     runtime_profiles = list(copied.get("runtime_profiles", []) or [])
     for instance in copied["instances"]:
         instance.setdefault("agent_instance", None)
+        instance.setdefault("display_name", instance.get("agent_instance") or "")
         instance["legacy_instance_ids"] = list(dict.fromkeys(instance.get("legacy_instance_ids", []) or []))
+        instance["supersedes_instance_ids"] = list(dict.fromkeys(instance.get("supersedes_instance_ids", []) or []))
+        instance.setdefault("identity_status", "active")
         provenance = instance.get("provenance")
         instance["provenance"] = dict(provenance) if isinstance(provenance, dict) else {}
         instance.setdefault("runtime_profile", None)
@@ -194,6 +198,29 @@ def _profile_copy(profile: dict[str, Any], source: str, source_path: str) -> dic
             runtime_profiles.append(instance["runtime_profile"])
     copied["runtime_profiles"] = runtime_profiles
     return copied
+
+
+def _load_profiles_from_registry(repo_root: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    path = repo_root / CUSTOM_REGISTRY_RELATIVE_PATH
+    if yaml is None or not path.exists():
+        return [], []
+    try:
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        return [], [f"Custom agent registry parse failed: {exc}"]
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("profiles"), list):
+        return [], ["Custom agent registry must contain a profiles list"]
+    profiles: list[dict[str, Any]] = []
+    for profile in parsed["profiles"]:
+        if isinstance(profile, dict) and profile.get("agent_id"):
+            profiles.append(
+                _profile_copy(
+                    profile,
+                    source="workspace_registry",
+                    source_path=CUSTOM_REGISTRY_RELATIVE_PATH.as_posix(),
+                )
+            )
+    return profiles, []
 
 
 def _extract_yaml_blocks(text: str) -> list[str]:
@@ -222,11 +249,27 @@ def _load_profiles_from_docs(docs_root: Path, repo_root: Path) -> list[dict[str,
 
 def load_agent_profiles(repo_root: Path) -> dict[str, Any]:
     docs_root = repo_root / "0_control_plane" / "agents"
-    profiles = _load_profiles_from_docs(docs_root, repo_root)
+    custom_profiles, registry_warnings = _load_profiles_from_registry(repo_root)
+    docs_profiles = _load_profiles_from_docs(docs_root, repo_root)
+    product_root = Path(__file__).resolve().parents[2]
+    if not docs_profiles and repo_root.resolve() != product_root.resolve():
+        docs_profiles = _load_profiles_from_docs(product_root / "0_control_plane" / "agents", product_root)
+    profiles = [*custom_profiles, *docs_profiles]
     if not profiles:
         profiles = [_profile_copy(FALLBACK_PROFILE, source="fallback", source_path="fallback:dev_claude")]
 
-    agents_by_id = {profile["agent_id"]: profile for profile in profiles if profile.get("agent_id")}
+    agents_by_id: dict[str, dict[str, Any]] = {}
+    duplicate_agent_ids: set[str] = set()
+    for profile in profiles:
+        agent_id = str(profile.get("agent_id") or "")
+        if not agent_id:
+            continue
+        if agent_id in agents_by_id:
+            duplicate_agent_ids.add(agent_id)
+            profile["warnings"].append(f"Duplicate agent_id ignored: {agent_id}")
+            agents_by_id[agent_id]["warnings"].append(f"Duplicate agent_id ignored: {agent_id}")
+            continue
+        agents_by_id[agent_id] = profile
     alias_index: dict[str, str] = {}
     instance_index: dict[str, dict[str, Any]] = {}
     legacy_instance_index: dict[str, list[dict[str, Any]]] = {}
@@ -236,6 +279,8 @@ def load_agent_profiles(repo_root: Path) -> dict[str, Any]:
         if not profile.get("enabled", True):
             continue
         agent_id = str(profile.get("agent_id") or "")
+        if agent_id in duplicate_agent_ids:
+            continue
         for alias in profile.get("aliases", []):
             alias_index[str(alias)] = agent_id
         for instance in profile.get("instances", []):
@@ -277,14 +322,23 @@ def load_agent_profiles(repo_root: Path) -> dict[str, Any]:
             "profiles": len(profiles),
             "enabled_profiles": sum(1 for profile in profiles if profile.get("enabled", True)),
             "instances": sum(len(profile.get("instances", [])) for profile in profiles),
-            "source": "docs" if any(profile.get("source") == "docs" for profile in profiles) else "fallback",
-            "warnings": sum(len(profile.get("warnings", [])) for profile in profiles),
+            "source": (
+                "workspace_registry+docs"
+                if custom_profiles and any(profile.get("source") == "docs" for profile in profiles)
+                else "workspace_registry"
+                if custom_profiles
+                else "docs"
+                if any(profile.get("source") == "docs" for profile in profiles)
+                else "fallback"
+            ),
+            "warnings": len(registry_warnings) + sum(len(profile.get("warnings", [])) for profile in profiles),
         },
         "agents_by_id": agents_by_id,
         "alias_index": alias_index,
         "instance_index": instance_index,
         "legacy_instance_index": legacy_instance_index,
         "ambiguous_legacy_instance_ids": ambiguous_legacy_instance_ids,
+        "registry_warnings": registry_warnings,
     }
 
 

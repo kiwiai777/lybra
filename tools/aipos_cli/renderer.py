@@ -223,7 +223,8 @@ def render_agents_text(profiles: dict[str, Any]) -> str:
         for instance in profile.get("instances", []):
             lines.append(
                 "  instance: "
-                f"{instance.get('agent_instance') or '-'} | profile={instance.get('runtime_profile') or '-'} | "
+                f"{instance.get('display_name') or instance.get('agent_instance') or '-'} "
+                f"[{instance.get('agent_instance') or '-'}] | profile={instance.get('runtime_profile') or '-'} | "
                 f"availability_status={instance.get('availability_status') or 'unknown'} | "
                 f"entrypoint={instance.get('runtime_entrypoint') or '-'} | "
                 f"command={instance.get('runtime_command') or '-'} | "

@@ -10,7 +10,10 @@ Capability profiles are declarative visibility and matching inputs. They do not 
 
 ```yaml
 agent_instance:
+display_name:
 legacy_instance_ids: []
+supersedes_instance_ids: []
+identity_status: active
 logical_agent:
 role:
 runtime:
@@ -95,7 +98,10 @@ role_catalog:
 ## Field Definitions
 
 - `agent_instance`: Stable Owner-defined opaque concrete-instance key, such as `agent-01`. The system must not parse semantic meaning from the string.
+- `display_name`: Editable human-readable presentation metadata. It is not a unique key, claim identity, or automatic alias.
 - `legacy_instance_ids`: Optional explicit historical-ID mappings used for additive compatibility. One legacy ID must not resolve ambiguously to multiple canonical IDs.
+- `supersedes_instance_ids`: Optional explicit additive replacement links. Historical records remain unchanged.
+- `identity_status`: Instance lifecycle state. Workspace-local authoring supports `active`, `inactive`, and `superseded`.
 - `logical_agent`: Stable logical agent identity, such as `dev_claude` or `dev_codex`.
 - `role`: Role family used for task assignment and policy matching.
 - `runtime`: Runtime family, such as `local_manual`, `cloud_24h`, `codex_cli`, `codex_mac`, or `claude_code`.
@@ -206,6 +212,16 @@ This schema complements `agent_runtime_profile_schema.md` and `runtime_profile_p
 Runtime profiles describe launch, topology, and authoritative host variants. Capability profiles describe what a concrete observed instance may claim now.
 
 Neither schema requires the CLI, Board, or any agent runtime to execute commands in AIPOS-49.
+
+## Workspace-Local Authoring
+
+AIPOS-149 adds CLI-only custom profile authoring under:
+
+```text
+<workspace_root>/0_control_plane/agents/custom_agent_profiles.yaml
+```
+
+Workspace-local custom profiles are loaded before product bundled defaults. Canonical and legacy identifier collisions block authoring instead of silently merging identities. The writer uses an explicit draft preview, Owner confirmation, scoped registry write, and post-write revalidation flow. It does not mutate historical records, queues, Board behavior, MCP behavior, runtime state, or controlled execute allowlists.
 
 ## AIPOS-95 SDK Compatibility
 
