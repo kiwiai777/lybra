@@ -29,7 +29,9 @@ from tools.aipos_cli.agent_profiles import actor_matches_task, availability_for_
 from tools.aipos_cli.context_pack_builder import build_context_pack_preview
 from tools.aipos_cli.ai_assisted_authoring import (
     build_authoring_draft,
+    build_live_authoring_draft,
     confirm_authoring_draft,
+    confirm_live_authoring_draft,
     load_intent_payload,
 )
 from tools.aipos_cli.custom_agent_profiles import (
@@ -504,6 +506,25 @@ def build_parser() -> argparse.ArgumentParser:
     ai_author_confirm_parser.add_argument("--owner-confirmation-token", required=True, help="Explicit Owner confirmation token")
     ai_author_confirm_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    ai_author_live_parser = ai_author_subparsers.add_parser("live", help="Live BYO-LLM AI-assisted authoring")
+    ai_author_live_subparsers = ai_author_live_parser.add_subparsers(dest="ai_author_live_command")
+    ai_author_live_draft_parser = ai_author_live_subparsers.add_parser("draft", help="Build a live BYO-LLM AI authoring preview")
+    ai_author_live_draft_parser.add_argument("--intent-json", required=True, help="Read semantic intent payload from JSON")
+    ai_author_live_draft_parser.add_argument("--endpoint-ref", required=True, help="Owner-configured live adapter endpoint")
+    ai_author_live_draft_parser.add_argument("--credential-ref", required=True, help="Environment-based credential reference such as env:LYBRA_LLM_API_KEY")
+    ai_author_live_draft_parser.add_argument("--model-ref", required=True, help="Model reference for the live adapter")
+    ai_author_live_draft_parser.add_argument("--provider-ref", default="provider-neutral", help="Optional provider reference for provenance")
+    ai_author_live_draft_parser.add_argument("--request-config-ref", default="live-default", help="Request configuration reference for provenance")
+    ai_author_live_draft_parser.add_argument("--request-timeout-seconds", type=int, default=30, help="Live adapter timeout in seconds")
+    ai_author_live_draft_parser.add_argument("--max-output-tokens", type=int, default=768, help="Maximum output tokens for the live adapter")
+    ai_author_live_draft_parser.add_argument("--actor", required=True, help="Actor requesting the preview")
+    ai_author_live_draft_parser.add_argument("--json", action="store_true", help="Output JSON")
+    ai_author_live_confirm_parser = ai_author_live_subparsers.add_parser("confirm", help="Confirm a prior live BYO-LLM preview")
+    ai_author_live_confirm_parser.add_argument("--from-json", required=True, help="Read prior live AI authoring preview envelope")
+    ai_author_live_confirm_parser.add_argument("--actor", required=True, help="Actor confirming the draft write")
+    ai_author_live_confirm_parser.add_argument("--owner-confirmation-token", required=True, help="Explicit Owner confirmation token")
+    ai_author_live_confirm_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     context_pack_parser = subparsers.add_parser("context-pack", help="Read-only context pack preview")
     context_pack_subparsers = context_pack_parser.add_subparsers(dest="context_pack_command")
     context_pack_preview_parser = context_pack_subparsers.add_parser("preview", help="Build a read-only context pack preview")
@@ -789,6 +810,33 @@ def main(argv: list[str] | None = None) -> int:
                     actor=args.actor,
                     owner_confirmation_token=args.owner_confirmation_token,
                 )
+            elif args.ai_author_command == "live":
+                if not getattr(args, "ai_author_live_command", None):
+                    parser.print_help()
+                    return 2
+                if args.ai_author_live_command == "draft":
+                    result = build_live_authoring_draft(
+                        repo_root,
+                        load_intent_payload(args.intent_json),
+                        endpoint_ref=args.endpoint_ref,
+                        credential_ref=args.credential_ref,
+                        model_ref=args.model_ref,
+                        actor=args.actor,
+                        provider_ref=args.provider_ref,
+                        request_config_ref=args.request_config_ref,
+                        request_timeout_seconds=args.request_timeout_seconds,
+                        max_output_tokens=args.max_output_tokens,
+                    )
+                elif args.ai_author_live_command == "confirm":
+                    result = confirm_live_authoring_draft(
+                        repo_root,
+                        _load_json_object(args.from_json),
+                        actor=args.actor,
+                        owner_confirmation_token=args.owner_confirmation_token,
+                    )
+                else:
+                    parser.print_help()
+                    return 2
             else:
                 parser.print_help()
                 return 2

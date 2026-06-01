@@ -482,6 +482,28 @@ The first slice performs no network call and reads no credential. It parses a bu
 
 Raw prompts and raw responses are not persisted. Retries are explicit new invocations with a visible `retry_of` relationship. Board, MCP, external-intake assist, provider fallback, background retry, runtime launch, and controlled execute allowlist expansion remain out of scope.
 
+### Live BYO-LLM AI-Assisted Authoring
+
+AIPOS-156 / AIPOS-157 add a CLI-only live adapter slice for BYO-LLM authoring:
+
+```bash
+export LYBRA_LLM_API_KEY=...
+python tools/aipos_cli/aipos_cli.py ai-author live draft \
+  --intent-json intent.json \
+  --endpoint-ref http://127.0.0.1:8787/live-authoring \
+  --credential-ref env:LYBRA_LLM_API_KEY \
+  --model-ref demo-model \
+  --actor owner \
+  --json
+python tools/aipos_cli/aipos_cli.py ai-author live confirm \
+  --from-json live-preview.json \
+  --actor owner \
+  --owner-confirmation-token OWNER_CONFIRMED \
+  --json
+```
+
+The live slice sends a networked request to an Owner-configured adapter endpoint, but it still keeps the live model output proposal-only. Raw prompt and raw response are not persisted by default. The provenance sidecar records non-secret adapter, endpoint, model, request-config, retry, and cost metadata only. Retry remains explicit and manual. Board, MCP, external-intake assist, autonomous runtime, provider fallback, and controlled execute expansion remain out of scope.
+
 ## Orchestration Protocol Status
 
 Planner-orchestrator protocol docs live under `0_control_plane/orchestration/`.
