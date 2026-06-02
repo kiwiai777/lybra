@@ -1,12 +1,31 @@
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import URLError
 
 from web.board.app import _api_post_routes, _api_routes, dispatch_api_request
 
 WEB_ROOT = Path(__file__).resolve().parents[1]
+
+
+class _FakeLiveAdapterResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.status = 200
+        self._payload = payload
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
+
+    def __enter__(self) -> "_FakeLiveAdapterResponse":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        return False
 
 
 class AiAuthoringApiTests(unittest.TestCase):
@@ -49,6 +68,70 @@ class AiAuthoringApiTests(unittest.TestCase):
                 "actor": actor,
                 "fixture_id": fixture_id,
                 "intent": intent or self.intent(),
+            },
+        )
+
+    def live_response(self, *, task_id: str = "BOARD-LIVE-01") -> dict[str, object]:
+        return {
+            "status": "drafted",
+            "provider_ref": "provider-neutral",
+            "model_ref": "demo-model",
+            "request_config_ref": "live-default",
+            "token_cost_estimate": {"input_tokens": 12, "output_tokens": 24},
+            "proposal": {
+                "frontmatter": {
+                    "task_id": task_id,
+                    "title": "Prepare a Board live status summary",
+                    "project": "demo_project",
+                    "assigned_to": "agent-01",
+                    "agent_instance": "agent-01",
+                    "context_bundle": "default_dev",
+                    "task_mode": "docs",
+                    "task_class": "simple",
+                    "complexity_note": "Small documentation summary from Board live mode.",
+                    "model_tier": "L1",
+                    "priority": "medium",
+                    "status": "pending",
+                    "created_by": "ai-assisted-live",
+                    "needs_owner": True,
+                    "output_target": "workspace_artifacts/board-live-summary.md",
+                    "artifact_policy": "formal_write",
+                    "task_type": "one_shot",
+                    "polling_mode": "agent_polling",
+                    "claim_policy": "assigned_agent_only",
+                    "report_mode": "completion_summary",
+                    "recurrence": "none",
+                },
+                "body": "## Goal\n\nPrepare one concise Board live status summary.\n",
+            },
+            "triage": {
+                "recommended_task_class": "simple",
+                "rationale": "Bounded documentation task.",
+                "assumptions": [],
+                "missing_information": [],
+                "possible_owner_gates": [],
+            },
+            "assignment_recommendations": {
+                "assigned_to": "agent-01",
+                "agent_instance": "agent-01",
+                "reviewer": None,
+                "audit_by": None,
+            },
+        }
+
+    def live_preview(self, *, intent: dict[str, object] | None = None) -> dict[str, object]:
+        return self.post(
+            "/api/ai-author/live/preview",
+            {
+                "actor": "owner",
+                "intent": intent or self.intent(intent_id="board-live"),
+                "endpoint_ref": "http://127.0.0.1:8787/live-authoring",
+                "credential_ref": "env:LYBRA_LLM_API_KEY",
+                "provider_ref": "provider-neutral",
+                "model_ref": "demo-model",
+                "request_config_ref": "live-default",
+                "request_timeout_seconds": 30,
+                "max_output_tokens": 768,
             },
         )
 
@@ -149,19 +232,65 @@ class AiAuthoringApiTests(unittest.TestCase):
         provenance = self.repo_root / confirmed["data"]["provenance_path"]
         self.assertIn("retry_of: authoring_previous", provenance.read_text(encoding="utf-8"))
 
-    def test_static_workbench_keeps_fixture_only_and_separate_publish_contract(self) -> None:
+    def test_live_preview_then_confirm_writes_standard_draft_and_non_secret_sidecar(self) -> None:
+        with patch.dict(os.environ, {"LYBRA_LLM_API_KEY": "live-secret"}), patch(
+            "tools.aipos_cli.ai_assisted_authoring.urlopen",
+            return_value=_FakeLiveAdapterResponse(self.live_response()),
+        ):
+            preview = self.live_preview()
+
+        self.assertEqual(preview["verdict"], "NEEDS_OWNER")
+        self.assertTrue(preview["data"]["network_call_performed"])
+        self.assertTrue(preview["data"]["credential_read_performed"])
+        self.assertEqual(self.data_paths(), [])
+
+        confirmed = self.post(
+            "/api/ai-author/live/confirm",
+            {"actor": "owner", "owner_confirmed": True, "preview": preview},
+        )
+
+        provenance = self.repo_root / confirmed["data"]["provenance_path"]
+        self.assertEqual(confirmed["verdict"], "PASS")
+        self.assertTrue((self.repo_root / "5_tasks" / "drafts" / "board-live-01.md").exists())
+        self.assertTrue(provenance.exists())
+        self.assertNotIn("live-secret", provenance.read_text(encoding="utf-8"))
+
+    def test_live_missing_credential_and_network_failure_block_with_zero_writes(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch("tools.aipos_cli.ai_assisted_authoring.urlopen") as mocked_urlopen:
+            missing_credential = self.live_preview(intent=self.intent(intent_id="board-live-missing-key"))
+
+        self.assertEqual(missing_credential["verdict"], "BLOCK")
+        self.assertIn("credential_ref environment variable is missing", missing_credential["blocking_reasons"][0])
+        mocked_urlopen.assert_not_called()
+
+        with patch.dict(os.environ, {"LYBRA_LLM_API_KEY": "live-secret"}), patch(
+            "tools.aipos_cli.ai_assisted_authoring.urlopen",
+            side_effect=URLError("boom"),
+        ):
+            network_failure = self.live_preview(intent=self.intent(intent_id="board-live-network-failure"))
+
+        self.assertEqual(network_failure["verdict"], "BLOCK")
+        self.assertIn("live adapter network failure", network_failure["blocking_reasons"][0])
+        self.assertEqual(self.data_paths(), [])
+
+    def test_static_workbench_keeps_modes_and_separate_publish_contract(self) -> None:
         html = (WEB_ROOT / "static" / "index.html").read_text(encoding="utf-8")
         js = (WEB_ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn("AI Task Authoring", html)
         self.assertIn("ai-author-requirement", html)
+        self.assertIn("ai-author-mode", html)
+        self.assertIn("Live BYO-LLM", html)
+        self.assertIn("env:LYBRA_LLM_API_KEY", html)
         self.assertIn("ai-author-owner-confirmed", html)
         self.assertIn("Raw AI authoring JSON", html)
         self.assertIn("/api/ai-author/preview", js)
         self.assertIn("/api/ai-author/confirm", js)
+        self.assertIn("/api/ai-author/live/preview", js)
+        self.assertIn("/api/ai-author/live/confirm", js)
         self.assertIn("invalidateAiAuthorPreview", js)
-        self.assertNotIn("LYBRA_LLM_API_KEY", js)
-        self.assertNotIn("credential_ref", js)
+        self.assertNotIn("live-secret", html)
+        self.assertNotIn("live-secret", js)
         self.assertNotIn("setInterval", js)
 
 

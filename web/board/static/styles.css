@@ -169,6 +169,46 @@ h2 { margin: 0 0 8px; font-size: 1rem; }
   gap: 8px;
   margin-bottom: 8px;
 }
+.ai-author-live-fields[hidden],
+#ai-author-fixture[hidden] {
+  display: none !important;
+}
+.segmented-control {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin: 0 0 8px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f1f5f9;
+}
+.segmented-control label {
+  cursor: pointer;
+}
+.segmented-control input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.segmented-control span {
+  display: block;
+  min-width: 112px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: #475569;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-align: center;
+}
+.segmented-control input:checked + span {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 12%);
+}
 .task-list,
 .detail-list {
   display: grid;
@@ -740,6 +780,16 @@ pre {
   }
   .toolbar {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .draft-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .segmented-control {
+    display: grid;
+    width: 100%;
+  }
+  .segmented-control span {
+    min-width: 0;
   }
   .toolbar button,
   .owner-decision-actions button,

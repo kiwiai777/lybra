@@ -168,6 +168,16 @@ function aiAuthorValue(id) {
   return document.getElementById(id).value.trim();
 }
 
+function aiAuthorMode() {
+  return document.querySelector('input[name="ai-author-mode"]:checked')?.value || "fixture";
+}
+
+function updateAiAuthorModeFields() {
+  const live = aiAuthorMode() === "live";
+  document.getElementById("ai-author-live-fields").hidden = !live;
+  document.getElementById("ai-author-fixture").hidden = live;
+}
+
 function aiAuthorIntent() {
   const intentId = aiAuthorValue("ai-author-intent-id") || `board-intent-${Date.now()}`;
   return {
@@ -190,8 +200,8 @@ function summarizeAiAuthor(data) {
   const intent = data?.data?.original_payload?.intent || {};
   const proposal = data?.data?.proposal || {};
   const frontmatter = proposal.frontmatter || {};
-  const triage = proposal.triage || {};
-  const assignment = proposal.assignment_recommendations || {};
+  const triage = data?.data?.triage || {};
+  const assignment = data?.data?.assignment_recommendations || {};
   return {
     ok: data?.ok,
     verdict: data?.verdict,
@@ -199,6 +209,7 @@ function summarizeAiAuthor(data) {
     attempt_status: attempt.attempt_status,
     intent_id: attempt.intent_id,
     adapter_id: attempt.adapter_id,
+    provider_ref: attempt.provider_ref,
     endpoint_ref: attempt.endpoint_ref,
     model_ref: attempt.model_ref,
     prompt_template_ref: data?.data?.attempt?.prompt_template_ref,
@@ -230,7 +241,7 @@ function renderAiAuthorCard(data) {
   const card = document.getElementById("ai-author-card");
   card.replaceChildren();
   if (!data) {
-    card.textContent = "Enter a natural-language requirement and preview the fixture-only draft.";
+    card.textContent = "Enter a natural-language requirement and preview a fixture-only or live BYO-LLM draft.";
     return;
   }
   const summary = summarizeAiAuthor(data);
@@ -246,6 +257,7 @@ function renderAiAuthorCard(data) {
     createTextBlock("ai-author-chip", "Reviewer", summary.reviewer),
     createTextBlock("ai-author-chip", "Auditor", summary.audit_by),
     createTextBlock("ai-author-chip", "Adapter", summary.adapter_id),
+    createTextBlock("ai-author-chip", "Provider", summary.provider_ref),
     createTextBlock("ai-author-chip", "Model", summary.model_ref),
     createTextBlock("ai-author-chip", "Endpoint", summary.endpoint_ref),
     createTextBlock("ai-author-chip", "Retry Of", summary.retry_of),
@@ -298,18 +310,33 @@ async function previewAiAuthorDraft() {
   document.getElementById("ai-author-owner-confirmed").checked = false;
   updateAiAuthorConfirmState();
   try {
-    const response = await fetch("/api/ai-author/preview", {
+    const live = aiAuthorMode() === "live";
+    const path = live ? "/api/ai-author/live/preview" : "/api/ai-author/preview";
+    const payload = {
+      actor,
+      intent: aiAuthorIntent(),
+    };
+    if (live) {
+      Object.assign(payload, {
+        endpoint_ref: aiAuthorValue("ai-author-endpoint-ref"),
+        credential_ref: aiAuthorValue("ai-author-credential-ref"),
+        provider_ref: aiAuthorValue("ai-author-provider-ref"),
+        model_ref: aiAuthorValue("ai-author-model-ref"),
+        request_config_ref: aiAuthorValue("ai-author-request-config-ref"),
+        request_timeout_seconds: Number(aiAuthorValue("ai-author-timeout-seconds")),
+        max_output_tokens: Number(aiAuthorValue("ai-author-max-output-tokens")),
+      });
+    } else {
+      payload.fixture_id = aiAuthorValue("ai-author-fixture");
+    }
+    const response = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        actor,
-        fixture_id: aiAuthorValue("ai-author-fixture"),
-        intent: aiAuthorIntent(),
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await response.json();
     latestAiAuthorPreview = data?.dry_run_id ? data : null;
-    latestDebug["/api/ai-author/preview"] = data;
+    latestDebug[path] = data;
     document.getElementById("ai-author-discard").disabled = !latestAiAuthorPreview;
     document.getElementById("ai-author-result").textContent = JSON.stringify(data, null, 2);
     renderAiAuthorCard(data);
@@ -329,7 +356,10 @@ async function confirmAiAuthorDraft() {
   }
   document.getElementById("ai-author-confirm").disabled = true;
   try {
-    const response = await fetch("/api/ai-author/confirm", {
+    const path = latestAiAuthorPreview?.operation === "ai_assisted_live_authoring"
+      ? "/api/ai-author/live/confirm"
+      : "/api/ai-author/confirm";
+    const response = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -339,7 +369,7 @@ async function confirmAiAuthorDraft() {
       }),
     });
     const data = await response.json();
-    latestDebug["/api/ai-author/confirm"] = data;
+    latestDebug[path] = data;
     document.getElementById("ai-author-result").textContent = JSON.stringify(data, null, 2);
     renderAiAuthorCard(data);
     latestAiAuthorPreview = null;
@@ -3384,6 +3414,9 @@ document.getElementById("ai-author-preview").addEventListener("click", previewAi
 document.getElementById("ai-author-discard").addEventListener("click", invalidateAiAuthorPreview);
 document.getElementById("ai-author-owner-confirmed").addEventListener("change", updateAiAuthorConfirmState);
 document.getElementById("ai-author-confirm").addEventListener("click", confirmAiAuthorDraft);
+for (const input of document.querySelectorAll('input[name="ai-author-mode"]')) {
+  input.addEventListener("change", updateAiAuthorModeFields);
+}
 for (const input of document.querySelectorAll("#ai-task-authoring input, #ai-task-authoring select, #ai-task-authoring textarea")) {
   if (input.id !== "ai-author-owner-confirmed") {
     input.addEventListener("input", invalidateAiAuthorPreview);
@@ -3394,4 +3427,5 @@ document.getElementById("needs-owner-load-task").addEventListener("click", loadT
 document.getElementById("validation-load-task").addEventListener("click", loadTaskFromValidation);
 document.getElementById("debug-toggle").addEventListener("click", toggleDebug);
 restoreActorInput();
+updateAiAuthorModeFields();
 refreshAll();

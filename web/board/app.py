@@ -18,7 +18,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.aipos_cli.adapter_response import blocked_response
-from tools.aipos_cli.ai_assisted_authoring import build_authoring_draft, confirm_authoring_draft
+from tools.aipos_cli.ai_assisted_authoring import (
+    build_authoring_draft,
+    build_live_authoring_draft,
+    confirm_authoring_draft,
+    confirm_live_authoring_draft,
+)
 from tools.aipos_cli.board_adapter import (
     append_orchestration_event,
     append_planner_iteration,
@@ -104,6 +109,8 @@ def _api_post_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, An
         "/api/planner-draft/publish/dry-run": partial(_planner_draft_publish_dry_run_route, repo_root=repo_root),
         "/api/ai-author/preview": partial(_ai_author_preview_route, repo_root=repo_root),
         "/api/ai-author/confirm": partial(_ai_author_confirm_route, repo_root=repo_root),
+        "/api/ai-author/live/preview": partial(_ai_author_live_preview_route, repo_root=repo_root),
+        "/api/ai-author/live/confirm": partial(_ai_author_live_confirm_route, repo_root=repo_root),
         "/api/execute/dry-run": partial(_execute_dry_run_route, repo_root=repo_root),
         "/api/execute/confirm": partial(_execute_confirm_route, repo_root=repo_root),
     }
@@ -1610,6 +1617,49 @@ def _ai_author_confirm_route(payload: dict[str, Any], *, repo_root: Path | None)
         )
     except Exception as exc:
         return _execute_error("ai_assisted_fixture_authoring", str(exc))
+
+
+def _ai_author_live_preview_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    actor = str(payload.get("actor") or "").strip()
+    intent = payload.get("intent")
+    if not actor:
+        return _execute_error("ai_assisted_live_authoring", "actor is required")
+    if not isinstance(intent, dict):
+        return _execute_error("ai_assisted_live_authoring", "intent object is required")
+    try:
+        return build_live_authoring_draft(
+            Path(repo_root or REPO_ROOT),
+            intent,
+            endpoint_ref=str(payload.get("endpoint_ref") or "").strip(),
+            credential_ref=str(payload.get("credential_ref") or "").strip(),
+            model_ref=str(payload.get("model_ref") or "").strip(),
+            actor=actor,
+            provider_ref=str(payload.get("provider_ref") or "provider-neutral").strip(),
+            request_config_ref=str(payload.get("request_config_ref") or "live-default").strip(),
+            request_timeout_seconds=int(payload.get("request_timeout_seconds") or 30),
+            max_output_tokens=int(payload.get("max_output_tokens") or 768),
+        )
+    except Exception as exc:
+        return _execute_error("ai_assisted_live_authoring", str(exc))
+
+
+def _ai_author_live_confirm_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    actor = str(payload.get("actor") or "").strip()
+    preview = payload.get("preview")
+    if not actor:
+        return _execute_error("ai_assisted_live_authoring", "actor is required")
+    if not isinstance(preview, dict):
+        return _execute_error("ai_assisted_live_authoring", "preview object is required")
+    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", False)) else None
+    try:
+        return confirm_live_authoring_draft(
+            Path(repo_root or REPO_ROOT),
+            preview,
+            actor=actor,
+            owner_confirmation_token=owner_token,
+        )
+    except Exception as exc:
+        return _execute_error("ai_assisted_live_authoring", str(exc))
 
 
 def _execute_dry_run_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:

@@ -72,9 +72,19 @@
       <section id="ai-task-authoring" class="operator-primary-action">
       <h2>AI Task Authoring</h2>
       <textarea id="ai-author-requirement" rows="5" placeholder="Describe the task in plain language"></textarea>
+      <fieldset id="ai-author-mode" class="segmented-control" aria-label="AI authoring mode">
+        <label>
+          <input type="radio" name="ai-author-mode" value="fixture" checked>
+          <span>Fixture-only</span>
+        </label>
+        <label>
+          <input type="radio" name="ai-author-mode" value="live">
+          <span>Live BYO-LLM</span>
+        </label>
+      </fieldset>
       <div class="draft-grid">
         <input id="ai-author-actor" type="text" value="owner" placeholder="actor">
-        <select id="ai-author-fixture">
+        <select id="ai-author-fixture" data-ai-author-mode="fixture">
           <option value="standard-simple">standard-simple</option>
           <option value="injection-escalation">injection-escalation</option>
           <option value="adapter-failure">adapter-failure</option>
@@ -92,6 +102,15 @@
         <input id="ai-author-context-bundle-hint" type="text" placeholder="context bundle hint (optional)">
         <input id="ai-author-retry-of" type="text" placeholder="retry_of (optional)">
       </div>
+      <div id="ai-author-live-fields" class="draft-grid ai-author-live-fields" hidden>
+        <input id="ai-author-endpoint-ref" type="text" placeholder="endpoint_ref (http:// or https://)">
+        <input id="ai-author-credential-ref" type="text" value="env:LYBRA_LLM_API_KEY" placeholder="credential_ref (env:NAME only)">
+        <input id="ai-author-provider-ref" type="text" value="provider-neutral" placeholder="provider_ref">
+        <input id="ai-author-model-ref" type="text" placeholder="model_ref">
+        <input id="ai-author-request-config-ref" type="text" value="live-default" placeholder="request_config_ref">
+        <input id="ai-author-timeout-seconds" type="number" value="30" min="1" step="1" placeholder="timeout seconds">
+        <input id="ai-author-max-output-tokens" type="number" value="768" min="1" step="1" placeholder="max output tokens">
+      </div>
       <div class="toolbar">
         <button id="ai-author-preview">Preview Draft</button>
         <button id="ai-author-discard" class="secondary-action" disabled>Discard Preview</button>
@@ -101,7 +120,7 @@
         I reviewed the generated draft and approve this exact write
       </label>
       <button id="ai-author-confirm" disabled>Confirm Draft Write</button>
-      <div id="ai-author-card" class="ai-author-card">Enter a natural-language requirement and preview the fixture-only draft.</div>
+      <div id="ai-author-card" class="ai-author-card">Enter a natural-language requirement and preview a fixture-only draft.</div>
       <details class="raw-json-drawer">
         <summary>Raw AI authoring JSON</summary>
         <pre id="ai-author-result">No AI authoring preview yet.</pre>

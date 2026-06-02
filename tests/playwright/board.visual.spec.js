@@ -6,6 +6,10 @@ test.describe('Lybra Board visual smoke', () => {
     await expect(page.getByRole('heading', { name: 'AI Task Authoring' })).toBeVisible();
     await expect(page.locator('#ai-author-requirement')).toBeVisible();
     await expect(page.locator('#ai-author-card')).toBeVisible();
+    await expect(page.locator('#ai-author-live-fields')).toBeHidden();
+    await page.getByText('Live BYO-LLM', { exact: true }).click();
+    await expect(page.locator('#ai-author-live-fields')).toBeVisible();
+    await expect(page.locator('#ai-author-credential-ref')).toHaveValue('env:LYBRA_LLM_API_KEY');
   }
 
   test('renders the AI Task Authoring workbench on desktop', async ({ page }, testInfo) => {
