@@ -24,6 +24,7 @@ from tools.aipos_cli.ai_assisted_authoring import (
     confirm_authoring_draft,
     confirm_live_authoring_draft,
 )
+from tools.aipos_cli.custom_agent_profiles import build_profile_draft, confirm_profile_draft
 from tools.aipos_cli.board_adapter import (
     append_orchestration_event,
     append_planner_iteration,
@@ -111,6 +112,8 @@ def _api_post_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, An
         "/api/ai-author/confirm": partial(_ai_author_confirm_route, repo_root=repo_root),
         "/api/ai-author/live/preview": partial(_ai_author_live_preview_route, repo_root=repo_root),
         "/api/ai-author/live/confirm": partial(_ai_author_live_confirm_route, repo_root=repo_root),
+        "/api/agent-profile/draft": partial(_agent_profile_draft_route, repo_root=repo_root),
+        "/api/agent-profile/confirm": partial(_agent_profile_confirm_route, repo_root=repo_root),
         "/api/execute/dry-run": partial(_execute_dry_run_route, repo_root=repo_root),
         "/api/execute/confirm": partial(_execute_confirm_route, repo_root=repo_root),
     }
@@ -1660,6 +1663,38 @@ def _ai_author_live_confirm_route(payload: dict[str, Any], *, repo_root: Path | 
         )
     except Exception as exc:
         return _execute_error("ai_assisted_live_authoring", str(exc))
+
+
+def _agent_profile_draft_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    actor = str(payload.get("actor") or "").strip()
+    profile_payload = payload.get("payload")
+    if not actor:
+        return _execute_error("custom_agent_profile_write", "actor is required")
+    if not isinstance(profile_payload, dict):
+        return _execute_error("custom_agent_profile_write", "payload object is required")
+    try:
+        return build_profile_draft(Path(repo_root or REPO_ROOT), profile_payload, actor=actor)
+    except Exception as exc:
+        return _execute_error("custom_agent_profile_write", str(exc))
+
+
+def _agent_profile_confirm_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    actor = str(payload.get("actor") or "").strip()
+    preview = payload.get("preview")
+    if not actor:
+        return _execute_error("custom_agent_profile_write", "actor is required")
+    if not isinstance(preview, dict):
+        return _execute_error("custom_agent_profile_write", "preview object is required")
+    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", False)) else None
+    try:
+        return confirm_profile_draft(
+            Path(repo_root or REPO_ROOT),
+            preview,
+            actor=actor,
+            owner_confirmation_token=owner_token,
+        )
+    except Exception as exc:
+        return _execute_error("custom_agent_profile_write", str(exc))
 
 
 def _execute_dry_run_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:

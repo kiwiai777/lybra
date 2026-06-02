@@ -10,6 +10,10 @@ test.describe('Lybra Board visual smoke', () => {
     await page.getByText('Live BYO-LLM', { exact: true }).click();
     await expect(page.locator('#ai-author-live-fields')).toBeVisible();
     await expect(page.locator('#ai-author-credential-ref')).toHaveValue('env:LYBRA_LLM_API_KEY');
+    await page.locator('#workflow-advanced-debug').evaluate((node) => { node.open = true; });
+    await expect(page.getByRole('heading', { name: 'Custom Agent Profiles' })).toBeVisible();
+    await expect(page.locator('#profile-card')).toBeVisible();
+    await expect(page.locator('#profile-result')).toBeHidden();
   }
 
   test('renders the AI Task Authoring workbench on desktop', async ({ page }, testInfo) => {

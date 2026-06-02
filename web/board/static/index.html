@@ -412,6 +412,61 @@
       <pre id="agents-detail">Select a profile or runtime instance.</pre>
     </section>
 
+      <section id="custom-agent-profiles" class="operator-primary-action">
+      <h2>Custom Agent Profiles</h2>
+      <div class="draft-grid">
+        <select id="profile-action">
+          <option value="upsert">upsert</option>
+          <option value="deactivate">deactivate</option>
+          <option value="supersede">supersede</option>
+        </select>
+        <input id="profile-actor" type="text" value="owner" placeholder="actor">
+        <input id="profile-agent-id" type="text" value="owner_agents" placeholder="logical agent_id">
+        <input id="profile-agent-instance" type="text" placeholder="canonical agent_instance">
+      </div>
+      <div id="profile-instance-fields" class="draft-grid">
+        <input id="profile-display-name" type="text" placeholder="display_name">
+        <select id="profile-identity-status">
+          <option value="active">active</option>
+          <option value="inactive">inactive</option>
+          <option value="superseded">superseded</option>
+        </select>
+        <label class="toggle-row"><input id="profile-enabled" type="checkbox" checked> enabled</label>
+        <input id="profile-description" type="text" placeholder="description (optional)">
+        <input id="profile-capabilities" type="text" placeholder="capabilities CSV">
+        <input id="profile-write-scopes" type="text" placeholder="write_scopes CSV">
+        <input id="profile-default-task-modes" type="text" placeholder="default_task_modes CSV">
+        <input id="profile-model-tiers" type="text" placeholder="model_tiers_available CSV">
+        <input id="profile-context-bundles" type="text" placeholder="context_bundles_supported CSV">
+        <input id="profile-allowed-modes" type="text" placeholder="allowed_modes CSV">
+        <input id="profile-forbidden-modes" type="text" placeholder="forbidden_modes CSV">
+        <input id="profile-legacy-ids" type="text" placeholder="legacy_instance_ids CSV">
+        <input id="profile-supersedes-ids" type="text" placeholder="supersedes_instance_ids CSV">
+        <input id="profile-provenance-vendor" type="text" placeholder="provenance.vendor">
+        <input id="profile-provenance-harness" type="text" placeholder="provenance.harness">
+        <input id="profile-provenance-model-family" type="text" placeholder="provenance.model_family">
+        <input id="profile-provenance-host" type="text" placeholder="provenance.host">
+      </div>
+      <div id="profile-replacement-fields" class="draft-grid" hidden>
+        <input id="profile-replacement-instance" type="text" placeholder="replacement canonical agent_instance">
+        <input id="profile-replacement-display-name" type="text" placeholder="replacement display_name">
+      </div>
+      <div class="toolbar">
+        <button id="profile-draft">Preview Registry Write</button>
+        <button id="profile-discard" class="secondary-action" disabled>Discard Preview</button>
+      </div>
+      <label class="confirm-row">
+        <input id="profile-owner-confirmed" type="checkbox">
+        I reviewed this exact registry write
+      </label>
+      <button id="profile-confirm" disabled>Confirm Registry Write</button>
+      <div id="profile-card" class="profile-card">Fill the structured fields and preview the workspace-local registry write.</div>
+      <details class="raw-json-drawer">
+        <summary>Raw custom profile JSON</summary>
+        <pre id="profile-result">No custom profile preview yet.</pre>
+      </details>
+    </section>
+
       <section>
       <h2>Task Preview</h2>
       <div class="toolbar">

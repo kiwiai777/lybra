@@ -170,7 +170,9 @@ h2 { margin: 0 0 8px; font-size: 1rem; }
   margin-bottom: 8px;
 }
 .ai-author-live-fields[hidden],
-#ai-author-fixture[hidden] {
+#ai-author-fixture[hidden],
+#profile-instance-fields[hidden],
+#profile-replacement-fields[hidden] {
   display: none !important;
 }
 .segmented-control {
@@ -741,6 +743,36 @@ pre {
   border: 1px solid #e2e8f0;
   border-radius: 6px;
   background: #ffffff;
+}
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  font-size: 0.9rem;
+}
+.toggle-row input {
+  width: auto;
+  min-height: auto;
+}
+.profile-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 6px;
 }
 
 @media (max-width: 640px) {

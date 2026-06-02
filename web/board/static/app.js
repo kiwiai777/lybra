@@ -40,6 +40,7 @@ let selectedOwnerDecisionRecord = null;
 let latestOwnerDecisionResolutionReview = null;
 let latestOwnerDecisionRecordDryRun = null;
 let latestAiAuthorPreview = null;
+let latestProfilePreview = null;
 
 function writePanel(id, payload) {
   document.getElementById(id).textContent = JSON.stringify(payload, null, 2);
@@ -381,6 +382,179 @@ async function confirmAiAuthorDraft() {
     return data;
   } catch (err) {
     document.getElementById("ai-author-result").textContent = JSON.stringify({ ok: false, message: String(err) }, null, 2);
+    return { ok: false, error: String(err) };
+  }
+}
+
+function profileValue(id) {
+  return document.getElementById(id).value.trim();
+}
+
+function profileList(id) {
+  return profileValue(id).split(",").map((value) => value.trim()).filter(Boolean);
+}
+
+function profileProvenance() {
+  const values = {
+    vendor: profileValue("profile-provenance-vendor"),
+    harness: profileValue("profile-provenance-harness"),
+    model_family: profileValue("profile-provenance-model-family"),
+    host: profileValue("profile-provenance-host"),
+  };
+  return Object.fromEntries(Object.entries(values).filter(([, value]) => value));
+}
+
+function profileInstance({ replacement = false } = {}) {
+  return {
+    agent_instance: replacement ? profileValue("profile-replacement-instance") : profileValue("profile-agent-instance"),
+    display_name: replacement ? profileValue("profile-replacement-display-name") : profileValue("profile-display-name"),
+    identity_status: replacement ? "active" : profileValue("profile-identity-status"),
+    enabled: replacement ? true : document.getElementById("profile-enabled").checked,
+    description: profileValue("profile-description"),
+    capabilities: profileList("profile-capabilities"),
+    write_scopes: profileList("profile-write-scopes"),
+    default_task_modes: profileList("profile-default-task-modes"),
+    model_tiers_available: profileList("profile-model-tiers"),
+    context_bundles_supported: profileList("profile-context-bundles"),
+    allowed_modes: profileList("profile-allowed-modes"),
+    forbidden_modes: profileList("profile-forbidden-modes"),
+    legacy_instance_ids: profileList("profile-legacy-ids"),
+    supersedes_instance_ids: profileList("profile-supersedes-ids"),
+    provenance: profileProvenance(),
+  };
+}
+
+function profilePayload() {
+  const action = profileValue("profile-action");
+  const payload = {
+    action,
+    agent_id: profileValue("profile-agent-id"),
+  };
+  if (action === "upsert") {
+    payload.instance = profileInstance();
+  } else {
+    payload.agent_instance = profileValue("profile-agent-instance");
+    if (action === "supersede") {
+      payload.replacement = profileInstance({ replacement: true });
+    }
+  }
+  return payload;
+}
+
+function updateProfileActionFields() {
+  const action = profileValue("profile-action");
+  document.getElementById("profile-instance-fields").hidden = action === "deactivate";
+  document.getElementById("profile-replacement-fields").hidden = action !== "supersede";
+}
+
+function renderProfileCard(data) {
+  const card = document.getElementById("profile-card");
+  card.replaceChildren();
+  if (!data) {
+    card.textContent = "Fill the structured fields and preview the workspace-local registry write.";
+    return;
+  }
+  const summary = data?.summary || data?.data?.change_summary || {};
+  const original = data?.data?.original_payload || {};
+  const proposed = original.instance || original.replacement || {};
+  const grid = document.createElement("div");
+  grid.className = "profile-grid";
+  grid.append(
+    createTextBlock("ai-author-chip", "Verdict", data?.verdict),
+    createTextBlock("ai-author-chip", "Action", summary.action),
+    createTextBlock("ai-author-chip", "Agent ID", original.agent_id),
+    createTextBlock("ai-author-chip", "Instance", summary.agent_instance || proposed.agent_instance),
+    createTextBlock("ai-author-chip", "Display Name", proposed.display_name),
+    createTextBlock("ai-author-chip", "Target", data?.data?.target_path)
+  );
+  card.append(
+    grid,
+    createListBlock("Changed Fields", summary.changed_fields || []),
+    createListBlock("Owner-visible Fields", summary.owner_visible_fields || []),
+    createListBlock("Planned Writes", (data?.planned_writes || []).map((row) => row.path || String(row))),
+    createListBlock("Owner Attention", data?.needs_owner_reasons || []),
+    createListBlock("Warnings", data?.warnings || []),
+    createListBlock("Safety Blocks", data?.blocking_reasons || [])
+  );
+}
+
+function updateProfileConfirmState() {
+  document.getElementById("profile-confirm").disabled = !(
+    latestProfilePreview?.dry_run_id
+    && latestProfilePreview?.verdict !== "BLOCK"
+    && document.getElementById("profile-owner-confirmed").checked
+  );
+}
+
+function invalidateProfilePreview() {
+  latestProfilePreview = null;
+  document.getElementById("profile-owner-confirmed").checked = false;
+  document.getElementById("profile-confirm").disabled = true;
+  document.getElementById("profile-discard").disabled = true;
+  renderProfileCard(null);
+  document.getElementById("profile-result").textContent = "Inputs changed. Run a fresh profile preview.";
+}
+
+async function previewProfileDraft() {
+  const actor = profileValue("profile-actor");
+  const payload = profilePayload();
+  if (!actor || !payload.agent_id || !profileValue("profile-agent-instance")) {
+    document.getElementById("profile-result").textContent = JSON.stringify({ ok: false, message: "actor, agent_id, and canonical agent_instance are required." }, null, 2);
+    return null;
+  }
+  latestProfilePreview = null;
+  document.getElementById("profile-owner-confirmed").checked = false;
+  updateProfileConfirmState();
+  try {
+    const response = await fetch("/api/agent-profile/draft", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor, payload }),
+    });
+    const data = await response.json();
+    latestProfilePreview = data?.dry_run_id ? data : null;
+    latestDebug["/api/agent-profile/draft"] = data;
+    document.getElementById("profile-discard").disabled = !latestProfilePreview;
+    document.getElementById("profile-result").textContent = JSON.stringify(data, null, 2);
+    renderProfileCard(data);
+    updateProfileConfirmState();
+    updateDebugPanel();
+    return data;
+  } catch (err) {
+    document.getElementById("profile-result").textContent = JSON.stringify({ ok: false, message: String(err) }, null, 2);
+    renderProfileCard(null);
+    return { ok: false, error: String(err) };
+  }
+}
+
+async function confirmProfileDraft() {
+  if (!latestProfilePreview) {
+    return null;
+  }
+  document.getElementById("profile-confirm").disabled = true;
+  try {
+    const response = await fetch("/api/agent-profile/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actor: profileValue("profile-actor"),
+        owner_confirmed: document.getElementById("profile-owner-confirmed").checked,
+        preview: latestProfilePreview,
+      }),
+    });
+    const data = await response.json();
+    latestDebug["/api/agent-profile/confirm"] = data;
+    document.getElementById("profile-result").textContent = JSON.stringify(data, null, 2);
+    renderProfileCard(data);
+    latestProfilePreview = null;
+    document.getElementById("profile-owner-confirmed").checked = false;
+    document.getElementById("profile-discard").disabled = true;
+    updateProfileConfirmState();
+    updateDebugPanel();
+    await refreshPanel("agents");
+    return data;
+  } catch (err) {
+    document.getElementById("profile-result").textContent = JSON.stringify({ ok: false, message: String(err) }, null, 2);
     return { ok: false, error: String(err) };
   }
 }
@@ -3417,6 +3591,17 @@ document.getElementById("ai-author-confirm").addEventListener("click", confirmAi
 for (const input of document.querySelectorAll('input[name="ai-author-mode"]')) {
   input.addEventListener("change", updateAiAuthorModeFields);
 }
+document.getElementById("profile-action").addEventListener("change", updateProfileActionFields);
+document.getElementById("profile-draft").addEventListener("click", previewProfileDraft);
+document.getElementById("profile-discard").addEventListener("click", invalidateProfilePreview);
+document.getElementById("profile-owner-confirmed").addEventListener("change", updateProfileConfirmState);
+document.getElementById("profile-confirm").addEventListener("click", confirmProfileDraft);
+for (const input of document.querySelectorAll("#custom-agent-profiles input, #custom-agent-profiles select, #custom-agent-profiles textarea")) {
+  if (input.id !== "profile-owner-confirmed") {
+    input.addEventListener("input", invalidateProfilePreview);
+    input.addEventListener("change", invalidateProfilePreview);
+  }
+}
 for (const input of document.querySelectorAll("#ai-task-authoring input, #ai-task-authoring select, #ai-task-authoring textarea")) {
   if (input.id !== "ai-author-owner-confirmed") {
     input.addEventListener("input", invalidateAiAuthorPreview);
@@ -3428,4 +3613,5 @@ document.getElementById("validation-load-task").addEventListener("click", loadTa
 document.getElementById("debug-toggle").addEventListener("click", toggleDebug);
 restoreActorInput();
 updateAiAuthorModeFields();
+updateProfileActionFields();
 refreshAll();
