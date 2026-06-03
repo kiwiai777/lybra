@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, error_entry, make_response
-from tools.aipos_cli.agent_profiles import load_agent_profiles
+from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles, resolve_instance_id
 from tools.aipos_cli.context_pack_builder import build_context_pack_preview
 from tools.aipos_cli.controlled_execute import (
     OWNER_CONFIRMATION_TOKEN,
@@ -27,7 +28,8 @@ from tools.aipos_cli.owner_decision_writer import build_owner_decision_record as
 from tools.aipos_cli.planner_iteration_writer import append_planner_iteration as backend_append_planner_iteration
 from tools.aipos_cli.planner_loop_mvp import build_planner_loop_mvp_preview
 from tools.aipos_cli.preview import build_preview
-from tools.aipos_cli.queue_mutation import mutate_queue_task
+from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.queue_mutation import mutate_queue_task, render_task_markdown
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import find_repo_root, find_task_by_id, load_all_tasks, load_task_by_path
 from tools.aipos_cli.validator import validate_single_task, validate_tasks
@@ -45,7 +47,7 @@ MUTATION_DRY_RUN_NOTICE = (
 CONTROLLED_EXECUTE_NOTICE = (
     "AIPOS-38 controlled execute is local-only and limited to dry-run-linked operations: "
     "draft_create, draft_publish, queue_claim, orchestration_event_append, planner_iteration_append, intake_submit, "
-    "owner_decision_record."
+    "owner_decision_record, queue_return."
 )
 HEALTH_NOTICE = "Local module adapter health check only. No CLI runtime bridge, server, or network behavior is used."
 GOVERNANCE_FILES = {
@@ -259,6 +261,7 @@ def _attach_controlled_execute_metadata(
         "draft_create",
         "draft_publish",
         "queue_claim",
+        "queue_return",
         "orchestration_event_append",
         "planner_iteration_append",
         "intake_submit",
@@ -1264,6 +1267,266 @@ def _queue_mutation_preview(
     )
 
 
+def _as_list(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _normalize_return_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    if isinstance(value, list):
+        return [_normalize_return_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_return_value(item) for key, item in value.items()}
+    return value
+
+
+def _return_owner_reasons() -> list[str]:
+    return ["MCP Supervised queue_return requires explicit Owner confirmation for this dry-run preview"]
+
+
+def _unsafe_return_ref(value: str) -> bool:
+    if not value:
+        return False
+    lowered = value.lower()
+    if any(marker in lowered for marker in ("api_key", "bearer ", "token=", "password=", "secret=")):
+        return True
+    raw = Path(value)
+    return raw.is_absolute() or ".." in raw.parts
+
+
+def _build_return_preview(
+    *,
+    task_id: str | None,
+    path: str | Path | None,
+    actor: str,
+    agent_instance: str,
+    owner_policy_ref: str,
+    claim_id: str | None,
+    active_session_id: str | None,
+    result_summary: str | None,
+    artifact_refs: list[str],
+    completion_report_ref: str | None,
+    return_reason: str | None,
+    repo_root: Path,
+    dry_run: bool,
+    mcp_return_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    selected_task_id, selected_path = _select_task_input(task_id, path)
+    validated, _tasks, _records, profiles, task = _load_validated_task(
+        repo_root=repo_root,
+        task_id=selected_task_id,
+        path=selected_path,
+        actor=actor,
+    )
+    source_rel = str(task.get("path") or "")
+    source_path = repo_root / source_rel
+    parsed_metadata, source_body, parse_warnings = parse_markdown_frontmatter(source_path.read_text(encoding="utf-8"))
+    source_metadata = _normalize_return_value(parsed_metadata)
+
+    blocking_reasons = list(validated.get("blocking_reasons", []))
+    warnings = list(validated.get("warnings", []))
+    warnings.extend(parse_warnings)
+    if task.get("queue_state") != "claimed":
+        blocking_reasons.append(f"TASK_NOT_CLAIMED: expected queue state claimed, found {task.get('queue_state')}")
+    if task.get("frontmatter_status") != "claimed":
+        blocking_reasons.append("TASK_NOT_CLAIMED: expected frontmatter status claimed")
+
+    resolved = resolve_instance_id(agent_instance, profiles)
+    canonical_agent_instance = str(resolved.get("canonical_instance_id") or "").strip()
+    if resolved.get("resolution") == "ambiguous" or not canonical_agent_instance:
+        blocking_reasons.append("agent_instance must resolve to one canonical concrete instance")
+    if actor != canonical_agent_instance:
+        blocking_reasons.append("For the first Supervised MCP return slice, actor must equal canonical agent_instance")
+
+    claimed_by = str(source_metadata.get("claimed_by") or "")
+    task_agent_instance = str(source_metadata.get("agent_instance") or "")
+    if claimed_by:
+        if not actor_matches_task_actor(canonical_agent_instance, claimed_by, profiles):
+            blocking_reasons.append("CLAIMANT_MISMATCH: task is claimed by another actor")
+    elif task_agent_instance:
+        if not actor_matches_task_actor(canonical_agent_instance, task_agent_instance, profiles):
+            blocking_reasons.append("CLAIMANT_MISMATCH: task agent_instance does not match returning instance")
+    else:
+        blocking_reasons.append("CLAIMANT_MISMATCH: claimed task lacks claimed_by or agent_instance")
+
+    if claim_id and str(source_metadata.get("claim_id") or "").strip() != claim_id:
+        blocking_reasons.append("CLAIM_ID_MISMATCH: claim_id does not match claimed task")
+    if active_session_id and str(source_metadata.get("active_session_id") or "").strip() != active_session_id:
+        blocking_reasons.append("SESSION_MISMATCH: active_session_id does not match claimed task")
+    if any(_unsafe_return_ref(ref) for ref in [*artifact_refs, completion_report_ref or ""]):
+        blocking_reasons.append("Return evidence refs must be repo-relative or approved workspace-relative and secret-free")
+
+    updated_metadata = dict(source_metadata)
+    updated_metadata["status"] = "claimed"
+    updated_metadata["executor_status"] = "completed"
+    updated_metadata["executor_completed_by"] = canonical_agent_instance or actor
+    updated_metadata["executor_completed_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    updated_metadata["audit_readiness"] = "ready"
+    updated_metadata["audit_status"] = str(updated_metadata.get("audit_status") or "pending")
+    updated_metadata["dependency_executor_status"] = "completed"
+    updated_metadata["dependency_audit_readiness"] = "ready"
+    updated_metadata["dependency_audit_status"] = str(updated_metadata.get("dependency_audit_status") or "pending")
+    updated_metadata["return_owner_policy_ref"] = owner_policy_ref
+    if result_summary:
+        updated_metadata["result_summary"] = result_summary
+    if artifact_refs:
+        updated_metadata["artifact_refs"] = artifact_refs
+    if completion_report_ref:
+        updated_metadata["completion_report_ref"] = completion_report_ref
+    if return_reason:
+        updated_metadata["return_reason"] = return_reason
+
+    rendered_markdown = render_task_markdown(updated_metadata, source_body)
+    planned_write = {"path": source_rel, "kind": "update", "type": "task_markdown"}
+    return_preview = {
+        "executor_status": "completed",
+        "audit_readiness": "ready",
+        "audit_status_after_return": updated_metadata["audit_status"],
+        "result_summary": result_summary,
+        "artifact_refs": artifact_refs,
+        "completion_report_ref": completion_report_ref,
+    }
+    data = {
+        "task_id": task.get("task_id"),
+        "source_path": source_rel,
+        "target_path": source_rel,
+        "from_state": "claimed",
+        "to_state": "claimed",
+        "would_write": not blocking_reasons,
+        "would_move": False,
+        "updated_frontmatter": updated_metadata,
+        "rendered_markdown": rendered_markdown,
+        "target_file_state": _target_file_state(repo_root, source_rel),
+        "with_records": False,
+        "records_enabled": False,
+        "owner_policy_ref": owner_policy_ref,
+        "canonical_agent_instance": canonical_agent_instance,
+        "claim_id": str(source_metadata.get("claim_id") or claim_id or ""),
+        "claimed_by": claimed_by,
+        "return_preview": return_preview,
+        "original_payload": {
+            "task_id": task_id,
+            "path": str(path) if path is not None else None,
+            "actor": actor,
+            "agent_instance": agent_instance,
+            "owner_policy_ref": owner_policy_ref,
+            "claim_id": claim_id,
+            "active_session_id": active_session_id,
+            "result_summary": result_summary,
+            "artifact_refs": artifact_refs,
+            "completion_report_ref": completion_report_ref,
+            "return_reason": return_reason,
+        },
+        "lease_preview": {
+            "lease_path": "claim_only",
+            "lease_status": "proposed",
+            "active_lease_written": False,
+        },
+    }
+    if mcp_return_metadata:
+        data["mcp_return"] = dict(mcp_return_metadata)
+
+    verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)
+    response = make_response(
+        ok=True,
+        verdict=verdict,
+        operation="queue_return",
+        dry_run=dry_run,
+        actor=_actor_payload(actor),
+        actor_match=validated.get("actor_match"),
+        data=data,
+        summary={"task_id": task.get("task_id"), "audit_readiness": "ready"},
+        planned_writes=[planned_write],
+        planned_moves=[],
+        warnings=warnings,
+        blocking_reasons=blocking_reasons,
+        needs_owner_reasons=[],
+        owner_confirmation_required=verdict != "BLOCK",
+        owner_confirmation_reasons=_return_owner_reasons() if verdict != "BLOCK" else [],
+        safety_notice=CONTROLLED_EXECUTE_NOTICE,
+        errors=[],
+    )
+    response["lease_preview"] = data["lease_preview"]
+    response["return_preview"] = return_preview
+    return response
+
+
+def return_task(
+    *,
+    task_id: str | None = None,
+    path: str | Path | None = None,
+    actor: str | None = None,
+    agent_instance: str | None = None,
+    owner_policy_ref: str | None = None,
+    claim_id: str | None = None,
+    active_session_id: str | None = None,
+    result_summary: str | None = None,
+    artifact_refs: Any = None,
+    completion_report_ref: str | None = None,
+    return_reason: str | None = None,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+    mcp_return_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        actor_text = str(actor or "").strip()
+        instance_text = str(agent_instance or "").strip()
+        policy_ref = str(owner_policy_ref or "").strip()
+        if not actor_text:
+            raise ValueError("actor is required")
+        if not instance_text:
+            raise ValueError("agent_instance is required")
+        if not policy_ref:
+            raise ValueError("owner_policy_ref is required")
+        refs = _as_list(artifact_refs)
+        summary_text = str(result_summary or "").strip()
+        completion_ref = str(completion_report_ref or "").strip()
+        if not summary_text and not refs and not completion_ref:
+            raise ValueError("MISSING_RETURN_EVIDENCE: result_summary, artifact_refs, or completion_report_ref is required")
+        resolved_root = _resolve_repo_root(repo_root)
+        response = _build_return_preview(
+            task_id=task_id,
+            path=path,
+            actor=actor_text,
+            agent_instance=instance_text,
+            owner_policy_ref=policy_ref,
+            claim_id=str(claim_id or "").strip() or None,
+            active_session_id=str(active_session_id or "").strip() or None,
+            result_summary=summary_text or None,
+            artifact_refs=refs,
+            completion_report_ref=completion_ref or None,
+            return_reason=str(return_reason or "").strip() or None,
+            repo_root=resolved_root,
+            dry_run=dry_run,
+            mcp_return_metadata=mcp_return_metadata,
+        )
+        if dry_run:
+            return _attach_controlled_execute_metadata(
+                operation="queue_return",
+                actor=actor_text,
+                response=response,
+                execute_allowed=response.get("verdict") != "BLOCK",
+            )
+        if response.get("verdict") == "BLOCK":
+            return response
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        target = resolved_root / str(data.get("target_path") or "")
+        target.write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
+        response["dry_run"] = False
+        response["data"]["wrote"] = True
+        response["performed_writes"] = list(response.get("planned_writes", []))
+        response["owner_confirmation_required"] = False
+        response["owner_confirmation_reasons"] = []
+        return response
+    except Exception as exc:
+        return _normalize_exception("queue_return", exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
 def _append_response(
     *,
     operation: str,
@@ -1394,6 +1657,7 @@ def execute_dry_run(
             "draft_create",
             "draft_publish",
             "queue_claim",
+            "queue_return",
             "orchestration_event_append",
             "planner_iteration_append",
             "intake_submit",
@@ -1460,6 +1724,25 @@ def execute_dry_run(
         elif op == "owner_decision_record":
             payload = source_data.get("original_payload") or {}
             current = record_owner_decision(payload, dry_run=True, repo_root=resolved_root, actor=actor_text)
+        elif op == "queue_return":
+            payload = source_data.get("original_payload") or {}
+            mcp_return_metadata = source_data.get("mcp_return") if isinstance(source_data.get("mcp_return"), dict) else None
+            current = return_task(
+                task_id=payload.get("task_id"),
+                path=payload.get("path"),
+                actor=actor_text,
+                agent_instance=payload.get("agent_instance"),
+                owner_policy_ref=payload.get("owner_policy_ref"),
+                claim_id=payload.get("claim_id"),
+                active_session_id=payload.get("active_session_id"),
+                result_summary=payload.get("result_summary"),
+                artifact_refs=payload.get("artifact_refs"),
+                completion_report_ref=payload.get("completion_report_ref"),
+                return_reason=payload.get("return_reason"),
+                dry_run=True,
+                repo_root=resolved_root,
+                mcp_return_metadata=mcp_return_metadata,
+            )
         elif op == TEMPLATE_OPERATION:
             payload = source_data.get("original_payload") or {}
             current = build_workspace_init_plan(
@@ -1683,6 +1966,44 @@ def execute_dry_run(
                 },
                 planned_writes=list(result.get("planned_writes", [])),
                 performed_writes=list(result.get("planned_writes", [])) if result.get("wrote") else [],
+                warnings=list(result.get("warnings", [])),
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                errors=[],
+            )
+
+        if op == "queue_return":
+            payload = source_data.get("original_payload") or {}
+            mcp_return_metadata = source_data.get("mcp_return") if isinstance(source_data.get("mcp_return"), dict) else None
+            result = return_task(
+                task_id=payload.get("task_id"),
+                path=payload.get("path"),
+                actor=actor_text,
+                agent_instance=payload.get("agent_instance"),
+                owner_policy_ref=payload.get("owner_policy_ref"),
+                claim_id=payload.get("claim_id"),
+                active_session_id=payload.get("active_session_id"),
+                result_summary=payload.get("result_summary"),
+                artifact_refs=payload.get("artifact_refs"),
+                completion_report_ref=payload.get("completion_report_ref"),
+                return_reason=payload.get("return_reason"),
+                dry_run=False,
+                repo_root=resolved_root,
+                mcp_return_metadata=mcp_return_metadata,
+            )
+            verdict = str(result.get("verdict") or "BLOCK")
+            return make_response(
+                ok=bool(result.get("data", {}).get("wrote", False)) if isinstance(result.get("data"), dict) else False,
+                verdict=verdict,
+                operation=op,
+                dry_run=False,
+                actor=_actor_payload(actor_text),
+                data=result.get("data"),
+                summary=result.get("summary"),
+                planned_writes=list(result.get("planned_writes", [])),
+                performed_writes=list(result.get("performed_writes", [])),
+                planned_moves=[],
+                performed_moves=[],
                 warnings=list(result.get("warnings", [])),
                 blocking_reasons=list(result.get("blocking_reasons", [])),
                 safety_notice=CONTROLLED_EXECUTE_NOTICE,

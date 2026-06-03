@@ -16,6 +16,7 @@ SUPPORTED_OPERATIONS = {
     "draft_create",
     "draft_publish",
     "queue_claim",
+    "queue_return",
     "orchestration_event_append",
     "planner_iteration_append",
     "intake_submit",
