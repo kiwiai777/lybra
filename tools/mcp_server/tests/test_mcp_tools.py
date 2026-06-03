@@ -476,6 +476,11 @@ class McpToolTests(unittest.TestCase):
         self.assertTrue(dry["owner_confirmation_required"])
         self.assertEqual(dry["owner_confirmation_token_required"], "OWNER_CONFIRMED")
         self.assertEqual(dry["lease_preview"]["lease_status"], "proposed")  # type: ignore[index]
+        self.assertEqual(dry["confirmation_preview"]["confirm"]["tool_name"], "lybra_queue_claim_confirm")  # type: ignore[index]
+        self.assertEqual(
+            dry["confirmation_preview"]["copyable_confirm_arguments"]["owner_confirmation_token"],  # type: ignore[index]
+            "OWNER_CONFIRMED",
+        )
         self.assertIn("dry_run_token", dry)
 
     def test_queue_claim_confirm_requires_owner_confirmation_then_moves_claim_only(self) -> None:
@@ -593,6 +598,11 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual(dry["owner_confirmation_token_required"], "OWNER_CONFIRMED")
         self.assertEqual(dry["lease_preview"]["lease_status"], "proposed")  # type: ignore[index]
         self.assertEqual(dry["confirmation_preview"]["confirm"]["tool_name"], "lybra_queue_return_confirm")  # type: ignore[index]
+        self.assertEqual(
+            dry["confirmation_preview"]["copyable_confirm_arguments"]["owner_confirmation_token"],  # type: ignore[index]
+            "OWNER_CONFIRMED",
+        )
+        self.assertIn("Verify returned work evidence", " ".join(dry["confirmation_preview"]["review_checklist"]))  # type: ignore[index]
         self.assertIn("dry_run_token", dry)
 
     def test_queue_return_confirm_requires_owner_confirmation_then_updates_claimed_task_only(self) -> None:
@@ -657,6 +667,49 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual(wrong_instance["verdict"], "BLOCK")
         self.assertTrue(any("CLAIMANT_MISMATCH" in item or "specific_instance_only" in item for item in wrong_instance["blocking_reasons"]))  # type: ignore[index]
         self.assertEqual(forbidden["error_code"], "UNSUPPORTED_QUEUE_RETURN_FIELD")
+
+    def test_queue_return_blocks_missing_evidence(self) -> None:
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_dry_run",
+                    self.return_payload(result_summary="", artifact_refs=[], completion_report_ref=""),
+                )
+            )
+
+        self.assertEqual(blocked["error_code"], "MISSING_RETURN_EVIDENCE")
+        self.assertIn("non-secret executor evidence", blocked["suggested_next_action"])
+
+    def test_queue_return_blocks_invalid_executor_status(self) -> None:
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(
+                self.call_tool("lybra_queue_return_dry_run", self.return_payload(executor_status="in_progress"))
+            )
+
+        self.assertEqual(blocked["error_code"], "INVALID_EXECUTOR_STATUS")
+
+    def test_queue_return_blocks_invalid_audit_readiness(self) -> None:
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(
+                self.call_tool("lybra_queue_return_dry_run", self.return_payload(audit_readiness="not_ready"))
+            )
+
+        self.assertEqual(blocked["error_code"], "INVALID_AUDIT_READINESS")
 
     def test_queue_return_confirm_rejects_non_mcp_dry_run_token(self) -> None:
         self.write_return_task()

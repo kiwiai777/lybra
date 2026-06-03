@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from typing import Any
@@ -139,6 +141,123 @@ def _task_summary(task: dict[str, Any]) -> dict[str, Any]:
             },
         ),
     }
+
+
+def _secret_fingerprint(raw: str) -> str | None:
+    value = raw.strip()
+    if not value:
+        return None
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return f"sha256:{digest[:12]}"
+
+
+def build_mcp_doctor_report(env: dict[str, str] | None = None) -> dict[str, Any]:
+    source = env if env is not None else os.environ
+    transport_token = str(source.get("LYBRA_MCP_TOKEN") or "").strip()
+    capability_raw = str(source.get("LYBRA_CAPABILITY_TOKEN") or "").strip()
+    capability: dict[str, Any] = {}
+    capability_errors: list[str] = []
+    if capability_raw:
+        try:
+            parsed = json.loads(capability_raw)
+        except json.JSONDecodeError:
+            capability_errors.append("LYBRA_CAPABILITY_TOKEN is not valid JSON")
+        else:
+            if isinstance(parsed, dict):
+                capability = parsed
+            else:
+                capability_errors.append("LYBRA_CAPABILITY_TOKEN must be a JSON object")
+
+    operations_raw = capability.get("operations")
+    operations = [str(item) for item in operations_raw] if isinstance(operations_raw, list) else []
+    if capability_raw and not isinstance(operations_raw, list):
+        capability_errors.append("LYBRA_CAPABILITY_TOKEN.operations must be a list")
+
+    expires_at = str(capability.get("expires_at") or "").strip()
+    expires_status = "missing"
+    if expires_at:
+        try:
+            parsed_expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if parsed_expires.tzinfo is None:
+                parsed_expires = parsed_expires.replace(tzinfo=timezone.utc)
+            expires_status = "valid" if parsed_expires > datetime.now(timezone.utc) else "expired"
+        except ValueError:
+            expires_status = "invalid"
+
+    tool_visibility = {
+        "queue_claim": "visible" if "queue_claim" in operations else "hidden",
+        "queue_return": "visible" if "queue_return" in operations else "hidden",
+    }
+    hints: list[str] = [
+        "Bearer transport auth controls whether the MCP client can connect.",
+        "LYBRA_CAPABILITY_TOKEN.operations controls which scoped write tools are visible.",
+    ]
+    if transport_token and not operations:
+        hints.append("Connection may work while claim/return tools stay hidden; check capability operations first.")
+    if "queue_claim" not in operations:
+        hints.append("Add queue_claim to operations before expecting lybra_queue_claim_* tools.")
+    if "queue_return" not in operations:
+        hints.append("Add queue_return to operations before expecting lybra_queue_return_* tools.")
+
+    return {
+        "operation": "mcp_doctor",
+        "ok": not capability_errors,
+        "transport_auth": {
+            "env_var": "LYBRA_MCP_TOKEN",
+            "present": bool(transport_token),
+            "fingerprint": _secret_fingerprint(transport_token),
+            "meaning": "Bearer token for HTTP/SSE transport connection only; it does not grant write-tool visibility.",
+        },
+        "capability_scope": {
+            "env_var": "LYBRA_CAPABILITY_TOKEN",
+            "present": bool(capability_raw),
+            "fingerprint": _secret_fingerprint(capability_raw),
+            "operations": operations,
+            "expires_at": expires_at or None,
+            "expires_status": expires_status,
+            "token_ref_present": bool(capability.get("token_ref") or capability.get("token_id")),
+            "meaning": "Capability token scopes determine which mutation tools are exposed.",
+        },
+        "tool_visibility": tool_visibility,
+        "diagnostics": capability_errors,
+        "hints": hints,
+        "secrets_notice": "Raw tokens are never printed; fingerprints are non-secret SHA-256 prefixes for comparison only.",
+    }
+
+
+def render_mcp_doctor_text(report: dict[str, Any]) -> str:
+    transport = report["transport_auth"]
+    capability = report["capability_scope"]
+    visibility = report["tool_visibility"]
+    lines = [
+        "MCP doctor",
+        "",
+        "Transport authentication:",
+        f"- LYBRA_MCP_TOKEN present: {transport['present']}",
+        f"- fingerprint: {transport.get('fingerprint') or '(missing)'}",
+        "- meaning: Bearer lets the MCP client connect; it does not grant write tools.",
+        "",
+        "Capability scopes:",
+        f"- LYBRA_CAPABILITY_TOKEN present: {capability['present']}",
+        f"- fingerprint: {capability.get('fingerprint') or '(missing)'}",
+        f"- operations: {capability.get('operations') or []}",
+        f"- expires_at: {capability.get('expires_at') or '(missing)'}",
+        f"- expires_status: {capability.get('expires_status')}",
+        "",
+        "Scoped tool visibility:",
+        f"- lybra_queue_claim_*: {visibility.get('queue_claim')}",
+        f"- lybra_queue_return_*: {visibility.get('queue_return')}",
+        "",
+        "Troubleshooting:",
+    ]
+    lines.extend(f"- {hint}" for hint in report.get("hints", []))
+    if report.get("diagnostics"):
+        lines.append("")
+        lines.append("Diagnostics:")
+        lines.extend(f"- {item}" for item in report["diagnostics"])
+    lines.append("")
+    lines.append(str(report["secrets_notice"]))
+    return "\n".join(lines)
 
 
 def build_validate_json_report(report: dict[str, Any], records: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -474,6 +593,11 @@ def build_parser() -> argparse.ArgumentParser:
     agents_parser = subparsers.add_parser("agents", help="Render agent profiles")
     agents_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    mcp_parser = subparsers.add_parser("mcp", help="MCP setup diagnostics")
+    mcp_subparsers = mcp_parser.add_subparsers(dest="mcp_command")
+    mcp_doctor_parser = mcp_subparsers.add_parser("doctor", help="Inspect MCP transport auth and capability scopes")
+    mcp_doctor_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
     profile_subparsers = profile_parser.add_subparsers(dest="profile_command")
     profile_draft_parser = profile_subparsers.add_parser("draft", help="Validate and preview a custom profile registry write")
@@ -667,6 +791,17 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"Unknown draft command: {args.draft_command}", file=sys.stderr)
         return 2
+
+    if args.command == "mcp":
+        if getattr(args, "mcp_command", None) != "doctor":
+            parser.print_help()
+            return 2
+        result = build_mcp_doctor_report()
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_mcp_doctor_text(result))
+        return 0 if result.get("ok") else 1
 
     if args.command == "workspace":
         if not getattr(args, "workspace_command", None):

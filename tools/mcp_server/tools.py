@@ -160,7 +160,10 @@ def _scope_denied_result_for(scope: str, label: str) -> dict[str, Any]:
     return _teaching_error(
         "SCOPE_DENIED",
         f"Connection capability does not include {scope}; {label} are not available.",
-        f"Restart the MCP server with LYBRA_CAPABILITY_TOKEN containing operations: [\"{scope}\"].",
+        (
+            f"Bearer transport auth may still be valid, but scoped mutation tools stay hidden until "
+            f"LYBRA_CAPABILITY_TOKEN contains operations: [\"{scope}\"]. Run `lybra mcp doctor` to inspect redacted effective scopes."
+        ),
         doc_ref="AIPOS-109 capability token scope-gated tool visibility",
     )
 
@@ -332,6 +335,61 @@ def _decorate_queue_claim_dry_run(response: dict[str, Any], *, args: dict[str, A
     response["owner_confirmation_token_required"] = OWNER_CONFIRMATION_TOKEN
     response["dry_run_token"] = response.get("dry_run_token") or response.get("dry_run_id")
     response["expires_at"] = response.get("dry_run_expires_at")
+    response["confirmation_preview"] = {
+        "envelope_version": "aipos-170.claim.v1",
+        "operation": "queue_claim",
+        "surface": "mcp",
+        "autonomy_mode": "Supervised",
+        "client_hint": "Present this exact preview to Owner. Confirm only with explicit owner_confirmation_token: OWNER_CONFIRMED.",
+        "review_checklist": [
+            "Verify task selector and planned pending-to-claimed move.",
+            "Verify actor, agent_instance, canonical_agent_instance, and owner_policy_ref.",
+            "Verify lease_status remains proposed and no worker is launched.",
+            "Copy confirm.arguments only after Owner approves this preview.",
+        ],
+        "task": {
+            "task_id": response.get("data", {}).get("task_id") if isinstance(response.get("data"), dict) else args.get("task_id"),
+            "task_path": response.get("data", {}).get("source_path") if isinstance(response.get("data"), dict) else args.get("task_path"),
+            "current_status": "pending",
+        },
+        "actor": {
+            "actor": str(args.get("actor") or "").strip(),
+            "agent_instance": str(args.get("agent_instance") or "").strip(),
+            "canonical_agent_instance": canonical_agent_instance,
+        },
+        "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+        "lease": response["lease_preview"],
+        "preview": {
+            "planned_writes": response.get("planned_writes", []),
+            "planned_moves": response.get("planned_moves", []),
+            "planned_records": [],
+            "blocking_reasons": response.get("blocking_reasons", []),
+            "warnings": response.get("warnings", []),
+        },
+        "confirm": {
+            "tool_name": "lybra_queue_claim_confirm",
+            "required_owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
+            "arguments": {
+                "dry_run_token": response.get("dry_run_token"),
+                "actor": str(args.get("actor") or "").strip(),
+                "agent_instance": str(args.get("agent_instance") or "").strip(),
+                "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+                "owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
+            },
+            "dry_run_token": response.get("dry_run_token"),
+            "actor": str(args.get("actor") or "").strip(),
+            "agent_instance": str(args.get("agent_instance") or "").strip(),
+            "canonical_agent_instance": canonical_agent_instance,
+            "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+        },
+        "copyable_confirm_arguments": {
+            "dry_run_token": response.get("dry_run_token"),
+            "actor": str(args.get("actor") or "").strip(),
+            "agent_instance": str(args.get("agent_instance") or "").strip(),
+            "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+            "owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
+        },
+    }
     return response
 
 
@@ -363,6 +421,14 @@ def _decorate_queue_return_dry_run(response: dict[str, Any], *, args: dict[str, 
         "operation": "queue_return",
         "surface": "mcp",
         "autonomy_mode": "Supervised",
+        "client_hint": "Present this exact preview to Owner. Confirm only with explicit owner_confirmation_token: OWNER_CONFIRMED.",
+        "review_checklist": [
+            "Verify returned work evidence is normalized and non-secret.",
+            "Verify actor, agent_instance, canonical_agent_instance, and owner_policy_ref.",
+            "Verify executor_status is completed and audit_readiness is ready.",
+            "Verify lease_status remains proposed; no audit dispatch, audit PASS, or finalize occurs.",
+            "Copy confirm.arguments only after Owner approves this preview.",
+        ],
         "task": {
             "task_id": response.get("data", {}).get("task_id") if isinstance(response.get("data"), dict) else args.get("task_id"),
             "task_path": response.get("data", {}).get("source_path") if isinstance(response.get("data"), dict) else args.get("task_path"),
@@ -386,11 +452,25 @@ def _decorate_queue_return_dry_run(response: dict[str, Any], *, args: dict[str, 
         "confirm": {
             "tool_name": "lybra_queue_return_confirm",
             "required_owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
+            "arguments": {
+                "dry_run_token": response.get("dry_run_token"),
+                "actor": str(args.get("actor") or "").strip(),
+                "agent_instance": str(args.get("agent_instance") or "").strip(),
+                "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+                "owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
+            },
             "dry_run_token": response.get("dry_run_token"),
             "actor": str(args.get("actor") or "").strip(),
             "agent_instance": str(args.get("agent_instance") or "").strip(),
             "canonical_agent_instance": canonical_agent_instance,
             "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+        },
+        "copyable_confirm_arguments": {
+            "dry_run_token": response.get("dry_run_token"),
+            "actor": str(args.get("actor") or "").strip(),
+            "agent_instance": str(args.get("agent_instance") or "").strip(),
+            "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+            "owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
         },
     }
     return response
@@ -659,16 +739,16 @@ def lybra_queue_claim_confirm(arguments: dict[str, Any] | None = None) -> dict[s
     if token is None:
         return _queue_claim_error(
             "STALE_DRY_RUN",
-            "dry_run_token was not found or is no longer available.",
-            "Run lybra_queue_claim_dry_run again, review the new preview, then confirm.",
+            "dry_run_token was not found in this MCP server process, or it expired.",
+            "Dry-run tokens are currently process-local. Run lybra_queue_claim_dry_run again on this connection, review the new preview, then confirm.",
         )
     source_data = token.plan.get("data") if isinstance(token.plan, dict) else {}
     mcp_claim = source_data.get("mcp_claim") if isinstance(source_data, dict) else None
     if token.operation != "queue_claim" or not isinstance(mcp_claim, dict):
         return _queue_claim_error(
             "INCOMPATIBLE_DRY_RUN",
-            "dry_run_token did not come from lybra_queue_claim_dry_run.",
-            "Run lybra_queue_claim_dry_run and confirm with that MCP dry_run_token.",
+            "dry_run_token was recognized but is not compatible with lybra_queue_claim_confirm.",
+            "Confirm only with a token produced by lybra_queue_claim_dry_run for this MCP claim surface.",
         )
     token_policy = str(mcp_claim.get("owner_policy_ref") or "").strip()
     token_instance = str(mcp_claim.get("canonical_agent_instance") or "").strip()
@@ -875,16 +955,16 @@ def lybra_queue_return_confirm(arguments: dict[str, Any] | None = None) -> dict[
     if token is None:
         return _queue_return_error(
             "STALE_DRY_RUN",
-            "dry_run_token was not found or is no longer available.",
-            "Run lybra_queue_return_dry_run again, review the new confirmation_preview, then confirm.",
+            "dry_run_token was not found in this MCP server process, or it expired.",
+            "Dry-run tokens are currently process-local. Run lybra_queue_return_dry_run again on this connection, review the new confirmation_preview, then confirm.",
         )
     source_data = token.plan.get("data") if isinstance(token.plan, dict) else {}
     mcp_return = source_data.get("mcp_return") if isinstance(source_data, dict) else None
     if token.operation != "queue_return" or not isinstance(mcp_return, dict):
         return _queue_return_error(
             "INCOMPATIBLE_DRY_RUN",
-            "dry_run_token did not come from lybra_queue_return_dry_run.",
-            "Run lybra_queue_return_dry_run and confirm with that MCP dry_run_token.",
+            "dry_run_token was recognized but is not compatible with lybra_queue_return_confirm.",
+            "Confirm only with a token produced by lybra_queue_return_dry_run for this MCP return surface.",
         )
     token_policy = str(mcp_return.get("owner_policy_ref") or "").strip()
     token_instance = str(mcp_return.get("canonical_agent_instance") or "").strip()
