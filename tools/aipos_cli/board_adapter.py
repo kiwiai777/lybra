@@ -1168,6 +1168,9 @@ def _queue_mutation_preview(
     repo_root: str | Path | None,
     reason: str | None = None,
     report_link: str | None = None,
+    owner_confirmation_required_override: bool | None = None,
+    owner_confirmation_reasons_override: list[str] | None = None,
+    mcp_claim_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not str(actor or "").strip():
         raise ValueError("actor is required")
@@ -1218,6 +1221,13 @@ def _queue_mutation_preview(
         data["record_updates"] = result.get("record_updates", [])
     if "record_previews" in result:
         data["record_previews"] = result.get("record_previews", [])
+    if mcp_claim_metadata:
+        data["mcp_claim"] = dict(mcp_claim_metadata)
+    owner_required = verdict == "NEEDS_OWNER"
+    owner_reasons = needs_owner_reasons if verdict == "NEEDS_OWNER" else []
+    if owner_confirmation_required_override is not None:
+        owner_required = bool(owner_confirmation_required_override)
+        owner_reasons = list(owner_confirmation_reasons_override or [])
     response = make_response(
         ok=True,
         verdict=verdict,
@@ -1232,8 +1242,8 @@ def _queue_mutation_preview(
         warnings=list(result.get("warnings", [])),
         blocking_reasons=list(result.get("blocking_reasons", [])),
         needs_owner_reasons=needs_owner_reasons,
-        owner_confirmation_required=verdict == "NEEDS_OWNER",
-        owner_confirmation_reasons=needs_owner_reasons if verdict == "NEEDS_OWNER" else [],
+        owner_confirmation_required=owner_required,
+        owner_confirmation_reasons=owner_reasons,
         safety_notice=MUTATION_DRY_RUN_NOTICE,
         errors=[],
     )
@@ -1462,6 +1472,7 @@ def execute_dry_run(
         else:
             claim_task_id = source_data.get("task_id")
             claim_path = None if claim_task_id else source_data.get("source_path")
+            mcp_claim_metadata = source_data.get("mcp_claim") if isinstance(source_data.get("mcp_claim"), dict) else None
             current = claim_task(
                 task_id=claim_task_id,
                 path=claim_path,
@@ -1469,6 +1480,13 @@ def execute_dry_run(
                 dry_run=True,
                 with_records=False,
                 repo_root=resolved_root,
+                owner_confirmation_required_override=True if mcp_claim_metadata else None,
+                owner_confirmation_reasons_override=(
+                    list(mcp_claim_metadata.get("owner_confirmation_reasons", []))
+                    if mcp_claim_metadata
+                    else None
+                ),
+                mcp_claim_metadata=mcp_claim_metadata,
             )
 
         current_hash = snapshot_hash(op, actor_text, current)
@@ -1741,6 +1759,9 @@ def claim_task(
     dry_run: bool = True,
     with_records: bool = False,
     repo_root: str | Path | None = None,
+    owner_confirmation_required_override: bool | None = None,
+    owner_confirmation_reasons_override: list[str] | None = None,
+    mcp_claim_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         return _queue_mutation_preview(
@@ -1752,6 +1773,9 @@ def claim_task(
             dry_run=dry_run,
             with_records=with_records,
             repo_root=repo_root,
+            owner_confirmation_required_override=owner_confirmation_required_override,
+            owner_confirmation_reasons_override=owner_confirmation_reasons_override,
+            mcp_claim_metadata=mcp_claim_metadata,
         )
     except Exception as exc:
         return _normalize_exception("queue_claim", exc, dry_run=dry_run, actor=_actor_payload(actor))

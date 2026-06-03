@@ -166,12 +166,21 @@ class HttpSseTransportTests(unittest.TestCase):
             response = self.post_rpc(base_url, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
             names = [tool["name"] for tool in response["result"]["tools"]]  # type: ignore[index]
             self.assertNotIn("lybra_intake_submit_dry_run", names)
+            self.assertNotIn("lybra_queue_claim_dry_run", names)
 
         with self.server(capability_token=self.capability_token()) as base_url:
             response = self.post_rpc(base_url, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
             names = [tool["name"] for tool in response["result"]["tools"]]  # type: ignore[index]
             self.assertIn("lybra_intake_submit_dry_run", names)
             self.assertIn("lybra_intake_submit_confirm", names)
+            self.assertNotIn("lybra_queue_claim_dry_run", names)
+
+        with self.server(capability_token=self.capability_token(operations=["queue_claim"])) as base_url:
+            response = self.post_rpc(base_url, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+            names = [tool["name"] for tool in response["result"]["tools"]]  # type: ignore[index]
+            self.assertIn("lybra_queue_claim_dry_run", names)
+            self.assertIn("lybra_queue_claim_confirm", names)
+            self.assertNotIn("lybra_intake_submit_dry_run", names)
 
     def test_intake_submit_dry_run_over_http_writes_nothing(self) -> None:
         with self.server(capability_token=self.capability_token()) as base_url:

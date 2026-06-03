@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.aipos_cli.controlled_execute import clear_tokens, get_dry_run
+from tools.aipos_cli.board_adapter import claim_task
 from tools.mcp_server.server import handle_request, serve
 from tools.mcp_server.tools import TOOL_DESCRIPTORS
 
@@ -99,6 +100,38 @@ class McpToolTests(unittest.TestCase):
                 "projects": ["acme_client"],
                 "expires_at": "2999-01-01T00:00:00Z",
             }
+        )
+
+    def write_claim_task(self, task_id: str = "AIPOS-MCP-CLAIM", *, agent_instance: str = "agent-01", claim_policy: str = "specific_instance_only") -> None:
+        (self.repo_root / "5_tasks" / "queue" / "pending" / f"{task_id.lower()}.md").write_text(
+            "\n".join(
+                [
+                    "---",
+                    f"task_id: {task_id}",
+                    "title: MCP Claim Test",
+                    "project: lybra",
+                    "assigned_to: dev_claude",
+                    f"agent_instance: {agent_instance}",
+                    "context_bundle: dev_claude",
+                    "task_mode: code",
+                    "model_tier: L2",
+                    "priority: medium",
+                    "status: pending",
+                    "created_by: tester",
+                    "needs_owner: false",
+                    "output_target: tools/mcp_server/",
+                    "artifact_policy: formal_write",
+                    "session_policy: single_task_session",
+                    "context_isolation: strict",
+                    "artifact_scope: tools/mcp_server/",
+                    "memory_scope: mcp claim tests",
+                    f"claim_policy: {claim_policy}",
+                    "---",
+                    "Supervised MCP claim test task.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
         )
 
     def intake_payload(self, **overrides: object) -> dict[str, object]:
@@ -224,10 +257,15 @@ class McpToolTests(unittest.TestCase):
         self.assertIn("lybra_owner_decision_record_confirm", names_with_owner_scope)
         self.assertNotIn("lybra_intake_submit_dry_run", names_with_owner_scope)
 
+        names_with_claim_scope = self.list_tool_names(capability_token=self.capability_token(operations=["queue_claim"]))
+        self.assertIn("lybra_queue_claim_dry_run", names_with_claim_scope)
+        self.assertIn("lybra_queue_claim_confirm", names_with_claim_scope)
+        self.assertNotIn("lybra_intake_submit_dry_run", names_with_claim_scope)
+
     def test_write_tool_descriptions_are_self_documenting(self) -> None:
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["intake_submit", "owner_decision_record"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["intake_submit", "owner_decision_record", "queue_claim"]),
         }
         with patch.dict(os.environ, env, clear=True):
             response = handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -235,7 +273,11 @@ class McpToolTests(unittest.TestCase):
         descriptions = {
             tool["name"]: tool["description"]
             for tool in response["result"]["tools"]  # type: ignore[index]
-            if tool["name"].startswith("lybra_intake_submit") or tool["name"].startswith("lybra_owner_decision_record")
+            if (
+                tool["name"].startswith("lybra_intake_submit")
+                or tool["name"].startswith("lybra_owner_decision_record")
+                or tool["name"].startswith("lybra_queue_claim")
+            )
         }
         self.assertEqual(
             set(descriptions),
@@ -244,6 +286,8 @@ class McpToolTests(unittest.TestCase):
                 "lybra_intake_submit_confirm",
                 "lybra_owner_decision_record_dry_run",
                 "lybra_owner_decision_record_confirm",
+                "lybra_queue_claim_dry_run",
+                "lybra_queue_claim_confirm",
             },
         )
         for description in descriptions.values():
@@ -318,6 +362,138 @@ class McpToolTests(unittest.TestCase):
             for path in (self.repo_root / "5_tasks" / "queue" / "pending").iterdir()
         )
         self.assertEqual(pending_after, [path for path in pending_before if path.startswith("5_tasks/queue/pending/")])
+
+    def claim_payload(self, **overrides: object) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "task_id": "AIPOS-MCP-CLAIM",
+            "actor": "agent-01",
+            "agent_instance": "agent-01",
+            "autonomy_mode": "Supervised",
+            "owner_policy_ref": "owner_policy:aipos-166-supervised-test",
+            "runtime_profile": "cc",
+            "active_session_id": "session_mcp_claim_test",
+            "context_bundle_ack": "ack",
+            "with_records": True,
+            "claim_reason": "test supervised explicit claim",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_queue_claim_dry_run_requires_scope_and_supervised_mode(self) -> None:
+        self.write_claim_task()
+        no_scope = self.assert_tool_ok(self.call_tool("lybra_queue_claim_dry_run", self.claim_payload()))
+        self.assertEqual(no_scope["error_code"], "SCOPE_DENIED")
+
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            delegated = self.assert_tool_ok(
+                self.call_tool("lybra_queue_claim_dry_run", self.claim_payload(autonomy_mode="Delegated"))
+            )
+        self.assertEqual(delegated["error_code"], "INVALID_AUTONOMY_MODE")
+
+    def test_queue_claim_dry_run_is_zero_write_and_owner_confirmed(self) -> None:
+        self.write_claim_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        before = self.data_paths()
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_claim_dry_run", self.claim_payload()))
+        after = self.data_paths()
+
+        self.assertEqual(before, after)
+        self.assertEqual(dry["operation"], "queue_claim")
+        self.assertEqual(dry["surface"], "mcp")
+        self.assertEqual(dry["autonomy_mode"], "Supervised")
+        self.assertEqual(dry["canonical_agent_instance"], "agent-01")
+        self.assertTrue(dry["owner_confirmation_required"])
+        self.assertEqual(dry["owner_confirmation_token_required"], "OWNER_CONFIRMED")
+        self.assertEqual(dry["lease_preview"]["lease_status"], "proposed")  # type: ignore[index]
+        self.assertIn("dry_run_token", dry)
+
+    def test_queue_claim_confirm_requires_owner_confirmation_then_moves_claim_only(self) -> None:
+        self.write_claim_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_claim_dry_run", self.claim_payload()))
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_claim_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-166-supervised-test",
+                    },
+                )
+            )
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_claim_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-166-supervised-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+
+        self.assertEqual(blocked["error_code"], "OWNER_CONFIRMATION_REQUIRED")
+        self.assertTrue(confirmed["ok"])
+        self.assertEqual(confirmed["lease_status"], "proposed")
+        self.assertTrue((self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-claim.md").exists())
+        self.assertFalse((self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-mcp-claim.md").exists())
+
+    def test_queue_claim_blocks_wrong_specific_instance_and_forbidden_fields(self) -> None:
+        self.write_claim_task(agent_instance="dev.claude.cc.local")
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            wrong_instance = self.assert_tool_ok(
+                self.call_tool("lybra_queue_claim_dry_run", self.claim_payload(actor="agent-02", agent_instance="agent-02"))
+            )
+            forbidden = self.assert_tool_ok(
+                self.call_tool("lybra_queue_claim_dry_run", self.claim_payload(raw_prompt="secret"))
+            )
+
+        self.assertEqual(wrong_instance["verdict"], "BLOCK")
+        self.assertTrue(any("specific_instance_only" in item for item in wrong_instance["blocking_reasons"]))  # type: ignore[index]
+        self.assertEqual(forbidden["error_code"], "UNSUPPORTED_QUEUE_CLAIM_FIELD")
+
+    def test_queue_claim_confirm_rejects_non_mcp_dry_run_token(self) -> None:
+        self.write_claim_task()
+        local_dry = claim_task(task_id="AIPOS-MCP-CLAIM", actor="agent-01", dry_run=True, repo_root=self.repo_root)
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            rejected = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_claim_confirm",
+                    {
+                        "dry_run_token": local_dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-166-supervised-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+
+        self.assertEqual(rejected["error_code"], "INCOMPATIBLE_DRY_RUN")
+        self.assertTrue((self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-mcp-claim.md").exists())
 
     def test_scope_denied_returns_structured_teaching_error(self) -> None:
         env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=[])}
