@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-from tools.aipos_cli.records import expected_claim_log_path, expected_session_record_path
+from tools.aipos_cli.records import expected_claim_log_path, expected_return_record_path, expected_session_record_path
 
 RECORDS_ROOT = Path("5_tasks/records")
 CLAIMS_ROOT = RECORDS_ROOT / "claims"
 SESSIONS_ROOT = RECORDS_ROOT / "sessions"
+RETURNS_ROOT = RECORDS_ROOT / "returns"
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -60,6 +61,8 @@ def ensure_safe_record_path(repo_root: Path, path: Path, record_type: str, task_
         root = (repo_root / CLAIMS_ROOT / task_id).resolve()
     elif record_type == "session_record":
         root = (repo_root / SESSIONS_ROOT / task_id).resolve()
+    elif record_type == "return_record":
+        root = (repo_root / RETURNS_ROOT / task_id).resolve()
     else:
         raise ValueError(f"Unsupported record_type: {record_type}")
     resolved = path.resolve()
@@ -128,6 +131,85 @@ SESSION_FRONTMATTER_ORDER = [
     "claim_id",
     "current_state",
     "event_count",
+]
+
+MCP_CLAIM_FRONTMATTER_ORDER = [
+    "record_type",
+    "event_type",
+    "claim_id",
+    "task_id",
+    "task_path",
+    "surface",
+    "operation",
+    "autonomy_mode",
+    "actor",
+    "canonical_agent_instance",
+    "owner_policy_ref",
+    "claimed_at",
+    "from_state",
+    "to_state",
+    "claim_policy",
+    "claim_match_basis",
+    "claim_requirements_hash",
+    "dry_run_id",
+    "dry_run_snapshot_hash",
+    "confirmation_ref",
+    "session_id",
+    "lease_status",
+    "lease_path",
+    "active_lease_written",
+]
+
+MCP_SESSION_FRONTMATTER_ORDER = [
+    "record_type",
+    "session_id",
+    "task_id",
+    "task_path",
+    "surface",
+    "autonomy_mode",
+    "actor",
+    "canonical_agent_instance",
+    "owner_policy_ref",
+    "claim_id",
+    "created_at",
+    "updated_at",
+    "session_status",
+    "current_state",
+    "lease_status",
+    "lease_path",
+    "active_lease_written",
+    "event_count",
+]
+
+MCP_RETURN_FRONTMATTER_ORDER = [
+    "record_type",
+    "event_type",
+    "return_id",
+    "task_id",
+    "task_path",
+    "surface",
+    "operation",
+    "autonomy_mode",
+    "actor",
+    "canonical_agent_instance",
+    "owner_policy_ref",
+    "claim_id",
+    "session_id",
+    "returned_at",
+    "executor_status",
+    "audit_readiness",
+    "dependency_executor_status",
+    "dependency_audit_readiness",
+    "dependency_audit_status",
+    "result_summary_present",
+    "artifact_refs",
+    "completion_report_ref",
+    "dry_run_id",
+    "dry_run_snapshot_hash",
+    "confirmation_ref",
+    "lease_status",
+    "lease_path",
+    "active_lease_written",
 ]
 
 
@@ -204,6 +286,178 @@ def build_session_record_markdown(
     return render_markdown(metadata, body, SESSION_FRONTMATTER_ORDER)
 
 
+def build_mcp_claim_record_markdown(
+    *,
+    task_id: str,
+    task_path: str,
+    actor: str,
+    canonical_agent_instance: str,
+    owner_policy_ref: str,
+    claim_id: str,
+    session_id: str,
+    claimed_at: str,
+    claim_policy: str | None = None,
+    claim_match_basis: str | None = None,
+    claim_requirements_hash: str | None = None,
+    dry_run_id: str | None = None,
+    dry_run_snapshot_hash: str | None = None,
+    confirmation_ref: str | None = None,
+) -> str:
+    metadata = {
+        "record_type": "claim_record",
+        "event_type": "mcp_queue_claim",
+        "claim_id": claim_id,
+        "task_id": task_id,
+        "task_path": task_path,
+        "surface": "mcp",
+        "operation": "queue_claim",
+        "autonomy_mode": "Supervised",
+        "actor": actor,
+        "canonical_agent_instance": canonical_agent_instance,
+        "owner_policy_ref": owner_policy_ref,
+        "claimed_at": claimed_at,
+        "from_state": "pending",
+        "to_state": "claimed",
+        "claim_policy": claim_policy or "",
+        "claim_match_basis": claim_match_basis or "",
+        "claim_requirements_hash": claim_requirements_hash or "",
+        "dry_run_id": dry_run_id or "",
+        "dry_run_snapshot_hash": dry_run_snapshot_hash or "",
+        "confirmation_ref": confirmation_ref or "",
+        "session_id": session_id,
+        "lease_status": "proposed",
+        "lease_path": "claim_only",
+        "active_lease_written": False,
+    }
+    body = "\n".join(
+        [
+            f"# MCP Claim Record: {claim_id}",
+            "",
+            "## Summary",
+            "",
+            f"- Task `{task_id}` was claimed by `{canonical_agent_instance}` through the Supervised MCP claim surface.",
+            f"- Owner policy: `{owner_policy_ref}`.",
+            "",
+            "## Boundary",
+            "",
+            "This record is provenance evidence only. It does not activate a lease, launch work, dispatch audit, record audit PASS, finalize, or unblock dependent work.",
+            "",
+        ]
+    )
+    return render_markdown(metadata, body, MCP_CLAIM_FRONTMATTER_ORDER)
+
+
+def build_mcp_claim_session_record_markdown(
+    *,
+    task_id: str,
+    task_path: str,
+    actor: str,
+    canonical_agent_instance: str,
+    owner_policy_ref: str,
+    session_id: str,
+    claim_id: str,
+    created_at: str,
+) -> str:
+    metadata = {
+        "record_type": "session_record",
+        "session_id": session_id,
+        "task_id": task_id,
+        "task_path": task_path,
+        "surface": "mcp",
+        "autonomy_mode": "Supervised",
+        "actor": actor,
+        "canonical_agent_instance": canonical_agent_instance,
+        "owner_policy_ref": owner_policy_ref,
+        "claim_id": claim_id,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "session_status": "claimed",
+        "current_state": "claimed",
+        "lease_status": "proposed",
+        "lease_path": "claim_only",
+        "active_lease_written": False,
+        "event_count": 1,
+    }
+    body = "\n".join(
+        [
+            f"# MCP Session Record: {session_id}",
+            "",
+            "## Events",
+            "",
+            f"- {created_at} mcp_queue_claim by {canonical_agent_instance}; claim_id={claim_id}; owner_policy_ref={owner_policy_ref}; lease_status=proposed.",
+            "",
+        ]
+    )
+    return render_markdown(metadata, body, MCP_SESSION_FRONTMATTER_ORDER)
+
+
+def build_mcp_return_record_markdown(
+    *,
+    task_id: str,
+    task_path: str,
+    actor: str,
+    canonical_agent_instance: str,
+    owner_policy_ref: str,
+    return_id: str,
+    claim_id: str,
+    session_id: str,
+    returned_at: str,
+    result_summary: str | None,
+    artifact_refs: list[str],
+    completion_report_ref: str | None,
+    dry_run_id: str | None = None,
+    dry_run_snapshot_hash: str | None = None,
+    confirmation_ref: str | None = None,
+) -> str:
+    metadata = {
+        "record_type": "return_record",
+        "event_type": "mcp_queue_return",
+        "return_id": return_id,
+        "task_id": task_id,
+        "task_path": task_path,
+        "surface": "mcp",
+        "operation": "queue_return",
+        "autonomy_mode": "Supervised",
+        "actor": actor,
+        "canonical_agent_instance": canonical_agent_instance,
+        "owner_policy_ref": owner_policy_ref,
+        "claim_id": claim_id,
+        "session_id": session_id,
+        "returned_at": returned_at,
+        "executor_status": "completed",
+        "audit_readiness": "ready",
+        "dependency_executor_status": "completed",
+        "dependency_audit_readiness": "ready",
+        "dependency_audit_status": "pending",
+        "result_summary_present": bool(result_summary),
+        "artifact_refs": artifact_refs,
+        "completion_report_ref": completion_report_ref or "",
+        "dry_run_id": dry_run_id or "",
+        "dry_run_snapshot_hash": dry_run_snapshot_hash or "",
+        "confirmation_ref": confirmation_ref or "",
+        "lease_status": "proposed",
+        "lease_path": "claim_only",
+        "active_lease_written": False,
+    }
+    body = "\n".join(
+        [
+            f"# MCP Return Record: {return_id}",
+            "",
+            "## Summary",
+            "",
+            f"- Task `{task_id}` was returned by `{canonical_agent_instance}` through the Supervised MCP return surface.",
+            f"- Owner policy: `{owner_policy_ref}`.",
+            f"- Result summary: {result_summary or 'not provided'}",
+            "",
+            "## Boundary",
+            "",
+            "This record marks executor completion plus audit readiness only. It does not dispatch audit, record audit PASS, finalize, activate a lease, or unblock dependent work.",
+            "",
+        ]
+    )
+    return render_markdown(metadata, body, MCP_RETURN_FRONTMATTER_ORDER)
+
+
 def load_session_record(path: Path) -> tuple[dict[str, Any], str, list[str]]:
     text = path.read_text(encoding="utf-8")
     metadata, body, warnings = parse_markdown_frontmatter(text)
@@ -239,6 +493,47 @@ def update_session_record_markdown(
     return render_markdown(metadata, body, SESSION_FRONTMATTER_ORDER)
 
 
+def append_mcp_return_session_event(
+    existing_metadata: dict[str, Any],
+    existing_body: str,
+    *,
+    actor: str,
+    canonical_agent_instance: str,
+    owner_policy_ref: str,
+    timestamp: str,
+    return_id: str,
+) -> str:
+    metadata = dict(existing_metadata)
+    metadata["updated_at"] = timestamp
+    metadata["session_status"] = "returned"
+    metadata["current_state"] = "claimed"
+    metadata.setdefault("lease_status", "proposed")
+    metadata.setdefault("lease_path", "claim_only")
+    metadata.setdefault("active_lease_written", False)
+    current_count = metadata.get("event_count")
+    try:
+        event_count = int(current_count) if current_count is not None else 0
+    except (TypeError, ValueError):
+        event_count = 0
+    metadata["event_count"] = event_count + 1
+    metadata.setdefault("actor", actor)
+    metadata.setdefault("canonical_agent_instance", canonical_agent_instance)
+    metadata.setdefault("owner_policy_ref", owner_policy_ref)
+    metadata.setdefault("record_type", "session_record")
+    body = existing_body.rstrip()
+    if "## Events" not in body:
+        body = "\n".join([body, "", "## Events"]).strip()
+    body = "\n".join(
+        [
+            body,
+            "",
+            f"- {timestamp} mcp_queue_return by {canonical_agent_instance}; return_id={return_id}; owner_policy_ref={owner_policy_ref}; audit_readiness=ready.",
+            "",
+        ]
+    )
+    return render_markdown(metadata, body, MCP_SESSION_FRONTMATTER_ORDER)
+
+
 def claim_record_paths(repo_root: Path, task_id: str, claim_id: str, session_id: str) -> tuple[Path, Path]:
     claim_path = ensure_safe_record_path(repo_root, expected_claim_log_path(repo_root, task_id, claim_id), "claim_log", task_id)
     session_path = ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), "session_record", task_id)
@@ -247,3 +542,7 @@ def claim_record_paths(repo_root: Path, task_id: str, claim_id: str, session_id:
 
 def session_record_path(repo_root: Path, task_id: str, session_id: str) -> Path:
     return ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), "session_record", task_id)
+
+
+def return_record_path(repo_root: Path, task_id: str, return_id: str) -> Path:
+    return ensure_safe_record_path(repo_root, expected_return_record_path(repo_root, task_id, return_id), "return_record", task_id)

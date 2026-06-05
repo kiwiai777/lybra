@@ -30,6 +30,17 @@ from tools.aipos_cli.planner_loop_mvp import build_planner_loop_mvp_preview
 from tools.aipos_cli.preview import build_preview
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.queue_mutation import mutate_queue_task, render_task_markdown
+from tools.aipos_cli.record_writer import (
+    append_mcp_return_session_event,
+    build_mcp_claim_record_markdown,
+    build_mcp_claim_session_record_markdown,
+    build_mcp_return_record_markdown,
+    build_runtime_id,
+    claim_record_paths,
+    load_session_record,
+    return_record_path,
+    session_record_path,
+)
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import find_repo_root, find_task_by_id, load_all_tasks, load_task_by_path
 from tools.aipos_cli.validator import validate_single_task, validate_tasks
@@ -1193,6 +1204,16 @@ def _queue_mutation_preview(
         dry_run=True,
         profiles=profiles,
         with_records=with_records,
+        claim_id_override=(
+            str(mcp_claim_metadata.get("planned_claim_id") or "").strip()
+            if action == "claim" and isinstance(mcp_claim_metadata, dict)
+            else None
+        ),
+        session_id_override=(
+            str(mcp_claim_metadata.get("planned_session_id") or "").strip()
+            if action == "claim" and isinstance(mcp_claim_metadata, dict)
+            else None
+        ),
     )
     validated, _tasks, _records, _profiles, _task = _load_validated_task(
         repo_root=resolved_root,
@@ -1226,6 +1247,29 @@ def _queue_mutation_preview(
         data["record_previews"] = result.get("record_previews", [])
     if mcp_claim_metadata:
         data["mcp_claim"] = dict(mcp_claim_metadata)
+        updated_frontmatter = result.get("updated_frontmatter") if isinstance(result.get("updated_frontmatter"), dict) else {}
+        data["mcp_claim"]["planned_claim_id"] = updated_frontmatter.get("claim_id")
+        data["mcp_claim"]["planned_session_id"] = updated_frontmatter.get("active_session_id")
+        record_plan = _mcp_claim_record_plan(
+            repo_root=resolved_root,
+            task_id=str(result.get("task_id") or ""),
+            task_path=str(result.get("target_path") or ""),
+            actor=str(actor),
+            canonical_agent_instance=str(mcp_claim_metadata.get("canonical_agent_instance") or actor),
+            owner_policy_ref=str(mcp_claim_metadata.get("owner_policy_ref") or ""),
+            updated_metadata=updated_frontmatter,
+        )
+        data["mcp_records_enabled"] = True
+        data["records_enabled"] = True
+        data["record_writes"] = record_plan["record_writes"]
+        data["record_previews"] = record_plan["record_previews"]
+        data["claim_record_path"] = record_plan["claim_record_path"]
+        data["session_record_path"] = record_plan["session_record_path"]
+        for reason_text in record_plan.get("record_blocking_reasons", []):
+            if reason_text not in result["blocking_reasons"]:
+                result["blocking_reasons"].append(reason_text)
+        if record_plan.get("record_blocking_reasons"):
+            verdict = "BLOCK"
     owner_required = verdict == "NEEDS_OWNER"
     owner_reasons = needs_owner_reasons if verdict == "NEEDS_OWNER" else []
     if owner_confirmation_required_override is not None:
@@ -1240,7 +1284,13 @@ def _queue_mutation_preview(
         actor_match=validated.get("actor_match"),
         data=data,
         summary={"task_id": result.get("task_id"), "to_state": result.get("to_state")},
-        planned_writes=list(result.get("planned_writes", [])),
+        planned_writes=(
+            list(result.get("planned_writes", []))
+            + [
+                {"path": item.get("path"), "kind": "create", "type": "record_markdown", "record_type": item.get("record_type")}
+                for item in data.get("record_writes", [])
+            ]
+        ),
         planned_moves=list(result.get("planned_moves", [])),
         warnings=list(result.get("warnings", [])),
         blocking_reasons=list(result.get("blocking_reasons", [])),
@@ -1250,7 +1300,7 @@ def _queue_mutation_preview(
         safety_notice=MUTATION_DRY_RUN_NOTICE,
         errors=[],
     )
-    allow_execute = verdict != "BLOCK" and operation == "queue_claim" and not with_records
+    allow_execute = verdict != "BLOCK" and operation == "queue_claim" and (not with_records or bool(mcp_claim_metadata))
     if with_records:
         response["execute_allowed"] = False
         response["execute_blocking_reasons"] = ["with_records execute is not enabled in AIPOS-38"]
@@ -1283,6 +1333,194 @@ def _normalize_return_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _normalize_return_value(item) for key, item in value.items()}
     return value
+
+
+def _mcp_record_write_plan(path: str, record_type: str, *, would_write: bool = False, would_update: bool = False) -> dict[str, Any]:
+    item = {"path": path, "record_type": record_type}
+    if would_write:
+        item["would_write"] = True
+        item["wrote"] = False
+    if would_update:
+        item["would_update"] = True
+        item["updated"] = False
+    return item
+
+
+def _mcp_claim_record_plan(
+    *,
+    repo_root: Path,
+    task_id: str,
+    task_path: str,
+    actor: str,
+    canonical_agent_instance: str,
+    owner_policy_ref: str,
+    updated_metadata: dict[str, Any],
+    dry_run_id: str | None = None,
+    dry_run_snapshot_hash: str | None = None,
+) -> dict[str, Any]:
+    claim_id = str(updated_metadata.get("claim_id") or "")
+    session_id = str(updated_metadata.get("active_session_id") or "")
+    claimed_at = str(updated_metadata.get("claimed_at") or "")
+    claim_path, session_path = claim_record_paths(repo_root, task_id, claim_id, session_id)
+    claim_rel = str(claim_path.relative_to(repo_root))
+    session_rel = str(session_path.relative_to(repo_root))
+    blocking: list[str] = []
+    if claim_path.exists():
+        blocking.append(f"Claim record already exists: {claim_rel}")
+    if session_path.exists():
+        blocking.append(f"Session record already exists: {session_rel}")
+    confirmation_ref = f"owner_policy:{owner_policy_ref}"
+    claim_markdown = build_mcp_claim_record_markdown(
+        task_id=task_id,
+        task_path=task_path,
+        actor=actor,
+        canonical_agent_instance=canonical_agent_instance,
+        owner_policy_ref=owner_policy_ref,
+        claim_id=claim_id,
+        session_id=session_id,
+        claimed_at=claimed_at,
+        claim_policy=str(updated_metadata.get("claim_policy") or ""),
+        claim_match_basis=str(updated_metadata.get("claim_match_basis") or ""),
+        claim_requirements_hash=str(updated_metadata.get("claim_requirements_hash") or ""),
+        dry_run_id=dry_run_id,
+        dry_run_snapshot_hash=dry_run_snapshot_hash,
+        confirmation_ref=confirmation_ref,
+    )
+    session_markdown = build_mcp_claim_session_record_markdown(
+        task_id=task_id,
+        task_path=task_path,
+        actor=actor,
+        canonical_agent_instance=canonical_agent_instance,
+        owner_policy_ref=owner_policy_ref,
+        session_id=session_id,
+        claim_id=claim_id,
+        created_at=claimed_at,
+    )
+    return {
+        "record_blocking_reasons": blocking,
+        "record_writes": [
+            _mcp_record_write_plan(claim_rel, "claim_record", would_write=not blocking),
+            _mcp_record_write_plan(session_rel, "session_record", would_write=not blocking),
+        ],
+        "record_previews": [
+            {"path": claim_rel, "record_type": "claim_record", "rendered_markdown": claim_markdown},
+            {"path": session_rel, "record_type": "session_record", "rendered_markdown": session_markdown},
+        ],
+        "claim_record_path": claim_rel,
+        "session_record_path": session_rel,
+        "claim_record_markdown": claim_markdown,
+        "session_record_markdown": session_markdown,
+    }
+
+
+def _write_mcp_claim_records(repo_root: Path, record_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    performed: list[dict[str, Any]] = []
+    for preview in record_plan.get("record_previews", []):
+        path = repo_root / str(preview.get("path") or "")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(preview.get("rendered_markdown") or ""), encoding="utf-8")
+        performed.append({"path": str(preview.get("path")), "record_type": preview.get("record_type"), "wrote": True})
+    return performed
+
+
+def _mcp_return_record_plan(
+    *,
+    repo_root: Path,
+    task_id: str,
+    task_path: str,
+    actor: str,
+    canonical_agent_instance: str,
+    owner_policy_ref: str,
+    source_metadata: dict[str, Any],
+    updated_metadata: dict[str, Any],
+    result_summary: str | None,
+    artifact_refs: list[str],
+    completion_report_ref: str | None,
+    dry_run_id: str | None = None,
+    dry_run_snapshot_hash: str | None = None,
+) -> dict[str, Any]:
+    claim_id = str(source_metadata.get("claim_id") or "")
+    session_id = str(source_metadata.get("active_session_id") or "")
+    returned_at = str(updated_metadata.get("executor_completed_at") or "")
+    return_id = build_runtime_id("return", task_id, returned_at, canonical_agent_instance)
+    session_path = session_record_path(repo_root, task_id, session_id)
+    return_path = return_record_path(repo_root, task_id, return_id)
+    session_rel = str(session_path.relative_to(repo_root))
+    return_rel = str(return_path.relative_to(repo_root))
+    blocking: list[str] = []
+    if not session_path.exists():
+        blocking.append(f"Session record does not exist: {session_rel}")
+    if return_path.exists():
+        blocking.append(f"Return record already exists: {return_rel}")
+    existing_metadata: dict[str, Any] = {}
+    existing_body = ""
+    if session_path.exists():
+        existing_metadata, existing_body, parse_warnings = load_session_record(session_path)
+        for warning in parse_warnings:
+            blocking.append(f"Session record parse issue: {warning}")
+        if existing_metadata.get("task_id") not in (None, task_id):
+            blocking.append("Session record task_id does not match queue task")
+        if existing_metadata.get("claim_id") not in (None, claim_id):
+            blocking.append("Session record claim_id does not match queue task")
+    confirmation_ref = f"owner_policy:{owner_policy_ref}"
+    return_markdown = build_mcp_return_record_markdown(
+        task_id=task_id,
+        task_path=task_path,
+        actor=actor,
+        canonical_agent_instance=canonical_agent_instance,
+        owner_policy_ref=owner_policy_ref,
+        return_id=return_id,
+        claim_id=claim_id,
+        session_id=session_id,
+        returned_at=returned_at,
+        result_summary=result_summary,
+        artifact_refs=artifact_refs,
+        completion_report_ref=completion_report_ref,
+        dry_run_id=dry_run_id,
+        dry_run_snapshot_hash=dry_run_snapshot_hash,
+        confirmation_ref=confirmation_ref,
+    )
+    session_markdown = ""
+    if not blocking:
+        session_markdown = append_mcp_return_session_event(
+            existing_metadata,
+            existing_body,
+            actor=actor,
+            canonical_agent_instance=canonical_agent_instance,
+            owner_policy_ref=owner_policy_ref,
+            timestamp=returned_at,
+            return_id=return_id,
+        )
+    return {
+        "return_id": return_id,
+        "return_record_ref": return_id,
+        "return_record_path": return_rel,
+        "session_record_path": session_rel,
+        "record_blocking_reasons": blocking,
+        "record_writes": [_mcp_record_write_plan(return_rel, "return_record", would_write=not blocking)],
+        "record_updates": [_mcp_record_write_plan(session_rel, "session_record", would_update=not blocking)],
+        "record_previews": [
+            {"path": return_rel, "record_type": "return_record", "rendered_markdown": return_markdown},
+            {"path": session_rel, "record_type": "session_record", "rendered_markdown": session_markdown},
+        ],
+        "return_record_markdown": return_markdown,
+        "session_record_markdown": session_markdown,
+    }
+
+
+def _write_mcp_return_records(repo_root: Path, record_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    performed: list[dict[str, Any]] = []
+    for preview in record_plan.get("record_previews", []):
+        path = repo_root / str(preview.get("path") or "")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(preview.get("rendered_markdown") or ""), encoding="utf-8")
+        item = {"path": str(preview.get("path")), "record_type": preview.get("record_type")}
+        if preview.get("record_type") == "return_record":
+            item["wrote"] = True
+        else:
+            item["updated"] = True
+        performed.append(item)
+    return performed
 
 
 def _return_owner_reasons() -> list[str]:
@@ -1381,6 +1619,32 @@ def _build_return_preview(
     if return_reason:
         updated_metadata["return_reason"] = return_reason
 
+    record_plan: dict[str, Any] = {
+        "record_writes": [],
+        "record_updates": [],
+        "record_previews": [],
+        "record_blocking_reasons": [],
+    }
+    if mcp_return_metadata:
+        record_plan = _mcp_return_record_plan(
+            repo_root=repo_root,
+            task_id=str(task.get("task_id") or ""),
+            task_path=source_rel,
+            actor=actor,
+            canonical_agent_instance=canonical_agent_instance,
+            owner_policy_ref=owner_policy_ref,
+            source_metadata=source_metadata,
+            updated_metadata=updated_metadata,
+            result_summary=result_summary,
+            artifact_refs=artifact_refs,
+            completion_report_ref=completion_report_ref,
+        )
+        if record_plan.get("record_blocking_reasons"):
+            blocking_reasons.extend(str(item) for item in record_plan.get("record_blocking_reasons", []))
+        else:
+            updated_metadata["return_record_ref"] = record_plan.get("return_record_ref")
+            updated_metadata["return_event_ref"] = record_plan.get("return_record_ref")
+
     rendered_markdown = render_task_markdown(updated_metadata, source_body)
     planned_write = {"path": source_rel, "kind": "update", "type": "task_markdown"}
     return_preview = {
@@ -1403,11 +1667,13 @@ def _build_return_preview(
         "rendered_markdown": rendered_markdown,
         "target_file_state": _target_file_state(repo_root, source_rel),
         "with_records": False,
-        "records_enabled": False,
+        "records_enabled": bool(mcp_return_metadata),
+        "mcp_records_enabled": bool(mcp_return_metadata),
         "owner_policy_ref": owner_policy_ref,
         "canonical_agent_instance": canonical_agent_instance,
         "claim_id": str(source_metadata.get("claim_id") or claim_id or ""),
         "claimed_by": claimed_by,
+        "return_record_ref": updated_metadata.get("return_record_ref"),
         "return_preview": return_preview,
         "original_payload": {
             "task_id": task_id,
@@ -1430,6 +1696,11 @@ def _build_return_preview(
     }
     if mcp_return_metadata:
         data["mcp_return"] = dict(mcp_return_metadata)
+        data["record_writes"] = record_plan.get("record_writes", [])
+        data["record_updates"] = record_plan.get("record_updates", [])
+        data["record_previews"] = record_plan.get("record_previews", [])
+        data["return_record_path"] = record_plan.get("return_record_path")
+        data["session_record_path"] = record_plan.get("session_record_path")
 
     verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)
     response = make_response(
@@ -1441,7 +1712,17 @@ def _build_return_preview(
         actor_match=validated.get("actor_match"),
         data=data,
         summary={"task_id": task.get("task_id"), "audit_readiness": "ready"},
-        planned_writes=[planned_write],
+        planned_writes=[
+            planned_write,
+            *[
+                {"path": item.get("path"), "kind": "create", "type": "record_markdown", "record_type": item.get("record_type")}
+                for item in record_plan.get("record_writes", [])
+            ],
+            *[
+                {"path": item.get("path"), "kind": "update", "type": "record_markdown", "record_type": item.get("record_type")}
+                for item in record_plan.get("record_updates", [])
+            ],
+        ],
         planned_moves=[],
         warnings=warnings,
         blocking_reasons=blocking_reasons,
@@ -1517,9 +1798,12 @@ def return_task(
         data = response.get("data") if isinstance(response.get("data"), dict) else {}
         target = resolved_root / str(data.get("target_path") or "")
         target.write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
+        record_performed_writes: list[dict[str, Any]] = []
+        if bool(data.get("mcp_records_enabled")):
+            record_performed_writes = _write_mcp_return_records(resolved_root, data)
         response["dry_run"] = False
         response["data"]["wrote"] = True
-        response["performed_writes"] = list(response.get("planned_writes", []))
+        response["performed_writes"] = list(response.get("planned_writes", [])) + record_performed_writes
         response["owner_confirmation_required"] = False
         response["owner_confirmation_reasons"] = []
         return response
@@ -2041,6 +2325,7 @@ def execute_dry_run(
 
         claim_task_id = source_data.get("task_id")
         claim_path = None if claim_task_id else source_data.get("source_path")
+        mcp_claim_metadata = source_data.get("mcp_claim") if isinstance(source_data.get("mcp_claim"), dict) else None
         result = mutate_queue_task(
             resolved_root,
             "claim",
@@ -2050,8 +2335,48 @@ def execute_dry_run(
             dry_run=False,
             with_records=False,
             profiles=load_agent_profiles(resolved_root),
+            claim_id_override=(
+                str(mcp_claim_metadata.get("planned_claim_id") or "").strip()
+                if isinstance(mcp_claim_metadata, dict)
+                else None
+            ),
+            session_id_override=(
+                str(mcp_claim_metadata.get("planned_session_id") or "").strip()
+                if isinstance(mcp_claim_metadata, dict)
+                else None
+            ),
         )
+        record_performed_writes: list[dict[str, Any]] = []
+        if result.get("wrote") and isinstance(mcp_claim_metadata, dict) and bool(source_data.get("mcp_records_enabled")):
+            record_plan = _mcp_claim_record_plan(
+                repo_root=resolved_root,
+                task_id=str(result.get("task_id") or ""),
+                task_path=str(result.get("target_path") or ""),
+                actor=actor_text,
+                canonical_agent_instance=str(mcp_claim_metadata.get("canonical_agent_instance") or actor_text),
+                owner_policy_ref=str(mcp_claim_metadata.get("owner_policy_ref") or ""),
+                updated_metadata=result.get("updated_frontmatter") if isinstance(result.get("updated_frontmatter"), dict) else {},
+                dry_run_id=dry_run_id,
+                dry_run_snapshot_hash=expected_hash,
+            )
+            if record_plan.get("record_blocking_reasons"):
+                for reason_text in record_plan.get("record_blocking_reasons", []):
+                    if reason_text not in result["blocking_reasons"]:
+                        result["blocking_reasons"].append(reason_text)
+                result["verdict"] = "BLOCK"
+            else:
+                record_performed_writes = _write_mcp_claim_records(resolved_root, record_plan)
+                result["records_enabled"] = True
+                result["mcp_records_enabled"] = True
+                result["record_writes"] = record_plan["record_writes"]
+                result["claim_record_path"] = record_plan["claim_record_path"]
+                result["session_record_path"] = record_plan["session_record_path"]
         verdict = str(result.get("verdict") or "BLOCK")
+        planned_record_writes = [
+            {"path": item.get("path"), "kind": "create", "type": "record_markdown", "record_type": item.get("record_type")}
+            for item in source_data.get("record_writes", [])
+            if isinstance(item, dict)
+        ]
         return make_response(
             ok=bool(result.get("wrote", False)),
             verdict=verdict,
@@ -2060,9 +2385,9 @@ def execute_dry_run(
             actor=_actor_payload(actor_text),
             data=result,
             summary={"task_id": result.get("task_id"), "moved": result.get("moved", False)},
-            planned_writes=list(result.get("planned_writes", [])),
+            planned_writes=list(result.get("planned_writes", [])) + planned_record_writes,
             planned_moves=list(result.get("planned_moves", [])),
-            performed_writes=list(result.get("planned_writes", [])) if result.get("wrote") else [],
+            performed_writes=(list(result.get("planned_writes", [])) if result.get("wrote") else []) + record_performed_writes,
             performed_moves=list(result.get("planned_moves", [])) if result.get("moved") else [],
             warnings=list(result.get("warnings", [])),
             blocking_reasons=list(result.get("blocking_reasons", [])),

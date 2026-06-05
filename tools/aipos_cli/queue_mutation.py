@@ -189,14 +189,21 @@ def _select_task(repo_root: Path, *, task_id: str | None = None, task_path: str 
     return load_task_file(path, repo_root)
 
 
-def _prepare_claim(metadata: dict[str, Any], actor: str, timestamp: str) -> dict[str, Any]:
+def _prepare_claim(
+    metadata: dict[str, Any],
+    actor: str,
+    timestamp: str,
+    *,
+    claim_id_override: str | None = None,
+    session_id_override: str | None = None,
+) -> dict[str, Any]:
     updated = dict(metadata)
     task_id = str(updated.get("task_id"))
     updated["status"] = "claimed"
     updated["claimed_by"] = actor
     updated["claimed_at"] = timestamp
-    updated["claim_id"] = build_runtime_id("claim", task_id, timestamp, actor)
-    updated["active_session_id"] = build_runtime_id("session", task_id, timestamp, actor)
+    updated["claim_id"] = claim_id_override or build_runtime_id("claim", task_id, timestamp, actor)
+    updated["active_session_id"] = session_id_override or build_runtime_id("session", task_id, timestamp, actor)
     if updated.get("needs_owner") is None:
         updated["needs_owner"] = False
     return updated
@@ -243,10 +250,25 @@ def _prepare_reopen(metadata: dict[str, Any], actor: str, timestamp: str, reason
     return updated
 
 
-def _mutation_metadata(action: str, metadata: dict[str, Any], actor: str, *, reason: str | None = None, report_link: str | None = None) -> dict[str, Any]:
+def _mutation_metadata(
+    action: str,
+    metadata: dict[str, Any],
+    actor: str,
+    *,
+    reason: str | None = None,
+    report_link: str | None = None,
+    claim_id_override: str | None = None,
+    session_id_override: str | None = None,
+) -> dict[str, Any]:
     timestamp = _utc_now()
     if action == "claim":
-        return _prepare_claim(metadata, actor, timestamp)
+        return _prepare_claim(
+            metadata,
+            actor,
+            timestamp,
+            claim_id_override=claim_id_override,
+            session_id_override=session_id_override,
+        )
     if action == "block":
         assert reason is not None
         return _prepare_block(metadata, actor, timestamp, reason)
@@ -435,6 +457,8 @@ def mutate_queue_task(
     dry_run: bool = False,
     profiles: dict[str, Any] | None = None,
     with_records: bool = False,
+    claim_id_override: str | None = None,
+    session_id_override: str | None = None,
 ) -> dict[str, Any]:
     if action not in ALLOWED_TRANSITIONS:
         raise ValueError(f"Unsupported queue mutation action: {action}")
@@ -498,6 +522,8 @@ def mutate_queue_task(
         actor,
         reason=str(reason or "").strip() or None,
         report_link=str(report_link or "").strip() or None,
+        claim_id_override=claim_id_override,
+        session_id_override=session_id_override,
     )
     rendered_markdown = render_task_markdown(updated_metadata, source_body)
     result["updated_frontmatter"] = updated_metadata

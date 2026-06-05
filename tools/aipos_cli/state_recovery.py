@@ -312,11 +312,13 @@ def build_state_recovery_preview(
 
     claim_check = _record_ref_status(record_checks, "claim_id")
     session_check = _record_ref_status(record_checks, "active_session_id")
+    return_check = _record_ref_status(record_checks, "return_record_ref")
     claim_status = (claim_check or {}).get("status")
     session_status = (session_check or {}).get("status")
+    return_status = (return_check or {}).get("status")
     if contradictions:
         completeness = "contradictory"
-    elif "missing" in {claim_status, session_status}:
+    elif "missing" in {claim_status, session_status, return_status}:
         completeness = "partial"
     elif metadata.get("audit_readiness") == "ready" and not has_return_evidence:
         completeness = "missing"
@@ -325,7 +327,11 @@ def build_state_recovery_preview(
     else:
         completeness = "missing"
 
-    source_refs = [item for item in [task.get("path"), _first_match(claim_check), _first_match(session_check)] if item]
+    source_refs = [
+        item
+        for item in [task.get("path"), _first_match(claim_check), _first_match(session_check), _first_match(return_check)]
+        if item
+    ]
     if completion_report_status.get("exists"):
         source_refs.append(str(completion_report_status.get("ref")))
     source_refs.extend(str(item.get("ref")) for item in artifact_status if item.get("exists"))
@@ -355,6 +361,9 @@ def build_state_recovery_preview(
         },
         "return": {
             "return_event_ref": metadata.get("return_event_ref"),
+            "return_record_ref": metadata.get("return_record_ref"),
+            "return_record_path": _first_match(return_check),
+            "record_status": return_status,
             "executor_completed_by": metadata.get("executor_completed_by"),
             "executor_completed_at": metadata.get("executor_completed_at"),
             "executor_status": metadata.get("executor_status"),

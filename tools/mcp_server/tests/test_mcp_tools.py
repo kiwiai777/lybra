@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 from tools.aipos_cli.controlled_execute import clear_tokens, get_dry_run
 from tools.aipos_cli.board_adapter import claim_task, return_task
+from tools.aipos_cli.records import load_records
+from tools.aipos_cli.state_recovery import build_state_recovery_preview
 from tools.mcp_server.server import handle_request, serve
 from tools.mcp_server.tools import TOOL_DESCRIPTORS
 
@@ -164,6 +166,74 @@ class McpToolTests(unittest.TestCase):
                     "active_session_id: session_AIPOS-MCP-RETURN_20260603_agent-01",
                     "---",
                     "Supervised MCP return test task.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        session_id = f"session_{task_id}_20260603_agent-01"
+        claim_id = f"claim_{task_id}_20260603_agent-01"
+        claim_path = self.repo_root / "5_tasks" / "records" / "claims" / task_id / f"{claim_id}.md"
+        claim_path.parent.mkdir(parents=True, exist_ok=True)
+        claim_path.write_text(
+            "\n".join(
+                [
+                    "---",
+                    "record_type: claim_record",
+                    "event_type: mcp_queue_claim",
+                    f"claim_id: {claim_id}",
+                    f"task_id: {task_id}",
+                    f"task_path: 5_tasks/queue/claimed/{task_id.lower()}.md",
+                    "surface: mcp",
+                    "operation: queue_claim",
+                    "autonomy_mode: Supervised",
+                    f"actor: {claimed_by}",
+                    f"canonical_agent_instance: {claimed_by}",
+                    "owner_policy_ref: owner_policy:aipos-169-supervised-return-test",
+                    "claimed_at: 2026-06-03T00:00:00Z",
+                    "from_state: pending",
+                    "to_state: claimed",
+                    "session_id: " + session_id,
+                    "lease_status: proposed",
+                    "lease_path: claim_only",
+                    "active_lease_written: false",
+                    "---",
+                    "# MCP Claim Record",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        session_path = self.repo_root / "5_tasks" / "records" / "sessions" / task_id / f"{session_id}.md"
+        session_path.parent.mkdir(parents=True, exist_ok=True)
+        session_path.write_text(
+            "\n".join(
+                [
+                    "---",
+                    "record_type: session_record",
+                    f"session_id: {session_id}",
+                    f"task_id: {task_id}",
+                    f"task_path: 5_tasks/queue/claimed/{task_id.lower()}.md",
+                    "surface: mcp",
+                    "autonomy_mode: Supervised",
+                    f"actor: {claimed_by}",
+                    f"canonical_agent_instance: {claimed_by}",
+                    "owner_policy_ref: owner_policy:aipos-169-supervised-return-test",
+                    f"claim_id: claim_{task_id}_20260603_agent-01",
+                    "created_at: 2026-06-03T00:00:00Z",
+                    "updated_at: 2026-06-03T00:00:00Z",
+                    "session_status: claimed",
+                    "current_state: claimed",
+                    "lease_status: proposed",
+                    "lease_path: claim_only",
+                    "active_lease_written: false",
+                    "event_count: 1",
+                    "---",
+                    "# MCP Session Record",
+                    "",
+                    "## Events",
+                    "",
+                    f"- 2026-06-03T00:00:00Z mcp_queue_claim by {claimed_by}; claim_id=claim_{task_id}_20260603_agent-01.",
                     "",
                 ]
             ),
@@ -520,6 +590,17 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual(confirmed["lease_status"], "proposed")
         self.assertTrue((self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-claim.md").exists())
         self.assertFalse((self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-mcp-claim.md").exists())
+        records = load_records(self.repo_root)
+        self.assertEqual(records["summary"]["claim_logs"], 1)
+        self.assertEqual(records["summary"]["session_records"], 1)
+        claim_record = records["claims"][0]["metadata"]
+        session_record = records["sessions"][0]["metadata"]
+        self.assertEqual(claim_record["record_type"], "claim_record")
+        self.assertEqual(claim_record["lease_status"], "proposed")
+        self.assertFalse(claim_record["active_lease_written"])
+        self.assertEqual(session_record["session_status"], "claimed")
+        self.assertEqual(session_record["lease_status"], "proposed")
+        self.assertFalse(session_record["active_lease_written"])
 
     def test_queue_claim_blocks_wrong_specific_instance_and_forbidden_fields(self) -> None:
         self.write_claim_task(agent_instance="dev.claude.cc.local")
@@ -649,6 +730,27 @@ class McpToolTests(unittest.TestCase):
         self.assertIn("dependency_executor_status: completed", text)
         self.assertIn("dependency_audit_readiness: ready", text)
         self.assertIn("dependency_audit_status: pending", text)
+        self.assertIn("return_record_ref: return_AIPOS-MCP-RETURN_", text)
+        records = load_records(self.repo_root)
+        self.assertEqual(records["summary"]["return_records"], 1)
+        return_record = records["returns"][0]["metadata"]
+        self.assertEqual(return_record["record_type"], "return_record")
+        self.assertEqual(return_record["executor_status"], "completed")
+        self.assertEqual(return_record["audit_readiness"], "ready")
+        self.assertEqual(return_record["dependency_audit_status"], "pending")
+        session_text = (
+            self.repo_root
+            / "5_tasks"
+            / "records"
+            / "sessions"
+            / "AIPOS-MCP-RETURN"
+            / "session_AIPOS-MCP-RETURN_20260603_agent-01.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("session_status: returned", session_text)
+        self.assertIn("mcp_queue_return", session_text)
+        recovery = build_state_recovery_preview(self.repo_root, task_id="AIPOS-MCP-RETURN")
+        self.assertEqual(recovery["provenance_completeness"], "complete")
+        self.assertEqual(recovery["provenance_chain"]["return"]["record_status"], "ok")
 
     def test_queue_return_blocks_wrong_claimant_and_forbidden_fields(self) -> None:
         self.write_return_task()
