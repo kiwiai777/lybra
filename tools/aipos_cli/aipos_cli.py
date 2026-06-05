@@ -64,6 +64,7 @@ from tools.aipos_cli.planner_iteration_writer import append_planner_iteration, l
 from tools.aipos_cli.preview import build_preview
 from tools.aipos_cli.queue_mutation import mutate_queue_task
 from tools.aipos_cli.records import load_records
+from tools.aipos_cli.state_recovery import build_state_recovery_preview
 from tools.aipos_cli.task_loader import find_repo_root, load_all_tasks, load_task_by_path
 from tools.aipos_cli.validator import (
     build_records_diagnostics,
@@ -590,6 +591,16 @@ def build_parser() -> argparse.ArgumentParser:
     records_parser = subparsers.add_parser("records", help="Render records summary")
     records_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    state_parser = subparsers.add_parser("state", help="Read-only state recovery and provenance previews")
+    state_subparsers = state_parser.add_subparsers(dest="state_command")
+    recovery_parser = state_subparsers.add_parser("recovery", help="State recovery preview operations")
+    recovery_subparsers = recovery_parser.add_subparsers(dest="recovery_command")
+    recovery_preview_parser = recovery_subparsers.add_parser("preview", help="Preview file-authoritative recovery state")
+    _task_lookup_arguments(recovery_preview_parser)
+    recovery_preview_parser.add_argument("--dry-run-token", help="Optional dry-run token to classify for staleness")
+    recovery_preview_parser.add_argument("--expected-operation", help="Optional expected operation for dry-run token compatibility")
+    recovery_preview_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     agents_parser = subparsers.add_parser("agents", help="Render agent profiles")
     agents_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -1114,6 +1125,28 @@ def main(argv: list[str] | None = None) -> int:
     profiles = load_agent_profiles(repo_root)
     actor = getattr(args, "actor", None)
     report = validate_tasks(tasks, current_actor=actor, records=records, profiles=profiles)
+
+    if args.command == "state":
+        if (
+            getattr(args, "state_command", None) != "recovery"
+            or getattr(args, "recovery_command", None) != "preview"
+        ):
+            parser.print_help()
+            return 2
+        try:
+            result = build_state_recovery_preview(
+                repo_root,
+                task_id=getattr(args, "task_id", None),
+                path=getattr(args, "path", None),
+                records=records,
+                dry_run_token=getattr(args, "dry_run_token", None),
+                expected_operation=getattr(args, "expected_operation", None),
+            )
+        except (OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" else 0
 
     if args.command == "queue":
         if args.json:

@@ -578,6 +578,21 @@ The tests use temporary repository fixtures and cover dry-run safety, allowed tr
 Records writer regression coverage lives in `tools/aipos_cli/tests/test_record_writer.py`.
 The tests use temporary repository fixtures and cover records dry-run safety, claim/session record creation, session record updates for block/complete/reopen, no-overwrite enforcement, unsafe path rejection, and records-reader compatibility for generated files.
 
+## AIPOS-173 State Recovery Preview
+
+AIPOS-173 adds a read-only state recovery and provenance preview:
+
+```bash
+python3 tools/aipos_cli/aipos_cli.py state recovery preview --task-id <TASK_ID> --json
+python3 tools/aipos_cli/aipos_cli.py state recovery preview --path <TASK_PATH> --json
+```
+
+The preview derives staleness markers, provenance completeness, record-reference gaps, queue/status contradictions, lease posture, and audit-readiness versus audit-PASS state from durable files. It returns `writes_enabled: false` and `execute_allowed: false`.
+
+Optional `--dry-run-token` plus `--expected-operation` classifies current-process dry-run token freshness when available. Tokens remain process-local and are not persisted by this command.
+
+AIPOS-173 does not add records writing, staleness writing, lease activation, recovery mutation, MCP tools, Board routes, audit dispatch, audit PASS, finalize, accepted-work unblock, runtime launch, scheduler, polling, heartbeat, credential handling, deployment, or public endpoint behavior.
+
 ## Notes
 
 Future command names or record-writing flows are not implemented here.
