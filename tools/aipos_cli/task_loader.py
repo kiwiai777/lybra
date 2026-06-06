@@ -6,12 +6,13 @@ from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_complexity import complexity_payload
+from tools.aipos_cli.workspace_config import has_workspace_queue, resolve_workspace_root
 
 QUEUE_STATES = ("pending", "claimed", "completed", "blocked")
 
 
 def _has_queue_root(path: Path) -> bool:
-    return (path / "5_tasks" / "queue").exists()
+    return has_workspace_queue(path)
 
 
 def _workspace_root_from_env() -> Path | None:
@@ -29,14 +30,8 @@ def find_repo_root(start: Path | None = None) -> Path:
         env_root = _workspace_root_from_env()
         if env_root is not None:
             return env_root
-
-    current = (start or Path.cwd()).expanduser().resolve()
-    if current.is_file():
-        current = current.parent
-    for candidate in [current, *current.parents]:
-        if _has_queue_root(candidate):
-            return candidate
-    raise FileNotFoundError("Could not locate repo root containing 5_tasks/queue")
+        return resolve_workspace_root(start)
+    return resolve_workspace_root(start, env={})
 
 
 def _normalize_task(

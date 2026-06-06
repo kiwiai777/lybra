@@ -154,14 +154,20 @@
   <p class="muted-line" data-i18n="csrc">Source checkout uses the Python module entry point above.</p>
 
   <div class="step-h" data-i18n="qsh">Quick start</div>
+  <p class="muted-line" data-i18n="qi">Create a local workspace:</p>
+  <pre><code>lybra init ./my-workspace --project-id my_project
+cd ./my-workspace</code></pre>
   <p class="muted-line" data-i18n="qb">Start the local Board (default port 7117):</p>
-  <pre><code>python3 web/board/app.py --host 127.0.0.1 --port 7117 --repo-root /path/to/your/workspace</code></pre>
+  <pre><code>lybra board</code></pre>
   <p class="muted-line" data-i18n="qo">Then open:</p>
   <pre><code>http://127.0.0.1:7117</code></pre>
   <p class="muted-line" data-i18n="qt">Access from another machine over SSH:</p>
   <pre><code>ssh -N -L 7117:127.0.0.1:7117 user@your-host</code></pre>
   <p class="muted-line" data-i18n="qm">Connect an agent over MCP (HTTP/SSE default port 7118):</p>
-  <pre><code>python3 -m tools.mcp_server serve-http --host 127.0.0.1 --port 7118</code></pre>
+  <pre><code>export LYBRA_MCP_TOKEN="&lt;set-your-token&gt;"
+export LYBRA_CAPABILITY_TOKEN='&lt;json-capability-token&gt;'
+lybra mcp
+lybra mcp-config</code></pre>
   <pre><code>http://127.0.0.1:7118</code></pre>
 </div></section>
 
@@ -186,7 +192,7 @@ const I18N={
   pk:"GET STARTED",pt:"Get started",
   ik:"INSTALL",it:"Install",ireq:"Requirements: Node.js 18+ (and Python 3 for the local Board and MCP server).",inote:"Package name: lybra.",
   clh:"CLI entry point",csrc:"Source checkout uses the Python module entry point above.",
-  qsh:"Quick start",qb:"Start the local Board (default port 7117):",qo:"Then open:",qt:"Access from another machine over SSH:",qm:"Connect an agent over MCP (HTTP/SSE default port 7118):",
+  qsh:"Quick start",qi:"Create a local workspace:",qb:"Start the local Board (default port 7117):",qo:"Then open:",qt:"Access from another machine over SSH:",qm:"Connect an agent over MCP (HTTP/SSE default port 7118):",
   wk:"WHAT'S NEW",wt:"What's new",wnote:"Update this section as major features ship \u2014 keep it aligned with GitHub Releases.",
   d0:"in development",
   e0:"Board now defaults to 7117, MCP HTTP/SSE to 7118, AI-assisted task authoring spans fixture-only Board flows and a live BYO-LLM CLI path, and custom agent identities use opaque IDs with explicit provenance.",
@@ -196,7 +202,7 @@ const I18N={
   pk:"\u5f00\u59cb\u4f7f\u7528",pt:"\u5f00\u59cb\u4f7f\u7528",
   ik:"\u5b89\u88c5",it:"\u5b89\u88c5",ireq:"\u73af\u5883\u8981\u6c42\uff1aNode.js 18+\uff08\u672c\u5730 Board \u548c MCP \u90fd\u9700\u8981 Python 3\uff09\u3002",inote:"\u5305\u540d\uff1alybra\u3002",
   clh:"CLI \u5165\u53e3",csrc:"\u672c\u5730\u6e90\u7801\u67e5\u51fa\u4f7f\u7528\u4e0a\u9762\u7684 Python \u6a21\u5757\u5165\u53e3\u3002",
-  qsh:"\u5feb\u901f\u5f00\u59cb",qb:"\u542f\u52a8\u672c\u5730 Board\uff08\u9ed8\u8ba4\u7aef\u53e3 7117\uff09\uff1a",qo:"\u7136\u540e\u6253\u5f00\uff1a",qt:"\u901a\u8fc7 SSH \u4ece\u53e6\u4e00\u53f0\u673a\u5668\u8bbf\u95ee\uff1a",qm:"\u901a\u8fc7 MCP \u63a5\u5165 Agent\uff08HTTP/SSE \u9ed8\u8ba4\u7aef\u53e3 7118\uff09\uff1a",
+  qsh:"\u5feb\u901f\u5f00\u59cb",qi:"\u521b\u5efa\u672c\u5730 workspace\uff1a",qb:"\u542f\u52a8\u672c\u5730 Board\uff08\u9ed8\u8ba4\u7aef\u53e3 7117\uff09\uff1a",qo:"\u7136\u540e\u6253\u5f00\uff1a",qt:"\u901a\u8fc7 SSH \u4ece\u53e6\u4e00\u53f0\u673a\u5668\u8bbf\u95ee\uff1a",qm:"\u901a\u8fc7 MCP \u63a5\u5165 Agent\uff08HTTP/SSE \u9ed8\u8ba4\u7aef\u53e3 7118\uff09\uff1a",
   wk:"\u66f4\u65b0",wt:"\u66f4\u65b0\u65e5\u5fd7",wnote:"\u6bcf\u6b21\u5927\u529f\u80fd\u4e0a\u7ebf\u65f6\u66f4\u65b0\u6b64\u5904 \u2014 \u4e0e GitHub Releases \u4fdd\u6301\u4e00\u81f4\u3002",
   d0:"\u5f00\u53d1\u4e2d",
   e0:"Board \u73b0\u5df2\u9ed8\u8ba4\u542f\u52a8\u4e3a 7117\uff0cMCP HTTP/SSE \u9ed8\u8ba4\u4e3a 7118\uff0cAI \u8f85\u52a9\u4efb\u52a1\u8d77\u8349\u5df2\u5305\u62ec fixture-only Board \u6d41\u7a0b\u4ee5\u53ca live BYO-LLM CLI \u8def\u5f84\uff0c\u81ea\u5b9a\u4e49 Agent \u8eab\u4efd\u4f7f\u7528\u4e0d\u900f\u9732 ID \u548c\u663e\u5f0f provenance\u3002",

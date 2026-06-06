@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 if __package__ in (None, ""):
@@ -77,6 +78,15 @@ from tools.aipos_cli.workspace_templates import (
     build_workspace_init_plan,
     execute_workspace_init,
     parse_var_items,
+)
+from tools.aipos_cli.workspace_config import (
+    DEFAULT_BOARD_HOST,
+    DEFAULT_BOARD_PORT,
+    DEFAULT_MCP_HOST,
+    DEFAULT_MCP_PORT,
+    load_workspace_config,
+    resolve_workspace_root,
+    write_workspace_config,
 )
 
 
@@ -188,6 +198,8 @@ def build_mcp_doctor_report(env: dict[str, str] | None = None) -> dict[str, Any]
     tool_visibility = {
         "queue_claim": "visible" if "queue_claim" in operations else "hidden",
         "queue_return": "visible" if "queue_return" in operations else "hidden",
+        "audit_dispatch": "visible" if "audit_dispatch" in operations else "hidden",
+        "audit_verdict": "visible" if "audit_verdict" in operations else "hidden",
     }
     hints: list[str] = [
         "Bearer transport auth controls whether the MCP client can connect.",
@@ -248,6 +260,8 @@ def render_mcp_doctor_text(report: dict[str, Any]) -> str:
         "Scoped tool visibility:",
         f"- lybra_queue_claim_*: {visibility.get('queue_claim')}",
         f"- lybra_queue_return_*: {visibility.get('queue_return')}",
+        f"- lybra_audit_dispatch_*: {visibility.get('audit_dispatch')}",
+        f"- lybra_audit_verdict_*: {visibility.get('audit_verdict')}",
         "",
         "Troubleshooting:",
     ]
@@ -259,6 +273,175 @@ def render_mcp_doctor_text(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append(str(report["secrets_notice"]))
     return "\n".join(lines)
+
+
+def _config_defaults(workspace_root: Path) -> dict[str, Any]:
+    config_path = workspace_root / ".lybra" / "config.json"
+    config: dict[str, Any] = {}
+    if config_path.is_file():
+        config = load_workspace_config(config_path)
+    board = config.get("board") if isinstance(config.get("board"), dict) else {}
+    mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
+    return {
+        "config_path": str(config_path) if config_path.is_file() else None,
+        "board_host": str(board.get("host") or DEFAULT_BOARD_HOST),
+        "board_port": int(board.get("port") or DEFAULT_BOARD_PORT),
+        "mcp_host": str(mcp.get("host") or DEFAULT_MCP_HOST),
+        "mcp_port": int(mcp.get("port") or DEFAULT_MCP_PORT),
+        "transport_token_env": str(mcp.get("transport_token_env") or "LYBRA_MCP_TOKEN"),
+        "capability_token_env": str(mcp.get("capability_token_env") or "LYBRA_CAPABILITY_TOKEN"),
+    }
+
+
+def _resolve_workspace_for_command(args: argparse.Namespace) -> Path:
+    return resolve_workspace_root(explicit_root=getattr(args, "workspace_root", None))
+
+
+def _run_board_command(args: argparse.Namespace) -> int:
+    from web.board.app import run_server
+
+    workspace_root = _resolve_workspace_for_command(args)
+    defaults = _config_defaults(workspace_root)
+    host = str(getattr(args, "host", None) or defaults["board_host"])
+    port = int(getattr(args, "port", None) or defaults["board_port"])
+    print(f"Lybra Board: http://{host}:{port}")
+    print(f"Workspace: {workspace_root}")
+    previous_root = os.environ.get("AIPOS_WORKSPACE_ROOT")
+    os.environ["AIPOS_WORKSPACE_ROOT"] = str(workspace_root)
+    try:
+        run_server(host=host, port=port, repo_root=workspace_root)
+    finally:
+        if previous_root is None:
+            os.environ.pop("AIPOS_WORKSPACE_ROOT", None)
+        else:
+            os.environ["AIPOS_WORKSPACE_ROOT"] = previous_root
+    return 0
+
+
+def _run_mcp_command(args: argparse.Namespace) -> int:
+    from tools.mcp_server.http_sse import DEFAULT_KEEPALIVE_SECONDS, config_from_env, run_http_server
+
+    workspace_root = _resolve_workspace_for_command(args)
+    defaults = _config_defaults(workspace_root)
+    host = str(getattr(args, "host", None) or defaults["mcp_host"])
+    port = int(getattr(args, "port", None) or defaults["mcp_port"])
+    keepalive = float(getattr(args, "keepalive_seconds", None) or DEFAULT_KEEPALIVE_SECONDS)
+    print(f"Lybra MCP HTTP/SSE: http://{host}:{port}")
+    print(f"Workspace: {workspace_root}")
+    previous_root = os.environ.get("AIPOS_WORKSPACE_ROOT")
+    os.environ["AIPOS_WORKSPACE_ROOT"] = str(workspace_root)
+    try:
+        return run_http_server(config_from_env(host, port, keepalive))
+    finally:
+        if previous_root is None:
+            os.environ.pop("AIPOS_WORKSPACE_ROOT", None)
+        else:
+            os.environ["AIPOS_WORKSPACE_ROOT"] = previous_root
+
+
+def build_mcp_config_report(args: argparse.Namespace, env: dict[str, str] | None = None) -> dict[str, Any]:
+    source = env if env is not None else os.environ
+    workspace_root = _resolve_workspace_for_command(args)
+    defaults = _config_defaults(workspace_root)
+    host = str(getattr(args, "host", None) or defaults["mcp_host"])
+    port = int(getattr(args, "port", None) or defaults["mcp_port"])
+    token_env = str(getattr(args, "transport_token_env", None) or defaults["transport_token_env"])
+    capability_env = str(getattr(args, "capability_token_env", None) or defaults["capability_token_env"])
+    transport_raw = str(source.get(token_env) or "")
+    capability_raw = str(source.get(capability_env) or "")
+    return {
+        "operation": "mcp_config",
+        "workspace_root": str(workspace_root),
+        "endpoint": f"http://{host}:{port}/mcp",
+        "sse_endpoint": f"http://{host}:{port}/sse",
+        "server_command": f"lybra mcp --workspace-root {workspace_root}",
+        "server_env": {
+            "AIPOS_WORKSPACE_ROOT": str(workspace_root),
+            token_env: f"${{{token_env}}}",
+            capability_env: f"${{{capability_env}}}",
+        },
+        "client": {
+            "authorization_header": f"Bearer ${{{token_env}}}",
+            "transport_token_env": token_env,
+            "capability_token_env": capability_env,
+            "capability_token_note": "LYBRA_CAPABILITY_TOKEN is consumed by the Lybra MCP server process for tool visibility.",
+        },
+        "fingerprints": {
+            token_env: _secret_fingerprint(transport_raw),
+            capability_env: _secret_fingerprint(capability_raw),
+        },
+        "secrets_notice": "Raw token values are never printed. Set tokens in the environment before starting lybra mcp.",
+    }
+
+
+def _render_mcp_config_text(report: dict[str, Any]) -> str:
+    lines = [
+        "MCP config",
+        "",
+        f"Workspace: {report['workspace_root']}",
+        f"Endpoint: {report['endpoint']}",
+        f"SSE: {report['sse_endpoint']}",
+        "",
+        "Start server:",
+        f"- {report['server_command']}",
+        "",
+        "Environment references:",
+    ]
+    for key, value in report["server_env"].items():
+        lines.append(f"- {key}={value}")
+    lines.extend(
+        [
+            "",
+            "Client Authorization header:",
+            f"- Authorization: {report['client']['authorization_header']}",
+            "",
+            "Fingerprints:",
+        ]
+    )
+    for key, value in report["fingerprints"].items():
+        lines.append(f"- {key}: {value or '(missing)'}")
+    lines.append("")
+    lines.append(str(report["secrets_notice"]))
+    return "\n".join(lines)
+
+
+def _run_top_level_init(args: argparse.Namespace) -> int:
+    output = Path(args.output).expanduser().resolve()
+    variables = {"project_id": args.project_id, **parse_var_items(args.var)}
+    if args.dry_run:
+        result = build_workspace_init_plan(
+            template=args.template,
+            output=output,
+            variables=variables,
+            actor=args.actor,
+            dry_run=True,
+        )
+        config_path = output / ".lybra" / "config.json"
+        result["planned_writes"].append(
+            {
+                "path": ".lybra/config.json",
+                "kind": "file",
+                "type": "lybra_workspace_config",
+                "byte_size": 0,
+            }
+        )
+        result["summary"]["config_path"] = str(config_path)
+    else:
+        result = execute_workspace_init(
+            template=args.template,
+            output=output,
+            variables=variables,
+            actor=args.actor,
+        )
+        if result.get("ok"):
+            config_path = write_workspace_config(output)
+            result["config_path"] = str(config_path)
+            result["summary"]["config_path"] = str(config_path)
+    if args.json:
+        print(render_json(result))
+    else:
+        print(render_json(result))
+    return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
 
 
 def build_validate_json_report(report: dict[str, Any], records: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -493,6 +676,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI Project OS CLI")
     subparsers = parser.add_subparsers(dest="command")
 
+    init_parser = subparsers.add_parser("init", help="Initialize a Lybra workspace from a bundled template")
+    init_parser.add_argument("output", help="Target workspace path")
+    init_parser.add_argument("--project-id", required=True, help="Workspace project_id")
+    init_parser.add_argument("--template", default="blank", help="Bundled template name; defaults to blank")
+    init_parser.add_argument("--var", action="append", default=[], help="Additional template variable in k=v form")
+    init_parser.add_argument("--actor", default="owner", help="Actor requesting init; defaults to owner")
+    init_parser.add_argument("--dry-run", action="store_true", help="Preview planned writes without creating the workspace")
+    init_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
+    board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    board_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
+    board_parser.add_argument("--port", type=int, help="Bind port; defaults to 7117")
+
+    mcp_config_parser = subparsers.add_parser("mcp-config", help="Print redacted MCP client/server configuration")
+    mcp_config_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    mcp_config_parser.add_argument("--host", help="MCP host; defaults to workspace config or 127.0.0.1")
+    mcp_config_parser.add_argument("--port", type=int, help="MCP port; defaults to workspace config or 7118")
+    mcp_config_parser.add_argument("--transport-token-env", help="Transport token env var; defaults to LYBRA_MCP_TOKEN")
+    mcp_config_parser.add_argument("--capability-token-env", help="Capability token env var; defaults to LYBRA_CAPABILITY_TOKEN")
+    mcp_config_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     draft_parser = subparsers.add_parser("draft", help="Safe task draft writer")
     draft_subparsers = draft_parser.add_subparsers(dest="draft_command")
 
@@ -604,7 +809,11 @@ def build_parser() -> argparse.ArgumentParser:
     agents_parser = subparsers.add_parser("agents", help="Render agent profiles")
     agents_parser.add_argument("--json", action="store_true", help="Output JSON")
 
-    mcp_parser = subparsers.add_parser("mcp", help="MCP setup diagnostics")
+    mcp_parser = subparsers.add_parser("mcp", help="Start MCP HTTP/SSE or run MCP setup diagnostics")
+    mcp_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    mcp_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
+    mcp_parser.add_argument("--port", type=int, help="Bind port; defaults to 7118")
+    mcp_parser.add_argument("--keepalive-seconds", type=float, help="SSE ping interval; defaults to 30 seconds")
     mcp_subparsers = mcp_parser.add_subparsers(dest="mcp_command")
     mcp_doctor_parser = mcp_subparsers.add_parser("doctor", help="Inspect MCP transport auth and capability scopes")
     mcp_doctor_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -720,6 +929,32 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
+    if args.command == "init":
+        try:
+            return _run_top_level_init(args)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "board":
+        try:
+            return _run_board_command(args)
+        except (OSError, ValueError, FileNotFoundError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "mcp-config":
+        try:
+            result = build_mcp_config_report(args)
+        except (OSError, ValueError, FileNotFoundError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(render_json(result))
+        else:
+            print(_render_mcp_config_text(result))
+        return 0
+
     if args.command == "draft":
         try:
             repo_root = find_repo_root()
@@ -804,15 +1039,18 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.command == "mcp":
-        if getattr(args, "mcp_command", None) != "doctor":
-            parser.print_help()
-            return 2
-        result = build_mcp_doctor_report()
-        if args.json:
-            print(render_json(result))
-        else:
-            print(render_mcp_doctor_text(result))
-        return 0 if result.get("ok") else 1
+        if getattr(args, "mcp_command", None) == "doctor":
+            result = build_mcp_doctor_report()
+            if args.json:
+                print(render_json(result))
+            else:
+                print(render_mcp_doctor_text(result))
+            return 0 if result.get("ok") else 1
+        try:
+            return _run_mcp_command(args)
+        except (OSError, ValueError, FileNotFoundError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
 
     if args.command == "workspace":
         if not getattr(args, "workspace_command", None):

@@ -73,13 +73,29 @@ python3 -m unittest discover -s tools/aipos_cli/tests
 python3 -m unittest discover -s web/board/tests
 ```
 
-Where the command needs a workspace root, use `AIPOS_WORKSPACE_ROOT` or `--repo-root` as applicable.
+Workspace commands auto-discover `.lybra/config.json` or `5_tasks/queue` from the current directory upward. Explicit flags and `AIPOS_WORKSPACE_ROOT` still override discovery.
 
 ## Quick start
 
 ```bash
-lybra --help
+npm install -g lybra
+lybra init ./my-workspace --project-id my_project
+cd ./my-workspace
+lybra board
 ```
+
+Board starts on `http://127.0.0.1:7117` by default.
+
+For MCP:
+
+```bash
+export LYBRA_MCP_TOKEN="<set-your-token>"
+export LYBRA_CAPABILITY_TOKEN='<json-capability-token>'
+lybra mcp
+lybra mcp-config
+```
+
+MCP HTTP/SSE starts on `http://127.0.0.1:7118` by default. `lybra mcp-config` prints endpoint and environment references for an agent without printing raw token values.
 
 ## The closed loop
 
