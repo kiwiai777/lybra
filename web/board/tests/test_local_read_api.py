@@ -37,6 +37,7 @@ class LocalReadApiTests(unittest.TestCase):
     def test_read_routes_return_json_envelopes(self) -> None:
         for path in (
             "/api/runtime-status",
+            "/api/lifecycle",
             "/api/queue",
             "/api/needs-owner",
             "/api/validate",
@@ -200,6 +201,112 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertEqual(stages["claimed"], 1)
         self.assertEqual(stages["verdict_pass"], 1)
         self.assertIn("finalize_writer", data["data"]["deferred_gates"])
+
+    def test_lifecycle_route_is_read_only_and_surfaces_owner_gate(self) -> None:
+        pending = self.repo_root / "5_tasks" / "queue" / "pending" / "pending-lifecycle.md"
+        pending.write_text(self.lifecycle_task_frontmatter("TASK-LIFE-PENDING", "pending", "Pending lifecycle"), encoding="utf-8")
+        returned = self.repo_root / "5_tasks" / "queue" / "claimed" / "returned-lifecycle.md"
+        returned.write_text(
+            self.lifecycle_task_frontmatter(
+                "TASK-LIFE-RETURNED",
+                "claimed",
+                "Returned lifecycle",
+                extra=[
+                    "claimed_by: agent-01",
+                    "claim_id: claim_TASK-LIFE-RETURNED_001_agent-01",
+                    "active_session_id: session_TASK-LIFE-RETURNED_001_agent-01",
+                    "executor_status: completed",
+                    "audit_readiness: ready",
+                    "dependency_audit_status: pending",
+                    "result_summary: Work returned.",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        audited = self.repo_root / "5_tasks" / "queue" / "claimed" / "audited-lifecycle.md"
+        audited.write_text(
+            self.lifecycle_task_frontmatter(
+                "TASK-LIFE-AUDITED",
+                "claimed",
+                "Audited lifecycle",
+                task_class="complex",
+                extra=[
+                    "claimed_by: agent-01",
+                    "claim_id: claim_TASK-LIFE-AUDITED_001_agent-01",
+                    "active_session_id: session_TASK-LIFE-AUDITED_001_agent-01",
+                    "executor_status: completed",
+                    "audit_readiness: ready",
+                    "dependency_audit_status: PASS",
+                    "result_summary: Work returned and audited.",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        before = self.data_paths()
+
+        status, data = dispatch_api_request(method="GET", path="/api/lifecycle", routes=self.routes)
+        after = self.data_paths()
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["operation"], "get_lifecycle")
+        self.assertFalse(data["data"]["writes_enabled"])
+        self.assertFalse(data["execute_allowed"])
+        self.assertEqual(before, after)
+        rows = {row["task_id"]: row for row in data["data"]["tasks"]}
+        self.assertEqual(rows["TASK-LIFE-PENDING"]["lifecycle_stage"], "pending")
+        self.assertEqual(rows["TASK-LIFE-RETURNED"]["lifecycle_stage"], "returned")
+        self.assertEqual(rows["TASK-LIFE-RETURNED"]["provenance_completeness"], "partial")
+        self.assertEqual(rows["TASK-LIFE-AUDITED"]["lifecycle_stage"], "verdict_pass")
+        self.assertEqual(rows["TASK-LIFE-AUDITED"]["owner_gate"]["state"], "audit_pass_waiting_owner_finalize")
+        self.assertIn("finalize_writer", data["data"]["deferred_gates"])
+
+    def test_static_board_contains_closed_loop_lifecycle_panel(self) -> None:
+        html = (WEB_ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        js = (WEB_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("Closed-Loop Lifecycle", html)
+        self.assertIn("/api/lifecycle", js)
+        self.assertIn("renderLifecycle", js)
+
+    def lifecycle_task_frontmatter(
+        self,
+        task_id: str,
+        status: str,
+        title: str,
+        *,
+        task_class: str = "simple",
+        extra: list[str] | None = None,
+    ) -> str:
+        lines = [
+            "---",
+            f"task_id: {task_id}",
+            f"title: {title}",
+            "project: lybra",
+            f"status: {status}",
+            "assigned_to: agent-01",
+            "agent_instance: agent-01",
+            "context_bundle: dev.codex.local",
+            "task_mode: docs",
+            f"task_class: {task_class}",
+            "model_tier: L2",
+            "priority: medium",
+            "created_by: owner",
+            "needs_owner: false",
+            "output_target: docs/",
+            "artifact_policy: formal_write",
+            "task_type: one_shot",
+            "polling_mode: agent_polling",
+            "claim_policy: assigned_agent_only",
+            "report_mode: forum_reply",
+            "recurrence: none",
+            "session_policy: single_task_session",
+            "context_isolation: strict",
+            "artifact_scope: docs/",
+            "memory_scope: board lifecycle tests",
+        ]
+        lines.extend(extra or [])
+        lines.extend(["---", ""])
+        return "\n".join(lines)
 
     def test_external_intake_review_route_lists_drafts_without_writing(self) -> None:
         draft_dir = self.repo_root / "5_tasks" / "drafts" / "external_intake"

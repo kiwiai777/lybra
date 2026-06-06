@@ -1,6 +1,7 @@
 const ROUTES = [
   ["health", "/api/health"],
   ["runtime-status", "/api/runtime-status"],
+  ["lifecycle", "/api/lifecycle"],
   ["queue", "/api/queue"],
   ["needs-owner", "/api/needs-owner"],
   ["validate", "/api/validate"],
@@ -42,6 +43,7 @@ let latestOwnerDecisionResolutionReview = null;
 let latestOwnerDecisionRecordDryRun = null;
 let latestAiAuthorPreview = null;
 let latestProfilePreview = null;
+let selectedLifecycle = null;
 
 function writePanel(id, payload) {
   document.getElementById(id).textContent = JSON.stringify(payload, null, 2);
@@ -107,6 +109,9 @@ async function loadRoute(id, path) {
     if (id === "runtime-status") {
       renderRuntimeStatus(data);
     }
+    if (id === "lifecycle") {
+      renderLifecycle(data);
+    }
     if (id === "needs-owner") {
       renderNeedsOwnerDetails(data);
     }
@@ -145,6 +150,11 @@ async function loadRoute(id, path) {
 function taskRows(queueData) {
   const tasks = queueData?.data?.tasks;
   return Array.isArray(tasks) ? tasks : [];
+}
+
+function lifecycleRows(data) {
+  const rows = data?.data?.tasks;
+  return Array.isArray(rows) ? rows : [];
 }
 
 function envelopeRows(data) {
@@ -266,6 +276,113 @@ function renderRuntimeStatus(data) {
     }
     card.appendChild(warningList);
   }
+}
+
+function lifecycleLabel(row) {
+  return [row?.task_id, row?.lifecycle_stage, row?.owner_gate?.state, row?.provenance_completeness].filter(Boolean).join(" | ");
+}
+
+function renderCountPills(container, counts, prefix = "") {
+  const keys = Object.keys(counts || {}).sort();
+  if (keys.length === 0) {
+    const pill = document.createElement("span");
+    pill.className = "runtime-pill";
+    pill.textContent = `${prefix}empty`;
+    container.appendChild(pill);
+    return;
+  }
+  for (const key of keys) {
+    const pill = document.createElement("span");
+    pill.className = "runtime-pill";
+    pill.textContent = `${prefix}${key}: ${counts[key]}`;
+    container.appendChild(pill);
+  }
+}
+
+function renderLifecycle(data) {
+  const summary = document.getElementById("lifecycle-summary");
+  const list = document.getElementById("lifecycle-list");
+  const detail = document.getElementById("lifecycle-detail");
+  const rows = lifecycleRows(data);
+  selectedLifecycle = null;
+  summary.replaceChildren();
+  list.replaceChildren();
+  detail.textContent = rows.length === 0 ? "No lifecycle rows." : "Select a lifecycle row.";
+  const stages = document.createElement("div");
+  stages.className = "runtime-tools";
+  renderCountPills(stages, data?.data?.stage_counts || {}, "stage ");
+  summary.appendChild(stages);
+  const gates = document.createElement("div");
+  gates.className = "runtime-tools";
+  renderCountPills(gates, data?.data?.owner_gate_counts || {}, "gate ");
+  summary.appendChild(gates);
+  const completeness = document.createElement("div");
+  completeness.className = "runtime-tools";
+  renderCountPills(completeness, data?.data?.provenance_completeness_counts || {}, "provenance ");
+  summary.appendChild(completeness);
+  for (const row of rows) {
+    const button = document.createElement("button");
+    button.className = "task-button";
+    button.textContent = lifecycleLabel(row);
+    button.title = row?.path || row?.task_id || "";
+    button.addEventListener("click", () => selectLifecycle(row, button));
+    list.appendChild(button);
+  }
+}
+
+function selectLifecycle(row, sourceButton) {
+  selectedLifecycle = row;
+  clearSelected(document.getElementById("lifecycle-list"));
+  sourceButton?.classList?.add("selected");
+  renderLifecycleDetail(row);
+}
+
+function renderLifecycleDetail(row) {
+  const detail = document.getElementById("lifecycle-detail");
+  detail.replaceChildren();
+  const header = document.createElement("div");
+  header.className = "lifecycle-header";
+  const title = document.createElement("strong");
+  title.textContent = row?.task_id || row?.path || "Lifecycle row";
+  const stage = document.createElement("span");
+  stage.textContent = row?.lifecycle_stage || "unknown";
+  header.append(title, stage);
+  detail.appendChild(header);
+
+  const gate = document.createElement("div");
+  gate.className = `owner-gate-banner ${row?.owner_gate?.state && row.owner_gate.state !== "none" ? "warn" : ""}`;
+  gate.textContent = row?.owner_gate?.label || "No Owner gate surfaced";
+  detail.appendChild(gate);
+
+  const refs = document.createElement("div");
+  refs.className = "lifecycle-ref-grid";
+  const refRows = row?.record_refs || {};
+  for (const key of ["claim_id", "claim_record_ref", "active_session_id", "session_record_ref", "return_record_ref", "return_record_path", "audit_dispatch_record_ref", "related_audit_task_ref", "related_audit_verdict_ref"]) {
+    const item = document.createElement("div");
+    item.className = "runtime-chip";
+    const label = document.createElement("strong");
+    label.textContent = key;
+    const value = document.createElement("span");
+    value.textContent = refRows[key] || "-";
+    item.append(label, value);
+    refs.appendChild(item);
+  }
+  detail.appendChild(refs);
+
+  const diagnostics = {
+    provenance_completeness: row?.provenance_completeness,
+    validator_verdict: row?.validator_verdict,
+    recovery_verdict: row?.recovery_verdict,
+    staleness: row?.staleness || [],
+    contradictions: row?.contradictions || [],
+    audit_relation: row?.audit_relation || {},
+    recommended_next_action: row?.recommended_next_action,
+    writes_enabled: row?.writes_enabled,
+    execute_allowed: row?.execute_allowed,
+  };
+  const pre = document.createElement("pre");
+  pre.textContent = JSON.stringify(diagnostics, null, 2);
+  detail.appendChild(pre);
 }
 
 function aiAuthorMode() {

@@ -55,6 +55,7 @@ from tools.aipos_cli.board_adapter import (
 from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
 from tools.aipos_cli.draft_validator import validate_draft_file
 from tools.aipos_cli.draft_writer import publish_draft as backend_publish_draft
+from tools.aipos_cli.state_recovery import build_state_recovery_preview
 from tools.aipos_cli.workspace_config import (
     CONFIG_RELATIVE_PATH,
     DEFAULT_BOARD_HOST,
@@ -86,6 +87,7 @@ def _api_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, list[st
     return {
         "/api/health": lambda _params: get_health(repo_root=repo_root),
         "/api/runtime-status": partial(_get_runtime_status_route, repo_root=repo_root),
+        "/api/lifecycle": partial(_get_lifecycle_route, repo_root=repo_root),
         "/api/governance": lambda _params: get_governance(repo_root=repo_root),
         "/api/queue": lambda _params: get_queue(repo_root=repo_root),
         "/api/needs-owner": lambda _params: get_needs_owner(repo_root=repo_root),
@@ -256,7 +258,11 @@ def _derive_task_lifecycle(task: dict[str, Any]) -> str:
         return "verdict_recorded"
     if int(records.get("audit_dispatch_records") or 0) > 0 or metadata.get("audit_dispatch_record_ref"):
         return "audit_dispatched"
-    if int(records.get("return_records") or 0) > 0 or metadata.get("return_record_ref"):
+    if (
+        int(records.get("return_records") or 0) > 0
+        or metadata.get("return_record_ref")
+        or (metadata.get("executor_status") == "completed" and metadata.get("audit_readiness") == "ready")
+    ):
         return "returned"
     if status == "claimed" or metadata.get("claim_id"):
         return "claimed"
@@ -287,6 +293,166 @@ def _loop_summary(tasks: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
     return {"counts": counts, "tasks": rows[:20], "total": len(rows)}
+
+
+def _record_ref_summary(recovery: dict[str, Any]) -> dict[str, Any]:
+    chain = recovery.get("provenance_chain") if isinstance(recovery.get("provenance_chain"), dict) else {}
+    claim = chain.get("claim") if isinstance(chain.get("claim"), dict) else {}
+    session = chain.get("session") if isinstance(chain.get("session"), dict) else {}
+    returned = chain.get("return") if isinstance(chain.get("return"), dict) else {}
+    audit = chain.get("audit") if isinstance(chain.get("audit"), dict) else {}
+    return {
+        "claim_id": recovery.get("claim_id"),
+        "claim_record_ref": claim.get("claim_record_ref"),
+        "active_session_id": recovery.get("active_session_id"),
+        "session_record_ref": session.get("session_record_ref"),
+        "return_record_ref": returned.get("return_record_ref"),
+        "return_record_path": returned.get("return_record_path"),
+        "audit_dispatch_record_ref": audit.get("audit_dispatch_record_ref") or None,
+        "related_audit_task_ref": audit.get("related_audit_task_ref"),
+        "related_audit_verdict_ref": audit.get("related_audit_verdict_ref"),
+    }
+
+
+def _owner_gate_state(task: dict[str, Any], recovery: dict[str, Any]) -> dict[str, Any]:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    task_verdict = str(task.get("verdict") or "")
+    dependency_audit_status = str(metadata.get("dependency_audit_status") or recovery.get("dependency_audit_status") or "")
+    if dependency_audit_status.upper() == "PASS" and not metadata.get("finalize_ref") and not metadata.get("finalize_status"):
+        return {
+            "state": "audit_pass_waiting_owner_finalize",
+            "label": "Audit PASS recorded; Owner finalize is still a separate gate",
+            "reasons": ["Finalize writer / accepted-work unblock is intentionally deferred."],
+        }
+    if task_verdict == "NEEDS_OWNER" or recovery.get("needs_owner_reasons"):
+        return {"state": "needs_owner", "label": "Owner decision required", "reasons": task.get("needs_owner_reasons") or recovery.get("needs_owner_reasons") or []}
+    if task_verdict == "BLOCK" or recovery.get("blocking_reasons"):
+        return {"state": "blocked", "label": "Blocked until durable state is repaired", "reasons": task.get("blocking_reasons") or recovery.get("blocking_reasons") or []}
+    if recovery.get("provenance_completeness") in {"partial", "missing", "contradictory"}:
+        return {
+            "state": "provenance_gap",
+            "label": "Provenance gap visible",
+            "reasons": recovery.get("warnings") or recovery.get("contradictions") or [],
+        }
+    return {"state": "none", "label": "No Owner gate surfaced", "reasons": []}
+
+
+def _lifecycle_row(task: dict[str, Any], recovery: dict[str, Any]) -> dict[str, Any]:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    linked = recovery.get("linked_records") if isinstance(recovery.get("linked_records"), dict) else {}
+    audit_dispatches = linked.get("audit_dispatches") if isinstance(linked.get("audit_dispatches"), list) else []
+    audit_verdicts = linked.get("audit_verdicts") if isinstance(linked.get("audit_verdicts"), list) else []
+    return {
+        "task_id": task.get("task_id") or metadata.get("task_id") or recovery.get("task_id"),
+        "title": task.get("title") or metadata.get("title"),
+        "path": task.get("path") or recovery.get("task_path"),
+        "queue_state": recovery.get("queue_state") or task.get("queue_state"),
+        "status": task.get("status") or metadata.get("status"),
+        "validator_verdict": task.get("verdict"),
+        "recovery_verdict": recovery.get("verdict"),
+        "lifecycle_stage": _derive_task_lifecycle(task),
+        "owner_gate": _owner_gate_state(task, recovery),
+        "provenance_completeness": recovery.get("provenance_completeness"),
+        "record_refs": _record_ref_summary(recovery),
+        "staleness": recovery.get("staleness") or [],
+        "contradictions": recovery.get("contradictions") or [],
+        "warnings": recovery.get("warnings") or [],
+        "audit_relation": {
+            "reviewed_task_id": metadata.get("reviewed_task_id"),
+            "related_audit_task_ref": metadata.get("related_audit_task_ref"),
+            "related_audit_verdict_ref": metadata.get("related_audit_verdict_ref"),
+            "audit_dispatches": audit_dispatches,
+            "audit_verdicts": audit_verdicts,
+            "distinct_auditor_visible": bool(audit_dispatches or audit_verdicts or metadata.get("related_audit_task_ref")),
+        },
+        "recommended_next_action": recovery.get("recommended_next_action"),
+        "writes_enabled": False,
+        "execute_allowed": False,
+    }
+
+
+def _get_lifecycle_route(_params: dict[str, list[str]], *, repo_root: Path | None) -> dict[str, Any]:
+    operation = "get_lifecycle"
+    resolved_root = (repo_root or REPO_ROOT).resolve()
+    queue = get_queue(repo_root=resolved_root)
+    records = get_records(repo_root=resolved_root)
+    records_report = records.get("data") if isinstance(records.get("data"), dict) else {}
+    tasks = queue.get("data", {}).get("tasks") if isinstance(queue.get("data"), dict) else []
+    tasks = tasks if isinstance(tasks, list) else []
+    rows: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for task in tasks:
+        try:
+            recovery = build_state_recovery_preview(resolved_root, path=str(task.get("path") or ""), records=records_report)
+        except Exception as exc:
+            recovery = {
+                "verdict": "WARN",
+                "task_id": task.get("task_id"),
+                "task_path": task.get("path"),
+                "provenance_completeness": "unknown",
+                "warnings": [f"state recovery preview unavailable: {exc}"],
+                "staleness": [],
+                "contradictions": [],
+                "linked_records": {},
+                "provenance_chain": {},
+                "writes_enabled": False,
+                "execute_allowed": False,
+            }
+            warnings.append(f"{task.get('task_id') or task.get('path')}: state recovery preview unavailable")
+        rows.append(_lifecycle_row(task, recovery))
+    stage_counts: dict[str, int] = {}
+    owner_gate_counts: dict[str, int] = {}
+    completeness_counts: dict[str, int] = {}
+    for row in rows:
+        stage = str(row.get("lifecycle_stage") or "unknown")
+        gate = str(row.get("owner_gate", {}).get("state") or "none")
+        completeness = str(row.get("provenance_completeness") or "unknown")
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
+        owner_gate_counts[gate] = owner_gate_counts.get(gate, 0) + 1
+        completeness_counts[completeness] = completeness_counts.get(completeness, 0) + 1
+    return {
+        "ok": True,
+        "verdict": "WARN" if warnings else "PASS",
+        "operation": operation,
+        "dry_run": False,
+        "actor": None,
+        "actor_match": None,
+        "timestamp": _utc_now(),
+        "data": {
+            "tasks": rows,
+            "stage_counts": stage_counts,
+            "owner_gate_counts": owner_gate_counts,
+            "provenance_completeness_counts": completeness_counts,
+            "record_summary": records.get("summary"),
+            "writes_enabled": False,
+            "execute_allowed": False,
+            "deferred_gates": ["finalize_writer", "accepted_work_unblock", "active_lease_writer", "delegated", "standing", "trace_native_audit"],
+        },
+        "summary": {
+            "total_tasks": len(rows),
+            "stage_counts": stage_counts,
+            "owner_gate_counts": owner_gate_counts,
+            "provenance_completeness_counts": completeness_counts,
+        },
+        "planned_writes": [],
+        "planned_moves": [],
+        "performed_writes": [],
+        "performed_moves": [],
+        "warnings": warnings,
+        "blocking_reasons": [],
+        "needs_owner_reasons": [],
+        "owner_confirmation_required": False,
+        "owner_confirmation_reasons": [],
+        "execute_allowed": False,
+        "execute_blocking_reasons": [],
+        "dry_run_id": None,
+        "dry_run_token": None,
+        "dry_run_snapshot_hash": None,
+        "dry_run_created_at": None,
+        "dry_run_expires_at": None,
+        "safety_notice": "Read-only Board lifecycle surface. State is derived from tasks, records, validator, and AIPOS-173 recovery preview; no files are written.",
+        "errors": [],
+    }
 
 
 def _get_runtime_status_route(_params: dict[str, list[str]], *, repo_root: Path | None) -> dict[str, Any]:

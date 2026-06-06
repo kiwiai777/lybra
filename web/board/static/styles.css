@@ -843,6 +843,47 @@ pre {
   padding-left: 18px;
   color: #92400e;
 }
+.lifecycle-summary,
+.lifecycle-detail {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+.lifecycle-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.lifecycle-header span {
+  padding: 4px 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  font-size: 0.82rem;
+}
+.owner-gate-banner {
+  padding: 8px;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  color: #166534;
+  background: #f0fdf4;
+}
+.owner-gate-banner.warn {
+  border-color: #fde68a;
+  color: #78350f;
+  background: #fffbeb;
+}
+.lifecycle-ref-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px;
+}
 
 @media (max-width: 640px) {
   header {
