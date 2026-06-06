@@ -1,5 +1,6 @@
 const ROUTES = [
   ["health", "/api/health"],
+  ["runtime-status", "/api/runtime-status"],
   ["queue", "/api/queue"],
   ["needs-owner", "/api/needs-owner"],
   ["validate", "/api/validate"],
@@ -103,6 +104,9 @@ async function loadRoute(id, path) {
     if (id === "queue") {
       renderTaskList(data);
     }
+    if (id === "runtime-status") {
+      renderRuntimeStatus(data);
+    }
     if (id === "needs-owner") {
       renderNeedsOwnerDetails(data);
     }
@@ -167,6 +171,101 @@ function ownerDecisionRecordRows(data) {
 
 function aiAuthorValue(id) {
   return document.getElementById(id).value.trim();
+}
+
+function setupStatusLabel(present) {
+  return present ? "present" : "missing";
+}
+
+function renderRuntimeStatus(data) {
+  const card = document.getElementById("runtime-status-card");
+  if (!card) {
+    return;
+  }
+  const payload = data?.data || {};
+  const workspace = payload.workspace || {};
+  const endpoints = payload.endpoints || {};
+  const setup = payload.agent_setup || {};
+  const loop = payload.loop || {};
+  const visibility = setup.tool_visibility || {};
+  const stages = loop.counts || {};
+  const warnings = Array.isArray(data?.warnings) ? data.warnings : [];
+  const rows = [
+    ["Workspace", workspace.root || "-"],
+    ["Config", workspace.config_path || "not found"],
+    ["Board", endpoints.board?.url || "-"],
+    ["MCP", endpoints.mcp?.url || "-"],
+    ["SSE", endpoints.mcp?.sse_url || "-"],
+    ["Transport auth", `${setupStatusLabel(setup.transport_token_present)} (${setup.transport_token_env || "LYBRA_MCP_TOKEN"})`],
+    ["Capability scope", `${setupStatusLabel(setup.capability_token_present)} (${setup.capability_token_env || "LYBRA_CAPABILITY_TOKEN"})`],
+  ];
+  card.replaceChildren();
+  const grid = document.createElement("div");
+  grid.className = "runtime-grid";
+  for (const [label, value] of rows) {
+    const item = document.createElement("div");
+    item.className = "runtime-chip";
+    const strong = document.createElement("strong");
+    strong.textContent = label;
+    const span = document.createElement("span");
+    span.textContent = String(value);
+    item.append(strong, span);
+    grid.appendChild(item);
+  }
+  card.appendChild(grid);
+
+  const setupBlock = document.createElement("div");
+  setupBlock.className = "runtime-setup";
+  const command = document.createElement("code");
+  command.textContent = setup.server_command || "lybra mcp";
+  setupBlock.appendChild(command);
+  const auth = document.createElement("code");
+  auth.textContent = setup.authorization_header_ref || "Bearer ${LYBRA_MCP_TOKEN}";
+  setupBlock.appendChild(auth);
+  card.appendChild(setupBlock);
+
+  const toolList = document.createElement("div");
+  toolList.className = "runtime-tools";
+  for (const key of ["queue_claim", "queue_return", "audit_dispatch", "audit_verdict"]) {
+    const pill = document.createElement("span");
+    pill.className = `runtime-pill ${visibility[key] === "visible" ? "is-visible" : "is-hidden"}`;
+    pill.textContent = `${key}: ${visibility[key] || "hidden"}`;
+    toolList.appendChild(pill);
+  }
+  card.appendChild(toolList);
+
+  const stageList = document.createElement("div");
+  stageList.className = "runtime-tools";
+  const stageKeys = Object.keys(stages).sort();
+  if (stageKeys.length === 0) {
+    const empty = document.createElement("span");
+    empty.className = "runtime-pill";
+    empty.textContent = "queue: empty";
+    stageList.appendChild(empty);
+  } else {
+    for (const key of stageKeys) {
+      const pill = document.createElement("span");
+      pill.className = "runtime-pill";
+      pill.textContent = `${key}: ${stages[key]}`;
+      stageList.appendChild(pill);
+    }
+  }
+  card.appendChild(stageList);
+
+  const notice = document.createElement("p");
+  notice.className = "runtime-notice";
+  notice.textContent = setup.secrets_notice || "Raw tokens are never shown.";
+  card.appendChild(notice);
+  if (warnings.length > 0) {
+    const warningList = document.createElement("ul");
+    warningList.className = "runtime-warnings";
+    for (const warning of warnings.slice(0, 4)) {
+      const item = document.createElement("li");
+      item.textContent = String(warning);
+      warningList.appendChild(item);
+    }
+    card.appendChild(warningList);
+  }
 }
 
 function aiAuthorMode() {

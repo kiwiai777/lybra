@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import json
 import re
@@ -54,6 +55,14 @@ from tools.aipos_cli.board_adapter import (
 from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
 from tools.aipos_cli.draft_validator import validate_draft_file
 from tools.aipos_cli.draft_writer import publish_draft as backend_publish_draft
+from tools.aipos_cli.workspace_config import (
+    CONFIG_RELATIVE_PATH,
+    DEFAULT_BOARD_HOST,
+    DEFAULT_BOARD_PORT,
+    DEFAULT_MCP_HOST,
+    DEFAULT_MCP_PORT,
+    load_workspace_config,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -76,6 +85,7 @@ def _content_type(path: Path) -> str:
 def _api_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, list[str]]], dict[str, Any]]]:
     return {
         "/api/health": lambda _params: get_health(repo_root=repo_root),
+        "/api/runtime-status": partial(_get_runtime_status_route, repo_root=repo_root),
         "/api/governance": lambda _params: get_governance(repo_root=repo_root),
         "/api/queue": lambda _params: get_queue(repo_root=repo_root),
         "/api/needs-owner": lambda _params: get_needs_owner(repo_root=repo_root),
@@ -154,6 +164,242 @@ def _slug(value: str) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _secret_fingerprint(value: str) -> str | None:
+    if not value:
+        return None
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _is_loopback_host(host: str) -> bool:
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _runtime_config_defaults(repo_root: Path) -> dict[str, Any]:
+    config_path = repo_root / CONFIG_RELATIVE_PATH
+    config: dict[str, Any] = {}
+    config_error: str | None = None
+    if config_path.is_file():
+        try:
+            config = load_workspace_config(config_path)
+        except Exception as exc:  # read-only status surface should report config issues instead of raising
+            config_error = str(exc)
+            config = {}
+    board = config.get("board") if isinstance(config.get("board"), dict) else {}
+    mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
+    return {
+        "config_path": str(config_path.relative_to(repo_root)) if config_path.exists() else None,
+        "config_error": config_error,
+        "board_host": str(board.get("host") or DEFAULT_BOARD_HOST),
+        "board_port": int(board.get("port") or DEFAULT_BOARD_PORT),
+        "mcp_host": str(mcp.get("host") or DEFAULT_MCP_HOST),
+        "mcp_port": int(mcp.get("port") or DEFAULT_MCP_PORT),
+        "transport_token_env": str(mcp.get("transport_token_env") or "LYBRA_MCP_TOKEN"),
+        "capability_token_env": str(mcp.get("capability_token_env") or "LYBRA_CAPABILITY_TOKEN"),
+    }
+
+
+def _capability_status(raw: str) -> dict[str, Any]:
+    operations: list[str] = []
+    diagnostics: list[str] = []
+    expires_at: str | None = None
+    expires_status = "missing"
+    if raw:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            payload = None
+            diagnostics.append("Capability token is not valid JSON")
+        if isinstance(payload, dict):
+            raw_operations = payload.get("operations")
+            if isinstance(raw_operations, list):
+                operations = [str(item) for item in raw_operations]
+            else:
+                diagnostics.append("Capability token operations must be a list")
+            expires_text = str(payload.get("expires_at") or "").strip()
+            if expires_text:
+                expires_at = expires_text
+                try:
+                    parsed = datetime.fromisoformat(expires_text.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    expires_status = "valid" if parsed > datetime.now(timezone.utc) else "expired"
+                except ValueError:
+                    expires_status = "invalid"
+        elif raw:
+            diagnostics.append("Capability token must be a JSON object")
+    visibility = {
+        "queue_claim": "visible" if "queue_claim" in operations else "hidden",
+        "queue_return": "visible" if "queue_return" in operations else "hidden",
+        "audit_dispatch": "visible" if "audit_dispatch" in operations else "hidden",
+        "audit_verdict": "visible" if "audit_verdict" in operations else "hidden",
+    }
+    return {
+        "operations": operations,
+        "expires_at": expires_at,
+        "expires_status": expires_status,
+        "tool_visibility": visibility,
+        "diagnostics": diagnostics,
+    }
+
+
+def _derive_task_lifecycle(task: dict[str, Any]) -> str:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    status = str(task.get("status") or metadata.get("status") or "").strip()
+    if status == "blocked":
+        return "blocked_or_needs_owner"
+    if str(metadata.get("dependency_audit_status") or "").lower() in {"pass", "audit_pass"}:
+        return "verdict_pass"
+    records = task.get("records") if isinstance(task.get("records"), dict) else {}
+    if int(records.get("audit_verdict_records") or 0) > 0:
+        return "verdict_recorded"
+    if int(records.get("audit_dispatch_records") or 0) > 0 or metadata.get("audit_dispatch_record_ref"):
+        return "audit_dispatched"
+    if int(records.get("return_records") or 0) > 0 or metadata.get("return_record_ref"):
+        return "returned"
+    if status == "claimed" or metadata.get("claim_id"):
+        return "claimed"
+    if status == "pending":
+        return "pending"
+    verdict = str(task.get("verdict") or "").strip()
+    if verdict in {"BLOCK", "NEEDS_OWNER"}:
+        return "blocked_or_needs_owner"
+    return status or "unknown"
+
+
+def _loop_summary(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    rows: list[dict[str, Any]] = []
+    for task in tasks:
+        stage = _derive_task_lifecycle(task)
+        counts[stage] = counts.get(stage, 0) + 1
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        rows.append(
+            {
+                "task_id": task.get("task_id") or metadata.get("task_id"),
+                "title": task.get("title") or metadata.get("title"),
+                "path": task.get("path"),
+                "status": task.get("status") or metadata.get("status"),
+                "verdict": task.get("verdict"),
+                "lifecycle_stage": stage,
+                "dependency_audit_status": metadata.get("dependency_audit_status"),
+            }
+        )
+    return {"counts": counts, "tasks": rows[:20], "total": len(rows)}
+
+
+def _get_runtime_status_route(_params: dict[str, list[str]], *, repo_root: Path | None) -> dict[str, Any]:
+    operation = "get_runtime_status"
+    resolved_root = (repo_root or REPO_ROOT).resolve()
+    defaults = _runtime_config_defaults(resolved_root)
+    transport_env = defaults["transport_token_env"]
+    capability_env = defaults["capability_token_env"]
+    transport_raw = str(os.environ.get(transport_env) or "")
+    capability_raw = str(os.environ.get(capability_env) or "")
+    capability = _capability_status(capability_raw)
+    queue = get_queue(repo_root=resolved_root)
+    records = get_records(repo_root=resolved_root)
+    validate = get_validate(repo_root=resolved_root)
+    tasks = queue.get("data", {}).get("tasks") if isinstance(queue.get("data"), dict) else []
+    tasks = tasks if isinstance(tasks, list) else []
+    warnings: list[str] = []
+    if defaults["config_error"]:
+        warnings.append(f"Workspace config issue: {defaults['config_error']}")
+    if not transport_raw:
+        warnings.append(f"{transport_env} is not set; MCP transport clients cannot authenticate.")
+    if not capability_raw:
+        warnings.append(f"{capability_env} is not set; scoped MCP mutation tools will be hidden.")
+    warnings.extend(capability["diagnostics"])
+    data = {
+        "workspace": {
+            "root": str(resolved_root),
+            "config_path": defaults["config_path"],
+            "discovery_note": "Board server repo_root / AIPOS_WORKSPACE_ROOT is authoritative for this process.",
+            "initialized": (resolved_root / "5_tasks" / "queue").exists(),
+        },
+        "endpoints": {
+            "board": {
+                "url": f"http://{defaults['board_host']}:{defaults['board_port']}",
+                "host": defaults["board_host"],
+                "port": defaults["board_port"],
+                "loopback": _is_loopback_host(defaults["board_host"]),
+            },
+            "mcp": {
+                "url": f"http://{defaults['mcp_host']}:{defaults['mcp_port']}/mcp",
+                "sse_url": f"http://{defaults['mcp_host']}:{defaults['mcp_port']}/sse",
+                "host": defaults["mcp_host"],
+                "port": defaults["mcp_port"],
+                "loopback": _is_loopback_host(defaults["mcp_host"]),
+            },
+        },
+        "agent_setup": {
+            "server_command": f"lybra mcp --workspace-root {resolved_root}",
+            "transport_token_env": transport_env,
+            "capability_token_env": capability_env,
+            "authorization_header_ref": f"Bearer ${{{transport_env}}}",
+            "transport_token_present": bool(transport_raw),
+            "transport_token_fingerprint": _secret_fingerprint(transport_raw),
+            "capability_token_present": bool(capability_raw),
+            "capability_token_fingerprint": _secret_fingerprint(capability_raw),
+            "capability_operations": capability["operations"],
+            "capability_expires_at": capability["expires_at"],
+            "capability_expires_status": capability["expires_status"],
+            "tool_visibility": capability["tool_visibility"],
+            "secrets_notice": "Raw tokens are never returned by this route; use environment references and redacted fingerprints only.",
+        },
+        "loop": _loop_summary(tasks),
+        "read_sources": {
+            "queue_summary": queue.get("summary"),
+            "records_summary": records.get("summary"),
+            "validate_summary": validate.get("summary"),
+        },
+        "writes_enabled": False,
+        "execute_allowed": False,
+        "deferred_gates": [
+            "finalize_writer",
+            "accepted_work_unblock",
+            "active_lease_writer",
+            "delegated",
+            "standing",
+            "runtime_launcher",
+        ],
+    }
+    return {
+        "ok": True,
+        "verdict": "WARN" if warnings else "PASS",
+        "operation": operation,
+        "dry_run": False,
+        "actor": None,
+        "actor_match": None,
+        "timestamp": _utc_now(),
+        "data": data,
+        "summary": {
+            "workspace_initialized": data["workspace"]["initialized"],
+            "transport_auth_present": bool(transport_raw),
+            "capability_scope_present": bool(capability_raw),
+            "task_count": data["loop"]["total"],
+            "loop_stages": data["loop"]["counts"],
+        },
+        "planned_writes": [],
+        "planned_moves": [],
+        "performed_writes": [],
+        "performed_moves": [],
+        "warnings": warnings,
+        "blocking_reasons": [],
+        "needs_owner_reasons": [],
+        "owner_confirmation_required": False,
+        "owner_confirmation_reasons": [],
+        "execute_allowed": False,
+        "execute_blocking_reasons": [],
+        "dry_run_id": None,
+        "dry_run_token": None,
+        "dry_run_snapshot_hash": None,
+        "dry_run_created_at": None,
+        "dry_run_expires_at": None,
+        "safety_notice": "Read-only Board runtime status surface. No files are written and no services are started.",
+        "errors": [],
+    }
 
 
 def _parent_requirement_error(message: str) -> dict[str, Any]:

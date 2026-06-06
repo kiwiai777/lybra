@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,6 +36,7 @@ class LocalReadApiTests(unittest.TestCase):
 
     def test_read_routes_return_json_envelopes(self) -> None:
         for path in (
+            "/api/runtime-status",
             "/api/queue",
             "/api/needs-owner",
             "/api/validate",
@@ -52,6 +54,152 @@ class LocalReadApiTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn("ok", data)
             self.assertIn("verdict", data)
+
+    def test_runtime_status_route_is_read_only_and_redacts_tokens(self) -> None:
+        config_dir = self.repo_root / ".lybra"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "workspace_root": ".",
+                    "board": {"host": "127.0.0.1", "port": 7117},
+                    "mcp": {
+                        "host": "127.0.0.1",
+                        "port": 7118,
+                        "transport_token_env": "TEST_MCP_TOKEN",
+                        "capability_token_env": "TEST_CAPABILITY_TOKEN",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        raw_transport = "transport-secret-value"
+        raw_capability = json.dumps({"operations": ["queue_claim", "queue_return"], "expires_at": "2999-01-01T00:00:00Z"})
+        before = self.data_paths()
+
+        with patch.dict("os.environ", {"TEST_MCP_TOKEN": raw_transport, "TEST_CAPABILITY_TOKEN": raw_capability}):
+            status, data = dispatch_api_request(method="GET", path="/api/runtime-status", routes=self.routes)
+        after = self.data_paths()
+
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["operation"], "get_runtime_status")
+        self.assertFalse(data["data"]["writes_enabled"])
+        self.assertFalse(data["execute_allowed"])
+        self.assertEqual(data["data"]["workspace"]["config_path"], ".lybra/config.json")
+        self.assertEqual(data["data"]["endpoints"]["board"]["url"], "http://127.0.0.1:7117")
+        self.assertEqual(data["data"]["endpoints"]["mcp"]["url"], "http://127.0.0.1:7118/mcp")
+        self.assertEqual(data["data"]["agent_setup"]["transport_token_env"], "TEST_MCP_TOKEN")
+        self.assertTrue(data["data"]["agent_setup"]["transport_token_present"])
+        self.assertTrue(data["data"]["agent_setup"]["transport_token_fingerprint"].startswith("sha256:"))
+        self.assertNotIn(raw_transport, json.dumps(data))
+        self.assertNotIn(raw_capability, json.dumps(data))
+        self.assertEqual(data["data"]["agent_setup"]["tool_visibility"]["queue_claim"], "visible")
+        self.assertEqual(data["data"]["agent_setup"]["tool_visibility"]["audit_dispatch"], "hidden")
+        self.assertEqual(before, after)
+
+    def test_runtime_status_route_derives_lifecycle_stages(self) -> None:
+        pending = self.repo_root / "5_tasks" / "queue" / "pending" / "pending-task.md"
+        pending.write_text(
+            "---\n"
+            "task_id: TASK-PENDING\n"
+            "title: Pending task\n"
+            "project: lybra\n"
+            "status: pending\n"
+            "assigned_to: agent-01\n"
+            "agent_instance: agent-01\n"
+            "context_bundle: dev.codex.local\n"
+            "task_mode: docs\n"
+            "task_class: simple\n"
+            "model_tier: L2\n"
+            "priority: medium\n"
+            "created_by: owner\n"
+            "needs_owner: false\n"
+            "output_target: docs/\n"
+            "artifact_policy: formal_write\n"
+            "task_type: one_shot\n"
+            "polling_mode: agent_polling\n"
+            "claim_policy: assigned_agent_only\n"
+            "report_mode: forum_reply\n"
+            "recurrence: none\n"
+            "session_policy: single_task_session\n"
+            "context_isolation: strict\n"
+            "artifact_scope: docs/\n"
+            "memory_scope: board runtime tests\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        claimed = self.repo_root / "5_tasks" / "queue" / "claimed" / "claimed-task.md"
+        claimed.write_text(
+            "---\n"
+            "task_id: TASK-CLAIMED\n"
+            "title: Claimed task\n"
+            "project: lybra\n"
+            "status: claimed\n"
+            "assigned_to: agent-01\n"
+            "agent_instance: agent-01\n"
+            "context_bundle: dev.codex.local\n"
+            "claim_id: claim-001\n"
+            "task_mode: docs\n"
+            "task_class: simple\n"
+            "model_tier: L2\n"
+            "priority: medium\n"
+            "created_by: owner\n"
+            "needs_owner: false\n"
+            "output_target: docs/\n"
+            "artifact_policy: formal_write\n"
+            "task_type: one_shot\n"
+            "polling_mode: agent_polling\n"
+            "claim_policy: assigned_agent_only\n"
+            "report_mode: forum_reply\n"
+            "recurrence: none\n"
+            "session_policy: single_task_session\n"
+            "context_isolation: strict\n"
+            "artifact_scope: docs/\n"
+            "memory_scope: board runtime tests\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        audited = self.repo_root / "5_tasks" / "queue" / "claimed" / "audited-task.md"
+        audited.write_text(
+            "---\n"
+            "task_id: TASK-AUDITED\n"
+            "title: Audited task\n"
+            "project: lybra\n"
+            "status: claimed\n"
+            "assigned_to: agent-01\n"
+            "agent_instance: agent-01\n"
+            "context_bundle: dev.codex.local\n"
+            "dependency_audit_status: PASS\n"
+            "task_mode: docs\n"
+            "task_class: complex\n"
+            "model_tier: L2\n"
+            "priority: medium\n"
+            "created_by: owner\n"
+            "needs_owner: false\n"
+            "output_target: docs/\n"
+            "artifact_policy: formal_write\n"
+            "task_type: one_shot\n"
+            "polling_mode: agent_polling\n"
+            "claim_policy: assigned_agent_only\n"
+            "report_mode: forum_reply\n"
+            "recurrence: none\n"
+            "session_policy: single_task_session\n"
+            "context_isolation: strict\n"
+            "artifact_scope: docs/\n"
+            "memory_scope: board runtime tests\n"
+            "---\n",
+            encoding="utf-8",
+        )
+
+        status, data = dispatch_api_request(method="GET", path="/api/runtime-status", routes=self.routes)
+
+        self.assertEqual(status, 200)
+        stages = data["data"]["loop"]["counts"]
+        self.assertEqual(stages["pending"], 1)
+        self.assertEqual(stages["claimed"], 1)
+        self.assertEqual(stages["verdict_pass"], 1)
+        self.assertIn("finalize_writer", data["data"]["deferred_gates"])
 
     def test_external_intake_review_route_lists_drafts_without_writing(self) -> None:
         draft_dir = self.repo_root / "5_tasks" / "drafts" / "external_intake"

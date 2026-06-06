@@ -3,6 +3,8 @@ const { test, expect } = require('@playwright/test');
 test.describe('Lybra Board visual smoke', () => {
   async function openBoard(page) {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('heading', { name: 'Setup & Runtime' })).toBeVisible();
+    await expect(page.locator('#runtime-status-card')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'AI Task Authoring' })).toBeVisible();
     await expect(page.locator('#ai-author-requirement')).toBeVisible();
     await expect(page.locator('#ai-author-card')).toBeVisible();
