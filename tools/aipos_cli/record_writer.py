@@ -12,6 +12,8 @@ RECORDS_ROOT = Path("5_tasks/records")
 CLAIMS_ROOT = RECORDS_ROOT / "claims"
 SESSIONS_ROOT = RECORDS_ROOT / "sessions"
 RETURNS_ROOT = RECORDS_ROOT / "returns"
+AUDIT_DISPATCHES_ROOT = RECORDS_ROOT / "audit_dispatches"
+AUDIT_VERDICTS_ROOT = RECORDS_ROOT / "audit_verdicts"
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -63,6 +65,10 @@ def ensure_safe_record_path(repo_root: Path, path: Path, record_type: str, task_
         root = (repo_root / SESSIONS_ROOT / task_id).resolve()
     elif record_type == "return_record":
         root = (repo_root / RETURNS_ROOT / task_id).resolve()
+    elif record_type == "audit_dispatch_record":
+        root = (repo_root / AUDIT_DISPATCHES_ROOT / task_id).resolve()
+    elif record_type == "audit_verdict_record":
+        root = (repo_root / AUDIT_VERDICTS_ROOT / task_id).resolve()
     else:
         raise ValueError(f"Unsupported record_type: {record_type}")
     resolved = path.resolve()
@@ -207,6 +213,74 @@ MCP_RETURN_FRONTMATTER_ORDER = [
     "dry_run_id",
     "dry_run_snapshot_hash",
     "confirmation_ref",
+    "lease_status",
+    "lease_path",
+    "active_lease_written",
+]
+
+MCP_AUDIT_DISPATCH_FRONTMATTER_ORDER = [
+    "record_type",
+    "event_type",
+    "dispatch_id",
+    "reviewed_task_id",
+    "reviewed_task_path",
+    "reviewed_return_record_ref",
+    "reviewed_executor_instance",
+    "reviewed_executor_claim_id",
+    "reviewed_executor_session_id",
+    "audit_task_id",
+    "audit_task_path",
+    "surface",
+    "operation",
+    "autonomy_mode",
+    "actor",
+    "canonical_agent_instance",
+    "owner_policy_ref",
+    "dispatched_at",
+    "independence_distinct_instance",
+    "dry_run_id",
+    "dry_run_snapshot_hash",
+    "confirmation_ref",
+    "dependency_executor_status",
+    "dependency_audit_readiness",
+    "dependency_audit_status",
+    "lease_status",
+    "lease_path",
+    "active_lease_written",
+]
+
+MCP_AUDIT_VERDICT_FRONTMATTER_ORDER = [
+    "record_type",
+    "event_type",
+    "verdict_id",
+    "verdict",
+    "reviewed_task_id",
+    "reviewed_task_path",
+    "reviewed_return_record_ref",
+    "audit_dispatch_record_ref",
+    "audit_task_id",
+    "audit_task_path",
+    "audit_claim_id",
+    "audit_session_id",
+    "reviewed_executor_instance",
+    "auditor_instance",
+    "independence_distinct_instance",
+    "surface",
+    "operation",
+    "autonomy_mode",
+    "actor",
+    "canonical_agent_instance",
+    "owner_policy_ref",
+    "verdict_at",
+    "findings_summary_present",
+    "evidence_refs",
+    "recommended_next_action",
+    "dry_run_id",
+    "dry_run_snapshot_hash",
+    "confirmation_ref",
+    "dependency_audit_status_after",
+    "finalize_performed",
+    "accepted_work_unblocked",
     "lease_status",
     "lease_path",
     "active_lease_written",
@@ -458,6 +532,155 @@ def build_mcp_return_record_markdown(
     return render_markdown(metadata, body, MCP_RETURN_FRONTMATTER_ORDER)
 
 
+def build_mcp_audit_dispatch_record_markdown(
+    *,
+    dispatch_id: str,
+    reviewed_task_id: str,
+    reviewed_task_path: str,
+    reviewed_return_record_ref: str,
+    reviewed_executor_instance: str,
+    reviewed_executor_claim_id: str,
+    reviewed_executor_session_id: str,
+    audit_task_id: str,
+    audit_task_path: str,
+    actor: str,
+    canonical_agent_instance: str,
+    owner_policy_ref: str,
+    dispatched_at: str,
+    dry_run_id: str | None = None,
+    dry_run_snapshot_hash: str | None = None,
+    confirmation_ref: str | None = None,
+) -> str:
+    metadata = {
+        "record_type": "audit_dispatch_record",
+        "event_type": "mcp_audit_dispatch",
+        "dispatch_id": dispatch_id,
+        "reviewed_task_id": reviewed_task_id,
+        "reviewed_task_path": reviewed_task_path,
+        "reviewed_return_record_ref": reviewed_return_record_ref,
+        "reviewed_executor_instance": reviewed_executor_instance,
+        "reviewed_executor_claim_id": reviewed_executor_claim_id,
+        "reviewed_executor_session_id": reviewed_executor_session_id,
+        "audit_task_id": audit_task_id,
+        "audit_task_path": audit_task_path,
+        "surface": "mcp",
+        "operation": "audit_dispatch",
+        "autonomy_mode": "Supervised",
+        "actor": actor,
+        "canonical_agent_instance": canonical_agent_instance,
+        "owner_policy_ref": owner_policy_ref,
+        "dispatched_at": dispatched_at,
+        "independence_distinct_instance": True,
+        "dry_run_id": dry_run_id or "",
+        "dry_run_snapshot_hash": dry_run_snapshot_hash or "",
+        "confirmation_ref": confirmation_ref or "",
+        "dependency_executor_status": "completed",
+        "dependency_audit_readiness": "ready",
+        "dependency_audit_status": "pending",
+        "lease_status": "proposed",
+        "lease_path": "claim_only",
+        "active_lease_written": False,
+    }
+    body = "\n".join(
+        [
+            f"# MCP Audit Dispatch Record: {dispatch_id}",
+            "",
+            "## Summary",
+            "",
+            f"- Task `{reviewed_task_id}` was dispatched for independent audit as `{audit_task_id}`.",
+            f"- Reviewed executor instance: `{reviewed_executor_instance}`.",
+            f"- Owner policy: `{owner_policy_ref}`.",
+            "",
+            "## Boundary",
+            "",
+            "This record creates audit-dispatch provenance only. It does not claim the audit task, launch an auditor, record a verdict, finalize, activate a lease, or unblock dependent work.",
+            "",
+        ]
+    )
+    return render_markdown(metadata, body, MCP_AUDIT_DISPATCH_FRONTMATTER_ORDER)
+
+
+def build_mcp_audit_verdict_record_markdown(
+    *,
+    verdict_id: str,
+    verdict: str,
+    reviewed_task_id: str,
+    reviewed_task_path: str,
+    reviewed_return_record_ref: str,
+    audit_dispatch_record_ref: str,
+    audit_task_id: str,
+    audit_task_path: str,
+    audit_claim_id: str,
+    audit_session_id: str,
+    reviewed_executor_instance: str,
+    auditor_instance: str,
+    actor: str,
+    canonical_agent_instance: str,
+    owner_policy_ref: str,
+    verdict_at: str,
+    findings_summary: str | None,
+    evidence_refs: list[str],
+    recommended_next_action: str | None,
+    dry_run_id: str | None = None,
+    dry_run_snapshot_hash: str | None = None,
+    confirmation_ref: str | None = None,
+) -> str:
+    metadata = {
+        "record_type": "audit_verdict_record",
+        "event_type": "mcp_audit_verdict",
+        "verdict_id": verdict_id,
+        "verdict": verdict,
+        "reviewed_task_id": reviewed_task_id,
+        "reviewed_task_path": reviewed_task_path,
+        "reviewed_return_record_ref": reviewed_return_record_ref,
+        "audit_dispatch_record_ref": audit_dispatch_record_ref,
+        "audit_task_id": audit_task_id,
+        "audit_task_path": audit_task_path,
+        "audit_claim_id": audit_claim_id,
+        "audit_session_id": audit_session_id,
+        "reviewed_executor_instance": reviewed_executor_instance,
+        "auditor_instance": auditor_instance,
+        "independence_distinct_instance": auditor_instance != reviewed_executor_instance,
+        "surface": "mcp",
+        "operation": "audit_verdict",
+        "autonomy_mode": "Supervised",
+        "actor": actor,
+        "canonical_agent_instance": canonical_agent_instance,
+        "owner_policy_ref": owner_policy_ref,
+        "verdict_at": verdict_at,
+        "findings_summary_present": bool(findings_summary),
+        "evidence_refs": evidence_refs,
+        "recommended_next_action": recommended_next_action or "",
+        "dry_run_id": dry_run_id or "",
+        "dry_run_snapshot_hash": dry_run_snapshot_hash or "",
+        "confirmation_ref": confirmation_ref or "",
+        "dependency_audit_status_after": "PASS" if verdict == "PASS" else verdict,
+        "finalize_performed": False,
+        "accepted_work_unblocked": False,
+        "lease_status": "proposed",
+        "lease_path": "claim_only",
+        "active_lease_written": False,
+    }
+    body = "\n".join(
+        [
+            f"# MCP Audit Verdict Record: {verdict_id}",
+            "",
+            "## Summary",
+            "",
+            f"- Audit task `{audit_task_id}` returned verdict `{verdict}` for `{reviewed_task_id}`.",
+            f"- Auditor instance: `{auditor_instance}`.",
+            f"- Reviewed executor instance: `{reviewed_executor_instance}`.",
+            f"- Findings summary: {findings_summary or 'not provided'}",
+            "",
+            "## Boundary",
+            "",
+            "This record is independent audit evidence. PASS may satisfy audit_pass only. It does not finalize, activate a lease, or unblock accepted-work dependencies.",
+            "",
+        ]
+    )
+    return render_markdown(metadata, body, MCP_AUDIT_VERDICT_FRONTMATTER_ORDER)
+
+
 def load_session_record(path: Path) -> tuple[dict[str, Any], str, list[str]]:
     text = path.read_text(encoding="utf-8")
     metadata, body, warnings = parse_markdown_frontmatter(text)
@@ -534,6 +757,48 @@ def append_mcp_return_session_event(
     return render_markdown(metadata, body, MCP_SESSION_FRONTMATTER_ORDER)
 
 
+def append_mcp_audit_verdict_session_event(
+    existing_metadata: dict[str, Any],
+    existing_body: str,
+    *,
+    actor: str,
+    canonical_agent_instance: str,
+    owner_policy_ref: str,
+    timestamp: str,
+    verdict_id: str,
+    verdict: str,
+) -> str:
+    metadata = dict(existing_metadata)
+    metadata["updated_at"] = timestamp
+    metadata["session_status"] = "audit_verdict"
+    metadata["current_state"] = "claimed"
+    metadata.setdefault("lease_status", "proposed")
+    metadata.setdefault("lease_path", "claim_only")
+    metadata.setdefault("active_lease_written", False)
+    current_count = metadata.get("event_count")
+    try:
+        event_count = int(current_count) if current_count is not None else 0
+    except (TypeError, ValueError):
+        event_count = 0
+    metadata["event_count"] = event_count + 1
+    metadata.setdefault("actor", actor)
+    metadata.setdefault("canonical_agent_instance", canonical_agent_instance)
+    metadata.setdefault("owner_policy_ref", owner_policy_ref)
+    metadata.setdefault("record_type", "session_record")
+    body = existing_body.rstrip()
+    if "## Events" not in body:
+        body = "\n".join([body, "", "## Events"]).strip()
+    body = "\n".join(
+        [
+            body,
+            "",
+            f"- {timestamp} mcp_audit_verdict by {canonical_agent_instance}; verdict_id={verdict_id}; verdict={verdict}; owner_policy_ref={owner_policy_ref}.",
+            "",
+        ]
+    )
+    return render_markdown(metadata, body, MCP_SESSION_FRONTMATTER_ORDER)
+
+
 def claim_record_paths(repo_root: Path, task_id: str, claim_id: str, session_id: str) -> tuple[Path, Path]:
     claim_path = ensure_safe_record_path(repo_root, expected_claim_log_path(repo_root, task_id, claim_id), "claim_log", task_id)
     session_path = ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), "session_record", task_id)
@@ -546,3 +811,13 @@ def session_record_path(repo_root: Path, task_id: str, session_id: str) -> Path:
 
 def return_record_path(repo_root: Path, task_id: str, return_id: str) -> Path:
     return ensure_safe_record_path(repo_root, expected_return_record_path(repo_root, task_id, return_id), "return_record", task_id)
+
+
+def audit_dispatch_record_path(repo_root: Path, task_id: str, dispatch_id: str) -> Path:
+    path = repo_root / AUDIT_DISPATCHES_ROOT / task_id / f"{dispatch_id}.md"
+    return ensure_safe_record_path(repo_root, path, "audit_dispatch_record", task_id)
+
+
+def audit_verdict_record_path(repo_root: Path, task_id: str, verdict_id: str) -> Path:
+    path = repo_root / AUDIT_VERDICTS_ROOT / task_id / f"{verdict_id}.md"
+    return ensure_safe_record_path(repo_root, path, "audit_verdict_record", task_id)

@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from tools.aipos_cli.controlled_execute import clear_tokens, get_dry_run
 from tools.aipos_cli.board_adapter import claim_task, return_task
+from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.state_recovery import build_state_recovery_preview
 from tools.mcp_server.server import handle_request, serve
@@ -373,10 +374,20 @@ class McpToolTests(unittest.TestCase):
         self.assertIn("lybra_queue_return_confirm", names_with_return_scope)
         self.assertNotIn("lybra_queue_claim_dry_run", names_with_return_scope)
 
+        names_with_dispatch_scope = self.list_tool_names(capability_token=self.capability_token(operations=["audit_dispatch"]))
+        self.assertIn("lybra_audit_dispatch_dry_run", names_with_dispatch_scope)
+        self.assertIn("lybra_audit_dispatch_confirm", names_with_dispatch_scope)
+        self.assertNotIn("lybra_audit_verdict_dry_run", names_with_dispatch_scope)
+
+        names_with_verdict_scope = self.list_tool_names(capability_token=self.capability_token(operations=["audit_verdict"]))
+        self.assertIn("lybra_audit_verdict_dry_run", names_with_verdict_scope)
+        self.assertIn("lybra_audit_verdict_confirm", names_with_verdict_scope)
+        self.assertNotIn("lybra_audit_dispatch_dry_run", names_with_verdict_scope)
+
     def test_write_tool_descriptions_are_self_documenting(self) -> None:
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["intake_submit", "owner_decision_record", "queue_claim", "queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["intake_submit", "owner_decision_record", "queue_claim", "queue_return", "audit_dispatch", "audit_verdict"]),
         }
         with patch.dict(os.environ, env, clear=True):
             response = handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
@@ -389,6 +400,8 @@ class McpToolTests(unittest.TestCase):
                 or tool["name"].startswith("lybra_owner_decision_record")
                 or tool["name"].startswith("lybra_queue_claim")
                 or tool["name"].startswith("lybra_queue_return")
+                or tool["name"].startswith("lybra_audit_dispatch")
+                or tool["name"].startswith("lybra_audit_verdict")
             )
         }
         self.assertEqual(
@@ -402,6 +415,10 @@ class McpToolTests(unittest.TestCase):
                 "lybra_queue_claim_confirm",
                 "lybra_queue_return_dry_run",
                 "lybra_queue_return_confirm",
+                "lybra_audit_dispatch_dry_run",
+                "lybra_audit_dispatch_confirm",
+                "lybra_audit_verdict_dry_run",
+                "lybra_audit_verdict_confirm",
             },
         )
         for description in descriptions.values():
@@ -511,6 +528,120 @@ class McpToolTests(unittest.TestCase):
         }
         payload.update(overrides)
         return payload
+
+    def dispatch_payload(self, **overrides: object) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "source_task_id": "AIPOS-MCP-RETURN",
+            "actor": "agent-02",
+            "agent_instance": "agent-02",
+            "autonomy_mode": "Supervised",
+            "owner_policy_ref": "owner_policy:aipos-178-supervised-audit-test",
+            "audit_task_id": "AIPOS-MCP-AUDIT-01",
+            "audit_task_title": "Audit MCP returned work",
+            "audit_by": "dev_claude",
+            "audit_agent_instance": "agent-02",
+            "dispatch_reason": "test supervised audit dispatch",
+        }
+        payload.update(overrides)
+        return payload
+
+    def verdict_payload(self, **overrides: object) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "audit_task_id": "AIPOS-MCP-AUDIT-01",
+            "reviewed_task_id": "AIPOS-MCP-RETURN",
+            "actor": "agent-02",
+            "agent_instance": "agent-02",
+            "autonomy_mode": "Supervised",
+            "owner_policy_ref": "owner_policy:aipos-178-supervised-verdict-test",
+            "verdict": "PASS",
+            "findings_summary": "Independent audit passed the returned work.",
+            "evidence_refs": ["reports/aipos-178-audit.md"],
+            "recommended_next_action": "ready_for_finalize_gate",
+        }
+        payload.update(overrides)
+        return payload
+
+    def prepare_returned_source(self) -> dict[str, object]:
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        return confirmed
+
+    def dispatch_audit_task(self) -> dict[str, object]:
+        self.prepare_returned_source()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_dispatch"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_audit_dispatch_dry_run", self.dispatch_payload()))
+            self.assertTrue(dry["ok"], dry.get("blocking_reasons"))
+            self.assertTrue(dry.get("dry_run_token"), dry)
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_audit_dispatch_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-02",
+                        "agent_instance": "agent-02",
+                        "owner_policy_ref": "owner_policy:aipos-178-supervised-audit-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+            self.assertTrue(confirmed["ok"], confirmed)
+        return confirmed
+
+    def claim_audit_task(self) -> dict[str, object]:
+        self.dispatch_audit_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_claim_dry_run",
+                    self.claim_payload(
+                        task_id="AIPOS-MCP-AUDIT-01",
+                        actor="agent-02",
+                        agent_instance="agent-02",
+                        owner_policy_ref="owner_policy:aipos-178-audit-claim-test",
+                    ),
+                )
+            )
+            self.assertTrue(dry["ok"], dry.get("blocking_reasons"))
+            self.assertTrue(dry.get("dry_run_token"), dry)
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_claim_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-02",
+                        "agent_instance": "agent-02",
+                        "owner_policy_ref": "owner_policy:aipos-178-audit-claim-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+            self.assertTrue(confirmed["ok"], confirmed)
+        return confirmed
 
     def test_queue_claim_dry_run_requires_scope_and_supervised_mode(self) -> None:
         self.write_claim_task()
@@ -851,6 +982,226 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual(rejected["error_code"], "INCOMPATIBLE_DRY_RUN")
         text = (self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md").read_text(encoding="utf-8")
         self.assertNotIn("executor_status: completed", text)
+
+    def test_audit_dispatch_dry_run_requires_scope_and_supervised_mode(self) -> None:
+        self.prepare_returned_source()
+        no_scope = self.assert_tool_ok(self.call_tool("lybra_audit_dispatch_dry_run", self.dispatch_payload()))
+        self.assertEqual(no_scope["error_code"], "SCOPE_DENIED")
+
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_dispatch"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            delegated = self.assert_tool_ok(
+                self.call_tool("lybra_audit_dispatch_dry_run", self.dispatch_payload(autonomy_mode="Delegated"))
+            )
+        self.assertEqual(delegated["error_code"], "INVALID_AUTONOMY_MODE")
+
+    def test_audit_dispatch_confirm_requires_owner_confirmation_then_creates_pending_audit_task(self) -> None:
+        self.prepare_returned_source()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_dispatch"]),
+        }
+        before = self.data_paths()
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_audit_dispatch_dry_run", self.dispatch_payload()))
+        after = self.data_paths()
+        self.assertEqual(before, after)
+        self.assertEqual(dry["operation"], "audit_dispatch")
+        self.assertEqual(dry["surface"], "mcp")
+        self.assertEqual(dry["autonomy_mode"], "Supervised")
+        self.assertEqual(dry["canonical_agent_instance"], "agent-02")
+        self.assertEqual(dry["reviewed_executor_instance"], "agent-01")
+        self.assertEqual(dry["confirmation_preview"]["confirm"]["tool_name"], "lybra_audit_dispatch_confirm")  # type: ignore[index]
+        self.assertEqual(
+            dry["confirmation_preview"]["copyable_confirm_arguments"]["owner_confirmation_token"],  # type: ignore[index]
+            "OWNER_CONFIRMED",
+        )
+
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_audit_dispatch_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-02",
+                        "agent_instance": "agent-02",
+                        "owner_policy_ref": "owner_policy:aipos-178-supervised-audit-test",
+                    },
+                )
+            )
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_audit_dispatch_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-02",
+                        "agent_instance": "agent-02",
+                        "owner_policy_ref": "owner_policy:aipos-178-supervised-audit-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+
+        self.assertEqual(blocked["error_code"], "OWNER_CONFIRMATION_REQUIRED")
+        self.assertTrue(confirmed["ok"])
+        audit_path = self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-mcp-audit-01.md"
+        self.assertTrue(audit_path.exists())
+        audit_metadata, _, _ = parse_markdown_frontmatter(audit_path.read_text(encoding="utf-8"))
+        self.assertEqual(audit_metadata["task_mode"], "audit")
+        self.assertEqual(audit_metadata["agent_instance"], "agent-02")
+        self.assertEqual(audit_metadata["reviewed_task_id"], "AIPOS-MCP-RETURN")
+        self.assertEqual(audit_metadata["reviewed_executor_instance"], "agent-01")
+        self.assertTrue(audit_metadata["independence_distinct_instance"])
+        source_text = (self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md").read_text(encoding="utf-8")
+        self.assertIn("related_audit_task_ref: AIPOS-MCP-AUDIT-01", source_text)
+        self.assertIn("audit_dispatch_record_ref: dispatch_AIPOS-MCP-RETURN_", source_text)
+        records = load_records(self.repo_root)
+        self.assertEqual(records["summary"]["audit_dispatch_records"], 1)
+        self.assertEqual(records["audit_dispatches"][0]["metadata"]["record_type"], "audit_dispatch_record")
+
+    def test_audit_dispatch_blocks_same_executor_auditor(self) -> None:
+        self.prepare_returned_source()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_dispatch"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_audit_dispatch_dry_run",
+                    self.dispatch_payload(actor="agent-01", agent_instance="agent-01", audit_agent_instance="agent-01"),
+                )
+            )
+        self.assertEqual(blocked["verdict"], "BLOCK")
+        self.assertEqual(blocked["error_code"], "INDEPENDENCE_FAILED")
+
+    def test_audit_task_claim_blocks_same_executor_instance(self) -> None:
+        self.write_claim_task(task_id="AIPOS-MCP-AUDIT-SELF", agent_instance="agent-01")
+        audit_path = self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-mcp-audit-self.md"
+        text = audit_path.read_text(encoding="utf-8")
+        text = text.replace("task_mode: code", "task_mode: audit")
+        text = text.replace(
+            "---\nSupervised MCP claim test task.",
+            "reviewed_executor_instance: agent-01\nindependence_distinct_instance: true\n---\nSupervised MCP audit claim test task.",
+        )
+        audit_path.write_text(text, encoding="utf-8")
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_claim_dry_run",
+                    self.claim_payload(task_id="AIPOS-MCP-AUDIT-SELF", actor="agent-01", agent_instance="agent-01"),
+                )
+            )
+        self.assertEqual(blocked["verdict"], "BLOCK")
+        self.assertTrue(
+            any("independence_distinct_instance" in item for item in blocked["blocking_reasons"])  # type: ignore[index]
+        )
+
+    def test_audit_verdict_confirm_requires_owner_confirmation_then_records_pass_without_finalize(self) -> None:
+        self.claim_audit_task()
+        audit_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-audit-01.md"
+        source_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md"
+        audit_metadata, _, _ = parse_markdown_frontmatter(audit_path.read_text(encoding="utf-8"))
+        source_metadata, _, _ = parse_markdown_frontmatter(source_path.read_text(encoding="utf-8"))
+        payload = self.verdict_payload(
+            claim_id=audit_metadata["claim_id"],
+            active_session_id=audit_metadata["active_session_id"],
+            audit_dispatch_record_ref=source_metadata["audit_dispatch_record_ref"],
+            reviewed_return_record_ref=source_metadata["return_record_ref"],
+        )
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_verdict"]),
+        }
+        before = self.data_paths()
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_audit_verdict_dry_run", payload))
+        after = self.data_paths()
+        self.assertEqual(before, after)
+        self.assertEqual(dry["operation"], "audit_verdict")
+        self.assertEqual(dry["surface"], "mcp")
+        self.assertEqual(dry["autonomy_mode"], "Supervised")
+        self.assertEqual(dry["canonical_agent_instance"], "agent-02")
+        self.assertEqual(dry["reviewed_executor_instance"], "agent-01")
+        self.assertEqual(dry["data"]["verdict"], "PASS")  # type: ignore[index]
+        self.assertEqual(dry["confirmation_preview"]["confirm"]["tool_name"], "lybra_audit_verdict_confirm")  # type: ignore[index]
+
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_audit_verdict_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-02",
+                        "agent_instance": "agent-02",
+                        "owner_policy_ref": "owner_policy:aipos-178-supervised-verdict-test",
+                    },
+                )
+            )
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_audit_verdict_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-02",
+                        "agent_instance": "agent-02",
+                        "owner_policy_ref": "owner_policy:aipos-178-supervised-verdict-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+
+        self.assertEqual(blocked["error_code"], "OWNER_CONFIRMATION_REQUIRED")
+        self.assertTrue(confirmed["ok"])
+        source_text = source_path.read_text(encoding="utf-8")
+        self.assertIn("dependency_audit_status: PASS", source_text)
+        self.assertIn("audit_status: PASS", source_text)
+        self.assertIn("related_audit_verdict_ref: verdict_AIPOS-MCP-RETURN_", source_text)
+        self.assertNotIn("finalize_performed: true", source_text)
+        self.assertNotIn("accepted_work_unblocked: true", source_text)
+        records = load_records(self.repo_root)
+        self.assertEqual(records["summary"]["audit_verdict_records"], 1)
+        self.assertEqual(records["audit_verdicts"][0]["metadata"]["record_type"], "audit_verdict_record")
+        session_text = (
+            self.repo_root
+            / "5_tasks"
+            / "records"
+            / "sessions"
+            / "AIPOS-MCP-AUDIT-01"
+            / str(audit_metadata["active_session_id"] + ".md")
+        ).read_text(encoding="utf-8")
+        self.assertIn("session_status: audit_verdict", session_text)
+        self.assertIn("mcp_audit_verdict", session_text)
+
+    def test_audit_verdict_blocks_same_executor_auditor(self) -> None:
+        self.claim_audit_task()
+        audit_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-audit-01.md"
+        source_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md"
+        text = audit_path.read_text(encoding="utf-8").replace("reviewed_executor_instance: agent-01", "reviewed_executor_instance: agent-02")
+        audit_path.write_text(text, encoding="utf-8")
+        audit_metadata, _, _ = parse_markdown_frontmatter(audit_path.read_text(encoding="utf-8"))
+        source_metadata, _, _ = parse_markdown_frontmatter(source_path.read_text(encoding="utf-8"))
+        payload = self.verdict_payload(
+            claim_id=audit_metadata["claim_id"],
+            active_session_id=audit_metadata["active_session_id"],
+            audit_dispatch_record_ref=source_metadata["audit_dispatch_record_ref"],
+            reviewed_return_record_ref=source_metadata["return_record_ref"],
+        )
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_verdict"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(self.call_tool("lybra_audit_verdict_dry_run", payload))
+        self.assertEqual(blocked["verdict"], "BLOCK")
+        self.assertEqual(blocked["error_code"], "INDEPENDENCE_FAILED")
 
     def test_scope_denied_returns_structured_teaching_error(self) -> None:
         env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=[])}

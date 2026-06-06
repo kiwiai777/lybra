@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tools.aipos_cli.board_adapter import (
+    audit_dispatch_task,
+    audit_verdict_task,
     claim_task,
     execute_dry_run,
     get_context_pack_preview,
@@ -28,6 +30,8 @@ INTAKE_SCOPE = "intake_submit"
 OWNER_DECISION_SCOPE = "owner_decision_record"
 QUEUE_CLAIM_SCOPE = "queue_claim"
 QUEUE_RETURN_SCOPE = "queue_return"
+AUDIT_DISPATCH_SCOPE = "audit_dispatch"
+AUDIT_VERDICT_SCOPE = "audit_verdict"
 DISCIPLINE_DOC_REF = "AIPOS-109 MCP-native discipline"
 SUPERVISED_CLAIM_DOC_REF = "AIPOS-165 Supervised MCP Explicit Claim Protocol"
 OWNER_CONFIRMATION_TOKEN = "OWNER_CONFIRMED"
@@ -59,6 +63,18 @@ FORBIDDEN_QUEUE_RETURN_FIELDS = {
     "lease_activation",
     "lease_writer",
     "raw_transcript",
+}
+FORBIDDEN_AUDIT_FIELDS = {
+    *FORBIDDEN_QUEUE_RETURN_FIELDS,
+    "accepted_work_unblock",
+    "audit_pass_override",
+    "auto_dispatch",
+    "auto_verdict",
+    "finalize_after_pass",
+    "launch_auditor",
+    "runtime",
+    "scheduler",
+    "worker",
 }
 
 
@@ -184,6 +200,14 @@ def _queue_return_scope_allowed() -> bool:
     return _capability_has_scope(QUEUE_RETURN_SCOPE)
 
 
+def _audit_dispatch_scope_allowed() -> bool:
+    return _capability_has_scope(AUDIT_DISPATCH_SCOPE)
+
+
+def _audit_verdict_scope_allowed() -> bool:
+    return _capability_has_scope(AUDIT_VERDICT_SCOPE)
+
+
 def _map_controlled_execute_error(response: dict[str, Any], *, dry_run_tool: str = "lybra_intake_submit_dry_run") -> dict[str, Any]:
     blocking = " ".join(str(item) for item in response.get("blocking_reasons", []))
     errors = response.get("errors") if isinstance(response.get("errors"), list) else []
@@ -228,6 +252,15 @@ def _queue_return_error(error_code: str, message: str, suggested_next_action: st
     )
 
 
+def _audit_error(error_code: str, message: str, suggested_next_action: str) -> dict[str, Any]:
+    return _teaching_error(
+        error_code,
+        message,
+        suggested_next_action,
+        doc_ref="AIPOS-177 Audit Dispatch And Verdict Protocol",
+    )
+
+
 def _normalize_selector(args: dict[str, Any]) -> tuple[str | None, str | None, dict[str, Any] | None]:
     task_id = str(args.get("task_id") or "").strip()
     task_path = str(args.get("task_path") or args.get("path") or "").strip()
@@ -246,6 +279,10 @@ def _forbidden_queue_claim_fields(args: dict[str, Any]) -> list[str]:
 
 def _forbidden_queue_return_fields(args: dict[str, Any]) -> list[str]:
     return sorted(key for key in args if key in FORBIDDEN_QUEUE_RETURN_FIELDS)
+
+
+def _forbidden_audit_fields(args: dict[str, Any]) -> list[str]:
+    return sorted(key for key in args if key in FORBIDDEN_AUDIT_FIELDS)
 
 
 def _resolve_claim_instance(agent_instance: str, repo_root: Path) -> dict[str, Any]:
@@ -267,6 +304,18 @@ def _claim_owner_reasons() -> list[str]:
 def _return_owner_reasons() -> list[str]:
     return [
         "MCP Supervised queue_return requires explicit Owner confirmation for this dry-run preview",
+    ]
+
+
+def _audit_dispatch_owner_reasons() -> list[str]:
+    return [
+        "MCP Supervised audit_dispatch requires explicit Owner confirmation for this dry-run preview",
+    ]
+
+
+def _audit_verdict_owner_reasons() -> list[str]:
+    return [
+        "MCP Supervised audit_verdict requires explicit Owner confirmation for this dry-run preview",
     ]
 
 
@@ -309,9 +358,11 @@ def _return_metadata(args: dict[str, Any], *, canonical_agent_instance: str) -> 
 
 
 def _decorate_queue_claim_dry_run(response: dict[str, Any], *, args: dict[str, Any], canonical_agent_instance: str) -> dict[str, Any]:
-    data = response.setdefault("data", {})
-    if isinstance(data, dict):
-        data.setdefault("mcp_claim", _claim_metadata(args, canonical_agent_instance=canonical_agent_instance))
+    data = response.get("data")
+    if not isinstance(data, dict):
+        data = {}
+        response["data"] = data
+    data.setdefault("mcp_claim", _claim_metadata(args, canonical_agent_instance=canonical_agent_instance))
     response["surface"] = "mcp"
     response["autonomy_mode"] = "Supervised"
     response["agent_instance"] = str(args.get("agent_instance") or "").strip()
@@ -451,6 +502,93 @@ def _decorate_queue_return_dry_run(response: dict[str, Any], *, args: dict[str, 
         },
         "confirm": {
             "tool_name": "lybra_queue_return_confirm",
+            "required_owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
+            "arguments": {
+                "dry_run_token": response.get("dry_run_token"),
+                "actor": str(args.get("actor") or "").strip(),
+                "agent_instance": str(args.get("agent_instance") or "").strip(),
+                "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+                "owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
+            },
+            "dry_run_token": response.get("dry_run_token"),
+            "actor": str(args.get("actor") or "").strip(),
+            "agent_instance": str(args.get("agent_instance") or "").strip(),
+            "canonical_agent_instance": canonical_agent_instance,
+            "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+        },
+        "copyable_confirm_arguments": {
+            "dry_run_token": response.get("dry_run_token"),
+            "actor": str(args.get("actor") or "").strip(),
+            "agent_instance": str(args.get("agent_instance") or "").strip(),
+            "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+            "owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
+        },
+    }
+    return response
+
+
+def _decorate_audit_dry_run(response: dict[str, Any], *, args: dict[str, Any], canonical_agent_instance: str, operation: str) -> dict[str, Any]:
+    confirm_tool = "lybra_audit_dispatch_confirm" if operation == "audit_dispatch" else "lybra_audit_verdict_confirm"
+    owner_reasons = _audit_dispatch_owner_reasons() if operation == "audit_dispatch" else _audit_verdict_owner_reasons()
+    data = response.get("data") if isinstance(response.get("data"), dict) else {}
+    response["surface"] = "mcp"
+    response["autonomy_mode"] = "Supervised"
+    response["agent_instance"] = str(args.get("agent_instance") or "").strip()
+    response["canonical_agent_instance"] = canonical_agent_instance
+    response["owner_policy_ref"] = str(args.get("owner_policy_ref") or "").strip()
+    response["reviewed_executor_instance"] = data.get("reviewed_executor_instance")
+    response["reviewed_return_record_ref"] = data.get("reviewed_return_record_ref")
+    response["audit_dispatch_record_ref"] = data.get("audit_dispatch_record_ref")
+    response["verdict"] = response.get("verdict")
+    blocking_text = " ".join(str(item) for item in response.get("blocking_reasons", []))
+    if response.get("verdict") == "BLOCK" and not response.get("error_code"):
+        if "INDEPENDENCE_FAILED" in blocking_text:
+            response["error_code"] = "INDEPENDENCE_FAILED"
+        elif "MISSING_RETURN_RECORD" in blocking_text:
+            response["error_code"] = "MISSING_RETURN_RECORD"
+        elif "MISSING_AUDIT_DISPATCH_RECORD" in blocking_text:
+            response["error_code"] = "MISSING_AUDIT_DISPATCH_RECORD"
+        elif "MISSING_AUDIT_SESSION_RECORD" in blocking_text:
+            response["error_code"] = "MISSING_AUDIT_SESSION_RECORD"
+        else:
+            response["error_code"] = "AUDIT_ACTION_BLOCKED"
+    response["lease_preview"] = {
+        "lease_path": "claim_only",
+        "lease_status": "proposed",
+        "active_lease_written": False,
+    }
+    response["owner_confirmation_required"] = True
+    response["owner_confirmation_reasons"] = owner_reasons
+    response["owner_confirmation_token_required"] = OWNER_CONFIRMATION_TOKEN
+    response["dry_run_token"] = response.get("dry_run_token") or response.get("dry_run_id")
+    response["expires_at"] = response.get("dry_run_expires_at")
+    response["confirmation_preview"] = {
+        "envelope_version": f"aipos-177.{operation}.v1",
+        "operation": operation,
+        "surface": "mcp",
+        "autonomy_mode": "Supervised",
+        "client_hint": "Present this exact preview to Owner. Confirm only with explicit owner_confirmation_token: OWNER_CONFIRMED.",
+        "review_checklist": [
+            "Verify actor, agent_instance, canonical_agent_instance, and owner_policy_ref.",
+            "Verify this action does not activate leases, finalize, or unblock accepted work.",
+            "Verify auditor distinctness and provenance links.",
+            "Copy confirm.arguments only after Owner approves this preview.",
+        ],
+        "preview": {
+            "planned_writes": response.get("planned_writes", []),
+            "planned_moves": response.get("planned_moves", []),
+            "blocking_reasons": response.get("blocking_reasons", []),
+            "warnings": response.get("warnings", []),
+            "data": {
+                "reviewed_executor_instance": data.get("reviewed_executor_instance"),
+                "reviewed_return_record_ref": data.get("reviewed_return_record_ref"),
+                "audit_dispatch_record_ref": data.get("audit_dispatch_record_ref"),
+                "audit_task_id": data.get("audit_task_id"),
+                "verdict": data.get("verdict"),
+            },
+        },
+        "confirm": {
+            "tool_name": confirm_tool,
             "required_owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
             "arguments": {
                 "dry_run_token": response.get("dry_run_token"),
@@ -1022,6 +1160,244 @@ def lybra_queue_return_confirm(arguments: dict[str, Any] | None = None) -> dict[
     return _tool_result(response, is_error=False)
 
 
+def _validate_supervised_audit_args(args: dict[str, Any], *, operation: str) -> tuple[str, dict[str, Any] | None]:
+    if str(args.get("autonomy_mode") or "").strip() != "Supervised":
+        return "", _audit_error(
+            "INVALID_AUTONOMY_MODE",
+            f"lybra_{operation}_dry_run supports only autonomy_mode: Supervised.",
+            "Use autonomy_mode: Supervised. Delegated and Standing remain behind separate Owner gates.",
+        )
+    actor = str(args.get("actor") or "").strip()
+    if not actor:
+        return "", _audit_error("ACTOR_REQUIRED", "actor is required.", "Pass the visible audit actor.")
+    owner_policy_ref = str(args.get("owner_policy_ref") or "").strip()
+    if not owner_policy_ref:
+        return "", _audit_error(
+            "OWNER_POLICY_REF_REQUIRED",
+            f"owner_policy_ref is required for Supervised MCP {operation}.",
+            "Pass the Owner approval or policy reference authorizing this supervised action.",
+        )
+    agent_instance = str(args.get("agent_instance") or "").strip()
+    if not agent_instance:
+        return "", _audit_error(
+            "INSTANCE_REQUIRED",
+            "agent_instance is required and must resolve to one canonical concrete instance.",
+            "Pass the canonical agent_instance or a non-ambiguous legacy instance ID.",
+        )
+    repo_root = _repo_root()
+    resolved = _resolve_claim_instance(agent_instance, repo_root)
+    resolution = resolved["resolution"]
+    canonical_agent_instance = str(resolved.get("canonical_agent_instance") or "").strip()
+    if resolution.get("resolution") == "ambiguous":
+        return "", _audit_error(
+            "AMBIGUOUS_LEGACY_INSTANCE",
+            f"agent_instance resolves ambiguously: {agent_instance}.",
+            "Use a canonical opaque agent_instance before requesting this audit action.",
+        )
+    if not canonical_agent_instance:
+        return "", _audit_error(
+            "INSTANCE_REQUIRED",
+            "agent_instance did not resolve to a concrete instance.",
+            "Pass a canonical opaque agent_instance before requesting this audit action.",
+        )
+    if actor != canonical_agent_instance:
+        return "", _audit_error(
+            "INSTANCE_MISMATCH",
+            f"For the first Supervised MCP {operation} slice, actor must equal the resolved canonical agent_instance.",
+            "Retry with actor set to the same canonical opaque instance used for agent_instance.",
+        )
+    return canonical_agent_instance, None
+
+
+def lybra_audit_dispatch_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _audit_dispatch_scope_allowed():
+        return _scope_denied_result_for(AUDIT_DISPATCH_SCOPE, "supervised audit dispatch tools")
+    args = arguments or {}
+    forbidden = _forbidden_audit_fields(args)
+    if forbidden:
+        return _audit_error(
+            "UNSUPPORTED_AUDIT_DISPATCH_FIELD",
+            f"Supervised MCP audit_dispatch does not accept these fields: {', '.join(forbidden)}.",
+            "Remove automatic, credential, lease, finalize, accepted-work, runtime, and scheduler fields; then run dry-run again.",
+        )
+    canonical_agent_instance, error = _validate_supervised_audit_args(args, operation="audit_dispatch")
+    if error is not None:
+        return error
+    response = audit_dispatch_task(
+        source_task_id=str(args.get("source_task_id") or args.get("task_id") or "").strip() or None,
+        source_path=str(args.get("source_task_path") or args.get("task_path") or "").strip() or None,
+        actor=canonical_agent_instance,
+        agent_instance=str(args.get("agent_instance") or "").strip(),
+        owner_policy_ref=str(args.get("owner_policy_ref") or "").strip(),
+        audit_task_id=str(args.get("audit_task_id") or "").strip(),
+        audit_task_title=str(args.get("audit_task_title") or "").strip() or None,
+        audit_by=str(args.get("audit_by") or "").strip() or None,
+        audit_agent_instance=str(args.get("audit_agent_instance") or "").strip(),
+        dispatch_reason=str(args.get("dispatch_reason") or "").strip() or None,
+        dry_run=True,
+        repo_root=_repo_root(),
+    )
+    decorated = _decorate_audit_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance, operation="audit_dispatch")
+    return _tool_result(decorated, is_error=decorated.get("verdict") == "BLOCK" or not bool(decorated.get("ok", False)))
+
+
+def lybra_audit_dispatch_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _audit_dispatch_scope_allowed():
+        return _scope_denied_result_for(AUDIT_DISPATCH_SCOPE, "supervised audit dispatch tools")
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    if not dry_run_token:
+        return _audit_error(
+            "DRY_RUN_REQUIRED",
+            "lybra_audit_dispatch_confirm requires dry_run_token from a prior lybra_audit_dispatch_dry_run response.",
+            "Call lybra_audit_dispatch_dry_run first, review the preview, then confirm with its dry_run_token.",
+        )
+    if str(args.get("owner_confirmation_token") or "").strip() != OWNER_CONFIRMATION_TOKEN:
+        return _audit_error(
+            "OWNER_CONFIRMATION_REQUIRED",
+            "Supervised MCP audit_dispatch confirm requires owner_confirmation_token: OWNER_CONFIRMED.",
+            "Present the dry-run preview to Owner, then retry confirm with owner_confirmation_token set to OWNER_CONFIRMED.",
+        )
+    actor = str(args.get("actor") or "").strip()
+    agent_instance = str(args.get("agent_instance") or "").strip()
+    owner_policy_ref = str(args.get("owner_policy_ref") or "").strip()
+    if not actor or not agent_instance or not owner_policy_ref:
+        return _audit_error(
+            "CONFIRM_ARGUMENTS_REQUIRED",
+            "actor, agent_instance, and owner_policy_ref are required on confirm.",
+            "Pass the same actor, agent_instance, and owner_policy_ref reviewed in the dry-run preview.",
+        )
+    canonical_agent_instance, error = _validate_supervised_audit_args(
+        {"actor": actor, "agent_instance": agent_instance, "owner_policy_ref": owner_policy_ref, "autonomy_mode": "Supervised"},
+        operation="audit_dispatch",
+    )
+    if error is not None:
+        return error
+    token = get_dry_run(dry_run_token)
+    if token is None:
+        return _audit_error(
+            "STALE_DRY_RUN",
+            "dry_run_token was not found in this MCP server process, or it expired.",
+            "Dry-run tokens are currently process-local. Run lybra_audit_dispatch_dry_run again, review the new preview, then confirm.",
+        )
+    if token.operation != "audit_dispatch":
+        return _audit_error(
+            "INCOMPATIBLE_DRY_RUN",
+            "dry_run_token was recognized but is not compatible with lybra_audit_dispatch_confirm.",
+            "Confirm only with a token produced by lybra_audit_dispatch_dry_run for this MCP dispatch surface.",
+        )
+    source_data = token.plan.get("data") if isinstance(token.plan, dict) else {}
+    if str(source_data.get("owner_policy_ref") or "") != owner_policy_ref:
+        return _audit_error("OWNER_POLICY_MISMATCH", "owner_policy_ref does not match the dry-run preview.", "Run dry-run again or confirm with the reviewed owner_policy_ref.")
+    if str(source_data.get("canonical_agent_instance") or "") != canonical_agent_instance:
+        return _audit_error("INSTANCE_MISMATCH", "agent_instance does not match the dry-run preview.", "Run dry-run again or confirm with the reviewed agent_instance.")
+    response = execute_dry_run(dry_run_token, actor, owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=_repo_root())
+    if not response.get("ok", False):
+        return _map_controlled_execute_error(response, dry_run_tool="lybra_audit_dispatch_dry_run")
+    response["surface"] = "mcp"
+    response["autonomy_mode"] = "Supervised"
+    response["canonical_agent_instance"] = canonical_agent_instance
+    response["owner_policy_ref"] = owner_policy_ref
+    return _tool_result(response, is_error=False)
+
+
+def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _audit_verdict_scope_allowed():
+        return _scope_denied_result_for(AUDIT_VERDICT_SCOPE, "supervised audit verdict tools")
+    args = arguments or {}
+    forbidden = _forbidden_audit_fields(args)
+    if forbidden:
+        return _audit_error(
+            "UNSUPPORTED_AUDIT_VERDICT_FIELD",
+            f"Supervised MCP audit_verdict does not accept these fields: {', '.join(forbidden)}.",
+            "Remove automatic, credential, lease, finalize, accepted-work, runtime, and scheduler fields; then run dry-run again.",
+        )
+    canonical_agent_instance, error = _validate_supervised_audit_args(args, operation="audit_verdict")
+    if error is not None:
+        return error
+    response = audit_verdict_task(
+        audit_task_id=str(args.get("audit_task_id") or "").strip() or None,
+        audit_task_path=str(args.get("audit_task_path") or args.get("task_path") or "").strip() or None,
+        reviewed_task_id=str(args.get("reviewed_task_id") or "").strip(),
+        actor=canonical_agent_instance,
+        agent_instance=str(args.get("agent_instance") or "").strip(),
+        owner_policy_ref=str(args.get("owner_policy_ref") or "").strip(),
+        audit_claim_id=str(args.get("audit_claim_id") or "").strip() or None,
+        audit_session_id=str(args.get("audit_session_id") or "").strip() or None,
+        audit_dispatch_record_ref=str(args.get("audit_dispatch_record_ref") or "").strip() or None,
+        reviewed_return_record_ref=str(args.get("reviewed_return_record_ref") or "").strip() or None,
+        verdict=str(args.get("verdict") or "").strip(),
+        findings_summary=str(args.get("findings_summary") or "").strip() or None,
+        evidence_refs=args.get("evidence_refs") if isinstance(args.get("evidence_refs"), list) else [],
+        recommended_next_action=str(args.get("recommended_next_action") or "").strip() or None,
+        owner_waiver_ref=str(args.get("owner_waiver_ref") or "").strip() or None,
+        dry_run=True,
+        repo_root=_repo_root(),
+    )
+    decorated = _decorate_audit_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance, operation="audit_verdict")
+    return _tool_result(decorated, is_error=decorated.get("verdict") == "BLOCK" or not bool(decorated.get("ok", False)))
+
+
+def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _audit_verdict_scope_allowed():
+        return _scope_denied_result_for(AUDIT_VERDICT_SCOPE, "supervised audit verdict tools")
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    if not dry_run_token:
+        return _audit_error(
+            "DRY_RUN_REQUIRED",
+            "lybra_audit_verdict_confirm requires dry_run_token from a prior lybra_audit_verdict_dry_run response.",
+            "Call lybra_audit_verdict_dry_run first, review the preview, then confirm with its dry_run_token.",
+        )
+    if str(args.get("owner_confirmation_token") or "").strip() != OWNER_CONFIRMATION_TOKEN:
+        return _audit_error(
+            "OWNER_CONFIRMATION_REQUIRED",
+            "Supervised MCP audit_verdict confirm requires owner_confirmation_token: OWNER_CONFIRMED.",
+            "Present the dry-run preview to Owner, then retry confirm with owner_confirmation_token set to OWNER_CONFIRMED.",
+        )
+    actor = str(args.get("actor") or "").strip()
+    agent_instance = str(args.get("agent_instance") or "").strip()
+    owner_policy_ref = str(args.get("owner_policy_ref") or "").strip()
+    if not actor or not agent_instance or not owner_policy_ref:
+        return _audit_error(
+            "CONFIRM_ARGUMENTS_REQUIRED",
+            "actor, agent_instance, and owner_policy_ref are required on confirm.",
+            "Pass the same actor, agent_instance, and owner_policy_ref reviewed in the dry-run preview.",
+        )
+    canonical_agent_instance, error = _validate_supervised_audit_args(
+        {"actor": actor, "agent_instance": agent_instance, "owner_policy_ref": owner_policy_ref, "autonomy_mode": "Supervised"},
+        operation="audit_verdict",
+    )
+    if error is not None:
+        return error
+    token = get_dry_run(dry_run_token)
+    if token is None:
+        return _audit_error(
+            "STALE_DRY_RUN",
+            "dry_run_token was not found in this MCP server process, or it expired.",
+            "Dry-run tokens are currently process-local. Run lybra_audit_verdict_dry_run again, review the new preview, then confirm.",
+        )
+    if token.operation != "audit_verdict":
+        return _audit_error(
+            "INCOMPATIBLE_DRY_RUN",
+            "dry_run_token was recognized but is not compatible with lybra_audit_verdict_confirm.",
+            "Confirm only with a token produced by lybra_audit_verdict_dry_run for this MCP verdict surface.",
+        )
+    source_data = token.plan.get("data") if isinstance(token.plan, dict) else {}
+    if str(source_data.get("owner_policy_ref") or "") != owner_policy_ref:
+        return _audit_error("OWNER_POLICY_MISMATCH", "owner_policy_ref does not match the dry-run preview.", "Run dry-run again or confirm with the reviewed owner_policy_ref.")
+    if str(source_data.get("canonical_agent_instance") or "") != canonical_agent_instance:
+        return _audit_error("INSTANCE_MISMATCH", "agent_instance does not match the dry-run preview.", "Run dry-run again or confirm with the reviewed agent_instance.")
+    response = execute_dry_run(dry_run_token, actor, owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=_repo_root())
+    if not response.get("ok", False):
+        return _map_controlled_execute_error(response, dry_run_tool="lybra_audit_verdict_dry_run")
+    response["surface"] = "mcp"
+    response["autonomy_mode"] = "Supervised"
+    response["canonical_agent_instance"] = canonical_agent_instance
+    response["owner_policy_ref"] = owner_policy_ref
+    return _tool_result(response, is_error=False)
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_task_preview": lybra_task_preview,
@@ -1035,6 +1411,10 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_claim_confirm": lybra_queue_claim_confirm,
     "lybra_queue_return_dry_run": lybra_queue_return_dry_run,
     "lybra_queue_return_confirm": lybra_queue_return_confirm,
+    "lybra_audit_dispatch_dry_run": lybra_audit_dispatch_dry_run,
+    "lybra_audit_dispatch_confirm": lybra_audit_dispatch_confirm,
+    "lybra_audit_verdict_dry_run": lybra_audit_verdict_dry_run,
+    "lybra_audit_verdict_confirm": lybra_audit_verdict_confirm,
 }
 
 
@@ -1306,6 +1686,110 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "lybra_audit_dispatch_dry_run",
+        "description": (
+            "When to use: create a Supervised MCP preview that dispatches one audit-ready returned task into one pending audit task for a distinct auditor. "
+            "Prerequisites: this MCP connection must have a capability_token with audit_dispatch scope; autonomy_mode must be Supervised; actor must equal resolved canonical agent_instance; owner_policy_ref and audit_agent_instance are required. "
+            "Return structure: a controlled execute envelope with planned source-task update, pending audit task creation, audit-dispatch record creation, dry_run_token, confirmation_preview, reviewed_executor_instance, and no lease activation. "
+            "Next-step hint: present confirmation_preview to Owner, then pass dry_run_token to lybra_audit_dispatch_confirm with owner_confirmation_token OWNER_CONFIRMED; confirm does not claim the audit task, launch an auditor, record a verdict, finalize, or unblock accepted work."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source_task_id": {"type": "string"},
+                "source_task_path": {"type": "string"},
+                "task_id": {"type": "string"},
+                "task_path": {"type": "string"},
+                "actor": {"type": "string"},
+                "agent_instance": {"type": "string"},
+                "autonomy_mode": {"type": "string", "enum": ["Supervised"]},
+                "owner_policy_ref": {"type": "string"},
+                "audit_task_id": {"type": "string"},
+                "audit_task_title": {"type": "string"},
+                "audit_by": {"type": "string"},
+                "audit_agent_instance": {"type": "string"},
+                "dispatch_reason": {"type": "string"},
+            },
+            "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref", "audit_task_id", "audit_agent_instance"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_audit_dispatch_confirm",
+        "description": (
+            "When to use: confirm a prior Supervised MCP audit-dispatch dry-run after Owner has reviewed the exact preview. "
+            "Prerequisites: this MCP connection must have a capability_token with audit_dispatch scope; dry_run_token is required; owner_confirmation_token must be OWNER_CONFIRMED; actor, agent_instance, and owner_policy_ref must match the dry-run preview. "
+            "Return structure: a controlled execute result with performed_writes for source task update, pending audit task creation, and audit-dispatch record creation. "
+            "Next-step hint: confirm only creates an audit task and dispatch provenance; the auditor must claim it separately through lybra_queue_claim_dry_run/confirm."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run_token": {"type": "string"},
+                "actor": {"type": "string"},
+                "agent_instance": {"type": "string"},
+                "owner_policy_ref": {"type": "string"},
+                "owner_confirmation_token": {"type": "string"},
+            },
+            "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_audit_verdict_dry_run",
+        "description": (
+            "When to use: create a Supervised MCP preview for recording an independent audit verdict on a reviewed returned task. "
+            "Prerequisites: this MCP connection must have a capability_token with audit_verdict scope; autonomy_mode must be Supervised; actor must equal resolved canonical agent_instance; the audit task must be claimed by this auditor and distinct from reviewed_executor_instance. "
+            "Return structure: a controlled execute envelope with planned reviewed-task update, audit-task update, audit-verdict record creation, auditor session update, dry_run_token, confirmation_preview, and no finalize or accepted-work unblock. "
+            "Next-step hint: present confirmation_preview to Owner, then pass dry_run_token to lybra_audit_verdict_confirm with owner_confirmation_token OWNER_CONFIRMED; PASS maps only to audit_pass."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "audit_task_id": {"type": "string"},
+                "audit_task_path": {"type": "string"},
+                "task_path": {"type": "string"},
+                "reviewed_task_id": {"type": "string"},
+                "actor": {"type": "string"},
+                "agent_instance": {"type": "string"},
+                "autonomy_mode": {"type": "string", "enum": ["Supervised"]},
+                "owner_policy_ref": {"type": "string"},
+                "audit_claim_id": {"type": "string"},
+                "audit_session_id": {"type": "string"},
+                "audit_dispatch_record_ref": {"type": "string"},
+                "reviewed_return_record_ref": {"type": "string"},
+                "verdict": {"type": "string", "enum": ["PASS", "FAIL", "REQUEST_CHANGES", "CHANGES", "BLOCKED", "WAIVED"]},
+                "findings_summary": {"type": "string"},
+                "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                "recommended_next_action": {"type": "string"},
+                "owner_waiver_ref": {"type": "string"},
+            },
+            "required": ["reviewed_task_id", "actor", "agent_instance", "autonomy_mode", "owner_policy_ref", "verdict"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_audit_verdict_confirm",
+        "description": (
+            "When to use: confirm a prior Supervised MCP audit-verdict dry-run after Owner has reviewed the exact preview. "
+            "Prerequisites: this MCP connection must have a capability_token with audit_verdict scope; dry_run_token is required; owner_confirmation_token must be OWNER_CONFIRMED; actor, agent_instance, and owner_policy_ref must match the dry-run preview. "
+            "Return structure: a controlled execute result with performed_writes for reviewed task audit status, audit task metadata, audit-verdict record, and auditor session event. "
+            "Next-step hint: confirm only records the verdict; it does not finalize, unblock accepted work, activate a lease, or dispatch follow-up work."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run_token": {"type": "string"},
+                "actor": {"type": "string"},
+                "agent_instance": {"type": "string"},
+                "owner_policy_ref": {"type": "string"},
+                "owner_confirmation_token": {"type": "string"},
+            },
+            "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -1319,6 +1803,10 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_claim"))
     if _queue_return_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_return"))
+    if _audit_dispatch_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_audit_dispatch"))
+    if _audit_verdict_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_audit_verdict"))
     return descriptors
 
 

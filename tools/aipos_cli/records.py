@@ -19,6 +19,14 @@ def expected_return_record_path(repo_root: Path, task_id: str, return_id: str) -
     return repo_root / "5_tasks" / "records" / "returns" / task_id / f"{return_id}.md"
 
 
+def expected_audit_dispatch_record_path(repo_root: Path, task_id: str, dispatch_id: str) -> Path:
+    return repo_root / "5_tasks" / "records" / "audit_dispatches" / task_id / f"{dispatch_id}.md"
+
+
+def expected_audit_verdict_record_path(repo_root: Path, task_id: str, verdict_id: str) -> Path:
+    return repo_root / "5_tasks" / "records" / "audit_verdicts" / task_id / f"{verdict_id}.md"
+
+
 def _record_sort_key(record: dict[str, Any]) -> tuple[str, str]:
     metadata = record.get("metadata", {})
     timestamp = (
@@ -26,6 +34,8 @@ def _record_sort_key(record: dict[str, Any]) -> tuple[str, str]:
         or metadata.get("session_started_at")
         or metadata.get("claimed_at")
         or metadata.get("returned_at")
+        or metadata.get("dispatched_at")
+        or metadata.get("verdict_at")
         or metadata.get("decided_at")
         or ""
     )
@@ -54,6 +64,8 @@ def _build_record(
         "session": "session_id",
         "claim": "claim_id",
         "return": "return_id",
+        "audit_dispatch": "dispatch_id",
+        "audit_verdict": "verdict_id",
     }[record_type]
     task_id = metadata.get("task_id") or directory_task_id
     record_id = metadata.get(id_field) or path.stem
@@ -96,7 +108,7 @@ def _build_record(
                 "claim_source": metadata.get("claim_source"),
             }
         )
-    else:
+    elif record_type == "return":
         record.update(
             {
                 "return_id": record_id,
@@ -106,6 +118,29 @@ def _build_record(
                 "returned_at": metadata.get("returned_at") or metadata.get("created_at"),
                 "executor_status": metadata.get("executor_status"),
                 "audit_readiness": metadata.get("audit_readiness"),
+            }
+        )
+    elif record_type == "audit_dispatch":
+        record.update(
+            {
+                "dispatch_id": record_id,
+                "reviewed_task_id": metadata.get("reviewed_task_id") or task_id,
+                "audit_task_id": metadata.get("audit_task_id"),
+                "reviewed_executor_instance": metadata.get("reviewed_executor_instance"),
+                "reviewed_return_record_ref": metadata.get("reviewed_return_record_ref"),
+                "dispatched_at": metadata.get("dispatched_at"),
+            }
+        )
+    else:
+        record.update(
+            {
+                "verdict_id": record_id,
+                "verdict": metadata.get("verdict"),
+                "reviewed_task_id": metadata.get("reviewed_task_id") or task_id,
+                "audit_task_id": metadata.get("audit_task_id"),
+                "reviewed_executor_instance": metadata.get("reviewed_executor_instance"),
+                "auditor_instance": metadata.get("auditor_instance"),
+                "verdict_at": metadata.get("verdict_at"),
             }
         )
     return record
@@ -183,6 +218,8 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     sessions_root = records_root / "sessions"
     claims_root = records_root / "claims"
     returns_root = records_root / "returns"
+    audit_dispatches_root = records_root / "audit_dispatches"
+    audit_verdicts_root = records_root / "audit_verdicts"
     owner_decisions_root = records_root / "owner_decisions"
     sessions = [
         _build_record(path, repo_root, "session", directory_task_id)
@@ -196,6 +233,14 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         _build_record(path, repo_root, "return", directory_task_id)
         for path, directory_task_id in _iter_record_files(returns_root)
     ]
+    audit_dispatches = [
+        _build_record(path, repo_root, "audit_dispatch", directory_task_id)
+        for path, directory_task_id in _iter_record_files(audit_dispatches_root)
+    ]
+    audit_verdicts = [
+        _build_record(path, repo_root, "audit_verdict", directory_task_id)
+        for path, directory_task_id in _iter_record_files(audit_verdicts_root)
+    ]
     owner_decisions = [
         _build_owner_decision_record(path, repo_root)
         for path in _iter_owner_decision_files(owner_decisions_root)
@@ -206,10 +251,14 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     session_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     claim_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     return_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    audit_dispatch_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    audit_verdict_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     owner_decision_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_sessions: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_claims: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_returns: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    task_audit_dispatches: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    task_audit_verdicts: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     for record in sessions:
         if record.get("session_id"):
@@ -232,6 +281,20 @@ def load_records(repo_root: Path) -> dict[str, Any]:
             task_returns[str(record["task_id"])].append(record)
         parse_errors.extend([f"{record['path']}: {item}" for item in record.get("parse_errors", [])])
         warnings.extend([f"{record['path']}: {item}" for item in record.get("warnings", [])])
+    for record in audit_dispatches:
+        if record.get("dispatch_id"):
+            audit_dispatch_index[str(record["dispatch_id"])].append(record)
+        if record.get("reviewed_task_id"):
+            task_audit_dispatches[str(record["reviewed_task_id"])].append(record)
+        parse_errors.extend([f"{record['path']}: {item}" for item in record.get("parse_errors", [])])
+        warnings.extend([f"{record['path']}: {item}" for item in record.get("warnings", [])])
+    for record in audit_verdicts:
+        if record.get("verdict_id"):
+            audit_verdict_index[str(record["verdict_id"])].append(record)
+        if record.get("reviewed_task_id"):
+            task_audit_verdicts[str(record["reviewed_task_id"])].append(record)
+        parse_errors.extend([f"{record['path']}: {item}" for item in record.get("parse_errors", [])])
+        warnings.extend([f"{record['path']}: {item}" for item in record.get("warnings", [])])
     for record in owner_decisions:
         if record.get("decision_id"):
             owner_decision_index[str(record["decision_id"])].append(record)
@@ -247,6 +310,12 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     for record_id, items in return_index.items():
         if len(items) > 1:
             warnings.append(f"Duplicate return_id found: {record_id}")
+    for record_id, items in audit_dispatch_index.items():
+        if len(items) > 1:
+            warnings.append(f"Duplicate dispatch_id found: {record_id}")
+    for record_id, items in audit_verdict_index.items():
+        if len(items) > 1:
+            warnings.append(f"Duplicate verdict_id found: {record_id}")
     for record_id, items in owner_decision_index.items():
         if len(items) > 1:
             warnings.append(f"Duplicate decision_id found: {record_id}")
@@ -257,15 +326,23 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         items.sort(key=_record_sort_key, reverse=True)
     for items in task_returns.values():
         items.sort(key=_record_sort_key, reverse=True)
+    for items in task_audit_dispatches.values():
+        items.sort(key=_record_sort_key, reverse=True)
+    for items in task_audit_verdicts.values():
+        items.sort(key=_record_sort_key, reverse=True)
 
     summary = {
         "session_records": len(sessions),
         "claim_logs": len(claims),
         "return_records": len(returns),
+        "audit_dispatch_records": len(audit_dispatches),
+        "audit_verdict_records": len(audit_verdicts),
         "owner_decision_records": len(owner_decisions),
         "tasks_with_session_records": len(task_sessions),
         "tasks_with_claim_logs": len(task_claims),
         "tasks_with_return_records": len(task_returns),
+        "tasks_with_audit_dispatch_records": len(task_audit_dispatches),
+        "tasks_with_audit_verdict_records": len(task_audit_verdicts),
         "parse_errors": len(parse_errors),
     }
     return {
@@ -276,20 +353,28 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         "sessions_root_exists": sessions_root.exists(),
         "claims_root_exists": claims_root.exists(),
         "returns_root_exists": returns_root.exists(),
+        "audit_dispatches_root_exists": audit_dispatches_root.exists(),
+        "audit_verdicts_root_exists": audit_verdicts_root.exists(),
         "owner_decisions_root_exists": owner_decisions_root.exists(),
         "sessions": sorted(sessions, key=_record_sort_key, reverse=True),
         "claims": sorted(claims, key=_record_sort_key, reverse=True),
         "returns": sorted(returns, key=_record_sort_key, reverse=True),
+        "audit_dispatches": sorted(audit_dispatches, key=_record_sort_key, reverse=True),
+        "audit_verdicts": sorted(audit_verdicts, key=_record_sort_key, reverse=True),
         "owner_decisions": sorted(owner_decisions, key=_record_sort_key, reverse=True),
         "warnings": warnings,
         "parse_errors": parse_errors,
         "session_index": dict(session_index),
         "claim_index": dict(claim_index),
         "return_index": dict(return_index),
+        "audit_dispatch_index": dict(audit_dispatch_index),
+        "audit_verdict_index": dict(audit_verdict_index),
         "owner_decision_index": dict(owner_decision_index),
         "task_sessions": dict(task_sessions),
         "task_claims": dict(task_claims),
         "task_returns": dict(task_returns),
+        "task_audit_dispatches": dict(task_audit_dispatches),
+        "task_audit_verdicts": dict(task_audit_verdicts),
     }
 
 
@@ -298,6 +383,8 @@ def find_records_for_task(records: dict[str, Any], task_id: str) -> dict[str, li
         "sessions": list(records.get("task_sessions", {}).get(task_id, [])),
         "claims": list(records.get("task_claims", {}).get(task_id, [])),
         "returns": list(records.get("task_returns", {}).get(task_id, [])),
+        "audit_dispatches": list(records.get("task_audit_dispatches", {}).get(task_id, [])),
+        "audit_verdicts": list(records.get("task_audit_verdicts", {}).get(task_id, [])),
     }
 
 
@@ -323,6 +410,8 @@ def _check_ref(
         "session": "session_index",
         "claim": "claim_index",
         "return": "return_index",
+        "audit_dispatch": "audit_dispatch_index",
+        "audit_verdict": "audit_verdict_index",
     }[record_type]
     matches = list(records.get(index_name, {}).get(str(record_id), []))
     normalized_matches = [
@@ -389,6 +478,12 @@ def check_task_record_refs(task: dict[str, Any], records: dict[str, Any]) -> dic
     return_ref = metadata.get("return_record_ref") or metadata.get("return_event_ref")
     if return_ref:
         checks.append(_check_ref("return_record_ref", task_id, return_ref, "return", records))
+    dispatch_ref = metadata.get("audit_dispatch_record_ref")
+    if dispatch_ref:
+        checks.append(_check_ref("audit_dispatch_record_ref", task_id, dispatch_ref, "audit_dispatch", records))
+    verdict_ref = metadata.get("related_audit_verdict_ref")
+    if verdict_ref:
+        checks.append(_check_ref("related_audit_verdict_ref", task_id, verdict_ref, "audit_verdict", records))
 
     warnings = [item["message"] for item in checks if item["level"] == "warn"]
     needs_owner_reasons = [item["message"] for item in checks if item["level"] == "needs_owner"]

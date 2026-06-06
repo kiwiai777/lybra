@@ -9,6 +9,7 @@ from tools.aipos_cli.agent_profiles import (
     actor_matches_task,
     actor_matches_task_actor,
     availability_warning_for_actor,
+    resolve_instance_id,
     specific_instance_match_details,
 )
 from tools.aipos_cli.records import check_task_record_refs, find_records_for_task
@@ -103,10 +104,16 @@ def _normalize_record_ref_check(check: dict[str, Any]) -> dict[str, Any]:
 def _task_records_summary(task: dict[str, Any]) -> dict[str, Any]:
     sessions = list(task.get("record_links", {}).get("sessions", []))
     claims = list(task.get("record_links", {}).get("claims", []))
+    returns = list(task.get("record_links", {}).get("returns", []))
+    audit_dispatches = list(task.get("record_links", {}).get("audit_dispatches", []))
+    audit_verdicts = list(task.get("record_links", {}).get("audit_verdicts", []))
     checks = list(task.get("record_ref_checks", []))
     return {
         "session_records": len(sessions),
         "claim_logs": len(claims),
+        "return_records": len(returns),
+        "audit_dispatch_records": len(audit_dispatches),
+        "audit_verdict_records": len(audit_verdicts),
         "has_record_issues": any(check.get("status") in {"missing", "conflict"} for check in checks),
     }
 
@@ -116,7 +123,13 @@ def build_records_summary(records: dict[str, Any], tasks: list[dict[str, Any]]) 
         1 for items in records.get("session_index", {}).values() if len(items) > 1
     )
     duplicate_claim_ids = sum(1 for items in records.get("claim_index", {}).values() if len(items) > 1)
-    task_ids_with_records = set(records.get("task_sessions", {}).keys()) | set(records.get("task_claims", {}).keys())
+    task_ids_with_records = (
+        set(records.get("task_sessions", {}).keys())
+        | set(records.get("task_claims", {}).keys())
+        | set(records.get("task_returns", {}).keys())
+        | set(records.get("task_audit_dispatches", {}).keys())
+        | set(records.get("task_audit_verdicts", {}).keys())
+    )
     task_ids_with_record_issues = {
         str(task.get("task_id"))
         for task in tasks
@@ -131,6 +144,9 @@ def build_records_summary(records: dict[str, Any], tasks: list[dict[str, Any]]) 
     return {
         "sessions_total": len(records.get("sessions", [])),
         "claims_total": len(records.get("claims", [])),
+        "returns_total": len(records.get("returns", [])),
+        "audit_dispatches_total": len(records.get("audit_dispatches", [])),
+        "audit_verdicts_total": len(records.get("audit_verdicts", [])),
         "parse_errors_total": len(records.get("parse_errors", [])),
         "warnings_total": len(records.get("warnings", [])),
         "tasks_with_records": len(task_ids_with_records),
@@ -138,6 +154,9 @@ def build_records_summary(records: dict[str, Any], tasks: list[dict[str, Any]]) 
         "records_root_exists": bool(records.get("records_root_exists")),
         "session_task_count": len(records.get("task_sessions", {})),
         "claim_task_count": len(records.get("task_claims", {})),
+        "return_task_count": len(records.get("task_returns", {})),
+        "audit_dispatch_task_count": len(records.get("task_audit_dispatches", {})),
+        "audit_verdict_task_count": len(records.get("task_audit_verdicts", {})),
         "duplicate_session_ids": duplicate_session_ids,
         "duplicate_claim_ids": duplicate_claim_ids,
         "task_id_mismatch_count": sum(
@@ -345,6 +364,28 @@ def validate_task(
                 _add(warnings, availability_warning)
         if not actor_matches:
             _add(blocking_reasons, "Current actor does not match assigned_to or agent_instance")
+
+        reviewed_executor = str(metadata.get("reviewed_executor_instance") or "").strip()
+        distinct_required = metadata.get("independence_distinct_instance") is True or str(
+            metadata.get("independence_distinct_instance") or ""
+        ).lower() == "true"
+        if reviewed_executor and distinct_required:
+            if profiles is not None:
+                actor_resolved = resolve_instance_id(current_actor, profiles or {})
+                reviewed_resolved = resolve_instance_id(reviewed_executor, profiles or {})
+                same_instance = (
+                    actor_resolved.get("resolution") != "ambiguous"
+                    and reviewed_resolved.get("resolution") != "ambiguous"
+                    and bool(actor_resolved.get("canonical_instance_id"))
+                    and actor_resolved.get("canonical_instance_id") == reviewed_resolved.get("canonical_instance_id")
+                )
+            else:
+                same_instance = current_actor == reviewed_executor
+            if same_instance:
+                _add(
+                    blocking_reasons,
+                    f"independence_distinct_instance requires auditor distinct from reviewed_executor_instance {reviewed_executor}",
+                )
 
     if queue_state == "claimed":
         for field in ("claim_id", "claimed_by", "claimed_at", "active_session_id"):

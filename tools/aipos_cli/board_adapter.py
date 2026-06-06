@@ -31,7 +31,12 @@ from tools.aipos_cli.preview import build_preview
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.queue_mutation import mutate_queue_task, render_task_markdown
 from tools.aipos_cli.record_writer import (
+    append_mcp_audit_verdict_session_event,
     append_mcp_return_session_event,
+    audit_dispatch_record_path,
+    audit_verdict_record_path,
+    build_mcp_audit_dispatch_record_markdown,
+    build_mcp_audit_verdict_record_markdown,
     build_mcp_claim_record_markdown,
     build_mcp_claim_session_record_markdown,
     build_mcp_return_record_markdown,
@@ -58,7 +63,7 @@ MUTATION_DRY_RUN_NOTICE = (
 CONTROLLED_EXECUTE_NOTICE = (
     "AIPOS-38 controlled execute is local-only and limited to dry-run-linked operations: "
     "draft_create, draft_publish, queue_claim, orchestration_event_append, planner_iteration_append, intake_submit, "
-    "owner_decision_record, queue_return."
+    "owner_decision_record, queue_return, audit_dispatch, audit_verdict."
 )
 HEALTH_NOTICE = "Local module adapter health check only. No CLI runtime bridge, server, or network behavior is used."
 GOVERNANCE_FILES = {
@@ -273,6 +278,8 @@ def _attach_controlled_execute_metadata(
         "draft_publish",
         "queue_claim",
         "queue_return",
+        "audit_dispatch",
+        "audit_verdict",
         "orchestration_event_append",
         "planner_iteration_append",
         "intake_submit",
@@ -1537,6 +1544,28 @@ def _unsafe_return_ref(value: str) -> bool:
     return raw.is_absolute() or ".." in raw.parts
 
 
+def _task_filename_for(task_id: str) -> str:
+    value = "".join(char.lower() if char.isalnum() else "-" for char in task_id).strip("-")
+    while "--" in value:
+        value = value.replace("--", "-")
+    return value or "task"
+
+
+def _select_task(repo_root: Path, *, task_id: str | None, path: str | Path | None) -> dict[str, Any]:
+    selected_task_id, selected_path = _select_task_input(task_id, path)
+    if selected_task_id:
+        selected, matches = find_task_by_id(selected_task_id, repo_root)
+        if not matches:
+            raise FileNotFoundError(f"No task found for task_id: {selected_task_id}")
+        if len(matches) > 1:
+            paths = ", ".join(sorted(str(match.get("path")) for match in matches))
+            raise ValueError(f"Duplicate task_id {selected_task_id} found in: {paths}")
+        assert selected is not None
+        return selected
+    assert selected_path is not None
+    return load_task_by_path(selected_path, repo_root)
+
+
 def _build_return_preview(
     *,
     task_id: str | None,
@@ -1811,6 +1840,653 @@ def return_task(
         return _normalize_exception("queue_return", exc, dry_run=dry_run, actor=_actor_payload(actor))
 
 
+def _dispatch_owner_reasons() -> list[str]:
+    return ["MCP Supervised audit_dispatch requires explicit Owner confirmation for this dry-run preview"]
+
+
+def _verdict_owner_reasons() -> list[str]:
+    return ["MCP Supervised audit_verdict requires explicit Owner confirmation for this dry-run preview"]
+
+
+def _build_audit_dispatch_preview(
+    *,
+    source_task_id: str | None,
+    source_path: str | Path | None,
+    actor: str,
+    agent_instance: str,
+    owner_policy_ref: str,
+    audit_task_id: str,
+    audit_task_title: str | None,
+    audit_by: str | None,
+    audit_agent_instance: str,
+    dispatch_reason: str | None,
+    repo_root: Path,
+    dry_run: bool,
+    planned_dispatch_id: str | None = None,
+    planned_dispatched_at: str | None = None,
+) -> dict[str, Any]:
+    source_task = _select_task(repo_root, task_id=source_task_id, path=source_path)
+    source_rel = str(source_task.get("path") or "")
+    source_file = repo_root / source_rel
+    source_metadata, source_body, parse_warnings = parse_markdown_frontmatter(source_file.read_text(encoding="utf-8"))
+    source_metadata = _normalize_return_value(source_metadata)
+    tasks = load_all_tasks(repo_root)
+    records = load_records(repo_root)
+    profiles = load_agent_profiles(repo_root)
+    source_validated = validate_single_task(source_task, tasks=tasks, records=records, profiles=profiles)
+
+    blocking_reasons = list(source_validated.get("blocking_reasons", []))
+    warnings = [*list(source_validated.get("warnings", [])), *parse_warnings]
+
+    resolved = resolve_instance_id(agent_instance, profiles)
+    canonical_agent_instance = str(resolved.get("canonical_instance_id") or "").strip()
+    if resolved.get("resolution") == "ambiguous" or not canonical_agent_instance:
+        blocking_reasons.append("INSTANCE_REQUIRED: agent_instance must resolve to one canonical concrete instance")
+    if actor != canonical_agent_instance:
+        blocking_reasons.append("INSTANCE_MISMATCH: actor must equal canonical agent_instance for Supervised MCP audit_dispatch")
+
+    if source_task.get("queue_state") != "claimed" or source_metadata.get("status") != "claimed":
+        blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: source task must be claimed")
+    if source_metadata.get("executor_status") != "completed":
+        blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: executor_status must be completed")
+    if source_metadata.get("audit_readiness") != "ready":
+        blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: audit_readiness must be ready")
+    if source_metadata.get("dependency_audit_status") == "PASS":
+        blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS")
+    if source_metadata.get("related_audit_task_ref") or source_metadata.get("audit_dispatch_record_ref"):
+        blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
+
+    reviewed_return_record_ref = str(source_metadata.get("return_record_ref") or source_metadata.get("return_event_ref") or "").strip()
+    if not reviewed_return_record_ref:
+        blocking_reasons.append("MISSING_RETURN_RECORD: source task lacks return_record_ref")
+    elif not records.get("return_index", {}).get(reviewed_return_record_ref):
+        blocking_reasons.append("MISSING_RETURN_RECORD: return_record_ref does not resolve to a return record")
+
+    reviewed_executor_instance = str(source_metadata.get("executor_completed_by") or source_metadata.get("agent_instance") or source_metadata.get("claimed_by") or "").strip()
+    if not reviewed_executor_instance:
+        blocking_reasons.append("MISSING_EXECUTOR_INSTANCE: source task lacks reviewed executor instance")
+    if reviewed_executor_instance and audit_agent_instance:
+        audit_resolved = resolve_instance_id(audit_agent_instance, profiles)
+        audit_canonical = str(audit_resolved.get("canonical_instance_id") or "").strip()
+        if audit_resolved.get("resolution") == "ambiguous" or not audit_canonical:
+            blocking_reasons.append("INSTANCE_REQUIRED: audit_agent_instance must resolve to one canonical concrete instance")
+        elif audit_canonical == reviewed_executor_instance:
+            blocking_reasons.append("INDEPENDENCE_FAILED: audit_agent_instance must be distinct from reviewed_executor_instance")
+    else:
+        blocking_reasons.append("INSTANCE_REQUIRED: audit_agent_instance is required for the first audit_dispatch slice")
+
+    task_id_text = str(audit_task_id or "").strip()
+    if not task_id_text:
+        blocking_reasons.append("INVALID_AUDIT_TASK_ID: audit_task_id is required")
+    audit_rel = f"5_tasks/queue/pending/{_task_filename_for(task_id_text)}.md"
+    audit_path = repo_root / audit_rel
+    if audit_path.exists():
+        blocking_reasons.append(f"AUDIT_TASK_TARGET_EXISTS: {audit_rel}")
+    if task_id_text:
+        _existing, matches = find_task_by_id(task_id_text, repo_root)
+        if matches:
+            blocking_reasons.append(f"AUDIT_TASK_ID_EXISTS: {task_id_text}")
+
+    timestamp = planned_dispatched_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    dispatch_id = planned_dispatch_id or build_runtime_id("dispatch", str(source_task.get("task_id") or ""), timestamp, canonical_agent_instance or actor)
+    dispatch_path = audit_dispatch_record_path(repo_root, str(source_task.get("task_id") or ""), dispatch_id)
+    dispatch_rel = str(dispatch_path.relative_to(repo_root))
+    if dispatch_path.exists():
+        blocking_reasons.append(f"Audit dispatch record already exists: {dispatch_rel}")
+
+    audit_metadata = {
+        "task_id": task_id_text,
+        "title": audit_task_title or f"Audit {source_task.get('task_id')}",
+        "project": source_metadata.get("project") or "lybra",
+        "assigned_to": audit_by or source_metadata.get("assigned_to") or "audit",
+        "agent_instance": audit_agent_instance,
+        "context_bundle": source_metadata.get("context_bundle") or "default",
+        "task_mode": "audit",
+        "task_class": "complex",
+        "model_tier": source_metadata.get("model_tier") or "L2",
+        "priority": source_metadata.get("priority") or "medium",
+        "status": "pending",
+        "created_by": actor,
+        "needs_owner": False,
+        "planner_agent": "owner_planner",
+        "reviewer": "owner_review",
+        "audit_by": audit_agent_instance,
+        "output_target": source_metadata.get("output_target") or source_rel,
+        "artifact_policy": source_metadata.get("artifact_policy") or "formal_write",
+        "session_policy": source_metadata.get("session_policy") or "single_task_session",
+        "context_isolation": source_metadata.get("context_isolation") or "strict",
+        "artifact_scope": source_metadata.get("artifact_scope") or source_rel,
+        "memory_scope": f"audit of {source_task.get('task_id')}",
+        "claim_policy": "specific_instance_only",
+        "depends_on": [str(source_task.get("task_id") or "")],
+        "dependency_condition": "audit_readiness",
+        "dependency_executor_status": "completed",
+        "dependency_audit_readiness": "ready",
+        "dependency_audit_status": "pending",
+        "reviewed_task_id": source_task.get("task_id"),
+        "reviewed_task_path": source_rel,
+        "reviewed_return_record_ref": reviewed_return_record_ref,
+        "reviewed_executor_instance": reviewed_executor_instance,
+        "reviewed_executor_claim_id": source_metadata.get("claim_id") or "",
+        "reviewed_executor_session_id": source_metadata.get("active_session_id") or source_metadata.get("last_session_id") or "",
+        "audit_subject_condition": "audit_readiness",
+        "required_verdict_condition": "audit_pass",
+        "independence_distinct_instance": True,
+        "audit_dispatch_record_ref": dispatch_id,
+        "audit_dispatch_owner_policy_ref": owner_policy_ref,
+    }
+    if dispatch_reason:
+        audit_metadata["dispatch_reason"] = dispatch_reason
+    audit_body = "\n".join(
+        [
+            f"Audit task for `{source_task.get('task_id')}`.",
+            "",
+            "Review the returned work evidence and produce an independent verdict.",
+            "",
+        ]
+    )
+    audit_markdown = render_task_markdown(audit_metadata, audit_body)
+
+    updated_source_metadata = dict(source_metadata)
+    updated_source_metadata["related_audit_task_ref"] = task_id_text
+    updated_source_metadata["audit_dispatch_record_ref"] = dispatch_id
+    updated_source_metadata["audit_dispatched_at"] = timestamp
+    updated_source_metadata["audit_dispatched_by"] = canonical_agent_instance or actor
+    updated_source_metadata["audit_dispatch_owner_policy_ref"] = owner_policy_ref
+    source_markdown = render_task_markdown(updated_source_metadata, source_body)
+
+    dispatch_markdown = build_mcp_audit_dispatch_record_markdown(
+        dispatch_id=dispatch_id,
+        reviewed_task_id=str(source_task.get("task_id") or ""),
+        reviewed_task_path=source_rel,
+        reviewed_return_record_ref=reviewed_return_record_ref,
+        reviewed_executor_instance=reviewed_executor_instance,
+        reviewed_executor_claim_id=str(source_metadata.get("claim_id") or ""),
+        reviewed_executor_session_id=str(source_metadata.get("active_session_id") or source_metadata.get("last_session_id") or ""),
+        audit_task_id=task_id_text,
+        audit_task_path=audit_rel,
+        actor=actor,
+        canonical_agent_instance=canonical_agent_instance,
+        owner_policy_ref=owner_policy_ref,
+        dispatched_at=timestamp,
+    )
+    record_writes = [_mcp_record_write_plan(dispatch_rel, "audit_dispatch_record", would_write=not blocking_reasons)]
+    data = {
+        "source_task_id": source_task.get("task_id"),
+        "task_id": source_task.get("task_id"),
+        "source_path": source_rel,
+        "target_path": source_rel,
+        "from_state": "claimed",
+        "to_state": "claimed",
+        "would_write": not blocking_reasons,
+        "would_move": False,
+        "updated_frontmatter": updated_source_metadata,
+        "rendered_markdown": source_markdown,
+        "target_file_state": _target_file_state(repo_root, source_rel),
+        "audit_task_id": task_id_text,
+        "audit_task_path": audit_rel,
+        "audit_task_markdown": audit_markdown,
+        "audit_task_metadata": audit_metadata,
+        "dispatch_id": dispatch_id,
+        "audit_dispatch_record_path": dispatch_rel,
+        "record_writes": record_writes,
+        "record_previews": [{"path": dispatch_rel, "record_type": "audit_dispatch_record", "rendered_markdown": dispatch_markdown}],
+        "owner_policy_ref": owner_policy_ref,
+        "canonical_agent_instance": canonical_agent_instance,
+        "reviewed_executor_instance": reviewed_executor_instance,
+        "reviewed_return_record_ref": reviewed_return_record_ref,
+        "original_payload": {
+            "source_task_id": source_task_id,
+            "source_path": str(source_path) if source_path is not None else None,
+            "actor": actor,
+            "agent_instance": agent_instance,
+            "owner_policy_ref": owner_policy_ref,
+            "audit_task_id": task_id_text,
+            "audit_task_title": audit_task_title,
+            "audit_by": audit_by,
+            "audit_agent_instance": audit_agent_instance,
+            "dispatch_reason": dispatch_reason,
+            "planned_dispatch_id": dispatch_id,
+            "planned_dispatched_at": timestamp,
+        },
+    }
+    verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)
+    response = make_response(
+        ok=True,
+        verdict=verdict,
+        operation="audit_dispatch",
+        dry_run=dry_run,
+        actor=_actor_payload(actor),
+        data=data,
+        summary={"source_task_id": source_task.get("task_id"), "audit_task_id": task_id_text},
+        planned_writes=[
+            {"path": source_rel, "kind": "update", "type": "task_markdown"},
+            {"path": audit_rel, "kind": "create", "type": "task_markdown"},
+            {"path": dispatch_rel, "kind": "create", "type": "record_markdown", "record_type": "audit_dispatch_record"},
+        ],
+        planned_moves=[],
+        warnings=warnings,
+        blocking_reasons=blocking_reasons,
+        needs_owner_reasons=[],
+        owner_confirmation_required=verdict != "BLOCK",
+        owner_confirmation_reasons=_dispatch_owner_reasons() if verdict != "BLOCK" else [],
+        safety_notice=CONTROLLED_EXECUTE_NOTICE,
+        errors=[],
+    )
+    return response
+
+
+def audit_dispatch_task(
+    *,
+    source_task_id: str | None = None,
+    source_path: str | Path | None = None,
+    actor: str | None = None,
+    agent_instance: str | None = None,
+    owner_policy_ref: str | None = None,
+    audit_task_id: str | None = None,
+    audit_task_title: str | None = None,
+    audit_by: str | None = None,
+    audit_agent_instance: str | None = None,
+    dispatch_reason: str | None = None,
+    planned_dispatch_id: str | None = None,
+    planned_dispatched_at: str | None = None,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+) -> dict[str, Any]:
+    try:
+        actor_text = str(actor or "").strip()
+        instance_text = str(agent_instance or "").strip()
+        policy_ref = str(owner_policy_ref or "").strip()
+        audit_id = str(audit_task_id or "").strip()
+        audit_instance = str(audit_agent_instance or "").strip()
+        if not actor_text:
+            raise ValueError("actor is required")
+        if not instance_text:
+            raise ValueError("agent_instance is required")
+        if not policy_ref:
+            raise ValueError("owner_policy_ref is required")
+        if not audit_id:
+            raise ValueError("audit_task_id is required")
+        if not audit_instance:
+            raise ValueError("audit_agent_instance is required")
+        resolved_root = _resolve_repo_root(repo_root)
+        response = _build_audit_dispatch_preview(
+            source_task_id=source_task_id,
+            source_path=source_path,
+            actor=actor_text,
+            agent_instance=instance_text,
+            owner_policy_ref=policy_ref,
+            audit_task_id=audit_id,
+            audit_task_title=str(audit_task_title or "").strip() or None,
+            audit_by=str(audit_by or "").strip() or None,
+            audit_agent_instance=audit_instance,
+            dispatch_reason=str(dispatch_reason or "").strip() or None,
+            planned_dispatch_id=str(planned_dispatch_id or "").strip() or None,
+            planned_dispatched_at=str(planned_dispatched_at or "").strip() or None,
+            repo_root=resolved_root,
+            dry_run=dry_run,
+        )
+        if dry_run:
+            return _attach_controlled_execute_metadata(
+                operation="audit_dispatch",
+                actor=actor_text,
+                response=response,
+                execute_allowed=response.get("verdict") != "BLOCK",
+            )
+        if response.get("verdict") == "BLOCK":
+            return response
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        (resolved_root / str(data.get("target_path") or "")).write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
+        audit_path = resolved_root / str(data.get("audit_task_path") or "")
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        audit_path.write_text(str(data.get("audit_task_markdown") or ""), encoding="utf-8")
+        performed = [{"path": data.get("target_path"), "kind": "update", "type": "task_markdown"}, {"path": data.get("audit_task_path"), "kind": "create", "type": "task_markdown"}]
+        for preview in data.get("record_previews", []):
+            path = resolved_root / str(preview.get("path") or "")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(preview.get("rendered_markdown") or ""), encoding="utf-8")
+            performed.append({"path": str(preview.get("path")), "kind": "create", "type": "record_markdown", "record_type": preview.get("record_type")})
+        response["dry_run"] = False
+        response["data"]["wrote"] = True
+        response["performed_writes"] = performed
+        response["owner_confirmation_required"] = False
+        response["owner_confirmation_reasons"] = []
+        return response
+    except Exception as exc:
+        return _normalize_exception("audit_dispatch", exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def _build_audit_verdict_preview(
+    *,
+    audit_task_id: str | None,
+    audit_task_path: str | Path | None,
+    reviewed_task_id: str,
+    actor: str,
+    agent_instance: str,
+    owner_policy_ref: str,
+    audit_claim_id: str | None,
+    audit_session_id: str | None,
+    audit_dispatch_record_ref: str | None,
+    reviewed_return_record_ref: str | None,
+    verdict_value: str,
+    findings_summary: str | None,
+    evidence_refs: list[str],
+    recommended_next_action: str | None,
+    owner_waiver_ref: str | None,
+    repo_root: Path,
+    dry_run: bool,
+    planned_verdict_id: str | None = None,
+    planned_verdict_at: str | None = None,
+) -> dict[str, Any]:
+    audit_task = _select_task(repo_root, task_id=audit_task_id, path=audit_task_path)
+    audit_rel = str(audit_task.get("path") or "")
+    audit_file = repo_root / audit_rel
+    audit_metadata, audit_body, audit_parse_warnings = parse_markdown_frontmatter(audit_file.read_text(encoding="utf-8"))
+    audit_metadata = _normalize_return_value(audit_metadata)
+    reviewed_task = _select_task(repo_root, task_id=reviewed_task_id, path=None)
+    reviewed_rel = str(reviewed_task.get("path") or "")
+    reviewed_file = repo_root / reviewed_rel
+    reviewed_metadata, reviewed_body, reviewed_parse_warnings = parse_markdown_frontmatter(reviewed_file.read_text(encoding="utf-8"))
+    reviewed_metadata = _normalize_return_value(reviewed_metadata)
+    tasks = load_all_tasks(repo_root)
+    records = load_records(repo_root)
+    profiles = load_agent_profiles(repo_root)
+    audit_validated = validate_single_task(audit_task, tasks=tasks, current_actor=actor, records=records, profiles=profiles)
+    reviewed_validated = validate_single_task(reviewed_task, tasks=tasks, records=records, profiles=profiles)
+
+    blocking_reasons = [*list(audit_validated.get("blocking_reasons", [])), *list(reviewed_validated.get("blocking_reasons", []))]
+    warnings = [
+        *list(audit_validated.get("warnings", [])),
+        *list(reviewed_validated.get("warnings", [])),
+        *audit_parse_warnings,
+        *reviewed_parse_warnings,
+    ]
+    resolved = resolve_instance_id(agent_instance, profiles)
+    canonical_agent_instance = str(resolved.get("canonical_instance_id") or "").strip()
+    if resolved.get("resolution") == "ambiguous" or not canonical_agent_instance:
+        blocking_reasons.append("INSTANCE_REQUIRED: agent_instance must resolve to one canonical concrete instance")
+    if actor != canonical_agent_instance:
+        blocking_reasons.append("INSTANCE_MISMATCH: actor must equal canonical agent_instance for Supervised MCP audit_verdict")
+
+    normalized_verdict = verdict_value.upper().strip()
+    if normalized_verdict == "CHANGES":
+        normalized_verdict = "REQUEST_CHANGES"
+    if normalized_verdict not in {"PASS", "FAIL", "REQUEST_CHANGES", "BLOCKED", "WAIVED"}:
+        blocking_reasons.append("INVALID_VERDICT: verdict must be PASS, FAIL, REQUEST_CHANGES, BLOCKED, or WAIVED")
+    if normalized_verdict == "WAIVED" and not str(owner_waiver_ref or "").strip():
+        blocking_reasons.append("WAIVER_REQUIRES_OWNER_EVIDENCE: owner_waiver_ref is required for WAIVED")
+
+    if audit_task.get("queue_state") != "claimed" or audit_metadata.get("status") != "claimed":
+        blocking_reasons.append("AUDIT_TASK_NOT_CLAIMED: audit task must be claimed")
+    if audit_metadata.get("reviewed_task_id") != reviewed_task.get("task_id"):
+        blocking_reasons.append("REVIEWED_TASK_MISMATCH: audit task reviewed_task_id does not match request")
+    if audit_claim_id and str(audit_metadata.get("claim_id") or "") != audit_claim_id:
+        blocking_reasons.append("AUDIT_CLAIM_MISMATCH: audit_claim_id does not match audit task")
+    if audit_session_id and str(audit_metadata.get("active_session_id") or "") != audit_session_id:
+        blocking_reasons.append("AUDIT_SESSION_MISMATCH: audit_session_id does not match audit task")
+
+    reviewed_executor_instance = str(audit_metadata.get("reviewed_executor_instance") or reviewed_metadata.get("executor_completed_by") or "").strip()
+    if not reviewed_executor_instance:
+        blocking_reasons.append("MISSING_EXECUTOR_INSTANCE: reviewed executor instance is required")
+    if reviewed_executor_instance and canonical_agent_instance == reviewed_executor_instance:
+        blocking_reasons.append("INDEPENDENCE_FAILED: auditor must be distinct from reviewed_executor_instance")
+
+    dispatch_ref = str(audit_dispatch_record_ref or audit_metadata.get("audit_dispatch_record_ref") or reviewed_metadata.get("audit_dispatch_record_ref") or "").strip()
+    if not dispatch_ref:
+        blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: audit dispatch record ref is required")
+    elif not records.get("audit_dispatch_index", {}).get(dispatch_ref):
+        blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: dispatch ref does not resolve to a record")
+    return_ref = str(reviewed_return_record_ref or audit_metadata.get("reviewed_return_record_ref") or reviewed_metadata.get("return_record_ref") or reviewed_metadata.get("return_event_ref") or "").strip()
+    if not return_ref:
+        blocking_reasons.append("MISSING_RETURN_RECORD: reviewed return record ref is required")
+    elif not records.get("return_index", {}).get(return_ref):
+        blocking_reasons.append("MISSING_RETURN_RECORD: reviewed return record ref does not resolve to a record")
+    session_id = str(audit_session_id or audit_metadata.get("active_session_id") or "").strip()
+    if not session_id:
+        blocking_reasons.append("MISSING_AUDIT_SESSION_RECORD: audit session id is required")
+    session_path = session_record_path(repo_root, str(audit_task.get("task_id") or ""), session_id) if session_id else None
+    if session_path is None or not session_path.exists():
+        blocking_reasons.append("MISSING_AUDIT_SESSION_RECORD: audit session record does not exist")
+
+    if any(_unsafe_return_ref(ref) for ref in evidence_refs):
+        blocking_reasons.append("Audit evidence refs must be repo-relative or approved workspace-relative and secret-free")
+    if normalized_verdict == "PASS" and not (findings_summary or evidence_refs):
+        blocking_reasons.append("MISSING_VERDICT_EVIDENCE: PASS requires findings_summary or evidence_refs")
+
+    timestamp = planned_verdict_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    verdict_id = planned_verdict_id or build_runtime_id("verdict", str(reviewed_task.get("task_id") or ""), timestamp, canonical_agent_instance or actor)
+    verdict_path = audit_verdict_record_path(repo_root, str(reviewed_task.get("task_id") or ""), verdict_id)
+    verdict_rel = str(verdict_path.relative_to(repo_root))
+    if verdict_path.exists():
+        blocking_reasons.append(f"Audit verdict record already exists: {verdict_rel}")
+
+    updated_reviewed = dict(reviewed_metadata)
+    updated_reviewed["related_audit_verdict_ref"] = verdict_id
+    updated_reviewed["audit_verdict"] = normalized_verdict
+    updated_reviewed["audit_verdict_at"] = timestamp
+    updated_reviewed["audit_verdict_by"] = canonical_agent_instance or actor
+    if normalized_verdict == "PASS":
+        updated_reviewed["dependency_audit_status"] = "PASS"
+        updated_reviewed["audit_status"] = "PASS"
+    else:
+        updated_reviewed["dependency_audit_status"] = normalized_verdict
+        updated_reviewed["audit_status"] = normalized_verdict
+    reviewed_markdown = render_task_markdown(updated_reviewed, reviewed_body)
+
+    updated_audit = dict(audit_metadata)
+    updated_audit["audit_verdict"] = normalized_verdict
+    updated_audit["related_audit_verdict_ref"] = verdict_id
+    updated_audit["audit_verdict_at"] = timestamp
+    updated_audit["audit_verdict_by"] = canonical_agent_instance or actor
+    audit_markdown = render_task_markdown(updated_audit, audit_body)
+
+    verdict_markdown = build_mcp_audit_verdict_record_markdown(
+        verdict_id=verdict_id,
+        verdict=normalized_verdict,
+        reviewed_task_id=str(reviewed_task.get("task_id") or ""),
+        reviewed_task_path=reviewed_rel,
+        reviewed_return_record_ref=return_ref,
+        audit_dispatch_record_ref=dispatch_ref,
+        audit_task_id=str(audit_task.get("task_id") or ""),
+        audit_task_path=audit_rel,
+        audit_claim_id=str(audit_metadata.get("claim_id") or audit_claim_id or ""),
+        audit_session_id=session_id,
+        reviewed_executor_instance=reviewed_executor_instance,
+        auditor_instance=canonical_agent_instance,
+        actor=actor,
+        canonical_agent_instance=canonical_agent_instance,
+        owner_policy_ref=owner_policy_ref,
+        verdict_at=timestamp,
+        findings_summary=findings_summary,
+        evidence_refs=evidence_refs,
+        recommended_next_action=recommended_next_action,
+    )
+    session_markdown = ""
+    session_rel = str(session_path.relative_to(repo_root)) if session_path else ""
+    if session_path and session_path.exists():
+        existing_metadata, existing_body, parse_warnings = load_session_record(session_path)
+        for warning in parse_warnings:
+            blocking_reasons.append(f"Audit session record parse issue: {warning}")
+        session_markdown = append_mcp_audit_verdict_session_event(
+            existing_metadata,
+            existing_body,
+            actor=actor,
+            canonical_agent_instance=canonical_agent_instance,
+            owner_policy_ref=owner_policy_ref,
+            timestamp=timestamp,
+            verdict_id=verdict_id,
+            verdict=normalized_verdict,
+        )
+
+    data = {
+        "task_id": reviewed_task.get("task_id"),
+        "source_path": reviewed_rel,
+        "target_path": reviewed_rel,
+        "from_state": str(reviewed_metadata.get("status") or reviewed_task.get("queue_state")),
+        "to_state": str(updated_reviewed.get("status") or reviewed_task.get("queue_state")),
+        "would_write": not blocking_reasons,
+        "would_move": False,
+        "updated_frontmatter": updated_reviewed,
+        "rendered_markdown": reviewed_markdown,
+        "target_file_state": _target_file_state(repo_root, reviewed_rel),
+        "audit_task_id": audit_task.get("task_id"),
+        "audit_task_path": audit_rel,
+        "audit_task_markdown": audit_markdown,
+        "audit_task_metadata": updated_audit,
+        "verdict_id": verdict_id,
+        "verdict": normalized_verdict,
+        "audit_verdict_record_path": verdict_rel,
+        "audit_session_record_path": session_rel,
+        "record_writes": [_mcp_record_write_plan(verdict_rel, "audit_verdict_record", would_write=not blocking_reasons)],
+        "record_updates": [_mcp_record_write_plan(session_rel, "session_record", would_update=not blocking_reasons)] if session_rel else [],
+        "record_previews": [
+            {"path": verdict_rel, "record_type": "audit_verdict_record", "rendered_markdown": verdict_markdown},
+            {"path": session_rel, "record_type": "session_record", "rendered_markdown": session_markdown},
+        ],
+        "owner_policy_ref": owner_policy_ref,
+        "canonical_agent_instance": canonical_agent_instance,
+        "reviewed_executor_instance": reviewed_executor_instance,
+        "reviewed_return_record_ref": return_ref,
+        "audit_dispatch_record_ref": dispatch_ref,
+        "original_payload": {
+            "audit_task_id": audit_task_id,
+            "audit_task_path": str(audit_task_path) if audit_task_path is not None else None,
+            "reviewed_task_id": reviewed_task_id,
+            "actor": actor,
+            "agent_instance": agent_instance,
+            "owner_policy_ref": owner_policy_ref,
+            "audit_claim_id": audit_claim_id,
+            "audit_session_id": audit_session_id,
+            "audit_dispatch_record_ref": audit_dispatch_record_ref,
+            "reviewed_return_record_ref": reviewed_return_record_ref,
+            "verdict": verdict_value,
+            "findings_summary": findings_summary,
+            "evidence_refs": evidence_refs,
+            "recommended_next_action": recommended_next_action,
+            "owner_waiver_ref": owner_waiver_ref,
+            "planned_verdict_id": verdict_id,
+            "planned_verdict_at": timestamp,
+        },
+    }
+    verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)
+    response = make_response(
+        ok=True,
+        verdict=verdict,
+        operation="audit_verdict",
+        dry_run=dry_run,
+        actor=_actor_payload(actor),
+        data=data,
+        summary={"reviewed_task_id": reviewed_task.get("task_id"), "audit_task_id": audit_task.get("task_id"), "verdict": normalized_verdict},
+        planned_writes=[
+            {"path": reviewed_rel, "kind": "update", "type": "task_markdown"},
+            {"path": audit_rel, "kind": "update", "type": "task_markdown"},
+            {"path": verdict_rel, "kind": "create", "type": "record_markdown", "record_type": "audit_verdict_record"},
+            {"path": session_rel, "kind": "update", "type": "record_markdown", "record_type": "session_record"},
+        ],
+        planned_moves=[],
+        warnings=warnings,
+        blocking_reasons=blocking_reasons,
+        needs_owner_reasons=[],
+        owner_confirmation_required=verdict != "BLOCK",
+        owner_confirmation_reasons=_verdict_owner_reasons() if verdict != "BLOCK" else [],
+        safety_notice=CONTROLLED_EXECUTE_NOTICE,
+        errors=[],
+    )
+    return response
+
+
+def audit_verdict_task(
+    *,
+    audit_task_id: str | None = None,
+    audit_task_path: str | Path | None = None,
+    reviewed_task_id: str | None = None,
+    actor: str | None = None,
+    agent_instance: str | None = None,
+    owner_policy_ref: str | None = None,
+    audit_claim_id: str | None = None,
+    audit_session_id: str | None = None,
+    audit_dispatch_record_ref: str | None = None,
+    reviewed_return_record_ref: str | None = None,
+    verdict: str | None = None,
+    findings_summary: str | None = None,
+    evidence_refs: Any = None,
+    recommended_next_action: str | None = None,
+    owner_waiver_ref: str | None = None,
+    planned_verdict_id: str | None = None,
+    planned_verdict_at: str | None = None,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+) -> dict[str, Any]:
+    try:
+        actor_text = str(actor or "").strip()
+        instance_text = str(agent_instance or "").strip()
+        policy_ref = str(owner_policy_ref or "").strip()
+        reviewed_id = str(reviewed_task_id or "").strip()
+        verdict_text = str(verdict or "").strip()
+        if not actor_text:
+            raise ValueError("actor is required")
+        if not instance_text:
+            raise ValueError("agent_instance is required")
+        if not policy_ref:
+            raise ValueError("owner_policy_ref is required")
+        if not reviewed_id:
+            raise ValueError("reviewed_task_id is required")
+        if not verdict_text:
+            raise ValueError("verdict is required")
+        resolved_root = _resolve_repo_root(repo_root)
+        response = _build_audit_verdict_preview(
+            audit_task_id=audit_task_id,
+            audit_task_path=audit_task_path,
+            reviewed_task_id=reviewed_id,
+            actor=actor_text,
+            agent_instance=instance_text,
+            owner_policy_ref=policy_ref,
+            audit_claim_id=str(audit_claim_id or "").strip() or None,
+            audit_session_id=str(audit_session_id or "").strip() or None,
+            audit_dispatch_record_ref=str(audit_dispatch_record_ref or "").strip() or None,
+            reviewed_return_record_ref=str(reviewed_return_record_ref or "").strip() or None,
+            verdict_value=verdict_text,
+            findings_summary=str(findings_summary or "").strip() or None,
+            evidence_refs=_as_list(evidence_refs),
+            recommended_next_action=str(recommended_next_action or "").strip() or None,
+            owner_waiver_ref=str(owner_waiver_ref or "").strip() or None,
+            planned_verdict_id=str(planned_verdict_id or "").strip() or None,
+            planned_verdict_at=str(planned_verdict_at or "").strip() or None,
+            repo_root=resolved_root,
+            dry_run=dry_run,
+        )
+        if dry_run:
+            return _attach_controlled_execute_metadata(
+                operation="audit_verdict",
+                actor=actor_text,
+                response=response,
+                execute_allowed=response.get("verdict") != "BLOCK",
+            )
+        if response.get("verdict") == "BLOCK":
+            return response
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        (resolved_root / str(data.get("target_path") or "")).write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
+        (resolved_root / str(data.get("audit_task_path") or "")).write_text(str(data.get("audit_task_markdown") or ""), encoding="utf-8")
+        performed = [
+            {"path": data.get("target_path"), "kind": "update", "type": "task_markdown"},
+            {"path": data.get("audit_task_path"), "kind": "update", "type": "task_markdown"},
+        ]
+        for preview in data.get("record_previews", []):
+            path = resolved_root / str(preview.get("path") or "")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(preview.get("rendered_markdown") or ""), encoding="utf-8")
+            kind = "create" if preview.get("record_type") == "audit_verdict_record" else "update"
+            performed.append({"path": str(preview.get("path")), "kind": kind, "type": "record_markdown", "record_type": preview.get("record_type")})
+        response["dry_run"] = False
+        response["data"]["wrote"] = True
+        response["performed_writes"] = performed
+        response["owner_confirmation_required"] = False
+        response["owner_confirmation_reasons"] = []
+        return response
+    except Exception as exc:
+        return _normalize_exception("audit_verdict", exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
 def _append_response(
     *,
     operation: str,
@@ -1942,6 +2618,8 @@ def execute_dry_run(
             "draft_publish",
             "queue_claim",
             "queue_return",
+            "audit_dispatch",
+            "audit_verdict",
             "orchestration_event_append",
             "planner_iteration_append",
             "intake_submit",
@@ -2026,6 +2704,47 @@ def execute_dry_run(
                 dry_run=True,
                 repo_root=resolved_root,
                 mcp_return_metadata=mcp_return_metadata,
+            )
+        elif op == "audit_dispatch":
+            payload = source_data.get("original_payload") or {}
+            current = audit_dispatch_task(
+                source_task_id=payload.get("source_task_id"),
+                source_path=payload.get("source_path"),
+                actor=actor_text,
+                agent_instance=payload.get("agent_instance"),
+                owner_policy_ref=payload.get("owner_policy_ref"),
+                audit_task_id=payload.get("audit_task_id"),
+                audit_task_title=payload.get("audit_task_title"),
+                audit_by=payload.get("audit_by"),
+                audit_agent_instance=payload.get("audit_agent_instance"),
+                dispatch_reason=payload.get("dispatch_reason"),
+                planned_dispatch_id=payload.get("planned_dispatch_id"),
+                planned_dispatched_at=payload.get("planned_dispatched_at"),
+                dry_run=True,
+                repo_root=resolved_root,
+            )
+        elif op == "audit_verdict":
+            payload = source_data.get("original_payload") or {}
+            current = audit_verdict_task(
+                audit_task_id=payload.get("audit_task_id"),
+                audit_task_path=payload.get("audit_task_path"),
+                reviewed_task_id=payload.get("reviewed_task_id"),
+                actor=actor_text,
+                agent_instance=payload.get("agent_instance"),
+                owner_policy_ref=payload.get("owner_policy_ref"),
+                audit_claim_id=payload.get("audit_claim_id"),
+                audit_session_id=payload.get("audit_session_id"),
+                audit_dispatch_record_ref=payload.get("audit_dispatch_record_ref"),
+                reviewed_return_record_ref=payload.get("reviewed_return_record_ref"),
+                verdict=payload.get("verdict"),
+                findings_summary=payload.get("findings_summary"),
+                evidence_refs=payload.get("evidence_refs"),
+                recommended_next_action=payload.get("recommended_next_action"),
+                owner_waiver_ref=payload.get("owner_waiver_ref"),
+                planned_verdict_id=payload.get("planned_verdict_id"),
+                planned_verdict_at=payload.get("planned_verdict_at"),
+                dry_run=True,
+                repo_root=resolved_root,
             )
         elif op == TEMPLATE_OPERATION:
             payload = source_data.get("original_payload") or {}
@@ -2274,6 +2993,85 @@ def execute_dry_run(
                 dry_run=False,
                 repo_root=resolved_root,
                 mcp_return_metadata=mcp_return_metadata,
+            )
+            verdict = str(result.get("verdict") or "BLOCK")
+            return make_response(
+                ok=bool(result.get("data", {}).get("wrote", False)) if isinstance(result.get("data"), dict) else False,
+                verdict=verdict,
+                operation=op,
+                dry_run=False,
+                actor=_actor_payload(actor_text),
+                data=result.get("data"),
+                summary=result.get("summary"),
+                planned_writes=list(result.get("planned_writes", [])),
+                performed_writes=list(result.get("performed_writes", [])),
+                planned_moves=[],
+                performed_moves=[],
+                warnings=list(result.get("warnings", [])),
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                errors=[],
+            )
+
+        if op == "audit_dispatch":
+            payload = source_data.get("original_payload") or {}
+            result = audit_dispatch_task(
+                source_task_id=payload.get("source_task_id"),
+                source_path=payload.get("source_path"),
+                actor=actor_text,
+                agent_instance=payload.get("agent_instance"),
+                owner_policy_ref=payload.get("owner_policy_ref"),
+                audit_task_id=payload.get("audit_task_id"),
+                audit_task_title=payload.get("audit_task_title"),
+                audit_by=payload.get("audit_by"),
+                audit_agent_instance=payload.get("audit_agent_instance"),
+                dispatch_reason=payload.get("dispatch_reason"),
+                planned_dispatch_id=payload.get("planned_dispatch_id"),
+                planned_dispatched_at=payload.get("planned_dispatched_at"),
+                dry_run=False,
+                repo_root=resolved_root,
+            )
+            verdict = str(result.get("verdict") or "BLOCK")
+            return make_response(
+                ok=bool(result.get("data", {}).get("wrote", False)) if isinstance(result.get("data"), dict) else False,
+                verdict=verdict,
+                operation=op,
+                dry_run=False,
+                actor=_actor_payload(actor_text),
+                data=result.get("data"),
+                summary=result.get("summary"),
+                planned_writes=list(result.get("planned_writes", [])),
+                performed_writes=list(result.get("performed_writes", [])),
+                planned_moves=[],
+                performed_moves=[],
+                warnings=list(result.get("warnings", [])),
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                errors=[],
+            )
+
+        if op == "audit_verdict":
+            payload = source_data.get("original_payload") or {}
+            result = audit_verdict_task(
+                audit_task_id=payload.get("audit_task_id"),
+                audit_task_path=payload.get("audit_task_path"),
+                reviewed_task_id=payload.get("reviewed_task_id"),
+                actor=actor_text,
+                agent_instance=payload.get("agent_instance"),
+                owner_policy_ref=payload.get("owner_policy_ref"),
+                audit_claim_id=payload.get("audit_claim_id"),
+                audit_session_id=payload.get("audit_session_id"),
+                audit_dispatch_record_ref=payload.get("audit_dispatch_record_ref"),
+                reviewed_return_record_ref=payload.get("reviewed_return_record_ref"),
+                verdict=payload.get("verdict"),
+                findings_summary=payload.get("findings_summary"),
+                evidence_refs=payload.get("evidence_refs"),
+                recommended_next_action=payload.get("recommended_next_action"),
+                owner_waiver_ref=payload.get("owner_waiver_ref"),
+                planned_verdict_id=payload.get("planned_verdict_id"),
+                planned_verdict_at=payload.get("planned_verdict_at"),
+                dry_run=False,
+                repo_root=resolved_root,
             )
             verdict = str(result.get("verdict") or "BLOCK")
             return make_response(

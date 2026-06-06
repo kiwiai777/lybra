@@ -22,6 +22,8 @@ SUPPORTED_OPERATIONS = {
     "intake_submit",
     "owner_decision_record",
     "workspace_init",
+    "audit_dispatch",
+    "audit_verdict",
 }
 
 
