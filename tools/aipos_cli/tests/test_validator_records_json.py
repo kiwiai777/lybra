@@ -61,6 +61,9 @@ class ValidatorRecordsJsonTests(unittest.TestCase):
             "source_tag",
             "client_tag",
             "external_ref",
+            "reviewed_task_id",
+            "audit_dispatch_record_ref",
+            "related_audit_verdict_ref",
         )
         for key in optional_keys:
             if key in metadata and metadata[key] is not None:
@@ -221,6 +224,49 @@ Two
         self.assertTrue(any(item["kind"] == "duplicate_record_id" for item in diagnostics))
         self.assertTrue(any(item["kind"] == "task_id_mismatch" for item in diagnostics))
         self.assertTrue(any(item["severity"] == "needs_owner" for item in diagnostics))
+
+    def test_validate_json_allows_audit_task_cross_task_dispatch_and_verdict_refs(self) -> None:
+        self.write_task("AIPOS-AUDIT-01", reviewed_task_id="AIPOS-PRIMARY", audit_dispatch_record_ref="dispatch_AIPOS-PRIMARY_001", related_audit_verdict_ref="verdict_AIPOS-PRIMARY_001")
+        self.write_record(
+            "5_tasks/records/audit_dispatches/AIPOS-PRIMARY/dispatch_AIPOS-PRIMARY_001.md",
+            """---
+task_id: AIPOS-PRIMARY
+dispatch_id: dispatch_AIPOS-PRIMARY_001
+reviewed_task_id: AIPOS-PRIMARY
+audit_task_id: AIPOS-AUDIT-01
+dispatched_at: 2026-06-06T10:00:00Z
+---
+Dispatch
+""",
+        )
+        self.write_record(
+            "5_tasks/records/audit_verdicts/AIPOS-PRIMARY/verdict_AIPOS-PRIMARY_001.md",
+            """---
+task_id: AIPOS-PRIMARY
+verdict_id: verdict_AIPOS-PRIMARY_001
+reviewed_task_id: AIPOS-PRIMARY
+audit_task_id: AIPOS-AUDIT-01
+verdict: PASS
+verdict_at: 2026-06-06T10:30:00Z
+---
+Verdict
+""",
+        )
+
+        report = self.build_validate_json()
+        task = report["tasks"][0]
+        statuses = {item["field"]: item["status"] for item in task["record_ref_checks"]}
+
+        self.assertEqual(statuses["audit_dispatch_record_ref"], "ok")
+        self.assertEqual(statuses["related_audit_verdict_ref"], "ok")
+        self.assertNotIn(
+            "audit_dispatch_record_ref points to audit_dispatch record with mismatched task_id",
+            task["needs_owner_reasons"],
+        )
+        self.assertNotIn(
+            "related_audit_verdict_ref points to audit_verdict record with mismatched task_id",
+            task["needs_owner_reasons"],
+        )
 
 
 if __name__ == "__main__":

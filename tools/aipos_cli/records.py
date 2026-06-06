@@ -394,6 +394,9 @@ def _check_ref(
     record_id: Any,
     record_type: str,
     records: dict[str, Any],
+    *,
+    reviewed_task_id: str | None = None,
+    audit_task_id: str | None = None,
 ) -> dict[str, Any]:
     if not record_id:
         return {
@@ -418,6 +421,8 @@ def _check_ref(
         {
             "path": item.get("path"),
             "task_id": item.get("task_id"),
+            "reviewed_task_id": item.get("reviewed_task_id"),
+            "audit_task_id": item.get("audit_task_id"),
             "record_id": item.get("record_id"),
             "parse_errors": item.get("parse_errors", []),
         }
@@ -434,7 +439,16 @@ def _check_ref(
             "matches": [],
         }
 
-    if any(task_id and item.get("task_id") != task_id for item in matches):
+    if any(
+        not _record_ref_matches_task_context(
+            item,
+            task_id=task_id,
+            record_type=record_type,
+            reviewed_task_id=reviewed_task_id,
+            audit_task_id=audit_task_id,
+        )
+        for item in matches
+    ):
         return {
             "reference": ref_name,
             "record_type": record_type,
@@ -467,9 +481,38 @@ def _check_ref(
     }
 
 
+def _record_ref_matches_task_context(
+    record: dict[str, Any],
+    *,
+    task_id: str | None,
+    record_type: str,
+    reviewed_task_id: str | None,
+    audit_task_id: str | None,
+) -> bool:
+    if task_id and record.get("task_id") == task_id:
+        return True
+    if record_type not in {"audit_dispatch", "audit_verdict"}:
+        return False
+    if not (task_id and reviewed_task_id and audit_task_id):
+        return False
+    if record.get("task_id") != reviewed_task_id:
+        return False
+    if record.get("reviewed_task_id") != reviewed_task_id:
+        return False
+    record_audit_task_id = record.get("audit_task_id")
+    return not record_audit_task_id or record_audit_task_id == audit_task_id
+
+
 def check_task_record_refs(task: dict[str, Any], records: dict[str, Any]) -> dict[str, Any]:
     metadata = task.get("metadata", {})
     task_id = task.get("task_id") or metadata.get("task_id")
+    reviewed_task_id = metadata.get("reviewed_task_id")
+    audit_context = {}
+    if reviewed_task_id and reviewed_task_id != task_id:
+        audit_context = {
+            "reviewed_task_id": str(reviewed_task_id),
+            "audit_task_id": str(task_id),
+        }
     checks = [
         _check_ref("claim_id", task_id, metadata.get("claim_id"), "claim", records),
         _check_ref("active_session_id", task_id, metadata.get("active_session_id"), "session", records),
@@ -480,10 +523,14 @@ def check_task_record_refs(task: dict[str, Any], records: dict[str, Any]) -> dic
         checks.append(_check_ref("return_record_ref", task_id, return_ref, "return", records))
     dispatch_ref = metadata.get("audit_dispatch_record_ref")
     if dispatch_ref:
-        checks.append(_check_ref("audit_dispatch_record_ref", task_id, dispatch_ref, "audit_dispatch", records))
+        checks.append(
+            _check_ref("audit_dispatch_record_ref", task_id, dispatch_ref, "audit_dispatch", records, **audit_context)
+        )
     verdict_ref = metadata.get("related_audit_verdict_ref")
     if verdict_ref:
-        checks.append(_check_ref("related_audit_verdict_ref", task_id, verdict_ref, "audit_verdict", records))
+        checks.append(
+            _check_ref("related_audit_verdict_ref", task_id, verdict_ref, "audit_verdict", records, **audit_context)
+        )
 
     warnings = [item["message"] for item in checks if item["level"] == "warn"]
     needs_owner_reasons = [item["message"] for item in checks if item["level"] == "needs_owner"]

@@ -216,6 +216,81 @@ Two
             report["needs_owner_reasons"],
         )
 
+    def test_audit_task_can_reference_reviewed_task_dispatch_and_verdict_records(self) -> None:
+        self.write_record(
+            "5_tasks/records/audit_dispatches/AIPOS-PRIMARY/dispatch_AIPOS-PRIMARY_001.md",
+            """---
+task_id: AIPOS-PRIMARY
+dispatch_id: dispatch_AIPOS-PRIMARY_001
+reviewed_task_id: AIPOS-PRIMARY
+audit_task_id: AIPOS-AUDIT-01
+dispatched_at: 2026-06-06T10:00:00Z
+---
+Dispatch
+""",
+        )
+        self.write_record(
+            "5_tasks/records/audit_verdicts/AIPOS-PRIMARY/verdict_AIPOS-PRIMARY_001.md",
+            """---
+task_id: AIPOS-PRIMARY
+verdict_id: verdict_AIPOS-PRIMARY_001
+reviewed_task_id: AIPOS-PRIMARY
+audit_task_id: AIPOS-AUDIT-01
+verdict: PASS
+verdict_at: 2026-06-06T10:30:00Z
+---
+Verdict
+""",
+        )
+
+        records = load_records(self.repo_root)
+        report = check_task_record_refs(
+            self.make_task(
+                "AIPOS-AUDIT-01",
+                reviewed_task_id="AIPOS-PRIMARY",
+                audit_dispatch_record_ref="dispatch_AIPOS-PRIMARY_001",
+                related_audit_verdict_ref="verdict_AIPOS-PRIMARY_001",
+            ),
+            records,
+        )
+
+        statuses = {item["reference"]: item["status"] for item in report["checks"]}
+        self.assertEqual(statuses["audit_dispatch_record_ref"], "ok")
+        self.assertEqual(statuses["related_audit_verdict_ref"], "ok")
+        self.assertEqual(report["needs_owner_reasons"], [])
+
+    def test_audit_task_cross_task_record_refs_still_reject_wrong_audit_task(self) -> None:
+        self.write_record(
+            "5_tasks/records/audit_dispatches/AIPOS-PRIMARY/dispatch_AIPOS-PRIMARY_001.md",
+            """---
+task_id: AIPOS-PRIMARY
+dispatch_id: dispatch_AIPOS-PRIMARY_001
+reviewed_task_id: AIPOS-PRIMARY
+audit_task_id: AIPOS-AUDIT-OTHER
+dispatched_at: 2026-06-06T10:00:00Z
+---
+Dispatch
+""",
+        )
+
+        records = load_records(self.repo_root)
+        report = check_task_record_refs(
+            self.make_task(
+                "AIPOS-AUDIT-01",
+                reviewed_task_id="AIPOS-PRIMARY",
+                audit_dispatch_record_ref="dispatch_AIPOS-PRIMARY_001",
+            ),
+            records,
+        )
+
+        dispatch_check = next(item for item in report["checks"] if item["reference"] == "audit_dispatch_record_ref")
+        self.assertEqual(dispatch_check["status"], "conflict")
+        self.assertEqual(dispatch_check["level"], "needs_owner")
+        self.assertIn(
+            "audit_dispatch_record_ref points to audit_dispatch record with mismatched task_id",
+            report["needs_owner_reasons"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
