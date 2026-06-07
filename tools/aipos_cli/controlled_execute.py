@@ -76,16 +76,19 @@ def _normalize_for_hash(value: Any) -> Any:
     return value
 
 
-def _stable_planned_writes(items: Any) -> list[dict[str, Any]]:
+def _stable_planned_writes(items: Any, *, operation: str | None = None) -> list[dict[str, Any]]:
     stable: list[dict[str, Any]] = []
     if not isinstance(items, list):
         return stable
     for item in items:
         if not isinstance(item, dict):
             continue
+        path = _normalize_relpath(item.get("path"))
+        if operation == "queue_return" and item.get("record_type") == "return_record":
+            path = None
         stable.append(
             {
-                "path": _normalize_relpath(item.get("path")),
+                "path": path,
                 "kind": item.get("kind"),
                 "type": item.get("type"),
                 "record_type": item.get("record_type"),
@@ -114,6 +117,10 @@ def _stable_planned_moves(items: Any) -> list[dict[str, Any]]:
 
 def build_snapshot_payload(operation: str, actor: str, plan: dict[str, Any]) -> dict[str, Any]:
     data = plan.get("data") or {}
+    original_payload = _normalize_for_hash(data.get("original_payload"))
+    if operation == "queue_return" and isinstance(original_payload, dict):
+        original_payload = dict(original_payload)
+        original_payload.pop("planned_returned_at", None)
     payload = {
         "operation": operation,
         "actor": actor,
@@ -127,12 +134,12 @@ def build_snapshot_payload(operation: str, actor: str, plan: dict[str, Any]) -> 
             "to": data.get("to_state"),
         },
         "frontmatter_status": ((data.get("updated_frontmatter") or {}).get("status") if isinstance(data.get("updated_frontmatter"), dict) else None),
-        "planned_writes": _stable_planned_writes(plan.get("planned_writes", [])),
+        "planned_writes": _stable_planned_writes(plan.get("planned_writes", []), operation=operation),
         "planned_moves": _stable_planned_moves(plan.get("planned_moves", [])),
         "target_path": _normalize_relpath(data.get("target_path")),
         "event_entry": _normalize_for_hash(data.get("event_entry")),
         "iteration_entry": _normalize_for_hash(data.get("iteration_entry")),
-        "original_payload": _normalize_for_hash(data.get("original_payload")),
+        "original_payload": original_payload,
         "write_snapshot_hash": data.get("write_snapshot_hash"),
         "target_file_state": _normalize_for_hash(data.get("target_file_state")),
         "with_records": bool(data.get("with_records", False)),

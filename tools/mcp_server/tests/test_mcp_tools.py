@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 import json
 from io import StringIO
@@ -882,6 +883,77 @@ class McpToolTests(unittest.TestCase):
         recovery = build_state_recovery_preview(self.repo_root, task_id="AIPOS-MCP-RETURN")
         self.assertEqual(recovery["provenance_completeness"], "complete")
         self.assertEqual(recovery["provenance_chain"]["return"]["record_status"], "ok")
+
+    def test_queue_return_confirm_reuses_planned_timestamp_for_stable_snapshot(self) -> None:
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            time.sleep(1.1)
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+
+        self.assertTrue(confirmed["ok"])
+        self.assertNotIn("error_code", confirmed)
+
+    def test_queue_return_dry_run_snapshot_ignores_generated_return_timestamp(self) -> None:
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            first = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            time.sleep(1.1)
+            second = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+
+        self.assertNotEqual(
+            first["data"]["original_payload"]["planned_returned_at"],  # type: ignore[index]
+            second["data"]["original_payload"]["planned_returned_at"],  # type: ignore[index]
+        )
+        self.assertEqual(first["dry_run_snapshot_hash"], second["dry_run_snapshot_hash"])
+
+    def test_queue_return_confirm_blocks_when_claimed_task_changes_after_dry_run(self) -> None:
+        self.write_return_task()
+        task_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md"
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            task_path.write_text(task_path.read_text(encoding="utf-8") + "\nStale source mutation.\n", encoding="utf-8")
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+
+        self.assertEqual(blocked["error_code"], "SNAPSHOT_MISMATCH")
+        text = task_path.read_text(encoding="utf-8")
+        self.assertNotIn("executor_status: completed", text)
+        records = load_records(self.repo_root)
+        self.assertEqual(records["summary"]["return_records"], 0)
 
     def test_queue_return_blocks_wrong_claimant_and_forbidden_fields(self) -> None:
         self.write_return_task()

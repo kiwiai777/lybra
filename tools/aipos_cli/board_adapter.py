@@ -1581,6 +1581,7 @@ def _build_return_preview(
     return_reason: str | None,
     repo_root: Path,
     dry_run: bool,
+    planned_returned_at: str | None = None,
     mcp_return_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected_task_id, selected_path = _select_task_input(task_id, path)
@@ -1632,7 +1633,8 @@ def _build_return_preview(
     updated_metadata["status"] = "claimed"
     updated_metadata["executor_status"] = "completed"
     updated_metadata["executor_completed_by"] = canonical_agent_instance or actor
-    updated_metadata["executor_completed_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    returned_at = planned_returned_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    updated_metadata["executor_completed_at"] = returned_at
     updated_metadata["audit_readiness"] = "ready"
     updated_metadata["audit_status"] = str(updated_metadata.get("audit_status") or "pending")
     updated_metadata["dependency_executor_status"] = "completed"
@@ -1716,6 +1718,7 @@ def _build_return_preview(
             "artifact_refs": artifact_refs,
             "completion_report_ref": completion_report_ref,
             "return_reason": return_reason,
+            "planned_returned_at": returned_at,
         },
         "lease_preview": {
             "lease_path": "claim_only",
@@ -1779,6 +1782,7 @@ def return_task(
     artifact_refs: Any = None,
     completion_report_ref: str | None = None,
     return_reason: str | None = None,
+    planned_returned_at: str | None = None,
     dry_run: bool = True,
     repo_root: str | Path | None = None,
     mcp_return_metadata: dict[str, Any] | None = None,
@@ -1811,6 +1815,7 @@ def return_task(
             artifact_refs=refs,
             completion_report_ref=completion_ref or None,
             return_reason=str(return_reason or "").strip() or None,
+            planned_returned_at=str(planned_returned_at or "").strip() or None,
             repo_root=resolved_root,
             dry_run=dry_run,
             mcp_return_metadata=mcp_return_metadata,
@@ -2701,6 +2706,7 @@ def execute_dry_run(
                 artifact_refs=payload.get("artifact_refs"),
                 completion_report_ref=payload.get("completion_report_ref"),
                 return_reason=payload.get("return_reason"),
+                planned_returned_at=payload.get("planned_returned_at"),
                 dry_run=True,
                 repo_root=resolved_root,
                 mcp_return_metadata=mcp_return_metadata,
@@ -2990,6 +2996,7 @@ def execute_dry_run(
                 artifact_refs=payload.get("artifact_refs"),
                 completion_report_ref=payload.get("completion_report_ref"),
                 return_reason=payload.get("return_reason"),
+                planned_returned_at=payload.get("planned_returned_at"),
                 dry_run=False,
                 repo_root=resolved_root,
                 mcp_return_metadata=mcp_return_metadata,
