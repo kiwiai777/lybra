@@ -294,7 +294,15 @@ def _config_defaults(workspace_root: Path) -> dict[str, Any]:
 
 
 def _resolve_workspace_for_command(args: argparse.Namespace) -> Path:
-    return resolve_workspace_root(explicit_root=getattr(args, "workspace_root", None))
+    explicit_root = getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None)
+    return resolve_workspace_root(explicit_root=explicit_root)
+
+
+def _find_repo_root_for_args(args: argparse.Namespace) -> Path:
+    explicit_root = getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None)
+    if explicit_root:
+        return resolve_workspace_root(explicit_root=explicit_root)
+    return find_repo_root()
 
 
 def _run_board_command(args: argparse.Namespace) -> int:
@@ -674,6 +682,7 @@ def _resolve_task_selection(args: argparse.Namespace, tasks: list[dict[str, Any]
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI Project OS CLI")
+    parser.add_argument("--workspace-root", dest="global_workspace_root", help="Workspace root; may also be provided on supported subcommands")
     subparsers = parser.add_subparsers(dest="command")
 
     init_parser = subparsers.add_parser("init", help="Initialize a Lybra workspace from a bundled template")
@@ -957,7 +966,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "draft":
         try:
-            repo_root = find_repo_root()
+            repo_root = _find_repo_root_for_args(args)
         except FileNotFoundError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
@@ -1095,7 +1104,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if result.get("verdict") == "BLOCK" else 0
 
     try:
-        repo_root = find_repo_root()
+        repo_root = _find_repo_root_for_args(args)
     except FileNotFoundError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

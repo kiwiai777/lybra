@@ -121,6 +121,50 @@ created_at: 2026-06-05T01:00:00Z
         )
         self.assertIn("Create or run the separately gated independent audit path", result["recommended_next_action"])
 
+    def test_claim_owner_policy_ref_is_recovered_from_linked_records(self) -> None:
+        self.write_task(
+            "claimed",
+            "aipos-188-owner-policy.md",
+            """task_id: AIPOS-188-OWNER-POLICY
+title: Claim policy provenance
+status: claimed
+agent_instance: agent-01
+claimed_by: agent-01
+claim_id: claim_AIPOS-188-OWNER-POLICY_001_agent-01
+active_session_id: session_AIPOS-188-OWNER-POLICY_001_agent-01
+executor_status: completed
+audit_readiness: ready
+dependency_audit_status: pending
+result_summary: Work returned.
+""",
+        )
+        self.write_record(
+            "5_tasks/records/claims/AIPOS-188-OWNER-POLICY/claim_AIPOS-188-OWNER-POLICY_001_agent-01.md",
+            """task_id: AIPOS-188-OWNER-POLICY
+record_type: claim_record
+claim_id: claim_AIPOS-188-OWNER-POLICY_001_agent-01
+session_id: session_AIPOS-188-OWNER-POLICY_001_agent-01
+claimed_by: agent-01
+claimed_at: 2026-06-07T01:00:00Z
+owner_policy_ref: owner_policy:aipos-188
+""",
+        )
+        self.write_record(
+            "5_tasks/records/sessions/AIPOS-188-OWNER-POLICY/session_AIPOS-188-OWNER-POLICY_001_agent-01.md",
+            """task_id: AIPOS-188-OWNER-POLICY
+record_type: session_record
+session_id: session_AIPOS-188-OWNER-POLICY_001_agent-01
+claim_id: claim_AIPOS-188-OWNER-POLICY_001_agent-01
+session_status: claimed
+created_at: 2026-06-07T01:00:00Z
+owner_policy_ref: owner_policy:aipos-188
+""",
+        )
+
+        result = build_state_recovery_preview(self.repo_root, task_id="AIPOS-188-OWNER-POLICY")
+
+        self.assertEqual(result["provenance_chain"]["claim"]["owner_policy_ref"], "owner_policy:aipos-188")
+
     def test_status_contradiction_blocks_recovery_preview(self) -> None:
         self.write_task(
             "claimed",

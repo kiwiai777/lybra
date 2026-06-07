@@ -139,6 +139,13 @@ class InstanceIdentityTests(unittest.TestCase):
         self.assertEqual(runtime["matched_instance"], "agent-02")
         self.assertEqual(runtime["runtime_profile"], "audit")
 
+    def test_unknown_actor_availability_warning_explains_no_heartbeat_tracking(self) -> None:
+        runtime = runtime_config_for_actor("missing-agent", self.profiles)
+
+        self.assertEqual(runtime["actor_availability_status"], "unknown")
+        self.assertIn("does not track live agent presence or heartbeat state", runtime["availability_warning"])
+        self.assertIn("gate-not-engine", runtime["availability_warning"])
+
     def test_default_independence_uses_distinct_canonical_ids(self) -> None:
         passed = evaluate_instance_independence("legacy.primary", "agent-02", self.profiles)
         blocked = evaluate_instance_independence("legacy.primary", "agent-01", self.profiles)

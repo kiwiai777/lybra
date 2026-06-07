@@ -80,6 +80,20 @@ class CliErgonomicsTests(unittest.TestCase):
         self.assertNotIn("queue_claim", result["server_env"]["LYBRA_CAPABILITY_TOKEN"])
         self.assertTrue(result["fingerprints"]["LYBRA_MCP_TOKEN"].startswith("sha256:"))
 
+    def test_global_workspace_root_is_accepted_before_subcommand(self) -> None:
+        workspace = self._make_workspace()
+        env = {
+            "LYBRA_MCP_TOKEN": "secret-transport-token",
+            "LYBRA_CAPABILITY_TOKEN": json.dumps({"token_ref": "dev", "operations": ["queue_claim"]}),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            code, raw = self._run_cli(["--workspace-root", str(workspace), "mcp-config", "--json"])
+        result = json.loads(raw)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(result["workspace_root"], str(workspace.resolve()))
+        self.assertEqual(result["endpoint"], "http://127.0.0.1:7118/mcp")
+
     def test_board_wrapper_uses_workspace_discovery_and_config_defaults(self) -> None:
         workspace = self._make_workspace()
         with patch("web.board.app.run_server") as run_server:

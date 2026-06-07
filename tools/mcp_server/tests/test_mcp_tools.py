@@ -720,6 +720,7 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual(blocked["error_code"], "OWNER_CONFIRMATION_REQUIRED")
         self.assertTrue(confirmed["ok"])
         self.assertEqual(confirmed["lease_status"], "proposed")
+        self.assertTrue(all(item["wrote"] for item in confirmed["data"]["record_writes"]))  # type: ignore[index]
         self.assertTrue((self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-claim.md").exists())
         self.assertFalse((self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-mcp-claim.md").exists())
         records = load_records(self.repo_root)
@@ -853,6 +854,7 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual(blocked["error_code"], "OWNER_CONFIRMATION_REQUIRED")
         self.assertTrue(confirmed["ok"])
         self.assertEqual(confirmed["lease_status"], "proposed")
+        self.assertTrue(all(item["wrote"] for item in confirmed["data"]["record_writes"]))  # type: ignore[index]
         path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md"
         self.assertTrue(path.exists())
         self.assertFalse((self.repo_root / "5_tasks" / "queue" / "completed" / "aipos-mcp-return.md").exists())
@@ -1119,6 +1121,7 @@ class McpToolTests(unittest.TestCase):
 
         self.assertEqual(blocked["error_code"], "OWNER_CONFIRMATION_REQUIRED")
         self.assertTrue(confirmed["ok"])
+        self.assertTrue(all(item["wrote"] for item in confirmed["data"]["record_writes"]))  # type: ignore[index]
         audit_path = self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-mcp-audit-01.md"
         self.assertTrue(audit_path.exists())
         audit_metadata, _, _ = parse_markdown_frontmatter(audit_path.read_text(encoding="utf-8"))
@@ -1232,6 +1235,8 @@ class McpToolTests(unittest.TestCase):
 
         self.assertEqual(blocked["error_code"], "OWNER_CONFIRMATION_REQUIRED")
         self.assertTrue(confirmed["ok"])
+        record_reports = confirmed["data"]["record_writes"] + confirmed["data"]["record_updates"]  # type: ignore[index]
+        self.assertTrue(all(item.get("wrote") or item.get("updated") for item in record_reports))
         source_text = source_path.read_text(encoding="utf-8")
         self.assertIn("dependency_audit_status: PASS", source_text)
         self.assertIn("audit_status: PASS", source_text)

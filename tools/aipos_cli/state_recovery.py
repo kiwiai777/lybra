@@ -78,6 +78,22 @@ def _first_match(check: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _first_linked_record_metadata(
+    linked_records: dict[str, list[dict[str, Any]]],
+    record_group: str,
+    record_id: Any,
+    id_field: str,
+) -> dict[str, Any]:
+    value = str(record_id or "").strip()
+    if not value:
+        return {}
+    for record in linked_records.get(record_group, []):
+        if str(record.get(id_field) or record.get("record_id") or "").strip() == value:
+            metadata = record.get("metadata")
+            return dict(metadata) if isinstance(metadata, dict) else {}
+    return {}
+
+
 def _dry_run_staleness(dry_run_token: str | None, expected_operation: str | None) -> list[dict[str, Any]]:
     if not dry_run_token:
         return [
@@ -316,6 +332,18 @@ def build_state_recovery_preview(
     claim_status = (claim_check or {}).get("status")
     session_status = (session_check or {}).get("status")
     return_status = (return_check or {}).get("status")
+    claim_record_metadata = _first_linked_record_metadata(linked_records, "claims", metadata.get("claim_id"), "claim_id")
+    session_record_metadata = _first_linked_record_metadata(
+        linked_records,
+        "sessions",
+        metadata.get("active_session_id"),
+        "session_id",
+    )
+    claim_owner_policy_ref = (
+        metadata.get("owner_policy_ref")
+        or claim_record_metadata.get("owner_policy_ref")
+        or session_record_metadata.get("owner_policy_ref")
+    )
     if contradictions:
         completeness = "contradictory"
     elif "missing" in {claim_status, session_status, return_status}:
@@ -348,7 +376,7 @@ def build_state_recovery_preview(
             "claimed_by": metadata.get("claimed_by"),
             "claimed_agent_instance": metadata.get("claimed_agent_instance") or metadata.get("agent_instance"),
             "claimed_at": metadata.get("claimed_at"),
-            "owner_policy_ref": metadata.get("owner_policy_ref"),
+            "owner_policy_ref": claim_owner_policy_ref,
             "claim_record_ref": _first_match(claim_check),
             "record_status": claim_status,
         },

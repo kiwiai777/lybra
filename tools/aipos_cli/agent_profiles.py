@@ -129,7 +129,7 @@ def _availability_warning(status: str, scope: str) -> str | None:
         return f"{scope} is busy"
     if status == "maintenance":
         return f"{scope} is in maintenance"
-    return f"{scope} availability is unknown"
+    return f"{scope} availability is unknown because Lybra does not track live agent presence or heartbeat state; this is expected for a gate-not-engine runtime."
 
 
 def _profile_copy(profile: dict[str, Any], source: str, source_path: str) -> dict[str, Any]:
@@ -608,7 +608,7 @@ def runtime_config_for_actor(actor: str | None, profiles: dict[str, Any]) -> dic
             "actor_agent_availability_status": "unknown",
             "actor_instance_availability_status": "unknown",
             "actor_availability_status": "unknown",
-            "availability_warning": "actor availability is unknown",
+            "availability_warning": _availability_warning("unknown", "actor"),
             "runtime_profile": None,
             "runtime_entrypoint": None,
             "runtime_command": None,

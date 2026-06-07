@@ -1353,6 +1353,20 @@ def _mcp_record_write_plan(path: str, record_type: str, *, would_write: bool = F
     return item
 
 
+def _mark_record_write_report_performed(data: dict[str, Any]) -> None:
+    for key in ("record_writes", "record_updates"):
+        items = data.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("would_write"):
+                item["wrote"] = True
+            if item.get("would_update"):
+                item["updated"] = True
+
+
 def _mcp_claim_record_plan(
     *,
     repo_root: Path,
@@ -1837,6 +1851,7 @@ def return_task(
             record_performed_writes = _write_mcp_return_records(resolved_root, data)
         response["dry_run"] = False
         response["data"]["wrote"] = True
+        _mark_record_write_report_performed(response["data"])
         response["performed_writes"] = list(response.get("planned_writes", [])) + record_performed_writes
         response["owner_confirmation_required"] = False
         response["owner_confirmation_reasons"] = []
@@ -2153,6 +2168,7 @@ def audit_dispatch_task(
             performed.append({"path": str(preview.get("path")), "kind": "create", "type": "record_markdown", "record_type": preview.get("record_type")})
         response["dry_run"] = False
         response["data"]["wrote"] = True
+        _mark_record_write_report_performed(response["data"])
         response["performed_writes"] = performed
         response["owner_confirmation_required"] = False
         response["owner_confirmation_reasons"] = []
@@ -2484,6 +2500,7 @@ def audit_verdict_task(
             performed.append({"path": str(preview.get("path")), "kind": kind, "type": "record_markdown", "record_type": preview.get("record_type")})
         response["dry_run"] = False
         response["data"]["wrote"] = True
+        _mark_record_write_report_performed(response["data"])
         response["performed_writes"] = performed
         response["owner_confirmation_required"] = False
         response["owner_confirmation_reasons"] = []
@@ -3174,6 +3191,7 @@ def execute_dry_run(
                 result["records_enabled"] = True
                 result["mcp_records_enabled"] = True
                 result["record_writes"] = record_plan["record_writes"]
+                _mark_record_write_report_performed(result)
                 result["claim_record_path"] = record_plan["claim_record_path"]
                 result["session_record_path"] = record_plan["session_record_path"]
         verdict = str(result.get("verdict") or "BLOCK")
