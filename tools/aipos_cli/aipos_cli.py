@@ -65,6 +65,13 @@ from tools.aipos_cli.planner_iteration_writer import append_planner_iteration, l
 from tools.aipos_cli.preview import build_preview
 from tools.aipos_cli.queue_mutation import mutate_queue_task
 from tools.aipos_cli.records import load_records
+from tools.aipos_cli.service_mode import (
+    render_connection_table,
+    rotate_report,
+    start_report,
+    status_report,
+    stop_report,
+)
 from tools.aipos_cli.state_recovery import build_state_recovery_preview
 from tools.aipos_cli.task_loader import find_repo_root, load_all_tasks, load_task_by_path
 from tools.aipos_cli.validator import (
@@ -827,6 +834,26 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_doctor_parser = mcp_subparsers.add_parser("doctor", help="Inspect MCP transport auth and capability scopes")
     mcp_doctor_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    serve_parser = subparsers.add_parser("serve", help="Start and inspect local Lybra gate service mode")
+    serve_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    serve_subparsers = serve_parser.add_subparsers(dest="serve_command")
+    serve_start_parser = serve_subparsers.add_parser("start", help="Start Board and MCP gate surfaces in foreground")
+    serve_start_parser.add_argument("--board-host", default="127.0.0.1", help="Board bind host; service mode v0 requires 127.0.0.1")
+    serve_start_parser.add_argument("--board-port", type=int, default=7117, help="Board port; defaults to 7117")
+    serve_start_parser.add_argument("--mcp-host", default="127.0.0.1", help="MCP bind host; service mode v0 requires 127.0.0.1")
+    serve_start_parser.add_argument("--mcp-port", type=int, default=7118, help="MCP port; defaults to 7118")
+    serve_start_parser.add_argument("--json", action="store_true", help="Output JSON after the supervisor exits")
+    serve_status_parser = serve_subparsers.add_parser("status", help="Print redacted service-mode status")
+    serve_status_parser.add_argument("--json", action="store_true", help="Output JSON")
+    serve_stop_parser = serve_subparsers.add_parser("stop", help="Stop service-owned Board/MCP child processes")
+    serve_stop_parser.add_argument("--json", action="store_true", help="Output JSON")
+    serve_rotate_parser = serve_subparsers.add_parser("rotate", help="Rotate local service-mode role tokens")
+    serve_rotate_parser.add_argument("--board-host", default="127.0.0.1", help="Board host for regenerated connection config")
+    serve_rotate_parser.add_argument("--board-port", type=int, default=7117, help="Board port for regenerated connection config")
+    serve_rotate_parser.add_argument("--mcp-host", default="127.0.0.1", help="MCP host for regenerated connection config")
+    serve_rotate_parser.add_argument("--mcp-port", type=int, default=7118, help="MCP port for regenerated connection config")
+    serve_rotate_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
     profile_subparsers = profile_parser.add_subparsers(dest="profile_command")
     profile_draft_parser = profile_subparsers.add_parser("draft", help="Validate and preview a custom profile registry write")
@@ -1060,6 +1087,49 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, FileNotFoundError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
+
+    if args.command == "serve":
+        if not getattr(args, "serve_command", None):
+            parser.print_help()
+            return 2
+        try:
+            workspace_root = _resolve_workspace_for_command(args)
+            if args.serve_command == "start":
+                result = start_report(
+                    workspace_root,
+                    board_host=str(args.board_host),
+                    board_port=int(args.board_port),
+                    mcp_host=str(args.mcp_host),
+                    mcp_port=int(args.mcp_port),
+                    start_processes=True,
+                )
+            elif args.serve_command == "status":
+                result = status_report(workspace_root)
+            elif args.serve_command == "stop":
+                result = stop_report(workspace_root)
+            elif args.serve_command == "rotate":
+                result = rotate_report(
+                    workspace_root,
+                    board_host=str(args.board_host),
+                    board_port=int(args.board_port),
+                    mcp_host=str(args.mcp_host),
+                    mcp_port=int(args.mcp_port),
+                )
+            else:
+                parser.print_help()
+                return 2
+        except (OSError, ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(render_json(result))
+        elif args.serve_command == "start" and result.get("supervisor_printed"):
+            pass
+        elif args.serve_command in {"start", "status", "rotate"}:
+            print(render_connection_table(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
 
     if args.command == "workspace":
         if not getattr(args, "workspace_command", None):

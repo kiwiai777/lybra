@@ -123,17 +123,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_KEEPALIVE_SECONDS,
         help="SSE ping interval; defaults to 30 seconds",
     )
+    http_parser.add_argument(
+        "--service-connection-json",
+        help="Service mode v0 connection config; enables server-side opaque role-token scope resolution",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    from .http_sse import config_from_env, run_http_server
+    from .http_sse import config_from_env, run_http_server, service_config_from_connection
 
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "serve":
         return serve()
     if args.command == "serve-http":
+        if getattr(args, "service_connection_json", None):
+            return run_http_server(
+                service_config_from_connection(
+                    str(args.host),
+                    int(args.port),
+                    float(args.keepalive_seconds),
+                    str(args.service_connection_json),
+                )
+            )
         return run_http_server(config_from_env(str(args.host), int(args.port), float(args.keepalive_seconds)))
     parser.print_help()
     return 2

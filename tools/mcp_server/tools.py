@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from tools.aipos_cli.board_adapter import (
     audit_dispatch_task,
@@ -26,6 +28,7 @@ from tools.aipos_cli.task_loader import find_repo_root
 
 READ_ONLY_NOTICE = "Lybra MCP exposes read tools by default. Write tools are visible only with scoped capability."
 CAPABILITY_ENV_VAR = "LYBRA_CAPABILITY_TOKEN"
+REQUEST_CAPABILITY: ContextVar[dict[str, Any] | None] = ContextVar("lybra_mcp_request_capability", default=None)
 INTAKE_SCOPE = "intake_submit"
 OWNER_DECISION_SCOPE = "owner_decision_record"
 QUEUE_CLAIM_SCOPE = "queue_claim"
@@ -87,6 +90,19 @@ def _json_text(payload: dict[str, Any]) -> str:
 
 
 def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str, Any]:
+    capability = REQUEST_CAPABILITY.get()
+    if isinstance(capability, dict) and capability.get("source") == "service_v0" and isinstance(payload, dict):
+        payload = dict(payload)
+        payload.setdefault(
+            "scope_basis",
+            {
+                "mode": "service_v0",
+                "token_ref": capability.get("token_ref"),
+                "role": capability.get("role"),
+                "scopes": list(capability.get("operations") or []),
+                "mcp_endpoint_ref": "local_service_mcp",
+            },
+        )
     return {
         "content": [{"type": "text", "text": _json_text(payload)}],
         "structuredContent": payload,
@@ -139,6 +155,9 @@ def _error_result(message: str, *, category: str = "VALIDATION_ERROR") -> dict[s
 
 
 def _capability_token() -> dict[str, Any]:
+    request_capability = REQUEST_CAPABILITY.get()
+    if isinstance(request_capability, dict):
+        return request_capability
     raw = os.environ.get(CAPABILITY_ENV_VAR, "").strip()
     if not raw:
         return {}
@@ -147,6 +166,15 @@ def _capability_token() -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+@contextmanager
+def request_capability_scope(capability: dict[str, Any] | None) -> Iterator[None]:
+    token = REQUEST_CAPABILITY.set(capability if isinstance(capability, dict) else None)
+    try:
+        yield
+    finally:
+        REQUEST_CAPABILITY.reset(token)
 
 
 def _capability_has_scope(scope: str) -> bool:

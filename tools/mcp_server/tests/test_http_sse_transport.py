@@ -107,6 +107,49 @@ class HttpSseTransportTests(unittest.TestCase):
                 thread.join(timeout=2)
                 httpd.server_close()
 
+    @contextmanager
+    def service_server(self, *, expired_executor: bool = False) -> Iterator[str]:
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}
+        registry = {
+            "executor-secret": {
+                "role": "executor",
+                "token_ref": "svc-executor",
+                "scopes": ["queue_claim", "queue_return"],
+                "expires_at": "2000-01-01T00:00:00Z" if expired_executor else "2999-01-01T00:00:00Z",
+            },
+            "owner-dispatch-secret": {
+                "role": "owner-dispatch",
+                "token_ref": "svc-owner-dispatch",
+                "scopes": ["audit_dispatch"],
+                "expires_at": "2999-01-01T00:00:00Z",
+            },
+            "auditor-secret": {
+                "role": "auditor",
+                "token_ref": "svc-auditor",
+                "scopes": ["queue_claim", "audit_verdict"],
+                "expires_at": "2999-01-01T00:00:00Z",
+            },
+        }
+        config = HttpSseConfig(
+            host=DEFAULT_HTTP_HOST,
+            port=0,
+            token="",
+            keepalive_seconds=0.01,
+            max_keepalive_events=1,
+            service_role_registry=registry,
+        )
+        with patch.dict(os.environ, env, clear=True):
+            httpd = build_http_server(config)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = httpd.server_address
+                yield f"http://{host}:{port}"
+            finally:
+                httpd.shutdown()
+                thread.join(timeout=2)
+                httpd.server_close()
+
     def post_rpc(self, base_url: str, payload: dict[str, object], *, token: str | None = "secret") -> dict[str, object]:
         headers = {"Content-Type": "application/json"}
         if token is not None:
@@ -191,6 +234,90 @@ class HttpSseTransportTests(unittest.TestCase):
             self.assertIn("lybra_queue_return_dry_run", names)
             self.assertIn("lybra_queue_return_confirm", names)
             self.assertNotIn("lybra_queue_claim_dry_run", names)
+
+    def test_service_mode_single_endpoint_uses_bearer_role_scope_registry(self) -> None:
+        with self.service_server() as base_url:
+            executor_response = self.post_rpc(base_url, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token="executor-secret")
+            auditor_response = self.post_rpc(base_url, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, token="auditor-secret")
+            dispatch_response = self.post_rpc(base_url, {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, token="owner-dispatch-secret")
+
+        executor_names = [tool["name"] for tool in executor_response["result"]["tools"]]  # type: ignore[index]
+        auditor_names = [tool["name"] for tool in auditor_response["result"]["tools"]]  # type: ignore[index]
+        dispatch_names = [tool["name"] for tool in dispatch_response["result"]["tools"]]  # type: ignore[index]
+
+        self.assertIn("lybra_queue_claim_dry_run", executor_names)
+        self.assertIn("lybra_queue_return_dry_run", executor_names)
+        self.assertNotIn("lybra_audit_verdict_dry_run", executor_names)
+        self.assertIn("lybra_queue_claim_dry_run", auditor_names)
+        self.assertIn("lybra_audit_verdict_dry_run", auditor_names)
+        self.assertNotIn("lybra_queue_return_dry_run", auditor_names)
+        self.assertIn("lybra_audit_dispatch_dry_run", dispatch_names)
+        self.assertNotIn("lybra_queue_claim_dry_run", dispatch_names)
+
+    def test_service_mode_wrong_role_tool_calls_are_denied(self) -> None:
+        with self.service_server() as base_url:
+            executor_verdict = self.post_rpc(
+                base_url,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "lybra_audit_verdict_dry_run",
+                        "arguments": {"operations": ["audit_verdict"], "actor": "agent-01"},
+                    },
+                },
+                token="executor-secret",
+            )
+            auditor_return = self.post_rpc(
+                base_url,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "lybra_queue_return_dry_run",
+                        "arguments": {"operations": ["queue_return"], "actor": "agent-02"},
+                    },
+                },
+                token="auditor-secret",
+            )
+
+        executor_structured = executor_verdict["result"]["structuredContent"]  # type: ignore[index]
+        auditor_structured = auditor_return["result"]["structuredContent"]  # type: ignore[index]
+        self.assertEqual(executor_structured["error_code"], "SCOPE_DENIED")  # type: ignore[index]
+        self.assertEqual(auditor_structured["error_code"], "SCOPE_DENIED")  # type: ignore[index]
+
+    def test_service_mode_scope_basis_is_server_side_and_redacted(self) -> None:
+        with self.service_server() as base_url:
+            response = self.post_rpc(
+                base_url,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "lybra_queue_list",
+                        "arguments": {"operations": ["audit_verdict", "queue_return"]},
+                    },
+                },
+                token="executor-secret",
+            )
+        raw = json.dumps(response)
+        structured = response["result"]["structuredContent"]  # type: ignore[index]
+        scope_basis = structured["scope_basis"]  # type: ignore[index]
+        self.assertEqual(scope_basis["role"], "executor")  # type: ignore[index]
+        self.assertEqual(scope_basis["token_ref"], "svc-executor")  # type: ignore[index]
+        self.assertEqual(scope_basis["scopes"], ["queue_claim", "queue_return"])  # type: ignore[index]
+        self.assertNotIn("executor-secret", raw)
+
+    def test_service_mode_expired_role_token_is_rejected_at_transport_boundary(self) -> None:
+        with self.service_server(expired_executor=True) as base_url:
+            with self.assertRaises(error.HTTPError) as expired:
+                self.post_rpc(base_url, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token="executor-secret")
+        self.assertEqual(expired.exception.code, 401)
+        body = json.loads(expired.exception.read().decode("utf-8"))
+        self.assertEqual(body["error_code"], "EXPIRED_BEARER_TOKEN")
 
     def test_intake_submit_dry_run_over_http_writes_nothing(self) -> None:
         with self.server(capability_token=self.capability_token()) as base_url:

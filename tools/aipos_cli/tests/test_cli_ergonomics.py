@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.aipos_cli import aipos_cli
+from tools.aipos_cli.service_mode import connection_path, start_report
 
 
 class CliErgonomicsTests(unittest.TestCase):
@@ -111,6 +112,28 @@ class CliErgonomicsTests(unittest.TestCase):
         config = run_http_server.call_args.args[0]
         self.assertEqual(config.host, "127.0.0.1")
         self.assertEqual(config.port, 7118)
+
+    def test_serve_status_outputs_redacted_connection_config(self) -> None:
+        workspace = self._make_workspace()
+        start_report(
+            workspace,
+            board_host="127.0.0.1",
+            board_port=7117,
+            mcp_host="127.0.0.1",
+            mcp_port=7118,
+            start_processes=False,
+        )
+        config = json.loads(connection_path(workspace).read_text(encoding="utf-8"))
+        raw_tokens = [item["token"] for item in config["tokens"]]
+
+        code, raw = self._run_cli(["--workspace-root", str(workspace), "serve", "status", "--json"])
+        result = json.loads(raw)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(result["operation"], "serve_status")
+        self.assertEqual(result["connection"]["mcp"]["rpc_url"], "http://127.0.0.1:7118/mcp")
+        for token in raw_tokens:
+            self.assertNotIn(token, raw)
 
 
 if __name__ == "__main__":
