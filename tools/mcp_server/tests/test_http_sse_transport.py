@@ -204,6 +204,25 @@ class HttpSseTransportTests(unittest.TestCase):
         structured = response["result"]["structuredContent"]  # type: ignore[index]
         self.assertEqual(structured["operation"], "get_queue")  # type: ignore[index]
 
+    def test_unhandled_tool_exception_returns_internal_error_without_disconnect_or_paths(self) -> None:
+        with self.server() as base_url:
+            with patch("tools.mcp_server.http_sse.handle_request", side_effect=FileNotFoundError("/secret/workspace/path")):
+                response = self.post_rpc(
+                    base_url,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "internal-error",
+                        "method": "tools/call",
+                        "params": {"name": "lybra_queue_list", "arguments": {}},
+                    },
+                )
+        raw = json.dumps(response)
+        self.assertEqual(response["error"]["code"], -32603)  # type: ignore[index]
+        self.assertEqual(response["error"]["message"], "Internal error")  # type: ignore[index]
+        self.assertEqual(response["error"]["data"]["error_code"], "INTERNAL_TOOL_ERROR")  # type: ignore[index]
+        self.assertEqual(response["error"]["data"]["error_type"], "FileNotFoundError")  # type: ignore[index]
+        self.assertNotIn("/secret/workspace/path", raw)
+
     def test_write_tool_visibility_respects_existing_capability_scope(self) -> None:
         with self.server(capability_token=self.capability_token(operations=[])) as base_url:
             response = self.post_rpc(base_url, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})

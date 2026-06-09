@@ -24,6 +24,9 @@ REQUIRED_LOCAL_DIR_MODE = 0o700
 REQUIRED_CONNECTION_MODE = 0o600
 SERVICE_MODE_VERSION = 1
 SERVICE_MODE = "service_v0"
+LOOPBACK_NO_PROXY_VALUES = {"127.0.0.1", "localhost", "::1"}
+PROXY_ENV_NAMES = ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+NO_PROXY_ENV_NAMES = ("no_proxy", "NO_PROXY")
 
 ROLE_SPECS: tuple[dict[str, Any], ...] = (
     {
@@ -143,6 +146,35 @@ def check_service_permissions(workspace_root: Path, *, for_secret_use: bool) -> 
     blocking = [issue.to_dict() for issue in issues if issue.severity == "BLOCK"]
     warnings = [issue.to_dict() for issue in issues if issue.severity != "BLOCK"]
     return blocking, warnings
+
+
+def _proxy_loopback_warnings(env: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    source_env = env if env is not None else os.environ
+    active_proxy_names = sorted(
+        name
+        for name in PROXY_ENV_NAMES
+        if str(source_env.get(name) or "").strip()
+        and "127.0.0.1" not in str(source_env.get(name) or "")
+        and "localhost" not in str(source_env.get(name) or "").lower()
+    )
+    if not active_proxy_names:
+        return []
+    raw_no_proxy = ",".join(str(source_env.get(name) or "") for name in NO_PROXY_ENV_NAMES)
+    no_proxy_values = {part.strip() for part in raw_no_proxy.split(",") if part.strip()}
+    missing = sorted(LOOPBACK_NO_PROXY_VALUES - no_proxy_values)
+    if not missing:
+        return []
+    return [
+        {
+            "message": (
+                "Loopback MCP/Board requests may be intercepted by a configured proxy. "
+                "Set NO_PROXY=127.0.0.1,localhost,::1 before using local service mode."
+            ),
+            "proxy_env": active_proxy_names,
+            "missing_no_proxy": missing,
+            "fix_command": "export NO_PROXY=127.0.0.1,localhost,::1",
+        }
+    ]
 
 
 def ensure_local_dir(workspace_root: Path) -> Path:
@@ -291,6 +323,7 @@ def status_report(workspace_root: Path) -> dict[str, Any]:
     permission_blocks, permission_warnings = check_service_permissions(workspace_root, for_secret_use=False)
     warnings.extend(permission_warnings)
     warnings.extend(permission_blocks)
+    warnings.extend(_proxy_loopback_warnings())
     config: dict[str, Any] | None = None
     path = connection_path(workspace_root)
     if path.exists():
@@ -378,6 +411,7 @@ def start_report(
             [],
         )
     blocking, warnings = check_service_permissions(workspace_root, for_secret_use=True)
+    warnings.extend(_proxy_loopback_warnings())
     if blocking:
         return _blocked("serve_start", workspace_root, blocking, warnings)
     config = load_connection_config(workspace_root) if connection_path(workspace_root).exists() else build_connection_config(
@@ -408,8 +442,9 @@ def start_report(
 def _run_supervisor(workspace_root: Path, config: dict[str, Any], *, warnings: list[dict[str, Any]]) -> dict[str, Any]:
     board = config.get("board") if isinstance(config.get("board"), dict) else {}
     mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
+    child_workspace_root = Path(str(config.get("workspace_root") or workspace_root)).expanduser().resolve()
     env = os.environ.copy()
-    env["AIPOS_WORKSPACE_ROOT"] = str(workspace_root)
+    env["AIPOS_WORKSPACE_ROOT"] = str(child_workspace_root)
     board_cmd = [
         sys.executable,
         "-m",
@@ -419,12 +454,12 @@ def _run_supervisor(workspace_root: Path, config: dict[str, Any], *, warnings: l
         "--port",
         str(board.get("port") or DEFAULT_BOARD_PORT),
         "--repo-root",
-        str(workspace_root),
+        str(child_workspace_root),
     ]
     mcp_cmd = [
         sys.executable,
         "-m",
-        "tools.mcp_server.server",
+        "tools.mcp_server",
         "serve-http",
         "--host",
         str(mcp.get("host") or DEFAULT_MCP_HOST),

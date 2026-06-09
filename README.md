@@ -89,6 +89,7 @@ Board starts on `http://127.0.0.1:7117` by default.
 For MCP:
 
 ```bash
+export NO_PROXY=127.0.0.1,localhost,::1
 export LYBRA_MCP_TOKEN="<set-your-token>"
 export LYBRA_CAPABILITY_TOKEN='<json-capability-token>'
 lybra mcp
@@ -96,6 +97,7 @@ lybra mcp-config
 ```
 
 MCP HTTP/SSE starts on `http://127.0.0.1:7118` by default. `lybra mcp-config` prints endpoint and environment references for an agent without printing raw token values.
+Set `NO_PROXY` when your shell has `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` configured, so local loopback MCP traffic is not intercepted by a proxy.
 
 ## The closed loop
 

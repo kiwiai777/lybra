@@ -145,6 +145,13 @@ def _rpc_response(message: dict[str, Any], *, capability: dict[str, Any] | None 
             return handle_request(message)
     except JsonRpcError as exc:
         return _error(request_id, exc.code, exc.message, exc.data)
+    except Exception as exc:
+        return _error(
+            request_id,
+            -32603,
+            "Internal error",
+            {"error_code": "INTERNAL_TOOL_ERROR", "error_type": exc.__class__.__name__},
+        )
 
 
 class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):

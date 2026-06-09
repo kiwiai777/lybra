@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import stat
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib import request
 
 from tools.aipos_cli.service_mode import (
     CONNECTION_REL,
@@ -28,6 +33,36 @@ from tools.aipos_cli.service_mode import (
 
 def _mode(path: Path) -> int:
     return stat.S_IMODE(path.stat().st_mode)
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_port(port: int, *, timeout: float = 8.0) -> None:
+    deadline = time.time() + timeout
+    last_error: OSError | None = None
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.1)
+    raise AssertionError(f"Timed out waiting for 127.0.0.1:{port}: {last_error}")
+
+
+def _post_rpc(port: int, token: str, payload: dict[str, object]) -> dict[str, object]:
+    req = request.Request(
+        f"http://127.0.0.1:{port}/mcp",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=3) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 class ServiceModeTests(unittest.TestCase):
@@ -61,6 +96,28 @@ class ServiceModeTests(unittest.TestCase):
             self.assertNotIn(token["token"], raw)
             self.assertNotIn(token["token"], rendered)
             self.assertIn(token["fingerprint"], rendered)
+
+    def test_start_and_status_warn_when_proxy_may_intercept_loopback_without_printing_proxy_value(self) -> None:
+        env = {
+            "HTTPS_PROXY": "http://proxy.internal.example:8080",
+            "NO_PROXY": "example.com",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            status = status_report(self.root)
+            start = start_report(
+                self.root,
+                board_host="127.0.0.1",
+                board_port=7117,
+                mcp_host="127.0.0.1",
+                mcp_port=7118,
+                start_processes=False,
+            )
+        status_text = json.dumps(status)
+        start_text = json.dumps(start)
+        self.assertIn("NO_PROXY=127.0.0.1,localhost,::1", status_text)
+        self.assertIn("NO_PROXY=127.0.0.1,localhost,::1", start_text)
+        self.assertNotIn("proxy.internal.example", status_text)
+        self.assertNotIn("proxy.internal.example", start_text)
 
     def test_rotate_blocks_existing_overbroad_secret_paths_with_actionable_fix(self) -> None:
         local_dir = self.root / LOCAL_DIR_REL
@@ -164,6 +221,81 @@ class ServiceModeTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual([call.args[0] for call in kill.call_args_list], [111, 333])
+
+    def test_service_mode_spawn_listens_and_resolves_workspace_without_shell_env(self) -> None:
+        board_port = _free_port()
+        mcp_port = _free_port()
+        env = os.environ.copy()
+        env.pop("AIPOS_WORKSPACE_ROOT", None)
+        env.pop("LYBRA_MCP_TOKEN", None)
+        env.pop("LYBRA_CAPABILITY_TOKEN", None)
+        env["NO_PROXY"] = "127.0.0.1,localhost,::1"
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "tools.aipos_cli.aipos_cli",
+                "--workspace-root",
+                str(self.root),
+                "serve",
+                "start",
+                "--board-port",
+                str(board_port),
+                "--mcp-port",
+                str(mcp_port),
+            ],
+            cwd=Path(__file__).resolve().parents[3],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout = ""
+        stderr = ""
+        try:
+            _wait_for_port(mcp_port)
+            config = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+            executor_token = next(item["token"] for item in config["tokens"] if item["role"] == "executor")
+            response = _post_rpc(
+                mcp_port,
+                executor_token,
+                {
+                    "jsonrpc": "2.0",
+                    "id": "queue-list",
+                    "method": "tools/call",
+                    "params": {"name": "lybra_queue_list", "arguments": {}},
+                },
+            )
+            structured = response["result"]["structuredContent"]  # type: ignore[index]
+            self.assertEqual(structured["operation"], "get_queue")  # type: ignore[index]
+            self.assertEqual(structured["scope_basis"]["role"], "executor")  # type: ignore[index]
+            self.assertNotIn("error", response)
+        finally:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "tools.aipos_cli.aipos_cli",
+                    "--workspace-root",
+                    str(self.root),
+                    "serve",
+                    "stop",
+                    "--json",
+                ],
+                cwd=Path(__file__).resolve().parents[3],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                stdout, stderr = proc.communicate(timeout=5)
+        self.assertEqual(proc.returncode, 0, (stdout, stderr))
 
 
 if __name__ == "__main__":
