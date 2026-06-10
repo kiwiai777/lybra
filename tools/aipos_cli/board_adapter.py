@@ -8,6 +8,13 @@ from typing import Any
 
 from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, error_entry, make_response
 from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles, resolve_instance_id
+from tools.aipos_cli.artifact_ingest import (
+    _as_ref_list,
+    approved_scratch_root,
+    has_scratch_request,
+    perform_scratch_ingestion,
+    plan_scratch_ingestion,
+)
 from tools.aipos_cli.context_pack_builder import build_context_pack_preview
 from tools.aipos_cli.controlled_execute import (
     OWNER_CONFIRMATION_TOKEN,
@@ -1459,11 +1466,12 @@ def _mcp_return_record_plan(
     completion_report_ref: str | None,
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
+    return_id: str | None = None,
 ) -> dict[str, Any]:
     claim_id = str(source_metadata.get("claim_id") or "")
     session_id = str(source_metadata.get("active_session_id") or "")
     returned_at = str(updated_metadata.get("executor_completed_at") or "")
-    return_id = build_runtime_id("return", task_id, returned_at, canonical_agent_instance)
+    return_id = return_id or build_runtime_id("return", task_id, returned_at, canonical_agent_instance)
     session_path = session_record_path(repo_root, task_id, session_id)
     return_path = return_record_path(repo_root, task_id, return_id)
     session_rel = str(session_path.relative_to(repo_root))
@@ -1597,6 +1605,8 @@ def _build_return_preview(
     dry_run: bool,
     planned_returned_at: str | None = None,
     mcp_return_metadata: dict[str, Any] | None = None,
+    scratch_dir: str | None = None,
+    scratch_artifact_refs: Any = None,
 ) -> dict[str, Any]:
     selected_task_id, selected_path = _select_task_input(task_id, path)
     validated, _tasks, _records, profiles, task = _load_validated_task(
@@ -1655,10 +1665,38 @@ def _build_return_preview(
     updated_metadata["dependency_audit_readiness"] = "ready"
     updated_metadata["dependency_audit_status"] = str(updated_metadata.get("dependency_audit_status") or "pending")
     updated_metadata["return_owner_policy_ref"] = owner_policy_ref
+
+    task_id_text = str(task.get("task_id") or "")
+    return_id = (
+        build_runtime_id("return", task_id_text, returned_at, canonical_agent_instance or actor)
+        if task_id_text
+        else ""
+    )
+
+    # AIPOS-196a: gate-side ingestion of confined-worker scratch artifacts. The
+    # gate copies scratch outputs into workspace_artifacts/ on Owner-confirmed
+    # return; persisted artifact_refs point to those gate-written paths.
+    ingestion_plan: dict[str, Any] = {"ingestions": [], "workspace_refs": [], "digest": ""}
+    if has_scratch_request(scratch_dir, scratch_artifact_refs):
+        if not return_id:
+            blocking_reasons.append("ARTIFACT_INGEST_BLOCKED: cannot derive return id for scratch ingestion")
+        else:
+            ingestion_plan = plan_scratch_ingestion(
+                repo_root=repo_root,
+                task_id=task_id_text,
+                return_id=return_id,
+                scratch_dir=scratch_dir,
+                scratch_artifact_refs=scratch_artifact_refs,
+            )
+            blocking_reasons.extend(str(item) for item in ingestion_plan.get("blocking_reasons", []))
+
+    workspace_refs = list(ingestion_plan.get("workspace_refs", []))
+    effective_artifact_refs = [*artifact_refs, *workspace_refs]
+
     if result_summary:
         updated_metadata["result_summary"] = result_summary
-    if artifact_refs:
-        updated_metadata["artifact_refs"] = artifact_refs
+    if effective_artifact_refs:
+        updated_metadata["artifact_refs"] = effective_artifact_refs
     if completion_report_ref:
         updated_metadata["completion_report_ref"] = completion_report_ref
     if return_reason:
@@ -1673,7 +1711,7 @@ def _build_return_preview(
     if mcp_return_metadata:
         record_plan = _mcp_return_record_plan(
             repo_root=repo_root,
-            task_id=str(task.get("task_id") or ""),
+            task_id=task_id_text,
             task_path=source_rel,
             actor=actor,
             canonical_agent_instance=canonical_agent_instance,
@@ -1681,8 +1719,9 @@ def _build_return_preview(
             source_metadata=source_metadata,
             updated_metadata=updated_metadata,
             result_summary=result_summary,
-            artifact_refs=artifact_refs,
+            artifact_refs=effective_artifact_refs,
             completion_report_ref=completion_report_ref,
+            return_id=return_id or None,
         )
         if record_plan.get("record_blocking_reasons"):
             blocking_reasons.extend(str(item) for item in record_plan.get("record_blocking_reasons", []))
@@ -1697,9 +1736,19 @@ def _build_return_preview(
         "audit_readiness": "ready",
         "audit_status_after_return": updated_metadata["audit_status"],
         "result_summary": result_summary,
-        "artifact_refs": artifact_refs,
+        "artifact_refs": effective_artifact_refs,
         "completion_report_ref": completion_report_ref,
+        "ingested_artifact_refs": workspace_refs,
     }
+    ingestion_planned_writes = [
+        {
+            "path": item.get("workspace_rel"),
+            "kind": "create",
+            "type": "ingested_artifact",
+            "record_type": "ingested_artifact",
+        }
+        for item in ingestion_plan.get("ingestions", [])
+    ]
     data = {
         "task_id": task.get("task_id"),
         "source_path": source_rel,
@@ -1733,12 +1782,18 @@ def _build_return_preview(
             "completion_report_ref": completion_report_ref,
             "return_reason": return_reason,
             "planned_returned_at": returned_at,
+            "scratch_dir": scratch_dir,
+            "scratch_artifact_refs": list(_as_ref_list(scratch_artifact_refs)),
         },
         "lease_preview": {
             "lease_path": "claim_only",
             "lease_status": "proposed",
             "active_lease_written": False,
         },
+        "scratch_ingestions": ingestion_plan.get("ingestions", []),
+        "scratch_ingestion_digest": ingestion_plan.get("digest", ""),
+        "scratch_root": ingestion_plan.get("scratch_root"),
+        "ingested_artifact_refs": workspace_refs,
     }
     if mcp_return_metadata:
         data["mcp_return"] = dict(mcp_return_metadata)
@@ -1760,6 +1815,7 @@ def _build_return_preview(
         summary={"task_id": task.get("task_id"), "audit_readiness": "ready"},
         planned_writes=[
             planned_write,
+            *ingestion_planned_writes,
             *[
                 {"path": item.get("path"), "kind": "create", "type": "record_markdown", "record_type": item.get("record_type")}
                 for item in record_plan.get("record_writes", [])
@@ -1800,6 +1856,8 @@ def return_task(
     dry_run: bool = True,
     repo_root: str | Path | None = None,
     mcp_return_metadata: dict[str, Any] | None = None,
+    scratch_dir: str | None = None,
+    scratch_artifact_refs: Any = None,
 ) -> dict[str, Any]:
     try:
         actor_text = str(actor or "").strip()
@@ -1812,9 +1870,11 @@ def return_task(
         if not policy_ref:
             raise ValueError("owner_policy_ref is required")
         refs = _as_list(artifact_refs)
+        scratch_dir_text = str(scratch_dir or "").strip() or None
+        scratch_refs = _as_ref_list(scratch_artifact_refs)
         summary_text = str(result_summary or "").strip()
         completion_ref = str(completion_report_ref or "").strip()
-        if not summary_text and not refs and not completion_ref:
+        if not summary_text and not refs and not completion_ref and not scratch_refs:
             raise ValueError("MISSING_RETURN_EVIDENCE: result_summary, artifact_refs, or completion_report_ref is required")
         resolved_root = _resolve_repo_root(repo_root)
         response = _build_return_preview(
@@ -1833,6 +1893,8 @@ def return_task(
             repo_root=resolved_root,
             dry_run=dry_run,
             mcp_return_metadata=mcp_return_metadata,
+            scratch_dir=scratch_dir_text,
+            scratch_artifact_refs=scratch_refs,
         )
         if dry_run:
             return _attach_controlled_execute_metadata(
@@ -1844,6 +1906,29 @@ def return_task(
         if response.get("verdict") == "BLOCK":
             return response
         data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        # AIPOS-196a: ingest scratch artifacts before any truth write so an
+        # integrity failure (R-A) blocks the whole return instead of leaving a
+        # task card that points at artifacts the gate never copied.
+        ingestion_performed_writes: list[dict[str, Any]] = []
+        scratch_ingestions = data.get("scratch_ingestions") if isinstance(data.get("scratch_ingestions"), list) else []
+        if scratch_ingestions:
+            try:
+                ingestion_performed_writes = perform_scratch_ingestion(
+                    resolved_root,
+                    scratch_ingestions,
+                    scratch_root=data.get("scratch_root"),
+                    approved_root=approved_scratch_root(),
+                )
+            except (ValueError, OSError) as exc:
+                return blocked_response(
+                    operation="queue_return",
+                    dry_run=False,
+                    category="ARTIFACT_INGEST_BLOCKED",
+                    message=str(exc),
+                    actor=_actor_payload(actor_text),
+                    data={"recommended_action": "re-run dry-run; scratch artifact changed or escaped"},
+                    safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                )
         target = resolved_root / str(data.get("target_path") or "")
         target.write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
         record_performed_writes: list[dict[str, Any]] = []
@@ -1852,7 +1937,7 @@ def return_task(
         response["dry_run"] = False
         response["data"]["wrote"] = True
         _mark_record_write_report_performed(response["data"])
-        response["performed_writes"] = list(response.get("planned_writes", [])) + record_performed_writes
+        response["performed_writes"] = list(response.get("planned_writes", [])) + ingestion_performed_writes + record_performed_writes
         response["owner_confirmation_required"] = False
         response["owner_confirmation_reasons"] = []
         return response
@@ -2727,6 +2812,8 @@ def execute_dry_run(
                 dry_run=True,
                 repo_root=resolved_root,
                 mcp_return_metadata=mcp_return_metadata,
+                scratch_dir=payload.get("scratch_dir"),
+                scratch_artifact_refs=payload.get("scratch_artifact_refs"),
             )
         elif op == "audit_dispatch":
             payload = source_data.get("original_payload") or {}
@@ -3022,6 +3109,8 @@ def execute_dry_run(
                 dry_run=False,
                 repo_root=resolved_root,
                 mcp_return_metadata=mcp_return_metadata,
+                scratch_dir=payload.get("scratch_dir"),
+                scratch_artifact_refs=payload.get("scratch_artifact_refs"),
             )
             verdict = str(result.get("verdict") or "BLOCK")
             return make_response(

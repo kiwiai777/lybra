@@ -1012,11 +1012,22 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
             "queue_return requires audit_readiness: ready.",
             "Return only audit-ready executor work through this first slice.",
         )
-    if not (str(args.get("result_summary") or "").strip() or args.get("artifact_refs") or str(args.get("completion_report_ref") or "").strip()):
+    if not (
+        str(args.get("result_summary") or "").strip()
+        or args.get("artifact_refs")
+        or args.get("scratch_artifact_refs")
+        or str(args.get("completion_report_ref") or "").strip()
+    ):
         return _queue_return_error(
             "MISSING_RETURN_EVIDENCE",
-            "result_summary, artifact_refs, or completion_report_ref is required.",
+            "result_summary, artifact_refs, scratch_artifact_refs, or completion_report_ref is required.",
             "Provide normalized non-secret executor evidence before returning work.",
+        )
+    if bool(args.get("scratch_artifact_refs")) != bool(str(args.get("scratch_dir") or "").strip()):
+        return _queue_return_error(
+            "INVALID_SCRATCH_INGEST",
+            "scratch_dir and scratch_artifact_refs must be provided together.",
+            "Pass both scratch_dir (the approved scratch root) and scratch_artifact_refs, or neither.",
         )
     task_id = str(args.get("task_id") or "").strip()
     task_path = str(args.get("task_path") or args.get("path") or "").strip()
@@ -1065,6 +1076,8 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
         dry_run=True,
         repo_root=repo_root,
         mcp_return_metadata=_return_metadata(args, canonical_agent_instance=canonical_agent_instance),
+        scratch_dir=str(args.get("scratch_dir") or "").strip() or None,
+        scratch_artifact_refs=args.get("scratch_artifact_refs"),
     )
     decorated = _decorate_queue_return_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance)
     if decorated.get("verdict") == "BLOCK":
@@ -1684,6 +1697,8 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "active_session_id": {"type": "string"},
                 "result_summary": {"type": "string"},
                 "artifact_refs": {"type": "array", "items": {"type": "string"}},
+                "scratch_dir": {"type": "string"},
+                "scratch_artifact_refs": {"type": "array", "items": {"type": "string"}},
                 "completion_report_ref": {"type": "string"},
                 "executor_status": {"type": "string", "enum": ["completed"]},
                 "audit_readiness": {"type": "string", "enum": ["ready"]},

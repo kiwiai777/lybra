@@ -84,7 +84,10 @@ def _stable_planned_writes(items: Any, *, operation: str | None = None) -> list[
         if not isinstance(item, dict):
             continue
         path = _normalize_relpath(item.get("path"))
-        if operation == "queue_return" and item.get("record_type") == "return_record":
+        if operation == "queue_return" and item.get("record_type") in {"return_record", "ingested_artifact"}:
+            # These paths embed the timestamp-derived return_id. Exclude the path
+            # from the hash; ingestion content integrity is covered separately by
+            # scratch_ingestion_digest (AIPOS-196a R-B).
             path = None
         stable.append(
             {
@@ -143,6 +146,7 @@ def build_snapshot_payload(operation: str, actor: str, plan: dict[str, Any]) -> 
         "write_snapshot_hash": data.get("write_snapshot_hash"),
         "target_file_state": _normalize_for_hash(data.get("target_file_state")),
         "with_records": bool(data.get("with_records", False)),
+        "scratch_ingestion_digest": data.get("scratch_ingestion_digest"),
         "owner_confirmation_required": bool(plan.get("owner_confirmation_required", False)),
         "owner_confirmation_reasons": list(plan.get("owner_confirmation_reasons", [])),
         "blocking_reasons": list(plan.get("blocking_reasons", [])),

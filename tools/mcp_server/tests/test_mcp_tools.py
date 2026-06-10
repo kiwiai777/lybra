@@ -957,6 +957,193 @@ class McpToolTests(unittest.TestCase):
         records = load_records(self.repo_root)
         self.assertEqual(records["summary"]["return_records"], 0)
 
+    def _make_scratch_root(self) -> Path:
+        scratch_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch_tmp.cleanup)
+        return Path(scratch_tmp.name).resolve()
+
+    def _scratch_return_env(self, approved_root: Path) -> dict[str, str]:
+        return {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_APPROVED_SCRATCH_ROOT": str(approved_root),
+        }
+
+    def test_queue_return_ingests_scratch_artifact_into_workspace(self) -> None:
+        self.write_return_task()
+        approved_root = self._make_scratch_root()
+        scratch_dir = approved_root / "worker-run"
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        (scratch_dir / "result.md").write_text("# gate ingested artifact\n", encoding="utf-8")
+        env = self._scratch_return_env(approved_root)
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_dry_run",
+                    self.return_payload(
+                        artifact_refs=[],
+                        completion_report_ref="",
+                        scratch_dir=str(scratch_dir),
+                        scratch_artifact_refs=["result.md"],
+                    ),
+                )
+            )
+            self.assertTrue(dry["ok"], dry.get("blocking_reasons"))
+            ingest_writes = [
+                item
+                for item in dry["data"]["original_payload"].get("scratch_artifact_refs", [])  # type: ignore[index]
+            ]
+            self.assertEqual(ingest_writes, ["result.md"])
+            ingested_refs = dry["data"]["ingested_artifact_refs"]  # type: ignore[index]
+            self.assertEqual(len(ingested_refs), 1)
+            workspace_rel = ingested_refs[0]
+            self.assertTrue(workspace_rel.startswith("workspace_artifacts/AIPOS-MCP-RETURN/"), workspace_rel)
+            # Not effective truth before ingestion.
+            self.assertFalse((self.repo_root / workspace_rel).exists())
+
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+
+        self.assertTrue(confirmed["ok"], confirmed)
+        dest = self.repo_root / workspace_rel
+        self.assertTrue(dest.exists())
+        self.assertEqual(dest.read_text(encoding="utf-8"), "# gate ingested artifact\n")
+        # Persisted artifact_refs point at the gate-written workspace path, not scratch.
+        task_text = (self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md").read_text(encoding="utf-8")
+        self.assertIn(workspace_rel, task_text)
+        self.assertNotIn(str(scratch_dir), task_text)
+        records = load_records(self.repo_root)
+        return_record = records["returns"][0]["metadata"]
+        self.assertIn(workspace_rel, return_record.get("artifact_refs", []))
+
+    def test_queue_return_scratch_requires_owner_confirmation(self) -> None:
+        self.write_return_task()
+        approved_root = self._make_scratch_root()
+        scratch_dir = approved_root / "worker-run"
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        (scratch_dir / "result.md").write_text("artifact\n", encoding="utf-8")
+        env = self._scratch_return_env(approved_root)
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_dry_run",
+                    self.return_payload(scratch_dir=str(scratch_dir), scratch_artifact_refs=["result.md"]),
+                )
+            )
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                    },
+                )
+            )
+        self.assertEqual(blocked["error_code"], "OWNER_CONFIRMATION_REQUIRED")
+        ingested = dry["data"]["ingested_artifact_refs"][0]  # type: ignore[index]
+        self.assertFalse((self.repo_root / ingested).exists())
+
+    def test_queue_return_scratch_requires_approved_root(self) -> None:
+        self.write_return_task()
+        approved_root = self._make_scratch_root()
+        scratch_dir = approved_root / "worker-run"
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        (scratch_dir / "result.md").write_text("artifact\n", encoding="utf-8")
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_dry_run",
+                    self.return_payload(scratch_dir=str(scratch_dir), scratch_artifact_refs=["result.md"]),
+                )
+            )
+        self.assertEqual(blocked["verdict"], "BLOCK")
+        self.assertTrue(any("approved scratch root" in r for r in blocked["blocking_reasons"]))  # type: ignore[index]
+
+    def test_queue_return_scratch_symlink_escape_blocked(self) -> None:
+        self.write_return_task()
+        approved_root = self._make_scratch_root()
+        scratch_dir = approved_root / "worker-run"
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        truth_target = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md"
+        os.symlink(truth_target, scratch_dir / "evil.md")
+        env = self._scratch_return_env(approved_root)
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_dry_run",
+                    self.return_payload(scratch_dir=str(scratch_dir), scratch_artifact_refs=["evil.md"]),
+                )
+            )
+        self.assertEqual(blocked["verdict"], "BLOCK")
+        self.assertTrue(any("escapes scratch_dir" in r for r in blocked["blocking_reasons"]))  # type: ignore[index]
+
+    def test_queue_return_scratch_parent_escape_blocked(self) -> None:
+        self.write_return_task()
+        approved_root = self._make_scratch_root()
+        scratch_dir = approved_root / "worker-run"
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        env = self._scratch_return_env(approved_root)
+        with patch.dict(os.environ, env, clear=True):
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_dry_run",
+                    self.return_payload(
+                        scratch_dir=str(scratch_dir),
+                        scratch_artifact_refs=["../../5_tasks/queue/claimed/aipos-mcp-return.md"],
+                    ),
+                )
+            )
+        self.assertEqual(blocked["verdict"], "BLOCK")
+        self.assertTrue(any("escapes scratch_dir" in r for r in blocked["blocking_reasons"]))  # type: ignore[index]
+
+    def test_queue_return_scratch_content_swap_blocks_confirm(self) -> None:
+        self.write_return_task()
+        approved_root = self._make_scratch_root()
+        scratch_dir = approved_root / "worker-run"
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        scratch_file = scratch_dir / "result.md"
+        scratch_file.write_text("original\n", encoding="utf-8")
+        env = self._scratch_return_env(approved_root)
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_dry_run",
+                    self.return_payload(scratch_dir=str(scratch_dir), scratch_artifact_refs=["result.md"]),
+                )
+            )
+            scratch_file.write_text("tampered\n", encoding="utf-8")
+            blocked = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        self.assertEqual(blocked["error_code"], "SNAPSHOT_MISMATCH")
+        ingested = dry["data"]["ingested_artifact_refs"][0]  # type: ignore[index]
+        self.assertFalse((self.repo_root / ingested).exists())
+
     def test_queue_return_blocks_wrong_claimant_and_forbidden_fields(self) -> None:
         self.write_return_task()
         env = {
