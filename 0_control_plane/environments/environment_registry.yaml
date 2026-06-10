@@ -3,6 +3,7 @@ updated_at: 2026-05-15
 shared_policy_refs:
   server_directory_policy: 0_control_plane/environments/server_directory_policy.md
   sandbox_runtime_abstraction_protocol: 0_control_plane/environments/sandbox_runtime_abstraction_protocol.md
+  confined_autonomous_worker_boundary_protocol: 0_control_plane/environments/confined_autonomous_worker_boundary_protocol.md
 environments:
   - id: any
     notes: "Abstract environment for cross-platform roles."
@@ -19,6 +20,7 @@ environments:
     policy_refs:
       - 0_control_plane/environments/server_directory_policy.md
       - 0_control_plane/environments/sandbox_runtime_abstraction_protocol.md
+      - 0_control_plane/environments/confined_autonomous_worker_boundary_protocol.md
     host:
       name: kiwiai.cloud
       ssh_aliases:
