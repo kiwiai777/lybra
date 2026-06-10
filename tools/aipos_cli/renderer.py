@@ -153,8 +153,8 @@ def render_draft_result_text(result: dict[str, Any]) -> str:
             lines.append("Planned Writes:")
             lines.extend(f"- {item.get('path')} ({item.get('kind')})" for item in result["planned_writes"])
         lines.append(
-            "Safety Notice: AIPOS-30 publish only writes a validated draft to 5_tasks/queue/pending/. "
-            "It does not claim, complete, block, write records, or run agents."
+            "Safety Notice: draft_publish writes a validated draft to 5_tasks/queue/pending/ "
+            "and a publish provenance record. It does not claim, complete, block, or run agents."
         )
         return "\n".join(lines)
 

@@ -12,6 +12,7 @@ from tools.aipos_cli.agent_profiles import (
     resolve_instance_id,
     specific_instance_match_details,
 )
+from tools.aipos_cli.authority_scanner import build_authority_report
 from tools.aipos_cli.records import check_task_record_refs, find_records_for_task
 from tools.aipos_cli.task_complexity import validate_task_complexity
 
@@ -125,6 +126,7 @@ def build_records_summary(records: dict[str, Any], tasks: list[dict[str, Any]]) 
     duplicate_claim_ids = sum(1 for items in records.get("claim_index", {}).values() if len(items) > 1)
     task_ids_with_records = (
         set(records.get("task_sessions", {}).keys())
+        | set(records.get("task_publishes", {}).keys())
         | set(records.get("task_claims", {}).keys())
         | set(records.get("task_returns", {}).keys())
         | set(records.get("task_audit_dispatches", {}).keys())
@@ -143,6 +145,7 @@ def build_records_summary(records: dict[str, Any], tasks: list[dict[str, Any]]) 
     )
     return {
         "sessions_total": len(records.get("sessions", [])),
+        "publishes_total": len(records.get("publishes", [])),
         "claims_total": len(records.get("claims", [])),
         "returns_total": len(records.get("returns", [])),
         "audit_dispatches_total": len(records.get("audit_dispatches", [])),
@@ -153,6 +156,7 @@ def build_records_summary(records: dict[str, Any], tasks: list[dict[str, Any]]) 
         "tasks_with_record_issues": len(task_ids_with_record_issues),
         "records_root_exists": bool(records.get("records_root_exists")),
         "session_task_count": len(records.get("task_sessions", {})),
+        "publish_task_count": len(records.get("task_publishes", {})),
         "claim_task_count": len(records.get("task_claims", {})),
         "return_task_count": len(records.get("task_returns", {})),
         "audit_dispatch_task_count": len(records.get("task_audit_dispatches", {})),
@@ -185,7 +189,11 @@ def build_records_diagnostics(records: dict[str, Any], tasks: list[dict[str, Any
                 }
             )
 
-    for record_type, items in (("session", records.get("sessions", [])), ("claim", records.get("claims", []))):
+    for record_type, items in (
+        ("session", records.get("sessions", [])),
+        ("publish", records.get("publishes", [])),
+        ("claim", records.get("claims", [])),
+    ):
         for record in items:
             record_id = record.get("record_id")
             for message in record.get("parse_errors", []):
@@ -491,6 +499,21 @@ def validate_tasks(
         validate_task(task, duplicate_task_ids, current_actor=current_actor, records=records, profiles=profiles)
         for task in tasks
     ]
+    authority_report = build_authority_report(tasks=validated, records=records or {})
+    authority_by_path = {
+        finding["subject_ref"]: finding
+        for finding in authority_report.get("task_authority", [])
+        if finding.get("subject_ref")
+    }
+    for task in validated:
+        task_authority = authority_by_path.get(task.get("path"))
+        if not task_authority:
+            continue
+        task["authority_verdict"] = task_authority.get("authority_verdict")
+        task["effective_truth"] = bool(task_authority.get("effective_truth", True))
+        task["authority_findings"] = list(task_authority.get("authority_findings", []))
+        if task.get("authority_verdict") in {"ORPHAN_INVALID", "QUARANTINED", "CONTRADICTORY"}:
+            task["recommended_action"] = "owner_authority_review"
     summary = Counter(task["verdict"].lower() for task in validated)
     return {
         "scope": "queue",
@@ -503,6 +526,9 @@ def validate_tasks(
         },
         "records_summary": build_records_summary(records or {}, validated),
         "records_diagnostics": build_records_diagnostics(records or {}, validated),
+        "authority_summary": authority_report.get("authority_summary", {}),
+        "authority_findings": authority_report.get("authority_findings", []),
+        "effective_queue_summary": authority_report.get("effective_queue_summary", {}),
         "tasks": validated,
     }
 

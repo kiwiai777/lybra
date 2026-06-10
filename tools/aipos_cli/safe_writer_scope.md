@@ -199,7 +199,7 @@ Audit expectations for writer implementation:
 
 - dry-run does not write
 - create only writes drafts
-- publish only writes pending
+- publish writes pending plus the publish provenance record
 - no writes to forbidden paths
 - duplicate `task_id` blocked
 - path traversal blocked

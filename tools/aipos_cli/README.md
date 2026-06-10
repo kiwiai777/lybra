@@ -570,7 +570,7 @@ Validator JSON regression coverage for this contract lives in `tools/aipos_cli/t
 - preview proposes record paths but does not create them
 
 Draft writer regression coverage lives in `tools/aipos_cli/tests/test_draft_writer.py`.
-The tests use temporary repository fixtures and cover dry-run safety, draft-only writes, publish-to-pending writes under temp repos only, duplicate task IDs, path traversal blocking, out-of-drafts validation rejection, non-markdown rejection, overwrite blocking, queue collision detection, missing drafts directory handling, and JSON output validity.
+The tests use temporary repository fixtures and cover dry-run safety, draft-only writes, publish-to-pending plus publish-provenance writes under temp repos only, duplicate task IDs, path traversal blocking, out-of-drafts validation rejection, non-markdown rejection, overwrite blocking, queue collision detection, missing drafts directory handling, and JSON output validity.
 
 Queue mutation regression coverage lives in `tools/aipos_cli/tests/test_queue_mutation.py`.
 The tests use temporary repository fixtures and cover dry-run safety, allowed transitions, actor mismatch blocking, directory/status mismatch blocking, duplicate task ID blocking, overwrite blocking, path traversal rejection, non-markdown rejection, JSON output validity, and preservation of read-only commands.

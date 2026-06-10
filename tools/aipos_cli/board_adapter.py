@@ -1139,7 +1139,7 @@ def publish_draft(
         if not dry_run:
             return _blocked_execute(operation, actor=actor)
         resolved_root = _resolve_repo_root(repo_root)
-        result = backend_publish_draft(resolved_root, normalized_path, dry_run=True)
+        result = backend_publish_draft(resolved_root, normalized_path, dry_run=True, actor=actor)
         verdict = derive_verdict(
             blocking_reasons=list(result.get("blocking_reasons", [])),
             warnings=list(result.get("warnings", [])),
@@ -2856,7 +2856,12 @@ def execute_dry_run(
                 errors=[],
             )
         if op == "draft_publish":
-            result = backend_publish_draft(resolved_root, source_data.get("source_path"), dry_run=False)
+            result = backend_publish_draft(
+                resolved_root,
+                source_data.get("source_path"),
+                dry_run=False,
+                actor=actor_text,
+            )
             verdict = derive_verdict(
                 blocking_reasons=list(result.get("blocking_reasons", [])),
                 warnings=list(result.get("warnings", [])),

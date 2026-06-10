@@ -15,6 +15,10 @@ def expected_claim_log_path(repo_root: Path, task_id: str, claim_id: str) -> Pat
     return repo_root / "5_tasks" / "records" / "claims" / task_id / f"{claim_id}.md"
 
 
+def expected_publish_record_path(repo_root: Path, task_id: str, publish_id: str) -> Path:
+    return repo_root / "5_tasks" / "records" / "publishes" / task_id / f"{publish_id}.md"
+
+
 def expected_return_record_path(repo_root: Path, task_id: str, return_id: str) -> Path:
     return repo_root / "5_tasks" / "records" / "returns" / task_id / f"{return_id}.md"
 
@@ -31,6 +35,7 @@ def _record_sort_key(record: dict[str, Any]) -> tuple[str, str]:
     metadata = record.get("metadata", {})
     timestamp = (
         metadata.get("created_at")
+        or metadata.get("published_at")
         or metadata.get("session_started_at")
         or metadata.get("claimed_at")
         or metadata.get("returned_at")
@@ -63,6 +68,7 @@ def _build_record(
     id_field = {
         "session": "session_id",
         "claim": "claim_id",
+        "publish": "publish_id",
         "return": "return_id",
         "audit_dispatch": "dispatch_id",
         "audit_verdict": "verdict_id",
@@ -106,6 +112,17 @@ def _build_record(
                 "claimed_by": metadata.get("claimed_by") or metadata.get("actor"),
                 "claimed_at": metadata.get("claimed_at") or metadata.get("created_at"),
                 "claim_source": metadata.get("claim_source"),
+            }
+        )
+    elif record_type == "publish":
+        record.update(
+            {
+                "publish_id": record_id,
+                "actor": metadata.get("actor") or metadata.get("published_by"),
+                "published_by": metadata.get("published_by") or metadata.get("actor"),
+                "published_at": metadata.get("published_at") or metadata.get("created_at"),
+                "source_draft_ref": metadata.get("source_draft_ref"),
+                "published_task_ref": metadata.get("published_task_ref"),
             }
         )
     elif record_type == "return":
@@ -216,6 +233,7 @@ def _iter_owner_decision_files(root: Path) -> list[Path]:
 def load_records(repo_root: Path) -> dict[str, Any]:
     records_root = repo_root / "5_tasks" / "records"
     sessions_root = records_root / "sessions"
+    publishes_root = records_root / "publishes"
     claims_root = records_root / "claims"
     returns_root = records_root / "returns"
     audit_dispatches_root = records_root / "audit_dispatches"
@@ -224,6 +242,10 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     sessions = [
         _build_record(path, repo_root, "session", directory_task_id)
         for path, directory_task_id in _iter_record_files(sessions_root)
+    ]
+    publishes = [
+        _build_record(path, repo_root, "publish", directory_task_id)
+        for path, directory_task_id in _iter_record_files(publishes_root)
     ]
     claims = [
         _build_record(path, repo_root, "claim", directory_task_id)
@@ -249,12 +271,14 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     warnings: list[str] = []
     parse_errors: list[str] = []
     session_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    publish_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     claim_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     return_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     audit_dispatch_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     audit_verdict_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     owner_decision_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_sessions: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    task_publishes: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_claims: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_returns: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_audit_dispatches: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -265,6 +289,13 @@ def load_records(repo_root: Path) -> dict[str, Any]:
             session_index[str(record["session_id"])].append(record)
         if record.get("task_id"):
             task_sessions[str(record["task_id"])].append(record)
+        parse_errors.extend([f"{record['path']}: {item}" for item in record.get("parse_errors", [])])
+        warnings.extend([f"{record['path']}: {item}" for item in record.get("warnings", [])])
+    for record in publishes:
+        if record.get("publish_id"):
+            publish_index[str(record["publish_id"])].append(record)
+        if record.get("task_id"):
+            task_publishes[str(record["task_id"])].append(record)
         parse_errors.extend([f"{record['path']}: {item}" for item in record.get("parse_errors", [])])
         warnings.extend([f"{record['path']}: {item}" for item in record.get("warnings", [])])
     for record in claims:
@@ -304,6 +335,9 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     for record_id, items in session_index.items():
         if len(items) > 1:
             warnings.append(f"Duplicate session_id found: {record_id}")
+    for record_id, items in publish_index.items():
+        if len(items) > 1:
+            warnings.append(f"Duplicate publish_id found: {record_id}")
     for record_id, items in claim_index.items():
         if len(items) > 1:
             warnings.append(f"Duplicate claim_id found: {record_id}")
@@ -322,6 +356,8 @@ def load_records(repo_root: Path) -> dict[str, Any]:
 
     for items in task_sessions.values():
         items.sort(key=_record_sort_key, reverse=True)
+    for items in task_publishes.values():
+        items.sort(key=_record_sort_key, reverse=True)
     for items in task_claims.values():
         items.sort(key=_record_sort_key, reverse=True)
     for items in task_returns.values():
@@ -333,12 +369,14 @@ def load_records(repo_root: Path) -> dict[str, Any]:
 
     summary = {
         "session_records": len(sessions),
+        "publish_records": len(publishes),
         "claim_logs": len(claims),
         "return_records": len(returns),
         "audit_dispatch_records": len(audit_dispatches),
         "audit_verdict_records": len(audit_verdicts),
         "owner_decision_records": len(owner_decisions),
         "tasks_with_session_records": len(task_sessions),
+        "tasks_with_publish_records": len(task_publishes),
         "tasks_with_claim_logs": len(task_claims),
         "tasks_with_return_records": len(task_returns),
         "tasks_with_audit_dispatch_records": len(task_audit_dispatches),
@@ -351,12 +389,14 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         "records_root": str(records_root.relative_to(repo_root)),
         "records_root_exists": records_root.exists(),
         "sessions_root_exists": sessions_root.exists(),
+        "publishes_root_exists": publishes_root.exists(),
         "claims_root_exists": claims_root.exists(),
         "returns_root_exists": returns_root.exists(),
         "audit_dispatches_root_exists": audit_dispatches_root.exists(),
         "audit_verdicts_root_exists": audit_verdicts_root.exists(),
         "owner_decisions_root_exists": owner_decisions_root.exists(),
         "sessions": sorted(sessions, key=_record_sort_key, reverse=True),
+        "publishes": sorted(publishes, key=_record_sort_key, reverse=True),
         "claims": sorted(claims, key=_record_sort_key, reverse=True),
         "returns": sorted(returns, key=_record_sort_key, reverse=True),
         "audit_dispatches": sorted(audit_dispatches, key=_record_sort_key, reverse=True),
@@ -365,12 +405,14 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         "warnings": warnings,
         "parse_errors": parse_errors,
         "session_index": dict(session_index),
+        "publish_index": dict(publish_index),
         "claim_index": dict(claim_index),
         "return_index": dict(return_index),
         "audit_dispatch_index": dict(audit_dispatch_index),
         "audit_verdict_index": dict(audit_verdict_index),
         "owner_decision_index": dict(owner_decision_index),
         "task_sessions": dict(task_sessions),
+        "task_publishes": dict(task_publishes),
         "task_claims": dict(task_claims),
         "task_returns": dict(task_returns),
         "task_audit_dispatches": dict(task_audit_dispatches),
@@ -381,6 +423,7 @@ def load_records(repo_root: Path) -> dict[str, Any]:
 def find_records_for_task(records: dict[str, Any], task_id: str) -> dict[str, list[dict[str, Any]]]:
     return {
         "sessions": list(records.get("task_sessions", {}).get(task_id, [])),
+        "publishes": list(records.get("task_publishes", {}).get(task_id, [])),
         "claims": list(records.get("task_claims", {}).get(task_id, [])),
         "returns": list(records.get("task_returns", {}).get(task_id, [])),
         "audit_dispatches": list(records.get("task_audit_dispatches", {}).get(task_id, [])),

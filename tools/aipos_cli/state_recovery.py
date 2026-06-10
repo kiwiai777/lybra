@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.controlled_execute import get_dry_run, is_expired
+from tools.aipos_cli.authority_scanner import classify_task_authority
 from tools.aipos_cli.records import check_task_record_refs, find_records_for_task
 from tools.aipos_cli.task_loader import load_all_tasks, load_task_by_path
 
@@ -198,6 +199,8 @@ def build_state_recovery_preview(
     record_report = check_task_record_refs(task, records_report)
     record_checks = list(record_report.get("checks", []))
     linked_records = find_records_for_task(records_report, task_id_value) if task_id_value else {"sessions": [], "claims": []}
+    authority = classify_task_authority(task, records_report)
+    authority_findings = list(authority.get("authority_findings", []))
 
     warnings: list[str] = list(selection_warnings)
     blocking: list[str] = []
@@ -415,6 +418,9 @@ def build_state_recovery_preview(
     }
 
     verdict = _derive_verdict(blocking, needs_owner, warnings)
+    effective_truth = bool(authority.get("effective_truth", True))
+    if not effective_truth and verdict == "PASS":
+        verdict = "WARN"
     return {
         "action": "state_recovery_preview",
         "protocol_ref": "AIPOS-172 State Staleness and Provenance Protocol",
@@ -433,6 +439,9 @@ def build_state_recovery_preview(
         "executor_status": metadata.get("executor_status"),
         "audit_readiness": metadata.get("audit_readiness"),
         "dependency_audit_status": metadata.get("dependency_audit_status"),
+        "authority_verdict": authority.get("authority_verdict"),
+        "effective_truth": effective_truth,
+        "authority_findings": authority_findings,
         "provenance_chain": provenance_chain,
         "provenance_completeness": completeness,
         "record_ref_checks": record_checks,
@@ -443,7 +452,7 @@ def build_state_recovery_preview(
         "blocking_reasons": blocking,
         "needs_owner_reasons": needs_owner,
         "source_refs": source_refs,
-        "recommended_next_action": _recommended_action(verdict, completeness, metadata),
+        "recommended_next_action": _recommended_action(verdict, completeness, metadata, effective_truth),
         "derived_at": _utc_now(),
         "writes_enabled": False,
         "execute_allowed": False,
@@ -451,7 +460,9 @@ def build_state_recovery_preview(
     }
 
 
-def _recommended_action(verdict: str, completeness: str, metadata: dict[str, Any]) -> str:
+def _recommended_action(verdict: str, completeness: str, metadata: dict[str, Any], effective_truth: bool = True) -> str:
+    if not effective_truth:
+        return "Treat this file as non-effective truth until Owner reviews authority provenance; do not use it to drive mutation."
     if verdict == "BLOCK":
         return "Resolve contradictory durable state before any mutation or recovery action."
     if verdict == "NEEDS_OWNER":

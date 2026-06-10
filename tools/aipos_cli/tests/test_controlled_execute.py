@@ -226,7 +226,7 @@ class ControlledExecuteTests(unittest.TestCase):
         self.assertIn("dry_run_id", dry)
         self.assertIn("dry_run_snapshot_hash", dry)
 
-    def test_execute_draft_publish_writes_pending_only_and_keeps_source(self) -> None:
+    def test_execute_draft_publish_writes_pending_and_publish_record_and_keeps_source(self) -> None:
         source = self.write_file(
             "5_tasks/drafts/aipos-38-publish-run.md",
             "\n".join(
@@ -263,6 +263,12 @@ class ControlledExecuteTests(unittest.TestCase):
 
         self.assertTrue(executed["ok"])
         self.assertTrue((self.repo_root / "5_tasks/queue/pending/aipos-38-publish-run.md").exists())
+        publish_record = (
+            self.repo_root
+            / "5_tasks/records/publishes/AIPOS-38-PUBLISH-RUN/publish_aipos-38-publish-run.md"
+        )
+        self.assertTrue(publish_record.exists())
+        self.assertIn("published_by: dev.codex.local", publish_record.read_text(encoding="utf-8"))
         self.assertEqual(source.read_text(encoding="utf-8"), before)
 
     def test_execute_queue_claim_moves_pending_to_claimed(self) -> None:

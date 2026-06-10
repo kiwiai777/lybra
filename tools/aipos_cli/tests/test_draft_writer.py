@@ -11,6 +11,7 @@ from pathlib import Path
 from tools.aipos_cli.aipos_cli import main
 from tools.aipos_cli.draft_validator import list_drafts, validate_draft_file
 from tools.aipos_cli.draft_writer import create_draft, publish_draft
+from tools.aipos_cli.records import load_records
 
 
 class DraftWriterTests(unittest.TestCase):
@@ -215,23 +216,34 @@ class DraftWriterTests(unittest.TestCase):
         self.assertTrue(result["would_write"])
         self.assertFalse(result["wrote"])
         self.assertEqual(result["target_path"], "5_tasks/queue/pending/aipos-30-dryrun.md")
+        self.assertEqual(result["publish_record_path"], "5_tasks/records/publishes/AIPOS-30-DRYRUN/publish_aipos-30-dryrun.md")
         self.assertEqual(result["rendered_markdown"], before_source)
         self.assertFalse((self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-30-dryrun.md").exists())
+        self.assertFalse(
+            (self.repo_root / "5_tasks" / "records" / "publishes" / "AIPOS-30-DRYRUN" / "publish_aipos-30-dryrun.md").exists()
+        )
         self.assertEqual(source_path.read_text(encoding="utf-8"), before_source)
 
-    def test_publish_writes_pending_file_under_temp_repo(self) -> None:
+    def test_publish_writes_pending_file_and_publish_record_under_temp_repo(self) -> None:
         create_draft(self.repo_root, self.draft_metadata("AIPOS-30-WRITE"), "## Goal\n\nPublish me.\n")
 
         source_path = self.repo_root / "5_tasks" / "drafts" / "aipos-30-write.md"
         source_text = source_path.read_text(encoding="utf-8")
-        result = publish_draft(self.repo_root, "5_tasks/drafts/aipos-30-write.md")
+        result = publish_draft(self.repo_root, "5_tasks/drafts/aipos-30-write.md", actor="agent-01")
         pending_path = self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-30-write.md"
+        publish_record_path = self.repo_root / "5_tasks" / "records" / "publishes" / "AIPOS-30-WRITE" / "publish_aipos-30-write.md"
 
         self.assertEqual(result["verdict"], "PASS")
         self.assertTrue(result["wrote"])
         self.assertTrue(pending_path.exists())
+        self.assertTrue(publish_record_path.exists())
         self.assertEqual(pending_path.read_text(encoding="utf-8"), source_text)
         self.assertEqual(source_path.read_text(encoding="utf-8"), source_text)
+        records = load_records(self.repo_root)
+        self.assertEqual(records["summary"]["publish_records"], 1)
+        self.assertEqual(records["publishes"][0]["publish_id"], "publish_aipos-30-write")
+        self.assertEqual(records["publishes"][0]["published_by"], "agent-01")
+        self.assertEqual(records["publishes"][0]["source_draft_ref"], "5_tasks/drafts/aipos-30-write.md")
 
     def test_publish_external_intake_draft_converts_to_execution_handoff(self) -> None:
         draft_path = self.write_file(

@@ -85,6 +85,7 @@ executor_status: completed
 audit_readiness: ready
 dependency_audit_status: pending
 result_summary: Work returned.
+return_record_ref: return_AIPOS-173-COMPLETE_001_agent-01
 """,
         )
         self.write_record(
@@ -103,6 +104,18 @@ session_id: session_AIPOS-173-COMPLETE_001_agent-01
 claim_id: claim_AIPOS-173-COMPLETE_001_agent-01
 session_status: claimed
 created_at: 2026-06-05T01:00:00Z
+""",
+        )
+        self.write_record(
+            "5_tasks/records/returns/AIPOS-173-COMPLETE/return_AIPOS-173-COMPLETE_001_agent-01.md",
+            """task_id: AIPOS-173-COMPLETE
+return_id: return_AIPOS-173-COMPLETE_001_agent-01
+claim_id: claim_AIPOS-173-COMPLETE_001_agent-01
+session_id: session_AIPOS-173-COMPLETE_001_agent-01
+returned_by: agent-01
+returned_at: 2026-06-05T01:05:00Z
+executor_status: completed
+audit_readiness: ready
 """,
         )
 

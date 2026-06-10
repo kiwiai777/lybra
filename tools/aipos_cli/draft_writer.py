@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from tools.aipos_cli.draft_validator import (
     resolve_pending_target_path,
     validate_draft_metadata,
 )
+from tools.aipos_cli.records import expected_publish_record_path
 from tools.aipos_cli.task_complexity import validate_task_complexity
 
 EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "agent-01"
@@ -85,6 +87,22 @@ def _yaml_scalar(value: Any) -> str:
     return text
 
 
+def _record_frontmatter(metadata: dict[str, Any], order: list[str]) -> str:
+    ordered_keys = [key for key in order if key in metadata]
+    ordered_keys.extend(sorted(key for key in metadata if key not in ordered_keys))
+    lines = ["---"]
+    for key in ordered_keys:
+        value = metadata[key]
+        if isinstance(value, list):
+            lines.append(f"{key}:")
+            for item in value:
+                lines.append(f"- {_yaml_scalar(item)}")
+            continue
+        lines.append(f"{key}: {_yaml_scalar(value)}")
+    lines.extend(["---", ""])
+    return "\n".join(lines)
+
+
 def render_markdown_task_card(metadata: dict[str, Any], body: str) -> str:
     ordered_keys = [key for key in FRONTMATTER_ORDER if key in metadata]
     ordered_keys.extend(sorted(key for key in metadata if key not in ordered_keys))
@@ -100,6 +118,62 @@ def render_markdown_task_card(metadata: dict[str, Any], body: str) -> str:
         lines.append(f"{key}: {_yaml_scalar(value)}")
     lines.extend(["---", body.rstrip(), ""])
     return "\n".join(lines)
+
+
+def stable_publish_id(task_id: str) -> str:
+    return f"publish_{draft_slug(task_id)}"
+
+
+def render_publish_record(
+    *,
+    task_id: str,
+    publish_id: str,
+    actor: str | None,
+    source_draft_ref: str,
+    published_task_ref: str,
+    source_sha256: str,
+    published_sha256: str,
+    published_at: str,
+) -> str:
+    metadata = {
+        "record_type": "publish_record",
+        "task_id": task_id,
+        "publish_id": publish_id,
+        "actor": actor or "unknown",
+        "published_by": actor or "unknown",
+        "source_draft_ref": source_draft_ref,
+        "published_task_ref": published_task_ref,
+        "source_sha256": source_sha256,
+        "published_sha256": published_sha256,
+        "published_at": published_at,
+        "created_at": published_at,
+    }
+    body = "\n".join(
+        [
+            "## Publish Provenance",
+            "",
+            f"- Source draft: `{source_draft_ref}`",
+            f"- Published task: `{published_task_ref}`",
+            "- Authority: `draft_publish` controlled gate",
+            "",
+        ]
+    )
+    return _record_frontmatter(
+        metadata,
+        [
+            "record_type",
+            "task_id",
+            "publish_id",
+            "actor",
+            "published_by",
+            "source_draft_ref",
+            "published_task_ref",
+            "source_sha256",
+            "published_sha256",
+            "published_at",
+            "created_at",
+        ],
+    ) + body
 
 
 def default_draft_body() -> str:
@@ -267,8 +341,10 @@ def publish_draft(
     draft_path: str | Path,
     *,
     dry_run: bool = False,
+    actor: str | None = None,
 ) -> dict[str, Any]:
     source_path = resolve_draft_path(repo_root, draft_path)
+    source_rel = str(source_path.relative_to(repo_root))
     validation = {
         "action": "draft_validate",
         "path": str(Path(draft_path)),
@@ -281,7 +357,7 @@ def publish_draft(
     result: dict[str, Any] = {
         "action": "draft_publish",
         "dry_run": dry_run,
-        "source_path": str(source_path.relative_to(repo_root)),
+        "source_path": source_rel,
         "target_path": None,
         "task_id": None,
         "verdict": "BLOCK",
@@ -328,12 +404,23 @@ def publish_draft(
     if isinstance(task_id, str) and task_id:
         target_path = expected_pending_relative_path(task_id)
         target_file = resolve_pending_target_path(repo_root, task_id)
+        publish_id = stable_publish_id(task_id)
+        publish_record_path = expected_publish_record_path(repo_root, task_id, publish_id)
+        publish_record_rel = str(publish_record_path.relative_to(repo_root))
+        result["publish_id"] = publish_id
+        result["publish_record_path"] = publish_record_rel
         result["target_path"] = target_path
         result["planned_writes"] = [
             {
                 "path": target_path,
                 "kind": "create",
                 "type": "pending_markdown",
+            },
+            {
+                "path": publish_record_rel,
+                "kind": "create",
+                "type": "publish_record",
+                "record_type": "publish_record",
             }
         ]
 
@@ -347,6 +434,8 @@ def publish_draft(
                 )
             elif target_file.exists():
                 validation["blocking_reasons"].append(f"Pending target already exists: {target_path}")
+        if publish_record_path.exists():
+            validation["blocking_reasons"].append(f"Publish record already exists: {publish_record_rel}")
 
     classification_warnings = list(validation.get("classification_warnings", []))
     verdict_warnings = [warning for warning in validation["warnings"] if warning not in classification_warnings]
@@ -377,5 +466,31 @@ def publish_draft(
     pending_root.mkdir(parents=True, exist_ok=True)
     target_file = repo_root / result["target_path"]
     target_file.write_text(rendered_markdown, encoding="utf-8")
+    publish_id = str(result["publish_id"])
+    publish_record_path = expected_publish_record_path(repo_root, str(task_id), publish_id)
+    publish_record_path.parent.mkdir(parents=True, exist_ok=True)
+    source_sha256 = hashlib.sha256(source_markdown.encode("utf-8")).hexdigest()
+    published_sha256 = hashlib.sha256(rendered_markdown.encode("utf-8")).hexdigest()
+    published_at = _utc_now()
+    publish_record_path.write_text(
+        render_publish_record(
+            task_id=str(task_id),
+            publish_id=publish_id,
+            actor=actor,
+            source_draft_ref=source_rel,
+            published_task_ref=str(result["target_path"]),
+            source_sha256=source_sha256,
+            published_sha256=published_sha256,
+            published_at=published_at,
+        ),
+        encoding="utf-8",
+    )
     result["wrote"] = True
+    result["record_writes"] = [
+        {
+            "path": str(publish_record_path.relative_to(repo_root)),
+            "record_type": "publish_record",
+            "wrote": True,
+        }
+    ]
     return result
