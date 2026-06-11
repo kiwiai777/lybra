@@ -218,11 +218,24 @@ def render_projection(context_pack: dict[str, Any], dest: Path) -> list[str]:
 
 
 def assert_no_secrets(directory: Path, secrets_to_scan: Sequence[str]) -> None:
-    """Abort if any raw secret literal appears anywhere under `directory`."""
+    """Abort if any raw secret literal appears anywhere under `directory`.
+
+    Scans both projection path names and file contents (belt-and-suspenders on
+    top of the structural exclusion already validated in AIPOS-195/196b). Errors
+    never echo the raw secret value, only fingerprints / generic locations.
+    """
     needles = [s for s in secrets_to_scan if s]
     if not needles:
         return
     for path in sorted(directory.rglob("*")):
+        rel = str(path.relative_to(directory))
+        for needle in needles:
+            if needle in rel:
+                # Do not print rel here — it would contain the raw secret.
+                raise ConfinedWorkerError(
+                    f"projection leak: a raw secret value appears in a projection path name "
+                    f"({secret_fingerprint(needle)})"
+                )
         if not path.is_file():
             continue
         try:
@@ -232,7 +245,8 @@ def assert_no_secrets(directory: Path, secrets_to_scan: Sequence[str]) -> None:
         for needle in needles:
             if needle in text:
                 raise ConfinedWorkerError(
-                    f"projection leak: a raw secret value appears in {path.relative_to(directory)}"
+                    f"projection leak: a raw secret value appears in {rel} "
+                    f"({secret_fingerprint(needle)})"
                 )
 
 
@@ -444,6 +458,23 @@ def build_worker_report(
 # Run / teardown                                                              #
 # --------------------------------------------------------------------------- #
 
+def provision_scratch_dir(path: Path) -> None:
+    """Create the per-run scratch dir writable by the container process.
+
+    AIPOS-191B pre-flight (Slice B): the worker runs without `--user`, so the
+    container writes `/scratch` as the image's default uid. On WSL2/Linux, when
+    that uid differs from the host scratch-dir owner the bind-mounted dir is not
+    writable (reproduced: mismatched non-root uid -> Permission denied). Docker
+    bind-mounts this run dir directly, so only the run dir's own mode gates
+    container access; the approved-root parent mode is not changed here, keeping
+    the operator's `LYBRA_APPROVED_SCRATCH_ROOT` permissions intact. Set the run
+    dir world-writable so any image uid can write its scratch outputs.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        os.chmod(path, 0o777)
+
+
 def teardown_token_file(path: Path) -> bool:
     try:
         path.unlink()
@@ -468,7 +499,7 @@ def run_confined_worker(request: ConfinedWorkerRequest) -> dict[str, Any]:
             teardown_verified=False,
         )
 
-    request.scratch_run_dir.mkdir(parents=True, exist_ok=True)
+    provision_scratch_dir(request.scratch_run_dir)
     write_mcp_config_file(request.mcp_config_path, build_mcp_client_config(request.gate_url, request.mcp_token))
 
     status = "completed"

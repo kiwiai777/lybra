@@ -244,6 +244,44 @@ class ProjectionScanTests(unittest.TestCase):
         with self.assertRaises(cw.ConfinedWorkerError):
             cw.assert_no_secrets(dest, ["RAW-TOKEN-XYZ"])
 
+    def test_assert_no_secrets_detects_filename_leak(self) -> None:
+        # AIPOS-191B Slice A: a secret value appearing in a path name is caught,
+        # and the raised message must not echo the raw secret.
+        dest = self.tmp / "projection"
+        (dest / "sub").mkdir(parents=True, exist_ok=True)
+        (dest / "sub" / "RAW-TOKEN-XYZ.json").write_text("{}", encoding="utf-8")
+        with self.assertRaises(cw.ConfinedWorkerError) as ctx:
+            cw.assert_no_secrets(dest, ["RAW-TOKEN-XYZ"])
+        self.assertNotIn("RAW-TOKEN-XYZ", str(ctx.exception))
+
+
+class ScratchProvisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp_ctx = tempfile.TemporaryDirectory()
+        self.tmp = Path(self.tmp_ctx.name).resolve()
+
+    def tearDown(self) -> None:
+        self.tmp_ctx.cleanup()
+
+    def test_provision_scratch_dir_is_world_writable(self) -> None:
+        # AIPOS-191B Slice B: the per-run scratch dir must be writable by any
+        # container uid (no --user is set), so it is provisioned world-writable.
+        approved = self.tmp / "approved"
+        approved.mkdir(parents=True, exist_ok=True)
+        os.chmod(approved, 0o700)  # operator may keep the approved root locked down
+        run_dir = approved / "cw_run"
+        cw.provision_scratch_dir(run_dir)
+        self.assertTrue(run_dir.is_dir())
+        self.assertEqual(stat.S_IMODE(run_dir.stat().st_mode), 0o777)
+        # The approved-root parent mode is left untouched.
+        self.assertEqual(stat.S_IMODE(approved.stat().st_mode), 0o700)
+
+    def test_provision_scratch_dir_idempotent(self) -> None:
+        run_dir = self.tmp / "approved" / "cw_run"
+        cw.provision_scratch_dir(run_dir)
+        cw.provision_scratch_dir(run_dir)  # exist_ok; re-chmod stays 0777
+        self.assertEqual(stat.S_IMODE(run_dir.stat().st_mode), 0o777)
+
 
 if __name__ == "__main__":
     unittest.main()
