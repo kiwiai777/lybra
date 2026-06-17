@@ -96,15 +96,18 @@ class McpToolTests(unittest.TestCase):
         assert response is not None
         return response
 
-    def capability_token(self, operations: list[str] | None = None) -> str:
-        return json.dumps(
-            {
-                "token_ref": "cap_mcp_test",
-                "operations": operations if operations is not None else ["intake_submit"],
-                "projects": ["acme_client"],
-                "expires_at": "2999-01-01T00:00:00Z",
-            }
-        )
+    def capability_token(self, operations: list[str] | None = None, role: str | None = None, fingerprint: str | None = None) -> str:
+        payload: dict[str, object] = {
+            "token_ref": "cap_mcp_test",
+            "operations": operations if operations is not None else ["intake_submit"],
+            "projects": ["acme_client"],
+            "expires_at": "2999-01-01T00:00:00Z",
+        }
+        if role is not None:
+            payload["role"] = role
+        if fingerprint is not None:
+            payload["fingerprint"] = fingerprint
+        return json.dumps(payload)
 
     def write_claim_task(self, task_id: str = "AIPOS-MCP-CLAIM", *, agent_instance: str = "agent-01", claim_policy: str = "specific_instance_only") -> None:
         (self.repo_root / "5_tasks" / "queue" / "pending" / f"{task_id.lower()}.md").write_text(
@@ -365,12 +368,12 @@ class McpToolTests(unittest.TestCase):
         self.assertIn("lybra_owner_decision_record_confirm", names_with_owner_scope)
         self.assertNotIn("lybra_intake_submit_dry_run", names_with_owner_scope)
 
-        names_with_claim_scope = self.list_tool_names(capability_token=self.capability_token(operations=["queue_claim"]))
+        names_with_claim_scope = self.list_tool_names(capability_token=self.capability_token(operations=["queue_claim", "owner_confirm"]))
         self.assertIn("lybra_queue_claim_dry_run", names_with_claim_scope)
         self.assertIn("lybra_queue_claim_confirm", names_with_claim_scope)
         self.assertNotIn("lybra_intake_submit_dry_run", names_with_claim_scope)
 
-        names_with_return_scope = self.list_tool_names(capability_token=self.capability_token(operations=["queue_return"]))
+        names_with_return_scope = self.list_tool_names(capability_token=self.capability_token(operations=["queue_return", "owner_confirm"]))
         self.assertIn("lybra_queue_return_dry_run", names_with_return_scope)
         self.assertIn("lybra_queue_return_confirm", names_with_return_scope)
         self.assertNotIn("lybra_queue_claim_dry_run", names_with_return_scope)
@@ -566,7 +569,7 @@ class McpToolTests(unittest.TestCase):
         self.write_return_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
@@ -613,7 +616,7 @@ class McpToolTests(unittest.TestCase):
         self.dispatch_audit_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             dry = self.assert_tool_ok(
@@ -651,7 +654,7 @@ class McpToolTests(unittest.TestCase):
 
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             delegated = self.assert_tool_ok(
@@ -663,7 +666,7 @@ class McpToolTests(unittest.TestCase):
         self.write_claim_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim", "owner_confirm"]),
         }
         before = self.data_paths()
         with patch.dict(os.environ, env, clear=True):
@@ -689,7 +692,7 @@ class McpToolTests(unittest.TestCase):
         self.write_claim_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             dry = self.assert_tool_ok(self.call_tool("lybra_queue_claim_dry_run", self.claim_payload()))
@@ -739,7 +742,7 @@ class McpToolTests(unittest.TestCase):
         self.write_claim_task(agent_instance="dev.claude.cc.local")
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             wrong_instance = self.assert_tool_ok(
@@ -758,7 +761,7 @@ class McpToolTests(unittest.TestCase):
         local_dry = claim_task(task_id="AIPOS-MCP-CLAIM", actor="agent-01", dry_run=True, repo_root=self.repo_root)
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             rejected = self.assert_tool_ok(
@@ -784,7 +787,7 @@ class McpToolTests(unittest.TestCase):
 
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             delegated = self.assert_tool_ok(
@@ -796,7 +799,7 @@ class McpToolTests(unittest.TestCase):
         self.write_return_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         before = self.data_paths()
         with patch.dict(os.environ, env, clear=True):
@@ -823,7 +826,7 @@ class McpToolTests(unittest.TestCase):
         self.write_return_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
@@ -886,11 +889,93 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual(recovery["provenance_completeness"], "complete")
         self.assertEqual(recovery["provenance_chain"]["return"]["record_status"], "ok")
 
+    def test_aipos197_return_confirm_denied_without_owner_confirm_scope(self) -> None:
+        # AIPOS-197 / F-candidate-1: a token that can dry-run (queue_return) but lacks
+        # owner_confirm is structurally denied confirm — even with OWNER_CONFIRMED.
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),  # NO owner_confirm
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            self.assertTrue(dry["ok"], dry.get("blocking_reasons"))  # dry-run still allowed
+            denied = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",  # knows the literal, still denied
+                    },
+                )
+            )
+        self.assertEqual(denied["error_code"], "SCOPE_DENIED")
+        # No truth mutation: task stays claimed-only with no return record.
+        self.assertEqual(load_records(self.repo_root)["summary"]["return_records"], 0)
+
+    def test_aipos197_claim_confirm_denied_without_owner_confirm_scope(self) -> None:
+        self.write_claim_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),  # NO owner_confirm
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_claim_dry_run", self.claim_payload()))
+            self.assertTrue(dry["ok"], dry.get("blocking_reasons"))
+            denied = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_claim_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-166-supervised-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        self.assertEqual(denied["error_code"], "SCOPE_DENIED")
+
+    def test_aipos197_return_confirm_records_confirmer_attribution(self) -> None:
+        # owner_confirm token confirms OK and the return record attributes the confirmer
+        # (role + non-secret fingerprint), so L3 can tell Owner-confirm from self-confirm.
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(
+                operations=["queue_return", "owner_confirm"], role="owner", fingerprint="sha256:ownerfp01"
+            ),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        self.assertTrue(confirmed["ok"], confirmed)
+        records = load_records(self.repo_root)
+        rec = records["returns"][0]["metadata"]
+        self.assertEqual(rec.get("confirmer_role"), "owner")
+        self.assertEqual(rec.get("confirmer_token_fingerprint"), "sha256:ownerfp01")
+        # §9 signature-ready placeholders present (empty in v0).
+        self.assertIn("gate_signature", rec)
+
     def test_queue_return_confirm_reuses_planned_timestamp_for_stable_snapshot(self) -> None:
         self.write_return_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
@@ -915,7 +1000,7 @@ class McpToolTests(unittest.TestCase):
         self.write_return_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             first = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
@@ -933,7 +1018,7 @@ class McpToolTests(unittest.TestCase):
         task_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md"
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
@@ -965,7 +1050,7 @@ class McpToolTests(unittest.TestCase):
     def _scratch_return_env(self, approved_root: Path) -> dict[str, str]:
         return {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
             "LYBRA_APPROVED_SCRATCH_ROOT": str(approved_root),
         }
 
@@ -1063,7 +1148,7 @@ class McpToolTests(unittest.TestCase):
         (scratch_dir / "result.md").write_text("artifact\n", encoding="utf-8")
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             blocked = self.assert_tool_ok(
@@ -1148,7 +1233,7 @@ class McpToolTests(unittest.TestCase):
         self.write_return_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             wrong_instance = self.assert_tool_ok(
@@ -1166,7 +1251,7 @@ class McpToolTests(unittest.TestCase):
         self.write_return_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             blocked = self.assert_tool_ok(
@@ -1183,7 +1268,7 @@ class McpToolTests(unittest.TestCase):
         self.write_return_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             blocked = self.assert_tool_ok(
@@ -1196,7 +1281,7 @@ class McpToolTests(unittest.TestCase):
         self.write_return_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             blocked = self.assert_tool_ok(
@@ -1224,7 +1309,7 @@ class McpToolTests(unittest.TestCase):
         )
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             rejected = self.assert_tool_ok(
@@ -1352,7 +1437,7 @@ class McpToolTests(unittest.TestCase):
         audit_path.write_text(text, encoding="utf-8")
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
-            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim", "owner_confirm"]),
         }
         with patch.dict(os.environ, env, clear=True):
             blocked = self.assert_tool_ok(

@@ -160,6 +160,14 @@ MCP_CLAIM_FRONTMATTER_ORDER = [
     "dry_run_id",
     "dry_run_snapshot_hash",
     "confirmation_ref",
+    "confirmer_role",
+    "confirmer_token_ref",
+    "confirmer_token_fingerprint",
+    "gate_signature",
+    "authority_seal",
+    "signature_key_ref",
+    "signed_payload_hash",
+    "signed_at",
     "session_id",
     "lease_status",
     "lease_path",
@@ -213,6 +221,14 @@ MCP_RETURN_FRONTMATTER_ORDER = [
     "dry_run_id",
     "dry_run_snapshot_hash",
     "confirmation_ref",
+    "confirmer_role",
+    "confirmer_token_ref",
+    "confirmer_token_fingerprint",
+    "gate_signature",
+    "authority_seal",
+    "signature_key_ref",
+    "signed_payload_hash",
+    "signed_at",
     "lease_status",
     "lease_path",
     "active_lease_written",
@@ -360,6 +376,25 @@ def build_session_record_markdown(
     return render_markdown(metadata, body, SESSION_FRONTMATTER_ORDER)
 
 
+def _confirmer_fields(confirmer: dict[str, Any] | None) -> dict[str, Any]:
+    """AIPOS-197 confirmer attribution + AIPOS-193 §9 signature-ready placeholders.
+
+    Records WHO confirmed (role + non-secret token fingerprint) so L3 can tell an
+    Owner-role confirmation from an agent self-confirmation. Never stores a raw token.
+    """
+    c = confirmer or {}
+    return {
+        "confirmer_role": str(c.get("confirmer_role") or ""),
+        "confirmer_token_ref": str(c.get("confirmer_token_ref") or ""),
+        "confirmer_token_fingerprint": str(c.get("confirmer_token_fingerprint") or ""),
+        "gate_signature": "",
+        "authority_seal": "",
+        "signature_key_ref": "",
+        "signed_payload_hash": "",
+        "signed_at": "",
+    }
+
+
 def build_mcp_claim_record_markdown(
     *,
     task_id: str,
@@ -376,6 +411,7 @@ def build_mcp_claim_record_markdown(
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
+    confirmer: dict[str, Any] | None = None,
 ) -> str:
     metadata = {
         "record_type": "claim_record",
@@ -398,6 +434,7 @@ def build_mcp_claim_record_markdown(
         "dry_run_id": dry_run_id or "",
         "dry_run_snapshot_hash": dry_run_snapshot_hash or "",
         "confirmation_ref": confirmation_ref or "",
+        **_confirmer_fields(confirmer),
         "session_id": session_id,
         "lease_status": "proposed",
         "lease_path": "claim_only",
@@ -482,6 +519,7 @@ def build_mcp_return_record_markdown(
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
+    confirmer: dict[str, Any] | None = None,
 ) -> str:
     metadata = {
         "record_type": "return_record",
@@ -509,6 +547,7 @@ def build_mcp_return_record_markdown(
         "dry_run_id": dry_run_id or "",
         "dry_run_snapshot_hash": dry_run_snapshot_hash or "",
         "confirmation_ref": confirmation_ref or "",
+        **_confirmer_fields(confirmer),
         "lease_status": "proposed",
         "lease_path": "claim_only",
         "active_lease_written": False,

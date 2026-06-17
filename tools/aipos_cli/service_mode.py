@@ -35,6 +35,14 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
         "scopes": ["queue_claim", "queue_return"],
     },
     {
+        # AIPOS-197: Owner-only confirm authority. The Owner uses this token,
+        # out of band, to CONFIRM claim/return dry-runs. The executor token does
+        # not hold owner_confirm, so a confined agent cannot self-confirm.
+        "role": "owner",
+        "token_ref": "svc-owner",
+        "scopes": ["queue_claim", "queue_return", "owner_confirm"],
+    },
+    {
         "role": "owner-dispatch",
         "token_ref": "svc-owner-dispatch",
         "scopes": ["audit_dispatch"],

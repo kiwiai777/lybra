@@ -123,6 +123,9 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
         "role": str(entry.get("role") or ""),
         "operations": [str(item) for item in scopes],
         "expires_at": expires_at,
+        # AIPOS-197: non-secret fingerprint of the bearer, for confirmer attribution
+        # in provenance records (never the raw token).
+        "fingerprint": str(entry.get("fingerprint") or ""),
         "source": "service_v0",
     }, None
 
@@ -302,6 +305,8 @@ def load_service_role_registry(connection_json: str | Path) -> dict[str, dict[st
             "token_ref": str(item.get("token_ref") or ""),
             "scopes": [str(scope) for scope in item.get("scopes", []) if str(scope).strip()] if isinstance(item.get("scopes"), list) else [],
             "expires_at": str(item.get("expires_at") or "2999-01-01T00:00:00Z"),
+            # AIPOS-197: connection.json already stores a non-secret fingerprint per token.
+            "fingerprint": str(item.get("fingerprint") or ""),
         }
     if not registry:
         raise ValueError(f"Service connection config contains no usable role tokens: {path}")

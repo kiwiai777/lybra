@@ -1272,6 +1272,7 @@ def _queue_mutation_preview(
             canonical_agent_instance=str(mcp_claim_metadata.get("canonical_agent_instance") or actor),
             owner_policy_ref=str(mcp_claim_metadata.get("owner_policy_ref") or ""),
             updated_metadata=updated_frontmatter,
+            confirmer=mcp_claim_metadata.get("confirmer") if isinstance(mcp_claim_metadata.get("confirmer"), dict) else None,
         )
         data["mcp_records_enabled"] = True
         data["records_enabled"] = True
@@ -1385,6 +1386,7 @@ def _mcp_claim_record_plan(
     updated_metadata: dict[str, Any],
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
+    confirmer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     claim_id = str(updated_metadata.get("claim_id") or "")
     session_id = str(updated_metadata.get("active_session_id") or "")
@@ -1413,6 +1415,7 @@ def _mcp_claim_record_plan(
         dry_run_id=dry_run_id,
         dry_run_snapshot_hash=dry_run_snapshot_hash,
         confirmation_ref=confirmation_ref,
+        confirmer=confirmer,
     )
     session_markdown = build_mcp_claim_session_record_markdown(
         task_id=task_id,
@@ -1467,6 +1470,7 @@ def _mcp_return_record_plan(
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     return_id: str | None = None,
+    confirmer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     claim_id = str(source_metadata.get("claim_id") or "")
     session_id = str(source_metadata.get("active_session_id") or "")
@@ -1508,6 +1512,7 @@ def _mcp_return_record_plan(
         dry_run_id=dry_run_id,
         dry_run_snapshot_hash=dry_run_snapshot_hash,
         confirmation_ref=confirmation_ref,
+        confirmer=confirmer,
     )
     session_markdown = ""
     if not blocking:
@@ -1722,6 +1727,7 @@ def _build_return_preview(
             artifact_refs=effective_artifact_refs,
             completion_report_ref=completion_report_ref,
             return_id=return_id or None,
+            confirmer=mcp_return_metadata.get("confirmer") if isinstance(mcp_return_metadata.get("confirmer"), dict) else None,
         )
         if record_plan.get("record_blocking_reasons"):
             blocking_reasons.extend(str(item) for item in record_plan.get("record_blocking_reasons", []))
@@ -2702,6 +2708,7 @@ def execute_dry_run(
     actor: str,
     owner_confirmation_token: str | None = None,
     repo_root: str | Path | None = None,
+    confirmer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     operation = "execute_dry_run"
     actor_text = str(actor or "").strip()
@@ -2764,6 +2771,14 @@ def execute_dry_run(
         source_plan = token.plan
         source_data = source_plan.get("data") or {}
         op = token.operation
+
+        # AIPOS-197: stamp the confirming token's non-secret identity into the mcp
+        # metadata so the claim/return record attributes WHO confirmed. Confirmer is
+        # not part of the dry-run snapshot, so this does not affect revalidation.
+        if isinstance(confirmer, dict):
+            for _mcp_key in ("mcp_claim", "mcp_return"):
+                if isinstance(source_data.get(_mcp_key), dict):
+                    source_data[_mcp_key]["confirmer"] = confirmer
 
         if bool(source_data.get("with_records", False)):
             return blocked_response(

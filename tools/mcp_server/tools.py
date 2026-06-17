@@ -35,6 +35,16 @@ QUEUE_CLAIM_SCOPE = "queue_claim"
 QUEUE_RETURN_SCOPE = "queue_return"
 AUDIT_DISPATCH_SCOPE = "audit_dispatch"
 AUDIT_VERDICT_SCOPE = "audit_verdict"
+# AIPOS-197 gate-hardening v0: an Owner-only scope required to CONFIRM consequential
+# truth mutations. dry-run keeps its operation scope; confirm additionally requires
+# this scope, which the executor token does not hold — so a confined agent cannot
+# self-confirm regardless of whether it knows the static OWNER_CONFIRMED literal.
+# v0 scope: claim + return confirm only (the F-candidate-1 surface proven in 191B).
+# Principle: every confirm tool that mutates Owner-gated truth should require an
+# Owner-held confirm scope; audit_dispatch/audit_verdict/intake/owner_decision/
+# workspace_init confirms keep their existing role gate until each one's legitimate
+# confirmer is decided per-tool (to preserve executor != auditor != owner).
+OWNER_CONFIRM_SCOPE = "owner_confirm"
 DISCIPLINE_DOC_REF = "AIPOS-109 MCP-native discipline"
 SUPERVISED_CLAIM_DOC_REF = "AIPOS-165 Supervised MCP Explicit Claim Protocol"
 OWNER_CONFIRMATION_TOKEN = "OWNER_CONFIRMED"
@@ -226,6 +236,24 @@ def _queue_claim_scope_allowed() -> bool:
 
 def _queue_return_scope_allowed() -> bool:
     return _capability_has_scope(QUEUE_RETURN_SCOPE)
+
+
+def _owner_confirm_scope_allowed() -> bool:
+    return _capability_has_scope(OWNER_CONFIRM_SCOPE)
+
+
+def _confirmer_attribution() -> dict[str, Any]:
+    """Non-secret identity of the token performing a confirm (AIPOS-197 / F-c12).
+
+    Lets durable provenance distinguish an Owner-role confirmation from a
+    non-Owner/agent self-confirmation. Never includes the raw token.
+    """
+    cap = _capability_token()
+    return {
+        "confirmer_role": str(cap.get("role") or "") or None,
+        "confirmer_token_ref": str(cap.get("token_ref") or cap.get("token_id") or "") or None,
+        "confirmer_token_fingerprint": str(cap.get("fingerprint") or "") or None,
+    }
 
 
 def _audit_dispatch_scope_allowed() -> bool:
@@ -859,6 +887,10 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
 def lybra_queue_claim_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     if not _queue_claim_scope_allowed():
         return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "supervised queue claim tools")
+    # AIPOS-197: confirm additionally requires the Owner-only owner_confirm scope, so a
+    # dry-run-capable (executor) token cannot self-confirm. Structural, not literal-secrecy.
+    if not _owner_confirm_scope_allowed():
+        return _scope_denied_result_for(OWNER_CONFIRM_SCOPE, "queue claim confirm (Owner-only)")
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -936,6 +968,7 @@ def lybra_queue_claim_confirm(arguments: dict[str, Any] | None = None) -> dict[s
         canonical_agent_instance,
         owner_confirmation_token=owner_confirmation_token,
         repo_root=repo_root,
+        confirmer=_confirmer_attribution(),
     )
     if not response.get("ok", False):
         return _map_controlled_execute_error(response, dry_run_tool="lybra_queue_claim_dry_run")
@@ -1088,6 +1121,9 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
 def lybra_queue_return_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     if not _queue_return_scope_allowed():
         return _scope_denied_result_for(QUEUE_RETURN_SCOPE, "supervised queue return tools")
+    # AIPOS-197: confirm additionally requires the Owner-only owner_confirm scope.
+    if not _owner_confirm_scope_allowed():
+        return _scope_denied_result_for(OWNER_CONFIRM_SCOPE, "queue return confirm (Owner-only)")
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -1165,6 +1201,7 @@ def lybra_queue_return_confirm(arguments: dict[str, Any] | None = None) -> dict[
         canonical_agent_instance,
         owner_confirmation_token=owner_confirmation_token,
         repo_root=repo_root,
+        confirmer=_confirmer_attribution(),
     )
     if not response.get("ok", False):
         return _map_controlled_execute_error(response, dry_run_tool="lybra_queue_return_dry_run")
