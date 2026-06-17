@@ -283,5 +283,69 @@ class ScratchProvisionTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(run_dir.stat().st_mode), 0o777)
 
 
+class ByoLlmWiringTests(unittest.TestCase):
+    """AIPOS-196c: base_url + model + config dir + auth_mode wiring."""
+
+    def setUp(self) -> None:
+        self.tmp_ctx = tempfile.TemporaryDirectory()
+        self.tmp = Path(self.tmp_ctx.name).resolve()
+
+    def tearDown(self) -> None:
+        self.tmp_ctx.cleanup()
+
+    def _envs(self, argv):
+        return [argv[i + 1] for i, tok in enumerate(argv) if tok == "--env"]
+
+    def test_base_url_injected_when_set_absent_when_unset(self) -> None:
+        argv = cw.build_docker_argv(_request(self.tmp, anthropic_base_url="https://xchai.xyz"))
+        self.assertIn("ANTHROPIC_BASE_URL=https://xchai.xyz", self._envs(argv))
+        argv2 = cw.build_docker_argv(_request(self.tmp))
+        self.assertFalse(any(e.startswith("ANTHROPIC_BASE_URL=") for e in self._envs(argv2)))
+
+    def test_model_flag_on_claude_command(self) -> None:
+        argv = cw.build_docker_argv(_request(self.tmp, model="claude-sonnet-4-6"))
+        self.assertIn("--model", argv)
+        self.assertEqual(argv[argv.index("--model") + 1], "claude-sonnet-4-6")
+        argv2 = cw.build_docker_argv(_request(self.tmp))
+        self.assertNotIn("--model", argv2)
+
+    def test_home_and_config_dir_always_injected(self) -> None:
+        envs = self._envs(cw.build_docker_argv(_request(self.tmp)))
+        self.assertIn("HOME=/tmp", envs)
+        self.assertIn("CLAUDE_CONFIG_DIR=/tmp/.claude", envs)
+
+    def test_auth_mode_selects_credential_env(self) -> None:
+        envs_default = self._envs(cw.build_docker_argv(_request(self.tmp)))
+        self.assertIn("ANTHROPIC_API_KEY", envs_default)
+        self.assertNotIn("ANTHROPIC_AUTH_TOKEN", envs_default)
+        envs_token = self._envs(cw.build_docker_argv(_request(self.tmp, auth_mode="auth_token")))
+        self.assertIn("ANTHROPIC_AUTH_TOKEN", envs_token)
+        self.assertNotIn("ANTHROPIC_API_KEY", envs_token)
+
+    def test_invalid_auth_mode_refused(self) -> None:
+        with self.assertRaises(cw.ConfinedWorkerError):
+            cw.build_docker_argv(_request(self.tmp, auth_mode="bogus"))
+
+    def test_argv_carries_no_raw_secret_with_byo_llm(self) -> None:
+        req = _request(self.tmp, anthropic_base_url="https://xchai.xyz", model="claude-sonnet-4-6")
+        joined = " ".join(cw.build_docker_argv(req))
+        self.assertNotIn("EXEC-TOKEN-RAW-VALUE", joined)
+        self.assertNotIn("sk-ant-secret", joined)
+
+    def test_report_llm_block_non_secret(self) -> None:
+        req = _request(self.tmp, anthropic_base_url="https://xchai.xyz", model="claude-sonnet-4-6", dry_run=True)
+        report = cw.run_confined_worker(req)
+        llm = report["llm"]
+        self.assertEqual(llm["base_url"], "https://xchai.xyz")
+        self.assertEqual(llm["model"], "claude-sonnet-4-6")
+        self.assertEqual(llm["auth_mode"], "api_key")
+        self.assertEqual(llm["config_dir"], "/tmp/.claude")
+        self.assertEqual(llm["home"], "/tmp")
+        self.assertEqual(llm["key_fingerprint"], cw.secret_fingerprint("sk-ant-secret"))
+        blob = json.dumps(report)
+        self.assertNotIn("sk-ant-secret", blob)
+        self.assertNotIn("EXEC-TOKEN-RAW-VALUE", blob)
+
+
 if __name__ == "__main__":
     unittest.main()

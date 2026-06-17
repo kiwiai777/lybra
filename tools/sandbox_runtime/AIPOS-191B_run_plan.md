@@ -226,6 +226,61 @@ each to a later slice; do NOT fix product code inside the 191B run.
   adapter exists → route to a codex harness + adapter slice for Round 2.
 - F-candidate-3 (known, B3): SC1 contract is prompt-carried, not a projection file
   anchor → route to the SC2 render pipeline.
+- **F-c4 (code-reviewed) — no OWNER_CONFIRMED-gated `draft_publish` transport
+  surface.** CLI `draft publish` calls `draft_writer.publish_draft` directly, so it
+  is ungated (no `dry_run_token`, no OWNER_CONFIRMED). No MCP draft tools exist
+  (`lybra_draft_*` absent). The gated logic exists only in
+  `board_adapter.execute_dry_run(op="draft_publish")` with no transport, and its
+  dry-run token is in-memory, so it cannot bridge the Owner turn-gap (dry-run in one
+  turn/process, confirm after Owner OWNER_CONFIRMED in another). Disposition: this
+  round accepts the ungated CLI publish with Owner out-of-band authorization; a
+  gated `draft_publish` surface is a separate later audited slice.
+- **F-c6 (blocking, RESOLVED this round) — product code repo != governed
+  workspace; Lybra had no standing autonomous workspace.** `~/lybra` (product code)
+  has no `5_tasks/` queue but carried a service-mode `connection.json` whose
+  `workspace_root` pointed at that queue-less root; `~/ai-project-os` has the live
+  `5_tasks/` queue but is the read-only governance/PM repo and has no service-mode
+  connection. Neither is a coherent run workspace. Disposition: provision a
+  dedicated 191B workspace outside both repos
+  (`~/lybra-191b-workspace/`) via `workspace init`, with its own service-mode
+  `connection.json` + role tokens and `workspace_root` set to itself. 191B truth
+  (queue/records/workspace_artifacts) lives there; `~/ai-project-os` task truth is
+  not touched and product truth is not pushed into `~/lybra`.
+- **F-c5 — no Round-1 Claude worker identity.** Only `dev.codex.local` exists; SC1
+  shipped the claude_code adapter, not a Claude worker bundle/profile. Disposition:
+  mint a minimal Claude worker `agent_instance` + a thin context bundle in the 191B
+  workspace, just enough for `specific_instance_only` claim; a full profile system
+  is a larger separate slice.
+- **F-c7 (MEDIUM) — controlled-execute confirm ergonomics are fragile.** During
+  191B workspace provisioning, several human-machine failure modes appeared, each
+  able to silently derail an Owner-gated confirm: (1) confirm/CLI must run from the
+  correct cwd and with the correct `AIPOS_WORKSPACE_ROOT` (a wrong root resolves to
+  a different/queue-less workspace); (2) long commands pasted into a terminal break
+  on line wrap; (3) a missing required `--actor` made argparse error while a shell
+  redirect still truncated the dry-run envelope to 0 bytes (a confirm against an
+  empty envelope would fail confusingly); (4) the dry-run token TTL is only ~10
+  minutes, so an Owner out-of-band confirm easily expires. Disposition (no product
+  code change this round): wrap gated operations in short, parameterized scripts
+  (token via `$1`, never a literal), persist envelopes to a stable path with
+  self-verify, and re-issue the dry-run if the window lapses. Route to a later
+  audited slice: longer/explicit TTL surfaced in the envelope, a confirm helper
+  that validates cwd/root/envelope before calling, and clearer empty/expired-proof
+  errors.
+- **F-c8 (HIGH, blocking Round-1 real run) — confined worker LLM wiring is
+  key-only; no base_url or model selection.** `confined_worker.build_docker_argv`
+  injects only `--env ANTHROPIC_API_KEY` (confined_worker.py:359) and runs
+  `claude -p <prompt> --mcp-config … --allowedTools …` with no `--model`
+  (:366-372). It passes neither `ANTHROPIC_BASE_URL` nor any model
+  (`ANTHROPIC_MODEL`/`--model`). With a BYO-LLM proxy credential that only serves a
+  specific model via a specific base_url (verified: this key works only at
+  `https://xchai.xyz/v1/messages` with `x-api-key` for `claude-sonnet-4-6`; default
+  `api.anthropic.com` and non-sonnet models fail), the worker cannot authenticate
+  or select the right model, so a real Round-1 run is blocked. Disposition: route
+  to a separate audited product-code slice that adds, at minimum, `ANTHROPIC_BASE_URL`
+  env passthrough and a model selector (`--model`/`ANTHROPIC_MODEL`) to the worker,
+  plus (related) a writable `HOME`/`CLAUDE_CONFIG_DIR` under the read-only rootfs
+  (the image currently sets `HOME=/tmp` as a stopgap; the wall mounts tmpfs /tmp).
+  Do NOT change product code inside the 191B run.
 - (reserve space for new findings discovered at run time.)
 
 ## 7. Red lines (kept closed)

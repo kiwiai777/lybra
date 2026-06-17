@@ -39,6 +39,15 @@ SCRATCH_TARGET = "/scratch"
 MCP_CONFIG_TARGET = "/etc/lybra/mcp.json"
 SCRATCH_HOST_ENV = "LYBRA_SCRATCH_HOST_DIR"
 ANTHROPIC_KEY_ENV = "ANTHROPIC_API_KEY"
+ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
+ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
+# AIPOS-196c: claude needs a writable HOME/config dir under the read-only rootfs;
+# both point at the tool-mounted tmpfs (/tmp), injected at run time, never baked
+# into the image and never a real secret.
+HOME_ENV = "HOME"
+HOME_VALUE = "/tmp"
+CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
+CLAUDE_CONFIG_DIR_VALUE = "/tmp/.claude"
 
 # Network modes that defeat the dedicated-bridge posture must be refused.
 _FORBIDDEN_NETWORKS = {"", "none", "host", "bridge", "container"}
@@ -66,6 +75,12 @@ class ConfinedWorkerRequest:
     gate_ip: str | None = None
     anthropic_key_present: bool = False
     anthropic_key_fingerprint: str | None = None
+    # AIPOS-196c BYO-LLM wiring. base_url / model / auth_mode are NON-SECRET and are
+    # supplied only by the orchestrator/CLI/request — the confined agent cannot set
+    # or influence them (they are fixed in the docker argv before the agent runs).
+    anthropic_base_url: str | None = None
+    model: str | None = None
+    auth_mode: str = "api_key"  # "api_key" (x-api-key) | "auth_token" (Bearer)
     allowed_tools: str = "mcp__lybra__*"
     timeout_seconds: int = 900
     cpus: str | None = None
@@ -300,6 +315,10 @@ def validate_request(request: ConfinedWorkerRequest) -> None:
         raise ConfinedWorkerError("gate_url must not point at 0.0.0.0; the gate must stay non-public")
     if not request.mcp_token.strip():
         raise ConfinedWorkerError("executor MCP token is required")
+    if request.auth_mode not in ("api_key", "auth_token"):
+        raise ConfinedWorkerError("auth_mode must be 'api_key' or 'auth_token'")
+    if request.anthropic_base_url and request.anthropic_base_url.startswith(("http://0.0.0.0", "https://0.0.0.0")):
+        raise ConfinedWorkerError("anthropic_base_url must not point at 0.0.0.0")
     if request.timeout_seconds <= 0:
         raise ConfinedWorkerError("timeout_seconds must be positive")
 
@@ -355,23 +374,30 @@ def build_docker_argv(request: ConfinedWorkerRequest) -> list[str]:
     argv.extend(["--mount", _readonly_mount(request.projection_dir, PROJECTION_TARGET)])
     argv.extend(["--mount", _writable_mount(request.scratch_run_dir, SCRATCH_TARGET)])
     argv.extend(["--mount", _readonly_mount(request.mcp_config_path, MCP_CONFIG_TARGET)])
-    # LLM key is passed by env passthrough so its value never appears in argv.
-    argv.extend(["--env", ANTHROPIC_KEY_ENV])
+    # LLM credential is passed by env passthrough so its value never appears in argv.
+    # Default x-api-key (ANTHROPIC_API_KEY); Bearer (ANTHROPIC_AUTH_TOKEN) only when
+    # auth_mode == "auth_token". Exactly one credential env is passed through.
+    if request.auth_mode == "auth_token":
+        argv.extend(["--env", ANTHROPIC_AUTH_TOKEN_ENV])
+    else:
+        argv.extend(["--env", ANTHROPIC_KEY_ENV])
+    # base_url is NON-SECRET and orchestrator-fixed; the confined agent cannot change
+    # it. Omitted when unset (default direct connection).
+    if request.anthropic_base_url:
+        argv.extend(["--env", f"{ANTHROPIC_BASE_URL_ENV}={request.anthropic_base_url}"])
+    # Writable HOME + config dir under the read-only rootfs, both on the tmpfs /tmp.
+    argv.extend(["--env", f"{HOME_ENV}={HOME_VALUE}"])
+    argv.extend(["--env", f"{CLAUDE_CONFIG_DIR_ENV}={CLAUDE_CONFIG_DIR_VALUE}"])
     argv.extend(["--env", f"{SCRATCH_HOST_ENV}={request.scratch_run_dir.resolve()}"])
     argv.extend(["--env", f"NO_PROXY={no_proxy_value(request.gate_ip)}"])
     argv.extend(["--workdir", PROJECTION_TARGET])
     argv.append(request.image)
-    argv.extend(
-        [
-            "claude",
-            "-p",
-            request.prompt,
-            "--mcp-config",
-            MCP_CONFIG_TARGET,
-            "--allowedTools",
-            request.allowed_tools,
-        ]
-    )
+    claude_cmd = ["claude", "-p", request.prompt, "--mcp-config", MCP_CONFIG_TARGET, "--allowedTools", request.allowed_tools]
+    # Model is NON-SECRET and orchestrator-fixed; selected via --model (the confined
+    # agent cannot override the launched command).
+    if request.model:
+        claude_cmd.extend(["--model", request.model])
+    argv.extend(claude_cmd)
     return argv
 
 
@@ -420,10 +446,25 @@ def build_worker_report(
             "mcp_token_fingerprint": request.mcp_token_fingerprint,
             "mcp_token_injected_via": f"readonly_mount({MCP_CONFIG_TARGET})",
             "anthropic_key_fingerprint": request.anthropic_key_fingerprint,
-            "anthropic_key_injected_via": f"env_passthrough({ANTHROPIC_KEY_ENV})",
+            "anthropic_key_injected_via": (
+                f"env_passthrough({ANTHROPIC_AUTH_TOKEN_ENV})"
+                if request.auth_mode == "auth_token"
+                else f"env_passthrough({ANTHROPIC_KEY_ENV})"
+            ),
             "baked_into_image": False,
             "in_projection": False,
             "in_scratch": False,
+        },
+        # AIPOS-196c: non-secret LLM wiring. base_url/model/auth_mode are set only by
+        # the orchestrator/CLI/request; the confined agent cannot influence them.
+        "llm": {
+            "base_url": request.anthropic_base_url or "default(api.anthropic.com)",
+            "model": request.model or "harness_default",
+            "auth_mode": request.auth_mode,
+            "key_fingerprint": request.anthropic_key_fingerprint,
+            "config_dir": CLAUDE_CONFIG_DIR_VALUE,
+            "home": HOME_VALUE,
+            "controlled_by": "orchestrator/cli/request (agent cannot change)",
         },
         "scratch": {
             "host_dir": str(request.scratch_run_dir.resolve()),
@@ -561,7 +602,9 @@ def build_request_from_args(args: argparse.Namespace) -> ConfinedWorkerRequest:
     if args.prompt_file:
         prompt = Path(args.prompt_file).read_text(encoding="utf-8")
 
-    anthropic_key = os.environ.get(ANTHROPIC_KEY_ENV, "")
+    auth_mode = args.auth_mode
+    cred_env = ANTHROPIC_AUTH_TOKEN_ENV if auth_mode == "auth_token" else ANTHROPIC_KEY_ENV
+    anthropic_key = os.environ.get(cred_env, "")
 
     build_projection(
         repo_root,
@@ -587,6 +630,9 @@ def build_request_from_args(args: argparse.Namespace) -> ConfinedWorkerRequest:
         mcp_token_fingerprint=secret_fingerprint(token),
         anthropic_key_present=bool(anthropic_key),
         anthropic_key_fingerprint=secret_fingerprint(anthropic_key) if anthropic_key else None,
+        anthropic_base_url=str(args.anthropic_base_url).strip() or None if args.anthropic_base_url else None,
+        model=str(args.model).strip() or None if args.model else None,
+        auth_mode=auth_mode,
         allowed_tools=args.allowed_tools,
         timeout_seconds=args.timeout,
         cpus=args.cpus,
@@ -612,6 +658,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--network", required=True, help="Dedicated user-defined docker bridge name")
     parser.add_argument("--gate-url", required=True, help="MCP gate URL reachable from the worker, e.g. http://172.18.0.1:7118/mcp")
     parser.add_argument("--gate-ip", help="Gate IP for NO_PROXY (e.g. 172.18.0.1)")
+    parser.add_argument("--anthropic-base-url", help="Non-secret BYO-LLM base URL (e.g. https://xchai.xyz); omit for default api.anthropic.com")
+    parser.add_argument("--model", help="Non-secret model id passed as claude --model (e.g. claude-sonnet-4-6)")
+    parser.add_argument("--auth-mode", choices=("api_key", "auth_token"), default="api_key", help="LLM auth header: api_key (x-api-key, default) or auth_token (Bearer)")
     parser.add_argument("--tmp-root", help="Controlled host temp root for projection + token file (outside repo, scratch, projection)")
     parser.add_argument("--run-id", help="Explicit run id; default generated")
     parser.add_argument("--allowed-tools", default="mcp__lybra__*", help="claude --allowedTools value")
