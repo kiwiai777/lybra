@@ -49,6 +49,9 @@ HOME_VALUE = "/tmp"
 CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 CLAUDE_CONFIG_DIR_VALUE = "/tmp/.claude"
 
+# AIPOS-198 F-c10: cap each captured stream (tail-kept) to bound report size.
+MAX_TRANSCRIPT_BYTES = 64 * 1024
+
 # Network modes that defeat the dedicated-bridge posture must be refused.
 _FORBIDDEN_NETWORKS = {"", "none", "host", "bridge", "container"}
 # Truth / control-plane / product roots that must never be a bind-mount source.
@@ -89,6 +92,18 @@ class ConfinedWorkerRequest:
     repo_root: Path | None = None
     dry_run: bool = False
     claim_task_id: str | None = None
+    # AIPOS-198 F-c9: run the container as a non-root uid/gid that matches the owner
+    # of the 0600 readonly mcp.json mount, so the in-container harness can read it
+    # (WSL2 bind-mount applies host-owner semantics; root cannot read a host-owned
+    # 0600 file). Derived from the orchestrator at request-build time; None => the
+    # `--no-user` escape hatch (no `--user` emitted). NEVER hardcoded.
+    run_as_uid: int | None = None
+    run_as_gid: int | None = None
+    # AIPOS-198 F-c10: raw secrets to redact out of the captured container transcript
+    # before it touches the report (all role tokens + the live LLM key). The live
+    # mcp_token is always added to the needle list regardless. In-memory only; never
+    # serialized into the report.
+    redaction_secrets: tuple[str, ...] = ()
 
 
 def _utc_compact() -> str:
@@ -367,6 +382,14 @@ def build_docker_argv(request: ConfinedWorkerRequest) -> list[str]:
         "--tmpfs",
         "/tmp",
     ]
+    # AIPOS-198 F-c9: run as the (non-root) owner of the readonly 0600 mcp.json mount
+    # so the harness can read it. Strictly hardens the already cap-dropped / no-new-
+    # privileges / read-only container (drops ambient root); writable paths still work
+    # (/tmp tmpfs is world-writable, /scratch is provisioned 0777). Omitted only under
+    # the `--no-user` escape hatch (run_as_uid is None).
+    if request.run_as_uid is not None:
+        gid = request.run_as_gid if request.run_as_gid is not None else request.run_as_uid
+        argv.extend(["--user", f"{request.run_as_uid}:{gid}"])
     if request.cpus:
         argv.extend(["--cpus", request.cpus])
     if request.memory:
@@ -402,6 +425,108 @@ def build_docker_argv(request: ConfinedWorkerRequest) -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
+# Transcript capture + redaction (AIPOS-198 F-c10)                            #
+# --------------------------------------------------------------------------- #
+
+def _as_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore")
+    return str(value)
+
+
+def redaction_needles(request: ConfinedWorkerRequest) -> list[str]:
+    """Deduped raw-secret needle list for transcript redaction.
+
+    All declared redaction_secrets (role tokens + live LLM key) plus the live
+    mcp_token, which is always scrubbed even if the caller passed nothing.
+    """
+    needles: list[str] = []
+    for value in list(request.redaction_secrets or ()) + [request.mcp_token]:
+        text = str(value or "").strip()
+        if text and text not in needles:
+            needles.append(text)
+    return needles
+
+
+def redact_transcript(text: str, secrets: Sequence[str]) -> tuple[str, list[str]]:
+    """Replace every raw secret literal with «redacted:<fingerprint>».
+
+    Returns (clean_text, hit_fingerprints). Never returns or records a raw needle.
+    """
+    clean = _as_text(text)
+    hits: list[str] = []
+    for secret in secrets:
+        if secret and secret in clean:
+            fingerprint = secret_fingerprint(secret)
+            clean = clean.replace(secret, f"«redacted:{fingerprint}»")
+            if fingerprint not in hits:
+                hits.append(fingerprint)
+    return clean, hits
+
+
+def _truncate_tail(text: str, max_bytes: int) -> tuple[str, bool]:
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text, False
+    return raw[-max_bytes:].decode("utf-8", errors="ignore"), True
+
+
+def build_transcript_block(
+    stdout: Any,
+    stderr: Any,
+    secrets: Sequence[str],
+    *,
+    captured: bool,
+    max_bytes: int = MAX_TRANSCRIPT_BYTES,
+) -> dict[str, Any]:
+    """Build the report transcript block: redact, THEN truncate (tail), fail-closed.
+
+    Redaction runs before truncation so a secret straddling the cut cannot survive.
+    A final re-scan of the assembled block raises rather than emit any raw needle.
+    """
+    out_text = _as_text(stdout)
+    err_text = _as_text(stderr)
+    out_bytes = len(out_text.encode("utf-8"))
+    err_bytes = len(err_text.encode("utf-8"))
+    needles = [s for s in secrets if s]
+
+    out_clean, out_hits = redact_transcript(out_text, needles)
+    err_clean, err_hits = redact_transcript(err_text, needles)
+    out_final, out_trunc = _truncate_tail(out_clean, max_bytes)
+    err_final, err_trunc = _truncate_tail(err_clean, max_bytes)
+
+    fingerprints: list[str] = []
+    for fingerprint in out_hits + err_hits:
+        if fingerprint not in fingerprints:
+            fingerprints.append(fingerprint)
+
+    block = {
+        "captured": captured,
+        "stdout": out_final,
+        "stderr": err_final,
+        "stdout_bytes": out_bytes,
+        "stderr_bytes": err_bytes,
+        "truncated": out_trunc or err_trunc,
+        "max_bytes": max_bytes,
+        "redaction": {
+            "scanned_needles": len(needles),
+            "redacted_fingerprints": fingerprints,
+        },
+    }
+    # Fail-closed: no raw needle may survive into the emitted block.
+    serialized = json.dumps(block, ensure_ascii=False)
+    for secret in needles:
+        if secret in serialized:
+            raise ConfinedWorkerError(
+                f"transcript redaction failed: a raw secret survived "
+                f"({secret_fingerprint(secret)})"
+            )
+    return block
+
+
+# --------------------------------------------------------------------------- #
 # Worker report                                                               #
 # --------------------------------------------------------------------------- #
 
@@ -415,6 +540,7 @@ def build_worker_report(
     timed_out: bool,
     token_file_removed: bool,
     teardown_verified: bool,
+    transcript: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "ok": (not executed) or (exit_code == 0),
@@ -485,6 +611,14 @@ def build_worker_report(
             "no pid=host",
             "no root escalation",
         ],
+        # AIPOS-198 F-c9: non-root uid/gid the container runs as (matches the 0600
+        # token-file owner). null only under the --no-user escape hatch.
+        "run_as": {
+            "uid": request.run_as_uid,
+            "gid": request.run_as_gid if request.run_as_gid is not None else request.run_as_uid,
+            "root": request.run_as_uid == 0,
+            "derivation": "owner of the readonly 0600 mcp.json mount (orchestrator uid)",
+        },
         "docker_argv": docker_argv,
         "teardown": {
             "container_rm": True,
@@ -492,6 +626,9 @@ def build_worker_report(
             "token_file_removed": token_file_removed,
             "verified": teardown_verified,
         },
+        # AIPOS-198 F-c10: redacted container stdout/stderr (raw secrets scrubbed to
+        # fingerprints before capture; never logged/written/committed in the raw).
+        "transcript": transcript if transcript is not None else build_transcript_block("", "", [], captured=False),
     }
 
 
@@ -528,6 +665,7 @@ def teardown_token_file(path: Path) -> bool:
 
 def run_confined_worker(request: ConfinedWorkerRequest) -> dict[str, Any]:
     docker_argv = build_docker_argv(request)
+    needles = redaction_needles(request)
     if request.dry_run:
         return build_worker_report(
             request,
@@ -538,14 +676,29 @@ def run_confined_worker(request: ConfinedWorkerRequest) -> dict[str, Any]:
             timed_out=False,
             token_file_removed=False,
             teardown_verified=False,
+            transcript=build_transcript_block("", "", needles, captured=False),
         )
 
     provision_scratch_dir(request.scratch_run_dir)
     write_mcp_config_file(request.mcp_config_path, build_mcp_client_config(request.gate_url, request.mcp_token))
 
+    # AIPOS-198 F-c9 fail-closed guard: the readonly 0600 mount is only readable by the
+    # container if its owner uid matches --user. Verify on the just-written file before
+    # launching; mismatch means the worker could not reach the gate anyway.
+    if request.run_as_uid is not None and os.name == "posix":
+        actual_uid = os.stat(request.mcp_config_path).st_uid
+        if actual_uid != request.run_as_uid:
+            teardown_token_file(request.mcp_config_path)
+            raise ConfinedWorkerError(
+                f"token-file owner uid {actual_uid} != run_as_uid {request.run_as_uid}; "
+                "the container --user could not read the 0600 mcp.json mount"
+            )
+
     status = "completed"
     exit_code: int | None = None
     timed_out = False
+    stdout_text = ""
+    stderr_text = ""
     env = os.environ.copy()
     try:
         completed = subprocess.run(
@@ -557,15 +710,22 @@ def run_confined_worker(request: ConfinedWorkerRequest) -> dict[str, Any]:
             env=env,
         )
         exit_code = completed.returncode
-    except subprocess.TimeoutExpired:
+        stdout_text = _as_text(completed.stdout)
+        stderr_text = _as_text(completed.stderr)
+    except subprocess.TimeoutExpired as exc:
         status = "timeout"
         timed_out = True
+        stdout_text = _as_text(exc.stdout)
+        stderr_text = _as_text(exc.stderr)
     except FileNotFoundError:
         status = "docker_unavailable"
     finally:
         token_file_removed = teardown_token_file(request.mcp_config_path)
         teardown_verified = token_file_removed and not request.mcp_config_path.exists()
 
+    transcript = build_transcript_block(
+        stdout_text, stderr_text, needles, captured=(status != "docker_unavailable")
+    )
     return build_worker_report(
         request,
         docker_argv=docker_argv,
@@ -575,6 +735,7 @@ def run_confined_worker(request: ConfinedWorkerRequest) -> dict[str, Any]:
         timed_out=timed_out,
         token_file_removed=token_file_removed,
         teardown_verified=teardown_verified,
+        transcript=transcript,
     )
 
 
@@ -605,6 +766,27 @@ def build_request_from_args(args: argparse.Namespace) -> ConfinedWorkerRequest:
     auth_mode = args.auth_mode
     cred_env = ANTHROPIC_AUTH_TOKEN_ENV if auth_mode == "auth_token" else ANTHROPIC_KEY_ENV
     anthropic_key = os.environ.get(cred_env, "")
+
+    # AIPOS-198 F-c9: derive the container uid/gid from the orchestrator (this process
+    # writes the 0600 token file via write_mcp_config_file, so the file owner == this
+    # uid by construction). --run-as / --run-as-uid/gid override; --no-user disables.
+    run_as_uid: int | None = None
+    run_as_gid: int | None = None
+    if not args.no_user:
+        if args.run_as:
+            parts = str(args.run_as).split(":", 1)
+            run_as_uid = int(parts[0])
+            run_as_gid = int(parts[1]) if len(parts) > 1 and parts[1] else None
+        if run_as_uid is None:
+            run_as_uid = args.run_as_uid if args.run_as_uid is not None else os.getuid()
+        if run_as_gid is None:
+            run_as_gid = args.run_as_gid if args.run_as_gid is not None else os.getgid()
+
+    # AIPOS-198 F-c10: every raw role token + the live LLM key are scrubbed from the
+    # captured transcript. The live mcp_token is always added downstream.
+    redaction_secrets = tuple(
+        s for s in (all_raw_secrets(connection_json) + ([anthropic_key] if anthropic_key else [])) if s
+    )
 
     build_projection(
         repo_root,
@@ -641,6 +823,9 @@ def build_request_from_args(args: argparse.Namespace) -> ConfinedWorkerRequest:
         repo_root=repo_root,
         dry_run=args.dry_run,
         claim_task_id=args.task_id,
+        run_as_uid=run_as_uid,
+        run_as_gid=run_as_gid,
+        redaction_secrets=redaction_secrets,
     )
 
 
@@ -669,6 +854,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--memory", help="Optional docker --memory")
     parser.add_argument("--pids-limit", type=int, default=512, help="docker --pids-limit")
     parser.add_argument("--repo-root", help="Lybra workspace root; default auto-detected")
+    parser.add_argument("--run-as", help="Run container as UID[:GID] (overrides the orchestrator-derived owner match; AIPOS-198 F-c9)")
+    parser.add_argument("--run-as-uid", type=int, help="Run container as this uid (default: orchestrator os.getuid(), matching the 0600 token-file owner)")
+    parser.add_argument("--run-as-gid", type=int, help="Run container as this gid (default: orchestrator os.getgid())")
+    parser.add_argument("--no-user", action="store_true", help="Escape hatch: do not set --user (root container). Off by default; breaks the WSL2 0600-mount read.")
     parser.add_argument("--dry-run", action="store_true", help="Build argv + report without running docker or writing secrets")
     return parser
 

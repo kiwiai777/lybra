@@ -33,6 +33,10 @@ def _request(tmp: Path, **overrides):
         mcp_token_fingerprint=cw.secret_fingerprint("EXEC-TOKEN-RAW-VALUE"),
         anthropic_key_present=True,
         anthropic_key_fingerprint=cw.secret_fingerprint("sk-ant-secret"),
+        # AIPOS-198: real path always derives a non-root --user from the orchestrator
+        # (== the 0600 token-file owner). Mirror that default in the test fixture.
+        run_as_uid=os.getuid(),
+        run_as_gid=os.getgid(),
         dry_run=True,
     )
     kwargs.update(overrides)
@@ -65,7 +69,9 @@ class ConfinedWorkerArgvTests(unittest.TestCase):
         self.assertNotIn("--privileged", argv)
         self.assertNotIn("--pid=host", joined)
         self.assertNotIn("docker.sock", joined)
-        self.assertNotIn("--user", argv)
+        # AIPOS-198 F-c9: non-root --user matching the orchestrator/token-file owner.
+        self.assertIn("--user", argv)
+        self.assertEqual(argv[argv.index("--user") + 1], f"{os.getuid()}:{os.getgid()}")
 
     def test_argv_carries_no_raw_secret(self) -> None:
         argv = cw.build_docker_argv(_request(self.tmp))
@@ -345,6 +351,201 @@ class ByoLlmWiringTests(unittest.TestCase):
         blob = json.dumps(report)
         self.assertNotIn("sk-ant-secret", blob)
         self.assertNotIn("EXEC-TOKEN-RAW-VALUE", blob)
+
+
+class RunAsUserTests(unittest.TestCase):
+    """AIPOS-198 F-c9: --user matches the 0600 token-file owner; never hardcoded."""
+
+    def setUp(self) -> None:
+        self.tmp_ctx = tempfile.TemporaryDirectory()
+        self.tmp = Path(self.tmp_ctx.name).resolve()
+
+    def tearDown(self) -> None:
+        self.tmp_ctx.cleanup()
+
+    def test_user_value_matches_derived_owner(self) -> None:
+        argv = cw.build_docker_argv(_request(self.tmp, run_as_uid=4321, run_as_gid=8765))
+        self.assertIn("--user", argv)
+        self.assertEqual(argv[argv.index("--user") + 1], "4321:8765")
+
+    def test_user_gid_defaults_to_uid_when_gid_none(self) -> None:
+        argv = cw.build_docker_argv(_request(self.tmp, run_as_uid=4321, run_as_gid=None))
+        self.assertEqual(argv[argv.index("--user") + 1], "4321:4321")
+
+    def test_no_user_escape_hatch_omits_user(self) -> None:
+        argv = cw.build_docker_argv(_request(self.tmp, run_as_uid=None, run_as_gid=None))
+        self.assertNotIn("--user", argv)
+
+    def test_cli_default_derives_orchestrator_uid(self) -> None:
+        argv = self._build_via_cli([])
+        self.assertIn("--user", argv)
+        self.assertEqual(argv[argv.index("--user") + 1], f"{os.getuid()}:{os.getgid()}")
+
+    def test_cli_run_as_uid_overrides(self) -> None:
+        argv = self._build_via_cli(["--run-as-uid", "1234", "--run-as-gid", "5678"])
+        self.assertEqual(argv[argv.index("--user") + 1], "1234:5678")
+
+    def test_cli_run_as_combined_overrides(self) -> None:
+        argv = self._build_via_cli(["--run-as", "1234:5678"])
+        self.assertEqual(argv[argv.index("--user") + 1], "1234:5678")
+        argv2 = self._build_via_cli(["--run-as", "1234"])  # gid defaults to orchestrator gid
+        self.assertEqual(argv2[argv2.index("--user") + 1], f"1234:{os.getgid()}")
+
+    def test_cli_no_user_disables(self) -> None:
+        argv = self._build_via_cli(["--no-user"])
+        self.assertNotIn("--user", argv)
+
+    def test_uid_consistency_guard_fail_closed(self) -> None:
+        # write_mcp_config_file writes as os.getuid(); a mismatched run_as_uid must
+        # be rejected before launch (the --user could not read the 0600 mount).
+        req = _request(self.tmp, run_as_uid=os.getuid() + 1, dry_run=False)
+        with self.assertRaises(cw.ConfinedWorkerError):
+            cw.run_confined_worker(req)
+        # the token file is cleaned up on the fail-closed path.
+        self.assertFalse(req.mcp_config_path.exists())
+
+    def test_report_run_as_block(self) -> None:
+        report = cw.run_confined_worker(_request(self.tmp, run_as_uid=4321, run_as_gid=8765, dry_run=True))
+        self.assertEqual(report["run_as"]["uid"], 4321)
+        self.assertEqual(report["run_as"]["gid"], 8765)
+        self.assertFalse(report["run_as"]["root"])
+
+    def _build_via_cli(self, extra):
+        repo = self.tmp / "repo"
+        (repo / "5_tasks" / "queue").mkdir(parents=True, exist_ok=True)
+        approved = self.tmp / "approved"
+        approved.mkdir(parents=True, exist_ok=True)
+        connection = self.tmp / "connection.json"
+        connection.write_text(
+            json.dumps({"tokens": [{"role": "executor", "token_ref": "svc-executor", "scopes": ["queue_claim"], "token": "EXEC-RAW"}]}),
+            encoding="utf-8",
+        )
+
+        captured = {}
+
+        def fake_build_projection(repo_root, dest, **kwargs):
+            Path(dest).mkdir(parents=True, exist_ok=True)
+            return {"projection_dir": str(dest), "files": [], "context_pack_verdict": "ok"}
+
+        orig = cw.build_projection
+        cw.build_projection = fake_build_projection
+        try:
+            args = cw.build_parser().parse_args(
+                [
+                    "--image", "img:test",
+                    "--prompt", "do x",
+                    "--task-id", "AIPOS-1",
+                    "--connection-json", str(connection),
+                    "--approved-scratch-root", str(approved),
+                    "--network", "lybra-net",
+                    "--gate-url", "http://172.18.0.1:7118/mcp",
+                    "--repo-root", str(repo),
+                    "--dry-run",
+                    *extra,
+                ]
+            )
+            request = cw.build_request_from_args(args)
+        finally:
+            cw.build_projection = orig
+        captured["argv"] = cw.build_docker_argv(request)
+        return captured["argv"]
+
+
+class TranscriptRedactionTests(unittest.TestCase):
+    """AIPOS-198 F-c10: capture stdout/stderr, redact raw secrets, fail-closed."""
+
+    def setUp(self) -> None:
+        self.tmp_ctx = tempfile.TemporaryDirectory()
+        self.tmp = Path(self.tmp_ctx.name).resolve()
+
+    def tearDown(self) -> None:
+        self.tmp_ctx.cleanup()
+
+    def test_redact_transcript_replaces_with_fingerprint(self) -> None:
+        clean, hits = cw.redact_transcript("before SEKRIT-TOKEN after", ["SEKRIT-TOKEN"])
+        self.assertNotIn("SEKRIT-TOKEN", clean)
+        self.assertIn(f"«redacted:{cw.secret_fingerprint('SEKRIT-TOKEN')}»", clean)
+        self.assertEqual(hits, [cw.secret_fingerprint("SEKRIT-TOKEN")])
+
+    def test_redaction_needles_always_include_mcp_token(self) -> None:
+        req = _request(self.tmp, mcp_token="LIVE-MCP", redaction_secrets=("ROLE-A", "LLM-KEY"))
+        needles = cw.redaction_needles(req)
+        self.assertIn("LIVE-MCP", needles)
+        self.assertIn("ROLE-A", needles)
+        self.assertIn("LLM-KEY", needles)
+        # deduped, no empties
+        self.assertEqual(len(needles), len(set(needles)))
+
+    def test_transcript_block_redacts_fake_secrets_deep(self) -> None:
+        secrets = ["FAKE-ROLE-TOKEN", "sk-fake-llm-key", "LIVE-MCP-TOKEN"]
+        stdout = "calling gate with Bearer LIVE-MCP-TOKEN and key sk-fake-llm-key\n"
+        stderr = "auth used FAKE-ROLE-TOKEN here\n"
+        block = cw.build_transcript_block(stdout, stderr, secrets, captured=True)
+        blob = json.dumps(block, ensure_ascii=False)
+        for raw in secrets:
+            self.assertNotIn(raw, blob)
+        fps = block["redaction"]["redacted_fingerprints"]
+        self.assertIn(cw.secret_fingerprint("LIVE-MCP-TOKEN"), fps)
+        self.assertIn(cw.secret_fingerprint("sk-fake-llm-key"), fps)
+        self.assertIn(cw.secret_fingerprint("FAKE-ROLE-TOKEN"), fps)
+        self.assertTrue(block["captured"])
+
+    def test_redaction_before_truncation_straddle(self) -> None:
+        secret = "STRADDLE-SECRET-VALUE"
+        # secret placed so it straddles the tail cut; padding pushes past max_bytes.
+        padding = "A" * 100
+        text = padding + secret + ("B" * 50)
+        block = cw.build_transcript_block(text, "", [secret], captured=True, max_bytes=60)
+        blob = json.dumps(block, ensure_ascii=False)
+        self.assertNotIn(secret, blob)
+        self.assertTrue(block["truncated"])
+        self.assertEqual(block["stdout_bytes"], len(text.encode("utf-8")))
+
+    def test_fail_closed_when_needle_survives(self) -> None:
+        # secret_fingerprint is deterministic; simulate a needle that cannot be
+        # redacted by monkeypatching redact_transcript to a no-op.
+        orig = cw.redact_transcript
+        cw.redact_transcript = lambda text, secrets: (text, [])
+        try:
+            with self.assertRaises(cw.ConfinedWorkerError):
+                cw.build_transcript_block("leak RAW-SECRET here", "", ["RAW-SECRET"], captured=True)
+        finally:
+            cw.redact_transcript = orig
+
+    def test_dry_run_report_has_empty_transcript(self) -> None:
+        report = cw.run_confined_worker(_request(self.tmp, dry_run=True))
+        self.assertIn("transcript", report)
+        self.assertFalse(report["transcript"]["captured"])
+        self.assertEqual(report["transcript"]["stdout"], "")
+
+    def test_run_report_transcript_redacts_subprocess_output(self) -> None:
+        # Drive run_confined_worker without docker by stubbing subprocess.run to
+        # emit a fake leak; the report transcript must carry only fingerprints.
+        import subprocess as _sp
+
+        class _Completed:
+            returncode = 0
+            stdout = "gate ok; token EXEC-TOKEN-RAW-VALUE; key sk-ant-secret\n"
+            stderr = ""
+
+        req = _request(
+            self.tmp,
+            dry_run=False,
+            run_as_uid=os.getuid(),
+            run_as_gid=os.getgid(),
+            redaction_secrets=("sk-ant-secret",),
+        )
+        orig_run = cw.subprocess.run
+        cw.subprocess.run = lambda *a, **k: _Completed()
+        try:
+            report = cw.run_confined_worker(req)
+        finally:
+            cw.subprocess.run = orig_run
+        blob = json.dumps(report, ensure_ascii=False)
+        self.assertNotIn("EXEC-TOKEN-RAW-VALUE", blob)
+        self.assertNotIn("sk-ant-secret", blob)
+        self.assertTrue(report["transcript"]["captured"])
+        self.assertIn(cw.secret_fingerprint("EXEC-TOKEN-RAW-VALUE"), report["transcript"]["redaction"]["redacted_fingerprints"])
 
 
 if __name__ == "__main__":
