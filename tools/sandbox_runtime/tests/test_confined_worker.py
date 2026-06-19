@@ -548,5 +548,46 @@ class TranscriptRedactionTests(unittest.TestCase):
         self.assertIn(cw.secret_fingerprint("EXEC-TOKEN-RAW-VALUE"), report["transcript"]["redaction"]["redacted_fingerprints"])
 
 
+class DefaultToolPolicyTests(unittest.TestCase):
+    """AIPOS-200 (RF-6): default tool policy lets the agent write /scratch + reach the gate."""
+
+    def setUp(self) -> None:
+        self.tmp_ctx = tempfile.TemporaryDirectory()
+        self.tmp = Path(self.tmp_ctx.name).resolve()
+
+    def tearDown(self) -> None:
+        self.tmp_ctx.cleanup()
+
+    def _allowed_tools_value(self, argv):
+        return argv[argv.index("--allowedTools") + 1]
+
+    def test_default_allowed_tools_includes_file_and_gate_tools_no_bash(self) -> None:
+        argv = cw.build_docker_argv(_request(self.tmp))
+        value = self._allowed_tools_value(argv)
+        self.assertEqual(value, cw.DEFAULT_ALLOWED_TOOLS)
+        for tool in ("Write", "Read", "Edit", "mcp__lybra__*"):
+            self.assertIn(tool, value)
+        # Bash is intentionally OFF by default.
+        self.assertNotIn("Bash", value)
+
+    def test_allowed_tools_override_honored(self) -> None:
+        argv = cw.build_docker_argv(_request(self.tmp, allowed_tools="mcp__lybra__*"))
+        self.assertEqual(self._allowed_tools_value(argv), "mcp__lybra__*")
+
+    def test_projection_injects_scratch_host_dir(self) -> None:
+        dest = self.tmp / "projection"
+        context_pack = {"scope": "task", "task": {"task_id": "AIPOS-X"}, "source_refs": []}
+        host_dir = "/home/kiwi/approved/cw_run_xyz"
+        cw.render_projection(context_pack, dest, scratch_host_dir=host_dir)
+        summary = json.loads((dest / "context_pack.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["scratch_host_dir"], host_dir)
+        self.assertEqual(summary["scratch_container_dir"], cw.SCRATCH_TARGET)
+        task_md = (dest / "TASK.md").read_text(encoding="utf-8")
+        self.assertIn(host_dir, task_md)
+        self.assertIn(cw.SCRATCH_TARGET, task_md)
+        # no secret needed; clean scan passes
+        cw.assert_no_secrets(dest, ["RAW-TOKEN-XYZ"])
+
+
 if __name__ == "__main__":
     unittest.main()

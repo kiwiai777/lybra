@@ -38,6 +38,14 @@ PROJECTION_TARGET = "/projection"
 SCRATCH_TARGET = "/scratch"
 MCP_CONFIG_TARGET = "/etc/lybra/mcp.json"
 SCRATCH_HOST_ENV = "LYBRA_SCRATCH_HOST_DIR"
+# AIPOS-200 (RF-6): default tool policy must let the agent write its scratch artifact
+# (file tools) AND reach the gate (mcp tools). L2 truth protection relies on mount-
+# exclusion (truth/.lybra/product/host are never mounted) + gate-only confirm, NOT on the
+# tool allowlist — so file tools can only write the writable /scratch (+ tmpfs), never truth.
+# `Bash` is intentionally OFF by default (smaller surface; the scratch host path is injected
+# into the projection so the agent does not need a shell to discover it). Operators can still
+# override via --allowed-tools.
+DEFAULT_ALLOWED_TOOLS = "Write,Read,Edit,mcp__lybra__*"
 ANTHROPIC_KEY_ENV = "ANTHROPIC_API_KEY"
 ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
 ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
@@ -84,7 +92,7 @@ class ConfinedWorkerRequest:
     anthropic_base_url: str | None = None
     model: str | None = None
     auth_mode: str = "api_key"  # "api_key" (x-api-key) | "auth_token" (Bearer)
-    allowed_tools: str = "mcp__lybra__*"
+    allowed_tools: str = DEFAULT_ALLOWED_TOOLS
     timeout_seconds: int = 900
     cpus: str | None = None
     memory: str | None = None
@@ -193,11 +201,15 @@ def write_mcp_config_file(path: Path, config: dict[str, Any]) -> Path:
 # Projection                                                                  #
 # --------------------------------------------------------------------------- #
 
-def render_projection(context_pack: dict[str, Any], dest: Path) -> list[str]:
+def render_projection(context_pack: dict[str, Any], dest: Path, *, scratch_host_dir: str | None = None) -> list[str]:
     """Render a minimal read-only projection from a context-pack preview dict.
 
     v0: the task card fields and a declared-input summary only. No secrets, no
     records, no other tasks' queue, no product repo. Returns written rel names.
+
+    AIPOS-200 (RF-6): inject the host scratch dir so the agent can pass it as
+    `scratch_dir` to queue_return without needing a shell to read the env var
+    (the default tool policy has no Bash). The host path is non-secret.
     """
     dest.mkdir(parents=True, exist_ok=True)
     task = context_pack.get("task") if isinstance(context_pack.get("task"), dict) else {}
@@ -224,10 +236,12 @@ def render_projection(context_pack: dict[str, Any], dest: Path) -> list[str]:
         "task": safe_task,
         "context_bundle_ref": bundle.get("ref"),
         "source_refs": [str(ref) for ref in context_pack.get("source_refs", []) if str(ref)],
+        "scratch_container_dir": SCRATCH_TARGET,
+        "scratch_host_dir": str(scratch_host_dir) if scratch_host_dir else None,
         "notice": (
             "Read-only context projection. The only consequential write path is the "
-            "Lybra MCP gate. Write scratch to /scratch; pass the host scratch dir "
-            f"(env {SCRATCH_HOST_ENV}) to queue_return so the gate ingests it."
+            f"Lybra MCP gate. Write outputs to {SCRATCH_TARGET}; pass scratch_host_dir "
+            "below as queue_return scratch_dir so the gate ingests them."
         ),
     }
     (dest / "context_pack.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -239,8 +253,12 @@ def render_projection(context_pack: dict[str, Any], dest: Path) -> list[str]:
         f"- Status: {safe_task.get('status') or ''}",
         "",
         "This is a read-only projection. You cannot write Lybra truth directly.",
-        "Write outputs to /scratch, then return them through the MCP gate "
-        "(queue_return) so the gate ingests them into workspace_artifacts/.",
+        f"Write outputs to {SCRATCH_TARGET} (the only writable path), then return them",
+        "through the MCP gate (queue_return) so the gate ingests them into",
+        "workspace_artifacts/. The Owner confirms the return out of band.",
+        "",
+        f"- scratch_container_dir (write here): {SCRATCH_TARGET}",
+        f"- scratch_host_dir (pass as queue_return scratch_dir): {scratch_host_dir or '(unset)'}",
         "",
     ]
     (dest / "TASK.md").write_text("\n".join(lines), encoding="utf-8")
@@ -288,11 +306,12 @@ def build_projection(
     task_path: str | None = None,
     connection_json: Path | None = None,
     anthropic_key: str | None = None,
+    scratch_host_dir: str | None = None,
 ) -> dict[str, Any]:
     from tools.aipos_cli.context_pack_builder import build_context_pack_preview
 
     context_pack = build_context_pack_preview(repo_root, task_id=task_id, path=task_path)
-    written = render_projection(context_pack, dest)
+    written = render_projection(context_pack, dest, scratch_host_dir=scratch_host_dir)
     scan: list[str] = []
     if connection_json is not None:
         scan.extend(all_raw_secrets(connection_json))
@@ -795,6 +814,7 @@ def build_request_from_args(args: argparse.Namespace) -> ConfinedWorkerRequest:
         task_path=args.task_path,
         connection_json=connection_json,
         anthropic_key=anthropic_key or None,
+        scratch_host_dir=str(scratch_run_dir.resolve()),
     )
 
     return ConfinedWorkerRequest(
@@ -848,7 +868,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auth-mode", choices=("api_key", "auth_token"), default="api_key", help="LLM auth header: api_key (x-api-key, default) or auth_token (Bearer)")
     parser.add_argument("--tmp-root", help="Controlled host temp root for projection + token file (outside repo, scratch, projection)")
     parser.add_argument("--run-id", help="Explicit run id; default generated")
-    parser.add_argument("--allowed-tools", default="mcp__lybra__*", help="claude --allowedTools value")
+    parser.add_argument("--allowed-tools", default=DEFAULT_ALLOWED_TOOLS, help="claude --allowedTools value (default: file tools for /scratch + gate tools; Bash off)")
     parser.add_argument("--timeout", type=int, default=900, help="Wall-clock timeout seconds")
     parser.add_argument("--cpus", help="Optional docker --cpus")
     parser.add_argument("--memory", help="Optional docker --memory")
