@@ -971,6 +971,41 @@ class McpToolTests(unittest.TestCase):
         # §9 signature-ready placeholders present (empty in v0).
         self.assertIn("gate_signature", rec)
 
+    def test_aipos199_claim_confirm_records_confirmer_attribution(self) -> None:
+        # AIPOS-199 / RF-5: the on-disk CLAIM record (written THROUGH the confirm tool
+        # handler, not a direct function call) must attribute the confirmer — the live
+        # 191B rerun showed these fields empty on the claim path while the return path
+        # filled them. Reading load_records() asserts what landed on disk at confirm.
+        self.write_claim_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(
+                operations=["queue_claim", "owner_confirm"], role="owner", fingerprint="sha256:ownerfp01"
+            ),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_claim_dry_run", self.claim_payload()))
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_claim_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-166-supervised-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        self.assertTrue(confirmed["ok"], confirmed)
+        records = load_records(self.repo_root)
+        rec = records["claims"][0]["metadata"]
+        self.assertEqual(rec.get("confirmer_role"), "owner")
+        self.assertEqual(rec.get("confirmer_token_ref"), "cap_mcp_test")
+        self.assertEqual(rec.get("confirmer_token_fingerprint"), "sha256:ownerfp01")
+        # §9 signature-ready placeholders present (empty in v0).
+        self.assertIn("gate_signature", rec)
+
     def test_queue_return_confirm_reuses_planned_timestamp_for_stable_snapshot(self) -> None:
         self.write_return_task()
         env = {

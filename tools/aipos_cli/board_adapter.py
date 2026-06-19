@@ -3289,6 +3289,11 @@ def execute_dry_run(
                 updated_metadata=result.get("updated_frontmatter") if isinstance(result.get("updated_frontmatter"), dict) else {},
                 dry_run_id=dry_run_id,
                 dry_run_snapshot_hash=expected_hash,
+                # AIPOS-199 (RF-5): thread the confirming token's identity into the claim
+                # record at confirm-write time, mirroring the queue_return path. Without
+                # this the on-disk claim record's confirmer_* fields were empty even when
+                # the confirm was performed by the owner role (F-c12 was OPEN on claim).
+                confirmer=mcp_claim_metadata.get("confirmer") if isinstance(mcp_claim_metadata.get("confirmer"), dict) else None,
             )
             if record_plan.get("record_blocking_reasons"):
                 for reason_text in record_plan.get("record_blocking_reasons", []):
