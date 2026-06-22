@@ -11,6 +11,10 @@ JSONRPC_VERSION = "2.0"
 SERVER_NAME = "lybra-mcp"
 SERVER_VERSION = "0.2.0"
 PROTOCOL_VERSION = "2024-11-05"
+# AIPOS-201: protocol versions the gate can speak. The default stays 2024-11-05
+# (stdio + legacy HTTP clients are unchanged); a Streamable-HTTP client that
+# negotiates a newer version (e.g. codex) gets its requested version echoed back.
+SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18")
 
 
 class JsonRpcError(Exception):
@@ -32,9 +36,17 @@ def _error(request_id: Any, code: int, message: str, data: Any | None = None) ->
     return {"jsonrpc": JSONRPC_VERSION, "id": request_id, "error": error}
 
 
-def _initialize_result() -> dict[str, Any]:
+def _initialize_result(requested_version: str | None = None) -> dict[str, Any]:
+    # AIPOS-201: echo the client's requested protocolVersion when supported,
+    # otherwise fall back to the historical default. Backward compatible: a
+    # client that omits or requests 2024-11-05 still receives 2024-11-05.
+    protocol_version = (
+        requested_version
+        if requested_version in SUPPORTED_PROTOCOL_VERSIONS
+        else PROTOCOL_VERSION
+    )
     return {
-        "protocolVersion": PROTOCOL_VERSION,
+        "protocolVersion": protocol_version,
         "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
         "capabilities": {"tools": {}},
         "instructions": READ_ONLY_NOTICE,
@@ -71,7 +83,11 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     if method == "initialize":
-        return _success(request_id, _initialize_result())
+        requested_version = params.get("protocolVersion")
+        return _success(
+            request_id,
+            _initialize_result(requested_version if isinstance(requested_version, str) else None),
+        )
     if method == "tools/list":
         return _success(request_id, {"tools": visible_tool_descriptors()})
     if method == "tools/call":

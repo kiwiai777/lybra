@@ -12,10 +12,12 @@ from typing import Iterator
 from unittest.mock import patch
 from urllib import error, request
 
+from tools.aipos_cli.records import load_records
 from tools.mcp_server.http_sse import (
     DEFAULT_HTTP_HOST,
     DEFAULT_HTTP_PORT,
     DEFAULT_KEEPALIVE_SECONDS,
+    SESSION_HEADER,
     HttpSseConfig,
     MCP_RPC_PATH,
     MCP_SSE_PATH,
@@ -52,15 +54,73 @@ class HttpSseTransportTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def capability_token(self, operations: list[str] | None = None) -> str:
-        return json.dumps(
-            {
-                "token_ref": "cap_http_test",
-                "operations": operations if operations is not None else ["intake_submit"],
-                "projects": ["acme_client"],
-                "expires_at": "2999-01-01T00:00:00Z",
-            }
+    def capability_token(
+        self,
+        operations: list[str] | None = None,
+        *,
+        role: str | None = None,
+        fingerprint: str | None = None,
+        token_ref: str = "cap_http_test",
+    ) -> str:
+        payload: dict[str, object] = {
+            "token_ref": token_ref,
+            "operations": operations if operations is not None else ["intake_submit"],
+            "projects": ["acme_client"],
+            "expires_at": "2999-01-01T00:00:00Z",
+        }
+        if role is not None:
+            payload["role"] = role
+        if fingerprint is not None:
+            payload["fingerprint"] = fingerprint
+        return json.dumps(payload)
+
+    def write_claim_task(self, task_id: str = "AIPOS-MCP-CLAIM", *, agent_instance: str = "agent-01") -> None:
+        (self.repo_root / "5_tasks" / "queue" / "pending" / f"{task_id.lower()}.md").write_text(
+            "\n".join(
+                [
+                    "---",
+                    f"task_id: {task_id}",
+                    "title: MCP Claim Test",
+                    "project: lybra",
+                    "assigned_to: dev_claude",
+                    f"agent_instance: {agent_instance}",
+                    "context_bundle: dev_claude",
+                    "task_mode: code",
+                    "model_tier: L2",
+                    "priority: medium",
+                    "status: pending",
+                    "created_by: tester",
+                    "needs_owner: false",
+                    "output_target: tools/mcp_server/",
+                    "artifact_policy: formal_write",
+                    "session_policy: single_task_session",
+                    "context_isolation: strict",
+                    "artifact_scope: tools/mcp_server/",
+                    "memory_scope: mcp claim tests",
+                    "claim_policy: specific_instance_only",
+                    "---",
+                    "Supervised MCP claim test task.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
         )
+
+    def claim_payload(self, **overrides: object) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "task_id": "AIPOS-MCP-CLAIM",
+            "actor": "agent-01",
+            "agent_instance": "agent-01",
+            "autonomy_mode": "Supervised",
+            "owner_policy_ref": "owner_policy:aipos-166-supervised-test",
+            "runtime_profile": "cc",
+            "active_session_id": "session_mcp_claim_test",
+            "context_bundle_ack": "ack",
+            "with_records": True,
+            "claim_reason": "test supervised explicit claim",
+        }
+        payload.update(overrides)
+        return payload
 
     def intake_payload(self) -> dict[str, object]:
         return {
@@ -162,6 +222,44 @@ class HttpSseTransportTests(unittest.TestCase):
         )
         with request.urlopen(req, timeout=3) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def post_rpc_full(
+        self,
+        base_url: str,
+        payload: dict[str, object],
+        *,
+        token: str | None = "secret",
+        session_id: str | None = None,
+        accept: str = "application/json, text/event-stream",
+    ) -> tuple[dict[str, object], dict[str, str]]:
+        # AIPOS-201: like post_rpc but exposes response headers (for Mcp-Session-Id)
+        # and sends a Streamable-HTTP-style Accept + optional session header.
+        headers = {"Content-Type": "application/json", "Accept": accept}
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        if session_id is not None:
+            headers[SESSION_HEADER] = session_id
+        req = request.Request(
+            f"{base_url}{MCP_RPC_PATH}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with request.urlopen(req, timeout=3) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            resp_headers = {key: value for key, value in response.getheaders()}
+            return body, resp_headers
+
+    def streamable_handshake(self, base_url: str, *, token: str | None = "secret", version: str = "2025-03-26") -> str:
+        # AIPOS-201: perform a Streamable-HTTP initialize and return the issued session id.
+        result, headers = self.post_rpc_full(
+            base_url,
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": version}},
+            token=token,
+        )
+        session_id = headers.get(SESSION_HEADER)
+        assert session_id, "initialize must issue an Mcp-Session-Id"
+        return session_id
 
     def test_default_bind_port_and_keepalive_values(self) -> None:
         self.assertEqual(DEFAULT_HTTP_HOST, "127.0.0.1")
@@ -380,6 +478,151 @@ class HttpSseTransportTests(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertIn("event: ping", body)
         self.assertIn('"type":"keepalive"', body)
+
+    # --- AIPOS-201: Streamable-HTTP transport (additive; reuses scope/confirmer) ---
+
+    def test_aipos201_initialize_issues_session_and_negotiates_protocol_version(self) -> None:
+        with self.server() as base_url:
+            result, headers = self.post_rpc_full(
+                base_url,
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}},
+            )
+        self.assertNotIn("error", result)
+        self.assertEqual(result["result"]["protocolVersion"], "2025-03-26")  # type: ignore[index]
+        self.assertTrue(headers.get(SESSION_HEADER), "initialize must issue Mcp-Session-Id")
+
+    def test_aipos201_initialize_defaults_to_legacy_protocol_version(self) -> None:
+        # Backward compatibility: a client that omits/requests the legacy version
+        # still receives 2024-11-05 (the AIPOS-123 behavior is unchanged).
+        with self.server() as base_url:
+            no_version, _ = self.post_rpc_full(
+                base_url, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+            )
+            legacy, _ = self.post_rpc_full(
+                base_url,
+                {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocolVersion": "2024-11-05"}},
+            )
+        self.assertEqual(no_version["result"]["protocolVersion"], "2024-11-05")  # type: ignore[index]
+        self.assertEqual(legacy["result"]["protocolVersion"], "2024-11-05")  # type: ignore[index]
+
+    def test_aipos201_get_mcp_serves_sse_keepalive_for_streamable_clients(self) -> None:
+        with self.server() as base_url:
+            req = request.Request(f"{base_url}{MCP_RPC_PATH}", headers={"Authorization": "Bearer secret", "Accept": "text/event-stream"})
+            with request.urlopen(req, timeout=3) as response:
+                body = response.read().decode("utf-8")
+        self.assertIn("event: ping", body)
+        self.assertIn('"type":"keepalive"', body)
+
+    def test_aipos201_delete_mcp_ends_session_returns_200(self) -> None:
+        with self.server() as base_url:
+            session_id = self.streamable_handshake(base_url)
+            req = request.Request(
+                f"{base_url}{MCP_RPC_PATH}",
+                headers={"Authorization": "Bearer secret", SESSION_HEADER: session_id},
+                method="DELETE",
+            )
+            with request.urlopen(req, timeout=3) as response:
+                self.assertEqual(response.status, 200)
+
+    def test_aipos201_unauthenticated_streamable_requests_are_rejected(self) -> None:
+        with self.server() as base_url:
+            with self.assertRaises(error.HTTPError) as missing:
+                self.post_rpc_full(
+                    base_url, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, token=None
+                )
+            self.assertEqual(missing.exception.code, 401)
+            # GET /mcp and DELETE /mcp also require auth.
+            get_req = request.Request(f"{base_url}{MCP_RPC_PATH}", headers={"Accept": "text/event-stream"})
+            with self.assertRaises(error.HTTPError) as get_missing:
+                request.urlopen(get_req, timeout=3)
+            self.assertEqual(get_missing.exception.code, 401)
+
+    def test_aipos201_tools_call_with_session_succeeds(self) -> None:
+        with self.server() as base_url:
+            session_id = self.streamable_handshake(base_url)
+            result, _ = self.post_rpc_full(
+                base_url,
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "lybra_queue_list", "arguments": {}}},
+                session_id=session_id,
+            )
+        self.assertNotIn("error", result)
+        self.assertEqual(result["result"]["structuredContent"]["operation"], "get_queue")  # type: ignore[index]
+
+    def test_aipos201_scope_denied_through_streamable_handshake(self) -> None:
+        # ★A1 over the new transport: an executor-scope token (queue_claim, NO
+        # owner_confirm) that completes a claim dry-run cannot self-confirm.
+        self.write_claim_task()
+        with self.server(capability_token=self.capability_token(operations=["queue_claim"])) as base_url:
+            session_id = self.streamable_handshake(base_url)
+            dry, _ = self.post_rpc_full(
+                base_url,
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "lybra_queue_claim_dry_run", "arguments": self.claim_payload()}},
+                session_id=session_id,
+            )
+            dry_token = dry["result"]["structuredContent"]["dry_run_token"]  # type: ignore[index]
+            denied, _ = self.post_rpc_full(
+                base_url,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "lybra_queue_claim_confirm",
+                        "arguments": {
+                            "dry_run_token": dry_token,
+                            "actor": "agent-01",
+                            "agent_instance": "agent-01",
+                            "owner_policy_ref": "owner_policy:aipos-166-supervised-test",
+                            "owner_confirmation_token": "OWNER_CONFIRMED",
+                        },
+                    },
+                },
+                session_id=session_id,
+            )
+        self.assertEqual(denied["result"]["structuredContent"]["error_code"], "SCOPE_DENIED")  # type: ignore[index]
+
+    def test_aipos201_claim_confirm_records_confirmer_through_streamable(self) -> None:
+        # AIPOS-199 over the new transport: an owner-scope token (owner_confirm)
+        # completing claim dry-run -> confirm through the Streamable-HTTP handshake
+        # still stamps the confirmer onto the on-disk claim record.
+        self.write_claim_task()
+        owner_token = self.capability_token(
+            operations=["queue_claim", "owner_confirm"], role="owner", fingerprint="sha256:ownerfp01"
+        )
+        with self.server(capability_token=owner_token) as base_url:
+            session_id = self.streamable_handshake(base_url)
+            dry, _ = self.post_rpc_full(
+                base_url,
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "lybra_queue_claim_dry_run", "arguments": self.claim_payload()}},
+                session_id=session_id,
+            )
+            dry_token = dry["result"]["structuredContent"]["dry_run_token"]  # type: ignore[index]
+            confirmed, _ = self.post_rpc_full(
+                base_url,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "lybra_queue_claim_confirm",
+                        "arguments": {
+                            "dry_run_token": dry_token,
+                            "actor": "agent-01",
+                            "agent_instance": "agent-01",
+                            "owner_policy_ref": "owner_policy:aipos-166-supervised-test",
+                            "owner_confirmation_token": "OWNER_CONFIRMED",
+                        },
+                    },
+                },
+                session_id=session_id,
+            )
+        self.assertTrue(confirmed["result"]["structuredContent"]["ok"], confirmed)  # type: ignore[index]
+        records = load_records(self.repo_root)
+        rec = records["claims"][0]["metadata"]
+        self.assertEqual(rec.get("confirmer_role"), "owner")
+        self.assertEqual(rec.get("confirmer_token_ref"), "cap_http_test")
+        self.assertEqual(rec.get("confirmer_token_fingerprint"), "sha256:ownerfp01")
+        self.assertIn("gate_signature", rec)
 
 
 if __name__ == "__main__":

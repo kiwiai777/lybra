@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,6 +23,19 @@ DEFAULT_KEEPALIVE_SECONDS = 30.0
 TOKEN_ENV_VAR = "LYBRA_MCP_TOKEN"
 MCP_RPC_PATH = "/mcp"
 MCP_SSE_PATH = "/sse"
+
+# AIPOS-201: MCP Streamable-HTTP (2025-03-26) transport additions, layered on the
+# existing AIPOS-123 HTTP/SSE surface WITHOUT changing it. The same `/mcp` POST
+# keeps returning a single application/json JSON-RPC response (probed: codex's
+# rmcp client accepts that). A Streamable-HTTP client additionally: receives an
+# `Mcp-Session-Id` on initialize and echoes it back; may open a GET stream on
+# `/mcp` for the server->client channel (keepalive only here); may DELETE the
+# session. Session tracking is advisory transport bookkeeping (issued, accepted,
+# deletable) and is intentionally NOT used to reject requests, so legacy/stateless
+# clients and the existing POST flow are unaffected (gate-not-engine: no long
+# state machine, no SoT).
+SESSION_HEADER = "Mcp-Session-Id"
+MAX_TRACKED_SESSIONS = 1024
 
 
 @dataclass(frozen=True)
@@ -130,12 +145,20 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
     }, None
 
 
-def _json_response(handler: BaseHTTPRequestHandler, status: HTTPStatus, payload: dict[str, Any]) -> None:
+def _json_response(
+    handler: BaseHTTPRequestHandler,
+    status: HTTPStatus,
+    payload: dict[str, Any],
+    *,
+    extra_headers: dict[str, str] | None = None,
+) -> None:
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     handler.send_response(status.value)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     handler.send_header("Cache-Control", "no-store")
+    for name, value in (extra_headers or {}).items():
+        handler.send_header(name, value)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -187,6 +210,9 @@ class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
         capability, _error_payload = _service_role_capability(self.headers.get("Authorization"), self.config.service_role_registry)
         return capability
 
+    def _sessions(self) -> "_SessionStore":
+        return self.server.sessions  # type: ignore[attr-defined]
+
     def do_POST(self) -> None:
         if urlparse(self.path).path != MCP_RPC_PATH:
             _json_response(
@@ -221,10 +247,19 @@ class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
         if response is None:
             _json_response(self, HTTPStatus.ACCEPTED, {"ok": True, "notification": True})
             return
-        _json_response(self, HTTPStatus.OK, response)
+        # AIPOS-201: issue an Mcp-Session-Id on a successful initialize so a
+        # Streamable-HTTP client (e.g. codex) can carry it on later requests.
+        # The single application/json response body is unchanged for every client.
+        extra_headers: dict[str, str] | None = None
+        if str(message.get("method") or "") == "initialize" and "error" not in response:
+            extra_headers = {SESSION_HEADER: self._sessions().mint()}
+        _json_response(self, HTTPStatus.OK, response, extra_headers=extra_headers)
 
     def do_GET(self) -> None:
-        if urlparse(self.path).path != MCP_SSE_PATH:
+        # AIPOS-201: serve the keepalive SSE stream on both the legacy /sse path
+        # and the Streamable-HTTP /mcp endpoint (the server->client channel that a
+        # client such as codex opens). The stream payload is identical to AIPOS-123.
+        if urlparse(self.path).path not in (MCP_SSE_PATH, MCP_RPC_PATH):
             _json_response(
                 self,
                 HTTPStatus.NOT_FOUND,
@@ -237,6 +272,9 @@ class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close" if self.config.max_keepalive_events is not None else "keep-alive")
+        session_id = (self.headers.get(SESSION_HEADER) or "").strip()
+        if session_id:
+            self.send_header(SESSION_HEADER, session_id)
         self.end_headers()
         count = 0
         while self.config.max_keepalive_events is None or count < self.config.max_keepalive_events:
@@ -253,12 +291,64 @@ class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
         if self.config.max_keepalive_events is not None:
             self.close_connection = True
 
+    def do_DELETE(self) -> None:
+        # AIPOS-201: Streamable-HTTP session teardown. Advisory only — after auth
+        # we drop any tracked session and return 200 (never reject on session id).
+        if urlparse(self.path).path != MCP_RPC_PATH:
+            _json_response(
+                self,
+                HTTPStatus.NOT_FOUND,
+                _structured_error("NOT_FOUND", "Unknown MCP HTTP/SSE endpoint.", f"DELETE the session at {MCP_RPC_PATH}."),
+            )
+            return
+        if not self._authorize():
+            return
+        self._sessions().drop((self.headers.get(SESSION_HEADER) or "").strip())
+        self.send_response(HTTPStatus.OK.value)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+class _SessionStore:
+    """AIPOS-201: bounded, thread-safe, advisory Streamable-HTTP session registry.
+
+    Sessions are issued on initialize and accepted/deletable thereafter, satisfying
+    the transport contract. They are intentionally NOT consulted to authorize or
+    reject requests (that stays with the Bearer/scope path), so this is transport
+    bookkeeping, not a long-lived state machine or source of truth.
+    """
+
+    def __init__(self, max_sessions: int = MAX_TRACKED_SESSIONS) -> None:
+        self._lock = threading.Lock()
+        self._sessions: dict[str, float] = {}
+        self._max = max_sessions
+
+    def mint(self) -> str:
+        session_id = secrets.token_urlsafe(24)
+        with self._lock:
+            if len(self._sessions) >= self._max:
+                oldest = min(self._sessions, key=lambda key: self._sessions[key])
+                self._sessions.pop(oldest, None)
+            self._sessions[session_id] = time.time()
+        return session_id
+
+    def drop(self, session_id: str) -> None:
+        if not session_id:
+            return
+        with self._lock:
+            self._sessions.pop(session_id, None)
+
+    def known(self, session_id: str) -> bool:
+        with self._lock:
+            return session_id in self._sessions
+
 
 class LybraMcpHttpSseServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, server_address: tuple[str, int], config: HttpSseConfig) -> None:
         self.lybra_config = config
+        self.sessions = _SessionStore()
         super().__init__(server_address, LybraMcpHttpSseHandler)
 
 
