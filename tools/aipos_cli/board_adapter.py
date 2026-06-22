@@ -1139,6 +1139,8 @@ def publish_draft(
     dry_run: bool = True,
     repo_root: str | Path | None = None,
     actor: str | None = None,
+    owner_confirmation_required_override: bool | None = None,
+    owner_confirmation_reasons_override: list[str] | None = None,
 ) -> dict[str, Any]:
     operation = "draft_publish"
     try:
@@ -1159,6 +1161,16 @@ def publish_draft(
             "validation": result.get("validation"),
             "rendered_markdown": result.get("rendered_markdown"),
         }
+        # AIPOS-204 / F-c4: the gated (MCP/TUI) publish surface requires explicit Owner
+        # confirmation, so the registered dry-run plan carries owner_confirmation_required;
+        # execute_dry_run then refuses to publish without OWNER_CONFIRMED. The CLI publish
+        # path passes no override and stays as-is (disclosed-deferred per DG-9).
+        owner_confirmation_required = bool(owner_confirmation_required_override)
+        owner_confirmation_reasons = (
+            list(owner_confirmation_reasons_override)
+            if owner_confirmation_required and owner_confirmation_reasons_override
+            else []
+        )
         response = make_response(
             ok=True,
             verdict=verdict,
@@ -1171,6 +1183,8 @@ def publish_draft(
             warnings=list(result.get("warnings", [])),
             blocking_reasons=list(result.get("blocking_reasons", [])),
             needs_owner_reasons=[],
+            owner_confirmation_required=owner_confirmation_required,
+            owner_confirmation_reasons=owner_confirmation_reasons,
             safety_notice=MUTATION_DRY_RUN_NOTICE,
             errors=[],
         )
@@ -2795,7 +2809,16 @@ def execute_dry_run(
             current = create_draft(payload, dry_run=True, repo_root=resolved_root, actor=actor_text)
         elif op == "draft_publish":
             source_path = source_data.get("source_path")
-            current = publish_draft(source_path, dry_run=True, repo_root=resolved_root, actor=actor_text)
+            # AIPOS-204: re-apply the registered plan's owner-confirm override so the
+            # revalidation snapshot matches the gated dry-run that minted the token.
+            current = publish_draft(
+                source_path,
+                dry_run=True,
+                repo_root=resolved_root,
+                actor=actor_text,
+                owner_confirmation_required_override=bool(source_plan.get("owner_confirmation_required")),
+                owner_confirmation_reasons_override=list(source_plan.get("owner_confirmation_reasons", [])),
+            )
         elif op == "orchestration_event_append":
             payload = source_data.get("original_payload") or {}
             current = append_orchestration_event(payload, dry_run=True, repo_root=resolved_root, actor=actor_text)
@@ -2958,11 +2981,14 @@ def execute_dry_run(
                 errors=[],
             )
         if op == "draft_publish":
+            # AIPOS-204 / F-c4: stamp the confirming Owner token's non-secret identity
+            # into the publish record (mirrors the claim/return confirmer path).
             result = backend_publish_draft(
                 resolved_root,
                 source_data.get("source_path"),
                 dry_run=False,
                 actor=actor_text,
+                confirmer=confirmer if isinstance(confirmer, dict) else None,
             )
             verdict = derive_verdict(
                 blocking_reasons=list(result.get("blocking_reasons", [])),

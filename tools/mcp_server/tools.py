@@ -17,6 +17,7 @@ from tools.aipos_cli.board_adapter import (
     get_preview,
     get_queue,
     get_validate,
+    publish_draft,
     record_owner_decision,
     return_task,
     submit_external_intake,
@@ -31,6 +32,7 @@ CAPABILITY_ENV_VAR = "LYBRA_CAPABILITY_TOKEN"
 REQUEST_CAPABILITY: ContextVar[dict[str, Any] | None] = ContextVar("lybra_mcp_request_capability", default=None)
 INTAKE_SCOPE = "intake_submit"
 OWNER_DECISION_SCOPE = "owner_decision_record"
+DRAFT_PUBLISH_SCOPE = "draft_publish"
 QUEUE_CLAIM_SCOPE = "queue_claim"
 QUEUE_RETURN_SCOPE = "queue_return"
 AUDIT_DISPATCH_SCOPE = "audit_dispatch"
@@ -240,6 +242,10 @@ def _queue_return_scope_allowed() -> bool:
 
 def _owner_confirm_scope_allowed() -> bool:
     return _capability_has_scope(OWNER_CONFIRM_SCOPE)
+
+
+def _draft_publish_scope_allowed() -> bool:
+    return _capability_has_scope(DRAFT_PUBLISH_SCOPE)
 
 
 def _confirmer_attribution() -> dict[str, Any]:
@@ -803,6 +809,79 @@ def lybra_owner_decision_record_confirm(arguments: dict[str, Any] | None = None)
     )
     if not response.get("ok", False):
         return _map_controlled_execute_error(response, dry_run_tool="lybra_owner_decision_record_dry_run")
+    return _tool_result(response, is_error=False)
+
+
+def _draft_publish_owner_reasons() -> list[str]:
+    return ["Gated MCP draft_publish requires explicit Owner confirmation for this dry-run preview"]
+
+
+def lybra_draft_publish_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    # AIPOS-204 / F-c4: gated publish surface. Visible with the draft_publish scope (the
+    # planner / AI-authoring publisher); the confirm additionally requires owner_confirm.
+    if not _draft_publish_scope_allowed():
+        return _scope_denied_result_for(DRAFT_PUBLISH_SCOPE, "gated draft publish tools")
+    args = arguments or {}
+    path = str(args.get("path") or "").strip()
+    if not path:
+        return _teaching_error(
+            "DRAFT_PATH_REQUIRED",
+            "lybra_draft_publish_dry_run requires path (the draft to publish).",
+            "Pass path to the draft under 5_tasks/drafts/, then review the preview before confirm.",
+        )
+    response = publish_draft(
+        path,
+        dry_run=True,
+        repo_root=_repo_root(),
+        actor=str(args.get("actor") or "mcp.client"),
+        owner_confirmation_required_override=True,
+        owner_confirmation_reasons_override=_draft_publish_owner_reasons(),
+    )
+    return _tool_result(response, is_error=not bool(response.get("ok", False)) or response.get("verdict") == "BLOCK")
+
+
+def lybra_draft_publish_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _draft_publish_scope_allowed():
+        return _scope_denied_result_for(DRAFT_PUBLISH_SCOPE, "gated draft publish tools")
+    # AIPOS-204 / F-c4 (mirrors AIPOS-197): publish confirm additionally requires the
+    # Owner-only owner_confirm scope, so a draft_publish-capable (publisher) token cannot
+    # self-publish. The publish record's confirmer is therefore provably the Owner —
+    # structural, not literal-secrecy.
+    if not _owner_confirm_scope_allowed():
+        return _scope_denied_result_for(OWNER_CONFIRM_SCOPE, "draft publish confirm (Owner-only)")
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    if not dry_run_token:
+        return _teaching_error(
+            "MISSING_DRY_RUN_TOKEN",
+            "lybra_draft_publish_confirm requires dry_run_token from a prior lybra_draft_publish_dry_run response.",
+            "Call lybra_draft_publish_dry_run first, review the preview, then confirm with its dry_run_token.",
+        )
+    owner_confirmation_token = str(args.get("owner_confirmation_token") or "").strip()
+    if owner_confirmation_token != OWNER_CONFIRMATION_TOKEN:
+        return _teaching_error(
+            "OWNER_CONFIRMATION_REQUIRED",
+            "Gated MCP draft_publish confirm requires owner_confirmation_token: OWNER_CONFIRMED.",
+            "Present the dry-run preview to Owner, then retry confirm with owner_confirmation_token set to OWNER_CONFIRMED.",
+        )
+    response = execute_dry_run(
+        dry_run_token,
+        str(args.get("actor") or "mcp.client"),
+        owner_confirmation_token=owner_confirmation_token,
+        repo_root=_repo_root(),
+        confirmer=_confirmer_attribution(),
+    )
+    if not response.get("ok", False):
+        return _map_controlled_execute_error(response, dry_run_tool="lybra_draft_publish_dry_run")
+    response["surface"] = "mcp"
+    response["provenance"] = {
+        "event_type": "mcp_draft_publish",
+        "actor": str(args.get("actor") or "mcp.client"),
+        "surface": "mcp",
+        "transport": "mcp",
+        "result": response.get("verdict"),
+        "dry_run_id": dry_run_token,
+    }
     return _tool_result(response, is_error=False)
 
 
@@ -1485,6 +1564,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_intake_submit_confirm": lybra_intake_submit_confirm,
     "lybra_owner_decision_record_dry_run": lybra_owner_decision_record_dry_run,
     "lybra_owner_decision_record_confirm": lybra_owner_decision_record_confirm,
+    "lybra_draft_publish_dry_run": lybra_draft_publish_dry_run,
+    "lybra_draft_publish_confirm": lybra_draft_publish_confirm,
     "lybra_queue_claim_dry_run": lybra_queue_claim_dry_run,
     "lybra_queue_claim_confirm": lybra_queue_claim_confirm,
     "lybra_queue_return_dry_run": lybra_queue_return_dry_run,
@@ -1545,6 +1626,41 @@ READ_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
 
 
 WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
+    {
+        "name": "lybra_draft_publish_dry_run",
+        "description": (
+            "When to use: create a controlled-execute preview for publishing a reviewed draft into the pending queue through the gated, accountable publish surface (the channel for TUI / AI-authored drafts). "
+            "Prerequisites: this MCP connection must have a capability_token with draft_publish scope; path must point to a draft under 5_tasks/drafts/; this tool writes nothing. "
+            "Return structure: a controlled-execute envelope with verdict, planned_writes (pending task + publish record), dry_run_token, dry_run_snapshot_hash, and dry_run_expires_at. Confirm requires the Owner-only owner_confirm scope."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "actor": {"type": "string"},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_draft_publish_confirm",
+        "description": (
+            "When to use: confirm a gated draft_publish dry-run, writing the pending task and a publish record that attributes the confirming Owner (confirmer_role/token_ref/fingerprint), closing F-c4. "
+            "Prerequisites: capability_token with BOTH draft_publish AND owner_confirm scope (a publisher-only token is SCOPE_DENIED — the publish confirmer is provably the Owner); dry_run_token from lybra_draft_publish_dry_run; owner_confirmation_token: OWNER_CONFIRMED. "
+            "Return structure: a controlled-execute envelope with performed_writes and the publish record reference."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run_token": {"type": "string"},
+                "owner_confirmation_token": {"type": "string"},
+                "actor": {"type": "string"},
+            },
+            "required": ["dry_run_token", "owner_confirmation_token"],
+            "additionalProperties": False,
+        },
+    },
     {
         "name": "lybra_intake_submit_dry_run",
         "description": (
@@ -1879,6 +1995,8 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_intake_submit"))
     if _owner_decision_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_owner_decision_record"))
+    if _draft_publish_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_draft_publish"))
     if _queue_claim_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_claim"))
     if _queue_return_scope_allowed():

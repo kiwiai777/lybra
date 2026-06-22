@@ -134,7 +134,14 @@ def render_publish_record(
     source_sha256: str,
     published_sha256: str,
     published_at: str,
+    confirmer: dict[str, Any] | None = None,
 ) -> str:
+    # AIPOS-204 / F-c4: a gated publish records WHO approved the publish, mirroring the
+    # AIPOS-199 claim/return confirmer attribution. `published_by` is the publisher
+    # (who drafted/initiated); confirmer_* is the Owner who confirmed the gate. The
+    # raw token is never recorded — only the non-secret role/ref/fingerprint. §9
+    # signing fields are placeholders (per-op nonce/signature stays deferred).
+    confirmer = confirmer if isinstance(confirmer, dict) else {}
     metadata = {
         "record_type": "publish_record",
         "task_id": task_id,
@@ -147,6 +154,14 @@ def render_publish_record(
         "published_sha256": published_sha256,
         "published_at": published_at,
         "created_at": published_at,
+        "confirmer_role": confirmer.get("confirmer_role"),
+        "confirmer_token_ref": confirmer.get("confirmer_token_ref"),
+        "confirmer_token_fingerprint": confirmer.get("confirmer_token_fingerprint"),
+        "gate_signature": confirmer.get("gate_signature"),
+        "authority_seal": confirmer.get("authority_seal"),
+        "signature_key_ref": confirmer.get("signature_key_ref"),
+        "signed_payload_hash": confirmer.get("signed_payload_hash"),
+        "signed_at": confirmer.get("signed_at"),
     }
     body = "\n".join(
         [
@@ -172,6 +187,14 @@ def render_publish_record(
             "published_sha256",
             "published_at",
             "created_at",
+            "confirmer_role",
+            "confirmer_token_ref",
+            "confirmer_token_fingerprint",
+            "gate_signature",
+            "authority_seal",
+            "signature_key_ref",
+            "signed_payload_hash",
+            "signed_at",
         ],
     ) + body
 
@@ -342,6 +365,7 @@ def publish_draft(
     *,
     dry_run: bool = False,
     actor: str | None = None,
+    confirmer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_path = resolve_draft_path(repo_root, draft_path)
     source_rel = str(source_path.relative_to(repo_root))
@@ -482,6 +506,7 @@ def publish_draft(
             source_sha256=source_sha256,
             published_sha256=published_sha256,
             published_at=published_at,
+            confirmer=confirmer,
         ),
         encoding="utf-8",
     )
