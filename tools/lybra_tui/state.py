@@ -10,6 +10,7 @@ thin renderer. It imports NO Textual, so it runs in the gate/core CI lane.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.confirm_client import (
@@ -24,7 +25,10 @@ from tools.aipos_cli.confirm_client import (
 WRITE_SCOPES = ("queue_claim", "queue_return", "owner_confirm", "draft_publish", "audit_dispatch", "audit_verdict")
 OBSERVE_MODE = "observe"
 CONFIRM_MODE = "confirm"
-MODES = (OBSERVE_MODE, CONFIRM_MODE)  # copilot mode is added by the DG-11 slice, not here
+COPILOT_MODE = "copilot"
+# AIPOS-206 (DG-11): Shift+Tab cycles observe -> confirm -> copilot. The copilot mode is
+# a read-only planning advisor (see tools.lybra_tui.copilot); it never confirms/publishes.
+MODES = (OBSERVE_MODE, CONFIRM_MODE, COPILOT_MODE)
 
 
 @dataclass
@@ -77,7 +81,7 @@ class TuiSession:
         return "owner_confirm" in self.scopes
 
     def toggle_mode(self) -> str:
-        # Shift+Tab cycles observe <-> confirm (copilot mode reserved for the DG-11 slice).
+        # Shift+Tab cycles observe -> confirm -> copilot (AIPOS-206).
         idx = MODES.index(self.mode) if self.mode in MODES else 0
         self.mode = MODES[(idx + 1) % len(MODES)]
         return self.mode
@@ -122,6 +126,22 @@ class TuiSession:
     def preview_publish(self, draft_path: str, *, actor: str = "owner") -> Preview:
         return self._client.preview("publish", {"path": draft_path, "actor": actor})
 
+    # --- AIPOS-206 Owner "proceed": land a copilot DRAFT, then publish via the gate ---
+    #
+    # This is the OWNER/TUI proceed action, NOT the copilot. The copilot loop only ever
+    # returns DRAFT data (tools.lybra_tui.copilot.DraftProposal); materializing it to a
+    # file and feeding the AIPOS-204 publish gate happens here, on the owner session, in
+    # one Owner action. The copilot credential can never reach this code (no write scope,
+    # no file write path on its side).
+    def land_draft(self, content: str, *, workspace_root: str, draft_rel_path: str) -> str:
+        """Write the DRAFT to drafts/ under the workspace (Owner action). Returns the path."""
+        if not draft_rel_path.startswith("5_tasks/drafts/"):
+            raise ValueError("a copilot DRAFT must land under 5_tasks/drafts/ (per-project, R4)")
+        path = Path(workspace_root).expanduser().resolve() / draft_rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return draft_rel_path
+
     def confirm(self, preview: Preview, owner_literal: str) -> dict[str, Any]:
         # Esc / empty literal = reject (the caller passes "" to cancel; never auto-supply).
         if not owner_literal:
@@ -129,4 +149,4 @@ class TuiSession:
         return self._client.confirm(preview, owner_literal)
 
 
-__all__ = ["TuiSession", "OBSERVE_MODE", "CONFIRM_MODE", "MODES", "WRITE_SCOPES", "token_fingerprint"]
+__all__ = ["TuiSession", "OBSERVE_MODE", "CONFIRM_MODE", "COPILOT_MODE", "MODES", "WRITE_SCOPES", "token_fingerprint"]

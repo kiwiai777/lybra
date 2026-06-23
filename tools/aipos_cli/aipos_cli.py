@@ -713,6 +713,12 @@ def build_parser() -> argparse.ArgumentParser:
     tui_parser.add_argument("--connection-json", help="Path to .lybra/local/connection.json (token read by role)")
     tui_parser.add_argument("--token-env", help="Env var holding the owner bearer token")
     tui_parser.add_argument("--role", default="owner", help="Role to read from connection.json; defaults to owner")
+    # AIPOS-206: read-only planning copilot (DG-11). Enabled only when an LLM config is given.
+    tui_parser.add_argument("--workspace-root", help="Workspace root used to land copilot DRAFTs under 5_tasks/drafts/")
+    tui_parser.add_argument("--project", help="Project the copilot session is scoped to (single-project, R4)")
+    tui_parser.add_argument("--llm-base-url", help="OpenAI-compatible base URL; enables the read-only planning copilot")
+    tui_parser.add_argument("--llm-key-env", help="Env var holding the LLM api key (never passed on the command line)")
+    tui_parser.add_argument("--llm-model", help="LLM model id (default gpt-4o-mini)")
 
     mcp_config_parser = subparsers.add_parser("mcp-config", help="Print redacted MCP client/server configuration")
     mcp_config_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
@@ -993,6 +999,11 @@ def main(argv: list[str] | None = None) -> int:
             connection_json=args.connection_json,
             token_env=args.token_env,
             role=args.role,
+            workspace_root=args.workspace_root,
+            project=args.project,
+            llm_base_url=args.llm_base_url,
+            llm_key_env=args.llm_key_env,
+            llm_model=args.llm_model,
         )
 
     if args.command == "board":

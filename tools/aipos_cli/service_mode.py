@@ -52,6 +52,15 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
         "token_ref": "svc-auditor",
         "scopes": ["queue_claim", "audit_verdict"],
     },
+    {
+        # AIPOS-206 (DG-11): the Planning Copilot's read-only credential. scopes [] is
+        # verified-sufficient — read tools are exposed by default (no scope required;
+        # tools.py READ_ONLY_NOTICE), and every write/confirm/publish op is structurally
+        # SCOPE_DENIED. This is the copilot-side ★A1 boundary as a credential, not policy.
+        "role": "copilot",
+        "token_ref": "svc-copilot",
+        "scopes": [],
+    },
 )
 
 

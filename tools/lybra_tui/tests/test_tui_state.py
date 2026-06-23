@@ -13,7 +13,7 @@ from typing import Iterator
 from unittest.mock import patch
 
 from tools.aipos_cli.records import load_records
-from tools.lybra_tui.state import TuiSession, OBSERVE_MODE, CONFIRM_MODE
+from tools.lybra_tui.state import TuiSession, OBSERVE_MODE, CONFIRM_MODE, COPILOT_MODE
 from tools.mcp_server.http_sse import DEFAULT_HTTP_HOST, HttpSseConfig, build_http_server
 
 FIXTURE_ROOT = Path(__file__).resolve().parent.parent.parent / "aipos_cli" / "tests" / "fixtures"
@@ -96,11 +96,12 @@ class TuiStateTests(unittest.TestCase):
             s = TuiSession.connect(url, connection_json=cpath, role="executor")
         self.assertFalse(s.has_owner_confirm)
 
-    def test_toggle_mode_cycles_observe_confirm(self) -> None:
+    def test_toggle_mode_cycles_observe_confirm_copilot(self) -> None:
         with self.gate() as url, self.conn("owner-secret") as cpath:
             s = TuiSession.connect(url, connection_json=cpath, role="owner")
             self.assertEqual(s.mode, OBSERVE_MODE)
             self.assertEqual(s.toggle_mode(), CONFIRM_MODE)
+            self.assertEqual(s.toggle_mode(), COPILOT_MODE)  # AIPOS-206
             self.assertEqual(s.toggle_mode(), OBSERVE_MODE)
 
     # T2 — observe via gate read-tool
