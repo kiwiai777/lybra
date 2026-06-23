@@ -40,7 +40,11 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
         # not hold owner_confirm, so a confined agent cannot self-confirm.
         "role": "owner",
         "token_ref": "svc-owner",
-        "scopes": ["queue_claim", "queue_return", "owner_confirm"],
+        # AIPOS-207 (F-cop-204scope-1): the Owner holds draft_publish so the AIPOS-204
+        # gated publish surface is reachable via serve-rotate creds (DG-11: the Owner runs
+        # dry_run + confirm in one proceed action). Only owner — NOT executor/copilot.
+        # The two-scope rule is unchanged: publish confirm still also needs owner_confirm.
+        "scopes": ["queue_claim", "queue_return", "owner_confirm", "draft_publish"],
     },
     {
         "role": "owner-dispatch",
