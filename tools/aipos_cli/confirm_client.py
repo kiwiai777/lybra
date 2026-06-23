@@ -37,7 +37,15 @@ _CLAIM_DRY_RUN = "lybra_queue_claim_dry_run"
 _CLAIM_CONFIRM = "lybra_queue_claim_confirm"
 _RETURN_DRY_RUN = "lybra_queue_return_dry_run"
 _RETURN_CONFIRM = "lybra_queue_return_confirm"
+# AIPOS-205: the TUI confirm panel also covers gated publish (AIPOS-204). The publish
+# confirm has a different arg shape (no agent_instance/owner_policy_ref), so confirm()
+# is op-aware below.
+_PUBLISH_DRY_RUN = "lybra_draft_publish_dry_run"
+_PUBLISH_CONFIRM = "lybra_draft_publish_confirm"
 _QUEUE_LIST = "lybra_queue_list"
+
+_DRY_RUN_TOOL = {"claim": _CLAIM_DRY_RUN, "return": _RETURN_DRY_RUN, "publish": _PUBLISH_DRY_RUN}
+_CONFIRM_TOOL = {"claim": _CLAIM_CONFIRM, "return": _RETURN_CONFIRM, "publish": _PUBLISH_CONFIRM}
 
 # The three args a confirm must replay from its dry-run (RF-4). Held by the client
 # because the client issued the dry-run, so they can never be mistyped/omitted.
@@ -183,18 +191,17 @@ class GateClient:
     # --- preview (issue dry-run) + confirm (replay) ---
 
     def preview(self, op: str, dry_run_args: dict[str, Any]) -> Preview:
-        if op == "claim":
-            tool = _CLAIM_DRY_RUN
-        elif op == "return":
-            tool = _RETURN_DRY_RUN
-        else:
-            raise ValueError(f"unknown op {op!r}; expected 'claim' or 'return'")
+        tool = _DRY_RUN_TOOL.get(op)
+        if tool is None:
+            raise ValueError(f"unknown op {op!r}; expected 'claim', 'return', or 'publish'")
         structured = self.call_tool(tool, dry_run_args)
         token = structured.get("dry_run_token") or structured.get("dry_run_id")
         if not token:
             reasons = structured.get("blocking_reasons") or structured.get("errors") or structured
             raise GateError(f"{op} dry-run produced no token: {reasons}")
-        replay = {key: dry_run_args.get(key) for key in _REPLAY_KEYS}
+        # publish confirm replays only actor (no agent_instance/owner_policy_ref).
+        replay_keys = ("actor",) if op == "publish" else _REPLAY_KEYS
+        replay = {key: dry_run_args.get(key) for key in replay_keys}
         return Preview(
             op=op,
             dry_run_token=str(token),
@@ -216,12 +223,18 @@ class GateClient:
         """
         if not owner_confirmation_literal:
             raise ValueError("owner confirmation literal is required (explicit Owner intent)")
-        tool = _CLAIM_CONFIRM if preview.op == "claim" else _RETURN_CONFIRM
+        tool = _CONFIRM_TOOL.get(preview.op)
+        if tool is None:
+            raise ValueError(f"unknown op {preview.op!r}; expected 'claim', 'return', or 'publish'")
         arguments = {
             "dry_run_token": preview.dry_run_token,
             "owner_confirmation_token": owner_confirmation_literal,
-            **{key: preview.replay_args.get(key) for key in _REPLAY_KEYS},
         }
+        # publish confirm replays only actor; claim/return replay the 3 identity args (RF-4).
+        replay_keys = ("actor",) if preview.op == "publish" else _REPLAY_KEYS
+        for key in replay_keys:
+            if preview.replay_args.get(key) is not None:
+                arguments[key] = preview.replay_args.get(key)
         return self.call_tool(tool, arguments)
 
 

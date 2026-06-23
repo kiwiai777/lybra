@@ -1,0 +1,23 @@
+# AIPOS-205 — Python dependency / extras declaration ONLY.
+#
+# This file does NOT take over distribution. The product is distributed via npm
+# (package.json) with `bin/lybra` as the entry point; that remains unchanged. This
+# pyproject exists solely to (a) declare that the gate core has ZERO runtime Python
+# dependencies, and (b) declare the optional `tui` extra (Textual), so the TUI client
+# is installed only with `pip install .[tui]` (or `pip install textual` in the tui CI
+# lane). Do not add gate runtime deps here — the gate must stay stdlib-only.
+
+[project]
+name = "lybra"
+version = "0.2.0"
+description = "Lybra — accountability harness for AI agents (gate core; npm/bin is the distribution entry)."
+requires-python = ">=3.10"
+dependencies = []  # gate core: stdlib only, intentionally zero runtime dependencies
+
+[project.optional-dependencies]
+# UI library lands ONLY in the TUI client (tools/lybra_tui); tools/mcp_server and
+# tools/aipos_cli never import it. Core CI lane installs nothing here and runs the gate.
+tui = ["textual>=0.50"]
+
+[tool.lybra]
+distribution = "npm"  # bin/lybra (package.json) is the entry; pyproject is deps/extras only

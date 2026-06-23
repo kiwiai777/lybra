@@ -706,6 +706,14 @@ def build_parser() -> argparse.ArgumentParser:
     board_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
     board_parser.add_argument("--port", type=int, help="Bind port; defaults to 7117")
 
+    # AIPOS-205: TUI client over an Owner-started gate. The Textual dependency lives only
+    # in tools/lybra_tui (the tui extra); this CLI stays stdlib/zero-dep and lazy-imports it.
+    tui_parser = subparsers.add_parser("tui", help="Launch the Lybra TUI client (requires: pip install lybra[tui])")
+    tui_parser.add_argument("--gate-url", required=True, help="Owner-started gate, e.g. http://127.0.0.1:7118")
+    tui_parser.add_argument("--connection-json", help="Path to .lybra/local/connection.json (token read by role)")
+    tui_parser.add_argument("--token-env", help="Env var holding the owner bearer token")
+    tui_parser.add_argument("--role", default="owner", help="Role to read from connection.json; defaults to owner")
+
     mcp_config_parser = subparsers.add_parser("mcp-config", help="Print redacted MCP client/server configuration")
     mcp_config_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     mcp_config_parser.add_argument("--host", help="MCP host; defaults to workspace config or 127.0.0.1")
@@ -971,6 +979,21 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
+
+    if args.command == "tui":
+        # Lazy import so the Textual dependency is required only when launching the TUI;
+        # the rest of the CLI / gate stays stdlib/zero-dep.
+        try:
+            from tools.lybra_tui.__main__ import run_tui
+        except ImportError:
+            print("lybra tui requires the TUI extra. Install with: pip install lybra[tui]", file=sys.stderr)
+            return 2
+        return run_tui(
+            gate_url=args.gate_url,
+            connection_json=args.connection_json,
+            token_env=args.token_env,
+            role=args.role,
+        )
 
     if args.command == "board":
         try:
