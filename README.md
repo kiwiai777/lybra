@@ -8,9 +8,9 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/lybra"><img alt="npm" src="https://img.shields.io/npm/v/lybra?color=0D5A3B&amp;label=npm"></a>
-  <img alt="node" src="https://img.shields.io/node/v/lybra?color=0D5A3B">
-  <img alt="license" src="https://img.shields.io/github/license/kiwiai777/lybra?color=0D5A3B">
+  <a href="https://www.npmjs.com/package/lybra"><img alt="npm" src="https://img.shields.io/npm/v/lybra?color=1A7A52&amp;label=npm"></a>
+  <img alt="node" src="https://img.shields.io/node/v/lybra?color=1A7A52">
+  <img alt="license" src="https://img.shields.io/github/license/kiwiai777/lybra?color=1A7A52">
   <img alt="status" src="https://img.shields.io/badge/status-early%20access-1A7A52">
 </p>
 
@@ -18,106 +18,104 @@
 
 ## What is Lybra
 
-Lybra is a **local-first, file-authoritative control plane** for AI agents — a harness that puts **governance, verification, and observability first**.
+Lybra is **an accountable single-agent autonomy loop, plus an accountability gate that any MCP
+agent can reach via Form B.** It optimizes for **accountability**, not raw autonomy.
 
-Most agent platforms optimize for **autonomy**. Lybra optimizes for **accountability**.
+Three principles are welded in:
 
-- **Files are the single source of truth** — state lives in durable files, not in compressed conversation memory. State outlives the model.
-- **The owner holds every decision gate** — architecture, risk, and scope decisions are non-delegable.
-- **Independent audit is enforced** — an executor can never audit its own work.
-- **Agents come to Lybra (MCP-native)** — no autonomous runtime, no heartbeat polling.
+- **Gate, not engine.** Clients (TUI / agents) connect to an Owner-started gate; the gate does not
+  run agents or stream model turns on its own.
+- **Files are truth.** State lives in durable files, not in compressed conversation memory — it
+  outlives the model.
+- **Drafter ≠ confirmer ≠ executor.** Planning is read-only; the Owner confirms through the gate; an
+  executor does the work. No party collapses into another.
 
 > The model isn't the bottleneck. The harness is.
 
-## Why it matters
+## Quick start
 
-Enterprises need AI they can hold accountable — not a polished demo. If you can't assign responsibility, reproduce a result, or audit a decision, you can't put an agent into real business. Lybra moves AI agents **from demos to accountable, repeatable work**.
+Lybra's **gate core ships via npm and has zero Python runtime dependencies**. The TUI client adds
+[Textual](https://pypi.org/project/textual/) on top. **`lybra` itself is distributed via npm and is
+NOT on PyPI** — install the TUI's `textual` separately.
+
+**npm end users:**
+
+```bash
+npm install -g lybra                 # gate core (Node 18+ and Python 3 on PATH)
+pip install "textual>=0.50"          # enable the TUI (textual is on PyPI; lybra is npm-only)
+lybra init ./ws --project-id my_project
+lybra serve --workspace-root ./ws    # Owner starts the gate (rotates roles, incl. read-only copilot)
+lybra tui --gate-url http://127.0.0.1:7118 --workspace-root ./ws --project my_project \
+          --llm-base-url <openai-compatible-url> --llm-model <model> --llm-key-env LYBRA_PLANCHAT_LLM_KEY
+```
+
+The LLM key is read from the `LYBRA_PLANCHAT_LLM_KEY` environment variable (never passed on the
+command line). Without an LLM config, `lybra tui` opens in read-only observe mode.
+
+**Source / dev (from a clone):**
+
+```bash
+git clone https://github.com/kiwiai777/lybra && cd lybra
+pip install ".[tui]"                 # installs the textual extra
+python3 -m unittest discover -s tools -p "test_*.py"
+```
+
+## Capabilities (v1.0)
+
+- **Chat-to-task first screen.** Launch the TUI, describe a task in one sentence, and the read-only
+  Planning Copilot drafts a **conformant** task card — its publishable structure is guaranteed by
+  code, not by LLM luck.
+- **Read-only Planning Copilot.** The copilot holds no write/confirm/publish scope (it connects with
+  a `scopes: []` role); every mutation it could attempt is structurally denied at the gate.
+- **Owner-gated publish.** The only path to truth is `draft → Owner proceed → gate confirm`; the
+  publish record attributes the confirming Owner (`confirmer_role=owner`).
+- **Supervised closed loop.** Every truth mutation passes an Owner confirm; an executor can never
+  self-confirm or audit its own work.
+- **Form A / Form B.** Form A is the supervised single-harness loop (Claude); Form B lets any MCP
+  agent reach the same accountability gate.
 
 ## How it works
 
-Three peer surfaces share one permission-and-audit backend:
-
-| Surface | Role |
-|---------|------|
-| **CLI** | command-line operation |
-| **Board** | local dashboard for review |
-| **MCP** | any agent connects in |
-
-Every write to the workspace is forced through one path — no shortcuts:
-
 ```
-dry-run  →  confirm  →  Owner Decision Gate  →  independent audit  →  written to files
+draft (read-only)  →  Owner proceed  →  gate confirm (OWNER_CONFIRMED)  →  written to files
+                                            │
+                                            └─ executor claim → work → return → independent audit → L3 VALID
 ```
 
-## Where Lybra sits — ETCLOVG
+The executor and the auditor are **different parties**; nothing is finalized without an audit pass.
+Workspace commands auto-discover the workspace from the current directory upward; explicit flags and
+`AIPOS_WORKSPACE_ROOT` override discovery.
 
-Against the seven-layer harness model (Execution · Tooling · Context · Lifecycle · Observability · Verification · Governance), Lybra is **deliberately heavy on Governance, Verification, and Observability**, and **deliberately does not do autonomous Execution or Lifecycle orchestration**. That's a stance, not a gap.
+## Scope & limits
 
-See [`docs/positioning/etclovg_self_assessment.md`](docs/positioning/etclovg_self_assessment.md).
+Lybra v1.0 is deliberately scoped. Every disclosed-deferred / discipline-held item — RF-3, gate
+signing (§9), CLI publish, scope exemptions, network egress, autonomy modes, the single-harness Wall,
+heterogeneous mutual audit, and the LLM key — is catalogued honestly, with the structure or
+discipline that holds it and the plan to address it, in:
 
-## Install
+- **[`docs/v1_disclosure.md`](docs/v1_disclosure.md)** — the honest disclosure ledger.
+- **[`docs/v1_acceptance_runbook.md`](docs/v1_acceptance_runbook.md)** — the manual release
+  walkthrough (every mutating gate is Owner-out-of-band).
+
+Automated acceptance gate (no confirm needed):
 
 ```bash
-npm install -g lybra
-lybra --help
+python -m tools.acceptance.v1_acceptance   # expect: ACCEPTANCE: PASS
 ```
 
-Lybra needs Node.js 18+ and Python 3 available on `PATH`.
-
-For source checkout contributors:
-
-```bash
-git clone <repo-url>
-cd lybra
-python3 -m unittest discover -s tools/aipos_cli/tests
-python3 -m unittest discover -s web/board/tests
-```
-
-Workspace commands auto-discover `.lybra/config.json` or `5_tasks/queue` from the current directory upward. Explicit flags and `AIPOS_WORKSPACE_ROOT` still override discovery.
-
-## Quick start
-
-```bash
-npm install -g lybra
-lybra init ./my-workspace --project-id my_project
-cd ./my-workspace
-lybra board
-```
-
-Board starts on `http://127.0.0.1:7117` by default.
-
-For MCP:
-
-```bash
-export NO_PROXY=127.0.0.1,localhost,::1
-export LYBRA_MCP_TOKEN="<set-your-token>"
-export LYBRA_CAPABILITY_TOKEN='<json-capability-token>'
-lybra mcp
-lybra mcp-config
-```
-
-MCP HTTP/SSE starts on `http://127.0.0.1:7118` by default. `lybra mcp-config` prints endpoint and environment references for an agent without printing raw token values.
-Set `NO_PROXY` when your shell has `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` configured, so local loopback MCP traffic is not intercepted by a proxy.
-
-## The closed loop
-
-For complex work, every task runs the same accountable loop:
-
-```
-Plan  →  Execute  →  Independent Audit  →  Fix / Finalize
-```
-
-The executor and the auditor must be **different parties**; nothing is finalized without an audit pass. Simple tasks close in a single step — but still leave an auditable trail.
+Lybra is **not** a "heterogeneous accountability loop" — heterogeneous dual-harness mutual audit is
+deferred (see the ledger).
 
 ## Contributing
 
-Changes that affect workflow gates, persistence boundaries, default ports, release surfaces, or audit rules should stay within the Owner decision flow and be validated before finalize. Keep product changes file-authoritative and narrowly scoped.
+Changes that affect workflow gates, persistence boundaries, default ports, release surfaces, or audit
+rules stay within the Owner decision flow and are validated before finalize. Keep product changes
+file-authoritative and narrowly scoped (see [`docs/release_discipline.md`](docs/release_discipline.md)).
 
 ## About
 
-Built by **KIWIAI**.
-
-Lybra helps teams turn AI from a personal trial tool into a **manageable, reusable, traceable, and continuously improvable** enterprise-grade system.
+Built by **KIWIAI**. Lybra turns AI from a personal trial tool into a **manageable, reusable,
+traceable** system you can hold accountable.
 
 ## License
 

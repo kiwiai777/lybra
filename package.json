@@ -2,7 +2,18 @@
   "name": "lybra",
   "version": "0.2.0",
   "license": "Apache-2.0",
-  "description": "Local-first, file-authoritative agent workbench with audit-first governance.",
+  "description": "An accountable single-agent autonomy loop + an accountability gate any MCP agent can reach via Form B. Gate, not engine; files are truth; drafter != confirmer != executor.",
+  "keywords": [
+    "ai-agent",
+    "accountability",
+    "governance",
+    "audit",
+    "mcp",
+    "harness",
+    "tui",
+    "file-authoritative",
+    "owner-gated"
+  ],
   "bin": {
     "lybra": "bin/lybra"
   },
