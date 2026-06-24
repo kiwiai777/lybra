@@ -1,0 +1,30 @@
+# Lybra v1.0 — disclosure ledger (honest deferrals & discipline-held items)
+
+This is an honest ledger, not marketing. It catalogs every v1.0 item that is **disclosed-deferred**
+or **discipline-held**, so claims stay scoped. README's "Scope & limits" section references this file.
+
+**Positioning (do not over-claim):** Lybra v1.0 is *"an accountable single-agent autonomy loop +
+an accountability gate any MCP agent can reach via Form B"* (DG-7). It is **NOT** a "heterogeneous
+accountability loop" — heterogeneous dual-harness mutual audit is deferred (see below).
+
+Each row records: **what is deferred · why v1.0 is safe (the structure or discipline holding it,
+honestly distinguished) · when planned · cross-references**.
+
+| # | Item | Deferred | Why v1.0 is safe (structure / discipline — honestly marked) | Planned · refs |
+|---|------|----------|--------------------------------------------------------------|----------------|
+| 1 | **RF-3 — orchestrator can read the owner token** | Structural isolation of the orchestrator from the owner token. | **Discipline-held (NOT structure-held — honestly disclosed).** Gate is loopback-only; `connection.json` is `0600`; the orchestrator is Owner-run locally. The ★A1 scope split (confirm ≠ execute) and confirmer attribution (role/token_ref/fingerprint) still hold structurally, but isolating the orchestrator from the token itself is **not** yet structural. | Separate structural-isolation slice · AIPOS-197 / AIPOS-199 |
+| 2 | **§9 — per-op Owner nonce / gate signature** | Real cryptographic signing. Placeholder fields are already written (`gate_signature`, `authority_seal`, `signature_key_ref`, `signed_payload_hash`, `signed_at`). | **Structure-held for accountability; signing is additive hardening.** Each gated mutation requires `OWNER_CONFIRMED` + dry-run snapshot revalidation + confirmer attribution. Cryptographic signing strengthens non-repudiation but is not the accountability premise. | Signing slice · AIPOS-204 / AIPOS-199 |
+| 3 | **DG-9 — CLI draft publish is ungated** | A gate on the CLI publish path. | **Structure-held via the accountable channel.** The accountable publish surface is the **gated MCP/TUI** path (`draft_publish` dry-run → Owner confirm → `confirmer_role=owner`). The CLI publish is a trusted local-operator convenience, disclosed as not the accountable surface. | Disclosed-deferred · DL-20260622-05 (AIPOS-204) |
+| 4 | **AIPOS-207 §8 — `intake_submit` / `owner_decision_record` reachable only via path B** | These scopes are not granted to any service role (operator `stdio` + `LYBRA_CAPABILITY_TOKEN` only). | **Intentional exemption, structure-guarded.** They are AIPOS-109/113 stdio controlled write-tools with a deliberate injection path (path B), verified reachable; the standing reachability test asserts every tools.py scope is "reachable by a role OR a proven exemption" so a future miss turns red. | Intentional (HTTP service-mode exposure, if ever, is a separate slice) · DL-20260623-11 (AIPOS-207) |
+| 5 | **Network egress not enforced** | An egress allow/deny boundary. The Planning Copilot sends workspace content (hydrated truth + chat) to the configured external LLM provider. | **Disclosed inherent behavior, structure-bounded.** The copilot is structurally read-only (scopes [], no truth-write path); egress is the planning feature's inherent output and configuring a provider is informed consent. It is orthogonal to the (closed) truth-write path. External web fetch is NOT in v1.0. | Egress policy + web fetch = later · DL-20260623-09 / DL-20260623-12 (AIPOS-206) · AIPOS-206 §2.2 |
+| 6 | **Autonomy: Supervised only** | Delegated / Standing autonomy modes. | **Structure-held.** Every truth mutation is gated by an Owner confirm (★A1); the executor token structurally cannot self-confirm. No higher autonomy surface is open, so there is no un-accountable execution path. | Delegated/Standing behind separate gates · AIPOS-197 / DG-7 |
+| 7 | **Form A (Wall) is Claude-only** | Other harnesses inside the confined Wall. `confined_worker` is hardcoded to `claude -p` (F-candidate-2). | **Scope-bounded + disclosed.** The Wall's scope is explicitly single-harness; Lybra does not claim a heterogeneous Wall. | Other harnesses in the Wall = v1.1 / E2 · DG-7 |
+| 8 | **Heterogeneous dual-harness mutual audit; R2 multi-project; R5 decision_log directory-ization; LLM digest; AIPOS-206b web fetch** | All of these (direction approved, implementation deferred). | **Not implemented and not claimed in scope.** Form B agent-agnostic gate access is proven (AIPOS-202), but two-harness mutual audit is deferred; R2/R5/digest/206b are direction-accepted only. | v1.1 / separate slices · DL-20260623-08 (R2/R5/R6) · DL-20260623-10 (206b) · DG-7 |
+| 9 | **LLM key is a temporary egress credential** | A durable secret-management story for the planning LLM key. | **Discipline-held.** The key is env-injected (`LYBRA_PLANCHAT_LLM_KEY`) only, fingerprint-only in all output, never in argv / `connection.json` / git; its temporary nature is disclosed. | Owner follow-up: rotate the key · DL-20260623-10 / DL-20260623-12 |
+
+## Notes
+- This ledger cross-references the decision log and finalize reports; it does not restate or rewrite
+  them. If an item here ever conflicts with `2_projects/lybra/decision_log.md`, the decision log wins
+  and this ledger must be corrected.
+- "Discipline-held" vs "structure-held" is stated honestly per row — a discipline-held item (e.g.
+  RF-3) is **not** presented as if a structural guarantee already exists.
