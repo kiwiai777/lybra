@@ -15,13 +15,16 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Footer, Header, Input, Static
 
+from tools.lybra_tui.presentation import LYBRA_GREEN, banner, color_enabled
 from tools.lybra_tui.state import COPILOT_MODE, TuiSession
 
 
 class LybraTui(App):
     """Owner console: observe gate state + modal confirm + read-only copilot. Non-daemon."""
 
-    CSS = "Screen { layout: vertical; } #body { height: 1fr; }"
+    # AIPOS-210: the brand green is injected from the single presentation token at exactly
+    # one point (LYBRA_GREEN) — no color literal lives here. `.brand` styles the banner.
+    CSS = f"Screen {{ layout: vertical; }} #body {{ height: 1fr; }} .brand {{ color: {LYBRA_GREEN}; text-style: bold; }}"
     BINDINGS = [
         Binding("shift+tab", "toggle_mode", "Mode"),
         Binding("/", "command_palette", "/-menu"),
@@ -42,11 +45,17 @@ class LybraTui(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Vertical(Static(id="status"), Static(id="body"), id="main")
+        yield Vertical(Static(id="banner"), Static(id="status"), Static(id="body"), id="main")
         yield Input(placeholder="/-menu: queue | validate | confirm | publish <draft> | draft <intent> | proceed | <Esc>", id="cmd")
         yield Footer()
 
     def on_mount(self) -> None:
+        # AIPOS-210: startup banner (narrow terminals fall back to plain LYBRA); brand color
+        # applied only when color_enabled (NO_COLOR / non-TTY → plain, no garble).
+        banner_widget = self.query_one("#banner", Static)
+        banner_widget.update(banner(self.size.width))
+        if color_enabled():
+            banner_widget.add_class("brand")
         self._render_status()
         self._show("Connected. Pull-on-demand: type a /-menu command (queue, validate, confirm).")
 
