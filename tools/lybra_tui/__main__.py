@@ -8,8 +8,23 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 from tools.lybra_tui.state import TuiSession
+
+# Default location serve-rotate writes the local connection config (0600).
+CONNECTION_REL = ".lybra/local/connection.json"
+
+
+def default_connection_json(workspace_root: str | None) -> str | None:
+    """AIPOS-209: resolve the serve-rotate connection.json under the workspace, if present.
+
+    Minimal convenience so `lybra tui` after `lybra serve` needs no explicit token source.
+    Returns the path string if the file exists, else None. Reads no token (path only).
+    """
+    base = Path(workspace_root).expanduser() if workspace_root else Path.cwd()
+    candidate = base / CONNECTION_REL
+    return str(candidate) if candidate.is_file() else None
 
 
 def _maybe_build_copilot(
@@ -52,6 +67,17 @@ def run_tui(
     llm_key_env: str | None = None,
     llm_model: str | None = None,
 ) -> int:
+    # AIPOS-209: if no explicit token source is given, fall back to the serve-rotate
+    # connection.json under the workspace (Owner ran `lybra serve` first).
+    if connection_json is None and token_env is None:
+        connection_json = default_connection_json(workspace_root)
+        if connection_json is None:
+            print(
+                "lybra tui: no token source. Run `lybra serve` first (writes "
+                f"{CONNECTION_REL}), or pass --connection-json / --token-env.",
+                file=sys.stderr,
+            )
+            return 2
     try:
         session = TuiSession.connect(
             gate_url, connection_json=connection_json, token_env=token_env, role=role
@@ -86,7 +112,9 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(prog="lybra tui", description="Lybra TUI client over an Owner-started gate.")
     parser.add_argument("--gate-url", required=True)
-    src = parser.add_mutually_exclusive_group(required=True)
+    # AIPOS-209: token source optional — defaults to the serve-rotate connection.json
+    # under the workspace when neither is given.
+    src = parser.add_mutually_exclusive_group(required=False)
     src.add_argument("--connection-json")
     src.add_argument("--token-env")
     parser.add_argument("--role", default="owner")
