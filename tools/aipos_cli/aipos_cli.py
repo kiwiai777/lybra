@@ -708,7 +708,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # AIPOS-205: TUI client over an Owner-started gate. The Textual dependency lives only
     # in tools/lybra_tui (the tui extra); this CLI stays stdlib/zero-dep and lazy-imports it.
-    tui_parser = subparsers.add_parser("tui", help="Launch the Lybra TUI client (requires: pip install lybra[tui])")
+    tui_parser = subparsers.add_parser("tui", help="Launch the Lybra TUI client (requires the TUI extra: pip install textual)")
     tui_parser.add_argument("--gate-url", required=True, help="Owner-started gate, e.g. http://127.0.0.1:7118")
     tui_parser.add_argument("--connection-json", help="Path to .lybra/local/connection.json (token read by role)")
     tui_parser.add_argument("--token-env", help="Env var holding the owner bearer token")
@@ -992,7 +992,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from tools.lybra_tui.__main__ import run_tui
         except ImportError:
-            print("lybra tui requires the TUI extra. Install with: pip install lybra[tui]", file=sys.stderr)
+            print(
+                "lybra tui requires Textual. Install it with: pip install textual "
+                "(lybra is npm-distributed, not on PyPI; see README Quick start).",
+                file=sys.stderr,
+            )
             return 2
         return run_tui(
             gate_url=args.gate_url,

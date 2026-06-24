@@ -17,8 +17,11 @@ against a **fresh, disposable workspace**; never touch the evidence workspaces (
 > are never given it on the command line). Tokens/keys are fingerprint-only in any output.
 
 ## R0 — install
-- `pip install .[tui]` → installs Textual (the TUI client).
-- Confirm the gate core still installs with **zero** Python deps: `pip install .` in a clean env.
+Two audiences, two install paths (lybra is **npm-distributed, not on PyPI**):
+- **npm end users (the shipped product path):** `npm install -g lybra` (gate core, zero Python deps)
+  → `pip install "textual>=0.50"` to enable the TUI client.
+- **Source / dev (from a clone):** `pip install ".[tui]"` → installs Textual (the TUI extra).
+- Confirm the gate core still installs with **zero** Python deps (no Textual needed to `lybra serve`).
 
 ## R1 — serve (Owner starts the gate)
 - `lybra serve --workspace-root <fresh-ws>` → `serve rotate` mints executor / owner / **copilot**

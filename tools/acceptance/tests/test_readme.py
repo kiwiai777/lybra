@@ -5,6 +5,10 @@ Keeps the outward-facing README honest and its Quickstart real:
 - every `lybra <subcmd>` in the README is a real CLI subcommand;
 - no broken install form (`pip install lybra[tui]` — lybra is npm-only, not on PyPI);
 - package.json files array ships tools/ and excludes evidence/secrets.
+
+AIPOS-215 (F-rg-1): the no-broken-install guard is extended from the README to *every*
+user-visible install-instruction surface — the CLI `tui` help string and the missing-Textual
+ImportError messages — so a future "fixed one surface, missed another" cannot recur.
 """
 
 from __future__ import annotations
@@ -17,6 +21,15 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[3]
 _README = _REPO / "README.md"
 _PKG = _REPO / "package.json"
+
+# AIPOS-215: every user-visible install-instruction surface (README + the CLI strings a user
+# hits when launching the TUI without Textual). The broken `pip install lybra[tui]` must appear
+# on NONE of them.
+_CLI_SURFACES = (
+    _REPO / "tools" / "aipos_cli" / "aipos_cli.py",
+    _REPO / "tools" / "lybra_tui" / "__main__.py",
+)
+_BROKEN_FORM = "pip install lybra[tui]"
 
 
 def _real_subcommands() -> set[str]:
@@ -67,6 +80,21 @@ class ReadmeGuardTests(unittest.TestCase):
         self.assertNotIn('pip install "lybra[tui]"', self.readme)
         self.assertRegex(self.readme, r"pip install\s+\"?textual")
         self.assertIn("NOT on PyPI", self.readme)
+
+    # --- AIPOS-215 (F-rg-1): the same guard, extended to every CLI install-instruction surface ---
+    def test_cli_install_instructions_have_no_broken_form(self) -> None:
+        for path in _CLI_SURFACES:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                _BROKEN_FORM, text,
+                f"{path.name} prints the broken install form `{_BROKEN_FORM}` "
+                "(lybra is npm-only, not on PyPI)",
+            )
+            # the surface that guides TUI install must give the correct command
+            self.assertIn(
+                "pip install textual", text,
+                f"{path.name} must guide the TUI install via `pip install textual`",
+            )
 
     # --- T3: package.json files ship tools/ and exclude evidence/secrets ---
     def test_package_files_ship_tools_exclude_evidence(self) -> None:

@@ -101,7 +101,11 @@ def run_tui(
     try:
         from tools.lybra_tui.app import build_app  # Textual import isolated here
     except ImportError:
-        print("lybra tui requires the TUI extra. Install with: pip install lybra[tui]", file=sys.stderr)
+        print(
+            "lybra tui requires Textual. Install it with: pip install textual "
+            "(lybra is npm-distributed, not on PyPI; see README Quick start).",
+            file=sys.stderr,
+        )
         return 2
     build_app(session, copilot, workspace_root=workspace_root).run()
     return 0
