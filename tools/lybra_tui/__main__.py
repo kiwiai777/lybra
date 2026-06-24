@@ -67,6 +67,11 @@ def run_tui(
     except (ValueError, OSError) as exc:
         print(f"lybra tui: could not connect: {exc}", file=sys.stderr)
         return 2
+    # AIPOS-208: when the copilot is enabled, the first screen IS chat-to-task (DG-8); Shift+Tab
+    # still cycles to observe/confirm. Without an LLM config we stay on the observe first screen.
+    if copilot is not None:
+        from tools.lybra_tui.state import COPILOT_MODE
+        session.mode = COPILOT_MODE
     try:
         from tools.lybra_tui.app import build_app  # Textual import isolated here
     except ImportError:

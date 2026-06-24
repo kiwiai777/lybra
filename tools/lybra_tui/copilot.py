@@ -38,10 +38,40 @@ from typing import Any, Callable, Protocol
 from urllib import request as _request
 
 from tools.aipos_cli.confirm_client import GateClient, load_owner_token, token_fingerprint
+# AIPOS-208: draft_validator is a READ-ONLY validator (it writes nothing and is NOT one of the
+# write helpers the AIPOS-206 guard test forbids here). Importing it lets the copilot guarantee
+# card conformance in-memory (single source for the field contract), so a copilot-authored card is
+# gated-publishable + claimable by construction, not by LLM luck.
+from tools.aipos_cli.draft_validator import (
+    DRAFT_REQUIRED_FIELDS,
+    FORBIDDEN_RUNTIME_FIELDS,
+    RECOMMENDED_FIELDS,
+    TASK_ID_PATTERN,
+    draft_slug,
+)
 
 _QUEUE_LIST = "lybra_queue_list"
 _TASK_PREVIEW = "lybra_task_preview"
 _VALIDATE = "lybra_validate"
+
+# Template defaults the copilot fills for required/recommended fields the LLM need not invent.
+# status MUST be pending (validator); created_by marks copilot authorship (DG-8 / N4 evidence).
+_CARD_DEFAULTS = {
+    "status": "pending",
+    "created_by": "copilot",
+    "needs_owner": "false",
+    "artifact_policy": "formal_write",
+    "task_mode": "docs",
+    "priority": "low",
+    "model_tier": "L2",
+    "task_type": "one_shot",
+    "polling_mode": "agent_polling",
+    "claim_policy": "assigned_agent_only",
+    "report_mode": "forum_reply",
+    "recurrence": "none",
+}
+# The semantic fields the LLM is asked to fill (everything else is templated/derived/Owner-supplied).
+_LLM_CARD_FIELDS = ("task_id", "title", "task_mode", "priority", "output_target", "assigned_to", "body")
 
 
 # --- LLM access (bare HTTP, no third-party SDK) ------------------------------------
@@ -143,6 +173,14 @@ class DraftProposal:
     project: str
     truth_reread: bool  # True iff truth was re-read via read-tools just before drafting (RF-5)
     truth_snapshot_keys: list[str] = field(default_factory=list)
+    # AIPOS-208 structured task-card authoring (None for a free-form planning draft):
+    task_id: str | None = None
+    conformant: bool = False  # passes the in-memory field contract (gated-publishable shape)
+    blocking_reasons: list[str] = field(default_factory=list)
+    needs_bundle: bool = False  # no matching existing context_bundle → Owner must specify at proceed
+    context_bundle: str | None = None
+    draft_rel_path: str | None = None  # slug-aligned target under 5_tasks/drafts/ (Owner lands here)
+    fields: dict[str, Any] = field(default_factory=dict)  # raw assembled fields (for re-finalize)
 
 
 _SYSTEM_PROMPT = (
@@ -230,6 +268,137 @@ class CopilotSession:
             truth_reread=True,
             truth_snapshot_keys=sorted(truth.keys()),
         )
+
+    # --- AIPOS-208: chat-to-task — structured, conformant task-card authoring ---
+
+    def available_context_bundles(self) -> list[str]:
+        """Read-only: the context_bundle values already in use across the queue (path-B for R4 'send')."""
+        bundles: set[str] = set()
+        data = self._read(_QUEUE_LIST).get("data")
+        tasks = data.get("tasks") if isinstance(data, dict) else None
+        for task in tasks or []:
+            meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+            value = meta.get("context_bundle") or task.get("context_bundle")
+            if value:
+                bundles.add(str(value))
+        return sorted(bundles)
+
+    def _suggest_bundle(self, assigned_to: str | None, available: list[str]) -> str | None:
+        # copilot NEVER invents a bundle: suggest one that already exists, else None (Owner specifies).
+        if assigned_to and assigned_to in available:
+            return assigned_to
+        return available[0] if available else None
+
+    @staticmethod
+    def _llm_card_fields(raw: str) -> dict[str, Any]:
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("```", 2)[1] if "```" in text[3:] else text.strip("`")
+            text = text[text.find("{"):] if "{" in text else text
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end == -1:
+            return {}
+        try:
+            obj = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return {}
+        return obj if isinstance(obj, dict) else {}
+
+    def _assemble_card(self, fields: dict[str, Any], context_bundle: str | None) -> tuple[str, dict[str, Any], str]:
+        """Assemble a conformant card text from LLM fields + template defaults. Pure (no write)."""
+        meta: dict[str, Any] = dict(_CARD_DEFAULTS)
+        for key in _LLM_CARD_FIELDS:
+            value = fields.get(key)
+            if value not in (None, ""):
+                meta[key] = value
+        meta["project"] = self.project
+        meta["agent_instance"] = fields.get("agent_instance") or "agent-01"
+        meta["assigned_to"] = fields.get("assigned_to") or "dev_claude"
+        if context_bundle:
+            meta["context_bundle"] = context_bundle
+        body = str(fields.get("body") or "").strip()
+        # render frontmatter (required first, then recommended) — forbidden runtime fields never added
+        ordered = [*DRAFT_REQUIRED_FIELDS, *RECOMMENDED_FIELDS]
+        lines = ["---"]
+        for key in ordered:
+            if key in meta and meta[key] not in (None, ""):
+                lines.append(f"{key}: {meta[key]}")
+        lines.append("---")
+        content = "\n".join(lines) + "\n" + body + "\n"
+        return content, meta, body
+
+    def _conformance(self, meta: dict[str, Any], body: str) -> list[str]:
+        """In-memory field-contract check (mirrors draft_validator's field rules; no fs access).
+
+        The full validate (collision/path) runs at draft_publish_dry_run; this guarantees the
+        gated-publishable shape up front so the Owner never previews an unpublishable card.
+        """
+        reasons: list[str] = []
+        for f in DRAFT_REQUIRED_FIELDS:
+            if meta.get(f) in (None, ""):
+                reasons.append(f"Missing required field: {f}")
+        task_id = meta.get("task_id")
+        if task_id and not TASK_ID_PATTERN.fullmatch(str(task_id)):
+            reasons.append("Invalid task_id format or path-unsafe task_id")
+        if meta.get("status") not in (None, "pending"):
+            reasons.append("Draft status must be pending")
+        for f in FORBIDDEN_RUNTIME_FIELDS:
+            if meta.get(f) not in (None, ""):
+                reasons.append(f"Draft contains forbidden runtime-state field: {f}")
+        if not body.strip():
+            reasons.append("Missing required field: body")
+        return reasons
+
+    def _proposal_from_fields(self, intent: str, fields: dict[str, Any], truth: dict[str, Any], *, context_bundle: str | None, available: list[str]) -> DraftProposal:
+        assigned_to = str(fields.get("assigned_to") or "") or None
+        bundle = context_bundle or self._suggest_bundle(assigned_to, available)
+        content, meta, body = self._assemble_card(fields, bundle)
+        reasons = self._conformance(meta, body)
+        task_id = str(meta.get("task_id") or "") or None
+        rel = None
+        if task_id and TASK_ID_PATTERN.fullmatch(task_id):
+            try:
+                rel = f"5_tasks/drafts/{draft_slug(task_id)}.md"
+            except ValueError:
+                rel = None
+        return DraftProposal(
+            intent=intent, content=content, project=self.project,
+            truth_reread=True, truth_snapshot_keys=sorted(truth.keys()),
+            task_id=task_id, conformant=not reasons, blocking_reasons=reasons,
+            needs_bundle=bundle is None, context_bundle=bundle,
+            draft_rel_path=rel, fields=dict(fields),
+        )
+
+    def draft_task_card(self, intent: str, *, task_id: str | None = None) -> DraftProposal:
+        """chat-to-task: turn a natural-language ask into a conformant task card. Zero file write.
+
+        RF-5 welded (truth re-read first). The LLM supplies semantics; copilot.py guarantees the
+        gated-publishable structure. If no existing context_bundle matches, the gap is surfaced to
+        the Owner (needs_bundle) rather than invented or left to fail validation.
+        """
+        truth = self.rehydrate_truth(task_id=task_id)
+        self.memory.record_chat("user", intent)
+        prompt = (
+            "Return ONLY a JSON object (no prose, no code fence) with these keys for a Lybra task "
+            f"card: {list(_LLM_CARD_FIELDS)}. task_id like 'AIPOS-DOC-1'; task_mode one of "
+            "code/docs/test/research; priority one of low/medium/high; output_target a path; body a "
+            "one-paragraph description. Base it on the request and the workspace truth.\nRequest: " + intent
+        )
+        raw = self._llm.complete(self._build_messages(prompt, truth))
+        self.memory.record_chat("assistant", raw)
+        fields = self._llm_card_fields(raw)
+        if task_id:
+            fields.setdefault("task_id", task_id)
+        return self._proposal_from_fields(intent, fields, truth, context_bundle=None, available=self.available_context_bundles())
+
+    def finalize_card(self, proposal: DraftProposal, *, context_bundle: str | None = None, task_id: str | None = None) -> DraftProposal:
+        """Re-assemble a card with Owner-supplied overrides (e.g. a bundle ref). Pure (no write)."""
+        fields = dict(proposal.fields)
+        if task_id:
+            fields["task_id"] = task_id
+        truth = {k: None for k in proposal.truth_snapshot_keys}  # keys only; not re-reading here
+        bundle = context_bundle or proposal.context_bundle
+        return self._proposal_from_fields(proposal.intent, fields, truth, context_bundle=bundle, available=self.available_context_bundles())
 
 
 def build_llm(config: LLMConfig | None) -> LLMCompleter | None:

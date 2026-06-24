@@ -96,6 +96,7 @@ class LybraTui(App):
     # --- AIPOS-206 copilot mode: read-only draft, then Owner "proceed" lands + publishes ---
 
     def _copilot_draft(self, intent: str) -> None:
+        # AIPOS-208 chat-to-task: a natural-language ask -> a conformant task card (read-only).
         if self._session.mode != COPILOT_MODE:
             self._show("Switch to copilot mode (Shift+Tab) first.")
             return
@@ -103,26 +104,40 @@ class LybraTui(App):
             self._show("Copilot not enabled. Start the TUI with an LLM config (base_url + key) to enable read-only planning.")
             return
         if not intent:
-            self._show("Usage: draft <what you want planned>")
+            self._show("Usage: draft <what task you want to issue>")
             return
-        proposal = self._copilot.draft(intent)  # read-only: returns DRAFT data, writes nothing
+        proposal = self._copilot.draft_task_card(intent)  # read-only: returns card DATA, writes nothing
         self._pending_proposal = proposal
-        self._show(f"DRAFT (read-only, not yet landed):\n\n{proposal.content}\n\n— `proceed <slug>` to land under drafts/ and publish via the gate (Owner action).")
+        self._show(self._render_proposal(proposal))
 
-    def _copilot_proceed(self, slug: str | None) -> None:
-        # The Owner "proceed" action: land the DRAFT, then publish through the AIPOS-204
-        # gate — on the OWNER session, not the copilot. Zero extra Owner steps.
+    def _render_proposal(self, p: Any) -> str:
+        head = f"TASK CARD DRAFT (read-only, not yet landed) — task_id {p.task_id}\n\n{p.content}\n"
+        if p.conformant:
+            return head + f"\n✓ conformant. `proceed` to land {p.draft_rel_path} and publish via the gate (Owner action)."
+        if p.needs_bundle:
+            bundles = ", ".join(self._copilot.available_context_bundles()) or "(none found)"
+            return head + f"\n⚠ no matching context_bundle. Existing: {bundles}. `proceed bundle=<ref>` to specify one (Owner)."
+        return head + f"\n⚠ not yet publishable:\n- " + "\n- ".join(p.blocking_reasons) + "\n`proceed bundle=<ref>` may resolve a missing bundle."
+
+    def _copilot_proceed(self, arg: str | None) -> None:
+        # Owner "proceed": optionally supply a bundle, finalize the card, land it, then publish
+        # through the AIPOS-204 gate — on the OWNER session, not the copilot.
         if self._pending_proposal is None:
-            self._show("No pending DRAFT. Use `draft <intent>` first.")
+            self._show("No pending card. Use `draft <intent>` first.")
             return
         if not self._workspace_root:
-            self._show("workspace_root unknown; cannot land DRAFT.")
+            self._show("workspace_root unknown; cannot land card.")
             return
-        slug = slug or "copilot-draft"
+        bundle = arg[len("bundle="):] if arg and arg.startswith("bundle=") else None
+        proposal = self._pending_proposal
+        if bundle:
+            proposal = self._copilot.finalize_card(proposal, context_bundle=bundle)
+            self._pending_proposal = proposal
+        if not proposal.conformant:
+            self._show("Card not publishable yet:\n- " + "\n- ".join(proposal.blocking_reasons))
+            return
         rel = self._session.land_draft(
-            self._pending_proposal.content,
-            workspace_root=self._workspace_root,
-            draft_rel_path=f"5_tasks/drafts/{slug}.md",
+            proposal.content, workspace_root=self._workspace_root, draft_rel_path=proposal.draft_rel_path,
         )
         preview = self._session.preview_publish(rel, actor="owner")
         self._pending_preview = preview
