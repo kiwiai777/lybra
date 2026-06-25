@@ -200,10 +200,27 @@ def _profile_copy(profile: dict[str, Any], source: str, source_path: str) -> dic
     return copied
 
 
+def registry_available() -> bool:
+    """Return True iff the profile registry can actually be loaded (PyYAML is present).
+
+    This is the canonical AIPOS-219 P5 signal used by tools.py and board_adapter.py
+    to record ``identity_provenance.registry_available`` and make fail-closed independence
+    decisions.  All profile sources require PyYAML (sequences-of-mappings); without it
+    the registry degrades to empty, so this signal is simply ``yaml is not None``.
+    """
+    return yaml is not None
+
+
 def _load_profiles_from_registry(repo_root: Path) -> tuple[list[dict[str, Any]], list[str]]:
     path = repo_root / CUSTOM_REGISTRY_RELATIVE_PATH
-    if yaml is None or not path.exists():
+    if not path.exists():
         return [], []
+    if yaml is None:
+        return [], [
+            "WARN [AIPOS-218 WS3]: PyYAML unavailable — cannot parse custom agent registry "
+            f"at {CUSTOM_REGISTRY_RELATIVE_PATH}; profiles degraded to empty. "
+            "Install PyYAML to enable custom agent profiles."
+        ]
     try:
         parsed = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception as exc:
@@ -227,9 +244,15 @@ def _extract_yaml_blocks(text: str) -> list[str]:
     return re.findall(r"```yaml\s*\n(.*?)\n```", text, flags=re.DOTALL)
 
 
-def _load_profiles_from_docs(docs_root: Path, repo_root: Path) -> list[dict[str, Any]]:
-    if yaml is None or not docs_root.exists():
-        return []
+def _load_profiles_from_docs(docs_root: Path, repo_root: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    if not docs_root.exists():
+        return [], []
+    if yaml is None:
+        return [], [
+            "WARN [AIPOS-218 WS3]: PyYAML unavailable — cannot parse agent runtime profile docs "
+            f"at {docs_root}; profiles degraded to empty. "
+            "Install PyYAML to enable registry-verified agent identity."
+        ]
 
     profiles: list[dict[str, Any]] = []
     for path in sorted(docs_root.glob("*_runtime_profiles.md")):
@@ -244,16 +267,18 @@ def _load_profiles_from_docs(docs_root: Path, repo_root: Path) -> list[dict[str,
                 continue
             if isinstance(parsed, dict) and parsed.get("agent_id"):
                 profiles.append(_profile_copy(parsed, source="docs", source_path=str(path.relative_to(repo_root))))
-    return profiles
+    return profiles, []
 
 
 def load_agent_profiles(repo_root: Path) -> dict[str, Any]:
     docs_root = repo_root / "0_control_plane" / "agents"
     custom_profiles, registry_warnings = _load_profiles_from_registry(repo_root)
-    docs_profiles = _load_profiles_from_docs(docs_root, repo_root)
+    docs_profiles, docs_warnings = _load_profiles_from_docs(docs_root, repo_root)
     product_root = Path(__file__).resolve().parents[2]
     if not docs_profiles and repo_root.resolve() != product_root.resolve():
-        docs_profiles = _load_profiles_from_docs(product_root / "0_control_plane" / "agents", product_root)
+        docs_profiles, extra_docs_warnings = _load_profiles_from_docs(product_root / "0_control_plane" / "agents", product_root)
+        docs_warnings = docs_warnings or extra_docs_warnings
+    registry_warnings = registry_warnings + docs_warnings
     profiles = [*custom_profiles, *docs_profiles]
     if not profiles:
         profiles = [_profile_copy(FALLBACK_PROFILE, source="fallback", source_path="fallback:dev_claude")]

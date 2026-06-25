@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import tempfile
 import unittest
@@ -15,6 +16,9 @@ from tools.aipos_cli.custom_agent_profiles import (
     load_custom_registry,
     registry_path,
 )
+
+# ENV-AWARE: bare-python asserts LOUD/FAIL-CLOSED behavior, not skip.
+_HAS_YAML = importlib.util.find_spec("yaml") is not None
 
 
 class CustomAgentProfileTests(unittest.TestCase):
@@ -56,6 +60,14 @@ class CustomAgentProfileTests(unittest.TestCase):
     def test_draft_writes_nothing_then_confirm_writes_and_revalidates(self) -> None:
         target = registry_path(self.repo_root)
         draft = build_profile_draft(self.repo_root, self.payload(), actor="owner")
+        if not _HAS_YAML:
+            # BARE: write raises (yaml required) → draft is BLOCKED with loud reason.
+            self.assertFalse(draft["ok"])
+            self.assertIn("BLOCK", draft["verdict"])
+            self.assertTrue(any("PyYAML" in str(r) for r in draft.get("blocking_reasons", [])),
+                            f"Expected loud PyYAML blocking reason; got: {draft.get('blocking_reasons')}")
+            self.assertFalse(target.exists(), "No file should be written on bare python")
+            return
 
         self.assertTrue(draft["ok"])
         self.assertEqual(draft["verdict"], "NEEDS_OWNER")
@@ -70,6 +82,14 @@ class CustomAgentProfileTests(unittest.TestCase):
         self.assertTrue(confirmed["data"]["registry_validation"]["ok"])
 
     def test_custom_profile_loader_keeps_bundled_defaults_and_adds_custom_instance(self) -> None:
+        if not _HAS_YAML:
+            # BARE: write raises → custom registry can't be created.
+            # load_agent_profiles falls back to FALLBACK_PROFILE (has agent-01).
+            # No custom instance (agent-04) is present.
+            profiles = load_agent_profiles(self.repo_root)
+            self.assertIn("agent-01", profiles["instance_index"], "Fallback profile should have agent-01")
+            self.assertNotIn("agent-04", profiles["instance_index"], "Custom instance must not exist on bare python")
+            return
         self.confirm(build_profile_draft(self.repo_root, self.payload(), actor="owner"))
 
         profiles = load_agent_profiles(self.repo_root)
@@ -118,6 +138,13 @@ class CustomAgentProfileTests(unittest.TestCase):
         self.assertTrue(any("runtime_env must remain empty" in reason for reason in draft["blocking_reasons"]))
 
     def test_display_name_edit_preserves_canonical_identity(self) -> None:
+        if not _HAS_YAML:
+            # BARE: write raises → registry stays empty; read warns loudly.
+            registry, blocking = load_custom_registry(self.repo_root)
+            self.assertEqual(registry["profiles"], [])
+            # No file → no blocking warning (file-absent = silent empty per spec).
+            self.assertEqual(blocking, [])
+            return
         self.confirm(build_profile_draft(self.repo_root, self.payload(), actor="owner"))
 
         update = build_profile_draft(
@@ -147,10 +174,38 @@ class CustomAgentProfileTests(unittest.TestCase):
             ),
             actor="owner",
         )
-
+        if not _HAS_YAML:
+            # BARE: write raises → BLOCK with PyYAML reason (provenance values irrelevant).
+            self.assertIn("BLOCK", draft["verdict"])
+            self.assertTrue(any("PyYAML" in str(r) for r in draft.get("blocking_reasons", [])))
+            return
         self.assertNotEqual(draft["verdict"], "BLOCK")
 
     def test_supersession_is_additive_and_does_not_rewrite_history(self) -> None:
+        if not _HAS_YAML:
+            # BARE: registry empty (can't create agent-04 without PyYAML) → supersede BLOCKS
+            # because agent-04 was never registered. History file must be untouched.
+            historical = self.repo_root / "5_tasks" / "queue" / "completed" / "historical.md"
+            historical.write_text("agent_instance: agent-04\n", encoding="utf-8")
+            supersede = build_profile_draft(
+                self.repo_root,
+                {
+                    "action": "supersede", "agent_id": "owner_agents", "agent_instance": "agent-04",
+                    "replacement": {"agent_instance": "agent-05", "display_name": "Replacement Session",
+                                    "capabilities": ["repo_edit"], "provenance": {"vendor": "replacement-vendor"}},
+                },
+                actor="owner",
+            )
+            # Any BLOCK is correct — either "PyYAML required" or "agent not found" (both fail-closed).
+            self.assertIn("BLOCK", supersede["verdict"])
+            all_blocking = (
+                supersede.get("blocking_reasons", []) + supersede.get("execute_blocking_reasons", [])
+            )
+            self.assertTrue(len(all_blocking) > 0,
+                            f"Expected at least one blocking reason; got: {supersede}")
+            # History file must not be modified.
+            self.assertEqual(historical.read_text(encoding="utf-8"), "agent_instance: agent-04\n")
+            return
         self.confirm(build_profile_draft(self.repo_root, self.payload(), actor="owner"))
         historical = self.repo_root / "5_tasks" / "queue" / "completed" / "historical.md"
         historical.write_text("agent_instance: agent-04\n", encoding="utf-8")
@@ -181,6 +236,12 @@ class CustomAgentProfileTests(unittest.TestCase):
         self.assertEqual(historical.read_text(encoding="utf-8"), "agent_instance: agent-04\n")
 
     def test_capability_edit_is_owner_visible(self) -> None:
+        if not _HAS_YAML:
+            # BARE: both initial confirm and capability-edit draft are BLOCKED (write raises).
+            draft = build_profile_draft(self.repo_root, self.payload(capabilities=["repo_edit", "test_run"]), actor="owner")
+            self.assertIn("BLOCK", draft["verdict"])
+            self.assertTrue(any("PyYAML" in str(r) for r in draft.get("blocking_reasons", [])))
+            return
         self.confirm(build_profile_draft(self.repo_root, self.payload(), actor="owner"))
 
         draft = build_profile_draft(
@@ -193,6 +254,12 @@ class CustomAgentProfileTests(unittest.TestCase):
         self.assertTrue(any("capabilities" in reason for reason in draft["owner_confirmation_reasons"]))
 
     def test_stale_preview_blocks_confirm(self) -> None:
+        if not _HAS_YAML:
+            # BARE: both drafts are BLOCKED with PyYAML reason — can't test stale preview.
+            draft = build_profile_draft(self.repo_root, self.payload(), actor="owner")
+            self.assertIn("BLOCK", draft["verdict"])
+            self.assertTrue(any("PyYAML" in str(r) for r in draft.get("blocking_reasons", [])))
+            return
         draft = build_profile_draft(self.repo_root, self.payload(), actor="owner")
         self.confirm(build_profile_draft(self.repo_root, self.payload(agent_instance="agent-06"), actor="owner"))
 
@@ -202,12 +269,30 @@ class CustomAgentProfileTests(unittest.TestCase):
         self.assertIn("profile draft snapshot mismatch; run draft again", result["blocking_reasons"])
 
     def test_cli_draft_confirm_list_inspect_and_validate(self) -> None:
+        import os
         payload_path = self.repo_root / "payload.json"
         payload_path.write_text(json.dumps(self.payload()), encoding="utf-8")
         original_cwd = Path.cwd()
+        if not _HAS_YAML:
+            # BARE: draft is BLOCKED with PyYAML reason — assert loud, no write.
+            # cli_json checks code==0 which would fail for a BLOCK, so capture raw.
+            stdout_buf = StringIO()
+            try:
+                os.chdir(self.repo_root)
+                code = None
+                with redirect_stdout(stdout_buf):
+                    code = main(["agent-profile", "draft", "--from-json", str(payload_path), "--actor", "owner", "--json"])
+            finally:
+                os.chdir(original_cwd)
+            dry = json.loads(stdout_buf.getvalue())
+            self.assertFalse(dry.get("ok"))
+            all_blocking = dry.get("execute_blocking_reasons", []) + dry.get("blocking_reasons", [])
+            self.assertTrue(
+                any("PyYAML" in str(r) for r in all_blocking),
+                f"Expected PyYAML blocking reason; got: {dry}",
+            )
+            return
         try:
-            import os
-
             os.chdir(self.repo_root)
             dry = self.cli_json(["agent-profile", "draft", "--from-json", str(payload_path), "--actor", "owner", "--json"])
             dry_path = self.repo_root / "dry.json"

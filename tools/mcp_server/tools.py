@@ -22,7 +22,7 @@ from tools.aipos_cli.board_adapter import (
     return_task,
     submit_external_intake,
 )
-from tools.aipos_cli.agent_profiles import load_agent_profiles, resolve_instance_id
+from tools.aipos_cli.agent_profiles import load_agent_profiles, registry_available, resolve_instance_id
 from tools.aipos_cli.controlled_execute import get_dry_run
 from tools.aipos_cli.task_loader import find_repo_root
 
@@ -350,10 +350,12 @@ def _forbidden_audit_fields(args: dict[str, Any]) -> list[str]:
 def _resolve_claim_instance(agent_instance: str, repo_root: Path) -> dict[str, Any]:
     profiles = load_agent_profiles(repo_root)
     resolution = resolve_instance_id(agent_instance, profiles)
+    reg_available = registry_available()
     return {
         "profiles": profiles,
         "resolution": resolution,
         "canonical_agent_instance": resolution.get("canonical_instance_id"),
+        "registry_available": reg_available,
     }
 
 
@@ -381,7 +383,13 @@ def _audit_verdict_owner_reasons() -> list[str]:
     ]
 
 
-def _claim_metadata(args: dict[str, Any], *, canonical_agent_instance: str) -> dict[str, Any]:
+def _claim_metadata(
+    args: dict[str, Any],
+    *,
+    canonical_agent_instance: str,
+    resolution_label: str = "unregistered",
+    reg_available: bool = True,
+) -> dict[str, Any]:
     return {
         "surface": "mcp",
         "operation": "queue_claim",
@@ -389,6 +397,11 @@ def _claim_metadata(args: dict[str, Any], *, canonical_agent_instance: str) -> d
         "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
         "agent_instance": str(args.get("agent_instance") or "").strip(),
         "canonical_agent_instance": canonical_agent_instance,
+        # AIPOS-219 P5: FLAT bounded-map provenance marker (depth-1, readable on bare python)
+        "identity_provenance": {
+            "resolution": resolution_label,
+            "registry_available": reg_available,
+        },
         "runtime_profile": str(args.get("runtime_profile") or "").strip() or None,
         "active_session_id": str(args.get("active_session_id") or "").strip() or None,
         "context_bundle_ack": str(args.get("context_bundle_ack") or "").strip() or None,
@@ -401,7 +414,13 @@ def _claim_metadata(args: dict[str, Any], *, canonical_agent_instance: str) -> d
     }
 
 
-def _return_metadata(args: dict[str, Any], *, canonical_agent_instance: str) -> dict[str, Any]:
+def _return_metadata(
+    args: dict[str, Any],
+    *,
+    canonical_agent_instance: str,
+    resolution_label: str = "unregistered",
+    reg_available: bool = True,
+) -> dict[str, Any]:
     return {
         "surface": "mcp",
         "operation": "queue_return",
@@ -409,6 +428,11 @@ def _return_metadata(args: dict[str, Any], *, canonical_agent_instance: str) -> 
         "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
         "agent_instance": str(args.get("agent_instance") or "").strip(),
         "canonical_agent_instance": canonical_agent_instance,
+        # AIPOS-219 P5: FLAT bounded-map provenance marker (depth-1, readable on bare python)
+        "identity_provenance": {
+            "resolution": resolution_label,
+            "registry_available": reg_available,
+        },
         "claim_id": str(args.get("claim_id") or "").strip() or None,
         "active_session_id": str(args.get("active_session_id") or "").strip() or None,
         "return_reason": str(args.get("return_reason") or "").strip() or None,
@@ -955,7 +979,12 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         repo_root=repo_root,
         owner_confirmation_required_override=True,
         owner_confirmation_reasons_override=_claim_owner_reasons(),
-        mcp_claim_metadata=_claim_metadata(args, canonical_agent_instance=canonical_agent_instance),
+        mcp_claim_metadata=_claim_metadata(
+            args,
+            canonical_agent_instance=canonical_agent_instance,
+            resolution_label=str(resolved["resolution"].get("resolution") or "unregistered"),
+            reg_available=bool(resolved.get("registry_available", True)),
+        ),
     )
     decorated = _decorate_queue_claim_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance)
     if decorated.get("verdict") == "BLOCK":
@@ -1187,7 +1216,12 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
         return_reason=str(args.get("return_reason") or "").strip() or None,
         dry_run=True,
         repo_root=repo_root,
-        mcp_return_metadata=_return_metadata(args, canonical_agent_instance=canonical_agent_instance),
+        mcp_return_metadata=_return_metadata(
+            args,
+            canonical_agent_instance=canonical_agent_instance,
+            resolution_label=str(resolved["resolution"].get("resolution") or "unregistered"),
+            reg_available=bool(resolved.get("registry_available", True)),
+        ),
         scratch_dir=str(args.get("scratch_dir") or "").strip() or None,
         scratch_artifact_refs=args.get("scratch_artifact_refs"),
     )

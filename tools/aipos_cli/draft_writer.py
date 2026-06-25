@@ -94,6 +94,9 @@ def _record_frontmatter(metadata: dict[str, Any], order: list[str]) -> str:
     for key in ordered_keys:
         value = metadata[key]
         if isinstance(value, list):
+            if not value:
+                lines.append(f"{key}: []")  # AIPOS-218: explicit empty list (no []/None ambiguity)
+                continue
             lines.append(f"{key}:")
             for item in value:
                 lines.append(f"- {_yaml_scalar(item)}")
@@ -111,6 +114,9 @@ def render_markdown_task_card(metadata: dict[str, Any], body: str) -> str:
     for key in ordered_keys:
         value = metadata[key]
         if isinstance(value, list):
+            if not value:
+                lines.append(f"{key}: []")  # AIPOS-218: explicit empty list (no []/None ambiguity)
+                continue
             lines.append(f"{key}:")
             for item in value:
                 lines.append(f"- {_yaml_scalar(item)}")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import tempfile
 import time
@@ -8,6 +9,9 @@ import json
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
+
+# ENV-AWARE: bare-python asserts LOUD/FAIL-CLOSED behavior, not skip.
+_HAS_YAML = importlib.util.find_spec("yaml") is not None
 
 from tools.aipos_cli.controlled_execute import clear_tokens, get_dry_run
 from tools.aipos_cli.board_adapter import claim_task, return_task
@@ -1390,6 +1394,19 @@ class McpToolTests(unittest.TestCase):
             dry = self.assert_tool_ok(self.call_tool("lybra_audit_dispatch_dry_run", self.dispatch_payload()))
         after = self.data_paths()
         self.assertEqual(before, after)
+
+        if not _HAS_YAML:
+            # BARE: executor_registry_verified=False → INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY
+            # blocks the dry-run. Fail-closed: no dispatch token is issued.
+            self.assertEqual(dry["verdict"], "BLOCK", dry)
+            self.assertEqual(dry["error_code"], "AUDIT_ACTION_BLOCKED", dry)
+            self.assertTrue(
+                any("INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY" in str(r) for r in dry.get("blocking_reasons", [])),
+                f"Expected INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY in blocking_reasons; got: {dry.get('blocking_reasons')}",
+            )
+            self.assertIsNone(dry.get("dry_run_token"), "No dispatch token must be issued when blocked")
+            return
+
         self.assertEqual(dry["operation"], "audit_dispatch")
         self.assertEqual(dry["surface"], "mcp")
         self.assertEqual(dry["autonomy_mode"], "Supervised")
@@ -1487,6 +1504,23 @@ class McpToolTests(unittest.TestCase):
         )
 
     def test_audit_verdict_confirm_requires_owner_confirmation_then_records_pass_without_finalize(self) -> None:
+        if not _HAS_YAML:
+            # BARE: audit dispatch is fail-closed (INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY) →
+            # claim_audit_task() cannot proceed. Assert the dispatch block directly, then return.
+            self.prepare_returned_source()
+            env = {
+                "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+                "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_dispatch"]),
+            }
+            with patch.dict(os.environ, env, clear=True):
+                dry = self.assert_tool_ok(self.call_tool("lybra_audit_dispatch_dry_run", self.dispatch_payload()))
+            self.assertEqual(dry["verdict"], "BLOCK", dry)
+            self.assertEqual(dry["error_code"], "AUDIT_ACTION_BLOCKED", dry)
+            self.assertTrue(
+                any("INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY" in str(r) for r in dry.get("blocking_reasons", [])),
+                f"Expected INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY; got: {dry.get('blocking_reasons')}",
+            )
+            return
         self.claim_audit_task()
         audit_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-audit-01.md"
         source_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md"
@@ -1564,7 +1598,78 @@ class McpToolTests(unittest.TestCase):
         self.assertIn("session_status: audit_verdict", session_text)
         self.assertIn("mcp_audit_verdict", session_text)
 
+    def test_audit_dispatch_blocks_registry_unverified_executor_real_path(self) -> None:
+        """AIPOS-219 §6b condition ③ — REAL-PATH negative control (closes ★C2).
+
+        An executor that returned registry-unverified (e.g. on bare python) has
+        ``executor_registry_verified: false`` stored on its source record. A later audit dispatch —
+        even WITH PyYAML present (auditor side verified) and a *distinct* auditor instance — must
+        BLOCK ``INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY`` rather than falsely accept distinctness. This
+        drives the real board_adapter dispatch path (not a re-implementation of the check): with
+        PyYAML present the block can ONLY come from the executor-side guard, so deleting that guard
+        makes this test fail.
+        """
+        self.prepare_returned_source()
+        # Ensure the source records a registry-UNVERIFIED executor. With PyYAML the return records
+        # `true`, so flip it (simulating a bare-python return); on bare python it is already `false`.
+        marked_unverified = False
+        for path in (self.repo_root / "5_tasks").rglob("*.md"):
+            text = path.read_text(encoding="utf-8")
+            if "executor_registry_verified: true" in text:
+                path.write_text(text.replace("executor_registry_verified: true", "executor_registry_verified: false"), encoding="utf-8")
+                marked_unverified = True
+            elif "executor_registry_verified: false" in text:
+                marked_unverified = True
+        self.assertTrue(marked_unverified, "return path must record executor_registry_verified on the source")
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_dispatch"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_audit_dispatch_dry_run", self.dispatch_payload()))
+        self.assertEqual(dry["verdict"], "BLOCK", dry)
+        self.assertTrue(
+            any("INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY" in str(r) for r in dry.get("blocking_reasons", [])),
+            f"registry-unverified executor must fail-closed; got: {dry.get('blocking_reasons')}",
+        )
+
+    def test_audit_dispatch_passes_when_both_registry_verified_real_path(self) -> None:
+        """Positive control (real path): with PyYAML present and both sides registry-verified, a
+        distinct auditor dispatch is NOT blocked by the P3 guard — proving the guard is specific to
+        the unverified case and does not over-block the normal path."""
+        if not _HAS_YAML:
+            self.skipTest("positive control requires PyYAML (registry-verified executor side)")
+        self.prepare_returned_source()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_dispatch"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_audit_dispatch_dry_run", self.dispatch_payload()))
+        self.assertFalse(
+            any("INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY" in str(r) for r in dry.get("blocking_reasons", [])),
+            f"both sides registry-verified must NOT trigger the no-registry block; got: {dry.get('blocking_reasons')}",
+        )
+
     def test_audit_verdict_blocks_same_executor_auditor(self) -> None:
+        if not _HAS_YAML:
+            # BARE: audit dispatch is fail-closed (INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY) →
+            # claim_audit_task() cannot proceed; audit verdict is unreachable.
+            # Assert that the dispatch itself blocks with the correct error code.
+            self.prepare_returned_source()
+            env = {
+                "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+                "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_dispatch"]),
+            }
+            with patch.dict(os.environ, env, clear=True):
+                dry = self.assert_tool_ok(self.call_tool("lybra_audit_dispatch_dry_run", self.dispatch_payload()))
+            self.assertEqual(dry["verdict"], "BLOCK", dry)
+            self.assertEqual(dry["error_code"], "AUDIT_ACTION_BLOCKED", dry)
+            self.assertTrue(
+                any("INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY" in str(r) for r in dry.get("blocking_reasons", [])),
+                f"Expected INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY; got: {dry.get('blocking_reasons')}",
+            )
+            return
         self.claim_audit_task()
         audit_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-audit-01.md"
         source_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md"

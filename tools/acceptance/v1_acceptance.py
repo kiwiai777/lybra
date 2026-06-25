@@ -28,27 +28,108 @@ ANCHORS = [
     ("presentation: single token + degradation + isolation (AIPOS-210)", "tools.lybra_tui.tests.test_presentation"),
 ]
 
-# In a SUBPROCESS with `import textual` blocked, import the gate + start/stop an in-proc gate.
-# This proves dependency isolation EVEN in a dev env that has textual installed (RF-5: the PASS must
-# not be an artifact of "textual happened to be present"). Exit non-zero ⇒ isolation broken.
-_ISOLATION_PROBE = r"""
-import sys
-class _BlockTextual:
+# AIPOS-218 WS6: Block ALL third-party imports (incl. yaml, textual) — allow only stdlib +
+# builtins + the repo's own tools package.  This proves the gate core (init, task/record I/O,
+# claim/return/audit with canonical inputs) is correct on bare python with NO third-party deps.
+# Combined with correctness assertions below, "R0 zero-dep" means *correct*, not just importable.
+_BROAD_BLOCK_PROBE = r"""
+import sys, builtins
+
+_STDLIB = getattr(sys, "stdlib_module_names", set())
+_BUILTIN_NAMES = set(dir(builtins))
+
+class _BlockThirdParty:
+    # Block every import that is not stdlib, a builtin, or the repo tools package.
     def find_spec(self, name, path=None, target=None):
-        if name == "textual" or name.startswith("textual."):
-            raise ImportError("textual blocked for the AIPOS-211 isolation probe")
-        return None
-sys.meta_path.insert(0, _BlockTextual())
+        top = name.split(".")[0]
+        if (
+            top == "tools"
+            or top.startswith("_")
+            or top in _STDLIB
+            or top in _BUILTIN_NAMES
+            or top in {"encodings", "codecs", "abc", "typing_extensions"}
+        ):
+            return None  # let normal import machinery handle it
+        raise ImportError(f"third-party module blocked for AIPOS-218 WS6 zero-dep probe: {name!r}")
+
+sys.meta_path.insert(0, _BlockThirdParty())
+
+# ----- Gate boot + stop (original AIPOS-211 check, now under the broad block) -----
 import threading
-import tools.mcp_server.tools  # gate tools (must import with no textual)
-import tools.aipos_cli.confirm_client  # client (no textual)
-import tools.lybra_tui.state, tools.lybra_tui.copilot, tools.lybra_tui.presentation  # tui core (no textual)
+import tools.mcp_server.tools  # gate tools (must import with no third-party)
+import tools.aipos_cli.confirm_client  # client
+import tools.lybra_tui.state, tools.lybra_tui.copilot, tools.lybra_tui.presentation  # tui core
 from tools.mcp_server.http_sse import DEFAULT_HTTP_HOST, HttpSseConfig, build_http_server
 cfg = HttpSseConfig(host=DEFAULT_HTTP_HOST, port=0, token="", keepalive_seconds=0.01, max_keepalive_events=1)
 httpd = build_http_server(cfg)
 t = threading.Thread(target=httpd.serve_forever, daemon=True); t.start()
 httpd.shutdown(); t.join(timeout=2); httpd.server_close()
-print("GATE_OK_NO_TEXTUAL")
+print("GATE_OK_NO_TEXTUAL")  # keep tag for existing check
+
+# ----- AIPOS-218 WS6 correctness assertions -----
+import tempfile, json
+from pathlib import Path
+
+REPO_ROOT = Path(".").resolve()  # probe is run with cwd=REPO_ROOT via subprocess
+TEMPLATES_DIR = REPO_ROOT / "templates"
+
+# (a) A rendered return record round-trips losslessly (no PyYAML, no textual).
+from tools.aipos_cli.record_writer import build_mcp_return_record_markdown
+from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+
+md = build_mcp_return_record_markdown(
+    task_id="AIPOS-WS6-ACC",
+    task_path="5_tasks/queue/claimed/aipos-ws6-acc.md",
+    actor="agent-01",
+    canonical_agent_instance="agent-01",
+    owner_policy_ref="DL-20260625-01",
+    return_id="return-ws6-acc",
+    claim_id="claim-ws6-acc",
+    session_id="session-ws6-acc",
+    returned_at="2026-06-25T00:01:00Z",
+    result_summary="Fix: colons and all",
+    artifact_refs=["docs/out #1.md", "5_tasks/records/r.md"],
+    completion_report_ref=None,
+)
+data, body, warnings = parse_markdown_frontmatter(md)
+assert data.get("record_type") == "return_record", f"round-trip (a) failed: record_type={data.get('record_type')!r}"
+assert data.get("artifact_refs") == ["docs/out #1.md", "5_tasks/records/r.md"], f"round-trip (a) artifact_refs wrong: {data.get('artifact_refs')!r}"
+assert warnings == [], f"round-trip (a) unexpected warnings: {warnings}"
+print("CORRECTNESS_A_PASS")
+
+# (b) Every real bundled manifest parses equal to expected nested-map shapes (no PyYAML baseline,
+#     but we verify key nested fields exist and have correct Python types).
+from tools.aipos_cli.frontmatter import _fallback_parse
+manifests = list(TEMPLATES_DIR.rglob("manifest.md"))
+assert manifests, "No manifests found under templates/"
+for mpath in sorted(manifests):
+    mtext = mpath.read_text(encoding="utf-8")
+    lines = mtext.splitlines()
+    if not lines or lines[0].strip() != "---":
+        continue
+    fm_text = ""
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            fm_text = "\n".join(lines[1:i]); break
+    mdata, mwarns = _fallback_parse(fm_text)
+    assert mwarns == [], f"manifest {mpath.name}: fallback warnings: {mwarns}"
+    assert "template_id" in mdata, f"manifest {mpath.name}: missing template_id"
+    assert "output_policy" in mdata, f"manifest {mpath.name}: missing output_policy"
+    assert isinstance(mdata["output_policy"], dict), f"manifest {mpath.name}: output_policy not a dict"
+print("CORRECTNESS_B_PASS")
+
+# (c) lybra init succeeds end-to-end with all third-party blocked.
+from tools.aipos_cli.workspace_templates import execute_workspace_init
+with tempfile.TemporaryDirectory() as tmp:
+    result = execute_workspace_init(
+        template="software-development",
+        output=Path(tmp) / "ws",
+        variables={"project_id": "acc-ws6-test", "source_tag": "acceptance", "external_ref": "none"},
+        actor="acceptance-probe",
+    )
+    assert result.get("ok"), f"lybra init failed: {result.get('blocking_reasons', result)}"
+    assert (Path(tmp) / "ws" / "5_tasks" / "queue" / "pending").exists(), "init: task queue not created"
+print("CORRECTNESS_C_PASS")
 """
 
 
@@ -91,9 +172,15 @@ def check_isolation_grep() -> tuple[bool, str]:
 
 
 def check_isolation_textual_absent() -> tuple[bool, str]:
-    code, out = _run([sys.executable, "-c", _ISOLATION_PROBE])
-    ok = code == 0 and "GATE_OK_NO_TEXTUAL" in out
-    return ok, ("gate imports + runs with textual blocked" if ok else f"FAILED: {out.strip()[-300:]}")
+    """AIPOS-218 WS6: block ALL third-party (incl. yaml, textual) + assert correctness."""
+    code, out = _run([sys.executable, "-c", _BROAD_BLOCK_PROBE])
+    # Must print all three CORRECTNESS_x_PASS tokens + GATE_OK_NO_TEXTUAL.
+    all_tags = ["GATE_OK_NO_TEXTUAL", "CORRECTNESS_A_PASS", "CORRECTNESS_B_PASS", "CORRECTNESS_C_PASS"]
+    missing = [t for t in all_tags if t not in out]
+    ok = code == 0 and not missing
+    if ok:
+        return True, "gate imports + runs with ALL third-party blocked; correctness A/B/C pass"
+    return False, f"FAILED (missing={missing}): {out.strip()[-400:]}"
 
 
 def run() -> int:
@@ -103,7 +190,7 @@ def run() -> int:
     ok, detail = check_isolation_grep()
     results.append(("dependency isolation — only app.py imports textual", ok, detail))
     ok, detail = check_isolation_textual_absent()
-    results.append(("dependency isolation — gate runs with textual ABSENT (subprocess probe)", ok, detail))
+    results.append(("dependency isolation — gate runs with ALL third-party ABSENT + correctness A/B/C (AIPOS-218 WS6)", ok, detail))
     for label, module in ANCHORS:
         ok, detail = _unittest(module)
         results.append((label, ok, detail))

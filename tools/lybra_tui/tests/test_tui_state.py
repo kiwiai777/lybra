@@ -74,12 +74,39 @@ class TuiStateTests(unittest.TestCase):
         path.write_text(json.dumps({"tokens": [{"role": "owner" if token == "owner-secret" else "executor", "token": token, "token_ref": "svc"}]}), encoding="utf-8")
         yield path
 
-    # T6 — dependency isolation: state imports no Textual
+    # T6 — dependency isolation: state imports no Textual (AIPOS-218 WS7 — subprocess, order-independent)
     def test_state_module_does_not_import_textual(self) -> None:
-        self.assertNotIn("textual", sys.modules, "the TUI state/core path must not import textual")
-        import tools.mcp_server.tools  # noqa: F401
-        import tools.aipos_cli.confirm_client  # noqa: F401
-        self.assertNotIn("textual", sys.modules, "gate / confirm-client must never import textual")
+        """Verify in a FRESH SUBPROCESS that importing tools.lybra_tui.state alone does not
+        pull in textual.  Using a subprocess (not global sys.modules) makes this test
+        order-independent: textual may already be loaded in this process from other tests."""
+        import os
+        import subprocess
+        check_script = (
+            "import sys, importlib.util\n"
+            "import tools.lybra_tui.state\n"
+            "textual_loaded = any(\n"
+            "    k == 'textual' or k.startswith('textual.')\n"
+            "    for k in sys.modules\n"
+            ")\n"
+            "if textual_loaded:\n"
+            "    print('FAIL: textual imported via tools.lybra_tui.state')\n"
+            "    sys.exit(1)\n"
+            "print('PASS: textual not imported')\n"
+        )
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[4])
+        proc = subprocess.run(
+            [sys.executable, "-c", check_script],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(
+            proc.returncode,
+            0,
+            f"WS7 isolation probe failed:\nstdout: {proc.stdout}\nstderr: {proc.stderr}",
+        )
+        self.assertIn("PASS", proc.stdout)
 
     # T1 — connect + status line (token never raw; scope reflected)
     def test_connect_status_line_no_token_leak(self) -> None:

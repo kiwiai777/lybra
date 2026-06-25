@@ -103,6 +103,9 @@ def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None
     for key in ordered_keys:
         value = _normalize_value(metadata[key])
         if isinstance(value, list):
+            if not value:
+                lines.append(f"{key}: []")  # AIPOS-218: explicit empty list (no []/None ambiguity)
+                continue
             lines.append(f"{key}:")
             for item in value:
                 lines.append(f"- {_yaml_scalar(item)}")

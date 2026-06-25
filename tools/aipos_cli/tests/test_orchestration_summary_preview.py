@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import os
@@ -12,6 +13,9 @@ from tools.aipos_cli.aipos_cli import main
 from tools.aipos_cli.orchestration_summary_preview import build_orchestration_summary_preview
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import load_all_tasks
+
+# ENV-AWARE: bare-python asserts LOUD/FAIL-CLOSED behavior.
+_HAS_YAML = importlib.util.find_spec("yaml") is not None
 
 
 class OrchestrationSummaryPreviewTests(unittest.TestCase):
@@ -141,6 +145,21 @@ class OrchestrationSummaryPreviewTests(unittest.TestCase):
         )
 
         self.assertEqual(result["action"], "orchestration_summary_preview")
+        if not _HAS_YAML:
+            # BARE: orchestration logs (sequences-of-mappings) can't be parsed → warn+empty.
+            # The preview still runs (gate must not hard-fail on read) but current_iteration = 0.
+            self.assertIn(result["verdict"], {"PASS", "NEEDS_OWNER"})
+            self.assertEqual(result["planned_summary"]["open_subtask_count"], 1)
+            self.assertEqual(result["planned_summary"]["completed_subtask_count"], 1)
+            self.assertEqual(result["planned_summary"]["current_iteration"], 0)
+            # Loud warning must be surfaced.
+            all_warnings = result.get("warnings", []) + result.get("planned_summary", {}).get("warnings", [])
+            self.assertTrue(
+                any("PyYAML" in str(w) for w in all_warnings),
+                f"Expected loud PyYAML warning in result; got warnings: {all_warnings}\nresult: {result}",
+            )
+            self.assertEqual(before, self.data_paths())
+            return
         self.assertEqual(result["verdict"], "PASS")
         self.assertTrue(result["dry_run"])
         self.assertFalse(result["would_write"])
@@ -183,6 +202,12 @@ class OrchestrationSummaryPreviewTests(unittest.TestCase):
             records=load_records(self.repo_root),
         )
 
+        if not _HAS_YAML:
+            # BARE: logs can't be parsed → no conflict detected (warn+empty, not hard-fail).
+            # verdict may be PASS or NEEDS_OWNER depending on task state; no BLOCK.
+            self.assertNotEqual(result["verdict"], "BLOCK")
+            self.assertFalse(result["writes_enabled"])
+            return
         self.assertEqual(result["verdict"], "NEEDS_OWNER")
         self.assertTrue(result["conflicts"])
         self.assertFalse(result["writes_enabled"])

@@ -39,11 +39,14 @@ class AcceptanceArtifactTests(unittest.TestCase):
         ok, detail = v1_acceptance.check_isolation_grep()
         self.assertTrue(ok, detail)
 
-    # --- the textual-absence probe blocks textual (RF-5 hardening) ---
+    # --- the broad block probe blocks ALL third-party (AIPOS-218 WS6 hardening) ---
     def test_isolation_probe_blocks_textual(self) -> None:
-        self.assertIn("_BlockTextual", v1_acceptance._ISOLATION_PROBE)
-        self.assertIn("textual blocked", v1_acceptance._ISOLATION_PROBE)
-        self.assertIn("GATE_OK_NO_TEXTUAL", v1_acceptance._ISOLATION_PROBE)
+        # AIPOS-218 WS6: _ISOLATION_PROBE renamed _BROAD_BLOCK_PROBE; blocks ALL third-party
+        # (including textual and yaml), not just textual.
+        probe = v1_acceptance._BROAD_BLOCK_PROBE
+        self.assertIn("_BlockThirdParty", probe)
+        self.assertIn("third-party module blocked", probe)
+        self.assertIn("GATE_OK_NO_TEXTUAL", probe)
 
     # --- anchors map to real test modules (承 the named slices) ---
     def test_anchors_are_real_modules(self) -> None:

@@ -34,7 +34,11 @@ Three principles are welded in:
 
 ## Quick start
 
-Lybra's **gate core ships via npm and has zero Python runtime dependencies**. The TUI client adds
+Lybra's **gate core (init, task/record I/O, and claim/return/audit with canonical opaque
+`agent_instance` IDs) ships via npm and is zero Python runtime dependency and correct on bare
+python.** Legacy-alias resolution and custom-profile registries require PyYAML; without it the gate
+**fails closed (blocks) rather than mis-attributing identity or weakening auditor independence** —
+it never silently degrades an accountability decision. The TUI client adds
 [Textual](https://pypi.org/project/textual/) on top. **`lybra` itself is distributed via npm and is
 NOT on PyPI** — install the TUI's `textual` separately.
 

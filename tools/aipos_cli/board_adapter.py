@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, error_entry, make_response
-from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles, resolve_instance_id
+from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles, registry_available, resolve_instance_id
 from tools.aipos_cli.artifact_ingest import (
     _as_ref_list,
     approved_scratch_root,
@@ -1676,6 +1676,20 @@ def _build_return_preview(
     updated_metadata["status"] = "claimed"
     updated_metadata["executor_status"] = "completed"
     updated_metadata["executor_completed_by"] = canonical_agent_instance or actor
+    # AIPOS-219 P5: persist executor registry-verification status so the audit verdict path can
+    # fail-closed when the executor identity was not registry-verified (bare python, no PyYAML).
+    _executor_provenance = (
+        mcp_return_metadata.get("identity_provenance")
+        if isinstance(mcp_return_metadata, dict)
+        else None
+    )
+    if isinstance(_executor_provenance, dict):
+        updated_metadata["executor_registry_verified"] = bool(
+            _executor_provenance.get("registry_available", True)
+        )
+    else:
+        # No provenance recorded — treat as registry-verified (legacy/direct path, PyYAML present).
+        updated_metadata["executor_registry_verified"] = True
     returned_at = planned_returned_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     updated_metadata["executor_completed_at"] = returned_at
     updated_metadata["audit_readiness"] = "ready"
@@ -2037,6 +2051,18 @@ def _build_audit_dispatch_preview(
             blocking_reasons.append("INSTANCE_REQUIRED: audit_agent_instance must resolve to one canonical concrete instance")
         elif audit_canonical == reviewed_executor_instance:
             blocking_reasons.append("INDEPENDENCE_FAILED: audit_agent_instance must be distinct from reviewed_executor_instance")
+        else:
+            # AIPOS-219 P3: fail-closed when EITHER side's identity is registry-unverified.
+            # Auditor side: registry_available() at dispatch time.
+            # Executor side: executor_registry_verified stored at return time (False/absent = unverified).
+            auditor_registry_ok = registry_available()
+            executor_registry_ok = source_metadata.get("executor_registry_verified", True)
+            if not auditor_registry_ok or not executor_registry_ok:
+                blocking_reasons.append(
+                    "INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY: cannot verify auditor/executor distinctness "
+                    "without the agent registry (PyYAML required); install PyYAML to enable audit dispatch "
+                    "when either side's identity was recorded without registry verification"
+                )
     else:
         blocking_reasons.append("INSTANCE_REQUIRED: audit_agent_instance is required for the first audit_dispatch slice")
 
@@ -2356,6 +2382,18 @@ def _build_audit_verdict_preview(
         blocking_reasons.append("MISSING_EXECUTOR_INSTANCE: reviewed executor instance is required")
     if reviewed_executor_instance and canonical_agent_instance == reviewed_executor_instance:
         blocking_reasons.append("INDEPENDENCE_FAILED: auditor must be distinct from reviewed_executor_instance")
+    elif reviewed_executor_instance:
+        # AIPOS-219 P3: fail-closed when EITHER side's identity is registry-unverified.
+        # Auditor side: registry_available() at verdict time.
+        # Executor side: executor_registry_verified stored at return time (False/absent = unverified).
+        auditor_registry_ok = registry_available()
+        executor_registry_ok = reviewed_metadata.get("executor_registry_verified", True)
+        if not auditor_registry_ok or not executor_registry_ok:
+            blocking_reasons.append(
+                "INDEPENDENCE_UNVERIFIABLE_NO_REGISTRY: cannot verify auditor/executor distinctness "
+                "without the agent registry (PyYAML required); install PyYAML to enable audit verdict "
+                "when either side's identity was recorded without registry verification"
+            )
 
     dispatch_ref = str(audit_dispatch_record_ref or audit_metadata.get("audit_dispatch_record_ref") or reviewed_metadata.get("audit_dispatch_record_ref") or "").strip()
     if not dispatch_ref:
