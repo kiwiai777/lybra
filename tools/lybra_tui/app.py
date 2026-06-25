@@ -154,5 +154,9 @@ class LybraTui(App):
         self._show(f"Landed {rel}. Publish dry-run {preview.dry_run_token} ready — confirm with the owner literal to publish.")
 
 
-def build_app(session: TuiSession) -> LybraTui:
-    return LybraTui(session)
+def build_app(
+    session: TuiSession, copilot_session: Any = None, *, workspace_root: str | None = None
+) -> LybraTui:
+    # Signature must mirror run_tui's call site: build_app(session, copilot, workspace_root=...).
+    # (Drift here crashed `lybra tui` at launch — AIPOS-216; guarded by the run_tui→build_app smoke.)
+    return LybraTui(session, copilot_session, workspace_root=workspace_root)
