@@ -23,7 +23,7 @@ class TuiAppTests(unittest.TestCase):
         copilot = MagicMock()
         app = build_app(session, copilot, workspace_root="/tmp/ws")
         self.assertIsInstance(app, LybraTui)
-        # bindings include Shift+Tab (mode), /-menu, and Esc (cancel/reject)
+        # AIPOS-221: Shift+Tab kept as a convenience; Esc cancel/reject still bound.
         keys = {b.key for b in LybraTui.BINDINGS}
         self.assertIn("shift+tab", keys)
         self.assertIn("escape", keys)
@@ -59,6 +59,644 @@ class TuiAppTests(unittest.TestCase):
         run.assert_called_once()
         constructed = run.call_args.args[0]
         self.assertIsInstance(constructed, LybraTui)
+
+
+def _make_session(mode: str = "copilot"):
+    """A read-only stub TuiSession with a stable status line (no network)."""
+    from unittest.mock import MagicMock
+
+    from tools.lybra_tui.state import COPILOT_MODE
+
+    session = MagicMock()
+    session.mode = COPILOT_MODE if mode == "copilot" else mode
+    session.status_line.return_value = "gate stub · token sha256:x · role owner · mode copilot"
+    return session
+
+
+def _make_chat_copilot():
+    """A copilot mock whose chat() returns a canned ChatReply (no network)."""
+    from unittest.mock import MagicMock
+
+    from tools.lybra_tui.copilot import ChatReply
+
+    copilot = MagicMock()
+    copilot.chat.return_value = ChatReply(content="advice", compacted=False)
+    return copilot
+
+
+def _make_proposal(*, conformant=True, needs_bundle=False, blocking=None):
+    from tools.lybra_tui.copilot import DraftProposal
+
+    return DraftProposal(
+        intent="do a thing",
+        content="---\ntask_id: AIPOS-DOC-1\n---\nbody\n",
+        project="p",
+        truth_reread=True,
+        task_id="AIPOS-DOC-1",
+        conformant=conformant,
+        needs_bundle=needs_bundle,
+        blocking_reasons=blocking or [],
+        draft_rel_path="5_tasks/drafts/AIPOS-DOC-1.md",
+    )
+
+
+@unittest.skipUnless(_HAS_TEXTUAL, "textual not installed (gate/core lane); app layer is tui-lane only")
+class TuiAppPilotTests(unittest.IsolatedAsyncioTestCase):
+    """App-layer behavior via Textual's run_test()/Pilot (tui lane only)."""
+
+    async def test_nl_submit_routes_to_chat_not_an_instant_card(self) -> None:
+        # AIPOS-222: an NL line is a CONVERSATIONAL turn → copilot.chat() OFF the event loop, NOT
+        # an instant card. draft_task_card is NOT called; a "generate draft?" offer is armed.
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.copilot import ChatReply
+
+        copilot = MagicMock()
+        copilot.chat.return_value = ChatReply(content="here is my read-only advice", compacted=False)
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            inp.text = "请生成一个任务 plan this"
+            await pilot.press("enter")
+            for _ in range(50):
+                if app._pending_offer:
+                    break
+                await asyncio.sleep(0.02)
+            copilot.chat.assert_called_once_with("请生成一个任务 plan this")
+            copilot.draft_task_card.assert_not_called()
+            self.assertTrue(app._pending_offer)
+            self.assertIsNone(app._pending_proposal)
+            # inline thinking line cleared after the result, prompt re-enabled.
+            self.assertIsNone(app._thinking)
+            self.assertFalse(app.query_one("#cmd").disabled)
+
+    async def test_affirmative_reply_while_offer_pending_routes_to_draft(self) -> None:
+        # AIPOS-222 Owner ruling 1: an affirmative reply ("yes"/是/好/可以) IMMEDIATELY AFTER an
+        # offer consents → draft_task_card. (A bare affirmative with NO pending offer is just chat.)
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.copilot import ChatReply
+
+        copilot = MagicMock()
+        copilot.chat.return_value = ChatReply(content="advice", compacted=False)
+        copilot.draft_task_card.return_value = _make_proposal(conformant=True)
+        copilot.available_context_bundles.return_value = []
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            inp.text = "plan a project"
+            await pilot.press("enter")
+            for _ in range(50):
+                if app._pending_offer:
+                    break
+                await asyncio.sleep(0.02)
+            inp.text = "是"  # affirmative (zh), trimmed/case-insensitive set
+            await pilot.press("enter")
+            for _ in range(50):
+                if app._pending_proposal is not None:
+                    break
+                await asyncio.sleep(0.02)
+            copilot.draft_task_card.assert_called_once()
+            self.assertIsNotNone(app._pending_proposal)
+            self.assertFalse(app._pending_offer)
+
+    async def test_affirmative_with_no_pending_offer_is_just_chat(self) -> None:
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.copilot import ChatReply
+
+        copilot = MagicMock()
+        copilot.chat.return_value = ChatReply(content="advice", compacted=False)
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            inp.text = "yes"  # no offer pending → ordinary NL chat turn
+            await pilot.press("enter")
+            for _ in range(50):
+                if copilot.chat.called:
+                    break
+                await asyncio.sleep(0.02)
+            copilot.chat.assert_called_once_with("yes")
+            copilot.draft_task_card.assert_not_called()
+
+    async def test_slash_draft_routes_to_draft_task_card(self) -> None:
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+
+        copilot = MagicMock()
+        copilot.draft_task_card.return_value = _make_proposal(conformant=True)
+        copilot.available_context_bundles.return_value = []
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            inp.text = "/draft"
+            await pilot.press("enter")
+            for _ in range(50):
+                if app._pending_proposal is not None:
+                    break
+                await asyncio.sleep(0.02)
+            copilot.draft_task_card.assert_called_once()
+
+    async def test_inline_thinking_indicator_appears_then_clears(self) -> None:
+        # AIPOS-222 ruling 2: an inline "· thinking… (Ns)" line appears while the worker runs and
+        # is cleared when the result arrives. Honest wording — no fabricated "effort".
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.copilot import ChatReply
+
+        gate = asyncio.Event()
+
+        def _slow_chat(intent):
+            # block in the worker thread until the test observes the thinking line
+            import time
+            for _ in range(200):
+                if gate.is_set():
+                    break
+                time.sleep(0.01)
+            return ChatReply(content="done", compacted=False)
+
+        copilot = MagicMock()
+        copilot.chat.side_effect = _slow_chat
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            inp.text = "think about this"
+            await pilot.press("enter")
+            # thinking line present while the worker is mid-flight
+            for _ in range(50):
+                if app._thinking is not None:
+                    break
+                await asyncio.sleep(0.02)
+            self.assertIsNotNone(app._thinking)
+            # AIPOS-222 fix 5: the honest verb word is now "Thinking…" (case-insensitive check so
+            # this assertion survives the wording polish from "thinking…" → "✽ Thinking…").
+            self.assertIn("thinking", str(app._thinking.render()).lower())
+            gate.set()  # let the worker finish
+            for _ in range(100):
+                if app._thinking is None:
+                    break
+                await asyncio.sleep(0.02)
+            self.assertIsNone(app._thinking)
+
+    async def test_compaction_notice_rendered_when_chat_reports_it(self) -> None:
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import _COMPACTION_NOTICE, build_app
+        from tools.lybra_tui.copilot import ChatReply
+
+        copilot = MagicMock()
+        copilot.chat.return_value = ChatReply(content="advice", compacted=True)
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            inp.text = "a long conversation"
+            await pilot.press("enter")
+            for _ in range(50):
+                if app._pending_offer:
+                    break
+                await asyncio.sleep(0.02)
+            texts = [str(w.render()) for w in app.query("#conversation Static")]
+            self.assertTrue(any(_COMPACTION_NOTICE in t for t in texts))
+
+    async def test_up_arrow_recalls_last_input_when_dropdown_closed(self) -> None:
+        # AIPOS-222: ↑ recalls the last submitted input when the `/` autocomplete is CLOSED.
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.copilot import ChatReply
+
+        copilot = MagicMock()
+        copilot.chat.return_value = ChatReply(content="ok", compacted=False)
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            await pilot.click("#cmd")
+            inp.text = "first intent"
+            await pilot.press("enter")
+            await asyncio.sleep(0.05)
+            self.assertFalse(app.query_one("#ac").display)  # dropdown closed
+            await pilot.press("up")
+            self.assertEqual(inp.text, "first intent")
+
+    async def test_up_down_go_to_dropdown_when_open(self) -> None:
+        # CLEAR PRECEDENCE: when the `/` autocomplete is OPEN, ↑/↓ navigate the dropdown (NOT
+        # history). The prompt keeps its `/`-token text; focus moves to the OptionList.
+        from tools.lybra_tui.app import build_app
+
+        app = build_app(_make_session(), _make_chat_copilot(), workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            await pilot.click("#cmd")
+            inp.text = "/"  # single-line `/` token → TextArea.Changed opens the dropdown
+            await pilot.pause()
+            ac = app.query_one("#ac")
+            self.assertTrue(ac.display)  # dropdown open
+            await pilot.press("up")
+            self.assertEqual(inp.text, "/")  # history NOT recalled while dropdown open
+            self.assertIs(app.focused, ac)
+
+    async def test_slash_prefixed_routes_to_command_handler(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from tools.lybra_tui.app import build_app
+
+        app = build_app(_make_session(), MagicMock(), workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            with patch.object(app, "_handle_command") as handler:
+                inp = app.query_one("#cmd")
+                inp.text = "/help"
+                await pilot.press("enter")
+            handler.assert_called_once_with("/help")
+
+    async def test_proceed_lands_draft_and_stages_dry_run_but_never_publishes(self) -> None:
+        # RED LINE: /proceed lands a draft + stages a publish DRY-RUN, but performs NO publish.
+        # Assert: no publish record written, nothing lands in queue/pending; only land_draft +
+        # preview_publish (dry-run) are invoked — confirm/publish are NEVER called.
+        import os
+        import tempfile
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+
+        with tempfile.TemporaryDirectory() as ws:
+            session = _make_session()
+            # land_draft / preview_publish are the ONLY truth-adjacent ops /proceed may call.
+            preview = MagicMock()
+            preview.dry_run_token = "dry-123"
+            session.preview_publish.return_value = preview
+
+            def _land(content, *, workspace_root, draft_rel_path):
+                path = os.path.join(workspace_root, draft_rel_path)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                return draft_rel_path
+
+            session.land_draft.side_effect = _land
+
+            copilot = MagicMock()
+            app = build_app(session, copilot, workspace_root=ws)
+            async with app.run_test() as pilot:
+                app._pending_proposal = _make_proposal(conformant=True)
+                inp = app.query_one("#cmd")
+                inp.text = "/proceed"
+                await pilot.press("enter")
+
+            # dry-run staged (preview_publish called); confirm/publish NEVER called.
+            session.preview_publish.assert_called_once()
+            session.confirm.assert_not_called()
+            self.assertFalse(session.client.confirm.called)
+            # draft landed under drafts/, and NOTHING landed in queue/pending/.
+            self.assertTrue(os.path.isfile(os.path.join(ws, "5_tasks/drafts/AIPOS-DOC-1.md")))
+            self.assertFalse(os.path.isdir(os.path.join(ws, "queue", "pending")))
+            # No publish record anywhere under the workspace.
+            for root, _dirs, files in os.walk(ws):
+                for name in files:
+                    self.assertNotIn("publish", name.lower())
+
+    async def test_copilot_session_built_read_only(self) -> None:
+        # The TUI is constructed with whatever copilot session run_tui builds; assert the copilot
+        # the app uses is the read-only one (role="copilot"). We assert the construction path:
+        # _maybe_build_copilot connects with role="copilot" (the welded read-only credential).
+        import inspect
+
+        from tools.lybra_tui import __main__ as M
+
+        src = inspect.getsource(M._maybe_build_copilot)
+        self.assertIn('role="copilot"', src)
+
+    async def test_exit_command_quits(self) -> None:
+        # AIPOS-222: `/exit` is an alias of `/quit` — both call App.exit().
+        from unittest.mock import MagicMock, patch
+
+        from tools.lybra_tui.app import build_app
+
+        app = build_app(_make_session(), MagicMock(), workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            with patch.object(app, "exit") as exit_:
+                inp = app.query_one("#cmd")
+                inp.text = "/exit"
+                await pilot.press("enter")
+            exit_.assert_called_once()
+
+    async def test_compact_calls_memory_compact_chat_only_and_shows_notice(self) -> None:
+        # AIPOS-222: `/compact` calls the EXISTING CopilotMemory.compact(keep_last=…), trims L3
+        # chat ONLY (L0 truth / L1 index untouched), shows the compaction notice, and is read-only.
+        import asyncio
+
+        from tools.lybra_tui.app import _COMPACTION_NOTICE, build_app
+        from tools.lybra_tui.copilot import CHAT_KEEP_LAST, CopilotMemory
+
+        # A REAL CopilotMemory so we exercise the actual compact() discipline (not a mock).
+        memory = CopilotMemory(
+            l0_truth={"queue": "TRUTH-SNAPSHOT"},
+            l1_index={"idx": "DERIVED"},
+        )
+        for i in range(CHAT_KEEP_LAST + 12):  # well past the keep-last threshold
+            memory.record_chat("user", f"turn {i}")
+        from unittest.mock import MagicMock
+
+        copilot = MagicMock()
+        copilot.memory = memory
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            inp.text = "/compact"
+            await pilot.press("enter")
+            await asyncio.sleep(0.05)
+            # L3 chat trimmed to keep_last; L0 truth + L1 index untouched (read-only discipline).
+            self.assertLessEqual(len(memory.l3_chat), CHAT_KEEP_LAST)
+            self.assertEqual(memory.l0_truth, {"queue": "TRUTH-SNAPSHOT"})
+            self.assertEqual(memory.l1_index, {"idx": "DERIVED"})
+            # compaction notice rendered in the transcript.
+            texts = [str(w.render()) for w in app.query("#conversation Static")]
+            self.assertTrue(any(_COMPACTION_NOTICE in t for t in texts))
+
+    async def test_footer_renders_model_and_ctx(self) -> None:
+        # AIPOS-222 ruling 4: the footer under the input shows `<model> · <dir> | Ctx: <n>%`.
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.copilot import CopilotMemory, LLMClient, LLMConfig
+
+        copilot = MagicMock()
+        copilot._llm = LLMClient(LLMConfig(base_url="http://llm", api_key="k", model="claude-sonnet-4-6"))
+        copilot.memory = CopilotMemory()
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            footer = str(app.query_one("#ctxbar").render())
+            self.assertIn("claude-sonnet-4-6", footer)  # model id from LLMConfig
+            self.assertIn("Ctx:", footer)               # honest context estimate, labelled
+            self.assertIn("%", footer)
+
+    async def test_footer_shows_no_llm_without_copilot(self) -> None:
+        # No copilot/LLM → footer reads `no-llm` and Ctx: 0% (honest: nothing is being sent).
+        from tools.lybra_tui.app import build_app
+
+        app = build_app(_make_session(), None, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            footer = str(app.query_one("#ctxbar").render())
+            self.assertIn("no-llm", footer)
+            self.assertIn("Ctx:", footer)
+
+    async def test_user_turn_style_is_not_green(self) -> None:
+        # AIPOS-222 ruling 1: the Owner's turn must NOT be LYBRA_GREEN — it is bold DEFAULT fg.
+        # green is reserved for the logo/frame, the "lybra" line, the thinking dot, and the offer.
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import LybraTui, build_app
+        from tools.lybra_tui.presentation import LYBRA_GREEN
+
+        # The CSS rule for .turn-user carries no color (so it inherits the default fg) and is bold.
+        self.assertNotIn(f".turn-user {{ color: {LYBRA_GREEN}", LybraTui.CSS)
+        self.assertIn(".turn-user { text-style: bold; }", LybraTui.CSS)
+
+        app = build_app(_make_session(), MagicMock(), workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            app._user("hello owner")
+            user_widgets = [w for w in app.query("#conversation Static") if "turn-user" in w.classes]
+            self.assertTrue(user_widgets)
+            styles = app.get_css_variables()  # smoke: CSS parsed without error
+            self.assertIsInstance(styles, dict)
+
+    async def test_draft_offer_affordance_is_present_and_prominent(self) -> None:
+        # AIPOS-222 ruling 3: after a chat reply the app appends a bilingual, prominent consent
+        # affordance (its own turn-offer line: green + bold + italic) with a blank spacer above it.
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import _DRAFT_OFFER, build_app
+        from tools.lybra_tui.copilot import ChatReply
+
+        copilot = MagicMock()
+        copilot.chat.return_value = ChatReply(content="advice", compacted=False)
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            inp.text = "plan something"
+            await pilot.press("enter")
+            for _ in range(50):
+                if app._pending_offer:
+                    break
+                await asyncio.sleep(0.02)
+            offer_widgets = [w for w in app.query("#conversation Static") if "turn-offer" in w.classes]
+            self.assertTrue(offer_widgets, "the consent affordance line is missing")
+            offer_text = str(offer_widgets[-1].render())
+            self.assertEqual(offer_text, _DRAFT_OFFER)
+            # bilingual: carries both the Chinese and the English consent hint.
+            self.assertIn("生成", offer_text)
+            self.assertIn("draft", offer_text)
+
+    async def test_cjk_input_is_accepted_by_chat_prompt(self) -> None:
+        # Ruling 4 (fix 3): the chat prompt is a multi-line TextArea (PromptArea) that accepts CJK /
+        # wide chars natively — a TextArea carries no restrict/type filter that could drop them.
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import PromptArea, build_app
+
+        app = build_app(_make_session(), MagicMock(), workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            # The prompt is a TextArea-based PromptArea (multi-line), not a single-line Input.
+            self.assertIsInstance(inp, PromptArea)
+            # A TextArea has no restrict/type filters at all (so none can silently drop CJK input).
+            self.assertFalse(hasattr(inp, "restrict"))
+            await pilot.click("#cmd")
+            for ch in "中文 test 你好":
+                inp.insert(ch)
+            self.assertEqual(inp.text, "中文 test 你好")
+            inp.insert("汉字宽字符")
+            self.assertEqual(inp.text, "中文 test 你好汉字宽字符")
+
+    async def test_prompt_border_uses_lybra_green_two_rules(self) -> None:
+        # AIPOS-222 fix 1: the prompt's chrome is a claude-code-style two-rule (top+bottom) border
+        # in LYBRA_GREEN — NOT Textual's default full blue focus box (which is overridden away on
+        # all sides, then re-drawn as just the top/bottom rules for both focused + unfocused).
+        from tools.lybra_tui.app import LybraTui
+        from tools.lybra_tui.presentation import LYBRA_GREEN
+
+        css = LybraTui.CSS
+        # centered `─` rules (solid), not `hkey`'s edge-pinned ▔/▁ which read as a wider gap.
+        self.assertIn(f"border-top: solid {LYBRA_GREEN};", css)
+        self.assertIn(f"border-bottom: solid {LYBRA_GREEN};", css)
+        # the full default box is overridden away (border: none) before the two rules are drawn,
+        # and the focus rule re-asserts the same green rules (so it never flashes blue).
+        self.assertIn("#cmd:focus", css)
+
+    async def test_prompt_gutter_shows_green_caret(self) -> None:
+        # AIPOS-222 fix 2: a green `>` prompt gutter sits in front of the multi-line prompt.
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import LybraTui, build_app
+        from tools.lybra_tui.presentation import LYBRA_GREEN
+
+        app = build_app(_make_session(), MagicMock(), workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            gutter = app.query_one("#prompt-gutter")
+            self.assertEqual(str(gutter.render()), ">")
+            # the gutter is styled in the brand green via the #prompt-gutter CSS rule
+            # (assert the rule's properties without pinning their order — AIPOS-222 fix).
+            gutter_rule = next(
+                line for line in LybraTui.CSS.splitlines() if "#prompt-gutter" in line
+            )
+            self.assertIn("width: 2", gutter_rule)
+            self.assertIn(LYBRA_GREEN, gutter_rule)
+
+    async def test_shift_enter_and_ctrl_j_insert_newline_enter_submits(self) -> None:
+        # AIPOS-222 fix 3: Enter SUBMITS the buffer; Shift+Enter and Ctrl+J insert a NEWLINE.
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.copilot import ChatReply
+
+        copilot = MagicMock()
+        copilot.chat.return_value = ChatReply(content="ok", compacted=False)
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            await pilot.click("#cmd")
+            inp.insert("line one")
+            await pilot.press("shift+enter")  # newline, NOT submit
+            inp.insert("line two")
+            await pilot.press("ctrl+j")        # newline, NOT submit
+            inp.insert("line three")
+            self.assertEqual(inp.text, "line one\nline two\nline three")
+            copilot.chat.assert_not_called()   # nothing submitted yet
+            await pilot.press("enter")          # NOW submit the whole multi-line buffer
+            for _ in range(50):
+                if copilot.chat.called:
+                    break
+                await asyncio.sleep(0.02)
+            copilot.chat.assert_called_once_with("line one\nline two\nline three")
+
+    async def test_up_moves_cursor_within_multiline_then_recalls_at_first_line(self) -> None:
+        # AIPOS-222 fix 3: ↑/↓ precedence inside a multi-line buffer. With the cursor NOT on the
+        # first line, ↑ moves the cursor up a line (TextArea default) and does NOT recall history;
+        # only when the cursor is on the first line does ↑ recall the previous submitted line.
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.copilot import ChatReply
+
+        copilot = MagicMock()
+        copilot.chat.return_value = ChatReply(content="ok", compacted=False)
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            await pilot.click("#cmd")
+            # Submit a line so there is history to (not) recall.
+            inp.insert("history line")
+            await pilot.press("enter")
+            await asyncio.sleep(0.05)
+            # Compose a two-line buffer; cursor ends on the LAST (second) line.
+            inp.insert("alpha")
+            await pilot.press("shift+enter")
+            inp.insert("beta")
+            self.assertEqual(inp.text, "alpha\nbeta")
+            self.assertFalse(inp.cursor_at_first_line)  # on line 2
+            await pilot.press("up")                      # moves cursor to line 1 (NOT history)
+            self.assertEqual(inp.text, "alpha\nbeta")    # buffer unchanged → no history recall
+            self.assertTrue(inp.cursor_at_first_line)
+            await pilot.press("up")                      # NOW on first line → history recall
+            self.assertEqual(inp.text, "history line")
+
+    async def test_markdown_answer_renders_fenced_code(self) -> None:
+        # AIPOS-222 fix 4: a copilot answer with a fenced code block renders as a Textual Markdown
+        # widget (Rich/Pygments highlighting), NOT a plain Static.
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from textual.widgets import Markdown
+
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.copilot import ChatReply
+
+        answer = "Here is code:\n\n```python\ndef f():\n    return 1\n```\n"
+        copilot = MagicMock()
+        copilot.chat.return_value = ChatReply(content=answer, compacted=False)
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            inp.text = "show me code"
+            await pilot.press("enter")
+            for _ in range(50):
+                if app._pending_offer:
+                    break
+                await asyncio.sleep(0.02)
+            md = app.query("#conversation Markdown")
+            self.assertTrue(len(md) >= 1, "copilot answer must render as a Markdown widget")
+
+    async def test_thinking_line_blinks_word_and_shows_token_field(self) -> None:
+        # AIPOS-222 fix 5: the live thinking line shows a pulsing "✽ Thinking…" (marker+word blink
+        # together) with an honest token field (↑ shown as a `~` estimate while in-flight); on
+        # completion a final line shows ↑/↓ token counts.
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.copilot import ChatReply, Usage
+
+        gate = asyncio.Event()
+
+        def _slow_chat(intent):
+            import time
+            for _ in range(300):
+                if gate.is_set():
+                    break
+                time.sleep(0.01)
+            return ChatReply(content="answer body", compacted=False, usage=Usage(prompt_tokens=2400, completion_tokens=7100))
+
+        copilot = MagicMock()
+        copilot.chat.side_effect = _slow_chat
+        copilot.memory = None
+        app = build_app(_make_session(), copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            inp = app.query_one("#cmd")
+            inp.text = "think hard"
+            await pilot.press("enter")
+            for _ in range(50):
+                if app._thinking is not None:
+                    break
+                await asyncio.sleep(0.02)
+            self.assertIsNotNone(app._thinking)
+            live = str(app._thinking.render())
+            self.assertIn("Thinking", live)         # the honest verb word is present
+            self.assertIn("↑", live)                # the up-token field is present while thinking
+            self.assertIn("tokens", live)
+            self.assertIn("~", live)                # in-flight ↑ is a marked estimate
+            # the word pulses with the marker: the markup styles the whole "✽ Thinking…" run.
+            app._thinking_dot_on = True
+            on_text = app._thinking_text()
+            app._thinking_dot_on = False
+            off_text = app._thinking_text()
+            self.assertNotEqual(on_text, off_text)  # the styled run toggles (blinks)
+            self.assertIn("✽ Thinking…", on_text)
+            gate.set()
+            for _ in range(100):
+                if app._thinking is None:
+                    break
+                await asyncio.sleep(0.02)
+            self.assertIsNone(app._thinking)
+            # final line shows the REAL ↑/↓ token counts (from ChatReply.usage), no `~`.
+            sys_texts = [str(w.render()) for w in app.query("#conversation Static")]
+            final = [t for t in sys_texts if "Thinking" in t and "↓" in t]
+            self.assertTrue(final, "a final ↑/↓ token line should be rendered")
+            self.assertIn("2.4k", final[-1])
+            self.assertIn("7.1k", final[-1])
 
 
 if __name__ == "__main__":

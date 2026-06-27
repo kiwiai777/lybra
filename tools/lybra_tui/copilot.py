@@ -91,6 +91,35 @@ class LLMConfig:
         return token_fingerprint(self.api_key)
 
 
+@dataclass
+class Usage:
+    """READ-ONLY token telemetry captured from an LLM /chat/completions response.
+
+    Pure observability surfaced on ``ChatReply`` so the TUI can show honest up/down token
+    counts in the thinking line. Carries NO secret, NO file path, NO token; capturing it
+    writes nothing and does not change the copilot's role/scopes. ``prompt_tokens`` is the
+    egress (↑) count, ``completion_tokens`` the answer (↓) count.
+    """
+
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
+def _usage_from_payload(payload: Any) -> Usage | None:
+    """Extract OpenAI-compatible ``usage`` from a response payload. Read-only, never raises."""
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    if not isinstance(usage, dict):
+        return None
+
+    def _int(value: Any) -> int | None:
+        return int(value) if isinstance(value, (int, float)) else None
+
+    return Usage(
+        prompt_tokens=_int(usage.get("prompt_tokens")),
+        completion_tokens=_int(usage.get("completion_tokens")),
+    )
+
+
 class LLMCompleter(Protocol):
     def complete(self, messages: list[dict[str, str]]) -> str: ...
 
@@ -106,6 +135,12 @@ class LLMClient:
     def __init__(self, config: LLMConfig) -> None:
         self._config = config
         self._opener = _request.build_opener(_request.ProxyHandler({}))
+        # AIPOS-222 (read-only telemetry): the usage block from the LAST /chat/completions
+        # response, if the provider returned one. Pure observability — it is captured from the
+        # HTTP response and surfaced on ChatReply; it writes NOTHING, confirms nothing, and does
+        # not touch the role/scopes credential. None until the first completion (or if the
+        # provider omits `usage`).
+        self.last_usage: Usage | None = None
 
     @property
     def key_fingerprint(self) -> str:
@@ -121,6 +156,8 @@ class LLMClient:
         req = _request.Request(url, data=body, headers=headers, method="POST")
         with self._opener.open(req, timeout=self._config.timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
+        # READ-ONLY telemetry: capture token usage from the response (if present) for display.
+        self.last_usage = _usage_from_payload(payload)
         choices = payload.get("choices") if isinstance(payload, dict) else None
         if not isinstance(choices, list) or not choices:
             raise RuntimeError("LLM response had no choices")
@@ -190,6 +227,41 @@ _SYSTEM_PROMPT = (
     "the Owner to review."
 )
 
+# AIPOS-222: a SEPARATE conversational system prompt for the read-only `chat()` turn. The
+# copilot answers in natural language as a planning advisor; it never writes/confirms/publishes.
+# When the discussion is concrete enough to act on, it OFFERS to generate a project-init task-card
+# draft — the Owner consents via `/draft` or an affirmative reply. The offer is a suggestion only;
+# producing the card is a separate consent step (draft_task_card), never done inside chat().
+_CHAT_SYSTEM_PROMPT = (
+    "You are the Lybra Planning Copilot: a read-only conversational planning advisor. Answer the "
+    "Owner's question in clear, natural language, grounded in the workspace truth you are given. "
+    "You CANNOT write files, confirm, or publish — only the Owner does that through the gate, so "
+    "never claim to have created, saved, or published anything. When the discussion has enough "
+    "concrete detail to act on, END your answer by briefly OFFERING to generate a project-init "
+    "task-card draft for the Owner to review (the Owner will consent). Do not output a task card "
+    "yourself; just converse and, when ready, offer."
+)
+
+# AIPOS-222: conversational chat accumulates turns, so the LLM egress (truth snapshot + chat)
+# would grow unbounded. After each chat turn, if l3_chat exceeds this, auto-compact (trim L3 chat
+# ONLY — never L0/L1 truth) down to the last KEEP_LAST turns. Reuses CopilotMemory.compact.
+CHAT_KEEP_LAST = 20
+
+
+@dataclass
+class ChatReply:
+    """Read-only conversational reply. DATA ONLY — no file path, no write, no token.
+
+    Returned by ``CopilotSession.chat``. ``compacted`` is True iff this turn triggered an
+    auto-compaction of L3 chat (so the TUI can surface a subtle "earlier turns compacted" line).
+    """
+
+    content: str
+    compacted: bool = False
+    # AIPOS-222 read-only telemetry: the token usage of the underlying LLM call, if the provider
+    # reported it (else None → the TUI falls back to a char-based ~estimate, never a fake number).
+    usage: "Usage | None" = None
+
 
 class CopilotSession:
     """Read-only planning session over the gate + an LLM. Single-project (R4).
@@ -241,10 +313,10 @@ class CopilotSession:
         self.memory.l0_truth = snapshot
         return snapshot
 
-    def _build_messages(self, intent: str, truth: dict[str, Any]) -> list[dict[str, str]]:
+    def _build_messages(self, intent: str, truth: dict[str, Any], *, system_prompt: str = _SYSTEM_PROMPT) -> list[dict[str, str]]:
         # Egress: the truth snapshot + chat are sent to the configured external LLM.
         messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "system", "content": f"project: {self.project}\nworkspace truth (read-only):\n{json.dumps(truth, sort_keys=True)[:20000]}"},
         ]
         for turn in self.memory.l3_chat:
@@ -268,6 +340,37 @@ class CopilotSession:
             truth_reread=True,
             truth_snapshot_keys=sorted(truth.keys()),
         )
+
+    # --- AIPOS-222: read-only conversational chat (NL answer; no card, no write) ---
+
+    def chat(self, intent: str) -> ChatReply:
+        """Read-only conversational turn. Answers the Owner in natural language.
+
+        Uses the SAME read-only gate read-tools as ``draft()`` (``rehydrate_truth`` → ``_read``),
+        calls the LLM (sync), and records BOTH turns in ``CopilotMemory`` (``truth=False``). It
+        writes NO file, calls NO write/confirm/publish tool, and holds NO owner token — it is a
+        pure planning conversation. After recording, it auto-compacts L3 chat (trimming chat ONLY,
+        never L0/L1 truth) when the transcript grows past ``CHAT_KEEP_LAST``, and reports whether a
+        compaction happened so the TUI can surface a subtle notice.
+
+        Returns DATA ONLY (``ChatReply``). The card-generation step is a SEPARATE consent action
+        (``draft_task_card``); chat never produces or lands a card.
+        """
+        truth = self.rehydrate_truth()  # RF-5: re-read truth via read-tools (read-only)
+        self.memory.record_chat("user", intent)
+        content = self._llm.complete(
+            self._build_messages(intent, truth, system_prompt=_CHAT_SYSTEM_PROMPT)
+        )
+        # READ-ONLY telemetry: read the usage the LLM client captured from its HTTP response (if
+        # any). This only READS an attribute on the client — it writes no file, calls no tool, and
+        # leaves the role/scopes credential untouched. None when the provider omits usage.
+        usage = getattr(self._llm, "last_usage", None)
+        self.memory.record_chat("assistant", content)
+        compacted = False
+        if len(self.memory.l3_chat) > CHAT_KEEP_LAST:
+            self.memory.compact(keep_last=CHAT_KEEP_LAST)  # trims L3 chat ONLY; truth untouched
+            compacted = True
+        return ChatReply(content=content, compacted=compacted, usage=usage)
 
     # --- AIPOS-208: chat-to-task — structured, conformant task-card authoring ---
 
@@ -409,8 +512,11 @@ __all__ = [
     "LLMConfig",
     "LLMClient",
     "LLMCompleter",
+    "Usage",
     "CopilotMemory",
     "ChatTurn",
+    "ChatReply",
+    "CHAT_KEEP_LAST",
     "DraftProposal",
     "CopilotSession",
     "build_llm",

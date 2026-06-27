@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 import tempfile
+import textwrap
 import threading
 import unittest
 from contextlib import contextmanager
@@ -21,6 +22,8 @@ from unittest.mock import patch
 
 from tools.aipos_cli.confirm_client import GateClient, load_owner_token
 from tools.lybra_tui.copilot import (
+    CHAT_KEEP_LAST,
+    ChatReply,
     ChatTurn,
     CopilotMemory,
     CopilotSession,
@@ -118,11 +121,33 @@ class CopilotTests(unittest.TestCase):
     def _all_files(self) -> set[str]:
         return {str(p.relative_to(self.repo_root)) for p in self.repo_root.rglob("*") if p.is_file()}
 
-    # --- T7: dependency isolation ---
+    # --- T7: dependency isolation (order-independent subprocess; mirrors AIPOS-218 WS7) ---
     def test_copilot_module_imports_no_textual(self) -> None:
-        self.assertNotIn("textual", sys.modules, "copilot core path must not import textual")
-        import tools.lybra_tui.copilot  # noqa: F401
-        self.assertNotIn("textual", sys.modules)
+        """Verify in a FRESH SUBPROCESS that importing tools.lybra_tui.copilot alone does not pull
+        in textual. A global ``sys.modules`` check is order-dependent (another test — e.g. the app
+        layer — may have already loaded textual into THIS process); the subprocess makes the
+        isolation claim robust regardless of test order. copilot.py must stay textual-free."""
+        import os
+        import subprocess
+
+        repo = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        )
+        check = (
+            "import sys\n"
+            "import tools.lybra_tui.copilot  # noqa\n"
+            "loaded = any(k == 'textual' or k.startswith('textual.') for k in sys.modules)\n"
+            "sys.exit(1 if loaded else 0)\n"
+        )
+        env = dict(os.environ)
+        env["PYTHONPATH"] = repo + os.pathsep + env.get("PYTHONPATH", "")
+        proc = subprocess.run(
+            [sys.executable, "-c", check], capture_output=True, text=True, env=env
+        )
+        self.assertEqual(
+            proc.returncode, 0,
+            f"copilot.py must not import textual (order-independent probe):\nstderr: {proc.stderr}",
+        )
 
     # --- T2 + scope verify: read-tool visible at scopes [], writes denied ---
     def test_copilot_scopes_empty_read_works_writes_denied(self) -> None:
@@ -162,6 +187,143 @@ class CopilotTests(unittest.TestCase):
         self.assertIn("plan", proposal.content)
         self.assertEqual(before, after, "the copilot draft loop must not write any file")
         self.assertFalse(hasattr(proposal, "path"))
+
+    # --- AIPOS-222: read-only conversational chat() is zero-write / records memory ---
+    def test_chat_returns_nl_answer_and_writes_no_file(self) -> None:
+        # RED LINE: chat() writes NO file. Snapshot the full workspace file set before/after.
+        llm = FakeLLM(reply="Here is my read-only advice. Generate a draft?")
+        with self.gate() as url, self.conn() as cpath:
+            copilot = self._copilot(url, cpath, llm)
+            before = self._all_files()
+            reply = copilot.chat("how should I structure this project?")
+            after = self._all_files()
+        self.assertIsInstance(reply, ChatReply)
+        self.assertIn("advice", reply.content)
+        self.assertEqual(before, after, "chat() must not write any file")
+
+    def test_chat_records_user_and_assistant_turns_non_truth(self) -> None:
+        llm = FakeLLM(reply="ok")
+        with self.gate() as url, self.conn() as cpath:
+            copilot = self._copilot(url, cpath, llm)
+            copilot.chat("plan it with me")
+        roles = [(t.role, t.content) for t in copilot.memory.l3_chat]
+        self.assertIn(("user", "plan it with me"), roles)
+        self.assertIn(("assistant", "ok"), roles)
+        self.assertTrue(all(t.truth is False for t in copilot.memory.l3_chat))
+
+    def test_chat_uses_read_only_truth_rehydrate_egress(self) -> None:
+        # chat() uses the SAME read-only read-tools as draft(): truth is rehydrated + sent egress.
+        llm = FakeLLM(reply="answer")
+        with self.gate() as url, self.conn() as cpath:
+            copilot = self._copilot(url, cpath, llm)
+            copilot.chat("what is in the queue?")
+        self.assertIn("queue", copilot.memory.l0_truth)
+        blob = json.dumps(llm.calls[0])
+        self.assertIn("queue", blob)
+
+    def test_chat_session_stays_copilot_role_scopes_empty(self) -> None:
+        # The chat path never escalates: the session credential stays role=copilot / scopes [].
+        llm = FakeLLM(reply="answer")
+        with self.gate() as url, self.conn() as cpath:
+            copilot = self._copilot(url, cpath, llm)
+            copilot.chat("hi")
+            basis = copilot._read("lybra_queue_list").get("scope_basis", {})
+        self.assertEqual(basis.get("role"), "copilot")
+        self.assertEqual(basis.get("scopes"), [])
+
+    def test_chat_calls_no_write_or_confirm_tool(self) -> None:
+        # chat() must call NO write/confirm/publish/file operation. Inspect its CODE (strip the
+        # docstring, which legitimately uses the words "confirm"/"publish" in prose) for call-like
+        # tokens that would indicate a write/confirm/publish/file op.
+        import ast
+        import inspect
+
+        chat_src = inspect.getsource(CopilotSession.chat)
+        func = ast.parse(textwrap.dedent(chat_src)).body[0]
+        func.body = [n for n in func.body if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))]
+        code_only = ast.unparse(func)
+        for forbidden in ("write_text", "open(", "_confirm", "land_draft", "draft_publish", "preview_publish", "owner_confirmation_token"):
+            self.assertNotIn(forbidden, code_only, f"chat() code must not reference {forbidden}")
+
+    def test_chat_auto_compacts_l3_but_l0_truth_byte_identical(self) -> None:
+        # RED LINE: auto-compact trims L3 chat to CHAT_KEEP_LAST while L0 truth is BYTE-IDENTICAL
+        # before/after (truth is never trimmed). Drive enough turns to exceed the threshold.
+        llm = FakeLLM(reply="ok")
+        with self.gate() as url, self.conn() as cpath:
+            copilot = self._copilot(url, cpath, llm)
+            copilot.rehydrate_truth()  # populate L0 once with a real read-tool snapshot
+            # RF-5 re-reads truth on every chat() turn, and the gate's validate verdict embeds a
+            # wall-clock `validated_at` timestamp — so the live L0 snapshot legitimately differs
+            # second-to-second. This test isolates the CLAIM under test (compaction never trims L0)
+            # from that orthogonal RF-5 churn by pinning the re-read to a fixed snapshot; the L0
+            # byte-identity then proves compaction itself leaves truth untouched (deterministically).
+            fixed = json.loads(json.dumps(copilot.memory.l0_truth, sort_keys=True))
+            copilot.rehydrate_truth = lambda *a, **k: copilot.memory.l0_truth.update(fixed) or copilot.memory.l0_truth  # type: ignore[method-assign]
+            l0_before = json.dumps(copilot.memory.l0_truth, sort_keys=True)
+            last = None
+            # each chat() adds 2 turns (user+assistant); run well past the threshold.
+            for n in range(CHAT_KEEP_LAST + 10):
+                last = copilot.chat(f"turn {n}")
+            l0_after = json.dumps(copilot.memory.l0_truth, sort_keys=True)
+        self.assertLessEqual(len(copilot.memory.l3_chat), CHAT_KEEP_LAST)
+        self.assertEqual(l0_before, l0_after, "L0 truth must be byte-identical across compaction")
+        self.assertTrue(last.compacted, "the final chat turn should report a compaction occurred")
+
+    # --- AIPOS-222: read-only usage telemetry surfaced on ChatReply (zero-write) ---
+    def test_chat_surfaces_read_only_usage_telemetry_and_writes_nothing(self) -> None:
+        # The LLM client captures token usage from its HTTP response; chat() surfaces it on
+        # ChatReply as pure observability. RED LINE: capturing/surfacing usage writes NO file and
+        # changes no scope. Here a FakeLLM exposes `last_usage` like LLMClient does.
+        from tools.lybra_tui.copilot import Usage
+
+        class UsageLLM(FakeLLM):
+            def __init__(self) -> None:
+                super().__init__(reply="advice")
+                self.last_usage = Usage(prompt_tokens=2400, completion_tokens=7100)
+
+        llm = UsageLLM()
+        with self.gate() as url, self.conn() as cpath:
+            copilot = self._copilot(url, cpath, llm)
+            before = self._all_files()
+            reply = copilot.chat("plan with usage")
+            after = self._all_files()
+        self.assertIsNotNone(reply.usage)
+        self.assertEqual(reply.usage.prompt_tokens, 2400)
+        self.assertEqual(reply.usage.completion_tokens, 7100)
+        self.assertEqual(before, after, "surfacing usage telemetry must not write any file")
+
+    def test_chat_usage_is_none_when_provider_omits_it(self) -> None:
+        # Honest fallback: when the provider returns no usage, ChatReply.usage is None (the TUI then
+        # shows a `~`-marked estimate — never a fabricated count).
+        llm = FakeLLM(reply="advice")  # FakeLLM has no last_usage attribute
+        with self.gate() as url, self.conn() as cpath:
+            copilot = self._copilot(url, cpath, llm)
+            reply = copilot.chat("plan without usage")
+        self.assertIsNone(reply.usage)
+
+    def test_llm_client_captures_usage_from_response_read_only(self) -> None:
+        # LLMClient.complete() captures usage from the /chat/completions JSON into last_usage —
+        # pure read of the HTTP response (no file write, no scope change). Stub the opener.
+        import io
+        from tools.lybra_tui.copilot import LLMClient, LLMConfig
+
+        class _Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        payload = json.dumps({
+            "choices": [{"message": {"content": "hi"}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 22},
+        }).encode("utf-8")
+        client = LLMClient(LLMConfig(base_url="http://x", api_key="k"))
+        client._opener.open = lambda req, timeout=None: _Resp(payload)  # type: ignore[assignment]
+        out = client.complete([{"role": "user", "content": "hi"}])
+        self.assertEqual(out, "hi")
+        self.assertIsNotNone(client.last_usage)
+        self.assertEqual(client.last_usage.prompt_tokens, 11)
+        self.assertEqual(client.last_usage.completion_tokens, 22)
 
     def test_copilot_module_imports_no_write_helper(self) -> None:
         src = (Path(__file__).resolve().parent.parent / "copilot.py").read_text(encoding="utf-8")

@@ -56,6 +56,12 @@ lybra tui --gate-url http://127.0.0.1:7118 --workspace-root ./ws --project my_pr
 The LLM key is read from the `LYBRA_PLANCHAT_LLM_KEY` environment variable (never passed on the
 command line). Without an LLM config, `lybra tui` opens in read-only observe mode.
 
+The TUI chat box accepts non-Latin / CJK input (Chinese, Japanese, Korean, etc.) — **pasting CJK
+always works**, which proves the app itself accepts wide characters (Lybra applies no input
+restriction). *Typing* CJK via an input method, however, requires a CJK-capable terminal + IME:
+Windows Terminal + an IME, iTerm2, or macOS Terminal.app deliver this. If pasted Chinese appears
+but typed Chinese does not, the blocker is your host terminal/IME, not Lybra.
+
 **Source / dev (from a clone):**
 
 ```bash

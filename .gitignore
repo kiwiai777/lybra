@@ -14,3 +14,6 @@ node_modules/
 playwright-report/
 test-results/
 .lybra/local/
+
+# disposable npm pack build artifacts (re-packed per release)
+*.tgz

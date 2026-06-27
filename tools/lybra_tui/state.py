@@ -86,6 +86,15 @@ class TuiSession:
         self.mode = MODES[(idx + 1) % len(MODES)]
         return self.mode
 
+    def set_mode(self, name: str) -> str:
+        # AIPOS-221: explicit mode set for `/mode [observe|confirm|copilot]` (no Shift+Tab
+        # dependency). Pure client-state only — no scope/accountability change. Raises on an
+        # unknown name so the TUI can surface a clear error rather than silently no-op.
+        if name not in MODES:
+            raise ValueError(f"unknown mode {name!r}; choose one of {', '.join(MODES)}")
+        self.mode = name
+        return self.mode
+
     def status_line(self) -> str:
         role = self.scope_basis.get("role") or "?"
         scope_text = ",".join(self.scopes) or "unknown"
