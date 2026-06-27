@@ -132,5 +132,34 @@ class ExternalIntakeWriterTests(unittest.TestCase):
         self.assertTrue((self.repo_root / dry["data"]["target_path"]).exists())
 
 
+class ExternalProjectExistsTests(unittest.TestCase):
+    """AIPOS-225 Slice 1 — project existence via home 5_tasks/queue marker, legacy fallback."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self.temp_dir.name)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_home_marker_exists(self) -> None:
+        from tools.aipos_cli.external_intake_writer import _external_project_exists
+
+        (self.repo_root / "homeproj" / "5_tasks" / "queue").mkdir(parents=True, exist_ok=True)
+        self.assertTrue(_external_project_exists(self.repo_root, "homeproj"))
+
+    def test_legacy_2projects_exists(self) -> None:
+        from tools.aipos_cli.external_intake_writer import _external_project_exists
+
+        (self.repo_root / "2_projects" / "acme_client").mkdir(parents=True, exist_ok=True)
+        self.assertTrue(_external_project_exists(self.repo_root, "acme_client"))
+
+    def test_neither_not_exists(self) -> None:
+        from tools.aipos_cli.external_intake_writer import _external_project_exists
+
+        self.assertFalse(_external_project_exists(self.repo_root, "ghost"))
+        self.assertFalse(_external_project_exists(self.repo_root, ""))
+
+
 if __name__ == "__main__":
     unittest.main()

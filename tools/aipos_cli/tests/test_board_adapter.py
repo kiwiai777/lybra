@@ -11,6 +11,7 @@ from tools.aipos_cli.board_adapter import (
     claim_task,
     create_draft,
     get_context_pack_preview,
+    get_governance,
     get_health,
     get_queue,
     get_task,
@@ -271,3 +272,82 @@ class BoardAdapterTests(unittest.TestCase):
         self.assert_envelope(result)
         self.assertFalse(result["ok"])
         self.assertEqual(result["errors"][0]["category"], "INTERNAL_ERROR")
+
+
+class GovernanceResolutionTests(unittest.TestCase):
+    """AIPOS-225 Slice 1 — de-hardcode get_governance (home governance/ preferred, legacy fallback)."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        for queue_state in ("pending", "claimed", "completed", "blocked"):
+            (self.root / "5_tasks" / "queue" / queue_state).mkdir(parents=True, exist_ok=True)
+        (self.root / ".lybra").mkdir(parents=True, exist_ok=True)
+        self._write_config({"config_version": 1, "workspace_root": ".", "active_project": "lybra"})
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _write_config(self, data: dict) -> None:
+        (self.root / ".lybra" / "config.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def _write_docs(self, rel_dir: str, tag: str) -> None:
+        d = self.root / rel_dir
+        d.mkdir(parents=True, exist_ok=True)
+        for name in ("decision_log.md", "project_status.md", "roadmap.md"):
+            (d / name).write_text(f"{tag} {name}", encoding="utf-8")
+
+    def test_legacy_layout_backcompat(self) -> None:
+        self._write_docs("2_projects/lybra", "legacy")
+        result = get_governance(self.root)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["data"]["project"], "lybra")
+        self.assertEqual(result["data"]["governance_layout"], "legacy")
+        self.assertEqual(result["data"]["project_root"], "2_projects/lybra")
+
+    def test_home_layout(self) -> None:
+        self._write_docs("governance", "home")
+        result = get_governance(self.root)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["data"]["project"], "lybra")
+        self.assertEqual(result["data"]["governance_layout"], "home")
+        self.assertEqual(result["data"]["project_root"], "governance")
+
+    def test_home_wins_precedence_over_legacy(self) -> None:
+        self._write_docs("2_projects/lybra", "legacy")
+        self._write_docs("governance", "home")
+        result = get_governance(self.root)
+        self.assertEqual(result["data"]["governance_layout"], "home")
+        self.assertEqual(result["data"]["project_root"], "governance")
+
+    def test_neither_layout_reports_home_path_and_warns(self) -> None:
+        result = get_governance(self.root)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["verdict"], "WARN")
+        self.assertEqual(result["data"]["governance_layout"], "home")
+        self.assertEqual(result["summary"]["documents_missing"], 3)
+
+    def test_governance_files_are_bare_filenames_no_hardcoded_project(self) -> None:
+        # ruling 1=B single-file decision_log.md; no hardcoded 2_projects/<project> path or
+        # project literal in the governance doc map (project is resolved from config).
+        from tools.aipos_cli.board_adapter import GOVERNANCE_FILES
+
+        for value in GOVERNANCE_FILES.values():
+            self.assertNotIn("/", value)
+            self.assertNotIn("2_projects", value)
+        self.assertEqual(GOVERNANCE_FILES["decision_log"], "decision_log.md")
+
+    def test_real_ambiguity_fails_closed(self) -> None:
+        # no active_project in config + two sibling project candidates → PROJECT_AMBIGUOUS
+        self._write_config({"config_version": 1, "workspace_root": "."})
+        (self.root / "projA" / "5_tasks" / "queue").mkdir(parents=True, exist_ok=True)
+        (self.root / "projB" / "5_tasks" / "queue").mkdir(parents=True, exist_ok=True)
+        result = get_governance(self.root)
+        self.assertFalse(result["ok"])
+        self.assertIn("PROJECT_AMBIGUOUS", json.dumps(result))
+
+
+if __name__ == "__main__":
+    unittest.main()

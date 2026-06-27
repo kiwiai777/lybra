@@ -55,6 +55,12 @@ from tools.aipos_cli.record_writer import (
 )
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import find_repo_root, find_task_by_id, load_all_tasks, load_task_by_path
+from tools.aipos_cli.workspace_config import (
+    find_workspace_config,
+    governance_paths,
+    load_workspace_config,
+    resolve_active_project,
+)
 from tools.aipos_cli.validator import validate_single_task, validate_tasks
 from tools.aipos_cli.workspace_templates import (
     TEMPLATE_OPERATION,
@@ -73,11 +79,10 @@ CONTROLLED_EXECUTE_NOTICE = (
     "owner_decision_record, queue_return, audit_dispatch, audit_verdict."
 )
 HEALTH_NOTICE = "Local module adapter health check only. No CLI runtime bridge, server, or network behavior is used."
-GOVERNANCE_FILES = {
-    "decision_log": "2_projects/lybra/decision_log.md",
-    "project_status": "2_projects/lybra/project_status.md",
-    "roadmap": "2_projects/lybra/roadmap.md",
-}
+# AIPOS-225 (Slice 1): governance doc filenames are sourced from the Slice 0 governance_paths()
+# shape (ruling 1=B: single-file decision_log.md) — one definition, no hardcoded project path.
+_GOVERNANCE_DOC_KEYS = ("decision_log", "project_status", "roadmap")
+GOVERNANCE_FILES = {key: governance_paths(Path("."))[key].name for key in _GOVERNANCE_DOC_KEYS}
 GOVERNANCE_EXCERPT_CHARS = 12000
 
 
@@ -464,15 +469,50 @@ def get_agents(repo_root: str | Path | None = None) -> dict[str, Any]:
         return _normalize_exception(operation, exc, dry_run=False)
 
 
-def get_governance(repo_root: str | Path | None = None) -> dict[str, Any]:
+def _resolve_active_project_for(resolved_root: Path, project: str | None) -> str:
+    """Resolve the active project (AIPOS-225 Slice 1): reuse Slice 0 resolve_active_project,
+    sourced from the workspace .lybra/config.json `active_project`. Real ambiguity (no config
+    entry and no single-project fallback) fails closed (PROJECT_AMBIGUOUS) — no project literal."""
+    config: dict[str, Any] = {}
+    config_path = find_workspace_config(resolved_root)
+    if config_path is not None:
+        config = load_workspace_config(config_path)
+    return resolve_active_project(resolved_root, explicit=project, config=config)
+
+
+def _resolve_governance_dir(resolved_root: Path, project: str) -> tuple[Path, str]:
+    """Prefer the new per-project governance/ dir; fall back to legacy 2_projects/<project>/.
+
+    AIPOS-225 (Slice 1): legacy is a temporary back-compat bridge removed in Slice 2 once the
+    move into the home completes. When neither layout has the decision_log, default to the
+    canonical home dir (a missing project reports the new path + WARN, never resurrects legacy).
+    """
+    decision_log_name = GOVERNANCE_FILES["decision_log"]
+    home_dir = resolved_root / "governance"
+    if (home_dir / decision_log_name).exists():
+        return home_dir, "home"
+    legacy_dir = resolved_root / "2_projects" / project
+    if (legacy_dir / decision_log_name).exists():
+        return legacy_dir, "legacy"
+    return home_dir, "home"
+
+
+def get_governance(repo_root: str | Path | None = None, *, project: str | None = None) -> dict[str, Any]:
     operation = "get_governance"
     try:
         resolved_root = _resolve_repo_root(repo_root)
-        documents = [_governance_doc(resolved_root, name, rel_path) for name, rel_path in GOVERNANCE_FILES.items()]
+        active_project = _resolve_active_project_for(resolved_root, project)
+        governance_dir, layout = _resolve_governance_dir(resolved_root, active_project)
+        documents = [
+            _governance_doc(resolved_root, name, (governance_dir / filename).relative_to(resolved_root).as_posix())
+            for name, filename in GOVERNANCE_FILES.items()
+        ]
         missing = [doc["path"] for doc in documents if not doc["exists"] or not doc["is_file"]]
+        project_root_rel = governance_dir.relative_to(resolved_root).as_posix()
         data = {
-            "project": "lybra",
-            "project_root": "2_projects/lybra",
+            "project": active_project,
+            "project_root": project_root_rel,
+            "governance_layout": layout,
             "documents": documents,
             "writes_enabled": False,
             "raw_json_default_visible": False,
@@ -484,7 +524,8 @@ def get_governance(repo_root: str | Path | None = None) -> dict[str, Any]:
             dry_run=False,
             data=data,
             summary={
-                "project": "lybra",
+                "project": active_project,
+                "governance_layout": layout,
                 "documents_total": len(documents),
                 "documents_present": len(documents) - len(missing),
                 "documents_missing": len(missing),

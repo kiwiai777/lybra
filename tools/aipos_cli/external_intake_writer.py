@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.draft_writer import render_markdown_task_card
+from tools.aipos_cli.workspace_config import has_workspace_queue
 
 EXTERNAL_INTAKE_DRAFTS_DIR = Path("5_tasks/drafts/external_intake")
 EXTERNAL_TAG_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -132,7 +133,13 @@ def _task_id(client_tag: str, safe_id: str) -> str:
 
 
 def _external_project_exists(repo_root: Path, client_tag: str) -> bool:
-    return bool(client_tag) and (repo_root / "2_projects" / client_tag).is_dir()
+    if not client_tag:
+        return False
+    # AIPOS-225 (Slice 1): a project exists by the home 5_tasks/queue marker; the legacy
+    # 2_projects/<tag> probe is a temporary back-compat bridge removed in Slice 2.
+    if has_workspace_queue(repo_root / client_tag):
+        return True
+    return (repo_root / "2_projects" / client_tag).is_dir()
 
 
 def _render_body(payload: dict[str, Any], *, actor: str | None) -> str:
