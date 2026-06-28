@@ -25,6 +25,16 @@ from tools.mcp_server.http_sse import (
     run_http_server,
 )
 
+# AIPOS-231 (no-regret test-harness hardening): centralize the previously-scattered magic timeouts
+# into one point of control, and widen the client budget with a stated rationale. Under WSL2 load the
+# REAL response latency can exceed a 3 s client budget — the product response is correct; the test's
+# latency bound was simply too tight. The server-thread join (after httpd.shutdown(), which stops
+# serve_forever) normally returns promptly; the cap is only a deadlock backstop. This is no-regret
+# hardening, NOT a flake fix: the accept-race hypothesis was refuted by evidence and the root cause
+# is unreproducible in the dev environment (item #2 stays OPEN, measured at the release-gate).
+_HTTP_CLIENT_TIMEOUT = 15.0  # urlopen connect+read budget (was a tight 3 s)
+_SERVER_JOIN_TIMEOUT = 10.0  # server-thread join backstop after shutdown() (was a 2 s cap)
+
 
 class HttpSseTransportTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -166,7 +176,7 @@ class HttpSseTransportTests(unittest.TestCase):
                 yield f"http://{host}:{port}"
             finally:
                 httpd.shutdown()
-                thread.join(timeout=2)
+                thread.join(_SERVER_JOIN_TIMEOUT)
                 httpd.server_close()
 
     @contextmanager
@@ -209,7 +219,7 @@ class HttpSseTransportTests(unittest.TestCase):
                 yield f"http://{host}:{port}"
             finally:
                 httpd.shutdown()
-                thread.join(timeout=2)
+                thread.join(_SERVER_JOIN_TIMEOUT)
                 httpd.server_close()
 
     def post_rpc(self, base_url: str, payload: dict[str, object], *, token: str | None = "secret") -> dict[str, object]:
@@ -222,7 +232,7 @@ class HttpSseTransportTests(unittest.TestCase):
             headers=headers,
             method="POST",
         )
-        with request.urlopen(req, timeout=3) as response:
+        with request.urlopen(req, timeout=_HTTP_CLIENT_TIMEOUT) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def post_rpc_full(
@@ -247,7 +257,7 @@ class HttpSseTransportTests(unittest.TestCase):
             headers=headers,
             method="POST",
         )
-        with request.urlopen(req, timeout=3) as response:
+        with request.urlopen(req, timeout=_HTTP_CLIENT_TIMEOUT) as response:
             body = json.loads(response.read().decode("utf-8"))
             resp_headers = {key: value for key, value in response.getheaders()}
             return body, resp_headers
@@ -474,7 +484,7 @@ class HttpSseTransportTests(unittest.TestCase):
         with self.server() as base_url:
             before = self.data_paths()
             req = request.Request(f"{base_url}{MCP_SSE_PATH}", headers={"Authorization": "Bearer secret"})
-            with request.urlopen(req, timeout=3) as response:
+            with request.urlopen(req, timeout=_HTTP_CLIENT_TIMEOUT) as response:
                 body = response.read().decode("utf-8")
             after = self.data_paths()
         self.assertEqual(before, after)
@@ -510,7 +520,7 @@ class HttpSseTransportTests(unittest.TestCase):
     def test_aipos201_get_mcp_serves_sse_keepalive_for_streamable_clients(self) -> None:
         with self.server() as base_url:
             req = request.Request(f"{base_url}{MCP_RPC_PATH}", headers={"Authorization": "Bearer secret", "Accept": "text/event-stream"})
-            with request.urlopen(req, timeout=3) as response:
+            with request.urlopen(req, timeout=_HTTP_CLIENT_TIMEOUT) as response:
                 body = response.read().decode("utf-8")
         self.assertIn("event: ping", body)
         self.assertIn('"type":"keepalive"', body)
@@ -523,7 +533,7 @@ class HttpSseTransportTests(unittest.TestCase):
                 headers={"Authorization": "Bearer secret", SESSION_HEADER: session_id},
                 method="DELETE",
             )
-            with request.urlopen(req, timeout=3) as response:
+            with request.urlopen(req, timeout=_HTTP_CLIENT_TIMEOUT) as response:
                 self.assertEqual(response.status, 200)
 
     def test_aipos201_unauthenticated_streamable_requests_are_rejected(self) -> None:
@@ -536,7 +546,7 @@ class HttpSseTransportTests(unittest.TestCase):
             # GET /mcp and DELETE /mcp also require auth.
             get_req = request.Request(f"{base_url}{MCP_RPC_PATH}", headers={"Accept": "text/event-stream"})
             with self.assertRaises(error.HTTPError) as get_missing:
-                request.urlopen(get_req, timeout=3)
+                request.urlopen(get_req, timeout=_HTTP_CLIENT_TIMEOUT)
             self.assertEqual(get_missing.exception.code, 401)
 
     def test_aipos201_tools_call_with_session_succeeds(self) -> None:
