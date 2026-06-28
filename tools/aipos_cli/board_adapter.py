@@ -58,6 +58,7 @@ from tools.aipos_cli.task_loader import find_repo_root, find_task_by_id, load_al
 from tools.aipos_cli.workspace_config import (
     find_workspace_config,
     governance_paths,
+    has_workspace_queue,
     load_workspace_config,
     resolve_active_project,
 )
@@ -88,6 +89,13 @@ GOVERNANCE_EXCERPT_CHARS = 12000
 
 def _resolve_repo_root(repo_root: str | Path | None) -> Path:
     candidate = Path(repo_root).resolve() if repo_root is not None else None
+    # AIPOS-226 FIX C①: an explicitly-supplied root that is ALREADY a valid workspace
+    # (has 5_tasks/queue) is used DIRECTLY — no upward re-resolution. Re-running
+    # find_repo_root on an already-valid workspace risks silently re-resolving it to a
+    # different root via the home model / legacy upward search. A valid explicit root is
+    # authoritative; only an invalid/non-workspace candidate falls through to find_repo_root.
+    if candidate is not None and has_workspace_queue(candidate):
+        return candidate
     return find_repo_root(candidate)
 
 
@@ -481,20 +489,27 @@ def _resolve_active_project_for(resolved_root: Path, project: str | None) -> str
 
 
 def _resolve_governance_dir(resolved_root: Path, project: str) -> tuple[Path, str]:
-    """Prefer the new per-project governance/ dir; fall back to legacy 2_projects/<project>/.
+    """Resolve the per-project governance/ dir under the truth home.
 
-    AIPOS-225 (Slice 1): legacy is a temporary back-compat bridge removed in Slice 2 once the
-    move into the home completes. When neither layout has the decision_log, default to the
-    canonical home dir (a missing project reports the new path + WARN, never resurrects legacy).
+    AIPOS-226 Slice 2 / Phase 2b: the Slice-1 legacy 2_projects/<project>/ back-compat bridge
+    is removed now that the move into the home is complete. Governance truth lives exclusively
+    at <project_home>/governance/.
+
+    AIPOS-226 FIX A: when the home governance/decision_log.md does NOT exist, this is NOT an
+    "empty home" — a validly established project always has a governance/decision_log.md stub
+    (the scaffold writes one). Its absence therefore means the resolved root is wrong (a
+    misresolution). Fail LOUDLY instead of silently defaulting to (home_dir, "home"), which
+    previously let a misresolved root masquerade as an empty home with 0 docs but layout="home".
     """
     decision_log_name = GOVERNANCE_FILES["decision_log"]
     home_dir = resolved_root / "governance"
     if (home_dir / decision_log_name).exists():
         return home_dir, "home"
-    legacy_dir = resolved_root / "2_projects" / project
-    if (legacy_dir / decision_log_name).exists():
-        return legacy_dir, "legacy"
-    return home_dir, "home"
+    raise FileNotFoundError(
+        f"GOVERNANCE_NOT_FOUND: no governance/{decision_log_name} under {resolved_root} "
+        f"— likely a resolution error (an established project always has a "
+        f"governance/{decision_log_name} stub)."
+    )
 
 
 def get_governance(repo_root: str | Path | None = None, *, project: str | None = None) -> dict[str, Any]:

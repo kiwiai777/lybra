@@ -28,7 +28,7 @@ truth root with no project dimension (`records.py:234`, `draft_validator.py`,
 
 This slice refactors **only** two things:
 
-1. The **truth-root layout** — move truth into a home (`~/.lybra/workspace`) separate from
+1. The **truth-root layout** — move truth into a home (`~/.lybra/projects`) separate from
    any code repo, and give `5_tasks/` + governance docs + stage archive a **per-project**
    dimension.
 2. The **project dimension on the gate** — a project axis layered on top of the existing
@@ -58,7 +58,7 @@ or the addition of any third-party dependency. See §"Red lines preserved".
 ### 1.2 Proposed home model
 
 Introduce a **home root** (the survivable truth container) that holds one subtree per
-**project**. The home root defaults to `~/.lybra/workspace` and is overridable. A single
+**project**. The home root defaults to `~/.lybra/projects` and is overridable. A single
 project's subtree is what `resolve_workspace_root()` returns as today's "workspace root" —
 so the entire downstream code path (records, drafts, orchestration, queue) is unchanged
 *relative to the resolved project root*. The refactor is: **what gets resolved** becomes
@@ -96,7 +96,7 @@ New resolver inputs (precedence, highest first):
 1. `--workspace-root` / `--home-root` explicit flag (back-compat: `--workspace-root` keeps
    meaning "the resolved project root" so existing invocations that point straight at a
    project subtree still work).
-2. `AIPOS_HOME_ROOT` env (new) for the home; `AIPOS_WORKSPACE_ROOT` (existing) keeps
+2. `LYBRA_HOME_ROOT` env (new) for the home; `AIPOS_WORKSPACE_ROOT` (existing) keeps
    meaning "resolved project root" for full back-compat.
 3. `.lybra/config.json` — extend `default_workspace_config()` (`workspace_config.py:83-95`)
    with a `home_root` and an `active_project` field (see §1.5 schema).
@@ -116,7 +116,7 @@ See §"Resolution algorithm" for the full spec including fail-closed cases.
 ```json
 {
   "config_version": 2,
-  "home_root": "~/.lybra/workspace",
+  "home_root": "~/.lybra/projects",
   "active_project": "lybra",
   "workspace_root": ".",
   "projects": {
@@ -376,12 +376,12 @@ makes establishment cheap.
 
 ### 7.2 Recommended (lightest correct path)
 
-**One-time move into `~/.lybra/workspace/lybra/`, then freeze the old shape:**
+**One-time move into `~/.lybra/projects/lybra/`, then freeze the old shape:**
 
-1. Establish the home: create `~/.lybra/workspace/` (Owner action, via `/project new lybra`
+1. Establish the home: create `~/.lybra/projects/` (Owner action, via `/project new lybra`
    or `serve rotate --project lybra` scaffolding).
 2. Move the existing project's truth (`5_tasks/`, governance docs) into
-   `~/.lybra/workspace/lybra/`, governance docs landing under `governance/` (§1.3).
+   `~/.lybra/projects/lybra/`, governance docs landing under `governance/` (§1.3).
 3. Write `project.json` mapping `lybra → /home/kiwi/lybra` (§2.2).
 4. Keep `config_version: 1` resolution working (back-compat) so any not-yet-migrated caller
    still functions; new projects only ever use the home model.
@@ -399,10 +399,68 @@ leaves the flagship project still conflated with its code repo.
 
 ---
 
+## 8. Two-root separation + home persistence (REFINEMENT — Owner-ruled 2026-06-27)
+
+> Refined after the Slice-2 truth-layout mapping surfaced (a) the home had no durability story
+> and (b) the existing governance repo `ai-project-os` is a multi-project + framework repo, so a
+> single "home = its own new repo" model did not fit. The full ruling supersedes §7.3 and the
+> first draft of this section.
+
+### 8.1 Two roots — Lybra runtime state is kept OUT of the truth repo
+
+- **`~/.lybra/` — Lybra runtime root (fixed, global; never enters a user truth repo):**
+  - `~/.lybra/config.json` — `{config_version, home_root, active_project}`. No secrets; points
+    at the truth home and names the active project.
+  - `~/.lybra/local/connection.json` — role tokens (`0600`, fingerprint-only). Here so tokens
+    are never committed into a truth repo.
+- **`LYBRA_HOME_ROOT` — truth home (default `~/.lybra/projects`, overridable):** only
+  project-related truth; per project `<project>/{governance/, 5_tasks/, stage_archive/,
+  workspace_artifacts/, project.json}`. **No `.lybra/` inside the home.** `project.json` lives
+  in the home (committable with the project truth; no secret).
+- **Resolution:** home_root = `LYBRA_HOME_ROOT` env → `~/.lybra/config.json .home_root` →
+  default `~/.lybra/projects`. active_project = `--project` → `LYBRA_ACTIVE_PROJECT` env →
+  `~/.lybra/config.json .active_project` → single-project fallback (marker = `5_tasks/queue` AND
+  `project.json`) → fail-closed.
+- **Legacy v1 untouched (M1):** `AIPOS_WORKSPACE_ROOT` + in-workspace `.lybra/config.json`
+  upward search stay byte-identical; the two-root model activates only on the new signals
+  (`LYBRA_HOME_ROOT` env OR `~/.lybra/config.json` with `home_root`).
+
+### 8.2 Home persistence = git-backed via one of THREE topologies
+
+The home should be git-versioned + remote-backed, but the shape is **not single** — the product
+supports three:
+- **A — workspace-repo:** the whole home (`LYBRA_HOME_ROOT`) is one git repo (all projects in it).
+- **B — per-project-repo:** each `<project>/` is its own git repo.
+- **C — external-existing-repo:** the home lives **inside an existing repo** the user already
+  manages (e.g. `LYBRA_HOME_ROOT=~/ai-project-os/2_projects`). Lybra adds no repo; the user
+  commits/pushes via their existing flow. This is the **Owner dogfood** (one governance remote,
+  no new repo; the gate sees only the marker-bearing project).
+
+### 8.3 `lybra home git-init` — topology-aware, one-shot, Owner-invoked
+
+- **★ Refuses if the target is already inside a git repo** (no nested repos) — which is exactly
+  what makes topology C safe (it declines inside `ai-project-os`).
+- Granularity: workspace-level (topology A) or `--project <name>` (topology B).
+- One shot; transparently prints the commands; **no remote config, no push** (prints the push
+  commands); no background/scheduler/auto. Owner action, not a copilot capability (the copilot's
+  read-only / scopes-`[]` boundary is untouched). Docs: claims ⊆ disclosure.
+
+### 8.4 Migration of the flagship is an Owner deploy step (reversible), not code
+
+Code provides only the tools (scaffold, resolver, `lybra project new`, `git-init`). The actual
+relocation is Owner-executed and reversible (topology C): confirm root `5_tasks` is lybra-only →
+non-destructive copy of `lybra` truth into the home layout under `ai-project-os/2_projects/lybra`
+→ verify the gate reads all truth from the home → only then switch `~/.lybra/config.json` + freeze
+(not delete) the old flat location → commit via the normal `ai-project-os` flow with a manually
+reviewed precise diff (other 8 projects + framework preserved; never force/overwrite). See the
+Slice 2 micro-plan (AIPOS-226) for the exact sequence.
+
+---
+
 ## Proposed home layout (ASCII tree)
 
 ```
-~/.lybra/workspace/                         # HOME ROOT (survivable; AIPOS_HOME_ROOT overridable)
+~/.lybra/projects/                         # HOME ROOT (survivable; LYBRA_HOME_ROOT overridable)
 ├── lybra/                                   # PROJECT ROOT  (== today's "workspace_root")
 │   ├── project.json                         # { project, code_repo, registered_by_token_ref }   (§2.2, Owner-authored)
 │   ├── governance/
@@ -444,10 +502,10 @@ resolve(home, project) :=
 home_root :=
   1. explicit --home-root / --workspace-root flag           (flag wins; --workspace-root
                                                               keeps legacy "= project root")
-  2. AIPOS_HOME_ROOT env                                     (new)
+  2. LYBRA_HOME_ROOT env                                     (new)
   3. AIPOS_WORKSPACE_ROOT env                                (legacy = project root, back-compat)
   4. .lybra/config.json .home_root                          (config_version >= 2)
-  5. ~/.lybra/workspace                                      (default)
+  5. ~/.lybra/projects                                      (default)
   6. upward search for 5_tasks/queue                         (legacy bare project subtree)
 
 # --- ACTIVE PROJECT ---

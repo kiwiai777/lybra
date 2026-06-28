@@ -19,6 +19,15 @@ from tools.aipos_cli.workspace_config import DEFAULT_BOARD_HOST, DEFAULT_BOARD_P
 LOCAL_DIR_REL = Path(".lybra") / "local"
 CONNECTION_REL = LOCAL_DIR_REL / "connection.json"
 SERVICE_STATE_REL = LOCAL_DIR_REL / "service_state.json"
+
+# AIPOS-226 (Slice 2): the connection.json (role tokens, 0600) now defaults to the GLOBAL
+# Lybra runtime root (~/.lybra/local/) so tokens are never committed into a user truth repo.
+# This is ★A1-adjacent: ONLY the file LOCATION changes — token minting/scopes/ROLE_SPECS are
+# unchanged. `--connection-json` still overrides; the workspace-local path stays honored for
+# legacy reads (TUI fallback).
+RUNTIME_ROOT = Path("~/.lybra")
+RUNTIME_LOCAL_REL = Path("local")
+RUNTIME_CONNECTION_REL = RUNTIME_LOCAL_REL / "connection.json"
 WORKSPACE_GITIGNORE_REL = Path(".gitignore")
 REQUIRED_LOCAL_DIR_MODE = 0o700
 REQUIRED_CONNECTION_MODE = 0o600
@@ -144,9 +153,37 @@ def _permission_issue(path: Path, required_mode: int, *, target_label: str, seve
     )
 
 
-def check_service_permissions(workspace_root: Path, *, for_secret_use: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    local_dir = workspace_root / LOCAL_DIR_REL
-    connection_path = workspace_root / CONNECTION_REL
+def runtime_connection_path(env: dict[str, str] | None = None) -> Path:
+    """The default connection.json location: ~/.lybra/local/connection.json.
+
+    Honors $HOME (via expanduser) so tests can patch HOME to a temp dir."""
+    if env is not None:
+        home = str(env.get("HOME") or "").strip()
+        if home:
+            return Path(home) / ".lybra" / RUNTIME_CONNECTION_REL
+    return (RUNTIME_ROOT / RUNTIME_CONNECTION_REL).expanduser()
+
+
+def _resolve_connection_target(workspace_root: Path, connection_target: Path | None) -> Path:
+    """Resolve the connection.json path.
+
+    AIPOS-226: when a `connection_target` is supplied it wins (override OR the runtime default
+    that the report functions thread through). When None this falls back to the LEGACY
+    in-workspace path (<workspace_root>/.lybra/local/connection.json) — the serve REPORT
+    functions (rotate/start/status/stop) default `connection_target` to the runtime root so the
+    user-facing default is ~/.lybra/local/, while the low-level writers keep their v1 contract
+    for direct callers (e.g. the scope-reachability fixture)."""
+    if connection_target is not None:
+        return Path(connection_target).expanduser()
+    return workspace_root / CONNECTION_REL
+
+
+def check_service_permissions(
+    workspace_root: Path, *, for_secret_use: bool, connection_target: Path | None = None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    conn = _resolve_connection_target(workspace_root, connection_target)
+    local_dir = conn.parent
+    connection_path = conn
     issues: list[PermissionIssue] = []
     dir_issue = _permission_issue(
         local_dir,
@@ -198,8 +235,8 @@ def _proxy_loopback_warnings(env: dict[str, str] | None = None) -> list[dict[str
     ]
 
 
-def ensure_local_dir(workspace_root: Path) -> Path:
-    local_dir = workspace_root / LOCAL_DIR_REL
+def ensure_local_dir(workspace_root: Path, *, connection_target: Path | None = None) -> Path:
+    local_dir = _resolve_connection_target(workspace_root, connection_target).parent
     local_dir.mkdir(parents=True, exist_ok=True)
     if os.name == "posix" and not _is_probably_non_posix(local_dir):
         os.chmod(local_dir, REQUIRED_LOCAL_DIR_MODE)
@@ -253,18 +290,25 @@ def build_connection_config(workspace_root: Path, *, board_host: str, board_port
     }
 
 
-def connection_path(workspace_root: Path) -> Path:
-    return workspace_root / CONNECTION_REL
+def connection_path(workspace_root: Path, *, connection_target: Path | None = None) -> Path:
+    return _resolve_connection_target(workspace_root, connection_target)
 
 
-def service_state_path(workspace_root: Path) -> Path:
-    return workspace_root / SERVICE_STATE_REL
+def service_state_path(workspace_root: Path, *, connection_target: Path | None = None) -> Path:
+    return _resolve_connection_target(workspace_root, connection_target).parent / "service_state.json"
 
 
-def write_connection_config(workspace_root: Path, config: dict[str, Any]) -> Path:
-    ensure_local_dir(workspace_root)
-    ensure_workspace_gitignore(workspace_root)
-    path = connection_path(workspace_root)
+def write_connection_config(
+    workspace_root: Path, config: dict[str, Any], *, connection_target: Path | None = None
+) -> Path:
+    ensure_local_dir(workspace_root, connection_target=connection_target)
+    # Backstop: if the workspace itself is being versioned, keep its .gitignore ignoring the
+    # legacy in-workspace local dir. (Tokens now live in the runtime root by default.)
+    try:
+        ensure_workspace_gitignore(workspace_root)
+    except OSError:
+        pass
+    path = connection_path(workspace_root, connection_target=connection_target)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     fd = os.open(path, flags, REQUIRED_CONNECTION_MODE)
     try:
@@ -277,8 +321,8 @@ def write_connection_config(workspace_root: Path, config: dict[str, Any]) -> Pat
     return path
 
 
-def load_connection_config(workspace_root: Path) -> dict[str, Any]:
-    path = connection_path(workspace_root)
+def load_connection_config(workspace_root: Path, *, connection_target: Path | None = None) -> dict[str, Any]:
+    path = connection_path(workspace_root, connection_target=connection_target)
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"Lybra service connection config must be an object: {path}")
@@ -305,7 +349,7 @@ def redacted_connection(config: dict[str, Any]) -> dict[str, Any]:
         "board": config.get("board"),
         "mcp": config.get("mcp"),
         "tokens": safe_tokens,
-        "secrets_notice": "Raw tokens are not printed. Read .lybra/local/connection.json only from trusted local clients.",
+        "secrets_notice": "Raw tokens are not printed. Read ~/.lybra/local/connection.json only from trusted local clients.",
     }
 
 
@@ -335,22 +379,27 @@ def render_connection_table(report: dict[str, Any]) -> str:
         for reason in report["blocking_reasons"]:
             lines.append(f"- {reason.get('message')}")
             lines.append(f"  fix: {reason.get('fix_command')}")
-    lines.extend(["", "Local config: .lybra/local/connection.json", "Raw tokens are not printed."])
+    runtime_loc = report.get("connection_path") or "~/.lybra/local/connection.json"
+    lines.extend(["", f"Local config: {runtime_loc}", "Raw tokens are not printed."])
     return "\n".join(lines)
 
 
-def status_report(workspace_root: Path) -> dict[str, Any]:
+def status_report(workspace_root: Path, *, connection_target: Path | None = None) -> dict[str, Any]:
+    if connection_target is None:
+        connection_target = runtime_connection_path()
     warnings, blocking = [], []
-    permission_blocks, permission_warnings = check_service_permissions(workspace_root, for_secret_use=False)
+    permission_blocks, permission_warnings = check_service_permissions(
+        workspace_root, for_secret_use=False, connection_target=connection_target
+    )
     warnings.extend(permission_warnings)
     warnings.extend(permission_blocks)
     warnings.extend(_proxy_loopback_warnings())
     config: dict[str, Any] | None = None
-    path = connection_path(workspace_root)
+    path = connection_path(workspace_root, connection_target=connection_target)
     if path.exists():
-        config = load_connection_config(workspace_root)
+        config = load_connection_config(workspace_root, connection_target=connection_target)
     state: dict[str, Any] = {}
-    state_path = service_state_path(workspace_root)
+    state_path = service_state_path(workspace_root, connection_target=connection_target)
     if state_path.exists():
         try:
             parsed = json.loads(state_path.read_text(encoding="utf-8"))
@@ -384,28 +433,42 @@ def redacted_service_state(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def rotate_report(workspace_root: Path, *, board_host: str, board_port: int, mcp_host: str, mcp_port: int) -> dict[str, Any]:
-    blocking, warnings = check_service_permissions(workspace_root, for_secret_use=True)
+def rotate_report(
+    workspace_root: Path,
+    *,
+    board_host: str,
+    board_port: int,
+    mcp_host: str,
+    mcp_port: int,
+    connection_target: Path | None = None,
+) -> dict[str, Any]:
+    if connection_target is None:
+        connection_target = runtime_connection_path()
+    blocking, warnings = check_service_permissions(
+        workspace_root, for_secret_use=True, connection_target=connection_target
+    )
     if blocking:
-        return _blocked("serve_rotate", workspace_root, blocking, warnings)
+        return _blocked("serve_rotate", workspace_root, blocking, warnings, connection_target=connection_target)
     previous_created = None
-    if connection_path(workspace_root).exists():
-        previous_created = load_connection_config(workspace_root).get("created_at")
+    if connection_path(workspace_root, connection_target=connection_target).exists():
+        previous_created = load_connection_config(
+            workspace_root, connection_target=connection_target
+        ).get("created_at")
     config = build_connection_config(workspace_root, board_host=board_host, board_port=board_port, mcp_host=mcp_host, mcp_port=mcp_port)
     if previous_created:
         config["created_at"] = previous_created
     config["rotated_at"] = _utc_now()
-    write_connection_config(workspace_root, config)
+    write_connection_config(workspace_root, config, connection_target=connection_target)
     return {
         "operation": "serve_rotate",
         "ok": True,
         "verdict": "PASS",
         "workspace_root": str(workspace_root),
-        "connection_path": str(connection_path(workspace_root)),
+        "connection_path": str(connection_path(workspace_root, connection_target=connection_target)),
         "connection": redacted_connection(config),
         "warnings": warnings,
         "blocking_reasons": [],
-        "secrets_notice": "Raw role tokens were written only to .lybra/local/connection.json and are not printed.",
+        "secrets_notice": "Raw role tokens were written only to ~/.lybra/local/connection.json and are not printed.",
     }
 
 
@@ -417,7 +480,10 @@ def start_report(
     mcp_host: str,
     mcp_port: int,
     start_processes: bool = True,
+    connection_target: Path | None = None,
 ) -> dict[str, Any]:
+    if connection_target is None:
+        connection_target = runtime_connection_path()
     if board_host != "127.0.0.1" or mcp_host != "127.0.0.1":
         return _blocked(
             "serve_start",
@@ -430,37 +496,51 @@ def start_report(
                 }
             ],
             [],
+            connection_target=connection_target,
         )
-    blocking, warnings = check_service_permissions(workspace_root, for_secret_use=True)
+    blocking, warnings = check_service_permissions(
+        workspace_root, for_secret_use=True, connection_target=connection_target
+    )
     warnings.extend(_proxy_loopback_warnings())
     if blocking:
-        return _blocked("serve_start", workspace_root, blocking, warnings)
-    config = load_connection_config(workspace_root) if connection_path(workspace_root).exists() else build_connection_config(
-        workspace_root,
-        board_host=board_host,
-        board_port=board_port,
-        mcp_host=mcp_host,
-        mcp_port=mcp_port,
+        return _blocked("serve_start", workspace_root, blocking, warnings, connection_target=connection_target)
+    conn_exists = connection_path(workspace_root, connection_target=connection_target).exists()
+    config = (
+        load_connection_config(workspace_root, connection_target=connection_target)
+        if conn_exists
+        else build_connection_config(
+            workspace_root,
+            board_host=board_host,
+            board_port=board_port,
+            mcp_host=mcp_host,
+            mcp_port=mcp_port,
+        )
     )
-    if not connection_path(workspace_root).exists():
-        write_connection_config(workspace_root, config)
+    if not conn_exists:
+        write_connection_config(workspace_root, config, connection_target=connection_target)
     if not start_processes:
         return {
             "operation": "serve_start",
             "ok": True,
             "verdict": "PASS",
             "workspace_root": str(workspace_root),
-            "connection_path": str(connection_path(workspace_root)),
+            "connection_path": str(connection_path(workspace_root, connection_target=connection_target)),
             "connection": redacted_connection(config),
             "service_state": None,
             "warnings": warnings,
             "blocking_reasons": [],
-            "secrets_notice": "Raw role tokens were written only to .lybra/local/connection.json and are not printed.",
+            "secrets_notice": "Raw role tokens were written only to ~/.lybra/local/connection.json and are not printed.",
         }
-    return _run_supervisor(workspace_root, config, warnings=warnings)
+    return _run_supervisor(workspace_root, config, warnings=warnings, connection_target=connection_target)
 
 
-def _run_supervisor(workspace_root: Path, config: dict[str, Any], *, warnings: list[dict[str, Any]]) -> dict[str, Any]:
+def _run_supervisor(
+    workspace_root: Path,
+    config: dict[str, Any],
+    *,
+    warnings: list[dict[str, Any]],
+    connection_target: Path | None = None,
+) -> dict[str, Any]:
     board = config.get("board") if isinstance(config.get("board"), dict) else {}
     mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
     child_workspace_root = Path(str(config.get("workspace_root") or workspace_root)).expanduser().resolve()
@@ -487,7 +567,7 @@ def _run_supervisor(workspace_root: Path, config: dict[str, Any], *, warnings: l
         "--port",
         str(mcp.get("port") or DEFAULT_MCP_PORT),
         "--service-connection-json",
-        str(connection_path(workspace_root)),
+        str(connection_path(workspace_root, connection_target=connection_target)),
     ]
     processes: list[subprocess.Popen[Any]] = []
     started_at = _utc_now()
@@ -497,13 +577,13 @@ def _run_supervisor(workspace_root: Path, config: dict[str, Any], *, warnings: l
         state = {
             "mode": SERVICE_MODE,
             "started_at": started_at,
-            "connection_path": str(connection_path(workspace_root)),
+            "connection_path": str(connection_path(workspace_root, connection_target=connection_target)),
             "processes": [
                 {"name": "board", "pid": processes[0].pid, "service_owned": True, "started_at": started_at},
                 {"name": "mcp", "pid": processes[1].pid, "service_owned": True, "started_at": started_at},
             ],
         }
-        _write_service_state(workspace_root, state)
+        _write_service_state(workspace_root, state, connection_target=connection_target)
         print(render_connection_table({"workspace_root": str(workspace_root), "connection": redacted_connection(config), "warnings": warnings, "blocking_reasons": []}))
         while True:
             exited = [proc for proc in processes if proc.poll() is not None]
@@ -526,16 +606,20 @@ def _run_supervisor(workspace_root: Path, config: dict[str, Any], *, warnings: l
     }
 
 
-def _write_service_state(workspace_root: Path, state: dict[str, Any]) -> None:
-    ensure_local_dir(workspace_root)
-    path = service_state_path(workspace_root)
+def _write_service_state(
+    workspace_root: Path, state: dict[str, Any], *, connection_target: Path | None = None
+) -> None:
+    ensure_local_dir(workspace_root, connection_target=connection_target)
+    path = service_state_path(workspace_root, connection_target=connection_target)
     path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if os.name == "posix" and not _is_probably_non_posix(path):
         os.chmod(path, REQUIRED_CONNECTION_MODE)
 
 
-def stop_report(workspace_root: Path) -> dict[str, Any]:
-    path = service_state_path(workspace_root)
+def stop_report(workspace_root: Path, *, connection_target: Path | None = None) -> dict[str, Any]:
+    if connection_target is None:
+        connection_target = runtime_connection_path()
+    path = service_state_path(workspace_root, connection_target=connection_target)
     warnings: list[dict[str, Any]] = []
     stopped: list[dict[str, Any]] = []
     if not path.exists():
@@ -569,13 +653,20 @@ def _terminate_processes(processes: list[subprocess.Popen[Any]]) -> None:
             proc.kill()
 
 
-def _blocked(operation: str, workspace_root: Path, blocking: list[dict[str, Any]], warnings: list[dict[str, Any]]) -> dict[str, Any]:
+def _blocked(
+    operation: str,
+    workspace_root: Path,
+    blocking: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+    *,
+    connection_target: Path | None = None,
+) -> dict[str, Any]:
     return {
         "operation": operation,
         "ok": False,
         "verdict": "BLOCK",
         "workspace_root": str(workspace_root),
-        "connection_path": str(connection_path(workspace_root)),
+        "connection_path": str(connection_path(workspace_root, connection_target=connection_target)),
         "connection": None,
         "warnings": warnings,
         "blocking_reasons": blocking,

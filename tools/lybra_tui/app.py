@@ -29,6 +29,12 @@ from textual.message import Message
 from textual.widgets import Footer, Header, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from tools.aipos_cli.home_git import execute_home_git_init, plan_home_git_init
+from tools.aipos_cli.workspace_config import (
+    project_json_path,
+    resolve_home_root,
+    scaffold_project,
+)
 from tools.lybra_tui.presentation import LYBRA_GREEN, banner, color_enabled
 from tools.lybra_tui.state import COPILOT_MODE, MODES, TuiSession
 
@@ -43,6 +49,8 @@ COMMANDS: tuple[tuple[str, str], ...] = (
     ("/gates", "list pending confirm gates (read-only view; confirm is OOB)"),
     ("/mode", "switch mode: /mode [observe|confirm|copilot]"),
     ("/audit", "compact L3 authority verdict for a task: /audit [task_id] (read-only)"),
+    ("/project", "Owner: scaffold a project under the home: /project new <name> (local, not a gate op)"),
+    ("/home", "Owner: one-shot local git init of the home: /home git-init (no remote, no push)"),
     ("/compact", "compress the current chat context now (read-only; trims chat only, never truth)"),
     ("/clear", "clear the conversation area"),
     ("/quit", "quit (also /exit, q, Ctrl+C)"),
@@ -559,6 +567,10 @@ class LybraTui(App):
                 self._cmd_mode(args[0] if args else None)
             elif cmd == "/audit":
                 self._cmd_audit(args[0] if args else None)
+            elif cmd == "/project":
+                self._cmd_project(args)
+            elif cmd == "/home":
+                self._cmd_home(args)
             elif cmd == "/clear":
                 self.query_one("#conversation", VerticalScroll).remove_children()
                 self._system("Conversation cleared.")
@@ -625,6 +637,51 @@ class LybraTui(App):
                     break
         suffix = f" (effective_truth={str(effective).lower()})" if effective is not None else ""
         self._pre(f"{task_id}: {verdict}{suffix}")
+
+    # --- AIPOS-226 (Slice 2): local Owner actions (NOT gate, NOT copilot) ----------
+
+    def _cmd_project(self, args: list[str]) -> None:
+        # Owner scaffold (ruling 2=a): a local filesystem action — no gate confirm, no token,
+        # never routed through the copilot. Only `/project new <name>` is wired in the TUI.
+        if not args or args[0] != "new" or len(args) < 2:
+            self._system("Usage: /project new <name>.")
+            return
+        name = args[1]
+        try:
+            home = resolve_home_root()
+            root = scaffold_project(home, name)
+        except Exception as exc:
+            self._system(f"Error: {exc}")
+            return
+        self._pre(
+            f"Created project root: {root}\n"
+            f"project.json: {project_json_path(root)}\n"
+            f"next: lybra serve with LYBRA_HOME_ROOT={home}"
+        )
+        self._system("Local Owner scaffold (no gate operation, no token minted).")
+
+    def _cmd_home(self, args: list[str]) -> None:
+        # Owner one-shot local git setup. Transparent: prints the exact plan first, then runs it.
+        # NEVER configures a remote or pushes; never routed through the copilot.
+        if not args or args[0] != "git-init":
+            self._system("Usage: /home git-init.")
+            return
+        try:
+            home = resolve_home_root()
+            plan = plan_home_git_init(home)
+            plan_lines = [f"Home: {plan['home']}", "Planned .gitignore:", plan["gitignore"].rstrip("\n")]
+            plan_lines.append("Planned git commands (one-shot, local only — no remote, no push):")
+            plan_lines.extend("  " + " ".join(cmd) for cmd in plan["commands"])
+            self._pre("\n".join(plan_lines))
+            result = execute_home_git_init(home)
+        except Exception as exc:
+            self._system(f"Error: {exc}")
+            return
+        out = ["Ran:"]
+        out.extend("  " + ran for ran in result["ran"])
+        out.append("Push hint (Owner runs this — Lybra never pushes):")
+        out.extend("  " + hint for hint in result["push_hint"])
+        self._pre("\n".join(out))
 
     def _cmd_compact(self) -> None:
         # AIPOS-222 ruling: compress the current context NOW. Calls the EXISTING

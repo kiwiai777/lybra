@@ -92,9 +92,14 @@ from tools.aipos_cli.workspace_config import (
     DEFAULT_MCP_HOST,
     DEFAULT_MCP_PORT,
     load_workspace_config,
+    project_json_path,
+    resolve_home_root,
     resolve_workspace_root,
+    scaffold_project,
+    set_project_repo,
     write_workspace_config,
 )
+from tools.aipos_cli.home_git import execute_home_git_init, plan_home_git_init
 
 
 def _filter_my_tasks(report: dict[str, Any], actor: str, profiles: dict[str, Any]) -> dict[str, Any]:
@@ -850,6 +855,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_parser = subparsers.add_parser("serve", help="Start and inspect local Lybra gate service mode")
     serve_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    # AIPOS-226: connection.json defaults to the global runtime root ~/.lybra/local/connection.json
+    # (tokens never enter a truth repo). --connection-json overrides the location.
+    serve_parser.add_argument("--connection-json", help="Override the connection.json path (default ~/.lybra/local/connection.json)")
     serve_subparsers = serve_parser.add_subparsers(dest="serve_command")
     serve_start_parser = serve_subparsers.add_parser("start", help="Start Board and MCP gate surfaces in foreground")
     serve_start_parser.add_argument("--board-host", default="127.0.0.1", help="Board bind host; service mode v0 requires 127.0.0.1")
@@ -968,6 +976,30 @@ def build_parser() -> argparse.ArgumentParser:
     _task_lookup_arguments(preview_parser)
     preview_parser.add_argument("--actor", required=True, help="Current actor")
     preview_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-226 (Slice 2, Phase 2a): governance-home Owner scaffold + one-shot git setup.
+    # These are LOCAL Owner actions (ruling 2=a) — they perform no gate confirm and mint no token.
+    default_actor = os.environ.get("USER") or "owner"
+
+    project_parser = subparsers.add_parser("project", help="Owner project scaffold under the governance home")
+    project_subparsers = project_parser.add_subparsers(dest="project_command")
+    project_new_parser = project_subparsers.add_parser("new", help="Scaffold a fresh per-project truth root + project.json")
+    project_new_parser.add_argument("name", help="Project name (becomes <home>/<name>)")
+    project_new_parser.add_argument("--code-repo", help="Optional absolute path to the project's code repo")
+    project_new_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_new_parser.add_argument("--actor", default=default_actor, help="Provenance actor (registered_by); defaults to $USER or owner")
+    project_setrepo_parser = project_subparsers.add_parser("set-repo", help="Set/update an established project's code_repo mapping")
+    project_setrepo_parser.add_argument("name", help="Established project name")
+    project_setrepo_parser.add_argument("--code-repo", required=True, help="Absolute path to the project's code repo")
+    project_setrepo_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_setrepo_parser.add_argument("--actor", default=default_actor, help="Provenance actor (registered_by); defaults to $USER or owner")
+
+    home_parser = subparsers.add_parser("home", help="Governance home operations (Owner-explicit, local only)")
+    home_subparsers = home_parser.add_subparsers(dest="home_command")
+    home_git_init_parser = home_subparsers.add_parser("git-init", help="One-shot, transparent local git init of the home (no remote, no push)")
+    home_git_init_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    home_git_init_parser.add_argument("--project", help="Init at <home>/<project> instead of the home root (topology B); default is workspace-level (topology A)")
+    home_git_init_parser.add_argument("--actor", default=default_actor, help="Commit identity actor; defaults to $USER or owner")
 
     return parser
 
@@ -1132,6 +1164,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             workspace_root = _resolve_workspace_for_command(args)
+            conn_override = getattr(args, "connection_json", None)
+            connection_target = Path(conn_override).expanduser() if conn_override else None
             if args.serve_command == "start":
                 result = start_report(
                     workspace_root,
@@ -1140,11 +1174,12 @@ def main(argv: list[str] | None = None) -> int:
                     mcp_host=str(args.mcp_host),
                     mcp_port=int(args.mcp_port),
                     start_processes=True,
+                    connection_target=connection_target,
                 )
             elif args.serve_command == "status":
-                result = status_report(workspace_root)
+                result = status_report(workspace_root, connection_target=connection_target)
             elif args.serve_command == "stop":
-                result = stop_report(workspace_root)
+                result = stop_report(workspace_root, connection_target=connection_target)
             elif args.serve_command == "rotate":
                 result = rotate_report(
                     workspace_root,
@@ -1152,6 +1187,7 @@ def main(argv: list[str] | None = None) -> int:
                     board_port=int(args.board_port),
                     mcp_host=str(args.mcp_host),
                     mcp_port=int(args.mcp_port),
+                    connection_target=connection_target,
                 )
             else:
                 parser.print_help()
@@ -1210,6 +1246,69 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_json(result))
         return 1 if result.get("verdict") == "BLOCK" else 0
+
+    if args.command == "project":
+        if not getattr(args, "project_command", None):
+            parser.print_help()
+            return 2
+        try:
+            home = resolve_home_root(explicit_root=args.home_root)
+            if args.project_command == "new":
+                root = scaffold_project(
+                    home, args.name, code_repo=args.code_repo, registered_by=args.actor
+                )
+                print(f"Created project root: {root}")
+                print(f"project.json: {project_json_path(root)}")
+                print(f"next: lybra serve with LYBRA_HOME_ROOT={home}")
+                print("tokens: lybra serve writes ~/.lybra/local/connection.json (runtime root)")
+                return 0
+            if args.project_command == "set-repo":
+                root = set_project_repo(
+                    home, args.name, args.code_repo, registered_by=args.actor
+                )
+                print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()}")
+                return 0
+        except (FileNotFoundError, FileExistsError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        parser.print_help()
+        return 2
+
+    if args.command == "home":
+        if not getattr(args, "home_command", None):
+            parser.print_help()
+            return 2
+        if args.home_command == "git-init":
+            try:
+                home = resolve_home_root(explicit_root=args.home_root)
+                # Topology B (--project) versions <home>/<project>; default (topology A) is the
+                # whole home as one repo.
+                project = getattr(args, "project", None)
+                target = (home / project) if project else home
+                # Transparent: print the exact plan (gitignore + commands + push hint) FIRST.
+                plan = plan_home_git_init(target, args.actor)
+                print(f"Home: {plan['home']}")
+                print("Planned .gitignore:")
+                print(plan["gitignore"].rstrip("\n"))
+                print("Planned git commands (one-shot, local only — no remote, no push):")
+                for cmd in plan["commands"]:
+                    print("  " + " ".join(cmd))
+                print("After it completes, push yourself with your own remote URL:")
+                for hint in plan["push_hint"]:
+                    print("  " + hint)
+                result = execute_home_git_init(target, actor=args.actor)
+            except (FileNotFoundError, FileExistsError, OSError, ValueError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            print("Ran:")
+            for ran in result["ran"]:
+                print("  " + ran)
+            print("Push hint (Owner runs this — Lybra never pushes):")
+            for hint in result["push_hint"]:
+                print("  " + hint)
+            return 0
+        parser.print_help()
+        return 2
 
     try:
         repo_root = _find_repo_root_for_args(args)

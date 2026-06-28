@@ -13,15 +13,23 @@ from pathlib import Path
 from tools.lybra_tui.state import TuiSession
 
 # Default location serve-rotate writes the local connection config (0600).
+# AIPOS-226: the runtime root (~/.lybra/local/) is now the primary location; the in-workspace
+# path remains a legacy fallback so pre-2a setups keep working. --connection-json overrides both.
 CONNECTION_REL = ".lybra/local/connection.json"
+RUNTIME_CONNECTION = Path("~/.lybra/local/connection.json")
 
 
 def default_connection_json(workspace_root: str | None) -> str | None:
-    """AIPOS-209: resolve the serve-rotate connection.json under the workspace, if present.
+    """AIPOS-209/226: resolve the serve-rotate connection.json, runtime root first.
 
-    Minimal convenience so `lybra tui` after `lybra serve` needs no explicit token source.
-    Returns the path string if the file exists, else None. Reads no token (path only).
+    Prefers the global runtime root ~/.lybra/local/connection.json (where `lybra serve` now
+    writes tokens); falls back to the legacy in-workspace .lybra/local/connection.json. Minimal
+    convenience so `lybra tui` after `lybra serve` needs no explicit token source. Returns the
+    path string if a file exists, else None. Reads no token (path only).
     """
+    runtime = RUNTIME_CONNECTION.expanduser()
+    if runtime.is_file():
+        return str(runtime)
     base = Path(workspace_root).expanduser() if workspace_root else Path.cwd()
     candidate = base / CONNECTION_REL
     return str(candidate) if candidate.is_file() else None

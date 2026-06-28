@@ -45,8 +45,8 @@ changing any current behavior**, so it can be merged and audited in isolation.
 
 All additions are **additive**; no existing function's signature or behavior changes.
 
-- **New constant**: `DEFAULT_HOME_ROOT = Path("~/.lybra/workspace")`.
-- **New env names** (read-only here, wired later): `AIPOS_HOME_ROOT`, `LYBRA_ACTIVE_PROJECT`.
+- **New constant**: `DEFAULT_HOME_ROOT = Path("~/.lybra/projects")`.
+- **New env names** (read-only here, wired later): `LYBRA_HOME_ROOT`, `LYBRA_ACTIVE_PROJECT`.
 - **New v2 readers** (all optional; absent ⇒ `None` ⇒ legacy path preserved):
   - `home_root_from_config(config) -> Path | None`
   - `active_project_from_config(config) -> str | None`
@@ -55,9 +55,9 @@ All additions are **additive**; no existing function's signature or behavior cha
     `project.json` in the project root is, and is read in Slice 2, not here).
 - **New resolver API** (the heart of the slice; pure, fail-closed, stdlib-only):
   - `resolve_home_root(start=None, *, explicit_root=None, env=None) -> Path`
-    precedence (AIPOS-223 §Resolution algorithm, HOME ROOT): explicit flag → `AIPOS_HOME_ROOT`
+    precedence (AIPOS-223 §Resolution algorithm, HOME ROOT): explicit flag → `LYBRA_HOME_ROOT`
     → `AIPOS_WORKSPACE_ROOT` (legacy = project root, back-compat) → `.lybra/config.json
-    .home_root` (v2) → `~/.lybra/workspace` default → upward `5_tasks/queue` search (legacy
+    .home_root` (v2) → `~/.lybra/projects` default → upward `5_tasks/queue` search (legacy
     bare subtree). Fail-closed `FileNotFoundError("HOME_NOT_RESOLVED: ...")` only when none
     resolve **and** the default home does not exist (so a machine with no home yet gets a
     teaching error, not a silent mkdir — Slice 0 never creates anything).
@@ -92,7 +92,7 @@ unwired.
 
 - **Extend** `tools/aipos_cli/tests/test_workspace_root.py` — keep all 5 existing tests green
   (the regression proof) and add a `ResolutionCoreTests` class covering:
-  - home-root precedence: explicit flag > `AIPOS_HOME_ROOT` > `AIPOS_WORKSPACE_ROOT` >
+  - home-root precedence: explicit flag > `LYBRA_HOME_ROOT` > `AIPOS_WORKSPACE_ROOT` >
     config `.home_root` > default > upward search.
   - active-project precedence incl. single-project fallback **and** the multi-candidate
     `PROJECT_AMBIGUOUS` fail-closed.

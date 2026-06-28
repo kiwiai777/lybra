@@ -7,10 +7,12 @@ dependency isolation of the entry module, and the 5a release-discipline doc.
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.lybra_tui.__main__ import CONNECTION_REL, default_connection_json, run_tui
 
@@ -19,16 +21,33 @@ class ServeTuiInstallTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
+        # AIPOS-226: default_connection_json now checks the runtime root ~/.lybra/local/ first.
+        # Patch HOME to an empty temp dir so these tests are isolated from the real ~/.lybra.
+        self.fake_home = self.root / "userhome"
+        self.fake_home.mkdir(parents=True, exist_ok=True)
+        self._home_patcher = patch.dict(os.environ, {"HOME": str(self.fake_home)})
+        self._home_patcher.start()
 
     def tearDown(self) -> None:
+        self._home_patcher.stop()
         self.temp_dir.cleanup()
 
-    # --- T3: connection.json default fallback under the workspace ---
+    # --- T3: connection.json default fallback under the workspace (legacy) ---
     def test_default_connection_json_found(self) -> None:
         conn = self.root / CONNECTION_REL
         conn.parent.mkdir(parents=True, exist_ok=True)
         conn.write_text("{}", encoding="utf-8")
         self.assertEqual(default_connection_json(str(self.root)), str(conn))
+
+    def test_default_connection_json_prefers_runtime_root(self) -> None:
+        # runtime root wins over the in-workspace legacy path
+        runtime = self.fake_home / ".lybra" / "local" / "connection.json"
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        runtime.write_text("{}", encoding="utf-8")
+        ws_conn = self.root / CONNECTION_REL
+        ws_conn.parent.mkdir(parents=True, exist_ok=True)
+        ws_conn.write_text("{}", encoding="utf-8")
+        self.assertEqual(default_connection_json(str(self.root)), str(runtime))
 
     def test_default_connection_json_absent(self) -> None:
         self.assertIsNone(default_connection_json(str(self.root)))

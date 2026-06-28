@@ -18,7 +18,9 @@ class ExternalIntakeWriterTests(unittest.TestCase):
         self.repo_root = Path(self.temp_dir.name)
         for queue_state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / queue_state).mkdir(parents=True, exist_ok=True)
-        (self.repo_root / "2_projects" / "acme_client").mkdir(parents=True, exist_ok=True)
+        # AIPOS-226 Phase 2b: project existence is the home 5_tasks/queue marker (legacy
+        # 2_projects/<tag> probe removed).
+        (self.repo_root / "acme_client" / "5_tasks" / "queue").mkdir(parents=True, exist_ok=True)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -133,7 +135,7 @@ class ExternalIntakeWriterTests(unittest.TestCase):
 
 
 class ExternalProjectExistsTests(unittest.TestCase):
-    """AIPOS-225 Slice 1 — project existence via home 5_tasks/queue marker, legacy fallback."""
+    """AIPOS-226 Phase 2b — project existence via home 5_tasks/queue marker (legacy removed)."""
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -148,11 +150,13 @@ class ExternalProjectExistsTests(unittest.TestCase):
         (self.repo_root / "homeproj" / "5_tasks" / "queue").mkdir(parents=True, exist_ok=True)
         self.assertTrue(_external_project_exists(self.repo_root, "homeproj"))
 
-    def test_legacy_2projects_exists(self) -> None:
+    def test_legacy_2projects_no_longer_exists(self) -> None:
+        # AIPOS-226 Phase 2b: the legacy 2_projects/<tag> probe is removed, so a 2_projects
+        # dir alone no longer marks a project as existing.
         from tools.aipos_cli.external_intake_writer import _external_project_exists
 
         (self.repo_root / "2_projects" / "acme_client").mkdir(parents=True, exist_ok=True)
-        self.assertTrue(_external_project_exists(self.repo_root, "acme_client"))
+        self.assertFalse(_external_project_exists(self.repo_root, "acme_client"))
 
     def test_neither_not_exists(self) -> None:
         from tools.aipos_cli.external_intake_writer import _external_project_exists

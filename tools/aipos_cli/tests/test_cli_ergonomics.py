@@ -115,6 +115,9 @@ class CliErgonomicsTests(unittest.TestCase):
 
     def test_serve_status_outputs_redacted_connection_config(self) -> None:
         workspace = self._make_workspace()
+        # AIPOS-226: connection.json defaults to ~/.lybra/local/; pin it under the temp dir via
+        # --connection-json so the test stays isolated from the real runtime root.
+        conn = self.root / "runtime" / "local" / "connection.json"
         start_report(
             workspace,
             board_host="127.0.0.1",
@@ -122,11 +125,14 @@ class CliErgonomicsTests(unittest.TestCase):
             mcp_host="127.0.0.1",
             mcp_port=7118,
             start_processes=False,
+            connection_target=conn,
         )
-        config = json.loads(connection_path(workspace).read_text(encoding="utf-8"))
+        config = json.loads(conn.read_text(encoding="utf-8"))
         raw_tokens = [item["token"] for item in config["tokens"]]
 
-        code, raw = self._run_cli(["--workspace-root", str(workspace), "serve", "status", "--json"])
+        code, raw = self._run_cli(
+            ["--workspace-root", str(workspace), "serve", "--connection-json", str(conn), "status", "--json"]
+        )
         result = json.loads(raw)
 
         self.assertEqual(code, 0)

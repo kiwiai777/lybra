@@ -71,8 +71,18 @@ class ServiceModeTests(unittest.TestCase):
         self.root = Path(self.temp_dir.name) / "workspace"
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+        # AIPOS-226: the connection.json default is now the global runtime root
+        # (~/.lybra/local/connection.json). To keep these existing assertions (which check the
+        # connection path / 0600 / gitignore relative to self.root) meaningful AND isolated from
+        # the real ~/.lybra, point the runtime default at self.root for this class.
+        self._rt_patcher = patch(
+            "tools.aipos_cli.service_mode.runtime_connection_path",
+            return_value=self.root / CONNECTION_REL,
+        )
+        self._rt_patcher.start()
 
     def tearDown(self) -> None:
+        self._rt_patcher.stop()
         self.temp_dir.cleanup()
 
     def test_start_creates_gitignored_0600_connection_without_printing_raw_tokens(self) -> None:
@@ -230,6 +240,10 @@ class ServiceModeTests(unittest.TestCase):
         env.pop("LYBRA_MCP_TOKEN", None)
         env.pop("LYBRA_CAPABILITY_TOKEN", None)
         env["NO_PROXY"] = "127.0.0.1,localhost,::1"
+        # AIPOS-226: connection.json defaults to the global runtime root; pin it to a path under
+        # the temp workspace via --connection-json so the spawned process stays isolated from the
+        # real ~/.lybra (and matches the in-process patched connection_path).
+        conn_json = str(self.root / CONNECTION_REL)
         proc = subprocess.Popen(
             [
                 sys.executable,
@@ -238,6 +252,8 @@ class ServiceModeTests(unittest.TestCase):
                 "--workspace-root",
                 str(self.root),
                 "serve",
+                "--connection-json",
+                conn_json,
                 "start",
                 "--board-port",
                 str(board_port),
@@ -254,7 +270,7 @@ class ServiceModeTests(unittest.TestCase):
         stderr = ""
         try:
             _wait_for_port(mcp_port)
-            config = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+            config = json.loads(Path(conn_json).read_text(encoding="utf-8"))
             executor_token = next(item["token"] for item in config["tokens"] if item["role"] == "executor")
             response = _post_rpc(
                 mcp_port,
@@ -279,6 +295,8 @@ class ServiceModeTests(unittest.TestCase):
                     "--workspace-root",
                     str(self.root),
                     "serve",
+                    "--connection-json",
+                    conn_json,
                     "stop",
                     "--json",
                 ],
@@ -296,6 +314,75 @@ class ServiceModeTests(unittest.TestCase):
                 proc.terminate()
                 stdout, stderr = proc.communicate(timeout=5)
         self.assertEqual(proc.returncode, 0, (stdout, stderr))
+
+
+class ConnectionLocationTests(unittest.TestCase):
+    """AIPOS-226: connection.json default location is the global runtime root ~/.lybra/local/.
+
+    Tokens must NOT be written under the truth home; --connection-json (connection_target) must
+    still override. ★A1-adjacent: only the file LOCATION changes — scopes/minting are unchanged.
+    """
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp_dir.name)
+        self.fake_home = self.base / "userhome"
+        self.fake_home.mkdir(parents=True)
+        # a truth home (separate from the runtime root)
+        self.truth_home = self.base / "truth"
+        for state in ("pending", "claimed", "completed", "blocked"):
+            (self.truth_home / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_rotate_writes_to_runtime_root_not_truth_home(self) -> None:
+        from tools.aipos_cli.service_mode import runtime_connection_path
+
+        with patch.dict(os.environ, {"HOME": str(self.fake_home)}, clear=True):
+            result = rotate_report(
+                self.truth_home, board_host="127.0.0.1", board_port=7117, mcp_host="127.0.0.1", mcp_port=7118
+            )
+            runtime = runtime_connection_path()
+
+        self.assertEqual(result["verdict"], "PASS")
+        # tokens landed in ~/.lybra/local/connection.json (runtime root)
+        self.assertEqual(runtime, self.fake_home / ".lybra" / "local" / "connection.json")
+        self.assertTrue(runtime.is_file())
+        self.assertEqual(_mode(runtime), REQUIRED_CONNECTION_MODE)
+        # NOT under the truth home
+        self.assertFalse((self.truth_home / CONNECTION_REL).exists())
+        self.assertFalse((self.truth_home / ".lybra" / "local").exists())
+
+    def test_connection_json_override_still_works(self) -> None:
+        target = self.base / "custom" / "conn.json"
+        with patch.dict(os.environ, {"HOME": str(self.fake_home)}, clear=True):
+            result = rotate_report(
+                self.truth_home,
+                board_host="127.0.0.1",
+                board_port=7117,
+                mcp_host="127.0.0.1",
+                mcp_port=7118,
+                connection_target=target,
+            )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertTrue(target.is_file())
+        self.assertEqual(_mode(target), REQUIRED_CONNECTION_MODE)
+        # runtime root untouched when overridden
+        self.assertFalse((self.fake_home / ".lybra" / "local" / "connection.json").exists())
+
+    def test_scopes_unchanged_after_location_move(self) -> None:
+        # ★A1: scope contents per role are unchanged by the location move.
+        with patch.dict(os.environ, {"HOME": str(self.fake_home)}, clear=True):
+            config = build_connection_config(
+                self.truth_home, board_host="127.0.0.1", board_port=7117, mcp_host="127.0.0.1", mcp_port=7118
+            )
+        scopes = {t["role"]: sorted(t["scopes"]) for t in config["tokens"]}
+        self.assertEqual(scopes["executor"], sorted(["queue_claim", "queue_return"]))
+        self.assertEqual(scopes["owner"], sorted(["queue_claim", "queue_return", "owner_confirm", "draft_publish"]))
+        self.assertEqual(scopes["copilot"], [])
+        self.assertEqual(scopes["auditor"], sorted(["queue_claim", "audit_verdict"]))
+        self.assertEqual(scopes["owner-dispatch"], ["audit_dispatch"])
 
 
 if __name__ == "__main__":

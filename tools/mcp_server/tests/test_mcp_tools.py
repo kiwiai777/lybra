@@ -28,7 +28,9 @@ class McpToolTests(unittest.TestCase):
         self.repo_root = Path(self.temp_dir.name)
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
-        (self.repo_root / "2_projects" / "acme_client").mkdir(parents=True, exist_ok=True)
+        # AIPOS-226 Phase 2b: project existence is the home 5_tasks/queue marker (legacy
+        # 2_projects/<tag> probe removed).
+        (self.repo_root / "acme_client" / "5_tasks" / "queue").mkdir(parents=True, exist_ok=True)
         (self.repo_root / "3_context_bundles" / "examples").mkdir(parents=True, exist_ok=True)
         (self.repo_root / "3_context_bundles" / "examples" / "dev.codex.local.md").write_text(
             "\n".join(

@@ -49,7 +49,18 @@ class WorkspaceRootTests(unittest.TestCase):
     def test_explicit_start_preserves_existing_parent_search_behavior(self) -> None:
         nested = self.workspace_root / "nested" / "child"
         nested.mkdir(parents=True, exist_ok=True)
-        with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.product_root)}):
+        # AIPOS-226 FIX C②: AIPOS_WORKSPACE_ROOT is STILL ignored on the explicit-start path.
+        # We patch HOME to an empty temp dir so the real ~/.lybra/config.json home model does
+        # NOT leak in (no global config => upward legacy search applies), and clear the
+        # home-model env signals. The explicit start (a non-workspace nested subdir) then
+        # resolves via the legacy upward 5_tasks/queue marker search to the workspace root.
+        empty_home = self.root / "empty-home-A"
+        empty_home.mkdir(parents=True, exist_ok=True)
+        with patch.dict(
+            os.environ,
+            {"AIPOS_WORKSPACE_ROOT": str(self.product_root), "HOME": str(empty_home)},
+            clear=True,
+        ):
             self.assertEqual(find_repo_root(nested), self.workspace_root.resolve())
 
     def test_find_repo_root_uses_lybra_config_from_nested_cwd(self) -> None:
@@ -75,16 +86,19 @@ class ResolutionCoreTests(unittest.TestCase):
         self.root = Path(self.temp_dir.name)
         self.home = self.root / "home"
         self.home.mkdir(parents=True, exist_ok=True)
-        # one established project under the home
+        # one established project under the home (AIPOS-226 marker = queue AND project.json)
         self.project = "lybra"
-        for queue_state in ("pending", "claimed", "completed", "blocked"):
-            (self.home / self.project / "5_tasks" / "queue" / queue_state).mkdir(parents=True, exist_ok=True)
+        self._add_project(self.project)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
     def _add_project(self, name: str) -> None:
-        (self.home / name / "5_tasks" / "queue" / "pending").mkdir(parents=True, exist_ok=True)
+        for queue_state in ("pending", "claimed", "completed", "blocked"):
+            (self.home / name / "5_tasks" / "queue" / queue_state).mkdir(parents=True, exist_ok=True)
+        (self.home / name / "project.json").write_text(
+            json.dumps({"project": name, "config_version": 1}), encoding="utf-8"
+        )
 
     # --- home root precedence ---
 
@@ -94,55 +108,43 @@ class ResolutionCoreTests(unittest.TestCase):
             self.home.resolve(),
         )
 
-    def test_resolve_home_root_aipos_home_root_env(self) -> None:
+    def test_resolve_home_root_lybra_home_root_env(self) -> None:
         self.assertEqual(
             resolve_home_root(env={HOME_ROOT_ENV: str(self.home)}),
             self.home.resolve(),
         )
 
-    def test_resolve_home_root_legacy_workspace_root_returns_parent(self) -> None:
-        project_root = self.home / self.project
-        self.assertEqual(
-            resolve_home_root(env={LEGACY_WORKSPACE_ROOT_ENV: str(project_root)}),
-            self.home.resolve(),
-        )
-
-    def test_resolve_home_root_from_config(self) -> None:
-        config_dir = self.root / "cfg"
-        (config_dir / ".lybra").mkdir(parents=True, exist_ok=True)
-        (config_dir / ".lybra" / "config.json").write_text(
+    def test_resolve_home_root_from_global_config(self) -> None:
+        # AIPOS-226: home_root now comes from the GLOBAL ~/.lybra/config.json (patched HOME).
+        fake_home = self.root / "userhome"
+        (fake_home / ".lybra").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".lybra" / "config.json").write_text(
             json.dumps({"config_version": 2, "home_root": str(self.home)}), encoding="utf-8"
         )
         self.assertEqual(
-            resolve_home_root(config_dir, env={}),
+            resolve_home_root(env={"HOME": str(fake_home)}),
             self.home.resolve(),
         )
 
-    def test_resolve_home_root_default_when_present(self) -> None:
-        fake_home = self.root / "userhome"
-        (fake_home / ".lybra" / "workspace").mkdir(parents=True, exist_ok=True)
-        empty_start = self.root / "elsewhere"
-        empty_start.mkdir(parents=True, exist_ok=True)
-        with patch.dict(os.environ, {"HOME": str(fake_home)}, clear=True):
-            self.assertEqual(
-                resolve_home_root(empty_start, env={}),
-                (fake_home / ".lybra" / "workspace").resolve(),
-            )
-
-    def test_resolve_home_root_upward_search_returns_parent(self) -> None:
-        nested = self.home / self.project / "deep" / "child"
-        nested.mkdir(parents=True, exist_ok=True)
+    def test_resolve_home_root_default_need_not_exist(self) -> None:
+        # AIPOS-226: the default ~/.lybra/projects is returned even if it does NOT exist
+        # (callers like `project new` create project subtrees under it). No fail-closed.
         fake_home = self.root / "userhome-empty"
-        with patch.dict(os.environ, {"HOME": str(fake_home)}, clear=True):
-            self.assertEqual(resolve_home_root(nested, env={}), self.home.resolve())
+        self.assertEqual(
+            resolve_home_root(env={"HOME": str(fake_home)}),
+            (fake_home / ".lybra" / "projects"),
+        )
 
-    def test_resolve_home_root_fail_closed_when_nothing_resolves(self) -> None:
-        empty = self.root / "void"
-        empty.mkdir(parents=True, exist_ok=True)
-        fake_home = self.root / "userhome-empty2"
-        with patch.dict(os.environ, {"HOME": str(fake_home)}, clear=True), self.assertRaises(FileNotFoundError) as cm:
-            resolve_home_root(empty, env={})
-        self.assertIn("HOME_NOT_RESOLVED", str(cm.exception))
+    def test_resolve_home_root_env_beats_global_config(self) -> None:
+        fake_home = self.root / "userhome2"
+        (fake_home / ".lybra").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".lybra" / "config.json").write_text(
+            json.dumps({"home_root": str(self.root / "configured")}), encoding="utf-8"
+        )
+        self.assertEqual(
+            resolve_home_root(env={"HOME": str(fake_home), HOME_ROOT_ENV: str(self.home)}),
+            self.home.resolve(),
+        )
 
     # --- active project precedence ---
 
@@ -154,27 +156,38 @@ class ResolutionCoreTests(unittest.TestCase):
 
     def test_resolve_active_project_env(self) -> None:
         self.assertEqual(
-            resolve_active_project(self.home, request_arg="beta", env={ACTIVE_PROJECT_ENV: "alpha"}),
+            resolve_active_project(self.home, env={ACTIVE_PROJECT_ENV: "alpha"}),
             "alpha",
         )
 
-    def test_resolve_active_project_request_arg(self) -> None:
-        self.assertEqual(resolve_active_project(self.home, request_arg="gamma", env={}), "gamma")
-
-    def test_resolve_active_project_from_config(self) -> None:
+    def test_resolve_active_project_from_global_config(self) -> None:
         self.assertEqual(
-            resolve_active_project(self.home, env={}, config={"active_project": "delta"}),
+            resolve_active_project(self.home, env={}, global_config={"active_project": "delta"}),
             "delta",
         )
 
+    def test_resolve_active_project_from_in_workspace_config_compat(self) -> None:
+        # AIPOS-225 board_adapter compat: when an in-workspace `config` dict is passed it is
+        # honored as the active_project source (Slice-1 fallback stays byte-identical).
+        self.assertEqual(
+            resolve_active_project(self.home, env={}, config={"active_project": "epsilon"}),
+            "epsilon",
+        )
+
     def test_resolve_active_project_single_fallback(self) -> None:
-        self.assertEqual(resolve_active_project(self.home, env={}), self.project)
+        self.assertEqual(resolve_active_project(self.home, env={}, global_config={}), self.project)
 
     def test_resolve_active_project_ambiguous_fail_closed(self) -> None:
         self._add_project("second")
         with self.assertRaises(ValueError) as cm:
-            resolve_active_project(self.home, env={})
+            resolve_active_project(self.home, env={}, global_config={})
         self.assertIn("PROJECT_AMBIGUOUS", str(cm.exception))
+
+    def test_project_candidate_requires_project_json(self) -> None:
+        # A dir with a queue but NO project.json is NOT a candidate (marker = both).
+        (self.home / "noproj" / "5_tasks" / "queue" / "pending").mkdir(parents=True, exist_ok=True)
+        # still resolves to the single real project, ignoring the markerless dir
+        self.assertEqual(resolve_active_project(self.home, env={}, global_config={}), self.project)
 
     # --- project root ---
 
@@ -190,6 +203,13 @@ class ResolutionCoreTests(unittest.TestCase):
         msg = str(cm.exception)
         self.assertIn("PROJECT_NOT_ESTABLISHED", msg)
         self.assertIn("lybra project new ghost", msg)
+
+    def test_resolve_project_root_requires_project_json(self) -> None:
+        # queue present but project.json missing -> not established (marker = both)
+        (self.home / "halfdone" / "5_tasks" / "queue" / "pending").mkdir(parents=True, exist_ok=True)
+        with self.assertRaises(FileNotFoundError) as cm:
+            resolve_project_root(self.home, "halfdone")
+        self.assertIn("PROJECT_NOT_ESTABLISHED", str(cm.exception))
 
     # --- governance paths (rulings 1=B, 7) ---
 

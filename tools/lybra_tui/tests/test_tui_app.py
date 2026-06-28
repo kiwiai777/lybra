@@ -640,6 +640,38 @@ class TuiAppPilotTests(unittest.IsolatedAsyncioTestCase):
             md = app.query("#conversation Markdown")
             self.assertTrue(len(md) >= 1, "copilot answer must render as a Markdown widget")
 
+    async def test_project_and_home_commands_are_in_command_list(self) -> None:
+        # AIPOS-226 Slice 2: the local Owner actions appear in the /help + autocomplete set.
+        from tools.lybra_tui.app import _COMMAND_NAMES
+
+        self.assertIn("/project", _COMMAND_NAMES)
+        self.assertIn("/home", _COMMAND_NAMES)
+
+    async def test_slash_project_new_scaffolds_against_temp_home(self) -> None:
+        # AIPOS-226 Slice 2: `/project new <name>` is a LOCAL Owner scaffold (not gate, not
+        # copilot). It creates the project tree under the resolved home and prints a success line.
+        import asyncio
+        import os
+        import tempfile
+        from unittest.mock import MagicMock, patch
+
+        from tools.lybra_tui.app import build_app
+
+        with tempfile.TemporaryDirectory() as home:
+            with patch.dict(os.environ, {"LYBRA_HOME_ROOT": home}):
+                app = build_app(_make_session(), MagicMock(), workspace_root="/tmp/ws")
+                async with app.run_test() as pilot:
+                    inp = app.query_one("#cmd")
+                    inp.text = "/project new demo"
+                    await pilot.press("enter")
+                    await asyncio.sleep(0.1)
+                    # scaffolded tree exists
+                    self.assertTrue(os.path.isdir(os.path.join(home, "demo", "5_tasks", "queue", "pending")))
+                    self.assertTrue(os.path.isfile(os.path.join(home, "demo", "project.json")))
+                    # a success line was rendered in the transcript
+                    texts = [str(w.render()) for w in app.query("#conversation Static")]
+                    self.assertTrue(any("Created project root" in t for t in texts))
+
     async def test_thinking_line_blinks_word_and_shows_token_field(self) -> None:
         # AIPOS-222 fix 5: the live thinking line shows a pulsing "✽ Thinking…" (marker+word blink
         # together) with an honest token field (↑ shown as a `~` estimate while in-flight); on
