@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +13,28 @@ from tools.aipos_cli.home_git import (
     is_git_repo,
     plan_home_git_init,
 )
+
+# AIPOS-233 (test hermeticity). `home_git.git_repo_ancestor` self-walks Path.parents to `/`
+# (correct topology-C nested-repo safety — product behavior is BYTE-UNCHANGED here). A stray
+# `.git` in an ancestor of the system temp dir (e.g. a polluted `/tmp/.git`, which is EXTERNAL
+# environment pollution — grep-proven: Lybra never `git init`s outside these tests' own
+# cwd=self.home calls) would make a /tmp-rooted test home walk up to it and fail. A clean /tmp
+# is a genuine PREMISE that the tests cannot engineer away. This guard makes a polluted env
+# announce itself with ONE clear message naming the stray .git, instead of masquerading as a
+# home_git regression (the prior cryptic 3-ERROR/1-FAIL pattern).
+HERMETIC_GIT_ENV = {
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+}
+
+
+def assert_no_ancestor_git(temp_root: Path) -> None:
+    stray = git_repo_ancestor(temp_root)
+    if stray is not None:
+        raise AssertionError(
+            f"non-hermetic env: stray ancestor .git at {stray}; remove it "
+            f"(the shared /tmp is polluted) — this is NOT a home_git regression"
+        )
 
 
 class HomeGitPlanTests(unittest.TestCase):
@@ -56,11 +79,26 @@ class HomeGitExecuteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.home = Path(self.temp_dir.name)
+        # AIPOS-233 git-config hermeticity (defense-in-depth): isolate user/system gitconfig so
+        # the product's inherited-env git subprocesses + the test helper are deterministic. HOME
+        # points at the temp dir; restored in tearDown. (commit identity already uses -c, so this
+        # is hardening, not a behavior change.)
+        self._saved_env = {k: os.environ.get(k) for k in (*HERMETIC_GIT_ENV, "HOME")}
+        os.environ.update(HERMETIC_GIT_ENV)
+        os.environ["HOME"] = str(self.home)
+        # AIPOS-233 diagnostic: a clean /tmp is a PREMISE; if it is polluted, fail with ONE clear
+        # message naming the stray .git rather than the cryptic ALREADY_IN_GIT_REPO pattern.
+        assert_no_ancestor_git(self.home)
         # something to commit (truth)
         (self.home / "5_tasks" / "queue" / "pending").mkdir(parents=True)
         (self.home / "5_tasks" / "queue" / "pending" / ".keep").write_text("", encoding="utf-8")
 
     def tearDown(self) -> None:
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         self.temp_dir.cleanup()
 
     def _git(self, *args: str) -> str:
@@ -119,6 +157,37 @@ class HomeGitExecuteTests(unittest.TestCase):
         self.assertTrue((project / ".git").exists())
         self.assertFalse((self.home / ".git").exists())  # home not a repo
         self.assertTrue(result["push_hint"])
+
+
+class HermeticGuardTests(unittest.TestCase):
+    """AIPOS-233: the diagnostic turns a polluted env into ONE clear, named message — not the
+    cryptic 3-ERROR/1-FAIL home_git pattern. Deterministic + self-hermetic: the stray `.git` is
+    created inside this test's OWN tempdir (NOT `/tmp/.git`), so it never pollutes other tests.
+    """
+
+    def test_guard_passes_on_clean_temp_root(self) -> None:
+        with tempfile.TemporaryDirectory() as base:
+            child = Path(base) / "home"
+            child.mkdir()
+            # No ancestor .git within this controlled subtree -> guard is silent.
+            try:
+                assert_no_ancestor_git(child)
+            except AssertionError:  # pragma: no cover - only if the shared /tmp is itself polluted
+                self.skipTest("shared /tmp is polluted by an external .git; clean it to run this")
+
+    def test_guard_names_stray_ancestor_git(self) -> None:
+        with tempfile.TemporaryDirectory() as base:
+            base_path = Path(base).resolve()
+            (base_path / ".git").mkdir()  # controlled stray, nearest ancestor
+            child = base_path / "home"
+            child.mkdir()
+            with self.assertRaises(AssertionError) as cm:
+                assert_no_ancestor_git(child)
+            msg = str(cm.exception)
+            # names the stray .git location (positive truth, not a generic failure)
+            self.assertIn(str(base_path), msg)
+            # states it is an environment problem, not a product regression
+            self.assertIn("NOT a home_git regression", msg)
 
 
 if __name__ == "__main__":
