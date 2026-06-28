@@ -31,9 +31,11 @@ from textual.widgets.option_list import Option
 
 from tools.aipos_cli.home_git import execute_home_git_init, plan_home_git_init
 from tools.aipos_cli.workspace_config import (
+    _project_candidates,
     project_json_path,
     resolve_home_root,
     scaffold_project,
+    set_active_project,
 )
 from tools.lybra_tui.presentation import LYBRA_GREEN, banner, color_enabled
 from tools.lybra_tui.state import COPILOT_MODE, MODES, TuiSession
@@ -49,7 +51,7 @@ COMMANDS: tuple[tuple[str, str], ...] = (
     ("/gates", "list pending confirm gates (read-only view; confirm is OOB)"),
     ("/mode", "switch mode: /mode [observe|confirm|copilot]"),
     ("/audit", "compact L3 authority verdict for a task: /audit [task_id] (read-only)"),
-    ("/project", "Owner: scaffold a project under the home: /project new <name> (local, not a gate op)"),
+    ("/project", "Owner: /project (list) | new <name> | switch <name> — local, not a gate op"),
     ("/home", "Owner: one-shot local git init of the home: /home git-init (no remote, no push)"),
     ("/compact", "compress the current chat context now (read-only; trims chat only, never truth)"),
     ("/clear", "clear the conversation area"),
@@ -641,12 +643,35 @@ class LybraTui(App):
     # --- AIPOS-226 (Slice 2): local Owner actions (NOT gate, NOT copilot) ----------
 
     def _cmd_project(self, args: list[str]) -> None:
-        # Owner scaffold (ruling 2=a): a local filesystem action — no gate confirm, no token,
-        # never routed through the copilot. Only `/project new <name>` is wired in the TUI.
-        if not args or args[0] != "new" or len(args) < 2:
-            self._system("Usage: /project new <name>.")
+        # Owner-side local actions (ruling 2=a / AIPOS-230): filesystem / runtime-config only — no
+        # gate confirm, no token, never routed through the copilot.
+        #   /project                -> list candidate projects + show the active one
+        #   /project new <name>     -> scaffold a project under the home (Slice 2)
+        #   /project switch <name>  -> set the active project (Slice 6): writes the runtime config
+        #                              so the gate resolves it, updates session + rebinds copilot.
+        if not args:
+            self._cmd_project_list()
             return
-        name = args[1]
+        verb = args[0]
+        if verb == "new" and len(args) >= 2:
+            self._cmd_project_new(args[1])
+        elif verb == "switch" and len(args) >= 2:
+            self._cmd_project_switch(args[1])
+        else:
+            self._system("Usage: /project (list) | /project new <name> | /project switch <name>.")
+
+    def _cmd_project_list(self) -> None:
+        try:
+            home = resolve_home_root()
+            candidates = _project_candidates(home)
+        except Exception as exc:
+            self._system(f"Error: {exc}")
+            return
+        active = self._session.active_project or "(none — gate resolves via ~/.lybra/config.json)"
+        listing = "\n".join(f"  {'* ' if c == self._session.active_project else '  '}{c}" for c in candidates) or "  (no established projects)"
+        self._pre(f"Projects under {home}:\n{listing}\n\nActive: {active}")
+
+    def _cmd_project_new(self, name: str) -> None:
         try:
             home = resolve_home_root()
             root = scaffold_project(home, name)
@@ -659,6 +684,28 @@ class LybraTui(App):
             f"next: lybra serve with LYBRA_HOME_ROOT={home}"
         )
         self._system("Local Owner scaffold (no gate operation, no token minted).")
+
+    def _cmd_project_switch(self, name: str) -> None:
+        # AIPOS-230 §1b: a local Owner action. Writes the runtime config active_project (so the gate
+        # resolves the switched project via §1a) + updates client state + rebinds the copilot
+        # session's project. NOT a copilot write; no token; no gate confirm. Scope enforcement stays
+        # in the gate (Slice 5): a switch outside the token's projects surfaces as PROJECT_SCOPE_DENIED
+        # on the next gate call — never hidden here.
+        try:
+            path = set_active_project(name)
+            self._session.set_active_project(name)
+        except Exception as exc:
+            self._system(f"Error: {exc}")
+            return
+        if self._copilot is not None and hasattr(self._copilot, "project"):
+            self._copilot.project = name
+        self._pre(
+            f"Active project -> {name}\n"
+            f"runtime config: {path}\n"
+            f"The gate now resolves '{name}' as the active project; calls outside your token's "
+            f"projects will return PROJECT_SCOPE_DENIED."
+        )
+        self._system("Local Owner action (runtime config only — no gate operation, no token minted).")
 
     def _cmd_home(self, args: list[str]) -> None:
         # Owner one-shot local git setup. Transparent: prints the exact plan first, then runs it.

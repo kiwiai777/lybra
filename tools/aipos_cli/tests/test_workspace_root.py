@@ -21,6 +21,7 @@ from tools.aipos_cli.workspace_config import (
     resolve_project_root,
     resolve_workspace_context,
     resolve_workspace_root,
+    set_active_project,
     write_workspace_config,
 )
 
@@ -299,6 +300,67 @@ class WorkspaceContextTests(unittest.TestCase):
                 resolve_workspace_root(self.ws, env=env),
                 resolve_workspace_context(self.ws, env=env)[0],
             )
+
+
+class ActiveProjectSequentialFallbackTests(unittest.TestCase):
+    """AIPOS-230 §1a — resolve_active_project sequential fallback reaches the GLOBAL active_project
+    even when an empty in-workspace config is passed; set_active_project round-trips through it."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.home = self.root / "home"
+        self.fake_home = self.root / "userhome"
+        for name in ("alpha", "beta"):  # ★ TWO projects -> single-project fallback is ambiguous
+            for qs in ("pending", "claimed", "completed", "blocked"):
+                (self.home / name / "5_tasks" / "queue" / qs).mkdir(parents=True, exist_ok=True)
+            (self.home / name / "project.json").write_text(
+                json.dumps({"project": name, "config_version": 1}), encoding="utf-8"
+            )
+        (self.fake_home / ".lybra").mkdir(parents=True, exist_ok=True)
+        (self.fake_home / ".lybra" / "config.json").write_text(
+            json.dumps({"config_version": 2, "home_root": str(self.home)}), encoding="utf-8"
+        )
+        self.env = {"HOME": str(self.fake_home)}
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_multiproject_no_active_is_ambiguous(self) -> None:
+        with self.assertRaises(ValueError) as cm:
+            resolve_active_project(self.home, env=self.env, config={})
+        self.assertIn("PROJECT_AMBIGUOUS", str(cm.exception))
+
+    def test_set_active_project_roundtrip_resolves_via_global(self) -> None:
+        # ★ crux (catches the v1 false-pass): empty in-workspace config MUST fall through to the
+        # global active_project. ≥2 projects so a single-project fallback can't mask it.
+        path = set_active_project("beta", env=self.env)
+        self.assertTrue(path.exists())
+        self.assertEqual(resolve_active_project(self.home, env=self.env, config={}), "beta")
+
+    def test_set_active_project_preserves_home_root(self) -> None:
+        set_active_project("beta", env=self.env)
+        cfg = json.loads((self.fake_home / ".lybra" / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(cfg["active_project"], "beta")
+        self.assertEqual(cfg["home_root"], str(self.home))  # preserved, not clobbered
+
+    def test_inworkspace_active_wins_over_global_byte_compat(self) -> None:
+        # AIPOS-225 Slice-1 byte-compat: an in-workspace config with active_project still wins.
+        set_active_project("beta", env=self.env)
+        self.assertEqual(
+            resolve_active_project(self.home, env=self.env, config={"active_project": "alpha"}),
+            "alpha",
+        )
+
+    def test_env_wins_over_global(self) -> None:
+        set_active_project("beta", env=self.env)
+        env = dict(self.env, LYBRA_ACTIVE_PROJECT="alpha")
+        self.assertEqual(resolve_active_project(self.home, env=env, config={}), "alpha")
+
+    def test_all_empty_fail_closed(self) -> None:
+        # global has no active_project + 2 projects -> still PROJECT_AMBIGUOUS (no silent default).
+        with self.assertRaises(ValueError):
+            resolve_active_project(self.home, env=self.env, config={})
 
 
 if __name__ == "__main__":

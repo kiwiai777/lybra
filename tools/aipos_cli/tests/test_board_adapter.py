@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -394,11 +395,18 @@ class GovernanceResolutionTests(unittest.TestCase):
             self.assertIn("CHILD", doc["excerpt"])
 
     def test_real_ambiguity_fails_closed(self) -> None:
-        # no active_project in config + two sibling project candidates → PROJECT_AMBIGUOUS
+        # no active_project in config + two sibling project candidates → PROJECT_AMBIGUOUS.
+        # AIPOS-230 §1a: with the sequential fallback, an in-workspace config lacking active_project
+        # now falls through to the GLOBAL ~/.lybra/config.json — so this test must isolate HOME to an
+        # empty dir, else the real global active_project would (correctly) resolve and mask the
+        # ambiguity. Isolated, resolution reaches the single-project fallback → ambiguous.
         self._write_config({"config_version": 1, "workspace_root": "."})
         (self.root / "projA" / "5_tasks" / "queue").mkdir(parents=True, exist_ok=True)
         (self.root / "projB" / "5_tasks" / "queue").mkdir(parents=True, exist_ok=True)
-        result = get_governance(self.root)
+        empty_home = self.root / "empty-home"
+        empty_home.mkdir(parents=True, exist_ok=True)
+        with patch.dict(os.environ, {"HOME": str(empty_home)}):
+            result = get_governance(self.root)
         self.assertFalse(result["ok"])
         self.assertIn("PROJECT_AMBIGUOUS", json.dumps(result))
 

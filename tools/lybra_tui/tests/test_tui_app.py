@@ -60,6 +60,20 @@ class TuiAppTests(unittest.TestCase):
         constructed = run.call_args.args[0]
         self.assertIsInstance(constructed, LybraTui)
 
+    def test_session_active_project_state_and_status_line(self) -> None:
+        # AIPOS-230 §2: client-side active-project state mirrors set_mode; status line shows it.
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.state import TuiSession
+
+        session = TuiSession(gate_url="http://x", _client=MagicMock())
+        self.assertIsNone(session.active_project)
+        self.assertEqual(session.set_active_project("beta"), "beta")
+        self.assertEqual(session.active_project, "beta")
+        self.assertIn("project beta", session.status_line())
+        with self.assertRaises(ValueError):
+            session.set_active_project("")  # non-empty required
+
 
 def _make_session(mode: str = "copilot"):
     """A read-only stub TuiSession with a stable status line (no network)."""
@@ -671,6 +685,34 @@ class TuiAppPilotTests(unittest.IsolatedAsyncioTestCase):
                     # a success line was rendered in the transcript
                     texts = [str(w.render()) for w in app.query("#conversation Static")]
                     self.assertTrue(any("Created project root" in t for t in texts))
+
+    async def test_slash_project_switch_sets_active_and_rebinds_copilot(self) -> None:
+        # AIPOS-230 §1b: `/project switch <name>` is a LOCAL Owner action — writes the runtime
+        # config (patched here), updates session state, and rebinds the copilot session's project.
+        # No gate confirm / no token / no copilot write. (Scope enforcement stays in the gate.)
+        import asyncio
+        from pathlib import Path
+        from unittest.mock import MagicMock, patch
+
+        from tools.lybra_tui.app import build_app
+
+        session = _make_session()
+        copilot = MagicMock()
+        copilot.project = "old"
+        app = build_app(session, copilot, workspace_root="/tmp/ws")
+        async with app.run_test() as pilot:
+            with patch(
+                "tools.lybra_tui.app.set_active_project",
+                return_value=Path("/tmp/userhome/.lybra/config.json"),
+            ) as setp:
+                app.query_one("#cmd").text = "/project switch beta"
+                await pilot.press("enter")
+                await asyncio.sleep(0.1)
+            setp.assert_called_once_with("beta")
+            session.set_active_project.assert_called_once_with("beta")
+            self.assertEqual(copilot.project, "beta")  # copilot session rebound
+            texts = [str(w.render()) for w in app.query("#conversation Static")]
+            self.assertTrue(any("Active project -> beta" in t for t in texts))
 
     async def test_thinking_line_blinks_word_and_shows_token_field(self) -> None:
         # AIPOS-222 fix 5: the live thinking line shows a pulsing "✽ Thinking…" (marker+word blink

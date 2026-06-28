@@ -39,6 +39,7 @@ class TuiSession:
     _client: GateClient
     scope_basis: dict[str, Any] = field(default_factory=dict)
     mode: str = OBSERVE_MODE
+    active_project: str | None = None
 
     @classmethod
     def connect(
@@ -95,13 +96,24 @@ class TuiSession:
         self.mode = name
         return self.mode
 
+    def set_active_project(self, name: str) -> str:
+        # AIPOS-230 §2: client-side active-project state, mirroring set_mode. Pure display/context;
+        # the gate-side switch (which makes enforcement see the new project) is the app Owner action
+        # that writes the runtime config — this only records what the TUI shows / where DRAFTs land.
+        project = str(name or "").strip()
+        if not project:
+            raise ValueError("active project name must be non-empty")
+        self.active_project = project
+        return self.active_project
+
     def status_line(self) -> str:
         role = self.scope_basis.get("role") or "?"
         scope_text = ",".join(self.scopes) or "unknown"
         oc = "yes" if self.has_owner_confirm else "no"
+        project_text = self.active_project or "—"
         return (
             f"gate {self.gate_url} · token {self.token_fingerprint} · role {role} · "
-            f"scopes [{scope_text}] · owner_confirm {oc} · read-only-view · mode {self.mode}"
+            f"scopes [{scope_text}] · owner_confirm {oc} · project {project_text} · read-only-view · mode {self.mode}"
         )
 
     # --- observe: state via gate read-tool, never direct file reads ---
