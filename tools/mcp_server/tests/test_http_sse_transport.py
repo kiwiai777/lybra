@@ -145,7 +145,9 @@ class HttpSseTransportTests(unittest.TestCase):
 
     @contextmanager
     def server(self, *, token: str = "secret", capability_token: str | None = None) -> Iterator[str]:
-        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}
+        # AIPOS-229 (Slice 5): the test bearer/capability is project-scoped (acme_client); set the
+        # active project so the now-enforced project gate matches (project-match-PASS path).
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_ACTIVE_PROJECT": "acme_client"}
         if capability_token is not None:
             env["LYBRA_CAPABILITY_TOKEN"] = capability_token
         config = HttpSseConfig(

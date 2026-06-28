@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from tools.aipos_cli.board_adapter import (
+    _resolve_active_project_for,
     audit_dispatch_task,
     audit_verdict_task,
     claim_task,
@@ -112,13 +113,12 @@ def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str
             "scopes": list(capability.get("operations") or []),
             "mcp_endpoint_ref": "local_service_mcp",
         }
-        # AIPOS-228 (Slice 4): echo the descriptive `projects` dimension + its "not yet enforced"
-        # marker — ONLY when the capability carries it, so a token without `projects` keeps a
-        # byte-identical scope_basis (R-d). Echo only; the gate makes NO allow/deny decision from
-        # `projects` in Slice 4 (enforcement is Slice 5).
+        # AIPOS-228/229: echo the `projects` dimension + its enforcement marker — ONLY when the
+        # capability carries it, so a token without `projects` keeps a byte-identical scope_basis.
+        # As of Slice 5 the project gate ENFORCES it at the dispatch choke-point.
         if capability.get("projects"):
             scope_basis["projects"] = list(capability.get("projects") or [])
-            scope_basis["projects_enforced"] = False
+            scope_basis["projects_enforced"] = True
         payload.setdefault("scope_basis", scope_basis)
     return {
         "content": [{"type": "text", "text": _json_text(payload)}],
@@ -227,6 +227,79 @@ def _scope_denied_result_for(scope: str, label: str) -> dict[str, Any]:
         ),
         doc_ref="AIPOS-109 capability token scope-gated tool visibility",
     )
+
+
+# --- AIPOS-229 (Slice 5): token project ENFORCEMENT -------------------------------------------
+# The project gate is a NEW pre-check ADDED IN FRONT of the operation-scope (★A1) gate at the
+# single dispatch choke-point (dispatch_tool). It can ONLY deny (narrow); it never bypasses or
+# weakens ★A1 and never grants an operation a role lacks. PROJECT_SCOPE_DENIED is a denial, not a
+# new operation class. PROJECT_SCOPE_DENIED is a denial category, NOT a mintable operation scope,
+# so there is deliberately no *_SCOPE constant for it (it is never granted to a role).
+
+
+def _capability_in_project(active_project: str) -> bool:
+    """True if the request's active_project is within the token's `projects`.
+
+    AIPOS-229 §2: a token WITHOUT a `projects` field is NOT narrowed by project -> True (back-compat
+    byte-identical). With `projects`, membership decides. Callers MUST check presence first (R-ii)
+    so an absent-`projects` token never triggers active_project resolution.
+    """
+    projects = _capability_token().get("projects")
+    if not projects:
+        return True
+    return active_project in [str(p) for p in projects]
+
+
+def _project_scope_denied_result(detail: str) -> dict[str, Any]:
+    return _teaching_error(
+        "PROJECT_SCOPE_DENIED",
+        f"Connection capability is project-scoped and does not authorize this project: {detail}",
+        (
+            "This local role token carries a `projects` scope that does not include the active "
+            "project. Rotate a token scoped to this project (`lybra serve rotate --project <name>`) "
+            "or operate within an authorized project."
+        ),
+        doc_ref="AIPOS-229 token project enforcement",
+    )
+
+
+def _project_gate_denied() -> dict[str, Any] | None:
+    """The project gate (AIPOS-229). Returns a PROJECT_SCOPE_DENIED result to BLOCK, or None to
+    fall through to the operation-scope (★A1) gate.
+
+    R-ii ordering (back-compat critical):
+      1. `projects` ABSENT -> return None (allow); do NOT resolve active_project at all.
+      2. `projects` PRESENT -> resolve active_project; resolution failure -> fail-closed deny
+         (reachable ONLY in this branch); else membership test.
+    """
+    projects = _capability_token().get("projects")
+    if not projects:
+        return None
+    try:
+        active_project = _resolve_active_project_for(_repo_root(), None)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        return _project_scope_denied_result(f"active project could not be resolved ({exc})")
+    if not _capability_in_project(active_project):
+        return _project_scope_denied_result(
+            f"active project '{active_project}' is not in the token's projects {list(projects)}"
+        )
+    return None
+
+
+def dispatch_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
+    """Single dispatch choke-point for every tools/call (AIPOS-229 R-i / R-α).
+
+    The project gate runs HERE, before the handler — so it is structurally unavoidable for ALL 18
+    tools (read + write), with ZERO exemptions. The handler's own operation-scope (★A1) check runs
+    after, unchanged. Ordering: project gate -> ★A1 -> controlled-execute.
+    """
+    handler = TOOL_HANDLERS.get(name)
+    if handler is None:
+        raise KeyError(name)
+    denied = _project_gate_denied()
+    if denied is not None:
+        return denied
+    return handler(arguments)
 
 
 def _intake_scope_allowed() -> bool:
@@ -1704,7 +1777,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "name": "lybra_intake_submit_dry_run",
         "description": (
             "When to use: create a controlled execute preview for normalized external intake that should become an Owner-reviewed draft. "
-            "Prerequisites: this MCP connection must have a capability_token with intake_submit scope; source_tag must match an approved external intake source from external_intake_registry.md; client_tag must map to an existing project (project dimension not yet enforced — Slice 5); this tool does not publish or execute work. "
+            "Prerequisites: this MCP connection must have a capability_token with intake_submit scope; source_tag must match an approved external intake source from external_intake_registry.md; client_tag must map to an existing project; project-scoped capability tokens are enforced (PROJECT_SCOPE_DENIED when the active project is not in the token's projects); this tool does not publish or execute work. "
             "Return structure: a controlled execute envelope with verdict, planned_writes, dry_run_token, dry_run_snapshot_hash, dry_run_created_at, dry_run_expires_at, and rendered draft content. "
             "Next-step hint: pass dry_run_token to lybra_intake_submit_confirm; the resulting draft waits for Owner publish and no agent takes automatic follow-up action."
         ),
@@ -1761,7 +1834,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "name": "lybra_owner_decision_record_dry_run",
         "description": (
             "When to use: create a controlled execute preview for recording a scoped Owner decision after an Owner Decision Gate has explicit evidence. "
-            "Prerequisites: this MCP connection must have a capability_token with owner_decision_record scope; owner_approval_evidence is required and must align with applies_to; capability_scope must include owner_decision_record (and names the target project when present — project dimension not yet enforced, Slice 5); this tool does not publish, mutate queues, append orchestration events, or execute follow-up work. "
+            "Prerequisites: this MCP connection must have a capability_token with owner_decision_record scope; owner_approval_evidence is required and must align with applies_to; capability_scope must include owner_decision_record (and the active project must be in the token's projects when project-scoped — enforced as PROJECT_SCOPE_DENIED); this tool does not publish, mutate queues, append orchestration events, or execute follow-up work. "
             "Return structure: a controlled execute envelope with verdict, planned_writes, dry_run_token, dry_run_snapshot_hash, dry_run_created_at, dry_run_expires_at, and rendered Owner decision record content. "
             "Next-step hint: pass dry_run_token to lybra_owner_decision_record_confirm; confirm writes only a records artifact under 5_tasks/records/owner_decisions and no agent takes automatic follow-up action."
         ),
@@ -2029,6 +2102,20 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
 
 
 def visible_tool_descriptors() -> list[dict[str, Any]]:
+    # AIPOS-229 (Slice 5): introspection is ADVISORY (R-α: descriptors are not the enforcement
+    # path — the authoritative project gate is the dispatch choke-point). Best-effort: when the
+    # token is project-scoped AND the active project RESOLVES to one outside the token's projects,
+    # reflect the narrowing by listing nothing (every call would be PROJECT_SCOPE_DENIED). When the
+    # active project cannot be resolved, do NOT hide here — the call path still fail-closes. A token
+    # without `projects` is unaffected (back-compat byte-identical: no resolution attempted).
+    _projects = _capability_token().get("projects")
+    if _projects:
+        try:
+            _active = _resolve_active_project_for(_repo_root(), None)
+        except (ValueError, FileNotFoundError, OSError):
+            _active = None
+        if _active is not None and _active not in [str(p) for p in _projects]:
+            return []
     descriptors = list(READ_TOOL_DESCRIPTORS)
     if _intake_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_intake_submit"))

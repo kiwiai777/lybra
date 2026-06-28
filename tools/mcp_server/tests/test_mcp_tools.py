@@ -97,7 +97,13 @@ class McpToolTests(unittest.TestCase):
             "method": "tools/call",
             "params": {"name": name, "arguments": arguments or {}},
         }
-        with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}):
+        # AIPOS-229 (Slice 5): the test capability is project-scoped (projects=["acme_client"]);
+        # the gate now ENFORCES it, so the workspace's active project must resolve to acme_client
+        # for a matching (non-denied) call. This exercises the project-match-PASS path end-to-end.
+        with patch.dict(
+            os.environ,
+            {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_ACTIVE_PROJECT": "acme_client"},
+        ):
             response = handle_request(request)
         assert response is not None
         return response
@@ -321,7 +327,9 @@ class McpToolTests(unittest.TestCase):
         return payload
 
     def list_tool_names(self, capability_token: str | None = None) -> list[str]:
-        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}
+        # AIPOS-229: the test capability is project-scoped (acme_client); set the active project so
+        # introspection reflects an authorized session (otherwise the project gate hides all tools).
+        env = {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_ACTIVE_PROJECT": "acme_client"}
         if capability_token is not None:
             env["LYBRA_CAPABILITY_TOKEN"] = capability_token
         with patch.dict(os.environ, env, clear=True):

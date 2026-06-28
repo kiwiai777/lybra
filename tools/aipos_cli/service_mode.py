@@ -267,16 +267,16 @@ def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None
         "fingerprint": secret_fingerprint(token),
         "token": token,
     }
-    # AIPOS-228 (Slice 4): optional `projects` dimension — MINT/ECHO ONLY, NOT enforced. The
-    # runtime --project selection wins; otherwise a spec MAY carry its own `projects`. The field
-    # is orthogonal to `scopes` and can only NARROW (never widen operation scope). Enforcement
-    # (active_project ∈ projects -> else PROJECT_SCOPE_DENIED) arrives in Slice 5; `projects` here
-    # is descriptive. The `projects_enforced: false` sibling marker is emitted ONLY alongside a
-    # present `projects` field, so a token without it stays byte-identical (R-d).
+    # AIPOS-228 (Slice 4) / AIPOS-229 (Slice 5): optional `projects` dimension. The runtime
+    # --project selection wins; otherwise a spec MAY carry its own `projects`. The field is
+    # orthogonal to `scopes` and can only NARROW (never widen operation scope). As of Slice 5 it is
+    # ENFORCED at the gate (active_project ∈ projects -> else PROJECT_SCOPE_DENIED); the
+    # `projects_enforced: true` sibling marker is emitted ONLY alongside a present `projects` field,
+    # so a token without it stays byte-identical.
     effective = list(projects) if projects else (list(spec["projects"]) if spec.get("projects") else None)
     if effective:
         entry["projects"] = effective
-        entry["projects_enforced"] = False
+        entry["projects_enforced"] = True
     return entry
 
 
@@ -362,12 +362,11 @@ def redacted_connection(config: dict[str, Any]) -> dict[str, Any]:
             "scopes": list(token.get("scopes") or []),
             "fingerprint": token.get("fingerprint") or secret_fingerprint(str(token.get("token") or "")),
         }
-        # AIPOS-228 (Slice 4): echo the descriptive `projects` dimension + its "not yet enforced"
-        # marker — ONLY when present, so tokens without it stay byte-identical (R-d). Echo only;
-        # the gate makes no decision from this in Slice 4.
+        # AIPOS-228/229: echo the `projects` dimension + its enforcement marker — ONLY when
+        # present, so tokens without it stay byte-identical. As of Slice 5 the gate enforces it.
         if token.get("projects"):
             safe["projects"] = list(token.get("projects") or [])
-            safe["projects_enforced"] = False
+            safe["projects_enforced"] = True
         safe_tokens.append(safe)
     return {
         "mode": config.get("mode"),

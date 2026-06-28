@@ -5,7 +5,7 @@ import json
 import sys
 from typing import Any, TextIO
 
-from .tools import READ_ONLY_NOTICE, TOOL_HANDLERS, visible_tool_descriptors
+from .tools import READ_ONLY_NOTICE, TOOL_HANDLERS, dispatch_tool, visible_tool_descriptors
 
 JSONRPC_VERSION = "2.0"
 SERVER_NAME = "lybra-mcp"
@@ -57,15 +57,16 @@ def _handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
     name = str(params.get("name") or "").strip()
     if not name:
         raise JsonRpcError(-32602, "tools/call requires a tool name")
-    handler = TOOL_HANDLERS.get(name)
-    if handler is None:
+    if name not in TOOL_HANDLERS:
         raise JsonRpcError(-32601, f"Unknown tool: {name}")
     arguments = params.get("arguments")
     if arguments is None:
         arguments = {}
     if not isinstance(arguments, dict):
         raise JsonRpcError(-32602, "tools/call arguments must be an object")
-    return handler(arguments)
+    # AIPOS-229 (Slice 5): route through the single project-gate choke-point. The project gate runs
+    # inside dispatch_tool BEFORE the handler (and before the handler's ★A1 operation-scope check).
+    return dispatch_tool(name, arguments)
 
 
 def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:

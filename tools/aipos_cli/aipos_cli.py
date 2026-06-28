@@ -874,7 +874,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_rotate_parser.add_argument("--board-port", type=int, default=7117, help="Board port for regenerated connection config")
     serve_rotate_parser.add_argument("--mcp-host", default="127.0.0.1", help="MCP host for regenerated connection config")
     serve_rotate_parser.add_argument("--mcp-port", type=int, default=7118, help="MCP port for regenerated connection config")
-    serve_rotate_parser.add_argument("--project", help="Scope the minted role tokens to this project (AIPOS-228: descriptive only, not yet enforced — Slice 5)")
+    serve_rotate_parser.add_argument("--project", help="Scope the minted role tokens to this project (AIPOS-229: enforced — calls for another project return PROJECT_SCOPE_DENIED)")
     serve_rotate_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")

@@ -408,7 +408,7 @@ class TokenProjectsMintEchoTests(unittest.TestCase):
         cfg = self._build(project="lybra")
         for token in cfg["tokens"]:
             self.assertEqual(token.get("projects"), ["lybra"])
-            self.assertEqual(token.get("projects_enforced"), False)
+            self.assertEqual(token.get("projects_enforced"), True)
 
     def test_absence_is_byte_identical_no_projects_field(self) -> None:
         # No --project -> NO projects/projects_enforced field anywhere (back-compat byte-stable).
@@ -420,7 +420,7 @@ class TokenProjectsMintEchoTests(unittest.TestCase):
     def test_redacted_echo_carries_projects_only_when_present(self) -> None:
         red_with = redacted_connection(self._build(project="lybra"))
         self.assertEqual(red_with["tokens"][0].get("projects"), ["lybra"])
-        self.assertEqual(red_with["tokens"][0].get("projects_enforced"), False)
+        self.assertEqual(red_with["tokens"][0].get("projects_enforced"), True)
         self.assertNotIn("token", red_with["tokens"][0])  # secret discipline: raw token never echoed
         red_without = redacted_connection(self._build())
         self.assertNotIn("projects", red_without["tokens"][0])

@@ -1,10 +1,12 @@
-"""AIPOS-228 Slice 4 — the capability token `projects` dimension is MINT/ECHO ONLY.
+"""AIPOS-228/229 — the OPERATION-scope gate (★A1) is INERT to `projects`.
 
-These tests assert the field is INERT at the gate: the allow/deny decision is byte-identical with
-and without `projects`, INCLUDING the case Slice 5 will turn into PROJECT_SCOPE_DENIED (a token
-carrying projects that do NOT contain the requested active project). This is the hardest proof
-that no latent read of `projects` has slipped into a decision (R-a). The field is, however, echoed
-in scope_basis when present (R-d).
+`_capability_has_scope` reads only operations/token_ref/expires_at, never `projects`. These tests
+assert that the operation-scope decision is byte-identical with and without `projects` — INCLUDING
+a token whose projects do NOT contain the active project. This is the ★A1-not-weakened anchor for
+AIPOS-229: project ENFORCEMENT lives at the dispatch choke-point (`_project_gate_denied` /
+`dispatch_tool`), NOT in the operation-scope gate, which stays unchanged. (The end-to-end
+PROJECT_SCOPE_DENIED behavior is covered in test_token_project_enforcement.) As of Slice 5 the
+scope_basis echo marks `projects_enforced: true`.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ def _cap(operations, *, projects=None):
     }
     if projects is not None:
         cap["projects"] = list(projects)
-        cap["projects_enforced"] = False
+        cap["projects_enforced"] = True
     return cap
 
 
@@ -67,7 +69,7 @@ class TokenProjectsGateInertTests(unittest.TestCase):
             result = _tool_result({"ok": True})
         basis = result["structuredContent"]["scope_basis"]
         self.assertEqual(basis.get("projects"), ["lybra"])
-        self.assertEqual(basis.get("projects_enforced"), False)
+        self.assertEqual(basis.get("projects_enforced"), True)
 
         with request_capability_scope(_cap(["queue_claim"])):
             result2 = _tool_result({"ok": True})

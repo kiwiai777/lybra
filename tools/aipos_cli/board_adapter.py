@@ -2175,10 +2175,24 @@ def _build_audit_dispatch_preview(
     if dispatch_path.exists():
         blocking_reasons.append(f"Audit dispatch record already exists: {dispatch_rel}")
 
+    # AIPOS-229 (Slice 5): de-hardcode the "lybra" project literal. Prefer the source task's
+    # project; otherwise resolve the active project from the home model. NO literal fallback — if
+    # neither yields a project, fail closed (BLOCK) rather than silently stamping "lybra".
+    dispatch_project = source_metadata.get("project")
+    if not dispatch_project:
+        try:
+            dispatch_project = _resolve_active_project_for(repo_root, None)
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            blocking_reasons.append(
+                f"PROJECT_UNRESOLVED: audit-dispatch project could not be resolved and no "
+                f"project literal fallback is allowed ({exc})"
+            )
+            dispatch_project = None
+
     audit_metadata = {
         "task_id": task_id_text,
         "title": audit_task_title or f"Audit {source_task.get('task_id')}",
-        "project": source_metadata.get("project") or "lybra",
+        "project": dispatch_project,
         "assigned_to": audit_by or source_metadata.get("assigned_to") or "audit",
         "agent_instance": audit_agent_instance,
         "context_bundle": source_metadata.get("context_bundle") or "default",

@@ -143,12 +143,12 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
         "fingerprint": str(entry.get("fingerprint") or ""),
         "source": "service_v0",
     }
-    # AIPOS-228 (Slice 4): carry the descriptive `projects` dimension into the capability — ECHO
-    # ONLY, no gate decision reads it in Slice 4. Present only when the token carries it, so a
-    # token without `projects` yields a byte-identical capability (and scope_basis).
+    # AIPOS-228/229: carry the `projects` dimension into the capability. As of Slice 5 the gate
+    # ENFORCES it (project gate at the dispatch choke-point). Present only when the token carries
+    # it, so a token without `projects` yields a byte-identical capability (and scope_basis).
     if entry.get("projects"):
         capability["projects"] = [str(item) for item in entry.get("projects") or []]
-        capability["projects_enforced"] = False
+        capability["projects_enforced"] = True
     return capability, None
 
 
