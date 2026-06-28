@@ -54,7 +54,13 @@ from tools.aipos_cli.record_writer import (
     session_record_path,
 )
 from tools.aipos_cli.records import load_records
-from tools.aipos_cli.task_loader import find_repo_root, find_task_by_id, load_all_tasks, load_task_by_path
+from tools.aipos_cli.task_loader import (
+    find_repo_context,
+    find_repo_root,
+    find_task_by_id,
+    load_all_tasks,
+    load_task_by_path,
+)
 from tools.aipos_cli.workspace_config import (
     find_workspace_config,
     governance_paths,
@@ -97,6 +103,20 @@ def _resolve_repo_root(repo_root: str | Path | None) -> Path:
     if candidate is not None and has_workspace_queue(candidate):
         return candidate
     return find_repo_root(candidate)
+
+
+def _resolve_repo_and_home(repo_root: str | Path | None) -> tuple[Path, Path | None]:
+    """``(resolved_root, home_root)`` for the AIPOS-227 196a ingestion home-guard.
+
+    Mirrors ``_resolve_repo_root``'s FIX C① contract: an explicit, already-valid workspace is
+    authoritative/direct, so ``home_root`` is ``None`` (no home-model re-resolution). Otherwise
+    resolution flows through ``find_repo_context`` and surfaces the truth home iff the home model
+    resolved it. ``home_root`` is ``None`` IFF the home model is not the resolution path (R-1).
+    """
+    candidate = Path(repo_root).resolve() if repo_root is not None else None
+    if candidate is not None and has_workspace_queue(candidate):
+        return candidate, None
+    return find_repo_context(candidate)
 
 
 def _actor_payload(actor: str | None) -> dict[str, Any] | None:
@@ -1682,6 +1702,7 @@ def _build_return_preview(
     mcp_return_metadata: dict[str, Any] | None = None,
     scratch_dir: str | None = None,
     scratch_artifact_refs: Any = None,
+    home_root: Path | None = None,
 ) -> dict[str, Any]:
     selected_task_id, selected_path = _select_task_input(task_id, path)
     validated, _tasks, _records, profiles, task = _load_validated_task(
@@ -1767,7 +1788,16 @@ def _build_return_preview(
     # return; persisted artifact_refs point to those gate-written paths.
     ingestion_plan: dict[str, Any] = {"ingestions": [], "workspace_refs": [], "digest": ""}
     if has_scratch_request(scratch_dir, scratch_artifact_refs):
-        if not return_id:
+        # AIPOS-227 R-2: single-caller-resolves invariant. The repo_root reaching ingestion is the
+        # already-resolved project truth root (queue_return -> _resolve_repo_and_home, which only
+        # ever yields a workspace with the 5_tasks/queue marker). A future second caller feeding a
+        # raw/unresolved root fails fast HERE instead of ingesting into a wrong root.
+        if not has_workspace_queue(repo_root):
+            blocking_reasons.append(
+                "ARTIFACT_INGEST_BLOCKED: ingestion repo_root is not a resolved workspace "
+                "(single-caller-resolves invariant violated)"
+            )
+        elif not return_id:
             blocking_reasons.append("ARTIFACT_INGEST_BLOCKED: cannot derive return id for scratch ingestion")
         else:
             ingestion_plan = plan_scratch_ingestion(
@@ -1776,6 +1806,7 @@ def _build_return_preview(
                 return_id=return_id,
                 scratch_dir=scratch_dir,
                 scratch_artifact_refs=scratch_artifact_refs,
+                home_root=home_root,
             )
             blocking_reasons.extend(str(item) for item in ingestion_plan.get("blocking_reasons", []))
 
@@ -1966,7 +1997,9 @@ def return_task(
         completion_ref = str(completion_report_ref or "").strip()
         if not summary_text and not refs and not completion_ref and not scratch_refs:
             raise ValueError("MISSING_RETURN_EVIDENCE: result_summary, artifact_refs, or completion_report_ref is required")
-        resolved_root = _resolve_repo_root(repo_root)
+        # AIPOS-227: resolve the project truth root AND the truth home in one shot, so the 196a
+        # ingestion home-guard uses the SAME resolution that produced repo_root (no drift).
+        resolved_root, home_root = _resolve_repo_and_home(repo_root)
         response = _build_return_preview(
             task_id=task_id,
             path=path,
@@ -1985,6 +2018,7 @@ def return_task(
             mcp_return_metadata=mcp_return_metadata,
             scratch_dir=scratch_dir_text,
             scratch_artifact_refs=scratch_refs,
+            home_root=home_root,
         )
         if dry_run:
             return _attach_controlled_execute_metadata(

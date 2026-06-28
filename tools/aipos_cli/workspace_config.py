@@ -75,13 +75,42 @@ def resolve_workspace_root(
     explicit_root: str | Path | None = None,
     env: dict[str, str] | None = None,
 ) -> Path:
+    """Resolve the project/workspace root.
+
+    Thin wrapper over ``resolve_workspace_context`` (the single AIPOS-226 precedence ladder);
+    returns only the project root for the many existing callers. Behavior is byte-identical to
+    the pre-AIPOS-227 implementation.
+    """
+    return resolve_workspace_context(start, explicit_root=explicit_root, env=env)[0]
+
+
+def resolve_workspace_context(
+    start: Path | None = None,
+    *,
+    explicit_root: str | Path | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[Path, Path | None]:
+    """Resolve ``(project_root, home_root)`` via the single AIPOS-226 precedence ladder.
+
+    ``home_root`` is the survivable truth home **when the home model resolves the workspace**
+    (``LYBRA_HOME_ROOT`` env / a v2 in-workspace config carrying ``home_root`` / the global
+    ``~/.lybra/config.json`` ``home_root``), else ``None`` for the legacy / explicit / marker
+    paths.
+
+    AIPOS-227: this is the ONE place the precedence ladder lives, so the 196a ingestion
+    home-guard and ``resolve_workspace_root`` can never drift. ``home_root`` is ``None`` IFF the
+    home model is NOT the resolution path — so a ``None`` home_root unambiguously means
+    legacy-v1 / explicit / direct, never "home model with an unresolved home" (R-1). On a home
+    path the project is resolved eagerly and a misresolution raises loudly
+    (``PROJECT_AMBIGUOUS`` / ``PROJECT_NOT_ESTABLISHED``) before any caller proceeds.
+    """
     source_env = env if env is not None else os.environ
     if explicit_root:
-        return _validate_workspace_root(Path(explicit_root), source="--workspace-root")
+        return _validate_workspace_root(Path(explicit_root), source="--workspace-root"), None
 
     raw_env_root = str(source_env.get("AIPOS_WORKSPACE_ROOT") or "").strip()
     if raw_env_root:
-        return _validate_workspace_root(Path(raw_env_root), source="AIPOS_WORKSPACE_ROOT")
+        return _validate_workspace_root(Path(raw_env_root), source="AIPOS_WORKSPACE_ROOT"), None
 
     # ---------------------------------------------------------------------------------
     # AIPOS-226 resolution precedence (AIPOS-223 §1.4, highest first). The two-root home
@@ -115,7 +144,7 @@ def resolve_workspace_root(
     if str(source_env.get(HOME_ROOT_ENV) or "").strip():
         home = resolve_home_root(env=source_env)
         project = resolve_active_project(home, env=source_env, global_config=global_config)
-        return resolve_project_root(home, project)
+        return resolve_project_root(home, project), home
 
     # 4. In-workspace config (upward search). A v2 config (home_root) routes to the home model
     #    using ITS home_root + active_project; a v1 config (no home_root) drives the legacy
@@ -124,8 +153,8 @@ def resolve_workspace_root(
         if found_home_root is not None:
             home = resolve_home_root(explicit_root=found_home_root, env=source_env)
             project = resolve_active_project(home, env=source_env, config=found_config)
-            return resolve_project_root(home, project)
-        return workspace_root_from_config(config_path)
+            return resolve_project_root(home, project), home
+        return workspace_root_from_config(config_path), None
 
     # 5. Upward 5_tasks/queue marker (legacy bare project subtree). A local workspace at/above
     #    the start wins over the global home model so v1 inputs / evidence workspaces / bare-cwd
@@ -135,7 +164,7 @@ def resolve_workspace_root(
         current = current.parent
     for candidate in [current, *current.parents]:
         if has_workspace_queue(candidate):
-            return candidate
+            return candidate, None
 
     # 6. Global ~/.lybra/config.json .home_root -> home model. This is the production path when
     #    the caller's cwd is the code repo (no local workspace signal): the global runtime config
@@ -144,7 +173,7 @@ def resolve_workspace_root(
     if global_config_home_root(global_config) is not None:
         home = resolve_home_root(env=source_env)
         project = resolve_active_project(home, env=source_env, global_config=global_config)
-        return resolve_project_root(home, project)
+        return resolve_project_root(home, project), home
 
     raise FileNotFoundError("Could not locate Lybra workspace root containing .lybra/config.json or 5_tasks/queue")
 

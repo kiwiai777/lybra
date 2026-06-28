@@ -19,6 +19,8 @@ from tools.aipos_cli.workspace_config import (
     resolve_active_project,
     resolve_home_root,
     resolve_project_root,
+    resolve_workspace_context,
+    resolve_workspace_root,
     write_workspace_config,
 )
 
@@ -245,6 +247,58 @@ class ResolutionCoreTests(unittest.TestCase):
         self.assertNotIn("home_root", cfg)
         self.assertNotIn("active_project", cfg)
         self.assertNotIn("projects", cfg)  # M2: no home-config projects{} table
+
+
+class WorkspaceContextTests(unittest.TestCase):
+    """AIPOS-227 — resolve_workspace_context: the single precedence ladder yields
+    (project_root, home_root|None); resolve_workspace_root delegates to it byte-identically."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.home = self.root / "home"
+        for qs in ("pending", "claimed", "completed", "blocked"):
+            (self.home / "lybra" / "5_tasks" / "queue" / qs).mkdir(parents=True, exist_ok=True)
+        (self.home / "lybra" / "project.json").write_text(
+            json.dumps({"project": "lybra", "config_version": 1}), encoding="utf-8"
+        )
+        self.ws = self.root / "ws"
+        for qs in ("pending", "claimed", "completed", "blocked"):
+            (self.ws / "5_tasks" / "queue" / qs).mkdir(parents=True, exist_ok=True)
+        self.empty_home = self.root / "empty"
+        self.empty_home.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_home_model_env_returns_project_root_and_home(self) -> None:
+        root, home = resolve_workspace_context(
+            self.ws, env={HOME_ROOT_ENV: str(self.home), "HOME": str(self.empty_home)}
+        )
+        self.assertEqual(root, (self.home / "lybra").resolve())
+        self.assertEqual(home, self.home.resolve())
+
+    def test_legacy_marker_returns_none_home(self) -> None:
+        root, home = resolve_workspace_context(self.ws, env={"HOME": str(self.empty_home)})
+        self.assertEqual(root, self.ws.resolve())
+        self.assertIsNone(home)  # legacy bare workspace -> not the home model
+
+    def test_explicit_and_legacy_env_return_none_home(self) -> None:
+        # R-1: home_root is None IFF the home model is NOT the resolution path.
+        _, h_explicit = resolve_workspace_context(explicit_root=str(self.ws))
+        self.assertIsNone(h_explicit)
+        _, h_legacy_env = resolve_workspace_context(self.ws, env={LEGACY_WORKSPACE_ROOT_ENV: str(self.ws)})
+        self.assertIsNone(h_legacy_env)
+
+    def test_resolve_workspace_root_delegates_byte_identical(self) -> None:
+        for env in (
+            {HOME_ROOT_ENV: str(self.home), "HOME": str(self.empty_home)},
+            {"HOME": str(self.empty_home)},
+        ):
+            self.assertEqual(
+                resolve_workspace_root(self.ws, env=env),
+                resolve_workspace_context(self.ws, env=env)[0],
+            )
 
 
 if __name__ == "__main__":

@@ -79,6 +79,7 @@ def plan_scratch_ingestion(
     scratch_dir: str | None,
     scratch_artifact_refs: Any,
     env: dict[str, str] | None = None,
+    home_root: Path | None = None,
 ) -> dict[str, Any]:
     """Plan (and content-hash) a scratch->workspace ingestion without writing.
 
@@ -86,6 +87,17 @@ def plan_scratch_ingestion(
     workspace_rel, content_sha256, size_bytes), ``workspace_refs``, a
     timestamp-independent ``digest`` (R-B snapshot integrity), and
     ``blocking_reasons``. Fails closed: any ambiguity is a blocking reason.
+
+    AIPOS-227 — invariant: ``repo_root`` is ALREADY the resolved project truth root supplied by
+    the single caller (board_adapter queue_return -> _resolve_repo_and_home). This function does
+    not resolve; a future second caller feeding a raw/unresolved root is a contract violation and
+    is fail-fast-guarded at the board boundary (R-2).
+
+    ``home_root`` is the survivable truth home that contains all project subtrees, resolved by the
+    home model. When supplied (production home path) a scratch source resolving anywhere inside
+    ``<home>`` — i.e. into any project's truth, not just this project's — is refused. ``None``
+    means the legacy/explicit/direct path (no home model in play), where the existing per-project
+    truth guards already apply (R-1: ``None`` never stands in for an unresolved home).
     """
     refs = _as_ref_list(scratch_artifact_refs)
     blocking: list[str] = []
@@ -125,6 +137,12 @@ def plan_scratch_ingestion(
         return result
     if _within_truth(repo_root, scratch_root) or _is_within((repo_root / WORKSPACE_ARTIFACT_ROOT).resolve(), scratch_root):
         blocking.append(f"{_BLOCK_PREFIX}: scratch_dir resolves into a Lybra truth or workspace-artifact path")
+        return result
+    # AIPOS-227: extend-only — when the home model is in play, refuse a scratch source anywhere
+    # inside the survivable truth home (any project's truth), not just this project's. Never
+    # relaxes an existing guard; only widens the refused surface.
+    if home_root is not None and _is_within(Path(home_root).expanduser().resolve(), scratch_root):
+        blocking.append(f"{_BLOCK_PREFIX}: scratch_dir resolves into the Lybra truth home")
         return result
     if not scratch_root.exists() or not scratch_root.is_dir():
         blocking.append(f"{_BLOCK_PREFIX}: scratch_dir does not exist or is not a directory")

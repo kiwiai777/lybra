@@ -143,6 +143,54 @@ class ArtifactIngestTests(unittest.TestCase):
         dest = self.repo_root / plan["workspace_refs"][0]
         self.assertFalse(dest.exists())
 
+    def test_home_guard_blocks_scratch_inside_home(self) -> None:
+        # AIPOS-227 R-3 (negative): home model in play; a scratch source resolving inside <home>
+        # (e.g. a SIBLING project's truth) is refused — the new extend-only guard.
+        home = self.repo_root / "home"
+        project = home / "proj"
+        (project / "5_tasks" / "queue" / "pending").mkdir(parents=True, exist_ok=True)
+        scratch = home / "otherproj" / "scratch"
+        scratch.mkdir(parents=True, exist_ok=True)
+        (scratch / "out.txt").write_bytes(b"x")
+        plan = plan_scratch_ingestion(
+            repo_root=project,
+            task_id="T",
+            return_id="R",
+            scratch_dir=str(scratch),
+            scratch_artifact_refs=["out.txt"],
+            env={APPROVED_SCRATCH_ROOT_ENV: str(home)},
+            home_root=home,
+        )
+        self.assertTrue(any("truth home" in r for r in plan["blocking_reasons"]), plan["blocking_reasons"])
+        self.assertEqual(plan["ingestions"], [])
+
+    def test_home_guard_allows_approved_scratch_outside_home(self) -> None:
+        # AIPOS-227 R-3 (positive): a legitimate approved scratch root OUTSIDE <home> is NOT
+        # harmed by the new guard — only the confused-deputy (scratch-inside-home) case is refused.
+        home = self.repo_root / "home"
+        project = home / "proj"
+        (project / "5_tasks" / "queue" / "pending").mkdir(parents=True, exist_ok=True)
+        self._write_scratch("out.txt", b"hello")  # self.scratch_dir is a separate tmp tree, outside home
+        plan = plan_scratch_ingestion(
+            repo_root=project,
+            task_id="T",
+            return_id="R",
+            scratch_dir=str(self.scratch_dir),
+            scratch_artifact_refs=["out.txt"],
+            env=self.env,
+            home_root=home,
+        )
+        self.assertEqual(plan["blocking_reasons"], [])
+        self.assertEqual(len(plan["ingestions"]), 1)
+
+    def test_home_root_none_skips_home_guard_legacy(self) -> None:
+        # AIPOS-227 R-1: home_root=None means legacy/explicit (no home model); behavior is
+        # byte-identical to pre-Slice-3 — the home guard is simply not applicable.
+        self._write_scratch("out.txt")
+        plan = self._plan(["out.txt"])  # no home_root kwarg => None
+        self.assertEqual(plan["blocking_reasons"], [])
+        self.assertEqual(len(plan["ingestions"]), 1)
+
     def test_perform_rejects_symlink_swap_toctou(self) -> None:
         scratch_file = self._write_scratch("out.txt", b"original")
         plan = self._plan(["out.txt"])

@@ -6,7 +6,11 @@ from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_complexity import complexity_payload
-from tools.aipos_cli.workspace_config import has_workspace_queue, resolve_workspace_root
+from tools.aipos_cli.workspace_config import (
+    has_workspace_queue,
+    resolve_workspace_context,
+    resolve_workspace_root,
+)
 
 QUEUE_STATES = ("pending", "claimed", "completed", "blocked")
 
@@ -26,18 +30,27 @@ def _workspace_root_from_env() -> Path | None:
 
 
 def find_repo_root(start: Path | None = None) -> Path:
+    """Resolve the repo/project root. Thin wrapper over ``find_repo_context`` (byte-identical)."""
+    return find_repo_context(start)[0]
+
+
+def find_repo_context(start: Path | None = None) -> tuple[Path, Path | None]:
+    """``(repo_root, home_root)`` — mirrors ``find_repo_root`` and also surfaces the truth home
+    when the home model resolves the workspace (AIPOS-227). ``home_root`` is ``None`` for the
+    env-root and explicit-valid-workspace short-circuits (direct/legacy) and for the legacy
+    resolution paths, exactly as in ``resolve_workspace_context``."""
     if start is None:
         env_root = _workspace_root_from_env()
         if env_root is not None:
-            return env_root
-        return resolve_workspace_root(start)
+            return env_root, None
+        return resolve_workspace_context(start)
     # AIPOS-226 FIX C① (parity): an explicit start that is ALREADY a valid workspace
     # (has 5_tasks/queue) is used DIRECTLY — no upward / home-model re-resolution. This mirrors
     # board_adapter._resolve_repo_root: an already-resolved root must never be silently
     # re-resolved to a different root. Internal callers (load_all_tasks(resolved_root), etc.)
     # rely on this so a valid root is honored verbatim.
     if _has_queue_root(start):
-        return start.expanduser().resolve()
+        return start.expanduser().resolve(), None
     # AIPOS-226 FIX C②: when the explicit start is NOT itself a workspace (e.g. a nested subdir),
     # resolution must STILL honor the home model (LYBRA_HOME_ROOT, the global ~/.lybra/config.json,
     # a found home_root config). The previous `env={}` dropped the entire home model, forcing a
@@ -46,7 +59,7 @@ def find_repo_root(start: Path | None = None) -> Path:
     # AIPOS_WORKSPACE_ROOT stripped, so the legacy explicit-start contract (AIPOS_WORKSPACE_ROOT
     # ignored when a start is given) is preserved.
     env = {k: v for k, v in os.environ.items() if k != "AIPOS_WORKSPACE_ROOT"}
-    return resolve_workspace_root(start, env=env)
+    return resolve_workspace_context(start, env=env)
 
 
 def _normalize_task(

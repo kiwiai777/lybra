@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from tools.aipos_cli.adapter_response import ENVELOPE_FIELDS
 from tools.aipos_cli.board_adapter import (
+    _resolve_repo_and_home,
     claim_task,
     create_draft,
     get_context_pack_preview,
@@ -400,6 +401,43 @@ class GovernanceResolutionTests(unittest.TestCase):
         result = get_governance(self.root)
         self.assertFalse(result["ok"])
         self.assertIn("PROJECT_AMBIGUOUS", json.dumps(result))
+
+
+class IngestionRepoAndHomeTests(unittest.TestCase):
+    """AIPOS-227 — _resolve_repo_and_home: ingestion gets (project_root, home_root|None) from the
+    SAME resolution as repo_root, so the 196a home-guard can never drift."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.home = self.root / "home"
+        for qs in ("pending", "claimed", "completed", "blocked"):
+            (self.home / "lybra" / "5_tasks" / "queue" / qs).mkdir(parents=True, exist_ok=True)
+        (self.home / "lybra" / "project.json").write_text(
+            json.dumps({"project": "lybra", "config_version": 1}), encoding="utf-8"
+        )
+        self.empty_home = self.root / "empty"
+        self.empty_home.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_explicit_valid_workspace_is_direct_home_none(self) -> None:
+        # FIX C① parity: an explicit already-valid workspace is authoritative/direct -> home None.
+        root, home = _resolve_repo_and_home(self.home / "lybra")
+        self.assertEqual(root, (self.home / "lybra").resolve())
+        self.assertIsNone(home)
+
+    def test_home_model_surfaces_home_root(self) -> None:
+        # Production path: cwd in code repo, home model resolves project + home.
+        with patch.dict(
+            __import__("os").environ,
+            {"LYBRA_HOME_ROOT": str(self.home), "HOME": str(self.empty_home)},
+            clear=True,
+        ), patch.object(Path, "cwd", return_value=self.root):
+            root, home = _resolve_repo_and_home(None)
+        self.assertEqual(root, (self.home / "lybra").resolve())
+        self.assertEqual(home, self.home.resolve())
 
 
 if __name__ == "__main__":
