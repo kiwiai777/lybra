@@ -29,6 +29,47 @@ def effective_task_class(metadata: dict[str, Any]) -> str:
     return raw or "simple"
 
 
+# AIPOS-232 — execution-layer workflow role counts. These are LABELS for the
+# accountability template (executor-only vs executor + independent auditor), NOT
+# an engine: nothing here runs, schedules, or launches an agent (gate-not-engine).
+ONE_ROLE = "1-role"
+TWO_ROLE = "2-role"
+
+
+def suggest_workflow_roles(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Pure heuristic hint (NOT enforcement) for 1-role vs 2-role.
+
+    Reads only the EXISTING ``task_class`` complexity signal: complex -> suggest
+    2-role (independent audit recommended); otherwise -> suggest 1-role.
+
+    Honesty (AIPOS-232 R-3): ``task_class`` is a *complexity tier*, not a *task
+    type*, so this only APPROXIMATES "doc/config vs ops/design/code" and is not
+    precise. The Owner always decides; there is NO auto-select and this never
+    mutates the card (``auto_selected`` is always False). Pure function: same
+    input -> same output, no side effect, no stored state, no background work.
+    """
+    task_class = effective_task_class(metadata)
+    if task_class == "complex":
+        suggested = TWO_ROLE
+        rationale = (
+            "complex-class -> independent audit recommended (executor + distinct auditor)"
+        )
+    else:
+        suggested = ONE_ROLE
+        rationale = (
+            "non-complex-class -> single role acceptable; choose 2-role explicitly "
+            "if an independent audit is wanted"
+        )
+    return {
+        "suggested_workflow": suggested,
+        "suggested_role_count": 2 if suggested == TWO_ROLE else 1,
+        "suggestion_basis": "task_class",
+        "suggestion_is_heuristic": True,
+        "suggestion_rationale": rationale,
+        "auto_selected": False,
+    }
+
+
 def complexity_payload(metadata: dict[str, Any]) -> dict[str, Any]:
     raw = metadata.get("task_class")
     return {
@@ -36,6 +77,8 @@ def complexity_payload(metadata: dict[str, Any]) -> dict[str, Any]:
         "effective_task_class": effective_task_class(metadata),
         "task_class_explicit": raw not in (None, ""),
         "complexity_note": metadata.get("complexity_note"),
+        # AIPOS-232: advisory-only role-count suggestion; never auto-applied.
+        "workflow_suggestion": suggest_workflow_roles(metadata),
     }
 
 
