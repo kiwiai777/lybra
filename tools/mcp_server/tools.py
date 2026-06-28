@@ -105,16 +105,21 @@ def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str
     capability = REQUEST_CAPABILITY.get()
     if isinstance(capability, dict) and capability.get("source") == "service_v0" and isinstance(payload, dict):
         payload = dict(payload)
-        payload.setdefault(
-            "scope_basis",
-            {
-                "mode": "service_v0",
-                "token_ref": capability.get("token_ref"),
-                "role": capability.get("role"),
-                "scopes": list(capability.get("operations") or []),
-                "mcp_endpoint_ref": "local_service_mcp",
-            },
-        )
+        scope_basis: dict[str, Any] = {
+            "mode": "service_v0",
+            "token_ref": capability.get("token_ref"),
+            "role": capability.get("role"),
+            "scopes": list(capability.get("operations") or []),
+            "mcp_endpoint_ref": "local_service_mcp",
+        }
+        # AIPOS-228 (Slice 4): echo the descriptive `projects` dimension + its "not yet enforced"
+        # marker — ONLY when the capability carries it, so a token without `projects` keeps a
+        # byte-identical scope_basis (R-d). Echo only; the gate makes NO allow/deny decision from
+        # `projects` in Slice 4 (enforcement is Slice 5).
+        if capability.get("projects"):
+            scope_basis["projects"] = list(capability.get("projects") or [])
+            scope_basis["projects_enforced"] = False
+        payload.setdefault("scope_basis", scope_basis)
     return {
         "content": [{"type": "text", "text": _json_text(payload)}],
         "structuredContent": payload,
@@ -1699,7 +1704,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "name": "lybra_intake_submit_dry_run",
         "description": (
             "When to use: create a controlled execute preview for normalized external intake that should become an Owner-reviewed draft. "
-            "Prerequisites: this MCP connection must have a capability_token with intake_submit scope; source_tag must match an approved external intake source from external_intake_registry.md; client_tag must map to an existing project; this tool does not publish or execute work. "
+            "Prerequisites: this MCP connection must have a capability_token with intake_submit scope; source_tag must match an approved external intake source from external_intake_registry.md; client_tag must map to an existing project (project dimension not yet enforced — Slice 5); this tool does not publish or execute work. "
             "Return structure: a controlled execute envelope with verdict, planned_writes, dry_run_token, dry_run_snapshot_hash, dry_run_created_at, dry_run_expires_at, and rendered draft content. "
             "Next-step hint: pass dry_run_token to lybra_intake_submit_confirm; the resulting draft waits for Owner publish and no agent takes automatic follow-up action."
         ),
@@ -1756,7 +1761,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "name": "lybra_owner_decision_record_dry_run",
         "description": (
             "When to use: create a controlled execute preview for recording a scoped Owner decision after an Owner Decision Gate has explicit evidence. "
-            "Prerequisites: this MCP connection must have a capability_token with owner_decision_record scope; owner_approval_evidence is required and must align with applies_to; capability_scope must include owner_decision_record and the target project when present; this tool does not publish, mutate queues, append orchestration events, or execute follow-up work. "
+            "Prerequisites: this MCP connection must have a capability_token with owner_decision_record scope; owner_approval_evidence is required and must align with applies_to; capability_scope must include owner_decision_record (and names the target project when present — project dimension not yet enforced, Slice 5); this tool does not publish, mutate queues, append orchestration events, or execute follow-up work. "
             "Return structure: a controlled execute envelope with verdict, planned_writes, dry_run_token, dry_run_snapshot_hash, dry_run_created_at, dry_run_expires_at, and rendered Owner decision record content. "
             "Next-step hint: pass dry_run_token to lybra_owner_decision_record_confirm; confirm writes only a records artifact under 5_tasks/records/owner_decisions and no agent takes automatic follow-up action."
         ),

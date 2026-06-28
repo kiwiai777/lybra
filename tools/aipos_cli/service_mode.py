@@ -258,19 +258,41 @@ def ensure_workspace_gitignore(workspace_root: Path) -> Path:
     return gitignore
 
 
-def _role_token_entry(spec: dict[str, Any]) -> dict[str, Any]:
+def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None) -> dict[str, Any]:
     token = secrets.token_urlsafe(32)
-    return {
+    entry = {
         "role": spec["role"],
         "token_ref": spec["token_ref"],
         "scopes": list(spec["scopes"]),
         "fingerprint": secret_fingerprint(token),
         "token": token,
     }
+    # AIPOS-228 (Slice 4): optional `projects` dimension — MINT/ECHO ONLY, NOT enforced. The
+    # runtime --project selection wins; otherwise a spec MAY carry its own `projects`. The field
+    # is orthogonal to `scopes` and can only NARROW (never widen operation scope). Enforcement
+    # (active_project ∈ projects -> else PROJECT_SCOPE_DENIED) arrives in Slice 5; `projects` here
+    # is descriptive. The `projects_enforced: false` sibling marker is emitted ONLY alongside a
+    # present `projects` field, so a token without it stays byte-identical (R-d).
+    effective = list(projects) if projects else (list(spec["projects"]) if spec.get("projects") else None)
+    if effective:
+        entry["projects"] = effective
+        entry["projects_enforced"] = False
+    return entry
 
 
-def build_connection_config(workspace_root: Path, *, board_host: str, board_port: int, mcp_host: str, mcp_port: int) -> dict[str, Any]:
+def build_connection_config(
+    workspace_root: Path,
+    *,
+    board_host: str,
+    board_port: int,
+    mcp_host: str,
+    mcp_port: int,
+    project: str | None = None,
+) -> dict[str, Any]:
     now = _utc_now()
+    # AIPOS-228: a single --project selection scopes every minted role token to that project
+    # (mint/echo only). No --project -> no `projects` field anywhere (byte-identical).
+    projects = [project] if project and str(project).strip() else None
     return {
         "config_version": SERVICE_MODE_VERSION,
         "mode": SERVICE_MODE,
@@ -285,7 +307,7 @@ def build_connection_config(workspace_root: Path, *, board_host: str, board_port
             "host": mcp_host,
             "port": mcp_port,
         },
-        "tokens": [_role_token_entry(spec) for spec in ROLE_SPECS],
+        "tokens": [_role_token_entry(spec, projects=projects) for spec in ROLE_SPECS],
         "secrets_notice": "Raw role tokens are local secrets. Anyone who can read this file can use the listed local role scopes.",
     }
 
@@ -334,14 +356,19 @@ def redacted_connection(config: dict[str, Any]) -> dict[str, Any]:
     for token in config.get("tokens", []) if isinstance(config.get("tokens"), list) else []:
         if not isinstance(token, dict):
             continue
-        safe_tokens.append(
-            {
-                "role": token.get("role"),
-                "token_ref": token.get("token_ref"),
-                "scopes": list(token.get("scopes") or []),
-                "fingerprint": token.get("fingerprint") or secret_fingerprint(str(token.get("token") or "")),
-            }
-        )
+        safe = {
+            "role": token.get("role"),
+            "token_ref": token.get("token_ref"),
+            "scopes": list(token.get("scopes") or []),
+            "fingerprint": token.get("fingerprint") or secret_fingerprint(str(token.get("token") or "")),
+        }
+        # AIPOS-228 (Slice 4): echo the descriptive `projects` dimension + its "not yet enforced"
+        # marker — ONLY when present, so tokens without it stay byte-identical (R-d). Echo only;
+        # the gate makes no decision from this in Slice 4.
+        if token.get("projects"):
+            safe["projects"] = list(token.get("projects") or [])
+            safe["projects_enforced"] = False
+        safe_tokens.append(safe)
     return {
         "mode": config.get("mode"),
         "workspace_root": config.get("workspace_root"),
@@ -441,6 +468,7 @@ def rotate_report(
     mcp_host: str,
     mcp_port: int,
     connection_target: Path | None = None,
+    project: str | None = None,
 ) -> dict[str, Any]:
     if connection_target is None:
         connection_target = runtime_connection_path()
@@ -454,7 +482,9 @@ def rotate_report(
         previous_created = load_connection_config(
             workspace_root, connection_target=connection_target
         ).get("created_at")
-    config = build_connection_config(workspace_root, board_host=board_host, board_port=board_port, mcp_host=mcp_host, mcp_port=mcp_port)
+    config = build_connection_config(
+        workspace_root, board_host=board_host, board_port=board_port, mcp_host=mcp_host, mcp_port=mcp_port, project=project
+    )
     if previous_created:
         config["created_at"] = previous_created
     config["rotated_at"] = _utc_now()

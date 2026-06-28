@@ -133,7 +133,7 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
             doc_ref="AIPOS-189 Service Mode v0 Protocol",
         )
     scopes = entry.get("scopes") if isinstance(entry.get("scopes"), list) else []
-    return {
+    capability = {
         "token_ref": str(entry.get("token_ref") or ""),
         "role": str(entry.get("role") or ""),
         "operations": [str(item) for item in scopes],
@@ -142,7 +142,14 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
         # in provenance records (never the raw token).
         "fingerprint": str(entry.get("fingerprint") or ""),
         "source": "service_v0",
-    }, None
+    }
+    # AIPOS-228 (Slice 4): carry the descriptive `projects` dimension into the capability — ECHO
+    # ONLY, no gate decision reads it in Slice 4. Present only when the token carries it, so a
+    # token without `projects` yields a byte-identical capability (and scope_basis).
+    if entry.get("projects"):
+        capability["projects"] = [str(item) for item in entry.get("projects") or []]
+        capability["projects_enforced"] = False
+    return capability, None
 
 
 def _json_response(

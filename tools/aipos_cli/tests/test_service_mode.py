@@ -20,6 +20,7 @@ from tools.aipos_cli.service_mode import (
     REQUIRED_LOCAL_DIR_MODE,
     build_connection_config,
     connection_path,
+    redacted_connection,
     render_connection_table,
     rotate_report,
     secret_fingerprint,
@@ -383,6 +384,71 @@ class ConnectionLocationTests(unittest.TestCase):
         self.assertEqual(scopes["copilot"], [])
         self.assertEqual(scopes["auditor"], sorted(["queue_claim", "audit_verdict"]))
         self.assertEqual(scopes["owner-dispatch"], ["audit_dispatch"])
+
+
+class TokenProjectsMintEchoTests(unittest.TestCase):
+    """AIPOS-228 Slice 4 — capability token `projects` dimension: mint + echo, ZERO enforcement."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name) / "workspace"
+        for state in ("pending", "claimed", "completed", "blocked"):
+            (self.root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _build(self, **overrides):
+        kwargs = dict(board_host="127.0.0.1", board_port=7117, mcp_host="127.0.0.1", mcp_port=7118)
+        kwargs.update(overrides)
+        return build_connection_config(self.root, **kwargs)
+
+    def test_with_project_mints_projects_into_every_role_token(self) -> None:
+        # Identity: --project X -> every role token entry carries projects == [X] + marker false.
+        cfg = self._build(project="lybra")
+        for token in cfg["tokens"]:
+            self.assertEqual(token.get("projects"), ["lybra"])
+            self.assertEqual(token.get("projects_enforced"), False)
+
+    def test_absence_is_byte_identical_no_projects_field(self) -> None:
+        # No --project -> NO projects/projects_enforced field anywhere (back-compat byte-stable).
+        cfg = self._build()
+        for token in cfg["tokens"]:
+            self.assertNotIn("projects", token)
+            self.assertNotIn("projects_enforced", token)
+
+    def test_redacted_echo_carries_projects_only_when_present(self) -> None:
+        red_with = redacted_connection(self._build(project="lybra"))
+        self.assertEqual(red_with["tokens"][0].get("projects"), ["lybra"])
+        self.assertEqual(red_with["tokens"][0].get("projects_enforced"), False)
+        self.assertNotIn("token", red_with["tokens"][0])  # secret discipline: raw token never echoed
+        red_without = redacted_connection(self._build())
+        self.assertNotIn("projects", red_without["tokens"][0])
+        self.assertNotIn("projects_enforced", red_without["tokens"][0])
+
+    def test_rotate_project_writes_0600_and_fingerprint_only(self) -> None:
+        with patch(
+            "tools.aipos_cli.service_mode.runtime_connection_path",
+            return_value=self.root / CONNECTION_REL,
+        ):
+            result = rotate_report(
+                self.root, board_host="127.0.0.1", board_port=7117, mcp_host="127.0.0.1", mcp_port=7118, project="lybra"
+            )
+            on_disk = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(_mode(connection_path(self.root)), REQUIRED_CONNECTION_MODE)
+        for token in on_disk["tokens"]:
+            self.assertEqual(token.get("projects"), ["lybra"])
+        # raw token is on disk (0600) but NEVER in the rendered/redacted report
+        rendered = render_connection_table(result)
+        for token in on_disk["tokens"]:
+            self.assertNotIn(token["token"], rendered)
+
+    def test_projects_value_is_slug_space_not_normalized(self) -> None:
+        # R-b: token.projects records the project selection verbatim in the resolve_active_project
+        # slug space (no display-name normalization layer introduced).
+        cfg = self._build(project="ai-project-os")
+        self.assertEqual(cfg["tokens"][0].get("projects"), ["ai-project-os"])
 
 
 if __name__ == "__main__":
