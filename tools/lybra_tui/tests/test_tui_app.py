@@ -28,6 +28,36 @@ class TuiAppTests(unittest.TestCase):
         self.assertIn("shift+tab", keys)
         self.assertIn("escape", keys)
 
+    def test_agents_command_is_oneshot_readonly_projection(self) -> None:
+        # AIPOS-234: /agents reads the SAME queue observation /queue uses (read-only) and renders a
+        # by-agent snapshot once. Assert it calls only observe("queue"), renders the grouped owner +
+        # the "not live" disclosure, and performs no mutation.
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.agents_view import NOT_LIVE_LABEL
+        from tools.lybra_tui.app import build_app
+
+        session = MagicMock()
+        session.status_line.return_value = "gate ... · read-only-view"
+        session.observe.return_value = {
+            "data": {"tasks": [
+                {"task_id": "AIPOS-9", "queue_state": "claimed", "claimed_by": "dev.codex.local"},
+            ]}
+        }
+        app = build_app(session, MagicMock(), workspace_root="/tmp/ws")
+        app._pre = MagicMock()      # bypass DOM mount
+        app._system = MagicMock()
+
+        app._cmd_agents()
+
+        session.observe.assert_called_once_with("queue")  # one-shot, single read
+        rendered = app._pre.call_args.args[0]
+        self.assertIn("dev.codex.local", rendered)         # grouped by owning instance
+        self.assertIn("AIPOS-9", rendered)
+        self.assertIn(NOT_LIVE_LABEL, rendered)            # honest disclosure rendered
+        # read-only: no mutating session entrypoints touched
+        session.confirm_gates.assert_not_called()
+
     def test_run_tui_constructs_app_through_real_call_path(self) -> None:
         # AIPOS-216 regression for the build_app signature drift that crashed `lybra tui`:
         # walk the actual run_tui → build_app path (with copilot + workspace_root) with .run()

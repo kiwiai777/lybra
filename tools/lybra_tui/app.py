@@ -37,6 +37,7 @@ from tools.aipos_cli.workspace_config import (
     scaffold_project,
     set_active_project,
 )
+from tools.lybra_tui.agents_view import render_agents
 from tools.lybra_tui.presentation import LYBRA_GREEN, banner, color_enabled
 from tools.lybra_tui.state import COPILOT_MODE, MODES, TuiSession
 
@@ -47,6 +48,7 @@ COMMANDS: tuple[tuple[str, str], ...] = (
     ("/draft", "turn the conversation so far into a project-init task-card draft (read-only)"),
     ("/proceed", "land the pending card under 5_tasks/drafts/ + stage a publish dry-run (never publishes; Owner confirms OOB)"),
     ("/queue", "observe the queue summary (read-only)"),
+    ("/agents", "snapshot tasks grouped by agent (read-only; as recorded, not live)"),
     ("/validate", "run the validator (read-only)"),
     ("/gates", "list pending confirm gates (read-only view; confirm is OOB)"),
     ("/mode", "switch mode: /mode [observe|confirm|copilot]"),
@@ -560,6 +562,8 @@ class LybraTui(App):
             elif cmd == "/queue":
                 self._pre(json.dumps(self._session.observe("queue").get("data", {}).get("summary", {}), indent=2))
                 self._system("Read-only queue summary (no truth changed).")
+            elif cmd == "/agents":
+                self._cmd_agents()
             elif cmd == "/validate":
                 self._pre(json.dumps(self._session.observe("validate").get("summary", {}), indent=2))
                 self._system("Read-only validator run (no truth changed).")
@@ -597,6 +601,16 @@ class LybraTui(App):
         lines.append("")
         lines.append("Anything without a leading `/` is sent to the copilot as a task intent.")
         self._pre("\n".join(lines))
+
+    def _cmd_agents(self) -> None:
+        # AIPOS-234: read-only snapshot — group the SAME queue rows /queue reads, by owning agent.
+        # One-shot on-command (never auto-refresh); a projection of recorded truth, not live state.
+        tasks = self._session.observe("queue").get("data", {}).get("tasks", []) or []
+        self._pre(render_agents(tasks))
+        self._system(
+            "Read-only snapshot grouped by agent (no truth changed). "
+            "As recorded — Lybra does not track live presence."
+        )
 
     def _cmd_gates(self) -> None:
         # Ruling 1: `/gates` is a READ-ONLY VIEW of pending confirm gates — not an action.
