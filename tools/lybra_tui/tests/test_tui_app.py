@@ -58,6 +58,57 @@ class TuiAppTests(unittest.TestCase):
         # read-only: no mutating session entrypoints touched
         session.confirm_gates.assert_not_called()
 
+    def test_apply_cjk_kitty_fix_reduces_to_disambiguate_only(self) -> None:
+        # AIPOS-237 (F-o3-12a): the fix reduces the kitty enable flag to DISAMBIGUATE-only so IME
+        # CJK is delivered as plain UTF-8. Assert the RESULT VALUES (not merely "it ran").
+        from textual.drivers import linux_driver as ld
+        from tools.lybra_tui.app import apply_cjk_kitty_fix
+
+        saved = (
+            ld.KITTY_DISAMBIGUATE_ESCAPE_CODES,
+            ld.KITTY_REPORT_ALL_KEYS,
+            ld.KITTY_REPORT_ASSOCIATED_TEXT,
+        )
+        try:
+            apply_cjk_kitty_fix()
+            self.assertEqual(ld.KITTY_REPORT_ASSOCIATED_TEXT, 0)
+            self.assertEqual(ld.KITTY_REPORT_ALL_KEYS, 0)
+            self.assertEqual(ld.KITTY_DISAMBIGUATE_ESCAPE_CODES, 1)
+            # the driver would OR these -> exactly \x1b[>1u (DISAMBIGUATE only)
+            flag = (
+                ld.KITTY_DISAMBIGUATE_ESCAPE_CODES
+                | ld.KITTY_REPORT_ALL_KEYS
+                | ld.KITTY_REPORT_ASSOCIATED_TEXT
+            )
+            self.assertEqual(flag, 1)
+        finally:
+            (
+                ld.KITTY_DISAMBIGUATE_ESCAPE_CODES,
+                ld.KITTY_REPORT_ALL_KEYS,
+                ld.KITTY_REPORT_ASSOCIATED_TEXT,
+            ) = saved
+
+    def test_apply_cjk_kitty_fix_fails_loud_on_missing_constant(self) -> None:
+        # A Textual rename/refactor must FAIL LOUD, never a silent no-op.
+        from textual.drivers import linux_driver as ld
+        from tools.lybra_tui.app import apply_cjk_kitty_fix
+
+        saved = ld.KITTY_REPORT_ASSOCIATED_TEXT
+        try:
+            del ld.KITTY_REPORT_ASSOCIATED_TEXT
+            with self.assertRaises(RuntimeError) as cm:
+                apply_cjk_kitty_fix()
+            self.assertIn("KITTY_REPORT_ASSOCIATED_TEXT", str(cm.exception))
+        finally:
+            ld.KITTY_REPORT_ASSOCIATED_TEXT = saved
+
+    def test_transcript_widgets_stay_selectable(self) -> None:
+        # AIPOS-237 (F-o3-12b): copy is native terminal selection (mouse capture is off, see
+        # test_run_tui...). Assert nothing disables Textual/terminal text selection.
+        from tools.lybra_tui.app import LybraTui
+
+        self.assertTrue(LybraTui.ALLOW_SELECT)
+
     def test_run_tui_constructs_app_through_real_call_path(self) -> None:
         # AIPOS-216 regression for the build_app signature drift that crashed `lybra tui`:
         # walk the actual run_tui → build_app path (with copilot + workspace_root) with .run()
@@ -89,6 +140,9 @@ class TuiAppTests(unittest.TestCase):
         run.assert_called_once()
         constructed = run.call_args.args[0]
         self.assertIsInstance(constructed, LybraTui)
+        # AIPOS-237 (F-o3-12b): the TUI runs with mouse capture OFF so the terminal keeps native
+        # selection + copy (Claude-Code parity). Assert the real launch passes mouse=False.
+        self.assertEqual(run.call_args.kwargs.get("mouse"), False)
 
     def test_session_active_project_state_and_status_line(self) -> None:
         # AIPOS-230 §2: client-side active-project state mirrors set_mode; status line shows it.

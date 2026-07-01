@@ -56,11 +56,14 @@ lybra tui --gate-url http://127.0.0.1:7118 --workspace-root ./ws --project my_pr
 The LLM key is read from the `LYBRA_PLANCHAT_LLM_KEY` environment variable (never passed on the
 command line). Without an LLM config, `lybra tui` opens in read-only observe mode.
 
-The TUI chat box accepts non-Latin / CJK input (Chinese, Japanese, Korean, etc.) — **pasting CJK
-always works**, which proves the app itself accepts wide characters (Lybra applies no input
-restriction). *Typing* CJK via an input method, however, requires a CJK-capable terminal + IME:
-Windows Terminal + an IME, iTerm2, or macOS Terminal.app deliver this. If pasted Chinese appears
-but typed Chinese does not, the blocker is your host terminal/IME, not Lybra.
+The TUI chat box accepts non-Latin / CJK input (Chinese, Japanese, Korean, etc.) — **both typing via
+an IME and pasting work.** (Earlier builds could only paste CJK: Textual's kitty-keyboard-protocol
+`REPORT_ASSOCIATED_TEXT` parsing dropped IME-typed CJK to an empty character. Lybra now enables the
+kitty protocol with **DISAMBIGUATE only**, so direct CJK typing works **and** Shift+Enter is
+preserved.) The TUI runs with **mouse capture off** — so your terminal keeps native mouse
+(selection, scrollback, and Cmd/Ctrl+C copy of any text), exactly like Claude Code; the `/` menu is
+keyboard-navigable (↑/↓ + Enter). *Verified on Linux + macOS (incl. iTerm2 → SSH → WSL); Windows is
+out of scope.*
 
 **Source / dev (from a clone):**
 

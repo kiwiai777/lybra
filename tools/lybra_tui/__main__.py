@@ -107,7 +107,7 @@ def run_tui(
         from tools.lybra_tui.state import COPILOT_MODE
         session.mode = COPILOT_MODE
     try:
-        from tools.lybra_tui.app import build_app  # Textual import isolated here
+        from tools.lybra_tui.app import apply_cjk_kitty_fix, build_app  # Textual import isolated here
     except ImportError:
         print(
             "lybra tui requires Textual. Install it with: pip install textual "
@@ -115,7 +115,14 @@ def run_tui(
             file=sys.stderr,
         )
         return 2
-    build_app(session, copilot, workspace_root=workspace_root).run()
+    # AIPOS-237 (F-o3-12a): reduce the kitty keyboard enable flag to DISAMBIGUATE-only BEFORE the
+    # app runs, so IME-typed CJK is delivered as plain UTF-8 (types) while Shift+Enter is preserved.
+    apply_cjk_kitty_fix()
+    # AIPOS-237 (F-o3-12b): run with mouse capture OFF (mouse=False) so the TERMINAL keeps native
+    # mouse — iTerm2 (incl. over SSH) selection + scrollback + Cmd/Ctrl+C copy of ANY text work,
+    # exactly like Claude Code (Ink), which never captures the mouse. We trade Textual's in-app mouse
+    # (click/scroll — the `/` menu is keyboard-navigable anyway) for native copy/paste.
+    build_app(session, copilot, workspace_root=workspace_root).run(mouse=False)
     return 0
 
 

@@ -61,6 +61,50 @@ COMMANDS: tuple[tuple[str, str], ...] = (
     ("/exit", "quit (alias of /quit)"),
 )
 _COMMAND_NAMES = tuple(name for name, _ in COMMANDS)
+
+
+def apply_cjk_kitty_fix() -> None:
+    """AIPOS-237 Slice G (F-o3-12a): enable the kitty keyboard protocol with DISAMBIGUATE only.
+
+    Textual's Linux driver enables the kitty protocol with ``REPORT_ASSOCIATED_TEXT`` (flag 16),
+    whose CSI-u *associated text* Textual parses to an EMPTY character under iTerm2 — so IME-typed
+    CJK is received but dropped (F-o3-12a). Reducing the enable flag to DISAMBIGUATE-only
+    (``\\x1b[>1u``) makes printable text — including CJK — fall back to plain UTF-8 (types correctly),
+    while ``DISAMBIGUATE`` still distinguishes Shift+Enter. Owner-confirmed on iTerm2→SSH→WSL.
+
+    This is a client-side override of the driver's OWN module constants; the Textual package is not
+    modified. It depends on Textual ``linux_driver``'s PRIVATE constant names, so it is guarded:
+      * PRE: the three constant names must exist — a rename/refactor **fails LOUD** (never a silent
+        no-op);
+      * POST: the result values are asserted (ASSOCIATED_TEXT == 0, ALL_KEYS == 0, DISAMBIGUATE == 1).
+    macOS runs through the same ``linux_driver`` (covered); Windows is out of scope.
+    """
+    from textual.drivers import linux_driver as _ld
+
+    required = (
+        "KITTY_DISAMBIGUATE_ESCAPE_CODES",
+        "KITTY_REPORT_ALL_KEYS",
+        "KITTY_REPORT_ASSOCIATED_TEXT",
+    )
+    missing = [name for name in required if not hasattr(_ld, name)]
+    if missing:
+        raise RuntimeError(
+            "AIPOS-237 CJK fix cannot apply: textual.drivers.linux_driver is missing "
+            f"{missing} (a Textual rename/refactor). Re-derive the DISAMBIGUATE-only kitty "
+            "override for this Textual version — do not ship a silent no-op."
+        )
+    _ld.KITTY_REPORT_ALL_KEYS = 0
+    _ld.KITTY_REPORT_ASSOCIATED_TEXT = 0
+    if not (
+        _ld.KITTY_REPORT_ASSOCIATED_TEXT == 0
+        and _ld.KITTY_REPORT_ALL_KEYS == 0
+        and _ld.KITTY_DISAMBIGUATE_ESCAPE_CODES == 1
+    ):
+        raise RuntimeError(
+            "AIPOS-237 CJK fix post-condition failed: expected the kitty enable flag to reduce to "
+            f"DISAMBIGUATE-only, got DISAMBIGUATE={_ld.KITTY_DISAMBIGUATE_ESCAPE_CODES} "
+            f"ALL_KEYS={_ld.KITTY_REPORT_ALL_KEYS} ASSOCIATED_TEXT={_ld.KITTY_REPORT_ASSOCIATED_TEXT}."
+        )
 _NEXT_AFTER_DRAFT = (
     "Next: review the card, then `/proceed` to land it + stage the publish dry-run "
     "(the Owner confirms out of band)."

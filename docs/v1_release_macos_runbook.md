@@ -117,11 +117,14 @@ an explicit next-step line. **`/proceed`** lands the draft + stages a publish dr
 publish — the line says so and that is the OOB Owner confirm. `/mode [observe|confirm|copilot]`
 switches mode without Shift+Tab. `Ctrl+C` to quit.
 
-**CJK input:** the chat box accepts Chinese/Japanese/Korean. **Pasting CJK always works** — that is
-the proof the app itself accepts wide characters (Lybra applies no input restriction). *Typing* CJK
-via an IME requires a CJK-capable terminal + IME (Terminal.app / iTerm2 deliver it on macOS). If
-pasted Chinese appears but typed Chinese does not, the blocker is the host terminal/IME, not Lybra —
-register it as a finding, do not patch the app.
+**CJK input (AIPOS-237):** the chat box accepts Chinese/Japanese/Korean by **direct IME typing AND
+paste.** (Earlier builds only pasted: Textual's kitty-protocol `REPORT_ASSOCIATED_TEXT` parsing
+dropped IME-typed CJK to an empty character. Lybra now enables the kitty protocol **DISAMBIGUATE
+only**, so typing works and Shift+Enter is preserved.) The TUI runs with **mouse capture off**
+(`run(mouse=False)`), so iTerm2 keeps native selection + scrollback + Cmd/Ctrl+C copy of any text —
+Claude-Code parity. Verify on the npm-installed prefix: type 中文 directly (it lands); Shift+Enter and
+Ctrl+J both newline; **select any text with the mouse and Cmd+C copies it**. Quit = **Ctrl+C** /
+`/quit`.
 
 ## New surfaces (post-AIPOS-220 — AIPOS-235 release-gate v2)
 
