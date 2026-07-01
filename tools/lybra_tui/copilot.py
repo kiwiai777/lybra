@@ -54,6 +54,13 @@ _QUEUE_LIST = "lybra_queue_list"
 _TASK_PREVIEW = "lybra_task_preview"
 _VALIDATE = "lybra_validate"
 
+# AIPOS-236 Slice A (F-o3-1): a static, non-empty User-Agent on the outbound LLM call.
+# Without it, urllib sends "Python-urllib/3.x", which WAF-protected (Cloudflare-class)
+# OpenAI-compatible endpoints reject with 403 — making copilot chat unusable. Static value
+# (no version coupling, no external dependency); this is only an outbound HTTP header — it
+# changes nothing about the read-only / scopes[] / zero-write copilot contract.
+_USER_AGENT = "lybra-copilot"
+
 # Template defaults the copilot fills for required/recommended fields the LLM need not invent.
 # status MUST be pending (validator); created_by marks copilot authorship (DG-8 / N4 evidence).
 _CARD_DEFAULTS = {
@@ -151,6 +158,7 @@ class LLMClient:
         headers = {
             "Authorization": f"Bearer {self._config.api_key}",
             "Content-Type": "application/json",
+            "User-Agent": _USER_AGENT,
         }
         url = self._config.base_url.rstrip("/") + "/chat/completions"
         req = _request.Request(url, data=body, headers=headers, method="POST")

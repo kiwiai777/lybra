@@ -325,6 +325,35 @@ class CopilotTests(unittest.TestCase):
         self.assertEqual(client.last_usage.prompt_tokens, 11)
         self.assertEqual(client.last_usage.completion_tokens, 22)
 
+    def test_llm_client_sends_user_agent_header(self) -> None:
+        # AIPOS-236 Slice A (F-o3-1): the outbound /chat/completions request must carry a non-empty
+        # User-Agent (else urllib's default "Python-urllib/*" is 403'd by WAF-protected endpoints).
+        # Capture the ACTUAL Request handed to the opener and assert the real header value.
+        import io
+        from tools.lybra_tui.copilot import LLMClient, LLMConfig, _USER_AGENT
+
+        class _Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        captured: dict[str, object] = {}
+
+        def _open(req, timeout=None):
+            captured["req"] = req
+            return _Resp(json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode("utf-8"))
+
+        client = LLMClient(LLMConfig(base_url="http://x", api_key="k"))
+        client._opener.open = _open  # type: ignore[assignment]
+        client.complete([{"role": "user", "content": "hi"}])
+
+        req = captured["req"]
+        ua = req.get_header("User-agent")  # urllib capitalizes header keys
+        self.assertIsNotNone(ua, "outbound LLM request is missing a User-Agent header")
+        self.assertEqual(ua, _USER_AGENT)
+        self.assertTrue(ua.strip(), "User-Agent must be non-empty")
+
     def test_copilot_module_imports_no_write_helper(self) -> None:
         src = (Path(__file__).resolve().parent.parent / "copilot.py").read_text(encoding="utf-8")
         for forbidden in ("draft_writer", "board_adapter", "publish_draft", "execute_dry_run"):
