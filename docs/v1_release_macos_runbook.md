@@ -106,7 +106,7 @@ pip3 install "textual>=0.50"                          # into the python the TUI 
 export LYBRA_PLANCHAT_LLM_KEY="$(cat ~/.lybra_planchat_key)"
 unset LYBRA_PYTHON                                    # use the python that has textual
 "$PREFIX/bin/lybra" tui --gate-url http://127.0.0.1:7118 --workspace-root "$WS" --project rgmac \
-  --llm-base-url https://xchai.xyz/v1 --llm-model claude-sonnet-4-6 --llm-key-env LYBRA_PLANCHAT_LLM_KEY
+  --llm-base-url https://goswitch.online/v1 --llm-model claude-sonnet-4-6 --llm-key-env LYBRA_PLANCHAT_LLM_KEY
 ```
 With an LLM config the **first screen is copilot** (status line ends `· mode copilot`; no Shift+Tab
 needed). Confirm (AIPOS-221 plan-chat UX): **no `build_app` TypeError at launch** (AIPOS-216), the
