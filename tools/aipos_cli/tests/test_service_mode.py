@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import stat
 import subprocess
@@ -40,6 +41,14 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
 
 
 def _wait_for_port(port: int, *, timeout: float = 8.0) -> None:
@@ -232,6 +241,132 @@ class ServiceModeTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual([call.args[0] for call in kill.call_args_list], [111, 333])
+
+    # ---- AIPOS-238 (F-o3-13) serve lifecycle fail-closed hardening ----
+
+    def test_ports_in_use_detects_active_listener_via_connect(self) -> None:
+        # D1: connect() probe reports an ACTIVE listener; a free port is not reported.
+        from tools.aipos_cli.service_mode import _ports_in_use
+
+        free = _free_port()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("127.0.0.1", free))
+            srv.listen()
+            occupied = _ports_in_use([("127.0.0.1", free, "mcp")])
+            self.assertEqual(occupied, [("127.0.0.1", free, "mcp")])
+        # after close, the port is free again → not reported
+        self.assertEqual(_ports_in_use([("127.0.0.1", free, "mcp")]), [])
+
+    def test_start_report_blocks_on_occupied_mcp_port_without_spawning(self) -> None:
+        # D1: an occupied MCP port → BLOCK naming the port; NO children spawned (no service_state).
+        board_port = _free_port()
+        mcp_port = _free_port()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as busy:
+            busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            busy.bind(("127.0.0.1", mcp_port))
+            busy.listen()
+            result = start_report(
+                self.root,
+                board_host="127.0.0.1",
+                board_port=board_port,
+                mcp_host="127.0.0.1",
+                mcp_port=mcp_port,
+                start_processes=True,
+            )
+        self.assertEqual(result.get("verdict"), "BLOCK")
+        self.assertFalse(result.get("ok"))
+        msg = json.dumps(result)
+        self.assertIn("already in use", msg)
+        self.assertIn(str(mcp_port), msg)
+        self.assertFalse(service_state_path(self.root).exists())  # never spawned
+
+    def test_serve_start_reaps_children_on_sigterm(self) -> None:
+        # B/F-NEW-b: a plain SIGTERM to the supervisor reaps board+mcp (no orphans holding the port).
+        board_port = _free_port()
+        mcp_port = _free_port()
+        env = os.environ.copy()
+        env["NO_PROXY"] = "127.0.0.1,localhost,::1"
+        conn_json = str(self.root / CONNECTION_REL)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "--workspace-root", str(self.root),
+             "serve", "--connection-json", conn_json, "start",
+             "--board-port", str(board_port), "--mcp-port", str(mcp_port)],
+            cwd=Path(__file__).resolve().parents[3], env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        child_pids: list[int] = []
+        try:
+            _wait_for_port(mcp_port)
+            state = json.loads(service_state_path(self.root).read_text(encoding="utf-8"))
+            child_pids = [int(p["pid"]) for p in state["processes"]]
+            proc.send_signal(signal.SIGTERM)  # NOT SIGINT — the F-NEW-b path
+            proc.wait(timeout=8)
+            deadline = time.time() + 6
+            alive = child_pids
+            while time.time() < deadline:
+                alive = [pid for pid in child_pids if _pid_alive(pid)]
+                if not alive:
+                    break
+                time.sleep(0.2)
+            self.assertEqual(alive, [], f"orphaned children survived SIGTERM: {alive}")
+        finally:
+            for pid in child_pids:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            if proc.poll() is None:
+                proc.kill()
+            proc.communicate(timeout=5)
+
+    def test_serve_stop_kills_without_home_root_or_project(self) -> None:
+        # A/F-NEW-a: `serve stop --connection-json X` locates the state + kills recorded PIDs even
+        # with NO LYBRA_HOME_ROOT / no established project (it must not fail-close on project resolve).
+        board_port = _free_port()
+        mcp_port = _free_port()
+        env = os.environ.copy()
+        env["NO_PROXY"] = "127.0.0.1,localhost,::1"
+        conn_json = str(self.root / CONNECTION_REL)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "--workspace-root", str(self.root),
+             "serve", "--connection-json", conn_json, "start",
+             "--board-port", str(board_port), "--mcp-port", str(mcp_port)],
+            cwd=Path(__file__).resolve().parents[3], env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        child_pids: list[int] = []
+        try:
+            _wait_for_port(mcp_port)
+            state = json.loads(service_state_path(self.root).read_text(encoding="utf-8"))
+            child_pids = [int(p["pid"]) for p in state["processes"]]
+            # stop in an env with NO LYBRA_HOME_ROOT and NO --workspace-root — only --connection-json.
+            stop_env = {k: v for k, v in env.items() if k not in ("LYBRA_HOME_ROOT", "LYBRA_ACTIVE_PROJECT")}
+            stopped = subprocess.run(
+                [sys.executable, "-m", "tools.aipos_cli.aipos_cli",
+                 "serve", "--connection-json", conn_json, "stop"],
+                cwd=Path(__file__).resolve().parents[3], env=stop_env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10, check=False,
+            )
+            self.assertEqual(stopped.returncode, 0, f"stop failed: {stopped.stderr}")
+            self.assertNotIn("PROJECT_NOT_ESTABLISHED", stopped.stdout + stopped.stderr)
+            deadline = time.time() + 6
+            alive = child_pids
+            while time.time() < deadline:
+                alive = [pid for pid in child_pids if _pid_alive(pid)]
+                if not alive:
+                    break
+                time.sleep(0.2)
+            self.assertEqual(alive, [], f"stop did not kill children: {alive}")
+        finally:
+            for pid in child_pids:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            if proc.poll() is None:
+                proc.kill()
+            proc.communicate(timeout=5)
 
     def test_service_mode_spawn_listens_and_resolves_workspace_without_shell_env(self) -> None:
         board_port = _free_port()

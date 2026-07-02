@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -598,8 +599,51 @@ def _run_supervisor(
         "--service-connection-json",
         str(connection_path(workspace_root, connection_target=connection_target)),
     ]
+    # AIPOS-238 (F-o3-13 D1): refuse an already-OCCUPIED port up front. A stale serve still answering
+    # would otherwise keep OLD tokens (→ downstream 401) while we falsely report success. Probe BOTH
+    # board + mcp with a connect() active-listener test (see _ports_in_use).
+    board_host_v = str(board.get("host") or DEFAULT_BOARD_HOST)
+    board_port_v = int(board.get("port") or DEFAULT_BOARD_PORT)
+    mcp_host_v = str(mcp.get("host") or DEFAULT_MCP_HOST)
+    mcp_port_v = int(mcp.get("port") or DEFAULT_MCP_PORT)
+    occupied = _ports_in_use([(board_host_v, board_port_v, "board"), (mcp_host_v, mcp_port_v, "mcp")])
+    if occupied:
+        names = ", ".join(f"{n} {h}:{p}" for h, p, n in occupied)
+        return _blocked(
+            "serve_start",
+            workspace_root,
+            [
+                {
+                    "message": (
+                        f"Port already in use: {names}. A serve is likely already running — stop it "
+                        "with `lybra serve stop`, or start on a different --mcp-port/--board-port."
+                    ),
+                    "path": str(workspace_root),
+                    "fix_command": "lybra serve stop",
+                }
+            ],
+            warnings,
+            connection_target=connection_target,
+        )
+
     processes: list[subprocess.Popen[Any]] = []
     started_at = _utc_now()
+    # AIPOS-238 (F-o3-13 B): reap children on SIGTERM/SIGHUP too, not just Ctrl-C (SIGINT). Without
+    # this, a plain `kill` / script exit / non-SIGINT trap orphans board+mcp (they keep the ports with
+    # old tokens). We route the signals into the SAME KeyboardInterrupt cleanup path — pure shutdown
+    # cleanup, NOT a daemon — and restore the prior handlers afterward.
+    prev_handlers: dict[int, Any] = {}
+
+    def _shutdown(_signum: int, _frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    for _sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if _sig is None:
+            continue
+        try:
+            prev_handlers[_sig] = signal.signal(_sig, _shutdown)
+        except (ValueError, OSError):
+            pass  # not the main thread / unsupported platform — best-effort
     try:
         processes.append(subprocess.Popen(board_cmd, env=env))
         processes.append(subprocess.Popen(mcp_cmd, env=env))
@@ -623,6 +667,38 @@ def _run_supervisor(
         pass
     finally:
         _terminate_processes(processes)
+        for _sig, _handler in prev_handlers.items():
+            try:
+                signal.signal(_sig, _handler)
+            except (ValueError, OSError):
+                pass
+    # AIPOS-238 (F-o3-13 C1b/D2): classify by the child's EXIT REASON. A self non-zero exit
+    # (returncode > 0 — a real crash / bind failure) → BLOCK. Killed-by-signal (returncode < 0, our
+    # own _terminate_processes OR an external `serve stop` that killed the children directly) or a
+    # clean 0 → PASS. Exit-reason covers external stop with no flag needed.
+    crashed = [
+        (name, proc.returncode)
+        for name, proc in zip(("board", "mcp"), processes)
+        if proc.returncode is not None and proc.returncode > 0
+    ]
+    if crashed:
+        detail = ", ".join(f"{name} exit={rc}" for name, rc in crashed)
+        return _blocked(
+            "serve_start",
+            workspace_root,
+            [
+                {
+                    "message": (
+                        f"serve child exited abnormally ({detail}) — likely a bind failure or startup "
+                        "error. Check the serve log; if a stale serve holds the port, `lybra serve stop`."
+                    ),
+                    "path": str(workspace_root),
+                    "fix_command": "lybra serve stop",
+                }
+            ],
+            warnings,
+            connection_target=connection_target,
+        )
     return {
         "operation": "serve_start",
         "ok": True,
@@ -669,6 +745,27 @@ def stop_report(workspace_root: Path, *, connection_target: Path | None = None) 
         except PermissionError:
             warnings.append({"message": f"Permission denied stopping service-owned process: {pid}", "pid": pid})
     return {"operation": "serve_stop", "ok": True, "verdict": "PASS", "workspace_root": str(workspace_root), "stopped": stopped, "warnings": warnings, "blocking_reasons": []}
+
+
+def _ports_in_use(targets: list[tuple[str, int, str]]) -> list[tuple[str, int, str]]:
+    """AIPOS-238 (F-o3-13 D1): which of (host, port, name) already have an ACTIVE listener.
+
+    Uses a `connect()` probe — an active-listener test that matches "is an old serve still
+    answering?" and is immune to `TIME_WAIT` on a just-stopped port. (A `SO_REUSEADDR`-off bind probe
+    would false-BLOCK a legit restart, because the real server sets `allow_reuse_address`.)
+    """
+    occupied: list[tuple[str, int, str]] = []
+    for host, port, name in targets:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(0.5)
+        try:
+            probe.connect((host, port))
+            occupied.append((host, port, name))  # connected → someone is listening
+        except OSError:
+            pass  # refused / no listener → free
+        finally:
+            probe.close()
+    return occupied
 
 
 def _terminate_processes(processes: list[subprocess.Popen[Any]]) -> None:

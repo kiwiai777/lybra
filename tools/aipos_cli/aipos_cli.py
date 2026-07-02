@@ -1164,9 +1164,23 @@ def main(argv: list[str] | None = None) -> int:
             parser.print_help()
             return 2
         try:
-            workspace_root = _resolve_workspace_for_command(args)
             conn_override = getattr(args, "connection_json", None)
             connection_target = Path(conn_override).expanduser() if conn_override else None
+            if args.serve_command == "stop":
+                # AIPOS-238 (F-o3-13 Part 1 A): `serve stop` is a pure lifecycle op — it locates the
+                # recorded service_state.json via connection_target (--connection-json) / the runtime
+                # root and SIGTERMs only service_owned PIDs. It must NOT fail-close on project
+                # resolution: a missing LYBRA_HOME_ROOT / unestablished project used to abort stop
+                # BEFORE any PID was killed (orphaned board+mcp kept the port). workspace_root here is
+                # cosmetic (stop_report reads the state by connection_target), so resolve leniently.
+                try:
+                    workspace_root = _resolve_workspace_for_command(args)
+                except Exception:
+                    workspace_root = Path(getattr(args, "workspace_root", None) or ".").expanduser()
+                result = stop_report(workspace_root, connection_target=connection_target)
+                print(render_json(result))
+                return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
+            workspace_root = _resolve_workspace_for_command(args)
             if args.serve_command == "start":
                 result = start_report(
                     workspace_root,
@@ -1179,8 +1193,6 @@ def main(argv: list[str] | None = None) -> int:
                 )
             elif args.serve_command == "status":
                 result = status_report(workspace_root, connection_target=connection_target)
-            elif args.serve_command == "stop":
-                result = stop_report(workspace_root, connection_target=connection_target)
             elif args.serve_command == "rotate":
                 result = rotate_report(
                     workspace_root,
