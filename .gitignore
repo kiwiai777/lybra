@@ -4,7 +4,10 @@ __pycache__/
 .vscode/
 .idea/
 .env
-task_cards/
+# AIPOS-240 r2 (F-o3-20): anchored — ONLY the repo-root audit-card dir. The unanchored form
+# also swallowed tools/aipos_cli/tests/fixtures/task_cards/ (fixtures were never tracked →
+# every fresh clone failed 4 tests; dev trees were false-green via local untracked files).
+/task_cards/
 
 .codex/
 .codex

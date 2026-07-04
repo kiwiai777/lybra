@@ -373,8 +373,12 @@ def publish_draft(
     actor: str | None = None,
     confirmer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # AIPOS-240 (F-o3-19): resolve once, locally, for symlink-safe repo-relative rendering. macOS
+    # /var→/private/var etc. make `source_path` (resolved) mismatch an unresolved `repo_root`. The
+    # `repo_root` parameter is left untouched (helpers below expect the caller's form).
+    root = repo_root.resolve()
     source_path = resolve_draft_path(repo_root, draft_path)
-    source_rel = str(source_path.relative_to(repo_root))
+    source_rel = str(source_path.resolve().relative_to(root))
     validation = {
         "action": "draft_validate",
         "path": str(Path(draft_path)),
@@ -475,7 +479,7 @@ def publish_draft(
     result["would_write"] = result["verdict"] != "BLOCK" and bool(result["target_path"])
     result["validation"] = {
         "action": "draft_validate",
-        "path": str(source_path.relative_to(repo_root)),
+        "path": str(source_path.resolve().relative_to(root)),  # AIPOS-240: symlink-safe
         "task_id": validation["task_id"],
         "verdict": result["verdict"],
         "blocking_reasons": list(validation["blocking_reasons"]),

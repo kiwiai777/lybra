@@ -175,7 +175,7 @@ def plan_scratch_ingestion(
         if not _is_within(workspace_artifact_root, dest_abs):
             blocking.append(f"{_BLOCK_PREFIX}: computed destination escapes workspace_artifacts: {ref}")
             continue
-        dest_rel = dest_abs.relative_to(repo_root).as_posix()
+        dest_rel = dest_abs.relative_to(repo_root.resolve()).as_posix()  # AIPOS-240 r2: dest_abs is resolved (line above); symlink-safe render
         if dest_rel in seen_dest:
             blocking.append(f"{_BLOCK_PREFIX}: duplicate destination for ingested artifact: {dest_rel}")
             continue

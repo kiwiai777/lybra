@@ -75,7 +75,7 @@ def _normalize_task(
     return {
         "task_id": metadata.get("task_id"),
         "title": metadata.get("title"),
-        "path": str(path.relative_to(repo_root)),
+        "path": str(path.resolve().relative_to(repo_root.resolve())),  # AIPOS-240 (F-o3-19): symlink-safe
         "repo_root": str(repo_root),
         "queue_state": queue_state,
         "frontmatter_status": frontmatter_status,

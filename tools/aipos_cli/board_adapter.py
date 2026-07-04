@@ -1482,8 +1482,9 @@ def _mcp_claim_record_plan(
     session_id = str(updated_metadata.get("active_session_id") or "")
     claimed_at = str(updated_metadata.get("claimed_at") or "")
     claim_path, session_path = claim_record_paths(repo_root, task_id, claim_id, session_id)
-    claim_rel = str(claim_path.relative_to(repo_root))
-    session_rel = str(session_path.relative_to(repo_root))
+    root = repo_root.resolve()  # AIPOS-240 (F-o3-19): record paths are .resolve()d; symlink-safe render
+    claim_rel = str(claim_path.resolve().relative_to(root))
+    session_rel = str(session_path.resolve().relative_to(root))
     blocking: list[str] = []
     if claim_path.exists():
         blocking.append(f"Claim record already exists: {claim_rel}")
@@ -1568,8 +1569,9 @@ def _mcp_return_record_plan(
     return_id = return_id or build_runtime_id("return", task_id, returned_at, canonical_agent_instance)
     session_path = session_record_path(repo_root, task_id, session_id)
     return_path = return_record_path(repo_root, task_id, return_id)
-    session_rel = str(session_path.relative_to(repo_root))
-    return_rel = str(return_path.relative_to(repo_root))
+    root = repo_root.resolve()  # AIPOS-240 (F-o3-19): record paths are .resolve()d; symlink-safe render
+    session_rel = str(session_path.resolve().relative_to(root))
+    return_rel = str(return_path.resolve().relative_to(root))
     blocking: list[str] = []
     if not session_path.exists():
         blocking.append(f"Session record does not exist: {session_rel}")
@@ -2171,7 +2173,7 @@ def _build_audit_dispatch_preview(
     timestamp = planned_dispatched_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     dispatch_id = planned_dispatch_id or build_runtime_id("dispatch", str(source_task.get("task_id") or ""), timestamp, canonical_agent_instance or actor)
     dispatch_path = audit_dispatch_record_path(repo_root, str(source_task.get("task_id") or ""), dispatch_id)
-    dispatch_rel = str(dispatch_path.relative_to(repo_root))
+    dispatch_rel = str(dispatch_path.resolve().relative_to(repo_root.resolve()))  # AIPOS-240: symlink-safe
     if dispatch_path.exists():
         blocking_reasons.append(f"Audit dispatch record already exists: {dispatch_rel}")
 
@@ -2524,7 +2526,8 @@ def _build_audit_verdict_preview(
     timestamp = planned_verdict_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     verdict_id = planned_verdict_id or build_runtime_id("verdict", str(reviewed_task.get("task_id") or ""), timestamp, canonical_agent_instance or actor)
     verdict_path = audit_verdict_record_path(repo_root, str(reviewed_task.get("task_id") or ""), verdict_id)
-    verdict_rel = str(verdict_path.relative_to(repo_root))
+    root = repo_root.resolve()  # AIPOS-240 (F-o3-19): record paths are .resolve()d; symlink-safe render
+    verdict_rel = str(verdict_path.resolve().relative_to(root))
     if verdict_path.exists():
         blocking_reasons.append(f"Audit verdict record already exists: {verdict_rel}")
 
@@ -2570,7 +2573,7 @@ def _build_audit_verdict_preview(
         recommended_next_action=recommended_next_action,
     )
     session_markdown = ""
-    session_rel = str(session_path.relative_to(repo_root)) if session_path else ""
+    session_rel = str(session_path.resolve().relative_to(root)) if session_path else ""  # AIPOS-240: symlink-safe
     if session_path and session_path.exists():
         existing_metadata, existing_body, parse_warnings = load_session_record(session_path)
         for warning in parse_warnings:

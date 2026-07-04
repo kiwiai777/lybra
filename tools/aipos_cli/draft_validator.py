@@ -251,7 +251,7 @@ def validate_draft_file(repo_root: Path, provided_path: str | Path) -> dict[str,
     result = validate_draft_metadata(repo_root, metadata, actual_path=path, parse_errors=parse_errors)
     return {
         "action": "draft_validate",
-        "path": str(path.relative_to(repo_root)) if _resolved_within(repo_root, path) else str(path),
+        "path": str(path.resolve().relative_to(repo_root.resolve())) if _resolved_within(repo_root, path) else str(path),  # AIPOS-240 r2: the guard both-resolves; the render must too (macOS /var→/private/var)
         "drafts_dir": str(drafts_root.relative_to(repo_root)),
         "task_id": result["task_id"],
         "verdict": result["verdict"],

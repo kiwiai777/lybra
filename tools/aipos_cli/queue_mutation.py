@@ -290,7 +290,7 @@ def _base_result(source_path: Path, repo_root: Path, source_task: dict[str, Any]
         "would_move": False,
         "moved": False,
         "task_id": source_task.get("task_id"),
-        "source_path": str(source_path.relative_to(repo_root)),
+        "source_path": str(source_path.resolve().relative_to(repo_root.resolve())),  # AIPOS-240: symlink-safe
         "target_path": None,
         "from_state": source_task.get("queue_state"),
         "to_state": to_state,
@@ -332,6 +332,7 @@ def _prepare_records_plan(
 ) -> dict[str, Any]:
     task_id = str(updated_metadata.get("task_id") or "")
     validate_safe_task_id(task_id)
+    root = repo_root.resolve()  # AIPOS-240 (F-o3-19): symlink-safe repo-relative render (record paths are .resolve()d)
     timestamp = str(updated_metadata.get("claimed_at") or updated_metadata.get("blocked_at") or updated_metadata.get("completed_at") or updated_metadata.get("reopened_at") or "")
     result: dict[str, Any] = {
         "with_records": True,
@@ -350,12 +351,12 @@ def _prepare_records_plan(
         claim_path, session_path = claim_record_paths(repo_root, task_id, claim_id, session_id)
         result["proposed_claim_id"] = claim_id
         result["proposed_session_id"] = session_id
-        result["claim_log_path"] = str(claim_path.relative_to(repo_root))
-        result["session_record_path"] = str(session_path.relative_to(repo_root))
+        result["claim_log_path"] = str(claim_path.resolve().relative_to(root))
+        result["session_record_path"] = str(session_path.resolve().relative_to(root))
         if claim_path.exists():
-            result["record_blocking_reasons"].append(f"Claim log already exists: {claim_path.relative_to(repo_root)}")
+            result["record_blocking_reasons"].append(f"Claim log already exists: {claim_path.resolve().relative_to(root)}")
         if session_path.exists():
-            result["record_blocking_reasons"].append(f"Session record already exists: {session_path.relative_to(repo_root)}")
+            result["record_blocking_reasons"].append(f"Session record already exists: {session_path.resolve().relative_to(root)}")
         claim_markdown = build_claim_log_markdown(
             task_id=task_id,
             task_path=task_target_path.replace("/pending/", "/claimed/"),
@@ -395,9 +396,9 @@ def _prepare_records_plan(
     session_id = str(source_metadata.get("active_session_id") or source_metadata.get("last_session_id") or "")
     path = session_record_path(repo_root, task_id, session_id)
     result["proposed_session_id"] = session_id
-    result["session_record_path"] = str(path.relative_to(repo_root))
+    result["session_record_path"] = str(path.resolve().relative_to(root))
     if not path.exists():
-        result["record_blocking_reasons"].append(f"Session record does not exist: {path.relative_to(repo_root)}")
+        result["record_blocking_reasons"].append(f"Session record does not exist: {path.resolve().relative_to(root)}")
         return result
 
     existing_metadata, existing_body, parse_warnings = load_session_record(path)
