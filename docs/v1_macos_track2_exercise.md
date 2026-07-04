@@ -107,7 +107,7 @@ text** (Claude-Code parity). Quit = **Ctrl+C** or `/quit`.
 
 ## Enforcement — /project switch → PROJECT_SCOPE_DENIED (R2 Slice 5)
 Token is scoped to `$PROJECT_A` (launcher mints `rotate --project`). `/project switch demo` then a
-gated read (`/queue` or `/agents`) → **`PROJECT_SCOPE_DENIED`** (18 gated / 0 exempt; owner included —
+gated read (`/queue` or `/agents`) → **`PROJECT_SCOPE_DENIED`** (19 gated / 0 exempt; owner included —
 no client-side fake isolation). `/project switch $PROJECT_A` → back in scope, reads work.
 
 ## /agents monitoring (AIPOS-234)

@@ -637,5 +637,57 @@ class HttpSseTransportTests(unittest.TestCase):
         self.assertIn("gate_signature", rec)
 
 
+class ServiceRoleRegistryProjectsTests(unittest.TestCase):
+    """AIPOS-242 (F-NEW, found live): the registry must CARRY the `projects` dimension.
+
+    `rotate --project` mints `projects` into connection.json, but load_service_role_registry
+    dropped it — so `_service_role_capability`'s entry.get("projects") was always empty and the
+    project gate NEVER engaged on the real HTTP serve path (live PROJECT_SCOPE_DENIED was
+    unreachable end to end). These pins make a re-drop turn red.
+    """
+
+    def _registry_for(self, token_entry: dict) -> dict:
+        from tools.mcp_server.http_sse import load_service_role_registry
+
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = Path(tmp) / "connection.json"
+            conn.write_text(json.dumps({"tokens": [token_entry]}), encoding="utf-8")
+            return load_service_role_registry(conn)
+
+    def test_registry_carries_projects_when_minted(self) -> None:
+        registry = self._registry_for(
+            {
+                "token": "tok-1",
+                "role": "owner",
+                "token_ref": "svc-owner",
+                "scopes": ["owner_confirm"],
+                "projects": ["lybra"],
+                "projects_enforced": True,
+            }
+        )
+        self.assertEqual(registry["tok-1"]["projects"], ["lybra"])
+        # and the capability built from it carries the dimension too (enforced end to end)
+        from tools.mcp_server.http_sse import _service_role_capability
+
+        capability, err = _service_role_capability("Bearer tok-1", registry)
+        self.assertIsNone(err)
+        self.assertEqual(capability["projects"], ["lybra"])
+        self.assertTrue(capability["projects_enforced"])
+
+    def test_registry_without_projects_stays_byte_identical(self) -> None:
+        # R-ii back-compat: a token minted WITHOUT `projects` must not gain the key (the gate then
+        # never resolves the active project for it — old behavior preserved).
+        registry = self._registry_for(
+            {"token": "tok-2", "role": "owner", "token_ref": "svc-owner", "scopes": []}
+        )
+        self.assertNotIn("projects", registry["tok-2"])
+        from tools.mcp_server.http_sse import _service_role_capability
+
+        capability, err = _service_role_capability("Bearer tok-2", registry)
+        self.assertIsNone(err)
+        self.assertNotIn("projects", capability)
+        self.assertNotIn("projects_enforced", capability)
+
+
 if __name__ == "__main__":
     unittest.main()

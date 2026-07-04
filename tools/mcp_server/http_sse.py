@@ -405,6 +405,14 @@ def load_service_role_registry(connection_json: str | Path) -> dict[str, dict[st
             # AIPOS-197: connection.json already stores a non-secret fingerprint per token.
             "fingerprint": str(item.get("fingerprint") or ""),
         }
+        # AIPOS-242 (F-NEW, found live): this registry DROPPED the `projects` dimension that
+        # `rotate --project` mints into connection.json — so `_service_role_capability`'s
+        # entry.get("projects") (AIPOS-228/229, ~:149) was ALWAYS empty and the project gate never
+        # engaged on the real HTTP serve path (live PROJECT_SCOPE_DENIED was unreachable end to
+        # end). Carry it through. Absent/[] → no key (R-ii back-compat: capability byte-identical
+        # for tokens without `projects`). The gate itself (_project_gate) is untouched.
+        if isinstance(item.get("projects"), list) and item.get("projects"):
+            registry[token]["projects"] = [str(p) for p in item["projects"]]
     if not registry:
         raise ValueError(f"Service connection config contains no usable role tokens: {path}")
     return registry

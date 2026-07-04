@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from textual import events, work
@@ -31,12 +32,39 @@ from textual.widgets.option_list import Option
 
 from tools.aipos_cli.home_git import execute_home_git_init, plan_home_git_init
 from tools.aipos_cli.workspace_config import (
-    _project_candidates,
     project_json_path,
     resolve_home_root,
     scaffold_project,
     set_active_project,
 )
+
+# AIPOS-242 (F-o3-18): the standardized PROJECT_SCOPE_DENIED message names the project the GATE
+# actually resolved ("active project 'X' is not in the token's projects [...]"). Parsing it is the
+# honest signal for the out-of-token-scope case WITHOUT touching the enforcement path
+# (_project_gate is a red line). The format is product-owned + pinned by a client-side test.
+_DENY_ACTIVE_RE = re.compile(r"active project '([^']+)'")
+
+
+def _gate_active_from_deny(payload: dict[str, Any]) -> str | None:
+    """Extract the gate-resolved active project from a PROJECT_SCOPE_DENIED payload, or None."""
+    match = _DENY_ACTIVE_RE.search(str(payload.get("message") or ""))
+    return match.group(1) if match else None
+
+
+def _observe_error_face(payload: dict[str, Any]) -> str | None:
+    """AIPOS-242 ROUND 2 (弱代理修复): shared error surface for observe-class commands.
+
+    The gate wraps errors (PROJECT_SCOPE_DENIED, ...) in a top-level {ok: False, error_code: ...,
+    message: ...} structure. Chained .get("data",{}).get("summary",{}) COLLAPSES the error to an
+    empty dict and then unconditionally renders it as success (silent failure dressed as success —
+    the F-o3-18 congruent defect). If the payload carries an error, return a loud string naming the
+    code + message; otherwise None (the caller renders success).
+    """
+    if not payload.get("ok", True):
+        code = str(payload.get("error_code") or "UNKNOWN_ERROR")
+        msg = str(payload.get("message") or "")
+        return f"{code}: {msg}" if msg else code
+    return None
 from tools.lybra_tui.agents_view import render_agents
 from tools.lybra_tui.presentation import LYBRA_GREEN, banner, color_enabled
 from tools.lybra_tui.state import COPILOT_MODE, MODES, TuiSession
@@ -604,13 +632,25 @@ class LybraTui(App):
             if cmd == "/help":
                 self._cmd_help()
             elif cmd == "/queue":
-                self._pre(json.dumps(self._session.observe("queue").get("data", {}).get("summary", {}), indent=2))
-                self._system("Read-only queue summary (no truth changed).")
+                # AIPOS-242 ROUND 2: check the error surface BEFORE chained .get (弱代理修复 — the
+                # gate error structure is {ok: False, error_code, message}, not {data: {summary}}).
+                result = self._session.observe("queue")
+                err = _observe_error_face(result)
+                if err:
+                    self._pre(f"Error: {err}")
+                else:
+                    self._pre(json.dumps(result.get("data", {}).get("summary", {}), indent=2))
+                    self._system("Read-only queue summary (no truth changed).")
             elif cmd == "/agents":
                 self._cmd_agents()
             elif cmd == "/validate":
-                self._pre(json.dumps(self._session.observe("validate").get("summary", {}), indent=2))
-                self._system("Read-only validator run (no truth changed).")
+                result = self._session.observe("validate")
+                err = _observe_error_face(result)
+                if err:
+                    self._pre(f"Error: {err}")
+                else:
+                    self._pre(json.dumps(result.get("summary", {}), indent=2))
+                    self._system("Read-only validator run (no truth changed).")
             elif cmd == "/gates":
                 self._cmd_gates()
             elif cmd == "/mode":
@@ -649,7 +689,13 @@ class LybraTui(App):
     def _cmd_agents(self) -> None:
         # AIPOS-234: read-only snapshot — group the SAME queue rows /queue reads, by owning agent.
         # One-shot on-command (never auto-refresh); a projection of recorded truth, not live state.
-        tasks = self._session.observe("queue").get("data", {}).get("tasks", []) or []
+        # AIPOS-242 ROUND 2: check error surface before chained .get (同病同治).
+        result = self._session.observe("queue")
+        err = _observe_error_face(result)
+        if err:
+            self._pre(f"Error: {err}")
+            return
+        tasks = result.get("data", {}).get("tasks", []) or []
         self._pre(render_agents(tasks))
         self._system(
             "Read-only snapshot grouped by agent (no truth changed). "
@@ -686,6 +732,11 @@ class LybraTui(App):
         except Exception as exc:
             self._system(f"Error: {exc}")
             return
+        # AIPOS-242 ROUND 2: check error surface (同病同治).
+        err = _observe_error_face(result)
+        if err:
+            self._pre(f"Error: {err}")
+            return
         data = result.get("data") if isinstance(result, dict) else None
         verdict = "UNKNOWN"
         effective = None
@@ -719,15 +770,52 @@ class LybraTui(App):
             self._system("Usage: /project (list) | /project new <name> | /project switch <name>.")
 
     def _cmd_project_list(self) -> None:
+        # AIPOS-242 (F-o3-2): the GATE is the single source of truth for the project view. The old
+        # implementation listed the CLIENT's guess (a bare resolve_home_root() reads the client
+        # env/defaults — potentially a DIFFERENT home than the gate's; the O3 "no established
+        # projects" symptom). No silent client-side fallback: gate view, or an honest error.
         try:
-            home = resolve_home_root()
-            candidates = _project_candidates(home)
+            status = self._session.observe("project_status")
         except Exception as exc:
-            self._system(f"Error: {exc}")
+            self._system(f"Error: could not read the gate's project view: {exc}")
             return
-        active = self._session.active_project or "(none — gate resolves via ~/.lybra/config.json)"
-        listing = "\n".join(f"  {'* ' if c == self._session.active_project else '  '}{c}" for c in candidates) or "  (no established projects)"
-        self._pre(f"Projects under {home}:\n{listing}\n\nActive: {active}")
+        code = str(status.get("error_code") or "")
+        if code == "PROJECT_SCOPE_DENIED":
+            gate_active = _gate_active_from_deny(status)
+            seen = (
+                f"the gate currently resolves '{gate_active}'"
+                if gate_active
+                else "the gate's active project"
+            )
+            self._pre(
+                f"PROJECT_SCOPE_DENIED — {seen}, which is outside your token's projects.\n"
+                f"All gated reads (including this view) are denied until you switch back:\n"
+                f"  /project switch <name-in-your-token-scope>"
+            )
+            return
+        if code:
+            self._system(f"Error: gate project view failed: {code}: {status.get('message')}")
+            return
+        gate_active = status.get("active_project")
+        projects = [str(p) for p in (status.get("projects") or [])]
+        listing = "\n".join(
+            f"  {'* ' if p == gate_active else '  '}{p}" for p in projects
+        ) or "  (no established projects)"
+        active_line = (
+            f"Active (gate): {gate_active}"
+            if gate_active
+            else f"Active (gate): unresolved — {status.get('resolution_error')}"
+        )
+        session_note = ""
+        if self._session.active_project and self._session.active_project != gate_active:
+            session_note = (
+                f"\nNOTE: this session shows '{self._session.active_project}' — differs from the "
+                f"gate. The gate wins; /project switch to realign."
+            )
+        self._pre(
+            f"Projects under {status.get('home_root')} (as resolved by the GATE):\n"
+            f"{listing}\n\n{active_line}{session_note}"
+        )
 
     def _cmd_project_new(self, name: str) -> None:
         try:
@@ -744,11 +832,11 @@ class LybraTui(App):
         self._system("Local Owner scaffold (no gate operation, no token minted).")
 
     def _cmd_project_switch(self, name: str) -> None:
-        # AIPOS-230 §1b: a local Owner action. Writes the runtime config active_project (so the gate
-        # resolves the switched project via §1a) + updates client state + rebinds the copilot
-        # session's project. NOT a copilot write; no token; no gate confirm. Scope enforcement stays
-        # in the gate (Slice 5): a switch outside the token's projects surfaces as PROJECT_SCOPE_DENIED
-        # on the next gate call — never hidden here.
+        # AIPOS-230 §1b + AIPOS-242 (F-o3-18): a local Owner action — write the runtime config,
+        # THEN VERIFY against the gate with a gated probe and report what is ACTUALLY true. The old
+        # code printed "The gate now resolves '<name>'" without ever asking the gate — under an
+        # LYBRA_ACTIVE_PROJECT env pin (resolution order: env > config) the switch silently failed
+        # while claiming success. Four outcomes, reported as measured; never optimistic.
         try:
             path = set_active_project(name)
             self._session.set_active_project(name)
@@ -757,13 +845,56 @@ class LybraTui(App):
             return
         if self._copilot is not None and hasattr(self._copilot, "project"):
             self._copilot.project = name
-        self._pre(
-            f"Active project -> {name}\n"
-            f"runtime config: {path}\n"
-            f"The gate now resolves '{name}' as the active project; calls outside your token's "
-            f"projects will return PROJECT_SCOPE_DENIED."
-        )
-        self._system("Local Owner action (runtime config only — no gate operation, no token minted).")
+        try:
+            status = self._session.observe("project_status")
+        except Exception as exc:
+            # branch 4: cannot verify -> say so, do NOT claim the gate followed.
+            self._pre(
+                f"Active project -> {name} (runtime config written: {path})\n"
+                f"WARNING: could not VERIFY that the gate followed (probe failed: {exc}).\n"
+                f"Not claiming success — re-check with /project once the gate is reachable."
+            )
+            return
+        code = str(status.get("error_code") or "")
+        if code == "PROJECT_SCOPE_DENIED":
+            gate_active = _gate_active_from_deny(status)
+            if gate_active == name:
+                # branch 2: the gate FOLLOWED the switch; the token just doesn't cover it — the
+                # live-enforcement demo state, still a verified switch.
+                self._pre(
+                    f"Gate now resolves '{name}' ✓ (verified via gated probe)\n"
+                    f"Your token's projects do not include '{name}' → every gated read/write "
+                    f"returns PROJECT_SCOPE_DENIED until you switch back."
+                )
+            else:
+                # branch 3: MISMATCH — the gate did NOT follow. Loud, with the likely cause.
+                self._pre(
+                    f"MISMATCH: runtime config written ({path}) but the gate still resolves "
+                    f"'{gate_active or '(unparseable deny)'}', NOT '{name}'.\n"
+                    f"Likely cause: the serve process carries an LYBRA_ACTIVE_PROJECT env pin "
+                    f"(resolution order: env > config), so config writes can never drive it.\n"
+                    f"Fix the serve start environment (drop the pin), then retry."
+                )
+            return
+        if code:
+            self._pre(
+                f"Runtime config written ({path}) but the verify probe errored: "
+                f"{code}: {status.get('message')}\nNot claiming success."
+            )
+            return
+        gate_active = status.get("active_project")
+        if gate_active == name:
+            # branch 1: verified in-scope switch.
+            self._pre(f"Gate now resolves '{name}' ✓ (verified via gated probe)\nruntime config: {path}")
+        else:
+            # branch 3 (success payload, different active): MISMATCH — loud.
+            self._pre(
+                f"MISMATCH: runtime config written ({path}) but the gate still resolves "
+                f"'{gate_active}', NOT '{name}'.\n"
+                f"Likely cause: LYBRA_ACTIVE_PROJECT env pin on the serve process (env > config).\n"
+                f"Fix the serve start environment (drop the pin), then retry."
+            )
+        self._system("Local Owner action + gated verify probe (read-only; no confirm, no token minted).")
 
     def _cmd_home(self, args: list[str]) -> None:
         # Owner one-shot local git setup. Transparent: prints the exact plan first, then runs it.

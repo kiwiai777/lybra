@@ -199,7 +199,7 @@ invoke this — Owner-only.)
   python3 -c "import sys,json;d=json.load(sys.stdin);print('projects_enforced=',d.get('projects_enforced'))"
 stat -f '%Lp' "$WS/.lybra/local/connection.json"   # 600; tokens fingerprint-only
 ```
-A call scoped to another project must return **`PROJECT_SCOPE_DENIED`** (enforcement, 18 gated / 0
+A call scoped to another project must return **`PROJECT_SCOPE_DENIED`** (enforcement, 19 gated / 0
 exempt). **Evidence:** `projects_enforced=True`; cross-project → denied; `600`.
 
 ### N5 — `/project switch` + `/agents` (TUI — Owner O3)

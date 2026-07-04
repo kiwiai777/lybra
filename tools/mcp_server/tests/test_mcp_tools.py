@@ -354,6 +354,7 @@ class McpToolTests(unittest.TestCase):
             names,
             [
                 "lybra_queue_list",
+                "lybra_project_status",  # AIPOS-242: the gate's own project view (read-only)
                 "lybra_task_preview",
                 "lybra_validate",
                 "lybra_context_pack_build",
@@ -366,6 +367,7 @@ class McpToolTests(unittest.TestCase):
             names_without_scope,
             [
                 "lybra_queue_list",
+                "lybra_project_status",  # AIPOS-242: read tool, exposed by default like the rest
                 "lybra_task_preview",
                 "lybra_validate",
                 "lybra_context_pack_build",

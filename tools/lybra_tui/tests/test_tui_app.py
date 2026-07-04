@@ -774,6 +774,10 @@ class TuiAppPilotTests(unittest.IsolatedAsyncioTestCase):
         # AIPOS-230 §1b: `/project switch <name>` is a LOCAL Owner action — writes the runtime
         # config (patched here), updates session state, and rebinds the copilot session's project.
         # No gate confirm / no token / no copilot write. (Scope enforcement stays in the gate.)
+        # AIPOS-242 (F-o3-18) DISCLOSED UPDATE: the old assertion pinned the OPTIMISTIC output
+        # ("Active project -> beta" printed without asking the gate) — which WAS the bug. The
+        # switch now runs a gated verify probe; with the gate agreeing (stubbed observe), the
+        # verified message is asserted instead. Intent (set active + rebind copilot) unchanged.
         import asyncio
         from pathlib import Path
         from unittest.mock import MagicMock, patch
@@ -781,6 +785,7 @@ class TuiAppPilotTests(unittest.IsolatedAsyncioTestCase):
         from tools.lybra_tui.app import build_app
 
         session = _make_session()
+        session.observe.return_value = {"ok": True, "active_project": "beta", "projects": ["beta"]}
         copilot = MagicMock()
         copilot.project = "old"
         app = build_app(session, copilot, workspace_root="/tmp/ws")
@@ -795,8 +800,9 @@ class TuiAppPilotTests(unittest.IsolatedAsyncioTestCase):
             setp.assert_called_once_with("beta")
             session.set_active_project.assert_called_once_with("beta")
             self.assertEqual(copilot.project, "beta")  # copilot session rebound
+            session.observe.assert_called_with("project_status")  # the verify probe ran
             texts = [str(w.render()) for w in app.query("#conversation Static")]
-            self.assertTrue(any("Active project -> beta" in t for t in texts))
+            self.assertTrue(any("Gate now resolves 'beta'" in t and "✓" in t for t in texts))
 
     async def test_thinking_line_blinks_word_and_shows_token_field(self) -> None:
         # AIPOS-222 fix 5: the live thinking line shows a pulsing "✽ Thinking…" (marker+word blink
@@ -855,6 +861,222 @@ class TuiAppPilotTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(final, "a final ↑/↓ token line should be rendered")
             self.assertIn("2.4k", final[-1])
             self.assertIn("7.1k", final[-1])
+
+
+@unittest.skipUnless(_HAS_TEXTUAL, "textual not installed (gate/core lane); app layer is tui-lane only")
+class ProjectViewGateTruthTests(unittest.TestCase):
+    """AIPOS-242 (Slice D) — the GATE is the single source of truth for the project view.
+
+    /project list = the gate's own view (no client-side resolve_home_root guess, no silent
+    fallback); /project switch = write THEN verify with a gated probe, four outcomes reported as
+    measured (never optimistic — F-o3-18). The deny-message parse is pinned against the REAL
+    product deny constructor so a format drift turns a test red before it breaks the client.
+    """
+
+    def _app(self, observe=None):
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+
+        session = _make_session()
+        session.active_project = "lybra"
+        if observe is not None:
+            if callable(observe):
+                session.observe.side_effect = observe
+            else:
+                session.observe.return_value = observe
+        app = build_app(session, None, workspace_root="/tmp/ws")
+        app._pre = MagicMock()
+        app._system = MagicMock()
+        return app, session
+
+    @staticmethod
+    def _pre_text(app) -> str:
+        return "\n".join(str(c.args[0]) for c in app._pre.call_args_list)
+
+    # --- deny parse pin (client regex <-> REAL product deny format coupling) ---
+    def test_deny_parse_pinned_against_real_product_deny(self) -> None:
+        from tools.lybra_tui.app import _gate_active_from_deny
+        from tools.mcp_server.tools import _project_scope_denied_result
+
+        real_deny = _project_scope_denied_result(
+            "active project 'demo' is not in the token's projects ['lybra']"
+        )["structuredContent"]
+        self.assertEqual(real_deny["error_code"], "PROJECT_SCOPE_DENIED")
+        self.assertEqual(_gate_active_from_deny(real_deny), "demo")
+        self.assertIsNone(_gate_active_from_deny({"message": "no project mentioned"}))
+
+    # --- /project list = gate view ---
+    def test_list_shows_gate_view_not_client_guess(self) -> None:
+        app, session = self._app(
+            observe={
+                "ok": True,
+                "source": "gate",
+                "home_root": "/disposable/home",
+                "active_project": "lybra",
+                "resolution_error": None,
+                "projects": ["demo", "lybra"],
+            }
+        )
+        app._cmd_project_list()
+        session.observe.assert_called_once_with("project_status")
+        out = self._pre_text(app)
+        self.assertIn("as resolved by the GATE", out)
+        self.assertIn("/disposable/home", out)
+        self.assertIn("demo", out)
+        self.assertIn("* lybra", out)
+        self.assertIn("Active (gate): lybra", out)
+
+    def test_list_denied_shows_gate_active_not_dead_air(self) -> None:
+        app, _ = self._app(
+            observe={
+                "error_code": "PROJECT_SCOPE_DENIED",
+                "message": (
+                    "Connection capability is project-scoped and does not authorize this project: "
+                    "active project 'demo' is not in the token's projects ['lybra']"
+                ),
+            }
+        )
+        app._cmd_project_list()
+        out = self._pre_text(app)
+        self.assertIn("PROJECT_SCOPE_DENIED", out)
+        self.assertIn("'demo'", out)  # what the gate ACTUALLY resolves, surfaced
+        self.assertIn("/project switch", out)
+
+    # --- /project switch: four outcomes, as measured ---
+    def _switch(self, observe, name="demo"):
+        from unittest.mock import patch as _patch
+
+        app, session = self._app(observe=observe)
+        with _patch("tools.lybra_tui.app.set_active_project", return_value="/fake/.lybra/config.json"):
+            app._cmd_project_switch(name)
+        return app, session
+
+    def test_switch_branch1_verified_in_scope(self) -> None:
+        app, _ = self._switch({"ok": True, "active_project": "demo", "projects": ["demo", "lybra"]})
+        out = self._pre_text(app)
+        self.assertIn("Gate now resolves 'demo' ✓", out)
+        self.assertIn("verified via gated probe", out)
+        self.assertNotIn("MISMATCH", out)
+
+    def test_switch_branch2_gate_followed_token_out_of_scope(self) -> None:
+        app, _ = self._switch(
+            {
+                "error_code": "PROJECT_SCOPE_DENIED",
+                "message": "…: active project 'demo' is not in the token's projects ['lybra']",
+            }
+        )
+        out = self._pre_text(app)
+        self.assertIn("Gate now resolves 'demo' ✓", out)  # switch DID land (the live-demo state)
+        self.assertIn("PROJECT_SCOPE_DENIED", out)
+        self.assertNotIn("MISMATCH", out)
+
+    def test_switch_branch3_env_pin_mismatch_is_loud(self) -> None:
+        # env-pin simulation: the gate STILL resolves 'lybra' after switching to 'demo' — the old
+        # code would have printed "The gate now resolves 'demo'" (silent failure). Now: LOUD.
+        app, _ = self._switch({"ok": True, "active_project": "lybra", "projects": ["demo", "lybra"]})
+        out = self._pre_text(app)
+        self.assertIn("MISMATCH", out)
+        self.assertIn("still resolves 'lybra'", out)
+        self.assertIn("LYBRA_ACTIVE_PROJECT env pin", out)
+        self.assertNotIn("✓", out)  # NEVER a green check on a mismatch
+
+    def test_switch_branch3b_deny_naming_other_project_is_mismatch(self) -> None:
+        app, _ = self._switch(
+            {
+                "error_code": "PROJECT_SCOPE_DENIED",
+                "message": "…: active project 'lybra' is not in the token's projects ['other']",
+            }
+        )
+        out = self._pre_text(app)
+        self.assertIn("MISMATCH", out)
+        self.assertNotIn("✓", out)
+
+    def test_switch_branch4_probe_failure_never_claims_success(self) -> None:
+        def _raise(*_a, **_k):
+            raise RuntimeError("gate unreachable")
+
+        app, _ = self._switch(_raise)
+        out = self._pre_text(app)
+        self.assertIn("could not VERIFY", out)
+        self.assertIn("Not claiming success", out)
+        self.assertNotIn("✓", out)
+        self.assertNotIn("now resolves", out)
+
+
+@unittest.skipUnless(_HAS_TEXTUAL, "textual not installed (gate/core lane); app layer is tui-lane only")
+class ObserveErrorSurfaceTests(unittest.TestCase):
+    """AIPOS-242 ROUND 2 (弱代理修复) — observe-class commands MUST surface gate errors loudly.
+
+    The gate wraps errors (PROJECT_SCOPE_DENIED, ...) in {ok: False, error_code, message}, NOT
+    {data: {summary}}. Chained .get("data",{}).get("summary",{}) COLLAPSED the error to {} and
+    rendered it as success (silent failure dressed as success — the F-o3-18 congruent defect).
+    With _observe_error_face: an error structure prints the code + message and skips success text.
+    """
+
+    def _app_with_session(self, observe_return):
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+
+        session = _make_session()
+        session.observe.return_value = observe_return
+        app = build_app(session, None, workspace_root="/tmp/ws")
+        app._pre = MagicMock()
+        app._system = MagicMock()
+        return app, session
+
+    @staticmethod
+    def _texts(app) -> str:
+        pre = "\n".join(str(c.args[0]) for c in app._pre.call_args_list)
+        sys = "\n".join(str(c.args[0]) for c in app._system.call_args_list)
+        return pre + "\n" + sys
+
+    def test_queue_denied_loud_not_dressed_as_success(self) -> None:
+        denied = {
+            "ok": False,
+            "error_code": "PROJECT_SCOPE_DENIED",
+            "message": "Connection capability is project-scoped: active project 'demo' is not in the token's projects ['lybra']",
+        }
+        app, _ = self._app_with_session(denied)
+        app._handle_command("/queue")
+        out = self._texts(app)
+        self.assertIn("PROJECT_SCOPE_DENIED", out)
+        self.assertIn("active project 'demo'", out)
+        self.assertNotIn("Read-only queue summary", out)  # success text NOT printed on error
+
+    def test_validate_denied_loud(self) -> None:
+        denied = {"ok": False, "error_code": "PROJECT_SCOPE_DENIED", "message": "..."}
+        app, _ = self._app_with_session(denied)
+        app._handle_command("/validate")
+        out = self._texts(app)
+        self.assertIn("PROJECT_SCOPE_DENIED", out)
+        self.assertNotIn("Read-only validator run", out)
+
+    def test_agents_denied_loud(self) -> None:
+        denied = {"ok": False, "error_code": "PROJECT_SCOPE_DENIED", "message": "..."}
+        app, _ = self._app_with_session(denied)
+        app._handle_command("/agents")
+        out = self._texts(app)
+        self.assertIn("PROJECT_SCOPE_DENIED", out)
+        self.assertNotIn("Read-only snapshot", out)
+
+    def test_audit_denied_loud(self) -> None:
+        denied = {"ok": False, "error_code": "PROJECT_SCOPE_DENIED", "message": "..."}
+        app, _ = self._app_with_session(denied)
+        app._handle_command("/audit AIPOS-999")
+        out = self._texts(app)
+        self.assertIn("PROJECT_SCOPE_DENIED", out)
+        self.assertNotIn("AIPOS-999:", out)  # the verdict line is NOT printed on error
+
+    def test_queue_success_renders_summary(self) -> None:
+        # confirm the success path still works (the shared error face returns None → normal render)
+        success = {"ok": True, "data": {"summary": {"total": 3}}}
+        app, _ = self._app_with_session(success)
+        app._handle_command("/queue")
+        out = self._texts(app)
+        self.assertIn('"total": 3', out)
+        self.assertIn("Read-only queue summary", out)
 
 
 if __name__ == "__main__":

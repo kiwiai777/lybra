@@ -26,6 +26,7 @@ from tools.aipos_cli.board_adapter import (
 from tools.aipos_cli.agent_profiles import load_agent_profiles, registry_available, resolve_instance_id
 from tools.aipos_cli.controlled_execute import get_dry_run
 from tools.aipos_cli.task_loader import find_repo_root
+from tools.aipos_cli.workspace_config import _project_candidates, resolve_home_root
 
 
 READ_ONLY_NOTICE = "Lybra MCP exposes read tools by default. Write tools are visible only with scoped capability."
@@ -805,6 +806,40 @@ def _map_owner_decision_dry_run_error(response: dict[str, Any]) -> dict[str, Any
 def lybra_queue_list(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     _ = arguments or {}
     return _tool_result(get_queue(repo_root=_repo_root()))
+
+
+def lybra_project_status(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-242 (Slice D): the gate's OWN project view — read-only self-report.
+
+    The single source of truth for the project view is the GATE, not the client (F-o3-2 /
+    F-o3-18): clients must not guess the home with their own env/defaults, and `/project switch`
+    must verify against THIS report instead of optimistically claiming the gate followed. Zero
+    write; reuses the exact resolution the enforcement path uses (`_resolve_active_project_for`)
+    and the same "established project" criterion as the single-project fallback
+    (`_project_candidates`: 5_tasks/queue + project.json). Registered like every other tool —
+    project-gated at the dispatch choke-point, NO exemption (an out-of-scope active project
+    denies this tool too; the standardized deny message names the resolved project, which IS the
+    honest signal clients surface).
+    """
+    _ = arguments or {}
+    home_root = resolve_home_root()
+    active: str | None = None
+    resolution_error: str | None = None
+    try:
+        active = _resolve_active_project_for(_repo_root(), None)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        resolution_error = str(exc)
+    return _tool_result(
+        {
+            "ok": True,
+            "source": "gate",
+            "home_root": str(home_root),
+            "active_project": active,
+            "resolution_error": resolution_error,
+            "projects": _project_candidates(home_root),
+            "workspace_root": str(_repo_root()),
+        }
+    )
 
 
 def lybra_validate(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1669,6 +1704,7 @@ def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict
 
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
+    "lybra_project_status": lybra_project_status,
     "lybra_task_preview": lybra_task_preview,
     "lybra_validate": lybra_validate,
     "lybra_context_pack_build": lybra_context_pack_build,
@@ -1693,6 +1729,15 @@ READ_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
     {
         "name": "lybra_queue_list",
         "description": "List Lybra task queue state using existing read-only backend semantics.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_project_status",
+        "description": "The gate's own read-only project view: resolved home_root, active project (or resolution error), and established projects.",
         "inputSchema": {
             "type": "object",
             "properties": {},

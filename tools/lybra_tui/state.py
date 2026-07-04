@@ -124,6 +124,7 @@ class TuiSession:
             "task": "lybra_task_preview",
             "validate": "lybra_validate",
             "context_pack": "lybra_context_pack_build",
+            "project_status": "lybra_project_status",  # AIPOS-242: the gate's own project view
         }.get(view)
         if tool is None:
             raise ValueError(f"unknown observe view {view!r}")
