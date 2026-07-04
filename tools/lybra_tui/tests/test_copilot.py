@@ -431,5 +431,127 @@ class CopilotTests(unittest.TestCase):
             self.assertEqual(s.toggle_mode(), OBSERVE_MODE)
 
 
+class SslContextForLlmTests(unittest.TestCase):
+    """AIPOS-241 (F-o3-14) — certifi-backed SSL context; precedence env > certifi > default.
+
+    Red line pinned here: verification is NEVER downgraded (no CERT_NONE / check_hostname=False /
+    unverified context anywhere on the path).
+    """
+
+    def setUp(self) -> None:
+        # hermetic env: no explicit CA env unless a test sets it
+        self._env = patch.dict(os.environ, {}, clear=False)
+        self._env.start()
+        os.environ.pop("SSL_CERT_FILE", None)
+        os.environ.pop("SSL_CERT_DIR", None)
+
+    def tearDown(self) -> None:
+        self._env.stop()
+
+    @contextmanager
+    def _stub_certifi(self, ca_path: str) -> Iterator[None]:
+        import types
+
+        stub = types.ModuleType("certifi")
+        stub.where = lambda: ca_path  # type: ignore[attr-defined]
+        with patch.dict(sys.modules, {"certifi": stub}):
+            yield
+
+    def test_1_certifi_cafile_reaches_context_and_opener(self) -> None:
+        # POSITIVE truth: the context is built FROM certifi's bundle and actually lands in the
+        # opener's HTTPSHandler — not merely created somewhere.
+        import ssl as _ssl
+
+        from tools.lybra_tui.copilot import LLMClient, LLMConfig
+
+        captured: dict[str, object] = {}
+        real_create = _ssl.create_default_context
+
+        def recording_create(*args, **kwargs):  # wraps the REAL function; no policy change
+            captured["cafile"] = kwargs.get("cafile")
+            context = real_create()  # a genuine default context (full verification)
+            captured["context"] = context
+            return context
+
+        with self._stub_certifi("/stub/ca/bundle.pem"):
+            with patch("ssl.create_default_context", side_effect=recording_create):
+                client = LLMClient(LLMConfig(base_url="https://x", api_key="k"))
+        self.assertEqual(captured["cafile"], "/stub/ca/bundle.pem")
+        # IDENTITY, not just non-None: py3.13's default HTTPSHandler also carries a context, so the
+        # only honest proof is that OUR certifi-built object is the one the opener holds.
+        https_contexts = [
+            getattr(h, "_context", None)
+            for h in client._opener.handlers
+            if h.__class__.__name__ == "HTTPSHandler"
+        ]
+        self.assertIn(
+            id(captured["context"]),
+            [id(ctx) for ctx in https_contexts],
+            "the certifi-built context object must be the one inside the opener's HTTPSHandler",
+        )
+
+    def test_2_anti_downgrade_cert_required_and_check_hostname(self) -> None:
+        # RED LINE PIN: the certifi path must yield FULL verification. If a future edit relaxes
+        # verify_mode or check_hostname (or swaps in an unverified context), this turns red.
+        import ssl as _ssl
+
+        from tools.lybra_tui.copilot import _ssl_context_for_llm
+
+        real_create = _ssl.create_default_context
+
+        def recording_create(*args, **kwargs):
+            return real_create()  # avoid needing a real PEM; contract of the REAL function
+
+        with self._stub_certifi("/stub/ca/bundle.pem"):
+            with patch("ssl.create_default_context", side_effect=recording_create):
+                context = _ssl_context_for_llm()
+        self.assertIsNotNone(context)
+        self.assertEqual(context.verify_mode, _ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+
+    def test_3_no_certifi_byte_identical_construction(self) -> None:
+        # certifi absent -> helper None -> the code takes TODAY'S exact constructor line, so the
+        # opener is shaped like a baseline build_opener(ProxyHandler({})): same handler classes,
+        # and the (stdlib-default) HTTPS context keeps full verification. NOTE: py3.13's default
+        # HTTPSHandler carries a default context, so "no certifi context" is proven by helper=None
+        # + baseline-identical shape, not by context-is-None.
+        import ssl as _ssl
+        from urllib import request as _req
+
+        from tools.lybra_tui.copilot import LLMClient, LLMConfig, _ssl_context_for_llm
+
+        with patch.dict(sys.modules, {"certifi": None}):  # import certifi -> ImportError
+            self.assertIsNone(_ssl_context_for_llm())
+            client = LLMClient(LLMConfig(base_url="https://x", api_key="k"))
+        baseline = _req.build_opener(_req.ProxyHandler({}))
+        self.assertEqual(
+            [h.__class__.__name__ for h in client._opener.handlers],
+            [h.__class__.__name__ for h in baseline.handlers],
+        )
+        for client_h, base_h in zip(client._opener.handlers, baseline.handlers):
+            if client_h.__class__.__name__ != "HTTPSHandler":
+                continue
+            c_ctx = getattr(client_h, "_context", None)
+            b_ctx = getattr(base_h, "_context", None)
+            self.assertEqual(
+                (getattr(c_ctx, "verify_mode", None), getattr(c_ctx, "check_hostname", None)),
+                (getattr(b_ctx, "verify_mode", None), getattr(b_ctx, "check_hostname", None)),
+            )
+            if c_ctx is not None:
+                self.assertEqual(c_ctx.verify_mode, _ssl.CERT_REQUIRED)  # never downgraded
+                self.assertTrue(c_ctx.check_hostname)
+
+    def test_5_explicit_env_wins_over_certifi(self) -> None:
+        # R ruling: SSL_CERT_FILE / SSL_CERT_DIR set -> helper returns None even WITH certifi
+        # importable (explicit operator choice is never overridden; default context honors env).
+        from tools.lybra_tui.copilot import _ssl_context_for_llm
+
+        for env_key in ("SSL_CERT_FILE", "SSL_CERT_DIR"):
+            with self.subTest(env=env_key):
+                with patch.dict(os.environ, {env_key: "/explicit/ca"}):
+                    with self._stub_certifi("/stub/ca/bundle.pem"):
+                        self.assertIsNone(_ssl_context_for_llm())
+
+
 if __name__ == "__main__":
     unittest.main()

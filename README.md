@@ -56,6 +56,11 @@ lybra tui --gate-url http://127.0.0.1:7118 --workspace-root ./ws --project my_pr
 The LLM key is read from the `LYBRA_PLANCHAT_LLM_KEY` environment variable (never passed on the
 command line). Without an LLM config, `lybra tui` opens in read-only observe mode.
 
+**macOS TLS note:** bare macOS venv pythons ship empty default CA paths, so copilot HTTPS fails
+`CERTIFICATE_VERIFY_FAILED` (an environment property of macOS pythons, not a Lybra defect). Install
+`certifi` into the TUI's python (or set `SSL_CERT_FILE`) — Lybra picks certifi up automatically
+(an explicit `SSL_CERT_FILE`/`SSL_CERT_DIR` always wins) and **never disables verification**.
+
 The TUI chat box accepts non-Latin / CJK input (Chinese, Japanese, Korean, etc.) — **both typing via
 an IME and pasting work.** (Earlier builds could only paste CJK: Textual's kitty-keyboard-protocol
 `REPORT_ASSOCIATED_TEXT` parsing dropped IME-typed CJK to an empty character. Lybra now enables the

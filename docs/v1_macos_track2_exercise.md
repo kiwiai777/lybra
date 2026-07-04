@@ -30,6 +30,18 @@
   printf '%s' 'sk-...' > ~/.lybra_planchat_key && chmod 600 ~/.lybra_planchat_key
   shasum -a 256 ~/.lybra_planchat_key | cut -c1-12    # record fp only (BSD shasum, not sha256sum)
   ```
+- **macOS certificates (AIPOS-241 / F-o3-14) — an ENVIRONMENT requirement of macOS pythons, not a
+  Lybra defect.** Bare macOS venvs have EMPTY default CA paths → every HTTPS handshake (copilot,
+  even pip) fails `CERTIFICATE_VERIFY_FAILED`. Remedies, in Lybra's CA precedence order (explicit
+  env > certifi > system default) — **NEVER disable verification** (no `--trusted-host`, no
+  unverified context; that class of workaround is forbidden):
+  1. **Recommended:** `pip install certifi` into the TUI venv — Lybra's copilot picks it up
+     automatically. Bootstrap note: on a truly bare venv pip ITSELF cannot handshake, so seed the
+     first install with a CA from an interpreter that already has certifi (system python3/conda):
+     `SSL_CERT_FILE="$(<python-with-certifi> -m certifi)" <tui-venv>/bin/pip install certifi` —
+     one-time; afterwards the venv is self-sufficient.
+  2. `export SSL_CERT_FILE=$(<python-with-certifi> -m certifi)` — explicit env; wins over certifi.
+  3. python.org installs: run `Install Certificates.command`.
 - **B1 — fail-loud endpoint + key probe (run BEFORE anything else).** Catches a dead endpoint / bad
   key / missing-UA WAF block up front, instead of discovering it at N3 after the whole setup. Requires
   **200**; sends the same static `User-Agent` copilot uses (F-o3-1) so it validates the real WAF path.

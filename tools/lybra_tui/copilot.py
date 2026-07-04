@@ -33,6 +33,8 @@ Structural red lines, enforced here in code (not by policy):
 from __future__ import annotations
 
 import json
+import os
+import ssl
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 from urllib import request as _request
@@ -60,6 +62,26 @@ _VALIDATE = "lybra_validate"
 # (no version coupling, no external dependency); this is only an outbound HTTP header — it
 # changes nothing about the read-only / scopes[] / zero-write copilot contract.
 _USER_AGENT = "lybra-copilot"
+
+
+def _ssl_context_for_llm() -> ssl.SSLContext | None:
+    """AIPOS-241 (F-o3-14) — CA source precedence: explicit env > certifi > system default.
+
+    Bare macOS venv pythons ship EMPTY default CA paths, so every HTTPS handshake fails with
+    CERTIFICATE_VERIFY_FAILED. When ``certifi`` happens to be importable (TUI-extra environments),
+    use its bundle; otherwise return None and the caller keeps urllib's default behavior —
+    byte-identical to before this slice. ``SSL_CERT_FILE``/``SSL_CERT_DIR`` set → also return None:
+    urllib's default context already honors them, and an explicit operator choice must never be
+    overridden by certifi. Verification is NEVER relaxed — ``ssl.create_default_context`` is
+    CERT_REQUIRED + check_hostname=True; only the trust-store SOURCE changes, never the policy.
+    """
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return None  # explicit env wins; the default context honors it
+    try:
+        import certifi  # optional, opportunistic; NOT a declared dependency
+    except ImportError:
+        return None
+    return ssl.create_default_context(cafile=certifi.where())
 
 # Template defaults the copilot fills for required/recommended fields the LLM need not invent.
 # status MUST be pending (validator); created_by marks copilot authorship (DG-8 / N4 evidence).
@@ -141,7 +163,15 @@ class LLMClient:
 
     def __init__(self, config: LLMConfig) -> None:
         self._config = config
-        self._opener = _request.build_opener(_request.ProxyHandler({}))
+        # AIPOS-241 (F-o3-14): certifi-backed SSL context when available (macOS bare venvs have
+        # empty default CA paths); None → today's exact constructor, byte-identical behavior.
+        context = _ssl_context_for_llm()
+        if context is not None:
+            self._opener = _request.build_opener(
+                _request.ProxyHandler({}), _request.HTTPSHandler(context=context)
+            )
+        else:
+            self._opener = _request.build_opener(_request.ProxyHandler({}))
         # AIPOS-222 (read-only telemetry): the usage block from the LAST /chat/completions
         # response, if the provider returned one. Pure observability — it is captured from the
         # HTTP response and surfaced on ChatReply; it writes NOTHING, confirms nothing, and does

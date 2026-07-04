@@ -29,6 +29,14 @@ product** is correct on a Mac. Reads as concrete commands; every mutating gate i
 python3 -m venv ~/lybra-bare-venv          # gate interpreter: NO PyYAML, NO textual
 ~/lybra-bare-venv/bin/python -c "import yaml" 2>&1 | tail -1   # must say: No module named 'yaml'
 ```
+- **macOS certificates (AIPOS-241 / F-o3-14):** bare macOS venv pythons have EMPTY default CA paths
+  → HTTPS (copilot, even pip) fails `CERTIFICATE_VERIFY_FAILED`. This is an environment requirement
+  of macOS pythons, NOT a Lybra defect. Fix (CA precedence: explicit env > certifi > system
+  default; **never disable verification — `--trusted-host` and unverified contexts are forbidden**):
+  `pip install certifi` into the TUI venv (recommended; copilot auto-uses it — on a truly bare venv
+  bootstrap pip's own handshake once: `SSL_CERT_FILE="$(<python-with-certifi> -m certifi)"
+  <tui-venv>/bin/pip install certifi`), OR `export SSL_CERT_FILE=$(<python-with-certifi> -m
+  certifi)`, OR run python.org's `Install Certificates.command`.
 - LLM key in a 0600 file (fingerprint-only; never echo):
 ```bash
 printf '%s' 'sk-...your-key...' > ~/.lybra_planchat_key && chmod 600 ~/.lybra_planchat_key
