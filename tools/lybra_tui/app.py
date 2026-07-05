@@ -79,6 +79,7 @@ COMMANDS: tuple[tuple[str, str], ...] = (
     ("/agents", "snapshot tasks grouped by agent (read-only; as recorded, not live)"),
     ("/validate", "run the validator (read-only)"),
     ("/gates", "list pending confirm gates (read-only view; confirm is OOB)"),
+    ("/confirm", "confirm a pending gate (Owner-only, explicit confirmation required)"),
     ("/mode", "switch mode: /mode [observe|confirm|copilot]"),
     ("/audit", "compact L3 authority verdict for a task: /audit [task_id] (read-only)"),
     ("/project", "Owner: /project (list) | new <name> | switch <name> — local, not a gate op"),
@@ -341,6 +342,7 @@ class LybraTui(App):
         self._workspace_root = workspace_root
         self._pending_preview: Any = None
         self._pending_proposal: Any = None  # last copilot DraftProposal awaiting Owner /proceed
+        self._pending_confirm: dict[str, Any] | None = None  # pending confirm gate awaiting affirmation (是/yes//confirm)
         # AIPOS-222 conversational substate (pure client-UX; no accountability state):
         self._pending_offer = False  # a "generate draft?" offer is open → an affirmative consents
         self._thinking: Static | None = None  # the inline "· thinking… (Ns)" line under the turn
@@ -607,13 +609,70 @@ class LybraTui(App):
         self.query_one("#ac", OptionList).display = False
         text = raw.strip()
         if not text:
+            # AIPOS-244 R-h1: an empty Enter while a confirm is pending IS a non-affirmative →
+            # cancel loudly (the promised "其余输入取消" contract; previously the early return let
+            # the pending survive an empty Enter). No pending → ignore as before.
+            if self._pending_confirm is not None:
+                self._pending_confirm = None
+                self._pre("已取消 confirm。")
             return
         # Record the submitted line in the in-memory history and reset the browse cursor.
         self._history.append(text)
         self._history_index = None
         self._history_draft = ""
         if text.startswith("/"):
-            self._handle_command(text)
+            # AIPOS-244 R-h1 严格模态: pending 挂起期间,/confirm(affirmation 阶段)是肯定词;
+            # 其余一切 / 命令先响亮取消 pending、再照常执行。pending 绝不允许跨命令存活——stale
+            # pending 会把后续对话里的一句"是"变成意外的真相写入。
+            if self._pending_confirm and self._pending_confirm.get("awaiting") == "affirmation" and text.lower() == "/confirm":
+                self._user(text)
+                self._execute_pending_confirm()
+            else:
+                if self._pending_confirm is not None:
+                    self._pending_confirm = None
+                    self._pre("已取消 confirm(你执行了其他命令)。")
+                self._handle_command(text)
+        elif self._pending_confirm and self._pending_confirm.get("awaiting") == "actor":
+            # AIPOS-244 R-2: waiting for actor input
+            if text:
+                self._user(text)
+                actor = text.strip()
+                # 拿到 actor,现在展示确认问句
+                gate = self._pending_confirm["gate"]
+                op = self._pending_confirm["op"]
+                task_id = self._pending_confirm["task_id"]
+
+                self._pre(f"Preview: {op} {task_id}")
+                self._pre(f"归因给: {actor}")
+
+                if op == "claim":
+                    question = f"确认把 {task_id} 批给 {actor} (claim) 吗?"
+                elif op == "return":
+                    question = f"确认接受 {actor} 的 {task_id} return 吗?"
+                elif op == "publish":
+                    question = f"确认发布草稿 {task_id} 到队列吗?"
+                else:
+                    question = f"确认执行 {op} {task_id} 吗?"
+
+                self._pre(question)
+                self._pre("输入 是 / yes / /confirm 确认; 其余输入取消。")
+
+                # 更新 pending_confirm 状态:现在等待肯定词
+                self._pending_confirm["actor"] = actor
+                self._pending_confirm["awaiting"] = "affirmation"
+            else:
+                # 空输入 → 取消
+                self._pre("已取消 confirm(未输入 actor)。")
+                self._pending_confirm = None
+        elif self._pending_confirm and self._pending_confirm.get("awaiting") == "affirmation" and text.lower() in ["是", "yes", "/confirm"]:
+            # AIPOS-244: affirmative reply to pending confirm → execute gate
+            self._user(text)
+            self._execute_pending_confirm()
+        elif self._pending_confirm:
+            # AIPOS-244: any other input (空回车/Esc/其他) → cancel confirm
+            self._user(text) if text else None
+            self._pre("已取消 confirm。")
+            self._pending_confirm = None
         elif self._pending_offer and text.lower() in _AFFIRMATIVES:
             # Owner ruling 1: an affirmative reply IMMEDIATELY AFTER a draft-offer = consent.
             self._user(text)
@@ -653,6 +712,8 @@ class LybraTui(App):
                     self._system("Read-only validator run (no truth changed).")
             elif cmd == "/gates":
                 self._cmd_gates()
+            elif cmd == "/confirm":
+                self._cmd_confirm(int(args[0]) if args and args[0].isdigit() else None)
             elif cmd == "/mode":
                 self._cmd_mode(args[0] if args else None)
             elif cmd == "/audit":
@@ -712,7 +773,114 @@ class LybraTui(App):
                 "Pending confirm gates (read-only view):\n"
                 + "\n".join(f"  [{i}] {g['op']} {g['task_id']}" for i, g in enumerate(gates))
             )
-        self._system("These are confirmed OUT OF BAND by the Owner with the owner token — the TUI never confirms.")
+        self._system("Use /confirm <n> to confirm a gate (Owner-only, explicit confirmation required).")
+
+    def _cmd_confirm(self, index: int | None = None) -> None:
+        """Execute a pending confirm gate (Owner-only, explicit confirmation required)."""
+        gates = self._session.confirm_gates()
+        if not gates:
+            self._pre("No pending confirm gates.")
+            return
+
+        # 1. 确定 gate 索引
+        if index is None:
+            if len(gates) == 1:
+                index = 0
+            else:
+                self._pre(f"{len(gates)} pending gates. Use /confirm <n> to specify.")
+                return
+        if index < 0 or index >= len(gates):
+            self._pre(f"Invalid gate index {index}. Valid range: 0-{len(gates)-1}.")
+            return
+
+        gate = gates[index]
+        op = gate.get("op", "unknown")
+        task_id = gate.get("task_id", "unknown")
+        task = gate.get("task", {})
+
+        # 2. 提取 actor/agent_instance(R-2:缺 assigned_to → 先问 actor)
+        assigned_to = task.get("assigned_to")
+        if not assigned_to:
+            # 缺失 assigned_to → 置 pending_confirm_ask_actor 状态,等 Owner 输入 actor
+            self._pre(f"任务 {task_id} 无 assigned_to。")
+            self._pre("归因给哪个 agent? 输入 actor 名:")
+            self._pending_confirm = {
+                "gate": gate,
+                "op": op,
+                "task_id": task_id,
+                "awaiting": "actor",  # 等待 actor 输入
+            }
+            return
+
+        # 3. 展示 preview + 自然语言问句
+        self._pre(f"Preview: {op} {task_id}")
+        self._pre(f"归因给: {assigned_to}")
+
+        if op == "claim":
+            question = f"确认把 {task_id} 批给 {assigned_to} (claim) 吗?"
+        elif op == "return":
+            question = f"确认接受 {assigned_to} 的 {task_id} return 吗?"
+        elif op == "publish":
+            question = f"确认发布草稿 {task_id} 到队列吗?"
+        else:
+            question = f"确认执行 {op} {task_id} 吗?"
+
+        self._pre(question)
+        self._pre("输入 是 / yes / /confirm 确认; 其余输入取消。")
+
+        # 4. 置 pending_confirm 状态并 return(不发射,等下一次输入拦截)
+        self._pending_confirm = {
+            "gate": gate,
+            "op": op,
+            "task_id": task_id,
+            "actor": assigned_to,
+            "awaiting": "affirmation",  # 等待肯定词
+        }
+
+    def _execute_pending_confirm(self) -> None:
+        """Execute the pending confirm gate (called after affirmative input)."""
+        if not self._pending_confirm:
+            return
+
+        pending = self._pending_confirm
+        self._pending_confirm = None  # 清状态
+
+        gate = pending["gate"]
+        actor = pending.get("actor")
+
+        # 调用既有 confirm_client 机器
+        try:
+            preview = self._session.preview_gate(gate)
+            result = self._session.confirm_gate(preview, actor=actor)
+        except Exception as e:
+            self._pre(f"Confirm failed: {e}")
+            return
+
+        # 诚实呈现(前置错误面检查,Slice D 纪律)
+        err = self._observe_error_face(result)
+        if err:
+            self._pre(f"Confirm failed: {err}")
+            return
+
+        # 成功:展示写了什么
+        op = pending["op"]
+        task_id = pending["task_id"]
+        data = result.get("data", {})
+        planned_writes = data.get("planned_writes", [])
+        if planned_writes:
+            self._pre("Confirmed. Writes:")
+            for w in planned_writes:
+                self._pre(f"  {w.get('kind', 'unknown')} {w.get('path', 'unknown')}")
+        else:
+            self._pre(f"Confirmed: {op} {task_id}")
+
+    def _observe_error_face(self, payload: dict[str, Any]) -> str | None:
+        """Shared error surface (Slice D ROUND 2 纪律)."""
+        if payload.get("ok") is False:
+            error_code = payload.get("error_code", "UNKNOWN_ERROR")
+            message = payload.get("message", "")
+            return f"{error_code}: {message}"
+        return None
 
     def _cmd_mode(self, name: str | None) -> None:
         if not name:

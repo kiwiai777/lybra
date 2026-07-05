@@ -1079,5 +1079,288 @@ class ObserveErrorSurfaceTests(unittest.TestCase):
         self.assertIn("Read-only queue summary", out)
 
 
+
+@unittest.skipUnless(_HAS_TEXTUAL, "textual not installed (gate/core lane); app layer is tui-lane only")
+class TuiOwnerConfirmTests(unittest.TestCase):
+    """AIPOS-244 — TUI Owner confirm 面端到端测试(真实输入路径,正向真相)."""
+
+    def _mock_session(self, gates: list[dict], confirm_result: dict | None = None) -> Any:
+        """创建 mock session,返回 gates 和 confirm 结果."""
+        from unittest.mock import MagicMock
+        session = MagicMock()
+        session.confirm_gates.return_value = gates
+        if gates:
+            gate = gates[0]
+            preview = {
+                "operation": gate.get("op", "claim"),
+                "task": {"task_id": gate.get("task_id", "AIPOS-999"), "assigned_to": gate.get("task", {}).get("assigned_to")},
+                "actor": {"actor": gate.get("task", {}).get("assigned_to", "agent-01")},
+            }
+            session.preview_gate.return_value = preview
+        if confirm_result:
+            session.confirm_gate.return_value = confirm_result
+        return session
+
+    def _app_with_session(self, gates: list[dict], confirm_result: dict | None = None) -> tuple[Any, Any]:
+        """创建 app + mock session."""
+        from unittest.mock import MagicMock
+        from tools.lybra_tui.app import build_app
+
+        session = self._mock_session(gates, confirm_result)
+        app = build_app(session, None, workspace_root="/tmp/ws")
+        app._pre = MagicMock()
+        app._system = MagicMock()
+        app._user = MagicMock()
+        return app, session
+
+    def _texts(self, app: Any) -> str:
+        """提取 app 的所有文本输出."""
+        pre = "\n".join(str(c.args[0]) for c in app._pre.call_args_list)
+        sys = "\n".join(str(c.args[0]) for c in app._system.call_args_list)
+        return pre + "\n" + sys
+
+    def _simulate_input(self, app: Any, text: str) -> None:
+        """模拟用户输入(走真实输入拦截逻辑,不依赖 Textual 事件)."""
+        text = text.strip()
+        if not text:
+            # 空输入
+            if app._pending_confirm:
+                app._pre("已取消 confirm。")
+                app._pending_confirm = None
+            return
+
+        if text.startswith("/"):
+            # AIPOS-244 R-h1(与 app.py 逐字同构): /confirm(affirmation 阶段)是肯定词;
+            # 其余一切 / 命令先响亮取消 pending、再照常执行。
+            if app._pending_confirm and app._pending_confirm.get("awaiting") == "affirmation" and text.lower() == "/confirm":
+                app._user(text)
+                app._execute_pending_confirm()
+            else:
+                if app._pending_confirm is not None:
+                    app._pending_confirm = None
+                    app._pre("已取消 confirm(你执行了其他命令)。")
+                app._handle_command(text)
+        elif app._pending_confirm and app._pending_confirm.get("awaiting") == "actor":
+            # 等待 actor 输入
+            app._user(text)
+            actor = text.strip()
+            gate = app._pending_confirm["gate"]
+            op = app._pending_confirm["op"]
+            task_id = app._pending_confirm["task_id"]
+
+            app._pre(f"Preview: {op} {task_id}")
+            app._pre(f"归因给: {actor}")
+
+            if op == "claim":
+                question = f"确认把 {task_id} 批给 {actor} (claim) 吗?"
+            elif op == "return":
+                question = f"确认接受 {actor} 的 {task_id} return 吗?"
+            elif op == "publish":
+                question = f"确认发布草稿 {task_id} 到队列吗?"
+            else:
+                question = f"确认执行 {op} {task_id} 吗?"
+
+            app._pre(question)
+            app._pre("输入 是 / yes / /confirm 确认; 其余输入取消。")
+            app._pending_confirm["actor"] = actor
+            app._pending_confirm["awaiting"] = "affirmation"
+        elif app._pending_confirm and app._pending_confirm.get("awaiting") == "affirmation" and text.lower() in ["是", "yes", "/confirm"]:
+            # 肯定词 → 发射
+            app._user(text)
+            app._execute_pending_confirm()
+        elif app._pending_confirm:
+            # 其他输入 → 取消
+            app._user(text)
+            app._pre("已取消 confirm。")
+            app._pending_confirm = None
+
+    def test_affirmative_fires_confirm(self) -> None:
+        """端到端: /confirm 0 → 是 → gate 被调."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-01"}}]
+        success = {"ok": True, "data": {"planned_writes": [{"kind": "create", "path": "5_tasks/queue/claimed/AIPOS-999.md"}]}}
+        app, session = self._app_with_session(gates, confirm_result=success)
+
+        self._simulate_input(app, "/confirm 0")
+        self.assertIsNotNone(app._pending_confirm)
+        self.assertEqual(app._pending_confirm.get("awaiting"), "affirmation")
+
+        self._simulate_input(app, "是")
+        self.assertTrue(session.confirm_gate.called)
+        out = self._texts(app)
+        self.assertIn("Confirmed", out)
+
+    def test_non_affirmative_cancels_empty(self) -> None:
+        """端到端: /confirm 0 → 空回车 → gate 未被调,取消."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-01"}}]
+        app, session = self._app_with_session(gates)
+
+        self._simulate_input(app, "/confirm 0")
+        self.assertIsNotNone(app._pending_confirm)
+
+        self._simulate_input(app, "")
+        self.assertFalse(session.confirm_gate.called)
+        out = self._texts(app)
+        self.assertIn("已取消", out)
+
+    def test_non_affirmative_cancels_other_text(self) -> None:
+        """端到端: /confirm 0 → 其他话 → gate 未被调,取消."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-01"}}]
+        app, session = self._app_with_session(gates)
+
+        self._simulate_input(app, "/confirm 0")
+        self._simulate_input(app, "不确认")
+
+        self.assertFalse(session.confirm_gate.called)
+        out = self._texts(app)
+        self.assertIn("已取消", out)
+
+    def test_three_affirmatives_all_fire(self) -> None:
+        """端到端: 是/yes//confirm 三种肯定各测 → 都发射."""
+        for affirmative in ["是", "yes", "/confirm"]:
+            gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-01"}}]
+            success = {"ok": True, "data": {}}
+            app, session = self._app_with_session(gates, confirm_result=success)
+
+            self._simulate_input(app, "/confirm 0")
+            self._simulate_input(app, affirmative)
+
+            self.assertTrue(session.confirm_gate.called, f"{affirmative} 应触发 confirm")
+
+    def test_gate_denied_loud(self) -> None:
+        """端到端: gate denied → 响亮(error_code 可见,无成功文案)."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-01"}}]
+        denied = {"ok": False, "error_code": "SCOPE_DENIED", "message": "缺少 owner_confirm scope"}
+        app, session = self._app_with_session(gates, confirm_result=denied)
+
+        self._simulate_input(app, "/confirm 0")
+        self._simulate_input(app, "是")
+        out = self._texts(app)
+
+        self.assertIn("SCOPE_DENIED", out)
+        self.assertIn("缺少 owner_confirm scope", out)
+        self.assertNotIn("Confirmed", out)
+
+    def test_no_assigned_to_asks_actor_then_fires(self) -> None:
+        """端到端: 无 assigned_to → 先问 actor,给之前零调用,给后+肯定词才发射."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {}}]
+        success = {"ok": True, "data": {}}
+        app, session = self._app_with_session(gates, confirm_result=success)
+
+        # Step 1: /confirm 0 → 问 actor
+        self._simulate_input(app, "/confirm 0")
+        out = self._texts(app)
+        self.assertIn("无 assigned_to", out)
+        self.assertIn("归因给哪个 agent", out)
+        self.assertEqual(app._pending_confirm.get("awaiting"), "actor")
+        self.assertFalse(session.confirm_gate.called)
+
+        # Step 2: 输入 actor
+        self._simulate_input(app, "agent-02")
+        self.assertEqual(app._pending_confirm.get("actor"), "agent-02")
+        self.assertEqual(app._pending_confirm.get("awaiting"), "affirmation")
+        self.assertFalse(session.confirm_gate.called)
+
+        # Step 3: 输入肯定词
+        self._simulate_input(app, "yes")
+        self.assertTrue(session.confirm_gate.called)
+
+    # --- F-244-2: 真接线测试(mock 降到 GateClient 层;session 是 REAL TuiSession) ---
+    def test_f244_2_real_wiring_confirm_literal_reaches_gateclient(self) -> None:
+        """F-244-2: /confirm→affirm 的真实发射链 TuiSession.confirm_gate → GateClient.confirm
+        必须带 owner_confirmation_literal == "OWNER_CONFIRMED",且 preview 原样传递。
+
+        写法要点(非同义反复):stub 用 create_autospec(GateClient) 强制真实签名——漏传字面量
+        (本 bug: state.py confirm_gate 调 confirm(preview) 缺参)会立刻 TypeError → 断言失败。
+        session 边界的 8 条 UX 测试 mock 掉了 TuiSession,永远走不到这条真接线(教训入卡)。
+        """
+        from unittest.mock import MagicMock, create_autospec
+
+        from tools.aipos_cli.confirm_client import GateClient, Preview
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.state import TuiSession
+
+        client = create_autospec(GateClient, instance=True)
+        gate_task = {
+            "task_id": "AIPOS-999",
+            "assigned_to": "exec.cc.local",
+            "metadata": {"agent_instance": "exec.cc.local"},
+        }
+        client.list_confirm_gates.return_value = [
+            {"op": "claim", "task_id": "AIPOS-999", "task": gate_task}
+        ]
+        preview_obj = Preview(
+            op="claim",
+            dry_run_token="dryrun_wiring_test",
+            expires_at=None,
+            snapshot_hash="snap",
+            replay_args={"actor": "exec.cc.local", "agent_instance": "exec.cc.local", "autonomy_mode": "Supervised"},
+        )
+        client.preview.return_value = preview_obj
+        client.confirm.return_value = {"ok": True, "data": {"planned_writes": []}}
+
+        session = TuiSession(gate_url="http://stub", _client=client)  # REAL session, stub transport
+        app = build_app(session, None, workspace_root="/tmp/ws")
+        app._pre = MagicMock()
+        app._system = MagicMock()
+        app._user = MagicMock()
+
+        app._cmd_confirm(0)                       # real command path → pending (affirmation)
+        self.assertEqual(app._pending_confirm.get("awaiting"), "affirmation")
+        self._simulate_input(app, "是")           # affirmative → real _execute_pending_confirm
+
+        client.preview.assert_called_once()
+        client.confirm.assert_called_once()
+        call = client.confirm.call_args
+        got_preview = call.args[0] if call.args else call.kwargs.get("preview")
+        literal = (
+            call.args[1] if len(call.args) > 1 else call.kwargs.get("owner_confirmation_literal")
+        )
+        self.assertIs(got_preview, preview_obj)            # preview 原样(不重构、不换对象)
+        self.assertEqual(literal, "OWNER_CONFIRMED")       # 字面量由 NL 肯定仪式背书传入
+        out = self._texts(app)
+        self.assertIn("Confirmed", out)
+        self.assertNotIn("Confirm failed", out)
+
+    # --- R-h1: pending 严格模态(pending 绝不跨命令存活) ---
+    def test_r_h1_command_cancels_pending_and_stale_affirmative_is_inert(self) -> None:
+        """R-h1 (a): /confirm 0 → /queue → pending 已清 + gate 零调用;随后 "是" → 仍零调用.
+
+        stale pending 的危险:若 pending 跨命令存活,后续对话里的一句"是"会变成意外真相写入。
+        """
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-01"}}]
+        app, session = self._app_with_session(gates)
+        session.observe.return_value = {"ok": True, "data": {"summary": {"pending": 1}}}
+
+        self._simulate_input(app, "/confirm 0")
+        self.assertEqual(app._pending_confirm.get("awaiting"), "affirmation")
+
+        self._simulate_input(app, "/queue")
+        self.assertIsNone(app._pending_confirm)                    # pending 已清
+        out = self._texts(app)
+        self.assertIn("已取消 confirm(你执行了其他命令)", out)      # 明说取消
+        session.observe.assert_called_with("queue")                 # 命令照常执行
+        session.preview_gate.assert_not_called()                    # gate 零调用
+        session.confirm_gate.assert_not_called()
+
+        self._simulate_input(app, "是")                             # stale 肯定词 → 只是普通输入
+        session.preview_gate.assert_not_called()
+        session.confirm_gate.assert_not_called()
+
+    def test_r_h1_command_cancels_pending_in_actor_stage(self) -> None:
+        """R-h1 (b): awaiting=actor 时敲 / 命令 → 同样取消 + 零调用."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {}}]  # 无 assigned_to → 问 actor
+        app, session = self._app_with_session(gates)
+
+        self._simulate_input(app, "/confirm 0")
+        self.assertEqual(app._pending_confirm.get("awaiting"), "actor")
+
+        self._simulate_input(app, "/help")
+        self.assertIsNone(app._pending_confirm)
+        out = self._texts(app)
+        self.assertIn("已取消 confirm(你执行了其他命令)", out)
+        session.preview_gate.assert_not_called()
+        session.confirm_gate.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

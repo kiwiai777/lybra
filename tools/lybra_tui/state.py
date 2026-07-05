@@ -148,6 +148,16 @@ class TuiSession:
     def preview_publish(self, draft_path: str, *, actor: str = "owner") -> Preview:
         return self._client.preview("publish", {"path": draft_path, "actor": actor})
 
+    def confirm_gate(self, preview: Preview, *, actor: str | None = None) -> dict[str, Any]:
+        """调用既有 GateClient.confirm(),含 replay_args 机制(F-244-2 接线修复)。
+
+        OWNER_CONFIRMED 字面量语义:这条路径只会在 Owner 的 NL 显式肯定(是/yes//confirm,
+        AIPOS-244 pending 严格模态)之后到达——那次肯定就是 Owner 的批准仪式,字面量由它背书
+        传入;非肯定/Esc/其他命令永远走不到这里(pending 已清)。GateClient 侧仍拒空字面量。
+        `actor` 仅作展示归因;gate 侧身份走 preview.replay_args(RF-4),不由此参数改写。
+        """
+        return self._client.confirm(preview, "OWNER_CONFIRMED")
+
     # --- AIPOS-206 Owner "proceed": land a copilot DRAFT, then publish via the gate ---
     #
     # This is the OWNER/TUI proceed action, NOT the copilot. The copilot loop only ever
