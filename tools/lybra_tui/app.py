@@ -63,7 +63,15 @@ def _observe_error_face(payload: dict[str, Any]) -> str | None:
     if not payload.get("ok", True):
         code = str(payload.get("error_code") or "UNKNOWN_ERROR")
         msg = str(payload.get("message") or "")
-        return f"{code}: {msg}" if msg else code
+        face = f"{code}: {msg}" if msg else code
+        # AIPOS-245 R-5: the gate's own _teaching_error carries a `suggested_next_action`
+        # (tools.py:145) that names HOW to fix. Surface it verbatim rather than dropping it —
+        # the TUI must NOT parallel-author a reason/fix (that duplicates + can drift from the
+        # gate's truth). Absent → show only `code: msg` (never fabricate a next step).
+        nxt = str(payload.get("suggested_next_action") or "")
+        if nxt:
+            face = f"{face}\n  → {nxt}"
+        return face
     return None
 from tools.lybra_tui.agents_view import render_agents
 from tools.lybra_tui.presentation import LYBRA_GREEN, banner, color_enabled
@@ -136,7 +144,12 @@ def apply_cjk_kitty_fix() -> None:
         )
 _NEXT_AFTER_DRAFT = (
     "Next: review the card, then `/proceed` to land it + stage the publish dry-run "
-    "(the Owner confirms out of band)."
+    "(the Owner confirms out of band).\n"
+    # AIPOS-245 A4 (F-o3-9/10). NL-revise is a REAL two-step chain (grounded R-2): say what to
+    # change → the copilot answers → reply yes/是 to regenerate. We describe that exact chain and
+    # do NOT promise a single utterance regenerates the draft (that would be a phantom / a behavior
+    # change out of F′'s presentation-only scope — see F-245-1).
+    "满意就 /proceed;想改就说哪里改(如「优先级改成 high」),我先答复,你回 yes/是 我据此重出草稿。"
 )
 # AIPOS-222 (Owner ruling 1): consent affirmatives (zh/en), case-insensitive + trimmed. An
 # affirmative only triggers a draft when a draft-offer is currently pending; otherwise it is
@@ -287,7 +300,9 @@ class LybraTui(App):
     #brandbar {{ height: auto; padding: 0; margin: 0; }}
     #banner {{ height: auto; padding: 0; margin: 0; }}
     #conversation {{ height: 1fr; padding: 0 1; }}
-    .turn {{ margin: 0; }}
+    /* AIPOS-245 F-245-o3-4: one blank line AFTER each message block (claude-code style visual
+       breathing — user echo / thinking / outputs no longer stick together; CJK included). */
+    .turn {{ margin: 0 0 1 0; }}
     /* AIPOS-222 ruling 1: the Owner's turn is bold DEFAULT foreground (NOT green). System
        lines stay muted; green is reserved for logo/frame, the "lybra" line, the thinking
        dot, and the consent affordance. */
@@ -399,6 +414,10 @@ class LybraTui(App):
         self._system(
             "Connected. Type what you want to do in plain language and press Enter; "
             "or start with `/` for a command (try `/help`)."
+        )
+        # AIPOS-245 A6: a one-line full-loop map so the Owner knows where each step lives.
+        self._system(
+            "本环:发任务(说需求 → /proceed)→ agent 认领 → 你 /gates + /confirm → /audit 看判定。"
         )
 
     # --- conversation transcript (codex/claude-code style message stream) ---------
@@ -628,6 +647,12 @@ class LybraTui(App):
                 self._user(text)
                 self._execute_pending_confirm()
             else:
+                # AIPOS-245 F-245-o3-4: echo the Owner's command line (claude-code style `› /cmd`)
+                # so every output block is visibly paired with the input that produced it. This also
+                # makes a REPEATED command (↑ history recall + Enter) distinguishable from a double
+                # print — without the echo, two consecutive /audit runs render two identical verdict
+                # lines back-to-back (the F-245-o3-2 symptom shape).
+                self._user(text)
                 if self._pending_confirm is not None:
                     self._pending_confirm = None
                     self._pre("已取消 confirm(你执行了其他命令)。")
@@ -642,9 +667,6 @@ class LybraTui(App):
                 op = self._pending_confirm["op"]
                 task_id = self._pending_confirm["task_id"]
 
-                self._pre(f"Preview: {op} {task_id}")
-                self._pre(f"归因给: {actor}")
-
                 if op == "claim":
                     question = f"确认把 {task_id} 批给 {actor} (claim) 吗?"
                 elif op == "return":
@@ -654,8 +676,14 @@ class LybraTui(App):
                 else:
                     question = f"确认执行 {op} {task_id} 吗?"
 
-                self._pre(question)
-                self._pre("输入 是 / yes / /confirm 确认; 其余输入取消。")
+                # AIPOS-245 F-245-o3-4b: the confirm prompt is ONE logical block → one widget
+                # (tight inside; the .turn margin provides the breathing BETWEEN blocks).
+                self._pre(
+                    f"Preview: {op} {task_id}\n"
+                    f"归因给: {actor}\n"
+                    f"{question}\n"
+                    "输入 是 / yes / /confirm 确认; 其余输入取消。"
+                )
 
                 # 更新 pending_confirm 状态:现在等待肯定词
                 self._pending_confirm["actor"] = actor
@@ -769,10 +797,20 @@ class LybraTui(App):
         if not gates:
             self._pre("No pending confirm gates.")
         else:
-            self._pre(
-                "Pending confirm gates (read-only view):\n"
-                + "\n".join(f"  [{i}] {g['op']} {g['task_id']}" for i, g in enumerate(gates))
-            )
+            # AIPOS-245 A3: show the task title + canonical claimant per row so the Owner sees WHAT
+            # they'd confirm and WHO it's attributed to. Data is already carried in g["task"] (pure
+            # presentation — no change to list_confirm_gates). Missing fields fall back to a neutral
+            # placeholder; NEVER pre-fill an answer (P-2 / default-yes red line).
+            lines = ["Pending confirm gates (read-only view):"]
+            for i, g in enumerate(gates):
+                task = g.get("task") or {}
+                title = task.get("title") or "(无标题)"
+                assigned_to = task.get("assigned_to") or "(未归因)"
+                lines.append(
+                    f"  [{i}] {g['op']} {g['task_id']} — {title}(归因 {assigned_to})"
+                    f"  用 /confirm {i} 确认"
+                )
+            self._pre("\n".join(lines))
         self._system("Use /confirm <n> to confirm a gate (Owner-only, explicit confirmation required).")
 
     def _cmd_confirm(self, index: int | None = None) -> None:
@@ -780,6 +818,10 @@ class LybraTui(App):
         gates = self._session.confirm_gates()
         if not gates:
             self._pre("No pending confirm gates.")
+            # AIPOS-245 B12 (P-A). Wording corrected against the REAL gate derivation (gates come
+            # from queue truth: pending task → claim gate, claimed task → return gate — the agent
+            # does NOT claim; deviation from the DRAFT's proposed wording disclosed in the ledger).
+            self._system("→ 无待确认项:/queue 看队列;有 pending/claimed 任务才会出 gate。要发新任务就(copilot 模式下)说需求 → /proceed。")
             return
 
         # 1. 确定 gate 索引
@@ -802,8 +844,12 @@ class LybraTui(App):
         assigned_to = task.get("assigned_to")
         if not assigned_to:
             # 缺失 assigned_to → 置 pending_confirm_ask_actor 状态,等 Owner 输入 actor
-            self._pre(f"任务 {task_id} 无 assigned_to。")
-            self._pre("归因给哪个 agent? 输入 actor 名:")
+            # AIPOS-245 F-245-o3-4b: one logical block → one widget (tight inside).
+            self._pre(f"任务 {task_id} 无 assigned_to。\n归因给哪个 agent? 输入 actor 名:")
+            # AIPOS-245 B1 (P-A): the honest fix path — assigned_to is REQUIRED card schema, so the
+            # gate will loudly BLOCK a claim on this card regardless of the actor typed here (AIPOS-244
+            # UX note). Name the durable fix; never pre-fill an actor.
+            self._system("(或先给任务卡补上 assigned_to 再 /confirm——缺必填字段时 gate 会响亮 BLOCK。)")
             self._pending_confirm = {
                 "gate": gate,
                 "op": op,
@@ -813,9 +859,6 @@ class LybraTui(App):
             return
 
         # 3. 展示 preview + 自然语言问句
-        self._pre(f"Preview: {op} {task_id}")
-        self._pre(f"归因给: {assigned_to}")
-
         if op == "claim":
             question = f"确认把 {task_id} 批给 {assigned_to} (claim) 吗?"
         elif op == "return":
@@ -825,8 +868,14 @@ class LybraTui(App):
         else:
             question = f"确认执行 {op} {task_id} 吗?"
 
-        self._pre(question)
-        self._pre("输入 是 / yes / /confirm 确认; 其余输入取消。")
+        # AIPOS-245 F-245-o3-4b: the confirm prompt is ONE logical block → one widget
+        # (tight inside; the .turn margin provides the breathing BETWEEN blocks).
+        self._pre(
+            f"Preview: {op} {task_id}\n"
+            f"归因给: {assigned_to}\n"
+            f"{question}\n"
+            "输入 是 / yes / /confirm 确认; 其余输入取消。"
+        )
 
         # 4. 置 pending_confirm 状态并 return(不发射,等下一次输入拦截)
         self._pending_confirm = {
@@ -859,7 +908,12 @@ class LybraTui(App):
         # 诚实呈现(前置错误面检查,Slice D 纪律)
         err = self._observe_error_face(result)
         if err:
+            # `err` already carries the gate's own message + suggested_next_action (R-5 pass-through
+            # in _observe_error_face). The TUI adds ONLY a loop-position line here — it does NOT
+            # re-author the failure reason (that stays the gate's job). This is orthogonal to the
+            # gate's suggested_next_action: it tells the Owner WHERE in the loop they are.
             self._pre(f"Confirm failed: {err}")
+            self._system("↳ 你在 confirm 环;/gates 重看待确认项。")
             return
 
         # 成功:展示写了什么
@@ -868,25 +922,47 @@ class LybraTui(App):
         data = result.get("data", {})
         planned_writes = data.get("planned_writes", [])
         if planned_writes:
-            self._pre("Confirmed. Writes:")
-            for w in planned_writes:
-                self._pre(f"  {w.get('kind', 'unknown')} {w.get('path', 'unknown')}")
+            # AIPOS-245 F-245-o3-4b: the writes table is ONE logical block → one widget
+            # (rows stay single-spaced; no blank line between rows).
+            self._pre(
+                "Confirmed. Writes:\n"
+                + "\n".join(f"  {w.get('kind', 'unknown')} {w.get('path', 'unknown')}" for w in planned_writes)
+            )
         else:
             self._pre(f"Confirmed: {op} {task_id}")
+        # AIPOS-245 A1/A2 (P-A: 成功分支也要"下一步"). Overlay the loop position after a
+        # successful confirm. `actor` is the canonical claimant recorded by the pending machine
+        # and already validated actor==canonical by the gate (R-3: transmit verbatim, never a
+        # derived/friendly name — aliases are a separate slice).
+        if op == "claim":
+            who = actor or "(未归因)"
+            self._system(
+                f"→ 已批给 {who}。通知 agent 开工;完成后回 /gates 看 return gate 再 /confirm。"
+            )
+        elif op == "return":
+            self._system(f"→ 任务已 RETURNED。下一步 /audit {task_id} 看判定。")
 
     def _observe_error_face(self, payload: dict[str, Any]) -> str | None:
-        """Shared error surface (Slice D ROUND 2 纪律)."""
-        if payload.get("ok") is False:
-            error_code = payload.get("error_code", "UNKNOWN_ERROR")
-            message = payload.get("message", "")
-            return f"{error_code}: {message}"
-        return None
+        """Shared error surface (Slice D ROUND 2 纪律).
+
+        AIPOS-245 R-5: delegate to the module-level surface so the two paths never fork —
+        it passes through the gate's own `suggested_next_action` (tools.py:145) verbatim and
+        never parallel-authors a reason/fix.
+        """
+        return _observe_error_face(payload)
 
     def _cmd_mode(self, name: str | None) -> None:
         if not name:
             self._system(f"Current mode: {self._session.mode}. Usage: /mode [{('|').join(MODES)}].")
             return
-        self._session.set_mode(name)  # raises ValueError on unknown → caught by _handle_command
+        try:
+            self._session.set_mode(name)
+        except ValueError:
+            # AIPOS-245 B14 (P-A): a local, reachable failure (unknown mode) — teach the valid set
+            # + the exact next command instead of leaking a bare `Error: {exc}`. Local state, no
+            # gate teaching to pass through; we author only the "what to type" (never pre-fill).
+            self._system(f"未知模式 “{name}”。→ /mode [{('|').join(MODES)}]。")
+            return
         self._render_status()
         self._system(f"Mode → {self._session.mode}.")
 
@@ -904,6 +980,9 @@ class LybraTui(App):
         err = _observe_error_face(result)
         if err:
             self._pre(f"Error: {err}")
+            # AIPOS-245 B8 (P-A): `err` already carries the gate's message (+ suggested_next_action
+            # via the R-5 pass-through); the TUI adds only the local next step, not a re-authored reason.
+            self._system("↳ 核对 task_id 拼写,或 /queue 看任务在不在队列。")
             return
         data = result.get("data") if isinstance(result, dict) else None
         verdict = "UNKNOWN"
@@ -916,6 +995,15 @@ class LybraTui(App):
                     break
         suffix = f" (effective_truth={str(effective).lower()})" if effective is not None else ""
         self._pre(f"{task_id}: {verdict}{suffix}")
+        # AIPOS-245 B7 (P-A: 失败判定也要"下一步"). The verdict is a read-face value (NOT a gate
+        # error_code / _teaching_error), so there is no gate-authored next step to pass through —
+        # this is a pure loop-position overlay. PASS → forward; FAIL/REQUEST_CHANGES → back to the
+        # executor. The blocking reason itself lives in L3 (we don't parallel-author it here).
+        v = verdict.upper()
+        if v in ("FAIL", "REQUEST_CHANGES", "BLOCK"):
+            self._system("↳ 审计未通过。看 L3 记录的 blocking 原因,退回执行者修后重走 return→/confirm。")
+        elif v in ("PASS", "APPROVE", "APPROVED"):
+            self._system("↳ 审计通过。该任务这一环已闭合。")
 
     # --- AIPOS-226 (Slice 2): local Owner actions (NOT gate, NOT copilot) ----------
 
@@ -1270,6 +1358,11 @@ class LybraTui(App):
         if message.error is not None:
             self._stop_thinking()
             self._system(f"Copilot error: {message.error}")
+            # AIPOS-245 F-245-o3-6 (P-A, Scope B 缺口): copilot-side failures (LLM endpoint — read
+            # timeout / connection / HTTP errors) used to end at the bare error. Add ONLY the loop
+            # guidance; the raw error above stays the single truth of WHAT failed. NO retry logic —
+            # behavior unchanged (presentation-only red line).
+            self._system("↳ 端点超时/失败(已知中转慢)→ 稍后重试;持续失败检查 --llm-base-url 端点与 key。")
             self.set_focus(self._prompt())
             return
         # Honest final token line (fix 5): REAL ↑/↓ from ChatReply.usage when present, else a
@@ -1316,8 +1409,30 @@ class LybraTui(App):
         else:
             self._system("Not publishable yet — see the blocking reasons above; fix the intent and resubmit.")
 
+    @staticmethod
+    def _card_markdown(content: str) -> str:
+        """AIPOS-245 F-245-o3-5: fence the card's YAML frontmatter before Markdown rendering.
+
+        A task card is YAML frontmatter + prose. Feeding the frontmatter to the Markdown widget
+        mangles it (`task_id`/`assigned_to` underscores parse as emphasis → a run-together blob,
+        Owner O3 screenshot). Pure presentation fix: the frontmatter block (--- … ---) is wrapped
+        in a ```yaml fence so it renders line-by-line, aligned, unparsed; only the prose body
+        (task description) stays Markdown. Content bytes are NOT modified — this only wraps.
+        """
+        if content.startswith("---\n") or content.startswith("---\r\n"):
+            end = content.find("\n---", 3)
+            if end != -1:
+                head_end = end + len("\n---")
+                frontmatter = content[:head_end]
+                body = content[head_end:]
+                return f"```yaml\n{frontmatter}\n```{body}"
+        return content
+
     def _render_proposal(self, p: Any) -> str:
-        head = f"TASK CARD DRAFT (read-only, not yet landed) — task_id {p.task_id}\n\n{p.content}"
+        head = (
+            f"TASK CARD DRAFT (read-only, not yet landed) — task_id {p.task_id}\n\n"
+            f"{self._card_markdown(p.content)}"
+        )
         if p.conformant:
             return head
         if p.needs_bundle:
@@ -1331,10 +1446,12 @@ class LybraTui(App):
         # DRY-RUN only. It NEVER publishes — the TUI holds no owner token; the Owner confirms
         # out of band. (This mirrors the welded AIPOS-206 owner-OOB confirm boundary.)
         if self._pending_proposal is None:
-            self._system("No pending card. Type a task in plain language first.")
+            # AIPOS-245 B10 (P-A 微调): make WHERE explicit — a card is born in copilot mode.
+            self._system("No pending card. Type a task in plain language first(copilot 模式下说需求即可生成草稿)。")
             return
         if not self._workspace_root:
-            self._system("workspace_root unknown; cannot land card.")
+            # AIPOS-245 B11 (P-A): local presentation state (no gate error_code) — name the exact restart flag.
+            self._system("workspace_root unknown; cannot land card. → 重启 lybra tui 时带 --workspace-root <path>。")
             return
         bundle = arg[len("bundle="):] if arg and arg.startswith("bundle=") else None
         proposal = self._pending_proposal
@@ -1357,6 +1474,8 @@ class LybraTui(App):
             f"Publish dry-run staged ({preview.dry_run_token}) — NOT published. "
             "Confirm out of band with the owner token to publish."
         )
+        # AIPOS-245 A5 (P-A: make the "next step" explicit). The TUI holds no publish authority.
+        self._system("→ 用 owner token OOB 确认发布(TUI 不持发布权);发布后 agent 才能认领。")
 
 
 def build_app(

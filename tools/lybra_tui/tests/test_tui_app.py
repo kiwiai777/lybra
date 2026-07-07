@@ -1136,6 +1136,9 @@ class TuiOwnerConfirmTests(unittest.TestCase):
                 app._user(text)
                 app._execute_pending_confirm()
             else:
+                # AIPOS-245 F-245-o3-4(与 app.py 逐字同构): 命令回显,让每个输出块可见地
+                # 配对到产生它的输入(重复命令 ≠ 双打印,F-245-o3-2 症状形状)。
+                app._user(text)
                 if app._pending_confirm is not None:
                     app._pending_confirm = None
                     app._pre("已取消 confirm(你执行了其他命令)。")
@@ -1148,9 +1151,6 @@ class TuiOwnerConfirmTests(unittest.TestCase):
             op = app._pending_confirm["op"]
             task_id = app._pending_confirm["task_id"]
 
-            app._pre(f"Preview: {op} {task_id}")
-            app._pre(f"归因给: {actor}")
-
             if op == "claim":
                 question = f"确认把 {task_id} 批给 {actor} (claim) 吗?"
             elif op == "return":
@@ -1160,8 +1160,13 @@ class TuiOwnerConfirmTests(unittest.TestCase):
             else:
                 question = f"确认执行 {op} {task_id} 吗?"
 
-            app._pre(question)
-            app._pre("输入 是 / yes / /confirm 确认; 其余输入取消。")
+            # AIPOS-245 F-245-o3-4b(与 app.py 逐字同构): 单逻辑块 → 单 widget。
+            app._pre(
+                f"Preview: {op} {task_id}\n"
+                f"归因给: {actor}\n"
+                f"{question}\n"
+                "输入 是 / yes / /confirm 确认; 其余输入取消。"
+            )
             app._pending_confirm["actor"] = actor
             app._pending_confirm["awaiting"] = "affirmation"
         elif app._pending_confirm and app._pending_confirm.get("awaiting") == "affirmation" and text.lower() in ["是", "yes", "/confirm"]:
@@ -1360,6 +1365,471 @@ class TuiOwnerConfirmTests(unittest.TestCase):
         self.assertIn("已取消 confirm(你执行了其他命令)", out)
         session.preview_gate.assert_not_called()
         session.confirm_gate.assert_not_called()
+
+
+@unittest.skipUnless(_HAS_TEXTUAL, "textual not installed (gate/core lane); app layer is tui-lane only")
+class Aipos245GuidanceContinuityTests(unittest.TestCase):
+    """AIPOS-245 (Slice F′) — Owner-side guidance & continuity (presentation-only).
+
+    Two hard invariants under test (per DRAFT §0 + R-1..R-5):
+    - Every step (success AND failure) carries a "where you are / what to type next" line (P-A).
+    - Guidance NEVER pre-fills an answer / auto-fires the gate (default-yes red line, P-2). The
+      Scope A/B tests assert guidance TEXT appears; they NEVER let it become a gate call.
+    """
+
+    # --- helpers (mirror TuiOwnerConfirmTests conventions) --------------------------
+    def _app_with_session(self, gates: list[dict], confirm_result: dict | None = None) -> tuple[Any, Any]:
+        from unittest.mock import MagicMock
+        from tools.lybra_tui.app import build_app
+
+        session = MagicMock()
+        session.confirm_gates.return_value = gates
+        if gates:
+            gate = gates[0]
+            session.preview_gate.return_value = {
+                "operation": gate.get("op", "claim"),
+                "task": {"task_id": gate.get("task_id", "AIPOS-999")},
+                "actor": {"actor": gate.get("task", {}).get("assigned_to", "agent-01")},
+            }
+        if confirm_result:
+            session.confirm_gate.return_value = confirm_result
+        app = build_app(session, None, workspace_root="/tmp/ws")
+        app._pre = MagicMock()
+        app._system = MagicMock()
+        app._user = MagicMock()
+        return app, session
+
+    def _texts(self, app: Any) -> str:
+        pre = "\n".join(str(c.args[0]) for c in app._pre.call_args_list if c.args)
+        sys = "\n".join(str(c.args[0]) for c in app._system.call_args_list if c.args)
+        return pre + "\n" + sys
+
+    def _fire_confirm(self, app: Any) -> None:
+        # Drive the real pending machine: /confirm 0 → 是 → _execute_pending_confirm.
+        app._cmd_confirm(0)
+        app._execute_pending_confirm()
+
+    # --- Scope A: happy-path guidance ----------------------------------------------
+    def test_a1_claim_success_guides_to_notify_agent_and_return(self) -> None:
+        """A1: claim 成功后引导含"通知 agent" + return 环位置,且 actor 是透传的 canonical(R-3)."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-07"}}]
+        success = {"ok": True, "data": {"planned_writes": []}}
+        app, _ = self._app_with_session(gates, confirm_result=success)
+
+        self._fire_confirm(app)
+        out = self._texts(app)
+        self.assertIn("通知 agent", out)
+        self.assertIn("return", out)
+        self.assertIn("agent-07", out)          # R-3: canonical actor 透传,不美化
+
+    def test_a2_return_success_guides_to_audit(self) -> None:
+        """A2: return 成功后引导含 /audit <task_id>."""
+        gates = [{"op": "return", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-07"}}]
+        success = {"ok": True, "data": {"planned_writes": []}}
+        app, _ = self._app_with_session(gates, confirm_result=success)
+
+        self._fire_confirm(app)
+        out = self._texts(app)
+        self.assertIn("/audit AIPOS-999", out)
+
+    def test_a3_gates_list_shows_title_and_attribution_and_confirm_hint(self) -> None:
+        """A3: /gates 行含 title + 归因人 + /confirm N 提示(数据现成,纯呈现)."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999",
+                  "task": {"assigned_to": "agent-07", "title": "重构登录流程"}}]
+        app, _ = self._app_with_session(gates)
+
+        app._cmd_gates()
+        out = self._texts(app)
+        self.assertIn("重构登录流程", out)
+        self.assertIn("agent-07", out)
+        self.assertIn("/confirm 0", out)
+
+    def test_a3_gates_missing_fields_fall_back_never_prefill(self) -> None:
+        """A3 红线: 缺 title/assigned_to → 中性回落,绝不预填答案(P-2)."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {}}]
+        app, _ = self._app_with_session(gates)
+
+        app._cmd_gates()
+        out = self._texts(app)
+        self.assertIn("(无标题)", out)
+        self.assertIn("(未归因)", out)
+
+    def test_a4_draft_conformant_guidance_describes_two_step_revise_not_phantom(self) -> None:
+        """A4 (R-2): draft conformant 引导贴合真实两步改稿链路,不承诺"单句即重出"."""
+        from tools.lybra_tui.app import _NEXT_AFTER_DRAFT
+        # 措辞含两步(先答复 → 回 yes/是 重出),不出现"直接重出/立即重出"的幻影承诺。
+        self.assertIn("回 yes", _NEXT_AFTER_DRAFT)
+        self.assertIn("重出草稿", _NEXT_AFTER_DRAFT)
+        self.assertIn("我先答复", _NEXT_AFTER_DRAFT)
+
+    def test_a6_connected_shows_full_loop_map(self) -> None:
+        """A6: 首屏全环导览含 认领 / /gates / /confirm / /audit 关键词."""
+        import inspect
+        from tools.lybra_tui.app import LybraTui
+        src = inspect.getsource(LybraTui.on_mount)
+        self.assertIn("本环", src)
+        self.assertIn("认领", src)
+        self.assertIn("/gates", src)
+        self.assertIn("/audit", src)
+
+    # --- Scope B: exception-path guidance (R-5 pass-through + loop overlay) ---------
+    def test_b_confirm_failure_passes_through_gate_next_step_and_adds_loop(self) -> None:
+        """R-5: confirm 失败透传 gate 自带 suggested_next_action(原文)+ 叠 confirm 环位置."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-07"}}]
+        denied = {
+            "ok": False,
+            "error_code": "SCOPE_DENIED",
+            "message": "token 缺 owner_confirm scope",
+            "suggested_next_action": "用 owner-role token 重连后重试",
+        }
+        app, _ = self._app_with_session(gates, confirm_result=denied)
+
+        self._fire_confirm(app)
+        out = self._texts(app)
+        self.assertIn("SCOPE_DENIED", out)
+        self.assertIn("用 owner-role token 重连后重试", out)   # R-5: gate 原文透传
+        self.assertIn("你在 confirm 环", out)                  # TUI 只叠环位置
+        self.assertNotIn("Confirmed. Writes", out)
+
+    def test_b_confirm_failure_without_next_step_does_not_fabricate(self) -> None:
+        """R-5 负向: gate 无 suggested_next_action → TUI 不虚构下一步(只 code:msg + 环位置)."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-07"}}]
+        denied = {"ok": False, "error_code": "SNAPSHOT_MISMATCH", "message": "快照已变"}
+        app, _ = self._app_with_session(gates, confirm_result=denied)
+
+        self._fire_confirm(app)
+        out = self._texts(app)
+        self.assertIn("SNAPSHOT_MISMATCH", out)
+        self.assertIn("快照已变", out)
+        self.assertIn("你在 confirm 环", out)          # 环位置(TUI 职责)仍在
+        self.assertNotIn("→ None", out)                # 不把缺失 next 渲染成假箭头
+
+    def test_b7_audit_fail_verdict_guides_back_to_executor(self) -> None:
+        """B7: audit verdict=FAIL → 引导退回执行者(读面态,非 gate error_code)."""
+        gates: list[dict] = []
+        app, session = self._app_with_session(gates)
+        session.observe.return_value = {"ok": True, "data": {"verdict": "FAIL"}}
+
+        app._cmd_audit("AIPOS-999")
+        out = self._texts(app)
+        self.assertIn("AIPOS-999: FAIL", out)
+        self.assertIn("退回执行者", out)
+
+    def test_a5_proceed_success_names_oob_publish_next_step(self) -> None:
+        """A5: /proceed 落盘后引导显式"下一步 = owner token OOB 确认发布"(TUI 不持发布权)."""
+        from unittest.mock import MagicMock
+
+        app, session = self._app_with_session([])
+        proposal = MagicMock(conformant=True, content="card", draft_rel_path="5_tasks/drafts/t.md",
+                             blocking_reasons=[])
+        app._pending_proposal = proposal
+        session.land_draft.return_value = "5_tasks/drafts/t.md"
+        session.preview_publish.return_value = MagicMock(dry_run_token="dryrun_x")
+
+        app._copilot_proceed(None)
+        out = self._texts(app)
+        self.assertIn("NOT published", out)
+        self.assertIn("OOB", out)
+        self.assertIn("不持发布权", out)
+
+    def test_b1_ask_actor_branch_names_assigned_to_fix_and_zero_gate_calls(self) -> None:
+        """B1: 缺 assigned_to → 问 actor 之外补"先给任务卡补 assigned_to"的治本引导;给前零调用."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {}}]
+        app, session = self._app_with_session(gates)
+
+        app._cmd_confirm(0)
+        out = self._texts(app)
+        self.assertIn("assigned_to", out)
+        self.assertIn("补上 assigned_to", out)
+        self.assertEqual(app._pending_confirm.get("awaiting"), "actor")
+        session.preview_gate.assert_not_called()
+        session.confirm_gate.assert_not_called()
+
+    def test_b8_audit_error_face_adds_local_next_step(self) -> None:
+        """B8: /audit 错误面(gate err 已响亮)之外补本地下一步(核对拼写 / /queue)."""
+        app, session = self._app_with_session([])
+        session.observe.return_value = {"ok": False, "error_code": "TASK_NOT_FOUND", "message": "no such task"}
+
+        app._cmd_audit("AIPOS-404")
+        out = self._texts(app)
+        self.assertIn("TASK_NOT_FOUND", out)
+        self.assertIn("核对 task_id", out)
+        self.assertIn("/queue", out)
+
+    def test_b10_proceed_without_card_names_where_cards_are_born(self) -> None:
+        """B10 微调: 无 pending 草稿 → 指明 copilot 模式说需求."""
+        app, _ = self._app_with_session([])
+        app._pending_proposal = None
+
+        app._copilot_proceed(None)
+        out = self._texts(app)
+        self.assertIn("No pending card", out)
+        self.assertIn("copilot 模式", out)
+
+    def test_b11_proceed_without_workspace_names_restart_flag(self) -> None:
+        """B11: workspace_root 未知 → 指明 --workspace-root 重启旗标(本地态,无 gate error)."""
+        from unittest.mock import MagicMock
+
+        app, _ = self._app_with_session([])
+        app._pending_proposal = MagicMock(conformant=True)
+        app._workspace_root = None
+
+        app._copilot_proceed(None)
+        out = self._texts(app)
+        self.assertIn("workspace_root unknown", out)
+        self.assertIn("--workspace-root", out)
+
+    def test_b12_no_pending_gates_names_queue_truth_next_step(self) -> None:
+        """B12: /confirm 无 pending gate → 指明 gate 从队列真相派生 + /queue / 发新任务;零 gate 写调用."""
+        app, session = self._app_with_session([])
+
+        app._cmd_confirm(0)
+        out = self._texts(app)
+        self.assertIn("No pending confirm gates", out)
+        self.assertIn("/queue", out)
+        self.assertIn("pending/claimed", out)
+        session.preview_gate.assert_not_called()
+        session.confirm_gate.assert_not_called()
+
+    # --- ROUND 增量: Owner O3 findings (F-245-o3-5 / o3-4 / o3-2 / B12 nit) ----------
+    def test_o3_5_card_frontmatter_fenced_prose_stays_markdown(self) -> None:
+        """F-245-o3-5: YAML frontmatter 进 ```yaml 围栏(不进 markdown 解析);散文体留 markdown;
+        内容字节不改(只包裹)."""
+        from tools.lybra_tui.app import LybraTui
+
+        card = "---\ntask_id: T-1\nassigned_to: exec.cc.local\n---\n\n任务描述:**加粗**散文。"
+        out = LybraTui._card_markdown(card)
+        self.assertTrue(out.startswith("```yaml\n---\ntask_id: T-1\n"))
+        self.assertIn("assigned_to: exec.cc.local\n---\n```", out)   # frontmatter 整段在围栏内
+        self.assertIn("任务描述:**加粗**散文。", out)                 # 散文在围栏外(markdown 照走)
+        self.assertNotIn("```yaml\n---\ntask_id: T-1\n" + "```", out.split("任务描述")[0].replace("\n", "") or "x")
+        # 字节不改:去掉围栏三行后还原出原卡
+        self.assertEqual(out.replace("```yaml\n", "", 1).replace("\n```", "", 1), card)
+
+    def test_o3_5_non_frontmatter_content_untouched(self) -> None:
+        """F-245-o3-5 负向: 无 frontmatter 的内容原样返回(不误包)."""
+        from tools.lybra_tui.app import LybraTui
+
+        prose = "just prose, no frontmatter"
+        self.assertEqual(LybraTui._card_markdown(prose), prose)
+
+    def test_o3_5_render_proposal_uses_fenced_card(self) -> None:
+        """F-245-o3-5: _render_proposal 输出对 frontmatter 卡含 ```yaml 围栏."""
+        from unittest.mock import MagicMock
+
+        app, _ = self._app_with_session([])
+        p = MagicMock(task_id="T-1", conformant=True,
+                      content="---\ntask_id: T-1\n---\nbody")
+        out = app._render_proposal(p)
+        self.assertIn("```yaml\n---\ntask_id: T-1\n---\n```", out)
+        self.assertIn("TASK CARD DRAFT", out)
+
+    def test_o3_4_command_input_is_echoed(self) -> None:
+        """F-245-o3-4: / 命令有用户回显(镜像走真实拦截逻辑;app 侧同构由源断言钉)."""
+        import inspect
+        from tools.lybra_tui.app import LybraTui
+
+        gates: list[dict] = []
+        app, session = self._app_with_session(gates)
+        session.observe.return_value = {"ok": True, "data": {"summary": {}}}
+        # 经镜像(真实拦截逻辑)提交命令 → _user 被调(镜像不依赖 self,直接借用)
+        TuiOwnerConfirmTests._simulate_input(None, app, "/queue")  # type: ignore[arg-type]
+        app._user.assert_any_call("/queue")
+        # app.py 真分支同构钉:else 分支在 _handle_command 前回显
+        src = inspect.getsource(LybraTui.on_prompt_area_submitted)
+        idx_echo = src.find("self._user(text)\n                if self._pending_confirm is not None:")
+        self.assertGreater(idx_echo, -1, "app / 分支缺命令回显(须在 cancel/handle 之前)")
+
+    def test_o3_4_turn_blocks_have_breathing_margin(self) -> None:
+        """F-245-o3-4: .turn 块间有空行(margin-bottom 1)——钉 CSS,防回退贴死."""
+        from tools.lybra_tui.app import LybraTui
+
+        self.assertIn(".turn { margin: 0 0 1 0; }", LybraTui.CSS)
+
+    def test_o3_2_audit_emits_verdict_exactly_once_per_invocation(self) -> None:
+        """F-245-o3-2 守卫: 单次 /audit 只发一条 verdict 行(单发射性质钉)."""
+        app, session = self._app_with_session([])
+        session.observe.return_value = {"ok": True, "data": {"verdict": "WARN"}}
+
+        app._cmd_audit("O3-FX-3")
+        verdict_lines = [str(c.args[0]) for c in app._pre.call_args_list
+                         if c.args and "O3-FX-3: WARN" in str(c.args[0])]
+        self.assertEqual(len(verdict_lines), 1)
+        self.assertEqual(session.observe.call_count, 1)
+
+    def test_o3_4b_confirm_prompt_is_one_block_widget(self) -> None:
+        """F-245-o3-4b: confirm 提示(Preview/归因给/问句/输入指引)是单 widget(块内紧凑)."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-07"}}]
+        app, _ = self._app_with_session(gates)
+
+        app._cmd_confirm(0)
+        block = [str(c.args[0]) for c in app._pre.call_args_list
+                 if c.args and "Preview: claim AIPOS-999" in str(c.args[0])]
+        self.assertEqual(len(block), 1)
+        # 四行同居一 widget(块内单倍行距;块间呼吸由 .turn margin 提供)
+        self.assertIn("归因给: agent-07", block[0])
+        self.assertIn("输入 是 / yes / /confirm 确认", block[0])
+
+    def test_o3_4b_planned_writes_rows_are_one_block_widget(self) -> None:
+        """F-245-o3-4b: Confirmed. Writes 表(标题+行)是单 widget——表行间不得插空."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999", "task": {"assigned_to": "agent-07"}}]
+        success = {"ok": True, "data": {"planned_writes": [
+            {"kind": "claim_record", "path": "records/claims/x.md"},
+            {"kind": "session_record", "path": "records/sessions/y.md"},
+        ]}}
+        app, _ = self._app_with_session(gates, confirm_result=success)
+
+        self._fire_confirm(app)
+        blocks = [str(c.args[0]) for c in app._pre.call_args_list
+                  if c.args and "Confirmed. Writes:" in str(c.args[0])]
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("claim_record records/claims/x.md", blocks[0])
+        self.assertIn("session_record records/sessions/y.md", blocks[0])
+
+    def test_o3_6_copilot_error_adds_endpoint_guidance_no_retry(self) -> None:
+        """F-245-o3-6: copilot 侧失败(如 read timeout)→ 裸错误 + P-A 引导;零重试逻辑."""
+        from tools.lybra_tui.app import CopilotResult
+
+        app, session = self._app_with_session([])
+        app._stop_thinking = __import__("unittest").mock.MagicMock()
+        app.set_focus = __import__("unittest").mock.MagicMock()
+        app._prompt = __import__("unittest").mock.MagicMock()
+
+        app.on_copilot_result(CopilotResult(kind="chat", error="read timeout: xchai.xyz"))
+        out = self._texts(app)
+        self.assertIn("Copilot error: read timeout: xchai.xyz", out)   # 原始错误仍是唯一真相
+        self.assertIn("稍后重试", out)
+        self.assertIn("--llm-base-url", out)
+        session.confirm_gate.assert_not_called()                        # 引导 ≠ 任何行为
+
+    def test_b12_nit_empty_gates_names_copilot_mode(self) -> None:
+        """B12 nit: 空态引导"说需求 → /proceed"带 (copilot 模式下) 限定."""
+        app, session = self._app_with_session([])
+
+        app._cmd_confirm(0)
+        out = self._texts(app)
+        self.assertIn("(copilot 模式下)", out)
+
+    def test_b14_mode_unknown_teaches_valid_modes_not_bare_exception(self) -> None:
+        """B14: /mode 未知模式 → 引导有效模式,不再裸抛 Error: {exc}."""
+        gates: list[dict] = []
+        app, session = self._app_with_session(gates)
+        session.mode = "observe"
+        session.set_mode.side_effect = ValueError("unknown mode: bogus")
+
+        app._cmd_mode("bogus")
+        out = self._texts(app)
+        self.assertIn("observe", out)
+        self.assertIn("confirm", out)
+        self.assertIn("copilot", out)
+
+    # --- default-yes regression nail: guidance TEXT is not a gate call --------------
+    def test_guidance_never_auto_fires_gate(self) -> None:
+        """新引导文案出现 ≠ gate 被调:仅 /gates(读面)不得触发 confirm/preview."""
+        gates = [{"op": "claim", "task_id": "AIPOS-999",
+                  "task": {"assigned_to": "agent-07", "title": "T"}}]
+        app, session = self._app_with_session(gates)
+
+        app._cmd_gates()
+        session.confirm_gate.assert_not_called()
+        session.preview_gate.assert_not_called()
+
+    # --- ★ R-4: real-wiring penetration (mock down to GateClient; REAL TuiSession) --
+    def test_f245_success_guidance_reaches_real_confirm_wiring(self) -> None:
+        """R-4 成功分支: A1 引导经真实 session→GateClient 接线发出(非 session-mock 假绿).
+
+        mock 降到 GateClient 层(create_autospec 锁签名),session 是 REAL TuiSession;
+        走 _cmd_confirm → 是 → _execute_pending_confirm → session.confirm_gate → GateClient.confirm。
+        断言: ① Confirmed ② A1 下一步引导(通知 agent + return) ③ actor 是透传的 canonical(R-3)。
+        """
+        from unittest.mock import MagicMock, create_autospec
+
+        from tools.aipos_cli.confirm_client import GateClient, Preview
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.state import TuiSession
+
+        client = create_autospec(GateClient, instance=True)
+        gate_task = {
+            "task_id": "AIPOS-999",
+            "assigned_to": "exec.cc.local",
+            "metadata": {"agent_instance": "exec.cc.local"},
+        }
+        client.list_confirm_gates.return_value = [
+            {"op": "claim", "task_id": "AIPOS-999", "task": gate_task}
+        ]
+        client.preview.return_value = Preview(
+            op="claim", dry_run_token="dryrun_ok", expires_at=None, snapshot_hash="snap",
+            replay_args={"actor": "exec.cc.local", "agent_instance": "exec.cc.local", "autonomy_mode": "Supervised"},
+        )
+        client.confirm.return_value = {"ok": True, "data": {"planned_writes": []}}
+
+        session = TuiSession(gate_url="http://stub", _client=client)  # REAL session, stub transport
+        app = build_app(session, None, workspace_root="/tmp/ws")
+        app._pre = MagicMock()
+        app._system = MagicMock()
+        app._user = MagicMock()
+
+        app._cmd_confirm(0)
+        self.assertEqual(app._pending_confirm.get("awaiting"), "affirmation")
+        app._execute_pending_confirm()
+
+        client.confirm.assert_called_once()
+        out = self._texts(app)
+        self.assertIn("Confirmed", out)
+        self.assertIn("通知 agent", out)          # A1 引导经真接线发出
+        self.assertIn("return", out)
+        self.assertIn("exec.cc.local", out)        # R-3: canonical actor 透传
+
+    def test_f245_teaching_and_loop_reach_real_confirm_wiring_fail(self) -> None:
+        """R-4 失败分支: gate 真实 _teaching_error 形状经真接线到达 → 透传 next_step + 叠环位置.
+
+        GateClient.confirm 返回真实 teaching-error 形状(ok:False + error_code + message +
+        suggested_next_action)。断言: ① 响亮 SCOPE_DENIED ② 透传 gate 自带 next_step 原文
+        ③ 叠 confirm 环位置 ④ 无成功文案。证明引导挂在真失败呈现路径(防 F-244-2 掩盖)。
+        """
+        from unittest.mock import MagicMock, create_autospec
+
+        from tools.aipos_cli.confirm_client import GateClient, Preview
+        from tools.lybra_tui.app import build_app
+        from tools.lybra_tui.state import TuiSession
+
+        client = create_autospec(GateClient, instance=True)
+        gate_task = {
+            "task_id": "AIPOS-999",
+            "assigned_to": "exec.cc.local",
+            "metadata": {"agent_instance": "exec.cc.local"},
+        }
+        client.list_confirm_gates.return_value = [
+            {"op": "claim", "task_id": "AIPOS-999", "task": gate_task}
+        ]
+        client.preview.return_value = Preview(
+            op="claim", dry_run_token="dryrun_deny", expires_at=None, snapshot_hash="snap",
+            replay_args={"actor": "exec.cc.local", "agent_instance": "exec.cc.local", "autonomy_mode": "Supervised"},
+        )
+        # 真实 _teaching_error 顶层形状(tools.py:138-146)。
+        client.confirm.return_value = {
+            "ok": False,
+            "verdict": "BLOCK",
+            "error_code": "SCOPE_DENIED",
+            "message": "token 缺 owner_confirm scope",
+            "suggested_next_action": "用 owner-role token 重连后重试",
+        }
+
+        session = TuiSession(gate_url="http://stub", _client=client)
+        app = build_app(session, None, workspace_root="/tmp/ws")
+        app._pre = MagicMock()
+        app._system = MagicMock()
+        app._user = MagicMock()
+
+        app._cmd_confirm(0)
+        app._execute_pending_confirm()
+
+        client.confirm.assert_called_once()
+        out = self._texts(app)
+        self.assertIn("SCOPE_DENIED", out)                       # ① 响亮
+        self.assertIn("用 owner-role token 重连后重试", out)      # ② gate 原文透传(R-5)
+        self.assertIn("你在 confirm 环", out)                    # ③ TUI 只叠环位置
+        self.assertNotIn("Confirmed. Writes", out)               # ④ 无成功文案
 
 
 if __name__ == "__main__":
