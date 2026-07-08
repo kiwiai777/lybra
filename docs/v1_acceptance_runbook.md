@@ -19,7 +19,7 @@ against a **fresh, disposable workspace**; never touch the evidence workspaces (
 ## R0 — install
 Two audiences, two install paths (lybra is **npm-distributed, not on PyPI**):
 - **npm end users (the shipped product path):** `npm install -g lybra` (gate core, zero Python deps)
-  → `pip install "textual>=0.50"` to enable the TUI client.
+  → `pip install "textual>=4.0"` to enable the TUI client.
 - **Source / dev (from a clone):** `pip install ".[tui]"` → installs Textual (the TUI extra).
 - Confirm the gate core still installs with **zero** Python deps (no Textual needed to `lybra serve`).
 

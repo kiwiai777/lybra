@@ -17,7 +17,7 @@ dependencies = []  # gate core: stdlib only, intentionally zero runtime dependen
 [project.optional-dependencies]
 # UI library lands ONLY in the TUI client (tools/lybra_tui); tools/mcp_server and
 # tools/aipos_cli never import it. Core CI lane installs nothing here and runs the gate.
-tui = ["textual>=0.50"]
+tui = ["textual>=4.0"]
 
 [tool.lybra]
 distribution = "npm"  # bin/lybra (package.json) is the entry; pyproject is deps/extras only

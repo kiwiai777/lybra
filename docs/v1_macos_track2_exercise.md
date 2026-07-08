@@ -23,7 +23,7 @@
   ```bash
   python3 -m venv /tmp/lybra-bare-venv
   /tmp/lybra-bare-venv/bin/python -c "import yaml" 2>&1 | tail -1   # must say: No module named 'yaml'
-  python3 -m venv ~/o3-textual-venv && ~/o3-textual-venv/bin/python -m pip -q install "textual>=0.50"
+  python3 -m venv ~/o3-textual-venv && ~/o3-textual-venv/bin/python -m pip -q install "textual>=4.0"
   ```
 - LLM key, fingerprint-only:
   ```bash

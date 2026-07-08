@@ -46,7 +46,7 @@ NOT on PyPI** — install the TUI's `textual` separately.
 
 ```bash
 npm install -g lybra                 # gate core (Node 18+ and Python 3 on PATH)
-pip install "textual>=0.50"          # enable the TUI (textual is on PyPI; lybra is npm-only)
+pip install "textual>=4.0"          # enable the TUI (textual is on PyPI; lybra is npm-only)
 lybra init ./ws --project-id my_project
 lybra serve --workspace-root ./ws    # Owner starts the gate (rotates roles, incl. read-only copilot)
 lybra tui --gate-url http://127.0.0.1:7118 --workspace-root ./ws --project my_project \

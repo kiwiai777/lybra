@@ -110,7 +110,7 @@ To show a *passing* independent audit, run that one segment with PyYAML installe
 
 ## O3 — TUI real launch (the AIPOS-216 fix)
 ```bash
-pip3 install "textual>=0.50"                          # into the python the TUI will use
+pip3 install "textual>=4.0"                          # into the python the TUI will use
 export LYBRA_PLANCHAT_LLM_KEY="$(cat ~/.lybra_planchat_key)"
 unset LYBRA_PYTHON                                    # use the python that has textual
 "$PREFIX/bin/lybra" tui --gate-url http://127.0.0.1:7118 --workspace-root "$WS" --project rgmac \

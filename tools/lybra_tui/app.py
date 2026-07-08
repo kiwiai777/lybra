@@ -254,6 +254,17 @@ class PromptArea(TextArea):
             event.prevent_default()
             self.insert("\n")
             return
+        # AIPOS-246 S2: PgUp/PgDn/End become the KEYBOARD scroll channel for the conversation
+        # (mouse-independent scrollback — the fallback when terminal mouse reporting is broken).
+        # Sacrifice disclosed: TextArea's native cursor paging / end-of-line on these keys has no
+        # practical value in a 1–3 line prompt (docs/v1_disclosure.md row; /help lists the keys).
+        if key in ("pageup", "pagedown", "end"):
+            event.stop()
+            event.prevent_default()
+            scroll = getattr(self.app, "_scroll_conversation", None)
+            if scroll is not None:
+                scroll(key)
+            return
         # Multi-line-aware ↑/↓ precedence: forward to the app (history / dropdown) ONLY at the
         # buffer edge; otherwise let TextArea move the cursor between lines AND stop the event so
         # it does NOT also bubble to App.on_key (which would recall history on top of the move).
@@ -358,6 +369,8 @@ class LybraTui(App):
         self._pending_preview: Any = None
         self._pending_proposal: Any = None  # last copilot DraftProposal awaiting Owner /proceed
         self._pending_confirm: dict[str, Any] | None = None  # pending confirm gate awaiting affirmation (是/yes//confirm)
+        # AIPOS-246 F-246-o3-2: conversation anchor engages lazily on first overflow (_maybe_anchor).
+        self._anchor_engaged: bool = False
         # AIPOS-222 conversational substate (pure client-UX; no accountability state):
         self._pending_offer = False  # a "generate draft?" offer is open → an affirmative consents
         self._thinking: Static | None = None  # the inline "· thinking… (Ns)" line under the turn
@@ -407,6 +420,11 @@ class LybraTui(App):
         # Short, single-line placeholder (claude-code style): a long one can soft-wrap to a 2nd
         # line in a narrow pane, inflating the input box. The full hint is in the welcome line.
         cmd.placeholder = "Type a task, or /help"
+        # AIPOS-246 S1 + F-246-o3-2: the conversation anchor is engaged LAZILY (see _maybe_anchor)
+        # — NOT here. Anchoring a shorter-than-a-screen container makes the compositor set a
+        # NEGATIVE scroll_y (installed 8.2.8 _compositor.py:609-618 sets scroll_y = content bottom
+        # minus viewport height via set_reactive, bypassing the clamp), pinning the welcome text to
+        # the viewport bottom (Owner O3 regression). The anchor engages on first overflow instead.
         self.query_one("#ac", OptionList).display = False
         self._render_status()
         self._render_ctxbar()
@@ -422,20 +440,44 @@ class LybraTui(App):
 
     # --- conversation transcript (codex/claude-code style message stream) ---------
 
-    def _append(self, text: str, css_class: str) -> None:
+    def _maybe_anchor(self) -> None:
+        # AIPOS-246 F-246-o3-2: engage the anchor only once the conversation actually OVERFLOWS a
+        # screen (max_scroll_y > 0). Before that, anchoring is harmful (compositor pins short
+        # content to the viewport bottom via a negative scroll_y — Owner O3 regression). At the
+        # first overflow the view is necessarily at its only position (scroll_y 0 == bottom-most
+        # reachable until now), so engaging + snapping to bottom IS the follow the Owner expects.
+        # Runs via call_after_refresh so max_scroll_y reflects the just-mounted widget.
+        if self._anchor_engaged:
+            return
         convo = self.query_one("#conversation", VerticalScroll)
+        if convo.max_scroll_y > 0:
+            convo.anchor()
+            self._anchor_engaged = True
+
+    def _append(self, text: str, css_class: str) -> None:
+        # AIPOS-246 S1: no per-mount scroll_visible — the #conversation container is ANCHORED
+        # lazily (F-246-o3-2, _maybe_anchor). Anchored = follows new content at the bottom; a user
+        # scroll-up releases the anchor (textual>=4.0 native), so new messages no longer yank the
+        # view back (F-245-o3-1).
+        convo = self.query_one("#conversation", VerticalScroll)
+        # Engagement check BOTH before the mount (sync — sees the SETTLED layout of previous
+        # content; covers a burst of same-tick mounts whose after-refresh callbacks can run before
+        # layout settles) and after the refresh. Engagement therefore lags overflow by at most one
+        # message — disclosed in the card.
+        self._maybe_anchor()
         widget = Static(text, classes=f"turn {css_class}")
         convo.mount(widget)
-        widget.scroll_visible()
+        self.call_after_refresh(self._maybe_anchor)
 
     def _markdown(self, text: str, css_class: str) -> None:
         # AIPOS-222 (fix 4): render copilot answers + task-card content as Textual `Markdown` so
         # fenced ```code``` blocks are syntax-highlighted (Rich/Pygments — ships with Textual, no
         # new dependency), exactly like codex/claude-code. Pure display; no accountability state.
         convo = self.query_one("#conversation", VerticalScroll)
+        self._maybe_anchor()  # sync pre-mount check (see _append)
         widget = Markdown(text, classes=f"turn {css_class}")
-        convo.mount(widget)
-        widget.scroll_visible()
+        convo.mount(widget)  # AIPOS-246 S1: (lazily) anchored container follows; no per-mount scroll
+        self.call_after_refresh(self._maybe_anchor)
 
     def _user(self, text: str) -> None:
         self._append(f"› {text}", "turn-user")
@@ -500,6 +542,19 @@ class LybraTui(App):
             system_chars = 0
         payload = truth_chars + chat_chars + system_chars
         return min(100, round(100 * payload / CTX_BUDGET_CHARS))
+
+    def _scroll_conversation(self, key: str) -> None:
+        # AIPOS-246 S2: keyboard scroll channel (forwarded from PromptArea; focus stays on the
+        # prompt). PgUp/PgDn page the conversation (scroll_to path → releases the anchor, textual
+        # native); End returns to the bottom via scroll_end (release_anchor=False → re-engages
+        # following at the bottom, §3 c). Pure view navigation — no state, no gate.
+        convo = self.query_one("#conversation", VerticalScroll)
+        if key == "pageup":
+            convo.scroll_page_up(animate=False)
+        elif key == "pagedown":
+            convo.scroll_page_down(animate=False)
+        else:
+            convo.scroll_end(animate=False)
 
     def _render_ctxbar(self) -> None:
         ctxbar = self.query_one("#ctxbar", Static)
@@ -627,6 +682,13 @@ class LybraTui(App):
         event.prompt.text = ""
         self.query_one("#ac", OptionList).display = False
         text = raw.strip()
+        # AIPOS-246 S1b (R boundary): ONLY an Owner submission re-bottoms the view (you typed →
+        # you want the current turn). Gate events / new messages / worker replies / thinking
+        # frames must NEVER trigger this — they rely solely on the passive anchor. Empty Enter
+        # is not a submission (it is the R-h1 cancel path), so it does not re-bottom.
+        if text:
+            self._maybe_anchor()  # F-246-o3-2: an Owner submission is also an engagement point
+            self.query_one("#conversation", VerticalScroll).scroll_end(animate=False)
         if not text:
             # AIPOS-244 R-h1: an empty Enter while a confirm is pending IS a non-affirmative →
             # cancel loudly (the promised "其余输入取消" contract; previously the early return let
@@ -751,7 +813,13 @@ class LybraTui(App):
             elif cmd == "/home":
                 self._cmd_home(args)
             elif cmd == "/clear":
-                self.query_one("#conversation", VerticalScroll).remove_children()
+                convo = self.query_one("#conversation", VerticalScroll)
+                convo.remove_children()
+                # AIPOS-246 F-246-o3-2: after /clear the content is short again — an engaged anchor
+                # would re-pin it to the viewport bottom (negative-scroll compositor path). Reset;
+                # it re-engages lazily at the next overflow.
+                convo.anchor(False)
+                self._anchor_engaged = False
                 self._system("Conversation cleared.")
             elif cmd == "/draft":
                 self._consent_to_draft()
@@ -773,6 +841,8 @@ class LybraTui(App):
             lines.append(f"  {name.ljust(width)}  {desc}")
         lines.append("")
         lines.append("Anything without a leading `/` is sent to the copilot as a task intent.")
+        # AIPOS-246 S2: keyboard scroll channel disclosure.
+        lines.append("Scrollback: PgUp/PgDn 翻看会话历史,End 回到底部并恢复跟随(上滚后新消息不再拽回)(Mac: Fn+↑ / Fn+↓ / Fn+→)。")
         self._pre("\n".join(lines))
 
     def _cmd_agents(self) -> None:
@@ -1248,8 +1318,8 @@ class LybraTui(App):
         self._thinking_up_est = self._estimate_up_tokens(intent)
         convo = self.query_one("#conversation", VerticalScroll)
         line = Static(self._thinking_text(), classes="turn turn-system")
-        convo.mount(line)
-        line.scroll_visible()
+        convo.mount(line)  # AIPOS-246 S1/R-3: (lazily) anchored container follows; thinking NEVER forces scroll
+        self.call_after_refresh(self._maybe_anchor)
         self._thinking = line
         self._thinking_timer = self.set_interval(0.5, self._tick_thinking)
         self._prompt().disabled = True

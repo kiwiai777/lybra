@@ -1832,5 +1832,180 @@ class Aipos245GuidanceContinuityTests(unittest.TestCase):
         self.assertNotIn("Confirmed. Writes", out)               # ④ 无成功文案
 
 
+@unittest.skipUnless(_HAS_TEXTUAL, "textual not installed (gate/core lane); app layer is tui-lane only")
+class Aipos246ScrollTests(unittest.IsolatedAsyncioTestCase):
+    """AIPOS-246 (F-245-o3-1) — conversation scrollback via textual anchor (real pilot, real keys).
+
+    Invariants (DRAFT §2/§3, R-1..R-3 folded):
+    - Scrolled-up position is NEVER yanked back by new messages or thinking frames (§3 a/a′ —
+      RED before the fix: per-mount scroll_visible pulled to bottom).
+    - At bottom the view follows new content (anchor; today's UX preserved) (§3 b).
+    - scroll_end returns to bottom AND re-engages following (§3 c).
+    - S1b boundary (R ruling): ONLY an Owner submission re-bottoms; gate events / new messages /
+      worker replies / thinking frames never do (§3 a″).
+    - S2: PgUp/PgDn/End scroll the conversation while the prompt keeps focus (keyboard channel).
+    """
+
+    def _make_app(self):
+        from unittest.mock import MagicMock
+        from tools.lybra_tui.app import build_app
+
+        session = MagicMock()
+        session.mode = "observe"
+        session.status_line.return_value = "stub status"
+        session.scopes = []
+        session.confirm_gates.return_value = []
+        session.observe.return_value = {"ok": True, "data": {"summary": {}}}
+        return build_app(session, None, workspace_root="/tmp/ws"), session
+
+    async def _fill(self, app, pilot, n: int = 40) -> "object":
+        from textual.containers import VerticalScroll
+
+        for i in range(n):
+            app._pre(f"backlog line {i}")
+        await pilot.pause()
+        convo = app.query_one("#conversation", VerticalScroll)
+        self.assertGreater(convo.max_scroll_y, 0, "content must overflow for a scroll test")
+        return convo
+
+    async def test_a_scrolled_up_not_yanked_by_new_message_or_thinking(self) -> None:
+        """§3(a): 上滚(释放 anchor)后,新消息 + thinking 帧不得拽回(修前 RED)."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            convo = await self._fill(app, pilot)
+            convo.scroll_page_up(animate=False)   # user scroll → releases anchor
+            await pilot.pause()
+            y = convo.scroll_y
+            self.assertLess(y, convo.max_scroll_y)
+
+            app._pre("new message while scrolled up")
+            await pilot.pause()
+            self.assertEqual(convo.scroll_y, y, "new message must not yank the view to bottom")
+
+            app._start_thinking()
+            await pilot.pause()
+            app._tick_thinking()
+            app._tick_thinking()
+            await pilot.pause()
+            app._stop_thinking()
+            self.assertEqual(convo.scroll_y, y, "thinking frames must not yank the view to bottom")
+
+    async def test_a2_r3_thinking_ticks_alone_do_not_pull(self) -> None:
+        """§3(a′) R-3: anchor 释放期间,仅 thinking tick 连打多帧,scroll_y 全程不动."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            convo = await self._fill(app, pilot)
+            app._start_thinking()
+            await pilot.pause()
+            convo.scroll_page_up(animate=False)
+            await pilot.pause()
+            y = convo.scroll_y
+            for _ in range(6):
+                app._tick_thinking()
+                await pilot.pause()
+            app._stop_thinking()
+            self.assertEqual(convo.scroll_y, y)
+
+    async def test_a3_s1b_boundary_only_owner_submit_rebottoms(self) -> None:
+        """§3(a″) S1b 边界(R 裁定): worker 回包/新消息不回底;Owner 提交回底."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            convo = await self._fill(app, pilot)
+            convo.scroll_page_up(animate=False)
+            await pilot.pause()
+            y = convo.scroll_y
+
+            # worker 回包(copilot error path mounts messages) → 不回底
+            from tools.lybra_tui.app import CopilotResult
+            app.on_copilot_result(CopilotResult(kind="chat", error="stub timeout"))
+            await pilot.pause()
+            self.assertEqual(convo.scroll_y, y, "a worker reply must not re-bottom")
+
+            # Owner 提交输入 → 回底(S1b)
+            await pilot.press(*"hello")
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertEqual(convo.scroll_y, convo.max_scroll_y, "an Owner submission re-bottoms")
+
+    async def test_b_at_bottom_follows_new_content(self) -> None:
+        """§3(b): 在底部时新消息自动跟随(现状体验保留)."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            convo = await self._fill(app, pilot)
+            convo.scroll_end(animate=False)
+            await pilot.pause()
+            for i in range(5):
+                app._pre(f"tail {i}")
+            await pilot.pause()
+            self.assertEqual(convo.scroll_y, convo.max_scroll_y)
+
+    async def test_c_scroll_end_reengages_following(self) -> None:
+        """§3(c): 上滚释放后 scroll_end 回底 → 跟随恢复."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            convo = await self._fill(app, pilot)
+            convo.scroll_page_up(animate=False)
+            await pilot.pause()
+            convo.scroll_end(animate=False)
+            await pilot.pause()
+            for i in range(5):
+                app._pre(f"tail {i}")
+            await pilot.pause()
+            self.assertEqual(convo.scroll_y, convo.max_scroll_y)
+
+    async def test_o3_2_short_content_not_anchored_until_overflow(self) -> None:
+        """F-246-o3-2: 开屏内容不足一屏 → 不 anchor(欢迎语不被钉到视口底);首次溢出才挂 + 跟随.
+
+        机制(装机 8.2.8 _compositor.py:609-618 核实):anchored 容器被 compositor 无条件
+        set_reactive(scroll_y = 内容底 - 视口高)——短内容时为负,内容被推到视口底部。
+        """
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            from textual.containers import VerticalScroll
+            convo = app.query_one("#conversation", VerticalScroll)
+            self.assertEqual(convo.max_scroll_y, 0, "premise: startup content fits one screen")
+            self.assertFalse(convo.is_anchored, "short content must NOT be anchored (RED pre-fix)")
+            self.assertGreaterEqual(convo.scroll_y, 0, "no negative scroll (pinned-bottom symptom)")
+
+            # 首次溢出 → 懒挂载生效 + 跟随(挂载滞后 ≤1 条消息:同 tick 连发 40 条后,
+            # 下一条消息的 mount 前同步检查在已结算布局上挂上 —— 与真实节奏一致)
+            for i in range(40):
+                app._pre(f"overflow line {i}")
+            await pilot.pause()
+            self.assertGreater(convo.max_scroll_y, 0)
+            app._pre("next message after overflow")
+            await pilot.pause()
+            self.assertTrue(convo.is_anchored, "anchor engages on first overflow (≤1 message lag)")
+            self.assertEqual(convo.scroll_y, convo.max_scroll_y, "and follows at the bottom")
+
+    async def test_s2_pgup_pgdn_end_scroll_conversation_from_prompt(self) -> None:
+        """S2: prompt 聚焦下 PgUp 上滚 / PgDn 下滚 / End 回底(键盘通道,鼠标失效兜底)."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            convo = await self._fill(app, pilot)
+            convo.scroll_end(animate=False)
+            await pilot.pause()
+            bottom = convo.scroll_y
+
+            await pilot.press("pageup")
+            await pilot.pause()
+            self.assertLess(convo.scroll_y, bottom, "PgUp must scroll the conversation up")
+            up_y = convo.scroll_y
+
+            await pilot.press("pagedown")
+            await pilot.pause()
+            self.assertGreater(convo.scroll_y, up_y, "PgDn must scroll the conversation down")
+
+            await pilot.press("pageup")
+            await pilot.press("end")
+            await pilot.pause()
+            self.assertEqual(convo.scroll_y, convo.max_scroll_y, "End must return to bottom")
+            # End 复位跟随:后续新消息继续跟
+            app._pre("after end")
+            await pilot.pause()
+            self.assertEqual(convo.scroll_y, convo.max_scroll_y)
+
+
 if __name__ == "__main__":
     unittest.main()
