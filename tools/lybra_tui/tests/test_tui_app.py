@@ -2007,5 +2007,131 @@ class Aipos246ScrollTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(convo.scroll_y, convo.max_scroll_y)
 
 
+@unittest.skipUnless(_HAS_TEXTUAL, "textual not installed (gate/core lane); app layer is tui-lane only")
+class Aipos247MouseBannerFlowTests(unittest.IsolatedAsyncioTestCase):
+    """AIPOS-247 — banner joins the conversation flow + `--mouse` opt-in hint (R folded).
+
+    Invariants (§2/§3, R-A/R-C folded):
+    - S2① (R-A — the 246 opening pin EVOLVES, never deleted): the banner is the FIRST
+      `#conversation` child, the welcome line the SECOND. RED pre-fix: the banner lived in
+      the fixed `#brandbar` layer, outside the conversation.
+    - S2②: once content overflows, the banner scrolls OUT of the viewport with the flow
+      (no fixed layer); the 246 anchor invariants stay pinned by Aipos246ScrollTests untouched.
+    - S2③: `/clear` removes the banner with the rest of the flow — no rebuild, no crash
+      (disclosed; claude-code same shape).
+    - S1 (R-C): the cost-disclosure hint prints ONLY when mouse=True; a default session's
+      startup output gains ZERO new lines.
+    """
+
+    def _make_app(self, *, mouse: bool = False):
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+
+        session = MagicMock()
+        session.mode = "observe"
+        session.status_line.return_value = "stub status"
+        session.scopes = []
+        session.confirm_gates.return_value = []
+        session.observe.return_value = {"ok": True, "data": {"summary": {}}}
+        # Passed only when on, so the default path exercises build_app exactly as before S1.
+        kwargs = {"mouse": True} if mouse else {}
+        return build_app(session, None, workspace_root="/tmp/ws", **kwargs), session
+
+    async def test_s2_banner_first_child_welcome_second(self) -> None:
+        """S2①(R-A): banner 入流 = #conversation 首子件,welcome 紧随(修前 RED:banner 在固定层)."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            from textual.containers import VerticalScroll
+
+            convo = app.query_one("#conversation", VerticalScroll)
+            children = list(convo.children)
+            self.assertGreaterEqual(len(children), 2, "startup conversation must hold banner + welcome")
+            self.assertEqual(children[0].id, "banner", "banner must be the FIRST conversation child (in-flow)")
+            self.assertIn("Connected.", str(children[1].render()), "welcome must sit directly under the banner")
+
+    async def test_s2_banner_scrolls_out_on_overflow(self) -> None:
+        """S2②: 超屏后 banner 随流滚出视口(无固定层);anchor 跟随不受影响."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            from textual.containers import VerticalScroll
+
+            convo = app.query_one("#conversation", VerticalScroll)
+            banner_widget = app.query_one("#banner")
+            for i in range(40):
+                app._pre(f"overflow line {i}")
+            await pilot.pause()
+            app._pre("post-overflow")  # anchor engages (≤1-message lag, 246 semantics) and follows
+            await pilot.pause()
+            self.assertGreater(convo.max_scroll_y, 0)
+            self.assertEqual(convo.scroll_y, convo.max_scroll_y, "at bottom, following (246 preserved)")
+            self.assertLessEqual(
+                banner_widget.virtual_region.bottom,
+                convo.scroll_y,
+                "banner must have scrolled OUT of the viewport with the flow (no fixed layer)",
+            )
+
+    async def test_s2_clear_removes_banner_no_rebuild_no_crash(self) -> None:
+        """S2③: /clear 后 banner 随流清走,不重建、不炸(披露,claude-code 同型)."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            self.assertTrue(app.query("#banner"), "premise: banner present at startup")
+            app._handle_command("/clear")
+            await pilot.pause()
+            self.assertFalse(app.query("#banner"), "/clear removes the banner with the flow (no rebuild)")
+            app._system("still alive")  # post-clear mounts keep working
+            await pilot.pause()
+            texts = [str(w.render()) for w in app.query("#conversation Static")]
+            self.assertTrue(any("still alive" in t for t in texts))
+
+    async def test_s1_hint_only_when_mouse_on(self) -> None:
+        """S1②(R-C): --mouse on → 开屏一行代价告知(Option+拖拽逃生门)."""
+        app, _ = self._make_app(mouse=True)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            texts = "\n".join(str(w.render()) for w in app.query("#conversation Static"))
+            self.assertIn("Option+拖拽", texts, "--mouse must disclose the native-selection cost at startup")
+
+    async def test_s1_default_session_prints_no_mouse_hint(self) -> None:
+        """S1③(R-C 负向): 默认会话零新增输出 — 无任何鼠标提示."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            texts = "\n".join(str(w.render()) for w in app.query("#conversation Static"))
+            self.assertNotIn("Option+拖拽", texts, "default session must gain ZERO new startup output (R-C)")
+            self.assertNotIn("鼠标模式", texts)
+
+
+@unittest.skipUnless(_HAS_TEXTUAL, "textual not installed (gate/core lane); app layer is tui-lane only")
+class Aipos247MouseWiringTests(unittest.TestCase):
+    """AIPOS-247 S1 接线钉(R 钩1):唯一分叉点 = `mouse` 透传链(grep 可对账);默认 run 收 False."""
+
+    def _run_tui(self, **extra):
+        from unittest.mock import MagicMock, patch
+
+        from tools.lybra_tui.__main__ import run_tui
+
+        with patch("tools.lybra_tui.state.TuiSession.connect", return_value=MagicMock(mode="observe")), patch(
+            "tools.lybra_tui.app.build_app"
+        ) as build_app, patch("tools.lybra_tui.app.apply_cjk_kitty_fix"):
+            rc = run_tui(gate_url="http://127.0.0.1:1", token_env="LYBRA_TEST_TOKEN", **extra)
+        return rc, build_app
+
+    def test_default_run_receives_mouse_false(self) -> None:
+        rc, build_app = self._run_tui()
+        self.assertEqual(rc, 0)
+        build_app.return_value.run.assert_called_once_with(mouse=False)
+        self.assertFalse(build_app.call_args.kwargs["mouse"])
+
+    def test_mouse_flag_run_receives_mouse_true(self) -> None:
+        rc, build_app = self._run_tui(mouse=True)
+        self.assertEqual(rc, 0)
+        build_app.return_value.run.assert_called_once_with(mouse=True)
+        self.assertTrue(build_app.call_args.kwargs["mouse"])
+
+
 if __name__ == "__main__":
     unittest.main()

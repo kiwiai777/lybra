@@ -25,7 +25,7 @@ from typing import Any
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, VerticalScroll
 from textual.message import Message
 from textual.widgets import Footer, Header, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
@@ -308,7 +308,8 @@ class LybraTui(App):
     # one point (LYBRA_GREEN) — no color literal lives here. `.brand` styles the banner.
     CSS = f"""
     Screen {{ layout: vertical; }}
-    #brandbar {{ height: auto; padding: 0; margin: 0; }}
+    /* AIPOS-247 S2: the banner lives IN the conversation flow (first child, `turn` class) — the
+       fixed #brandbar layer is gone; the banner scrolls away with the transcript. */
     #banner {{ height: auto; padding: 0; margin: 0; }}
     #conversation {{ height: 1fr; padding: 0 1; }}
     /* AIPOS-245 F-245-o3-4: one blank line AFTER each message block (claude-code style visual
@@ -359,9 +360,19 @@ class LybraTui(App):
         Binding("ctrl+c", "quit", "Quit"),
     ]
 
-    def __init__(self, session: TuiSession, copilot_session: Any = None, *, workspace_root: str | None = None) -> None:
+    def __init__(
+        self,
+        session: TuiSession,
+        copilot_session: Any = None,
+        *,
+        workspace_root: str | None = None,
+        mouse: bool = False,
+    ) -> None:
         super().__init__()
         self._session = session
+        # AIPOS-247 S1: whether this session runs with mouse capture ON (`--mouse`). Display-only:
+        # gates the one-line cost disclosure at startup; the capture itself is App.run(mouse=...).
+        self._mouse = mouse
         # AIPOS-206: optional read-only planning copilot (CopilotSession). When absent,
         # NL input explains how to enable it; the owner session is unaffected.
         self._copilot = copilot_session
@@ -386,7 +397,8 @@ class LybraTui(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Vertical(Static(id="banner"), id="brandbar")
+        # AIPOS-247 S2: no fixed #brandbar layer — the banner is mounted in on_mount as the FIRST
+        # #conversation child, so it scrolls away with the flow (claude-code shape).
         yield VerticalScroll(id="conversation")
         yield Static(id="status")
         # AIPOS-222 (fix 1+2+3): a claude-code-style prompt row — a green `>` gutter followed by a
@@ -407,12 +419,16 @@ class LybraTui(App):
         # ONLY the llama logo + the box frame are green; the "lybra" identity line is bold; the
         # subtitle lines use the terminal default foreground. We render per-line content markup
         # (display-only) instead of class-coloring the whole Static green.
-        banner_widget = self.query_one("#banner", Static)
-        raw = banner(self.size.width)
-        if color_enabled():
-            banner_widget.update(_banner_markup(raw))
-        else:
-            banner_widget.update(raw)
+        # AIPOS-247 S2: the banner joins the conversation FLOW (first child, before the welcome
+        # lines) instead of a fixed layer — it scrolls away once content overflows, and /clear
+        # removes it with the rest (disclosed; no rebuild — rendered ONCE here, never on resize,
+        # same as the pre-247 single mount-time render). Width accounts for the container's 0 1
+        # padding (content width = terminal - 2).
+        raw = banner(self.size.width - 2)
+        banner_widget = Static(
+            _banner_markup(raw) if color_enabled() else raw, id="banner", classes="turn"
+        )
+        self.query_one("#conversation", VerticalScroll).mount(banner_widget)
         # AIPOS-221/222 (ruling 4): the chat prompt is a multi-line TextArea that accepts CJK /
         # wide chars natively (no `restrict`/`type` filter exists on a TextArea to drop them). The
         # `/` OptionList dropdown is the primary command autocomplete (driven by TextArea.Changed).
@@ -437,6 +453,10 @@ class LybraTui(App):
         self._system(
             "本环:发任务(说需求 → /proceed)→ agent 认领 → 你 /gates + /confirm → /audit 看判定。"
         )
+        # AIPOS-247 S1 (P-A, R-C): the `--mouse` cost disclosure prints ONLY when the flag is on —
+        # a default session's startup output is byte-identical to pre-247.
+        if self._mouse:
+            self._system("鼠标模式:滚轮/点击进 TUI;选中复制用 Option+拖拽(iTerm2)。")
 
     # --- conversation transcript (codex/claude-code style message stream) ---------
 
@@ -1549,8 +1569,13 @@ class LybraTui(App):
 
 
 def build_app(
-    session: TuiSession, copilot_session: Any = None, *, workspace_root: str | None = None
+    session: TuiSession,
+    copilot_session: Any = None,
+    *,
+    workspace_root: str | None = None,
+    mouse: bool = False,
 ) -> LybraTui:
-    # Signature must mirror run_tui's call site: build_app(session, copilot, workspace_root=...).
-    # (Drift here crashed `lybra tui` at launch — AIPOS-216; guarded by the run_tui→build_app smoke.)
-    return LybraTui(session, copilot_session, workspace_root=workspace_root)
+    # Signature must mirror run_tui's call site: build_app(session, copilot, workspace_root=...,
+    # mouse=...). (Drift here crashed `lybra tui` at launch — AIPOS-216; guarded by the
+    # run_tui→build_app smoke + the AIPOS-247 mouse wiring pins.)
+    return LybraTui(session, copilot_session, workspace_root=workspace_root, mouse=mouse)

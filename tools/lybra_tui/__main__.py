@@ -74,6 +74,7 @@ def run_tui(
     llm_base_url: str | None = None,
     llm_key_env: str | None = None,
     llm_model: str | None = None,
+    mouse: bool = False,
 ) -> int:
     # AIPOS-209: if no explicit token source is given, fall back to the serve-rotate
     # connection.json under the workspace (Owner ran `lybra serve` first).
@@ -118,11 +119,15 @@ def run_tui(
     # AIPOS-237 (F-o3-12a): reduce the kitty keyboard enable flag to DISAMBIGUATE-only BEFORE the
     # app runs, so IME-typed CJK is delivered as plain UTF-8 (types) while Shift+Enter is preserved.
     apply_cjk_kitty_fix()
-    # AIPOS-237 (F-o3-12b): run with mouse capture OFF (mouse=False) so the TERMINAL keeps native
-    # mouse — iTerm2 (incl. over SSH) selection + scrollback + Cmd/Ctrl+C copy of ANY text work,
-    # exactly like Claude Code (Ink), which never captures the mouse. We trade Textual's in-app mouse
-    # (click/scroll — the `/` menu is keyboard-navigable anyway) for native copy/paste.
-    build_app(session, copilot, workspace_root=workspace_root).run(mouse=False)
+    # AIPOS-237 (F-o3-12b): by default run with mouse capture OFF (mouse=False) so the TERMINAL
+    # keeps native mouse — iTerm2 (incl. over SSH) selection + scrollback + Cmd/Ctrl+C copy of ANY
+    # text work, exactly like Claude Code (Ink), which never captures the mouse. We trade Textual's
+    # in-app mouse (click/scroll — the `/` menu is keyboard-navigable anyway) for native copy/paste.
+    # AIPOS-247 (S1): `--mouse` re-opens that trade PER SESSION (opt-in): in-app wheel/click work,
+    # native selection needs the terminal escape hatch (Option+drag in iTerm2). This passthrough is
+    # the ONLY fork point from the default behavior (R 钩1; the startup hint is gated on the same
+    # flag inside the app).
+    build_app(session, copilot, workspace_root=workspace_root, mouse=mouse).run(mouse=mouse)
     return 0
 
 
@@ -142,6 +147,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--llm-base-url", help="OpenAI-compatible base URL; enables the read-only planning copilot")
     parser.add_argument("--llm-key-env", help="env var holding the LLM api key (never passed on the command line)")
     parser.add_argument("--llm-model", help="LLM model id (default gpt-4o-mini)")
+    # AIPOS-247 (S1): per-session opt-in reversal of the AIPOS-237 F-o3-12b mouse trade.
+    parser.add_argument(
+        "--mouse",
+        action="store_true",
+        default=False,
+        help="capture the mouse in the TUI (wheel/click scroll the conversation); costs native "
+        "terminal selection — use Option+drag (iTerm2) to select/copy. Default: off (native copy).",
+    )
     args = parser.parse_args(argv)
     return run_tui(
         gate_url=args.gate_url,
@@ -153,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         llm_base_url=args.llm_base_url,
         llm_key_env=args.llm_key_env,
         llm_model=args.llm_model,
+        mouse=args.mouse,
     )
 
 

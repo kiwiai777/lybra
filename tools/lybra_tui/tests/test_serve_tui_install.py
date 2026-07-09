@@ -61,6 +61,23 @@ class ServeTuiInstallTests(unittest.TestCase):
     def test_entry_module_imports_no_textual(self) -> None:
         self.assertNotIn("textual", sys.modules, "tools.lybra_tui.__main__ must not import textual at top level")
 
+    # --- AIPOS-247 S1: argparse → run_tui `mouse` passthrough (the single fork point, R 钩1) ---
+    def test_247_main_default_passes_mouse_false(self) -> None:
+        from tools.lybra_tui import __main__ as entry
+
+        with patch.object(entry, "run_tui", return_value=0) as run_tui_mock:
+            rc = entry.main(["--gate-url", "http://127.0.0.1:1"])
+        self.assertEqual(rc, 0)
+        self.assertFalse(run_tui_mock.call_args.kwargs["mouse"], "no --mouse → run_tui(mouse=False)")
+
+    def test_247_main_mouse_flag_passes_mouse_true(self) -> None:
+        from tools.lybra_tui import __main__ as entry
+
+        with patch.object(entry, "run_tui", return_value=0) as run_tui_mock:
+            rc = entry.main(["--gate-url", "http://127.0.0.1:1", "--mouse"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(run_tui_mock.call_args.kwargs["mouse"], "--mouse → run_tui(mouse=True)")
+
     # --- T6: 5a release-discipline doc exists with the codified points ---
     def test_release_discipline_doc(self) -> None:
         doc = Path(__file__).resolve().parents[3] / "docs" / "release_discipline.md"
