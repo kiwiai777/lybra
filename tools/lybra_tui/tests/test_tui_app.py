@@ -2106,6 +2106,186 @@ class Aipos247MouseBannerFlowTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(_HAS_TEXTUAL, "textual not installed (gate/core lane); app layer is tui-lane only")
+class F247o31GrowthAnchorTests(unittest.IsolatedAsyncioTestCase):
+    """F-247-o3-1 (latent since 246 F-246-o3-2 lazy mount) — anchor engagement missed when the
+    LAST message GROWS after mount.
+
+    O3 symptom: a single long copilot reply overflows the screen but the view stays pinned at
+    the top (scroll_y 0, banner visible) — PgDn needed by hand. Mechanism (code-verified):
+    engagement checks ran only on APPEND (sync pre-mount + one call_after_refresh); a Markdown
+    reply lays out asynchronously and grows AFTER both checks, and with no later message the
+    anchor never engaged. 246/247 O3 missed it because those sessions filled the screen with
+    many short messages (every append re-checked).
+
+    Fix invariant: overflow detection must also fire on CONTENT-SIZE change (virtual_size
+    watch — textual-native reactive, zero polling). Release/re-engage semantics of an ALREADY
+    engaged anchor must not change (pinned below); the 246 multi-message path stays pinned by
+    Aipos246ScrollTests untouched.
+    """
+
+    def _make_app(self, *, mouse: bool = False):
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import build_app
+
+        session = MagicMock()
+        session.mode = "observe"
+        session.status_line.return_value = "stub status"
+        session.scopes = []
+        session.confirm_gates.return_value = []
+        session.observe.return_value = {"ok": True, "data": {"summary": {}}}
+        return build_app(session, None, workspace_root="/tmp/ws", mouse=mouse), session
+
+    async def test_red_single_message_growing_after_mount_engages_anchor(self) -> None:
+        """确定性复现:单条消息挂载后长高(无后续追加)→ anchor 须挂上 + 视图跟到底(修前 RED)."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 40)) as pilot:
+            await pilot.pause()
+            from textual.containers import VerticalScroll
+
+            convo = app.query_one("#conversation", VerticalScroll)
+            app._pre("copilot reply placeholder")  # append-side checks run HERE (no overflow yet)
+            await pilot.pause()
+            self.assertEqual(convo.max_scroll_y, 0, "premise: no overflow at mount/refresh check time")
+            self.assertFalse(convo.is_anchored, "premise: anchor not engaged yet")
+            # The widget grows AFTER its mount (async layout of a long reply) — NO further append.
+            convo.children[-1].update("\n".join(f"late-layout line {i}" for i in range(80)))
+            # Bounded settle: the growth check is refresh-deferred (watcher → call_after_refresh),
+            # so engagement needs 2 refresh cycles; under full-suite load one pause can be short.
+            # Pre-fix this loop changes nothing (no growth trigger exists at all — stays RED).
+            for _ in range(10):
+                await pilot.pause()
+                if convo.is_anchored:
+                    break
+            self.assertGreater(convo.max_scroll_y, 0, "content now overflows")
+            self.assertTrue(convo.is_anchored, "content growth must engage the anchor (RED pre-fix)")
+            self.assertEqual(convo.scroll_y, convo.max_scroll_y, "and the view follows to the bottom")
+
+    async def test_real_markdown_single_long_reply_follows_to_bottom(self) -> None:
+        """O3 同型场景:单条真 Markdown 长回复(异步排版)→ 视图须跟到底,无需手动 PgDn."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            from textual.containers import VerticalScroll
+
+            convo = app.query_one("#conversation", VerticalScroll)
+            long_md = "# Reply\n\n" + "\n\n".join(f"Paragraph {i}: lorem ipsum dolor." for i in range(40))
+            app._markdown(long_md, "turn-copilot")  # ONE message; Markdown lays out asynchronously
+            for _ in range(10):  # bounded settle for async block mounts + the refresh-deferred check
+                await pilot.pause()
+                if convo.is_anchored:
+                    break
+            self.assertGreater(convo.max_scroll_y, 0, "premise: the single reply overflows a screen")
+            self.assertTrue(convo.is_anchored, "the view must follow the single long reply")
+            self.assertEqual(convo.scroll_y, convo.max_scroll_y, "bottom = latest content visible")
+
+    async def test_r3_growth_pass_engages_with_zero_scheduling_dependence(self) -> None:
+        """R3 忠实钉(O3 REJECTED 后):逐字节重放 textual 真实生长 pass 入口
+        (screen.py:1373 → `_size_updated(size, 长高的 virtual, container)`,内部赋值序 =
+        `_size` → `virtual_size`(watcher 同步触发)→ `_container_size` 即真实中途序),
+        然后不做任何泵处理立即断言已挂——挂载不得依赖任何后续调度跳
+        (修前 RED:R2 的 defer 把一次性事件押在 App 泵 → screen._callbacks 多跳链上)."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(100, 50)) as pilot:
+            await pilot.pause()
+            from textual.containers import VerticalScroll
+            from textual.geometry import Size
+
+            convo = app.query_one("#conversation", VerticalScroll)
+            self.assertFalse(app._anchor_engaged, "premise: tall screen, startup content short")
+            grown = Size(convo.virtual_size.width, convo.size.height + 30)
+            convo._size_updated(convo.size, grown, convo.container_size)
+            # NO pilot.pause() before the assert: engagement must be synchronous in the watcher.
+            self.assertTrue(
+                app._anchor_engaged,
+                "growth must engage the anchor with ZERO scheduling dependence (RED pre-R3-fix)",
+            )
+            self.assertTrue(convo.is_anchored)
+
+    async def test_r3_real_draft_chain_on_tall_screen_follows_to_bottom(self) -> None:
+        """O3 场景行为钉(100×50 高屏——开屏不溢出,溢出只能来自卡片排版):真实 /draft
+        渲染链(thinking 收尾 + markdown 卡[frontmatter+prose] + blocking reasons + 尾行)
+        → 视图须自动跟到底,无需手动 PgDn."""
+        from unittest.mock import MagicMock
+
+        from tools.lybra_tui.app import CopilotResult
+
+        app, _ = self._make_app()
+        async with app.run_test(size=(100, 50)) as pilot:
+            await pilot.pause()
+            from textual.containers import VerticalScroll
+
+            convo = app.query_one("#conversation", VerticalScroll)
+            self.assertEqual(convo.max_scroll_y, 0, "premise: tall screen — startup does not overflow")
+            prop = MagicMock()
+            prop.task_id = "AIPOS-999"
+            prop.content = (
+                "---\n" + "\n".join(f"field_{i}: value_{i}" for i in range(12)) + "\n---\n\n# Intent\n\n"
+                + "\n\n".join(f"Paragraph {i} of the drafted card body." for i in range(10))
+            )
+            prop.conformant = False
+            prop.needs_bundle = False
+            prop.blocking_reasons = [f"blocking reason {i}" for i in range(4)]
+            app._start_thinking()
+            await pilot.pause()
+            app.on_copilot_result(CopilotResult(kind="draft", proposal=prop))
+            for _ in range(10):  # bounded settle (async markdown block mounts)
+                await pilot.pause()
+                if convo.is_anchored and convo.scroll_y == convo.max_scroll_y:
+                    break
+            self.assertGreater(convo.max_scroll_y, 0, "premise: the card overflows the tall screen")
+            self.assertTrue(convo.is_anchored, "the /draft card must engage the anchor")
+            self.assertEqual(convo.scroll_y, convo.max_scroll_y, "the view must follow the /draft card")
+
+    async def test_o3_2_default_session_hides_scrollbar_mouse_session_keeps_it(self) -> None:
+        """F-247-o3-2(Owner 裁定):默认(无鼠标)会话隐藏会话区滚动条(不可拖拽的滚动条是
+        误导性摆设);--mouse 会话保留显示。CSS 层实现,滚动行为(PgUp/PgDn/End/anchor)不变."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            convo = app.query_one("#conversation")
+            self.assertEqual(
+                convo.styles.scrollbar_size_vertical, 0, "default session: vertical scrollbar hidden"
+            )
+        app2, _ = self._make_app(mouse=True)
+        async with app2.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            convo2 = app2.query_one("#conversation")
+            self.assertGreater(
+                convo2.styles.scrollbar_size_vertical, 0, "--mouse session: scrollbar stays (draggable)"
+            )
+
+    async def test_growth_never_re_engages_a_released_anchor(self) -> None:
+        """红线钉:anchor 已挂后被用户上滚释放 → 内容长高不得复挂/拽回(释放语义不变)."""
+        app, _ = self._make_app()
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            from textual.containers import VerticalScroll
+
+            convo = app.query_one("#conversation", VerticalScroll)
+            for i in range(40):
+                app._pre(f"backlog line {i}")
+            await pilot.pause()
+            app._pre("engage")  # ≤1-message lag (246 semantics)
+            await pilot.pause()
+            self.assertTrue(convo.is_anchored, "premise: anchor engaged")
+            convo.scroll_page_up(animate=False)  # user scroll → releases the anchor
+            await pilot.pause()
+            y = convo.scroll_y
+            self.assertLess(y, convo.max_scroll_y)
+            convo.children[-1].update("\n".join(f"grown line {i}" for i in range(30)))
+            await pilot.pause()
+            await pilot.pause()  # cover the refresh-deferred check window before asserting NO change
+            self.assertEqual(convo.scroll_y, y, "growth must not yank a released view")
+            # textual keeps `_anchored=True` on release (`_anchor_released` is the internal flag;
+            # installed 8.2.7 source verified) — the honest PUBLIC pin is behavioral: a released
+            # view must keep NOT following new content after the growth event.
+            app._pre("after growth")
+            await pilot.pause()
+            self.assertEqual(convo.scroll_y, y, "released view must stay put after growth (no re-engage)")
+
+
+@unittest.skipUnless(_HAS_TEXTUAL, "textual not installed (gate/core lane); app layer is tui-lane only")
 class Aipos247MouseWiringTests(unittest.TestCase):
     """AIPOS-247 S1 接线钉(R 钩1):唯一分叉点 = `mouse` 透传链(grep 可对账);默认 run 收 False."""
 

@@ -312,6 +312,10 @@ class LybraTui(App):
        fixed #brandbar layer is gone; the banner scrolls away with the transcript. */
     #banner {{ height: auto; padding: 0; margin: 0; }}
     #conversation {{ height: 1fr; padding: 0 1; }}
+    /* F-247-o3-2 (Owner ruling): a scrollbar you cannot drag is a misleading ornament — the
+       DEFAULT (no-mouse) session hides it (scrolling itself is untouched: PgUp/PgDn/End +
+       anchor). A --mouse session keeps it (it IS draggable there). */
+    #conversation.-hide-vscroll {{ scrollbar-size-vertical: 0; }}
     /* AIPOS-245 F-245-o3-4: one blank line AFTER each message block (claude-code style visual
        breathing — user echo / thinking / outputs no longer stick together; CJK included). */
     .turn {{ margin: 0 0 1 0; }}
@@ -428,7 +432,18 @@ class LybraTui(App):
         banner_widget = Static(
             _banner_markup(raw) if color_enabled() else raw, id="banner", classes="turn"
         )
-        self.query_one("#conversation", VerticalScroll).mount(banner_widget)
+        convo = self.query_one("#conversation", VerticalScroll)
+        # F-247-o3-2: hide the (undraggable) scrollbar in default sessions; keep it under --mouse.
+        convo.set_class(not self._mouse, "-hide-vscroll")
+        convo.mount(banner_widget)
+        # F-247-o3-1 (latent since 246 F-246-o3-2): anchor engagement must also fire on CONTENT
+        # GROWTH, not only on append — a single Markdown reply lays out asynchronously and grows
+        # AFTER the append-side checks (pre-mount sync + one call_after_refresh); with no later
+        # message the anchor never engaged and the view stayed pinned at the top (O3: PgDn by
+        # hand). `virtual_size` is the textual-native reactive for content size — this watch is
+        # message-driven (zero polling/timers). _maybe_anchor stays the single engagement gate
+        # (engage-once; a RELEASED anchor is never re-engaged here — _anchor_engaged short-circuits).
+        self.watch(convo, "virtual_size", self._on_conversation_growth, init=False)
         # AIPOS-221/222 (ruling 4): the chat prompt is a multi-line TextArea that accepts CJK /
         # wide chars natively (no `restrict`/`type` filter exists on a TextArea to drop them). The
         # `/` OptionList dropdown is the primary command autocomplete (driven by TextArea.Changed).
@@ -459,6 +474,28 @@ class LybraTui(App):
             self._system("鼠标模式:滚轮/点击进 TUI;选中复制用 Option+拖拽(iTerm2)。")
 
     # --- conversation transcript (codex/claude-code style message stream) ---------
+
+    def _on_conversation_growth(self) -> None:
+        # F-247-o3-1 (R3): content-size-change side of the lazy anchor (see the watch in
+        # on_mount). Growth is a ONE-SHOT event, so the check must be SYNCHRONOUS and race-free:
+        # - max_scroll_y is NOT readable here: the virtual_size reactive fires mid-layout, before
+        #   `_container_size` commits in the same pass (widget.py `_size_updated` assigns `_size`
+        #   → `virtual_size` [watcher fires] → `_container_size`), so max reads a stale container
+        #   (measured: startup vh=43/max=43 transient — the R2 reason for deferring).
+        # - Deferring loses the race instead (R3 O3 REJECTED): call_after_refresh is a multi-hop
+        #   chain (App pump InvokeLater → screen._callbacks → next update/idle flush) and the
+        #   one-shot event has no re-trigger — the Owner's machine missed the engagement forever.
+        # The SAME-pass consistent pair is (size, virtual_size): `_size` commits BEFORE the
+        # watcher fires. And virtual_size is FLOORED at the container (compositor total_region
+        # starts from the widget's own region, then unions content) — so vh > ch ⟺ genuine
+        # content overflow; short content has vh == ch and can never false-engage (F-246-o3-2
+        # stays impossible). Zero polling, zero deferral, zero scheduling dependence.
+        if self._anchor_engaged:
+            return
+        convo = self.query_one("#conversation", VerticalScroll)
+        if convo.virtual_size.height > convo.size.height > 0:
+            convo.anchor()
+            self._anchor_engaged = True
 
     def _maybe_anchor(self) -> None:
         # AIPOS-246 F-246-o3-2: engage the anchor only once the conversation actually OVERFLOWS a
