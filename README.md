@@ -56,6 +56,16 @@ lybra tui --gate-url http://127.0.0.1:7118 --workspace-root ./ws --project my_pr
 The LLM key is read from the `LYBRA_PLANCHAT_LLM_KEY` environment variable (never passed on the
 command line). Without an LLM config, `lybra tui` opens in read-only observe mode.
 
+**Hook up an agent (executor):** give this SKILL to your agent —
+`ln -s "$(pwd)/skills/lybra-executor" ~/.claude/skills/lybra-executor` (Claude Code) or
+`ln -s "$(pwd)/skills/lybra-executor" ~/.codex/skills/lybra-executor` (Codex). The agent then says
+**`lybra on`** (plain text, no leading slash — Claude Code's slash-command resolver only
+recognizes registered command names like `/lybra-executor`, not an arbitrary `/lybra`, so a typed
+`/lybra on` fails; the bare phrase triggers the skill's natural-language match instead) to start
+pulling for claimable tasks (`lybra agent watch` — a stateless, agent-side, bounded foreground
+loop; Lybra never pushes and never tracks agent presence) and **`lybra off`** to stop. See
+`skills/lybra-executor/SKILL.md` and `docs/mcp-agent-setup.md`.
+
 **macOS TLS note:** bare macOS venv pythons ship empty default CA paths, so copilot HTTPS fails
 `CERTIFICATE_VERIFY_FAILED` (an environment property of macOS pythons, not a Lybra defect). Install
 `certifi` into the TUI's python (or set `SSL_CERT_FILE`) — Lybra picks certifi up automatically

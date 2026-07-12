@@ -2,6 +2,19 @@
 
 Lybra's MCP server is a local-first gate. Connecting to the transport does not claim work, return work, launch a worker, activate a lease, dispatch audit, or finalize anything.
 
+> **Agent-side pull loop (AIPOS-248):** for the `lybra on`/`lybra off` fetch-for-work pattern
+> (plain text, no leading slash — see F-248-o3-3 below), give your agent
+> `skills/lybra-executor/SKILL.md` (symlink into `~/.claude/skills` or `~/.codex/skills`) and use
+> `lybra agent fetch|watch` — a stateless, role-agnostic client pull over `lybra_queue_list`.
+> Lybra never pushes, schedules, or records agent presence; claiming stays the supervised
+> dry-run → Owner confirm chain below.
+>
+> **F-248-o3-3 (real-machine finding):** typing `/lybra on` fails in Claude Code — the slash
+> resolver only matches REGISTERED command names (the skill's own invocable name is
+> `/lybra-executor`, from its directory basename), and there is no separate `lybra` command
+> registered, so the literal slash form errors out instead of falling back to natural-language
+> skill matching. Say the bare phrase `lybra on` / `lybra off` instead.
+
 ## Start The Server
 
 ```bash

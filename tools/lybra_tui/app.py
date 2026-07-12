@@ -860,7 +860,7 @@ class LybraTui(App):
             elif cmd == "/gates":
                 self._cmd_gates()
             elif cmd == "/confirm":
-                self._cmd_confirm(int(args[0]) if args and args[0].isdigit() else None)
+                self._cmd_confirm(args[0] if args else None)
             elif cmd == "/mode":
                 self._cmd_mode(args[0] if args else None)
             elif cmd == "/audit":
@@ -918,30 +918,44 @@ class LybraTui(App):
             "As recorded — Lybra does not track live presence."
         )
 
+    @staticmethod
+    def _gates_list_lines(gates: list[dict[str, Any]]) -> list[str]:
+        # AIPOS-245 A3: show the task title + canonical claimant per row so the Owner sees WHAT
+        # they'd confirm and WHO it's attributed to. Data is already carried in g["task"] (pure
+        # presentation — no change to list_confirm_gates). Missing fields fall back to a neutral
+        # placeholder; NEVER pre-fill an answer (P-2 / default-yes red line).
+        # F-248-o3-2 (shared with bare /confirm — see _cmd_confirm): also surface claim_id when
+        # the gate's task carries one (return gates), so /confirm <claim_id> has something to match.
+        lines = ["Pending confirm gates (read-only view):"]
+        for i, g in enumerate(gates):
+            task = g.get("task") or {}
+            title = task.get("title") or "(无标题)"
+            assigned_to = task.get("assigned_to") or "(未归因)"
+            metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+            claim_id = metadata.get("claim_id")
+            selector_hint = f"/confirm {i}" + (f" 或 /confirm {claim_id}" if claim_id else "")
+            lines.append(
+                f"  [{i}] {g['op']} {g['task_id']} — {title}(归因 {assigned_to})  用 {selector_hint} 确认"
+            )
+        return lines
+
     def _cmd_gates(self) -> None:
         # Ruling 1: `/gates` is a READ-ONLY VIEW of pending confirm gates — not an action.
         gates = self._session.confirm_gates()
         if not gates:
             self._pre("No pending confirm gates.")
         else:
-            # AIPOS-245 A3: show the task title + canonical claimant per row so the Owner sees WHAT
-            # they'd confirm and WHO it's attributed to. Data is already carried in g["task"] (pure
-            # presentation — no change to list_confirm_gates). Missing fields fall back to a neutral
-            # placeholder; NEVER pre-fill an answer (P-2 / default-yes red line).
-            lines = ["Pending confirm gates (read-only view):"]
-            for i, g in enumerate(gates):
-                task = g.get("task") or {}
-                title = task.get("title") or "(无标题)"
-                assigned_to = task.get("assigned_to") or "(未归因)"
-                lines.append(
-                    f"  [{i}] {g['op']} {g['task_id']} — {title}(归因 {assigned_to})"
-                    f"  用 /confirm {i} 确认"
-                )
-            self._pre("\n".join(lines))
+            self._pre("\n".join(self._gates_list_lines(gates)))
         self._system("Use /confirm <n> to confirm a gate (Owner-only, explicit confirmation required).")
 
-    def _cmd_confirm(self, index: int | None = None) -> None:
-        """Execute a pending confirm gate (Owner-only, explicit confirmation required)."""
+    def _cmd_confirm(self, selector: int | str | None = None) -> None:
+        """Execute a pending confirm gate (Owner-only, explicit confirmation required).
+
+        `selector` is the `/confirm` argument: an int index (existing call sites/tests pass
+        this directly), a numeric-string index or a claim_id string from the command line
+        (F-248-o3-2, best-effort claim_id match against each gate's task metadata), or None
+        (bare `/confirm`).
+        """
         gates = self._session.confirm_gates()
         if not gates:
             self._pre("No pending confirm gates.")
@@ -951,12 +965,37 @@ class LybraTui(App):
             self._system("→ 无待确认项:/queue 看队列;有 pending/claimed 任务才会出 gate。要发新任务就(copilot 模式下)说需求 → /proceed。")
             return
 
-        # 1. 确定 gate 索引
+        # 1. 确定 gate 索引(int 下标、数字字符串下标,或 F-248-o3-2:claim_id 字符串匹配)
+        index: int | None
+        if selector is None:
+            index = None
+        elif isinstance(selector, int):
+            index = selector
+        elif selector.isdigit():
+            index = int(selector)
+        else:
+            index = next(
+                (
+                    i
+                    for i, g in enumerate(gates)
+                    if str(((g.get("task") or {}).get("metadata") or {}).get("claim_id") or "") == selector
+                ),
+                None,
+            )
+            if index is None:
+                self._pre(f"Unknown gate selector {selector!r} (not an index or a known claim_id).")
+                self._pre("\n".join(self._gates_list_lines(gates)))
+                return
         if index is None:
             if len(gates) == 1:
                 index = 0
             else:
-                self._pre(f"{len(gates)} pending gates. Use /confirm <n> to specify.")
+                # F-248-o3-2 (O3 real-machine finding): bare /confirm with >1 pending gate used to
+                # print only a terse count line — the Owner had no way to see WHICH gates without a
+                # separate /gates call. /confirm is the RESERVED fallback execution surface (Ruling
+                # 1: /gates is the read-only view, /confirm executes) — it must show the same list.
+                self._pre("\n".join(self._gates_list_lines(gates)))
+                self._system(f"{len(gates)} pending gates. Use /confirm <n> (or /confirm <claim_id>) to specify.")
                 return
         if index < 0 or index >= len(gates):
             self._pre(f"Invalid gate index {index}. Valid range: 0-{len(gates)-1}.")

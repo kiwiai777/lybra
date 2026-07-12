@@ -1454,6 +1454,39 @@ class Aipos245GuidanceContinuityTests(unittest.TestCase):
         self.assertIn("(无标题)", out)
         self.assertIn("(未归因)", out)
 
+    def test_f248_o3_2_bare_confirm_with_multiple_gates_renders_same_list_as_gates(self) -> None:
+        """F-248-o3-2(O3 real-machine finding):裸 /confirm(无下标)遇多个 pending gate 时,
+        必须渲染与 /gates 相同的列表(confirm 是保留的备用执行面),而非此前的一句计数提示。"""
+        gates = [
+            {"op": "claim", "task_id": "AIPOS-A", "task": {"assigned_to": "agent-07", "title": "任务甲"}},
+            {"op": "claim", "task_id": "AIPOS-B", "task": {"assigned_to": "agent-08", "title": "任务乙"}},
+        ]
+        app, _ = self._app_with_session(gates)
+
+        app._cmd_confirm(None)  # bare /confirm, no selector
+        out = self._texts(app)
+        self.assertIn("任务甲", out)
+        self.assertIn("任务乙", out)
+        self.assertIn("agent-07", out)
+        self.assertIn("agent-08", out)
+        self.assertIn("/confirm 0", out)
+        self.assertIn("/confirm 1", out)
+
+    def test_f248_o3_2_confirm_accepts_claim_id_selector(self) -> None:
+        """F-248-o3-2(量力小加):/confirm <claim_id> 可选中一个 return gate(按 claim_id 匹配)。"""
+        gates = [
+            {
+                "op": "return",
+                "task_id": "AIPOS-A",
+                "task": {"assigned_to": "agent-07", "metadata": {"claim_id": "claim_AIPOS-A_x"}},
+            }
+        ]
+        app, _ = self._app_with_session(gates)
+
+        app._cmd_confirm("claim_AIPOS-A_x")
+        self.assertEqual(app._pending_confirm.get("task_id"), "AIPOS-A")
+        self.assertEqual(app._pending_confirm.get("awaiting"), "affirmation")
+
     def test_a4_draft_conformant_guidance_describes_two_step_revise_not_phantom(self) -> None:
         """A4 (R-2): draft conformant 引导贴合真实两步改稿链路,不承诺"单句即重出"."""
         from tools.lybra_tui.app import _NEXT_AFTER_DRAFT

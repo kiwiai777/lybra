@@ -706,6 +706,32 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--dry-run", action="store_true", help="Preview planned writes without creating the workspace")
     init_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-248: agent-side connector — a STATELESS pull over the gate read tool. The
+    # loop host is the AGENT-side process (never a Lybra daemon); role-agnostic client.
+    # Distinct from `agents` below (recorded-profile rendering) — disclosed:
+    # /agents = recorded snapshot, `agent watch` = client-side loop.
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help="Agent-side connector: stateless pull for claimable tasks (fetch once / bounded watch; AIPOS-248)",
+    )
+    agent_subparsers = agent_parser.add_subparsers(dest="agent_command")
+    for _name, _help in (
+        ("fetch", "One stateless pull: tasks claimable by --actor (advisory list; the gate is the truth)"),
+        ("watch", "Foreground BOUNDED client loop: poll until a task appears or --max-wait elapses"),
+    ):
+        _sub = agent_subparsers.add_parser(_name, help=_help)
+        _sub.add_argument("--gate-url", required=True, help="e.g. http://127.0.0.1:7118")
+        _src = _sub.add_mutually_exclusive_group(required=True)
+        _src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
+        _src.add_argument("--token-env", help="env var holding the role bearer token")
+        _sub.add_argument("--role", default="executor", help="role token to read (role-agnostic client; default executor)")
+        _sub.add_argument("--actor", required=True, help="your agent/actor name (matched against assigned_to/agent_instance)")
+        if _name == "fetch":
+            _sub.add_argument("--json", action="store_true", help="Output JSON")
+        else:
+            _sub.add_argument("--interval", type=float, default=60.0, help="poll interval in seconds (default 60; hard floor 15)")
+            _sub.add_argument("--max-wait", type=float, default=1800.0, help="bounded wait in seconds before a clean exit (default 1800)")
+
     board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     board_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
@@ -1018,6 +1044,13 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
+
+    if args.command == "agent":
+        # AIPOS-248: pure gate client — needs no workspace discovery, reads no files
+        # (token via connection.json/env inside the module; state via the read tool).
+        from tools.aipos_cli.agent_connector import run_agent_command
+
+        return run_agent_command(args)
 
     if args.command == "tui":
         # Lazy import so the Textual dependency is required only when launching the TUI;
