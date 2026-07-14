@@ -66,6 +66,20 @@ pulling for claimable tasks (`lybra agent watch` — a stateless, agent-side, bo
 loop; Lybra never pushes and never tracks agent presence) and **`lybra off`** to stop. See
 `skills/lybra-executor/SKILL.md` and `docs/mcp-agent-setup.md`.
 
+**Three SKILLs (the roles).** Lybra ships three agent-facing skills — symlink whichever you need
+into `~/.claude/skills/` (or `~/.codex/skills/`):
+- **`skills/owner-console/`** — the Owner's own advisor + confirm console (owner token): plan,
+  narrate queue/audit state in plain language, draft cards, and hand-approve confirm/publish via the
+  harness prompt. Self-sufficient — this one skill carries the full advisor role.
+- **`skills/lybra-planner/`** — a third-party BYO planning advisor (planner token): read-only truth
+  + draft-submit; it can never claim/return/confirm/publish (SCOPE_DENIED) — the Owner publishes.
+- **`skills/lybra-executor/`** — an executor that pulls for claimable work (`lybra on|off`).
+
+The confirm gate lives in the Owner's advisor conversation and runs through the harness's
+tool-approval prompt (the model cannot press it; `owner_confirm` is never on the auto-approve
+allowlist). This confirm surface is **verified on Claude Code only** — codex approval modes are
+unverified, so use codex for planner/executor roles, not confirm.
+
 **macOS TLS note:** bare macOS venv pythons ship empty default CA paths, so copilot HTTPS fails
 `CERTIFICATE_VERIFY_FAILED` (an environment property of macOS pythons, not a Lybra defect). Install
 `certifi` into the TUI's python (or set `SSL_CERT_FILE`) — Lybra picks certifi up automatically

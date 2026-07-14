@@ -86,6 +86,12 @@ def build_preview(
         ),
         "existing_session_records": existing_records["sessions"],
         "existing_claim_logs": existing_records["claims"],
+        # AIPOS-249 R-2: surface the audit verdicts + returns that find_records_for_task already
+        # loads (records.py) but the preview previously dropped. Zero new I/O — the records are
+        # already in `existing_records`. The planner reads these for round-end capability scoring
+        # (which task passed/blocked, how many reopens) via the read-only lybra_task_preview.
+        "existing_audit_verdicts": existing_records["audit_verdicts"],
+        "existing_returns": existing_records["returns"],
         "record_ref_checks": record_report["checks"],
         "record_warnings": record_report["warnings"] + record_report["needs_owner_reasons"],
         "runtime_profile": runtime_config.get("runtime_profile"),

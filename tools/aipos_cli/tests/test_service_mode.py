@@ -519,6 +519,8 @@ class ConnectionLocationTests(unittest.TestCase):
         self.assertEqual(scopes["copilot"], [])
         self.assertEqual(scopes["auditor"], sorted(["queue_claim", "audit_verdict"]))
         self.assertEqual(scopes["owner-dispatch"], ["audit_dispatch"])
+        # AIPOS-249: planner holds ONLY draft_submit — no claim/return/confirm/publish/audit.
+        self.assertEqual(scopes["planner"], ["draft_submit"])
 
 
 class TokenProjectsMintEchoTests(unittest.TestCase):

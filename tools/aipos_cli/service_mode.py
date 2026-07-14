@@ -75,6 +75,20 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
         "token_ref": "svc-copilot",
         "scopes": [],
     },
+    {
+        # AIPOS-249 (planner slice): the BYO external planning advisor's credential.
+        # scopes = [draft_submit] ONLY — read tools are exposed by default (no scope),
+        # and draft_submit lets the planner land task-card DRAFTS into 5_tasks/drafts/
+        # (a proposal zone, structurally path-locked). The planner holds NO
+        # queue_claim/queue_return/owner_confirm/draft_publish/audit_* — so it can never
+        # claim/return/confirm/publish/audit: every such op is structurally SCOPE_DENIED.
+        # Landing a draft into truth (drafts -> queue/pending) is draft_publish, which the
+        # planner lacks and which additionally requires owner_confirm — the gate stays with
+        # the Owner. This is the planner-side ★A1 boundary as a credential, not policy.
+        "role": "planner",
+        "token_ref": "svc-planner",
+        "scopes": ["draft_submit"],
+    },
 )
 
 

@@ -13,6 +13,7 @@ from tools.aipos_cli.board_adapter import (
     audit_dispatch_task,
     audit_verdict_task,
     claim_task,
+    create_draft,
     execute_dry_run,
     get_context_pack_preview,
     get_preview,
@@ -35,6 +36,13 @@ REQUEST_CAPABILITY: ContextVar[dict[str, Any] | None] = ContextVar("lybra_mcp_re
 INTAKE_SCOPE = "intake_submit"
 OWNER_DECISION_SCOPE = "owner_decision_record"
 DRAFT_PUBLISH_SCOPE = "draft_publish"
+# AIPOS-249 (planner slice): the planner's ONLY write scope — land a task-card DRAFT into
+# 5_tasks/drafts/ (a proposal zone, path-locked by DRAFTS_DIR + draft_slug). This is NOT
+# draft_publish: submitting a draft does NOT put it into truth (queue/pending). Landing it —
+# drafts -> queue/pending — is draft_publish, which additionally requires owner_confirm, so
+# the planner (which holds neither) can never publish. Draft submit confirm does NOT require
+# owner_confirm (a draft is a proposal, not truth); the Owner gate is at publish.
+DRAFT_SUBMIT_SCOPE = "draft_submit"
 QUEUE_CLAIM_SCOPE = "queue_claim"
 QUEUE_RETURN_SCOPE = "queue_return"
 AUDIT_DISPATCH_SCOPE = "audit_dispatch"
@@ -325,6 +333,10 @@ def _owner_confirm_scope_allowed() -> bool:
 
 def _draft_publish_scope_allowed() -> bool:
     return _capability_has_scope(DRAFT_PUBLISH_SCOPE)
+
+
+def _draft_submit_scope_allowed() -> bool:
+    return _capability_has_scope(DRAFT_SUBMIT_SCOPE)
 
 
 def _confirmer_attribution() -> dict[str, Any]:
@@ -1022,6 +1034,44 @@ def lybra_draft_publish_confirm(arguments: dict[str, Any] | None = None) -> dict
     return _tool_result(response, is_error=False)
 
 
+def lybra_draft_submit_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    # AIPOS-249 (planner slice): land a task-card DRAFT into 5_tasks/drafts/. Visible with the
+    # draft_submit scope (the planner). Reuses the existing draft_create controlled-execute op —
+    # the target path is DRAFTS_DIR / draft_slug(task_id).md (constant dir + regex-locked slug,
+    # draft_validator.py), so the caller passes NO path field and CANNOT write outside drafts/.
+    if not _draft_submit_scope_allowed():
+        return _scope_denied_result_for(DRAFT_SUBMIT_SCOPE, "planner draft submit tools")
+    args = arguments or {}
+    response = create_draft(args, dry_run=True, repo_root=_repo_root(), actor=str(args.get("actor") or "mcp.client"))
+    return _tool_result(response, is_error=not bool(response.get("ok", False)) or response.get("verdict") == "BLOCK")
+
+
+def lybra_draft_submit_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    # AIPOS-249: submit confirm does NOT require owner_confirm — a draft is a PROPOSAL, not truth.
+    # The Owner gate is at PUBLISH (drafts -> queue/pending = lybra_draft_publish, which the planner
+    # lacks AND which requires owner_confirm). So a planner can fill the drafts zone autonomously,
+    # but landing into truth is structurally Owner-gated.
+    if not _draft_submit_scope_allowed():
+        return _scope_denied_result_for(DRAFT_SUBMIT_SCOPE, "planner draft submit tools")
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    if not dry_run_token:
+        return _teaching_error(
+            "MISSING_DRY_RUN_TOKEN",
+            "lybra_draft_submit_confirm requires dry_run_token from a prior lybra_draft_submit_dry_run response.",
+            "Call lybra_draft_submit_dry_run first, review the rendered draft, then confirm with its dry_run_token.",
+        )
+    response = execute_dry_run(
+        dry_run_token,
+        str(args.get("actor") or "mcp.client"),
+        owner_confirmation_token=None,
+        repo_root=_repo_root(),
+    )
+    if not response.get("ok", False):
+        return _map_controlled_execute_error(response, dry_run_tool="lybra_draft_submit_dry_run")
+    return _tool_result(response, is_error=False)
+
+
 def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     if not _queue_claim_scope_allowed():
         return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "supervised queue claim tools")
@@ -1714,6 +1764,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_owner_decision_record_confirm": lybra_owner_decision_record_confirm,
     "lybra_draft_publish_dry_run": lybra_draft_publish_dry_run,
     "lybra_draft_publish_confirm": lybra_draft_publish_confirm,
+    "lybra_draft_submit_dry_run": lybra_draft_submit_dry_run,
+    "lybra_draft_submit_confirm": lybra_draft_submit_confirm,
     "lybra_queue_claim_dry_run": lybra_queue_claim_dry_run,
     "lybra_queue_claim_confirm": lybra_queue_claim_confirm,
     "lybra_queue_return_dry_run": lybra_queue_return_dry_run,
@@ -1815,6 +1867,41 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "actor": {"type": "string"},
             },
             "required": ["dry_run_token", "owner_confirmation_token"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_draft_submit_dry_run",
+        "description": (
+            "When to use: create a controlled-execute preview for submitting a NEW task-card DRAFT into 5_tasks/drafts/ (the planner's proposal zone). This does NOT put anything into truth. "
+            "Prerequisites: this MCP connection must have a capability_token with draft_submit scope (the planner role); pass frontmatter (task-card fields incl. task_id/title) and optional body; you pass NO file path — the target is DRAFTS_DIR / draft_slug(task_id).md, regex-locked so a draft can never land outside drafts/. "
+            "Return structure: a controlled-execute envelope with verdict, planned_writes, rendered_markdown, and dry_run_token. Confirm does NOT require owner_confirm (a draft is a proposal). Landing the draft into the queue is a separate Owner-gated draft_publish."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "frontmatter": {"type": "object"},
+                "body": {"type": "string"},
+                "actor": {"type": "string"},
+            },
+            "required": ["frontmatter"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_draft_submit_confirm",
+        "description": (
+            "When to use: confirm a lybra_draft_submit_dry_run, writing the task-card draft into 5_tasks/drafts/. "
+            "Prerequisites: capability_token with draft_submit scope; dry_run_token from lybra_draft_submit_dry_run. owner_confirm is NOT required (a draft is a proposal, not truth — the Owner gate is at publish). "
+            "Return structure: a controlled-execute envelope with performed_writes (the draft file under 5_tasks/drafts/)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run_token": {"type": "string"},
+                "actor": {"type": "string"},
+            },
+            "required": ["dry_run_token"],
             "additionalProperties": False,
         },
     },
@@ -2168,6 +2255,8 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_owner_decision_record"))
     if _draft_publish_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_draft_publish"))
+    if _draft_submit_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_draft_submit"))
     if _queue_claim_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_claim"))
     if _queue_return_scope_allowed():

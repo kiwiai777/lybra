@@ -18,8 +18,10 @@ Claude Code 的斜杠命令严格按已注册命令名解析,本 skill 的可调
 ## 前提(一次性配置)
 
 1. Owner 已在本机跑 `lybra serve`(gate,非 daemon,Owner 显式启停)。
-2. 你有 executor 角色 token:环境变量(如 `LYBRA_EXEC_TOKEN`)或 connection.json
+2. 你有 executor 角色 token:环境变量 `LYBRA_MCP_TOKEN` 或 connection.json
    (默认 `~/.lybra/local/connection.json`;token 永远不出现在命令行/日志里)。
+   (**F-249-o3-1**:token 环境变量名统一为 `LYBRA_MCP_TOKEN`——三角色都用这个名,本会话
+   设 executor token 值;旧文档的 `LYBRA_EXEC_TOKEN` 已废。)
 3. 你知道自己的 actor 名(与任务卡 `assigned_to`/`agent_instance` 对得上——
    任务必须先由 Owner 指派给你,你才可认领)。
 4. 自检:下面命令能返回三态之一即通:
@@ -38,11 +40,14 @@ lybra agent fetch --gate-url http://127.0.0.1:7118 \
 工具**,说明 gate 还没挂到你的 MCP 客户端——自行完成挂载:
 
 ```bash
-# executor token 从 connection.json 读,不落命令行;<gate-url> 是 Owner 给你的地址
-claude mcp add lybra --url <gate-url>/mcp --bearer-token-env-var LYBRA_EXEC_TOKEN
+# executor token 放进 LYBRA_MCP_TOKEN 环境变量(不落命令行);url 是位置参数,bearer 走 --header
+export LYBRA_MCP_TOKEN="$(<读出 executor 角色 token>)"
+claude mcp add lybra --transport http http://127.0.0.1:7118/mcp \
+  --header 'Authorization: Bearer ${LYBRA_MCP_TOKEN}'
 ```
 
-(token 本体放进 `LYBRA_EXEC_TOKEN` 环境变量,不要粘贴进命令行参数或聊天记录里。)
+(token 本体放进 `LYBRA_MCP_TOKEN` 环境变量,不要粘贴进命令行参数或聊天记录里;`--header`
+用单引号,让 `${LYBRA_MCP_TOKEN}` 存为字面量、由 cc 运行时展开。)
 挂载后**自检**:确认工具列表里出现 `lybra_queue_return`(或任一 `lybra_queue_*`)——
 看到了才算真正接通,再继续下面的 `lybra on` 流程。
 
