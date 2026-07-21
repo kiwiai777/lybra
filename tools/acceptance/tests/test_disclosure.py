@@ -27,7 +27,7 @@ class DisclosureLedgerTests(unittest.TestCase):
             "intake_submit",              # 4 path-B exemption
             "owner_decision_record",
             "egress",                     # 5 network egress
-            "Supervised only",            # 6 autonomy
+            "PreAuthorized envelope tier",  # 6 autonomy (AIPOS-250: Supervised default + PreAuthorized claim tier)
             "Form A",                     # 7 Wall = Claude only
             "F-candidate-2",
             "mutual audit",               # 8 heterogeneous / R2 / R5 / 206b

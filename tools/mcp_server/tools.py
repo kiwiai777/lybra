@@ -19,10 +19,18 @@ from tools.aipos_cli.board_adapter import (
     get_preview,
     get_queue,
     get_validate,
+    load_task_snapshot,
     publish_draft,
     record_owner_decision,
     return_task,
     submit_external_intake,
+)
+from tools.aipos_cli.autonomy_policy import (
+    AUTONOMY_MODE_PREAUTHORIZED,
+    AUTONOMY_MODE_SUPERVISED,
+    count_preauthorized_claims,
+    load_policy,
+    match_claim_envelope,
 )
 from tools.aipos_cli.agent_profiles import load_agent_profiles, registry_available, resolve_instance_id
 from tools.aipos_cli.controlled_execute import get_dry_run
@@ -474,18 +482,37 @@ def _audit_verdict_owner_reasons() -> list[str]:
     ]
 
 
+def _reported_tokens_value(args: dict[str, Any]) -> int | None:
+    # AIPOS-250 (capability ledger): agent-REPORTED token count. Coerce to int or drop —
+    # the gate records it as-reported, never measures or verifies it (disclosure #15).
+    raw = args.get("reported_tokens")
+    if isinstance(raw, bool) or raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _claim_metadata(
     args: dict[str, Any],
     *,
     canonical_agent_instance: str,
     resolution_label: str = "unregistered",
     reg_available: bool = True,
+    autonomy_mode: str = "Supervised",
+    owner_policy_ref: str | None = None,
+    owner_confirmation_required: bool = True,
+    owner_confirmation_reasons: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "surface": "mcp",
         "operation": "queue_claim",
-        "autonomy_mode": "Supervised",
-        "owner_policy_ref": str(args.get("owner_policy_ref") or "").strip(),
+        # AIPOS-250: read the mode from the caller (Supervised default; PreAuthorized only when
+        # the gate has confirmed a matching active envelope). Never trust a raw client-supplied
+        # PreAuthorized — the gate sets this after a structural match.
+        "autonomy_mode": str(autonomy_mode or "Supervised").strip() or "Supervised",
+        "owner_policy_ref": str(owner_policy_ref if owner_policy_ref is not None else args.get("owner_policy_ref") or "").strip(),
         "agent_instance": str(args.get("agent_instance") or "").strip(),
         "canonical_agent_instance": canonical_agent_instance,
         # AIPOS-219 P5: FLAT bounded-map provenance marker (depth-1, readable on bare python)
@@ -497,9 +524,12 @@ def _claim_metadata(
         "active_session_id": str(args.get("active_session_id") or "").strip() or None,
         "context_bundle_ack": str(args.get("context_bundle_ack") or "").strip() or None,
         "claim_reason": str(args.get("claim_reason") or "").strip() or None,
+        # AIPOS-250 (capability ledger): agent-reported, not gate-measured.
+        "actual_model": str(args.get("actual_model") or "").strip() or None,
+        "reported_tokens": _reported_tokens_value(args),
         "with_records_requested": bool(args.get("with_records", True)),
-        "owner_confirmation_required": True,
-        "owner_confirmation_reasons": _claim_owner_reasons(),
+        "owner_confirmation_required": bool(owner_confirmation_required),
+        "owner_confirmation_reasons": list(owner_confirmation_reasons) if owner_confirmation_reasons is not None else _claim_owner_reasons(),
         "lease_path": "claim_only",
         "lease_status": "proposed",
     }
@@ -527,6 +557,9 @@ def _return_metadata(
         "claim_id": str(args.get("claim_id") or "").strip() or None,
         "active_session_id": str(args.get("active_session_id") or "").strip() or None,
         "return_reason": str(args.get("return_reason") or "").strip() or None,
+        # AIPOS-250 (capability ledger): agent-reported, not gate-measured (disclosure #15).
+        "actual_model": str(args.get("actual_model") or "").strip() or None,
+        "reported_tokens": _reported_tokens_value(args),
         "owner_confirmation_required": True,
         "owner_confirmation_reasons": _return_owner_reasons(),
         "lease_path": "claim_only",
@@ -950,10 +983,27 @@ def lybra_owner_decision_record_confirm(arguments: dict[str, Any] | None = None)
             "Call lybra_owner_decision_record_dry_run first, then pass its dry_run_token to lybra_owner_decision_record_confirm.",
             doc_ref="AIPOS-109 MCP-native discipline; AIPOS-112 owner_decision_record writer",
         )
+    owner_confirmation_token = str(args.get("owner_confirmation_token") or "") or None
+    # AIPOS-250: when this owner decision GRANTS a PreAuthorized autonomy envelope, the confirm is
+    # the ONE Owner hand-confirmation that arms the envelope (red line 1). Gate it exactly like the
+    # other consequential confirms — additionally require the Owner-only owner_confirm scope AND the
+    # explicit OWNER_CONFIRMED token, so an autonomy envelope can never be armed without the Owner.
+    token = get_dry_run(dry_run_token)
+    plan_data = token.plan.get("data") if token is not None and isinstance(token.plan, dict) else None
+    grants_policy = bool(plan_data.get("autonomy_policy_grant")) if isinstance(plan_data, dict) else False
+    if grants_policy:
+        if not _owner_confirm_scope_allowed():
+            return _scope_denied_result_for(OWNER_CONFIRM_SCOPE, "owner decision record autonomy-policy grant (Owner-only)")
+        if owner_confirmation_token != OWNER_CONFIRMATION_TOKEN:
+            return _teaching_error(
+                "OWNER_CONFIRMATION_REQUIRED",
+                "Arming a PreAuthorized autonomy envelope requires owner_confirmation_token: OWNER_CONFIRMED.",
+                "Present the policy grant preview to the Owner, then retry confirm with owner_confirmation_token set to OWNER_CONFIRMED.",
+            )
     response = execute_dry_run(
         dry_run_token,
         str(args.get("actor") or "mcp.client"),
-        owner_confirmation_token=str(args.get("owner_confirmation_token") or "") or None,
+        owner_confirmation_token=owner_confirmation_token,
         repo_root=_repo_root(),
     )
     if not response.get("ok", False):
@@ -1072,6 +1122,131 @@ def lybra_draft_submit_confirm(arguments: dict[str, Any] | None = None) -> dict[
     return _tool_result(response, is_error=False)
 
 
+def _match_claim_envelope(
+    repo_root: Path,
+    *,
+    owner_policy_ref: str,
+    task_id: str | None,
+    task_path: str | None,
+    canonical_agent_instance: str,
+    actor: str,
+) -> str | None:
+    """Return the owner_policy_ref iff it names an active Owner-signed envelope that strictly
+    matches this claim; else None (→ fall back to Supervised). Loading a policy for a ref that
+    does not resolve returns None (★A1 anti-forgery: a ref to a nonexistent/unauthorized policy
+    grants nothing)."""
+    policy = load_policy(repo_root, owner_policy_ref)
+    if policy is None:
+        return None
+    snapshot = load_task_snapshot(repo_root, task_id=task_id, path=task_path)
+    if snapshot is None:
+        return None
+    # Envelope auto-release covers only pending (claimable) queue tasks — anything else drops to
+    # the Supervised path (which will itself surface why the task is not claimable).
+    if str(snapshot.get("queue_state") or "").strip() != "pending":
+        return None
+    released = count_preauthorized_claims(repo_root, owner_policy_ref)
+    matched, _reason = match_claim_envelope(
+        policy=policy,
+        task_id=str(snapshot.get("task_id") or task_id or ""),
+        task_mode=str(snapshot.get("task_mode") or ""),
+        project=str(snapshot.get("project") or ""),
+        agent_instance=canonical_agent_instance,
+        actor=actor,
+        now=datetime.now(timezone.utc),
+        released_count=released,
+    )
+    return owner_policy_ref if matched else None
+
+
+def _preauthorized_claim_autorelease(
+    *,
+    args: dict[str, Any],
+    repo_root: Path,
+    task_id: str | None,
+    task_path: str | None,
+    canonical_agent_instance: str,
+    policy_id: str,
+    resolution_label: str,
+    reg_available: bool,
+) -> dict[str, Any]:
+    """One-stage PreAuthorized release: run a claim dry-run with owner_confirmation NOT required
+    (the envelope already authorized it), then immediately execute it. The executor never calls
+    claim_confirm and never holds owner_confirm scope — the gate performs the write as the executor
+    of the Owner-signed policy. The claim record self-attributes autonomy_mode=PreAuthorized +
+    owner_policy_ref=<policy_id>."""
+    confirmer = {
+        # The runtime "confirmer" is the Owner-signed policy, not any live token — honest
+        # attribution: no agent pressed a button at runtime (red line 1).
+        "confirmer_role": "autonomy_policy:PreAuthorized",
+        "confirmer_token_ref": policy_id,
+        "confirmer_token_fingerprint": "",
+    }
+    claim_meta = _claim_metadata(
+        args,
+        canonical_agent_instance=canonical_agent_instance,
+        resolution_label=resolution_label,
+        reg_available=reg_available,
+        autonomy_mode=AUTONOMY_MODE_PREAUTHORIZED,
+        owner_policy_ref=policy_id,
+        owner_confirmation_required=False,
+        owner_confirmation_reasons=[],
+    )
+    claim_meta["confirmer"] = confirmer
+    dry = claim_task(
+        task_id=task_id,
+        path=task_path,
+        actor=canonical_agent_instance,
+        dry_run=True,
+        with_records=False,
+        repo_root=repo_root,
+        owner_confirmation_required_override=False,
+        owner_confirmation_reasons_override=[],
+        mcp_claim_metadata=claim_meta,
+    )
+    dry_run_token = str(dry.get("dry_run_token") or "").strip()
+    if dry.get("verdict") == "BLOCK" or not dry_run_token:
+        # Not auto-releasable (e.g. the task is no longer claimable). Surface the preview/blocks.
+        decorated = _decorate_queue_claim_dry_run(dry, args=args, canonical_agent_instance=canonical_agent_instance)
+        return _tool_result(decorated, is_error=True)
+    executed = execute_dry_run(
+        dry_run_token,
+        canonical_agent_instance,
+        owner_confirmation_token=None,
+        repo_root=repo_root,
+        confirmer=confirmer,
+    )
+    if not executed.get("ok", False):
+        return _map_controlled_execute_error(executed, dry_run_tool="lybra_queue_claim_dry_run")
+    executed["surface"] = "mcp"
+    executed["autonomy_mode"] = AUTONOMY_MODE_PREAUTHORIZED
+    executed["agent_instance"] = str(args.get("agent_instance") or "").strip()
+    executed["canonical_agent_instance"] = canonical_agent_instance
+    executed["owner_policy_ref"] = policy_id
+    executed["owner_confirmation_required"] = False
+    executed["preauthorized_release"] = True
+    executed["lease_status"] = "proposed"
+    executed["lease_path"] = "claim_only"
+    executed["lease_preview"] = {
+        "lease_path": "claim_only",
+        "lease_status": "proposed",
+        "active_lease_written": False,
+        "next_required_action": "separate explicit lease activation before execution",
+    }
+    executed["provenance"] = {
+        "event_type": "mcp_queue_claim",
+        "actor": canonical_agent_instance,
+        "actor_instance_id": canonical_agent_instance,
+        "surface": "mcp",
+        "transport": "mcp",
+        "owner_policy_ref": policy_id,
+        "autonomy_mode": AUTONOMY_MODE_PREAUTHORIZED,
+        "result": executed.get("verdict"),
+        "dry_run_id": dry_run_token,
+    }
+    return _tool_result(executed, is_error=False)
+
+
 def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     if not _queue_claim_scope_allowed():
         return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "supervised queue claim tools")
@@ -1083,11 +1258,12 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
             f"Supervised MCP queue_claim does not accept these fields: {', '.join(forbidden)}.",
             "Remove automatic, batch, credential, bearer-token, raw prompt, and raw response fields; then run dry-run again.",
         )
-    if str(args.get("autonomy_mode") or "").strip() != "Supervised":
+    requested_mode = str(args.get("autonomy_mode") or "").strip()
+    if requested_mode not in {AUTONOMY_MODE_SUPERVISED, AUTONOMY_MODE_PREAUTHORIZED}:
         return _queue_claim_error(
             "INVALID_AUTONOMY_MODE",
-            "lybra_queue_claim_dry_run supports only autonomy_mode: Supervised.",
-            "Use autonomy_mode: Supervised. Delegated and Standing remain behind separate Owner gates.",
+            "lybra_queue_claim_dry_run supports autonomy_mode: Supervised or PreAuthorized.",
+            "Use Supervised (per-task Owner confirm) or PreAuthorized (auto-release only when the gate matches an Owner-signed envelope). Delegated and Standing remain behind separate Owner gates.",
         )
     actor = str(args.get("actor") or "").strip()
     if not actor:
@@ -1133,6 +1309,36 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
             "Retry with actor set to the same canonical opaque instance used for agent_instance.",
         )
 
+    resolution_label = str(resolved["resolution"].get("resolution") or "unregistered")
+    reg_available = bool(resolved.get("registry_available", True))
+
+    # AIPOS-250 — PreAuthorized envelope: the gate does a STRUCTURAL match against an Owner-signed
+    # policy and, ONLY on a strict match, auto-releases the claim in ONE stage (no dry_run token,
+    # no confirm step). The executor never gains a confirm capability (★A1): the authorization is
+    # the Owner-signed envelope, and the gate is the executor of that already-granted policy. Any
+    # miss / expiry / count-bound / forged ref falls back to the Supervised per-task preview.
+    if requested_mode == AUTONOMY_MODE_PREAUTHORIZED:
+        matched_policy_id = _match_claim_envelope(
+            repo_root,
+            owner_policy_ref=owner_policy_ref,
+            task_id=task_id,
+            task_path=task_path,
+            canonical_agent_instance=canonical_agent_instance,
+            actor=actor,
+        )
+        if matched_policy_id:
+            return _preauthorized_claim_autorelease(
+                args=args,
+                repo_root=repo_root,
+                task_id=task_id,
+                task_path=task_path,
+                canonical_agent_instance=canonical_agent_instance,
+                policy_id=matched_policy_id,
+                resolution_label=resolution_label,
+                reg_available=reg_available,
+            )
+        # fall through to a Supervised preview (fail-safe: 回落 Supervised 逐单).
+
     response = claim_task(
         task_id=task_id,
         path=task_path,
@@ -1145,8 +1351,9 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         mcp_claim_metadata=_claim_metadata(
             args,
             canonical_agent_instance=canonical_agent_instance,
-            resolution_label=str(resolved["resolution"].get("resolution") or "unregistered"),
-            reg_available=bool(resolved.get("registry_available", True)),
+            resolution_label=resolution_label,
+            reg_available=reg_available,
+            autonomy_mode=AUTONOMY_MODE_SUPERVISED,
         ),
     )
     decorated = _decorate_queue_claim_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance)
@@ -1965,10 +2172,10 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
     {
         "name": "lybra_owner_decision_record_dry_run",
         "description": (
-            "When to use: create a controlled execute preview for recording a scoped Owner decision after an Owner Decision Gate has explicit evidence. "
-            "Prerequisites: this MCP connection must have a capability_token with owner_decision_record scope; owner_approval_evidence is required and must align with applies_to; capability_scope must include owner_decision_record (and the active project must be in the token's projects when project-scoped — enforced as PROJECT_SCOPE_DENIED); this tool does not publish, mutate queues, append orchestration events, or execute follow-up work. "
-            "Return structure: a controlled execute envelope with verdict, planned_writes, dry_run_token, dry_run_snapshot_hash, dry_run_created_at, dry_run_expires_at, and rendered Owner decision record content. "
-            "Next-step hint: pass dry_run_token to lybra_owner_decision_record_confirm; confirm writes only a records artifact under 5_tasks/records/owner_decisions and no agent takes automatic follow-up action."
+            "When to use: create a controlled execute preview for either (a) recording a scoped Owner decision with out-of-band approval evidence, or (b) AIPOS-250 arming a PreAuthorized autonomy envelope by passing an autonomy_policy block. "
+            "Prerequisites: this MCP connection must have a capability_token with owner_decision_record scope (Owner-only). For the general decision path, owner_approval_evidence (aligned with applies_to) + capability_scope (including owner_decision_record) are required. For the autonomy_policy ENVELOPE path, pass ONLY decision_id + autonomy_policy (agent_or_role, active_from, expires_at, max_tasks, task_selector) — owner_approval_evidence / applies_to / approval_scope / capability_scope are NOT required and are auto-derived, because the approval is the in-band harness owner_confirm at confirm time, not an out-of-band artifact. This tool does not publish, mutate queues, or execute follow-up work. "
+            "Return structure: a controlled execute envelope with verdict, planned_writes, dry_run_token, dry_run_snapshot_hash, autonomy_policy_grant (true on the envelope path), and rendered Owner decision record content. "
+            "Next-step hint: pass dry_run_token to lybra_owner_decision_record_confirm (envelope path additionally requires owner_confirm + owner_confirmation_token OWNER_CONFIRMED); confirm writes a records artifact under 5_tasks/records/owner_decisions (+ the policy artifact under 5_tasks/policies on the envelope path) and no agent takes automatic follow-up action."
         ),
         "inputSchema": {
             "type": "object",
@@ -1988,21 +2195,15 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "owner_approval_evidence": {"type": "object"},
                 "refs": {"type": "array", "items": {"type": "string"}},
                 "capability_scope": {"type": "object"},
+                # AIPOS-250: the envelope-arming block. Present => the writer takes the relaxed grant
+                # path (evidence/applies_to/capability_scope auto-derived). Absent => full AIPOS-110
+                # decision schema, whose remaining fields the WRITER enforces conditionally (not the
+                # schema): only decision_id is unconditionally required here, so the envelope path is
+                # reachable through a schema-validating MCP client (which would otherwise strip an
+                # undeclared autonomy_policy and force the evidence fields — the O3 defect).
+                "autonomy_policy": {"type": "object"},
             },
-            "required": [
-                "decision_id",
-                "decision_type",
-                "decision_status",
-                "decided_at",
-                "decided_by_ref",
-                "captured_by",
-                "capture_surface",
-                "decision_summary",
-                "applies_to",
-                "approval_scope",
-                "owner_approval_evidence",
-                "capability_scope",
-            ],
+            "required": ["decision_id"],
             "additionalProperties": False,
         },
     },
@@ -2028,10 +2229,10 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
     {
         "name": "lybra_queue_claim_dry_run",
         "description": (
-            "When to use: create a Supervised MCP preview for explicitly claiming one pending task for one concrete agent instance. "
-            "Prerequisites: this MCP connection must have a capability_token with queue_claim scope; autonomy_mode must be Supervised; actor must equal the resolved canonical agent_instance in this first slice; owner_policy_ref is required; this tool does not execute work, dispatch audit, write records, or activate a lease. "
-            "Return structure: a controlled execute envelope with verdict, planned_moves, dry_run_token, dry_run_snapshot_hash, owner_confirmation_required, canonical_agent_instance, owner_policy_ref, and lease_status proposed. "
-            "Next-step hint: present the preview to Owner, then pass dry_run_token to lybra_queue_claim_confirm with owner_confirmation_token OWNER_CONFIRMED; execution still requires a later explicit lease activation path."
+            "When to use: claim one pending task for one concrete agent instance. autonomy_mode Supervised returns a dry-run preview requiring Owner per-task confirm; autonomy_mode PreAuthorized asks the gate to check owner_policy_ref against Owner-signed autonomy envelopes and, ONLY on a strict structural match, auto-release the claim in one step (no confirm) — any miss/expiry/count-bound falls back to a Supervised preview. "
+            "Prerequisites: this MCP connection must have a capability_token with queue_claim scope; actor must equal the resolved canonical agent_instance in this first slice; owner_policy_ref is required (for PreAuthorized it must name an active envelope policy_id). Optional actual_model / reported_tokens are agent-reported capability-ledger fields (recorded, never verified). "
+            "Return structure: a controlled execute envelope with verdict, autonomy_mode (Supervised | PreAuthorized), owner_policy_ref, canonical_agent_instance, lease_status proposed; Supervised additionally returns dry_run_token + owner_confirmation_required, PreAuthorized returns performed_moves for the auto-released claim. "
+            "Next-step hint: for Supervised, present the preview to Owner then confirm via lybra_queue_claim_confirm with OWNER_CONFIRMED; for PreAuthorized the claim is already landed and attributed to the policy — do NOT call confirm."
         ),
         "inputSchema": {
             "type": "object",
@@ -2040,13 +2241,15 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "task_path": {"type": "string"},
                 "actor": {"type": "string"},
                 "agent_instance": {"type": "string"},
-                "autonomy_mode": {"type": "string", "enum": ["Supervised"]},
+                "autonomy_mode": {"type": "string", "enum": ["Supervised", "PreAuthorized"]},
                 "owner_policy_ref": {"type": "string"},
                 "runtime_profile": {"type": "string"},
                 "active_session_id": {"type": "string"},
                 "context_bundle_ack": {"type": "string"},
                 "with_records": {"type": "boolean"},
                 "claim_reason": {"type": "string"},
+                "actual_model": {"type": "string"},
+                "reported_tokens": {"type": "integer"},
             },
             "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
             "additionalProperties": False,
@@ -2100,6 +2303,8 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "executor_status": {"type": "string", "enum": ["completed"]},
                 "audit_readiness": {"type": "string", "enum": ["ready"]},
                 "return_reason": {"type": "string"},
+                "actual_model": {"type": "string"},
+                "reported_tokens": {"type": "integer"},
             },
             "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
             "additionalProperties": False,

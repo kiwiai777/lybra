@@ -1152,6 +1152,10 @@ def record_owner_decision(
             "rendered_markdown": result.get("rendered_markdown"),
             "original_payload": result.get("original_payload"),
             "capability_scope": result.get("capability_scope"),
+            # AIPOS-250: lets the confirm handler require owner_confirm for a policy grant.
+            "autonomy_policy_grant": bool(result.get("autonomy_policy_grant")),
+            "autonomy_policy_id": result.get("autonomy_policy_id"),
+            "autonomy_policy_path": result.get("autonomy_policy_path"),
         }
         response = make_response(
             ok=True,
@@ -1362,6 +1366,9 @@ def _queue_mutation_preview(
             canonical_agent_instance=str(mcp_claim_metadata.get("canonical_agent_instance") or actor),
             owner_policy_ref=str(mcp_claim_metadata.get("owner_policy_ref") or ""),
             updated_metadata=updated_frontmatter,
+            autonomy_mode=str(mcp_claim_metadata.get("autonomy_mode") or "Supervised"),
+            actual_model=mcp_claim_metadata.get("actual_model"),
+            reported_tokens=mcp_claim_metadata.get("reported_tokens"),
             confirmer=mcp_claim_metadata.get("confirmer") if isinstance(mcp_claim_metadata.get("confirmer"), dict) else None,
         )
         data["mcp_records_enabled"] = True
@@ -1474,6 +1481,9 @@ def _mcp_claim_record_plan(
     canonical_agent_instance: str,
     owner_policy_ref: str,
     updated_metadata: dict[str, Any],
+    autonomy_mode: str = "Supervised",
+    actual_model: str | None = None,
+    reported_tokens: int | None = None,
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     confirmer: dict[str, Any] | None = None,
@@ -1500,6 +1510,9 @@ def _mcp_claim_record_plan(
         claim_id=claim_id,
         session_id=session_id,
         claimed_at=claimed_at,
+        autonomy_mode=autonomy_mode,
+        actual_model=actual_model,
+        reported_tokens=reported_tokens,
         claim_policy=str(updated_metadata.get("claim_policy") or ""),
         claim_match_basis=str(updated_metadata.get("claim_match_basis") or ""),
         claim_requirements_hash=str(updated_metadata.get("claim_requirements_hash") or ""),
@@ -1517,6 +1530,7 @@ def _mcp_claim_record_plan(
         session_id=session_id,
         claim_id=claim_id,
         created_at=claimed_at,
+        autonomy_mode=autonomy_mode,
     )
     return {
         "record_blocking_reasons": blocking,
@@ -1558,6 +1572,8 @@ def _mcp_return_record_plan(
     result_summary: str | None,
     artifact_refs: list[str],
     completion_report_ref: str | None,
+    actual_model: str | None = None,
+    reported_tokens: int | None = None,
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     return_id: str | None = None,
@@ -1601,6 +1617,8 @@ def _mcp_return_record_plan(
         result_summary=result_summary,
         artifact_refs=artifact_refs,
         completion_report_ref=completion_report_ref,
+        actual_model=actual_model,
+        reported_tokens=reported_tokens,
         dry_run_id=dry_run_id,
         dry_run_snapshot_hash=dry_run_snapshot_hash,
         confirmation_ref=confirmation_ref,
@@ -1843,6 +1861,8 @@ def _build_return_preview(
             result_summary=result_summary,
             artifact_refs=effective_artifact_refs,
             completion_report_ref=completion_report_ref,
+            actual_model=mcp_return_metadata.get("actual_model") if isinstance(mcp_return_metadata, dict) else None,
+            reported_tokens=mcp_return_metadata.get("reported_tokens") if isinstance(mcp_return_metadata, dict) else None,
             return_id=return_id or None,
             confirmer=mcp_return_metadata.get("confirmer") if isinstance(mcp_return_metadata.get("confirmer"), dict) else None,
         )
@@ -3059,7 +3079,15 @@ def execute_dry_run(
                 dry_run=True,
                 with_records=False,
                 repo_root=resolved_root,
-                owner_confirmation_required_override=True if mcp_claim_metadata else None,
+                # AIPOS-250: honor the ORIGINAL owner-confirm requirement captured in the claim
+                # metadata (Supervised=True; PreAuthorized envelope auto-release=False) so the
+                # revalidation snapshot matches the dry-run that minted the token. Hardcoding True
+                # here broke the one-stage PreAuthorized release with a false SNAPSHOT_MISMATCH.
+                owner_confirmation_required_override=(
+                    bool(mcp_claim_metadata.get("owner_confirmation_required", True))
+                    if mcp_claim_metadata
+                    else None
+                ),
                 owner_confirmation_reasons_override=(
                     list(mcp_claim_metadata.get("owner_confirmation_reasons", []))
                     if mcp_claim_metadata
@@ -3458,6 +3486,9 @@ def execute_dry_run(
                 canonical_agent_instance=str(mcp_claim_metadata.get("canonical_agent_instance") or actor_text),
                 owner_policy_ref=str(mcp_claim_metadata.get("owner_policy_ref") or ""),
                 updated_metadata=result.get("updated_frontmatter") if isinstance(result.get("updated_frontmatter"), dict) else {},
+                autonomy_mode=str(mcp_claim_metadata.get("autonomy_mode") or "Supervised"),
+                actual_model=mcp_claim_metadata.get("actual_model"),
+                reported_tokens=mcp_claim_metadata.get("reported_tokens"),
                 dry_run_id=dry_run_id,
                 dry_run_snapshot_hash=expected_hash,
                 # AIPOS-199 (RF-5): thread the confirming token's identity into the claim
@@ -3533,6 +3564,29 @@ def claim_task(
         )
     except Exception as exc:
         return _normalize_exception("queue_claim", exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def load_task_snapshot(
+    repo_root: str | Path | None = None,
+    *,
+    task_id: str | None = None,
+    path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """AIPOS-250: read-only snapshot of a queue task's envelope-relevant fields (task_mode /
+    project / queue_state) for the gate's claim envelope match. Returns None if the task cannot
+    be resolved — the caller then falls back to Supervised (fail-safe偏窄)."""
+    try:
+        resolved_root = _resolve_repo_root(repo_root)
+        task = _select_task(resolved_root, task_id=task_id, path=path)
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    return {
+        "task_id": task.get("task_id"),
+        "task_mode": task.get("task_mode") or metadata.get("task_mode"),
+        "project": metadata.get("project"),
+        "queue_state": task.get("queue_state"),
+    }
 
 
 def block_task(

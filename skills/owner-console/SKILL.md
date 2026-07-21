@@ -12,7 +12,8 @@ description: Lybra Owner 控制台（顾问 + 放行）。当你（作为 Owner 
    弹窗**执行,由**你(人类 Owner)亲手点批准**。
 
 > **F-06 双防线(不可让渡,永禁旁路)**:`owner_confirm` 类工具(`draft_publish_confirm` /
-> `queue_claim_confirm` / `queue_return_confirm`)每一次都**必须弹窗、由人亲手放行**。
+> `queue_claim_confirm` / `queue_return_confirm` / 以及**给预授权信封落盘的**
+> `owner_decision_record_confirm`)每一次都**必须弹窗、由人亲手放行**。
 > - **第一道(结构,必装)**:cc 权限系统的 `ask` 档——把这三个工具钉进 `.claude/settings.json`
 >   的 `permissions.ask`(下面「一次性配置」步 4 的必装片段)。`ask` 在优先级上**先于**
 >   `allow`,所以即使某次误点了"don't ask again"(写进 `settings.local.json` 的 `allow`)、
@@ -47,7 +48,10 @@ description: Lybra Owner 控制台（顾问 + 放行）。当你（作为 Owner 
      --header 'Authorization: Bearer ${LYBRA_MCP_TOKEN}'
    ```
    自检:重启后工具列表出现 `lybra_queue_list`(只读)+ `lybra_draft_publish_dry_run`
-   (放行面)再继续。
+   (放行面)+ **`lybra_owner_decision_record_dry_run`(信封起草面,AIPOS-250)** 再继续。
+   **若缺 `lybra_owner_decision_record_dry_run`**:owner token 的 scope 未含
+   `owner_decision_record`(旧 token)——重铸 owner token(`serve rotate`,service_mode 已把
+   该 scope 归 owner 角色),重挂 MCP 后再自检。缺它则「预授权信封」流程整条不可达。
 4. **必装权限片段(F-249-o3-2 第一道防线,不装则 confirm 不弹窗 = 红线破)**——把 owner
    确认类工具钉进 `ask` 档(放 `.claude/settings.json`,shared/committed 比 local 更稳):
    ```json
@@ -56,7 +60,8 @@ description: Lybra Owner 控制台（顾问 + 放行）。当你（作为 Owner 
        "ask": [
          "mcp__lybra__lybra_draft_publish_confirm",
          "mcp__lybra__lybra_queue_claim_confirm",
-         "mcp__lybra__lybra_queue_return_confirm"
+         "mcp__lybra__lybra_queue_return_confirm",
+         "mcp__lybra__lybra_owner_decision_record_confirm"
        ]
      }
    }
@@ -147,6 +152,69 @@ Owner 问队列/审计状态时,你调只读工具(`lybra_queue_list` / `lybra_t
   解释影响,但**批准动作是人的**。
 - **claim/return 的确认**同理:supervised claim/return 的 confirm 经弹窗人手放行。
 
+### 预授权信封(第一档自动化:claim 免逐单,AIPOS-250)
+Owner 想把**逐单 claim 确认**批量化到"一段有界自治"里(**只 claim**;return/publish/audit 不动)。
+这不是委托——是 Owner **事先亲手确认一段有界信封**,运行时 gate 依已授权策略结构放行,人手那一按
+移到授权时刻、从未消失。你(顾问)全程**只起草 + 呈报 + 亲手按那一次 confirm 弹窗**,绝不替 Owner
+判断运行时该不该放。
+
+**触发**:Owner 说类似"给 exec 池预授权——今天到期、只覆盖 MP/code 类卡、最多 5 张"。
+
+**1. 起草信封(owner_autonomy_policy 工件)**:走 `lybra_owner_decision_record_dry_run`。**完整可直接
+抄改的 payload 全例**(改几个值就能过 dry-run)——注意信封路径**不需要**手工
+`owner_approval_evidence`/`applies_to`/`capability_scope`(见下"为何不用填证据"),只需 `decision_id`
++ `autonomy_policy` 块(外加可选 `decision_summary`/`decided_by_ref`):
+```json
+{
+  "decision_id": "pol-decision-exec-mp-20260715",
+  "actor": "owner",
+  "decided_by_ref": "owner",
+  "decision_summary": "给 exec 池预授权:今天到期、只覆盖 code 类卡、最多 5 张。",
+  "autonomy_policy": {
+    "policy_id": "pol_exec_mp_20260715",
+    "agent_or_role": "exec.cc.local",
+    "active_from": "2026-07-15T00:00:00Z",
+    "expires_at": "2026-07-16T00:00:00Z",
+    "max_tasks": 5,
+    "task_selector": { "task_mode": "code" }
+  }
+}
+```
+逐字段:`policy_id`=claim 记录的 `owner_policy_ref` 将指回它;`agent_or_role`=信封覆盖谁(exec 池的
+canonical 实例或角色标签);`active_from`/`expires_at`=时间界;`max_tasks`=次数界(达上限回落);
+`task_selector`=覆盖哪些任务,**至少填一项、无通配**:`task_mode`(明确类)或 `project` 或
+`task_ids: ["AIPOS-x", ...]`(精确集合)。呈 Owner 过目 dry-run 预览
+(`data.autonomy_policy_grant=true` + 计划写 `5_tasks/policies/<policy_id>.md` + `.../owner_decisions/<decision_id>.md`)。
+
+> **为何这条路不用填 owner_approval_evidence(AIPOS-250 设计裁定:放宽)**:一般 owner_decision 的
+> `owner_approval_evidence` 是为**带外**(out-of-band,如聊天里 Owner 批准)审批留证。而信封的批准是
+> **带内**——就是下一步 confirm 时你**亲手点的 harness 弹窗**。让顾问再手工编一段带外证据,既冗余、
+> 又诱导编造(为一个正在发生的批准伪造证据字段)。故信封路径**不要求**证据块:gate 自动落一条**如实的
+> 带内证据标记**(`capture_method: harness_owner_confirm`,`evidence_hash` 留空——本就没有带外工件可哈希),
+> 其余 `applies_to`/`approval_scope`/`capability_scope` 由策略派生。你只填 `decision_id`+`autonomy_policy`。
+
+**2. 亲手确认(唯一人手门)**:`lybra_owner_decision_record_confirm`(带 dry-run 返回的
+`dry_run_token` + **`actor: owner`(必须与 dry-run 的 actor 一致,否则
+`execute actor does not match dry-run actor`)** + `owner_confirmation_token: OWNER_CONFIRMED`)
+→ **harness ask 弹窗,Owner 亲手点** → 落盘策略工件(`status: active` /
+`approved_by_owner: true` / `owner_approval_ref` 指回本决策)+ 一条 owner 决策记录。**这一按 =
+预授权非委托的"门"**;该工具已钉进上面的 `permissions.ask`,结构上必弹窗。
+
+**3. 运行时(你不参与)**:executor 带 `autonomy_mode=PreAuthorized` + `owner_policy_ref=<policy_id>`
+claim。gate 严格 AND 匹配(`task_selector ∧ agent/role ∧ 时间窗 ∧ 已放行数<max_tasks ∧
+status==active`):
+- **信封内** → **一段式自动放行**(claim 直接落盘,无逐单 confirm);记录标 `autonomy_mode=
+  PreAuthorized` + `owner_policy_ref` 指回策略,可审计"因策略 P、Owner 于 T 授权"。
+- **信封外 / 超额 / 过期 / 撤销 / 伪造 ref** → **回落 Supervised**(逐单 owner_confirm,弹窗人手放行)。
+
+**4. 撤销/到期**:等 `expires_at` 过期即失效;或**撤销** = 一次 owner 动作把工件
+`status: active` → `status: revoked`(留痕),gate 下次 claim 即读到、即时回落 Supervised。达
+`max_tasks` 次数上限同理回落。有界 = 时间界 + 次数界,达任一界即回落。
+
+**红线口径(不可越)**:预授权≠委托(那一按是 Owner 的、在授权时刻);顾问/agent **永不**替 Owner
+按门,运行时无任何 agent 侧 confirm 动作;`owner_confirm` 永禁免审白名单不变;信封**只放行 claim**,
+return/publish/audit 恒逐单。
+
 ## 读治理真相(读面策略)
 结构化真相走只读 MCP 工具(queue/task_preview[含审计判定]/validate/project_status/
 context_pack)。治理叙述文档(decision_log/roadmap/project_status.md/reports)与 audit_verdict
@@ -182,6 +250,9 @@ Owner 确认落地。
 - draft 是提案区,不是真相;落地(publish)永远过 Owner 门(结构性 owner_confirm)。
 - 出卡顺序是你的 agent 层编排,Lybra 零调度。
 - 执行 ≠ 审计的独立性由 gate 绑实例强制;你不得给自己编排的工作配亲缘审计者。
-- **零 autonomy(R-5)**:任务卡的 `autonomy_mode` 字段存在(默认 `Supervised`),但本 v1.0
-  路径**不实现任何免确认路径**——每次 claim/publish 都逐单人手放行。策略化预授权是独立的
-  后续片,不在此处。
+- **预授权 ≠ 委托(AIPOS-250 生死线)**:第一档自动化 `PreAuthorized` **只对 claim**,且靠
+  Owner **事先亲手确认**一段有界信封(见下「预授权信封」)。运行时是 gate **执行已授权策略**
+  的结构判定,**不是**模型重新判断——那一按是 Owner 的、发生在授权时刻,从未消失。你(顾问)
+  **永不替 Owner 按门**,运行时也没有任何 agent 侧 confirm 动作。**return / publish / audit
+  仍逐单人手放行**(它们的 `autonomy_mode` 恒 `Supervised`,免确认路径本片不碰)。`owner_confirm`
+  永禁免审白名单不变(F-06)。

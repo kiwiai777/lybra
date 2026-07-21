@@ -64,12 +64,19 @@ lybra agent watch --gate-url http://127.0.0.1:7118 \
 2. 按输出的三态行动(每态自带下一步引导):
    - **"你已持有 <task>"** → 一 session 一 task:先完成/return 手头任务,不接新活。
    - **可认领列表** → 注意:**列表是建议,门才是真相**(这只是按 assigned_to 匹配的
-     咨询性预过滤;认领资格最终由 gate 校验)。向用户复述任务、确认后走 supervised
-     claim:调 `lybra_queue_claim_dry_run`(actor=你,agent_instance=你的 canonical
-     实例,autonomy_mode=Supervised,**必带 active_session_id=<当前会话标识>**)→
-     把 dry-run 结果报给 Owner,由 Owner 在 TUI `/confirm`(OOB)放行。
-     **你永远不能自己 confirm——executor token 没有那个 scope,SCOPE_DENIED 是结构,
-     不是故障。**
+     咨询性预过滤;认领资格最终由 gate 校验)。向用户复述任务、确认后调
+     `lybra_queue_claim_dry_run`(actor=你,agent_instance=你的 canonical 实例,
+     **必带 active_session_id=<当前会话标识>**)。认领怎么放行由 gate 判定,你不预判:
+     - **信封内**(Owner 事先亲手确认过一段有界 autonomy 策略、且此单落在其中)→ claim
+       **自动放行、无需报 Owner**;应答 `autonomy_mode=PreAuthorized`,claim 记录标
+       PreAuthorized 并 `owner_policy_ref` 指回那条策略。**这不是委托**:Owner 那一按发生
+       在授权策略时,运行时只是 gate 执行已授权信封,你没有也不需要 confirm 动作。
+     - **信封外/过期/次数用尽/策略被撤销** → 回落逐单:应答 `autonomy_mode=Supervised`,
+       把 dry-run 结果报给 Owner,由 Owner 在 TUI `/confirm`(OOB)放行。
+     是否在信封内**由 gate 应答为准,你不自行假设**。可选带 `actual_model` /
+     `reported_tokens`(自报,喂能力账本;门只记录、不校验真伪)。
+     **你永远不能自己 confirm——executor token 没有 owner_confirm scope,SCOPE_DENIED 是结构,
+     不是故障;PreAuthorized 也不给你 confirm 能力,它由 gate 依已授权策略直接落盘。**
    - **"暂无可认领"** → watch 会继续等;超时退出后告知用户,询问是否重进。
 3. claim 成功 → 本会话绑定该任务直到 return/complete;期间不再跑 watch、不接新活。
 

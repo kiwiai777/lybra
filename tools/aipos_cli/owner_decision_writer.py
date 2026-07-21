@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tools.aipos_cli.autonomy_policy import (
+    POLICIES_DIR,
+    POLICY_ID_PATTERN,
+    build_autonomy_policy_markdown,
+)
 from tools.aipos_cli.record_writer import render_markdown
 
 OWNER_DECISION_RECORDS_DIR = Path("5_tasks/records/owner_decisions")
@@ -299,6 +304,153 @@ def _metadata(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_autonomy_policy(
+    value: Any, *, decision_id: str, blocking_reasons: list[str]
+) -> dict[str, Any] | None:
+    """AIPOS-250: OPTIONAL — when an owner decision GRANTS a PreAuthorized autonomy envelope,
+    the payload carries an autonomy_policy block. Validating and materializing the policy
+    artifact HERE means the envelope only lands when the owner_decision_record itself lands
+    (owner_confirm-gated on confirm) — 'pre-authorization = one Owner hand-confirm', red line 1.
+    Absent this block, owner_decision behaviour is 100% unchanged."""
+    if value in (None, ""):
+        return None
+    if not isinstance(value, dict):
+        _add(blocking_reasons, "autonomy_policy must be a mapping")
+        return None
+
+    policy_id = str(value.get("policy_id") or "").strip()
+    if not policy_id:
+        _add(blocking_reasons, "Missing required field: autonomy_policy.policy_id")
+    elif not POLICY_ID_PATTERN.fullmatch(policy_id):
+        _add(blocking_reasons, "Invalid autonomy_policy.policy_id format")
+
+    agent_or_role = str(value.get("agent_or_role") or "").strip()
+    if not agent_or_role:
+        _add(blocking_reasons, "Missing required field: autonomy_policy.agent_or_role")
+
+    active_from = _parse_iso_datetime(value.get("active_from"), "autonomy_policy.active_from", blocking_reasons)
+    expires_at = _parse_iso_datetime(value.get("expires_at"), "autonomy_policy.expires_at", blocking_reasons)
+    if active_from and expires_at:
+        af = datetime.fromisoformat(active_from.replace("Z", "+00:00"))
+        ex = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if ex <= af:
+            _add(blocking_reasons, "autonomy_policy.expires_at must be after active_from")
+
+    max_tasks_raw = value.get("max_tasks")
+    try:
+        max_tasks = int(max_tasks_raw)
+    except (TypeError, ValueError):
+        max_tasks = 0
+        _add(blocking_reasons, "autonomy_policy.max_tasks must be an integer")
+    if max_tasks_raw is not None and max_tasks <= 0:
+        _add(blocking_reasons, "autonomy_policy.max_tasks must be a positive count bound")
+
+    selector = value.get("task_selector")
+    if not isinstance(selector, dict):
+        selector = {}
+        _add(blocking_reasons, "autonomy_policy.task_selector must be a mapping")
+    sel_mode = str(selector.get("task_mode") or "").strip()
+    sel_project = str(selector.get("project") or "").strip()
+    sel_ids_raw = selector.get("task_ids")
+    sel_ids = [str(item).strip() for item in sel_ids_raw if str(item).strip()] if isinstance(sel_ids_raw, list) else []
+    if sel_ids_raw not in (None, []) and not isinstance(sel_ids_raw, list):
+        _add(blocking_reasons, "autonomy_policy.task_selector.task_ids must be a list of strings")
+    if not (sel_mode or sel_project or sel_ids):
+        _add(blocking_reasons, "autonomy_policy.task_selector must set at least one of task_mode/project/task_ids (no wildcard envelope)")
+
+    return {
+        "policy_id": policy_id,
+        "agent_or_role": agent_or_role,
+        "active_from": active_from,
+        "expires_at": expires_at,
+        "max_tasks": max_tasks,
+        "task_selector_task_mode": sel_mode,
+        "task_selector_project": sel_project,
+        "task_selector_task_ids": sel_ids,
+        "owner_approval_ref": decision_id,
+    }
+
+
+def _synthesize_policy_grant_record(
+    payload: dict[str, Any],
+    autonomy_policy: dict[str, Any] | None,
+    decision_id: str,
+    actor: str | None,
+) -> dict[str, Any]:
+    """Build a complete, HONEST owner_decision_record for the envelope-arming path WITHOUT demanding
+    the heavy AIPOS-110 out-of-band evidence. All values derive deterministically from the policy +
+    a few payload scalars (so the dry-run↔confirm re-run yields an identical snapshot; NO now())."""
+    ap = autonomy_policy or {}
+    policy_id = str(ap.get("policy_id") or "").strip()
+    agent_or_role = str(ap.get("agent_or_role") or "").strip()
+    active_from = str(ap.get("active_from") or "").strip()   # already ISO-normalized by _normalize_autonomy_policy
+    expires_at = str(ap.get("expires_at") or "").strip()
+    project = str(ap.get("task_selector_project") or "").strip() or str(payload.get("project") or "").strip() or None
+    decided_by = str(payload.get("decided_by_ref") or actor or "owner").strip() or "owner"
+    captured_by = str(payload.get("captured_by") or decided_by).strip() or "owner.console"
+    summary = str(
+        payload.get("decision_summary")
+        or f"Arm PreAuthorized autonomy envelope {policy_id} covering {agent_or_role}."
+    ).strip()
+    external_ref = f"autonomy_policy:{policy_id}"
+    policy_ref_path = f"5_tasks/policies/{policy_id}.md"
+    # TRUTHFUL in-band evidence: the approval IS the live harness owner_confirm at confirm time —
+    # not an out-of-band artifact. No fabricated evidence_hash; capture_method names the real gate.
+    evidence = {
+        "evidence_id": f"inband-owner-confirm:{policy_id}",
+        "source_tag": "owner_console",
+        "client_tag": project,
+        "external_ref": external_ref,
+        "approval_actor_ref": decided_by,
+        "approval_timestamp": active_from,
+        "approval_intent": "arm_autonomy_envelope",
+        "evidence_hash": "",  # no out-of-band artifact to hash — approval is in-band (harness confirm)
+        "evidence_ref": "harness:owner_confirm",
+        "captured_by": captured_by,
+        "capture_method": "harness_owner_confirm",
+        "redaction_status": "not_applicable",
+        "refs": [policy_ref_path],
+    }
+    applies_to = {
+        "project": project,
+        "task_id": None,
+        "draft_path": None,
+        "orchestration_id": None,
+        "iteration_id": None,
+        "event_id": None,
+        "external_ref": external_ref,
+    }
+    approval_scope = {
+        "operation": "owner_decision_record",
+        "authority_boundary": f"arm PreAuthorized autonomy envelope {policy_id}",
+        "allowed_next_action": "preauthorized_claim_autorelease",
+        "expires_at": expires_at or None,
+    }
+    return {
+        "decision_id": decision_id,
+        "decision_type": str(payload.get("decision_type") or "grant_autonomy_policy").strip() or "grant_autonomy_policy",
+        "decision_status": str(payload.get("decision_status") or "approved").strip() or "approved",
+        "decided_at": active_from,
+        "decided_by_ref": decided_by,
+        "captured_by": captured_by,
+        "capture_surface": str(payload.get("capture_surface") or "mcp").strip() or "mcp",
+        "decision_summary": summary,
+        "decision_rationale": str(payload.get("decision_rationale") or "").strip() or None,
+        "applies_to": applies_to,
+        "approval_scope": approval_scope,
+        "owner_approval_evidence": evidence,
+        "refs": [policy_ref_path],
+        "capability_scope": {
+            "token_ref": "owner_console",
+            "operations": ["owner_decision_record"],
+            "projects": [project] if project else [],
+            "expires_at": expires_at,
+            "evidence_ref": None,
+        },
+        "recorded_by": actor or captured_by or None,
+    }
+
+
 def build_owner_decision_record(
     repo_root: Path,
     payload: dict[str, Any],
@@ -311,45 +463,65 @@ def build_owner_decision_record(
     if not isinstance(payload, dict):
         raise TypeError("payload must be a mapping")
 
-    for field in REQUIRED_PAYLOAD_FIELDS:
-        if _is_missing(payload.get(field)):
-            _add(blocking_reasons, f"Missing required field: {field}")
-
     decision_id = _normalize_decision_id(payload.get("decision_id"), blocking_reasons)
-    decision_type = _normalize_text(payload.get("decision_type"), field="decision_type", blocking_reasons=blocking_reasons, max_length=96)
-    decision_status = _normalize_text(payload.get("decision_status"), field="decision_status", blocking_reasons=blocking_reasons, max_length=64)
-    if decision_status and decision_status not in ALLOWED_DECISION_STATUSES:
-        _add(blocking_reasons, "Invalid decision_status")
-    capture_surface = _normalize_text(payload.get("capture_surface"), field="capture_surface", blocking_reasons=blocking_reasons, max_length=64)
-    if capture_surface and capture_surface not in ALLOWED_CAPTURE_SURFACES:
-        _add(blocking_reasons, "Invalid capture_surface")
-    applies_to = _normalize_applies_to(payload.get("applies_to"), blocking_reasons)
-    approval_scope = _normalize_approval_scope(payload.get("approval_scope"), blocking_reasons)
-    evidence = _normalize_evidence(payload.get("owner_approval_evidence"), blocking_reasons)
-    capability_scope = _normalize_capability_scope(payload.get("capability_scope"), project=applies_to.get("project"), blocking_reasons=blocking_reasons)
+    autonomy_policy = _normalize_autonomy_policy(
+        payload.get("autonomy_policy"), decision_id=decision_id, blocking_reasons=blocking_reasons
+    )
+    is_policy_grant = payload.get("autonomy_policy") not in (None, "")
 
-    if applies_to.get("project") and evidence.get("client_tag") and applies_to["project"] != evidence["client_tag"]:
-        _add(blocking_reasons, "owner_approval_evidence.client_tag must match applies_to.project")
-    if applies_to.get("external_ref") and evidence.get("external_ref") and applies_to["external_ref"] != evidence["external_ref"]:
-        _add(blocking_reasons, "owner_approval_evidence.external_ref must match applies_to.external_ref")
+    if is_policy_grant:
+        # AIPOS-250 design decision (relax): arming a PreAuthorized envelope's approval is IN-BAND —
+        # the live harness owner_confirm press at confirm time IS the approval. The heavy AIPOS-110
+        # out-of-band owner_approval_evidence is redundant here (and demanding it would invite the
+        # advisor to FABRICATE evidence for an approval that is happening live). So this path does
+        # NOT require the advisor to supply owner_approval_evidence / applies_to / approval_scope /
+        # capability_scope: the record is synthesized from the policy + a TRUTHFUL in-band evidence
+        # marker (capture_method=harness_owner_confirm). Advisor supplies only decision_id + the
+        # autonomy_policy block. The non-grant owner_decision path is unchanged (full AIPOS-110 schema).
+        normalized_record = _synthesize_policy_grant_record(payload, autonomy_policy, decision_id, actor)
+    else:
+        for field in REQUIRED_PAYLOAD_FIELDS:
+            if _is_missing(payload.get(field)):
+                _add(blocking_reasons, f"Missing required field: {field}")
 
-    normalized_record = {
-        "decision_id": decision_id,
-        "decision_type": decision_type,
-        "decision_status": decision_status,
-        "decided_at": _parse_iso_datetime(payload.get("decided_at"), "decided_at", blocking_reasons),
-        "decided_by_ref": _normalize_text(payload.get("decided_by_ref"), field="decided_by_ref", blocking_reasons=blocking_reasons, max_length=160),
-        "captured_by": _normalize_text(payload.get("captured_by"), field="captured_by", blocking_reasons=blocking_reasons, max_length=160),
-        "capture_surface": capture_surface,
-        "decision_summary": _normalize_text(payload.get("decision_summary"), field="decision_summary", blocking_reasons=blocking_reasons, max_length=320),
-        "decision_rationale": str(payload.get("decision_rationale") or "").strip() or None,
-        "applies_to": applies_to,
-        "approval_scope": approval_scope,
-        "owner_approval_evidence": evidence,
-        "refs": _normalize_list(payload.get("refs"), "refs", blocking_reasons),
-        "capability_scope": capability_scope,
-        "recorded_by": actor or str(payload.get("captured_by") or "").strip() or None,
-    }
+        decision_type = _normalize_text(payload.get("decision_type"), field="decision_type", blocking_reasons=blocking_reasons, max_length=96)
+        decision_status = _normalize_text(payload.get("decision_status"), field="decision_status", blocking_reasons=blocking_reasons, max_length=64)
+        if decision_status and decision_status not in ALLOWED_DECISION_STATUSES:
+            _add(blocking_reasons, "Invalid decision_status")
+        capture_surface = _normalize_text(payload.get("capture_surface"), field="capture_surface", blocking_reasons=blocking_reasons, max_length=64)
+        if capture_surface and capture_surface not in ALLOWED_CAPTURE_SURFACES:
+            _add(blocking_reasons, "Invalid capture_surface")
+        applies_to = _normalize_applies_to(payload.get("applies_to"), blocking_reasons)
+        approval_scope = _normalize_approval_scope(payload.get("approval_scope"), blocking_reasons)
+        evidence = _normalize_evidence(payload.get("owner_approval_evidence"), blocking_reasons)
+        capability_scope = _normalize_capability_scope(payload.get("capability_scope"), project=applies_to.get("project"), blocking_reasons=blocking_reasons)
+
+        if applies_to.get("project") and evidence.get("client_tag") and applies_to["project"] != evidence["client_tag"]:
+            _add(blocking_reasons, "owner_approval_evidence.client_tag must match applies_to.project")
+        if applies_to.get("external_ref") and evidence.get("external_ref") and applies_to["external_ref"] != evidence["external_ref"]:
+            _add(blocking_reasons, "owner_approval_evidence.external_ref must match applies_to.external_ref")
+
+        normalized_record = {
+            "decision_id": decision_id,
+            "decision_type": decision_type,
+            "decision_status": decision_status,
+            "decided_at": _parse_iso_datetime(payload.get("decided_at"), "decided_at", blocking_reasons),
+            "decided_by_ref": _normalize_text(payload.get("decided_by_ref"), field="decided_by_ref", blocking_reasons=blocking_reasons, max_length=160),
+            "captured_by": _normalize_text(payload.get("captured_by"), field="captured_by", blocking_reasons=blocking_reasons, max_length=160),
+            "capture_surface": capture_surface,
+            "decision_summary": _normalize_text(payload.get("decision_summary"), field="decision_summary", blocking_reasons=blocking_reasons, max_length=320),
+            "decision_rationale": str(payload.get("decision_rationale") or "").strip() or None,
+            "applies_to": applies_to,
+            "approval_scope": approval_scope,
+            "owner_approval_evidence": evidence,
+            "refs": _normalize_list(payload.get("refs"), "refs", blocking_reasons),
+            "capability_scope": capability_scope,
+            "recorded_by": actor or str(payload.get("captured_by") or "").strip() or None,
+        }
+    # AIPOS-250: round-trip the RAW autonomy_policy block through original_payload so the confirm
+    # re-run (which rebuilds from original_payload) re-materializes the policy artifact identically.
+    if autonomy_policy is not None and payload.get("autonomy_policy") is not None:
+        normalized_record["autonomy_policy"] = payload.get("autonomy_policy")
 
     target_path = str(OWNER_DECISION_RECORDS_DIR / f"{decision_id}.md") if decision_id else None
     target_file = repo_root / target_path if target_path else None
@@ -368,6 +540,37 @@ def build_owner_decision_record(
             }
         )
 
+    # AIPOS-250: when this owner decision GRANTS a PreAuthorized envelope, plan (and on confirm,
+    # write) the policy artifact alongside the decision record. status=active + approved_by_owner
+    # is stamped by the gate only through this owner_confirm-gated path.
+    policy_path = None
+    policy_file = None
+    policy_markdown = ""
+    if autonomy_policy is not None and autonomy_policy.get("policy_id"):
+        policy_path = str(POLICIES_DIR / f"{autonomy_policy['policy_id']}.md")
+        policy_file = repo_root / policy_path
+        if policy_file.exists():
+            _add(blocking_reasons, f"Autonomy policy already exists: {policy_path}")
+        policy_markdown = build_autonomy_policy_markdown(
+            policy_id=autonomy_policy["policy_id"],
+            agent_or_role=autonomy_policy["agent_or_role"],
+            active_from=autonomy_policy["active_from"],
+            expires_at=autonomy_policy["expires_at"],
+            max_tasks=autonomy_policy["max_tasks"],
+            owner_approval_ref=autonomy_policy["owner_approval_ref"],
+            task_selector_task_mode=autonomy_policy["task_selector_task_mode"],
+            task_selector_project=autonomy_policy["task_selector_project"],
+            task_selector_task_ids=autonomy_policy["task_selector_task_ids"],
+        )
+        planned_writes.append(
+            {
+                "path": policy_path,
+                "kind": "create",
+                "type": "record_markdown",
+                "record_type": "owner_autonomy_policy",
+            }
+        )
+
     verdict = "BLOCK" if blocking_reasons else ("WARN" if warnings else "PASS")
     result: dict[str, Any] = {
         "action": "owner_decision_record",
@@ -381,7 +584,14 @@ def build_owner_decision_record(
         "would_write": verdict != "BLOCK" and bool(target_path),
         "rendered_markdown": rendered_markdown,
         "original_payload": normalized_record,
-        "capability_scope": capability_scope,
+        # read from the record (defined in BOTH branches) — the grant path never binds a local
+        # capability_scope of its own (AIPOS-250 relax: it is synthesized inside the record).
+        "capability_scope": normalized_record.get("capability_scope"),
+        # AIPOS-250: surfaced so the confirm handler can require owner_confirm for a policy grant
+        # (mirrors claim/return/publish confirm) — a policy grant is a consequential truth mutation.
+        "autonomy_policy_grant": bool(autonomy_policy is not None and autonomy_policy.get("policy_id")),
+        "autonomy_policy_id": autonomy_policy.get("policy_id") if autonomy_policy else None,
+        "autonomy_policy_path": policy_path,
     }
 
     if dry_run:
@@ -393,5 +603,8 @@ def build_owner_decision_record(
 
     target_file.parent.mkdir(parents=True, exist_ok=True)
     target_file.write_text(rendered_markdown, encoding="utf-8")
+    if policy_file is not None and policy_markdown:
+        policy_file.parent.mkdir(parents=True, exist_ok=True)
+        policy_file.write_text(policy_markdown, encoding="utf-8")
     result["wrote"] = True
     return result

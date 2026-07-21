@@ -54,7 +54,13 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
         # gated publish surface is reachable via serve-rotate creds (DG-11: the Owner runs
         # dry_run + confirm in one proceed action). Only owner — NOT executor/copilot.
         # The two-scope rule is unchanged: publish confirm still also needs owner_confirm.
-        "scopes": ["queue_claim", "queue_return", "owner_confirm", "draft_publish"],
+        # AIPOS-250: the Owner also holds owner_decision_record so the Owner can DRAFT+ARM a
+        # PreAuthorized autonomy envelope (owner_autonomy_policy) via serve-rotate creds — it is
+        # an Owner-only write surface (OWNER_DECISION_SCOPE) whose confirm additionally requires
+        # owner_confirm when it grants a policy. Without this scope the owner-console SKILL's
+        # envelope flow is unreachable (the dry_run/confirm tools never appear). Moved off the
+        # path-B-only exemption (test_scope_reachability CAPABILITY_TOKEN_EXEMPT) accordingly.
+        "scopes": ["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record"],
     },
     {
         "role": "owner-dispatch",

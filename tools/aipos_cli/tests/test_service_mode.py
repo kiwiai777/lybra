@@ -515,7 +515,12 @@ class ConnectionLocationTests(unittest.TestCase):
             )
         scopes = {t["role"]: sorted(t["scopes"]) for t in config["tokens"]}
         self.assertEqual(scopes["executor"], sorted(["queue_claim", "queue_return"]))
-        self.assertEqual(scopes["owner"], sorted(["queue_claim", "queue_return", "owner_confirm", "draft_publish"]))
+        # AIPOS-250: owner also holds owner_decision_record so the owner-console can arm a
+        # PreAuthorized autonomy envelope via serve-rotate creds (Owner-only write surface).
+        self.assertEqual(
+            scopes["owner"],
+            sorted(["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record"]),
+        )
         self.assertEqual(scopes["copilot"], [])
         self.assertEqual(scopes["auditor"], sorted(["queue_claim", "audit_verdict"]))
         self.assertEqual(scopes["owner-dispatch"], ["audit_dispatch"])

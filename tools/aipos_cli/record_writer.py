@@ -154,6 +154,8 @@ MCP_CLAIM_FRONTMATTER_ORDER = [
     "actor",
     "canonical_agent_instance",
     "owner_policy_ref",
+    "actual_model",
+    "reported_tokens",
     "claimed_at",
     "from_state",
     "to_state",
@@ -210,6 +212,8 @@ MCP_RETURN_FRONTMATTER_ORDER = [
     "actor",
     "canonical_agent_instance",
     "owner_policy_ref",
+    "actual_model",
+    "reported_tokens",
     "claim_id",
     "session_id",
     "returned_at",
@@ -408,6 +412,9 @@ def build_mcp_claim_record_markdown(
     claim_id: str,
     session_id: str,
     claimed_at: str,
+    autonomy_mode: str = "Supervised",
+    actual_model: str | None = None,
+    reported_tokens: int | None = None,
     claim_policy: str | None = None,
     claim_match_basis: str | None = None,
     claim_requirements_hash: str | None = None,
@@ -424,10 +431,16 @@ def build_mcp_claim_record_markdown(
         "task_path": task_path,
         "surface": "mcp",
         "operation": "queue_claim",
-        "autonomy_mode": "Supervised",
+        # AIPOS-250: autonomy_mode is now read from the caller (Supervised | PreAuthorized),
+        # no longer hardcoded — a PreAuthorized envelope auto-release stamps PreAuthorized so the
+        # record self-attributes to the policy that permitted it.
+        "autonomy_mode": str(autonomy_mode or "Supervised").strip() or "Supervised",
         "actor": actor,
         "canonical_agent_instance": canonical_agent_instance,
         "owner_policy_ref": owner_policy_ref,
+        # AIPOS-250 (capability ledger): agent-REPORTED, not gate-measured (disclosure #15).
+        "actual_model": str(actual_model or "").strip(),
+        "reported_tokens": int(reported_tokens) if isinstance(reported_tokens, int) else "",
         "claimed_at": claimed_at,
         "from_state": "pending",
         "to_state": "claimed",
@@ -449,7 +462,7 @@ def build_mcp_claim_record_markdown(
             "",
             "## Summary",
             "",
-            f"- Task `{task_id}` was claimed by `{canonical_agent_instance}` through the Supervised MCP claim surface.",
+            f"- Task `{task_id}` was claimed by `{canonical_agent_instance}` through the {metadata['autonomy_mode']} MCP claim surface.",
             f"- Owner policy: `{owner_policy_ref}`.",
             "",
             "## Boundary",
@@ -471,6 +484,7 @@ def build_mcp_claim_session_record_markdown(
     session_id: str,
     claim_id: str,
     created_at: str,
+    autonomy_mode: str = "Supervised",
 ) -> str:
     metadata = {
         "record_type": "session_record",
@@ -478,7 +492,9 @@ def build_mcp_claim_session_record_markdown(
         "task_id": task_id,
         "task_path": task_path,
         "surface": "mcp",
-        "autonomy_mode": "Supervised",
+        # AIPOS-250: the session is a claim-side artifact — reflect the claim's autonomy_mode
+        # (Supervised | PreAuthorized) so it stays consistent with the claim record.
+        "autonomy_mode": str(autonomy_mode or "Supervised").strip() or "Supervised",
         "actor": actor,
         "canonical_agent_instance": canonical_agent_instance,
         "owner_policy_ref": owner_policy_ref,
@@ -519,6 +535,8 @@ def build_mcp_return_record_markdown(
     result_summary: str | None,
     artifact_refs: list[str],
     completion_report_ref: str | None,
+    actual_model: str | None = None,
+    reported_tokens: int | None = None,
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
@@ -532,10 +550,15 @@ def build_mcp_return_record_markdown(
         "task_path": task_path,
         "surface": "mcp",
         "operation": "queue_return",
+        # AIPOS-250 red line 4: return stays Supervised-only (per-task owner_confirm); the
+        # PreAuthorized tier is CLAIM-only this slice. Do NOT parametrize this.
         "autonomy_mode": "Supervised",
         "actor": actor,
         "canonical_agent_instance": canonical_agent_instance,
         "owner_policy_ref": owner_policy_ref,
+        # AIPOS-250 (capability ledger): agent-REPORTED, not gate-measured (disclosure #15).
+        "actual_model": str(actual_model or "").strip(),
+        "reported_tokens": int(reported_tokens) if isinstance(reported_tokens, int) else "",
         "claim_id": claim_id,
         "session_id": session_id,
         "returned_at": returned_at,

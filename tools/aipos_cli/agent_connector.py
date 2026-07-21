@@ -153,9 +153,12 @@ def render(result: dict[str, Any], *, watching: bool = False) -> str:
         lines += [_task_line(task) for task in result["claimable"]]
         lines.append(_HYGIENE_HINT)
         lines.append(
-            "→ 下一步:选定一单,走 lybra_queue_claim_dry_run(actor=你,"
-            "autonomy_mode=Supervised,带 active_session_id)→ 把 dry-run 结果报 Owner,"
-            "由 Owner OOB confirm——你不能自行 confirm。"
+            "→ 下一步:选定一单,走 lybra_queue_claim_dry_run(actor=你,带 active_session_id)。"
+            "认领结果由门(gate)判定,你不预判、不自行 confirm:"
+            "若此单落在你的预授权信封内(Owner 事先签发的 autonomy 策略),claim 会自动放行、"
+            "无需报 Owner(应答 autonomy_mode=PreAuthorized,记录指回策略);"
+            "否则回落逐单——把 dry-run 结果报 Owner,由 Owner OOB confirm(应答 autonomy_mode=Supervised)。"
+            "是否在信封内以 gate 应答为准。"
         )
         return "\n".join(lines)
     if watching:

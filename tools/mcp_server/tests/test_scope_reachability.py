@@ -29,15 +29,18 @@ from tools.aipos_cli.service_mode import ROLE_SPECS, build_connection_config, wr
 from tools.mcp_server import tools as gate_tools
 from tools.mcp_server.http_sse import DEFAULT_HTTP_HOST, HttpSseConfig, build_http_server, load_service_role_registry
 
-# Scopes intentionally NOT granted to any service role: the AIPOS-109 (intake_submit) and AIPOS-113
-# (owner_decision_record) stdio MCP controlled write-tools are reached via path B — an operator-minted
-# LYBRA_CAPABILITY_TOKEN — not service roles. Each exempt scope is PROVEN reachable via path B below,
-# so EXEMPT cannot be used as an escape hatch for a future missed role grant.
-CAPABILITY_TOKEN_EXEMPT = {"intake_submit", "owner_decision_record"}
+# Scopes intentionally NOT granted to any service role: the AIPOS-109 (intake_submit) stdio MCP
+# controlled write-tool is reached via path B — an operator-minted LYBRA_CAPABILITY_TOKEN — not a
+# service role. Each exempt scope is PROVEN reachable via path B below, so EXEMPT cannot be used as
+# an escape hatch for a future missed role grant.
+# AIPOS-250: owner_decision_record MOVED OFF this exemption — it is now granted to the owner role
+# (so the owner-console PreAuthorized-envelope flow is reachable via serve-rotate creds); it is
+# covered by the rotate union, not by path B. (Path B still works code-wise; it is simply no longer
+# the ONLY path, so it is not asserted as exempt here.)
+CAPABILITY_TOKEN_EXEMPT = {"intake_submit"}
 # scope -> its dry-run tool (maintained alongside tools.py); every EXEMPT scope must appear here.
 EXEMPT_DRY_RUN_TOOL = {
     "intake_submit": "lybra_intake_submit_dry_run",
-    "owner_decision_record": "lybra_owner_decision_record_dry_run",
 }
 
 
@@ -119,6 +122,30 @@ class ScopeReachabilityTests(unittest.TestCase):
                 c = GateClient(url, owner_token); c.initialize()
                 r = c.call_tool("lybra_draft_publish_dry_run", {"path": "5_tasks/drafts/x.md", "actor": "owner"})
         self.assertNotEqual(r.get("error_code"), "SCOPE_DENIED", r)
+
+    # --- T2b (AIPOS-250): owner_decision_record reachable by owner via REAL rotate creds ---
+    def test_owner_decision_record_reachable(self) -> None:
+        config = self._real_rotate_config()
+        registry = load_service_role_registry(self.repo_root / ".lybra" / "local" / "connection.json")
+        owner_token = next(t["token"] for t in config["tokens"] if t["role"] == "owner")
+        with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
+            with self._gate(service_role_registry=registry) as url:
+                c = GateClient(url, owner_token); c.initialize()
+                r = c.call_tool("lybra_owner_decision_record_dry_run", {"actor": "owner"})
+        # not SCOPE_DENIED — the owner-console envelope flow (arm owner_autonomy_policy) is reachable.
+        self.assertNotEqual(r.get("error_code"), "SCOPE_DENIED", r)
+
+    def test_owner_decision_record_denied_for_executor(self) -> None:
+        # ★A1 boundary: owner_decision_record stays Owner-only — executor/planner cannot arm a policy.
+        config = self._real_rotate_config()
+        registry = load_service_role_registry(self.repo_root / ".lybra" / "local" / "connection.json")
+        tokens = {t["role"]: t["token"] for t in config["tokens"]}
+        with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
+            with self._gate(service_role_registry=registry) as url:
+                for role in ("executor", "planner", "copilot"):
+                    c = GateClient(url, tokens[role]); c.initialize()
+                    r = c.call_tool("lybra_owner_decision_record_dry_run", {"actor": role})
+                    self.assertEqual(r.get("error_code"), "SCOPE_DENIED", f"{role}: {r}")
 
     # --- T3: ★A1 not weakened — executor/copilot draft_publish denied via REAL rotate creds ---
     def test_executor_and_copilot_draft_publish_denied(self) -> None:
