@@ -5,31 +5,51 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lybra Overview — Multi-Workspace Dashboard</title>
   <link rel="stylesheet" href="/overview.css">
+  <link rel="stylesheet" href="/i18n.css">
 </head>
 <body>
   <header class="top-bar">
     <div class="top-bar-inner">
       <img src="/assets/lybra_logo_white.png" alt="Lybra" class="brand-logo">
-      <div>
-        <h1 class="brand-title">Lybra Overview</h1>
-        <p class="brand-subtitle">Multi-workspace command center</p>
+      <div style="flex: 1;">
+        <h1 class="brand-title" id="page-title">Lybra Overview</h1>
+        <p class="brand-subtitle" id="page-subtitle">Multi-workspace command center</p>
       </div>
+      <div id="lang-switcher-mount"></div>
     </div>
   </header>
 
   <main>
     <div class="kicker">
       <div class="kicker-box"></div>
-      <span class="kicker-text">Workspaces</span>
+      <span class="kicker-text" id="kicker-text">Workspaces</span>
     </div>
-    <h2 class="section-title">All Projects</h2>
+    <h2 class="section-title" id="section-title">All Projects</h2>
     
     <div id="workspace-grid" class="workspace-grid">
       <div class="loading">Loading workspaces...</div>
     </div>
   </main>
 
+  <script src="/i18n.js"></script>
   <script>
+    // Render page with i18n
+    function renderPage() {
+      // Update static text
+      document.getElementById('page-title').textContent = i18n.t('overview.title');
+      document.getElementById('page-subtitle').textContent = i18n.t('overview.subtitle');
+      document.getElementById('kicker-text').textContent = i18n.t('overview.workspaces');
+      document.getElementById('section-title').textContent = i18n.t('overview.all_projects');
+      
+      // Mount language switcher
+      const switcherMount = document.getElementById('lang-switcher-mount');
+      switcherMount.innerHTML = '';
+      switcherMount.appendChild(i18n.createLanguageSwitcher());
+      
+      // Reload data
+      loadOverview();
+    }
+    
     // Fetch and render workspace overview
     async function loadOverview() {
       const grid = document.getElementById('workspace-grid');
@@ -39,7 +59,7 @@
         const data = await response.json();
         
         if (!data.ok || !data.workspaces || data.workspaces.length === 0) {
-          grid.innerHTML = '<div class="loading">No workspaces configured. Add workspaces to .board_config.json</div>';
+          grid.innerHTML = `<div class="loading">${i18n.t('overview.no_workspaces')}</div>`;
           return;
         }
         
@@ -51,14 +71,14 @@
         });
         
       } catch (error) {
-        grid.innerHTML = `<div class="loading">Error loading overview: ${error.message}</div>`;
+        grid.innerHTML = `<div class="loading">${i18n.t('overview.error')}: ${error.message}</div>`;
       }
     }
     
     function createWorkspaceCard(workspace, index) {
       const card = document.createElement('a');
       card.className = 'workspace-card';
-      card.href = `/workspace/${index}`;
+      card.href = `/workspace/${index}`; // Links to new project-detail page
       
       if (workspace.status === 'error') {
         card.className += ' error';
@@ -78,7 +98,8 @@
       
       const status = document.createElement('span');
       status.className = `workspace-status ${workspace.status}`;
-      status.textContent = workspace.status || 'unknown';
+      const statusKey = `status.${workspace.status || 'unknown'}`;
+      status.textContent = i18n.t(statusKey);
       
       header.appendChild(label);
       header.appendChild(status);
@@ -108,7 +129,7 @@
           
           const labelEl = document.createElement('div');
           labelEl.className = 'queue-label';
-          labelEl.textContent = state;
+          labelEl.textContent = i18n.t(`queue.${state}`);
           
           item.appendChild(count);
           item.appendChild(labelEl);
@@ -124,7 +145,7 @@
       
       const needsTitle = document.createElement('div');
       needsTitle.className = 'needs-owner-title';
-      needsTitle.textContent = 'Needs Owner';
+      needsTitle.textContent = i18n.t('card.needs_owner');
       needsSection.appendChild(needsTitle);
       
       if (workspace.needs_owner && workspace.needs_owner.length > 0) {
@@ -144,13 +165,13 @@
           const more = document.createElement('div');
           more.className = 'needs-owner-item';
           more.style.fontStyle = 'italic';
-          more.textContent = `+ ${workspace.needs_owner.length - 3} more`;
+          more.textContent = `+ ${workspace.needs_owner.length - 3} ${i18n.t('card.more_items')}`;
           needsSection.appendChild(more);
         }
       } else {
         const empty = document.createElement('div');
         empty.className = 'needs-owner-empty';
-        empty.textContent = 'No items waiting for Owner';
+        empty.textContent = i18n.t('card.needs_owner_empty');
         needsSection.appendChild(empty);
       }
       
@@ -163,7 +184,7 @@
         
         const label = document.createElement('span');
         label.className = 'activity-label';
-        label.textContent = 'Recent: ';
+        label.textContent = i18n.t('card.recent_activity') + ': ';
         
         const info = document.createElement('span');
         const timestamp = workspace.recent_activity.timestamp 
@@ -180,7 +201,7 @@
     }
     
     // Load on page ready
-    loadOverview();
+    renderPage();
   </script>
 </body>
 </html>

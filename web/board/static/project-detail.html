@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>项目详情 - Lybra</title>
+  <link rel="stylesheet" href="/overview.css">
+  <link rel="stylesheet" href="/i18n.css">
+  <style>
+    /* Project detail page specific styles */
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--accent-bright);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+      transition: color 0.2s;
+    }
+    
+    .back-link:hover {
+      color: var(--accent);
+    }
+    
+    .project-header {
+      margin-bottom: 2.5rem;
+    }
+    
+    .project-title {
+      font-size: 36px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--text-body);
+      margin-bottom: 0.5rem;
+    }
+    
+    .project-status-badge {
+      display: inline-block;
+      padding: 0.4rem 1rem;
+      background: var(--accent-bright);
+      color: white;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-radius: 4px;
+    }
+    
+    /* Section styles */
+    .detail-section {
+      background: var(--surface-card);
+      border: 1px solid var(--border-default);
+      border-left: 4px solid var(--accent);
+      padding: 1.75rem 2rem;
+      margin-bottom: 1.5rem;
+    }
+    
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 1.25rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 2px solid var(--border-default);
+    }
+    
+    .section-header h3 {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-body);
+    }
+    
+    /* Progress grid */
+    .progress-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 1.25rem;
+    }
+    
+    .progress-item {
+      text-align: center;
+      padding: 1rem;
+      background: rgba(0, 0, 0, 0.02);
+      border-radius: 6px;
+    }
+    
+    .progress-number {
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--accent);
+      line-height: 1;
+      margin-bottom: 0.5rem;
+    }
+    
+    .progress-label {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+    
+    /* Needs owner list */
+    .needs-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    
+    .needs-item {
+      padding: 1rem 1.25rem;
+      background: rgba(0, 0, 0, 0.02);
+      border-left: 3px solid var(--accent-bright);
+      border-radius: 4px;
+    }
+    
+    .needs-item-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 0.5rem;
+    }
+    
+    .needs-task-id {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-body);
+    }
+    
+    .needs-reason {
+      font-size: 13.5px;
+      color: var(--text-secondary);
+      margin-bottom: 0.75rem;
+    }
+    
+    .needs-command {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.5rem 0.75rem;
+      background: rgba(0, 0, 0, 0.05);
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12.5px;
+      color: var(--text-body);
+    }
+    
+    .copy-button {
+      padding: 0.3rem 0.75rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    
+    .copy-button:hover {
+      background: var(--accent-bright);
+    }
+    
+    .copy-button.copied {
+      background: #10b981;
+    }
+    
+    /* Timeline */
+    .timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    
+    .timeline-item {
+      display: flex;
+      gap: 1rem;
+      padding: 0.75rem 1rem;
+      background: rgba(0, 0, 0, 0.02);
+      border-radius: 4px;
+    }
+    
+    .timeline-time {
+      font-size: 12px;
+      color: var(--text-secondary);
+      min-width: 140px;
+      flex-shrink: 0;
+    }
+    
+    .timeline-content {
+      flex: 1;
+    }
+    
+    .timeline-type {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.25rem;
+    }
+    
+    .timeline-description {
+      font-size: 13.5px;
+      color: var(--text-body);
+    }
+    
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 2rem;
+      color: var(--text-secondary);
+      font-style: italic;
+    }
+    
+    /* Advanced section */
+    .advanced-section {
+      margin-top: 3rem;
+      padding-top: 2rem;
+      border-top: 2px solid var(--border-default);
+    }
+    
+    .advanced-header {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      margin-bottom: 1rem;
+    }
+    
+    .debug-link {
+      display: inline-block;
+      padding: 0.75rem 1.25rem;
+      background: rgba(0, 0, 0, 0.05);
+      border: 1px solid var(--border-default);
+      color: var(--text-body);
+      text-decoration: none;
+      border-radius: 4px;
+      font-size: 13.5px;
+      transition: all 0.2s;
+    }
+    
+    .debug-link:hover {
+      background: rgba(0, 0, 0, 0.08);
+      border-color: var(--accent);
+    }
+    
+    .debug-description {
+      font-size: 12.5px;
+      color: var(--text-secondary);
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <header class="top-bar">
+    <div class="top-bar-inner">
+      <img src="/assets/lybra_logo_white.png" alt="Lybra" class="brand-logo">
+      <div style="flex: 1;">
+        <h1 class="brand-title" id="page-title">项目详情</h1>
+        <p class="brand-subtitle" id="page-subtitle">Owner 控制台</p>
+      </div>
+      <div id="lang-switcher-mount"></div>
+    </div>
+  </header>
+
+  <main>
+    <a href="/" class="back-link" id="back-link">
+      ← 返回总览
+    </a>
+    
+    <div id="project-content">
+      <div class="loading">加载中...</div>
+    </div>
+  </main>
+
+  <script src="/i18n.js"></script>
+  <script>
+    // Get workspace index from URL
+    const pathParts = window.location.pathname.split('/');
+    const workspaceIndex = pathParts[2]; // /workspace/{index}
+    
+    // Render page with i18n
+    function renderPage() {
+      // Update static text
+      document.getElementById('page-title').textContent = i18n.t('detail.title');
+      document.getElementById('back-link').textContent = i18n.t('detail.back_to_overview');
+      
+      // Mount language switcher
+      const switcherMount = document.getElementById('lang-switcher-mount');
+      switcherMount.innerHTML = '';
+      switcherMount.appendChild(i18n.createLanguageSwitcher());
+      
+      // Load project data
+      loadProjectDetail();
+    }
+    
+    async function loadProjectDetail() {
+      const container = document.getElementById('project-content');
+      
+      try {
+        // Fetch overview to get workspace info
+        const overviewResponse = await fetch('/api/overview');
+        const overviewData = await overviewResponse.json();
+        
+        if (!overviewData.ok || !overviewData.workspaces || !overviewData.workspaces[workspaceIndex]) {
+          container.innerHTML = `<div class="empty-state">${i18n.t('detail.error_loading')}</div>`;
+          return;
+        }
+        
+        const workspace = overviewData.workspaces[workspaceIndex];
+        
+        // Fetch detailed data for this workspace
+        const queueResponse = await fetch(`/api/queue?workspace=${workspaceIndex}`);
+        const queueData = await queueResponse.json();
+        
+        const needsOwnerResponse = await fetch(`/api/needs-owner?workspace=${workspaceIndex}`);
+        const needsOwnerData = await needsOwnerResponse.json();
+        
+        const recordsResponse = await fetch(`/api/records?workspace=${workspaceIndex}`);
+        const recordsData = await recordsResponse.json();
+        
+        // Render project detail
+        container.innerHTML = '';
+        container.appendChild(createProjectHeader(workspace));
+        container.appendChild(createProgressSection(workspace, queueData));
+        container.appendChild(createNeedsOwnerSection(needsOwnerData));
+        container.appendChild(createTimelineSection(recordsData));
+        container.appendChild(createAdvancedSection(workspaceIndex));
+        
+      } catch (error) {
+        container.innerHTML = `<div class="empty-state">${i18n.t('detail.error_loading')}: ${error.message}</div>`;
+      }
+    }
+    
+    function createProjectHeader(workspace) {
+      const header = document.createElement('div');
+      header.className = 'project-header';
+      
+      const title = document.createElement('h2');
+      title.className = 'project-title';
+      title.textContent = workspace.label || 'Unnamed Project';
+      
+      const badge = document.createElement('span');
+      badge.className = 'project-status-badge';
+      badge.textContent = i18n.t(`status.${workspace.status || 'unknown'}`);
+      
+      header.appendChild(title);
+      header.appendChild(badge);
+      
+      return header;
+    }
+    
+    function createProgressSection(workspace, queueData) {
+      const section = document.createElement('div');
+      section.className = 'detail-section';
+      
+      const header = document.createElement('div');
+      header.className = 'section-header';
+      const title = document.createElement('h3');
+      title.textContent = i18n.t('detail.section.progress');
+      header.appendChild(title);
+      section.appendChild(header);
+      
+      const grid = document.createElement('div');
+      grid.className = 'progress-grid';
+      
+      // Calculate metrics
+      const counts = workspace.queue_counts || {};
+      const claimed = counts.claimed || 0;
+      const pending = counts.pending || 0;
+      const blocked = counts.blocked || 0;
+      const completed = counts.completed || 0;
+      
+      // Needs owner count
+      let needsOwnerCount = 0;
+      if (workspace.needs_owner && workspace.needs_owner.length > 0) {
+        needsOwnerCount = workspace.needs_owner.length;
+      }
+      
+      // Create progress items
+      const items = [
+        { count: claimed, label: i18n.t('detail.progress.in_progress') },
+        { count: needsOwnerCount, label: i18n.t('detail.progress.waiting_review') },
+        { count: pending, label: i18n.t('detail.progress.pending') },
+        { count: blocked, label: i18n.t('detail.progress.blocked') },
+      ];
+      
+      items.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'progress-item';
+        
+        const number = document.createElement('div');
+        number.className = 'progress-number';
+        number.textContent = item.count;
+        
+        const label = document.createElement('div');
+        label.className = 'progress-label';
+        label.textContent = item.label;
+        
+        div.appendChild(number);
+        div.appendChild(label);
+        grid.appendChild(div);
+      });
+      
+      section.appendChild(grid);
+      return section;
+    }
+    
+    function createNeedsOwnerSection(needsOwnerData) {
+      const section = document.createElement('div');
+      section.className = 'detail-section';
+      
+      const header = document.createElement('div');
+      header.className = 'section-header';
+      const title = document.createElement('h3');
+      title.textContent = i18n.t('detail.section.needs_owner');
+      header.appendChild(title);
+      section.appendChild(header);
+      
+      const tasks = needsOwnerData?.data?.tasks || [];
+      
+      if (tasks.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = i18n.t('detail.needs_owner.empty');
+        section.appendChild(empty);
+        return section;
+      }
+      
+      const list = document.createElement('div');
+      list.className = 'needs-list';
+      
+      tasks.forEach(task => {
+        const item = document.createElement('div');
+        item.className = 'needs-item';
+        
+        const itemHeader = document.createElement('div');
+        itemHeader.className = 'needs-item-header';
+        
+        const taskId = document.createElement('div');
+        taskId.className = 'needs-task-id';
+        taskId.textContent = `${i18n.t('detail.needs_owner.task')}: ${task.task_id || 'N/A'}`;
+        itemHeader.appendChild(taskId);
+        
+        item.appendChild(itemHeader);
+        
+        // Reason (translate internal fields to human-readable)
+        const reason = document.createElement('div');
+        reason.className = 'needs-reason';
+        const reasonText = formatNeedsOwnerReason(task);
+        reason.textContent = `${i18n.t('detail.needs_owner.reason')}: ${reasonText}`;
+        item.appendChild(reason);
+        
+        // Next command (if available)
+        const command = generateNextCommand(task);
+        if (command) {
+          const cmdLabel = document.createElement('div');
+          cmdLabel.style.fontSize = '12px';
+          cmdLabel.style.fontWeight = '700';
+          cmdLabel.style.color = 'var(--text-secondary)';
+          cmdLabel.style.marginBottom = '0.5rem';
+          cmdLabel.textContent = i18n.t('detail.needs_owner.command');
+          item.appendChild(cmdLabel);
+          
+          const cmdDiv = document.createElement('div');
+          cmdDiv.className = 'needs-command';
+          
+          const cmdText = document.createElement('code');
+          cmdText.style.flex = '1';
+          cmdText.textContent = command;
+          
+          const copyBtn = document.createElement('button');
+          copyBtn.className = 'copy-button';
+          copyBtn.textContent = i18n.t('detail.needs_owner.copy');
+          copyBtn.onclick = () => {
+            navigator.clipboard.writeText(command);
+            copyBtn.textContent = i18n.t('detail.needs_owner.copied');
+            copyBtn.classList.add('copied');
+            setTimeout(() => {
+              copyBtn.textContent = i18n.t('detail.needs_owner.copy');
+              copyBtn.classList.remove('copied');
+            }, 2000);
+          };
+          
+          cmdDiv.appendChild(cmdText);
+          cmdDiv.appendChild(copyBtn);
+          item.appendChild(cmdDiv);
+        }
+        
+        list.appendChild(item);
+      });
+      
+      section.appendChild(list);
+      return section;
+    }
+    
+    function formatNeedsOwnerReason(task) {
+      // Translate internal reasons to human-readable Chinese/English
+      const reasons = task.needs_owner_reasons || [];
+      if (reasons.length > 0) {
+        return reasons.join(', ');
+      }
+      
+      if (task.verdict === 'NEEDS_OWNER') {
+        return i18n.getCurrentLang() === 'zh' ? '需要 Owner 审批' : 'Requires Owner approval';
+      }
+      
+      return i18n.getCurrentLang() === 'zh' ? '待审核' : 'Pending review';
+    }
+    
+    function generateNextCommand(task) {
+      // Generate appropriate command based on task state
+      const taskId = task.task_id;
+      if (!taskId) return null;
+      
+      // Simple heuristic: if needs owner, suggest review command
+      return `lybra review ${taskId}`;
+    }
+    
+    function createTimelineSection(recordsData) {
+      const section = document.createElement('div');
+      section.className = 'detail-section';
+      
+      const header = document.createElement('div');
+      header.className = 'section-header';
+      const title = document.createElement('h3');
+      title.textContent = i18n.t('detail.section.timeline');
+      header.appendChild(title);
+      section.appendChild(header);
+      
+      const data = recordsData?.data || {};
+      
+      // Collect all records
+      const allRecords = [];
+      ['sessions', 'publishes', 'claims', 'returns', 'audit_dispatches', 'audit_verdicts', 'owner_decisions'].forEach(key => {
+        const records = data[key] || [];
+        records.forEach(rec => {
+          allRecords.push({
+            ...rec,
+            _record_type: key.replace(/_/g, ' ').replace('s', '')
+          });
+        });
+      });
+      
+      if (allRecords.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = i18n.t('detail.timeline.empty');
+        section.appendChild(empty);
+        return section;
+      }
+      
+      // Sort by timestamp (most recent first)
+      allRecords.sort((a, b) => {
+        const timeA = a.timestamp || a.decided_at || a.created_at || '';
+        const timeB = b.timestamp || b.decided_at || b.created_at || '';
+        return timeB.localeCompare(timeA);
+      });
+      
+      const timeline = document.createElement('div');
+      timeline.className = 'timeline';
+      
+      // Show top 10 most recent
+      allRecords.slice(0, 10).forEach(record => {
+        const item = document.createElement('div');
+        item.className = 'timeline-item';
+        
+        const time = document.createElement('div');
+        time.className = 'timeline-time';
+        const timestamp = record.timestamp || record.decided_at || record.created_at || '';
+        time.textContent = timestamp ? new Date(timestamp).toLocaleString() : 'Unknown';
+        
+        const content = document.createElement('div');
+        content.className = 'timeline-content';
+        
+        const typeDiv = document.createElement('div');
+        typeDiv.className = 'timeline-type';
+        const recordType = record.record_type || record._record_type || 'unknown';
+        const typeKey = `detail.timeline.type.${recordType.replace(/_record$/, '').replace(/ /g, '_')}`;
+        typeDiv.textContent = i18n.t(typeKey);
+        
+        const desc = document.createElement('div');
+        desc.className = 'timeline-description';
+        desc.textContent = formatTimelineDescription(record);
+        
+        content.appendChild(typeDiv);
+        content.appendChild(desc);
+        
+        item.appendChild(time);
+        item.appendChild(content);
+        timeline.appendChild(item);
+      });
+      
+      section.appendChild(timeline);
+      return section;
+    }
+    
+    function formatTimelineDescription(record) {
+      // Create human-readable description
+      const taskId = record.task_id || 'N/A';
+      const agent = record.agent_name || record.decided_by_ref || record.captured_by || 'Unknown';
+      
+      const lang = i18n.getCurrentLang();
+      if (lang === 'zh') {
+        return `${agent} 操作了任务 ${taskId}`;
+      } else {
+        return `${agent} performed action on task ${taskId}`;
+      }
+    }
+    
+    function createAdvancedSection(workspaceIndex) {
+      const section = document.createElement('div');
+      section.className = 'advanced-section';
+      
+      const header = document.createElement('div');
+      header.className = 'advanced-header';
+      header.textContent = i18n.t('detail.advanced');
+      section.appendChild(header);
+      
+      const link = document.createElement('a');
+      link.className = 'debug-link';
+      link.href = `/index.html?workspace=${workspaceIndex}`;
+      link.textContent = i18n.t('detail.advanced.debug_view');
+      
+      const desc = document.createElement('div');
+      desc.className = 'debug-description';
+      desc.textContent = i18n.t('detail.advanced.debug_desc');
+      
+      section.appendChild(link);
+      section.appendChild(desc);
+      
+      return section;
+    }
+    
+    // Load on page ready
+    renderPage();
+  </script>
+</body>
+</html>

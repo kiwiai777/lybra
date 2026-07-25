@@ -187,24 +187,48 @@ def _content_type(path: Path) -> str:
     return "application/octet-stream"
 
 
+def _resolve_workspace_root(params: dict[str, list[str]], fallback_root: Path | None) -> Path | None:
+    """Resolve workspace root from query params or fallback to default.
+    
+    AIPOS-252: Multi-workspace API support.
+    If ?workspace=N is provided, load that workspace from .board_config.json.
+    Otherwise use fallback_root (single-workspace mode).
+    """
+    workspace_param = params.get('workspace', [])
+    if not workspace_param:
+        return fallback_root
+    
+    try:
+        workspace_index = int(workspace_param[0])
+        workspaces_config = _load_board_config()
+        if not workspaces_config or workspace_index >= len(workspaces_config):
+            return fallback_root
+        
+        ws_config = workspaces_config[workspace_index]
+        root_str = ws_config.get('root', '')
+        return Path(root_str).expanduser().resolve()
+    except (ValueError, IndexError, KeyError):
+        return fallback_root
+
+
 def _api_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, list[str]]], dict[str, Any]]]:
     return {
-        "/api/health": lambda _params: get_health(repo_root=repo_root),
+        "/api/health": lambda params: get_health(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/overview": lambda _params: get_overview(),
         "/api/runtime-status": partial(_get_runtime_status_route, repo_root=repo_root),
         "/api/lifecycle": partial(_get_lifecycle_route, repo_root=repo_root),
-        "/api/governance": lambda _params: get_governance(repo_root=repo_root),
-        "/api/queue": lambda _params: get_queue(repo_root=repo_root),
-        "/api/needs-owner": lambda _params: get_needs_owner(repo_root=repo_root),
-        "/api/validate": lambda _params: get_validate(repo_root=repo_root),
-        "/api/agents": lambda _params: get_agents(repo_root=repo_root),
-        "/api/drafts": lambda _params: get_drafts(repo_root=repo_root),
-        "/api/records": lambda _params: get_records(repo_root=repo_root),
-        "/api/external-intake/review": lambda _params: get_external_intake_review(repo_root=repo_root),
-        "/api/owner-decision-records": lambda _params: get_owner_decision_records(repo_root=repo_root),
+        "/api/governance": lambda params: get_governance(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/queue": lambda params: get_queue(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/needs-owner": lambda params: get_needs_owner(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/validate": lambda params: get_validate(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/agents": lambda params: get_agents(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/drafts": lambda params: get_drafts(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/records": lambda params: get_records(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/external-intake/review": lambda params: get_external_intake_review(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/owner-decision-records": lambda params: get_owner_decision_records(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/planner-drafts/review": partial(_get_planner_drafts_review_route, repo_root=repo_root),
         "/api/owner-decisions/review": partial(_get_owner_decisions_review_route, repo_root=repo_root),
-        "/api/orchestration/index": lambda _params: get_orchestration_index(repo_root=repo_root),
+        "/api/orchestration/index": lambda params: get_orchestration_index(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/orchestration-summary": partial(_get_orchestration_summary_route, repo_root=repo_root),
         "/api/orchestration/summary": partial(_get_orchestration_summary_route, repo_root=repo_root),
         "/api/orchestration-timeline": partial(_get_orchestration_timeline_route, repo_root=repo_root),
@@ -2348,12 +2372,12 @@ def make_handler(repo_root: Path | None = None) -> type[BaseHTTPRequestHandler]:
                 self._send_file(STATIC_DIR / "overview.html")
                 return
             
-            # AIPOS-251: Workspace-specific view
+            # AIPOS-252: Workspace-specific detail view (Owner-friendly)
             if path.startswith("/workspace/"):
-                self._send_file(STATIC_DIR / "index.html")
+                self._send_file(STATIC_DIR / "project-detail.html")
                 return
 
-            # Legacy single-workspace direct access
+            # Legacy single-workspace direct access (now debug view)
             if path == "/index.html":
                 self._send_file(STATIC_DIR / "index.html")
                 return
