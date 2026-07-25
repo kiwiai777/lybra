@@ -1,0 +1,49 @@
+/* KiwiAI · Lybra — color tokens
+   Source of truth: kiwiai777/lybra docs/index.html + docs/start.html :root,
+   plus the KiwiAI_BP260612 deck palette. Values copied verbatim — do not round. */
+
+:root {
+  /* ── Base: Lybra web palette ─────────────────────────── */
+  --green: #0D5A3B;        /* primary brand green */
+  --green-dark: #083D28;   /* dark band / pull-quote bg */
+  --green-bright: #1A7A52; /* chips, accents, medium fills */
+  --mint: #E8F2EA;         /* card / panel background */
+  --mint-2: #D6E8DC;       /* pipeline steps, accents on dark */
+  --border: #C8DCCE;       /* hairline borders */
+  --ink: #141414;          /* body text */
+  --muted: #5F7268;        /* secondary text on light */
+  --muted-on-dark: #A7C6B6;/* secondary text on green */
+  --white: #FFFFFF;
+  --bg-alt: #FAFCFB;       /* alternating section background */
+  --footer-bg: #0A3322;    /* footer, darkest green */
+  --code-bg: #0D2A1E;      /* code block background */
+  --code-fg: #D6E8DC;      /* code text */
+  --code-comment: #7FB79A; /* code comments */
+  --track-bg: #F0F5F2;     /* meter track */
+  --track-border: #E6EEE9;
+
+  /* ── Base: KiwiAI deck palette ───────────────────────── */
+  --deck-bg: #FAFBF8;      /* slide background, warm off-white */
+  --deck-green: #075C3D;   /* deck primary green */
+  --deck-ink: #121613;     /* deck headline ink */
+  --deck-muted: #667269;   /* deck secondary text */
+  --deck-sage: #8EA095;    /* dividers, quiet labels */
+  --deck-mint: #D9EADC;    /* deck panel fill */
+  --deck-mint-2: #F3F7F1;  /* deck faint fill */
+
+  /* ── Semantic aliases ────────────────────────────────── */
+  --text-body: var(--ink);
+  --text-secondary: var(--muted);
+  --text-on-brand: var(--white);
+  --text-secondary-on-brand: var(--muted-on-dark);
+  --surface-page: var(--white);
+  --surface-page-alt: var(--bg-alt);
+  --surface-card: var(--mint);
+  --surface-card-on-brand: var(--green-dark);
+  --surface-brand: var(--green);
+  --surface-brand-deep: var(--green-dark);
+  --border-default: var(--border);
+  --accent: var(--green);
+  --accent-bright: var(--green-bright);
+  --link-hover: var(--green);
+}

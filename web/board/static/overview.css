@@ -1,0 +1,245 @@
+/* AIPOS-251 Overview page styles — kiwiai-design system */
+@import "./assets/tokens/colors.css";
+@import "./assets/tokens/fonts.css";
+@import "./assets/tokens/typography.css";
+@import "./assets/tokens/spacing.css";
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Noto Sans CJK SC", -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--text-body);
+  background: var(--surface-page);
+}
+
+/* Top bar (brand header) */
+.top-bar {
+  background: var(--surface-brand);
+  padding: 20px 28px;
+  border-bottom: 1px solid var(--green-dark);
+}
+
+.top-bar-inner {
+  max-width: 1060px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.brand-logo {
+  height: 42px;
+  width: auto;
+}
+
+.brand-title {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--text-on-brand);
+  letter-spacing: -0.4px;
+  line-height: 1.2;
+}
+
+.brand-subtitle {
+  font-size: 14.5px;
+  color: var(--text-secondary-on-brand);
+  margin-top: 4px;
+}
+
+/* Main container */
+main {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 64px 28px;
+}
+
+/* Kicker component */
+.kicker {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 16px;
+}
+
+.kicker-box {
+  width: 11px;
+  height: 11px;
+  background: var(--accent-bright);
+  flex-shrink: 0;
+}
+
+.kicker-text {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent-bright);
+}
+
+/* Section title */
+.section-title {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  line-height: 1.2;
+  color: var(--text-body);
+  margin-bottom: 32px;
+}
+
+/* Workspace grid */
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+  gap: 22px;
+}
+
+@media (max-width: 1100px) {
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Workspace card */
+.workspace-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-left: 5px solid var(--accent);
+  padding: 24px 26px;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  transition: border-left-color 0.15s;
+}
+
+.workspace-card:hover {
+  border-left-color: var(--accent-bright);
+}
+
+.workspace-card.error {
+  border-left-color: #dc2626;
+  opacity: 0.7;
+}
+
+.workspace-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 16px;
+}
+
+.workspace-label {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-body);
+}
+
+.workspace-status {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 7px 14px;
+  background: var(--accent-bright);
+  color: var(--white);
+}
+
+.workspace-status.error {
+  background: #dc2626;
+}
+
+/* Queue counts */
+.queue-counts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.queue-item {
+  text-align: center;
+}
+
+.queue-count {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.queue-label {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Needs owner section */
+.needs-owner-section {
+  margin-bottom: 20px;
+}
+
+.needs-owner-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-body);
+  margin-bottom: 8px;
+}
+
+.needs-owner-list {
+  list-style: none;
+}
+
+.needs-owner-item {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.needs-owner-item:last-child {
+  border-bottom: none;
+}
+
+.needs-owner-empty {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* Recent activity */
+.recent-activity {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  padding-top: 12px;
+  border-top: 1px solid var(--border-default);
+}
+
+.activity-label {
+  font-weight: 700;
+  color: var(--text-body);
+}
+
+/* Error message */
+.error-message {
+  font-size: 14px;
+  color: #dc2626;
+  padding: 12px;
+  background: #fef2f2;
+  border-radius: 4px;
+  margin-top: 12px;
+}
+
+/* Loading state */
+.loading {
+  text-align: center;
+  padding: 64px 28px;
+  font-size: 16px;
+  color: var(--text-secondary);
+}

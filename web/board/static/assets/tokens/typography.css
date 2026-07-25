@@ -1,0 +1,31 @@
+/* KiwiAI · Lybra — typography tokens
+   The brand deliberately uses the system font stack with CJK fallbacks
+   (bilingual EN/中文 product). No webfonts exist in any source. */
+
+:root {
+  --font-sans: -apple-system, "Segoe UI", Roboto, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Sizes — exact values from docs site CSS */
+  --text-hero: 64px;        /* h1, letter-spacing -1px, line-height 1.02 */
+  --text-h2: 30px;          /* letter-spacing -.4px, line-height 1.2 */
+  --text-h3: 20px;
+  --text-standfirst: 25px;  /* hero one-liner, 700 */
+  --text-pull: 28px;        /* pull quote, 700 */
+  --text-lead: 16px;
+  --text-body: 14.5px;
+  --text-ui: 14px;          /* nav links */
+  --text-note: 13.5px;      /* italic notes */
+  --text-kicker: 13px;      /* 700, letter-spacing 2px */
+  --text-chip: 12px;        /* 700, letter-spacing 1.5px */
+  --text-small: 12.5px;
+
+  --leading-body: 1.6;
+  --leading-tight: 1.2;
+  --leading-hero: 1.02;
+
+  --tracking-hero: -1px;
+  --tracking-h2: -0.4px;
+  --tracking-kicker: 2px;
+  --tracking-chip: 1.5px;
+}

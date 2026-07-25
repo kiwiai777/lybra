@@ -1,0 +1,18 @@
+/* KiwiAI · Lybra — webfonts
+   Noto Sans CJK SC (OTF, 400 + 700) — covers Latin + Simplified Chinese. */
+
+@font-face {
+  font-family: "Noto Sans CJK SC";
+  src: url("../assets/fonts/NotoSansCJKsc-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Sans CJK SC";
+  src: url("../assets/fonts/NotoSansCJKsc-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}

@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lybra Overview — Multi-Workspace Dashboard</title>
+  <link rel="stylesheet" href="/overview.css">
+</head>
+<body>
+  <header class="top-bar">
+    <div class="top-bar-inner">
+      <img src="/assets/lybra_logo_white.png" alt="Lybra" class="brand-logo">
+      <div>
+        <h1 class="brand-title">Lybra Overview</h1>
+        <p class="brand-subtitle">Multi-workspace command center</p>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="kicker">
+      <div class="kicker-box"></div>
+      <span class="kicker-text">Workspaces</span>
+    </div>
+    <h2 class="section-title">All Projects</h2>
+    
+    <div id="workspace-grid" class="workspace-grid">
+      <div class="loading">Loading workspaces...</div>
+    </div>
+  </main>
+
+  <script>
+    // Fetch and render workspace overview
+    async function loadOverview() {
+      const grid = document.getElementById('workspace-grid');
+      
+      try {
+        const response = await fetch('/api/overview');
+        const data = await response.json();
+        
+        if (!data.ok || !data.workspaces || data.workspaces.length === 0) {
+          grid.innerHTML = '<div class="loading">No workspaces configured. Add workspaces to .board_config.json</div>';
+          return;
+        }
+        
+        grid.innerHTML = '';
+        
+        data.workspaces.forEach((ws, index) => {
+          const card = createWorkspaceCard(ws, index);
+          grid.appendChild(card);
+        });
+        
+      } catch (error) {
+        grid.innerHTML = `<div class="loading">Error loading overview: ${error.message}</div>`;
+      }
+    }
+    
+    function createWorkspaceCard(workspace, index) {
+      const card = document.createElement('a');
+      card.className = 'workspace-card';
+      card.href = `/workspace/${index}`;
+      
+      if (workspace.status === 'error') {
+        card.className += ' error';
+        card.onclick = (e) => {
+          e.preventDefault();
+          alert(`Workspace error: ${workspace.error}`);
+        };
+      }
+      
+      // Header
+      const header = document.createElement('div');
+      header.className = 'workspace-header';
+      
+      const label = document.createElement('h3');
+      label.className = 'workspace-label';
+      label.textContent = workspace.label || 'Unnamed Workspace';
+      
+      const status = document.createElement('span');
+      status.className = `workspace-status ${workspace.status}`;
+      status.textContent = workspace.status || 'unknown';
+      
+      header.appendChild(label);
+      header.appendChild(status);
+      card.appendChild(header);
+      
+      // Error state
+      if (workspace.status === 'error') {
+        const errorMsg = document.createElement('div');
+        errorMsg.className = 'error-message';
+        errorMsg.textContent = workspace.error || 'Unknown error';
+        card.appendChild(errorMsg);
+        return card;
+      }
+      
+      // Queue counts
+      if (workspace.queue_counts) {
+        const counts = document.createElement('div');
+        counts.className = 'queue-counts';
+        
+        ['pending', 'claimed', 'blocked', 'completed'].forEach(state => {
+          const item = document.createElement('div');
+          item.className = 'queue-item';
+          
+          const count = document.createElement('div');
+          count.className = 'queue-count';
+          count.textContent = workspace.queue_counts[state] || 0;
+          
+          const labelEl = document.createElement('div');
+          labelEl.className = 'queue-label';
+          labelEl.textContent = state;
+          
+          item.appendChild(count);
+          item.appendChild(labelEl);
+          counts.appendChild(item);
+        });
+        
+        card.appendChild(counts);
+      }
+      
+      // Needs owner
+      const needsSection = document.createElement('div');
+      needsSection.className = 'needs-owner-section';
+      
+      const needsTitle = document.createElement('div');
+      needsTitle.className = 'needs-owner-title';
+      needsTitle.textContent = 'Needs Owner';
+      needsSection.appendChild(needsTitle);
+      
+      if (workspace.needs_owner && workspace.needs_owner.length > 0) {
+        const list = document.createElement('ul');
+        list.className = 'needs-owner-list';
+        
+        workspace.needs_owner.slice(0, 3).forEach(item => {
+          const li = document.createElement('li');
+          li.className = 'needs-owner-item';
+          li.textContent = `${item.task_id || 'N/A'}: ${item.reason || 'pending review'}`;
+          list.appendChild(li);
+        });
+        
+        needsSection.appendChild(list);
+        
+        if (workspace.needs_owner.length > 3) {
+          const more = document.createElement('div');
+          more.className = 'needs-owner-item';
+          more.style.fontStyle = 'italic';
+          more.textContent = `+ ${workspace.needs_owner.length - 3} more`;
+          needsSection.appendChild(more);
+        }
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'needs-owner-empty';
+        empty.textContent = 'No items waiting for Owner';
+        needsSection.appendChild(empty);
+      }
+      
+      card.appendChild(needsSection);
+      
+      // Recent activity
+      if (workspace.recent_activity) {
+        const activity = document.createElement('div');
+        activity.className = 'recent-activity';
+        
+        const label = document.createElement('span');
+        label.className = 'activity-label';
+        label.textContent = 'Recent: ';
+        
+        const info = document.createElement('span');
+        const timestamp = workspace.recent_activity.timestamp 
+          ? new Date(workspace.recent_activity.timestamp).toLocaleString()
+          : 'unknown';
+        info.textContent = `${workspace.recent_activity.type || 'activity'} (${timestamp})`;
+        
+        activity.appendChild(label);
+        activity.appendChild(info);
+        card.appendChild(activity);
+      }
+      
+      return card;
+    }
+    
+    // Load on page ready
+    loadOverview();
+  </script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+/* KiwiAI · Lybra — spacing, radius, structure tokens
+   Values copied verbatim from docs site CSS. */
+
+:root {
+  /* Layout */
+  --page-max: 1060px;
+  --page-pad: 28px;
+  --section-pad-y: 64px;
+  --hero-pad-top: 74px;
+  --hero-pad-bottom: 80px;
+
+  /* Component spacing */
+  --card-pad: 24px 26px;
+  --card-gap: 22px;
+  --btn-pad: 13px 24px;
+  --chip-pad: 7px 14px;
+
+  /* Radii — the brand is square-cornered; only small controls round */
+  --radius-none: 0;        /* cards, chips, kickers, bands, meters */
+  --radius-control: 6px;   /* lang toggle */
+  --radius-btn: 7px;       /* buttons */
+  --radius-code: 8px;      /* code blocks */
+
+  /* Borders & accents */
+  --border-hairline: 1px solid var(--border);
+  --accent-bar: 5px;       /* card left border */
+  --accent-bar-quote: 11px;/* pull-quote left border */
+
+  /* No shadow system — the brand uses flat fills and hairlines, never shadows */
+}

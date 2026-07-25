@@ -63,9 +63,113 @@ from tools.aipos_cli.workspace_config import (
     DEFAULT_MCP_HOST,
     DEFAULT_MCP_PORT,
     load_workspace_config,
+    has_workspace_queue,
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+BOARD_CONFIG_PATH = Path(__file__).resolve().parent / ".board_config.json"
+
+
+def _load_board_config() -> list[dict[str, str]]:
+    """Load multi-workspace config from .board_config.json.
+    
+    Returns list of {label, root} dicts. Falls back to single REPO_ROOT workspace.
+    """
+    if not BOARD_CONFIG_PATH.exists():
+        return []
+    try:
+        data = json.loads(BOARD_CONFIG_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return []
+        workspaces = data.get("workspaces", [])
+        if not isinstance(workspaces, list):
+            return []
+        return workspaces
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def get_overview(board_config_path: Path | None = None) -> dict[str, Any]:
+    """Multi-workspace overview aggregation (AIPOS-251)."""
+    config_path = board_config_path or BOARD_CONFIG_PATH
+    workspaces_config = _load_board_config() if config_path == BOARD_CONFIG_PATH else []
+    
+    # Fallback to single workspace if no config
+    if not workspaces_config:
+        workspaces_config = [{"label": "Default Workspace", "root": str(REPO_ROOT)}]
+    
+    results = []
+    for ws_config in workspaces_config:
+        label = ws_config.get("label", "Unnamed")
+        root_str = ws_config.get("root", "")
+        
+        try:
+            root = Path(root_str).expanduser().resolve()
+            
+            # Validate workspace
+            if not has_workspace_queue(root):
+                results.append({
+                    "label": label,
+                    "root": str(root),
+                    "status": "error",
+                    "error": "Workspace root does not contain 5_tasks/queue"
+                })
+                continue
+            
+            # Aggregate data from this workspace
+            queue_data = get_queue(repo_root=root)
+            needs_owner_data = get_needs_owner(repo_root=root)
+            records_data = get_records(repo_root=root)
+            
+            # Extract queue counts
+            queue_counts = {}
+            if queue_data.get("ok") and "data" in queue_data:
+                summary = queue_data["data"].get("summary", {})
+                for state in ["pending", "claimed", "blocked", "completed"]:
+                    queue_counts[state] = summary.get(state, 0)
+            
+            # Extract needs-owner items (top 5)
+            needs_owner_items = []
+            if needs_owner_data.get("ok") and "data" in needs_owner_data:
+                items = needs_owner_data["data"].get("needs_owner_items", [])
+                for item in items[:5]:
+                    needs_owner_items.append({
+                        "task_id": item.get("task_id"),
+                        "reason": item.get("reason"),
+                        "created": item.get("created")
+                    })
+            
+            # Extract recent activity
+            recent_activity = None
+            if records_data.get("ok") and "data" in records_data:
+                summary = records_data["data"].get("summary", {})
+                if summary.get("most_recent_timestamp"):
+                    recent_activity = {
+                        "timestamp": summary.get("most_recent_timestamp"),
+                        "type": summary.get("most_recent_type", "activity")
+                    }
+            
+            results.append({
+                "label": label,
+                "root": str(root),
+                "status": "ok",
+                "queue_counts": queue_counts,
+                "needs_owner": needs_owner_items,
+                "recent_activity": recent_activity
+            })
+            
+        except Exception as e:
+            results.append({
+                "label": label,
+                "root": root_str,
+                "status": "error",
+                "error": str(e)
+            })
+    
+    return {
+        "ok": True,
+        "workspaces": results
+    }
 
 
 def _json_bytes(payload: dict[str, Any]) -> bytes:
@@ -86,6 +190,7 @@ def _content_type(path: Path) -> str:
 def _api_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, list[str]]], dict[str, Any]]]:
     return {
         "/api/health": lambda _params: get_health(repo_root=repo_root),
+        "/api/overview": lambda _params: get_overview(),
         "/api/runtime-status": partial(_get_runtime_status_route, repo_root=repo_root),
         "/api/lifecycle": partial(_get_lifecycle_route, repo_root=repo_root),
         "/api/governance": lambda _params: get_governance(repo_root=repo_root),
@@ -2238,7 +2343,18 @@ def make_handler(repo_root: Path | None = None) -> type[BaseHTTPRequestHandler]:
                 self._send_json(HTTPStatus.OK, result)
                 return
 
-            if path == "/" or path == "/index.html":
+            # AIPOS-251: Overview page as new root
+            if path == "/":
+                self._send_file(STATIC_DIR / "overview.html")
+                return
+            
+            # AIPOS-251: Workspace-specific view
+            if path.startswith("/workspace/"):
+                self._send_file(STATIC_DIR / "index.html")
+                return
+
+            # Legacy single-workspace direct access
+            if path == "/index.html":
                 self._send_file(STATIC_DIR / "index.html")
                 return
 

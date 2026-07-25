@@ -1,0 +1,12 @@
+{
+  "workspaces": [
+    {
+      "label": "Lybra Main",
+      "root": "~/projects/lybra"
+    },
+    {
+      "label": "Example Project",
+      "root": "~/projects/example"
+    }
+  ]
+}
