@@ -50,6 +50,8 @@ def _registry() -> dict[str, dict[str, Any]]:
             "scopes": ["queue_claim", "queue_return"],
             "expires_at": "2999-01-01T00:00:00Z",
             "fingerprint": "sha256:exfp250",
+            # AIPOS-250B: bind executor token to canonical agent_instance (PreAuthorized identity authority)
+            "agent_instance": "exec.cc",
         },
     }
 
@@ -405,6 +407,109 @@ class PreAuthEnvelopeGateTests(unittest.TestCase):
                 )
                 self.assertEqual(claim.get("error_code"), "UNSUPPORTED_QUEUE_CLAIM_FIELD", f"{field}: {claim}")
 
+    # --- AIPOS-250B: zero-dependency identity gate tests ---
+
+    def test_250b_token_bound_identity_match_auto_releases(self) -> None:
+        """AIPOS-250B test 1: token binding matches claim self-report → auto-release (zero-dependency)."""
+        self._seed_pending("AIPOS-250B-1", agent="exec.cc")
+        with self.gate() as url:
+            owner = GateClient(url, "owner-secret")
+            owner.initialize()
+            # grant envelope covering exec.cc
+            self._grant_policy(owner, "pol-250b-1", _policy_block("pol_250b_1", agent_or_role="exec.cc", task_mode="code"))
+
+            ex = GateClient(url, "executor-secret")
+            ex.initialize()
+            # executor token is bound to agent_instance="exec.cc" (in _registry()),
+            # claim self-reports agent_instance="exec.cc" → identity matches → auto-release
+            claim = self._claim(ex, "AIPOS-250B-1", mode="PreAuthorized", policy_ref="pol_250b_1")
+
+            self.assertTrue(claim.get("ok"), f"token-bound identity match should auto-release: {claim}")
+            self.assertEqual(claim.get("autonomy_mode"), "PreAuthorized", claim)
+            self.assertTrue(claim.get("preauthorized_release"), claim)
+            self.assertFalse(claim.get("owner_confirmation_required"), claim)
+
+    def test_250b_identity_mismatch_falls_back_supervised(self) -> None:
+        """AIPOS-250B test 2: claim self-report doesn't match token binding → fall back Supervised."""
+        self._seed_pending("AIPOS-250B-2", agent="impostor.local")
+        with self.gate() as url:
+            owner = GateClient(url, "owner-secret")
+            owner.initialize()
+            # grant envelope covering impostor.local
+            self._grant_policy(owner, "pol-250b-2", _policy_block("pol_250b_2", agent_or_role="impostor.local", task_mode="code"))
+
+            ex = GateClient(url, "executor-secret")
+            ex.initialize()
+            # executor token is bound to agent_instance="exec.cc",
+            # but claim self-reports agent_instance="impostor.local" → identity mismatch → fall back Supervised
+            claim = self._claim(ex, "AIPOS-250B-2", mode="PreAuthorized", policy_ref="pol_250b_2", agent_instance="impostor.local", actor="impostor.local")
+
+            # should fall back to Supervised (dry-run preview, owner_confirmation_required)
+            self.assertFalse(claim.get("preauthorized_release"), claim)
+            self.assertTrue(claim.get("owner_confirmation_required"), claim)
+            self.assertIn("dry_run_token", claim, claim)
+            # identity_provenance should record binding_mismatch
+            meta = claim.get("data", {}).get("mcp_claim", {})
+            prov = meta.get("identity_provenance", {})
+            self.assertEqual(prov.get("binding_status"), "binding_mismatch", prov)
+
+    def test_250b_no_binding_falls_back_supervised(self) -> None:
+        """AIPOS-250B test 3: token without agent_instance binding → PreAuthorized unavailable (backward-compatible)."""
+        self._seed_pending("AIPOS-250B-3", agent="exec.cc")
+        # Use a registry without agent_instance binding
+        unbound_registry = {
+            "owner-secret": {
+                "role": "owner",
+                "token_ref": "svc-owner",
+                "scopes": ["queue_claim", "queue_return", "owner_confirm", "owner_decision_record", "draft_publish"],
+                "expires_at": "2999-01-01T00:00:00Z",
+                "fingerprint": "sha256:ownfp250",
+            },
+            "executor-secret": {
+                "role": "executor",
+                "token_ref": "svc-executor",
+                "scopes": ["queue_claim", "queue_return"],
+                "expires_at": "2999-01-01T00:00:00Z",
+                "fingerprint": "sha256:exfp250",
+                # NO agent_instance binding
+            },
+        }
+        config = HttpSseConfig(
+            host=DEFAULT_HTTP_HOST,
+            port=0,
+            token="",
+            keepalive_seconds=0.01,
+            max_keepalive_events=1,
+            service_role_registry=unbound_registry,
+        )
+        with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
+            httpd = build_http_server(config)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = httpd.server_address
+                url = f"http://{host}:{port}"
+                owner = GateClient(url, "owner-secret")
+                owner.initialize()
+                self._grant_policy(owner, "pol-250b-3", _policy_block("pol_250b_3", agent_or_role="exec.cc", task_mode="code"))
+
+                ex = GateClient(url, "executor-secret")
+                ex.initialize()
+                claim = self._claim(ex, "AIPOS-250B-3", mode="PreAuthorized", policy_ref="pol_250b_3")
+
+                # should fall back to Supervised (no binding → PreAuthorized unavailable)
+                self.assertFalse(claim.get("preauthorized_release"), claim)
+                self.assertTrue(claim.get("owner_confirmation_required"), claim)
+                self.assertIn("dry_run_token", claim, claim)
+                # identity_provenance should record binding_absent
+                meta = claim.get("data", {}).get("mcp_claim", {})
+                prov = meta.get("identity_provenance", {})
+                self.assertEqual(prov.get("binding_status"), "binding_absent", prov)
+            finally:
+                httpd.shutdown()
+                thread.join(timeout=2)
+                httpd.server_close()
+
 
 class PreAuthEnvelopeRealRotateEndToEndTests(unittest.TestCase):
     """AIPOS-250 #4 — end-to-end via REAL serve-rotate creds (no hand-built registry) using the
@@ -447,7 +552,7 @@ class PreAuthEnvelopeRealRotateEndToEndTests(unittest.TestCase):
         from tools.mcp_server.http_sse import load_service_role_registry
 
         config = build_connection_config(
-            self.repo_root, board_host="127.0.0.1", board_port=7117, mcp_host="127.0.0.1", mcp_port=7118
+            self.repo_root, board_host="127.0.0.1", board_port=7117, mcp_host="127.0.0.1", mcp_port=7118, executor_instance="exec.cc.local"
         )
         write_connection_config(self.repo_root, config)
         registry = load_service_role_registry(self.repo_root / ".lybra" / "local" / "connection.json")

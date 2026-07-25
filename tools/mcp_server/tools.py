@@ -504,6 +504,7 @@ def _claim_metadata(
     owner_policy_ref: str | None = None,
     owner_confirmation_required: bool = True,
     owner_confirmation_reasons: list[str] | None = None,
+    binding_status: str | None = None,
 ) -> dict[str, Any]:
     return {
         "surface": "mcp",
@@ -519,6 +520,9 @@ def _claim_metadata(
         "identity_provenance": {
             "resolution": resolution_label,
             "registry_available": reg_available,
+            # AIPOS-250B: informational binding status (binding_absent/binding_mismatch when
+            # PreAuthorized falls back Supervised due to token identity gate).
+            **(({"binding_status": binding_status} if binding_status else {})),
         },
         "runtime_profile": str(args.get("runtime_profile") or "").strip() or None,
         "active_session_id": str(args.get("active_session_id") or "").strip() or None,
@@ -1130,21 +1134,32 @@ def _match_claim_envelope(
     task_path: str | None,
     canonical_agent_instance: str,
     actor: str,
-) -> str | None:
-    """Return the owner_policy_ref iff it names an active Owner-signed envelope that strictly
-    matches this claim; else None (→ fall back to Supervised). Loading a policy for a ref that
-    does not resolve returns None (★A1 anti-forgery: a ref to a nonexistent/unauthorized policy
-    grants nothing)."""
+) -> tuple[str | None, str | None]:
+    """Return (owner_policy_ref, binding_status) iff it names an active Owner-signed envelope that strictly
+    matches this claim; else (None, binding_status_reason). Loading a policy for a ref that
+    does not resolve returns (None, None) (★A1 anti-forgery: a ref to a nonexistent/unauthorized policy
+    grants nothing). binding_status is informational for identity_provenance when falling back Supervised."""
+    # AIPOS-250B: PreAuthorized identity gate (zero-dependency, token authority).
+    # The claim's agent_instance (and actor) MUST match the canonical instance bound to the
+    # request token in connection.json. No binding or mismatch → fall back Supervised.
+    # This is the authoritative identity source (Owner-minted token binding), not self-reported.
+    bound = str(_capability_token().get("agent_instance") or "").strip()
+    if not bound:
+        # Token has no agent_instance binding → PreAuthorized unavailable (backward-compatible).
+        return None, "binding_absent"
+    if bound != canonical_agent_instance or bound != actor:
+        # Identity mismatch: claim self-report doesn't match token authority → fall back Supervised.
+        return None, "binding_mismatch"
     policy = load_policy(repo_root, owner_policy_ref)
     if policy is None:
-        return None
+        return None, None
     snapshot = load_task_snapshot(repo_root, task_id=task_id, path=task_path)
     if snapshot is None:
-        return None
+        return None, None
     # Envelope auto-release covers only pending (claimable) queue tasks — anything else drops to
     # the Supervised path (which will itself surface why the task is not claimable).
     if str(snapshot.get("queue_state") or "").strip() != "pending":
-        return None
+        return None, None
     released = count_preauthorized_claims(repo_root, owner_policy_ref)
     matched, _reason = match_claim_envelope(
         policy=policy,
@@ -1156,7 +1171,7 @@ def _match_claim_envelope(
         now=datetime.now(timezone.utc),
         released_count=released,
     )
-    return owner_policy_ref if matched else None
+    return (owner_policy_ref, None) if matched else (None, None)
 
 
 def _preauthorized_claim_autorelease(
@@ -1317,8 +1332,9 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
     # no confirm step). The executor never gains a confirm capability (★A1): the authorization is
     # the Owner-signed envelope, and the gate is the executor of that already-granted policy. Any
     # miss / expiry / count-bound / forged ref falls back to the Supervised per-task preview.
+    binding_status = None
     if requested_mode == AUTONOMY_MODE_PREAUTHORIZED:
-        matched_policy_id = _match_claim_envelope(
+        matched_policy_id, binding_status = _match_claim_envelope(
             repo_root,
             owner_policy_ref=owner_policy_ref,
             task_id=task_id,
@@ -1354,6 +1370,7 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
             resolution_label=resolution_label,
             reg_available=reg_available,
             autonomy_mode=AUTONOMY_MODE_SUPERVISED,
+            binding_status=binding_status,
         ),
     )
     decorated = _decorate_queue_claim_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance)

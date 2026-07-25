@@ -279,7 +279,7 @@ def ensure_workspace_gitignore(workspace_root: Path) -> Path:
     return gitignore
 
 
-def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None) -> dict[str, Any]:
+def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None, executor_instance: str | None = None) -> dict[str, Any]:
     token = secrets.token_urlsafe(32)
     entry = {
         "role": spec["role"],
@@ -298,6 +298,11 @@ def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None
     if effective:
         entry["projects"] = effective
         entry["projects_enforced"] = True
+    # AIPOS-250B: optional `agent_instance` binding for PreAuthorized identity authority.
+    # Only written for executor role when --executor-instance is specified; other roles ignore it.
+    # No binding -> PreAuthorized unavailable for that token (backward-compatible: falls back Supervised).
+    if executor_instance and spec["role"] == "executor":
+        entry["agent_instance"] = executor_instance
     return entry
 
 
@@ -309,11 +314,16 @@ def build_connection_config(
     mcp_host: str,
     mcp_port: int,
     project: str | None = None,
+    executor_instance: str | None = None,
 ) -> dict[str, Any]:
     now = _utc_now()
     # AIPOS-228: a single --project selection scopes every minted role token to that project
     # (mint/echo only). No --project -> no `projects` field anywhere (byte-identical).
     projects = [project] if project and str(project).strip() else None
+    # AIPOS-250B: --executor-instance binds the executor token to a canonical agent_instance
+    # (PreAuthorized identity authority). No --executor-instance -> no `agent_instance` field
+    # (backward-compatible: PreAuthorized unavailable for that token, falls back Supervised).
+    exec_instance = str(executor_instance).strip() if executor_instance else None
     return {
         "config_version": SERVICE_MODE_VERSION,
         "mode": SERVICE_MODE,
@@ -328,7 +338,7 @@ def build_connection_config(
             "host": mcp_host,
             "port": mcp_port,
         },
-        "tokens": [_role_token_entry(spec, projects=projects) for spec in ROLE_SPECS],
+        "tokens": [_role_token_entry(spec, projects=projects, executor_instance=exec_instance) for spec in ROLE_SPECS],
         "secrets_notice": "Raw role tokens are local secrets. Anyone who can read this file can use the listed local role scopes.",
     }
 
@@ -489,6 +499,7 @@ def rotate_report(
     mcp_port: int,
     connection_target: Path | None = None,
     project: str | None = None,
+    executor_instance: str | None = None,
 ) -> dict[str, Any]:
     if connection_target is None:
         connection_target = runtime_connection_path()
@@ -503,7 +514,7 @@ def rotate_report(
             workspace_root, connection_target=connection_target
         ).get("created_at")
     config = build_connection_config(
-        workspace_root, board_host=board_host, board_port=board_port, mcp_host=mcp_host, mcp_port=mcp_port, project=project
+        workspace_root, board_host=board_host, board_port=board_port, mcp_host=mcp_host, mcp_port=mcp_port, project=project, executor_instance=executor_instance
     )
     if previous_created:
         config["created_at"] = previous_created

@@ -149,6 +149,11 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
     if entry.get("projects"):
         capability["projects"] = [str(item) for item in entry.get("projects") or []]
         capability["projects_enforced"] = True
+    # AIPOS-250B: carry `agent_instance` binding (PreAuthorized identity authority).
+    # Present only when the token carries it (executor role with --executor-instance).
+    # No binding -> PreAuthorized unavailable (backward-compatible: falls back Supervised).
+    if entry.get("agent_instance"):
+        capability["agent_instance"] = str(entry.get("agent_instance"))
     return capability, None
 
 
@@ -413,6 +418,11 @@ def load_service_role_registry(connection_json: str | Path) -> dict[str, dict[st
         # for tokens without `projects`). The gate itself (_project_gate) is untouched.
         if isinstance(item.get("projects"), list) and item.get("projects"):
             registry[token]["projects"] = [str(p) for p in item["projects"]]
+        # AIPOS-250B: carry `agent_instance` binding (PreAuthorized identity authority).
+        # Same silent-drop trap as AIPOS-242 F-NEW: must explicitly copy or field vanishes at runtime.
+        # Present only when connection.json token carries it (executor + --executor-instance).
+        if item.get("agent_instance"):
+            registry[token]["agent_instance"] = str(item["agent_instance"])
     if not registry:
         raise ValueError(f"Service connection config contains no usable role tokens: {path}")
     return registry
