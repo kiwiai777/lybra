@@ -153,7 +153,7 @@ class McpToolTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def write_return_task(self, task_id: str = "AIPOS-MCP-RETURN", *, claimed_by: str = "agent-01", agent_instance: str = "agent-01") -> None:
+    def write_return_task(self, task_id: str = "AIPOS-MCP-RETURN", *, claimed_by: str = "agent-01", agent_instance: str = "agent-01", audit: str | None = None) -> None:
         (self.repo_root / "5_tasks" / "queue" / "claimed" / f"{task_id.lower()}.md").write_text(
             "\n".join(
                 [
@@ -181,6 +181,7 @@ class McpToolTests(unittest.TestCase):
                     f"claimed_by: {claimed_by}",
                     "claimed_at: 2026-06-03T00:00:00Z",
                     "active_session_id: session_AIPOS-MCP-RETURN_20260603_agent-01",
+                    *([f"audit: {audit}"] if audit else []),
                     "---",
                     "Supervised MCP return test task.",
                     "",
@@ -582,7 +583,9 @@ class McpToolTests(unittest.TestCase):
         return payload
 
     def prepare_returned_source(self) -> dict[str, object]:
-        self.write_return_task()
+        # AIPOS-257: opt out of auto-derivation so the manual-dispatch path is reachable
+        # (return_confirm otherwise derives an audit task and writes related_audit_task_ref).
+        self.write_return_task(audit="none")
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
             "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),

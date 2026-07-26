@@ -28,6 +28,7 @@ from tools.aipos_cli.controlled_execute import (
 from tools.aipos_cli.draft_validator import list_drafts, validate_draft_file
 from tools.aipos_cli.draft_writer import create_draft as backend_create_draft
 from tools.aipos_cli.draft_writer import default_draft_body, publish_draft as backend_publish_draft
+from tools.aipos_cli.draft_writer import stable_publish_id
 from tools.aipos_cli.external_intake_writer import build_external_intake_draft as backend_build_external_intake_draft
 from tools.aipos_cli.orchestration_event_writer import append_orchestration_event as backend_append_orchestration_event
 from tools.aipos_cli.orchestration_summary_preview import build_orchestration_summary_preview
@@ -2557,11 +2558,23 @@ def _build_audit_verdict_preview(
                 "when either side's identity was recorded without registry verification"
             )
 
+    # AIPOS-257: 派生审计任务(created_by=gate_derivation)以派生 publish 记录为出处,
+    # 等价 dispatch;非派生路径保持原 audit_dispatch 记录校验不变。
+    is_derived_audit = str(audit_metadata.get("created_by") or "").strip() == "gate_derivation"
     dispatch_ref = str(audit_dispatch_record_ref or audit_metadata.get("audit_dispatch_record_ref") or reviewed_metadata.get("audit_dispatch_record_ref") or "").strip()
-    if not dispatch_ref:
-        blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: audit dispatch record ref is required")
-    elif not records.get("audit_dispatch_index", {}).get(dispatch_ref):
-        blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: dispatch ref does not resolve to a record")
+    if is_derived_audit:
+        # 派生模式:出处 = 派生 publish 记录(publish_id 确定性可解析)
+        if not dispatch_ref:
+            dispatch_ref = stable_publish_id(str(audit_task.get("task_id") or ""))
+        if not dispatch_ref:
+            blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: audit dispatch record ref is required")
+        elif not records.get("publish_index", {}).get(dispatch_ref):
+            blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: derivation publish ref does not resolve to a record")
+    else:
+        if not dispatch_ref:
+            blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: audit dispatch record ref is required")
+        elif not records.get("audit_dispatch_index", {}).get(dispatch_ref):
+            blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: dispatch ref does not resolve to a record")
     return_ref = str(reviewed_return_record_ref or audit_metadata.get("reviewed_return_record_ref") or reviewed_metadata.get("return_record_ref") or reviewed_metadata.get("return_event_ref") or "").strip()
     if not return_ref:
         blocking_reasons.append("MISSING_RETURN_RECORD: reviewed return record ref is required")
@@ -2614,6 +2627,7 @@ def _build_audit_verdict_preview(
         reviewed_task_path=reviewed_rel,
         reviewed_return_record_ref=return_ref,
         audit_dispatch_record_ref=dispatch_ref,
+        audit_provenance_type="derivation" if is_derived_audit else "dispatch",
         audit_task_id=str(audit_task.get("task_id") or ""),
         audit_task_path=audit_rel,
         audit_claim_id=str(audit_metadata.get("claim_id") or audit_claim_id or ""),
@@ -2675,6 +2689,7 @@ def _build_audit_verdict_preview(
         "reviewed_executor_instance": reviewed_executor_instance,
         "reviewed_return_record_ref": return_ref,
         "audit_dispatch_record_ref": dispatch_ref,
+        "audit_provenance_type": "derivation" if is_derived_audit else "dispatch",
         "original_payload": {
             "audit_task_id": audit_task_id,
             "audit_task_path": str(audit_task_path) if audit_task_path is not None else None,
