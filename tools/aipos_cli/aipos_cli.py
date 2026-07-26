@@ -902,6 +902,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_rotate_parser.add_argument("--mcp-port", type=int, default=7118, help="MCP port for regenerated connection config")
     serve_rotate_parser.add_argument("--project", help="Scope the minted role tokens to this project (AIPOS-229: enforced — calls for another project return PROJECT_SCOPE_DENIED)")
     serve_rotate_parser.add_argument("--executor-instance", help="AIPOS-250B: bind the executor token to this canonical agent_instance (PreAuthorized identity authority); unspecified → no binding (backward-compatible: PreAuthorized unavailable, falls back Supervised)")
+    serve_rotate_parser.add_argument("--role-instance", action="append", dest="role_instances", metavar="ROLE=INSTANCE", help="AIPOS-254: bind any role token to a canonical agent_instance (format: role=instance, e.g., auditor=audit.lybra.local); can be specified multiple times; --executor-instance is kept as an alias for executor role")
     serve_rotate_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
@@ -1228,6 +1229,13 @@ def main(argv: list[str] | None = None) -> int:
             elif args.serve_command == "status":
                 result = status_report(workspace_root, connection_target=connection_target)
             elif args.serve_command == "rotate":
+                # AIPOS-254: parse --role-instance (multi-use) into dict
+                role_inst_map = {}
+                if getattr(args, "role_instances", None):
+                    for item in args.role_instances:
+                        if "=" in item:
+                            role, instance = item.split("=", 1)
+                            role_inst_map[role.strip()] = instance.strip()
                 result = rotate_report(
                     workspace_root,
                     board_host=str(args.board_host),
@@ -1237,6 +1245,7 @@ def main(argv: list[str] | None = None) -> int:
                     connection_target=connection_target,
                     project=(str(args.project).strip() if getattr(args, "project", None) else None),
                     executor_instance=(str(args.executor_instance).strip() if getattr(args, "executor_instance", None) else None),
+                    role_instances=role_inst_map if role_inst_map else None,
                 )
             else:
                 parser.print_help()

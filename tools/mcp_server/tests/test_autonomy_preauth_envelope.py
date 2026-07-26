@@ -510,6 +510,180 @@ class PreAuthEnvelopeGateTests(unittest.TestCase):
                 thread.join(timeout=2)
                 httpd.server_close()
 
+    # --- AIPOS-254: auditor role generalization tests ---
+
+    def test_254_auditor_bound_identity_match_auto_releases(self) -> None:
+        """AIPOS-254 test 1: auditor token with agent_instance binding matches claim → auto-release (role generalization)."""
+        self._seed_pending("AIPOS-254-AUDIT1", task_mode="audit", agent="audit.lybra.local")
+        # Use a registry with auditor token bound to agent_instance
+        auditor_registry = {
+            "owner-secret": {
+                "role": "owner",
+                "token_ref": "svc-owner",
+                "scopes": ["queue_claim", "queue_return", "owner_confirm", "owner_decision_record", "draft_publish"],
+                "expires_at": "2999-01-01T00:00:00Z",
+                "fingerprint": "sha256:ownfp254",
+            },
+            "auditor-secret": {
+                "role": "auditor",
+                "token_ref": "svc-auditor",
+                "scopes": ["queue_claim", "audit_verdict"],
+                "expires_at": "2999-01-01T00:00:00Z",
+                "fingerprint": "sha256:audfp254",
+                # AIPOS-254: auditor token bound to canonical agent_instance
+                "agent_instance": "audit.lybra.local",
+            },
+        }
+        config = HttpSseConfig(
+            host=DEFAULT_HTTP_HOST,
+            port=0,
+            token="",
+            keepalive_seconds=0.01,
+            max_keepalive_events=1,
+            service_role_registry=auditor_registry,
+        )
+        with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
+            httpd = build_http_server(config)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = httpd.server_address
+                url = f"http://{host}:{port}"
+                owner = GateClient(url, "owner-secret")
+                owner.initialize()
+                # grant envelope covering audit.lybra.local for audit tasks
+                self._grant_policy(owner, "pol-254-audit1", _policy_block("pol_254_audit1", agent_or_role="audit.lybra.local", task_mode="audit"))
+
+                auditor = GateClient(url, "auditor-secret")
+                auditor.initialize()
+                # auditor token bound to agent_instance="audit.lybra.local",
+                # claim self-reports same → identity matches → auto-release
+                claim = self._claim(auditor, "AIPOS-254-AUDIT1", mode="PreAuthorized", policy_ref="pol_254_audit1", agent_instance="audit.lybra.local", actor="audit.lybra.local")
+
+                self.assertTrue(claim.get("ok"), f"auditor token-bound identity match should auto-release: {claim}")
+                self.assertEqual(claim.get("autonomy_mode"), "PreAuthorized", claim)
+                self.assertTrue(claim.get("preauthorized_release"), claim)
+                self.assertFalse(claim.get("owner_confirmation_required"), claim)
+            finally:
+                httpd.shutdown()
+                thread.join(timeout=2)
+                httpd.server_close()
+
+    def test_254_auditor_identity_mismatch_falls_back(self) -> None:
+        """AIPOS-254 test 2: auditor claim self-report doesn't match token binding → fall back Supervised."""
+        self._seed_pending("AIPOS-254-AUDIT2", task_mode="audit", agent="impostor.audit")
+        auditor_registry = {
+            "owner-secret": {
+                "role": "owner",
+                "token_ref": "svc-owner",
+                "scopes": ["queue_claim", "queue_return", "owner_confirm", "owner_decision_record", "draft_publish"],
+                "expires_at": "2999-01-01T00:00:00Z",
+                "fingerprint": "sha256:ownfp254",
+            },
+            "auditor-secret": {
+                "role": "auditor",
+                "token_ref": "svc-auditor",
+                "scopes": ["queue_claim", "audit_verdict"],
+                "expires_at": "2999-01-01T00:00:00Z",
+                "fingerprint": "sha256:audfp254",
+                "agent_instance": "audit.lybra.local",
+            },
+        }
+        config = HttpSseConfig(
+            host=DEFAULT_HTTP_HOST,
+            port=0,
+            token="",
+            keepalive_seconds=0.01,
+            max_keepalive_events=1,
+            service_role_registry=auditor_registry,
+        )
+        with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
+            httpd = build_http_server(config)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = httpd.server_address
+                url = f"http://{host}:{port}"
+                owner = GateClient(url, "owner-secret")
+                owner.initialize()
+                # grant envelope covering impostor.audit
+                self._grant_policy(owner, "pol-254-audit2", _policy_block("pol_254_audit2", agent_or_role="impostor.audit", task_mode="audit"))
+
+                auditor = GateClient(url, "auditor-secret")
+                auditor.initialize()
+                # auditor token bound to "audit.lybra.local",
+                # but claim self-reports "impostor.audit" → identity mismatch → fall back Supervised
+                claim = self._claim(auditor, "AIPOS-254-AUDIT2", mode="PreAuthorized", policy_ref="pol_254_audit2", agent_instance="impostor.audit", actor="impostor.audit")
+
+                self.assertFalse(claim.get("preauthorized_release"), claim)
+                self.assertTrue(claim.get("owner_confirmation_required"), claim)
+                self.assertIn("dry_run_token", claim, claim)
+                # identity_provenance should record binding_mismatch
+                meta = claim.get("data", {}).get("mcp_claim", {})
+                prov = meta.get("identity_provenance", {})
+                self.assertEqual(prov.get("binding_status"), "binding_mismatch", prov)
+            finally:
+                httpd.shutdown()
+                thread.join(timeout=2)
+                httpd.server_close()
+
+    def test_254_auditor_no_binding_falls_back(self) -> None:
+        """AIPOS-254 test 3: auditor token without agent_instance binding → PreAuthorized unavailable."""
+        self._seed_pending("AIPOS-254-AUDIT3", task_mode="audit", agent="audit.lybra.local")
+        # Use a registry without agent_instance binding for auditor
+        unbound_auditor_registry = {
+            "owner-secret": {
+                "role": "owner",
+                "token_ref": "svc-owner",
+                "scopes": ["queue_claim", "queue_return", "owner_confirm", "owner_decision_record", "draft_publish"],
+                "expires_at": "2999-01-01T00:00:00Z",
+                "fingerprint": "sha256:ownfp254",
+            },
+            "auditor-secret": {
+                "role": "auditor",
+                "token_ref": "svc-auditor",
+                "scopes": ["queue_claim", "audit_verdict"],
+                "expires_at": "2999-01-01T00:00:00Z",
+                "fingerprint": "sha256:audfp254",
+                # NO agent_instance binding
+            },
+        }
+        config = HttpSseConfig(
+            host=DEFAULT_HTTP_HOST,
+            port=0,
+            token="",
+            keepalive_seconds=0.01,
+            max_keepalive_events=1,
+            service_role_registry=unbound_auditor_registry,
+        )
+        with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
+            httpd = build_http_server(config)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = httpd.server_address
+                url = f"http://{host}:{port}"
+                owner = GateClient(url, "owner-secret")
+                owner.initialize()
+                self._grant_policy(owner, "pol-254-audit3", _policy_block("pol_254_audit3", agent_or_role="audit.lybra.local", task_mode="audit"))
+
+                auditor = GateClient(url, "auditor-secret")
+                auditor.initialize()
+                claim = self._claim(auditor, "AIPOS-254-AUDIT3", mode="PreAuthorized", policy_ref="pol_254_audit3", agent_instance="audit.lybra.local", actor="audit.lybra.local")
+
+                # should fall back to Supervised (no binding → PreAuthorized unavailable)
+                self.assertFalse(claim.get("preauthorized_release"), claim)
+                self.assertTrue(claim.get("owner_confirmation_required"), claim)
+                self.assertIn("dry_run_token", claim, claim)
+                # identity_provenance should record binding_absent
+                meta = claim.get("data", {}).get("mcp_claim", {})
+                prov = meta.get("identity_provenance", {})
+                self.assertEqual(prov.get("binding_status"), "binding_absent", prov)
+            finally:
+                httpd.shutdown()
+                thread.join(timeout=2)
+                httpd.server_close()
+
 
 class PreAuthEnvelopeRealRotateEndToEndTests(unittest.TestCase):
     """AIPOS-250 #4 — end-to-end via REAL serve-rotate creds (no hand-built registry) using the
