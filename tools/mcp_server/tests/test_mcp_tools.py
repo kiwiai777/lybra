@@ -1814,6 +1814,211 @@ class McpToolTests(unittest.TestCase):
             )
         self.assertEqual(response["error_code"], "SNAPSHOT_MISMATCH")
 
+    def test_aipos253_return_confirm_derives_audit_task_with_publish_record(self) -> None:
+        """AIPOS-253: return_confirm mechanically derives audit task + publish record."""
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+
+        self.assertTrue(confirmed["ok"])
+        
+        # Verify audit task was derived
+        audit_task_path = self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-mcp-returnr.md"
+        self.assertTrue(audit_task_path.exists(), "Derived audit task should exist")
+        
+        audit_content = audit_task_path.read_text(encoding="utf-8")
+        audit_metadata, audit_body, _ = parse_markdown_frontmatter(audit_content)
+        
+        self.assertEqual(audit_metadata["task_id"], "AIPOS-MCP-RETURNR")
+        self.assertEqual(audit_metadata["task_mode"], "audit")
+        self.assertEqual(audit_metadata["status"], "pending")
+        self.assertEqual(audit_metadata["created_by"], "gate_derivation")
+        self.assertEqual(audit_metadata["derived_from"], "AIPOS-MCP-RETURN")
+        self.assertEqual(audit_metadata["reviewed_task_id"], "AIPOS-MCP-RETURN")
+        self.assertIn("audit.lybra.", audit_metadata["agent_instance"])
+        self.assertEqual(audit_metadata["assigned_to"], "audit_lybra")
+        
+        # Verify body is mechanical signpost
+        self.assertIn("AIPOS-MCP-RETURN", audit_body)
+        self.assertIn("Independent audit", audit_body)
+        self.assertIn("original task card", audit_body)
+        
+        # Verify publish record was written for authority_scanner VALID
+        publish_record_path = self.repo_root / "5_tasks" / "records" / "publishes" / "AIPOS-MCP-RETURNR" / "publish_aipos-mcp-returnr.md"
+        self.assertTrue(publish_record_path.exists(), "Publish record should exist for derived audit task")
+        
+        publish_content = publish_record_path.read_text(encoding="utf-8")
+        publish_metadata, _, _ = parse_markdown_frontmatter(publish_content)
+        
+        self.assertEqual(publish_metadata["record_type"], "publish_record")
+        self.assertEqual(publish_metadata["task_id"], "AIPOS-MCP-RETURNR")
+        self.assertEqual(publish_metadata["actor"], "gate_derivation")
+        self.assertEqual(publish_metadata["published_task_ref"], "5_tasks/queue/pending/aipos-mcp-returnr.md")
+        
+        # Verify authority_scanner classifies as VALID
+        from tools.aipos_cli.authority_scanner import classify_task_authority
+        from tools.aipos_cli.task_loader import load_all_tasks
+        
+        tasks = load_all_tasks(self.repo_root)
+        records = load_records(self.repo_root)
+        
+        audit_task = next((t for t in tasks if t.get("task_id") == "AIPOS-MCP-RETURNR"), None)
+        self.assertIsNotNone(audit_task, "Derived audit task should be in task index")
+        
+        authority = classify_task_authority(audit_task, records)  # type: ignore[arg-type]
+        self.assertEqual(authority["authority_verdict"], "VALID", "Derived audit task should have VALID authority")
+        self.assertTrue(authority["effective_truth"], "Derived audit task should have effective_truth=True")
+
+    def test_aipos253_return_confirm_idempotency_no_duplicate_derivation(self) -> None:
+        """AIPOS-253: Idempotency - if audit task already exists, no re-derivation."""
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
+        }
+        
+        # First return derives audit task
+        with patch.dict(os.environ, env, clear=True):
+            dry1 = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            confirmed1 = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry1["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        
+        self.assertTrue(confirmed1["ok"])
+        audit_task_path = self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-mcp-returnr.md"
+        self.assertTrue(audit_task_path.exists())
+        
+        # Record original content and mtime
+        original_content = audit_task_path.read_text(encoding="utf-8")
+        original_mtime = audit_task_path.stat().st_mtime
+        
+        # Direct call to derivation logic with same task_id should be idempotent
+        from tools.aipos_cli.audit_derivation import derive_audit_task_on_return
+        
+        result = derive_audit_task_on_return(
+            repo_root=self.repo_root,
+            source_task_id="AIPOS-MCP-RETURN",
+            source_metadata={"task_id": "AIPOS-MCP-RETURN", "title": "Test", "project": "lybra"},
+            source_path="5_tasks/queue/claimed/aipos-mcp-return.md",
+            return_record_ref="return_AIPOS-MCP-RETURN_second",
+            artifact_refs=[],
+        )
+        
+        # Should not re-derive
+        self.assertFalse(result["derived"])
+        self.assertIn("already exists", result["reason"])
+        
+        # Verify audit task was not modified
+        current_content = audit_task_path.read_text(encoding="utf-8")
+        current_mtime = audit_task_path.stat().st_mtime
+        
+        self.assertEqual(original_content, current_content, "Audit task should not be modified")
+        self.assertEqual(original_mtime, current_mtime, "Audit task mtime should not change")
+
+    def test_aipos253_return_confirm_respects_audit_none_opt_out(self) -> None:
+        """AIPOS-253: Tasks with audit: none do not derive audit task."""
+        # Write task with audit: none
+        (self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md").write_text(
+            "\n".join(
+                [
+                    "---",
+                    "task_id: AIPOS-MCP-RETURN",
+                    "title: MCP Return Test",
+                    "project: lybra",
+                    "assigned_to: dev_claude",
+                    "agent_instance: agent-01",
+                    "context_bundle: dev_claude",
+                    "task_mode: code",
+                    "model_tier: L2",
+                    "priority: medium",
+                    "status: claimed",
+                    "created_by: tester",
+                    "needs_owner: false",
+                    "audit: none",  # Opt-out
+                    "output_target: tools/mcp_server/",
+                    "artifact_policy: formal_write",
+                    "session_policy: single_task_session",
+                    "context_isolation: strict",
+                    "artifact_scope: tools/mcp_server/",
+                    "memory_scope: mcp return tests",
+                    "claim_policy: specific_instance_only",
+                    "claim_id: claim_AIPOS-MCP-RETURN_20260603_agent-01",
+                    "claimed_by: agent-01",
+                    "claimed_at: 2026-06-03T00:00:00Z",
+                    "active_session_id: session_AIPOS-MCP-RETURN_20260603_agent-01",
+                    "---",
+                    "Task with audit opt-out.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        
+        # Write claim and session records
+        session_id = "session_AIPOS-MCP-RETURN_20260603_agent-01"
+        claim_id = "claim_AIPOS-MCP-RETURN_20260603_agent-01"
+        claim_path = self.repo_root / "5_tasks" / "records" / "claims" / "AIPOS-MCP-RETURN" / f"{claim_id}.md"
+        claim_path.parent.mkdir(parents=True, exist_ok=True)
+        claim_path.write_text("---\nrecord_type: claim_record\nclaim_id: " + claim_id + "\ntask_id: AIPOS-MCP-RETURN\n---\n", encoding="utf-8")
+        
+        session_path = self.repo_root / "5_tasks" / "records" / "sessions" / "AIPOS-MCP-RETURN" / f"{session_id}.md"
+        session_path.parent.mkdir(parents=True, exist_ok=True)
+        session_path.write_text("---\nrecord_type: session_record\nsession_id: " + session_id + "\ntask_id: AIPOS-MCP-RETURN\n---\n", encoding="utf-8")
+        
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        
+        self.assertTrue(confirmed["ok"])
+        
+        # Verify audit task was NOT derived
+        audit_task_path = self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-mcp-returnr.md"
+        self.assertFalse(audit_task_path.exists(), "Audit task should NOT be derived when audit: none")
+        
+        # Verify no publish record
+        publish_record_path = self.repo_root / "5_tasks" / "records" / "publishes" / "AIPOS-MCP-RETURNR"
+        self.assertFalse(publish_record_path.exists(), "No publish record should exist when audit opt-out")
+
 
 if __name__ == "__main__":
     unittest.main()

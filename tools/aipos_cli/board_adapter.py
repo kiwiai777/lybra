@@ -8,6 +8,7 @@ from typing import Any
 
 from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, error_entry, make_response
 from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles, registry_available, resolve_instance_id
+from tools.aipos_cli.audit_derivation import derive_audit_task_on_return
 from tools.aipos_cli.artifact_ingest import (
     _as_ref_list,
     approved_scratch_root,
@@ -2080,10 +2081,27 @@ def return_task(
         record_performed_writes: list[dict[str, Any]] = []
         if bool(data.get("mcp_records_enabled")):
             record_performed_writes = _write_mcp_return_records(resolved_root, data)
+        
+        # AIPOS-253: Derive audit task after successful return
+        audit_derivation_writes: list[dict[str, Any]] = []
+        source_metadata = data.get("updated_frontmatter") if isinstance(data.get("updated_frontmatter"), dict) else {}
+        return_record_ref = str(source_metadata.get("return_record_ref") or "")
+        if return_record_ref:
+            derivation_result = derive_audit_task_on_return(
+                repo_root=resolved_root,
+                source_task_id=str(data.get("task_id") or ""),
+                source_metadata=source_metadata,
+                source_path=str(data.get("source_path") or ""),
+                return_record_ref=return_record_ref,
+                artifact_refs=list(source_metadata.get("artifact_refs", [])),
+            )
+            if derivation_result.get("derived"):
+                audit_derivation_writes = list(derivation_result.get("performed_writes", []))
+        
         response["dry_run"] = False
         response["data"]["wrote"] = True
         _mark_record_write_report_performed(response["data"])
-        response["performed_writes"] = list(response.get("planned_writes", [])) + ingestion_performed_writes + record_performed_writes
+        response["performed_writes"] = list(response.get("planned_writes", [])) + ingestion_performed_writes + record_performed_writes + audit_derivation_writes
         response["owner_confirmation_required"] = False
         response["owner_confirmation_reasons"] = []
         return response
