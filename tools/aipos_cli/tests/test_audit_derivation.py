@@ -45,6 +45,12 @@ class TestAuditDerivation(unittest.TestCase):
         self.assertFalse(should_derive_audit({"audit": "None"}))
         self.assertFalse(should_derive_audit({"audit": "NONE"}))
 
+    def test_should_derive_audit_audit_mode_blocked(self) -> None:
+        # AIPOS-256 F-253-3: audit tasks do not derive audit tasks (infinite R chain guard)
+        self.assertFalse(should_derive_audit({"task_mode": "audit"}))
+        self.assertFalse(should_derive_audit({"task_mode": "AUDIT"}))
+        self.assertFalse(should_derive_audit({"task_mode": "Audit"}))
+
     def test_should_derive_audit_idempotency_checks(self) -> None:
         self.assertFalse(should_derive_audit({"related_audit_task_ref": "AIPOS-123R"}))
         self.assertFalse(should_derive_audit({"audit_dispatch_record_ref": "dispatch_xyz"}))
@@ -82,7 +88,8 @@ class TestAuditDerivation(unittest.TestCase):
         self.assertEqual(metadata["title"], "Audit Test Task")
         self.assertEqual(metadata["project"], "lybra")
         self.assertEqual(metadata["task_mode"], "audit")
-        self.assertEqual(metadata["task_class"], "complex")
+        self.assertEqual(metadata["task_class"], "simple")  # AIPOS-256F1 F-256-1: simple per enum
+        self.assertEqual(metadata["audit"], "none")  # AIPOS-256 F-253-3: audit: none prevents R chain
         self.assertEqual(metadata["status"], "pending")
         self.assertEqual(metadata["created_by"], "gate_derivation")
         self.assertEqual(metadata["derived_from"], "AIPOS-123")

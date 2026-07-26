@@ -14,9 +14,12 @@ from tools.aipos_cli.board_adapter import (
     execute_dry_run,
     publish_draft,
     reopen_task,
+    return_task,
 )
 from tools.aipos_cli.controlled_execute import get_dry_run
 from tools.aipos_cli.draft_validator import validate_draft_file
+from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.queue_mutation import render_task_markdown
 
 FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures"
 
@@ -236,6 +239,96 @@ class BoardAdapterExecuteIntegrationTests(unittest.TestCase):
         self.assertIn("current_snapshot_hash", blocked["data"])
         self.assertIn("expected_dry_run_snapshot_hash", blocked["data"])
         self.assertEqual(blocked["data"].get("recommended_action"), "run dry-run again")
+
+    # AIPOS-256F3 F-256R-3-R1: Real E2E for return→derive→backref with body preservation.
+    # Function-level call (dry_run=False); no MCP/owner-token mock required (proven path).
+    def test_return_derive_backref_body_survives(self) -> None:
+        task_id = "AIPOS-V01"
+        session_id = "session_AIPOS-V01_x"
+        claim_id = "claim_AIPOS-V01_x"
+        actor = "exec.lybra.test"
+
+        # Records scaffolding required by the return flow (not created by setUp).
+        for rel in (
+            f"5_tasks/records/sessions/{task_id}",
+            f"5_tasks/records/claims/{task_id}",
+            f"5_tasks/records/returns/{task_id}",
+        ):
+            (self.repo_root / rel).mkdir(parents=True, exist_ok=True)
+        (self.repo_root / f"5_tasks/records/sessions/{task_id}/{session_id}.md").write_text(
+            f"---\nrecord_type: session_record\ntask_id: {task_id}\nsession_id: {session_id}\n---\n",
+            encoding="utf-8",
+        )
+        (self.repo_root / f"5_tasks/records/claims/{task_id}/{claim_id}.md").write_text(
+            f"---\nrecord_type: claim_record\ntask_id: {task_id}\nclaim_id: {claim_id}\n---\n",
+            encoding="utf-8",
+        )
+
+        source_metadata = {
+            "task_id": task_id,
+            "title": "T",
+            "project": "lybra",
+            "task_mode": "code",
+            "task_class": "simple",
+            "status": "claimed",
+            "assigned_to": actor,
+            "agent_instance": actor,
+            "context_bundle": "default",
+            "priority": "medium",
+            "created_by": "advisor",
+            "needs_owner": False,
+            "output_target": "tools/",
+            "artifact_policy": "formal_write",
+            "claimed_by": actor,
+            "claim_id": claim_id,
+            "active_session_id": session_id,
+            "claimed_at": "2026-07-26T13:00:00Z",
+        }
+        # Distinctive body marker — must survive the return/derive/backref rewrite byte-for-byte.
+        body_before = "## Important Task Body\nDistinctive-MARKER-9f3c21\nMust survive.\n"
+        source_card = self.repo_root / "5_tasks/queue/claimed/aipos-v01.md"
+        source_card.write_text(render_task_markdown(source_metadata, body_before), encoding="utf-8")
+
+        # Body as it lives in the source card immediately before return (byte-level baseline).
+        _, parsed_body_before, _ = parse_markdown_frontmatter(source_card.read_text(encoding="utf-8"))
+
+        response = return_task(
+            task_id=task_id,
+            actor=actor,
+            agent_instance=actor,
+            owner_policy_ref="owner_policy:test",
+            claim_id=claim_id,
+            active_session_id=session_id,
+            result_summary="done",
+            dry_run=False,
+            repo_root=self.repo_root,
+            mcp_return_metadata={"identity_provenance": {"registry_available": True}},
+        )
+
+        # (a) verdict non-BLOCK (the F-256R-1-R1 crash was swallowed into BLOCK).
+        self.assertNotEqual(response.get("verdict"), "BLOCK", msg=f"return blocked: {response.get('blocking_reasons')!r}")
+        self.assertNotIn(
+            "'tuple' object has no attribute 'get'",
+            str(response.get("blocking_reasons")),
+            msg="F-256R-1-R1 tuple crash regressed",
+        )
+
+        # (b) derived audit card exists on disk (locate via performed_writes, then assert file).
+        derivation_writes = [
+            w for w in response.get("performed_writes", []) if w.get("type") == "derived_audit_task"
+        ]
+        self.assertTrue(derivation_writes, msg="no derived_audit_task write in performed_writes")
+        audit_card_path = self.repo_root / derivation_writes[0]["path"]
+        self.assertTrue(audit_card_path.exists(), msg=f"derived audit card missing at {audit_card_path}")
+
+        # (c) source card backref written (the F-253-1 closure the crash was silently breaking).
+        after_text = source_card.read_text(encoding="utf-8")
+        self.assertIn("related_audit_task_ref: AIPOS-V01R", after_text, msg="backref not written to source card")
+
+        # (d) source card body byte-identical before vs after the rewrite.
+        _, parsed_body_after, _ = parse_markdown_frontmatter(after_text)
+        self.assertEqual(parsed_body_before, parsed_body_after, msg="source card body changed across return")
+        self.assertIn("Distinctive-MARKER-9f3c21", parsed_body_after, msg="distinctive body marker lost")
 
 
 if __name__ == "__main__":

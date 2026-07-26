@@ -52,10 +52,15 @@ def should_derive_audit(source_metadata: dict[str, Any]) -> bool:
     
     Returns False if:
     - audit: none in frontmatter
+    - task_mode is audit (AIPOS-256 F-253-3: prevent infinite R chain)
     - already has related_audit_task_ref or audit_dispatch_record_ref (idempotency)
     """
     # Explicit opt-out
     if str(source_metadata.get("audit", "")).strip().lower() == "none":
+        return False
+    
+    # AIPOS-256 F-253-3: Prevent infinite audit chain (audit tasks do not derive audits)
+    if str(source_metadata.get("task_mode", "")).strip().lower() == "audit":
         return False
     
     # Already dispatched (idempotency)
@@ -94,11 +99,12 @@ def build_derived_audit_task(
         "agent_instance": _derive_audit_instance(project),
         "context_bundle": source_metadata.get("context_bundle", "default"),
         "task_mode": "audit",
-        "task_class": "complex",
+        "task_class": "simple",
         "priority": source_metadata.get("priority", "medium"),
         "status": "pending",
         "created_by": "gate_derivation",
         "needs_owner": False,
+        "audit": "none",
         "derived_from": source_task_id,
         "reviewed_task_id": source_task_id,
         "reviewed_task_path": source_path,

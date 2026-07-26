@@ -2097,6 +2097,24 @@ def return_task(
             )
             if derivation_result.get("derived"):
                 audit_derivation_writes = list(derivation_result.get("performed_writes", []))
+                # AIPOS-256 F-253-1: Write back related_audit_task_ref to source task
+                # AIPOS-256F2 F-256R-1: Read body from file to preserve content
+                audit_task_id = derivation_result.get("audit_task_id")
+                if audit_task_id:
+                    # Read current task card content (just written at line 2080)
+                    current_source_content = target.read_text(encoding="utf-8")
+                    _, source_body, _ = parse_markdown_frontmatter(current_source_content)
+                    updated_source_metadata = dict(source_metadata)
+                    updated_source_metadata["related_audit_task_ref"] = audit_task_id
+                    updated_source_markdown = render_task_markdown(updated_source_metadata, source_body)
+                    target.write_text(updated_source_markdown, encoding="utf-8")
+                    audit_derivation_writes.append({
+                        "path": str(data.get("source_path") or ""),
+                        "kind": "update",
+                        "type": "source_task_backref",
+                        "field": "related_audit_task_ref",
+                        "value": audit_task_id,
+                    })
         
         response["dry_run"] = False
         response["data"]["wrote"] = True
