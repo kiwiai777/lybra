@@ -599,7 +599,8 @@
     function formatTimelineDescription(record) {
       // Create human-readable description
       const taskId = record.task_id || 'N/A';
-      const agent = record.agent_name || record.decided_by_ref || record.captured_by || 'Unknown';
+      // AIPOS-255 F-BOARD-2: read actor from record.actor (now exposed by records.py)
+      const agent = record.actor || record.agent_name || record.decided_by_ref || record.captured_by || 'unknown';
       
       const lang = i18n.getCurrentLang();
       if (lang === 'zh') {

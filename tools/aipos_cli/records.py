@@ -102,6 +102,8 @@ def _build_record(
                 "session_status": metadata.get("session_status") or metadata.get("status"),
                 "claim_id": metadata.get("claim_id"),
                 "created_at": metadata.get("created_at") or metadata.get("session_started_at"),
+                # AIPOS-255 F-BOARD-2: expose actor for timeline rendering
+                "actor": metadata.get("actor"),
             }
         )
     elif record_type == "claim":
@@ -135,6 +137,8 @@ def _build_record(
                 "returned_at": metadata.get("returned_at") or metadata.get("created_at"),
                 "executor_status": metadata.get("executor_status"),
                 "audit_readiness": metadata.get("audit_readiness"),
+                # AIPOS-255 F-BOARD-2: expose actor for timeline rendering
+                "actor": metadata.get("actor") or metadata.get("returned_by"),
             }
         )
     elif record_type == "audit_dispatch":
@@ -146,6 +150,8 @@ def _build_record(
                 "reviewed_executor_instance": metadata.get("reviewed_executor_instance"),
                 "reviewed_return_record_ref": metadata.get("reviewed_return_record_ref"),
                 "dispatched_at": metadata.get("dispatched_at"),
+                # AIPOS-255 F-BOARD-2: expose actor for timeline rendering
+                "actor": metadata.get("actor"),
             }
         )
     else:
@@ -158,6 +164,8 @@ def _build_record(
                 "reviewed_executor_instance": metadata.get("reviewed_executor_instance"),
                 "auditor_instance": metadata.get("auditor_instance"),
                 "verdict_at": metadata.get("verdict_at"),
+                # AIPOS-255 F-BOARD-2: expose actor for timeline rendering
+                "actor": metadata.get("actor") or metadata.get("auditor_instance"),
             }
         )
     return record

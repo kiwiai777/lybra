@@ -515,6 +515,8 @@ def validate_tasks(
         if task.get("authority_verdict") in {"ORPHAN_INVALID", "QUARANTINED", "CONTRADICTORY"}:
             task["recommended_action"] = "owner_authority_review"
     summary = Counter(task["verdict"].lower() for task in validated)
+    # AIPOS-255 F-BOARD-1: add queue_state counts for board UI
+    queue_state_counts = Counter(task["queue_state"] for task in validated if task.get("queue_state"))
     return {
         "scope": "queue",
         "summary": {
@@ -523,6 +525,11 @@ def validate_tasks(
             "warn": summary.get("warn", 0),
             "block": summary.get("block", 0),
             "needs_owner": summary.get("needs_owner", 0),
+            # AIPOS-255 F-BOARD-1: queue state counts (board UI contract)
+            "pending": queue_state_counts.get("pending", 0),
+            "claimed": queue_state_counts.get("claimed", 0),
+            "blocked": queue_state_counts.get("blocked", 0),
+            "completed": queue_state_counts.get("completed", 0),
         },
         "records_summary": build_records_summary(records or {}, validated),
         "records_diagnostics": build_records_diagnostics(records or {}, validated),
