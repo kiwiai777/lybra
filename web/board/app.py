@@ -160,9 +160,11 @@ def get_overview(board_config_path: Path | None = None) -> dict[str, Any]:
                 if truth_data.get("ok"):
                     summary = truth_data.get("summary") or {}
                     stage_counts = dict(summary.get("stage_counts") or {})
+                    top_level_counts = dict(summary.get("top_level_counts") or {})
                     truth_total = int(summary.get("total_tasks") or 0)
             except Exception:
                 stage_counts = {}
+                top_level_counts = {}
                 truth_total = 0
 
             results.append({
@@ -173,8 +175,9 @@ def get_overview(board_config_path: Path | None = None) -> dict[str, Any]:
                 "needs_owner": needs_owner_items,
                 "recent_activity": recent_activity,
                 "stage_counts": stage_counts,
+                "top_level_counts": top_level_counts,
                 "truth_total": truth_total,
-            })
+            });
             
         except Exception as e:
             results.append({

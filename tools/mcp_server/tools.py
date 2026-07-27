@@ -494,6 +494,40 @@ def _reported_tokens_value(args: dict[str, Any]) -> int | None:
         return None
 
 
+def _coerce_int_or_none(raw: Any) -> int | None:
+    if isinstance(raw, bool) or raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _agent_runtime_value(args: dict[str, Any]) -> dict[str, Any] | None:
+    # AIPOS-261 (capability ledger, additive): agent-REPORTED runtime bundle for a
+    # return — {harness, model_self_reported, tokens_in, tokens_out}. The gate records
+    # it as-reported, never measures or verifies it (same disclosure caliber as
+    # actual_model/reported_tokens). Returns None when the caller sent nothing usable,
+    # so old records simply lack the key (popup shows 未记录).
+    raw = args.get("agent_runtime")
+    if not isinstance(raw, dict):
+        return None
+    harness = str(raw.get("harness") or "").strip() or None
+    model_self_reported = str(raw.get("model_self_reported") or "").strip() or None
+    tokens_in = _coerce_int_or_none(raw.get("tokens_in"))
+    tokens_out = _coerce_int_or_none(raw.get("tokens_out"))
+    bundle: dict[str, Any] = {}
+    if harness:
+        bundle["harness"] = harness
+    if model_self_reported:
+        bundle["model_self_reported"] = model_self_reported
+    if tokens_in is not None:
+        bundle["tokens_in"] = tokens_in
+    if tokens_out is not None:
+        bundle["tokens_out"] = tokens_out
+    return bundle or None
+
+
 def _claim_metadata(
     args: dict[str, Any],
     *,
@@ -564,6 +598,10 @@ def _return_metadata(
         # AIPOS-250 (capability ledger): agent-reported, not gate-measured (disclosure #15).
         "actual_model": str(args.get("actual_model") or "").strip() or None,
         "reported_tokens": _reported_tokens_value(args),
+        # AIPOS-261 (additive): optional agent-reported runtime bundle
+        # {harness, model_self_reported, tokens_in, tokens_out}. Recorded as-reported,
+        # never verified; absent → None (old records show 未记录 in the popup).
+        "agent_runtime": _agent_runtime_value(args),
         "owner_confirmation_required": True,
         "owner_confirmation_reasons": _return_owner_reasons(),
         "lease_path": "claim_only",
@@ -2322,6 +2360,17 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "return_reason": {"type": "string"},
                 "actual_model": {"type": "string"},
                 "reported_tokens": {"type": "integer"},
+                "agent_runtime": {
+                    "type": "object",
+                    "description": "AIPOS-261: optional agent-REPORTED runtime bundle (capability ledger, never verified). {harness, model_self_reported, tokens_in, tokens_out}.",
+                    "properties": {
+                        "harness": {"type": "string"},
+                        "model_self_reported": {"type": "string"},
+                        "tokens_in": {"type": "integer"},
+                        "tokens_out": {"type": "integer"}
+                    },
+                    "additionalProperties": False
+                },
             },
             "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
             "additionalProperties": False,

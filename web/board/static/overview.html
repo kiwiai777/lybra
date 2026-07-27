@@ -114,42 +114,27 @@
         return card;
       }
       
-      // Queue counts
-      if (workspace.queue_counts) {
-        const counts = document.createElement('div');
-        counts.className = 'queue-counts';
-        
-        ['pending', 'claimed', 'blocked', 'completed'].forEach(state => {
-          const item = document.createElement('div');
-          item.className = 'queue-item';
-          
-          const count = document.createElement('div');
-          count.className = 'queue-count';
-          count.textContent = workspace.queue_counts[state] || 0;
-          
-          const labelEl = document.createElement('div');
-          labelEl.className = 'queue-label';
-          labelEl.textContent = i18n.t(`queue.${state}`);
-          
-          item.appendChild(count);
-          item.appendChild(labelEl);
-          counts.appendChild(item);
-        });
-        
-        card.appendChild(counts);
-      }
-      
       // AIPOS-260 FIX-1: record-derived true-stage counts per workspace (not the
       // raw claimed/ count the old card labelled "进行中"). Additive key from /api/overview.
-      if (workspace.stage_counts) {
+      // FIX-2 F-261-3: collapse to three top-level states (已发布/执行中/已闭环),
+      // in sync with the workspace detail page; fine-grained stage_counts stays as data.
+      const realCounts = workspace.top_level_counts || workspace.stage_counts || {};
+      if (workspace.top_level_counts || workspace.stage_counts) {
         const real = document.createElement('div');
         real.className = 'real-progress';
         const realTitle = document.createElement('div');
         realTitle.className = 'real-progress-title';
         realTitle.textContent = i18n.t('card.real_progress');
         real.appendChild(realTitle);
-        const stages = ['executing', 'delivered', 'auditing', 'verdict_pass', 'verdict_fail', 'closed'];
-        const labels = {
+        const threeState = !!workspace.top_level_counts;
+        const stages = threeState
+          ? ['published', 'executing', 'closed']
+          : ['executing', 'delivered', 'auditing', 'verdict_pass', 'verdict_fail', 'closed'];
+        const labels = threeState ? {
+          published: i18n.t('stage.published'),
+          executing: i18n.t('stage.executing'),
+          closed: i18n.t('stage.closed'),
+        } : {
           executing: i18n.t('stage.executing'),
           delivered: i18n.t('stage.delivered'),
           auditing: i18n.t('stage.auditing'),
@@ -157,13 +142,14 @@
           verdict_fail: i18n.t('stage.verdict_fail'),
           closed: i18n.t('stage.closed'),
         };
+        const pillClass = threeState ? (s) => `rp-pill rp-${s}` : (s) => `rp-pill rp-${s}`;
         const pills = document.createElement('div');
         pills.className = 'real-progress-pills';
         stages.forEach(stage => {
-          const n = workspace.stage_counts[stage] || 0;
+          const n = realCounts[stage] || 0;
           if (!n) return;
           const pill = document.createElement('span');
-          pill.className = `rp-pill rp-${stage}`;
+          pill.className = pillClass(stage);
           pill.textContent = `${labels[stage]} ${n}`;
           pills.appendChild(pill);
         });
@@ -175,6 +161,24 @@
         }
         real.appendChild(pills);
         card.appendChild(real);
+      }
+      
+      // FIX-3 F-261-5: "受阻" anomaly light — rendered ONLY when blocked > 0
+      // (zero takes no slot). queue_counts data interface stays untouched; only
+      // the old four-count display (待认领/进行中/受阻/已完成, queue raw counts)
+      // was removed — the three-state pills above replace it (与 workspace 页同源).
+      const blockedCount =
+        (workspace.queue_counts && workspace.queue_counts.blocked) || 0;
+      if (blockedCount > 0) {
+        const signal = document.createElement('div');
+        signal.className = 'blocked-signal';
+        const dot = document.createElement('span');
+        dot.className = 'blocked-dot';
+        signal.appendChild(dot);
+        const sigText = document.createElement('span');
+        sigText.textContent = i18n.t('stage.blocked') + ' ' + blockedCount;
+        signal.appendChild(sigText);
+        card.appendChild(signal);
       }
       
       // Needs owner

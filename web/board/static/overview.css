@@ -154,31 +154,28 @@ main {
   background: #dc2626;
 }
 
-/* Queue counts */
-.queue-counts {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 20px;
-}
-
-.queue-item {
-  text-align: center;
-}
-
-.queue-count {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--accent);
-  line-height: 1;
-  margin-bottom: 4px;
-}
-
-.queue-label {
+/* FIX-3 F-261-5: blocked anomaly light — only rendered (JS) when blocked > 0;
+   the old four-count queue display (待认领/进行中/受阻/已完成) was removed
+   from the landing card; queue_counts data interface stays untouched. */
+.blocked-signal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 0.6rem;
+  padding: 6px 10px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
   font-size: 12.5px;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-weight: 600;
+  color: #b91c1c;
+}
+.blocked-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #dc2626;
+  flex-shrink: 0;
 }
 
 /* Needs owner section */
@@ -273,6 +270,9 @@ main {
   color: #fff;
 }
 .rp-executing { background: #2563eb; }
+/* FIX-3 F-261-6: 已发布 badge purple (was indigo #4f46e5), consistent with the
+   violet published card-background family (tlc-published #f5f3ff / #ddd6fe). */
+.rp-published { background: #7c3aed; }
 .rp-delivered { background: #d97706; }
 .rp-auditing { background: #7c3aed; }
 .rp-verdict_pass { background: #16a34a; }

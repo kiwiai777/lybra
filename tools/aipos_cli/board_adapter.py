@@ -1589,6 +1589,7 @@ def _mcp_return_record_plan(
     completion_report_ref: str | None,
     actual_model: str | None = None,
     reported_tokens: int | None = None,
+    agent_runtime: dict[str, Any] | None = None,
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     return_id: str | None = None,
@@ -1634,6 +1635,7 @@ def _mcp_return_record_plan(
         completion_report_ref=completion_report_ref,
         actual_model=actual_model,
         reported_tokens=reported_tokens,
+        agent_runtime=agent_runtime,
         dry_run_id=dry_run_id,
         dry_run_snapshot_hash=dry_run_snapshot_hash,
         confirmation_ref=confirmation_ref,
@@ -1878,6 +1880,7 @@ def _build_return_preview(
             completion_report_ref=completion_report_ref,
             actual_model=mcp_return_metadata.get("actual_model") if isinstance(mcp_return_metadata, dict) else None,
             reported_tokens=mcp_return_metadata.get("reported_tokens") if isinstance(mcp_return_metadata, dict) else None,
+            agent_runtime=mcp_return_metadata.get("agent_runtime") if isinstance(mcp_return_metadata, dict) and isinstance(mcp_return_metadata.get("agent_runtime"), dict) else None,
             return_id=return_id or None,
             confirmer=mcp_return_metadata.get("confirmer") if isinstance(mcp_return_metadata.get("confirmer"), dict) else None,
         )

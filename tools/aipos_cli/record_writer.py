@@ -110,6 +110,17 @@ def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None
             for item in value:
                 lines.append(f"- {_yaml_scalar(item)}")
             continue
+        # AIPOS-261: bounded depth-1 nested map (e.g. agent_runtime). Round-trips through
+        # both PyYAML and the stdlib fallback parser (which supports depth-1 maps). Deeper
+        # structures are intentionally not emitted by any writer.
+        if isinstance(value, dict):
+            if not value:
+                lines.append(f"{key}: " + "{}")
+                continue
+            lines.append(f"{key}:")
+            for sub_key, sub_val in value.items():
+                lines.append(f"  {sub_key}: {_yaml_scalar(sub_val)}")
+            continue
         lines.append(f"{key}: {_yaml_scalar(value)}")
     lines.extend(["---", body.rstrip(), ""])
     return "\n".join(lines)
@@ -214,6 +225,7 @@ MCP_RETURN_FRONTMATTER_ORDER = [
     "owner_policy_ref",
     "actual_model",
     "reported_tokens",
+    "agent_runtime",
     "claim_id",
     "session_id",
     "returned_at",
@@ -538,6 +550,7 @@ def build_mcp_return_record_markdown(
     completion_report_ref: str | None,
     actual_model: str | None = None,
     reported_tokens: int | None = None,
+    agent_runtime: dict[str, Any] | None = None,
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
@@ -579,6 +592,11 @@ def build_mcp_return_record_markdown(
         "lease_path": "claim_only",
         "active_lease_written": False,
     }
+    # AIPOS-261 (additive): only persist agent_runtime when at least one sub-value is
+    # present, so old records (and returns that did not report runtime) simply lack the
+    # key — the popup reads absent-key as 未记录.
+    if isinstance(agent_runtime, dict) and agent_runtime:
+        metadata["agent_runtime"] = dict(agent_runtime)
     body = "\n".join(
         [
             f"# MCP Return Record: {return_id}",

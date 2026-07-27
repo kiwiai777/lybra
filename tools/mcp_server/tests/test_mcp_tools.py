@@ -841,6 +841,83 @@ class McpToolTests(unittest.TestCase):
         self.assertIn("Verify returned work evidence", " ".join(dry["confirmation_preview"]["review_checklist"]))  # type: ignore[index]
         self.assertIn("dry_run_token", dry)
 
+    def test_aipos261_return_records_optional_agent_runtime_bundle(self) -> None:
+        # AIPOS-261 S3/S4: gate return dry_run/confirm accept an OPTIONAL agent_runtime
+        # bundle ({harness, model_self_reported, tokens_in, tokens_out}) and persist it
+        # into the return record frontmatter. Confirm carries it through the stored
+        # dry-run snapshot (no confirm-schema change). Sub-key names are pinned.
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
+        }
+        runtime = {
+            "harness": "pi",
+            "model_self_reported": "provider/sonnet-5",
+            "tokens_in": 12345,
+            "tokens_out": 678,
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload(agent_runtime=runtime)))
+            # dry-run preview must echo the bundle in mcp_return (additive, never verified).
+            self.assertEqual(dry["data"]["mcp_return"]["agent_runtime"], runtime)
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        self.assertTrue(confirmed["ok"])
+        records = load_records(self.repo_root)
+        return_record = records["returns"][0]["metadata"]
+        # S4: the four sub-key names are pinned exactly.
+        self.assertEqual(
+            set(return_record["agent_runtime"].keys()),
+            {"harness", "model_self_reported", "tokens_in", "tokens_out"},
+        )
+        self.assertEqual(return_record["agent_runtime"]["harness"], "pi")
+        self.assertEqual(return_record["agent_runtime"]["model_self_reported"], "provider/sonnet-5")
+        self.assertEqual(return_record["agent_runtime"]["tokens_in"], 12345)
+        self.assertEqual(return_record["agent_runtime"]["tokens_out"], 678)
+        # The persisted file must carry the nested map (round-trip safe).
+        ret_path = self.repo_root / "5_tasks" / "records" / "returns" / "AIPOS-MCP-RETURN" / records["returns"][0]["path"].split("/")[-1]
+        self.assertIn("agent_runtime:", ret_path.read_text(encoding="utf-8"))
+        self.assertIn("  harness: pi", ret_path.read_text(encoding="utf-8"))
+
+    def test_aipos261_return_without_agent_runtime_is_zero_break(self) -> None:
+        # AIPOS-261 S3: a return that does NOT send agent_runtime must work exactly as
+        # before — the key is simply absent (popup reads 未记录). Zero regression.
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            # dry-run preview carries agent_runtime=None (no data reported)...
+            self.assertIsNone(dry["data"]["mcp_return"].get("agent_runtime"))
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        self.assertTrue(confirmed["ok"])
+        return_record = load_records(self.repo_root)["returns"][0]["metadata"]
+        self.assertNotIn("agent_runtime", return_record)
+
     def test_queue_return_confirm_requires_owner_confirmation_then_updates_claimed_task_only(self) -> None:
         self.write_return_task()
         env = {
