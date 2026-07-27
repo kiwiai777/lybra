@@ -55,6 +55,7 @@ from tools.aipos_cli.record_writer import (
     return_record_path,
     session_record_path,
 )
+from tools.aipos_cli.owner_truth_view import build_owner_truth_view
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import (
     find_repo_context,
@@ -485,6 +486,18 @@ def get_records(repo_root: str | Path | None = None) -> dict[str, Any]:
         resolved_root = _resolve_repo_root(repo_root)
         report = load_records(resolved_root)
         return _response_from_validated_report(operation=operation, report=report)
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=False)
+
+
+def get_owner_truth_view(repo_root: str | Path | None = None) -> dict[str, Any]:
+    """AIPOS-260: read-only Owner truth summary read surface (task-center view +
+    per-round summary timeline + record-derived true-stage counts + activity
+    feed). Pure additive aggregation over records + tasks."""
+    operation = "get_owner_truth_view"
+    try:
+        resolved_root = _resolve_repo_root(repo_root)
+        return build_owner_truth_view(resolved_root)
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=False)
 

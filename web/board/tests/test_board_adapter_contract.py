@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.aipos_cli.board_adapter import get_queue, get_records
+from tools.aipos_cli.board_adapter import get_owner_truth_view, get_queue, get_records
 from tools.aipos_cli.task_loader import load_all_tasks
 from tools.aipos_cli.validator import validate_tasks
 from tools.aipos_cli.records import load_records
@@ -168,6 +168,97 @@ class BoardAdapterContractTests(unittest.TestCase):
         self.assertEqual(len(sessions), 1)
         self.assertIn("actor", sessions[0], "Board timeline reads record.actor")
         self.assertEqual(sessions[0]["actor"], "auditor.lybra.test")
+
+
+    def test_owner_truth_view_pinned_record_field_keys(self) -> None:
+        """AIPOS-260 S4: the Owner truth read surface depends on these exact records
+        field names: record_type, result_summary, findings_summary, verdict.
+        Pin the keys so any rename drifts visibly."""
+        # Task card with a real first-paragraph purpose.
+        (self.repo_root / "5_tasks" / "queue" / "claimed" / "task-c.md").write_text(
+            "---\n"
+            "task_id: TASK-C\n"
+            "title: Serve address passthrough\n"
+            "status: claimed\n"
+            "---\n"
+            "# TASK-C — cross-host onboarding\n\n"
+            "Gate/board must bind a host so cross-machine agents can reach it.\n",
+            encoding="utf-8",
+        )
+
+        def _write(rel: str, frontmatter: str, body: str = "") -> None:
+            path = self.repo_root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("---\n" + frontmatter + "\n---\n" + body, encoding="utf-8")
+
+        _write(
+            "5_tasks/records/publishes/TASK-C/publish_c1.md",
+            "record_type: publish_record\npublish_id: publish_c1\ntask_id: TASK-C\n"
+            "actor: owner\npublished_at: '2026-07-01T00:00:00Z'\n",
+        )
+        _write(
+            "5_tasks/records/claims/TASK-C/claim_c1.md",
+            "record_type: claim_record\nclaim_id: claim_c1\ntask_id: TASK-C\n"
+            "actor: exec.lybra.test\nclaimed_at: '2026-07-01T00:05:00Z'\n",
+        )
+        _write(
+            "5_tasks/records/returns/TASK-C/return_c1.md",
+            "record_type: return_record\nreturn_id: return_c1\ntask_id: TASK-C\n"
+            "actor: exec.lybra.test\nreturned_at: '2026-07-01T00:20:00Z'\n"
+            "result_summary_present: true\n",
+            "# MCP Return Record: return_c1\n\n## Summary\n\n"
+            "- Result summary: bind address passthrough complete, tests green.\n",
+        )
+        _write(
+            "5_tasks/records/audit_dispatches/TASK-C/dispatch_c1.md",
+            "record_type: audit_dispatch_record\ndispatch_id: dispatch_c1\n"
+            "reviewed_task_id: TASK-C\nactor: audit.lybra.test\n"
+            "dispatched_at: '2026-07-01T00:30:00Z'\n",
+        )
+        _write(
+            "5_tasks/records/audit_verdicts/TASK-C/verdict_c1.md",
+            "record_type: audit_verdict_record\nverdict_id: verdict_c1\nverdict: PASS\n"
+            "reviewed_task_id: TASK-C\nactor: audit.lybra.test\n"
+            "verdict_at: '2026-07-01T00:40:00Z'\nfindings_summary_present: true\n",
+            "# MCP Audit Verdict Record: verdict_c1\n\n## Summary\n\n"
+            "- Findings summary: PASS, independent evidence captured.\n",
+        )
+
+        response = get_owner_truth_view(repo_root=self.repo_root)
+
+        self.assertTrue(response["ok"], response)
+        data = response["data"]
+
+        # S4: pinned records field keys declared by the surface.
+        for key in ("record_type", "result_summary", "findings_summary", "verdict"):
+            self.assertIn(key, data["record_field_keys"], f"record_field_keys must pin {key}")
+
+        task_c = next(t for t in data["tasks"] if t["task_id"] == "TASK-C")
+        # Task row contract keys.
+        for key in ("task_id", "title", "purpose", "path", "queue_state", "true_stage", "stage_label", "verdict", "timeline"):
+            self.assertIn(key, task_c, f"task row must expose {key}")
+        self.assertEqual(task_c["title"], "Serve address passthrough")
+        self.assertIn("bind", task_c["purpose"].lower())
+        # Verdict recorded -> true_stage verdict_pass (display-layer derivation only).
+        self.assertEqual(task_c["true_stage"], "verdict_pass")
+        self.assertEqual(task_c["verdict"], "PASS")
+
+        # Timeline event contract keys; return carries result_summary, verdict carries findings_summary.
+        by_type = {ev["record_type"]: ev for ev in task_c["timeline"]}
+        self.assertEqual(set(by_type), {"publish", "claim", "return", "audit_dispatch", "audit_verdict"})
+        for ev in task_c["timeline"]:
+            for key in ("record_type", "record_id", "actor", "timestamp", "verb", "summary", "verdict"):
+                self.assertIn(key, ev, f"timeline event must carry {key}")
+        self.assertEqual(by_type["return"]["result_summary"], "bind address passthrough complete, tests green.")
+        self.assertEqual(by_type["audit_verdict"]["findings_summary"], "PASS, independent evidence captured.")
+        self.assertEqual(by_type["audit_verdict"]["verdict"], "PASS")
+        self.assertEqual(by_type["return"]["verb"], "交付了")
+        self.assertEqual(by_type["audit_verdict"]["verb"], "判决")
+
+        # Activity feed surfaces every record_type with a verb + summary.
+        feed_types = {ev["record_type"] for ev in data["activity_feed"]}
+        self.assertIn("return", feed_types)
+        self.assertIn("audit_verdict", feed_types)
 
 
 if __name__ == "__main__":

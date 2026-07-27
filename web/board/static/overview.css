@@ -244,3 +244,38 @@ main {
   font-size: 16px;
   color: var(--text-secondary);
 }
+
+/* AIPOS-260 FIX-1: per-workspace record-derived real progress (overview cards). */
+.real-progress {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-default);
+}
+.real-progress-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+}
+.real-progress-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rp-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+}
+.rp-executing { background: #2563eb; }
+.rp-delivered { background: #d97706; }
+.rp-auditing { background: #7c3aed; }
+.rp-verdict_pass { background: #16a34a; }
+.rp-verdict_fail { background: #dc2626; }
+.rp-closed { background: #0891b2; }
+.rp-empty { color: var(--text-secondary); font-size: 12px; font-style: italic; }

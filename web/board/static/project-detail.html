@@ -250,6 +250,100 @@
       color: var(--text-secondary);
       margin-top: 0.5rem;
     }
+
+    /* ===== AIPOS-260 FIX-1: 任务中心 (Owner truth summary) ===== */
+    .task-center-section { border-left-color: var(--accent); }
+    .section-hint {
+      margin: 0 0 12px;
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .tc-subheading {
+      margin: 18px 0 8px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-body);
+    }
+    /* True-stage pills (record-derived counts). */
+    .tc-stage-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .stage-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      background: rgba(0,0,0,0.04);
+      color: var(--text-body);
+    }
+    .stage-pill .stage-num { font-weight: 800; }
+    .stage-pill.is-executing { background: #dbeafe; color: #1e3a8a; }
+    .stage-pill.is-delivered { background: #fef3c7; color: #92400e; }
+    .stage-pill.is-auditing { background: #ede9fe; color: #5b21b6; }
+    .stage-pill.is-verdict_pass { background: #dcfce7; color: #166534; }
+    .stage-pill.is-verdict_fail { background: #fee2e2; color: #991b1b; }
+    .stage-pill.is-closed { background: #cffafe; color: #155e75; }
+    /* Task cards. */
+    .tc-tasks { display: grid; gap: 10px; }
+    .tc-task-card {
+      border: 1px solid var(--border-default);
+      border-radius: 8px;
+      background: var(--surface-card);
+      padding: 10px 14px;
+    }
+    .tc-task-card[open] { border-color: var(--accent); }
+    .tc-task-head {
+      cursor: pointer;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+    }
+    .tc-task-title { font-weight: 600; flex: 1 1 280px; overflow-wrap: anywhere; }
+    .tc-task-id {
+      font-family: ui-monospace, monospace;
+      font-size: 12px; color: var(--text-secondary);
+    }
+    .stage-badge {
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 700; color: #fff; white-space: nowrap;
+    }
+    .sb-published { background: #0284c7; }
+    .sb-executing { background: #2563eb; }
+    .sb-delivered { background: #d97706; }
+    .sb-auditing { background: #7c3aed; }
+    .sb-verdict_pass { background: #16a34a; }
+    .sb-verdict_fail { background: #dc2626; }
+    .sb-closed { background: #0891b2; }
+    .sb-pending { background: #94a3b8; }
+    .sb-blocked { background: #dc2626; }
+    .sb-unknown { background: #94a3b8; }
+    .tc-task-body { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-default); }
+    .tc-purpose { margin: 0 0 8px; line-height: 1.55; font-size: 13.5px; }
+    .tc-purpose .muted { color: var(--text-secondary); margin-right: 4px; }
+    .tc-timeline { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+    .tc-event { border-left: 3px solid var(--border-default); padding: 4px 0 4px 12px; font-size: 13px; }
+    .tc-event .ev-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+    .ev-verb { font-weight: 700; color: var(--accent); }
+    .ev-actor { font-family: ui-monospace, monospace; color: var(--text-secondary); font-size: 12px; }
+    .ev-time { margin-left: auto; color: var(--text-secondary); font-size: 11.5px; }
+    .ev-summary { margin-top: 3px; color: var(--text-body); overflow-wrap: anywhere; }
+    .ev-empty { color: var(--text-secondary); font-style: italic; font-size: 13px; }
+    /* Activity feed. */
+    .tc-feed {
+      border: 1px solid var(--border-default); border-radius: 8px;
+      background: var(--surface-card); padding: 10px; max-height: 460px; overflow-y: auto;
+    }
+    .tc-feed-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+    .tc-feed-item { border-bottom: 1px dashed var(--border-default); padding: 6px 0; font-size: 13px; }
+    .tc-feed-item:last-child { border-bottom: none; }
   </style>
 </head>
 <body>
@@ -268,10 +362,27 @@
     <a href="/" class="back-link" id="back-link">
       ← 返回总览
     </a>
-    
-    <div id="project-content">
+
+    <div id="project-header">
       <div class="loading">加载中...</div>
     </div>
+
+    <!-- AIPOS-260 FIX-1: 任务中心 mounted on the REAL /workspace/<n> route.
+         Static heading is baked in so curl GET /workspace/0 sees the task-center block;
+         JS hydrates the #tc-* containers from /api/owner-truth?workspace=N (DOM-only). -->
+    <section id="task-center-section" class="detail-section task-center-section" data-owner-truth="task-center">
+      <div class="section-header">
+        <h3>任务中心 · Owner 真相摘要</h3>
+      </div>
+      <p class="section-hint">每任务一卡：标题 + 一句话目的 + 真实阶段（从已记录的 records 推导，不改队列状态机）。点开看每轮摘要时间线；下方为按记录时间倒序的动态流。只读已记录真相。</p>
+      <div id="tc-counts" class="tc-stage-pills">加载中...</div>
+      <h4 class="tc-subheading">任务卡片（点开看每轮摘要）</h4>
+      <div id="tc-tasks" class="tc-tasks">加载中...</div>
+      <h4 class="tc-subheading">动态流（按记录时间倒序）</h4>
+      <div id="tc-feed" class="tc-feed">加载中...</div>
+    </section>
+
+    <div id="project-content"></div>
   </main>
 
   <script src="/i18n.js"></script>
@@ -296,40 +407,55 @@
     }
     
     async function loadProjectDetail() {
-      const container = document.getElementById('project-content');
-      
+      const headerHost = document.getElementById('project-header');
+      const contentHost = document.getElementById('project-content');
+      const countsEl = document.getElementById('tc-counts');
+      const tasksEl = document.getElementById('tc-tasks');
+      const feedEl = document.getElementById('tc-feed');
+
+      const showError = (host, msg) => {
+        host.replaceChildren();
+        const box = document.createElement('div');
+        box.className = 'empty-state';
+        box.textContent = msg;
+        host.appendChild(box);
+      };
+
       try {
-        // Fetch overview to get workspace info
+        // Fetch overview to resolve this workspace's label + status.
         const overviewResponse = await fetch('/api/overview');
         const overviewData = await overviewResponse.json();
-        
+
         if (!overviewData.ok || !overviewData.workspaces || !overviewData.workspaces[workspaceIndex]) {
-          container.innerHTML = `<div class="empty-state">${i18n.t('detail.error_loading')}</div>`;
+          showError(headerHost, i18n.t('detail.error_loading'));
           return;
         }
-        
+
         const workspace = overviewData.workspaces[workspaceIndex];
-        
-        // Fetch detailed data for this workspace
-        const queueResponse = await fetch(`/api/queue?workspace=${workspaceIndex}`);
-        const queueData = await queueResponse.json();
-        
+
+        // Owner truth summary (record-derived stages + per-round timelines + verb feed).
+        const truthResponse = await fetch(`/api/owner-truth?workspace=${workspaceIndex}`);
+        const truthData = await truthResponse.json();
+
         const needsOwnerResponse = await fetch(`/api/needs-owner?workspace=${workspaceIndex}`);
         const needsOwnerData = await needsOwnerResponse.json();
-        
-        const recordsResponse = await fetch(`/api/records?workspace=${workspaceIndex}`);
-        const recordsData = await recordsResponse.json();
-        
-        // Render project detail
-        container.innerHTML = '';
-        container.appendChild(createProjectHeader(workspace));
-        container.appendChild(createProgressSection(workspace, queueData));
-        container.appendChild(createNeedsOwnerSection(needsOwnerData));
-        container.appendChild(createTimelineSection(recordsData));
-        container.appendChild(createAdvancedSection(workspaceIndex));
-        
+
+        // 1) Workspace header.
+        headerHost.replaceChildren();
+        headerHost.appendChild(createProjectHeader(workspace));
+
+        // 2) Task center (real route mount, AIPOS-260 FIX-1).
+        renderTruthStagePills(countsEl, truthData);
+        renderTruthTaskCards(tasksEl, truthData);
+        renderTruthActivityFeed(feedEl, truthData);
+
+        // 3) Needs-owner (actionable) + advanced/debug.
+        contentHost.replaceChildren();
+        contentHost.appendChild(createNeedsOwnerSection(needsOwnerData));
+        contentHost.appendChild(createAdvancedSection(workspaceIndex));
+
       } catch (error) {
-        container.innerHTML = `<div class="empty-state">${i18n.t('detail.error_loading')}: ${error.message}</div>`;
+        showError(headerHost, `${i18n.t('detail.error_loading')}: ${error.message}`);
       }
     }
     
@@ -351,60 +477,44 @@
       return header;
     }
     
-    function createProgressSection(workspace, queueData) {
-      const section = document.createElement('div');
-      section.className = 'detail-section';
-      
-      const header = document.createElement('div');
-      header.className = 'section-header';
-      const title = document.createElement('h3');
-      title.textContent = i18n.t('detail.section.progress');
-      header.appendChild(title);
-      section.appendChild(header);
-      
-      const grid = document.createElement('div');
-      grid.className = 'progress-grid';
-      
-      // Calculate metrics
-      const counts = workspace.queue_counts || {};
-      const claimed = counts.claimed || 0;
-      const pending = counts.pending || 0;
-      const blocked = counts.blocked || 0;
-      const completed = counts.completed || 0;
-      
-      // Needs owner count
-      let needsOwnerCount = 0;
-      if (workspace.needs_owner && workspace.needs_owner.length > 0) {
-        needsOwnerCount = workspace.needs_owner.length;
+    // AIPOS-260 FIX-1: record-derived true-stage count pills (replaces the fake
+    // "claimed = 进行中" count). Renders into the #tc-counts container, DOM-only.
+    function renderTruthStagePills(container, truthData) {
+      container.replaceChildren();
+      if (!truthData || truthData.ok === false) {
+        const note = document.createElement('span');
+        note.className = 'ev-empty';
+        note.textContent = (truthData && truthData.error) ? truthData.error : i18n.t('detail.error_loading');
+        container.appendChild(note);
+        return;
       }
-      
-      // Create progress items
-      const items = [
-        { count: claimed, label: i18n.t('detail.progress.in_progress') },
-        { count: needsOwnerCount, label: i18n.t('detail.progress.waiting_review') },
-        { count: pending, label: i18n.t('detail.progress.pending') },
-        { count: blocked, label: i18n.t('detail.progress.blocked') },
-      ];
-      
-      items.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'progress-item';
-        
-        const number = document.createElement('div');
-        number.className = 'progress-number';
-        number.textContent = item.count;
-        
-        const label = document.createElement('div');
-        label.className = 'progress-label';
-        label.textContent = item.label;
-        
-        div.appendChild(number);
-        div.appendChild(label);
-        grid.appendChild(div);
+      const d = truthData.data || {};
+      const counts = d.stage_counts || {};
+      const labels = d.stage_labels || {};
+      const order = d.true_stage_order || [];
+      // Canonical stage order first, then any extras; only non-zero counts.
+      const keys = order.filter(k => counts[k]).concat(
+        Object.keys(counts).filter(k => !order.includes(k) && counts[k])
+      );
+      if (keys.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ev-empty';
+        empty.textContent = i18n.t('detail.timeline.empty');
+        container.appendChild(empty);
+        return;
+      }
+      keys.forEach(stage => {
+        const pill = document.createElement('span');
+        pill.className = `stage-pill is-${stage}`;
+        const lbl = document.createElement('span');
+        lbl.textContent = labels[stage] || stage;
+        const num = document.createElement('span');
+        num.className = 'stage-num';
+        num.textContent = String(counts[stage]);
+        pill.appendChild(lbl);
+        pill.appendChild(num);
+        container.appendChild(pill);
       });
-      
-      section.appendChild(grid);
-      return section;
     }
     
     function createNeedsOwnerSection(needsOwnerData) {
@@ -518,96 +628,141 @@
       return `lybra review ${taskId}`;
     }
     
-    function createTimelineSection(recordsData) {
-      const section = document.createElement('div');
-      section.className = 'detail-section';
-      
-      const header = document.createElement('div');
-      header.className = 'section-header';
-      const title = document.createElement('h3');
-      title.textContent = i18n.t('detail.section.timeline');
-      header.appendChild(title);
-      section.appendChild(header);
-      
-      const data = recordsData?.data || {};
-      
-      // Collect all records
-      const allRecords = [];
-      ['sessions', 'publishes', 'claims', 'returns', 'audit_dispatches', 'audit_verdicts', 'owner_decisions'].forEach(key => {
-        const records = data[key] || [];
-        records.forEach(rec => {
-          allRecords.push({
-            ...rec,
-            _record_type: key.replace(/_/g, ' ').replace('s', '')
-          });
-        });
-      });
-      
-      if (allRecords.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'empty-state';
-        empty.textContent = i18n.t('detail.timeline.empty');
-        section.appendChild(empty);
-        return section;
+    // Shared event renderer: verb + actor [+ task] + time [+ verdict] + summary.
+    // DOM-only (textContent); renders record-authored text safely.
+    function appendTruthEvent(target, ev, withTask) {
+      const head = document.createElement('div');
+      head.className = 'ev-head';
+      const verb = document.createElement('span');
+      verb.className = 'ev-verb';
+      verb.textContent = ev.verb || ev.record_type || i18n.t('detail.timeline.type.unknown');
+      head.appendChild(verb);
+      const actor = document.createElement('span');
+      actor.className = 'ev-actor';
+      actor.textContent = ev.actor || '—';
+      head.appendChild(actor);
+      if (withTask) {
+        const t = document.createElement('span');
+        t.className = 'ev-actor';
+        t.textContent = ev.task_id || '—';
+        head.appendChild(t);
       }
-      
-      // Sort by timestamp (most recent first)
-      allRecords.sort((a, b) => {
-        const timeA = a.timestamp || a.decided_at || a.created_at || '';
-        const timeB = b.timestamp || b.decided_at || b.created_at || '';
-        return timeB.localeCompare(timeA);
+      const time = document.createElement('span');
+      time.className = 'ev-time';
+      time.textContent = ev.timestamp ? new Date(ev.timestamp).toLocaleString() : '';
+      head.appendChild(time);
+      if (ev.verdict) {
+        const v = document.createElement('span');
+        v.className = `stage-badge sb-${String(ev.verdict).toLowerCase()}`;
+        v.textContent = ev.verdict;
+        head.appendChild(v);
+      }
+      target.appendChild(head);
+      if (ev.summary) {
+        const s = document.createElement('div');
+        s.className = 'ev-summary';
+        s.textContent = ev.summary;
+        target.appendChild(s);
+      }
+    }
+
+    // AIPOS-260 FIX-1: per-task card with title + purpose + true-stage badge +
+    // expandable per-round summary timeline (publish → claim → return → audit → verdict).
+    function renderTruthTaskCards(container, truthData) {
+      container.replaceChildren();
+      if (!truthData || truthData.ok === false) {
+        const note = document.createElement('p');
+        note.className = 'ev-empty';
+        note.textContent = (truthData && truthData.error) ? truthData.error : i18n.t('detail.error_loading');
+        container.appendChild(note);
+        return;
+      }
+      const tasks = (truthData.data && truthData.data.tasks) || [];
+      if (tasks.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'ev-empty';
+        empty.textContent = i18n.t('detail.timeline.empty');
+        container.appendChild(empty);
+        return;
+      }
+      tasks.forEach(t => {
+        const card = document.createElement('details');
+        card.className = 'tc-task-card';
+        const head = document.createElement('summary');
+        head.className = 'tc-task-head';
+        const badge = document.createElement('span');
+        badge.className = `stage-badge sb-${t.true_stage || 'unknown'}`;
+        badge.textContent = t.stage_label || t.true_stage || '';
+        head.appendChild(badge);
+        const title = document.createElement('span');
+        title.className = 'tc-task-title';
+        title.textContent = t.title || t.task_id || '(untitled)';
+        head.appendChild(title);
+        const id = document.createElement('span');
+        id.className = 'tc-task-id';
+        id.textContent = t.task_id || '';
+        head.appendChild(id);
+        card.appendChild(head);
+        const body = document.createElement('div');
+        body.className = 'tc-task-body';
+        const purpose = document.createElement('p');
+        purpose.className = 'tc-purpose';
+        const lbl = document.createElement('span');
+        lbl.className = 'muted';
+        lbl.textContent = i18n.t('detail.needs_owner.what_to_do') + ':';
+        purpose.appendChild(lbl);
+        purpose.appendChild(document.createTextNode(' ' + (t.purpose || '(无目的摘要)')));
+        body.appendChild(purpose);
+        const tl = document.createElement('ol');
+        tl.className = 'tc-timeline';
+        const timeline = t.timeline || [];
+        if (timeline.length === 0) {
+          const e = document.createElement('li');
+          e.className = 'ev-empty';
+          e.textContent = i18n.t('detail.timeline.empty');
+          tl.appendChild(e);
+        } else {
+          timeline.forEach(ev => {
+            const li = document.createElement('li');
+            li.className = 'tc-event';
+            appendTruthEvent(li, ev, false);
+            tl.appendChild(li);
+          });
+        }
+        body.appendChild(tl);
+        card.appendChild(body);
+        container.appendChild(card);
       });
-      
-      const timeline = document.createElement('div');
-      timeline.className = 'timeline';
-      
-      // Show top 10 most recent
-      allRecords.slice(0, 10).forEach(record => {
-        const item = document.createElement('div');
-        item.className = 'timeline-item';
-        
-        const time = document.createElement('div');
-        time.className = 'timeline-time';
-        const timestamp = record.timestamp || record.decided_at || record.created_at || '';
-        time.textContent = timestamp ? new Date(timestamp).toLocaleString() : 'Unknown';
-        
-        const content = document.createElement('div');
-        content.className = 'timeline-content';
-        
-        const typeDiv = document.createElement('div');
-        typeDiv.className = 'timeline-type';
-        const recordType = record.record_type || record._record_type || 'unknown';
-        const typeKey = `detail.timeline.type.${recordType.replace(/_record$/, '').replace(/ /g, '_')}`;
-        typeDiv.textContent = i18n.t(typeKey);
-        
-        const desc = document.createElement('div');
-        desc.className = 'timeline-description';
-        desc.textContent = formatTimelineDescription(record);
-        
-        content.appendChild(typeDiv);
-        content.appendChild(desc);
-        
-        item.appendChild(time);
-        item.appendChild(content);
-        timeline.appendChild(item);
-      });
-      
-      section.appendChild(timeline);
-      return section;
     }
     
-    function formatTimelineDescription(record) {
-      // Create human-readable description
-      const taskId = record.task_id || 'N/A';
-      // AIPOS-255 F-BOARD-2: read actor from record.actor (now exposed by records.py)
-      const agent = record.actor || record.agent_name || record.decided_by_ref || record.captured_by || 'unknown';
-      
-      const lang = i18n.getCurrentLang();
-      if (lang === 'zh') {
-        return `${agent} 操作了任务 ${taskId}`;
-      } else {
-        return `${agent} performed action on task ${taskId}`;
+    // AIPOS-260 FIX-1: cross-task activity feed (动态流) — newest-first, with a
+    // real verb + summary per record_type (replaces the verb-less "X 操作了任务 Y").
+    function renderTruthActivityFeed(container, truthData) {
+      container.replaceChildren();
+      if (!truthData || truthData.ok === false) {
+        const note = document.createElement('p');
+        note.className = 'ev-empty';
+        note.textContent = (truthData && truthData.error) ? truthData.error : i18n.t('detail.error_loading');
+        container.appendChild(note);
+        return;
       }
+      const feed = (truthData.data && truthData.data.activity_feed) || [];
+      if (feed.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'ev-empty';
+        empty.textContent = i18n.t('detail.timeline.empty');
+        container.appendChild(empty);
+        return;
+      }
+      const list = document.createElement('ul');
+      list.className = 'tc-feed-list';
+      feed.forEach(ev => {
+        const li = document.createElement('li');
+        li.className = 'tc-feed-item';
+        appendTruthEvent(li, ev, true);
+        list.appendChild(li);
+      });
+      container.appendChild(list);
     }
     
     function createAdvancedSection(workspaceIndex) {

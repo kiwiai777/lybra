@@ -40,6 +40,7 @@ from tools.aipos_cli.board_adapter import (
     get_governance,
     get_needs_owner,
     get_owner_decision_records,
+    get_owner_truth_view,
     get_orchestration_summary_preview,
     get_orchestration_index,
     get_orchestration_timeline_preview,
@@ -148,14 +149,31 @@ def get_overview(board_config_path: Path | None = None) -> dict[str, Any]:
                         "timestamp": summary.get("most_recent_timestamp"),
                         "type": summary.get("most_recent_type", "activity")
                     }
-            
+
+            # AIPOS-260 FIX-1: record-derived true-stage counts per workspace
+            # (Owner overview must not show the raw claimed/ count as "进行中").
+            # Read-only aggregation; falls back to empty on any error.
+            stage_counts: dict[str, int] = {}
+            truth_total = 0
+            try:
+                truth_data = get_owner_truth_view(repo_root=root)
+                if truth_data.get("ok"):
+                    summary = truth_data.get("summary") or {}
+                    stage_counts = dict(summary.get("stage_counts") or {})
+                    truth_total = int(summary.get("total_tasks") or 0)
+            except Exception:
+                stage_counts = {}
+                truth_total = 0
+
             results.append({
                 "label": label,
                 "root": str(root),
                 "status": "ok",
                 "queue_counts": queue_counts,
                 "needs_owner": needs_owner_items,
-                "recent_activity": recent_activity
+                "recent_activity": recent_activity,
+                "stage_counts": stage_counts,
+                "truth_total": truth_total,
             })
             
         except Exception as e:
@@ -224,6 +242,7 @@ def _api_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, list[st
         "/api/agents": lambda params: get_agents(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/drafts": lambda params: get_drafts(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/records": lambda params: get_records(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/owner-truth": lambda params: get_owner_truth_view(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/external-intake/review": lambda params: get_external_intake_review(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/owner-decision-records": lambda params: get_owner_decision_records(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/planner-drafts/review": partial(_get_planner_drafts_review_route, repo_root=repo_root),

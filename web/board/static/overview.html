@@ -26,7 +26,7 @@
     </div>
     <h2 class="section-title" id="section-title">All Projects</h2>
     
-    <div id="workspace-grid" class="workspace-grid">
+    <div id="workspace-grid" class="workspace-grid" data-owner-truth="overview">
       <div class="loading">Loading workspaces...</div>
     </div>
   </main>
@@ -137,6 +137,44 @@
         });
         
         card.appendChild(counts);
+      }
+      
+      // AIPOS-260 FIX-1: record-derived true-stage counts per workspace (not the
+      // raw claimed/ count the old card labelled "进行中"). Additive key from /api/overview.
+      if (workspace.stage_counts) {
+        const real = document.createElement('div');
+        real.className = 'real-progress';
+        const realTitle = document.createElement('div');
+        realTitle.className = 'real-progress-title';
+        realTitle.textContent = i18n.t('card.real_progress');
+        real.appendChild(realTitle);
+        const stages = ['executing', 'delivered', 'auditing', 'verdict_pass', 'verdict_fail', 'closed'];
+        const labels = {
+          executing: i18n.t('stage.executing'),
+          delivered: i18n.t('stage.delivered'),
+          auditing: i18n.t('stage.auditing'),
+          verdict_pass: i18n.t('stage.verdict_pass'),
+          verdict_fail: i18n.t('stage.verdict_fail'),
+          closed: i18n.t('stage.closed'),
+        };
+        const pills = document.createElement('div');
+        pills.className = 'real-progress-pills';
+        stages.forEach(stage => {
+          const n = workspace.stage_counts[stage] || 0;
+          if (!n) return;
+          const pill = document.createElement('span');
+          pill.className = `rp-pill rp-${stage}`;
+          pill.textContent = `${labels[stage]} ${n}`;
+          pills.appendChild(pill);
+        });
+        if (!pills.childElementCount) {
+          const empty = document.createElement('span');
+          empty.className = 'rp-empty';
+          empty.textContent = i18n.t('card.real_progress_empty');
+          pills.appendChild(empty);
+        }
+        real.appendChild(pills);
+        card.appendChild(real);
       }
       
       // Needs owner

@@ -29,6 +29,18 @@ const translations = {
     'queue.blocked': '受阻',
     'queue.completed': '已完成',
     
+    // AIPOS-260: record-derived true stages (Owner truth summary)
+    'stage.published': '已发布',
+    'stage.executing': '执行中',
+    'stage.delivered': '已交付待审',
+    'stage.auditing': '审计中',
+    'stage.verdict_pass': '判决 PASS',
+    'stage.verdict_fail': '判决 FAIL',
+    'stage.closed': '已闭环',
+    'stage.pending': '待认领',
+    'stage.blocked': '受阻',
+    'stage.unknown': '未知',
+    
     // Project detail page
     'detail.title': '项目详情',
     'detail.back_to_overview': '← 返回总览',
@@ -75,6 +87,8 @@ const translations = {
     'card.needs_owner_empty': '暂无待处理事项',
     'card.recent_activity': '最近活动',
     'card.more_items': '更多',
+    'card.real_progress': '真实进展（按记录推导）',
+    'card.real_progress_empty': '暂无已记录进展',
   },
   
   en: {
@@ -101,6 +115,18 @@ const translations = {
     'queue.claimed': 'In Progress',
     'queue.blocked': 'Blocked',
     'queue.completed': 'Completed',
+    
+    // AIPOS-260: record-derived true stages (Owner truth summary)
+    'stage.published': 'Published',
+    'stage.executing': 'Executing',
+    'stage.delivered': 'Delivered (awaiting audit)',
+    'stage.auditing': 'Under audit',
+    'stage.verdict_pass': 'Verdict PASS',
+    'stage.verdict_fail': 'Verdict FAIL',
+    'stage.closed': 'Closed loop',
+    'stage.pending': 'Pending',
+    'stage.blocked': 'Blocked',
+    'stage.unknown': 'Unknown',
     
     // Project detail page
     'detail.title': 'Project Detail',
@@ -148,6 +174,8 @@ const translations = {
     'card.needs_owner_empty': 'No items waiting for Owner',
     'card.recent_activity': 'Recent',
     'card.more_items': 'more',
+    'card.real_progress': 'Real progress (record-derived)',
+    'card.real_progress_empty': 'No recorded progress yet',
   }
 };
 
