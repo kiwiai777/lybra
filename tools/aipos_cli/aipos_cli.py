@@ -886,9 +886,11 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--connection-json", help="Override the connection.json path (default ~/.lybra/local/connection.json)")
     serve_subparsers = serve_parser.add_subparsers(dest="serve_command")
     serve_start_parser = serve_subparsers.add_parser("start", help="Start Board and MCP gate surfaces in foreground")
-    serve_start_parser.add_argument("--board-host", default="127.0.0.1", help="Board bind host (AIPOS-258: passed through to web.board.app --host; default 127.0.0.1 loopback)")
+    serve_start_parser.add_argument("--board-host", default=None, help="Board BIND host (AIPOS-258: passed through to web.board.app --host). Default 127.0.0.1; AIPOS-259: when given, overrides a stored connection.json and is written back.")
+    serve_start_parser.add_argument("--board-advertise", default=None, help="AIPOS-259: address clients should dial for the Board URL (default = bind host). REQUIRED when --board-host is a wildcard (0.0.0.0), else serve start BLOCKs fail-closed.")
     serve_start_parser.add_argument("--board-port", type=int, default=7117, help="Board port; defaults to 7117")
-    serve_start_parser.add_argument("--mcp-host", default="127.0.0.1", help="MCP bind host (AIPOS-258: passed through to mcp_server serve-http --host; default 127.0.0.1 loopback)")
+    serve_start_parser.add_argument("--mcp-host", default=None, help="MCP BIND host (AIPOS-258: passed through to mcp_server serve-http --host). Default 127.0.0.1; AIPOS-259: when given, overrides a stored connection.json and is written back.")
+    serve_start_parser.add_argument("--mcp-advertise", default=None, help="AIPOS-259: address clients should dial for rpc_url/sse_url (default = bind host). REQUIRED when --mcp-host is a wildcard (0.0.0.0), else serve start BLOCKs fail-closed.")
     serve_start_parser.add_argument("--mcp-port", type=int, default=7118, help="MCP port; defaults to 7118")
     serve_start_parser.add_argument("--json", action="store_true", help="Output JSON after the supervisor exits")
     serve_status_parser = serve_subparsers.add_parser("status", help="Print redacted service-mode status")
@@ -896,9 +898,11 @@ def build_parser() -> argparse.ArgumentParser:
     serve_stop_parser = serve_subparsers.add_parser("stop", help="Stop service-owned Board/MCP child processes")
     serve_stop_parser.add_argument("--json", action="store_true", help="Output JSON")
     serve_rotate_parser = serve_subparsers.add_parser("rotate", help="Rotate local service-mode role tokens")
-    serve_rotate_parser.add_argument("--board-host", default="127.0.0.1", help="Board host for regenerated connection config")
+    serve_rotate_parser.add_argument("--board-host", default=None, help="Board BIND host for regenerated connection config (default 127.0.0.1)")
+    serve_rotate_parser.add_argument("--board-advertise", default=None, help="AIPOS-259: address clients dial for the Board URL (default = bind host; REQUIRED when --board-host is 0.0.0.0)")
     serve_rotate_parser.add_argument("--board-port", type=int, default=7117, help="Board port for regenerated connection config")
-    serve_rotate_parser.add_argument("--mcp-host", default="127.0.0.1", help="MCP host for regenerated connection config")
+    serve_rotate_parser.add_argument("--mcp-host", default=None, help="MCP BIND host for regenerated connection config (default 127.0.0.1)")
+    serve_rotate_parser.add_argument("--mcp-advertise", default=None, help="AIPOS-259: address clients dial for rpc_url/sse_url (default = bind host; REQUIRED when --mcp-host is 0.0.0.0)")
     serve_rotate_parser.add_argument("--mcp-port", type=int, default=7118, help="MCP port for regenerated connection config")
     serve_rotate_parser.add_argument("--project", help="Scope the minted role tokens to this project (AIPOS-229: enforced — calls for another project return PROJECT_SCOPE_DENIED)")
     serve_rotate_parser.add_argument("--executor-instance", help="AIPOS-250B: bind the executor token to this canonical agent_instance (PreAuthorized identity authority); unspecified → no binding (backward-compatible: PreAuthorized unavailable, falls back Supervised)")
@@ -1219,10 +1223,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.serve_command == "start":
                 result = start_report(
                     workspace_root,
-                    board_host=str(args.board_host),
+                    board_host=args.board_host,
                     board_port=int(args.board_port),
-                    mcp_host=str(args.mcp_host),
+                    mcp_host=args.mcp_host,
                     mcp_port=int(args.mcp_port),
+                    board_advertise_host=args.board_advertise,
+                    mcp_advertise_host=args.mcp_advertise,
                     start_processes=True,
                     connection_target=connection_target,
                 )
@@ -1238,10 +1244,12 @@ def main(argv: list[str] | None = None) -> int:
                             role_inst_map[role.strip()] = instance.strip()
                 result = rotate_report(
                     workspace_root,
-                    board_host=str(args.board_host),
+                    board_host=args.board_host,
                     board_port=int(args.board_port),
-                    mcp_host=str(args.mcp_host),
+                    mcp_host=args.mcp_host,
                     mcp_port=int(args.mcp_port),
+                    board_advertise_host=args.board_advertise,
+                    mcp_advertise_host=args.mcp_advertise,
                     connection_target=connection_target,
                     project=(str(args.project).strip() if getattr(args, "project", None) else None),
                     executor_instance=(str(args.executor_instance).strip() if getattr(args, "executor_instance", None) else None),

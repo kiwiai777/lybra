@@ -64,6 +64,26 @@ def _wait_for_port(port: int, *, timeout: float = 8.0) -> None:
     raise AssertionError(f"Timed out waiting for 127.0.0.1:{port}: {last_error}")
 
 
+def _listen_bind_address(port: int) -> str | None:
+    """Bind address (e.g. '0.0.0.0', '127.0.0.1') of a LISTEN socket on `port`, read from
+    /proc/net/tcp (Linux); None if not found / unavailable. Used to prove a REAL 0.0.0.0 bind
+    (AIPOS-259 S2: bind all-interfaces while URLs carry the advertise address)."""
+    path = Path("/proc/net/tcp")
+    if not path.exists():
+        return None
+    want = f":{port:04X}"
+    for line in path.read_text(encoding="ascii", errors="replace").splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        local, state = parts[1], parts[3]
+        if local.endswith(want) and state == "0A":  # 0A = TCP_LISTEN
+            ip_hex = local.split(":", 1)[0]
+            octets = [int(ip_hex[i:i + 2], 16) for i in (6, 4, 2, 0)]  # /proc/net/tcp is LE per u32
+            return ".".join(str(o) for o in octets)
+    return None
+
+
 def _post_rpc(port: int, token: str, payload: dict[str, object]) -> dict[str, object]:
     req = request.Request(
         f"http://127.0.0.1:{port}/mcp",
@@ -282,13 +302,15 @@ class ServiceModeTests(unittest.TestCase):
         self.assertFalse(service_state_path(self.root).exists())  # never spawned
 
     def test_start_report_allows_non_loopback_host_without_blocking(self) -> None:
-        # AIPOS-258 S2: serve start with a non-loopback host no longer BLOCKs on "loopback-only";
-        # default 127.0.0.1 stays the loopback safe-default, non-loopback is opt-in.
+        # AIPOS-258 S2 (refined by 259): serve start with a CONCRETE non-loopback host (a tailnet
+        # IP) is allowed — non-loopback is opt-in, no longer blocked as "loopback-only". A
+        # wildcard (0.0.0.0) is exercised separately by the advertise/fail-closed tests below.
+        # advertise defaults to the bind host, so URLs carry it directly (byte-identical shape).
         result = start_report(
             self.root,
-            board_host="0.0.0.0",
+            board_host="100.64.0.1",
             board_port=7117,
-            mcp_host="0.0.0.0",
+            mcp_host="100.64.0.1",
             mcp_port=7118,
             start_processes=False,
         )
@@ -296,10 +318,12 @@ class ServiceModeTests(unittest.TestCase):
         self.assertEqual(result.get("verdict"), "PASS")
         self.assertEqual(result.get("blocking_reasons"), [])
         # connection.json (url/rpc_url/sse_url + host) reflects the requested host, not 127.0.0.1
-        self.assertEqual(result["connection"]["board"]["host"], "0.0.0.0")
-        self.assertEqual(result["connection"]["board"]["url"], "http://0.0.0.0:7117")
-        self.assertEqual(result["connection"]["mcp"]["host"], "0.0.0.0")
-        self.assertEqual(result["connection"]["mcp"]["rpc_url"], "http://0.0.0.0:7118/mcp")
+        self.assertEqual(result["connection"]["board"]["host"], "100.64.0.1")
+        self.assertEqual(result["connection"]["board"]["url"], "http://100.64.0.1:7117")
+        self.assertEqual(result["connection"]["mcp"]["host"], "100.64.0.1")
+        self.assertEqual(result["connection"]["mcp"]["rpc_url"], "http://100.64.0.1:7118/mcp")
+        # advertise == bind -> no advertise_host field (byte-identical to pre-259 output)
+        self.assertNotIn("advertise_host", result["connection"]["mcp"])
 
     def test_child_command_carries_default_loopback_host(self) -> None:
         # AIPOS-258 S1: default config (no host override) → child argv --host is 127.0.0.1.
@@ -329,6 +353,76 @@ class ServiceModeTests(unittest.TestCase):
         # argv shape unchanged: still --host <value>, --port <value>, --repo-root/--service-connection-json
         self.assertEqual(board_cmd[board_cmd.index("--port") + 1], "7117")
         self.assertEqual(mcp_cmd[mcp_cmd.index("--port") + 1], "7118")
+
+    def test_start_host_param_overrides_stored_config_and_reaches_child(self) -> None:
+        # AIPOS-259 S1 / F-258-1: with an EXISTING connection.json, an explicit --mcp-host WINS
+        # over the stored host (the stored value used to win silently — 258's blind spot: its
+        # tests all used fresh workspaces). The new host reaches the child --host flag AND is
+        # written back to config (the process leaves a trail `serve status` then shows).
+        from tools.aipos_cli.service_mode import _build_child_commands
+        rotate_report(self.root, board_host="127.0.0.1", board_port=7117, mcp_host="127.0.0.1", mcp_port=7118)
+        result = start_report(
+            self.root, board_host=None, board_port=7117, mcp_host="100.64.0.1", mcp_port=7118,
+            start_processes=False,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["connection"]["mcp"]["host"], "100.64.0.1")
+        # writeback trail: the on-disk config now reflects the override
+        on_disk = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["mcp"]["host"], "100.64.0.1")
+        self.assertEqual(on_disk["mcp"]["rpc_url"], "http://100.64.0.1:7118/mcp")
+        # the child the supervisor WOULD spawn carries the NEW host (the 258 blind spot)
+        _, mcp_cmd = _build_child_commands(
+            on_disk, child_workspace_root=self.root, connection_path_str=str(connection_path(self.root)),
+        )
+        self.assertEqual(mcp_cmd[mcp_cmd.index("--host") + 1], "100.64.0.1")
+
+    def test_start_with_no_host_param_leaves_stored_config_byte_identical(self) -> None:
+        # AIPOS-259 S1: no host param at all -> the stored config is byte-identical (NOT rewritten)
+        # and the STORED host is what the child binds (not the 127.0.0.1 default).
+        from tools.aipos_cli.service_mode import _build_child_commands
+        rotate_report(self.root, board_host="127.0.0.2", board_port=7117, mcp_host="127.0.0.2", mcp_port=7118)
+        before = connection_path(self.root).read_bytes()
+        result = start_report(
+            self.root, board_host=None, board_port=7117, mcp_host=None, mcp_port=7118, start_processes=False,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(connection_path(self.root).read_bytes(), before)  # file untouched
+        on_disk = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["mcp"]["host"], "127.0.0.2")  # stored, not the 127.0.0.1 default
+        _, mcp_cmd = _build_child_commands(
+            on_disk, child_workspace_root=self.root, connection_path_str=str(connection_path(self.root)),
+        )
+        self.assertEqual(mcp_cmd[mcp_cmd.index("--host") + 1], "127.0.0.2")
+
+    def test_start_blocks_on_wildcard_bind_without_advertise(self) -> None:
+        # AIPOS-259 S3 (fail-closed): bind 0.0.0.0 with no advertise -> BLOCK; nothing written.
+        result = start_report(
+            self.root, board_host=None, board_port=7117, mcp_host="0.0.0.0", mcp_port=7118,
+            start_processes=False,
+        )
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertFalse(result.get("ok"))
+        msg = json.dumps(result)
+        self.assertIn("0.0.0.0", msg)
+        self.assertIn("--mcp-advertise", msg)
+        self.assertFalse(connection_path(self.root).exists())  # fail-closed before any write
+
+    def test_start_wildcard_bind_with_advertise_urls_use_advertise(self) -> None:
+        # AIPOS-259 S2 (unit): bind 0.0.0.0 + advertise -> PASS; host stays 0.0.0.0 (bind), URLs
+        # carry the ADVERTISE address, advertise_host stored (differs from bind).
+        result = start_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="0.0.0.0", mcp_port=7118, mcp_advertise_host="tailnet.example",
+            start_processes=False,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        mcp = result["connection"]["mcp"]
+        self.assertEqual(mcp["host"], "0.0.0.0")
+        self.assertEqual(mcp["advertise_host"], "tailnet.example")
+        self.assertEqual(mcp["rpc_url"], "http://tailnet.example:7118/mcp")
+        self.assertEqual(mcp["sse_url"], "http://tailnet.example:7118/sse")
+        self.assertNotIn("0.0.0.0", mcp["rpc_url"])
 
     def test_serve_start_reaps_children_on_sigterm(self) -> None:
         # B/F-NEW-b: a plain SIGTERM to the supervisor reaps board+mcp (no orphans holding the port).
@@ -501,9 +595,10 @@ class ServiceModeTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, (stdout, stderr))
 
     def test_service_mode_spawn_listens_on_non_loopback_bind(self) -> None:
-        # AIPOS-258 S3 (local): serve start with --board-host/--mcp-host 0.0.0.0 binds all
-        # interfaces and still serves; loopback (127.0.0.1) is one of them so a local RPC works.
-        # (Cross-machine tailnet curl is advisor acceptance; this proves the non-loopback bind path.)
+        # AIPOS-259 S2 (local): bind 0.0.0.0 (all interfaces) + advertise 127.0.0.1. The child must
+        # LISTEN on 0.0.0.0 (proven via /proc/net/tcp), while connection.json rpc_url/sse_url/url
+        # carry the ADVERTISE address (127.0.0.1) — a local RPC via that advertise works because
+        # 0.0.0.0 covers loopback. (Cross-machine tailnet curl is advisor acceptance.)
         board_port = _free_port()
         mcp_port = _free_port()
         env = os.environ.copy()
@@ -522,10 +617,14 @@ class ServiceModeTests(unittest.TestCase):
                 "start",
                 "--board-host",
                 "0.0.0.0",
+                "--board-advertise",
+                "127.0.0.1",
                 "--board-port",
                 str(board_port),
                 "--mcp-host",
                 "0.0.0.0",
+                "--mcp-advertise",
+                "127.0.0.1",
                 "--mcp-port",
                 str(mcp_port),
             ],
@@ -540,10 +639,14 @@ class ServiceModeTests(unittest.TestCase):
         try:
             _wait_for_port(mcp_port)
             config = json.loads(Path(conn_json).read_text(encoding="utf-8"))
-            # connection.json recorded the non-loopback host (url/rpc_url/sse_url + host all reflect it)
+            # BIND is 0.0.0.0 (recorded + actually listening on all interfaces)
             self.assertEqual(config["board"]["host"], "0.0.0.0")
             self.assertEqual(config["mcp"]["host"], "0.0.0.0")
-            self.assertTrue(config["mcp"]["rpc_url"].startswith("http://0.0.0.0:"), config["mcp"]["rpc_url"])
+            self.assertEqual(_listen_bind_address(mcp_port), "0.0.0.0")
+            # ADVERTISE is 127.0.0.1 — URLs carry it, NOT 0.0.0.0 (the F-258-2 fix)
+            self.assertEqual(config["mcp"]["advertise_host"], "127.0.0.1")
+            self.assertTrue(config["mcp"]["rpc_url"].startswith("http://127.0.0.1:"), config["mcp"]["rpc_url"])
+            self.assertNotIn("0.0.0.0", config["mcp"]["rpc_url"])
             executor_token = next(item["token"] for item in config["tokens"] if item["role"] == "executor")
             response = _post_rpc(
                 mcp_port,
@@ -584,6 +687,85 @@ class ServiceModeTests(unittest.TestCase):
                 proc.terminate()
                 stdout, stderr = proc.communicate(timeout=5)
         self.assertEqual(proc.returncode, 0, (stdout, stderr))
+
+    def test_start_existing_wildcard_config_blocks_without_advertise(self) -> None:
+        # AIPOS-259: the real-machine record — a stored config with host=0.0.0.0 and a 0.0.0.0
+        # rpc_url (exactly 258's regenerate output) — must BLOCK on a plain `serve start` until
+        # an advertise is given. fail-closed catches the unusable URL instead of silently serving.
+        config = build_connection_config(
+            self.root, board_host="127.0.0.1", board_port=7117, mcp_host="0.0.0.0", mcp_port=7118,
+        )
+        write_connection_config(self.root, config)
+        result = start_report(
+            self.root, board_host=None, board_port=7117, mcp_host=None, mcp_port=7118, start_processes=False,
+        )
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertIn("--mcp-advertise", json.dumps(result))
+
+    def test_start_existing_wildcard_config_fixed_by_advertise_param(self) -> None:
+        # AIPOS-259: a stored 0.0.0.0 config is fixed by passing ONLY --mcp-advertise (no bind
+        # override): bind stays 0.0.0.0, URLs become usable, the advertise is written back.
+        config = build_connection_config(
+            self.root, board_host="127.0.0.1", board_port=7117, mcp_host="0.0.0.0", mcp_port=7118,
+        )
+        write_connection_config(self.root, config)
+        result = start_report(
+            self.root, board_host=None, board_port=7117, mcp_host=None, mcp_port=7118,
+            mcp_advertise_host="tailnet.example", start_processes=False,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        mcp = result["connection"]["mcp"]
+        self.assertEqual(mcp["host"], "0.0.0.0")  # bind preserved
+        self.assertEqual(mcp["advertise_host"], "tailnet.example")
+        self.assertEqual(mcp["rpc_url"], "http://tailnet.example:7118/mcp")
+
+    def test_start_preserves_stored_advertise_on_no_param_restart(self) -> None:
+        # AIPOS-259 S4: after rotate writes bind=0.0.0.0 + advertise=tailnet, a plain `serve
+        # start` (no params) keeps rpc_url on the tailnet advertise (stored advertise carries
+        # forward) and the child still binds 0.0.0.0 — rotate and start stay consistent.
+        from tools.aipos_cli.service_mode import _build_child_commands
+        rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="0.0.0.0", mcp_port=7118, mcp_advertise_host="tailnet.example",
+        )
+        before = connection_path(self.root).read_bytes()
+        result = start_report(
+            self.root, board_host=None, board_port=7117, mcp_host=None, mcp_port=7118, start_processes=False,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        mcp = result["connection"]["mcp"]
+        self.assertEqual(mcp["host"], "0.0.0.0")
+        self.assertEqual(mcp["rpc_url"], "http://tailnet.example:7118/mcp")
+        self.assertEqual(connection_path(self.root).read_bytes(), before)  # no param -> byte-identical
+        on_disk = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+        _, mcp_cmd = _build_child_commands(
+            on_disk, child_workspace_root=self.root, connection_path_str=str(connection_path(self.root)),
+        )
+        self.assertEqual(mcp_cmd[mcp_cmd.index("--host") + 1], "0.0.0.0")  # bind preserved
+
+    def test_rotate_fail_closed_and_advertise_field_rules(self) -> None:
+        # AIPOS-259 S4 / fail-closed: rotate regenerates fresh, so a wildcard with no advertise
+        # BLOCKs (never writes a 0.0.0.0-url config); with an advertise it passes. And the
+        # advertise_host field is stored ONLY when it differs from bind (byte-identical otherwise).
+        blocked = rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117, mcp_host="0.0.0.0", mcp_port=7118,
+        )
+        self.assertEqual(blocked["verdict"], "BLOCK")
+        self.assertFalse(connection_path(self.root).exists())  # nothing written
+        ok = rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="0.0.0.0", mcp_port=7118, mcp_advertise_host="tailnet.example",
+        )
+        self.assertEqual(ok["verdict"], "PASS")
+        on_disk = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["mcp"]["host"], "0.0.0.0")
+        self.assertEqual(on_disk["mcp"]["advertise_host"], "tailnet.example")
+        # advertise == bind (concrete) -> NO advertise_host field (byte-identical to pre-259)
+        cfg = build_connection_config(
+            self.root, board_host="10.0.0.5", board_port=7117, mcp_host="10.0.0.5", mcp_port=7118,
+        )
+        self.assertNotIn("advertise_host", cfg["mcp"])
+        self.assertEqual(cfg["mcp"]["rpc_url"], "http://10.0.0.5:7118/mcp")
 
 
 class ConnectionLocationTests(unittest.TestCase):

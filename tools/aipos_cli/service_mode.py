@@ -311,6 +311,94 @@ def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None
     return entry
 
 
+# AIPOS-259: bind-all wildcards. A 0.0.0.0 (or ::) bind is CORRECT for listening on every
+# interface, but a 0.0.0.0 URL is unusable for clients (the confined worker refuses it, and no
+# client can dial it). So the advertise address — what goes into rpc_url/sse_url/board url — must
+# be a concrete host whenever the bind is a wildcard. This is the F-258-2 bind/advertise split.
+WILDCARD_BIND_HOSTS = frozenset({"0.0.0.0", "::", "::0"})
+
+
+def _normalize_host(value: str | None) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _advertise_or_bind(bind_host: str, advertise_host: str | None) -> str:
+    """Advertise host to embed in client URLs; falls back to the bind host when not given.
+
+    Builder default (build_connection_config) — does NOT enforce fail-closed. The wildcard-
+    requires-advertise check (AIPOS-259 S3) lives in start_report / rotate_report, which gate
+    before any usable config is written. A directly-built wildcard config therefore carries a
+    wildcard URL; that is a builder artifact, never something start/rotate will emit to disk."""
+    return _normalize_host(advertise_host) or _normalize_host(bind_host)
+
+
+def _board_block(bind_host: str, advertise_host: str, port: int) -> dict[str, Any]:
+    """board surface block: url uses ADVERTISE, host is the BIND, advertise_host stored only
+    when it differs from bind (byte-identical to pre-259 output when advertise == bind)."""
+    block = {"url": f"http://{advertise_host}:{port}", "host": bind_host, "port": port}
+    if advertise_host != bind_host:
+        block["advertise_host"] = advertise_host
+    return block
+
+
+def _mcp_block(bind_host: str, advertise_host: str, port: int) -> dict[str, Any]:
+    """mcp surface block: rpc_url/sse_url use ADVERTISE, host is the BIND, advertise_host stored
+    only when it differs from bind (byte-identical to pre-259 output when advertise == bind)."""
+    block = {
+        "rpc_url": f"http://{advertise_host}:{port}/mcp",
+        "sse_url": f"http://{advertise_host}:{port}/sse",
+        "host": bind_host,
+        "port": port,
+    }
+    if advertise_host != bind_host:
+        block["advertise_host"] = advertise_host
+    return block
+
+
+def _resolve_bind_advertise(
+    *,
+    label: str,
+    workspace_root: Path,
+    param_host: str | None,
+    param_advertise: str | None,
+    stored_host: str | None,
+    stored_advertise: str | None,
+    default_host: str,
+) -> tuple[str, str, dict[str, Any] | None]:
+    """Resolve (bind, advertise, block_reason) for one surface (board or mcp).
+
+    Returns concrete usable hosts when block_reason is None; otherwise the caller must BLOCK
+    (fail-closed: a wildcard bind with no usable advertise — clients cannot dial a 0.0.0.0 URL,
+    AIPOS-259 S3). Shared by start_report + rotate_report so both paths stay consistent (S4).
+
+    Precedence (F-258-1): bind = explicit param > stored config > default. Advertise = explicit
+    param; elif no bind override this run, a previously-stored advertise still applies; else
+    default to bind. A stored advertise is IGNORED when a bind param is given this run (it
+    belonged to the OLD bind); the user re-states --advertise if they still want one.
+    """
+    bind = _normalize_host(param_host) or _normalize_host(stored_host) or default_host
+    param_adv = _normalize_host(param_advertise)
+    stored_adv = _normalize_host(stored_advertise)
+    if param_adv:
+        advertise = param_adv
+    elif param_host is None and stored_adv:
+        advertise = stored_adv
+    else:
+        advertise = ""
+    if bind in WILDCARD_BIND_HOSTS and not (advertise and advertise not in WILDCARD_BIND_HOSTS):
+        reason = {
+            "message": (
+                f"{label} bind {bind!r} is a wildcard — correct for listening on every interface, "
+                "but clients cannot dial a 0.0.0.0 URL. Pass an explicit advertise host (the address "
+                f"clients should reach, e.g. a tailnet IP or DNS name) via --{label}-advertise."
+            ),
+            "path": str(workspace_root),
+            "fix_command": f"lybra serve start --{label}-host {bind} --{label}-advertise <client-reachable-host>",
+        }
+        return bind, advertise, reason
+    return bind, advertise or bind, None
+
+
 def build_connection_config(
     workspace_root: Path,
     *,
@@ -321,6 +409,8 @@ def build_connection_config(
     project: str | None = None,
     executor_instance: str | None = None,
     role_instances: dict[str, str] | None = None,
+    board_advertise_host: str | None = None,
+    mcp_advertise_host: str | None = None,
 ) -> dict[str, Any]:
     now = _utc_now()
     # AIPOS-228: a single --project selection scopes every minted role token to that project
@@ -331,6 +421,10 @@ def build_connection_config(
     # No binding -> no `agent_instance` field (backward-compatible: PreAuthorized unavailable, falls back Supervised).
     exec_instance = str(executor_instance).strip() if executor_instance else None
     role_inst_map = dict(role_instances) if role_instances else None
+    # AIPOS-259 (F-258-2): URLs (url/rpc_url/sse_url) carry the ADVERTISE host; the `host` field
+    # stays the BIND host (consumed by the child --host flag + the port-in-use probe).
+    board_adv = _advertise_or_bind(board_host, board_advertise_host)
+    mcp_adv = _advertise_or_bind(mcp_host, mcp_advertise_host)
     return {
         "config_version": SERVICE_MODE_VERSION,
         "mode": SERVICE_MODE,
@@ -338,13 +432,8 @@ def build_connection_config(
         "local_only": True,
         "created_at": now,
         "rotated_at": None,
-        "board": {"url": f"http://{board_host}:{board_port}", "host": board_host, "port": board_port},
-        "mcp": {
-            "rpc_url": f"http://{mcp_host}:{mcp_port}/mcp",
-            "sse_url": f"http://{mcp_host}:{mcp_port}/sse",
-            "host": mcp_host,
-            "port": mcp_port,
-        },
+        "board": _board_block(board_host, board_adv, board_port),
+        "mcp": _mcp_block(mcp_host, mcp_adv, mcp_port),
         "tokens": [_role_token_entry(spec, projects=projects, executor_instance=exec_instance, role_instances=role_inst_map) for spec in ROLE_SPECS],
         "secrets_notice": "Raw role tokens are local secrets. Anyone who can read this file can use the listed local role scopes.",
     }
@@ -508,6 +597,8 @@ def rotate_report(
     project: str | None = None,
     executor_instance: str | None = None,
     role_instances: dict[str, str] | None = None,
+    board_advertise_host: str | None = None,
+    mcp_advertise_host: str | None = None,
 ) -> dict[str, Any]:
     if connection_target is None:
         connection_target = runtime_connection_path()
@@ -516,13 +607,30 @@ def rotate_report(
     )
     if blocking:
         return _blocked("serve_rotate", workspace_root, blocking, warnings, connection_target=connection_target)
+    # AIPOS-259 (F-258-2): fail-closed before minting — a wildcard bind with no usable advertise
+    # would write 0.0.0.0 URLs no client can dial. rotate rebuilds fresh, so no stored values apply.
+    board_bind, board_adv, board_block = _resolve_bind_advertise(
+        label="board", workspace_root=workspace_root, param_host=board_host,
+        param_advertise=board_advertise_host, stored_host=None, stored_advertise=None,
+        default_host=DEFAULT_BOARD_HOST,
+    )
+    mcp_bind, mcp_adv, mcp_block = _resolve_bind_advertise(
+        label="mcp", workspace_root=workspace_root, param_host=mcp_host,
+        param_advertise=mcp_advertise_host, stored_host=None, stored_advertise=None,
+        default_host=DEFAULT_MCP_HOST,
+    )
+    advertise_blocks = [b for b in (board_block, mcp_block) if b]
+    if advertise_blocks:
+        return _blocked("serve_rotate", workspace_root, advertise_blocks, warnings, connection_target=connection_target)
     previous_created = None
     if connection_path(workspace_root, connection_target=connection_target).exists():
         previous_created = load_connection_config(
             workspace_root, connection_target=connection_target
         ).get("created_at")
     config = build_connection_config(
-        workspace_root, board_host=board_host, board_port=board_port, mcp_host=mcp_host, mcp_port=mcp_port, project=project, executor_instance=executor_instance, role_instances=role_instances
+        workspace_root, board_host=board_bind, board_port=board_port, mcp_host=mcp_bind, mcp_port=mcp_port,
+        project=project, executor_instance=executor_instance, role_instances=role_instances,
+        board_advertise_host=board_adv, mcp_advertise_host=mcp_adv,
     )
     if previous_created:
         config["created_at"] = previous_created
@@ -544,18 +652,25 @@ def rotate_report(
 def start_report(
     workspace_root: Path,
     *,
-    board_host: str,
+    board_host: str | None = None,
     board_port: int,
-    mcp_host: str,
+    mcp_host: str | None = None,
     mcp_port: int,
     start_processes: bool = True,
     connection_target: Path | None = None,
+    board_advertise_host: str | None = None,
+    mcp_advertise_host: str | None = None,
 ) -> dict[str, Any]:
     if connection_target is None:
         connection_target = runtime_connection_path()
-    # AIPOS-258: --mcp-host/--board-host now pass through to the child processes so the gate can
-    # bind a tailnet address for cross-machine access. The default stays 127.0.0.1 (loopback
-    # safe-default, enforced by the CLI default + DEFAULT_*_HOST); non-loopback is opt-in.
+    # AIPOS-258/259: --mcp-host/--board-host pass through to the child processes so the gate can
+    # bind a tailnet address for cross-machine access. AIPOS-259 adds two fixes on top:
+    #  (F-258-1) an explicit CLI host param now OVERRIDES a stored connection.json (the stored
+    #    value used to win silently, zero warning); no param -> stored behavior is byte-identical
+    #    (the file is not rewritten).
+    #  (F-258-2) bind (child --host) and advertise (client URLs) are split: rpc_url/sse_url/board
+    #    url carry the ADVERTISE host; a wildcard bind (0.0.0.0) REQUIRES an explicit advertise
+    #    or the call BLOCKs fail-closed (a 0.0.0.0 URL is unusable by clients).
     blocking, warnings = check_service_permissions(
         workspace_root, for_secret_use=True, connection_target=connection_target
     )
@@ -563,18 +678,44 @@ def start_report(
     if blocking:
         return _blocked("serve_start", workspace_root, blocking, warnings, connection_target=connection_target)
     conn_exists = connection_path(workspace_root, connection_target=connection_target).exists()
-    config = (
-        load_connection_config(workspace_root, connection_target=connection_target)
-        if conn_exists
-        else build_connection_config(
-            workspace_root,
-            board_host=board_host,
-            board_port=board_port,
-            mcp_host=mcp_host,
-            mcp_port=mcp_port,
-        )
+    stored = (
+        load_connection_config(workspace_root, connection_target=connection_target) if conn_exists else None
     )
-    if not conn_exists:
+    stored_board = stored.get("board") if isinstance(stored, dict) and isinstance(stored.get("board"), dict) else {}
+    stored_mcp = stored.get("mcp") if isinstance(stored, dict) and isinstance(stored.get("mcp"), dict) else {}
+    board_bind, board_adv, board_block = _resolve_bind_advertise(
+        label="board", workspace_root=workspace_root, param_host=board_host,
+        param_advertise=board_advertise_host, stored_host=stored_board.get("host"),
+        stored_advertise=stored_board.get("advertise_host"), default_host=DEFAULT_BOARD_HOST,
+    )
+    mcp_bind, mcp_adv, mcp_block = _resolve_bind_advertise(
+        label="mcp", workspace_root=workspace_root, param_host=mcp_host,
+        param_advertise=mcp_advertise_host, stored_host=stored_mcp.get("host"),
+        stored_advertise=stored_mcp.get("advertise_host"), default_host=DEFAULT_MCP_HOST,
+    )
+    advertise_blocks = [b for b in (board_block, mcp_block) if b]
+    if advertise_blocks:
+        return _blocked("serve_start", workspace_root, advertise_blocks, warnings, connection_target=connection_target)
+    # F-258-1: a host/advertise param appearing -> it overrides the stored value and is written
+    # back (the process leaves a trail: `serve status` then shows the new host). No param at all
+    # -> the stored config is untouched (byte-identical, S1).
+    host_param_given = any(p is not None for p in (board_host, mcp_host, board_advertise_host, mcp_advertise_host))
+    if conn_exists:
+        config = stored
+        if host_param_given:
+            config["board"] = _board_block(board_bind, board_adv, int(stored_board.get("port") or DEFAULT_BOARD_PORT))
+            config["mcp"] = _mcp_block(mcp_bind, mcp_adv, int(stored_mcp.get("port") or DEFAULT_MCP_PORT))
+            write_connection_config(workspace_root, config, connection_target=connection_target)
+    else:
+        config = build_connection_config(
+            workspace_root,
+            board_host=board_bind,
+            board_port=board_port,
+            mcp_host=mcp_bind,
+            mcp_port=mcp_port,
+            board_advertise_host=board_adv,
+            mcp_advertise_host=mcp_adv,
+        )
         write_connection_config(workspace_root, config, connection_target=connection_target)
     if not start_processes:
         return {
