@@ -553,20 +553,9 @@ def start_report(
 ) -> dict[str, Any]:
     if connection_target is None:
         connection_target = runtime_connection_path()
-    if board_host != "127.0.0.1" or mcp_host != "127.0.0.1":
-        return _blocked(
-            "serve_start",
-            workspace_root,
-            [
-                {
-                    "message": "Service mode v0 is loopback-only; host must be 127.0.0.1.",
-                    "path": str(workspace_root),
-                    "fix_command": "Use --board-host 127.0.0.1 and --mcp-host 127.0.0.1.",
-                }
-            ],
-            [],
-            connection_target=connection_target,
-        )
+    # AIPOS-258: --mcp-host/--board-host now pass through to the child processes so the gate can
+    # bind a tailnet address for cross-machine access. The default stays 127.0.0.1 (loopback
+    # safe-default, enforced by the CLI default + DEFAULT_*_HOST); non-loopback is opt-in.
     blocking, warnings = check_service_permissions(
         workspace_root, for_secret_use=True, connection_target=connection_target
     )
@@ -603,18 +592,20 @@ def start_report(
     return _run_supervisor(workspace_root, config, warnings=warnings, connection_target=connection_target)
 
 
-def _run_supervisor(
-    workspace_root: Path,
+def _build_child_commands(
     config: dict[str, Any],
     *,
-    warnings: list[dict[str, Any]],
-    connection_target: Path | None = None,
-) -> dict[str, Any]:
+    child_workspace_root: Path,
+    connection_path_str: str,
+) -> tuple[list[str], list[str]]:
+    """Build the (board, mcp) child-process argv from the connection config.
+
+    Pure/testable: AIPOS-258 asserts --mcp-host/--board-host reach the child --host flags
+    without spawning a real subprocess. Defaults to DEFAULT_*_HOST when config omits a value
+    (byte-identical to the prior inline construction).
+    """
     board = config.get("board") if isinstance(config.get("board"), dict) else {}
     mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
-    child_workspace_root = Path(str(config.get("workspace_root") or workspace_root)).expanduser().resolve()
-    env = os.environ.copy()
-    env["AIPOS_WORKSPACE_ROOT"] = str(child_workspace_root)
     board_cmd = [
         sys.executable,
         "-m",
@@ -636,8 +627,28 @@ def _run_supervisor(
         "--port",
         str(mcp.get("port") or DEFAULT_MCP_PORT),
         "--service-connection-json",
-        str(connection_path(workspace_root, connection_target=connection_target)),
+        connection_path_str,
     ]
+    return board_cmd, mcp_cmd
+
+
+def _run_supervisor(
+    workspace_root: Path,
+    config: dict[str, Any],
+    *,
+    warnings: list[dict[str, Any]],
+    connection_target: Path | None = None,
+) -> dict[str, Any]:
+    board = config.get("board") if isinstance(config.get("board"), dict) else {}
+    mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
+    child_workspace_root = Path(str(config.get("workspace_root") or workspace_root)).expanduser().resolve()
+    env = os.environ.copy()
+    env["AIPOS_WORKSPACE_ROOT"] = str(child_workspace_root)
+    board_cmd, mcp_cmd = _build_child_commands(
+        config,
+        child_workspace_root=child_workspace_root,
+        connection_path_str=str(connection_path(workspace_root, connection_target=connection_target)),
+    )
     # AIPOS-238 (F-o3-13 D1): refuse an already-OCCUPIED port up front. A stale serve still answering
     # would otherwise keep OLD tokens (→ downstream 401) while we falsely report success. Probe BOTH
     # board + mcp with a connect() active-listener test (see _ports_in_use).

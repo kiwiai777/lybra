@@ -281,6 +281,55 @@ class ServiceModeTests(unittest.TestCase):
         self.assertIn(str(mcp_port), msg)
         self.assertFalse(service_state_path(self.root).exists())  # never spawned
 
+    def test_start_report_allows_non_loopback_host_without_blocking(self) -> None:
+        # AIPOS-258 S2: serve start with a non-loopback host no longer BLOCKs on "loopback-only";
+        # default 127.0.0.1 stays the loopback safe-default, non-loopback is opt-in.
+        result = start_report(
+            self.root,
+            board_host="0.0.0.0",
+            board_port=7117,
+            mcp_host="0.0.0.0",
+            mcp_port=7118,
+            start_processes=False,
+        )
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("verdict"), "PASS")
+        self.assertEqual(result.get("blocking_reasons"), [])
+        # connection.json (url/rpc_url/sse_url + host) reflects the requested host, not 127.0.0.1
+        self.assertEqual(result["connection"]["board"]["host"], "0.0.0.0")
+        self.assertEqual(result["connection"]["board"]["url"], "http://0.0.0.0:7117")
+        self.assertEqual(result["connection"]["mcp"]["host"], "0.0.0.0")
+        self.assertEqual(result["connection"]["mcp"]["rpc_url"], "http://0.0.0.0:7118/mcp")
+
+    def test_child_command_carries_default_loopback_host(self) -> None:
+        # AIPOS-258 S1: default config (no host override) → child argv --host is 127.0.0.1.
+        from tools.aipos_cli.service_mode import _build_child_commands
+        config = build_connection_config(
+            self.root, board_host="127.0.0.1", board_port=7117, mcp_host="127.0.0.1", mcp_port=7118,
+        )
+        board_cmd, mcp_cmd = _build_child_commands(
+            config, child_workspace_root=self.root, connection_path_str=str(self.root / "connection.json"),
+        )
+        self.assertEqual(board_cmd[board_cmd.index("--host") + 1], "127.0.0.1")
+        self.assertEqual(mcp_cmd[mcp_cmd.index("--host") + 1], "127.0.0.1")
+
+    def test_child_command_passes_through_non_loopback_host(self) -> None:
+        # AIPOS-258 S2: --mcp-host 0.0.0.0 / --board-host <tailnet addr> reach the child --host flags
+        # (spawn command-line assertion, without spawning a real subprocess).
+        from tools.aipos_cli.service_mode import _build_child_commands
+        config = build_connection_config(
+            self.root, board_host="100.64.0.1", board_port=7117, mcp_host="0.0.0.0", mcp_port=7118,
+        )
+        board_cmd, mcp_cmd = _build_child_commands(
+            config, child_workspace_root=self.root, connection_path_str=str(self.root / "connection.json"),
+        )
+        # board binds the tailnet address, mcp binds all interfaces
+        self.assertEqual(board_cmd[board_cmd.index("--host") + 1], "100.64.0.1")
+        self.assertEqual(mcp_cmd[mcp_cmd.index("--host") + 1], "0.0.0.0")
+        # argv shape unchanged: still --host <value>, --port <value>, --repo-root/--service-connection-json
+        self.assertEqual(board_cmd[board_cmd.index("--port") + 1], "7117")
+        self.assertEqual(mcp_cmd[mcp_cmd.index("--port") + 1], "7118")
+
     def test_serve_start_reaps_children_on_sigterm(self) -> None:
         # B/F-NEW-b: a plain SIGTERM to the supervisor reaps board+mcp (no orphans holding the port).
         board_port = _free_port()
@@ -421,6 +470,91 @@ class ServiceModeTests(unittest.TestCase):
             structured = response["result"]["structuredContent"]  # type: ignore[index]
             self.assertEqual(structured["operation"], "get_queue")  # type: ignore[index]
             self.assertEqual(structured["scope_basis"]["role"], "executor")  # type: ignore[index]
+            self.assertNotIn("error", response)
+        finally:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "tools.aipos_cli.aipos_cli",
+                    "--workspace-root",
+                    str(self.root),
+                    "serve",
+                    "--connection-json",
+                    conn_json,
+                    "stop",
+                    "--json",
+                ],
+                cwd=Path(__file__).resolve().parents[3],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                stdout, stderr = proc.communicate(timeout=5)
+        self.assertEqual(proc.returncode, 0, (stdout, stderr))
+
+    def test_service_mode_spawn_listens_on_non_loopback_bind(self) -> None:
+        # AIPOS-258 S3 (local): serve start with --board-host/--mcp-host 0.0.0.0 binds all
+        # interfaces and still serves; loopback (127.0.0.1) is one of them so a local RPC works.
+        # (Cross-machine tailnet curl is advisor acceptance; this proves the non-loopback bind path.)
+        board_port = _free_port()
+        mcp_port = _free_port()
+        env = os.environ.copy()
+        env["NO_PROXY"] = "127.0.0.1,localhost,::1"
+        conn_json = str(self.root / CONNECTION_REL)
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "tools.aipos_cli.aipos_cli",
+                "--workspace-root",
+                str(self.root),
+                "serve",
+                "--connection-json",
+                conn_json,
+                "start",
+                "--board-host",
+                "0.0.0.0",
+                "--board-port",
+                str(board_port),
+                "--mcp-host",
+                "0.0.0.0",
+                "--mcp-port",
+                str(mcp_port),
+            ],
+            cwd=Path(__file__).resolve().parents[3],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout = ""
+        stderr = ""
+        try:
+            _wait_for_port(mcp_port)
+            config = json.loads(Path(conn_json).read_text(encoding="utf-8"))
+            # connection.json recorded the non-loopback host (url/rpc_url/sse_url + host all reflect it)
+            self.assertEqual(config["board"]["host"], "0.0.0.0")
+            self.assertEqual(config["mcp"]["host"], "0.0.0.0")
+            self.assertTrue(config["mcp"]["rpc_url"].startswith("http://0.0.0.0:"), config["mcp"]["rpc_url"])
+            executor_token = next(item["token"] for item in config["tokens"] if item["role"] == "executor")
+            response = _post_rpc(
+                mcp_port,
+                executor_token,
+                {
+                    "jsonrpc": "2.0",
+                    "id": "queue-list",
+                    "method": "tools/call",
+                    "params": {"name": "lybra_queue_list", "arguments": {}},
+                },
+            )
             self.assertNotIn("error", response)
         finally:
             subprocess.run(
