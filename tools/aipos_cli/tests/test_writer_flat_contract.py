@@ -242,6 +242,85 @@ class WriterFlatContractTests(unittest.TestCase):
         task_path = repo_root / result["target_path"]
         _assert_flat_contract(self, "publish_draft", task_path.read_text(encoding="utf-8"))
 
+    def test_aipos265_return_record_drops_empty_legacy_runtime_fields(self) -> None:
+        # AIPOS-265 S3: empty actual_model/reported_tokens are no longer written
+        # (空置停写); agent_runtime is the single new 口径. The return frontmatter
+        # must omit BOTH legacy keys when the caller sends nothing.
+        text = build_mcp_return_record_markdown(
+            task_id="AIPOS-265W", task_path="5_tasks/queue/claimed/aipos-265w.md",
+            actor="exec.lybra.test", canonical_agent_instance="exec.lybra.test",
+            owner_policy_ref="owner_policy:test", return_id="return-w1",
+            claim_id="claim-w1", session_id="session-w1",
+            returned_at="2026-07-28T00:00:00Z", result_summary=None,
+            artifact_refs=[], completion_report_ref=None,
+        )
+        self.assertNotIn("actual_model:", text)
+        self.assertNotIn("reported_tokens:", text)
+        _assert_flat_contract(self, "return_record_no_legacy_runtime", text)
+
+    def test_aipos265_return_record_keeps_legacy_runtime_fields_when_provided(self) -> None:
+        # AIPOS-265 S3 read-side compat: a caller still sending actual_model /
+        # reported_tokens (legacy) must see them persisted — only EMPTY values are
+        # dropped, so historical callers keep working until they migrate to agent_runtime.
+        text = build_mcp_return_record_markdown(
+            task_id="AIPOS-265W", task_path="5_tasks/queue/claimed/aipos-265w.md",
+            actor="exec.lybra.test", canonical_agent_instance="exec.lybra.test",
+            owner_policy_ref="owner_policy:test", return_id="return-w2",
+            claim_id="claim-w2", session_id="session-w2",
+            returned_at="2026-07-28T00:00:00Z", result_summary=None,
+            artifact_refs=[], completion_report_ref=None,
+            actual_model="provider/legacy-7", reported_tokens=4242,
+        )
+        self.assertIn("actual_model: provider/legacy-7", text)
+        self.assertIn("reported_tokens: 4242", text)
+        _assert_flat_contract(self, "return_record_legacy_runtime_provided", text)
+
+    def test_aipos265f1_verdict_record_with_agent_runtime_is_flat(self) -> None:
+        # AIPOS-265 FIX-1 S1 (writer-side): the verdict record accepts an optional
+        # agent_runtime bundle (symmetric to the return half) and persists it to
+        # frontmatter when provided. This is what lets an auditor's 档案 populate.
+        text = build_mcp_audit_verdict_record_markdown(
+            verdict_id="verdict-265f1", verdict="PASS",
+            reviewed_task_id="AIPOS-265F1", reviewed_task_path="5_tasks/queue/completed/aipos-265f1.md",
+            reviewed_return_record_ref="5_tasks/records/returns/aipos-265f1/return.md",
+            audit_dispatch_record_ref="5_tasks/records/audit_dispatches/dispatch.md",
+            audit_task_id="AIPOS-265F1-AUDIT", audit_task_path="5_tasks/queue/completed/aipos-265f1-audit.md",
+            audit_claim_id="claim-a", audit_session_id="session-a",
+            reviewed_executor_instance="exec.lybra.test",
+            auditor_instance="audit.lybra.test", actor="audit.lybra.test",
+            canonical_agent_instance="audit.lybra.test", owner_policy_ref="DL-265F1",
+            verdict_at="2026-07-29T00:03:00Z", findings_summary="All checks passed.",
+            evidence_refs=[], recommended_next_action="finalize",
+            agent_runtime={"harness": "pi", "model_self_reported": "provider/sonnet-5",
+                           "tokens_in": 4321, "tokens_out": 88},
+        )
+        self.assertIn("agent_runtime:", text)
+        self.assertIn("harness: pi", text)
+        self.assertIn("model_self_reported: provider/sonnet-5", text)
+        self.assertIn("tokens_in: 4321", text)
+        self.assertIn("tokens_out: 88", text)
+        _assert_flat_contract(self, "verdict_record_with_agent_runtime", text)
+
+    def test_aipos265f1_verdict_record_without_agent_runtime_omits_key(self) -> None:
+        # AIPOS-265 FIX-1 S3 (zero-regression): a verdict that sends NO agent_runtime
+        # omits the key entirely — existing verdict records/tests stay byte-identical
+        # (additive only; the 档案 popup reads absent-key as 未记录).
+        text = build_mcp_audit_verdict_record_markdown(
+            verdict_id="verdict-265f1b", verdict="PASS",
+            reviewed_task_id="AIPOS-265F1", reviewed_task_path="5_tasks/queue/completed/aipos-265f1.md",
+            reviewed_return_record_ref="5_tasks/records/returns/aipos-265f1/return.md",
+            audit_dispatch_record_ref="5_tasks/records/audit_dispatches/dispatch.md",
+            audit_task_id="AIPOS-265F1-AUDIT", audit_task_path="5_tasks/queue/completed/aipos-265f1-audit.md",
+            audit_claim_id="claim-a", audit_session_id="session-a",
+            reviewed_executor_instance="exec.lybra.test",
+            auditor_instance="audit.lybra.test", actor="audit.lybra.test",
+            canonical_agent_instance="audit.lybra.test", owner_policy_ref="DL-265F1",
+            verdict_at="2026-07-29T00:03:00Z", findings_summary="All checks passed.",
+            evidence_refs=[], recommended_next_action="finalize",
+        )
+        self.assertNotIn("agent_runtime:", text)
+        _assert_flat_contract(self, "verdict_record_without_agent_runtime", text)
+
 
 if __name__ == "__main__":
     unittest.main()

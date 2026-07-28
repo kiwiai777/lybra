@@ -917,6 +917,11 @@ class McpToolTests(unittest.TestCase):
         self.assertTrue(confirmed["ok"])
         return_record = load_records(self.repo_root)["returns"][0]["metadata"]
         self.assertNotIn("agent_runtime", return_record)
+        # AIPOS-265 S3: a return that sends NO runtime also drops the legacy 空
+        # actual_model/reported_tokens fields (空置停写) — agent_runtime is the
+        # single new 口径; new records no longer carry dead empty fields.
+        self.assertNotIn("actual_model", return_record)
+        self.assertNotIn("reported_tokens", return_record)
 
     def test_queue_return_confirm_requires_owner_confirmation_then_updates_claimed_task_only(self) -> None:
         self.write_return_task()
@@ -1689,6 +1694,61 @@ class McpToolTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("session_status: audit_verdict", session_text)
         self.assertIn("mcp_audit_verdict", session_text)
+
+    def test_aipos265f1_audit_verdict_persists_agent_runtime_to_record(self) -> None:
+        """AIPOS-265 FIX-1 S1: lybra_audit_verdict dry_run/confirm accept an optional
+        agent_runtime bundle and persist it to the verdict record frontmatter (symmetric
+        to the return half). This is the write-side half that lets an auditor's 档案
+        populate; the read-side dual-source scan is covered by the board contract test."""
+        runtime = {"harness": "pi", "model_self_reported": "provider/sonnet-5",
+                   "tokens_in": 4321, "tokens_out": 88}
+        if not _HAS_YAML:
+            # BARE: dispatch is fail-closed, so the full roundtrip can't complete. Still assert
+            # the verdict surface ACCEPTS agent_runtime (it is NOT in FORBIDDEN_AUDIT_FIELDS —
+            # only the unrelated `runtime` field is), i.e. no UNSUPPORTED_AUDIT_VERDICT_FIELD.
+            self.prepare_returned_source()
+            env = {
+                "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+                "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_verdict"]),
+            }
+            with patch.dict(os.environ, env, clear=True):
+                dry = self.assert_tool_ok(self.call_tool(
+                    "lybra_audit_verdict_dry_run", self.verdict_payload(agent_runtime=runtime)))
+            self.assertNotEqual(dry.get("error_code"), "UNSUPPORTED_AUDIT_VERDICT_FIELD", dry)
+            return
+        self.claim_audit_task()
+        audit_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-audit-01.md"
+        source_path = self.repo_root / "5_tasks" / "queue" / "claimed" / "aipos-mcp-return.md"
+        audit_metadata, _, _ = parse_markdown_frontmatter(audit_path.read_text(encoding="utf-8"))
+        source_metadata, _, _ = parse_markdown_frontmatter(source_path.read_text(encoding="utf-8"))
+        payload = self.verdict_payload(
+            claim_id=audit_metadata["claim_id"],
+            active_session_id=audit_metadata["active_session_id"],
+            audit_dispatch_record_ref=source_metadata["audit_dispatch_record_ref"],
+            reviewed_return_record_ref=source_metadata["return_record_ref"],
+            agent_runtime=runtime,
+        )
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["audit_verdict"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_audit_verdict_dry_run", payload))
+            # The roundtrip captures agent_runtime in the plan's original_payload.
+            self.assertEqual(dry["data"]["original_payload"]["agent_runtime"], runtime)  # type: ignore[index]
+            confirmed = self.assert_tool_ok(self.call_tool(
+                "lybra_audit_verdict_confirm",
+                {
+                    "dry_run_token": dry["dry_run_token"],
+                    "actor": "agent-02",
+                    "agent_instance": "agent-02",
+                    "owner_policy_ref": "owner_policy:aipos-178-supervised-verdict-test",
+                    "owner_confirmation_token": "OWNER_CONFIRMED",
+                },
+            ))
+        self.assertTrue(confirmed["ok"], confirmed)
+        verdict_meta = load_records(self.repo_root)["audit_verdicts"][0]["metadata"]
+        self.assertEqual(verdict_meta["agent_runtime"], runtime)
 
     def test_audit_dispatch_blocks_registry_unverified_executor_real_path(self) -> None:
         """AIPOS-219 §6b condition ③ — REAL-PATH negative control (closes ★C2).

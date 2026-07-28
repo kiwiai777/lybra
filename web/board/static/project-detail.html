@@ -374,6 +374,9 @@
     .agent-popup .ap-v.muted { color: var(--text-secondary); font-weight: 400; font-style: italic; }
     .agent-popup .ap-tag { display: inline-block; margin-left: 6px; font-size: 10px; font-weight: 700; color: #92400e; background: #fef3c7; padding: 1px 6px; border-radius: 8px; vertical-align: middle; }
     .agent-popup .ap-close { margin-top: 12px; width: 100%; padding: 7px; border: 1px solid var(--border-default); background: var(--surface); border-radius: 8px; cursor: pointer; font-size: 13px; }
+    .agent-popup .ap-section { margin: 12px 0 2px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-secondary); border-top: 1px solid var(--border-default); padding-top: 8px; }
+    .agent-popup .ap-section:first-of-type { margin-top: 4px; border-top: 0; padding-top: 0; }
+    .agent-popup .ap-note { font-size: 12px; color: var(--text-secondary); font-style: italic; padding: 3px 0; }
     /* Activity feed. */
     .tc-feed {
       border: 1px solid var(--border-default); border-radius: 8px;
@@ -671,9 +674,9 @@
     
     // Shared event renderer: verb + actor [+ task] + time [+ verdict] + summary.
     // DOM-only (textContent); renders record-authored text safely.
-    // AIPOS-261: renders one truth event in 人话 — leads with the full sentence
-    // (phrase) + Chinese role label; the raw agent instance collapses to a small
-    // clickable link (opens the agent-info popup when agent_info is present).
+    // AIPOS-261/265: renders one truth event in 人话 — leads with the full sentence
+    // (phrase) + Chinese role label; the raw agent instance is ALWAYS a clickable
+    // link (every record type carries agent_info since AIPOS-265 → 档案 popup).
     // `verb`/`actor`/`verdict` are preserved on the node for contract/debug visibility.
     function appendTruthEvent(target, ev, withTask) {
       const head = document.createElement('div');
@@ -693,7 +696,8 @@
           link.type = 'button';
           link.className = 'agent-link';
           link.textContent = ev.actor;
-          link.title = '查看 agent 信息';
+          link.title = '查看 agent 档案';
+          link.setAttribute('aria-haspopup', 'dialog');
           link.addEventListener('click', () => showAgentPopup(ev.agent_info));
           head.appendChild(link);
         } else {
@@ -735,8 +739,9 @@
       return '';
     }
 
-    // AIPOS-261: agent info popup. Model + token fields are SELF-REPORTED (labeled
-    // 自报); absent fields show 未记录. Duration derives from session created/updated.
+    // AIPOS-265: 档案式 agent popup. Two sections — 最近已知档案 (the agent's latest
+    // return carrying a runtime signal, across the whole repo) + 本轮 (this event's
+    // own runtime, else "本轮未记录"). Model/token fields are SELF-REPORTED (自报).
     function showAgentPopup(info) {
       const old = document.getElementById('agent-popup-mask');
       if (old) old.remove();
@@ -747,38 +752,40 @@
       const box = document.createElement('div');
       box.className = 'agent-popup';
       const h = document.createElement('h4');
-      h.textContent = `${info.role || 'agent'} 信息`;
+      h.textContent = `${info.role || 'agent'} 档案`;
       box.appendChild(h);
       const sub = document.createElement('div');
       sub.className = 'ap-sub';
       sub.textContent = info.instance || '—';
       box.appendChild(sub);
-      const rows = [
-        ['角色', info.role, false],
-        ['实例', info.instance, false],
-        ['harness', info.harness, false],
-      ];
-      // Self-reported block (model + tokens) — always present, flagged 自报.
-      const selfTag = document.createElement('span');
-      selfTag.className = 'ap-tag';
-      selfTag.textContent = '自报';
-      rows.push(['自报模型', nv(info.model_self_reported), true]);
-      rows.push(['自报 tokens(in/out)', tokenPair(info), true]);
-      rows.push(['本次耗时', durationLabel(info.duration_seconds), false]);
-      rows.forEach(([k, v, isSelf]) => {
-        const row = document.createElement('div');
-        row.className = 'ap-row';
-        const kEl = document.createElement('span');
-        kEl.className = 'ap-k';
-        kEl.textContent = k;
-        if (isSelf) kEl.appendChild(selfTag.cloneNode(true));
-        const vEl = document.createElement('span');
-        vEl.className = 'ap-v' + (v === '未记录' ? ' muted' : '');
-        vEl.textContent = v;
-        row.appendChild(kEl);
-        row.appendChild(vEl);
-        box.appendChild(row);
-      });
+
+      // 最近已知档案
+      box.appendChild(apSection('最近已知档案'));
+      const profile = info.profile;
+      if (profile) {
+        box.appendChild(apRow('harness', nv(profile.harness), false));
+        box.appendChild(apRow('自报模型', nv(profile.model_self_reported), true));
+        box.appendChild(apRow('自报 tokens(in/out)', tokenPair(profile), true));
+        if (profile.source_return_id) {
+          const when = profile.source_returned_at ? ' · ' + new Date(profile.source_returned_at).toLocaleString() : '';
+          box.appendChild(apNote('来自 ' + profile.source_return_id + when));
+        }
+      } else {
+        box.appendChild(apNote('暂无已知档案'));
+      }
+
+      // 本轮
+      box.appendChild(apSection('本轮'));
+      const round = info.round;
+      if (round) {
+        box.appendChild(apRow('harness', nv(round.harness), false));
+        box.appendChild(apRow('自报模型', nv(round.model_self_reported), true));
+        box.appendChild(apRow('自报 tokens(in/out)', tokenPair(round), true));
+        box.appendChild(apRow('本次耗时', durationLabel(round.duration_seconds), false));
+      } else {
+        box.appendChild(apNote('本轮未记录'));
+      }
+
       const close = document.createElement('button');
       close.className = 'ap-close';
       close.textContent = '关闭';
@@ -786,6 +793,37 @@
       box.appendChild(close);
       mask.appendChild(box);
       document.body.appendChild(mask);
+    }
+    function apSection(label) {
+      const el = document.createElement('div');
+      el.className = 'ap-section';
+      el.textContent = label;
+      return el;
+    }
+    function apRow(label, value, isSelf) {
+      const row = document.createElement('div');
+      row.className = 'ap-row';
+      const kEl = document.createElement('span');
+      kEl.className = 'ap-k';
+      kEl.textContent = label;
+      if (isSelf) {
+        const tag = document.createElement('span');
+        tag.className = 'ap-tag';
+        tag.textContent = '自报';
+        kEl.appendChild(tag);
+      }
+      const vEl = document.createElement('span');
+      vEl.className = 'ap-v' + (value === '未记录' ? ' muted' : '');
+      vEl.textContent = value;
+      row.appendChild(kEl);
+      row.appendChild(vEl);
+      return row;
+    }
+    function apNote(text) {
+      const el = document.createElement('div');
+      el.className = 'ap-note';
+      el.textContent = text;
+      return el;
     }
     function nv(v) { return (v === null || v === undefined || v === '') ? '未记录' : String(v); }
     function tokenPair(info) {

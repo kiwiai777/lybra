@@ -373,17 +373,194 @@ class BoardAdapterContractTests(unittest.TestCase):
         self.assertEqual(vd_ev["role"], "审计员")
         self.assertIn("PASS", vd_ev["phrase"])
 
-        # agent_info on the return event: pinned sub-keys, self-reported flag, duration.
+        # AIPOS-265 S1: the verdict line carries agent_info too → its agent name is a
+        # clickable popup target (was unbound before this slice). audit.lybra.test filed
+        # no return, so profile/round are None (popup shows 暂无已知档案 / 本轮未记录).
+        self.assertIn("agent_info", vd_ev)
+        self.assertEqual(vd_ev["agent_info"]["role"], "审计员")
+        self.assertIsNone(vd_ev["agent_info"]["profile"])
+        self.assertIsNone(vd_ev["agent_info"]["round"])
+
+        # AIPOS-265 S4: agent_info is 档案式 (profile + round). The return IS the latest
+        # runtime source for exec.lybra.test, so profile == round runtime here.
         self.assertIn("agent_info", ret_ev)
         info = ret_ev["agent_info"]
-        for key in ("role", "instance", "harness", "model_self_reported", "tokens_in", "tokens_out", "duration_seconds", "self_reported"):
+        for key in ("role", "instance", "self_reported", "profile", "round"):
             self.assertIn(key, info, f"agent_info must expose {key}")
-        self.assertEqual(info["harness"], "pi")
-        self.assertEqual(info["model_self_reported"], "provider/sonnet-5")
-        self.assertEqual(info["tokens_in"], 12345)
-        self.assertEqual(info["tokens_out"], 678)
         self.assertTrue(info["self_reported"])  # model/tokens are self-reported
-        self.assertEqual(info["duration_seconds"], 1200)  # 00:00 -> 00:20
+        # profile = 最近已知档案 (latest return carrying runtime for this instance).
+        profile = info["profile"]
+        self.assertEqual(profile["harness"], "pi")
+        self.assertEqual(profile["model_self_reported"], "provider/sonnet-5")
+        self.assertEqual(profile["tokens_in"], 12345)
+        self.assertEqual(profile["tokens_out"], 678)
+        self.assertEqual(profile["source_return_id"], "return_x")
+        self.assertEqual(profile["source_returned_at"], "2026-07-28T00:20:00Z")
+        # round = 本轮 (this return's own runtime + session duration 00:00 -> 00:20).
+        round_info = info["round"]
+        self.assertEqual(round_info["harness"], "pi")
+        self.assertEqual(round_info["model_self_reported"], "provider/sonnet-5")
+        self.assertEqual(round_info["tokens_in"], 12345)
+        self.assertEqual(round_info["tokens_out"], 678)
+        self.assertEqual(round_info["duration_seconds"], 1200)
+
+    def test_aipos265_agent_popup_unified_and_dossier_semantics(self) -> None:
+        """AIPOS-265: agent_info attaches to EVERY record type (S1 unified clickable);
+        the popup is 档案式 (profile = latest return runtime for the instance; round =
+        this event's own runtime, else 本轮未记录) (S2); and pre-265 returns carrying
+        only legacy actual_model/reported_tokens still surface their runtime (S3)."""
+        (self.repo_root / "5_tasks" / "queue" / "claimed" / "task-265.md").write_text(
+            "---\ntask_id: AIPOS-265P\ntitle: Agent popup unification\nstatus: claimed\n---\n# AIPOS-265P\n\nPopup semantics.\n",
+            encoding="utf-8",
+        )
+
+        def _write(rel: str, frontmatter: str, body: str = "") -> None:
+            path = self.repo_root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("---\n" + frontmatter + "\n---\n" + body, encoding="utf-8")
+
+        # exec.lybra.test: publish + bare claim + return WITH agent_runtime + session.
+        _write("5_tasks/records/publishes/AIPOS-265P/publish_265.md",
+               "record_type: publish_record\npublish_id: publish_265\ntask_id: AIPOS-265P\n"
+               "actor: exec.lybra.test\npublished_at: '2026-07-28T00:00:00Z'\n")
+        _write("5_tasks/records/claims/AIPOS-265P/claim_265.md",
+               "record_type: claim_record\nclaim_id: claim_265\ntask_id: AIPOS-265P\n"
+               "actor: exec.lybra.test\nclaimed_at: '2026-07-28T00:05:00Z'\n")
+        _write("5_tasks/records/sessions/AIPOS-265P/session_265.md",
+               "record_type: session_record\nsession_id: session_265\ntask_id: AIPOS-265P\n"
+               "actor: exec.lybra.test\ncreated_at: '2026-07-28T00:05:00Z'\nupdated_at: '2026-07-28T00:25:00Z'\n")
+        _write("5_tasks/records/returns/AIPOS-265P/return_265.md",
+               "record_type: return_record\nreturn_id: return_265\ntask_id: AIPOS-265P\n"
+               "actor: exec.lybra.test\nsession_id: session_265\nreturned_at: '2026-07-28T00:25:00Z'\n"
+               "result_summary_present: true\n"
+               "agent_runtime:\n  harness: pi\n  model_self_reported: provider/sonnet-5\n  tokens_in: 100\n  tokens_out: 20\n",
+               "# Return\n\n- Result summary: popup unified.\n")
+        # audit_verdict by a different auditor (filed no return of its own).
+        _write("5_tasks/records/audit_verdicts/AIPOS-265P/verdict_265.md",
+               "record_type: audit_verdict_record\nverdict_id: verdict_265\nverdict: PASS\n"
+               "reviewed_task_id: AIPOS-265P\nactor: audit.lybra.test\nverdict_at: '2026-07-28T00:40:00Z'\n",
+               "# Verdict\n\n- Findings summary: PASS.\n")
+        # exec.lybra.legacy: a pre-265 return carrying ONLY legacy actual_model/reported_tokens.
+        (self.repo_root / "5_tasks" / "queue" / "claimed" / "task-leg.md").write_text(
+            "---\ntask_id: AIPOS-265L\ntitle: Legacy runtime\nstatus: claimed\n---\n# AIPOS-265L\n\nLegacy.\n",
+            encoding="utf-8",
+        )
+        _write("5_tasks/records/returns/AIPOS-265L/return_leg.md",
+               "record_type: return_record\nreturn_id: return_leg\ntask_id: AIPOS-265L\n"
+               "actor: exec.lybra.legacy\nreturned_at: '2026-07-20T00:00:00Z'\n"
+               "actual_model: claude-opus-4\nreported_tokens: 999\n")
+
+        response = get_owner_truth_view(repo_root=self.repo_root)
+        self.assertTrue(response["ok"], response)
+        data = response["data"]
+
+        task = next(t for t in data["tasks"] if t["task_id"] == "AIPOS-265P")
+        by_type = {ev["record_type"]: ev for ev in task["timeline"]}
+
+        # S1 (unified): every record type carries agent_info → all actor names clickable.
+        for rt in ("publish", "claim", "return", "audit_verdict"):
+            self.assertIn(rt, by_type, f"timeline must include {rt}")
+            self.assertIn("agent_info", by_type[rt], f"{rt} event must carry agent_info (clickable)")
+
+        # S2 (dossier): the bare claim (no runtime of its own) shows the agent's
+        # 最近已知档案 (from the agent_runtime return) + round=None (本轮未记录).
+        claim_info = by_type["claim"]["agent_info"]
+        self.assertIsNotNone(claim_info["profile"])
+        self.assertEqual(claim_info["profile"]["harness"], "pi")
+        self.assertEqual(claim_info["profile"]["source_return_id"], "return_265")
+        self.assertIsNone(claim_info["round"], "claim with no runtime → 本轮未记录")
+        # The return event shows BOTH profile and its own round (duration 00:05 → 00:25).
+        ret_info = by_type["return"]["agent_info"]
+        self.assertEqual(ret_info["profile"]["source_return_id"], "return_265")
+        self.assertIsNotNone(ret_info["round"])
+        self.assertEqual(ret_info["round"]["duration_seconds"], 1200)
+        # The auditor filed no return → its verdict popup has no profile/round.
+        self.assertIsNone(by_type["audit_verdict"]["agent_info"]["profile"])
+        self.assertIsNone(by_type["audit_verdict"]["agent_info"]["round"])
+
+        # S3 (read-side legacy compat): exec.lybra.legacy's return carries no agent_runtime,
+        # only legacy actual_model/reported_tokens → the profile surfaces them (no harness).
+        task_leg = next(t for t in data["tasks"] if t["task_id"] == "AIPOS-265L")
+        leg_ret = next(ev for ev in task_leg["timeline"] if ev["record_type"] == "return")
+        leg_profile = leg_ret["agent_info"]["profile"]
+        self.assertIsNone(leg_profile["harness"])
+        self.assertEqual(leg_profile["model_self_reported"], "claude-opus-4")
+        self.assertEqual(leg_profile["tokens_in"], 999)
+        # The feed mirrors the same dossier semantics (popup source for the feed too).
+        feed_claim = next(ev for ev in data["activity_feed"]
+                          if ev["record_type"] == "claim" and ev.get("actor") == "exec.lybra.test")
+        self.assertIsNotNone(feed_claim["agent_info"]["profile"])
+        self.assertIsNone(feed_claim["agent_info"]["round"])
+
+    def test_aipos265f1_auditor_profile_from_verdict_dual_source(self) -> None:
+        """AIPOS-265 FIX-1 S2 (Owner eye-verify打回: 'exec 档案全显 / audit 全暂无').
+
+        Auditors file audit_verdicts, not returns. The pre-fix profile index scanned
+        returns ONLY → every auditor's 档案 was blank. Now the index scans return +
+        audit_verdict (dual source), most-recent by time. So an auditor whose verdict
+        carries agent_runtime now shows a known profile; and when the same instance has
+        both sources, the strictly-later one wins (cross-source recency)."""
+        def _write(rel: str, frontmatter: str, body: str = "") -> None:
+            path = self.repo_root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("---\n" + frontmatter + "\n---\n" + body, encoding="utf-8")
+
+        # --- Task V: auditor files a verdict WITH agent_runtime (no return of its own).
+        (self.repo_root / "5_tasks" / "queue" / "claimed" / "task-265f1v.md").write_text(
+            "---\ntask_id: AIPOS-265F1V\ntitle: Auditor profile from verdict\nstatus: claimed\n---\n# AIPOS-265F1V\n\nVerdict-sourced profile.\n",
+            encoding="utf-8",
+        )
+        _write("5_tasks/records/audit_verdicts/AIPOS-265F1V/verdict_v.md",
+               "record_type: audit_verdict_record\nverdict_id: verdict_v\nverdict: PASS\n"
+               "reviewed_task_id: AIPOS-265F1V\nactor: audit.lybra.test\nauditor_instance: audit.lybra.test\n"
+               "verdict_at: '2026-07-29T00:40:00Z'\n"
+               "agent_runtime:\n  harness: pi\n  model_self_reported: provider/sonnet-5\n  tokens_in: 4321\n  tokens_out: 88\n",
+               "# Verdict\n\n- Findings summary: PASS.\n")
+
+        # --- Task X: same instance 'audit.lybra.cross' has an OLDER return-with-runtime
+        # (T=00:10) AND a NEWER verdict-with-runtime (T=00:50) → the verdict must win.
+        (self.repo_root / "5_tasks" / "queue" / "claimed" / "task-265f1x.md").write_text(
+            "---\ntask_id: AIPOS-265F1X\ntitle: Cross-source recency\nstatus: claimed\n---\n# AIPOS-265F1X\n\nRecency.\n",
+            encoding="utf-8",
+        )
+        _write("5_tasks/records/returns/AIPOS-265F1X/return_x.md",
+               "record_type: return_record\nreturn_id: return_x\ntask_id: AIPOS-265F1X\n"
+               "actor: audit.lybra.cross\nreturned_at: '2026-07-29T00:10:00Z'\nresult_summary_present: true\n"
+               "agent_runtime:\n  harness: cli-old\n  model_self_reported: provider/old-7\n  tokens_in: 10\n  tokens_out: 1\n",
+               "# Return\n\n- Result summary: older return source.\n")
+        _write("5_tasks/records/audit_verdicts/AIPOS-265F1X/verdict_x.md",
+               "record_type: audit_verdict_record\nverdict_id: verdict_x\nverdict: PASS\n"
+               "reviewed_task_id: AIPOS-265F1X\nactor: audit.lybra.cross\nauditor_instance: audit.lybra.cross\n"
+               "verdict_at: '2026-07-29T00:50:00Z'\n"
+               "agent_runtime:\n  harness: pi\n  model_self_reported: provider/sonnet-5\n  tokens_in: 50\n  tokens_out: 5\n",
+               "# Verdict\n\n- Findings summary: newer verdict source.\n")
+
+        response = get_owner_truth_view(repo_root=self.repo_root)
+        self.assertTrue(response["ok"], response)
+        data = response["data"]
+
+        # S2 core: audit.lybra.test filed ONLY a verdict-with-runtime → its verdict-line
+        # popup now shows a known profile (was '暂无已知档案' before this fix).
+        task_v = next(t for t in data["tasks"] if t["task_id"] == "AIPOS-265F1V")
+        vd_ev = next(ev for ev in task_v["timeline"] if ev["record_type"] == "audit_verdict")
+        profile = vd_ev["agent_info"]["profile"]
+        self.assertIsNotNone(profile, "auditor with a runtime-carrying verdict must have a profile")
+        self.assertEqual(profile["harness"], "pi")
+        self.assertEqual(profile["model_self_reported"], "provider/sonnet-5")
+        self.assertEqual(profile["tokens_in"], 4321)
+        self.assertEqual(profile["tokens_out"], 88)
+        self.assertEqual(profile["source_return_id"], "verdict_v")
+        self.assertEqual(profile["source_returned_at"], "2026-07-29T00:40:00Z")
+        self.assertIsNone(vd_ev["agent_info"]["round"], "verdict records carry no round runtime")
+
+        # Cross-source recency: the NEWER verdict (T=00:50) beats the OLDER return
+        # (T=00:10) for audit.lybra.cross → profile source is the verdict.
+        task_x = next(t for t in data["tasks"] if t["task_id"] == "AIPOS-265F1X")
+        ret_ev_x = next(ev for ev in task_x["timeline"] if ev["record_type"] == "return")
+        cross_profile = ret_ev_x["agent_info"]["profile"]
+        self.assertEqual(cross_profile["source_return_id"], "verdict_x", "newer verdict must win across sources")
+        self.assertEqual(cross_profile["harness"], "pi")
+        self.assertEqual(cross_profile["model_self_reported"], "provider/sonnet-5")
 
     def test_aipos261f1_purpose_and_summary_speak_human_no_markdown(self) -> None:
         """AIPOS-261 FIX-1 (Owner eye-verify打回): the display layer speaks 人话.

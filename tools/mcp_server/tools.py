@@ -1947,6 +1947,7 @@ def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict
         evidence_refs=args.get("evidence_refs") if isinstance(args.get("evidence_refs"), list) else [],
         recommended_next_action=str(args.get("recommended_next_action") or "").strip() or None,
         owner_waiver_ref=str(args.get("owner_waiver_ref") or "").strip() or None,
+        agent_runtime=_agent_runtime_value(args),
         dry_run=True,
         repo_root=_repo_root(),
     )
@@ -2475,6 +2476,17 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "evidence_refs": {"type": "array", "items": {"type": "string"}},
                 "recommended_next_action": {"type": "string"},
                 "owner_waiver_ref": {"type": "string"},
+                "agent_runtime": {
+                    "type": "object",
+                    "description": "AIPOS-265 FIX-1: optional agent-REPORTED runtime bundle for the auditor (capability ledger, never verified). Symmetric to the return half; populates the auditor's 档案 so its verdict-line popup shows a known profile. {harness, model_self_reported, tokens_in, tokens_out}.",
+                    "properties": {
+                        "harness": {"type": "string"},
+                        "model_self_reported": {"type": "string"},
+                        "tokens_in": {"type": "integer"},
+                        "tokens_out": {"type": "integer"}
+                    },
+                    "additionalProperties": False
+                },
             },
             "required": ["reviewed_task_id", "actor", "agent_instance", "autonomy_mode", "owner_policy_ref", "verdict"],
             "additionalProperties": False,

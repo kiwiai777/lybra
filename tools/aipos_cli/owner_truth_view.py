@@ -529,50 +529,131 @@ def _duration_seconds(created: str | None, updated: str | None) -> int | None:
     return int(delta)
 
 
+def _runtime_bundle_from_record(record: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalized runtime bundle for ONE record (AIPOS-265 read-side convergence).
+
+    Prefers the agent_runtime map (the single new 口径 since AIPOS-261) and falls
+    back to the legacy actual_model/reported_tokens pair so pre-265 records still
+    surface their reported runtime in the 档案 popup. Returns
+    {harness?, model_self_reported?, tokens_in?, tokens_out?} or None when the
+    record carries no runtime signal at all. Pure read; no file touched."""
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    bundle: dict[str, Any] = {}
+    runtime = metadata.get("agent_runtime") if isinstance(metadata.get("agent_runtime"), dict) else None
+    if runtime:
+        for k in ("harness", "model_self_reported"):
+            val = runtime.get(k)
+            if val:
+                bundle[k] = val
+        for k in ("tokens_in", "tokens_out"):
+            val = runtime.get(k)
+            if isinstance(val, int) and not isinstance(val, bool):
+                bundle[k] = val
+    if not bundle:
+        # Legacy fallback (read-side compat): actual_model / reported_tokens.
+        actual_model = str(metadata.get("actual_model") or "").strip()
+        reported_tokens = metadata.get("reported_tokens")
+        if actual_model:
+            bundle["model_self_reported"] = actual_model
+        if isinstance(reported_tokens, int) and not isinstance(reported_tokens, bool):
+            bundle["tokens_in"] = reported_tokens
+    return bundle or None
+
+
+def _build_instance_profile_index(
+    records_report: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Per-instance most-recent-known runtime profile (the 档案, AIPOS-265).
+
+    Scans return AND audit_verdict records (AIPOS-265 FIX-1: auditors file
+    verdicts, not returns — a returns-only scan left every auditor's 档案 blank,
+    which is exactly what Owner eye-verify打回 caught: "exec 档案全显 / audit 全暂无").
+    Groups by actor (canonical instance) and keeps the latest (by timestamp) that
+    carries any runtime signal — agent_runtime preferred, legacy
+    actual_model/reported_tokens as the read-side fallback for pre-265 returns.
+    Each entry records its source record id + time so the popup can attribute the
+    档案. Pure read-side derivation; no history file is modified."""
+    profiles: dict[str, dict[str, Any]] = {}
+
+    def _consider(record: dict[str, Any], ts_key: str, id_key: str) -> None:
+        bundle = _runtime_bundle_from_record(record)
+        if not bundle:
+            return
+        instance = _record_actor(record)
+        if not instance:
+            return
+        metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        ts = str(metadata.get(ts_key) or record.get(ts_key) or "")
+        rid = str(record.get(id_key) or metadata.get(id_key) or "")
+        prev = profiles.get(instance)
+        prev_ts = str(prev.get("source_returned_at") or "") if prev else ""
+        # Replace when first seen, or when this record is strictly later (ISO lex).
+        # A record with no timestamp never displaces one that already has one.
+        # source_return_id/source_returned_at are the established contract keys
+        # (popup renders "来自 <id> · <when>"); for a verdict source the id is the
+        # verdict_id — honest attribution, stable contract.
+        if prev is None or (bool(ts) and (not prev_ts or ts > prev_ts)):
+            profiles[instance] = {
+                "harness": bundle.get("harness"),
+                "model_self_reported": bundle.get("model_self_reported"),
+                "tokens_in": bundle.get("tokens_in"),
+                "tokens_out": bundle.get("tokens_out"),
+                "source_return_id": rid or None,
+                "source_returned_at": ts or None,
+            }
+
+    for record in records_report.get("returns", []):
+        _consider(record, "returned_at", "return_id")
+    for record in records_report.get("audit_verdicts", []):
+        _consider(record, "verdict_at", "verdict_id")
+    return profiles
+
+
 def _enrich_event_agent_info(
     event: dict[str, Any],
-    record: dict[str, Any],
+    record: dict[str, Any] | None,
     records_report: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Attach agent_info to return/claim events (additive). Pulls the optional
-    agent_runtime bundle from the return record frontmatter and derives session
-    duration from the linked session record. Returns the attached bundle, or None.
+    profile_index: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Attach agent_info to an event (AIPOS-265: ALL record types, 档案式 semantics).
 
-    All model/token fields are SELF-REPORTED (recorded, never verified) — callers
-    must label them 自报. Absent fields → None → UI shows 未记录."""
-    record_type = record.get("record_type")
-    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
-    runtime = metadata.get("agent_runtime") if isinstance(metadata.get("agent_runtime"), dict) else None
-    # Only return/claim records carry executor-attributed runtime in this slice.
-    if record_type not in ("return", "claim") and not runtime:
-        return None
+    - profile: the agent's most recent known runtime 档案 (latest return carrying a
+      runtime signal for this instance). None when no such return exists.
+    - round: THIS event's own runtime (return/claim records only); None for every
+      other record type → the popup shows "本轮未记录".
+
+    Model/token fields are SELF-REPORTED (recorded, never verified); callers must
+    label them 自报. Absent sub-fields → None → UI shows 未记录."""
+    record_type = (record.get("record_type") if record else None) or event.get("record_type")
     instance = event.get("actor")
     info: dict[str, Any] = {
         "role": _role_for_event(record_type),
         "instance": instance,
-        "harness": None,
-        "model_self_reported": None,
-        "tokens_in": None,
-        "tokens_out": None,
-        "duration_seconds": None,
         "self_reported": True,  # model/token are agent-reported, not gate-measured
+        "profile": dict(profile_index[instance]) if (instance and profile_index.get(instance)) else None,
+        "round": None,
     }
-    if isinstance(runtime, dict):
-        info["harness"] = runtime.get("harness")
-        info["model_self_reported"] = runtime.get("model_self_reported")
-        for k in ("tokens_in", "tokens_out"):
-            val = runtime.get(k)
-            if isinstance(val, int):
-                info[k] = val
-    # Duration: link return → session (same claim/session id) and use created→updated.
-    session_id = metadata.get("session_id") or record.get("session_id")
-    sessions = records_report.get("session_index", {}).get(str(session_id), []) if session_id else []
-    if sessions:
-        smeta = sessions[0].get("metadata") if isinstance(sessions[0].get("metadata"), dict) else {}
-        info["duration_seconds"] = _duration_seconds(
-            smeta.get("created_at") or sessions[0].get("created_at"),
-            smeta.get("updated_at") or sessions[0].get("updated_at"),
-        )
+    # 本轮: this record's own runtime (return/claim only).
+    if record is not None and record_type in ("return", "claim"):
+        bundle = _runtime_bundle_from_record(record)
+        if bundle:
+            metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+            round_info: dict[str, Any] = {
+                "harness": bundle.get("harness"),
+                "model_self_reported": bundle.get("model_self_reported"),
+                "tokens_in": bundle.get("tokens_in"),
+                "tokens_out": bundle.get("tokens_out"),
+                "duration_seconds": None,
+            }
+            session_id = metadata.get("session_id") or record.get("session_id")
+            sessions = records_report.get("session_index", {}).get(str(session_id), []) if session_id else []
+            if sessions:
+                smeta = sessions[0].get("metadata") if isinstance(sessions[0].get("metadata"), dict) else {}
+                round_info["duration_seconds"] = _duration_seconds(
+                    smeta.get("created_at") or sessions[0].get("created_at"),
+                    smeta.get("updated_at") or sessions[0].get("updated_at"),
+                )
+            info["round"] = round_info
     event["agent_info"] = info
     return info
 
@@ -781,6 +862,9 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
     resolved = Path(repo_root).resolve() if repo_root else None
     records_report = load_records(resolved) if resolved else load_records()
     tasks = load_all_tasks(resolved) if resolved else load_all_tasks()
+    # AIPOS-265: per-instance most-recent-known runtime 档案 (drives the agent popup's
+    # profile block for EVERY record type, not just returns). Built once, read-only.
+    profile_index = _build_instance_profile_index(records_report)
 
     # FIX-2 F-261-4: archived-dossier root for the "already incorporated" closed
     # signal (5_tasks/queue/completed/<ID>/ dir). Only read for existence; never
@@ -817,7 +901,8 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
         )
         tl_state = top_level_state(true_stage)
 
-        # record_id -> source record, for agent_info enrichment of return/claim events.
+        # record_id -> source record, for agent_info enrichment (return/claim carry
+        # the round's own runtime; other types enrich via the profile index only).
         record_by_id: dict[str, dict[str, Any]] = {}
         for kind in ("returns", "claims"):
             for record in recs.get(kind, []):
@@ -830,13 +915,11 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
             for record in recs.get(kind, []):
                 timeline_raw.append(build_timeline_event(record))
         timeline_raw.sort(key=_sort_key_timestamp)  # earliest -> latest
-        # AIPOS-261: attach agent_info (self-reported runtime + session duration) to
-        # return/claim timeline events. Additive; other events are untouched.
+        # AIPOS-265: attach agent_info (档案式: most-recent profile + this round) to
+        # EVERY timeline event so all actor names render through one clickable path.
         for ev in timeline_raw:
-            if ev.get("record_type") in ("return", "claim"):
-                src = record_by_id.get(str(ev.get("record_id") or ""))
-                if src:
-                    _enrich_event_agent_info(ev, src, records_report)
+            src = record_by_id.get(str(ev.get("record_id") or ""))
+            _enrich_event_agent_info(ev, src, records_report, profile_index)
 
         verdict_value = None
         for verdict_record in recs.get("audit_verdicts", []):
@@ -901,12 +984,10 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
     for record in records_report.get("owner_decisions", []):
         activity_feed.append(build_timeline_event(record))
     activity_feed.sort(key=_sort_key_timestamp, reverse=True)
-    # AIPOS-261: enrich feed return/claim events with agent_info too (popup source).
+    # AIPOS-265: every feed event gets agent_info (档案式) — all actor names clickable.
     for ev in activity_feed:
-        if ev.get("record_type") in ("return", "claim"):
-            src = feed_record_by_id.get(str(ev.get("record_id") or ""))
-            if src:
-                _enrich_event_agent_info(ev, src, records_report)
+        src = feed_record_by_id.get(str(ev.get("record_id") or ""))
+        _enrich_event_agent_info(ev, src, records_report, profile_index)
 
     return {
         "ok": True,

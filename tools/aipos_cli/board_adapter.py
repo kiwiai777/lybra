@@ -2508,6 +2508,7 @@ def _build_audit_verdict_preview(
     dry_run: bool,
     planned_verdict_id: str | None = None,
     planned_verdict_at: str | None = None,
+    agent_runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     audit_task = _select_task(repo_root, task_id=audit_task_id, path=audit_task_path)
     audit_rel = str(audit_task.get("path") or "")
@@ -2657,6 +2658,7 @@ def _build_audit_verdict_preview(
         findings_summary=findings_summary,
         evidence_refs=evidence_refs,
         recommended_next_action=recommended_next_action,
+        agent_runtime=agent_runtime,
     )
     session_markdown = ""
     session_rel = str(session_path.resolve().relative_to(root)) if session_path else ""  # AIPOS-240: symlink-safe
@@ -2722,6 +2724,7 @@ def _build_audit_verdict_preview(
             "evidence_refs": evidence_refs,
             "recommended_next_action": recommended_next_action,
             "owner_waiver_ref": owner_waiver_ref,
+            "agent_runtime": agent_runtime,
             "planned_verdict_id": verdict_id,
             "planned_verdict_at": timestamp,
         },
@@ -2772,6 +2775,7 @@ def audit_verdict_task(
     owner_waiver_ref: str | None = None,
     planned_verdict_id: str | None = None,
     planned_verdict_at: str | None = None,
+    agent_runtime: dict[str, Any] | None = None,
     dry_run: bool = True,
     repo_root: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -2810,6 +2814,7 @@ def audit_verdict_task(
             owner_waiver_ref=str(owner_waiver_ref or "").strip() or None,
             planned_verdict_id=str(planned_verdict_id or "").strip() or None,
             planned_verdict_at=str(planned_verdict_at or "").strip() or None,
+            agent_runtime=agent_runtime,
             repo_root=resolved_root,
             dry_run=dry_run,
         )
@@ -3121,6 +3126,7 @@ def execute_dry_run(
                 evidence_refs=payload.get("evidence_refs"),
                 recommended_next_action=payload.get("recommended_next_action"),
                 owner_waiver_ref=payload.get("owner_waiver_ref"),
+                agent_runtime=payload.get("agent_runtime"),
                 planned_verdict_id=payload.get("planned_verdict_id"),
                 planned_verdict_at=payload.get("planned_verdict_at"),
                 dry_run=True,
@@ -3467,6 +3473,7 @@ def execute_dry_run(
                 evidence_refs=payload.get("evidence_refs"),
                 recommended_next_action=payload.get("recommended_next_action"),
                 owner_waiver_ref=payload.get("owner_waiver_ref"),
+                agent_runtime=payload.get("agent_runtime"),
                 planned_verdict_id=payload.get("planned_verdict_id"),
                 planned_verdict_at=payload.get("planned_verdict_at"),
                 dry_run=False,

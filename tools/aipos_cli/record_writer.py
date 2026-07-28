@@ -307,6 +307,7 @@ MCP_AUDIT_VERDICT_FRONTMATTER_ORDER = [
     "actor",
     "canonical_agent_instance",
     "owner_policy_ref",
+    "agent_runtime",
     "verdict_at",
     "findings_summary_present",
     "evidence_refs",
@@ -570,9 +571,10 @@ def build_mcp_return_record_markdown(
         "actor": actor,
         "canonical_agent_instance": canonical_agent_instance,
         "owner_policy_ref": owner_policy_ref,
-        # AIPOS-250 (capability ledger): agent-REPORTED, not gate-measured (disclosure #15).
-        "actual_model": str(actual_model or "").strip(),
-        "reported_tokens": int(reported_tokens) if isinstance(reported_tokens, int) else "",
+        # AIPOS-265 (field convergence): agent_runtime is the single new runtime 口径.
+        # Legacy actual_model/reported_tokens are persisted ONLY when the caller still
+        # sends a value (conditional below); empty values are dropped so new return
+        # records no longer carry dead 空 fields. History files are never rewritten.
         "claim_id": claim_id,
         "session_id": session_id,
         "returned_at": returned_at,
@@ -592,6 +594,15 @@ def build_mcp_return_record_markdown(
         "lease_path": "claim_only",
         "active_lease_written": False,
     }
+    # AIPOS-265 (field convergence): legacy actual_model/reported_tokens persisted ONLY
+    # when non-empty (空置停写). agent_runtime (below) is the single new 口径; these
+    # stay for read-side compat with callers still sending a value. Frontmatter order
+    # keeps them adjacent to agent_runtime when present, absent otherwise.
+    _actual_model = str(actual_model or "").strip()
+    if _actual_model:
+        metadata["actual_model"] = _actual_model
+    if isinstance(reported_tokens, int) and not isinstance(reported_tokens, bool):
+        metadata["reported_tokens"] = reported_tokens
     # AIPOS-261 (additive): only persist agent_runtime when at least one sub-value is
     # present, so old records (and returns that did not report runtime) simply lack the
     # key — the popup reads absent-key as 未记录.
@@ -709,6 +720,7 @@ def build_mcp_audit_verdict_record_markdown(
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
+    agent_runtime: dict[str, Any] | None = None,
 ) -> str:
     metadata = {
         "record_type": "audit_verdict_record",
@@ -747,6 +759,12 @@ def build_mcp_audit_verdict_record_markdown(
         "lease_path": "claim_only",
         "active_lease_written": False,
     }
+    # AIPOS-265 FIX-1 (additive, symmetric to the return half): only persist
+    # agent_runtime when at least one sub-value is present, so verdict records that
+    # did not report runtime simply lack the key — the 档案 popup reads absent-key
+    # as 未记录, and existing verdict tests/frontmatter stay byte-identical.
+    if isinstance(agent_runtime, dict) and agent_runtime:
+        metadata["agent_runtime"] = dict(agent_runtime)
     body = "\n".join(
         [
             f"# MCP Audit Verdict Record: {verdict_id}",

@@ -186,9 +186,16 @@ class RealRouteTaskCenterTests(unittest.TestCase):
         ev = unit["timeline"][0]
         self.assertIn("role", ev)
         self.assertIn("phrase", ev)
+        # AIPOS-265 S1 (real route): every timeline event carries agent_info so its
+        # agent name renders as a clickable popup target on the live board.
+        self.assertIn("agent_info", ev)
+        self.assertIn("profile", ev["agent_info"])
+        self.assertIn("round", ev["agent_info"])
         # S2: no bare-jargon phrase leaks into the feed (no "操作了任务").
         for feed_ev in data["activity_feed"]:
             self.assertNotIn("操作了任务", str(feed_ev.get("phrase", "")))
+            # AIPOS-265 S1 (real route): feed events are clickable too.
+            self.assertIn("agent_info", feed_ev)
 
 
 if __name__ == "__main__":
