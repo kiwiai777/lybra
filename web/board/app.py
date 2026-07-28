@@ -68,6 +68,7 @@ from tools.aipos_cli.workspace_config import (
     load_workspace_config,
     has_workspace_queue,
 )
+from web.board.md_source import get_markdown_source
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 BOARD_CONFIG_PATH = Path(__file__).resolve().parent / ".board_config.json"
@@ -263,6 +264,7 @@ def _api_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, list[st
         "/api/context-pack/preview": partial(_get_context_pack_preview_route, repo_root=repo_root),
         "/api/task": partial(_get_task_route, repo_root=repo_root),
         "/api/preview": partial(_get_preview_route, repo_root=repo_root),
+        "/api/markdown-source": partial(_get_markdown_source_route, repo_root=repo_root),
     }
 
 
@@ -2152,6 +2154,17 @@ def _get_preview_route(params: dict[str, list[str]], *, repo_root: Path | None) 
     if bool(task_id) == bool(path):
         return _selector_error("get_preview", "Exactly one of task_id or path is required")
     return get_preview(task_id=task_id, path=path, actor=actor, repo_root=repo_root)
+
+
+def _get_markdown_source_route(params: dict[str, list[str]], *, repo_root: Path | None) -> dict[str, Any]:
+    # AIPOS-263: md 原文侧栏 — 队列卡 / 记录 md 的只读安全渲染(零依赖、先转义后变换、路径白名单)。
+    resolved_root = _resolve_workspace_root(params, repo_root)
+    return get_markdown_source(
+        path=_first_param(params, "path"),
+        task_id=_first_param(params, "task_id"),
+        record_id=_first_param(params, "record_id"),
+        repo_root=resolved_root,
+    )
 
 
 def _ai_author_preview_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
