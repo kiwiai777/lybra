@@ -26,6 +26,8 @@ from tools.aipos_cli.ai_assisted_authoring import (
     confirm_live_authoring_draft,
 )
 from tools.aipos_cli.custom_agent_profiles import build_profile_draft, confirm_profile_draft
+from tools.aipos_cli.project_map import get_project_map
+from tools.aipos_cli.verify_bench import get_verify_bench
 from tools.aipos_cli.board_adapter import (
     append_orchestration_event,
     append_planner_iteration,
@@ -246,6 +248,8 @@ def _api_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, list[st
         "/api/drafts": lambda params: get_drafts(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/records": lambda params: get_records(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/owner-truth": lambda params: get_owner_truth_view(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/project-map": lambda params: get_project_map(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/verify-bench": lambda params: get_verify_bench(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/external-intake/review": lambda params: get_external_intake_review(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/owner-decision-records": lambda params: get_owner_decision_records(repo_root=_resolve_workspace_root(params, repo_root)),
         "/api/planner-drafts/review": partial(_get_planner_drafts_review_route, repo_root=repo_root),

@@ -385,6 +385,147 @@
     .tc-feed-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
     .tc-feed-item { border-bottom: 1px dashed var(--border-default); padding: 6px 0; font-size: 13px; }
     .tc-feed-item:last-child { border-bottom: none; }
+
+    /* ===== AIPOS-262B: 里程碑地图 (置顶独立区域,横向图表) ===== */
+    .milestone-map-section { border-left-color: var(--accent); }
+    /* F-262B-1: 一行排布,不换行堆叠(overflow-x 滚动兜底);节点默认只画点本身。 */
+    .map-road {
+      display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 0;
+      padding: 8px 4px 4px; overflow-x: auto;
+    }
+    .map-seg { display: flex; align-items: center; gap: 0; flex: 0 0 auto; }
+    .map-seg-label {
+      writing-mode: vertical-rl; transform: rotate(180deg);
+      font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      color: var(--text-secondary); text-transform: uppercase;
+      padding: 2px 6px; align-self: center;
+    }
+    .map-node {
+      display: inline-flex; flex-direction: column; align-items: center;
+      gap: 4px; padding: 4px 8px; background: none; border: 0; cursor: pointer;
+      flex: 0 0 auto;
+    }
+    .map-dot {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--accent); border: 2px solid var(--accent);
+      transition: transform .15s, box-shadow .15s;
+    }
+    .map-node:hover .map-dot { transform: scale(1.25); box-shadow: 0 0 0 4px rgba(124,58,237,.18); }
+    .map-cap {
+      font-size: 11px; line-height: 1.25; color: var(--text-secondary);
+      text-align: center; overflow-wrap: anywhere;
+    }
+    /* near-term: lighter solid */
+    .map-node.is-near .map-dot { background: var(--surface); border-color: var(--accent); }
+    /* horizon: dashed outline, faint */
+    .map-node.is-horizon .map-dot {
+      background: transparent; border: 2px dashed var(--border-default);
+    }
+    .map-node.is-horizon .map-cap { color: var(--text-secondary); opacity: .8; }
+    /* current: highlighted diamond marker */
+    .map-current { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 12px; flex: 0 0 auto; }
+    .map-current-mark {
+      width: 20px; height: 20px; transform: rotate(45deg);
+      background: var(--accent-bright); border: 2px solid var(--accent);
+      box-shadow: 0 0 0 5px rgba(124,58,237,.15);
+      position: relative;
+    }
+    .map-current-mark::after {
+      content: '当前'; position: absolute; top: 26px; left: 50%; transform: translateX(-50%) rotate(-45deg);
+      font-size: 10px; font-weight: 800; color: var(--accent-bright); white-space: nowrap;
+    }
+    .map-current-cap {
+      font-size: 12px; font-weight: 700; color: var(--text-body);
+      max-width: 220px; text-align: center; margin-top: 18px; overflow-wrap: anywhere;
+    }
+    .map-link { flex: 0 0 18px; height: 2px; background: var(--accent); opacity: .45; align-self: flex-start; margin-top: 11px; }
+    .map-link.is-dashed { background: transparent; border-top: 2px dashed var(--border-default); opacity: .8; }
+    .map-legend {
+      display: flex; flex-wrap: wrap; gap: 14px; margin-top: 14px;
+      font-size: 12px; color: var(--text-secondary);
+    }
+    .map-legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .map-legend i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    .map-legend i.l-done { background: var(--accent); }
+    .map-legend i.l-near { background: var(--surface); border: 2px solid var(--accent); }
+    .map-legend i.l-hor { background: transparent; border: 2px dashed var(--border-default); border-radius: 50%; }
+    .map-legend i.l-cur { background: var(--accent-bright); transform: rotate(45deg); border-radius: 2px; }
+    .map-empty { color: var(--text-secondary); font-style: italic; padding: 6px 0; }
+
+    /* milestone node detail popup (reuses the agent-popup shell) */
+    .ms-popup { max-width: 460px; }
+    .ms-popup h4 { margin: 0 0 6px; font-size: 15px; overflow-wrap: anywhere; }
+    .ms-popup .ms-kind { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); margin-bottom: 8px; }
+    .ms-popup .ms-desc { font-size: 13.5px; line-height: 1.55; color: var(--text-body); margin-bottom: 10px; overflow-wrap: anywhere; }
+    .ms-popup .ms-section { margin: 10px 0 2px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-secondary); border-top: 1px solid var(--border-default); padding-top: 8px; }
+    .ms-popup .ms-refs { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+    .ms-popup .ms-refs li { font-size: 12.5px; font-family: ui-monospace, monospace; color: var(--text-secondary); padding-left: 10px; border-left: 2px solid var(--border-default); overflow-wrap: anywhere; }
+    .ms-popup .ms-dl { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+    .ms-popup .ms-dl li { font-size: 12.5px; color: var(--text-body); }
+    .ms-popup .ms-dl .dl-date { font-family: ui-monospace, monospace; color: var(--accent); font-size: 11px; margin-right: 6px; }
+
+    /* ===== AIPOS-262B: 验证台读面 ===== */
+    .verify-section { border-left-color: #0891b2; }
+    .vb-stations { display: grid; gap: 12px; }
+    .vb-station {
+      border: 1px solid var(--border-default); border-left: 4px solid #0891b2;
+      border-radius: 8px; background: var(--surface-card); padding: 12px 16px;
+    }
+    .vb-station-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+    .vb-station-title { font-size: 15px; font-weight: 700; color: var(--text-body); flex: 1 1 240px; overflow-wrap: anywhere; }
+    .vb-station-id { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text-secondary); }
+    .vb-await {
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: 11px; font-weight: 800; color: #fff; background: #d97706; white-space: nowrap;
+    }
+    .vb-assertions { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+    .vb-assertions li {
+      font-size: 13px; line-height: 1.5; color: var(--text-body);
+      padding-left: 16px; position: relative; overflow-wrap: anywhere;
+    }
+    .vb-assertions li::before { content: '✓'; position: absolute; left: 0; color: #0891b2; font-weight: 800; }
+    .vb-evidence { margin-top: 10px; display: grid; gap: 8px; }
+    .vb-ring {
+      padding: 8px 10px; background: rgba(0,0,0,.025); border-radius: 6px;
+      font-size: 12.5px; line-height: 1.5;
+    }
+    .vb-ring.vb-empty { color: var(--text-secondary); font-style: italic; }
+    .vb-ring-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 3px; }
+    .vb-ring-tag {
+      font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em;
+      color: #fff; padding: 1px 7px; border-radius: 8px;
+    }
+    .vb-ring-tag.t-machine { background: #2563eb; }
+    .vb-ring-tag.t-audit { background: #16a34a; }
+    .vb-ring-tag.t-fix { background: #d97706; }
+    .vb-ring-meta { font-family: ui-monospace, monospace; font-size: 11px; color: var(--text-secondary); }
+    .vb-verdict { font-weight: 800; }
+    .vb-verdict.is-PASS { color: #16a34a; }
+    .vb-verdict.is-FAIL { color: #dc2626; }
+    .vb-ring-body { color: var(--text-body); overflow-wrap: anywhere; white-space: pre-wrap; }
+    .vb-fix-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+    .vb-fix-list li { font-family: ui-monospace, monospace; font-size: 11.5px; padding: 2px 8px; border-radius: 6px; background: rgba(217,119,6,.1); color: #92400e; }
+    .vb-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .vb-btn { padding: 5px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--border-default); background: var(--surface); color: var(--text-secondary); cursor: not-allowed; }
+    .vb-btn.vb-pass { color: #16a34a; border-color: #16a34a; }
+    .vb-btn.vb-reject { color: #dc2626; border-color: #dc2626; }
+    .vb-resolution-note { font-size: 11.5px; color: var(--text-secondary); font-style: italic; margin-top: 6px; }
+    .vb-previewable { display: grid; gap: 10px; }
+    .vb-preview {
+      border: 1px dashed var(--border-default); border-radius: 8px;
+      padding: 10px 14px; background: rgba(0,0,0,.015);
+    }
+    .vb-preview-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+    .vb-preview-title { font-size: 14px; font-weight: 600; color: var(--text-body); overflow-wrap: anywhere; }
+    .vb-preview-note { font-size: 12px; color: var(--text-secondary); font-style: italic; }
+    /* F-262B-3: station + preview cards collapse by default — head shows only
+       卡号 + 标题 + 待验徽章;click/Enter expands 断言 + 证据(actions for station). */
+    .vb-station-head, .vb-preview-head { cursor: pointer; user-select: none; }
+    .vb-station-head:hover, .vb-preview-head:hover { background: rgba(8,145,178,.06); border-radius: 4px; }
+    .vb-station-head:focus-visible, .vb-preview-head:focus-visible { outline: 2px solid #0891b2; outline-offset: 2px; border-radius: 4px; }
+    .vb-toggle { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--text-secondary); white-space: nowrap; }
+    .vb-station.collapsed .vb-details, .vb-preview.collapsed .vb-details { display: none; }
+    .vb-subheading { margin: 16px 0 8px; font-size: 14px; font-weight: 700; color: var(--text-body); }
   </style>
 </head>
 <body>
@@ -407,6 +548,27 @@
     <div id="project-header">
       <div class="loading">加载中...</div>
     </div>
+
+    <!-- AIPOS-262B: 里程碑地图 — 置顶独立区域,任务中心之上。静态标题烘入,JS 从
+         /api/project-map?workspace=N 水合;无 project-map.md 时整区优雅隐藏(DOM-only)。 -->
+    <section id="milestone-map-section" class="detail-section milestone-map-section" data-owner-truth="milestone-map" hidden>
+      <div class="section-header">
+        <h3>项目里程碑</h3>
+      </div>
+      <p class="section-hint" id="map-hint">横向里程碑图表:已完成(实心)→ 当前(高亮)→ 近期规划 → 远期走向(虚线)。点节点看详情与决策引用。</p>
+      <div id="map-road" class="map-road"></div>
+      <div id="map-legend" class="map-legend" hidden></div>
+    </section>
+
+    <!-- AIPOS-262B FIX-1: 验证台 — 静态区块(里程碑地图之后,任务中心之前)。Owner 核验站 +
+         进行中预览 +"等我处理"并入分组(有内容才显示)。JS 水合 #vb-body,DOM-only。 -->
+    <section id="verify-bench-section" class="detail-section verify-section" data-owner-truth="verify-bench" hidden>
+      <div class="section-header">
+        <h3>验证台 · Owner 核验</h3>
+      </div>
+      <p class="section-hint">审计已 PASS 待 Owner 真机过目的核验站 + 进行中预览;需要 Owner 裁定的待办("等我处理")并入此处。</p>
+      <div id="vb-body" class="vb-body"></div>
+    </section>
 
     <!-- AIPOS-260 FIX-1: 任务中心 mounted on the REAL /workspace/<n> route.
          Static heading is baked in so curl GET /workspace/0 sees the task-center block;
@@ -481,18 +643,30 @@
         const needsOwnerResponse = await fetch(`/api/needs-owner?workspace=${workspaceIndex}`);
         const needsOwnerData = await needsOwnerResponse.json();
 
+        // AIPOS-262B: milestone map + verification bench (read-only Owner faces).
+        const mapResponse = await fetch(`/api/project-map?workspace=${workspaceIndex}`);
+        const mapData = await mapResponse.json();
+        const verifyResponse = await fetch(`/api/verify-bench?workspace=${workspaceIndex}`);
+        const verifyBenchData = await verifyResponse.json();
+
         // 1) Workspace header.
         headerHost.replaceChildren();
         headerHost.appendChild(createProjectHeader(workspace));
 
-        // 2) Task center (real route mount, AIPOS-260 FIX-1).
+        // AIPOS-262B: milestone map (置顶独立区域;无文件时优雅隐藏)。
+        renderMilestoneMap(mapData);
+
+        // 2) Verify bench (静态区块;needs_owner 并入分组)。
+        //    区块序:门户头 → 里程碑地图 → 验证台 → 任务中心 → 高级/调试。
+        renderVerifyBench(verifyBenchData, needsOwnerData);
+
+        // 3) Task center (real route mount, AIPOS-260 FIX-1).
         renderTruthStagePills(countsEl, truthData);
         renderTruthTaskCards(tasksEl, truthData);
         renderTruthActivityFeed(feedEl, truthData);
 
-        // 3) Needs-owner (actionable) + advanced/debug.
+        // 4) Advanced/debug (page bottom).
         contentHost.replaceChildren();
-        contentHost.appendChild(createNeedsOwnerSection(needsOwnerData));
         contentHost.appendChild(createAdvancedSection(workspaceIndex));
 
       } catch (error) {
@@ -500,6 +674,357 @@
       }
     }
     
+    // ===== AIPOS-262B: 里程碑地图 (横向图表 + 点节点弹层) =====
+    // Renders the four-segment milestone road from /api/project-map. Hides the
+    // whole section (hidden attr) when the file is absent or empty. DOM-only.
+    function renderMilestoneMap(mapData) {
+      const section = document.getElementById('milestone-map-section');
+      const road = document.getElementById('map-road');
+      const legend = document.getElementById('map-legend');
+      road.replaceChildren();
+      const d = (mapData && mapData.ok !== false && mapData.data) ? mapData.data : null;
+      if (!d || !d.available) {
+        section.hidden = true;
+        legend.hidden = true;
+        return;
+      }
+      const milestones = Array.isArray(d.milestones) ? d.milestones : [];
+      const inFlight = Array.isArray(d.in_flight) ? d.in_flight : [];
+      const next = Array.isArray(d.next) ? d.next : [];
+      const horizon = Array.isArray(d.horizon) ? d.horizon : [];
+      const nearTerm = inFlight.concat(next);
+      if (milestones.length === 0 && !d.current && nearTerm.length === 0 && horizon.length === 0) {
+        section.hidden = true;
+        legend.hidden = true;
+        return;
+      }
+      section.hidden = false;
+
+      // Segment 1: completed milestones (solid dots, linked).
+      if (milestones.length > 0) {
+        const seg = el('div', 'map-seg');
+        milestones.forEach((m, i) => {
+          if (i > 0) seg.appendChild(el('span', 'map-link'));
+          seg.appendChild(mapNode({
+            kind: 'done',
+            onClick: () => showMilestonePopup({
+              kind: '已完成里程碑', title: m.title || m.id,
+              desc: m.title || '', refs: m.refs || [],
+            }),
+          }));
+        });
+        road.appendChild(seg);
+      }
+
+      // Current position (highlighted diamond marker).
+      if (d.current) {
+        if (milestones.length > 0) road.appendChild(el('span', 'map-link'));
+        const cur = el('div', 'map-current');
+        cur.appendChild(el('span', 'map-current-mark'));
+        const cap = el('span', 'map-current-cap');
+        cap.textContent = truncate(d.current, 12);
+        cur.appendChild(cap);
+        cur.style.cursor = 'pointer';
+        cur.addEventListener('click', () => showMilestonePopup({
+          kind: '当前位置', title: '当前进展', desc: d.current,
+          refs: [], directionLog: d.direction_log_recent || [],
+        }));
+        road.appendChild(cur);
+      }
+
+      // Segment 2: near-term planning (in_flight + next; lighter solid).
+      if (nearTerm.length > 0) {
+        if (milestones.length > 0 || d.current) road.appendChild(el('span', 'map-link'));
+        const seg = el('div', 'map-seg');
+        nearTerm.forEach((label, i) => {
+          if (i > 0) seg.appendChild(el('span', 'map-link'));
+          seg.appendChild(mapNode({
+            kind: 'near',
+            onClick: () => showMilestonePopup({ kind: '近期规划', title: label, desc: label, refs: [] }),
+          }));
+        });
+        road.appendChild(seg);
+      }
+
+      // Segment 3: horizon (dashed, faint).
+      if (horizon.length > 0) {
+        if (milestones.length > 0 || d.current || nearTerm.length > 0) road.appendChild(el('span', 'map-link is-dashed'));
+        const seg = el('div', 'map-seg');
+        horizon.forEach((label, i) => {
+          if (i > 0) seg.appendChild(el('span', 'map-link is-dashed'));
+          seg.appendChild(mapNode({
+            kind: 'horizon',
+            onClick: () => showMilestonePopup({ kind: '远期走向', title: label, desc: label, refs: [] }),
+          }));
+        });
+        road.appendChild(seg);
+      }
+
+      // Legend.
+      legend.hidden = false;
+      legend.replaceChildren();
+      legend.appendChild(legendItem('l-done', '已完成'));
+      legend.appendChild(legendItem('l-cur', '当前'));
+      legend.appendChild(legendItem('l-near', '近期规划'));
+      legend.appendChild(legendItem('l-hor', '远期走向'));
+    }
+
+    // F-262B-1: 节点默认只画点本身(无文本标签);完整信息走点击弹层(零信息丢失)。
+    function mapNode(opts) {
+      const node = document.createElement('button');
+      node.type = 'button';
+      node.className = 'map-node' + (opts.kind === 'near' ? ' is-near' : opts.kind === 'horizon' ? ' is-horizon' : '');
+      node.appendChild(el('span', 'map-dot'));
+      node.addEventListener('click', opts.onClick || (() => {}));
+      return node;
+    }
+    function legendItem(cls, label) {
+      const span = document.createElement('span');
+      const i = el('i', cls);
+      span.appendChild(i);
+      span.appendChild(document.createTextNode(label));
+      return span;
+    }
+    function el(tag, cls) {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      return e;
+    }
+    function truncate(text, n) {
+      const s = String(text || '');
+      return s.length > n ? s.slice(0, n).trimEnd() + '…' : s;
+    }
+
+    // Milestone node detail popup (title + desc + refs; current adds direction_log).
+    function showMilestonePopup(info) {
+      const old = document.getElementById('ms-popup-mask') || document.getElementById('agent-popup-mask');
+      if (old) old.remove();
+      const mask = document.createElement('div');
+      mask.id = 'ms-popup-mask';
+      mask.className = 'agent-popup-mask';
+      mask.addEventListener('click', (e) => { if (e.target === mask) mask.remove(); });
+      const box = document.createElement('div');
+      box.className = 'agent-popup ms-popup';
+      const kind = el('div', 'ms-kind'); kind.textContent = info.kind || '';
+      box.appendChild(kind);
+      const h = document.createElement('h4'); h.textContent = info.title || '';
+      box.appendChild(h);
+      if (info.desc && info.desc !== info.title) {
+        const desc = el('div', 'ms-desc'); desc.textContent = info.desc;
+        box.appendChild(desc);
+      }
+      if (info.refs && info.refs.length > 0) {
+        box.appendChild(msSection('相关决策引用'));
+        const ul = document.createElement('ul'); ul.className = 'ms-refs';
+        info.refs.forEach(r => { const li = document.createElement('li'); li.textContent = r; ul.appendChild(li); });
+        box.appendChild(ul);
+      }
+      if (info.directionLog && info.directionLog.length > 0) {
+        box.appendChild(msSection('direction_log 最近方向'));
+        const ul = document.createElement('ul'); ul.className = 'ms-dl';
+        info.directionLog.forEach(item => {
+          const li = document.createElement('li');
+          const d = el('span', 'dl-date'); d.textContent = item.date || '';
+          li.appendChild(d); li.appendChild(document.createTextNode(item.title || ''));
+          ul.appendChild(li);
+        });
+        box.appendChild(ul);
+      }
+      const close = document.createElement('button');
+      close.className = 'ap-close'; close.textContent = '关闭';
+      close.addEventListener('click', () => mask.remove());
+      box.appendChild(close);
+      mask.appendChild(box);
+      document.body.appendChild(mask);
+    }
+    function msSection(label) {
+      const s = el('div', 'ms-section'); s.textContent = label; return s;
+    }
+
+    // ===== AIPOS-262B FIX-1: 验证台 (静态区块水合;"等我处理"并入分组) =====
+    // Hydrates the static #verify-bench-section (between milestone map and task
+    // center). Groups: 待验站 / 进行中预览 / 待 Owner 裁定(needs_owner,有内容才显示)。
+    // Whole section hides when all three are empty. DOM-only.
+    function renderVerifyBench(vbData, noData) {
+      const section = document.getElementById('verify-bench-section');
+      const body = document.getElementById('vb-body');
+      body.replaceChildren();
+      const d = (vbData && vbData.ok !== false && vbData.data) ? vbData.data : null;
+      const stations = (d && Array.isArray(d.stations)) ? d.stations : [];
+      const previewable = (d && Array.isArray(d.previewable)) ? d.previewable : [];
+      const noTasks = (noData && noData.ok !== false && noData.data && Array.isArray(noData.data.tasks)) ? noData.data.tasks : [];
+
+      if (stations.length === 0 && previewable.length === 0 && noTasks.length === 0) {
+        section.hidden = true;
+        return;
+      }
+      section.hidden = false;
+
+      if (stations.length > 0) {
+        const sub = document.createElement('h4'); sub.className = 'vb-subheading';
+        sub.textContent = `待验站(${stations.length})——审计已 PASS,待 Owner 真机过目`;
+        body.appendChild(sub);
+        const list = document.createElement('div'); list.className = 'vb-stations';
+        stations.forEach(s => list.appendChild(vbStationCard(s)));
+        body.appendChild(list);
+      }
+
+      if (previewable.length > 0) {
+        const sub = document.createElement('h4'); sub.className = 'vb-subheading';
+        sub.textContent = `进行中预览(${previewable.length})——它将被怎么验`;
+        body.appendChild(sub);
+        const list = document.createElement('div'); list.className = 'vb-previewable';
+        previewable.forEach(p => list.appendChild(vbPreviewCard(p)));
+        body.appendChild(list);
+      }
+
+      if (noTasks.length > 0) {
+        body.appendChild(vbNeedsOwnerGroup(noTasks));
+      }
+
+      const note = document.createElement('p'); note.className = 'vb-resolution-note';
+      note.textContent = (d && d.resolution_note) || '只读核验面;通过/打回按键留候选⑬(board 鉴权后)。';
+      body.appendChild(note);
+    }
+
+    // "等我处理"(needs_owner)并入验证台的一类分组:有内容才渲染此分组。卡片复用
+    // 既有 formatNeedsOwnerReason / generateNextCommand(DOM-only,textContent 渲染)。
+    function vbNeedsOwnerGroup(tasks) {
+      const wrap = document.createElement('div'); wrap.className = 'vb-needs-group';
+      const sub = document.createElement('h4'); sub.className = 'vb-subheading';
+      sub.textContent = `待 Owner 裁定(${tasks.length})——"等我处理"并入此处`;
+      wrap.appendChild(sub);
+      const list = document.createElement('div'); list.className = 'needs-list';
+      tasks.forEach(task => list.appendChild(needsOwnerCard(task)));
+      wrap.appendChild(list);
+      return wrap;
+    }
+
+    function vbStationCard(s) {
+      const card = document.createElement('div'); card.className = 'vb-station collapsed';
+      const head = document.createElement('div'); head.className = 'vb-station-head';
+      head.setAttribute('role', 'button'); head.setAttribute('tabindex', '0');
+      head.setAttribute('aria-expanded', 'false');
+      head.setAttribute('title', '点击展开/收起断言与证据');
+      const title = el('div', 'vb-station-title'); title.textContent = s.title || s.task_id || '';
+      const id = el('span', 'vb-station-id'); id.textContent = s.task_id || '';
+      const await_ = el('span', 'vb-await'); await_.textContent = '待 Owner 核验';
+      const toggle = el('span', 'vb-toggle'); toggle.textContent = '展开 ▸';
+      head.appendChild(title); head.appendChild(id); head.appendChild(await_); head.appendChild(toggle);
+      const toggleFn = () => vbToggle(card, head, toggle);
+      head.addEventListener('click', toggleFn);
+      head.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFn(); } });
+      card.appendChild(head);
+
+      // F-262B-3: assertions + three rings + actions live in a collapsed .vb-details.
+      const details = el('div', 'vb-details');
+      const assertions = s.acceptance_assertions || [];
+      if (assertions.length > 0) {
+        const lbl = el('div', 'vb-ring-head'); lbl.style.marginTop = '6px';
+        const tag = el('span', 'vb-ring-tag t-machine'); tag.textContent = '验收断言';
+        lbl.appendChild(tag);
+        details.appendChild(lbl);
+        const ul = el('ul', 'vb-assertions');
+        assertions.forEach(a => { const li = document.createElement('li'); li.textContent = a; ul.appendChild(li); });
+        details.appendChild(ul);
+      }
+
+      const ev = s.evidence || {};
+      const rings = el('div', 'vb-evidence');
+      rings.appendChild(vbRing('machine', '机判记录', ev.machine_judgment, vbMachineBody));
+      rings.appendChild(vbRing('audit', '审计判决', ev.audit_verdict, vbAuditBody));
+      rings.appendChild(vbRing('fix', '往轮修复', { present: (ev.prior_fixes || []).length > 0, fixes: ev.prior_fixes || [] }, vbFixBody));
+      details.appendChild(rings);
+
+      const actions = el('div', 'vb-actions');
+      const passBtn = el('button', 'vb-btn vb-pass'); passBtn.textContent = '通过'; passBtn.disabled = true;
+      const rejectBtn = el('button', 'vb-btn vb-reject'); rejectBtn.textContent = '打回'; rejectBtn.disabled = true;
+      actions.appendChild(passBtn); actions.appendChild(rejectBtn);
+      details.appendChild(actions);
+      card.appendChild(details);
+      return card;
+    }
+
+    // F-262B-3: shared disclosure toggle for station + preview cards. Flips the
+    // .collapsed class, syncs aria-expanded, swaps the 展开/收起 affordance.
+    function vbToggle(card, head, toggle) {
+      const collapsed = card.classList.toggle('collapsed');
+      head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      if (toggle) toggle.textContent = collapsed ? '展开 ▸' : '收起 ▾';
+    }
+
+    function vbRing(kind, label, data, bodyFn) {
+      const ring = document.createElement('div');
+      ring.className = 'vb-ring' + (data && data.present ? '' : ' vb-empty');
+      const head = el('div', 'vb-ring-head');
+      const tag = el('span', 'vb-ring-tag t-' + kind); tag.textContent = label;
+      head.appendChild(tag);
+      ring.appendChild(head);
+      const body = bodyFn(data, head);
+      if (body) ring.appendChild(body);
+      return ring;
+    }
+    function vbMachineBody(data, head) {
+      if (!data || !data.present) { return document.createTextNode('尚未提交返回记录。'); }
+      const meta = el('span', 'vb-ring-meta');
+      meta.textContent = [data.actor, data.executor_status && ('状态:' + data.executor_status), data.returned_at].filter(Boolean).join(' · ');
+      head.appendChild(meta);
+      if (data.summary_excerpt) {
+        const b = el('div', 'vb-ring-body'); b.textContent = data.summary_excerpt; return b;
+      }
+      return null;
+    }
+    function vbAuditBody(data, head) {
+      if (!data || !data.present) { return document.createTextNode('尚未记录审计判决。'); }
+      const meta = el('span', 'vb-ring-meta');
+      meta.textContent = [data.auditor_instance, data.verdict_at].filter(Boolean).join(' · ');
+      head.appendChild(meta);
+      if (data.verdict) {
+        const vd = document.createElement('span'); vd.className = 'vb-verdict is-' + String(data.verdict).toUpperCase(); vd.textContent = data.verdict;
+        head.appendChild(vd);
+      }
+      if (data.findings_excerpt) {
+        const b = el('div', 'vb-ring-body'); b.textContent = data.findings_excerpt; return b;
+      }
+      return null;
+    }
+    function vbFixBody(data, head) {
+      if (!data || !data.present) { return document.createTextNode('无往轮修复(首轮即过)。'); }
+      const ul = document.createElement('ul'); ul.className = 'vb-fix-list';
+      (data.fixes || []).forEach(f => {
+        const li = document.createElement('li'); li.textContent = f.task_id || ''; ul.appendChild(li);
+      });
+      return ul;
+    }
+
+    function vbPreviewCard(p) {
+      const card = document.createElement('div'); card.className = 'vb-preview collapsed';
+      const head = document.createElement('div'); head.className = 'vb-preview-head';
+      head.setAttribute('role', 'button'); head.setAttribute('tabindex', '0');
+      head.setAttribute('aria-expanded', 'false');
+      head.setAttribute('title', '点击展开/收起验收标准');
+      const title = el('div', 'vb-preview-title'); title.textContent = p.title || p.task_id || '';
+      const id = el('span', 'vb-station-id'); id.textContent = (p.task_id || '') + (p.true_stage ? ' · ' + p.true_stage : '');
+      const toggle = el('span', 'vb-toggle'); toggle.textContent = '展开 ▸';
+      head.appendChild(title); head.appendChild(id); head.appendChild(toggle);
+      const toggleFn = () => vbToggle(card, head, toggle);
+      head.addEventListener('click', toggleFn);
+      head.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFn(); } });
+      card.appendChild(head);
+      // F-262B-3: note + assertions collapsed under .vb-details.
+      const details = el('div', 'vb-details');
+      const note = el('div', 'vb-preview-note'); note.textContent = p.stage_note || '进行中——验收标准预览。';
+      details.appendChild(note);
+      const assertions = p.acceptance_assertions || [];
+      if (assertions.length > 0) {
+        const ul = el('ul', 'vb-assertions');
+        assertions.forEach(a => { const li = document.createElement('li'); li.textContent = a; ul.appendChild(li); });
+        details.appendChild(ul);
+      }
+      card.appendChild(details);
+      return card;
+    }
+
     function createProjectHeader(workspace) {
       const header = document.createElement('div');
       header.className = 'project-header';
@@ -561,92 +1086,56 @@
       });
     }
     
-    function createNeedsOwnerSection(needsOwnerData) {
-      const section = document.createElement('div');
-      section.className = 'detail-section';
-      
-      const header = document.createElement('div');
-      header.className = 'section-header';
-      const title = document.createElement('h3');
-      title.textContent = i18n.t('detail.section.needs_owner');
-      header.appendChild(title);
-      section.appendChild(header);
-      
-      const tasks = needsOwnerData?.data?.tasks || [];
-      
-      if (tasks.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'empty-state';
-        empty.textContent = i18n.t('detail.needs_owner.empty');
-        section.appendChild(empty);
-        return section;
+    // needs_owner 单卡构建器(并入验证台分组后由 vbNeedsOwnerGroup 调用;DOM-only,textContent 渲染)。
+    function needsOwnerCard(task) {
+      const item = document.createElement('div');
+      item.className = 'needs-item';
+
+      const itemHeader = document.createElement('div');
+      itemHeader.className = 'needs-item-header';
+      const taskId = document.createElement('div');
+      taskId.className = 'needs-task-id';
+      taskId.textContent = `${i18n.t('detail.needs_owner.task')}: ${task.task_id || 'N/A'}`;
+      itemHeader.appendChild(taskId);
+      item.appendChild(itemHeader);
+
+      const reason = document.createElement('div');
+      reason.className = 'needs-reason';
+      reason.textContent = `${i18n.t('detail.needs_owner.reason')}: ${formatNeedsOwnerReason(task)}`;
+      item.appendChild(reason);
+
+      const command = generateNextCommand(task);
+      if (command) {
+        const cmdLabel = document.createElement('div');
+        cmdLabel.style.fontSize = '12px';
+        cmdLabel.style.fontWeight = '700';
+        cmdLabel.style.color = 'var(--text-secondary)';
+        cmdLabel.style.marginBottom = '0.5rem';
+        cmdLabel.textContent = i18n.t('detail.needs_owner.command');
+        item.appendChild(cmdLabel);
+
+        const cmdDiv = document.createElement('div');
+        cmdDiv.className = 'needs-command';
+        const cmdText = document.createElement('code');
+        cmdText.style.flex = '1';
+        cmdText.textContent = command;
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-button';
+        copyBtn.textContent = i18n.t('detail.needs_owner.copy');
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(command);
+          copyBtn.textContent = i18n.t('detail.needs_owner.copied');
+          copyBtn.classList.add('copied');
+          setTimeout(() => {
+            copyBtn.textContent = i18n.t('detail.needs_owner.copy');
+            copyBtn.classList.remove('copied');
+          }, 2000);
+        };
+        cmdDiv.appendChild(cmdText);
+        cmdDiv.appendChild(copyBtn);
+        item.appendChild(cmdDiv);
       }
-      
-      const list = document.createElement('div');
-      list.className = 'needs-list';
-      
-      tasks.forEach(task => {
-        const item = document.createElement('div');
-        item.className = 'needs-item';
-        
-        const itemHeader = document.createElement('div');
-        itemHeader.className = 'needs-item-header';
-        
-        const taskId = document.createElement('div');
-        taskId.className = 'needs-task-id';
-        taskId.textContent = `${i18n.t('detail.needs_owner.task')}: ${task.task_id || 'N/A'}`;
-        itemHeader.appendChild(taskId);
-        
-        item.appendChild(itemHeader);
-        
-        // Reason (translate internal fields to human-readable)
-        const reason = document.createElement('div');
-        reason.className = 'needs-reason';
-        const reasonText = formatNeedsOwnerReason(task);
-        reason.textContent = `${i18n.t('detail.needs_owner.reason')}: ${reasonText}`;
-        item.appendChild(reason);
-        
-        // Next command (if available)
-        const command = generateNextCommand(task);
-        if (command) {
-          const cmdLabel = document.createElement('div');
-          cmdLabel.style.fontSize = '12px';
-          cmdLabel.style.fontWeight = '700';
-          cmdLabel.style.color = 'var(--text-secondary)';
-          cmdLabel.style.marginBottom = '0.5rem';
-          cmdLabel.textContent = i18n.t('detail.needs_owner.command');
-          item.appendChild(cmdLabel);
-          
-          const cmdDiv = document.createElement('div');
-          cmdDiv.className = 'needs-command';
-          
-          const cmdText = document.createElement('code');
-          cmdText.style.flex = '1';
-          cmdText.textContent = command;
-          
-          const copyBtn = document.createElement('button');
-          copyBtn.className = 'copy-button';
-          copyBtn.textContent = i18n.t('detail.needs_owner.copy');
-          copyBtn.onclick = () => {
-            navigator.clipboard.writeText(command);
-            copyBtn.textContent = i18n.t('detail.needs_owner.copied');
-            copyBtn.classList.add('copied');
-            setTimeout(() => {
-              copyBtn.textContent = i18n.t('detail.needs_owner.copy');
-              copyBtn.classList.remove('copied');
-            }, 2000);
-          };
-          
-          cmdDiv.appendChild(cmdText);
-          cmdDiv.appendChild(copyBtn);
-          item.appendChild(cmdDiv);
-        }
-        
-        list.appendChild(item);
-      });
-      
-      section.appendChild(list);
-      return section;
+      return item;
     }
     
     function formatNeedsOwnerReason(task) {
