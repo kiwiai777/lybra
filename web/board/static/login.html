@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lybra Board · 登录</title>
+  <link rel="stylesheet" href="/login.css">
+</head>
+<body class="login-body">
+  <main class="login-card">
+    <img src="/assets/lybra_logo_white.png" alt="Lybra" class="login-logo">
+    <h1 class="login-title">Lybra Board</h1>
+    <p class="login-sub" id="login-sub">输入角色 token 登录(对照 connection.json 校验)</p>
+
+    <form id="login-form" autocomplete="off" novalidate>
+      <label class="login-field">
+        <span class="login-label">Token</span>
+        <input type="password" name="token" id="token"
+               autocomplete="current-password"
+               placeholder="任意角色 token 均可登录,权限按角色" required>
+      </label>
+      <button type="submit" class="login-submit" id="login-submit">登录</button>
+      <p id="login-error" class="login-error" role="alert" hidden></p>
+    </form>
+
+    <p class="login-hint">
+      会话 cookie 仅本进程内存态,重启需重新登录;token 明文不落日志、不进 cookie。
+    </p>
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+      var form = document.getElementById("login-form");
+      var err = document.getElementById("login-error");
+      var btn = document.getElementById("login-submit");
+
+      function showError(msg) {
+        err.hidden = false;
+        err.textContent = msg || "登录失败。";
+      }
+
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        err.hidden = true;
+        var token = document.getElementById("token").value;
+        if (!token) { showError("请输入 token。"); return; }
+        btn.disabled = true;
+        btn.textContent = "校验中…";
+        fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ token: token })
+        }).then(function (resp) {
+          return resp.json().then(function (j) { return { status: resp.status, json: j }; });
+        }).then(function (res) {
+          if (res.status === 200 && res.json && res.json.ok) {
+            window.location.href = res.json.redirect || "/";
+          } else {
+            btn.disabled = false;
+            btn.textContent = "登录";
+            showError((res.json && res.json.message) || "Token 无效或未匹配到任何角色。");
+          }
+        }).catch(function () {
+          btn.disabled = false;
+          btn.textContent = "登录";
+          showError("网络错误,请重试。");
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

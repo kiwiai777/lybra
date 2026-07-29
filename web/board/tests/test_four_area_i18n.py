@@ -26,7 +26,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from web.board.app import make_handler
+from web.board.app import SESSION_COOKIE_NAME, SessionStore, make_handler
 
 
 def _free_port() -> int:
@@ -35,8 +35,16 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+# AIPOS-270: board routes are now auth-gated; these real-route tests authenticate
+# via an injected SessionStore + a session cookie minted in setUp.
+_AUTH_COOKIE: str | None = None
+
+
 def _get(url: str) -> tuple[int, str]:
-    with urllib.request.urlopen(url, timeout=5) as resp:
+    req = urllib.request.Request(url)
+    if _AUTH_COOKIE:
+        req.add_header("Cookie", _AUTH_COOKIE)
+    with urllib.request.urlopen(req, timeout=5) as resp:
         return resp.status, resp.read().decode("utf-8")
 
 
@@ -57,13 +65,19 @@ class FourAreaI18nTests(unittest.TestCase):
         )
         self._patch = patch("web.board.app.BOARD_CONFIG_PATH", self.config_path)
         self._patch.start()
+        self._auth_store = SessionStore()
+        _sid = self._auth_store.create(role="owner", scopes=["owner_confirm"])
+        global _AUTH_COOKIE
+        _AUTH_COOKIE = f"{SESSION_COOKIE_NAME}={_sid}"
         port = _free_port()
-        self.server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(repo_root=self.repo_root))
+        self.server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(repo_root=self.repo_root, session_store=self._auth_store))
         self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self._thread.start()
         self.base = f"http://127.0.0.1:{port}"
 
     def tearDown(self) -> None:
+        global _AUTH_COOKIE
+        _AUTH_COOKIE = None
         self.server.shutdown()
         self.server.server_close()
         self._patch.stop()

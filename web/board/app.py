@@ -5,10 +5,13 @@ import hashlib
 import os
 import json
 import re
+import secrets
 import sys
+import threading
 from datetime import datetime, timezone
 from functools import partial
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -2368,11 +2371,264 @@ def dispatch_api_request(
     )
 
 
-def make_handler(repo_root: Path | None = None) -> type[BaseHTTPRequestHandler]:
+# ---------------------------------------------------------------------------
+# AIPOS-270 — board 鉴权(owner/角色 token 登录 + 会话 cookie)
+#
+# 红线:零依赖(stdlib http.cookies / secrets / hashlib);token 明文不落日志、不进 cookie。
+# 登录仅用「提交 token 的 sha256 指纹」对照 connection.json 里已存的 fingerprint 字段——
+# 永不读取/回显/比较 connection.json 的原始 token 字段。会话 = 进程内存态随机 secret,
+# 重启失效(重登即可)。
+# ---------------------------------------------------------------------------
+
+SESSION_COOKIE_NAME = "board_session"
+
+# 无需登录即可访问的路径(登录页 / 鉴权 API 本身)。
+_AUTH_PUBLIC_PATHS = frozenset({"/login", "/api/auth/login", "/api/auth/logout", "/api/auth/status"})
+
+# 静态资源后缀(登录页与受保护页都能正常渲染所需):放行,不走鉴权。
+# 注意:.html 不在此列——HTML 页面本身是受保护的应用页(由各自路由在登录后提供)。
+_STATIC_ASSET_SUFFIXES = frozenset({
+    ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+    ".ico", ".woff", ".woff2", ".ttf", ".eot", ".map",
+})
+
+
+def _token_fingerprint(token: str) -> str:
+    """与 connection.json 同算法:sha256 前 12 hex。"""
+    return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def _discover_connection_paths(board_config_path: Path | None = None) -> list[Path]:
+    """发现用于校验登录 token 的 connection.json。
+
+    候选:(1) 全局运行时 ~/.lybra/local/connection.json;(2) .board_config.json 各 workspace
+    根下的 .lybra/local/connection.json 与 .lybra/connection.json(兼容两种落位)。
+    仅返回真实存在的文件,去重。"""
+    cfg_path = board_config_path or BOARD_CONFIG_PATH
+    candidates: list[Path] = [Path("~/.lybra/local/connection.json").expanduser()]
+    for ws in _load_board_config() if cfg_path == BOARD_CONFIG_PATH else _load_board_config_for(cfg_path):
+        root_str = str(ws.get("root") or "").strip()
+        if not root_str:
+            continue
+        root = Path(root_str).expanduser()
+        if root.is_dir():
+            candidates.append(root / ".lybra" / "local" / "connection.json")
+            candidates.append(root / ".lybra" / "connection.json")
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in candidates:
+        try:
+            if path.is_file():
+                key = str(path.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    result.append(path)
+        except OSError:
+            continue
+    return result
+
+
+def _load_board_config_for(board_config_path: Path) -> list[dict[str, str]]:
+    """与 _load_board_config 同,但针对指定配置路径(测试可注入)。"""
+    if not board_config_path.exists():
+        return []
+    try:
+        data = json.loads(board_config_path.read_text(encoding="utf-8"))
+        workspaces = data.get("workspaces") if isinstance(data, dict) else None
+        return workspaces if isinstance(workspaces, list) else []
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def verify_login_token(
+    token: str,
+    connection_paths: list[Path] | None = None,
+) -> dict[str, Any] | None:
+    """校验登录 token:对照 connection.json 的 fingerprint 字段。
+
+    命中返回 {role, is_owner, scopes, token_ref};未命中返回 None。
+    **只比较指纹,绝不读取/回显 connection.json 的原始 token 字段**;用 secrets.compare_digest
+    做常量时间比较,避免基于时间的指纹探测。任何 IO/解析异常 → 视为不可信 → 不命中(fail-closed)。
+    """
+    if not token or not isinstance(token, str):
+        return None
+    submitted_fp = _token_fingerprint(token)
+    paths = connection_paths if connection_paths is not None else _discover_connection_paths()
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        tokens = data.get("tokens") if isinstance(data, dict) else None
+        if not isinstance(tokens, list):
+            continue
+        for item in tokens:
+            if not isinstance(item, dict):
+                continue
+            stored_fp = str(item.get("fingerprint") or "")
+            if not stored_fp:
+                continue
+            if secrets.compare_digest(stored_fp, submitted_fp):
+                role = str(item.get("role") or "").strip()
+                raw_scopes = item.get("scopes")
+                scopes = (
+                    [str(s) for s in raw_scopes if str(s).strip()]
+                    if isinstance(raw_scopes, list)
+                    else []
+                )
+                return {
+                    "role": role,
+                    "is_owner": role == "owner",
+                    "scopes": scopes,
+                    "token_ref": str(item.get("token_ref") or ""),
+                }
+    return None
+
+
+class SessionStore:
+    """进程内会话表(session_id -> 会话信息)。重启即失效(重新登录)。
+
+    session_id 是 secrets.token_urlsafe 生成的随机不透明 secret;**原始 token 永不入库、不入 cookie**。
+    线程安全(ThreadingHTTPServer 多线程处理)。"""
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+
+    def create(self, *, role: str, scopes: list[str], token_ref: str = "") -> str:
+        session_id = secrets.token_urlsafe(32)
+        with self._lock:
+            self._sessions[session_id] = {
+                "role": role,
+                "is_owner": role == "owner",
+                "scopes": list(scopes),
+                "token_ref": token_ref,
+                "created_at": _utc_now(),
+            }
+        return session_id
+
+    def get(self, session_id: str | None) -> dict[str, Any] | None:
+        if not session_id:
+            return None
+        with self._lock:
+            entry = self._sessions.get(session_id)
+            return dict(entry) if entry is not None else None
+
+    def revoke(self, session_id: str | None) -> bool:
+        if not session_id:
+            return False
+        with self._lock:
+            return self._sessions.pop(session_id, None) is not None
+
+    def clear(self) -> None:
+        with self._lock:
+            self._sessions.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._sessions)
+
+
+def parse_session_cookie(cookie_header: str | None) -> str | None:
+    """从 Cookie 头解析出 board_session 的值(不透明 secret);无/畸形 → None。"""
+    if not cookie_header:
+        return None
+    try:
+        cookie = SimpleCookie()
+        cookie.load(cookie_header)
+    except Exception:
+        return None
+    morsel = cookie.get(SESSION_COOKIE_NAME)
+    if morsel is None:
+        return None
+    value = (morsel.value or "").strip()
+    return value or None
+
+
+def build_session_cookie_header(session_id: str) -> str:
+    """构造签发会话的 Set-Cookie 值:HttpOnly;Path=/;SameSite=Lax。
+
+    不设 Secure:board 常以明文 HTTP 跑在 loopback / 0.0.0.0(收账注记),Secure 会使 cookie 在
+    http:// 下被丢弃;Owner 可在前面套 TLS 终端时再开 Secure。"""
+    cookie = SimpleCookie()
+    cookie[SESSION_COOKIE_NAME] = session_id
+    morsel = cookie[SESSION_COOKIE_NAME]
+    morsel["httponly"] = True
+    morsel["path"] = "/"
+    morsel["samesite"] = "Lax"
+    return cookie.output(header="").strip()
+
+
+def build_clear_cookie_header() -> str:
+    """构造清除会话的 Set-Cookie 值(Max-Age=0 + 过期)。"""
+    cookie = SimpleCookie()
+    cookie[SESSION_COOKIE_NAME] = ""
+    morsel = cookie[SESSION_COOKIE_NAME]
+    morsel["httponly"] = True
+    morsel["path"] = "/"
+    morsel["samesite"] = "Lax"
+    morsel["max-age"] = "0"
+    morsel["expires"] = "Thu, 01 Jan 1970 00:00:00 GMT"
+    return cookie.output(header="").strip()
+
+
+def is_public_path(clean_path: str) -> bool:
+    """登录页 / 鉴权 API 本身:无需登录。"""
+    return clean_path in _AUTH_PUBLIC_PATHS
+
+
+def is_static_asset_path(clean_path: str) -> bool:
+    """受保护页与登录页渲染所需的静态资源(css/js/img…):放行。
+
+    判据:解析到 STATIC_DIR 内真实存在的文件,且后缀属于资源集合(排 .html)。含路径穿越防护。"""
+    if not clean_path or clean_path in {"/", "/."}:
+        return False
+    try:
+        candidate = (STATIC_DIR / clean_path.lstrip("/")).resolve()
+    except OSError:
+        return False
+    static_root = STATIC_DIR.resolve()
+    try:
+        if not candidate.exists() or not candidate.is_file():
+            return False
+        candidate.relative_to(static_root)
+    except ValueError:
+        return False
+    return candidate.suffix.lower() in _STATIC_ASSET_SUFFIXES
+
+
+def is_authorized(
+    clean_path: str,
+    method: str,
+    cookie_header: str | None,
+    session_store: SessionStore,
+) -> bool:
+    """鉴权闸门:True=放行,False=需 302 到登录页。
+
+    顺序:公开路径 → 静态资源(GET) → 会话 cookie 校验。cookie 篡改/未知 → False(拒)。"""
+    if is_public_path(clean_path):
+        return True
+    if method.upper() == "GET" and is_static_asset_path(clean_path):
+        return True
+    session_id = parse_session_cookie(cookie_header)
+    return session_store.get(session_id) is not None
+
+
+def make_handler(
+    repo_root: Path | None = None,
+    *,
+    session_store: SessionStore | None = None,
+    connection_paths: list[Path] | None = None,
+) -> type[BaseHTTPRequestHandler]:
     routes = _api_routes(repo_root)
     post_routes = _api_post_routes(repo_root)
+    sessions = session_store if session_store is not None else SessionStore()
+    conn_paths: list[Path] | None = connection_paths
 
     class BoardHandler(BaseHTTPRequestHandler):
+        _sessions = sessions
+        _conn_paths = conn_paths
+
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             body = _json_bytes(payload)
             self.send_response(status)
@@ -2398,8 +2654,108 @@ def make_handler(repo_root: Path | None = None) -> type[BaseHTTPRequestHandler]:
                 dispatch_api_request(method="POST", path="/api/health", routes=routes)[1],
             )
 
+        # ---- AIPOS-270 鉴权辅助 ----
+        def _redirect(self, status: int, location: str, *, set_cookie: str | None = None) -> None:
+            self.send_response(status)
+            self.send_header("Location", location)
+            if set_cookie:
+                self.send_header("Set-Cookie", set_cookie)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _redirect_to_login(self) -> None:
+            """未登录:302 到登录页。"""
+            self._redirect(int(HTTPStatus.FOUND), "/login")
+
+        def _auth_gate(self, method: str) -> bool:
+            """鉴权闸门:放行返回 True;未通过则发 302 并返回 False。"""
+            clean = self.path.split("?", 1)[0]
+            if is_authorized(clean, method, self.headers.get("Cookie"), self._sessions):
+                return True
+            self._redirect_to_login()
+            return False
+
+        def _send_json_cookie(
+            self, status: HTTPStatus, payload: dict[str, Any], *, set_cookie: str | None = None
+        ) -> None:
+            body = _json_bytes(payload)
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            if set_cookie:
+                self.send_header("Set-Cookie", set_cookie)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _handle_auth_status(self) -> None:
+            sid = parse_session_cookie(self.headers.get("Cookie"))
+            info = self._sessions.get(sid)
+            if info is None:
+                self._send_json(HTTPStatus.OK, {"ok": True, "authenticated": False})
+                return
+            self._send_json(HTTPStatus.OK, {
+                "ok": True,
+                "authenticated": True,
+                "role": info.get("role"),
+                "is_owner": bool(info.get("is_owner")),
+            })
+
+        def _handle_login(self) -> None:
+            """POST /api/auth/login:校验 token(仅指纹)→ 签发会话 cookie。
+
+            红线:原始 token 不入日志、不入 cookie、不进会话表;失败 401。"""
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length > 0 else b""
+            token = ""
+            try:
+                body = json.loads(raw.decode("utf-8") or "{}") if raw else {}
+                if isinstance(body, dict):
+                    token = str(body.get("token") or "")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                token = ""
+            info = verify_login_token(token, self._conn_paths)
+            if info is None:
+                self._send_json(HTTPStatus.UNAUTHORIZED, {
+                    "ok": False,
+                    "error": "INVALID_TOKEN",
+                    "message": "Token 无效或未匹配到任何角色。",
+                })
+                return
+            session_id = self._sessions.create(
+                role=info["role"], scopes=info["scopes"], token_ref=info.get("token_ref", "")
+            )
+            self._send_json_cookie(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "role": info["role"],
+                    "is_owner": info["is_owner"],
+                    "redirect": "/",
+                },
+                set_cookie=build_session_cookie_header(session_id),
+            )
+
+        def _handle_logout(self) -> None:
+            """POST /api/auth/logout:撤销会话 + 清 cookie + 303 回登录页。"""
+            sid = parse_session_cookie(self.headers.get("Cookie"))
+            self._sessions.revoke(sid)
+            self._redirect(
+                int(HTTPStatus.SEE_OTHER), "/login", set_cookie=build_clear_cookie_header()
+            )
+
         def do_GET(self) -> None:  # noqa: N802
+            # AIPOS-270 鉴权闸门:未登录 302 到 /login(静态资源与公开路径放行)。
+            if not self._auth_gate("GET"):
+                return
             path = self.path.split("?", 1)[0]
+
+            # 公开路由:登录页 / 会话状态(闸门已放行,这里分发)。
+            if path == "/login":
+                self._send_file(STATIC_DIR / "login.html")
+                return
+            if path == "/api/auth/status":
+                self._handle_auth_status()
+                return
 
             if path in routes:
                 _status, result = dispatch_api_request(method="GET", path=self.path, routes=routes)
@@ -2429,7 +2785,16 @@ def make_handler(repo_root: Path | None = None) -> type[BaseHTTPRequestHandler]:
             self._not_found()
 
         def do_POST(self) -> None:  # noqa: N802
+            # AIPOS-270 鉴权闸门:登录/登出本身为公开路径,其余未登录 302 到 /login。
+            if not self._auth_gate("POST"):
+                return
             path = self.path.split("?", 1)[0]
+            if path == "/api/auth/login":
+                self._handle_login()
+                return
+            if path == "/api/auth/logout":
+                self._handle_logout()
+                return
             if path in post_routes:
                 length = int(self.headers.get("Content-Length", "0") or "0")
                 raw = self.rfile.read(length) if length > 0 else b"{}"
@@ -2451,13 +2816,16 @@ def make_handler(repo_root: Path | None = None) -> type[BaseHTTPRequestHandler]:
             self._method_not_allowed()
 
         def do_PUT(self) -> None:  # noqa: N802
-            self._method_not_allowed()
+            if self._auth_gate("PUT"):
+                self._method_not_allowed()
 
         def do_PATCH(self) -> None:  # noqa: N802
-            self._method_not_allowed()
+            if self._auth_gate("PATCH"):
+                self._method_not_allowed()
 
         def do_DELETE(self) -> None:  # noqa: N802
-            self._method_not_allowed()
+            if self._auth_gate("DELETE"):
+                self._method_not_allowed()
 
         def log_message(self, format: str, *args: object) -> None:
             return

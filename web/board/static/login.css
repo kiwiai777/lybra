@@ -1,0 +1,119 @@
+/* AIPOS-270 login page — reuses design tokens, self-contained. */
+@import "./assets/tokens/colors.css";
+@import "./assets/tokens/fonts.css";
+@import "./assets/tokens/typography.css";
+@import "./assets/tokens/spacing.css";
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+.login-body {
+  font-family: "Noto Sans CJK SC", -apple-system, "Segoe UI", Roboto,
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-body);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-brand-deep);
+  padding: 24px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface-page);
+  border-radius: 14px;
+  padding: 40px 32px 32px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+  text-align: center;
+}
+
+.login-logo {
+  height: 52px;
+  width: auto;
+  margin: 0 auto 18px;
+  display: block;
+  mix-blend-mode: multiply;
+}
+
+.login-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--green-dark);
+  margin-bottom: 6px;
+}
+
+.login-sub {
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  margin-bottom: 26px;
+}
+
+.login-form { text-align: left; }
+
+.login-field {
+  display: block;
+  margin-bottom: 18px;
+}
+
+.login-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.login-field input {
+  width: 100%;
+  padding: 11px 13px;
+  font-size: 15px;
+  font-family: inherit;
+  color: var(--text-body);
+  background: var(--surface-page);
+  border: 1px solid #cdd8d2;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.login-field input:focus {
+  border-color: var(--green-bright);
+  box-shadow: 0 0 0 3px rgba(26, 122, 82, 0.16);
+}
+
+.login-submit {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--text-on-brand);
+  background: var(--green-bright);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.login-submit:hover:not(:disabled) { background: var(--green-dark); }
+.login-submit:disabled { opacity: 0.6; cursor: default; }
+
+.login-error {
+  margin-top: 14px;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: #8a1f1f;
+  background: #fdecec;
+  border: 1px solid #f2b8b8;
+  border-radius: 7px;
+  text-align: center;
+}
+
+.login-hint {
+  margin-top: 22px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  text-align: center;
+}
