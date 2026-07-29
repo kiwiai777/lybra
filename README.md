@@ -66,6 +66,14 @@ pulling for claimable tasks (`lybra agent watch` — a stateless, agent-side, bo
 loop; Lybra never pushes and never tracks agent presence) and **`lybra off`** to stop. See
 `skills/lybra-executor/SKILL.md` and `docs/mcp-agent-setup.md`.
 
+**Harness-agnostic change pump (AIPOS-268):** `agent watch` also runs WITHOUT a gate —
+`lybra agent watch --workspace-root <ws>` polls `5_tasks/queue/**` and `5_tasks/records/**`
+by mtime+path, prints a one-line JSON change summary (`{"changed":[{path,kind}]}`) on the
+first change (exit 0), and exits 2 silently on `--timeout`. Any agent that can run bash can
+use it (no MCP/token/gate); the gate records nothing. This is candidate ⑫ of the `agent watch`
+confluence — candidate ⑤ (`--gate-url`, the stateless pull for claimable tasks, AIPOS-248) is
+unchanged; the two modes are mutually exclusive.
+
 **Three SKILLs (the roles).** Lybra ships three agent-facing skills — symlink whichever you need
 into `~/.claude/skills/` (or `~/.codex/skills/`):
 - **`skills/owner-console/`** — the Owner's own advisor + confirm console (owner token): plan,

@@ -712,25 +712,49 @@ def build_parser() -> argparse.ArgumentParser:
     # /agents = recorded snapshot, `agent watch` = client-side loop.
     agent_parser = subparsers.add_parser(
         "agent",
-        help="Agent-side connector: stateless pull for claimable tasks (fetch once / bounded watch; AIPOS-248)",
+        help="Agent-side connector: fetch claimable tasks (gate pull) / bounded watch — "
+        "two harness modes (候选⑤⑫合流): --workspace-root = filesystem pump (AIPOS-268, any bash agent); "
+        "--gate-url = stateless gate pull (AIPOS-248)",
     )
     agent_subparsers = agent_parser.add_subparsers(dest="agent_command")
-    for _name, _help in (
-        ("fetch", "One stateless pull: tasks claimable by --actor (advisory list; the gate is the truth)"),
-        ("watch", "Foreground BOUNDED client loop: poll until a task appears or --max-wait elapses"),
-    ):
-        _sub = agent_subparsers.add_parser(_name, help=_help)
-        _sub.add_argument("--gate-url", required=True, help="e.g. http://127.0.0.1:7118")
-        _src = _sub.add_mutually_exclusive_group(required=True)
-        _src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
-        _src.add_argument("--token-env", help="env var holding the role bearer token")
-        _sub.add_argument("--role", default="executor", help="role token to read (role-agnostic client; default executor)")
-        _sub.add_argument("--actor", required=True, help="your agent/actor name (matched against assigned_to/agent_instance)")
-        if _name == "fetch":
-            _sub.add_argument("--json", action="store_true", help="Output JSON")
-        else:
-            _sub.add_argument("--interval", type=float, default=60.0, help="poll interval in seconds (default 60; hard floor 15)")
-            _sub.add_argument("--max-wait", type=float, default=1800.0, help="bounded wait in seconds before a clean exit (default 1800)")
+    # `agent fetch` (candidate ⑤, AIPOS-248): one stateless gate pull — byte-identical to before.
+    _fetch_parser = agent_subparsers.add_parser(
+        "fetch", help="One stateless pull: tasks claimable by --actor (advisory list; the gate is the truth)"
+    )
+    _fetch_parser.add_argument("--gate-url", required=True, help="e.g. http://127.0.0.1:7118")
+    _fetch_src = _fetch_parser.add_mutually_exclusive_group(required=True)
+    _fetch_src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
+    _fetch_src.add_argument("--token-env", help="env var holding the role bearer token")
+    _fetch_parser.add_argument("--role", default="executor", help="role token to read (role-agnostic client; default executor)")
+    _fetch_parser.add_argument("--actor", required=True, help="your agent/actor name (matched against assigned_to/agent_instance)")
+    _fetch_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # `agent watch` (候选⑤⑫合流): two MUTUALLY EXCLUSIVE harness modes. --workspace-root
+    # (candidate ⑫, AIPOS-268) = the harness-agnostic filesystem pump (no gate/MCP/token,
+    # any agent that can run bash); --gate-url (candidate ⑤, AIPOS-248) = the stateless
+    # gate pull for claimable tasks. Both are foreground, bounded, client-side loops.
+    _watch_parser = agent_subparsers.add_parser(
+        "watch",
+        help="Foreground BOUNDED client loop. Two modes (候选⑤⑫合流): "
+        "--workspace-root = filesystem mtime pump (candidate ⑫, AIPOS-268; any bash agent, no gate); "
+        "--gate-url = stateless gate pull for claimable tasks (candidate ⑤, AIPOS-248).",
+    )
+    _watch_mode = _watch_parser.add_mutually_exclusive_group(required=True)
+    _watch_mode.add_argument(
+        "--workspace-root",
+        help="候选⑫ filesystem pump (AIPOS-268): poll 5_tasks/queue/** + 5_tasks/records/** mtime+path; "
+        "print a JSON change summary on the first change (exit 0); exit 2 silent on --timeout. No gate/token.",
+    )
+    _watch_mode.add_argument("--gate-url", help="候选⑤ gate pull (AIPOS-248): e.g. http://127.0.0.1:7118")
+    _watch_gate_src = _watch_parser.add_mutually_exclusive_group(required=False)
+    _watch_gate_src.add_argument("--connection-json", help="[gate mode] path to connection.json (token read by --role; never on argv)")
+    _watch_gate_src.add_argument("--token-env", help="[gate mode] env var holding the role bearer token")
+    _watch_parser.add_argument("--role", default="executor", help="[gate mode] role token to read (role-agnostic client; default executor)")
+    _watch_parser.add_argument("--actor", help="[gate mode] your agent/actor name (matched against assigned_to/agent_instance)")
+    # --interval is shared by both modes with DIFFERENT defaults (pump 15 / gate 60); the
+    # argparse default is None and each mode resolves its own default in the dispatch.
+    _watch_parser.add_argument("--interval", type=float, default=None, help="poll interval seconds. Filesystem pump default 15; gate pull default 60 (hard floor 15).")
+    _watch_parser.add_argument("--max-wait", type=float, default=1800.0, help="[gate mode] bounded wait seconds before a clean exit (default 1800)")
+    _watch_parser.add_argument("--timeout", type=float, default=1800.0, help="[filesystem pump] no-change timeout seconds -> silent exit 2 (default 1800)")
 
     board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
@@ -1052,10 +1076,35 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     if args.command == "agent":
-        # AIPOS-248: pure gate client — needs no workspace discovery, reads no files
-        # (token via connection.json/env inside the module; state via the read tool).
+        # 候选⑤⑫合流 dispatch. `agent watch --workspace-root` (candidate ⑫, AIPOS-268)
+        # routes to the filesystem pump; everything else (`fetch`, and `watch --gate-url`)
+        # is the AIPOS-248 gate path in agent_connector.py — left byte-identical.
+        if getattr(args, "agent_command", None) == "watch" and getattr(args, "workspace_root", None):
+            from tools.aipos_cli.agent_watch_fs import run_fs_watch_cli
+            return run_fs_watch_cli(args)
+        # Gate mode (candidate ⑤): preserve the AIPOS-248 required-arg contract in code
+        # (--actor / a token source are required for the gate pull). argparse can no longer
+        # express 'required only when --gate-url is set' now that `watch` is polymorphic;
+        # validate here so run_agent_command / agent_connector.py stay byte-identical.
+        if getattr(args, "agent_command", None) == "watch":
+            missing = []
+            if not getattr(args, "actor", None):
+                missing.append("--actor")
+            if not getattr(args, "connection_json", None) and not getattr(args, "token_env", None):
+                missing.append("(--connection-json | --token-env)")
+            if missing:
+                print(
+                    "lybra agent watch --gate-url: missing required argument(s): "
+                    + ", ".join(missing),
+                    file=sys.stderr,
+                )
+                return 2
+            # Resolve the shared --interval default for gate mode (60s) here so
+            # agent_connector.run_watch — which does `float(args.interval)` — stays untouched.
+            from tools.aipos_cli.agent_connector import DEFAULT_INTERVAL_SECONDS
+            if getattr(args, "interval", None) is None:
+                args.interval = DEFAULT_INTERVAL_SECONDS
         from tools.aipos_cli.agent_connector import run_agent_command
-
         return run_agent_command(args)
 
     if args.command == "tui":
