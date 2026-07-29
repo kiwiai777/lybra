@@ -81,6 +81,38 @@ const translations = {
     'detail.advanced': '高级选项',
     'detail.advanced.debug_view': '工程调试视图',
     'detail.advanced.debug_desc': '查看完整的工程字段与原始 JSON(仅供排障)',
+
+    // ===== AIPOS-266: 四区界面标签 (门户头/里程碑地图/验证台/任务中心) + 共享弹层 =====
+    // 红线:记录与声明内容 (卡标题/摘要/findings/里程碑文字/portal 描述) 原文直显,不译。
+
+    // 共享弹层
+    'popup.close': '关闭',
+
+    // 门户头 (AIPOS-264)
+    'portal.name_fallback': '项目',
+    'portal.updated_prefix': '更新 ',
+    'portal.label.mode': '模式',
+    'portal.label.topology': '拓扑',
+    'portal.label.workers': '牛马',
+    'portal.label.advisor': '顾问',
+    'portal.role.worker_fallback': '牛马',
+    'portal.role.advisor_fallback': '顾问',
+    'portal.worker_chip_title': '查看 agent 档案',
+
+    // 里程碑地图 (AIPOS-262B)
+    'map.title': '项目里程碑',
+    'map.hint': '横向里程碑图表:已完成(实心)→ 当前(高亮)→ 近期规划 → 远期走向(虚线)。点节点看详情与决策引用。',
+    'map.legend.done': '已完成',
+    'map.legend.current': '当前',
+    'map.legend.near': '近期规划',
+    'map.legend.horizon': '远期走向',
+    'map.popup.kind.done': '已完成里程碑',
+    'map.popup.kind.current': '当前位置',
+    'map.popup.kind.near': '近期规划',
+    'map.popup.kind.horizon': '远期走向',
+    'map.popup.current_title': '当前进展',
+    'map.popup.section.refs': '相关决策引用',
+    'map.popup.section.direction_log': 'direction_log 最近方向',
     
     // Workspace card (overview)
     'card.needs_owner': '等我处理',
@@ -88,7 +120,75 @@ const translations = {
     'card.recent_activity': '最近活动',
     'card.more_items': '更多',
     'card.real_progress': '真实进展（按记录推导）',
+
+    // 验证台 (AIPOS-262B FIX-1)
+    'vb.title': '验证台 · Owner 核验',
+    'vb.hint': '审计已 PASS 待 Owner 真机过目的核验站 + 进行中预览;需要 Owner 裁定的待办("等我处理")并入此处。',
+    'vb.stations.heading': '待验站({n})——审计已 PASS,待 Owner 真机过目',
+    'vb.preview.heading': '进行中预览({n})——它将被怎么验',
+    'vb.needs.heading': '待 Owner 裁定({n})——"等我处理"并入此处',
+    'vb.resolution_note_fallback': '只读核验面;通过/打回按键留候选⑬(board 鉴权后)。',
+    'vb.station.await': '待 Owner 核验',
+    'vb.station.head_title': '点击展开/收起断言与证据',
+    'vb.preview.head_title': '点击展开/收起验收标准',
+    'vb.toggle.expand': '展开 ▸',
+    'vb.toggle.collapse': '收起 ▾',
+    'vb.section.assertions': '验收断言',
+    'vb.ring.machine': '机判记录',
+    'vb.ring.audit': '审计判决',
+    'vb.ring.fix': '往轮修复',
+    'vb.ring.status_prefix': '状态:',
+    'vb.empty.machine': '尚未提交返回记录。',
+    'vb.empty.audit': '尚未记录审计判决。',
+    'vb.empty.fix': '无往轮修复(首轮即过)。',
+    'vb.action.pass': '通过',
+    'vb.action.reject': '打回',
+    'vb.preview.note_fallback': '进行中——验收标准预览。',
     'card.real_progress_empty': '暂无已记录进展',
+
+    // 任务中心 (AIPOS-260 FIX-1)
+    'tc.title': '任务中心 · Owner 真相摘要',
+    'tc.hint': '每任务一卡：标题 + 一句话目的 + 真实阶段（从已记录的 records 推导，不改队列状态机）。点开看每轮摘要时间线；下方为按记录时间倒序的动态流。只读已记录真相。',
+    'tc.subheading.cards': '任务卡片（点开看每轮摘要）',
+    'tc.subheading.feed': '动态流（按记录时间倒序）',
+    'tc.loading': '加载中...',
+    'tc.purpose_fallback': '(无目的摘要)',
+    'tc.view_card': '查看原卡',
+    'tc.view_card_title': '右侧抽屉渲染本卡 md 原文',
+    'tc.view_record': '原记录',
+    'tc.view_record_title': '查看本记录 md 原文',
+    'tc.member.main': '主',
+    'tc.member.audit': '审',
+    'tc.member.fix': '修',
+    'tc.member.finalize': '编',
+    'tc.dur.sec': ' 秒',
+    'tc.dur.min': ' 分钟',
+    'tc.dur.hr': ' 小时',
+    'detail.needs_owner.reason.approval': '需要 Owner 审批',
+    'detail.needs_owner.reason.review': '待审核',
+
+    // 共享:agent 档案弹层 (AIPOS-265;门户头牛马 chip + 任务中心 agent 链接共用)
+    'agent.profile.default': 'agent 档案',
+    'agent.profile.suffix': '档案',
+    'agent.profile.latest': '最近已知档案',
+    'agent.profile.this_round': '本轮',
+    'agent.profile.model': '自报模型',
+    'agent.profile.tokens': '自报 tokens(in/out)',
+    'agent.profile.duration': '本次耗时',
+    'agent.profile.source_prefix': '来自 ',
+    'agent.profile.self_reported_tag': '自报',
+    'agent.profile.not_recorded': '未记录',
+    'agent.profile.no_profile': '暂无已知档案',
+    'agent.profile.no_round': '本轮未记录',
+
+    // 共享:md 原文抽屉 (AIPOS-263;任务中心原卡/原记录共用)
+    'md.drawer.aria': 'md 原文',
+    'md.drawer.title_fallback': 'md 原文',
+    'md.drawer.loading': '加载中…',
+    'md.drawer.loading_path': '加载中…',
+    'md.drawer.load_failed': '加载失败',
+    'md.drawer.network_error': '网络错误',
+    'md.drawer.frontmatter': 'frontmatter(折叠)',
   },
   
   en: {
@@ -168,6 +268,39 @@ const translations = {
     'detail.advanced': 'Advanced',
     'detail.advanced.debug_view': 'Engineering Debug View',
     'detail.advanced.debug_desc': 'View full engineering fields and raw JSON (for troubleshooting only)',
+
+    // ===== AIPOS-266: four-area UI labels (portal header / milestone map / verify bench /
+    // task center) + shared popups. Red line: record & statement content (card titles /
+    // summaries / findings / milestone text / portal description) stays original; chrome only. =====
+
+    // Shared popups
+    'popup.close': 'Close',
+
+    // Portal header (AIPOS-264)
+    'portal.name_fallback': 'Project',
+    'portal.updated_prefix': 'Updated ',
+    'portal.label.mode': 'Mode',
+    'portal.label.topology': 'Topology',
+    'portal.label.workers': 'Workers',
+    'portal.label.advisor': 'Advisor',
+    'portal.role.worker_fallback': 'Worker',
+    'portal.role.advisor_fallback': 'Advisor',
+    'portal.worker_chip_title': 'View agent profile',
+
+    // Milestone map (AIPOS-262B)
+    'map.title': 'Project Milestones',
+    'map.hint': 'Horizontal milestone chart: completed (solid) → current (highlighted) → near-term plan → horizon (dashed). Click a node for details and decision refs.',
+    'map.legend.done': 'Completed',
+    'map.legend.current': 'Current',
+    'map.legend.near': 'Near-term',
+    'map.legend.horizon': 'Horizon',
+    'map.popup.kind.done': 'Completed milestone',
+    'map.popup.kind.current': 'Current position',
+    'map.popup.kind.near': 'Near-term plan',
+    'map.popup.kind.horizon': 'Horizon',
+    'map.popup.current_title': 'Current progress',
+    'map.popup.section.refs': 'Related decision refs',
+    'map.popup.section.direction_log': 'direction_log (recent directions)',
     
     // Workspace card (overview)
     'card.needs_owner': 'Needs Owner',
@@ -175,7 +308,75 @@ const translations = {
     'card.recent_activity': 'Recent',
     'card.more_items': 'more',
     'card.real_progress': 'Real progress (record-derived)',
+
+    // Verify bench (AIPOS-262B FIX-1)
+    'vb.title': 'Verify Bench · Owner Review',
+    'vb.hint': 'Verification stations (audit PASSed, awaiting Owner real-machine review) + in-progress previews; Owner-decision to-dos ("needs owner") are grouped here.',
+    'vb.stations.heading': 'Verification stations ({n}) — audit PASSed, awaiting Owner real-machine review',
+    'vb.preview.heading': 'In-progress previews ({n}) — how it will be verified',
+    'vb.needs.heading': 'Awaiting Owner decision ({n}) — "needs owner" grouped here',
+    'vb.resolution_note_fallback': 'Read-only verification face; pass/reject buttons are pending (after board auth).',
+    'vb.station.await': 'Awaiting Owner review',
+    'vb.station.head_title': 'Click to expand/collapse assertions and evidence',
+    'vb.preview.head_title': 'Click to expand/collapse acceptance criteria',
+    'vb.toggle.expand': 'Expand ▸',
+    'vb.toggle.collapse': 'Collapse ▾',
+    'vb.section.assertions': 'Acceptance assertions',
+    'vb.ring.machine': 'Machine judgment',
+    'vb.ring.audit': 'Audit verdict',
+    'vb.ring.fix': 'Prior-round fixes',
+    'vb.ring.status_prefix': 'Status: ',
+    'vb.empty.machine': 'No return record submitted yet.',
+    'vb.empty.audit': 'No audit verdict recorded yet.',
+    'vb.empty.fix': 'No prior-round fixes (passed on first round).',
+    'vb.action.pass': 'Pass',
+    'vb.action.reject': 'Reject',
+    'vb.preview.note_fallback': 'In progress — acceptance criteria preview.',
     'card.real_progress_empty': 'No recorded progress yet',
+
+    // Task center (AIPOS-260 FIX-1)
+    'tc.title': 'Task Center · Owner Truth Summary',
+    'tc.hint': 'One card per task: title + one-line purpose + true stage (derived from recorded records; the queue state machine is untouched). Expand to see the per-round summary timeline; below is the activity feed in reverse record-time order. Read-only recorded truth.',
+    'tc.subheading.cards': 'Task cards (expand for per-round summaries)',
+    'tc.subheading.feed': 'Activity feed (reverse record-time order)',
+    'tc.loading': 'Loading...',
+    'tc.purpose_fallback': '(no purpose summary)',
+    'tc.view_card': 'View source card',
+    'tc.view_card_title': "Render this card's md source in the side drawer",
+    'tc.view_record': 'Source record',
+    'tc.view_record_title': "View this record's md source",
+    'tc.member.main': 'Main',
+    'tc.member.audit': 'Audit',
+    'tc.member.fix': 'Fix',
+    'tc.member.finalize': 'Finalize',
+    'tc.dur.sec': ' sec',
+    'tc.dur.min': ' min',
+    'tc.dur.hr': ' hr',
+    'detail.needs_owner.reason.approval': 'Requires Owner approval',
+    'detail.needs_owner.reason.review': 'Pending review',
+
+    // Shared: agent profile popup (AIPOS-265; portal worker chips + task-center agent links)
+    'agent.profile.default': 'Agent Profile',
+    'agent.profile.suffix': 'Profile',
+    'agent.profile.latest': 'Latest known profile',
+    'agent.profile.this_round': 'This round',
+    'agent.profile.model': 'Self-reported model',
+    'agent.profile.tokens': 'Self-reported tokens (in/out)',
+    'agent.profile.duration': 'Duration',
+    'agent.profile.source_prefix': 'From ',
+    'agent.profile.self_reported_tag': 'self-reported',
+    'agent.profile.not_recorded': 'not recorded',
+    'agent.profile.no_profile': 'No known profile',
+    'agent.profile.no_round': 'Not recorded this round',
+
+    // Shared: md source drawer (AIPOS-263; task-center source card / record)
+    'md.drawer.aria': 'md source',
+    'md.drawer.title_fallback': 'md source',
+    'md.drawer.loading': 'Loading…',
+    'md.drawer.loading_path': 'Loading…',
+    'md.drawer.load_failed': 'Failed to load',
+    'md.drawer.network_error': 'Network error',
+    'md.drawer.frontmatter': 'frontmatter (collapsed)',
   }
 };
 

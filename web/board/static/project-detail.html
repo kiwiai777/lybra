@@ -668,7 +668,7 @@
          /api/project-map?workspace=N 水合;无 project-map.md 时整区优雅隐藏(DOM-only)。 -->
     <section id="milestone-map-section" class="detail-section milestone-map-section" data-owner-truth="milestone-map" hidden>
       <div class="section-header">
-        <h3>项目里程碑</h3>
+        <h3 id="map-title">项目里程碑</h3>
       </div>
       <p class="section-hint" id="map-hint">横向里程碑图表:已完成(实心)→ 当前(高亮)→ 近期规划 → 远期走向(虚线)。点节点看详情与决策引用。</p>
       <div id="map-road" class="map-road"></div>
@@ -679,9 +679,9 @@
          进行中预览 +"等我处理"并入分组(有内容才显示)。JS 水合 #vb-body,DOM-only。 -->
     <section id="verify-bench-section" class="detail-section verify-section" data-owner-truth="verify-bench" hidden>
       <div class="section-header">
-        <h3>验证台 · Owner 核验</h3>
+        <h3 id="vb-title">验证台 · Owner 核验</h3>
       </div>
-      <p class="section-hint">审计已 PASS 待 Owner 真机过目的核验站 + 进行中预览;需要 Owner 裁定的待办("等我处理")并入此处。</p>
+      <p class="section-hint" id="vb-hint">审计已 PASS 待 Owner 真机过目的核验站 + 进行中预览;需要 Owner 裁定的待办("等我处理")并入此处。</p>
       <div id="vb-body" class="vb-body"></div>
     </section>
 
@@ -690,14 +690,14 @@
          JS hydrates the #tc-* containers from /api/owner-truth?workspace=N (DOM-only). -->
     <section id="task-center-section" class="detail-section task-center-section" data-owner-truth="task-center">
       <div class="section-header">
-        <h3>任务中心 · Owner 真相摘要</h3>
+        <h3 id="tc-title">任务中心 · Owner 真相摘要</h3>
       </div>
-      <p class="section-hint">每任务一卡：标题 + 一句话目的 + 真实阶段（从已记录的 records 推导，不改队列状态机）。点开看每轮摘要时间线；下方为按记录时间倒序的动态流。只读已记录真相。</p>
-      <div id="tc-counts" class="tc-stage-pills">加载中...</div>
-      <h4 class="tc-subheading">任务卡片（点开看每轮摘要）</h4>
-      <div id="tc-tasks" class="tc-tasks">加载中...</div>
-      <h4 class="tc-subheading">动态流（按记录时间倒序）</h4>
-      <div id="tc-feed" class="tc-feed">加载中...</div>
+      <p class="section-hint" id="tc-hint">每任务一卡：标题 + 一句话目的 + 真实阶段（从已记录的 records 推导，不改队列状态机）。点开看每轮摘要时间线；下方为按记录时间倒序的动态流。只读已记录真相。</p>
+      <div id="tc-counts" class="tc-stage-pills" data-i18n="tc.loading">加载中...</div>
+      <h4 class="tc-subheading" id="tc-sub-cards">任务卡片（点开看每轮摘要）</h4>
+      <div id="tc-tasks" class="tc-tasks" data-i18n="tc.loading">加载中...</div>
+      <h4 class="tc-subheading" id="tc-sub-feed">动态流（按记录时间倒序）</h4>
+      <div id="tc-feed" class="tc-feed" data-i18n="tc.loading">加载中...</div>
     </section>
 
     <div id="project-content"></div>
@@ -714,6 +714,21 @@
       // Update static text
       document.getElementById('page-title').textContent = i18n.t('detail.title');
       document.getElementById('back-link').textContent = i18n.t('detail.back_to_overview');
+
+      // AIPOS-266: 四区静态区块标题/提示/子标题/加载占位 (静态烘入 zh 为默认;
+      // 切换语言时这里重设,下方各 render* 再以 i18n.t 渲染动态 chrome)。
+      document.getElementById('map-title').textContent = i18n.t('map.title');
+      document.getElementById('map-hint').textContent = i18n.t('map.hint');
+      document.getElementById('vb-title').textContent = i18n.t('vb.title');
+      document.getElementById('vb-hint').textContent = i18n.t('vb.hint');
+      document.getElementById('tc-title').textContent = i18n.t('tc.title');
+      document.getElementById('tc-hint').textContent = i18n.t('tc.hint');
+      document.getElementById('tc-sub-cards').textContent = i18n.t('tc.subheading.cards');
+      document.getElementById('tc-sub-feed').textContent = i18n.t('tc.subheading.feed');
+      ['tc-counts', 'tc-tasks', 'tc-feed'].forEach(id => {
+        const n = document.getElementById(id);
+        if (n && !n.childElementCount) n.textContent = i18n.t('tc.loading');
+      });
       
       // Mount language switcher
       const switcherMount = document.getElementById('lang-switcher-mount');
@@ -808,15 +823,15 @@
       // S2: graceful hide — no portal segment or no description (the required element).
       if (!portal || !portal.description) { section.hidden = true; return; }
       section.hidden = false;
-      nameEl.textContent = (workspace && workspace.label) ? workspace.label : '项目';
-      if (d && d.updated) { updatedEl.textContent = '更新 ' + d.updated; updatedEl.hidden = false; }
+      nameEl.textContent = (workspace && workspace.label) ? workspace.label : i18n.t('portal.name_fallback');
+      if (d && d.updated) { updatedEl.textContent = i18n.t('portal.updated_prefix') + d.updated; updatedEl.hidden = false; }
       else { updatedEl.hidden = true; }
       descEl.textContent = portal.description;
       collabEl.replaceChildren();
       // 协作模式
       if (portal.collab_mode) {
         const mode = el('span', 'pc-mode'); mode.textContent = portal.collab_mode;
-        collabEl.appendChild(pcGroup('模式', mode));
+        collabEl.appendChild(pcGroup(i18n.t('portal.label.mode'), mode));
       }
       // 拓扑 + 极简小图标
       if (portal.topology) {
@@ -824,7 +839,7 @@
         topo.appendChild(topologyIcon(portal.topology));
         const tl = el('span'); tl.textContent = portal.topology;
         topo.appendChild(tl);
-        collabEl.appendChild(pcGroup('拓扑', topo));
+        collabEl.appendChild(pcGroup(i18n.t('portal.label.topology'), topo));
       }
       // 牛马阵容(点击复用 agent 档案弹层)
       const workers = Array.isArray(portal.workers) ? portal.workers : [];
@@ -836,7 +851,7 @@
           const chip = document.createElement('button');
           chip.type = 'button';
           chip.className = 'worker-chip';
-          chip.title = '查看 agent 档案';
+          chip.title = i18n.t('portal.worker_chip_title');
           chip.setAttribute('aria-haspopup', 'dialog');
           if (w.role) { const r = el('span', 'wc-role'); r.textContent = w.role; chip.appendChild(r); }
           const inst = el('span', 'wc-inst'); inst.textContent = w.instance; chip.appendChild(inst);
@@ -844,7 +859,7 @@
           chip.addEventListener('click', () => {
             const info = profileIndex[w.instance];
             showAgentPopup({
-              role: (info && info.role) || w.role || '牛马',
+              role: (info && info.role) || w.role || i18n.t('portal.role.worker_fallback'),
               instance: w.instance,
               profile: info ? info.profile : null,
               round: null,
@@ -852,20 +867,20 @@
           });
           wrap.appendChild(chip);
         });
-        collabEl.appendChild(pcGroup('牛马', wrap));
+        collabEl.appendChild(pcGroup(i18n.t('portal.label.workers'), wrap));
       }
       // 顾问信息
       if (portal.advisor) {
         const adv = parseWorker(portal.advisor);
         const box = el('span', 'pc-advisor');
-        const role = el('span', 'adv-role'); role.textContent = adv.role || '顾问';
+        const role = el('span', 'adv-role'); role.textContent = adv.role || i18n.t('portal.role.advisor_fallback');
         box.appendChild(role);
         const ai = el('span', 'adv-inst'); ai.textContent = adv.instance; box.appendChild(ai);
         if (adv.harness || adv.desc) {
           const dd = el('span', 'adv-desc');
           dd.textContent = [adv.harness, adv.desc].filter(Boolean).join(' · '); box.appendChild(dd);
         }
-        collabEl.appendChild(pcGroup('顾问', box));
+        collabEl.appendChild(pcGroup(i18n.t('portal.label.advisor'), box));
       }
     }
 
@@ -903,7 +918,7 @@
           seg.appendChild(mapNode({
             kind: 'done',
             onClick: () => showMilestonePopup({
-              kind: '已完成里程碑', title: m.title || m.id,
+              kind: i18n.t('map.popup.kind.done'), title: m.title || m.id,
               desc: m.title || '', refs: m.refs || [],
             }),
           }));
@@ -921,7 +936,7 @@
         cur.appendChild(cap);
         cur.style.cursor = 'pointer';
         cur.addEventListener('click', () => showMilestonePopup({
-          kind: '当前位置', title: '当前进展', desc: d.current,
+          kind: i18n.t('map.popup.kind.current'), title: i18n.t('map.popup.current_title'), desc: d.current,
           refs: [], directionLog: d.direction_log_recent || [],
         }));
         road.appendChild(cur);
@@ -935,7 +950,7 @@
           if (i > 0) seg.appendChild(el('span', 'map-link'));
           seg.appendChild(mapNode({
             kind: 'near',
-            onClick: () => showMilestonePopup({ kind: '近期规划', title: label, desc: label, refs: [] }),
+            onClick: () => showMilestonePopup({ kind: i18n.t('map.popup.kind.near'), title: label, desc: label, refs: [] }),
           }));
         });
         road.appendChild(seg);
@@ -949,7 +964,7 @@
           if (i > 0) seg.appendChild(el('span', 'map-link is-dashed'));
           seg.appendChild(mapNode({
             kind: 'horizon',
-            onClick: () => showMilestonePopup({ kind: '远期走向', title: label, desc: label, refs: [] }),
+            onClick: () => showMilestonePopup({ kind: i18n.t('map.popup.kind.horizon'), title: label, desc: label, refs: [] }),
           }));
         });
         road.appendChild(seg);
@@ -958,10 +973,10 @@
       // Legend.
       legend.hidden = false;
       legend.replaceChildren();
-      legend.appendChild(legendItem('l-done', '已完成'));
-      legend.appendChild(legendItem('l-cur', '当前'));
-      legend.appendChild(legendItem('l-near', '近期规划'));
-      legend.appendChild(legendItem('l-hor', '远期走向'));
+      legend.appendChild(legendItem('l-done', i18n.t('map.legend.done')));
+      legend.appendChild(legendItem('l-cur', i18n.t('map.legend.current')));
+      legend.appendChild(legendItem('l-near', i18n.t('map.legend.near')));
+      legend.appendChild(legendItem('l-hor', i18n.t('map.legend.horizon')));
     }
 
     // F-262B-1: 节点默认只画点本身(无文本标签);完整信息走点击弹层(零信息丢失)。
@@ -1067,13 +1082,13 @@
         box.appendChild(desc);
       }
       if (info.refs && info.refs.length > 0) {
-        box.appendChild(msSection('相关决策引用'));
+        box.appendChild(msSection(i18n.t('map.popup.section.refs')));
         const ul = document.createElement('ul'); ul.className = 'ms-refs';
         info.refs.forEach(r => { const li = document.createElement('li'); li.textContent = r; ul.appendChild(li); });
         box.appendChild(ul);
       }
       if (info.directionLog && info.directionLog.length > 0) {
-        box.appendChild(msSection('direction_log 最近方向'));
+        box.appendChild(msSection(i18n.t('map.popup.section.direction_log')));
         const ul = document.createElement('ul'); ul.className = 'ms-dl';
         info.directionLog.forEach(item => {
           const li = document.createElement('li');
@@ -1084,7 +1099,7 @@
         box.appendChild(ul);
       }
       const close = document.createElement('button');
-      close.className = 'ap-close'; close.textContent = '关闭';
+      close.className = 'ap-close'; close.textContent = i18n.t('popup.close');
       close.addEventListener('click', () => mask.remove());
       box.appendChild(close);
       mask.appendChild(box);
@@ -1115,7 +1130,7 @@
 
       if (stations.length > 0) {
         const sub = document.createElement('h4'); sub.className = 'vb-subheading';
-        sub.textContent = `待验站(${stations.length})——审计已 PASS,待 Owner 真机过目`;
+        sub.textContent = i18n.t('vb.stations.heading').replace('{n}', stations.length);
         body.appendChild(sub);
         const list = document.createElement('div'); list.className = 'vb-stations';
         stations.forEach(s => list.appendChild(vbStationCard(s)));
@@ -1124,7 +1139,7 @@
 
       if (previewable.length > 0) {
         const sub = document.createElement('h4'); sub.className = 'vb-subheading';
-        sub.textContent = `进行中预览(${previewable.length})——它将被怎么验`;
+        sub.textContent = i18n.t('vb.preview.heading').replace('{n}', previewable.length);
         body.appendChild(sub);
         const list = document.createElement('div'); list.className = 'vb-previewable';
         previewable.forEach(p => list.appendChild(vbPreviewCard(p)));
@@ -1136,7 +1151,7 @@
       }
 
       const note = document.createElement('p'); note.className = 'vb-resolution-note';
-      note.textContent = (d && d.resolution_note) || '只读核验面;通过/打回按键留候选⑬(board 鉴权后)。';
+      note.textContent = (d && d.resolution_note) || i18n.t('vb.resolution_note_fallback');
       body.appendChild(note);
     }
 
@@ -1145,7 +1160,7 @@
     function vbNeedsOwnerGroup(tasks) {
       const wrap = document.createElement('div'); wrap.className = 'vb-needs-group';
       const sub = document.createElement('h4'); sub.className = 'vb-subheading';
-      sub.textContent = `待 Owner 裁定(${tasks.length})——"等我处理"并入此处`;
+      sub.textContent = i18n.t('vb.needs.heading').replace('{n}', tasks.length);
       wrap.appendChild(sub);
       const list = document.createElement('div'); list.className = 'needs-list';
       tasks.forEach(task => list.appendChild(needsOwnerCard(task)));
@@ -1158,11 +1173,11 @@
       const head = document.createElement('div'); head.className = 'vb-station-head';
       head.setAttribute('role', 'button'); head.setAttribute('tabindex', '0');
       head.setAttribute('aria-expanded', 'false');
-      head.setAttribute('title', '点击展开/收起断言与证据');
+      head.setAttribute('title', i18n.t('vb.station.head_title'));
       const title = el('div', 'vb-station-title'); title.textContent = s.title || s.task_id || '';
       const id = el('span', 'vb-station-id'); id.textContent = s.task_id || '';
-      const await_ = el('span', 'vb-await'); await_.textContent = '待 Owner 核验';
-      const toggle = el('span', 'vb-toggle'); toggle.textContent = '展开 ▸';
+      const await_ = el('span', 'vb-await'); await_.textContent = i18n.t('vb.station.await');
+      const toggle = el('span', 'vb-toggle'); toggle.textContent = i18n.t('vb.toggle.expand');
       head.appendChild(title); head.appendChild(id); head.appendChild(await_); head.appendChild(toggle);
       const toggleFn = () => vbToggle(card, head, toggle);
       head.addEventListener('click', toggleFn);
@@ -1174,7 +1189,7 @@
       const assertions = s.acceptance_assertions || [];
       if (assertions.length > 0) {
         const lbl = el('div', 'vb-ring-head'); lbl.style.marginTop = '6px';
-        const tag = el('span', 'vb-ring-tag t-machine'); tag.textContent = '验收断言';
+        const tag = el('span', 'vb-ring-tag t-machine'); tag.textContent = i18n.t('vb.section.assertions');
         lbl.appendChild(tag);
         details.appendChild(lbl);
         const ul = el('ul', 'vb-assertions');
@@ -1184,14 +1199,14 @@
 
       const ev = s.evidence || {};
       const rings = el('div', 'vb-evidence');
-      rings.appendChild(vbRing('machine', '机判记录', ev.machine_judgment, vbMachineBody));
-      rings.appendChild(vbRing('audit', '审计判决', ev.audit_verdict, vbAuditBody));
-      rings.appendChild(vbRing('fix', '往轮修复', { present: (ev.prior_fixes || []).length > 0, fixes: ev.prior_fixes || [] }, vbFixBody));
+      rings.appendChild(vbRing('machine', i18n.t('vb.ring.machine'), ev.machine_judgment, vbMachineBody));
+      rings.appendChild(vbRing('audit', i18n.t('vb.ring.audit'), ev.audit_verdict, vbAuditBody));
+      rings.appendChild(vbRing('fix', i18n.t('vb.ring.fix'), { present: (ev.prior_fixes || []).length > 0, fixes: ev.prior_fixes || [] }, vbFixBody));
       details.appendChild(rings);
 
       const actions = el('div', 'vb-actions');
-      const passBtn = el('button', 'vb-btn vb-pass'); passBtn.textContent = '通过'; passBtn.disabled = true;
-      const rejectBtn = el('button', 'vb-btn vb-reject'); rejectBtn.textContent = '打回'; rejectBtn.disabled = true;
+      const passBtn = el('button', 'vb-btn vb-pass'); passBtn.textContent = i18n.t('vb.action.pass'); passBtn.disabled = true;
+      const rejectBtn = el('button', 'vb-btn vb-reject'); rejectBtn.textContent = i18n.t('vb.action.reject'); rejectBtn.disabled = true;
       actions.appendChild(passBtn); actions.appendChild(rejectBtn);
       details.appendChild(actions);
       card.appendChild(details);
@@ -1203,7 +1218,7 @@
     function vbToggle(card, head, toggle) {
       const collapsed = card.classList.toggle('collapsed');
       head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-      if (toggle) toggle.textContent = collapsed ? '展开 ▸' : '收起 ▾';
+      if (toggle) toggle.textContent = collapsed ? i18n.t('vb.toggle.expand') : i18n.t('vb.toggle.collapse');
     }
 
     function vbRing(kind, label, data, bodyFn) {
@@ -1218,9 +1233,9 @@
       return ring;
     }
     function vbMachineBody(data, head) {
-      if (!data || !data.present) { return document.createTextNode('尚未提交返回记录。'); }
+      if (!data || !data.present) { return document.createTextNode(i18n.t('vb.empty.machine')); }
       const meta = el('span', 'vb-ring-meta');
-      meta.textContent = [data.actor, data.executor_status && ('状态:' + data.executor_status), data.returned_at].filter(Boolean).join(' · ');
+      meta.textContent = [data.actor, data.executor_status && (i18n.t('vb.ring.status_prefix') + data.executor_status), data.returned_at].filter(Boolean).join(' · ');
       head.appendChild(meta);
       if (data.summary_excerpt) {
         const b = el('div', 'vb-ring-body'); b.textContent = data.summary_excerpt; return b;
@@ -1228,7 +1243,7 @@
       return null;
     }
     function vbAuditBody(data, head) {
-      if (!data || !data.present) { return document.createTextNode('尚未记录审计判决。'); }
+      if (!data || !data.present) { return document.createTextNode(i18n.t('vb.empty.audit')); }
       const meta = el('span', 'vb-ring-meta');
       meta.textContent = [data.auditor_instance, data.verdict_at].filter(Boolean).join(' · ');
       head.appendChild(meta);
@@ -1242,7 +1257,7 @@
       return null;
     }
     function vbFixBody(data, head) {
-      if (!data || !data.present) { return document.createTextNode('无往轮修复(首轮即过)。'); }
+      if (!data || !data.present) { return document.createTextNode(i18n.t('vb.empty.fix')); }
       const ul = document.createElement('ul'); ul.className = 'vb-fix-list';
       (data.fixes || []).forEach(f => {
         const li = document.createElement('li'); li.textContent = f.task_id || ''; ul.appendChild(li);
@@ -1255,10 +1270,10 @@
       const head = document.createElement('div'); head.className = 'vb-preview-head';
       head.setAttribute('role', 'button'); head.setAttribute('tabindex', '0');
       head.setAttribute('aria-expanded', 'false');
-      head.setAttribute('title', '点击展开/收起验收标准');
+      head.setAttribute('title', i18n.t('vb.preview.head_title'));
       const title = el('div', 'vb-preview-title'); title.textContent = p.title || p.task_id || '';
       const id = el('span', 'vb-station-id'); id.textContent = (p.task_id || '') + (p.true_stage ? ' · ' + p.true_stage : '');
-      const toggle = el('span', 'vb-toggle'); toggle.textContent = '展开 ▸';
+      const toggle = el('span', 'vb-toggle'); toggle.textContent = i18n.t('vb.toggle.expand');
       head.appendChild(title); head.appendChild(id); head.appendChild(toggle);
       const toggleFn = () => vbToggle(card, head, toggle);
       head.addEventListener('click', toggleFn);
@@ -1266,7 +1281,7 @@
       card.appendChild(head);
       // F-262B-3: note + assertions collapsed under .vb-details.
       const details = el('div', 'vb-details');
-      const note = el('div', 'vb-preview-note'); note.textContent = p.stage_note || '进行中——验收标准预览。';
+      const note = el('div', 'vb-preview-note'); note.textContent = p.stage_note || i18n.t('vb.preview.note_fallback');
       details.appendChild(note);
       const assertions = p.acceptance_assertions || [];
       if (assertions.length > 0) {
@@ -1399,10 +1414,10 @@
       }
       
       if (task.verdict === 'NEEDS_OWNER') {
-        return i18n.getCurrentLang() === 'zh' ? '需要 Owner 审批' : 'Requires Owner approval';
+        return i18n.t('detail.needs_owner.reason.approval');
       }
       
-      return i18n.getCurrentLang() === 'zh' ? '待审核' : 'Pending review';
+      return i18n.t('detail.needs_owner.reason.review');
     }
     
     function generateNextCommand(task) {
@@ -1438,7 +1453,7 @@
           link.type = 'button';
           link.className = 'agent-link';
           link.textContent = ev.actor;
-          link.title = '查看 agent 档案';
+          link.title = i18n.t('portal.worker_chip_title');
           link.setAttribute('aria-haspopup', 'dialog');
           link.addEventListener('click', () => showAgentPopup(ev.agent_info));
           head.appendChild(link);
@@ -1478,9 +1493,9 @@
         srcBtn.type = 'button';
         srcBtn.className = 'ev-source';
         srcBtn.appendChild(tcIcon({ paths: ['M9 17H7A5 5 0 0 0 7 7h2', 'M15 7h2a5 5 0 0 1 0 10h-2'], lines: [[8, 12, 16, 12]] }));
-        srcBtn.appendChild(document.createTextNode('原记录'));
-        srcBtn.title = '查看本记录 md 原文';
-        srcBtn.addEventListener('click', () => openMdDrawer({ record_id: ev.record_id, task_id: ev.task_id, label: ev.phrase || ev.record_type || '原记录' }));
+        srcBtn.appendChild(document.createTextNode(i18n.t('tc.view_record')));
+        srcBtn.title = i18n.t('tc.view_record_title');
+        srcBtn.addEventListener('click', () => openMdDrawer({ record_id: ev.record_id, task_id: ev.task_id, label: ev.phrase || ev.record_type || i18n.t('tc.view_record') }));
         target.appendChild(srcBtn);
       }
     }
@@ -1505,7 +1520,9 @@
       const box = document.createElement('div');
       box.className = 'agent-popup';
       const h = document.createElement('h4');
-      h.textContent = `${info.role || 'agent'} 档案`;
+      h.textContent = info.role
+        ? info.role + ' ' + i18n.t('agent.profile.suffix')
+        : i18n.t('agent.profile.default');
       box.appendChild(h);
       const sub = document.createElement('div');
       sub.className = 'ap-sub';
@@ -1513,35 +1530,35 @@
       box.appendChild(sub);
 
       // 最近已知档案
-      box.appendChild(apSection('最近已知档案'));
+      box.appendChild(apSection(i18n.t('agent.profile.latest')));
       const profile = info.profile;
       if (profile) {
         box.appendChild(apRow('harness', nv(profile.harness), false));
-        box.appendChild(apRow('自报模型', nv(profile.model_self_reported), true));
-        box.appendChild(apRow('自报 tokens(in/out)', tokenPair(profile), true));
+        box.appendChild(apRow(i18n.t('agent.profile.model'), nv(profile.model_self_reported), true));
+        box.appendChild(apRow(i18n.t('agent.profile.tokens'), tokenPair(profile), true));
         if (profile.source_return_id) {
           const when = profile.source_returned_at ? ' · ' + new Date(profile.source_returned_at).toLocaleString() : '';
-          box.appendChild(apNote('来自 ' + profile.source_return_id + when));
+          box.appendChild(apNote(i18n.t('agent.profile.source_prefix') + profile.source_return_id + when));
         }
       } else {
-        box.appendChild(apNote('暂无已知档案'));
+        box.appendChild(apNote(i18n.t('agent.profile.no_profile')));
       }
 
       // 本轮
-      box.appendChild(apSection('本轮'));
+      box.appendChild(apSection(i18n.t('agent.profile.this_round')));
       const round = info.round;
       if (round) {
         box.appendChild(apRow('harness', nv(round.harness), false));
-        box.appendChild(apRow('自报模型', nv(round.model_self_reported), true));
-        box.appendChild(apRow('自报 tokens(in/out)', tokenPair(round), true));
-        box.appendChild(apRow('本次耗时', durationLabel(round.duration_seconds), false));
+        box.appendChild(apRow(i18n.t('agent.profile.model'), nv(round.model_self_reported), true));
+        box.appendChild(apRow(i18n.t('agent.profile.tokens'), tokenPair(round), true));
+        box.appendChild(apRow(i18n.t('agent.profile.duration'), durationLabel(round.duration_seconds), false));
       } else {
-        box.appendChild(apNote('本轮未记录'));
+        box.appendChild(apNote(i18n.t('agent.profile.no_round')));
       }
 
       const close = document.createElement('button');
       close.className = 'ap-close';
-      close.textContent = '关闭';
+      close.textContent = i18n.t('popup.close');
       close.addEventListener('click', () => mask.remove());
       box.appendChild(close);
       mask.appendChild(box);
@@ -1562,11 +1579,11 @@
       if (isSelf) {
         const tag = document.createElement('span');
         tag.className = 'ap-tag';
-        tag.textContent = '自报';
+        tag.textContent = i18n.t('agent.profile.self_reported_tag');
         kEl.appendChild(tag);
       }
       const vEl = document.createElement('span');
-      vEl.className = 'ap-v' + (value === '未记录' ? ' muted' : '');
+      vEl.className = 'ap-v' + (value === i18n.t('agent.profile.not_recorded') ? ' muted' : '');
       vEl.textContent = value;
       row.appendChild(kEl);
       row.appendChild(vEl);
@@ -1578,16 +1595,16 @@
       el.textContent = text;
       return el;
     }
-    function nv(v) { return (v === null || v === undefined || v === '') ? '未记录' : String(v); }
+    function nv(v) { return (v === null || v === undefined || v === '') ? i18n.t('agent.profile.not_recorded') : String(v); }
     function tokenPair(info) {
-      if (info.tokens_in === null && info.tokens_out === null) return '未记录';
+      if (info.tokens_in === null && info.tokens_out === null) return i18n.t('agent.profile.not_recorded');
       return `${nv(info.tokens_in)} / ${nv(info.tokens_out)}`;
     }
     function durationLabel(sec) {
-      if (sec === null || sec === undefined) return '未记录';
-      if (sec < 60) return sec + ' 秒';
-      if (sec < 3600) return Math.round(sec / 60) + ' 分钟';
-      return (sec / 3600).toFixed(1) + ' 小时';
+      if (sec === null || sec === undefined) return i18n.t('agent.profile.not_recorded');
+      if (sec < 60) return sec + i18n.t('tc.dur.sec');
+      if (sec < 3600) return Math.round(sec / 60) + i18n.t('tc.dur.min');
+      return (sec / 3600).toFixed(1) + i18n.t('tc.dur.hr');
     }
 
     // AIPOS-263F1 (FIX-1): 按钮内联 SVG 图标(跟随 currentColor,零外部依赖,与 kiwiai-design 主色一致)。
@@ -1634,21 +1651,21 @@
       drawer.className = 'md-drawer';
       drawer.setAttribute('role', 'dialog');
       drawer.setAttribute('aria-modal', 'true');
-      drawer.setAttribute('aria-label', 'md 原文');
+      drawer.setAttribute('aria-label', i18n.t('md.drawer.aria'));
       const head = document.createElement('div'); head.className = 'md-drawer-head';
       const titleWrap = document.createElement('div'); titleWrap.style.flex = '1 1 auto';
       const title = document.createElement('div'); title.className = 'md-drawer-title';
-      title.textContent = selector.label || selector.task_id || selector.record_id || selector.path || 'md 原文';
+      title.textContent = selector.label || selector.task_id || selector.record_id || selector.path || i18n.t('md.drawer.title_fallback');
       titleWrap.appendChild(title);
-      const pathEl = document.createElement('div'); pathEl.className = 'md-drawer-path'; pathEl.textContent = '加载中…';
+      const pathEl = document.createElement('div'); pathEl.className = 'md-drawer-path'; pathEl.textContent = i18n.t('md.drawer.loading_path');
       titleWrap.appendChild(pathEl);
       head.appendChild(titleWrap);
       const closeBtn = document.createElement('button'); closeBtn.className = 'md-drawer-close'; closeBtn.type = 'button';
-      closeBtn.textContent = '×'; closeBtn.setAttribute('aria-label', '关闭'); closeBtn.addEventListener('click', closeMdDrawer);
+      closeBtn.textContent = '×'; closeBtn.setAttribute('aria-label', i18n.t('popup.close')); closeBtn.addEventListener('click', closeMdDrawer);
       head.appendChild(closeBtn);
       drawer.appendChild(head);
       const body = document.createElement('div'); body.className = 'md-drawer-body';
-      const loading = document.createElement('div'); loading.className = 'md-drawer-loading'; loading.textContent = '加载中…';
+      const loading = document.createElement('div'); loading.className = 'md-drawer-loading'; loading.textContent = i18n.t('md.drawer.loading');
       body.appendChild(loading);
       drawer.appendChild(body);
       mask.appendChild(drawer);
@@ -1660,14 +1677,14 @@
           body.replaceChildren();
           if (!payload || payload.ok === false) {
             const err = document.createElement('div'); err.className = 'md-drawer-error';
-            err.textContent = (payload && payload.errors && payload.errors[0] && payload.errors[0].message) || '加载失败';
+            err.textContent = (payload && payload.errors && payload.errors[0] && payload.errors[0].message) || i18n.t('md.drawer.load_failed');
             body.appendChild(err); return;
           }
           const d = payload.data || {};
           pathEl.textContent = d.path || '';
           if (d.has_frontmatter && d.frontmatter) {
             const fm = document.createElement('details'); fm.className = 'md-frontmatter';
-            const sum = document.createElement('summary'); sum.textContent = 'frontmatter(折叠)'; fm.appendChild(sum);
+            const sum = document.createElement('summary'); sum.textContent = i18n.t('md.drawer.frontmatter'); fm.appendChild(sum);
             const pre = document.createElement('pre'); pre.textContent = d.frontmatter; fm.appendChild(pre);
             body.appendChild(fm);
           }
@@ -1677,7 +1694,7 @@
         })
         .catch(() => {
           body.replaceChildren();
-          const err = document.createElement('div'); err.className = 'md-drawer-error'; err.textContent = '网络错误';
+          const err = document.createElement('div'); err.className = 'md-drawer-error'; err.textContent = i18n.t('md.drawer.network_error');
           body.appendChild(err);
         });
     }
@@ -1743,9 +1760,9 @@
         viewSrc.type = 'button';
         viewSrc.className = 'tc-view-source';
         viewSrc.appendChild(tcIcon({ paths: ['M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z', 'M14 2v4a2 2 0 0 0 2 2h4', 'M16 13H8', 'M16 17H8', 'M10 9H8'] }));
-        viewSrc.appendChild(document.createTextNode('查看原卡'));
-        viewSrc.title = '右侧抽屉渲染本卡 md 原文';
-        viewSrc.addEventListener('click', () => openMdDrawer({ task_id: u.root_task_id, label: u.title || u.root_task_id || 'md 原文' }));
+        viewSrc.appendChild(document.createTextNode(i18n.t('tc.view_card')));
+        viewSrc.title = i18n.t('tc.view_card_title');
+        viewSrc.addEventListener('click', () => openMdDrawer({ task_id: u.root_task_id, label: u.title || u.root_task_id || i18n.t('md.drawer.title_fallback') }));
         head.appendChild(viewSrc);
         card.appendChild(head);
         const body = document.createElement('div');
@@ -1762,7 +1779,7 @@
         lbl.className = 'muted';
         lbl.textContent = i18n.t('detail.needs_owner.what_to_do') + ':';
         purpose.appendChild(lbl);
-        purpose.appendChild(document.createTextNode(' ' + (u.purpose || '(无目的摘要)')));
+        purpose.appendChild(document.createTextNode(' ' + (u.purpose || i18n.t('tc.purpose_fallback'))));
         body.appendChild(purpose);
         // Family members (chips: main / audit / fix / finalize).
         const members = u.members || [];
@@ -1812,7 +1829,7 @@
                 .replace(/FAIL/g, '<span class="chain-fail">FAIL</span>');
     }
     function memberKindLabel(kind) {
-      return ({ main: '主', audit: '审', fix: '修', finalize: '编' })[kind] || kind || '';
+      return ({ main: i18n.t('tc.member.main'), audit: i18n.t('tc.member.audit'), fix: i18n.t('tc.member.fix'), finalize: i18n.t('tc.member.finalize') })[kind] || kind || '';
     }
     
     // AIPOS-260 FIX-1: cross-task activity feed (动态流) — newest-first, with a
