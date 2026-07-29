@@ -38,6 +38,7 @@ map_version: 1
 portal:
   description: Fixture portal description
   collab_mode: 2-role
+  topology: 星型
   workers:
     - exec.fixture
     - audit.fixture
@@ -138,6 +139,45 @@ class ProjectMapContractTests(_BaseServer):
         self.assertEqual(dl[0]["date"], "2026-07-10")
         self.assertEqual(dl[0]["title"], "Third decision")
         self.assertEqual(dl[-1]["date"], "2026-07-07")
+
+    def test_portal_header_schema_five_keys(self) -> None:
+        """AIPOS-264 S4: /api/project-map portal carries the documented five keys
+        (description / collab_mode / topology / workers[] / advisor)."""
+        status, body = _get(f"{self.base}/api/project-map?workspace=0")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"], payload)
+        portal = payload["data"]["portal"]
+        for key in ("description", "collab_mode", "topology", "workers", "advisor"):
+            self.assertIn(key, portal, f"portal missing key {key}")
+        self.assertEqual(portal["description"], "Fixture portal description")
+        self.assertEqual(portal["collab_mode"], "2-role")
+        self.assertEqual(portal["topology"], "星型")
+        self.assertEqual(portal["workers"], ["exec.fixture", "audit.fixture"])
+        self.assertEqual(portal["advisor"], "advisor.fixture")
+
+    def test_workspace_route_serves_portal_header(self) -> None:
+        """AIPOS-264 S1/S3/S4: the real /workspace/0 route serves the portal-header
+        region (置顶, 里程碑地图之上), the renderPortalHeader hydrator, and the
+        worker→agent-档案 popup wiring (reuses showAgentPopup). Block order:
+        门户头(project-header 之后)→ 里程碑地图 → 验证台 → 任务中心."""
+        status, html = _get(f"{self.base}/workspace/0")
+        self.assertEqual(status, 200)
+        self.assertIn('id="portal-header-section"', html)
+        self.assertIn("renderPortalHeader", html)
+        # Worker chips reuse the 261/265 agent 档案 popup.
+        self.assertIn("showAgentPopup", html)
+        self.assertIn("parseWorker", html)
+        # Graceful-hide guard present (S2).
+        self.assertIn("section.hidden = true", html)
+        # Block order: portal-header sits between the workspace header and milestone map.
+        i_header = html.find('id="project-header"')
+        i_portal = html.find('id="portal-header-section"')
+        i_map = html.find('id="milestone-map-section"')
+        for i in (i_header, i_portal, i_map):
+            self.assertGreater(i, -1, "expected section missing")
+        self.assertLess(i_header, i_portal)
+        self.assertLess(i_portal, i_map)
 
     def test_workspace_route_serves_milestone_map_section(self) -> None:
         """S1/S4: the real /workspace/0 route serves the milestone-map region.
@@ -372,6 +412,51 @@ class VerifyBenchClosedLoopExcludedTests(_BaseServer):
         self.assertIn("TASK-CL", ids)
         # Not promoted to previewable either (it is done, not in flight).
         self.assertEqual(data["previewable"], [])
+
+
+class PortalSegmentAbsentTests(_BaseServer):
+    """AIPOS-264 S2: project-map.md present but WITHOUT a portal segment — the
+    portal region hides gracefully (portal.description empty; the static section
+    stays in the DOM, hidden by the renderPortalHeader guard)."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self.temp_dir.name)
+        for state in ("pending", "claimed", "completed", "blocked"):
+            (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+        (self.repo_root / "governance").mkdir(parents=True, exist_ok=True)
+        # project-map.md with milestones but NO portal segment.
+        (self.repo_root / "governance" / "project-map.md").write_text(
+            "---\nmap_version: 1\nupdated: 2026-07-28\n"
+            "milestones:\n  - id: m1\n    title: Only milestone\n    refs: []\n"
+            "current: here\n---\n# map\n",
+            encoding="utf-8",
+        )
+        self._start(self.repo_root)
+
+    def test_no_portal_segment_yields_empty_portal(self) -> None:
+        """S2: absent portal segment -> portal keys present but empty (hide signal)."""
+        status, body = _get(f"{self.base}/api/project-map?workspace=0")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"], payload)
+        portal = payload["data"]["portal"]
+        # All five keys present (schema-stable) but empty -> frontend hides.
+        self.assertEqual(portal["description"], "")
+        self.assertEqual(portal["collab_mode"], "")
+        self.assertEqual(portal["topology"], "")
+        self.assertEqual(portal["workers"], [])
+        self.assertEqual(portal["advisor"], "")
+
+    def test_route_serves_portal_hide_guard(self) -> None:
+        """S2: the portal-header section is baked into the page (hidden by JS at
+        runtime when portal.description is empty); the hide guard is present."""
+        status, html = _get(f"{self.base}/workspace/0")
+        self.assertEqual(status, 200)
+        self.assertIn('id="portal-header-section"', html)
+        self.assertIn("renderPortalHeader", html)
+        # The renderPortalHeader hide guard (no description -> hide).
+        self.assertIn("section.hidden = true", html)
 
 
 if __name__ == "__main__":

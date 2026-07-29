@@ -452,6 +452,29 @@
     .map-legend i.l-cur { background: var(--accent-bright); transform: rotate(45deg); border-radius: 2px; }
     .map-empty { color: var(--text-secondary); font-style: italic; padding: 6px 0; }
 
+    /* AIPOS-264: 项目门户头 (项目描述 + 协作面板:模式/拓扑/牛马/顾问). */
+    .portal-header-section { border-left-color: var(--accent-bright); }
+    .portal-hero { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .portal-name { margin: 0; font-size: 20px; font-weight: 700; color: var(--text-body); overflow-wrap: anywhere; }
+    .portal-updated { font-size: 11.5px; color: var(--text-secondary); font-family: ui-monospace, monospace; }
+    .portal-desc { margin: 8px 0 12px; font-size: 14px; line-height: 1.6; color: var(--text-body); overflow-wrap: anywhere; }
+    .portal-collab { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 12.5px; }
+    .portal-collab .pc-group { display: inline-flex; align-items: center; gap: 6px; }
+    .portal-collab .pc-k { font-size: 10px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .03em; }
+    .portal-collab .pc-mode { padding: 2px 9px; border-radius: 10px; font-weight: 600; background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe; }
+    .portal-collab .pc-topo { display: inline-flex; align-items: center; gap: 6px; color: var(--text-body); }
+    .portal-collab .pc-topo svg { width: 16px; height: 16px; color: var(--accent); flex: 0 0 auto; }
+    .portal-collab .pc-workers { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+    .worker-chip { display: inline-flex; align-items: baseline; gap: 5px; padding: 2px 9px; border-radius: 8px; font-size: 11.5px; background: var(--surface); border: 1px solid var(--border-default); cursor: pointer; font-family: inherit; }
+    .worker-chip:hover { border-color: var(--accent); }
+    .worker-chip .wc-role { font-size: 10px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .03em; }
+    .worker-chip .wc-inst { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--text-body); }
+    .worker-chip .wc-harness { font-size: 10.5px; color: var(--text-secondary); }
+    .portal-collab .pc-advisor { display: inline-flex; align-items: baseline; gap: 6px; color: var(--text-body); }
+    .portal-collab .pc-advisor .adv-role { font-size: 10px; font-weight: 700; color: #92400e; text-transform: uppercase; letter-spacing: .03em; }
+    .portal-collab .pc-advisor .adv-inst { font-family: ui-monospace, monospace; font-size: 11.5px; }
+    .portal-collab .pc-advisor .adv-desc { font-size: 11px; color: var(--text-secondary); }
+
     /* milestone node detail popup (reuses the agent-popup shell) */
     .ms-popup { max-width: 460px; }
     .ms-popup h4 { margin: 0 0 6px; font-size: 15px; overflow-wrap: anywhere; }
@@ -629,6 +652,18 @@
       <div class="loading">加载中...</div>
     </div>
 
+    <!-- AIPOS-264: 项目门户头 — 置顶(里程碑地图之上)。项目名 + 1-2 句描述 +
+         协作面板(模式/拓扑/牛马阵容/顾问)。静态骨架烘入,JS 从 /api/project-map
+         的 portal 段水合;无 portal 段优雅隐藏(DOM-only)。 -->
+    <section id="portal-header-section" class="detail-section portal-header-section" hidden>
+      <div class="portal-hero">
+        <h2 class="portal-name" id="portal-name">—</h2>
+        <span class="portal-updated" id="portal-updated" hidden></span>
+      </div>
+      <p class="portal-desc" id="portal-desc"></p>
+      <div class="portal-collab" id="portal-collab"></div>
+    </section>
+
     <!-- AIPOS-262B: 里程碑地图 — 置顶独立区域,任务中心之上。静态标题烘入,JS 从
          /api/project-map?workspace=N 水合;无 project-map.md 时整区优雅隐藏(DOM-only)。 -->
     <section id="milestone-map-section" class="detail-section milestone-map-section" data-owner-truth="milestone-map" hidden>
@@ -733,6 +768,9 @@
         headerHost.replaceChildren();
         headerHost.appendChild(createProjectHeader(workspace));
 
+        // AIPOS-264: 项目门户头 (置顶,里程碑地图之上;无 portal 段优雅隐藏)。
+        renderPortalHeader(mapData, truthData, workspace);
+
         // AIPOS-262B: milestone map (置顶独立区域;无文件时优雅隐藏)。
         renderMilestoneMap(mapData);
 
@@ -754,6 +792,83 @@
       }
     }
     
+    // ===== AIPOS-264: 项目门户头 (项目描述 + 协作面板;无 portal 段优雅隐藏) =====
+    // Renders the portal segment of /api/project-map at the very top (above the
+    // milestone map). Worker chips reuse the 261/265 agent 档案 popup
+    // (showAgentPopup); the per-instance profile is sourced from the owner-truth
+    // activity feed (latest known 档案, already deduped by the backend).
+    function renderPortalHeader(mapData, truthData, workspace) {
+      const section = document.getElementById('portal-header-section');
+      const nameEl = document.getElementById('portal-name');
+      const updatedEl = document.getElementById('portal-updated');
+      const descEl = document.getElementById('portal-desc');
+      const collabEl = document.getElementById('portal-collab');
+      const d = (mapData && mapData.ok !== false && mapData.data) ? mapData.data : null;
+      const portal = (d && d.portal) ? d.portal : null;
+      // S2: graceful hide — no portal segment or no description (the required element).
+      if (!portal || !portal.description) { section.hidden = true; return; }
+      section.hidden = false;
+      nameEl.textContent = (workspace && workspace.label) ? workspace.label : '项目';
+      if (d && d.updated) { updatedEl.textContent = '更新 ' + d.updated; updatedEl.hidden = false; }
+      else { updatedEl.hidden = true; }
+      descEl.textContent = portal.description;
+      collabEl.replaceChildren();
+      // 协作模式
+      if (portal.collab_mode) {
+        const mode = el('span', 'pc-mode'); mode.textContent = portal.collab_mode;
+        collabEl.appendChild(pcGroup('模式', mode));
+      }
+      // 拓扑 + 极简小图标
+      if (portal.topology) {
+        const topo = el('span', 'pc-topo');
+        topo.appendChild(topologyIcon(portal.topology));
+        const tl = el('span'); tl.textContent = portal.topology;
+        topo.appendChild(tl);
+        collabEl.appendChild(pcGroup('拓扑', topo));
+      }
+      // 牛马阵容(点击复用 agent 档案弹层)
+      const workers = Array.isArray(portal.workers) ? portal.workers : [];
+      if (workers.length > 0) {
+        const profileIndex = buildAgentProfileIndex(truthData);
+        const wrap = el('span', 'pc-workers');
+        workers.forEach(raw => {
+          const w = parseWorker(raw);
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = 'worker-chip';
+          chip.title = '查看 agent 档案';
+          chip.setAttribute('aria-haspopup', 'dialog');
+          if (w.role) { const r = el('span', 'wc-role'); r.textContent = w.role; chip.appendChild(r); }
+          const inst = el('span', 'wc-inst'); inst.textContent = w.instance; chip.appendChild(inst);
+          if (w.harness) { const h = el('span', 'wc-harness'); h.textContent = w.harness; chip.appendChild(h); }
+          chip.addEventListener('click', () => {
+            const info = profileIndex[w.instance];
+            showAgentPopup({
+              role: (info && info.role) || w.role || '牛马',
+              instance: w.instance,
+              profile: info ? info.profile : null,
+              round: null,
+            });
+          });
+          wrap.appendChild(chip);
+        });
+        collabEl.appendChild(pcGroup('牛马', wrap));
+      }
+      // 顾问信息
+      if (portal.advisor) {
+        const adv = parseWorker(portal.advisor);
+        const box = el('span', 'pc-advisor');
+        const role = el('span', 'adv-role'); role.textContent = adv.role || '顾问';
+        box.appendChild(role);
+        const ai = el('span', 'adv-inst'); ai.textContent = adv.instance; box.appendChild(ai);
+        if (adv.harness || adv.desc) {
+          const dd = el('span', 'adv-desc');
+          dd.textContent = [adv.harness, adv.desc].filter(Boolean).join(' · '); box.appendChild(dd);
+        }
+        collabEl.appendChild(pcGroup('顾问', box));
+      }
+    }
+
     // ===== AIPOS-262B: 里程碑地图 (横向图表 + 点节点弹层) =====
     // Renders the four-segment milestone road from /api/project-map. Hides the
     // whole section (hidden attr) when the file is absent or empty. DOM-only.
@@ -873,6 +988,64 @@
     function truncate(text, n) {
       const s = String(text || '');
       return s.length > n ? s.slice(0, n).trimEnd() + '…' : s;
+    }
+
+    // ===== AIPOS-264: 门户头辅助 (worker 串解析 / per-instance 档案索引 / 拓扑图标) =====
+    // Parses "instance(role,harness,desc...)" — the worker/advisor string shape in
+    // project-map.md. Falls back to the bare instance when no parenthetical tail.
+    function parseWorker(raw) {
+      const s = String(raw || '').trim();
+      const m = s.match(/^([^(]+)\((.*)\)\s*$/);
+      if (!m) return { instance: s, role: '', harness: '', desc: '' };
+      const parts = m[2].split(',').map(p => p.trim()).filter(Boolean);
+      return { instance: m[1].trim(), role: parts[0] || '', harness: parts[1] || '', desc: parts.slice(2).join(', ') };
+    }
+
+    // Per-instance latest-known 档案 from the owner-truth activity feed (the backend
+    // already keeps the latest profile per instance, so the first hit is canonical).
+    function buildAgentProfileIndex(truthData) {
+      const idx = {};
+      const feed = (truthData && truthData.data && Array.isArray(truthData.data.activity_feed)) ? truthData.data.activity_feed : [];
+      feed.forEach(ev => {
+        if (ev && ev.agent_info) {
+          const inst = ev.agent_info.instance || ev.actor;
+          if (inst && !idx[inst]) idx[inst] = ev.agent_info;
+        }
+      });
+      return idx;
+    }
+
+    // Minimal topology glyph (星型=hub-spoke / 串型=linear / else=generic graph).
+    function topologyIcon(topology) {
+      const t = String(topology || '');
+      let inner;
+      if (t.includes('星')) {
+        inner = '<circle cx="12" cy="12" r="3" fill="currentColor"/>' +
+          '<circle cx="12" cy="3.5" r="1.9" fill="currentColor"/><circle cx="20.5" cy="12" r="1.9" fill="currentColor"/>' +
+          '<circle cx="12" cy="20.5" r="1.9" fill="currentColor"/><circle cx="3.5" cy="12" r="1.9" fill="currentColor"/>' +
+          '<line x1="12" y1="12" x2="12" y2="5.4" stroke="currentColor" stroke-width="1.1"/>' +
+          '<line x1="12" y1="12" x2="18.6" y2="12" stroke="currentColor" stroke-width="1.1"/>' +
+          '<line x1="12" y1="12" x2="12" y2="18.6" stroke="currentColor" stroke-width="1.1"/>' +
+          '<line x1="12" y1="12" x2="5.4" y2="12" stroke="currentColor" stroke-width="1.1"/>';
+      } else if (t.includes('串') || t.includes('线') || t.includes('链')) {
+        inner = '<line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="1.3"/>' +
+          '<circle cx="5" cy="12" r="1.9" fill="currentColor"/><circle cx="12" cy="12" r="1.9" fill="currentColor"/><circle cx="19" cy="12" r="1.9" fill="currentColor"/>';
+      } else {
+        inner = '<circle cx="7" cy="7" r="1.9" fill="currentColor"/><circle cx="17" cy="7" r="1.9" fill="currentColor"/><circle cx="12" cy="17" r="1.9" fill="currentColor"/>' +
+          '<line x1="7" y1="7" x2="17" y2="7" stroke="currentColor" stroke-width="1.1"/>' +
+          '<line x1="7" y1="7" x2="12" y2="17" stroke="currentColor" stroke-width="1.1"/>' +
+          '<line x1="17" y1="7" x2="12" y2="17" stroke="currentColor" stroke-width="1.1"/>';
+      }
+      const holder = document.createElement('span');
+      holder.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + inner + '</svg>';
+      return holder.firstElementChild;
+    }
+
+    function pcGroup(label, node) {
+      const g = el('span', 'pc-group');
+      const k = el('span', 'pc-k'); k.textContent = label;
+      g.appendChild(k); g.appendChild(node);
+      return g;
     }
 
     // Milestone node detail popup (title + desc + refs; current adds direction_log).
