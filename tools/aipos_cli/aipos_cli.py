@@ -338,6 +338,116 @@ def _run_board_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_board_open(args: argparse.Namespace) -> int:
+    """AIPOS-271 ``board open``:读 connection.json(文件权即身份)铸 OTC → 开/打看板登录链接。
+    
+    F-271-1: 支持免 --workspace-root(单工作区自动发现:按当前目录或环境变量)。
+    """
+    import webbrowser
+
+    from tools.aipos_cli.board_login import (
+        build_login_url,
+        load_role_token,
+        mint_otc,
+        resolve_board_url,
+        token_fingerprint,
+    )
+
+    connection_json = getattr(args, "connection_json", None)
+    role = getattr(args, "role", None)
+    try:
+        token, role_used = load_role_token(connection_json, role=role)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"Error: 读取 connection.json 失败 —— {exc}", file=sys.stderr)
+        print("提示:用 --connection-json 指定路径,或 --role 指定角色。", file=sys.stderr)
+        return 1
+    
+    # F-271-1: 支持工作区自动发现(优先显式参数,否则尝试当前目录)
+    workspace_root = getattr(args, "workspace_root", None)
+    if not workspace_root:
+        try:
+            workspace_root = _resolve_workspace_for_command(args)
+        except Exception:
+            workspace_root = None  # 降级到 connection.json
+    
+    base_url = resolve_board_url(
+        connection_json,
+        url=getattr(args, "url", None),
+        host=getattr(args, "host", None),
+        port=getattr(args, "port", None),
+        workspace_root=workspace_root,
+    )
+    print(f"Board server: {base_url}")
+    print(f"身份(角色): {role_used}  token 指纹: {token_fingerprint(token)}")
+    try:
+        result = mint_otc(base_url, token)
+    except OSError as exc:
+        print(f"Error: 无法连接 board server({base_url})—— {exc}", file=sys.stderr)
+        print("提示:先在另一终端 `lybra board` 或 `lybra serve start` 启动 server。", file=sys.stderr)
+        return 1
+    if not result.ok:
+        print(f"Error: 铸 OTC 失败 —— {result.error}", file=sys.stderr)
+        return 1
+    login_url = build_login_url(base_url, result.login_url)
+    print(f"已铸一次性登录票(TTL {result.expires_in}s)。")
+    if getattr(args, "no_browser", False):
+        print(login_url)
+        return 0
+    print(f"打开浏览器:{login_url}")
+    try:
+        webbrowser.open(login_url)
+    except Exception as exc:  # 无头环境/webbrowser 不可用 → 退回打印 URL。
+        print(f"(未能自动打开浏览器:{exc};请手动复制上方 URL)", file=sys.stderr)
+    return 0
+
+
+def _run_board_approve(args: argparse.Namespace) -> int:
+    """AIPOS-271 ``board approve <码>``:gate 机读 connection.json 确认身份 → 批准跨机设备码。
+    
+    F-271-1: 支持免 --workspace-root(单工作区自动发现:按当前目录或环境变量)。
+    """
+    from tools.aipos_cli.board_login import (
+        approve_device,
+        load_role_token,
+        resolve_board_url,
+        token_fingerprint,
+    )
+
+    connection_json = getattr(args, "connection_json", None)
+    role = getattr(args, "role", None)
+    try:
+        token, role_used = load_role_token(connection_json, role=role)
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"Error: 读取 connection.json 失败 —— {exc}", file=sys.stderr)
+        return 1
+    
+    # F-271-1: 支持工作区自动发现(优先显式参数,否则尝试当前目录)
+    workspace_root = getattr(args, "workspace_root", None)
+    if not workspace_root:
+        try:
+            workspace_root = _resolve_workspace_for_command(args)
+        except Exception:
+            workspace_root = None  # 降级到 connection.json
+    
+    base_url = resolve_board_url(
+        connection_json,
+        url=getattr(args, "url", None),
+        host=getattr(args, "host", None),
+        port=getattr(args, "port", None),
+        workspace_root=workspace_root,
+    )
+    code = str(getattr(args, "code", "") or "")
+    print(f"Board server: {base_url}")
+    print(f"身份(角色): {role_used}  token 指纹: {token_fingerprint(token)}")
+    try:
+        ok, message = approve_device(base_url, token, code)
+    except OSError as exc:
+        print(f"Error: 无法连接 board server({base_url})—— {exc}", file=sys.stderr)
+        return 1
+    print(message)
+    return 0 if ok else 1
+
+
 def _run_mcp_command(args: argparse.Namespace) -> int:
     from tools.mcp_server.http_sse import DEFAULT_KEEPALIVE_SECONDS, config_from_env, run_http_server
 
@@ -760,6 +870,29 @@ def build_parser() -> argparse.ArgumentParser:
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     board_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
     board_parser.add_argument("--port", type=int, help="Bind port; defaults to 7117")
+    # AIPOS-271: board 子命令 —— start(旧版默认)/open(本机无感)/approve(跨机设备码)。
+    # ``lybra board``(无子命令)仍启动 server(向后兼容,零回归)。
+    board_sub = board_parser.add_subparsers(dest="board_command")
+    _board_start_parser = board_sub.add_parser("start", help="Start the local Lybra Board server (default)")
+    _board_start_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    _board_start_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
+    _board_start_parser.add_argument("--port", type=int, help="Bind port; defaults to 7117")
+    board_open_parser = board_sub.add_parser("open", help="AIPOS-271: open the Board in the browser with a one-time ticket (no token pasting)")
+    board_open_parser.add_argument("--workspace-root", help="Workspace root for auto-discovery; defaults to current directory or env")
+    board_open_parser.add_argument("--connection-json", help="Override the connection.json path (default ~/.lybra/local/connection.json)")
+    board_open_parser.add_argument("--role", help="Role token to read from connection.json; default prefers owner then first available")
+    board_open_parser.add_argument("--url", help="Board server base URL; overrides connection.json board.url")
+    board_open_parser.add_argument("--host", help="Board server host; overrides connection.json")
+    board_open_parser.add_argument("--port", type=int, help="Board server port; overrides connection.json")
+    board_open_parser.add_argument("--no-browser", action="store_true", help="Print the login URL instead of opening a browser")
+    board_approve_parser = board_sub.add_parser("approve", help="AIPOS-271: approve a cross-machine device code (run on the gate machine)")
+    board_approve_parser.add_argument("code", help="6-digit device code shown in the remote browser")
+    board_approve_parser.add_argument("--workspace-root", help="Workspace root for auto-discovery; defaults to current directory or env")
+    board_approve_parser.add_argument("--connection-json", help="Override the connection.json path (default ~/.lybra/local/connection.json)")
+    board_approve_parser.add_argument("--role", help="Role token to read from connection.json; default prefers owner then first available")
+    board_approve_parser.add_argument("--url", help="Board server base URL; overrides connection.json board.url")
+    board_approve_parser.add_argument("--host", help="Board server host; overrides connection.json")
+    board_approve_parser.add_argument("--port", type=int, help="Board server port; overrides connection.json")
 
     # AIPOS-205: TUI client over an Owner-started gate. The Textual dependency lives only
     # in tools/lybra_tui (the tui extra); this CLI stays stdlib/zero-dep and lazy-imports it.
@@ -1132,8 +1265,14 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "board":
+        # AIPOS-271:子命令 start(默认)/open/approve;无子命令 → start(零回归)。
+        board_cmd = getattr(args, "board_command", None)
         try:
-            return _run_board_command(args)
+            if board_cmd == "open":
+                return _run_board_open(args)
+            if board_cmd == "approve":
+                return _run_board_approve(args)
+            return _run_board_command(args)  # None | "start"
         except (OSError, ValueError, FileNotFoundError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1

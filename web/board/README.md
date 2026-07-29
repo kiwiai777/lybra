@@ -34,6 +34,29 @@ Open:
 
 - `http://127.0.0.1:7117/`
 
+## Authentication & Login
+
+The Board is gated behind a session cookie (AIPOS-270). Three ways to log in;
+all share the same identity root — **file-system access to
+`.lybra/local/connection.json`** is the workspace owner. Raw tokens never enter
+cookies or logs.
+
+1. **Token paste** (fallback, AIPOS-270): paste any role token on `/login`; the
+   server checks the fingerprint against `connection.json` and mints a session.
+2. **`lybra board open`** (local seamless, AIPOS-271): the CLI reads
+   `connection.json` (file access = identity), mints a single-use one-time ticket
+   (OTC, 60s TTL), and opens `/login?otc=…` in the browser — the browser only
+   ever receives a session cookie, hands never touch the token. Reusing or
+   refreshing an old OTC link is rejected (single-use + expiry).
+3. **Device code** (cross-machine, AIPOS-271): on the remote browser pick
+   "设备码登录", read the 6-digit code, then on the gate machine run
+   `lybra board approve <code>` (the CLI confirms identity via `connection.json`).
+   The remote page polls and auto-logs-in once approved (code TTL 300s, single-use).
+
+Every successful login (any of the three) appends one line to
+`.lybra/auth-log.jsonl` with timestamp / method / role / token_ref / source IP
+only — **never** the raw token, OTC, or device-code value.
+
 ## Owner-Private Remote Dogfood
 
 AIPOS-84 documents private remote dogfood without changing the default bind address.

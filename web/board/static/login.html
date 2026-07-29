@@ -23,8 +23,33 @@
       <p id="login-error" class="login-error" role="alert" hidden></p>
     </form>
 
+    <!-- AIPOS-271:本机 OTC 直登由 `lybra board open` 在浏览器自动完成;此处保留 token 手贴
+         与跨机设备码两条人工入口。OTC 链接过期时显示提示。 -->
+    <div class="login-divider"><span>或</span></div>
+
+    <button type="button" class="login-submit login-submit--alt" id="device-toggle">设备码登录(跨机)</button>
+
+    <section id="device-panel" class="device-panel" hidden>
+      <!-- F-271-2: 三路径人话说明(并列展示) -->
+      <p class="device-hint-title">跨机登录设备码：</p>
+      <div class="device-code" id="device-code">······</div>
+      <div class="device-paths">
+        <p class="device-path"><strong>① 顾问代批</strong>：把这个码发给你的顾问 agent（顾问有文件权可代批）</p>
+        <p class="device-path"><strong>② 短命令</strong>：在 gate 机运行：<code>lybra board approve &lt;码&gt;</code></p>
+        <p class="device-path"><strong>③ token 手贴</strong>：返回上方表单，直接输入 token 登录</p>
+      </div>
+      <p class="device-status" id="device-status">生成中…</p>
+      <p class="device-countdown" id="device-countdown" hidden></p>
+      <!-- F-271-3: 记住设备 30 天 -->
+      <label class="device-remember">
+        <input type="checkbox" id="device-remember" checked>
+        <span>记住此设备（30 天）</span>
+      </label>
+      <button type="button" class="device-cancel" id="device-cancel">取消</button>
+    </section>
+
     <p class="login-hint">
-      会话 cookie 仅本进程内存态,重启需重新登录;token 明文不落日志、不进 cookie。
+      会话 cookie 仅本进程内存态,重启需重新登录;token / OTC / 设备码明文不落日志、不进 cookie。
     </p>
   </main>
 
@@ -38,6 +63,11 @@
       function showError(msg) {
         err.hidden = false;
         err.textContent = msg || "登录失败。";
+      }
+
+      // AIPOS-271:OTC 链接失效/过期/已用 → server 302 到 /login?otc_err=1,此处提示。
+      if (location.search.indexOf("otc_err=1") !== -1) {
+        showError("登录链接已失效或过期(一次性票单次即焚,60s 内有效)。请重新生成,或用 token / 设备码登录。");
       }
 
       form.addEventListener("submit", function (e) {
@@ -67,6 +97,74 @@
           btn.textContent = "登录";
           showError("网络错误,请重试。");
         });
+      });
+
+      // ---- AIPOS-271 跨机设备码流 ----
+      var toggle = document.getElementById("device-toggle");
+      var panel = document.getElementById("device-panel");
+      var codeEl = document.getElementById("device-code");
+      var statusEl = document.getElementById("device-status");
+      var countdownEl = document.getElementById("device-countdown");
+      var cancelBtn = document.getElementById("device-cancel");
+      var rememberCheckbox = document.getElementById("device-remember");
+      var pollTimer = null, countTimer = null, expiresAt = 0;
+
+      function stopPolling() {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        if (countTimer) { clearInterval(countTimer); countTimer = null; }
+      }
+
+      function resetPanel() {
+        stopPolling();
+        panel.hidden = true;
+        toggle.disabled = false;
+        codeEl.textContent = "······";
+        statusEl.textContent = "生成中…";
+        countdownEl.hidden = true;
+      }
+
+      cancelBtn.addEventListener("click", resetPanel);
+
+      toggle.addEventListener("click", function () {
+        toggle.disabled = true;
+        panel.hidden = false;
+        statusEl.textContent = "生成中…";
+        fetch("/api/auth/device/code", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          credentials: "same-origin", body: "{}"
+        }).then(function (r) { return r.json(); }).then(function (j) {
+          if (!j || !j.ok) { showError("无法生成设备码,请重试。"); resetPanel(); return; }
+          codeEl.textContent = j.code;
+          expiresAt = Date.now() + (j.expires_in || 300) * 1000;
+          countdownEl.hidden = false;
+          statusEl.textContent = "等待批准…";
+          countTimer = setInterval(function () {
+            var left = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+            countdownEl.textContent = "有效期剩余 " + left + "s";
+            if (left <= 0) { stopPolling(); statusEl.textContent = "设备码已过期,请重新生成。"; }
+          }, 1000);
+          pollTimer = setInterval(pollDevice, 1500);
+          function pollDevice() {
+            // F-271-3: 带上 remember 标志
+            var remember = rememberCheckbox.checked;
+            fetch("/api/auth/device/poll", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              credentials: "same-origin", body: JSON.stringify({ code: j.code, remember: remember })
+            }).then(function (r) { return r.json(); }).then(function (p) {
+              if (p && p.status === "approved") {
+                stopPolling();
+                statusEl.textContent = "已批准,正在进站…";
+                window.location.href = p.redirect || "/";
+              } else if (p && p.status === "expired") {
+                stopPolling();
+                statusEl.textContent = "设备码已过期,请重新生成。";
+              } else if (p && p.status === "unknown") {
+                stopPolling();
+                statusEl.textContent = "设备码已失效,请重新生成。";
+              }
+            }).catch(function () { /* 网络抖动:下一轮再试 */ });
+          }
+        }).catch(function () { showError("网络错误,无法生成设备码。"); resetPanel(); });
       });
     })();
   </script>

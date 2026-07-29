@@ -72,6 +72,14 @@ from tools.aipos_cli.workspace_config import (
     has_workspace_queue,
 )
 from web.board.md_source import get_markdown_source
+from web.board.auth_otc import (
+    DEVICE_CODE_TTL_SECONDS,
+    OTC_TTL_SECONDS,
+    DeviceCodeStore,
+    OTCStore,
+    append_auth_log,
+    resolve_auth_log_path,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 BOARD_CONFIG_PATH = Path(__file__).resolve().parent / ".board_config.json"
@@ -2381,9 +2389,21 @@ def dispatch_api_request(
 # ---------------------------------------------------------------------------
 
 SESSION_COOKIE_NAME = "board_session"
+REMEMBER_COOKIE_NAME = "board_remember"  # F-271-6: 长效 remember token (HMAC 签名)
 
-# 无需登录即可访问的路径(登录页 / 鉴权 API 本身)。
-_AUTH_PUBLIC_PATHS = frozenset({"/login", "/api/auth/login", "/api/auth/logout", "/api/auth/status"})
+# 无需登录即可访问的路径(登录页 / 鉴权 API 本身 + AIPOS-271 一次性凭据通道)。
+# AIPOS-271:OTC mint / 设备码三通道均为公开 —— 这些端点本身用递来的 token 指纹鉴权
+# (复用 verify_login_token),不依赖既有会话;原始 token / OTC 值 / 设备码值不落日志。
+_AUTH_PUBLIC_PATHS = frozenset({
+    "/login",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/status",
+    "/api/auth/otc/mint",
+    "/api/auth/device/code",
+    "/api/auth/device/poll",
+    "/api/auth/device/approve",
+})
 
 # 静态资源后缀(登录页与受保护页都能正常渲染所需):放行,不走鉴权。
 # 注意:.html 不在此列——HTML 页面本身是受保护的应用页(由各自路由在登录后提供)。
@@ -2545,22 +2565,103 @@ def parse_session_cookie(cookie_header: str | None) -> str | None:
     return value or None
 
 
-def build_session_cookie_header(session_id: str) -> str:
-    """构造签发会话的 Set-Cookie 值:HttpOnly;Path=/;SameSite=Lax。
+def parse_remember_cookie(cookie_header: str | None) -> str | None:
+    """从 Cookie 头解析 board_remember 完整 token 值(需 URL 解码)。返回 token 字符串或 None。"""
+    import urllib.parse
+    if not cookie_header:
+        return None
+    try:
+        cookie = SimpleCookie()
+        cookie.load(cookie_header)
+    except Exception:
+        return None
+    morsel = cookie.get(REMEMBER_COOKIE_NAME)
+    if morsel is None:
+        return None
+    value = (morsel.value or "").strip()
+    if not value:
+        return None
+    # URL 解码
+    try:
+        return urllib.parse.unquote(value)
+    except Exception:
+        return None
+
+
+def build_session_cookie_header(
+    session_id: str,
+    remember: bool = False,
+    remember_secret: str = "",
+    session_info: dict[str, Any] | None = None,
+) -> list[str]:
+    """构造签发会话的 Set-Cookie 值列表(可能包含两枚 cookie):HttpOnly;Path=/;SameSite=Lax。
+    
+    FIX-4: 返回列表以支持多个独立 Set-Cookie header(HTTP 规范要求每枚 cookie 独立 header)。
+    F-271-6: remember=True 时另发第二枚 HttpOnly cookie = HMAC 签名 remember token (30 天),
+    载荷含 session_id:role:scopes:token_ref:signature。会话 cookie 无效(serve 重启)而
+    remember token 验签有效 → 自动重建会话。
 
     不设 Secure:board 常以明文 HTTP 跑在 loopback / 0.0.0.0(收账注记),Secure 会使 cookie 在
-    http:// 下被丢弃;Owner 可在前面套 TLS 终端时再开 Secure。"""
+    http:// 下被丢弃;Owner 可在前面套 TLS 终端时再开 Secure。
+    
+    Args:
+        session_id: 会话 ID
+        remember: 是否启用长效 cookie
+        remember_secret: remember token 签名密钥
+        session_info: 会话信息 {"role": str, "scopes": list[str], "token_ref": str}
+    
+    Returns:
+        Set-Cookie header 值的列表(1 或 2 个元素)
+    """
+    from web.board.auth_otc import REMEMBER_DAYS, sign_remember_token
+    import urllib.parse
+    
+    cookies = []
+    
+    # 会话 cookie (短期或长期，取决于 remember)
     cookie = SimpleCookie()
     cookie[SESSION_COOKIE_NAME] = session_id
     morsel = cookie[SESSION_COOKIE_NAME]
     morsel["httponly"] = True
     morsel["path"] = "/"
     morsel["samesite"] = "Lax"
-    return cookie.output(header="").strip()
+    if remember:
+        morsel["max-age"] = str(REMEMBER_DAYS * 24 * 3600)
+    cookies.append(cookie.output(header="").strip())
+    
+    # F-271-6: remember=True 时另发 remember token (携带完整会话信息 + HMAC 签名)
+    # URL 编码以避免冒号等特殊字符导致 SimpleCookie 解析失败
+    if remember and remember_secret and session_info:
+        role = session_info.get("role", "")
+        scopes = session_info.get("scopes", [])
+        token_ref = session_info.get("token_ref", "")
+        remember_token = sign_remember_token(remember_secret, session_id, role, scopes, token_ref)
+        # URL 编码 remember token
+        encoded_token = urllib.parse.quote(remember_token, safe="")
+        remember_cookie = SimpleCookie()
+        remember_cookie[REMEMBER_COOKIE_NAME] = encoded_token
+        remember_morsel = remember_cookie[REMEMBER_COOKIE_NAME]
+        remember_morsel["httponly"] = True
+        remember_morsel["path"] = "/"
+        remember_morsel["samesite"] = "Lax"
+        remember_morsel["max-age"] = str(REMEMBER_DAYS * 24 * 3600)
+        cookies.append(remember_cookie.output(header="").strip())
+    
+    return cookies
 
 
-def build_clear_cookie_header() -> str:
-    """构造清除会话的 Set-Cookie 值(Max-Age=0 + 过期)。"""
+def build_clear_cookie_header() -> list[str]:
+    """构造清除会话的 Set-Cookie 值列表(Max-Age=0 + 过期)。
+    
+    FIX-4: 返回列表以支持多个独立 Set-Cookie header。
+    F-271-6: 清除两枚 cookie (session + remember)。
+    
+    Returns:
+        Set-Cookie header 值的列表(2 个元素)
+    """
+    cookies = []
+    
+    # 清除会话 cookie
     cookie = SimpleCookie()
     cookie[SESSION_COOKIE_NAME] = ""
     morsel = cookie[SESSION_COOKIE_NAME]
@@ -2569,7 +2670,20 @@ def build_clear_cookie_header() -> str:
     morsel["samesite"] = "Lax"
     morsel["max-age"] = "0"
     morsel["expires"] = "Thu, 01 Jan 1970 00:00:00 GMT"
-    return cookie.output(header="").strip()
+    cookies.append(cookie.output(header="").strip())
+    
+    # F-271-6: 同时清除 remember cookie
+    remember_cookie = SimpleCookie()
+    remember_cookie[REMEMBER_COOKIE_NAME] = ""
+    remember_morsel = remember_cookie[REMEMBER_COOKIE_NAME]
+    remember_morsel["httponly"] = True
+    remember_morsel["path"] = "/"
+    remember_morsel["samesite"] = "Lax"
+    remember_morsel["max-age"] = "0"
+    remember_morsel["expires"] = "Thu, 01 Jan 1970 00:00:00 GMT"
+    cookies.append(remember_cookie.output(header="").strip())
+    
+    return cookies
 
 
 def is_public_path(clean_path: str) -> bool:
@@ -2602,16 +2716,54 @@ def is_authorized(
     method: str,
     cookie_header: str | None,
     session_store: SessionStore,
+    remember_secret: str = "",
 ) -> bool:
     """鉴权闸门:True=放行,False=需 302 到登录页。
 
-    顺序:公开路径 → 静态资源(GET) → 会话 cookie 校验。cookie 篡改/未知 → False(拒)。"""
+    F-271-6: 会话 cookie 无效(serve 重启)而 remember token 验签有效 → 自动重建会话(无感)。
+    顺序:公开路径 → 静态资源(GET) → 会话 cookie 校验 → remember token 自动续登。
+    cookie 篡改/未知 → False(拒)。"""
     if is_public_path(clean_path):
         return True
     if method.upper() == "GET" and is_static_asset_path(clean_path):
         return True
+    
     session_id = parse_session_cookie(cookie_header)
-    return session_store.get(session_id) is not None
+    existing_session = session_store.get(session_id)
+    if existing_session is not None:
+        return True
+    
+    # F-271-6: 会话失效，尝试 remember token 自动续登
+    if not remember_secret:
+        return False
+    
+    remember_token = parse_remember_cookie(cookie_header)
+    if remember_token is None:
+        return False
+    
+    from web.board.auth_otc import verify_remember_token
+    session_info = verify_remember_token(remember_secret, remember_token)
+    if session_info is None:
+        return False
+    
+    # 验签通过，从 remember token 中恢复会话信息并重建会话
+    # 注意：这里重建的 session_id 应该与 remember token 中携带的一致
+    remembered_session_id = session_info["session_id"]
+    role = session_info["role"]
+    scopes = session_info["scopes"]
+    token_ref = session_info.get("token_ref", "")
+    
+    # 重建会话（使用原 session_id）
+    with session_store._lock:
+        session_store._sessions[remembered_session_id] = {
+            "role": role,
+            "is_owner": role == "owner",
+            "scopes": scopes,
+            "token_ref": token_ref,
+            "created_at": _utc_now(),
+        }
+    
+    return True
 
 
 def make_handler(
@@ -2619,15 +2771,29 @@ def make_handler(
     *,
     session_store: SessionStore | None = None,
     connection_paths: list[Path] | None = None,
+    otc_store: OTCStore | None = None,
+    device_store: DeviceCodeStore | None = None,
+    auth_log_path: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     routes = _api_routes(repo_root)
     post_routes = _api_post_routes(repo_root)
     sessions = session_store if session_store is not None else SessionStore()
     conn_paths: list[Path] | None = connection_paths
+    otc = otc_store if otc_store is not None else OTCStore()
+    device = device_store if device_store is not None else DeviceCodeStore()
+    # auth-log 落点:显式注入优先(测试),否则按 repo_root 解析(repo_root 为 None 则不落盘)。
+    log_path = auth_log_path if auth_log_path is not None else resolve_auth_log_path(repo_root)
+    # F-271-3: 长效 cookie secret(持久化到 .lybra/remember_secret)
+    from web.board.auth_otc import load_or_create_remember_secret
+    remember_secret = load_or_create_remember_secret(repo_root)
 
     class BoardHandler(BaseHTTPRequestHandler):
         _sessions = sessions
         _conn_paths = conn_paths
+        _otc = otc
+        _device = device
+        _auth_log_path = log_path
+        _remember_secret = remember_secret
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             body = _json_bytes(payload)
@@ -2655,11 +2821,19 @@ def make_handler(
             )
 
         # ---- AIPOS-270 鉴权辅助 ----
-        def _redirect(self, status: int, location: str, *, set_cookie: str | None = None) -> None:
+        def _redirect(self, status: int, location: str, *, set_cookie: str | list[str] | None = None) -> None:
+            """发送重定向响应。
+            
+            FIX-4: set_cookie 支持列表,每个元素发送独立的 Set-Cookie header。
+            """
             self.send_response(status)
             self.send_header("Location", location)
             if set_cookie:
-                self.send_header("Set-Cookie", set_cookie)
+                if isinstance(set_cookie, list):
+                    for cookie in set_cookie:
+                        self.send_header("Set-Cookie", cookie)
+                else:
+                    self.send_header("Set-Cookie", set_cookie)
             self.send_header("Content-Length", "0")
             self.end_headers()
 
@@ -2670,22 +2844,66 @@ def make_handler(
         def _auth_gate(self, method: str) -> bool:
             """鉴权闸门:放行返回 True;未通过则发 302 并返回 False。"""
             clean = self.path.split("?", 1)[0]
-            if is_authorized(clean, method, self.headers.get("Cookie"), self._sessions):
+            if is_authorized(clean, method, self.headers.get("Cookie"), self._sessions, self._remember_secret):
                 return True
             self._redirect_to_login()
             return False
 
         def _send_json_cookie(
-            self, status: HTTPStatus, payload: dict[str, Any], *, set_cookie: str | None = None
+            self, status: HTTPStatus, payload: dict[str, Any], *, set_cookie: str | list[str] | None = None
         ) -> None:
+            """发送 JSON 响应并设置 cookie。
+            
+            FIX-4: set_cookie 支持列表,每个元素发送独立的 Set-Cookie header。
+            """
             body = _json_bytes(payload)
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             if set_cookie:
-                self.send_header("Set-Cookie", set_cookie)
+                if isinstance(set_cookie, list):
+                    for cookie in set_cookie:
+                        self.send_header("Set-Cookie", cookie)
+                else:
+                    self.send_header("Set-Cookie", set_cookie)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _source_ip(self) -> str:
+            """请求来源 IP(仅用于 auth-log;不用于鉴权决策)。"""
+            try:
+                return str(self.client_address[0]) if self.client_address else "unknown"
+            except (IndexError, TypeError):
+                return "unknown"
+
+        def _read_json_body(self) -> dict[str, Any]:
+            """读 JSON POST body(畸形/空 → {})。供 AIPOS-271 鉴权通道复用。"""
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(length) if length > 0 else b""
+            if not raw:
+                return {}
+            try:
+                body = json.loads(raw.decode("utf-8") or "{}")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return {}
+            return body if isinstance(body, dict) else {}
+
+        def _issue_session(self, info: dict[str, Any], *, method: str) -> str:
+            """建会话 + 写登录留痕。method ∈ {token, otc, device_code}。
+
+            红线:原始 token / OTC 值 / 设备码值均不写日志;auth-log 只记
+            时间/方式/角色/token_ref/来源 IP。留痕失败不影响登录(尽力留痕)。"""
+            session_id = self._sessions.create(
+                role=info["role"], scopes=info["scopes"], token_ref=info.get("token_ref", "")
+            )
+            append_auth_log(
+                self._auth_log_path,
+                method=method,
+                role=info["role"],
+                token_ref=info.get("token_ref", ""),
+                source_ip=self._source_ip(),
+            )
+            return session_id
 
         def _handle_auth_status(self) -> None:
             sid = parse_session_cookie(self.headers.get("Cookie"))
@@ -2721,9 +2939,7 @@ def make_handler(
                     "message": "Token 无效或未匹配到任何角色。",
                 })
                 return
-            session_id = self._sessions.create(
-                role=info["role"], scopes=info["scopes"], token_ref=info.get("token_ref", "")
-            )
+            session_id = self._issue_session(info, method="token")
             self._send_json_cookie(
                 HTTPStatus.OK,
                 {
@@ -2743,6 +2959,84 @@ def make_handler(
                 int(HTTPStatus.SEE_OTHER), "/login", set_cookie=build_clear_cookie_header()
             )
 
+        # ---- AIPOS-271 一次性凭据通道(本机 OTC + 跨机设备码)----
+        # 红线:原始 token / OTC 值 / 设备码值一律不落日志。auth-log 只在换会话 cookie
+        # 成功时追加一条(method/role/token_ref/IP),由 _issue_session 统一处理。
+
+        def _handle_otc_mint(self) -> None:
+            """POST /api/auth/otc/mint:CLI 携 token(指纹校验)→ 铸 OTC + 返回换票链接。
+
+            浏览器随后 GET ``/login?otc=…`` redeem 换 cookie。原始 token 不进日志/响应。"""
+            token = self._read_json_body().get("token", "")
+            info = verify_login_token(token, self._conn_paths)
+            if info is None:
+                self._send_json(HTTPStatus.UNAUTHORIZED, {
+                    "ok": False, "error": "INVALID_TOKEN",
+                    "message": "Token 无效或未匹配到任何角色。",
+                })
+                return
+            otc = self._otc.mint(
+                role=info["role"], scopes=info["scopes"], token_ref=info.get("token_ref", "")
+            )
+            self._send_json(HTTPStatus.OK, {
+                "ok": True, "otc": otc, "expires_in": OTC_TTL_SECONDS,
+                "login_url": f"/login?otc={otc}",
+            })
+
+        def _handle_device_code(self) -> None:
+            """POST /api/auth/device/code:跨机浏览器申请一个 pending 6 位设备码。"""
+            code = self._device.issue()
+            self._send_json(HTTPStatus.OK, {
+                "ok": True, "code": code, "expires_in": DEVICE_CODE_TTL_SECONDS,
+            })
+
+        def _handle_device_poll(self) -> None:
+            """POST /api/auth/device/poll:浏览器轮询设备码状态。
+
+            approved 且未过期 → 单次取出、换会话 cookie(method=device_code 留痕)。
+            F-271-6: 支持 remember 参数(长效 cookie + remember token)。"""
+            body = self._read_json_body()
+            code = str(body.get("code", "") or "")
+            remember = bool(body.get("remember", False))
+            res = self._device.poll(code)
+            status = res.get("status")
+            if status == "approved":
+                session_id = self._issue_session(res, method="device_code")
+                session_info = {
+                    "role": res.get("role", ""),
+                    "scopes": res.get("scopes", []),
+                    "token_ref": res.get("token_ref", ""),
+                }
+                self._send_json_cookie(
+                    HTTPStatus.OK,
+                    {"ok": True, "status": "approved", "role": res.get("role"), "redirect": "/"},
+                    set_cookie=build_session_cookie_header(
+                        session_id,
+                        remember=remember,
+                        remember_secret=self._remember_secret,
+                        session_info=session_info,
+                    ),
+                )
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True, "status": status})
+
+        def _handle_device_approve(self) -> None:
+            """POST /api/auth/device/approve:gate 机 CLI 携 token 确认一个 pending 设备码。"""
+            body = self._read_json_body()
+            code = str(body.get("code", "") or "")
+            token = str(body.get("token", "") or "")
+            info = verify_login_token(token, self._conn_paths)
+            if info is None:
+                self._send_json(HTTPStatus.UNAUTHORIZED, {
+                    "ok": False, "error": "INVALID_TOKEN",
+                    "message": "Token 无效或未匹配到任何角色。",
+                })
+                return
+            approved = self._device.approve(
+                code, role=info["role"], scopes=info["scopes"], token_ref=info.get("token_ref", "")
+            )
+            self._send_json(HTTPStatus.OK, {"ok": approved, "status": "approved" if approved else "not_approved"})
+
         def do_GET(self) -> None:  # noqa: N802
             # AIPOS-270 鉴权闸门:未登录 302 到 /login(静态资源与公开路径放行)。
             if not self._auth_gate("GET"):
@@ -2751,6 +3045,22 @@ def make_handler(
 
             # 公开路由:登录页 / 会话状态(闸门已放行,这里分发)。
             if path == "/login":
+                # AIPOS-271:本机无感 —— ``/login?otc=…`` 换会话 cookie 后直跳看板。
+                qs = parse_qs(urlparse(self.path).query)
+                otc_vals = qs.get("otc", [])
+                if otc_vals:
+                    info = self._otc.redeem(otc_vals[0])
+                    if info is not None:
+                        session_id = self._issue_session(info, method="otc")
+                        # OTC 登录不支持 remember（只有设备码登录支持）
+                        self._redirect(
+                            int(HTTPStatus.FOUND), "/",
+                            set_cookie=build_session_cookie_header(session_id),
+                        )
+                        return
+                    # OTC 无效/过期/已用:回登录页并带错误标志供前端提示(不复用单次票)。
+                    self._redirect(int(HTTPStatus.FOUND), "/login?otc_err=1")
+                    return
                 self._send_file(STATIC_DIR / "login.html")
                 return
             if path == "/api/auth/status":
@@ -2794,6 +3104,19 @@ def make_handler(
                 return
             if path == "/api/auth/logout":
                 self._handle_logout()
+                return
+            # AIPOS-271 一次性凭据通道(均为公开路径,闸门已放行)。
+            if path == "/api/auth/otc/mint":
+                self._handle_otc_mint()
+                return
+            if path == "/api/auth/device/code":
+                self._handle_device_code()
+                return
+            if path == "/api/auth/device/poll":
+                self._handle_device_poll()
+                return
+            if path == "/api/auth/device/approve":
+                self._handle_device_approve()
                 return
             if path in post_routes:
                 length = int(self.headers.get("Content-Length", "0") or "0")

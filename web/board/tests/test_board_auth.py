@@ -337,7 +337,11 @@ class CookieHelperTests(unittest.TestCase):
         self.assertIsNone(parse_session_cookie("board_session="))
 
     def test_build_session_cookie_has_security_flags(self) -> None:
-        header = build_session_cookie_header("sid123")
+        # FIX-4: build_session_cookie_header 现在返回列表
+        headers = build_session_cookie_header("sid123")
+        self.assertIsInstance(headers, list, "should return list")
+        self.assertEqual(len(headers), 1, "remember=false should return 1 cookie")
+        header = headers[0]
         self.assertIn("board_session=sid123", header)
         self.assertIn("HttpOnly", header)
         self.assertIn("Path=/", header)
@@ -345,9 +349,13 @@ class CookieHelperTests(unittest.TestCase):
         self.assertNotIn("Secure", header, "no Secure (board may run on plain http)")
 
     def test_build_clear_cookie_expires(self) -> None:
-        header = build_clear_cookie_header()
-        self.assertIn("Max-Age=0", header)
-        self.assertIn("1970", header)
+        # FIX-4: build_clear_cookie_header 现在返回列表
+        headers = build_clear_cookie_header()
+        self.assertIsInstance(headers, list, "should return list")
+        self.assertEqual(len(headers), 2, "should clear both session and remember cookies")
+        combined = " ".join(headers)
+        self.assertIn("Max-Age=0", combined)
+        self.assertIn("1970", combined)
 
 
 class AuthGatePredicateTests(unittest.TestCase):

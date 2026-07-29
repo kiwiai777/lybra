@@ -17,6 +17,10 @@ node_modules/
 playwright-report/
 test-results/
 .lybra/local/
+# AIPOS-271: login trail (runtime; may carry source IPs — not a truth-repo artifact)
+.lybra/auth-log.jsonl
+# F-271-6: remember secret (server-side signing key for long-lived cookies)
+.lybra/remember_secret
 
 # disposable npm pack build artifacts (re-packed per release)
 *.tgz
