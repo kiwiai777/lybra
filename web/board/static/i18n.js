@@ -28,6 +28,7 @@ const translations = {
     'queue.claimed': '进行中',
     'queue.blocked': '受阻',
     'queue.completed': '已完成',
+    'queue.closed': '已收编',
     
     // AIPOS-260: record-derived true stages (Owner truth summary)
     'stage.published': '已发布',
@@ -226,6 +227,7 @@ const translations = {
     'queue.claimed': 'In Progress',
     'queue.blocked': 'Blocked',
     'queue.completed': 'Completed',
+    'queue.closed': 'Closed',
     
     // AIPOS-260: record-derived true stages (Owner truth summary)
     'stage.published': 'Published',

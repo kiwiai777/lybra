@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-from tools.aipos_cli.records import expected_claim_log_path, expected_return_record_path, expected_session_record_path
+from tools.aipos_cli.records import expected_claim_log_path, expected_closure_record_path, expected_return_record_path, expected_session_record_path
 
 RECORDS_ROOT = Path("5_tasks/records")
 CLAIMS_ROOT = RECORDS_ROOT / "claims"
@@ -14,6 +14,7 @@ SESSIONS_ROOT = RECORDS_ROOT / "sessions"
 RETURNS_ROOT = RECORDS_ROOT / "returns"
 AUDIT_DISPATCHES_ROOT = RECORDS_ROOT / "audit_dispatches"
 AUDIT_VERDICTS_ROOT = RECORDS_ROOT / "audit_verdicts"
+CLOSURES_ROOT = RECORDS_ROOT / "closures"
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -69,6 +70,8 @@ def ensure_safe_record_path(repo_root: Path, path: Path, record_type: str, task_
         root = (repo_root / AUDIT_DISPATCHES_ROOT / task_id).resolve()
     elif record_type == "audit_verdict_record":
         root = (repo_root / AUDIT_VERDICTS_ROOT / task_id).resolve()
+    elif record_type == "closure_record":
+        root = (repo_root / CLOSURES_ROOT / task_id).resolve()
     else:
         raise ValueError(f"Unsupported record_type: {record_type}")
     resolved = path.resolve()
@@ -925,3 +928,61 @@ def audit_dispatch_record_path(repo_root: Path, task_id: str, dispatch_id: str) 
 def audit_verdict_record_path(repo_root: Path, task_id: str, verdict_id: str) -> Path:
     path = repo_root / AUDIT_VERDICTS_ROOT / task_id / f"{verdict_id}.md"
     return ensure_safe_record_path(repo_root, path, "audit_verdict_record", task_id)
+
+
+def closure_record_path(repo_root: Path, task_id: str, closure_id: str) -> Path:
+    path = repo_root / CLOSURES_ROOT / task_id / f"{closure_id}.md"
+    return ensure_safe_record_path(repo_root, path, "closure_record", task_id)
+
+
+def build_closure_record_markdown(
+    *,
+    task_id: str,
+    task_path: str,
+    actor: str,
+    closure_id: str,
+    closed_at: str,
+    closure_evidence: dict[str, Any],
+    return_record_ref: str | None = None,
+    related_audit_task_refs: list[str] | None = None,
+) -> str:
+    """Build a closure record markdown document (AIPOS-283).
+
+    The closure record is the append-only proof that a task was formally closed
+    (moved from claimed/ to completed/) through the gate's close verb. It records
+    who closed it, when, and what evidence justified the closure.
+    """
+    metadata = {
+        "record_type": "closure_record",
+        "event_type": "mcp_queue_close",
+        "closure_id": closure_id,
+        "task_id": task_id,
+        "task_path": task_path,
+        "surface": "mcp",
+        "operation": "queue_close",
+        "actor": actor,
+        "closed_at": closed_at,
+        "closure_evidence_type": closure_evidence.get("type", "unknown"),
+        "closure_evidence_ref": closure_evidence.get("ref", ""),
+        "return_record_ref": return_record_ref or "",
+    }
+    if related_audit_task_refs:
+        metadata["related_audit_task_refs"] = related_audit_task_refs
+    body = (
+        f"# Closure Record: {closure_id}\n\n"
+        f"Task `{task_id}` was closed (claimed → completed) by `{actor}` at `{closed_at}`.\n\n"
+        f"## Evidence\n\n"
+        f"- Type: {closure_evidence.get('type', 'unknown')}\n"
+        f"- Ref: {closure_evidence.get('ref', '')}\n\n"
+        f"## Return Record\n\n"
+        f"- Return record ref: {return_record_ref or 'N/A'}\n"
+    )
+    if related_audit_task_refs:
+        body += f"\n## Related Audit Tasks\n\n"
+        for ref in related_audit_task_refs:
+            body += f"- {ref}\n"
+    return render_markdown(metadata, body, [
+        "record_type", "event_type", "closure_id", "task_id", "task_path",
+        "surface", "operation", "actor", "closed_at", "closure_evidence_type",
+        "closure_evidence_ref", "return_record_ref", "related_audit_task_refs",
+    ])

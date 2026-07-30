@@ -42,7 +42,10 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
     {
         "role": "executor",
         "token_ref": "svc-executor",
-        "scopes": ["queue_claim", "queue_return"],
+        # AIPOS-283: executor also holds queue_close (the gate close verb — finalize
+        # settlement step). This is NOT owner-gated: it requires closure_evidence and
+        # a prior return record, but not owner_confirm.
+        "scopes": ["queue_claim", "queue_return", "queue_close"],
     },
     {
         # AIPOS-197: Owner-only confirm authority. The Owner uses this token,

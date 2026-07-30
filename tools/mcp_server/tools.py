@@ -13,6 +13,7 @@ from tools.aipos_cli.board_adapter import (
     audit_dispatch_task,
     audit_verdict_task,
     claim_task,
+    close_task,
     create_draft,
     execute_dry_run,
     get_context_pack_preview,
@@ -55,6 +56,11 @@ QUEUE_CLAIM_SCOPE = "queue_claim"
 QUEUE_RETURN_SCOPE = "queue_return"
 AUDIT_DISPATCH_SCOPE = "audit_dispatch"
 AUDIT_VERDICT_SCOPE = "audit_verdict"
+# AIPOS-283: queue_close scope — executor/advisor(planner) can call.
+# This is NOT owner-gated: the close verb is the finalize settlement step
+# that the executor calls after work is returned. It requires closure_evidence
+# and a prior return record, but NOT owner_confirm.
+QUEUE_CLOSE_SCOPE = "queue_close"
 # AIPOS-197 gate-hardening v0: an Owner-only scope required to CONFIRM consequential
 # truth mutations. dry-run keeps its operation scope; confirm additionally requires
 # this scope, which the executor token does not hold — so a confined agent cannot
@@ -367,6 +373,10 @@ def _audit_dispatch_scope_allowed() -> bool:
 
 def _audit_verdict_scope_allowed() -> bool:
     return _capability_has_scope(AUDIT_VERDICT_SCOPE)
+
+
+def _queue_close_scope_allowed() -> bool:
+    return _capability_has_scope(QUEUE_CLOSE_SCOPE)
 
 
 def _map_controlled_execute_error(response: dict[str, Any], *, dry_run_tool: str = "lybra_intake_submit_dry_run") -> dict[str, Any]:
@@ -2015,6 +2025,107 @@ def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict
     return _tool_result(response, is_error=False)
 
 
+def _queue_close_error(error_code: str, message: str, suggested_next_action: str) -> dict[str, Any]:
+    return _teaching_error(
+        error_code,
+        message,
+        suggested_next_action,
+        doc_ref="AIPOS-283 gate close verb + closure evidence protocol",
+    )
+
+
+def lybra_queue_close_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-283: dry-run preview for closing a claimed task (claimed/ -> completed/).
+
+    Requires: queue_close scope (executor/advisor), task_id, closure_evidence.
+    Validates: task in claimed/, has return record, evidence present.
+    Does NOT require owner_confirm (this is the executor's finalize settlement step).
+    """
+    if not _queue_close_scope_allowed():
+        return _scope_denied_result_for(QUEUE_CLOSE_SCOPE, "queue close tools")
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    if not task_id:
+        return _queue_close_error(
+            "TASK_ID_REQUIRED",
+            "lybra_queue_close_dry_run requires task_id.",
+            "Pass the task_id of the claimed task to close.",
+        )
+    closure_evidence = args.get("closure_evidence")
+    if not closure_evidence or not isinstance(closure_evidence, dict):
+        return _queue_close_error(
+            "MISSING_CLOSURE_EVIDENCE",
+            "closure_evidence is required (object with at least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref).",
+            "Provide closure evidence before closing. See AIPOS-283.",
+        )
+    actor = str(args.get("actor") or "").strip()
+    if not actor:
+        return _queue_close_error(
+            "ACTOR_REQUIRED",
+            "actor is required.",
+            "Pass the actor performing the close.",
+        )
+    response = close_task(
+        task_id=task_id,
+        actor=actor,
+        closure_evidence=closure_evidence,
+        dry_run=True,
+        repo_root=_repo_root(),
+    )
+    if response.get("verdict") == "BLOCK":
+        return _tool_result(response, is_error=True)
+    # Add MCP decoration
+    response["surface"] = "mcp"
+    response["operation"] = "queue_close"
+    response["dry_run"] = True
+    return _tool_result(response, is_error=not bool(response.get("ok", False)))
+
+
+def lybra_queue_close_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-283: confirm close — execute the close (move card + write closure record).
+
+    Does NOT require owner_confirm (executor/advisor callable per S2).
+    Re-validates all inputs before executing.
+    """
+    if not _queue_close_scope_allowed():
+        return _scope_denied_result_for(QUEUE_CLOSE_SCOPE, "queue close tools")
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    if not task_id:
+        return _queue_close_error(
+            "TASK_ID_REQUIRED",
+            "lybra_queue_close_confirm requires task_id.",
+            "Pass the task_id of the claimed task to close.",
+        )
+    closure_evidence = args.get("closure_evidence")
+    if not closure_evidence or not isinstance(closure_evidence, dict):
+        return _queue_close_error(
+            "MISSING_CLOSURE_EVIDENCE",
+            "closure_evidence is required.",
+            "Provide closure evidence before closing.",
+        )
+    actor = str(args.get("actor") or "").strip()
+    if not actor:
+        return _queue_close_error(
+            "ACTOR_REQUIRED",
+            "actor is required.",
+            "Pass the actor performing the close.",
+        )
+    response = close_task(
+        task_id=task_id,
+        actor=actor,
+        closure_evidence=closure_evidence,
+        dry_run=False,
+        repo_root=_repo_root(),
+    )
+    if response.get("verdict") == "BLOCK":
+        return _tool_result(response, is_error=True)
+    response["surface"] = "mcp"
+    response["operation"] = "queue_close"
+    response["dry_run"] = False
+    return _tool_result(response, is_error=not bool(response.get("ok", False)))
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
@@ -2037,6 +2148,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_audit_dispatch_confirm": lybra_audit_dispatch_confirm,
     "lybra_audit_verdict_dry_run": lybra_audit_verdict_dry_run,
     "lybra_audit_verdict_confirm": lybra_audit_verdict_confirm,
+    "lybra_queue_close_dry_run": lybra_queue_close_dry_run,
+    "lybra_queue_close_confirm": lybra_queue_close_confirm,
 }
 
 
@@ -2513,6 +2626,64 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "lybra_queue_close_dry_run",
+        "description": (
+            "When to use: preview closing a claimed task (claimed/ -> completed/) with closure evidence. "
+            "AIPOS-283 gate close verb: the finalize settlement step that moves a returned task out of the claimed queue. "
+            "Prerequisites: queue_close scope (executor/advisor); task_id of a claimed task; closure_evidence with at least one of: "
+            "finalize_commit_hash, finalize_return_ref, owner_verification_ref. Task must have a return record. "
+            "Return structure: dry-run preview with closure_id, closure_record_path, related_audit_task_refs. "
+            "Does NOT require owner_confirm (executor callable)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "actor": {"type": "string"},
+                "closure_evidence": {
+                    "type": "object",
+                    "description": "At least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref.",
+                    "properties": {
+                        "finalize_commit_hash": {"type": "string"},
+                        "finalize_return_ref": {"type": "string"},
+                        "owner_verification_ref": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["task_id", "actor", "closure_evidence"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_queue_close_confirm",
+        "description": (
+            "When to use: confirm closing a claimed task. Moves card claimed/ -> completed/ and writes closure record (append-only). "
+            "Auto-closes audit-derived <ID>R cards if still claimed. "
+            "Prerequisites: queue_close scope; same task_id, actor, closure_evidence as dry-run. "
+            "Does NOT require owner_confirm (executor callable per AIPOS-283 S2)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "actor": {"type": "string"},
+                "closure_evidence": {
+                    "type": "object",
+                    "description": "At least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref.",
+                    "properties": {
+                        "finalize_commit_hash": {"type": "string"},
+                        "finalize_return_ref": {"type": "string"},
+                        "owner_verification_ref": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["task_id", "actor", "closure_evidence"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -2548,6 +2719,8 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_audit_dispatch"))
     if _audit_verdict_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_audit_verdict"))
+    if _queue_close_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_close"))
     return descriptors
 
 

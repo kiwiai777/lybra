@@ -775,7 +775,6 @@ def _build_closure_units(
     closure_meta: dict[str, dict[str, Any]],
     row_by_id: dict[str, dict[str, Any]],
     records_report: dict[str, Any],
-    stage_rank: dict[str, int],
 ) -> list[dict[str, Any]]:
     """Group task rows into closure units (主卡 + R/F*/FZ 全家). One unit per root.
 
@@ -824,6 +823,14 @@ def _build_closure_units(
                 merged.append(ev)
         merged.sort(key=_sort_key_timestamp)
 
+        # AIPOS-283 FIX-1: compute unit's latest activity for ordering.
+        unit_latest_activity = ""
+        if merged:
+            timestamps = [str(ev.get("timestamp") or "") for ev in merged]
+            timestamps = [ts for ts in timestamps if ts]
+            if timestamps:
+                unit_latest_activity = max(timestamps)
+
         overall_stage = main_row.get("true_stage") if main_row else None
         overall_tl = top_level_state(overall_stage)
         overall_label = STAGE_LABELS_FULL.get(overall_stage, overall_stage) if overall_stage else "未知"
@@ -845,11 +852,20 @@ def _build_closure_units(
             "final_verdict": stage_chain["final_verdict"],
             "members": members,
             "timeline": merged,
+            # AIPOS-283 FIX-1: unit's latest activity timestamp for sorting (internal).
+            "_latest_activity": unit_latest_activity,
         }
         units.append(unit)
 
-    # Order units by overall true-stage rank, then root id (matches task list order).
-    units.sort(key=lambda u: (stage_rank.get(u.get("true_stage"), 99), str(u.get("root_task_id") or "")))
+    # AIPOS-283 FIX-1: order units by latest activity descending (newest first),
+    # then root_task_id descending when timestamps tie.
+    units.sort(
+        key=lambda u: (
+            str(u.get("_latest_activity") or ""),
+            str(u.get("root_task_id") or ""),
+        ),
+        reverse=True,
+    )
     return units
 
 
@@ -928,6 +944,15 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
                 verdict_value = value
                 break
 
+        # AIPOS-283 FIX-1: compute latest activity time for ordering.
+        # Latest activity = max timestamp across all timeline events (publish/claim/return/audit).
+        latest_activity = ""
+        if timeline_raw:
+            timestamps = [str(ev.get("timestamp") or "") for ev in timeline_raw]
+            timestamps = [ts for ts in timestamps if ts]  # filter empty
+            if timestamps:
+                latest_activity = max(timestamps)  # ISO timestamps: lexicographic max = latest
+
         title = task.get("title") or metadata.get("title")
         row = {
             "task_id": task_id,
@@ -942,6 +967,8 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
             "badge_label": badge_label_for(true_stage, tl_state, STAGE_LABELS_FULL.get(true_stage, true_stage)),
             "verdict": verdict_value,
             "timeline": timeline_raw,
+            # AIPOS-283 FIX-1: latest activity timestamp for sorting (internal field).
+            "_latest_activity": latest_activity,
         }
         task_rows.append(row)
         root = _derive_closure_root(task_id, metadata)
@@ -952,10 +979,16 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
             "task_mode": str(metadata.get("task_mode") or "").strip(),
         }
 
-    # Stable ordering: true-stage order, then task_id, so the board reads top-down.
-    stage_rank = {stage: idx for idx, stage in enumerate(TRUE_STAGE_ORDER)}
+    # AIPOS-283 FIX-1: Owner 网页打回 verify_AIPOS-283_20260730T163735 — "任务里不管是
+    # 已发布还是正在执行还是已闭环,都以最近一次的任务往下排序,现在是最下面才是最近的任务".
+    # Sort by latest activity time descending (newest first), then task_id descending
+    # when timestamps tie. ISO timestamps sort lexicographically; negate with reversed().
     task_rows.sort(
-        key=lambda r: (stage_rank.get(r["true_stage"], 99), str(r.get("task_id") or ""))
+        key=lambda r: (
+            str(r.get("_latest_activity") or ""),  # empty string sorts first (oldest/no activity)
+            str(r.get("task_id") or ""),
+        ),
+        reverse=True,  # descending: latest activity on top, then task_id Z→A
     )
     row_by_id = {str(r.get("task_id")): r for r in task_rows}
 
@@ -970,7 +1003,7 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
     # AIPOS-261: closure-unit grouping (主卡 + R/F*/FZ 全家收进一张卡). Face = one-line
     # stage chain; members carry per-card kind. Pure read-side grouping over the
     # already-loaded tasks + records; nothing is moved or rewritten.
-    closure_units = _build_closure_units(task_rows, closure_meta, row_by_id, records_report, stage_rank)
+    closure_units = _build_closure_units(task_rows, closure_meta, row_by_id, records_report)
 
     # Cross-task activity feed: every record, newest first.
     activity_feed: list[dict[str, Any]] = []

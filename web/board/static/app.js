@@ -824,7 +824,15 @@ function rowRecommendedAction(row) {
 }
 
 function taskLabel(task) {
-  return [task.task_id, task.effective_task_class || "simple", task.metadata?.title || task.title, task.path].filter(Boolean).join(" | ");
+  const parts = [task.task_id, task.effective_task_class || "simple", task.metadata?.title || task.title, task.path];
+  // AIPOS-283: show "已收编" (zh) / "Closed" (en) badge for completed tasks with closure records
+  const status = task.metadata?.status || task.status || "";
+  const queueState = task.queue_state || "";
+  const hasClosure = task.has_closure || (queueState === "completed" && status === "completed");
+  if (hasClosure && queueState === "completed") {
+    parts.push(`[${i18n("queue.closed")}]`);
+  }
+  return parts.filter(Boolean).join(" | ");
 }
 
 function renderTaskList(queueData) {

@@ -45,6 +45,7 @@ from tools.aipos_cli.record_writer import (
     append_mcp_return_session_event,
     audit_dispatch_record_path,
     audit_verdict_record_path,
+    build_closure_record_markdown,
     build_mcp_audit_dispatch_record_markdown,
     build_mcp_audit_verdict_record_markdown,
     build_mcp_claim_record_markdown,
@@ -52,12 +53,13 @@ from tools.aipos_cli.record_writer import (
     build_mcp_return_record_markdown,
     build_runtime_id,
     claim_record_paths,
+    closure_record_path,
     load_session_record,
     return_record_path,
     session_record_path,
 )
 from tools.aipos_cli.owner_truth_view import build_owner_truth_view
-from tools.aipos_cli.records import load_records
+from tools.aipos_cli.records import expected_closure_record_path, load_records
 from tools.aipos_cli.task_loader import (
     find_repo_context,
     find_repo_root,
@@ -434,6 +436,12 @@ def get_queue(repo_root: str | Path | None = None) -> dict[str, Any]:
         records = load_records(resolved_root)
         profiles = load_agent_profiles(resolved_root)
         report = validate_tasks(tasks, records=records, profiles=profiles)
+        # AIPOS-283: enrich tasks with has_closure flag for "\u5df2\u6536\u7f16" badge
+        task_closures = records.get("task_closures", {})
+        for task in report.get("tasks", []):
+            tid = task.get("task_id") or task.get("metadata", {}).get("task_id", "")
+            if tid and tid in task_closures:
+                task["has_closure"] = True
         return _response_from_validated_report(operation=operation, report=report)
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=False)
@@ -3851,3 +3859,249 @@ def reopen_task(
         )
     except Exception as exc:
         return _normalize_exception("queue_reopen", exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def close_task(
+    *,
+    task_id: str | None = None,
+    path: str | Path | None = None,
+    actor: str | None = None,
+    closure_evidence: dict[str, Any] | None = None,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """AIPOS-283: gate close verb — move a claimed task to completed/ with closure evidence.
+
+    Validates:
+    - Task is in claimed/ queue state
+    - Task has at least one return record
+    - closure_evidence is provided with at least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref
+
+    On confirm (dry_run=False):
+    - Moves card claimed/ → completed/
+    - Writes closure record to records/closures/<task_id>/ (append-only)
+    - Auto-closes audit-derived cards (<task_id>R) if they are still in claimed/
+    """
+    operation = "queue_close"
+    try:
+        actor_text = str(actor or "").strip()
+        if not actor_text:
+            raise ValueError("actor is required")
+        if not closure_evidence or not isinstance(closure_evidence, dict):
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="MISSING_CLOSURE_EVIDENCE",
+                message="closure_evidence is required with at least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref.",
+                actor=_actor_payload(actor_text),
+                data={"recommended_action": "Provide closure evidence before closing."},
+                safety_notice="AIPOS-283 queue_close requires closure evidence.",
+            )
+
+        # Validate at least one evidence ref is present and non-empty
+        evidence_type = None
+        evidence_ref = None
+        for key in ("finalize_commit_hash", "finalize_return_ref", "owner_verification_ref"):
+            val = str(closure_evidence.get(key) or "").strip()
+            if val:
+                evidence_type = key
+                evidence_ref = val
+                break
+        if not evidence_type:
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="MISSING_CLOSURE_EVIDENCE",
+                message="At least one of finalize_commit_hash, finalize_return_ref, or owner_verification_ref must be non-empty.",
+                actor=_actor_payload(actor_text),
+                data={"recommended_action": "Provide at least one closure evidence reference."},
+                safety_notice="AIPOS-283 queue_close requires at least one evidence reference.",
+            )
+
+        resolved_root = _resolve_repo_root(repo_root)
+
+        # Resolve the task
+        selected_task = _select_task(resolved_root, task_id=task_id, path=path)
+        resolved_task_id = str(selected_task.get("task_id") or "")
+        queue_state = selected_task.get("queue_state")
+
+        # Validate task is in claimed/
+        if queue_state != "claimed":
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="INVALID_QUEUE_STATE",
+                message=f"Task must be in claimed/ to close, found: {queue_state}.",
+                actor=_actor_payload(actor_text),
+                data={"task_id": resolved_task_id, "queue_state": queue_state},
+                safety_notice="AIPOS-283 queue_close only operates on claimed tasks.",
+            )
+
+        # Validate task has a return record
+        records = load_records(resolved_root)
+        task_returns = records.get("task_returns", {}).get(resolved_task_id, [])
+        if not task_returns:
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="MISSING_RETURN_RECORD",
+                message=f"Task {resolved_task_id} has no return record. Cannot close without a return.",
+                actor=_actor_payload(actor_text),
+                data={"task_id": resolved_task_id},
+                safety_notice="AIPOS-283 queue_close requires a prior return record.",
+            )
+
+        # Check if already closed (idempotency)
+        task_closures = records.get("task_closures", {}).get(resolved_task_id, [])
+        if task_closures:
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="ALREADY_CLOSED",
+                message=f"Task {resolved_task_id} already has a closure record.",
+                actor=_actor_payload(actor_text),
+                data={"task_id": resolved_task_id, "existing_closures": len(task_closures)},
+                safety_notice="AIPOS-283 queue_close is not repeatable; task already closed.",
+            )
+
+        # Build closure ID
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        closure_id = build_runtime_id("close", resolved_task_id, timestamp, actor_text)
+        return_record_ref = str(task_returns[0].get("path") or "") if task_returns else ""
+
+        # Find related audit-derived cards (<task_id>R pattern)
+        source_path = str(selected_task.get("path") or "")
+        related_audit_refs: list[str] = []
+        audit_task_id = resolved_task_id + "R"
+        try:
+            audit_matches = find_task_by_id(audit_task_id, resolved_root)
+            if audit_matches[1]:
+                for match in audit_matches[1]:
+                    if match.get("queue_state") == "claimed":
+                        related_audit_refs.append(audit_task_id)
+                        break
+        except (ValueError, FileNotFoundError, OSError):
+            pass
+
+        closure_evidence_bundle = {"type": evidence_type, "ref": evidence_ref}
+        closure_path = closure_record_path(resolved_root, resolved_task_id, closure_id)
+
+        # Build the complete mutation (claimed → completed)
+        report_link = evidence_ref
+        mutation_result = mutate_queue_task(
+            resolved_root,
+            "complete",
+            task_id=resolved_task_id,
+            actor=actor_text,
+            report_link=report_link,
+            dry_run=dry_run,
+            with_records=False,
+        )
+
+        # Build response
+        if dry_run:
+            return make_response(
+                ok=mutation_result.get("verdict") != "BLOCK",
+                operation=operation,
+                dry_run=True,
+                verdict=mutation_result.get("verdict", "PASS"),
+                data={
+                    "task_id": resolved_task_id,
+                    "source_path": source_path,
+                    "target_path": mutation_result.get("target_path"),
+                    "from_state": "claimed",
+                    "to_state": "completed",
+                    "closure_id": closure_id,
+                    "closure_record_path": str(closure_path.resolve().relative_to(resolved_root.resolve())),
+                    "closure_evidence": closure_evidence_bundle,
+                    "return_record_ref": return_record_ref,
+                    "related_audit_task_refs": related_audit_refs,
+                    "mutation_preview": mutation_result,
+                },
+                blocking_reasons=mutation_result.get("blocking_reasons", []),
+                warnings=mutation_result.get("warnings", []),
+                safety_notice="AIPOS-283 queue_close dry-run preview. No files written.",
+            )
+
+        # Confirm: execute the mutation
+        if mutation_result.get("verdict") == "BLOCK":
+            return make_response(
+                ok=False,
+                operation=operation,
+                dry_run=False,
+                verdict="BLOCK",
+                data={"task_id": resolved_task_id, "mutation_result": mutation_result},
+                blocking_reasons=mutation_result.get("blocking_reasons", []),
+                safety_notice="AIPOS-283 queue_close blocked by mutation validation.",
+            )
+
+        # Write closure record (append-only)
+        closure_markdown = build_closure_record_markdown(
+            task_id=resolved_task_id,
+            task_path=source_path,
+            actor=actor_text,
+            closure_id=closure_id,
+            closed_at=timestamp,
+            closure_evidence=closure_evidence_bundle,
+            return_record_ref=return_record_ref,
+            related_audit_task_refs=related_audit_refs or None,
+        )
+        closure_path_resolved = resolved_root / closure_path
+        closure_path_resolved.parent.mkdir(parents=True, exist_ok=True)
+        closure_path_resolved.write_text(closure_markdown, encoding="utf-8")
+
+        # Auto-close related audit-derived cards (direct move, bypassing actor-match
+        # validation since this is a system consequence of parent closure, not an
+        # actor-driven mutation).
+        auto_closed: list[str] = []
+        for audit_ref in related_audit_refs:
+            try:
+                audit_matches = find_task_by_id(audit_ref, resolved_root)
+                if not audit_matches[1]:
+                    continue
+                audit_task = audit_matches[1][0]
+                if audit_task.get("queue_state") != "claimed":
+                    continue
+                audit_source_path = resolved_root / str(audit_task["path"])
+                audit_target_path = resolved_root / "5_tasks" / "queue" / "completed" / audit_source_path.name
+                # Update frontmatter status to completed before moving
+                audit_text = audit_source_path.read_text(encoding="utf-8")
+                audit_metadata, audit_body, _ = parse_markdown_frontmatter(audit_text)
+                audit_metadata["status"] = "completed"
+                audit_metadata["auto_closed_with_parent"] = resolved_task_id
+                audit_metadata["auto_closed_via"] = closure_id
+                rendered = render_task_markdown(audit_metadata, audit_body)
+                audit_target_path.parent.mkdir(parents=True, exist_ok=True)
+                audit_target_path.write_text(rendered, encoding="utf-8")
+                audit_source_path.unlink()
+                auto_closed.append(audit_ref)
+            except (ValueError, FileNotFoundError, OSError, KeyError):
+                pass
+
+        return make_response(
+            ok=True,
+            operation=operation,
+            dry_run=False,
+            verdict=mutation_result.get("verdict", "PASS"),
+            data={
+                "task_id": resolved_task_id,
+                "source_path": source_path,
+                "target_path": mutation_result.get("target_path"),
+                "from_state": "claimed",
+                "to_state": "completed",
+                "closure_id": closure_id,
+                "closure_record_path": str(closure_path.resolve().relative_to(resolved_root.resolve())),
+                "closure_evidence": closure_evidence_bundle,
+                "return_record_ref": return_record_ref,
+                "related_audit_task_refs": related_audit_refs,
+                "auto_closed_audit_cards": auto_closed,
+                "mutation_result": {
+                    "moved": mutation_result.get("moved"),
+                    "wrote": mutation_result.get("wrote"),
+                },
+            },
+            warnings=mutation_result.get("warnings", []),
+            safety_notice="AIPOS-283 queue_close completed. Closure record written (append-only).",
+        )
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))

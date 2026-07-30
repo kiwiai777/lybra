@@ -35,6 +35,10 @@ def expected_owner_verification_record_path(repo_root: Path, task_id: str, filen
     return repo_root / "5_tasks" / "records" / "owner_verifications" / task_id / filename
 
 
+def expected_closure_record_path(repo_root: Path, task_id: str, closure_id: str) -> Path:
+    return repo_root / "5_tasks" / "records" / "closures" / task_id / f"{closure_id}.md"
+
+
 def _record_sort_key(record: dict[str, Any]) -> tuple[str, str]:
     metadata = record.get("metadata", {})
     timestamp = (
@@ -76,6 +80,7 @@ def _build_record(
         "return": "return_id",
         "audit_dispatch": "dispatch_id",
         "audit_verdict": "verdict_id",
+        "closure": "closure_id",
     }[record_type]
     task_id = metadata.get("task_id") or directory_task_id
     record_id = metadata.get(id_field) or path.stem
@@ -155,6 +160,17 @@ def _build_record(
                 "reviewed_return_record_ref": metadata.get("reviewed_return_record_ref"),
                 "dispatched_at": metadata.get("dispatched_at"),
                 # AIPOS-255 F-BOARD-2: expose actor for timeline rendering
+                "actor": metadata.get("actor"),
+            }
+        )
+    elif record_type == "closure":
+        record.update(
+            {
+                "closure_id": record_id,
+                "closed_at": metadata.get("closed_at"),
+                "closure_evidence_type": metadata.get("closure_evidence_type"),
+                "closure_evidence_ref": metadata.get("closure_evidence_ref"),
+                "return_record_ref": metadata.get("return_record_ref"),
                 "actor": metadata.get("actor"),
             }
         )
@@ -298,6 +314,7 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     audit_verdicts_root = records_root / "audit_verdicts"
     owner_decisions_root = records_root / "owner_decisions"
     owner_verifications_root = records_root / "owner_verifications"
+    closures_root = records_root / "closures"
     sessions = [
         _build_record(path, repo_root, "session", directory_task_id)
         for path, directory_task_id in _iter_record_files(sessions_root)
@@ -335,6 +352,10 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         _build_owner_verification_record(path, repo_root, directory_task_id)
         for path, directory_task_id in _iter_record_files(owner_verifications_root)
     ]
+    closures = [
+        _build_record(path, repo_root, "closure", directory_task_id)
+        for path, directory_task_id in _iter_record_files(closures_root)
+    ]
 
     warnings: list[str] = []
     parse_errors: list[str] = []
@@ -352,6 +373,8 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     task_audit_dispatches: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_audit_verdicts: dict[str, list[dict[str, Any]]] = defaultdict(list)
     task_owner_verifications: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    closure_index: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    task_closures: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     for record in sessions:
         if record.get("session_id"):
@@ -405,6 +428,13 @@ def load_records(repo_root: Path) -> dict[str, Any]:
             task_owner_verifications[str(record["task_id"])].append(record)
         parse_errors.extend([f"{record['path']}: {item}" for item in record.get("parse_errors", [])])
         warnings.extend([f"{record['path']}: {item}" for item in record.get("warnings", [])])
+    for record in closures:
+        if record.get("closure_id"):
+            closure_index[str(record["closure_id"])].append(record)
+        if record.get("task_id"):
+            task_closures[str(record["task_id"])].append(record)
+        parse_errors.extend([f"{record['path']}: {item}" for item in record.get("parse_errors", [])])
+        warnings.extend([f"{record['path']}: {item}" for item in record.get("warnings", [])])
 
     for record_id, items in session_index.items():
         if len(items) > 1:
@@ -427,6 +457,9 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     for record_id, items in owner_decision_index.items():
         if len(items) > 1:
             warnings.append(f"Duplicate decision_id found: {record_id}")
+    for record_id, items in closure_index.items():
+        if len(items) > 1:
+            warnings.append(f"Duplicate closure_id found: {record_id}")
 
     for items in task_sessions.values():
         items.sort(key=_record_sort_key, reverse=True)
@@ -442,6 +475,8 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         items.sort(key=_record_sort_key, reverse=True)
     for items in task_owner_verifications.values():
         items.sort(key=_record_sort_key, reverse=True)
+    for items in task_closures.values():
+        items.sort(key=_record_sort_key, reverse=True)
 
     summary = {
         "session_records": len(sessions),
@@ -452,6 +487,7 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         "audit_verdict_records": len(audit_verdicts),
         "owner_decision_records": len(owner_decisions),
         "owner_verification_records": len(owner_verifications),
+        "closure_records": len(closures),
         "tasks_with_session_records": len(task_sessions),
         "tasks_with_publish_records": len(task_publishes),
         "tasks_with_claim_logs": len(task_claims),
@@ -459,6 +495,7 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         "tasks_with_audit_dispatch_records": len(task_audit_dispatches),
         "tasks_with_audit_verdict_records": len(task_audit_verdicts),
         "tasks_with_owner_verification_records": len(task_owner_verifications),
+        "tasks_with_closure_records": len(task_closures),
         "parse_errors": len(parse_errors),
     }
     return {
@@ -474,6 +511,7 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         "audit_verdicts_root_exists": audit_verdicts_root.exists(),
         "owner_decisions_root_exists": owner_decisions_root.exists(),
         "owner_verifications_root_exists": owner_verifications_root.exists(),
+        "closures_root_exists": closures_root.exists(),
         "sessions": sorted(sessions, key=_record_sort_key, reverse=True),
         "publishes": sorted(publishes, key=_record_sort_key, reverse=True),
         "claims": sorted(claims, key=_record_sort_key, reverse=True),
@@ -482,6 +520,7 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         "audit_verdicts": sorted(audit_verdicts, key=_record_sort_key, reverse=True),
         "owner_decisions": sorted(owner_decisions, key=_record_sort_key, reverse=True),
         "owner_verifications": sorted(owner_verifications, key=_record_sort_key, reverse=True),
+        "closures": sorted(closures, key=_record_sort_key, reverse=True),
         "warnings": warnings,
         "parse_errors": parse_errors,
         "session_index": dict(session_index),
@@ -498,6 +537,8 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         "task_audit_dispatches": dict(task_audit_dispatches),
         "task_audit_verdicts": dict(task_audit_verdicts),
         "task_owner_verifications": dict(task_owner_verifications),
+        "closure_index": dict(closure_index),
+        "task_closures": dict(task_closures),
     }
 
 
@@ -510,6 +551,7 @@ def find_records_for_task(records: dict[str, Any], task_id: str) -> dict[str, li
         "audit_dispatches": list(records.get("task_audit_dispatches", {}).get(task_id, [])),
         "audit_verdicts": list(records.get("task_audit_verdicts", {}).get(task_id, [])),
         "owner_verifications": list(records.get("task_owner_verifications", {}).get(task_id, [])),
+        "closures": list(records.get("task_closures", {}).get(task_id, [])),
     }
 
 
