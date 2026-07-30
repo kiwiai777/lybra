@@ -456,6 +456,11 @@
       font-size: 11.5px; color: var(--text-secondary); font-family: ui-monospace, monospace;
       white-space: nowrap; margin-left: auto;
     }
+    /* AIPOS-276: red badge when map is stale (N days outdated) */
+    .map-updated-badge.stale {
+      background: #fee2e2; color: #991b1b; padding: 4px 10px; border-radius: 999px;
+      font-weight: 700; font-size: 11px;
+    }
     .ms-map-updated {
       font-size: 12px; color: var(--text-secondary); font-family: ui-monospace, monospace;
       margin-bottom: 6px;
@@ -1107,10 +1112,25 @@
       section.hidden = false;
 
       // AIPOS-275 F-275-2: show map updated date in section header.
+      // AIPOS-276: red badge when map is stale (updated > same-window tasks).
       const badge = document.getElementById('map-updated-badge');
       if (badge) {
         if (d.updated) {
-          badge.textContent = i18n.t('map.updated_prefix') + d.updated;
+          const mapDate = new Date(d.updated);
+          const now = new Date();
+          const daysSince = Math.floor((now - mapDate) / (1000 * 60 * 60 * 24));
+          
+          // Check if stale: map updated >N days ago (use same window as truthData tasks)
+          // Simple heuristic: if map date is >7 days old, show red badge
+          const isStale = daysSince > 7;
+          
+          if (isStale) {
+            badge.textContent = `地图已 ${daysSince} 天未更新`;
+            badge.className = 'map-updated-badge stale';
+          } else {
+            badge.textContent = i18n.t('map.updated_prefix') + d.updated;
+            badge.className = 'map-updated-badge';
+          }
           badge.hidden = false;
         } else {
           badge.hidden = true;

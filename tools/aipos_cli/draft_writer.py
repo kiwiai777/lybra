@@ -20,6 +20,71 @@ from tools.aipos_cli.draft_validator import (
 from tools.aipos_cli.records import expected_publish_record_path
 from tools.aipos_cli.task_complexity import validate_task_complexity
 
+
+def _check_project_map_staleness(repo_root: Path, validation: dict[str, Any]) -> None:
+    """AIPOS-276: project-map staleness check (publish gate warning hook).
+    
+    If project-map.md exists and has an 'updated' field that is >3 days older
+    than the most recent return record (收编), append a warning to validation["warnings"].
+    Non-blocking; gracefully degrades if map absent, no updated field, or no returns.
+    """
+    map_path = repo_root / "governance" / "project-map.md"
+    if not map_path.is_file():
+        return  # no map = no check
+    
+    try:
+        from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+        text = map_path.read_text(encoding="utf-8", errors="replace")
+        meta, _body, _warnings = parse_markdown_frontmatter(text)
+        map_updated_str = str(meta.get("updated") or "").strip()
+        if not map_updated_str:
+            return  # no updated field = no check
+        
+        # Parse map updated timestamp
+        map_updated = datetime.fromisoformat(map_updated_str.replace("Z", "+00:00"))
+        if map_updated.tzinfo is None:
+            map_updated = map_updated.replace(tzinfo=timezone.utc)
+        
+        # Find most recent return record (收编 = finalized delivery)
+        returns_root = repo_root / "5_tasks" / "records" / "returns"
+        if not returns_root.exists():
+            return  # no returns = no check
+        
+        most_recent_return: datetime | None = None
+        for task_dir in returns_root.iterdir():
+            if not task_dir.is_dir():
+                continue
+            for record_file in task_dir.glob("*.md"):
+                try:
+                    record_text = record_file.read_text(encoding="utf-8", errors="replace")
+                    record_meta, _record_body, _record_warnings = parse_markdown_frontmatter(record_text)
+                    returned_at_str = str(record_meta.get("returned_at") or record_meta.get("created_at") or "").strip()
+                    if not returned_at_str:
+                        continue
+                    returned_at = datetime.fromisoformat(returned_at_str.replace("Z", "+00:00"))
+                    if returned_at.tzinfo is None:
+                        returned_at = returned_at.replace(tzinfo=timezone.utc)
+                    if most_recent_return is None or returned_at > most_recent_return:
+                        most_recent_return = returned_at
+                except Exception:
+                    continue
+        
+        if most_recent_return is None:
+            return  # no valid return records = no check
+        
+        # Check staleness: map_updated is >3 days before most_recent_return
+        delta = most_recent_return - map_updated
+        if delta.total_seconds() > 3 * 24 * 3600:
+            map_date = map_updated.strftime("%Y-%m-%d")
+            return_date = most_recent_return.strftime("%Y-%m-%d")
+            warning = f"PROJECT_MAP_STALE (地图更新于 {map_date}, 最近收编 {return_date})"
+            if warning not in validation["warnings"]:
+                validation["warnings"].append(warning)
+    
+    except Exception:
+        # Graceful degradation: staleness check is advisory, never fails publish
+        pass
+
 EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "agent-01"
 EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET = "workspace_artifacts/external_intake"
 
@@ -141,6 +206,7 @@ def render_publish_record(
     published_sha256: str,
     published_at: str,
     confirmer: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
 ) -> str:
     # AIPOS-204 / F-c4: a gated publish records WHO approved the publish, mirroring the
     # AIPOS-199 claim/return confirmer attribution. `published_by` is the publisher
@@ -148,6 +214,7 @@ def render_publish_record(
     # raw token is never recorded — only the non-secret role/ref/fingerprint. §9
     # signing fields are placeholders (per-op nonce/signature stays deferred).
     confirmer = confirmer if isinstance(confirmer, dict) else {}
+    warnings = warnings if isinstance(warnings, list) else []
     metadata = {
         "record_type": "publish_record",
         "task_id": task_id,
@@ -168,6 +235,7 @@ def render_publish_record(
         "signature_key_ref": confirmer.get("signature_key_ref"),
         "signed_payload_hash": confirmer.get("signed_payload_hash"),
         "signed_at": confirmer.get("signed_at"),
+        "warnings": warnings if warnings else None,
     }
     body = "\n".join(
         [
@@ -201,6 +269,7 @@ def render_publish_record(
             "signature_key_ref",
             "signed_payload_hash",
             "signed_at",
+            "warnings",
         ],
     ) + body
 
@@ -431,6 +500,11 @@ def publish_draft(
             validation["warnings"].append(warning)
         if warning not in validation.setdefault("classification_warnings", []):
             validation["classification_warnings"].append(warning)
+    
+    # AIPOS-276: project-map staleness check (publish gate warning hook)
+    # If project-map.md exists and updated > 3 days before most recent return record, warn.
+    _check_project_map_staleness(repo_root, validation)
+    
     result["task_id"] = validation["task_id"]
     result["warnings"] = list(validation["warnings"])
 
@@ -517,6 +591,7 @@ def publish_draft(
             published_sha256=published_sha256,
             published_at=published_at,
             confirmer=confirmer,
+            warnings=validation["warnings"],
         ),
         encoding="utf-8",
     )

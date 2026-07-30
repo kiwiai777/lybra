@@ -270,7 +270,15 @@ def get_project_map(repo_root: str | Path | None = None) -> dict[str, Any]:
         portal_raw = meta.get("portal")
         portal = portal_raw if isinstance(portal_raw, dict) else {}
 
-        in_flight = _as_str_list(meta.get("in_flight"))
+        # Initialize warnings list early
+        warnings: list[str] = []
+        
+        # AIPOS-276: in_flight deprecated — read for backward compat but ignore; "进行中"
+        # is derived from queue state (claimed/pending code tasks) in the frontend.
+        in_flight_raw = meta.get("in_flight")
+        if in_flight_raw is not None:
+            warnings.append("project-map.md contains deprecated 'in_flight' field; this field is ignored. Remove it and rely on queue-derived '进行中' display.")
+        
         nxt = _as_str_list(meta.get("next"))
         horizon = _as_str_list(meta.get("horizon"))
         current = _as_str(meta.get("current"))
@@ -278,10 +286,11 @@ def get_project_map(repo_root: str | Path | None = None) -> dict[str, Any]:
         governance_dir = resolved / "governance"
         direction_recent = _read_direction_log_recent(governance_dir)
 
-        warnings: list[str] = []
         verdict = "PASS"
         if not milestones and not current:
             warnings.append("project-map.md parsed but has no milestones/current; region hidden.")
+            verdict = "WARN"
+        elif warnings:  # AIPOS-276: deprecation warnings should result in WARN verdict
             verdict = "WARN"
 
         data = {
@@ -298,7 +307,7 @@ def get_project_map(repo_root: str | Path | None = None) -> dict[str, Any]:
             },
             "milestones": milestones,
             "current": current,
-            "in_flight": in_flight,
+            "in_flight": [],  # AIPOS-276: always empty; frontend derives from queue
             "next": nxt,
             "horizon": horizon,
             "direction_log_recent": direction_recent,
@@ -313,7 +322,7 @@ def get_project_map(repo_root: str | Path | None = None) -> dict[str, Any]:
             summary={
                 "available": True,
                 "milestones": len(milestones),
-                "near_term": len(in_flight) + len(nxt),
+                "near_term": len(nxt),  # AIPOS-276: in_flight removed, only count next
                 "horizon": len(horizon),
                 "direction_log_recent": len(direction_recent),
             },
