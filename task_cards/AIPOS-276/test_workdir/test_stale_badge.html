@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>F-276-2 真机测试：红标渲染验证</title>
+<style>
+.map-updated-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.map-updated-badge.stale {
+  background: #fee2e2;
+  color: #991b1b;
+  font-weight: 700;
+}
+</style>
+</head>
+<body>
+<h1>F-276-2 真机测试：陈旧地图红标渲染</h1>
+
+<h2>测试配置</h2>
+<ul>
+  <li>project-map.md updated: <code>2026-07-16</code></li>
+  <li>当前日期: <code id="current-date"></code></li>
+  <li>天数差: <code id="days-diff"></code></li>
+</ul>
+
+<h2>红标渲染结果</h2>
+<div style="padding: 20px; background: #f5f5f5; border-radius: 8px;">
+  <span id="badge" class="map-updated-badge"></span>
+</div>
+
+<h2>逻辑验证</h2>
+<pre id="logic-output"></pre>
+
+<script>
+// 从 API 读取的地图数据（模拟）
+const mapData = {
+  updated: "2026-07-16"
+};
+
+// 前端逻辑（来自 project-detail.html:1115-1130）
+const mapDate = new Date(mapData.updated);
+const now = new Date();
+const daysSince = Math.floor((now - mapDate) / (1000 * 60 * 60 * 24));
+const isStale = daysSince > 7;
+
+// 显示当前日期和天数差
+document.getElementById('current-date').textContent = now.toISOString().split('T')[0];
+document.getElementById('days-diff').textContent = daysSince + ' 天';
+
+// 渲染徽章
+const badge = document.getElementById('badge');
+if (isStale) {
+  badge.textContent = `地图已 ${daysSince} 天未更新`;
+  badge.className = 'map-updated-badge stale';
+} else {
+  badge.textContent = '地图更新于 ' + mapData.updated;
+  badge.className = 'map-updated-badge';
+}
+
+// 逻辑验证输出
+const logicOutput = `
+地图日期: ${mapData.updated}
+当前日期: ${now.toISOString().split('T')[0]}
+天数差: ${daysSince} 天
+isStale (>7天): ${isStale}
+
+CSS class applied: ${badge.className}
+Badge text: "${badge.textContent}"
+
+预期行为: daysSince=${daysSince} > 7 → 应显示红标
+实际结果: ${isStale ? '✅ 红标已显示 (background: #fee2e2, color: #991b1b)' : '❌ 未显示红标'}
+`;
+
+document.getElementById('logic-output').textContent = logicOutput;
+</script>
+</body>
+</html>
