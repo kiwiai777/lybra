@@ -34,6 +34,7 @@ from tools.aipos_cli.orchestration_event_writer import append_orchestration_even
 from tools.aipos_cli.orchestration_summary_preview import build_orchestration_summary_preview
 from tools.aipos_cli.orchestration_timeline_preview import build_orchestration_timeline_preview
 from tools.aipos_cli.owner_decision_writer import build_owner_decision_record as backend_build_owner_decision_record
+from tools.aipos_cli.owner_verification_writer import build_owner_verification_record as backend_build_owner_verification_record
 from tools.aipos_cli.planner_iteration_writer import append_planner_iteration as backend_append_planner_iteration
 from tools.aipos_cli.planner_loop_mvp import build_planner_loop_mvp_preview
 from tools.aipos_cli.preview import build_preview
@@ -327,6 +328,7 @@ def _attach_controlled_execute_metadata(
         "planner_iteration_append",
         "intake_submit",
         "owner_decision_record",
+        "owner_verification_record",
         TEMPLATE_OPERATION,
     }:
         response["execute_allowed"] = False
@@ -1188,6 +1190,83 @@ def record_owner_decision(
             warnings=list(result.get("warnings", [])),
             blocking_reasons=list(result.get("blocking_reasons", [])),
             needs_owner_reasons=[],
+            safety_notice=CONTROLLED_EXECUTE_NOTICE,
+            errors=[],
+        )
+        return _attach_controlled_execute_metadata(
+            operation=operation,
+            actor=actor,
+            response=response,
+            execute_allowed=verdict != "BLOCK",
+        )
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def record_owner_verification(
+    payload: Mapping[str, Any],
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+    actor: str | None = None,
+) -> dict[str, Any]:
+    """AIPOS-273: Record owner verification (approve/reject) for a task.
+    
+    Writes append-only verification records to 5_tasks/records/owner_verifications/<task_id>/.
+    Requires authenticated session (web_session) or equivalent MCP token.
+    
+    Args:
+        payload: Dict with task_id, decision (approve/reject), reason (optional for approve, required for reject), decided_via
+        dry_run: If True, validates but doesn't write (default True)
+        repo_root: Repository root path
+        actor: Actor identifier (typically "owner" or session-derived)
+    
+    Returns:
+        Response dict with verdict, blocking_reasons, target_path, rendered_markdown, etc.
+    """
+    operation = "owner_verification_record"
+    try:
+        if not isinstance(payload, Mapping):
+            raise TypeError("payload must be a mapping")
+        if not dry_run:
+            return _blocked_execute(operation, actor=actor)
+        resolved_root = _resolve_repo_root(repo_root)
+        result = backend_build_owner_verification_record(
+            resolved_root,
+            dict(payload),
+            actor=actor,
+            dry_run=True,
+        )
+        verdict = derive_verdict(
+            blocking_reasons=list(result.get("blocking_reasons", [])),
+            warnings=list(result.get("warnings", [])),
+        )
+        data = {
+            "task_id": result.get("task_id"),
+            "decision": result.get("decision"),
+            "target_path": result.get("target_path"),
+            "would_write": result.get("would_write", False),
+            "rendered_markdown": result.get("rendered_markdown"),
+            "original_payload": result.get("original_payload"),
+        }
+        response = make_response(
+            ok=True,
+            verdict=verdict,
+            operation=operation,
+            dry_run=True,
+            actor=_actor_payload(actor),
+            data=data,
+            summary={
+                "task_id": result.get("task_id"),
+                "decision": result.get("decision"),
+                "target_path": result.get("target_path"),
+                "would_write": result.get("would_write", False),
+            },
+            planned_writes=list(result.get("planned_writes", [])),
+            warnings=list(result.get("warnings", [])),
+            blocking_reasons=list(result.get("blocking_reasons", [])),
+            needs_owner_reasons=[],
+            owner_confirmation_required=True,  # AIPOS-273: owner verification requires owner_confirm (dogfood)
+            owner_confirmation_reasons=["Owner verification record writes to truth (append-only records)"],
             safety_notice=CONTROLLED_EXECUTE_NOTICE,
             errors=[],
         )
@@ -2989,6 +3068,7 @@ def execute_dry_run(
             "planner_iteration_append",
             "intake_submit",
             "owner_decision_record",
+            "owner_verification_record",
             TEMPLATE_OPERATION,
         }:
             return blocked_response(
@@ -3068,6 +3148,9 @@ def execute_dry_run(
         elif op == "owner_decision_record":
             payload = source_data.get("original_payload") or {}
             current = record_owner_decision(payload, dry_run=True, repo_root=resolved_root, actor=actor_text)
+        elif op == "owner_verification_record":
+            payload = source_data.get("original_payload") or {}
+            current = record_owner_verification(payload, dry_run=True, repo_root=resolved_root, actor=actor_text)
         elif op == "queue_return":
             payload = source_data.get("original_payload") or {}
             mcp_return_metadata = source_data.get("mcp_return") if isinstance(source_data.get("mcp_return"), dict) else None
@@ -3366,6 +3449,38 @@ def execute_dry_run(
                 data=result,
                 summary={
                     "decision_id": result.get("decision_id"),
+                    "target_path": result.get("target_path"),
+                    "wrote": result.get("wrote", False),
+                },
+                planned_writes=list(result.get("planned_writes", [])),
+                performed_writes=list(result.get("planned_writes", [])) if result.get("wrote") else [],
+                warnings=list(result.get("warnings", [])),
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                errors=[],
+            )
+
+        if op == "owner_verification_record":
+            payload = source_data.get("original_payload") or {}
+            result = backend_build_owner_verification_record(
+                resolved_root,
+                payload,
+                actor=actor_text,
+                dry_run=False,
+            )
+            verdict = derive_verdict(
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                warnings=list(result.get("warnings", [])),
+            )
+            return make_response(
+                ok=bool(result.get("wrote", False)),
+                verdict=verdict,
+                operation=op,
+                dry_run=False,
+                actor=_actor_payload(actor_text),
+                data=result,
+                summary={
+                    "verification_id": result.get("verification_id"),
                     "target_path": result.get("target_path"),
                     "wrote": result.get("wrote", False),
                 },

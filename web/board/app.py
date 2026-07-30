@@ -57,6 +57,7 @@ from tools.aipos_cli.board_adapter import (
     get_validate,
     publish_draft,
     record_owner_decision,
+    record_owner_verification,
 )
 from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
 from tools.aipos_cli.draft_validator import validate_draft_file
@@ -315,6 +316,8 @@ def _api_post_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, An
         "/api/agent-profile/confirm": partial(_agent_profile_confirm_route, repo_root=repo_root),
         "/api/execute/dry-run": partial(_execute_dry_run_route, repo_root=repo_root),
         "/api/execute/confirm": partial(_execute_confirm_route, repo_root=repo_root),
+        "/api/verify/approve": partial(_owner_verification_approve_route, repo_root=repo_root),
+        "/api/verify/reject": partial(_owner_verification_reject_route, repo_root=repo_root),
     }
 
 
@@ -2379,10 +2382,15 @@ def _execute_dry_run_route(payload: dict[str, Any], *, repo_root: Path | None) -
         if not isinstance(decision_payload, dict):
             return _execute_error("owner_decision_record", "payload object is required")
         return record_owner_decision(decision_payload, dry_run=True, repo_root=repo_root, actor=actor)
+    if operation == "owner_verification_record":
+        verification_payload = payload.get("payload")
+        if not isinstance(verification_payload, dict):
+            return _execute_error("owner_verification_record", "payload object is required")
+        return record_owner_verification(verification_payload, dry_run=True, repo_root=repo_root, actor=actor)
     if operation != "queue_claim":
         return _execute_error(
             "execute_dry_run",
-            "Only queue_claim, draft_create, draft_publish, orchestration_event_append, planner_iteration_append, and owner_decision_record are enabled in the controlled execute API",
+            "Only queue_claim, draft_create, draft_publish, orchestration_event_append, planner_iteration_append, owner_decision_record, and owner_verification_record are enabled in the controlled execute API",
         )
     task_id = str(payload.get("task_id") or "").strip() or None
     path = str(payload.get("path") or "").strip() or None
@@ -2401,6 +2409,87 @@ def _execute_confirm_route(payload: dict[str, Any], *, repo_root: Path | None) -
     if not actor:
         return _execute_error("execute_dry_run", "actor is required")
     owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", False)) else None
+    return execute_dry_run(dry_run_id, actor, owner_confirmation_token=owner_token, repo_root=repo_root)
+
+
+def _owner_verification_approve_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    """AIPOS-273: Owner verification approve route (POST /api/verify/<task_id>/approve).
+    
+    Wrapper for the controlled execute flow: builds payload -> dry-run -> confirm.
+    """
+    task_id = str(payload.get("task_id") or "").strip()
+    actor = str(payload.get("actor") or "owner").strip()
+    if not task_id:
+        return _execute_error("owner_verification_record", "task_id is required")
+    
+    verification_payload = {
+        "task_id": task_id,
+        "decision": "approve",
+        "reason": "",  # approve doesn't require reason
+        "decided_via": "web_session",
+    }
+    
+    # Step 1: dry-run to get the plan
+    dry_run_response = record_owner_verification(
+        verification_payload,
+        dry_run=True,
+        repo_root=repo_root,
+        actor=actor,
+    )
+    
+    if not dry_run_response.get("ok") or dry_run_response.get("verdict") == "BLOCK":
+        return dry_run_response
+    
+    # Step 2: extract dry_run_id and confirm
+    dry_run_id = dry_run_response.get("dry_run_id")
+    if not dry_run_id:
+        return _execute_error("owner_verification_record", "Failed to register dry-run")
+    
+    # Step 3: execute with owner_confirm
+    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", True)) else None
+    return execute_dry_run(dry_run_id, actor, owner_confirmation_token=owner_token, repo_root=repo_root)
+
+
+def _owner_verification_reject_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    """AIPOS-273: Owner verification reject route (POST /api/verify/<task_id>/reject).
+    
+    Wrapper for the controlled execute flow: builds payload -> dry-run -> confirm.
+    Requires reason field.
+    """
+    task_id = str(payload.get("task_id") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    actor = str(payload.get("actor") or "owner").strip()
+    
+    if not task_id:
+        return _execute_error("owner_verification_record", "task_id is required")
+    if not reason:
+        return _execute_error("owner_verification_record", "reason is required for reject decision")
+    
+    verification_payload = {
+        "task_id": task_id,
+        "decision": "reject",
+        "reason": reason,
+        "decided_via": "web_session",
+    }
+    
+    # Step 1: dry-run to get the plan
+    dry_run_response = record_owner_verification(
+        verification_payload,
+        dry_run=True,
+        repo_root=repo_root,
+        actor=actor,
+    )
+    
+    if not dry_run_response.get("ok") or dry_run_response.get("verdict") == "BLOCK":
+        return dry_run_response
+    
+    # Step 2: extract dry_run_id and confirm
+    dry_run_id = dry_run_response.get("dry_run_id")
+    if not dry_run_id:
+        return _execute_error("owner_verification_record", "Failed to register dry-run")
+    
+    # Step 3: execute with owner_confirm
+    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", True)) else None
     return execute_dry_run(dry_run_id, actor, owner_confirmation_token=owner_token, repo_root=repo_root)
 
 

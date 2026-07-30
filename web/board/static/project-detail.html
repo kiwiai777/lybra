@@ -609,9 +609,20 @@
     .vb-fix-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
     .vb-fix-list li { font-family: ui-monospace, monospace; font-size: 11.5px; padding: 2px 8px; border-radius: 6px; background: rgba(217,119,6,.1); color: #92400e; }
     .vb-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
-    .vb-btn { padding: 5px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--border-default); background: var(--surface); color: var(--text-secondary); cursor: not-allowed; }
-    .vb-btn.vb-pass { color: #16a34a; border-color: #16a34a; }
-    .vb-btn.vb-reject { color: #dc2626; border-color: #dc2626; }
+    .vb-btn { padding: 5px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--border-default); background: var(--surface); color: var(--text-secondary); cursor: pointer; transition: all 0.15s ease; }
+    .vb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .vb-btn.vb-pass { color: #16a34a; border-color: #16a34a; background: rgba(22, 163, 74, 0.05); }
+    .vb-btn.vb-pass:hover:not(:disabled) { background: #16a34a; color: white; }
+    .vb-btn.vb-reject { color: #dc2626; border-color: #dc2626; background: rgba(220, 38, 38, 0.05); }
+    .vb-btn.vb-reject:hover:not(:disabled) { background: #dc2626; color: white; }
+    .vb-btn.vb-verified { background: #16a34a; color: white; border-color: #16a34a; cursor: default; }
+    .vb-btn.vb-rejected { background: #dc2626; color: white; border-color: #dc2626; cursor: default; }
+    .vb-reject-reason { margin-top: 8px; display: none; }
+    .vb-reject-reason.show { display: block; }
+    .vb-reject-reason input { width: 100%; padding: 6px 10px; border: 1px solid var(--border-default); border-radius: 4px; font-size: 13px; }
+    .vb-reject-reason button { margin-top: 6px; padding: 5px 12px; border-radius: 4px; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .vb-reject-reason .confirm { background: #dc2626; color: white; border: 1px solid #dc2626; margin-right: 6px; }
+    .vb-reject-reason .cancel { background: var(--surface); color: var(--text-body); border: 1px solid var(--border-default); }
     .vb-resolution-note { font-size: 11.5px; color: var(--text-secondary); font-style: italic; margin-top: 6px; }
     .vb-previewable { display: grid; gap: 10px; }
     .vb-preview {
@@ -1388,6 +1399,102 @@
       };
     }
 
+    // ===== AIPOS-273: 核验按钮功能 (approve/reject) =====
+    async function handleVerificationApprove(taskId, passBtn, rejectBtn, actions) {
+      if (!taskId) return;
+      passBtn.disabled = true;
+      rejectBtn.disabled = true;
+      passBtn.textContent = i18n.t('vb.action.processing') || '处理中...';
+      
+      try {
+        const response = await fetch(`/api/verify/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_id: taskId, owner_confirmed: true }),
+        });
+        const result = await response.json();
+        
+        if (result.ok && result.verdict !== 'BLOCK') {
+          passBtn.textContent = '✓ ' + (i18n.t('vb.action.verified') || '已核验');
+          passBtn.className = 'vb-btn vb-verified';
+          rejectBtn.style.display = 'none';
+          // Show success message
+          const msg = el('div', 'vb-success-msg');
+          msg.textContent = i18n.t('vb.success.approved') || '已通过核验，记录已写入';
+          msg.style.cssText = 'margin-top: 8px; color: #16a34a; font-size: 12px; font-weight: 600;';
+          actions.appendChild(msg);
+        } else {
+          passBtn.textContent = i18n.t('vb.action.pass');
+          passBtn.disabled = false;
+          rejectBtn.disabled = false;
+          alert((result.blocking_reasons && result.blocking_reasons[0]) || result.error || '操作失败');
+        }
+      } catch (err) {
+        passBtn.textContent = i18n.t('vb.action.pass');
+        passBtn.disabled = false;
+        rejectBtn.disabled = false;
+        alert('网络错误: ' + err.message);
+      }
+    }
+    
+    function handleVerificationReject(taskId, passBtn, rejectBtn, actions) {
+      if (!taskId) return;
+      // Show reason input
+      const rejectReason = actions.querySelector('.vb-reject-reason');
+      if (rejectReason) {
+        rejectReason.classList.add('show');
+        const input = rejectReason.querySelector('input');
+        if (input) input.focus();
+        passBtn.disabled = true;
+        rejectBtn.disabled = true;
+      }
+    }
+    
+    async function submitReject(taskId, reason, passBtn, rejectBtn, actions, rejectReason) {
+      if (!taskId) return;
+      if (!reason || !reason.trim()) {
+        alert(i18n.t('vb.reject.reason_required') || '请输入打回理由');
+        return;
+      }
+      
+      const confirmBtn = rejectReason.querySelector('.confirm');
+      const cancelBtn = rejectReason.querySelector('.cancel');
+      confirmBtn.disabled = true;
+      cancelBtn.disabled = true;
+      confirmBtn.textContent = i18n.t('vb.action.processing') || '处理中...';
+      
+      try {
+        const response = await fetch(`/api/verify/reject`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_id: taskId, reason: reason.trim(), owner_confirmed: true }),
+        });
+        const result = await response.json();
+        
+        if (result.ok && result.verdict !== 'BLOCK') {
+          rejectReason.classList.remove('show');
+          rejectBtn.textContent = '✗ ' + (i18n.t('vb.action.rejected') || '已打回');
+          rejectBtn.className = 'vb-btn vb-rejected';
+          passBtn.style.display = 'none';
+          // Show success message
+          const msg = el('div', 'vb-success-msg');
+          msg.textContent = i18n.t('vb.success.rejected') || '已打回，记录已写入';
+          msg.style.cssText = 'margin-top: 8px; color: #dc2626; font-size: 12px; font-weight: 600;';
+          actions.appendChild(msg);
+        } else {
+          confirmBtn.textContent = i18n.t('vb.reject.confirm') || '确认打回';
+          confirmBtn.disabled = false;
+          cancelBtn.disabled = false;
+          alert((result.blocking_reasons && result.blocking_reasons[0]) || result.error || '操作失败');
+        }
+      } catch (err) {
+        confirmBtn.textContent = i18n.t('vb.reject.confirm') || '确认打回';
+        confirmBtn.disabled = false;
+        cancelBtn.disabled = false;
+        alert('网络错误: ' + err.message);
+      }
+    }
+
     // ===== AIPOS-262B FIX-1: 验证台 (静态区块水合;"等我处理"并入分组) =====
     // Hydrates the static #verify-bench-section (between milestone map and task
     // center). Groups: 待验站 / 进行中预览 / 待 Owner 裁定(needs_owner,有内容才显示)。
@@ -1484,9 +1591,44 @@
       details.appendChild(rings);
 
       const actions = el('div', 'vb-actions');
-      const passBtn = el('button', 'vb-btn vb-pass'); passBtn.textContent = i18n.t('vb.action.pass'); passBtn.disabled = true;
-      const rejectBtn = el('button', 'vb-btn vb-reject'); rejectBtn.textContent = i18n.t('vb.action.reject'); rejectBtn.disabled = true;
-      actions.appendChild(passBtn); actions.appendChild(rejectBtn);
+      const passBtn = el('button', 'vb-btn vb-pass');
+      passBtn.textContent = i18n.t('vb.action.pass');
+      passBtn.type = 'button';
+      passBtn.disabled = false;
+      passBtn.addEventListener('click', () => handleVerificationApprove(s.task_id, passBtn, rejectBtn, actions));
+      
+      const rejectBtn = el('button', 'vb-btn vb-reject');
+      rejectBtn.textContent = i18n.t('vb.action.reject');
+      rejectBtn.type = 'button';
+      rejectBtn.disabled = false;
+      rejectBtn.addEventListener('click', () => handleVerificationReject(s.task_id, passBtn, rejectBtn, actions));
+      
+      actions.appendChild(passBtn);
+      actions.appendChild(rejectBtn);
+      
+      // Reject reason input (hidden by default)
+      const rejectReason = el('div', 'vb-reject-reason');
+      const reasonInput = document.createElement('input');
+      reasonInput.type = 'text';
+      reasonInput.placeholder = i18n.t('vb.reject.reason_placeholder') || '请输入打回理由...';
+      reasonInput.maxLength = 500;
+      rejectReason.appendChild(reasonInput);
+      const confirmBtn = document.createElement('button');
+      confirmBtn.className = 'confirm';
+      confirmBtn.textContent = i18n.t('vb.reject.confirm') || '确认打回';
+      confirmBtn.addEventListener('click', () => submitReject(s.task_id, reasonInput.value, passBtn, rejectBtn, actions, rejectReason));
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'cancel';
+      cancelBtn.textContent = i18n.t('vb.reject.cancel') || '取消';
+      cancelBtn.addEventListener('click', () => {
+        rejectReason.classList.remove('show');
+        passBtn.disabled = false;
+        rejectBtn.disabled = false;
+      });
+      rejectReason.appendChild(confirmBtn);
+      rejectReason.appendChild(cancelBtn);
+      actions.appendChild(rejectReason);
+      
       details.appendChild(actions);
       card.appendChild(details);
       return card;

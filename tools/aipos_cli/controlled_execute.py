@@ -21,6 +21,7 @@ SUPPORTED_OPERATIONS = {
     "planner_iteration_append",
     "intake_submit",
     "owner_decision_record",
+    "owner_verification_record",
     "workspace_init",
     "audit_dispatch",
     "audit_verdict",

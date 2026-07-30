@@ -265,9 +265,9 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
             "stations": stations,
             "previewable": previewable,
             "closed_excluded": closed_excluded,
-            "writes_enabled": False,
-            "resolution_enabled": False,
-            "resolution_note": "通过/打回按键留候选⑬(board 鉴权后);当前为只读核验面。",
+            "writes_enabled": True,
+            "resolution_enabled": True,
+            "resolution_note": "AIPOS-273:通过/打回按钮已接真,写入 owner 核验记录到文件系统(append-only)。",
         }
         return make_response(
             ok=True,

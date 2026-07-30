@@ -287,9 +287,9 @@ class VerifyBenchContractTests(_BaseServer):
         # station; closed_excluded is empty.
         self.assertEqual(payload["summary"]["closed_excluded"], 0)
         self.assertEqual(data["closed_excluded"], [])
-        # Resolution is read-only (pass/reject deferred to candidate 13).
-        self.assertFalse(data["writes_enabled"])
-        self.assertFalse(data["resolution_enabled"])
+        # AIPOS-273: Resolution enabled (approve/reject buttons functional).
+        self.assertTrue(data["writes_enabled"])
+        self.assertTrue(data["resolution_enabled"])
 
         station = data["stations"][0]
         self.assertEqual(station["task_id"], "TASK-ST")
