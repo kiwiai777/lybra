@@ -33,6 +33,7 @@ READ_SAFETY_NOTICE = "Read-only local Board adapter call. No files are written."
 
 _EXCERPT_CHARS = 320
 _ASSERTION_HEADINGS = ("验收断言", "acceptance", "验收标准")
+_CHECKLIST_HEADINGS = ("owner 核验单", "owner核验单", "核验单")
 
 
 def _as_str(value: Any) -> str:
@@ -68,6 +69,49 @@ def _section_excerpt(body: str, heading: str, limit: int = _EXCERPT_CHARS) -> st
             break
         collected.append(line)
     return _excerpt("\n".join(collected).strip(), limit)
+
+
+def _extract_owner_verify_checklist(body: str) -> list[str]:
+    """AIPOS-274: Extract human-readable checklist from '## Owner 核验单' section.
+    
+    Looks for section heading variants (Owner 核验单/Owner核验单/核验单), returns
+    numbered/bullet list items or non-blank lines. Fallback兼容:if no such section,
+    returns empty list (caller uses acceptance_assertions as fallback).
+    """
+    lines = (_as_str(body)).splitlines()
+    start: int | None = None
+    for idx, line in enumerate(lines):
+        stripped = line.strip().lstrip("#").strip().lower()
+        if stripped and any(stripped.startswith(h) for h in _CHECKLIST_HEADINGS):
+            start = idx
+            break
+    if start is None:
+        return []
+    section: list[str] = []
+    for line in lines[start + 1:]:
+        if line.startswith("##"):
+            break
+        section.append(line)
+    # Extract numbered (1. 2. ...) or bulleted (- * + ...) list items
+    items = []
+    for line in section:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Match numbered list: "1. text" or "1) text"
+        import re
+        num_match = re.match(r'^\d+[.)\s]\s*(.+)$', stripped)
+        if num_match:
+            items.append(num_match.group(1).strip())
+            continue
+        # Match bullet list: "- text" or "* text" or "+ text"
+        if stripped.startswith(("-", "*", "+")) and len(stripped) > 1:
+            items.append(stripped[1:].strip())
+            continue
+        # Non-list line: include if not a heading or horizontal rule
+        if not stripped.startswith("#") and stripped not in ("---", "***", "___"):
+            items.append(stripped)
+    return [item for item in items if item]
 
 
 def _extract_acceptance_assertions(body: str) -> list[str]:
@@ -220,21 +264,42 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
             main_verdict = verdict_by_task.get(str(root))
             completed_dossier = bool(tid and (completed_root / str(tid)).is_dir())
             stage = derive_true_stage(tid, recs, queue_state, main_verdict, completed_dossier)
+            # AIPOS-274: owner_verify_checklist 字段优先,退而从正文解析 Owner 核验单,再退而用验收断言
+            checklist_meta = metadata.get("owner_verify_checklist")
+            checklist = (
+                checklist_meta if isinstance(checklist_meta, list) and checklist_meta
+                else _extract_owner_verify_checklist(task.get("body") or "")
+            )
             assertions = _extract_acceptance_assertions(task.get("body") or "")
+            # 人话清单为主,断言为备退(前端优先显示 checklist,断言折叠)
+            if not checklist and assertions:
+                checklist = assertions
+            preview_route = _as_str(metadata.get("owner_verify_preview") or "")
             base = {
                 "task_id": tid,
                 "title": _as_str(task.get("title") or metadata.get("title")),
                 "path": task.get("path"),
                 "queue_state": queue_state,
                 "true_stage": stage,
+                "owner_verify_checklist": checklist,
                 "acceptance_assertions": assertions,
+                "owner_verify_preview": preview_route if preview_route else None,
             }
             # F-262B-4: 闭环即退站 — a verdict-PASS main card whose closure unit
             # already finalized (FZ returned / 收编) is no longer 待验; exclude it
             # from the station (and from previewable — it is done, not in flight).
+            # AIPOS-274F1: 已核验即退站 — an owner_verification record with
+            # decision=approve filed against this main card means the Owner has
+            # already looked at it; it must not reappear on 待验站 while it waits
+            # for FZ to catch up (263 复活 bug: FZ was still pending/未收编,
+            # closure_unit_finalized() alone missed the earlier approve record).
+            owner_approved = any(
+                _as_str((v.get("metadata") or {}).get("decision")).lower() == "approve"
+                for v in recs.get("owner_verifications", [])
+            )
             if (
                 stage == "verdict_pass"
-                and _closure_unit_finalized(root, members_by_root, records)
+                and (owner_approved or _closure_unit_finalized(root, members_by_root, records))
             ):
                 closed_excluded.append({"task_id": tid, "title": base["title"]})
                 continue
@@ -255,12 +320,21 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
             else:
                 # 进行中: Owner can preview how it will be verified.
                 previewable.append({**base, "stage_note": _stage_note(stage)})
-            if not assertions:
-                warnings.append(f"{tid}: no 验收断言 section found in card body.")
+            # AIPOS-274: 既无人话清单也无断言时才警告
+            if not checklist and not assertions:
+                warnings.append(f"{tid}: no owner_verify_checklist or 验收断言 found.")
 
         stations.sort(key=lambda s: str(s.get("task_id") or ""))
         previewable.sort(key=lambda s: str(s.get("task_id") or ""))
 
+        # AIPOS-274F2: mirror summary into data.summary so frontend can read
+        # either response.summary or response.data.summary.
+        summary = {
+            "stations": len(stations),
+            "previewable": len(previewable),
+            "closed_excluded": len(closed_excluded),
+            "owner_verify_total": len(stations) + len(previewable) + len(closed_excluded),
+        }
         data = {
             "stations": stations,
             "previewable": previewable,
@@ -268,6 +342,8 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
             "writes_enabled": True,
             "resolution_enabled": True,
             "resolution_note": "AIPOS-273:通过/打回按钮已接真,写入 owner 核验记录到文件系统(append-only)。",
+            # AIPOS-274F2: summary mirrored inside data for frontend alignment.
+            "summary": summary,
         }
         return make_response(
             ok=True,
@@ -275,12 +351,7 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
             operation=operation,
             dry_run=False,
             data=data,
-            summary={
-                "stations": len(stations),
-                "previewable": len(previewable),
-                "closed_excluded": len(closed_excluded),
-                "owner_verify_total": len(stations) + len(previewable) + len(closed_excluded),
-            },
+            summary=summary,
             warnings=warnings,
             blocking_reasons=[],
             needs_owner_reasons=[],

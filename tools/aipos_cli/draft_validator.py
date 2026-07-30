@@ -37,6 +37,12 @@ RECOMMENDED_FIELDS = [
     "recurrence",
 ]
 
+# AIPOS-274: Owner 核验体验 P1 — 可选人话字段(旧卡无字段兼容)
+OPTIONAL_OWNER_VERIFY_FIELDS = [
+    "owner_verify_checklist",
+    "owner_verify_preview",
+]
+
 FORBIDDEN_RUNTIME_FIELDS = [
     "claim_id",
     "claimed_by",
