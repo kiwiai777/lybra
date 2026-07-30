@@ -22,5 +22,8 @@ test-results/
 # F-271-6: remember secret (server-side signing key for long-lived cookies)
 .lybra/remember_secret
 
+# AIPOS-272 FIX-3: board 多工作区配置(部署物,不入产品代码树)
+web/board/.board_config.json
+
 # disposable npm pack build artifacts (re-packed per release)
 *.tgz

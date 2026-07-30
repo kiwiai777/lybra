@@ -202,6 +202,70 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertEqual(stages["verdict_pass"], 1)
         self.assertIn("finalize_writer", data["data"]["deferred_gates"])
 
+    def test_runtime_status_reads_connection_json_per_workspace(self) -> None:
+        """AIPOS-272 FIX-8: /api/runtime-status must read connection.json from the requested workspace."""
+        # Workspace 0 (default): connection.json with port 7120
+        ws0_connection_dir = self.repo_root / ".lybra"
+        ws0_connection_dir.mkdir(parents=True, exist_ok=True)
+        (ws0_connection_dir / "connection.json").write_text(
+            json.dumps({
+                "mcp": {
+                    "rpc_url": "http://127.0.0.1:7120/mcp",
+                    "sse_url": "http://127.0.0.1:7120/sse"
+                },
+                "board": {"url": "http://127.0.0.1:7119"}
+            }),
+            encoding="utf-8"
+        )
+
+        # Workspace 1: different port 7130
+        ws1_root = Path(self.temp_dir.name) / "workspace1"
+        ws1_root.mkdir(parents=True, exist_ok=True)
+        (ws1_root / "5_tasks" / "queue" / "pending").mkdir(parents=True, exist_ok=True)
+        ws1_connection_dir = ws1_root / ".lybra"
+        ws1_connection_dir.mkdir(parents=True, exist_ok=True)
+        (ws1_connection_dir / "connection.json").write_text(
+            json.dumps({
+                "mcp": {
+                    "rpc_url": "http://127.0.0.1:7130/mcp",
+                    "sse_url": "http://127.0.0.1:7130/sse"
+                },
+                "board": {"url": "http://127.0.0.1:7129"}
+            }),
+            encoding="utf-8"
+        )
+
+        # Board config pointing to both workspaces
+        board_config_path = Path(self.temp_dir.name) / "board_config.json"
+        board_config_path.write_text(
+            json.dumps({
+                "workspaces": [
+                    {"label": "Workspace 0", "root": str(self.repo_root)},
+                    {"label": "Workspace 1", "root": str(ws1_root)}
+                ]
+            }),
+            encoding="utf-8"
+        )
+
+        routes = _api_routes(self.repo_root, board_config_path=board_config_path)
+
+        # Test workspace 0
+        status0, data0 = dispatch_api_request(method="GET", path="/api/runtime-status?workspace=0", routes=routes)
+        self.assertEqual(status0, 200)
+        self.assertEqual(data0["data"]["endpoints"]["mcp"]["url"], "http://127.0.0.1:7120/mcp")
+        self.assertEqual(data0["data"]["endpoints"]["mcp"]["sse_url"], "http://127.0.0.1:7120/sse")
+        self.assertEqual(data0["data"]["endpoints"]["board"]["url"], "http://127.0.0.1:7119")
+
+        # Test workspace 1
+        status1, data1 = dispatch_api_request(method="GET", path="/api/runtime-status?workspace=1", routes=routes)
+        self.assertEqual(status1, 200)
+        self.assertEqual(data1["data"]["endpoints"]["mcp"]["url"], "http://127.0.0.1:7130/mcp")
+        self.assertEqual(data1["data"]["endpoints"]["mcp"]["sse_url"], "http://127.0.0.1:7130/sse")
+        self.assertEqual(data1["data"]["endpoints"]["board"]["url"], "http://127.0.0.1:7129")
+
+        # Ensure each workspace returns its own URLs (not mixed)
+        self.assertNotEqual(data0["data"]["endpoints"]["mcp"]["url"], data1["data"]["endpoints"]["mcp"]["url"])
+
     def test_lifecycle_route_is_read_only_and_surfaces_owner_gate(self) -> None:
         pending = self.repo_root / "5_tasks" / "queue" / "pending" / "pending-lifecycle.md"
         pending.write_text(self.lifecycle_task_frontmatter("TASK-LIFE-PENDING", "pending", "Pending lifecycle"), encoding="utf-8")

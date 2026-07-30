@@ -24,8 +24,6 @@ import unittest
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
-
 from web.board.app import SESSION_COOKIE_NAME, SessionStore, make_handler
 
 
@@ -63,14 +61,12 @@ class FourAreaI18nTests(unittest.TestCase):
             json.dumps({"workspaces": [{"label": "Fixture", "root": str(self.repo_root)}]}),
             encoding="utf-8",
         )
-        self._patch = patch("web.board.app.BOARD_CONFIG_PATH", self.config_path)
-        self._patch.start()
         self._auth_store = SessionStore()
         _sid = self._auth_store.create(role="owner", scopes=["owner_confirm"])
         global _AUTH_COOKIE
         _AUTH_COOKIE = f"{SESSION_COOKIE_NAME}={_sid}"
         port = _free_port()
-        self.server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(repo_root=self.repo_root, session_store=self._auth_store))
+        self.server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(repo_root=self.repo_root, board_config_path=self.config_path, session_store=self._auth_store))
         self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self._thread.start()
         self.base = f"http://127.0.0.1:{port}"
@@ -80,7 +76,6 @@ class FourAreaI18nTests(unittest.TestCase):
         _AUTH_COOKIE = None
         self.server.shutdown()
         self.server.server_close()
-        self._patch.stop()
         self.temp_dir.cleanup()
 
     # ---- S1: four-area chrome is wired to i18n (no hardcoded zh in render paths) ----

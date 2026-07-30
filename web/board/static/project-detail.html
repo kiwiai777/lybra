@@ -621,6 +621,117 @@
     .vb-preview-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 6px; }
     .vb-preview-title { font-size: 14px; font-weight: 600; color: var(--text-body); overflow-wrap: anywhere; }
     .vb-preview-note { font-size: 12px; color: var(--text-secondary); font-style: italic; }
+
+    /* ===== AIPOS-272 FIX-4: 空板三步向导 (total_tasks===0 时显示) ===== */
+    .onboarding-section {
+      border-left-color: var(--accent-bright);
+      background: linear-gradient(135deg, rgba(124,58,237,0.03) 0%, rgba(124,58,237,0.08) 100%);
+    }
+    .onboarding-hero {
+      text-align: center;
+      margin-bottom: 2rem;
+      padding: 1.5rem 1rem;
+      border-bottom: 2px dashed var(--border-default);
+    }
+    .onboarding-hero h3 {
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--accent-bright);
+      margin-bottom: 0.75rem;
+      letter-spacing: -0.5px;
+    }
+    .onboarding-hero p {
+      font-size: 15px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+    .onboarding-steps {
+      display: grid;
+      gap: 1.5rem;
+    }
+    .onboarding-step {
+      background: var(--surface-card);
+      border: 1px solid var(--border-default);
+      border-left: 4px solid var(--accent);
+      border-radius: 8px;
+      padding: 1.5rem;
+    }
+    .onboarding-step-header {
+      display: flex;
+      align-items: baseline;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .onboarding-step-number {
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--accent);
+      line-height: 1;
+    }
+    .onboarding-step-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-body);
+      flex: 1;
+    }
+    .onboarding-step-body {
+      font-size: 14px;
+      line-height: 1.65;
+      color: var(--text-body);
+      margin-bottom: 1rem;
+    }
+    .onboarding-code-block {
+      background: rgba(0,0,0,0.04);
+      border: 1px solid var(--border-default);
+      border-radius: 6px;
+      padding: 1rem;
+      font-family: ui-monospace, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--text-body);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      margin-bottom: 0.75rem;
+    }
+    .onboarding-copy-btn {
+      padding: 0.5rem 1.25rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.05s;
+      box-shadow: 0 2px 4px rgba(124,58,237,0.2);
+    }
+    .onboarding-copy-btn:hover {
+      background: var(--accent-bright);
+      box-shadow: 0 4px 8px rgba(124,58,237,0.3);
+    }
+    .onboarding-copy-btn:active {
+      transform: translateY(1px);
+    }
+    .onboarding-copy-btn.copied {
+      background: #10b981;
+    }
+    .onboarding-diagram {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 1.25rem;
+      background: rgba(0,0,0,0.02);
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      flex-wrap: wrap;
+    }
+    .onboarding-diagram-arrow {
+      font-size: 18px;
+      color: var(--accent);
+    }
     /* F-262B-3: station + preview cards collapse by default — head shows only
        卡号 + 标题 + 待验徽章;click/Enter expands 断言 + 证据(actions for station). */
     .vb-station-head, .vb-preview-head { cursor: pointer; user-select: none; }
@@ -684,6 +795,66 @@
       </div>
       <p class="section-hint" id="vb-hint">审计已 PASS 待 Owner 真机过目的核验站 + 进行中预览;需要 Owner 裁定的待办("等我处理")并入此处。</p>
       <div id="vb-body" class="vb-body"></div>
+    </section>
+
+    <!-- AIPOS-272 FIX-4: 空板三步向导 (total_tasks===0 时显示，有任务后隐藏) -->
+    <section id="onboarding-section" class="detail-section onboarding-section" hidden>
+      <div class="onboarding-hero">
+        <h3>🎉 欢迎使用 Lybra</h3>
+        <p>这是你的第一个工作区。让我们开始三步走，从零到第一张任务卡闭环。</p>
+      </div>
+      <div class="onboarding-steps">
+        <!-- Step 1: 连接顾问 -->
+        <div class="onboarding-step">
+          <div class="onboarding-step-header">
+            <span class="onboarding-step-number">①</span>
+            <h4 class="onboarding-step-title">连接你的顾问 Agent</h4>
+          </div>
+          <div class="onboarding-step-body">
+            <p>复制下方定制接入提示词，粘贴给 Claude / Codex / 任意 AI agent，它就能成为你的顾问（Advisor）——帮你起草任务卡、建议发布、查看真相。</p>
+          </div>
+          <div id="advisor-prompt" class="onboarding-code-block">加载中...</div>
+          <button id="copy-advisor-prompt" class="onboarding-copy-btn">📋 一键复制接入提示词</button>
+        </div>
+
+        <!-- Step 2: 发布第一张卡 -->
+        <div class="onboarding-step">
+          <div class="onboarding-step-header">
+            <span class="onboarding-step-number">②</span>
+            <h4 class="onboarding-step-title">发布第一张任务卡</h4>
+          </div>
+          <div class="onboarding-step-body">
+            <p>工作区已为你生成示例任务卡（在 <code>5_tasks/drafts/example-task.md</code>）。复制下方命令发布它，任务就会进入队列等待认领。</p>
+          </div>
+          <div id="publish-command" class="onboarding-code-block">lybra publish 5_tasks/drafts/example-task.md</div>
+          <button id="copy-publish-command" class="onboarding-copy-btn">📋 一键复制发布命令</button>
+        </div>
+
+        <!-- Step 3: 看它流经门 -->
+        <div class="onboarding-step">
+          <div class="onboarding-step-header">
+            <span class="onboarding-step-number">③</span>
+            <h4 class="onboarding-step-title">看它流经 Lybra 的门</h4>
+          </div>
+          <div class="onboarding-step-body">
+            <p>任务卡发布后，会经历完整的闭环链路：</p>
+          </div>
+          <div class="onboarding-diagram">
+            <span>发布</span>
+            <span class="onboarding-diagram-arrow">→</span>
+            <span>认领</span>
+            <span class="onboarding-diagram-arrow">→</span>
+            <span>交付</span>
+            <span class="onboarding-diagram-arrow">→</span>
+            <span>审计</span>
+            <span class="onboarding-diagram-arrow">→</span>
+            <span>收编</span>
+          </div>
+          <div class="onboarding-step-body" style="margin-top: 1rem;">
+            <p>每个环节都有记录（records），Owner 真相视图始终向你呈现真实阶段。发布第一张卡后，刷新页面，向导会自动让位给任务中心。</p>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- AIPOS-260 FIX-1: 任务中心 mounted on the REAL /workspace/<n> route.
@@ -791,8 +962,11 @@
         renderMilestoneMap(mapData);
 
         // 2) Verify bench (静态区块;needs_owner 并入分组)。
-        //    区块序:门户头 → 里程碑地图 → 验证台 → 任务中心 → 高级/调试。
+        //    区块序:门户头 → 里程碑地图 → 验证台 → [空板向导] → 任务中心 → 高级/调试。
         renderVerifyBench(verifyBenchData, needsOwnerData);
+
+        // AIPOS-272 FIX-4: 空板三步向导 (total_tasks===0 时显示，有任务后隐藏)。
+        await renderOnboardingGuide(truthData, workspace);
 
         // 3) Task center (real route mount, AIPOS-260 FIX-1).
         renderTruthStagePills(countsEl, truthData);
@@ -1108,6 +1282,110 @@
     }
     function msSection(label) {
       const s = el('div', 'ms-section'); s.textContent = label; return s;
+    }
+
+    // ===== AIPOS-272 FIX-4: 空板三步向导 (total_tasks===0 时显示) =====
+    // Renders the onboarding guide when the workspace has zero tasks. Hides when
+    // tasks exist. Generates a customized advisor connection prompt (workspace path,
+    // gate URL, charter location, watch usage). DOM-only.
+    // AIPOS-272 FIX-7: Gate URL 从工作区真实配置取 (runtime-status API)。
+    async function renderOnboardingGuide(truthData, workspace) {
+      const section = document.getElementById('onboarding-section');
+      const promptEl = document.getElementById('advisor-prompt');
+      const copyPromptBtn = document.getElementById('copy-advisor-prompt');
+      const publishCmdEl = document.getElementById('publish-command');
+      const copyPublishBtn = document.getElementById('copy-publish-command');
+
+      const summary = (truthData && truthData.data && truthData.data.summary) || {};
+      const totalTasks = summary.total_tasks || 0;
+
+      // S1: hide when tasks exist (向导让位).
+      if (totalTasks > 0) {
+        section.hidden = true;
+        return;
+      }
+
+      // S2: show and hydrate the guide.
+      section.hidden = false;
+
+      // FIX-7: Fetch real gate URL from runtime-status.
+      let gateURL = 'http://127.0.0.1:7118 (默认,请核对)';  // fallback with explicit notice
+      try {
+        const runtimeResponse = await fetch(`/api/runtime-status?workspace=${workspaceIndex}`);
+        const runtimeData = await runtimeResponse.json();
+        if (runtimeData && runtimeData.ok !== false && runtimeData.data) {
+          const endpoints = runtimeData.data.endpoints || {};
+          const mcp = endpoints.mcp || {};
+          if (mcp.url) {
+            // Use the advertised rpc_url (strip /mcp suffix if present for cleaner display)
+            gateURL = mcp.url.replace(/\/mcp$/, '');
+          }
+        }
+      } catch (err) {
+        // Fallback already set with explicit notice
+      }
+
+      // Generate customized advisor connection prompt (定制接入提示词).
+      const workspaceLabel = (workspace && workspace.label) || 'unnamed workspace';
+      const workspaceRoot = (workspace && workspace.root) || '/path/to/workspace';
+      const charterPath = workspaceRoot + '/governance/advisor-charter.md';
+      const exampleCardPath = workspaceRoot + '/5_tasks/drafts/example-task.md';
+
+      const advisorPrompt = `你是 ${workspaceLabel} 工作区的顾问 (Advisor)。
+
+工作区信息：
+- 路径：${workspaceRoot}
+- Gate URL：${gateURL}
+- Charter：${charterPath}
+
+你的职责：
+- 读取 charter 了解红线和工作方式
+- 起草任务卡（在 5_tasks/drafts/）
+- 向 Owner 建议发布
+- 查看状态：lybra queue / lybra records / lybra owner-truth
+- 盯队列与记录变化：lybra agent watch --workspace-root ${workspaceRoot} —— 有变化即返回摘要,适合做你的唤醒泵
+
+快速开始：
+1. 连接 gate（使用 Owner 提供的 advisor token）
+2. 阅读 ${charterPath}
+3. 查看示例卡：${exampleCardPath}
+4. 起草第一张任务卡，建议 Owner 发布
+
+重要:你对治理工作区有写权(起草任务卡、维护治理文档);已发布的卡、queue、records是 gate 的领地,不可手写;产品仓等其他仓库默认只读,除非 Owner 明确授权;发布由 Owner 确认。`;
+
+      promptEl.textContent = advisorPrompt;
+
+      // Copy button for advisor prompt.
+      copyPromptBtn.onclick = () => {
+        navigator.clipboard.writeText(advisorPrompt).then(() => {
+          copyPromptBtn.textContent = '✅ 已复制';
+          copyPromptBtn.classList.add('copied');
+          setTimeout(() => {
+            copyPromptBtn.textContent = '📋 一键复制接入提示词';
+            copyPromptBtn.classList.remove('copied');
+          }, 2000);
+        }).catch(() => {
+          alert('复制失败，请手动复制');
+        });
+      };
+
+      // Publish command (example card path may vary, use default).
+      const publishCommand = `lybra publish 5_tasks/drafts/example-task.md`;
+      publishCmdEl.textContent = publishCommand;
+
+      // Copy button for publish command.
+      copyPublishBtn.onclick = () => {
+        navigator.clipboard.writeText(publishCommand).then(() => {
+          copyPublishBtn.textContent = '✅ 已复制';
+          copyPublishBtn.classList.add('copied');
+          setTimeout(() => {
+            copyPublishBtn.textContent = '📋 一键复制发布命令';
+            copyPublishBtn.classList.remove('copied');
+          }, 2000);
+        }).catch(() => {
+          alert('复制失败，请手动复制');
+        });
+      };
     }
 
     // ===== AIPOS-262B FIX-1: 验证台 (静态区块水合;"等我处理"并入分组) =====

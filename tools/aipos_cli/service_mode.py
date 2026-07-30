@@ -464,6 +464,10 @@ def write_connection_config(
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(config, handle, indent=2, sort_keys=True)
             handle.write("\n")
+            # AIPOS-272 FIX-1: flush + fsync before returning so子进程 spawn 后读取时文件已完整可读。
+            # 首启竞态:write 返回但 OS 缓存未落盘 → board/mcp 启动时读空/旧 registry → 401/崩溃。
+            handle.flush()
+            os.fsync(handle.fileno())
     finally:
         if os.name == "posix" and not _is_probably_non_posix(path):
             os.chmod(path, REQUIRED_CONNECTION_MODE)
@@ -835,6 +839,14 @@ def _run_supervisor(
             prev_handlers[_sig] = signal.signal(_sig, _shutdown)
         except (ValueError, OSError):
             pass  # not the main thread / unsupported platform — best-effort
+    # AIPOS-272 FIX-1: supervisor 子进程重拉机制（有界退避），防止首启竞态导致子进程崩溃后不重启。
+    # 重启策略：每个子进程独立计数，最多重启 5 次，退避延迟 1/2/4/8/16 秒。systemd 模式不冲突（该逻辑
+    # 仅在前台 demo 模式生效；systemd 有自己的 Restart=）。
+    MAX_RESTARTS = 5
+    BACKOFF_DELAYS = [1, 2, 4, 8, 16]
+    restart_counts = {"board": 0, "mcp": 0}
+    child_specs = [("board", board_cmd), ("mcp", mcp_cmd)]
+    should_exit = False
     try:
         processes.append(subprocess.Popen(board_cmd, env=env))
         processes.append(subprocess.Popen(mcp_cmd, env=env))
@@ -849,11 +861,27 @@ def _run_supervisor(
         }
         _write_service_state(workspace_root, state, connection_target=connection_target)
         print(render_connection_table({"workspace_root": str(workspace_root), "connection": redacted_connection(config), "warnings": warnings, "blocking_reasons": []}))
-        while True:
-            exited = [proc for proc in processes if proc.poll() is not None]
-            if exited:
-                break
-            time.sleep(0.5)
+        while not should_exit:
+            for i, (name, cmd) in enumerate(child_specs):
+                proc = processes[i]
+                if proc.poll() is not None:
+                    # 子进程已退出
+                    if restart_counts[name] >= MAX_RESTARTS:
+                        # 达到重启上限，标记退出
+                        print(f"Warning: {name} exited and reached restart limit ({MAX_RESTARTS})", file=sys.stderr)
+                        should_exit = True
+                        break
+                    # 退避延迟
+                    delay = BACKOFF_DELAYS[min(restart_counts[name], len(BACKOFF_DELAYS) - 1)]
+                    print(f"Warning: {name} (pid {proc.pid}) exited with code {proc.returncode}; restarting in {delay}s (attempt {restart_counts[name] + 1}/{MAX_RESTARTS})...", file=sys.stderr)
+                    time.sleep(delay)
+                    # 重启
+                    new_proc = subprocess.Popen(cmd, env=env)
+                    processes[i] = new_proc
+                    restart_counts[name] += 1
+                    print(f"{name} restarted as pid {new_proc.pid}", file=sys.stderr)
+            if not should_exit:
+                time.sleep(0.5)
     except KeyboardInterrupt:
         pass
     finally:

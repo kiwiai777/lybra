@@ -82,36 +82,54 @@ from web.board.auth_otc import (
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-BOARD_CONFIG_PATH = Path(__file__).resolve().parent / ".board_config.json"
 
 
-def _load_board_config() -> list[dict[str, str]]:
-    """Load multi-workspace config from .board_config.json.
+def _load_board_config(config_path: Path | None, repo_root: Path | None) -> list[dict[str, str]]:
+    """Load multi-workspace config from specified path or workspace-local deployment config.
     
-    Returns list of {label, root} dicts. Falls back to single REPO_ROOT workspace.
+    AIPOS-272 FIX-3: Config resolution order:
+    1. Explicit --board-config parameter (config_path)
+    2. <repo_root>/.lybra/board_config.json (workspace-local deployment config)
+    3. No config => single-workspace mode (workspace is repo_root itself; empty => wizard)
+    
+    Returns list of {label, root} dicts, or empty list for single-workspace fallback.
     """
-    if not BOARD_CONFIG_PATH.exists():
-        return []
-    try:
-        data = json.loads(BOARD_CONFIG_PATH.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return []
-        workspaces = data.get("workspaces", [])
-        if not isinstance(workspaces, list):
-            return []
-        return workspaces
-    except (json.JSONDecodeError, OSError):
-        return []
+    # Priority 1: Explicit --board-config parameter
+    if config_path and config_path.exists():
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                workspaces = data.get("workspaces", [])
+                if isinstance(workspaces, list):
+                    return workspaces
+        except (json.JSONDecodeError, OSError):
+            pass
+    
+    # Priority 2: Workspace-local deployment config
+    if repo_root:
+        workspace_config = repo_root / ".lybra" / "board_config.json"
+        if workspace_config.exists():
+            try:
+                data = json.loads(workspace_config.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    workspaces = data.get("workspaces", [])
+                    if isinstance(workspaces, list):
+                        return workspaces
+            except (json.JSONDecodeError, OSError):
+                pass
+    
+    # Priority 3: Single-workspace mode (empty list => caller handles fallback)
+    return []
 
 
-def get_overview(board_config_path: Path | None = None) -> dict[str, Any]:
-    """Multi-workspace overview aggregation (AIPOS-251)."""
-    config_path = board_config_path or BOARD_CONFIG_PATH
-    workspaces_config = _load_board_config() if config_path == BOARD_CONFIG_PATH else []
+def get_overview(board_config_path: Path | None = None, repo_root: Path | None = None) -> dict[str, Any]:
+    """Multi-workspace overview aggregation (AIPOS-251, AIPOS-272 FIX-3)."""
+    workspaces_config = _load_board_config(board_config_path, repo_root)
     
     # Fallback to single workspace if no config
     if not workspaces_config:
-        workspaces_config = [{"label": "Default Workspace", "root": str(REPO_ROOT)}]
+        fallback_root = repo_root or REPO_ROOT
+        workspaces_config = [{"label": "Default Workspace", "root": str(fallback_root)}]
     
     results = []
     for ws_config in workspaces_config:
@@ -222,11 +240,12 @@ def _content_type(path: Path) -> str:
     return "application/octet-stream"
 
 
-def _resolve_workspace_root(params: dict[str, list[str]], fallback_root: Path | None) -> Path | None:
+def _resolve_workspace_root(params: dict[str, list[str]], fallback_root: Path | None, board_config_path: Path | None) -> Path | None:
     """Resolve workspace root from query params or fallback to default.
     
     AIPOS-252: Multi-workspace API support.
-    If ?workspace=N is provided, load that workspace from .board_config.json.
+    AIPOS-272 FIX-3: Use new config resolution.
+    If ?workspace=N is provided, load that workspace from config.
     Otherwise use fallback_root (single-workspace mode).
     """
     workspace_param = params.get('workspace', [])
@@ -235,7 +254,7 @@ def _resolve_workspace_root(params: dict[str, list[str]], fallback_root: Path | 
     
     try:
         workspace_index = int(workspace_param[0])
-        workspaces_config = _load_board_config()
+        workspaces_config = _load_board_config(board_config_path, fallback_root)
         if not workspaces_config or workspace_index >= len(workspaces_config):
             return fallback_root
         
@@ -246,27 +265,27 @@ def _resolve_workspace_root(params: dict[str, list[str]], fallback_root: Path | 
         return fallback_root
 
 
-def _api_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, list[str]]], dict[str, Any]]]:
+def _api_routes(repo_root: Path | None, board_config_path: Path | None = None) -> dict[str, Callable[[dict[str, list[str]]], dict[str, Any]]]:
     return {
-        "/api/health": lambda params: get_health(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/overview": lambda _params: get_overview(),
-        "/api/runtime-status": partial(_get_runtime_status_route, repo_root=repo_root),
+        "/api/health": lambda params: get_health(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/overview": lambda _params: get_overview(board_config_path=board_config_path, repo_root=repo_root),
+        "/api/runtime-status": partial(_get_runtime_status_route, repo_root=repo_root, board_config_path=board_config_path),
         "/api/lifecycle": partial(_get_lifecycle_route, repo_root=repo_root),
-        "/api/governance": lambda params: get_governance(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/queue": lambda params: get_queue(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/needs-owner": lambda params: get_needs_owner(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/validate": lambda params: get_validate(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/agents": lambda params: get_agents(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/drafts": lambda params: get_drafts(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/records": lambda params: get_records(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/owner-truth": lambda params: get_owner_truth_view(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/project-map": lambda params: get_project_map(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/verify-bench": lambda params: get_verify_bench(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/external-intake/review": lambda params: get_external_intake_review(repo_root=_resolve_workspace_root(params, repo_root)),
-        "/api/owner-decision-records": lambda params: get_owner_decision_records(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/governance": lambda params: get_governance(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/queue": lambda params: get_queue(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/needs-owner": lambda params: get_needs_owner(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/validate": lambda params: get_validate(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/agents": lambda params: get_agents(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/drafts": lambda params: get_drafts(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/records": lambda params: get_records(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/owner-truth": lambda params: get_owner_truth_view(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/project-map": lambda params: get_project_map(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/verify-bench": lambda params: get_verify_bench(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/external-intake/review": lambda params: get_external_intake_review(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/owner-decision-records": lambda params: get_owner_decision_records(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
         "/api/planner-drafts/review": partial(_get_planner_drafts_review_route, repo_root=repo_root),
         "/api/owner-decisions/review": partial(_get_owner_decisions_review_route, repo_root=repo_root),
-        "/api/orchestration/index": lambda params: get_orchestration_index(repo_root=_resolve_workspace_root(params, repo_root)),
+        "/api/orchestration/index": lambda params: get_orchestration_index(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
         "/api/orchestration-summary": partial(_get_orchestration_summary_route, repo_root=repo_root),
         "/api/orchestration/summary": partial(_get_orchestration_summary_route, repo_root=repo_root),
         "/api/orchestration-timeline": partial(_get_orchestration_timeline_route, repo_root=repo_root),
@@ -275,7 +294,7 @@ def _api_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, list[st
         "/api/context-pack/preview": partial(_get_context_pack_preview_route, repo_root=repo_root),
         "/api/task": partial(_get_task_route, repo_root=repo_root),
         "/api/preview": partial(_get_preview_route, repo_root=repo_root),
-        "/api/markdown-source": partial(_get_markdown_source_route, repo_root=repo_root),
+        "/api/markdown-source": partial(_get_markdown_source_route, repo_root=repo_root, board_config_path=board_config_path),
     }
 
 
@@ -368,6 +387,41 @@ def _runtime_config_defaults(repo_root: Path) -> dict[str, Any]:
         "transport_token_env": str(mcp.get("transport_token_env") or "LYBRA_MCP_TOKEN"),
         "capability_token_env": str(mcp.get("capability_token_env") or "LYBRA_CAPABILITY_TOKEN"),
     }
+
+
+def _load_connection_endpoints(repo_root: Path) -> dict[str, Any]:
+    """Load actual endpoint URLs from workspace connection.json (AIPOS-272 FIX-8).
+    
+    Returns dict with mcp_rpc_url, mcp_sse_url, board_url (or None if not found).
+    Graceful degradation: missing file or parse error => all None + notice.
+    """
+    connection_path = repo_root / ".lybra" / "connection.json"
+    if not connection_path.exists():
+        return {
+            "mcp_rpc_url": None,
+            "mcp_sse_url": None,
+            "board_url": None,
+            "connection_notice": f"connection.json not found at {connection_path.relative_to(repo_root)}",
+        }
+    
+    try:
+        data = json.loads(connection_path.read_text(encoding="utf-8"))
+        mcp = data.get("mcp") if isinstance(data.get("mcp"), dict) else {}
+        board = data.get("board") if isinstance(data.get("board"), dict) else {}
+        return {
+            "mcp_rpc_url": mcp.get("rpc_url"),
+            "mcp_sse_url": mcp.get("sse_url"),
+            "board_url": board.get("url"),
+            "connection_notice": None,
+        }
+    except Exception as exc:
+        return {
+            "mcp_rpc_url": None,
+            "mcp_sse_url": None,
+            "board_url": None,
+            "connection_notice": f"Failed to parse connection.json: {exc}",
+        }
+
 
 
 def _capability_status(raw: str) -> dict[str, Any]:
@@ -623,10 +677,15 @@ def _get_lifecycle_route(_params: dict[str, list[str]], *, repo_root: Path | Non
     }
 
 
-def _get_runtime_status_route(_params: dict[str, list[str]], *, repo_root: Path | None) -> dict[str, Any]:
+def _get_runtime_status_route(params: dict[str, list[str]], *, repo_root: Path | None, board_config_path: Path | None = None) -> dict[str, Any]:
     operation = "get_runtime_status"
-    resolved_root = (repo_root or REPO_ROOT).resolve()
+    resolved_root = _resolve_workspace_root(params, repo_root or REPO_ROOT, board_config_path)
+    if resolved_root is None:
+        resolved_root = (repo_root or REPO_ROOT).resolve()
+    else:
+        resolved_root = resolved_root.resolve()
     defaults = _runtime_config_defaults(resolved_root)
+    connection_endpoints = _load_connection_endpoints(resolved_root)
     transport_env = defaults["transport_token_env"]
     capability_env = defaults["capability_token_env"]
     transport_raw = str(os.environ.get(transport_env) or "")
@@ -640,6 +699,8 @@ def _get_runtime_status_route(_params: dict[str, list[str]], *, repo_root: Path 
     warnings: list[str] = []
     if defaults["config_error"]:
         warnings.append(f"Workspace config issue: {defaults['config_error']}")
+    if connection_endpoints["connection_notice"]:
+        warnings.append(connection_endpoints["connection_notice"])
     if not transport_raw:
         warnings.append(f"{transport_env} is not set; MCP transport clients cannot authenticate.")
     if not capability_raw:
@@ -654,14 +715,14 @@ def _get_runtime_status_route(_params: dict[str, list[str]], *, repo_root: Path 
         },
         "endpoints": {
             "board": {
-                "url": f"http://{defaults['board_host']}:{defaults['board_port']}",
+                "url": connection_endpoints["board_url"] or f"http://{defaults['board_host']}:{defaults['board_port']}",
                 "host": defaults["board_host"],
                 "port": defaults["board_port"],
                 "loopback": _is_loopback_host(defaults["board_host"]),
             },
             "mcp": {
-                "url": f"http://{defaults['mcp_host']}:{defaults['mcp_port']}/mcp",
-                "sse_url": f"http://{defaults['mcp_host']}:{defaults['mcp_port']}/sse",
+                "url": connection_endpoints["mcp_rpc_url"] or f"http://{defaults['mcp_host']}:{defaults['mcp_port']}/mcp",
+                "sse_url": connection_endpoints["mcp_sse_url"] or f"http://{defaults['mcp_host']}:{defaults['mcp_port']}/sse",
                 "host": defaults["mcp_host"],
                 "port": defaults["mcp_port"],
                 "loopback": _is_loopback_host(defaults["mcp_host"]),
@@ -2167,9 +2228,9 @@ def _get_preview_route(params: dict[str, list[str]], *, repo_root: Path | None) 
     return get_preview(task_id=task_id, path=path, actor=actor, repo_root=repo_root)
 
 
-def _get_markdown_source_route(params: dict[str, list[str]], *, repo_root: Path | None) -> dict[str, Any]:
+def _get_markdown_source_route(params: dict[str, list[str]], *, repo_root: Path | None, board_config_path: Path | None = None) -> dict[str, Any]:
     # AIPOS-263: md 原文侧栏 — 队列卡 / 记录 md 的只读安全渲染(零依赖、先转义后变换、路径白名单)。
-    resolved_root = _resolve_workspace_root(params, repo_root)
+    resolved_root = _resolve_workspace_root(params, repo_root, board_config_path)
     return get_markdown_source(
         path=_first_param(params, "path"),
         task_id=_first_param(params, "task_id"),
@@ -2418,22 +2479,19 @@ def _token_fingerprint(token: str) -> str:
     return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
 
 
-def _discover_connection_paths(board_config_path: Path | None = None) -> list[Path]:
+def _discover_connection_paths(repo_root: Path | None = None, board_config_path: Path | None = None) -> list[Path]:
     """发现用于校验登录 token 的 connection.json。
 
-    候选:(1) 全局运行时 ~/.lybra/local/connection.json;(2) .board_config.json 各 workspace
-    根下的 .lybra/local/connection.json 与 .lybra/connection.json(兼容两种落位)。
+    AIPOS-272 FIX-2: 首选 board 启动参数 repo_root 自身的 .lybra/connection.json,
+    次选全局 ~/.lybra/local/connection.json(单机默认工作区场景)。
+    不再枚举 .board_config.json 配置的其他工作区(部署路径不得入产品代码;避免跨工作区认证串门)。
     仅返回真实存在的文件,去重。"""
-    cfg_path = board_config_path or BOARD_CONFIG_PATH
-    candidates: list[Path] = [Path("~/.lybra/local/connection.json").expanduser()]
-    for ws in _load_board_config() if cfg_path == BOARD_CONFIG_PATH else _load_board_config_for(cfg_path):
-        root_str = str(ws.get("root") or "").strip()
-        if not root_str:
-            continue
-        root = Path(root_str).expanduser()
-        if root.is_dir():
-            candidates.append(root / ".lybra" / "local" / "connection.json")
-            candidates.append(root / ".lybra" / "connection.json")
+    candidates: list[Path] = []
+    # 首选:board 启动时明确声明的工作区
+    if repo_root is not None:
+        candidates.append(repo_root / ".lybra" / "connection.json")
+    # 次选:单机默认全局运行时
+    candidates.append(Path("~/.lybra/local/connection.json").expanduser())
     seen: set[str] = set()
     result: list[Path] = []
     for path in candidates:
@@ -2447,17 +2505,6 @@ def _discover_connection_paths(board_config_path: Path | None = None) -> list[Pa
             continue
     return result
 
-
-def _load_board_config_for(board_config_path: Path) -> list[dict[str, str]]:
-    """与 _load_board_config 同,但针对指定配置路径(测试可注入)。"""
-    if not board_config_path.exists():
-        return []
-    try:
-        data = json.loads(board_config_path.read_text(encoding="utf-8"))
-        workspaces = data.get("workspaces") if isinstance(data, dict) else None
-        return workspaces if isinstance(workspaces, list) else []
-    except (json.JSONDecodeError, OSError):
-        return []
 
 
 def verify_login_token(
@@ -2769,16 +2816,18 @@ def is_authorized(
 def make_handler(
     repo_root: Path | None = None,
     *,
+    board_config_path: Path | None = None,
     session_store: SessionStore | None = None,
     connection_paths: list[Path] | None = None,
     otc_store: OTCStore | None = None,
     device_store: DeviceCodeStore | None = None,
     auth_log_path: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    routes = _api_routes(repo_root)
+    routes = _api_routes(repo_root, board_config_path)
     post_routes = _api_post_routes(repo_root)
     sessions = session_store if session_store is not None else SessionStore()
-    conn_paths: list[Path] | None = connection_paths
+    # AIPOS-272 FIX-2: 未显式注入时，按 repo_root 发现 connection.json（首选工作区自身）
+    conn_paths = connection_paths if connection_paths is not None else _discover_connection_paths(repo_root=repo_root)
     otc = otc_store if otc_store is not None else OTCStore()
     device = device_store if device_store is not None else DeviceCodeStore()
     # auth-log 落点:显式注入优先(测试),否则按 repo_root 解析(repo_root 为 None 则不落盘)。
@@ -3156,8 +3205,8 @@ def make_handler(
     return BoardHandler
 
 
-def run_server(host: str = "127.0.0.1", port: int = 7117, repo_root: Path | None = None) -> None:
-    handler = make_handler(repo_root=repo_root)
+def run_server(host: str = "127.0.0.1", port: int = 7117, repo_root: Path | None = None, board_config_path: Path | None = None) -> None:
+    handler = make_handler(repo_root=repo_root, board_config_path=board_config_path)
     with ThreadingHTTPServer((host, port), handler) as httpd:
         print(f"AIPOS board local UI listening on http://{host}:{port}")
         httpd.serve_forever()
@@ -3168,6 +3217,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7117)
     parser.add_argument("--repo-root", default=None)
+    parser.add_argument("--board-config", default=None, help="Path to board_config.json (AIPOS-272 FIX-3)")
     return parser.parse_args()
 
 
@@ -3175,7 +3225,9 @@ def main() -> int:
     args = parse_args()
     repo_root_arg = args.repo_root or os.environ.get("AIPOS_WORKSPACE_ROOT")
     repo_root = Path(repo_root_arg).expanduser().resolve() if repo_root_arg else None
-    run_server(host=str(args.host), port=int(args.port), repo_root=repo_root)
+    board_config_arg = args.board_config
+    board_config_path = Path(board_config_arg).expanduser().resolve() if board_config_arg else None
+    run_server(host=str(args.host), port=int(args.port), repo_root=repo_root, board_config_path=board_config_path)
     return 0
 
 

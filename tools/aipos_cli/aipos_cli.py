@@ -535,8 +535,37 @@ def _render_mcp_config_text(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _print_onboarding_guide(workspace_root: Path, project_id: str) -> None:
+    """Print three-step onboarding guide after successful init (AIPOS-272)."""
+    print("\n" + "=" * 80)
+    print("🎉 Workspace initialized successfully!")
+    print("=" * 80)
+    print("\n📦 Onboarding package created:")
+    print(f"  - governance/advisor-charter.md   (顾问接入包：置顶铁律 + 六查 + governance_refs)")
+    print(f"  - governance/AGENTS.md             (Executor/Auditor 角色说明)")
+    print(f"  - 5_tasks/drafts/example-task.md   (示例任务卡)")
+    print("\n🚀 Next steps — Get started in 3 steps:\n")
+    print("  ① Start the gate:")
+    print(f"     cd {workspace_root}")
+    print(f"     lybra serve --workspace-root .")
+    print("\n  ② Open the board (in another terminal):")
+    print(f"     lybra board open --workspace-root {workspace_root}")
+    print("     # The board will show a welcome guide when empty.")
+    print("\n  ③ Connect your advisor agent:")
+    print("     Copy the advisor onboarding prompt from the board's welcome guide,")
+    print("     paste it to your agent (Claude/Codex/any MCP-capable agent),")
+    print("     and start drafting your first task card!")
+    print("\n💡 See QUICKSTART.md for the complete walkthrough.")
+    print("=" * 80 + "\n")
+
+
 def _run_top_level_init(args: argparse.Namespace) -> int:
-    output = Path(args.output).expanduser().resolve()
+    # AIPOS-272F5: Default output to ~/.lybra/workspaces/<project_id>/ if not provided
+    if args.output:
+        output = Path(args.output).expanduser().resolve()
+    else:
+        output = Path.home() / ".lybra" / "workspaces" / args.project_id
+        output = output.resolve()
     variables = {"project_id": args.project_id, **parse_var_items(args.var)}
     if args.dry_run:
         result = build_workspace_init_plan(
@@ -571,6 +600,9 @@ def _run_top_level_init(args: argparse.Namespace) -> int:
         print(render_json(result))
     else:
         print(render_json(result))
+        # AIPOS-272: Print onboarding guide after successful init
+        if not args.dry_run and result.get("ok") and not result.get("blocking_reasons"):
+            _print_onboarding_guide(output, variables.get("project_id", "workspace"))
     return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
 
 
@@ -808,7 +840,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     init_parser = subparsers.add_parser("init", help="Initialize a Lybra workspace from a bundled template")
-    init_parser.add_argument("output", help="Target workspace path")
+    init_parser.add_argument("output", nargs="?", help="Target workspace path (defaults to ~/.lybra/workspaces/<project-id>/)")
     init_parser.add_argument("--project-id", required=True, help="Workspace project_id")
     init_parser.add_argument("--template", default="blank", help="Bundled template name; defaults to blank")
     init_parser.add_argument("--var", action="append", default=[], help="Additional template variable in k=v form")
