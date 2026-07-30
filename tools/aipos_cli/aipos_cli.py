@@ -877,13 +877,14 @@ def build_parser() -> argparse.ArgumentParser:
     _watch_parser = agent_subparsers.add_parser(
         "watch",
         help="Foreground BOUNDED client loop. Two modes (候选⑤⑫合流): "
-        "--workspace-root = filesystem mtime pump (candidate ⑫, AIPOS-268; any bash agent, no gate); "
-        "--gate-url = stateless gate pull for claimable tasks (candidate ⑤, AIPOS-248).",
+        "--workspace-root = filesystem mtime pump (candidate ⑫, AIPOS-268+284; any bash agent, no gate); "
+        "--gate-url = stateless gate pull for claimable tasks (candidate ⑤, AIPOS-248). "
+        "Exit codes: 0=change/expect satisfied, 2=timeout, 3=end-pattern but no product, 4=stall, 130=signal.",
     )
     _watch_mode = _watch_parser.add_mutually_exclusive_group(required=True)
     _watch_mode.add_argument(
         "--workspace-root",
-        help="候选⑫ filesystem pump (AIPOS-268): poll 5_tasks/queue/** + 5_tasks/records/** mtime+path; "
+        help="候选⑫ filesystem pump (AIPOS-268+284): poll 5_tasks/queue/** + 5_tasks/records/** mtime+path; "
         "print a JSON change summary on the first change (exit 0); exit 2 silent on --timeout. No gate/token.",
     )
     _watch_mode.add_argument("--gate-url", help="候选⑤ gate pull (AIPOS-248): e.g. http://127.0.0.1:7118")
@@ -897,6 +898,11 @@ def build_parser() -> argparse.ArgumentParser:
     _watch_parser.add_argument("--interval", type=float, default=None, help="poll interval seconds. Filesystem pump default 15; gate pull default 60 (hard floor 15).")
     _watch_parser.add_argument("--max-wait", type=float, default=1800.0, help="[gate mode] bounded wait seconds before a clean exit (default 1800)")
     _watch_parser.add_argument("--timeout", type=float, default=1800.0, help="[filesystem pump] no-change timeout seconds -> silent exit 2 (default 1800)")
+    # AIPOS-284 v2: three "death silence" semantics
+    _watch_parser.add_argument("--expect", action="append", help="[filesystem pump v2] glob pattern for expected artifact; check immediately on startup and every poll (布防即检). Can be repeated. Exit 0 when any match.")
+    _watch_parser.add_argument("--run-log", help="[filesystem pump v2] path to run log (for end-pattern and stall detection)")
+    _watch_parser.add_argument("--end-pattern", help="[filesystem pump v2] regex: if found in run-log but --expect NOT satisfied, exit 3 after one grace poll (结束无产物)")
+    _watch_parser.add_argument("--stall-secs", type=float, default=None, help="[filesystem pump v2] silence threshold seconds (default 600). If run-log (or observation surface) mtime unchanged for ≥N seconds, exit 4 (静默停滞)")
 
     board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")

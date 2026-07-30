@@ -1,6 +1,6 @@
-"""AIPOS-268 — `agent watch --workspace-root` filesystem pump tests.
+"""AIPOS-268 + AIPOS-284 — `agent watch --workspace-root` filesystem pump tests.
 
-Pins (card AIPOS-268 §1-3 + red lines):
+Pins (card AIPOS-268 §1-3 + red lines + AIPOS-284 S1-S5):
 - diff four kinds (new / modified / moved / deleted) over real fixture trees, incl. the
   queue state-transition move (pending->claimed, same content fingerprint = a move, not
   new+deleted) and deterministic sorted output;
@@ -8,6 +8,11 @@ Pins (card AIPOS-268 §1-3 + red lines):
   SILENT exit 2; SIGTERM is a clean exit (130, no output, no traceback) — verified on the
   real CLI via subprocess (zero bash `$!` methodology issues);
 - summary FORMAT: a single JSON line, ``changed`` array, each entry ``{path, kind}``;
+- AIPOS-284 v2: four exit codes (0/2/3/4) with dedicated semantics:
+  - exit 0: expect satisfied OR diff non-empty
+  - exit 2: timeout (silent, v1 behavior)
+  - exit 3: end-pattern seen but expect NOT satisfied (结束无产物)
+  - exit 4: stall detected (静默停滞)
 - red lines: the module is stdlib-only (zero new deps), read-only (no write/remove
   syscalls in source), and GATE-FREE (no MCP/gate client imports — the pump never touches
   the gate); agent_connector.py stays byte-identical (candidate ⑤ preserved).
@@ -32,11 +37,17 @@ from typing import Any
 from tools.aipos_cli import agent_watch_fs
 from tools.aipos_cli.agent_watch_fs import (
     DEFAULT_INTERVAL_SECONDS,
+    DEFAULT_STALL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
     EXIT_CHANGE,
+    EXIT_END_NO_PRODUCT,
     EXIT_SIGNAL,
+    EXIT_STALL,
     EXIT_TIMEOUT,
+    check_expect_patterns,
     diff_snapshots,
+    get_observation_mtime,
+    get_run_log_tail,
     run_fs_watch,
     snapshot,
 )
@@ -392,7 +403,7 @@ class FsWatchRedLineTests(unittest.TestCase):
         tree = ast.parse(Path(agent_watch_fs.__file__).read_text(encoding="utf-8"))
         stdlib = {
             "json", "os", "signal", "stat", "sys", "time", "pathlib", "typing",
-            "__future__",
+            "__future__", "fnmatch", "re",
         }
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -418,14 +429,20 @@ class FsWatchRedLineTests(unittest.TestCase):
 
     def test_snapshot_is_read_only(self) -> None:
         """Red line '纯客户端只读': the module must contain no write/move/remove
-        primitives — it only ever reads (stat/walk)."""
+        primitives — it only ever reads (stat/walk). AIPOS-284: open() is allowed in
+        read mode for run-log tail reading."""
         src = Path(agent_watch_fs.__file__).read_text(encoding="utf-8")
         for forbidden in (
             "os.remove(", "os.unlink(", "os.rmdir(", "os.rename(", "os.replace(",
             "shutil.",
-            ".write_text(", ".write_bytes(", "open(",
+            ".write_text(", ".write_bytes(",
         ):
             self.assertNotIn(forbidden, src, f"pump must be read-only: found {forbidden!r}")
+        # Verify open() is only used in read mode (AIPOS-284 run-log tail reading)
+        import re
+        open_calls = re.findall(r'open\([^)]+\)', src)
+        for call in open_calls:
+            self.assertIn('"r"', call, f"open() must be read-only: {call}")
 
     def test_agent_connector_module_is_unchanged_zero_regression(self) -> None:
         """Red line 'gate 零改动' + S3 zero-regression: the AIPOS-248 gate-path module
@@ -457,6 +474,324 @@ class FsWatchRedLineTests(unittest.TestCase):
         self.assertIn("--workspace-root", text)
         self.assertIn("--gate-url", text)
         self.assertIn("--timeout", text)
+
+
+class FsWatchV2ExpectTests(unittest.TestCase):
+    """AIPOS-284 S1: --expect glob布防即检 + 运行中检. Exit 0 when matched."""
+
+    def test_expect_satisfied_immediately_on_startup(self):
+        """S1布防即检: --expect pattern exists at startup -> exit 0 immediately."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/RETURN.md"), "done")
+        args = _args(ws, interval=0.5, timeout=10.0)
+        args.expect = ["5_tasks/records/RETURN.md"]
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=lambda s: None, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_CHANGE)
+        payload = json.loads(out.getvalue())
+        self.assertIn("expect_satisfied", payload)
+        self.assertIn("5_tasks/records/RETURN.md", payload["expect_satisfied"])
+
+    def test_expect_satisfied_during_poll(self):
+        """S1运行中检: expect appears after startup -> exit 0 on next poll."""
+        ws = _make_workspace()
+        created = {"done": False}
+
+        def sleeper(seconds: float):
+            if not created["done"]:
+                _write(os.path.join(ws, "5_tasks/queue/claimed/artifact.json"), "output")
+                created["done"] = True
+
+        args = _args(ws, interval=0.1, timeout=10.0)
+        args.expect = ["5_tasks/queue/claimed/*.json"]
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_CHANGE)
+        payload = json.loads(out.getvalue())
+        self.assertIn("expect_satisfied", payload)
+        self.assertIn("5_tasks/queue/claimed/artifact.json", payload["expect_satisfied"])
+
+    def test_expect_glob_matches_multiple(self):
+        """--expect can be a glob matching multiple files."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/a.md"), "x")
+        _write(os.path.join(ws, "5_tasks/records/b.md"), "y")
+        matched = check_expect_patterns(Path(ws), ["5_tasks/records/*.md"])
+        self.assertEqual(sorted(matched), ["5_tasks/records/a.md", "5_tasks/records/b.md"])
+
+    def test_multiple_expect_patterns(self):
+        """--expect can be repeated; any match triggers exit 0."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/queue/pending/task.md"), "pending")
+        args = _args(ws, interval=0.1, timeout=5.0)
+        args.expect = ["5_tasks/records/RETURN.md", "5_tasks/queue/pending/*.md"]
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args)
+        self.assertEqual(rc, EXIT_CHANGE)
+        payload = json.loads(out.getvalue())
+        self.assertIn("5_tasks/queue/pending/task.md", payload["expect_satisfied"])
+
+
+class FsWatchV2EndNoProductTests(unittest.TestCase):
+    """AIPOS-284 S2: --run-log + --end-pattern结束无产物. Exit 3 when end seen but expect NOT satisfied."""
+
+    def test_end_pattern_seen_but_no_expect_triggers_exit3(self):
+        """S2结束无产物: end-pattern appears in run-log, expect not satisfied -> exit 3 after grace."""
+        ws = _make_workspace()
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "starting...\n")
+        polls = [0]
+
+        def sleeper(seconds: float):
+            polls[0] += 1
+            if polls[0] == 1:
+                # First poll: append end-pattern
+                with open(run_log, "a") as f:
+                    f.write("execution finished\n")
+            # Second poll: grace period, still no expect -> exit 3
+
+        args = _args(ws, interval=0.1, timeout=10.0)
+        args.expect = ["5_tasks/records/RETURN.md"]
+        args.run_log = run_log
+        args.end_pattern = "execution finished"
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_END_NO_PRODUCT)
+        payload = json.loads(out.getvalue())
+        self.assertIn("end_no_product", payload)
+        self.assertIn("execution finished", payload["end_no_product"]["run_log_tail"])
+
+    def test_end_pattern_with_expect_satisfied_exits_0(self):
+        """If expect IS satisfied after end-pattern, exit 0 (not 3)."""
+        ws = _make_workspace()
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "starting...\n")
+        polls = [0]
+
+        def sleeper(seconds: float):
+            polls[0] += 1
+            if polls[0] == 1:
+                with open(run_log, "a") as f:
+                    f.write("execution finished\n")
+                _write(os.path.join(ws, "5_tasks/records/RETURN.md"), "done")
+
+        args = _args(ws, interval=0.1, timeout=10.0)
+        args.expect = ["5_tasks/records/RETURN.md"]
+        args.run_log = run_log
+        args.end_pattern = "execution finished"
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_CHANGE)  # expect satisfied, not exit 3
+        payload = json.loads(out.getvalue())
+        self.assertIn("expect_satisfied", payload)
+
+    def test_no_end_pattern_means_no_exit3(self):
+        """Without --end-pattern, exit 3 never happens."""
+        ws = _make_workspace()
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "done done done\n")
+        args = _args(ws, interval=0.5, timeout=1.5)
+        args.expect = ["5_tasks/records/RETURN.md"]
+        args.run_log = run_log
+        args.end_pattern = None  # no end-pattern
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=time.sleep, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_TIMEOUT)  # just times out
+
+
+class FsWatchV2StallTests(unittest.TestCase):
+    """AIPOS-284 S3: --stall-secs静默停滞. Exit 4 when observation surface silent beyond threshold."""
+
+    def test_stall_on_run_log_silence(self):
+        """S3静默停滞: run-log mtime unchanged for >= stall-secs -> exit 4."""
+        ws = _make_workspace()
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "started\n")
+        # Ensure run-log mtime is in the past
+        time.sleep(0.1)
+        clock_now = [0.0]
+
+        def sleeper(seconds: float):
+            clock_now[0] += seconds
+
+        args = _args(ws, interval=0.5, timeout=100.0)
+        args.expect = None
+        args.run_log = run_log
+        args.end_pattern = None
+        args.stall_secs = 2.0  # 2 seconds stall threshold
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
+        self.assertEqual(rc, EXIT_STALL)
+        payload = json.loads(out.getvalue())
+        self.assertIn("stall", payload)
+        self.assertGreaterEqual(payload["stall"]["silence_seconds"], 2)
+
+    def test_stall_on_observation_surface_when_no_run_log(self):
+        """Without run-log, stall detection uses the entire observation surface (queue+records)."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/seed.md"), "seed")
+        time.sleep(0.1)
+        clock_now = [0.0]
+
+        def sleeper(seconds: float):
+            clock_now[0] += seconds
+
+        args = _args(ws, interval=0.5, timeout=100.0)
+        args.expect = None
+        args.run_log = None  # no run-log
+        args.end_pattern = None
+        args.stall_secs = 1.5
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
+        self.assertEqual(rc, EXIT_STALL)
+
+    def test_stall_default_is_600_seconds(self):
+        """S3: default stall threshold is 600 seconds."""
+        self.assertEqual(DEFAULT_STALL_SECONDS, 600)
+
+    def test_observation_surface_change_resets_stall_timer(self):
+        """If observation surface changes, stall timer resets."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/initial.md"), "start")
+        clock_now = [0.0]
+        polls = [0]
+
+        def sleeper(seconds: float):
+            clock_now[0] += seconds
+            polls[0] += 1
+            if polls[0] == 3:
+                # Add a new file to reset stall timer
+                _write(os.path.join(ws, "5_tasks/records/progress.md"), "updated")
+
+        args = _args(ws, interval=0.5, timeout=10.0)
+        args.expect = None
+        args.run_log = None  # Use observation surface, not run-log
+        args.end_pattern = None
+        args.stall_secs = 1.5
+        with redirect_stdout(io.StringIO()):
+            rc = run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
+        # Should exit 0 with change detection, not stall
+        self.assertEqual(rc, EXIT_CHANGE)
+
+
+class FsWatchV2TimeoutTests(unittest.TestCase):
+    """AIPOS-284 S4: timeout仍exit 2 (v1 behavior零回归)."""
+
+    def test_timeout_with_v2_params_still_exit2(self):
+        """Even with v2 params set, timeout still produces silent exit 2."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/seed.md"), "seed")
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "starting\n")
+        clock_now = [0.0]
+
+        def sleeper(seconds: float):
+            clock_now[0] += seconds
+
+        args = _args(ws, interval=0.3, timeout=1.0)
+        args.expect = ["5_tasks/records/NEVER_EXISTS.md"]
+        args.run_log = run_log
+        args.end_pattern = "will never match"
+        args.stall_secs = 999.0  # won't trigger
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
+        self.assertEqual(rc, EXIT_TIMEOUT)
+        self.assertEqual(out.getvalue(), "", "timeout must be silent")
+
+
+class FsWatchV2IntegrationTests(unittest.TestCase):
+    """AIPOS-284 S5: four exit codes end-to-end on real CLI."""
+
+    def test_real_cli_exit0_expect_satisfied(self):
+        """Real CLI: --expect satisfied -> exit 0."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/RETURN.md"), "done")
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "watch",
+             "--workspace-root", ws, "--timeout", "5", "--interval", "0.3",
+             "--expect", "5_tasks/records/RETURN.md"],
+            cwd=str(_REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        out, err = proc.communicate(timeout=8)
+        self.assertEqual(proc.returncode, EXIT_CHANGE, err)
+        payload = json.loads(out.decode("utf-8").strip())
+        self.assertIn("expect_satisfied", payload)
+
+    def test_real_cli_exit2_timeout(self):
+        """Real CLI: timeout with no change -> exit 2 (silent)."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/seed.md"), "seed")
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "watch",
+             "--workspace-root", ws, "--timeout", "1", "--interval", "0.3"],
+            cwd=str(_REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        out, err = proc.communicate(timeout=8)
+        self.assertEqual(proc.returncode, EXIT_TIMEOUT)
+        self.assertEqual(out, b"", "timeout must be silent")
+
+    def test_real_cli_exit3_end_no_product(self):
+        """Real CLI: end-pattern seen but expect not satisfied -> exit 3."""
+        ws = _make_workspace()
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "starting...\n")
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "watch",
+             "--workspace-root", ws, "--timeout", "8", "--interval", "0.3",
+             "--expect", "5_tasks/records/RETURN.md",
+             "--run-log", run_log, "--end-pattern", "FINISHED"],
+            cwd=str(_REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            time.sleep(0.5)
+            with open(run_log, "a") as f:
+                f.write("FINISHED\n")
+            out, err = proc.communicate(timeout=8)
+        except Exception:
+            proc.kill()
+            raise
+        self.assertEqual(proc.returncode, EXIT_END_NO_PRODUCT, err)
+        payload = json.loads(out.decode("utf-8").strip())
+        self.assertIn("end_no_product", payload)
+
+    def test_real_cli_exit4_stall(self):
+        """Real CLI: observation surface silent beyond stall-secs -> exit 4."""
+        ws = _make_workspace()
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "started\n")
+        # Let run-log settle
+        time.sleep(0.2)
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "watch",
+             "--workspace-root", ws, "--timeout", "20", "--interval", "0.3",
+             "--run-log", run_log, "--stall-secs", "1.5"],
+            cwd=str(_REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        out, err = proc.communicate(timeout=8)
+        self.assertEqual(proc.returncode, EXIT_STALL, err)
+        payload = json.loads(out.decode("utf-8").strip())
+        self.assertIn("stall", payload)
+        self.assertGreaterEqual(payload["stall"]["silence_seconds"], 1)
 
 
 if __name__ == "__main__":

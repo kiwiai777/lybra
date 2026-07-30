@@ -1,9 +1,9 @@
-"""AIPOS-268 — ``agent watch --workspace-root``: the harness-agnostic filesystem pump.
+"""AIPOS-268 + AIPOS-284 — ``agent watch --workspace-root``: filesystem pump v2.
 
 This is candidate ⑫ of the 候选⑤⑫合流 — the ``agent watch`` verb carries TWO
 mutually-exclusive harness modes (selected on the CLI):
 
-- candidate ⑫ (this module, AIPOS-268): ``--workspace-root`` — a PURE CLIENT
+- candidate ⑫ (this module, AIPOS-268 + AIPOS-284): ``--workspace-root`` — a PURE CLIENT
   read-only mtime+path sentinel. No gate, no MCP, no token.
 - candidate ⑤ (AIPOS-248, ``agent_connector.py``): ``--gate-url`` — a stateless
   pull for claimable tasks over the gate read tool.
@@ -34,11 +34,27 @@ Change kinds reported (``changed[].kind``):
                  enumerated new/modified/moved; ``deleted`` is a minimal honest
                  extension — silently dropping deletions would miss real changes and
                  defeat the "any change wakes the pump" purpose.
+
+AIPOS-284 v2 enhancements ("listening for death silences"):
+- ``--expect <glob>`` (multi):布防即检 — check immediately on startup; exit 0 if any match.
+- ``--run-log <path>`` + ``--end-pattern <regex>``: 结束无产物 — exit 3 if end-pattern
+  appears in run-log but expect is NOT satisfied (after a one-poll grace period).
+- ``--stall-secs <n>``: 静默停滞 — exit 4 if run-log (or observation surface if no run-log)
+  has not changed for ≥n seconds.
+
+Exit codes (AIPOS-284 S4):
+- 0: change detected (expect satisfied OR diff non-empty)
+- 2: timeout with no change (silent)
+- 3: end-pattern seen, expect NOT satisfied ("finished but produced nothing")
+- 4: stall detected ("silence exceeded threshold")
+- 130: SIGTERM/SIGINT clean exit
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
+import re
 import signal
 import stat as stat_mod
 import sys
@@ -50,16 +66,22 @@ from typing import Any, Callable
 DEFAULT_INTERVAL_SECONDS = 15.0
 DEFAULT_TIMEOUT_SECONDS = 1800.0
 
-# Exit codes (card AIPOS-268 §2): 0 = change printed; 2 = timeout (silent);
+# Exit codes (AIPOS-268 + AIPOS-284): 0 = change/expect satisfied; 2 = timeout (silent);
+# 3 = end-pattern seen but expect NOT satisfied; 4 = stall detected;
 # 130 = SIGTERM/SIGINT clean exit (no output, no traceback).
 EXIT_CHANGE = 0
 EXIT_TIMEOUT = 2
+EXIT_END_NO_PRODUCT = 3
+EXIT_STALL = 4
 EXIT_SIGNAL = 130
 
 # The two subtrees the advisor sentinel watches (relative to --workspace-root):
 # queue/** = task cards moving through states (pending→claimed→completed = moves);
 # records/** = session/claim/return records being written.
 _WATCH_SUBTREES = ("5_tasks/queue", "5_tasks/records")
+
+# AIPOS-284: default stall threshold (10 minutes = 600 seconds).
+DEFAULT_STALL_SECONDS = 600
 
 
 def snapshot(workspace_root: Path) -> dict[str, tuple[int, int]]:
@@ -122,6 +144,62 @@ def diff_snapshots(
     return changed
 
 
+def check_expect_patterns(workspace_root: Path, patterns: list[str]) -> list[str]:
+    """AIPOS-284 S1: check --expect globs against the workspace. Returns list of matched
+    paths (POSIX relative). Empty list = no match."""
+    if not patterns:
+        return []
+    root_str = str(workspace_root)
+    matches: list[str] = []
+    for sub in _WATCH_SUBTREES:
+        base = os.path.join(root_str, sub)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(base):
+            for name in filenames:
+                full = os.path.join(dirpath, name)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                if not stat_mod.S_ISREG(st.st_mode):
+                    continue
+                rel = os.path.relpath(full, root_str).replace(os.sep, "/")
+                for pat in patterns:
+                    if fnmatch.fnmatch(rel, pat):
+                        matches.append(rel)
+                        break
+    return sorted(set(matches))
+
+
+def get_run_log_tail(run_log_path: str | None, lines: int = 20) -> str:
+    """AIPOS-284 S2/S3: read last N lines of run-log (or empty if not exists/not readable)."""
+    if not run_log_path:
+        return ""
+    try:
+        with open(run_log_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.readlines()
+            return "".join(content[-lines:])
+    except Exception:
+        return ""
+
+
+def get_observation_mtime(workspace_root: Path, run_log_path: str | None) -> float:
+    """AIPOS-284 S3: get the latest mtime of the observation surface.
+    If run-log is given, return its mtime; otherwise return max mtime across all watched files.
+    Returns 0.0 if nothing is observable."""
+    if run_log_path:
+        try:
+            return os.path.getmtime(run_log_path)
+        except OSError:
+            return 0.0
+    # No run-log: scan the entire observation surface (queue + records)
+    snap = snapshot(workspace_root)
+    if not snap:
+        return 0.0
+    return max(mtime_ns / 1e9 for mtime_ns, _size in snap.values())
+
+
 class _SignalExit(SystemExit):
     """Raised by SIGTERM/SIGINT handlers for a clean, traceback-free exit."""
 
@@ -133,10 +211,16 @@ def run_fs_watch(
     clock: Callable[[], float] = time.monotonic,
 ) -> int:
     """Core bounded poll loop (testable: sleeper/clock injectable, no global signal
-    state). Returns EXIT_CHANGE (0) on the first change — a one-line JSON summary is
-    printed to stdout; returns EXIT_TIMEOUT (2) silently when no change occurs within
-    --timeout. Arg/workspace errors print to stderr and also return 2 (the umbrella
-    'did not detect a change' code; timeout is distinguished by being SILENT)."""
+    state). Returns EXIT_CHANGE (0) on the first change OR expect satisfaction — a
+    one-line JSON summary is printed to stdout; returns EXIT_TIMEOUT (2) silently when
+    no change occurs within --timeout; returns EXIT_END_NO_PRODUCT (3) when end-pattern
+    is seen but expect is NOT satisfied; returns EXIT_STALL (4) when the observation
+    surface is silent beyond --stall-secs. Arg/workspace errors print to stderr and
+    also return 2 (the umbrella 'did not detect a change' code; timeout is distinguished
+    by being SILENT).
+    
+    AIPOS-284 S1-S4:布防即检 / 结束无产物 / 静默停滞 / 超时仍exit2.
+    """
     interval = DEFAULT_INTERVAL_SECONDS if getattr(args, "interval", None) is None else float(args.interval)
     timeout = DEFAULT_TIMEOUT_SECONDS if getattr(args, "timeout", None) is None else float(args.timeout)
     if interval <= 0:
@@ -150,19 +234,103 @@ def run_fs_watch(
         print(f"lybra agent watch: --workspace-root is not a directory: {ws}", file=sys.stderr)
         return EXIT_TIMEOUT
 
+    # AIPOS-284 v2 parameters
+    expect_patterns: list[str] = getattr(args, "expect", None) or []
+    run_log_path: str | None = getattr(args, "run_log", None)
+    end_pattern_str: str | None = getattr(args, "end_pattern", None)
+    end_pattern: re.Pattern | None = None
+    if end_pattern_str:
+        try:
+            end_pattern = re.compile(end_pattern_str)
+        except re.error as e:
+            print(f"lybra agent watch: invalid --end-pattern regex: {e}", file=sys.stderr)
+            return EXIT_TIMEOUT
+    # Stall detection: only enabled if user explicitly sets --stall-secs OR --run-log is given
+    stall_secs_arg = getattr(args, "stall_secs", None)
+    stall_enabled = stall_secs_arg is not None or run_log_path is not None
+    if stall_enabled:
+        if stall_secs_arg is None:
+            stall_secs = DEFAULT_STALL_SECONDS
+        else:
+            stall_secs = float(stall_secs_arg)
+            if stall_secs <= 0:
+                print("lybra agent watch: --stall-secs must be positive.", file=sys.stderr)
+                return EXIT_TIMEOUT
+    else:
+        stall_secs = float('inf')  # Effectively disabled
+
     start = clock()
     prev = snapshot(ws)
+    
+    # S1: 布防即检 — check expect patterns IMMEDIATELY on startup
+    if expect_patterns:
+        matched = check_expect_patterns(ws, expect_patterns)
+        if matched:
+            print(json.dumps({"expect_satisfied": matched}, ensure_ascii=False))
+            return EXIT_CHANGE
+    
+    # Track last observation mtime for stall detection (initialized to current time if no observable surface)
+    last_obs_mtime = get_observation_mtime(ws, run_log_path)
+    last_obs_check = start  # Track when we last checked observation mtime
+    end_pattern_seen = False
+    grace_after_end = False  # S2: one-poll grace period after end-pattern
+
     while True:
         curr = snapshot(ws)
         changed = diff_snapshots(prev, curr)
+        
+        # Check expect patterns on every poll (S1: running检 same as 布防检)
+        if expect_patterns:
+            matched = check_expect_patterns(ws, expect_patterns)
+            if matched:
+                print(json.dumps({"expect_satisfied": matched}, ensure_ascii=False))
+                return EXIT_CHANGE
+        
+        # Regular diff change
         if changed:
             print(json.dumps({"changed": changed}, ensure_ascii=False))
             return EXIT_CHANGE
+        
+        # S2: 结束无产物 — end-pattern logic
+        if end_pattern and run_log_path:
+            tail = get_run_log_tail(run_log_path)
+            if end_pattern.search(tail):
+                if not end_pattern_seen:
+                    # First time seeing end-pattern: mark and give one grace poll
+                    end_pattern_seen = True
+                    grace_after_end = True
+                elif grace_after_end:
+                    # Grace poll done, still no expect match -> exit 3
+                    grace_after_end = False
+                else:
+                    # Already past grace, still no product
+                    print(json.dumps({"end_no_product": {"run_log_tail": tail.strip().split("\n")[-1] if tail.strip() else ""}}, ensure_ascii=False))
+                    return EXIT_END_NO_PRODUCT
+        
+        # S3: 静默停滞 — stall detection
+        current_obs_mtime = get_observation_mtime(ws, run_log_path)
+        if current_obs_mtime > last_obs_mtime:
+            # Observation surface changed, reset stall tracking
+            last_obs_mtime = current_obs_mtime
+            last_obs_check = clock()
+        else:
+            # Observation surface hasn't changed since last_obs_check
+            silence_duration = clock() - last_obs_check
+            if silence_duration >= stall_secs:
+                tail = get_run_log_tail(run_log_path) if run_log_path else ""
+                last_line = tail.strip().split("\n")[-1] if tail.strip() else ""
+                print(json.dumps({"stall": {"silence_seconds": int(silence_duration), "run_log_tail": last_line}}, ensure_ascii=False))
+                return EXIT_STALL
+        
         # Bounded: stop before the next poll would exceed the timeout (the loop must end).
         if clock() - start + interval >= timeout:
             return EXIT_TIMEOUT  # silent
         sleeper(interval)
         prev = curr
+        
+        # Reset grace flag after one poll
+        if grace_after_end:
+            grace_after_end = False
 
 
 def run_fs_watch_cli(args: Any) -> int:
