@@ -451,6 +451,15 @@
     .map-legend i.l-hor { background: transparent; border: 2px dashed var(--border-default); border-radius: 50%; }
     .map-legend i.l-cur { background: var(--accent-bright); transform: rotate(45deg); border-radius: 2px; }
     .map-empty { color: var(--text-secondary); font-style: italic; padding: 6px 0; }
+    /* AIPOS-275 F-275-2: map updated badge in section header + popup */
+    .map-updated-badge {
+      font-size: 11.5px; color: var(--text-secondary); font-family: ui-monospace, monospace;
+      white-space: nowrap; margin-left: auto;
+    }
+    .ms-map-updated {
+      font-size: 12px; color: var(--text-secondary); font-family: ui-monospace, monospace;
+      margin-bottom: 6px;
+    }
 
     /* AIPOS-264: 项目门户头 (项目描述 + 协作面板:模式/拓扑/牛马/顾问). */
     .portal-header-section { border-left-color: var(--accent-bright); }
@@ -792,6 +801,7 @@
     <section id="milestone-map-section" class="detail-section milestone-map-section" data-owner-truth="milestone-map" hidden>
       <div class="section-header">
         <h3 id="map-title">项目里程碑</h3>
+        <span class="map-updated-badge" id="map-updated-badge" hidden></span>
       </div>
       <p class="section-hint" id="map-hint">横向里程碑图表:已完成(实心)→ 当前(高亮)→ 近期规划 → 远期走向(虚线)。点节点看详情与决策引用。</p>
       <div id="map-road" class="map-road"></div>
@@ -1096,6 +1106,17 @@
       }
       section.hidden = false;
 
+      // AIPOS-275 F-275-2: show map updated date in section header.
+      const badge = document.getElementById('map-updated-badge');
+      if (badge) {
+        if (d.updated) {
+          badge.textContent = i18n.t('map.updated_prefix') + d.updated;
+          badge.hidden = false;
+        } else {
+          badge.hidden = true;
+        }
+      }
+
       // Segment 1: completed milestones (solid dots, linked).
       if (milestones.length > 0) {
         const seg = el('div', 'map-seg');
@@ -1124,6 +1145,7 @@
         cur.addEventListener('click', () => showMilestonePopup({
           kind: i18n.t('map.popup.kind.current'), title: i18n.t('map.popup.current_title'), desc: d.current,
           refs: [], directionLog: d.direction_log_recent || [],
+          mapUpdated: d.updated || '',
         }));
         road.appendChild(cur);
       }
@@ -1272,6 +1294,18 @@
         const ul = document.createElement('ul'); ul.className = 'ms-refs';
         info.refs.forEach(r => { const li = document.createElement('li'); li.textContent = r; ul.appendChild(li); });
         box.appendChild(ul);
+      }
+      // AIPOS-275 F-275-2: show map updated date in current-position popup.
+      if (info.mapUpdated) {
+        const upd = el('div', 'ms-map-updated');
+        upd.textContent = i18n.t('map.popup.updated_prefix') + info.mapUpdated;
+        // Insert after the kind label + title, before desc.
+        const h4 = box.querySelector('h4');
+        if (h4 && h4.nextSibling) {
+          box.insertBefore(upd, h4.nextSibling);
+        } else {
+          box.appendChild(upd);
+        }
       }
       if (info.directionLog && info.directionLog.length > 0) {
         box.appendChild(msSection(i18n.t('map.popup.section.direction_log')));

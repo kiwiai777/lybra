@@ -32,7 +32,8 @@ READ_SAFETY_NOTICE = "Read-only local Board adapter call. No files are written."
 PROJECT_MAP_REL = "governance/project-map.md"
 DIRECTION_LOG_REL = "governance/direction_log"
 
-_HEADING_DATE_RE = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})\s*[—–\-]\s*(.+?)\s*$")
+# AIPOS-275 F-275-1: tolerate optional parenthetical date suffix (e.g. "## 2026-07-29(a) — …")
+_HEADING_DATE_RE = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})(?:\([^)]*\))?\s*[—–\-]\s*(.+?)\s*$")
 _INT_RE = re.compile(r"^-?\d+$")
 _FLOAT_RE = re.compile(r"^-?\d+\.\d+$")
 

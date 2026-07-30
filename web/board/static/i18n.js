@@ -113,6 +113,8 @@ const translations = {
     'map.popup.current_title': '当前进展',
     'map.popup.section.refs': '相关决策引用',
     'map.popup.section.direction_log': 'direction_log 最近方向',
+    'map.updated_prefix': '地图更新于 ',
+    'map.popup.updated_prefix': '地图更新于 ',
     
     // Workspace card (overview)
     'card.needs_owner': '等我处理',
@@ -310,6 +312,8 @@ const translations = {
     'map.popup.current_title': 'Current progress',
     'map.popup.section.refs': 'Related decision refs',
     'map.popup.section.direction_log': 'direction_log (recent directions)',
+    'map.updated_prefix': 'Map updated ',
+    'map.popup.updated_prefix': 'Map updated ',
     
     // Workspace card (overview)
     'card.needs_owner': 'Needs Owner',

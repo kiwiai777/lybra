@@ -111,6 +111,11 @@ class ProjectMapContractTests(_BaseServer):
             "## 2026-07-07 — First decision\n",
             encoding="utf-8",
         )
+        # AIPOS-275 F-275-1: fixture with date-suffixed heading (e.g. "## 2026-07-29(a) — …").
+        (dl / "2026-07b-direction-suffixed.md").write_text(
+            "# DL-b\n\n## 2026-07-29(a) — Suffixed decision\n\n## 2026-07-05 — Plain old entry\n",
+            encoding="utf-8",
+        )
         self._start(self.repo_root)
 
     def test_project_map_schema_and_nested_parse(self) -> None:
@@ -144,10 +149,26 @@ class ProjectMapContractTests(_BaseServer):
         payload = json.loads(body)
         dl = payload["data"]["direction_log_recent"]
         self.assertEqual(len(dl), 3)
-        # Newest first by date.
-        self.assertEqual(dl[0]["date"], "2026-07-10")
-        self.assertEqual(dl[0]["title"], "Third decision")
-        self.assertEqual(dl[-1]["date"], "2026-07-07")
+        # Newest first by date (AIPOS-275: suffixed 2026-07-29(a) now tops).
+        self.assertEqual(dl[0]["date"], "2026-07-29")
+        self.assertEqual(dl[0]["title"], "Suffixed decision")
+        self.assertEqual(dl[1]["date"], "2026-07-10")
+        self.assertEqual(dl[1]["title"], "Third decision")
+
+    def test_direction_log_date_suffix_compatible(self) -> None:
+        """AIPOS-275 F-275-1: direction_log entries with parenthetical date
+        suffixes (e.g. '## 2026-07-29(a) — …') are parsed identically to plain
+        date headings. Both formats coexist in the same result set."""
+        status, body = _get(f"{self.base}/api/project-map?workspace=0")
+        payload = json.loads(body)
+        dl = payload["data"]["direction_log_recent"]
+        # The suffixed entry must appear (date=2026-07-29, title='Suffixed decision').
+        dates = [e["date"] for e in dl]
+        self.assertIn("2026-07-29", dates, f"suffixed date 2026-07-29 missing from {dates}")
+        suffixed = [e for e in dl if e["date"] == "2026-07-29"][0]
+        self.assertEqual(suffixed["title"], "Suffixed decision")
+        # Plain entry from the same or other file also present.
+        self.assertIn("2026-07-10", dates)
 
     def test_portal_header_schema_five_keys(self) -> None:
         """AIPOS-264 S4: /api/project-map portal carries the documented five keys
@@ -204,6 +225,19 @@ class ProjectMapContractTests(_BaseServer):
         self.assertIn("truncate(d.current, 12)", html)
         # Non-current node text captions are gone (old per-node caption truncate removed).
         self.assertNotIn("truncate(caption, 34)", html)
+
+    def test_map_updated_badge_in_html(self) -> None:
+        """AIPOS-275 F-275-2: the milestone map section header contains the
+        map-updated-badge element for displaying the 'updated:' date, and the
+        current-position popup carries the mapUpdated field."""
+        status, html = _get(f"{self.base}/workspace/0")
+        self.assertEqual(status, 200)
+        # Badge element present in section header.
+        self.assertIn('id="map-updated-badge"', html)
+        # JS hydrator writes the updated date into the badge.
+        self.assertIn("map.updated_prefix", html)
+        # Current-position popup passes mapUpdated.
+        self.assertIn("mapUpdated: d.updated", html)
 
 
 class ProjectMapGracefulHideTests(_BaseServer):
