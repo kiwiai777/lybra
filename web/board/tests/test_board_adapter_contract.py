@@ -267,6 +267,28 @@ class BoardAdapterContractTests(unittest.TestCase):
         self.assertIn("return", feed_types)
         self.assertIn("audit_verdict", feed_types)
 
+    def test_owner_truth_view_total_tasks_key_pinned_at_top_level(self) -> None:
+        """AIPOS-274F1+F2: pin `summary.total_tasks` at BOTH the response top
+        level AND inside `data.summary` (mirrored). project-detail.html's
+        onboarding wizard reads `truthData.summary.total_tasks`; other consumers
+        may read `truthData.data.summary.total_tasks`. AIPOS-274F2 mirrors the
+        summary into data so both paths resolve identically."""
+        (self.repo_root / "5_tasks" / "queue" / "claimed" / "task-tt.md").write_text(
+            "---\ntask_id: TASK-TT\ntitle: Total tasks probe\nstatus: claimed\n---\n# TASK-TT\n",
+            encoding="utf-8",
+        )
+
+        response = get_owner_truth_view(repo_root=self.repo_root)
+
+        self.assertTrue(response["ok"], response)
+        # Top-level summary must exist (backward compat).
+        self.assertIn("summary", response)
+        self.assertIn("total_tasks", response["summary"], "summary.total_tasks key dropped again")
+        self.assertEqual(response["summary"]["total_tasks"], 1)
+        # AIPOS-274F2: summary mirrored inside data for frontend alignment.
+        self.assertIn("summary", response.get("data", {}), "data.summary missing — F2 mirror broken")
+        self.assertEqual(response["data"]["summary"]["total_tasks"], 1)
+
     def test_aipos261_closure_units_and_human_phrasing_contract(self) -> None:
         """AIPOS-261 S4: the truth surface groups tasks into closure units and emits
         human-worded events. Pin the new keys: closure_units shape, timeline event

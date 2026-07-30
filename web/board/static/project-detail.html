@@ -1307,7 +1307,10 @@
       const publishCmdEl = document.getElementById('publish-command');
       const copyPublishBtn = document.getElementById('copy-publish-command');
 
-      const summary = (truthData && truthData.data && truthData.data.summary) || {};
+      // AIPOS-274F1: summary 是 API 响应顶层字段(build_owner_truth_view 返回
+      // {data:{...}, summary:{total_tasks,...}}),不在 data 里 —— 之前误读 truthData.data.summary
+      // 导致 totalTasks 恒为 0,已有任务的工作区仍显示空板向导(二次回归,铁证:93 任务 workspace 现向导)。
+      const summary = (truthData && truthData.summary) || {};
       const totalTasks = summary.total_tasks || 0;
 
       // S1: hide when tasks exist (向导让位).
@@ -1570,17 +1573,54 @@
       head.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFn(); } });
       card.appendChild(head);
 
-      // F-262B-3: assertions + three rings + actions live in a collapsed .vb-details.
+      // AIPOS-274: details = 人话清单置顶 + [预览 iframe] + 技术细节折叠(断言+证据+按钮)
       const details = el('div', 'vb-details');
+      
+      // 1) 人话清单置顶 (owner_verify_checklist 优先,退而 acceptance_assertions)
+      const checklist = s.owner_verify_checklist || [];
+      if (checklist.length > 0) {
+        const checkHead = el('div', 'vb-ring-head'); checkHead.style.marginTop = '6px';
+        const checkTag = el('span', 'vb-ring-tag t-machine'); checkTag.textContent = '你要验证的是';
+        checkHead.appendChild(checkTag);
+        details.appendChild(checkHead);
+        const ul = el('ul', 'vb-assertions');
+        checklist.forEach(item => { const li = document.createElement('li'); li.textContent = item; ul.appendChild(li); });
+        details.appendChild(ul);
+      }
+
+      // 2) 预览 iframe (如有 owner_verify_preview 路由)
+      if (s.owner_verify_preview) {
+        const previewWrap = el('div'); previewWrap.style.cssText = 'margin: 12px 0; border: 1px solid var(--border-default); border-radius: 8px; overflow: hidden;';
+        const previewLabel = el('div'); previewLabel.style.cssText = 'padding: 6px 10px; background: rgba(0,0,0,0.03); font-size: 11px; font-weight: 700; color: var(--text-secondary); border-bottom: 1px solid var(--border-default);';
+        previewLabel.textContent = '内嵌预览';
+        previewWrap.appendChild(previewLabel);
+        const iframe = document.createElement('iframe');
+        iframe.src = s.owner_verify_preview;
+        iframe.style.cssText = 'width: 100%; height: 480px; border: 0; display: block;';
+        iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms');
+        iframe.setAttribute('title', '任务预览');
+        previewWrap.appendChild(iframe);
+        details.appendChild(previewWrap);
+      }
+
+      // 3) 技术细节折叠 (断言 + 三环证据 + 按钮)
+      const techDetails = document.createElement('details');
+      techDetails.style.cssText = 'margin-top: 12px; border-top: 1px dashed var(--border-default); padding-top: 8px;';
+      const techSummary = document.createElement('summary');
+      techSummary.style.cssText = 'cursor: pointer; font-size: 12px; font-weight: 700; color: var(--text-secondary); user-select: none;';
+      techSummary.textContent = '技术细节 (验收断言 + 证据 + 操作)';
+      techDetails.appendChild(techSummary);
+
+      const techContent = el('div'); techContent.style.marginTop = '8px';
       const assertions = s.acceptance_assertions || [];
       if (assertions.length > 0) {
-        const lbl = el('div', 'vb-ring-head'); lbl.style.marginTop = '6px';
+        const lbl = el('div', 'vb-ring-head');
         const tag = el('span', 'vb-ring-tag t-machine'); tag.textContent = i18n.t('vb.section.assertions');
         lbl.appendChild(tag);
-        details.appendChild(lbl);
+        techContent.appendChild(lbl);
         const ul = el('ul', 'vb-assertions');
         assertions.forEach(a => { const li = document.createElement('li'); li.textContent = a; ul.appendChild(li); });
-        details.appendChild(ul);
+        techContent.appendChild(ul);
       }
 
       const ev = s.evidence || {};
@@ -1588,7 +1628,7 @@
       rings.appendChild(vbRing('machine', i18n.t('vb.ring.machine'), ev.machine_judgment, vbMachineBody));
       rings.appendChild(vbRing('audit', i18n.t('vb.ring.audit'), ev.audit_verdict, vbAuditBody));
       rings.appendChild(vbRing('fix', i18n.t('vb.ring.fix'), { present: (ev.prior_fixes || []).length > 0, fixes: ev.prior_fixes || [] }, vbFixBody));
-      details.appendChild(rings);
+      techContent.appendChild(rings);
 
       const actions = el('div', 'vb-actions');
       const passBtn = el('button', 'vb-btn vb-pass');
@@ -1629,6 +1669,9 @@
       rejectReason.appendChild(cancelBtn);
       actions.appendChild(rejectReason);
       
+      // AIPOS-274F3: 按钮移出技术细节折叠,站卡展开即常显
+      techDetails.appendChild(techContent);
+      details.appendChild(techDetails);
       details.appendChild(actions);
       card.appendChild(details);
       return card;
@@ -1700,15 +1743,37 @@
       head.addEventListener('click', toggleFn);
       head.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFn(); } });
       card.appendChild(head);
-      // F-262B-3: note + assertions collapsed under .vb-details.
+      // AIPOS-274: 人话清单优先 + stage note + [预览 iframe]
       const details = el('div', 'vb-details');
       const note = el('div', 'vb-preview-note'); note.textContent = p.stage_note || i18n.t('vb.preview.note_fallback');
       details.appendChild(note);
-      const assertions = p.acceptance_assertions || [];
-      if (assertions.length > 0) {
+      const checklist = p.owner_verify_checklist || [];
+      if (checklist.length > 0) {
         const ul = el('ul', 'vb-assertions');
-        assertions.forEach(a => { const li = document.createElement('li'); li.textContent = a; ul.appendChild(li); });
+        checklist.forEach(item => { const li = document.createElement('li'); li.textContent = item; ul.appendChild(li); });
         details.appendChild(ul);
+      } else {
+        // 退而显示断言
+        const assertions = p.acceptance_assertions || [];
+        if (assertions.length > 0) {
+          const ul = el('ul', 'vb-assertions');
+          assertions.forEach(a => { const li = document.createElement('li'); li.textContent = a; ul.appendChild(li); });
+          details.appendChild(ul);
+        }
+      }
+      // 预览 iframe (如有)
+      if (p.owner_verify_preview) {
+        const previewWrap = el('div'); previewWrap.style.cssText = 'margin: 12px 0; border: 1px solid var(--border-default); border-radius: 8px; overflow: hidden;';
+        const previewLabel = el('div'); previewLabel.style.cssText = 'padding: 6px 10px; background: rgba(0,0,0,0.03); font-size: 11px; font-weight: 700; color: var(--text-secondary); border-bottom: 1px solid var(--border-default);';
+        previewLabel.textContent = '内嵌预览';
+        previewWrap.appendChild(previewLabel);
+        const iframe = document.createElement('iframe');
+        iframe.src = p.owner_verify_preview;
+        iframe.style.cssText = 'width: 100%; height: 480px; border: 0; display: block;';
+        iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms');
+        iframe.setAttribute('title', '任务预览');
+        previewWrap.appendChild(iframe);
+        details.appendChild(previewWrap);
       }
       card.appendChild(details);
       return card;

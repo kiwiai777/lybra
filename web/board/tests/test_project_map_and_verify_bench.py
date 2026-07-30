@@ -423,6 +423,92 @@ class VerifyBenchClosedLoopExcludedTests(_BaseServer):
         self.assertEqual(data["previewable"], [])
 
 
+class VerifyBenchOwnerApprovedExcludedTests(_BaseServer):
+    """AIPOS-274F1: 待验站排除已核验任务(owner_verification approve 记录即退站,
+    不必等 FZ 收编).
+
+    Regression fixture pinning the 263 vs 273 divergence the advisor caught by
+    eye: both cards carry an approve owner_verification record, but only 273's
+    FZ member had returned. Before the fix, verify_bench.py's station-exclusion
+    check (_closure_unit_finalized) only looked at FZ returns, so 263 kept
+    reappearing on 待验站 despite the Owner already having approved it — a
+    genuinely closed loop revived by a blind spot in the exclusion logic.
+    Two fixtures, side by side: TASK-APPROVED (approve record, FZ member
+    still pending) must be excluded; TASK-UNAPPROVED (same shape, no
+    owner_verification record at all) must still surface on the station.
+    """
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self.temp_dir.name)
+        for state in ("pending", "claimed", "completed", "blocked"):
+            (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+
+        def _card(task_id: str) -> None:
+            (self.repo_root / "5_tasks" / "queue" / "claimed" / f"{task_id.lower()}.md").write_text(
+                f"---\ntask_id: {task_id}\ntitle: {task_id} main card\nstatus: claimed\n"
+                "owner_verify: required\n---\n"
+                f"# {task_id}\n\n## 验收断言\n\n- S1 assertion\n",
+                encoding="utf-8",
+            )
+            rd = self.repo_root / "5_tasks" / "records" / "returns" / task_id
+            rd.mkdir(parents=True, exist_ok=True)
+            (rd / f"return_{task_id.lower()}.md").write_text(
+                f"---\nrecord_type: return_record\nreturn_id: return_{task_id.lower()}\ntask_id: {task_id}\n"
+                "actor: exec.lybra.test\nreturned_at: '2026-07-30T00:20:00Z'\n"
+                "executor_status: completed\naudit_readiness: ready\n---\n# Return\n",
+                encoding="utf-8",
+            )
+            vd = self.repo_root / "5_tasks" / "records" / "audit_verdicts" / task_id
+            vd.mkdir(parents=True, exist_ok=True)
+            (vd / f"verdict_{task_id.lower()}.md").write_text(
+                f"---\nrecord_type: audit_verdict_record\nverdict_id: verdict_{task_id.lower()}\nverdict: PASS\n"
+                f"reviewed_task_id: {task_id}\nactor: audit.lybra.test\nverdict_at: '2026-07-30T00:40:00Z'\n"
+                "---\n# Verdict\n",
+                encoding="utf-8",
+            )
+            # FZ member declared but NOT returned yet (still pending) — the
+            # exact shape that tripped up _closure_unit_finalized-only exclusion.
+            (self.repo_root / "5_tasks" / "queue" / "pending" / f"{task_id.lower()}fz.md").write_text(
+                f"---\ntask_id: {task_id}FZ\ntitle: Finalize\nstatus: pending\n---\n# Finalize\n",
+                encoding="utf-8",
+            )
+
+        _card("TASK-APPROVED")
+        _card("TASK-UNAPPROVED")
+
+        # Only TASK-APPROVED carries an Owner approve record.
+        vr = self.repo_root / "5_tasks" / "records" / "owner_verifications" / "TASK-APPROVED"
+        vr.mkdir(parents=True, exist_ok=True)
+        (vr / "verify_approved_nofz_20260730T053058.md").write_text(
+            "---\ndecided_at: '2026-07-30T05:30:58Z'\ndecided_by: owner\n"
+            "decided_via: web_session\ndecision: approve\nreason:\n"
+            "record_type: owner_verification\ntask_id: TASK-APPROVED\n---\n"
+            "# Owner 核验记录: TASK-APPROVED\n",
+            encoding="utf-8",
+        )
+
+        self._start(self.repo_root)
+
+    def test_approved_without_fz_excluded_unapproved_still_stations(self) -> None:
+        status, body = _get(f"{self.base}/api/verify-bench?workspace=0")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertTrue(payload["ok"], payload)
+        data = payload["data"]
+
+        station_ids = [s["task_id"] for s in data["stations"]]
+        closed_ids = [c["task_id"] for c in data["closed_excluded"]]
+
+        # Approved (even without FZ return yet) => excluded from 待验站.
+        self.assertNotIn("TASK-APPROVED", station_ids)
+        self.assertIn("TASK-APPROVED", closed_ids)
+
+        # No approval record at all => stays on 待验站 (real work still pending).
+        self.assertIn("TASK-UNAPPROVED", station_ids)
+        self.assertNotIn("TASK-UNAPPROVED", closed_ids)
+
+
 class PortalSegmentAbsentTests(_BaseServer):
     """AIPOS-264 S2: project-map.md present but WITHOUT a portal segment — the
     portal region hides gracefully (portal.description empty; the static section

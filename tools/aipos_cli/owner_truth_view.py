@@ -989,6 +989,16 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
         src = feed_record_by_id.get(str(ev.get("record_id") or ""))
         _enrich_event_agent_info(ev, src, records_report, profile_index)
 
+    # AIPOS-274F2: mirror summary into data.summary so frontend can read either
+    # response.summary or response.data.summary (backend aligns to frontend).
+    # Top-level summary retained for backward compat.
+    summary = {
+        "total_tasks": len(task_rows),
+        "closure_units": len(closure_units),
+        "stage_counts": stage_counts,
+        "top_level_counts": top_level_counts,
+        "activity_events": len(activity_feed),
+    }
     return {
         "ok": True,
         "operation": "get_owner_truth_view",
@@ -1007,14 +1017,10 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
             "activity_feed": activity_feed,
             "record_field_keys": list(RECORD_FIELD_KEYS),
             "records_summary": records_report.get("summary"),
+            # AIPOS-274F2: summary mirrored inside data for frontend alignment.
+            "summary": summary,
         },
-        "summary": {
-            "total_tasks": len(task_rows),
-            "closure_units": len(closure_units),
-            "stage_counts": stage_counts,
-            "top_level_counts": top_level_counts,
-            "activity_events": len(activity_feed),
-        },
+        "summary": summary,
         "warnings": [],
         "errors": [],
         "safety_notice": (
