@@ -1,0 +1,27 @@
+# Decision Log
+
+This directory contains decision-level records organized by month.
+
+Structure:
+- `<YYYY-MM>/`: Monthly directories
+- `<YYYY-MM>/<DD>-<seq>-<slug>.md`: Individual decision entries
+- `<YYYY-MM>/INDEX.md`: Index of entries for the month
+
+Example:
+```
+decision_log/
+├── 2026-07/
+│   ├── INDEX.md
+│   ├── 07-01-initial-architecture-decision.md
+│   ├── 15-01-authentication-strategy.md
+│   └── 15-02-database-choice.md
+└── 2026-08/
+    ├── INDEX.md
+    └── 03-01-api-versioning-policy.md
+```
+
+Each entry file contains a single decision with:
+- Heading: `## YYYY-MM-DD — Title`
+- Body: Decision rationale, impacts, and implementation status
+
+The INDEX.md provides a quick overview of all decisions in that month.

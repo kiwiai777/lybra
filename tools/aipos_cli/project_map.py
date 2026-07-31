@@ -30,7 +30,8 @@ from tools.aipos_cli.workspace_config import has_workspace_queue
 READ_SAFETY_NOTICE = "Read-only local Board adapter call. No files are written."
 
 PROJECT_MAP_REL = "governance/project-map.md"
-DIRECTION_LOG_REL = "governance/direction_log"
+DECISION_LOG_REL = "governance/decision_log"
+DIRECTION_LOG_REL = "governance/direction_log"  # backward compat alias
 
 # AIPOS-275 F-275-1: tolerate optional parenthetical date suffix (e.g. "## 2026-07-29(a) — …")
 _HEADING_DATE_RE = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})(?:\([^)]*\))?\s*[—–\-]\s*(.+?)\s*$")
@@ -211,22 +212,56 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 def _read_direction_log_recent(governance_dir: Path, limit: int = 3) -> list[dict[str, str]]:
-    """Latest ``limit`` dated ``## YYYY-MM-DD — Title`` headings across the
-    ``direction_log/`` directory (monthly files). Newest first."""
-    dl_dir = governance_dir / "direction_log"
+    """Latest ``limit`` decision entries. Newest first.
+    
+    Supports both structures:
+    - New: decision_log/<YYYY-MM>/<DD>-<seq>-<slug>.md (one entry per file)
+    - Old: decision_log/<YYYY-MM>-direction-decisions.md (multiple ## headings)
+    
+    Backward compatibility: reads decision_log/ first; falls back to direction_log/ if absent.
+    """
+    # Prefer decision_log/, fall back to direction_log/
+    dl_dir = governance_dir / "decision_log"
+    if not dl_dir.is_dir():
+        dl_dir = governance_dir / "direction_log"
     if not dl_dir.is_dir():
         return []
+    
     entries: list[tuple[str, str]] = []  # (date, title)
-    for path in sorted(dl_dir.glob("*.md"), reverse=True):
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for line in text.splitlines():
-            match = _HEADING_DATE_RE.match(line)
-            if match:
-                entries.append((match.group(1), match.group(2).strip()))
-    # Sort by date descending (entries may be roughly chronological within a file).
+    
+    # Check for new structure: <YYYY-MM>/ subdirectories
+    month_dirs = [p for p in dl_dir.iterdir() if p.is_dir() and re.match(r"\d{4}-\d{2}", p.name)]
+    
+    if month_dirs:
+        # New structure: read individual entry files from month directories
+        for month_dir in sorted(month_dirs, reverse=True):
+            for entry_file in sorted(month_dir.glob("*.md"), reverse=True):
+                # Skip INDEX.md
+                if entry_file.name == "INDEX.md":
+                    continue
+                try:
+                    text = entry_file.read_text(encoding="utf-8", errors="replace")
+                    # Extract heading from first line
+                    for line in text.splitlines():
+                        match = _HEADING_DATE_RE.match(line)
+                        if match:
+                            entries.append((match.group(1), match.group(2).strip()))
+                            break  # Only first heading per file
+                except OSError:
+                    continue
+    else:
+        # Old structure: scan monthly aggregate files for ## headings
+        for path in sorted(dl_dir.glob("*.md"), reverse=True):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                match = _HEADING_DATE_RE.match(line)
+                if match:
+                    entries.append((match.group(1), match.group(2).strip()))
+    
+    # Sort by date descending
     entries.sort(key=lambda pair: pair[0], reverse=True)
     return [{"date": date, "title": title} for date, title in entries[:limit]]
 
