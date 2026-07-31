@@ -877,9 +877,10 @@ def build_parser() -> argparse.ArgumentParser:
     _watch_parser = agent_subparsers.add_parser(
         "watch",
         help="Foreground BOUNDED client loop. Two modes (候选⑤⑫合流): "
-        "--workspace-root = filesystem mtime pump (candidate ⑫, AIPOS-268+284; any bash agent, no gate); "
+        "--workspace-root = filesystem mtime pump (candidate ⑫, AIPOS-268+284+284C+284D; any bash agent, no gate); "
         "--gate-url = stateless gate pull for claimable tasks (candidate ⑤, AIPOS-248). "
-        "Exit codes: 0=change/expect satisfied, 2=timeout, 3=end-pattern but no product, 4=stall, 130=signal.",
+        "Exit codes: 0=change/expect satisfied, 2=timeout, 3=end-pattern but no product, 4=stall, 130=signal. "
+        "Stream mode (--stream): emits 'kind:end' event before timeout/signal exit.",
     )
     _watch_mode = _watch_parser.add_mutually_exclusive_group(required=True)
     _watch_mode.add_argument(
@@ -897,14 +898,16 @@ def build_parser() -> argparse.ArgumentParser:
     # argparse default is None and each mode resolves its own default in the dispatch.
     _watch_parser.add_argument("--interval", type=float, default=None, help="poll interval seconds. Filesystem pump default 15; gate pull default 60 (hard floor 15).")
     _watch_parser.add_argument("--max-wait", type=float, default=1800.0, help="[gate mode] bounded wait seconds before a clean exit (default 1800)")
-    _watch_parser.add_argument("--timeout", type=float, default=1800.0, help="[filesystem pump] no-change timeout seconds -> silent exit 2 (default 1800)")
+    _watch_parser.add_argument("--timeout", type=float, default=None, help="[filesystem pump] no-change timeout seconds -> silent exit 2 (default: 1800 for default mode, infinite for --stream mode; 0 = explicit infinite)")
     # AIPOS-284 v2: three "death silence" semantics
     _watch_parser.add_argument("--expect", action="append", help="[filesystem pump v2] glob pattern for expected artifact; check immediately on startup and every poll (布防即检). Can be repeated. Exit 0 when any match.")
     _watch_parser.add_argument("--run-log", help="[filesystem pump v2] path to run log (for end-pattern and stall detection)")
     _watch_parser.add_argument("--end-pattern", help="[filesystem pump v2] regex: if found in run-log but --expect NOT satisfied, exit 3 after one grace poll (结束无产物)")
     _watch_parser.add_argument("--stall-secs", type=float, default=None, help="[filesystem pump v2] silence threshold seconds (default 600). If run-log (or observation surface) mtime unchanged for ≥N seconds, exit 4 (静默停滞)")
     # AIPOS-284C: --stream mode (persistent observer, event lines, no exit on change/stall/run_end)
-    _watch_parser.add_argument("--stream", action="store_true", help="[filesystem pump v3/AIPOS-284C] persistent mode: emit JSON event lines (kind: expect|change|stall|run_end) and continue. Only timeout/signal exits. Event deduplication: expect files reported once (new only).")
+    _watch_parser.add_argument("--stream", action="store_true", help="[filesystem pump v3/AIPOS-284C] persistent mode: emit JSON event lines (kind: expect|change|stall|run_end|end) and continue. Only timeout/signal exits (emits 'end' event). Event deduplication: expect files reported once (new only).")
+    # AIPOS-284D: --events filter (F-284C-1 抑噪)
+    _watch_parser.add_argument("--events", choices=["expect", "change", "all"], help="[filesystem pump v4/AIPOS-284D] event filter: 'expect' = only expect events; 'change' = only filesystem changes; 'all' = both. Default: 'expect' when --expect is given, 'all' otherwise (F-284C-1 抑噪).")
 
     board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")

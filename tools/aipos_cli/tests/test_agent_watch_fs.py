@@ -285,7 +285,9 @@ class FsWatchLoopTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             rc = run_fs_watch(_args(ws, interval=0, timeout=10.0))
         self.assertEqual(rc, EXIT_TIMEOUT)
-        rc = run_fs_watch(_args(ws, interval=1.0, timeout=0))
+        # AIPOS-284D: --timeout 0 = infinite (no longer an error); negative is still error
+        with redirect_stdout(io.StringIO()):
+            rc = run_fs_watch(_args(ws, interval=1.0, timeout=-1.0))
         self.assertEqual(rc, EXIT_TIMEOUT)
 
 
@@ -1168,6 +1170,7 @@ class FsWatchStreamModeTests(unittest.TestCase):
         args = _args(ws, interval=0.3, timeout=100.0)
         args.stream = True
         args.expect = ["5_tasks/records/RETURN.md"]
+        args.events = "all"  # AIPOS-284D: need explicit 'all' to see both expect+change
         args.run_log = run_log
         args.end_pattern = None
         args.stall_secs = 1.0
@@ -1188,8 +1191,8 @@ class FsWatchStreamModeTests(unittest.TestCase):
         change_idx = kinds.index("change")
         self.assertLess(expect_idx, change_idx, "expect should come before change")
 
-    def test_stream_mode_timeout_still_exits_2(self):
-        """Stream mode: timeout still produces exit 2 (silent)."""
+    def test_stream_mode_timeout_exits_2_with_end_event(self):
+        """AIPOS-284D S2: stream mode timeout produces exit 2 AND emits kind:end event."""
         ws = _make_workspace()
         _write(os.path.join(ws, "5_tasks/records/seed.md"), "seed")
         clock_now = [0.0]
@@ -1200,13 +1203,19 @@ class FsWatchStreamModeTests(unittest.TestCase):
         args = _args(ws, interval=0.3, timeout=1.0)
         args.stream = True
         args.expect = None
+        args.events = None
         args.run_log = None
         args.end_pattern = None
         args.stall_secs = None
         with redirect_stdout(io.StringIO()) as out:
             rc = run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
         self.assertEqual(rc, EXIT_TIMEOUT)
-        self.assertEqual(out.getvalue(), "", "timeout must be silent even in stream mode")
+        # AIPOS-284D S2: stream mode must emit kind:end before exit (禁无声退)
+        lines = [l for l in out.getvalue().strip().split("\n") if l]
+        self.assertEqual(len(lines), 1, "should emit exactly one end event")
+        event = json.loads(lines[0])
+        self.assertEqual(event["kind"], "end")
+        self.assertEqual(event["reason"], "timeout")
 
     def test_default_mode_unchanged_zero_regression(self):
         """S2 zero-regression: default mode (no --stream) behaves exactly as before."""
@@ -1235,7 +1244,7 @@ class FsWatchStreamModeIntegrationTests(unittest.TestCase):
         proc = subprocess.Popen(
             [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "watch",
              "--workspace-root", ws, "--timeout", "3", "--interval", "0.3",
-             "--stream", "--expect", "5_tasks/records/*.md"],
+             "--stream", "--events", "all", "--expect", "5_tasks/records/*.md"],
             cwd=str(_REPO_ROOT),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1266,3 +1275,280 @@ class FsWatchStreamModeIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FsWatch284DTests(unittest.TestCase):
+    """AIPOS-284D: --events filter + infinite timeout + kind:end event."""
+
+    def test_events_filter_expect_only(self):
+        """S1 (F-284C-1): --events expect suppresses change events."""
+        ws = _make_workspace()
+        args = SimpleNamespace(
+            workspace_root=ws,
+            interval=0.1,
+            timeout=float('inf'),
+            stream=True,
+            expect=["5_tasks/records/RETURN.md"],
+            events="expect",
+            run_log=None,
+            end_pattern=None,
+            stall_secs=None,
+        )
+        clock_state = {"t": 0.0}
+        sleeps = []
+        
+        def mock_sleep(n: float) -> None:
+            sleeps.append(n)
+            clock_state["t"] += n
+            # After first sleep, create a filesystem change (should be filtered)
+            if len(sleeps) == 1:
+                _write(os.path.join(ws, "5_tasks/queue/pending/new.md"), "change")
+            # After second sleep, create expect match
+            if len(sleeps) == 2:
+                _write(os.path.join(ws, "5_tasks/records/RETURN.md"), "done")
+            # Stop after third sleep
+            if len(sleeps) >= 3:
+                raise _SignalExit(EXIT_SIGNAL)
+        
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                run_fs_watch(args, sleeper=mock_sleep, clock=lambda: clock_state["t"])
+            except _SignalExit:
+                pass
+        
+        lines = [l for l in out.getvalue().strip().split("\n") if l]
+        events = [json.loads(l) for l in lines]
+        kinds = [e["kind"] for e in events]
+        
+        # Should only see expect event, not change
+        self.assertIn("expect", kinds, "expect event should be emitted")
+        self.assertNotIn("change", kinds, "change event should be suppressed by --events expect")
+    
+    def test_events_filter_change_only(self):
+        """S1: --events change suppresses expect events."""
+        ws = _make_workspace()
+        args = SimpleNamespace(
+            workspace_root=ws,
+            interval=0.1,
+            timeout=float('inf'),
+            stream=True,
+            expect=["5_tasks/records/RETURN.md"],
+            events="change",
+            run_log=None,
+            end_pattern=None,
+            stall_secs=None,
+        )
+        clock_state = {"t": 0.0}
+        sleeps = []
+        
+        def mock_sleep(n: float) -> None:
+            sleeps.append(n)
+            clock_state["t"] += n
+            # Create expect match (should be filtered)
+            if len(sleeps) == 1:
+                _write(os.path.join(ws, "5_tasks/records/RETURN.md"), "done")
+            # Create filesystem change
+            if len(sleeps) == 2:
+                _write(os.path.join(ws, "5_tasks/queue/pending/new.md"), "change")
+            if len(sleeps) >= 3:
+                raise _SignalExit(EXIT_SIGNAL)
+        
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                run_fs_watch(args, sleeper=mock_sleep, clock=lambda: clock_state["t"])
+            except _SignalExit:
+                pass
+        
+        lines = [l for l in out.getvalue().strip().split("\n") if l]
+        events = [json.loads(l) for l in lines]
+        kinds = [e["kind"] for e in events]
+        
+        # Should only see change event, not expect
+        self.assertIn("change", kinds, "change event should be emitted")
+        self.assertNotIn("expect", kinds, "expect event should be suppressed by --events change")
+    
+    def test_events_default_expect_when_pattern_given(self):
+        """S1: default behavior when --expect given is 'expect' mode (抑噪)."""
+        ws = _make_workspace()
+        args = SimpleNamespace(
+            workspace_root=ws,
+            interval=0.1,
+            timeout=float('inf'),
+            stream=True,
+            expect=["5_tasks/records/RETURN.md"],
+            events=None,  # No explicit --events
+            run_log=None,
+            end_pattern=None,
+            stall_secs=None,
+        )
+        clock_state = {"t": 0.0}
+        sleeps = []
+        
+        def mock_sleep(n: float) -> None:
+            sleeps.append(n)
+            clock_state["t"] += n
+            # Create a change (should be suppressed in default expect mode)
+            if len(sleeps) == 1:
+                _write(os.path.join(ws, "5_tasks/queue/pending/new.md"), "noise")
+            if len(sleeps) >= 2:
+                raise _SignalExit(EXIT_SIGNAL)
+        
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                run_fs_watch(args, sleeper=mock_sleep, clock=lambda: clock_state["t"])
+            except _SignalExit:
+                pass
+        
+        lines = [l for l in out.getvalue().strip().split("\n") if l]
+        # Should have zero events (change suppressed, no expect match)
+        self.assertEqual(len(lines), 0, "default expect mode should suppress change events")
+    
+    def test_timeout_zero_is_infinite(self):
+        """S2 (F-284C-2): --timeout 0 means infinite (永挂)."""
+        ws = _make_workspace()
+        args = SimpleNamespace(
+            workspace_root=ws,
+            interval=0.1,
+            timeout=0.0,  # Explicit infinite
+            stream=True,
+            expect=None,
+            events=None,
+            run_log=None,
+            end_pattern=None,
+            stall_secs=None,
+        )
+        clock_state = {"t": 0.0}
+        sleeps = []
+        
+        def mock_sleep(n: float) -> None:
+            sleeps.append(n)
+            clock_state["t"] += 10.0  # Fast-forward time
+            if len(sleeps) >= 5:  # After many polls, still no timeout
+                raise _SignalExit(EXIT_SIGNAL)
+        
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                rc = run_fs_watch(args, sleeper=mock_sleep, clock=lambda: clock_state["t"])
+            except _SignalExit as e:
+                rc = e.code
+        
+        # Should exit via signal, not timeout
+        self.assertEqual(rc, EXIT_SIGNAL, "timeout=0 should never timeout")
+    
+    def test_stream_mode_defaults_to_infinite_timeout(self):
+        """S2: --stream without --timeout defaults to infinite."""
+        ws = _make_workspace()
+        args = SimpleNamespace(
+            workspace_root=ws,
+            interval=0.1,
+            timeout=None,  # No explicit timeout
+            stream=True,
+            expect=None,
+            events=None,
+            run_log=None,
+            end_pattern=None,
+            stall_secs=None,
+        )
+        clock_state = {"t": 0.0}
+        sleeps = []
+        
+        def mock_sleep(n: float) -> None:
+            sleeps.append(n)
+            clock_state["t"] += 100.0  # Simulate long time passing
+            if len(sleeps) >= 3:
+                raise _SignalExit(EXIT_SIGNAL)
+        
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                rc = run_fs_watch(args, sleeper=mock_sleep, clock=lambda: clock_state["t"])
+            except _SignalExit as e:
+                rc = e.code
+        
+        self.assertEqual(rc, EXIT_SIGNAL, "stream mode should default to infinite timeout")
+    
+    def test_stream_emits_end_event_on_timeout(self):
+        """S2: stream mode emits kind:end with reason=timeout before exit."""
+        ws = _make_workspace()
+        args = SimpleNamespace(
+            workspace_root=ws,
+            interval=0.1,
+            timeout=0.5,
+            stream=True,
+            expect=None,
+            events=None,
+            run_log=None,
+            end_pattern=None,
+            stall_secs=None,
+        )
+        clock_state = {"t": 0.0}
+        
+        def mock_sleep(n: float) -> None:
+            clock_state["t"] += n
+        
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=mock_sleep, clock=lambda: clock_state["t"])
+        
+        self.assertEqual(rc, EXIT_TIMEOUT)
+        lines = [l for l in out.getvalue().strip().split("\n") if l]
+        self.assertEqual(len(lines), 1, "should emit one end event")
+        event = json.loads(lines[0])
+        self.assertEqual(event["kind"], "end")
+        self.assertEqual(event["reason"], "timeout")
+    
+    def test_stream_emits_end_event_on_signal(self):
+        """S2: stream mode emits kind:end with reason=signal before exit."""
+        ws = _make_workspace()
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "watch",
+             "--workspace-root", ws, "--timeout", "10", "--interval", "0.5", "--stream"],
+            cwd=str(_REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            time.sleep(0.8)
+            proc.send_signal(signal.SIGTERM)
+            out, err = proc.communicate(timeout=3)
+        except Exception:
+            proc.kill()
+            raise
+        
+        self.assertEqual(proc.returncode, EXIT_SIGNAL, err)
+        lines = [l for l in out.decode("utf-8").strip().split("\n") if l]
+        # Last line should be end event
+        self.assertGreaterEqual(len(lines), 1, "should emit at least end event")
+        end_event = json.loads(lines[-1])
+        self.assertEqual(end_event["kind"], "end")
+        self.assertEqual(end_event["reason"], "signal")
+    
+    def test_default_mode_unchanged_zero_regression(self):
+        """S3: default mode (no --stream) behavior unchanged."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/queue/pending/task.md"), "content")
+        args = SimpleNamespace(
+            workspace_root=ws,
+            interval=0.1,
+            timeout=1.0,
+            stream=False,  # Default mode
+            expect=None,
+            events=None,
+            run_log=None,
+            end_pattern=None,
+            stall_secs=None,
+        )
+        clock_state = {"t": 0.0}
+        
+        def mock_sleep(n: float) -> None:
+            clock_state["t"] += n
+            # Create a change
+            _write(os.path.join(ws, "5_tasks/queue/pending/new.md"), "new")
+        
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=mock_sleep, clock=lambda: clock_state["t"])
+        
+        # Should exit 0 immediately on change
+        self.assertEqual(rc, EXIT_CHANGE)
+        payload = json.loads(out.getvalue())
+        # Old format: {"changed": [...]}
+        self.assertIn("changed", payload, "default mode should use old format")
+        self.assertNotIn("kind", payload, "default mode should not emit event format")

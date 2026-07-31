@@ -51,15 +51,22 @@ AIPOS-284C --stream mode event kinds:
 - ``change``   — filesystem change detected (new/modified/moved/deleted)
 - ``stall``    — observation surface silent beyond threshold
 - ``run_end``  — end-pattern seen but expect not satisfied
+- ``end``      — stream terminated (AIPOS-284D S2: any exit reason; reason field explains)
 
-Exit codes (AIPOS-284 S4 + AIPOS-284C S2):
+AIPOS-284D enhancements:
+- ``--events expect|change|all``: F-284C-1 抑噪 — when --expect is given, default to 
+  'expect' (only expect events); 'change' = only filesystem changes; 'all' = both.
+- ``--stream`` + ``--timeout 0``: F-284C-2 常驻豁免 — timeout=0 means infinite (never exit on timeout).
+- Stream exit: always emit ``kind:end`` event with reason before process termination.
+
+Exit codes (AIPOS-284 S4 + AIPOS-284C S2 + AIPOS-284D S2):
 - 0: change detected (expect satisfied OR diff non-empty) — DEFAULT MODE ONLY
-- 2: timeout (silent) — both modes
+- 2: timeout (silent in default mode; 'end' event in stream mode) — both modes
 - 3: end-pattern seen, expect NOT satisfied — DEFAULT MODE ONLY
 - 4: stall detected — DEFAULT MODE ONLY
-- 130: SIGTERM/SIGINT clean exit — both modes
+- 130: SIGTERM/SIGINT clean exit (stream mode: 'end' event with reason=signal) — both modes
 
-In --stream mode: exit 0/3/4 become JSON event lines; only timeout/signal exit the process.
+In --stream mode: exit 0/3/4 become JSON event lines; timeout/signal emit 'end' event then exit.
 """
 from __future__ import annotations
 
@@ -289,23 +296,45 @@ def run_fs_watch(
     
     AIPOS-284 S1-S4:布防即检 / 结束无产物 / 静默停滞 / 超时仍exit2.
     AIPOS-284C --stream mode: emit JSON event lines and continue (no exit 0/3/4).
+    AIPOS-284D: --events expect|change|all (F-284C-1抑噪); --timeout 0 = infinite (F-284C-2常驻豁免); kind:end event on exit.
     Event deduplication (S3): track reported expect files, only report new appearances.
     """
     interval = DEFAULT_INTERVAL_SECONDS if getattr(args, "interval", None) is None else float(args.interval)
-    timeout = DEFAULT_TIMEOUT_SECONDS if getattr(args, "timeout", None) is None else float(args.timeout)
+    timeout_arg = getattr(args, "timeout", None)
+    stream_mode = getattr(args, "stream", False)
+    
+    # AIPOS-284D S2: --stream defaults to infinite timeout; --timeout 0 = explicit infinite
+    if timeout_arg is None:
+        timeout = float('inf') if stream_mode else DEFAULT_TIMEOUT_SECONDS
+    else:
+        timeout_val = float(timeout_arg)
+        if timeout_val == 0:
+            # F-284C-2: --timeout 0 = explicit infinite (常驻永挂)
+            timeout = float('inf')
+        elif timeout_val < 0:
+            print("lybra agent watch: --timeout must be non-negative (0 = infinite).", file=sys.stderr)
+            return EXIT_TIMEOUT
+        else:
+            timeout = timeout_val
+    
     if interval <= 0:
         print("lybra agent watch: --interval must be positive.", file=sys.stderr)
-        return EXIT_TIMEOUT
-    if timeout <= 0:
-        print("lybra agent watch: --timeout must be positive (the loop must be bounded).", file=sys.stderr)
         return EXIT_TIMEOUT
     ws = Path(args.workspace_root)
     if not ws.is_dir():
         print(f"lybra agent watch: --workspace-root is not a directory: {ws}", file=sys.stderr)
         return EXIT_TIMEOUT
-
-    # AIPOS-284C: stream mode flag
-    stream_mode = getattr(args, "stream", False)
+    
+    # AIPOS-284D S1: --events filter (F-284C-1 抑噪)
+    events_filter = str(getattr(args, "events", None) or "")
+    if not events_filter:
+        # Default: if --expect is given, only emit expect events; otherwise emit all
+        expect_patterns = getattr(args, "expect", None) or []
+        events_filter = "expect" if expect_patterns else "all"
+    
+    if events_filter not in ("expect", "change", "all"):
+        print(f"lybra agent watch: --events must be one of: expect, change, all (got: {events_filter})", file=sys.stderr)
+        return EXIT_USAGE
     
     # AIPOS-284 v2 parameters
     expect_patterns: list[str] = getattr(args, "expect", None) or []
@@ -370,7 +399,7 @@ def run_fs_watch(
         changed = diff_snapshots(prev, curr)
         
         # Check expect patterns on every poll (S1: running检 same as 布防检)
-        if expect_patterns:
+        if expect_patterns and events_filter in ("expect", "all"):
             matched = check_expect_patterns(ws, expect_patterns)
             if matched:
                 if stream_mode:
@@ -383,8 +412,8 @@ def run_fs_watch(
                     print(json.dumps({"expect_satisfied": matched}, ensure_ascii=False))
                     return EXIT_CHANGE
         
-        # Regular diff change
-        if changed:
+        # Regular diff change (AIPOS-284D S1: filtered by --events)
+        if changed and events_filter in ("change", "all"):
             if stream_mode:
                 # AIPOS-284C: emit event and continue
                 print(json.dumps({"kind": "change", "changed": changed}, ensure_ascii=False), flush=True)
@@ -438,8 +467,12 @@ def run_fs_watch(
                     return EXIT_STALL
         
         # Bounded: stop before the next poll would exceed the timeout (the loop must end).
-        if clock() - start + interval >= timeout:
-            return EXIT_TIMEOUT  # silent
+        # AIPOS-284D S2: infinite timeout (timeout == float('inf')) means never exit on timeout
+        if not (timeout == float('inf')) and clock() - start + interval >= timeout:
+            if stream_mode:
+                # AIPOS-284D S2: emit 'end' event before exit
+                print(json.dumps({"kind": "end", "reason": "timeout"}, ensure_ascii=False), flush=True)
+            return EXIT_TIMEOUT  # silent in default mode
         sleeper(interval)
         if not stream_mode:
             prev = curr  # Default mode: advance snapshot each poll
@@ -452,8 +485,19 @@ def run_fs_watch(
 def run_fs_watch_cli(args: Any) -> int:
     """CLI entry: installs clean SIGTERM/SIGINT handlers around the core loop (the
     card's 'SIGTERM 干净退出' — no Python traceback), then restores the prior handlers.
-    Only valid in the main thread (where the CLI runs)."""
+    Only valid in the main thread (where the CLI runs).
+    
+    AIPOS-284D S2: in --stream mode, emit 'kind:end' event before signal exit.
+    """
+    stream_mode = getattr(args, "stream", False)
+    
     def _handler(signum: int, frame: Any) -> None:
+        # AIPOS-284D S2: emit end event in stream mode before exit
+        if stream_mode:
+            try:
+                print(json.dumps({"kind": "end", "reason": "signal"}, ensure_ascii=False), flush=True)
+            except Exception:
+                pass  # Best effort: don't crash if stdout is broken
         raise _SignalExit(EXIT_SIGNAL)
 
     prev_term = signal.signal(signal.SIGTERM, _handler)
