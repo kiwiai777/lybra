@@ -44,6 +44,7 @@ from tools.aipos_cli.agent_watch_fs import (
     EXIT_SIGNAL,
     EXIT_STALL,
     EXIT_TIMEOUT,
+    EXIT_USAGE,
     check_expect_patterns,
     diff_snapshots,
     get_observation_mtime,
@@ -824,7 +825,7 @@ class FsWatchF2841OutsideWatchSubtreesTests(unittest.TestCase):
                          "walk must be limited to static prefix, not full tree")
 
     def test_expect_pattern_validation_rejects_absolute_path(self):
-        """F-284-1: absolute paths are rejected at startup."""
+        """F-284B-1: absolute paths are rejected at startup with exit 5."""
         ws = _make_workspace()
         args = _args(ws, interval=0.5, timeout=10.0)
         args.expect = ["/absolute/path/file.md"]
@@ -833,10 +834,10 @@ class FsWatchF2841OutsideWatchSubtreesTests(unittest.TestCase):
         args.stall_secs = None
         with redirect_stdout(io.StringIO()):
             rc = run_fs_watch(args, sleeper=lambda s: None, clock=time.monotonic)
-        self.assertEqual(rc, EXIT_TIMEOUT)  # validation failure -> exit 2
+        self.assertEqual(rc, EXIT_USAGE)  # F-284B-1: validation failure -> exit 5
 
     def test_expect_pattern_validation_rejects_dotdot_escape(self):
-        """F-284-1: patterns with '..' are rejected at startup."""
+        """F-284B-1: patterns with '..' are rejected at startup with exit 5."""
         ws = _make_workspace()
         args = _args(ws, interval=0.5, timeout=10.0)
         args.expect = ["../escape/file.md"]
@@ -845,42 +846,52 @@ class FsWatchF2841OutsideWatchSubtreesTests(unittest.TestCase):
         args.stall_secs = None
         with redirect_stdout(io.StringIO()):
             rc = run_fs_watch(args, sleeper=lambda s: None, clock=time.monotonic)
-        self.assertEqual(rc, EXIT_TIMEOUT)
+        self.assertEqual(rc, EXIT_USAGE)  # F-284B-1: exit 5
 
-    def test_expect_pattern_validation_rejects_nonexistent_unreachable_prefix(self):
-        """F-284-1: patterns whose static prefix cannot exist are rejected."""
+    def test_expect_pattern_validation_allows_nonexistent_prefix_inside_workspace(self):
+        """F-284B-1 修向: patterns with nonexistent prefix (but inside workspace) are VALID.
+        Validation only rejects absolute/.. escapes; nonexistent prefix = future event."""
         ws = _make_workspace()
-        args = _args(ws, interval=0.5, timeout=10.0)
-        # Create a file (not directory) where prefix would need to be
-        _write(os.path.join(ws, "blocker.txt"), "blocks")
-        args.expect = ["blocker.txt/impossible/*.md"]  # blocker.txt is a file, not a dir
-        args.run_log = None
-        args.end_pattern = None
-        args.stall_secs = None
-        with redirect_stdout(io.StringIO()):
-            rc = run_fs_watch(args, sleeper=lambda s: None, clock=time.monotonic)
-        self.assertEqual(rc, EXIT_TIMEOUT)
-
-    def test_expect_pattern_validation_allows_nonexistent_but_creatable_prefix(self):
-        """Patterns whose prefix doesn't exist yet but COULD be created are allowed."""
-        ws = _make_workspace()
-        # Don't create task_cards/FUTURE/ yet, but it COULD be created
-        args = _args(ws, interval=0.5, timeout=10.0)
+        args = _args(ws, interval=0.5, timeout=1.0)  # Short timeout to exit quickly
+        # Don't create task_cards/FUTURE/ — pattern is valid, just no match yet
         args.expect = ["task_cards/FUTURE/*.md"]
         args.run_log = None
         args.end_pattern = None
         args.stall_secs = None
         clock_now = [0.0]
-
-        def sleeper(seconds: float):
-            clock_now[0] += seconds
-
-        # Should not reject pattern, just timeout (no match)
-        with redirect_stdout(io.StringIO()) as out:
+        def sleeper(s: float):
+            clock_now[0] += s
+        with redirect_stdout(io.StringIO()):
             rc = run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
-        # Pattern is valid, just no match -> timeout
-        self.assertEqual(rc, EXIT_TIMEOUT)
-        self.assertEqual(out.getvalue(), "")
+        # Pattern is VALID (not rejected), just times out with no match
+        self.assertEqual(rc, EXIT_TIMEOUT, "nonexistent prefix should be valid, just timeout")
+
+    def test_expect_prefix_created_after_watch_starts_exit0(self):
+        """F-284B-1 修向d: 前缀后建场景 — watch starts with nonexistent prefix, prefix+file
+        created during poll -> expect satisfied, exit 0. This is the dogfood case:
+        executor布防 task_cards/AIPOS-277/RETURN.md before the directory exists."""
+        ws = _make_workspace()
+        created = {"done": False}
+        
+        def sleeper(seconds: float):
+            if not created["done"]:
+                # Simulate executor creating directory + artifact during execution
+                task_dir = os.path.join(ws, "task_cards/AIPOS-277")
+                os.makedirs(task_dir, exist_ok=True)
+                _write(os.path.join(task_dir, "RETURN.md"), "task completed")
+                created["done"] = True
+        
+        args = _args(ws, interval=0.1, timeout=10.0)
+        args.expect = ["task_cards/AIPOS-277/RETURN.md"]
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_CHANGE, "prefix created during watch -> expect satisfied")
+        payload = json.loads(out.getvalue())
+        self.assertIn("expect_satisfied", payload)
+        self.assertIn("task_cards/AIPOS-277/RETURN.md", payload["expect_satisfied"])
 
 
 class FsWatchV2IntegrationTests(unittest.TestCase):

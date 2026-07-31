@@ -66,13 +66,15 @@ from typing import Any, Callable
 DEFAULT_INTERVAL_SECONDS = 15.0
 DEFAULT_TIMEOUT_SECONDS = 1800.0
 
-# Exit codes (AIPOS-268 + AIPOS-284): 0 = change/expect satisfied; 2 = timeout (silent);
+# Exit codes (AIPOS-268 + AIPOS-284 + F-284B-1): 0 = change/expect satisfied; 2 = timeout (silent);
 # 3 = end-pattern seen but expect NOT satisfied; 4 = stall detected;
+# 5 = usage error (布防拒绝: invalid --expect pattern);
 # 130 = SIGTERM/SIGINT clean exit (no output, no traceback).
 EXIT_CHANGE = 0
 EXIT_TIMEOUT = 2
 EXIT_END_NO_PRODUCT = 3
 EXIT_STALL = 4
+EXIT_USAGE = 5
 EXIT_SIGNAL = 130
 
 # The two subtrees the advisor sentinel watches (relative to --workspace-root):
@@ -158,11 +160,14 @@ def _extract_static_prefix(pattern: str) -> str:
 
 
 def _validate_expect_pattern(workspace_root: Path, pattern: str) -> tuple[bool, str]:
-    """Validate that an expect pattern can potentially match within workspace-root.
-    Returns (is_valid, error_message). A pattern is invalid if:
-    - it starts with '/' (absolute path outside workspace)
-    - it escapes workspace-root via '..'
-    - its static prefix doesn't exist and can never be created inside workspace"""
+    """F-284B-1: validate that an expect pattern can potentially match within workspace-root.
+    Returns (is_valid, error_message). A pattern is INVALID only if:
+    - it starts with '/' (absolute path)
+    - it contains '..' (escape attempt)
+    
+    A pattern whose static prefix does NOT exist yet is VALID (the修向: "静态前缀目前不存在
+    是合法的未来事件,watch 的本義就是等它出現"). check_expect_patterns handles dynamic
+    prefix appearance on each poll."""
     # Reject absolute paths
     if pattern.startswith("/"):
         return False, f"--expect pattern must be relative to workspace-root: {pattern}"
@@ -170,16 +175,6 @@ def _validate_expect_pattern(workspace_root: Path, pattern: str) -> tuple[bool, 
     # Reject patterns that escape workspace via '..'
     if ".." in pattern:
         return False, f"--expect pattern cannot escape workspace-root: {pattern}"
-    
-    # Extract static prefix and check if it's rooted inside workspace
-    static_prefix = _extract_static_prefix(pattern)
-    if static_prefix:
-        full_prefix = workspace_root / static_prefix
-        # Check if prefix exists OR could exist (parent dir exists)
-        if not full_prefix.exists():
-            parent = full_prefix.parent
-            if not parent.exists() or not parent.is_relative_to(workspace_root):
-                return False, f"--expect pattern prefix does not exist and cannot be created: {pattern} (prefix: {static_prefix})"
     
     return True, ""
 
@@ -297,12 +292,12 @@ def run_fs_watch(
 
     # AIPOS-284 v2 parameters
     expect_patterns: list[str] = getattr(args, "expect", None) or []
-    # F-284-1: validate expect patterns (reject unmatchable patterns)
+    # F-284B-1: validate expect patterns (reject 绝对路径/.. only; 不存在的前缀 = 合法未来)
     for pat in expect_patterns:
         is_valid, error_msg = _validate_expect_pattern(ws, pat)
         if not is_valid:
             print(f"lybra agent watch: {error_msg}", file=sys.stderr)
-            return EXIT_TIMEOUT
+            return EXIT_USAGE
     run_log_path: str | None = getattr(args, "run_log", None)
     end_pattern_str: str | None = getattr(args, "end_pattern", None)
     end_pattern: re.Pattern | None = None
