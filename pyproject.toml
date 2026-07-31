@@ -1,11 +1,9 @@
-# AIPOS-205 — Python dependency / extras declaration ONLY.
+# AIPOS-205/290 — Python dependency / extras / console_scripts entry.
 #
-# This file does NOT take over distribution. The product is distributed via npm
-# (package.json) with `bin/lybra` as the entry point; that remains unchanged. This
-# pyproject exists solely to (a) declare that the gate core has ZERO runtime Python
-# dependencies, and (b) declare the optional `tui` extra (Textual), so the TUI client
-# is installed only with `pip install .[tui]` (or `pip install textual` in the tui CI
-# lane). Do not add gate runtime deps here — the gate must stay stdlib-only.
+# AIPOS-290: Added [project.scripts] to expose `lybra` console entry (pip install -e).
+# Distribution still npm/bin (package.json), but pip install now makes `lybra` command
+# available for dev/test convenience. Gate core stays stdlib-only (zero runtime deps).
+# Optional `tui` extra (Textual) for TUI client only.
 
 [project]
 name = "lybra"
@@ -18,6 +16,16 @@ dependencies = []  # gate core: stdlib only, intentionally zero runtime dependen
 # UI library lands ONLY in the TUI client (tools/lybra_tui); tools/mcp_server and
 # tools/aipos_cli never import it. Core CI lane installs nothing here and runs the gate.
 tui = ["textual>=4.0"]
+
+[project.scripts]
+# AIPOS-290: console_scripts entry for `pip install -e .` dev convenience.
+# Points to tools.aipos_cli.aipos_cli:main (existing main() in aipos_cli.py).
+lybra = "tools.aipos_cli.aipos_cli:main"
+
+[tool.setuptools]
+# AIPOS-290: explicit package discovery to avoid flat-layout multi-package error.
+# Only include tools.* (CLI/MCP/TUI), exclude top-level directories (web, config, etc).
+packages = ["tools.aipos_cli", "tools.mcp_server", "tools.lybra_tui"]
 
 [tool.lybra]
 distribution = "npm"  # bin/lybra (package.json) is the entry; pyproject is deps/extras only
