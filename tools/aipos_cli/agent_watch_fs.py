@@ -1,9 +1,9 @@
-"""AIPOS-268 + AIPOS-284 — ``agent watch --workspace-root``: filesystem pump v2.
+"""AIPOS-268 + AIPOS-284 + AIPOS-284C — ``agent watch --workspace-root``: filesystem pump v2.
 
 This is candidate ⑫ of the 候选⑤⑫合流 — the ``agent watch`` verb carries TWO
 mutually-exclusive harness modes (selected on the CLI):
 
-- candidate ⑫ (this module, AIPOS-268 + AIPOS-284): ``--workspace-root`` — a PURE CLIENT
+- candidate ⑫ (this module, AIPOS-268 + AIPOS-284 + AIPOS-284C): ``--workspace-root`` — a PURE CLIENT
   read-only mtime+path sentinel. No gate, no MCP, no token.
 - candidate ⑤ (AIPOS-248, ``agent_connector.py``): ``--gate-url`` — a stateless
   pull for claimable tasks over the gate read tool.
@@ -12,6 +12,10 @@ A PURE CLIENT, read-only mtime+path sentinel. It snapshots two subtrees of a Lyb
 workspace — ``5_tasks/queue/**`` and ``5_tasks/records/**`` — and block-polls until a
 change appears, then prints a ONE-LINE JSON change summary and exits 0. On timeout
 with no change it exits 2 SILENTLY; on SIGTERM/SIGINT it exits cleanly (130).
+
+AIPOS-284C --stream mode: a PERSISTENT observer that prints JSON event lines (line-buffered,
+immediate flush) and continues running. Only SIGTERM/SIGINT/--timeout terminate the process.
+Event deduplication: each expect file is reported at most once (new appearance only).
 
 Why this exists (governance ref ⑫, pinned 2026-07-26): the gate has ZERO alarm — the
 pump that wakes an advisor lives in the PRODUCT CLI, not the gate, so ANY agent that
@@ -42,12 +46,20 @@ AIPOS-284 v2 enhancements ("listening for death silences"):
 - ``--stall-secs <n>``: 静默停滞 — exit 4 if run-log (or observation surface if no run-log)
   has not changed for ≥n seconds.
 
-Exit codes (AIPOS-284 S4):
-- 0: change detected (expect satisfied OR diff non-empty)
-- 2: timeout with no change (silent)
-- 3: end-pattern seen, expect NOT satisfied ("finished but produced nothing")
-- 4: stall detected ("silence exceeded threshold")
-- 130: SIGTERM/SIGINT clean exit
+AIPOS-284C --stream mode event kinds:
+- ``expect``   — expect pattern matched (new file only; deduplicated)
+- ``change``   — filesystem change detected (new/modified/moved/deleted)
+- ``stall``    — observation surface silent beyond threshold
+- ``run_end``  — end-pattern seen but expect not satisfied
+
+Exit codes (AIPOS-284 S4 + AIPOS-284C S2):
+- 0: change detected (expect satisfied OR diff non-empty) — DEFAULT MODE ONLY
+- 2: timeout (silent) — both modes
+- 3: end-pattern seen, expect NOT satisfied — DEFAULT MODE ONLY
+- 4: stall detected — DEFAULT MODE ONLY
+- 130: SIGTERM/SIGINT clean exit — both modes
+
+In --stream mode: exit 0/3/4 become JSON event lines; only timeout/signal exit the process.
 """
 from __future__ import annotations
 
@@ -276,6 +288,8 @@ def run_fs_watch(
     by being SILENT).
     
     AIPOS-284 S1-S4:布防即检 / 结束无产物 / 静默停滞 / 超时仍exit2.
+    AIPOS-284C --stream mode: emit JSON event lines and continue (no exit 0/3/4).
+    Event deduplication (S3): track reported expect files, only report new appearances.
     """
     interval = DEFAULT_INTERVAL_SECONDS if getattr(args, "interval", None) is None else float(args.interval)
     timeout = DEFAULT_TIMEOUT_SECONDS if getattr(args, "timeout", None) is None else float(args.timeout)
@@ -290,6 +304,9 @@ def run_fs_watch(
         print(f"lybra agent watch: --workspace-root is not a directory: {ws}", file=sys.stderr)
         return EXIT_TIMEOUT
 
+    # AIPOS-284C: stream mode flag
+    stream_mode = getattr(args, "stream", False)
+    
     # AIPOS-284 v2 parameters
     expect_patterns: list[str] = getattr(args, "expect", None) or []
     # F-284B-1: validate expect patterns (reject 绝对路径/.. only; 不存在的前缀 = 合法未来)
@@ -320,6 +337,9 @@ def run_fs_watch(
                 return EXIT_TIMEOUT
     else:
         stall_secs = float('inf')  # Effectively disabled
+    
+    # AIPOS-284C S3: event deduplication (track reported expect files)
+    reported_expect_files: set[str] = set()
 
     start = clock()
     prev = snapshot(ws)
@@ -328,8 +348,16 @@ def run_fs_watch(
     if expect_patterns:
         matched = check_expect_patterns(ws, expect_patterns)
         if matched:
-            print(json.dumps({"expect_satisfied": matched}, ensure_ascii=False))
-            return EXIT_CHANGE
+            if stream_mode:
+                # AIPOS-284C: emit event and continue, track reported files
+                new_files = [f for f in matched if f not in reported_expect_files]
+                if new_files:
+                    print(json.dumps({"kind": "expect", "paths": new_files}, ensure_ascii=False), flush=True)
+                    reported_expect_files.update(new_files)
+            else:
+                # Default mode: exit 0
+                print(json.dumps({"expect_satisfied": matched}, ensure_ascii=False))
+                return EXIT_CHANGE
     
     # Track last observation mtime for stall detection (initialized to current time if no observable surface)
     last_obs_mtime = get_observation_mtime(ws, run_log_path)
@@ -345,13 +373,25 @@ def run_fs_watch(
         if expect_patterns:
             matched = check_expect_patterns(ws, expect_patterns)
             if matched:
-                print(json.dumps({"expect_satisfied": matched}, ensure_ascii=False))
-                return EXIT_CHANGE
+                if stream_mode:
+                    # AIPOS-284C S3: deduplicate — only report new files
+                    new_files = [f for f in matched if f not in reported_expect_files]
+                    if new_files:
+                        print(json.dumps({"kind": "expect", "paths": new_files}, ensure_ascii=False), flush=True)
+                        reported_expect_files.update(new_files)
+                else:
+                    print(json.dumps({"expect_satisfied": matched}, ensure_ascii=False))
+                    return EXIT_CHANGE
         
         # Regular diff change
         if changed:
-            print(json.dumps({"changed": changed}, ensure_ascii=False))
-            return EXIT_CHANGE
+            if stream_mode:
+                # AIPOS-284C: emit event and continue
+                print(json.dumps({"kind": "change", "changed": changed}, ensure_ascii=False), flush=True)
+                prev = curr  # Advance snapshot to avoid re-reporting same change
+            else:
+                print(json.dumps({"changed": changed}, ensure_ascii=False))
+                return EXIT_CHANGE
         
         # S2: 结束无产物 — end-pattern logic
         if end_pattern and run_log_path:
@@ -362,12 +402,20 @@ def run_fs_watch(
                     end_pattern_seen = True
                     grace_after_end = True
                 elif grace_after_end:
-                    # Grace poll done, still no expect match -> exit 3
+                    # Grace poll done, still no expect match
                     grace_after_end = False
+                    # In stream mode, emit run_end and continue; in default mode, fall through to else on next poll
                 else:
                     # Already past grace, still no product
-                    print(json.dumps({"end_no_product": {"run_log_tail": tail.strip().split("\n")[-1] if tail.strip() else ""}}, ensure_ascii=False))
-                    return EXIT_END_NO_PRODUCT
+                    if stream_mode:
+                        # AIPOS-284C: emit run_end event and continue (only once, then reset)
+                        print(json.dumps({"kind": "run_end", "run_log_tail": tail.strip().split("\n")[-1] if tail.strip() else ""}, ensure_ascii=False), flush=True)
+                        # Reset to allow future detection
+                        end_pattern_seen = False
+                    else:
+                        # Default mode: exit 3
+                        print(json.dumps({"end_no_product": {"run_log_tail": tail.strip().split("\n")[-1] if tail.strip() else ""}}, ensure_ascii=False))
+                        return EXIT_END_NO_PRODUCT
         
         # S3: 静默停滞 — stall detection
         current_obs_mtime = get_observation_mtime(ws, run_log_path)
@@ -381,14 +429,20 @@ def run_fs_watch(
             if silence_duration >= stall_secs:
                 tail = get_run_log_tail(run_log_path) if run_log_path else ""
                 last_line = tail.strip().split("\n")[-1] if tail.strip() else ""
-                print(json.dumps({"stall": {"silence_seconds": int(silence_duration), "run_log_tail": last_line}}, ensure_ascii=False))
-                return EXIT_STALL
+                if stream_mode:
+                    # AIPOS-284C: emit stall event and continue, reset timer
+                    print(json.dumps({"kind": "stall", "silence_seconds": int(silence_duration), "run_log_tail": last_line}, ensure_ascii=False), flush=True)
+                    last_obs_check = clock()  # Reset to avoid repeated stall events
+                else:
+                    print(json.dumps({"stall": {"silence_seconds": int(silence_duration), "run_log_tail": last_line}}, ensure_ascii=False))
+                    return EXIT_STALL
         
         # Bounded: stop before the next poll would exceed the timeout (the loop must end).
         if clock() - start + interval >= timeout:
             return EXIT_TIMEOUT  # silent
         sleeper(interval)
-        prev = curr
+        if not stream_mode:
+            prev = curr  # Default mode: advance snapshot each poll
         
         # Reset grace flag after one poll
         if grace_after_end:

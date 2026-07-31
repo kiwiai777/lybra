@@ -45,6 +45,7 @@ from tools.aipos_cli.agent_watch_fs import (
     EXIT_STALL,
     EXIT_TIMEOUT,
     EXIT_USAGE,
+    _SignalExit,
     check_expect_patterns,
     diff_snapshots,
     get_observation_mtime,
@@ -975,6 +976,292 @@ class FsWatchV2IntegrationTests(unittest.TestCase):
         payload = json.loads(out.decode("utf-8").strip())
         self.assertIn("stall", payload)
         self.assertGreaterEqual(payload["stall"]["silence_seconds"], 1)
+
+
+class FsWatchStreamModeTests(unittest.TestCase):
+    """AIPOS-284C: --stream mode (persistent observer, event lines, no exit on change)."""
+
+    def test_stream_mode_expect_emits_event_and_continues(self):
+        """Stream mode: expect satisfied -> emit JSON event, continue running."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/RETURN.md"), "done")
+        polls = [0]
+        
+        def sleeper(seconds: float):
+            polls[0] += 1
+            if polls[0] >= 3:  # Let it poll a few times after emitting event
+                raise _SignalExit(EXIT_SIGNAL)  # Simulate clean exit
+        
+        args = _args(ws, interval=0.1, timeout=100.0)
+        args.stream = True
+        args.expect = ["5_tasks/records/RETURN.md"]
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                run_fs_watch(args, sleeper=sleeper, clock=time.monotonic)
+            except _SignalExit:
+                pass
+        lines = out.getvalue().strip().split("\n")
+        self.assertGreaterEqual(len(lines), 1)
+        first = json.loads(lines[0])
+        self.assertEqual(first["kind"], "expect")
+        self.assertIn("5_tasks/records/RETURN.md", first["paths"])
+
+    def test_stream_mode_change_emits_event_and_continues(self):
+        """Stream mode: filesystem change -> emit JSON event, continue running."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/seed.md"), "seed")
+        polls = [0]
+        
+        def sleeper(seconds: float):
+            polls[0] += 1
+            if polls[0] == 1:
+                _write(os.path.join(ws, "5_tasks/queue/pending/new.md"), "new")
+            elif polls[0] >= 3:
+                raise _SignalExit(EXIT_SIGNAL)
+        
+        args = _args(ws, interval=0.1, timeout=100.0)
+        args.stream = True
+        args.expect = None
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                run_fs_watch(args, sleeper=sleeper, clock=time.monotonic)
+            except _SignalExit:
+                pass
+        lines = out.getvalue().strip().split("\n")
+        self.assertGreaterEqual(len(lines), 1)
+        first = json.loads(lines[0])
+        self.assertEqual(first["kind"], "change")
+        self.assertTrue(any(c["path"] == "5_tasks/queue/pending/new.md" for c in first["changed"]))
+
+    def test_stream_mode_stall_emits_event_and_continues(self):
+        """Stream mode: stall detected -> emit JSON event, continue running."""
+        ws = _make_workspace()
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "started\n")
+        time.sleep(0.1)
+        clock_now = [0.0]
+        polls = [0]
+        
+        def sleeper(seconds: float):
+            clock_now[0] += seconds
+            polls[0] += 1
+            if polls[0] >= 5:  # After emitting stall event
+                raise _SignalExit(EXIT_SIGNAL)
+        
+        args = _args(ws, interval=0.5, timeout=100.0)
+        args.stream = True
+        args.expect = None
+        args.run_log = run_log
+        args.end_pattern = None
+        args.stall_secs = 1.5
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
+            except _SignalExit:
+                pass
+        lines = out.getvalue().strip().split("\n")
+        self.assertGreaterEqual(len(lines), 1)
+        # Find stall event
+        stall_event = None
+        for line in lines:
+            if line:
+                evt = json.loads(line)
+                if evt.get("kind") == "stall":
+                    stall_event = evt
+                    break
+        self.assertIsNotNone(stall_event, "stall event should be emitted")
+        self.assertGreaterEqual(stall_event["silence_seconds"], 1)
+
+    def test_stream_mode_run_end_emits_event_and_continues(self):
+        """Stream mode: end-pattern seen -> emit run_end event, continue running."""
+        ws = _make_workspace()
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "starting...\n")
+        polls = [0]
+        
+        def sleeper(seconds: float):
+            polls[0] += 1
+            if polls[0] == 1:
+                with open(run_log, "a") as f:
+                    f.write("execution finished\n")
+            elif polls[0] >= 4:  # After grace + run_end event
+                raise _SignalExit(EXIT_SIGNAL)
+        
+        args = _args(ws, interval=0.1, timeout=100.0)
+        args.stream = True
+        args.expect = ["5_tasks/records/RETURN.md"]  # Never created
+        args.run_log = run_log
+        args.end_pattern = "execution finished"
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                run_fs_watch(args, sleeper=sleeper, clock=time.monotonic)
+            except _SignalExit:
+                pass
+        lines = out.getvalue().strip().split("\n")
+        self.assertGreaterEqual(len(lines), 1)
+        # Find run_end event
+        run_end_event = None
+        for line in lines:
+            if line:
+                evt = json.loads(line)
+                if evt.get("kind") == "run_end":
+                    run_end_event = evt
+                    break
+        self.assertIsNotNone(run_end_event, "run_end event should be emitted")
+        self.assertIn("execution finished", run_end_event["run_log_tail"])
+
+    def test_stream_mode_expect_deduplication(self):
+        """Stream mode S3: same expect file reported only once (new appearance only)."""
+        ws = _make_workspace()
+        polls = [0]
+        
+        def sleeper(seconds: float):
+            polls[0] += 1
+            if polls[0] == 1:
+                _write(os.path.join(ws, "5_tasks/records/RETURN.md"), "first")
+            elif polls[0] >= 5:  # Multiple polls after first match
+                raise _SignalExit(EXIT_SIGNAL)
+        
+        args = _args(ws, interval=0.1, timeout=100.0)
+        args.stream = True
+        args.expect = ["5_tasks/records/RETURN.md"]
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                run_fs_watch(args, sleeper=sleeper, clock=time.monotonic)
+            except _SignalExit:
+                pass
+        lines = [l for l in out.getvalue().strip().split("\n") if l]
+        # Should only have ONE expect event (deduplication)
+        expect_events = [json.loads(l) for l in lines if json.loads(l).get("kind") == "expect"]
+        self.assertEqual(len(expect_events), 1, "expect file should be reported only once")
+
+    def test_stream_mode_multi_event_sequence(self):
+        """Stream mode S4: multiple events in sequence (expect -> change -> stall)."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/seed.md"), "seed")
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "started\n")
+        time.sleep(0.1)
+        clock_now = [0.0]
+        polls = [0]
+        
+        def sleeper(seconds: float):
+            clock_now[0] += seconds
+            polls[0] += 1
+            if polls[0] == 1:
+                _write(os.path.join(ws, "5_tasks/records/RETURN.md"), "done")
+            elif polls[0] == 2:
+                _write(os.path.join(ws, "5_tasks/queue/pending/new.md"), "new")
+            elif polls[0] >= 6:  # After stall threshold
+                raise _SignalExit(EXIT_SIGNAL)
+        
+        args = _args(ws, interval=0.3, timeout=100.0)
+        args.stream = True
+        args.expect = ["5_tasks/records/RETURN.md"]
+        args.run_log = run_log
+        args.end_pattern = None
+        args.stall_secs = 1.0
+        with redirect_stdout(io.StringIO()) as out:
+            try:
+                run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
+            except _SignalExit:
+                pass
+        lines = [l for l in out.getvalue().strip().split("\n") if l]
+        events = [json.loads(l) for l in lines]
+        kinds = [e["kind"] for e in events]
+        # Should have expect, change, and stall events in order
+        self.assertIn("expect", kinds)
+        self.assertIn("change", kinds)
+        self.assertIn("stall", kinds)
+        # Verify order: expect before change
+        expect_idx = kinds.index("expect")
+        change_idx = kinds.index("change")
+        self.assertLess(expect_idx, change_idx, "expect should come before change")
+
+    def test_stream_mode_timeout_still_exits_2(self):
+        """Stream mode: timeout still produces exit 2 (silent)."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/seed.md"), "seed")
+        clock_now = [0.0]
+        
+        def sleeper(seconds: float):
+            clock_now[0] += seconds
+        
+        args = _args(ws, interval=0.3, timeout=1.0)
+        args.stream = True
+        args.expect = None
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
+        self.assertEqual(rc, EXIT_TIMEOUT)
+        self.assertEqual(out.getvalue(), "", "timeout must be silent even in stream mode")
+
+    def test_default_mode_unchanged_zero_regression(self):
+        """S2 zero-regression: default mode (no --stream) behaves exactly as before."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/RETURN.md"), "done")
+        args = _args(ws, interval=0.1, timeout=5.0)
+        args.stream = False  # Explicit default
+        args.expect = ["5_tasks/records/RETURN.md"]
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args)
+        self.assertEqual(rc, EXIT_CHANGE, "default mode should exit 0 on expect")
+        payload = json.loads(out.getvalue())
+        self.assertIn("expect_satisfied", payload, "default mode uses old JSON format")
+
+
+class FsWatchStreamModeIntegrationTests(unittest.TestCase):
+    """AIPOS-284C S4: stream mode end-to-end on real CLI."""
+
+    def test_real_cli_stream_mode_multi_event(self):
+        """Real CLI --stream: multiple events emitted, process continues."""
+        ws = _make_workspace()
+        _write(os.path.join(ws, "5_tasks/records/seed.md"), "seed")
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "watch",
+             "--workspace-root", ws, "--timeout", "3", "--interval", "0.3",
+             "--stream", "--expect", "5_tasks/records/*.md"],
+            cwd=str(_REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            time.sleep(0.5)
+            # Trigger multiple events
+            _write(os.path.join(ws, "5_tasks/records/RETURN.md"), "done")
+            time.sleep(0.5)
+            _write(os.path.join(ws, "5_tasks/queue/pending/new.md"), "new")
+            time.sleep(0.8)
+            # Should still be running, terminate it
+            proc.send_signal(signal.SIGTERM)
+            out, err = proc.communicate(timeout=3)
+        except Exception:
+            proc.kill()
+            raise
+        # Should exit cleanly via signal
+        self.assertEqual(proc.returncode, EXIT_SIGNAL, err)
+        lines = [l for l in out.decode("utf-8").strip().split("\n") if l]
+        # Should have multiple event lines
+        self.assertGreaterEqual(len(lines), 2, "should emit multiple events")
+        events = [json.loads(l) for l in lines]
+        kinds = [e["kind"] for e in events]
+        self.assertIn("expect", kinds)
+        self.assertIn("change", kinds)
 
 
 if __name__ == "__main__":

@@ -903,6 +903,8 @@ def build_parser() -> argparse.ArgumentParser:
     _watch_parser.add_argument("--run-log", help="[filesystem pump v2] path to run log (for end-pattern and stall detection)")
     _watch_parser.add_argument("--end-pattern", help="[filesystem pump v2] regex: if found in run-log but --expect NOT satisfied, exit 3 after one grace poll (结束无产物)")
     _watch_parser.add_argument("--stall-secs", type=float, default=None, help="[filesystem pump v2] silence threshold seconds (default 600). If run-log (or observation surface) mtime unchanged for ≥N seconds, exit 4 (静默停滞)")
+    # AIPOS-284C: --stream mode (persistent observer, event lines, no exit on change/stall/run_end)
+    _watch_parser.add_argument("--stream", action="store_true", help="[filesystem pump v3/AIPOS-284C] persistent mode: emit JSON event lines (kind: expect|change|stall|run_end) and continue. Only timeout/signal exits. Event deduplication: expect files reported once (new only).")
 
     board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
