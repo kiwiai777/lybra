@@ -95,7 +95,7 @@ class _BaseTicketStore:
         if entry is None:
             return None
         if self._now() > float(entry.get("expire_at", 0.0)):
-            return None  # 过期:已删除,视为未命中
+            return None  # 过期:已删除,视为未命中  # i18n-exempt: code comment
         return entry
 
 
@@ -250,10 +250,10 @@ def load_or_create_remember_secret(repo_root: Path | None) -> str:
     try:
         secret_path.parent.mkdir(parents=True, exist_ok=True)
         secret_path.write_text(new_secret, encoding="utf-8")
-        secret_path.chmod(0o600)  # 仅所有者可读写
+        secret_path.chmod(0o600)  # 仅所有者可读写  # i18n-exempt: code comment
         return new_secret
     except OSError:
-        return new_secret  # 写入失败也返回,降级为进程内存态
+        return new_secret  # 写入失败也返回,降级为进程内存态  # i18n-exempt: code comment
 
 
 def sign_remember_token(secret: str, session_id: str, role: str, scopes: list[str], token_ref: str = "") -> str:
@@ -280,7 +280,7 @@ def verify_remember_token(secret: str, token: str) -> dict[str, Any] | None:
     import json
     
     parts = token.split(":")
-    if len(parts) < 5:  # session_id:role:scopes:token_ref:signature (至少5段)
+    if len(parts) < 5:  # session_id:role:scopes:token_ref:signature (至少5段)  # i18n-exempt: code comment
         return None
     
     # 最后一段是签名，前面可能因为 scopes_json 中有冒号而多段
@@ -293,8 +293,8 @@ def verify_remember_token(secret: str, token: str) -> dict[str, Any] | None:
     
     session_id = payload_parts[0]
     role = payload_parts[1]
-    token_ref = payload_parts[-1]  # 最后一段是 token_ref
-    scopes_json = ":".join(payload_parts[2:-1])  # 中间所有段重组为 scopes_json
+    token_ref = payload_parts[-1]  # 最后一段是 token_ref  # i18n-exempt: code comment
+    scopes_json = ":".join(payload_parts[2:-1])  # 中间所有段重组为 scopes_json  # i18n-exempt: code comment
     
     payload = f"{session_id}:{role}:{scopes_json}:{token_ref}"
     expected = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()

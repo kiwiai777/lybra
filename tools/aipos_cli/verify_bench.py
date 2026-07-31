@@ -264,6 +264,8 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
             main_verdict = verdict_by_task.get(str(root))
             completed_dossier = bool(tid and (completed_root / str(tid)).is_dir())
             stage = derive_true_stage(tid, recs, queue_state, main_verdict, completed_dossier)
+            # AIPOS-287: audit 字段读取（判断免审计卡）
+            audit_policy = _as_str(metadata.get("audit")).lower()
             # AIPOS-274: owner_verify_checklist 字段优先,退而从正文解析 Owner 核验单,再退而用验收断言
             checklist_meta = metadata.get("owner_verify_checklist")
             checklist = (
@@ -281,6 +283,7 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
                 "path": task.get("path"),
                 "queue_state": queue_state,
                 "true_stage": stage,
+                "audit_policy": audit_policy,
                 "owner_verify_checklist": checklist,
                 "acceptance_assertions": assertions,
                 "owner_verify_preview": preview_route if preview_route else None,
@@ -297,14 +300,25 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
                 _as_str((v.get("metadata") or {}).get("decision")).lower() == "approve"
                 for v in recs.get("owner_verifications", [])
             )
+            # AIPOS-287: 站位推导扩展 — audit:none 且有 return 记录也起站
+            # 已核验即退站（owner_approved 或闭环完成）
             if (
                 stage == "verdict_pass"
                 and (owner_approved or _closure_unit_finalized(root, members_by_root, records))
             ):
                 closed_excluded.append({"task_id": tid, "title": base["title"]})
                 continue
-            if stage == "verdict_pass":
-                # 待验站: audit PASS, awaiting Owner真人核验 + finalize.
+            # AIPOS-287: audit:none 且已 return 且已核验也要退站
+            if (
+                audit_policy == "none"
+                and stage == "delivered"
+                and (owner_approved or _closure_unit_finalized(root, members_by_root, records))
+            ):
+                closed_excluded.append({"task_id": tid, "title": base["title"]})
+                continue
+            # 站位条件：verdict_pass 或 (audit:none 且 delivered)
+            if stage == "verdict_pass" or (audit_policy == "none" and stage == "delivered"):
+                # 待验站: audit PASS (或 audit:none 已返回), awaiting Owner真人核验 + finalize.
                 fix_tasks = [
                     t for t in members_by_root.get(str(root), [])
                     if _member_kind(t.get("task_id"), t.get("metadata") or {}, root) == "fix"

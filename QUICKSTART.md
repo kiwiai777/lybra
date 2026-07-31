@@ -349,6 +349,151 @@ lybra owner-truth
 
 ---
 
+## 跨机接入：顾问在另一台机器
+
+前面的示例假设顾问 agent、gate、工作区都在同一台机器上。实际使用中，顾问 agent 常跑在开发机，gate 和工作区在服务器或远程主机。跨机接入有两种方式：
+
+### 方式 A：零安装 MCP 直连（推荐）
+
+顾问 agent 无需安装 Lybra CLI，直接通过 HTTP MCP 连接远程 gate。
+
+#### 1) 服务端：启动 gate 并绑定网络接口
+
+在**服务器**（工作区所在机器）上：
+
+```bash
+cd ~/.lybra/workspaces/my_project
+
+# 绑定到所有接口，允许远程访问
+lybra serve --workspace-root . --mcp-host 0.0.0.0
+
+# 如果需要指定广播地址（例如服务器公网 IP 或内网 IP）：
+# lybra serve --workspace-root . --mcp-host 0.0.0.0 --mcp-advertise http://192.168.1.100:7118
+
+# Gate 会输出：
+# 🔒 Gate started at http://0.0.0.0:7118
+# 🌐 Advertised as: http://192.168.1.100:7118
+# 🔑 Advisor token: advisor_xyz456...
+```
+
+**安全提示**：
+- 确保 token 不泄露（通过安全渠道传给顾问 agent）
+- 考虑使用 VPN 或 SSH 隧道，避免直接暴露 gate 到公网
+- 如需防火墙，开放 MCP 端口（默认 7118）
+
+#### 2) 客户端：配置顾问 agent 连接远程 gate
+
+在**开发机**（顾问 agent 所在机器）上，配置 agent 的 MCP 服务器：
+
+**Claude Desktop/Cline**（编辑 `claude_desktop_config.json` 或 Cline 设置）：
+
+```json
+{
+  "mcpServers": {
+    "lybra-advisor": {
+      "url": "http://192.168.1.100:7118/mcp",
+      "headers": {
+        "Authorization": "Bearer advisor_xyz456..."
+      }
+    }
+  }
+}
+```
+
+**Claude Code 命令行**：
+
+```bash
+claude mcp add lybra --transport http http://192.168.1.100:7118/mcp --header "Authorization: Bearer advisor_xyz456..."
+```
+
+**Pi/Codex/其他 HTTP MCP harness**：
+
+```json
+{
+  "url": "http://192.168.1.100:7118/mcp",
+  "headers": {
+    "Authorization": "Bearer advisor_xyz456..."
+  }
+}
+```
+
+配置后，顾问 agent 可通过 MCP 工具调用 gate（查看队列、起草任务卡、建议发布）。
+
+#### 3) 验证连接
+
+告诉顾问 agent：
+
+```
+你是 my_project 工作区的顾问。
+Gate URL：http://192.168.1.100:7118
+Charter：~/.lybra/workspaces/my_project/governance/advisor-charter.md
+请使用 lybra MCP 工具查看当前队列状态。
+```
+
+Agent 应能调用 `lybra_queue` 工具并返回队列摘要。
+
+---
+
+### 方式 B：CLI 自举（完整功能）
+
+如果顾问 agent 需要使用 `lybra agent watch` 监听队列变化（唤醒泵），或需要在本地执行 CLI 命令，可通过 gate 自举安装 CLI。
+
+#### 1) 假设条件
+
+- Gate 所在机器已暴露 git/npm/pip 源（或 agent 可访问公网）
+- Agent 有权限在本地机器执行 `npm install -g` 和 `pip install`
+
+#### 2) Agent 自举安装
+
+告诉顾问 agent：
+
+```
+请安装 Lybra CLI（从 npm）：
+
+npm install -g lybra
+pip install "textual>=4.0"
+lybra --version
+
+安装后，使用跨机模式监听队列变化：
+lybra agent watch --gate-url http://192.168.1.100:7118 --token advisor_xyz456... --timeout 30
+```
+
+Agent 会：
+1. 执行安装命令（如有权限）
+2. 运行 `agent watch` 跨机模式，通过 gate API 拉取队列和记录变化
+3. 检测到变化时返回 JSON 摘要，适合作为唤醒泵
+
+---
+
+### 安全注意事项
+
+**Token 管理**：
+- Advisor token 只给顾问 agent
+- Executor/Auditor token 只给对应角色的 agent
+- Owner token 永远不给 agent（Owner 亲自持有）
+
+**网络隔离**：
+- 同机：`--mcp-host 127.0.0.1`（默认，仅本机访问）
+- 跨机（内网）：`--mcp-host 0.0.0.0 --mcp-advertise http://<内网IP>:7118`
+- 跨机（公网）：强烈建议使用 VPN 或 SSH 隧道，避免直接暴露
+
+**防火墙**：
+- 如需开放端口，仅允许可信 IP 访问 MCP 端口（7118）和看板端口（7117）
+
+---
+
+### 同机 vs 跨机对比
+
+| 维度             | 同机（本地）                              | 跨机（远程）                                  |
+|------------------|-------------------------------------------|-----------------------------------------------|
+| **Gate 启动**    | `lybra serve --workspace-root .`          | `lybra serve --workspace-root . --mcp-host 0.0.0.0 --mcp-advertise http://<IP>:7118` |
+| **Agent 接入**   | 文件系统直接访问 或 MCP `127.0.0.1:7118`  | MCP `http://<服务器IP>:7118/mcp` + token      |
+| **CLI 需求**     | 可选（MCP 直连即可基础功能）              | 可选（零安装 MCP 直连）或 CLI 自举（完整功能）|
+| **agent watch**  | `--workspace-root <本地路径>`             | `--gate-url <远程URL> --token <TOKEN>`        |
+| **安全考量**     | 本机隔离，无网络暴露                      | 需 token 管理 + 网络隔离（VPN/防火墙）        |
+
+---
+
 ## 常见问题
 
 ### Q1: Gate 启动失败，提示端口被占用？

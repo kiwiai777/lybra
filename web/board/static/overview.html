@@ -56,6 +56,13 @@
             <div class="input-hint" id="project-name-hint"></div>
           </div>
 
+          <!-- AIPOS-288 FIX-5: Optional English name -->
+          <div class="input-group">
+            <label for="project-name-en-input" id="project-name-en-label"></label>
+            <input type="text" id="project-name-en-input" placeholder="My Project" />
+            <div class="input-hint" id="project-name-en-hint"></div>
+          </div>
+
           <div class="setup-options">
             <!-- Option A: Copy command -->
             <div class="setup-option">
@@ -99,6 +106,15 @@
 
   <script src="/i18n.js"></script>
   <script>
+    // AIPOS-288 FIX-5: workspace label helper (EN prefers label_en, fallback to label)
+    function workspaceLabel(workspace) {
+      const lang = i18n.getCurrentLang();
+      if (lang === 'en' && workspace.label_en) {
+        return workspace.label_en;
+      }
+      return workspace.label || 'Unnamed Workspace';
+    }
+
     // Render page with i18n
     function renderPage() {
       // Update static text
@@ -113,6 +129,8 @@
       document.getElementById('modal-intro').textContent = i18n.t('overview.new_project_modal.intro');
       document.getElementById('project-name-label').textContent = i18n.t('overview.new_project_modal.project_name');
       document.getElementById('project-name-hint').textContent = i18n.t('overview.new_project_modal.project_name_hint');
+      document.getElementById('project-name-en-label').textContent = i18n.t('overview.new_project_modal.project_name_en');
+      document.getElementById('project-name-en-hint').textContent = i18n.t('overview.new_project_modal.project_name_en_hint');
       document.getElementById('option-a-title').textContent = i18n.t('overview.new_project_modal.option_a');
       document.getElementById('option-a-desc').textContent = i18n.t('overview.new_project_modal.option_a_desc');
       document.getElementById('option-b-title').textContent = i18n.t('overview.new_project_modal.option_b');
@@ -173,7 +191,7 @@
       
       const label = document.createElement('h3');
       label.className = 'workspace-label';
-      label.textContent = workspace.label || 'Unnamed Workspace';
+      label.textContent = workspaceLabel(workspace);
       
       const status = document.createElement('span');
       status.className = `workspace-status ${workspace.status}`;
@@ -326,6 +344,7 @@
     const modal = document.getElementById('add-project-modal');
     const modalClose = document.getElementById('modal-close');
     const projectNameInput = document.getElementById('project-name-input');
+    const projectNameEnInput = document.getElementById('project-name-en-input');
     const initCommandEl = document.getElementById('init-command');
     const copyInitBtn = document.getElementById('copy-init-btn');
     const serverInitBtn = document.getElementById('server-init-btn');
@@ -334,6 +353,7 @@
     function openAddProjectModal() {
       modal.hidden = false;
       projectNameInput.value = '';
+      projectNameEnInput.value = '';
       projectNameInput.focus();
       updateInitCommand();
       serverInitResult.hidden = true;
@@ -368,6 +388,7 @@
 
     async function serverSideInit() {
       const projectName = projectNameInput.value.trim();
+      const projectNameEn = projectNameEnInput.value.trim();
       if (!projectName || !/^[a-z0-9_-]+$/.test(projectName)) {
         serverInitResult.textContent = 'Invalid project name. Use lowercase letters, numbers, dash, or underscore only.';
         serverInitResult.className = 'result-message error';
@@ -381,10 +402,15 @@
       serverInitResult.hidden = false;
 
       try {
+        // AIPOS-288 FIX-5: Include label_en if provided
+        const payload = { project_id: projectName };
+        if (projectNameEn) {
+          payload.label_en = projectNameEn;
+        }
         const response = await fetch('/api/workspace/init', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ project_id: projectName })
+          body: JSON.stringify(payload)
         });
         const data = await response.json();
 

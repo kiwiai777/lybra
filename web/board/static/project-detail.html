@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>项目详情 - Lybra</title>
+  <title data-i18n="detail.title">Project Detail - Lybra</title>
   <link rel="stylesheet" href="/overview.css">
   <link rel="stylesheet" href="/i18n.css">
   <style>
@@ -431,7 +431,7 @@
       position: relative;
     }
     .map-current-mark::after {
-      content: '当前'; position: absolute; top: 26px; left: 50%; transform: translateX(-50%) rotate(-45deg);
+      content: '当前'; position: absolute; top: 26px; left: 50%; transform: translateX(-50%) rotate(-45deg); /* i18n-exempt: CSS default, replaced by dynamic i18n */
       font-size: 10px; font-weight: 800; color: var(--accent-bright); white-space: nowrap;
     }
     .map-current-cap {
@@ -591,6 +591,11 @@
     .vb-station-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-bottom: 8px; }
     .vb-station-title { font-size: 15px; font-weight: 700; color: var(--text-body); flex: 1 1 240px; overflow-wrap: anywhere; }
     .vb-station-id { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text-secondary); }
+    .vb-audit-badge {
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: 11px; font-weight: 800; color: #fff; background: #10b981; white-space: nowrap;
+      margin-right: 6px;
+    }
     .vb-await {
       display: inline-block; padding: 2px 10px; border-radius: 999px;
       font-size: 11px; font-weight: 800; color: #fff; background: #d97706; white-space: nowrap;
@@ -772,8 +777,8 @@
     <div class="top-bar-inner">
       <img src="/assets/lybra_logo_white.png" alt="Lybra" class="brand-logo">
       <div style="flex: 1;">
-        <h1 class="brand-title" id="page-title">项目详情</h1>
-        <p class="brand-subtitle" id="page-subtitle">Owner 控制台</p>
+        <h1 class="brand-title" id="page-title" data-i18n="detail.title">Project Detail</h1>
+        <p class="brand-subtitle" id="page-subtitle" data-i18n="detail.subtitle">Owner Console</p>
       </div>
       <div id="lang-switcher-mount"></div>
       <div id="auth-chrome-mount"></div>
@@ -782,11 +787,11 @@
 
   <main>
     <a href="/" class="back-link" id="back-link">
-      ← 返回总览
+      <span data-i18n="detail.back_to_overview">← Back to Overview</span>
     </a>
 
     <div id="project-header">
-      <div class="loading">加载中...</div>
+      <div class="loading" data-i18n="detail.loading">Loading project detail...</div>
     </div>
 
     <!-- AIPOS-264: 项目门户头 — 置顶(里程碑地图之上)。项目名 + 1-2 句描述 +
@@ -805,10 +810,10 @@
          /api/project-map?workspace=N 水合;无 project-map.md 时整区优雅隐藏(DOM-only)。 -->
     <section id="milestone-map-section" class="detail-section milestone-map-section" data-owner-truth="milestone-map" hidden>
       <div class="section-header">
-        <h3 id="map-title">项目里程碑</h3>
+        <h3 id="map-title" data-i18n="map.title">Project Milestones</h3>
         <span class="map-updated-badge" id="map-updated-badge" hidden></span>
       </div>
-      <p class="section-hint" id="map-hint">横向里程碑图表:已完成(实心)→ 当前(高亮)→ 近期规划 → 远期走向(虚线)。点节点看详情与决策引用。</p>
+      <p class="section-hint" id="map-hint" data-i18n="map.hint">Horizontal milestone chart: completed (solid) → current (highlighted) → near-term plan → horizon (dashed). Click a node for details and decision refs.</p>
       <div id="map-road" class="map-road"></div>
       <div id="map-legend" class="map-legend" hidden></div>
     </section>
@@ -817,67 +822,71 @@
          进行中预览 +"等我处理"并入分组(有内容才显示)。JS 水合 #vb-body,DOM-only。 -->
     <section id="verify-bench-section" class="detail-section verify-section" data-owner-truth="verify-bench" hidden>
       <div class="section-header">
-        <h3 id="vb-title">验证台 · Owner 核验</h3>
+        <h3 id="vb-title" data-i18n="vb.title">Verify Bench · Owner Review</h3>
       </div>
-      <p class="section-hint" id="vb-hint">审计已 PASS 待 Owner 真机过目的核验站 + 进行中预览;需要 Owner 裁定的待办("等我处理")并入此处。</p>
+      <p class="section-hint" id="vb-hint" data-i18n="vb.hint">Verification stations (audit PASSed, awaiting Owner real-machine review) + in-progress previews; Owner-decision to-dos ("needs owner") are grouped here.</p>
       <div id="vb-body" class="vb-body"></div>
     </section>
 
     <!-- AIPOS-272 FIX-4: 空板三步向导 (total_tasks===0 时显示，有任务后隐藏) -->
     <section id="onboarding-section" class="detail-section onboarding-section" hidden>
       <div class="onboarding-hero">
-        <h3>🎉 欢迎使用 Lybra</h3>
-        <p>这是你的第一个工作区。让我们开始三步走，从零到第一张任务卡闭环。</p>
+        <h3 data-i18n="onboarding.welcome_title">🎉 Welcome to Lybra</h3>
+        <p data-i18n="onboarding.welcome_intro">This is your first workspace. Let's go through three steps to close your first task loop.</p>
       </div>
       <div class="onboarding-steps">
         <!-- Step 1: 连接顾问 -->
         <div class="onboarding-step">
           <div class="onboarding-step-header">
             <span class="onboarding-step-number">①</span>
-            <h4 class="onboarding-step-title">连接你的顾问 Agent</h4>
+            <h4 class="onboarding-step-title" data-i18n="onboarding.step1_title">Connect Your Advisor Agent</h4>
           </div>
           <div class="onboarding-step-body">
-            <p>复制下方定制接入提示词，粘贴给 Claude / Codex / 任意 AI agent，它就能成为你的顾问（Advisor）——帮你起草任务卡、建议发布、查看真相。</p>
+            <p data-i18n="onboarding.step1_body">Copy the customized onboarding prompt below and paste it to Claude / Codex / any AI agent, and it will become your advisor—helping you draft task cards, suggest publishing, and view the truth.</p>
+            <p id="ssh-reminder" style="margin-top: 0.75rem; padding: 0.75rem; background: rgba(217,119,6,0.1); border-left: 3px solid #d97706; border-radius: 4px; font-size: 13px; line-height: 1.6;">
+              <strong data-i18n="onboarding.ssh_reminder">⚠️ Cross-Machine Setup:</strong>
+              <span data-i18n="onboarding.ssh_reminder_text">If your advisor agent and Lybra server are on different machines, please configure SSH connectivity (or network routing) first to ensure the agent can reach the server before proceeding. The prompt includes step-0 connectivity checks.</span>
+            </p>
           </div>
-          <div id="advisor-prompt" class="onboarding-code-block">加载中...</div>
-          <button id="copy-advisor-prompt" class="onboarding-copy-btn">📋 一键复制接入提示词</button>
+          <div id="advisor-prompt" class="onboarding-code-block" data-i18n="onboarding.loading">Loading...</div>
+          <button id="copy-advisor-prompt" class="onboarding-copy-btn" data-i18n="onboarding.copy_prompt">📋 Copy Onboarding Prompt</button>
         </div>
 
         <!-- Step 2: 发布第一张卡 -->
         <div class="onboarding-step">
           <div class="onboarding-step-header">
             <span class="onboarding-step-number">②</span>
-            <h4 class="onboarding-step-title">发布第一张任务卡</h4>
+            <h4 class="onboarding-step-title" data-i18n="onboarding.step2_title">Publish Your First Task Card</h4>
           </div>
           <div class="onboarding-step-body">
-            <p>工作区已为你生成示例任务卡（在 <code>5_tasks/drafts/example-task.md</code>）。复制下方命令发布它，任务就会进入队列等待认领。</p>
+            <p data-i18n="onboarding.step2_body">The workspace has generated an example task card for you (in <code>5_tasks/drafts/example-task.md</code>). Copy the command below to publish it, and the task will enter the queue awaiting claim.</p>
           </div>
           <div id="publish-command" class="onboarding-code-block">lybra publish 5_tasks/drafts/example-task.md</div>
-          <button id="copy-publish-command" class="onboarding-copy-btn">📋 一键复制发布命令</button>
+          <button id="copy-publish-command" class="onboarding-copy-btn" data-i18n="onboarding.step2_copy_btn">📋 Copy Publish Command</button>
         </div>
 
         <!-- Step 3: 看它流经门 -->
         <div class="onboarding-step">
           <div class="onboarding-step-header">
             <span class="onboarding-step-number">③</span>
-            <h4 class="onboarding-step-title">看它流经 Lybra 的门</h4>
+            <h4 class="onboarding-step-title" data-i18n="onboarding.step3_title">Watch It Flow Through Lybra's Gate</h4>
           </div>
           <div class="onboarding-step-body">
-            <p>任务卡发布后，会经历完整的闭环链路：</p>
+            <p data-i18n="onboarding.step3_body">After publishing, the task will go through the complete closure loop:</p>
           </div>
           <div class="onboarding-diagram">
-            <span>发布</span>
+            <span data-i18n="onboarding.step3_flow_publish">Publish</span>
             <span class="onboarding-diagram-arrow">→</span>
-            <span>认领</span>
+            <span data-i18n="onboarding.step3_flow_claim">Claim</span>
             <span class="onboarding-diagram-arrow">→</span>
-            <span>交付</span>
+            <span data-i18n="onboarding.step3_flow_deliver">Deliver</span>
             <span class="onboarding-diagram-arrow">→</span>
-            <span>审计</span>
+            <span data-i18n="onboarding.step3_flow_audit">Audit</span>
             <span class="onboarding-diagram-arrow">→</span>
-            <span>收编</span>
+            <span data-i18n="onboarding.step3_flow_close">Close</span>
           </div>
           <div class="onboarding-step-body" style="margin-top: 1rem;">
-            <p>每个环节都有记录（records），Owner 真相视图始终向你呈现真实阶段。发布第一张卡后，刷新页面，向导会自动让位给任务中心。</p>
+            <p data-i18n="onboarding.step3_note">Each step is recorded (in records). The Owner truth view always presents the real stage. After publishing your first card, refresh the page and the guide will give way to the task center.</p>
           </div>
         </div>
       </div>
@@ -888,14 +897,14 @@
          JS hydrates the #tc-* containers from /api/owner-truth?workspace=N (DOM-only). -->
     <section id="task-center-section" class="detail-section task-center-section" data-owner-truth="task-center">
       <div class="section-header">
-        <h3 id="tc-title">任务中心 · Owner 真相摘要</h3>
+        <h3 id="tc-title" data-i18n="tc.title">Task Center · Owner Truth Summary</h3>
       </div>
-      <p class="section-hint" id="tc-hint">每任务一卡：标题 + 一句话目的 + 真实阶段（从已记录的 records 推导，不改队列状态机）。点开看每轮摘要时间线；下方为按记录时间倒序的动态流。只读已记录真相。</p>
-      <div id="tc-counts" class="tc-stage-pills" data-i18n="tc.loading">加载中...</div>
-      <h4 class="tc-subheading" id="tc-sub-cards">任务卡片（点开看每轮摘要）</h4>
-      <div id="tc-tasks" class="tc-tasks" data-i18n="tc.loading">加载中...</div>
-      <h4 class="tc-subheading" id="tc-sub-feed">动态流（按记录时间倒序）</h4>
-      <div id="tc-feed" class="tc-feed" data-i18n="tc.loading">加载中...</div>
+      <p class="section-hint" id="tc-hint" data-i18n="tc.hint">One card per task: title + one-line purpose + true stage (derived from recorded records; the queue state machine is untouched). Expand to see the per-round summary timeline; below is the activity feed in reverse record-time order. Read-only recorded truth.</p>
+      <div id="tc-counts" class="tc-stage-pills" data-i18n="tc.loading">Loading...</div>
+      <h4 class="tc-subheading" id="tc-sub-cards" data-i18n="tc.subheading.cards">Task cards (expand for per-round summaries)</h4>
+      <div id="tc-tasks" class="tc-tasks" data-i18n="tc.loading">Loading...</div>
+      <h4 class="tc-subheading" id="tc-sub-feed" data-i18n="tc.subheading.feed">Activity feed (reverse record-time order)</h4>
+      <div id="tc-feed" class="tc-feed" data-i18n="tc.loading">Loading...</div>
     </section>
 
     <div id="project-content"></div>
@@ -903,14 +912,36 @@
 
   <script src="/i18n.js"></script>
   <script>
+    // AIPOS-288 FIX-5: workspace label helper (EN prefers label_en, fallback to label)
+    function workspaceLabel(workspace) {
+      const lang = i18n.getCurrentLang();
+      if (lang === 'en' && workspace.label_en) {
+        return workspace.label_en;
+      }
+      return workspace.label || 'Unnamed Workspace';
+    }
+
     // Get workspace index from URL
     const pathParts = window.location.pathname.split('/');
     const workspaceIndex = pathParts[2]; // /workspace/{index}
     
     // Render page with i18n
     function renderPage() {
+      // AIPOS-286 FIX-3: Update page title
+      document.title = `${i18n.t('detail.title')} - Lybra`;
+      
+      // AIPOS-286 FIX-3: Dynamic CSS for pseudo-element i18n (map current mark)
+      let i18nStyle = document.getElementById('i18n-dynamic-style');
+      if (!i18nStyle) {
+        i18nStyle = document.createElement('style');
+        i18nStyle.id = 'i18n-dynamic-style';
+        document.head.appendChild(i18nStyle);
+      }
+      i18nStyle.textContent = `.map-current-mark::after { content: '${i18n.t('map.legend.current')}'; }`;
+      
       // Update static text
       document.getElementById('page-title').textContent = i18n.t('detail.title');
+      document.getElementById('page-subtitle').textContent = i18n.t('detail.subtitle');
       document.getElementById('back-link').textContent = i18n.t('detail.back_to_overview');
 
       // AIPOS-266: 四区静态区块标题/提示/子标题/加载占位 (静态烘入 zh 为默认;
@@ -927,6 +958,31 @@
         const n = document.getElementById(id);
         if (n && !n.childElementCount) n.textContent = i18n.t('tc.loading');
       });
+      
+      // AIPOS-286 FIX-3: Update onboarding guide static text
+      const onboardingEls = [
+        ['onboarding.welcome_title', document.querySelector('.onboarding-hero h3')],
+        ['onboarding.welcome_intro', document.querySelector('.onboarding-hero p')],
+        ['onboarding.step1_title', document.querySelector('.onboarding-step:nth-of-type(1) .onboarding-step-title')],
+        ['onboarding.step1_body', document.querySelector('.onboarding-step:nth-of-type(1) .onboarding-step-body p:first-of-type')],
+        ['onboarding.ssh_reminder', document.querySelector('#ssh-reminder strong')],
+        ['onboarding.ssh_reminder_text', document.querySelector('#ssh-reminder span')],
+        ['onboarding.copy_prompt', document.getElementById('copy-advisor-prompt')],
+        ['onboarding.step2_title', document.querySelector('.onboarding-step:nth-of-type(2) .onboarding-step-title')],
+        ['onboarding.step2_body', document.querySelector('.onboarding-step:nth-of-type(2) .onboarding-step-body p')],
+        ['onboarding.step2_copy_btn', document.getElementById('copy-publish-command')],
+        ['onboarding.step3_title', document.querySelector('.onboarding-step:nth-of-type(3) .onboarding-step-title')],
+        ['onboarding.step3_body', document.querySelector('.onboarding-step:nth-of-type(3) .onboarding-step-body p:first-of-type')],
+        ['onboarding.step3_note', document.querySelector('.onboarding-step:nth-of-type(3) .onboarding-step-body p:last-of-type')],
+      ];
+      onboardingEls.forEach(([key, el]) => { if (el) el.textContent = i18n.t(key); });
+      
+      // Update onboarding flow diagram
+      const flowSpans = document.querySelectorAll('.onboarding-diagram span:not(.onboarding-diagram-arrow)');
+      const flowKeys = ['onboarding.step3_flow_publish', 'onboarding.step3_flow_claim', 
+                        'onboarding.step3_flow_deliver', 'onboarding.step3_flow_audit', 
+                        'onboarding.step3_flow_close'];
+      flowSpans.forEach((span, idx) => { if (flowKeys[idx]) span.textContent = i18n.t(flowKeys[idx]); });
       
       // Mount language switcher
       const switcherMount = document.getElementById('lang-switcher-mount');
@@ -963,6 +1019,9 @@
         }
 
         const workspace = overviewData.workspaces[workspaceIndex];
+
+        // AIPOS-288 FIX-5: Update browser title with workspace label
+        document.title = `${workspaceLabel(workspace)} - Lybra`;
 
         // Owner truth summary (record-derived stages + per-round timelines + verb feed).
         const truthResponse = await fetch(`/api/owner-truth?workspace=${workspaceIndex}`);
@@ -1008,6 +1067,21 @@
       }
     }
     
+    // ===== AIPOS-288 FIX-2: 双语字段选择辅助 =====
+    // AIPOS-288 FIX-2: EN mode prefers _en variant; fallback to original if absent.
+    // ZH mode always uses original field (no translation).
+    function i18nField(obj, baseKey) {
+      if (!obj) return '';
+      const lang = i18n.getCurrentLang();
+      if (lang === 'en') {
+        const enKey = baseKey + '_en';
+        const enVal = obj[enKey];
+        if (enVal && String(enVal).trim()) return String(enVal).trim();
+      }
+      const base = obj[baseKey];
+      return base ? String(base).trim() : '';
+    }
+
     // ===== AIPOS-264: 项目门户头 (项目描述 + 协作面板;无 portal 段优雅隐藏) =====
     // Renders the portal segment of /api/project-map at the very top (above the
     // milestone map). Worker chips reuse the 261/265 agent 档案 popup
@@ -1024,26 +1098,34 @@
       // S2: graceful hide — no portal segment or no description (the required element).
       if (!portal || !portal.description) { section.hidden = true; return; }
       section.hidden = false;
-      nameEl.textContent = (workspace && workspace.label) ? workspace.label : i18n.t('portal.name_fallback');
+      nameEl.textContent = workspaceLabel(workspace);
       if (d && d.updated) { updatedEl.textContent = i18n.t('portal.updated_prefix') + d.updated; updatedEl.hidden = false; }
       else { updatedEl.hidden = true; }
-      descEl.textContent = portal.description;
+      // AIPOS-288 FIX-2: description uses i18nField (EN prefers _en, fallback to original).
+      descEl.textContent = i18nField(portal, 'description');
       collabEl.replaceChildren();
-      // 协作模式
-      if (portal.collab_mode) {
-        const mode = el('span', 'pc-mode'); mode.textContent = portal.collab_mode;
+      // 协作模式 (AIPOS-288 FIX-2: bilingual support)
+      const collabModeText = i18nField(portal, 'collab_mode');
+      if (collabModeText) {
+        const mode = el('span', 'pc-mode'); mode.textContent = collabModeText;
         collabEl.appendChild(pcGroup(i18n.t('portal.label.mode'), mode));
       }
-      // 拓扑 + 极简小图标
-      if (portal.topology) {
+      // 拓扑 + 极简小图标 (AIPOS-288 FIX-2: bilingual support)
+      const topologyText = i18nField(portal, 'topology');
+      if (topologyText) {
         const topo = el('span', 'pc-topo');
-        topo.appendChild(topologyIcon(portal.topology));
-        const tl = el('span'); tl.textContent = portal.topology;
+        topo.appendChild(topologyIcon(topologyText));
+        const tl = el('span'); tl.textContent = topologyText;
         topo.appendChild(tl);
         collabEl.appendChild(pcGroup(i18n.t('portal.label.topology'), topo));
       }
       // 牛马阵容(点击复用 agent 档案弹层)
-      const workers = Array.isArray(portal.workers) ? portal.workers : [];
+      // AIPOS-288 FIX-2: workers uses workers_en array in EN mode (fallback to workers).
+      const lang = i18n.getCurrentLang();
+      let workers = Array.isArray(portal.workers) ? portal.workers : [];
+      if (lang === 'en' && Array.isArray(portal.workers_en) && portal.workers_en.length > 0) {
+        workers = portal.workers_en;
+      }
       if (workers.length > 0) {
         const profileIndex = buildAgentProfileIndex(truthData);
         const wrap = el('span', 'pc-workers');
@@ -1070,16 +1152,23 @@
         });
         collabEl.appendChild(pcGroup(i18n.t('portal.label.workers'), wrap));
       }
-      // 顾问信息
-      if (portal.advisor) {
-        const adv = parseWorker(portal.advisor);
+      // 顾问信息 (AIPOS-288 FIX-2: advisor uses advisor_en in EN mode; advisor_note_en for note text)
+      let advisorText = portal.advisor;
+      if (lang === 'en' && portal.advisor_en && String(portal.advisor_en).trim()) {
+        advisorText = portal.advisor_en;
+      }
+      if (advisorText) {
+        const adv = parseWorker(advisorText);
         const box = el('span', 'pc-advisor');
         const role = el('span', 'adv-role'); role.textContent = adv.role || i18n.t('portal.role.advisor_fallback');
         box.appendChild(role);
         const ai = el('span', 'adv-inst'); ai.textContent = adv.instance; box.appendChild(ai);
-        if (adv.harness || adv.desc) {
+        // AIPOS-288 FIX-2: use advisor_note_en for the note part (harness stays as-is).
+        const noteText = i18nField(portal, 'advisor_note');
+        if (adv.harness || adv.desc || noteText) {
           const dd = el('span', 'adv-desc');
-          dd.textContent = [adv.harness, adv.desc].filter(Boolean).join(' · '); box.appendChild(dd);
+          // Prefer noteText from advisor_note_en; fallback to adv.desc from parseWorker.
+          dd.textContent = [adv.harness, noteText || adv.desc].filter(Boolean).join(' · '); box.appendChild(dd);
         }
         collabEl.appendChild(pcGroup(i18n.t('portal.label.advisor'), box));
       }
@@ -1125,7 +1214,7 @@
           const isStale = daysSince > 7;
           
           if (isStale) {
-            badge.textContent = `地图已 ${daysSince} 天未更新`;
+            badge.textContent = i18n.t('map.stale_badge').replace('{days}', daysSince);
             badge.className = 'map-updated-badge stale';
           } else {
             badge.textContent = i18n.t('map.updated_prefix') + d.updated;
@@ -1138,15 +1227,17 @@
       }
 
       // Segment 1: completed milestones (solid dots, linked).
+      // AIPOS-288 FIX-2: milestone title uses i18nField (EN prefers title_en).
       if (milestones.length > 0) {
         const seg = el('div', 'map-seg');
         milestones.forEach((m, i) => {
           if (i > 0) seg.appendChild(el('span', 'map-link'));
+          const titleText = i18nField(m, 'title');
           seg.appendChild(mapNode({
             kind: 'done',
             onClick: () => showMilestonePopup({
-              kind: i18n.t('map.popup.kind.done'), title: m.title || m.id,
-              desc: m.title || '', refs: m.refs || [],
+              kind: i18n.t('map.popup.kind.done'), title: titleText || m.id,
+              desc: titleText || '', refs: m.refs || [],
             }),
           }));
         });
@@ -1154,16 +1245,18 @@
       }
 
       // Current position (highlighted diamond marker).
+      // AIPOS-288 FIX-2: current uses i18nField (EN prefers current_en).
       if (d.current) {
         if (milestones.length > 0) road.appendChild(el('span', 'map-link'));
         const cur = el('div', 'map-current');
         cur.appendChild(el('span', 'map-current-mark'));
         const cap = el('span', 'map-current-cap');
-        cap.textContent = truncate(d.current, 12);
+        const currentText = i18nField(d, 'current');
+        cap.textContent = truncate(currentText, 12);
         cur.appendChild(cap);
         cur.style.cursor = 'pointer';
         cur.addEventListener('click', () => showMilestonePopup({
-          kind: i18n.t('map.popup.kind.current'), title: i18n.t('map.popup.current_title'), desc: d.current,
+          kind: i18n.t('map.popup.kind.current'), title: i18n.t('map.popup.current_title'), desc: currentText,
           refs: [], directionLog: d.direction_log_recent || [],
           mapUpdated: d.updated || '',
         }));
@@ -1262,7 +1355,7 @@
     function topologyIcon(topology) {
       const t = String(topology || '');
       let inner;
-      if (t.includes('星')) {
+      if (t.includes('星')) {  // i18n-exempt: topology icon detection (data classification, not UI text)
         inner = '<circle cx="12" cy="12" r="3" fill="currentColor"/>' +
           '<circle cx="12" cy="3.5" r="1.9" fill="currentColor"/><circle cx="20.5" cy="12" r="1.9" fill="currentColor"/>' +
           '<circle cx="12" cy="20.5" r="1.9" fill="currentColor"/><circle cx="3.5" cy="12" r="1.9" fill="currentColor"/>' +
@@ -1270,7 +1363,7 @@
           '<line x1="12" y1="12" x2="18.6" y2="12" stroke="currentColor" stroke-width="1.1"/>' +
           '<line x1="12" y1="12" x2="12" y2="18.6" stroke="currentColor" stroke-width="1.1"/>' +
           '<line x1="12" y1="12" x2="5.4" y2="12" stroke="currentColor" stroke-width="1.1"/>';
-      } else if (t.includes('串') || t.includes('线') || t.includes('链')) {
+      } else if (t.includes('串') || t.includes('线') || t.includes('链')) {  // i18n-exempt: topology icon detection
         inner = '<line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="1.3"/>' +
           '<circle cx="5" cy="12" r="1.9" fill="currentColor"/><circle cx="12" cy="12" r="1.9" fill="currentColor"/><circle cx="19" cy="12" r="1.9" fill="currentColor"/>';
       } else {
@@ -1349,11 +1442,10 @@
       const s = el('div', 'ms-section'); s.textContent = label; return s;
     }
 
-    // ===== AIPOS-272 FIX-4: 空板三步向导 (total_tasks===0 时显示) =====
+    // ===== AIPOS-272 FIX-4 + AIPOS-286 FIX-2: 空板三步向导 (total_tasks===0 时显示) =====
     // Renders the onboarding guide when the workspace has zero tasks. Hides when
-    // tasks exist. Generates a customized advisor connection prompt (workspace path,
-    // gate URL, charter location, watch usage). DOM-only.
-    // AIPOS-272 FIX-7: Gate URL 从工作区真实配置取 (runtime-status API)。
+    // tasks exist. AIPOS-286 FIX-2: Advisor prompt now generated server-side with
+    // locale support (fetches from /api/generate/advisor-prompt). DOM-only.
     async function renderOnboardingGuide(truthData, workspace) {
       const section = document.getElementById('onboarding-section');
       const promptEl = document.getElementById('advisor-prompt');
@@ -1376,64 +1468,36 @@
       // S2: show and hydrate the guide.
       section.hidden = false;
 
-      // FIX-7: Fetch real gate URL from runtime-status.
-      let gateURL = 'http://127.0.0.1:7118 (默认,请核对)';  // fallback with explicit notice
+      // AIPOS-286 FIX-2: Fetch advisor prompt from server-side i18n generation API.
+      const currentLocale = i18n.getCurrentLang();
+      let advisorPrompt = i18n.t('onboarding.step1_body');  // fallback message
       try {
-        const runtimeResponse = await fetch(`/api/runtime-status?workspace=${workspaceIndex}`);
-        const runtimeData = await runtimeResponse.json();
-        if (runtimeData && runtimeData.ok !== false && runtimeData.data) {
-          const endpoints = runtimeData.data.endpoints || {};
-          const mcp = endpoints.mcp || {};
-          if (mcp.url) {
-            // Use the advertised rpc_url (strip /mcp suffix if present for cleaner display)
-            gateURL = mcp.url.replace(/\/mcp$/, '');
-          }
+        const promptResponse = await fetch(`/api/generate/advisor-prompt?workspace=${workspaceIndex}&locale=${currentLocale}`);
+        const promptData = await promptResponse.json();
+        if (promptData && promptData.ok && promptData.data && promptData.data.prompt) {
+          advisorPrompt = promptData.data.prompt;
+        } else {
+          advisorPrompt = 'Failed to load advisor prompt. Please check server logs.';
         }
       } catch (err) {
-        // Fallback already set with explicit notice
+        advisorPrompt = `Error loading advisor prompt: ${err.message}`;
       }
-
-      // Generate customized advisor connection prompt (定制接入提示词).
-      const workspaceLabel = (workspace && workspace.label) || 'unnamed workspace';
-      const workspaceRoot = (workspace && workspace.root) || '/path/to/workspace';
-      const charterPath = workspaceRoot + '/governance/advisor-charter.md';
-      const exampleCardPath = workspaceRoot + '/5_tasks/drafts/example-task.md';
-
-      const advisorPrompt = `你是 ${workspaceLabel} 工作区的顾问 (Advisor)。
-
-工作区信息：
-- 路径：${workspaceRoot}
-- Gate URL：${gateURL}
-- Charter：${charterPath}
-
-你的职责：
-- 读取 charter 了解红线和工作方式
-- 起草任务卡（在 5_tasks/drafts/）
-- 向 Owner 建议发布
-- 查看状态：lybra queue / lybra records / lybra owner-truth
-- 盯队列与记录变化：lybra agent watch --workspace-root ${workspaceRoot} —— 有变化即返回摘要,适合做你的唤醒泵
-
-快速开始：
-1. 连接 gate（使用 Owner 提供的 advisor token）
-2. 阅读 ${charterPath}
-3. 查看示例卡：${exampleCardPath}
-4. 起草第一张任务卡，建议 Owner 发布
-
-重要:你对治理工作区有写权(起草任务卡、维护治理文档);已发布的卡、queue、records是 gate 的领地,不可手写;产品仓等其他仓库默认只读,除非 Owner 明确授权;发布由 Owner 确认。`;
 
       promptEl.textContent = advisorPrompt;
 
       // Copy button for advisor prompt.
       copyPromptBtn.onclick = () => {
         navigator.clipboard.writeText(advisorPrompt).then(() => {
-          copyPromptBtn.textContent = '✅ 已复制';
+          const originalText = copyPromptBtn.textContent;
+          copyPromptBtn.textContent = i18n.t('onboarding.copied');
           copyPromptBtn.classList.add('copied');
           setTimeout(() => {
-            copyPromptBtn.textContent = '📋 一键复制接入提示词';
+            copyPromptBtn.textContent = originalText;
             copyPromptBtn.classList.remove('copied');
           }, 2000);
         }).catch(() => {
-          alert('复制失败，请手动复制');
+          const msg = i18n.t('onboarding.copy_failed');
+          alert(msg);
         });
       };
 
@@ -1444,14 +1508,14 @@
       // Copy button for publish command.
       copyPublishBtn.onclick = () => {
         navigator.clipboard.writeText(publishCommand).then(() => {
-          copyPublishBtn.textContent = '✅ 已复制';
+          copyPublishBtn.textContent = i18n.t('onboarding.copied');
           copyPublishBtn.classList.add('copied');
           setTimeout(() => {
-            copyPublishBtn.textContent = '📋 一键复制发布命令';
+            copyPublishBtn.textContent = i18n.t('onboarding.step2_copy_btn');
             copyPublishBtn.classList.remove('copied');
           }, 2000);
         }).catch(() => {
-          alert('复制失败，请手动复制');
+          alert(i18n.t('onboarding.copy_failed'));
         });
       };
     }
@@ -1484,13 +1548,13 @@
           passBtn.textContent = i18n.t('vb.action.pass');
           passBtn.disabled = false;
           rejectBtn.disabled = false;
-          alert((result.blocking_reasons && result.blocking_reasons[0]) || result.error || '操作失败');
+          alert((result.blocking_reasons && result.blocking_reasons[0]) || result.error || i18n.t('alert.operation_failed'));
         }
       } catch (err) {
         passBtn.textContent = i18n.t('vb.action.pass');
         passBtn.disabled = false;
         rejectBtn.disabled = false;
-        alert('网络错误: ' + err.message);
+        alert(i18n.t('alert.network_error') + ': ' + err.message);
       }
     }
     
@@ -1542,13 +1606,13 @@
           confirmBtn.textContent = i18n.t('vb.reject.confirm') || '确认打回';
           confirmBtn.disabled = false;
           cancelBtn.disabled = false;
-          alert((result.blocking_reasons && result.blocking_reasons[0]) || result.error || '操作失败');
+          alert((result.blocking_reasons && result.blocking_reasons[0]) || result.error || i18n.t('alert.operation_failed'));
         }
       } catch (err) {
         confirmBtn.textContent = i18n.t('vb.reject.confirm') || '确认打回';
         confirmBtn.disabled = false;
         cancelBtn.disabled = false;
-        alert('网络错误: ' + err.message);
+        alert(i18n.t('alert.network_error') + ': ' + err.message);
       }
     }
 
@@ -1620,8 +1684,17 @@
       const title = el('div', 'vb-station-title'); title.textContent = s.title || s.task_id || '';
       const id = el('span', 'vb-station-id'); id.textContent = s.task_id || '';
       const await_ = el('span', 'vb-await'); await_.textContent = i18n.t('vb.station.await');
+      // AIPOS-287: audit:none 免审计 badge
+      if (s.audit_policy === 'none') {
+        const auditBadge = el('span', 'vb-audit-badge');
+        auditBadge.textContent = i18n.t('vb.audit.none_badge');
+        auditBadge.setAttribute('title', i18n.t('vb.audit.none_title'));
+        head.appendChild(title); head.appendChild(id); head.appendChild(auditBadge); head.appendChild(await_);
+      } else {
+        head.appendChild(title); head.appendChild(id); head.appendChild(await_);
+      }
       const toggle = el('span', 'vb-toggle'); toggle.textContent = i18n.t('vb.toggle.expand');
-      head.appendChild(title); head.appendChild(id); head.appendChild(await_); head.appendChild(toggle);
+      head.appendChild(toggle);
       const toggleFn = () => vbToggle(card, head, toggle);
       head.addEventListener('click', toggleFn);
       head.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFn(); } });
@@ -1634,7 +1707,7 @@
       const checklist = s.owner_verify_checklist || [];
       if (checklist.length > 0) {
         const checkHead = el('div', 'vb-ring-head'); checkHead.style.marginTop = '6px';
-        const checkTag = el('span', 'vb-ring-tag t-machine'); checkTag.textContent = '你要验证的是';
+        const checkTag = el('span', 'vb-ring-tag t-machine'); checkTag.textContent = i18n.t('vb.inline.what_to_verify');
         checkHead.appendChild(checkTag);
         details.appendChild(checkHead);
         const ul = el('ul', 'vb-assertions');
@@ -1646,13 +1719,13 @@
       if (s.owner_verify_preview) {
         const previewWrap = el('div'); previewWrap.style.cssText = 'margin: 12px 0; border: 1px solid var(--border-default); border-radius: 8px; overflow: hidden;';
         const previewLabel = el('div'); previewLabel.style.cssText = 'padding: 6px 10px; background: rgba(0,0,0,0.03); font-size: 11px; font-weight: 700; color: var(--text-secondary); border-bottom: 1px solid var(--border-default);';
-        previewLabel.textContent = '内嵌预览';
+        previewLabel.textContent = i18n.t('vb.inline.preview_label');
         previewWrap.appendChild(previewLabel);
         const iframe = document.createElement('iframe');
         iframe.src = s.owner_verify_preview;
         iframe.style.cssText = 'width: 100%; height: 480px; border: 0; display: block;';
         iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms');
-        iframe.setAttribute('title', '任务预览');
+        iframe.setAttribute('title', i18n.t('vb.inline.preview_title'));
         previewWrap.appendChild(iframe);
         details.appendChild(previewWrap);
       }
@@ -1662,7 +1735,7 @@
       techDetails.style.cssText = 'margin-top: 12px; border-top: 1px dashed var(--border-default); padding-top: 8px;';
       const techSummary = document.createElement('summary');
       techSummary.style.cssText = 'cursor: pointer; font-size: 12px; font-weight: 700; color: var(--text-secondary); user-select: none;';
-      techSummary.textContent = '技术细节 (验收断言 + 证据 + 操作)';
+      techSummary.textContent = i18n.t('vb.inline.tech_details');
       techDetails.appendChild(techSummary);
 
       const techContent = el('div'); techContent.style.marginTop = '8px';
@@ -1680,7 +1753,9 @@
       const ev = s.evidence || {};
       const rings = el('div', 'vb-evidence');
       rings.appendChild(vbRing('machine', i18n.t('vb.ring.machine'), ev.machine_judgment, vbMachineBody));
-      rings.appendChild(vbRing('audit', i18n.t('vb.ring.audit'), ev.audit_verdict, vbAuditBody));
+      // AIPOS-287: audit ring 传入 audit_policy 判断免审计
+      const auditData = {...(ev.audit_verdict || {}), audit_policy: s.audit_policy};
+      rings.appendChild(vbRing('audit', i18n.t('vb.ring.audit'), auditData, vbAuditBody));
       rings.appendChild(vbRing('fix', i18n.t('vb.ring.fix'), { present: (ev.prior_fixes || []).length > 0, fixes: ev.prior_fixes || [] }, vbFixBody));
       techContent.appendChild(rings);
 
@@ -1761,6 +1836,11 @@
       return null;
     }
     function vbAuditBody(data, head) {
+      // AIPOS-287: audit:none 卡显示“免审计”而非“尚未记录”
+      if (data && data.audit_policy === 'none') {
+        const exemptNote = document.createTextNode(i18n.t('vb.audit.none_note'));
+        return exemptNote;
+      }
       if (!data || !data.present) { return document.createTextNode(i18n.t('vb.empty.audit')); }
       const meta = el('span', 'vb-ring-meta');
       meta.textContent = [data.auditor_instance, data.verdict_at].filter(Boolean).join(' · ');
@@ -1819,13 +1899,13 @@
       if (p.owner_verify_preview) {
         const previewWrap = el('div'); previewWrap.style.cssText = 'margin: 12px 0; border: 1px solid var(--border-default); border-radius: 8px; overflow: hidden;';
         const previewLabel = el('div'); previewLabel.style.cssText = 'padding: 6px 10px; background: rgba(0,0,0,0.03); font-size: 11px; font-weight: 700; color: var(--text-secondary); border-bottom: 1px solid var(--border-default);';
-        previewLabel.textContent = '内嵌预览';
+        previewLabel.textContent = i18n.t('vb.inline.preview_label');
         previewWrap.appendChild(previewLabel);
         const iframe = document.createElement('iframe');
         iframe.src = p.owner_verify_preview;
         iframe.style.cssText = 'width: 100%; height: 480px; border: 0; display: block;';
         iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms');
-        iframe.setAttribute('title', '任务预览');
+        iframe.setAttribute('title', i18n.t('vb.inline.preview_title'));
         previewWrap.appendChild(iframe);
         details.appendChild(previewWrap);
       }
@@ -1839,7 +1919,7 @@
       
       const title = document.createElement('h2');
       title.className = 'project-title';
-      title.textContent = workspace.label || 'Unnamed Project';
+      title.textContent = workspaceLabel(workspace);
       
       const badge = document.createElement('span');
       badge.className = 'project-status-badge';
@@ -2043,7 +2123,7 @@
     // Map a Chinese role label to a CSS modifier (Owner / audit / exec).
     function roleClassKey(roleText) {
       if (roleText === 'Owner') return 'Owner';
-      if (roleText === '审计员') return 'audit';
+      if (roleText === '审计员') return 'audit';  // i18n-exempt: role name matching (data classification)
       return '';
     }
 
@@ -2175,7 +2255,7 @@
       params.set('workspace', workspaceIndex);
       if (selector.record_id) {
         params.set('record_id', selector.record_id);
-        if (selector.task_id) params.set('task_id', selector.task_id);  // 消歧
+        if (selector.task_id) params.set('task_id', selector.task_id);  // i18n-exempt: 消歧 (disambiguation, technical term)
       } else if (selector.task_id) {
         params.set('task_id', selector.task_id);
       } else if (selector.path) {
@@ -2229,7 +2309,7 @@
             body.appendChild(fm);
           }
           const prose = document.createElement('div'); prose.className = 'md-prose';
-          prose.innerHTML = d.rendered_html || '';  // 服务端 escape-first,安全注入
+          prose.innerHTML = d.rendered_html || '';  // i18n-exempt: 服务端 escape-first,安全注入 (technical security note)
           body.appendChild(prose);
         })
         .catch(() => {

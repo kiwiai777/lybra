@@ -17,6 +17,13 @@ Design notes
   passed through best-effort; an unparseable section degrades to empty (graceful)
   and never raises — the region hides when the file is absent or empty.
 - **Read-only.** No files are written; the queue state machine is untouched.
+- **AIPOS-288 FIX-2: Bilingual fields.** Optional ``_en`` variant fields enable
+  English content without translating original declarations. EN mode prefers
+  ``_en`` fields (e.g., ``description_en``); falls back to original when absent.
+  ZH mode always uses original fields. Supported: ``portal.description_en``,
+  ``collab_mode_en``, ``topology_en``, ``workers_en[]`` (parallel array),
+  ``advisor_en``, ``advisor_note_en``; ``current_en``; ``milestones[].title_en``.
+  Backward-compatible: maps without ``_en`` fields work unchanged.
 """
 from __future__ import annotations
 
@@ -296,6 +303,7 @@ def get_project_map(repo_root: str | Path | None = None) -> dict[str, Any]:
                     milestones.append({
                         "id": str(item.get("id") or "").strip() or None,
                         "title": str(item.get("title") or "").strip(),
+                        "title_en": str(item.get("title_en") or "").strip(),
                         "refs": [
                             str(ref).strip() for ref in item.get("refs", [])
                             if isinstance(item.get("refs"), list) and str(ref).strip()
@@ -335,13 +343,20 @@ def get_project_map(repo_root: str | Path | None = None) -> dict[str, Any]:
             "source_path": PROJECT_MAP_REL,
             "portal": {
                 "description": _as_str(portal.get("description")),
+                "description_en": _as_str(portal.get("description_en")),
                 "collab_mode": _as_str(portal.get("collab_mode")),
+                "collab_mode_en": _as_str(portal.get("collab_mode_en")),
                 "topology": _as_str(portal.get("topology")),
+                "topology_en": _as_str(portal.get("topology_en")),
                 "workers": _as_str_list(portal.get("workers")),
+                "workers_en": _as_str_list(portal.get("workers_en")),
                 "advisor": _as_str(portal.get("advisor")),
+                "advisor_en": _as_str(portal.get("advisor_en")),
+                "advisor_note_en": _as_str(portal.get("advisor_note_en")),
             },
             "milestones": milestones,
             "current": current,
+            "current_en": _as_str(meta.get("current_en")),
             "in_flight": [],  # AIPOS-276: always empty; frontend derives from queue
             "next": nxt,
             "horizon": horizon,

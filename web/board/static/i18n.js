@@ -1,6 +1,23 @@
 /**
- * Lybra Board i18n system
- * Centralized translation management (AIPOS-252)
+ * Lybra Board i18n system (AIPOS-288: unified single-channel i18n)
+ * 
+ * RED LINE: All product UI text MUST flow through this channel.
+ * - Frontend: i18n.t('key') in JS, data-i18n="key" in HTML
+ * - Backend: _generate_text('template', locale, ...) in Python
+ * - CJK literals outside i18n dictionaries => test failure (test_aipos288_cjk_source_guard.py)
+ * 
+ * Adding new UI text:
+ * 1. Add key to BOTH zh and en dictionaries below (missing key in en => test failure)
+ * 2. Use i18n.t('your.new.key') in JS or data-i18n="your.new.key" in HTML
+ * 3. For backend-generated text (advisor prompts, etc.), add to _I18N_TEMPLATES in app.py
+ * 4. Run: python3 tests/test_aipos288_cjk_source_guard.py to verify
+ * 
+ * Exemptions:
+ * - Data content (project names, task titles, descriptions) stays original
+ * - Code comments and docstrings (engineering docs, not product UI)
+ * - Mark exemptions with: // i18n-exempt: <reason>
+ * 
+ * Centralized translation management (AIPOS-252 baseline, AIPOS-288 enforcement)
  */
 
 const translations = {
@@ -22,6 +39,8 @@ const translations = {
     'overview.new_project_modal.intro': '启动一个新的并行项目工作区。选择你的设置方式:',
     'overview.new_project_modal.project_name': '项目名称',
     'overview.new_project_modal.project_name_hint': '仅限小写字母、数字、短横线或下划线',
+    'overview.new_project_modal.project_name_en': '英文名称（可选）',
+    'overview.new_project_modal.project_name_en_hint': '用于英文界面显示，留空则使用项目名称',
     'overview.new_project_modal.option_a': '复制命令（推荐）',
     'overview.new_project_modal.option_a_desc': '在终端运行此命令初始化工作区:',
     'overview.new_project_modal.option_b': '服务端初始化',
@@ -58,6 +77,7 @@ const translations = {
     
     // Project detail page
     'detail.title': '项目详情',
+    'detail.subtitle': 'Owner 控制台',
     'detail.back_to_overview': '← 返回总览',
     'detail.loading': '加载项目详情...',
     'detail.error_loading': '加载失败',
@@ -158,6 +178,9 @@ const translations = {
     'vb.empty.machine': '尚未提交返回记录。',
     'vb.empty.audit': '尚未记录审计判决。',
     'vb.empty.fix': '无往轮修复(首轮即过)。',
+    'vb.audit.none_badge': '免审计',
+    'vb.audit.none_title': '本任务卡 audit:none，无需审计，直接从 return 记录起站',
+    'vb.audit.none_note': '免审计（audit:none）——以 RETURN 记录为证据。',
     'vb.action.pass': '通过',
     'vb.action.reject': '打回',
     'vb.action.processing': '处理中...',
@@ -215,6 +238,40 @@ const translations = {
     'md.drawer.load_failed': '加载失败',
     'md.drawer.network_error': '网络错误',
     'md.drawer.frontmatter': 'frontmatter(折叠)',
+
+    // Onboarding guide (AIPOS-286)
+    'onboarding.welcome_title': '🎉 欢迎使用 Lybra',
+    'onboarding.welcome_intro': '这是你的第一个工作区。让我们开始三步走，从零到第一张任务卡闭环。',
+    'onboarding.loading': '加载中...',
+    'onboarding.step1_title': '连接你的顾问 Agent',
+    'onboarding.step1_body': '复制下方定制接入提示词，粘贴给 Claude / Codex / 任意 AI agent，它就能成为你的顾问（Advisor）——帮你起草任务卡、建议发布、查看真相。',
+    'onboarding.copy_prompt': '📋 一键复制接入提示词',
+    'onboarding.ssh_reminder': '⚠️ 跨机接入提醒：',
+    'onboarding.ssh_reminder_text': '如果你的顾问 agent 与 Lybra 服务端不在同一台机器，请先配置好 SSH 连通性（或网络路由），确保 agent 能访问服务端后再继续。提示词中包含第 0 步检查指引。',
+    'onboarding.step2_title': '发布第一张任务卡',
+    'onboarding.step2_body': '工作区已为你生成示例任务卡（在 <code>5_tasks/drafts/example-task.md</code>）。复制下方命令发布它，任务就会进入队列等待认领。',
+    'onboarding.step2_copy_btn': '📋 一键复制发布命令',
+    'onboarding.step3_title': '看它流经 Lybra 的门',
+    'onboarding.step3_body': '任务卡发布后，会经历完整的闭环链路：',
+    'onboarding.step3_flow_publish': '发布',
+    'onboarding.step3_flow_claim': '认领',
+    'onboarding.step3_flow_deliver': '交付',
+    'onboarding.step3_flow_audit': '审计',
+    'onboarding.step3_flow_close': '收编',
+    'onboarding.step3_note': '每个环节都有记录（records），Owner 真相视图始终向你呈现真实阶段。发布第一张卡后，刷新页面，向导会自动让位给任务中心。',
+    'onboarding.copied': '✅ 已复制',
+    'onboarding.copy_failed': '复制失败，请手动复制',
+
+    // Verification bench inline labels (AIPOS-288)
+    'vb.inline.what_to_verify': '你要验证的是',
+    'vb.inline.preview_label': '内嵌预览',
+    'vb.inline.preview_title': '任务预览',
+    'vb.inline.tech_details': '技术细节 (验收断言 + 证据 + 操作)',
+
+    // Misc UI alerts/messages (AIPOS-288)
+    'alert.operation_failed': '操作失败',
+    'alert.network_error': '网络错误',
+    'map.stale_badge': '地图已 {days} 天未更新',
   },
   
   en: {
@@ -235,6 +292,8 @@ const translations = {
     'overview.new_project_modal.intro': 'Start a new parallel project workspace. Choose your setup method:',
     'overview.new_project_modal.project_name': 'Project Name',
     'overview.new_project_modal.project_name_hint': 'Lowercase letters, numbers, dash, or underscore only',
+    'overview.new_project_modal.project_name_en': 'English Name (optional)',
+    'overview.new_project_modal.project_name_en_hint': 'Displayed in English UI; leave blank to use project name',
     'overview.new_project_modal.option_a': 'Copy Command (Recommended)',
     'overview.new_project_modal.option_a_desc': 'Run this command in your terminal to initialize the workspace:',
     'overview.new_project_modal.option_b': 'Server-Side Init',
@@ -271,6 +330,7 @@ const translations = {
     
     // Project detail page
     'detail.title': 'Project Detail',
+    'detail.subtitle': 'Owner Console',
     'detail.back_to_overview': '← Back to Overview',
     'detail.loading': 'Loading project detail...',
     'detail.error_loading': 'Failed to load',
@@ -372,6 +432,9 @@ const translations = {
     'vb.empty.machine': 'No return record submitted yet.',
     'vb.empty.audit': 'No audit verdict recorded yet.',
     'vb.empty.fix': 'No prior-round fixes (passed on first round).',
+    'vb.audit.none_badge': 'Audit-exempt',
+    'vb.audit.none_title': 'This task has audit:none, no audit required, directly elevated from return record',
+    'vb.audit.none_note': 'Audit-exempt (audit:none) — RETURN record serves as evidence.',
     'vb.action.pass': 'Pass',
     'vb.action.reject': 'Reject',
     'vb.action.processing': 'Processing...',
@@ -429,6 +492,40 @@ const translations = {
     'md.drawer.load_failed': 'Failed to load',
     'md.drawer.network_error': 'Network error',
     'md.drawer.frontmatter': 'frontmatter (collapsed)',
+
+    // Onboarding guide (AIPOS-286)
+    'onboarding.welcome_title': '🎉 Welcome to Lybra',
+    'onboarding.welcome_intro': 'This is your first workspace. Let\'s go through three steps to close your first task loop.',
+    'onboarding.loading': 'Loading...',
+    'onboarding.step1_title': 'Connect Your Advisor Agent',
+    'onboarding.step1_body': 'Copy the customized onboarding prompt below and paste it to Claude / Codex / any AI agent, and it will become your advisor—helping you draft task cards, suggest publishing, and view the truth.',
+    'onboarding.copy_prompt': '📋 Copy Onboarding Prompt',
+    'onboarding.ssh_reminder': '⚠️ Cross-Machine Setup:',
+    'onboarding.ssh_reminder_text': 'If your advisor agent and Lybra server are on different machines, please configure SSH connectivity (or network routing) first to ensure the agent can reach the server before proceeding. The prompt includes step-0 connectivity checks.',
+    'onboarding.step2_title': 'Publish Your First Task Card',
+    'onboarding.step2_body': 'The workspace has generated an example task card for you (in <code>5_tasks/drafts/example-task.md</code>). Copy the command below to publish it, and the task will enter the queue awaiting claim.',
+    'onboarding.step2_copy_btn': '📋 Copy Publish Command',
+    'onboarding.step3_title': 'Watch It Flow Through Lybra\'s Gate',
+    'onboarding.step3_body': 'After publishing, the task will go through the complete closure loop:',
+    'onboarding.step3_flow_publish': 'Publish',
+    'onboarding.step3_flow_claim': 'Claim',
+    'onboarding.step3_flow_deliver': 'Deliver',
+    'onboarding.step3_flow_audit': 'Audit',
+    'onboarding.step3_flow_close': 'Close',
+    'onboarding.step3_note': 'Each step is recorded (in records). The Owner truth view always presents the real stage. After publishing your first card, refresh the page and the guide will give way to the task center.',
+    'onboarding.copied': '✅ Copied',
+    'onboarding.copy_failed': 'Copy failed, please copy manually',
+
+    // Verification bench inline labels (AIPOS-288)
+    'vb.inline.what_to_verify': 'What to verify',
+    'vb.inline.preview_label': 'Embedded preview',
+    'vb.inline.preview_title': 'Task preview',
+    'vb.inline.tech_details': 'Technical details (assertions + evidence + actions)',
+
+    // Misc UI alerts/messages (AIPOS-288)
+    'alert.operation_failed': 'Operation failed',
+    'alert.network_error': 'Network error',
+    'map.stale_badge': 'Map not updated for {days} days',
   }
 };
 
@@ -440,6 +537,36 @@ let currentLang = localStorage.getItem('lybra_lang') || 'zh';
  */
 function t(key) {
   return translations[currentLang]?.[key] || translations['zh']?.[key] || key;
+}
+
+/**
+ * Apply translations to DOM elements with data-i18n attributes
+ * @param {Element} root - Root element to scan (default: document)
+ */
+function applyTranslations(root = document) {
+  // Handle data-i18n="key" for textContent
+  const textElements = root.querySelectorAll('[data-i18n]');
+  textElements.forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (key) {
+      el.textContent = t(key);
+    }
+  });
+  
+  // Handle data-i18n-attr="attrName:key" for attributes (e.g., placeholder:key)
+  const attrElements = root.querySelectorAll('[data-i18n-attr]');
+  attrElements.forEach(el => {
+    const attrSpec = el.getAttribute('data-i18n-attr');
+    if (attrSpec) {
+      // Support multiple attributes: "placeholder:key1;title:key2"
+      attrSpec.split(';').forEach(spec => {
+        const [attrName, key] = spec.split(':').map(s => s.trim());
+        if (attrName && key) {
+          el.setAttribute(attrName, t(key));
+        }
+      });
+    }
+  });
 }
 
 /**
@@ -460,6 +587,9 @@ function switchLanguage(lang) {
     // Fallback: reload page
     location.reload();
   }
+  
+  // Apply translations after language switch
+  applyTranslations();
 }
 
 /**
@@ -492,10 +622,18 @@ function createLanguageSwitcher() {
   return switcher;
 }
 
+// Apply translations on DOMContentLoaded
+if (typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
+    applyTranslations();
+  });
+}
+
 // Export for browser
 if (typeof window !== 'undefined') {
   window.i18n = {
     t,
+    applyTranslations,
     switchLanguage,
     getCurrentLang,
     createLanguageSwitcher

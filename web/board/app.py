@@ -6,6 +6,7 @@ import os
 import json
 import re
 import secrets
+import socket
 import sys
 import threading
 from datetime import datetime, timezone
@@ -142,12 +143,16 @@ def get_overview(board_config_path: Path | None = None, repo_root: Path | None =
             
             # Validate workspace
             if not has_workspace_queue(root):
-                results.append({
+                error_entry = {
                     "label": label,
                     "root": str(root),
                     "status": "error",
                     "error": "Workspace root does not contain 5_tasks/queue"
-                })
+                }
+                label_en = ws_config.get("label_en")
+                if label_en:
+                    error_entry["label_en"] = label_en
+                results.append(error_entry)
                 continue
             
             # Aggregate data from this workspace
@@ -200,7 +205,7 @@ def get_overview(board_config_path: Path | None = None, repo_root: Path | None =
                 top_level_counts = {}
                 truth_total = 0
 
-            results.append({
+            ok_entry = {
                 "label": label,
                 "root": str(root),
                 "status": "ok",
@@ -210,15 +215,23 @@ def get_overview(board_config_path: Path | None = None, repo_root: Path | None =
                 "stage_counts": stage_counts,
                 "top_level_counts": top_level_counts,
                 "truth_total": truth_total,
-            });
+            }
+            label_en = ws_config.get("label_en")
+            if label_en:
+                ok_entry["label_en"] = label_en
+            results.append(ok_entry)
             
         except Exception as e:
-            results.append({
+            exception_entry = {
                 "label": label,
                 "root": root_str,
                 "status": "error",
                 "error": str(e)
-            })
+            }
+            label_en = ws_config.get("label_en")
+            if label_en:
+                exception_entry["label_en"] = label_en
+            results.append(exception_entry)
     
     return {
         "ok": True,
@@ -271,6 +284,7 @@ def _api_routes(repo_root: Path | None, board_config_path: Path | None = None) -
         "/api/health": lambda params: get_health(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
         "/api/overview": lambda _params: get_overview(board_config_path=board_config_path, repo_root=repo_root),
         "/api/runtime-status": partial(_get_runtime_status_route, repo_root=repo_root, board_config_path=board_config_path),
+        "/api/generate/advisor-prompt": partial(_generate_advisor_prompt_route, repo_root=repo_root, board_config_path=board_config_path),
         "/api/lifecycle": partial(_get_lifecycle_route, repo_root=repo_root),
         "/api/governance": lambda params: get_governance(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
         "/api/queue": lambda params: get_queue(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
@@ -681,6 +695,289 @@ def _get_lifecycle_route(_params: dict[str, list[str]], *, repo_root: Path | Non
     }
 
 
+def _get_server_location_info() -> dict[str, Any] | None:
+    """
+    AIPOS-286: Get server hostname and IP for advisor same-machine verification.
+    Returns dict with 'hostname', 'ip', 'note' or None on failure (graceful degradation).
+    """
+    try:
+        hostname = socket.gethostname()
+        # Use dummy socket connect to get preferred outbound IP (doesn't actually connect)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return {
+            "hostname": hostname,
+            "ip": ip,
+            "note": "AIPOS-286: Advisor agents should verify same-machine before connecting. See onboarding prompt step-0."
+        }
+    except Exception:
+        return None
+
+
+# ===== AIPOS-286 FIX-2: Server-side i18n generation channel =====
+# Unified template system for generated content (advisor onboarding prompt,
+# wizard guidance, MCP snippet comments, QUICKSTART blocks). All generated
+# text must flow through this channel to ensure locale-aware rendering with
+# zero CJK leakage in en mode.
+#
+# CONSTRAINT: All template keys must exist in BOTH zh and en. Missing en key
+# => test failure (not silent fallback to zh). This enforces complete i18n
+# coverage for generated content.
+#
+# USAGE: Call _generate_text(template_key, locale, **vars) to get rendered text.
+# New generated content MUST use this channel (see docstring enforcement test).
+
+_I18N_TEMPLATES = {
+    "zh": {
+        "advisor_prompt": """你是 {workspace_label} 工作区的顾问 (Advisor)。
+
+工作区信息：
+- 路径：{workspace_root}
+- Gate URL：{gate_url}
+- Charter：{charter_path}
+
+Lybra 服务端位置（AIPOS-286）：
+- 主机名：{server_hostname}
+- IP 地址：{server_ip}
+
+你的职责：
+- 读取 charter 了解红线和工作方式
+- 起草任务卡（在 5_tasks/drafts/）
+- 向 Owner 建议发布
+- 查看状态：lybra queue / lybra records / lybra owner-truth
+- 盯队列与记录变化：lybra agent watch --workspace-root {workspace_root} —— 有变化即返回摘要,适合做你的唤醒泵
+
+快速开始：
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  第 0 步：同机确认与连通性检测（AIPOS-286 强制前置）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+在连接 gate 之前，你必须先完成以下检查：
+
+1. **确认你与 Lybra 服务端是否在同一台机器**：
+   - 服务端主机名：{server_hostname}
+   - 服务端 IP：{server_ip}
+   - 检查方法：运行 `hostname` 和 `hostname -I` 命令，对比上述信息
+   - 同机：继续第 2 步
+   - 不同机：继续第 2 步（跨机场景）
+
+2. **连通性检测**（不同机时必做，同机时也建议做）：
+   
+   **方式 A — HTTP 健康检查（推荐）**：
+   ```bash
+   curl -v {gate_url}/health
+   ```
+   预期：返回 200 OK + JSON 响应（包含 `"ok": true`）
+   
+   **方式 B — 文件真相面检测**（需要 SSH 或挂载）：
+   - 尝试访问工作区路径：`ls {workspace_root}/5_tasks/queue`
+   - 预期：能列出队列文件
+   
+   **不通过怎么办**：
+   - 如果连通性检测失败（curl 超时、SSH 不通、路径无法访问）：
+     **立即停止，block-and-report 给 Owner**，说明：
+     * 你的位置（主机名 + IP）
+     * 服务端位置（{server_hostname} / {server_ip}）
+     * 检测失败的具体现象（超时、拒绝连接、权限不足等）
+     * 需要 Owner 配置 SSH 连通性或网络路由后再继续
+   - **绝不带病接线**：连不通 gate 时强行配置 MCP 会导致后续所有操作静默失败
+
+3. **通过后再继续**：
+   - 连通性确认 OK → 进入下方「零安装接入」配置 MCP 连接
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔌 零安装接入（任何 MCP agent 均可，无需安装 Lybra CLI）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. 使用 Owner 提供的 advisor token：
+   - Claude Desktop/Cline: mcpServers → {{"lybra": {{"url": "{gate_url}/mcp", "headers": {{"Authorization": "Bearer <ADVISOR_TOKEN>"}}}}}}
+   - Claude Code 命令行: claude mcp add lybra --transport http {gate_url}/mcp --header "Authorization: Bearer <ADVISOR_TOKEN>"
+   - Pi/Codex/其他 HTTP MCP harness: {{"url": "{gate_url}/mcp", "headers": {{"Authorization": "Bearer <ADVISOR_TOKEN>"}}}}
+   注：以上为常见 harness 示意（非穷举），桌面版/命令行均可；不支持 MCP 的 agent 可直接文件系统操作。
+
+2. 🔧 安装 Lybra CLI（标准第二步，完整功能需要）
+   完整功能（含 agent watch 耳朵/claim 全链）需要安装 Lybra CLI：
+   
+   方式 A — 从 npm 安装（推荐）：
+   npm install -g lybra
+   pip install "textual>=4.0"  # TUI 依赖
+   lybra --version
+   
+   方式 B — 从 gate 自举（agent 可自取）：
+   假设 gate 机已暴露 git/pip 源，agent 可执行：
+   git clone <LYBRA_REPO_URL> /tmp/lybra && cd /tmp/lybra
+   npm install -g .
+   pip install "textual>=4.0"
+   lybra --version
+   
+   安装后可用双式 watch：
+   - 跨机模式（无需本地 workspace，通过 gate 拉取）：
+     lybra agent watch --gate-url {gate_url} --token <ADVISOR_TOKEN> --timeout 30
+   - 同机模式（agent 与 workspace 在同一台机器）：
+     lybra agent watch --workspace-root {workspace_root} --timeout 30
+
+3. 📖 阅读 charter 与示例
+   - Charter: {charter_path}
+   - 示例卡: {example_card_path}
+
+4. 起草第一张任务卡，建议 Owner 发布
+
+---
+
+重要边界：
+- 你对治理工作区有写权（起草任务卡、维护治理文档）
+- 已发布的卡、queue、records 是 gate 的领地，不可手写
+- 产品仓等其他仓库默认只读，除非 Owner 明确授权
+- 发布由 Owner 确认（你起草，Owner 决定）
+- 凭据只按名引用，绝不读取/回显 token 文件内容""",
+    },
+    "en": {
+        "advisor_prompt": """You are the Advisor for the {workspace_label}.
+
+Workspace info:
+- Path: {workspace_root}
+- Gate URL: {gate_url}
+- Charter: {charter_path}
+
+Lybra server location (AIPOS-286):
+- Hostname: {server_hostname}
+- IP address: {server_ip}
+
+Your responsibilities:
+- Read the charter to understand red lines and working protocols
+- Draft task cards (in 5_tasks/drafts/)
+- Suggest publishing to Owner
+- Check status: lybra queue / lybra records / lybra owner-truth
+- Watch queue & record changes: lybra agent watch --workspace-root {workspace_root} — returns summary on change, ideal as your wakeup pump
+
+Quick start:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  Step 0: Same-machine verification & connectivity check (AIPOS-286 mandatory prerequisite)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Before connecting to the gate, you must complete these checks:
+
+1. **Verify if you and the Lybra server are on the same machine**:
+   - Server hostname: {server_hostname}
+   - Server IP: {server_ip}
+   - Check method: Run `hostname` and `hostname -I`, compare with the above
+   - Same machine: proceed to step 2
+   - Different machines: proceed to step 2 (cross-machine scenario)
+
+2. **Connectivity check** (mandatory for cross-machine, recommended for same-machine):
+   
+   **Method A — HTTP health check (recommended)**:
+   ```bash
+   curl -v {gate_url}/health
+   ```
+   Expected: 200 OK + JSON response (containing `"ok": true`)
+   
+   **Method B — File truth surface check** (requires SSH or mount):
+   - Try accessing workspace path: `ls {workspace_root}/5_tasks/queue`
+   - Expected: Can list queue files
+   
+   **What if checks fail**:
+   - If connectivity check fails (curl timeout, SSH unreachable, path inaccessible):
+     **Stop immediately, block-and-report to Owner**, stating:
+     * Your location (hostname + IP)
+     * Server location ({server_hostname} / {server_ip})
+     * Specific failure symptom (timeout, connection refused, permission denied, etc.)
+     * Need Owner to configure SSH connectivity or network routing before proceeding
+   - **Never proceed with broken connectivity**: Forcing MCP config when gate is unreachable causes all subsequent operations to fail silently
+
+3. **Proceed only after passing**:
+   - Connectivity confirmed OK → continue to "Zero-install onboarding" below to configure MCP connection
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔌 Zero-install onboarding (any MCP agent, no Lybra CLI installation needed)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Use the advisor token provided by Owner:
+   - Claude Desktop/Cline: mcpServers → {{"lybra": {{"url": "{gate_url}/mcp", "headers": {{"Authorization": "Bearer <ADVISOR_TOKEN>"}}}}}}
+   - Claude Code CLI: claude mcp add lybra --transport http {gate_url}/mcp --header "Authorization: Bearer <ADVISOR_TOKEN>"
+   - Pi/Codex/other HTTP MCP harness: {{"url": "{gate_url}/mcp", "headers": {{"Authorization": "Bearer <ADVISOR_TOKEN>"}}}}
+   Note: Above are common harness examples (non-exhaustive), desktop/CLI both work; agents without MCP support can use direct filesystem operations.
+
+2. 🔧 Install Lybra CLI (standard step 2, needed for full functionality)
+   Full functionality (including agent watch listener / claim full chain) requires Lybra CLI:
+   
+   Method A — Install from npm (recommended):
+   npm install -g lybra
+   pip install "textual>=4.0"  # TUI dependency
+   lybra --version
+   
+   Method B — Bootstrap from gate (agent self-service):
+   If gate machine exposes git/pip sources, agent can run:
+   git clone <LYBRA_REPO_URL> /tmp/lybra && cd /tmp/lybra
+   npm install -g .
+   pip install "textual>=4.0"
+   lybra --version
+   
+   After installation, use dual-mode watch:
+   - Cross-machine mode (no local workspace, pull through gate):
+     lybra agent watch --gate-url {gate_url} --token <ADVISOR_TOKEN> --timeout 30
+   - Same-machine mode (agent and workspace on same machine):
+     lybra agent watch --workspace-root {workspace_root} --timeout 30
+
+3. 📖 Read charter & examples
+   - Charter: {charter_path}
+   - Example card: {example_card_path}
+
+4. Draft your first task card, suggest publishing to Owner
+
+---
+
+Important boundaries:
+- You have write access to the governance workspace (draft task cards, maintain governance docs)
+- Published cards, queue, records are gate's domain, no manual writes
+- Product repos and other repos are read-only by default, unless Owner explicitly authorizes
+- Publishing requires Owner confirmation (you draft, Owner decides)
+- Credentials are referenced by name only, never read/echo token file contents""",
+    },
+}
+
+
+def _generate_text(template_key: str, locale: str, **variables: Any) -> str:
+    """
+    AIPOS-286 FIX-2: Unified server-side i18n generation channel.
+    
+    Generate locale-aware text from templates. All generated content (advisor
+    onboarding prompts, wizard guidance, MCP snippet comments, QUICKSTART blocks)
+    MUST flow through this function.
+    
+    Args:
+        template_key: Template identifier (e.g., 'advisor_prompt')
+        locale: Language code ('zh' or 'en')
+        **variables: Template variables for substitution
+    
+    Returns:
+        Rendered text in the requested locale
+    
+    Raises:
+        KeyError: If template_key is missing in the requested locale
+                  (enforces complete i18n coverage, no silent fallback)
+    
+    Red line: Missing en key => test failure. New generated content must declare
+    both zh and en templates upfront.
+    """
+    if locale not in _I18N_TEMPLATES:
+        locale = "zh"  # Default to zh if unsupported locale requested
+    
+    templates = _I18N_TEMPLATES[locale]
+    if template_key not in templates:
+        raise KeyError(
+            f"Template '{template_key}' missing in locale '{locale}'. "
+            f"All templates must exist in both zh and en (AIPOS-286 FIX-2 red line)."
+        )
+    
+    template = templates[template_key]
+    return template.format(**variables)
+
+
 def _get_runtime_status_route(params: dict[str, list[str]], *, repo_root: Path | None, board_config_path: Path | None = None) -> dict[str, Any]:
     operation = "get_runtime_status"
     resolved_root = _resolve_workspace_root(params, repo_root or REPO_ROOT, board_config_path)
@@ -710,7 +1007,9 @@ def _get_runtime_status_route(params: dict[str, list[str]], *, repo_root: Path |
     if not capability_raw:
         warnings.append(f"{capability_env} is not set; scoped MCP mutation tools will be hidden.")
     warnings.extend(capability["diagnostics"])
+    server_location = _get_server_location_info()
     data = {
+        "server_location": server_location,
         "workspace": {
             "root": str(resolved_root),
             "config_path": defaults["config_path"],
@@ -798,6 +1097,86 @@ def _get_runtime_status_route(params: dict[str, list[str]], *, repo_root: Path |
         "dry_run_expires_at": None,
         "safety_notice": "Read-only Board runtime status surface. No files are written and no services are started.",
         "errors": [],
+    }
+
+
+def _generate_advisor_prompt_route(params: dict[str, list[str]], *, repo_root: Path | None, board_config_path: Path | None = None) -> dict[str, Any]:
+    """
+    AIPOS-286 FIX-2: Server-side advisor prompt generation with locale support.
+    
+    GET /api/generate/advisor-prompt?workspace=<index>&locale=<zh|en>
+    Returns generated advisor onboarding prompt in the requested language.
+    """
+    operation = "generate_advisor_prompt"
+    locale = _first_param(params, "locale") or "zh"
+    if locale not in ("zh", "en"):
+        locale = "zh"
+    
+    resolved_root = _resolve_workspace_root(params, repo_root or REPO_ROOT, board_config_path)
+    if resolved_root is None:
+        resolved_root = (repo_root or REPO_ROOT).resolve()
+    else:
+        resolved_root = resolved_root.resolve()
+    
+    # Load workspace label
+    workspace_label = "unnamed workspace"
+    if board_config_path and board_config_path.exists():
+        try:
+            config_data = json.loads(board_config_path.read_text(encoding="utf-8"))
+            workspaces = config_data.get("workspaces", [])
+            workspace_param = _first_param(params, "workspace")
+            if workspace_param and workspace_param.isdigit():
+                idx = int(workspace_param)
+                if 0 <= idx < len(workspaces):
+                    workspace_label = workspaces[idx].get("label", "unnamed workspace")
+        except Exception:
+            pass
+    
+    # Load connection endpoints
+    connection_endpoints = _load_connection_endpoints(resolved_root)
+    defaults = _runtime_config_defaults(resolved_root)
+    gate_url = connection_endpoints["mcp_rpc_url"] or f"http://{defaults['mcp_host']}:{defaults['mcp_port']}/mcp"
+    # Strip /mcp suffix if present to get base gate URL
+    if gate_url.endswith("/mcp"):
+        gate_url = gate_url[:-4]
+    
+    # Get server location
+    server_location = _get_server_location_info()
+    server_hostname = server_location["hostname"] if server_location else "<server_hostname>"
+    server_ip = server_location["ip"] if server_location else "<server_ip>"
+    
+    # Generate prompt
+    try:
+        prompt_text = _generate_text(
+            "advisor_prompt",
+            locale,
+            workspace_label=workspace_label,
+            workspace_root=str(resolved_root),
+            gate_url=gate_url,
+            charter_path=str(resolved_root / "governance" / "advisor-charter.md"),
+            example_card_path=str(resolved_root / "5_tasks" / "drafts" / "example-task.md"),
+            server_hostname=server_hostname,
+            server_ip=server_ip,
+        )
+    except KeyError as e:
+        return {
+            "ok": False,
+            "verdict": "BLOCK",
+            "operation": operation,
+            "message": str(e),
+            "errors": [str(e)],
+        }
+    
+    return {
+        "ok": True,
+        "verdict": "PASS",
+        "operation": operation,
+        "data": {
+            "prompt": prompt_text,
+            "locale": locale,
+            "workspace_root": str(resolved_root),
+            "gate_url": gate_url,
+        },
     }
 
 
@@ -2358,6 +2737,7 @@ def _workspace_init_route(payload: dict[str, Any], *, repo_root: Path | None) ->
     from tools.aipos_cli.workspace_templates import execute_workspace_init
     
     project_id = str(payload.get("project_id") or "").strip()
+    label_en = str(payload.get("label_en") or "").strip()  # AIPOS-288 FIX-5: optional English name
     if not project_id:
         return blocked_response(
             operation="workspace_init",
@@ -2414,10 +2794,14 @@ def _workspace_init_route(payload: dict[str, Any], *, repo_root: Path | None) ->
         # Check if already registered
         existing = any(ws.get("root") == str(output_path) for ws in workspaces)
         if not existing:
-            workspaces.append({
+            # AIPOS-288 FIX-5: write label_en if provided
+            ws_entry = {
                 "label": project_id.replace("-", " ").replace("_", " ").title(),
                 "root": str(output_path)
-            })
+            }
+            if label_en:
+                ws_entry["label_en"] = label_en
+            workspaces.append(ws_entry)
             board_config_path.write_text(
                 json.dumps({"workspaces": workspaces}, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8"
@@ -2623,7 +3007,7 @@ def dispatch_api_request(
 # ---------------------------------------------------------------------------
 
 SESSION_COOKIE_NAME = "board_session"
-REMEMBER_COOKIE_NAME = "board_remember"  # F-271-6: 长效 remember token (HMAC 签名)
+REMEMBER_COOKIE_NAME = "board_remember"  # F-271-6: 长效 remember token (HMAC 签名)  # i18n-exempt: auth constant
 
 # 无需登录即可访问的路径(登录页 / 鉴权 API 本身 + AIPOS-271 一次性凭据通道)。
 # AIPOS-271:OTC mint / 设备码三通道均为公开 —— 这些端点本身用递来的 token 指纹鉴权
@@ -3158,7 +3542,7 @@ def make_handler(
                 self._send_json(HTTPStatus.UNAUTHORIZED, {
                     "ok": False,
                     "error": "INVALID_TOKEN",
-                    "message": "Token 无效或未匹配到任何角色。",
+                    "message": "Token 无效或未匹配到任何角色。",  # i18n-exempt: auth error
                 })
                 return
             session_id = self._issue_session(info, method="token")
@@ -3194,7 +3578,7 @@ def make_handler(
             if info is None:
                 self._send_json(HTTPStatus.UNAUTHORIZED, {
                     "ok": False, "error": "INVALID_TOKEN",
-                    "message": "Token 无效或未匹配到任何角色。",
+                    "message": "Token 无效或未匹配到任何角色。",  # i18n-exempt: auth error
                 })
                 return
             otc = self._otc.mint(
@@ -3251,7 +3635,7 @@ def make_handler(
             if info is None:
                 self._send_json(HTTPStatus.UNAUTHORIZED, {
                     "ok": False, "error": "INVALID_TOKEN",
-                    "message": "Token 无效或未匹配到任何角色。",
+                    "message": "Token 无效或未匹配到任何角色。",  # i18n-exempt: auth error
                 })
                 return
             approved = self._device.approve(
