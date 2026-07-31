@@ -711,6 +711,178 @@ class FsWatchV2TimeoutTests(unittest.TestCase):
         self.assertEqual(out.getvalue(), "", "timeout must be silent")
 
 
+class FsWatchF2841OutsideWatchSubtreesTests(unittest.TestCase):
+    """F-284-1: --expect supports workspace-root-relative globs outside _WATCH_SUBTREES.
+    Four exit codes with task_cards/ fixture (outside queue/records)."""
+
+    def test_expect_match_outside_watch_subtrees_exit0(self):
+        """Exit 0: expect pattern matches file in task_cards/ (outside queue/records)."""
+        ws = _make_workspace()
+        task_cards_dir = os.path.join(ws, "task_cards/AIPOS-284")
+        os.makedirs(task_cards_dir, exist_ok=True)
+        _write(os.path.join(task_cards_dir, "RETURN.md"), "done")
+        
+        args = _args(ws, interval=0.5, timeout=10.0)
+        args.expect = ["task_cards/AIPOS-284/*.md"]  # Use *.md not exact path
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=lambda s: None, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_CHANGE)
+        payload = json.loads(out.getvalue())
+        self.assertIn("expect_satisfied", payload)
+        self.assertIn("task_cards/AIPOS-284/RETURN.md", payload["expect_satisfied"])
+
+    def test_expect_timeout_outside_watch_subtrees_exit2(self):
+        """Exit 2: expect pattern for task_cards/ never matches, timeout."""
+        ws = _make_workspace()
+        task_cards_dir = os.path.join(ws, "task_cards/AIPOS-284")
+        os.makedirs(task_cards_dir, exist_ok=True)
+        # Create a decoy file that doesn't match pattern
+        _write(os.path.join(task_cards_dir, "OTHER.md"), "decoy")
+        clock_now = [0.0]
+
+        def sleeper(seconds: float):
+            clock_now[0] += seconds
+
+        args = _args(ws, interval=0.3, timeout=1.0)
+        args.expect = ["task_cards/AIPOS-284/RETURN.md"]  # doesn't exist
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
+        self.assertEqual(rc, EXIT_TIMEOUT)
+        self.assertEqual(out.getvalue(), "", "timeout must be silent")
+
+    def test_expect_end_no_product_outside_watch_subtrees_exit3(self):
+        """Exit 3: expect for task_cards/ not satisfied, end-pattern seen."""
+        ws = _make_workspace()
+        task_cards_dir = os.path.join(ws, "task_cards/AIPOS-284")
+        os.makedirs(task_cards_dir, exist_ok=True)
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "starting...\n")
+        polls = [0]
+
+        def sleeper(seconds: float):
+            polls[0] += 1
+            if polls[0] == 1:
+                with open(run_log, "a") as f:
+                    f.write("execution finished\n")
+
+        args = _args(ws, interval=0.1, timeout=10.0)
+        args.expect = ["task_cards/AIPOS-284/RETURN.md"]  # never created
+        args.run_log = run_log
+        args.end_pattern = "execution finished"
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_END_NO_PRODUCT)
+        payload = json.loads(out.getvalue())
+        self.assertIn("end_no_product", payload)
+
+    def test_expect_stall_outside_watch_subtrees_exit4(self):
+        """Exit 4: expect for task_cards/ not satisfied, stall detected."""
+        ws = _make_workspace()
+        task_cards_dir = os.path.join(ws, "task_cards/AIPOS-284")
+        os.makedirs(task_cards_dir, exist_ok=True)
+        run_log = os.path.join(ws, "run.log")
+        _write(run_log, "started\n")
+        time.sleep(0.1)  # Ensure mtime is in the past
+        clock_now = [0.0]
+
+        def sleeper(seconds: float):
+            clock_now[0] += seconds
+
+        args = _args(ws, interval=0.5, timeout=100.0)
+        args.expect = ["task_cards/AIPOS-284/RETURN.md"]  # never created
+        args.run_log = run_log
+        args.end_pattern = None
+        args.stall_secs = 2.0
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
+        self.assertEqual(rc, EXIT_STALL)
+        payload = json.loads(out.getvalue())
+        self.assertIn("stall", payload)
+
+    def test_expect_glob_walk_scope_is_static_prefix(self):
+        """Walk scope = static prefix of glob pattern (not full tree)."""
+        ws = _make_workspace()
+        # Create nested structure
+        os.makedirs(os.path.join(ws, "task_cards/AIPOS-284/sub"), exist_ok=True)
+        os.makedirs(os.path.join(ws, "task_cards/OTHER/deep"), exist_ok=True)
+        _write(os.path.join(ws, "task_cards/AIPOS-284/RETURN.md"), "target")
+        _write(os.path.join(ws, "task_cards/AIPOS-284/sub/nested.md"), "nested")
+        _write(os.path.join(ws, "task_cards/OTHER/deep/decoy.md"), "decoy")
+        
+        # Pattern with static prefix 'task_cards/AIPOS-284' should only walk that dir
+        matched = check_expect_patterns(Path(ws), ["task_cards/AIPOS-284/*.md", "task_cards/AIPOS-284/**/*.md"])
+        self.assertIn("task_cards/AIPOS-284/RETURN.md", matched)
+        self.assertIn("task_cards/AIPOS-284/sub/nested.md", matched)
+        self.assertNotIn("task_cards/OTHER/deep/decoy.md", matched,
+                         "walk must be limited to static prefix, not full tree")
+
+    def test_expect_pattern_validation_rejects_absolute_path(self):
+        """F-284-1: absolute paths are rejected at startup."""
+        ws = _make_workspace()
+        args = _args(ws, interval=0.5, timeout=10.0)
+        args.expect = ["/absolute/path/file.md"]
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()):
+            rc = run_fs_watch(args, sleeper=lambda s: None, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_TIMEOUT)  # validation failure -> exit 2
+
+    def test_expect_pattern_validation_rejects_dotdot_escape(self):
+        """F-284-1: patterns with '..' are rejected at startup."""
+        ws = _make_workspace()
+        args = _args(ws, interval=0.5, timeout=10.0)
+        args.expect = ["../escape/file.md"]
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()):
+            rc = run_fs_watch(args, sleeper=lambda s: None, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_TIMEOUT)
+
+    def test_expect_pattern_validation_rejects_nonexistent_unreachable_prefix(self):
+        """F-284-1: patterns whose static prefix cannot exist are rejected."""
+        ws = _make_workspace()
+        args = _args(ws, interval=0.5, timeout=10.0)
+        # Create a file (not directory) where prefix would need to be
+        _write(os.path.join(ws, "blocker.txt"), "blocks")
+        args.expect = ["blocker.txt/impossible/*.md"]  # blocker.txt is a file, not a dir
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        with redirect_stdout(io.StringIO()):
+            rc = run_fs_watch(args, sleeper=lambda s: None, clock=time.monotonic)
+        self.assertEqual(rc, EXIT_TIMEOUT)
+
+    def test_expect_pattern_validation_allows_nonexistent_but_creatable_prefix(self):
+        """Patterns whose prefix doesn't exist yet but COULD be created are allowed."""
+        ws = _make_workspace()
+        # Don't create task_cards/FUTURE/ yet, but it COULD be created
+        args = _args(ws, interval=0.5, timeout=10.0)
+        args.expect = ["task_cards/FUTURE/*.md"]
+        args.run_log = None
+        args.end_pattern = None
+        args.stall_secs = None
+        clock_now = [0.0]
+
+        def sleeper(seconds: float):
+            clock_now[0] += seconds
+
+        # Should not reject pattern, just timeout (no match)
+        with redirect_stdout(io.StringIO()) as out:
+            rc = run_fs_watch(args, sleeper=sleeper, clock=lambda: clock_now[0])
+        # Pattern is valid, just no match -> timeout
+        self.assertEqual(rc, EXIT_TIMEOUT)
+        self.assertEqual(out.getvalue(), "")
+
+
 class FsWatchV2IntegrationTests(unittest.TestCase):
     """AIPOS-284 S5: four exit codes end-to-end on real CLI."""
 

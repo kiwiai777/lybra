@@ -144,17 +144,79 @@ def diff_snapshots(
     return changed
 
 
+def _extract_static_prefix(pattern: str) -> str:
+    """Extract the static directory prefix from a glob pattern (before any wildcard).
+    Examples: 'task_cards/AIPOS-284/*.md' -> 'task_cards/AIPOS-284',
+              '5_tasks/*/foo.md' -> '5_tasks', 'foo/*.md' -> 'foo', '*.md' -> ''"""
+    parts = pattern.split("/")
+    static_parts = []
+    for part in parts:
+        if any(c in part for c in "*?[]"):
+            break
+        static_parts.append(part)
+    return "/".join(static_parts)
+
+
+def _validate_expect_pattern(workspace_root: Path, pattern: str) -> tuple[bool, str]:
+    """Validate that an expect pattern can potentially match within workspace-root.
+    Returns (is_valid, error_message). A pattern is invalid if:
+    - it starts with '/' (absolute path outside workspace)
+    - it escapes workspace-root via '..'
+    - its static prefix doesn't exist and can never be created inside workspace"""
+    # Reject absolute paths
+    if pattern.startswith("/"):
+        return False, f"--expect pattern must be relative to workspace-root: {pattern}"
+    
+    # Reject patterns that escape workspace via '..'
+    if ".." in pattern:
+        return False, f"--expect pattern cannot escape workspace-root: {pattern}"
+    
+    # Extract static prefix and check if it's rooted inside workspace
+    static_prefix = _extract_static_prefix(pattern)
+    if static_prefix:
+        full_prefix = workspace_root / static_prefix
+        # Check if prefix exists OR could exist (parent dir exists)
+        if not full_prefix.exists():
+            parent = full_prefix.parent
+            if not parent.exists() or not parent.is_relative_to(workspace_root):
+                return False, f"--expect pattern prefix does not exist and cannot be created: {pattern} (prefix: {static_prefix})"
+    
+    return True, ""
+
+
 def check_expect_patterns(workspace_root: Path, patterns: list[str]) -> list[str]:
-    """AIPOS-284 S1: check --expect globs against the workspace. Returns list of matched
-    paths (POSIX relative). Empty list = no match."""
+    """AIPOS-284 S1 + F-284-1: check --expect globs against the workspace. Supports any
+    relative glob within workspace-root. Walk scope = static prefix directory (not full tree).
+    Returns list of matched paths (POSIX relative). Empty list = no match."""
     if not patterns:
         return []
     root_str = str(workspace_root)
     matches: list[str] = []
-    for sub in _WATCH_SUBTREES:
-        base = os.path.join(root_str, sub)
+    
+    for pat in patterns:
+        # Extract static prefix to limit walk scope (not full tree scan)
+        static_prefix = _extract_static_prefix(pat)
+        if static_prefix:
+            # If static prefix is the entire pattern (no wildcards), check directly
+            if static_prefix == pat:
+                full_path = os.path.join(root_str, pat)
+                try:
+                    st = os.stat(full_path)
+                    if stat_mod.S_ISREG(st.st_mode):
+                        matches.append(pat)
+                except OSError:
+                    pass  # File doesn't exist
+                continue
+            
+            # Walk from the static prefix directory
+            base = os.path.join(root_str, static_prefix)
+        else:
+            # Pattern like '*.md' at root: walk from workspace root
+            base = root_str
+        
         if not os.path.isdir(base):
-            continue
+            continue  # Prefix doesn't exist yet, no matches
+        
         for dirpath, _dirnames, filenames in os.walk(base):
             for name in filenames:
                 full = os.path.join(dirpath, name)
@@ -165,10 +227,9 @@ def check_expect_patterns(workspace_root: Path, patterns: list[str]) -> list[str
                 if not stat_mod.S_ISREG(st.st_mode):
                     continue
                 rel = os.path.relpath(full, root_str).replace(os.sep, "/")
-                for pat in patterns:
-                    if fnmatch.fnmatch(rel, pat):
-                        matches.append(rel)
-                        break
+                if fnmatch.fnmatch(rel, pat):
+                    matches.append(rel)
+    
     return sorted(set(matches))
 
 
@@ -236,6 +297,12 @@ def run_fs_watch(
 
     # AIPOS-284 v2 parameters
     expect_patterns: list[str] = getattr(args, "expect", None) or []
+    # F-284-1: validate expect patterns (reject unmatchable patterns)
+    for pat in expect_patterns:
+        is_valid, error_msg = _validate_expect_pattern(ws, pat)
+        if not is_valid:
+            print(f"lybra agent watch: {error_msg}", file=sys.stderr)
+            return EXIT_TIMEOUT
     run_log_path: str | None = getattr(args, "run_log", None)
     end_pattern_str: str | None = getattr(args, "end_pattern", None)
     end_pattern: re.Pattern | None = None

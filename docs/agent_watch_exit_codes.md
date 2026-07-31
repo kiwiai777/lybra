@@ -17,12 +17,30 @@ about task execution outcomes.
 | **4** | Stall detected | JSON: `{"stall": {"silence_seconds": N, "run_log_tail": "..."}}` | Observation surface (run-log or queue+records) silent for ≥ `--stall-secs`. The execution is stuck. |
 | **130** | SIGTERM/SIGINT | None | Clean signal exit (no Python traceback) |
 
+## Observation Surface
+
+**Diff detection (exit 0 with `{"changed": [...]}`)**:
+- Scope: `5_tasks/queue/**` and `5_tasks/records/**` only
+- Any new/modified/moved/deleted file in these subtrees triggers exit 0
+
+**Expect matching (exit 0 with `{"expect_satisfied": [...]}`)**:
+- Scope: entire workspace-root (F-284-1)
+- Walk range: static prefix directory of each glob pattern (not full tree)
+- Example: `--expect "task_cards/AIPOS-284/*.md"` walks only `task_cards/AIPOS-284/`
+- Patterns must be relative; absolute paths and `..` escapes are rejected
+
+**Stall detection (exit 4)**:
+- With `--run-log`: observes run-log mtime only
+- Without `--run-log`: observes `5_tasks/queue/**` and `5_tasks/records/**` (same as diff scope)
+
 ## v2 Parameters (AIPOS-284)
 
 ### `--expect <glob>` (repeatable)
 **布防即检** — Check immediately on startup AND on every poll. If any file matches the glob pattern, exit 0 with `{"expect_satisfied": [paths]}`.
 
-**Use case:** Wait for a specific artifact (e.g., `--expect "5_tasks/records/RETURN.md"`).
+**Observation surface (F-284-1):** `--expect` patterns are matched against the ENTIRE workspace-root, not just `5_tasks/queue/**` and `5_tasks/records/**`. The walk scope is limited to the static prefix directory of each glob pattern (e.g., `task_cards/AIPOS-284/*.md` walks only `task_cards/AIPOS-284/`, not the entire tree). Patterns must be relative to workspace-root; absolute paths and `..` escapes are rejected.
+
+**Use case:** Wait for a specific artifact (e.g., `--expect "5_tasks/records/RETURN.md"` or `--expect "task_cards/AIPOS-284/RETURN.md"`).
 
 **Example:**
 ```bash
