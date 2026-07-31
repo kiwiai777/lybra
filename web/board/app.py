@@ -301,6 +301,7 @@ def _api_routes(repo_root: Path | None, board_config_path: Path | None = None) -
 
 def _api_post_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
     return {
+        "/api/workspace/init": partial(_workspace_init_route, repo_root=repo_root),
         "/api/parent-requirement/preview": partial(_parent_requirement_preview_route, repo_root=repo_root),
         "/api/planner-tick/preview": partial(_planner_tick_preview_route, repo_root=repo_root),
         "/api/planner-tick/manual-flow/preview": partial(_planner_tick_manual_flow_preview_route, repo_root=repo_root),
@@ -2350,6 +2351,89 @@ def _agent_profile_confirm_route(payload: dict[str, Any], *, repo_root: Path | N
         )
     except Exception as exc:
         return _execute_error("custom_agent_profile_write", str(exc))
+
+
+def _workspace_init_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    """AIPOS-277: Server-side workspace init + board_config registration."""
+    from tools.aipos_cli.workspace_templates import execute_workspace_init
+    
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        return blocked_response(
+            operation="workspace_init",
+            dry_run=False,
+            category="VALIDATION_ERROR",
+            message="project_id is required",
+        )
+    
+    if not re.match(r"^[a-z0-9_-]+$", project_id):
+        return blocked_response(
+            operation="workspace_init",
+            dry_run=False,
+            category="VALIDATION_ERROR",
+            message="project_id must use lowercase letters, numbers, dash, or underscore",
+        )
+    
+    # Default workspace path
+    home = Path.home()
+    output_path = home / ".lybra" / "workspaces" / project_id
+    
+    if output_path.exists() and any(output_path.iterdir()):
+        return blocked_response(
+            operation="workspace_init",
+            dry_run=False,
+            category="VALIDATION_ERROR",
+            message=f"Workspace path already exists and is not empty: {output_path}",
+        )
+    
+    try:
+        # Execute workspace init with blank template
+        result = execute_workspace_init(
+            template="blank",
+            output=output_path,
+            variables={"project_id": project_id},
+            actor="board.server",
+            template_repo_root=REPO_ROOT,
+        )
+        
+        if not result.get("ok"):
+            return result
+        
+        # Append to board_config.json (追加不重写)
+        board_config_path = (repo_root or REPO_ROOT) / ".lybra" / "board_config.json"
+        board_config_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        workspaces = []
+        if board_config_path.exists():
+            try:
+                data = json.loads(board_config_path.read_text(encoding="utf-8"))
+                workspaces = data.get("workspaces", [])
+            except (json.JSONDecodeError, OSError):
+                pass
+        
+        # Check if already registered
+        existing = any(ws.get("root") == str(output_path) for ws in workspaces)
+        if not existing:
+            workspaces.append({
+                "label": project_id.replace("-", " ").replace("_", " ").title(),
+                "root": str(output_path)
+            })
+            board_config_path.write_text(
+                json.dumps({"workspaces": workspaces}, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8"
+            )
+        
+        result["board_config_updated"] = not existing
+        result["workspace_path"] = str(output_path)
+        return result
+        
+    except Exception as exc:
+        return blocked_response(
+            operation="workspace_init",
+            dry_run=False,
+            category="EXECUTION_ERROR",
+            message=str(exc),
+        )
 
 
 def _execute_dry_run_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:

@@ -25,10 +25,75 @@
       <div class="kicker-box"></div>
       <span class="kicker-text" id="kicker-text">Workspaces</span>
     </div>
-    <h2 class="section-title" id="section-title">All Projects</h2>
+    <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem;">
+      <h2 class="section-title" id="section-title" style="margin-bottom: 0;">All Projects</h2>
+      <button id="add-project-btn" class="add-project-btn" title="Add new project" aria-label="Add new project">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        <span id="add-project-text"></span>
+      </button>
+    </div>
     
     <div id="workspace-grid" class="workspace-grid" data-owner-truth="overview">
       <div class="loading">Loading workspaces...</div>
+    </div>
+
+    <!-- AIPOS-277: New Project Panel (modal) -->
+    <div id="add-project-modal" class="modal-mask" hidden>
+      <div class="modal-panel">
+        <div class="modal-header">
+          <h3 id="modal-title"></h3>
+          <button id="modal-close" class="modal-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="modal-intro"></p>
+          
+          <div class="input-group">
+            <label for="project-name-input" id="project-name-label"></label>
+            <input type="text" id="project-name-input" placeholder="my-project" />
+            <div class="input-hint" id="project-name-hint"></div>
+          </div>
+
+          <div class="setup-options">
+            <!-- Option A: Copy command -->
+            <div class="setup-option">
+              <div class="option-header">
+                <span class="option-badge">A</span>
+                <h4 id="option-a-title"></h4>
+              </div>
+              <p id="option-a-desc"></p>
+              <div class="code-block">
+                <code id="init-command">lybra init --project-id my-project</code>
+                <button id="copy-init-btn" class="copy-btn" title="Copy command">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <span id="copy-btn-text"></span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Option B: Server-side init (if serve has file permissions) -->
+            <div class="setup-option">
+              <div class="option-header">
+                <span class="option-badge">B</span>
+                <h4 id="option-b-title"></h4>
+              </div>
+              <p id="option-b-desc"></p>
+              <button id="server-init-btn" class="action-btn" disabled>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 5v14M5 12l7 7 7-7"></path>
+                </svg>
+                <span id="server-init-text"></span>
+              </button>
+              <div id="server-init-result" class="result-message" hidden></div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </main>
 
@@ -41,6 +106,19 @@
       document.getElementById('page-subtitle').textContent = i18n.t('overview.subtitle');
       document.getElementById('kicker-text').textContent = i18n.t('overview.workspaces');
       document.getElementById('section-title').textContent = i18n.t('overview.all_projects');
+      document.getElementById('add-project-text').textContent = i18n.t('overview.add_project');
+      
+      // Modal i18n
+      document.getElementById('modal-title').textContent = i18n.t('overview.new_project_modal.title');
+      document.getElementById('modal-intro').textContent = i18n.t('overview.new_project_modal.intro');
+      document.getElementById('project-name-label').textContent = i18n.t('overview.new_project_modal.project_name');
+      document.getElementById('project-name-hint').textContent = i18n.t('overview.new_project_modal.project_name_hint');
+      document.getElementById('option-a-title').textContent = i18n.t('overview.new_project_modal.option_a');
+      document.getElementById('option-a-desc').textContent = i18n.t('overview.new_project_modal.option_a_desc');
+      document.getElementById('option-b-title').textContent = i18n.t('overview.new_project_modal.option_b');
+      document.getElementById('option-b-desc').textContent = i18n.t('overview.new_project_modal.option_b_desc');
+      document.getElementById('copy-btn-text').textContent = i18n.t('overview.copy');
+      document.getElementById('server-init-text').textContent = i18n.t('overview.init_now');
       
       // Mount language switcher
       const switcherMount = document.getElementById('lang-switcher-mount');
@@ -243,6 +321,103 @@
       return card;
     }
     
+    // AIPOS-277: Add Project modal logic
+    const addProjectBtn = document.getElementById('add-project-btn');
+    const modal = document.getElementById('add-project-modal');
+    const modalClose = document.getElementById('modal-close');
+    const projectNameInput = document.getElementById('project-name-input');
+    const initCommandEl = document.getElementById('init-command');
+    const copyInitBtn = document.getElementById('copy-init-btn');
+    const serverInitBtn = document.getElementById('server-init-btn');
+    const serverInitResult = document.getElementById('server-init-result');
+
+    function openAddProjectModal() {
+      modal.hidden = false;
+      projectNameInput.value = '';
+      projectNameInput.focus();
+      updateInitCommand();
+      serverInitResult.hidden = true;
+    }
+
+    function closeAddProjectModal() {
+      modal.hidden = true;
+    }
+
+    function updateInitCommand() {
+      const projectName = projectNameInput.value.trim() || 'my-project';
+      const defaultPath = `~/.lybra/workspaces/${projectName}/`;
+      initCommandEl.textContent = `lybra init ${defaultPath} --project-id ${projectName}`;
+      serverInitBtn.disabled = !projectName || projectName === 'my-project';
+    }
+
+    async function copyInitCommand() {
+      const command = initCommandEl.textContent;
+      try {
+        await navigator.clipboard.writeText(command);
+        const btnText = document.getElementById('copy-btn-text');
+        btnText.textContent = i18n.t('overview.copied') || 'Copied!';
+        copyInitBtn.classList.add('copied');
+        setTimeout(() => {
+          btnText.textContent = i18n.t('overview.copy') || 'Copy';
+          copyInitBtn.classList.remove('copied');
+        }, 2000);
+      } catch (err) {
+        alert('Failed to copy: ' + err.message);
+      }
+    }
+
+    async function serverSideInit() {
+      const projectName = projectNameInput.value.trim();
+      if (!projectName || !/^[a-z0-9_-]+$/.test(projectName)) {
+        serverInitResult.textContent = 'Invalid project name. Use lowercase letters, numbers, dash, or underscore only.';
+        serverInitResult.className = 'result-message error';
+        serverInitResult.hidden = false;
+        return;
+      }
+
+      serverInitBtn.disabled = true;
+      serverInitResult.textContent = i18n.t('overview.initializing') || 'Initializing workspace...';
+      serverInitResult.className = 'result-message info';
+      serverInitResult.hidden = false;
+
+      try {
+        const response = await fetch('/api/workspace/init', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id: projectName })
+        });
+        const data = await response.json();
+
+        if (data.ok) {
+          serverInitResult.textContent = i18n.t('overview.init_success') || 'Workspace created successfully! Refreshing...';
+          serverInitResult.className = 'result-message success';
+          setTimeout(() => {
+            window.location.reload();
+          }, 1500);
+        } else {
+          serverInitResult.textContent = `Error: ${data.message || data.error || 'Unknown error'}`;
+          serverInitResult.className = 'result-message error';
+          serverInitBtn.disabled = false;
+        }
+      } catch (err) {
+        serverInitResult.textContent = `Failed: ${err.message}`;
+        serverInitResult.className = 'result-message error';
+        serverInitBtn.disabled = false;
+      }
+    }
+
+    addProjectBtn.addEventListener('click', openAddProjectModal);
+    modalClose.addEventListener('click', closeAddProjectModal);
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeAddProjectModal();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !modal.hidden) closeAddProjectModal();
+    });
+    projectNameInput.addEventListener('input', updateInitCommand);
+    copyInitBtn.addEventListener('click', copyInitCommand);
+    serverInitBtn.addEventListener('click', serverSideInit);
+
     // Load on page ready
     renderPage();
   </script>
