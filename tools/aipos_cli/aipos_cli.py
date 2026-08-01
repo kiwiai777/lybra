@@ -100,6 +100,12 @@ from tools.aipos_cli.workspace_config import (
     write_workspace_config,
 )
 from tools.aipos_cli.home_git import execute_home_git_init, plan_home_git_init
+from tools.aipos_cli.project_structure import (
+    export_project_to_yaml,
+    import_project_structure,
+    validate_structure,
+    parse_yaml,
+)
 
 
 def _filter_my_tasks(report: dict[str, Any], actor: str, profiles: dict[str, Any]) -> dict[str, Any]:
@@ -1248,6 +1254,18 @@ def build_parser() -> argparse.ArgumentParser:
     project_setrepo_parser.add_argument("--code-repo", required=True, help="Absolute path to the project's code repo")
     project_setrepo_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setrepo_parser.add_argument("--actor", default=default_actor, help="Provenance actor (registered_by); defaults to $USER or owner")
+    # AIPOS-293: export/import project structure file
+    project_export_parser = project_subparsers.add_parser("export", help="AIPOS-293: Export workspace structure to a YAML file")
+    project_export_parser.add_argument("workspace_root", nargs="?", help="Workspace root to export (defaults to current workspace)")
+    project_export_parser.add_argument("--output", "-o", help="Output file path (default: <workspace>/lybra-project.yaml)")
+    project_export_parser.add_argument("--project-name", help="Override project name in the structure file")
+    project_export_parser.add_argument("--json", action="store_true", help="Output JSON")
+    project_import_parser = project_subparsers.add_parser("import", help="AIPOS-293: Import project from a structure file")
+    project_import_parser.add_argument("structure_file", help="Path to lybra-project.yaml structure file")
+    project_import_parser.add_argument("output_root", help="Target directory for the imported project")
+    project_import_parser.add_argument("--dry-run", action="store_true", help="Preview planned writes without creating")
+    project_import_parser.add_argument("--actor", default=default_actor, help="Actor for provenance (registered_by)")
+    project_import_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     home_parser = subparsers.add_parser("home", help="Governance home operations (Owner-explicit, local only)")
     home_subparsers = home_parser.add_subparsers(dest="home_command")
@@ -1571,7 +1589,11 @@ def main(argv: list[str] | None = None) -> int:
             parser.print_help()
             return 2
         try:
-            home = resolve_home_root(explicit_root=args.home_root)
+            # AIPOS-293: export/import don't need home_root
+            if args.project_command in ("export", "import"):
+                pass  # handled below
+            else:
+                home = resolve_home_root(explicit_root=args.home_root)
             if args.project_command == "new":
                 root = scaffold_project(
                     home, args.name, code_repo=args.code_repo, registered_by=args.actor
@@ -1587,6 +1609,56 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()}")
                 return 0
+            if args.project_command == "export":
+                ws_root = args.workspace_root
+                if not ws_root:
+                    try:
+                        ws_root = str(resolve_workspace_root())
+                    except (FileNotFoundError, OSError) as exc:
+                        print(f"Error: {exc}", file=sys.stderr)
+                        print("Hint: provide workspace_root or run from within a workspace.", file=sys.stderr)
+                        return 1
+                result = export_project_to_yaml(
+                    ws_root,
+                    project_name=args.project_name,
+                    output_path=args.output,
+                )
+                if args.json:
+                    print(render_json(result))
+                else:
+                    if result.get("ok"):
+                        print(f"Exported project structure to: {result['output_path']}")
+                        print(f"  Project: {result['structure']['project_name']}")
+                        print(f"  Documents: {result['doc_count']}")
+                        print(f"  Governance files: {', '.join(result['governance_files'])}")
+                    else:
+                        print(f"Export failed: {result.get('blocking_reasons')}", file=sys.stderr)
+                return 0 if result.get("ok") else 1
+            if args.project_command == "import":
+                result = import_project_structure(
+                    args.structure_file,
+                    args.output_root,
+                    dry_run=args.dry_run,
+                    actor=args.actor,
+                )
+                if args.json:
+                    print(render_json(result))
+                else:
+                    if result.get("ok"):
+                        if args.dry_run:
+                            print(f"Dry-run: would create project '{result['project_name']}' at {result['output_root']}")
+                            print(f"  Directories: {len(result['planned_dirs'])}")
+                            print(f"  Files: {len(result['planned_files'])}")
+                            print(f"  Migration items: {result['migration_item_count']}")
+                        else:
+                            print(f"Imported project '{result['project_name']}' to {result['output_root']}")
+                            print(f"  Directories created: {len(result['planned_dirs'])}")
+                            print(f"  Files written: {len(result['planned_files'])}")
+                            print(f"  Skipped (existing): {len(result['skipped_existing'])}")
+                            print(f"  Migration checklist: {result['migration_checklist']}")
+                    else:
+                        print(f"Import failed: {result.get('blocking_reasons')}", file=sys.stderr)
+                return 0 if result.get("ok") else 1
         except (FileNotFoundError, FileExistsError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1

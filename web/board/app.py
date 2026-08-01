@@ -316,6 +316,8 @@ def _api_routes(repo_root: Path | None, board_config_path: Path | None = None) -
 def _api_post_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
     return {
         "/api/workspace/init": partial(_workspace_init_route, repo_root=repo_root),
+        "/api/project-structure/preview": partial(_project_structure_preview_route, repo_root=repo_root),
+        "/api/project-structure/import": partial(_project_structure_import_route, repo_root=repo_root),
         "/api/parent-requirement/preview": partial(_parent_requirement_preview_route, repo_root=repo_root),
         "/api/planner-tick/preview": partial(_planner_tick_preview_route, repo_root=repo_root),
         "/api/planner-tick/manual-flow/preview": partial(_planner_tick_manual_flow_preview_route, repo_root=repo_root),
@@ -2818,6 +2820,351 @@ def _workspace_init_route(payload: dict[str, Any], *, repo_root: Path | None) ->
             category="EXECUTION_ERROR",
             message=str(exc),
         )
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-293 FIX-1: Error code → i18n key mapping for humanized errors
+# ---------------------------------------------------------------------------
+
+# Maps backend error codes to i18n keys. Frontend uses these keys to display
+# localized, actionable error messages. "Unknown error" is forbidden.
+_ERROR_CODE_TO_I18N: dict[str, str] = {
+    "path_required": "error.import.path_required",
+    "path_not_exists": "error.import.path_not_exists",
+    "path_not_directory": "error.import.path_not_directory",
+    "path_not_file": "error.import.path_not_file",
+    "path_not_yaml": "error.import.path_not_yaml",
+    "file_read_failed": "error.import.file_read_failed",
+    "schema_validation_failed": "error.import.schema_validation_failed",
+    "project_id_required": "error.import.project_id_required",
+    "project_id_invalid": "error.import.project_id_invalid",
+    "workspace_not_empty": "error.import.workspace_not_empty",
+    "export_failed": "error.import.export_failed",
+    "import_failed": "error.import.import_failed",
+    "unexpected_error": "error.import.unexpected_error",
+}
+
+
+def _humanized_error(code: str, detail: str = "", **extra: Any) -> dict[str, Any]:
+    """Return a structured error response with i18n error code.
+
+    AIPOS-293 FIX-1: All errors must carry an error_code that maps to an i18n key.
+    The 'Unknown error' string is forbidden — every error path must use this helper
+    or include an explicit error_code.
+    """
+    i18n_key = _ERROR_CODE_TO_I18N.get(code, "error.import.unexpected_error")
+    result: dict[str, Any] = {
+        "ok": False,
+        "error_code": code,
+        "error_i18n_key": i18n_key,
+        "error_detail": detail,
+    }
+    result.update(extra)
+    return result
+
+
+def _project_structure_preview_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    """AIPOS-293 S4 + FIX-1: Preview structure from directory OR structure file.
+
+    Supports two modes:
+    - mode="directory" (default): Export structure from an existing workspace directory
+    - mode="file": Read and validate a YAML structure file directly
+    """
+    from tools.aipos_cli.project_structure import (
+        export_project_structure,
+        validate_structure,
+        parse_yaml,
+        _check_no_credentials,
+    )
+
+    mode = str(payload.get("mode") or "directory").strip().lower()
+    workspace_path = str(payload.get("workspace_path") or "").strip()
+    structure_file_path = str(payload.get("structure_file_path") or "").strip()
+
+    # --- Mode: file (AIPOS-293 FIX-1: direct structure file import) ---
+    if mode == "file":
+        if not structure_file_path:
+            return {
+                **_humanized_error("path_required", "Structure file path is required"),
+                "operation": "project_structure_preview",
+            }
+
+        fp = Path(structure_file_path).expanduser().resolve()
+        if not fp.exists():
+            return {
+                **_humanized_error("path_not_exists", str(fp)),
+                "operation": "project_structure_preview",
+            }
+        if not fp.is_file():
+            return {
+                **_humanized_error("path_not_file", str(fp)),
+                "operation": "project_structure_preview",
+            }
+        if fp.suffix.lower() not in (".yaml", ".yml"):
+            return {
+                **_humanized_error("path_not_yaml", str(fp)),
+                "operation": "project_structure_preview",
+            }
+
+        try:
+            yaml_text = fp.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return {
+                **_humanized_error("file_read_failed", str(exc)),
+                "operation": "project_structure_preview",
+            }
+
+        try:
+            structure = parse_yaml(yaml_text)
+        except Exception as exc:
+            return {
+                **_humanized_error("schema_validation_failed", str(exc)),
+                "operation": "project_structure_preview",
+            }
+
+        errors = validate_structure(structure)
+        if errors:
+            return {
+                **_humanized_error("schema_validation_failed", "; ".join(errors)),
+                "operation": "project_structure_preview",
+                "validation_errors": errors,
+            }
+
+        # Credential safety check (red line)
+        cred_findings = _check_no_credentials(structure)
+        if cred_findings:
+            return {
+                **_humanized_error("schema_validation_failed", "Credential values detected"),
+                "operation": "project_structure_preview",
+                "validation_errors": cred_findings,
+            }
+
+        return {
+            "ok": True,
+            "operation": "project_structure_preview",
+            "mode": "file",
+            "source_file": str(fp),
+            "project_name": structure.get("project_name"),
+            "description": structure.get("description", ""),
+            "code_repos": structure.get("code_repos", []),
+            "doc_count": len(structure.get("doc_manifest", [])),
+            "governance_files": list(structure.get("governance_files", {}).keys()),
+            "queue_summary": structure.get("queue_summary", {}),
+            "roles": structure.get("roles", []),
+        }
+
+    # --- Mode: directory (default, existing behavior) ---
+    if not workspace_path:
+        return {
+            **_humanized_error("path_required", "Workspace path is required"),
+            "operation": "project_structure_preview",
+        }
+
+    ws = Path(workspace_path).expanduser().resolve()
+    if not ws.exists():
+        return {
+            **_humanized_error("path_not_exists", str(ws)),
+            "operation": "project_structure_preview",
+        }
+    if not ws.is_dir():
+        # AIPOS-293 FIX-1: Smart suggestion — if user typed a .yaml path, suggest file mode
+        if ws.suffix.lower() in (".yaml", ".yml"):
+            return {
+                **_humanized_error("path_not_directory", str(ws)),
+                "operation": "project_structure_preview",
+                "suggest_file_mode": True,
+            }
+        return {
+            **_humanized_error("path_not_directory", str(ws)),
+            "operation": "project_structure_preview",
+        }
+
+    try:
+        structure = export_project_structure(ws)
+        errors = validate_structure(structure)
+        if errors:
+            return {
+                **_humanized_error("schema_validation_failed", "; ".join(errors)),
+                "operation": "project_structure_preview",
+                "validation_errors": errors,
+            }
+        return {
+            "ok": True,
+            "operation": "project_structure_preview",
+            "mode": "directory",
+            "project_name": structure.get("project_name"),
+            "description": structure.get("description", ""),
+            "code_repos": structure.get("code_repos", []),
+            "doc_count": len(structure.get("doc_manifest", [])),
+            "governance_files": list(structure.get("governance_files", {}).keys()),
+            "queue_summary": structure.get("queue_summary", {}),
+            "roles": structure.get("roles", []),
+        }
+    except Exception as exc:
+        return {
+            **_humanized_error("unexpected_error", str(exc)),
+            "operation": "project_structure_preview",
+        }
+
+
+def _project_structure_import_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
+    """AIPOS-293 S4 + FIX-1: Import workspace from directory OR structure file.
+
+    Supports two modes:
+    - mode="directory" (default): Export from directory then import (existing behavior)
+    - mode="file": Import directly from a YAML structure file (new in FIX-1)
+    """
+    from tools.aipos_cli.project_structure import export_project_to_yaml, import_project_structure
+
+    mode = str(payload.get("mode") or "directory").strip().lower()
+    workspace_path = str(payload.get("workspace_path") or "").strip()
+    structure_file_path = str(payload.get("structure_file_path") or "").strip()
+    project_id = str(payload.get("project_id") or "").strip()
+    label_en = str(payload.get("label_en") or "").strip()
+
+    # --- Common validation ---
+    if not project_id:
+        return {
+            **_humanized_error("project_id_required", "project_id is required"),
+            "operation": "project_structure_import",
+        }
+    if not re.match(r"^[a-z0-9_-]+$", project_id):
+        return {
+            **_humanized_error("project_id_invalid", "project_id must use lowercase letters, numbers, dash, or underscore"),
+            "operation": "project_structure_import",
+        }
+
+    # Target workspace path
+    home = Path.home()
+    output_path = home / ".lybra" / "workspaces" / project_id
+
+    if output_path.exists() and any(output_path.iterdir()):
+        return {
+            **_humanized_error("workspace_not_empty", f"Target workspace already exists and is not empty: {output_path}"),
+            "operation": "project_structure_import",
+        }
+
+    try:
+        # --- Mode: file (AIPOS-293 FIX-1: direct structure file import) ---
+        if mode == "file":
+            if not structure_file_path:
+                return {
+                    **_humanized_error("path_required", "Structure file path is required"),
+                    "operation": "project_structure_import",
+                }
+
+            fp = Path(structure_file_path).expanduser().resolve()
+            if not fp.exists():
+                return {
+                    **_humanized_error("path_not_exists", str(fp)),
+                    "operation": "project_structure_import",
+                }
+            if not fp.is_file():
+                return {
+                    **_humanized_error("path_not_file", str(fp)),
+                    "operation": "project_structure_import",
+                }
+            if fp.suffix.lower() not in (".yaml", ".yml"):
+                return {
+                    **_humanized_error("path_not_yaml", str(fp)),
+                    "operation": "project_structure_import",
+                }
+
+            # Import directly from the structure file
+            import_result = import_project_structure(fp, output_path, actor="board.import-wizard")
+            if not import_result.get("ok"):
+                blocking = import_result.get("blocking_reasons", "unknown")
+                if isinstance(blocking, list):
+                    blocking = "; ".join(blocking)
+                return {
+                    **_humanized_error("import_failed", str(blocking)),
+                    "operation": "project_structure_import",
+                }
+
+        # --- Mode: directory (default, existing behavior) ---
+        else:
+            if not workspace_path:
+                return {
+                    **_humanized_error("path_required", "Workspace path is required"),
+                    "operation": "project_structure_import",
+                }
+
+            ws = Path(workspace_path).expanduser().resolve()
+            if not ws.exists():
+                return {
+                    **_humanized_error("path_not_exists", str(ws)),
+                    "operation": "project_structure_import",
+                }
+            if not ws.is_dir():
+                if ws.suffix.lower() in (".yaml", ".yml"):
+                    return {
+                        **_humanized_error("path_not_directory", str(ws)),
+                        "operation": "project_structure_import",
+                        "suggest_file_mode": True,
+                    }
+                return {
+                    **_humanized_error("path_not_directory", str(ws)),
+                    "operation": "project_structure_import",
+                }
+
+            # Step 1: Export source workspace to a temp YAML file
+            import tempfile as _tempfile
+            tmp_yaml = Path(_tempfile.mkdtemp(prefix="aipos293_import_")) / "lybra-project.yaml"
+            export_result = export_project_to_yaml(ws, project_name=project_id, output_path=tmp_yaml)
+            if not export_result.get("ok"):
+                blocking = export_result.get("blocking_reasons", "unknown")
+                if isinstance(blocking, list):
+                    blocking = "; ".join(blocking)
+                return {
+                    **_humanized_error("export_failed", str(blocking)),
+                    "operation": "project_structure_import",
+                }
+
+            # Step 2: Import from structure file to target
+            import_result = import_project_structure(tmp_yaml, output_path, actor="board.import-wizard")
+            if not import_result.get("ok"):
+                blocking = import_result.get("blocking_reasons", "unknown")
+                if isinstance(blocking, list):
+                    blocking = "; ".join(blocking)
+                return {
+                    **_humanized_error("import_failed", str(blocking)),
+                    "operation": "project_structure_import",
+                }
+
+        # Step 3: Register in board_config.json (shared by both modes)
+        board_config_path = (repo_root or REPO_ROOT) / ".lybra" / "board_config.json"
+        board_config_path.parent.mkdir(parents=True, exist_ok=True)
+        workspaces = []
+        if board_config_path.exists():
+            try:
+                data = json.loads(board_config_path.read_text(encoding="utf-8"))
+                workspaces = data.get("workspaces", [])
+            except (json.JSONDecodeError, OSError):
+                pass
+        existing = any(ws_entry.get("root") == str(output_path) for ws_entry in workspaces)
+        if not existing:
+            ws_entry = {
+                "label": project_id.replace("-", " ").replace("_", " ").title(),
+                "root": str(output_path),
+            }
+            if label_en:
+                ws_entry["label_en"] = label_en
+            workspaces.append(ws_entry)
+            board_config_path.write_text(
+                json.dumps({"workspaces": workspaces}, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+        import_result["board_config_updated"] = not existing
+        import_result["workspace_path"] = str(output_path)
+        import_result["mode"] = mode
+        return import_result
+
+    except Exception as exc:
+        return {
+            **_humanized_error("unexpected_error", str(exc)),
+            "operation": "project_structure_import",
+        }
 
 
 def _execute_dry_run_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:

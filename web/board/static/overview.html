@@ -98,6 +98,65 @@
               </button>
               <div id="server-init-result" class="result-message" hidden></div>
             </div>
+
+            <!-- AIPOS-293 S4 + FIX-1: Option C: Import existing project (dual mode) -->
+            <div class="setup-option">
+              <div class="option-header">
+                <span class="option-badge">C</span>
+                <h4 id="option-c-title"></h4>
+              </div>
+              <p id="option-c-desc"></p>
+
+              <!-- Mode toggle: directory vs structure file -->
+              <div class="import-mode-toggle" style="margin-top: 0.5rem; display: flex; gap: 0.5rem; align-items: center;">
+                <label style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+                  <input type="radio" name="import-mode" value="directory" id="import-mode-directory" checked />
+                  <span id="import-mode-directory-label"></span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+                  <input type="radio" name="import-mode" value="file" id="import-mode-file" />
+                  <span id="import-mode-file-label"></span>
+                </label>
+              </div>
+
+              <!-- Mode 1: Directory path input -->
+              <div id="import-mode-directory-panel" class="input-group" style="margin-top: 0.5rem;">
+                <label for="import-workspace-path" id="import-workspace-label"></label>
+                <input type="text" id="import-workspace-path" placeholder="~/projects/my-existing-project" />
+                <div class="input-hint" id="import-workspace-hint"></div>
+                <!-- Smart hint: shown when .yaml detected in directory input -->
+                <div id="import-yaml-hint" class="input-hint" style="color: #d97706; display: none; margin-top: 0.25rem;"></div>
+              </div>
+
+              <!-- Mode 2: Structure file input (hidden by default) -->
+              <div id="import-mode-file-panel" class="input-group" style="margin-top: 0.5rem; display: none;">
+                <label for="import-structure-file-path" id="import-structure-file-label"></label>
+                <input type="text" id="import-structure-file-path" placeholder="/tmp/lybra-structure.yaml" />
+                <div class="input-hint" id="import-structure-file-hint"></div>
+                <div style="margin-top: 0.5rem;">
+                  <label id="import-structure-file-upload-label" style="display: block; margin-bottom: 0.25rem;"></label>
+                  <input type="file" id="import-structure-file-upload" accept=".yaml,.yml" style="font-size: 0.85rem;" />
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                <button id="preview-import-btn" class="action-btn secondary">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                  <span id="preview-import-text"></span>
+                </button>
+                <button id="confirm-import-btn" class="action-btn" disabled>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 5v14M5 12l7 7 7-7"></path>
+                  </svg>
+                  <span id="confirm-import-text"></span>
+                </button>
+              </div>
+              <div id="import-preview-result" class="result-message" hidden></div>
+              <div id="import-final-result" class="result-message" hidden></div>
+            </div>
           </div>
         </div>
       </div>
@@ -137,6 +196,19 @@
       document.getElementById('option-b-desc').textContent = i18n.t('overview.new_project_modal.option_b_desc');
       document.getElementById('copy-btn-text').textContent = i18n.t('overview.copy');
       document.getElementById('server-init-text').textContent = i18n.t('overview.init_now');
+      // AIPOS-293 S4 + FIX-1: Option C i18n (dual mode)
+      document.getElementById('option-c-title').textContent = i18n.t('overview.new_project_modal.option_c');
+      document.getElementById('option-c-desc').textContent = i18n.t('overview.new_project_modal.option_c_desc');
+      document.getElementById('import-workspace-label').textContent = i18n.t('overview.new_project_modal.import_workspace_path');
+      document.getElementById('import-workspace-hint').textContent = i18n.t('overview.new_project_modal.import_workspace_hint');
+      document.getElementById('import-mode-directory-label').textContent = i18n.t('overview.new_project_modal.import_mode_directory');
+      document.getElementById('import-mode-file-label').textContent = i18n.t('overview.new_project_modal.import_mode_file');
+      document.getElementById('import-structure-file-label').textContent = i18n.t('overview.new_project_modal.import_structure_file_path');
+      document.getElementById('import-structure-file-hint').textContent = i18n.t('overview.new_project_modal.import_structure_file_hint');
+      document.getElementById('import-structure-file-upload-label').textContent = i18n.t('overview.new_project_modal.import_structure_file_upload');
+      document.getElementById('import-yaml-hint').textContent = i18n.t('overview.new_project_modal.import_yaml_hint');
+      document.getElementById('preview-import-text').textContent = i18n.t('overview.new_project_modal.preview_import');
+      document.getElementById('confirm-import-text').textContent = i18n.t('overview.new_project_modal.confirm_import');
       
       // Mount language switcher
       const switcherMount = document.getElementById('lang-switcher-mount');
@@ -357,6 +429,12 @@
       projectNameInput.focus();
       updateInitCommand();
       serverInitResult.hidden = true;
+      // AIPOS-293 S4: Reset Option C state
+      importWorkspacePath.value = '';
+      importPreviewResult.hidden = true;
+      importFinalResult.hidden = true;
+      confirmImportBtn.disabled = true;
+      importPreviewData = null;
     }
 
     function closeAddProjectModal() {
@@ -431,6 +509,248 @@
         serverInitBtn.disabled = false;
       }
     }
+
+    // AIPOS-293 S4 + FIX-1: Option C - Import existing project (dual mode)
+    const previewImportBtn = document.getElementById('preview-import-btn');
+    const confirmImportBtn = document.getElementById('confirm-import-btn');
+    const importWorkspacePath = document.getElementById('import-workspace-path');
+    const importStructureFilePath = document.getElementById('import-structure-file-path');
+    const importStructureFileUpload = document.getElementById('import-structure-file-upload');
+    const importPreviewResult = document.getElementById('import-preview-result');
+    const importFinalResult = document.getElementById('import-final-result');
+    const importModeDirectory = document.getElementById('import-mode-directory');
+    const importModeFile = document.getElementById('import-mode-file');
+    const importModeDirectoryPanel = document.getElementById('import-mode-directory-panel');
+    const importModeFilePanel = document.getElementById('import-mode-file-panel');
+    const importYamlHint = document.getElementById('import-yaml-hint');
+    let importPreviewData = null;
+
+    // Get current import mode
+    function getImportMode() {
+      return importModeFile.checked ? 'file' : 'directory';
+    }
+
+    // Mode toggle: show/hide panels
+    function updateImportModeUI() {
+      const mode = getImportMode();
+      if (mode === 'file') {
+        importModeDirectoryPanel.style.display = 'none';
+        importModeFilePanel.style.display = '';
+      } else {
+        importModeDirectoryPanel.style.display = '';
+        importModeFilePanel.style.display = 'none';
+      }
+      importYamlHint.style.display = 'none';
+    }
+
+    importModeDirectory.addEventListener('change', updateImportModeUI);
+    importModeFile.addEventListener('change', updateImportModeUI);
+
+    // Smart hint: if user types .yaml/.yml in directory input, suggest switching to file mode
+    importWorkspacePath.addEventListener('input', () => {
+      const val = importWorkspacePath.value.trim();
+      if (val.endsWith('.yaml') || val.endsWith('.yml')) {
+        importYamlHint.style.display = '';
+      } else {
+        importYamlHint.style.display = 'none';
+      }
+    });
+
+    // File upload: when user selects a file, populate the path input
+    importStructureFileUpload.addEventListener('change', () => {
+      const file = importStructureFileUpload.files[0];
+      if (file) {
+        importStructureFilePath.value = file.name;
+      }
+    });
+
+    // Humanized error display: map error_code to i18n message
+    function humanizeError(data, fallbackLang) {
+      const lang = fallbackLang || i18n.getCurrentLang();
+      const errorDetail = data.error_detail || '';
+      const i18nKey = data.error_i18n_key;
+
+      // Try i18n key first
+      if (i18nKey) {
+        const msg = i18n.t(i18nKey);
+        // If i18n returned the key itself (not found), fall back to detail
+        if (msg !== i18nKey) {
+          return msg.replace('{detail}', errorDetail);
+        }
+      }
+
+      // Fallback: use error_detail with actionable suggestion
+      if (errorDetail) {
+        return errorDetail;
+      }
+
+      // Last resort (should never happen with FIX-1)
+      return i18n.t('error.import.unexpected_error').replace('{detail}', '');
+    }
+
+    async function previewImport() {
+      const mode = getImportMode();
+      const payload = { mode };
+
+      if (mode === 'file') {
+        const filePath = importStructureFilePath.value.trim();
+        if (!filePath) {
+          importPreviewResult.textContent = i18n.t('overview.new_project_modal.import_path_required') || 'Please enter a structure file path';
+          importPreviewResult.className = 'result-message error';
+          importPreviewResult.hidden = false;
+          return;
+        }
+        payload.structure_file_path = filePath;
+      } else {
+        const wsPath = importWorkspacePath.value.trim();
+        if (!wsPath) {
+          importPreviewResult.textContent = i18n.t('overview.new_project_modal.import_path_required') || 'Please enter a workspace path';
+          importPreviewResult.className = 'result-message error';
+          importPreviewResult.hidden = false;
+          return;
+        }
+        payload.workspace_path = wsPath;
+      }
+
+      previewImportBtn.disabled = true;
+      importPreviewResult.textContent = i18n.t('overview.new_project_modal.previewing') || 'Scanning...';
+      importPreviewResult.className = 'result-message info';
+      importPreviewResult.hidden = false;
+      importFinalResult.hidden = true;
+      confirmImportBtn.disabled = true;
+      importPreviewData = null;
+
+      try {
+        const response = await fetch('/api/project-structure/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        const lang = i18n.getCurrentLang();
+        if (data.ok) {
+          importPreviewData = data;
+          const lines = [];
+          const sourceLabel = mode === 'file'
+            ? i18n.t('overview.new_project_modal.preview_file_loaded')
+            : i18n.t('overview.new_project_modal.preview_workspace_found');
+          lines.push(sourceLabel);
+          lines.push(`  ${i18n.t('overview.new_project_modal.preview_field_project')}: ${data.project_name || '?'}`);
+          if (data.description) lines.push(`  ${i18n.t('overview.new_project_modal.preview_field_description')}: ${data.description}`);
+          lines.push(`  ${i18n.t('overview.new_project_modal.preview_field_documents')}: ${data.doc_count}`);
+          if (data.code_repos && data.code_repos.length > 0) {
+            lines.push(`  ${i18n.t('overview.new_project_modal.preview_field_code_repos')}: ${data.code_repos.join(', ')}`);
+          }
+          if (data.governance_files && data.governance_files.length > 0) {
+            lines.push(`  ${i18n.t('overview.new_project_modal.preview_field_governance')}: ${data.governance_files.join(', ')}`);
+          }
+          lines.push('');
+          lines.push(i18n.t('overview.new_project_modal.preview_instruction'));
+          importPreviewResult.textContent = lines.join('\n');
+          importPreviewResult.className = 'result-message success';
+          importPreviewResult.style.whiteSpace = 'pre-line';
+          confirmImportBtn.disabled = false;
+        } else {
+          const errorMsg = humanizeError(data, lang);
+          let extraHint = '';
+          if (data.suggest_file_mode) {
+            extraHint = i18n.t('overview.new_project_modal.suggest_file_mode_hint');
+          }
+          importPreviewResult.textContent = `${i18n.t('overview.new_project_modal.preview_error_prefix')}: ${errorMsg}${extraHint}`;
+          importPreviewResult.className = 'result-message error';
+        }
+      } catch (err) {
+        importPreviewResult.textContent = `Failed: ${err.message}`;
+        importPreviewResult.className = 'result-message error';
+      }
+      previewImportBtn.disabled = false;
+    }
+
+    async function confirmImport() {
+      const mode = getImportMode();
+      const projectName = projectNameInput.value.trim();
+      const projectNameEn = projectNameEnInput.value.trim();
+
+      // Validate path based on mode
+      if (mode === 'file') {
+        const filePath = importStructureFilePath.value.trim();
+        if (!filePath) {
+          importFinalResult.textContent = i18n.t('overview.new_project_modal.import_path_required') || 'Please enter a structure file path';
+          importFinalResult.className = 'result-message error';
+          importFinalResult.hidden = false;
+          return;
+        }
+      } else {
+        const wsPath = importWorkspacePath.value.trim();
+        if (!wsPath) {
+          importFinalResult.textContent = i18n.t('overview.new_project_modal.import_path_required') || 'Please enter a workspace path';
+          importFinalResult.className = 'result-message error';
+          importFinalResult.hidden = false;
+          return;
+        }
+      }
+
+      if (!projectName) {
+        importFinalResult.textContent = i18n.t('overview.new_project_modal.need_project_name') || 'Please enter a project name above';
+        importFinalResult.className = 'result-message error';
+        importFinalResult.hidden = false;
+        return;
+      }
+      if (!/^[a-z0-9_-]+$/.test(projectName)) {
+        importFinalResult.textContent = i18n.t('overview.new_project_modal.invalid_name') || 'Invalid project name. Use lowercase letters, numbers, dash, or underscore only.';
+        importFinalResult.className = 'result-message error';
+        importFinalResult.hidden = false;
+        return;
+      }
+      confirmImportBtn.disabled = true;
+      importFinalResult.textContent = i18n.t('overview.new_project_modal.importing') || 'Importing workspace...';
+      importFinalResult.className = 'result-message info';
+      importFinalResult.hidden = false;
+
+      try {
+        const payload = { mode, project_id: projectName };
+        if (mode === 'file') {
+          payload.structure_file_path = importStructureFilePath.value.trim();
+        } else {
+          payload.workspace_path = importWorkspacePath.value.trim();
+        }
+        if (projectNameEn) payload.label_en = projectNameEn;
+        const response = await fetch('/api/project-structure/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        const lang = i18n.getCurrentLang();
+        if (data.ok) {
+          importFinalResult.textContent = i18n.t('overview.new_project_modal.import_success') || 'Workspace imported successfully! Refreshing...';
+          importFinalResult.className = 'result-message success';
+          setTimeout(() => { window.location.reload(); }, 1500);
+        } else {
+          const errorMsg = humanizeError(data, lang);
+          let extraHint = '';
+          if (data.suggest_file_mode) {
+            extraHint = i18n.t('overview.new_project_modal.suggest_file_mode_hint');
+          }
+          importFinalResult.textContent = `${i18n.t('overview.new_project_modal.preview_error_prefix')}: ${errorMsg}${extraHint}`;
+          importFinalResult.className = 'result-message error';
+          confirmImportBtn.disabled = false;
+        }
+      } catch (err) {
+        importFinalResult.textContent = `Failed: ${err.message}`;
+        importFinalResult.className = 'result-message error';
+        confirmImportBtn.disabled = false;
+      }
+    }
+
+    previewImportBtn.addEventListener('click', previewImport);
+    confirmImportBtn.addEventListener('click', confirmImport);
+    importWorkspacePath.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') previewImport();
+    });
+    importStructureFilePath.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') previewImport();
+    });
 
     addProjectBtn.addEventListener('click', openAddProjectModal);
     modalClose.addEventListener('click', closeAddProjectModal);
