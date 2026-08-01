@@ -945,12 +945,15 @@ def build_closure_record_markdown(
     closure_evidence: dict[str, Any],
     return_record_ref: str | None = None,
     related_audit_task_refs: list[str] | None = None,
+    warnings: list[str] | None = None,
 ) -> str:
-    """Build a closure record markdown document (AIPOS-283).
+    """Build a closure record markdown document (AIPOS-283/289).
 
     The closure record is the append-only proof that a task was formally closed
     (moved from claimed/ to completed/) through the gate's close verb. It records
     who closed it, when, and what evidence justified the closure.
+
+    AIPOS-289: warnings (governance account drift) are written to frontmatter.
     """
     metadata = {
         "record_type": "closure_record",
@@ -968,6 +971,8 @@ def build_closure_record_markdown(
     }
     if related_audit_task_refs:
         metadata["related_audit_task_refs"] = related_audit_task_refs
+    if warnings:
+        metadata["warnings"] = warnings
     body = (
         f"# Closure Record: {closure_id}\n\n"
         f"Task `{task_id}` was closed (claimed → completed) by `{actor}` at `{closed_at}`.\n\n"
@@ -981,8 +986,13 @@ def build_closure_record_markdown(
         body += f"\n## Related Audit Tasks\n\n"
         for ref in related_audit_task_refs:
             body += f"- {ref}\n"
+    if warnings:
+        body += f"\n## Warnings\n\n"
+        for warning in warnings:
+            body += f"- {warning}\n"
     return render_markdown(metadata, body, [
         "record_type", "event_type", "closure_id", "task_id", "task_path",
         "surface", "operation", "actor", "closed_at", "closure_evidence_type",
         "closure_evidence_ref", "return_record_ref", "related_audit_task_refs",
+        "warnings",
     ])

@@ -1070,6 +1070,28 @@ def build_parser() -> argparse.ArgumentParser:
     agents_parser = subparsers.add_parser("agents", help="Render agent profiles")
     agents_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-292: auditor loop (product daemon for idle_agent)
+    auditor_parser = subparsers.add_parser("auditor", help="AIPOS-292: Auditor daemon operations")
+    auditor_subparsers = auditor_parser.add_subparsers(dest="auditor_command")
+    auditor_loop_parser = auditor_subparsers.add_parser(
+        "loop",
+        help="Production auditor daemon: watch → PreAuthorized claim → launch auditor runtime. Exit 75 when envelope exhausted (RestartPreventExitStatus)."
+    )
+    auditor_loop_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root (治理仓)")
+    auditor_loop_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
+    auditor_loop_parser.add_argument("--gate-url", default="http://127.0.0.1:7118", help="Gate URL (default: http://127.0.0.1:7118)")
+    auditor_loop_parser.add_argument("--connection-json", help="Path to connection.json (default: <workspace>/.lybra/connection.json)")
+    auditor_loop_parser.add_argument("--auditor-instance", default="audit.lybra.kiwiai-dev", help="Auditor instance name")
+    auditor_loop_parser.add_argument("--policy", "--envelope", dest="envelope", default="pol_lybra_audit_1", help="PreAuthorized envelope/policy ref")
+    auditor_loop_parser.add_argument(
+        "--runtime-cmd",
+        default="pi --model anthropic/claude-3-5-sonnet-20241022 --prompt '{kickoff}'",
+        help="Auditor runtime command template. Use {kickoff} for the prompt. Default: pi + claude-sonnet-5"
+    )
+    auditor_loop_parser.add_argument("--interval", type=float, default=20.0, help="FS pump watch interval seconds (default: 20)")
+    auditor_loop_parser.add_argument("--timeout", type=float, default=1800.0, help="FS pump watch timeout seconds (default: 1800)")
+    auditor_loop_parser.add_argument("--claim-transient-tries", type=int, default=20, help="Transient claim retry attempts (default: 20)")
+
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP HTTP/SSE or run MCP setup diagnostics")
     mcp_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     mcp_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
@@ -1942,6 +1964,27 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_agents_text(profiles))
         return 0
+
+    if args.command == "auditor":
+        if getattr(args, "auditor_command", None) == "loop":
+            from tools.aipos_cli.auditor_loop import main as auditor_loop_main
+            argv = ["--workspace-root", args.workspace_root]
+            if args.product_repo:
+                argv.extend(["--product-repo", args.product_repo])
+            argv.extend(["--gate-url", args.gate_url])
+            if args.connection_json:
+                argv.extend(["--connection-json", args.connection_json])
+            argv.extend([
+                "--auditor-instance", args.auditor_instance,
+                "--policy", args.envelope,
+                "--runtime-cmd", args.runtime_cmd,
+                "--interval", str(args.interval),
+                "--timeout", str(args.timeout),
+                "--claim-transient-tries", str(args.claim_transient_tries),
+            ])
+            return auditor_loop_main(argv)
+        parser.print_help()
+        return 2
 
     if args.command == "task":
         try:

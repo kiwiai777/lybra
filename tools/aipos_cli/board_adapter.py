@@ -3986,6 +3986,66 @@ def close_task(
         closure_evidence_bundle = {"type": evidence_type, "ref": evidence_ref}
         closure_path = closure_record_path(resolved_root, resolved_task_id, closure_id)
 
+        # AIPOS-289 S1+S2: governance account inspection (read-only, append WARN to closure record)
+        governance_warnings: list[str] = []
+        
+        # S1: decision_log scan (双名兼容: decision_log.md 或 decision_log/)
+        decision_log_found = False
+        governance_dir = resolved_root / "governance"
+        decision_log_file = governance_dir / "decision_log.md"
+        decision_log_dir = governance_dir / "decision_log"
+        
+        if decision_log_file.is_file():
+            decision_log_found = True
+            decision_log_text = decision_log_file.read_text(encoding="utf-8", errors="replace")
+            # More strict match: task_id as word boundary (not substring)
+            import re
+            if not re.search(r'\b' + re.escape(resolved_task_id) + r'\b', decision_log_text):
+                governance_warnings.append(f"decision_log.md lacks entry for {resolved_task_id}")
+        elif decision_log_dir.is_dir():
+            decision_log_found = True
+            # Scan all .md files in decision_log/ for the task_id
+            task_found = False
+            import re
+            pattern = re.compile(r'\b' + re.escape(resolved_task_id) + r'\b')
+            for entry in decision_log_dir.rglob("*.md"):
+                if entry.is_file():
+                    try:
+                        content = entry.read_text(encoding="utf-8", errors="replace")
+                        if pattern.search(content):
+                            task_found = True
+                            break
+                    except (OSError, UnicodeDecodeError):
+                        pass
+            if not task_found:
+                governance_warnings.append(f"decision_log/ lacks entry for {resolved_task_id}")
+        
+        if not decision_log_found:
+            governance_warnings.append("decision_log not found (expected decision_log.md or decision_log/)")
+        
+        # S2: stage_archive/ freshness (default threshold: 30 days)
+        stage_archive_threshold_days = 30
+        stage_archive_dir = resolved_root / "stage_archive"
+        if stage_archive_dir.is_dir():
+            latest_mtime = 0.0
+            for entry in stage_archive_dir.rglob("*"):
+                if entry.is_file():
+                    try:
+                        mtime = entry.stat().st_mtime
+                        if mtime > latest_mtime:
+                            latest_mtime = mtime
+                    except OSError:
+                        pass
+            if latest_mtime > 0:
+                import time
+                age_days = (time.time() - latest_mtime) / 86400
+                if age_days > stage_archive_threshold_days:
+                    governance_warnings.append(
+                        f"stage_archive/ stale: latest file is {int(age_days)} days old (threshold: {stage_archive_threshold_days} days)"
+                    )
+        else:
+            governance_warnings.append("stage_archive/ directory not found")
+
         # Build the complete mutation (claimed → completed)
         report_link = evidence_ref
         mutation_result = mutate_queue_task(
@@ -4000,6 +4060,8 @@ def close_task(
 
         # Build response
         if dry_run:
+            combined_warnings = list(mutation_result.get("warnings", []))
+            combined_warnings.extend(governance_warnings)
             return make_response(
                 ok=mutation_result.get("verdict") != "BLOCK",
                 operation=operation,
@@ -4017,10 +4079,11 @@ def close_task(
                     "return_record_ref": return_record_ref,
                     "related_audit_task_refs": related_audit_refs,
                     "mutation_preview": mutation_result,
+                    "governance_warnings": governance_warnings,
                 },
                 blocking_reasons=mutation_result.get("blocking_reasons", []),
-                warnings=mutation_result.get("warnings", []),
-                safety_notice="AIPOS-283 queue_close dry-run preview. No files written.",
+                warnings=combined_warnings,
+                safety_notice="AIPOS-283/289 queue_close dry-run preview. No files written.",
             )
 
         # Confirm: execute the mutation
@@ -4035,7 +4098,7 @@ def close_task(
                 safety_notice="AIPOS-283 queue_close blocked by mutation validation.",
             )
 
-        # Write closure record (append-only)
+        # Write closure record (append-only, with governance warnings)
         closure_markdown = build_closure_record_markdown(
             task_id=resolved_task_id,
             task_path=source_path,
@@ -4045,6 +4108,7 @@ def close_task(
             closure_evidence=closure_evidence_bundle,
             return_record_ref=return_record_ref,
             related_audit_task_refs=related_audit_refs or None,
+            warnings=governance_warnings or None,
         )
         closure_path_resolved = resolved_root / closure_path
         closure_path_resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -4078,6 +4142,8 @@ def close_task(
             except (ValueError, FileNotFoundError, OSError, KeyError):
                 pass
 
+        combined_warnings = list(mutation_result.get("warnings", []))
+        combined_warnings.extend(governance_warnings)
         return make_response(
             ok=True,
             operation=operation,
@@ -4099,9 +4165,10 @@ def close_task(
                     "moved": mutation_result.get("moved"),
                     "wrote": mutation_result.get("wrote"),
                 },
+                "governance_warnings": governance_warnings,
             },
-            warnings=mutation_result.get("warnings", []),
-            safety_notice="AIPOS-283 queue_close completed. Closure record written (append-only).",
+            warnings=combined_warnings,
+            safety_notice="AIPOS-283/289 queue_close completed. Closure record written (append-only).",
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))

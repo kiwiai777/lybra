@@ -1,0 +1,40 @@
+[Unit]
+Description=Lybra auditor daemon (AIPOS-292): watch → PreAuthorized claim → auditor runtime
+Documentation=https://github.com/your-org/lybra
+# claim 依赖 gate (board+mcp); gate 自愈后本服务继续。仅排序,不强绑定。
+After=lybra-gate.service network-online.target
+Wants=network-online.target
+
+[Service]
+# Type=simple: auditor loop 是一个阻塞前台 while 循环 (watch 阻塞等变化 → claim → 阻塞拉起 auditor)。
+# SIGTERM 被 watch 的 FS 泵捕获 → 干净退出 130 → daemon exit 0。
+Type=simple
+WorkingDirectory=/path/to/product/repo
+# AIPOS-292: 产品命令 (不再是 ~/bin 脚本)
+ExecStart=/usr/local/bin/lybra auditor loop \
+    --workspace-root /path/to/workspace \
+    --product-repo /path/to/product/repo \
+    --gate-url http://127.0.0.1:7118 \
+    --connection-json /path/to/workspace/.lybra/connection.json \
+    --auditor-instance audit.lybra.kiwiai-dev \
+    --policy pol_lybra_audit_1 \
+    --runtime-cmd "pi --model anthropic/claude-3-5-sonnet-20241022 --prompt '{kickoff}'" \
+    --interval 20 \
+    --timeout 1800
+
+# 自愈: crash / gate 闪断 / watch 异常退出 (非 75) → systemd 重拉一个全新 daemon。
+Restart=always
+RestartSec=10
+
+# 防空转 (宁停勿猜): daemon 主动 BLOCK (信封耗尽 / claim 非自动放行) 时 exit 75。
+# 此码列入 RestartPreventExitStatus → 不自动重启, 等顾问/Owner 重武装信封后手动 start。
+# 优先级高于 Restart=always (systemd.service(5) 明文: 此选项 take precedence)。
+RestartPreventExitStatus=75
+
+# control-group: stop/重启时把 daemon 及其拉起的 auditor 子进程 (pi) 一同收割, 不残留。
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

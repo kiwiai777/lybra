@@ -94,6 +94,11 @@ def _build_record(
             f"{record_type} record filename mismatch: filename={path.stem} metadata={metadata.get(id_field)}"
         )
 
+    # AIPOS-289: merge frontmatter warnings (governance account drift) into record warnings
+    frontmatter_warnings = metadata.get("warnings")
+    if isinstance(frontmatter_warnings, list):
+        warnings.extend(frontmatter_warnings)
+
     record = {
         "record_type": record_type,
         "record_id": record_id,
