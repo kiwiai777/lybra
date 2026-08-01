@@ -96,4 +96,6 @@ $ python3 -m pytest web/board/tests/test_aipos293_fix1_dual_mode.py -v
 
 ### 实际 commit hash
 
-**待 commit 后回填**
+- Round 2 commit: `a5a523f` on `main`(本节所在 commit,FINALIZE2-RETURN.md hash 回填)
+- Round 2 push: `b99bafe..a5a523f  main -> main`
+- 上派主 commit: `b99bafe`(schema 文档入库 + 草稿清理,4 文件)
