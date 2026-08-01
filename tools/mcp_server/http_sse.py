@@ -193,6 +193,7 @@ def _rpc_response(message: dict[str, Any], *, capability: dict[str, Any] | None 
 
 
 class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     server_version = "LybraMcpHttpSse/0.2.0"
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -283,7 +284,10 @@ class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK.value)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close" if self.config.max_keepalive_events is not None else "keep-alive")
+        # AIPOS-296: SSE 流式响应 HTTP/1.1 正确性 —— 流不定长且不用 chunked，
+        # 必须显式 Connection: close 让客户端知道流结束时机（关闭连接=EOF）。
+        # undici streamable 客户端要求明确的传输边界。
+        self.send_header("Connection", "close")
         session_id = (self.headers.get(SESSION_HEADER) or "").strip()
         if session_id:
             self.send_header(SESSION_HEADER, session_id)

@@ -3741,6 +3741,7 @@ def make_handler(
     remember_secret = load_or_create_remember_secret(repo_root)
 
     class BoardHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
         _sessions = sessions
         _conn_paths = conn_paths
         _otc = otc
