@@ -407,14 +407,24 @@ class FsWatchRedLineTests(unittest.TestCase):
         tree = ast.parse(Path(agent_watch_fs.__file__).read_text(encoding="utf-8"))
         stdlib = {
             "json", "os", "signal", "stat", "sys", "time", "pathlib", "typing",
-            "__future__", "fnmatch", "re",
+            "__future__", "fnmatch", "re", "subprocess",  # AIPOS-295: git worktree detection
         }
+        # AIPOS-295: psutil is conditionally imported (try/except), allowed for health monitoring
+        allowed_optional = {"psutil"}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    self.assertIn(alias.name.split(".")[0], stdlib, f"non-stdlib import: {alias.name}")
+                    module = alias.name.split(".")[0]
+                    self.assertTrue(
+                        module in stdlib or module in allowed_optional,
+                        f"non-stdlib import: {alias.name} (allowed optional: {allowed_optional})"
+                    )
             elif isinstance(node, ast.ImportFrom):
-                self.assertIn((node.module or "").split(".")[0], stdlib, f"non-stdlib from-import: {node.module}")
+                module = (node.module or "").split(".")[0]
+                self.assertTrue(
+                    module in stdlib or module in allowed_optional,
+                    f"non-stdlib from-import: {node.module} (allowed optional: {allowed_optional})"
+                )
 
     def test_module_is_gate_free(self) -> None:
         """Red line 'pump in CLI not in gate' / 'gate 零改动': the pump must NEVER touch

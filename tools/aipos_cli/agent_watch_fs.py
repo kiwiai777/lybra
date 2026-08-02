@@ -1,9 +1,9 @@
-"""AIPOS-268 + AIPOS-284 + AIPOS-284C — ``agent watch --workspace-root``: filesystem pump v2.
+"""AIPOS-268 + AIPOS-284 + AIPOS-284C + AIPOS-295 — ``agent watch --workspace-root``: filesystem pump v2 + health monitoring.
 
 This is candidate ⑫ of the 候选⑤⑫合流 — the ``agent watch`` verb carries TWO
 mutually-exclusive harness modes (selected on the CLI):
 
-- candidate ⑫ (this module, AIPOS-268 + AIPOS-284 + AIPOS-284C): ``--workspace-root`` — a PURE CLIENT
+- candidate ⑫ (this module, AIPOS-268 + AIPOS-284 + AIPOS-284C + AIPOS-295): ``--workspace-root`` — a PURE CLIENT
   read-only mtime+path sentinel. No gate, no MCP, no token.
 - candidate ⑤ (AIPOS-248, ``agent_connector.py``): ``--gate-url`` — a stateless
   pull for claimable tasks over the gate read tool.
@@ -16,6 +16,12 @@ with no change it exits 2 SILENTLY; on SIGTERM/SIGINT it exits cleanly (130).
 AIPOS-284C --stream mode: a PERSISTENT observer that prints JSON event lines (line-buffered,
 immediate flush) and continues running. Only SIGTERM/SIGINT/--timeout terminate the process.
 Event deduplication: each expect file is reported at most once (new appearance only).
+
+AIPOS-295 --health mode: health monitoring with periodic heartbeat events. When combined with
+--stream mode, emits ``kind:health`` events at regular intervals reporting process liveness,
+CPU delta, session file activity, and worktree changes. Supports ``kind:unhealthy`` detection
+when the monitored process exhibits signs of death (process gone OR sustained silence across
+all observation surfaces).
 
 Why this exists (governance ref ⑫, pinned 2026-07-26): the gate has ZERO alarm — the
 pump that wakes an advisor lives in the PRODUCT CLI, not the gate, so ANY agent that
@@ -76,10 +82,16 @@ import os
 import re
 import signal
 import stat as stat_mod
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
+
+try:
+    import psutil
+except ImportError:
+    psutil = None  # type: ignore
 
 # Candidate ⑫ pump defaults (card AIPOS-268): 15s poll, 30min bounded timeout.
 DEFAULT_INTERVAL_SECONDS = 15.0
@@ -103,6 +115,128 @@ _WATCH_SUBTREES = ("5_tasks/queue", "5_tasks/records")
 
 # AIPOS-284: default stall threshold (10 minutes = 600 seconds).
 DEFAULT_STALL_SECONDS = 600
+
+# AIPOS-295: health monitoring defaults (5 minutes = 300 seconds).
+DEFAULT_HEALTH_INTERVAL = 300
+DEFAULT_UNHEALTHY_CYCLES = 2  # Consecutive silent cycles before declaring unhealthy
+
+
+def _find_pi_processes(pid_file: str | None = None, proc_pattern: str | None = None) -> list[int]:
+    """AIPOS-295 S1: find pi subprocess tree PIDs (excluding timeout wrapper).
+    
+    Args:
+        pid_file: Path to PID file (read parent PID from file)
+        proc_pattern: Process name pattern (e.g., 'node')
+    
+    Returns:
+        List of PIDs matching criteria (pi children, not timeout shell)
+    """
+    if psutil is None:
+        return []
+    
+    pids = []
+    
+    if pid_file and os.path.isfile(pid_file):
+        try:
+            parent_pid = int(Path(pid_file).read_text().strip())
+            parent = psutil.Process(parent_pid)
+            # Get all children recursively
+            for child in parent.children(recursive=True):
+                try:
+                    # Skip shell/timeout processes (cmdline contains 'timeout' or 'bash')
+                    cmdline = ' '.join(child.cmdline()).lower()
+                    if 'timeout' not in cmdline and 'bash' not in cmdline:
+                        pids.append(child.pid)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except (ValueError, OSError, psutil.NoSuchProcess):
+            pass
+    
+    if proc_pattern:
+        # Find all processes matching pattern
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                name = proc.info['name'] or ''
+                cmdline = ' '.join(proc.info['cmdline'] or []).lower()
+                if proc_pattern.lower() in name.lower() or proc_pattern.lower() in cmdline:
+                    # Exclude timeout/bash wrappers
+                    if 'timeout' not in cmdline and 'bash' not in cmdline:
+                        pids.append(proc.info['pid'])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    
+    return list(set(pids))  # Deduplicate
+
+
+def _get_process_cpu_time(pids: list[int]) -> float:
+    """AIPOS-295 S1: get total CPU time (user+system) for a list of PIDs.
+    
+    Returns sum of cpu_times (seconds) across all PIDs. Returns 0.0 if psutil unavailable.
+    """
+    if psutil is None or not pids:
+        return 0.0
+    
+    total = 0.0
+    for pid in pids:
+        try:
+            proc = psutil.Process(pid)
+            cpu_times = proc.cpu_times()
+            total += cpu_times.user + cpu_times.system
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return total
+
+
+def _count_new_session_files(session_dirs: list[str], last_check: float) -> int:
+    """AIPOS-295 S1: count new files in session directories since last_check timestamp.
+    
+    Args:
+        session_dirs: List of session directory paths
+        last_check: Unix timestamp of last check
+    
+    Returns:
+        Number of files created/modified after last_check
+    """
+    count = 0
+    for dir_path in session_dirs:
+        if not os.path.isdir(dir_path):
+            continue
+        for root, _dirs, files in os.walk(dir_path):
+            for name in files:
+                full = os.path.join(root, name)
+                try:
+                    mtime = os.path.getmtime(full)
+                    if mtime > last_check:
+                        count += 1
+                except OSError:
+                    continue
+    return count
+
+
+def _count_worktree_changes(worktree_path: str, since_timestamp: float) -> int:
+    """AIPOS-295 S1: count git worktree changes (new/modified files) since timestamp.
+    
+    Uses git status --porcelain to detect changes. Returns 0 if not a git repo or git unavailable.
+    """
+    if not os.path.isdir(worktree_path):
+        return 0
+    
+    try:
+        # Use git status to detect changes
+        result = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            lines = [l for l in result.stdout.strip().split('\n') if l]
+            return len(lines)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    
+    return 0
 
 
 def snapshot(workspace_root: Path) -> dict[str, tuple[int, int]]:
@@ -369,6 +503,35 @@ def run_fs_watch(
     
     # AIPOS-284C S3: event deduplication (track reported expect files)
     reported_expect_files: set[str] = set()
+    
+    # AIPOS-295: health monitoring parameters
+    health_interval_arg = getattr(args, "health", None)
+    health_enabled = health_interval_arg is not None
+    if health_enabled:
+        if not stream_mode:
+            print("lybra agent watch: --health requires --stream mode.", file=sys.stderr)
+            return EXIT_USAGE
+        health_interval = float(health_interval_arg) if health_interval_arg else DEFAULT_HEALTH_INTERVAL
+        if health_interval <= 0:
+            print("lybra agent watch: --health interval must be positive.", file=sys.stderr)
+            return EXIT_USAGE
+        
+        # Health observation parameters
+        pid_file = getattr(args, "pid_file", None)
+        proc_pattern = getattr(args, "proc_pattern", None)
+        session_dirs_arg = getattr(args, "session_dirs", None)
+        session_dirs = session_dirs_arg.split(",") if session_dirs_arg else []
+        worktree_path = getattr(args, "worktree_path", None) or str(ws.parent)  # Default to parent of workspace
+        
+        # Health state tracking
+        last_health_check = 0.0
+        last_cpu_time = 0.0
+        last_health_timestamp = clock()
+        silent_cycles = 0
+        unhealthy_threshold = getattr(args, "unhealthy_cycles", DEFAULT_UNHEALTHY_CYCLES)
+    else:
+        health_interval = 0.0
+        last_health_check = 0.0
 
     start = clock()
     prev = snapshot(ws)
@@ -395,6 +558,64 @@ def run_fs_watch(
     grace_after_end = False  # S2: one-poll grace period after end-pattern
 
     while True:
+        # AIPOS-295: Health monitoring (periodic heartbeat)
+        if health_enabled:
+            elapsed_since_health = clock() - last_health_check
+            if elapsed_since_health >= health_interval:
+                # Perform health check
+                pids = _find_pi_processes(pid_file, proc_pattern) if health_enabled else []
+                proc_alive = len(pids) > 0
+                
+                # CPU delta
+                current_cpu_time = _get_process_cpu_time(pids)
+                cpu_delta = current_cpu_time - last_cpu_time
+                last_cpu_time = current_cpu_time
+                
+                # Session files
+                new_session_files = _count_new_session_files(session_dirs, last_health_timestamp)
+                
+                # Worktree changes
+                worktree_changes = _count_worktree_changes(worktree_path, last_health_timestamp) if worktree_path else 0
+                
+                # Silent duration (time since last health check)
+                silent_secs = int(elapsed_since_health)
+                
+                # Health event
+                health_data = {
+                    "kind": "health",
+                    "proc_alive": proc_alive,
+                    "cpu_delta": round(cpu_delta, 2),
+                    "new_session_files": new_session_files,
+                    "worktree_changes": worktree_changes,
+                    "silent_secs": silent_secs
+                }
+                print(json.dumps(health_data, ensure_ascii=False), flush=True)
+                
+                # AIPOS-295 S2: Unhealthy detection
+                # Process gone OR (cpu_delta ≈ 0 AND new_session_files = 0 AND worktree_changes = 0)
+                if not proc_alive or (cpu_delta < 0.01 and new_session_files == 0 and worktree_changes == 0):
+                    silent_cycles += 1
+                    if silent_cycles >= unhealthy_threshold:
+                        # Emit unhealthy event
+                        unhealthy_data = {
+                            "kind": "unhealthy",
+                            "reason": "process_gone" if not proc_alive else "sustained_silence",
+                            "silent_cycles": silent_cycles,
+                            "proc_alive": proc_alive,
+                            "cpu_delta": round(cpu_delta, 2),
+                            "new_session_files": new_session_files,
+                            "worktree_changes": worktree_changes
+                        }
+                        print(json.dumps(unhealthy_data, ensure_ascii=False), flush=True)
+                        # Note: unhealthy event is emitted but watch continues
+                        # Respawn logic is handled by supervise command, not watch
+                        silent_cycles = 0  # Reset after reporting
+                else:
+                    silent_cycles = 0  # Reset on any activity
+                
+                last_health_check = clock()
+                last_health_timestamp = time.time()  # Wall clock for file timestamps
+        
         curr = snapshot(ws)
         changed = diff_snapshots(prev, curr)
         

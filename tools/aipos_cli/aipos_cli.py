@@ -914,6 +914,30 @@ def build_parser() -> argparse.ArgumentParser:
     _watch_parser.add_argument("--stream", action="store_true", help="[filesystem pump v3/AIPOS-284C] persistent mode: emit JSON event lines (kind: expect|change|stall|run_end|end) and continue. Only timeout/signal exits (emits 'end' event). Event deduplication: expect files reported once (new only).")
     # AIPOS-284D: --events filter (F-284C-1 抑噪)
     _watch_parser.add_argument("--events", choices=["expect", "change", "all"], help="[filesystem pump v4/AIPOS-284D] event filter: 'expect' = only expect events; 'change' = only filesystem changes; 'all' = both. Default: 'expect' when --expect is given, 'all' otherwise (F-284C-1 抑噪).")
+    # AIPOS-295: health monitoring (requires --stream)
+    _watch_parser.add_argument("--health", type=float, metavar="SECS", help="[AIPOS-295] Enable health monitoring: emit 'kind:health' heartbeat every SECS seconds (default: 300). Requires --stream. Reports proc_alive, cpu_delta, new_session_files, worktree_changes, silent_secs.")
+    _watch_parser.add_argument("--pid-file", help="[AIPOS-295] PID file path for process tree monitoring (reads parent PID, monitors pi children excluding timeout wrapper)")
+    _watch_parser.add_argument("--proc-pattern", help="[AIPOS-295] Process name pattern to monitor (e.g., 'node' for pi). Excludes timeout/bash wrappers.")
+    _watch_parser.add_argument("--session-dirs", help="[AIPOS-295] Comma-separated session storage directories to monitor for new files")
+    _watch_parser.add_argument("--worktree-path", help="[AIPOS-295] Git worktree path to monitor for changes (default: parent of workspace-root)")
+    _watch_parser.add_argument("--unhealthy-cycles", type=int, default=2, help="[AIPOS-295] Consecutive silent health cycles before emitting 'unhealthy' event (default: 2)")
+    
+    # `agent supervise` (AIPOS-295): health monitoring with bounded auto-restart
+    _supervise_parser = agent_subparsers.add_parser(
+        "supervise",
+        help="[AIPOS-295] Health monitoring with bounded auto-restart. Spawns a command, monitors health, "
+        "and implements bounded self-healing (1 respawn, then ESCALATE). Exit 75 on escalation (RestartPreventExitStatus)."
+    )
+    _supervise_parser.add_argument("--spawn-cmd", required=True, help="Command to spawn (must include timeout wrapper)")
+    _supervise_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root")
+    _supervise_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
+    _supervise_parser.add_argument("--card-id", required=True, help="Task card ID (for ESCALATE file)")
+    _supervise_parser.add_argument("--health-interval", type=float, default=300, help="Health check interval seconds (default: 300)")
+    _supervise_parser.add_argument("--pid-file", help="PID file path (optional, for process monitoring)")
+    _supervise_parser.add_argument("--proc-pattern", help="Process name pattern (e.g., 'node' for pi)")
+    _supervise_parser.add_argument("--session-dirs", help="Comma-separated session directories")
+    _supervise_parser.add_argument("--worktree-path", help="Git worktree path (default: product-repo)")
+    _supervise_parser.add_argument("--run-log", help="Run log path (for stall detection)")
 
     board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
@@ -1298,6 +1322,10 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "agent_command", None) == "watch" and getattr(args, "workspace_root", None):
             from tools.aipos_cli.agent_watch_fs import run_fs_watch_cli
             return run_fs_watch_cli(args)
+        # AIPOS-295: agent supervise
+        if getattr(args, "agent_command", None) == "supervise":
+            from tools.aipos_cli.agent_supervise import main as supervise_main
+            return supervise_main(sys.argv[3:])  # Pass remaining args after 'agent supervise'
         # Gate mode (candidate ⑤): preserve the AIPOS-248 required-arg contract in code
         # (--actor / a token source are required for the gate pull). argparse can no longer
         # express 'required only when --gate-url is set' now that `watch` is polymorphic;
