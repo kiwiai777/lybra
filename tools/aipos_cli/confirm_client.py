@@ -146,7 +146,23 @@ class GateClient:
             issued = response.headers.get(SESSION_HEADER)
             if issued:
                 self._session_id = issued
-            payload = json.loads(response.read().decode("utf-8"))
+            raw = response.read().decode("utf-8")
+            ctype = (response.headers.get("Content-Type") or "").lower()
+            # AIPOS-296B/296C: gate 内容协商，Accept 含 SSE 时返回 SSE 单事件包裹。
+            # 本客户端声明接受 SSE (ACCEPT_STREAMABLE)，须解析 data: 行提取 JSON-RPC。
+            # gate 当前只发单事件 (initialize/tool call)，取最后一条非空 data: 行。
+            if "text/event-stream" in ctype:
+                datas = [ln[5:].lstrip() for ln in raw.splitlines() if ln.startswith("data:")]
+                if not datas:
+                    # SSE 流无 data 行（空响应或格式错误）→ 无法提取 JSON-RPC
+                    raise GateError("SSE response contains no data events")
+                try:
+                    payload = json.loads(datas[-1])
+                except (json.JSONDecodeError, ValueError) as exc:
+                    raise GateError(f"SSE data event is not valid JSON: {exc}")
+            else:
+                # application/json 路径（原有逻辑）
+                payload = json.loads(raw)
         if isinstance(payload, dict) and payload.get("error"):
             raise GateError(str(payload["error"].get("message") or payload["error"]))
         return payload.get("result") if isinstance(payload, dict) else None

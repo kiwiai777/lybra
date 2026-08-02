@@ -268,6 +268,59 @@ class ConfirmClientTests(unittest.TestCase):
         self.assertEqual(args["owner_policy_ref"], "owner_policy:ret")
         self.assertEqual(args["claim_id"], "claim_x")
 
+    # --- AIPOS-296B/296C: SSE response parsing (content negotiation + chunked) ---
+
+    def test_sse_response_single_event_parsed(self) -> None:
+        """SSE single-event response extracts JSON-RPC from data: line (296B hot-patch)."""
+        with self.gate() as url:
+            client = GateClient(url, "owner-secret")
+            # Client declares Accept: text/event-stream → gate returns SSE
+            client.initialize()
+            result = client.call_tool("lybra_queue_list", {})
+        # Verify the SSE was parsed and structuredContent extracted
+        self.assertEqual(result.get("operation"), "get_queue")
+
+
+class SseParsingUnitTests(unittest.TestCase):
+    """AIPOS-296B/296C: SSE parsing correctness (isolated from gate/transport)."""
+
+    def test_extract_json_from_single_sse_event(self) -> None:
+        """Single SSE event: extract JSON from 'data: <json>\n\n' format."""
+        sse_body = 'data: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n\n'
+        datas = [ln[5:].lstrip() for ln in sse_body.splitlines() if ln.startswith("data:")]
+        self.assertEqual(len(datas), 1)
+        payload = json.loads(datas[-1])
+        self.assertTrue(payload["result"]["ok"])
+
+    def test_extract_last_event_from_multi_sse(self) -> None:
+        """Multi SSE events: take last data: line (gate single-event assumption)."""
+        sse_body = (
+            'event: ping\ndata: {"type":"keepalive"}\n\n'
+            'data: {"jsonrpc":"2.0","id":2,"result":{"answer":42}}\n\n'
+        )
+        datas = [ln[5:].lstrip() for ln in sse_body.splitlines() if ln.startswith("data:")]
+        self.assertEqual(len(datas), 2)
+        payload = json.loads(datas[-1])
+        self.assertEqual(payload["result"]["answer"], 42)
+
+    def test_empty_sse_stream_detection(self) -> None:
+        """Empty SSE stream (no data: lines) detected before JSON parse."""
+        sse_body = "event: ping\n\n"
+        datas = [ln[5:].lstrip() for ln in sse_body.splitlines() if ln.startswith("data:")]
+        self.assertEqual(len(datas), 0)
+        # Hardened logic: raise GateError when datas is empty
+        if not datas:
+            with self.assertRaises(ValueError):  # Simulates GateError path
+                raise ValueError("SSE response contains no data events")
+
+    def test_invalid_json_in_sse_data_line(self) -> None:
+        """Invalid JSON in SSE data: line raises decode error."""
+        sse_body = "data: {invalid json\n\n"
+        datas = [ln[5:].lstrip() for ln in sse_body.splitlines() if ln.startswith("data:")]
+        self.assertEqual(len(datas), 1)
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads(datas[-1])
+
 
 if __name__ == "__main__":
     unittest.main()

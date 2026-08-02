@@ -246,6 +246,8 @@ class HttpSseTransportTests(unittest.TestCase):
     ) -> tuple[dict[str, object], dict[str, str]]:
         # AIPOS-201: like post_rpc but exposes response headers (for Mcp-Session-Id)
         # and sends a Streamable-HTTP-style Accept + optional session header.
+        # AIPOS-296B: smart parse — if server returns SSE (content negotiation),
+        # extract JSON from SSE envelope; otherwise parse as JSON directly.
         headers = {"Content-Type": "application/json", "Accept": accept}
         if token is not None:
             headers["Authorization"] = f"Bearer {token}"
@@ -258,8 +260,20 @@ class HttpSseTransportTests(unittest.TestCase):
             method="POST",
         )
         with request.urlopen(req, timeout=_HTTP_CLIENT_TIMEOUT) as response:
-            body = json.loads(response.read().decode("utf-8"))
+            raw_body = response.read().decode("utf-8")
+            content_type = response.getheader("Content-Type") or ""
             resp_headers = {key: value for key, value in response.getheaders()}
+            # SSE response: extract JSON from "data: <json>\n\n" envelope
+            if "text/event-stream" in content_type:
+                if raw_body.startswith("data: ") and raw_body.endswith("\n\n"):
+                    json_payload = raw_body.split("\n")[0][len("data: "):]
+                    body = json.loads(json_payload)
+                else:
+                    # Empty SSE (notification case) — return empty dict
+                    body = {}
+            else:
+                # JSON response
+                body = json.loads(raw_body)
             return body, resp_headers
 
     def streamable_handshake(self, base_url: str, *, token: str | None = "secret", version: str = "2025-03-26") -> str:

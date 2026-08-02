@@ -175,6 +175,33 @@ def _json_response(
     handler.wfile.write(body)
 
 
+def _write_chunked_sse(
+    handler: BaseHTTPRequestHandler,
+    data: str,
+    *,
+    flush: bool = True,
+) -> None:
+    """AIPOS-296C: Write SSE data as a chunked transfer-encoding frame.
+    
+    Chunked format: <size-hex>\r\n<data>\r\n. Caller sends headers with
+    Transfer-Encoding: chunked (no Content-Length), and closes stream with
+    a 0-chunk ("0\r\n\r\n").
+    """
+    chunk_data = data.encode("utf-8")
+    size_hex = f"{len(chunk_data):X}"
+    handler.wfile.write(f"{size_hex}\r\n".encode("ascii"))
+    handler.wfile.write(chunk_data)
+    handler.wfile.write(b"\r\n")
+    if flush:
+        handler.wfile.flush()
+
+
+def _end_chunked(handler: BaseHTTPRequestHandler) -> None:
+    """AIPOS-296C: Terminate chunked transfer with a 0-chunk."""
+    handler.wfile.write(b"0\r\n\r\n")
+    handler.wfile.flush()
+
+
 def _rpc_response(message: dict[str, Any], *, capability: dict[str, Any] | None = None) -> dict[str, Any] | None:
     request_id: Any = None
     try:
@@ -257,16 +284,61 @@ class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
             _json_response(self, HTTPStatus.BAD_REQUEST, _error(None, -32600, "JSON-RPC message must be an object"))
             return
         response = _rpc_response(message, capability=self._request_capability())
+        
+        # AIPOS-296B: Content negotiation — if Accept contains text/event-stream,
+        # respond with SSE single-event; otherwise application/json (zero regression).
+        accept_header = self.headers.get("Accept", "")
+        wants_sse = "text/event-stream" in accept_header
+        
+        # AIPOS-201: issue an Mcp-Session-Id on a successful initialize.
+        session_id: str | None = None
+        if str(message.get("method") or "") == "initialize" and (response is None or "error" not in response):
+            session_id = self._sessions().mint()
+        
         if response is None:
-            _json_response(self, HTTPStatus.ACCEPTED, {"ok": True, "notification": True})
-            return
-        # AIPOS-201: issue an Mcp-Session-Id on a successful initialize so a
-        # Streamable-HTTP client (e.g. codex) can carry it on later requests.
-        # The single application/json response body is unchanged for every client.
-        extra_headers: dict[str, str] | None = None
-        if str(message.get("method") or "") == "initialize" and "error" not in response:
-            extra_headers = {SESSION_HEADER: self._sessions().mint()}
-        _json_response(self, HTTPStatus.OK, response, extra_headers=extra_headers)
+            # Notification (no response expected). Both paths must preserve semantics.
+            if wants_sse:
+                # AIPOS-296C: SSE notification via chunked transfer (keep-alive friendly).
+                self.send_response(HTTPStatus.ACCEPTED.value)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Cache-Control", "no-cache")
+                if session_id:
+                    self.send_header(SESSION_HEADER, session_id)
+                self.end_headers()
+                # Empty SSE stream for notification: just send 0-chunk (end).
+                _end_chunked(self)
+                return
+            else:
+                # JSON path: existing ACCEPTED response.
+                extra_headers: dict[str, str] | None = None
+                if session_id:
+                    extra_headers = {SESSION_HEADER: session_id}
+                _json_response(self, HTTPStatus.ACCEPTED, {"ok": True, "notification": True}, extra_headers=extra_headers)
+                return
+        
+        if wants_sse:
+            # AIPOS-296C: SSE single-event via chunked transfer (undici keep-alive).
+            body_json = json.dumps(response, separators=(",", ":"))
+            sse_event = f"data: {body_json}\n\n"
+            self.send_response(HTTPStatus.OK.value)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Cache-Control", "no-cache")
+            if session_id:
+                self.send_header(SESSION_HEADER, session_id)
+            self.end_headers()
+            try:
+                _write_chunked_sse(self, sse_event)
+                _end_chunked(self)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        else:
+            # JSON path: existing application/json response (codex/pi zero regression).
+            extra_headers = None
+            if session_id:
+                extra_headers = {SESSION_HEADER: session_id}
+            _json_response(self, HTTPStatus.OK, response, extra_headers=extra_headers)
 
     def do_GET(self) -> None:
         # AIPOS-201: serve the keepalive SSE stream on both the legacy /sse path
@@ -281,13 +353,11 @@ class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
             return
         if not self._authorize():
             return
+        # AIPOS-296C: keepalive SSE 流用 chunked 传输（undici keep-alive 兼容）。
         self.send_response(HTTPStatus.OK.value)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Transfer-Encoding", "chunked")
         self.send_header("Cache-Control", "no-cache")
-        # AIPOS-296: SSE 流式响应 HTTP/1.1 正确性 —— 流不定长且不用 chunked，
-        # 必须显式 Connection: close 让客户端知道流结束时机（关闭连接=EOF）。
-        # undici streamable 客户端要求明确的传输边界。
-        self.send_header("Connection", "close")
         session_id = (self.headers.get(SESSION_HEADER) or "").strip()
         if session_id:
             self.send_header(SESSION_HEADER, session_id)
@@ -295,15 +365,20 @@ class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
         count = 0
         while self.config.max_keepalive_events is None or count < self.config.max_keepalive_events:
             payload = json.dumps({"type": "keepalive", "transport": "http_sse"}, separators=(",", ":"))
+            sse_event = f"event: ping\ndata: {payload}\n\n"
             try:
-                self.wfile.write(f"event: ping\ndata: {payload}\n\n".encode("utf-8"))
-                self.wfile.flush()
+                _write_chunked_sse(self, sse_event)
             except (BrokenPipeError, ConnectionResetError):
                 break
             count += 1
             if self.config.max_keepalive_events is not None and count >= self.config.max_keepalive_events:
                 break
             time.sleep(max(self.config.keepalive_seconds, 0.001))
+        # 正常结束流：发 0-chunk。测试中 max_keepalive_events 触发时关闭连接。
+        try:
+            _end_chunked(self)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
         if self.config.max_keepalive_events is not None:
             self.close_connection = True
 
