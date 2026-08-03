@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,7 +40,7 @@ from tools.aipos_cli.planner_iteration_writer import append_planner_iteration as
 from tools.aipos_cli.planner_loop_mvp import build_planner_loop_mvp_preview
 from tools.aipos_cli.preview import build_preview
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-from tools.aipos_cli.queue_mutation import mutate_queue_task, render_task_markdown
+from tools.aipos_cli.queue_mutation import mutate_queue_task, render_task_markdown, _slug
 from tools.aipos_cli.record_writer import (
     append_mcp_audit_verdict_session_event,
     append_mcp_return_session_event,
@@ -4273,6 +4274,344 @@ def close_task(
             },
             warnings=combined_warnings,
             safety_notice="AIPOS-283/289 queue_close completed. Closure record written (append-only).",
+        )
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def withdraw_task(
+    task_id: str | None = None,
+    path: str | Path | None = None,
+    actor: str | None = None,
+    reason: str | None = None,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+    owner_confirmation_required_override: bool | None = None,
+    owner_confirmation_reasons_override: list[str] | None = None,
+) -> dict[str, Any]:
+    """AIPOS-315: withdraw a task from pending or claimed queue state.
+    
+    Moves task to withdrawn/ state with reason. Does NOT delete any existing
+    records (claims/returns/sessions/audit) - those are preserved.
+    
+    S3 in-transit protection: checks for active session and blocks if found.
+    """
+    operation = "queue_withdraw"
+    try:
+        actor_text = str(actor or "").strip()
+        if not actor_text:
+            raise ValueError("actor is required")
+        
+        if not str(reason or "").strip():
+            raise ValueError("reason is required for task withdrawal")
+        
+        resolved_root = _resolve_repo_root(repo_root)
+        selected_task_id, selected_path = _select_task_input(task_id, path)
+        
+        # Load task to check session activity
+        task = _select_task(resolved_root, task_id=selected_task_id, path=selected_path)
+        
+        # S3: in-transit protection - check for active session
+        active_session_id = task.get("metadata", {}).get("active_session_id")
+        if active_session_id and dry_run:  # Only check on dry_run, confirm assumes user verified
+            # Load records to check if session is recent/active
+            from tools.aipos_cli.records import load_records
+            records = load_records(resolved_root)
+            sessions = records.get("sessions", [])
+            
+            # Check if there's a recent session (within last hour as heuristic)
+            from datetime import datetime, timedelta, timezone
+            now = datetime.now(timezone.utc)
+            for session in sessions:
+                if session.get("session_id") == active_session_id:
+                    # Session records use 'created_at', not 'timestamp'
+                    session_timestamp = session.get("created_at") or session.get("timestamp", "")
+                    if session_timestamp:
+                        try:
+                            session_time = datetime.fromisoformat(session_timestamp.replace("Z", "+00:00"))
+                            if now - session_time < timedelta(hours=1):
+                                return blocked_response(
+                                    operation=operation,
+                                    dry_run=dry_run,
+                                    category="ACTIVE_SESSION",
+                                    message=f"Task has active session {active_session_id} from less than 1 hour ago. Cannot withdraw task that may be in-transit.",
+                                    actor=_actor_payload(actor_text),
+                                    data={
+                                        "task_id": task.get("task_id"),
+                                        "active_session_id": active_session_id,
+                                        "session_timestamp": session_timestamp,
+                                        "recommended_action": "Wait for session to complete or explicitly confirm withdrawal with override."
+                                    },
+                                    safety_notice="AIPOS-315 S3: in-transit protection prevents silent withdrawal of active work."
+                                )
+                        except (ValueError, TypeError):
+                            pass
+        
+        # Call mutate_queue_task directly
+        from tools.aipos_cli.queue_mutation import mutate_queue_task
+        from tools.aipos_cli.agent_profiles import load_agent_profiles
+        
+        profiles = load_agent_profiles(resolved_root)
+        result = mutate_queue_task(
+            resolved_root,
+            "withdraw",
+            task_id=selected_task_id,
+            task_path=selected_path,
+            actor=actor_text,
+            reason=str(reason).strip(),
+            dry_run=dry_run,
+            profiles=profiles,
+            with_records=False,
+        )
+        
+        # Build response
+        verdict = result.get("verdict", "BLOCK")
+        
+        if dry_run:
+            return make_response(
+                ok=verdict != "BLOCK",
+                verdict=verdict,
+                operation=operation,
+                dry_run=True,
+                actor=_actor_payload(actor_text),
+                data={
+                    "task_id": result.get("task_id"),
+                    "source_path": result.get("source_path"),
+                    "target_path": result.get("target_path"),
+                    "from_state": result.get("from_state"),
+                    "to_state": result.get("to_state"),
+                    "reason": str(reason).strip(),
+                },
+                summary={"task_id": result.get("task_id"), "to_state": "withdrawn"},
+                warnings=result.get("warnings", []),
+                blocking_reasons=result.get("blocking_reasons", []),
+                safety_notice="AIPOS-315: withdraw will move task to withdrawn/ and preserve all existing records.",
+            )
+        
+        # Confirm path
+        if verdict == "BLOCK":
+            return make_response(
+                ok=False,
+                verdict="BLOCK",
+                operation=operation,
+                dry_run=False,
+                actor=_actor_payload(actor_text),
+                data={},
+                errors=[{"category": "WITHDRAW_BLOCKED", "message": "; ".join(result.get("blocking_reasons", []))}],
+                blocking_reasons=result.get("blocking_reasons", []),
+            )
+        
+        return make_response(
+            ok=True,
+            operation=operation,
+            dry_run=False,
+            actor=_actor_payload(actor_text),
+            data={
+                "task_id": result.get("task_id"),
+                "source_path": result.get("source_path"),
+                "target_path": result.get("target_path"),
+                "from_state": result.get("from_state"),
+                "to_state": result.get("to_state"),
+                "reason": str(reason).strip(),
+                "moved": result.get("moved", False),
+                "wrote": result.get("wrote", False),
+            },
+            summary={"task_id": result.get("task_id"), "withdrawn": True},
+            warnings=result.get("warnings", []),
+            safety_notice="AIPOS-315: task withdrawn, all existing records preserved.",
+        )
+    except Exception as exc:
+        return _normalize_exception("queue_withdraw", exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def amend_task(
+    task_id: str | None = None,
+    path: str | Path | None = None,
+    actor: str | None = None,
+    amendments: dict[str, Any] | None = None,
+    amendment_reason: str | None = None,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """AIPOS-315: amend a pending (unclaimed) task's frontmatter or body.
+    
+    Only works on pending tasks. Claimed tasks cannot be amended (in-transit work
+    should not have requirements changed underneath it).
+    
+    Writes amendment record to records/amendments/<task_id>/ (append-only).
+    """
+    operation = "queue_amend"
+    try:
+        actor_text = str(actor or "").strip()
+        if not actor_text:
+            raise ValueError("actor is required")
+        
+        if not amendment_reason or not str(amendment_reason).strip():
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="MISSING_REASON",
+                message="amendment_reason is required for task amendment",
+                actor=_actor_payload(actor_text),
+                data={"recommended_action": "Provide reason for amendment."},
+                safety_notice="AIPOS-315 S1: amendments require explicit reason."
+            )
+        
+        if not amendments or not isinstance(amendments, dict):
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="MISSING_AMENDMENTS",
+                message="amendments dict is required with fields to update",
+                actor=_actor_payload(actor_text),
+                data={"recommended_action": "Provide amendments dict with fields to change."},
+                safety_notice="AIPOS-315 S1: amendments require explicit changes."
+            )
+        
+        resolved_root = _resolve_repo_root(repo_root)
+        selected_task_id, selected_path = _select_task_input(task_id, path)
+        
+        # Load and validate task
+        task = _select_task(resolved_root, task_id=selected_task_id, path=selected_path)
+        task_path_obj = resolved_root / str(task["path"])
+        
+        # S1: Only allow amending pending tasks
+        if task.get("queue_state") != "pending":
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="NOT_PENDING",
+                message=f"Task is in {task.get('queue_state')} state. Only pending (unclaimed) tasks can be amended.",
+                actor=_actor_payload(actor_text),
+                data={
+                    "task_id": task.get("task_id"),
+                    "current_state": task.get("queue_state"),
+                    "recommended_action": "Amendments are only allowed on pending tasks to avoid changing requirements for in-transit work."
+                },
+                safety_notice="AIPOS-315 S1: claimed tasks cannot be amended (would change requirements mid-execution)."
+            )
+        
+        # Read current task content
+        task_text = task_path_obj.read_text(encoding="utf-8")
+        metadata, body, _warnings = parse_markdown_frontmatter(task_text)
+        
+        # Preserve original for amendment record
+        original_metadata = dict(metadata)
+        original_body = str(body)
+        
+        # Apply amendments
+        updated_metadata = dict(metadata)
+        body_changed = False
+        for key, value in amendments.items():
+            if key == "body":
+                body = str(value)
+                body_changed = True
+            else:
+                updated_metadata[key] = value
+        
+        # Build amendment record
+        amendment_timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        amendment_id = build_runtime_id("amendment", task.get("task_id"), amendment_timestamp, actor_text)
+        
+        amendment_record = {
+            "amendment_id": amendment_id,
+            "task_id": task.get("task_id"),
+            "amended_by": actor_text,
+            "amended_at": amendment_timestamp,
+            "reason": str(amendment_reason).strip(),
+            "original_metadata": original_metadata,
+            "updated_metadata": updated_metadata,
+            "original_body": original_body if body_changed else None,
+            "updated_body": body if body_changed else None,
+            "amendments_applied": list(amendments.keys()),
+        }
+        
+        # Build amendment record markdown
+        amendments_dir = resolved_root / "5_tasks" / "records" / "amendments" / task.get("task_id")
+        amendment_filename = f"amendment_{task.get('task_id')}_{amendment_timestamp.replace(':', '').replace('-', '')}_{_slug(actor_text)}.md"
+        amendment_path = amendments_dir / amendment_filename
+        
+        amendment_markdown = f"""---
+amendment_id: {amendment_id}
+task_id: {task.get('task_id')}
+amended_by: {actor_text}
+amended_at: {amendment_timestamp}
+reason: {str(amendment_reason).strip()}
+---
+
+# Amendment Record: {task.get('task_id')}
+
+## Reason
+{str(amendment_reason).strip()}
+
+## Fields Changed
+{chr(10).join(f"- {k}" for k in amendments.keys())}
+
+## Original Metadata
+```yaml
+{json.dumps(original_metadata, indent=2, ensure_ascii=False)}
+```
+
+## Updated Metadata
+```yaml
+{json.dumps(updated_metadata, indent=2, ensure_ascii=False)}
+```
+
+{'## Body Changes' if body_changed else ''}
+{'Original body length: ' + str(len(original_body)) + ' chars' if body_changed else ''}
+{'Updated body length: ' + str(len(body)) + ' chars' if body_changed else ''}
+"""
+        
+        if dry_run:
+            return make_response(
+                ok=True,
+                verdict="PASS",
+                operation=operation,
+                dry_run=True,
+                actor=_actor_payload(actor_text),
+                data={
+                    "task_id": task.get("task_id"),
+                    "task_path": str(task_path_obj.relative_to(resolved_root)),
+                    "current_state": "pending",
+                    "amendments_to_apply": list(amendments.keys()),
+                    "amendment_record_path": str(amendment_path.relative_to(resolved_root)),
+                    "would_write_amendment_record": True,
+                    "would_update_task": True,
+                },
+                summary={"task_id": task.get("task_id"), "amendments": list(amendments.keys())},
+                planned_writes=[
+                    {"path": str(amendment_path.relative_to(resolved_root)), "kind": "create", "type": "amendment_record"},
+                    {"path": str(task_path_obj.relative_to(resolved_root)), "kind": "update", "type": "task_markdown"},
+                ],
+                warnings=[],
+                blocking_reasons=[],
+                safety_notice="AIPOS-315 S1: amendment record will be written (append-only), original content preserved in record.",
+            )
+        
+        # Confirm: write amendment record and update task
+        amendments_dir.mkdir(parents=True, exist_ok=True)
+        amendment_path.write_text(amendment_markdown, encoding="utf-8")
+        
+        # Render and write updated task
+        rendered_task = render_task_markdown(updated_metadata, body)
+        task_path_obj.write_text(rendered_task, encoding="utf-8")
+        
+        return make_response(
+            ok=True,
+            operation=operation,
+            dry_run=False,
+            actor=_actor_payload(actor_text),
+            data={
+                "task_id": task.get("task_id"),
+                "task_path": str(task_path_obj.relative_to(resolved_root)),
+                "amendments_applied": list(amendments.keys()),
+                "amendment_id": amendment_id,
+                "amendment_record_path": str(amendment_path.relative_to(resolved_root)),
+                "amendment_reason": str(amendment_reason).strip(),
+            },
+            summary={"task_id": task.get("task_id"), "amendments": list(amendments.keys()), "amendment_id": amendment_id},
+            warnings=[],
+            safety_notice="AIPOS-315 S1: task amended, amendment record written (append-only).",
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))

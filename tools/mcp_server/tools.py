@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterator
 
 from tools.aipos_cli.board_adapter import (
     _resolve_active_project_for,
+    amend_task,
     audit_dispatch_task,
     audit_verdict_task,
     claim_task,
@@ -25,6 +26,7 @@ from tools.aipos_cli.board_adapter import (
     record_owner_decision,
     return_task,
     submit_external_intake,
+    withdraw_task,
 )
 from tools.aipos_cli.autonomy_policy import (
     AUTONOMY_MODE_PREAUTHORIZED,
@@ -61,6 +63,11 @@ AUDIT_VERDICT_SCOPE = "audit_verdict"
 # that the executor calls after work is returned. It requires closure_evidence
 # and a prior return record, but NOT owner_confirm.
 QUEUE_CLOSE_SCOPE = "queue_close"
+# AIPOS-315: withdraw and amend scopes for task lifecycle management.
+# withdraw: remove task from queue (pending or claimed) with reason, preserves all records.
+# amend: modify pending task frontmatter/body with amendment history (only pending allowed).
+QUEUE_WITHDRAW_SCOPE = "queue_withdraw"
+QUEUE_AMEND_SCOPE = "queue_amend"
 # AIPOS-197 gate-hardening v0: an Owner-only scope required to CONFIRM consequential
 # truth mutations. dry-run keeps its operation scope; confirm additionally requires
 # this scope, which the executor token does not hold — so a confined agent cannot
@@ -377,6 +384,14 @@ def _audit_verdict_scope_allowed() -> bool:
 
 def _queue_close_scope_allowed() -> bool:
     return _capability_has_scope(QUEUE_CLOSE_SCOPE)
+
+
+def _queue_withdraw_scope_allowed() -> bool:
+    return _capability_has_scope(QUEUE_WITHDRAW_SCOPE)
+
+
+def _queue_amend_scope_allowed() -> bool:
+    return _capability_has_scope(QUEUE_AMEND_SCOPE)
 
 
 def _map_controlled_execute_error(response: dict[str, Any], *, dry_run_tool: str = "lybra_intake_submit_dry_run") -> dict[str, Any]:
@@ -2126,6 +2141,204 @@ def lybra_queue_close_confirm(arguments: dict[str, Any] | None = None) -> dict[s
     return _tool_result(response, is_error=not bool(response.get("ok", False)))
 
 
+def lybra_queue_withdraw_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-315: dry-run preview for withdrawing a task from queue.
+    
+    Requires: queue_withdraw scope, task_id, reason.
+    Supports: pending or claimed tasks.
+    S3 in-transit protection: blocks if active session detected within last hour.
+    """
+    if not _queue_withdraw_scope_allowed():
+        return _scope_denied_result_for(QUEUE_WITHDRAW_SCOPE, "queue withdraw tools")
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    if not task_id:
+        return _teaching_error(
+            "TASK_ID_REQUIRED",
+            "lybra_queue_withdraw_dry_run requires task_id.",
+            "Pass the task_id of the task to withdraw.",
+        )
+    reason = str(args.get("reason") or "").strip()
+    if not reason:
+        return _teaching_error(
+            "REASON_REQUIRED",
+            "reason is required for task withdrawal.",
+            "Provide the reason for withdrawing this task.",
+        )
+    actor = str(args.get("actor") or "").strip()
+    if not actor:
+        return _teaching_error(
+            "ACTOR_REQUIRED",
+            "actor is required.",
+            "Pass the actor performing the withdrawal.",
+        )
+    response = withdraw_task(
+        task_id=task_id,
+        actor=actor,
+        reason=reason,
+        dry_run=True,
+        repo_root=_repo_root(),
+    )
+    if response.get("verdict") == "BLOCK":
+        return _tool_result(response, is_error=True)
+    response["surface"] = "mcp"
+    response["operation"] = "queue_withdraw"
+    response["dry_run"] = True
+    return _tool_result(response, is_error=not bool(response.get("ok", False)))
+
+
+def lybra_queue_withdraw_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-315: confirm withdraw — execute the withdrawal (move card to withdrawn/).
+    
+    Does NOT require owner_confirm (advisor callable).
+    Re-validates all inputs and in-transit checks before executing.
+    """
+    if not _queue_withdraw_scope_allowed():
+        return _scope_denied_result_for(QUEUE_WITHDRAW_SCOPE, "queue withdraw tools")
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    if not task_id:
+        return _teaching_error(
+            "TASK_ID_REQUIRED",
+            "lybra_queue_withdraw_confirm requires task_id.",
+            "Pass the task_id of the task to withdraw.",
+        )
+    reason = str(args.get("reason") or "").strip()
+    if not reason:
+        return _teaching_error(
+            "REASON_REQUIRED",
+            "reason is required for task withdrawal.",
+            "Provide the reason for withdrawing this task.",
+        )
+    actor = str(args.get("actor") or "").strip()
+    if not actor:
+        return _teaching_error(
+            "ACTOR_REQUIRED",
+            "actor is required.",
+            "Pass the actor performing the withdrawal.",
+        )
+    response = withdraw_task(
+        task_id=task_id,
+        actor=actor,
+        reason=reason,
+        dry_run=False,
+        repo_root=_repo_root(),
+    )
+    if response.get("verdict") == "BLOCK":
+        return _tool_result(response, is_error=True)
+    response["surface"] = "mcp"
+    response["operation"] = "queue_withdraw"
+    response["dry_run"] = False
+    return _tool_result(response, is_error=not bool(response.get("ok", False)))
+
+
+def lybra_queue_amend_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-315: dry-run preview for amending a pending task.
+    
+    Requires: queue_amend scope, task_id, amendments, amendment_reason.
+    Only works on pending tasks (claimed tasks cannot be amended mid-execution).
+    Writes amendment record preserving original content.
+    """
+    if not _queue_amend_scope_allowed():
+        return _scope_denied_result_for(QUEUE_AMEND_SCOPE, "queue amend tools")
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    if not task_id:
+        return _teaching_error(
+            "TASK_ID_REQUIRED",
+            "lybra_queue_amend_dry_run requires task_id.",
+            "Pass the task_id of the pending task to amend.",
+        )
+    amendments = args.get("amendments")
+    if not amendments or not isinstance(amendments, dict):
+        return _teaching_error(
+            "AMENDMENTS_REQUIRED",
+            "amendments dict is required with fields to update.",
+            "Provide amendments dict with frontmatter fields or 'body' to change.",
+        )
+    amendment_reason = str(args.get("amendment_reason") or "").strip()
+    if not amendment_reason:
+        return _teaching_error(
+            "REASON_REQUIRED",
+            "amendment_reason is required.",
+            "Provide the reason for this amendment.",
+        )
+    actor = str(args.get("actor") or "").strip()
+    if not actor:
+        return _teaching_error(
+            "ACTOR_REQUIRED",
+            "actor is required.",
+            "Pass the actor performing the amendment.",
+        )
+    response = amend_task(
+        task_id=task_id,
+        actor=actor,
+        amendments=amendments,
+        amendment_reason=amendment_reason,
+        dry_run=True,
+        repo_root=_repo_root(),
+    )
+    if response.get("verdict") == "BLOCK":
+        return _tool_result(response, is_error=True)
+    response["surface"] = "mcp"
+    response["operation"] = "queue_amend"
+    response["dry_run"] = True
+    return _tool_result(response, is_error=not bool(response.get("ok", False)))
+
+
+def lybra_queue_amend_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-315: confirm amend — execute the amendment (update task + write amendment record).
+    
+    Does NOT require owner_confirm (advisor callable for governance amendments).
+    Re-validates all inputs and pending state before executing.
+    """
+    if not _queue_amend_scope_allowed():
+        return _scope_denied_result_for(QUEUE_AMEND_SCOPE, "queue amend tools")
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    if not task_id:
+        return _teaching_error(
+            "TASK_ID_REQUIRED",
+            "lybra_queue_amend_confirm requires task_id.",
+            "Pass the task_id of the pending task to amend.",
+        )
+    amendments = args.get("amendments")
+    if not amendments or not isinstance(amendments, dict):
+        return _teaching_error(
+            "AMENDMENTS_REQUIRED",
+            "amendments dict is required with fields to update.",
+            "Provide amendments dict with frontmatter fields or 'body' to change.",
+        )
+    amendment_reason = str(args.get("amendment_reason") or "").strip()
+    if not amendment_reason:
+        return _teaching_error(
+            "REASON_REQUIRED",
+            "amendment_reason is required.",
+            "Provide the reason for this amendment.",
+        )
+    actor = str(args.get("actor") or "").strip()
+    if not actor:
+        return _teaching_error(
+            "ACTOR_REQUIRED",
+            "actor is required.",
+            "Pass the actor performing the amendment.",
+        )
+    response = amend_task(
+        task_id=task_id,
+        actor=actor,
+        amendments=amendments,
+        amendment_reason=amendment_reason,
+        dry_run=False,
+        repo_root=_repo_root(),
+    )
+    if response.get("verdict") == "BLOCK":
+        return _tool_result(response, is_error=True)
+    response["surface"] = "mcp"
+    response["operation"] = "queue_amend"
+    response["dry_run"] = False
+    return _tool_result(response, is_error=not bool(response.get("ok", False)))
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
@@ -2150,6 +2363,10 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_audit_verdict_confirm": lybra_audit_verdict_confirm,
     "lybra_queue_close_dry_run": lybra_queue_close_dry_run,
     "lybra_queue_close_confirm": lybra_queue_close_confirm,
+    "lybra_queue_withdraw_dry_run": lybra_queue_withdraw_dry_run,
+    "lybra_queue_withdraw_confirm": lybra_queue_withdraw_confirm,
+    "lybra_queue_amend_dry_run": lybra_queue_amend_dry_run,
+    "lybra_queue_amend_confirm": lybra_queue_amend_confirm,
 }
 
 
@@ -2684,6 +2901,90 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "lybra_queue_withdraw_dry_run",
+        "description": (
+            "AIPOS-315: dry-run preview for withdrawing a task from queue. "
+            "Supports pending or claimed tasks. Moves to withdrawn/ state with reason. "
+            "S3 in-transit protection: blocks if active session detected within last hour. "
+            "Does NOT delete existing records (claims/returns/sessions preserved). "
+            "Prerequisites: queue_withdraw scope, task_id, reason, actor."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "actor": {"type": "string"},
+                "reason": {"type": "string", "description": "Why this task is being withdrawn."},
+            },
+            "required": ["task_id", "actor", "reason"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_queue_withdraw_confirm",
+        "description": (
+            "AIPOS-315: confirm withdraw — execute the withdrawal (move card to withdrawn/). "
+            "Re-validates all inputs and in-transit checks before executing. "
+            "Does NOT require owner_confirm (advisor callable)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "actor": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["task_id", "actor", "reason"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_queue_amend_dry_run",
+        "description": (
+            "AIPOS-315: dry-run preview for amending a pending task's frontmatter or body. "
+            "Only works on pending (unclaimed) tasks. Claimed tasks cannot be amended (in-transit work protection). "
+            "Writes amendment record (append-only) preserving original content. "
+            "Prerequisites: queue_amend scope, task_id, amendments dict, amendment_reason, actor."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "actor": {"type": "string"},
+                "amendments": {
+                    "type": "object",
+                    "description": "Dict with frontmatter fields to update or 'body' key for body changes.",
+                    "additionalProperties": True,
+                },
+                "amendment_reason": {"type": "string", "description": "Why this amendment is needed."},
+            },
+            "required": ["task_id", "actor", "amendments", "amendment_reason"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_queue_amend_confirm",
+        "description": (
+            "AIPOS-315: confirm amend — execute the amendment (update task + write amendment record). "
+            "Re-validates pending state before executing. "
+            "Does NOT require owner_confirm (advisor callable for governance amendments)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "actor": {"type": "string"},
+                "amendments": {
+                    "type": "object",
+                    "additionalProperties": True,
+                },
+                "amendment_reason": {"type": "string"},
+            },
+            "required": ["task_id", "actor", "amendments", "amendment_reason"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -2721,6 +3022,10 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_audit_verdict"))
     if _queue_close_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_close"))
+    if _queue_withdraw_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_withdraw"))
+    if _queue_amend_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_amend"))
     return descriptors
 
 

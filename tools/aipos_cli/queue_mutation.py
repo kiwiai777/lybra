@@ -36,6 +36,7 @@ ALLOWED_TRANSITIONS = {
     "block": ("claimed", "blocked"),
     "complete": ("claimed", "completed"),
     "reopen": ("blocked", "pending"),
+    "withdraw": ("*", "withdrawn"),  # AIPOS-315: can withdraw from pending or claimed
 }
 FRONTMATTER_ORDER = [
     "task_id",
@@ -77,6 +78,9 @@ FRONTMATTER_ORDER = [
     "reopened_by",
     "reopened_at",
     "reopen_reason",
+    "withdrawn_by",
+    "withdrawn_at",
+    "withdrawal_reason",
 ]
 
 
@@ -250,6 +254,20 @@ def _prepare_reopen(metadata: dict[str, Any], actor: str, timestamp: str, reason
     return updated
 
 
+def _prepare_withdraw(metadata: dict[str, Any], actor: str, timestamp: str, reason: str) -> dict[str, Any]:
+    """AIPOS-315: prepare metadata for task withdrawal."""
+    updated = dict(metadata)
+    updated["status"] = "withdrawn"
+    updated["withdrawn_by"] = actor
+    updated["withdrawn_at"] = timestamp
+    updated["withdrawal_reason"] = reason
+    # Preserve claim history if exists
+    if updated.get("active_session_id") not in (None, ""):
+        updated["last_session_id"] = updated.get("active_session_id")
+    updated.pop("active_session_id", None)
+    return updated
+
+
 def _mutation_metadata(
     action: str,
     metadata: dict[str, Any],
@@ -278,6 +296,9 @@ def _mutation_metadata(
     if action == "reopen":
         assert reason is not None
         return _prepare_reopen(metadata, actor, timestamp, reason)
+    if action == "withdraw":
+        assert reason is not None
+        return _prepare_withdraw(metadata, actor, timestamp, reason)
     raise ValueError(f"Unsupported queue mutation action: {action}")
 
 
@@ -465,7 +486,7 @@ def mutate_queue_task(
         raise ValueError(f"Unsupported queue mutation action: {action}")
     if not str(actor or "").strip():
         raise ValueError("--actor is required")
-    if action in {"block", "reopen"} and not str(reason or "").strip():
+    if action in {"block", "reopen", "withdraw"} and not str(reason or "").strip():
         raise ValueError("--reason is required and must be non-empty")
     if action == "complete" and not str(report_link or "").strip():
         raise ValueError("--report-link is required and must be non-empty")
@@ -473,6 +494,14 @@ def mutate_queue_task(
     source_task = _select_task(repo_root, task_id=task_id, task_path=task_path)
     source_path = (repo_root / str(source_task["path"])).resolve()
     from_state, to_state = ALLOWED_TRANSITIONS[action]
+    
+    # AIPOS-315: withdraw supports multiple source states
+    if action == "withdraw":
+        actual_state = source_task.get("queue_state")
+        if actual_state not in ("pending", "claimed"):
+            raise ValueError(f"withdraw only supports pending or claimed tasks, found {actual_state}")
+        from_state = actual_state
+    
     target_path = repo_root / QUEUE_STATE_DIRS[to_state] / source_path.name
     source_metadata, source_body, _warnings = _read_task_markdown(source_path)
     result = _base_result(source_path, repo_root, source_task, action, dry_run, actor, to_state)
@@ -483,22 +512,34 @@ def mutate_queue_task(
         result["safety_notice"] = MUTATION_RECORDS_SAFETY_NOTICE
 
     validation_profiles = profiles if profiles else None
-    validation = validate_single_task(source_task, current_actor=actor, profiles=validation_profiles)
+    # AIPOS-315: withdraw allows any actor (advisor can revoke any task), skip actor validation
+    validation_actor = None if action == "withdraw" else actor
+    validation = validate_single_task(source_task, current_actor=validation_actor, profiles=validation_profiles)
     if validation["blocking_reasons"]:
-        result["blocking_reasons"].extend(validation["blocking_reasons"])
+        # AIPOS-315: filter out actor-related blocks for withdraw
+        if action == "withdraw":
+            filtered_blocks = [
+                reason for reason in validation["blocking_reasons"]
+                if not any(keyword in str(reason).lower() for keyword in ["actor", "claimed by", "assigned"])
+            ]
+            result["blocking_reasons"].extend(filtered_blocks)
+        else:
+            result["blocking_reasons"].extend(validation["blocking_reasons"])
     if validation["warnings"]:
         result["warnings"].extend(validation["warnings"])
     result["classification_warnings"].extend(validation.get("classification_warnings", []))
     needs_owner_reasons: list[str] = []
 
-    if source_task.get("queue_state") != from_state:
-        result["blocking_reasons"].append(
-            f"Invalid transition for {action}: expected source state {from_state}, found {source_task.get('queue_state')}"
-        )
-    if source_task.get("frontmatter_status") != from_state:
-        result["blocking_reasons"].append(
-            f"Directory/status mismatch blocks {action}: expected frontmatter status {from_state}"
-        )
+    # AIPOS-315: withdraw has flexible from_state, skip this check
+    if action != "withdraw":
+        if source_task.get("queue_state") != from_state:
+            result["blocking_reasons"].append(
+                f"Invalid transition for {action}: expected source state {from_state}, found {source_task.get('queue_state')}"
+            )
+        if source_task.get("frontmatter_status") != from_state:
+            result["blocking_reasons"].append(
+                f"Directory/status mismatch blocks {action}: expected frontmatter status {from_state}"
+            )
 
     claimed_by = str(source_metadata.get("claimed_by") or "")
     claimed_actor_matches = (
@@ -568,7 +609,9 @@ def mutate_queue_task(
     preview_task["agent_instance"] = updated_metadata.get("agent_instance")
     preview_task["claimed_by"] = updated_metadata.get("claimed_by")
     preview_task["needs_owner"] = updated_metadata.get("needs_owner")
-    preview_validation = validate_single_task(preview_task, current_actor=actor, profiles=validation_profiles)
+    # AIPOS-315: use same actor logic for preview validation
+    preview_actor = None if action == "withdraw" else actor
+    preview_validation = validate_single_task(preview_task, current_actor=preview_actor, profiles=validation_profiles)
     if preview_validation["blocking_reasons"]:
         for reason_text in preview_validation["blocking_reasons"]:
             if reason_text not in result["blocking_reasons"]:

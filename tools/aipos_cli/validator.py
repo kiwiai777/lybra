@@ -303,7 +303,7 @@ def validate_task(
         _add(blocking_reasons, "Queue directory does not match frontmatter status")
         _add(needs_owner_reasons, "Directory/status mismatch")
 
-    if queue_state not in {"pending", "claimed", "completed", "blocked"}:
+    if queue_state not in {"pending", "claimed", "completed", "blocked", "withdrawn"}:
         _add(blocking_reasons, f"Invalid queue state: {queue_state}")
 
     if _is_missing(metadata.get("project")):

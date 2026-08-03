@@ -12,7 +12,7 @@ from tools.aipos_cli.workspace_config import (
     resolve_workspace_root,
 )
 
-QUEUE_STATES = ("pending", "claimed", "completed", "blocked")
+QUEUE_STATES = ("pending", "claimed", "completed", "blocked", "withdrawn")  # AIPOS-315: withdrawn for revoked/cancelled tasks
 
 
 def _has_queue_root(path: Path) -> bool:
