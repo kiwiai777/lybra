@@ -388,6 +388,51 @@
       
       card.appendChild(needsSection);
       
+      // AIPOS-297: Advisor pending items (待顾问收编)
+      if (workspace.advisor_pending && workspace.advisor_pending.total_pending > 0) {
+        const advisorSection = document.createElement('div');
+        advisorSection.className = 'advisor-pending-section';
+        
+        const advisorTitle = document.createElement('div');
+        advisorTitle.className = 'advisor-pending-title';
+        advisorTitle.textContent = i18n.t('card.advisor_pending');
+        advisorSection.appendChild(advisorTitle);
+        
+        const pendingList = document.createElement('ul');
+        pendingList.className = 'advisor-pending-list';
+        
+        const approvals = workspace.advisor_pending.pending_approvals || [];
+        const rejects = workspace.advisor_pending.pending_rejects || [];
+        
+        approvals.slice(0, 3).forEach(item => {
+          const li = document.createElement('li');
+          li.className = 'advisor-pending-item approval';
+          li.textContent = `✓ ${item.task_id}: ${i18n.t('card.advisor_pending_approvals')}`;
+          pendingList.appendChild(li);
+        });
+        
+        rejects.slice(0, 3).forEach(item => {
+          const li = document.createElement('li');
+          li.className = 'advisor-pending-item reject';
+          li.textContent = `✗ ${item.task_id}: ${i18n.t('card.advisor_pending_rejects')}`;
+          pendingList.appendChild(li);
+        });
+        
+        advisorSection.appendChild(pendingList);
+        
+        const total = workspace.advisor_pending.total_pending;
+        const shown = Math.min(approvals.length + rejects.length, 6);
+        if (total > shown) {
+          const more = document.createElement('div');
+          more.className = 'advisor-pending-item';
+          more.style.fontStyle = 'italic';
+          more.textContent = `+ ${total - shown} ${i18n.t('card.more_items')}`;
+          advisorSection.appendChild(more);
+        }
+        
+        card.appendChild(advisorSection);
+      }
+      
       // Recent activity
       if (workspace.recent_activity) {
         const activity = document.createElement('div');

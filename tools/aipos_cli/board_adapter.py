@@ -512,6 +512,110 @@ def get_owner_truth_view(repo_root: str | Path | None = None) -> dict[str, Any]:
         return _normalize_exception(operation, exc, dry_run=False)
 
 
+
+def _extract_draft_task_ids_fast(repo_root: Path) -> set[str]:
+    """AIPOS-297 FIX: 轻量级提取 draft task_id，跳过完整验证（性能优化）。
+    
+    只解析 frontmatter 提取 task_id，不做碰撞检查、复杂度验证等重操作。
+    用于 get_advisor_pending_items 等只需 task_id 列表的场景。
+    """
+    drafts_dir = repo_root / "5_tasks" / "drafts"
+    if not drafts_dir.exists():
+        return set()
+    
+    task_ids = set()
+    for draft_path in drafts_dir.rglob("*.md"):
+        if not draft_path.is_file():
+            continue
+        try:
+            metadata, _body, _errors = parse_markdown_frontmatter(draft_path.read_text(encoding="utf-8"))
+            task_id = metadata.get("task_id")
+            if task_id:
+                task_ids.add(str(task_id))
+        except Exception:
+            # 解析失败跳过，不影响整体
+            continue
+    return task_ids
+
+
+def get_advisor_pending_items(repo_root: str | Path | None = None) -> dict[str, Any]:
+    """AIPOS-297: read-only advisor pending items surface — gate push=0 纯推导.
+    
+    计算"待顾问收编"计数:
+    - approve: 有 owner_verification approve 记录 但 无对应 closure 记录
+    - reject: 有 owner_verification reject 记录 但 无对应后续动作
+    
+    Red lines:
+    - gate 零推送: 只读记录推导, 无写入
+    - 计数随收编/接手自动清零 (closure/新 draft 出现则视为已接)
+    
+    AIPOS-297 FIX-1: 用 _extract_draft_task_ids_fast 替代 get_drafts 全验证，
+    消除 O(drafts × (drafts + tasks)) 碰撞检查导致的挂死。
+    """
+    operation = "get_advisor_pending_items"
+    try:
+        resolved_root = _resolve_repo_root(repo_root)
+        records_report = load_records(resolved_root)
+        
+        owner_verifications = records_report.get("owner_verifications", [])
+        closures = records_report.get("closures", [])
+        
+        # FIX: 用轻量级提取替代完整验证（43s → <1s）
+        tasks_with_drafts = _extract_draft_task_ids_fast(resolved_root)
+        
+        tasks_with_closure = set()
+        for closure in closures:
+            task_id = closure.get("task_id")
+            if task_id:
+                tasks_with_closure.add(str(task_id))
+        
+        pending_approvals = []
+        pending_rejects = []
+        
+        for verification in owner_verifications:
+            task_id = verification.get("task_id")
+            decision = verification.get("decision", "").strip().lower()
+            decided_at = verification.get("decided_at", "")
+            
+            if not task_id or not decision:
+                continue
+            
+            task_id_str = str(task_id)
+            
+            if decision == "approve":
+                if task_id_str not in tasks_with_closure:
+                    pending_approvals.append({
+                        "task_id": task_id,
+                        "decision": "approve",
+                        "decided_at": decided_at,
+                        "verification_record_id": verification.get("record_id"),
+                    })
+            elif decision == "reject":
+                if task_id_str not in tasks_with_drafts:
+                    pending_rejects.append({
+                        "task_id": task_id,
+                        "decision": "reject",
+                        "decided_at": decided_at,
+                        "verification_record_id": verification.get("record_id"),
+                    })
+        
+        pending_approvals.sort(key=lambda x: x.get("decided_at", ""), reverse=True)
+        pending_rejects.sort(key=lambda x: x.get("decided_at", ""), reverse=True)
+        
+        return make_response(
+            ok=True,
+            verdict="PASS",
+            operation=operation,
+            dry_run=False,
+            data={
+                "pending_approvals": pending_approvals,
+                "pending_rejects": pending_rejects,
+                "total_pending": len(pending_approvals) + len(pending_rejects),
+            },
+        )
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=False)
+
 def get_agents(repo_root: str | Path | None = None) -> dict[str, Any]:
     operation = "get_agents"
     try:

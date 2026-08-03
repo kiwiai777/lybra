@@ -33,6 +33,7 @@ from tools.aipos_cli.custom_agent_profiles import build_profile_draft, confirm_p
 from tools.aipos_cli.project_map import get_project_map
 from tools.aipos_cli.verify_bench import get_verify_bench
 from tools.aipos_cli.board_adapter import (
+    get_advisor_pending_items,
     append_orchestration_event,
     append_planner_iteration,
     claim_task,
@@ -205,6 +206,24 @@ def get_overview(board_config_path: Path | None = None, repo_root: Path | None =
                 top_level_counts = {}
                 truth_total = 0
 
+            # AIPOS-297: advisor pending items (gate 零推送纯推导)
+            advisor_pending = {}
+            try:
+                pending_data = get_advisor_pending_items(repo_root=root)
+                if pending_data.get("ok"):
+                    data = pending_data.get("data") or {}
+                    advisor_pending = {
+                        "pending_approvals": data.get("pending_approvals", []),
+                        "pending_rejects": data.get("pending_rejects", []),
+                        "total_pending": data.get("total_pending", 0),
+                    }
+            except Exception:
+                advisor_pending = {
+                    "pending_approvals": [],
+                    "pending_rejects": [],
+                    "total_pending": 0,
+                }
+
             ok_entry = {
                 "label": label,
                 "root": str(root),
@@ -215,6 +234,7 @@ def get_overview(board_config_path: Path | None = None, repo_root: Path | None =
                 "stage_counts": stage_counts,
                 "top_level_counts": top_level_counts,
                 "truth_total": truth_total,
+                "advisor_pending": advisor_pending,
             }
             label_en = ws_config.get("label_en")
             if label_en:

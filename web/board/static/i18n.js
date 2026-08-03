@@ -201,6 +201,10 @@ const translations = {
     'card.needs_owner_empty': '暂无待处理事项',
     'card.recent_activity': '最近活动',
     'card.more_items': '更多',
+    'card.advisor_pending': '待顾问收编',
+    'card.advisor_pending_empty': '暂无待收编项',
+    'card.advisor_pending_approvals': '已通过待收编',
+    'card.advisor_pending_rejects': '已打回待处理',
     'card.real_progress': '真实进展（按记录推导）',
 
     // 验证台 (AIPOS-262B FIX-1)
@@ -496,6 +500,10 @@ const translations = {
     'map.popup.updated_prefix': 'Map updated ',
     
     // Workspace card (overview)
+    'card.advisor_pending': 'Awaiting Advisor Review',
+    'card.advisor_pending_empty': 'No pending items',
+    'card.advisor_pending_approvals': 'Approved, awaiting finalization',
+    'card.advisor_pending_rejects': 'Rejected, awaiting followup',
     'card.needs_owner': 'Needs Owner',
     'card.needs_owner_empty': 'No items waiting for Owner',
     'card.recent_activity': 'Recent',

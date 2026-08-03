@@ -562,3 +562,44 @@ main {
   color: #b91c1c;
   border: 1px solid #fecaca;
 }
+
+/* AIPOS-297: Advisor pending items styling */
+.advisor-pending-section {
+  margin-bottom: 20px;
+  padding: 12px;
+  background: var(--surface-secondary, #fef9e7);
+  border-left: 3px solid var(--color-warning, #f39c12);
+  border-radius: 4px;
+}
+
+.advisor-pending-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-body);
+  margin-bottom: 8px;
+}
+
+.advisor-pending-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.advisor-pending-item {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-light, #f5f5f5);
+}
+
+.advisor-pending-item:last-child {
+  border-bottom: none;
+}
+
+.advisor-pending-item.approval {
+  color: var(--color-success, #27ae60);
+}
+
+.advisor-pending-item.reject {
+  color: var(--color-danger, #e74c3c);
+}
