@@ -6,6 +6,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+
+
+
 ORCHESTRATION_ROOT = Path("5_tasks/orchestration")
 EVENT_LOG_FILENAME = "orchestration_events.md"
 ORCHESTRATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -267,3 +270,6 @@ def append_orchestration_event(
         handle.write(result["append_markdown"])
     result["wrote"] = True
     return result
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

@@ -17,6 +17,9 @@ from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN, snapsho
 from tools.aipos_cli.draft_writer import create_draft
 from tools.aipos_cli.record_writer import render_markdown
 
+
+
+
 AUTHORING_OPERATION = "ai_assisted_fixture_authoring"
 PROVENANCE_ROOT = Path("5_tasks/records/authoring_provenance")
 PROMPT_TEMPLATE_REF = "0_control_plane/tasks/prompt_templates/ai_assisted_task_authoring_v1.md"
@@ -826,3 +829,6 @@ def confirm_authoring_draft(
         }
     )
     return rebuilt
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

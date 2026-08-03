@@ -7,6 +7,9 @@ from typing import Any
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_complexity import complexity_payload
 from tools.aipos_cli.workspace_config import (
+
+
+
     has_workspace_queue,
     resolve_workspace_context,
     resolve_workspace_root,
@@ -146,3 +149,6 @@ def load_task_by_path(task_path: str, repo_root: Path | None = None) -> dict[str
     if path.suffix != ".md":
         raise ValueError(f"Task path is not a markdown file: {task_path}")
     return load_task_file(path, resolved_root)
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

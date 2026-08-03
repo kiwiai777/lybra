@@ -18,6 +18,9 @@ from typing import Any
 
 from tools.aipos_cli.record_writer import render_markdown
 
+
+
+
 OWNER_VERIFICATIONS_DIR = Path("5_tasks/records/owner_verifications")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$")
 ALLOWED_DECISIONS = {"approve", "reject"}
@@ -231,3 +234,6 @@ def build_owner_verification_record(
         result["wrote"] = True
     
     return result
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

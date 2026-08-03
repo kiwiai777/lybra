@@ -9,6 +9,9 @@ from tools.aipos_cli.authority_scanner import classify_task_authority
 from tools.aipos_cli.records import check_task_record_refs, find_records_for_task
 from tools.aipos_cli.task_loader import load_all_tasks, load_task_by_path
 
+
+
+
 SAFETY_NOTICE = (
     "AIPOS-173 state recovery preview is read-only. It derives staleness, provenance, "
     "and contradiction markers from durable files; it does not write records, repair state, "
@@ -472,3 +475,6 @@ def _recommended_action(verdict: str, completeness: str, metadata: dict[str, Any
     if completeness in {"partial", "missing"}:
         return "Treat missing provenance as a gap; use separate Owner-gated records or recovery writers if durable repair is needed."
     return "State is recoverable from durable files for read-only inspection."
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

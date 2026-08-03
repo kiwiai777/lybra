@@ -22,6 +22,9 @@ from typing import Any
 
 from tools.aipos_cli.adapter_response import make_response
 from tools.aipos_cli.owner_truth_view import (
+
+
+
     _derive_closure_root,
     _member_kind,
     derive_true_stage,
@@ -146,9 +149,10 @@ def _extract_acceptance_assertions(body: str) -> list[str]:
 
 
 def _latest(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the latest (newest) record. Records are sorted newest-first by load_records."""
     if not records:
         return None
-    return records[-1]
+    return records[0]
 
 
 def _machine_judgment(returns: list[dict[str, Any]]) -> dict[str, Any]:
@@ -420,3 +424,6 @@ def _empty(operation: str) -> dict[str, Any]:
         safety_notice=READ_SAFETY_NOTICE,
         errors=[],
     )
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

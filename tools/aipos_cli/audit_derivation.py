@@ -19,6 +19,9 @@ from tools.aipos_cli.records import expected_publish_record_path
 from tools.aipos_cli.task_loader import find_task_by_id
 
 
+
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -240,3 +243,6 @@ def derive_audit_task_on_return(
             },
         ],
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

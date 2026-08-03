@@ -11,6 +11,9 @@ from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import find_task_by_id, load_all_tasks, load_task_by_path
 from tools.aipos_cli.validator import validate_single_task
 
+
+
+
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -310,3 +313,6 @@ def build_context_pack_preview(
             "execute agents, mutate queues, append orchestration logs, or automate git."
         ),
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

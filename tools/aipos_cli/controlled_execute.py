@@ -9,6 +9,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+
+
+
 DEFAULT_TTL_SECONDS = 600
 MAX_TTL_SECONDS = 1800
 OWNER_CONFIRMATION_TOKEN = "OWNER_CONFIRMED"
@@ -216,3 +219,6 @@ def validate_owner_confirmation(*, required: bool, owner_confirmation_token: str
 
 def clear_tokens() -> None:
     _TOKEN_STORE.clear()
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

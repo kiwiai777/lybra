@@ -34,6 +34,9 @@ from typing import Any
 from tools.aipos_cli.adapter_response import make_response
 from tools.aipos_cli.workspace_config import has_workspace_queue
 
+
+
+
 READ_SAFETY_NOTICE = "Read-only local Board adapter call. No files are written."
 
 PROJECT_MAP_REL = "governance/project-map.md"
@@ -430,3 +433,6 @@ def _as_str_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return []
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

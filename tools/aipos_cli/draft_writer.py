@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.draft_validator import (
+
+
+
     DRAFTS_DIR,
     PENDING_QUEUE_DIR,
     draft_slug,
@@ -604,3 +607,6 @@ def publish_draft(
         }
     ]
     return result
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

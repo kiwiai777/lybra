@@ -27,6 +27,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+
+
+
 DEFAULT_CONNECTION_JSON = "~/.lybra/local/connection.json"
 DEFAULT_BOARD_HOST = "127.0.0.1"
 DEFAULT_BOARD_PORT = 7117
@@ -199,3 +202,6 @@ def build_login_url(base_url: str, login_path: str) -> str:
     if login_path.startswith("http://") or login_path.startswith("https://"):
         return login_path
     return base_url.rstrip("/") + "/" + login_path.lstrip("/")
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

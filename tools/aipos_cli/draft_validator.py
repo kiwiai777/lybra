@@ -8,6 +8,9 @@ from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_loader import QUEUE_STATES
 from tools.aipos_cli.task_complexity import complexity_payload, validate_task_complexity
 
+
+
+
 DRAFTS_DIR = Path("5_tasks/drafts")
 QUEUE_DIR = Path("5_tasks/queue")
 PENDING_QUEUE_DIR = QUEUE_DIR / "pending"
@@ -308,3 +311,6 @@ def list_drafts(repo_root: Path) -> dict[str, Any]:
         "total": len(drafts),
         "drafts": drafts,
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

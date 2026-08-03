@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+
+
+
 ENVELOPE_FIELDS = [
     "ok",
     "verdict",
@@ -189,3 +192,6 @@ def blocked_response(
         safety_notice=safety_notice,
         errors=[error_entry(category, message, field=field)],
     )
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

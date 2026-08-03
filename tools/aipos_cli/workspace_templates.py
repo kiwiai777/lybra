@@ -7,6 +7,9 @@ from typing import Any
 from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, make_response
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 
+
+
+
 TEMPLATE_OPERATION = "workspace_init"
 TEMPLATE_KIND = "workspace_project_skeleton"
 SAFETY_NOTICE = (
@@ -380,3 +383,6 @@ def execute_workspace_init(
     plan["data"]["wrote"] = True
     plan["summary"]["wrote"] = True
     return plan
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

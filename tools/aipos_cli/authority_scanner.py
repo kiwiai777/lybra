@@ -7,6 +7,9 @@ from typing import Any
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.records import check_task_record_refs
 
+
+
+
 AUTHORITY_VERDICTS = {
     "VALID",
     "GRANDFATHERED",
@@ -338,3 +341,6 @@ def build_authority_report(
         "task_authority": task_authority,
         "authority_findings": findings,
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

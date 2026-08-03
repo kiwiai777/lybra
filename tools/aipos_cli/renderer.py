@@ -4,6 +4,9 @@ import json
 from typing import Any
 
 
+
+
+
 def _task_line(task: dict[str, Any]) -> str:
     assigned = task.get("assigned_to") or "-"
     agent = task.get("agent_instance") or "-"
@@ -449,3 +452,6 @@ def render_preview_text(preview: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

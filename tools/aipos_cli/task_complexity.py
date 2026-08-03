@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+
+
+
 ALLOWED_TASK_CLASSES = {"simple", "complex"}
 CODE_TASK_MODES = {"code", "coding"}
 AUDIT_PASS_VALUES = {"pass", "passed"}
@@ -172,3 +175,6 @@ def validate_task_complexity(
         "warnings": warnings,
         "needs_owner_reasons": needs_owner_reasons,
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

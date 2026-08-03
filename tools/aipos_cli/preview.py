@@ -6,6 +6,9 @@ from typing import Any
 
 from tools.aipos_cli.agent_profiles import runtime_config_for_actor
 from tools.aipos_cli.records import (
+
+
+
     check_task_record_refs,
     expected_claim_log_path,
     expected_session_record_path,
@@ -134,3 +137,6 @@ def build_preview(
         "last_session_id": metadata.get("last_session_id"),
         "claim_id": metadata.get("claim_id"),
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

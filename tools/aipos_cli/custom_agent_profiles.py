@@ -9,6 +9,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+
+
+
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover
@@ -467,3 +470,6 @@ def confirm_profile_draft(
         }
     )
     return rebuilt
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

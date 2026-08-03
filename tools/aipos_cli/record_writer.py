@@ -8,6 +8,9 @@ from typing import Any
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.records import expected_claim_log_path, expected_closure_record_path, expected_return_record_path, expected_session_record_path
 
+
+
+
 RECORDS_ROOT = Path("5_tasks/records")
 CLAIMS_ROOT = RECORDS_ROOT / "claims"
 SESSIONS_ROOT = RECORDS_ROOT / "sessions"
@@ -996,3 +999,6 @@ def build_closure_record_markdown(
         "closure_evidence_ref", "return_record_ref", "related_audit_task_refs",
         "warnings",
     ])
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

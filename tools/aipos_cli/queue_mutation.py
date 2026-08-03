@@ -9,6 +9,9 @@ from tools.aipos_cli.agent_profiles import actor_matches_task_actor
 from tools.aipos_cli.draft_validator import find_case_insensitive_path_collision
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.record_writer import (
+
+
+
     build_claim_log_markdown,
     build_runtime_id,
     build_session_record_markdown,
@@ -667,3 +670,6 @@ def mutate_queue_task(
     result["wrote"] = True
     result["moved"] = True
     return result
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

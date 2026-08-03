@@ -27,6 +27,9 @@ import re
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import load_all_tasks
 
+
+
+
 # True-stage taxonomy (display order). Derived purely from records + queue_state.
 TRUE_STAGE_LABELS: dict[str, str] = {
     "published": "已发布",
@@ -421,11 +424,19 @@ def derive_true_stage(
         return "verdict_pass" if str(main_verdict).upper() == "PASS" else "verdict_fail"
     verdicts = recs.get("audit_verdicts") or []
     if verdicts:
-        values = [
-            str((v.get("metadata") or {}).get("verdict") or "").strip().upper()
-            for v in verdicts
-        ]
-        if any(v == "FAIL" for v in values):
+        # Sort by timestamp to get chronological order (earliest first)
+        sorted_verdicts = sorted(verdicts, key=lambda v: (
+            (v.get("metadata") or {}).get("verdict_at")
+            or (v.get("metadata") or {}).get("created_at")
+            or v.get("verdict_at")
+            or v.get("created_at")
+            or ""
+        ))
+        # Take the LATEST (last) verdict, not any(FAIL) across all history
+        latest_verdict = str(
+            (sorted_verdicts[-1].get("metadata") or {}).get("verdict") or ""
+        ).strip().upper()
+        if latest_verdict == "FAIL":
             return "verdict_fail"
         return "verdict_pass"
     if recs.get("audit_dispatches"):
@@ -1062,3 +1073,6 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
             "mutated and no records are rewritten."
         ),
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

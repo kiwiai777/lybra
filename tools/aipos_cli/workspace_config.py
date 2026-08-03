@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+
+
+
 CONFIG_RELATIVE_PATH = Path(".lybra") / "config.json"
 DEFAULT_BOARD_HOST = "127.0.0.1"
 DEFAULT_BOARD_PORT = 7117
@@ -581,3 +584,6 @@ def set_project_repo(
     root = resolve_project_root(home_root, name)
     write_project_json(root, name, code_repo=code_repo, registered_by=registered_by)
     return root
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

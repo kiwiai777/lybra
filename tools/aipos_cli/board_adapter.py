@@ -11,6 +11,9 @@ from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, e
 from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles, registry_available, resolve_instance_id
 from tools.aipos_cli.audit_derivation import derive_audit_task_on_return
 from tools.aipos_cli.artifact_ingest import (
+
+
+
     _as_ref_list,
     approved_scratch_root,
     has_scratch_request,
@@ -4615,3 +4618,6 @@ reason: {str(amendment_reason).strip()}
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

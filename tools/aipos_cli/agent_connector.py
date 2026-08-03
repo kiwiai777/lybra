@@ -33,6 +33,9 @@ from typing import Any, Callable
 
 from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token
 
+
+
+
 # Client-side loop guards (R hook 6): 60s default, 15s hard floor (protect the gate;
 # below the floor is an ERROR, never silently raised), 30min bounded watch, error
 # backoff doubling up to 5min and resetting on success.
@@ -269,3 +272,6 @@ def run_agent_command(args: Any) -> int:
         return run_watch(args)
     print("usage: lybra agent {fetch|watch} … (see --help)")
     return 2
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

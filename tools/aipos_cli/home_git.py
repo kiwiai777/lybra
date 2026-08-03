@@ -22,6 +22,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+
+
+
 # The home .gitignore IGNORES ephemeral/local-only artifacts; it deliberately does NOT ignore
 # truth — `*/5_tasks/`, `*/governance/`, `*/stage_archive/`, and `project.json` are TRACKED so
 # the governance home is fully versioned/remote-backed.
@@ -123,3 +126,6 @@ def execute_home_git_init(target: str | Path, *, actor: str = "owner") -> dict[s
         ran.append(" ".join(cmd))
 
     return {"home": str(home), "ran": ran, "push_hint": list(plan["push_hint"])}
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

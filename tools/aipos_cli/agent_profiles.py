@@ -4,6 +4,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+
+
+
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover
@@ -707,3 +710,6 @@ def availability_for_actor(actor: str | None, profiles: dict[str, Any]) -> dict[
 
 def availability_warning_for_actor(actor: str | None, profiles: dict[str, Any]) -> str | None:
     return availability_for_actor(actor, profiles).get("availability_warning")
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

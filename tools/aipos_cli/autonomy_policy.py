@@ -21,6 +21,9 @@ from typing import Any
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.record_writer import CLAIMS_ROOT, render_markdown
 
+
+
+
 POLICIES_DIR = Path("5_tasks/policies")
 AUTONOMY_MODE_SUPERVISED = "Supervised"
 AUTONOMY_MODE_PREAUTHORIZED = "PreAuthorized"
@@ -256,3 +259,6 @@ def match_claim_envelope(
         return False, f"policy count bound reached ({released_count}/{max_tasks})"
 
     return True, f"matched policy {policy.get('policy_id')} (released {released_count}/{max_tasks})"
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

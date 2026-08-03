@@ -4,6 +4,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+
+
+
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -191,3 +194,6 @@ def build_orchestration_timeline_preview(repo_root: Path, orchestration_id: str)
         "owner_confirmation_required": bool(owner_attention_items or conflicts),
         "safety_notice": "AIPOS-70 reads append-only orchestration timeline sources only. It does not write events, iterations, summary state, queue tasks, drafts, records, runtime state, forum backends, or git state.",
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

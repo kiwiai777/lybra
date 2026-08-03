@@ -5,6 +5,9 @@ import re
 from typing import Any
 
 from tools.aipos_cli.agent_profiles import (
+
+
+
     actor_match_details,
     actor_matches_task,
     actor_matches_task_actor,
@@ -551,3 +554,6 @@ def validate_single_task(
     counts = Counter(item["task_id"] for item in comparison_tasks if item.get("task_id"))
     duplicate_task_ids = {task_id for task_id, count in counts.items() if count > 1}
     return validate_task(task, duplicate_task_ids, current_actor=current_actor, records=records, profiles=profiles)
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

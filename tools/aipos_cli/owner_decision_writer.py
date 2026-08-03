@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.autonomy_policy import (
+
+
+
     POLICIES_DIR,
     POLICY_ID_PATTERN,
     build_autonomy_policy_markdown,
@@ -608,3 +611,6 @@ def build_owner_decision_record(
         policy_file.write_text(policy_markdown, encoding="utf-8")
     result["wrote"] = True
     return result
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

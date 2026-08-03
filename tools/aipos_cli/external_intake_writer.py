@@ -10,6 +10,9 @@ from typing import Any
 from tools.aipos_cli.draft_writer import render_markdown_task_card
 from tools.aipos_cli.workspace_config import has_workspace_queue
 
+
+
+
 EXTERNAL_INTAKE_DRAFTS_DIR = Path("5_tasks/drafts/external_intake")
 EXTERNAL_TAG_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 REQUIRED_PAYLOAD_FIELDS = [
@@ -311,3 +314,6 @@ def build_external_intake_draft(
     target_file.write_text(rendered_markdown, encoding="utf-8")
     result["wrote"] = True
     return result
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

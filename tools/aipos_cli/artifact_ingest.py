@@ -19,6 +19,9 @@ import stat as stat_module
 from pathlib import Path
 from typing import Any
 
+
+
+
 WORKSPACE_ARTIFACT_ROOT = Path("workspace_artifacts")
 APPROVED_SCRATCH_ROOT_ENV = "LYBRA_APPROVED_SCRATCH_ROOT"
 # Truth / control-plane prefixes that must never be a scratch source.
@@ -293,3 +296,6 @@ def _read_nofollow(path: Path) -> bytes:
         return data
     finally:
         os.close(fd)
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

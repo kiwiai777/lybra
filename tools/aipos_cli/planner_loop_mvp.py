@@ -10,6 +10,9 @@ from tools.aipos_cli.orchestration_timeline_preview import build_orchestration_t
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import load_all_tasks
 
+
+
+
 ORCHESTRATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -213,3 +216,6 @@ def build_planner_loop_mvp_preview(repo_root: Path, orchestration_id: str, *, ac
         "needs_owner_reasons": owner_reasons if verdict == "NEEDS_OWNER" else [],
         "safety_notice": "AIPOS-75 planner loop MVP is a single-step coordinator preview. It writes no files, launches no runtime, polls no queue, runs no agents, publishes or claims nothing, and returns no execute token.",
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

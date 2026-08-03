@@ -17,6 +17,9 @@ from typing import Any
 
 from tools.aipos_cli.workspace_config import DEFAULT_BOARD_HOST, DEFAULT_BOARD_PORT, DEFAULT_MCP_HOST, DEFAULT_MCP_PORT
 
+
+
+
 LOCAL_DIR_REL = Path(".lybra") / "local"
 CONNECTION_REL = LOCAL_DIR_REL / "connection.json"
 SERVICE_STATE_REL = LOCAL_DIR_REL / "service_state.json"
@@ -614,6 +617,48 @@ def rotate_report(
     )
     if blocking:
         return _blocked("serve_rotate", workspace_root, blocking, warnings, connection_target=connection_target)
+    
+    # AIPOS-316 S1.3: detect existing instance bindings that would be lost
+    conn_path = connection_path(workspace_root, connection_target=connection_target)
+    if conn_path.exists():
+        try:
+            existing_config = load_connection_config(workspace_root, connection_target=connection_target)
+            existing_tokens = existing_config.get("tokens", []) if isinstance(existing_config, dict) else []
+            
+            # Collect existing bindings
+            existing_bindings = {}
+            for token in existing_tokens:
+                if isinstance(token, dict) and "agent_instance" in token:
+                    role = token.get("role")
+                    if role:
+                        existing_bindings[role] = token["agent_instance"]
+            
+            # Check if rotation would lose bindings
+            if existing_bindings:
+                # Build new bindings map
+                new_bindings = dict(role_instances) if role_instances else {}
+                if executor_instance:
+                    new_bindings["executor"] = executor_instance
+                
+                # Find bindings that would be lost
+                lost_bindings = {}
+                for role, instance in existing_bindings.items():
+                    if role not in new_bindings:
+                        lost_bindings[role] = instance
+                
+                if lost_bindings:
+                    lost_list = ", ".join(f"{role}={instance}" for role, instance in sorted(lost_bindings.items()))
+                    blocking.append(
+                        f"serve rotate would lose existing instance bindings: {lost_list}. "
+                        f"PreAuthorized autonomy would become unavailable for these roles. "
+                        f"Specify --executor-instance and/or --role-instance to preserve bindings, "
+                        f"or confirm this is intentional (e.g., rotating to unbind for testing)."
+                    )
+                    return _blocked("serve_rotate", workspace_root, blocking, warnings, connection_target=connection_target)
+        except Exception:
+            # Best effort: if we can't read existing config, proceed (file may be corrupted)
+            pass
+    
     # AIPOS-259 (F-258-2): fail-closed before minting — a wildcard bind with no usable advertise
     # would write 0.0.0.0 URLs no client can dial. rotate rebuilds fresh, so no stored values apply.
     board_bind, board_adv, board_block = _resolve_bind_advertise(
@@ -1020,3 +1065,6 @@ def _blocked(
         "blocking_reasons": blocking,
         "secrets_notice": "Raw tokens are not printed. Fix local secret file permissions before using service mode tokens.",
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

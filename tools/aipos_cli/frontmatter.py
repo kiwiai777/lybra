@@ -3,6 +3,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+
+
+
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -181,3 +184,6 @@ def parse_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str, list[str
     data, fallback_warnings = _fallback_parse(frontmatter)
     warnings.extend(fallback_warnings)
     return data, body, warnings
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

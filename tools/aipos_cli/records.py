@@ -7,6 +7,9 @@ from typing import Any
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 
 
+
+
+
 def expected_session_record_path(repo_root: Path, task_id: str, session_id: str) -> Path:
     return repo_root / "5_tasks" / "records" / "sessions" / task_id / f"{session_id}.md"
 
@@ -711,3 +714,6 @@ def check_task_record_refs(task: dict[str, Any], records: dict[str, Any]) -> dic
         "warnings": warnings,
         "needs_owner_reasons": needs_owner_reasons,
     }
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)

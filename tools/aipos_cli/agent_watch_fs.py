@@ -88,6 +88,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+
+
+
 try:
     import psutil
 except ImportError:
@@ -553,7 +556,9 @@ def run_fs_watch(
     
     # Track last observation mtime for stall detection (initialized to current time if no observable surface)
     last_obs_mtime = get_observation_mtime(ws, run_log_path)
+    initial_obs_mtime = last_obs_mtime  # AIPOS-316: track initial state for never-changed detection
     last_obs_check = start  # Track when we last checked observation mtime
+    stall_hint_emitted = False  # AIPOS-316: emit observation surface hint only once
     end_pattern_seen = False
     grace_after_end = False  # S2: one-poll grace period after end-pattern
 
@@ -676,6 +681,17 @@ def run_fs_watch(
         else:
             # Observation surface hasn't changed since last_obs_check
             silence_duration = clock() - last_obs_check
+            
+            # AIPOS-316 S1.2: emit operational hint if observation surface never changed since startup
+            if not stall_hint_emitted and current_obs_mtime == initial_obs_mtime and silence_duration >= stall_secs:
+                hint_msg = (
+                    "WARNING: Observation surface has not changed since watch started. "
+                    "If the monitored process buffers output (e.g., pi), consider using "
+                    "--worktree-path, --proc-pattern, or --session-dirs for more responsive monitoring."
+                )
+                print(hint_msg, file=sys.stderr)
+                stall_hint_emitted = True
+            
             if silence_duration >= stall_secs:
                 tail = get_run_log_tail(run_log_path) if run_log_path else ""
                 last_line = tail.strip().split("\n")[-1] if tail.strip() else ""
@@ -730,3 +746,6 @@ def run_fs_watch_cli(args: Any) -> int:
     finally:
         signal.signal(signal.SIGTERM, prev_term)
         signal.signal(signal.SIGINT, prev_int)
+# AIPOS-316: Guard against direct invocation
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+check_direct_invocation(__name__)
