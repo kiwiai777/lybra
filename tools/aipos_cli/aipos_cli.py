@@ -938,6 +938,22 @@ def build_parser() -> argparse.ArgumentParser:
     _supervise_parser.add_argument("--session-dirs", help="Comma-separated session directories")
     _supervise_parser.add_argument("--worktree-path", help="Git worktree path (default: product-repo)")
     _supervise_parser.add_argument("--run-log", help="Run log path (for stall detection)")
+    
+    # `agent launch-check` (AIPOS-295C): 开工确认 + 首刻失败自愈
+    _launch_check_parser = agent_subparsers.add_parser(
+        "launch-check",
+        help="[AIPOS-295C] 开工确认 + 首刻失败自愈. Verifies agent actually starts working (not just process exists). "
+        "Implements bounded retry (1 relaunch) and writes BLOCK on double failure. Exit 2 on BLOCK."
+    )
+    _launch_check_parser.add_argument("--spawn-cmd", required=True, help="Command to spawn (must include timeout wrapper)")
+    _launch_check_parser.add_argument("--task-id", required=True, help="Task card ID (e.g., AIPOS-295C)")
+    _launch_check_parser.add_argument("--executor-instance", required=True, help="Executor agent instance name")
+    _launch_check_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
+    _launch_check_parser.add_argument("--session-dirs", help="Comma-separated session directories to monitor")
+    _launch_check_parser.add_argument("--worktree-path", help="Git worktree path (default: product-repo)")
+    _launch_check_parser.add_argument("--launch-window", type=float, default=90, help="Launch verification window seconds (default: 90)")
+    _launch_check_parser.add_argument("--check-interval", type=float, default=5, help="Poll interval seconds (default: 5)")
+    _launch_check_parser.add_argument("--model-fallback-policy", help="JSON file with model substitution policy (optional)")
 
     board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
@@ -1326,6 +1342,10 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "agent_command", None) == "supervise":
             from tools.aipos_cli.agent_supervise import main as supervise_main
             return supervise_main(sys.argv[3:])  # Pass remaining args after 'agent supervise'
+        # AIPOS-295C: agent launch-check
+        if getattr(args, "agent_command", None) == "launch-check":
+            from tools.aipos_cli.agent_launch_check import main as launch_check_main
+            return launch_check_main(sys.argv[3:])  # Pass remaining args after 'agent launch-check'
         # Gate mode (candidate ⑤): preserve the AIPOS-248 required-arg contract in code
         # (--actor / a token source are required for the gate pull). argparse can no longer
         # express 'required only when --gate-url is set' now that `watch` is polymorphic;
