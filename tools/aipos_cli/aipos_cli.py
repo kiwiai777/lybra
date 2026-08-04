@@ -91,8 +91,11 @@ from tools.aipos_cli.workspace_config import (
     DEFAULT_BOARD_PORT,
     DEFAULT_MCP_HOST,
     DEFAULT_MCP_PORT,
+    _project_candidates,
+    get_collaboration_profile,
     load_workspace_config,
     project_json_path,
+    read_project_json,
     resolve_home_root,
     resolve_workspace_root,
     scaffold_project,
@@ -539,6 +542,82 @@ def _render_mcp_config_text(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append(str(report["secrets_notice"]))
     return "\n".join(lines)
+
+
+def _ask_project_type_interactive() -> dict[str, Any] | None:
+    """AIPOS-335 S2: 交互式询问项目类型，生成 collaboration_profile。
+    
+    按 AIPOS-304 D3 措辞：只设默认、明示可后加，不吓唬用户“定死了”。
+    可跳过：不回答时给安全默认并提示如何后改。
+    
+    返回 collaboration_profile dict 或 None（跳过）。
+    """
+    import sys
+    
+    print("\n" + "=" * 80)
+    print("🔧 项目类型配置（可以在项目设置中修改）")
+    print("=" * 80)
+    print("\n这个项目主要用来做什么？")
+    print("  1. 代码开发（需要独立审计 agent）")
+    print("  2. 非代码任务（文档/配置/部署，验证台审计）")
+    print("  3. 混合项目（同时包含代码与非代码任务）")
+    print("  [Enter] 跳过（使用默认：代码开发）")
+    print("\n💡 提示：选择后仍可在项目设置中调整，首次出现新类型任务时会有智能提示\n")
+    
+    try:
+        choice = input("请选择 (1-3 或 Enter): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n跳过配置，使用默认值。")
+        return None
+    
+    if not choice:
+        print("使用默认配置：代码开发项目")
+        print("🔧 可以后续在项目设置中修改协作能力")
+        return None
+    
+    # 根据选择生成 collaboration_profile
+    if choice == "1":
+        profile = {
+            "code_enabled": True,
+            "deploy_gate_enabled": False,
+            "default_audit_mode": "agent",
+            "output_locations": ["product_repo_worktree", "workspace_records"],
+        }
+        print("✅ 项目类型：代码开发（完整 agent 审计）")
+    elif choice == "2":
+        profile = {
+            "code_enabled": False,
+            "deploy_gate_enabled": False,
+            "default_audit_mode": "bench",
+            "output_locations": ["workspace_records", "remote_system"],
+        }
+        print("✅ 项目类型：非代码（验证台审计）")
+    elif choice == "3":
+        profile = {
+            "code_enabled": True,
+            "deploy_gate_enabled": False,
+            "default_audit_mode": "hybrid",
+            "output_locations": ["product_repo_worktree", "workspace_records", "remote_system"],
+        }
+        print("✅ 项目类型：混合（按任务自适应）")
+    else:
+        print(f"无效选择 '{choice}'，使用默认配置")
+        return None
+    
+    # 询问是否涉及部署
+    print("\n是否涉及部署？(y/N): ", end="")
+    try:
+        deploy = input().strip().lower()
+        if deploy in ("y", "yes"):
+            profile["deploy_gate_enabled"] = True
+            print("✅ 启用部署门（需要双层 Owner 确认）")
+    except (EOFError, KeyboardInterrupt):
+        pass
+    
+    print("🔧 可以后续在项目设置中修改协作能力")
+    print("=" * 80 + "\n")
+    
+    return profile
 
 
 def _print_onboarding_guide(workspace_root: Path, project_id: str) -> None:
@@ -1138,6 +1217,27 @@ def build_parser() -> argparse.ArgumentParser:
     auditor_loop_parser.add_argument("--timeout", type=float, default=1800.0, help="FS pump watch timeout seconds (default: 1800)")
     auditor_loop_parser.add_argument("--claim-transient-tries", type=int, default=20, help="Transient claim retry attempts (default: 20)")
 
+    # AIPOS-325: pump 子命令 (kickoff 三层制约 + 产品 CLI 入口)
+    pump_parser = subparsers.add_parser("pump", help="AIPOS-325: Advisor pump operations with kickoff constraints")
+    pump_subparsers = pump_parser.add_subparsers(dest="pump_command")
+    pump_run_parser = pump_subparsers.add_parser(
+        "run",
+        help="Dispatch a task with kickoff three-layer constraints (generated kickoff + budget limit + repetition check)"
+    )
+    pump_run_parser.add_argument("--card", "--card-id", dest="card_id", required=True, help="Task card ID (e.g., AIPOS-325)")
+    pump_run_parser.add_argument("--role", required=True, choices=["executor", "auditor"], help="Target role (executor or auditor)")
+    pump_run_parser.add_argument("--round-type", default="first", choices=["first", "fix", "resume"], help="Round type: first (default), fix (repair), or resume (continue)")
+    pump_run_parser.add_argument("--delta", default="", help="Incremental information for this round (advisor provides only delta)")
+    pump_run_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root (governance repo)")
+    pump_run_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
+    pump_run_parser.add_argument("--gate-url", default="http://127.0.0.1:7118", help="Gate URL (default: http://127.0.0.1:7118)")
+    pump_run_parser.add_argument("--connection-json", help="Path to connection.json (default: <workspace>/.lybra/connection.json)")
+    pump_run_parser.add_argument("--envelope", help="Policy envelope ID (auto-detect from policies/ if not provided)")
+    pump_run_parser.add_argument("--budget-threshold", type=int, default=8000, help="Budget threshold in tokens (default: 8000)")
+    pump_run_parser.add_argument("--repetition-threshold", type=float, default=0.3, help="Repetition overlap threshold 0.0-1.0 (default: 0.3)")
+    pump_run_parser.add_argument("--dry-run", action="store_true", help="Validate kickoff constraints without actual dispatch")
+    pump_run_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP HTTP/SSE or run MCP setup diagnostics")
     mcp_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     mcp_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
@@ -1294,6 +1394,10 @@ def build_parser() -> argparse.ArgumentParser:
     project_setrepo_parser.add_argument("--code-repo", required=True, help="Absolute path to the project's code repo")
     project_setrepo_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setrepo_parser.add_argument("--actor", default=default_actor, help="Provenance actor (registered_by); defaults to $USER or owner")
+    # AIPOS-335 S4: list existing projects and their inferred collaboration_profile
+    project_list_parser = project_subparsers.add_parser("list", help="AIPOS-335: List existing projects and their collaboration profiles")
+    project_list_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_list_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-293: export/import project structure file
     project_export_parser = project_subparsers.add_parser("export", help="AIPOS-293: Export workspace structure to a YAML file")
     project_export_parser.add_argument("workspace_root", nargs="?", help="Workspace root to export (defaults to current workspace)")
@@ -1643,11 +1747,16 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 home = resolve_home_root(explicit_root=args.home_root)
             if args.project_command == "new":
+                # AIPOS-335 S2: 交互式询问项目类型
+                collaboration_profile = _ask_project_type_interactive()
                 root = scaffold_project(
-                    home, args.name, code_repo=args.code_repo, registered_by=args.actor
+                    home, args.name, code_repo=args.code_repo, registered_by=args.actor,
+                    collaboration_profile=collaboration_profile
                 )
                 print(f"Created project root: {root}")
                 print(f"project.json: {project_json_path(root)}")
+                if collaboration_profile:
+                    print(f"collaboration_profile: {collaboration_profile}")
                 print(f"next: lybra serve with LYBRA_HOME_ROOT={home}")
                 print("tokens: lybra serve writes ~/.lybra/local/connection.json (runtime root)")
                 return 0
@@ -1656,6 +1765,50 @@ def main(argv: list[str] | None = None) -> int:
                     home, args.name, args.code_repo, registered_by=args.actor
                 )
                 print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()}")
+                return 0
+            if args.project_command == "list":
+                # AIPOS-335 S4: 存量项目盘点
+                candidates = _project_candidates(home)
+                result = {
+                    "ok": True,
+                    "home_root": str(home),
+                    "project_count": len(candidates),
+                    "projects": [],
+                }
+                for name in candidates:
+                    project_root = home / name
+                    project_json = read_project_json(project_root)
+                    profile = get_collaboration_profile(project_root)
+                    has_explicit_profile = "collaboration_profile" in project_json
+                    result["projects"].append({
+                        "name": name,
+                        "project_root": str(project_root),
+                        "code_repo": project_json.get("code_repo"),
+                        "collaboration_profile": profile,
+                        "has_explicit_profile": has_explicit_profile,
+                        "inferred": not has_explicit_profile,
+                    })
+                if args.json:
+                    print(render_json(result))
+                else:
+                    print(f"\nFound {len(candidates)} project(s) under {home}:\n")
+                    for proj in result["projects"]:
+                        marker = "✅" if proj["has_explicit_profile"] else "🔵"
+                        print(f"{marker} {proj['name']}")
+                        print(f"   Path: {proj['project_root']}")
+                        print(f"   Code repo: {proj['code_repo'] or 'None'}")
+                        if proj["inferred"]:
+                            print(f"   Profile: (inferred, not yet written to project.json)")
+                        else:
+                            print(f"   Profile: (explicit in project.json)")
+                        cp = proj["collaboration_profile"]
+                        print(f"     - code_enabled: {cp['code_enabled']}")
+                        print(f"     - deploy_gate_enabled: {cp['deploy_gate_enabled']}")
+                        print(f"     - default_audit_mode: {cp['default_audit_mode']}")
+                        print(f"     - output_locations: {', '.join(cp['output_locations'])}")
+                        print()
+                    print("💡 提示：蓝色圆点 🔵 表示该项目尚未写入 collaboration_profile，使用默认推断值")
+                    print("💡 Owner 可决定是否写入（本命令只列不改）")
                 return 0
             if args.project_command == "export":
                 ws_root = args.workspace_root
@@ -2106,6 +2259,59 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
+    if args.command == "pump":
+        if getattr(args, "pump_command", None) == "run":
+            from tools.aipos_cli.advisor_pump import validate_and_dispatch
+            
+            workspace_root = Path(args.workspace_root).expanduser().resolve()
+            product_repo = Path(args.product_repo).expanduser().resolve() if args.product_repo else Path.home() / "projects" / "lybra"
+            
+            # 执行三层制约验证
+            result = validate_and_dispatch(
+                card_id=args.card_id,
+                role=args.role,
+                round_type=args.round_type,
+                delta=args.delta,
+                workspace_root=workspace_root,
+                budget_threshold=args.budget_threshold,
+                repetition_threshold=args.repetition_threshold,
+                dry_run=args.dry_run,
+            )
+            
+            if args.json:
+                print(render_json(result))
+            else:
+                # 文本输出
+                if result["ok"]:
+                    print(f"\u2713 Kickoff validation PASSED")
+                    print(f"\nGenerated kickoff ({result.get('metrics', {}).get('total_tokens', 'N/A')} tokens):")
+                    print("-" * 60)
+                    print(result["kickoff"])
+                    print("-" * 60)
+                    if result.get("metrics"):
+                        metrics = result["metrics"]
+                        print(f"\nMetrics:")
+                        print(f"  Total tokens: {metrics.get('total_tokens', 'N/A')}")
+                        print(f"  Budget threshold: {metrics.get('budget_threshold', 'N/A')}")
+                        print(f"  Overlap ratio: {metrics.get('overlap_ratio', 0.0):.1%}")
+                        print(f"  Repetition threshold: {metrics.get('repetition_threshold', 'N/A'):.1%}")
+                    if args.dry_run:
+                        print("\n[DRY RUN] Validation passed. Actual dispatch skipped.")
+                    else:
+                        print("\n[READY] Validation passed. Proceed with actual dispatch.")
+                        print(result.get("message", ""))
+                else:
+                    print(f"\u2717 Kickoff validation BLOCKED")
+                    print(f"\nErrors:")
+                    for error in result.get("errors", []):
+                        print(error)
+                        print()
+            
+            return 0 if result["ok"] else 1
+        
+        parser.print_help()
+        return 2
+
     if args.command == "task":
         try:
             selected = _resolve_task_selection(args, tasks)
@@ -2141,3 +2347,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

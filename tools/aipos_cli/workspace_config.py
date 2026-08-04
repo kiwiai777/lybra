@@ -470,6 +470,48 @@ def governance_paths(project_root: str | Path) -> dict[str, Path]:
 _QUEUE_STATES = ("pending", "claimed", "completed", "blocked")
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-335: collaboration_profile schema (AIPOS-304 阶段一)
+#
+# project.json 新增 collaboration_profile 字段，记录项目协作能力配置。
+# 向后兼容：缺字段时不报错，提供默认行为。
+# ---------------------------------------------------------------------------
+
+def default_collaboration_profile() -> dict[str, Any]:
+    """AIPOS-335: collaboration_profile 默认值（向后兼容现状）。
+    
+    按 AIPOS-304 D1 schema:
+    - code_enabled: 默认 True（现状所有项目都跑代码任务）
+    - deploy_gate_enabled: 默认 False（现状无部署门）
+    - default_audit_mode: "agent"（现状所有任务都走完整 agent 审计）
+    - output_locations: ["product_repo_worktree", "workspace_records"]（现状默认产出位置）
+    
+    这个默认值使老项目行为零改变。
+    """
+    return {
+        "code_enabled": True,
+        "deploy_gate_enabled": False,
+        "default_audit_mode": "agent",
+        "output_locations": ["product_repo_worktree", "workspace_records"],
+    }
+
+
+def get_collaboration_profile(project_root: str | Path) -> dict[str, Any]:
+    """AIPOS-335: 读取项目的 collaboration_profile，缺失时返回默认值。
+    
+    向后兼容：老项目不存在该字段时，返回 default_collaboration_profile()，
+    不报错、不阻断任何操作。
+    """
+    project_json = read_project_json(project_root)
+    profile = project_json.get("collaboration_profile")
+    if profile is None or not isinstance(profile, dict):
+        return default_collaboration_profile()
+    # 补齐缺失的字段（部分填写的场景）
+    result = default_collaboration_profile()
+    result.update(profile)
+    return result
+
+
 def project_root_for(home_root: str | Path, name: str) -> Path:
     """The intended <home>/<name> root for a project (no existence assertion)."""
     return Path(home_root).expanduser().resolve() / str(name).strip()
@@ -499,19 +541,28 @@ def write_project_json(
     registered_by: str = "owner",
     registered_at: str | None = None,
     preserve_registered_at: bool = True,
+    collaboration_profile: dict[str, Any] | None = None,
+    preserve_collaboration_profile: bool = True,
 ) -> Path:
     """Write <project_root>/project.json with provenance (M3).
 
-    Schema: {project, code_repo, registered_at, registered_by, config_version:1} (sorted,
-    2-indent, trailing newline). `code_repo` is stored as an expanded absolute-ish string or
-    null. When `preserve_registered_at` and an existing project.json already carries a
-    `registered_at`, it is kept (so set-repo never clobbers the original creation provenance).
+    Schema: {project, code_repo, registered_at, registered_by, config_version:1,
+    collaboration_profile} (sorted, 2-indent, trailing newline). `code_repo` is stored as an
+    expanded absolute-ish string or null. When `preserve_registered_at` and an existing
+    project.json already carries a `registered_at`, it is kept (so set-repo never clobbers the
+    original creation provenance).
+    
+    AIPOS-335: collaboration_profile is optional. When preserve_collaboration_profile=True
+    (default) and an existing project.json has collaboration_profile, it is preserved unless
+    an explicit new value is passed. When collaboration_profile=None and no existing value,
+    the field is omitted (backward compatible: old projects stay unchanged).
     """
     root = Path(project_root)
     path = project_json_path(root)
 
+    existing = read_project_json(root) if (preserve_registered_at or preserve_collaboration_profile) else {}
+    
     if preserve_registered_at:
-        existing = read_project_json(root)
         prior = str(existing.get("registered_at") or "").strip()
         if prior:
             registered_at = prior
@@ -524,6 +575,15 @@ def write_project_json(
         "registered_by": registered_by,
         "config_version": 1,
     }
+    
+    # AIPOS-335: collaboration_profile 向后兼容处理
+    # 优先级：显式传入 > 保留旧值 > 不写入（老项目维持原状）
+    if collaboration_profile is not None:
+        payload["collaboration_profile"] = collaboration_profile
+    elif preserve_collaboration_profile and "collaboration_profile" in existing:
+        payload["collaboration_profile"] = existing["collaboration_profile"]
+    # else: 不写入 collaboration_profile（老项目维持无此字段状态）
+    
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
@@ -535,6 +595,7 @@ def scaffold_project(
     *,
     code_repo: str | Path | None = None,
     registered_by: str = "owner",
+    collaboration_profile: dict[str, Any] | None = None,
 ) -> Path:
     """Owner scaffold of a fresh per-project truth root under the home.
 
@@ -543,6 +604,9 @@ def scaffold_project(
     1=B) stub if absent, and project.json. Refuses to overwrite a non-empty existing root
     (teaching error). Directory shape is sourced from governance_paths() so there is one
     definition.
+    
+    AIPOS-335: collaboration_profile is optional. When provided, it will be written to
+    project.json; when None, project.json will not have this field (for backward compatibility).
     """
     clean = str(name).strip()
     if not clean:
@@ -565,7 +629,7 @@ def scaffold_project(
     if not decision_log.exists():
         decision_log.write_text(f"# {clean} Decision Log\n", encoding="utf-8")
 
-    write_project_json(root, clean, code_repo=code_repo, registered_by=registered_by)
+    write_project_json(root, clean, code_repo=code_repo, registered_by=registered_by, collaboration_profile=collaboration_profile)
     return root
 
 
