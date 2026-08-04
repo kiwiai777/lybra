@@ -42,6 +42,11 @@ try:
 except ImportError:
     psutil = None  # type: ignore
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from tools.aipos_cli.confirm_client import GateClient, GateError
+
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_ESCALATE = 75  # systemd RestartPreventExitStatus
@@ -181,6 +186,107 @@ Next step: Advisor/Owner reviews this file + decides model switch or other inter
     return escalate_file
 
 
+def diagnose_death_cause(
+    failure_record: dict[str, Any],
+    run_log: str | None,
+    session_dirs: str | None,
+) -> str:
+    """Diagnose death cause from failure signature.
+    
+    Returns one of: context_exhausted, process_crash, route_failure, unknown
+    """
+    reason = failure_record.get("reason", "")
+    proc_alive = failure_record.get("proc_alive", False)
+    cpu_delta = failure_record.get("cpu_delta", 0)
+    new_session_files = failure_record.get("new_session_files", 0)
+    worktree_changes = failure_record.get("worktree_changes", 0)
+    
+    # Process crashed/killed
+    if not proc_alive:
+        return "process_crash"
+    
+    # Context exhaustion signature: proc alive but silent death
+    # (CPU not climbing + zero session files + zero worktree delta)
+    if proc_alive and cpu_delta == 0 and new_session_files == 0 and worktree_changes == 0:
+        # Try to read run_log for compaction evidence
+        if run_log:
+            try:
+                log_path = Path(run_log)
+                if log_path.exists():
+                    # Read last 50 lines for compaction events
+                    with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.readlines()
+                        last_lines = lines[-50:] if len(lines) > 50 else lines
+                        last_text = ''.join(last_lines).lower()
+                        
+                        # Check for compaction indicators
+                        if 'compaction' in last_text or 'context' in last_text:
+                            return "context_exhausted"
+                        
+                        # Check for high cacheRead / low output (typical of context issues)
+                        if 'cacheread' in last_text and 'output":0' in last_text:
+                            return "context_exhausted"
+            except Exception:
+                pass
+        
+        # Default to context_exhausted if signature matches (silent death pattern)
+        return "context_exhausted"
+    
+    # Check for route/provider failure indicators
+    if "timeout" in reason.lower() or "connection" in reason.lower():
+        return "route_failure"
+    
+    # Cannot determine
+    return "unknown"
+
+
+def report_death_to_gate(
+    gate_client: GateClient | None,
+    card_id: str,
+    actor: str,
+    death_cause: str,
+    failure_history: list[dict[str, Any]],
+) -> None:
+    """Report executor death as blocked event via lybra_task_progress."""
+    if gate_client is None:
+        log("WARNING: No gate client, cannot report death event")
+        return
+    
+    try:
+        # Build reason summary
+        last_failure = failure_history[-1] if failure_history else {}
+        reason_text = f"Executor process terminated abnormally after {len(failure_history)} failure(s). "
+        reason_text += f"Death cause: {death_cause}. "
+        
+        if death_cause == "context_exhausted":
+            reason_text += "Likely context window exhaustion (silent death: no CPU activity, no file changes)."
+        elif death_cause == "process_crash":
+            reason_text += "Process crashed or was killed."
+        elif death_cause == "route_failure":
+            reason_text += "Possible route/provider connectivity issue."
+        else:
+            reason_text += "Cause could not be determined from available signals."
+        
+        # Call lybra_task_progress with event_type=blocked
+        args = {
+            "task_id": card_id,
+            "event_type": "blocked",
+            "actor": actor,
+            "reason": death_cause,
+            "summary": reason_text,
+        }
+        
+        result = gate_client.call_tool("lybra_task_progress", args)
+        
+        if result.get("ok"):
+            log(f"Death event reported to gate: {card_id} → {death_cause}")
+        else:
+            log(f"WARNING: Failed to report death event: {result}")
+    
+    except Exception as exc:
+        log(f"ERROR: Failed to report death event to gate: {exc}")
+
+
 def run_supervise(
     spawn_cmd: str,
     workspace_root: Path,
@@ -192,6 +298,8 @@ def run_supervise(
     session_dirs: str | None,
     worktree_path: str | None,
     run_log: str | None,
+    gate_client: GateClient | None,
+    actor: str,
 ) -> int:
     """Main supervise loop.
     
@@ -359,15 +467,23 @@ def run_supervise(
                 continue
             else:
                 # Escalate (second failure)
+                # Diagnose death cause
+                death_cause = diagnose_death_cause(failure_record, run_log, session_dirs)
+                
                 escalate_event = {
                     "kind": "escalate",
                     "reason": "max_respawn_exceeded",
                     "attempts": attempt,
+                    "death_cause": death_cause,
                     "failure_history": failure_history,
                     "timestamp": timestamp
                 }
                 print(json.dumps(escalate_event, ensure_ascii=False), flush=True)
                 log(f"Maximum respawn attempts ({max_attempts}) exceeded, escalating...")
+                log(f"Death cause diagnosed: {death_cause}")
+                
+                # Report death to gate via lybra_task_progress
+                report_death_to_gate(gate_client, card_id, actor, death_cause, failure_history)
                 
                 write_escalate_file(product_repo, card_id, spawn_cmd, failure_history)
                 return EXIT_ESCALATE
@@ -377,6 +493,34 @@ def run_supervise(
             return EXIT_OK
     
     return EXIT_OK
+
+
+def init_gate_client(connection_json: Path, gate_url: str) -> GateClient | None:
+    """Initialize gate client for death reporting (executor token)."""
+    try:
+        if not connection_json.exists():
+            log(f"WARNING: connection.json not found: {connection_json}")
+            return None
+        
+        conn_data = json.loads(connection_json.read_text(encoding="utf-8"))
+        executor_token = None
+        for item in conn_data.get("tokens", []):
+            if isinstance(item, dict) and item.get("role") == "executor":
+                executor_token = item.get("token", "").strip()
+                break
+        
+        if not executor_token:
+            log("WARNING: executor token not found in connection.json")
+            return None
+        
+        gate_client = GateClient(gate_url, executor_token)
+        gate_client.initialize()
+        log(f"Gate client initialized for death reporting")
+        return gate_client
+    
+    except Exception as exc:
+        log(f"WARNING: Failed to initialize gate client: {exc}")
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -399,6 +543,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-dirs", help="Comma-separated session directories")
     parser.add_argument("--worktree-path", help="Git worktree path (default: product-repo)")
     parser.add_argument("--run-log", help="Run log path (for stall detection)")
+    parser.add_argument("--gate-url", help="Gate URL (for death reporting, e.g., http://127.0.0.1:7118)")
+    parser.add_argument("--connection-json", type=Path, help="Connection.json path (for gate auth)")
+    parser.add_argument("--actor", help="Agent instance name (for death reporting, e.g., exec.lybra.kiwiai-dev)")
     
     args = parser.parse_args(argv)
     
@@ -414,6 +561,13 @@ def main(argv: list[str] | None = None) -> int:
     
     worktree_path = args.worktree_path or str(product_repo)
     
+    # Initialize gate client if credentials provided
+    gate_client = None
+    if args.gate_url and args.connection_json:
+        gate_client = init_gate_client(args.connection_json, args.gate_url)
+    
+    actor = args.actor or "exec.lybra.kiwiai-dev"
+    
     try:
         return run_supervise(
             spawn_cmd=args.spawn_cmd,
@@ -426,6 +580,8 @@ def main(argv: list[str] | None = None) -> int:
             session_dirs=args.session_dirs,
             worktree_path=worktree_path,
             run_log=args.run_log,
+            gate_client=gate_client,
+            actor=actor,
         )
     except KeyboardInterrupt:
         log("Interrupted by user")
