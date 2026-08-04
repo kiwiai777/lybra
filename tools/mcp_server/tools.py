@@ -68,6 +68,10 @@ QUEUE_CLOSE_SCOPE = "queue_close"
 # amend: modify pending task frontmatter/body with amendment history (only pending allowed).
 QUEUE_WITHDRAW_SCOPE = "queue_withdraw"
 QUEUE_AMEND_SCOPE = "queue_amend"
+# AIPOS-323: task_progress scope — agent self-reports task facts (started/progress/completed/blocked)
+# to the gate, which records them (append-only events) without maintaining online/offline state.
+# This is the "agent opens mouth to gate" direction (取代顾问观察式); gate只记录不判活、不心跳、不推送。
+TASK_PROGRESS_SCOPE = "task_progress"
 # AIPOS-197 gate-hardening v0: an Owner-only scope required to CONFIRM consequential
 # truth mutations. dry-run keeps its operation scope; confirm additionally requires
 # this scope, which the executor token does not hold — so a confined agent cannot
@@ -392,6 +396,10 @@ def _queue_withdraw_scope_allowed() -> bool:
 
 def _queue_amend_scope_allowed() -> bool:
     return _capability_has_scope(QUEUE_AMEND_SCOPE)
+
+
+def _task_progress_scope_allowed() -> bool:
+    return _capability_has_scope(TASK_PROGRESS_SCOPE)
 
 
 def _map_controlled_execute_error(response: dict[str, Any], *, dry_run_tool: str = "lybra_intake_submit_dry_run") -> dict[str, Any]:
@@ -2339,6 +2347,133 @@ def lybra_queue_amend_confirm(arguments: dict[str, Any] | None = None) -> dict[s
     return _tool_result(response, is_error=not bool(response.get("ok", False)))
 
 
+def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-323: agent self-reports task progress events (started/progress/completed/blocked).
+    
+    Agent pushes task facts to gate, which writes append-only event records to
+    5_tasks/records/events/<task_id>/. Gate does NOT maintain online/offline state,
+    does NOT timeout-judge liveness, does NOT push to anyone. Advisor/board read events as needed.
+    
+    This is the "agent opens mouth" direction (取代顾问观察式); gate只记录不判活、不心跳、不推送。
+    跨机可用 (MCP HTTP, no gate filesystem access required).
+    """
+    if not _task_progress_scope_allowed():
+        return _scope_denied_result_for(TASK_PROGRESS_SCOPE, "task progress tools")
+    
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    if not task_id:
+        return _teaching_error(
+            "TASK_ID_REQUIRED",
+            "task_id is required for task progress events.",
+            "Pass the task_id you are reporting progress for.",
+        )
+    
+    event_type = str(args.get("event_type") or "").strip()
+    if event_type not in ("started", "progress", "completed", "blocked"):
+        return _teaching_error(
+            "INVALID_EVENT_TYPE",
+            f"event_type must be one of: started, progress, completed, blocked. Got: {event_type}",
+            "Pass a valid event_type.",
+        )
+    
+    actor = str(args.get("actor") or "").strip()
+    if not actor:
+        return _teaching_error(
+            "ACTOR_REQUIRED",
+            "actor is required.",
+            "Pass the actor (agent instance) reporting this event.",
+        )
+    
+    # Optional fields
+    summary = str(args.get("summary") or "").strip()
+    model_self_reported = str(args.get("model_self_reported") or "").strip()
+    stage = str(args.get("stage") or "").strip()
+    reason = str(args.get("reason") or "").strip()
+    
+    # Write event record
+    try:
+        repo_root = _repo_root()
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        
+        # Build event record
+        events_dir = repo_root / "5_tasks" / "records" / "events" / task_id
+        events_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Event filename: <event_type>_<timestamp>.md
+        timestamp_slug = timestamp.replace(":", "").replace("-", "").replace("T", "_").replace("Z", "")
+        event_file = events_dir / f"{event_type}_{timestamp_slug}.md"
+        
+        # Build frontmatter
+        metadata = {
+            "record_type": "task_progress_event",
+            "event_type": event_type,
+            "task_id": task_id,
+            "actor": actor,
+            "timestamp": timestamp,
+        }
+        if model_self_reported:
+            metadata["model_self_reported"] = model_self_reported
+        if stage:
+            metadata["stage"] = stage
+        if summary:
+            metadata["summary"] = summary
+        if reason:
+            metadata["reason"] = reason
+        
+        # Build markdown
+        lines = ["---"]
+        for key in ["record_type", "event_type", "task_id", "actor", "timestamp", "model_self_reported", "stage", "summary", "reason"]:
+            if key in metadata and metadata[key]:
+                value = metadata[key]
+                if any(char in str(value) for char in [":", "#", "[", "]", "{", "}", "\n"]) or str(value) != str(value).strip():
+                    lines.append(f"{key}: '{str(value).replace("'", "''")}'") 
+                else:
+                    lines.append(f"{key}: {value}")
+        lines.append("---")
+        lines.append(f"# Task Progress Event: {event_type}")
+        lines.append("")
+        lines.append(f"Agent `{actor}` reported {event_type} for task `{task_id}` at {timestamp}.")
+        lines.append("")
+        if summary:
+            lines.append(f"## Summary")
+            lines.append("")
+            lines.append(summary)
+            lines.append("")
+        if reason:
+            lines.append(f"## Reason")
+            lines.append("")
+            lines.append(reason)
+            lines.append("")
+        lines.append("---")
+        lines.append("")
+        lines.append("This event was self-reported by the agent via the task_progress MCP verb (AIPOS-323).")
+        lines.append("Gate records only; it does not maintain online/offline state or judge timeouts.")
+        lines.append("")
+        
+        event_file.write_text("\n".join(lines), encoding="utf-8")
+        
+        return _tool_result({
+            "ok": True,
+            "operation": "task_progress",
+            "event_type": event_type,
+            "task_id": task_id,
+            "actor": actor,
+            "timestamp": timestamp,
+            "event_file": str(event_file.relative_to(repo_root)),
+            "summary": summary or "(none)",
+            "model_self_reported": model_self_reported or "(none)",
+            "stage": stage or "(none)",
+            "reason": reason or "(none)",
+        }, is_error=False)
+    except Exception as exc:
+        return _teaching_error(
+            "EVENT_WRITE_FAILED",
+            f"Failed to write task progress event: {exc}",
+            "Check gate logs and file permissions.",
+        )
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
@@ -2367,6 +2502,7 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_withdraw_confirm": lybra_queue_withdraw_confirm,
     "lybra_queue_amend_dry_run": lybra_queue_amend_dry_run,
     "lybra_queue_amend_confirm": lybra_queue_amend_confirm,
+    "lybra_task_progress": lybra_task_progress,
 }
 
 
@@ -2985,6 +3121,30 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "lybra_task_progress",
+        "description": (
+            "AIPOS-323: agent self-reports task progress events (started/progress/completed/blocked). "
+            "Agent pushes task facts to gate, which writes append-only records to 5_tasks/records/events/<task_id>/. "
+            "Gate does NOT maintain online/offline state, does NOT judge timeouts, does NOT push to anyone. "
+            "This is the 'agent opens mouth' direction (取代顾问观察式); gate只记录不判活、不心跳、不推送. "
+            "跨机可用 (MCP HTTP). Frequency decided by agent; no gate-side timeout enforcement."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Task ID being reported on."},
+                "event_type": {"type": "string", "enum": ["started", "progress", "completed", "blocked"], "description": "Event type."},
+                "actor": {"type": "string", "description": "Agent instance reporting this event."},
+                "summary": {"type": "string", "description": "Optional free-text summary of progress."},
+                "model_self_reported": {"type": "string", "description": "Optional self-reported model identifier."},
+                "stage": {"type": "string", "description": "Optional stage marker (e.g., 'analysis', 'implementation')."},
+                "reason": {"type": "string", "description": "Optional reason (e.g., for blocked events)."},
+            },
+            "required": ["task_id", "event_type", "actor"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -3026,6 +3186,8 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_withdraw"))
     if _queue_amend_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_amend"))
+    if _task_progress_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_task_progress"))
     return descriptors
 
 

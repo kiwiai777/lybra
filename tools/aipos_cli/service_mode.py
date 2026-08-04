@@ -48,7 +48,10 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
         # AIPOS-283: executor also holds queue_close (the gate close verb — finalize
         # settlement step). This is NOT owner-gated: it requires closure_evidence and
         # a prior return record, but not owner_confirm.
-        "scopes": ["queue_claim", "queue_return", "queue_close"],
+        # AIPOS-323: executor also holds task_progress (agent self-reports task facts:
+        # started/progress/completed/blocked). Gate records only; no online/offline state,
+        # no timeout judgment, no push.
+        "scopes": ["queue_claim", "queue_return", "queue_close", "task_progress"],
     },
     {
         # AIPOS-197: Owner-only confirm authority. The Owner uses this token,
@@ -79,7 +82,8 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
     {
         "role": "auditor",
         "token_ref": "svc-auditor",
-        "scopes": ["queue_claim", "audit_verdict"],
+        # AIPOS-323: auditor also holds task_progress (审计牛马也需要上报自己的任务进度).
+        "scopes": ["queue_claim", "audit_verdict", "task_progress"],
     },
     {
         # AIPOS-206 (DG-11): the Planning Copilot's read-only credential. scopes [] is
