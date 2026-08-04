@@ -359,6 +359,7 @@ class McpToolTests(unittest.TestCase):
                 "lybra_task_preview",
                 "lybra_validate",
                 "lybra_context_pack_build",
+                "lybra_gate_guidance",  # AIPOS-330: read-only gate guidance (facts only)
             ],
         )
 
@@ -372,6 +373,7 @@ class McpToolTests(unittest.TestCase):
                 "lybra_task_preview",
                 "lybra_validate",
                 "lybra_context_pack_build",
+                "lybra_gate_guidance",  # AIPOS-330: read-only, exposed by default
             ],
         )
 

@@ -252,14 +252,23 @@ def _scope_denied_result() -> dict[str, Any]:
 
 
 def _scope_denied_result_for(scope: str, label: str) -> dict[str, Any]:
+    # AIPOS-330 S4: Actionable rejection — say who holds this scope.
+    from tools.aipos_cli.verb_contract import who_holds_scope
+    holders = who_holds_scope(scope)
+    holders_text = ", ".join(holders) if holders else "(no role currently holds this scope)"
     return _teaching_error(
         "SCOPE_DENIED",
-        f"Connection capability does not include {scope}; {label} are not available.",
+        f"Connection capability does not include '{scope}'; {label} are not available. "
+        f"Roles that hold '{scope}': {holders_text}.",
         (
             f"Bearer transport auth may still be valid, but scoped mutation tools stay hidden until "
-            f"LYBRA_CAPABILITY_TOKEN contains operations: [\"{scope}\"]. Run `lybra mcp doctor` to inspect redacted effective scopes."
+            f"LYBRA_CAPABILITY_TOKEN contains operations: [\"{scope}\"]. "
+            f"Roles holding this scope: {holders_text}. "
+            f"If you are the auditor and the scope is 'audit_verdict', your token DOES hold it — "
+            f"the 'owner' in 'owner_confirmation_token' is a parameter name, not a scope requirement. "
+            f"Run `lybra mcp doctor` to inspect redacted effective scopes."
         ),
-        doc_ref="AIPOS-109 capability token scope-gated tool visibility",
+        doc_ref="AIPOS-109 capability token scope-gated tool visibility; AIPOS-330 S4 actionable rejection",
     )
 
 
@@ -2474,6 +2483,38 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
         )
 
 
+def lybra_gate_guidance(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-330 S3: Read-only gate guidance — given card + role, answer what to do next.
+
+    Returns: the verb to call, required params, whether the role's scope is sufficient,
+    and who holds the scope if not. Data-driven (flow_description.py), not hardcoded.
+
+    This is the "agent asks gate" direction: kickoff no longer needs to describe the flow,
+    it just says "ask the gate".
+    """
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    role = str(args.get("role") or "").strip()
+
+    if not task_id:
+        return _error_result("task_id is required")
+    if not role:
+        return _error_result("role is required")
+
+    from tools.aipos_cli.flow_description import resolve_next_step
+
+    try:
+        result = resolve_next_step(task_id, role, _repo_root())
+    except Exception as exc:
+        return _error_result(f"Failed to resolve guidance: {exc}")
+
+    return _tool_result({
+        "ok": True,
+        "source": "gate",
+        "guidance": result,
+    })
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
@@ -2503,6 +2544,7 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_amend_dry_run": lybra_queue_amend_dry_run,
     "lybra_queue_amend_confirm": lybra_queue_amend_confirm,
     "lybra_task_progress": lybra_task_progress,
+    "lybra_gate_guidance": lybra_gate_guidance,
 }
 
 
@@ -2557,6 +2599,25 @@ READ_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "path": {"type": "string"},
                 "orchestration_id": {"type": "string"},
             },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_gate_guidance",
+        "description": (
+            "AIPOS-330 S3: Read-only gate guidance. Given a task_id and role, the gate answers: "
+            "which verb to call next, what params are required, and whether the role's scope is sufficient. "
+            "Data-driven from the gate's flow description (collaboration_profile × task fields → gate chain). "
+            "This replaces hand-written kickoff instructions: kickoff says 'ask the gate', gate answers with facts. "
+            "Gate provides facts only — it does not execute, does not decide whether the agent should act."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Task ID to get guidance for."},
+                "role": {"type": "string", "description": "Role requesting guidance (executor/auditor/advisor)."},
+            },
+            "required": ["task_id", "role"],
             "additionalProperties": False,
         },
     },

@@ -13,6 +13,11 @@ Key changes from 295B PoC to 312 Phase 2:
 - Multi-chain ready (mechanical steps driven by chain definition interface)
 - Owner ruling DL 03-02: executor can self-confirm return (queue_return scope sufficient)
 
+AIPOS-325 — kickoff三层制约 (补做):
+1. 第一层: 泵按模板生成kickoff,顾问只填增量
+2. 第二层: 预算硬上限 (kickoff+卡正文超阈值拒绝派工)
+3. 第三层: 复述检测 (kickoff与卡正文重叠度超阈值拒绝)
+
 Behavioral contract (aligned with 295B S1-S5 + 312 enhancements):
 1. SESSION-AGNOSTIC RECEPTION: watch --stream persistent listening, survives advisor
    session restarts. Three event types: owner_verify, executor health, return artifacts.
@@ -1343,6 +1348,288 @@ def main(argv: list[str] | None = None) -> int:
     )
     
     return pump.run()
+
+
+# AIPOS-325: kickoff 三层制约
+
+def generate_kickoff(
+    card_id: str,
+    role: str,
+    round_type: str = "first",
+    delta: str = "",
+    workspace_root: Path | None = None,
+) -> str:
+    """第一层：泵按模板生成 kickoff，顾问只填增量。
+
+    AIPOS-330 S2: 动词名从 gate 取,不手写。kickoff 不再描述流程,改为
+    告诉 agent "问 gate" (lybra_gate_guidance)。
+
+    Args:
+        card_id: 任务卡 ID (如 AIPOS-325)
+        role: 角色 (executor/auditor)
+        round_type: 轮次类型 (first/fix/resume)
+        delta: 顾问提供的增量信息（本轮特殊指示）
+        workspace_root: 治理仓根目录（用于读取卡信息）
+
+    Returns:
+        生成的 kickoff 文本
+
+    Raises:
+        ValueError: if generated kickoff contains unregistered verb names (S2 validation).
+    """
+    from tools.aipos_cli.verb_contract import validate_kickoff_verbs
+
+    # 基础模板 — AIPOS-330: 不再手写动词名,改为让 agent 问 gate
+    if round_type == "first":
+        template = f"""冷启动。执行卡 {card_id} 在 5_tasks/queue/pending/{card_id.lower()}.md(workspace={{workspace}},gate={{gate}},产品仓={{product_repo}})。先向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role}),按 gate 回答的动词与参数过门。
+{{delta}}
+【过门】完成后 write-return(最终 confirm 由顾问代按);自产审计卡只放 task_cards/{card_id}/,不投队列。"""
+    elif round_type == "fix":
+        template = f"""修复轮。执行卡 {card_id}，审计发现问题需修复。先向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role})。
+{{delta}}
+【约束】只修复审计指出的问题，禁止重写已有正确实现、禁止重复读卡全文。
+【过门】修复后 write-return，自产审计卡放 task_cards/{card_id}/。"""
+    elif round_type == "resume":
+        template = f"""续跑轮。执行卡 {card_id}，从断点继续。先向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role})。
+{{delta}}
+【已完成】{{completed_work}}
+【只需补】{{remaining_work}}
+【约束】禁止重写已有实现、禁止重复读卡全文。从断点继续完成剩余部分。
+【过门】完成后 write-return，自产审计卡放 task_cards/{card_id}/。"""
+    else:
+        raise ValueError(f"Unknown round_type: {round_type}")
+
+    # 填充增量
+    kickoff = template.replace("{delta}", delta if delta else "")
+
+    # AIPOS-330 S2: validate that all lybra_* verbs in kickoff exist in the registry.
+    # This catches hand-written verb names at generation time, not at agent runtime.
+    verb_errors = validate_kickoff_verbs(kickoff)
+    if verb_errors:
+        error_msg = "\n".join(verb_errors)
+        raise ValueError(
+            f"Generated kickoff for {card_id} ({round_type}) contains unregistered verb names:\n{error_msg}"
+        )
+
+    return kickoff.strip()
+
+
+def estimate_token_count(text: str) -> int:
+    """简单估算 token 数量（粗略：1 token ≈ 4 chars for English, ≈ 1.5 chars for Chinese）。
+    
+    实际应该用 tiktoken 等库，这里用简化估算。
+    """
+    # 统计中英文字符
+    chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    other_chars = len(text) - chinese_chars
+    
+    # 中文按 1.5 char/token，英文按 4 char/token
+    estimated_tokens = int(chinese_chars / 1.5 + other_chars / 4)
+    return estimated_tokens
+
+
+def check_budget_limit(
+    kickoff: str,
+    card_content: str,
+    threshold: int = 8000,
+) -> tuple[bool, int, str]:
+    """第二层：预算硬上限检查。
+    
+    Args:
+        kickoff: 生成的 kickoff 文本
+        card_content: 任务卡正文
+        threshold: token 阈值（默认 8000）
+    
+    Returns:
+        (是否通过, 实际token数, 错误信息)
+    """
+    total_tokens = estimate_token_count(kickoff) + estimate_token_count(card_content)
+    
+    if total_tokens > threshold:
+        excess = total_tokens - threshold
+        error_msg = f"""预算超限：kickoff + 卡正文 = {total_tokens} tokens，超出阈值 {threshold} tokens（超 {excess} tokens）。
+
+建议：
+1. 简化 kickoff 增量部分（当前 kickoff: {estimate_token_count(kickoff)} tokens）
+2. 检查任务卡是否过重（当前卡正文: {estimate_token_count(card_content)} tokens）
+3. 如卡本身过重，须在发卡时拦截（AIPOS-313 draft_validator）
+
+拒绝派工。"""
+        return False, total_tokens, error_msg
+    
+    return True, total_tokens, ""
+
+
+def calculate_overlap_ratio(text1: str, text2: str, ngram_size: int = 5) -> float:
+    """计算两段文本的重叠度（基于 n-gram）。
+    
+    Args:
+        text1: 文本1
+        text2: 文本2
+        ngram_size: n-gram 大小
+    
+    Returns:
+        重叠度 (0.0-1.0)
+    """
+    def get_ngrams(text: str, n: int) -> set[str]:
+        # 移除空白符，统一处理
+        text = "".join(text.split())
+        if len(text) < n:
+            return {text}
+        return {text[i:i+n] for i in range(len(text) - n + 1)}
+    
+    ngrams1 = get_ngrams(text1, ngram_size)
+    ngrams2 = get_ngrams(text2, ngram_size)
+    
+    if not ngrams1 or not ngrams2:
+        return 0.0
+    
+    intersection = ngrams1 & ngrams2
+    # 重叠度 = 交集 / 较小集合的大小
+    overlap_ratio = len(intersection) / min(len(ngrams1), len(ngrams2))
+    
+    return overlap_ratio
+
+
+def check_repetition(
+    kickoff: str,
+    card_content: str,
+    threshold: float = 0.3,
+) -> tuple[bool, float, str]:
+    """第三层：复述检测。
+    
+    Args:
+        kickoff: 生成的 kickoff 文本
+        card_content: 任务卡正文
+        threshold: 重叠度阈值（默认 0.3 = 30%）
+    
+    Returns:
+        (是否通过, 重叠度, 错误信息)
+    """
+    overlap = calculate_overlap_ratio(kickoff, card_content)
+    
+    if overlap > threshold:
+        error_msg = f"""复述检测失败：kickoff 与卡正文重叠度 {overlap:.1%}，超出阈值 {threshold:.1%}。
+
+常见原因：
+- 把卡内的必修项、红线、验收要求又抄了一遍
+- 重复引用卡内已有的技术细节
+
+建议：
+- kickoff 应只包含【本轮增量】（如"只修 F-312R-02"、"已完成 X，只需补 Y"）
+- 不要重复卡内已有信息
+
+拒绝派工。"""
+        return False, overlap, error_msg
+    
+    return True, overlap, ""
+
+
+def validate_and_dispatch(
+    card_id: str,
+    role: str,
+    round_type: str = "first",
+    delta: str = "",
+    workspace_root: Path | None = None,
+    budget_threshold: int = 8000,
+    repetition_threshold: float = 0.3,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """验证并派工（三层制约完整流程）。
+    
+    Args:
+        card_id: 任务卡 ID
+        role: 角色
+        round_type: 轮次类型
+        delta: 增量信息
+        workspace_root: 治理仓根目录
+        budget_threshold: 预算阈值
+        repetition_threshold: 复述阈值
+        dry_run: 是否只验证不实际派工
+    
+    Returns:
+        结果字典 {"ok": bool, "verdict": str, "kickoff": str, "errors": []}
+    """
+    result: dict[str, Any] = {
+        "ok": True,
+        "verdict": "PASS",
+        "kickoff": "",
+        "errors": [],
+        "metrics": {},
+    }
+    
+    # 读取任务卡
+    if workspace_root:
+        card_path = workspace_root / "5_tasks" / "queue" / "pending" / f"{card_id.lower()}.md"
+        if not card_path.exists():
+            # 尝试其他队列
+            for queue_dir in ["claimed", "blocked"]:
+                alt_path = workspace_root / "5_tasks" / "queue" / queue_dir / f"{card_id.lower()}.md"
+                if alt_path.exists():
+                    card_path = alt_path
+                    break
+        
+        if not card_path.exists():
+            result["ok"] = False
+            result["verdict"] = "BLOCK"
+            result["errors"].append(f"任务卡不存在: {card_path}")
+            return result
+        
+        try:
+            card_content = card_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            result["ok"] = False
+            result["verdict"] = "BLOCK"
+            result["errors"].append(f"读取任务卡失败: {exc}")
+            return result
+    else:
+        # 没有 workspace_root，无法读取卡，只生成 kickoff
+        card_content = ""
+    
+    # 第一层：生成 kickoff
+    try:
+        kickoff = generate_kickoff(card_id, role, round_type, delta, workspace_root)
+        result["kickoff"] = kickoff
+    except Exception as exc:
+        result["ok"] = False
+        result["verdict"] = "BLOCK"
+        result["errors"].append(f"生成 kickoff 失败: {exc}")
+        return result
+    
+    # 如果有卡内容，执行第二、三层检查
+    if card_content:
+        # 第二层：预算检查
+        budget_ok, total_tokens, budget_error = check_budget_limit(
+            kickoff, card_content, budget_threshold
+        )
+        result["metrics"]["total_tokens"] = total_tokens
+        result["metrics"]["budget_threshold"] = budget_threshold
+        
+        if not budget_ok:
+            result["ok"] = False
+            result["verdict"] = "BLOCK"
+            result["errors"].append(budget_error)
+            return result
+        
+        # 第三层：复述检测
+        repetition_ok, overlap, repetition_error = check_repetition(
+            kickoff, card_content, repetition_threshold
+        )
+        result["metrics"]["overlap_ratio"] = overlap
+        result["metrics"]["repetition_threshold"] = repetition_threshold
+        
+        if not repetition_ok:
+            result["ok"] = False
+            result["verdict"] = "BLOCK"
+            result["errors"].append(repetition_error)
+            return result
+    
+    # 如果不是 dry_run，这里应该实际调用派工逻辑
+    # 由于实际派工需要更多上下文（gate client, envelope 等），这里暂不实现
+    if not dry_run:
+        result["message"] = "实际派工逻辑需要在调用方实现（需要 gate client 等上下文）"
+    
+    return result
 
 
 if __name__ == "__main__":
