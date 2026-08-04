@@ -260,13 +260,20 @@ def launch_auditor_runtime(
     dir_name = reviewed_task_id or audit_task_id.replace("R", "")
     report_path = product_repo / "task_cards" / dir_name / f"AUDIT-REPORT-{audit_task_id}.md"
     
+    # AIPOS-330 S2: verb names come from the gate's verb contract registry, never hand-written.
+    from tools.aipos_cli.verb_contract import get_verb_contract, validate_kickoff_verbs
+
+    verdict_dry_run = get_verb_contract("lybra_audit_verdict_dry_run")
+    verdict_confirm = get_verb_contract("lybra_audit_verdict_confirm")
+    verdict_verb_name = "lybra_audit_verdict_dry_run" if verdict_dry_run else "lybra_audit_verdict_dry_run"
+
     if is_retry:
         # Tight kickoff for retry: report exists, only submit verdict
         kickoff = (
             f"有界补跑 (AIPOS-306 守护检测到 verdict_missing, 自动补提交裁决, 全程无人)。"
             f"审计卡 {audit_task_id} 已由 daemon 持有 (信封 {envelope})。"
-            f"报告已存在: {report_path}, 结论已定。你【只需补提交裁决】(write-return 流程的 "
-            f"lybra_audit_verdict 步骤), 【禁止重做分析】。读取既有报告, 提取结论, 提交裁决即可。"
+            f"报告已存在: {report_path}, 结论已定。你【只需补提交裁决】(调用 gate 的 "
+            f"{verdict_verb_name} 步骤), 【禁止重做分析】。读取既有报告, 提取结论, 提交裁决即可。"
             f"遇护栏拦截即说明并停。"
         )
     else:
@@ -280,16 +287,43 @@ def launch_auditor_runtime(
             f"逐项 PASS/FAIL+证据, 给结论。报告出口唯一化 (不得自选): 写到 {report_path}。"
             f"审完按你的 write-return 流程如实记录裁决与自报模型/token; 遇护栏拦截即说明并停。"
         )
+
+    # AIPOS-330 S2: validate that all lybra_* verbs in kickoff exist in the registry.
+    verb_errors = validate_kickoff_verbs(kickoff)
+    if verb_errors:
+        error_msg = "\n".join(verb_errors)
+        log(f"KICKOFF VERB VALIDATION FAILED:\n{error_msg}")
+        raise ValueError(f"Kickoff contains invalid verb names: {error_msg}")
     
-    # Expand template variables
-    cmd = runtime_cmd_template.replace("{kickoff}", kickoff)
+    # AIPOS-327 S1: Safe kickoff transmission (write to temp file, use @file syntax)
+    import tempfile
+    
+    kickoff_fd, kickoff_temp_path = tempfile.mkstemp(suffix=".txt", prefix="lybra_kickoff_audit_")
+    try:
+        with os.fdopen(kickoff_fd, "w", encoding="utf-8") as f:
+            f.write(kickoff)
+    except Exception as exc:
+        os.close(kickoff_fd)
+        log(f"ERROR: Failed to write kickoff to temp file: {exc}")
+        raise
+    
+    # Replace {kickoff} with @file syntax to avoid shell interpretation
+    cmd = runtime_cmd_template.replace("{kickoff}", f"@{kickoff_temp_path}")
     
     retry_label = "[补跑] " if is_retry else ""
     log(f"{retry_label}拉起 auditor: {audit_task_id} → 报告={report_path}")
+    log(f"Kickoff written to {kickoff_temp_path} for safe transmission")
     log(f"运行命令: {cmd[:200]}...")
     
     # Execute the runtime command (blocking)
-    result = subprocess.run(cmd, shell=True, cwd=str(product_repo))
+    try:
+        result = subprocess.run(cmd, shell=True, cwd=str(product_repo))
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(kickoff_temp_path)
+        except OSError:
+            pass
     
     log(f"{retry_label}auditor 结束 exit={result.returncode} ({audit_task_id})")
     
