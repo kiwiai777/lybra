@@ -92,7 +92,7 @@ def test_launch_success(temp_product_repo, mock_psutil, capsys):
                         
                         # Run launch check with short window for testing
                         exit_code, failure_data = check_launch(
-                        spawn_cmd="timeout 3600 pi --prompt 'test'",
+                        spawn_cmd="timeout 3600 pi --append-system-prompt 'test'",
                         task_id="AIPOS-295C",
                         executor_instance="exec.test",
                         product_repo=temp_product_repo,
@@ -137,7 +137,7 @@ def test_launch_early_exit(temp_product_repo, capsys):
         
         # Run launch check
         exit_code, failure_data = check_launch(
-            spawn_cmd="timeout 3600 pi --prompt 'test'",
+            spawn_cmd="timeout 3600 pi --append-system-prompt 'test'",
             task_id="AIPOS-295C",
             executor_instance="exec.test",
             product_repo=temp_product_repo,
@@ -186,7 +186,7 @@ def test_launch_silent_hang(temp_product_repo, mock_psutil):
                         with patch("tools.aipos_cli.agent_launch_check._kill_process_tree"):
                             # Run launch check with short window
                             exit_code, failure_data = check_launch(
-                                spawn_cmd="timeout 3600 pi --prompt 'test'",
+                                spawn_cmd="timeout 3600 pi --append-system-prompt 'test'",
                                 task_id="AIPOS-295C",
                                 executor_instance="exec.test",
                                 product_repo=temp_product_repo,
@@ -230,7 +230,7 @@ def test_relaunch_success(temp_product_repo, mock_psutil, capsys):
     with patch("tools.aipos_cli.agent_launch_check.check_launch", side_effect=mock_check_launch):
         # Run launch check with retry
         exit_code = run_launch_check(
-            spawn_cmd="timeout 3600 pi --prompt 'test'",
+            spawn_cmd="timeout 3600 pi --append-system-prompt 'test'",
             task_id="AIPOS-295C",
             executor_instance="exec.test",
             product_repo=temp_product_repo,
@@ -276,7 +276,7 @@ def test_double_failure_block(temp_product_repo, capsys):
     with patch("tools.aipos_cli.agent_launch_check.check_launch", side_effect=mock_check_launch):
         # Run launch check with retry
         exit_code = run_launch_check(
-            spawn_cmd="timeout 3600 pi --prompt 'test'",
+            spawn_cmd="timeout 3600 pi --append-system-prompt 'test'",
             task_id="AIPOS-295C",
             executor_instance="exec.test",
             product_repo=temp_product_repo,
@@ -323,13 +323,13 @@ def test_model_extraction_and_substitution():
     )
     
     # Test model extraction
-    cmd1 = "timeout 3600 pi --model sonnet-5 --prompt 'test'"
+    cmd1 = "timeout 3600 pi --model sonnet-5 --append-system-prompt 'test'"
     assert _extract_model_from_command(cmd1) == "sonnet-5"
     
-    cmd2 = "timeout 3600 pi -m claude-sonnet-3-5-20241022 --prompt 'test'"
+    cmd2 = "timeout 3600 pi -m claude-sonnet-3-5-20241022 --append-system-prompt 'test'"
     assert _extract_model_from_command(cmd2) == "claude-sonnet-3-5-20241022"
     
-    cmd3 = "timeout 3600 pi --prompt 'test'"  # No explicit model
+    cmd3 = "timeout 3600 pi --append-system-prompt 'test'"  # No explicit model
     result = _extract_model_from_command(cmd3)
     assert result is None or result == "pi"  # Heuristic might find "pi"
     
@@ -341,7 +341,7 @@ def test_model_extraction_and_substitution():
 
 def test_block_file_with_model_suggestion(temp_product_repo):
     """Test BLOCK file includes model switch suggestion when policy exists."""
-    spawn_cmd = "timeout 3600 pi --model sonnet-5 --prompt 'test'"
+    spawn_cmd = "timeout 3600 pi --model sonnet-5 --append-system-prompt 'test'"
     failure_history = [
         {
             "timestamp": "2026-08-03T05:00:00Z",
@@ -395,7 +395,7 @@ def test_cli_integration(temp_product_repo, capsys):
         mock_run.return_value = EXIT_OK
         
         argv = [
-            "--spawn-cmd", "timeout 3600 pi --prompt 'test'",
+            "--spawn-cmd", "timeout 3600 pi --append-system-prompt 'test'",
             "--task-id", "AIPOS-295C",
             "--executor-instance", "exec.test",
             "--product-repo", str(temp_product_repo),
@@ -431,3 +431,157 @@ def test_zero_regression_existing_supervise():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_safe_kickoff_transmission_real_hazards(temp_product_repo):
+    """AIPOS-327F1: Test real kickoff transmission with shell hazards (活体验证).
+    
+    Verifies that dangerous characters (backticks, $(), ${}) are NOT shell-evaluated
+    when transmitted via --append-system-prompt @file.
+    """
+    import tempfile
+    
+    # Create kickoff with all dangerous characters
+    hazardous_kickoff = """Test kickoff:
+- Backtick: `echo DANGER`
+- Command sub: $(whoami)
+- Var expansion: ${HOME}
+- Newline after this
+
+Second line
+- Marker: MARKER_327F1_TEST"""
+    
+    # Write to temp file
+    fd, temp_path = tempfile.mkstemp(suffix=".txt", prefix="test_kickoff_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(hazardous_kickoff)
+        
+        # Build spawn command with --append-system-prompt @file
+        spawn_cmd = f"timeout 10 pi --no-session --append-system-prompt @{temp_path} -p 'echo received'"
+        
+        # Mock subprocess that simulates pi accepting the file
+        with patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.pid = 12345
+            mock_proc.poll.return_value = None
+            mock_popen.return_value = mock_proc
+            
+            # Mock process checks to simulate success
+            with patch("tools.aipos_cli.agent_launch_check._find_pi_processes") as mock_find:
+                mock_find.return_value = [12346]
+                
+                with patch("tools.aipos_cli.agent_launch_check._get_process_cpu_time") as mock_cpu:
+                    mock_cpu.side_effect = [0.0, 0.0, 2.5]
+                    
+                    with patch("tools.aipos_cli.agent_launch_check._count_new_files") as mock_files:
+                        mock_files.return_value = 1
+                        
+                        with patch("tools.aipos_cli.agent_launch_check._has_worktree_changes") as mock_wt:
+                            mock_wt.return_value = True
+                            
+                            exit_code, failure_data = check_launch(
+                                spawn_cmd=spawn_cmd,
+                                task_id="AIPOS-327F1",
+                                executor_instance="exec.test",
+                                product_repo=temp_product_repo,
+                                session_dirs=[str(temp_product_repo / ".pi_sessions")],
+                                worktree_path=str(temp_product_repo),
+                                launch_window_secs=15,
+                                check_interval_secs=2,
+                            )
+                            
+                            # Verify success
+                            assert exit_code == EXIT_OK
+                            assert failure_data is None
+                            
+                            # Verify spawn command used @file syntax
+                            assert mock_popen.called
+                            actual_cmd = mock_popen.call_args[0][0]
+                            assert f"--append-system-prompt @{temp_path}" in actual_cmd
+                            assert "`echo DANGER`" not in actual_cmd
+                            assert "$(whoami)" not in actual_cmd
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+
+def test_kickoff_transmission_failure_aborts(temp_product_repo):
+    """AIPOS-327F1 F-327R-02: Test that transmission failure aborts with error.
+    
+    When kickoff contains hazards but temp file write fails, must abort with
+    EXIT_ERROR and NOT fall back to unsafe command.
+    """
+    # Build spawn command with hazardous inline kickoff
+    spawn_cmd = "timeout 3600 pi --append-system-prompt 'test `echo DANGER` content' -p 'run'"
+    
+    # Mock tempfile.mkstemp to fail
+    with patch("tempfile.mkstemp") as mock_mkstemp:
+        mock_mkstemp.side_effect = OSError("Disk full")
+        
+        # Run check_launch
+        exit_code, failure_data = check_launch(
+            spawn_cmd=spawn_cmd,
+            task_id="AIPOS-327F1",
+            executor_instance="exec.test",
+            product_repo=temp_product_repo,
+            session_dirs=[str(temp_product_repo / ".pi_sessions")],
+            worktree_path=str(temp_product_repo),
+            launch_window_secs=10,
+            check_interval_secs=2,
+        )
+        
+        # Verify failure with proper error
+        assert exit_code == EXIT_ERROR
+        assert failure_data is not None
+        assert failure_data["reason"] == "kickoff_transmission_failed"
+        assert "Disk full" in str(failure_data["error"])
+
+
+def test_no_hazards_passthrough(temp_product_repo):
+    """AIPOS-327F1: Test that kickoff without hazards passes through unchanged.
+    
+    When kickoff contains no dangerous characters, should use original command.
+    """
+    # Safe kickoff with no hazards
+    spawn_cmd = "timeout 3600 pi --append-system-prompt 'safe kickoff text' -p 'run'"
+    
+    # Mock subprocess
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        mock_popen.return_value = mock_proc
+        
+        with patch("tools.aipos_cli.agent_launch_check._find_pi_processes") as mock_find:
+            mock_find.return_value = [12346]
+            
+            with patch("tools.aipos_cli.agent_launch_check._get_process_cpu_time") as mock_cpu:
+                mock_cpu.side_effect = [0.0, 0.0, 2.5]
+                
+                with patch("tools.aipos_cli.agent_launch_check._count_new_files") as mock_files:
+                    mock_files.return_value = 1
+                    
+                    with patch("tools.aipos_cli.agent_launch_check._has_worktree_changes") as mock_wt:
+                        mock_wt.return_value = True
+                        
+                        exit_code, failure_data = check_launch(
+                            spawn_cmd=spawn_cmd,
+                            task_id="AIPOS-327F1",
+                            executor_instance="exec.test",
+                            product_repo=temp_product_repo,
+                            session_dirs=[str(temp_product_repo / ".pi_sessions")],
+                            worktree_path=str(temp_product_repo),
+                            launch_window_secs=15,
+                            check_interval_secs=2,
+                        )
+                        
+                        assert exit_code == EXIT_OK
+                        
+                        # Verify original command was used (no temp file created)
+                        actual_cmd = mock_popen.call_args[0][0]
+                        assert actual_cmd == spawn_cmd
+                        assert "@/tmp/" not in actual_cmd

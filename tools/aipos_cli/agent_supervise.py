@@ -3,7 +3,7 @@
 The supervise command wraps an agent execution command (typically spawning pi with timeout),
 monitors its health via `agent watch --stream --health`, and implements bounded self-healing:
 
-1. Spawns the target command (e.g., `timeout 3600 pi --prompt '{kickoff}'`)
+1. Spawns the target command (e.g., `timeout 3600 pi --append-system-prompt '{kickoff}'`)
 2. Monitors health events from a parallel `agent watch --stream --health` process
 3. On `kind:unhealthy` event:
    - Kill the process tree (including timeout wrapper and pi subprocess)
@@ -32,6 +32,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,6 +57,51 @@ def log(msg: str, *, stream: Any = sys.stderr) -> None:
     """Timestamped log."""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"[supervise {timestamp}] {msg}", file=stream, flush=True)
+
+
+def _prepare_spawn_cmd_safe(spawn_cmd: str, kickoff_content: str | None = None) -> tuple[str, Path | None]:
+    """AIPOS-327 S1: Prepare spawn command with safe kickoff transmission.
+    
+    If spawn_cmd contains {kickoff} placeholder and kickoff_content is provided,
+    writes kickoff to a temporary file and replaces placeholder with @file syntax.
+    Otherwise returns spawn_cmd unchanged.
+    
+    Args:
+        spawn_cmd: Command template (may contain {kickoff} placeholder)
+        kickoff_content: Kickoff text to transmit safely (if applicable)
+    
+    Returns:
+        (prepared_cmd, temp_file_path_or_none)
+        Caller must clean up temp file after process exits.
+    """
+    if kickoff_content is None or "{kickoff}" not in spawn_cmd:
+        return spawn_cmd, None
+    
+    # Detect shell-interpretation hazards
+    hazards = ["`", "$(", "${", "$((", "&&", "||", ";", "\n"]
+    has_hazards = any(h in kickoff_content for h in hazards)
+    
+    if has_hazards:
+        log(f"Kickoff contains shell-interpretation hazards, using safe file transmission", stream=sys.stderr)
+    
+    # Write kickoff to temporary file
+    fd, temp_path = tempfile.mkstemp(suffix=".txt", prefix="lybra_kickoff_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(kickoff_content)
+    except Exception as exc:
+        os.close(fd)
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise RuntimeError(f"Failed to write kickoff to temp file: {exc}") from exc
+    
+    # Replace {kickoff} with @file syntax
+    safe_cmd = spawn_cmd.replace("{kickoff}", f"@{temp_path}")
+    log(f"Kickoff written to {temp_path}, command updated to use @file syntax", stream=sys.stderr)
+    
+    return safe_cmd, Path(temp_path)
 
 
 def kill_process_tree(pid: int) -> None:
@@ -312,14 +358,53 @@ def run_supervise(
     attempt = 0
     max_attempts = 2  # Initial spawn + 1 respawn
     
+    # AIPOS-327 S1 / AIPOS-327F2: Safe kickoff transmission using pi-supported channel
+    # Extract kickoff from --append-system-prompt and write to temp file for safe transmission
+    import re
+    
+    temp_kickoff_file = None
+    safe_spawn_cmd = spawn_cmd
+    
+    # Match --append-system-prompt '...' or "..." in spawn_cmd
+    prompt_pattern = r"--append-system-prompt\s+(['\"])(.+?)\1"
+    match = re.search(prompt_pattern, spawn_cmd, re.DOTALL)
+    
+    if match:
+        kickoff_content = match.group(2)
+        
+        # Check if kickoff contains shell-interpretation hazards
+        hazards = ["`", "$(", "${", "\n"]
+        has_hazards = any(h in kickoff_content for h in hazards)
+        
+        if has_hazards:
+            log("Kickoff contains shell-interpretation hazards, using safe file transmission")
+            
+            # Write kickoff to temporary file
+            try:
+                fd, temp_path = tempfile.mkstemp(suffix=".txt", prefix="lybra_kickoff_")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(kickoff_content)
+                temp_kickoff_file = Path(temp_path)
+                
+                # Replace --append-system-prompt '...' with --append-system-prompt @tempfile
+                # AIPOS-327F2: Use pi-supported --append-system-prompt @file syntax
+                # (same fix as agent_launch_check.py per AUDIT-REPORT-327F1R F-327F1R-01)
+                safe_spawn_cmd = spawn_cmd[:match.start()] + f"--append-system-prompt @{temp_path}" + spawn_cmd[match.end():]
+                log(f"Kickoff written to {temp_path}, using --append-system-prompt @file syntax")
+            except Exception as exc:
+                log(f"ERROR: Failed to write kickoff to temp file: {exc}")
+                log("Cannot proceed with unsafe command, aborting")
+                # AIPOS-327F2 F-327R-02: Fail instead of falling back to unsafe command
+                return EXIT_ERROR
+    
     while attempt < max_attempts:
         attempt += 1
-        log(f"Spawning command (attempt {attempt}/{max_attempts}): {spawn_cmd[:100]}...")
+        log(f"Spawning command (attempt {attempt}/{max_attempts}): {safe_spawn_cmd[:100]}...")
         
         # Spawn the target command
         try:
             proc = subprocess.Popen(
-                spawn_cmd,
+                safe_spawn_cmd,
                 shell=True,
                 cwd=str(product_repo),
                 stdout=subprocess.PIPE,
@@ -328,6 +413,14 @@ def run_supervise(
             )
         except Exception as exc:
             log(f"ERROR: Failed to spawn command: {exc}")
+            
+            # Clean up temp kickoff file
+            if temp_kickoff_file and temp_kickoff_file.exists():
+                try:
+                    temp_kickoff_file.unlink()
+                except OSError:
+                    pass
+            
             return EXIT_ERROR
         
         log(f"Spawned process PID {proc.pid}")
@@ -371,6 +464,14 @@ def run_supervise(
         except Exception as exc:
             log(f"ERROR: Failed to spawn watch process: {exc}")
             kill_process_tree(proc.pid)
+            
+            # Clean up temp kickoff file
+            if temp_kickoff_file and temp_kickoff_file.exists():
+                try:
+                    temp_kickoff_file.unlink()
+                except OSError:
+                    pass
+            
             return EXIT_ERROR
         
         log(f"Watch process started PID {watch_proc.pid}")
@@ -486,11 +587,37 @@ def run_supervise(
                 report_death_to_gate(gate_client, card_id, actor, death_cause, failure_history)
                 
                 write_escalate_file(product_repo, card_id, spawn_cmd, failure_history)
+                
+                # Clean up temp kickoff file
+                if temp_kickoff_file and temp_kickoff_file.exists():
+                    try:
+                        temp_kickoff_file.unlink()
+                        log(f"Cleaned up temp kickoff file: {temp_kickoff_file}")
+                    except OSError:
+                        pass
+                
                 return EXIT_ESCALATE
         else:
             # Process ended normally (not unhealthy)
             log("Process ended normally (no unhealthy detected)")
+            
+            # Clean up temp kickoff file
+            if temp_kickoff_file and temp_kickoff_file.exists():
+                try:
+                    temp_kickoff_file.unlink()
+                    log(f"Cleaned up temp kickoff file: {temp_kickoff_file}")
+                except OSError:
+                    pass
+            
             return EXIT_OK
+    
+    # Clean up temp kickoff file (fallback)
+    if temp_kickoff_file and temp_kickoff_file.exists():
+        try:
+            temp_kickoff_file.unlink()
+            log(f"Cleaned up temp kickoff file: {temp_kickoff_file}")
+        except OSError:
+            pass
     
     return EXIT_OK
 

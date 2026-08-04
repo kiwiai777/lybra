@@ -527,10 +527,35 @@ def render_connection_table(report: dict[str, Any]) -> str:
     connection = report.get("connection") if isinstance(report.get("connection"), dict) else {}
     board = connection.get("board") if isinstance(connection.get("board"), dict) else {}
     mcp = connection.get("mcp") if isinstance(connection.get("mcp"), dict) else {}
+    
+    # AIPOS-327 S3: Check if workspace_root exists and warn if not
+    workspace_root_str = connection.get('workspace_root') or report.get('workspace_root')
+    workspace_status = workspace_root_str
+    workspace_warning = None
+    
+    if workspace_root_str:
+        workspace_path = Path(workspace_root_str).expanduser()
+        if not workspace_path.exists():
+            workspace_status = f"{workspace_root_str} ⚠️  (DOES NOT EXIST)"
+            workspace_warning = {
+                "message": f"Workspace root does not exist: {workspace_root_str}",
+                "severity": "ERROR",
+                "likely_cause": "Test pollution or stale configuration from deleted workspace",
+                "fix_command": "lybra serve stop && lybra serve start --workspace-root <real_workspace>",
+            }
+        elif "pytest" in workspace_root_str or "/tmp/" in workspace_root_str:
+            workspace_status = f"{workspace_root_str} ⚠️  (SUSPICIOUS TEMP PATH)"
+            workspace_warning = {
+                "message": f"Workspace root appears to be a temporary test directory: {workspace_root_str}",
+                "severity": "WARN",
+                "likely_cause": "Test pollution (AIPOS-327 S2)",
+                "fix_command": "lybra serve stop && lybra serve start --workspace-root <real_workspace>",
+            }
+    
     lines = [
         "Lybra service mode",
         "",
-        f"Workspace: {connection.get('workspace_root') or report.get('workspace_root')}",
+        f"Workspace: {workspace_status}",
         f"Board: {board.get('url') or '(missing)'}",
         f"MCP:   {mcp.get('rpc_url') or '(missing)'}",
         "",
@@ -539,11 +564,18 @@ def render_connection_table(report: dict[str, Any]) -> str:
     for token in connection.get("tokens", []) if isinstance(connection.get("tokens"), list) else []:
         scopes = ", ".join(str(item) for item in token.get("scopes", []))
         lines.append(f"{str(token.get('role') or ''):<16} {scopes:<30} {str(token.get('token_ref') or ''):<22} {token.get('fingerprint') or '(missing)'}")
-    if report.get("warnings"):
+    
+    # Add workspace warning to warnings list
+    all_warnings = list(report.get("warnings", []))
+    if workspace_warning:
+        all_warnings.insert(0, workspace_warning)
+    
+    if all_warnings:
         lines.extend(["", "Warnings:"])
-        for warning in report["warnings"]:
+        for warning in all_warnings:
             lines.append(f"- {warning.get('message')}")
-            lines.append(f"  fix: {warning.get('fix_command')}")
+            if warning.get('fix_command'):
+                lines.append(f"  fix: {warning.get('fix_command')}")
     if report.get("blocking_reasons"):
         lines.extend(["", "Blocking:"])
         for reason in report["blocking_reasons"]:

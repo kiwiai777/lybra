@@ -403,10 +403,53 @@ def check_launch(
     """
     log(f"Spawning command: {spawn_cmd[:100]}...")
     
+    # AIPOS-327F1: Safe kickoff transmission using pi-supported channel
+    # Extract kickoff from --append-system-prompt and validate safe transmission
+    import re
+    import tempfile
+    
+    temp_kickoff_file = None
+    safe_spawn_cmd = spawn_cmd
+    
+    # Match --append-system-prompt '...' or "..." in spawn_cmd
+    prompt_pattern = r"--append-system-prompt\s+(['\"])(.+?)\1"
+    match = re.search(prompt_pattern, spawn_cmd, re.DOTALL)
+    
+    if match:
+        kickoff_content = match.group(2)
+        
+        # Check if kickoff contains shell-interpretation hazards
+        hazards = ["`", "$(", "${", "\n"]
+        has_hazards = any(h in kickoff_content for h in hazards)
+        
+        if has_hazards:
+            log("Kickoff contains shell-interpretation hazards, using safe file transmission")
+            
+            # Write kickoff to temporary file
+            try:
+                fd, temp_path = tempfile.mkstemp(suffix=".txt", prefix="lybra_kickoff_")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(kickoff_content)
+                temp_kickoff_file = Path(temp_path)
+                
+                # Replace --append-system-prompt '...' with --append-system-prompt @tempfile
+                # AIPOS-327F1: Use pi-supported --append-system-prompt @file syntax
+                safe_spawn_cmd = spawn_cmd[:match.start()] + f"--append-system-prompt @{temp_path}" + spawn_cmd[match.end():]
+                log(f"Kickoff written to {temp_path}, using --append-system-prompt @file syntax")
+            except Exception as exc:
+                log(f"ERROR: Failed to write kickoff to temp file: {exc}")
+                log("Cannot proceed with unsafe command, aborting")
+                # AIPOS-327F1 F-327R-02: Fail instead of falling back to unsafe command
+                return EXIT_ERROR, {
+                    "reason": "kickoff_transmission_failed",
+                    "error": str(exc),
+                    "exit_code": None,
+                }
+    
     # Spawn the command
     try:
         proc = subprocess.Popen(
-            spawn_cmd,
+            safe_spawn_cmd,
             shell=True,
             cwd=str(product_repo),
             stdout=subprocess.PIPE,
@@ -415,6 +458,12 @@ def check_launch(
         )
     except Exception as exc:
         log(f"ERROR: Failed to spawn command: {exc}")
+        # Clean up temp file if created
+        if temp_kickoff_file and temp_kickoff_file.exists():
+            try:
+                temp_kickoff_file.unlink()
+            except OSError:
+                pass
         return EXIT_ERROR, {
             "reason": "spawn_failed",
             "error": str(exc),
@@ -436,6 +485,14 @@ def check_launch(
         exit_code = proc.poll()
         if exit_code is not None:
             log(f"Process exited early with code {exit_code}")
+            
+            # Clean up temp kickoff file
+            if temp_kickoff_file and temp_kickoff_file.exists():
+                try:
+                    temp_kickoff_file.unlink()
+                except OSError:
+                    pass
+            
             return EXIT_ERROR, {
                 "reason": "process_early_exit",
                 "exit_code": exit_code,
@@ -492,6 +549,15 @@ def check_launch(
             emit_event(started_event)
             
             log(f"Started event emitted. Handing off to supervise/watch for ongoing monitoring.")
+            
+            # Clean up temp kickoff file
+            if temp_kickoff_file and temp_kickoff_file.exists():
+                try:
+                    temp_kickoff_file.unlink()
+                    log(f"Cleaned up temp kickoff file: {temp_kickoff_file}")
+                except OSError:
+                    pass
+            
             return EXIT_OK, None
         
         # Continue polling
@@ -520,6 +586,14 @@ def check_launch(
     
     # Kill the hung/failed process
     _kill_process_tree(proc.pid)
+    
+    # Clean up temp kickoff file
+    if temp_kickoff_file and temp_kickoff_file.exists():
+        try:
+            temp_kickoff_file.unlink()
+            log(f"Cleaned up temp kickoff file: {temp_kickoff_file}")
+        except OSError:
+            pass
     
     return EXIT_ERROR, {
         "reason": reason,
