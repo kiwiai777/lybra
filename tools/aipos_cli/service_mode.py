@@ -66,7 +66,10 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
         # owner_confirm when it grants a policy. Without this scope the owner-console SKILL's
         # envelope flow is unreachable (the dry_run/confirm tools never appear). Moved off the
         # path-B-only exemption (test_scope_reachability CAPABILITY_TOKEN_EXEMPT) accordingly.
-        "scopes": ["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record"],
+        # AIPOS-318: the Owner also holds queue_amend and queue_withdraw (顾问侧治理动作:
+        # 修订未认领的卡、撤回卡). These are Owner-only governance operations per AIPOS-315;
+        # executor/auditor/planner should NOT be able to amend/withdraw task cards.
+        "scopes": ["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record", "queue_amend", "queue_withdraw"],
     },
     {
         "role": "owner-dispatch",

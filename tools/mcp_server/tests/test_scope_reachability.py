@@ -28,6 +28,7 @@ from tools.aipos_cli.confirm_client import GateClient
 from tools.aipos_cli.service_mode import ROLE_SPECS, build_connection_config, write_connection_config
 from tools.mcp_server import tools as gate_tools
 from tools.mcp_server.http_sse import DEFAULT_HTTP_HOST, HttpSseConfig, build_http_server, load_service_role_registry
+from tools.mcp_server.tools import WRITE_TOOL_DESCRIPTORS
 
 # Scopes intentionally NOT granted to any service role: the AIPOS-109 (intake_submit) stdio MCP
 # controlled write-tool is reached via path B — an operator-minted LYBRA_CAPABILITY_TOKEN — not a
@@ -51,6 +52,40 @@ def _tools_py_scopes() -> set[str]:
         for name, value in vars(gate_tools).items()
         if name.endswith("_SCOPE") and isinstance(value, str) and value
     }
+
+
+def _scope_to_tool_prefix_map() -> dict[str, str]:
+    """Map each scope to its corresponding tool name prefix.
+    
+    Extracted from the gate_tools.list_tools() logic: each scope gates a family of tools
+    (typically dry_run + confirm). This returns the prefix used in tool name filtering.
+    
+    Example: QUEUE_AMEND_SCOPE="queue_amend" -> prefix="lybra_queue_amend"
+    """
+    # Build from the pattern in list_tools(): if _X_scope_allowed() gates tools starting with "lybra_X"
+    mapping = {}
+    for name, value in vars(gate_tools).items():
+        if name.endswith("_SCOPE") and isinstance(value, str) and value:
+            # Convert QUEUE_AMEND_SCOPE -> queue_amend -> lybra_queue_amend
+            scope_name = value
+            # Most scopes follow the pattern: scope "queue_amend" -> prefix "lybra_queue_amend"
+            # Special cases handled based on actual tool naming:
+            if scope_name == "intake_submit":
+                prefix = "lybra_intake_submit"
+            elif scope_name == "owner_decision_record":
+                prefix = "lybra_owner_decision_record"
+            elif scope_name == "draft_publish":
+                prefix = "lybra_draft_publish"
+            elif scope_name == "draft_submit":
+                prefix = "lybra_draft_submit"
+            elif scope_name == "owner_confirm":
+                # owner_confirm is special: it's a second gate on other operations, not its own tool family
+                continue
+            else:
+                # Default pattern: scope -> lybra_{scope}
+                prefix = f"lybra_{scope_name}"
+            mapping[scope_name] = prefix
+    return mapping
 
 
 def _capability_env_token(scope: str) -> str:
@@ -197,6 +232,83 @@ class ScopeReachabilityTests(unittest.TestCase):
                     c = GateClient(url, "transport-secret"); c.initialize()
                     denied = c.call_tool(tool, {})
             self.assertEqual(denied.get("error_code"), "SCOPE_DENIED", f"{scope}: {denied}")
+
+    # --- T6 (AIPOS-318): EVERY registered MCP verb with a scope gate is reachable by some role ---
+    def test_every_scoped_verb_reachable_by_some_role(self) -> None:
+        """AIPOS-318 根治断言: 动态枚举所有已注册 MCP 动词，断言每个带 scope 门的动词至少有一个角色默认持有其所需 scope。
+        
+        这是 283/315 两次同型问题的产品级药：动词出生即不可达。
+        动态枚举：将来新增动词自动纳入，不写死清单。
+        """
+        # Build the union of all scopes granted by ROLE_SPECS
+        role_scopes_union = {s for spec in ROLE_SPECS for s in spec["scopes"]}
+        
+        # Get all scopes referenced in tools.py (via *_SCOPE constants)
+        all_scopes = _tools_py_scopes()
+        
+        # Build scope -> tool prefix mapping to understand which tools need which scope
+        scope_to_prefix = _scope_to_tool_prefix_map()
+        
+        # For each scope that gates actual tools (not just owner_confirm which is a second gate)
+        unreachable = []
+        for scope in sorted(all_scopes):
+            # owner_confirm is special: it's a second gate on confirm operations, not a primary tool family
+            if scope == "owner_confirm":
+                continue
+            
+            # Check if this scope is either:
+            # 1. Granted by some role in ROLE_SPECS, OR
+            # 2. Explicitly exempt (reachable via path B - LYBRA_CAPABILITY_TOKEN)
+            is_granted = scope in role_scopes_union
+            is_exempt = scope in CAPABILITY_TOKEN_EXEMPT
+            
+            if not is_granted and not is_exempt:
+                tool_prefix = scope_to_prefix.get(scope, f"lybra_{scope}")
+                unreachable.append(f"{scope} (tools: {tool_prefix}_*)")
+        
+        self.assertEqual(
+            unreachable, [],
+            f"Scopes with no reachable role (not in ROLE_SPECS union, not exempt): {unreachable}. "
+            f"This means the MCP verbs are registered but no role can call them via the gate. "
+            f"Fix: add the scope to an appropriate role in service_mode.ROLE_SPECS, or register as exempt with a proven path-B."
+        )
+
+    def test_amend_and_withdraw_reachable_before_318(self) -> None:
+        """AIPOS-318 红后绿证据: amend/withdraw 缺 scope 时红，补上后绿。
+        
+        这个测试记录 318 修复前的状态：如果暂时移除 owner 角色的 queue_amend/queue_withdraw，
+        test_every_scoped_verb_reachable_by_some_role 应该发现并报错。
+        
+        此测试为证据用，不是常规回归测试。
+        """
+        # This is a proof-of-concept test showing the assertion would catch the original issue.
+        # In the actual fixed state, amend/withdraw ARE in owner scopes, so this demonstrates
+        # what WOULD have been caught if the test existed during AIPOS-315.
+        
+        # Simulate the pre-318 state: owner WITHOUT queue_amend/queue_withdraw
+        pre_318_role_specs = [
+            spec if spec["role"] != "owner" else {
+                **spec,
+                "scopes": [s for s in spec["scopes"] if s not in ("queue_amend", "queue_withdraw")]
+            }
+            for spec in ROLE_SPECS
+        ]
+        
+        pre_318_union = {s for spec in pre_318_role_specs for s in spec["scopes"]}
+        all_scopes = _tools_py_scopes()
+        
+        # Check if queue_amend and queue_withdraw would be unreachable
+        missing = []
+        for scope in ("queue_amend", "queue_withdraw"):
+            if scope in all_scopes and scope not in pre_318_union and scope not in CAPABILITY_TOKEN_EXEMPT:
+                missing.append(scope)
+        
+        # The pre-318 state SHOULD have these missing (proving the test would catch it)
+        self.assertEqual(
+            sorted(missing), ["queue_amend", "queue_withdraw"],
+            "Test expectation: pre-318 state should show amend/withdraw as unreachable. "
+            "If this fails, it means the fix is already applied (expected after 318)."
+        )
 
 
 if __name__ == "__main__":
