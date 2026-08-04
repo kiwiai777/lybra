@@ -1,0 +1,363 @@
+#!/usr/bin/env bash
+# lybra-deploy — isolate gate runtime from working tree (AIPOS-333)
+#
+# The gate (lybra-dev-gate.service) must NOT run directly from the product
+# repo working tree, because agents modify that tree in real time.  This
+# script creates an immutable snapshot, validates it, atomically switches
+# a symlink, and restarts the gate — all as one explicit action.
+#
+# Usage:
+#   lybra-deploy              # deploy current working tree as new release
+#   lybra-deploy status       # show what version the gate is running
+#   lybra-deploy rollback     # revert to previous release
+#   lybra-deploy validate     # validate working tree without deploying
+#
+# Exit codes:
+#   0  success
+#   1  validation or deploy failure (old version preserved)
+#   2  usage error
+
+set -euo pipefail
+
+# ── paths ───────────────────────────────────────────────────────────────
+PRODUCT_REPO="/home/kiwi/projects/lybra"
+DEPLOY_DIR="$PRODUCT_REPO/.deploy"
+RELEASES_DIR="$DEPLOY_DIR/releases"
+CURRENT_LINK="$DEPLOY_DIR/current"
+PREVIOUS_LINK="$DEPLOY_DIR/previous"
+VERSION_FILE="$DEPLOY_DIR/VERSION"
+GATE_SERVICE="lybra-dev-gate.service"
+MAX_RELEASES=5  # keep last N releases (oldest pruned on each deploy)
+
+# ── rsync excludes ──────────────────────────────────────────────────────
+# Things that must NOT appear in the runtime snapshot.
+# Credentials (.lybra/, .env) are referenced by absolute path, never copied.
+EXCLUDES=(
+    ".git/"
+    ".deploy/"
+    ".lybra/"
+    "__pycache__/"
+    "*.pyc"
+    "*.egg-info/"
+    "task_cards/"
+    "node_modules/"
+    ".DS_Store"
+    "._*"
+    ".pytest_cache/"
+    ".claude/"
+    ".github/"
+    ".codex/"
+    ".codex"
+    ".env"
+    "*.tgz"
+    "lybra.egg-info/"
+    "playwright-report/"
+    "test-results/"
+)
+
+# ── helpers ─────────────────────────────────────────────────────────────
+log()  { echo "[lybra-deploy] $*"; }
+err()  { echo "[lybra-deploy] ERROR: $*" >&2; }
+die()  { err "$@"; exit 1; }
+
+build_rsync_excludes() {
+    local args=()
+    for ex in "${EXCLUDES[@]}"; do
+        args+=(--exclude="$ex")
+    done
+    echo "${args[@]}"
+}
+
+get_current_release_dir() {
+    if [[ -L "$CURRENT_LINK" ]]; then
+        readlink -f "$CURRENT_LINK"
+    else
+        echo ""
+    fi
+}
+
+get_previous_release_dir() {
+    if [[ -L "$PREVIOUS_LINK" ]]; then
+        readlink -f "$PREVIOUS_LINK"
+    else
+        echo ""
+    fi
+}
+
+read_version() {
+    local dir="$1"
+    if [[ -f "$dir/VERSION" ]]; then
+        cat "$dir/VERSION"
+    else
+        echo "(unknown)"
+    fi
+}
+
+# ── status ──────────────────────────────────────────────────────────────
+cmd_status() {
+    echo "=== lybra-deploy status ==="
+    echo ""
+
+    # Current release
+    local current
+    current=$(get_current_release_dir)
+    if [[ -n "$current" && -d "$current" ]]; then
+        echo "Running version:  $(read_version "$current")"
+        echo "Running from:     $current"
+    else
+        echo "Running version:  (no deployment found — gate may be running from working tree)"
+        echo "Running from:     (none)"
+    fi
+    echo ""
+
+    # Gate service status
+    if systemctl --user is-active "$GATE_SERVICE" &>/dev/null; then
+        local pid
+        pid=$(systemctl --user show -p MainPID --value "$GATE_SERVICE" 2>/dev/null || echo "?")
+        echo "Gate service:     active (PID $pid)"
+        # Show what directory the process is actually running from
+        local cwd
+        cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || echo "?")
+        echo "Process cwd:      $cwd"
+    else
+        echo "Gate service:     inactive"
+    fi
+    echo ""
+
+    # Working tree version
+    local wt_hash
+    wt_hash=$(cd "$PRODUCT_REPO" && git rev-parse --short HEAD 2>/dev/null || echo "(not a git repo)")
+    local wt_dirty=""
+    if [[ -n "$(cd "$PRODUCT_REPO" && git status --porcelain 2>/dev/null)" ]]; then
+        wt_dirty=" (dirty)"
+    fi
+    echo "Working tree:     $wt_hash$wt_dirty"
+
+    # List recent releases
+    echo ""
+    echo "Recent releases:"
+    if [[ -d "$RELEASES_DIR" ]]; then
+        ls -1d "$RELEASES_DIR"/*/ 2>/dev/null | tail -"$MAX_RELEASES" | while read -r d; do
+            local marker=""
+            [[ "$(readlink -f "$d")" == "$(get_current_release_dir)" ]] && marker=" ← current"
+            [[ "$(readlink -f "$d")" == "$(get_previous_release_dir)" ]] && marker=" ← previous"
+            local vinfo
+            vinfo=$(head -1 "$d/VERSION" 2>/dev/null | sed 's/^release: //')
+            echo "  $(basename "$d") [$vinfo]$marker"
+        done
+    else
+        echo "  (none)"
+    fi
+}
+
+# ── validate ────────────────────────────────────────────────────────────
+cmd_validate() {
+    local target_dir="${1:-}"
+    if [[ -z "$target_dir" ]]; then
+        target_dir="$PRODUCT_REPO"
+    fi
+    log "Validating Python import in: $target_dir"
+    if (cd "$target_dir" && python3 -c "import tools.aipos_cli.aipos_cli" 2>&1); then
+        log "✓ Import validation passed"
+        return 0
+    else
+        err "✗ Import validation FAILED"
+        return 1
+    fi
+}
+
+# ── deploy ──────────────────────────────────────────────────────────────
+cmd_deploy() {
+    log "Starting deploy from working tree..."
+
+    # Gather version info
+    local git_hash git_timestamp
+    git_hash=$(cd "$PRODUCT_REPO" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    git_timestamp=$(date -u +"%Y%m%d_%H%M%S")
+
+    local release_name="${git_timestamp}-${git_hash}"
+    local release_dir="$RELEASES_DIR/$release_name"
+    local staging_dir="$RELEASES_DIR/.staging-${release_name}"
+
+    # Check if this exact release already exists
+    if [[ -d "$release_dir" ]]; then
+        die "Release $release_name already exists. Refusing to overwrite."
+    fi
+
+    # Save current for potential rollback
+    local old_current
+    old_current=$(get_current_release_dir)
+
+    # ── Step 1: rsync to staging ────────────────────────────────────────
+    log "Step 1/5: Creating snapshot in staging..."
+    mkdir -p "$RELEASES_DIR"
+    local excludes_str
+    excludes_str=$(build_rsync_excludes)
+    # shellcheck disable=SC2086
+    rsync -a --delete \
+        $excludes_str \
+        "$PRODUCT_REPO/" \
+        "$staging_dir/"
+
+    # Write VERSION file into the staging release
+    local dirty_flag=""
+    if [[ -n "$(cd "$PRODUCT_REPO" && git status --porcelain 2>/dev/null)" ]]; then
+        dirty_flag="-dirty"
+    fi
+    cat > "$staging_dir/VERSION" <<EOF
+release: $release_name
+git_commit: $(cd "$PRODUCT_REPO" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+git_short: ${git_hash}
+built_at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+working_tree_dirty: ${dirty_flag:-no}
+deploy_script: $(readlink -f "$0")
+EOF
+    log "  Snapshot created: $staging_dir"
+
+    # ── Step 2: validate ────────────────────────────────────────────────
+    log "Step 2/5: Validating import..."
+    if ! (cd "$staging_dir" && python3 -c "import tools.aipos_cli.aipos_cli" 2>&1); then
+        err "Import validation FAILED. Aborting deploy."
+        err "Old version is untouched."
+        rm -rf "$staging_dir"
+        exit 1
+    fi
+    log "  ✓ Import validation passed"
+
+    # ── Step 3: atomic symlink switch ───────────────────────────────────
+    log "Step 3/5: Switching current symlink..."
+    # Rename staging to final name (atomic on same filesystem)
+    mv "$staging_dir" "$release_dir"
+
+    # Save previous symlink target
+    if [[ -n "$old_current" ]]; then
+        ln -sfn "$old_current" "$PREVIOUS_LINK"
+    fi
+
+    # Atomic symlink switch
+    ln -sfn "$release_dir" "$CURRENT_LINK"
+
+    # Write top-level VERSION for quick inspection
+    cp "$release_dir/VERSION" "$VERSION_FILE"
+
+    log "  current → $release_dir"
+
+    # ── Step 4: restart gate ────────────────────────────────────────────
+    log "Step 4/5: Restarting gate service..."
+    systemctl --user daemon-reload
+    if ! systemctl --user restart "$GATE_SERVICE"; then
+        err "systemctl restart failed! Rolling back..."
+        _do_rollback "$old_current"
+        exit 1
+    fi
+
+    # ── Step 5: health check ────────────────────────────────────────────
+    log "Step 5/5: Health check (waiting 5s for gate to stabilize)..."
+    sleep 5
+
+    if systemctl --user is-active "$GATE_SERVICE" &>/dev/null; then
+        log "✓ Gate is running. Deploy successful!"
+        log ""
+        log "Deployed version: $release_name"
+        log "  git commit: $(cd "$PRODUCT_REPO" && git rev-parse HEAD 2>/dev/null || echo "unknown")"
+        log "  running from: $release_dir"
+        if [[ -n "$dirty_flag" ]]; then
+            log "  ⚠ Working tree was dirty at deploy time"
+        fi
+    else
+        err "Gate failed to stay running after restart! Rolling back..."
+        _do_rollback "$old_current"
+        exit 1
+    fi
+
+    # ── Prune old releases ──────────────────────────────────────────────
+    _prune_releases
+
+    log ""
+    log "Done. Gate is serving from isolated snapshot."
+}
+
+# ── rollback ────────────────────────────────────────────────────────────
+_do_rollback() {
+    local target="${1:-}"
+    if [[ -z "$target" ]]; then
+        target=$(get_previous_release_dir)
+    fi
+    if [[ -z "$target" || ! -d "$target" ]]; then
+        err "No previous release to roll back to!"
+        err "Manual intervention required."
+        return 1
+    fi
+    log "Rolling back to: $target"
+    ln -sfn "$target" "$CURRENT_LINK"
+    cp "$target/VERSION" "$VERSION_FILE" 2>/dev/null || true
+    systemctl --user restart "$GATE_SERVICE" || true
+    sleep 3
+    if systemctl --user is-active "$GATE_SERVICE" &>/dev/null; then
+        log "✓ Rollback successful. Gate running from: $target"
+    else
+        err "Rollback completed but gate is not running. Manual intervention needed."
+    fi
+}
+
+cmd_rollback() {
+    local prev
+    prev=$(get_previous_release_dir)
+    if [[ -z "$prev" || ! -d "$prev" ]]; then
+        die "No previous release available for rollback."
+    fi
+    log "Will roll back to: $(read_version "$prev")"
+    log "Target: $prev"
+    _do_rollback "$prev"
+}
+
+# ── prune ───────────────────────────────────────────────────────────────
+_prune_releases() {
+    local count
+    count=$(ls -1d "$RELEASES_DIR"/*/ 2>/dev/null | wc -l)
+    if (( count > MAX_RELEASES )); then
+        local to_remove=$(( count - MAX_RELEASES ))
+        log "Pruning $to_remove old release(s)..."
+        ls -1d "$RELEASES_DIR"/*/ 2>/dev/null | head -n "$to_remove" | while read -r old; do
+            local resolved
+            resolved=$(readlink -f "$old")
+            # Never prune current or previous
+            if [[ "$resolved" == "$(get_current_release_dir)" || "$resolved" == "$(get_previous_release_dir)" ]]; then
+                continue
+            fi
+            rm -rf "$old"
+            log "  Removed: $(basename "$old")"
+        done
+    fi
+}
+
+# ── main ────────────────────────────────────────────────────────────────
+main() {
+    local cmd="${1:-deploy}"
+    shift 2>/dev/null || true
+
+    case "$cmd" in
+        deploy)    cmd_deploy ;;
+        status)    cmd_status ;;
+        rollback)  cmd_rollback ;;
+        validate)  cmd_validate "$@" ;;
+        -h|--help|help)
+            echo "Usage: lybra-deploy [command]"
+            echo ""
+            echo "Commands:"
+            echo "  deploy     (default) Snapshot working tree, validate, switch, restart gate"
+            echo "  status     Show current deployed version and gate status"
+            echo "  rollback   Revert to previous release"
+            echo "  validate   Check if working tree can be imported (no deploy)"
+            echo ""
+            echo "AIPOS-333: gate runtime isolation from working tree."
+            ;;
+        *)
+            err "Unknown command: $cmd"
+            echo "Usage: lybra-deploy [deploy|status|rollback|validate]" >&2
+            exit 2
+            ;;
+    esac
+}
+
+main "$@"

@@ -28,3 +28,6 @@ web/board/.board_config.json
 
 # disposable npm pack build artifacts (re-packed per release)
 *.tgz
+
+# AIPOS-333: deploy snapshots (gate runs from .deploy/current, not working tree)
+.deploy/
