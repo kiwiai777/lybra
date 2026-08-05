@@ -3,8 +3,8 @@
 验证：
 1. LybraMcpHttpSseHandler.protocol_version = "HTTP/1.1"
 2. BoardHandler.protocol_version = "HTTP/1.1"
-3. 所有响应路径 Content-Length/chunked/Connection: close 正确性
-4. SSE 流式响应使用 Connection: close（不定长流无 Content-Length）
+3. 所有响应路径 Content-Length/chunked 正确性
+4. SSE 流式响应使用 chunked + keep-alive（AIPOS-296C: 不定长流无 Content-Length，无 Connection: close）
 """
 
 import http.client
@@ -98,8 +98,8 @@ class TestAIPOS296HttpVersionUpgrade(unittest.TestCase):
         finally:
             server.shutdown()
 
-    def test_gate_sse_stream_has_connection_close(self) -> None:
-        """S2b: gate SSE 流式响应有 Connection: close（不定长流）"""
+    def test_gate_sse_stream_uses_chunked_keepalive(self) -> None:
+        """S2b: gate SSE 流式响应用 chunked + keep-alive（AIPOS-296C 升级，不再 Connection: close）"""
         port = find_free_port()
         config = HttpSseConfig(
             host="127.0.0.1",
@@ -129,12 +129,19 @@ class TestAIPOS296HttpVersionUpgrade(unittest.TestCase):
             # 验证 HTTP/1.1
             self.assertEqual(response.version, 11, "SSE response must be HTTP/1.1 (version=11)")
             
-            # 验证 Connection: close（流式响应必须显式关闭连接）
-            connection_header = response.getheader("Connection")
+            # AIPOS-296C: chunked transfer-encoding, keep-alive (no Connection: close)
+            transfer_encoding = response.getheader("Transfer-Encoding")
             self.assertEqual(
-                connection_header,
+                transfer_encoding,
+                "chunked",
+                "SSE stream must use Transfer-Encoding: chunked (AIPOS-296C)",
+            )
+            
+            connection_header = response.getheader("Connection", "")
+            self.assertNotEqual(
+                connection_header.lower(),
                 "close",
-                "SSE stream must have Connection: close (undici streamable requirement)",
+                "SSE stream must not force Connection: close (AIPOS-296C keep-alive)",
             )
             
             # 验证无 Content-Length（流式响应不定长）
