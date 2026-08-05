@@ -1438,6 +1438,17 @@ def build_parser() -> argparse.ArgumentParser:
     home_git_init_parser.add_argument("--project", help="Init at <home>/<project> instead of the home root (topology B); default is workspace-level (topology A)")
     home_git_init_parser.add_argument("--actor", default=default_actor, help="Commit identity actor; defaults to $USER or owner")
 
+    # AIPOS-340: Turn advancer (next-step command resolver)
+    turn_parser = subparsers.add_parser("turn-advancer", help="AIPOS-340: Resolve next-step command for turn-based workflow")
+    turn_subparsers = turn_parser.add_subparsers(dest="turn_command")
+    turn_next_parser = turn_subparsers.add_parser("next", help="Resolve next command for a single task")
+    turn_next_parser.add_argument("task_id", help="Task ID to resolve")
+    turn_next_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
+    turn_next_parser.add_argument("--mode", choices=["manual", "auto"], default="manual", help="Dispatch mode: manual (print) or auto (execute)")
+    turn_scan_parser = turn_subparsers.add_parser("scan", help="Scan all tasks and show next-step list")
+    turn_scan_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
+    turn_scan_parser.add_argument("--mode", choices=["manual", "auto"], default="manual", help="Dispatch mode")
+
     return parser
 
 
@@ -2435,6 +2446,39 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_preview_text(preview))
         return 0
+
+    if args.command == "turn-advancer":
+        # AIPOS-340: Turn advancer (next-step resolver)
+        from tools.turn_advancer import resolve_next_command
+        from tools.turn_advancer.resolver import scan_all_tasks
+        
+        workspace_root = args.workspace_root or workspace
+        
+        if args.turn_command == "next":
+            try:
+                result = resolve_next_command(
+                    task_id=args.task_id,
+                    workspace_root=workspace_root,
+                    dispatch_mode=args.mode,
+                )
+                print(render_json(result))
+                return 0
+            except Exception as exc:
+                print(f"Error resolving next command: {exc}", file=sys.stderr)
+                return 1
+        
+        elif args.turn_command == "scan":
+            try:
+                results = scan_all_tasks(workspace_root, dispatch_mode=args.mode)
+                print(render_json({"tasks": results, "total": len(results)}))
+                return 0
+            except Exception as exc:
+                print(f"Error scanning tasks: {exc}", file=sys.stderr)
+                return 1
+        
+        else:
+            print("turn-advancer subcommand required: next | scan", file=sys.stderr)
+            return 2
 
     print(f"Unknown command: {args.command}", file=sys.stderr)
     return 2
