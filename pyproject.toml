@@ -25,7 +25,7 @@ lybra = "tools.aipos_cli.aipos_cli:main"
 [tool.setuptools]
 # AIPOS-290: explicit package discovery to avoid flat-layout multi-package error.
 # Only include tools.* (CLI/MCP/TUI), exclude top-level directories (web, config, etc).
-packages = ["tools.aipos_cli", "tools.mcp_server", "tools.lybra_tui"]
+packages = ["tools.aipos_cli", "tools.mcp_server", "tools.lybra_tui", "tools.turn_advancer"]
 
 [tool.lybra]
 distribution = "npm"  # bin/lybra (package.json) is the entry; pyproject is deps/extras only
