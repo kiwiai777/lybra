@@ -136,6 +136,133 @@ def build_command(action: str, state: dict[str, Any], workspace_root: Path) -> d
             "copyable_line": copyable,
         }
     
+    elif action == "resume_round":
+        # AIPOS-340F5: resume 轮派工 — lybra pump run --round-type resume
+        # 参数来源:
+        #   --card: task_id
+        #   --role: executor(固定)
+        #   --round-type: resume(固定)
+        #   --workspace-root: workspace_root
+        #   --envelope: policy_resolver 实时解析
+        #   --runtime: 从 task_frontmatter 或默认 pi
+        #   --runtime-cmd: 从配置/档案读取;无配置 → 输出等待人工选择提示
+        #   --executor-instance: 卡面 assigned_to
+        assigned_to = task_frontmatter.get("assigned_to") or task_frontmatter.get("agent_instance")
+        if not assigned_to:
+            return {
+                "command_type": "wait_human",
+                "verb": None,
+                "args": {},
+                "copyable_line": f"任务 {task_id} 缺 assigned_to/agent_instance，无法构建 resume 命令",
+            }
+
+        # 信封:policy_resolver 实时解析
+        from tools.aipos_cli.policy_resolver import find_active_policy
+        governance_root = Path(os.getenv("LYBRA_GOVERNANCE_ROOT",
+                                         "/home/kiwi/ai-project-os/2_projects/lybra"))
+        envelope = find_active_policy(governance_root, role="exec", policy_type="dev")
+
+        if not envelope:
+            return {
+                "command_type": "wait_human",
+                "verb": None,
+                "args": {},
+                "copyable_line": f"任务 {task_id} 无法解析活跃 resume 信封，检查治理仓 5_tasks/policies/ 或明确指定",
+            }
+
+        # runtime:卡面指定或默认 pi
+        runtime = task_frontmatter.get("runtime", "pi")
+
+        # runtime-cmd:从配置读取;无配置 → 明确等待提示
+        # 配置查找顺序:环境变量 LYBRA_RUNTIME_CMD > 产品仓 config/runtime_cmds.yaml
+        runtime_cmd = os.getenv("LYBRA_RUNTIME_CMD")
+        if not runtime_cmd:
+            runtime_cmds_config = Path(workspace_root) / "config" / "runtime_cmds.yaml"
+            if runtime_cmds_config.is_file():
+                try:
+                    import yaml
+                    cfg = yaml.safe_load(runtime_cmds_config.read_text(encoding="utf-8"))
+                    if isinstance(cfg, dict):
+                        runtime_cmd = cfg.get(runtime) or cfg.get("default")
+                except Exception:
+                    pass
+
+        # 模型顶替:failure_tracker + 配置表
+        # 检查 failure_tracker 是否建议顶替(连败达阈值)
+        model_note = ""
+        try:
+            from tools.turn_advancer.failure_tracker import check_retry_limit
+            retry_info = check_retry_limit(governance_root, task_id)
+            if retry_info["action"] == "trigger_substitution":
+                model_note = f" [模型顶替: {retry_info['reason']} — 等待人工选择替代模型]"
+            elif retry_info["action"] == "block_escalate":
+                model_note = f" [顶替升级: {retry_info['reason']} — 等待 Owner 裁定]"
+        except Exception:
+            pass
+
+        # 组装命令
+        ws_str = str(workspace_root)
+        if runtime_cmd:
+            copyable = (
+                f"lybra pump run --card {task_id} --role executor --round-type resume"
+                f" --workspace-root {ws_str}"
+                f" --envelope {envelope}"
+                f" --runtime {runtime}"
+                f" --runtime-cmd '{runtime_cmd}'"
+                f" --executor-instance {assigned_to}"
+                f"{model_note}"
+            )
+            args = {
+                "card": task_id,
+                "role": "executor",
+                "round_type": "resume",
+                "workspace_root": ws_str,
+                "envelope": envelope,
+                "runtime": runtime,
+                "runtime_cmd": runtime_cmd,
+                "executor_instance": assigned_to,
+            }
+            return {
+                "command_type": "cli",
+                "verb": None,
+                "args": args,
+                "copyable_line": copyable,
+            }
+        else:
+            # 无 runtime-cmd 配置 → 命令含明确等待提示
+            copyable = (
+                f"lybra pump run --card {task_id} --role executor --round-type resume"
+                f" --workspace-root {ws_str}"
+                f" --envelope {envelope}"
+                f" --runtime {runtime}"
+                f" --runtime-cmd <等待人工选择:无 runtime-cmd 配置,请指定拉起命令模板>"
+                f" --executor-instance {assigned_to}"
+                f"{model_note}"
+            )
+            return {
+                "command_type": "wait_human",
+                "verb": None,
+                "args": {
+                    "card": task_id,
+                    "role": "executor",
+                    "round_type": "resume",
+                    "workspace_root": ws_str,
+                    "envelope": envelope,
+                    "runtime": runtime,
+                    "executor_instance": assigned_to,
+                    "missing": "runtime_cmd",
+                },
+                "copyable_line": copyable,
+            }
+
+    elif action == "wait_executor":
+        return {
+            "command_type": "wait_human",
+            "verb": None,
+            "args": {},
+            "copyable_line": f"等待执行体完成(执行中,不动作)",
+        }
+
     elif action == "wait_human":
         return {
             "command_type": "wait_human",
