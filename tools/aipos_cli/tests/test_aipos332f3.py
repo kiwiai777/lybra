@@ -53,7 +53,10 @@ class TestSessionDirDerivation:
         home_pi = tmp_path / "fake_home" / ".pi" / "agent" / "sessions"
         product_repo = tmp_path / "repo"
         product_repo.mkdir()
-        encoded = po._encode_cwd_for_pi(product_repo)
+        # AIPOS-332F5:编码用 workdir(运行体真实工作目录),不用 product_repo
+        workdir = tmp_path / "workdir"
+        workdir.mkdir()
+        encoded = po._encode_cwd_for_pi(workdir)
         real_session_dir = home_pi / encoded
         real_session_dir.mkdir(parents=True)
 
@@ -61,6 +64,7 @@ class TestSessionDirDerivation:
             card_id="AIPOS-T1", role="executor",
             workspace_root=tmp_path / "ws",
             product_repo=product_repo,
+            workdir=workdir,
         )
         # 模拟 observation_plan 里有 pi 运行体档案
         ctx.observation_plan = {
@@ -82,11 +86,15 @@ class TestSessionDirDerivation:
         """目录不存在 → 告警 + 降级(空列表),不带着死判据开杀。"""
         product_repo = tmp_path / "repo"
         product_repo.mkdir()
+        # AIPOS-332F5:workdir 必须配置才会编码;这里配一个使目录不存在的场景
+        workdir = tmp_path / "actual_workdir"
+        workdir.mkdir()
 
         ctx = po.DispatchContext(
             card_id="AIPOS-T2", role="executor",
             workspace_root=tmp_path / "ws",
             product_repo=product_repo,
+            workdir=workdir,
         )
         ctx.observation_plan = {
             "runtime_profile": {

@@ -228,6 +228,9 @@ class DispatchContext:
     collaboration_profile: dict[str, Any] | None = None
     # 运行时命令模板(顾问/harness 提供,含 {kickoff} 占位)
     runtime_cmd_template: str | None = None
+    # AIPOS-332F5:运行体真实工作目录(配置声明);用于会话目录编码,不用 product_repo 推断。
+    # 未配置时 _session_dirs_for 跳过会话判据并明确提示。
+    workdir: Path | None = None
     # 派生结果(各步填)
     observation_plan: dict[str, Any] = field(default_factory=dict)
     kickoff: str = ""
@@ -542,13 +545,18 @@ def _encode_cwd_for_pi(cwd: Path) -> str:
 
 
 def _session_dirs_for(ctx: DispatchContext) -> list[str]:
-    """AIPOS-332F3 修一:会话目录取自运行体档案,不硬编码 product_repo/.pi。
+    """AIPOS-332F5 修:会话目录编码用运行体真实工作目录(workdir),不用 product_repo。
 
     派生逻辑:
       1. 从运行体档案取 session_root(如 pi → ``~/.pi/agent/sessions``);
-      2. 按档案的编码规则 + 运行目录(产品仓)算出具体子目录;
+      2. 编码用 **workdir**(运行体配置的真实工作目录);workdir 未配置 →
+         跳过会话判据 + 明确提示"未配置 workdir,会话判据不可用";
       3. **校验存在性**:目录不存在 → 明确告警并降级到 CPU/工作树判据,
          不得带着死判据开杀(AIPOS-332F3 根因修复)。
+
+    AIPOS-332F5 根因:product_repo 是产品仓路径(如 ~/projects/lybra),
+    而运行体实际 cd 到的工作目录可能是另一个路径(如 ~/projects/kiwiai-pi/lybra-executor),
+    导致编码出的会话目录与实际 pi 会话目录不一致——监控盯错目录,三轮四杀。
     """
     dirs: list[str] = []
     warnings: list[str] = []
@@ -559,21 +567,30 @@ def _session_dirs_for(ctx: DispatchContext) -> list[str]:
     encoding = runtime_profile.get("session_dir_encoding")
 
     if session_root_raw and encoding:
-        session_root = Path(session_root_raw).expanduser()
-        if encoding == "pi_cwd_dash":
-            encoded = _encode_cwd_for_pi(ctx.product_repo)
-            session_dir = session_root / encoded
-        else:
-            session_dir = session_root
-
-        if session_dir.is_dir():
-            dirs.append(str(session_dir))
-        else:
-            # 目录不存在 → 告警 + 降级(不带着死判据开杀)
+        # AIPOS-332F5:编码用 workdir(配置声明的运行体真实工作目录),不用 product_repo。
+        cwd_for_encoding = ctx.workdir
+        if cwd_for_encoding is None:
+            # workdir 未配置 → 跳过会话判据 + 明确提示
             warnings.append(
-                f"运行体档案派生的会话目录不存在: {session_dir}"
-                ";已降级到 CPU/工作树判据,不因此误杀健康 agent(AIPOS-332F3 修一)。"
+                "未配置 workdir,会话判据不可用(AIPOS-332F5);"
+                "已降级到 CPU/工作树判据。请在 config/runtime_cmds.yaml 或 CLI --workdir 配置运行体真实工作目录。"
             )
+        else:
+            session_root = Path(session_root_raw).expanduser()
+            if encoding == "pi_cwd_dash":
+                encoded = _encode_cwd_for_pi(cwd_for_encoding)
+                session_dir = session_root / encoded
+            else:
+                session_dir = session_root
+
+            if session_dir.is_dir():
+                dirs.append(str(session_dir))
+            else:
+                # 目录不存在 → 告警 + 降级(不带着死判据开杀)
+                warnings.append(
+                    f"运行体档案派生的会话目录不存在: {session_dir}"
+                    ";已降级到 CPU/工作树判据,不因此误杀健康 agent(AIPOS-332F3 修一)。"
+                )
 
     # 其他已知会话目录(cc 等,按产品仓内是否存在加入)
     if (ctx.product_repo / ".claude").is_dir():

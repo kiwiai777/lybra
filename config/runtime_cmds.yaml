@@ -1,0 +1,28 @@
+# AIPOS-332F5: 运行体命令配置(含 workdir)。
+#
+# 每个运行体条目:
+#   cmd     : 拉起命令模板(含 {kickoff} 占位)
+#   workdir : 运行体真实工作目录(绝对路径);用于会话目录编码。
+#             pi 会话目录 = session_root + encode(workdir);
+#             不配 → 会话判据不可用,降级到 CPU/工作树判据。
+#
+# 本文件是操作者配置(非代码):不同部署环境 workdir 不同,在此声明。
+# 代码不猜 workdir——猜错 = 盯错目录 = 误杀(AIPOS-332 三轮四杀根因)。
+
+pi:
+  cmd: "pi --append-system-prompt {kickoff}"
+  # 示例:executor 实际 cd 到的工作目录(非产品仓)。
+  # 部署时按实际环境修改此值。
+  workdir: /home/kiwi/projects/kiwiai-pi/lybra-executor
+
+cc:
+  cmd: "cc {kickoff}"
+  workdir: null  # cc 无已知会话目录机制;配 null = 会话判据不可用
+
+claude_code:
+  cmd: "claude {kickoff}"
+  workdir: null
+
+generic_bash:
+  cmd: "bash -c '{kickoff}'"
+  workdir: null  # bash 秒活,通常无需会话监控

@@ -1244,6 +1244,8 @@ def build_parser() -> argparse.ArgumentParser:
     pump_run_parser.add_argument("--runtime-cmd", default=None, help="[AIPOS-332] 拉起命令模板(含 {kickoff} 占位);非 dry-run 时必需,判断留人")
     pump_run_parser.add_argument("--reviewed-task-id", default=None, help="[AIPOS-332] 审计裁决落该(被审卡)ID 目录;role=auditor 时用")
     pump_run_parser.add_argument("--executor-instance", default=None, help="[AIPOS-332] 执行体实例名(默认 <role>.lybra.kiwiai-dev)")
+    pump_run_parser.add_argument("--workdir", default=None, help="[AIPOS-332F5] 运行体真实工作目录(用于会话目录编码);不配则会话判据不可用")
+    pump_run_parser.add_argument("--runtime-cmds-yaml", default=None, help="[AIPOS-332F5] runtime_cmds.yaml 路径(从中读 workdir 等配置)")
     pump_run_parser.add_argument("--check-unmanaged", action="store_true", help="[AIPOS-332 S3] 只读列出非泵派出的在跑 agent,后退出")
 
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP HTTP/SSE or run MCP setup diagnostics")
@@ -2377,6 +2379,30 @@ def main(argv: list[str] | None = None) -> int:
                 collab = get_collaboration_profile(str(product_repo))
             except Exception:
                 collab = None
+            # AIPOS-332F5:解析 workdir(优先级:CLI --workdir > runtime_cmds.yaml > None)
+            workdir_path = None
+            if getattr(args, "workdir", None):
+                workdir_path = Path(args.workdir).expanduser().resolve()
+            else:
+                # 尝试从 runtime_cmds.yaml 读取
+                import yaml as _yaml
+                rc_yaml_path = getattr(args, "runtime_cmds_yaml", None)
+                if not rc_yaml_path:
+                    # 自动发现:产品仓 config/runtime_cmds.yaml
+                    candidate = product_repo / "config" / "runtime_cmds.yaml"
+                    if candidate.is_file():
+                        rc_yaml_path = str(candidate)
+                if rc_yaml_path:
+                    try:
+                        with open(rc_yaml_path) as _f:
+                            _rc_data = _yaml.safe_load(_f) or {}
+                        runtime_type = getattr(args, "runtime", None)
+                        if runtime_type and runtime_type in _rc_data:
+                            _wd = _rc_data[runtime_type].get("workdir")
+                            if _wd:
+                                workdir_path = Path(_wd).expanduser().resolve()
+                    except Exception:
+                        pass  # 配置读失败不阻塞派工,workdir 留 None 走降级
             ctx = DispatchContext(
                 card_id=args.card_id, role=args.role, round_type=args.round_type, delta=args.delta,
                 workspace_root=workspace_root, product_repo=product_repo,
@@ -2388,6 +2414,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_target=getattr(args, "output_target", None),
                 collaboration_profile=collab,
                 runtime_cmd_template=getattr(args, "runtime_cmd", None),
+                workdir=workdir_path,
             )
 
             dispatch = run_pump_dispatch(ctx, dry_run=args.dry_run)
