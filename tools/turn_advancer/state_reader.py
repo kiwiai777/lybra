@@ -6,6 +6,28 @@
 from pathlib import Path
 from typing import Any
 import json
+import re
+
+
+_EVENT_KIND_FROM_FILENAME = re.compile(r"^(.+?)_\d{8}_\d{6}")
+
+
+def _normalize_event_type(fm: dict[str, Any], filename: str) -> str | None:
+    """统一三来源事件类型为单个 type 字段(rules.py 与 failure_kinds 消费用)。
+
+    三来源真实落盘格式(AIPOS-340F4):
+    - task_progress_event:frontmatter ``event_type``(started/progress/completed/blocked)
+    - launch_check_event: frontmatter ``event_kind``(launch_failed/blocked),``source: launch_check``
+    - audit_event(守护): frontmatter ``event_kind``(blocked/audit_incomplete)
+
+    文件名统一为 ``<kind>_<YYYYMMDD>_<HHMMSS>.md``。优先取 frontmatter 字段;
+    字段缺失时回退文件名前缀,保证个别文件 frontmatter 漂移也能读出(容错,不判活只读事实)。
+    """
+    kind = str(fm.get("event_type") or fm.get("event_kind") or "").strip()
+    if kind:
+        return kind
+    match = _EVENT_KIND_FROM_FILENAME.match(filename)
+    return match.group(1) if match else None
 
 
 def read_task_state(workspace_root: Path, task_id: str) -> dict[str, Any]:
@@ -87,20 +109,24 @@ def read_task_state(workspace_root: Path, task_id: str) -> dict[str, Any]:
             except Exception:
                 pass
     
-    # 5. 读 events（started/progress/completed/blocked）
+    # 5. 读 events —— 三来源真实落盘格式并容错(AIPOS-340F4):
+    #    task_progress_event(event_type)/ launch_check_event(event_kind)/
+    #    audit_event 守护(event_kind);文件名 <kind>_<ts>.md。type 归一见 _normalize_event_type。
     events_dir = workspace_root / "5_tasks" / "records" / "events" / task_id
     if events_dir.is_dir():
         event_files = sorted(events_dir.glob("*.md"), key=lambda p: p.stat().st_mtime)
         for ef in event_files:
             try:
                 fm, _, _ = parse_markdown_frontmatter(ef.read_text(encoding="utf-8"))
-                if isinstance(fm, dict):
-                    state["events"].append({
-                        "type": fm.get("event_type"),
-                        "timestamp": fm.get("timestamp") or fm.get("reported_at"),
-                        "actor": fm.get("actor"),
-                        "reason": fm.get("reason"),
-                    })
+                if not isinstance(fm, dict):
+                    continue
+                state["events"].append({
+                    "type": _normalize_event_type(fm, ef.name),
+                    "timestamp": fm.get("timestamp") or fm.get("reported_at"),
+                    "actor": fm.get("actor"),
+                    "reason": fm.get("reason"),
+                    "source": fm.get("source") or fm.get("record_type"),
+                })
             except Exception:
                 pass
     
