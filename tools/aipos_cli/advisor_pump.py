@@ -1358,30 +1358,26 @@ def generate_kickoff(
     round_type: str = "first",
     delta: str = "",
     workspace_root: Path | None = None,
+    placeholders: dict[str, str] | None = None,
 ) -> str:
     """第一层：泵按模板生成 kickoff，顾问只填增量。
 
     AIPOS-330 S2: 动词名从 gate 取,不手写。kickoff 不再描述流程,改为
     告诉 agent "问 gate" (lybra_gate_guidance)。
 
+    AIPOS-332 S7: 占位符 {workspace}/{gate}/{product_repo}/{envelope} 在【生成阶段】展开
+    (取值来源为命令参数与工作区配置),生成物是可直接投递的成品,不残留 {...} 占位符。
+    缺值时当场报错,不输出带占位符的半成品。
+
     Args:
-        card_id: 任务卡 ID (如 AIPOS-325)
-        role: 角色 (executor/auditor)
-        round_type: 轮次类型 (first/fix/resume)
-        delta: 顾问提供的增量信息（本轮特殊指示）
-        workspace_root: 治理仓根目录（用于读取卡信息）
-
-    Returns:
-        生成的 kickoff 文本
-
-    Raises:
-        ValueError: if generated kickoff contains unregistered verb names (S2 validation).
+        placeholders: 可选,提供则原地展开 {workspace}/{gate}/{product_repo}/{envelope}。
+            未提供时保留占位符(向后兼容旧 dry-run 路径)。
     """
     from tools.aipos_cli.verb_contract import validate_kickoff_verbs
 
     # 基础模板 — AIPOS-330: 不再手写动词名,改为让 agent 问 gate
     if round_type == "first":
-        template = f"""冷启动。执行卡 {card_id} 在 5_tasks/queue/pending/{card_id.lower()}.md(workspace={{workspace}},gate={{gate}},产品仓={{product_repo}})。先向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role}),按 gate 回答的动词与参数过门。
+        template = f"""冷启动。执行卡 {card_id} 在 5_tasks/queue/pending/{card_id.lower()}.md(workspace={{workspace}},gate={{gate}},产品仓={{product_repo}},信封={{envelope}})。本卡已由泵经预授权信封一发式认领(autonomy_mode=PreAuthorized),你【无需再 /claim】。先向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role}),按 gate 回答的动词与参数过门。
 {{delta}}
 【过门】完成后 write-return(最终 confirm 由顾问代按);自产审计卡只放 task_cards/{card_id}/,不投队列。"""
     elif round_type == "fix":
@@ -1401,6 +1397,21 @@ def generate_kickoff(
 
     # 填充增量
     kickoff = template.replace("{delta}", delta if delta else "")
+
+    # AIPOS-332 S7: 在生成阶段展开 {workspace}/{gate}/{product_repo}/{envelope}。
+    # 缺值即报错(不输出带占位符的半成品)。
+    if placeholders is not None:
+        import re as _re
+        _S7_KEYS = ("workspace", "gate", "product_repo", "envelope")
+        for key in _S7_KEYS:
+            if key not in placeholders or not placeholders[key]:
+                raise ValueError(
+                    f"无法展开 kickoff 占位符 {{{key}}}:缺值。派工中止(S7:不输出带占位符的半成品)。"
+                )
+            kickoff = kickoff.replace("{" + key + "}", placeholders[key])
+        leftover = _re.findall(r"\{[a-z_]+\}", kickoff)
+        if leftover:
+            raise ValueError(f"kickoff 仍含未展开占位符 {leftover}(S7)。")
 
     # AIPOS-330 S2: validate that all lybra_* verbs in kickoff exist in the registry.
     # This catches hand-written verb names at generation time, not at agent runtime.

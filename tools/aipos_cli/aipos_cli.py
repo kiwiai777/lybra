@@ -1237,6 +1237,13 @@ def build_parser() -> argparse.ArgumentParser:
     pump_run_parser.add_argument("--repetition-threshold", type=float, default=0.3, help="Repetition overlap threshold 0.0-1.0 (default: 0.3)")
     pump_run_parser.add_argument("--dry-run", action="store_true", help="Validate kickoff constraints without actual dispatch")
     pump_run_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-332: 编排式全程派工的新参数(默认关,不改既有参数语义 S6④)
+    pump_run_parser.add_argument("--runtime", default=None, help="[AIPOS-332] 运行体类型档案(pi/cc/claude_code/generic_bash);决定观测面选择")
+    pump_run_parser.add_argument("--output-target", default=None, help="[AIPOS-332] 任务产出位置(tools/docs/config/remote/workspace_only);决定 worktree 判据是否适用")
+    pump_run_parser.add_argument("--runtime-cmd", default=None, help="[AIPOS-332] 拉起命令模板(含 {kickoff} 占位);非 dry-run 时必需,判断留人")
+    pump_run_parser.add_argument("--reviewed-task-id", default=None, help="[AIPOS-332] 审计裁决落该(被审卡)ID 目录;role=auditor 时用")
+    pump_run_parser.add_argument("--executor-instance", default=None, help="[AIPOS-332] 执行体实例名(默认 <role>.lybra.kiwiai-dev)")
+    pump_run_parser.add_argument("--check-unmanaged", action="store_true", help="[AIPOS-332 S3] 只读列出非泵派出的在跑 agent,后退出")
 
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP HTTP/SSE or run MCP setup diagnostics")
     mcp_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
@@ -2262,52 +2269,86 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "pump":
         if getattr(args, "pump_command", None) == "run":
             from tools.aipos_cli.advisor_pump import validate_and_dispatch
-            
+            from tools.aipos_cli.pump_orchestration import (
+                DispatchContext, run_pump_dispatch, render_dispatch_plan, list_unmanaged_agents,
+            )
+            from tools.aipos_cli.workspace_config import get_collaboration_profile
+
             workspace_root = Path(args.workspace_root).expanduser().resolve()
             product_repo = Path(args.product_repo).expanduser().resolve() if args.product_repo else Path.home() / "projects" / "lybra"
-            
-            # 执行三层制约验证
+            connection_json = Path(args.connection_json).expanduser().resolve() if getattr(args, "connection_json", None) else (workspace_root / ".lybra" / "connection.json")
+
+            # S3: --check-unmanaged 只读列出非泵派出的在跑 agent,后退出(不阻止人工介入)
+            if getattr(args, "check_unmanaged", False):
+                unmanaged = list_unmanaged_agents(product_repo, workspace_root, managed_task_ids=set())
+                if args.json:
+                    print(render_json({"unmanaged": unmanaged}))
+                else:
+                    print("[S3] 非泵派出的在跑 agent(只读告警,不阻止):")
+                    for u in unmanaged:
+                        print(f"  - {u['task_id']}  信号: {u['signal']}")
+                    if not unmanaged:
+                        print("  (无)")
+                return 0
+
+            # 保留现有三层制约(预算/复述)——零回归
             result = validate_and_dispatch(
-                card_id=args.card_id,
-                role=args.role,
-                round_type=args.round_type,
-                delta=args.delta,
-                workspace_root=workspace_root,
-                budget_threshold=args.budget_threshold,
-                repetition_threshold=args.repetition_threshold,
+                card_id=args.card_id, role=args.role, round_type=args.round_type,
+                delta=args.delta, workspace_root=workspace_root,
+                budget_threshold=args.budget_threshold, repetition_threshold=args.repetition_threshold,
                 dry_run=args.dry_run,
             )
-            
-            if args.json:
-                print(render_json(result))
-            else:
-                # 文本输出
-                if result["ok"]:
-                    print(f"\u2713 Kickoff validation PASSED")
-                    print(f"\nGenerated kickoff ({result.get('metrics', {}).get('total_tokens', 'N/A')} tokens):")
-                    print("-" * 60)
-                    print(result["kickoff"])
-                    print("-" * 60)
-                    if result.get("metrics"):
-                        metrics = result["metrics"]
-                        print(f"\nMetrics:")
-                        print(f"  Total tokens: {metrics.get('total_tokens', 'N/A')}")
-                        print(f"  Budget threshold: {metrics.get('budget_threshold', 'N/A')}")
-                        print(f"  Overlap ratio: {metrics.get('overlap_ratio', 0.0):.1%}")
-                        print(f"  Repetition threshold: {metrics.get('repetition_threshold', 'N/A'):.1%}")
-                    if args.dry_run:
-                        print("\n[DRY RUN] Validation passed. Actual dispatch skipped.")
-                    else:
-                        print("\n[READY] Validation passed. Proceed with actual dispatch.")
-                        print(result.get("message", ""))
+            if not result["ok"]:
+                if args.json:
+                    print(render_json(result))
                 else:
-                    print(f"\u2717 Kickoff validation BLOCKED")
-                    print(f"\nErrors:")
+                    print("\u2717 Kickoff validation BLOCKED")
                     for error in result.get("errors", []):
-                        print(error)
-                        print()
-            
-            return 0 if result["ok"] else 1
+                        print(f"  - {error}")
+                return 1
+
+            # 构建编排上下文(AIPOS-332)
+            try:
+                collab = get_collaboration_profile(str(product_repo))
+            except Exception:
+                collab = None
+            ctx = DispatchContext(
+                card_id=args.card_id, role=args.role, round_type=args.round_type, delta=args.delta,
+                workspace_root=workspace_root, product_repo=product_repo,
+                gate_url=getattr(args, "gate_url", "http://127.0.0.1:7118"),
+                connection_json=connection_json, envelope=getattr(args, "envelope", "") or "",
+                executor_instance=getattr(args, "executor_instance", None) or "",
+                reviewed_task_id=getattr(args, "reviewed_task_id", None),
+                runtime_type=getattr(args, "runtime", None),
+                output_target=getattr(args, "output_target", None),
+                collaboration_profile=collab,
+                runtime_cmd_template=getattr(args, "runtime_cmd", None),
+            )
+
+            dispatch = run_pump_dispatch(ctx, dry_run=args.dry_run)
+
+            if args.json:
+                # JSON 只增字段不删字段、不改字段语义(S6④)
+                out = dict(result)
+                out["dispatch"] = dispatch
+                print(render_json(out))
+            else:
+                if args.dry_run:
+                    print("\u2713 Kickoff validation PASSED")
+                    print(render_dispatch_plan(dispatch))
+                    metrics = result.get("metrics", {})
+                    if metrics:
+                        print(f"\nMetrics: tokens={metrics.get('total_tokens','N/A')} overlap={metrics.get('overlap_ratio',0.0):.1%}")
+                    print("\n[DRY RUN] 校验通过,未派工(--dry-run 保留现有语义)。")
+                else:
+                    print(render_dispatch_plan(dispatch))
+                    sv = (dispatch.get("watch") or {}).get("verify") or dispatch.get("sentinel_verify") or {}
+                    if sv.get("expect_status"):
+                        print("\n哨兵自证(expect 布防即检):")
+                        for e in sv["expect_status"]:
+                            tag = f" [{e.get('label')}]" if e.get("matched") else ""
+                            print(f"  - {e['pattern']}  命中={e['matched']}{tag}")
+            return 0 if dispatch["ok"] else 1
         
         parser.print_help()
         return 2

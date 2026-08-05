@@ -80,6 +80,103 @@ def emit_event(event: dict[str, Any]) -> None:
     print(json.dumps(event, ensure_ascii=False), flush=True)
 
 
+# F-332-01: 一次性 pump run 路径的失败类事件须落工作区(S10 硬约束2/3)。
+# 与 AIPOS-323 事件通道同落位 5_tasks/records/events/<task_id>/;产品仓 BLOCK 文件
+# 仅作详情附件(有产品仓才写),工作区事件无条件写。
+WORKSPACE_EVENTS_REL = Path("5_tasks") / "records" / "events"
+
+
+def _fm_yaml_scalar(value: Any) -> str:
+    """把值格式化为 YAML 安全标量(frontmatter 用)。"""
+    text = str(value or "").strip()
+    if text == "":
+        return '""'
+    if any(ch in text for ch in [":", "#", "[", "]", "{", "}", "\n", "'", '"']) or text != text.strip():
+        return "'" + text.replace("'", "''") + "'"
+    return text
+
+
+def _event_timestamp_slug(timestamp: str) -> str:
+    """ISO8601 Z 时间戳 → 文件名安全 slug(与 AIPOS-323/daemon 同精度:秒)。"""
+    return (
+        timestamp.replace(":", "").replace("-", "").replace("T", "_").replace("Z", "")
+    )
+
+
+def write_event_to_workspace(
+    workspace_root: Path,
+    task_id: str,
+    event: dict[str, Any],
+    *,
+    actor: str = "",
+) -> Path:
+    """F-332-01: 把 launch-check 的失败类事件持久化到工作区 events 目录。
+
+    与 AIPOS-323 事件通道同落位 ``5_tasks/records/events/<task_id>/<kind>_<ts>.md``。
+    工作区事件无条件写(不以产品仓是否存在为前提);产品仓 BLOCK 文件仅作详情附件。
+
+    落库失败抛出(不吞掉,任务卡红线)——调用方据此响,不得静默。
+    返回写入的文件路径。
+    """
+    events_dir = workspace_root / WORKSPACE_EVENTS_REL / task_id
+    events_dir.mkdir(parents=True, exist_ok=True)
+    kind = str(event.get("kind") or "event")
+    timestamp = str(
+        event.get("timestamp")
+        or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    slug = _event_timestamp_slug(timestamp)
+    event_file = events_dir / f"{kind}_{slug}.md"
+    # 同秒内多事件稳妥去重(launch 间隔理论上≥5s,此处仍防御)
+    n = 2
+    while event_file.exists():
+        event_file = events_dir / f"{kind}_{slug}_{n}.md"
+        n += 1
+
+    fm_lines = [
+        "---",
+        "record_type: launch_check_event",
+        f"event_kind: {kind}",
+        f"task_id: {task_id}",
+        f"actor: {_fm_yaml_scalar(actor or 'launch-check')}",
+        f"timestamp: {timestamp}",
+    ]
+    reason = event.get("reason")
+    if reason:
+        fm_lines.append(f"reason: {_fm_yaml_scalar(reason)}")
+    if event.get("exit_code") is not None:
+        fm_lines.append(f"exit_code: {event.get('exit_code')}")
+    if event.get("attempt") is not None:
+        fm_lines.append(f"attempt: {event.get('attempt')}")
+    fm_lines.append("source: launch_check")
+    fm_lines.append("---")
+
+    body_lines = [
+        f"# Launch-check event: {kind}",
+        "",
+        f"Task `{task_id}` 的 launch-check(一次性 pump run 路径)于 {timestamp} 报出 `{kind}`。",
+        "",
+    ]
+    if reason:
+        body_lines.append(f"- reason: {reason}")
+    if event.get("attempt") is not None:
+        body_lines.append(f"- attempt: {event.get('attempt')}")
+    if event.get("exit_code") is not None:
+        body_lines.append(f"- exit_code: {event.get('exit_code')}")
+    body_lines.append("")
+    body_lines.append(
+        "> 本事件由 launch-check 写入(F-332-01),与 AIPOS-323 通道同落位;"
+        "产品仓 BLOCK 文件仅作详情附件,不得作唯一载体。"
+    )
+    body_lines.append("")
+
+    event_file.write_text(
+        "\n".join(fm_lines) + "\n" + "\n".join(body_lines), encoding="utf-8"
+    )
+    log(f"Workspace event written: {event_file}")
+    return event_file
+
+
 def _find_pi_processes(pid: int) -> list[int]:
     """Find pi subprocess tree PIDs (excluding timeout wrapper).
     
@@ -615,9 +712,14 @@ def run_launch_check(
     launch_window_secs: float,
     check_interval_secs: float,
     model_fallback_policy: dict[str, str] | None = None,
+    workspace_root: Path | None = None,
 ) -> int:
     """Main launch-check loop with bounded retry (S3: 有界自愈).
-    
+
+    workspace_root: 若提供,则把 launch_failed/blocked 失败类事件无条件落工作区
+        ``5_tasks/records/events/<task_id>/``(F-332-01,S10 硬约束2/3);为 None 时
+        保持旧行为(仅 stdout + 产品仓 BLOCK)——daemon 路径不传,行为不变。
+
     Returns:
         EXIT_OK (0): launched successfully
         EXIT_BLOCKED (2): failed twice, BLOCK written
@@ -664,7 +766,12 @@ def run_launch_check(
             "timestamp": timestamp,
         }
         emit_event(launch_failed_event)
-        
+        if workspace_root is not None:
+            # F-332-01: 失败类事件无条件落工作区(不以产品仓是否存在为前提)
+            write_event_to_workspace(
+                workspace_root, task_id, launch_failed_event, actor=executor_instance
+            )
+
         if attempt < max_attempts:
             # S3: Relaunch (first failure)
             relaunch_event = {
@@ -688,6 +795,12 @@ def run_launch_check(
                 "timestamp": timestamp,
             }
             emit_event(blocked_event)
+            if workspace_root is not None:
+                # F-332-01: 失败类事件无条件落工作区(不以产品仓是否存在为前提)。
+                # 落库失败抛出(不吞掉,任务卡红线)——BLOCK 附件仅作详情补充。
+                write_event_to_workspace(
+                    workspace_root, task_id, blocked_event, actor=executor_instance
+                )
             log(f"Maximum launch attempts ({max_attempts}) exceeded. Writing BLOCK file...")
             
             write_block_file(
@@ -724,6 +837,9 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"Launch verification window seconds (default: {DEFAULT_LAUNCH_WINDOW_SECS})")
     parser.add_argument("--check-interval", type=float, default=DEFAULT_CHECK_INTERVAL_SECS,
                         help=f"Poll interval seconds (default: {DEFAULT_CHECK_INTERVAL_SECS})")
+    parser.add_argument("--workspace-root", type=Path, default=None,
+                        help="[AIPOS-332F1] 治理工作区根;提供后 launch_failed/blocked "
+                             "事件无条件落 5_tasks/records/events/<task_id>/(F-332-01)")
     parser.add_argument("--model-fallback-policy", help="JSON file with model substitution policy (optional)")
     
     args = parser.parse_args(argv)
@@ -763,6 +879,7 @@ def main(argv: list[str] | None = None) -> int:
             launch_window_secs=args.launch_window,
             check_interval_secs=args.check_interval,
             model_fallback_policy=model_fallback_policy,
+            workspace_root=args.workspace_root,
         )
     except KeyboardInterrupt:
         log("Interrupted by user")
