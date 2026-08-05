@@ -47,6 +47,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tools.aipos_cli.confirm_client import GateClient, GateError
+from tools.aipos_cli.kickoff_safe import KICKOFF_HAZARDS
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -57,51 +58,6 @@ def log(msg: str, *, stream: Any = sys.stderr) -> None:
     """Timestamped log."""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"[supervise {timestamp}] {msg}", file=stream, flush=True)
-
-
-def _prepare_spawn_cmd_safe(spawn_cmd: str, kickoff_content: str | None = None) -> tuple[str, Path | None]:
-    """AIPOS-327 S1: Prepare spawn command with safe kickoff transmission.
-    
-    If spawn_cmd contains {kickoff} placeholder and kickoff_content is provided,
-    writes kickoff to a temporary file and replaces placeholder with @file syntax.
-    Otherwise returns spawn_cmd unchanged.
-    
-    Args:
-        spawn_cmd: Command template (may contain {kickoff} placeholder)
-        kickoff_content: Kickoff text to transmit safely (if applicable)
-    
-    Returns:
-        (prepared_cmd, temp_file_path_or_none)
-        Caller must clean up temp file after process exits.
-    """
-    if kickoff_content is None or "{kickoff}" not in spawn_cmd:
-        return spawn_cmd, None
-    
-    # Detect shell-interpretation hazards
-    hazards = ["`", "$(", "${", "$((", "&&", "||", ";", "\n"]
-    has_hazards = any(h in kickoff_content for h in hazards)
-    
-    if has_hazards:
-        log(f"Kickoff contains shell-interpretation hazards, using safe file transmission", stream=sys.stderr)
-    
-    # Write kickoff to temporary file
-    fd, temp_path = tempfile.mkstemp(suffix=".txt", prefix="lybra_kickoff_")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(kickoff_content)
-    except Exception as exc:
-        os.close(fd)
-        try:
-            os.unlink(temp_path)
-        except OSError:
-            pass
-        raise RuntimeError(f"Failed to write kickoff to temp file: {exc}") from exc
-    
-    # Replace {kickoff} with @file syntax
-    safe_cmd = spawn_cmd.replace("{kickoff}", f"@{temp_path}")
-    log(f"Kickoff written to {temp_path}, command updated to use @file syntax", stream=sys.stderr)
-    
-    return safe_cmd, Path(temp_path)
 
 
 def kill_process_tree(pid: int) -> None:
@@ -372,9 +328,8 @@ def run_supervise(
     if match:
         kickoff_content = match.group(2)
         
-        # Check if kickoff contains shell-interpretation hazards
-        hazards = ["`", "$(", "${", "\n"]
-        has_hazards = any(h in kickoff_content for h in hazards)
+        # Check if kickoff contains shell-interpretation hazards (AIPOS-339: shared list)
+        has_hazards = any(h in kickoff_content for h in KICKOFF_HAZARDS)
         
         if has_hazards:
             log("Kickoff contains shell-interpretation hazards, using safe file transmission")

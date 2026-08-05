@@ -26,6 +26,9 @@ from tools.aipos_cli.agent_supervise import (
     EXIT_OK,
     run_supervise,
 )
+from tools.aipos_cli.kickoff_safe import KICKOFF_HAZARDS as _KICKOFF_HAZARDS_SOURCE
+from tools.aipos_cli import agent_launch_check as _launch_check_mod
+from tools.aipos_cli import agent_supervise as _supervise_mod
 
 
 @pytest.fixture
@@ -138,3 +141,26 @@ def test_supervise_no_hazards_passthrough(temp_product_repo):
     assert exit_code == EXIT_OK
     # Original command used as-is, no temp-file substitution
     assert mock_popen.call_args_list[0].args[0] == spawn_cmd
+
+
+def test_kickoff_hazards_single_source_of_truth():
+    """AIPOS-339: both consumers reference the exact same KICKOFF_HAZARDS object.
+
+    Prevents re-divergence: if someone accidentally re-introduces a local copy
+    in either module, this identity assertion catches it.
+    """
+    from tools.aipos_cli.kickoff_safe import KICKOFF_HAZARDS as source
+
+    # Both modules must expose the attribute …
+    assert hasattr(_supervise_mod, "KICKOFF_HAZARDS"), \
+        "agent_supervise lost KICKOFF_HAZARDS binding"
+    assert hasattr(_launch_check_mod, "KICKOFF_HAZARDS"), \
+        "agent_launch_check lost KICKOFF_HAZARDS binding"
+
+    # … and both must be the *same object* (identity, not just equality)
+    assert _supervise_mod.KICKOFF_HAZARDS is source, \
+        "agent_supervise.KICKOFF_HAZARDS is not the shared source object"
+    assert _launch_check_mod.KICKOFF_HAZARDS is source, \
+        "agent_launch_check.KICKOFF_HAZARDS is not the shared source object"
+    assert _supervise_mod.KICKOFF_HAZARDS is _launch_check_mod.KICKOFF_HAZARDS, \
+        "supervise and launch_check reference different KICKOFF_HAZARDS objects"

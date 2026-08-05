@@ -51,6 +51,8 @@ try:
 except ImportError:
     psutil = None  # type: ignore
 
+from tools.aipos_cli.kickoff_safe import KICKOFF_HAZARDS
+
 # Exit codes
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -567,9 +569,8 @@ def check_launch(
     if match:
         kickoff_content = match.group(2)
         
-        # Check if kickoff contains shell-interpretation hazards
-        hazards = ["`", "$(", "${", "\n"]
-        has_hazards = any(h in kickoff_content for h in hazards)
+        # Check if kickoff contains shell-interpretation hazards (AIPOS-339: shared list)
+        has_hazards = any(h in kickoff_content for h in KICKOFF_HAZARDS)
         
         if has_hazards:
             log("Kickoff contains shell-interpretation hazards, using safe file transmission")
