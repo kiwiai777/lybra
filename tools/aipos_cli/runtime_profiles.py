@@ -36,6 +36,12 @@ RUNTIME_PROFILES: dict[str, dict[str, Any]] = {
         # pi 的会话目录 = session_root + encode(cwd);cwd 即运行目录(产品仓)。
         "session_root": "~/.pi/agent/sessions",
         "session_dir_encoding": "pi_cwd_dash",  # / → -,前后加 --
+        # AIPOS-332F4 修一:拉起时间参数(启动窗口、检查间隔、冷启动宽限)。
+        # 慢端点无头冷启动实测 ~60s(网络等待期 CPU≈0),留裕量 ≥180s。
+        # 代码不写死任何秒数——step_launch 从本字段取值。
+        "launch_window_secs": 180,
+        "check_interval_secs": 5,
+        "cold_start_grace_secs": 120,
     },
     "cc": {
         "buffer_output": True,
@@ -44,6 +50,9 @@ RUNTIME_PROFILES: dict[str, dict[str, Any]] = {
         "run_log_role": "end_only",
         "session_root": None,  # cc 无已知会话目录机制
         "session_dir_encoding": None,
+        "launch_window_secs": 180,
+        "check_interval_secs": 5,
+        "cold_start_grace_secs": 120,
     },
     "claude_code": {
         "buffer_output": True,
@@ -52,6 +61,9 @@ RUNTIME_PROFILES: dict[str, dict[str, Any]] = {
         "run_log_role": "end_only",
         "session_root": None,
         "session_dir_encoding": None,
+        "launch_window_secs": 180,
+        "check_interval_secs": 5,
+        "cold_start_grace_secs": 120,
     },
     "generic_bash": {
         "buffer_output": False,
@@ -60,6 +72,10 @@ RUNTIME_PROFILES: dict[str, dict[str, Any]] = {
         "run_log_role": "stall",
         "session_root": None,
         "session_dir_encoding": None,
+        # bash 秒活,无冷启动延迟;窗口短。
+        "launch_window_secs": 30,
+        "check_interval_secs": 3,
+        "cold_start_grace_secs": 10,
     },
 }
 
@@ -71,6 +87,10 @@ _DEFAULT_RUNTIME_PROFILE: dict[str, Any] = {
     "run_log_role": "end_only",
     "session_root": None,
     "session_dir_encoding": None,
+    # AIPOS-332F4: 安全默认用大窗口(宁可多等,不误杀)。
+    "launch_window_secs": 180,
+    "check_interval_secs": 5,
+    "cold_start_grace_secs": 120,
 }
 
 

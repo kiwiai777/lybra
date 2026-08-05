@@ -496,6 +496,7 @@ def step_launch(ctx: DispatchContext) -> dict[str, Any]:
     """步骤5:走 launch-check 的三合一判据与有界自愈。起不来当场说起不来,非零退出。
 
     组合 tools.aipos_cli.agent_launch_check.run_launch_check,不内联其逻辑(S6①)。
+    AIPOS-332F4 修一:拉起窗口与检查间隔从运行体档案取,不硬编码秒数。
     返回 {ok, exit_code, pid?}。
     """
     from tools.aipos_cli.agent_launch_check import run_launch_check, EXIT_OK
@@ -504,6 +505,10 @@ def step_launch(ctx: DispatchContext) -> dict[str, Any]:
     plan = ctx.observation_plan
     session_dirs = _session_dirs_for(ctx)
     worktree_path = str(ctx.product_repo) if plan.get("worktree_criterion") else ""
+    # AIPOS-332F4 修一:窗口/节奏从运行体档案取,代码不写死任何秒数。
+    runtime_profile = plan.get("runtime_profile", {})
+    launch_window = float(runtime_profile.get("launch_window_secs", 180))
+    check_interval = float(runtime_profile.get("check_interval_secs", 5))
     try:
         code = run_launch_check(
             spawn_cmd=spawn_cmd,
@@ -512,8 +517,8 @@ def step_launch(ctx: DispatchContext) -> dict[str, Any]:
             product_repo=ctx.product_repo,
             session_dirs=session_dirs,
             worktree_path=worktree_path,
-            launch_window_secs=90.0,
-            check_interval_secs=5.0,
+            launch_window_secs=launch_window,
+            check_interval_secs=check_interval,
             # F-332-01: 失败类事件无条件落工作区(工作区是唯一保证存在的根,S10)。
             # daemon 路径不调本函数,行为不受影响。
             workspace_root=ctx.workspace_root or None,

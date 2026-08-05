@@ -1030,7 +1030,8 @@ def build_parser() -> argparse.ArgumentParser:
     _launch_check_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
     _launch_check_parser.add_argument("--session-dirs", help="Comma-separated session directories to monitor")
     _launch_check_parser.add_argument("--worktree-path", help="Git worktree path (default: product-repo)")
-    _launch_check_parser.add_argument("--launch-window", type=float, default=90, help="Launch verification window seconds (default: 90)")
+    # AIPOS-332F4: CLI 兆底默认从 90→180(慢端点冷启动实测 ~60s 留裕量)
+    _launch_check_parser.add_argument("--launch-window", type=float, default=180, help="Launch verification window seconds (default: 180, AIPOS-332F4)")
     _launch_check_parser.add_argument("--check-interval", type=float, default=5, help="Poll interval seconds (default: 5)")
     _launch_check_parser.add_argument("--model-fallback-policy", help="JSON file with model substitution policy (optional)")
 

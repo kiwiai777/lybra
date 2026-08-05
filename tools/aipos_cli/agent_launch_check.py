@@ -57,8 +57,9 @@ EXIT_ERROR = 1
 EXIT_BLOCKED = 2
 EXIT_SIGNAL = 130
 
-# Launch window defaults
-DEFAULT_LAUNCH_WINDOW_SECS = 90  # S1: 短窗口默认90秒
+# Launch window defaults — AIPOS-332F4: 这些仅作为 CLI 未指定时的兆底,
+# 实际值应由运行体档案(runtime_profiles.py)提供。代码不写死任何秒数。
+DEFAULT_LAUNCH_WINDOW_SECS = 180  # AIPOS-332F4: 从 90→180,慢端点冷启动实测 ~60s 留裕量
 DEFAULT_CHECK_INTERVAL_SECS = 5  # Poll interval during launch window
 MIN_CPU_DELTA = 0.01  # Minimum CPU time delta to consider "computing"
 
@@ -251,6 +252,40 @@ def _count_new_files(directories: list[str], since_timestamp: float) -> int:
     return count
 
 
+def _snapshot_session_dirs(directories: list[str]) -> list[dict[str, Any]]:
+    """AIPOS-332F4 修三:判死时刻会话目录快照(便于事后核对)。
+
+    对每个会话目录列出最近修改的文件(最多 10 个),含 mtime 精确到秒。
+    用于复现“判死后 N 秒出文件”类问题的取证。
+    """
+    snapshot: list[dict[str, Any]] = []
+    for dir_path in directories:
+        entry: dict[str, Any] = {"dir": dir_path, "exists": os.path.isdir(dir_path), "files": []}
+        if not entry["exists"]:
+            snapshot.append(entry)
+            continue
+        # 收集目录下最近修改的文件(最多 10 个)
+        file_entries: list[dict[str, Any]] = []
+        try:
+            for root, _dirs, files in os.walk(dir_path):
+                for name in files:
+                    full = os.path.join(root, name)
+                    try:
+                        mtime = os.path.getmtime(full)
+                        mtime_iso = datetime.fromtimestamp(mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        file_entries.append({"path": full, "mtime": mtime_iso, "mtime_ts": mtime})
+                    except OSError:
+                        continue
+        except OSError:
+            pass
+        # 按 mtime 降序取前 10
+        file_entries.sort(key=lambda e: e["mtime_ts"], reverse=True)
+        entry["files"] = [{"path": e["path"], "mtime": e["mtime"]} for e in file_entries[:10]]
+        entry["total_files"] = len(file_entries)
+        snapshot.append(entry)
+    return snapshot
+
+
 def _has_worktree_changes(worktree_path: str) -> bool:
     """Check if git worktree has changes (new/modified files).
     
@@ -388,6 +423,23 @@ def write_block_file(
         history_lines.append(f"- CPU delta: {failure.get('cpu_delta', 0)}")
         history_lines.append(f"- Session files: {failure.get('new_session_files', 0)}")
         history_lines.append(f"- Worktree changes: {failure.get('worktree_changed', False)}")
+        # AIPOS-332F4 修二/修三:判死留证字段
+        if "actual_waited_secs" in failure:
+            history_lines.append(f"- Actual waited (s): {failure['actual_waited_secs']}")
+        if "window_config_secs" in failure:
+            history_lines.append(f"- Window config (s): {failure['window_config_secs']}")
+        if "judged_at" in failure:
+            history_lines.append(f"- Judged at: {failure['judged_at']}")
+        # 会话目录快照(修三:便于核对“判死后 N 秒出文件”)
+        snapshot = failure.get("session_snapshot") or []
+        if snapshot:
+            history_lines.append("- Session snapshot at judgment:")
+            for snap in snapshot:
+                dir_exists = snap.get("exists", False)
+                total = snap.get("total_files", 0)
+                history_lines.append(f"    - dir={snap['dir']} exists={dir_exists} total_files={total}")
+                for f_entry in snap.get("files", [])[:5]:
+                    history_lines.append(f"      - {f_entry['path']} mtime={f_entry['mtime']}")
         history_lines.append("")
     
     # Model switch suggestion
@@ -489,7 +541,7 @@ def check_launch(
         product_repo: Product repo root path
         session_dirs: List of session directories to monitor
         worktree_path: Git worktree path to monitor
-        launch_window_secs: Time window to verify launch (default 90s)
+        launch_window_secs: Time window to verify launch (default 180s, AIPOS-332F4)
         check_interval_secs: Poll interval during launch window
         model_fallback_policy: Model substitution policy (optional)
     
@@ -597,6 +649,11 @@ def check_launch(
                 "cpu_delta": 0.0,
                 "new_session_files": 0,
                 "worktree_changed": False,
+                # AIPOS-332F4: 留证字段(进程早退也要记录实际等待与窗口配置)
+                "actual_waited_secs": round(time.time() - start_time, 1),
+                "window_config_secs": launch_window_secs,
+                "session_snapshot": _snapshot_session_dirs(session_dirs),
+                "judged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
         
         # Find pi subprocess PIDs (exclude timeout wrapper)
@@ -661,16 +718,22 @@ def check_launch(
         time.sleep(check_interval_secs)
     
     # Launch window expired, still no signs of life
+    # AIPOS-332F4 修二:窗口耗尽才可判死;窗口内进程存活不得提前判死。
+    # 此处是循环正常出口(时间耗尽),允许判死。
+    actual_waited_secs = time.time() - start_time
     exit_code = proc.poll()
     pi_pids = _find_pi_processes(proc.pid)
     proc_alive = exit_code is None and len(pi_pids) > 0
-    
+
     current_cpu_time = _get_process_cpu_time(pi_pids)
     cpu_delta = current_cpu_time - last_cpu_time if initial_cpu_check_done else 0.0
-    
+
     new_session_files = _count_new_files(session_dirs, start_time)
     worktree_changed = _has_worktree_changes(worktree_path)
-    
+
+    # AIPOS-332F4 修三:判死时刻会话目录快照(便于事后核对“判死后 N 秒出文件”)
+    session_snapshot = _snapshot_session_dirs(session_dirs)
+
     # Determine failure reason
     if not proc_alive:
         reason = "process_gone"
@@ -678,12 +741,12 @@ def check_launch(
         reason = "silent_hang"  # 静默挂死
     else:
         reason = "insufficient_activity"
-    
-    log(f"Launch FAILED: {reason} (window {launch_window_secs}s expired)")
-    
+
+    log(f"Launch FAILED: {reason} (waited {actual_waited_secs:.1f}s / window {launch_window_secs}s)")
+
     # Kill the hung/failed process
     _kill_process_tree(proc.pid)
-    
+
     # Clean up temp kickoff file
     if temp_kickoff_file and temp_kickoff_file.exists():
         try:
@@ -691,7 +754,7 @@ def check_launch(
             log(f"Cleaned up temp kickoff file: {temp_kickoff_file}")
         except OSError:
             pass
-    
+
     return EXIT_ERROR, {
         "reason": reason,
         "exit_code": exit_code,
@@ -699,6 +762,11 @@ def check_launch(
         "cpu_delta": cpu_delta,
         "new_session_files": new_session_files,
         "worktree_changed": worktree_changed,
+        # AIPOS-332F4 修二/修三:判死留证字段
+        "actual_waited_secs": round(actual_waited_secs, 1),
+        "window_config_secs": launch_window_secs,
+        "session_snapshot": session_snapshot,
+        "judged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
