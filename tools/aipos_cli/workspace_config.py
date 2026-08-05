@@ -498,7 +498,7 @@ def default_collaboration_profile() -> dict[str, Any]:
 
 def get_collaboration_profile(project_root: str | Path) -> dict[str, Any]:
     """AIPOS-335: 读取项目的 collaboration_profile，缺失时返回默认值。
-    
+
     向后兼容：老项目不存在该字段时，返回 default_collaboration_profile()，
     不报错、不阻断任何操作。
     """
@@ -510,6 +510,73 @@ def get_collaboration_profile(project_root: str | Path) -> dict[str, Any]:
     result = default_collaboration_profile()
     result.update(profile)
     return result
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-338 S5: workspace-level dispatch_mode (auto | manual)
+#
+# Owner-only switch. Truth lives in project.json (NOT conversation). manual =
+# "turn OFF auto-dispatch" (the pump refuses); auto = manual /claim still works.
+# Default auto; old workspaces without the field are treated as auto (zero error).
+# Switching is append-only logged (who / when / why). Judgment stays with the
+# Owner — product/advisor only PROPOSE a switch (e.g. on repeated pump failures).
+# ---------------------------------------------------------------------------
+
+DEFAULT_DISPATCH_MODE = "auto"
+_DISPATCH_MODES = ("auto", "manual")
+
+
+def default_dispatch_mode() -> str:
+    return DEFAULT_DISPATCH_MODE
+
+
+def get_dispatch_mode(project_root: str | Path) -> str:
+    """Read dispatch_mode from project.json. Absent/invalid -> 'auto' (back-comat)."""
+    project_json = read_project_json(project_root)
+    mode = str(project_json.get("dispatch_mode") or "").strip().lower()
+    return mode if mode in _DISPATCH_MODES else DEFAULT_DISPATCH_MODE
+
+
+def dispatch_mode_trail_path(project_root: str | Path) -> Path:
+    """Append-only switch trail location: <project_root>/governance/dispatch_mode_log.md."""
+    return governance_paths(project_root)["decision_log"].parent / "dispatch_mode_log.md"
+
+
+def set_dispatch_mode(
+    project_root: str | Path,
+    mode: str,
+    *,
+    by: str = "owner",
+    reason: str = "",
+) -> tuple[str, Path]:
+    """Owner-only switch of dispatch_mode. Writes project.json (preserve all fields)
+    and appends an append-only trail entry. Returns (new_mode, trail_path).
+
+    Refuses invalid modes. Does not mint tokens or confirm gates (local Owner action,
+    like set_active_project).
+    """
+    clean = str(mode or "").strip().lower()
+    if clean not in _DISPATCH_MODES:
+        raise ValueError(f"dispatch_mode must be one of {list(_DISPATCH_MODES)}, got: {mode!r}")
+    root = Path(project_root)
+    path = project_json_path(root)
+    data = read_project_json(root)
+    previous = str(data.get("dispatch_mode") or "").strip().lower() or DEFAULT_DISPATCH_MODE
+    if previous not in _DISPATCH_MODES:
+        previous = DEFAULT_DISPATCH_MODE
+    data["dispatch_mode"] = clean
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # append-only trail
+    trail = dispatch_mode_trail_path(root)
+    trail.parent.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    line = f"- {ts}  `{previous}` -> `{clean}`  by={by}  reason={reason or '(none)'}\n"
+    with trail.open("a", encoding="utf-8") as fh:
+        if trail.stat().st_size == 0:
+            fh.write("# Dispatch Mode Switch Log (append-only)\n\n")
+        fh.write(line)
+    return clean, trail
 
 
 def project_root_for(home_root: str | Path, name: str) -> Path:

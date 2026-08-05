@@ -437,6 +437,46 @@ def create_draft(
     return result
 
 
+def _workspace_gate_url(repo_root: Path) -> str:
+    """AIPOS-338 S1: delegate to the single-source connection reader."""
+    from tools.aipos_cli.gate_contract_section import workspace_gate_url
+    return workspace_gate_url(repo_root)
+
+
+def _append_gate_contract_section(
+    repo_root: Path, metadata: dict[str, Any], task_id: str, rendered_markdown: str
+) -> str:
+    """AIPOS-338 S1: append the single-source 「认领与交回」 section to a newly published card.
+
+    The section derives its branch from flow_description and its verbs from
+    verb_contract (this file carries ZERO lybra_* literals). Old cards are not
+    backfilled — only NEW publishes get it. Best-effort: never blocks publish
+    (zero regression); the happy path is covered by tests.
+    """
+    if "【认领与交回】" in rendered_markdown:
+        return rendered_markdown  # idempotency: never double-append
+    try:
+        from tools.aipos_cli.flow_description import resolve_collaboration_profile
+        from tools.aipos_cli.gate_contract_section import render_gate_contract_section
+
+        project_json = repo_root / "project.json"
+        if not project_json.is_file():
+            project_json = repo_root / "2_projects" / "lybra" / "project.json"
+        profile = resolve_collaboration_profile(project_json)
+        task_fields = {k: v for k, v in metadata.items() if k in (
+            "task_mode", "output_target", "deploy", "audit", "owner_verify", "task_class"
+        )}
+        section = render_gate_contract_section(
+            profile, task_fields, role="executor",
+            gate_url=_workspace_gate_url(repo_root),
+            connection_json_rel=".lybra/connection.json",
+            workspace_display=str(repo_root), task_id=task_id,
+        )
+        return rendered_markdown.rstrip() + "\n\n" + section + "\n"
+    except Exception:
+        return rendered_markdown
+
+
 def publish_draft(
     repo_root: Path,
     draft_path: str | Path,
@@ -547,6 +587,12 @@ def publish_draft(
                 validation["blocking_reasons"].append(f"Pending target already exists: {target_path}")
         if publish_record_path.exists():
             validation["blocking_reasons"].append(f"Publish record already exists: {publish_record_rel}")
+
+        # AIPOS-338 S1: append the single-source 「认领与交回」 section to
+        # newly published executor cards (old cards are not backfilled).
+        rendered_markdown = _append_gate_contract_section(
+            repo_root, publish_metadata, str(task_id), rendered_markdown
+        )
 
     classification_warnings = list(validation.get("classification_warnings", []))
     verdict_warnings = [warning for warning in validation["warnings"] if warning not in classification_warnings]

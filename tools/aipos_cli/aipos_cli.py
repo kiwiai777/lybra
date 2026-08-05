@@ -1405,6 +1405,18 @@ def build_parser() -> argparse.ArgumentParser:
     project_list_parser = project_subparsers.add_parser("list", help="AIPOS-335: List existing projects and their collaboration profiles")
     project_list_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_list_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-338 S5: workspace-level dispatch_mode switch (Owner-only)
+    dm_parser = project_subparsers.add_parser("dispatch-mode", help="AIPOS-338: Show/set workspace dispatch_mode (auto|manual)")
+    dm_sub = dm_parser.add_subparsers(dest="dispatch_mode_command")
+    dm_show = dm_sub.add_parser("show", help="Show the current dispatch_mode (read-only)")
+    dm_show.add_argument("--project-root", help="Project root (governance); defaults to resolver")
+    dm_show.add_argument("--json", action="store_true", help="Output JSON")
+    dm_set = dm_sub.add_parser("set", help="Set dispatch_mode (Owner-only; append-only logged)")
+    dm_set.add_argument("--mode", required=True, choices=["auto", "manual"], help="Target mode")
+    dm_set.add_argument("--project-root", help="Project root (governance); defaults to resolver")
+    dm_set.add_argument("--by", default="owner", help="Who is switching (default: owner)")
+    dm_set.add_argument("--reason", default="", help="Why (logged in the append-only trail)")
+    dm_set.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-293: export/import project structure file
     project_export_parser = project_subparsers.add_parser("export", help="AIPOS-293: Export workspace structure to a YAML file")
     project_export_parser.add_argument("workspace_root", nargs="?", help="Workspace root to export (defaults to current workspace)")
@@ -1748,8 +1760,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.print_help()
             return 2
         try:
-            # AIPOS-293: export/import don't need home_root
-            if args.project_command in ("export", "import"):
+            # AIPOS-293: export/import don't need home_root; dispatch-mode uses --project-root
+            if args.project_command in ("export", "import", "dispatch-mode"):
                 pass  # handled below
             else:
                 home = resolve_home_root(explicit_root=args.home_root)
@@ -1787,6 +1799,11 @@ def main(argv: list[str] | None = None) -> int:
                     project_json = read_project_json(project_root)
                     profile = get_collaboration_profile(project_root)
                     has_explicit_profile = "collaboration_profile" in project_json
+                    try:
+                        from tools.aipos_cli.workspace_config import get_dispatch_mode
+                        dispatch_mode = get_dispatch_mode(project_root)
+                    except Exception:
+                        dispatch_mode = "auto"
                     result["projects"].append({
                         "name": name,
                         "project_root": str(project_root),
@@ -1794,6 +1811,7 @@ def main(argv: list[str] | None = None) -> int:
                         "collaboration_profile": profile,
                         "has_explicit_profile": has_explicit_profile,
                         "inferred": not has_explicit_profile,
+                        "dispatch_mode": dispatch_mode,
                     })
                 if args.json:
                     print(render_json(result))
@@ -1813,10 +1831,45 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"     - deploy_gate_enabled: {cp['deploy_gate_enabled']}")
                         print(f"     - default_audit_mode: {cp['default_audit_mode']}")
                         print(f"     - output_locations: {', '.join(cp['output_locations'])}")
+                        print(f"     - dispatch_mode: {proj['dispatch_mode']}")
                         print()
                     print("💡 提示：蓝色圆点 🔵 表示该项目尚未写入 collaboration_profile，使用默认推断值")
                     print("💡 Owner 可决定是否写入（本命令只列不改）")
                 return 0
+            if args.project_command == "dispatch-mode":
+                from tools.aipos_cli.workspace_config import (
+                    get_dispatch_mode, set_dispatch_mode, dispatch_mode_trail_path,
+                )
+                proj_root = args.project_root
+                if not proj_root:
+                    try:
+                        proj_root = str(resolve_workspace_root())
+                    except (FileNotFoundError, OSError) as exc:
+                        print(f"Error: {exc}", file=sys.stderr)
+                        print("Hint: provide --project-root or run from within a project.", file=sys.stderr)
+                        return 1
+                sub = getattr(args, "dispatch_mode_command", None)
+                if sub == "show":
+                    mode = get_dispatch_mode(proj_root)
+                    if args.json:
+                        print(render_json({"ok": True, "project_root": proj_root, "dispatch_mode": mode}))
+                    else:
+                        print(f"dispatch_mode: {mode}  (project: {proj_root})")
+                    return 0
+                if sub == "set":
+                    new_mode, trail = set_dispatch_mode(
+                        proj_root, args.mode, by=args.by, reason=args.reason,
+                    )
+                    if args.json:
+                        print(render_json({
+                            "ok": True, "project_root": proj_root,
+                            "dispatch_mode": new_mode, "trail_path": str(trail),
+                        }))
+                    else:
+                        print(f"✓ dispatch_mode set to {new_mode}  (trail: {trail})")
+                    return 0
+                print("Usage: lybra project dispatch-mode {show|set} ...", file=sys.stderr)
+                return 2
             if args.project_command == "export":
                 ws_root = args.workspace_root
                 if not ws_root:

@@ -600,6 +600,27 @@ def run_pump_dispatch(
         _log(f"[{step}] FAIL: {msg}")
         return result
 
+    # AIPOS-338 S5: manual mode refuses auto-dispatch (pump ≠ manual-permission).
+    # auto mode leaves manual /claim untouched. dry_run still previews so the
+    # operator can see the mode without a real dispatch.
+    try:
+        from tools.aipos_cli.workspace_config import get_dispatch_mode
+        mode = get_dispatch_mode(ctx.workspace_root)
+        result["dispatch_mode"] = mode
+        if mode == "manual" and not dry_run:
+            return _fail(
+                "dispatch_mode",
+                "当前工作区为 manual 模式,pump run 已关闭自动派工"
+                "(防泵与 Owner 同派一卡撞车)。请手动 /claim,或确认后切回 auto:"
+                "`lybra project dispatch-mode set --mode auto`。",
+            )
+        if mode == "manual":
+            result["warnings"].append(
+                "当前工作区为 manual 模式;dry-run 仅预览,实际派工将被拒绝。"
+            )
+    except Exception:
+        pass  # never block dispatch on a mode-read failure (default auto)
+
     # 步骤1:选择观测面
     ctx = step_build_context(ctx)
     result["plan"] = ctx.observation_plan

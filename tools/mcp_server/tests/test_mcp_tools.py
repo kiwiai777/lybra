@@ -2006,7 +2006,11 @@ class McpToolTests(unittest.TestCase):
         # Verify body is mechanical signpost
         self.assertIn("AIPOS-MCP-RETURN", audit_body)
         self.assertIn("Independent audit", audit_body)
-        self.assertIn("original task card", audit_body)
+        # AIPOS-338 S2: criterion is now the original card full text (准绳), with
+        # the two AIPOS-314 bottom-line assertions.
+        self.assertIn("原执行卡全文", audit_body)
+        self.assertIn("起得来", audit_body)
+        self.assertIn("产物可用", audit_body)
         
         # Verify publish record was written for authority_scanner VALID
         publish_record_path = self.repo_root / "5_tasks" / "records" / "publishes" / "AIPOS-MCP-RETURNR" / "publish_aipos-mcp-returnr.md"

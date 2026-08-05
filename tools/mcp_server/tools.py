@@ -954,8 +954,11 @@ def lybra_project_status(arguments: dict[str, Any] | None = None) -> dict[str, A
     home_root = resolve_home_root()
     active: str | None = None
     resolution_error: str | None = None
+    dispatch_mode = "auto"
     try:
         active = _resolve_active_project_for(_repo_root(), None)
+        from tools.aipos_cli.workspace_config import get_dispatch_mode
+        dispatch_mode = get_dispatch_mode(_repo_root())
     except (ValueError, FileNotFoundError, OSError) as exc:
         resolution_error = str(exc)
     return _tool_result(
@@ -967,6 +970,7 @@ def lybra_project_status(arguments: dict[str, Any] | None = None) -> dict[str, A
             "resolution_error": resolution_error,
             "projects": _project_candidates(home_root),
             "workspace_root": str(_repo_root()),
+            "dispatch_mode": dispatch_mode,
         }
     )
 

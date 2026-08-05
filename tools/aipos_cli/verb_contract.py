@@ -106,6 +106,79 @@ def get_verb_contract(name: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-338 S1: gate-contract-section verb resolver (single source for verbs).
+#
+# The card "认领与交回」section must derive its verb names/params from the
+# registry — the publisher (draft_writer) carries ZERO verb-name literals.
+# This resolver maps a stable LOGICAL ROLE to the live registry contract by
+# matching operation keyword + scope, so a registry rename (that preserves the
+# operation stem, e.g. *_dry_run → *_preview) auto-flows into newly published
+# cards with no edits anywhere in the publisher.
+# ---------------------------------------------------------------------------
+
+# Logical roles the contract section renders. (operation_token, scope, variant)
+# variant: "dry_run" | "confirm" | "plain". operation_token must appear as a
+# whole word in the verb name.
+_GATE_VERB_ROLES: dict[str, tuple[str, str | None, str]] = {
+    "claim_dry_run": ("claim", "queue_claim", "dry_run"),
+    "claim_confirm": ("claim", "queue_claim", "confirm"),
+    "task_progress": ("progress", "task_progress", "plain"),
+    "return_dry_run": ("return", "queue_return", "dry_run"),
+    "return_confirm": ("return", "queue_return", "confirm"),
+    "audit_dispatch_dry_run": ("dispatch", "audit_dispatch", "dry_run"),
+    "audit_verdict_dry_run": ("verdict", "audit_verdict", "dry_run"),
+    "close_dry_run": ("close", "queue_close", "dry_run"),
+    "bench_audit_submit": ("bench_audit_submit", None, "plain"),
+    "bench_audit_confirm": ("bench_audit_confirm", None, "confirm"),
+}
+
+
+def _match_verb(registry, token, scope, variant):
+    """Find the live verb for (token, scope, variant); scope-strict then token-fallback."""
+    def _ok(entry, require_scope):
+        name = entry["name"]
+        if token not in name:
+            return False
+        if require_scope and scope is not None and entry.get("required_scope") != scope:
+            return False
+        if variant == "dry_run" and not name.endswith("_dry_run"):
+            return False
+        if variant == "confirm" and not name.endswith("_confirm"):
+            return False
+        if variant == "plain" and (name.endswith("_dry_run") or name.endswith("_confirm")):
+            return False
+        return True
+    # strict: token + scope + variant
+    for entry in registry:
+        if _ok(entry, require_scope=True):
+            return entry
+    # robust fallback: token + variant (survives stem renames that keep the op token)
+    for entry in registry:
+        if _ok(entry, require_scope=False):
+            return entry
+    return None
+
+
+def resolve_gate_verbs() -> dict[str, dict[str, Any] | None]:
+    """Map every logical role → live registry contract (None if not registered).
+
+    Single source for the contract section's verbs. Returns a dict keyed by the
+    logical role; each value is the registry contract (name/required_params/...)
+    or None when that verb is not implemented (e.g. bench verbs pre-AIPOS-336).
+    """
+    registry = get_verb_registry()
+    resolved: dict[str, dict[str, Any] | None] = {}
+    for role, (token, scope, variant) in _GATE_VERB_ROLES.items():
+        resolved[role] = _match_verb(registry, token, scope, variant)
+    return resolved
+
+
+def resolve_gate_verb(role: str) -> dict[str, Any] | None:
+    """Return the live registry contract for one logical role (None if absent)."""
+    return resolve_gate_verbs().get(role)
+
+
+# ---------------------------------------------------------------------------
 # S6③: Extensible validation framework
 # ---------------------------------------------------------------------------
 

@@ -217,7 +217,10 @@ class DraftWriterTests(unittest.TestCase):
         self.assertFalse(result["wrote"])
         self.assertEqual(result["target_path"], "5_tasks/queue/pending/aipos-30-dryrun.md")
         self.assertEqual(result["publish_record_path"], "5_tasks/records/publishes/AIPOS-30-DRYRUN/publish_aipos-30-dryrun.md")
-        self.assertEqual(result["rendered_markdown"], before_source)
+        # AIPOS-338 S1: published card now carries the appended contract section
+        # (source draft is untouched). Preview must show it.
+        self.assertTrue(result["rendered_markdown"].startswith(before_source.rstrip()))
+        self.assertIn("【认领与交回】", result["rendered_markdown"])
         self.assertFalse((self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-30-dryrun.md").exists())
         self.assertFalse(
             (self.repo_root / "5_tasks" / "records" / "publishes" / "AIPOS-30-DRYRUN" / "publish_aipos-30-dryrun.md").exists()
@@ -237,7 +240,11 @@ class DraftWriterTests(unittest.TestCase):
         self.assertTrue(result["wrote"])
         self.assertTrue(pending_path.exists())
         self.assertTrue(publish_record_path.exists())
-        self.assertEqual(pending_path.read_text(encoding="utf-8"), source_text)
+        # AIPOS-338 S1: the published card carries the appended contract section;
+        # the source draft file is unchanged.
+        published_text = pending_path.read_text(encoding="utf-8")
+        self.assertTrue(published_text.startswith(source_text.rstrip()))
+        self.assertIn("【认领与交回】", published_text)
         self.assertEqual(source_path.read_text(encoding="utf-8"), source_text)
         records = load_records(self.repo_root)
         self.assertEqual(records["summary"]["publish_records"], 1)
