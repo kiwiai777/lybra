@@ -3,7 +3,62 @@
 给定任务状态，返回下一步动作类别 + 规则依据。
 判断留人（S3）：卡内容/审计结论/owner_verify 不代产。
 """
+from datetime import datetime, timezone
 from typing import Any
+
+# AIPOS-340F3 — 配置:claimed 中途态"近期 started"判据阈值(秒)。
+# 卡 rule 2:"近期"判据用事件时间戳,阈值进配置,不判活只读事实。
+# 超过此阈值未刷新 started 视为非"近期"(无活跃执行信号)。
+RECENT_STARTED_THRESHOLD_SECONDS = 30 * 60  # 30 分钟
+
+
+def _parse_event_ts(ts: object) -> datetime | None:
+    """解析事件时间戳(兼容 ISO 字符串 / datetime 对象 / None)。"""
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _classify_claimed_no_return_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """分析 claimed+无return 的事件序列(纯读事实,不判活)。
+
+    返回最新 started / 最新失败(blocked|launch_failed)的时间戳与判定:
+    - failure_after_started:最新失败 ≥ 最新 started(无活跃执行,上次尝试已失败)
+    - started_is_recent:最新 started 在阈值内(执行中信号)
+    """
+    failure_kinds = {"launch_failed", "blocked"}
+    latest_started: datetime | None = None
+    latest_failure: datetime | None = None
+    for ev in events:
+        kind = ev.get("type")
+        ts = _parse_event_ts(ev.get("timestamp"))
+        if ts is None:
+            continue
+        if kind == "started" and (latest_started is None or ts > latest_started):
+            latest_started = ts
+        elif kind in failure_kinds and (latest_failure is None or ts > latest_failure):
+            latest_failure = ts
+    now = datetime.now(timezone.utc)
+    started_is_recent = (
+        latest_started is not None
+        and (now - latest_started).total_seconds() <= RECENT_STARTED_THRESHOLD_SECONDS
+    )
+    failure_after_started = latest_failure is not None and (
+        latest_started is None or latest_failure >= latest_started
+    )
+    return {
+        "latest_started": latest_started,
+        "latest_failure": latest_failure,
+        "started_is_recent": started_is_recent,
+        "failure_after_started": failure_after_started,
+    }
 
 
 def infer_next_action(state: dict[str, Any]) -> dict[str, Any]:
@@ -118,6 +173,44 @@ def infer_next_action(state: dict[str, Any]) -> dict[str, Any]:
             "human_judgment_reason": "blocked 恢复策略 = 方向裁定（S3 边界）",
         }
     
+    # AIPOS-340F3 — claimed 中途态(无 return):续跑 / 等待执行
+    # 仅在"已 claimed、尚无任何 return 产物/记录"时分析事件序列。
+    if queue_status == "claimed" and not has_return and not latest_return:
+        cls = _classify_claimed_no_return_events(events)
+        # rule 1:events 含 blocked/launch_failed 且无活跃执行(最新失败 ≥ 最新 started)
+        #        → resume 轮派工(pump run --round-type resume;信封经 policy_resolver,
+        #          模型顶替经 failure_tracker+配置表)
+        if cls["failure_after_started"]:
+            return {
+                "action": "resume_round",
+                "rule": (
+                    "claimed+无return+events含blocked/launch_failed(最新失败≥最新started,"
+                    "无活跃执行)→ resume 轮派工(pump run --round-type resume;信封经 "
+                    "policy_resolver,模型顶替经 failure_tracker+配置表)"
+                ),
+                "requires_human_judgment": False,
+                "human_judgment_reason": None,
+            }
+        # rule 2:近期 started 且其后无 blocked/launch_failed → wait_executor(执行中,不动作)
+        if cls["started_is_recent"] and not cls["failure_after_started"]:
+            started_iso = cls["latest_started"].isoformat() if cls["latest_started"] else "?"
+            return {
+                "action": "wait_executor",
+                "rule": (
+                    f"claimed+无return+近期started({started_iso})且无blocked/launch_failed "
+                    f"→ wait_executor(执行中,不动作;阈值={RECENT_STARTED_THRESHOLD_SECONDS}s)"
+                ),
+                "requires_human_judgment": False,
+                "human_judgment_reason": None,
+            }
+        # 既无失败信号、也无近期 started:事实不足以自动续跑/判执行中 → 留人(不判活)
+        return {
+            "action": "wait_human",
+            "rule": "claimed+无return+无失败事件且无近期started → 事实不足,等待人工/新事件信号(不判活)",
+            "requires_human_judgment": True,
+            "human_judgment_reason": "无 blocked/launch_failed 不可自动续跑;无近期 started 不可判执行中。需人工或新事件",
+        }
+
     # 默认：无法推断下一步（可能状态不完整或未覆盖的边界情况）
     return {
         "action": "unknown",
