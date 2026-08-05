@@ -2488,8 +2488,18 @@ def main(argv: list[str] | None = None) -> int:
                     workspace_root=workspace_root,
                     dispatch_mode=args.mode,
                 )
+                exit_code = 0
+                # AIPOS-340F6:auto 模式接真执行出口(subprocess + 退出码透传 + 前后留痕 +
+                # 判断留人拒绝);manual 模式零回归(仅解析打印,不执行)。
+                if args.mode == "auto":
+                    from tools.turn_advancer.auto_executor import execute_auto
+                    actor = os.environ.get("LYBRA_AUTO_ACTOR", "turn_advancer_auto")
+                    result["execution"] = execute_auto(
+                        result, workspace_root, actor=actor
+                    )
+                    exit_code = int(result["execution"]["exit_code"])
                 print(render_json(result))
-                return 0
+                return exit_code
             except Exception as exc:
                 print(f"Error resolving next command: {exc}", file=sys.stderr)
                 return 1

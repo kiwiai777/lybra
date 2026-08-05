@@ -67,12 +67,10 @@ def resolve_next_command(
         "copyable_line": command_info["copyable_line"],
     }
     
-    # 5. auto 模式：执行命令（简化版，当前只打印"would execute"）
-    if dispatch_mode == "auto" and command_info["command_type"] == "mcp_verb":
-        # TODO: 实际执行 MCP verb（调用 gate）
-        result["execution_status"] = "would_execute_in_auto_mode"
-        result["execution_note"] = "auto 模式执行未实现（需调用 gate/pump）"
-    
+    # 5. auto 模式的真执行由 CLI 层(`aipos_cli.py` turn-advancer next --mode auto)
+    #    调用 ``tools.turn_advancer.auto_executor.execute_auto`` 完成:subprocess 真执行 +
+    #    退出码透传 + 执行前后留痕 + 判断留人拒绝。resolver 本身保持纯解析(无副作用),
+    #    manual/auto 仅在结果里标记 dispatch_mode,便于上层决定是否接执行出口。
     return result
 
 
