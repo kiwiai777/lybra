@@ -1701,9 +1701,13 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
 def lybra_queue_return_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     if not _queue_return_scope_allowed():
         return _scope_denied_result_for(QUEUE_RETURN_SCOPE, "supervised queue return tools")
-    # AIPOS-197: confirm additionally requires the Owner-only owner_confirm scope.
-    if not _owner_confirm_scope_allowed():
-        return _scope_denied_result_for(OWNER_CONFIRM_SCOPE, "queue return confirm (Owner-only)")
+    # DL 03-02 / AIPOS-328: return is "I'm done, here's my output" — NOT an Owner gate.
+    # The executor confirms its own return with its own queue_return scope (checked above).
+    # The real gates are downstream: audit_verdict -> owner_verify -> close. Do NOT re-add an
+    # owner_confirm scope check here: it forced advisors to press OWNER_CONFIRMED via a private
+    # dual-token script (~/bin/lybra-dev-return), bypassing the gate — the exact drift the M4
+    # judge targets. The owner_confirmation_token=OWNER_CONFIRMED literal below is retained as a
+    # deliberate confirm-intent ceremony (public constant, not a secret); it gates nothing Owner-side.
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:

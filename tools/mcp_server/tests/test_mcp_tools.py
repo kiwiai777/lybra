@@ -992,9 +992,16 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual(recovery["provenance_completeness"], "complete")
         self.assertEqual(recovery["provenance_chain"]["return"]["record_status"], "ok")
 
-    def test_aipos197_return_confirm_denied_without_owner_confirm_scope(self) -> None:
-        # AIPOS-197 / F-candidate-1: a token that can dry-run (queue_return) but lacks
-        # owner_confirm is structurally denied confirm — even with OWNER_CONFIRMED.
+    def test_aipos328_return_confirm_allowed_with_queue_return_scope_only(self) -> None:
+        # DL 03-02 / AIPOS-328: return is "I'm done, here's my output" — NOT an Owner gate.
+        # An executor token holding ONLY queue_return (no owner_confirm scope) must be able to
+        # confirm its own return. This reverts the AIPOS-197 F-candidate-1 denial for RETURN:
+        # that denial forced advisors to press OWNER_CONFIRMED via a private dual-token script
+        # (~/bin/lybra-dev-return), bypassing the gate — the exact drift the M4 judge targets.
+        # The real gates downstream (audit_verdict -> owner_verify -> close) are unchanged and
+        # still require owner_confirm where they did before (see the claim/publish/verdict tests).
+        # The owner_confirmation_token=OWNER_CONFIRMED literal stays as a confirm-intent ceremony
+        # (still enforced — see test_queue_return_confirm_requires_owner_confirmation_then_*).
         self.write_return_task()
         env = {
             "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
@@ -1003,7 +1010,7 @@ class McpToolTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
             self.assertTrue(dry["ok"], dry.get("blocking_reasons"))  # dry-run still allowed
-            denied = self.assert_tool_ok(
+            confirmed = self.assert_tool_ok(
                 self.call_tool(
                     "lybra_queue_return_confirm",
                     {
@@ -1011,13 +1018,13 @@ class McpToolTests(unittest.TestCase):
                         "actor": "agent-01",
                         "agent_instance": "agent-01",
                         "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
-                        "owner_confirmation_token": "OWNER_CONFIRMED",  # knows the literal, still denied
+                        "owner_confirmation_token": "OWNER_CONFIRMED",  # confirm-intent ceremony (public literal)
                     },
                 )
             )
-        self.assertEqual(denied["error_code"], "SCOPE_DENIED")
-        # No truth mutation: task stays claimed-only with no return record.
-        self.assertEqual(load_records(self.repo_root)["summary"]["return_records"], 0)
+        self.assertTrue(confirmed["ok"])
+        # Truth mutation DID happen: the executor self-confirmed and a return record landed.
+        self.assertEqual(load_records(self.repo_root)["summary"]["return_records"], 1)
 
     def test_aipos197_claim_confirm_denied_without_owner_confirm_scope(self) -> None:
         self.write_claim_task()
