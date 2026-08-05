@@ -1635,11 +1635,11 @@ def validate_and_dispatch(
             result["errors"].append(repetition_error)
             return result
     
-    # 如果不是 dry_run，这里应该实际调用派工逻辑
-    # 由于实际派工需要更多上下文（gate client, envelope 等），这里暂不实现
-    if not dry_run:
-        result["message"] = "实际派工逻辑需要在调用方实现（需要 gate client 等上下文）"
-    
+    # AIPOS-332F2: 删除占位路径。三种轮次(first/fix/resume)同一条编排代码,
+    # 实际派工由 run_pump_dispatch() 完成(在 aipos_cli.py 中调用)。
+    # 本函数只负责三层制约校验(kickoff 生成 + 预算 + 复述),不再返回
+    # 『需要在调用方实现』的空壳消息。
+
     return result
 
 

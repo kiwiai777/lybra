@@ -406,6 +406,72 @@ def step_claim(ctx: DispatchContext) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-332F2 — resume/fix 轮:跳过 claim,校验卡已由本实例持有。
+# 与 step_claim 同层(编排式),不内联 gate 调用。
+# ---------------------------------------------------------------------------
+
+def _find_claim_holder(workspace_root: Path, task_id: str) -> str | None:
+    """从 claims/<ID>/claim_*.md 读出当前持有者的 canonical_agent_instance。
+
+    返回持有者实例名(如 ``exec.lybra.kiwiai-dev``);无记录或解析失败返回 None。
+    """
+    d = workspace_root / _record_rel_dir("claim", task_id, None)
+    if not d.is_dir():
+        return None
+    for p in sorted(d.glob("claim_*.md"), reverse=True):
+        # 取最新的一条 claim 记录
+        try:
+            content = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if not content.startswith("---"):
+            continue
+        end = content.find("\n---", 3)
+        if end < 0:
+            continue
+        holder: str | None = None
+        for line in content[3:end].splitlines():
+            if line.startswith("canonical_agent_instance:"):
+                holder = line.split(":", 1)[1].strip().strip("'\"")
+            elif line.startswith("actor:") and holder is None:
+                holder = line.split(":", 1)[1].strip().strip("'\"")
+        if holder:
+            return holder
+    return None
+
+
+def step_verify_held(ctx: DispatchContext) -> dict[str, Any]:
+    """AIPOS-332F2:resume/fix 轮替代 step_claim。
+
+    校验卡已由本 executor_instance 持有(claims 记录存在且持有者匹配)。
+    不发起新 claim(幂等:重复 claim 可能产生重复记录)。
+
+    返回 {ok, holder, reason}。ok=False 时编排层终止派工。
+    """
+    holder = _find_claim_holder(ctx.workspace_root, ctx.card_id)
+    expected = ctx.executor_instance or f"{ctx.role}.lybra.kiwiai-dev"
+    if holder is None:
+        return {
+            "ok": False,
+            "holder": None,
+            "reason": (
+                f"resume/fix 轮要求卡已被持有,但 claims/{ctx.card_id}/ 下无 claim 记录"
+                f"(或记录无法解析)。请先用 first 轮认领本卡。"
+            ),
+        }
+    if holder != expected:
+        return {
+            "ok": False,
+            "holder": holder,
+            "reason": (
+                f"resume/fix 轮:卡 {ctx.card_id} 由 {holder!r} 持有,"
+                f"但当前实例为 {expected!r}。不允许跨实例续派/修复。"
+            ),
+        }
+    return {"ok": True, "holder": holder, "reason": ""}
+
+
+# ---------------------------------------------------------------------------
 # S1 步骤5/6 — 拉起(launch-check)与挂哨(watch):组合零件,不内联。
 # ---------------------------------------------------------------------------
 
@@ -674,12 +740,22 @@ def run_pump_dispatch(
         _log("[dry-run] 校验通过,未派工(--dry-run 保留现有语义)")
         return result
 
-    # 步骤4(S11):拉起前认领(编排式);失败即止
+    # 步骤4(S11/AIPOS-332F2):认领或校验持有
+    #   first 轮:走 step_claim(一发式认领,失败即止)
+    #   resume/fix 轮:走 step_verify_held(校验卡已由本实例持有,不发起新 claim)
+    #   三种轮次同一条编排代码,轮次差异是数据不是分支。
     if do_claim:
-        claim = step_claim(ctx)
-        result["claim"] = claim
-        if not claim["ok"]:
-            return _fail("claim", claim["reason"])
+        if ctx.round_type == "first":
+            claim = step_claim(ctx)
+            result["claim"] = claim
+            if not claim["ok"]:
+                return _fail("claim", claim["reason"])
+        else:
+            # resume / fix: 跳过 claim, 校验已持有
+            verify = step_verify_held(ctx)
+            result["claim"] = verify  # 复用 claim 槽位,下游渲染一致
+            if not verify["ok"]:
+                return _fail("claim", verify["reason"])
     result["step"] = "claim"
 
     # 步骤5:拉起(launch-check)
