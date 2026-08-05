@@ -1375,23 +1375,21 @@ def generate_kickoff(
     """
     from tools.aipos_cli.verb_contract import validate_kickoff_verbs
 
-    # 基础模板 — AIPOS-330: 不再手写动词名,改为让 agent 问 gate
+    # 基础模板 — AIPOS-332F3 修三:极简三要素(卡在哪、已认领、问 gate 下一步)。
+    # 与 338 卡面契约节重复的【过门】句从模板删除(卡面已自动携带)。
     if round_type == "first":
-        template = f"""冷启动。执行卡 {card_id} 在 5_tasks/queue/pending/{card_id.lower()}.md(workspace={{workspace}},gate={{gate}},产品仓={{product_repo}},信封={{envelope}})。本卡已由泵经预授权信封一发式认领(autonomy_mode=PreAuthorized),你【无需再 /claim】。先向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role}),按 gate 回答的动词与参数过门。
-{{delta}}
-【过门】完成后 write-return(最终 confirm 由顾问代按);自产审计卡只放 task_cards/{card_id}/,不投队列。"""
+        template = f"""冷启动。卡 {card_id} 在 5_tasks/queue/pending/{card_id.lower()}.md(workspace={{workspace}},gate={{gate}},产品仓={{product_repo}},信封={{envelope}})。已由泵一发式认领,无需再 /claim。请向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role})。
+{{delta}}"""
     elif round_type == "fix":
-        template = f"""修复轮。执行卡 {card_id}，审计发现问题需修复。先向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role})。
+        template = f"""修复轮。卡 {card_id},审计发现问题需修复。请向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role})。
 {{delta}}
-【约束】只修复审计指出的问题，禁止重写已有正确实现、禁止重复读卡全文。
-【过门】修复后 write-return，自产审计卡放 task_cards/{card_id}/。"""
+【约束】只修审计指出的问题,禁止重写已有正确实现。"""
     elif round_type == "resume":
-        template = f"""续跑轮。执行卡 {card_id}，从断点继续。先向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role})。
-{{delta}}
-【已完成】{{completed_work}}
-【只需补】{{remaining_work}}
-【约束】禁止重写已有实现、禁止重复读卡全文。从断点继续完成剩余部分。
-【过门】完成后 write-return，自产审计卡放 task_cards/{card_id}/。"""
+        # AIPOS-332F2: 简化为与 fix 同构的增量式模板。
+        # {completed_work}/{remaining_work} 占位符无法被编排层展开(S7),
+        # 改为由顾问在 --delta 中自行描述已完成/待补内容。
+        template = f"""续跑轮。卡 {card_id},从断点继续。请向 gate 询问下一步(lybra_gate_guidance, task_id={card_id}, role={role})。
+{{delta}}"""
     else:
         raise ValueError(f"Unknown round_type: {round_type}")
 

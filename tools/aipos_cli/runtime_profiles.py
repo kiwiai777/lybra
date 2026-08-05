@@ -32,24 +32,34 @@ RUNTIME_PROFILES: dict[str, dict[str, Any]] = {
         "stall_surfaces": ["session_dirs", "cpu", "worktree"],
         # run-log 仅可用于"结束检测"(进程退出会 flush),不可判停滞。
         "run_log_role": "end_only",
+        # AIPOS-332F3 修一:会话根来自运行体档案,不硬编码 product_repo/.pi。
+        # pi 的会话目录 = session_root + encode(cwd);cwd 即运行目录(产品仓)。
+        "session_root": "~/.pi/agent/sessions",
+        "session_dir_encoding": "pi_cwd_dash",  # / → -,前后加 --
     },
     "cc": {
         "buffer_output": True,
         "description": "Claude Code harness (buffered output).",
         "stall_surfaces": ["session_dirs", "cpu", "worktree"],
         "run_log_role": "end_only",
+        "session_root": None,  # cc 无已知会话目录机制
+        "session_dir_encoding": None,
     },
     "claude_code": {
         "buffer_output": True,
         "description": "Claude Code direct (buffered output).",
         "stall_surfaces": ["session_dirs", "cpu", "worktree"],
         "run_log_role": "end_only",
+        "session_root": None,
+        "session_dir_encoding": None,
     },
     "generic_bash": {
         "buffer_output": False,
         "description": "Generic bash script (line-buffered stdout).",
         "stall_surfaces": ["run_log", "session_dirs", "worktree"],
         "run_log_role": "stall",
+        "session_root": None,
+        "session_dir_encoding": None,
     },
 }
 
@@ -59,6 +69,8 @@ _DEFAULT_RUNTIME_PROFILE: dict[str, Any] = {
     "description": "UNKNOWN runtime — safe default assumes buffered output.",
     "stall_surfaces": ["session_dirs", "cpu", "worktree"],
     "run_log_role": "end_only",
+    "session_root": None,
+    "session_dir_encoding": None,
 }
 
 

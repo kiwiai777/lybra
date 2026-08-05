@@ -526,11 +526,59 @@ def step_launch(ctx: DispatchContext) -> dict[str, Any]:
     return {"ok": code == EXIT_OK, "exit_code": code}
 
 
+def _encode_cwd_for_pi(cwd: Path) -> str:
+    """pi 会话目录编码规则:绝对路径的 / 替换为 -,前后加 --。
+
+    例:``/home/kiwi/projects/lybra`` → ``--home-kiwi-projects-lybra--``
+    与本机 ``~/.pi/agent/sessions/`` 下的实际目录名一致(实证)。
+    """
+    abs_path = str(cwd.resolve())
+    return "--" + abs_path.lstrip("/").replace("/", "-") + "--"
+
+
 def _session_dirs_for(ctx: DispatchContext) -> list[str]:
-    """会话目录:与产出位置无关的判据(S8/S12)— 总是包含 pi 会话目录。"""
-    dirs = [str(ctx.product_repo / ".pi" / "sessions")]
+    """AIPOS-332F3 修一:会话目录取自运行体档案,不硬编码 product_repo/.pi。
+
+    派生逻辑:
+      1. 从运行体档案取 session_root(如 pi → ``~/.pi/agent/sessions``);
+      2. 按档案的编码规则 + 运行目录(产品仓)算出具体子目录;
+      3. **校验存在性**:目录不存在 → 明确告警并降级到 CPU/工作树判据,
+         不得带着死判据开杀(AIPOS-332F3 根因修复)。
+    """
+    dirs: list[str] = []
+    warnings: list[str] = []
+
+    # 从运行体档案取 session_root(纯数据,不硬编码)
+    runtime_profile = ctx.observation_plan.get("runtime_profile", {})
+    session_root_raw = runtime_profile.get("session_root")
+    encoding = runtime_profile.get("session_dir_encoding")
+
+    if session_root_raw and encoding:
+        session_root = Path(session_root_raw).expanduser()
+        if encoding == "pi_cwd_dash":
+            encoded = _encode_cwd_for_pi(ctx.product_repo)
+            session_dir = session_root / encoded
+        else:
+            session_dir = session_root
+
+        if session_dir.is_dir():
+            dirs.append(str(session_dir))
+        else:
+            # 目录不存在 → 告警 + 降级(不带着死判据开杀)
+            warnings.append(
+                f"运行体档案派生的会话目录不存在: {session_dir}"
+                ";已降级到 CPU/工作树判据,不因此误杀健康 agent(AIPOS-332F3 修一)。"
+            )
+
+    # 其他已知会话目录(cc 等,按产品仓内是否存在加入)
     if (ctx.product_repo / ".claude").is_dir():
         dirs.append(str(ctx.product_repo / ".claude"))
+
+    # 把告警注入 observation_plan 以便上层可见
+    if warnings:
+        existing = ctx.observation_plan.get("warnings", [])
+        ctx.observation_plan["warnings"] = existing + warnings
+
     return dirs
 
 
@@ -704,10 +752,11 @@ def run_pump_dispatch(
     result["step"] = "generate_kickoff"
 
     # 步骤3(S7):展开占位符
+    # AIPOS-332F3 修二:真派与 dry-run 同一条展开逻辑,统一调用
+    # step_expand_kickoff_lenient 取得展开结果 + 缺失列表;非 dry-run 时缺失即硬失败。
+    kickoff_text, missing = step_expand_kickoff_lenient(ctx, kickoff_raw)
     if dry_run:
         # F-332-03:dry-run 下缺值降级为告警 + 展示未展开占位符 + exit 0
-        # (旧表层行为恢复);非 dry-run 缺值仍硬失败(S7 语义不变)。
-        kickoff_text, missing = step_expand_kickoff_lenient(ctx, kickoff_raw)
         ctx.kickoff = kickoff_text
         result["kickoff"] = kickoff_text
         if missing:
@@ -716,11 +765,22 @@ def run_pump_dispatch(
                 "非 dry-run 派工时缺值将硬失败(S7);dry-run 仅告警不中止(exit 0)。"
             )
     else:
-        try:
-            ctx.kickoff = step_expand_kickoff(ctx, kickoff_raw)
-        except ValueError as exc:
-            return _fail("expand_kickoff", str(exc))
-        result["kickoff"] = ctx.kickoff
+        # 真派路径:缺值硬失败(S7 语义不变)
+        if missing:
+            return _fail(
+                "expand_kickoff",
+                f"无法展开 kickoff 占位符 {missing}:缺少对应取值。"
+                " 派工中止——不输出带占位符的半成品(S7)。",
+            )
+        # AIPOS-332F3 修二:真派路径零占位符残留断言
+        leftover = re.findall(r"\{[a-z_]+\}", kickoff_text)
+        if leftover:
+            return _fail(
+                "expand_kickoff",
+                f"kickoff 仍含未展开占位符 {leftover}(真派路径零容忍,S7)。",
+            )
+        ctx.kickoff = kickoff_text
+        result["kickoff"] = kickoff_text
     result["step"] = "expand_kickoff"
 
     # dry_run 到此为止:只校验不派(现有语义保留)。但仍展示派生结果(确定性证据)。
