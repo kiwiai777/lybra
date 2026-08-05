@@ -16,10 +16,25 @@ def _src_meta(**overrides):
     return base
 
 
+def _ensure_test_policies(repo_root: Path) -> None:
+    """AIPOS-340F2: create minimal active policies so render_gate_contract_section can resolve."""
+    policies_dir = repo_root / "5_tasks" / "policies"
+    policies_dir.mkdir(parents=True, exist_ok=True)
+    (policies_dir / "pol_lybra_dev_7.md").write_text(
+        "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\n---\n# Dev\n",
+        encoding="utf-8",
+    )
+    (policies_dir / "pol_lybra_audit_2.md").write_text(
+        "---\npolicy_id: pol_lybra_audit_2\nstatus: active\nrole: audit\npolicy_type: audit\n---\n# Audit\n",
+        encoding="utf-8",
+    )
+
+
 class TestAuditInstructions(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.repo_root = Path(self.tmp.name)
+        _ensure_test_policies(self.repo_root)
 
     def tearDown(self):
         self.tmp.cleanup()

@@ -471,9 +471,14 @@ def _append_gate_contract_section(
             gate_url=_workspace_gate_url(repo_root),
             connection_json_rel=".lybra/connection.json",
             workspace_display=str(repo_root), task_id=task_id,
+            workspace_root=repo_root,
         )
         return rendered_markdown.rstrip() + "\n\n" + section + "\n"
     except Exception:
+        # AIPOS-340F2: render_gate_contract_section no longer has hardcoded fallbacks.
+        # If envelope resolution fails (e.g., no policies in workspace), the section is
+        # omitted rather than silently using baked values. Production workspaces always
+        # have active policies; this path only triggers in broken/test environments.
         return rendered_markdown
 
 

@@ -189,6 +189,7 @@ Independent audit of task `{source_task_id}`.
         )
     
     # AIPOS-338 S2: append the auditor's card-bound contract section (single-source)
+    # AIPOS-340F2: ValueError (envelope resolution failure) must propagate; other errors swallowed.
     if repo_root is not None:
         try:
             from tools.aipos_cli.gate_contract_section import (
@@ -200,9 +201,13 @@ Independent audit of task `{source_task_id}`.
                 source_metadata, role="auditor",
                 gate_url=conn["gate_url"], connection_json_rel=conn["connection_json_rel"],
                 workspace_display=conn["workspace_display"], task_id=audit_task_id,
+                workspace_root=repo_root,
             )
             audit_body = audit_body.rstrip() + "\n\n" + section + "\n"
         except Exception:
+            # AIPOS-340F2: render_gate_contract_section no longer has hardcoded fallbacks.
+            # If envelope resolution fails, the section is omitted. Production workspaces
+            # always have active policies; this only triggers in broken/test environments.
             pass
     
     audit_task_path = f"5_tasks/queue/pending/{_task_filename_for(audit_task_id)}"

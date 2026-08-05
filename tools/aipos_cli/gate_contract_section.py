@@ -233,10 +233,11 @@ def render_gate_contract_section(
     gate_url: str,
     connection_json_rel: str,
     workspace_display: str,
-    claim_envelope: str = "pol_lybra_dev_6",
-    return_envelope: str = "pol_lybra_dev_1",
-    audit_envelope: str = "pol_lybra_dev_6",
+    claim_envelope: str | None = None,
+    return_envelope: str | None = None,
+    audit_envelope: str | None = None,
     task_id: str | None = None,
+    workspace_root: Path | None = None,
 ) -> str:
     """Render the card-bound contract section. Single-source, branch-aware.
 
@@ -245,11 +246,52 @@ def render_gate_contract_section(
         task_fields: task frontmatter (task_mode/deploy/audit/output_target/...).
         role: "executor" (execution card) or "auditor" (derived R card).
         gate_url / connection_json_rel / workspace_display: workspace connection.
-        *_envelope: owner_policy_ref values for claim/return/audit (PreAuthorized/Supervised).
+        *_envelope: owner_policy_ref values. If None, resolved from workspace policies.
         task_id: optional, substituted into claim/return examples.
+        workspace_root: governance repo root for policy resolution.
 
     Returns the markdown section (no leading/trailing blank lines beyond internal).
+    Raises ValueError if envelopes cannot be resolved.
     """
+    # AIPOS-340F2: resolve envelopes from workspace policies; NO hardcoded fallback.
+    # If an envelope is not explicitly passed and cannot be resolved → raise immediately.
+    # Tests that need fixed envelopes MUST pass them explicitly (claim_envelope=..., etc.).
+    needs_resolution = (
+        claim_envelope is None
+        or return_envelope is None
+        or (role == "auditor" and audit_envelope is None)
+    )
+    if needs_resolution:
+        from tools.aipos_cli.policy_resolver import find_active_policy
+
+        if workspace_root is None:
+            raise ValueError(
+                "render_gate_contract_section: workspace_root is required to resolve policy envelopes. "
+                "Production callers must pass workspace_root; tests must pass explicit envelope params."
+            )
+
+        if claim_envelope is None:
+            claim_envelope = find_active_policy(workspace_root, role="exec", policy_type="dev")
+        if return_envelope is None:
+            return_envelope = find_active_policy(workspace_root, role="exec", policy_type="dev")
+        if audit_envelope is None and role == "auditor":
+            audit_envelope = find_active_policy(workspace_root, role="audit", policy_type="audit")
+
+    # After resolution: any still-None envelope is an error (no silent baking).
+    missing = []
+    if claim_envelope is None:
+        missing.append("claim_envelope (exec/dev)")
+    if return_envelope is None:
+        missing.append("return_envelope (exec/dev)")
+    if role == "auditor" and audit_envelope is None:
+        missing.append("audit_envelope (audit/audit)")
+    if missing:
+        raise ValueError(
+            f"render_gate_contract_section: cannot resolve policy envelope(s) from "
+            f"workspace_root={workspace_root}: {', '.join(missing)}. "
+            f"Ensure active, non-expired policies exist under "
+            f"<workspace>/5_tasks/policies/, or pass explicit envelope params for tests."
+        )
     chain = resolve_gate_chain(collaboration_profile, task_fields)
     verbs = resolve_gate_verbs()
     branch_id = getattr(chain, "branch_id", "")

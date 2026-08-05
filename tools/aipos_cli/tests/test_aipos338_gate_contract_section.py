@@ -61,6 +61,7 @@ class TestGateContractSectionRendering(unittest.TestCase):
             profile, {"task_mode": "code"}, role="executor",
             gate_url="http://127.0.0.1:7118", connection_json_rel=".lybra/connection.json",
             workspace_display=_WS, task_id="AIPOS-1",
+            claim_envelope="pol_lybra_dev_7", return_envelope="pol_lybra_dev_1",
         )
         found = self._verbs_in(section)
         self.assertTrue(found, "section must reference verbs")
@@ -79,6 +80,7 @@ class TestGateContractSectionRendering(unittest.TestCase):
             {"task_mode": "code"}, role="executor",
             gate_url="http://127.0.0.1:7118", connection_json_rel=".lybra/connection.json",
             workspace_display=_WS, task_id="AIPOS-1",
+            claim_envelope="pol_lybra_dev_7", return_envelope="pol_lybra_dev_1",
         )
         self.assertIn("http://127.0.0.1:7118", section)
         self.assertIn(".lybra/connection.json", section)
@@ -92,6 +94,7 @@ class TestGateContractSectionRendering(unittest.TestCase):
             {"task_mode": "code", "deploy": True}, role="executor",
             gate_url="http://g", connection_json_rel=".lybra/connection.json",
             workspace_display=_WS, task_id="AIPOS-2",
+            claim_envelope="pol_lybra_dev_7", return_envelope="pol_lybra_dev_1",
         )
         self.assertIn("部署门提醒", section)
         # prod-grade only; dev-loop deploy does NOT trigger (S6 判据澄清)
@@ -104,6 +107,7 @@ class TestGateContractSectionRendering(unittest.TestCase):
             {"task_mode": "content"}, role="executor",
             gate_url="http://g", connection_json_rel=".lybra/connection.json",
             workspace_display=_WS, task_id="AIPOS-3",
+            claim_envelope="pol_lybra_dev_7", return_envelope="pol_lybra_dev_1",
         )
         # non-code branch does NOT derive an independent audit R card (S6②)
         self.assertIn("不派生独立审计 R 卡", section)
@@ -118,6 +122,8 @@ class TestGateContractSectionRendering(unittest.TestCase):
             {"task_mode": "audit"}, role="auditor",
             gate_url="http://g", connection_json_rel=".lybra/connection.json",
             workspace_display=_WS, task_id="AIPOS-1R",
+            claim_envelope="pol_lybra_dev_7", return_envelope="pol_lybra_dev_1",
+            audit_envelope="pol_lybra_audit_2",
         )
         self.assertIn("审计体必读", section)
         self.assertIn("lybra_audit_verdict_dry_run", section)
@@ -167,6 +173,7 @@ class TestRegistryRenameAutoFollows(unittest.TestCase):
                 {"task_mode": "code"}, role="executor",
                 gate_url="http://g", connection_json_rel=".lybra/connection.json",
                 workspace_display=_WS, task_id="AIPOS-1",
+                claim_envelope="pol_lybra_dev_7", return_envelope="pol_lybra_dev_1",
             )
             self.assertIn(new_name, section)
             self.assertNotIn(old_name, section)
@@ -176,12 +183,45 @@ class TestRegistryRenameAutoFollows(unittest.TestCase):
             WRITE_TOOL_DESCRIPTORS[:] = orig_desc
 
 
+def _create_test_policies(repo_root: Path) -> None:
+    """Create minimal active policies so render_gate_contract_section can resolve envelopes.
+
+    AIPOS-340F2: tests that exercise the production path (publish_draft → _append_gate_contract_section
+    → render_gate_contract_section with workspace_root) need real policy files to resolve from.
+    """
+    policies_dir = repo_root / "5_tasks" / "policies"
+    policies_dir.mkdir(parents=True, exist_ok=True)
+    # dev policy
+    (policies_dir / "pol_lybra_dev_7.md").write_text(
+        "---\n"
+        "policy_id: pol_lybra_dev_7\n"
+        "status: active\n"
+        "role: exec\n"
+        "policy_type: dev\n"
+        "---\n"
+        "# Dev Policy 7\n",
+        encoding="utf-8",
+    )
+    # audit policy
+    (policies_dir / "pol_lybra_audit_2.md").write_text(
+        "---\n"
+        "policy_id: pol_lybra_audit_2\n"
+        "status: active\n"
+        "role: audit\n"
+        "policy_type: audit\n"
+        "---\n"
+        "# Audit Policy 2\n",
+        encoding="utf-8",
+    )
+
+
 class TestPublishAppendsSection(unittest.TestCase):
     """Acceptance #1: a newly published card auto-includes the contract section."""
 
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.repo_root = Path(self.tmp.name)
+        _create_test_policies(self.repo_root)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -204,6 +244,58 @@ class TestPublishAppendsSection(unittest.TestCase):
         source = (self.repo_root / draft_rel).read_text(encoding="utf-8")
         # the draft does NOT carry the section (only the published card does)
         self.assertNotIn("【认领与交回】", source)
+
+
+class TestNoHardcodedFallback(unittest.TestCase):
+    """AIPOS-340F2: no silent fallback — missing envelopes must raise."""
+
+    def test_missing_workspace_root_raises(self):
+        """No workspace_root → ValueError (no silent baking)."""
+        with self.assertRaises(ValueError) as ctx:
+            render_gate_contract_section(
+                {"code_enabled": True, "deploy_gate_enabled": False, "default_audit_mode": "agent"},
+                {"task_mode": "code"}, role="executor",
+                gate_url="http://g", connection_json_rel=".lybra/connection.json",
+                workspace_display=_WS, task_id="AIPOS-1",
+                # no workspace_root, no explicit envelopes
+            )
+        self.assertIn("workspace_root is required", str(ctx.exception))
+
+    def test_no_active_policies_raises(self):
+        """workspace_root with no valid policies → ValueError with actionable message."""
+        with TemporaryDirectory() as tmp:
+            empty_root = Path(tmp)
+            with self.assertRaises(ValueError) as ctx:
+                render_gate_contract_section(
+                    {"code_enabled": True, "deploy_gate_enabled": False, "default_audit_mode": "agent"},
+                    {"task_mode": "code"}, role="executor",
+                    gate_url="http://g", connection_json_rel=".lybra/connection.json",
+                    workspace_display=_WS, task_id="AIPOS-1",
+                    workspace_root=empty_root,
+                )
+            msg = str(ctx.exception)
+            self.assertIn("cannot resolve policy envelope", msg)
+            self.assertIn("claim_envelope", msg)
+
+    def test_explicit_envelopes_skip_policy_resolution(self):
+        """Explicit envelopes bypass policy resolution (test injection path)."""
+        # Even with no workspace policies, explicit envelopes work fine
+        section = render_gate_contract_section(
+            {"code_enabled": True, "deploy_gate_enabled": False, "default_audit_mode": "agent"},
+            {"task_mode": "code"}, role="executor",
+            gate_url="http://g", connection_json_rel=".lybra/connection.json",
+            workspace_display=_WS, task_id="AIPOS-1",
+            claim_envelope="pol_test_explicit", return_envelope="pol_test_explicit",
+            workspace_root=Path("/nonexistent"),  # doesn't matter when explicit
+        )
+        self.assertIn("pol_test_explicit", section)
+
+    def test_no_hardcoded_pol_lybra_dev_in_source(self):
+        """AIPOS-340F2 acceptance #3: grep no pol_lybra_dev_* hardcoded in gate_contract_section.py."""
+        src = Path("tools/aipos_cli/gate_contract_section.py").read_text(encoding="utf-8")
+        import re as _re
+        hardcoded = _re.findall(r"pol_lybra_dev_\d+", src)
+        self.assertEqual(hardcoded, [], f"gate_contract_section.py still has hardcoded envelopes: {hardcoded}")
 
 
 if __name__ == "__main__":
