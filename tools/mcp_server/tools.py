@@ -140,13 +140,22 @@ def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str
     capability = REQUEST_CAPABILITY.get()
     if isinstance(capability, dict) and capability.get("source") == "service_v0" and isinstance(payload, dict):
         payload = dict(payload)
+        # AIPOS-347: scope_basis echoes the REAL-TIME resolved scopes from ROLE_SPECS,
+        # not the token's baked-in `operations` snapshot.  The minted operations are
+        # echoed separately as `minted_scopes` for debugging/audit.
+        _role = str(capability.get("role") or "").strip()
+        _resolved_scopes = _resolve_role_scopes(_role) if _role else list(capability.get("operations") or [])
         scope_basis: dict[str, Any] = {
             "mode": "service_v0",
             "token_ref": capability.get("token_ref"),
             "role": capability.get("role"),
-            "scopes": list(capability.get("operations") or []),
+            "scopes": _resolved_scopes,
             "mcp_endpoint_ref": "local_service_mcp",
         }
+        # Echo the minted (baked) operations for audit/debugging — informational only.
+        _minted = list(capability.get("operations") or [])
+        if _minted and _minted != _resolved_scopes:
+            scope_basis["minted_scopes"] = _minted
         # AIPOS-228/229: echo the `projects` dimension + its enforcement marker — ONLY when the
         # capability carries it, so a token without `projects` keeps a byte-identical scope_basis.
         # As of Slice 5 the project gate ENFORCES it at the dispatch choke-point.
@@ -228,11 +237,44 @@ def request_capability_scope(capability: dict[str, Any] | None) -> Iterator[None
         REQUEST_CAPABILITY.reset(token)
 
 
+def _resolve_role_scopes(role: str) -> list[str]:
+    """Resolve the current scopes for a role from ROLE_SPECS (single source of truth).
+
+    AIPOS-347: scope is resolved at call time from the deployed ROLE_SPECS, not from
+    the token's baked-in ``operations`` snapshot.  This means changing a role's permissions
+    in ROLE_SPECS takes effect immediately for all existing tokens of that role — no
+    re-minting required.  The token's ``operations`` field is retained for informational
+    purposes only (echoed in scope_basis) but is NOT used for gate decisions.
+    """
+    from tools.aipos_cli.service_mode import ROLE_SPECS
+    for spec in ROLE_SPECS:
+        if spec["role"] == role:
+            return list(spec.get("scopes", []))
+    return []
+
+
 def _capability_has_scope(scope: str) -> bool:
+    """AIPOS-347: scope resolved at call time from ROLE_SPECS, not from token snapshot.
+
+    The token provides IDENTITY (role + token_ref + expires_at).  The SCOPE is looked up
+    from the deployed ROLE_SPECS based on the token's ``role`` field.  This is the single
+    source of truth — same ROLE_SPECS that ``serve rotate`` mints from.
+
+    Identity checks preserved (not weakened):
+    - ``token_ref`` (or ``token_id``) must be present — proves the token was minted by the system
+    - ``expires_at`` must be present and in the future — temporal validity
+
+    Scope resolution (AIPOS-347):
+    - If ``role`` is present and resolves in ROLE_SPECS → use ROLE_SPECS (real-time)
+    - If ``role`` is absent → fall back to ``operations`` (backward compat for legacy tokens)
+
+    This means: changing a role's scopes in ROLE_SPECS takes effect immediately for ALL
+    existing tokens of that role — no re-minting required.  Old tokens with stale
+    ``operations`` but a valid ``role`` get the CURRENT role scopes, not their baked ones.
+    Tokens without ``role`` (legacy) still use their baked ``operations``.
+    """
     token = _capability_token()
-    operations = token.get("operations")
-    if not isinstance(operations, list) or scope not in operations:
-        return False
+    # --- Identity checks (unchanged) ---
     if not bool(token.get("token_ref") or token.get("token_id")):
         return False
     expires_at_raw = str(token.get("expires_at") or "").strip()
@@ -244,7 +286,22 @@ def _capability_has_scope(scope: str) -> bool:
         return False
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
-    return expires_at > datetime.now(timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        return False
+    # --- AIPOS-347: scope from ROLE_SPECS at call time ---
+    role = str(token.get("role") or "").strip()
+    if role:
+        role_scopes = _resolve_role_scopes(role)
+        if role_scopes:
+            # Role resolved in ROLE_SPECS → real-time scope resolution
+            return scope in role_scopes
+        # Role present but NOT in ROLE_SPECS → fail-closed (unknown role denied)
+        return False
+    # --- Backward compat: no role field → fall back to baked operations ---
+    operations = token.get("operations")
+    if not isinstance(operations, list) or scope not in operations:
+        return False
+    return True
 
 
 def _scope_denied_result() -> dict[str, Any]:
