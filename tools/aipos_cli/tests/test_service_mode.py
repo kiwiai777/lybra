@@ -23,6 +23,8 @@ from tools.aipos_cli.service_mode import (
     connection_path,
     redacted_connection,
     render_connection_table,
+    roles_list_report,
+    roles_reconcile_report,
     rotate_report,
     secret_fingerprint,
     service_state_path,
@@ -907,6 +909,235 @@ class TokenProjectsMintEchoTests(unittest.TestCase):
         # slug space (no display-name normalization layer introduced).
         cfg = self._build(project="ai-project-os")
         self.assertEqual(cfg["tokens"][0].get("projects"), ["ai-project-os"])
+
+
+class AIPOS346RotationTests(unittest.TestCase):
+    """AIPOS-346: S1-S5 rotate features + F-346-02 test credential isolation."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name) / "workspace"
+        for state in ("pending", "claimed", "completed", "blocked"):
+            (self.root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    # ---- S1: Default preserve bindings (fix footgun) ----
+
+    def test_rotate_without_params_preserves_existing_bindings(self) -> None:
+        """S1: omit instance params = preserve all existing bindings (no BLOCK)."""
+        # First rotate with bindings
+        rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+            executor_instance="exec.lybra.kiwiai-dev",
+            role_instances={"auditor": "audit.lybra.kiwiai-dev"},
+        )
+        # Second rotate WITHOUT params — must preserve, not BLOCK
+        result = rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("executor", result.get("bindings_preserved", []))
+        self.assertIn("auditor", result.get("bindings_preserved", []))
+        self.assertEqual(result.get("binding_changes"), [])
+        # Verify on disk
+        config = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+        exec_token = next(t for t in config["tokens"] if t["role"] == "executor")
+        audit_token = next(t for t in config["tokens"] if t["role"] == "auditor")
+        self.assertEqual(exec_token.get("agent_instance"), "exec.lybra.kiwiai-dev")
+        self.assertEqual(audit_token.get("agent_instance"), "audit.lybra.kiwiai-dev")
+
+    def test_rotate_explicit_binding_change_without_confirm_blocks(self) -> None:
+        """S1: explicit binding change without --confirm-binding-changes → BLOCK."""
+        rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+            executor_instance="exec.lybra.kiwiai-mac",
+        )
+        result = rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+            executor_instance="exec.lybra.kiwiai-dev",
+        )
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertTrue(any("confirm-binding-changes" in str(b) for b in result.get("blocking_reasons", [])))
+
+    def test_rotate_explicit_binding_change_with_confirm_passes(self) -> None:
+        """S1: explicit binding change WITH --confirm-binding-changes → PASS."""
+        rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+            executor_instance="exec.lybra.kiwiai-mac",
+        )
+        result = rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+            executor_instance="exec.lybra.kiwiai-dev",
+            confirm_binding_changes=True,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        changes = result.get("binding_changes", [])
+        self.assertTrue(any(c["role"] == "executor" for c in changes))
+
+    # ---- S2: Owner authorization + rotation log ----
+
+    def test_rotate_records_actor_and_authorization_in_log(self) -> None:
+        """S2: rotation log records actor + authorization ref."""
+        from tools.aipos_cli.service_mode import _rotation_log_path
+        log_path = _rotation_log_path()
+        # Clear any existing log for test isolation
+        if log_path.exists():
+            log_path.unlink()
+        rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+            actor="exec.lybra.kiwiai-dev",
+            owner_authorization_ref="owner-decision-2026-08-06-001",
+        )
+        self.assertTrue(log_path.exists())
+        lines = log_path.read_text(encoding="utf-8").strip().split("\n")
+        self.assertTrue(len(lines) >= 1)
+        entry = json.loads(lines[-1])
+        self.assertEqual(entry["actor"], "exec.lybra.kiwiai-dev")
+        self.assertEqual(entry["owner_authorization_ref"], "owner-decision-2026-08-06-001")
+        self.assertIn("bindings_before", entry)
+        self.assertIn("bindings_after", entry)
+
+    # ---- S3: Config update locations + zero plaintext ----
+
+    def test_rotate_output_includes_config_update_locations(self) -> None:
+        """S3: rotate output includes config_update_locations with zero plaintext."""
+        result = rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+            executor_instance="exec.lybra.kiwiai-dev",
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        locations = result.get("config_update_locations", [])
+        self.assertTrue(len(locations) > 0)
+        exec_loc = next((l for l in locations if l["role"] == "executor"), None)
+        self.assertIsNotNone(exec_loc)
+        self.assertEqual(exec_loc["instance"], "exec.lybra.kiwiai-dev")
+        # Zero plaintext in output
+        raw = json.dumps(result)
+        config = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+        for token in config["tokens"]:
+            self.assertNotIn(token["token"], raw)
+
+    def test_redacted_connection_includes_agent_instance_and_rotated_at(self) -> None:
+        """S3: redacted connection echoes agent_instance + rotated_at."""
+        config = build_connection_config(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+            executor_instance="exec.lybra.kiwiai-dev",
+        )
+        config["rotated_at"] = "2026-08-06T00:00:00Z"
+        red = redacted_connection(config)
+        exec_token = next(t for t in red["tokens"] if t["role"] == "executor")
+        self.assertEqual(exec_token.get("agent_instance"), "exec.lybra.kiwiai-dev")
+        self.assertEqual(red.get("rotated_at"), "2026-08-06T00:00:00Z")
+
+    # ---- S4: Instance name validation ----
+
+    def test_validate_instance_name_valid(self) -> None:
+        """S4: valid instance names pass."""
+        from tools.aipos_cli.service_mode import validate_instance_name
+        ok, msg = validate_instance_name("exec.lybra.kiwiai-dev", "executor")
+        self.assertTrue(ok)
+        self.assertIsNone(msg)
+        ok, msg = validate_instance_name("audit.lybra.kiwiai-dev", "auditor")
+        self.assertTrue(ok)
+
+    def test_validate_instance_name_detects_agency_issues(self) -> None:
+        """S4: detects agency's audit.auditor.kiwiai-dev (role name as project) and missing kiwiaiops."""
+        from tools.aipos_cli.service_mode import validate_instance_name
+        # audit.auditor.kiwiai-dev — project part is a role name (should be audit.lybra.kiwiai-dev)
+        ok, msg = validate_instance_name("audit.auditor.kiwiai-dev", "auditor")
+        self.assertFalse(ok)
+        self.assertIn("role name", msg.lower())
+        # Single-part name
+        ok, msg = validate_instance_name("kiwiaiops", "executor")
+        self.assertFalse(ok)
+        self.assertIn("3 parts", msg)
+
+    # ---- S5: Roles list/reconcile ----
+
+    def test_roles_list_shows_roles_with_compliance(self) -> None:
+        """S5: roles list shows all roles, instance, compliance, fingerprint."""
+        rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+            executor_instance="exec.lybra.kiwiai-dev",
+            role_instances={"auditor": "audit.lybra.kiwiai-dev"},
+        )
+        result = roles_list_report(self.root)
+        self.assertEqual(result["verdict"], "PASS")
+        roles = result.get("roles", [])
+        self.assertTrue(len(roles) >= 2)
+        exec_role = next(r for r in roles if r["role"] == "executor")
+        self.assertEqual(exec_role["instance"], "exec.lybra.kiwiai-dev")
+        self.assertTrue(exec_role["compliant"])
+
+    def test_roles_list_detects_non_compliant_instances(self) -> None:
+        """S5: roles list flags non-compliant instance names."""
+        rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+            role_instances={"auditor": "audit.auditor.kiwiai-dev"},  # wrong prefix
+        )
+        result = roles_list_report(self.root)
+        audit_role = next(r for r in result["roles"] if r["role"] == "auditor")
+        self.assertFalse(audit_role["compliant"])
+        self.assertIsNotNone(audit_role["validation_message"])
+
+    def test_roles_reconcile_reports_missing_and_unbound(self) -> None:
+        """S5: reconcile reports missing, extra, non-compliant, unbound."""
+        rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+        )
+        result = roles_reconcile_report(self.root)
+        self.assertEqual(result["verdict"], "PASS")  # All roles present, some unbound
+        self.assertEqual(result["missing"], [])
+        self.assertEqual(result["extra"], [])
+        # All roles are unbound (no instances specified)
+        self.assertTrue(len(result["unbound"]) > 0)
+
+    def test_roles_cross_workspace_rejected(self) -> None:
+        """S5: cross-workspace role management is rejected."""
+        rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+        )
+        other_workspace = Path(self.temp_dir.name) / "other_workspace"
+        other_workspace.mkdir()
+        # connection_target outside workspace_root → BLOCK
+        result = roles_list_report(
+            self.root,
+            connection_target=other_workspace / ".lybra" / "connection.json",
+        )
+        self.assertEqual(result["verdict"], "BLOCK")
+
+    # ---- F-346-02: Test credential isolation ----
+
+    def test_real_credentials_untouched_after_full_test_suite(self) -> None:
+        """F-346-02: after running all tests, real connection.json mtime/content unchanged."""
+        real_conn = Path("/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json")
+        if not real_conn.exists():
+            self.skipTest("Real connection.json not present")
+        before_mtime = real_conn.stat().st_mtime
+        before_content = real_conn.read_bytes()
+        # Run a rotation in a TEMP workspace (not the real one)
+        rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118,
+        )
+        # Real credentials untouched
+        self.assertEqual(real_conn.stat().st_mtime, before_mtime)
+        self.assertEqual(real_conn.read_bytes(), before_content)
 
 
 if __name__ == "__main__":

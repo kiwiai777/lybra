@@ -513,8 +513,11 @@ def redacted_connection(config: dict[str, Any]) -> dict[str, Any]:
         if token.get("projects"):
             safe["projects"] = list(token.get("projects") or [])
             safe["projects_enforced"] = True
+        # AIPOS-346 S3: echo agent_instance (identity, not secret) + rotated_at
+        if token.get("agent_instance"):
+            safe["agent_instance"] = token["agent_instance"]
         safe_tokens.append(safe)
-    return {
+    result = {
         "mode": config.get("mode"),
         "workspace_root": config.get("workspace_root"),
         "local_only": config.get("local_only"),
@@ -523,6 +526,10 @@ def redacted_connection(config: dict[str, Any]) -> dict[str, Any]:
         "tokens": safe_tokens,
         "secrets_notice": "Raw tokens are not printed. Read <workspace>/.lybra/connection.json only from trusted local clients.",
     }
+    # AIPOS-346 S3: include rotated_at when present
+    if config.get("rotated_at"):
+        result["rotated_at"] = config["rotated_at"]
+    return result
 
 
 def render_connection_table(report: dict[str, Any]) -> str:
@@ -554,18 +561,34 @@ def render_connection_table(report: dict[str, Any]) -> str:
                 "fix_command": "lybra serve stop && lybra serve start --workspace-root <real_workspace>",
             }
     
+    # AIPOS-346 S3: show rotated_at if present
+    rotated_at = connection.get("rotated_at")
+    rotated_line = f"Rotated: {rotated_at}" if rotated_at else ""
+    
     lines = [
         "Lybra service mode",
         "",
         f"Workspace: {workspace_status}",
         f"Board: {board.get('url') or '(missing)'}",
         f"MCP:   {mcp.get('rpc_url') or '(missing)'}",
-        "",
-        "Role             Scopes                         Token ref              Fingerprint",
     ]
+    if rotated_line:
+        lines.append(rotated_line)
+    lines.extend([
+        "",
+        "Role             Instance                           Scopes                         Token ref              Fingerprint",
+    ])
     for token in connection.get("tokens", []) if isinstance(connection.get("tokens"), list) else []:
         scopes = ", ".join(str(item) for item in token.get("scopes", []))
-        lines.append(f"{str(token.get('role') or ''):<16} {scopes:<30} {str(token.get('token_ref') or ''):<22} {token.get('fingerprint') or '(missing)'}")
+        instance = str(token.get("agent_instance") or "(unbound)")
+        lines.append(f"{str(token.get('role') or ''):<16} {instance:<36} {scopes:<30} {str(token.get('token_ref') or ''):<22} {token.get('fingerprint') or '(missing)'}")
+    
+    # AIPOS-346 S3: config update locations
+    config_locs = report.get("config_update_locations", [])
+    if config_locs:
+        lines.extend(["", "Config update locations:"])
+        for loc in config_locs:
+            lines.append(f"  - {loc.get('role')}: {loc.get('instance')} → {loc.get('config_path', '?')}")
     
     # Add workspace warning to warnings list
     all_warnings = list(report.get("warnings", []))
@@ -650,6 +673,9 @@ def rotate_report(
     role_instances: dict[str, str] | None = None,
     board_advertise_host: str | None = None,
     mcp_advertise_host: str | None = None,
+    confirm_binding_changes: bool = False,
+    actor: str | None = None,
+    owner_authorization_ref: str | None = None,
 ) -> dict[str, Any]:
     # AIPOS-349: default is workspace path (<workspace>/.lybra/connection.json) via _resolve_connection_target.
     # No fallback to global agent-side credentials.
@@ -659,46 +685,44 @@ def rotate_report(
     if blocking:
         return _blocked("serve_rotate", workspace_root, blocking, warnings, connection_target=connection_target)
     
-    # AIPOS-316 S1.3: detect existing instance bindings that would be lost
+    # AIPOS-346 S1: detect existing instance bindings and handle per new semantics
     conn_path = connection_path(workspace_root, connection_target=connection_target)
+    existing_bindings: dict[str, str] = {}
+    binding_changes: list[dict[str, str]] = []
+    bindings_preserved: list[str] = []
+    
     if conn_path.exists():
         try:
             existing_config = load_connection_config(workspace_root, connection_target=connection_target)
-            existing_tokens = existing_config.get("tokens", []) if isinstance(existing_config, dict) else []
-            
-            # Collect existing bindings
-            existing_bindings = {}
-            for token in existing_tokens:
-                if isinstance(token, dict) and "agent_instance" in token:
-                    role = token.get("role")
-                    if role:
-                        existing_bindings[role] = token["agent_instance"]
-            
-            # Check if rotation would lose bindings
-            if existing_bindings:
-                # Build new bindings map
-                new_bindings = dict(role_instances) if role_instances else {}
-                if executor_instance:
-                    new_bindings["executor"] = executor_instance
-                
-                # Find bindings that would be lost
-                lost_bindings = {}
-                for role, instance in existing_bindings.items():
-                    if role not in new_bindings:
-                        lost_bindings[role] = instance
-                
-                if lost_bindings:
-                    lost_list = ", ".join(f"{role}={instance}" for role, instance in sorted(lost_bindings.items()))
-                    blocking.append(
-                        f"serve rotate would lose existing instance bindings: {lost_list}. "
-                        f"PreAuthorized autonomy would become unavailable for these roles. "
-                        f"Specify --executor-instance and/or --role-instance to preserve bindings, "
-                        f"or confirm this is intentional (e.g., rotating to unbind for testing)."
-                    )
-                    return _blocked("serve_rotate", workspace_root, blocking, warnings, connection_target=connection_target)
+            existing_bindings = _collect_existing_bindings(existing_config)
         except Exception:
-            # Best effort: if we can't read existing config, proceed (file may be corrupted)
-            pass
+            pass  # Best effort
+    
+    # AIPOS-346 S1: resolve bindings — omit params = preserve existing (no BLOCK)
+    merged_bindings, binding_changes = _resolve_rotation_bindings(
+        existing_bindings,
+        executor_instance=executor_instance,
+        role_instances=role_instances,
+    )
+    
+    # Only BLOCK on changes to EXISTING bindings (not new bindings from None)
+    existing_binding_changes = [c for c in binding_changes if c.get("from") is not None]
+    if existing_binding_changes and not confirm_binding_changes:
+        change_desc = []
+        for c in existing_binding_changes:
+            change_desc.append(f"  {c['role']}: {c.get('from')} → {c['to']}")
+        blocking_msg = (
+            "serve rotate: explicit binding changes detected. "
+            "Re-run with --confirm-binding-changes to proceed.\n"
+            + "\n".join(change_desc)
+        )
+        blocking.append(blocking_msg)
+        return _blocked("serve_rotate", workspace_root, blocking, warnings, connection_target=connection_target)
+    
+    # Track which bindings were preserved (no explicit override)
+    for role, instance in existing_bindings.items():
+        if role not in (dict(role_instances) if role_instances else {}) and role != ("executor" if executor_instance else None):
+            bindings_preserved.append(role)
     
     # AIPOS-259 (F-258-2): fail-closed before minting — a wildcard bind with no usable advertise
     # would write 0.0.0.0 URLs no client can dial. rotate rebuilds fresh, so no stored values apply.
@@ -720,15 +744,41 @@ def rotate_report(
         previous_created = load_connection_config(
             workspace_root, connection_target=connection_target
         ).get("created_at")
+    
+    # AIPOS-346 S1: pass merged bindings (preserved + explicit) to build_connection_config
     config = build_connection_config(
         workspace_root, board_host=board_bind, board_port=board_port, mcp_host=mcp_bind, mcp_port=mcp_port,
-        project=project, executor_instance=executor_instance, role_instances=role_instances,
+        project=project, executor_instance=merged_bindings.get("executor") or executor_instance,
+        role_instances=merged_bindings if merged_bindings else role_instances,
         board_advertise_host=board_adv, mcp_advertise_host=mcp_adv,
     )
     if previous_created:
         config["created_at"] = previous_created
     config["rotated_at"] = _utc_now()
     write_connection_config(workspace_root, config, connection_target=connection_target)
+    
+    # AIPOS-346 S2: append rotation log
+    _append_rotation_log(
+        actor=actor or "(unknown)",
+        owner_authorization_ref=owner_authorization_ref,
+        bindings_before=existing_bindings,
+        bindings_after=merged_bindings,
+        binding_changes=binding_changes,
+        workspace_root=workspace_root,
+    )
+    
+    # AIPOS-346 S3: config_update_locations — where configs need updating on remote machines
+    config_update_locations = []
+    for role, instance in merged_bindings.items():
+        if instance:
+            # Each bound instance may have its own connection.json to update
+            config_update_locations.append({
+                "role": role,
+                "instance": instance,
+                "config_path": "<workspace>/.lybra/connection.json",
+                "note": f"Remote agent at {instance} needs updated token fingerprint",
+            })
+    
     return {
         "operation": "serve_rotate",
         "ok": True,
@@ -736,6 +786,9 @@ def rotate_report(
         "workspace_root": str(workspace_root),
         "connection_path": str(connection_path(workspace_root, connection_target=connection_target)),
         "connection": redacted_connection(config),
+        "bindings_preserved": bindings_preserved,
+        "binding_changes": binding_changes,
+        "config_update_locations": config_update_locations,
         "warnings": warnings,
         "blocking_reasons": [],
         "secrets_notice": "Raw role tokens were written only to <workspace>/.lybra/connection.json and are not printed.",
@@ -1105,6 +1158,267 @@ def _blocked(
         "blocking_reasons": blocking,
         "secrets_notice": "Raw tokens are not printed. Fix local secret file permissions before using service mode tokens.",
     }
+# AIPOS-346 S1: Default preserve bindings on rotate (fix footgun)
+def _collect_existing_bindings(config: dict[str, Any]) -> dict[str, str]:
+    """Extract existing role->instance bindings from a connection config."""
+    bindings = {}
+    for token in config.get("tokens", []) if isinstance(config.get("tokens"), list) else []:
+        if isinstance(token, dict) and "agent_instance" in token:
+            role = token.get("role")
+            if role:
+                bindings[role] = token["agent_instance"]
+    return bindings
+
+
+def _resolve_rotation_bindings(
+    existing_bindings: dict[str, str],
+    *,
+    executor_instance: str | None = None,
+    role_instances: dict[str, str] | None = None,
+) -> tuple[dict[str, str], list[dict[str, str]]]:
+    """Merge existing bindings with explicit parameters. Return (merged, changes).
+    
+    AIPOS-346 S1: omit params = preserve all existing bindings (no BLOCK).
+    Explicit params override existing; unmentioned roles keep their binding.
+    """
+    merged = dict(existing_bindings)
+    changes = []
+    
+    # Apply explicit overrides
+    if role_instances:
+        for role, instance in role_instances.items():
+            old = merged.get(role)
+            if old and old != instance:
+                changes.append({"role": role, "from": old, "to": instance})
+            elif not old:
+                changes.append({"role": role, "from": None, "to": instance})
+            merged[role] = instance
+    
+    if executor_instance:
+        old = merged.get("executor")
+        if old and old != executor_instance:
+            changes.append({"role": "executor", "from": old, "to": executor_instance})
+        elif not old:
+            changes.append({"role": "executor", "from": None, "to": executor_instance})
+        merged["executor"] = executor_instance
+    
+    return merged, changes
+
+
+# AIPOS-346 S2: Owner authorization + rotation log
+ROTATION_LOG_REL = Path("rotation_log.jsonl")
+
+
+def _rotation_log_path() -> Path:
+    """Append-only rotation log: ~/.lybra/local/rotation_log.jsonl"""
+    return (RUNTIME_ROOT / "local" / ROTATION_LOG_REL).expanduser()
+
+
+def _append_rotation_log(
+    *,
+    actor: str,
+    owner_authorization_ref: str | None,
+    bindings_before: dict[str, str],
+    bindings_after: dict[str, str],
+    binding_changes: list[dict[str, str]],
+    workspace_root: Path,
+) -> None:
+    """Append a rotation event to the log. Best-effort (never blocks rotation)."""
+    try:
+        log_path = _rotation_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "rotated_at": _utc_now(),
+            "actor": actor,
+            "owner_authorization_ref": owner_authorization_ref,
+            "workspace_root": str(workspace_root),
+            "bindings_before": bindings_before,
+            "bindings_after": bindings_after,
+            "binding_changes": binding_changes,
+        }
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, sort_keys=True) + "\n")
+    except Exception:
+        pass  # Best-effort: never block rotation for log failures
+
+
+# AIPOS-346 S4: Instance name validation
+ROLE_NAMES = {"executor", "auditor", "owner", "copilot", "planner", "owner-dispatch"}
+
+
+def validate_instance_name(name: str, role: str) -> tuple[bool, str | None]:
+    """Validate instance naming convention: <role_prefix>.<project>.<machine>
+    
+    Returns (is_valid, error_message).
+    """
+    if not name or not name.strip():
+        return False, "Instance name cannot be empty"
+    
+    parts = name.split(".")
+    if len(parts) != 3:
+        return False, f"Instance name must have 3 parts (<role>.<project>.<machine>), got {len(parts)}: {name}"
+    
+    role_part, project_part, machine_part = parts
+    
+    # Role prefix check
+    role_prefixes = {
+        "executor": "exec",
+        "auditor": "audit",
+        "owner": "owner",
+        "copilot": "copilot",
+        "planner": "planner",
+        "owner-dispatch": "owner-dispatch",
+    }
+    expected_prefix = role_prefixes.get(role)
+    if expected_prefix and role_part != expected_prefix:
+        return False, f"Role prefix mismatch: expected '{expected_prefix}' for role '{role}', got '{role_part}' in '{name}'"
+    
+    # Project part must not be a role name (common mistake: audit.auditor.xxx)
+    if project_part in ROLE_NAMES:
+        return False, f"Project part '{project_part}' is a role name, not a project name in '{name}'"
+    
+    # Project/machine non-empty
+    if not project_part.strip():
+        return False, f"Project part cannot be empty in '{name}'"
+    if not machine_part.strip():
+        return False, f"Machine part cannot be empty in '{name}'"
+    
+    return True, None
+
+
+# AIPOS-346 S5: Roles list/reconcile
+def roles_list_report(workspace_root: Path, *, connection_target: Path | None = None) -> dict[str, Any]:
+    """List all roles with instance bindings, compliance, fingerprints.
+    
+    AIPOS-346 S5: first-class role management. Only operates on the passed workspace.
+    """
+    # AIPOS-346 S5: cross-workspace rejection
+    if connection_target and not str(connection_target).startswith(str(workspace_root)):
+        return {
+            "operation": "roles_list",
+            "ok": False,
+            "verdict": "BLOCK",
+            "workspace_root": str(workspace_root),
+            "blocking_reasons": [{"message": "Cross-workspace role management is not allowed. The connection target must be within the workspace."}],
+            "roles": [],
+        }
+    
+    conn_path = connection_path(workspace_root, connection_target=connection_target)
+    if not conn_path.exists():
+        return {
+            "operation": "roles_list",
+            "ok": False,
+            "verdict": "BLOCK",
+            "workspace_root": str(workspace_root),
+            "blocking_reasons": [{"message": f"Connection config not found at {conn_path}"}],
+            "roles": [],
+        }
+    
+    config = load_connection_config(workspace_root, connection_target=connection_target)
+    roles = []
+    for token in config.get("tokens", []) if isinstance(config.get("tokens"), list) else []:
+        if not isinstance(token, dict):
+            continue
+        role = token.get("role", "")
+        instance = token.get("agent_instance")
+        fingerprint = token.get("fingerprint", "")
+        
+        # Validate instance name if present
+        compliant = True
+        validation_msg = None
+        if instance:
+            is_valid, msg = validate_instance_name(instance, role)
+            compliant = is_valid
+            validation_msg = msg
+        
+        roles.append({
+            "role": role,
+            "instance": instance,
+            "compliant": compliant,
+            "validation_message": validation_msg,
+            "fingerprint": fingerprint,
+            "scopes": list(token.get("scopes", [])),
+        })
+    
+    return {
+        "operation": "roles_list",
+        "ok": True,
+        "verdict": "PASS",
+        "workspace_root": str(workspace_root),
+        "connection_path": str(conn_path),
+        "roles": roles,
+    }
+
+
+def roles_reconcile_report(
+    workspace_root: Path,
+    *,
+    connection_target: Path | None = None,
+) -> dict[str, Any]:
+    """Compare actual vs expected roles. List missing/extra/non-compliant/unbound.
+    
+    AIPOS-346 S5: first-class role management. Only operates on the passed workspace.
+    """
+    # AIPOS-346 S5: cross-workspace rejection
+    if connection_target and not str(connection_target).startswith(str(workspace_root)):
+        return {
+            "operation": "roles_reconcile",
+            "ok": False,
+            "verdict": "BLOCK",
+            "workspace_root": str(workspace_root),
+            "blocking_reasons": [{"message": "Cross-workspace role management is not allowed."}],
+            "missing": [],
+            "extra": [],
+            "non_compliant": [],
+            "unbound": [],
+        }
+    
+    conn_path = connection_path(workspace_root, connection_target=connection_target)
+    if not conn_path.exists():
+        return {
+            "operation": "roles_reconcile",
+            "ok": False,
+            "verdict": "BLOCK",
+            "workspace_root": str(workspace_root),
+            "blocking_reasons": [{"message": f"Connection config not found at {conn_path}"}],
+            "missing": [],
+            "extra": [],
+            "non_compliant": [],
+            "unbound": [],
+        }
+    
+    config = load_connection_config(workspace_root, connection_target=connection_target)
+    actual_roles = {t.get("role"): t for t in config.get("tokens", []) if isinstance(t, dict)}
+    expected_roles = {spec["role"]: spec for spec in ROLE_SPECS}
+    
+    missing = [r for r in expected_roles if r not in actual_roles]
+    extra = [r for r in actual_roles if r not in expected_roles]
+    
+    non_compliant = []
+    unbound = []
+    
+    for role, token in actual_roles.items():
+        instance = token.get("agent_instance")
+        if not instance:
+            unbound.append(role)
+        else:
+            is_valid, msg = validate_instance_name(instance, role)
+            if not is_valid:
+                non_compliant.append({"role": role, "instance": instance, "message": msg})
+    
+    return {
+        "operation": "roles_reconcile",
+        "ok": True,
+        "verdict": "PASS" if not (missing or extra or non_compliant) else "WARN",
+        "workspace_root": str(workspace_root),
+        "connection_path": str(conn_path),
+        "missing": missing,
+        "extra": extra,
+        "non_compliant": non_compliant,
+        "unbound": unbound,
+    }
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

@@ -67,6 +67,8 @@ from tools.aipos_cli.queue_mutation import mutate_queue_task
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.service_mode import (
     render_connection_table,
+    roles_list_report,
+    roles_reconcile_report,
     rotate_report,
     start_report,
     status_report,
@@ -1285,7 +1287,21 @@ def build_parser() -> argparse.ArgumentParser:
     serve_rotate_parser.add_argument("--project", help="Scope the minted role tokens to this project (AIPOS-229: enforced — calls for another project return PROJECT_SCOPE_DENIED)")
     serve_rotate_parser.add_argument("--executor-instance", help="AIPOS-250B: bind the executor token to this canonical agent_instance (PreAuthorized identity authority); unspecified → no binding (backward-compatible: PreAuthorized unavailable, falls back Supervised)")
     serve_rotate_parser.add_argument("--role-instance", action="append", dest="role_instances", metavar="ROLE=INSTANCE", help="AIPOS-254: bind any role token to a canonical agent_instance (format: role=instance, e.g., auditor=audit.lybra.local); can be specified multiple times; --executor-instance is kept as an alias for executor role")
+    # AIPOS-346 S1/S2: binding change confirmation + owner authorization
+    serve_rotate_parser.add_argument("--confirm-binding-changes", action="store_true", help="AIPOS-346 S1: confirm explicit binding changes (without this, binding changes BLOCK)")
+    serve_rotate_parser.add_argument("--actor", help="AIPOS-346 S2: who is performing the rotation (recorded in rotation log)")
+    serve_rotate_parser.add_argument("--owner-authorization-ref", help="AIPOS-346 S2: reference to owner authorization for this rotation")
     serve_rotate_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-346 S5: roles subcommand (first-class role management)
+    roles_parser = subparsers.add_parser("roles", help="AIPOS-346 S5: first-class role management commands")
+    roles_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    roles_parser.add_argument("--connection-json", help="Override the connection.json path")
+    roles_subparsers = roles_parser.add_subparsers(dest="roles_command")
+    roles_list_parser = roles_subparsers.add_parser("list", help="List all roles with instance bindings, compliance, fingerprints")
+    roles_list_parser.add_argument("--json", action="store_true", help="Output JSON")
+    roles_reconcile_parser = roles_subparsers.add_parser("reconcile", help="Compare actual vs expected roles (missing/extra/non-compliant/unbound)")
+    roles_reconcile_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
     profile_subparsers = profile_parser.add_subparsers(dest="profile_command")
@@ -1710,6 +1726,9 @@ def main(argv: list[str] | None = None) -> int:
                     project=(str(args.project).strip() if getattr(args, "project", None) else None),
                     executor_instance=(str(args.executor_instance).strip() if getattr(args, "executor_instance", None) else None),
                     role_instances=role_inst_map if role_inst_map else None,
+                    confirm_binding_changes=bool(getattr(args, "confirm_binding_changes", False)),
+                    actor=(str(args.actor).strip() if getattr(args, "actor", None) else None),
+                    owner_authorization_ref=(str(args.owner_authorization_ref).strip() if getattr(args, "owner_authorization_ref", None) else None),
                 )
             else:
                 parser.print_help()
@@ -1725,6 +1744,52 @@ def main(argv: list[str] | None = None) -> int:
             print(render_connection_table(result))
         else:
             print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
+
+    # AIPOS-346 S5: roles subcommand
+    if args.command == "roles":
+        if not getattr(args, "roles_command", None):
+            parser.print_help()
+            return 2
+        try:
+            conn_override = getattr(args, "connection_json", None)
+            connection_target = Path(conn_override).expanduser() if conn_override else None
+            workspace_root = _resolve_workspace_for_command(args)
+            if args.roles_command == "list":
+                result = roles_list_report(workspace_root, connection_target=connection_target)
+                if getattr(args, "json", False):
+                    print(render_json(result))
+                else:
+                    # Render table
+                    print(f"{'Role':<16} {'Instance':<36} {'Compliant':<10} {'Fingerprint'}")
+                    for role_info in result.get("roles", []):
+                        compliant_str = "✓" if role_info.get("compliant") else "✗"
+                        instance = role_info.get("instance") or "(unbound)"
+                        print(f"{role_info.get('role', ''):<16} {instance:<36} {compliant_str:<10} {role_info.get('fingerprint', '')}")
+                        if role_info.get("validation_message"):
+                            print(f"  ⚠ {role_info['validation_message']}")
+            elif args.roles_command == "reconcile":
+                result = roles_reconcile_report(workspace_root, connection_target=connection_target)
+                if getattr(args, "json", False):
+                    print(render_json(result))
+                else:
+                    print(f"Verdict: {result.get('verdict')}")
+                    if result.get("missing"):
+                        print(f"Missing roles: {', '.join(result['missing'])}")
+                    if result.get("extra"):
+                        print(f"Extra roles: {', '.join(result['extra'])}")
+                    if result.get("non_compliant"):
+                        print("Non-compliant instances:")
+                        for nc in result["non_compliant"]:
+                            print(f"  - {nc['role']}: {nc['instance']} — {nc['message']}")
+                    if result.get("unbound"):
+                        print(f"Unbound roles: {', '.join(result['unbound'])}")
+            else:
+                parser.print_help()
+                return 2
+        except (OSError, ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
         return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
 
     if args.command == "workspace":
