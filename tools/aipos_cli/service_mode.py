@@ -289,7 +289,7 @@ def ensure_workspace_gitignore(workspace_root: Path) -> Path:
     return gitignore
 
 
-def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None, executor_instance: str | None = None, role_instances: dict[str, str] | None = None) -> dict[str, Any]:
+def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None, executor_instance: str | None = None, role_instances: dict[str, str] | None = None, role_class: str | None = None) -> dict[str, Any]:
     token = secrets.token_urlsafe(32)
     entry = {
         "role": spec["role"],
@@ -298,6 +298,10 @@ def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None
         "fingerprint": secret_fingerprint(token),
         "token": token,
     }
+    # AIPOS-352: custom roles carry their resolved builtin class so the gate can
+    # do scope resolution without reading project.json at call time.
+    if role_class:
+        entry["role_class"] = role_class
     # AIPOS-228 (Slice 4) / AIPOS-229 (Slice 5): optional `projects` dimension. The runtime
     # --project selection wins; otherwise a spec MAY carry its own `projects`. The field is
     # orthogonal to `scopes` and can only NARROW (never widen operation scope). As of Slice 5 it is
@@ -319,6 +323,70 @@ def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None
     if bound_instance:
         entry["agent_instance"] = bound_instance
     return entry
+
+
+def _mint_custom_role_tokens(
+    workspace_root: Path,
+    *,
+    projects: list[str] | None = None,
+    role_instances: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """AIPOS-352: mint token entries for custom roles from workspace's project.json.
+
+    Each custom role gets a token entry with:
+    - role: the custom name (e.g., "kiwiaiops")
+    - role_class: the resolved builtin class (e.g., "executor")
+    - scopes: resolved from ROLE_SPECS via role_class (same as builtin)
+    - token_ref: "svc-<custom_name>"
+    No scope fields in the registry — scopes are always derived from ROLE_SPECS.
+    """
+    from tools.aipos_cli.custom_roles import load_custom_roles
+    custom_roles = load_custom_roles(workspace_root)
+    if not custom_roles:
+        return []
+    tokens = []
+    role_inst_map = dict(role_instances) if role_instances else {}
+    for name, entry in custom_roles.items():
+        builtin_class = entry["class"]
+        # Find the ROLE_SPECS entry for the builtin class
+        class_spec = None
+        for spec in ROLE_SPECS:
+            if spec["role"] == builtin_class:
+                class_spec = spec
+                break
+        if class_spec is None:
+            continue  # defensive: should not happen after validation
+        # Build a synthetic spec for token minting
+        synthetic_spec = {
+            "role": name,
+            "token_ref": f"svc-{name}",
+            "scopes": list(class_spec["scopes"]),
+        }
+        token_entry = _role_token_entry(
+            synthetic_spec,
+            projects=projects,
+            role_instances=role_inst_map,
+            role_class=builtin_class,
+        )
+        tokens.append(token_entry)
+    return tokens
+
+
+def _build_all_tokens(
+    workspace_root: Path,
+    projects: list[str] | None,
+    exec_instance: str | None,
+    role_inst_map: dict[str, str] | None,
+) -> list[dict[str, Any]]:
+    """AIPOS-352: build complete token list = builtins + custom roles."""
+    tokens = [_role_token_entry(spec, projects=projects, executor_instance=exec_instance, role_instances=role_inst_map) for spec in ROLE_SPECS]
+    custom_tokens = _mint_custom_role_tokens(
+        workspace_root,
+        projects=projects,
+        role_instances=role_inst_map,
+    )
+    tokens.extend(custom_tokens)
+    return tokens
 
 
 # AIPOS-259: bind-all wildcards. A 0.0.0.0 (or ::) bind is CORRECT for listening on every
@@ -444,7 +512,7 @@ def build_connection_config(
         "rotated_at": None,
         "board": _board_block(board_host, board_adv, board_port),
         "mcp": _mcp_block(mcp_host, mcp_adv, mcp_port),
-        "tokens": [_role_token_entry(spec, projects=projects, executor_instance=exec_instance, role_instances=role_inst_map) for spec in ROLE_SPECS],
+        "tokens": _build_all_tokens(workspace_root, projects, exec_instance, role_inst_map),
         "secrets_notice": "Raw role tokens are local secrets. Anyone who can read this file can use the listed local role scopes.",
     }
 
@@ -516,6 +584,9 @@ def redacted_connection(config: dict[str, Any]) -> dict[str, Any]:
         # AIPOS-346 S3: echo agent_instance (identity, not secret) + rotated_at
         if token.get("agent_instance"):
             safe["agent_instance"] = token["agent_instance"]
+        # AIPOS-352: echo role_class for custom roles
+        if token.get("role_class"):
+            safe["role_class"] = token["role_class"]
         safe_tokens.append(safe)
     result = {
         "mode": config.get("mode"),
@@ -676,6 +747,7 @@ def rotate_report(
     confirm_binding_changes: bool = False,
     actor: str | None = None,
     owner_authorization_ref: str | None = None,
+    roles: list[str] | None = None,
 ) -> dict[str, Any]:
     # AIPOS-349: default is workspace path (<workspace>/.lybra/connection.json) via _resolve_connection_target.
     # No fallback to global agent-side credentials.
@@ -739,11 +811,18 @@ def rotate_report(
     advertise_blocks = [b for b in (board_block, mcp_block) if b]
     if advertise_blocks:
         return _blocked("serve_rotate", workspace_root, advertise_blocks, warnings, connection_target=connection_target)
+    # AIPOS-353: selective rotation — load existing tokens before rebuild so we can
+    # restore unselected roles byte-for-byte after build_connection_config mints fresh ones.
+    existing_tokens_by_role: dict[str, dict[str, Any]] = {}
     previous_created = None
     if connection_path(workspace_root, connection_target=connection_target).exists():
-        previous_created = load_connection_config(
+        existing_config = load_connection_config(
             workspace_root, connection_target=connection_target
-        ).get("created_at")
+        )
+        previous_created = existing_config.get("created_at")
+        for token_entry in existing_config.get("tokens", []):
+            if isinstance(token_entry, dict) and token_entry.get("role"):
+                existing_tokens_by_role[token_entry["role"]] = token_entry
     
     # AIPOS-346 S1: pass merged bindings (preserved + explicit) to build_connection_config
     config = build_connection_config(
@@ -755,6 +834,56 @@ def rotate_report(
     if previous_created:
         config["created_at"] = previous_created
     config["rotated_at"] = _utc_now()
+
+    # AIPOS-353: selective rotation — restore unselected roles' existing token entries
+    # byte-for-byte. Only roles in `roles` get their freshly-minted tokens kept.
+    roles_normalized = [r.strip().lower() for r in roles] if roles else None
+    roles_rotated: list[str] = []
+    roles_preserved_tokens: list[str] = []
+    if roles_normalized:
+        # Validate that requested roles exist in ROLE_SPECS or custom_roles registry
+        known_roles = {spec["role"] for spec in ROLE_SPECS}
+        # AIPOS-352: include custom roles from workspace registry
+        try:
+            from tools.aipos_cli.custom_roles import load_custom_roles
+            custom = load_custom_roles(workspace_root)
+            known_roles.update(custom.keys())
+        except Exception:
+            pass
+        unknown = [r for r in roles_normalized if r not in known_roles]
+        if unknown:
+            blocking.append(
+                f"serve rotate --roles: unknown role(s): {', '.join(unknown)}. "
+                f"Known roles: {', '.join(sorted(known_roles))}"
+            )
+            return _blocked("serve_rotate", workspace_root, blocking, warnings, connection_target=connection_target)
+        # Validate that existing tokens exist for unselected roles
+        all_role_names = list(known_roles)
+        unselected = [r for r in all_role_names if r not in roles_normalized]
+        missing_existing = [r for r in unselected if r not in existing_tokens_by_role]
+        if missing_existing and existing_tokens_by_role:
+            # Only warn if there IS an existing config but some unselected roles are missing
+            warnings.append({
+                "message": f"Unselected role without existing tokens (will be freshly minted): {', '.join(missing_existing)}",
+                "severity": "WARN",
+            })
+        # Restore unselected roles' existing token entries
+        new_tokens = []
+        for token_entry in config.get("tokens", []):
+            role = token_entry.get("role")
+            if role and role in unselected and role in existing_tokens_by_role:
+                # Preserve byte-for-byte from existing config
+                new_tokens.append(existing_tokens_by_role[role])
+                roles_preserved_tokens.append(role)
+            else:
+                new_tokens.append(token_entry)
+                if role and role in roles_normalized:
+                    roles_rotated.append(role)
+        config["tokens"] = new_tokens
+    else:
+        # Full rotation: all roles rotated
+        roles_rotated = [spec["role"] for spec in ROLE_SPECS]
+
     write_connection_config(workspace_root, config, connection_target=connection_target)
     
     # AIPOS-346 S2: append rotation log
@@ -768,9 +897,10 @@ def rotate_report(
     )
     
     # AIPOS-346 S3: config_update_locations — where configs need updating on remote machines
+    # AIPOS-353: only include affected (rotated) roles
     config_update_locations = []
     for role, instance in merged_bindings.items():
-        if instance:
+        if instance and role in roles_rotated:
             # Each bound instance may have its own connection.json to update
             config_update_locations.append({
                 "role": role,
@@ -779,7 +909,7 @@ def rotate_report(
                 "note": f"Remote agent at {instance} needs updated token fingerprint",
             })
     
-    return {
+    result: dict[str, Any] = {
         "operation": "serve_rotate",
         "ok": True,
         "verdict": "PASS",
@@ -793,6 +923,12 @@ def rotate_report(
         "blocking_reasons": [],
         "secrets_notice": "Raw role tokens were written only to <workspace>/.lybra/connection.json and are not printed.",
     }
+    # AIPOS-353: selective rotation metadata
+    if roles_normalized:
+        result["selective_rotation"] = True
+        result["roles_rotated"] = roles_rotated
+        result["roles_preserved"] = roles_preserved_tokens
+    return result
 
 
 def start_report(
@@ -1242,24 +1378,11 @@ def _append_rotation_log(
         pass  # Best-effort: never block rotation for log failures
 
 
-# AIPOS-346 S4 / AIPOS-350 S3: Instance name validation — zero hardcoded prefix mapping.
-# The prefix mapping, project segment, and host segment all come from the naming
-# profile (alias layer) in project.json. The three-part dotted structure is a
-# product rule; the VALUES within each segment are data, not code.
-ROLE_NAMES = {"executor", "auditor", "owner", "copilot", "planner", "owner-dispatch"}
-
-
-def validate_instance_name(name: str, role: str) -> tuple[bool, str | None]:
-    """Validate instance naming convention: <role_prefix>.<project>.<machine>
-
-    Returns (is_valid, error_message).
-
-    AIPOS-350 S3: zero hardcoded prefix mapping. Delegates to naming_profile module
-    which reads the alias layer from project.json (or defaults when no project_root
-    is available). The three-part structure is a product rule; segment values are data.
-    """
-    from tools.aipos_cli.naming_profile import validate_instance_name_default
-    return validate_instance_name_default(name, role)
+# AIPOS-350F2: compliance validation single-sourced from naming_profile.
+# All callers (roles list/reconcile, rotate pre-check, generators) use
+# validate_instance_name() from naming_profile — it reads the naming_profile
+# alias layer (prefix mapping / project segment aliases / host segment aliases).
+from tools.aipos_cli.naming_profile import validate_instance_name  # noqa: F401
 
 
 # AIPOS-346 S5: Roles list/reconcile
@@ -1303,18 +1426,23 @@ def roles_list_report(workspace_root: Path, *, connection_target: Path | None = 
         compliant = True
         validation_msg = None
         if instance:
-            is_valid, msg = validate_instance_name(instance, role)
+            is_valid, msg = validate_instance_name(instance, role, workspace_root)
             compliant = is_valid
             validation_msg = msg
         
-        roles.append({
+        entry = {
             "role": role,
             "instance": instance,
             "compliant": compliant,
             "validation_message": validation_msg,
             "fingerprint": fingerprint,
             "scopes": list(token.get("scopes", [])),
-        })
+        }
+        # AIPOS-352: echo role_class for custom roles
+        if token.get("role_class"):
+            entry["role_class"] = token["role_class"]
+            entry["is_custom"] = True
+        roles.append(entry)
     
     return {
         "operation": "roles_list",
@@ -1366,6 +1494,15 @@ def roles_reconcile_report(
     config = load_connection_config(workspace_root, connection_target=connection_target)
     actual_roles = {t.get("role"): t for t in config.get("tokens", []) if isinstance(t, dict)}
     expected_roles = {spec["role"]: spec for spec in ROLE_SPECS}
+    # AIPOS-352: custom roles from the workspace registry are also expected
+    try:
+        from tools.aipos_cli.custom_roles import load_custom_roles
+        custom = load_custom_roles(workspace_root)
+        for name in custom:
+            if name not in expected_roles:
+                expected_roles[name] = {"role": name, "custom": True}
+    except Exception:
+        pass
     
     missing = [r for r in expected_roles if r not in actual_roles]
     extra = [r for r in actual_roles if r not in expected_roles]
@@ -1378,7 +1515,7 @@ def roles_reconcile_report(
         if not instance:
             unbound.append(role)
         else:
-            is_valid, msg = validate_instance_name(instance, role)
+            is_valid, msg = validate_instance_name(instance, role, workspace_root)
             if not is_valid:
                 non_compliant.append({"role": role, "instance": instance, "message": msg})
     

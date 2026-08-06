@@ -1140,5 +1140,198 @@ class AIPOS346RotationTests(unittest.TestCase):
         self.assertEqual(real_conn.read_bytes(), before_content)
 
 
+class SelectiveRotationTests(unittest.TestCase):
+    """AIPOS-353: selective rotation by role — only recast specified roles, preserve others byte-for-byte."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name) / "workspace"
+        for state in ("pending", "claimed", "completed", "blocked"):
+            (self.root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def _full_rotate(self, **kwargs):
+        return rotate_report(
+            self.root, board_host="127.0.0.1", board_port=7117,
+            mcp_host="127.0.0.1", mcp_port=7118, **kwargs,
+        )
+
+    def _load_config(self):
+        return json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+
+    # ---- Core: selective rotation preserves unselected roles byte-for-byte ----
+
+    def test_selective_rotate_preserves_unselected_tokens_byte_for_byte(self) -> None:
+        """AIPOS-353 D1: --roles auditor recasts only auditor; executor/planner tokens byte-identical."""
+        # First: full rotation to establish baseline
+        self._full_rotate(
+            executor_instance="exec.lybra.kiwiai-dev",
+            role_instances={"auditor": "audit.lybra.kiwiai-dev"},
+        )
+        config_before = self._load_config()
+        exec_before = next(t for t in config_before["tokens"] if t["role"] == "executor")
+        planner_before = next(t for t in config_before["tokens"] if t["role"] == "planner")
+        auditor_before = next(t for t in config_before["tokens"] if t["role"] == "auditor")
+
+        # Selective rotation: only auditor
+        result = self._full_rotate(roles=["auditor"])
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertTrue(result.get("selective_rotation"))
+        self.assertIn("auditor", result["roles_rotated"])
+        self.assertIn("executor", result["roles_preserved"])
+        self.assertIn("planner", result["roles_preserved"])
+
+        config_after = self._load_config()
+        exec_after = next(t for t in config_after["tokens"] if t["role"] == "executor")
+        planner_after = next(t for t in config_after["tokens"] if t["role"] == "planner")
+        auditor_after = next(t for t in config_after["tokens"] if t["role"] == "auditor")
+
+        # Unselected roles byte-identical
+        self.assertEqual(exec_before, exec_after)
+        self.assertEqual(planner_before, planner_after)
+        # Selected role changed
+        self.assertNotEqual(auditor_before["token"], auditor_after["token"])
+        self.assertNotEqual(auditor_before["fingerprint"], auditor_after["fingerprint"])
+
+    def test_selective_rotate_multiple_roles(self) -> None:
+        """AIPOS-353: --roles auditor,executor recasts both; others preserved."""
+        self._full_rotate()
+        config_before = self._load_config()
+        copilot_before = next(t for t in config_before["tokens"] if t["role"] == "copilot")
+        owner_before = next(t for t in config_before["tokens"] if t["role"] == "owner")
+
+        result = self._full_rotate(roles=["auditor", "executor"])
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(sorted(result["roles_rotated"]), ["auditor", "executor"])
+
+        config_after = self._load_config()
+        copilot_after = next(t for t in config_after["tokens"] if t["role"] == "copilot")
+        owner_after = next(t for t in config_after["tokens"] if t["role"] == "owner")
+
+        # Unselected roles byte-identical
+        self.assertEqual(copilot_before, copilot_after)
+        self.assertEqual(owner_before, owner_after)
+
+    # ---- Positive name change + recast in one step ----
+
+    def test_selective_rotate_with_role_instance_rename(self) -> None:
+        """AIPOS-353 D2: --roles auditor --role-instance auditor=<new> = rename + recast in one step."""
+        self._full_rotate(
+            executor_instance="exec.lybra.kiwiai-dev",
+            role_instances={"auditor": "audit.lybra.old-name"},
+        )
+        config_before = self._load_config()
+        exec_before = next(t for t in config_before["tokens"] if t["role"] == "executor")
+
+        result = self._full_rotate(
+            roles=["auditor"],
+            role_instances={"auditor": "audit.lybra.kiwiai-dev"},
+            confirm_binding_changes=True,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+
+        config_after = self._load_config()
+        exec_after = next(t for t in config_after["tokens"] if t["role"] == "executor")
+        auditor_after = next(t for t in config_after["tokens"] if t["role"] == "auditor")
+
+        # Executor byte-identical
+        self.assertEqual(exec_before, exec_after)
+        # Auditor has new binding and new token
+        self.assertEqual(auditor_after["agent_instance"], "audit.lybra.kiwiai-dev")
+        # Binding change recorded
+        changes = result.get("binding_changes", [])
+        auditor_change = next((c for c in changes if c["role"] == "auditor"), None)
+        self.assertIsNotNone(auditor_change)
+        self.assertEqual(auditor_change["from"], "audit.lybra.old-name")
+        self.assertEqual(auditor_change["to"], "audit.lybra.kiwiai-dev")
+
+    # ---- Output only contains affected roles ----
+
+    def test_selective_rotate_output_only_affected_fingerprints(self) -> None:
+        """AIPOS-353 D3: output only contains affected roles' new fingerprints."""
+        self._full_rotate(
+            executor_instance="exec.lybra.kiwiai-dev",
+            role_instances={"auditor": "audit.lybra.kiwiai-dev"},
+        )
+        result = self._full_rotate(roles=["auditor"])
+        self.assertEqual(result["verdict"], "PASS")
+
+        # config_update_locations should only contain auditor (the rotated role)
+        locations = result.get("config_update_locations", [])
+        location_roles = [l["role"] for l in locations]
+        self.assertIn("auditor", location_roles)
+        self.assertNotIn("executor", location_roles)
+
+    def test_selective_rotate_redacted_output_no_plaintext(self) -> None:
+        """AIPOS-353: zero plaintext in output for selective rotation."""
+        self._full_rotate()
+        result = self._full_rotate(roles=["auditor"])
+        config = self._load_config()
+        raw = json.dumps(result)
+        for token in config["tokens"]:
+            self.assertNotIn(token["token"], raw)
+
+    # ---- Unknown role handling ----
+
+    def test_selective_rotate_unknown_role_blocks(self) -> None:
+        """AIPOS-353: --roles nonexistent → BLOCK with actionable message."""
+        self._full_rotate()
+        result = self._full_rotate(roles=["nonexistent"])
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertTrue(any("unknown role" in str(b).lower() for b in result.get("blocking_reasons", [])))
+
+    # ---- Full rotation unchanged ----
+
+    def test_full_rotate_without_roles_unchanged(self) -> None:
+        """AIPOS-353 D4: no --roles = full rotation, behavior unchanged."""
+        first = self._full_rotate()
+        self.assertEqual(first["verdict"], "PASS")
+        self.assertNotIn("selective_rotation", first)
+
+        second = self._full_rotate()
+        self.assertEqual(second["verdict"], "PASS")
+        self.assertNotIn("selective_rotation", second)
+
+        # All tokens should have changed
+        config_first = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+        # Do another full rotation
+        self._full_rotate()
+        config_second = json.loads(connection_path(self.root).read_text(encoding="utf-8"))
+        for t1, t2 in zip(config_first["tokens"], config_second["tokens"]):
+            self.assertNotEqual(t1["token"], t2["token"])
+
+    # ---- Selective rotation on fresh workspace (no existing config) ----
+
+    def test_selective_rotate_on_fresh_workspace(self) -> None:
+        """AIPOS-353: --roles on a workspace with no existing config still works (all tokens freshly minted)."""
+        result = self._full_rotate(roles=["auditor"])
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertTrue(result.get("selective_rotation"))
+        # On fresh workspace, all tokens are freshly minted (no existing to preserve)
+        config = self._load_config()
+        self.assertEqual(len(config["tokens"]), 6)  # All 6 roles present
+
+    # ---- Binding preservation in selective rotation ----
+
+    def test_selective_rotate_preserves_bindings_for_unselected(self) -> None:
+        """AIPOS-353: unselected roles keep their bindings intact."""
+        self._full_rotate(
+            executor_instance="exec.lybra.kiwiai-dev",
+            role_instances={"auditor": "audit.lybra.kiwiai-dev"},
+        )
+        # Selective rotate only copilot
+        result = self._full_rotate(roles=["copilot"])
+        self.assertEqual(result["verdict"], "PASS")
+
+        config = self._load_config()
+        exec_token = next(t for t in config["tokens"] if t["role"] == "executor")
+        auditor_token = next(t for t in config["tokens"] if t["role"] == "auditor")
+        # Bindings preserved byte-for-byte
+        self.assertEqual(exec_token.get("agent_instance"), "exec.lybra.kiwiai-dev")
+        self.assertEqual(auditor_token.get("agent_instance"), "audit.lybra.kiwiai-dev")
+
+
 if __name__ == "__main__":
     unittest.main()

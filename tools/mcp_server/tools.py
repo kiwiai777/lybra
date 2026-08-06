@@ -144,7 +144,8 @@ def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str
         # not the token's baked-in `operations` snapshot.  The minted operations are
         # echoed separately as `minted_scopes` for debugging/audit.
         _role = str(capability.get("role") or "").strip()
-        _resolved_scopes = _resolve_role_scopes(_role) if _role else list(capability.get("operations") or [])
+        _role_class = str(capability.get("role_class") or "").strip() or None
+        _resolved_scopes = _resolve_role_scopes(_role, role_class=_role_class) if _role else list(capability.get("operations") or [])
         scope_basis: dict[str, Any] = {
             "mode": "service_v0",
             "token_ref": capability.get("token_ref"),
@@ -237,7 +238,7 @@ def request_capability_scope(capability: dict[str, Any] | None) -> Iterator[None
         REQUEST_CAPABILITY.reset(token)
 
 
-def _resolve_role_scopes(role: str) -> list[str]:
+def _resolve_role_scopes(role: str, *, role_class: str | None = None) -> list[str]:
     """Resolve the current scopes for a role from ROLE_SPECS (single source of truth).
 
     AIPOS-347: scope is resolved at call time from the deployed ROLE_SPECS, not from
@@ -245,11 +246,20 @@ def _resolve_role_scopes(role: str) -> list[str]:
     in ROLE_SPECS takes effect immediately for all existing tokens of that role — no
     re-minting required.  The token's ``operations`` field is retained for informational
     purposes only (echoed in scope_basis) but is NOT used for gate decisions.
+
+    AIPOS-352: custom roles carry a ``role_class`` field that resolves to a built-in
+    class. When the role name is not in ROLE_SPECS directly, we use role_class to
+    look up the scopes. This is the 347 link reuse: custom name → class → ROLE_SPECS.
     """
     from tools.aipos_cli.service_mode import ROLE_SPECS
     for spec in ROLE_SPECS:
         if spec["role"] == role:
             return list(spec.get("scopes", []))
+    # AIPOS-352: custom role — resolve via role_class
+    if role_class:
+        for spec in ROLE_SPECS:
+            if spec["role"] == role_class:
+                return list(spec.get("scopes", []))
     return []
 
 
@@ -291,7 +301,9 @@ def _capability_has_scope(scope: str) -> bool:
     # --- AIPOS-347: scope from ROLE_SPECS at call time ---
     role = str(token.get("role") or "").strip()
     if role:
-        role_scopes = _resolve_role_scopes(role)
+        # AIPOS-352: custom roles carry role_class for scope resolution
+        role_class = str(token.get("role_class") or "").strip() or None
+        role_scopes = _resolve_role_scopes(role, role_class=role_class)
         if role_scopes:
             # Role resolved in ROLE_SPECS → real-time scope resolution
             return scope in role_scopes

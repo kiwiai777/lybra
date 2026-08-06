@@ -345,10 +345,11 @@ def _scope_for_verb(verb_name: str) -> str | None:
 # Scope-to-role mapping (derived from service_mode.py ROLE_SPECS)
 # ---------------------------------------------------------------------------
 
-def get_scope_role_map() -> dict[str, list[str]]:
+def get_scope_role_map(workspace_root: str | None = None) -> dict[str, list[str]]:
     """Return mapping: scope → list of roles that hold it.
 
     Derived from service_mode.py ROLE_SPECS at call time.
+    AIPOS-352: includes custom roles from workspace registry (resolved via role_class).
     """
     from tools.aipos_cli.service_mode import ROLE_SPECS
 
@@ -357,6 +358,19 @@ def get_scope_role_map() -> dict[str, list[str]]:
         role = spec["role"]
         for scope in spec.get("scopes", []):
             scope_to_roles.setdefault(scope, []).append(role)
+    # AIPOS-352: add custom roles (they inherit their class's scopes)
+    if workspace_root is not None:
+        try:
+            from tools.aipos_cli.custom_roles import load_custom_roles
+            custom = load_custom_roles(workspace_root)
+            for name, entry in custom.items():
+                builtin_class = entry["class"]
+                class_spec = next((s for s in ROLE_SPECS if s["role"] == builtin_class), None)
+                if class_spec:
+                    for scope in class_spec.get("scopes", []):
+                        scope_to_roles.setdefault(scope, []).append(name)
+        except Exception:
+            pass
     return scope_to_roles
 
 
@@ -367,6 +381,6 @@ def get_role_scope_map() -> dict[str, list[str]]:
     return {spec["role"]: list(spec.get("scopes", [])) for spec in ROLE_SPECS}
 
 
-def who_holds_scope(scope: str) -> list[str]:
+def who_holds_scope(scope: str, workspace_root: str | None = None) -> list[str]:
     """Return list of roles that hold a given scope."""
-    return get_scope_role_map().get(scope, [])
+    return get_scope_role_map(workspace_root).get(scope, [])

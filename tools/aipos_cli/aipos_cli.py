@@ -1291,6 +1291,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_rotate_parser.add_argument("--confirm-binding-changes", action="store_true", help="AIPOS-346 S1: confirm explicit binding changes (without this, binding changes BLOCK)")
     serve_rotate_parser.add_argument("--actor", help="AIPOS-346 S2: who is performing the rotation (recorded in rotation log)")
     serve_rotate_parser.add_argument("--owner-authorization-ref", help="AIPOS-346 S2: reference to owner authorization for this rotation")
+    serve_rotate_parser.add_argument("--roles", help="AIPOS-353: comma-separated list of roles to rotate (e.g. auditor or auditor,executor); unselected roles keep their existing tokens byte-for-byte. Omit for full rotation.")
     serve_rotate_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-346 S5: roles subcommand (first-class role management)
@@ -1714,6 +1715,10 @@ def main(argv: list[str] | None = None) -> int:
                         if "=" in item:
                             role, instance = item.split("=", 1)
                             role_inst_map[role.strip()] = instance.strip()
+                # AIPOS-353: parse --roles (comma-separated) into list
+                roles_list = None
+                if getattr(args, "roles", None):
+                    roles_list = [r.strip() for r in args.roles.split(",") if r.strip()]
                 result = rotate_report(
                     workspace_root,
                     board_host=args.board_host,
@@ -1729,6 +1734,7 @@ def main(argv: list[str] | None = None) -> int:
                     confirm_binding_changes=bool(getattr(args, "confirm_binding_changes", False)),
                     actor=(str(args.actor).strip() if getattr(args, "actor", None) else None),
                     owner_authorization_ref=(str(args.owner_authorization_ref).strip() if getattr(args, "owner_authorization_ref", None) else None),
+                    roles=roles_list,
                 )
             else:
                 parser.print_help()

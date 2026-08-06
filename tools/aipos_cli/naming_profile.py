@@ -88,7 +88,8 @@ def get_naming_profile(project_root: str | Path) -> dict[str, Any]:
     """Read naming_profile from project.json.  AIPOS-350F1: no baked-in values.
 
     prefix_mapping: merged with DEFAULT_PREFIX_MAPPING (new roles from default
-        added, existing overridden).
+        added, existing overridden). AIPOS-352: also includes custom role prefixes
+        from the custom_roles registry (custom role name → itself as prefix).
     project_segment: from naming_profile.project_segment, falling back to
         project.json's 'project' field.  If neither exists, raises ValueError.
     host_segment: from naming_profile.host_segment only (no fallback).  If absent
@@ -120,6 +121,12 @@ def get_naming_profile(project_root: str | Path) -> dict[str, Any]:
             val = profile.get(key)
             if isinstance(val, list):
                 result[key] = [str(v).strip() for v in val if str(v).strip()]
+    # AIPOS-352: merge custom role prefixes (custom name → itself as prefix)
+    try:
+        from tools.aipos_cli.custom_roles import custom_roles_for_naming
+        result["prefix_mapping"].update(custom_roles_for_naming(project_root))
+    except Exception:
+        pass  # defensive: custom_roles module may not be available in all contexts
 
     # project_segment fallback: derive from project.json's 'project' field
     if "project_segment" not in result:
@@ -368,21 +375,45 @@ def _accepted_prefixes_for_role(role: str, profile: dict[str, Any]) -> set[str]:
     return set()
 
 
-def validate_instance_name_with_profile(
+_DEFAULT_PROFILE_CACHE: dict[str, Any] | None = None
+
+
+def _default_profile() -> dict[str, Any]:
+    """Lazy singleton default profile (for callers without a project_root).
+
+    AIPOS-350F1: contains only prefix_mapping (no project/host — those have no
+    safe global default).  Callers use this for format-only validation.
+    """
+    global _DEFAULT_PROFILE_CACHE
+    if _DEFAULT_PROFILE_CACHE is None:
+        _DEFAULT_PROFILE_CACHE = default_naming_profile()  # no project_root → no project/host
+    return _DEFAULT_PROFILE_CACHE
+
+
+def validate_instance_name(
     name: str,
     role: str,
-    project_root: str | Path,
+    project_root: str | Path | None = None,
 ) -> tuple[bool, str | None]:
-    """Validate instance name using the naming profile (alias layer).
+    """Unified compliance validation — single entry point (AIPOS-350F2).
+
+    Reads naming_profile (prefix mapping / project segment aliases / host
+    segment aliases) from the workspace's project.json when project_root is
+    provided.  When project_root is None, falls back to format-only validation
+    using the default prefix mapping (no project/host value checks — there are
+    no hardcoded defaults).
+
+    All callers (roles list/reconcile, rotate pre-check, generators) must use
+    this function.  No parallel validation logic anywhere.
 
     Returns (is_valid, error_message).
 
     Rules:
     - Three-part dotted structure (product rule, not configurable).
-    - Role prefix must match the naming profile's prefix_mapping for the role.
-    - Project segment must be the canonical value or one of its aliases,
-      AND must not be a role name (common mistake: audit.auditor.xxx).
-    - Host segment must be the canonical value or one of its aliases.
+    - Role prefix must match the naming_profile's prefix_mapping for the role.
+    - Project part must not be a role name (common mistake: audit.auditor.xxx).
+    - When project_root provided: project/host segments checked against alias layer.
+    - When project_root is None: format-only (prefix + role-name guard + non-empty).
     """
     if not name or not name.strip():
         return False, "Instance name cannot be empty"
@@ -392,9 +423,19 @@ def validate_instance_name_with_profile(
         return False, f"Instance name must have 3 parts (<role>.<project>.<machine>), got {len(parts)}: {name}"
 
     role_part, project_part, machine_part = parts
-    profile = get_naming_profile(project_root)
 
-    # Role prefix check — from alias layer, NOT hardcoded
+    # Resolve profile: workspace-aware or format-only default
+    if project_root is not None:
+        try:
+            profile = get_naming_profile(project_root)
+        except (ValueError, KeyError):
+            # Workspace has no project.json or no project_segment configured;
+            # fall back to format-only validation (no project/host value checks).
+            profile = _default_profile()
+    else:
+        profile = _default_profile()
+
+    # Role prefix check — from naming_profile alias layer, NOT hardcoded
     accepted_prefixes = _accepted_prefixes_for_role(role, profile)
     if accepted_prefixes and role_part not in accepted_prefixes:
         expected = profile["prefix_mapping"].get(role, "?")
@@ -404,16 +445,17 @@ def validate_instance_name_with_profile(
     if project_part in ROLE_NAMES:
         return False, f"Project part '{project_part}' is a role name, not a project name in '{name}'"
 
-    # Project segment check — from alias layer
-    accepted_projects = _accepted_project_segments(profile)
-    if project_part not in accepted_projects:
-        return False, (
-            f"Project part '{project_part}' is not the project segment "
-            f"('{profile['project_segment']}') or any of its aliases "
-            f"({sorted(accepted_projects)}) in '{name}'"
-        )
+    # Project segment check — from alias layer (only when profile has project_segment)
+    if "project_segment" in profile:
+        accepted_projects = _accepted_project_segments(profile)
+        if project_part not in accepted_projects:
+            return False, (
+                f"Project part '{project_part}' is not the project segment "
+                f"('{profile['project_segment']}') or any of its aliases "
+                f"({sorted(accepted_projects)}) in '{name}'"
+            )
 
-    # Host segment check — from alias layer (skip if workspace has no host_segment configured)
+    # Host segment check — from alias layer (only when profile has host_segment)
     if "host_segment" in profile:
         accepted_hosts = _accepted_host_segments(profile)
         if machine_part not in accepted_hosts:
@@ -433,64 +475,22 @@ def validate_instance_name_with_profile(
 
 
 # ---------------------------------------------------------------------------
-# Backward-compatible validate_instance_name (reads naming profile)
-#
-# This replaces the hardcoded version in service_mode.py. It requires a
-# project_root to read the naming profile. When called without one (legacy
-# callers), it falls back to the DEFAULT naming profile (zero-hardcode
-# preserved via default_naming_profile()).
+# Backward-compatible aliases — delegate to unified validate_instance_name()
+# AIPOS-350F2: these are thin wrappers, zero duplicated logic.
 # ---------------------------------------------------------------------------
 
-_DEFAULT_PROFILE_CACHE: dict[str, Any] | None = None
-
-
-def _default_profile() -> dict[str, Any]:
-    """Lazy singleton default profile (for callers without a project_root).
-
-    AIPOS-350F1: contains only prefix_mapping (no project/host — those have no
-    safe global default).  Callers use this for format-only validation.
-    """
-    global _DEFAULT_PROFILE_CACHE
-    if _DEFAULT_PROFILE_CACHE is None:
-        _DEFAULT_PROFILE_CACHE = default_naming_profile()  # no project_root → no project/host
-    return _DEFAULT_PROFILE_CACHE
+def validate_instance_name_with_profile(
+    name: str,
+    role: str,
+    project_root: str | Path,
+) -> tuple[bool, str | None]:
+    """Backward-compatible alias — delegates to validate_instance_name()."""
+    return validate_instance_name(name, role, project_root)
 
 
 def validate_instance_name_default(name: str, role: str) -> tuple[bool, str | None]:
-    """Validate using the default naming profile (no project_root needed).
-
-    AIPOS-350F1: format-only validation (3-part structure, prefix match, project
-    part is not a role name).  Does NOT check project/host values — there are no
-    hardcoded defaults.  For workspace-aware validation (with aliases and specific
-    project/host values), use validate_instance_name_with_profile().
-    """
-    if not name or not name.strip():
-        return False, "Instance name cannot be empty"
-
-    parts = name.split(".")
-    if len(parts) != 3:
-        return False, f"Instance name must have 3 parts (<role>.<project>.<machine>), got {len(parts)}: {name}"
-
-    role_part, project_part, machine_part = parts
-    profile = _default_profile()
-
-    # Role prefix check — from alias layer (default), NOT hardcoded
-    accepted_prefixes = _accepted_prefixes_for_role(role, profile)
-    if accepted_prefixes and role_part not in accepted_prefixes:
-        expected = profile["prefix_mapping"].get(role, "?")
-        return False, f"Role prefix mismatch: expected '{expected}' for role '{role}', got '{role_part}' in '{name}'"
-
-    # Project part must not be a role name
-    if project_part in ROLE_NAMES:
-        return False, f"Project part '{project_part}' is a role name, not a project name in '{name}'"
-
-    # Project/machine non-empty
-    if not project_part.strip():
-        return False, f"Project part cannot be empty in '{name}'"
-    if not machine_part.strip():
-        return False, f"Machine part cannot be empty in '{name}'"
-
-    return True, None
+    """Backward-compatible alias — delegates to validate_instance_name(None)."""
+    return validate_instance_name(name, role)
 
 
 # AIPOS-316: Guard against direct invocation

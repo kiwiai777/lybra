@@ -154,6 +154,9 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
     # No binding -> PreAuthorized unavailable (backward-compatible: falls back Supervised).
     if entry.get("agent_instance"):
         capability["agent_instance"] = str(entry.get("agent_instance"))
+    # AIPOS-352: carry `role_class` for custom role scope resolution.
+    if entry.get("role_class"):
+        capability["role_class"] = str(entry.get("role_class"))
     return capability, None
 
 
@@ -502,6 +505,9 @@ def load_service_role_registry(connection_json: str | Path) -> dict[str, dict[st
         # Present only when connection.json token carries it (executor + --executor-instance).
         if item.get("agent_instance"):
             registry[token]["agent_instance"] = str(item["agent_instance"])
+        # AIPOS-352: carry `role_class` for custom role scope resolution.
+        if item.get("role_class"):
+            registry[token]["role_class"] = str(item["role_class"])
     if not registry:
         raise ValueError(f"Service connection config contains no usable role tokens: {path}")
     return registry
