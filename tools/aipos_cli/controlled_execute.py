@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import uuid
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,122 @@ class DryRunToken:
 
 
 _TOKEN_STORE: dict[str, DryRunToken] = {}
+
+# AIPOS-351: File-based token persistence to survive MCP server process restarts.
+# Root cause of STALE_DRY_RUN: _TOKEN_STORE was process-local (in-memory dict).
+# When the MCP server restarted between dry_run and confirm, tokens were lost,
+# causing get_dry_run() to return None → confirm reported STALE_DRY_RUN.
+# Fix: persist tokens to disk; reload on demand when not found in memory.
+_TOKEN_PERSIST_DIR: Path | None = None
+
+
+def _resolve_persist_dir() -> Path | None:
+    """Resolve the token persistence directory.
+    
+    Uses LYBRA_TOKEN_STORE_DIR env var if set, otherwise uses a temp directory
+    under the system temp dir. Returns None if persistence is disabled.
+    """
+    global _TOKEN_PERSIST_DIR
+    if _TOKEN_PERSIST_DIR is not None:
+        return _TOKEN_PERSIST_DIR
+    
+    env_dir = os.environ.get("LYBRA_TOKEN_STORE_DIR", "").strip()
+    if env_dir:
+        persist_dir = Path(env_dir).expanduser().resolve()
+    else:
+        # Default: use a temp directory that survives process restarts
+        import tempfile
+        persist_dir = Path(tempfile.gettempdir()) / "lybra_dry_run_tokens"
+    
+    try:
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        _TOKEN_PERSIST_DIR = persist_dir
+        return persist_dir
+    except (OSError, PermissionError):
+        # If we can't create the directory, disable persistence
+        _TOKEN_PERSIST_DIR = Path("/dev/null")  # Sentinel: tried but failed
+        return None
+
+
+def _persist_token_to_disk(token: DryRunToken) -> None:
+    """Write token to disk for crash/restart recovery (AIPOS-351)."""
+    persist_dir = _resolve_persist_dir()
+    if persist_dir is None or not persist_dir.is_dir():
+        return
+    
+    token_file = persist_dir / f"{token.dry_run_id}.json"
+    try:
+        # Serialize the token (plan may contain complex objects)
+        token_data = {
+            "dry_run_id": token.dry_run_id,
+            "operation": token.operation,
+            "actor": token.actor,
+            "created_at": token.created_at,
+            "expires_at": token.expires_at,
+            "snapshot_hash": token.snapshot_hash,
+            "plan": token.plan,
+        }
+        token_file.write_text(json.dumps(token_data, ensure_ascii=False, default=str), encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        # Persistence failure is non-fatal; in-memory store is the primary path
+        pass
+
+
+def _load_token_from_disk(dry_run_id: str) -> DryRunToken | None:
+    """Load token from disk when not found in memory (AIPOS-351)."""
+    persist_dir = _resolve_persist_dir()
+    if persist_dir is None or not persist_dir.is_dir():
+        return None
+    
+    token_file = persist_dir / f"{dry_run_id}.json"
+    if not token_file.is_file():
+        return None
+    
+    try:
+        token_data = json.loads(token_file.read_text(encoding="utf-8"))
+        token = DryRunToken(
+            dry_run_id=token_data["dry_run_id"],
+            operation=token_data["operation"],
+            actor=token_data["actor"],
+            created_at=token_data["created_at"],
+            expires_at=token_data["expires_at"],
+            snapshot_hash=token_data["snapshot_hash"],
+            plan=token_data["plan"],
+        )
+        # Restore to in-memory store for subsequent lookups
+        _TOKEN_STORE[dry_run_id] = token
+        return token
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def _cleanup_expired_tokens() -> None:
+    """Remove expired tokens from both memory and disk (AIPOS-351)."""
+    now = _utc_now()
+    expired_ids = [
+        dr_id for dr_id, token in _TOKEN_STORE.items()
+        if datetime.fromisoformat(token.expires_at.replace("Z", "+00:00")) <= now
+    ]
+    for dr_id in expired_ids:
+        del _TOKEN_STORE[dr_id]
+    
+    # Also clean up expired files on disk
+    persist_dir = _resolve_persist_dir()
+    if persist_dir is None or not persist_dir.is_dir():
+        return
+    
+    for token_file in persist_dir.glob("dryrun_*.json"):
+        try:
+            token_data = json.loads(token_file.read_text(encoding="utf-8"))
+            expires_at = datetime.fromisoformat(token_data["expires_at"].replace("Z", "+00:00"))
+            if expires_at <= now:
+                token_file.unlink(missing_ok=True)
+        except (OSError, json.JSONDecodeError, KeyError, ValueError):
+            # Clean up corrupt files
+            try:
+                token_file.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _utc_now() -> datetime:
@@ -191,6 +308,8 @@ def register_dry_run(
         plan=plan_copy,
     )
     _TOKEN_STORE[dr_id] = token
+    # AIPOS-351: persist to disk so tokens survive process restarts
+    _persist_token_to_disk(token)
 
     return {
         "dry_run_id": token.dry_run_id,
@@ -201,7 +320,18 @@ def register_dry_run(
 
 
 def get_dry_run(dry_run_id: str) -> DryRunToken | None:
-    return _TOKEN_STORE.get(str(dry_run_id))
+    """Look up a dry-run token by ID.
+    
+    AIPOS-351: first checks in-memory store, then falls back to disk persistence.
+    This ensures tokens survive MCP server process restarts (the root cause of STALE_DRY_RUN).
+    """
+    dr_id = str(dry_run_id)
+    # Fast path: in-memory store
+    token = _TOKEN_STORE.get(dr_id)
+    if token is not None:
+        return token
+    # AIPOS-351: slow path: try to load from disk (survives process restarts)
+    return _load_token_from_disk(dr_id)
 
 
 def is_expired(token: DryRunToken) -> bool:
@@ -218,7 +348,16 @@ def validate_owner_confirmation(*, required: bool, owner_confirmation_token: str
 
 
 def clear_tokens() -> None:
+    """Clear all tokens from memory and disk (AIPOS-351: also cleans persisted files)."""
     _TOKEN_STORE.clear()
+    # Also clean up persisted files
+    persist_dir = _resolve_persist_dir()
+    if persist_dir is not None and persist_dir.is_dir():
+        for token_file in persist_dir.glob("dryrun_*.json"):
+            try:
+                token_file.unlink(missing_ok=True)
+            except OSError:
+                pass
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

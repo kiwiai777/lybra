@@ -85,6 +85,114 @@ def find_pending_audit_cards(workspace_root: Path, auditor_instance: str) -> lis
     return results
 
 
+def check_reviewed_task_has_final_verdict(
+    workspace_root: Path,
+    reviewed_task_id: str,
+) -> dict[str, Any]:
+    """AIPOS-351: Check if the reviewed task already has a final verdict.
+    
+    This prevents the guardian from repeatedly claiming stale R-cards whose
+    reviewed task has already been audited (manually or automatically) and
+    whose fix chain has closed.
+    
+    Returns: {has_final_verdict: bool, verdict_result: str, reason: str, verdict_files: list[Path]}
+    """
+    if not reviewed_task_id:
+        return {
+            "has_final_verdict": False,
+            "verdict_result": "",
+            "reason": "no reviewed_task_id specified",
+            "verdict_files": [],
+        }
+    
+    verdicts_dir = workspace_root / "5_tasks" / "records" / "audit_verdicts" / reviewed_task_id
+    if not verdicts_dir.is_dir():
+        return {
+            "has_final_verdict": False,
+            "verdict_result": "",
+            "reason": f"no verdict records directory for {reviewed_task_id}",
+            "verdict_files": [],
+        }
+    
+    verdict_files = sorted(verdicts_dir.glob("verdict_*.md"))
+    if not verdict_files:
+        return {
+            "has_final_verdict": False,
+            "verdict_result": "",
+            "reason": f"verdict directory exists but no verdict files for {reviewed_task_id}",
+            "verdict_files": [],
+        }
+    
+    # Read the latest verdict to determine if it's final
+    latest = verdict_files[-1]  # sorted, so last is latest
+    verdict_result = ""
+    try:
+        content = latest.read_text(encoding="utf-8")
+        # Parse frontmatter for verdict result
+        # AIPOS-351: check both 'verdict:' and 'verdict_result:' field names
+        # (different audit paths use different field names)
+        if content.startswith("---"):
+            end = content.find("\n---", 3)
+            if end > 0:
+                for line in content[3:end].splitlines():
+                    if line.startswith("verdict_result:"):
+                        verdict_result = line.split(":", 1)[1].strip().strip("'\"")
+                        break  # verdict_result takes priority
+                    elif line.startswith("verdict:") and not line.startswith("verdict_id:"):
+                        verdict_result = line.split(":", 1)[1].strip().strip("'\"")
+                        # Don't break - prefer verdict_result if found later
+    except OSError:
+        pass
+    
+    # A verdict is "final" if it exists (PASS, FAIL, PASS_WITH_NOTES, etc.)
+    # The guardian should not re-audit a task that already has a verdict record.
+    # The fix chain closure is a separate concern (handled by the task lifecycle).
+    has_final = bool(verdict_result)
+    
+    return {
+        "has_final_verdict": has_final,
+        "verdict_result": verdict_result,
+        "reason": f"verdict already landed for {reviewed_task_id}: {verdict_result} ({len(verdict_files)} record(s))" if has_final else f"verdict files exist but no verdict_result parsed for {reviewed_task_id}",
+        "verdict_files": verdict_files,
+    }
+
+
+def write_skip_stale_card_event(
+    workspace_root: Path,
+    audit_task_id: str,
+    reviewed_task_id: str,
+    reason: str,
+) -> None:
+    """AIPOS-351: Write a skip event when the guardian skips a stale R-card."""
+    events_dir = workspace_root / "5_tasks" / "records" / "events" / audit_task_id
+    events_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    event_file = events_dir / f"skip_stale_card_{timestamp}.md"
+    
+    content = f"""---
+record_type: audit_event
+event_kind: skip_stale_card
+task_id: {audit_task_id}
+reviewed_task_id: {reviewed_task_id}
+timestamp: {datetime.now(timezone.utc).isoformat()}
+reason: already_has_final_verdict
+---
+# Skip Stale Card Event: {audit_task_id}
+
+## AIPOS-351 守护队列卫生
+
+守护在认卡前核对发现被审卡 {reviewed_task_id} 已有终态裁决, 不再自领。
+
+原因: {reason}
+
+此事件由 AIPOS-351 守护自动写入, 标记 skip_stale_card (陈卡不啃)。
+"""
+    
+    event_file.write_text(content, encoding="utf-8")
+    log(f"写入 skip_stale_card 事件: {event_file}")
+
+
 def claim_preauthorized(
     gate_client: GateClient,
     auditor_instance: str,
@@ -275,6 +383,12 @@ def launch_auditor_runtime(
             f"报告已存在: {report_path}, 结论已定。你【只需补提交裁决】(调用 gate 的 "
             f"{verdict_verb_name} 步骤), 【禁止重做分析】。读取既有报告, 提取结论, 提交裁决即可。"
             f"遇护栏拦截即说明并停。"
+            f"\n\n## AIPOS-351 裁决提交失败规范动作"
+            f"\n如果 {verdict_verb_name} 返回错误 (STALE_DRY_RUN/DRY_RUN_REQUIRED/SCOPE_DENIED 等):"
+            f"\n1. 将完整错误 JSON 贴到报告末尾的 `## 裁决提交失败` 节"
+            f"\n2. 写 blocked 事件到 5_tasks/records/events/{audit_task_id}/blocked_*.md"
+            f"\n3. 禁止手写 records (不伪造裁决记录)"
+            f"\n4. 如实退出 (非零 exit), 守护会检测到 verdict_missing 并升级"
         )
     else:
         # Normal kickoff
@@ -286,6 +400,12 @@ def launch_auditor_runtime(
             f"以原卡为唯一真相)。请按你的 skills (audit-independent-evidence) 独立只读取证, "
             f"逐项 PASS/FAIL+证据, 给结论。报告出口唯一化 (不得自选): 写到 {report_path}。"
             f"审完按你的 write-return 流程如实记录裁决与自报模型/token; 遇护栏拦截即说明并停。"
+            f"\n\n## AIPOS-351 裁决提交失败规范动作"
+            f"\n如果 {verdict_verb_name} 返回错误 (STALE_DRY_RUN/DRY_RUN_REQUIRED/SCOPE_DENIED 等):"
+            f"\n1. 将完整错误 JSON 贴到报告末尾的 `## 裁决提交失败` 节"
+            f"\n2. 写 blocked 事件到 5_tasks/records/events/{audit_task_id}/blocked_*.md"
+            f"\n3. 禁止手写 records (不伪造裁决记录)"
+            f"\n4. 如实退出 (非零 exit), 守护会检测到 verdict_missing 并升级"
         )
 
     # AIPOS-330 S2: validate that all lybra_* verbs in kickoff exist in the registry.
@@ -611,7 +731,24 @@ def process_pending_audits(
         reviewed_task_id = card["reviewed_task_id"]
         audit_card_path = card["path"]
         
-        log(f"发现 pending audit 卡: {audit_task_id} (reviewed={reviewed_task_id or '(未知)'}) → claim")
+        log(f"发现 pending audit 卡: {audit_task_id} (reviewed={reviewed_task_id or '(未知)'}) → 先核对队列卫生")
+        
+        # AIPOS-351: Check if the reviewed task already has a final verdict
+        # before attempting to claim. This prevents the guardian from repeatedly
+        # chewing on stale R-cards whose fix chain has already closed.
+        if reviewed_task_id:
+            verdict_check = check_reviewed_task_has_final_verdict(workspace_root, reviewed_task_id)
+            if verdict_check["has_final_verdict"]:
+                log(f"⏭️ 跳过陈卡 {audit_task_id}: {verdict_check['reason']}")
+                write_skip_stale_card_event(
+                    workspace_root,
+                    audit_task_id,
+                    reviewed_task_id,
+                    verdict_check["reason"],
+                )
+                continue  # Skip this card, move to next
+        
+        log(f"队列卫生通过 → claim")
         
         # Attempt PreAuthorized claim with transient retry
         backoff = 1
