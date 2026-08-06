@@ -11,6 +11,11 @@ The three-part dotted structure (<role_prefix>.<project_segment>.<host_segment>)
 is a PRODUCT RULE (not configurable). The VALUES within each segment come from
 the alias layer (naming_profile in project.json). Changing an alias = config edit
 (no code change, no new task card).
+
+AIPOS-350F1: project_segment and host_segment are NEVER hardcoded.
+  - project_segment: derived from project.json's 'project' field (workspace identity).
+  - host_segment: must be explicitly configured per workspace; at minting time an
+    per-instance override may be supplied (workspace value is the default pre-fill).
 """
 from __future__ import annotations
 
@@ -40,24 +45,39 @@ DEFAULT_PREFIX_MAPPING: dict[str, str] = {
 }
 
 
-def default_naming_profile() -> dict[str, Any]:
-    """Default naming profile. Matches current Lybra conventions.
+def default_naming_profile(
+    project_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Default naming profile — derived from workspace, never hardcoded.
+
+    AIPOS-350F1: no project or host literal is baked in.
 
     prefix_mapping: role -> display prefix (planner maps to 'planner' by default;
         projects that use 'advisor' for planner set it via set_prefix_mapping).
-    project_segment: the canonical project name used in instance names.
-    project_segment_aliases: alternative names accepted for the project segment
-        (e.g. 'kiwiaiops' as alias for 'lybra').
-    host_segment: the canonical host name used in instance names.
-    host_segment_aliases: alternative names accepted for the host segment.
+    project_segment: derived from project.json's 'project' field when project_root
+        is provided.  If the field is missing, raises ValueError with guidance.
+        If project_root is None, project_segment is omitted from the result.
+    host_segment: intentionally omitted — no hardcoded default.  Must be explicitly
+        configured per workspace via set_host_segment() or in project.json.
+    *_aliases: empty lists (stable defaults).
     """
-    return {
+    profile: dict[str, Any] = {
         "prefix_mapping": dict(DEFAULT_PREFIX_MAPPING),
-        "project_segment": "lybra",
         "project_segment_aliases": [],
-        "host_segment": "kiwiai-dev",
         "host_segment_aliases": [],
     }
+    if project_root is not None:
+        project_json = read_project_json(project_root)
+        project_name = str(project_json.get("project") or "").strip()
+        if project_name:
+            profile["project_segment"] = project_name
+        else:
+            raise ValueError(
+                "未配置项目段 (project_segment): project.json 缺少 'project' 字段。"
+                "请运行 `lybra naming set-project-segment <name>` 或在 project.json "
+                "中添加 naming_profile.project_segment"
+            )
+    return profile
 
 
 # ---------------------------------------------------------------------------
@@ -65,30 +85,56 @@ def default_naming_profile() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def get_naming_profile(project_root: str | Path) -> dict[str, Any]:
-    """Read naming_profile from project.json. Absent/invalid fields -> defaults.
+    """Read naming_profile from project.json.  AIPOS-350F1: no baked-in values.
 
-    Backward compatible: old projects without naming_profile get defaults.
-    Partial profiles are merged with defaults (missing fields filled in).
+    prefix_mapping: merged with DEFAULT_PREFIX_MAPPING (new roles from default
+        added, existing overridden).
+    project_segment: from naming_profile.project_segment, falling back to
+        project.json's 'project' field.  If neither exists, raises ValueError.
+    host_segment: from naming_profile.host_segment only (no fallback).  If absent
+        the key is omitted from the result — generate_canonical_name() will raise
+        at call time, and validate_instance_name_with_profile() skips host check.
+    *_aliases: from naming_profile or empty lists.
     """
     project_json = read_project_json(project_root)
     profile = project_json.get("naming_profile")
-    if profile is None or not isinstance(profile, dict):
-        return default_naming_profile()
-    # Merge with defaults
-    result = default_naming_profile()
-    # prefix_mapping: merge (new roles from default added, existing overridden)
-    if isinstance(profile.get("prefix_mapping"), dict):
-        result["prefix_mapping"].update(profile["prefix_mapping"])
-    # Scalar fields: override if present and non-empty
-    for key in ("project_segment", "host_segment"):
-        val = profile.get(key)
-        if isinstance(val, str) and val.strip():
-            result[key] = val.strip()
-    # List fields: override if present and is a list
-    for key in ("project_segment_aliases", "host_segment_aliases"):
-        val = profile.get(key)
-        if isinstance(val, list):
-            result[key] = [str(v).strip() for v in val if str(v).strip()]
+
+    # Start with prefix defaults only — no project/host hardcodes
+    result: dict[str, Any] = {
+        "prefix_mapping": dict(DEFAULT_PREFIX_MAPPING),
+        "project_segment_aliases": [],
+        "host_segment_aliases": [],
+    }
+
+    if profile is not None and isinstance(profile, dict):
+        # prefix_mapping: merge (new roles from default added, existing overridden)
+        if isinstance(profile.get("prefix_mapping"), dict):
+            result["prefix_mapping"].update(profile["prefix_mapping"])
+        # Scalar fields: override if present and non-empty
+        for key in ("project_segment", "host_segment"):
+            val = profile.get(key)
+            if isinstance(val, str) and val.strip():
+                result[key] = val.strip()
+        # List fields: override if present and is a list
+        for key in ("project_segment_aliases", "host_segment_aliases"):
+            val = profile.get(key)
+            if isinstance(val, list):
+                result[key] = [str(v).strip() for v in val if str(v).strip()]
+
+    # project_segment fallback: derive from project.json's 'project' field
+    if "project_segment" not in result:
+        project_name = str(project_json.get("project") or "").strip()
+        if project_name:
+            result["project_segment"] = project_name
+        else:
+            raise ValueError(
+                "未配置项目段 (project_segment): project.json 既无 "
+                "naming_profile.project_segment 也无 'project' 字段。"
+                "请运行 `lybra naming set-project-segment <name>`"
+            )
+
+    # host_segment: no fallback — intentionally omitted if not configured.
+    # generate_canonical_name() raises when it is needed but absent.
     return result
 
 
@@ -255,11 +301,15 @@ def add_host_segment_alias(
 def generate_canonical_name(
     role: str,
     project_root: str | Path,
+    *,
+    host_segment_override: str | None = None,
 ) -> str:
     """Generate the canonical instance name for a role: <prefix>.<project>.<host>.
 
     All three segments come from the naming profile (alias layer). No hardcoded values.
-    Raises ValueError if the role has no prefix mapping.
+    AIPOS-350F1: host_segment_override allows per-instance host at minting time;
+    the workspace-level host_segment is the default pre-fill.
+    Raises ValueError if the role has no prefix mapping or host_segment is absent.
     """
     profile = get_naming_profile(project_root)
     role_clean = str(role or "").strip()
@@ -270,7 +320,13 @@ def generate_canonical_name(
             f"Known roles: {sorted(profile['prefix_mapping'].keys())}"
         )
     project = profile["project_segment"]
-    host = profile["host_segment"]
+    # Host: per-instance override > workspace config > error
+    host = str(host_segment_override or "").strip() or profile.get("host_segment")
+    if not host:
+        raise ValueError(
+            "未配置主机段 (host_segment): 请在 project.json 中设置 "
+            "naming_profile.host_segment, 或在铸发时通过 host_segment_override 指定"
+        )
     return f"{prefix}.{project}.{host}"
 
 
@@ -357,14 +413,15 @@ def validate_instance_name_with_profile(
             f"({sorted(accepted_projects)}) in '{name}'"
         )
 
-    # Host segment check — from alias layer
-    accepted_hosts = _accepted_host_segments(profile)
-    if machine_part not in accepted_hosts:
-        return False, (
-            f"Host part '{machine_part}' is not the host segment "
-            f"('{profile['host_segment']}') or any of its aliases "
-            f"({sorted(accepted_hosts)}) in '{name}'"
-        )
+    # Host segment check — from alias layer (skip if workspace has no host_segment configured)
+    if "host_segment" in profile:
+        accepted_hosts = _accepted_host_segments(profile)
+        if machine_part not in accepted_hosts:
+            return False, (
+                f"Host part '{machine_part}' is not the host segment "
+                f"('{profile['host_segment']}') or any of its aliases "
+                f"({sorted(accepted_hosts)}) in '{name}'"
+            )
 
     # Non-empty (belt-and-suspenders after split, but defensive)
     if not project_part.strip():
@@ -388,19 +445,24 @@ _DEFAULT_PROFILE_CACHE: dict[str, Any] | None = None
 
 
 def _default_profile() -> dict[str, Any]:
-    """Lazy singleton default profile (for callers without a project_root)."""
+    """Lazy singleton default profile (for callers without a project_root).
+
+    AIPOS-350F1: contains only prefix_mapping (no project/host — those have no
+    safe global default).  Callers use this for format-only validation.
+    """
     global _DEFAULT_PROFILE_CACHE
     if _DEFAULT_PROFILE_CACHE is None:
-        _DEFAULT_PROFILE_CACHE = default_naming_profile()
+        _DEFAULT_PROFILE_CACHE = default_naming_profile()  # no project_root → no project/host
     return _DEFAULT_PROFILE_CACHE
 
 
 def validate_instance_name_default(name: str, role: str) -> tuple[bool, str | None]:
     """Validate using the default naming profile (no project_root needed).
 
-    This is the drop-in replacement for the old hardcoded validate_instance_name.
-    It uses default_naming_profile() which matches current Lybra conventions.
-    For workspace-aware validation (with aliases), use validate_instance_name_with_profile().
+    AIPOS-350F1: format-only validation (3-part structure, prefix match, project
+    part is not a role name).  Does NOT check project/host values — there are no
+    hardcoded defaults.  For workspace-aware validation (with aliases and specific
+    project/host values), use validate_instance_name_with_profile().
     """
     if not name or not name.strip():
         return False, "Instance name cannot be empty"
