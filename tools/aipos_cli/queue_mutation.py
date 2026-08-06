@@ -38,9 +38,11 @@ ALLOWED_TRANSITIONS = {
     "claim": ("pending", "claimed"),
     "block": ("claimed", "blocked"),
     "complete": ("claimed", "completed"),
-    "reopen": ("blocked", "pending"),
+    "reopen": ("*", "pending"),  # AIPOS-348: accept blocked or completed (correction path)
     "withdraw": ("*", "withdrawn"),  # AIPOS-315: can withdraw from pending or claimed
 }
+# AIPOS-348: reopen source states (explicit allowlist for "*" transitions)
+REOPEN_SOURCE_STATES = ("blocked", "completed")
 FRONTMATTER_ORDER = [
     "task_id",
     "title",
@@ -254,6 +256,12 @@ def _prepare_reopen(metadata: dict[str, Any], actor: str, timestamp: str, reason
     updated["needs_owner"] = False
     updated.pop("active_session_id", None)
     updated.pop("claim_id", None)
+    # AIPOS-348: when reopening from completed, clear completion fields (preserve history)
+    updated.pop("completed_by", None)
+    updated.pop("completed_at", None)
+    updated.pop("blocked_by", None)
+    updated.pop("blocked_at", None)
+    updated.pop("block_reason", None)
     return updated
 
 
@@ -470,6 +478,29 @@ def _prepare_records_plan(
     return result
 
 
+def _check_for_pass_audit_verdict(repo_root: Path, task_id: str) -> bool:
+    """AIPOS-348: check if a task has at least one PASS audit verdict in records.
+
+    Scans 5_tasks/records/audit_verdicts/<task_id>/ for verdict records with verdict: PASS.
+    Returns True if at least one PASS verdict exists.
+    """
+    if not task_id:
+        return False
+    verdicts_dir = repo_root / "5_tasks" / "records" / "audit_verdicts" / task_id
+    if not verdicts_dir.is_dir():
+        return False
+    for verdict_file in verdicts_dir.glob("*.md"):
+        try:
+            text = verdict_file.read_text(encoding="utf-8")
+            metadata, _, _ = parse_markdown_frontmatter(text)
+            verdict_value = str(metadata.get("verdict") or "").strip().upper()
+            if verdict_value == "PASS":
+                return True
+        except (OSError, UnicodeDecodeError):
+            continue
+    return False
+
+
 def mutate_queue_task(
     repo_root: Path,
     action: str,
@@ -504,6 +535,14 @@ def mutate_queue_task(
         if actual_state not in ("pending", "claimed"):
             raise ValueError(f"withdraw only supports pending or claimed tasks, found {actual_state}")
         from_state = actual_state
+    # AIPOS-348: reopen supports blocked and completed source states
+    if action == "reopen":
+        actual_state = source_task.get("queue_state")
+        if actual_state not in REOPEN_SOURCE_STATES:
+            # Don't raise; let the blocking_reasons path handle it for a clean BLOCK verdict
+            from_state = actual_state  # will fail the transition check below
+        else:
+            from_state = actual_state
     
     target_path = repo_root / QUEUE_STATE_DIRS[to_state] / source_path.name
     source_metadata, source_body, _warnings = _read_task_markdown(source_path)
@@ -533,8 +572,8 @@ def mutate_queue_task(
     result["classification_warnings"].extend(validation.get("classification_warnings", []))
     needs_owner_reasons: list[str] = []
 
-    # AIPOS-315: withdraw has flexible from_state, skip this check
-    if action != "withdraw":
+    # AIPOS-315/348: withdraw and reopen have flexible from_state, skip this check
+    if action not in ("withdraw", "reopen"):
         if source_task.get("queue_state") != from_state:
             result["blocking_reasons"].append(
                 f"Invalid transition for {action}: expected source state {from_state}, found {source_task.get('queue_state')}"
@@ -542,6 +581,18 @@ def mutate_queue_task(
         if source_task.get("frontmatter_status") != from_state:
             result["blocking_reasons"].append(
                 f"Directory/status mismatch blocks {action}: expected frontmatter status {from_state}"
+            )
+    # AIPOS-348: reopen from completed/blocked needs frontmatter/status consistency + source state check
+    if action == "reopen":
+        actual_state = source_task.get("queue_state")
+        if actual_state not in REOPEN_SOURCE_STATES:
+            result["blocking_reasons"].append(
+                f"Invalid transition for reopen: expected source state in {REOPEN_SOURCE_STATES}, found {actual_state}"
+            )
+        fm_status = source_task.get("frontmatter_status")
+        if fm_status and fm_status != actual_state:
+            result["blocking_reasons"].append(
+                f"Directory/status mismatch blocks reopen: queue_state={actual_state} but frontmatter status={fm_status}"
             )
 
     claimed_by = str(source_metadata.get("claimed_by") or "")
@@ -552,6 +603,19 @@ def mutate_queue_task(
     )
     if action in {"block", "complete"} and not claimed_actor_matches:
         result["blocking_reasons"].append("Task is claimed by another actor")
+
+    # AIPOS-348: audit gate — complete requires PASS verdict when audit: required
+    if action == "complete":
+        audit_requirement = str(source_metadata.get("audit") or "").strip().lower()
+        if audit_requirement == "required":
+            resolved_task_id = str(source_metadata.get("task_id") or "")
+            has_pass_verdict = _check_for_pass_audit_verdict(repo_root, resolved_task_id)
+            if not has_pass_verdict:
+                result["blocking_reasons"].append(
+                    f"Task {resolved_task_id} has audit: required but no PASS audit verdict found. "
+                    f"Cannot complete without a passing audit. "
+                    f"Required path: return \u2192 audit dispatch \u2192 audit verdict (PASS) \u2192 then complete."
+                )
 
     pending_collision = find_case_insensitive_path_collision(target_path.parent, target_path.name)
     if pending_collision is not None:

@@ -431,10 +431,13 @@ class QueueMutationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reason is required"):
             mutate_queue_task(self.repo_root, "reopen", task_id="AIPOS-31-REOPEN-REASON", actor="dev.codex.local", reason=" ", dry_run=True)
 
-    def test_reopen_rejects_completed_source(self) -> None:
+    def test_reopen_accepts_completed_source_aipos348(self) -> None:
+        # AIPOS-348: reopen from completed is now allowed (correction path)
         self.write_task("AIPOS-31-REOPEN-COMPLETED", queue_state="completed", completed_by="dev.codex.local", completed_at="2026-04-30T00:00:00Z", last_session_id="session_AIPOS-31-REOPEN-COMPLETED_1_dev")
-        result = mutate_queue_task(self.repo_root, "reopen", task_id="AIPOS-31-REOPEN-COMPLETED", actor="dev.codex.local", reason="Nope", dry_run=True)
-        self.assertEqual(result["verdict"], "BLOCK")
+        result = mutate_queue_task(self.repo_root, "reopen", task_id="AIPOS-31-REOPEN-COMPLETED", actor="dev.codex.local", reason="Incorrect completion", dry_run=True)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["from_state"], "completed")
+        self.assertEqual(result["to_state"], "pending")
 
     def test_path_traversal_outside_queue_non_markdown_and_missing_file_are_rejected(self) -> None:
         self.write_file("outside.md", "x")
