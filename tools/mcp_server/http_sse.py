@@ -110,7 +110,7 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
         return None, _structured_error(
             "INVALID_BEARER_TOKEN",
             "Bearer token did not match a configured local service role token.",
-            "Use a token from .lybra/local/connection.json for the intended local role, or run `lybra serve status` to inspect redacted refs.",
+            "Use a token from .lybra/connection.json for the intended local role, or run `lybra serve status` to inspect redacted refs.",
             doc_ref="AIPOS-189 Service Mode v0 Protocol",
         )
     expires_at = str(entry.get("expires_at") or "2999-01-01T00:00:00Z")

@@ -30,7 +30,7 @@ from urllib.parse import urlparse
 
 
 
-DEFAULT_CONNECTION_JSON = "~/.lybra/local/connection.json"
+DEFAULT_CONNECTION_JSON = "~/.lybra/agent_credentials.json"
 DEFAULT_BOARD_HOST = "127.0.0.1"
 DEFAULT_BOARD_PORT = 7117
 _HTTP_TIMEOUT = 8  # loopback,失败要快

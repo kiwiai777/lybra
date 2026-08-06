@@ -3406,16 +3406,16 @@ def _token_fingerprint(token: str) -> str:
 def _discover_connection_paths(repo_root: Path | None = None, board_config_path: Path | None = None) -> list[Path]:
     """发现用于校验登录 token 的 connection.json。
 
-    AIPOS-272 FIX-2: 首选 board 启动参数 repo_root 自身的 .lybra/connection.json,
-    次选全局 ~/.lybra/local/connection.json(单机默认工作区场景)。
+    AIPOS-349: 首选 board 启动参数 repo_root 自身的 .lybra/connection.json(唯一规范),
+    次选远端 agent 侧凭据 ~/.lybra/agent_credentials.json(仅 agent 侧读,工作区操作不回落)。
     不再枚举 .board_config.json 配置的其他工作区(部署路径不得入产品代码;避免跨工作区认证串门)。
     仅返回真实存在的文件,去重。"""
     candidates: list[Path] = []
     # 首选:board 启动时明确声明的工作区
     if repo_root is not None:
         candidates.append(repo_root / ".lybra" / "connection.json")
-    # 次选:单机默认全局运行时
-    candidates.append(Path("~/.lybra/local/connection.json").expanduser())
+    # 次选:远端 agent 侧凭据(改名后,与工作区配置一眼可分)
+    candidates.append(Path("~/.lybra/agent_credentials.json").expanduser())
     seen: set[str] = set()
     result: list[Path] = []
     for path in candidates:

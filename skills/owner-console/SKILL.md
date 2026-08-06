@@ -33,7 +33,7 @@ description: Lybra Owner 控制台（顾问 + 放行）。当你（作为 Owner 
 
 ## 一次性配置
 
-1. `serve rotate` 铸出含 owner 角色的 connection.json(默认 `~/.lybra/local/connection.json`,
+1. `serve rotate` 铸出含 owner 角色的 connection.json(默认 `<workspace>/.lybra/connection.json`,
    0600);owner token 从环境变量读,**永不上命令行/日志**。设权威环境变量:
    ```bash
    export LYBRA_MCP_TOKEN="$(<读出 owner 角色 token,例如从 connection.json 的 tokens[].token>)"

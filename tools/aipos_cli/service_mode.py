@@ -20,18 +20,15 @@ from tools.aipos_cli.workspace_config import DEFAULT_BOARD_HOST, DEFAULT_BOARD_P
 
 
 
-LOCAL_DIR_REL = Path(".lybra") / "local"
+LOCAL_DIR_REL = Path(".lybra")
 CONNECTION_REL = LOCAL_DIR_REL / "connection.json"
 SERVICE_STATE_REL = LOCAL_DIR_REL / "service_state.json"
 
-# AIPOS-226 (Slice 2): the connection.json (role tokens, 0600) now defaults to the GLOBAL
-# Lybra runtime root (~/.lybra/local/) so tokens are never committed into a user truth repo.
-# This is ★A1-adjacent: ONLY the file LOCATION changes — token minting/scopes/ROLE_SPECS are
-# unchanged. `--connection-json` still overrides; the workspace-local path stays honored for
-# legacy reads (TUI fallback).
+# AIPOS-349: the only workspace connection config is <workspace>/.lybra/connection.json.
+# The global agent-side credential (~/.lybra/agent_credentials.json) is reserved for
+# remote agent-side single-role credentials only — workspace operations never fall back to it.
 RUNTIME_ROOT = Path("~/.lybra")
-RUNTIME_LOCAL_REL = Path("local")
-RUNTIME_CONNECTION_REL = RUNTIME_LOCAL_REL / "connection.json"
+RUNTIME_CONNECTION_REL = Path("agent_credentials.json")
 WORKSPACE_GITIGNORE_REL = Path(".gitignore")
 REQUIRED_LOCAL_DIR_MODE = 0o700
 REQUIRED_CONNECTION_MODE = 0o600
@@ -189,8 +186,10 @@ def _permission_issue(path: Path, required_mode: int, *, target_label: str, seve
 
 
 def runtime_connection_path(env: dict[str, str] | None = None) -> Path:
-    """The default connection.json location: ~/.lybra/local/connection.json.
+    """Remote agent-side credential path: ~/.lybra/agent_credentials.json.
 
+    AIPOS-349: this file is for remote agent-side single-role credentials only —
+    workspace operations never fall back to it.
     Honors $HOME (via expanduser) so tests can patch HOME to a temp dir."""
     if env is not None:
         home = str(env.get("HOME") or "").strip()
@@ -202,12 +201,9 @@ def runtime_connection_path(env: dict[str, str] | None = None) -> Path:
 def _resolve_connection_target(workspace_root: Path, connection_target: Path | None) -> Path:
     """Resolve the connection.json path.
 
-    AIPOS-226: when a `connection_target` is supplied it wins (override OR the runtime default
-    that the report functions thread through). When None this falls back to the LEGACY
-    in-workspace path (<workspace_root>/.lybra/local/connection.json) — the serve REPORT
-    functions (rotate/start/status/stop) default `connection_target` to the runtime root so the
-    user-facing default is ~/.lybra/local/, while the low-level writers keep their v1 contract
-    for direct callers (e.g. the scope-reachability fixture)."""
+    AIPOS-349: the only workspace connection config is <workspace_root>/.lybra/connection.json.
+    When `connection_target` is supplied it wins (override). When None, returns the canonical
+    workspace path. No fallback to any global/agent-side credential file."""
     if connection_target is not None:
         return Path(connection_target).expanduser()
     return workspace_root / CONNECTION_REL
@@ -280,7 +276,7 @@ def ensure_local_dir(workspace_root: Path, *, connection_target: Path | None = N
 
 def ensure_workspace_gitignore(workspace_root: Path) -> Path:
     gitignore = workspace_root / WORKSPACE_GITIGNORE_REL
-    entry = ".lybra/local/"
+    entry = ".lybra/connection.json"
     if gitignore.exists():
         text = gitignore.read_text(encoding="utf-8")
         lines = text.splitlines()
@@ -490,6 +486,11 @@ def write_connection_config(
 
 def load_connection_config(workspace_root: Path, *, connection_target: Path | None = None) -> dict[str, Any]:
     path = connection_path(workspace_root, connection_target=connection_target)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Workspace connection config not found at expected path: {path}. "
+            f"Run `lybra serve start --workspace-root <workspace>` to create it."
+        )
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"Lybra service connection config must be an object: {path}")
@@ -520,7 +521,7 @@ def redacted_connection(config: dict[str, Any]) -> dict[str, Any]:
         "board": config.get("board"),
         "mcp": config.get("mcp"),
         "tokens": safe_tokens,
-        "secrets_notice": "Raw tokens are not printed. Read ~/.lybra/local/connection.json only from trusted local clients.",
+        "secrets_notice": "Raw tokens are not printed. Read <workspace>/.lybra/connection.json only from trusted local clients.",
     }
 
 
@@ -582,14 +583,14 @@ def render_connection_table(report: dict[str, Any]) -> str:
         for reason in report["blocking_reasons"]:
             lines.append(f"- {reason.get('message')}")
             lines.append(f"  fix: {reason.get('fix_command')}")
-    runtime_loc = report.get("connection_path") or "~/.lybra/local/connection.json"
+    runtime_loc = report.get("connection_path") or "<workspace>/.lybra/connection.json"
     lines.extend(["", f"Local config: {runtime_loc}", "Raw tokens are not printed."])
     return "\n".join(lines)
 
 
 def status_report(workspace_root: Path, *, connection_target: Path | None = None) -> dict[str, Any]:
-    if connection_target is None:
-        connection_target = runtime_connection_path()
+    # AIPOS-349: default is workspace path (<workspace>/.lybra/connection.json) via _resolve_connection_target.
+    # No fallback to global agent-side credentials.
     warnings, blocking = [], []
     permission_blocks, permission_warnings = check_service_permissions(
         workspace_root, for_secret_use=False, connection_target=connection_target
@@ -650,8 +651,8 @@ def rotate_report(
     board_advertise_host: str | None = None,
     mcp_advertise_host: str | None = None,
 ) -> dict[str, Any]:
-    if connection_target is None:
-        connection_target = runtime_connection_path()
+    # AIPOS-349: default is workspace path (<workspace>/.lybra/connection.json) via _resolve_connection_target.
+    # No fallback to global agent-side credentials.
     blocking, warnings = check_service_permissions(
         workspace_root, for_secret_use=True, connection_target=connection_target
     )
@@ -737,7 +738,7 @@ def rotate_report(
         "connection": redacted_connection(config),
         "warnings": warnings,
         "blocking_reasons": [],
-        "secrets_notice": "Raw role tokens were written only to ~/.lybra/local/connection.json and are not printed.",
+        "secrets_notice": "Raw role tokens were written only to <workspace>/.lybra/connection.json and are not printed.",
     }
 
 
@@ -753,8 +754,8 @@ def start_report(
     board_advertise_host: str | None = None,
     mcp_advertise_host: str | None = None,
 ) -> dict[str, Any]:
-    if connection_target is None:
-        connection_target = runtime_connection_path()
+    # AIPOS-349: default is workspace path (<workspace>/.lybra/connection.json) via _resolve_connection_target.
+    # No fallback to global agent-side credentials.
     # AIPOS-258/259: --mcp-host/--board-host pass through to the child processes so the gate can
     # bind a tailnet address for cross-machine access. AIPOS-259 adds two fixes on top:
     #  (F-258-1) an explicit CLI host param now OVERRIDES a stored connection.json (the stored
@@ -820,7 +821,7 @@ def start_report(
             "service_state": None,
             "warnings": warnings,
             "blocking_reasons": [],
-            "secrets_notice": "Raw role tokens were written only to ~/.lybra/local/connection.json and are not printed.",
+            "secrets_notice": "Raw role tokens were written only to <workspace>/.lybra/connection.json and are not printed.",
         }
     return _run_supervisor(workspace_root, config, warnings=warnings, connection_target=connection_target)
 
@@ -1029,8 +1030,7 @@ def _write_service_state(
 
 
 def stop_report(workspace_root: Path, *, connection_target: Path | None = None) -> dict[str, Any]:
-    if connection_target is None:
-        connection_target = runtime_connection_path()
+    # AIPOS-349: default is workspace path via _resolve_connection_target. No fallback to global.
     path = service_state_path(workspace_root, connection_target=connection_target)
     warnings: list[dict[str, Any]] = []
     stopped: list[dict[str, Any]] = []

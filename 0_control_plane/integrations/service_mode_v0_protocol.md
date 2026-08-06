@@ -201,7 +201,7 @@ The implementation task must choose one form explicitly and test it. In either f
 Service mode writes a local connection config under the workspace:
 
 ```text
-.lybra/local/connection.json
+.lybra/connection.json
 ```
 
 Rules:
@@ -270,7 +270,7 @@ executor         queue_claim, queue_return       svc-executor           sha256:.
 owner-dispatch   audit_dispatch                  svc-owner-dispatch     sha256:...
 auditor          queue_claim, audit_verdict      svc-auditor            sha256:...
 
-Local config: .lybra/local/connection.json
+Local config: .lybra/connection.json
 Raw tokens are not printed.
 ```
 
@@ -359,7 +359,7 @@ This requirement applies to future service-mode claim / return / audit-dispatch 
 Rules:
 
 - rotation creates new opaque role tokens;
-- rotation updates the server-side token registry and `.lybra/local/connection.json`;
+- rotation updates the server-side token registry and `.lybra/connection.json`;
 - console output remains redacted;
 - old tokens become invalid after rotation unless a future implementation explicitly supports a grace window;
 - rotation does not rewrite historical records;
@@ -404,7 +404,7 @@ Security constraints:
 - no third-party API key management;
 - raw role tokens may exist only in gitignored local config;
 - raw role tokens are never printed to console, Board, logs, task cards, records, provenance, or git-tracked files;
-- anyone who can read `.lybra/local/connection.json` can use those local role scopes;
+- anyone who can read `.lybra/connection.json` can use those local role scopes;
 - file permissions must be checked and surfaced when unsafe;
 - cloud / team / multi-user MCP requires a separate security model and Owner gate.
 

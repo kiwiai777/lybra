@@ -83,7 +83,7 @@ class AiAuthoringTests(unittest.TestCase):
 
     @contextmanager
     def _gate(self) -> Iterator[str]:
-        registry = load_service_role_registry(self.repo_root / ".lybra" / "local" / "connection.json")
+        registry = load_service_role_registry(self.repo_root / ".lybra" / "connection.json")
         config = HttpSseConfig(host=DEFAULT_HTTP_HOST, port=0, token="", keepalive_seconds=0.01, max_keepalive_events=1, service_role_registry=registry)
         with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
             httpd = build_http_server(config)
@@ -96,7 +96,7 @@ class AiAuthoringTests(unittest.TestCase):
                 httpd.shutdown(); thread.join(timeout=2); httpd.server_close()
 
     def _copilot(self, url: str, llm: FakeLLM | None = None) -> CopilotSession:
-        cj = self.repo_root / ".lybra" / "local" / "connection.json"
+        cj = self.repo_root / ".lybra" / "connection.json"
         return CopilotSession.connect(url, llm=llm or FakeLLM(), project="lybra", connection_json=str(cj), role="copilot")
 
     def _all_files(self) -> set[str]:
@@ -112,9 +112,9 @@ class AiAuthoringTests(unittest.TestCase):
             self.assertTrue(proposal.conformant, proposal.blocking_reasons)
             self.assertEqual(proposal.blocking_reasons, [])
             # land via the owner session, then prove the gate accepts it (not SCOPE_DENIED / not BLOCK)
-            owner = TuiSession.connect(url, connection_json=str(self.repo_root / ".lybra/local/connection.json"), role="owner")
+            owner = TuiSession.connect(url, connection_json=str(self.repo_root / ".lybra/connection.json"), role="owner")
             owner.land_draft(proposal.content, workspace_root=str(self.repo_root), draft_rel_path=proposal.draft_rel_path)
-            otok = load_owner_token(connection_json=str(self.repo_root / ".lybra/local/connection.json"), role="owner")
+            otok = load_owner_token(connection_json=str(self.repo_root / ".lybra/connection.json"), role="owner")
             oc = GateClient(url, otok); oc.initialize()
             r = oc.call_tool("lybra_draft_publish_dry_run", {"path": proposal.draft_rel_path, "actor": "owner"})
         self.assertNotEqual(r.get("error_code"), "SCOPE_DENIED", r)

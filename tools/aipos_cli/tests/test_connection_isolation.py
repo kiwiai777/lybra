@@ -1,10 +1,10 @@
-"""AIPOS-327 S2: Test isolation - ensure tests never write to real ~/.lybra/
+"""AIPOS-327 S2 / AIPOS-349: Test isolation - ensure tests never write to real ~/.lybra/
 
 Regression test for the bug where test fixtures polluted the real user connection.json
 with temporary workspace paths (e.g., /tmp/pytest-of-kiwi/pytest-7/...).
 
 This test runs the full test suite and asserts that:
-1. Real ~/.lybra/local/connection.json is not modified (if it exists)
+1. Real ~/.lybra/agent_credentials.json is not modified (if it exists)
 2. No test writes to the real user HOME directory
 """
 from __future__ import annotations
@@ -21,13 +21,13 @@ class ConnectionIsolationTests(unittest.TestCase):
     """Verify that test suite does not pollute real ~/.lybra/ directory."""
     
     def test_test_suite_does_not_modify_real_connection_json(self) -> None:
-        """Regression test: running tests should not modify ~/.lybra/local/connection.json.
+        """Regression test: running tests should not modify ~/.lybra/agent_credentials.json.
         
         AIPOS-327 context: A test fixture wrote workspace_root=/tmp/pytest-of-kiwi/... to
         the real user connection.json, causing `lybra serve status` to report a fake workspace.
         """
         real_home = Path.home()
-        real_connection = real_home / ".lybra" / "local" / "connection.json"
+        real_connection = real_home / ".lybra" / "agent_credentials.json"
         
         # Capture state before test (if exists)
         before_exists = real_connection.exists()
@@ -72,12 +72,12 @@ class ConnectionIsolationTests(unittest.TestCase):
             )
     
     def test_connection_json_workspace_root_points_to_real_workspace(self) -> None:
-        """If ~/.lybra/local/connection.json exists, its workspace_root should be a real directory.
+        """If ~/.lybra/agent_credentials.json exists, its workspace_root should be a real directory.
         
         This catches the pollution case where workspace_root=/tmp/pytest-of-kiwi/... (already deleted).
         """
         real_home = Path.home()
-        real_connection = real_home / ".lybra" / "local" / "connection.json"
+        real_connection = real_home / ".lybra" / "agent_credentials.json"
         
         if not real_connection.exists():
             self.skipTest("No real connection.json exists, nothing to check")

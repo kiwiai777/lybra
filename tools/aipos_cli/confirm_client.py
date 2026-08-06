@@ -310,7 +310,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--gate-url", required=True, help="e.g. http://127.0.0.1:7118")
     src = parser.add_mutually_exclusive_group(required=True)
-    src.add_argument("--connection-json", help="path to .lybra/local/connection.json (token read by role)")
+    src.add_argument("--connection-json", help="path to .lybra/connection.json (token read by role)")
     src.add_argument("--token-env", help="env var holding the owner bearer token")
     parser.add_argument("--role", default="owner", help="role to read from connection.json (default owner)")
     parser.add_argument("--owner-policy-ref", default="owner_policy:supervised", help="owner_policy_ref for a claim preview")

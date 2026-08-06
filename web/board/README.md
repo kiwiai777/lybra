@@ -38,7 +38,7 @@ Open:
 
 The Board is gated behind a session cookie (AIPOS-270). Three ways to log in;
 all share the same identity root — **file-system access to
-`.lybra/local/connection.json`** is the workspace owner. Raw tokens never enter
+`.lybra/connection.json`** is the workspace owner. Raw tokens never enter
 cookies or logs.
 
 1. **Token paste** (fallback, AIPOS-270): paste any role token on `/login`; the

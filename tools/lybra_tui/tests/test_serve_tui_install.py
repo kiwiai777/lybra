@@ -39,15 +39,15 @@ class ServeTuiInstallTests(unittest.TestCase):
         conn.write_text("{}", encoding="utf-8")
         self.assertEqual(default_connection_json(str(self.root)), str(conn))
 
-    def test_default_connection_json_prefers_runtime_root(self) -> None:
-        # runtime root wins over the in-workspace legacy path
-        runtime = self.fake_home / ".lybra" / "local" / "connection.json"
+    def test_default_connection_json_prefers_workspace_over_agent_credential(self) -> None:
+        """AIPOS-349: workspace path wins over the global agent credential."""
+        runtime = self.fake_home / ".lybra" / "agent_credentials.json"
         runtime.parent.mkdir(parents=True, exist_ok=True)
         runtime.write_text("{}", encoding="utf-8")
         ws_conn = self.root / CONNECTION_REL
         ws_conn.parent.mkdir(parents=True, exist_ok=True)
         ws_conn.write_text("{}", encoding="utf-8")
-        self.assertEqual(default_connection_json(str(self.root)), str(runtime))
+        self.assertEqual(default_connection_json(str(self.root)), str(ws_conn))
 
     def test_default_connection_json_absent(self) -> None:
         self.assertIsNone(default_connection_json(str(self.root)))

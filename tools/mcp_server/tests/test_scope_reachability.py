@@ -150,7 +150,7 @@ class ScopeReachabilityTests(unittest.TestCase):
     # --- T2: draft_publish reachable by owner via REAL rotate creds ---
     def test_owner_draft_publish_reachable(self) -> None:
         config = self._real_rotate_config()
-        registry = load_service_role_registry(self.repo_root / ".lybra" / "local" / "connection.json")
+        registry = load_service_role_registry(self.repo_root / ".lybra" / "connection.json")
         owner_token = next(t["token"] for t in config["tokens"] if t["role"] == "owner")
         with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
             with self._gate(service_role_registry=registry) as url:
@@ -161,7 +161,7 @@ class ScopeReachabilityTests(unittest.TestCase):
     # --- T2b (AIPOS-250): owner_decision_record reachable by owner via REAL rotate creds ---
     def test_owner_decision_record_reachable(self) -> None:
         config = self._real_rotate_config()
-        registry = load_service_role_registry(self.repo_root / ".lybra" / "local" / "connection.json")
+        registry = load_service_role_registry(self.repo_root / ".lybra" / "connection.json")
         owner_token = next(t["token"] for t in config["tokens"] if t["role"] == "owner")
         with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
             with self._gate(service_role_registry=registry) as url:
@@ -173,7 +173,7 @@ class ScopeReachabilityTests(unittest.TestCase):
     def test_owner_decision_record_denied_for_executor(self) -> None:
         # ★A1 boundary: owner_decision_record stays Owner-only — executor/planner cannot arm a policy.
         config = self._real_rotate_config()
-        registry = load_service_role_registry(self.repo_root / ".lybra" / "local" / "connection.json")
+        registry = load_service_role_registry(self.repo_root / ".lybra" / "connection.json")
         tokens = {t["role"]: t["token"] for t in config["tokens"]}
         with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
             with self._gate(service_role_registry=registry) as url:
@@ -185,7 +185,7 @@ class ScopeReachabilityTests(unittest.TestCase):
     # --- T3: ★A1 not weakened — executor/copilot draft_publish denied via REAL rotate creds ---
     def test_executor_and_copilot_draft_publish_denied(self) -> None:
         config = self._real_rotate_config()
-        registry = load_service_role_registry(self.repo_root / ".lybra" / "local" / "connection.json")
+        registry = load_service_role_registry(self.repo_root / ".lybra" / "connection.json")
         tokens = {t["role"]: t["token"] for t in config["tokens"]}
         with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root)}, clear=True):
             with self._gate(service_role_registry=registry) as url:

@@ -13,7 +13,7 @@ ephemeral. It does not schedule, poll, heartbeat, daemonize, or auto-restart.
 - `docker` available; a worker image that contains the Claude Code CLI (`claude`)
   and Node. Build/select it explicitly; the tool uses `--pull never`.
 - A Lybra service-mode `connection.json` with role tokens (executor / auditor /
-  owner-dispatch). Default location: `.lybra/local/connection.json`.
+  owner-dispatch). Default location: `.lybra/connection.json`.
 - `ANTHROPIC_API_KEY` exported in the operator shell (passed to docker by env
   passthrough; its value never appears in argv, projection, scratch, or report).
 
@@ -38,7 +38,7 @@ without changing service_mode:
 ```bash
 PYTHONPATH=$PWD python -m tools.mcp_server serve-http \
   --host "$GATE_IP" --port 7118 \
-  --service-connection-json .lybra/local/connection.json
+  --service-connection-json .lybra/connection.json
 ```
 
 Verify it is NOT listening on a public address (only on `$GATE_IP`):
@@ -65,7 +65,7 @@ host gate validates it inside `LYBRA_APPROVED_SCRATCH_ROOT` and ingests it.
 PYTHONPATH=$PWD python -m tools.sandbox_runtime.confined_worker \
   --image lybra/claude-worker:local \
   --task-id AIPOS-XXX \
-  --connection-json .lybra/local/connection.json \
+  --connection-json .lybra/connection.json \
   --approved-scratch-root "$LYBRA_APPROVED_SCRATCH_ROOT" \
   --network lybra-worker-net --gate-url "http://$GATE_IP:7118/mcp" --gate-ip "$GATE_IP" \
   --tmp-root /srv/lybra/worker_tmp \
@@ -75,7 +75,7 @@ PYTHONPATH=$PWD python -m tools.sandbox_runtime.confined_worker \
 # Real one-shot run (drop --dry-run):
 PYTHONPATH=$PWD python -m tools.sandbox_runtime.confined_worker \
   --image lybra/claude-worker:local --task-id AIPOS-XXX \
-  --connection-json .lybra/local/connection.json \
+  --connection-json .lybra/connection.json \
   --approved-scratch-root "$LYBRA_APPROVED_SCRATCH_ROOT" \
   --network lybra-worker-net --gate-url "http://$GATE_IP:7118/mcp" --gate-ip "$GATE_IP" \
   --tmp-root /srv/lybra/worker_tmp \

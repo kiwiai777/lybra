@@ -41,7 +41,7 @@ Queries the gate for claimable tasks. Requires `--actor`, `--connection-json` or
 
 ```bash
 lybra agent watch --gate-url http://127.0.0.1:7118 --actor advisor.{{ project_id }}.local \
-  --connection-json .lybra/local/connection.json [options]
+  --connection-json .lybra/connection.json [options]
 ```
 
 **Exit codes:** Same as filesystem pump (0/2/3/4).
@@ -104,7 +104,7 @@ Before launching an agent, run `launch-check` to validate the environment and ga
 ```bash
 lybra agent launch-check \
   --actor advisor.{{ project_id }}.local \
-  --connection-json .lybra/local/connection.json \
+  --connection-json .lybra/connection.json \
   --gate-url http://127.0.0.1:7118 \
   [--fix]
 ```
@@ -255,7 +255,7 @@ lybra agent spawn executor "implement AIPOS-123"
 ```bash
 # Pre-flight check
 lybra agent launch-check --actor advisor.{{ project_id }}.local \
-  --connection-json .lybra/local/connection.json \
+  --connection-json .lybra/connection.json \
   --gate-url http://127.0.0.1:7118
 
 # Only spawn if launch-check exits 0

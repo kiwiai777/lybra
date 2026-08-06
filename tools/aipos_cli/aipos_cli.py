@@ -1048,7 +1048,7 @@ def build_parser() -> argparse.ArgumentParser:
     _board_start_parser.add_argument("--port", type=int, help="Bind port; defaults to 7117")
     board_open_parser = board_sub.add_parser("open", help="AIPOS-271: open the Board in the browser with a one-time ticket (no token pasting)")
     board_open_parser.add_argument("--workspace-root", help="Workspace root for auto-discovery; defaults to current directory or env")
-    board_open_parser.add_argument("--connection-json", help="Override the connection.json path (default ~/.lybra/local/connection.json)")
+    board_open_parser.add_argument("--connection-json", help="Override the connection.json path (default <workspace>/.lybra/connection.json)")
     board_open_parser.add_argument("--role", help="Role token to read from connection.json; default prefers owner then first available")
     board_open_parser.add_argument("--url", help="Board server base URL; overrides connection.json board.url")
     board_open_parser.add_argument("--host", help="Board server host; overrides connection.json")
@@ -1057,7 +1057,7 @@ def build_parser() -> argparse.ArgumentParser:
     board_approve_parser = board_sub.add_parser("approve", help="AIPOS-271: approve a cross-machine device code (run on the gate machine)")
     board_approve_parser.add_argument("code", help="6-digit device code shown in the remote browser")
     board_approve_parser.add_argument("--workspace-root", help="Workspace root for auto-discovery; defaults to current directory or env")
-    board_approve_parser.add_argument("--connection-json", help="Override the connection.json path (default ~/.lybra/local/connection.json)")
+    board_approve_parser.add_argument("--connection-json", help="Override the connection.json path (default <workspace>/.lybra/connection.json)")
     board_approve_parser.add_argument("--role", help="Role token to read from connection.json; default prefers owner then first available")
     board_approve_parser.add_argument("--url", help="Board server base URL; overrides connection.json board.url")
     board_approve_parser.add_argument("--host", help="Board server host; overrides connection.json")
@@ -1067,7 +1067,7 @@ def build_parser() -> argparse.ArgumentParser:
     # in tools/lybra_tui (the tui extra); this CLI stays stdlib/zero-dep and lazy-imports it.
     tui_parser = subparsers.add_parser("tui", help="Launch the Lybra TUI client (requires the TUI extra: pip install textual)")
     tui_parser.add_argument("--gate-url", required=True, help="Owner-started gate, e.g. http://127.0.0.1:7118")
-    tui_parser.add_argument("--connection-json", help="Path to .lybra/local/connection.json (token read by role)")
+    tui_parser.add_argument("--connection-json", help="Path to .lybra/connection.json (token read by role)")
     tui_parser.add_argument("--token-env", help="Env var holding the owner bearer token")
     tui_parser.add_argument("--role", default="owner", help="Role to read from connection.json; defaults to owner")
     # AIPOS-206: read-only planning copilot (DG-11). Enabled only when an LLM config is given.
@@ -1259,9 +1259,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_parser = subparsers.add_parser("serve", help="Start and inspect local Lybra gate service mode")
     serve_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
-    # AIPOS-226: connection.json defaults to the global runtime root ~/.lybra/local/connection.json
-    # (tokens never enter a truth repo). --connection-json overrides the location.
-    serve_parser.add_argument("--connection-json", help="Override the connection.json path (default ~/.lybra/local/connection.json)")
+    # AIPOS-349: connection.json defaults to <workspace>/.lybra/connection.json (workspace-scoped).
+    # --connection-json overrides the location.
+    serve_parser.add_argument("--connection-json", help="Override the connection.json path (default <workspace>/.lybra/connection.json)")
     serve_subparsers = serve_parser.add_subparsers(dest="serve_command")
     serve_start_parser = serve_subparsers.add_parser("start", help="Start Board and MCP gate surfaces in foreground")
     serve_start_parser.add_argument("--board-host", default=None, help="Board BIND host (AIPOS-258: passed through to web.board.app --host). Default 127.0.0.1; AIPOS-259: when given, overrides a stored connection.json and is written back.")
@@ -1791,7 +1791,7 @@ def main(argv: list[str] | None = None) -> int:
                 if collaboration_profile:
                     print(f"collaboration_profile: {collaboration_profile}")
                 print(f"next: lybra serve with LYBRA_HOME_ROOT={home}")
-                print("tokens: lybra serve writes ~/.lybra/local/connection.json (runtime root)")
+                print("tokens: lybra serve writes <workspace>/.lybra/connection.json")
                 return 0
             if args.project_command == "set-repo":
                 root = set_project_repo(

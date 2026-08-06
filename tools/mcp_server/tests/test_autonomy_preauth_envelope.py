@@ -729,7 +729,7 @@ class PreAuthEnvelopeRealRotateEndToEndTests(unittest.TestCase):
             self.repo_root, board_host="127.0.0.1", board_port=7117, mcp_host="127.0.0.1", mcp_port=7118, executor_instance="exec.cc.local"
         )
         write_connection_config(self.repo_root, config)
-        registry = load_service_role_registry(self.repo_root / ".lybra" / "local" / "connection.json")
+        registry = load_service_role_registry(self.repo_root / ".lybra" / "connection.json")
         tokens = {t["role"]: t["token"] for t in config["tokens"]}
 
         # EXACT minimal payload shape from the owner-console SKILL (decision_id + autonomy_policy only).

@@ -19,7 +19,7 @@ Claude Code 的斜杠命令严格按已注册命令名解析,本 skill 的可调
 
 1. Owner 已在本机跑 `lybra serve`(gate,非 daemon,Owner 显式启停)。
 2. 你有 executor 角色 token:环境变量 `LYBRA_MCP_TOKEN` 或 connection.json
-   (默认 `~/.lybra/local/connection.json`;token 永远不出现在命令行/日志里)。
+   (默认 `<workspace>/.lybra/connection.json`;token 永远不出现在命令行/日志里)。
    (**F-249-o3-1**:token 环境变量名统一为 `LYBRA_MCP_TOKEN`——三角色都用这个名,本会话
    设 executor token 值;旧文档的 `LYBRA_EXEC_TOKEN` 已废。)
 3. 你知道自己的 actor 名(与任务卡 `assigned_to`/`agent_instance` 对得上——
@@ -28,7 +28,7 @@ Claude Code 的斜杠命令严格按已注册命令名解析,本 skill 的可调
 
 ```bash
 lybra agent fetch --gate-url http://127.0.0.1:7118 \
-  --connection-json ~/.lybra/local/connection.json \
+  --connection-json <workspace>/.lybra/connection.json \
   --role executor --actor <你的 actor 名>
 ```
 
@@ -57,7 +57,7 @@ claude mcp add lybra --transport http http://127.0.0.1:7118/mcp \
 
 ```bash
 lybra agent watch --gate-url http://127.0.0.1:7118 \
-  --connection-json ~/.lybra/local/connection.json \
+  --connection-json <workspace>/.lybra/connection.json \
   --role executor --actor <你> --interval 60 --max-wait 1800
 ```
 

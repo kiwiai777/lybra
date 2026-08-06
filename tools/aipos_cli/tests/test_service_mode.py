@@ -101,8 +101,8 @@ class ServiceModeTests(unittest.TestCase):
         self.root = Path(self.temp_dir.name) / "workspace"
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
-        # AIPOS-226: the connection.json default is now the global runtime root
-        # (~/.lybra/local/connection.json). To keep these existing assertions (which check the
+        # AIPOS-349: the connection.json default is now the workspace path
+        # (<workspace>/.lybra/connection.json). To keep these existing assertions (which check the
         # connection path / 0600 / gitignore relative to self.root) meaningful AND isolated from
         # the real ~/.lybra, point the runtime default at self.root for this class.
         self._rt_patcher = patch(
@@ -131,7 +131,7 @@ class ServiceModeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(_mode(self.root / LOCAL_DIR_REL), REQUIRED_LOCAL_DIR_MODE)
         self.assertEqual(_mode(self.root / CONNECTION_REL), REQUIRED_CONNECTION_MODE)
-        self.assertIn(".lybra/local/", (self.root / ".gitignore").read_text(encoding="utf-8"))
+        self.assertIn(".lybra/connection.json", (self.root / ".gitignore").read_text(encoding="utf-8"))
         for token in config["tokens"]:
             self.assertNotIn(token["token"], raw)
             self.assertNotIn(token["token"], rendered)
@@ -788,7 +788,8 @@ class ConnectionLocationTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_rotate_writes_to_runtime_root_not_truth_home(self) -> None:
+    def test_rotate_writes_to_workspace_not_runtime_root(self) -> None:
+        """AIPOS-349: rotate writes to <workspace>/.lybra/connection.json, NOT the global agent credential."""
         from tools.aipos_cli.service_mode import runtime_connection_path
 
         with patch.dict(os.environ, {"HOME": str(self.fake_home)}, clear=True):
@@ -798,13 +799,12 @@ class ConnectionLocationTests(unittest.TestCase):
             runtime = runtime_connection_path()
 
         self.assertEqual(result["verdict"], "PASS")
-        # tokens landed in ~/.lybra/local/connection.json (runtime root)
-        self.assertEqual(runtime, self.fake_home / ".lybra" / "local" / "connection.json")
-        self.assertTrue(runtime.is_file())
-        self.assertEqual(_mode(runtime), REQUIRED_CONNECTION_MODE)
-        # NOT under the truth home
-        self.assertFalse((self.truth_home / CONNECTION_REL).exists())
-        self.assertFalse((self.truth_home / ".lybra" / "local").exists())
+        # tokens landed in <workspace>/.lybra/connection.json (workspace path)
+        ws_conn = self.truth_home / CONNECTION_REL
+        self.assertTrue(ws_conn.is_file())
+        self.assertEqual(_mode(ws_conn), REQUIRED_CONNECTION_MODE)
+        # global agent credential NOT touched by workspace operation
+        self.assertFalse(runtime.is_file())
 
     def test_connection_json_override_still_works(self) -> None:
         target = self.base / "custom" / "conn.json"
@@ -821,7 +821,7 @@ class ConnectionLocationTests(unittest.TestCase):
         self.assertTrue(target.is_file())
         self.assertEqual(_mode(target), REQUIRED_CONNECTION_MODE)
         # runtime root untouched when overridden
-        self.assertFalse((self.fake_home / ".lybra" / "local" / "connection.json").exists())
+        self.assertFalse((self.fake_home / ".lybra" / "agent_credentials.json").exists())
 
     def test_scopes_unchanged_after_location_move(self) -> None:
         # ★A1: scope contents per role are unchanged by the location move.

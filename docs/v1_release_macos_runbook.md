@@ -65,7 +65,7 @@ third-party blocked).
 ## R1 — serve (bare python)
 ```bash
 "$PREFIX/bin/lybra" serve --workspace-root "$WS" rotate --json   # mints executor/owner/copilot…
-stat -f '%Lp' "$WS/.lybra/local/connection.json"                 # expect 600
+stat -f '%Lp' "$WS/.lybra/connection.json"                       # expect 600
 "$PREFIX/bin/lybra" serve --workspace-root "$WS" start &         # gate on 127.0.0.1:7118
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7118/mcp -X POST -d '{}'   # 401 = up+auth
 ```
@@ -84,7 +84,7 @@ hallucinated fields / no secrets.
 ## R4 — gated publish **[Owner OOB]**
 With the card staged under `5_tasks/drafts/`, confirm with the owner token (read at runtime by role):
 ```bash
-PYTHONPATH="$PKG" "$LYBRA_PYTHON" - "$WS/.lybra/local/connection.json" 5_tasks/drafts/<card>.md <<'PY'
+PYTHONPATH="$PKG" "$LYBRA_PYTHON" - "$WS/.lybra/connection.json" 5_tasks/drafts/<card>.md <<'PY'
 import sys
 from tools.aipos_cli.confirm_client import GateClient, load_owner_token
 cj, draft = sys.argv[1], sys.argv[2]
@@ -168,10 +168,10 @@ acceptance-on-installed = isolation + A/B/C PASS, test-driven anchors `NO TESTS 
 ### N1 — dual-root + R2
 ```bash
 export LYBRA_HOME_ROOT=~/lybra-rg-mac-home        # truth home = project truth ONLY
-ls -la ~/.lybra ~/.lybra/local/connection.json    # config + token live here (NOT in the truth tree)
-stat -f '%Lp' ~/.lybra/local/connection.json      # expect 600
+ls -la ~/.lybra ~/.lybra/agent_credentials.json   # agent-side credential (NOT in the truth tree)
+stat -f '%Lp' ~/.lybra/agent_credentials.json     # expect 600
 # no secret leaks into the truth tree (grep the project truth for any token fingerprint → none):
-grep -rIl "$(shasum -a 256 ~/.lybra/local/connection.json | cut -c1-12)" "$LYBRA_HOME_ROOT" || echo "no secret in truth tree — OK"
+grep -rIl "$(shasum -a 256 ~/.lybra/agent_credentials.json | cut -c1-12)" "$LYBRA_HOME_ROOT" || echo "no secret in truth tree — OK"
 ```
 **Evidence:** config/token under `~/.lybra`; truth tree carries **no secret**; `600`.
 
@@ -197,7 +197,7 @@ invoke this — Owner-only.)
 ```bash
 "$PREFIX/bin/lybra" serve --workspace-root "$WS" rotate --project rgmac --json | \
   python3 -c "import sys,json;d=json.load(sys.stdin);print('projects_enforced=',d.get('projects_enforced'))"
-stat -f '%Lp' "$WS/.lybra/local/connection.json"   # 600; tokens fingerprint-only
+stat -f '%Lp' "$WS/.lybra/connection.json"         # 600; tokens fingerprint-only
 ```
 A call scoped to another project must return **`PROJECT_SCOPE_DENIED`** (enforcement, 19 gated / 0
 exempt). **Evidence:** `projects_enforced=True`; cross-project → denied; `600`.

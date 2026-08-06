@@ -126,7 +126,7 @@ The projection should be derived from the existing Context Pack path where pract
 
 The projection must explicitly exclude:
 
-- `.lybra/local/connection.json`;
+- `.lybra/connection.json`;
 - raw service-mode role tokens;
 - `5_tasks/records/**`;
 - other tasks' queue cards unless explicitly included as read-only context;
@@ -222,7 +222,7 @@ Forbidden in v0:
 - database credentials;
 - service account credentials;
 - raw service-mode tokens for other roles;
-- `.lybra/local/connection.json`;
+- `.lybra/connection.json`;
 - long-lived broad `.env` files.
 
 Role tokens and LLM keys must not be baked into images, written into the context projection, committed to git, persisted in records, copied into task cards, printed in logs, or surfaced in Board output.
