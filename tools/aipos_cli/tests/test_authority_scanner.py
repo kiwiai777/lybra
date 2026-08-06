@@ -17,6 +17,13 @@ class AuthorityScannerTests(unittest.TestCase):
         self.repo_root = Path(self.temp_dir.name)
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+        # AIPOS-344: inject active policy envelope so publish can resolve it (F-343-01 fix)
+        policies_dir = self.repo_root / "5_tasks" / "policies"
+        policies_dir.mkdir(parents=True, exist_ok=True)
+        (policies_dir / "pol_lybra_dev_7.md").write_text(
+            "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\nagent_or_role: exec\n---\n# Dev\n",
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
