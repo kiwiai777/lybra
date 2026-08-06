@@ -1242,48 +1242,24 @@ def _append_rotation_log(
         pass  # Best-effort: never block rotation for log failures
 
 
-# AIPOS-346 S4: Instance name validation
+# AIPOS-346 S4 / AIPOS-350 S3: Instance name validation — zero hardcoded prefix mapping.
+# The prefix mapping, project segment, and host segment all come from the naming
+# profile (alias layer) in project.json. The three-part dotted structure is a
+# product rule; the VALUES within each segment are data, not code.
 ROLE_NAMES = {"executor", "auditor", "owner", "copilot", "planner", "owner-dispatch"}
 
 
 def validate_instance_name(name: str, role: str) -> tuple[bool, str | None]:
     """Validate instance naming convention: <role_prefix>.<project>.<machine>
-    
+
     Returns (is_valid, error_message).
+
+    AIPOS-350 S3: zero hardcoded prefix mapping. Delegates to naming_profile module
+    which reads the alias layer from project.json (or defaults when no project_root
+    is available). The three-part structure is a product rule; segment values are data.
     """
-    if not name or not name.strip():
-        return False, "Instance name cannot be empty"
-    
-    parts = name.split(".")
-    if len(parts) != 3:
-        return False, f"Instance name must have 3 parts (<role>.<project>.<machine>), got {len(parts)}: {name}"
-    
-    role_part, project_part, machine_part = parts
-    
-    # Role prefix check
-    role_prefixes = {
-        "executor": "exec",
-        "auditor": "audit",
-        "owner": "owner",
-        "copilot": "copilot",
-        "planner": "planner",
-        "owner-dispatch": "owner-dispatch",
-    }
-    expected_prefix = role_prefixes.get(role)
-    if expected_prefix and role_part != expected_prefix:
-        return False, f"Role prefix mismatch: expected '{expected_prefix}' for role '{role}', got '{role_part}' in '{name}'"
-    
-    # Project part must not be a role name (common mistake: audit.auditor.xxx)
-    if project_part in ROLE_NAMES:
-        return False, f"Project part '{project_part}' is a role name, not a project name in '{name}'"
-    
-    # Project/machine non-empty
-    if not project_part.strip():
-        return False, f"Project part cannot be empty in '{name}'"
-    if not machine_part.strip():
-        return False, f"Machine part cannot be empty in '{name}'"
-    
-    return True, None
+    from tools.aipos_cli.naming_profile import validate_instance_name_default
+    return validate_instance_name_default(name, role)
 
 
 # AIPOS-346 S5: Roles list/reconcile

@@ -2633,6 +2633,111 @@ def lybra_gate_guidance(arguments: dict[str, Any] | None = None) -> dict[str, An
     })
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-350: Naming profile gate verbs
+# ---------------------------------------------------------------------------
+
+def lybra_naming_profile_get(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-350 S2: read the naming profile (alias layer) for the active workspace.
+
+    Returns the full naming profile: prefix_mapping, project_segment (+aliases),
+    host_segment (+aliases). Read-only; no scope required beyond basic gate access.
+    """
+    from tools.aipos_cli.naming_profile import get_naming_profile, generate_canonical_name
+    try:
+        profile = get_naming_profile(_repo_root())
+    except Exception as exc:
+        return _error_result(f"Failed to read naming profile: {exc}")
+    # Also generate canonical names for all known roles
+    generated = {}
+    for role in sorted(profile.get("prefix_mapping", {}).keys()):
+        try:
+            generated[role] = generate_canonical_name(role, _repo_root())
+        except ValueError:
+            pass
+    return _tool_result({
+        "ok": True,
+        "operation": "naming_profile_get",
+        "naming_profile": profile,
+        "generated_canonical_names": generated,
+    })
+
+
+def lybra_naming_profile_set(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-350 S2: modify the naming profile (alias layer).
+
+    Supports setting: prefix_mapping (single role->prefix), project_segment,
+    host_segment, and their aliases. All changes are append-only logged.
+    Requires owner scope (this is an Owner/advisor governance action).
+    """
+    from tools.aipos_cli.naming_profile import (
+        get_naming_profile,
+        set_prefix_mapping,
+        set_project_segment,
+        set_host_segment,
+        add_project_segment_alias,
+        add_host_segment_alias,
+    )
+    args = arguments or {}
+    actor = str(args.get("actor") or "").strip() or "owner"
+    reason = str(args.get("reason") or "").strip()
+    changes_made: list[dict[str, Any]] = []
+    root = _repo_root()
+    try:
+        # Set prefix for a role
+        if "prefix_role" in args and "prefix_value" in args:
+            role = str(args["prefix_role"]).strip()
+            prefix = str(args["prefix_value"]).strip()
+            set_prefix_mapping(root, role, prefix, by=actor, reason=reason)
+            changes_made.append({"action": "set_prefix", "role": role, "prefix": prefix})
+        # Set project segment
+        if "project_segment" in args:
+            aliases = args.get("project_segment_aliases")
+            if isinstance(aliases, list):
+                aliases = [str(a) for a in aliases]
+            else:
+                aliases = None
+            set_project_segment(root, str(args["project_segment"]), aliases=aliases, by=actor, reason=reason)
+            changes_made.append({"action": "set_project_segment", "value": args["project_segment"]})
+        # Set host segment
+        if "host_segment" in args:
+            aliases = args.get("host_segment_aliases")
+            if isinstance(aliases, list):
+                aliases = [str(a) for a in aliases]
+            else:
+                aliases = None
+            set_host_segment(root, str(args["host_segment"]), aliases=aliases, by=actor, reason=reason)
+            changes_made.append({"action": "set_host_segment", "value": args["host_segment"]})
+        # Add project segment alias
+        if "add_project_alias" in args:
+            add_project_segment_alias(root, str(args["add_project_alias"]), by=actor, reason=reason)
+            changes_made.append({"action": "add_project_alias", "alias": args["add_project_alias"]})
+        # Add host segment alias
+        if "add_host_alias" in args:
+            add_host_segment_alias(root, str(args["add_host_alias"]), by=actor, reason=reason)
+            changes_made.append({"action": "add_host_alias", "alias": args["add_host_alias"]})
+    except (ValueError, FileNotFoundError) as exc:
+        return _error_result(f"Naming profile update failed: {exc}")
+    if not changes_made:
+        return _error_result("No naming profile changes specified. Provide one of: prefix_role+prefix_value, project_segment, host_segment, add_project_alias, add_host_alias.")
+    # Return updated profile
+    from tools.aipos_cli.naming_profile import get_naming_profile as gnp, generate_canonical_name as gcn
+    updated = gnp(root)
+    generated = {}
+    for role in sorted(updated.get("prefix_mapping", {}).keys()):
+        try:
+            generated[role] = gcn(role, root)
+        except ValueError:
+            pass
+    return _tool_result({
+        "ok": True,
+        "operation": "naming_profile_set",
+        "changes": changes_made,
+        "naming_profile": updated,
+        "generated_canonical_names": generated,
+    })
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
@@ -2664,6 +2769,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_amend_confirm": lybra_queue_amend_confirm,
     "lybra_task_progress": lybra_task_progress,
     "lybra_gate_guidance": lybra_gate_guidance,
+    "lybra_naming_profile_get": lybra_naming_profile_get,
+    "lybra_naming_profile_set": lybra_naming_profile_set,
 }
 
 
@@ -2754,6 +2861,19 @@ READ_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "role": {"type": "string", "description": "Role requesting guidance (executor/auditor/advisor)."},
             },
             "required": ["task_id", "role"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_naming_profile_get",
+        "description": (
+            "AIPOS-350 S2: read the naming profile (alias layer) for the active workspace. "
+            "Returns prefix_mapping (role->prefix), project_segment (+aliases), host_segment (+aliases), "
+            "and pre-generated canonical names for all known roles. Read-only; no special scope required."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
             "additionalProperties": False,
         },
     },
@@ -3343,6 +3463,32 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "lybra_naming_profile_set",
+        "description": (
+            "AIPOS-350 S2: modify the naming profile (alias layer) for the active workspace. "
+            "Supports: set prefix for a role (prefix_role + prefix_value), set project_segment, "
+            "set host_segment, add project/host segment aliases. All changes are append-only logged "
+            "and take effect immediately. No code change needed to rename anything. "
+            "Returns the updated naming profile and regenerated canonical names."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "actor": {"type": "string", "description": "Who is making this change (for audit trail)."},
+                "reason": {"type": "string", "description": "Why this naming change is needed."},
+                "prefix_role": {"type": "string", "description": "Role name to set prefix for (e.g. 'planner')."},
+                "prefix_value": {"type": "string", "description": "New prefix value (e.g. 'advisor')."},
+                "project_segment": {"type": "string", "description": "New canonical project segment."},
+                "project_segment_aliases": {"type": "array", "items": {"type": "string"}, "description": "Aliases for project segment."},
+                "host_segment": {"type": "string", "description": "New canonical host segment."},
+                "host_segment_aliases": {"type": "array", "items": {"type": "string"}, "description": "Aliases for host segment."},
+                "add_project_alias": {"type": "string", "description": "Add a single project segment alias."},
+                "add_host_alias": {"type": "string", "description": "Add a single host segment alias."},
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -3386,6 +3532,8 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_amend"))
     if _task_progress_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_task_progress"))
+    # AIPOS-350: naming profile verbs are always visible (governance config, append-only logged)
+    descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_naming_profile"))
     return descriptors
 
 
