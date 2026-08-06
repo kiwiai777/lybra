@@ -30,6 +30,7 @@ def build_preview(
     actor: str | None,
     records: dict[str, Any] | None = None,
     profiles: dict[str, Any] | None = None,
+    include_body: bool = False,
 ) -> dict[str, Any]:
     metadata = task["metadata"]
     selected_actor = actor or metadata.get("assigned_to") or metadata.get("agent_instance") or "unknown_actor"
@@ -136,6 +137,7 @@ def build_preview(
         "active_session_id": metadata.get("active_session_id"),
         "last_session_id": metadata.get("last_session_id"),
         "claim_id": metadata.get("claim_id"),
+        **({"body_markdown": task.get("body", "")} if include_body else {}),
     }
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation

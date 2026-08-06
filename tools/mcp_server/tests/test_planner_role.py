@@ -1,15 +1,14 @@
-"""AIPOS-249 — planner token role + draft_submit write surface (gate-side, real HTTP gate).
+"""AIPOS-249 + AIPOS-342 — planner token role + draft_submit/draft_publish write surface (gate-side, real HTTP gate).
 
 Red lines pinned (card §1):
-- 红线2: planner token (scopes=[draft_submit]) is structurally SCOPE_DENIED on
-  claim/return/confirm/publish/audit — and leaves ZERO records on those attempts.
+- 红线2: planner token (scopes=[draft_submit, draft_publish]) is structurally SCOPE_DENIED on
+  claim/return/confirm(close)/audit — and leaves ZERO records on those attempts.
+  AIPOS-342 (甲案): planner gains draft_publish so the advisor can publish its own drafts
+  without the Owner manually running a publish command (Owner裁定 DL 05-10: publishing a card
+  is NOT a gate — the card lands in pending and waits for an agent to claim).
 - 红线1: draft_submit lands ONLY under 5_tasks/drafts/ — the path is DRAFTS_DIR +
   draft_slug(task_id) (constant dir + regex-locked slug); a caller passes no path and
   cannot escape drafts/ (`..`, absolute, separators are slugged away).
-- 红线2 (publish gate): a planner draft is a PROPOSAL — landing it into truth
-  (drafts -> queue/pending = draft_publish) is SCOPE_DENIED for the planner AND requires
-  owner_confirm, so only the Owner can publish. draft_submit confirm itself needs NO
-  owner_confirm (a draft is not truth).
 - R-2: lybra_task_preview surfaces existing_audit_verdicts (+ existing_returns) so the
   planner can read audit outcomes for round-end scoring via a read-only tool.
 - R-4: a task in the drafts zone is NOT claimable — only queue/pending is. Proven with a
@@ -38,7 +37,9 @@ def _registry() -> dict[str, dict[str, Any]]:
         "planner-secret": {
             "role": "planner",
             "token_ref": "svc-planner",
-            "scopes": ["draft_submit"],
+            # AIPOS-342 (甲案): planner gains draft_publish so the advisor can publish
+            # its own drafts without the Owner manually running a publish command.
+            "scopes": ["draft_submit", "draft_publish"],
             "expires_at": "2999-01-01T00:00:00Z",
             "fingerprint": "sha256:plfp249",
         },
@@ -82,6 +83,13 @@ class PlannerRoleGateTests(unittest.TestCase):
         self.repo_root = Path(self.temp_dir.name)
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+        # AIPOS-343: inject active policy so contract section can resolve envelopes
+        policies_dir = self.repo_root / "5_tasks" / "policies"
+        policies_dir.mkdir(parents=True, exist_ok=True)
+        (policies_dir / "pol_lybra_dev_7.md").write_text(
+            "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\nagent_or_role: exec\n---\n# Dev\n",
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -167,13 +175,13 @@ class PlannerRoleGateTests(unittest.TestCase):
     # --- 红线2: planner is SCOPE_DENIED on every non-draft-submit write, ZERO records ---
 
     def test_planner_denied_on_all_gated_writes_zero_records(self) -> None:
+        # AIPOS-342 (甲案): draft_publish removed from denials — planner now has that scope.
+        # Planner still denied on claim/return/audit/owner_decision_record.
         denials = [
             ("lybra_queue_claim_dry_run", {"task_id": "X", "actor": "planner", "agent_instance": "planner", "autonomy_mode": "Supervised", "owner_policy_ref": "op"}),
             ("lybra_queue_claim_confirm", {"dry_run_token": "t", "actor": "planner"}),
             ("lybra_queue_return_dry_run", {"actor": "planner"}),
             ("lybra_queue_return_confirm", {"dry_run_token": "t", "actor": "planner"}),
-            ("lybra_draft_publish_dry_run", {"path": "5_tasks/drafts/x.md", "actor": "planner"}),
-            ("lybra_draft_publish_confirm", {"dry_run_token": "t", "owner_confirmation_token": "OWNER_CONFIRMED", "actor": "planner"}),
             ("lybra_audit_dispatch_dry_run", {"actor": "planner"}),
             ("lybra_audit_verdict_dry_run", {"actor": "planner"}),
             ("lybra_owner_decision_record_dry_run", {"actor": "planner"}),
@@ -188,9 +196,11 @@ class PlannerRoleGateTests(unittest.TestCase):
         wrote = list(records_dir.rglob("*.md")) if records_dir.exists() else []
         self.assertEqual(wrote, [], f"denied writes must leave ZERO records: {wrote}")
 
-    # --- 红线2 (publish gate): planner submits a draft but CANNOT publish it; Owner can ---
+    # --- AIPOS-342 (甲案): planner CAN publish its own draft (出卡不是门) ---
 
-    def test_planner_cannot_publish_own_draft_owner_can(self) -> None:
+    def test_planner_can_publish_own_draft(self) -> None:
+        """AIPOS-342: planner has draft_publish scope and can complete the full publish flow
+        (dry_run + confirm) without owner_confirm. The card lands in queue/pending."""
         with self.gate() as url:
             planner = GateClient(url, "planner-secret")
             planner.initialize()
@@ -198,16 +208,22 @@ class PlannerRoleGateTests(unittest.TestCase):
                 "lybra_draft_submit_dry_run",
                 {"frontmatter": _draft_frontmatter("AIPOS-PUBTEST"), "body": "b", "actor": "planner"},
             )
-            planner.call_tool("lybra_draft_submit_confirm", {"dry_run_token": dry["dry_run_token"], "actor": "planner"})
+            submit_confirm = planner.call_tool("lybra_draft_submit_confirm", {"dry_run_token": dry["dry_run_token"], "actor": "planner"})
+            self.assertTrue(submit_confirm.get("ok"), f"submit confirm should succeed: {submit_confirm}")
             draft_path = dry["data"]["target_path"]
-            # planner tries to publish its own draft → SCOPE_DENIED (no draft_publish scope)
-            denied = planner.call_tool("lybra_draft_publish_dry_run", {"path": draft_path, "actor": "planner"})
-            self.assertEqual(denied.get("error_code"), "SCOPE_DENIED")
-            # Owner CAN publish it (draft_publish + owner_confirm) — the gate stays with the Owner
-            owner = GateClient(url, "owner-secret")
-            owner.initialize()
-            owner_dry = owner.call_tool("lybra_draft_publish_dry_run", {"path": draft_path, "actor": "owner"})
-            self.assertTrue(owner_dry.get("dry_run_token"), owner_dry)
+            # planner CAN publish its own draft (AIPOS-342 甲案)
+            publish_dry = planner.call_tool("lybra_draft_publish_dry_run", {"path": draft_path, "actor": "planner"})
+            self.assertTrue(publish_dry.get("dry_run_token"), f"planner should be able to dry_run publish: {publish_dry}")
+            self.assertFalse(publish_dry.get("owner_confirmation_required"), "draft_publish should NOT require owner_confirm after AIPOS-342")
+            publish_confirm = planner.call_tool(
+                "lybra_draft_publish_confirm",
+                {"dry_run_token": publish_dry["dry_run_token"], "actor": "planner"},
+            )
+            self.assertTrue(publish_confirm.get("ok"), f"planner should be able to confirm publish: {publish_confirm}")
+            self.assertNotEqual(publish_confirm.get("verdict"), "BLOCK", f"publish should not be BLOCK: {publish_confirm}")
+        # the card is now in queue/pending
+        pending = list((self.repo_root / "5_tasks" / "queue" / "pending").glob("*.md"))
+        self.assertTrue(any("aipos-pubtest" in f.name.lower() for f in pending), f"published card should be in queue/pending, found: {[f.name for f in pending]}")
 
     # --- R-2: task_preview surfaces audit verdicts for planner scoring ---
 

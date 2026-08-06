@@ -31,6 +31,13 @@ class Aipos204GatedPublishTests(unittest.TestCase):
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
         (self.repo_root / "5_tasks" / "drafts").mkdir(parents=True, exist_ok=True)
+        # AIPOS-343: inject active policy so contract section can resolve envelopes
+        policies_dir = self.repo_root / "5_tasks" / "policies"
+        policies_dir.mkdir(parents=True, exist_ok=True)
+        (policies_dir / "pol_lybra_dev_7.md").write_text(
+            "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\nagent_or_role: exec\n---\n# Dev\n",
+            encoding="utf-8",
+        )
         shutil.copyfile(FIXTURE_ROOT / "drafts/valid_publishable_draft.md", self.repo_root / DRAFT_REL)
 
     def tearDown(self) -> None:
@@ -71,75 +78,71 @@ class Aipos204GatedPublishTests(unittest.TestCase):
         self.assertIn("lybra_draft_publish_dry_run", names)
         self.assertIn("lybra_draft_publish_confirm", names)
 
-    # --- dry-run is zero-write + requires owner confirm + previews the publish record ---
+    # --- dry-run is zero-write + previews the publish record ---
+    # AIPOS-342 (甲案): owner_confirmation_required is now False — publishing a card is NOT
+    # a gate (Owner裁定 DL 05-10). The card lands in pending and waits for an agent to claim.
 
-    def test_publish_dry_run_is_zero_write_and_owner_gated(self) -> None:
+    def test_publish_dry_run_is_zero_write_and_no_owner_gate(self) -> None:
         before = self.data_paths()
         cap = self.capability(["draft_publish"])
         dry = self.call(lybra_draft_publish_dry_run, {"path": DRAFT_REL, "actor": PUBLISHER}, cap)
         after = self.data_paths()
         self.assertEqual(before, after)  # zero write
         self.assertTrue(dry.get("dry_run_token"))
-        self.assertTrue(dry.get("owner_confirmation_required"))
+        self.assertFalse(dry.get("owner_confirmation_required"))  # AIPOS-342: no owner gate
         kinds = {(w.get("type") or w.get("record_type")) for w in dry.get("planned_writes", [])}
         self.assertIn("publish_record", kinds)
 
-    # --- ★A1 on the publish surface: a publisher-only token cannot self-publish ---
+    # --- AIPOS-342 (甲案): a publisher-only token CAN self-publish (出卡不是门) ---
 
-    def test_publisher_only_token_cannot_self_confirm_publish(self) -> None:
-        cap = self.capability(["draft_publish"])  # NO owner_confirm
+    def test_publisher_only_token_can_self_confirm_publish(self) -> None:
+        """AIPOS-342: Owner裁定 — publishing a card is NOT a gate. A draft_publish-scoped
+        token can complete the full publish flow (dry_run + confirm) without owner_confirm."""
+        cap = self.capability(["draft_publish"])  # NO owner_confirm needed
         dry = self.call(lybra_draft_publish_dry_run, {"path": DRAFT_REL, "actor": PUBLISHER}, cap)
-        denied = self.call(
+        self.assertTrue(dry.get("dry_run_token"), dry)
+        self.assertFalse(dry.get("owner_confirmation_required"))
+        confirmed = self.call(
             lybra_draft_publish_confirm,
-            {"dry_run_token": dry["dry_run_token"], "actor": PUBLISHER, "owner_confirmation_token": "OWNER_CONFIRMED"},
+            {"dry_run_token": dry["dry_run_token"], "actor": PUBLISHER},
             cap,
         )
-        self.assertEqual(denied.get("error_code"), "SCOPE_DENIED")
-        # nothing published
-        self.assertFalse((self.repo_root / PENDING_REL).exists())
-        self.assertEqual(load_records(self.repo_root).get("publishes", []), [])
+        self.assertTrue(confirmed.get("ok"), f"publisher-only token should be able to publish: {confirmed}")
+        self.assertTrue((self.repo_root / PENDING_REL).exists())
+        records = load_records(self.repo_root)
+        self.assertEqual(len(records.get("publishes", [])), 1)
 
-    # --- owner confirm publishes AND stamps confirmer on the on-disk publish record ---
+    # --- AIPOS-342: owner confirm is no longer required for draft_publish ---
+    # The owner can still publish with owner_confirm scope, but it's not required.
 
-    def test_owner_confirm_publishes_and_records_confirmer(self) -> None:
+    def test_owner_can_still_publish_with_owner_confirm(self) -> None:
+        """Owner with draft_publish+owner_confirm can still publish; the owner_confirmation_token
+        is accepted but no longer required."""
         owner_cap = self.capability(
             ["draft_publish", "owner_confirm"], role="owner", fingerprint="sha256:ownerpub01"
         )
         dry = self.call(lybra_draft_publish_dry_run, {"path": DRAFT_REL, "actor": PUBLISHER}, owner_cap)
         confirmed = self.call(
             lybra_draft_publish_confirm,
-            {"dry_run_token": dry["dry_run_token"], "actor": PUBLISHER, "owner_confirmation_token": "OWNER_CONFIRMED"},
+            {"dry_run_token": dry["dry_run_token"], "actor": PUBLISHER},
             owner_cap,
         )
         self.assertTrue(confirmed.get("ok"), confirmed)
         self.assertTrue((self.repo_root / PENDING_REL).exists())
         records = load_records(self.repo_root)
-        meta = records["publishes"][0]["metadata"]
-        self.assertEqual(meta.get("confirmer_role"), "owner")
-        self.assertEqual(meta.get("confirmer_token_ref"), "cap_pub_test")
-        self.assertEqual(meta.get("confirmer_token_fingerprint"), "sha256:ownerpub01")
-        self.assertIn("gate_signature", meta)  # §9 placeholder present
+        self.assertEqual(len(records.get("publishes", [])), 1)
 
-    def test_publish_confirm_requires_owner_literal(self) -> None:
-        owner_cap = self.capability(["draft_publish", "owner_confirm"], role="owner", fingerprint="sha256:ownerpub01")
-        dry = self.call(lybra_draft_publish_dry_run, {"path": DRAFT_REL, "actor": PUBLISHER}, owner_cap)
-        denied = self.call(
-            lybra_draft_publish_confirm,
-            {"dry_run_token": dry["dry_run_token"], "actor": PUBLISHER, "owner_confirmation_token": "no"},
-            owner_cap,
-        )
-        self.assertEqual(denied.get("error_code"), "OWNER_CONFIRMATION_REQUIRED")
-        self.assertFalse((self.repo_root / PENDING_REL).exists())
+    # --- L3 link: a published pending task is VALID provenance ---
 
-    # --- L3 link: a gate-published pending task is VALID provenance ---
-
-    def test_gated_publish_makes_pending_task_l3_valid(self) -> None:
-        owner_cap = self.capability(["draft_publish", "owner_confirm"], role="owner", fingerprint="sha256:ownerpub01")
-        dry = self.call(lybra_draft_publish_dry_run, {"path": DRAFT_REL, "actor": PUBLISHER}, owner_cap)
+    def test_published_pending_task_l3_valid(self) -> None:
+        """AIPOS-342: a draft_publish-scoped token can publish; the resulting pending task
+        is L3-valid (authority=VALID, effective_truth=True)."""
+        cap = self.capability(["draft_publish"])
+        dry = self.call(lybra_draft_publish_dry_run, {"path": DRAFT_REL, "actor": PUBLISHER}, cap)
         self.call(
             lybra_draft_publish_confirm,
-            {"dry_run_token": dry["dry_run_token"], "actor": PUBLISHER, "owner_confirmation_token": "OWNER_CONFIRMED"},
-            owner_cap,
+            {"dry_run_token": dry["dry_run_token"], "actor": PUBLISHER},
+            cap,
         )
         report = build_authority_report(
             tasks=load_all_tasks(self.repo_root), records=load_records(self.repo_root), repo_root=self.repo_root

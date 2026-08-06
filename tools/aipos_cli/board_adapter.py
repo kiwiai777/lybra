@@ -782,6 +782,7 @@ def get_preview(
     path: str | Path | None = None,
     actor: str | None = None,
     repo_root: str | Path | None = None,
+    include_body: bool = False,
 ) -> dict[str, Any]:
     operation = "get_preview"
     try:
@@ -793,7 +794,7 @@ def get_preview(
             path=selected_path,
             actor=actor,
         )
-        preview = build_preview(validated, actor, records=records, profiles=profiles)
+        preview = build_preview(validated, actor, records=records, profiles=profiles, include_body=include_body)
         report = {
             "verdict": validated.get("verdict"),
             "blocking_reasons": list(validated.get("blocking_reasons", [])),
@@ -1935,6 +1936,7 @@ def _build_return_preview(
     scratch_dir: str | None = None,
     scratch_artifact_refs: Any = None,
     home_root: Path | None = None,
+    return_body: str | None = None,
 ) -> dict[str, Any]:
     selected_task_id, selected_path = _select_task_input(task_id, path)
     validated, _tasks, _records, profiles, task = _load_validated_task(
@@ -2140,6 +2142,7 @@ def _build_return_preview(
             "planned_returned_at": returned_at,
             "scratch_dir": scratch_dir,
             "scratch_artifact_refs": list(_as_ref_list(scratch_artifact_refs)),
+            "return_body": return_body,
         },
         "lease_preview": {
             "lease_path": "claim_only",
@@ -2159,6 +2162,14 @@ def _build_return_preview(
         data["return_record_path"] = record_plan.get("return_record_path")
         data["session_record_path"] = record_plan.get("session_record_path")
 
+    # AIPOS-320: RETURN.md planned write (gate-side落盘,路径严格限定 task_cards/<ID>/RETURN.md)
+    return_body_planned_writes: list[dict[str, Any]] = []
+    if return_body is not None and task_id_text:
+        return_body_rel = f"task_cards/{task_id_text}/RETURN.md"
+        return_body_planned_writes = [
+            {"path": return_body_rel, "kind": "create", "type": "return_body"}
+        ]
+
     verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)
     response = make_response(
         ok=True,
@@ -2171,6 +2182,7 @@ def _build_return_preview(
         summary={"task_id": task.get("task_id"), "audit_readiness": "ready"},
         planned_writes=[
             planned_write,
+            *return_body_planned_writes,
             *ingestion_planned_writes,
             *[
                 {"path": item.get("path"), "kind": "create", "type": "record_markdown", "record_type": item.get("record_type")}
@@ -2214,6 +2226,7 @@ def return_task(
     mcp_return_metadata: dict[str, Any] | None = None,
     scratch_dir: str | None = None,
     scratch_artifact_refs: Any = None,
+    return_body: str | None = None,
 ) -> dict[str, Any]:
     try:
         actor_text = str(actor or "").strip()
@@ -2254,6 +2267,7 @@ def return_task(
             scratch_dir=scratch_dir_text,
             scratch_artifact_refs=scratch_refs,
             home_root=home_root,
+            return_body=return_body,
         )
         if dry_run:
             return _attach_controlled_execute_metadata(
@@ -2290,6 +2304,30 @@ def return_task(
                 )
         target = resolved_root / str(data.get("target_path") or "")
         target.write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
+        # AIPOS-320: write RETURN.md when return_body was provided (路径严格限定 task_cards/<ID>/RETURN.md)
+        return_body_performed_writes: list[dict[str, Any]] = []
+        if return_body is not None:
+            task_id_for_return = str(data.get("task_id") or "")
+            if task_id_for_return:
+                return_body_rel = f"task_cards/{task_id_for_return}/RETURN.md"
+                return_body_path = resolved_root / return_body_rel
+                # 路径逃逸防护:确保解析后路径仍在 resolved_root 下
+                try:
+                    return_body_path.resolve().relative_to(resolved_root.resolve())
+                except ValueError:
+                    return blocked_response(
+                        operation="queue_return",
+                        dry_run=False,
+                        category="RETURN_BODY_PATH_ESCAPE",
+                        message=f"return_body path escapes workspace: {return_body_rel}",
+                        actor=_actor_payload(actor_text),
+                        safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                    )
+                return_body_path.parent.mkdir(parents=True, exist_ok=True)
+                return_body_path.write_text(return_body, encoding="utf-8")
+                return_body_performed_writes = [
+                    {"path": return_body_rel, "kind": "create", "type": "return_body"}
+                ]
         record_performed_writes: list[dict[str, Any]] = []
         if bool(data.get("mcp_records_enabled")):
             record_performed_writes = _write_mcp_return_records(resolved_root, data)
@@ -2331,7 +2369,7 @@ def return_task(
         response["dry_run"] = False
         response["data"]["wrote"] = True
         _mark_record_write_report_performed(response["data"])
-        response["performed_writes"] = list(response.get("planned_writes", [])) + ingestion_performed_writes + record_performed_writes + audit_derivation_writes
+        response["performed_writes"] = list(response.get("planned_writes", [])) + return_body_performed_writes + ingestion_performed_writes + record_performed_writes + audit_derivation_writes
         response["owner_confirmation_required"] = False
         response["owner_confirmation_reasons"] = []
         return response
@@ -3288,6 +3326,7 @@ def execute_dry_run(
                 mcp_return_metadata=mcp_return_metadata,
                 scratch_dir=payload.get("scratch_dir"),
                 scratch_artifact_refs=payload.get("scratch_artifact_refs"),
+                return_body=payload.get("return_body"),
             )
         elif op == "audit_dispatch":
             payload = source_data.get("original_payload") or {}
@@ -3629,6 +3668,7 @@ def execute_dry_run(
                 mcp_return_metadata=mcp_return_metadata,
                 scratch_dir=payload.get("scratch_dir"),
                 scratch_artifact_refs=payload.get("scratch_artifact_refs"),
+                return_body=payload.get("return_body"),
             )
             verdict = str(result.get("verdict") or "BLOCK")
             return make_response(

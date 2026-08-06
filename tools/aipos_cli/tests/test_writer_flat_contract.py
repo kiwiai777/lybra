@@ -216,6 +216,13 @@ class WriterFlatContractTests(unittest.TestCase):
         repo_root = Path(td.name)
         for state in ("pending", "claimed", "completed", "blocked"):
             (repo_root / "5_tasks" / "queue" / state).mkdir(parents=True)
+        # AIPOS-343: active policies so contract section can resolve envelopes
+        policies_dir = repo_root / "5_tasks" / "policies"
+        policies_dir.mkdir(parents=True, exist_ok=True)
+        (policies_dir / "pol_lybra_dev_7.md").write_text(
+            "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\n---\n# Dev\n",
+            encoding="utf-8",
+        )
         metadata = {
             "task_id": "AIPOS-WS4-PUB",
             "title": "WS4 publish test",

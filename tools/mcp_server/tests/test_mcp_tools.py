@@ -357,6 +357,7 @@ class McpToolTests(unittest.TestCase):
                 "lybra_queue_list",
                 "lybra_project_status",  # AIPOS-242: the gate's own project view (read-only)
                 "lybra_task_preview",
+                "lybra_return_content",  # AIPOS-320: read-only RETURN.md content for cross-machine audit
                 "lybra_validate",
                 "lybra_context_pack_build",
                 "lybra_gate_guidance",  # AIPOS-330: read-only gate guidance (facts only)
@@ -371,6 +372,7 @@ class McpToolTests(unittest.TestCase):
                 "lybra_queue_list",
                 "lybra_project_status",  # AIPOS-242: read tool, exposed by default like the rest
                 "lybra_task_preview",
+                "lybra_return_content",  # AIPOS-320: read-only, exposed by default (requires queue_claim scope at call time)
                 "lybra_validate",
                 "lybra_context_pack_build",
                 "lybra_gate_guidance",  # AIPOS-330: read-only, exposed by default
@@ -468,6 +470,59 @@ class McpToolTests(unittest.TestCase):
         error = self.assert_tool_ok(self.call_tool("lybra_task_preview", {}))
         self.assertFalse(error["ok"])
         self.assertEqual(error["verdict"], "BLOCK")
+
+    def test_task_preview_include_body_returns_body_markdown(self) -> None:
+        """AIPOS-319: include_body=true returns body_markdown matching card body."""
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_ACTIVE_PROJECT": "acme_client",
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "lybra_task_preview", "arguments": {"task_id": "AIPOS-MCP-READ", "include_body": True}},
+        }
+        with patch.dict(os.environ, env, clear=True):
+            response = handle_request(request)
+        structured = response["result"]["structuredContent"]
+        self.assertTrue(structured["ok"])
+        self.assertEqual(structured["operation"], "get_preview")
+        data = structured["data"]
+        self.assertIn("body_markdown", data)
+        self.assertEqual(data["body_markdown"], "Read-only MCP test task.")
+
+    def test_task_preview_default_no_body_markdown(self) -> None:
+        """AIPOS-319: default (no include_body) has zero regression — no body_markdown field."""
+        structured = self.assert_tool_ok(
+            self.call_tool("lybra_task_preview", {"task_id": "AIPOS-MCP-READ"})
+        )
+        data = structured["data"]
+        self.assertNotIn("body_markdown", data)  # type: ignore[operator]
+
+    def test_task_preview_include_body_false_no_body_markdown(self) -> None:
+        """AIPOS-319: explicit include_body=false also omits body_markdown."""
+        structured = self.assert_tool_ok(
+            self.call_tool("lybra_task_preview", {"task_id": "AIPOS-MCP-READ", "include_body": False})
+        )
+        data = structured["data"]
+        self.assertNotIn("body_markdown", data)  # type: ignore[operator]
+
+    def test_task_preview_include_body_scope_denied_without_queue_claim(self) -> None:
+        """AIPOS-319: include_body=true requires queue_claim scope."""
+        # Default test capability has no queue_claim scope — uses intake_submit only
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "lybra_task_preview", "arguments": {"task_id": "AIPOS-MCP-READ", "include_body": True}},
+        }
+        with patch.dict(os.environ, {"AIPOS_WORKSPACE_ROOT": str(self.repo_root), "LYBRA_ACTIVE_PROJECT": "acme_client"}):
+            response = handle_request(request)
+        structured = response["result"]["structuredContent"]
+        self.assertFalse(structured["ok"])
+        self.assertEqual(structured["error_code"], "SCOPE_DENIED")
 
     def test_validate_happy_path(self) -> None:
         structured = self.assert_tool_ok(self.call_tool("lybra_validate"))
@@ -2171,6 +2226,153 @@ class McpToolTests(unittest.TestCase):
         # Verify no publish record
         publish_record_path = self.repo_root / "5_tasks" / "records" / "publishes" / "AIPOS-MCP-RETURNR"
         self.assertFalse(publish_record_path.exists(), "No publish record should exist when audit opt-out")
+
+
+    # ── AIPOS-320: return_body + lybra_return_content ──────────────────────────
+
+    def test_aipos320_return_body_written_to_return_md_on_confirm(self) -> None:
+        """dry_run+confirm with return_body → gate-side task_cards/<ID>/RETURN.md 落盘且内容逐字一致."""
+        self.write_return_task()
+        return_body_text = "# Executor Return Report\n\nImplemented feature X.\nAll tests pass.\n"
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_dry_run",
+                    self.return_payload(return_body=return_body_text),
+                )
+            )
+            # dry_run should show the planned write for RETURN.md
+            planned_paths = [w["path"] for w in dry.get("planned_writes", [])]
+            self.assertIn("task_cards/AIPOS-MCP-RETURN/RETURN.md", planned_paths)
+            # confirm
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        self.assertTrue(confirmed["ok"])
+        # Verify RETURN.md was written with exact content
+        return_md = self.repo_root / "task_cards" / "AIPOS-MCP-RETURN" / "RETURN.md"
+        self.assertTrue(return_md.exists(), "RETURN.md should exist after confirm with return_body")
+        self.assertEqual(return_md.read_text(encoding="utf-8"), return_body_text)
+
+    def test_aipos320_return_body_absent_zero_regression(self) -> None:
+        """Without return_body, existing behavior is unchanged (no RETURN.md written)."""
+        self.write_return_task()
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            dry = self.assert_tool_ok(self.call_tool("lybra_queue_return_dry_run", self.return_payload()))
+            # No RETURN.md in planned writes when return_body not provided
+            planned_paths = [w["path"] for w in dry.get("planned_writes", [])]
+            self.assertNotIn("task_cards/AIPOS-MCP-RETURN/RETURN.md", planned_paths)
+            confirmed = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_confirm",
+                    {
+                        "dry_run_token": dry["dry_run_token"],
+                        "actor": "agent-01",
+                        "agent_instance": "agent-01",
+                        "owner_policy_ref": "owner_policy:aipos-169-supervised-return-test",
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                    },
+                )
+            )
+        self.assertTrue(confirmed["ok"])
+        # RETURN.md should NOT exist
+        return_md = self.repo_root / "task_cards" / "AIPOS-MCP-RETURN" / "RETURN.md"
+        self.assertFalse(return_md.exists(), "RETURN.md should not exist when return_body not provided")
+
+    def test_aipos320_return_content_reads_body(self) -> None:
+        """lybra_return_content returns the RETURN.md body for a returned task."""
+        # Pre-create a RETURN.md
+        return_body_text = "This is the return content for audit.\nLine 2.\n"
+        task_dir = self.repo_root / "task_cards" / "AIPOS-MCP-RETURN"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        (task_dir / "RETURN.md").write_text(return_body_text, encoding="utf-8")
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            result = self.assert_tool_ok(
+                self.call_tool("lybra_return_content", {"task_id": "AIPOS-MCP-RETURN"})
+            )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["return_body"], return_body_text)
+        self.assertEqual(result["task_id"], "AIPOS-MCP-RETURN")
+        self.assertEqual(result["return_body_path"], "task_cards/AIPOS-MCP-RETURN/RETURN.md")
+
+    def test_aipos320_return_content_not_found_errors(self) -> None:
+        """lybra_return_content returns clear error when no RETURN.md exists (not silent empty)."""
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            result = self.assert_tool_ok(
+                self.call_tool("lybra_return_content", {"task_id": "AIPOS-NONEXISTENT"})
+            )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["errors"][0]["category"], "RETURN_CONTENT_NOT_FOUND")
+
+    def test_aipos320_return_content_path_escape_blocked(self) -> None:
+        """return_body path is strictly confined; traversal attempts are blocked."""
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            result = self.assert_tool_ok(
+                self.call_tool("lybra_return_content", {"task_id": "../etc/passwd"})
+            )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["errors"][0]["category"], "PATH_ESCAPE_BLOCKED")
+
+    def test_aipos320_return_content_requires_queue_claim_scope(self) -> None:
+        """lybra_return_content requires queue_claim scope; auditor and executor both have it."""
+        # Without queue_claim scope → scope denied
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=[]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            result = self.assert_tool_ok(
+                self.call_tool("lybra_return_content", {"task_id": "AIPOS-MCP-RETURN"})
+            )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "SCOPE_DENIED")
+
+    def test_aipos320_return_content_auditor_scope_works(self) -> None:
+        """Auditor token (with queue_claim) can read return content."""
+        return_body_text = "Audit evidence body.\n"
+        task_dir = self.repo_root / "task_cards" / "AIPOS-MCP-RETURN"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        (task_dir / "RETURN.md").write_text(return_body_text, encoding="utf-8")
+        # Auditor token has queue_claim + audit_verdict
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_claim", "audit_verdict"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            result = self.assert_tool_ok(
+                self.call_tool("lybra_return_content", {"task_id": "AIPOS-MCP-RETURN"})
+            )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["return_body"], return_body_text)
 
 
 if __name__ == "__main__":

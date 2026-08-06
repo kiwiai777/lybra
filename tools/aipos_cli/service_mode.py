@@ -96,17 +96,18 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         # AIPOS-249 (planner slice): the BYO external planning advisor's credential.
-        # scopes = [draft_submit] ONLY — read tools are exposed by default (no scope),
-        # and draft_submit lets the planner land task-card DRAFTS into 5_tasks/drafts/
-        # (a proposal zone, structurally path-locked). The planner holds NO
-        # queue_claim/queue_return/owner_confirm/draft_publish/audit_* — so it can never
-        # claim/return/confirm/publish/audit: every such op is structurally SCOPE_DENIED.
-        # Landing a draft into truth (drafts -> queue/pending) is draft_publish, which the
-        # planner lacks and which additionally requires owner_confirm — the gate stays with
-        # the Owner. This is the planner-side ★A1 boundary as a credential, not policy.
+        # AIPOS-342 (甲案): planner gains draft_publish so the advisor can publish its own
+        # drafts without the Owner manually running a publish command. The Owner裁定
+        # (DL 05-10) reasons that publishing a card is NOT a gate — the card lands in
+        # pending and waits for an agent to claim; the real gates (envelope, red lines,
+        # independent audit, owner_verify, deploy) are unchanged. Requiring Owner to
+        # confirm every publish was proven unworkable (advisor published 20+ cards/day
+        # using the Owner token, bypassing the very gate it created).
+        # Planner still holds NO queue_claim/queue_return/owner_confirm/close/amend/withdraw
+        # — all other red lines from the 2026-07-09 BYO planner裁定 are preserved.
         "role": "planner",
         "token_ref": "svc-planner",
-        "scopes": ["draft_submit"],
+        "scopes": ["draft_submit", "draft_publish"],
     },
 )
 

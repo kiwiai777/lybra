@@ -984,15 +984,67 @@ def lybra_task_preview(arguments: dict[str, Any] | None = None) -> dict[str, Any
     args = arguments or {}
     task_id = args.get("task_id")
     path = args.get("path")
+    include_body = bool(args.get("include_body", False))
     if bool(str(task_id or "").strip()) == bool(str(path or "").strip()):
         return _error_result("Exactly one of task_id or path is required")
+    if include_body and not _queue_claim_scope_allowed():
+        return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "lybra_task_preview with include_body")
     response = get_preview(
         task_id=str(task_id).strip() if task_id else None,
         path=str(path).strip() if path else None,
         actor=str(args.get("actor")).strip() if args.get("actor") else None,
         repo_root=_repo_root(),
+        include_body=include_body,
     )
     return _tool_result(response, is_error=not bool(response.get("ok", False)))
+
+
+def lybra_return_content(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-320: read-only tool that returns the RETURN.md body for a task card.
+    Path is strictly confined to task_cards/<task_id>/RETURN.md within the gate workspace.
+    Requires queue_claim scope (held by executor and auditor tokens)."""
+    if not _queue_claim_scope_allowed():
+        return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "lybra_return_content")
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    if not task_id:
+        return _error_result("task_id is required", category="VALIDATION_ERROR")
+    # Path escape prevention: task_id must not contain path separators or traversal
+    if "/" in task_id or "\\" in task_id or ".." in task_id:
+        return _error_result(
+            f"task_id contains invalid characters for path construction: {task_id!r}",
+            category="PATH_ESCAPE_BLOCKED",
+        )
+    repo_root = _repo_root()
+    return_body_rel = f"task_cards/{task_id}/RETURN.md"
+    return_body_path = repo_root / return_body_rel
+    # Double-check path confinement after resolution
+    try:
+        return_body_path.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return _error_result(
+            f"return_body path escapes workspace: {return_body_rel}",
+            category="PATH_ESCAPE_BLOCKED",
+        )
+    if not return_body_path.is_file():
+        return _error_result(
+            f"No RETURN.md found for task {task_id} at {return_body_rel}. "
+            "The task may not have been returned yet, or the return did not include a return_body.",
+            category="RETURN_CONTENT_NOT_FOUND",
+        )
+    content = return_body_path.read_text(encoding="utf-8")
+    return _tool_result(
+        {
+            "ok": True,
+            "verdict": "PASS",
+            "operation": "return_content",
+            "task_id": task_id,
+            "return_body_path": return_body_rel,
+            "return_body": content,
+            "return_body_size": len(content),
+        },
+        is_error=False,
+    )
 
 
 def lybra_context_pack_build(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1105,7 +1157,10 @@ def _draft_publish_owner_reasons() -> list[str]:
 
 def lybra_draft_publish_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     # AIPOS-204 / F-c4: gated publish surface. Visible with the draft_publish scope (the
-    # planner / AI-authoring publisher); the confirm additionally requires owner_confirm.
+    # planner / AI-authoring publisher).
+    # AIPOS-342 (甲案): owner_confirmation_required set to False — publishing a card is NOT
+    # a gate (Owner裁定 DL 05-10). The card lands in pending and waits for an agent to claim;
+    # the real gates (envelope, red lines, audit, owner_verify, deploy) are unchanged.
     if not _draft_publish_scope_allowed():
         return _scope_denied_result_for(DRAFT_PUBLISH_SCOPE, "gated draft publish tools")
     args = arguments or {}
@@ -1121,8 +1176,8 @@ def lybra_draft_publish_dry_run(arguments: dict[str, Any] | None = None) -> dict
         dry_run=True,
         repo_root=_repo_root(),
         actor=str(args.get("actor") or "mcp.client"),
-        owner_confirmation_required_override=True,
-        owner_confirmation_reasons_override=_draft_publish_owner_reasons(),
+        owner_confirmation_required_override=False,
+        owner_confirmation_reasons_override=None,
     )
     return _tool_result(response, is_error=not bool(response.get("ok", False)) or response.get("verdict") == "BLOCK")
 
@@ -1130,12 +1185,13 @@ def lybra_draft_publish_dry_run(arguments: dict[str, Any] | None = None) -> dict
 def lybra_draft_publish_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     if not _draft_publish_scope_allowed():
         return _scope_denied_result_for(DRAFT_PUBLISH_SCOPE, "gated draft publish tools")
-    # AIPOS-204 / F-c4 (mirrors AIPOS-197): publish confirm additionally requires the
-    # Owner-only owner_confirm scope, so a draft_publish-capable (publisher) token cannot
-    # self-publish. The publish record's confirmer is therefore provably the Owner —
-    # structural, not literal-secrecy.
-    if not _owner_confirm_scope_allowed():
-        return _scope_denied_result_for(OWNER_CONFIRM_SCOPE, "draft publish confirm (Owner-only)")
+    # AIPOS-342 (甲案): owner_confirm scope check REMOVED from draft_publish_confirm.
+    # Owner裁定 (DL 05-10): publishing a card is NOT a gate — the card lands in pending
+    # and waits for an agent to claim; the real gates (envelope, red lines, independent
+    # audit, owner_verify, deploy) are unchanged. Requiring Owner to confirm every
+    # publish was proven unworkable. The planner (now holding draft_publish) can complete
+    # the full publish flow without the Owner manually running a confirm command.
+    # The owner_confirmation_token parameter is no longer required for draft_publish.
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -1144,17 +1200,13 @@ def lybra_draft_publish_confirm(arguments: dict[str, Any] | None = None) -> dict
             "lybra_draft_publish_confirm requires dry_run_token from a prior lybra_draft_publish_dry_run response.",
             "Call lybra_draft_publish_dry_run first, review the preview, then confirm with its dry_run_token.",
         )
-    owner_confirmation_token = str(args.get("owner_confirmation_token") or "").strip()
-    if owner_confirmation_token != OWNER_CONFIRMATION_TOKEN:
-        return _teaching_error(
-            "OWNER_CONFIRMATION_REQUIRED",
-            "Gated MCP draft_publish confirm requires owner_confirmation_token: OWNER_CONFIRMED.",
-            "Present the dry-run preview to Owner, then retry confirm with owner_confirmation_token set to OWNER_CONFIRMED.",
-        )
+    # AIPOS-342 (甲案): owner_confirmation_token is no longer required for draft_publish.
+    # Publishing a card is NOT a gate (Owner裁定 DL 05-10). Pass empty token; execute_dry_run
+    # will not require it because the dry-run plan has owner_confirmation_required=False.
     response = execute_dry_run(
         dry_run_token,
         str(args.get("actor") or "mcp.client"),
-        owner_confirmation_token=owner_confirmation_token,
+        owner_confirmation_token=None,
         repo_root=_repo_root(),
         confirmer=_confirmer_attribution(),
     )
@@ -1695,6 +1747,7 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
         ),
         scratch_dir=str(args.get("scratch_dir") or "").strip() or None,
         scratch_artifact_refs=args.get("scratch_artifact_refs"),
+        return_body=args.get("return_body") if isinstance(args.get("return_body"), str) else None,
     )
     decorated = _decorate_queue_return_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance)
     if decorated.get("verdict") == "BLOCK":
@@ -2527,6 +2580,7 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
     "lybra_task_preview": lybra_task_preview,
+    "lybra_return_content": lybra_return_content,
     "lybra_validate": lybra_validate,
     "lybra_context_pack_build": lybra_context_pack_build,
     "lybra_intake_submit_dry_run": lybra_intake_submit_dry_run,
@@ -2577,14 +2631,31 @@ READ_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
     },
     {
         "name": "lybra_task_preview",
-        "description": "Build a read-only task session preview for one task by task_id or path.",
+        "description": "Build a read-only task session preview for one task by task_id or path. Set include_body=true to receive the task card body markdown (requires queue_claim scope).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
                 "path": {"type": "string"},
                 "actor": {"type": "string"},
+                "include_body": {"type": "boolean", "description": "When true, include body_markdown field with the task card body content. Requires queue_claim scope. Default false."},
             },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_return_content",
+        "description": (
+            "AIPOS-320: read-only tool that returns the RETURN.md body for a returned task card. "
+            "Used by auditors for cross-machine evidence retrieval. "
+            "Requires queue_claim scope. Returns error (not silent empty) when no RETURN.md exists for the task."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "The task_id to read RETURN.md for. Path is strictly confined to task_cards/<task_id>/RETURN.md."},
+            },
+            "required": ["task_id"],
             "additionalProperties": False,
         },
     },
@@ -2894,6 +2965,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "executor_status": {"type": "string", "enum": ["completed"]},
                 "audit_readiness": {"type": "string", "enum": ["ready"]},
                 "return_reason": {"type": "string"},
+                "return_body": {"type": "string", "description": "AIPOS-320: optional RETURN.md body text. When provided, the gate writes it to task_cards/<ID>/RETURN.md on confirm. Path is strictly confined to task_cards/<ID>/RETURN.md (no path escape)."},
                 "actual_model": {"type": "string"},
                 "reported_tokens": {"type": "integer"},
                 "agent_runtime": {

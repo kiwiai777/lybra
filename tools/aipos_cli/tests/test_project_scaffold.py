@@ -226,6 +226,13 @@ class ProjectScaffoldTests(unittest.TestCase):
 
     def test_draft_round_trip_under_scaffolded_project(self) -> None:
         root = scaffold_project(self.home, "rt")
+        # AIPOS-343: active policies so contract section can resolve envelopes
+        policies_dir = root / "5_tasks" / "policies"
+        policies_dir.mkdir(parents=True, exist_ok=True)
+        (policies_dir / "pol_rt_dev_1.md").write_text(
+            "---\npolicy_id: pol_rt_dev_1\nstatus: active\nrole: exec\npolicy_type: dev\n---\n# Dev\n",
+            encoding="utf-8",
+        )
         metadata = {
             "task_id": "AIPOS-RT-1",
             "title": "round trip",

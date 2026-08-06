@@ -443,43 +443,72 @@ def _workspace_gate_url(repo_root: Path) -> str:
     return workspace_gate_url(repo_root)
 
 
+class ContractSectionError(RuntimeError):
+    """AIPOS-343: raised when the contract section cannot be generated.
+
+    The error message includes diagnostic information about which step failed
+    and how to fix it, so publish fails loudly instead of producing a silent card.
+    """
+
+
 def _append_gate_contract_section(
     repo_root: Path, metadata: dict[str, Any], task_id: str, rendered_markdown: str
 ) -> str:
-    """AIPOS-338 S1: append the single-source 「认领与交回」 section to a newly published card.
+    """AIPOS-338 S1 / AIPOS-343: append the single-source 「认领与交回」 section.
 
-    The section derives its branch from flow_description and its verbs from
-    verb_contract (this file carries ZERO lybra_* literals). Old cards are not
-    backfilled — only NEW publishes get it. Best-effort: never blocks publish
-    (zero regression); the happy path is covered by tests.
+    AIPOS-343: rendering failures are NO LONGER silently swallowed. If the section
+    cannot be generated, a ContractSectionError is raised with diagnostic info
+    (which step failed, what's missing, how to fix it). The caller (publish_draft)
+    propagates this as a BLOCK, so the user gets a clear error instead of a mute card.
+
+    Old cards are not backfilled — only NEW publishes get it.
     """
     if "【认领与交回】" in rendered_markdown:
         return rendered_markdown  # idempotency: never double-append
-    try:
-        from tools.aipos_cli.flow_description import resolve_collaboration_profile
-        from tools.aipos_cli.gate_contract_section import render_gate_contract_section
 
-        project_json = repo_root / "project.json"
-        if not project_json.is_file():
-            project_json = repo_root / "2_projects" / "lybra" / "project.json"
-        profile = resolve_collaboration_profile(project_json)
-        task_fields = {k: v for k, v in metadata.items() if k in (
-            "task_mode", "output_target", "deploy", "audit", "owner_verify", "task_class"
-        )}
+    from tools.aipos_cli.flow_description import resolve_collaboration_profile
+    from tools.aipos_cli.gate_contract_section import render_gate_contract_section
+
+    # AIPOS-343: workspace-agnostic project.json location (no lybra-specific fallback)
+    project_json = repo_root / "project.json"
+    profile = resolve_collaboration_profile(project_json)
+
+    task_fields = {k: v for k, v in metadata.items() if k in (
+        "task_mode", "output_target", "deploy", "audit", "owner_verify", "task_class"
+    )}
+
+    # AIPOS-343: each failure mode gets a specific diagnostic message
+    gate_url = _workspace_gate_url(repo_root)
+
+    try:
         section = render_gate_contract_section(
             profile, task_fields, role="executor",
-            gate_url=_workspace_gate_url(repo_root),
+            gate_url=gate_url,
             connection_json_rel=".lybra/connection.json",
             workspace_display=str(repo_root), task_id=task_id,
             workspace_root=repo_root,
         )
-        return rendered_markdown.rstrip() + "\n\n" + section + "\n"
-    except Exception:
-        # AIPOS-340F2: render_gate_contract_section no longer has hardcoded fallbacks.
-        # If envelope resolution fails (e.g., no policies in workspace), the section is
-        # omitted rather than silently using baked values. Production workspaces always
-        # have active policies; this path only triggers in broken/test environments.
-        return rendered_markdown
+    except ValueError as exc:
+        # Envelope resolution failed (no active policies, missing workspace_root, etc.)
+        raise ContractSectionError(
+            f"AIPOS-343: contract section generation failed for task {task_id}. "
+            f"Policy envelope resolution error: {exc}\n"
+            f"  workspace_root={repo_root}\n"
+            f"  Fix: ensure active, non-expired policies exist under "
+            f"<workspace>/5_tasks/policies/ with agent_or_role matching the executor role."
+        ) from exc
+    except Exception as exc:
+        # Any other unexpected failure — still loud, with context
+        raise ContractSectionError(
+            f"AIPOS-343: contract section generation failed for task {task_id}. "
+            f"Unexpected error during rendering: {type(exc).__name__}: {exc}\n"
+            f"  workspace_root={repo_root}\n"
+            f"  project_json_exists={project_json.is_file()}\n"
+            f"  gate_url={gate_url}\n"
+            f"  Fix: check workspace structure (project.json, .lybra/connection.json, policies/)."
+        ) from exc
+
+    return rendered_markdown.rstrip() + "\n\n" + section + "\n"
 
 
 def publish_draft(
@@ -593,11 +622,14 @@ def publish_draft(
         if publish_record_path.exists():
             validation["blocking_reasons"].append(f"Publish record already exists: {publish_record_rel}")
 
-        # AIPOS-338 S1: append the single-source 「认领与交回」 section to
-        # newly published executor cards (old cards are not backfilled).
-        rendered_markdown = _append_gate_contract_section(
-            repo_root, publish_metadata, str(task_id), rendered_markdown
-        )
+        # AIPOS-338 S1 / AIPOS-343: append the single-source 「认领与交回」 section.
+        # AIPOS-343: failure is now loud — ContractSectionError → BLOCK with diagnostic.
+        try:
+            rendered_markdown = _append_gate_contract_section(
+                repo_root, publish_metadata, str(task_id), rendered_markdown
+            )
+        except ContractSectionError as exc:
+            validation["blocking_reasons"].append(str(exc))
 
     classification_warnings = list(validation.get("classification_warnings", []))
     verdict_warnings = [warning for warning in validation["warnings"] if warning not in classification_warnings]
