@@ -413,48 +413,41 @@ def check_verdict_landed(
     reviewed_task_id: str,
 ) -> dict[str, Any]:
     """Check if the verdict has actually landed in gate records.
-    
-    AIPOS-306: Verify that:
-    1. records/audit_verdicts/<reviewed_id>/verdict_*.md exists
-    2. The audit card has left claimed state
-    
+
+    AIPOS-306 + AIPOS-354: Verify that verdict record exists (单一判据).
+    R 卡闭合由 AIPOS-354 S1 机制(verdict 落地即自动闭卡)承担,
+    不再作为守护成败条件 — 修掉『每成功一单必自判失败自尽』的根因。
+
     Returns: {landed: bool, verdict_files: list[Path], card_status: str, reason: str}
     """
-    # ① Check verdict record files
+    # ① Check verdict record files — 唯一判据
     verdicts_dir = workspace_root / "5_tasks" / "records" / "audit_verdicts" / reviewed_task_id
     verdict_files = []
     if verdicts_dir.is_dir():
         verdict_files = sorted(verdicts_dir.glob("verdict_*.md"))
-    
+
     has_verdict_record = len(verdict_files) > 0
-    
-    # ② Check audit card status (should have left claimed)
+
+    # ② Card status — 仅 informational, 不影响 landed 判定
     card_status = "unknown"
     claimed_path = workspace_root / "5_tasks" / "queue" / "claimed" / f"{audit_task_id.lower()}.md"
     completed_path = workspace_root / "5_tasks" / "queue" / "completed" / f"{audit_task_id.lower()}.md"
-    
+
     if claimed_path.exists():
         card_status = "claimed"
     elif completed_path.exists():
         card_status = "completed"
     else:
-        # Card might be in other states, consider this as "left claimed"
         card_status = "not_in_claimed"
-    
-    has_left_claimed = card_status != "claimed"
-    
-    landed = has_verdict_record and has_left_claimed
-    
+
+    # AIPOS-354: landed = verdict record exists (单一判据, 不再要求卡离开 claimed)
+    landed = has_verdict_record
+
     if not landed:
-        reasons = []
-        if not has_verdict_record:
-            reasons.append(f"verdict 记录缺失: {verdicts_dir}/verdict_*.md 不存在")
-        if not has_left_claimed:
-            reasons.append(f"审计卡仍在 claimed 态: {claimed_path}")
-        reason = "; ".join(reasons)
+        reason = f"verdict 记录缺失: {verdicts_dir}/verdict_*.md 不存在"
     else:
-        reason = f"verdict 已落地: {len(verdict_files)} 个记录, 卡状态={card_status}"
-    
+        reason = f"verdict 已落地: {len(verdict_files)} 个记录, 卡状态={card_status}(informational)"
+
     return {
         "landed": landed,
         "verdict_files": verdict_files,

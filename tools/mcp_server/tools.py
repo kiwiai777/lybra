@@ -16,6 +16,7 @@ from tools.aipos_cli.board_adapter import (
     bench_audit_submit,
     claim_task,
     close_task,
+    converge_r_cards,
     create_draft,
     execute_dry_run,
     get_context_pack_preview,
@@ -23,6 +24,7 @@ from tools.aipos_cli.board_adapter import (
     get_queue,
     get_validate,
     load_task_snapshot,
+    mark_concluded_task,
     publish_draft,
     record_owner_decision,
     return_task,
@@ -2421,6 +2423,56 @@ def lybra_queue_close_confirm(arguments: dict[str, Any] | None = None) -> dict[s
     return _tool_result(response, is_error=not bool(response.get("ok", False)))
 
 
+def lybra_converge_r_cards(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-354 S2: batch convergence of existing R cards.
+
+    Scans all audit-derived cards (R cards) in claimed/ and pending/.
+    For each, checks if the reviewed (parent) task has a verdict record.
+    If yes, moves the R card to completed/ with closure metadata.
+    Never deletes records; only moves cards.
+
+    Use dry_run=true first to preview, then dry_run=false to execute.
+    """
+    args = arguments or {}
+    actor = str(args.get("actor") or "system").strip()
+    dry_run = bool(args.get("dry_run", True))
+    response = converge_r_cards(
+        repo_root=_repo_root(),
+        actor=actor,
+        dry_run=dry_run,
+    )
+    response["surface"] = "mcp"
+    return _tool_result(response, is_error=not bool(response.get("ok", False)))
+
+
+def lybra_mark_concluded(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-354 S3: explicit mark-concluded for report-style audits.
+
+    For bypass scenarios where no formal verdict was landed via gate.
+    Leaves a machine-readable closure marker so the card moves to completed/
+    without producing a断层 card.
+
+    Requires: task_id, and at least one of report_path or conclusion_note.
+    """
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    if not task_id:
+        return _tool_result({
+            "ok": False, "verdict": "BLOCK", "operation": "mark_concluded",
+            "blocking_reasons": ["TASK_ID_REQUIRED: task_id is required"],
+        }, is_error=True)
+    response = mark_concluded_task(
+        task_id=task_id,
+        report_path=str(args.get("report_path") or "").strip() or None,
+        actor=str(args.get("actor") or "").strip() or None,
+        conclusion_note=str(args.get("conclusion_note") or "").strip() or None,
+        dry_run=bool(args.get("dry_run", True)),
+        repo_root=_repo_root(),
+    )
+    response["surface"] = "mcp"
+    return _tool_result(response, is_error=not bool(response.get("ok", False)))
+
+
 def lybra_queue_withdraw_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-315: dry-run preview for withdrawing a task from queue.
     
@@ -3006,6 +3058,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_bench_audit_confirm": lybra_bench_audit_confirm,
     "lybra_queue_close_dry_run": lybra_queue_close_dry_run,
     "lybra_queue_close_confirm": lybra_queue_close_confirm,
+    "lybra_converge_r_cards": lybra_converge_r_cards,
+    "lybra_mark_concluded": lybra_mark_concluded,
     "lybra_queue_withdraw_dry_run": lybra_queue_withdraw_dry_run,
     "lybra_queue_withdraw_confirm": lybra_queue_withdraw_confirm,
     "lybra_queue_amend_dry_run": lybra_queue_amend_dry_run,
@@ -3656,6 +3710,44 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "lybra_converge_r_cards",
+        "description": (
+            "AIPOS-354 S2: batch convergence of existing R cards (audit-derived cards). "
+            "Scans claimed/ and pending/ for audit cards whose reviewed task already has a verdict. "
+            "Moves matching R cards to completed/ with closure metadata. Never deletes records. "
+            "Use dry_run=true first to preview, then dry_run=false to execute."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "actor": {"type": "string", "description": "Who is running the convergence (default: system)."},
+                "dry_run": {"type": "boolean", "description": "Preview only (default: true)."},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_mark_concluded",
+        "description": (
+            "AIPOS-354 S3: explicit mark-concluded for report-style audits (bypass path). "
+            "For scenarios where no formal verdict was landed via gate. "
+            "Leaves a machine-readable closure marker so the card moves to completed/ "
+            "without producing a断层 card. Requires task_id and at least one of report_path or conclusion_note."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Task ID to mark concluded."},
+                "actor": {"type": "string", "description": "Who is marking this concluded."},
+                "report_path": {"type": "string", "description": "Path to the audit report (evidence)."},
+                "conclusion_note": {"type": "string", "description": "Free-text conclusion note."},
+                "dry_run": {"type": "boolean", "description": "Preview only (default: true)."},
+            },
+            "required": ["task_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "lybra_queue_withdraw_dry_run",
         "description": (
             "AIPOS-315: dry-run preview for withdrawing a task from queue. "
@@ -3871,6 +3963,8 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"] == "lybra_bench_audit_confirm")
     if _queue_close_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_close"))
+        # AIPOS-354: converge_r_cards and mark_concluded share queue_close scope
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"] in ("lybra_converge_r_cards", "lybra_mark_concluded"))
     if _queue_withdraw_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_withdraw"))
     if _queue_amend_scope_allowed():

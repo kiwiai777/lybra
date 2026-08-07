@@ -3082,6 +3082,59 @@ def _build_audit_verdict_preview(
     return response
 
 
+def _auto_close_audit_card_on_verdict(
+    repo_root: Path,
+    verdict_data: dict[str, Any],
+    actor: str,
+) -> dict[str, Any] | None:
+    """AIPOS-354 S1: verdict 落地即自动闭卡.
+
+    After a verdict record is written, move the audit (R) card from claimed/ → completed/.
+    This prevents R cards from permanently lying in the queue after their verdict has landed.
+
+    Returns a move record dict on success, None if no action needed.
+    """
+    audit_task_id = str(verdict_data.get("audit_task_id") or "").strip()
+    audit_task_rel = str(verdict_data.get("audit_task_path") or "").strip()
+    verdict_id = str(verdict_data.get("verdict_id") or "").strip()
+    if not audit_task_id or not audit_task_rel:
+        return None
+
+    source_path = repo_root / audit_task_rel
+    if not source_path.is_file():
+        return None
+
+    # Only operate on cards still in claimed/
+    claimed_dir = repo_root / "5_tasks" / "queue" / "claimed"
+    if not str(source_path.resolve()).startswith(str(claimed_dir.resolve())):
+        return None  # already moved or in unexpected location
+
+    target_path = repo_root / "5_tasks" / "queue" / "completed" / source_path.name
+
+    try:
+        text = source_path.read_text(encoding="utf-8")
+        metadata, body, _ = parse_markdown_frontmatter(text)
+        if not isinstance(metadata, dict):
+            return None
+        metadata["status"] = "completed"
+        metadata["closed_by"] = f"verdict:{verdict_id}"
+        metadata["closed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        metadata["auto_closed_by"] = "AIPOS-354"
+        rendered = render_task_markdown(metadata, body)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(rendered, encoding="utf-8")
+        source_path.unlink()
+        return {
+            "from": audit_task_rel,
+            "to": str(target_path.relative_to(repo_root)),
+            "kind": "auto_close_on_verdict",
+            "audit_task_id": audit_task_id,
+            "verdict_id": verdict_id,
+        }
+    except (OSError, KeyError, ValueError):
+        return None
+
+
 def audit_verdict_task(
     *,
     audit_task_id: str | None = None,
@@ -3172,6 +3225,13 @@ def audit_verdict_task(
         response["performed_writes"] = performed
         response["owner_confirmation_required"] = False
         response["owner_confirmation_reasons"] = []
+        # AIPOS-354 S1: verdict 落地即自动闭卡 — move audit (R) card claimed/ → completed/
+        auto_closed = _auto_close_audit_card_on_verdict(
+            resolved_root, data, instance_text or actor_text,
+        )
+        if auto_closed:
+            response["data"]["auto_closed_audit_card"] = auto_closed
+            response.setdefault("performed_moves", []).append(auto_closed)
         return response
     except Exception as exc:
         return _normalize_exception("audit_verdict", exc, dry_run=dry_run, actor=_actor_payload(actor))
@@ -4140,6 +4200,230 @@ def reopen_task(
         )
     except Exception as exc:
         return _normalize_exception("queue_reopen", exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def converge_r_cards(
+    *,
+    repo_root: str | Path | None = None,
+    actor: str = "system",
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """AIPOS-354 S2: 存量 R 卡批量收敛.
+
+    Scan all R cards (audit-derived cards) in claimed/ and pending/.
+    For each, check if the reviewed (parent) task already has a verdict record.
+    If yes, move the R card to completed/ with closure metadata.
+    Never deletes any record; only moves cards and adds metadata.
+
+    Returns: {converged: [...], skipped: [...], errors: [...]}
+    """
+    resolved_root = _resolve_repo_root(repo_root)
+    converged: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    for queue_state in ("claimed", "pending"):
+        queue_dir = resolved_root / "5_tasks" / "queue" / queue_state
+        if not queue_dir.is_dir():
+            continue
+        for card_file in sorted(queue_dir.glob("*.md")):
+            try:
+                text = card_file.read_text(encoding="utf-8")
+                fm, body, _ = parse_markdown_frontmatter(text)
+                if not isinstance(fm, dict):
+                    continue
+                task_id = str(fm.get("task_id") or "")
+                # Only process audit-derived cards (task_mode=audit or created_by=gate_derivation)
+                task_mode = str(fm.get("task_mode") or "")
+                created_by = str(fm.get("created_by") or "")
+                if task_mode != "audit" and created_by != "gate_derivation":
+                    continue
+                # Resolve the reviewed (parent) task ID
+                reviewed_task_id = str(fm.get("reviewed_task_id") or "")
+                if not reviewed_task_id:
+                    # Try to derive from task_id (e.g. AIPOS-304R -> AIPOS-304)
+                    if task_id.upper().endswith("R"):
+                        reviewed_task_id = task_id[:-1]
+                    else:
+                        skipped.append({"task_id": task_id, "reason": "no reviewed_task_id"})
+                        continue
+                # Check if verdict exists for the reviewed task
+                verdicts_dir = resolved_root / "5_tasks" / "records" / "audit_verdicts" / reviewed_task_id
+                if not verdicts_dir.is_dir():
+                    skipped.append({"task_id": task_id, "reason": f"no verdicts dir for {reviewed_task_id}"})
+                    continue
+                verdict_files = sorted(verdicts_dir.glob("verdict_*.md"))
+                if not verdict_files:
+                    skipped.append({"task_id": task_id, "reason": f"no verdict records for {reviewed_task_id}"})
+                    continue
+                # Get the latest verdict_id for closure metadata
+                latest_verdict_id = ""
+                if verdict_files:
+                    vfm, _, _ = parse_markdown_frontmatter(verdict_files[-1].read_text(encoding="utf-8"))
+                    if isinstance(vfm, dict):
+                        latest_verdict_id = str(vfm.get("verdict_id") or "")
+                if dry_run:
+                    converged.append({
+                        "task_id": task_id,
+                        "reviewed_task_id": reviewed_task_id,
+                        "verdict_id": latest_verdict_id,
+                        "from_queue": queue_state,
+                        "dry_run": True,
+                    })
+                    continue
+                # Actually move the card
+                fm["status"] = "completed"
+                fm["closed_by"] = f"verdict:{latest_verdict_id}" if latest_verdict_id else "batch_convergence"
+                fm["closed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                fm["auto_closed_by"] = "AIPOS-354_batch_convergence"
+                rendered = render_task_markdown(fm, body)
+                target_path = resolved_root / "5_tasks" / "queue" / "completed" / card_file.name
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                target_path.write_text(rendered, encoding="utf-8")
+                card_file.unlink()
+                converged.append({
+                    "task_id": task_id,
+                    "reviewed_task_id": reviewed_task_id,
+                    "verdict_id": latest_verdict_id,
+                    "from_queue": queue_state,
+                    "moved_to": str(target_path.relative_to(resolved_root)),
+                })
+            except Exception as exc:
+                errors.append({"file": str(card_file), "error": str(exc)})
+
+    return {
+        "ok": True,
+        "operation": "converge_r_cards",
+        "dry_run": dry_run,
+        "actor": actor,
+        "converged": converged,
+        "skipped": skipped,
+        "errors": errors,
+        "summary": {
+            "total_converged": len(converged),
+            "total_skipped": len(skipped),
+            "total_errors": len(errors),
+        },
+    }
+
+
+def mark_concluded_task(
+    *,
+    task_id: str | None = None,
+    report_path: str | None = None,
+    actor: str | None = None,
+    conclusion_note: str | None = None,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """AIPOS-354 S3: 报告式审结 — 显式标记审结.
+
+    For bypass scenarios (report-style audits, manual conclusions) where no
+    formal verdict was landed via gate. Leaves a machine-readable closure marker
+    so the card can be moved to completed/ without producing a断层 card.
+
+    Validates:
+    - task_id is provided and exists in claimed/ or pending/
+    - report_path or conclusion_note is provided (evidence of conclusion)
+    - Does NOT require a formal verdict record (this is the bypass path)
+
+    On confirm (dry_run=False):
+    - Moves card to completed/
+    - Adds closed_by=conclusion_marker, closed_at, conclusion_report_ref metadata
+    """
+    operation = "mark_concluded"
+    try:
+        actor_text = str(actor or "").strip()
+        if not actor_text:
+            raise ValueError("actor is required")
+        tid = str(task_id or "").strip()
+        if not tid:
+            raise ValueError("task_id is required")
+        report_ref = str(report_path or "").strip()
+        note = str(conclusion_note or "").strip()
+        if not report_ref and not note:
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="MISSING_EVIDENCE",
+                message="At least one of report_path or conclusion_note is required.",
+                actor=_actor_payload(actor_text),
+                data={"recommended_action": "Provide report_path (path to audit report) or conclusion_note."},
+            )
+        resolved_root = _resolve_repo_root(repo_root)
+        # Find the task card
+        card_file = None
+        queue_state = None
+        for qs in ("claimed", "pending"):
+            candidate = resolved_root / "5_tasks" / "queue" / qs / f"{tid.lower()}.md"
+            if candidate.is_file():
+                card_file = candidate
+                queue_state = qs
+                break
+        if card_file is None:
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="TASK_NOT_FOUND",
+                message=f"Task {tid} not found in claimed/ or pending/.",
+                actor=_actor_payload(actor_text),
+                data={"task_id": tid},
+            )
+        text = card_file.read_text(encoding="utf-8")
+        fm, body, _ = parse_markdown_frontmatter(text)
+        if not isinstance(fm, dict):
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="PARSE_ERROR",
+                message=f"Failed to parse frontmatter from {card_file}.",
+                actor=_actor_payload(actor_text),
+            )
+        closure_ref = report_ref or f"note:{note[:80]}"
+        if dry_run:
+            return make_response(
+                ok=True,
+                verdict="PASS",
+                operation=operation,
+                dry_run=True,
+                actor=_actor_payload(actor_text),
+                data={
+                    "task_id": tid,
+                    "from_queue": queue_state,
+                    "closure_ref": closure_ref,
+                    "target_path": str((resolved_root / "5_tasks" / "queue" / "completed" / card_file.name).relative_to(resolved_root)),
+                },
+                safety_notice="AIPOS-354 mark_concluded dry-run. No files written.",
+            )
+        # Confirm: move card to completed/
+        fm["status"] = "completed"
+        fm["closed_by"] = "conclusion_marker"
+        fm["closed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fm["conclusion_report_ref"] = report_ref or ""
+        fm["conclusion_note"] = note or ""
+        fm["auto_closed_by"] = "AIPOS-354_mark_concluded"
+        rendered = render_task_markdown(fm, body)
+        target_path = resolved_root / "5_tasks" / "queue" / "completed" / card_file.name
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(rendered, encoding="utf-8")
+        card_file.unlink()
+        return make_response(
+            ok=True,
+            verdict="PASS",
+            operation=operation,
+            dry_run=False,
+            actor=_actor_payload(actor_text),
+            data={
+                "task_id": tid,
+                "from_queue": queue_state,
+                "closure_ref": closure_ref,
+                "target_path": str(target_path.relative_to(resolved_root)),
+                "moved": True,
+            },
+            safety_notice="AIPOS-354 mark_concluded: card moved to completed/ with machine-readable closure marker.",
+        )
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(str(actor or "")))
 
 
 def close_task(
