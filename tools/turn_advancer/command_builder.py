@@ -115,13 +115,46 @@ def build_command(action: str, state: dict[str, Any], workspace_root: Path) -> d
         }
     
     elif action == "dispatch_audit":
-        # 审计派工：lybra_audit_dispatch（owner-dispatch role）
-        # 简化：这里输出"调用 lybra audit dispatch"（CLI 命令）
-        copyable = f"lybra auditor dispatch --task-id {task_id}"
+        # AIPOS-358: 审计派工 → lybra auditor launch (经 launch_auditor_runtime)
+        # 参数来源: state + policy_resolver + workspace_root
+        assigned_to = task_frontmatter.get("assigned_to") or task_frontmatter.get("agent_instance")
+        reviewed_id = task_frontmatter.get("reviewed_task_id", "")
+        if not reviewed_id and task_id.endswith("R") and len(task_id) > 1:
+            reviewed_id = task_id[:-1]
+        audit_card_path = str(state.get("task_path") or "")
+
+        from tools.aipos_cli.policy_resolver import find_active_policy
+        governance_root = Path(os.getenv("LYBRA_GOVERNANCE_ROOT",
+                                         "/home/kiwi/ai-project-os/2_projects/lybra"))
+        envelope = find_active_policy(governance_root, role="audit", policy_type="audit")
+        if not envelope:
+            envelope = "pol_lybra_audit_1"
+
+        runtime_cmd = os.getenv("LYBRA_AUDITOR_RUNTIME_CMD",
+                                "pi --model anthropic/claude-3-5-sonnet-20241022 --prompt '{kickoff}'")
+
+        import sys as _sys
+        copyable = (
+            f"{_sys.executable} -m tools.aipos_cli.aipos_cli auditor launch"
+            f" --task-id {task_id}"
+            f" --reviewed-task-id {reviewed_id}"
+            f" --workspace-root {workspace_root}"
+            f" --envelope {envelope}"
+            f" --runtime-cmd '{runtime_cmd}'"
+        )
+        if audit_card_path:
+            copyable += f" --audit-card-path '{audit_card_path}'"
+
         return {
             "command_type": "cli",
             "verb": None,
-            "args": {},
+            "args": {
+                "task_id": task_id,
+                "reviewed_task_id": reviewed_id,
+                "workspace_root": str(workspace_root),
+                "envelope": envelope,
+                "runtime_cmd": runtime_cmd,
+            },
             "copyable_line": copyable,
         }
     

@@ -1198,27 +1198,40 @@ def build_parser() -> argparse.ArgumentParser:
     agents_parser = subparsers.add_parser("agents", help="Render agent profiles")
     agents_parser.add_argument("--json", action="store_true", help="Output JSON")
 
-    # AIPOS-292: auditor loop (product daemon for idle_agent)
-    auditor_parser = subparsers.add_parser("auditor", help="AIPOS-292: Auditor daemon operations")
+    # AIPOS-358: auditor thin shell (退役私有编排,定时器直驱 turn-advancer)
+    auditor_parser = subparsers.add_parser("auditor", help="AIPOS-358: Auditor daemon operations (thin shell)")
     auditor_subparsers = auditor_parser.add_subparsers(dest="auditor_command")
     auditor_loop_parser = auditor_subparsers.add_parser(
         "loop",
-        help="Production auditor daemon: watch → PreAuthorized claim → launch auditor runtime. Exit 75 when envelope exhausted (RestartPreventExitStatus)."
+        help="AIPOS-358: Auditor thin shell daemon. Calls turn-advancer scan --mode auto on a timer. Never exits due to business results."
     )
     auditor_loop_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root (治理仓)")
-    auditor_loop_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
-    auditor_loop_parser.add_argument("--gate-url", default="http://127.0.0.1:7118", help="Gate URL (default: http://127.0.0.1:7118)")
-    auditor_loop_parser.add_argument("--connection-json", help="Path to connection.json (default: <workspace>/.lybra/connection.json)")
-    auditor_loop_parser.add_argument("--auditor-instance", default="audit.lybra.kiwiai-dev", help="Auditor instance name")
-    auditor_loop_parser.add_argument("--policy", "--envelope", dest="envelope", default="pol_lybra_audit_1", help="PreAuthorized envelope/policy ref")
-    auditor_loop_parser.add_argument(
+    auditor_loop_parser.add_argument("--interval", type=float, default=20.0, help="Scan interval seconds (default: 20)")
+    # Retained args for backward compat (systemd unit may pass them); ignored by thin shell.
+    auditor_loop_parser.add_argument("--product-repo", help=argparse.SUPPRESS)
+    auditor_loop_parser.add_argument("--gate-url", help=argparse.SUPPRESS)
+    auditor_loop_parser.add_argument("--connection-json", help=argparse.SUPPRESS)
+    auditor_loop_parser.add_argument("--auditor-instance", help=argparse.SUPPRESS)
+    auditor_loop_parser.add_argument("--policy", "--envelope", dest="envelope", help=argparse.SUPPRESS)
+    auditor_loop_parser.add_argument("--runtime-cmd", help=argparse.SUPPRESS)
+    auditor_loop_parser.add_argument("--timeout", type=float, help=argparse.SUPPRESS)
+    auditor_loop_parser.add_argument("--claim-transient-tries", type=int, help=argparse.SUPPRESS)
+    # AIPOS-358: auditor launch (执行出口, 由 turn-advancer dispatch_audit 调用)
+    auditor_launch_parser = auditor_subparsers.add_parser(
+        "launch",
+        help="AIPOS-358: Launch auditor agent for a specific audit card (called by turn-advancer dispatch_audit)."
+    )
+    auditor_launch_parser.add_argument("--task-id", required=True, help="Audit task ID")
+    auditor_launch_parser.add_argument("--reviewed-task-id", default="", help="Reviewed (audited) task ID")
+    auditor_launch_parser.add_argument("--workspace-root", required=True, type=Path, help="Workspace root")
+    auditor_launch_parser.add_argument("--product-repo", type=Path, help="Product repo (default: ~/projects/lybra)")
+    auditor_launch_parser.add_argument("--envelope", default="pol_lybra_audit_1", help="PreAuthorized envelope ref")
+    auditor_launch_parser.add_argument("--audit-cards-path", default="", help="Path to the audit card file")
+    auditor_launch_parser.add_argument(
         "--runtime-cmd",
         default="pi --model anthropic/claude-3-5-sonnet-20241022 --prompt '{kickoff}'",
-        help="Auditor runtime command template. Use {kickoff} for the prompt. Default: pi + claude-sonnet-5"
+        help="Auditor runtime command template"
     )
-    auditor_loop_parser.add_argument("--interval", type=float, default=20.0, help="FS pump watch interval seconds (default: 20)")
-    auditor_loop_parser.add_argument("--timeout", type=float, default=1800.0, help="FS pump watch timeout seconds (default: 1800)")
-    auditor_loop_parser.add_argument("--claim-transient-tries", type=int, default=20, help="Transient claim retry attempts (default: 20)")
 
     # AIPOS-325: pump 子命令 (kickoff 三层制约 + 产品 CLI 入口)
     pump_parser = subparsers.add_parser("pump", help="AIPOS-325: Advisor pump operations with kickoff constraints")
@@ -2453,22 +2466,29 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "auditor":
         if getattr(args, "auditor_command", None) == "loop":
+            # AIPOS-358: thin shell — only workspace-root and interval matter
             from tools.aipos_cli.auditor_loop import main as auditor_loop_main
-            argv = ["--workspace-root", args.workspace_root]
-            if args.product_repo:
-                argv.extend(["--product-repo", args.product_repo])
-            argv.extend(["--gate-url", args.gate_url])
-            if args.connection_json:
-                argv.extend(["--connection-json", args.connection_json])
-            argv.extend([
-                "--auditor-instance", args.auditor_instance,
-                "--policy", args.envelope,
-                "--runtime-cmd", args.runtime_cmd,
-                "--interval", str(args.interval),
-                "--timeout", str(args.timeout),
-                "--claim-transient-tries", str(args.claim_transient_tries),
-            ])
+            argv = ["--workspace-root", args.workspace_root, "--interval", str(args.interval)]
             return auditor_loop_main(argv)
+        if getattr(args, "auditor_command", None) == "launch":
+            # AIPOS-358: auditor launch (execution出口, called by turn-advancer dispatch_audit)
+            from tools.aipos_cli.auditor_runtime import launch_auditor_runtime
+            product_repo = (args.product_repo or Path.home() / "projects" / "lybra").expanduser().resolve()
+            ws = args.workspace_root.expanduser().resolve()
+            try:
+                result = launch_auditor_runtime(
+                    runtime_cmd_template=args.runtime_cmd,
+                    audit_task_id=args.task_id,
+                    reviewed_task_id=args.reviewed_task_id or "",
+                    audit_card_path=args.audit_card_path or "",
+                    product_repo=product_repo,
+                    workspace_root=ws,
+                    envelope=args.envelope,
+                )
+                return int(result["exit_code"])
+            except Exception as exc:
+                print(f"ERROR: auditor launch failed: {exc}", file=sys.stderr)
+                return 1
         parser.print_help()
         return 2
 

@@ -163,11 +163,10 @@ class TestKickoffGeneration(unittest.TestCase):
         self.assertIn("lybra_gate_guidance", kickoff)
 
     def test_auditor_loop_kickoff_validates_verbs(self):
-        """auditor_loop kickoff text validates verbs (S2)."""
+        """auditor_runtime kickoff text validates verbs (S2). AIPOS-358: migrated from auditor_loop."""
         from tools.aipos_cli.verb_contract import validate_kickoff_verbs
 
-        # Simulate the retry kickoff text from auditor_loop
-        # (After fix, it uses verb contract names)
+        # Simulate the kickoff text from auditor_runtime (AIPOS-358 thin shell)
         from tools.aipos_cli.verb_contract import get_verb_contract
         verdict_contract = get_verb_contract("lybra_audit_verdict_dry_run")
         self.assertIsNotNone(verdict_contract)
