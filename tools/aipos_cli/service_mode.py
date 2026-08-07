@@ -48,7 +48,10 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
         # AIPOS-323: executor also holds task_progress (agent self-reports task facts:
         # started/progress/completed/blocked). Gate records only; no online/offline state,
         # no timeout judgment, no push.
-        "scopes": ["queue_claim", "queue_return", "queue_close", "task_progress"],
+        # AIPOS-336: executor also holds bench_audit_submit (non-code audit evidence
+        # submission). Executor CAN submit (dry_run) but CANNOT self-confirm (bench_audit_confirm
+        # is held by advisor/owner only, acceptance #2: 执行体无法自行 confirm).
+        "scopes": ["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"],
     },
     {
         # AIPOS-197: Owner-only confirm authority. The Owner uses this token,
@@ -69,7 +72,11 @@ ROLE_SPECS: tuple[dict[str, Any], ...] = (
         # AIPOS-318: the Owner also holds queue_amend and queue_withdraw (顾问侧治理动作:
         # 修订未认领的卡、撤回卡). These are Owner-only governance operations per AIPOS-315;
         # executor/auditor/planner should NOT be able to amend/withdraw task cards.
-        "scopes": ["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record", "queue_amend", "queue_withdraw"],
+        # AIPOS-336: the Owner also holds bench_audit_confirm (non-code audit 审结 confirm).
+        # This is the Owner/advisor gate that approves bench submissions after ring3 eye-verify.
+        # Executor holds bench_audit_submit (can submit) but NOT bench_audit_confirm (cannot
+        # self-confirm, acceptance #2).
+        "scopes": ["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record", "queue_amend", "queue_withdraw", "bench_audit_confirm"],
     },
     {
         "role": "owner-dispatch",

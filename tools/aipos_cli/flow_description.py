@@ -150,20 +150,20 @@ _NONCODE_CHAIN = GateChain(
             scope_needed="queue_return",
             description="确认归还",
         ),
-        # S8: bench audit verbs not yet implemented — explicit markers
+        # AIPOS-336: bench audit verbs implemented
         GateChainStep(
-            verb_name="lybra_bench_audit_submit",
-            not_implemented=True,
-            required_params=["task_id", "actor", "evidence_refs"],
+            verb_name="lybra_bench_audit_submit_dry_run",
+            not_implemented=False,
+            required_params=["task_id", "actor", "conclusion"],
             scope_needed="bench_audit_submit",
-            description="提交验证台审计（该动词尚未实现）",
+            description="提交验证台审计(ring2 自动检查 + ring3 Owner 眼验)",
         ),
         GateChainStep(
             verb_name="lybra_bench_audit_confirm",
-            not_implemented=True,
+            not_implemented=False,
             required_params=["dry_run_token", "actor"],
             scope_needed="bench_audit_confirm",
-            description="确认验证台审计结果（该动词尚未实现）",
+            description="确认验证台审计结果(审结提交)",
         ),
         GateChainStep(
             verb_name="lybra_queue_close_dry_run",

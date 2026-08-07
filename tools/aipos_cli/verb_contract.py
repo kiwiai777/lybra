@@ -128,8 +128,8 @@ _GATE_VERB_ROLES: dict[str, tuple[str, str | None, str]] = {
     "audit_dispatch_dry_run": ("dispatch", "audit_dispatch", "dry_run"),
     "audit_verdict_dry_run": ("verdict", "audit_verdict", "dry_run"),
     "close_dry_run": ("close", "queue_close", "dry_run"),
-    "bench_audit_submit": ("bench_audit_submit", None, "plain"),
-    "bench_audit_confirm": ("bench_audit_confirm", None, "confirm"),
+    "bench_audit_submit": ("bench_audit_submit", "bench_audit_submit", "dry_run"),
+    "bench_audit_confirm": ("bench_audit_confirm", "bench_audit_confirm", "confirm"),
 }
 
 
@@ -328,6 +328,8 @@ def _scope_for_verb(verb_name: str) -> str | None:
         "lybra_queue_return": "queue_return",
         "lybra_audit_dispatch": "audit_dispatch",
         "lybra_audit_verdict": "audit_verdict",
+        "lybra_bench_audit_submit": "bench_audit_submit",
+        "lybra_bench_audit_confirm": "bench_audit_confirm",
         "lybra_queue_close": "queue_close",
         "lybra_queue_withdraw": "queue_withdraw",
         "lybra_queue_amend": "queue_amend",

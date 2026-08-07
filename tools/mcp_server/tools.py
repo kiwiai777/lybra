@@ -2187,6 +2187,138 @@ def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict
     return _tool_result(response, is_error=False)
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-336: bench audit submit/confirm (non-code branch audit)
+# ---------------------------------------------------------------------------
+
+BENCH_AUDIT_SUBMIT_SCOPE = "bench_audit_submit"
+BENCH_AUDIT_CONFIRM_SCOPE = "bench_audit_confirm"
+
+
+def _bench_audit_scope_allowed() -> bool:
+    """Check if the current token holds bench_audit_submit scope (executor/advisor)."""
+    return _capability_has_scope(BENCH_AUDIT_SUBMIT_SCOPE)
+
+
+def _bench_audit_confirm_scope_allowed() -> bool:
+    """Check if the current token holds bench_audit_confirm scope (advisor/owner).
+    
+    AIPOS-336 S1 + acceptance #2: bench_audit_confirm is NOT held by executor.
+    The executor can dry_run (submit the evidence), but CANNOT self-confirm.
+    Confirmation is an advisor/owner gate (甲案家族: Owner 确认发生在验证台按键).
+    """
+    return _capability_has_scope(BENCH_AUDIT_CONFIRM_SCOPE)
+
+
+def _bench_audit_error(error_code: str, message: str, suggested_next_action: str) -> dict[str, Any]:
+    return _teaching_error(
+        error_code,
+        message,
+        suggested_next_action,
+        doc_ref="AIPOS-336 bench audit submit/confirm (non-code branch)",
+    )
+
+
+def lybra_bench_audit_submit_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-336 S1: Submit bench audit conclusion (审结提交) — dry-run preview.
+    
+    Non-code tasks (deploy/config/content/research) walk the bench audit path
+    (304 D2 branch-1): executor produces evidence → verification station ring2
+    checklist + ring3 Owner eye-verify → Owner confirm → close. This verb is the
+    "审结提交" step: the executor/advisor submits the evidence + conclusion; the gate
+    runs the ring2 auto-checks (data-driven, same source as card template); the
+    record lands in the workspace (`5_tasks/records/bench_audit/<task_id>/`).
+    
+    Requires: bench_audit_submit scope (executor/advisor). Executor CAN dry_run
+    (submit evidence), but CANNOT self-confirm (acceptance #2). Confirmation is
+    a separate gate verb (lybra_bench_audit_confirm) that requires
+    bench_audit_confirm scope (advisor/owner).
+    
+    Returns: controlled_execute envelope with verdict, planned_writes, dry_run_token,
+    checklist (ring2 auto-check results + ring3 human items), ring2_summary.
+    """
+    if not _bench_audit_scope_allowed():
+        return _scope_denied_result_for(BENCH_AUDIT_SUBMIT_SCOPE, "bench audit submit tools")
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    actor = str(args.get("actor") or "").strip()
+    if not task_id:
+        return _bench_audit_error(
+            "TASK_ID_REQUIRED",
+            "lybra_bench_audit_submit_dry_run requires task_id.",
+            "Pass the task_id of the task being audited.",
+        )
+    if not actor:
+        return _bench_audit_error(
+            "ACTOR_REQUIRED",
+            "lybra_bench_audit_submit_dry_run requires actor.",
+            "Pass the actor identifier (executor or advisor).",
+        )
+    response = bench_audit_submit(
+        payload={
+            "task_id": task_id,
+            "evidence_type": str(args.get("evidence_type") or "").strip() or None,
+            "task_mode": str(args.get("task_mode") or "").strip() or None,
+            "conclusion": str(args.get("conclusion") or "").strip(),
+            "evidence_refs": args.get("evidence_refs") if isinstance(args.get("evidence_refs"), list) else [],
+            "notes": str(args.get("notes") or "").strip() or None,
+        },
+        actor=actor,
+        dry_run=True,
+        repo_root=_repo_root(),
+    )
+    return _tool_result(response, is_error=response.get("verdict") == "BLOCK" or not bool(response.get("ok", False)))
+
+
+def lybra_bench_audit_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-336 S1: Confirm bench audit submission — execute the dry-run token.
+    
+    Requires: bench_audit_confirm scope (advisor/owner). Executor does NOT hold
+    this scope (acceptance #2: 执行体无法自行 confirm). This is the Owner/advisor
+    gate that审结 the bench submission after reviewing the ring2 checklist and
+    performing ring3 eye-verify.
+    
+    The dry_run_token is produced by lybra_bench_audit_submit_dry_run. This verb
+    re-validates the preview, then writes the bench audit record to the workspace.
+    
+    Returns: executed response with ok, performed_writes, checklist, ring2_summary.
+    """
+    if not _bench_audit_confirm_scope_allowed():
+        return _scope_denied_result_for(BENCH_AUDIT_CONFIRM_SCOPE, "bench audit confirm tools")
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    if not dry_run_token:
+        return _bench_audit_error(
+            "DRY_RUN_REQUIRED",
+            "lybra_bench_audit_confirm requires dry_run_token from a prior lybra_bench_audit_submit_dry_run response.",
+            "Call lybra_bench_audit_submit_dry_run first, review the preview, then confirm with its dry_run_token.",
+        )
+    actor = str(args.get("actor") or "").strip()
+    if not actor:
+        return _bench_audit_error(
+            "ACTOR_REQUIRED",
+            "lybra_bench_audit_confirm requires actor.",
+            "Pass the confirming actor identifier (advisor or owner).",
+        )
+    # AIPOS-336 顾问注记 #5: bench_audit_confirm 语义=审结提交(非 Owner 门).
+    # Owner 确认发生在验证台按键(owner_verification_record),不在动词层重复设门.
+    # bench_audit_confirm 是 advisor/owner scope-gated,但不要求 owner_confirmation_token.
+    # 甲案家族: submit 干运行 + confirm 审结提交,Owner 眼验在台上.
+    confirmer = _confirmer_attribution()
+    response = execute_dry_run(
+        dry_run_token,
+        actor,
+        owner_confirmation_token=None,  # bench confirm does NOT require owner_confirmation_token
+        repo_root=_repo_root(),
+        confirmer=confirmer,
+    )
+    if not response.get("ok", False):
+        return _map_controlled_execute_error(response, dry_run_tool="lybra_bench_audit_submit_dry_run")
+    response["surface"] = "mcp"
+    response["confirmer"] = confirmer
+    return _tool_result(response, is_error=False)
+
+
 def _queue_close_error(error_code: str, message: str, suggested_next_action: str) -> dict[str, Any]:
     return _teaching_error(
         error_code,
@@ -2869,6 +3001,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_audit_dispatch_confirm": lybra_audit_dispatch_confirm,
     "lybra_audit_verdict_dry_run": lybra_audit_verdict_dry_run,
     "lybra_audit_verdict_confirm": lybra_audit_verdict_confirm,
+    "lybra_bench_audit_submit_dry_run": lybra_bench_audit_submit_dry_run,
+    "lybra_bench_audit_confirm": lybra_bench_audit_confirm,
     "lybra_queue_close_dry_run": lybra_queue_close_dry_run,
     "lybra_queue_close_confirm": lybra_queue_close_confirm,
     "lybra_queue_withdraw_dry_run": lybra_queue_withdraw_dry_run,
@@ -3408,6 +3542,61 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "lybra_bench_audit_submit_dry_run",
+        "description": (
+            "AIPOS-336: Submit bench audit conclusion (审结提交) for non-code tasks (deploy/config/content/research). "
+            "Non-code tasks walk the bench audit path (304 D2 branch-1): executor produces evidence → "
+            "verification station ring2 checklist (auto-checks) + ring3 Owner eye-verify → Owner confirm → close. "
+            "This verb is the '审结提交' step: executor/advisor submits evidence + conclusion; gate runs ring2 "
+            "auto-checks (data-driven from EVIDENCE_TYPES registry); record lands in workspace "
+            "(`5_tasks/records/bench_audit/<task_id>/`). Requires bench_audit_submit scope (executor/advisor). "
+            "Executor CAN dry_run but CANNOT self-confirm (acceptance #2). Confirmation is lybra_bench_audit_confirm "
+            "(bench_audit_confirm scope: advisor/owner). Returns controlled_execute envelope with verdict, "
+            "planned_writes, dry_run_token, checklist (ring2 results + ring3 human items), ring2_summary."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Task ID being audited (bench path)."},
+                "actor": {"type": "string", "description": "Actor identifier (executor or advisor)."},
+                "evidence_type": {"type": "string", "description": "Evidence type id (deploy/config/content/research). Optional; inferred from task_mode if absent."},
+                "task_mode": {"type": "string", "description": "Task mode (deploy/config/content/research). Used to infer evidence_type if not explicit."},
+                "conclusion": {"type": "string", "description": "Conclusion: pass | pass_with_notes | fail | needs_human."},
+                "evidence_refs": {
+                    "type": "array",
+                    "description": "List of evidence references: [{check_id, ref, note?}]. check_id matches ring2 checklist.",
+                    "items": {"type": "object"},
+                },
+                "notes": {"type": "string", "description": "Optional notes (附注)."},
+            },
+            "required": ["task_id", "actor", "conclusion"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_bench_audit_confirm",
+        "description": (
+            "AIPOS-336: Confirm bench audit submission — execute the dry-run token. "
+            "Requires bench_audit_confirm scope (advisor/owner). Executor does NOT hold this scope "
+            "(acceptance #2: 执行体无法自行 confirm). This is the Owner/advisor gate that 审结 the bench "
+            "submission after reviewing the ring2 checklist and performing ring3 eye-verify. "
+            "The dry_run_token is produced by lybra_bench_audit_submit_dry_run. This verb re-validates "
+            "the preview, then writes the bench audit record to the workspace. "
+            "甲案家族: bench_audit_confirm 是审结提交(非 Owner 门); Owner 确认发生在验证台按键 "
+            "(owner_verification_record), 不在动词层重复设门. Returns executed response with ok, "
+            "performed_writes, checklist, ring2_summary."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run_token": {"type": "string", "description": "Token from lybra_bench_audit_submit_dry_run."},
+                "actor": {"type": "string", "description": "Confirming actor (advisor or owner)."},
+            },
+            "required": ["dry_run_token", "actor"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "lybra_queue_close_dry_run",
         "description": (
             "When to use: preview closing a claimed task (claimed/ -> completed/) with closure evidence. "
@@ -3674,6 +3863,11 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_audit_dispatch"))
     if _audit_verdict_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_audit_verdict"))
+    # AIPOS-336: bench_audit_submit visible to executor/advisor; bench_audit_confirm to advisor/owner
+    if _bench_audit_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_bench_audit_submit"))
+    if _bench_audit_confirm_scope_allowed():
+        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"] == "lybra_bench_audit_confirm")
     if _queue_close_scope_allowed():
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_close"))
     if _queue_withdraw_scope_allowed():

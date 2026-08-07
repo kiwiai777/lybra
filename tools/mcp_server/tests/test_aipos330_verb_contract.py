@@ -238,15 +238,22 @@ class TestFlowDescription(unittest.TestCase):
         chain = resolve_gate_chain(profile, task_fields)
         self.assertEqual(chain.branch_id, "code_with_deploy")
 
-    def test_noncode_chain_has_unimplemented_bench_verbs(self):
-        """Non-code chain has bench audit verbs marked as not_implemented (S8)."""
+    def test_noncode_chain_has_bench_verbs_implemented(self):
+        """AIPOS-336: Non-code chain has bench audit verbs implemented and resolvable."""
         from tools.aipos_cli.flow_description import _NONCODE_CHAIN
+        from tools.aipos_cli.verb_contract import resolve_gate_verbs
 
-        bench_steps = [s for s in _NONCODE_CHAIN.steps if s.not_implemented]
-        self.assertGreater(len(bench_steps), 0)
-        bench_verb_names = [s.verb_name for s in bench_steps]
-        self.assertIn("lybra_bench_audit_submit", bench_verb_names)
-        self.assertIn("lybra_bench_audit_confirm", bench_verb_names)
+        bench_steps = [s for s in _NONCODE_CHAIN.steps if 'bench_audit' in s.verb_name]
+        self.assertGreater(len(bench_steps), 0, "Non-code chain should have bench_audit steps")
+        
+        # Bench verbs should NOT be marked not_implemented (336 delivered them)
+        unimplemented = [s for s in bench_steps if s.not_implemented]
+        self.assertEqual(len(unimplemented), 0, "Bench audit verbs should be implemented (AIPOS-336)")
+        
+        # Bench verbs should resolve in the verb registry
+        resolved = resolve_gate_verbs()
+        self.assertIsNotNone(resolved.get('bench_audit_submit'), "bench_audit_submit should resolve")
+        self.assertIsNotNone(resolved.get('bench_audit_confirm'), "bench_audit_confirm should resolve")
 
     def test_task_audit_bench_overrides_profile(self):
         """Task-level audit=bench overrides project's agent audit mode."""

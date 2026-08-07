@@ -335,6 +335,7 @@ def _attach_controlled_execute_metadata(
         "intake_submit",
         "owner_decision_record",
         "owner_verification_record",
+        "bench_audit_submit",
         TEMPLATE_OPERATION,
     }:
         response["execute_allowed"] = False
@@ -1384,6 +1385,98 @@ def record_owner_verification(
             needs_owner_reasons=[],
             owner_confirmation_required=True,  # AIPOS-273: owner verification requires owner_confirm (dogfood)
             owner_confirmation_reasons=["Owner verification record writes to truth (append-only records)"],
+            safety_notice=CONTROLLED_EXECUTE_NOTICE,
+            errors=[],
+        )
+        return _attach_controlled_execute_metadata(
+            operation=operation,
+            actor=actor,
+            response=response,
+            execute_allowed=verdict != "BLOCK",
+        )
+    except Exception as exc:
+        return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def bench_audit_submit(
+    payload: Mapping[str, Any],
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+    actor: str | None = None,
+) -> dict[str, Any]:
+    """AIPOS-336 S1: Submit bench audit conclusion (审结提交).
+
+    Non-code tasks walk the bench audit path (304 D2 branch-1): executor produces
+    evidence → verification station ring2 checklist + ring3 Owner eye-verify → Owner
+    confirm → close. This function is the "审结提交" step: the executor (or advisor)
+    submits the evidence + conclusion; the gate runs the ring2 auto-checks; the record
+    lands in the workspace (`5_tasks/records/bench_audit/<task_id>/`) — same tier as
+    audit_verdict records ("非代码不等于无据可依").
+
+    The confirmation (bench_audit_confirm) is a separate gate verb that requires
+    owner_confirm scope. The executor CANNOT self-confirm (acceptance #2: "执行体无法
+    自行 confirm"). This is the two-stage controlled_execute pattern (351 磁盘持久化).
+
+    Args:
+        payload: {task_id, evidence_type?, task_mode?, conclusion, evidence_refs?, notes?}
+        dry_run: if True, preview (default); write only when False (via execute_dry_run).
+        repo_root: workspace root.
+        actor: who submits (executor or advisor).
+
+    Returns a response dict with verdict/blocking_reasons/target_path/checklist/
+    dry_run_token (when execute_allowed).
+    """
+    operation = "bench_audit_submit"
+    try:
+        if not isinstance(payload, Mapping):
+            raise TypeError("payload must be a mapping")
+        if not dry_run:
+            return _blocked_execute(operation, actor=actor)
+        resolved_root = _resolve_repo_root(repo_root)
+        from tools.aipos_cli.bench_audit_writer import build_bench_audit_record
+        result = build_bench_audit_record(
+            resolved_root,
+            dict(payload),
+            actor=actor,
+            dry_run=True,
+        )
+        verdict = derive_verdict(
+            blocking_reasons=list(result.get("blocking_reasons", [])),
+            warnings=list(result.get("warnings", [])),
+        )
+        data = {
+            "task_id": result.get("task_id"),
+            "evidence_type": result.get("evidence_type"),
+            "conclusion": result.get("conclusion"),
+            "target_path": result.get("target_path"),
+            "would_write": result.get("would_write", False),
+            "rendered_markdown": result.get("rendered_markdown"),
+            "checklist": result.get("checklist"),
+            "ring2_summary": result.get("ring2_summary"),
+            "original_payload": result.get("original_payload"),
+        }
+        response = make_response(
+            ok=True,
+            verdict=verdict,
+            operation=operation,
+            dry_run=True,
+            actor=_actor_payload(actor),
+            data=data,
+            summary={
+                "task_id": result.get("task_id"),
+                "conclusion": result.get("conclusion"),
+                "target_path": result.get("target_path"),
+                "ring2_summary": result.get("ring2_summary"),
+                "would_write": result.get("would_write", False),
+            },
+            planned_writes=list(result.get("planned_writes", [])),
+            warnings=list(result.get("warnings", [])),
+            blocking_reasons=list(result.get("blocking_reasons", [])),
+            needs_owner_reasons=[],
+            owner_confirmation_required=True,
+            owner_confirmation_reasons=[
+                "Bench audit conclusion requires Owner confirmation (bench_audit_confirm)."
+            ],
             safety_notice=CONTROLLED_EXECUTE_NOTICE,
             errors=[],
         )
@@ -3223,6 +3316,7 @@ def execute_dry_run(
             "intake_submit",
             "owner_decision_record",
             "owner_verification_record",
+            "bench_audit_submit",
             TEMPLATE_OPERATION,
         }:
             return blocked_response(
@@ -3637,6 +3731,45 @@ def execute_dry_run(
                 summary={
                     "verification_id": result.get("verification_id"),
                     "target_path": result.get("target_path"),
+                    "wrote": result.get("wrote", False),
+                },
+                planned_writes=list(result.get("planned_writes", [])),
+                performed_writes=list(result.get("planned_writes", [])) if result.get("wrote") else [],
+                warnings=list(result.get("warnings", [])),
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                errors=[],
+            )
+
+        if op == "bench_audit_submit":
+            payload = source_data.get("original_payload") or {}
+            from tools.aipos_cli.bench_audit_writer import build_bench_audit_record
+            # AIPOS-336: confirmer attribution (who confirmed: advisor/owner via bench_audit_confirm)
+            confirmer_role = str((confirmer or {}).get("confirmer_role") or "") if isinstance(confirmer, dict) else ""
+            result = build_bench_audit_record(
+                resolved_root,
+                payload,
+                actor=actor_text,
+                confirmer=confirmer_role or actor_text,
+                confirmation_ref=dry_run_token,
+                dry_run=False,
+            )
+            verdict = derive_verdict(
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                warnings=list(result.get("warnings", [])),
+            )
+            return make_response(
+                ok=bool(result.get("wrote", False)),
+                verdict=verdict,
+                operation=op,
+                dry_run=False,
+                actor=_actor_payload(actor_text),
+                data=result,
+                summary={
+                    "task_id": result.get("task_id"),
+                    "conclusion": result.get("conclusion"),
+                    "target_path": result.get("target_path"),
+                    "ring2_summary": result.get("ring2_summary"),
                     "wrote": result.get("wrote", False),
                 },
                 planned_writes=list(result.get("planned_writes", [])),
