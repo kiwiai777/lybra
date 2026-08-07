@@ -259,8 +259,8 @@ EOF
     local env_file="$HOME/.config/lybra/pi-key.env"
 
     if [[ ! -f "$service_file" ]]; then
-        err "Service file not found: $service_file"
-        err "Falling back to hard restart..."
+        err "⚠ DEGRADATION: Service file not found: $service_file"
+        err "  Graceful handoff unavailable — falling back to hard restart."
         systemctl --user daemon-reload
         systemctl --user restart "$GATE_SERVICE" || { _do_rollback "$old_current"; exit 1; }
     else
@@ -284,93 +284,100 @@ EOF
             --host "$mcp_host" --port "$mcp_port" \
             --service-connection-json "$conn_json" \
             --reuse-port &
-        # The scope runs asynchronously; find its main PID
-        sleep 1
-        local temp_pid
-        temp_pid=$(systemctl --user show -p MainPID --value "$scope_name.scope" 2>/dev/null || echo "")
-        if [[ -z "$temp_pid" || "$temp_pid" == "0" ]]; then
-            err "Failed to start temp MCP scope"
-            err "Falling back to hard restart..."
+
+        # ── AIPOS-356F1: cleanup trap for temp scope ──────────────────
+        # Transient scope units don't reliably populate MainPID (337U).
+        # We judge readiness by port probe (behavior), not process bookkeeping.
+        # The trap ensures the temp scope is cleaned up on ANY exit path.
+        local _handoff_cleanup_armed=true
+        _handoff_cleanup() {
+            if [[ "${_handoff_cleanup_armed:-}" == "true" ]]; then
+                log "  [cleanup] Stopping temp handoff scope ($scope_name.scope)..."
+                systemctl --user stop "$scope_name.scope" 2>/dev/null || true
+                _handoff_cleanup_armed=false
+            fi
+        }
+        trap '_handoff_cleanup' EXIT ERR INT TERM
+
+        # ── AIPOS-356F1: port-based readiness (replaces MainPID check) ─
+        # Wait for the temp MCP to accept TCP connections.
+        # This is the single source of truth — no MainPID dependency.
+        log "  Waiting for temp MCP to accept connections (port probe)..."
+        local max_wait=15 waited=0 ready=false
+        while (( waited < max_wait )); do
+            if python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(0.5)
+try:
+    s.connect(('127.0.0.1', $mcp_port))
+    s.close()
+except Exception:
+    sys.exit(1)
+" 2>/dev/null; then
+                ready=true
+                break
+            fi
+            sleep 0.5
+            (( waited++ )) || true
+        done
+
+        if [[ "$ready" != "true" ]]; then
+            # ── DEGRADATION: temp never became ready ──
+            err "⚠ DEGRADATION: Temp MCP did not become ready within ${max_wait}s"
+            err "  Graceful handoff failed — falling back to hard restart."
+            err "  (Temp scope will be cleaned up by trap)"
+            # trap handles temp scope cleanup; proceed with hard restart
             systemctl --user daemon-reload
             systemctl --user restart "$GATE_SERVICE" || { _do_rollback "$old_current"; exit 1; }
         else
-            log "  Temp MCP running in scope (PID $temp_pid)"
+            log "  ✓ Temp MCP is accepting connections (port probe passed)"
 
-            # Step 4b: Wait for temp to be accepting connections
-            local max_wait=10 waited=0 ready=false
-            while (( waited < max_wait )); do
-                if python3 -c "
-import socket
+            # Step 4c: Restart the gate service.
+            # systemd stops old (SIGTERM to cgroup) → starts new (from new symlink).
+            # The temp scope is NOT in the service's cgroup, so it survives.
+            # Both temp + new have SO_REUSEPORT → port always has a listener.
+            log "  Restarting gate service (temp keeps port alive)..."
+            systemctl --user daemon-reload
+            systemctl --user restart "$GATE_SERVICE"
+
+            # Step 4d: Wait for the new systemd process to be healthy
+            log "  Waiting for new gate process to stabilize..."
+            sleep 3
+            local new_ready=false
+            for i in $(seq 1 10); do
+                if systemctl --user is-active "$GATE_SERVICE" &>/dev/null; then
+                    # Verify the new process is actually responding
+                    if python3 -c "
+import socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.settimeout(0.5)
 try:
     s.connect(('127.0.0.1', $mcp_port))
     s.close()
-    exit(0)
-except:
-    exit(1)
+except Exception:
+    sys.exit(1)
 " 2>/dev/null; then
-                    ready=true
-                    break
+                        new_ready=true
+                        break
+                    fi
                 fi
-                sleep 0.5
-                (( waited++ )) || true
+                sleep 1
             done
 
-            if [[ "$ready" != "true" ]]; then
-                err "Temp MCP did not become ready within ${max_wait}s"
-                systemctl --user stop "$scope_name.scope" 2>/dev/null || true
-                err "Falling back to hard restart..."
-                systemctl --user daemon-reload
-                systemctl --user restart "$GATE_SERVICE" || { _do_rollback "$old_current"; exit 1; }
-            else
-                log "  ✓ Temp MCP is accepting connections"
+            # Step 4e: Handoff complete — disarm trap, then kill temp scope
+            _handoff_cleanup_armed=false
+            trap - EXIT ERR INT TERM
+            log "  Stopping temp handoff scope..."
+            systemctl --user stop "$scope_name.scope" 2>/dev/null || true
 
-                # Step 4c: Restart the gate service.
-                # systemd stops old (SIGTERM to cgroup) → starts new (from new symlink).
-                # The temp scope is NOT in the service's cgroup, so it survives.
-                # Both temp + new have SO_REUSEPORT → port always has a listener.
-                log "  Restarting gate service (temp keeps port alive)..."
-                systemctl --user daemon-reload
-                systemctl --user restart "$GATE_SERVICE"
-
-                # Step 4d: Wait for the new systemd process to be healthy
-                log "  Waiting for new gate process to stabilize..."
-                sleep 3
-                local new_ready=false
-                for i in $(seq 1 10); do
-                    if systemctl --user is-active "$GATE_SERVICE" &>/dev/null; then
-                        # Verify the new process is actually responding
-                        if python3 -c "
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.settimeout(0.5)
-try:
-    s.connect(('127.0.0.1', $mcp_port))
-    s.close()
-    exit(0)
-except:
-    exit(1)
-" 2>/dev/null; then
-                            new_ready=true
-                            break
-                        fi
-                    fi
-                    sleep 1
-                done
-
-                # Step 4e: Kill the temp scope
-                log "  Stopping temp handoff scope..."
-                systemctl --user stop "$scope_name.scope" 2>/dev/null || true
-
-                if [[ "$new_ready" != "true" ]]; then
-                    err "New gate process did not become ready!"
-                    err "Rolling back..."
-                    _do_rollback "$old_current"
-                    exit 1
-                fi
-                log "  ✓ Graceful handoff complete — new gate is serving"
+            if [[ "$new_ready" != "true" ]]; then
+                err "New gate process did not become ready!"
+                err "Rolling back..."
+                _do_rollback "$old_current"
+                exit 1
             fi
+            log "  ✓ Graceful handoff complete — new gate is serving"
         fi
     fi
 
