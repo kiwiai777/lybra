@@ -453,8 +453,8 @@ class HttpSseTransportTests(unittest.TestCase):
         self.assertEqual(scope_basis["token_ref"], "svc-executor")  # type: ignore[index]
         # AIPOS-347: scope_basis echoes REAL-TIME resolved scopes from ROLE_SPECS,
         # not the token registry's baked scopes.  Executor in ROLE_SPECS holds
-        # queue_claim, queue_return, queue_close, task_progress.
-        self.assertEqual(scope_basis["scopes"], ["queue_claim", "queue_return", "queue_close", "task_progress"])  # type: ignore[index]
+        # queue_claim, queue_return, queue_close, task_progress, bench_audit_submit (AIPOS-336F1).
+        self.assertEqual(scope_basis["scopes"], ["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"])  # type: ignore[index]
         self.assertNotIn("executor-secret", raw)
 
     def test_service_mode_expired_role_token_is_rejected_at_transport_boundary(self) -> None:

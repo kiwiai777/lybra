@@ -111,8 +111,9 @@ class TestGateContractSectionRendering(unittest.TestCase):
         )
         # non-code branch does NOT derive an independent audit R card (S6②)
         self.assertIn("不派生独立审计 R 卡", section)
-        # bench verbs not yet implemented -> explicit degradation marker (S6③)
-        self.assertIn("bench 动词尚未实现", section)
+        # AIPOS-336F1: bench verbs now implemented -> no degradation marker, real verb name present
+        self.assertNotIn("bench 动词尚未实现", section)
+        self.assertIn("lybra_bench_audit_submit_dry_run", section)
         # evidence requirements attached
         self.assertIn("证据要求", section)
 

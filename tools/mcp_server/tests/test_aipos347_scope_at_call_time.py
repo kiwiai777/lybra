@@ -170,10 +170,10 @@ class ZeroWideningTests(unittest.TestCase):
     def test_executor_scopes_unchanged(self) -> None:
         self._check_role_scopes(
             "executor",
-            expected_scopes=["queue_claim", "queue_return", "queue_close", "task_progress"],
+            expected_scopes=["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"],
             denied_scopes=["owner_confirm", "draft_publish", "audit_verdict",
                            "audit_dispatch", "intake_submit", "owner_decision_record",
-                           "queue_amend", "queue_withdraw", "draft_submit"],
+                           "queue_amend", "queue_withdraw", "draft_submit", "bench_audit_confirm"],
         )
 
     def test_owner_scopes_unchanged(self) -> None:
@@ -351,21 +351,21 @@ class ScopeBasisEchoTests(unittest.TestCase):
         with request_capability_scope(cap):
             result = _tool_result({"ok": True})
             basis = result["structuredContent"]["scope_basis"]
-            # Real-time resolved: executor has 4 scopes in ROLE_SPECS
+            # Real-time resolved: executor has 5 scopes in ROLE_SPECS (AIPOS-336F1: +bench_audit_submit)
             self.assertEqual(basis["scopes"],
-                             ["queue_claim", "queue_return", "queue_close", "task_progress"])
+                             ["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"])
             # Minted (baked) operations echoed separately
             self.assertEqual(basis.get("minted_scopes"), ["queue_claim", "queue_return"])
 
     def test_scope_basis_no_minted_when_identical(self) -> None:
         """When minted == resolved, no minted_scopes field (clean output)."""
         cap = _cap("executor",
-                    operations=["queue_claim", "queue_return", "queue_close", "task_progress"])
+                    operations=["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"])
         with request_capability_scope(cap):
             result = _tool_result({"ok": True})
             basis = result["structuredContent"]["scope_basis"]
             self.assertEqual(basis["scopes"],
-                             ["queue_claim", "queue_return", "queue_close", "task_progress"])
+                             ["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"])
             self.assertNotIn("minted_scopes", basis)
 
     def test_scope_basis_legacy_token_no_role(self) -> None:

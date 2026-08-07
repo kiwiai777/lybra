@@ -282,8 +282,8 @@ class TestBuiltinRolesZeroRegression(unittest.TestCase):
     def test_builtin_scopes_unchanged(self):
         """Each built-in role's scopes are unchanged."""
         expected_scopes = {
-            "executor": ["queue_claim", "queue_return", "queue_close", "task_progress"],
-            "owner": ["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record", "queue_amend", "queue_withdraw"],
+            "executor": ["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"],
+            "owner": ["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record", "queue_amend", "queue_withdraw", "bench_audit_confirm"],
             "owner-dispatch": ["audit_dispatch"],
             "auditor": ["queue_claim", "audit_verdict", "task_progress"],
             "copilot": [],

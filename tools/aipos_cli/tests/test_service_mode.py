@@ -832,18 +832,18 @@ class ConnectionLocationTests(unittest.TestCase):
                 self.truth_home, board_host="127.0.0.1", board_port=7117, mcp_host="127.0.0.1", mcp_port=7118
             )
         scopes = {t["role"]: sorted(t["scopes"]) for t in config["tokens"]}
-        self.assertEqual(scopes["executor"], sorted(["queue_claim", "queue_return"]))
+        self.assertEqual(scopes["executor"], sorted(["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"]))
         # AIPOS-250: owner also holds owner_decision_record so the owner-console can arm a
         # PreAuthorized autonomy envelope via serve-rotate creds (Owner-only write surface).
         self.assertEqual(
             scopes["owner"],
-            sorted(["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record"]),
+            sorted(["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record", "queue_amend", "queue_withdraw", "bench_audit_confirm"]),
         )
         self.assertEqual(scopes["copilot"], [])
-        self.assertEqual(scopes["auditor"], sorted(["queue_claim", "audit_verdict"]))
+        self.assertEqual(scopes["auditor"], sorted(["queue_claim", "audit_verdict", "task_progress"]))
         self.assertEqual(scopes["owner-dispatch"], ["audit_dispatch"])
         # AIPOS-249: planner holds ONLY draft_submit — no claim/return/confirm/publish/audit.
-        self.assertEqual(scopes["planner"], ["draft_submit"])
+        self.assertEqual(scopes["planner"], sorted(["draft_submit", "draft_publish"]))
 
 
 class TokenProjectsMintEchoTests(unittest.TestCase):

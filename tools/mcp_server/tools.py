@@ -13,6 +13,7 @@ from tools.aipos_cli.board_adapter import (
     amend_task,
     audit_dispatch_task,
     audit_verdict_task,
+    bench_audit_submit,
     claim_task,
     close_task,
     create_draft,
