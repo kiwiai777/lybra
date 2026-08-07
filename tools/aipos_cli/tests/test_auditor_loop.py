@@ -191,7 +191,18 @@ class AuditorLoopProcessPendingTests(unittest.TestCase):
                 "path": "/path/to/card.md",
             }
         ]
-        mock_launch.return_value = 0
+        # AIPOS-357: launch_auditor_runtime returns a dict (exit_code/verdict_check/
+        # retry_exhausted) per the AIPOS-306 contract; the old `= 0` int mock was stale.
+        mock_launch.return_value = {
+            "exit_code": 0,
+            "verdict_check": {
+                "landed": True,
+                "reason": "verdict landed (test stub)",
+                "verdict_files": [],
+                "card_status": "completed",
+            },
+            "retry_exhausted": False,
+        }
         
         mock_client = MockGateClient(auto_released=True)
         

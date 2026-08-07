@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -157,14 +158,127 @@ def check_reviewed_task_has_final_verdict(
     }
 
 
+def resolve_reviewed_task_id(audit_task_id: str, reviewed_task_id_fm: str) -> str:
+    """AIPOS-357: Resolve the audited (reviewed) task ID from an audit card.
+
+    Two sources, in priority order:
+    1. Explicit frontmatter ``reviewed_task_id`` (preferred, set by audit derivation).
+    2. Derived by stripping the trailing ``R`` from a ``<ID>R`` audit task ID.
+
+    Returns ``""`` when unresolvable — special non-R audit cards (e.g. AIPOS-346A, a
+    re-audit card with no R suffix and no reviewed_task_id) that cannot be mapped to a
+    reviewed task. The caller must skip_unresolvable (do not claim, do not chew),
+    because the verdict-criterion path
+    ``5_tasks/records/audit_verdicts/<被审卡>/verdict_*.md`` cannot be assembled
+    without a reviewed ID.
+    """
+    rid = (reviewed_task_id_fm or "").strip()
+    if rid:
+        return rid
+    tid = (audit_task_id or "").strip()
+    if tid.endswith("R") and len(tid) > 1:
+        return tid[:-1]
+    return ""
+
+
+def _has_existing_event_kind(events_dir: Path, event_kind: str) -> bool:
+    """AIPOS-357: dedup — return True if an event file with the given ``event_kind``
+    already exists under ``events_dir``.
+
+    Parsed from frontmatter ``event_kind:`` (robust); falls back to the
+    ``<kind>_<YYYYMMDD>_<HHMMSS>.md`` filename prefix when frontmatter is absent or
+    unparsable. Used so a repeatedly-polled card (e.g. 320R class) yields zero new
+    skip events after the first one lands.
+    """
+    if not events_dir.is_dir():
+        return False
+    for ef in events_dir.glob("*.md"):
+        try:
+            text = ef.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        kind = ""
+        if text.startswith("---"):
+            end = text.find("\n---", 3)
+            if end > 0:
+                for line in text[3:end].splitlines():
+                    if line.startswith("event_kind:"):
+                        kind = line.split(":", 1)[1].strip().strip("'\"")
+                        break
+        if not kind:
+            match = re.match(r"^(.+?)_\d{8}_\d{6}", ef.name)
+            kind = match.group(1) if match else ""
+        if kind == event_kind:
+            return True
+    return False
+
+
+def write_skip_unresolvable_event(
+    workspace_root: Path,
+    audit_task_id: str,
+    reviewed_task_id_raw: str,
+) -> None:
+    """AIPOS-357: Write a (deduped) skip event when the guardian cannot resolve the
+    audited task ID — a special non-R audit card (e.g. AIPOS-346A re-audit card) that
+    has no reviewed_task_id and no ``<ID>R`` suffix.
+
+    The guardian does NOT claim and does NOT chew such cards; it skips them once and
+    only once (same-kind event dedup via :func:`_has_existing_event_kind`).
+    """
+    events_dir = workspace_root / "5_tasks" / "records" / "events" / audit_task_id
+
+    if _has_existing_event_kind(events_dir, "skip_unresolvable"):
+        log(f"skip_unresolvable 事件已存在, 不重复写: {audit_task_id}")
+        return
+
+    events_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    event_file = events_dir / f"skip_unresolvable_{timestamp}.md"
+
+    content = f"""---
+record_type: audit_event
+event_kind: skip_unresolvable
+task_id: {audit_task_id}
+reviewed_task_id: {reviewed_task_id_raw or "(空)"}
+timestamp: {datetime.now(timezone.utc).isoformat()}
+reason: reviewed_task_id_unresolvable
+---
+# Skip Unresolvable Event: {audit_task_id}
+
+## AIPOS-357 守护队列卫生(特型卡不啃)
+
+守护在认卡前解析被审卡 ID 失败: 审计卡 {audit_task_id} 既无 reviewed_task_id,
+也非 `<ID>R` 形态(如 AIPOS-346A 特型补审卡), 无法映射出被审卡 → verdict 判据路径
+`5_tasks/records/audit_verdicts/<被审卡>/verdict_*.md` 拼不完整。
+
+守护【不 claim、不啃】, 跳过此卡。若为误判, 顾问可补 `reviewed_task_id` 或规整为
+`<ID>R` 形态后重新入队。
+
+此事件由 AIPOS-357 守护自动写入(去重: 同卡同类事件仅一次)。
+"""
+    event_file.write_text(content, encoding="utf-8")
+    log(f"写入 skip_unresolvable 事件: {event_file}")
+
+
 def write_skip_stale_card_event(
     workspace_root: Path,
     audit_task_id: str,
     reviewed_task_id: str,
     reason: str,
 ) -> None:
-    """AIPOS-351: Write a skip event when the guardian skips a stale R-card."""
+    """AIPOS-351: Write a (deduped, AIPOS-357) skip event when the guardian skips a
+    stale R-card whose reviewed task already has a final verdict.
+
+    Dedup (AIPOS-357): if a ``skip_stale_card`` event already exists for this card, the
+    guardian is re-polling a card it has already skipped — do not rewrite (fixes the
+    320R-class noise of one skip event per poll round).
+    """
     events_dir = workspace_root / "5_tasks" / "records" / "events" / audit_task_id
+
+    if _has_existing_event_kind(events_dir, "skip_stale_card"):
+        log(f"skip_stale_card 事件已存在, 不重复写: {audit_task_id}")
+        return
+
     events_dir.mkdir(parents=True, exist_ok=True)
     
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -375,6 +489,14 @@ def launch_auditor_runtime(
     verdict_confirm = get_verb_contract("lybra_audit_verdict_confirm")
     verdict_verb_name = "lybra_audit_verdict_dry_run" if verdict_dry_run else "lybra_audit_verdict_dry_run"
 
+    # AIPOS-357: event write root guard — hand the agent an ABSOLUTE workspace path for
+    # event files so it never resolves a relative "5_tasks/..." against its product-repo
+    # cwd (the misdirect that wrote blocked_verdict_submit into the product repo).
+    events_abs_glob = (
+        str((workspace_root / "5_tasks" / "records" / "events" / audit_task_id).resolve())
+        + "/blocked_*.md"
+    )
+
     if is_retry:
         # Tight kickoff for retry: report exists, only submit verdict
         kickoff = (
@@ -386,7 +508,7 @@ def launch_auditor_runtime(
             f"\n\n## AIPOS-351 裁决提交失败规范动作"
             f"\n如果 {verdict_verb_name} 返回错误 (STALE_DRY_RUN/DRY_RUN_REQUIRED/SCOPE_DENIED 等):"
             f"\n1. 将完整错误 JSON 贴到报告末尾的 `## 裁决提交失败` 节"
-            f"\n2. 写 blocked 事件到 5_tasks/records/events/{audit_task_id}/blocked_*.md"
+            f"\n2. 写 blocked 事件到 {events_abs_glob} (绝对工作区路径, 勿写入产品仓根)"
             f"\n3. 禁止手写 records (不伪造裁决记录)"
             f"\n4. 如实退出 (非零 exit), 守护会检测到 verdict_missing 并升级"
         )
@@ -403,7 +525,7 @@ def launch_auditor_runtime(
             f"\n\n## AIPOS-351 裁决提交失败规范动作"
             f"\n如果 {verdict_verb_name} 返回错误 (STALE_DRY_RUN/DRY_RUN_REQUIRED/SCOPE_DENIED 等):"
             f"\n1. 将完整错误 JSON 贴到报告末尾的 `## 裁决提交失败` 节"
-            f"\n2. 写 blocked 事件到 5_tasks/records/events/{audit_task_id}/blocked_*.md"
+            f"\n2. 写 blocked 事件到 {events_abs_glob} (绝对工作区路径, 勿写入产品仓根)"
             f"\n3. 禁止手写 records (不伪造裁决记录)"
             f"\n4. 如实退出 (非零 exit), 守护会检测到 verdict_missing 并升级"
         )
@@ -728,25 +850,39 @@ def process_pending_audits(
     
     for card in pending:
         audit_task_id = card["task_id"]
-        reviewed_task_id = card["reviewed_task_id"]
+        reviewed_task_id_raw = card["reviewed_task_id"]
         audit_card_path = card["path"]
-        
-        log(f"发现 pending audit 卡: {audit_task_id} (reviewed={reviewed_task_id or '(未知)'}) → 先核对队列卫生")
-        
+
+        # AIPOS-357: robustly resolve the audited (reviewed) task ID BEFORE claiming.
+        # Special non-R audit cards (e.g. AIPOS-346A re-audit card: no R suffix and no
+        # reviewed_task_id) cannot be mapped → the verdict-criterion path
+        # (5_tasks/records/audit_verdicts/<被审卡>/verdict_*.md) cannot be assembled.
+        # The guardian must SKIP such cards (skip_unresolvable), not claim-and-chew
+        # (which previously spun until exit 75 on the unparseable card).
+        reviewed_task_id = resolve_reviewed_task_id(audit_task_id, reviewed_task_id_raw)
+        if not reviewed_task_id:
+            log(
+                f"⏭️ 跳过无法解析的特型审计卡 {audit_task_id}: "
+                f"reviewed_task_id 为空且非 <ID>R 形态 → skip_unresolvable (不 claim、不啃)"
+            )
+            write_skip_unresolvable_event(workspace_root, audit_task_id, reviewed_task_id_raw)
+            continue  # Skip this card, move to next
+
+        log(f"发现 pending audit 卡: {audit_task_id} (reviewed={reviewed_task_id}) → 先核对队列卫生")
+
         # AIPOS-351: Check if the reviewed task already has a final verdict
         # before attempting to claim. This prevents the guardian from repeatedly
         # chewing on stale R-cards whose fix chain has already closed.
-        if reviewed_task_id:
-            verdict_check = check_reviewed_task_has_final_verdict(workspace_root, reviewed_task_id)
-            if verdict_check["has_final_verdict"]:
-                log(f"⏭️ 跳过陈卡 {audit_task_id}: {verdict_check['reason']}")
-                write_skip_stale_card_event(
-                    workspace_root,
-                    audit_task_id,
-                    reviewed_task_id,
-                    verdict_check["reason"],
-                )
-                continue  # Skip this card, move to next
+        verdict_check = check_reviewed_task_has_final_verdict(workspace_root, reviewed_task_id)
+        if verdict_check["has_final_verdict"]:
+            log(f"⏭️ 跳过陈卡 {audit_task_id}: {verdict_check['reason']}")
+            write_skip_stale_card_event(
+                workspace_root,
+                audit_task_id,
+                reviewed_task_id,
+                verdict_check["reason"],
+            )
+            continue  # Skip this card, move to next
         
         log(f"队列卫生通过 → claim")
         

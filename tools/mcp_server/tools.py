@@ -38,7 +38,7 @@ from tools.aipos_cli.autonomy_policy import (
 from tools.aipos_cli.agent_profiles import load_agent_profiles, registry_available, resolve_instance_id
 from tools.aipos_cli.controlled_execute import get_dry_run
 from tools.aipos_cli.task_loader import find_repo_root
-from tools.aipos_cli.workspace_config import _project_candidates, resolve_home_root
+from tools.aipos_cli.workspace_config import _project_candidates, has_workspace_queue, resolve_home_root
 
 
 READ_ONLY_NOTICE = "Lybra MCP exposes read tools by default. Write tools are visible only with scoped capability."
@@ -2533,6 +2533,24 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
     # Write event record
     try:
         repo_root = _repo_root()
+        # AIPOS-357: event write root guard — task progress events MUST land in the
+        # Lybra governance workspace (a root containing 5_tasks/queue), never the
+        # product repo (which has no 5_tasks/queue). If _repo_root() resolved to a
+        # non-workspace root, the event would be invisible to the board and silently
+        # misdirected (the S10 blocked_verdict_submit misdirect) — reject it.
+        if not has_workspace_queue(repo_root):
+            return _teaching_error(
+                "EVENTS_ROOT_NOT_WORKSPACE",
+                f"task progress events must be written to the Lybra governance workspace "
+                f"(a root containing 5_tasks/queue), but the resolved root is not a "
+                f"workspace: {repo_root}. This looks like the product repo or a "
+                f"non-workspace root; an event written here would be invisible to the "
+                f"board (S10 misdirect). Likely the gate's AIPOS_WORKSPACE_ROOT is "
+                f"misconfigured or the gate is running from the product repo.",
+                "Run the gate with AIPOS_WORKSPACE_ROOT pointing at the governance "
+                "workspace (the directory that contains 5_tasks/queue), or invoke the "
+                "gate from a location that resolves upward to such a workspace.",
+            )
         timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         
         # Build event record
