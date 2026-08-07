@@ -361,6 +361,7 @@ class McpToolTests(unittest.TestCase):
                 "lybra_validate",
                 "lybra_context_pack_build",
                 "lybra_gate_guidance",  # AIPOS-330: read-only gate guidance (facts only)
+                "lybra_naming_profile_get",  # AIPOS-350: read-only naming profile
             ],
         )
 
@@ -376,6 +377,10 @@ class McpToolTests(unittest.TestCase):
                 "lybra_validate",
                 "lybra_context_pack_build",
                 "lybra_gate_guidance",  # AIPOS-330: read-only, exposed by default
+                "lybra_naming_profile_get",  # AIPOS-350: always visible (governance config)
+                "lybra_naming_profile_set",  # AIPOS-350: always visible (governance config)
+                "lybra_roles_register",  # AIPOS-352F1: always visible (owner-gated via param)
+                "lybra_roles_remove",  # AIPOS-352F1: always visible (owner-gated via param)
             ],
         )
 

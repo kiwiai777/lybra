@@ -2750,6 +2750,84 @@ def lybra_naming_profile_set(arguments: dict[str, Any] | None = None) -> dict[st
     })
 
 
+def lybra_roles_register(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-352F1: register a custom role in the workspace registry.
+
+    Custom roles are workspace data (project.json). A custom role = {name → builtin_class}.
+    Owner-gated: requires owner_authorization_ref (audit trail per AIPOS-346F2).
+    Registry carries ZERO scope fields (anti-privilege-escalation).
+    """
+    from tools.aipos_cli.custom_roles import register_custom_role
+    args = arguments or {}
+    name = str(args.get("name") or "").strip()
+    builtin_class = str(args.get("builtin_class") or args.get("class") or "").strip()
+    owner_authorization_ref = str(args.get("owner_authorization_ref") or "").strip() or None
+    reason = str(args.get("reason") or "").strip()
+    if not name:
+        return _error_result("Missing required parameter: name")
+    if not builtin_class:
+        return _error_result("Missing required parameter: builtin_class (or class)")
+    if not owner_authorization_ref:
+        return _error_result(
+            "Missing required parameter: owner_authorization_ref. "
+            "Custom role registration is owner-gated (AIPOS-346F2). "
+            "Provide a reference to the owner authorization decision."
+        )
+    root = _repo_root()
+    try:
+        updated = register_custom_role(
+            root, name, builtin_class,
+            by=owner_authorization_ref,
+            reason=reason or f"owner-authorization-ref: {owner_authorization_ref}",
+        )
+    except ValueError as exc:
+        return _error_result(f"Custom role registration failed: {exc}")
+    return _tool_result({
+        "ok": True,
+        "operation": "roles_register",
+        "name": name,
+        "builtin_class": builtin_class,
+        "owner_authorization_ref": owner_authorization_ref,
+        "custom_roles": updated,
+    })
+
+
+def lybra_roles_remove(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-352F1: remove a custom role from the workspace registry. Idempotent.
+
+    Owner-gated: requires owner_authorization_ref (audit trail per AIPOS-346F2).
+    """
+    from tools.aipos_cli.custom_roles import remove_custom_role
+    args = arguments or {}
+    name = str(args.get("name") or "").strip()
+    owner_authorization_ref = str(args.get("owner_authorization_ref") or "").strip() or None
+    reason = str(args.get("reason") or "").strip()
+    if not name:
+        return _error_result("Missing required parameter: name")
+    if not owner_authorization_ref:
+        return _error_result(
+            "Missing required parameter: owner_authorization_ref. "
+            "Custom role removal is owner-gated (AIPOS-346F2). "
+            "Provide a reference to the owner authorization decision."
+        )
+    root = _repo_root()
+    try:
+        updated = remove_custom_role(
+            root, name,
+            by=owner_authorization_ref,
+            reason=reason or f"owner-authorization-ref: {owner_authorization_ref}",
+        )
+    except ValueError as exc:
+        return _error_result(f"Custom role removal failed: {exc}")
+    return _tool_result({
+        "ok": True,
+        "operation": "roles_remove",
+        "name": name,
+        "owner_authorization_ref": owner_authorization_ref,
+        "custom_roles": updated,
+    })
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
@@ -2783,6 +2861,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_gate_guidance": lybra_gate_guidance,
     "lybra_naming_profile_get": lybra_naming_profile_get,
     "lybra_naming_profile_set": lybra_naming_profile_set,
+    "lybra_roles_register": lybra_roles_register,
+    "lybra_roles_remove": lybra_roles_remove,
 }
 
 
@@ -3501,6 +3581,46 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "lybra_roles_register",
+        "description": (
+            "AIPOS-352F1: register a custom role in the workspace registry (project.json). "
+            "A custom role maps a name to a built-in role class (e.g., 'kiwiaiops' → 'executor'). "
+            "Owner-gated: requires owner_authorization_ref (AIPOS-346F2 audit trail). "
+            "Registry carries ZERO scope fields (anti-privilege-escalation). "
+            "Scopes are resolved from the built-in class at call time."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Custom role name (lowercase, alphanumeric + hyphens, max 32 chars)."},
+                "builtin_class": {"type": "string", "description": "Built-in role class to map to (e.g. executor, auditor)."},
+                "class": {"type": "string", "description": "Alias for builtin_class."},
+                "owner_authorization_ref": {"type": "string", "description": "AIPOS-346F2: reference to owner authorization for this registration."},
+                "reason": {"type": "string", "description": "Reason for registering this custom role."},
+            },
+            "required": ["name", "owner_authorization_ref"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_roles_remove",
+        "description": (
+            "AIPOS-352F1: remove a custom role from the workspace registry (project.json). Idempotent. "
+            "Owner-gated: requires owner_authorization_ref (AIPOS-346F2 audit trail). "
+            "Appends an unregister entry to the custom roles log."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Custom role name to remove."},
+                "owner_authorization_ref": {"type": "string", "description": "AIPOS-346F2: reference to owner authorization for this removal."},
+                "reason": {"type": "string", "description": "Reason for removing this custom role."},
+            },
+            "required": ["name", "owner_authorization_ref"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -3546,6 +3666,8 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
         descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_task_progress"))
     # AIPOS-350: naming profile verbs are always visible (governance config, append-only logged)
     descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_naming_profile"))
+    # AIPOS-352F1: custom role write verbs are always visible (owner-gated via owner_authorization_ref param)
+    descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_roles_register") or tool["name"].startswith("lybra_roles_remove"))
     return descriptors
 
 

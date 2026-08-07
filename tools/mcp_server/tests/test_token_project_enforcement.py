@@ -44,7 +44,7 @@ def _err(result):
 class ProjectEnforcementTests(unittest.TestCase):
     # --- R-α: 30 gated / 0 exempt (AIPOS-242: +lybra_project_status; AIPOS-249: +2 draft_submit; AIPOS-283: +2 queue_close; AIPOS-315: +2 withdraw +2 amend; AIPOS-320: +1 return_content; AIPOS-323: +1 task_progress; AIPOS-330: +1 gate_guidance) --
     def test_all_tool_handlers_are_project_gated_no_exemptions(self) -> None:
-        self.assertEqual(len(TOOL_HANDLERS), 30)  # contract: a new tool must be counted + gated
+        self.assertEqual(len(TOOL_HANDLERS), 34)  # contract: a new tool must be counted + gated (AIPOS-352F1: +2 roles register/remove)
         with patch.object(gate, "_repo_root", return_value="/tmp/x"), patch.object(
             gate, "_resolve_active_project_for", return_value="proj-A"
         ), request_capability_scope(_cap(projects=["other-proj"])):

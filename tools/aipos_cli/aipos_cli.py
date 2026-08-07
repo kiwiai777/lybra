@@ -1303,6 +1303,18 @@ def build_parser() -> argparse.ArgumentParser:
     roles_list_parser.add_argument("--json", action="store_true", help="Output JSON")
     roles_reconcile_parser = roles_subparsers.add_parser("reconcile", help="Compare actual vs expected roles (missing/extra/non-compliant/unbound)")
     roles_reconcile_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-352F1: custom role write-side entry points
+    roles_register_parser = roles_subparsers.add_parser("register", help="AIPOS-352F1: register a custom role (name → builtin class mapping)")
+    roles_register_parser.add_argument("name", help="Custom role name (lowercase, alphanumeric + hyphens, max 32 chars)")
+    roles_register_parser.add_argument("--class", dest="builtin_class", required=True, help="Built-in role class to map to (e.g. executor, auditor)")
+    roles_register_parser.add_argument("--owner-authorization-ref", help="AIPOS-346F2: reference to owner authorization for this registration")
+    roles_register_parser.add_argument("--reason", default="", help="Reason for registering this custom role")
+    roles_register_parser.add_argument("--json", action="store_true", help="Output JSON")
+    roles_remove_parser = roles_subparsers.add_parser("remove", help="AIPOS-352F1: remove a custom role (idempotent)")
+    roles_remove_parser.add_argument("name", help="Custom role name to remove")
+    roles_remove_parser.add_argument("--owner-authorization-ref", help="AIPOS-346F2: reference to owner authorization for this removal")
+    roles_remove_parser.add_argument("--reason", default="", help="Reason for removing this custom role")
+    roles_remove_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
     profile_subparsers = profile_parser.add_subparsers(dest="profile_command")
@@ -1790,13 +1802,67 @@ def main(argv: list[str] | None = None) -> int:
                             print(f"  - {nc['role']}: {nc['instance']} — {nc['message']}")
                     if result.get("unbound"):
                         print(f"Unbound roles: {', '.join(result['unbound'])}")
+            elif args.roles_command == "register":
+                # AIPOS-352F1: register a custom role
+                from tools.aipos_cli.custom_roles import register_custom_role
+                owner_auth_ref = str(getattr(args, "owner_authorization_ref", "") or "").strip() or None
+                reason = str(getattr(args, "reason", "") or "").strip()
+                by = owner_auth_ref or "owner"
+                updated = register_custom_role(
+                    workspace_root,
+                    args.name,
+                    args.builtin_class,
+                    by=by,
+                    reason=reason or (f"owner-authorization-ref: {owner_auth_ref}" if owner_auth_ref else ""),
+                )
+                result = {
+                    "ok": True,
+                    "operation": "roles_register",
+                    "name": args.name,
+                    "builtin_class": args.builtin_class,
+                    "owner_authorization_ref": owner_auth_ref,
+                    "custom_roles": updated,
+                }
+                if getattr(args, "json", False):
+                    print(render_json(result))
+                else:
+                    print(f"Registered custom role '{args.name}' → class '{args.builtin_class}'")
+                    if owner_auth_ref:
+                        print(f"  Owner authorization ref: {owner_auth_ref}")
+                    print(f"  Active custom roles: {list(updated.keys())}")
+            elif args.roles_command == "remove":
+                # AIPOS-352F1: remove a custom role
+                from tools.aipos_cli.custom_roles import remove_custom_role
+                owner_auth_ref = str(getattr(args, "owner_authorization_ref", "") or "").strip() or None
+                reason = str(getattr(args, "reason", "") or "").strip()
+                by = owner_auth_ref or "owner"
+                updated = remove_custom_role(
+                    workspace_root,
+                    args.name,
+                    by=by,
+                    reason=reason or (f"owner-authorization-ref: {owner_auth_ref}" if owner_auth_ref else ""),
+                )
+                result = {
+                    "ok": True,
+                    "operation": "roles_remove",
+                    "name": args.name,
+                    "owner_authorization_ref": owner_auth_ref,
+                    "custom_roles": updated,
+                }
+                if getattr(args, "json", False):
+                    print(render_json(result))
+                else:
+                    print(f"Removed custom role '{args.name}' (idempotent)")
+                    if owner_auth_ref:
+                        print(f"  Owner authorization ref: {owner_auth_ref}")
+                    print(f"  Active custom roles: {list(updated.keys())}")
             else:
                 parser.print_help()
                 return 2
         except (OSError, ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 2
-        return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
+        return 1 if isinstance(result, dict) and (result.get("verdict") == "BLOCK" or result.get("blocking_reasons")) else 0
 
     if args.command == "workspace":
         if not getattr(args, "workspace_command", None):
