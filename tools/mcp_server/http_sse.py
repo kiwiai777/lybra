@@ -46,6 +46,10 @@ class HttpSseConfig:
     keepalive_seconds: float = DEFAULT_KEEPALIVE_SECONDS
     max_keepalive_events: int | None = None
     service_role_registry: dict[str, dict[str, Any]] | None = None
+    # AIPOS-356: when True, set SO_REUSEPORT on the listening socket so a new
+    # process can bind the same port while the old one is still draining.
+    # This enables zero-downtime deploy (graceful handoff between snapshots).
+    reuse_port: bool = False
 
 
 def _structured_error(
@@ -365,6 +369,15 @@ class LybraMcpHttpSseHandler(BaseHTTPRequestHandler):
         if session_id:
             self.send_header(SESSION_HEADER, session_id)
         self.end_headers()
+        # AIPOS-356: send an SSE `retry:` directive at stream start. This tells
+        # clients how many milliseconds to wait before reconnecting if the stream
+        # drops (e.g., during a deploy handoff). 1000ms keeps reconnection snappy
+        # without hammering the server. The SSE spec says clients SHOULD honor this.
+        retry_directive = "retry: 1000\n"
+        try:
+            _write_chunked_sse(self, retry_directive)
+        except (BrokenPipeError, ConnectionResetError):
+            return
         count = 0
         while self.config.max_keepalive_events is None or count < self.config.max_keepalive_events:
             payload = json.dumps({"type": "keepalive", "transport": "http_sse"}, separators=(",", ":"))
@@ -439,11 +452,26 @@ class _SessionStore:
 
 class LybraMcpHttpSseServer(ThreadingHTTPServer):
     daemon_threads = True
+    # AIPOS-238: allow_reuse_address is already True (inherited from TCPServer)
+    # so a quick restart doesn't false-block on TIME_WAIT. AIPOS-356 adds the
+    # optional SO_REUSEPORT layer for overlapping-bind graceful handoff.
+    allow_reuse_address = True
 
     def __init__(self, server_address: tuple[str, int], config: HttpSseConfig) -> None:
         self.lybra_config = config
         self.sessions = _SessionStore()
         super().__init__(server_address, LybraMcpHttpSseHandler)
+
+    def server_bind(self) -> None:
+        # AIPOS-356: SO_REUSEPORT — when enabled, multiple processes can bind
+        # the same port simultaneously. The kernel load-balances incoming
+        # connections across all listeners. This is the foundation of the
+        # graceful deploy handoff: the new process starts accepting before
+        # the old one stops.
+        if self.lybra_config.reuse_port:
+            import socket as _socket
+            self.socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEPORT, 1)
+        super().server_bind()
 
 
 def build_http_server(config: HttpSseConfig) -> LybraMcpHttpSseServer:
@@ -455,17 +483,19 @@ def run_http_server(config: HttpSseConfig, *, error_stream: TextIO = sys.stderr)
         print(f"{TOKEN_ENV_VAR} is required for MCP HTTP/SSE transport.", file=error_stream)
         return 2
     with build_http_server(config) as httpd:
-        print(f"Lybra MCP HTTP/SSE listening on http://{config.host}:{config.port}", file=error_stream)
+        reuse_note = " (SO_REUSEPORT — graceful handoff)" if config.reuse_port else ""
+        print(f"Lybra MCP HTTP/SSE listening on http://{config.host}:{config.port}{reuse_note}", file=error_stream)
         httpd.serve_forever()
     return 0
 
 
-def config_from_env(host: str, port: int, keepalive_seconds: float) -> HttpSseConfig:
+def config_from_env(host: str, port: int, keepalive_seconds: float, *, reuse_port: bool = False) -> HttpSseConfig:
     return HttpSseConfig(
         host=host,
         port=port,
         token=os.environ.get(TOKEN_ENV_VAR, "").strip(),
         keepalive_seconds=keepalive_seconds,
+        reuse_port=reuse_port,
     )
 
 
@@ -513,11 +543,12 @@ def load_service_role_registry(connection_json: str | Path) -> dict[str, dict[st
     return registry
 
 
-def service_config_from_connection(host: str, port: int, keepalive_seconds: float, connection_json: str | Path) -> HttpSseConfig:
+def service_config_from_connection(host: str, port: int, keepalive_seconds: float, connection_json: str | Path, *, reuse_port: bool = False) -> HttpSseConfig:
     return HttpSseConfig(
         host=host,
         port=port,
         token="",
         keepalive_seconds=keepalive_seconds,
         service_role_registry=load_service_role_registry(connection_json),
+        reuse_port=reuse_port,
     )

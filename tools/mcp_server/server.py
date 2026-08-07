@@ -144,6 +144,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--service-connection-json",
         help="Service mode v0 connection config; enables server-side opaque role-token scope resolution",
     )
+    http_parser.add_argument(
+        "--reuse-port",
+        action="store_true",
+        default=False,
+        help="AIPOS-356: set SO_REUSEPORT on the listening socket so a new process can bind the same port while the old one drains (graceful deploy handoff)",
+    )
     return parser
 
 
@@ -155,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         return serve()
     if args.command == "serve-http":
+        reuse_port = bool(getattr(args, "reuse_port", False))
         if getattr(args, "service_connection_json", None):
             return run_http_server(
                 service_config_from_connection(
@@ -162,8 +169,9 @@ def main(argv: list[str] | None = None) -> int:
                     int(args.port),
                     float(args.keepalive_seconds),
                     str(args.service_connection_json),
+                    reuse_port=reuse_port,
                 )
             )
-        return run_http_server(config_from_env(str(args.host), int(args.port), float(args.keepalive_seconds)))
+        return run_http_server(config_from_env(str(args.host), int(args.port), float(args.keepalive_seconds), reuse_port=reuse_port))
     parser.print_help()
     return 2

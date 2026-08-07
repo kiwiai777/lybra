@@ -942,6 +942,7 @@ def start_report(
     connection_target: Path | None = None,
     board_advertise_host: str | None = None,
     mcp_advertise_host: str | None = None,
+    reuse_port: bool = False,
 ) -> dict[str, Any]:
     # AIPOS-349: default is workspace path (<workspace>/.lybra/connection.json) via _resolve_connection_target.
     # No fallback to global agent-side credentials.
@@ -1012,7 +1013,7 @@ def start_report(
             "blocking_reasons": [],
             "secrets_notice": "Raw role tokens were written only to <workspace>/.lybra/connection.json and are not printed.",
         }
-    return _run_supervisor(workspace_root, config, warnings=warnings, connection_target=connection_target)
+    return _run_supervisor(workspace_root, config, warnings=warnings, connection_target=connection_target, reuse_port=reuse_port)
 
 
 def _build_child_commands(
@@ -1020,12 +1021,14 @@ def _build_child_commands(
     *,
     child_workspace_root: Path,
     connection_path_str: str,
+    reuse_port: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Build the (board, mcp) child-process argv from the connection config.
 
     Pure/testable: AIPOS-258 asserts --mcp-host/--board-host reach the child --host flags
     without spawning a real subprocess. Defaults to DEFAULT_*_HOST when config omits a value
     (byte-identical to the prior inline construction).
+    AIPOS-356: reuse_port threads --reuse-port through to the MCP child for SO_REUSEPORT.
     """
     board = config.get("board") if isinstance(config.get("board"), dict) else {}
     mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
@@ -1052,6 +1055,8 @@ def _build_child_commands(
         "--service-connection-json",
         connection_path_str,
     ]
+    if reuse_port:
+        mcp_cmd.append("--reuse-port")
     return board_cmd, mcp_cmd
 
 
@@ -1061,6 +1066,7 @@ def _run_supervisor(
     *,
     warnings: list[dict[str, Any]],
     connection_target: Path | None = None,
+    reuse_port: bool = False,
 ) -> dict[str, Any]:
     board = config.get("board") if isinstance(config.get("board"), dict) else {}
     mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
@@ -1071,33 +1077,38 @@ def _run_supervisor(
         config,
         child_workspace_root=child_workspace_root,
         connection_path_str=str(connection_path(workspace_root, connection_target=connection_target)),
+        reuse_port=reuse_port,
     )
     # AIPOS-238 (F-o3-13 D1): refuse an already-OCCUPIED port up front. A stale serve still answering
     # would otherwise keep OLD tokens (→ downstream 401) while we falsely report success. Probe BOTH
     # board + mcp with a connect() active-listener test (see _ports_in_use).
+    # AIPOS-356: skip the port-in-use check when reuse_port is True — the whole point is that
+    # another process is already listening on the same port (graceful deploy handoff).
     board_host_v = str(board.get("host") or DEFAULT_BOARD_HOST)
     board_port_v = int(board.get("port") or DEFAULT_BOARD_PORT)
     mcp_host_v = str(mcp.get("host") or DEFAULT_MCP_HOST)
     mcp_port_v = int(mcp.get("port") or DEFAULT_MCP_PORT)
-    occupied = _ports_in_use([(board_host_v, board_port_v, "board"), (mcp_host_v, mcp_port_v, "mcp")])
-    if occupied:
-        names = ", ".join(f"{n} {h}:{p}" for h, p, n in occupied)
-        return _blocked(
-            "serve_start",
-            workspace_root,
-            [
-                {
-                    "message": (
-                        f"Port already in use: {names}. A serve is likely already running — stop it "
-                        "with `lybra serve stop`, or start on a different --mcp-port/--board-port."
-                    ),
-                    "path": str(workspace_root),
-                    "fix_command": "lybra serve stop",
-                }
-            ],
-            warnings,
-            connection_target=connection_target,
-        )
+    # AIPOS-356: skip port-in-use check when reuse_port is True (graceful handoff).
+    if not reuse_port:
+        occupied = _ports_in_use([(board_host_v, board_port_v, "board"), (mcp_host_v, mcp_port_v, "mcp")])
+        if occupied:
+            names = ", ".join(f"{n} {h}:{p}" for h, p, n in occupied)
+            return _blocked(
+                "serve_start",
+                workspace_root,
+                [
+                    {
+                        "message": (
+                            f"Port already in use: {names}. A serve is likely already running — stop it "
+                            "with `lybra serve stop`, or start on a different --mcp-port/--board-port."
+                        ),
+                        "path": str(workspace_root),
+                        "fix_command": "lybra serve stop",
+                    }
+                ],
+                warnings,
+                connection_target=connection_target,
+            )
 
     processes: list[subprocess.Popen[Any]] = []
     started_at = _utc_now()

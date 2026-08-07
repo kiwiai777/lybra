@@ -1272,6 +1272,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_start_parser.add_argument("--mcp-host", default=None, help="MCP BIND host (AIPOS-258: passed through to mcp_server serve-http --host). Default 127.0.0.1; AIPOS-259: when given, overrides a stored connection.json and is written back.")
     serve_start_parser.add_argument("--mcp-advertise", default=None, help="AIPOS-259: address clients should dial for rpc_url/sse_url (default = bind host). REQUIRED when --mcp-host is a wildcard (0.0.0.0), else serve start BLOCKs fail-closed.")
     serve_start_parser.add_argument("--mcp-port", type=int, default=7118, help="MCP port; defaults to 7118")
+    serve_start_parser.add_argument("--reuse-port", action="store_true", default=False, help="AIPOS-356: set SO_REUSEPORT on the MCP listening socket so a new process can bind the same port while the old one drains (graceful deploy handoff)")
     serve_start_parser.add_argument("--json", action="store_true", help="Output JSON after the supervisor exits")
     serve_status_parser = serve_subparsers.add_parser("status", help="Print redacted service-mode status")
     serve_status_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1716,6 +1717,7 @@ def main(argv: list[str] | None = None) -> int:
                     mcp_advertise_host=args.mcp_advertise,
                     start_processes=True,
                     connection_target=connection_target,
+                    reuse_port=bool(getattr(args, "reuse_port", False)),
                 )
             elif args.serve_command == "status":
                 result = status_report(workspace_root, connection_target=connection_target)

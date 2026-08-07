@@ -242,18 +242,141 @@ EOF
 
     log "  current → $release_dir"
 
-    # ── Step 4: restart gate ────────────────────────────────────────────
-    log "Step 4/5: Restarting gate service..."
-    systemctl --user daemon-reload
-    if ! systemctl --user restart "$GATE_SERVICE"; then
-        err "systemctl restart failed! Rolling back..."
-        _do_rollback "$old_current"
-        exit 1
+    # ── Step 4: graceful handoff (AIPOS-356) ────────────────────────────
+    # Zero-downtime deploy using SO_REUSEPORT:
+    #   1. Start a temp MCP process with --reuse-port in its own systemd scope
+    #      (isolated from the gate service's cgroup so systemctl stop won't kill it)
+    #   2. Verify temp is healthy and accepting connections
+    #   3. systemctl restart $GATE_SERVICE — kills old process, starts new one
+    #      (new also has --reuse-port from the service file)
+    #      During this: temp keeps the port alive → zero connection refused
+    #   4. Wait for new systemd process to be healthy
+    #   5. Kill temp scope — all traffic now goes to new process
+    log "Step 4/5: Graceful handoff (AIPOS-356 — zero-downtime deploy)..."
+
+    local service_file="$HOME/.config/systemd/user/$GATE_SERVICE"
+    local conn_json="/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json"
+    local env_file="$HOME/.config/lybra/pi-key.env"
+
+    if [[ ! -f "$service_file" ]]; then
+        err "Service file not found: $service_file"
+        err "Falling back to hard restart..."
+        systemctl --user daemon-reload
+        systemctl --user restart "$GATE_SERVICE" || { _do_rollback "$old_current"; exit 1; }
+    else
+        # Read MCP port from connection.json
+        local mcp_host mcp_port
+        mcp_host=$(python3 -c "import json; d=json.load(open('$conn_json')); print(d['mcp']['host'])" 2>/dev/null || echo "0.0.0.0")
+        mcp_port=$(python3 -c "import json; d=json.load(open('$conn_json')); print(d['mcp']['port'])" 2>/dev/null || echo "7118")
+
+        # Source env for tokens
+        if [[ -f "$env_file" ]]; then
+            set -a
+            source "$env_file"
+            set +a
+        fi
+
+        # Step 4a: Start temp MCP in its own systemd scope (isolated cgroup)
+        log "  Starting temp MCP with SO_REUSEPORT in isolated scope..."
+        local scope_name="lybra-deploy-handoff"
+        systemd-run --user --scope --unit="$scope_name" \
+            /usr/bin/python3 -m tools.mcp_server serve-http \
+            --host "$mcp_host" --port "$mcp_port" \
+            --service-connection-json "$conn_json" \
+            --reuse-port &
+        # The scope runs asynchronously; find its main PID
+        sleep 1
+        local temp_pid
+        temp_pid=$(systemctl --user show -p MainPID --value "$scope_name.scope" 2>/dev/null || echo "")
+        if [[ -z "$temp_pid" || "$temp_pid" == "0" ]]; then
+            err "Failed to start temp MCP scope"
+            err "Falling back to hard restart..."
+            systemctl --user daemon-reload
+            systemctl --user restart "$GATE_SERVICE" || { _do_rollback "$old_current"; exit 1; }
+        else
+            log "  Temp MCP running in scope (PID $temp_pid)"
+
+            # Step 4b: Wait for temp to be accepting connections
+            local max_wait=10 waited=0 ready=false
+            while (( waited < max_wait )); do
+                if python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(0.5)
+try:
+    s.connect(('127.0.0.1', $mcp_port))
+    s.close()
+    exit(0)
+except:
+    exit(1)
+" 2>/dev/null; then
+                    ready=true
+                    break
+                fi
+                sleep 0.5
+                (( waited++ )) || true
+            done
+
+            if [[ "$ready" != "true" ]]; then
+                err "Temp MCP did not become ready within ${max_wait}s"
+                systemctl --user stop "$scope_name.scope" 2>/dev/null || true
+                err "Falling back to hard restart..."
+                systemctl --user daemon-reload
+                systemctl --user restart "$GATE_SERVICE" || { _do_rollback "$old_current"; exit 1; }
+            else
+                log "  ✓ Temp MCP is accepting connections"
+
+                # Step 4c: Restart the gate service.
+                # systemd stops old (SIGTERM to cgroup) → starts new (from new symlink).
+                # The temp scope is NOT in the service's cgroup, so it survives.
+                # Both temp + new have SO_REUSEPORT → port always has a listener.
+                log "  Restarting gate service (temp keeps port alive)..."
+                systemctl --user daemon-reload
+                systemctl --user restart "$GATE_SERVICE"
+
+                # Step 4d: Wait for the new systemd process to be healthy
+                log "  Waiting for new gate process to stabilize..."
+                sleep 3
+                local new_ready=false
+                for i in $(seq 1 10); do
+                    if systemctl --user is-active "$GATE_SERVICE" &>/dev/null; then
+                        # Verify the new process is actually responding
+                        if python3 -c "
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(0.5)
+try:
+    s.connect(('127.0.0.1', $mcp_port))
+    s.close()
+    exit(0)
+except:
+    exit(1)
+" 2>/dev/null; then
+                            new_ready=true
+                            break
+                        fi
+                    fi
+                    sleep 1
+                done
+
+                # Step 4e: Kill the temp scope
+                log "  Stopping temp handoff scope..."
+                systemctl --user stop "$scope_name.scope" 2>/dev/null || true
+
+                if [[ "$new_ready" != "true" ]]; then
+                    err "New gate process did not become ready!"
+                    err "Rolling back..."
+                    _do_rollback "$old_current"
+                    exit 1
+                fi
+                log "  ✓ Graceful handoff complete — new gate is serving"
+            fi
+        fi
     fi
 
     # ── Step 5: health check ────────────────────────────────────────────
-    log "Step 5/5: Health check (waiting 5s for gate to stabilize)..."
-    sleep 5
+    log "Step 5/5: Health check (verifying gate stability)..."
+    sleep 2
 
     if systemctl --user is-active "$GATE_SERVICE" &>/dev/null; then
         log "✓ Gate is running. Deploy successful!"
