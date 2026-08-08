@@ -2233,8 +2233,6 @@ def main(argv: list[str] | None = None) -> int:
             parser.print_help()
             return 2
         if args.envelope_command == "mint":
-            from datetime import datetime, timezone
-            from tools.aipos_cli.board_adapter import record_owner_decision
             # Build autonomy_policy payload
             task_selector = {}
             if args.task_mode:
@@ -2480,8 +2478,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "queue" and getattr(args, "queue_command", None) == "return-repair":
         # AIPOS-370F2: return-repair — diagnose and repair stuck return
         from tools.aipos_cli.task_loader import find_task_by_id
-        from tools.aipos_cli.records import load_records, expected_session_record_path
-        from datetime import datetime, timezone
         
         try:
             task, all_matches = find_task_by_id(args.task_id, repo_root)
@@ -2863,7 +2859,6 @@ def main(argv: list[str] | None = None) -> int:
             from tools.aipos_cli.pump_orchestration import (
                 DispatchContext, run_pump_dispatch, render_dispatch_plan, list_unmanaged_agents,
             )
-            from tools.aipos_cli.workspace_config import get_collaboration_profile
 
             workspace_root = Path(args.workspace_root).expanduser().resolve()
             product_repo = Path(args.product_repo).expanduser().resolve() if args.product_repo else Path.home() / "projects" / "lybra"
