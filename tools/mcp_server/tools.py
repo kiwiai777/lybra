@@ -3224,6 +3224,181 @@ def lybra_roles_remove(arguments: dict[str, Any] | None = None) -> dict[str, Any
     })
 
 
+def lybra_roles_enroll_code(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-362: generate a one-time enrollment code for remote agent credential bootstrap.
+
+    Owner-gated: requires owner_authorization_ref.
+    The enrollment code is NOT a token — it's a temporary credential that can be exchanged
+    for a real token via lybra_roles_enroll_exchange.
+    """
+    from tools.aipos_cli.enrollment import create_enrollment_code
+    args = arguments or {}
+    role = str(args.get("role") or "").strip()
+    instance = str(args.get("instance") or "").strip() or None
+    ttl = args.get("ttl")
+    owner_authorization_ref = str(args.get("owner_authorization_ref") or "").strip() or None
+    reason = str(args.get("reason") or "").strip()
+    if not role:
+        return _error_result("Missing required parameter: role")
+    if not owner_authorization_ref:
+        return _error_result(
+            "Missing required parameter: owner_authorization_ref. "
+            "Enrollment code generation is owner-gated (AIPOS-362 security model)."
+        )
+    if ttl is not None:
+        try:
+            ttl = int(ttl)
+            if ttl <= 0:
+                return _error_result("ttl must be a positive integer (seconds)")
+        except (ValueError, TypeError):
+            return _error_result("ttl must be a positive integer (seconds)")
+    root = _repo_root()
+    try:
+        enrollment = create_enrollment_code(
+            root,
+            role=role,
+            instance=instance,
+            ttl_seconds=ttl,
+            by=owner_authorization_ref,
+            reason=reason or f"owner-authorization-ref: {owner_authorization_ref}",
+        )
+    except ValueError as exc:
+        return _error_result(f"Enrollment code creation failed: {exc}")
+    return _tool_result({
+        "ok": True,
+        "operation": "roles_enroll_code",
+        "enrollment": enrollment,
+        "security_notice": "The enrollment code is shown only once. Token values never appear in logs or responses.",
+    })
+
+
+def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-362: exchange an enrollment code for a capability token.
+
+    This is a PUBLIC endpoint (no token required). The enrollment code itself is the authentication.
+    Once exchanged, the code is marked as used and cannot be reused.
+    The token value is returned ONLY in this response and never logged.
+    """
+    from tools.aipos_cli.enrollment import get_enrollment_status, mark_enrollment_used
+    import secrets
+    args = arguments or {}
+    code = str(args.get("code") or "").strip()
+    if not code:
+        return _error_result("Missing required parameter: code")
+    
+    root = _repo_root()
+    try:
+        status, record = get_enrollment_status(root, code)
+    except Exception as exc:
+        return _error_result(f"Enrollment exchange failed: {exc}")
+    
+    if status != "pending":
+        return _error_result(f"Enrollment code is {status}. Valid codes can only be used once.")
+    if not record:
+        return _error_result("Enrollment code not found or expired")
+    
+    # Generate token for the bound role
+    role = record["role"]
+    instance = record.get("instance")
+    
+    # Mint a new token (same logic as service_mode._role_token_entry)
+    token = secrets.token_urlsafe(32)
+    from tools.aipos_cli.service_mode import secret_fingerprint, ROLE_SPECS
+    from tools.aipos_cli.custom_roles import resolve_role_to_class
+    
+    # Resolve role to class (handles custom roles)
+    role_class = resolve_role_to_class(role, root)
+    if not role_class:
+        return _error_result(f"Unknown role: {role}. Role must be a built-in or registered custom role.")
+    
+    # Find the role spec
+    spec = None
+    for s in ROLE_SPECS:
+        if s["role"] == role_class:
+            spec = s
+            break
+    if not spec:
+        return _error_result(f"Role class '{role_class}' not found in ROLE_SPECS")
+    
+    # Build token entry
+    token_entry = {
+        "role": role,
+        "token": token,
+        "token_ref": f"svc-{role}",
+        "scopes": list(spec["scopes"]),
+        "fingerprint": secret_fingerprint(token),
+    }
+    if role_class != role:  # Custom role
+        token_entry["role_class"] = role_class
+    if instance:
+        token_entry["agent_instance"] = instance
+    
+    # Mark code as used
+    try:
+        mark_enrollment_used(root, code)
+    except ValueError as exc:
+        return _error_result(f"Failed to mark enrollment code as used: {exc}")
+    
+    return _tool_result({
+        "ok": True,
+        "operation": "roles_enroll_exchange",
+        "token_entry": token_entry,
+        "security_notice": "Store this token securely with 0600 permissions. It will not be shown again.",
+    })
+
+
+def lybra_roles_enroll_revoke(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-362: revoke an enrollment code. Idempotent.
+
+    Owner-gated: requires owner_authorization_ref.
+    """
+    from tools.aipos_cli.enrollment import revoke_enrollment_code
+    args = arguments or {}
+    code_id = str(args.get("code_id") or "").strip()
+    owner_authorization_ref = str(args.get("owner_authorization_ref") or "").strip() or None
+    reason = str(args.get("reason") or "").strip()
+    if not code_id:
+        return _error_result("Missing required parameter: code_id")
+    if not owner_authorization_ref:
+        return _error_result(
+            "Missing required parameter: owner_authorization_ref. "
+            "Enrollment code revocation is owner-gated (AIPOS-362 security model)."
+        )
+    root = _repo_root()
+    try:
+        revoked = revoke_enrollment_code(
+            root,
+            code_id,
+            by=owner_authorization_ref,
+            reason=reason or f"owner-authorization-ref: {owner_authorization_ref}",
+        )
+    except ValueError as exc:
+        return _error_result(f"Enrollment code revocation failed: {exc}")
+    return _tool_result({
+        "ok": True,
+        "operation": "roles_enroll_revoke",
+        "revoked": revoked,
+    })
+
+
+def lybra_roles_enroll_list(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-362: list all enrollment codes (without showing the actual code values).
+
+    Read-only, no owner-gating required.
+    """
+    from tools.aipos_cli.enrollment import list_enrollment_codes
+    root = _repo_root()
+    try:
+        codes = list_enrollment_codes(root, include_code=False)
+    except Exception as exc:
+        return _error_result(f"Failed to list enrollment codes: {exc}")
+    return _tool_result({
+        "ok": True,
+        "operation": "roles_enroll_list",
+        "enrollments": codes,
+    })
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
@@ -3264,6 +3439,10 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_naming_profile_set": lybra_naming_profile_set,
     "lybra_roles_register": lybra_roles_register,
     "lybra_roles_remove": lybra_roles_remove,
+    "lybra_roles_enroll_code": lybra_roles_enroll_code,
+    "lybra_roles_enroll_exchange": lybra_roles_enroll_exchange,
+    "lybra_roles_enroll_revoke": lybra_roles_enroll_revoke,
+    "lybra_roles_enroll_list": lybra_roles_enroll_list,
 }
 
 
@@ -4124,6 +4303,76 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "lybra_roles_enroll_code",
+        "description": (
+            "AIPOS-362: generate a one-time enrollment code for remote agent credential bootstrap. "
+            "Owner-gated: requires owner_authorization_ref. "
+            "The enrollment code can be exchanged for a capability token via lybra_roles_enroll_exchange. "
+            "The code is NOT a token — it's a temporary credential that can be safely transmitted to the remote agent. "
+            "Token values never appear in logs or agent-facing outputs."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "role": {"type": "string", "description": "Role to bind (e.g., executor, auditor, or custom role)."},
+                "instance": {"type": "string", "description": "Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance."},
+                "ttl": {"type": "integer", "description": "Time-to-live in seconds; omit for no expiration."},
+                "owner_authorization_ref": {"type": "string", "description": "Reference to owner authorization for this enrollment."},
+                "reason": {"type": "string", "description": "Reason for generating this enrollment code."},
+            },
+            "required": ["role", "owner_authorization_ref"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_roles_enroll_exchange",
+        "description": (
+            "AIPOS-362: exchange an enrollment code for a capability token. "
+            "PUBLIC endpoint (no token required) — the enrollment code itself is the authentication. "
+            "Once exchanged, the code is marked as used and cannot be reused. "
+            "The token value is returned ONLY in this response and never logged. "
+            "Remote agents should save the token with 0600 permissions."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Enrollment code to exchange."},
+            },
+            "required": ["code"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_roles_enroll_revoke",
+        "description": (
+            "AIPOS-362: revoke an enrollment code. Idempotent. "
+            "Owner-gated: requires owner_authorization_ref. "
+            "Revoked codes cannot be exchanged for tokens."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "code_id": {"type": "string", "description": "Enrollment code ID to revoke."},
+                "owner_authorization_ref": {"type": "string", "description": "Reference to owner authorization for this revocation."},
+                "reason": {"type": "string", "description": "Reason for revoking this enrollment code."},
+            },
+            "required": ["code_id", "owner_authorization_ref"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_roles_enroll_list",
+        "description": (
+            "AIPOS-362: list all enrollment codes (without showing the actual code values). "
+            "Read-only, no owner-gating required. Shows status, role, instance, and expiration."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -4178,6 +4427,8 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
     descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_naming_profile"))
     # AIPOS-352F1: custom role write verbs are always visible (owner-gated via owner_authorization_ref param)
     descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_roles_register") or tool["name"].startswith("lybra_roles_remove"))
+    # AIPOS-362: enrollment verbs - enroll_code/revoke/list are owner-gated (always visible); enroll_exchange is PUBLIC (always visible)
+    descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_roles_enroll"))
     return descriptors
 
 

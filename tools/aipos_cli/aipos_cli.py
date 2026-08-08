@@ -1432,6 +1432,21 @@ def build_parser() -> argparse.ArgumentParser:
     roles_remove_parser.add_argument("--owner-authorization-ref", help="AIPOS-346F2: reference to owner authorization for this removal")
     roles_remove_parser.add_argument("--reason", default="", help="Reason for removing this custom role")
     roles_remove_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-362: enrollment code management (remote agent credential enrollment)
+    roles_enroll_code_parser = roles_subparsers.add_parser("enroll-code", help="AIPOS-362: generate a one-time enrollment code for remote agent credential bootstrap")
+    roles_enroll_code_parser.add_argument("--role", required=True, help="Role to bind (e.g., executor, auditor, or custom role)")
+    roles_enroll_code_parser.add_argument("--instance", help="Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance")
+    roles_enroll_code_parser.add_argument("--ttl", type=int, help="Time-to-live in seconds; omit for no expiration")
+    roles_enroll_code_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this enrollment")
+    roles_enroll_code_parser.add_argument("--reason", default="", help="Reason for generating this enrollment code")
+    roles_enroll_code_parser.add_argument("--json", action="store_true", help="Output JSON")
+    roles_enroll_revoke_parser = roles_subparsers.add_parser("enroll-revoke", help="AIPOS-362: revoke an enrollment code")
+    roles_enroll_revoke_parser.add_argument("code_id", help="Enrollment code ID to revoke")
+    roles_enroll_revoke_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this revocation")
+    roles_enroll_revoke_parser.add_argument("--reason", default="", help="Reason for revoking this enrollment code")
+    roles_enroll_revoke_parser.add_argument("--json", action="store_true", help="Output JSON")
+    roles_enroll_list_parser = roles_subparsers.add_parser("enroll-list", help="AIPOS-362: list enrollment codes")
+    roles_enroll_list_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
     profile_subparsers = profile_parser.add_subparsers(dest="profile_command")
@@ -2061,6 +2076,80 @@ def main(argv: list[str] | None = None) -> int:
                     if owner_auth_ref:
                         print(f"  Owner authorization ref: {owner_auth_ref}")
                     print(f"  Active custom roles: {list(updated.keys())}")
+            elif args.roles_command == "enroll-code":
+                # AIPOS-362: generate enrollment code
+                from tools.aipos_cli.enrollment import create_enrollment_code
+                owner_auth_ref = str(getattr(args, "owner_authorization_ref", "") or "").strip() or None
+                reason = str(getattr(args, "reason", "") or "").strip()
+                by = owner_auth_ref or "owner"
+                ttl = getattr(args, "ttl", None)
+                instance = getattr(args, "instance", None)
+                enrollment = create_enrollment_code(
+                    workspace_root,
+                    role=args.role,
+                    instance=instance,
+                    ttl_seconds=ttl,
+                    by=by,
+                    reason=reason or (f"owner-authorization-ref: {owner_auth_ref}" if owner_auth_ref else ""),
+                )
+                result = {
+                    "ok": True,
+                    "operation": "roles_enroll_code",
+                    "enrollment": enrollment,
+                }
+                if getattr(args, "json", False):
+                    print(render_json(result))
+                else:
+                    print(f"Generated enrollment code for role '{args.role}'")
+                    if instance:
+                        print(f"  Instance: {instance}")
+                    print(f"  Code ID: {enrollment['code_id']}")
+                    print(f"  Fingerprint: {enrollment['fingerprint']}")
+                    if ttl:
+                        print(f"  Expires at: {enrollment['expires_at']}")
+                    print(f"\n  Enrollment code (give this to the remote agent):")
+                    print(f"  {enrollment['code']}")
+                    print(f"\n  ⚠ This code is shown only once. Store it securely or share it immediately.")
+            elif args.roles_command == "enroll-revoke":
+                # AIPOS-362: revoke enrollment code
+                from tools.aipos_cli.enrollment import revoke_enrollment_code
+                owner_auth_ref = str(getattr(args, "owner_authorization_ref", "") or "").strip() or None
+                reason = str(getattr(args, "reason", "") or "").strip()
+                by = owner_auth_ref or "owner"
+                revoked = revoke_enrollment_code(
+                    workspace_root,
+                    args.code_id,
+                    by=by,
+                    reason=reason or (f"owner-authorization-ref: {owner_auth_ref}" if owner_auth_ref else ""),
+                )
+                result = {
+                    "ok": True,
+                    "operation": "roles_enroll_revoke",
+                    "revoked": revoked,
+                }
+                if getattr(args, "json", False):
+                    print(render_json(result))
+                else:
+                    print(f"Revoked enrollment code: {args.code_id}")
+                    if owner_auth_ref:
+                        print(f"  Owner authorization ref: {owner_auth_ref}")
+            elif args.roles_command == "enroll-list":
+                # AIPOS-362: list enrollment codes
+                from tools.aipos_cli.enrollment import list_enrollment_codes
+                codes = list_enrollment_codes(workspace_root, include_code=False)
+                result = {
+                    "ok": True,
+                    "operation": "roles_enroll_list",
+                    "enrollments": codes,
+                }
+                if getattr(args, "json", False):
+                    print(render_json(result))
+                else:
+                    print(f"{'Code ID':<24} {'Role':<16} {'Instance':<32} {'Status':<10} {'Expires At'}")
+                    for code in codes:
+                        inst = code.get('instance') or '(any)'
+                        expires = code.get('expires_at') or '(never)'
+                        print(f"{code['code_id']:<24} {code['role']:<16} {inst:<32} {code['status']:<10} {expires}")
             else:
                 parser.print_help()
                 return 2
