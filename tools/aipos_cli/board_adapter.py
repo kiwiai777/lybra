@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1993,6 +1994,68 @@ def _unsafe_return_ref(value: str) -> bool:
     return raw.is_absolute() or ".." in raw.parts
 
 
+def _check_uncommitted_code(repo_root: Path, task_id: str) -> dict[str, Any]:
+    """AIPOS-FND-5: Check if code task has uncommitted changes in working tree.
+    
+    Returns:
+        dict with keys:
+            - has_uncommitted: bool
+            - message: str (if has_uncommitted=True)
+            - details: dict (git status output, HEAD check)
+    """
+    try:
+        # Check git status --porcelain (non-empty = uncommitted changes)
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            # Not a git repo or git command failed - skip check
+            return {"has_uncommitted": False, "skip_reason": "git status failed"}
+        
+        status_output = result.stdout.strip()
+        if status_output:
+            # Has uncommitted changes
+            lines = status_output.split("\n")
+            file_count = len(lines)
+            return {
+                "has_uncommitted": True,
+                "message": f"Working tree has {file_count} uncommitted file(s)",
+                "details": {"status_output": status_output[:500]},  # Truncate for safety
+            }
+        
+        # Check if there's a recent commit mentioning this task_id
+        # (This is optional verification - primary check is status above)
+        if task_id:
+            result = subprocess.run(
+                ["git", "log", "-1", "--oneline", "--grep", task_id],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # Found a commit mentioning task_id - good signal
+                return {
+                    "has_uncommitted": False,
+                    "commit_found": True,
+                    "commit_line": result.stdout.strip()[:200],
+                }
+        
+        # No uncommitted changes and no verification needed
+        return {"has_uncommitted": False}
+    
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        # Git command failed - skip check to avoid false blocking
+        return {
+            "has_uncommitted": False,
+            "skip_reason": f"git check error: {type(exc).__name__}",
+        }
+
+
 def _task_filename_for(task_id: str) -> str:
     value = "".join(char.lower() if char.isalnum() else "-" for char in task_id).strip("-")
     while "--" in value:
@@ -2081,6 +2144,18 @@ def _build_return_preview(
         blocking_reasons.append("SESSION_MISMATCH: active_session_id does not match claimed task")
     if any(_unsafe_return_ref(ref) for ref in [*artifact_refs, completion_report_ref or ""]):
         blocking_reasons.append("Return evidence refs must be repo-relative or approved workspace-relative and secret-free")
+    
+    # AIPOS-FND-5: code 卡交回门检测未提交代码
+    task_mode = str(source_metadata.get("task_mode") or "").strip()
+    artifact_policy = str(source_metadata.get("artifact_policy") or "").strip()
+    if task_mode == "code" or artifact_policy == "formal_write":
+        current_task_id = str(task.get("task_id") or "")
+        git_check = _check_uncommitted_code(repo_root, current_task_id)
+        if git_check.get("has_uncommitted"):
+            blocking_reasons.append(
+                f"CODE_NOT_COMMITTED: {git_check.get('message', 'Working tree has uncommitted changes')}. "
+                "Code tasks must commit all changes before return."
+            )
 
     updated_metadata = dict(source_metadata)
     updated_metadata["status"] = "claimed"
