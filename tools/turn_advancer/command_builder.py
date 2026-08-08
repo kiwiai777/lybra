@@ -3,6 +3,7 @@
 根据动作类别 + 任务状态，构建完整的 MCP verb 调用或 CLI 命令（所有参数填好）。
 
 AIPOS-FND-9: finalize action now auto-deploys gate-side changes.
+Test marker: v2 for finalize auto-deploy validation.
 """
 from pathlib import Path
 from typing import Any
