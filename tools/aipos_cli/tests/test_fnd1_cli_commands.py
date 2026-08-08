@@ -48,12 +48,13 @@ class TestNewCLICommands(unittest.TestCase):
     @patch('tools.aipos_cli.aipos_cli._find_repo_root_for_args')
     @patch('tools.aipos_cli.board_adapter.return_task')
     def test_queue_return_parsing(self, mock_return, mock_root):
-        """Test queue-return command parameter parsing."""
+        """Test queue return command parameter parsing."""
         mock_root.return_value = Path("/tmp/test")
         mock_return.return_value = {"ok": True, "verdict": "PASS"}
         
         args = [
-            "queue-return",
+            "queue",
+            "return",
             "--task-id", "TEST-1",
             "--actor", "test-actor",
             "--agent-instance", "test-instance",
