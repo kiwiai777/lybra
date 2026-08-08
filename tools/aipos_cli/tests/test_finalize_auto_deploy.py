@@ -12,19 +12,29 @@ from tools.aipos_cli.finalize import finalize_task
 @pytest.fixture
 def mock_git_setup(tmp_path):
     """Setup a mock git repository structure."""
-    # Create task_cards structure
+    # Create task_cards structure (display-only report; NOT judged by finalize anymore)
     task_dir = tmp_path / "task_cards" / "TEST-TASK"
     task_dir.mkdir(parents=True)
-    
-    # Create audit report with PASS verdict
     audit_report = task_dir / "AUDIT-REPORT-001.md"
-    audit_report.write_text(
+    audit_report.write_text("# Audit Report\n(no frontmatter, as real reports ship today)\n")
+
+    # AIPOS-FND-14: finalize eligibility now reads the AUTHORITATIVE gate audit_verdict_record
+    # under governance_root/5_tasks/records/audit_verdicts/<task_id>/*.md, not the report above.
+    # This fixture uses tmp_path as BOTH governance_root and workspace_root (single-root test
+    # setup), so the verdict record lives under tmp_path/5_tasks/records/audit_verdicts/.
+    verdicts_dir = tmp_path / "5_tasks" / "records" / "audit_verdicts" / "TEST-TASK"
+    verdicts_dir.mkdir(parents=True)
+    verdict_record = verdicts_dir / "verdict_TEST-TASK_20260101_000000_audit-test.md"
+    verdict_record.write_text(
         "---\n"
+        "record_type: audit_verdict_record\n"
         "verdict: PASS\n"
+        "reviewed_task_id: TEST-TASK\n"
+        "verdict_at: '2026-01-01T00:00:00Z'\n"
         "---\n"
-        "# Audit Report\n"
+        "# MCP Audit Verdict Record\n"
     )
-    
+
     # Create .deploy structure
     deploy_dir = tmp_path / ".deploy"
     current_dir = deploy_dir / "releases" / "20260808_120000-abc1234"
@@ -93,6 +103,7 @@ def test_finalize_auto_deploy_gate_side_changes(mock_subprocess, mock_git_setup)
         task_id="TEST-TASK",
         actor="test-actor",
         workspace_root=workspace_root,
+        governance_root=workspace_root,
         dry_run=False,
         push=False,
     )
@@ -153,6 +164,7 @@ def test_finalize_skip_deploy_cli_side_only(mock_subprocess, mock_git_setup):
         task_id="TEST-TASK",
         actor="test-actor",
         workspace_root=workspace_root,
+        governance_root=workspace_root,
         dry_run=False,
         push=False,
     )
@@ -216,6 +228,7 @@ def test_finalize_deploy_failure_does_not_block_finalize(mock_subprocess, mock_g
         task_id="TEST-TASK",
         actor="test-actor",
         workspace_root=workspace_root,
+        governance_root=workspace_root,
         dry_run=False,
         push=False,
     )
@@ -267,6 +280,7 @@ def test_finalize_no_drift_no_deploy(mock_subprocess, mock_git_setup):
         task_id="TEST-TASK",
         actor="test-actor",
         workspace_root=workspace_root,
+        governance_root=workspace_root,
         dry_run=False,
         push=False,
     )

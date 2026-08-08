@@ -1771,7 +1771,8 @@ def build_parser() -> argparse.ArgumentParser:
     finalize_parser = subparsers.add_parser("finalize", help="AIPOS-FND-2: Finalize PASS task (git commit/push)")
     finalize_parser.add_argument("--task-id", required=True, help="Task ID to finalize (must have verdict=PASS)")
     finalize_parser.add_argument("--actor", required=True, help="Actor performing finalization")
-    finalize_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    finalize_parser.add_argument("--workspace-root", help="Product code repo root (git commit/push runs here); defaults to auto-discovery")
+    finalize_parser.add_argument("--governance-root", help="AIPOS-FND-14: Governance workspace root that owns 5_tasks/records/audit_verdicts/ (authoritative gate verdicts). Defaults to auto-discovery via the standard Lybra workspace resolution ladder; must be set explicitly when it differs from --workspace-root.")
     finalize_parser.add_argument("--push", action="store_true", help="Push to remote after commit")
     finalize_parser.add_argument("--dry-run", action="store_true", help="Validate without committing")
     finalize_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -2587,11 +2588,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # Fallback to current directory if no workspace structure found
             repo_root = Path.cwd()
-        
+
+        # AIPOS-FND-14: governance_root (owns 5_tasks/records/audit_verdicts/) is resolved
+        # separately from repo_root (the product code repo where git ops run) — the two are
+        # decoupled and must never be guessed as the same path. --governance-root wins;
+        # otherwise finalize_task() falls back to resolve_workspace_root() auto-discovery.
+        governance_root = (
+            Path(args.governance_root).expanduser().resolve() if getattr(args, "governance_root", None) else None
+        )
+
         result = finalize_task(
             task_id=args.task_id,
             actor=args.actor,
             workspace_root=repo_root,
+            governance_root=governance_root,
             dry_run=args.dry_run,
             push=args.push,
         )

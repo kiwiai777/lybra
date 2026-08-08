@@ -97,76 +97,141 @@ def _check_deployment_integrity(repo_root: Path) -> dict[str, Any]:
         }
 
 
-def check_task_can_finalize(task_id: str, workspace_root: Path) -> dict[str, Any]:
-    """Check if a task can be finalized (verdict=PASS).
-    
+def _report_frontmatter_verdict_for_display(workspace_root: Path, task_id: str) -> dict[str, Any]:
+    """AIPOS-FND-14: best-effort, DISPLAY-ONLY lookup of the human-authored
+    task_cards/<task_id>/AUDIT-REPORT-*.md frontmatter ``verdict:`` field.
+
+    This is NEVER judged for finalize eligibility (see ``check_task_can_finalize`` below —
+    that report has no reliable frontmatter and is a plain editable markdown file anyone could
+    hand-write a fake ``verdict: PASS`` into). It is surfaced purely so operators can see what
+    the (non-authoritative) report says alongside the real gate verdict. Any failure here is
+    swallowed — this must never block or alter the real finalize decision.
+    """
+    try:
+        task_dir = workspace_root / "task_cards" / task_id
+        audit_reports = sorted(task_dir.glob("AUDIT-REPORT-*.md"))
+        if not audit_reports:
+            return {"report_path": None, "report_verdict": None}
+        from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+
+        report_path = audit_reports[0]
+        metadata, _body, _warnings = parse_markdown_frontmatter(report_path.read_text(encoding="utf-8"))
+        return {"report_path": str(report_path), "report_verdict": metadata.get("verdict")}
+    except Exception:
+        return {"report_path": None, "report_verdict": None}
+
+
+def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, Any]:
+    """AIPOS-FND-14: Check if a task can be finalized against the AUTHORITATIVE gate
+    audit verdict record — NOT the task_cards/<task_id>/AUDIT-REPORT-*.md frontmatter.
+
+    Root cause this fixes: the old implementation read a hand-authored audit report's
+    frontmatter ``verdict:`` field. That report ships with no frontmatter at all, so
+    ``verdict`` was always ``None`` and finalize was permanently BLOCKed — forcing executors
+    to hand-roll ``git push`` around the gate entirely. Worse, that report is a plain editable
+    markdown file: anyone could hand-write ``verdict: PASS`` into it and finalize would trust
+    it, which is backwards for an accountability harness.
+
+    The authoritative source of truth is the gate's own audit_verdict_record files under
+    ``<governance_root>/5_tasks/records/audit_verdicts/<task_id>/*.md`` — written ONLY by the
+    ``audit_verdict`` MCP verb, always carrying ``record_type: audit_verdict_record``. This
+    scans that directory, rejects any file that doesn't carry that exact ``record_type`` (never
+    counts hand-written markdown as judgeable evidence), sorts the rest by ``verdict_at``, and
+    requires the LATEST terminal verdict to be PASS or PASS_WITH_NOTES (same acceptance rule as
+    ``queue_mutation._check_for_pass_audit_verdict``, AIPOS-FND-7F3).
+
+    ``governance_root`` MUST be the governance workspace root — the one that owns
+    ``5_tasks/records/`` — NOT the product code repo. The two are decoupled (task_cards/ lives
+    in the product repo; 5_tasks/records/ lives in governance); callers must resolve this
+    explicitly rather than guessing between the two roots.
+
     Returns:
         {
             "can_finalize": bool,
             "task_id": str,
             "verdict": str | None,
-            "audit_card_path": str | None,
+            "verdict_record_path": str | None,
+            "verdict_id": str | None,
             "reason": str
         }
     """
-    # Look for audit report in task_cards/<task_id>/AUDIT-REPORT-*.md
-    task_dir = workspace_root / "task_cards" / task_id
-    
-    if not task_dir.exists():
+    verdicts_dir = governance_root / "5_tasks" / "records" / "audit_verdicts" / task_id
+
+    if not verdicts_dir.is_dir():
         return {
             "can_finalize": False,
             "task_id": task_id,
             "verdict": None,
-            "audit_card_path": None,
-            "reason": f"Task directory not found: {task_dir}",
+            "verdict_record_path": None,
+            "verdict_id": None,
+            "reason": (
+                f"No gate audit verdict record found for {task_id} under {verdicts_dir} "
+                "(finalize requires an authoritative gate audit_verdict record; a task_cards "
+                "AUDIT-REPORT is never sufficient)."
+            ),
         }
-    
-    # Find audit report
-    audit_reports = list(task_dir.glob("AUDIT-REPORT-*.md"))
-    if not audit_reports:
-        return {
-            "can_finalize": False,
-            "task_id": task_id,
-            "verdict": None,
-            "audit_card_path": None,
-            "reason": f"No audit report found in {task_dir}",
-        }
-    
-    # Use the first audit report (should be only one)
-    audit_card_path = audit_reports[0]
-    
-    # Parse frontmatter directly to get verdict
-    try:
-        from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-        
-        content = audit_card_path.read_text(encoding="utf-8")
-        metadata, body, errors = parse_markdown_frontmatter(content)
-        verdict = metadata.get("verdict")
-        
-        if verdict == "PASS":
-            return {
-                "can_finalize": True,
-                "task_id": task_id,
-                "verdict": verdict,
-                "audit_card_path": str(audit_card_path),
-                "reason": "Audit verdict is PASS",
+
+    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+
+    candidates: list[dict[str, Any]] = []
+    for verdict_file in sorted(verdicts_dir.glob("*.md")):
+        try:
+            text = verdict_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        metadata, _body, _warnings = parse_markdown_frontmatter(text)
+        # AIPOS-FND-14: reject hand-written markdown masquerading as a gate verdict. A real
+        # gate audit_verdict_record ALWAYS carries record_type: audit_verdict_record.
+        if str(metadata.get("record_type") or "").strip() != "audit_verdict_record":
+            continue
+        verdict_value = str(metadata.get("verdict") or "").strip().upper()
+        verdict_at = str(metadata.get("verdict_at") or metadata.get("timestamp") or "")
+        candidates.append(
+            {
+                "path": verdict_file,
+                "verdict": verdict_value,
+                "verdict_at": verdict_at,
+                "verdict_id": metadata.get("verdict_id") or verdict_file.stem,
             }
-        else:
-            return {
-                "can_finalize": False,
-                "task_id": task_id,
-                "verdict": verdict,
-                "audit_card_path": str(audit_card_path),
-                "reason": f"Audit verdict is {verdict}, not PASS (cannot finalize)",
-            }
-    except Exception as e:
+        )
+
+    if not candidates:
         return {
             "can_finalize": False,
             "task_id": task_id,
             "verdict": None,
-            "audit_card_path": str(audit_card_path),
-            "reason": f"Error loading audit report: {e}",
+            "verdict_record_path": None,
+            "verdict_id": None,
+            "reason": (
+                f"No gate audit verdict record found for {task_id} under {verdicts_dir} "
+                "(files present but none carry record_type: audit_verdict_record — hand-written "
+                "markdown is never accepted as finalize evidence)."
+            ),
         }
+
+    latest = max(candidates, key=lambda c: c["verdict_at"])
+
+    if latest["verdict"] in {"PASS", "PASS_WITH_NOTES"}:
+        return {
+            "can_finalize": True,
+            "task_id": task_id,
+            "verdict": latest["verdict"],
+            "verdict_record_path": str(latest["path"]),
+            "verdict_id": latest["verdict_id"],
+            "reason": f"Latest gate audit verdict is {latest['verdict']} ({latest['path'].name})",
+        }
+
+    return {
+        "can_finalize": False,
+        "task_id": task_id,
+        "verdict": latest["verdict"] or None,
+        "verdict_record_path": str(latest["path"]),
+        "verdict_id": latest["verdict_id"],
+        "reason": (
+            f"Latest gate audit verdict is {latest['verdict'] or 'UNKNOWN'}, not PASS "
+            f"(cannot finalize): {latest['path'].name}"
+        ),
+    }
 
 
 def finalize_task(
@@ -174,20 +239,29 @@ def finalize_task(
     actor: str,
     workspace_root: Path,
     *,
+    governance_root: Path | None = None,
     dry_run: bool = False,
     push: bool = False,
 ) -> dict[str, Any]:
     """Finalize a PASS task by committing changes to git.
-    
+
     AIPOS-FND-9: After commit, auto-deploys gate-side changes to prevent drift.
-    
+    AIPOS-FND-14: Audit eligibility is now checked against the authoritative gate
+    audit_verdict_record (governance workspace 5_tasks/records/), NOT the task_cards
+    AUDIT-REPORT markdown frontmatter.
+
     Args:
         task_id: Task ID to finalize
         actor: Actor performing the finalization
-        workspace_root: Workspace root directory
+        workspace_root: Product code repo root (git operations run here)
+        governance_root: Governance workspace root (owns 5_tasks/records/).  If None,
+            resolved via ``resolve_workspace_root()`` using the standard Lybra precedence
+            ladder (LYBRA_WORKSPACE_ROOT / AIPOS_WORKSPACE_ROOT / ~/.lybra/config.json home
+            model).  Must be supplied explicitly in contexts where auto-resolution would
+            produce the wrong workspace.
         dry_run: If True, only validate without committing
         push: If True, also push after commit
-    
+
     Returns:
         {
             "verdict": "PASS" | "BLOCK",
@@ -207,9 +281,48 @@ def finalize_task(
         }
     """
     operations = []
-    
-    # Check if task can be finalized (verdict=PASS)
-    finalize_check = check_task_can_finalize(task_id, workspace_root)
+
+    # AIPOS-FND-14: resolve governance root (where 5_tasks/records/ lives) separately from
+    # workspace_root (the product code repo, where git commit/push runs). In the standard
+    # two-root setup, workspace_root=~/projects/lybra and governance_root=
+    # ~/ai-project-os/2_projects/lybra; they MUST NOT be conflated.
+    if governance_root is None:
+        from tools.aipos_cli.workspace_config import resolve_workspace_root
+        try:
+            governance_root = resolve_workspace_root()
+        except FileNotFoundError as exc:
+            operations.append(f"Cannot resolve governance root: {exc}")
+            return {
+                "verdict": "BLOCK",
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": dry_run,
+                "can_finalize": False,
+                "integrity_check": None,
+                "committed": False,
+                "pushed": False,
+                "deployed": False,
+                "deployment_skipped": False,
+                "deployment_error": None,
+                "commit_hash": None,
+                "message": f"Cannot locate governance workspace (5_tasks/records/): {exc}",
+                "operations": operations,
+            }
+
+    operations.append(f"Governance root (audit verdicts): {governance_root}")
+    operations.append(f"Product repo root (git ops): {workspace_root}")
+
+    # AIPOS-FND-14: display-only — surface the task_cards AUDIT-REPORT frontmatter verdict
+    # (if any) alongside the real gate verdict for operator visibility. Never judged.
+    report_display = _report_frontmatter_verdict_for_display(workspace_root, task_id)
+    if report_display["report_path"]:
+        operations.append(
+            f"(display only, not judged) task_cards AUDIT-REPORT frontmatter verdict: "
+            f"{report_display['report_verdict']!r} at {report_display['report_path']}"
+        )
+
+    # Check if task can be finalized (gate audit verdict = PASS)
+    finalize_check = check_task_can_finalize(task_id, governance_root)
     operations.append(f"Checked finalize eligibility: {finalize_check['reason']}")
     
     if not finalize_check["can_finalize"]:
