@@ -2521,10 +2521,33 @@ def _build_audit_dispatch_preview(
         blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: executor_status must be completed")
     if source_metadata.get("audit_readiness") != "ready":
         blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: audit_readiness must be ready")
-    if source_metadata.get("dependency_audit_status") == "PASS":
+    # AIPOS-FND-7F1: FAIL/REQUEST_CHANGES 是非终态,可以复审;PASS 是终态,不可翻案
+    source_task_id_for_verdict = str(source_task.get("task_id") or "")
+    existing_verdicts = records.get("task_audit_verdicts", {}).get(source_task_id_for_verdict, [])
+    if existing_verdicts:
+        # 有已有裁决,检查最新裁决状态
+        latest_verdict = max(existing_verdicts, key=lambda v: v.get("verdict_at", ""))
+        latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
+        if latest_verdict_value in {"PASS", "PASS_WITH_NOTES"}:
+            blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS (terminal state, cannot overturn)")
+        # FAIL/REQUEST_CHANGES/BLOCKED 等非终态:允许 re-dispatch,不 BLOCK
+    elif source_metadata.get("dependency_audit_status") == "PASS":
+        # 兜底:metadata 显示 PASS 但没找到 verdict 记录(数据不一致)
         blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS")
+    
+    # re-dispatch 检查:如果前轮是非终态(FAIL/REQUEST_CHANGES),允许新 audit_task_id
     if source_metadata.get("related_audit_task_ref") or source_metadata.get("audit_dispatch_record_ref"):
-        blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
+        # 已有 dispatch 记录
+        if existing_verdicts:
+            latest_verdict = max(existing_verdicts, key=lambda v: v.get("verdict_at", ""))
+            latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
+            if latest_verdict_value not in {"FAIL", "REQUEST_CHANGES", "BLOCKED"}:
+                # 非 FAIL/REQUEST_CHANGES,不允许 re-dispatch
+                blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
+            # else: FAIL/REQUEST_CHANGES,允许 re-dispatch,不 BLOCK
+        else:
+            # 没有 verdict 记录,但有 dispatch(审计进行中),BLOCK
+            blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
 
     reviewed_return_record_ref = str(source_metadata.get("return_record_ref") or source_metadata.get("return_event_ref") or "").strip()
     if not reviewed_return_record_ref:
@@ -2944,6 +2967,18 @@ def _build_audit_verdict_preview(
     verdict_path = audit_verdict_record_path(repo_root, str(reviewed_task.get("task_id") or ""), verdict_id)
     root = repo_root.resolve()  # AIPOS-240 (F-o3-19): record paths are .resolve()d; symlink-safe render
     verdict_rel = str(verdict_path.resolve().relative_to(root))
+    
+    # AIPOS-FND-7F1: 检查已有裁决,PASS 终态不可翻案,FAIL/REQUEST_CHANGES 允许 supersede
+    reviewed_task_id_for_verdict = str(reviewed_task.get("task_id") or "")
+    existing_verdicts = records.get("task_audit_verdicts", {}).get(reviewed_task_id_for_verdict, [])
+    if existing_verdicts:
+        # 有已有裁决,检查最新裁决状态
+        latest_verdict = max(existing_verdicts, key=lambda v: v.get("verdict_at", ""))
+        latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
+        if latest_verdict_value in {"PASS", "PASS_WITH_NOTES"}:
+            blocking_reasons.append(f"Audit verdict cannot overturn PASS: reviewed task already has terminal PASS verdict")
+        # FAIL/REQUEST_CHANGES/BLOCKED 等非终态:允许 supersede,继续写新 verdict
+    
     if verdict_path.exists():
         blocking_reasons.append(f"Audit verdict record already exists: {verdict_rel}")
 
