@@ -165,5 +165,280 @@ class MultiProjectAuthorizationTests(unittest.TestCase):
             self.assertEqual(_err(result), "PROJECT_SCOPE_DENIED")
 
 
+class UnifiedRegistryLoadingTests(unittest.TestCase):
+    """AIPOS-294C: Unified home_root registry loading tests."""
+
+    def test_unified_load_combines_home_and_projects(self) -> None:
+        """Unified loading combines home-level and project-level registries."""
+        import tempfile
+        import json
+        from tools.mcp_server.http_sse import load_unified_service_role_registry
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            
+            # Create home-level connection.json (cross-project token)
+            home_lybra = home / ".lybra"
+            home_lybra.mkdir()
+            home_conn = {
+                "tokens": [
+                    {
+                        "token": "home_cross_project_token",
+                        "role": "advisor",
+                        "scopes": ["queue_claim"],
+                        "projects": ["*"],  # Explicit cross-project
+                    }
+                ]
+            }
+            (home_lybra / "connection.json").write_text(json.dumps(home_conn))
+            
+            # Create project A
+            proj_a = home / "projectA"
+            proj_a.mkdir()
+            (proj_a / "project.json").write_text(json.dumps({"name": "projectA"}))
+            proj_a_queue = proj_a / "5_tasks" / "queue"
+            proj_a_queue.mkdir(parents=True)
+            proj_a_lybra = proj_a / ".lybra"
+            proj_a_lybra.mkdir()
+            proj_a_conn = {
+                "tokens": [
+                    {
+                        "token": "projectA_dev_token",
+                        "role": "dev",
+                        "scopes": ["queue_claim"],
+                        # No projects field - should default to ["projectA"]
+                    }
+                ]
+            }
+            (proj_a_lybra / "connection.json").write_text(json.dumps(proj_a_conn))
+            
+            # Create project B
+            proj_b = home / "projectB"
+            proj_b.mkdir()
+            (proj_b / "project.json").write_text(json.dumps({"name": "projectB"}))
+            proj_b_queue = proj_b / "5_tasks" / "queue"
+            proj_b_queue.mkdir(parents=True)
+            proj_b_lybra = proj_b / ".lybra"
+            proj_b_lybra.mkdir()
+            proj_b_conn = {
+                "tokens": [
+                    {
+                        "token": "projectB_executor_token",
+                        "role": "executor",
+                        "scopes": ["queue_claim"],
+                        "projects": ["projectB"],  # Explicit single project
+                    }
+                ]
+            }
+            (proj_b_lybra / "connection.json").write_text(json.dumps(proj_b_conn))
+            
+            # Load unified registry
+            registry = load_unified_service_role_registry(home)
+            
+            # Verify all three tokens present
+            self.assertIn("home_cross_project_token", registry)
+            self.assertIn("projectA_dev_token", registry)
+            self.assertIn("projectB_executor_token", registry)
+            
+            # Verify projects attribution
+            self.assertEqual(registry["home_cross_project_token"]["projects"], ["*"])
+            self.assertEqual(registry["projectA_dev_token"]["projects"], ["projectA"])
+            self.assertEqual(registry["projectB_executor_token"]["projects"], ["projectB"])
+
+    def test_explicit_projects_respected_not_overwritten(self) -> None:
+        """DEBT REMOVAL: Explicit projects in token are respected, not overwritten by source."""
+        import tempfile
+        import json
+        from tools.mcp_server.http_sse import load_unified_service_role_registry
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            
+            # Create project A with a token that explicitly declares multi-project access
+            proj_a = home / "projectA"
+            proj_a.mkdir()
+            (proj_a / "project.json").write_text(json.dumps({"name": "projectA"}))
+            proj_a_queue = proj_a / "5_tasks" / "queue"
+            proj_a_queue.mkdir(parents=True)
+            proj_a_lybra = proj_a / ".lybra"
+            proj_a_lybra.mkdir()
+            proj_a_conn = {
+                "tokens": [
+                    {
+                        "token": "multi_project_token",
+                        "role": "auditor",
+                        "scopes": ["queue_claim"],
+                        "projects": ["projectA", "projectB"],  # Explicit multi-project
+                    }
+                ]
+            }
+            (proj_a_lybra / "connection.json").write_text(json.dumps(proj_a_conn))
+            
+            # Load unified registry
+            registry = load_unified_service_role_registry(home)
+            
+            # CRITICAL: projects must be ["projectA", "projectB"], NOT overwritten to ["projectA"]
+            self.assertEqual(registry["multi_project_token"]["projects"], ["projectA", "projectB"])
+
+    def test_token_collision_warns_keeps_first(self) -> None:
+        """Token collision between files warns and keeps first-seen."""
+        import tempfile
+        import json
+        import io
+        from tools.mcp_server.http_sse import load_unified_service_role_registry
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            
+            # Home-level token
+            home_lybra = home / ".lybra"
+            home_lybra.mkdir()
+            home_conn = {
+                "tokens": [
+                    {
+                        "token": "duplicate_token",
+                        "role": "home_role",
+                        "scopes": ["queue_claim"],
+                        "projects": ["*"],
+                    }
+                ]
+            }
+            (home_lybra / "connection.json").write_text(json.dumps(home_conn))
+            
+            # Project A with same token
+            proj_a = home / "projectA"
+            proj_a.mkdir()
+            (proj_a / "project.json").write_text(json.dumps({"name": "projectA"}))
+            proj_a_queue = proj_a / "5_tasks" / "queue"
+            proj_a_queue.mkdir(parents=True)
+            proj_a_lybra = proj_a / ".lybra"
+            proj_a_lybra.mkdir()
+            proj_a_conn = {
+                "tokens": [
+                    {
+                        "token": "duplicate_token",
+                        "role": "project_role",
+                        "scopes": ["queue_claim"],
+                    }
+                ]
+            }
+            (proj_a_lybra / "connection.json").write_text(json.dumps(proj_a_conn))
+            
+            # Load with captured stderr
+            stderr = io.StringIO()
+            registry = load_unified_service_role_registry(home, error_stream=stderr)
+            
+            # Should keep home entry (first-seen)
+            self.assertEqual(registry["duplicate_token"]["role"], "home_role")
+            self.assertEqual(registry["duplicate_token"]["projects"], ["*"])
+            
+            # Should have warned
+            warning = stderr.getvalue()
+            self.assertIn("collision", warning.lower())
+
+    def test_missing_projects_defaults_to_source_project(self) -> None:
+        """Tokens without projects field default to their source project."""
+        import tempfile
+        import json
+        from tools.mcp_server.http_sse import load_unified_service_role_registry
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            
+            # Create project without projects field
+            proj_a = home / "projectA"
+            proj_a.mkdir()
+            (proj_a / "project.json").write_text(json.dumps({"name": "projectA"}))
+            proj_a_queue = proj_a / "5_tasks" / "queue"
+            proj_a_queue.mkdir(parents=True)
+            proj_a_lybra = proj_a / ".lybra"
+            proj_a_lybra.mkdir()
+            proj_a_conn = {
+                "tokens": [
+                    {
+                        "token": "project_token_no_projects",
+                        "role": "dev",
+                        "scopes": ["queue_claim"],
+                        # No projects field
+                    }
+                ]
+            }
+            (proj_a_lybra / "connection.json").write_text(json.dumps(proj_a_conn))
+            
+            # Load unified registry
+            registry = load_unified_service_role_registry(home)
+            
+            # Should default to source project
+            self.assertEqual(registry["project_token_no_projects"]["projects"], ["projectA"])
+
+    def test_home_level_without_projects_defaults_to_wildcard(self) -> None:
+        """Home-level tokens without projects field default to ["*"]."""
+        import tempfile
+        import json
+        from tools.mcp_server.http_sse import load_unified_service_role_registry
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            
+            # Home-level token without projects
+            home_lybra = home / ".lybra"
+            home_lybra.mkdir()
+            home_conn = {
+                "tokens": [
+                    {
+                        "token": "home_token_no_projects",
+                        "role": "owner",
+                        "scopes": ["queue_claim"],
+                        # No projects field
+                    }
+                ]
+            }
+            (home_lybra / "connection.json").write_text(json.dumps(home_conn))
+            
+            # Load unified registry
+            registry = load_unified_service_role_registry(home)
+            
+            # Should default to wildcard
+            self.assertEqual(registry["home_token_no_projects"]["projects"], ["*"])
+
+    def test_token_values_never_modified(self) -> None:
+        """Token values are preserved exactly as in source files."""
+        import tempfile
+        import json
+        from tools.mcp_server.http_sse import load_unified_service_role_registry
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            
+            original_token_value = "original_token_12345_unchanged"
+            
+            # Create project with token
+            proj_a = home / "projectA"
+            proj_a.mkdir()
+            (proj_a / "project.json").write_text(json.dumps({"name": "projectA"}))
+            proj_a_queue = proj_a / "5_tasks" / "queue"
+            proj_a_queue.mkdir(parents=True)
+            proj_a_lybra = proj_a / ".lybra"
+            proj_a_lybra.mkdir()
+            proj_a_conn = {
+                "tokens": [
+                    {
+                        "token": original_token_value,
+                        "role": "dev",
+                        "scopes": ["queue_claim"],
+                    }
+                ]
+            }
+            (proj_a_lybra / "connection.json").write_text(json.dumps(proj_a_conn))
+            
+            # Load unified registry
+            registry = load_unified_service_role_registry(home)
+            
+            # Token value must be unchanged
+            self.assertIn(original_token_value, registry)
+            # Verify it's the exact key (not modified)
+            self.assertEqual(list(registry.keys())[0], original_token_value)
+
+
 if __name__ == "__main__":
     unittest.main()

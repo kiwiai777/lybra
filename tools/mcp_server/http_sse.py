@@ -543,6 +543,70 @@ def load_service_role_registry(connection_json: str | Path) -> dict[str, dict[st
     return registry
 
 
+def load_unified_service_role_registry(home_root: str | Path, *, error_stream: TextIO = sys.stderr) -> dict[str, dict[str, Any]]:
+    """AIPOS-294C: Load and unify all service role registries under home_root.
+
+    Combines:
+      - home_root/.lybra/connection.json (if exists) — cross-project identities
+      - Each project home_root/<proj>/.lybra/connection.json
+
+    Projects field attribution (DEBT REMOVAL KEY):
+      - Token entry ALREADY HAS `projects` → respect it verbatim (cross-project [*] / multi-project)
+      - Token entry LACKS `projects` → default to source project (home-level defaults to ["*"])
+
+    Collision: same token in multiple files → warn, keep first-seen.
+    Token values are NEVER rewritten.
+    """
+    from tools.aipos_cli.workspace_config import _project_candidates
+
+    home_path = Path(home_root).expanduser().resolve()
+    unified: dict[str, dict[str, Any]] = {}
+    seen_sources: dict[str, str] = {}  # token -> source_label
+
+    # 1. Load home-level registry (cross-project identities)
+    home_connection = home_path / ".lybra" / "connection.json"
+    if home_connection.exists():
+        try:
+            home_registry = load_service_role_registry(home_connection)
+            for token, entry in home_registry.items():
+                # Home-level tokens without explicit projects default to ["*"]
+                if "projects" not in entry:
+                    entry["projects"] = ["*"]
+                unified[token] = entry
+                seen_sources[token] = "home"
+        except Exception as exc:
+            print(f"Warning: failed to load home registry {home_connection}: {exc}", file=error_stream)
+
+    # 2. Load each project's registry
+    project_names = _project_candidates(home_path)
+    for proj_name in project_names:
+        proj_connection = home_path / proj_name / ".lybra" / "connection.json"
+        if not proj_connection.exists():
+            continue
+        try:
+            proj_registry = load_service_role_registry(proj_connection)
+            for token, entry in proj_registry.items():
+                if token in unified:
+                    print(
+                        f"Warning: token collision — {token[:16]}... found in both {seen_sources[token]} "
+                        f"and project '{proj_name}'; keeping {seen_sources[token]} entry",
+                        file=error_stream,
+                    )
+                    continue
+                # Project-level tokens without explicit projects default to [source_project]
+                if "projects" not in entry:
+                    entry["projects"] = [proj_name]
+                unified[token] = entry
+                seen_sources[token] = f"project '{proj_name}'"
+        except Exception as exc:
+            print(f"Warning: failed to load project registry {proj_connection}: {exc}", file=error_stream)
+
+    if not unified:
+        raise ValueError(f"No usable service role tokens found under home_root: {home_path}")
+
+    return unified
+
+
 def service_config_from_connection(host: str, port: int, keepalive_seconds: float, connection_json: str | Path, *, reuse_port: bool = False) -> HttpSseConfig:
     return HttpSseConfig(
         host=host,
@@ -550,5 +614,17 @@ def service_config_from_connection(host: str, port: int, keepalive_seconds: floa
         token="",
         keepalive_seconds=keepalive_seconds,
         service_role_registry=load_service_role_registry(connection_json),
+        reuse_port=reuse_port,
+    )
+
+
+def service_config_from_home_root(host: str, port: int, keepalive_seconds: float, home_root: str | Path, *, reuse_port: bool = False) -> HttpSseConfig:
+    """AIPOS-294C: Build config from unified home_root registry."""
+    return HttpSseConfig(
+        host=host,
+        port=port,
+        token="",
+        keepalive_seconds=keepalive_seconds,
+        service_role_registry=load_unified_service_role_registry(home_root),
         reuse_port=reuse_port,
     )

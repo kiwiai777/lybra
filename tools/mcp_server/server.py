@@ -145,6 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Service mode v0 connection config; enables server-side opaque role-token scope resolution",
     )
     http_parser.add_argument(
+        "--home-root",
+        help="AIPOS-294C: Load unified service role registry from home_root (all projects + home-level cross-project tokens); mutually exclusive with --service-connection-json",
+    )
+    http_parser.add_argument(
         "--reuse-port",
         action="store_true",
         default=False,
@@ -154,7 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from .http_sse import config_from_env, run_http_server, service_config_from_connection
+    from .http_sse import config_from_env, run_http_server, service_config_from_connection, service_config_from_home_root
 
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -162,13 +166,31 @@ def main(argv: list[str] | None = None) -> int:
         return serve()
     if args.command == "serve-http":
         reuse_port = bool(getattr(args, "reuse_port", False))
-        if getattr(args, "service_connection_json", None):
+        service_connection_json = getattr(args, "service_connection_json", None)
+        home_root = getattr(args, "home_root", None)
+        
+        # AIPOS-294C: --home-root and --service-connection-json are mutually exclusive
+        if service_connection_json and home_root:
+            print("Error: --service-connection-json and --home-root are mutually exclusive", file=sys.stderr)
+            return 2
+        
+        if home_root:
+            return run_http_server(
+                service_config_from_home_root(
+                    str(args.host),
+                    int(args.port),
+                    float(args.keepalive_seconds),
+                    str(home_root),
+                    reuse_port=reuse_port,
+                )
+            )
+        if service_connection_json:
             return run_http_server(
                 service_config_from_connection(
                     str(args.host),
                     int(args.port),
                     float(args.keepalive_seconds),
-                    str(args.service_connection_json),
+                    str(service_connection_json),
                     reuse_port=reuse_port,
                 )
             )
