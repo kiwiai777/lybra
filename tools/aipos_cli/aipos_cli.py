@@ -1197,6 +1197,18 @@ def build_parser() -> argparse.ArgumentParser:
     queue_return_repair_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     queue_return_repair_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-FND-1: queue return subcommand (same-machine task return)
+    queue_return_parser = queue_subparsers.add_parser("return", help="Return completed task (same-machine)")
+    queue_return_parser.add_argument("--task-id", required=True, help="Task ID to return")
+    queue_return_parser.add_argument("--actor", required=True, help="Actor returning the task")
+    queue_return_parser.add_argument("--agent-instance", required=True, help="Agent instance name")
+    queue_return_parser.add_argument("--result-summary", required=True, help="Result summary")
+    queue_return_parser.add_argument("--owner-policy-ref", required=True, help="Owner policy reference")
+    queue_return_parser.add_argument("--artifact-refs", help="JSON array of artifact references")
+    queue_return_parser.add_argument("--completion-report-ref", help="Completion report reference")
+    queue_return_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    queue_return_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     my_tasks_parser = subparsers.add_parser("my-tasks", help="Render tasks for an actor")
     my_tasks_parser.add_argument("--actor", required=True, help="Role instance or agent instance")
     my_tasks_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1580,6 +1592,55 @@ def build_parser() -> argparse.ArgumentParser:
     turn_scan_parser = turn_subparsers.add_parser("scan", help="Scan all tasks and show next-step list")
     turn_scan_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
     turn_scan_parser.add_argument("--mode", choices=["manual", "auto"], default="manual", help="Dispatch mode")
+
+    # AIPOS-FND-1: Five missing loop-step CLIs (wrap existing gate verbs/backend functions)
+    # 1. task progress - wrap lybra_task_progress (tools.py:2847)
+    task_progress_parser = subparsers.add_parser("task-progress", help="Report task progress event")
+    task_progress_parser.add_argument("--task-id", required=True, help="Task ID")
+    task_progress_parser.add_argument("--actor", required=True, help="Actor reporting progress")
+    task_progress_parser.add_argument("--agent-instance", required=True, help="Agent instance name")
+    task_progress_parser.add_argument("--event-type", required=True, choices=["started", "progress", "completed", "blocked"], help="Event type")
+    task_progress_parser.add_argument("--summary", help="Event summary (optional)")
+    task_progress_parser.add_argument("--model-self-reported", help="Model used (for capability ledger)")
+    task_progress_parser.add_argument("--stage", help="Current stage (optional)")
+    task_progress_parser.add_argument("--reason", help="Reason (for blocked events)")
+    task_progress_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # 3. bench-audit - wrap lybra_bench_audit_submit_dry_run/confirm (tools.py:2398/2449)
+    bench_audit_parser = subparsers.add_parser("bench-audit", help="Submit bench audit conclusion")
+    bench_audit_parser.add_argument("--task-id", required=True, help="Task ID being audited")
+    bench_audit_parser.add_argument("--actor", required=True, help="Actor submitting audit")
+    bench_audit_parser.add_argument("--conclusion", required=True, help="Audit conclusion")
+    bench_audit_parser.add_argument("--evidence-type", help="Evidence type (optional)")
+    bench_audit_parser.add_argument("--task-mode", help="Task mode (optional)")
+    bench_audit_parser.add_argument("--evidence-refs", help="JSON array of evidence references")
+    bench_audit_parser.add_argument("--notes", help="Additional notes (optional)")
+    bench_audit_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    bench_audit_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # 4. owner-verify - wrap lybra_owner_decision_record_dry_run/confirm (tools.py:1344/1354)
+    owner_verify_parser = subparsers.add_parser("owner-verify", help="Record owner verification decision")
+    owner_verify_parser.add_argument("--task-id", required=True, help="Task ID being verified")
+    owner_verify_parser.add_argument("--actor", required=True, help="Actor recording decision")
+    owner_verify_parser.add_argument("--decision-type", required=True, help="Decision type")
+    owner_verify_parser.add_argument("--decision-summary", required=True, help="Decision summary")
+    owner_verify_parser.add_argument("--context-refs", help="JSON array of context references")
+    owner_verify_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    owner_verify_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # 5. converge / mark-concluded - wrap lybra_converge_r_cards/lybra_mark_concluded (tools.py:2599/2621)
+    converge_parser = subparsers.add_parser("converge", help="Batch convergence of R cards")
+    converge_parser.add_argument("--actor", default="system", help="Actor performing convergence")
+    converge_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    converge_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    mark_concluded_parser = subparsers.add_parser("mark-concluded", help="Mark task as concluded (report-style audits)")
+    mark_concluded_parser.add_argument("--task-id", required=True, help="Task ID to mark concluded")
+    mark_concluded_parser.add_argument("--actor", default="system", help="Actor marking concluded")
+    mark_concluded_parser.add_argument("--report-path", help="Report path (optional)")
+    mark_concluded_parser.add_argument("--conclusion-note", help="Conclusion note (optional)")
+    mark_concluded_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    mark_concluded_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     return parser
 
@@ -2610,6 +2671,40 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(diagnosis))
         return 1 if diagnosis.get("verdict") == "BLOCK" else 0
 
+    if args.command == "queue" and getattr(args, "queue_command", None) == "return":
+        # AIPOS-FND-1: queue return — wrap board_adapter.return_task
+        from tools.aipos_cli.board_adapter import return_task
+        
+        artifact_refs = None
+        if args.artifact_refs:
+            try:
+                artifact_refs = json.loads(args.artifact_refs)
+            except json.JSONDecodeError as exc:
+                print(f"Error: Invalid JSON in --artifact-refs: {exc}", file=sys.stderr)
+                return 1
+        
+        try:
+            result = return_task(
+                task_id=args.task_id,
+                actor=args.actor,
+                agent_instance=args.agent_instance,
+                owner_policy_ref=args.owner_policy_ref,
+                result_summary=args.result_summary,
+                artifact_refs=artifact_refs,
+                completion_report_ref=getattr(args, "completion_report_ref", None),
+                dry_run=args.dry_run,
+                repo_root=repo_root,
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" else 0
+
     if args.command == "orchestration":
         if getattr(args, "orchestration_command", None) == "event" and getattr(args, "event_command", None) == "append":
             try:
@@ -3035,6 +3130,153 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("turn-advancer subcommand required: next | scan", file=sys.stderr)
             return 2
+
+    # AIPOS-FND-1: Five missing loop-step CLI implementations
+    if args.command == "task-progress":
+        # Wrap task progress writer (local variant, bypasses MCP scope)
+        from tools.aipos_cli.task_progress_writer import write_task_progress_event
+        
+        try:
+            repo_root = _find_repo_root_for_args(args)
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        
+        result = write_task_progress_event(
+            repo_root=repo_root,
+            task_id=args.task_id,
+            actor=args.actor,
+            event_type=args.event_type,
+            agent_instance=args.agent_instance,
+            summary=args.summary,
+            model_self_reported=args.model_self_reported,
+            stage=args.stage,
+            reason=args.reason,
+        )
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" else 0
+
+    if args.command == "bench-audit":
+        # Wrap bench_audit_writer (local variant)
+        from tools.aipos_cli.bench_audit_writer import build_bench_audit_record
+        
+        try:
+            repo_root = _find_repo_root_for_args(args)
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        
+        payload = {
+            "task_id": args.task_id,
+            "conclusion": args.conclusion,
+        }
+        if args.evidence_type:
+            payload["evidence_type"] = args.evidence_type
+        if args.task_mode:
+            payload["task_mode"] = args.task_mode
+        if args.evidence_refs:
+            try:
+                payload["evidence_refs"] = json.loads(args.evidence_refs)
+            except json.JSONDecodeError as exc:
+                print(f"Error: Invalid JSON in --evidence-refs: {exc}", file=sys.stderr)
+                return 1
+        if args.notes:
+            payload["notes"] = args.notes
+        
+        result = build_bench_audit_record(
+            repo_root=repo_root,
+            payload=payload,
+            actor=args.actor,
+            dry_run=args.dry_run,
+        )
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" else 0
+
+    if args.command == "owner-verify":
+        # Wrap owner_verification_writer (local variant)
+        from tools.aipos_cli.owner_verification_writer import build_owner_verification_record
+        
+        try:
+            repo_root = _find_repo_root_for_args(args)
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        
+        payload = {
+            "task_id": args.task_id,
+            "decision": args.decision_type,
+            "reason": args.decision_summary,
+            "decided_via": "cli",
+        }
+        if args.context_refs:
+            try:
+                payload["context_refs"] = json.loads(args.context_refs)
+            except json.JSONDecodeError as exc:
+                print(f"Error: Invalid JSON in --context-refs: {exc}", file=sys.stderr)
+                return 1
+        
+        result = build_owner_verification_record(
+            repo_root=repo_root,
+            payload=payload,
+            actor=args.actor,
+            dry_run=args.dry_run,
+        )
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" else 0
+
+    if args.command == "converge":
+        # Wrap converge_r_cards from board_adapter
+        from tools.aipos_cli.board_adapter import converge_r_cards
+        
+        try:
+            repo_root = _find_repo_root_for_args(args)
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        
+        result = converge_r_cards(
+            repo_root=repo_root,
+            actor=args.actor,
+            dry_run=args.dry_run,
+        )
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" or not result.get("ok") else 0
+
+    if args.command == "mark-concluded":
+        # Wrap mark_concluded_task from board_adapter
+        from tools.aipos_cli.board_adapter import mark_concluded_task
+        
+        try:
+            repo_root = _find_repo_root_for_args(args)
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        
+        result = mark_concluded_task(
+            task_id=args.task_id,
+            repo_root=repo_root,
+            actor=args.actor,
+            report_path=args.report_path,
+            conclusion_note=args.conclusion_note,
+            dry_run=args.dry_run,
+        )
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" or not result.get("ok") else 0
 
     print(f"Unknown command: {args.command}", file=sys.stderr)
     return 2
