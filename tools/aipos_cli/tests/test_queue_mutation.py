@@ -494,6 +494,148 @@ class QueueMutationTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(output["scope"], "queue")
 
+    def test_complete_with_audit_required_blocks_without_pass_verdict(self) -> None:
+        """AIPOS-FND-4: complete blocks when audit: required but no PASS/PASS_WITH_NOTES verdict exists."""
+        self.write_task(
+            "AIPOS-FND-4-NO-VERDICT",
+            queue_state="claimed",
+            claim_id="claim_AIPOS-FND-4-NO-VERDICT_1_dev",
+            active_session_id="session_AIPOS-FND-4-NO-VERDICT_1_dev",
+            claimed_by="dev.codex.local",
+            claimed_at="2026-04-30T00:00:00Z",
+        )
+        task_path = self.repo_root / "5_tasks/queue/claimed/aipos-fnd-4-no-verdict.md"
+        content = task_path.read_text(encoding="utf-8")
+        content = content.replace("---", "---\naudit: required", 1)
+        task_path.write_text(content, encoding="utf-8")
+
+        result = mutate_queue_task(
+            self.repo_root,
+            "complete",
+            task_id="AIPOS-FND-4-NO-VERDICT",
+            actor="dev.codex.local",
+            report_link="https://example.com/report",
+            dry_run=True,
+        )
+
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertTrue(
+            any("no PASS audit verdict found" in str(reason) for reason in result["blocking_reasons"])
+        )
+
+    def test_complete_with_audit_required_passes_with_pass_verdict(self) -> None:
+        """AIPOS-FND-4: complete succeeds when audit: required and PASS verdict exists."""
+        self.write_task(
+            "AIPOS-FND-4-PASS",
+            queue_state="claimed",
+            claim_id="claim_AIPOS-FND-4-PASS_1_dev",
+            active_session_id="session_AIPOS-FND-4-PASS_1_dev",
+            claimed_by="dev.codex.local",
+            claimed_at="2026-04-30T00:00:00Z",
+        )
+        task_path = self.repo_root / "5_tasks/queue/claimed/aipos-fnd-4-pass.md"
+        content = task_path.read_text(encoding="utf-8")
+        content = content.replace("---", "---\naudit: required", 1)
+        task_path.write_text(content, encoding="utf-8")
+
+        # Write PASS verdict
+        verdict_content = """---
+verdict: PASS
+task_id: AIPOS-FND-4-PASS
+auditor: test.auditor
+---
+Passed audit.
+"""
+        self.write_file("5_tasks/records/audit_verdicts/AIPOS-FND-4-PASS/verdict_1.md", verdict_content)
+
+        result = mutate_queue_task(
+            self.repo_root,
+            "complete",
+            task_id="AIPOS-FND-4-PASS",
+            actor="dev.codex.local",
+            report_link="https://example.com/report",
+            dry_run=True,
+        )
+
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["blocking_reasons"], [])
+
+    def test_complete_with_audit_required_passes_with_pass_with_notes_verdict(self) -> None:
+        """AIPOS-FND-4: complete succeeds when audit: required and PASS_WITH_NOTES verdict exists."""
+        self.write_task(
+            "AIPOS-FND-4-PASS-NOTES",
+            queue_state="claimed",
+            claim_id="claim_AIPOS-FND-4-PASS-NOTES_1_dev",
+            active_session_id="session_AIPOS-FND-4-PASS-NOTES_1_dev",
+            claimed_by="dev.codex.local",
+            claimed_at="2026-04-30T00:00:00Z",
+        )
+        task_path = self.repo_root / "5_tasks/queue/claimed/aipos-fnd-4-pass-notes.md"
+        content = task_path.read_text(encoding="utf-8")
+        content = content.replace("---", "---\naudit: required", 1)
+        task_path.write_text(content, encoding="utf-8")
+
+        # Write PASS_WITH_NOTES verdict
+        verdict_content = """---
+verdict: PASS_WITH_NOTES
+task_id: AIPOS-FND-4-PASS-NOTES
+auditor: test.auditor
+---
+Passed with minor notes.
+"""
+        self.write_file("5_tasks/records/audit_verdicts/AIPOS-FND-4-PASS-NOTES/verdict_1.md", verdict_content)
+
+        result = mutate_queue_task(
+            self.repo_root,
+            "complete",
+            task_id="AIPOS-FND-4-PASS-NOTES",
+            actor="dev.codex.local",
+            report_link="https://example.com/report",
+            dry_run=True,
+        )
+
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["blocking_reasons"], [])
+
+    def test_complete_with_audit_required_blocks_with_fail_verdict(self) -> None:
+        """AIPOS-FND-4: complete blocks when audit: required and only FAIL verdict exists."""
+        self.write_task(
+            "AIPOS-FND-4-FAIL",
+            queue_state="claimed",
+            claim_id="claim_AIPOS-FND-4-FAIL_1_dev",
+            active_session_id="session_AIPOS-FND-4-FAIL_1_dev",
+            claimed_by="dev.codex.local",
+            claimed_at="2026-04-30T00:00:00Z",
+        )
+        task_path = self.repo_root / "5_tasks/queue/claimed/aipos-fnd-4-fail.md"
+        content = task_path.read_text(encoding="utf-8")
+        content = content.replace("---", "---\naudit: required", 1)
+        task_path.write_text(content, encoding="utf-8")
+
+        # Write FAIL verdict
+        verdict_content = """---
+verdict: FAIL
+task_id: AIPOS-FND-4-FAIL
+auditor: test.auditor
+---
+Failed audit.
+"""
+        self.write_file("5_tasks/records/audit_verdicts/AIPOS-FND-4-FAIL/verdict_1.md", verdict_content)
+
+        result = mutate_queue_task(
+            self.repo_root,
+            "complete",
+            task_id="AIPOS-FND-4-FAIL",
+            actor="dev.codex.local",
+            report_link="https://example.com/report",
+            dry_run=True,
+        )
+
+        self.assertEqual(result["verdict"], "BLOCK")
+        self.assertTrue(
+            any("no PASS audit verdict found" in str(reason) for reason in result["blocking_reasons"])
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

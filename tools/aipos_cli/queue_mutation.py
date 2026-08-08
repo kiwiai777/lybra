@@ -479,10 +479,11 @@ def _prepare_records_plan(
 
 
 def _check_for_pass_audit_verdict(repo_root: Path, task_id: str) -> bool:
-    """AIPOS-348: check if a task has at least one PASS audit verdict in records.
+    """AIPOS-FND-4: check if a task has at least one passing audit verdict in records.
 
-    Scans 5_tasks/records/audit_verdicts/<task_id>/ for verdict records with verdict: PASS.
-    Returns True if at least one PASS verdict exists.
+    Scans 5_tasks/records/audit_verdicts/<task_id>/ for verdict records with verdict: PASS or PASS_WITH_NOTES.
+    Returns True if at least one passing verdict exists.
+    PASS and PASS_WITH_NOTES both allow task completion; FAIL/REQUEST_CHANGES/unmet CONDITIONAL block.
     """
     if not task_id:
         return False
@@ -494,7 +495,7 @@ def _check_for_pass_audit_verdict(repo_root: Path, task_id: str) -> bool:
             text = verdict_file.read_text(encoding="utf-8")
             metadata, _, _ = parse_markdown_frontmatter(text)
             verdict_value = str(metadata.get("verdict") or "").strip().upper()
-            if verdict_value == "PASS":
+            if verdict_value in {"PASS", "PASS_WITH_NOTES"}:
                 return True
         except (OSError, UnicodeDecodeError):
             continue
