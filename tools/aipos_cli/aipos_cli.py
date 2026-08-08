@@ -2404,6 +2404,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "queue" and getattr(args, "queue_command", None) in {"claim", "block", "complete", "reopen"}:
         profiles = load_agent_profiles(repo_root)
+        # AIPOS-370F2: file-CLI claim now defaults to with_records=True to align session record
+        # creation with gate-verb claim, eliminating the "Session record does not exist" blocker
+        # when using gate-verb return after file-CLI claim.
+        with_records_value = args.with_records
+        if args.queue_command == "claim" and not args.with_records:
+            # Default to True for claim to create session records (gate-verb return requires them)
+            with_records_value = True
         try:
             result = mutate_queue_task(
                 repo_root,
@@ -2415,7 +2422,7 @@ def main(argv: list[str] | None = None) -> int:
                 report_link=getattr(args, "report_link", None),
                 dry_run=args.dry_run,
                 profiles=profiles,
-                with_records=args.with_records,
+                with_records=with_records_value,
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -2471,17 +2478,24 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if result.get("verdict") == "BLOCK" else 0
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "return-repair":
-        # AIPOS-370: return-repair — diagnose and repair stuck return
-        from tools.aipos_cli.task_loader import load_task_by_id
-        from tools.aipos_cli.records import load_records
+        # AIPOS-370F2: return-repair — diagnose and repair stuck return
+        from tools.aipos_cli.task_loader import find_task_by_id
+        from tools.aipos_cli.records import load_records, expected_session_record_path
+        from datetime import datetime, timezone
+        
         try:
-            task = load_task_by_id(repo_root, args.task_id)
+            task, all_matches = find_task_by_id(args.task_id, repo_root)
             if not task:
                 print(f"Error: Task {args.task_id} not found", file=sys.stderr)
                 return 1
+            if len(all_matches) > 1:
+                print(f"Error: Multiple tasks match {args.task_id}", file=sys.stderr)
+                return 1
+            
             records = load_records(repo_root)
             task_claims = [c for c in records.get("claims", []) if c.get("task_id") == args.task_id]
             task_returns = [r for r in records.get("returns", []) if r.get("task_id") == args.task_id]
+            task_sessions = records.get("task_sessions", {}).get(args.task_id, [])
             
             diagnosis = {
                 "operation": "return_repair",
@@ -2489,22 +2503,106 @@ def main(argv: list[str] | None = None) -> int:
                 "current_state": task.get("queue_state"),
                 "claim_count": len(task_claims),
                 "return_count": len(task_returns),
+                "session_count": len(task_sessions),
                 "diagnosis": [],
                 "recommended_action": None,
+                "repair_actions": [],
             }
             
             # Diagnose stuck patterns
             if task.get("queue_state") == "claimed" and not task_returns:
-                diagnosis["diagnosis"].append("Task is claimed but no return records found")
-                diagnosis["recommended_action"] = "Complete return via lybra_queue_return MCP tool or owner manual intervention"
+                diagnosis["diagnosis"].append("Task is claimed but no return records found (stuck return)")
+                metadata = task.get("metadata", {})
+                session_id = metadata.get("active_session_id") or metadata.get("last_session_id")
+                
+                # Check if session record exists
+                session_exists = False
+                if session_id:
+                    session_path = expected_session_record_path(repo_root, args.task_id, session_id)
+                    session_exists = session_path.exists()
+                    diagnosis["session_id"] = session_id
+                    diagnosis["session_record_exists"] = session_exists
+                
+                if not args.dry_run:
+                    # AIPOS-370F2: Real repair — file-CLI claim doesn't build session records,
+                    # causing gate-verb return to fail. Two strategies:
+                    # 1. If no session_id or session doesn't exist: block→reopen→reclaim with --with-records
+                    # 2. If session exists but return blocked: manual gate-verb return needed (out of scope)
+                    
+                    if not session_id or not session_exists:
+                        diagnosis["repair_actions"].append("No session record; executing: block → reopen → reclaim with session record")
+                        profiles = load_agent_profiles(repo_root)
+                        
+                        # Step 1: block
+                        block_result = mutate_queue_task(
+                            repo_root, "block",
+                            task_id=args.task_id,
+                            actor=args.actor,
+                            reason="AIPOS-370F2 return-repair: missing session record",
+                            dry_run=False,
+                            profiles=profiles,
+                            with_records=False,
+                        )
+                        if block_result.get("verdict") == "BLOCK":
+                            diagnosis["verdict"] = "BLOCK"
+                            diagnosis["repair_error"] = f"Block failed: {block_result.get('blocking_reasons')}"
+                            print(render_json(diagnosis), file=sys.stderr)
+                            return 1
+                        diagnosis["repair_actions"].append(f"Blocked: {args.task_id}")
+                        
+                        # Step 2: reopen
+                        reopen_result = mutate_queue_task(
+                            repo_root, "reopen",
+                            task_id=args.task_id,
+                            actor=args.actor,
+                            reason="AIPOS-370F2 return-repair: prepare for reclaim with session record",
+                            dry_run=False,
+                            profiles=profiles,
+                            with_records=False,
+                        )
+                        if reopen_result.get("verdict") == "BLOCK":
+                            diagnosis["verdict"] = "BLOCK"
+                            diagnosis["repair_error"] = f"Reopen failed: {reopen_result.get('blocking_reasons')}"
+                            print(render_json(diagnosis), file=sys.stderr)
+                            return 1
+                        diagnosis["repair_actions"].append(f"Reopened: {args.task_id}")
+                        
+                        # Step 3: reclaim with --with-records to create session record
+                        reclaim_result = mutate_queue_task(
+                            repo_root, "claim",
+                            task_id=args.task_id,
+                            actor=args.actor,
+                            dry_run=False,
+                            profiles=profiles,
+                            with_records=True,
+                        )
+                        if reclaim_result.get("verdict") == "BLOCK":
+                            diagnosis["verdict"] = "BLOCK"
+                            diagnosis["repair_error"] = f"Reclaim failed: {reclaim_result.get('blocking_reasons')}"
+                            print(render_json(diagnosis), file=sys.stderr)
+                            return 1
+                        diagnosis["repair_actions"].append(f"Reclaimed with session record: {args.task_id}")
+                        diagnosis["new_session_id"] = reclaim_result.get("proposed_session_id")
+                        diagnosis["verdict"] = "REPAIRED"
+                        diagnosis["recommended_action"] = "Task reclaimed with session record; now ready for gate-verb return"
+                    else:
+                        diagnosis["verdict"] = "OK"
+                        diagnosis["recommended_action"] = "Session record exists; use lybra_queue_return gate tool to complete return"
+                else:
+                    # Dry-run: just diagnose
+                    if not session_id or not session_exists:
+                        diagnosis["recommended_action"] = "Would execute: block → reopen → reclaim with --with-records"
+                    else:
+                        diagnosis["recommended_action"] = "Session record exists; use lybra_queue_return gate tool"
+                    diagnosis["verdict"] = "OK"
             elif task.get("queue_state") == "claimed" and task_returns:
                 diagnosis["diagnosis"].append(f"Task has {len(task_returns)} return record(s) but still in claimed state")
                 diagnosis["recommended_action"] = "State inconsistency detected; requires manual queue state correction"
+                diagnosis["verdict"] = "BLOCK"
             else:
                 diagnosis["diagnosis"].append(f"Task is in {task.get('queue_state')} state")
                 diagnosis["recommended_action"] = "No stuck return detected"
-            
-            diagnosis["verdict"] = "BLOCK" if "inconsistency" in diagnosis["recommended_action"] else "OK"
+                diagnosis["verdict"] = "OK"
             
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
