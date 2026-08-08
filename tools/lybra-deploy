@@ -166,6 +166,105 @@ cmd_validate() {
     fi
 }
 
+# ── verify ──────────────────────────────────────────────────────────────
+cmd_verify() {
+    log "Verifying deployment integrity (AIPOS-369)..."
+    echo ""
+
+    # Check 1: current symlink points to HEAD
+    local current_dir
+    current_dir=$(get_current_release_dir)
+    if [[ -z "$current_dir" || ! -d "$current_dir" ]]; then
+        err "✗ No current deployment found (.deploy/current does not exist)"
+        return 1
+    fi
+
+    local expected_commit current_commit
+    expected_commit=$(cd "$PRODUCT_REPO" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+    current_commit=$(grep '^git_commit:' "$current_dir/VERSION" 2>/dev/null | awk '{print $2}' || echo "unknown")
+
+    echo "Working tree HEAD:    $expected_commit"
+    echo "Current deployment:   $current_commit"
+    echo ""
+
+    if [[ "$expected_commit" != "$current_commit" ]]; then
+        err "✗ DRIFT DETECTED: .deploy/current does NOT match git HEAD"
+        err "  This means the gate is running an outdated snapshot."
+        err "  Run 'lybra-deploy' to fix."
+        return 1
+    fi
+    log "✓ Symlink verification: current == HEAD"
+    echo ""
+
+    # Check 2: Live gate HTTP endpoint
+    log "Querying live gate via HTTP..."
+    local conn_json mcp_port executor_token
+    conn_json="/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json"
+    mcp_port=$(python3 -c "import json; print(json.load(open('$conn_json'))['mcp']['port'])" 2>/dev/null || echo "7118")
+    executor_token=$(python3 -c "import json; tokens=[t for t in json.load(open('$conn_json'))['tokens'] if t.get('role')=='executor']; print(tokens[0]['token'] if tokens else '')" 2>/dev/null)
+
+    local live_response http_status
+    live_response=$(mktemp)
+    http_status=$(curl -s -w "%{http_code}" -o "$live_response" -X POST "http://127.0.0.1:$mcp_port/mcp" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $executor_token" \
+        -d '{
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "lybra_gate_version",
+                "arguments": {}
+            }
+        }' 2>&1 || echo "000")
+
+    if [[ "$http_status" != "200" ]]; then
+        err "✗ Live gate HTTP endpoint unavailable (status: $http_status)"
+        cat "$live_response" >&2
+        rm -f "$live_response"
+        return 1
+    fi
+
+    local live_commit live_runtime_dir
+    live_commit=$(python3 -c "
+import json, sys
+try:
+    data = json.load(open('$live_response'))
+    result = data.get('result', {}).get('structuredContent', {})
+    print(result.get('git_commit', 'unknown'))
+except Exception as e:
+    print('parse_error', file=sys.stderr)
+    sys.exit(1)
+" 2>/dev/null)
+    live_runtime_dir=$(python3 -c "
+import json
+try:
+    data = json.load(open('$live_response'))
+    result = data.get('result', {}).get('structuredContent', {})
+    print(result.get('runtime_directory', 'unknown'))
+except Exception:
+    print('unknown')
+" 2>/dev/null)
+    rm -f "$live_response"
+
+    echo "Live gate commit:     $live_commit"
+    echo "Live gate running from: $live_runtime_dir"
+    echo ""
+
+    if [[ "$live_commit" != "$expected_commit" ]]; then
+        err "✗ LIVE GATE MISMATCH: gate is running commit $live_commit, expected $expected_commit"
+        err "  The gate process has not picked up the current deployment."
+        err "  Try restarting the gate service."
+        return 1
+    fi
+
+    log "✓ Live gate HTTP verification: running HEAD commit"
+    echo ""
+    log "=== All checks passed ==="
+    log "Deployment is consistent: working tree, current symlink, and live gate all at $expected_commit"
+    return 0
+}
+
 # ── deploy ──────────────────────────────────────────────────────────────
 cmd_deploy() {
     log "Starting deploy from working tree..."
@@ -241,6 +340,32 @@ EOF
     cp "$release_dir/VERSION" "$VERSION_FILE"
 
     log "  current → $release_dir"
+
+    # ── AIPOS-369 S1: Mandatory assertion — current symlink == HEAD ────
+    log "  Verifying current symlink points to expected release..."
+    local expected_commit actual_commit_in_release
+    expected_commit=$(cd "$PRODUCT_REPO" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+    actual_commit_in_release=$(grep '^git_commit:' "$release_dir/VERSION" | awk '{print $2}' || echo "unknown")
+
+    if [[ "$expected_commit" == "unknown" || "$actual_commit_in_release" == "unknown" ]]; then
+        err "✗ ASSERTION FAILED: Cannot determine git commits for verification."
+        err "  Expected (HEAD): $expected_commit"
+        err "  Release VERSION:  $actual_commit_in_release"
+        err "  Deploy FAILED. Rolling back..."
+        _do_rollback "$old_current"
+        exit 1
+    fi
+
+    if [[ "$expected_commit" != "$actual_commit_in_release" ]]; then
+        err "✗ ASSERTION FAILED: .deploy/current does NOT point to HEAD!"
+        err "  Expected (git HEAD): $expected_commit"
+        err "  Actual (current):    $actual_commit_in_release"
+        err "  This indicates symlink switching failed silently."
+        err "  Deploy FAILED. Rolling back..."
+        _do_rollback "$old_current"
+        exit 1
+    fi
+    log "  ✓ Assertion passed: current → HEAD ($expected_commit)"
 
     # ── Step 4: graceful handoff (AIPOS-356) ────────────────────────────
     # Zero-downtime deploy using SO_REUSEPORT:
@@ -382,22 +507,105 @@ except Exception:
     fi
 
     # ── Step 5: health check ────────────────────────────────────────────
-    log "Step 5/5: Health check (verifying gate stability)..."
+    log "Step 5/5: Health check (verifying gate stability + live endpoint)..."
     sleep 2
 
-    if systemctl --user is-active "$GATE_SERVICE" &>/dev/null; then
-        log "✓ Gate is running. Deploy successful!"
-        log ""
-        log "Deployed version: $release_name"
-        log "  git commit: $(cd "$PRODUCT_REPO" && git rev-parse HEAD 2>/dev/null || echo "unknown")"
-        log "  running from: $release_dir"
-        if [[ -n "$dirty_flag" ]]; then
-            log "  ⚠ Working tree was dirty at deploy time"
-        fi
-    else
+    if ! systemctl --user is-active "$GATE_SERVICE" &>/dev/null; then
         err "Gate failed to stay running after restart! Rolling back..."
         _do_rollback "$old_current"
         exit 1
+    fi
+
+    # ── AIPOS-369 S2: Live gate endpoint verification ──────────────────
+    log "  Verifying live gate is running the deployed commit..."
+    local mcp_port conn_json executor_token expected_commit
+    conn_json="/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json"
+    mcp_port=$(python3 -c "import json; print(json.load(open('$conn_json'))['mcp']['port'])" 2>/dev/null || echo "7118")
+    executor_token=$(python3 -c "import json; tokens=[t for t in json.load(open('$conn_json'))['tokens'] if t.get('role')=='executor']; print(tokens[0]['token'] if tokens else '')" 2>/dev/null)
+    expected_commit=$(cd "$PRODUCT_REPO" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+
+    local live_commit live_response http_status
+    live_response=$(mktemp)
+    http_status=$(curl -s -w "%{http_code}" -o "$live_response" -X POST "http://127.0.0.1:$mcp_port/mcp" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $executor_token" \
+        -d '{
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "lybra_gate_version",
+                "arguments": {}
+            }
+        }' 2>&1 || echo "000")
+
+    if [[ "$http_status" != "200" ]]; then
+        # Check if it's "Unknown tool" error (old gate without lybra_gate_version)
+        local error_msg
+        error_msg=$(python3 -c "
+import json, sys
+try:
+    data = json.load(open('$live_response'))
+    error = data.get('error', {})
+    print(error.get('message', ''))
+except Exception:
+    print('')
+" 2>/dev/null)
+        
+        if [[ "$error_msg" == *"Unknown tool"* ]]; then
+            log "  ⚠ DEGRADATION: lybra_gate_version tool not available (old gate)"
+            log "  Live HTTP verification skipped — only Step 3 assertion applies."
+            log "  After this deploy, future deploys will have full HTTP verification."
+            rm -f "$live_response"
+        else
+            err "✗ Live gate HTTP endpoint failed (status: $http_status)"
+            cat "$live_response" >&2
+            rm -f "$live_response"
+            err "Deploy technically succeeded but live verification failed."
+            err "Manual inspection required."
+            exit 1
+        fi
+    else
+        # HTTP 200 — parse and verify commit
+        live_commit=$(python3 -c "
+import json, sys
+try:
+    data = json.load(open('$live_response'))
+    result = data.get('result', {}).get('structuredContent', {})
+    print(result.get('git_commit', 'unknown'))
+except Exception:
+    print('parse_error')
+" 2>/dev/null)
+        rm -f "$live_response"
+
+        if [[ "$live_commit" == "unknown" || "$live_commit" == "parse_error" ]]; then
+            err "✗ Could not parse live gate version from HTTP response."
+            err "Deploy technically succeeded but live verification failed."
+            err "Manual inspection required."
+            exit 1
+        fi
+
+        if [[ "$live_commit" != "$expected_commit" ]]; then
+            err "✗ DEPLOYMENT VERIFICATION FAILED!"
+            err "  Expected (git HEAD): $expected_commit"
+            err "  Live gate reports:   $live_commit"
+            err "  The gate restarted but is NOT running the new code."
+            err "  This should not happen after Step 3 assertion passed."
+            err "  Manual inspection required."
+            exit 1
+        fi
+
+        log "  ✓ Live gate HTTP endpoint verified: running commit $live_commit"
+    fi
+    log ""
+    log "✓ Deploy successful and VERIFIED live!"
+    log ""
+    log "Deployed version: $release_name"
+    log "  git commit: $expected_commit"
+    log "  running from: $release_dir"
+    log "  live gate confirmed via HTTP: YES"
+    if [[ -n "$dirty_flag" ]]; then
+        log "  ⚠ Working tree was dirty at deploy time"
     fi
 
     # ── Prune old releases ──────────────────────────────────────────────
@@ -471,6 +679,7 @@ main() {
         status)    cmd_status ;;
         rollback)  cmd_rollback ;;
         validate)  cmd_validate "$@" ;;
+        verify)    cmd_verify ;;
         -h|--help|help)
             echo "Usage: lybra-deploy [command]"
             echo ""
@@ -479,12 +688,14 @@ main() {
             echo "  status     Show current deployed version and gate status"
             echo "  rollback   Revert to previous release"
             echo "  validate   Check if working tree can be imported (no deploy)"
+            echo "  verify     Verify deployment integrity: current==HEAD + live gate HTTP check (AIPOS-369)"
             echo ""
             echo "AIPOS-333: gate runtime isolation from working tree."
+            echo "AIPOS-369: deployment integrity verification."
             ;;
         *)
             err "Unknown command: $cmd"
-            echo "Usage: lybra-deploy [deploy|status|rollback|validate]" >&2
+            echo "Usage: lybra-deploy [deploy|status|rollback|validate|verify]" >&2
             exit 2
             ;;
     esac

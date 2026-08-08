@@ -356,6 +356,7 @@ class McpToolTests(unittest.TestCase):
             [
                 "lybra_queue_list",
                 "lybra_project_status",  # AIPOS-242: the gate's own project view (read-only)
+                "lybra_gate_version",  # AIPOS-369: gate runtime version (deployment verification)
                 "lybra_task_preview",
                 "lybra_return_content",  # AIPOS-320: read-only RETURN.md content for cross-machine audit
                 "lybra_validate",
@@ -372,6 +373,7 @@ class McpToolTests(unittest.TestCase):
             [
                 "lybra_queue_list",
                 "lybra_project_status",  # AIPOS-242: read tool, exposed by default like the rest
+                "lybra_gate_version",  # AIPOS-369: read-only deployment verification
                 "lybra_task_preview",
                 "lybra_return_content",  # AIPOS-320: read-only, exposed by default (requires queue_claim scope at call time)
                 "lybra_validate",

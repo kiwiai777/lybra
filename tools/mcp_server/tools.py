@@ -1117,6 +1117,52 @@ def lybra_project_status(arguments: dict[str, Any] | None = None) -> dict[str, A
     )
 
 
+def lybra_gate_version(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-369: report the gate's runtime version (git commit + VERSION file).
+
+    Returns the git commit hash the gate is ACTUALLY running from (live runtime snapshot),
+    not the working tree. Used by lybra-deploy to verify deployment took effect via HTTP
+    endpoint probe (not in-process import). Read-only; no auth required (deployment health check).
+    """
+    _ = arguments or {}
+    import subprocess
+    from pathlib import Path
+
+    # The gate runs from .deploy/current (or working tree if not deployed)
+    repo_root = _repo_root()
+    version_info: dict[str, Any] = {"ok": True, "source": "gate_runtime"}
+
+    # Read VERSION file if it exists (deployment snapshot)
+    version_file = Path(repo_root) / "VERSION"
+    if version_file.exists():
+        try:
+            version_info["version_file"] = version_file.read_text().strip()
+        except Exception as e:
+            version_info["version_file_error"] = str(e)
+
+    # Get git commit (ground truth)
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            version_info["git_commit"] = result.stdout.strip()
+            version_info["git_commit_short"] = result.stdout.strip()[:7]
+        else:
+            version_info["git_error"] = result.stderr.strip()
+    except Exception as e:
+        version_info["git_error"] = str(e)
+
+    # Report the actual runtime directory
+    version_info["runtime_directory"] = str(repo_root)
+
+    return _tool_result(version_info)
+
+
 def lybra_validate(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     _ = arguments or {}
     return _tool_result(get_validate(repo_root=_repo_root()))
@@ -3109,6 +3155,7 @@ def lybra_roles_remove(arguments: dict[str, Any] | None = None) -> dict[str, Any
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
+    "lybra_gate_version": lybra_gate_version,
     "lybra_task_preview": lybra_task_preview,
     "lybra_return_content": lybra_return_content,
     "lybra_validate": lybra_validate,
@@ -3161,6 +3208,15 @@ READ_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
     {
         "name": "lybra_project_status",
         "description": "The gate's own read-only project view: resolved home_root, active project (or resolution error), and established projects.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_gate_version",
+        "description": "AIPOS-369: Report the gate's runtime version (git commit, VERSION file). Returns the actual deployed snapshot commit, used by lybra-deploy to verify deployment took effect.",
         "inputSchema": {
             "type": "object",
             "properties": {},
