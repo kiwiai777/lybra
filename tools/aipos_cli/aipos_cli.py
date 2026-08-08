@@ -1176,6 +1176,27 @@ def build_parser() -> argparse.ArgumentParser:
     _queue_mutation_arguments(queue_reopen_parser)
     queue_reopen_parser.add_argument("--reason", required=True, help="Reopen reason")
 
+    queue_amend_parser = queue_subparsers.add_parser("amend", help="Amend a pending task")
+    queue_amend_parser.add_argument("--task-id", required=True, help="Task ID to amend")
+    queue_amend_parser.add_argument("--actor", required=True, help="Actor performing the amendment")
+    queue_amend_parser.add_argument("--amendments", required=True, help="JSON dict of amendments")
+    queue_amend_parser.add_argument("--amendment-reason", required=True, help="Reason for amendment")
+    queue_amend_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    queue_amend_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    queue_withdraw_parser = queue_subparsers.add_parser("withdraw", help="Withdraw a task from queue")
+    queue_withdraw_parser.add_argument("--task-id", required=True, help="Task ID to withdraw")
+    queue_withdraw_parser.add_argument("--actor", required=True, help="Actor performing the withdrawal")
+    queue_withdraw_parser.add_argument("--reason", required=True, help="Reason for withdrawal")
+    queue_withdraw_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    queue_withdraw_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    queue_return_repair_parser = queue_subparsers.add_parser("return-repair", help="Repair a stuck return")
+    queue_return_repair_parser.add_argument("--task-id", required=True, help="Task ID with stuck return")
+    queue_return_repair_parser.add_argument("--actor", required=True, help="Actor performing the repair")
+    queue_return_repair_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    queue_return_repair_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     my_tasks_parser = subparsers.add_parser("my-tasks", help="Render tasks for an actor")
     my_tasks_parser.add_argument("--actor", required=True, help="Role instance or agent instance")
     my_tasks_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1265,6 +1286,25 @@ def build_parser() -> argparse.ArgumentParser:
         default="pi --model anthropic/claude-3-5-sonnet-20241022 --prompt '{kickoff}'",
         help="Auditor runtime command template"
     )
+
+    # AIPOS-370: audit-verdict 顶级命令（MCP-only 动词上 CLI）
+    audit_verdict_parser = subparsers.add_parser("audit-verdict", help="Submit audit verdict for a reviewed task")
+    audit_verdict_parser.add_argument("--audit-task-id", help="Audit task ID (optional)")
+    audit_verdict_parser.add_argument("--reviewed-task-id", required=True, help="Reviewed task ID")
+    audit_verdict_parser.add_argument("--actor", required=True, help="Actor submitting verdict")
+    audit_verdict_parser.add_argument("--agent-instance", required=True, help="Agent instance")
+    audit_verdict_parser.add_argument("--owner-policy-ref", required=True, help="Owner policy reference")
+    audit_verdict_parser.add_argument("--verdict", required=True, choices=["PASS", "FAIL", "CONDITIONAL"], help="Verdict")
+    audit_verdict_parser.add_argument("--findings-summary", help="Findings summary")
+    audit_verdict_parser.add_argument("--evidence-refs", help="JSON list of evidence references")
+    audit_verdict_parser.add_argument("--audit-claim-id", help="Audit claim ID")
+    audit_verdict_parser.add_argument("--audit-session-id", help="Audit session ID")
+    audit_verdict_parser.add_argument("--audit-dispatch-record-ref", help="Audit dispatch record reference")
+    audit_verdict_parser.add_argument("--reviewed-return-record-ref", help="Reviewed return record reference")
+    audit_verdict_parser.add_argument("--recommended-next-action", help="Recommended next action")
+    audit_verdict_parser.add_argument("--owner-waiver-ref", help="Owner waiver reference")
+    audit_verdict_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    audit_verdict_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-325: pump 子命令 (kickoff 三层制约 + 产品 CLI 入口)
     pump_parser = subparsers.add_parser("pump", help="AIPOS-325: Advisor pump operations with kickoff constraints")
@@ -1508,6 +1548,20 @@ def build_parser() -> argparse.ArgumentParser:
     project_import_parser.add_argument("--dry-run", action="store_true", help="Preview planned writes without creating")
     project_import_parser.add_argument("--actor", default=default_actor, help="Actor for provenance (registered_by)")
     project_import_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-370: envelope mint command (owner-gated)
+    envelope_parser = subparsers.add_parser("envelope", help="Owner autonomy envelope operations")
+    envelope_subparsers = envelope_parser.add_subparsers(dest="envelope_command")
+    envelope_mint_parser = envelope_subparsers.add_parser("mint", help="Mint a PreAuthorized autonomy envelope")
+    envelope_mint_parser.add_argument("--policy-id", required=True, help="Policy ID")
+    envelope_mint_parser.add_argument("--agent-or-role", required=True, help="Agent instance or role")
+    envelope_mint_parser.add_argument("--max-tasks", type=int, required=True, help="Maximum tasks allowed")
+    envelope_mint_parser.add_argument("--task-mode", help="Task mode selector (e.g., code)")
+    envelope_mint_parser.add_argument("--expires-at", required=True, help="Expiration datetime (ISO8601)")
+    envelope_mint_parser.add_argument("--decision-summary", required=True, help="Decision summary")
+    envelope_mint_parser.add_argument("--actor", default="owner", help="Actor (default: owner)")
+    envelope_mint_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    envelope_mint_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     home_parser = subparsers.add_parser("home", help="Governance home operations (Owner-explicit, local only)")
     home_subparsers = home_parser.add_subparsers(dest="home_command")
@@ -2174,6 +2228,50 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    if args.command == "envelope":
+        if not getattr(args, "envelope_command", None):
+            parser.print_help()
+            return 2
+        if args.envelope_command == "mint":
+            from datetime import datetime, timezone
+            from tools.aipos_cli.board_adapter import record_owner_decision
+            # Build autonomy_policy payload
+            task_selector = {}
+            if args.task_mode:
+                task_selector["task_mode"] = args.task_mode
+            autonomy_policy = {
+                "policy_id": args.policy_id,
+                "agent_or_role": args.agent_or_role,
+                "active_from": datetime.now(timezone.utc).isoformat(),
+                "expires_at": args.expires_at,
+                "max_tasks": args.max_tasks,
+                "task_selector": task_selector,
+            }
+            payload = {
+                "decision_id": f"envelope-{args.policy_id}",
+                "actor": args.actor,
+                "decided_by_ref": args.actor,
+                "decision_summary": args.decision_summary,
+                "autonomy_policy": autonomy_policy,
+            }
+            try:
+                result = record_owner_decision(
+                    payload,
+                    dry_run=args.dry_run,
+                    repo_root=repo_root,
+                    actor=args.actor,
+                )
+            except (FileNotFoundError, OSError, ValueError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            if args.json:
+                print(render_json(result))
+            else:
+                print(render_json(result))
+            return 1 if result.get("verdict") == "BLOCK" else 0
+        parser.print_help()
+        return 2
+
     if args.command == "controlled-execute":
         if not getattr(args, "controlled_command", None):
             parser.print_help()
@@ -2327,6 +2425,96 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_queue_mutation_text(result))
         return 1 if result.get("verdict") == "BLOCK" else 0
+
+    if args.command == "queue" and getattr(args, "queue_command", None) == "amend":
+        from tools.aipos_cli.board_adapter import amend_task
+        try:
+            amendments = json.loads(args.amendments)
+        except json.JSONDecodeError as exc:
+            print(f"Error: Invalid JSON in --amendments: {exc}", file=sys.stderr)
+            return 1
+        try:
+            result = amend_task(
+                task_id=args.task_id,
+                actor=args.actor,
+                amendments=amendments,
+                amendment_reason=args.amendment_reason,
+                dry_run=args.dry_run,
+                repo_root=repo_root,
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" else 0
+
+    if args.command == "queue" and getattr(args, "queue_command", None) == "withdraw":
+        from tools.aipos_cli.board_adapter import withdraw_task
+        try:
+            result = withdraw_task(
+                task_id=args.task_id,
+                actor=args.actor,
+                reason=args.reason,
+                dry_run=args.dry_run,
+                repo_root=repo_root,
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" else 0
+
+    if args.command == "queue" and getattr(args, "queue_command", None) == "return-repair":
+        # AIPOS-370: return-repair — diagnose and repair stuck return
+        from tools.aipos_cli.task_loader import load_task_by_id
+        from tools.aipos_cli.records import load_records
+        try:
+            task = load_task_by_id(repo_root, args.task_id)
+            if not task:
+                print(f"Error: Task {args.task_id} not found", file=sys.stderr)
+                return 1
+            records = load_records(repo_root)
+            task_claims = [c for c in records.get("claims", []) if c.get("task_id") == args.task_id]
+            task_returns = [r for r in records.get("returns", []) if r.get("task_id") == args.task_id]
+            
+            diagnosis = {
+                "operation": "return_repair",
+                "task_id": args.task_id,
+                "current_state": task.get("queue_state"),
+                "claim_count": len(task_claims),
+                "return_count": len(task_returns),
+                "diagnosis": [],
+                "recommended_action": None,
+            }
+            
+            # Diagnose stuck patterns
+            if task.get("queue_state") == "claimed" and not task_returns:
+                diagnosis["diagnosis"].append("Task is claimed but no return records found")
+                diagnosis["recommended_action"] = "Complete return via lybra_queue_return MCP tool or owner manual intervention"
+            elif task.get("queue_state") == "claimed" and task_returns:
+                diagnosis["diagnosis"].append(f"Task has {len(task_returns)} return record(s) but still in claimed state")
+                diagnosis["recommended_action"] = "State inconsistency detected; requires manual queue state correction"
+            else:
+                diagnosis["diagnosis"].append(f"Task is in {task.get('queue_state')} state")
+                diagnosis["recommended_action"] = "No stuck return detected"
+            
+            diagnosis["verdict"] = "BLOCK" if "inconsistency" in diagnosis["recommended_action"] else "OK"
+            
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        
+        if args.json:
+            print(render_json(diagnosis))
+        else:
+            print(render_json(diagnosis))
+        return 1 if diagnosis.get("verdict") == "BLOCK" else 0
 
     if args.command == "orchestration":
         if getattr(args, "orchestration_command", None) == "event" and getattr(args, "event_command", None) == "append":
@@ -2531,6 +2719,45 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         parser.print_help()
         return 2
+
+    if args.command == "audit-verdict":
+        from tools.aipos_cli.board_adapter import audit_verdict_task
+        try:
+            evidence_refs = []
+            if args.evidence_refs:
+                evidence_refs = json.loads(args.evidence_refs)
+        except json.JSONDecodeError as exc:
+            print(f"Error: Invalid JSON in --evidence-refs: {exc}", file=sys.stderr)
+            return 1
+        try:
+            result = audit_verdict_task(
+                audit_task_id=args.audit_task_id,
+                audit_task_path=None,
+                reviewed_task_id=args.reviewed_task_id,
+                actor=args.actor,
+                agent_instance=args.agent_instance,
+                owner_policy_ref=args.owner_policy_ref,
+                audit_claim_id=args.audit_claim_id,
+                audit_session_id=args.audit_session_id,
+                audit_dispatch_record_ref=args.audit_dispatch_record_ref,
+                reviewed_return_record_ref=args.reviewed_return_record_ref,
+                verdict=args.verdict,
+                findings_summary=args.findings_summary,
+                evidence_refs=evidence_refs,
+                recommended_next_action=args.recommended_next_action,
+                owner_waiver_ref=args.owner_waiver_ref,
+                agent_runtime=None,
+                dry_run=args.dry_run,
+                repo_root=repo_root,
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" else 0
 
     if args.command == "pump":
         if getattr(args, "pump_command", None) == "run":
