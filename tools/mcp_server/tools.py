@@ -1146,42 +1146,62 @@ def lybra_gate_version(arguments: dict[str, Any] | None = None) -> dict[str, Any
     Returns the git commit hash the gate is ACTUALLY running from (live runtime snapshot),
     not the working tree. Used by lybra-deploy to verify deployment took effect via HTTP
     endpoint probe (not in-process import). Read-only; no auth required (deployment health check).
+    
+    AIPOS-FND-8: Fixed to read deployment snapshot commit (from VERSION file or product repo),
+    not workspace (治理仓) HEAD. Uses __file__ to locate actual loaded code (follows symlinks
+    to .deploy/current), then reads VERSION from that root.
     """
     _ = arguments or {}
     import subprocess
     from pathlib import Path
+    import re
 
-    # The gate runs from .deploy/current (or working tree if not deployed)
-    repo_root = _repo_root()
     version_info: dict[str, Any] = {"ok": True, "source": "gate_runtime"}
+    
+    # Find the directory where THIS code is actually loaded from (follows symlinks)
+    # Gate loads tools.mcp_server from .deploy/current (via symlink), not workspace
+    code_file = Path(__file__).resolve()  # resolve() follows symlinks
+    # Go up: tools.py -> mcp_server/ -> tools/ -> repo root
+    code_root = code_file.parent.parent.parent
+    version_info["runtime_directory"] = str(code_root)
 
-    # Read VERSION file if it exists (deployment snapshot)
-    version_file = Path(repo_root) / "VERSION"
+    # Priority 1: Read VERSION file's git_commit field (deployment snapshot ground truth)
+    version_file = code_root / "VERSION"
     if version_file.exists():
         try:
-            version_info["version_file"] = version_file.read_text().strip()
+            version_content = version_file.read_text().strip()
+            version_info["version_file"] = version_content
+            
+            # Parse YAML-like format: git_commit: <hash>
+            match = re.search(r'^git_commit:\s*([a-f0-9]{40})\s*$', version_content, re.MULTILINE)
+            if match:
+                commit = match.group(1)
+                version_info["git_commit"] = commit
+                version_info["git_commit_short"] = commit[:7]
+                version_info["source"] = "VERSION_file"
+                return _tool_result(version_info)
         except Exception as e:
             version_info["version_file_error"] = str(e)
 
-    # Get git commit (ground truth)
+    # Priority 2: Fallback to git in code root (non-deployed / dev mode)
+    # Use code_root (product repo), NOT workspace, to avoid reading 治理仓 HEAD
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=repo_root,
+            cwd=code_root,
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode == 0:
-            version_info["git_commit"] = result.stdout.strip()
-            version_info["git_commit_short"] = result.stdout.strip()[:7]
+            commit = result.stdout.strip()
+            version_info["git_commit"] = commit
+            version_info["git_commit_short"] = commit[:7]
+            version_info["source"] = "git_code_root"
         else:
             version_info["git_error"] = result.stderr.strip()
     except Exception as e:
         version_info["git_error"] = str(e)
-
-    # Report the actual runtime directory
-    version_info["runtime_directory"] = str(repo_root)
 
     return _tool_result(version_info)
 
