@@ -98,6 +98,12 @@ CONTROLLED_EXECUTE_NOTICE = (
 HEALTH_NOTICE = "Local module adapter health check only. No CLI runtime bridge, server, or network behavior is used."
 # AIPOS-225 (Slice 1): governance doc filenames are sourced from the Slice 0 governance_paths()
 # shape (ruling 1=B: single-file decision_log.md) — one definition, no hardcoded project path.
+
+# AIPOS-FND-7F2: null-safe verdict timestamp extractor for max() sorting
+# Mixed-format records exist: old (verdict_at=None, timestamp set) vs new (verdict_at set, timestamp=None)
+def _verdict_time(v: dict[str, Any]) -> str:
+    """Extract verdict timestamp in null-safe manner: verdict_at > timestamp > empty string."""
+    return v.get("verdict_at") or v.get("timestamp") or ""
 _GOVERNANCE_DOC_KEYS = ("decision_log", "project_status", "roadmap")
 GOVERNANCE_FILES = {key: governance_paths(Path("."))[key].name for key in _GOVERNANCE_DOC_KEYS}
 GOVERNANCE_EXCERPT_CHARS = 12000
@@ -2526,7 +2532,7 @@ def _build_audit_dispatch_preview(
     existing_verdicts = records.get("task_audit_verdicts", {}).get(source_task_id_for_verdict, [])
     if existing_verdicts:
         # 有已有裁决,检查最新裁决状态
-        latest_verdict = max(existing_verdicts, key=lambda v: v.get("verdict_at", ""))
+        latest_verdict = max(existing_verdicts, key=_verdict_time)
         latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
         if latest_verdict_value in {"PASS", "PASS_WITH_NOTES"}:
             blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS (terminal state, cannot overturn)")
@@ -2539,7 +2545,7 @@ def _build_audit_dispatch_preview(
     if source_metadata.get("related_audit_task_ref") or source_metadata.get("audit_dispatch_record_ref"):
         # 已有 dispatch 记录
         if existing_verdicts:
-            latest_verdict = max(existing_verdicts, key=lambda v: v.get("verdict_at", ""))
+            latest_verdict = max(existing_verdicts, key=_verdict_time)
             latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
             if latest_verdict_value not in {"FAIL", "REQUEST_CHANGES", "BLOCKED"}:
                 # 非 FAIL/REQUEST_CHANGES,不允许 re-dispatch
@@ -2973,7 +2979,7 @@ def _build_audit_verdict_preview(
     existing_verdicts = records.get("task_audit_verdicts", {}).get(reviewed_task_id_for_verdict, [])
     if existing_verdicts:
         # 有已有裁决,检查最新裁决状态
-        latest_verdict = max(existing_verdicts, key=lambda v: v.get("verdict_at", ""))
+        latest_verdict = max(existing_verdicts, key=_verdict_time)
         latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
         if latest_verdict_value in {"PASS", "PASS_WITH_NOTES"}:
             blocking_reasons.append(f"Audit verdict cannot overturn PASS: reviewed task already has terminal PASS verdict")
