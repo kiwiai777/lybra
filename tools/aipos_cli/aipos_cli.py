@@ -1037,6 +1037,39 @@ def build_parser() -> argparse.ArgumentParser:
     _launch_check_parser.add_argument("--check-interval", type=float, default=5, help="Poll interval seconds (default: 5)")
     _launch_check_parser.add_argument("--model-fallback-policy", help="JSON file with model substitution policy (optional)")
 
+    # AIPOS-363 S1/S2: `agent materialize` / `agent pushback` — the cross-machine adaptation
+    # layer. materialize = claim + pull body (319) + drop LOCAL material + print a zero-gate-verb
+    # kickoff; pushback = read LOCAL RETURN + push via 320 + self-confirm (328). The agent only
+    # reads/writes LOCAL files (card S3: harness-agnostic baseline). gate-url mode only.
+    def _add_material_common(p, *, require_actor: bool = True) -> None:
+        p.add_argument("--gate-url", required=True, help="e.g. http://127.0.0.1:7118 (gate-url mode only)")
+        _src = p.add_mutually_exclusive_group(required=True)
+        _src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
+        _src.add_argument("--token-env", help="env var holding the role bearer token")
+        p.add_argument("--role", default="executor", help="role token to read (default executor)")
+        p.add_argument("--actor", required=require_actor, help="your agent/actor name (must match the claim token binding)")
+        p.add_argument("--task-id", required=True, help="task card id to materialize / push back")
+        p.add_argument("--owner-policy-ref", required=True, help="owner_policy_ref for claim/return (PreAuthorized envelope id)")
+        p.add_argument("--material-root", help="material area root (default ~/.lybra/work; env LYBRA_MATERIAL_ROOT)")
+        p.add_argument("--actual-model", default="", help="capability-ledger: self-reported model (recorded, never verified)")
+        p.add_argument("--json", action="store_true", help="Output JSON")
+
+    _materialize_parser = agent_subparsers.add_parser(
+        "materialize",
+        help="[AIPOS-363 S1] Cross-machine: claim + pull card body via gate + drop LOCAL material + "
+             "print a zero-gate-verb kickoff (any harness that reads a file). gate-url mode only.",
+    )
+    _add_material_common(_materialize_parser)
+    _materialize_parser.add_argument("--autonomy-mode", default="PreAuthorized", help="claim autonomy_mode (default PreAuthorized)")
+    _materialize_parser.add_argument("--gate-workspace", default="", help="gate workspace root (recorded in MANIFEST for traceability)")
+
+    _pushback_parser = agent_subparsers.add_parser(
+        "pushback",
+        help="[AIPOS-363 S2] Cross-machine: read LOCAL RETURN.md + push back via gate (320) + "
+             "self-confirm (328). On failure emits a blocked event (323) — never silent.",
+    )
+    _add_material_common(_pushback_parser)
+
     board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     board_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
@@ -1526,6 +1559,13 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "agent_command", None) == "launch-check":
             from tools.aipos_cli.agent_launch_check import main as launch_check_main
             return launch_check_main(sys.argv[3:])  # Pass remaining args after 'agent launch-check'
+        # AIPOS-363 S1/S2: agent materialize / pushback (cross-machine adaptation layer)
+        if getattr(args, "agent_command", None) == "materialize":
+            from tools.aipos_cli.agent_materialize import run_materialize
+            return run_materialize(args)
+        if getattr(args, "agent_command", None) == "pushback":
+            from tools.aipos_cli.agent_materialize import run_pushback
+            return run_pushback(args)
         # Gate mode (candidate ⑤): preserve the AIPOS-248 required-arg contract in code
         # (--actor / a token source are required for the gate pull). argparse can no longer
         # express 'required only when --gate-url is set' now that `watch` is polymorphic;

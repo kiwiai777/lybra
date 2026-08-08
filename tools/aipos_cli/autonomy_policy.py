@@ -210,6 +210,7 @@ def match_claim_envelope(
     actor: str,
     now: datetime,
     released_count: int,
+    claiming_role: str | None = None,
 ) -> tuple[bool, str]:
     """Strict-AND envelope match for a claim. Returns (matched, reason). Every predicate must
     hold; any miss returns matched=False with a human reason (偏窄 fail-safe). The caller uses
@@ -233,9 +234,19 @@ def match_claim_envelope(
     if now >= expires_at:
         return False, "policy has expired (expires_at reached)"
 
-    # agent/role: match either the concrete instance/actor or a role label the caller carries.
+    # agent/role: match the concrete instance/actor OR a role label the caller carries.
+    # AIPOS-363 S4: the role label may be a built-in role name OR an AIPOS-352 registered
+    # custom role (e.g. kaia-asst). The claiming_role comes from the Owner-minted capability
+    # token (authoritative identity, not self-reported), so it is safe to match against. This
+    # does NOT loosen coverage: an envelope naming role R covers only agents whose token role
+    # is exactly R (or whose instance/actor is exactly R) — agents of any other role still
+    # fall back to Supervised (偏窄 fail-safe preserved).
     covered = str(policy.get("agent_or_role") or "").strip()
-    if not covered or covered not in {str(agent_instance or "").strip(), str(actor or "").strip()}:
+    identity = {str(agent_instance or "").strip(), str(actor or "").strip()}
+    if claiming_role:
+        identity.add(str(claiming_role).strip())
+    identity.discard("")
+    if not covered or covered not in identity:
         return False, "claiming agent/role is not covered by policy.agent_or_role"
 
     # task_selector: strict, no wildcards. At least one selector dimension must be present and

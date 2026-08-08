@@ -23,6 +23,13 @@ claude_code:
   cmd: "claude {kickoff}"
   workdir: null
 
+# AIPOS-363 S3: codex harness slot (template extension position; NOT live-tested in this card —
+# materialization is harness-agnostic, so adding a harness = adding a cmd template here, zero
+# change to the materialization protocol). Fill workdir per deployment environment.
+codex:
+  cmd: "codex {kickoff}"
+  workdir: null
+
 generic_bash:
   cmd: "bash -c '{kickoff}'"
   workdir: null  # bash 秒活,通常无需会话监控

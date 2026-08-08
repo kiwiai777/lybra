@@ -1369,6 +1369,10 @@ def _match_claim_envelope(
     if str(snapshot.get("queue_state") or "").strip() != "pending":
         return None, None
     released = count_preauthorized_claims(repo_root, owner_policy_ref)
+    # AIPOS-363 S4: carry the calling role so an envelope may name an AIPOS-352 custom role
+    # (e.g. agent_or_role: kaia-asst) and still match an agent claiming under that role.
+    # The role is read from the Owner-minted capability token (authoritative, not self-reported).
+    claiming_role = str(_capability_token().get("role") or "").strip()
     matched, _reason = match_claim_envelope(
         policy=policy,
         task_id=str(snapshot.get("task_id") or task_id or ""),
@@ -1378,6 +1382,7 @@ def _match_claim_envelope(
         actor=actor,
         now=datetime.now(timezone.utc),
         released_count=released,
+        claiming_role=claiming_role or None,
     )
     return (owner_policy_ref, None) if matched else (None, None)
 
