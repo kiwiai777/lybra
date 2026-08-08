@@ -479,27 +479,44 @@ def _prepare_records_plan(
 
 
 def _check_for_pass_audit_verdict(repo_root: Path, task_id: str) -> bool:
-    """AIPOS-FND-4: check if a task has at least one passing audit verdict in records.
+    """AIPOS-FND-7F3: check if a task's LATEST audit verdict is PASS/PASS_WITH_NOTES.
 
-    Scans 5_tasks/records/audit_verdicts/<task_id>/ for verdict records with verdict: PASS or PASS_WITH_NOTES.
-    Returns True if at least one passing verdict exists.
-    PASS and PASS_WITH_NOTES both allow task completion; FAIL/REQUEST_CHANGES/unmet CONDITIONAL block.
+    Scans 5_tasks/records/audit_verdicts/<task_id>/ for verdict records, sorts by verdict_at
+    (null-safe: verdict_at > timestamp > empty string), and checks if the LATEST is PASS.
+    Returns True only if the most recent verdict allows task completion.
+    
+    This ensures the re-review flow works correctly:
+    - FAIL(T1) → re-audit → PASS(T2) → complete ✅ (latest=PASS)
+    - PASS(T1) → (hypothetical) FAIL(T2) → complete ❌ (latest=FAIL, though overturn is blocked)
+    
+    PASS and PASS_WITH_NOTES both allow task completion; FAIL/REQUEST_CHANGES/BLOCKED block.
     """
     if not task_id:
         return False
     verdicts_dir = repo_root / "5_tasks" / "records" / "audit_verdicts" / task_id
     if not verdicts_dir.is_dir():
         return False
+    
+    verdicts = []
     for verdict_file in verdicts_dir.glob("*.md"):
         try:
             text = verdict_file.read_text(encoding="utf-8")
             metadata, _, _ = parse_markdown_frontmatter(text)
             verdict_value = str(metadata.get("verdict") or "").strip().upper()
-            if verdict_value in {"PASS", "PASS_WITH_NOTES"}:
-                return True
+            # Extract timestamp for sorting (null-safe, same as _verdict_time in board_adapter)
+            # Convert to string to ensure consistent comparison (metadata may parse as datetime)
+            verdict_at_raw = metadata.get("verdict_at") or metadata.get("timestamp") or ""
+            verdict_at = str(verdict_at_raw) if verdict_at_raw else ""
+            verdicts.append({"verdict": verdict_value, "verdict_at": verdict_at})
         except (OSError, UnicodeDecodeError):
             continue
-    return False
+    
+    if not verdicts:
+        return False
+    
+    # Sort by verdict_at (latest first), then check if latest is PASS/PASS_WITH_NOTES
+    latest_verdict = max(verdicts, key=lambda v: v["verdict_at"])
+    return latest_verdict["verdict"] in {"PASS", "PASS_WITH_NOTES"}
 
 
 def mutate_queue_task(
