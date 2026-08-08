@@ -1059,9 +1059,15 @@ def _build_child_commands(
         str(mcp.get("host") or DEFAULT_MCP_HOST),
         "--port",
         str(mcp.get("port") or DEFAULT_MCP_PORT),
-        "--service-connection-json",
-        connection_path_str,
     ]
+    # AIPOS-294-OPS: home-root 单门模式——LYBRA_HOME_ROOT 环境变量存在时,MCP 加载
+    # home 级联合注册表(所有项目 token,294C),否则退回单项目 --service-connection-json。
+    # 两者互斥(serve-http 契约)。
+    _home_root = os.environ.get("LYBRA_HOME_ROOT", "").strip()
+    if _home_root:
+        mcp_cmd += ["--home-root", _home_root]
+    else:
+        mcp_cmd += ["--service-connection-json", connection_path_str]
     if reuse_port:
         mcp_cmd.append("--reuse-port")
     return board_cmd, mcp_cmd
