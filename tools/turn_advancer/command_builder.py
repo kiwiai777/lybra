@@ -1,6 +1,8 @@
 """AIPOS-340 — 命令构建器（填充参数，生成可执行命令）。
 
 根据动作类别 + 任务状态，构建完整的 MCP verb 调用或 CLI 命令（所有参数填好）。
+
+AIPOS-FND-9: finalize action now auto-deploys gate-side changes.
 """
 from pathlib import Path
 from typing import Any
