@@ -40,6 +40,7 @@ from tools.aipos_cli.autonomy_policy import (
 )
 from tools.aipos_cli.agent_profiles import load_agent_profiles, registry_available, resolve_instance_id
 from tools.aipos_cli.controlled_execute import get_dry_run
+from tools.aipos_cli.records import find_records_for_task, load_records
 from tools.aipos_cli.task_loader import find_repo_root
 from tools.aipos_cli.workspace_config import _project_candidates, has_workspace_queue, resolve_home_root
 
@@ -551,6 +552,28 @@ def _queue_amend_scope_allowed() -> bool:
 
 def _task_progress_scope_allowed() -> bool:
     return _capability_has_scope(TASK_PROGRESS_SCOPE)
+
+
+def _check_actor_has_claim(task_id: str, actor: str, repo_root: Path) -> bool:
+    """AIPOS-366: Check if the given actor has a valid claim record for the task.
+    
+    Returns True if there is at least one claim record in records/claims/<task_id>/
+    for this actor, False otherwise.
+    """
+    try:
+        records = load_records(repo_root)
+        task_records = find_records_for_task(records, task_id)
+        claims = task_records.get("claims", [])
+        
+        # Check if any claim record matches the actor
+        for claim in claims:
+            claim_actor = claim.get("actor") or claim.get("claimed_by")
+            if claim_actor and str(claim_actor).strip() == str(actor).strip():
+                return True
+        return False
+    except Exception:
+        # If we can't load records, fail closed (deny body access)
+        return False
 
 
 def _map_controlled_execute_error(response: dict[str, Any], *, dry_run_tool: str = "lybra_intake_submit_dry_run") -> dict[str, Any]:
@@ -1177,6 +1200,35 @@ def lybra_task_preview(arguments: dict[str, Any] | None = None) -> dict[str, Any
         return _error_result("Exactly one of task_id or path is required")
     if include_body and not _queue_claim_scope_allowed():
         return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "lybra_task_preview with include_body")
+    
+    # AIPOS-366: claim-before-work gate — body requires a valid claim record
+    if include_body:
+        # Determine actor: explicit arg, or infer from capability token
+        actor = str(args.get("actor")).strip() if args.get("actor") else None
+        if not actor:
+            cap = _capability_token()
+            actor = str(cap.get("agent_instance") or cap.get("role") or "").strip() or None
+        
+        if actor and task_id:
+            # task_id is the primary selector; if path is used, we'd need to resolve it to task_id first
+            resolved_task_id = str(task_id).strip() if task_id else None
+            if resolved_task_id and not _check_actor_has_claim(resolved_task_id, actor, _repo_root()):
+                return _tool_result(
+                    {
+                        "ok": False,
+                        "verdict": "BLOCK",
+                        "error_code": "CLAIM_REQUIRED",
+                        "operation": "lybra_task_preview",
+                        "message": (
+                            f"Task body access requires a valid claim record for actor '{actor}' on task '{resolved_task_id}'. "
+                            "Claim the task first using the claim workflow before requesting include_body=true."
+                        ),
+                        "doc_ref": "AIPOS-366 claim-before-work hard enforcement",
+                        "suggested_next_action": "Claim the task before requesting body content.",
+                    },
+                    is_error=True,
+                )
+    
     response = get_preview(
         task_id=str(task_id).strip() if task_id else None,
         path=str(path).strip() if path else None,
