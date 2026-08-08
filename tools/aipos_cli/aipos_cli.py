@@ -921,6 +921,87 @@ def _resolve_task_selection(args: argparse.Namespace, tasks: list[dict[str, Any]
     raise ValueError("Exactly one of --task-id or --path must be provided")
 
 
+def _run_dispatch(args: argparse.Namespace) -> dict[str, Any]:
+    """AIPOS-FND-12: Generate executor dispatch command (claim via connector, not file path).
+    
+    Output: a command string that invokes `lybra agent materialize` with all required params.
+    The executor runs this command, which forces claim→materialize flow (gate-recorded, no bypass).
+    """
+    from pathlib import Path
+    
+    task_id = args.task_id
+    executor = args.executor
+    
+    # Resolve workspace config to get gate URL and connection.json
+    try:
+        workspace_root = _resolve_workspace_for_command(args)
+    except Exception:
+        # If workspace resolution fails, use explicit args or defaults
+        workspace_root = Path(getattr(args, "workspace_root", None) or ".").expanduser()
+    
+    # Gate URL: explicit > workspace config > default
+    gate_url = args.gate_url
+    if not gate_url:
+        try:
+            config = load_workspace_config(workspace_root)
+            gate_url = config.get("mcp_url") or f"http://{config.get('mcp_host', DEFAULT_MCP_HOST)}:{config.get('mcp_port', DEFAULT_MCP_PORT)}"
+        except Exception:
+            gate_url = f"http://{DEFAULT_MCP_HOST}:{DEFAULT_MCP_PORT}"
+    
+    # Connection JSON: explicit > workspace default
+    connection_json = args.connection_json
+    if not connection_json:
+        connection_json = str(workspace_root / ".lybra" / "connection.json")
+    
+    # Owner policy ref: explicit or use task's declared policy
+    owner_policy_ref = args.owner_policy_ref
+    if not owner_policy_ref:
+        # Try to load task and extract policy from frontmatter
+        try:
+            from tools.aipos_cli.task_loader import find_task_by_id, find_repo_root
+            repo_root = find_repo_root(workspace_root)
+            task, _ = find_task_by_id(task_id, repo_root)
+            if task:
+                metadata = task.get("metadata", {})
+                owner_policy_ref = metadata.get("owner_policy_ref") or "pol_lybra_dev_8"
+            else:
+                owner_policy_ref = "pol_lybra_dev_8"  # Default PreAuthorized envelope
+        except Exception:
+            owner_policy_ref = "pol_lybra_dev_8"
+    
+    # Material root: explicit > default
+    material_root = args.material_root or "~/.lybra/work"
+    
+    # Build the dispatch command
+    cmd_parts = [
+        "lybra agent materialize",
+        f"--task-id {task_id}",
+        f"--actor {executor}",
+        f"--owner-policy-ref {owner_policy_ref}",
+        f"--gate-url {gate_url}",
+        f"--connection-json {connection_json}",
+        f"--material-root {material_root}",
+    ]
+    
+    dispatch_command = " ".join(cmd_parts)
+    
+    return {
+        "ok": True,
+        "operation": "dispatch",
+        "task_id": task_id,
+        "executor": executor,
+        "dispatch_command": dispatch_command,
+        "gate_url": gate_url,
+        "connection_json": connection_json,
+        "owner_policy_ref": owner_policy_ref,
+        "material_root": material_root,
+        "usage_hint": (
+            "Give this command to the executor. They run it to claim and materialize the task. "
+            "DO NOT give file paths directly — this enforces claim via connector (gate-recorded)."
+        ),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI Project OS CLI")
     parser.add_argument("--workspace-root", dest="global_workspace_root", help="Workspace root; may also be provided on supported subcommands")
@@ -1119,6 +1200,17 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_config_parser.add_argument("--transport-token-env", help="Transport token env var; defaults to LYBRA_MCP_TOKEN")
     mcp_config_parser.add_argument("--capability-token-env", help="Capability token env var; defaults to LYBRA_CAPABILITY_TOKEN")
     mcp_config_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-FND-12: dispatch — 产出给执行体的是认领命令(经连接器),不是队列文件路径
+    dispatch_parser = subparsers.add_parser("dispatch", help="Generate executor dispatch command (claim via connector, not file path)")
+    dispatch_parser.add_argument("task_id", help="Task ID to dispatch")
+    dispatch_parser.add_argument("--to", dest="executor", required=True, help="Executor actor/instance name")
+    dispatch_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    dispatch_parser.add_argument("--gate-url", help="Gate URL; defaults to workspace config or http://127.0.0.1:7118")
+    dispatch_parser.add_argument("--owner-policy-ref", help="Owner policy reference (PreAuthorized envelope)")
+    dispatch_parser.add_argument("--connection-json", help="Path to connection.json (for token resolution)")
+    dispatch_parser.add_argument("--material-root", help="Material area root (default ~/.lybra/work)")
+    dispatch_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     draft_parser = subparsers.add_parser("draft", help="Safe task draft writer")
     draft_subparsers = draft_parser.add_subparsers(dest="draft_command")
@@ -1803,6 +1895,19 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(_render_mcp_config_text(result))
+        return 0
+
+    if args.command == "dispatch":
+        # AIPOS-FND-12: 产出给执行体的是认领命令(经连接器 claim→材料化),不是队列文件路径
+        try:
+            result = _run_dispatch(args)
+        except (OSError, ValueError, FileNotFoundError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(render_json(result))
+        else:
+            print(result["dispatch_command"])
         return 0
 
     if args.command == "draft":
