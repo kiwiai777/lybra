@@ -1669,6 +1669,14 @@ def build_parser() -> argparse.ArgumentParser:
     finalize_parser.add_argument("--dry-run", action="store_true", help="Validate without committing")
     finalize_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-FND-9: gate deployment drift detection
+    gate_parser = subparsers.add_parser("gate", help="AIPOS-FND-9: Gate deployment operations")
+    gate_subparsers = gate_parser.add_subparsers(dest="gate_command", help="Gate operations")
+    
+    gate_drift_parser = gate_subparsers.add_parser("drift", help="Check deployment drift (committed but not deployed)")
+    gate_drift_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    gate_drift_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     return parser
 
 
@@ -2310,6 +2318,68 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
+    if args.command == "gate":
+        # AIPOS-FND-9: Gate deployment operations
+        if not hasattr(args, 'gate_command') or args.gate_command is None:
+            parser.parse_args([args.command, '--help'])
+            return 2
+        
+        if args.gate_command == "drift":
+            from tools.aipos_cli.gate_drift import check_gate_drift
+            
+            # Resolve workspace root
+            if args.workspace_root:
+                repo_root = Path(args.workspace_root).expanduser().resolve()
+            elif args.global_workspace_root:
+                repo_root = Path(args.global_workspace_root).expanduser().resolve()
+            else:
+                repo_root = Path.cwd()
+            
+            result = check_gate_drift(repo_root)
+            
+            if args.json:
+                print(render_json(result))
+            else:
+                # Text output
+                print("=== Gate Deployment Drift Check ===")
+                print()
+                print(result['message'])
+                print()
+                
+                if result['has_drift']:
+                    print(f"Undeployed commits: {result['commits_ahead']}")
+                    if result['undeployed_commits']:
+                        print()
+                        print("Recent commits:")
+                        for commit in result['undeployed_commits']:
+                            print(f"  {commit['hash']} {commit['message']}")
+                    
+                    classification = result['classification']
+                    if classification['gate_side']:
+                        print()
+                        print(f"Gate-side changes ({len(classification['gate_side'])} files):")
+                        for path in classification['gate_side'][:10]:
+                            print(f"  - {path}")
+                        if len(classification['gate_side']) > 10:
+                            print(f"  ... and {len(classification['gate_side']) - 10} more")
+                    
+                    if classification['cli_side']:
+                        print()
+                        print(f"CLI-side changes ({len(classification['cli_side'])} files):")
+                        for path in classification['cli_side'][:5]:
+                            print(f"  - {path}")
+                        if len(classification['cli_side']) > 5:
+                            print(f"  ... and {len(classification['cli_side']) - 5} more")
+                    
+                    print()
+                    print(f"Recommendation: {result['recommendation']}")
+                else:
+                    print("✓ No drift detected")
+            
+            return 0 if not result['has_drift'] else 1
+        
+        return 2
+
     if args.command == "finalize":
         # AIPOS-FND-2: Finalize PASS task (git commit/push)
         # Processed BEFORE global _find_repo_root_for_args to avoid 5_tasks/queue requirement
@@ -2346,6 +2416,15 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  - {op}")
             if result.get('commit_hash'):
                 print(f"\nCommit: {result['commit_hash']}")
+            
+            # AIPOS-FND-9: Show deployment status
+            if result.get('deployed'):
+                print("\n✓ Gate deployment completed successfully")
+            elif result.get('deployment_error'):
+                print(f"\n⚠️  WARNING: Deployment failed: {result['deployment_error']}")
+                print("   Manual deployment required: run 'lybra-deploy'")
+            elif result.get('deployment_skipped'):
+                print("\nℹ️  Deployment skipped (no gate-side changes)")
         
         return 0 if result.get("verdict") == "PASS" else 1
 

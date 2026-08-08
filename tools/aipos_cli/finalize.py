@@ -1,12 +1,15 @@
-"""AIPOS-FND-2 — finalize: git commit/push for PASS tasks.
+"""AIPOS-FND-2/FND-9 — finalize: git commit/push/deploy for PASS tasks.
 
 After audit verdict=PASS, finalize commits the changes to git and optionally pushes.
 Enforces deployment integrity (current==HEAD) and only allows finalization of PASS tasks.
+
+AIPOS-FND-9: Auto-deploy gate-side changes after commit to prevent "committed but not live" drift.
 """
 
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +179,8 @@ def finalize_task(
 ) -> dict[str, Any]:
     """Finalize a PASS task by committing changes to git.
     
+    AIPOS-FND-9: After commit, auto-deploys gate-side changes to prevent drift.
+    
     Args:
         task_id: Task ID to finalize
         actor: Actor performing the finalization
@@ -193,6 +198,9 @@ def finalize_task(
             "integrity_check": dict,
             "committed": bool,
             "pushed": bool,
+            "deployed": bool,  # FND-9: auto-deployed gate-side changes
+            "deployment_skipped": bool,  # FND-9: no gate-side changes
+            "deployment_error": str | None,  # FND-9: deployment failure
             "commit_hash": str | None,
             "message": str,
             "operations": list[str]
@@ -214,6 +222,9 @@ def finalize_task(
             "integrity_check": None,
             "committed": False,
             "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
             "commit_hash": None,
             "message": finalize_check["reason"],
             "operations": operations,
@@ -233,6 +244,9 @@ def finalize_task(
             "integrity_check": integrity,
             "committed": False,
             "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
             "commit_hash": None,
             "message": f"Deployment integrity check failed: {integrity['message']}",
             "operations": operations,
@@ -249,6 +263,9 @@ def finalize_task(
             "integrity_check": integrity,
             "committed": False,
             "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
             "commit_hash": _git_rev_parse_head(workspace_root),
             "message": "No changes to commit (working tree clean)",
             "operations": operations,
@@ -267,6 +284,9 @@ def finalize_task(
             "integrity_check": integrity,
             "committed": False,
             "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
             "commit_hash": None,
             "message": "DRY-RUN: Changes would be committed",
             "operations": operations,
@@ -321,6 +341,63 @@ def finalize_task(
             except subprocess.TimeoutExpired:
                 operations.append("Push timed out after 30s")
         
+        # AIPOS-FND-9: Auto-deploy gate-side changes
+        deployed = False
+        deployment_skipped = False
+        deployment_error = None
+        
+        from tools.aipos_cli.gate_drift import check_gate_drift
+        
+        drift_check = check_gate_drift(workspace_root)
+        operations.append(f"Drift check: {drift_check['message']}")
+        
+        if drift_check["has_drift"] and drift_check["classification"]["has_gate_side_changes"]:
+            # Gate-side changes detected - auto-deploy
+            operations.append("⚠️  Gate-side changes detected - triggering auto-deploy...")
+            
+            deploy_script = workspace_root / "tools" / "lybra-deploy"
+            if deploy_script.exists():
+                try:
+                    result = subprocess.run(
+                        [str(deploy_script)],
+                        cwd=str(workspace_root),
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                    )
+                    operations.append("✓ Deployment completed successfully")
+                    # Append deployment output (first 10 lines)
+                    deploy_lines = result.stdout.strip().splitlines()
+                    for line in deploy_lines[:10]:
+                        operations.append(f"  {line}")
+                    if len(deploy_lines) > 10:
+                        operations.append(f"  ... ({len(deploy_lines) - 10} more lines)")
+                    deployed = True
+                except subprocess.CalledProcessError as e:
+                    deployment_error = e.stderr
+                    operations.append(f"✗ Deployment FAILED: {e.stderr[:200]}")
+                    # Don't fail the finalize, but warn strongly
+                except subprocess.TimeoutExpired:
+                    deployment_error = "Deployment timed out after 120s"
+                    operations.append("✗ Deployment FAILED: timed out after 120s")
+            else:
+                deployment_error = "lybra-deploy script not found"
+                operations.append(f"✗ Cannot auto-deploy: {deploy_script} not found")
+        elif drift_check["has_drift"] and not drift_check["classification"]["has_gate_side_changes"]:
+            operations.append("ℹ️  CLI-side changes only - no deployment needed")
+            deployment_skipped = True
+        else:
+            operations.append("ℹ️  No drift detected - deployment up-to-date")
+            deployment_skipped = True
+        
+        # Build final message
+        final_message = f"Successfully committed changes: {commit_hash[:8]}"
+        if deployed:
+            final_message += " and deployed to gate"
+        elif deployment_error:
+            final_message += f" but deployment FAILED: {deployment_error[:100]}"
+        
         return {
             "verdict": "PASS",
             "task_id": task_id,
@@ -330,8 +407,11 @@ def finalize_task(
             "integrity_check": integrity,
             "committed": True,
             "pushed": pushed,
+            "deployed": deployed,
+            "deployment_skipped": deployment_skipped,
+            "deployment_error": deployment_error,
             "commit_hash": commit_hash,
-            "message": f"Successfully committed changes: {commit_hash[:8]}",
+            "message": final_message,
             "operations": operations,
         }
         
@@ -346,6 +426,9 @@ def finalize_task(
             "integrity_check": integrity,
             "committed": False,
             "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
             "commit_hash": None,
             "message": f"Git operation failed: {e.stderr}",
             "operations": operations,
