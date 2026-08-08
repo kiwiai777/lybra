@@ -131,7 +131,25 @@ FORBIDDEN_AUDIT_FIELDS = {
 }
 
 
+# AIPOS-294: Request-level project routing context. When set, _repo_root() resolves to
+# this project's workspace instead of using the process-global binding.
+REQUEST_PROJECT: ContextVar[str | None] = ContextVar("lybra_mcp_request_project", default=None)
+
+
 def _repo_root() -> Path:
+    """Resolve workspace root for the current request.
+    
+    AIPOS-294: Request-level routing — if REQUEST_PROJECT is set (from tool argument or
+    capability default), resolve <home>/<project>; otherwise fall back to find_repo_root()
+    (legacy/env-based resolution for backward compatibility).
+    """
+    project = REQUEST_PROJECT.get()
+    if project:
+        # Request specifies a project -> resolve via home model
+        from tools.aipos_cli.workspace_config import resolve_home_root, resolve_project_root
+        home = resolve_home_root()
+        return resolve_project_root(home, project)
+    # Legacy: process-level workspace resolution (AIPOS_WORKSPACE_ROOT or upward search)
     return find_repo_root()
 
 
@@ -239,6 +257,16 @@ def request_capability_scope(capability: dict[str, Any] | None) -> Iterator[None
         yield
     finally:
         REQUEST_CAPABILITY.reset(token)
+
+
+@contextmanager
+def request_project_scope(project: str | None) -> Iterator[None]:
+    """AIPOS-294: Set request-level project for workspace routing."""
+    token = REQUEST_PROJECT.set(project if project else None)
+    try:
+        yield
+    finally:
+        REQUEST_PROJECT.reset(token)
 
 
 def _resolve_role_scopes(role: str, *, role_class: str | None = None) -> list[str]:
@@ -379,8 +407,11 @@ def _project_scope_denied_result(detail: str) -> dict[str, Any]:
 
 
 def _project_gate_denied() -> dict[str, Any] | None:
-    """The project gate (AIPOS-229). Returns a PROJECT_SCOPE_DENIED result to BLOCK, or None to
-    fall through to the operation-scope (★A1) gate.
+    """The project gate (AIPOS-229, AIPOS-294). Returns a PROJECT_SCOPE_DENIED result to BLOCK,
+    or None to fall through to the operation-scope (★A1) gate.
+
+    AIPOS-294: When REQUEST_PROJECT is set (explicit routing), validates against that project.
+    Otherwise falls back to resolving active_project from the workspace (legacy behavior).
 
     R-ii ordering (back-compat critical):
       1. `projects` ABSENT -> return None (allow); do NOT resolve active_project at all.
@@ -390,31 +421,70 @@ def _project_gate_denied() -> dict[str, Any] | None:
     projects = _capability_token().get("projects")
     if not projects:
         return None
-    try:
-        active_project = _resolve_active_project_for(_repo_root(), None)
-    except (ValueError, FileNotFoundError, OSError) as exc:
-        return _project_scope_denied_result(f"active project could not be resolved ({exc})")
-    if not _capability_in_project(active_project):
+    
+    # AIPOS-294: Determine which project to validate
+    request_project = REQUEST_PROJECT.get()
+    if request_project:
+        # Request-level routing: validate the explicitly routed project
+        target_project = request_project
+    else:
+        # Legacy path: resolve active_project from the workspace
+        # Note: _repo_root() here will use find_repo_root() since REQUEST_PROJECT is None
+        try:
+            target_project = _resolve_active_project_for(_repo_root(), None)
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            return _project_scope_denied_result(f"active project could not be resolved ({exc})")
+    
+    # Check authorization
+    if not _capability_in_project(target_project):
         return _project_scope_denied_result(
-            f"active project '{active_project}' is not in the token's projects {list(projects)}"
+            f"active project '{target_project}' is not in the token's projects {list(projects)}"
         )
     return None
 
 
-def dispatch_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
-    """Single dispatch choke-point for every tools/call (AIPOS-229 R-i / R-α).
+def _resolve_request_project(arguments: dict[str, Any]) -> str | None:
+    """AIPOS-294: Resolve the target project for this request.
+    
+    Returns the explicit `project` argument if provided; otherwise None (fall back to legacy).
+    
+    Design: ONLY explicit project argument triggers request-level routing. Single-project
+    inference is NOT automatic to preserve zero regression — existing tests expect even
+    single-project tokens to validate against the workspace's active_project via the legacy
+    path. The explicit argument is the opt-in signal for multi-project routing.
+    """
+    # Explicit project argument only
+    explicit = str(arguments.get("project") or "").strip()
+    if explicit:
+        return explicit
+    
+    # No explicit argument: fall back to legacy (None signals no request-level override)
+    return None
 
-    The project gate runs HERE, before the handler — so it is structurally unavoidable for ALL 18
-    tools (read + write), with ZERO exemptions. The handler's own operation-scope (★A1) check runs
-    after, unchanged. Ordering: project gate -> ★A1 -> controlled-execute.
+
+def dispatch_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
+    """Single dispatch choke-point for every tools/call (AIPOS-229 R-i / R-α, AIPOS-294).
+
+    AIPOS-294: Request-level project routing. Extract `project` from arguments (or infer from
+    capability for single-project tokens), set REQUEST_PROJECT context, then route. The project
+    gate runs HERE, before the handler — so it is structurally unavoidable for ALL tools (read +
+    write), with ZERO exemptions. The handler's own operation-scope (★A1) check runs after,
+    unchanged. Ordering: project routing -> project gate -> ★A1 -> controlled-execute.
     """
     handler = TOOL_HANDLERS.get(name)
     if handler is None:
         raise KeyError(name)
-    denied = _project_gate_denied()
-    if denied is not None:
-        return denied
-    return handler(arguments)
+    
+    # AIPOS-294: Extract request project from arguments or infer from capability
+    args = arguments if isinstance(arguments, dict) else {}
+    request_project = _resolve_request_project(args)
+    
+    # Set request project context and dispatch
+    with request_project_scope(request_project):
+        denied = _project_gate_denied()
+        if denied is not None:
+            return denied
+        return handler(args)
 
 
 def _intake_scope_allowed() -> bool:
