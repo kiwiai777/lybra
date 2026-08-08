@@ -77,6 +77,7 @@ from tools.aipos_cli.workspace_config import (
     governance_paths,
     has_workspace_queue,
     load_workspace_config,
+    read_project_json,
     resolve_active_project,
 )
 from tools.aipos_cli.validator import validate_single_task, validate_tasks
@@ -1994,9 +1995,77 @@ def _unsafe_return_ref(value: str) -> bool:
     return raw.is_absolute() or ".." in raw.parts
 
 
+class ProductRepoNotConfigured(ValueError):
+    """AIPOS-FND-5F1: raised when the governance workspace's project.json does not carry a
+    valid ``code_repo`` mapping. Callers must surface this as an actionable blocking reason,
+    never silently guess a path."""
+
+
+def _resolve_product_code_repo(governance_root: Path) -> Path:
+    """AIPOS-FND-5F1: Resolve the PRODUCT repo (where code actually lands) strictly from
+    config — ``governance_root/project.json`` -> ``code_repo`` (sole authority per ruling 6).
+
+    Root cause this fixes: the governance workspace (e.g.
+    ``~/ai-project-os/2_projects/lybra``) is a SUBTREE of the governance monorepo and has NO
+    ``.git`` of its own. A naive ``git status`` run with that dir as ``cwd`` walks UPWARD and
+    lands on the governance monorepo's ``.git``, which is essentially always dirty (unrelated
+    task cards/records for other projects) — a completely different repo from where code卡
+    actually commits.
+
+    Owner ruling (2026-08-09): the product repo location MUST be resolved from config, with
+    ZERO machine-specific hardcoded fallback paths (no ``~/projects/lybra``, no
+    ``~/projects/<project>`` naming-convention guess — those are dev-machine layout
+    assumptions that do not belong baked into product logic). Missing/invalid config fails
+    LOUD with an actionable message, never silently degrades to a guessed path.
+
+    Resolution:
+      1. If ``governance_root`` itself directly owns a ``.git``, it IS the product repo (a
+         single-repo setup where governance and code share one root) — use it AS-IS. This
+         also covers every existing test fixture that ``git init``s its own tempdir directly:
+         their behavior is unaffected by this fix.
+      2. Otherwise, if ``governance_root/project.json`` does not exist AT ALL, this workspace
+         was never registered under the governance-home model in the first place (e.g. an
+         ad hoc/legacy tempdir used by unrelated tests) — fall back to ``governance_root``
+         unchanged (legacy passthrough, byte-identical to pre-FND-5F1 behavior: git will
+         simply skip the check if that root isn't a git repo either).
+      3. Otherwise (``project.json`` exists — this IS an established governance project),
+         read its ``code_repo``. If present AND the path exists on disk, use it.
+      4. Otherwise raise ``ProductRepoNotConfigured`` with a message pointing at
+         ``lybra project set-repo`` — an established project with a missing/stale code_repo
+         mapping is an actionable configuration error, never a silent path guess.
+    """
+    if (governance_root / ".git").exists():
+        return governance_root
+    project_json_file = governance_root / "project.json"
+    if not project_json_file.is_file():
+        return governance_root
+    try:
+        project_json = read_project_json(governance_root)
+    except (OSError, ValueError):
+        project_json = {}
+    code_repo_raw = str(project_json.get("code_repo") or "").strip()
+    if code_repo_raw:
+        candidate = Path(code_repo_raw).expanduser()
+        if candidate.is_dir():
+            return candidate
+        raise ProductRepoNotConfigured(
+            f"project.json code_repo={code_repo_raw!r} does not exist on disk. "
+            "Run `lybra project set-repo <name> --code-repo <path>` to fix the mapping."
+        )
+    raise ProductRepoNotConfigured(
+        "project.json has no code_repo mapping for this governance workspace. "
+        "Run `lybra project set-repo <name> --code-repo <path>` to set it."
+    )
+
+
 def _check_uncommitted_code(repo_root: Path, task_id: str) -> dict[str, Any]:
-    """AIPOS-FND-5: Check if code task has uncommitted changes in working tree.
-    
+    """AIPOS-FND-5 / AIPOS-FND-5F1: Check if code task has uncommitted changes in working tree.
+
+    ``repo_root`` here MUST be the resolved PRODUCT code repo (see
+    ``_resolve_product_code_repo``), not the governance workspace root — the governance
+    monorepo's own dirt (task cards/records for unrelated projects) must never block a code
+    task's return.
+
     Returns:
         dict with keys:
             - has_uncommitted: bool
@@ -2150,12 +2219,17 @@ def _build_return_preview(
     artifact_policy = str(source_metadata.get("artifact_policy") or "").strip()
     if task_mode == "code" or artifact_policy == "formal_write":
         current_task_id = str(task.get("task_id") or "")
-        git_check = _check_uncommitted_code(repo_root, current_task_id)
-        if git_check.get("has_uncommitted"):
-            blocking_reasons.append(
-                f"CODE_NOT_COMMITTED: {git_check.get('message', 'Working tree has uncommitted changes')}. "
-                "Code tasks must commit all changes before return."
-            )
+        try:
+            product_repo_root = _resolve_product_code_repo(repo_root)
+        except ProductRepoNotConfigured as exc:
+            blocking_reasons.append(f"CODE_REPO_NOT_CONFIGURED: {exc}")
+        else:
+            git_check = _check_uncommitted_code(product_repo_root, current_task_id)
+            if git_check.get("has_uncommitted"):
+                blocking_reasons.append(
+                    f"CODE_NOT_COMMITTED: {git_check.get('message', 'Working tree has uncommitted changes')}. "
+                    "Code tasks must commit all changes before return."
+                )
 
     updated_metadata = dict(source_metadata)
     updated_metadata["status"] = "claimed"
