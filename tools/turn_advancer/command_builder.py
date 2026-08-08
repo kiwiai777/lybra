@@ -159,13 +159,27 @@ def build_command(action: str, state: dict[str, Any], workspace_root: Path) -> d
         }
     
     elif action == "finalize":
-        # finalize 卡生成 + 派工
-        # 简化：输出"生成 finalize 卡并派工"
-        copyable = f"# 生成 FINALIZE-{task_id}.md 并派工给 executor（机械步，可模板自动生成）"
+        # AIPOS-FND-2: finalize PASS task (git commit/push)
+        # 参数来源: state + task_frontmatter
+        assigned_to = task_frontmatter.get("assigned_to") or task_frontmatter.get("agent_instance")
+        actor = assigned_to or "system"
+        
+        import sys as _sys
+        copyable = (
+            f"{_sys.executable} -m tools.aipos_cli.aipos_cli finalize"
+            f" --task-id {task_id}"
+            f" --actor {actor}"
+            f" --workspace-root {workspace_root}"
+        )
+        
         return {
             "command_type": "cli",
             "verb": None,
-            "args": {},
+            "args": {
+                "task_id": task_id,
+                "actor": actor,
+                "workspace_root": str(workspace_root),
+            },
             "copyable_line": copyable,
         }
     

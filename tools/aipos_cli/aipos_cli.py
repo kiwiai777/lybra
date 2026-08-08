@@ -1660,6 +1660,15 @@ def build_parser() -> argparse.ArgumentParser:
     mark_concluded_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     mark_concluded_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-FND-2: finalize PASS tasks (git commit/push)
+    finalize_parser = subparsers.add_parser("finalize", help="AIPOS-FND-2: Finalize PASS task (git commit/push)")
+    finalize_parser.add_argument("--task-id", required=True, help="Task ID to finalize (must have verdict=PASS)")
+    finalize_parser.add_argument("--actor", required=True, help="Actor performing finalization")
+    finalize_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
+    finalize_parser.add_argument("--push", action="store_true", help="Push to remote after commit")
+    finalize_parser.add_argument("--dry-run", action="store_true", help="Validate without committing")
+    finalize_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     return parser
 
 
@@ -2300,6 +2309,45 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.print_help()
         return 2
+
+    if args.command == "finalize":
+        # AIPOS-FND-2: Finalize PASS task (git commit/push)
+        # Processed BEFORE global _find_repo_root_for_args to avoid 5_tasks/queue requirement
+        from tools.aipos_cli.finalize import finalize_task
+        
+        # finalize doesn't require full 5_tasks/queue structure, only task_cards/ and git
+        if args.workspace_root:
+            repo_root = Path(args.workspace_root).expanduser().resolve()
+        elif args.global_workspace_root:
+            repo_root = Path(args.global_workspace_root).expanduser().resolve()
+        else:
+            # Fallback to current directory if no workspace structure found
+            repo_root = Path.cwd()
+        
+        result = finalize_task(
+            task_id=args.task_id,
+            actor=args.actor,
+            workspace_root=repo_root,
+            dry_run=args.dry_run,
+            push=args.push,
+        )
+        
+        if args.json:
+            print(render_json(result))
+        else:
+            # Text output
+            print(f"Task: {result['task_id']}")
+            print(f"Actor: {result['actor']}")
+            print(f"Verdict: {result['verdict']}")
+            print(f"Message: {result['message']}")
+            if result.get('operations'):
+                print("\nOperations:")
+                for op in result['operations']:
+                    print(f"  - {op}")
+            if result.get('commit_hash'):
+                print(f"\nCommit: {result['commit_hash']}")
+        
+        return 0 if result.get("verdict") == "PASS" else 1
 
     try:
         repo_root = _find_repo_root_for_args(args)
