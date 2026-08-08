@@ -2901,10 +2901,13 @@ def _build_audit_verdict_preview(
                 "when either side's identity was recorded without registry verification"
             )
 
-    # AIPOS-257: 派生审计任务(created_by=gate_derivation)以派生 publish 记录为出处,
-    # 等价 dispatch;非派生路径保持原 audit_dispatch 记录校验不变。
+    # AIPOS-FND-7: 统一首审/复审护栏——派生与非派生都必须有对应记录
+    # 派生审计(created_by=gate_derivation)检查 publish_index;
+    # 非派生审计(手发卡)检查 audit_dispatch_index。
+    # 关键:两条路径都必须有记录,不再区分首审/复审。
     is_derived_audit = str(audit_metadata.get("created_by") or "").strip() == "gate_derivation"
     dispatch_ref = str(audit_dispatch_record_ref or audit_metadata.get("audit_dispatch_record_ref") or reviewed_metadata.get("audit_dispatch_record_ref") or "").strip()
+    
     if is_derived_audit:
         # 派生模式:出处 = 派生 publish 记录(publish_id 确定性可解析)
         if not dispatch_ref:
@@ -2914,8 +2917,9 @@ def _build_audit_verdict_preview(
         elif not records.get("publish_index", {}).get(dispatch_ref):
             blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: derivation publish ref does not resolve to a record")
     else:
+        # 非派生模式(手发卡):必须有 audit_dispatch 记录
         if not dispatch_ref:
-            blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: audit dispatch record ref is required")
+            blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: audit dispatch record ref is required (non-derived audit must be dispatched via audit_dispatch_task)")
         elif not records.get("audit_dispatch_index", {}).get(dispatch_ref):
             blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: dispatch ref does not resolve to a record")
     return_ref = str(reviewed_return_record_ref or audit_metadata.get("reviewed_return_record_ref") or reviewed_metadata.get("return_record_ref") or reviewed_metadata.get("return_event_ref") or "").strip()

@@ -886,7 +886,7 @@ class AdvisorPump:
         return False
     
     def _auto_dispatch_audit(self, task_id: str, return_data: dict[str, Any]) -> bool:
-        """AIPOS-324 S2: Auto-dispatch task to auditor after return settlement.
+        """AIPOS-FND-7: Auto-dispatch task to auditor after return settlement, building audit_dispatch record.
         
         Returns True on success, False on failure (triggers ESCALATE).
         """
@@ -904,12 +904,18 @@ class AdvisorPump:
             if self.gate_client is None:
                 raise ValueError("Gate client not initialized")
             
-            # Build dispatch arguments
+            # Generate audit task ID
+            audit_task_id = f"{task_id}R1"  # Convention: R1 for first audit round
+            
+            # Build dispatch arguments (AIPOS-FND-7: correct MCP schema)
             args = {
-                "task_id": task_id,
+                "source_task_id": task_id,
                 "actor": "advisor.lybra.kiwiai-dev",  # Advisor dispatches
-                "auditor": "audit.lybra.kiwiai-dev",
+                "agent_instance": "advisor.lybra.kiwiai-dev",
+                "autonomy_mode": "Supervised",
                 "owner_policy_ref": envelope,
+                "audit_task_id": audit_task_id,
+                "audit_agent_instance": "audit.lybra.kiwiai-dev",
             }
             
             # Dry run
@@ -923,11 +929,11 @@ class AdvisorPump:
             
             log(f"Audit dispatch dry-run succeeded: {dry_run_token}", "INFO")
             
-            # Confirm
+            # Confirm (AIPOS-FND-7: correct confirm schema)
             confirm_args = {
                 "dry_run_token": dry_run_token,
                 "actor": args["actor"],
-                "auditor": args["auditor"],
+                "agent_instance": args["agent_instance"],
                 "owner_policy_ref": args["owner_policy_ref"],
                 "owner_confirmation_token": "OWNER_CONFIRMED",
             }
@@ -939,7 +945,7 @@ class AdvisorPump:
                 log(f"Audit dispatch confirm failed: {error_msg}", "ERROR")
                 return False
             
-            log(f"Audit dispatch confirm succeeded: {task_id}", "INFO")
+            log(f"Audit dispatch confirm succeeded: {task_id} -> {audit_task_id}", "INFO")
             
             # Doorway verification: check dispatch record landed
             # For now, we just verify the task is in the right state

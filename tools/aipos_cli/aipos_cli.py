@@ -1299,6 +1299,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Auditor runtime command template"
     )
 
+    # AIPOS-FND-7: audit dispatch 顶级命令（派审自动建记录）
+    audit_dispatch_parser = subparsers.add_parser("audit", help="Audit operations")
+    audit_subparsers = audit_dispatch_parser.add_subparsers(dest="audit_command")
+    
+    dispatch_parser = audit_subparsers.add_parser("dispatch", help="Dispatch audit for a completed task")
+    dispatch_parser.add_argument("--source-task-id", "--task-id", dest="source_task_id", help="Source task ID")
+    dispatch_parser.add_argument("--source-task-path", "--task-path", dest="source_task_path", help="Source task path")
+    dispatch_parser.add_argument("--actor", required=True, help="Actor dispatching audit")
+    dispatch_parser.add_argument("--agent-instance", required=True, help="Agent instance (dispatcher)")
+    dispatch_parser.add_argument("--owner-policy-ref", required=True, help="Owner policy reference")
+    dispatch_parser.add_argument("--audit-task-id", required=True, help="Audit task ID")
+    dispatch_parser.add_argument("--audit-task-title", help="Audit task title")
+    dispatch_parser.add_argument("--audit-by", help="Auditor role/instance")
+    dispatch_parser.add_argument("--audit-agent-instance", required=True, help="Auditor agent instance")
+    dispatch_parser.add_argument("--dispatch-reason", help="Dispatch reason")
+    dispatch_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    dispatch_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     # AIPOS-370: audit-verdict 顶级命令（MCP-only 动词上 CLI）
     audit_verdict_parser = subparsers.add_parser("audit-verdict", help="Submit audit verdict for a reviewed task")
     audit_verdict_parser.add_argument("--audit-task-id", help="Audit task ID (optional)")
@@ -2906,6 +2924,35 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 print(f"ERROR: auditor launch failed: {exc}", file=sys.stderr)
                 return 1
+        parser.print_help()
+        return 2
+
+    if args.command == "audit":
+        if getattr(args, "audit_command", None) == "dispatch":
+            from tools.aipos_cli.board_adapter import audit_dispatch_task
+            try:
+                result = audit_dispatch_task(
+                    source_task_id=args.source_task_id,
+                    source_path=args.source_task_path,
+                    actor=args.actor,
+                    agent_instance=args.agent_instance,
+                    owner_policy_ref=args.owner_policy_ref,
+                    audit_task_id=args.audit_task_id,
+                    audit_task_title=args.audit_task_title,
+                    audit_by=args.audit_by,
+                    audit_agent_instance=args.audit_agent_instance,
+                    dispatch_reason=args.dispatch_reason,
+                    dry_run=args.dry_run,
+                    repo_root=repo_root,
+                )
+            except (FileNotFoundError, OSError, ValueError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            if args.json:
+                print(render_json(result))
+            else:
+                print(render_json(result))
+            return 1 if result.get("verdict") == "BLOCK" else 0
         parser.print_help()
         return 2
 
