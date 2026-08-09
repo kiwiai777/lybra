@@ -51,6 +51,62 @@ def build_preview(
             except Exception:
                 pass  # If read fails, leave as None; connector will handle missing card
 
+    # AIPOS-363F2: read referenced governance files for cross-machine materialization
+    referenced_files_content: list[dict[str, str]] = []
+    if include_body:
+        referenced_files_spec = metadata.get("referenced_files", [])
+        if referenced_files_spec:
+            for ref_spec in referenced_files_spec:
+                # ref_spec can be str (legacy: just path) or dict with {path, scope, ...}
+                if isinstance(ref_spec, str):
+                    ref_path = ref_spec
+                elif isinstance(ref_spec, dict):
+                    ref_path = ref_spec.get("path", "")
+                else:
+                    continue  # skip malformed
+                
+                if not ref_path:
+                    continue
+                
+                # Security: sanitize path (no .., must be relative, within project governance)
+                ref_path_clean = ref_path.strip()
+                if ".." in ref_path_clean or ref_path_clean.startswith("/"):
+                    # reject absolute or parent-traversing paths
+                    referenced_files_content.append({
+                        "path": ref_path,
+                        "error": "Security: path traversal not allowed",
+                    })
+                    continue
+                
+                # Read file from repo_root (governance files are project-scoped)
+                ref_file = repo_root / ref_path_clean
+                try:
+                    # Additional safety: ensure resolved path is still under repo_root
+                    ref_file_resolved = ref_file.resolve()
+                    repo_root_resolved = repo_root.resolve()
+                    if not str(ref_file_resolved).startswith(str(repo_root_resolved)):
+                        referenced_files_content.append({
+                            "path": ref_path,
+                            "error": "Security: path escapes project scope",
+                        })
+                        continue
+                    
+                    content = ref_file_resolved.read_text(encoding="utf-8")
+                    referenced_files_content.append({
+                        "path": ref_path,
+                        "content": content,
+                    })
+                except FileNotFoundError:
+                    referenced_files_content.append({
+                        "path": ref_path,
+                        "error": "File not found",
+                    })
+                except Exception as e:
+                    referenced_files_content.append({
+                        "path": ref_path,
+                        "error": f"Read error: {e}",
+                    })
+
     verdict = task["verdict"]
     can_start = verdict in {"PASS", "WARN"}
     copy_allowed = verdict in {"PASS", "WARN"}
@@ -151,6 +207,7 @@ def build_preview(
         **({
             "body_markdown": task.get("body", ""),
             "rendered_card_markdown": rendered_card_markdown,
+            "referenced_files_content": referenced_files_content,
         } if include_body else {}),
     }
 # AIPOS-316: Guard against direct invocation
