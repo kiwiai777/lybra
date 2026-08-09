@@ -40,6 +40,17 @@ def build_preview(
     task_id = task.get("task_id") or "UNKNOWN_TASK"
     repo_root = Path(task.get("repo_root", "."))
 
+    # AIPOS-363F1: read complete card file (frontmatter+body) for cross-machine materialization
+    rendered_card_markdown = None
+    if include_body:
+        task_path = task.get("path")
+        if task_path:
+            card_file = repo_root / task_path
+            try:
+                rendered_card_markdown = card_file.read_text(encoding="utf-8")
+            except Exception:
+                pass  # If read fails, leave as None; connector will handle missing card
+
     verdict = task["verdict"]
     can_start = verdict in {"PASS", "WARN"}
     copy_allowed = verdict in {"PASS", "WARN"}
@@ -137,7 +148,10 @@ def build_preview(
         "active_session_id": metadata.get("active_session_id"),
         "last_session_id": metadata.get("last_session_id"),
         "claim_id": metadata.get("claim_id"),
-        **({"body_markdown": task.get("body", "")} if include_body else {}),
+        **({
+            "body_markdown": task.get("body", ""),
+            "rendered_card_markdown": rendered_card_markdown,
+        } if include_body else {}),
     }
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
