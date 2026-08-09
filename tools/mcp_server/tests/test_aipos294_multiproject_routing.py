@@ -64,16 +64,16 @@ class MultiProjectRoutingTests(unittest.TestCase):
                 # (handler should see the routed workspace)
 
     def test_single_project_token_infers_project(self) -> None:
-        """Single-project token requires explicit project argument (no auto-inference for zero regression)."""
+        """AIPOS-FND-17: Single-project token NOW auto-infers its only project (design change)."""
         request_project = _resolve_request_project({})  # No explicit project
         
-        # Without explicit argument: returns None (legacy path)
+        # Without capability: returns None (legacy path)
         self.assertIsNone(request_project)
         
-        # With single-project capability but no explicit argument: still None
+        # AIPOS-FND-17: Single-project capability NOW auto-infers (changed from AIPOS-294)
         with request_capability_scope(_cap(projects=["projectA"])):
             request_project = _resolve_request_project({})
-            self.assertIsNone(request_project)  # No auto-inference
+            self.assertEqual(request_project, "projectA")  # Auto-inference enabled for standard MCP clients
 
     def test_multi_project_token_without_explicit_falls_back_legacy(self) -> None:
         """Multi-project token without explicit project argument falls back to legacy resolution."""

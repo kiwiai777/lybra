@@ -408,22 +408,24 @@ def _project_scope_denied_result(detail: str) -> dict[str, Any]:
 
 
 def _project_gate_denied() -> dict[str, Any] | None:
-    """The project gate (AIPOS-229, AIPOS-294). Returns a PROJECT_SCOPE_DENIED result to BLOCK,
+    """The project gate (AIPOS-229, AIPOS-294, AIPOS-FND-17). Returns a PROJECT_SCOPE_DENIED result to BLOCK,
     or None to fall through to the operation-scope (★A1) gate.
 
-    AIPOS-294: When REQUEST_PROJECT is set (explicit routing), validates against that project.
-    Otherwise falls back to resolving active_project from the workspace (legacy behavior).
+    AIPOS-FND-17: When REQUEST_PROJECT is set (from explicit arg, default_project, or single-project
+    inference), validates against that project. Otherwise falls back to resolving active_project
+    from the workspace (legacy behavior).
 
     R-ii ordering (back-compat critical):
       1. `projects` ABSENT -> return None (allow); do NOT resolve active_project at all.
       2. `projects` PRESENT -> resolve active_project; resolution failure -> fail-closed deny
          (reachable ONLY in this branch); else membership test.
     """
-    projects = _capability_token().get("projects")
+    token = _capability_token()
+    projects = token.get("projects")
     if not projects:
         return None
     
-    # AIPOS-294: Determine which project to validate
+    # AIPOS-FND-17: Determine which project to validate
     request_project = REQUEST_PROJECT.get()
     if request_project:
         # Request-level routing: validate the explicitly routed project
@@ -434,32 +436,64 @@ def _project_gate_denied() -> dict[str, Any] | None:
         try:
             target_project = _resolve_active_project_for(_repo_root(), None)
         except (ValueError, FileNotFoundError, OSError) as exc:
-            return _project_scope_denied_result(f"active project could not be resolved ({exc})")
+            # AIPOS-FND-17: Improved error message with actionable guidance
+            token_projects = list(projects) if isinstance(projects, list) else []
+            default_project = str(token.get("default_project") or "").strip()
+            guidance = "Pass 'project' argument in tool calls"
+            if len(token_projects) == 1:
+                guidance += f" (or your single-project token should auto-infer '{token_projects[0]}')"
+            elif default_project:
+                guidance += f" (or bind default_project='{default_project}' at connection level)"
+            elif len(token_projects) > 1:
+                guidance += f" or bind a default_project at token mint time. Authorized: {token_projects}"
+            return _project_scope_denied_result(
+                f"active project could not be resolved ({exc}). {guidance}"
+            )
     
     # Check authorization
     if not _capability_in_project(target_project):
+        token_projects = list(projects) if isinstance(projects, list) else []
         return _project_scope_denied_result(
-            f"active project '{target_project}' is not in the token's projects {list(projects)}"
+            f"project '{target_project}' is not in the token's authorized projects {token_projects}. "
+            f"Pass an authorized project explicitly or bind default_project at token mint time."
         )
     return None
 
 
 def _resolve_request_project(arguments: dict[str, Any]) -> str | None:
-    """AIPOS-294: Resolve the target project for this request.
+    """AIPOS-FND-17: Resolve the target project for this request with inference.
     
-    Returns the explicit `project` argument if provided; otherwise None (fall back to legacy).
+    Priority (first match wins):
+    1. Explicit `project` argument (per-call override)
+    2. Token's `default_project` field (connection-level default)
+    3. Single-project inference: if token.projects has exactly one entry, use it
+    4. None (fall back to legacy path)
     
-    Design: ONLY explicit project argument triggers request-level routing. Single-project
-    inference is NOT automatic to preserve zero regression — existing tests expect even
-    single-project tokens to validate against the workspace's active_project via the legacy
-    path. The explicit argument is the opt-in signal for multi-project routing.
+    This lets standard MCP clients (Claude Code) use single-gate without injecting
+    project per-call. Single-project tokens (e.g., agency→kiwiaiagency) auto-route.
+    Multi-project tokens can bind a default_project at mint time or pass explicit project.
     """
-    # Explicit project argument only
+    # Priority 1: Explicit project argument
     explicit = str(arguments.get("project") or "").strip()
     if explicit:
         return explicit
     
-    # No explicit argument: fall back to legacy (None signals no request-level override)
+    # Priority 2 & 3: Connection-level default or single-project inference
+    token = _capability_token()
+    
+    # Priority 2: Token's default_project (connection-level binding)
+    default_project = str(token.get("default_project") or "").strip()
+    if default_project:
+        return default_project
+    
+    # Priority 3: Single-project inference
+    projects = token.get("projects")
+    if isinstance(projects, list) and len(projects) == 1:
+        single_project = str(projects[0]).strip()
+        if single_project:
+            return single_project
+    
+    # Priority 4: No inference possible, fall back to legacy
     return None
 
 

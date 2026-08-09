@@ -90,7 +90,8 @@ class ClaimBeforeBodyTests(unittest.TestCase):
         payload: dict[str, object] = {
             "token_ref": "cap_test_366",
             "operations": operations,
-            "projects": ["test_project"],
+            # AIPOS-FND-17: Use multi-project to preserve legacy path testing
+            "projects": ["test_project", "other_project"],
             "expires_at": "2999-01-01T00:00:00Z",
         }
         if role is not None:

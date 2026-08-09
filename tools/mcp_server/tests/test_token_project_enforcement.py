@@ -44,10 +44,12 @@ def _err(result):
 class ProjectEnforcementTests(unittest.TestCase):
     # --- R-α: 30 gated / 0 exempt (AIPOS-242: +lybra_project_status; AIPOS-249: +2 draft_submit; AIPOS-283: +2 queue_close; AIPOS-315: +2 withdraw +2 amend; AIPOS-320: +1 return_content; AIPOS-323: +1 task_progress; AIPOS-330: +1 gate_guidance) --
     def test_all_tool_handlers_are_project_gated_no_exemptions(self) -> None:
-        self.assertEqual(len(TOOL_HANDLERS), 39)  # contract: a new tool must be counted + gated (AIPOS-336F1: +2 bench_audit_submit/confirm; AIPOS-354: +2 converge_r_cards/mark_concluded; AIPOS-369: +1 lybra_gate_version)
+        # Count updated for new tools added since AIPOS-229
+        self.assertEqual(len(TOOL_HANDLERS), 43)  # contract: a new tool must be counted + gated
+        # AIPOS-FND-17: Use multi-project token to force legacy resolution path
         with patch.object(gate, "_repo_root", return_value="/tmp/x"), patch.object(
             gate, "_resolve_active_project_for", return_value="proj-A"
-        ), request_capability_scope(_cap(projects=["other-proj"])):
+        ), request_capability_scope(_cap(projects=["other-proj", "another-proj"])):
             gated = 0
             for name in TOOL_HANDLERS:
                 result = dispatch_tool(name, {})
@@ -57,9 +59,10 @@ class ProjectEnforcementTests(unittest.TestCase):
 
     # --- inverse flip-case ---------------------------------------------------------------------
     def test_inverse_flip_case_mismatch_now_denies(self) -> None:
+        # AIPOS-FND-17: Use multi-project token to test legacy path (single-project auto-infers)
         with patch.object(gate, "_repo_root", return_value="/tmp/x"), patch.object(
             gate, "_resolve_active_project_for", return_value="proj-A"
-        ), request_capability_scope(_cap(projects=["proj-B"])):
+        ), request_capability_scope(_cap(projects=["proj-B", "proj-C"])):
             self.assertEqual(_err(dispatch_tool("lybra_queue_list", {})), "PROJECT_SCOPE_DENIED")
 
     def test_match_passes_project_gate(self) -> None:
@@ -94,16 +97,18 @@ class ProjectEnforcementTests(unittest.TestCase):
     def test_project_gate_precedes_operation_gate(self) -> None:
         # A token that would fail BOTH (wrong project AND lacking the op scope) is denied by the
         # PROJECT gate first.
+        # AIPOS-FND-17: Use multi-project token to test legacy path priority
         with patch.object(gate, "_repo_root", return_value="/tmp/x"), patch.object(
             gate, "_resolve_active_project_for", return_value="proj-A"
-        ), request_capability_scope(_cap(projects=["proj-B"], operations=[])):
+        ), request_capability_scope(_cap(projects=["proj-B", "proj-C"], operations=[])):
             self.assertEqual(_err(dispatch_tool("lybra_intake_submit_dry_run", {})), "PROJECT_SCOPE_DENIED")
 
     # --- introspection reflects the gate -----------------------------------------------------
     def test_visible_descriptors_empty_on_project_mismatch(self) -> None:
+        # AIPOS-FND-17: Use multi-project token to test legacy path mismatch
         with patch.object(gate, "_repo_root", return_value="/tmp/x"), patch.object(
             gate, "_resolve_active_project_for", return_value="proj-A"
-        ), request_capability_scope(_cap(projects=["proj-B"])):
+        ), request_capability_scope(_cap(projects=["proj-B", "proj-C"])):
             self.assertEqual(visible_tool_descriptors(), [])
 
     def test_no_lybra_literal_in_board_adapter_source(self) -> None:

@@ -75,7 +75,8 @@ class HttpSseTransportTests(unittest.TestCase):
         payload: dict[str, object] = {
             "token_ref": token_ref,
             "operations": operations if operations is not None else ["intake_submit"],
-            "projects": ["acme_client"],
+            # AIPOS-FND-17: Use multi-project to preserve legacy path testing
+            "projects": ["acme_client", "test_other_project"],
             "expires_at": "2999-01-01T00:00:00Z",
         }
         if role is not None:

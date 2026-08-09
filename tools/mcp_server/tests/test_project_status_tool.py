@@ -97,11 +97,14 @@ class ProjectStatusToolTests(unittest.TestCase):
         with patch.object(gate, "_repo_root", return_value=self.workspace), patch.object(
             gate, "_resolve_active_project_for", return_value="demo"
         ), patch.dict(os.environ, self.env, clear=True):
-            with request_capability_scope(_cap(projects=["lybra"])):
+            # AIPOS-FND-17: Use multi-project token to test legacy path (single-project auto-infers)
+            with request_capability_scope(_cap(projects=["lybra", "other_project"])):
                 denied = dispatch_tool("lybra_project_status", {})
                 sc = denied["structuredContent"]
                 self.assertEqual(sc["error_code"], "PROJECT_SCOPE_DENIED")
-                self.assertIn("active project 'demo'", sc["message"])
+                # AIPOS-FND-17: Error message now includes actionable guidance
+                self.assertIn("project 'demo'", sc["message"])
+                self.assertIn("not in the token's authorized projects", sc["message"])
             with request_capability_scope(_cap(projects=["demo"])):
                 allowed = dispatch_tool("lybra_project_status", {})
                 sc = allowed["structuredContent"]

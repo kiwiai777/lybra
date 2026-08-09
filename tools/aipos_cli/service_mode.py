@@ -296,7 +296,7 @@ def ensure_workspace_gitignore(workspace_root: Path) -> Path:
     return gitignore
 
 
-def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None, executor_instance: str | None = None, role_instances: dict[str, str] | None = None, role_class: str | None = None) -> dict[str, Any]:
+def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None, executor_instance: str | None = None, role_instances: dict[str, str] | None = None, role_class: str | None = None, default_project: str | None = None) -> dict[str, Any]:
     token = secrets.token_urlsafe(32)
     entry = {
         "role": spec["role"],
@@ -319,6 +319,17 @@ def _role_token_entry(spec: dict[str, Any], *, projects: list[str] | None = None
     if effective:
         entry["projects"] = effective
         entry["projects_enforced"] = True
+        # AIPOS-FND-17: connection-level default_project. Validated against the token's
+        # authorized `projects` set when both are present. A single-project token
+        # auto-infers its default even without this field; default_project is the explicit
+        # binding for multi-project tokens (e.g., an agency multi-project connection).
+        effective_default = str(default_project).strip() if default_project else str(spec.get("default_project") or "").strip() or None
+        if effective_default:
+            if effective_default not in effective:
+                raise ValueError(
+                    f"default_project '{effective_default}' is not in token's projects {effective}"
+                )
+            entry["default_project"] = effective_default
     # AIPOS-254: generalized role-instance binding for PreAuthorized identity authority.
     # Check role_instances dict first (any role), then executor_instance (backward-compat alias).
     # No binding -> PreAuthorized unavailable for that token (backward-compatible: falls back Supervised).
