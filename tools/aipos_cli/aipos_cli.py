@@ -3326,12 +3326,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error connecting to gate: {exc}", file=sys.stderr)
             return 1
 
-        # 构建 dry_run 参数
+        # 构建 dry_run 参数（必须带 autonomy_mode: Supervised）
         dry_run_args = {
             "reviewed_task_id": args.reviewed_task_id,
             "actor": args.actor,
             "agent_instance": args.agent_instance,
             "owner_policy_ref": args.owner_policy_ref,
+            "autonomy_mode": "Supervised",
             "verdict": args.verdict,
         }
         if args.audit_task_id:
