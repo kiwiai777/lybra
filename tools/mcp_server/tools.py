@@ -4419,10 +4419,17 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
     # without `projects` is unaffected (back-compat byte-identical: no resolution attempted).
     _projects = _capability_token().get("projects")
     if _projects:
-        try:
-            _active = _resolve_active_project_for(_repo_root(), None)
-        except (ValueError, FileNotFoundError, OSError):
-            _active = None
+        # AIPOS-FND-17F1: apply the SAME project inference as tools/call (dispatch_tool via
+        # _resolve_request_project) so tool DISCOVERY and INVOCATION route consistently. A
+        # single-project token (e.g. agency->kiwiaiagency) must infer its OWN project here, not
+        # resolve the default workspace project ('lybra') and then hide every tool as out-of-scope
+        # (which returned {"tools": []} to standard MCP clients -> zero tools registered).
+        _active = _resolve_request_project({})
+        if _active is None:
+            try:
+                _active = _resolve_active_project_for(_repo_root(), None)
+            except (ValueError, FileNotFoundError, OSError):
+                _active = None
         if _active is not None and _active not in [str(p) for p in _projects]:
             return []
     descriptors = list(READ_TOOL_DESCRIPTORS)
