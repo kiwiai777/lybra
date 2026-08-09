@@ -31,3 +31,4 @@ web/board/.board_config.json
 
 # AIPOS-333: deploy snapshots (gate runs from .deploy/current, not working tree)
 .deploy/
+5_tasks/
