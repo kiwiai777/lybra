@@ -54,7 +54,9 @@ def build_preview(
     # AIPOS-363F2: read referenced governance files for cross-machine materialization
     referenced_files_content: list[dict[str, str]] = []
     if include_body:
-        referenced_files_spec = metadata.get("referenced_files", [])
+        # AIPOS-363F2-fix: cards declare the field as `materialize_refs` (agency convention);
+        # accept `referenced_files` too for back-compat. Field-name mismatch was reading empty.
+        referenced_files_spec = metadata.get("materialize_refs") or metadata.get("referenced_files", [])
         if referenced_files_spec:
             for ref_spec in referenced_files_spec:
                 # ref_spec can be str (legacy: just path) or dict with {path, scope, ...}
