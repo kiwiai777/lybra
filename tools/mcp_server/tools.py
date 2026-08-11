@@ -142,13 +142,19 @@ def _reload_token_registry() -> None:
     
     调用 http_sse 模块的全局 server 实例来重载凭据源。
     """
+    import sys
     try:
         from tools.mcp_server import http_sse
+        print(f"[tools.py] _reload_token_registry called, _CURRENT_SERVER={http_sse._CURRENT_SERVER is not None}", file=sys.stderr)
         if http_sse._CURRENT_SERVER is not None:
             http_sse._CURRENT_SERVER.reload_token_registry()
+            print(f"[tools.py] Token registry reload complete", file=sys.stderr)
+        else:
+            print(f"[tools.py] Warning: _CURRENT_SERVER is None, cannot reload", file=sys.stderr)
     except Exception as exc:
         import logging
         logging.warning(f"_reload_token_registry failed: {exc}")
+        print(f"[tools.py] _reload_token_registry exception: {exc}", file=sys.stderr)
 
 
 def _repo_root() -> Path:
