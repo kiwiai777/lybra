@@ -479,13 +479,20 @@ class LybraMcpHttpSseServer(ThreadingHTTPServer):
     
     def reload_token_registry(self) -> None:
         """FIX-2: 热重载 token registry(从 connection.json 重新加载)。"""
+        from pathlib import Path
+        debug_log = Path("/tmp/reload_debug.log")
+        
+        with debug_log.open("a") as f:
+            f.write(f"\n=== reload_token_registry() started ===\n")
+            f.write(f"service_role_registry is None: {self.lybra_config.service_role_registry is None}\n")
+            f.flush()
+        
         if self.lybra_config.service_role_registry is None:
             return  # 单 token 模式,无需重载
         
         # 根据启动模式重新加载 registry
         # Gate 现在用 home_root 模式启动(--home-root),需要从 unified registry 重载
         try:
-            from pathlib import Path
             import os
             
             # 尝试从环境变量或默认路径获取 home_root
@@ -495,14 +502,34 @@ class LybraMcpHttpSseServer(ThreadingHTTPServer):
                 home_root_str = str(Path.home() / 'ai-project-os' / '2_projects')
             
             home_root = Path(home_root_str).expanduser().resolve()
+            
+            with debug_log.open("a") as f:
+                f.write(f"home_root: {home_root}\n")
+                f.write(f"home_root exists: {home_root.exists()}\n")
+                f.flush()
+            
             if home_root.exists():
                 # 使用 load_unified_service_role_registry (home 模式)
+                old_count = len(self.lybra_config.service_role_registry)
                 self.lybra_config.service_role_registry = load_unified_service_role_registry(home_root)
-                print(f"[HTTP/SSE] Token registry reloaded from home_root: {home_root}", file=sys.stderr)
+                new_count = len(self.lybra_config.service_role_registry)
+                
+                with debug_log.open("a") as f:
+                    f.write(f"Registry reloaded: {old_count} -> {new_count} tokens\n")
+                    f.flush()
+                
+                print(f"[HTTP/SSE] Token registry reloaded from home_root: {home_root} ({old_count}->{new_count} tokens)", file=sys.stderr)
             else:
+                with debug_log.open("a") as f:
+                    f.write(f"ERROR: home_root not found: {home_root}\n")
+                    f.flush()
                 print(f"[HTTP/SSE] Warning: home_root not found for reload: {home_root}", file=sys.stderr)
         except Exception as exc:
-            import sys
+            import traceback
+            with debug_log.open("a") as f:
+                f.write(f"EXCEPTION in reload_token_registry: {exc}\n")
+                traceback.print_exc(file=f)
+                f.flush()
             print(f"[HTTP/SSE] Warning: Failed to reload token registry: {exc}", file=sys.stderr)
 
 
