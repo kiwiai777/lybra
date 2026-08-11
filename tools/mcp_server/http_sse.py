@@ -482,19 +482,25 @@ class LybraMcpHttpSseServer(ThreadingHTTPServer):
         if self.lybra_config.service_role_registry is None:
             return  # 单 token 模式,无需重载
         
-        # 找到原始 connection.json 路径并重新加载
-        # 注意:我们需要从启动时的 connection.json 重新加载
-        # 这里采用简化策略:直接从 repo_root/.lybra/connection.json 重载
+        # 根据启动模式重新加载 registry
+        # Gate 现在用 home_root 模式启动(--home-root),需要从 unified registry 重载
         try:
             from pathlib import Path
-            # 从 tools.py 的 _repo_root() 获取路径
-            import sys
-            tools_module = sys.modules.get('tools.mcp_server.tools')
-            if tools_module and hasattr(tools_module, '_repo_root'):
-                repo_root = tools_module._repo_root()
-                connection_path = Path(repo_root) / ".lybra" / "connection.json"
-                if connection_path.exists():
-                    self.lybra_config.service_role_registry = load_service_role_registry(connection_path)
+            import os
+            
+            # 尝试从环境变量或默认路径获取 home_root
+            home_root_str = os.environ.get('LYBRA_HOME_ROOT', '').strip()
+            if not home_root_str:
+                # 默认: ~/ai-project-os/2_projects (kiwiai 标准部署)
+                home_root_str = str(Path.home() / 'ai-project-os' / '2_projects')
+            
+            home_root = Path(home_root_str).expanduser().resolve()
+            if home_root.exists():
+                # 使用 load_unified_service_role_registry (home 模式)
+                self.lybra_config.service_role_registry = load_unified_service_role_registry(home_root)
+                print(f"[HTTP/SSE] Token registry reloaded from home_root: {home_root}", file=sys.stderr)
+            else:
+                print(f"[HTTP/SSE] Warning: home_root not found for reload: {home_root}", file=sys.stderr)
         except Exception as exc:
             import sys
             print(f"[HTTP/SSE] Warning: Failed to reload token registry: {exc}", file=sys.stderr)
