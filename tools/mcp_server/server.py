@@ -116,7 +116,9 @@ def serve(input_stream: TextIO = sys.stdin, output_stream: TextIO = sys.stdout, 
         except JsonRpcError as exc:
             response = _error(request_id, exc.code, exc.message, exc.data)
         except Exception as exc:  # pragma: no cover - defensive stdio boundary
+            import traceback
             print(f"{SERVER_NAME}: internal error: {exc}", file=error_stream)
+            traceback.print_exc(file=error_stream)
             response = _error(request_id, -32603, "Internal error")
 
         if response is not None:

@@ -1162,17 +1162,28 @@ def lybra_queue_list(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
                     if default_project:
                         project_scope = str(default_project)
                     else:
-                        # FND-17单门推断规则: 多项目token无显式参数时使用当前active project
-                        try:
-                            project_scope = _resolve_active_project_for(_repo_root(), None)
-                        except (ValueError, FileNotFoundError, OSError):
-                            pass
+                        # 多项目token无显式参数且无default_project: 必须报错
+                        # (不尝试推断active project,因为租户token可能没有workspace访问权限)
+                        raise ValueError(
+                            f"Multi-project token (projects={projects}) requires explicit 'project' argument "
+                            f"or 'default_project' in token. Cannot infer project scope."
+                        )
     
     # Instance scope用于held检查(在classify时使用)
     instance_scope = str(agent_instance) if agent_instance else None
     
+    # AIPOS-R1-FIX2: 根据project_scope动态解析workspace_root
+    # 租户token可能没有全局workspace访问权限,必须从project_scope推导
+    if project_scope:
+        from tools.aipos_cli.workspace_config import resolve_home_root, resolve_project_root
+        home = resolve_home_root()
+        repo_root = resolve_project_root(home, project_scope)
+    else:
+        # Legacy: 无project scope时使用全局workspace
+        repo_root = _repo_root()
+    
     return _tool_result(get_queue(
-        repo_root=_repo_root(),
+        repo_root=repo_root,
         project_scope=project_scope,
         instance_scope=instance_scope,
     ))
