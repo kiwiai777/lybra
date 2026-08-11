@@ -38,7 +38,7 @@ SESSION_HEADER = "Mcp-Session-Id"
 MAX_TRACKED_SESSIONS = 1024
 
 
-@dataclass(frozen=True)
+@dataclass
 class HttpSseConfig:
     host: str = DEFAULT_HTTP_HOST
     port: int = DEFAULT_HTTP_PORT
