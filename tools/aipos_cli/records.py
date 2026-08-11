@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.task_loader import _serialize_dates
 
 
 
@@ -196,7 +197,8 @@ def _build_record(
                 "actor": metadata.get("actor") or metadata.get("auditor_instance"),
             }
         )
-    return record
+    # AIPOS-R1-FIX2: 转换所有 date/datetime 对象为 ISO 字符串
+    return _serialize_dates(record)
 
 
 def _iter_record_files(root: Path) -> list[tuple[Path, str]]:
@@ -231,7 +233,7 @@ def _build_owner_decision_record(path: Path, repo_root: Path) -> dict[str, Any]:
     if metadata.get("record_type") not in (None, "owner_decision_record"):
         warnings.append(f"owner decision record_type mismatch: {metadata.get('record_type')}")
 
-    return {
+    return _serialize_dates({
         "record_type": "owner_decision_record",
         "record_id": decision_id,
         "decision_id": decision_id,
@@ -257,7 +259,7 @@ def _build_owner_decision_record(path: Path, repo_root: Path) -> dict[str, Any]:
         "body": body,
         "parse_errors": parse_errors,
         "warnings": warnings,
-    }
+    })
 
 
 def _iter_owner_decision_files(root: Path) -> list[Path]:
@@ -309,7 +311,9 @@ def _build_owner_verification_record(
         "body": body,
         "parse_errors": parse_errors,
         "warnings": warnings,
-    }
+    })
+    # AIPOS-R1-FIX2: 转换所有 date/datetime 对象
+    return _serialize_dates(record)
 
 
 def load_records(repo_root: Path) -> dict[str, Any]:
