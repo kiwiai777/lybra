@@ -259,7 +259,7 @@ def enroll(
     Args:
         code: Enrollment code(从 owner/advisor 获得)
         gate_url: Gate MCP URL
-        workspace_root: Workspace root(落配置的目标目录)
+        workspace_root: Workspace root(落配置的目标目录,不需要预先存在)
         policy: Optional policy reference(如未提供,从 gate 返回中提取或不设置)
         bootstrap_token: Optional bootstrap token for HTTP transport auth(any valid token)
     
@@ -279,8 +279,15 @@ def enroll(
     
     Raises:
         RuntimeError: If enrollment fails
+    
+    Note:
+        FIX-1: workspace_root 不需要预先存在。Enroll 只需要落 .lybra/ 配置,
+        不需要队列结构(队列在 gate 侧)。新机零手工上线。
     """
     workspace_root = workspace_root.resolve()
+    
+    # FIX-1: 确保 workspace_root 存在(对空目录新机零手工上线)
+    workspace_root.mkdir(parents=True, exist_ok=True)
     
     # Step 1: Exchange enrollment code for token
     try:

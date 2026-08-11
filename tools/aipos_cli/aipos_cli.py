@@ -2208,10 +2208,18 @@ def main(argv: list[str] | None = None) -> int:
                     by=by,
                     reason=reason or (f"owner-authorization-ref: {owner_auth_ref}" if owner_auth_ref else ""),
                 )
+                # FIX-2: --json 输出稳定含 code/code_id/fingerprint 在顶层
                 result = {
                     "ok": True,
                     "operation": "roles_enroll_code",
-                    "enrollment": enrollment,
+                    "code": enrollment["code"],
+                    "code_id": enrollment["code_id"],
+                    "fingerprint": enrollment["fingerprint"],
+                    "role": enrollment["role"],
+                    "instance": enrollment.get("instance"),
+                    "expires_at": enrollment.get("expires_at"),
+                    "created_at": enrollment["created_at"],
+                    "enrollment": enrollment,  # 完整记录保留在 enrollment 字段
                 }
                 if getattr(args, "json", False):
                     print(render_json(result))

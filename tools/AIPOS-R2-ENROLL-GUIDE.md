@@ -2,7 +2,7 @@
 
 ## 概述
 
-`lybra enroll` 命令实现 gate 分发器 v1 的凭据注册功能,一条命令完成:
+`lybra roles enroll` 命令实现 gate 分发器 v1 的凭据注册功能,一条命令完成:
 1. 从 gate 兑换 enrollment code 获取 role credential
 2. 落 `.lybra/` 自发现配置(connection/role/actor/policy)
 3. 使后续 loop 操作零手工配置(不需要 source 脚本或手动设置 token)
@@ -14,21 +14,21 @@
 在 gate 所在机器(dev)上:
 
 ```bash
-cd ~/projects/lybra
-python3 -m tools.aipos_cli.aipos_cli \
-  --workspace-root /home/kiwi/ai-project-os/2_projects/lybra \
+lybra --workspace-root /home/kiwi/ai-project-os/2_projects/lybra \
   roles enroll-code \
   --role executor \
   --instance exec.lybra.mac1 \
   --ttl 86400 \
   --owner-authorization-ref "AIPOS-R2-mac-enroll" \
-  --reason "Enroll Mac executor for lybra project"
+  --reason "Enroll Mac executor for lybra project" \
+  --json
 ```
 
-输出包含:
+输出包含(FIX-2: 顶层字段):
 - `code`: enrollment code(明文,可以通过聊天/邮件传输)
 - `code_id`: 用于后续管理(revoke 等)
 - `fingerprint`: code 的指纹(非敏感)
+- `role`, `instance`, `expires_at`: 元数据
 
 ### 2. Remote agent 使用 enrollment code 进行 enroll
 
@@ -36,8 +36,7 @@ python3 -m tools.aipos_cli.aipos_cli \
 
 ```bash
 # 方式 1: 直接使用 CLI
-python3 -m tools.aipos_cli.aipos_cli \
-  --workspace-root ~/ai-projects/lybra \
+lybra --workspace-root ~/ai-projects/lybra \
   roles enroll \
   --code "<enrollment_code>" \
   --gate-url "http://kiwiai-dev.tail6b5218.ts.net:7118" \
@@ -45,8 +44,7 @@ python3 -m tools.aipos_cli.aipos_cli \
 
 # 方式 2: 使用环境变量提供 bootstrap token
 export LYBRA_BOOTSTRAP_TOKEN="<any_valid_token>"
-python3 -m tools.aipos_cli.aipos_cli \
-  --workspace-root ~/ai-projects/lybra \
+lybra --workspace-root ~/ai-projects/lybra \
   roles enroll \
   --code "<enrollment_code>" \
   --gate-url "http://kiwiai-dev.tail6b5218.ts.net:7118"
@@ -64,6 +62,11 @@ python3 /path/to/tools/aipos_cli/enroll_client.py \
 - 但 HTTP 传输层仍需要一个有效的 bearer token 通过认证
 - 可以使用任何有效的 token(executor/owner/auditor 等)
 - 只用于 HTTP 传输认证,不影响最终铸造的 token 权限
+
+**FIX-1: 新机零手工上线**
+- workspace-root 不需要预先存在
+- enroll 自动创建 workspace-root 和 .lybra/ 目录
+- 只需要 .lybra/ 配置,不需要队列结构(队列在 gate 侧)
 
 ### 3. 验证自发现配置
 
@@ -111,8 +114,7 @@ print(f"Gate URL: {gate_url}")
 
 ```bash
 # 第二次 enroll 同一 instance → 轮换 token
-python3 -m tools.aipos_cli.aipos_cli \
-  --workspace-root ~/ai-projects/lybra \
+lybra --workspace-root ~/ai-projects/lybra \
   roles enroll \
   --code "<new_enrollment_code>" \
   --gate-url "http://kiwiai-dev.tail6b5218.ts.net:7118" \
@@ -142,16 +144,14 @@ python3 -m tools.aipos_cli.aipos_cli \
 ### 列出所有 enrollment codes
 
 ```bash
-python3 -m tools.aipos_cli.aipos_cli \
-  --workspace-root /home/kiwi/ai-project-os/2_projects/lybra \
+lybra --workspace-root /home/kiwi/ai-project-os/2_projects/lybra \
   roles enroll-list
 ```
 
 ### 吊销 enrollment code
 
 ```bash
-python3 -m tools.aipos_cli.aipos_cli \
-  --workspace-root /home/kiwi/ai-project-os/2_projects/lybra \
+lybra --workspace-root /home/kiwi/ai-project-os/2_projects/lybra \
   roles enroll-revoke <code_id> \
   --owner-authorization-ref "security-revoke" \
   --reason "Compromised or no longer needed"
