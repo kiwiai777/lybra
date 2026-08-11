@@ -2106,9 +2106,19 @@ def main(argv: list[str] | None = None) -> int:
             parser.print_help()
             return 2
         try:
-            conn_override = getattr(args, "connection_json", None)
-            connection_target = Path(conn_override).expanduser() if conn_override else None
-            workspace_root = _resolve_workspace_for_command(args)
+            # FIX-1: roles enroll 不需要 5_tasks/queue 结构(只落 .lybra/ 配置)
+            if args.roles_command == "enroll":
+                # enroll 自己创建 workspace_root,不需要预先存在
+                explicit_root = getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None)
+                if not explicit_root:
+                    raise ValueError("roles enroll requires explicit --workspace-root")
+                workspace_root = Path(explicit_root).expanduser().resolve()
+                connection_target = None
+            else:
+                # 其他 roles 命令需要完整 workspace 结构
+                conn_override = getattr(args, "connection_json", None)
+                connection_target = Path(conn_override).expanduser() if conn_override else None
+                workspace_root = _resolve_workspace_for_command(args)
             if args.roles_command == "list":
                 result = roles_list_report(workspace_root, connection_target=connection_target)
                 if getattr(args, "json", False):
