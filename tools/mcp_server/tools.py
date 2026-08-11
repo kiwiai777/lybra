@@ -143,16 +143,39 @@ def _reload_token_registry() -> None:
     调用 http_sse 模块的全局 server 实例来重载凭据源。
     """
     import sys
+    from pathlib import Path
+    
+    # Debug: 写日志文件
+    debug_log = Path("/tmp/reload_debug.log")
     try:
+        with debug_log.open("a") as f:
+            f.write(f"\n=== _reload_token_registry called ===\n")
+            f.flush()
+        
         from tools.mcp_server import http_sse
+        with debug_log.open("a") as f:
+            f.write(f"_CURRENT_SERVER exists: {http_sse._CURRENT_SERVER is not None}\n")
+            f.flush()
+        
         print(f"[tools.py] _reload_token_registry called, _CURRENT_SERVER={http_sse._CURRENT_SERVER is not None}", file=sys.stderr)
         if http_sse._CURRENT_SERVER is not None:
             http_sse._CURRENT_SERVER.reload_token_registry()
+            with debug_log.open("a") as f:
+                f.write(f"reload_token_registry() completed\n")
+                f.flush()
             print(f"[tools.py] Token registry reload complete", file=sys.stderr)
         else:
+            with debug_log.open("a") as f:
+                f.write(f"WARNING: _CURRENT_SERVER is None\n")
+                f.flush()
             print(f"[tools.py] Warning: _CURRENT_SERVER is None, cannot reload", file=sys.stderr)
     except Exception as exc:
         import logging
+        import traceback
+        with debug_log.open("a") as f:
+            f.write(f"EXCEPTION: {exc}\n")
+            traceback.print_exc(file=f)
+            f.flush()
         logging.warning(f"_reload_token_registry failed: {exc}")
         print(f"[tools.py] _reload_token_registry exception: {exc}", file=sys.stderr)
 
