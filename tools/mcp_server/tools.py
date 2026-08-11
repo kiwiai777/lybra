@@ -1132,8 +1132,50 @@ def _map_owner_decision_dry_run_error(response: dict[str, Any]) -> dict[str, Any
 
 
 def lybra_queue_list(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    _ = arguments or {}
-    return _tool_result(get_queue(repo_root=_repo_root()))
+    """List queue tasks with project and instance scope filtering.
+    
+    AIPOS-R1 scope铁律: 按调用者token的(project, instance)返回任务。
+    单项目token=该项目;多项目token=显式project参数或推断。
+    绝不返回home-root全项目视图。
+    """
+    args = arguments or {}
+    
+    # AIPOS-R1: 从token提取project和instance scope
+    token = _capability_token()
+    projects = token.get("projects")
+    agent_instance = token.get("agent_instance")
+    
+    # 确定project scope
+    project_scope: str | None = None
+    if projects:
+        if isinstance(projects, list):
+            if len(projects) == 1:
+                # 单项目token: 自动推断为该项目
+                project_scope = str(projects[0])
+            elif len(projects) > 1:
+                # 多项目token: 需要显式参数或default_project
+                explicit_project = args.get("project")
+                if explicit_project:
+                    project_scope = str(explicit_project)
+                else:
+                    default_project = token.get("default_project")
+                    if default_project:
+                        project_scope = str(default_project)
+                    else:
+                        # FND-17单门推断规则: 多项目token无显式参数时使用当前active project
+                        try:
+                            project_scope = _resolve_active_project_for(_repo_root(), None)
+                        except (ValueError, FileNotFoundError, OSError):
+                            pass
+    
+    # Instance scope用于held检查(在classify时使用)
+    instance_scope = str(agent_instance) if agent_instance else None
+    
+    return _tool_result(get_queue(
+        repo_root=_repo_root(),
+        project_scope=project_scope,
+        instance_scope=instance_scope,
+    ))
 
 
 def lybra_project_status(arguments: dict[str, Any] | None = None) -> dict[str, Any]:

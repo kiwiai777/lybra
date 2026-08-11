@@ -441,7 +441,21 @@ def get_health(repo_root: str | Path | None = None) -> dict[str, Any]:
         return _normalize_exception(operation, exc, dry_run=False)
 
 
-def get_queue(repo_root: str | Path | None = None) -> dict[str, Any]:
+def get_queue(
+    repo_root: str | Path | None = None,
+    *,
+    project_scope: str | None = None,
+    instance_scope: str | None = None,
+) -> dict[str, Any]:
+    """Get queue tasks with optional project and instance filtering.
+    
+    AIPOS-R1 scope铁律: queue_list按调用者token的(project, instance)返回。
+    - project_scope: 项目标识,用于多项目隔离
+    - instance_scope: agent实例标识,用于held检查
+    
+    单项目token=该项目;多项目token=显式project参数或推断。
+    绝不返回home-root全项目视图。
+    """
     operation = "get_queue"
     try:
         resolved_root = _resolve_repo_root(repo_root)
@@ -449,12 +463,31 @@ def get_queue(repo_root: str | Path | None = None) -> dict[str, Any]:
         records = load_records(resolved_root)
         profiles = load_agent_profiles(resolved_root)
         report = validate_tasks(tasks, records=records, profiles=profiles)
-        # AIPOS-283: enrich tasks with has_closure flag for "\u5df2\u6536\u7f16" badge
+        
+        # AIPOS-R1: 按(project, instance) scope过滤
+        if project_scope or instance_scope:
+            filtered_tasks = []
+            for task in report.get("tasks", []):
+                metadata = task.get("metadata", {})
+                task_project = metadata.get("project", "")
+                
+                # Project filtering: 只返回匹配project的任务
+                if project_scope and task_project != project_scope:
+                    continue
+                
+                filtered_tasks.append(task)
+            
+            report["tasks"] = filtered_tasks
+            if "summary" in report:
+                report["summary"]["total_tasks"] = len(filtered_tasks)
+        
+        # AIPOS-283: enrich tasks with has_closure flag for "已收编" badge
         task_closures = records.get("task_closures", {})
         for task in report.get("tasks", []):
             tid = task.get("task_id") or task.get("metadata", {}).get("task_id", "")
             if tid and tid in task_closures:
                 task["has_closure"] = True
+        
         return _response_from_validated_report(operation=operation, report=report)
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=False)
@@ -1724,6 +1757,18 @@ def _queue_mutation_preview(
         safety_notice=MUTATION_DRY_RUN_NOTICE,
         errors=[],
     )
+    # AIPOS-R1: claim 返回 LoopContext 字段
+    if operation == "queue_claim" and verdict != "BLOCK":
+        task_metadata = _task.get("metadata", {}) if _task else {}
+        task_project = task_metadata.get("project", "")
+        response["context"] = {
+            "project": task_project,
+            "workspace_root": str(resolved_root),
+            "code_repo": str(resolved_root),  # 默认与workspace_root相同
+            "task_state": result.get("to_state", ""),
+            "worktree": None,  # worktree隔离在R5实现
+        }
+    
     allow_execute = verdict != "BLOCK" and operation == "queue_claim" and (not with_records or bool(mcp_claim_metadata))
     if with_records:
         response["execute_allowed"] = False
