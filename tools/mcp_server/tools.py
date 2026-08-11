@@ -3449,18 +3449,26 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
         write_connection_json,
         ensure_lybra_dir,
     )
+    import sys
+    print(f"[enroll_exchange] FIX-2: Registering token to gate workspace", file=sys.stderr)
     try:
         lybra_dir = ensure_lybra_dir(root)
         connection_data = load_or_create_connection_json(lybra_dir, gate_url=None)  # 保留现有 gate_url
         rotated = upsert_token_entry(connection_data, token_entry)
         write_connection_json(lybra_dir, connection_data)
+        print(f"[enroll_exchange] Token written to {lybra_dir}/connection.json (rotated={rotated})", file=sys.stderr)
         
         # 热加载: 通知当前 gate 进程重载 token registry
+        print(f"[enroll_exchange] Calling _reload_token_registry()", file=sys.stderr)
         _reload_token_registry()
+        print(f"[enroll_exchange] _reload_token_registry() returned", file=sys.stderr)
     except Exception as exc:
         # 注册失败不阻断 exchange(客户端已有 token),但记录警告
         import logging
+        import traceback
         logging.warning(f"FIX-2: Failed to register token to gate workspace: {exc}")
+        print(f"[enroll_exchange] ERROR in token registration: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         rotated = False
     
     # Mark code as used
