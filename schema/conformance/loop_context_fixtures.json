@@ -1,0 +1,183 @@
+{
+  "schema_version": "1.0.0",
+  "description": "AIPOS-R1 conformance test fixtures - Python与TS解析同一输入必须得到同一输出",
+  "fixtures": [
+    {
+      "name": "single_project_token_autodiscover",
+      "description": "单项目token,从.lybra/自动发现",
+      "input": {
+        "connection_json": {
+          "mode": "service_v0",
+          "workspace_root": "/home/user/projects/lybra",
+          "mcp": {
+            "rpc_url": "http://127.0.0.1:7118/mcp"
+          },
+          "tokens": [
+            {
+              "role": "executor",
+              "agent_instance": "exec.lybra.test",
+              "token": "test_token_abc123",
+              "scopes": ["queue_claim", "queue_return"]
+            }
+          ]
+        },
+        "token_data": {
+          "role": "executor",
+          "agent_instance": "exec.lybra.test",
+          "projects": ["lybra"]
+        },
+        "env": {},
+        "explicit_args": {}
+      },
+      "expected": {
+        "gate_url": "http://127.0.0.1:7118/mcp",
+        "token": "test_token_abc123",
+        "project_scope": "lybra",
+        "instance_scope": "exec.lybra.test"
+      }
+    },
+    {
+      "name": "multi_project_with_default",
+      "description": "多项目token,有default_project",
+      "input": {
+        "connection_json": {
+          "mode": "service_v0",
+          "workspace_root": "/home/user/projects/lybra",
+          "mcp": {
+            "rpc_url": "http://kiwiai-dev.local:7118/mcp"
+          },
+          "tokens": [
+            {
+              "role": "executor",
+              "agent_instance": "exec.multi.test",
+              "token": "test_token_multi",
+              "scopes": ["queue_claim"]
+            }
+          ]
+        },
+        "token_data": {
+          "role": "executor",
+          "agent_instance": "exec.multi.test",
+          "projects": ["lybra", "kiwiaiagency", "kaia-asst"],
+          "default_project": "lybra"
+        },
+        "env": {},
+        "explicit_args": {}
+      },
+      "expected": {
+        "gate_url": "http://kiwiai-dev.local:7118/mcp",
+        "token": "test_token_multi",
+        "project_scope": "lybra",
+        "instance_scope": "exec.multi.test"
+      }
+    },
+    {
+      "name": "env_override",
+      "description": "环境变量覆盖.lybra/配置",
+      "input": {
+        "connection_json": {
+          "mode": "service_v0",
+          "workspace_root": "/home/user/projects/lybra",
+          "mcp": {
+            "rpc_url": "http://127.0.0.1:7118/mcp"
+          },
+          "tokens": [
+            {
+              "role": "executor",
+              "token": "test_token_original"
+            }
+          ]
+        },
+        "token_data": {
+          "role": "executor",
+          "agent_instance": "exec.lybra.test",
+          "projects": ["lybra"]
+        },
+        "env": {
+          "LYBRA_GATE_URL": "http://override.local:9999/mcp",
+          "LYBRA_TOKEN": "test_token_override"
+        },
+        "explicit_args": {}
+      },
+      "expected": {
+        "gate_url": "http://override.local:9999/mcp",
+        "token": "test_token_override",
+        "project_scope": "lybra",
+        "instance_scope": "exec.lybra.test"
+      }
+    },
+    {
+      "name": "explicit_args_highest_priority",
+      "description": "显式参数优先级最高",
+      "input": {
+        "connection_json": {
+          "mode": "service_v0",
+          "workspace_root": "/home/user/projects/lybra",
+          "mcp": {
+            "rpc_url": "http://127.0.0.1:7118/mcp"
+          },
+          "tokens": [
+            {
+              "role": "executor",
+              "token": "test_token_config"
+            }
+          ]
+        },
+        "token_data": {
+          "role": "executor",
+          "agent_instance": "exec.lybra.test",
+          "projects": ["lybra"]
+        },
+        "env": {
+          "LYBRA_GATE_URL": "http://env.local:8888/mcp",
+          "LYBRA_TOKEN": "test_token_env"
+        },
+        "explicit_args": {
+          "gate_url": "http://explicit.local:7777/mcp",
+          "token": "test_token_explicit"
+        }
+      },
+      "expected": {
+        "gate_url": "http://explicit.local:7777/mcp",
+        "token": "test_token_explicit",
+        "project_scope": "lybra",
+        "instance_scope": "exec.lybra.test"
+      }
+    },
+    {
+      "name": "multi_project_explicit_project",
+      "description": "多项目token,显式指定project参数",
+      "input": {
+        "connection_json": {
+          "mode": "service_v0",
+          "workspace_root": "/home/user/projects/home",
+          "mcp": {
+            "rpc_url": "http://127.0.0.1:7118/mcp"
+          },
+          "tokens": [
+            {
+              "role": "executor",
+              "agent_instance": "exec.multi.test",
+              "token": "test_token_multi2"
+            }
+          ]
+        },
+        "token_data": {
+          "role": "executor",
+          "agent_instance": "exec.multi.test",
+          "projects": ["lybra", "kiwiaiagency"]
+        },
+        "env": {},
+        "explicit_args": {
+          "project": "kiwiaiagency"
+        }
+      },
+      "expected": {
+        "gate_url": "http://127.0.0.1:7118/mcp",
+        "token": "test_token_multi2",
+        "project_scope": "kiwiaiagency",
+        "instance_scope": "exec.multi.test"
+      }
+    }
+  ]
+}
