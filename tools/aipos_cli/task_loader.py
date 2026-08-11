@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,24 @@ from tools.aipos_cli.workspace_config import (
 )
 
 QUEUE_STATES = ("pending", "claimed", "completed", "blocked", "withdrawn")  # AIPOS-315: withdrawn for revoked/cancelled tasks
+
+
+def _serialize_dates(obj: Any) -> Any:
+    """递归转换 date/datetime 对象为 ISO 格式字符串,确保 JSON 可序列化。
+    
+    AIPOS-R1-FIX2: YAML 库会自动把 'created_at: 2026-08-11' 解析为 date 对象,
+    导致 MCP 返回时 JSON 序列化失败。
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, date):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: _serialize_dates(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_serialize_dates(item) for item in obj]
+    else:
+        return obj
 
 
 def _has_queue_root(path: Path) -> bool:
@@ -75,6 +94,8 @@ def _normalize_task(
 ) -> dict[str, Any]:
     frontmatter_status = metadata.get("status")
     status_consistent = frontmatter_status == queue_state
+    # AIPOS-R1-FIX2: 转换 metadata 中的 date/datetime 对象为字符串
+    serialized_metadata = _serialize_dates(metadata)
     return {
         "task_id": metadata.get("task_id"),
         "title": metadata.get("title"),
@@ -90,7 +111,7 @@ def _normalize_task(
         **complexity_payload(metadata),
         "model_tier": metadata.get("model_tier"),
         "needs_owner": metadata.get("needs_owner"),
-        "metadata": metadata,
+        "metadata": serialized_metadata,
         "body": body,
         "parse_errors": parse_errors,
     }
