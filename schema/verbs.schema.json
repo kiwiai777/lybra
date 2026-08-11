@@ -1,0 +1,412 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Lybra verb contracts - parameters, responses, and two-phase semantics",
+  "last_updated": "2026-08-11",
+  "two_phase_protocol": {
+    "description": "All mutation verbs follow dry_run → confirm two-phase pattern",
+    "phases": {
+      "dry_run": {
+        "purpose": "Preview operation without side effects",
+        "returns": "Operation plan, validation results, and dry_run_token for confirmation"
+      },
+      "confirm": {
+        "purpose": "Execute the operation with dry_run_token from preview",
+        "requires": "Valid dry_run_token from a recent dry_run call",
+        "executes": "Actual mutation based on validated plan"
+      }
+    }
+  },
+  "warn_behavior": {
+    "description": "WARN behavior contract - consistent across all verbs",
+    "rules": [
+      "WARN is non-blocking - operation proceeds with warnings",
+      "WARN never consumes tokens - dry_run_token remains valid",
+      "WARN never blocks subsequent operations",
+      "WARN messages are recorded but do not prevent confirmation",
+      "Executor can proceed through WARN to completion"
+    ]
+  },
+  "verbs": {
+    "lybra_draft_publish": {
+      "description": "Publish a draft task to pending queue (N0 - task creation node)",
+      "phases": ["dry_run", "confirm"],
+      "dry_run_parameters": {
+        "path": {
+          "type": "string",
+          "required": true,
+          "description": "Path to draft file (relative to repo root)"
+        },
+        "actor": {
+          "type": "string",
+          "required": false,
+          "description": "Actor performing the publish"
+        },
+        "repo_root": {
+          "type": "string",
+          "required": false,
+          "description": "Repository root path (auto-detected if not provided)"
+        }
+      },
+      "dry_run_response": {
+        "ok": {"type": "boolean", "description": "Operation success status"},
+        "verdict": {"type": "string", "enum": ["PASS", "WARN", "BLOCK"], "description": "Validation verdict"},
+        "task_id": {"type": "string", "description": "Task identifier"},
+        "source_path": {"type": "string", "description": "Source draft path"},
+        "target_path": {"type": "string", "description": "Target pending queue path"},
+        "would_write": {"type": "boolean", "description": "Whether files would be written"},
+        "validation": {"type": "object", "description": "Full validation results"},
+        "blocking_reasons": {"type": "array", "items": {"type": "string"}, "description": "Blocking issues"},
+        "warnings": {"type": "array", "items": {"type": "string"}, "description": "Non-blocking warnings"},
+        "dry_run_token": {"type": "string", "description": "Token for confirm phase"}
+      },
+      "confirm_parameters": {
+        "dry_run_token": {
+          "type": "string",
+          "required": true,
+          "description": "Token from dry_run phase"
+        },
+        "owner_confirmation": {
+          "type": "string",
+          "required": false,
+          "description": "Owner confirmation token if required"
+        }
+      },
+      "validation_rules": {
+        "schema_validation": "All fields validated against card.schema.json",
+        "required_fields": "Missing required fields cause BLOCK verdict",
+        "undefined_fields": "Unknown fields cause WARN or BLOCK (configurable)",
+        "typo_detection": "Misspelled field names are detected and reported",
+        "enum_validation": "Enum fields validated against enums.schema.json",
+        "runtime_fields": "Runtime fields in draft cause BLOCK verdict"
+      }
+    },
+    "lybra_queue_claim": {
+      "description": "Claim a pending task (N1 - task claim node)",
+      "phases": ["dry_run", "confirm"],
+      "dry_run_parameters": {
+        "task_id": {
+          "type": "string",
+          "required": true,
+          "description": "Task identifier to claim"
+        },
+        "actor": {
+          "type": "string",
+          "required": true,
+          "description": "Agent/role claiming the task"
+        },
+        "agent_instance": {
+          "type": "string",
+          "required": true,
+          "description": "Specific agent instance identifier"
+        },
+        "autonomy_mode": {
+          "type": "string",
+          "enum": ["Supervised", "PreAuthorized", "FullyAutonomous"],
+          "required": true,
+          "description": "Autonomy mode for this claim"
+        },
+        "owner_policy_ref": {
+          "type": "string",
+          "required": false,
+          "description": "Owner policy reference"
+        }
+      },
+      "dry_run_response": {
+        "ok": {"type": "boolean"},
+        "verdict": {"type": "string", "enum": ["PASS", "WARN", "BLOCK"]},
+        "task_id": {"type": "string"},
+        "claim_id": {"type": "string", "description": "Generated claim identifier"},
+        "context": {
+          "type": "object",
+          "description": "LoopContext fields returned by gate",
+          "fields": {
+            "project": "string",
+            "workspace_root": "string",
+            "code_repo": "string",
+            "task_state": "string",
+            "worktree": "string"
+          }
+        },
+        "held_check": {"type": "object", "description": "Held task check results by (project, instance)"},
+        "dry_run_token": {"type": "string"}
+      }
+    },
+    "lybra_task_progress": {
+      "description": "Report task progress (N2 - execution phase)",
+      "phases": ["single_phase"],
+      "parameters": {
+        "task_id": {
+          "type": "string",
+          "required": true,
+          "description": "Task identifier"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["started", "progress", "completed", "blocked"],
+          "required": true,
+          "description": "Progress status"
+        },
+        "message": {
+          "type": "string",
+          "required": false,
+          "description": "Progress message"
+        },
+        "actor": {
+          "type": "string",
+          "required": true,
+          "description": "Agent reporting progress"
+        }
+      },
+      "response": {
+        "ok": {"type": "boolean"},
+        "recorded": {"type": "boolean", "description": "Whether progress was recorded"}
+      }
+    },
+    "lybra_queue_return": {
+      "description": "Return completed work (N3 - task return node)",
+      "phases": ["dry_run", "confirm"],
+      "dry_run_parameters": {
+        "task_id": {
+          "type": "string",
+          "required": true,
+          "description": "Task identifier"
+        },
+        "actor": {
+          "type": "string",
+          "required": true,
+          "description": "Agent returning the task"
+        },
+        "completion_notes": {
+          "type": "string",
+          "required": false,
+          "description": "Completion notes"
+        },
+        "artifact_refs": {
+          "type": "array",
+          "items": {"type": "string"},
+          "required": false,
+          "description": "References to artifacts produced"
+        },
+        "autonomy_mode": {
+          "type": "string",
+          "required": true,
+          "description": "Autonomy mode for return"
+        },
+        "owner_policy_ref": {
+          "type": "string",
+          "required": false,
+          "description": "Owner policy reference"
+        }
+      },
+      "dry_run_response": {
+        "ok": {"type": "boolean"},
+        "verdict": {"type": "string", "enum": ["PASS", "WARN", "BLOCK"]},
+        "return_id": {"type": "string", "description": "Generated return identifier"},
+        "commit_check": {"type": "object", "description": "Commit verification results"},
+        "dry_run_token": {"type": "string"}
+      },
+      "idempotency": "Return is idempotent and recoverable - retry after failure is safe"
+    },
+    "lybra_audit_dispatch": {
+      "description": "Dispatch task for audit (N4 entry - audit assignment)",
+      "phases": ["dry_run", "confirm"],
+      "dry_run_parameters": {
+        "task_id": {
+          "type": "string",
+          "required": true,
+          "description": "Task to audit"
+        },
+        "auditor": {
+          "type": "string",
+          "required": true,
+          "description": "Assigned auditor"
+        },
+        "actor": {
+          "type": "string",
+          "required": true,
+          "description": "Actor dispatching audit"
+        }
+      },
+      "dry_run_response": {
+        "ok": {"type": "boolean"},
+        "verdict": {"type": "string"},
+        "audit_task_id": {"type": "string", "description": "Generated audit task identifier"},
+        "dry_run_token": {"type": "string"}
+      }
+    },
+    "lybra_audit_verdict": {
+      "description": "Submit audit verdict (N4 - audit verdict node)",
+      "phases": ["dry_run", "confirm"],
+      "dry_run_parameters": {
+        "task_id": {
+          "type": "string",
+          "required": true,
+          "description": "Task being audited"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["PASS", "PASS_WITH_NOTES", "FAIL", "BLOCK", "WARN"],
+          "required": true,
+          "description": "Audit verdict"
+        },
+        "notes": {
+          "type": "string",
+          "required": false,
+          "description": "Audit notes"
+        },
+        "auditor": {
+          "type": "string",
+          "required": true,
+          "description": "Auditor submitting verdict"
+        }
+      },
+      "dry_run_response": {
+        "ok": {"type": "boolean"},
+        "verdict": {"type": "string"},
+        "verdict_id": {"type": "string", "description": "Generated verdict record identifier"},
+        "dry_run_token": {"type": "string"}
+      }
+    },
+    "lybra_finalize": {
+      "description": "Finalize task - commit, push, deploy (N5 - finalize node)",
+      "phases": ["dry_run", "confirm"],
+      "prerequisites": "Requires PASS verdict from audit (N4)",
+      "dry_run_parameters": {
+        "task_id": {
+          "type": "string",
+          "required": true,
+          "description": "Task to finalize"
+        },
+        "actor": {
+          "type": "string",
+          "required": true,
+          "description": "Agent finalizing"
+        }
+      },
+      "dry_run_response": {
+        "ok": {"type": "boolean"},
+        "verdict": {"type": "string"},
+        "commit_plan": {"type": "object", "description": "Planned commit details"},
+        "push_plan": {"type": "object", "description": "Planned push details"},
+        "deploy_plan": {"type": "object", "description": "Planned deploy details (if applicable)"},
+        "dry_run_token": {"type": "string"}
+      },
+      "confirm_actions": [
+        "Commit changes with precise pathspec (no add -A)",
+        "Push to remote",
+        "Deploy if specified"
+      ]
+    },
+    "lybra_queue_close": {
+      "description": "Close and archive task (N6 - closure node)",
+      "phases": ["dry_run", "confirm"],
+      "dry_run_parameters": {
+        "task_id": {
+          "type": "string",
+          "required": true,
+          "description": "Task to close"
+        },
+        "closure_evidence_ref": {
+          "type": "string",
+          "required": true,
+          "description": "Reference to closure evidence"
+        },
+        "actor": {
+          "type": "string",
+          "required": true,
+          "description": "Actor closing task"
+        }
+      },
+      "dry_run_response": {
+        "ok": {"type": "boolean"},
+        "verdict": {"type": "string"},
+        "closure_id": {"type": "string"},
+        "governance_updates": {
+          "type": "object",
+          "description": "Planned governance document updates (decision_log, etc.)"
+        },
+        "dry_run_token": {"type": "string"}
+      },
+      "governance_updates": [
+        "Append to decision_log",
+        "Update project_status if needed",
+        "Update roadmap if needed",
+        "Archive task card to 5_tasks/queue/completed/",
+        "Push governance repo changes"
+      ],
+      "automation": "N6 auto-advances when closure evidence is complete"
+    },
+    "lybra_queue_withdraw": {
+      "description": "Withdraw task from queue (G2 - maintenance verb)",
+      "phases": ["dry_run", "confirm"],
+      "dry_run_parameters": {
+        "task_id": {
+          "type": "string",
+          "required": true,
+          "description": "Task to withdraw"
+        },
+        "reason": {
+          "type": "string",
+          "required": true,
+          "description": "Reason for withdrawal"
+        },
+        "actor": {
+          "type": "string",
+          "required": true,
+          "description": "Actor withdrawing task"
+        }
+      },
+      "preserves_records": true,
+      "non_blocking_warns": "Malformed or legacy tasks can always be withdrawn"
+    },
+    "lybra_queue_amend": {
+      "description": "Amend pending task metadata/body (G2 - maintenance verb)",
+      "phases": ["dry_run", "confirm"],
+      "constraints": "Only pending tasks can be amended",
+      "dry_run_parameters": {
+        "task_id": {
+          "type": "string",
+          "required": true,
+          "description": "Task to amend"
+        },
+        "amendments": {
+          "type": "object",
+          "required": true,
+          "description": "Field amendments"
+        },
+        "actor": {
+          "type": "string",
+          "required": true,
+          "description": "Actor amending task"
+        }
+      },
+      "preserves_history": "Amendment history tracked in metadata"
+    },
+    "lybra_owner_decision": {
+      "description": "Record owner decision (G1 - owner gate)",
+      "phases": ["dry_run", "confirm"],
+      "dry_run_parameters": {
+        "task_id": {
+          "type": "string",
+          "required": false,
+          "description": "Related task (if applicable)"
+        },
+        "decision": {
+          "type": "string",
+          "required": true,
+          "description": "Owner decision"
+        },
+        "decision_type": {
+          "type": "string",
+          "required": true,
+          "description": "Type of decision"
+        },
+        "actor": {
+          "type": "string",
+          "required": true,
+          "description": "Owner making decision"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,715 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Lybra task card schema - single source of truth for all card fields",
+  "last_updated": "2026-08-11",
+  "fields": {
+    "task_id": {
+      "type": "string",
+      "required": true,
+      "description": "Unique task identifier",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "title": {
+      "type": "string",
+      "required": true,
+      "description": "Task title"
+    },
+    "project": {
+      "type": "string",
+      "required": true,
+      "description": "Project identifier"
+    },
+    "assigned_to": {
+      "type": "string",
+      "required": true,
+      "description": "Agent or role assigned to this task"
+    },
+    "agent_instance": {
+      "type": "string",
+      "required": false,
+      "description": "Specific agent instance identifier"
+    },
+    "context_bundle": {
+      "type": "string",
+      "required": true,
+      "description": "Context bundle identifier for the task"
+    },
+    "task_mode": {
+      "type": "string",
+      "required": true,
+      "enum": ["code", "docs", "governance", "config"],
+      "description": "Task mode - determines workflow routing (code=full N0-N6; docs/governance/config=skip N4/N5)"
+    },
+    "task_class": {
+      "type": "string",
+      "required": false,
+      "enum": ["simple", "standard", "complex"],
+      "description": "Task complexity classification"
+    },
+    "task_type": {
+      "type": "string",
+      "required": false,
+      "enum": ["one_shot", "continuous", "scheduled"],
+      "description": "Task execution type"
+    },
+    "model_tier": {
+      "type": "string",
+      "required": false,
+      "description": "Model tier for agent execution"
+    },
+    "priority": {
+      "type": "string",
+      "required": true,
+      "enum": ["low", "medium", "high", "critical"],
+      "description": "Task priority level"
+    },
+    "status": {
+      "type": "string",
+      "required": true,
+      "enum": ["pending", "claimed", "returned", "completed", "blocked", "withdrawn"],
+      "description": "Current task queue state"
+    },
+    "created_by": {
+      "type": "string",
+      "required": true,
+      "description": "Creator of the task (agent/role)"
+    },
+    "created_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Task creation timestamp"
+    },
+    "needs_owner": {
+      "type": "boolean",
+      "required": true,
+      "description": "Whether task requires owner approval"
+    },
+    "needs_owner_reasons": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "Reasons why owner approval is needed"
+    },
+    "output_target": {
+      "type": "string",
+      "required": true,
+      "description": "Target output location or scope"
+    },
+    "artifact_policy": {
+      "type": "string",
+      "required": true,
+      "enum": ["formal_write", "scratch_only", "read_only"],
+      "description": "Artifact handling policy"
+    },
+    "artifact_scope": {
+      "type": "string",
+      "required": false,
+      "description": "Scope of artifacts for this task"
+    },
+    "artifact_refs": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "References to task artifacts"
+    },
+    "artifact_links": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "Links to task artifacts"
+    },
+    "session_policy": {
+      "type": "string",
+      "required": false,
+      "description": "Session handling policy"
+    },
+    "context_isolation": {
+      "type": "string",
+      "required": false,
+      "enum": ["shared", "isolated"],
+      "description": "Context isolation level"
+    },
+    "memory_scope": {
+      "type": "string",
+      "required": false,
+      "description": "Memory scope for task execution"
+    },
+    "claim_id": {
+      "type": "string",
+      "required": false,
+      "description": "Claim record identifier (runtime field)"
+    },
+    "claimed_by": {
+      "type": "string",
+      "required": false,
+      "description": "Agent that claimed this task (runtime field)"
+    },
+    "claimed_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Claim timestamp (runtime field)"
+    },
+    "active_session_id": {
+      "type": "string",
+      "required": false,
+      "description": "Active session identifier (runtime field)"
+    },
+    "last_session_id": {
+      "type": "string",
+      "required": false,
+      "description": "Last session identifier (runtime field)"
+    },
+    "session_started_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Session start timestamp (runtime field)"
+    },
+    "completed_by": {
+      "type": "string",
+      "required": false,
+      "description": "Agent that completed this task (runtime field)"
+    },
+    "completed_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Completion timestamp (runtime field)"
+    },
+    "closed_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Closure timestamp (runtime field)"
+    },
+    "audit": {
+      "type": "string",
+      "required": false,
+      "enum": ["required", "none", "optional"],
+      "description": "Audit requirement level"
+    },
+    "audit_status": {
+      "type": "string",
+      "required": false,
+      "description": "Current audit status (runtime field)"
+    },
+    "audit_readiness": {
+      "type": "string",
+      "required": false,
+      "description": "Audit readiness state (runtime field)"
+    },
+    "audit_task_id": {
+      "type": "string",
+      "required": false,
+      "description": "Related audit task identifier"
+    },
+    "audit_by": {
+      "type": "string",
+      "required": false,
+      "description": "Auditor assignment"
+    },
+    "audit_dispatch_record_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Audit dispatch record reference"
+    },
+    "auditor_instance": {
+      "type": "string",
+      "required": false,
+      "description": "Auditor instance identifier"
+    },
+    "owner_verify": {
+      "type": "boolean",
+      "required": false,
+      "description": "Whether owner verification is required"
+    },
+    "owner_verify_checklist": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "Owner verification checklist items"
+    },
+    "owner_verify_preview": {
+      "type": "string",
+      "required": false,
+      "description": "Preview text for owner verification"
+    },
+    "owner_review_required": {
+      "type": "boolean",
+      "required": false,
+      "description": "Whether owner review is required"
+    },
+    "owner_approval_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Owner approval record reference"
+    },
+    "owner_policy_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Owner policy reference"
+    },
+    "owner_override": {
+      "type": "boolean",
+      "required": false,
+      "description": "Whether owner override is active"
+    },
+    "owner_confirmation_required": {
+      "type": "boolean",
+      "required": false,
+      "description": "Whether owner confirmation is required"
+    },
+    "owner_confirmation_reasons": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "Reasons for owner confirmation requirement"
+    },
+    "governance_refs": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "References to governance documents"
+    },
+    "referenced_files": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "Files referenced by this task"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "Task dependencies"
+    },
+    "dependency_condition": {
+      "type": "string",
+      "required": false,
+      "description": "Dependency completion condition"
+    },
+    "dependency_executor_status": {
+      "type": "string",
+      "required": false,
+      "description": "Dependency executor status (runtime field)"
+    },
+    "dependency_audit_status": {
+      "type": "string",
+      "required": false,
+      "description": "Dependency audit status (runtime field)"
+    },
+    "dependency_audit_readiness": {
+      "type": "string",
+      "required": false,
+      "description": "Dependency audit readiness (runtime field)"
+    },
+    "derived_from": {
+      "type": "string",
+      "required": false,
+      "description": "Source task this was derived from"
+    },
+    "related_audit_task_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Related audit task reference"
+    },
+    "related_audit_verdict_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Related audit verdict reference"
+    },
+    "return_id": {
+      "type": "string",
+      "required": false,
+      "description": "Return record identifier (runtime field)"
+    },
+    "return_record_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Return record reference"
+    },
+    "return_event_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Return event reference"
+    },
+    "return_owner_policy_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Owner policy reference for return"
+    },
+    "returned_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Return timestamp (runtime field)"
+    },
+    "returned_by": {
+      "type": "string",
+      "required": false,
+      "description": "Agent that returned this task (runtime field)"
+    },
+    "executor_status": {
+      "type": "string",
+      "required": false,
+      "description": "Executor status (runtime field)"
+    },
+    "executor_completed_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Executor completion timestamp (runtime field)"
+    },
+    "executor_completed_by": {
+      "type": "string",
+      "required": false,
+      "description": "Executor that completed (runtime field)"
+    },
+    "executor_registry_verified": {
+      "type": "boolean",
+      "required": false,
+      "description": "Whether executor is registry verified (runtime field)"
+    },
+    "closure_evidence_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Closure evidence record reference"
+    },
+    "closure_evidence_type": {
+      "type": "string",
+      "required": false,
+      "description": "Type of closure evidence"
+    },
+    "finalize_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Finalize record reference"
+    },
+    "finalize_status": {
+      "type": "string",
+      "required": false,
+      "description": "Finalize status (runtime field)"
+    },
+    "result_summary": {
+      "type": "string",
+      "required": false,
+      "description": "Summary of task results"
+    },
+    "completion_report_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Completion report reference"
+    },
+    "approval_required": {
+      "type": "boolean",
+      "required": false,
+      "description": "Whether approval is required"
+    },
+    "approval_operation": {
+      "type": "string",
+      "required": false,
+      "description": "Operation requiring approval"
+    },
+    "approved_by_owner": {
+      "type": "boolean",
+      "required": false,
+      "description": "Whether approved by owner"
+    },
+    "complexity_note": {
+      "type": "string",
+      "required": false,
+      "description": "Notes on task complexity"
+    },
+    "polling_mode": {
+      "type": "string",
+      "required": false,
+      "enum": ["agent_polling", "push_notify", "hybrid"],
+      "description": "Task polling mode"
+    },
+    "claim_policy": {
+      "type": "string",
+      "required": false,
+      "enum": ["assigned_agent_only", "any_qualified", "open"],
+      "description": "Claim policy for task"
+    },
+    "claim_source": {
+      "type": "string",
+      "required": false,
+      "description": "Source of the claim (runtime field)"
+    },
+    "claim_match_basis": {
+      "type": "string",
+      "required": false,
+      "description": "Basis for claim matching (runtime field)"
+    },
+    "claim_requirements_hash": {
+      "type": "string",
+      "required": false,
+      "description": "Hash of claim requirements (runtime field)"
+    },
+    "report_mode": {
+      "type": "string",
+      "required": false,
+      "enum": ["forum_reply", "inline", "separate_doc"],
+      "description": "Reporting mode for task results"
+    },
+    "report_mode": {
+      "type": "string",
+      "required": false,
+      "description": "Reporting mode"
+    },
+    "external_ref": {
+      "type": "string",
+      "required": false,
+      "description": "External reference identifier"
+    },
+    "source_tag": {
+      "type": "string",
+      "required": false,
+      "description": "Source tag for task origin"
+    },
+    "client_tag": {
+      "type": "string",
+      "required": false,
+      "description": "Client tag identifier"
+    },
+    "forum_thread_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Forum thread reference"
+    },
+    "draft_id": {
+      "type": "string",
+      "required": false,
+      "description": "Draft identifier if this was a draft"
+    },
+    "draft_path": {
+      "type": "string",
+      "required": false,
+      "description": "Path to draft file"
+    },
+    "source_draft_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Source draft reference"
+    },
+    "published_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Publication timestamp"
+    },
+    "published_by": {
+      "type": "string",
+      "required": false,
+      "description": "Agent/role that published"
+    },
+    "published_task_ref": {
+      "type": "string",
+      "required": false,
+      "description": "Published task reference"
+    },
+    "dispatched_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Dispatch timestamp"
+    },
+    "reopened_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Reopen timestamp"
+    },
+    "autonomy_mode": {
+      "type": "string",
+      "required": false,
+      "enum": ["Supervised", "PreAuthorized", "FullyAutonomous"],
+      "description": "Autonomy mode for task execution"
+    },
+    "actor": {
+      "type": "string",
+      "required": false,
+      "description": "Actor performing action"
+    },
+    "agent_or_role": {
+      "type": "string",
+      "required": false,
+      "description": "Agent or role identifier"
+    },
+    "canonical_agent_instance": {
+      "type": "string",
+      "required": false,
+      "description": "Canonical agent instance identifier"
+    },
+    "agent_runtime": {
+      "type": "string",
+      "required": false,
+      "description": "Agent runtime environment"
+    },
+    "runtime_profile": {
+      "type": "string",
+      "required": false,
+      "description": "Runtime profile for execution"
+    },
+    "orchestration": {
+      "type": "string",
+      "required": false,
+      "description": "Orchestration identifier"
+    },
+    "orchestration_id": {
+      "type": "string",
+      "required": false,
+      "description": "Orchestration ID"
+    },
+    "planner_agent": {
+      "type": "string",
+      "required": false,
+      "description": "Planner agent identifier"
+    },
+    "planner_agent_instance": {
+      "type": "string",
+      "required": false,
+      "description": "Planner agent instance"
+    },
+    "planner_model_tier": {
+      "type": "string",
+      "required": false,
+      "description": "Model tier for planner"
+    },
+    "planned_claim_id": {
+      "type": "string",
+      "required": false,
+      "description": "Planned claim identifier"
+    },
+    "planned_session_id": {
+      "type": "string",
+      "required": false,
+      "description": "Planned session identifier"
+    },
+    "task_selector_project": {
+      "type": "string",
+      "required": false,
+      "description": "Task selector project filter"
+    },
+    "task_selector_task_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "Task selector ID filter"
+    },
+    "task_selector_task_mode": {
+      "type": "string",
+      "required": false,
+      "description": "Task selector mode filter"
+    },
+    "template_id": {
+      "type": "string",
+      "required": false,
+      "description": "Template identifier"
+    },
+    "template_kind": {
+      "type": "string",
+      "required": false,
+      "description": "Template kind/type"
+    },
+    "template_version": {
+      "type": "string",
+      "required": false,
+      "description": "Template version"
+    },
+    "template_status": {
+      "type": "string",
+      "required": false,
+      "description": "Template status"
+    },
+    "description": {
+      "type": "string",
+      "required": false,
+      "description": "Task description"
+    },
+    "requirements": {
+      "type": "string",
+      "required": false,
+      "description": "Task requirements"
+    },
+    "risk_level": {
+      "type": "string",
+      "required": false,
+      "enum": ["low", "medium", "high", "critical"],
+      "description": "Risk level assessment"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "Warning messages"
+    },
+    "reason": {
+      "type": "string",
+      "required": false,
+      "description": "Reason for action/state"
+    },
+    "timestamp": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Generic timestamp field"
+    },
+    "actual_model": {
+      "type": "string",
+      "required": false,
+      "description": "Actual model used for execution"
+    },
+    "reported_tokens": {
+      "type": "object",
+      "required": false,
+      "description": "Token usage report"
+    },
+    "body": {
+      "type": "string",
+      "required": false,
+      "description": "Task body content (markdown)"
+    }
+  },
+  "runtime_fields": [
+    "claim_id",
+    "claimed_by",
+    "claimed_at",
+    "active_session_id",
+    "last_session_id",
+    "session_started_at",
+    "completed_by",
+    "completed_at",
+    "closed_at",
+    "audit_status",
+    "audit_readiness",
+    "dependency_executor_status",
+    "dependency_audit_status",
+    "dependency_audit_readiness",
+    "return_id",
+    "returned_at",
+    "returned_by",
+    "executor_status",
+    "executor_completed_at",
+    "executor_completed_by",
+    "executor_registry_verified",
+    "finalize_status",
+    "claim_source",
+    "claim_match_basis",
+    "claim_requirements_hash"
+  ],
+  "forbidden_in_draft": [
+    "claim_id",
+    "claimed_by",
+    "claimed_at",
+    "active_session_id",
+    "last_session_id",
+    "completed_by",
+    "completed_at",
+    "blocked_by",
+    "blocked_at"
+  ]
+}

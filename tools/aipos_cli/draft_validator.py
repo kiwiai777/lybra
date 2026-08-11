@@ -8,6 +8,19 @@ from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_loader import QUEUE_STATES
 from tools.aipos_cli.task_complexity import complexity_payload, validate_task_complexity
 
+# AIPOS-R0: Schema-based validation
+try:
+    from tools.schema_loader import (
+        is_field_defined,
+        get_required_card_fields,
+        get_forbidden_draft_fields,
+        validate_field_value,
+        get_all_defined_fields,
+    )
+    SCHEMA_AVAILABLE = True
+except ImportError:
+    SCHEMA_AVAILABLE = False
+
 
 
 
@@ -187,19 +200,55 @@ def validate_draft_metadata(
     for error in parse_errors or []:
         _add(blocking_reasons, f"Frontmatter parse issue: {error}")
 
-    for field in DRAFT_REQUIRED_FIELDS:
-        if _is_missing(metadata.get(field)):
-            _add(blocking_reasons, f"Missing required field: {field}")
+    # AIPOS-R0: Schema-based validation (N0 gate)
+    if SCHEMA_AVAILABLE:
+        # Check for undefined/misspelled fields
+        all_defined_fields = get_all_defined_fields(repo_root)
+        for field_name in metadata.keys():
+            if field_name == "body":  # body is special, not in frontmatter schema
+                continue
+            if not is_field_defined(field_name, repo_root):
+                # Check for likely typos (similar field names)
+                similar = [f for f in all_defined_fields if f.lower().replace('_', '') == field_name.lower().replace('_', '')]
+                if similar:
+                    _add(blocking_reasons, f"Unknown field '{field_name}' (did you mean '{similar[0]}'?)")
+                else:
+                    _add(warnings, f"Unknown field '{field_name}' not defined in card.schema.json")
+        
+        # Check required fields from schema
+        schema_required = get_required_card_fields(repo_root)
+        for field in schema_required:
+            if _is_missing(metadata.get(field)):
+                _add(blocking_reasons, f"Missing required field: {field}")
+        
+        # Check forbidden runtime fields from schema
+        schema_forbidden = get_forbidden_draft_fields(repo_root)
+        for field in schema_forbidden:
+            if not _is_missing(metadata.get(field)):
+                _add(blocking_reasons, f"Draft contains forbidden runtime-state field: {field}")
+        
+        # Validate field values against schema (enum checks, type checks)
+        for field_name, value in metadata.items():
+            if field_name == "body" or _is_missing(value):
+                continue
+            is_valid, error_msg = validate_field_value(field_name, value, repo_root)
+            if not is_valid and error_msg:
+                _add(blocking_reasons, error_msg)
+    else:
+        # Fallback to hardcoded validation if schema not available
+        for field in DRAFT_REQUIRED_FIELDS:
+            if _is_missing(metadata.get(field)):
+                _add(blocking_reasons, f"Missing required field: {field}")
+        
+        for field in FORBIDDEN_RUNTIME_FIELDS:
+            if not _is_missing(metadata.get(field)):
+                _add(blocking_reasons, f"Draft contains forbidden runtime-state field: {field}")
 
     if not _is_missing(task_id) and not _is_safe_task_id(task_id):
         _add(blocking_reasons, "Invalid task_id format or path-unsafe task_id")
 
     if metadata.get("status") not in (None, "pending"):
         _add(blocking_reasons, "Draft status must be pending")
-
-    for field in FORBIDDEN_RUNTIME_FIELDS:
-        if not _is_missing(metadata.get(field)):
-            _add(blocking_reasons, f"Draft contains forbidden runtime-state field: {field}")
 
     if _is_missing(metadata.get("body")):
         pass

@@ -1,0 +1,267 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Lybra configuration schema - structure and sources for all configuration, NO hardcoded values in code",
+  "last_updated": "2026-08-11",
+  "configuration_sources": {
+    "connection": {
+      "description": "Gate connection configuration",
+      "source_file": ".lybra/connection.json",
+      "schema": {
+        "gate_url": {
+          "type": "string",
+          "required": true,
+          "description": "Gate server URL",
+          "example": "http://127.0.0.1:7118"
+        },
+        "project": {
+          "type": "string",
+          "required": true,
+          "description": "Project identifier"
+        },
+        "workspace_root": {
+          "type": "string",
+          "required": false,
+          "description": "Workspace root path (can be inferred)"
+        }
+      }
+    },
+    "role": {
+      "description": "Agent role configuration",
+      "source_file": ".lybra/role.json",
+      "schema": {
+        "role": {
+          "type": "string",
+          "required": true,
+          "description": "Agent role category",
+          "enum": ["executor", "auditor", "owner", "owner-dispatch", "planner", "copilot"]
+        },
+        "agent_instance": {
+          "type": "string",
+          "required": true,
+          "description": "Agent instance identifier"
+        },
+        "credential_token": {
+          "type": "string",
+          "required": true,
+          "description": "Role credential token (enrolled by gate)"
+        }
+      }
+    },
+    "policy": {
+      "description": "Autonomy policy configuration",
+      "source_file": ".lybra/policy.json",
+      "schema": {
+        "policy_id": {
+          "type": "string",
+          "required": true,
+          "description": "Policy identifier"
+        },
+        "autonomy_mode": {
+          "type": "string",
+          "enum": ["Supervised", "PreAuthorized", "FullyAutonomous"],
+          "required": true,
+          "description": "Default autonomy mode"
+        },
+        "claim_limits": {
+          "type": "object",
+          "description": "Claim limits for this policy"
+        }
+      }
+    },
+    "workspace_config": {
+      "description": "Workspace-level configuration",
+      "source_file": ".lybra/config.json",
+      "schema": {
+        "workspace_root": {
+          "type": "string",
+          "required": true,
+          "description": "Workspace root directory"
+        },
+        "project": {
+          "type": "string",
+          "required": true,
+          "description": "Project identifier"
+        },
+        "governance_root": {
+          "type": "string",
+          "required": true,
+          "description": "Governance repository root path"
+        },
+        "code_repo": {
+          "type": "string",
+          "required": false,
+          "description": "Code repository path (for code tasks)"
+        }
+      }
+    }
+  },
+  "ports": {
+    "description": "Service port configuration",
+    "gate_default": 7118,
+    "gate_range": "7100-7199",
+    "mcp_server_default": 7118,
+    "auditor_loop_default": 7119,
+    "tunnel_default": 7120
+  },
+  "urls": {
+    "description": "URL patterns and defaults",
+    "gate_local": "http://127.0.0.1:7118",
+    "gate_tailscale_pattern": "http://{hostname}.{tailnet}:7118"
+  },
+  "governance_structure": {
+    "description": "Governance repository fixed directory structure - read from workspace config, NOT hardcoded",
+    "paths": {
+      "governance_root": {
+        "source": "workspace_config.governance_root",
+        "description": "Root of governance repository"
+      },
+      "governance_docs": {
+        "relative_to": "governance_root",
+        "path": "governance/",
+        "description": "Governance documents directory",
+        "files": {
+          "decision_log": "decision_log.md",
+          "project_status": "project_status.md",
+          "roadmap": "roadmap.md",
+          "loop_design": "LOOP-REDESIGN.md"
+        }
+      },
+      "tasks_root": {
+        "relative_to": "governance_root",
+        "path": "5_tasks/",
+        "description": "Tasks root directory"
+      },
+      "queue": {
+        "relative_to": "tasks_root",
+        "path": "queue/",
+        "description": "Task queue directory",
+        "subdirs": [
+          "pending/",
+          "claimed/",
+          "returned/",
+          "completed/",
+          "blocked/",
+          "withdrawn/"
+        ]
+      },
+      "drafts": {
+        "relative_to": "tasks_root",
+        "path": "drafts/",
+        "description": "Draft tasks directory"
+      },
+      "records": {
+        "relative_to": "tasks_root",
+        "path": "records/",
+        "description": "Task records root",
+        "subdirs": [
+          "claims/",
+          "returns/",
+          "closures/",
+          "audit_dispatches/",
+          "audit_verdicts/",
+          "owner_decisions/",
+          "owner_verifications/",
+          "publishes/",
+          "events/",
+          "sessions/"
+        ]
+      },
+      "stage_archive": {
+        "relative_to": "governance_root",
+        "path": "stage_archive/",
+        "description": "Stage completion archive directory"
+      }
+    }
+  },
+  "n6_closure_checklist": {
+    "description": "N6 closure node governance updates checklist - what files to update on task completion",
+    "updates": [
+      {
+        "file": "governance/decision_log.md",
+        "action": "append",
+        "description": "Append task completion decision to decision log"
+      },
+      {
+        "file": "governance/project_status.md",
+        "action": "update_section",
+        "description": "Update relevant sections in project status"
+      },
+      {
+        "file": "governance/roadmap.md",
+        "action": "update_section",
+        "description": "Update roadmap if task affects milestones"
+      },
+      {
+        "file": "5_tasks/queue/completed/{task_id}.md",
+        "action": "move",
+        "description": "Move task card to completed queue"
+      },
+      {
+        "file": "stage_archive/{stage_id}/",
+        "action": "create_or_append",
+        "description": "Archive stage completion documentation (on stage boundary)",
+        "condition": "stage_completion"
+      }
+    ],
+    "final_action": {
+      "operation": "git_push",
+      "repository": "governance_repo",
+      "description": "Push all governance updates to remote (push is part of N6 node)"
+    }
+  },
+  "path_conventions": {
+    "description": "Path conventions used throughout the system",
+    "task_card_filename": "{task_id_slug}.md",
+    "claim_record": "5_tasks/records/claims/{task_id}/claim_{task_id}_{timestamp}_{agent}.md",
+    "return_record": "5_tasks/records/returns/{task_id}/return_{task_id}_{timestamp}_{agent}.md",
+    "closure_record": "5_tasks/records/closures/{task_id}/closure_{task_id}_{timestamp}.md",
+    "audit_dispatch_record": "5_tasks/records/audit_dispatches/{task_id}/dispatch_{task_id}_{timestamp}.md",
+    "audit_verdict_record": "5_tasks/records/audit_verdicts/{task_id}/verdict_{task_id}_{timestamp}_{auditor}.md",
+    "session_record": "5_tasks/records/sessions/{task_id}/session_{session_id}.md",
+    "event_record": "5_tasks/records/events/{task_id}/{event_type}_{task_id}_{timestamp}.md"
+  },
+  "environment_variables": {
+    "description": "Environment variables that can override config file values",
+    "variables": {
+      "AIPOS_WORKSPACE_ROOT": {
+        "type": "string",
+        "description": "Override workspace root path"
+      },
+      "LYBRA_GATE_URL": {
+        "type": "string",
+        "description": "Override gate server URL"
+      },
+      "LYBRA_HOME_ROOT": {
+        "type": "string",
+        "description": "Home root for multi-workspace resolution"
+      },
+      "LYBRA_CAPABILITY_TOKEN": {
+        "type": "string",
+        "description": "Capability token for scoped operations"
+      }
+    },
+    "precedence": "Environment variables override config files"
+  },
+  "multi_project_support": {
+    "description": "Multi-project configuration - gate serves multiple projects",
+    "project_registry": {
+      "source": "gate configuration",
+      "description": "Gate maintains registry of all projects",
+      "structure": {
+        "project_id": "string",
+        "governance_root": "path",
+        "code_repo": "path (optional)",
+        "workspace_root": "path"
+      }
+    },
+    "scope_isolation": {
+      "description": "All operations scoped by (project, instance) tuple",
+      "rules": [
+        "queue_list filtered by project",
+        "held checks per (project, instance)",
+        "claim eligibility per project",
+        "session binding per project"
+      ]
+    }
+  }
+}

@@ -1,0 +1,307 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Lybra enumeration values - single source of truth for all enum types",
+  "last_updated": "2026-08-11",
+  "enums": {
+    "queue_state": {
+      "description": "Task queue states",
+      "values": [
+        {
+          "value": "pending",
+          "description": "Task published, awaiting claim"
+        },
+        {
+          "value": "claimed",
+          "description": "Task claimed by an agent, work in progress"
+        },
+        {
+          "value": "returned",
+          "description": "Task work returned, awaiting audit/closure"
+        },
+        {
+          "value": "completed",
+          "description": "Task completed and closed"
+        },
+        {
+          "value": "blocked",
+          "description": "Task blocked, cannot proceed"
+        },
+        {
+          "value": "withdrawn",
+          "description": "Task withdrawn/cancelled"
+        }
+      ]
+    },
+    "verdict": {
+      "description": "Audit verdict types",
+      "values": [
+        {
+          "value": "PASS",
+          "description": "Audit passed without issues"
+        },
+        {
+          "value": "PASS_WITH_NOTES",
+          "description": "Audit passed with advisory notes"
+        },
+        {
+          "value": "FAIL",
+          "description": "Audit failed, requires fixes"
+        },
+        {
+          "value": "BLOCK",
+          "description": "Blocking issue, cannot proceed"
+        },
+        {
+          "value": "WARN",
+          "description": "Warning issued, non-blocking"
+        }
+      ]
+    },
+    "record_type": {
+      "description": "Record types in the system",
+      "values": [
+        {
+          "value": "claim",
+          "description": "Task claim record"
+        },
+        {
+          "value": "return",
+          "description": "Task return record"
+        },
+        {
+          "value": "audit_dispatch",
+          "description": "Audit dispatch record"
+        },
+        {
+          "value": "audit_verdict",
+          "description": "Audit verdict record"
+        },
+        {
+          "value": "closure",
+          "description": "Task closure record"
+        },
+        {
+          "value": "owner_decision",
+          "description": "Owner decision record"
+        },
+        {
+          "value": "owner_verification",
+          "description": "Owner verification record"
+        },
+        {
+          "value": "publish",
+          "description": "Task publish record"
+        }
+      ]
+    },
+    "role_category": {
+      "description": "Agent role categories",
+      "values": [
+        {
+          "value": "executor",
+          "description": "Execution agent - claims and completes tasks"
+        },
+        {
+          "value": "auditor",
+          "description": "Audit agent - reviews completed work"
+        },
+        {
+          "value": "owner",
+          "description": "Owner - final approval authority"
+        },
+        {
+          "value": "owner-dispatch",
+          "description": "Owner dispatch - audit assignment"
+        },
+        {
+          "value": "planner",
+          "description": "Planner - creates and plans tasks"
+        },
+        {
+          "value": "copilot",
+          "description": "Copilot - assists in task execution"
+        }
+      ]
+    },
+    "task_mode": {
+      "description": "Task mode - determines workflow routing",
+      "routing_rules": {
+        "code": "Full workflow N0→N6 (all nodes including independent audit N4 and finalize N5)",
+        "docs": "Skip N4/N5, advisor review replaces independent audit",
+        "governance": "Skip N4/N5, advisor review replaces independent audit",
+        "config": "Skip N4/N5, advisor review replaces independent audit"
+      },
+      "values": [
+        {
+          "value": "code",
+          "description": "Code implementation task - full workflow with independent audit"
+        },
+        {
+          "value": "docs",
+          "description": "Documentation task - advisor review, skip independent audit"
+        },
+        {
+          "value": "governance",
+          "description": "Governance task - advisor review, skip independent audit"
+        },
+        {
+          "value": "config",
+          "description": "Configuration task - advisor review, skip independent audit"
+        }
+      ]
+    },
+    "task_class": {
+      "description": "Task complexity classification",
+      "values": [
+        {
+          "value": "simple",
+          "description": "Simple task - straightforward implementation"
+        },
+        {
+          "value": "standard",
+          "description": "Standard task - moderate complexity"
+        },
+        {
+          "value": "complex",
+          "description": "Complex task - high complexity, multiple components"
+        }
+      ]
+    },
+    "priority": {
+      "description": "Task priority levels",
+      "values": [
+        {
+          "value": "low",
+          "description": "Low priority"
+        },
+        {
+          "value": "medium",
+          "description": "Medium priority"
+        },
+        {
+          "value": "high",
+          "description": "High priority"
+        },
+        {
+          "value": "critical",
+          "description": "Critical priority - urgent action required"
+        }
+      ]
+    },
+    "artifact_policy": {
+      "description": "Artifact handling policies",
+      "values": [
+        {
+          "value": "formal_write",
+          "description": "Write to formal repository locations"
+        },
+        {
+          "value": "scratch_only",
+          "description": "Write to scratch space only"
+        },
+        {
+          "value": "read_only",
+          "description": "Read-only access, no writes"
+        }
+      ]
+    },
+    "autonomy_mode": {
+      "description": "Agent autonomy modes",
+      "values": [
+        {
+          "value": "Supervised",
+          "description": "Supervised mode - requires owner confirmation"
+        },
+        {
+          "value": "PreAuthorized",
+          "description": "Pre-authorized mode - can self-confirm within policy"
+        },
+        {
+          "value": "FullyAutonomous",
+          "description": "Fully autonomous - no confirmations required"
+        }
+      ]
+    },
+    "audit_requirement": {
+      "description": "Audit requirement levels",
+      "values": [
+        {
+          "value": "required",
+          "description": "Independent audit required"
+        },
+        {
+          "value": "optional",
+          "description": "Audit optional"
+        },
+        {
+          "value": "none",
+          "description": "No audit required"
+        }
+      ]
+    },
+    "context_isolation": {
+      "description": "Context isolation levels",
+      "values": [
+        {
+          "value": "shared",
+          "description": "Shared context across sessions"
+        },
+        {
+          "value": "isolated",
+          "description": "Isolated context per session"
+        }
+      ]
+    },
+    "polling_mode": {
+      "description": "Task polling modes",
+      "values": [
+        {
+          "value": "agent_polling",
+          "description": "Agent polls for tasks"
+        },
+        {
+          "value": "push_notify",
+          "description": "Push notifications to agent"
+        },
+        {
+          "value": "hybrid",
+          "description": "Hybrid polling and push"
+        }
+      ]
+    },
+    "claim_policy": {
+      "description": "Task claim policies",
+      "values": [
+        {
+          "value": "assigned_agent_only",
+          "description": "Only assigned agent can claim"
+        },
+        {
+          "value": "any_qualified",
+          "description": "Any qualified agent can claim"
+        },
+        {
+          "value": "open",
+          "description": "Open to any agent"
+        }
+      ]
+    },
+    "report_mode": {
+      "description": "Task reporting modes",
+      "values": [
+        {
+          "value": "forum_reply",
+          "description": "Report via forum reply"
+        },
+        {
+          "value": "inline",
+          "description": "Inline report in task"
+        },
+        {
+          "value": "separate_doc",
+          "description": "Separate document report"
+        }
+      ]
+    }
+  }
+}
