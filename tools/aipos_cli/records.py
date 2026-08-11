@@ -295,7 +295,7 @@ def _build_owner_verification_record(
             f"owner_verification record task_id mismatch: directory={directory_task_id} metadata={metadata.get('task_id')}"
         )
 
-    return {
+    record = {
         "record_type": "owner_verification",
         "record_id": path.stem,
         "task_id": task_id,
@@ -311,7 +311,7 @@ def _build_owner_verification_record(
         "body": body,
         "parse_errors": parse_errors,
         "warnings": warnings,
-    })
+    }
     # AIPOS-R1-FIX2: 转换所有 date/datetime 对象
     return _serialize_dates(record)
 
