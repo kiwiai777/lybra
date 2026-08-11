@@ -476,6 +476,32 @@ class LybraMcpHttpSseServer(ThreadingHTTPServer):
             import socket as _socket
             self.socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEPORT, 1)
         super().server_bind()
+    
+    def reload_token_registry(self) -> None:
+        """FIX-2: 热重载 token registry(从 connection.json 重新加载)。"""
+        if self.lybra_config.service_role_registry is None:
+            return  # 单 token 模式,无需重载
+        
+        # 找到原始 connection.json 路径并重新加载
+        # 注意:我们需要从启动时的 connection.json 重新加载
+        # 这里采用简化策略:直接从 repo_root/.lybra/connection.json 重载
+        try:
+            from pathlib import Path
+            # 从 tools.py 的 _repo_root() 获取路径
+            import sys
+            tools_module = sys.modules.get('tools.mcp_server.tools')
+            if tools_module and hasattr(tools_module, '_repo_root'):
+                repo_root = tools_module._repo_root()
+                connection_path = Path(repo_root) / ".lybra" / "connection.json"
+                if connection_path.exists():
+                    self.lybra_config.service_role_registry = load_service_role_registry(connection_path)
+        except Exception as exc:
+            import sys
+            print(f"[HTTP/SSE] Warning: Failed to reload token registry: {exc}", file=sys.stderr)
+
+
+# FIX-2: 全局 server 实例引用(供热重载)
+_CURRENT_SERVER: LybraMcpHttpSseServer | None = None
 
 
 def build_http_server(config: HttpSseConfig) -> LybraMcpHttpSseServer:
@@ -483,13 +509,18 @@ def build_http_server(config: HttpSseConfig) -> LybraMcpHttpSseServer:
 
 
 def run_http_server(config: HttpSseConfig, *, error_stream: TextIO = sys.stderr) -> int:
+    global _CURRENT_SERVER
     if not config.token and config.service_role_registry is None:
         print(f"{TOKEN_ENV_VAR} is required for MCP HTTP/SSE transport.", file=error_stream)
         return 2
     with build_http_server(config) as httpd:
+        _CURRENT_SERVER = httpd  # FIX-2: 设置全局引用供热重载
         reuse_note = " (SO_REUSEPORT — graceful handoff)" if config.reuse_port else ""
         print(f"Lybra MCP HTTP/SSE listening on http://{config.host}:{config.port}{reuse_note}", file=error_stream)
-        httpd.serve_forever()
+        try:
+            httpd.serve_forever()
+        finally:
+            _CURRENT_SERVER = None
     return 0
 
 

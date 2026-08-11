@@ -137,6 +137,20 @@ FORBIDDEN_AUDIT_FIELDS = {
 REQUEST_PROJECT: ContextVar[str | None] = ContextVar("lybra_mcp_request_project", default=None)
 
 
+def _reload_token_registry() -> None:
+    """FIX-2: 热重载 token registry(从 connection.json 重新加载)。
+    
+    调用 http_sse 模块的全局 server 实例来重载凭据源。
+    """
+    try:
+        from tools.mcp_server import http_sse
+        if http_sse._CURRENT_SERVER is not None:
+            http_sse._CURRENT_SERVER.reload_token_registry()
+    except Exception as exc:
+        import logging
+        logging.warning(f"_reload_token_registry failed: {exc}")
+
+
 def _repo_root() -> Path:
     """Resolve workspace root for the current request.
     
@@ -3365,6 +3379,8 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
     This is a PUBLIC endpoint (no token required). The enrollment code itself is the authentication.
     Once exchanged, the code is marked as used and cannot be reused.
     The token value is returned ONLY in this response and never logged.
+    
+    FIX-2: Gate 侧必须注册新铸 token 到凭据源并即时生效。
     """
     from tools.aipos_cli.enrollment import get_enrollment_status, mark_enrollment_used
     import secrets
@@ -3420,6 +3436,27 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
     if instance:
         token_entry["agent_instance"] = instance
     
+    # FIX-2: 注册 token 到 gate workspace connection.json
+    from tools.aipos_cli.enroll_client import (
+        load_or_create_connection_json,
+        upsert_token_entry,
+        write_connection_json,
+        ensure_lybra_dir,
+    )
+    try:
+        lybra_dir = ensure_lybra_dir(root)
+        connection_data = load_or_create_connection_json(lybra_dir, gate_url=None)  # 保留现有 gate_url
+        rotated = upsert_token_entry(connection_data, token_entry)
+        write_connection_json(lybra_dir, connection_data)
+        
+        # 热加载: 通知当前 gate 进程重载 token registry
+        _reload_token_registry()
+    except Exception as exc:
+        # 注册失败不阻断 exchange(客户端已有 token),但记录警告
+        import logging
+        logging.warning(f"FIX-2: Failed to register token to gate workspace: {exc}")
+        rotated = False
+    
     # Mark code as used
     try:
         mark_enrollment_used(root, code)
@@ -3430,6 +3467,7 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
         "ok": True,
         "operation": "roles_enroll_exchange",
         "token_entry": token_entry,
+        "rotated": rotated,
         "security_notice": "Store this token securely with 0600 permissions. It will not be shown again.",
     })
 
