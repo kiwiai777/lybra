@@ -218,6 +218,10 @@ def _rpc_response(message: dict[str, Any], *, capability: dict[str, Any] | None 
     except JsonRpcError as exc:
         return _error(request_id, exc.code, exc.message, exc.data)
     except Exception as exc:
+        import traceback
+        import sys
+        print(f"[HTTP/SSE] Internal error in request handling: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return _error(
             request_id,
             -32603,
