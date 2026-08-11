@@ -1541,6 +1541,14 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_revoke_parser.add_argument("--json", action="store_true", help="Output JSON")
     roles_enroll_list_parser = roles_subparsers.add_parser("enroll-list", help="AIPOS-362: list enrollment codes")
     roles_enroll_list_parser.add_argument("--json", action="store_true", help="Output JSON")
+    
+    # AIPOS-R2: enroll command (client-side enrollment: exchange code + write .lybra/ config)
+    roles_enroll_parser = roles_subparsers.add_parser("enroll", help="AIPOS-R2: enroll this machine/agent (exchange enrollment code + write .lybra/ config)")
+    roles_enroll_parser.add_argument("--code", required=True, help="Enrollment code (from owner/advisor)")
+    roles_enroll_parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://host:7118)")
+    roles_enroll_parser.add_argument("--policy", help="Optional policy reference")
+    roles_enroll_parser.add_argument("--bootstrap-token", help="Bootstrap token for HTTP transport auth (any valid token; or set LYBRA_BOOTSTRAP_TOKEN)")
+    roles_enroll_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
     profile_subparsers = profile_parser.add_subparsers(dest="profile_command")
@@ -2258,6 +2266,38 @@ def main(argv: list[str] | None = None) -> int:
                         inst = code.get('instance') or '(any)'
                         expires = code.get('expires_at') or '(never)'
                         print(f"{code['code_id']:<24} {code['role']:<16} {inst:<32} {code['status']:<10} {expires}")
+            elif args.roles_command == "enroll":
+                # AIPOS-R2: client-side enrollment (exchange code + write .lybra/ config)
+                from tools.aipos_cli.enroll_client import enroll
+                try:
+                    result = enroll(
+                        code=args.code,
+                        gate_url=args.gate_url,
+                        workspace_root=workspace_root,
+                        policy=getattr(args, "policy", None),
+                        bootstrap_token=getattr(args, "bootstrap_token", None),
+                    )
+                    if getattr(args, "json", False):
+                        print(render_json(result))
+                    else:
+                        print(f"\n✓ Enrollment successful!")
+                        print(f"  Role: {result['role']}")
+                        if result.get('agent_instance'):
+                            print(f"  Instance: {result['agent_instance']}")
+                        print(f"  Token fingerprint: {result['fingerprint']}")
+                        print(f"  Scopes: {', '.join(result['scopes'])}")
+                        if result['rotated']:
+                            print(f"  ⟳ Token rotated (replaced existing credential)")
+                        else:
+                            print(f"  ✓ New credential registered")
+                        print(f"\n  Configuration written to: {result['lybra_dir']}/")
+                        for fname in result['files_written']:
+                            print(f"    - {fname}")
+                        print(f"\n⚠ Enrollment code has been consumed and cannot be reused.")
+                        print(f"⚠ Token is stored with 0600 permissions in connection.json")
+                except RuntimeError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    return 2
             else:
                 parser.print_help()
                 return 2
