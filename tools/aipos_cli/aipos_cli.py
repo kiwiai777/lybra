@@ -1432,9 +1432,9 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verdict_parser = subparsers.add_parser("audit-verdict", help="Submit audit verdict for a reviewed task (via gate MCP)")
     audit_verdict_parser.add_argument("--audit-task-id", help="Audit task ID (optional)")
     audit_verdict_parser.add_argument("--reviewed-task-id", required=True, help="Reviewed task ID")
-    audit_verdict_parser.add_argument("--actor", required=True, help="Actor submitting verdict")
-    audit_verdict_parser.add_argument("--agent-instance", required=True, help="Agent instance")
-    audit_verdict_parser.add_argument("--owner-policy-ref", required=True, help="Owner policy reference")
+    audit_verdict_parser.add_argument("--actor", help="AIPOS-R4B-2: Actor submitting verdict (auto-discovered if not provided)")
+    audit_verdict_parser.add_argument("--agent-instance", help="AIPOS-R4B-2: Agent instance (auto-discovered if not provided)")
+    audit_verdict_parser.add_argument("--owner-policy-ref", help="AIPOS-R4B-2: Owner policy reference (auto-discovered if not provided)")
     audit_verdict_parser.add_argument("--verdict", required=True, choices=["PASS", "FAIL", "CONDITIONAL"], help="Verdict")
     audit_verdict_parser.add_argument("--findings-summary", help="Findings summary")
     audit_verdict_parser.add_argument("--evidence-refs", help="JSON list of evidence references")
@@ -1803,6 +1803,7 @@ def build_parser() -> argparse.ArgumentParser:
     finalize_parser.add_argument("--workspace-root", help="Product code repo root (git commit/push runs here); defaults to auto-discovery")
     finalize_parser.add_argument("--governance-root", help="AIPOS-FND-14: Governance workspace root that owns 5_tasks/records/audit_verdicts/ (authoritative gate verdicts). Defaults to auto-discovery via the standard Lybra workspace resolution ladder; must be set explicitly when it differs from --workspace-root.")
     finalize_parser.add_argument("--push", action="store_true", help="Push to remote after commit")
+    finalize_parser.add_argument("--deploy", action="store_true", help="AIPOS-R4B-2: Run lybra-deploy after push (requires --push, enforces deployment branch)")
     finalize_parser.add_argument("--dry-run", action="store_true", help="Validate without committing")
     finalize_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -2683,6 +2684,7 @@ def main(argv: list[str] | None = None) -> int:
             governance_root=governance_root,
             dry_run=args.dry_run,
             push=args.push,
+            deploy=getattr(args, 'deploy', False),
         )
         
         if args.json:
@@ -3367,8 +3369,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.command == "audit-verdict":
-        # AIPOS-FND-15: 真落库，过 gate MCP 两阶段 (dry_run → confirm)
-        from tools.aipos_cli.confirm_client import GateClient, load_owner_token
+        # AIPOS-R4B-2 N4: 审计裁决自助 — 从 LoopContext 自发现身份参数
+        from tools.aipos_cli.confirm_client import GateClient
+        from tools.aipos_cli.audit_verdict_helper import (
+            resolve_audit_context,
+            build_audit_verdict_dry_run_args,
+            build_audit_verdict_confirm_args,
+        )
+        
         try:
             evidence_refs = []
             if args.evidence_refs:
@@ -3376,68 +3384,100 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as exc:
             print(f"Error: Invalid JSON in --evidence-refs: {exc}", file=sys.stderr)
             return 1
-
-        # 解析 connection.json 路径（默认 workspace/.lybra/connection.json）
-        connection_json_path = args.connection_json
-        if not connection_json_path:
-            # 尝试从 repo_root 推断 workspace
-            workspace_candidate = Path(repo_root).parent if repo_root else Path.cwd()
-            connection_json_path = workspace_candidate / ".lybra" / "connection.json"
-            if not connection_json_path.exists():
-                # 回退到产品仓 .lybra/connection.json
-                connection_json_path = Path(repo_root or Path.cwd()) / ".lybra" / "connection.json"
-
-        try:
-            token = load_owner_token(
-                connection_json=connection_json_path,
-                role=args.token_role
-            )
-        except (ValueError, OSError, json.JSONDecodeError) as exc:
-            print(f"Error reading token: {exc}", file=sys.stderr)
-            return 1
-
-        client = GateClient(args.gate_url, token)
+        
+        # AIPOS-R4B-2: 自发现模式 — 当必要参数缺失时，从 LoopContext 解析
+        auto_discover = not all([
+            getattr(args, 'actor', None),
+            getattr(args, 'agent_instance', None),
+            getattr(args, 'owner_policy_ref', None),
+        ])
+        
+        if auto_discover:
+            # 自发现模式
+            try:
+                # Resolve workspace root
+                workspace_root = None
+                if hasattr(args, 'workspace_root') and args.workspace_root:
+                    workspace_root = Path(args.workspace_root).expanduser().resolve()
+                elif hasattr(args, 'global_workspace_root') and args.global_workspace_root:
+                    workspace_root = Path(args.global_workspace_root).expanduser().resolve()
+                
+                context = resolve_audit_context(
+                    workspace_root=workspace_root,
+                    role=getattr(args, 'token_role', 'auditor'),
+                    gate_url=getattr(args, 'gate_url', None),
+                )
+                
+                print(f"[自发现] gate_url: {context['gate_url']}", file=sys.stderr)
+                print(f"[自发现] role: {context['role']}", file=sys.stderr)
+                print(f"[自发现] agent_instance: {context['agent_instance']}", file=sys.stderr)
+                print(f"[自发现] actor: {context['actor']}", file=sys.stderr)
+                
+            except Exception as exc:
+                print(f"Error: Auto-discovery failed: {exc}", file=sys.stderr)
+                print("Hint: Ensure .lybra/connection.json exists or provide explicit parameters.", file=sys.stderr)
+                return 1
+        else:
+            # 显式参数模式（向后兼容）
+            from tools.aipos_cli.confirm_client import load_owner_token
+            
+            connection_json_path = args.connection_json
+            if not connection_json_path:
+                workspace_candidate = Path(repo_root).parent if repo_root else Path.cwd()
+                connection_json_path = workspace_candidate / ".lybra" / "connection.json"
+                if not connection_json_path.exists():
+                    connection_json_path = Path(repo_root or Path.cwd()) / ".lybra" / "connection.json"
+            
+            try:
+                token = load_owner_token(
+                    connection_json=connection_json_path,
+                    role=args.token_role
+                )
+            except (ValueError, OSError, json.JSONDecodeError) as exc:
+                print(f"Error reading token: {exc}", file=sys.stderr)
+                return 1
+            
+            context = {
+                "gate_url": args.gate_url,
+                "token": token,
+                "role": args.token_role,
+                "actor": args.actor,
+                "agent_instance": args.agent_instance,
+                "owner_policy_ref": args.owner_policy_ref,
+                "source": "explicit",
+            }
+        
+        # 初始化 GateClient
+        client = GateClient(context["gate_url"], context["token"])
         try:
             client.initialize()
         except Exception as exc:
             print(f"Error connecting to gate: {exc}", file=sys.stderr)
             return 1
-
-        # 构建 dry_run 参数（必须带 autonomy_mode: Supervised）
-        dry_run_args = {
-            "reviewed_task_id": args.reviewed_task_id,
-            "actor": args.actor,
-            "agent_instance": args.agent_instance,
-            "owner_policy_ref": args.owner_policy_ref,
-            "autonomy_mode": "Supervised",
-            "verdict": args.verdict,
-        }
-        if args.audit_task_id:
-            dry_run_args["audit_task_id"] = args.audit_task_id
-        if args.findings_summary:
-            dry_run_args["findings_summary"] = args.findings_summary
-        if evidence_refs:
-            dry_run_args["evidence_refs"] = evidence_refs
-        if args.audit_claim_id:
-            dry_run_args["audit_claim_id"] = args.audit_claim_id
-        if args.audit_session_id:
-            dry_run_args["audit_session_id"] = args.audit_session_id
-        if args.audit_dispatch_record_ref:
-            dry_run_args["audit_dispatch_record_ref"] = args.audit_dispatch_record_ref
-        if args.reviewed_return_record_ref:
-            dry_run_args["reviewed_return_record_ref"] = args.reviewed_return_record_ref
-        if args.recommended_next_action:
-            dry_run_args["recommended_next_action"] = args.recommended_next_action
-        if args.owner_waiver_ref:
-            dry_run_args["owner_waiver_ref"] = args.owner_waiver_ref
-
+        
+        # 构建 dry_run 参数
+        dry_run_args = build_audit_verdict_dry_run_args(
+            reviewed_task_id=args.reviewed_task_id,
+            verdict=args.verdict,
+            context=context,
+            audit_task_id=getattr(args, 'audit_task_id', None),
+            findings_summary=getattr(args, 'findings_summary', None),
+            evidence_refs=evidence_refs if evidence_refs else None,
+            audit_claim_id=getattr(args, 'audit_claim_id', None),
+            audit_session_id=getattr(args, 'audit_session_id', None),
+            audit_dispatch_record_ref=getattr(args, 'audit_dispatch_record_ref', None),
+            reviewed_return_record_ref=getattr(args, 'reviewed_return_record_ref', None),
+            recommended_next_action=getattr(args, 'recommended_next_action', None),
+            owner_waiver_ref=getattr(args, 'owner_waiver_ref', None),
+        )
+        
         # 第一阶段：dry_run
         try:
             structured = client.call_tool("lybra_audit_verdict_dry_run", dry_run_args)
         except Exception as exc:
             print(f"Error calling lybra_audit_verdict_dry_run: {exc}", file=sys.stderr)
             return 1
-
+        
         dry_run_token = structured.get("dry_run_token") or structured.get("dry_run_id")
         if not dry_run_token:
             # 无 token = 被拦截或错误
@@ -3447,21 +3487,19 @@ def main(argv: list[str] | None = None) -> int:
                 print("\u2717 Audit verdict dry-run BLOCKED or ERROR:", file=sys.stderr)
                 print(render_json(structured), file=sys.stderr)
             return 1
-
+        
         # 第二阶段：自动 confirm（审计 pi 无需人工介入）
+        confirm_args = build_audit_verdict_confirm_args(
+            dry_run_token=dry_run_token,
+            context=context,
+        )
+        
         try:
-            confirm_args = {
-                "dry_run_token": dry_run_token,
-                "actor": args.actor,
-                "agent_instance": args.agent_instance,
-                "owner_policy_ref": args.owner_policy_ref,
-                "owner_confirmation_token": "OWNER_CONFIRMED",
-            }
             result = client.call_tool("lybra_audit_verdict_confirm", confirm_args)
         except Exception as exc:
             print(f"Error calling lybra_audit_verdict_confirm: {exc}", file=sys.stderr)
             return 1
-
+        
         if args.json:
             print(render_json(result))
         else:
@@ -3473,7 +3511,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print("\u2717 Audit verdict BLOCKED:", file=sys.stderr)
                 print(render_json(result), file=sys.stderr)
-
+        
         return 0 if result.get("ok") else 1
 
     if args.command == "pump":

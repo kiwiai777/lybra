@@ -2267,6 +2267,7 @@ def _build_return_preview(
         blocking_reasons.append("Return evidence refs must be repo-relative or approved workspace-relative and secret-free")
     
     # AIPOS-FND-5: code 卡交回门检测未提交代码
+    # AIPOS-R4B-2 N3: 交回门按卡 scope — 只检查本卡声明的路径，不全仓扫描
     task_mode = str(source_metadata.get("task_mode") or "").strip()
     artifact_policy = str(source_metadata.get("artifact_policy") or "").strip()
     if task_mode == "code" or artifact_policy == "formal_write":
@@ -2276,7 +2277,15 @@ def _build_return_preview(
         except ProductRepoNotConfigured as exc:
             blocking_reasons.append(f"CODE_REPO_NOT_CONFIGURED: {exc}")
         else:
-            git_check = _check_uncommitted_code(product_repo_root, current_task_id)
+            # AIPOS-R4B-2: 使用 scoped check，只看本卡 scope 内改动
+            from tools.aipos_cli.scoped_commit_check import (
+                check_uncommitted_in_scope,
+                resolve_check_scope_from_task,
+            )
+            scoped_paths = resolve_check_scope_from_task(source_metadata)
+            git_check = check_uncommitted_in_scope(
+                product_repo_root, current_task_id, scoped_paths=scoped_paths
+            )
             if git_check.get("has_uncommitted"):
                 blocking_reasons.append(
                     f"CODE_NOT_COMMITTED: {git_check.get('message', 'Working tree has uncommitted changes')}. "

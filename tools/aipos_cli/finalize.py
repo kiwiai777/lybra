@@ -242,6 +242,7 @@ def finalize_task(
     governance_root: Path | None = None,
     dry_run: bool = False,
     push: bool = False,
+    deploy: bool = False,
 ) -> dict[str, Any]:
     """Finalize a PASS task by committing changes to git.
 
@@ -261,6 +262,7 @@ def finalize_task(
             produce the wrong workspace.
         dry_run: If True, only validate without committing
         push: If True, also push after commit
+        deploy: If True, run lybra-deploy after push (AIPOS-R4B-2)
 
     Returns:
         {
@@ -270,11 +272,12 @@ def finalize_task(
             "dry_run": bool,
             "can_finalize": bool,
             "integrity_check": dict,
+            "branch_check": dict,  # AIPOS-R4B-2: deployment branch enforcement
             "committed": bool,
             "pushed": bool,
-            "deployed": bool,  # FND-9: auto-deployed gate-side changes
-            "deployment_skipped": bool,  # FND-9: no gate-side changes
-            "deployment_error": str | None,  # FND-9: deployment failure
+            "deployed": bool,
+            "deployment_skipped": bool,
+            "deployment_error": str | None,
             "commit_hash": str | None,
             "message": str,
             "operations": list[str]
@@ -355,6 +358,7 @@ def finalize_task(
             "dry_run": dry_run,
             "can_finalize": True,
             "integrity_check": integrity,
+            "branch_check": None,
             "committed": False,
             "pushed": False,
             "deployed": False,
@@ -362,6 +366,32 @@ def finalize_task(
             "deployment_error": None,
             "commit_hash": None,
             "message": f"Deployment integrity check failed: {integrity['message']}",
+            "operations": operations,
+        }
+    
+    # AIPOS-R4B-2: 部署分支强制 — finalize/deploy 只允许从 main 分支
+    from tools.aipos_cli.finalize_enhanced import check_deployment_branch
+    
+    branch_check = check_deployment_branch(workspace_root, required_branch="main")
+    operations.append(f"Branch check: {branch_check['message']}")
+    
+    # 如果要 push 或 deploy，必须在 main 分支上
+    if (push or deploy) and not branch_check["on_required_branch"]:
+        return {
+            "verdict": "BLOCK",
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "can_finalize": True,
+            "integrity_check": integrity,
+            "branch_check": branch_check,
+            "committed": False,
+            "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
+            "commit_hash": None,
+            "message": f"Deployment branch check failed: {branch_check['message']}",
             "operations": operations,
         }
     
@@ -374,6 +404,7 @@ def finalize_task(
             "dry_run": dry_run,
             "can_finalize": True,
             "integrity_check": integrity,
+            "branch_check": branch_check,
             "committed": False,
             "pushed": False,
             "deployed": False,
@@ -388,6 +419,8 @@ def finalize_task(
         operations.append("DRY-RUN: Would commit changes")
         if push:
             operations.append("DRY-RUN: Would push to remote")
+        if deploy:
+            operations.append("DRY-RUN: Would run lybra-deploy")
         return {
             "verdict": "PASS",
             "task_id": task_id,
@@ -395,6 +428,7 @@ def finalize_task(
             "dry_run": True,
             "can_finalize": True,
             "integrity_check": integrity,
+            "branch_check": branch_check,
             "committed": False,
             "pushed": False,
             "deployed": False,
@@ -454,54 +488,86 @@ def finalize_task(
             except subprocess.TimeoutExpired:
                 operations.append("Push timed out after 30s")
         
-        # AIPOS-FND-9: Auto-deploy gate-side changes
+        # AIPOS-R4B-2: Explicit deploy with lybra-deploy
         deployed = False
         deployment_skipped = False
         deployment_error = None
         
-        from tools.aipos_cli.gate_drift import check_gate_drift
-        
-        drift_check = check_gate_drift(workspace_root)
-        operations.append(f"Drift check: {drift_check['message']}")
-        
-        if drift_check["has_drift"] and drift_check["classification"]["has_gate_side_changes"]:
-            # Gate-side changes detected - auto-deploy
-            operations.append("⚠️  Gate-side changes detected - triggering auto-deploy...")
+        if deploy:
+            # 显式 deploy 模式：直接调用 lybra-deploy
+            from tools.aipos_cli.finalize_enhanced import invoke_lybra_deploy, verify_deployment_version
             
-            deploy_script = workspace_root / "tools" / "lybra-deploy"
-            if deploy_script.exists():
-                try:
-                    result = subprocess.run(
-                        [str(deploy_script)],
-                        cwd=str(workspace_root),
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                        timeout=120,
-                    )
-                    operations.append("✓ Deployment completed successfully")
-                    # Append deployment output (first 10 lines)
-                    deploy_lines = result.stdout.strip().splitlines()
-                    for line in deploy_lines[:10]:
-                        operations.append(f"  {line}")
-                    if len(deploy_lines) > 10:
-                        operations.append(f"  ... ({len(deploy_lines) - 10} more lines)")
+            operations.append("ℹ️  Invoking lybra-deploy (explicit deploy mode)...")
+            deploy_result = invoke_lybra_deploy(workspace_root)
+            
+            if deploy_result["success"]:
+                operations.append("✓ lybra-deploy completed successfully")
+                # Append first 10 lines of output
+                deploy_lines = deploy_result["stdout"].strip().splitlines()
+                for line in deploy_lines[:10]:
+                    operations.append(f"  {line}")
+                if len(deploy_lines) > 10:
+                    operations.append(f"  ... ({len(deploy_lines) - 10} more lines)")
+                
+                # Verify deployment
+                verification = verify_deployment_version(workspace_root, commit_hash)
+                operations.append(f"Deployment verification: {verification['message']}")
+                if verification["verified"]:
                     deployed = True
-                except subprocess.CalledProcessError as e:
-                    deployment_error = e.stderr
-                    operations.append(f"✗ Deployment FAILED: {e.stderr[:200]}")
-                    # Don't fail the finalize, but warn strongly
-                except subprocess.TimeoutExpired:
-                    deployment_error = "Deployment timed out after 120s"
-                    operations.append("✗ Deployment FAILED: timed out after 120s")
+                else:
+                    deployment_error = verification["message"]
+                    operations.append(f"✗ Deployment verification FAILED: {verification['message']}")
             else:
-                deployment_error = "lybra-deploy script not found"
-                operations.append(f"✗ Cannot auto-deploy: {deploy_script} not found")
-        elif drift_check["has_drift"] and not drift_check["classification"]["has_gate_side_changes"]:
-            operations.append("ℹ️  CLI-side changes only - no deployment needed")
-            deployment_skipped = True
+                deployment_error = deploy_result["stderr"]
+                operations.append(f"✗ lybra-deploy FAILED: {deploy_result['stderr'][:200]}")
+        elif push:
+            # AIPOS-FND-9: Auto-deploy gate-side changes (仅当 push=True 且 deploy=False 时)
+            from tools.aipos_cli.gate_drift import check_gate_drift
+            
+            drift_check = check_gate_drift(workspace_root)
+            operations.append(f"Drift check: {drift_check['message']}")
+            
+            if drift_check["has_drift"] and drift_check["classification"]["has_gate_side_changes"]:
+                # Gate-side changes detected - auto-deploy
+                operations.append("⚠️  Gate-side changes detected - triggering auto-deploy...")
+                
+                deploy_script = workspace_root / "tools" / "lybra-deploy"
+                if deploy_script.exists():
+                    try:
+                        result = subprocess.run(
+                            [str(deploy_script)],
+                            cwd=str(workspace_root),
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            timeout=120,
+                        )
+                        operations.append("✓ Deployment completed successfully")
+                        # Append deployment output (first 10 lines)
+                        deploy_lines = result.stdout.strip().splitlines()
+                        for line in deploy_lines[:10]:
+                            operations.append(f"  {line}")
+                        if len(deploy_lines) > 10:
+                            operations.append(f"  ... ({len(deploy_lines) - 10} more lines)")
+                        deployed = True
+                    except subprocess.CalledProcessError as e:
+                        deployment_error = e.stderr
+                        operations.append(f"✗ Deployment FAILED: {e.stderr[:200]}")
+                        # Don't fail the finalize, but warn strongly
+                    except subprocess.TimeoutExpired:
+                        deployment_error = "Deployment timed out after 120s"
+                        operations.append("✗ Deployment FAILED: timed out after 120s")
+                else:
+                    deployment_error = "lybra-deploy script not found"
+                    operations.append(f"✗ Cannot auto-deploy: {deploy_script} not found")
+            elif drift_check["has_drift"] and not drift_check["classification"]["has_gate_side_changes"]:
+                operations.append("ℹ️  CLI-side changes only - no deployment needed")
+                deployment_skipped = True
+            else:
+                operations.append("ℹ️  No drift detected - deployment up-to-date")
+                deployment_skipped = True
         else:
-            operations.append("ℹ️  No drift detected - deployment up-to-date")
+            # Neither push nor deploy requested
             deployment_skipped = True
         
         # Build final message
@@ -518,6 +584,7 @@ def finalize_task(
             "dry_run": False,
             "can_finalize": True,
             "integrity_check": integrity,
+            "branch_check": branch_check,
             "committed": True,
             "pushed": pushed,
             "deployed": deployed,
@@ -537,6 +604,7 @@ def finalize_task(
             "dry_run": False,
             "can_finalize": True,
             "integrity_check": integrity,
+            "branch_check": branch_check,
             "committed": False,
             "pushed": False,
             "deployed": False,
