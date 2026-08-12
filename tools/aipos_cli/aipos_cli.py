@@ -3395,6 +3395,12 @@ def main(argv: list[str] | None = None) -> int:
             getattr(args, 'agent_instance', None),
             getattr(args, 'owner_policy_ref', None),
         ])
+        # AIPOS-SMOKE-LOOP-1 坑①: workspace_root 两分支都要可用 (派生 audit R 卡 task_id)
+        workspace_root: Path | None = None
+        if hasattr(args, 'workspace_root') and args.workspace_root:
+            workspace_root = Path(args.workspace_root).expanduser().resolve()
+        elif hasattr(args, 'global_workspace_root') and args.global_workspace_root:
+            workspace_root = Path(args.global_workspace_root).expanduser().resolve()
         
         if auto_discover:
             # 自发现模式
@@ -3473,6 +3479,8 @@ def main(argv: list[str] | None = None) -> int:
             reviewed_return_record_ref=getattr(args, 'reviewed_return_record_ref', None),
             recommended_next_action=getattr(args, 'recommended_next_action', None),
             owner_waiver_ref=getattr(args, 'owner_waiver_ref', None),
+            # AIPOS-SMOKE-LOOP-1 坑①: 传 workspace 作 repo_root, 供派生 audit R 卡 task_id
+            repo_root=workspace_root,
         )
         
         # 第一阶段：dry_run
