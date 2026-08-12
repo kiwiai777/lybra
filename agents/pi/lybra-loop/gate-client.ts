@@ -236,6 +236,32 @@ export class GateMcpClient {
     }
     return structured as AnyDict;
   }
+
+  /** AIPOS-CONN-LOOP-2 ①: queue_return dry-run。返回 structuredContent。 */
+  async returnDryRun(args: AnyDict): Promise<AnyDict> {
+    const result = await this._rpc("tools/call", { name: "lybra_queue_return_dry_run", arguments: args });
+    if (!result || typeof result !== "object") {
+      throw new GateError("queue_return_dry_run returned no result");
+    }
+    const structured = (result as { structuredContent?: unknown }).structuredContent;
+    if (!structured || typeof structured !== "object") {
+      throw new GateError("queue_return_dry_run returned no structuredContent");
+    }
+    return structured as AnyDict;
+  }
+
+  /** AIPOS-CONN-LOOP-2 ①: queue_return confirm (executor自确认,328机制)。返回 structuredContent。 */
+  async returnConfirm(args: AnyDict): Promise<AnyDict> {
+    const result = await this._rpc("tools/call", { name: "lybra_queue_return_confirm", arguments: args });
+    if (!result || typeof result !== "object") {
+      throw new GateError("queue_return_confirm returned no result");
+    }
+    const structured = (result as { structuredContent?: unknown }).structuredContent;
+    if (!structured || typeof structured !== "object") {
+      throw new GateError("queue_return_confirm returned no structuredContent");
+    }
+    return structured as AnyDict;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,33 @@ from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.records import expected_claim_log_path, expected_closure_record_path, expected_return_record_path, expected_session_record_path
+from tools.schema_loader import get_enum_values
+
+# Record type constants from enums.schema.json (single source)
+# FND-47: 禁字面量漂移 - 所有 record_type 值从 enums.schema 读取
+_RECORD_TYPE_ENUM: list[str] | None = None
+
+def _get_record_type(name: str) -> str:
+    """Get record_type value from enums.schema.json.
+    
+    Args:
+        name: enum value name (e.g., 'audit_verdict', 'claim', 'return')
+    
+    Returns:
+        The value from enums.schema (single source)
+    
+    Raises:
+        ValueError: If the record type is not defined in enums.schema
+    """
+    global _RECORD_TYPE_ENUM
+    if _RECORD_TYPE_ENUM is None:
+        _RECORD_TYPE_ENUM = get_enum_values("record_type")
+    if name not in _RECORD_TYPE_ENUM:
+        raise ValueError(
+            f"record_type '{name}' not found in enums.schema.json. "
+            f"Available: {_RECORD_TYPE_ENUM}"
+        )
+    return name
 
 
 

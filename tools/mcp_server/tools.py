@@ -43,7 +43,7 @@ from tools.aipos_cli.controlled_execute import get_dry_run
 from tools.aipos_cli.records import find_records_for_task, load_records
 from tools.aipos_cli.task_loader import find_repo_root
 from tools.aipos_cli.workspace_config import _project_candidates, has_workspace_queue, resolve_home_root
-from tools.schema_loader import get_role_scopes
+from tools.schema_loader import get_role_scopes, load_schema
 
 
 READ_ONLY_NOTICE = "Lybra MCP exposes read tools by default. Write tools are visible only with scoped capability."
@@ -202,6 +202,94 @@ def _json_text(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True)
 
 
+# AIPOS-CONN-LOOP-2 ②: 从 transitions.schema 生成 next_action
+_TRANSITIONS_CACHE: dict[str, Any] | None = None
+
+def _load_transitions_schema() -> dict[str, Any]:
+    """加载 transitions.schema.json（带缓存）。"""
+    global _TRANSITIONS_CACHE
+    if _TRANSITIONS_CACHE is not None:
+        return _TRANSITIONS_CACHE
+    try:
+        _TRANSITIONS_CACHE = load_schema("transitions")
+        return _TRANSITIONS_CACHE
+    except Exception:
+        return {}
+
+def _generate_next_action(current_state: str, task_mode: str, operation: str) -> dict[str, Any] | None:
+    """根据当前态×task_mode 从 transitions.schema 生成 next_action。
+    
+    Args:
+        current_state: 当前队列状态（pending/claimed/returned/completed）
+        task_mode: 任务模式（code/docs/governance/config）
+        operation: 当前操作（claim/return/audit/finalize/close）
+    
+    Returns:
+        {verb: str, params_hint: str, auth_note: str} 或 None
+    """
+    schema = _load_transitions_schema()
+    if not schema:
+        return None
+    
+    # 根据当前操作决定下一步
+    # N1 claim -> N2 execute (报 started)
+    if operation == "claim" and current_state == "claimed":
+        return {
+            "verb": "lybra_task_progress",
+            "params_hint": "event_type=started, 开始执行任务",
+            "auth_note": "executor 使用 task_progress scope 自报进度",
+        }
+    
+    # N2 execute (completed) -> N3 return
+    if operation == "task_progress" and current_state == "claimed":
+        return {
+            "verb": "lybra_queue_return_dry_run",
+            "params_hint": "autonomy_mode=Supervised, 携带 result_summary 和 artifact_refs",
+            "auth_note": "executor 使用 queue_return scope 归还工作；328机制：executor持dry_run_token自行confirm, owner_confirmation_token为参数字面量OWNER_CONFIRMED",
+        }
+    
+    # N3 return dry-run -> return confirm
+    if operation == "return_dry_run" and current_state == "claimed":
+        return {
+            "verb": "lybra_queue_return_confirm",
+            "params_hint": "dry_run_token=<from_dry_run>, owner_confirmation_token=OWNER_CONFIRMED",
+            "auth_note": "328机制：executor持dry_run_token自行confirm, owner_confirmation_token为参数字面量OWNER_CONFIRMED（非秘密，公开常量）",
+        }
+    
+    # N3 return confirm -> N4 audit (code) 或 N6 close (docs/governance/config)
+    if operation == "return_confirm" and current_state == "returned":
+        if task_mode == "code":
+            return {
+                "verb": "lybra_audit_dispatch",
+                "params_hint": "等待 owner/advisor 派审；auditor 认领 R 卡后执行独立审计",
+                "auth_note": "audit_dispatch 需要 owner_dispatch scope（advisor角色）",
+            }
+        else:
+            return {
+                "verb": "lybra_queue_close",
+                "params_hint": "非 code 任务跳过 N4/N5，advisor review 后直接 close",
+                "auth_note": "close 操作需要 queue_close scope",
+            }
+    
+    # N4 audit verdict PASS -> N5 finalize (code only)
+    if operation == "audit_verdict" and task_mode == "code":
+        return {
+            "verb": "lybra_finalize",
+            "params_hint": "commit 到产品仓，push，deploy（如适用）",
+            "auth_note": "finalize 需要 audit verdict PASS 前置（FND-14 gate 强制）",
+        }
+    
+    # N5 finalize -> N6 close
+    if operation == "finalize":
+        return {
+            "verb": "lybra_queue_close",
+            "params_hint": "创建 closure record，更新治理文档，push 治理仓",
+            "auth_note": "close 操作需要 queue_close scope；N6 包含完整治理对账",
+        }
+    
+    return None
+
+
 def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str, Any]:
     capability = REQUEST_CAPABILITY.get()
     if isinstance(capability, dict) and capability.get("source") == "service_v0" and isinstance(payload, dict):
@@ -231,6 +319,40 @@ def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str
             scope_basis["projects"] = list(capability.get("projects") or [])
             scope_basis["projects_enforced"] = True
         payload.setdefault("scope_basis", scope_basis)
+        
+        # AIPOS-CONN-LOOP-2 ②: 注入 next_action（从 transitions.schema 生成）
+        # 从 payload 提取当前状态和操作
+        operation = str(payload.get("operation") or "").strip()
+        if operation and not is_error:
+            # 从 payload 中提取状态信息
+            data = payload.get("data") or {}
+            task_state = str(data.get("task_state") or data.get("queue_state") or "").strip()
+            task_mode = str(data.get("task_mode") or "").strip()
+            
+            # 如果是 return_confirm，状态从 claimed 转为 returned
+            if operation == "queue_return" and payload.get("ok"):
+                task_state = "returned"
+            
+            if task_state and operation:
+                # 根据 operation 决定操作类型
+                op_type = operation
+                if "claim" in operation:
+                    op_type = "claim"
+                elif "return" in operation:
+                    if "confirm" in operation:
+                        op_type = "return_confirm"
+                    else:
+                        op_type = "return_dry_run"
+                elif "audit" in operation:
+                    op_type = "audit_verdict"
+                elif "finalize" in operation:
+                    op_type = "finalize"
+                elif "close" in operation:
+                    op_type = "close"
+                
+                next_action = _generate_next_action(task_state, task_mode, op_type)
+                if next_action:
+                    payload["next_action"] = next_action
     return {
         "content": [{"type": "text", "text": _json_text(payload)}],
         "structuredContent": payload,

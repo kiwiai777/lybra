@@ -9,11 +9,15 @@
 import { appendFileSync, existsSync, renameSync, statSync } from "node:fs";
 import { logLine, classifyTasks, decideClaimDryRun, resolveCardPath, type AnyDict } from "./loop-decisions.ts";
 
-/** executeTick 需要的 gate 读面(GateMcpClient 实现它;测试传 mock)。 */
+/** executeTick 需要的 gate 读面(GateMcpClient 实现它;测试传 mock)。
+ * AIPOS-CONN-LOOP-2: 添加 return 方法支持自动归还。
+ */
 export interface GateReadFace {
   queueTasks(): Promise<AnyDict[]>;
   claimDryRun(args: AnyDict): Promise<AnyDict>;
   taskPreview(args: AnyDict): Promise<AnyDict>; // AIPOS-363F1: 取完整卡(include_body)
+  returnDryRun(args: AnyDict): Promise<AnyDict>; // AIPOS-CONN-LOOP-2 ①: queue_return dry-run
+  returnConfirm(args: AnyDict): Promise<AnyDict>; // AIPOS-CONN-LOOP-2 ①: queue_return confirm
 }
 
 // ---------------------------------------------------------------------------
