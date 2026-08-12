@@ -98,6 +98,10 @@ def apply_transition_metadata(
             updated["reopen_reason"] = extra_fields["reason"]
         
         updated["needs_owner"] = False
+        
+        # AIPOS-R4A FIX-2: malformed 修复路径，清理 active_session_id → last_session_id
+        if updated.get("active_session_id") not in (None, ""):
+            updated["last_session_id"] = updated.get("active_session_id")
         updated.pop("active_session_id", None)
         updated.pop("claim_id", None)
         

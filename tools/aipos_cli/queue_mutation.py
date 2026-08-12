@@ -577,6 +577,14 @@ def mutate_queue_task(
                 if not any(keyword in str(reason).lower() for keyword in ["actor", "claimed by", "assigned"])
             ]
             result["blocking_reasons"].extend(filtered_blocks)
+        # AIPOS-R4A: reopen malformed 卡修复路径——降级 active_session_id 残留检查
+        elif action == "reopen":
+            for reason in validation["blocking_reasons"]:
+                if "active_session_id" in str(reason):
+                    # malformed 签名（gate 旧自动关闭遗留），降级 WARN，引擎会清理
+                    result["warnings"].append(f"MALFORMED_REPAIR: {reason} (will be cleaned by transition engine)")
+                else:
+                    result["blocking_reasons"].extend([reason])
         else:
             result["blocking_reasons"].extend(validation["blocking_reasons"])
     if validation["warnings"]:
