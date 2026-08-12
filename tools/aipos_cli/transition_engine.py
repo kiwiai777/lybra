@@ -2,34 +2,19 @@
 
 一机制一实现：所有状态转移统一走此引擎，禁散落 if/else。
 引擎读 schema 声明（from/to/触发者/证据/盖字段），泛化执行。
+
+AIPOS-R4A F-1(P0)修复：schema 加载统一走 tools/schema_loader.py（唯一入口）。
 """
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# AIPOS-R4A F-1: 使用唯一 schema loader（tools/schema_loader.py）
+from tools.schema_loader import load_schema
 
-def load_transitions_schema(repo_root: Path | None = None) -> dict[str, Any]:
-    """加载 transitions.schema.json
-    
-    Args:
-        repo_root: 仓库根目录，None 时自动查找（向上找 schema/transitions.schema.json）
-    """
-    if repo_root is None:
-        # 自动查找：从当前文件向上找 schema 目录
-        current = Path(__file__).resolve().parent
-        for _ in range(5):  # 最多向上 5 层
-            candidate = current / "schema" / "transitions.schema.json"
-            if candidate.exists():
-                return json.loads(candidate.read_text(encoding="utf-8"))
-            current = current.parent
-        raise FileNotFoundError("Could not find schema/transitions.schema.json")
-    
-    schema_path = repo_root / "schema" / "transitions.schema.json"
-    return json.loads(schema_path.read_text(encoding="utf-8"))
 
 
 def apply_transition_metadata(
@@ -57,7 +42,8 @@ def apply_transition_metadata(
         更新后的 metadata
     """
     if schema is None:
-        schema = load_transitions_schema(repo_root)
+        # AIPOS-R4A F-1: 使用唯一 schema_loader.load_schema（repo_root=None 自动定位产品仓）
+        schema = load_schema("transitions", repo_root=None)
     
     if timestamp is None:
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -170,7 +156,8 @@ def validate_transition(
         (is_valid, message)
     """
     if schema is None:
-        schema = load_transitions_schema(repo_root)
+        # AIPOS-R4A F-1: 使用唯一 schema_loader.load_schema
+        schema = load_schema("transitions", repo_root=None)
     
     # 根据转移名称查找 allowed transitions
     # 简化版：从预定义映射查找

@@ -208,26 +208,35 @@ def _prepare_claim(
 ) -> dict[str, Any]:
     updated = dict(metadata)
     task_id = str(updated.get("task_id"))
-    updated["status"] = "claimed"
-    updated["claimed_by"] = actor
-    updated["claimed_at"] = timestamp
-    updated["claim_id"] = claim_id_override or build_runtime_id("claim", task_id, timestamp, actor)
-    updated["active_session_id"] = session_id_override or build_runtime_id("session", task_id, timestamp, actor)
+    # AIPOS-R4A F-2: claim 走转移引擎（一机制一实现）
+    from tools.aipos_cli.transition_engine import apply_transition_metadata
+    claim_id = claim_id_override or build_runtime_id("claim", task_id, timestamp, actor)
+    session_id = session_id_override or build_runtime_id("session", task_id, timestamp, actor)
+    updated = apply_transition_metadata(
+        metadata=metadata,
+        transition_name="claim",
+        actor=actor,
+        timestamp=timestamp,
+        claim_id=claim_id,
+        claimed_at=timestamp,
+        active_session_id=session_id,
+    )
     if updated.get("needs_owner") is None:
         updated["needs_owner"] = False
     return updated
 
 
 def _prepare_block(metadata: dict[str, Any], actor: str, timestamp: str, reason: str) -> dict[str, Any]:
-    updated = dict(metadata)
-    updated["status"] = "blocked"
-    updated["blocked_by"] = actor
-    updated["blocked_at"] = timestamp
-    updated["block_reason"] = reason
+    # AIPOS-R4A F-2: block 走转移引擎（一机制一实现）
+    from tools.aipos_cli.transition_engine import apply_transition_metadata
+    updated = apply_transition_metadata(
+        metadata=metadata,
+        transition_name="block",
+        actor=actor,
+        timestamp=timestamp,
+        reason=reason,
+    )
     updated["needs_owner"] = True
-    if updated.get("active_session_id") not in (None, ""):
-        updated["last_session_id"] = updated.get("active_session_id")
-    updated.pop("active_session_id", None)
     return updated
 
 
@@ -261,16 +270,15 @@ def _prepare_reopen(metadata: dict[str, Any], actor: str, timestamp: str, reason
 
 def _prepare_withdraw(metadata: dict[str, Any], actor: str, timestamp: str, reason: str) -> dict[str, Any]:
     """AIPOS-315: prepare metadata for task withdrawal."""
-    updated = dict(metadata)
-    updated["status"] = "withdrawn"
-    updated["withdrawn_by"] = actor
-    updated["withdrawn_at"] = timestamp
-    updated["withdrawal_reason"] = reason
-    # Preserve claim history if exists
-    if updated.get("active_session_id") not in (None, ""):
-        updated["last_session_id"] = updated.get("active_session_id")
-    updated.pop("active_session_id", None)
-    return updated
+    # AIPOS-R4A F-2: withdraw 走转移引擎（一机制一实现）
+    from tools.aipos_cli.transition_engine import apply_transition_metadata
+    return apply_transition_metadata(
+        metadata=metadata,
+        transition_name="withdraw",
+        actor=actor,
+        timestamp=timestamp,
+        reason=reason,
+    )
 
 
 def _mutation_metadata(

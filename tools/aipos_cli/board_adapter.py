@@ -3376,7 +3376,6 @@ def _auto_close_audit_card_on_verdict(
             transition_name="complete",
             actor=actor,
             timestamp=None,  # 引擎自动生成
-            repo_root=repo_root,
         )
         # 保留原有 closed_by/at 作为额外来源记录
         metadata["closed_by"] = f"verdict:{verdict_id}"
@@ -3393,8 +3392,17 @@ def _auto_close_audit_card_on_verdict(
             "audit_task_id": audit_task_id,
             "verdict_id": verdict_id,
         }
-    except (OSError, KeyError, ValueError):
-        return None
+    except (OSError, KeyError, ValueError) as exc:
+        # AIPOS-R4A F-3: 禁静默失败，至少记录错误
+        import logging
+        logging.error(f"_auto_close_audit_card_on_verdict failed: audit_task_id={audit_task_id}, error={exc}")
+        return {
+            "from": audit_task_rel,
+            "kind": "auto_close_on_verdict_FAILED",
+            "audit_task_id": audit_task_id,
+            "verdict_id": verdict_id,
+            "error": str(exc),
+        }
 
 
 def audit_verdict_task(
@@ -4541,7 +4549,6 @@ def converge_r_cards(
                     transition_name="complete",
                     actor=actor,
                     timestamp=None,  # 引擎自动生成
-                    repo_root=resolved_root,
                 )
                 # 保留原有 closed_by/at 作为额外来源记录
                 fm["closed_by"] = f"verdict:{latest_verdict_id}" if latest_verdict_id else "batch_convergence"
@@ -4563,7 +4570,7 @@ def converge_r_cards(
                 errors.append({"file": str(card_file), "error": str(exc)})
 
     return {
-        "ok": True,
+        "ok": not errors,  # AIPOS-R4A F-3: ok 反映真实结果（禁硬编码 True）
         "operation": "converge_r_cards",
         "dry_run": dry_run,
         "actor": actor,
@@ -4674,7 +4681,6 @@ def mark_concluded_task(
             transition_name="complete",
             actor=actor_text,
             timestamp=None,  # 引擎自动生成
-            repo_root=resolved_root,
         )
         # 保留原有 closed_by/at 作为额外来源记录
         fm["closed_by"] = "conclusion_marker"
@@ -4983,7 +4989,6 @@ def close_task(
                     transition_name="complete",
                     actor=actor_text,
                     timestamp=None,  # 引擎自动生成
-                    repo_root=resolved_root,
                 )
                 # 保留额外跟踪字段
                 audit_metadata["auto_closed_with_parent"] = resolved_task_id
