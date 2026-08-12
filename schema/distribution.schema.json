@@ -1,0 +1,233 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Lybra distribution specification - declarative rules for distributing tools/credentials/config/charters to harness workstations. Per LOOP-REDESIGN v2 §4: distribution WHAT = data (this schema), distribution HOW = fixed primitives (distribute_tools.py engine). New distribution entry = add data row, zero code change. Replaces hardcoded ROLE_TOOL_MAPPING.",
+  "last_updated": "2026-08-12",
+  "primitives": {
+    "description": "Fixed distribution primitives (implemented in distribute_tools.py engine). These are the ONLY operations; plugins/custom code forbidden per §4 design decision (supply-chain + auditability).",
+    "operations": [
+      {
+        "name": "copy_tree",
+        "description": "Recursively copy directory tree from source to target",
+        "parameters": ["source_path", "target_path", "force_overwrite"]
+      },
+      {
+        "name": "render_config",
+        "description": "Render config template with substitutions",
+        "parameters": ["template_path", "target_path", "variables"]
+      },
+      {
+        "name": "mint_credential",
+        "description": "Mint role credential via gate (enroll flow)",
+        "parameters": ["role", "agent_instance", "projects"]
+      },
+      {
+        "name": "write_manifest",
+        "description": "Write version/provenance manifest",
+        "parameters": ["target_path", "manifest_data"]
+      }
+    ]
+  },
+  "distributions": [
+    {
+      "distribution_id": "executor-loop-extension",
+      "kind": "extension",
+      "description": "Lybra loop connector extension for executor role",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/pi/lybra-loop"
+      },
+      "target": {
+        "harness": "pi",
+        "relative_path": "_distributed/extensions/lybra-loop"
+      },
+      "applies_to_roles": ["executor"],
+      "operation": "copy_tree",
+      "version_strategy": "git_commit_hash",
+      "notes": "Main loop connector - unified for all roles that run loops"
+    },
+    {
+      "distribution_id": "executor-skills",
+      "kind": "skills",
+      "description": "Skills package for executor role",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/pi/skills"
+      },
+      "target": {
+        "harness": "pi",
+        "relative_path": "_distributed/skills"
+      },
+      "applies_to_roles": ["executor"],
+      "operation": "copy_tree",
+      "filter": {
+        "include": ["block-and-report", "chunked-io", "finalize-slice", "task-closure-loop", "write-return"]
+      },
+      "version_strategy": "git_commit_hash",
+      "notes": "Filtered skill set per role requirements from roles.schema.json"
+    },
+    {
+      "distribution_id": "auditor-loop-extension",
+      "kind": "extension",
+      "description": "Lybra loop connector extension for auditor role",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/pi/lybra-loop"
+      },
+      "target": {
+        "harness": "pi",
+        "relative_path": "_distributed/extensions/lybra-loop"
+      },
+      "applies_to_roles": ["auditor"],
+      "operation": "copy_tree",
+      "version_strategy": "git_commit_hash",
+      "notes": "Same loop connector, role-specific behavior via token scopes"
+    },
+    {
+      "distribution_id": "auditor-skills",
+      "kind": "skills",
+      "description": "Skills package for auditor role",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/pi/skills"
+      },
+      "target": {
+        "harness": "pi",
+        "relative_path": "_distributed/skills"
+      },
+      "applies_to_roles": ["auditor"],
+      "operation": "copy_tree",
+      "filter": {
+        "include": ["audit-independent-evidence", "block-and-report", "chunked-io", "task-closure-loop", "write-return"]
+      },
+      "version_strategy": "git_commit_hash",
+      "notes": "Auditor-specific skill set"
+    },
+    {
+      "distribution_id": "advisor-loop-extension",
+      "kind": "extension",
+      "description": "Lybra loop connector extension for advisor role",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/pi/lybra-loop"
+      },
+      "target": {
+        "harness": "pi",
+        "relative_path": "_distributed/extensions/lybra-loop"
+      },
+      "applies_to_roles": ["advisor"],
+      "operation": "copy_tree",
+      "version_strategy": "git_commit_hash",
+      "notes": "Advisor uses same loop infrastructure"
+    },
+    {
+      "distribution_id": "advisor-skills",
+      "kind": "skills",
+      "description": "Skills package for advisor role",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/pi/skills"
+      },
+      "target": {
+        "harness": "pi",
+        "relative_path": "_distributed/skills"
+      },
+      "applies_to_roles": ["advisor"],
+      "operation": "copy_tree",
+      "filter": {
+        "include": ["block-and-report", "task-closure-loop", "truth-first-drafting", "write-return"]
+      },
+      "version_strategy": "git_commit_hash",
+      "notes": "Advisor-specific skill set"
+    },
+    {
+      "distribution_id": "executor-charter",
+      "kind": "charter",
+      "description": "Role charter (contract) for executor role",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/pi/charters/executor/AGENTS.md"
+      },
+      "target": {
+        "harness": "pi",
+        "relative_path": "AGENTS.md"
+      },
+      "applies_to_roles": ["executor"],
+      "operation": "copy_tree",
+      "version_strategy": "git_commit_hash",
+      "gitignore": true,
+      "notes": "Charter is a generated artifact, not committed to harness repo. Source of truth lives in lybra product repo."
+    },
+    {
+      "distribution_id": "auditor-charter",
+      "kind": "charter",
+      "description": "Role charter (contract) for auditor role",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/pi/charters/auditor/AGENTS.md"
+      },
+      "target": {
+        "harness": "pi",
+        "relative_path": "AGENTS.md"
+      },
+      "applies_to_roles": ["auditor"],
+      "operation": "copy_tree",
+      "version_strategy": "git_commit_hash",
+      "gitignore": true,
+      "notes": "Charter is a generated artifact, not committed to harness repo"
+    }
+  ],
+  "version_strategies": {
+    "git_commit_hash": {
+      "description": "Version equals source repo git commit hash (short form)",
+      "manifest_field": "source_commit"
+    },
+    "semantic_version": {
+      "description": "Explicit semantic version (for external dependencies)",
+      "manifest_field": "version"
+    }
+  },
+  "manifest_schema": {
+    "description": "Standard manifest written to target_root/.version-{role} after distribution",
+    "required_fields": ["version", "role", "distributed_at", "distributions"],
+    "example": {
+      "version": "b0d056e",
+      "role": "executor",
+      "distributed_at": "2026-08-12T13:45:00Z",
+      "distributions": [
+        {
+          "distribution_id": "executor-loop-extension",
+          "source_commit": "b0d056e",
+          "target_path": "_distributed/extensions/lybra-loop"
+        },
+        {
+          "distribution_id": "executor-skills",
+          "source_commit": "b0d056e",
+          "target_path": "_distributed/skills"
+        },
+        {
+          "distribution_id": "executor-charter",
+          "source_commit": "b0d056e",
+          "target_path": "AGENTS.md"
+        }
+      ]
+    }
+  },
+  "gitignore_rules": {
+    "description": "Standard .gitignore entries for distributed artifacts (生成物不入库 per AIPOS-R3 lesson)",
+    "rules": [
+      "_distributed/",
+      "AGENTS.md  # Charter is distributed, not committed"
+    ],
+    "rationale": "Distributed artifacts are derived from product repo. Committing them creates second source → inevitable drift. Single source = product repo; harness receives via distribution; version tracked in manifest."
+  },
+  "extension_point": {
+    "description": "How to add a new distribution entry",
+    "steps": [
+      "1. Add entry to distributions[] array in this schema",
+      "2. Specify: distribution_id, kind, source, target, applies_to_roles, operation",
+      "3. Run distribute_tools.py - new entry takes effect immediately",
+      "4. Zero code change to distribute_tools.py engine (data-driven)"
+    ],
+    "forbidden": "Custom code / plugins in distribute_tools.py. New primitive = product repo task + audit. Per §4: 'distribution WHAT = data, HOW = fixed engine'."
+  }
+}

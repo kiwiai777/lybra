@@ -2661,17 +2661,27 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "finalize":
         # AIPOS-FND-2: Finalize PASS task (git commit/push)
-        # Processed BEFORE global _find_repo_root_for_args to avoid 5_tasks/queue requirement
+        # AIPOS-CONN-LOOP-1 §6: finalize走Context — code_repo从LoopContext/自发现,
+        # --workspace-root仅作override,废除cwd猜测(08-12实撞:误传治理仓致越权提交)
         from tools.aipos_cli.finalize import finalize_task
+        from tools.aipos_cli.workspace_config import resolve_workspace_root
         
         # finalize doesn't require full 5_tasks/queue structure, only task_cards/ and git
         if args.workspace_root:
+            # Explicit override (highest priority)
             repo_root = Path(args.workspace_root).expanduser().resolve()
         elif args.global_workspace_root:
             repo_root = Path(args.global_workspace_root).expanduser().resolve()
         else:
-            # Fallback to current directory if no workspace structure found
-            repo_root = Path.cwd()
+            # AIPOS-CONN-LOOP-1 §6: Auto-discover via workspace resolution ladder
+            # (precedence: AIPOS_WORKSPACE_ROOT env → .lybra/config.json → 5_tasks/queue marker)
+            # This replaces the dangerous Path.cwd() fallback that caused 08-12 incident
+            try:
+                repo_root = resolve_workspace_root()
+            except Exception as e:
+                print(f"Error: Cannot auto-discover workspace root: {e}", file=sys.stderr)
+                print("Provide --workspace-root explicitly or run from within a Lybra workspace.", file=sys.stderr)
+                return 1
 
         # AIPOS-FND-14: governance_root (owns 5_tasks/records/audit_verdicts/) is resolved
         # separately from repo_root (the product code repo where git ops run) — the two are

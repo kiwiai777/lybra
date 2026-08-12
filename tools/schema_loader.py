@@ -21,8 +21,9 @@ VERBS_SCHEMA_FILE = SCHEMA_DIR / "verbs.schema.json"
 CONFIG_SCHEMA_FILE = SCHEMA_DIR / "config.schema.json"
 TRANSITIONS_SCHEMA_FILE = SCHEMA_DIR / "transitions.schema.json"
 ROLES_SCHEMA_FILE = SCHEMA_DIR / "roles.schema.json"
+DISTRIBUTION_SCHEMA_FILE = SCHEMA_DIR / "distribution.schema.json"
 
-SchemaType = Literal["card", "enums", "verbs", "config", "transitions", "roles"]
+SchemaType = Literal["card", "enums", "verbs", "config", "transitions", "roles", "distribution"]
 
 
 class SchemaLoadError(Exception):
@@ -114,6 +115,7 @@ def load_schema(schema_type: SchemaType, repo_root: Path | None = None) -> dict[
         "config": CONFIG_SCHEMA_FILE,
         "transitions": TRANSITIONS_SCHEMA_FILE,
         "roles": ROLES_SCHEMA_FILE,
+        "distribution": DISTRIBUTION_SCHEMA_FILE,
     }
     
     schema_file = schema_files.get(schema_type)
