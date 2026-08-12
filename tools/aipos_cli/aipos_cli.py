@@ -105,8 +105,24 @@ from tools.aipos_cli.workspace_config import (
     write_workspace_config,
 )
 
-from tools.schema_loader import get_config_default_gate_url  # AIPOS-R4B-1: gate URL single source
-_DEFAULT_GATE_URL = get_config_default_gate_url()
+# AIPOS-R4B-1 FIX-2: 延迟初始化(避免模块级导入崩溃 CLI)。见 AUDIT-R4B-1 F-R4B1-1。
+_DEFAULT_GATE_URL: str | None = None
+
+def _get_default_gate_url() -> str:
+    """惰性读取 gate URL(避免模块级导入 schema_loader)。"""
+    global _DEFAULT_GATE_URL
+    if _DEFAULT_GATE_URL is None:
+        try:
+            from tools.schema_loader import get_config_default_gate_url
+            _DEFAULT_GATE_URL = get_config_default_gate_url()
+        except ImportError as e:
+            raise ImportError(
+                "Cannot load schema_loader.get_config_default_gate_url() for gate URL default. "
+                "This typically occurs when running lybra CLI from outside the project root "
+                "in an editable install. Run from the project directory or ensure PYTHONPATH "
+                "includes the project root."
+            ) from e
+    return _DEFAULT_GATE_URL
 from tools.aipos_cli.home_git import execute_home_git_init, plan_home_git_init
 from tools.aipos_cli.project_structure import (
     export_project_to_yaml,
@@ -1034,7 +1050,7 @@ def build_parser() -> argparse.ArgumentParser:
     _fetch_parser = agent_subparsers.add_parser(
         "fetch", help="One stateless pull: tasks claimable by --actor (advisory list; the gate is the truth)"
     )
-    _fetch_parser.add_argument("--gate-url", required=True, help=f"e.g. {_DEFAULT_GATE_URL}")
+    _fetch_parser.add_argument("--gate-url", required=True, help="Gate URL (e.g. http://127.0.0.1:7118)")
     _fetch_src = _fetch_parser.add_mutually_exclusive_group(required=True)
     _fetch_src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
     _fetch_src.add_argument("--token-env", help="env var holding the role bearer token")
@@ -1059,7 +1075,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="候选⑫ filesystem pump (AIPOS-268+284): poll 5_tasks/queue/** + 5_tasks/records/** mtime+path; "
         "print a JSON change summary on the first change (exit 0); exit 2 silent on --timeout. No gate/token.",
     )
-    _watch_mode.add_argument("--gate-url", help=f"候选⑤ gate pull (AIPOS-248): e.g. {_DEFAULT_GATE_URL}")
+    _watch_mode.add_argument("--gate-url", help="候选⑤ gate pull (AIPOS-248): Gate URL (e.g. http://127.0.0.1:7118)")
     _watch_gate_src = _watch_parser.add_mutually_exclusive_group(required=False)
     _watch_gate_src.add_argument("--connection-json", help="[gate mode] path to connection.json (token read by --role; never on argv)")
     _watch_gate_src.add_argument("--token-env", help="[gate mode] env var holding the role bearer token")
@@ -1126,7 +1142,7 @@ def build_parser() -> argparse.ArgumentParser:
     # kickoff; pushback = read LOCAL RETURN + push via 320 + self-confirm (328). The agent only
     # reads/writes LOCAL files (card S3: harness-agnostic baseline). gate-url mode only.
     def _add_material_common(p, *, require_actor: bool = True) -> None:
-        p.add_argument("--gate-url", required=True, help=f"e.g. {_DEFAULT_GATE_URL} (gate-url mode only)")
+        p.add_argument("--gate-url", required=True, help="Gate URL (e.g. http://127.0.0.1:7118, gate-url mode only)")
         _src = p.add_mutually_exclusive_group(required=True)
         _src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
         _src.add_argument("--token-env", help="env var holding the role bearer token")
@@ -1185,7 +1201,7 @@ def build_parser() -> argparse.ArgumentParser:
     # AIPOS-205: TUI client over an Owner-started gate. The Textual dependency lives only
     # in tools/lybra_tui (the tui extra); this CLI stays stdlib/zero-dep and lazy-imports it.
     tui_parser = subparsers.add_parser("tui", help="Launch the Lybra TUI client (requires the TUI extra: pip install textual)")
-    tui_parser.add_argument("--gate-url", required=True, help=f"Owner-started gate, e.g. {_DEFAULT_GATE_URL}")
+    tui_parser.add_argument("--gate-url", required=True, help="Owner-started gate URL (e.g. http://127.0.0.1:7118)")
     tui_parser.add_argument("--connection-json", help="Path to .lybra/connection.json (token read by role)")
     tui_parser.add_argument("--token-env", help="Env var holding the owner bearer token")
     tui_parser.add_argument("--role", default="owner", help="Role to read from connection.json; defaults to owner")
@@ -1209,7 +1225,7 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch_parser.add_argument("task_id", help="Task ID to dispatch")
     dispatch_parser.add_argument("--to", dest="executor", required=True, help="Executor actor/instance name")
     dispatch_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
-    dispatch_parser.add_argument("--gate-url", help=f"Gate URL; defaults to workspace config or {_DEFAULT_GATE_URL}")
+    dispatch_parser.add_argument("--gate-url", help="Gate URL; defaults to workspace config or http://127.0.0.1:7118")
     dispatch_parser.add_argument("--owner-policy-ref", help="Owner policy reference (PreAuthorized envelope)")
     dispatch_parser.add_argument("--connection-json", help="Path to connection.json (for token resolution)")
     dispatch_parser.add_argument("--material-root", help="Material area root (default ~/.lybra/work)")
@@ -1428,7 +1444,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verdict_parser.add_argument("--reviewed-return-record-ref", help="Reviewed return record reference")
     audit_verdict_parser.add_argument("--recommended-next-action", help="Recommended next action")
     audit_verdict_parser.add_argument("--owner-waiver-ref", help="Owner waiver reference")
-    audit_verdict_parser.add_argument("--gate-url", default=_DEFAULT_GATE_URL, help=f"Gate MCP server URL (default: {_DEFAULT_GATE_URL})")
+    audit_verdict_parser.add_argument("--gate-url", default=None, help="Gate MCP server URL (default: http://127.0.0.1:7118)")
     audit_verdict_parser.add_argument("--connection-json", help="Path to connection.json (default: .lybra/connection.json in workspace)")
     audit_verdict_parser.add_argument("--token-role", default="auditor", help="Token role in connection.json (default: auditor)")
     audit_verdict_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1446,7 +1462,7 @@ def build_parser() -> argparse.ArgumentParser:
     pump_run_parser.add_argument("--delta", default="", help="Incremental information for this round (advisor provides only delta)")
     pump_run_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root (governance repo)")
     pump_run_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
-    pump_run_parser.add_argument("--gate-url", default=_DEFAULT_GATE_URL, help=f"Gate URL (default: {_DEFAULT_GATE_URL})")
+    pump_run_parser.add_argument("--gate-url", default=None, help="Gate URL (default: http://127.0.0.1:7118)")
     pump_run_parser.add_argument("--connection-json", help="Path to connection.json (default: <workspace>/.lybra/connection.json)")
     pump_run_parser.add_argument("--envelope", help="Policy envelope ID (auto-detect from policies/ if not provided)")
     pump_run_parser.add_argument("--budget-threshold", type=int, default=8000, help="Budget threshold in tokens (default: 8000)")
@@ -3532,7 +3548,7 @@ def main(argv: list[str] | None = None) -> int:
             ctx = DispatchContext(
                 card_id=args.card_id, role=args.role, round_type=args.round_type, delta=args.delta,
                 workspace_root=workspace_root, product_repo=product_repo,
-                gate_url=getattr(args, "gate_url", _DEFAULT_GATE_URL),
+                gate_url=getattr(args, "gate_url", None) or _get_default_gate_url(),
                 connection_json=connection_json, envelope=getattr(args, "envelope", "") or "",
                 executor_instance=getattr(args, "executor_instance", None) or "",
                 reviewed_task_id=getattr(args, "reviewed_task_id", None),

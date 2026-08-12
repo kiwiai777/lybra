@@ -75,7 +75,28 @@ def _build_role_specs_from_registry() -> tuple[dict[str, Any], ...]:
 # AIPOS-R4B-1: ROLE_SPECS is now built from the single-source roles registry.
 # The previous hardcoded tuple (with scopes/token_ref duplicated in code) is gone;
 # the registry is the only definition. See _build_role_specs_from_registry().
-ROLE_SPECS: tuple[dict[str, Any], ...] = _build_role_specs_from_registry()
+# AIPOS-R4B-1 FIX-2: 延迟初始化(模块级 try-except),避免 CLI 早期导入链在 editable-install
+# 环境下 ModuleNotFoundError。见 AUDIT-R4B-1 F-R4B1-1。
+try:
+    ROLE_SPECS: tuple[dict[str, Any], ...] = _build_role_specs_from_registry()
+except ImportError:
+    # CLI 从项目目录外运行,schema_loader 不可用。延迟初始化,使用时报错。
+    ROLE_SPECS = ()  # type: ignore[assignment]
+
+def _ensure_role_specs() -> tuple[dict[str, Any], ...]:
+    """延迟初始化 ROLE_SPECS。CLI 从项目外运行时,首次使用时尝试构建并响亮报错。"""
+    global ROLE_SPECS
+    if not ROLE_SPECS:
+        try:
+            ROLE_SPECS = _build_role_specs_from_registry()
+        except ImportError as e:
+            raise ImportError(
+                "Cannot load schema_loader to build ROLE_SPECS (gate role definitions). "
+                "This typically occurs when running lybra CLI from outside the project root "
+                "in an editable install. Run 'lybra serve' from the project directory or ensure "
+                "PYTHONPATH includes the project root."
+            ) from e
+    return ROLE_SPECS
 
 
 @dataclass(frozen=True)
@@ -330,7 +351,7 @@ def _mint_custom_role_tokens(
         builtin_class = entry["class"]
         # Find the ROLE_SPECS entry for the builtin class
         class_spec = None
-        for spec in ROLE_SPECS:
+        for spec in _ensure_role_specs():
             if spec["role"] == builtin_class:
                 class_spec = spec
                 break
@@ -359,7 +380,7 @@ def _build_all_tokens(
     role_inst_map: dict[str, str] | None,
 ) -> list[dict[str, Any]]:
     """AIPOS-352: build complete token list = builtins + custom roles."""
-    tokens = [_role_token_entry(spec, projects=projects, executor_instance=exec_instance, role_instances=role_inst_map) for spec in ROLE_SPECS]
+    tokens = [_role_token_entry(spec, projects=projects, executor_instance=exec_instance, role_instances=role_inst_map) for spec in _ensure_role_specs()]
     custom_tokens = _mint_custom_role_tokens(
         workspace_root,
         projects=projects,
@@ -822,7 +843,7 @@ def rotate_report(
     roles_preserved_tokens: list[str] = []
     if roles_normalized:
         # Validate that requested roles exist in ROLE_SPECS or custom_roles registry
-        known_roles = {spec["role"] for spec in ROLE_SPECS}
+        known_roles = {spec["role"] for spec in _ensure_role_specs()}
         # AIPOS-352: include custom roles from workspace registry
         try:
             from tools.aipos_cli.custom_roles import load_custom_roles
@@ -862,7 +883,7 @@ def rotate_report(
         config["tokens"] = new_tokens
     else:
         # Full rotation: all roles rotated
-        roles_rotated = [spec["role"] for spec in ROLE_SPECS]
+        roles_rotated = [spec["role"] for spec in _ensure_role_specs()]
 
     write_connection_config(workspace_root, config, connection_target=connection_target)
     

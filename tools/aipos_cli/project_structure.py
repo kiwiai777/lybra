@@ -19,7 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.schema_loader import get_config_port  # AIPOS-R4B-1: port defaults single-sourced
+# AIPOS-R4B-1 FIX-2: schema_loader 导入移至函数内(惰性),避免 CLI 早期导入链在 editable-install
+# 环境下 ModuleNotFoundError。见 AUDIT-R4B-1 F-R4B1-1。
 
 
 
@@ -679,14 +680,27 @@ def import_project_structure(
         "content": ignore_content,
     })
 
+    # 惰性导入(避免模块级导入崩溃 CLI)
+    try:
+        from tools.schema_loader import get_config_port
+        board_port = get_config_port("board_default")
+        mcp_port = get_config_port("mcp_server_default")
+    except ImportError as e:
+        raise ImportError(
+            "Cannot load schema_loader.get_config_port() for project structure template. "
+            "This typically occurs when running lybra CLI from outside the project root "
+            "in an editable install. Run from the project directory or ensure PYTHONPATH "
+            "includes the project root."
+        ) from e
+
     # 5. .lybra/config.json
     config_data = {
         "config_version": 1,
         "workspace_root": ".",
-        "board": {"host": "127.0.0.1", "port": get_config_port("board_default")},
+        "board": {"host": "127.0.0.1", "port": board_port},
         "mcp": {
             "host": "127.0.0.1",
-            "port": get_config_port("mcp_server_default"),
+            "port": mcp_port,
             "transport_token_env": "LYBRA_MCP_TOKEN",
             "capability_token_env": "LYBRA_CAPABILITY_TOKEN",
         },

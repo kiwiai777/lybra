@@ -6,16 +6,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.schema_loader import get_config_port
-
-
-
-
+# AIPOS-R4B-1: 端口默认值的权威来源是 schema/config.schema.json(board_default=7117,
+# mcp_server_default=7118),经 tools/schema_loader.py:get_config_port() 读取。
+# workspace_config 在 CLI 导入链早期被导入,为避免 editable-install 环境下 namespace
+# package 'tools' 无法解析顶层模块 'schema_loader' 导致 ModuleNotFoundError(见 AUDIT-R4B-1
+# F-R4B1-1),此处保留常量镜像,与 config.schema 值保持同步。
+# 调用方应优先直接调用 schema_loader.get_config_port() 读单一源;仅在 workspace_config
+# 场景(如 default_workspace_config 生成)使用此常量。loader 仍唯一,config.schema 仍是单一源。
 CONFIG_RELATIVE_PATH = Path(".lybra") / "config.json"
 DEFAULT_BOARD_HOST = "127.0.0.1"
-DEFAULT_BOARD_PORT = get_config_port("board_default")  # AIPOS-R4B-1: from config.schema (single source)
+DEFAULT_BOARD_PORT = 7117  # config.schema board_default (镜像,非权威)
 DEFAULT_MCP_HOST = "127.0.0.1"
-DEFAULT_MCP_PORT = get_config_port("mcp_server_default")  # AIPOS-R4B-1: from config.schema
+DEFAULT_MCP_PORT = 7118    # config.schema mcp_server_default (镜像,非权威)
 
 # AIPOS-224 (governance home, Slice 0): home-root + active-project resolution.
 # This block is ADDITIVE and UNWIRED — no existing resolver/caller behaviour changes in this

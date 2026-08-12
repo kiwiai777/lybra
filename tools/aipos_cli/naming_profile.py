@@ -31,7 +31,9 @@ from tools.aipos_cli.workspace_config import (
     project_json_path,
     governance_paths,
 )
-from tools.schema_loader import get_role_naming_template
+# AIPOS-R4B-1 FIX-2: schema_loader 导入移至函数内(惰性),避免 CLI 早期导入链在 editable-install
+# 环境下 ModuleNotFoundError(namespace package 'tools' 无法解析顶层模块 'schema_loader')。
+# 见 AUDIT-R4B-1 F-R4B1-1。
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +86,17 @@ def default_instance_name(
     NEVER raises. For the canonical (config-backed, validating) path use
     generate_canonical_name() instead.
     """
-    template = get_role_naming_template()
+    # 惰性导入(避免模块级导入崩溃 CLI)
+    try:
+        from tools.schema_loader import get_role_naming_template
+        template = get_role_naming_template()
+    except ImportError as e:
+        raise ImportError(
+            "Cannot load schema_loader.get_role_naming_template() for instance naming. "
+            "This typically occurs when running lybra CLI from outside the project root "
+            "in an editable install. Run from the project directory or ensure PYTHONPATH "
+            "includes the project root."
+        ) from e
     proj = project or DEFAULT_INSTANCE_PROJECT
     h = host or socket.gethostname().split(".")[0]
     return template.format(prefix=prefix, project=proj, host=h)

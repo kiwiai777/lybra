@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 # AIPOS-R4A F-1: 使用唯一 schema loader（tools/schema_loader.py）
-from tools.schema_loader import load_schema
+# AIPOS-R4B-1 FIX-2: schema_loader 导入移至函数内(惰性),避免 CLI 早期导入链在 editable-install
+# 环境下 ModuleNotFoundError。见 AUDIT-R4B-1 F-R4B1-1。
 
 
 
@@ -43,7 +44,16 @@ def apply_transition_metadata(
     """
     if schema is None:
         # AIPOS-R4A F-1: 使用唯一 schema_loader.load_schema（repo_root=None 自动定位产品仓）
-        schema = load_schema("transitions", repo_root=None)
+        try:
+            from tools.schema_loader import load_schema
+            schema = load_schema("transitions", repo_root=None)
+        except ImportError as e:
+            raise ImportError(
+                "Cannot load schema_loader.load_schema() for transitions schema. "
+                "This typically occurs when running lybra CLI from outside the project root "
+                "in an editable install. Run from the project directory or ensure PYTHONPATH "
+                "includes the project root."
+            ) from e
     
     if timestamp is None:
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -157,7 +167,16 @@ def validate_transition(
     """
     if schema is None:
         # AIPOS-R4A F-1: 使用唯一 schema_loader.load_schema
-        schema = load_schema("transitions", repo_root=None)
+        try:
+            from tools.schema_loader import load_schema
+            schema = load_schema("transitions", repo_root=None)
+        except ImportError as e:
+            raise ImportError(
+                "Cannot load schema_loader.load_schema() for transitions schema. "
+                "This typically occurs when running lybra CLI from outside the project root "
+                "in an editable install. Run from the project directory or ensure PYTHONPATH "
+                "includes the project root."
+            ) from e
     
     # 根据转移名称查找 allowed transitions
     # 简化版：从预定义映射查找
