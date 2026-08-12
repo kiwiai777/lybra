@@ -12,7 +12,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from tools.aipos_cli.naming_profile import (
-    DEFAULT_PREFIX_MAPPING,
     default_naming_profile,
     get_naming_profile,
     set_prefix_mapping,

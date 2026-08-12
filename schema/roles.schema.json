@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Lybra Role Registry — single source of truth for role category definitions. LOOP-REDESIGN v2 §5-6 (角色注册表): each role category's complete definition lives here. enroll (scopes) / distribute (tool package) / instance naming derivation ALL read from this registry — new role = add one entry, zero code change. Read via the unique loader (tools/schema_loader).",
+  "last_updated": "2026-08-12",
+  "source_of_truth_note": "This file is the ONLY place role categories are defined. AIPOS-R4B-1: replaces ROLE_TOOL_MAPPING (distribute_tools.py), _resolve_role_scopes (mcp_server/tools.py), 20 scattered instance-name literals, and the hardcoded DEFAULT_PREFIX_MAPPING (naming_profile.py). Per 一机制一实现 (§6), introducing a second role-definition source = audit FAIL.",
+  "naming": {
+    "template": "{prefix}.{project}.{host}",
+    "description": "Instance-name derivation template (a PRODUCT RULE, not configurable). The three-part dotted structure is fixed; segment VALUES come from elsewhere: prefix from role.naming.prefix (this registry); project from workspace project.json (naming_profile.project_segment or .project); host from workspace project.json (naming_profile.host_segment). Derived by exactly one implementation: naming_profile.generate_canonical_name().",
+    "segments": {
+      "prefix": "role-specific short label, from this registry (role.naming.prefix)",
+      "project": "workspace project_segment (from project.json)",
+      "host": "workspace host_segment (from project.json); per-instance override allowed at mint time"
+    }
+  },
+  "roles": [
+    {
+      "role": "executor",
+      "token_ref": "svc-executor",
+      "scopes": ["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"],
+      "naming": { "prefix": "exec" },
+      "tool_package": {
+        "extensions": ["lybra-loop"],
+        "skills": ["block-and-report", "chunked-io", "finalize-slice", "task-closure-loop", "write-return"]
+      }
+    },
+    {
+      "role": "owner",
+      "token_ref": "svc-owner",
+      "scopes": ["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record", "queue_amend", "queue_withdraw", "bench_audit_confirm"],
+      "naming": { "prefix": "owner" },
+      "_note": "No tool_package: owner operates out-of-band, not a distributed harness role."
+    },
+    {
+      "role": "owner-dispatch",
+      "token_ref": "svc-owner-dispatch",
+      "scopes": ["audit_dispatch"],
+      "naming": { "prefix": "owner-dispatch" },
+      "_note": "No tool_package: dispatch-only credential."
+    },
+    {
+      "role": "auditor",
+      "token_ref": "svc-auditor",
+      "scopes": ["queue_claim", "audit_verdict", "task_progress"],
+      "naming": { "prefix": "audit" },
+      "tool_package": {
+        "extensions": ["lybra-loop"],
+        "skills": ["audit-independent-evidence", "block-and-report", "chunked-io", "task-closure-loop", "write-return"]
+      }
+    },
+    {
+      "role": "copilot",
+      "token_ref": "svc-copilot",
+      "scopes": [],
+      "naming": { "prefix": "copilot" },
+      "_note": "Read-only credential; scopes [] verified-sufficient. No tool_package (planning-copilot, no harness loop)."
+    },
+    {
+      "role": "planner",
+      "token_ref": "svc-planner",
+      "scopes": ["draft_submit", "draft_publish"],
+      "naming": { "prefix": "planner" },
+      "_note": "BYO external planning advisor's credential (gate role = planner). No tool_package in current distribute mapping."
+    },
+    {
+      "role": "advisor",
+      "naming": { "prefix": "advisor" },
+      "tool_package": {
+        "extensions": ["lybra-loop"],
+        "skills": ["block-and-report", "task-closure-loop", "truth-first-drafting", "write-return"]
+      },
+      "_note": "Distribute/naming target only. NOT a mintable gate role (absent from service_mode.ROLE_SPECS): has no token_ref/scopes. This captures the pre-R4B-1 advisor/planner split observed in code (advisor_pump labels actors 'advisor.*'; gate credential is 'planner'). Reconciling advisor↔planner is a separate semantic decision, out of R4B-1 scope; this registry faithfully records current truth."
+    }
+  ],
+  "custom_roles": {
+    "description": "Extension point: workspace-defined custom roles. Lives in project.json (workspace DATA, not code). Maps a custom name to a builtin class; scopes are derived from the builtin class at call time. Registry carries ZERO scope fields for custom roles (anti-privilege-escalation: a custom role can never grant scopes its builtin class does not hold). Adding a custom role = one project.json entry, zero code change. Resolved by tools/aipos_cli/custom_roles.py.",
+    "source": "project.json:custom_roles",
+    "shape": {
+      "<custom_role_name>": { "class": "<builtin_role_name>" }
+    },
+    "builtin_classes": ["executor", "owner", "owner-dispatch", "auditor", "copilot", "planner"],
+    "scope_resolution": "custom name → builtin class → this registry's role.scopes (call-time, AIPOS-347 link reuse)"
+  },
+  "drill_assertion": "Acceptance #1 (new-role drill): add a probe role entry here (with naming prefix + scopes + tool_package) → enroll/distribute/naming all work with ZERO code change → proving 'new role = add one data row'. Drill must be reverted before commit."
+}

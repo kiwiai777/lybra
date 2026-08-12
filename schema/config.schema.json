@@ -96,7 +96,8 @@
     }
   },
   "ports": {
-    "description": "Service port configuration",
+    "description": "Service port configuration — single source for all port defaults. AIPOS-R4B-1: code reads these via schema_loader.get_config_port(); the 35 hardcoded 7117/7118 references in tools/ (non-test) route through here. board_default added (was missing: board port 7117 had no single source).",
+    "board_default": 7117,
     "gate_default": 7118,
     "gate_range": "7100-7199",
     "mcp_server_default": 7118,

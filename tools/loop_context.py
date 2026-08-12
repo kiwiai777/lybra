@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tools.schema_loader import get_config_default_gate_url  # AIPOS-R4B-1: gate URL single source
+
 
 @dataclass(frozen=True)
 class LoopContext:
@@ -122,8 +124,8 @@ class ConnectionResolver:
                 except (FileNotFoundError, ValueError, KeyError):
                     pass
         
-        # Default fallback
-        return "http://127.0.0.1:7118/mcp"
+        # Default fallback (AIPOS-R4B-1: from config.schema)
+        return f"{get_config_default_gate_url()}/mcp"
     
     @staticmethod
     def resolve_token(

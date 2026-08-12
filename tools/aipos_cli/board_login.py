@@ -27,12 +27,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from tools.schema_loader import get_config_port  # stdlib-only leaf; preserves zero-external-dep (AIPOS-R4B-1: board port single-sourced)
+
 
 
 
 DEFAULT_CONNECTION_JSON = "~/.lybra/agent_credentials.json"
 DEFAULT_BOARD_HOST = "127.0.0.1"
-DEFAULT_BOARD_PORT = 7117
+DEFAULT_BOARD_PORT = get_config_port("board_default")  # AIPOS-R4B-1: from config.schema (was hardcoded 7117)
 _HTTP_TIMEOUT = 8  # loopback,失败要快
 
 

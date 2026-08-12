@@ -20,6 +20,8 @@ AIPOS-350F1: project_segment and host_segment are NEVER hardcoded.
 from __future__ import annotations
 
 import json
+import os
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,20 +31,63 @@ from tools.aipos_cli.workspace_config import (
     project_json_path,
     governance_paths,
 )
+from tools.schema_loader import get_role_naming_template
 
 
 # ---------------------------------------------------------------------------
 # Default naming profile — matches current Lybra conventions
 # ---------------------------------------------------------------------------
 
-DEFAULT_PREFIX_MAPPING: dict[str, str] = {
-    "executor": "exec",
-    "auditor": "audit",
-    "owner": "owner",
-    "copilot": "copilot",
-    "planner": "planner",
-    "owner-dispatch": "owner-dispatch",
-}
+def _registry_prefix_mapping() -> dict[str, str]:
+    """Build the role→prefix map from the roles registry (single source, AIPOS-R4B-1).
+
+    Replaces the previous hardcoded DEFAULT_PREFIX_MAPPING dict. Each registry
+    role's naming.prefix is the prefix (LOOP-REDESIGN v2 §5-6). A role without a
+    prefix is skipped. New role = add naming.prefix to the registry; naming picks
+    it up with zero code change.
+    """
+    from tools.schema_loader import get_all_role_names, get_role_naming_prefix
+    mapping: dict[str, str] = {}
+    for role in get_all_role_names():
+        prefix = get_role_naming_prefix(role)
+        if prefix:
+            mapping[role] = prefix
+    return mapping
+
+
+# AIPOS-R4B-1: centralized dev defaults for the non-raising instance-name path.
+# Used by default_instance_name() when no workspace project.json is available
+# (CLI fallback paths: pump_orchestration, advisor_pump, agent_supervise).
+# Forward-compatible: override via env. The canonical, config-backed, validating
+# path remains generate_canonical_name() (which reads project.json).
+DEFAULT_INSTANCE_PROJECT = os.environ.get("LYBRA_PROJECT", "lybra")
+
+
+def default_instance_name(
+    prefix: str, *, project: str | None = None, host: str | None = None
+) -> str:
+    """Non-raising instance-name derivation from the registry template (AIPOS-R4B-1).
+
+    THE single implementation of the {prefix}.{project}.{host} pattern for the
+    non-validating/fallback paths. Replaces ~20 scattered inline literals such
+    as 'exec.lybra.kiwiai-dev' / f"{role}.lybra.kiwiai-dev" (pump_orchestration,
+    advisor_pump, agent_supervise, audit_derivation).
+
+    - prefix: the role's display prefix (e.g. 'exec', 'audit', 'advisor').
+      Callers already hold this (from policy envelopes). The prefix<->role map
+      is also single-sourced in the registry (role.naming.prefix) for the
+      canonical path (generate_canonical_name).
+    - project: from caller; else DEFAULT_INSTANCE_PROJECT (env-overridable).
+    - host: from caller; else socket.gethostname() short form (machine identity;
+      matches audit_derivation's prior behavior — no hardcoded 'kiwiai-dev').
+
+    NEVER raises. For the canonical (config-backed, validating) path use
+    generate_canonical_name() instead.
+    """
+    template = get_role_naming_template()
+    proj = project or DEFAULT_INSTANCE_PROJECT
+    h = host or socket.gethostname().split(".")[0]
+    return template.format(prefix=prefix, project=proj, host=h)
 
 
 def default_naming_profile(
@@ -62,7 +107,7 @@ def default_naming_profile(
     *_aliases: empty lists (stable defaults).
     """
     profile: dict[str, Any] = {
-        "prefix_mapping": dict(DEFAULT_PREFIX_MAPPING),
+        "prefix_mapping": _registry_prefix_mapping(),
         "project_segment_aliases": [],
         "host_segment_aliases": [],
     }
@@ -87,7 +132,7 @@ def default_naming_profile(
 def get_naming_profile(project_root: str | Path) -> dict[str, Any]:
     """Read naming_profile from project.json.  AIPOS-350F1: no baked-in values.
 
-    prefix_mapping: merged with DEFAULT_PREFIX_MAPPING (new roles from default
+    prefix_mapping: merged with the registry prefix map (new roles from registry
         added, existing overridden). AIPOS-352: also includes custom role prefixes
         from the custom_roles registry (custom role name → itself as prefix).
     project_segment: from naming_profile.project_segment, falling back to
@@ -102,7 +147,7 @@ def get_naming_profile(project_root: str | Path) -> dict[str, Any]:
 
     # Start with prefix defaults only — no project/host hardcodes
     result: dict[str, Any] = {
-        "prefix_mapping": dict(DEFAULT_PREFIX_MAPPING),
+        "prefix_mapping": _registry_prefix_mapping(),
         "project_segment_aliases": [],
         "host_segment_aliases": [],
     }

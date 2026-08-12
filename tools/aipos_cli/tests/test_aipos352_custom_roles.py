@@ -40,7 +40,7 @@ from tools.aipos_cli.service_mode import (
     roles_list_report,
     roles_reconcile_report,
 )
-from tools.mcp_server.tools import _resolve_role_scopes
+from tools.mcp_server.tools import get_role_scopes
 
 
 def _make_workspace():
@@ -164,24 +164,24 @@ class TestScopeResolution(unittest.TestCase):
         self.assertIsNone(resolve_role_to_class("unknown", self.ws))
 
     def test_resolve_role_scopes_builtin(self):
-        scopes = _resolve_role_scopes("executor")
+        scopes = get_role_scopes("executor")
         self.assertIn("queue_claim", scopes)
         self.assertIn("queue_return", scopes)
 
     def test_resolve_role_scopes_custom_via_class(self):
-        scopes = _resolve_role_scopes("kiwiaiops", role_class="executor")
-        executor_scopes = _resolve_role_scopes("executor")
+        scopes = get_role_scopes("kiwiaiops", role_class="executor")
+        executor_scopes = get_role_scopes("executor")
         self.assertEqual(scopes, executor_scopes)
 
     def test_resolve_role_scopes_custom_without_class_fails_closed(self):
-        scopes = _resolve_role_scopes("kiwiaiops")
+        scopes = get_role_scopes("kiwiaiops")
         self.assertEqual(scopes, [])
 
     def test_custom_scopes_match_class_scopes_exactly(self):
         """Custom role scopes = exactly the class's scopes. No more, no less."""
         register_custom_role(self.ws, "my-auditor", "auditor")
-        custom_scopes = _resolve_role_scopes("my-auditor", role_class="auditor")
-        auditor_scopes = _resolve_role_scopes("auditor")
+        custom_scopes = get_role_scopes("my-auditor", role_class="auditor")
+        auditor_scopes = get_role_scopes("auditor")
         self.assertEqual(custom_scopes, auditor_scopes)
 
 

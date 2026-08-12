@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
+
 
 # ---------------------------------------------------------------------------
 # 记录布局(与 records.py 对齐;S9 expect 派生以此为准,不许人手填)。
@@ -368,7 +370,7 @@ def step_claim(ctx: DispatchContext) -> dict[str, Any]:
             "claim_record": None,
         }
     client = GateClient(ctx.gate_url, token)
-    actor = ctx.executor_instance or f"{ctx.role}.lybra.kiwiai-dev"
+    actor = ctx.executor_instance or default_instance_name(ctx.role)
     try:
         resp = client.call_tool("lybra_queue_claim_dry_run", {
             "actor": actor,
@@ -452,7 +454,7 @@ def step_verify_held(ctx: DispatchContext) -> dict[str, Any]:
     返回 {ok, holder, reason}。ok=False 时编排层终止派工。
     """
     holder = _find_claim_holder(ctx.workspace_root, ctx.card_id)
-    expected = ctx.executor_instance or f"{ctx.role}.lybra.kiwiai-dev"
+    expected = ctx.executor_instance or default_instance_name(ctx.role)
     if holder is None:
         return {
             "ok": False,
@@ -516,7 +518,7 @@ def step_launch(ctx: DispatchContext) -> dict[str, Any]:
         code = run_launch_check(
             spawn_cmd=spawn_cmd,
             task_id=ctx.card_id,
-            executor_instance=ctx.executor_instance or f"{ctx.role}.lybra.kiwiai-dev",
+            executor_instance=ctx.executor_instance or default_instance_name(ctx.role),
             product_repo=ctx.product_repo,
             session_dirs=session_dirs,
             worktree_path=worktree_path,

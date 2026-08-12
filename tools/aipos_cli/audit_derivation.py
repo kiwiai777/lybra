@@ -17,6 +17,7 @@ from tools.aipos_cli.draft_writer import render_publish_record, stable_publish_i
 from tools.aipos_cli.queue_mutation import render_task_markdown
 from tools.aipos_cli.records import expected_publish_record_path
 from tools.aipos_cli.task_loader import find_task_by_id
+from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
 
 
 
@@ -36,12 +37,13 @@ def _task_filename_for(task_id: str) -> str:
 
 def _derive_audit_instance(project: str) -> str:
     """
-    Derive audit agent_instance per convention: audit.<project>.<hostname>
+    Derive audit agent_instance via the single naming implementation (AIPOS-R4B-1):
+    audit.<project>.<hostname> from the registry template.
     
     Example: audit.lybra.kiwiai-dev
     """
     hostname = socket.gethostname().split(".")[0]  # short hostname
-    return f"audit.{project}.{hostname}"
+    return default_instance_name("audit", project=project, host=hostname)
 
 
 def _derive_audit_assigned_to(project: str) -> str:

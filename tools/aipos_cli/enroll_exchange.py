@@ -8,7 +8,7 @@ Usage:
     python3 enroll_exchange.py <enrollment_code> --gate-url <url> --output <path>
 
 Example:
-    python3 enroll_exchange.py "ABC123..." --gate-url http://kiwiai-dev.tail6b5218.ts.net:7118 --output ~/.lybra/credentials.json
+    python3 enroll_exchange.py "ABC123..." --gate-url http://<gate-host>:<gate-port> --output ~/.lybra/credentials.json
 
 Security:
   - The enrollment code is NOT logged.
@@ -36,7 +36,7 @@ def exchange_enrollment_code(gate_url: str, code: str) -> dict[str, Any]:
     """Call the gate's lybra_roles_enroll_exchange MCP verb.
     
     Args:
-        gate_url: Gate MCP URL (e.g., http://host:7118)
+        gate_url: Gate MCP URL (e.g., http://host:<gate-port>)
         code: Enrollment code
     
     Returns:
@@ -109,7 +109,7 @@ def main() -> int:
         epilog=__doc__
     )
     parser.add_argument("code", help="Enrollment code (provided by owner/advisor)")
-    parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://host:7118)")
+    parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://host:<gate-port>)")
     parser.add_argument("--output", required=True, help="Output credential file path (will be created with 0600)")
     parser.add_argument("--quiet", action="store_true", help="Suppress non-error output")
     

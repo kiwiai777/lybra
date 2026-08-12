@@ -104,6 +104,9 @@ from tools.aipos_cli.workspace_config import (
     set_project_repo,
     write_workspace_config,
 )
+
+from tools.schema_loader import get_config_default_gate_url  # AIPOS-R4B-1: gate URL single source
+_DEFAULT_GATE_URL = get_config_default_gate_url()
 from tools.aipos_cli.home_git import execute_home_git_init, plan_home_git_init
 from tools.aipos_cli.project_structure import (
     export_project_to_yaml,
@@ -1031,7 +1034,7 @@ def build_parser() -> argparse.ArgumentParser:
     _fetch_parser = agent_subparsers.add_parser(
         "fetch", help="One stateless pull: tasks claimable by --actor (advisory list; the gate is the truth)"
     )
-    _fetch_parser.add_argument("--gate-url", required=True, help="e.g. http://127.0.0.1:7118")
+    _fetch_parser.add_argument("--gate-url", required=True, help=f"e.g. {_DEFAULT_GATE_URL}")
     _fetch_src = _fetch_parser.add_mutually_exclusive_group(required=True)
     _fetch_src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
     _fetch_src.add_argument("--token-env", help="env var holding the role bearer token")
@@ -1056,7 +1059,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="候选⑫ filesystem pump (AIPOS-268+284): poll 5_tasks/queue/** + 5_tasks/records/** mtime+path; "
         "print a JSON change summary on the first change (exit 0); exit 2 silent on --timeout. No gate/token.",
     )
-    _watch_mode.add_argument("--gate-url", help="候选⑤ gate pull (AIPOS-248): e.g. http://127.0.0.1:7118")
+    _watch_mode.add_argument("--gate-url", help=f"候选⑤ gate pull (AIPOS-248): e.g. {_DEFAULT_GATE_URL}")
     _watch_gate_src = _watch_parser.add_mutually_exclusive_group(required=False)
     _watch_gate_src.add_argument("--connection-json", help="[gate mode] path to connection.json (token read by --role; never on argv)")
     _watch_gate_src.add_argument("--token-env", help="[gate mode] env var holding the role bearer token")
@@ -1123,7 +1126,7 @@ def build_parser() -> argparse.ArgumentParser:
     # kickoff; pushback = read LOCAL RETURN + push via 320 + self-confirm (328). The agent only
     # reads/writes LOCAL files (card S3: harness-agnostic baseline). gate-url mode only.
     def _add_material_common(p, *, require_actor: bool = True) -> None:
-        p.add_argument("--gate-url", required=True, help="e.g. http://127.0.0.1:7118 (gate-url mode only)")
+        p.add_argument("--gate-url", required=True, help=f"e.g. {_DEFAULT_GATE_URL} (gate-url mode only)")
         _src = p.add_mutually_exclusive_group(required=True)
         _src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
         _src.add_argument("--token-env", help="env var holding the role bearer token")
@@ -1154,14 +1157,14 @@ def build_parser() -> argparse.ArgumentParser:
     board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     board_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
-    board_parser.add_argument("--port", type=int, help="Bind port; defaults to 7117")
+    board_parser.add_argument("--port", type=int, help=f"Bind port; defaults to {DEFAULT_BOARD_PORT}")
     # AIPOS-271: board 子命令 —— start(旧版默认)/open(本机无感)/approve(跨机设备码)。
     # ``lybra board``(无子命令)仍启动 server(向后兼容,零回归)。
     board_sub = board_parser.add_subparsers(dest="board_command")
     _board_start_parser = board_sub.add_parser("start", help="Start the local Lybra Board server (default)")
     _board_start_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     _board_start_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
-    _board_start_parser.add_argument("--port", type=int, help="Bind port; defaults to 7117")
+    _board_start_parser.add_argument("--port", type=int, help=f"Bind port; defaults to {DEFAULT_BOARD_PORT}")
     board_open_parser = board_sub.add_parser("open", help="AIPOS-271: open the Board in the browser with a one-time ticket (no token pasting)")
     board_open_parser.add_argument("--workspace-root", help="Workspace root for auto-discovery; defaults to current directory or env")
     board_open_parser.add_argument("--connection-json", help="Override the connection.json path (default <workspace>/.lybra/connection.json)")
@@ -1182,7 +1185,7 @@ def build_parser() -> argparse.ArgumentParser:
     # AIPOS-205: TUI client over an Owner-started gate. The Textual dependency lives only
     # in tools/lybra_tui (the tui extra); this CLI stays stdlib/zero-dep and lazy-imports it.
     tui_parser = subparsers.add_parser("tui", help="Launch the Lybra TUI client (requires the TUI extra: pip install textual)")
-    tui_parser.add_argument("--gate-url", required=True, help="Owner-started gate, e.g. http://127.0.0.1:7118")
+    tui_parser.add_argument("--gate-url", required=True, help=f"Owner-started gate, e.g. {_DEFAULT_GATE_URL}")
     tui_parser.add_argument("--connection-json", help="Path to .lybra/connection.json (token read by role)")
     tui_parser.add_argument("--token-env", help="Env var holding the owner bearer token")
     tui_parser.add_argument("--role", default="owner", help="Role to read from connection.json; defaults to owner")
@@ -1196,7 +1199,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_config_parser = subparsers.add_parser("mcp-config", help="Print redacted MCP client/server configuration")
     mcp_config_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     mcp_config_parser.add_argument("--host", help="MCP host; defaults to workspace config or 127.0.0.1")
-    mcp_config_parser.add_argument("--port", type=int, help="MCP port; defaults to workspace config or 7118")
+    mcp_config_parser.add_argument("--port", type=int, help=f"MCP port; defaults to workspace config or {DEFAULT_MCP_PORT}")
     mcp_config_parser.add_argument("--transport-token-env", help="Transport token env var; defaults to LYBRA_MCP_TOKEN")
     mcp_config_parser.add_argument("--capability-token-env", help="Capability token env var; defaults to LYBRA_CAPABILITY_TOKEN")
     mcp_config_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1206,7 +1209,7 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch_parser.add_argument("task_id", help="Task ID to dispatch")
     dispatch_parser.add_argument("--to", dest="executor", required=True, help="Executor actor/instance name")
     dispatch_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
-    dispatch_parser.add_argument("--gate-url", help="Gate URL; defaults to workspace config or http://127.0.0.1:7118")
+    dispatch_parser.add_argument("--gate-url", help=f"Gate URL; defaults to workspace config or {_DEFAULT_GATE_URL}")
     dispatch_parser.add_argument("--owner-policy-ref", help="Owner policy reference (PreAuthorized envelope)")
     dispatch_parser.add_argument("--connection-json", help="Path to connection.json (for token resolution)")
     dispatch_parser.add_argument("--material-root", help="Material area root (default ~/.lybra/work)")
@@ -1425,7 +1428,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verdict_parser.add_argument("--reviewed-return-record-ref", help="Reviewed return record reference")
     audit_verdict_parser.add_argument("--recommended-next-action", help="Recommended next action")
     audit_verdict_parser.add_argument("--owner-waiver-ref", help="Owner waiver reference")
-    audit_verdict_parser.add_argument("--gate-url", default="http://127.0.0.1:7118", help="Gate MCP server URL (default: http://127.0.0.1:7118)")
+    audit_verdict_parser.add_argument("--gate-url", default=_DEFAULT_GATE_URL, help=f"Gate MCP server URL (default: {_DEFAULT_GATE_URL})")
     audit_verdict_parser.add_argument("--connection-json", help="Path to connection.json (default: .lybra/connection.json in workspace)")
     audit_verdict_parser.add_argument("--token-role", default="auditor", help="Token role in connection.json (default: auditor)")
     audit_verdict_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1443,7 +1446,7 @@ def build_parser() -> argparse.ArgumentParser:
     pump_run_parser.add_argument("--delta", default="", help="Incremental information for this round (advisor provides only delta)")
     pump_run_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root (governance repo)")
     pump_run_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
-    pump_run_parser.add_argument("--gate-url", default="http://127.0.0.1:7118", help="Gate URL (default: http://127.0.0.1:7118)")
+    pump_run_parser.add_argument("--gate-url", default=_DEFAULT_GATE_URL, help=f"Gate URL (default: {_DEFAULT_GATE_URL})")
     pump_run_parser.add_argument("--connection-json", help="Path to connection.json (default: <workspace>/.lybra/connection.json)")
     pump_run_parser.add_argument("--envelope", help="Policy envelope ID (auto-detect from policies/ if not provided)")
     pump_run_parser.add_argument("--budget-threshold", type=int, default=8000, help="Budget threshold in tokens (default: 8000)")
@@ -1463,7 +1466,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP HTTP/SSE or run MCP setup diagnostics")
     mcp_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     mcp_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
-    mcp_parser.add_argument("--port", type=int, help="Bind port; defaults to 7118")
+    mcp_parser.add_argument("--port", type=int, help=f"Bind port; defaults to {DEFAULT_MCP_PORT}")
     mcp_parser.add_argument("--keepalive-seconds", type=float, help="SSE ping interval; defaults to 30 seconds")
     mcp_subparsers = mcp_parser.add_subparsers(dest="mcp_command")
     mcp_doctor_parser = mcp_subparsers.add_parser("doctor", help="Inspect MCP transport auth and capability scopes")
@@ -1478,10 +1481,10 @@ def build_parser() -> argparse.ArgumentParser:
     serve_start_parser = serve_subparsers.add_parser("start", help="Start Board and MCP gate surfaces in foreground")
     serve_start_parser.add_argument("--board-host", default=None, help="Board BIND host (AIPOS-258: passed through to web.board.app --host). Default 127.0.0.1; AIPOS-259: when given, overrides a stored connection.json and is written back.")
     serve_start_parser.add_argument("--board-advertise", default=None, help="AIPOS-259: address clients should dial for the Board URL (default = bind host). REQUIRED when --board-host is a wildcard (0.0.0.0), else serve start BLOCKs fail-closed.")
-    serve_start_parser.add_argument("--board-port", type=int, default=7117, help="Board port; defaults to 7117")
+    serve_start_parser.add_argument("--board-port", type=int, default=DEFAULT_BOARD_PORT, help=f"Board port; defaults to {DEFAULT_BOARD_PORT} (config.schema)")
     serve_start_parser.add_argument("--mcp-host", default=None, help="MCP BIND host (AIPOS-258: passed through to mcp_server serve-http --host). Default 127.0.0.1; AIPOS-259: when given, overrides a stored connection.json and is written back.")
     serve_start_parser.add_argument("--mcp-advertise", default=None, help="AIPOS-259: address clients should dial for rpc_url/sse_url (default = bind host). REQUIRED when --mcp-host is a wildcard (0.0.0.0), else serve start BLOCKs fail-closed.")
-    serve_start_parser.add_argument("--mcp-port", type=int, default=7118, help="MCP port; defaults to 7118")
+    serve_start_parser.add_argument("--mcp-port", type=int, default=DEFAULT_MCP_PORT, help=f"MCP port; defaults to {DEFAULT_MCP_PORT} (config.schema)")
     serve_start_parser.add_argument("--reuse-port", action="store_true", default=False, help="AIPOS-356: set SO_REUSEPORT on the MCP listening socket so a new process can bind the same port while the old one drains (graceful deploy handoff)")
     serve_start_parser.add_argument("--json", action="store_true", help="Output JSON after the supervisor exits")
     serve_status_parser = serve_subparsers.add_parser("status", help="Print redacted service-mode status")
@@ -1491,10 +1494,10 @@ def build_parser() -> argparse.ArgumentParser:
     serve_rotate_parser = serve_subparsers.add_parser("rotate", help="Rotate local service-mode role tokens")
     serve_rotate_parser.add_argument("--board-host", default=None, help="Board BIND host for regenerated connection config (default 127.0.0.1)")
     serve_rotate_parser.add_argument("--board-advertise", default=None, help="AIPOS-259: address clients dial for the Board URL (default = bind host; REQUIRED when --board-host is 0.0.0.0)")
-    serve_rotate_parser.add_argument("--board-port", type=int, default=7117, help="Board port for regenerated connection config")
+    serve_rotate_parser.add_argument("--board-port", type=int, default=DEFAULT_BOARD_PORT, help="Board port for regenerated connection config")
     serve_rotate_parser.add_argument("--mcp-host", default=None, help="MCP BIND host for regenerated connection config (default 127.0.0.1)")
     serve_rotate_parser.add_argument("--mcp-advertise", default=None, help="AIPOS-259: address clients dial for rpc_url/sse_url (default = bind host; REQUIRED when --mcp-host is 0.0.0.0)")
-    serve_rotate_parser.add_argument("--mcp-port", type=int, default=7118, help="MCP port for regenerated connection config")
+    serve_rotate_parser.add_argument("--mcp-port", type=int, default=DEFAULT_MCP_PORT, help="MCP port for regenerated connection config")
     serve_rotate_parser.add_argument("--project", help="Scope the minted role tokens to this project (AIPOS-229: enforced — calls for another project return PROJECT_SCOPE_DENIED)")
     serve_rotate_parser.add_argument("--executor-instance", help="AIPOS-250B: bind the executor token to this canonical agent_instance (PreAuthorized identity authority); unspecified → no binding (backward-compatible: PreAuthorized unavailable, falls back Supervised)")
     serve_rotate_parser.add_argument("--role-instance", action="append", dest="role_instances", metavar="ROLE=INSTANCE", help="AIPOS-254: bind any role token to a canonical agent_instance (format: role=instance, e.g., auditor=audit.lybra.local); can be specified multiple times; --executor-instance is kept as an alias for executor role")
@@ -1545,7 +1548,7 @@ def build_parser() -> argparse.ArgumentParser:
     # AIPOS-R2: enroll command (client-side enrollment: exchange code + write .lybra/ config)
     roles_enroll_parser = roles_subparsers.add_parser("enroll", help="AIPOS-R2: enroll this machine/agent (exchange enrollment code + write .lybra/ config)")
     roles_enroll_parser.add_argument("--code", required=True, help="Enrollment code (from owner/advisor)")
-    roles_enroll_parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://host:7118)")
+    roles_enroll_parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://<host>:<gate-port>)")
     roles_enroll_parser.add_argument("--policy", help="Optional policy reference")
     roles_enroll_parser.add_argument("--bootstrap-token", help="Bootstrap token for HTTP transport auth (any valid token; or set LYBRA_BOOTSTRAP_TOKEN)")
     roles_enroll_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -3529,7 +3532,7 @@ def main(argv: list[str] | None = None) -> int:
             ctx = DispatchContext(
                 card_id=args.card_id, role=args.role, round_type=args.round_type, delta=args.delta,
                 workspace_root=workspace_root, product_repo=product_repo,
-                gate_url=getattr(args, "gate_url", "http://127.0.0.1:7118"),
+                gate_url=getattr(args, "gate_url", _DEFAULT_GATE_URL),
                 connection_json=connection_json, envelope=getattr(args, "envelope", "") or "",
                 executor_instance=getattr(args, "executor_instance", None) or "",
                 reviewed_task_id=getattr(args, "reviewed_task_id", None),

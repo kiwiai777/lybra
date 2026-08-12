@@ -26,9 +26,10 @@ from typing import Any
 
 from tools.aipos_cli.flow_description import resolve_gate_chain
 from tools.aipos_cli.verb_contract import resolve_gate_verbs
+from tools.schema_loader import get_config_default_gate_url  # AIPOS-R4B-1: gate URL single-sourced
 
 
-_DEFAULT_GATE_URL = "http://127.0.0.1:7118"
+_DEFAULT_GATE_URL = get_config_default_gate_url()  # AIPOS-R4B-1: from config.schema (was hardcoded http://127.0.0.1:7118)
 
 
 def workspace_gate_url(repo_root: str | Path) -> str:

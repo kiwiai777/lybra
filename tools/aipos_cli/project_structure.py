@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tools.schema_loader import get_config_port  # AIPOS-R4B-1: port defaults single-sourced
+
 
 
 
@@ -681,10 +683,10 @@ def import_project_structure(
     config_data = {
         "config_version": 1,
         "workspace_root": ".",
-        "board": {"host": "127.0.0.1", "port": 7117},
+        "board": {"host": "127.0.0.1", "port": get_config_port("board_default")},
         "mcp": {
             "host": "127.0.0.1",
-            "port": 7118,
+            "port": get_config_port("mcp_server_default"),
             "transport_token_env": "LYBRA_MCP_TOKEN",
             "capability_token_env": "LYBRA_CAPABILITY_TOKEN",
         },

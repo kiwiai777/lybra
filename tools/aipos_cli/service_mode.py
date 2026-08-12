@@ -38,82 +38,44 @@ LOOPBACK_NO_PROXY_VALUES = {"127.0.0.1", "localhost", "::1"}
 PROXY_ENV_NAMES = ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
 NO_PROXY_ENV_NAMES = ("no_proxy", "NO_PROXY")
 
-ROLE_SPECS: tuple[dict[str, Any], ...] = (
-    {
-        "role": "executor",
-        "token_ref": "svc-executor",
-        # AIPOS-283: executor also holds queue_close (the gate close verb — finalize
-        # settlement step). This is NOT owner-gated: it requires closure_evidence and
-        # a prior return record, but not owner_confirm.
-        # AIPOS-323: executor also holds task_progress (agent self-reports task facts:
-        # started/progress/completed/blocked). Gate records only; no online/offline state,
-        # no timeout judgment, no push.
-        # AIPOS-336: executor also holds bench_audit_submit (non-code audit evidence
-        # submission). Executor CAN submit (dry_run) but CANNOT self-confirm (bench_audit_confirm
-        # is held by advisor/owner only, acceptance #2: 执行体无法自行 confirm).
-        "scopes": ["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"],
-    },
-    {
-        # AIPOS-197: Owner-only confirm authority. The Owner uses this token,
-        # out of band, to CONFIRM claim/return dry-runs. The executor token does
-        # not hold owner_confirm, so a confined agent cannot self-confirm.
-        "role": "owner",
-        "token_ref": "svc-owner",
-        # AIPOS-207 (F-cop-204scope-1): the Owner holds draft_publish so the AIPOS-204
-        # gated publish surface is reachable via serve-rotate creds (DG-11: the Owner runs
-        # dry_run + confirm in one proceed action). Only owner — NOT executor/copilot.
-        # The two-scope rule is unchanged: publish confirm still also needs owner_confirm.
-        # AIPOS-250: the Owner also holds owner_decision_record so the Owner can DRAFT+ARM a
-        # PreAuthorized autonomy envelope (owner_autonomy_policy) via serve-rotate creds — it is
-        # an Owner-only write surface (OWNER_DECISION_SCOPE) whose confirm additionally requires
-        # owner_confirm when it grants a policy. Without this scope the owner-console SKILL's
-        # envelope flow is unreachable (the dry_run/confirm tools never appear). Moved off the
-        # path-B-only exemption (test_scope_reachability CAPABILITY_TOKEN_EXEMPT) accordingly.
-        # AIPOS-318: the Owner also holds queue_amend and queue_withdraw (顾问侧治理动作:
-        # 修订未认领的卡、撤回卡). These are Owner-only governance operations per AIPOS-315;
-        # executor/auditor/planner should NOT be able to amend/withdraw task cards.
-        # AIPOS-336: the Owner also holds bench_audit_confirm (non-code audit 审结 confirm).
-        # This is the Owner/advisor gate that approves bench submissions after ring3 eye-verify.
-        # Executor holds bench_audit_submit (can submit) but NOT bench_audit_confirm (cannot
-        # self-confirm, acceptance #2).
-        "scopes": ["queue_claim", "queue_return", "owner_confirm", "draft_publish", "owner_decision_record", "queue_amend", "queue_withdraw", "bench_audit_confirm"],
-    },
-    {
-        "role": "owner-dispatch",
-        "token_ref": "svc-owner-dispatch",
-        "scopes": ["audit_dispatch"],
-    },
-    {
-        "role": "auditor",
-        "token_ref": "svc-auditor",
-        # AIPOS-323: auditor also holds task_progress (审计牛马也需要上报自己的任务进度).
-        "scopes": ["queue_claim", "audit_verdict", "task_progress"],
-    },
-    {
-        # AIPOS-206 (DG-11): the Planning Copilot's read-only credential. scopes [] is
-        # verified-sufficient — read tools are exposed by default (no scope required;
-        # tools.py READ_ONLY_NOTICE), and every write/confirm/publish op is structurally
-        # SCOPE_DENIED. This is the copilot-side ★A1 boundary as a credential, not policy.
-        "role": "copilot",
-        "token_ref": "svc-copilot",
-        "scopes": [],
-    },
-    {
-        # AIPOS-249 (planner slice): the BYO external planning advisor's credential.
-        # AIPOS-342 (甲案): planner gains draft_publish so the advisor can publish its own
-        # drafts without the Owner manually running a publish command. The Owner裁定
-        # (DL 05-10) reasons that publishing a card is NOT a gate — the card lands in
-        # pending and waits for an agent to claim; the real gates (envelope, red lines,
-        # independent audit, owner_verify, deploy) are unchanged. Requiring Owner to
-        # confirm every publish was proven unworkable (advisor published 20+ cards/day
-        # using the Owner token, bypassing the very gate it created).
-        # Planner still holds NO queue_claim/queue_return/owner_confirm/close/amend/withdraw
-        # — all other red lines from the 2026-07-09 BYO planner裁定 are preserved.
-        "role": "planner",
-        "token_ref": "svc-planner",
-        "scopes": ["draft_submit", "draft_publish"],
-    },
-)
+def _build_role_specs_from_registry() -> tuple[dict[str, Any], ...]:
+    """Build ROLE_SPECS from the roles registry (single source, AIPOS-R4B-1 / §5-6).
+
+    Role category definitions (role / token_ref / scopes) live in
+    schema/roles.schema.json (LOOP-REDESIGN v2 §5-6 角色注册表). service_mode
+    composes them into the cred-minting ROLE_SPECS tuple used by serve-rotate.
+    Editing a role's scopes = edit the registry; the change takes effect for BOTH
+    gate decisions (mcp_server/tools.py reads the registry via schema_loader) and
+    token minting (here) with zero code change — one source, no drift.
+
+    Roles without token_ref (e.g. advisor — distribute/naming target only, not a
+    mintable gate credential) are excluded from ROLE_SPECS.
+
+    Per-role scope rationale (why each scope was granted) is preserved in the
+    registry's role entries and in git history: AIPOS-197 (owner confirm),
+    AIPOS-207 (owner draft_publish), AIPOS-250 (owner_decision_record),
+    AIPOS-283 (executor queue_close), AIPOS-318 (owner amend/withdraw),
+    AIPOS-323 (task_progress), AIPOS-336 (bench_audit_*), AIPOS-342 (planner
+    draft_publish), AIPOS-206 (copilot read-only []), AIPOS-249 (planner cred).
+    """
+    from tools.schema_loader import get_role_spec, get_all_role_names
+    specs: list[dict[str, Any]] = []
+    for role in get_all_role_names():
+        spec = get_role_spec(role)
+        if spec is None or not spec.get("token_ref"):
+            continue  # not a mintable gate role (e.g. advisor: distribute/naming only)
+        specs.append({
+            "role": spec["role"],
+            "token_ref": spec["token_ref"],
+            "scopes": list(spec.get("scopes", [])),
+        })
+    return tuple(specs)
+
+
+# AIPOS-R4B-1: ROLE_SPECS is now built from the single-source roles registry.
+# The previous hardcoded tuple (with scopes/token_ref duplicated in code) is gone;
+# the registry is the only definition. See _build_role_specs_from_registry().
+ROLE_SPECS: tuple[dict[str, Any], ...] = _build_role_specs_from_registry()
 
 
 @dataclass(frozen=True)

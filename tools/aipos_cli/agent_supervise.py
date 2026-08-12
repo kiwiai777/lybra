@@ -48,6 +48,7 @@ if __package__ in (None, ""):
 
 from tools.aipos_cli.confirm_client import GateClient, GateError
 from tools.aipos_cli.kickoff_safe import KICKOFF_HAZARDS
+from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -625,7 +626,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-dirs", help="Comma-separated session directories")
     parser.add_argument("--worktree-path", help="Git worktree path (default: product-repo)")
     parser.add_argument("--run-log", help="Run log path (for stall detection)")
-    parser.add_argument("--gate-url", help="Gate URL (for death reporting, e.g., http://127.0.0.1:7118)")
+    parser.add_argument("--gate-url", help="Gate URL (for death reporting, e.g., http://127.0.0.1:<gate-port>)")
     parser.add_argument("--connection-json", type=Path, help="Connection.json path (for gate auth)")
     parser.add_argument("--actor", help="Agent instance name (for death reporting, e.g., exec.lybra.kiwiai-dev)")
     
@@ -648,7 +649,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.gate_url and args.connection_json:
         gate_client = init_gate_client(args.connection_json, args.gate_url)
     
-    actor = args.actor or "exec.lybra.kiwiai-dev"
+    actor = args.actor or default_instance_name("exec")
     
     try:
         return run_supervise(

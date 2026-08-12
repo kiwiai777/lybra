@@ -10,41 +10,18 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from tools.schema_loader import (
+    get_role_tool_package,
+    get_roles_with_tool_package,
+    SchemaLoadError,
+)
+
 # 产品仓工具包路径
 TOOLS_SOURCE = Path(__file__).parent.parent / "agents" / "pi"
 
-# 角色到工具包的映射（按角色类别分发）
-ROLE_TOOL_MAPPING = {
-    "executor": {
-        "extensions": ["lybra-loop"],
-        "skills": [
-            "block-and-report",
-            "chunked-io", 
-            "finalize-slice",
-            "task-closure-loop",
-            "write-return"
-        ]
-    },
-    "auditor": {
-        "extensions": ["lybra-loop"],
-        "skills": [
-            "audit-independent-evidence",
-            "block-and-report",
-            "chunked-io",
-            "task-closure-loop",
-            "write-return"
-        ]
-    },
-    "advisor": {
-        "extensions": ["lybra-loop"],
-        "skills": [
-            "block-and-report",
-            "task-closure-loop",
-            "truth-first-drafting",
-            "write-return"
-        ]
-    }
-}
+# AIPOS-R4B-1: 角色到工具包的映射现从单一源 schema/roles.schema.json 读取
+# (LOOP-REDESIGN v2 §5-6 角色注册表)。原硬编码 ROLE_TOOL_MAPPING 已删除。
+# 新角色 = 注册表加一条 (含 tool_package)，本分发器零改即可分发。
 
 
 def get_product_repo_version() -> str:
@@ -80,8 +57,13 @@ def distribute_to_harness(
     Returns:
         分发结果字典
     """
-    if role not in ROLE_TOOL_MAPPING:
-        raise ValueError(f"Unknown role: {role}. Valid roles: {list(ROLE_TOOL_MAPPING.keys())}")
+    try:
+        tool_spec = get_role_tool_package(role)
+    except SchemaLoadError as e:
+        raise ValueError(
+            f"Role has no distributed tool package: {role}. "
+            f"Roles with a tool package: {get_roles_with_tool_package()}"
+        ) from e
     
     if not TOOLS_SOURCE.exists():
         raise FileNotFoundError(f"Tools source not found: {TOOLS_SOURCE}")
@@ -113,8 +95,6 @@ def distribute_to_harness(
         "skipped": [],
         "errors": []
     }
-    
-    tool_spec = ROLE_TOOL_MAPPING[role]
     
     # 分发 extensions
     for ext_name in tool_spec.get("extensions", []):
@@ -172,7 +152,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Distribute Lybra tools to harness")
     parser.add_argument("target", help="Target harness root (e.g., ~/projects/kiwiai-pi/lybra-executor)")
-    parser.add_argument("role", choices=list(ROLE_TOOL_MAPPING.keys()), help="Role category")
+    parser.add_argument("role", choices=get_roles_with_tool_package(), help="Role category")
     parser.add_argument("--force", action="store_true", help="Force overwrite existing files")
     
     args = parser.parse_args()

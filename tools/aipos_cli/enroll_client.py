@@ -37,7 +37,7 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
     """调用 gate 的 lybra_roles_enroll_exchange MCP 动词兑换 enrollment code。
     
     Args:
-        gate_url: Gate MCP URL (e.g., http://host:7118)
+        gate_url: Gate MCP URL (e.g., http://host:<gate-port>)
         code: Enrollment code
         bootstrap_token: Optional bootstrap token for HTTP transport auth.
                         If not provided, tries LYBRA_BOOTSTRAP_TOKEN env var.
@@ -360,7 +360,7 @@ def main() -> int:
         epilog=__doc__
     )
     parser.add_argument("--code", required=True, help="Enrollment code(from owner/advisor)")
-    parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://host:7118)")
+    parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://host:<gate-port>)")
     parser.add_argument("--workspace", help="Workspace root(defaults to current directory)")
     parser.add_argument("--policy", help="Optional policy reference")
     parser.add_argument("--bootstrap-token", help="Bootstrap token for HTTP transport auth (any valid token; or set LYBRA_BOOTSTRAP_TOKEN)")

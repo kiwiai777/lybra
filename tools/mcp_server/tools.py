@@ -43,6 +43,7 @@ from tools.aipos_cli.controlled_execute import get_dry_run
 from tools.aipos_cli.records import find_records_for_task, load_records
 from tools.aipos_cli.task_loader import find_repo_root
 from tools.aipos_cli.workspace_config import _project_candidates, has_workspace_queue, resolve_home_root
+from tools.schema_loader import get_role_scopes
 
 
 READ_ONLY_NOTICE = "Lybra MCP exposes read tools by default. Write tools are visible only with scoped capability."
@@ -205,12 +206,13 @@ def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str
     capability = REQUEST_CAPABILITY.get()
     if isinstance(capability, dict) and capability.get("source") == "service_v0" and isinstance(payload, dict):
         payload = dict(payload)
-        # AIPOS-347: scope_basis echoes the REAL-TIME resolved scopes from ROLE_SPECS,
-        # not the token's baked-in `operations` snapshot.  The minted operations are
-        # echoed separately as `minted_scopes` for debugging/audit.
+        # AIPOS-347/R4B-1: scope_basis echoes the REAL-TIME resolved scopes from the
+        # roles registry (schema/roles.schema.json), not the token's baked-in
+        # `operations` snapshot. The minted operations are echoed separately as
+        # `minted_scopes` for debugging/audit.
         _role = str(capability.get("role") or "").strip()
         _role_class = str(capability.get("role_class") or "").strip() or None
-        _resolved_scopes = _resolve_role_scopes(_role, role_class=_role_class) if _role else list(capability.get("operations") or [])
+        _resolved_scopes = get_role_scopes(_role, role_class=_role_class) if _role else list(capability.get("operations") or [])
         scope_basis: dict[str, Any] = {
             "mode": "service_v0",
             "token_ref": capability.get("token_ref"),
@@ -313,47 +315,23 @@ def request_project_scope(project: str | None) -> Iterator[None]:
         REQUEST_PROJECT.reset(token)
 
 
-def _resolve_role_scopes(role: str, *, role_class: str | None = None) -> list[str]:
-    """Resolve the current scopes for a role from ROLE_SPECS (single source of truth).
-
-    AIPOS-347: scope is resolved at call time from the deployed ROLE_SPECS, not from
-    the token's baked-in ``operations`` snapshot.  This means changing a role's permissions
-    in ROLE_SPECS takes effect immediately for all existing tokens of that role — no
-    re-minting required.  The token's ``operations`` field is retained for informational
-    purposes only (echoed in scope_basis) but is NOT used for gate decisions.
-
-    AIPOS-352: custom roles carry a ``role_class`` field that resolves to a built-in
-    class. When the role name is not in ROLE_SPECS directly, we use role_class to
-    look up the scopes. This is the 347 link reuse: custom name → class → ROLE_SPECS.
-    """
-    from tools.aipos_cli.service_mode import ROLE_SPECS
-    for spec in ROLE_SPECS:
-        if spec["role"] == role:
-            return list(spec.get("scopes", []))
-    # AIPOS-352: custom role — resolve via role_class
-    if role_class:
-        for spec in ROLE_SPECS:
-            if spec["role"] == role_class:
-                return list(spec.get("scopes", []))
-    return []
-
-
 def _capability_has_scope(scope: str) -> bool:
-    """AIPOS-347: scope resolved at call time from ROLE_SPECS, not from token snapshot.
+    """AIPOS-347: scope resolved at call time from the roles registry, not from token snapshot.
 
     The token provides IDENTITY (role + token_ref + expires_at).  The SCOPE is looked up
-    from the deployed ROLE_SPECS based on the token's ``role`` field.  This is the single
-    source of truth — same ROLE_SPECS that ``serve rotate`` mints from.
+    from the roles registry (schema/roles.schema.json, via schema_loader.get_role_scopes)
+    based on the token's ``role`` field.  This is the single source of truth — same
+    registry that ``serve rotate`` mints from (service_mode.ROLE_SPECS is built from it).
 
     Identity checks preserved (not weakened):
     - ``token_ref`` (or ``token_id``) must be present — proves the token was minted by the system
     - ``expires_at`` must be present and in the future — temporal validity
 
     Scope resolution (AIPOS-347):
-    - If ``role`` is present and resolves in ROLE_SPECS → use ROLE_SPECS (real-time)
+    - If ``role`` is present and resolves in the registry → use registry scopes (real-time)
     - If ``role`` is absent → fall back to ``operations`` (backward compat for legacy tokens)
 
-    This means: changing a role's scopes in ROLE_SPECS takes effect immediately for ALL
+    This means: changing a role's scopes in the registry takes effect immediately for ALL
     existing tokens of that role — no re-minting required.  Old tokens with stale
     ``operations`` but a valid ``role`` get the CURRENT role scopes, not their baked ones.
     Tokens without ``role`` (legacy) still use their baked ``operations``.
@@ -373,16 +351,16 @@ def _capability_has_scope(scope: str) -> bool:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at <= datetime.now(timezone.utc):
         return False
-    # --- AIPOS-347: scope from ROLE_SPECS at call time ---
+    # --- AIPOS-347: scope from the roles registry at call time ---
     role = str(token.get("role") or "").strip()
     if role:
         # AIPOS-352: custom roles carry role_class for scope resolution
         role_class = str(token.get("role_class") or "").strip() or None
-        role_scopes = _resolve_role_scopes(role, role_class=role_class)
+        role_scopes = get_role_scopes(role, role_class=role_class)
         if role_scopes:
-            # Role resolved in ROLE_SPECS → real-time scope resolution
+            # Role resolved in registry -> real-time scope resolution
             return scope in role_scopes
-        # Role present but NOT in ROLE_SPECS → fail-closed (unknown role denied)
+        # Role present but NOT in registry -> fail-closed (unknown role denied)
         return False
     # --- Backward compat: no role field → fall back to baked operations ---
     operations = token.get("operations")

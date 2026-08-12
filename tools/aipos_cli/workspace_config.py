@@ -6,14 +6,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tools.schema_loader import get_config_port
+
 
 
 
 CONFIG_RELATIVE_PATH = Path(".lybra") / "config.json"
 DEFAULT_BOARD_HOST = "127.0.0.1"
-DEFAULT_BOARD_PORT = 7117
+DEFAULT_BOARD_PORT = get_config_port("board_default")  # AIPOS-R4B-1: from config.schema (single source)
 DEFAULT_MCP_HOST = "127.0.0.1"
-DEFAULT_MCP_PORT = 7118
+DEFAULT_MCP_PORT = get_config_port("mcp_server_default")  # AIPOS-R4B-1: from config.schema
 
 # AIPOS-224 (governance home, Slice 0): home-root + active-project resolution.
 # This block is ADDITIVE and UNWIRED — no existing resolver/caller behaviour changes in this

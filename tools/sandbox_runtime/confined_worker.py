@@ -861,7 +861,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--connection-json", required=True, help="Service-mode connection.json (reads executor role token)")
     parser.add_argument("--approved-scratch-root", required=True, help="Host approved scratch root (= LYBRA_APPROVED_SCRATCH_ROOT)")
     parser.add_argument("--network", required=True, help="Dedicated user-defined docker bridge name")
-    parser.add_argument("--gate-url", required=True, help="MCP gate URL reachable from the worker, e.g. http://172.18.0.1:7118/mcp")
+    parser.add_argument("--gate-url", required=True, help="MCP gate URL reachable from the worker, e.g. http://<gate-ip>:<gate-port>/mcp")
     parser.add_argument("--gate-ip", help="Gate IP for NO_PROXY (e.g. 172.18.0.1)")
     parser.add_argument("--anthropic-base-url", help="Non-secret BYO-LLM base URL (e.g. https://xchai.xyz); omit for default api.anthropic.com")
     parser.add_argument("--model", help="Non-secret model id passed as claude --model (e.g. claude-sonnet-4-6)")

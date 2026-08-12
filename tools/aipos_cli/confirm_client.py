@@ -308,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="lybra confirm",
         description="Interactive Owner confirm client over the gate (F-c7 fix). The owner token is read internally; never pass it on the command line.",
     )
-    parser.add_argument("--gate-url", required=True, help="e.g. http://127.0.0.1:7118")
+    parser.add_argument("--gate-url", required=True, help="e.g. http://127.0.0.1:<gate-port>")
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--connection-json", help="path to .lybra/connection.json (token read by role)")
     src.add_argument("--token-env", help="env var holding the owner bearer token")

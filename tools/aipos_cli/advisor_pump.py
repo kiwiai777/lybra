@@ -49,6 +49,7 @@ if __package__ in (None, ""):
 
 from tools.aipos_cli.confirm_client import GateClient, GateError
 from tools.aipos_cli.chain_definition import get_chain_for_task
+from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -663,8 +664,8 @@ class AdvisorPump:
         # Build gate call arguments (aligned with lybra_queue_return_dry_run)
         args = {
             "task_id": task_id,
-            "actor": return_data.get("canonical_agent_instance", "exec.lybra.kiwiai-dev"),
-            "agent_instance": return_data.get("canonical_agent_instance", "exec.lybra.kiwiai-dev"),
+            "actor": return_data.get("canonical_agent_instance", default_instance_name("exec")),
+            "agent_instance": return_data.get("canonical_agent_instance", default_instance_name("exec")),
             "owner_policy_ref": envelope,
             "executor_status": "completed",
             "audit_readiness": "ready",
@@ -910,12 +911,12 @@ class AdvisorPump:
             # Build dispatch arguments (AIPOS-FND-7: correct MCP schema)
             args = {
                 "source_task_id": task_id,
-                "actor": "advisor.lybra.kiwiai-dev",  # Advisor dispatches
-                "agent_instance": "advisor.lybra.kiwiai-dev",
+                "actor": default_instance_name("advisor"),  # Advisor dispatches
+                "agent_instance": default_instance_name("advisor"),
                 "autonomy_mode": "Supervised",
                 "owner_policy_ref": envelope,
                 "audit_task_id": audit_task_id,
-                "audit_agent_instance": "audit.lybra.kiwiai-dev",
+                "audit_agent_instance": default_instance_name("audit"),
             }
             
             # Dry run
@@ -978,8 +979,8 @@ class AdvisorPump:
             # Build close arguments
             args = {
                 "task_id": task_id,
-                "actor": "advisor.lybra.kiwiai-dev",
-                "agent_instance": "exec.lybra.kiwiai-dev",
+                "actor": default_instance_name("advisor"),
+                "agent_instance": default_instance_name("exec"),
                 "owner_policy_ref": envelope,
             }
             
@@ -1105,7 +1106,7 @@ class AdvisorPump:
                 "--run-log", preset["run_log"],
                 "--gate-url", self.gate_url,
                 "--connection-json", str(self.connection_json),
-                "--actor", f"{role}.lybra.kiwiai-dev",
+                "--actor", default_instance_name(role),
             ]
         else:
             # watch-only mode (纯观测)
@@ -1305,7 +1306,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--gate-url",
         required=True,
-        help="Gate HTTP URL (e.g., http://127.0.0.1:7118)"
+        help="Gate HTTP URL (e.g., http://127.0.0.1:<gate-port>)"
     )
     parser.add_argument(
         "--token-ref",

@@ -1,13 +1,18 @@
-"""AIPOS-347 — scope resolved at call time from ROLE_SPECS, not from token snapshot.
+"""AIPOS-347 — scope resolved at call time from the roles registry, not from token snapshot.
 
 Red lines (from task card):
-1. 活体: change a role's ROLE_SPECS and deploy → no token rotation → the role immediately
+1. 活体: change a role's registry scopes and deploy → no token rotation → the role immediately
    gains/loses the scope (reproduce the planner draft_publish scenario).
 2. 老 token 继续可用 (backward compat: tokens with stale operations still work).
 3. 零放宽:逐条验证 return/audit_verdict/close/draft_publish/amend/withdraw/owner_confirm
    的判定结果与改造前一致 (same role+scope decisions as before).
 4. tools/list visibility matches real-time scope.
 5. Identity checks preserved: expiry, token_ref, instance binding all still enforced.
+
+AIPOS-R4B-1: the single source is now schema/roles.schema.json, read via
+schema_loader.get_role_scopes (previously service_mode.ROLE_SPECS). The
+registry is also what service_mode builds ROLE_SPECS from, so minting and
+gate decisions share one source. Live-change tests patch get_role_scopes.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from unittest.mock import patch
 
 from tools.mcp_server.tools import (
     _capability_has_scope,
-    _resolve_role_scopes,
+    get_role_scopes,
     _tool_result,
     request_capability_scope,
     visible_tool_descriptors,
@@ -57,50 +62,44 @@ class LiveRoleSpecsTests(unittest.TestCase):
         # Simulate an OLD planner token: operations baked before draft_publish was added
         old_planner_cap = _cap("planner", operations=["draft_submit"])
         with request_capability_scope(old_planner_cap):
-            # With AIPOS-347: role resolved from ROLE_SPECS → planner has draft_publish
+            # With AIPOS-347: role resolved from registry → planner has draft_publish
             self.assertTrue(_capability_has_scope("draft_publish"))
             self.assertTrue(_capability_has_scope("draft_submit"))
 
     def test_role_scope_change_immediate(self) -> None:
-        """Patching ROLE_SPECS to add a scope to a role → existing tokens gain it."""
-        from tools.aipos_cli import service_mode
-        original = service_mode.ROLE_SPECS
+        """Changing a role's registry scopes → existing tokens gain it immediately (call-time)."""
+        real = get_role_scopes
 
-        try:
-            # Patch ROLE_SPECS: add a new scope to copilot (normally empty)
-            patched = tuple(
-                {**spec, "scopes": ["queue_claim"]} if spec["role"] == "copilot" else spec
-                for spec in original
-            )
-            with patch.object(service_mode, "ROLE_SPECS", patched):
-                copilot_cap = _cap("copilot", operations=[])  # old token: no scopes
-                with request_capability_scope(copilot_cap):
-                    # Immediately gains queue_claim from patched ROLE_SPECS
-                    self.assertTrue(_capability_has_scope("queue_claim"))
-        finally:
-            pass  # patch.object auto-restores
+        def patched(role, *, role_class=None, repo_root=None):
+            # Add a new scope to copilot (normally empty)
+            if role == "copilot":
+                return ["queue_claim"]
+            return real(role, role_class=role_class, repo_root=repo_root)
+
+        with patch("tools.mcp_server.tools.get_role_scopes", patched):
+            copilot_cap = _cap("copilot", operations=[])  # old token: no scopes
+            with request_capability_scope(copilot_cap):
+                # Immediately gains queue_claim from the registry change (call-time resolution)
+                self.assertTrue(_capability_has_scope("queue_claim"))
 
     def test_role_scope_removal_immediate(self) -> None:
-        """Patching ROLE_SPECS to remove a scope from a role → existing tokens lose it."""
-        from tools.aipos_cli import service_mode
-        original = service_mode.ROLE_SPECS
+        """Removing a scope from a role's registry → existing tokens lose it immediately."""
+        real = get_role_scopes
 
-        try:
-            # Patch ROLE_SPECS: remove queue_close from executor
-            patched = tuple(
-                {**spec, "scopes": [s for s in spec["scopes"] if s != "queue_close"]}
-                if spec["role"] == "executor" else spec
-                for spec in original
-            )
-            with patch.object(service_mode, "ROLE_SPECS", patched):
-                executor_cap = _cap("executor", operations=["queue_claim", "queue_return", "queue_close"])
-                with request_capability_scope(executor_cap):
-                    # queue_close is gone from ROLE_SPECS → denied even though old token has it
-                    self.assertFalse(_capability_has_scope("queue_close"))
-                    # queue_claim still works
-                    self.assertTrue(_capability_has_scope("queue_claim"))
-        finally:
-            pass
+        def patched(role, *, role_class=None, repo_root=None):
+            scopes = real(role, role_class=role_class, repo_root=repo_root)
+            # Remove queue_close from executor
+            if role == "executor":
+                return [s for s in scopes if s != "queue_close"]
+            return scopes
+
+        with patch("tools.mcp_server.tools.get_role_scopes", patched):
+            executor_cap = _cap("executor", operations=["queue_claim", "queue_return", "queue_close"])
+            with request_capability_scope(executor_cap):
+                # queue_close is gone from the registry → denied even though old token has it
+                self.assertFalse(_capability_has_scope("queue_close"))
+                # queue_claim still works
+                self.assertTrue(_capability_has_scope("queue_claim"))
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +114,7 @@ class BackwardCompatTests(unittest.TestCase):
         # Executor token minted before queue_close and task_progress were added
         old_executor = _cap("executor", operations=["queue_claim", "queue_return"])
         with request_capability_scope(old_executor):
-            # Gets current ROLE_SPECS scopes, not just baked operations
+            # Gets current registry scopes, not just baked operations
             self.assertTrue(_capability_has_scope("queue_claim"))
             self.assertTrue(_capability_has_scope("queue_return"))
             self.assertTrue(_capability_has_scope("queue_close"))  # added later
@@ -346,12 +345,12 @@ class ScopeBasisEchoTests(unittest.TestCase):
     """scope_basis in tool results echoes real-time resolved scopes."""
 
     def test_scope_basis_shows_resolved_scopes(self) -> None:
-        """scope_basis['scopes'] shows ROLE_SPECS-resolved scopes, not baked operations."""
+        """scope_basis['scopes'] shows registry-resolved scopes, not baked operations."""
         cap = _cap("executor", operations=["queue_claim", "queue_return"])
         with request_capability_scope(cap):
             result = _tool_result({"ok": True})
             basis = result["structuredContent"]["scope_basis"]
-            # Real-time resolved: executor has 5 scopes in ROLE_SPECS (AIPOS-336F1: +bench_audit_submit)
+            # Real-time resolved: executor has 5 scopes in the registry (AIPOS-336F1: +bench_audit_submit)
             self.assertEqual(basis["scopes"],
                              ["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"])
             # Minted (baked) operations echoed separately
@@ -383,24 +382,28 @@ class ScopeBasisEchoTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _resolve_role_scopes helper
+# get_role_scopes helper (registry-backed, AIPOS-R4B-1)
 # ---------------------------------------------------------------------------
 
-class ResolveRoleScopesTests(unittest.TestCase):
-    """Unit tests for the _resolve_role_scopes helper."""
+class GetRoleScopesTests(unittest.TestCase):
+    """Unit tests for the registry-backed get_role_scopes helper."""
 
     def test_known_roles(self) -> None:
-        self.assertIn("queue_claim", _resolve_role_scopes("executor"))
-        self.assertIn("owner_confirm", _resolve_role_scopes("owner"))
-        self.assertIn("audit_verdict", _resolve_role_scopes("auditor"))
-        self.assertIn("audit_dispatch", _resolve_role_scopes("owner-dispatch"))
-        self.assertEqual(_resolve_role_scopes("copilot"), [])
-        self.assertIn("draft_submit", _resolve_role_scopes("planner"))
-        self.assertIn("draft_publish", _resolve_role_scopes("planner"))
+        self.assertIn("queue_claim", get_role_scopes("executor"))
+        self.assertIn("owner_confirm", get_role_scopes("owner"))
+        self.assertIn("audit_verdict", get_role_scopes("auditor"))
+        self.assertIn("audit_dispatch", get_role_scopes("owner-dispatch"))
+        self.assertEqual(get_role_scopes("copilot"), [])
+        self.assertIn("draft_submit", get_role_scopes("planner"))
+        self.assertIn("draft_publish", get_role_scopes("planner"))
+
+    def test_custom_role_resolves_via_class(self) -> None:
+        # AIPOS-352 link reuse: custom name -> builtin class -> registry scopes
+        self.assertIn("queue_claim", get_role_scopes("kiwiaiops", role_class="executor"))
 
     def test_unknown_role_returns_empty(self) -> None:
-        self.assertEqual(_resolve_role_scopes("nonexistent"), [])
-        self.assertEqual(_resolve_role_scopes(""), [])
+        self.assertEqual(get_role_scopes("nonexistent"), [])
+        self.assertEqual(get_role_scopes(""), [])
 
 
 if __name__ == "__main__":
