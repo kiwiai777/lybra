@@ -120,7 +120,10 @@ def _check_scoped_paths(
     # 标准化路径：确保相对路径，去掉前导 ./
     normalized_paths = []
     for p in scoped_paths:
-        p_clean = str(p).lstrip("./")
+        # F-R4B2-7: Use removeprefix instead of lstrip to avoid eating leading dots
+        p_clean = str(p)
+        if p_clean.startswith("./"):
+            p_clean = p_clean[2:]
         if p_clean:
             normalized_paths.append(p_clean)
     

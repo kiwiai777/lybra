@@ -87,14 +87,20 @@ def resolve_audit_context(
                     actor = token_entry.get("actor") or agent_instance
                     break
             
-            # Try to get policy reference
+            # F-R4B2-2: Try to get policy reference (priority: explicit > policy.json > env)
             policy_file = lybra_dir / "policy.json"
             if policy_file.exists():
+                import json
                 policy_data = json.loads(policy_file.read_text(encoding="utf-8"))
                 owner_policy_ref = policy_data.get("policy_id")
     except Exception:
         # Discovery failed, use fallback
         pass
+    
+    # F-R4B2-2: Fallback to env if policy not found in config
+    if not owner_policy_ref:
+        import os
+        owner_policy_ref = os.environ.get("LYBRA_OWNER_POLICY_REF")
     
     if token and gate_url:
         source = "explicit"
@@ -129,7 +135,7 @@ def build_audit_verdict_dry_run_args(
     
     Args:
         reviewed_task_id: 被审计任务 ID
-        verdict: 裁决（PASS/FAIL/CONDITIONAL）
+        verdict: 裁决（PASS/PASS_WITH_NOTES/FAIL/BLOCK/WARN，从 enums.schema 读取）
         context: 从 resolve_audit_context 得到的上下文
         其他参数: 可选的审计元数据
     
@@ -140,7 +146,7 @@ def build_audit_verdict_dry_run_args(
         "reviewed_task_id": reviewed_task_id,
         "actor": context.get("actor") or context.get("agent_instance") or "unknown-auditor",
         "agent_instance": context.get("agent_instance") or context.get("actor") or "unknown-auditor",
-        "owner_policy_ref": context.get("owner_policy_ref") or "default-policy",
+        "owner_policy_ref": context.get("owner_policy_ref") or "unknown-policy",
         "autonomy_mode": "Supervised",
         "verdict": verdict,
     }
@@ -186,7 +192,7 @@ def build_audit_verdict_confirm_args(
         "dry_run_token": dry_run_token,
         "actor": context.get("actor") or context.get("agent_instance") or "unknown-auditor",
         "agent_instance": context.get("agent_instance") or context.get("actor") or "unknown-auditor",
-        "owner_policy_ref": context.get("owner_policy_ref") or "default-policy",
+        "owner_policy_ref": context.get("owner_policy_ref") or "unknown-policy",
         "owner_confirmation_token": "OWNER_CONFIRMED",
     }
 

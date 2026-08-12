@@ -2110,72 +2110,7 @@ def _resolve_product_code_repo(governance_root: Path) -> Path:
     )
 
 
-def _check_uncommitted_code(repo_root: Path, task_id: str) -> dict[str, Any]:
-    """AIPOS-FND-5 / AIPOS-FND-5F1: Check if code task has uncommitted changes in working tree.
-
-    ``repo_root`` here MUST be the resolved PRODUCT code repo (see
-    ``_resolve_product_code_repo``), not the governance workspace root — the governance
-    monorepo's own dirt (task cards/records for unrelated projects) must never block a code
-    task's return.
-
-    Returns:
-        dict with keys:
-            - has_uncommitted: bool
-            - message: str (if has_uncommitted=True)
-            - details: dict (git status output, HEAD check)
-    """
-    try:
-        # Check git status --porcelain (non-empty = uncommitted changes)
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode != 0:
-            # Not a git repo or git command failed - skip check
-            return {"has_uncommitted": False, "skip_reason": "git status failed"}
-        
-        status_output = result.stdout.strip()
-        if status_output:
-            # Has uncommitted changes
-            lines = status_output.split("\n")
-            file_count = len(lines)
-            return {
-                "has_uncommitted": True,
-                "message": f"Working tree has {file_count} uncommitted file(s)",
-                "details": {"status_output": status_output[:500]},  # Truncate for safety
-            }
-        
-        # Check if there's a recent commit mentioning this task_id
-        # (This is optional verification - primary check is status above)
-        if task_id:
-            result = subprocess.run(
-                ["git", "log", "-1", "--oneline", "--grep", task_id],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                # Found a commit mentioning task_id - good signal
-                return {
-                    "has_uncommitted": False,
-                    "commit_found": True,
-                    "commit_line": result.stdout.strip()[:200],
-                }
-        
-        # No uncommitted changes and no verification needed
-        return {"has_uncommitted": False}
-    
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        # Git command failed - skip check to avoid false blocking
-        return {
-            "has_uncommitted": False,
-            "skip_reason": f"git check error: {type(exc).__name__}",
-        }
-
+# F-R4B2-6: _check_uncommitted_code 已退役，改用 scoped_commit_check.check_uncommitted_in_scope
 
 def _task_filename_for(task_id: str) -> str:
     value = "".join(char.lower() if char.isalnum() else "-" for char in task_id).strip("-")

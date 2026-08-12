@@ -306,15 +306,22 @@ def test_split_repo_product_dirty_is_blocked():
 # ---------------------------------------------------------------------------
 
 def test_return_task_blocks_on_uncommitted_product_code():
-    """FND-5 Integration: return_task blocks when product repo has uncommitted changes."""
+    """FND-5 Integration: return_task blocks when product repo has uncommitted changes.
+    
+    F-R4B2-4: Updated for scoped check - uncommitted file must be within task's output_target.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # Product repo with uncommitted code
+        # Product repo with uncommitted code IN SCOPE (tools/aipos_cli/)
         product_repo = tmp / "product"
         product_repo.mkdir()
         _init_git_repo(product_repo)
-        (product_repo / "uncommitted_code.py").write_text("# Not committed\n", encoding="utf-8")
+        
+        # F-R4B2-4: Put uncommitted file within output_target scope
+        scope_dir = product_repo / "tools" / "aipos_cli"
+        scope_dir.mkdir(parents=True)
+        (scope_dir / "uncommitted_code.py").write_text("# Not committed\n", encoding="utf-8")
 
         # Governance workspace pointing at the dirty product repo
         governance_root = tmp / "governance"
@@ -336,7 +343,7 @@ def test_return_task_blocks_on_uncommitted_product_code():
         blocking_reasons = result.get("blocking_reasons", [])
         assert any("CODE_NOT_COMMITTED" in str(r) for r in blocking_reasons), \
             f"Expected CODE_NOT_COMMITTED in blocking_reasons, got {blocking_reasons}"
-        print("✓ return_task blocks on uncommitted product-repo code")
+        print("✓ return_task blocks on uncommitted product-repo code (in scope)")
 
 
 def test_return_task_not_blocked_when_product_repo_clean_governance_dirty():
@@ -461,15 +468,22 @@ def test_return_task_passes_on_committed_code():
 
 
 def test_artifact_policy_formal_write_triggers_check():
-    """FND-5 Coverage: artifact_policy=formal_write also triggers the product-repo check."""
+    """FND-5 Coverage: artifact_policy=formal_write also triggers the product-repo check.
+    
+    F-R4B2-4: Updated for scoped check - uncommitted file must be within task's output_target.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # Product repo: dirty
+        # Product repo: dirty IN SCOPE
         product_repo = tmp / "product"
         product_repo.mkdir()
         _init_git_repo(product_repo)
-        (product_repo / "formal_artifact.txt").write_text("Uncommitted\n", encoding="utf-8")
+        
+        # F-R4B2-4: Put uncommitted file within output_target scope
+        scope_dir = product_repo / "tools" / "aipos_cli"
+        scope_dir.mkdir(parents=True)
+        (scope_dir / "formal_artifact.txt").write_text("Uncommitted\n", encoding="utf-8")
 
         # Governance workspace with artifact_policy=formal_write (not task_mode=code)
         governance_root = tmp / "governance"
@@ -494,7 +508,7 @@ def test_artifact_policy_formal_write_triggers_check():
         blocking_reasons = result.get("blocking_reasons", [])
         assert any("CODE_NOT_COMMITTED" in str(r) for r in blocking_reasons), \
             f"artifact_policy=formal_write should trigger check, got {blocking_reasons}"
-        print("✓ artifact_policy=formal_write triggers product-repo check")
+        print("✓ artifact_policy=formal_write triggers product-repo check (scoped)")
 
 
 if __name__ == "__main__":

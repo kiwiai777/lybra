@@ -520,9 +520,10 @@ def finalize_task(
             else:
                 deployment_error = deploy_result["stderr"]
                 operations.append(f"✗ lybra-deploy FAILED: {deploy_result['stderr'][:200]}")
-        elif push:
-            # AIPOS-FND-9: Auto-deploy gate-side changes (仅当 push=True 且 deploy=False 时)
+        else:
+            # F-R4B2-3: FND-9 Auto-deploy gate-side changes (无论 push 与否都检查)
             from tools.aipos_cli.gate_drift import check_gate_drift
+            from tools.aipos_cli.finalize_enhanced import invoke_lybra_deploy
             
             drift_check = check_gate_drift(workspace_root)
             operations.append(f"Drift check: {drift_check['message']}")
@@ -531,44 +532,26 @@ def finalize_task(
                 # Gate-side changes detected - auto-deploy
                 operations.append("⚠️  Gate-side changes detected - triggering auto-deploy...")
                 
-                deploy_script = workspace_root / "tools" / "lybra-deploy"
-                if deploy_script.exists():
-                    try:
-                        result = subprocess.run(
-                            [str(deploy_script)],
-                            cwd=str(workspace_root),
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            timeout=120,
-                        )
-                        operations.append("✓ Deployment completed successfully")
-                        # Append deployment output (first 10 lines)
-                        deploy_lines = result.stdout.strip().splitlines()
-                        for line in deploy_lines[:10]:
-                            operations.append(f"  {line}")
-                        if len(deploy_lines) > 10:
-                            operations.append(f"  ... ({len(deploy_lines) - 10} more lines)")
-                        deployed = True
-                    except subprocess.CalledProcessError as e:
-                        deployment_error = e.stderr
-                        operations.append(f"✗ Deployment FAILED: {e.stderr[:200]}")
-                        # Don't fail the finalize, but warn strongly
-                    except subprocess.TimeoutExpired:
-                        deployment_error = "Deployment timed out after 120s"
-                        operations.append("✗ Deployment FAILED: timed out after 120s")
+                deploy_result = invoke_lybra_deploy(workspace_root)
+                if deploy_result["success"]:
+                    operations.append("✓ Deployment completed successfully")
+                    # Append deployment output (first 10 lines)
+                    deploy_lines = deploy_result["stdout"].strip().splitlines()
+                    for line in deploy_lines[:10]:
+                        operations.append(f"  {line}")
+                    if len(deploy_lines) > 10:
+                        operations.append(f"  ... ({len(deploy_lines) - 10} more lines)")
+                    deployed = True
                 else:
-                    deployment_error = "lybra-deploy script not found"
-                    operations.append(f"✗ Cannot auto-deploy: {deploy_script} not found")
+                    deployment_error = deploy_result["stderr"]
+                    operations.append(f"✗ Deployment FAILED: {deploy_result['stderr'][:200]}")
+                    # Don't fail the finalize, but warn strongly
             elif drift_check["has_drift"] and not drift_check["classification"]["has_gate_side_changes"]:
                 operations.append("ℹ️  CLI-side changes only - no deployment needed")
                 deployment_skipped = True
             else:
                 operations.append("ℹ️  No drift detected - deployment up-to-date")
                 deployment_skipped = True
-        else:
-            # Neither push nor deploy requested
-            deployment_skipped = True
         
         # Build final message
         final_message = f"Successfully committed changes: {commit_hash[:8]}"
