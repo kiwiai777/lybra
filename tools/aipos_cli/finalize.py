@@ -22,6 +22,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from tools.schema_loader import get_enum_values
+
+# FND-47: record_type 从 enums.schema 读取（单一源）
+_RECORD_TYPE_ENUM_CACHE: list[str] | None = None
+
+def _get_valid_record_types() -> list[str]:
+    """Get all valid record_type values from enums.schema.json."""
+    global _RECORD_TYPE_ENUM_CACHE
+    if _RECORD_TYPE_ENUM_CACHE is None:
+        _RECORD_TYPE_ENUM_CACHE = get_enum_values("record_type")
+    return _RECORD_TYPE_ENUM_CACHE
+
 
 def _git_rev_parse_head(repo_root: Path) -> str:
     """Get current git HEAD commit hash."""
@@ -141,10 +153,10 @@ def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, An
     markdown file: anyone could hand-write ``verdict: PASS`` into it and finalize would trust
     it, which is backwards for an accountability harness.
 
-    The authoritative source of truth is the gate's own audit_verdict_record files under
+    The authoritative source of truth is the gate's own audit verdict record files under
     ``<governance_root>/5_tasks/records/audit_verdicts/<task_id>/*.md`` — written ONLY by the
-    ``audit_verdict`` MCP verb, always carrying ``record_type: audit_verdict_record``. This
-    scans that directory, rejects any file that doesn't carry that exact ``record_type`` (never
+    ``audit_verdict`` MCP verb, carrying ``record_type`` from enums.schema audit_verdict family. This
+    scans that directory, rejects any file that doesn't carry a valid audit_verdict record_type (never
     counts hand-written markdown as judgeable evidence), sorts the rest by ``verdict_at``, and
     requires the LATEST terminal verdict to be PASS or PASS_WITH_NOTES (same acceptance rule as
     ``queue_mutation._check_for_pass_audit_verdict``, AIPOS-FND-7F3).
@@ -189,9 +201,14 @@ def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, An
         except OSError:
             continue
         metadata, _body, _warnings = parse_markdown_frontmatter(text)
-        # AIPOS-FND-14: reject hand-written markdown masquerading as a gate verdict. A real
-        # gate audit_verdict_record ALWAYS carries record_type: audit_verdict_record.
-        if str(metadata.get("record_type") or "").strip() != "audit_verdict_record":
+        # AIPOS-FND-14 + FND-47: reject hand-written markdown masquerading as a gate verdict.
+        # A real gate audit_verdict record carries record_type from enums.schema audit_verdict family.
+        # FND-47 fix: read valid types from schema (single source), accept both audit_verdict and
+        # audit_verdict_record (legacy) to handle schema migration period.
+        record_type = str(metadata.get("record_type") or "").strip()
+        valid_types = _get_valid_record_types()
+        # Accept audit_verdict* family (audit_verdict, audit_verdict_record)
+        if not (record_type in valid_types and record_type.startswith("audit_verdict")):
             continue
         verdict_value = str(metadata.get("verdict") or "").strip().upper()
         verdict_at = str(metadata.get("verdict_at") or metadata.get("timestamp") or "")
@@ -213,7 +230,7 @@ def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, An
             "verdict_id": None,
             "reason": (
                 f"No gate audit verdict record found for {task_id} under {verdicts_dir} "
-                "(files present but none carry record_type: audit_verdict_record — hand-written "
+                "(files present but none carry valid audit_verdict* record_type from enums.schema — hand-written "
                 "markdown is never accepted as finalize evidence)."
             ),
         }
@@ -259,9 +276,9 @@ def finalize_task(
     治理仓(5_tasks/records/)的 git 操作归 N6 收账节点(顾问职责),executor 无权。
     
     AIPOS-FND-9: After commit, auto-deploys gate-side changes to prevent drift.
-    AIPOS-FND-14: Audit eligibility is now checked against the authoritative gate
-    audit_verdict_record (governance workspace 5_tasks/records/), NOT the task_cards
-    AUDIT-REPORT markdown frontmatter.
+    AIPOS-FND-14 + FND-47: Audit eligibility is now checked against the authoritative gate
+    audit verdict record (governance workspace 5_tasks/records/), NOT the task_cards
+    AUDIT-REPORT markdown frontmatter. FND-47: record_type validation reads from enums.schema (single source).
 
     Args:
         task_id: Task ID to finalize

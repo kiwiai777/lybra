@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "description": "Lybra enumeration values - single source of truth for all enum types",
-  "last_updated": "2026-08-11",
+  "last_updated": "2026-08-12",
   "enums": {
     "queue_state": {
       "description": "Task queue states",
@@ -61,28 +61,68 @@
       "description": "Record types in the system",
       "values": [
         {
-          "value": "claim",
-          "description": "Task claim record"
-        },
-        {
-          "value": "return",
-          "description": "Task return record"
+          "value": "ai_authoring_provenance",
+          "description": "AI authoring provenance record"
         },
         {
           "value": "audit_dispatch",
           "description": "Audit dispatch record"
         },
         {
+          "value": "audit_dispatch_record",
+          "description": "Audit dispatch record (deprecated, use audit_dispatch)"
+        },
+        {
           "value": "audit_verdict",
           "description": "Audit verdict record"
+        },
+        {
+          "value": "audit_verdict_record",
+          "description": "Audit verdict record (deprecated, use audit_verdict)"
+        },
+        {
+          "value": "bench_audit",
+          "description": "Bench audit record"
+        },
+        {
+          "value": "claim",
+          "description": "Task claim record"
+        },
+        {
+          "value": "claim_log",
+          "description": "Claim log record (deprecated, use claim)"
+        },
+        {
+          "value": "claim_record",
+          "description": "Claim record (deprecated, use claim)"
         },
         {
           "value": "closure",
           "description": "Task closure record"
         },
         {
+          "value": "closure_record",
+          "description": "Closure record (deprecated, use closure)"
+        },
+        {
+          "value": "external_intake_draft",
+          "description": "External intake draft record"
+        },
+        {
+          "value": "ingested_artifact",
+          "description": "Ingested artifact record"
+        },
+        {
+          "value": "owner_autonomy_policy",
+          "description": "Owner autonomy policy record"
+        },
+        {
           "value": "owner_decision",
           "description": "Owner decision record"
+        },
+        {
+          "value": "owner_decision_record",
+          "description": "Owner decision record (deprecated, use owner_decision)"
         },
         {
           "value": "owner_verification",
@@ -91,6 +131,26 @@
         {
           "value": "publish",
           "description": "Task publish record"
+        },
+        {
+          "value": "publish_record",
+          "description": "Publish record (deprecated, use publish)"
+        },
+        {
+          "value": "return",
+          "description": "Task return record"
+        },
+        {
+          "value": "return_record",
+          "description": "Return record (deprecated, use return)"
+        },
+        {
+          "value": "session_record",
+          "description": "Session record (claim execution tracking)"
+        },
+        {
+          "value": "task_progress_event",
+          "description": "Task progress event record"
         }
       ]
     },
