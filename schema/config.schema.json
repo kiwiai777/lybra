@@ -33,7 +33,7 @@
           "type": "string",
           "required": true,
           "description": "Agent role category",
-          "enum": ["executor", "auditor", "owner", "owner-dispatch", "planner", "copilot"]
+          "$enum": "role_category"
         },
         "agent_instance": {
           "type": "string",
@@ -58,7 +58,7 @@
         },
         "autonomy_mode": {
           "type": "string",
-          "enum": ["Supervised", "PreAuthorized", "FullyAutonomous"],
+          "$enum": "autonomy_mode",
           "required": true,
           "description": "Default autonomy mode"
         },

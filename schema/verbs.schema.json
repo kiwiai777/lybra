@@ -49,7 +49,7 @@
       },
       "dry_run_response": {
         "ok": {"type": "boolean", "description": "Operation success status"},
-        "verdict": {"type": "string", "enum": ["PASS", "WARN", "BLOCK"], "description": "Validation verdict"},
+        "verdict": {"type": "string", "$enum": "validation_verdict", "description": "Validation verdict"},
         "task_id": {"type": "string", "description": "Task identifier"},
         "source_path": {"type": "string", "description": "Source draft path"},
         "target_path": {"type": "string", "description": "Target pending queue path"},
@@ -101,7 +101,7 @@
         },
         "autonomy_mode": {
           "type": "string",
-          "enum": ["Supervised", "PreAuthorized", "FullyAutonomous"],
+          "$enum": "autonomy_mode",
           "required": true,
           "description": "Autonomy mode for this claim"
         },
@@ -113,7 +113,7 @@
       },
       "dry_run_response": {
         "ok": {"type": "boolean"},
-        "verdict": {"type": "string", "enum": ["PASS", "WARN", "BLOCK"]},
+        "verdict": {"type": "string", "$enum": "validation_verdict"},
         "task_id": {"type": "string"},
         "claim_id": {"type": "string", "description": "Generated claim identifier"},
         "context": {
@@ -142,7 +142,7 @@
         },
         "status": {
           "type": "string",
-          "enum": ["started", "progress", "completed", "blocked"],
+          "$enum": "progress_status",
           "required": true,
           "description": "Progress status"
         },
@@ -200,7 +200,7 @@
       },
       "dry_run_response": {
         "ok": {"type": "boolean"},
-        "verdict": {"type": "string", "enum": ["PASS", "WARN", "BLOCK"]},
+        "verdict": {"type": "string", "$enum": "validation_verdict"},
         "return_id": {"type": "string", "description": "Generated return identifier"},
         "commit_check": {"type": "object", "description": "Commit verification results"},
         "dry_run_token": {"type": "string"}
@@ -245,7 +245,7 @@
         },
         "verdict": {
           "type": "string",
-          "enum": ["PASS", "PASS_WITH_NOTES", "FAIL", "BLOCK", "WARN"],
+          "$enum": "verdict",
           "required": true,
           "description": "Audit verdict"
         },

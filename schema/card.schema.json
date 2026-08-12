@@ -37,19 +37,19 @@
     "task_mode": {
       "type": "string",
       "required": true,
-      "enum": ["code", "docs", "governance", "config"],
+      "$enum": "task_mode",
       "description": "Task mode - determines workflow routing (code=full N0-N6; docs/governance/config=skip N4/N5)"
     },
     "task_class": {
       "type": "string",
       "required": false,
-      "enum": ["simple", "standard", "complex"],
+      "$enum": "task_class",
       "description": "Task complexity classification"
     },
     "task_type": {
       "type": "string",
       "required": false,
-      "enum": ["one_shot", "continuous", "scheduled"],
+      "$enum": "task_type",
       "description": "Task execution type"
     },
     "model_tier": {
@@ -60,13 +60,13 @@
     "priority": {
       "type": "string",
       "required": true,
-      "enum": ["low", "medium", "high", "critical"],
+      "$enum": "priority",
       "description": "Task priority level"
     },
     "status": {
       "type": "string",
       "required": true,
-      "enum": ["pending", "claimed", "returned", "completed", "blocked", "withdrawn"],
+      "$enum": "queue_state",
       "description": "Current task queue state"
     },
     "created_by": {
@@ -99,7 +99,7 @@
     "artifact_policy": {
       "type": "string",
       "required": true,
-      "enum": ["formal_write", "scratch_only", "read_only"],
+      "$enum": "artifact_policy",
       "description": "Artifact handling policy"
     },
     "artifact_scope": {
@@ -127,7 +127,7 @@
     "context_isolation": {
       "type": "string",
       "required": false,
-      "enum": ["shared", "isolated"],
+      "$enum": "context_isolation",
       "description": "Context isolation level"
     },
     "memory_scope": {
@@ -197,7 +197,7 @@
     "audit": {
       "type": "string",
       "required": false,
-      "enum": ["required", "none", "optional"],
+      "$enum": "audit_requirement",
       "description": "Audit requirement level"
     },
     "audit_status": {
@@ -435,13 +435,13 @@
     "polling_mode": {
       "type": "string",
       "required": false,
-      "enum": ["agent_polling", "push_notify", "hybrid"],
+      "$enum": "polling_mode",
       "description": "Task polling mode"
     },
     "claim_policy": {
       "type": "string",
       "required": false,
-      "enum": ["assigned_agent_only", "any_qualified", "open"],
+      "$enum": "claim_policy",
       "description": "Claim policy for task"
     },
     "claim_source": {
@@ -462,13 +462,8 @@
     "report_mode": {
       "type": "string",
       "required": false,
-      "enum": ["forum_reply", "inline", "separate_doc"],
+      "$enum": "report_mode",
       "description": "Reporting mode for task results"
-    },
-    "report_mode": {
-      "type": "string",
-      "required": false,
-      "description": "Reporting mode"
     },
     "external_ref": {
       "type": "string",
@@ -536,7 +531,7 @@
     "autonomy_mode": {
       "type": "string",
       "required": false,
-      "enum": ["Supervised", "PreAuthorized", "FullyAutonomous"],
+      "$enum": "autonomy_mode",
       "description": "Autonomy mode for task execution"
     },
     "actor": {
@@ -648,7 +643,7 @@
     "risk_level": {
       "type": "string",
       "required": false,
-      "enum": ["low", "medium", "high", "critical"],
+      "$enum": "risk_level",
       "description": "Risk level assessment"
     },
     "warnings": {

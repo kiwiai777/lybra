@@ -124,6 +124,46 @@ def load_schema(schema_type: SchemaType, repo_root: Path | None = None) -> dict[
     return _load_json_file(schema_path)
 
 
+def resolve_enum_ref(enum_name: str, repo_root: Path | None = None) -> list[str]:
+    """Resolve an enum name to its values from enums.schema.json (single source).
+
+    Args:
+        enum_name: Name of the enum in enums.schema.json
+        repo_root: Repository root path
+
+    Returns:
+        List of valid enum values
+
+    Raises:
+        SchemaLoadError: If enum not found in enums.schema.json
+    """
+    enums_schema = load_schema("enums", repo_root)
+    enum_def = enums_schema.get("enums", {}).get(enum_name)
+    if enum_def is None:
+        raise SchemaLoadError(
+            f"$enum reference '{enum_name}' not found in enums.schema.json. "
+            f"Available enums: {sorted(enums_schema.get('enums', {}).keys())}"
+        )
+    return [item["value"] for item in enum_def.get("values", [])]
+
+
+def resolve_field_enum(field_schema: dict[str, Any], repo_root: Path | None = None) -> list[str] | None:
+    """Resolve enum values from a field schema dict.
+
+    Handles both:
+    - Legacy inline "enum": [...] (for backward compat during transition)
+    - New "$enum": "name" reference (resolved via enums.schema.json)
+
+    Returns None if field has no enum constraint.
+    Raises SchemaLoadError if $enum references a non-existent enum.
+    """
+    if "$enum" in field_schema:
+        return resolve_enum_ref(field_schema["$enum"], repo_root)
+    if "enum" in field_schema:
+        return list(field_schema["enum"])
+    return None
+
+
 def get_card_field_schema(field_name: str, repo_root: Path | None = None) -> dict[str, Any] | None:
     """Get schema definition for a specific card field.
     
@@ -460,9 +500,9 @@ def validate_field_value(field_name: str, value: Any, repo_root: Path | None = N
     elif field_type == "object" and not isinstance(value, dict):
         return False, f"Field '{field_name}' must be an object, got {type(value).__name__}"
     
-    # Enum validation
-    if "enum" in field_schema:
-        allowed_values = field_schema["enum"]
+    # Enum validation (resolves $enum references from enums.schema.json)
+    allowed_values = resolve_field_enum(field_schema, repo_root)
+    if allowed_values is not None:
         if value not in allowed_values:
             return False, f"Field '{field_name}' value '{value}' not in allowed values: {allowed_values}"
     
@@ -509,10 +549,113 @@ def get_schema_version(schema_type: SchemaType, repo_root: Path | None = None) -
     return schema.get("schema_version", "unknown")
 
 
+# ---------------------------------------------------------------------------
+# Cross-validation (AIPOS-SCHEMA-UNIFY-1: single-source enforcement)
+# ---------------------------------------------------------------------------
+
+def _walk_for_enum_literals(obj: Any, path: str) -> list[str]:
+    """Recursively walk a JSON structure and find residual 'enum' array literals."""
+    findings = []
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            current_path = f"{path}.{key}" if path else key
+            if key == "enum" and isinstance(val, list):
+                findings.append(f"{current_path}: {val}")
+            else:
+                findings.extend(_walk_for_enum_literals(val, current_path))
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            findings.extend(_walk_for_enum_literals(item, f"{path}[{i}]"))
+    return findings
+
+
+def _walk_for_enum_refs(obj: Any, path: str) -> list[tuple[str, str]]:
+    """Recursively walk a JSON structure and find all '$enum' references."""
+    findings = []
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            current_path = f"{path}.{key}" if path else key
+            if key == "$enum" and isinstance(val, str):
+                findings.append((current_path, val))
+            else:
+                findings.extend(_walk_for_enum_refs(val, current_path))
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            findings.extend(_walk_for_enum_refs(item, f"{path}[{i}]"))
+    return findings
+
+
+def cross_validate_schemas(repo_root: Path | None = None) -> list[str]:
+    """Cross-validate schema package for single-source compliance.
+
+    Checks:
+    1. All '$enum' references resolve to existing enums in enums.schema.json
+    2. No residual 'enum' array literals exist outside enums.schema.json
+
+    Returns:
+        List of error messages (empty = all good)
+
+    Raises:
+        SchemaLoadError: If any validation error is found (with all errors listed)
+    """
+    errors: list[str] = []
+
+    # Get known enum names
+    enums_schema = load_schema("enums", repo_root)
+    known_enums = set(enums_schema.get("enums", {}).keys())
+
+    # Check schemas that should use $enum references (not enums.schema.json itself)
+    schemas_to_check: list[SchemaType] = ["card", "verbs", "config", "transitions", "roles"]
+
+    for schema_type in schemas_to_check:
+        try:
+            schema_data = load_schema(schema_type, repo_root)
+        except SchemaLoadError:
+            continue  # Schema file might not exist yet
+
+        schema_path = f"{schema_type}.schema.json"
+
+        # Check 1: No residual 'enum' array literals
+        residual = _walk_for_enum_literals(schema_data, schema_path)
+        for r in residual:
+            errors.append(
+                f"RESIDUAL ENUM LITERAL in {r} — "
+                f"must use {{\"$enum\": \"<enum_name>\"}} referencing enums.schema.json"
+            )
+
+        # Check 2: All '$enum' references resolve
+        refs = _walk_for_enum_refs(schema_data, schema_path)
+        for ref_path, enum_name in refs:
+            if enum_name not in known_enums:
+                errors.append(
+                    f"BROKEN $enum REF at {ref_path}: '{enum_name}' "
+                    f"not found in enums.schema.json. Available: {sorted(known_enums)}"
+                )
+
+    if errors:
+        raise SchemaLoadError(
+            f"Schema cross-validation failed ({len(errors)} error(s)):\n"
+            + "\n".join(f"  - {e}" for e in errors)
+        )
+
+    return errors
+
+
+def validate_all_enum_refs(repo_root: Path | None = None) -> bool:
+    """Validate all $enum references resolve. Raises SchemaLoadError on failure.
+
+    Convenience wrapper around cross_validate_schemas() that returns True on success.
+    """
+    cross_validate_schemas(repo_root)
+    return True
+
+
 # Convenience exports
 __all__ = [
     "SchemaLoadError",
     "load_schema",
+    "resolve_enum_ref",
+    "resolve_field_enum",
     "get_card_field_schema",
     "get_enum_values",
     "get_required_card_fields",
@@ -535,4 +678,6 @@ __all__ = [
     "get_all_defined_fields",
     "get_schema_version",
     "clear_cache",
+    "cross_validate_schemas",
+    "validate_all_enum_refs",
 ]

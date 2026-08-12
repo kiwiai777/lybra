@@ -302,6 +302,82 @@
           "description": "Separate document report"
         }
       ]
+    },
+    "task_type": {
+      "description": "Task execution types",
+      "values": [
+        {
+          "value": "one_shot",
+          "description": "Single execution task"
+        },
+        {
+          "value": "continuous",
+          "description": "Continuous ongoing task"
+        },
+        {
+          "value": "scheduled",
+          "description": "Scheduled/recurring task"
+        }
+      ]
+    },
+    "risk_level": {
+      "description": "Risk assessment levels",
+      "values": [
+        {
+          "value": "low",
+          "description": "Low risk"
+        },
+        {
+          "value": "medium",
+          "description": "Medium risk"
+        },
+        {
+          "value": "high",
+          "description": "High risk"
+        },
+        {
+          "value": "critical",
+          "description": "Critical risk"
+        }
+      ]
+    },
+    "validation_verdict": {
+      "description": "Dry-run validation verdicts (subset of full audit verdict, used in verb responses)",
+      "values": [
+        {
+          "value": "PASS",
+          "description": "Validation passed"
+        },
+        {
+          "value": "WARN",
+          "description": "Validation passed with warnings"
+        },
+        {
+          "value": "BLOCK",
+          "description": "Validation blocked"
+        }
+      ]
+    },
+    "progress_status": {
+      "description": "Task progress reporting statuses (used by lybra_task_progress)",
+      "values": [
+        {
+          "value": "started",
+          "description": "Work has begun"
+        },
+        {
+          "value": "progress",
+          "description": "Intermediate progress update"
+        },
+        {
+          "value": "completed",
+          "description": "Work completed"
+        },
+        {
+          "value": "blocked",
+          "description": "Cannot proceed"
+        }
+      ]
     }
   }
 }

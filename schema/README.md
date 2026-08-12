@@ -1,5 +1,68 @@
 # AIPOS-R0 Schema Package Implementation
 
+## Schema 间依赖图 (AIPOS-SCHEMA-UNIFY-1)
+
+enums.schema.json 是包内唯一值域源。其他 schema 通过 `{"$enum": "<name>"}` 按名引用,
+loader 解析展开 + 加载时交叉校验(引用不存在/字面量残留 = SchemaLoadError)。
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    enums.schema.json                             │
+│               (唯一值域源 / Single Source of Truth)              │
+│                                                                  │
+│  queue_state  verdict  task_mode  task_class  priority           │
+│  artifact_policy  autonomy_mode  audit_requirement                │
+│  context_isolation  polling_mode  claim_policy  report_mode      │
+│  role_category  record_type                                       │
+│  task_type  risk_level  validation_verdict  progress_status      │
+└──────┬──────────┬──────────┬──────────┬──────────┬───────────────┘
+       │          │          │          │          │
+  $enum│     $enum│     $enum│     $enum│     $enum│
+       ▼          ▼          ▼          ▼          ▼
+ ┌──────────┐ ┌────────┐ ┌──────────────┐ ┌────────────┐ ┌──────────┐
+ │card.schema│ │verbs   │ │config.schema │ │roles.schema│ │transitions│
+ │.json      │ │.schema │ │.json         │ │.json       │ │.schema   │
+ │           │ │.json   │ │              │ │(语义引用    │ │.json     │
+ │status →   │ │verdict →│ │role →       │ │ role_category)│ │(描述式   │
+ │ queue_state│ │ verdict│ │ role_category│ │             │ │ 无机器    │
+ │task_mode →│ │autonomy │ │autonomy_mode │ │             │ │ 约束)    │
+ │ task_mode │ │ _mode  │ │              │ │             │ │          │
+ │priority → │ │validation│ │            │ │             │ │          │
+ │ priority  │ │ _verdict│ │            │ │             │ │          │
+ │...13 fields│ │progress │ │            │ │             │ │          │
+ │ use $enum │ │ _status │ │            │ │             │ │          │
+ └─────┬─────┘ └───┬────┘ └──────┬───────┘ └─────────────┘ └──────────┘
+       │           │             │
+       ▼           ▼             ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │              tools/schema_loader.py                          │
+ │        (唯一加载实现 / 一机制一实现)                          │
+ │                                                              │
+ │  resolve_enum_ref()     ← $enum → enums.schema.json 展开    │
+ │  resolve_field_enum()   ← 兼容旧 inline enum + 新 $enum    │
+ │  cross_validate_schemas() ← 加载时交叉校验                  │
+ │  validate_field_value() ← 消费方透明,内部自动解析 $enum    │
+ └─────────────────────────────────────────────────────────────┘
+       │
+       ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │                    消费方 (零行为变化)                        │
+ │                                                              │
+ │  draft_validator.py    ← validate_field_value (N0校验)      │
+ │  aipos_cli.py          ← get_enum_values (CLI枚举提示)      │
+ │  mcp_server/tools.py   ← get_verb_contract (动词契约)       │
+ │  enroll/distribute     ← get_role_spec (角色注册表)         │
+ └─────────────────────────────────────────────────────────────┘
+```
+
+### 引用规则
+
+1. **新增 schema 必先挂图**: 任何新 schema 文件加入包前,必须更新此依赖图
+2. **枚举值域只加 enums.schema.json**: 改值域只改一处,消费方自动跟随
+3. **禁止 inline enum 数组**: card/verbs/config 中不允许 `"enum": [...]` 字面量
+4. **引用不存在 = 加载即炸**: `cross_validate_schemas()` 在加载时校验所有 $enum 引用
+5. **一机制一实现**: 引用解析只在 `tools/schema_loader.py` 一处
+
 ## 交付内容
 
 ### 1. Schema包五件套（`schema/` 目录）
