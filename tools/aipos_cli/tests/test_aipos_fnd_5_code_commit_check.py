@@ -2,8 +2,8 @@
 """AIPOS-FND-5 / AIPOS-FND-5F1: Test code task return gate detects uncommitted changes.
 
 Tests:
-1. Unit: product-repo dirty -> _check_uncommitted_code returns has_uncommitted=True
-2. Unit: product-repo clean -> _check_uncommitted_code returns has_uncommitted=False
+1. Unit: product-repo dirty -> check_uncommitted_in_scope returns has_uncommitted=True
+2. Unit: product-repo clean -> check_uncommitted_in_scope returns has_uncommitted=False
 3. Unit: non-code task (validation/audit) -> no check triggered
 4. FND-5F1 split-repo: product-repo clean, governance-repo dirty -> NOT blocked
 5. FND-5F1 split-repo: product-repo dirty, governance-repo clean -> BLOCKED
@@ -22,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from board_adapter import (
     ProductRepoNotConfigured,
-    _check_uncommitted_code,
     _resolve_product_code_repo,
     return_task,
 )
@@ -109,11 +108,13 @@ claimed_at: 2026-01-01T00:00:00Z
 
 
 # ---------------------------------------------------------------------------
-# unit tests: _check_uncommitted_code (pure git-status check on the given dir)
+# F-R4B2-6: 改用 scoped_commit_check 替代已退役的 _check_uncommitted_code
 # ---------------------------------------------------------------------------
 
 def test_uncommitted_changes_detected():
     """FND-5 验收 1: product-repo dirty -> has_uncommitted=True."""
+    from tools.aipos_cli.scoped_commit_check import check_uncommitted_in_scope
+    
     with tempfile.TemporaryDirectory() as tmpdir:
         product_repo = Path(tmpdir) / "product"
         product_repo.mkdir()
@@ -122,7 +123,7 @@ def test_uncommitted_changes_detected():
         # Leave a dirty file
         (product_repo / "test_code.py").write_text("# Uncommitted\n", encoding="utf-8")
 
-        result = _check_uncommitted_code(product_repo, "TEST-CODE-001")
+        result = check_uncommitted_in_scope(product_repo, "TEST-CODE-001", scoped_paths=None)
         assert result.get("has_uncommitted") is True, f"Expected dirty, got {result}"
         assert "uncommitted" in result.get("message", "").lower()
         print("✓ product-repo dirty → detected")
@@ -130,6 +131,8 @@ def test_uncommitted_changes_detected():
 
 def test_committed_changes_pass():
     """FND-5 验收 2: product-repo clean -> has_uncommitted=False."""
+    from tools.aipos_cli.scoped_commit_check import check_uncommitted_in_scope
+    
     with tempfile.TemporaryDirectory() as tmpdir:
         product_repo = Path(tmpdir) / "product"
         product_repo.mkdir()
@@ -145,7 +148,7 @@ def test_committed_changes_pass():
             cwd=product_repo, check=True, capture_output=True,
         )
 
-        result = _check_uncommitted_code(product_repo, "TEST-CODE-002")
+        result = check_uncommitted_in_scope(product_repo, "TEST-CODE-002", scoped_paths=None)
         assert result.get("has_uncommitted") is False, f"Expected clean, got {result}"
         print("✓ product-repo clean → no block")
 
@@ -266,7 +269,8 @@ def test_split_repo_governance_dirty_product_clean_not_blocked():
             f"Expected product repo {product_repo}, got {product_resolved}"
 
         # And the commit check on the product repo should be clean
-        check = _check_uncommitted_code(product_resolved, "TEST-SPLIT-001")
+        from tools.aipos_cli.scoped_commit_check import check_uncommitted_in_scope
+        check = check_uncommitted_in_scope(product_resolved, "TEST-SPLIT-001", scoped_paths=None)
         assert check.get("has_uncommitted") is False, \
             f"Product repo is clean but check reported dirty: {check}"
         print("✓ governance-repo dirty + product-repo clean -> NOT blocked")
@@ -295,7 +299,8 @@ def test_split_repo_product_dirty_is_blocked():
 
         # The product repo should be detected as dirty
         product_resolved = _resolve_product_code_repo(governance_root)
-        check = _check_uncommitted_code(product_resolved, "TEST-SPLIT-002")
+        from tools.aipos_cli.scoped_commit_check import check_uncommitted_in_scope
+        check = check_uncommitted_in_scope(product_resolved, "TEST-SPLIT-002", scoped_paths=None)
         assert check.get("has_uncommitted") is True, \
             f"Product repo is dirty but check did not detect it: {check}"
         print("✓ product-repo dirty -> IS blocked (FND-5 preserved)")

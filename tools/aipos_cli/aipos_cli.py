@@ -1430,8 +1430,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # AIPOS-370 / FND-15: audit-verdict 顶级命令（真落库过 gate MCP）
     # F-R4B2-1: verdict choices 从 enums.schema 读（唯一权威）
-    from tools.schema_loader import load_enum_values
-    verdict_choices = load_enum_values("verdict")
+    from tools.schema_loader import get_enum_values
+    verdict_choices = get_enum_values("verdict")
     
     audit_verdict_parser = subparsers.add_parser("audit-verdict", help="Submit audit verdict for a reviewed task (via gate MCP)")
     audit_verdict_parser.add_argument("--audit-task-id", help="Audit task ID (optional)")
