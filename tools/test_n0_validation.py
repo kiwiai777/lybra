@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.aipos_cli.draft_validator import validate_draft_file
+from tools.aipos_cli.draft_validator import validate_draft_file, validate_draft_metadata
 
 # Use real repo root for schema access
 REPO_ROOT = Path(__file__).parent.parent
@@ -284,6 +284,56 @@ This draft has invalid enum values.
         return False
 
 
+def test_schema_lookup_independent_of_repo_root():
+    """AIPOS-SMOKE-LOOP-1 / R4A F-1 回归:schema 单一源在产品仓。
+
+    发卡时 repo_root=governance 项目根(无 schema/),N0 schema 校验绝不能因此崩。
+    断言:repo_root 指向一个【没有 schema/】的目录时,schema 仍从产品仓自动定位、
+    校验照常生效(故意喂非法 enum → 应被 schema 拦下,而非 Schema file not found)。
+    """
+    import shutil
+    import tempfile
+
+    print("Test 6: schema lookup independent of repo_root (no schema/ in repo_root)")
+    print("-" * 60)
+
+    fake_root = Path(tempfile.mkdtemp(prefix="n0-noschema-"))
+    try:
+        # minimal repo layout: drafts + queue dirs exist, but NO schema/
+        (fake_root / "5_tasks" / "drafts").mkdir(parents=True)
+        (fake_root / "5_tasks" / "queue").mkdir(parents=True)
+        assert not (fake_root / "schema").exists(), "test setup: fake_root must NOT have schema/"
+
+        # metadata with an INVALID enum (task_mode=bogus) to prove schema is consulted
+        md = {
+            "task_id": "SMOKE-LOOP-1-NOSCHEMA",
+            "title": "probe",
+            "project": "lybra",
+            "assigned_to": "exec.lybra.kiwiai-dev",
+            "context_bundle": "exec.lybra.kiwiai-dev",
+            "task_mode": "bogus-mode",  # invalid enum
+            "priority": "high",
+            "status": "pending",
+            "created_by": "advisor.lybra.kiwiai-dev",
+            "needs_owner": False,
+            "output_target": "repo",
+            "artifact_policy": "formal_write",
+        }
+        result = validate_draft_metadata(fake_root, md)
+        enum_blocked = any("task_mode" in r and "not in allowed values" in r for r in result["blocking_reasons"])
+        schema_not_found = any("Schema file not found" in r for r in result["blocking_reasons"])
+
+        if result["verdict"] == "BLOCK" and enum_blocked and not schema_not_found:
+            print("✓ PASS: schema auto-located from product repo; invalid enum caught; no 'Schema file not found'")
+            print()
+            return True
+        print(f"✗ FAIL: verdict={result['verdict']} reasons={result['blocking_reasons'][:3]}")
+        print()
+        return False
+    finally:
+        shutil.rmtree(fake_root, ignore_errors=True)
+
+
 def main():
     """Run all verification tests."""
     print("=" * 70)
@@ -300,6 +350,7 @@ def main():
         test_runtime_field_forbidden,
         test_valid_draft,
         test_enum_validation,
+        test_schema_lookup_independent_of_repo_root,
     ]
     
     results = []

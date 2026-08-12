@@ -201,37 +201,42 @@ def validate_draft_metadata(
         _add(blocking_reasons, f"Frontmatter parse issue: {error}")
 
     # AIPOS-R0: Schema-based validation (N0 gate)
+    # AIPOS-SMOKE-LOOP-1 / R4A F-1 同款修复: schema 单一源在产品仓 (schema/),
+    # 绝不能随本函数的 repo_root(发卡时=governance 项目根,无 schema/)去解析 →
+    # FileNotFoundError。schema_loader.* 默认 repo_root=None 自动定位产品仓
+    # (LOOP-REDESIGN v2 §5/§6 一机制一实现),这里禁传 repo_root 给任何 schema 查询。
+    # repo_root 参数仍用于草稿路径/碰撞等 repo-relative 操作,仅 schema 查询剥离它。
     if SCHEMA_AVAILABLE:
         # Check for undefined/misspelled fields
-        all_defined_fields = get_all_defined_fields(repo_root)
+        all_defined_fields = get_all_defined_fields()
         for field_name in metadata.keys():
             if field_name == "body":  # body is special, not in frontmatter schema
                 continue
-            if not is_field_defined(field_name, repo_root):
+            if not is_field_defined(field_name):
                 # Check for likely typos (similar field names)
                 similar = [f for f in all_defined_fields if f.lower().replace('_', '') == field_name.lower().replace('_', '')]
                 if similar:
                     _add(blocking_reasons, f"Unknown field '{field_name}' (did you mean '{similar[0]}'?)")
                 else:
                     _add(warnings, f"Unknown field '{field_name}' not defined in card.schema.json")
-        
+
         # Check required fields from schema
-        schema_required = get_required_card_fields(repo_root)
+        schema_required = get_required_card_fields()
         for field in schema_required:
             if _is_missing(metadata.get(field)):
                 _add(blocking_reasons, f"Missing required field: {field}")
-        
+
         # Check forbidden runtime fields from schema
-        schema_forbidden = get_forbidden_draft_fields(repo_root)
+        schema_forbidden = get_forbidden_draft_fields()
         for field in schema_forbidden:
             if not _is_missing(metadata.get(field)):
                 _add(blocking_reasons, f"Draft contains forbidden runtime-state field: {field}")
-        
+
         # Validate field values against schema (enum checks, type checks)
         for field_name, value in metadata.items():
             if field_name == "body" or _is_missing(value):
                 continue
-            is_valid, error_msg = validate_field_value(field_name, value, repo_root)
+            is_valid, error_msg = validate_field_value(field_name, value)
             if not is_valid and error_msg:
                 _add(blocking_reasons, error_msg)
     else:
