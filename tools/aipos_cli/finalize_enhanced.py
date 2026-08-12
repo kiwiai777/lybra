@@ -1,5 +1,7 @@
 """AIPOS-R4B-2: Enhanced finalize — 一条命令真 push+deploy+部署分支强制.
 
+AIPOS-FINALIZE-FIX-1 (2026-08-12): lybra-deploy 路径从产品仓根解析,禁 cwd 猜测。
+
 finalize 收口：读 gate 真裁决(PASS前提) → 产品仓commit校验 → push → lybra-deploy
 → VERSION对齐断言，全程一条命令。含部署分支强制：部署commit必须在main，否则拒。
 
@@ -113,8 +115,11 @@ def check_deployment_branch(repo_root: Path, *, required_branch: str = "main") -
 def invoke_lybra_deploy(repo_root: Path) -> dict[str, Any]:
     """调用 lybra-deploy 脚本执行部署。
     
+    AIPOS-FINALIZE-FIX-1: 脚本路径从产品仓根解析 (repo_root / "tools" / "lybra-deploy"),
+    禁止依赖 cwd 猜测。config.schema 定义此路径为标准位置。
+    
     Args:
-        repo_root: 产品仓根路径
+        repo_root: 产品仓根路径 (必须是产品仓,不是治理仓)
     
     Returns:
         {
@@ -124,20 +129,22 @@ def invoke_lybra_deploy(repo_root: Path) -> dict[str, Any]:
             "returncode": int,
         }
     """
+    # AIPOS-FINALIZE-FIX-1: 从产品仓根解析脚本路径,禁 cwd 猜
     deploy_script = repo_root / "tools" / "lybra-deploy"
     
     if not deploy_script.exists():
         return {
             "success": False,
             "stdout": "",
-            "stderr": f"lybra-deploy script not found: {deploy_script}",
+            "stderr": f"lybra-deploy script not found at expected location: {deploy_script} (resolved from repo_root={repo_root})",
             "returncode": 1,
         }
     
     try:
+        # AIPOS-FINALIZE-FIX-1: cwd 设为产品仓根,确保脚本在正确上下文执行
         result = subprocess.run(
             [str(deploy_script)],
-            cwd=repo_root,
+            cwd=str(repo_root),
             capture_output=True,
             text=True,
             timeout=120,  # 2分钟超时

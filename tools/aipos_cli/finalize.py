@@ -1,5 +1,14 @@
 """AIPOS-FND-2/FND-9 — finalize: git commit/push/deploy for PASS tasks.
 
+AIPOS-FINALIZE-FIX-1 (2026-08-12): 三项红线修正:
+  ① 剥离治理仓 git 操作 — finalize 的 git commit/push 只作用于产品仓 (workspace_root),
+     绝不操作治理仓 (governance_root)。records/queue 文件由 gate 动词写入,治理仓 git
+     归 N6 收账节点 (顾问职责),executor 无权推治理仓。
+  ② deploy 失败 → finalize 整体 FAIL — deploy 子步失败 (显式或自动) 必须返回
+     verdict="FAIL" + exit 非0,禁止吞错报成功。
+  ③ lybra-deploy 路径从产品仓根解析 — repo_root / "tools" / "lybra-deploy",
+     禁止 cwd 猜测,符合 config.schema 标准位置。
+
 After audit verdict=PASS, finalize commits the changes to git and optionally pushes.
 Enforces deployment integrity (current==HEAD) and only allows finalization of PASS tasks.
 
@@ -246,6 +255,9 @@ def finalize_task(
 ) -> dict[str, Any]:
     """Finalize a PASS task by committing changes to git.
 
+    AIPOS-FINALIZE-FIX-1: finalize 只操作产品仓 git,绝不 commit/push 治理仓。
+    治理仓(5_tasks/records/)的 git 操作归 N6 收账节点(顾问职责),executor 无权。
+    
     AIPOS-FND-9: After commit, auto-deploys gate-side changes to prevent drift.
     AIPOS-FND-14: Audit eligibility is now checked against the authoritative gate
     audit_verdict_record (governance workspace 5_tasks/records/), NOT the task_cards
@@ -254,19 +266,18 @@ def finalize_task(
     Args:
         task_id: Task ID to finalize
         actor: Actor performing the finalization
-        workspace_root: Product code repo root (git operations run here)
-        governance_root: Governance workspace root (owns 5_tasks/records/).  If None,
-            resolved via ``resolve_workspace_root()`` using the standard Lybra precedence
-            ladder (LYBRA_WORKSPACE_ROOT / AIPOS_WORKSPACE_ROOT / ~/.lybra/config.json home
-            model).  Must be supplied explicitly in contexts where auto-resolution would
-            produce the wrong workspace.
+        workspace_root: Product code repo root (git operations run here) - must be product
+            repo, NOT governance repo. finalize git commit/push only operates here.
+        governance_root: Governance workspace root (owns 5_tasks/records/) - read-only for
+            audit verdict check. NO git operations here. If None, resolved via
+            resolve_workspace_root().
         dry_run: If True, only validate without committing
-        push: If True, also push after commit
+        push: If True, also push after commit (product repo only)
         deploy: If True, run lybra-deploy after push (AIPOS-R4B-2)
 
     Returns:
         {
-            "verdict": "PASS" | "BLOCK",
+            "verdict": "PASS" | "BLOCK" | "FAIL",  # AIPOS-FINALIZE-FIX-1: deploy fail -> FAIL
             "task_id": str,
             "actor": str,
             "dry_run": bool,
@@ -525,7 +536,8 @@ def finalize_task(
             except subprocess.TimeoutExpired:
                 operations.append("Push timed out after 30s")
         
-        # AIPOS-R4B-2: Explicit deploy with lybra-deploy
+        # AIPOS-R4B-2 / AIPOS-FINALIZE-FIX-1: Explicit deploy with lybra-deploy
+        # deploy 失败 → finalize 整体 FAIL (exit 非0 + verdict FAIL),禁吞错报成功
         deployed = False
         deployment_skipped = False
         deployment_error = None
@@ -552,11 +564,47 @@ def finalize_task(
                 if verification["verified"]:
                     deployed = True
                 else:
+                    # AIPOS-FINALIZE-FIX-1: 部署验证失败 → finalize FAIL
                     deployment_error = verification["message"]
                     operations.append(f"✗ Deployment verification FAILED: {verification['message']}")
+                    return {
+                        "verdict": "FAIL",
+                        "task_id": task_id,
+                        "actor": actor,
+                        "dry_run": False,
+                        "can_finalize": True,
+                        "integrity_check": integrity,
+                        "branch_check": branch_check,
+                        "committed": True,
+                        "pushed": pushed,
+                        "deployed": False,
+                        "deployment_skipped": False,
+                        "deployment_error": deployment_error,
+                        "commit_hash": commit_hash,
+                        "message": f"Deployment verification failed: {deployment_error}",
+                        "operations": operations,
+                    }
             else:
+                # AIPOS-FINALIZE-FIX-1: deploy 子步失败 → finalize 整体 FAIL
                 deployment_error = deploy_result["stderr"]
                 operations.append(f"✗ lybra-deploy FAILED: {deploy_result['stderr'][:200]}")
+                return {
+                    "verdict": "FAIL",
+                    "task_id": task_id,
+                    "actor": actor,
+                    "dry_run": False,
+                    "can_finalize": True,
+                    "integrity_check": integrity,
+                    "branch_check": branch_check,
+                    "committed": True,
+                    "pushed": pushed,
+                    "deployed": False,
+                    "deployment_skipped": False,
+                    "deployment_error": deployment_error,
+                    "commit_hash": commit_hash,
+                    "message": f"Deployment failed: {deployment_error[:200]}",
+                    "operations": operations,
+                }
         else:
             # F-R4B2-3: FND-9 Auto-deploy gate-side changes (无论 push 与否都检查)
             from tools.aipos_cli.gate_drift import check_gate_drift
@@ -580,9 +628,26 @@ def finalize_task(
                         operations.append(f"  ... ({len(deploy_lines) - 10} more lines)")
                     deployed = True
                 else:
+                    # AIPOS-FINALIZE-FIX-1: 自动部署失败也必须 FAIL,禁吞错
                     deployment_error = deploy_result["stderr"]
-                    operations.append(f"✗ Deployment FAILED: {deploy_result['stderr'][:200]}")
-                    # Don't fail the finalize, but warn strongly
+                    operations.append(f"✗ Auto-deployment FAILED: {deploy_result['stderr'][:200]}")
+                    return {
+                        "verdict": "FAIL",
+                        "task_id": task_id,
+                        "actor": actor,
+                        "dry_run": False,
+                        "can_finalize": True,
+                        "integrity_check": integrity,
+                        "branch_check": branch_check,
+                        "committed": True,
+                        "pushed": pushed,
+                        "deployed": False,
+                        "deployment_skipped": False,
+                        "deployment_error": deployment_error,
+                        "commit_hash": commit_hash,
+                        "message": f"Auto-deployment failed: {deployment_error[:200]}",
+                        "operations": operations,
+                    }
             elif drift_check["has_drift"] and not drift_check["classification"]["has_gate_side_changes"]:
                 operations.append("ℹ️  CLI-side changes only - no deployment needed")
                 deployment_skipped = True
