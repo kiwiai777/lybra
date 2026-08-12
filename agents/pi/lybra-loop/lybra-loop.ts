@@ -38,6 +38,9 @@ let currentLogger: Logger | null = null;
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 // release 触发的 newSession 是循环自驱的,session_shutdown 不应据此停循环(区别于用户 /new)。
 let expectingSwap = false;
+// AIPOS-CONN-LOOP-2 ①: 跟踪当前执行的任务ID和worktree路径，用于自动return
+let currentTaskId: string | null = null;
+let currentWorktreePath: string | null = null;
 
 // F-EXT001-6(FIX2): 默认日志路径迁移到 Lybra 产品仓任务卡目录(旧 contrib 路径已废弃)
 const LOG_PATH_DEFAULT = `${process.env.HOME || ""}/projects/lybra/task_cards/LYBRA-EXT-001/loop.log`;
@@ -62,6 +65,119 @@ function scheduleNextTick(pi: ExtensionAPI, ctx: any, delayMs: number) {
       });
     });
   }, delayMs);
+}
+
+/**
+ * AIPOS-CONN-LOOP-2 ①: 检查是否有 completed 事件，如有则自动 return。
+ * 完成判定 = task-progress completed 事件（既有动词兼职完成信号）。
+ * return 素材自动组装 = result_summary(取 completed 事件 summary) + artifact_refs(取卡分支 commit 文件清单)。
+ */
+async function tryAutoReturn(ctx: any): Promise<boolean> {
+  if (!currentTaskId || !currentClient || !currentLogger) return false;
+  
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  
+  // 检查是否有 completed 事件文件
+  let config;
+  try {
+    config = loadConfig(process.env);
+  } catch {
+    return false;
+  }
+  
+  const eventsDir = path.join(config.workspaceRoot, "5_tasks/records/events", currentTaskId);
+  if (!fs.existsSync(eventsDir)) return false;
+  
+  // 查找 completed_*.md 文件
+  const files = fs.readdirSync(eventsDir);
+  const completedFiles = files.filter((f) => f.startsWith("completed_") && f.endsWith(".md"));
+  if (completedFiles.length === 0) return false;
+  
+  // 读取最新的 completed 事件
+  completedFiles.sort();
+  const latestCompleted = path.join(eventsDir, completedFiles[completedFiles.length - 1]);
+  const eventContent = fs.readFileSync(latestCompleted, "utf-8");
+  
+  // 从 frontmatter 提取 summary
+  let summary = "";
+  const summaryMatch = eventContent.match(/^summary:\s*['"]?([^'"\n]+)['"]?$/m);
+  if (summaryMatch) {
+    summary = summaryMatch[1].trim();
+  }
+  
+  // 从 worktree git log 提取 artifact_refs（最近一次 commit 的文件列表）
+  let artifactRefs: string[] = [];
+  if (currentWorktreePath && fs.existsSync(currentWorktreePath)) {
+    try {
+      const { execSync } = await import("node:child_process");
+      // 获取最近一次 commit 的文件列表
+      const gitOutput = execSync("git diff-tree --no-commit-id --name-only -r HEAD", {
+        cwd: currentWorktreePath,
+        encoding: "utf-8",
+      });
+      artifactRefs = gitOutput.trim().split("\n").filter((f) => f.trim());
+    } catch (e) {
+      currentLogger.warn("auto-return-git-failed", {
+        task_id: currentTaskId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  
+  // 调用 return_dry_run
+  currentLogger.info("auto-return-start", {
+    task_id: currentTaskId,
+    summary: summary || "(no summary)",
+    artifact_count: artifactRefs.length,
+  });
+  
+  try {
+    const dryRunResp = await currentClient.returnDryRun({
+      task_id: currentTaskId,
+      actor: config.actor,
+      agent_instance: config.agentInstance,
+      autonomy_mode: "Supervised",
+      owner_policy_ref: config.ownerPolicyRef,
+      result_summary: summary || "Task completed (auto-return)",
+      artifact_refs: artifactRefs.length > 0 ? artifactRefs : undefined,
+      active_session_id: getSessionId(ctx),
+    });
+    
+    const dryRunToken = dryRunResp.dry_run_token;
+    if (!dryRunToken) {
+      currentLogger.error("auto-return-no-token", { task_id: currentTaskId, response: dryRunResp });
+      return false;
+    }
+    
+    // AIPOS-328: executor 自确认 return (owner_confirmation_token = OWNER_CONFIRMED 字面量)
+    const confirmResp = await currentClient.returnConfirm({
+      dry_run_token: String(dryRunToken),
+      actor: config.actor,
+      agent_instance: config.agentInstance,
+      owner_policy_ref: config.ownerPolicyRef,
+      owner_confirmation_token: "OWNER_CONFIRMED",
+    });
+    
+    currentLogger.info("auto-return-success", {
+      task_id: currentTaskId,
+      verdict: confirmResp.verdict || confirmResp.ok ? "ok" : "unknown",
+    });
+    
+    ctx.ui?.notify?.(`自动归还任务 ${currentTaskId}`, "info");
+    
+    // 清空当前任务信息
+    currentTaskId = null;
+    currentWorktreePath = null;
+    
+    return true;
+  } catch (e) {
+    currentLogger.error("auto-return-failed", {
+      task_id: currentTaskId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return false;
+  }
 }
 
 function stopLoop(
@@ -114,12 +230,19 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
 
     if (outcome.kind === "release") {
       loopState.released += 1;
+      // AIPOS-CONN-LOOP-2 ①: 记录当前任务信息，用于自动return
+      currentTaskId = String(outcome.task.task_id);
+      // worktree路径从任务元数据中获取
+      const taskMeta = (outcome.task as { metadata?: unknown }).metadata;
+      const meta = taskMeta && typeof taskMeta === "object" ? (taskMeta as Record<string, unknown>) : {};
+      currentWorktreePath = String(meta.active_worktree_path || "") || null;
       currentLogger.info("release", {
         task_id: outcome.task.task_id,
         card: outcome.cardAbsPath,
         policy: outcome.policyId || "?",
         released: loopState.released,
         maxN: loopState.maxN,
+        worktree: currentWorktreePath,
       });
       if (loopState.released >= loopState.maxN) {
         currentLogger.info("release-last", { task_id: outcome.task.task_id });
@@ -183,6 +306,25 @@ export default function (pi: ExtensionAPI) {
   // --- 续跑:maxN>1 时,新 session 的卡执行完(settle)→ 直接调 tick ---
   pi.on("agent_settled", async (_event, ctx) => {
     if (!loopState.on) return;
+    
+    // AIPOS-CONN-LOOP-2 ①: 检查是否有 completed 事件，如有则自动 return
+    if (currentTaskId) {
+      const returned = await tryAutoReturn(ctx);
+      if (returned) {
+        // return 成功后，如果还未达到 maxN，继续轮询下一张卡
+        if (loopState.released < loopState.maxN) {
+          if (!loopState.running) {
+            doTick(pi, ctx).catch((e) => {
+              currentLogger?.warn("agent_settled-post-return-tick-error", {
+                error: e instanceof Error ? e.message : String(e),
+              });
+            });
+          }
+        }
+        return;
+      }
+    }
+    
     if (loopState.released >= loopState.maxN) {
       stopLoop(ctx, `达到 maxN(${loopState.maxN}),已放行 ${loopState.released} 张`, "info");
       return;
