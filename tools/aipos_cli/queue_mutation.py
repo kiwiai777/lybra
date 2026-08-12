@@ -232,37 +232,31 @@ def _prepare_block(metadata: dict[str, Any], actor: str, timestamp: str, reason:
 
 
 def _prepare_complete(metadata: dict[str, Any], actor: str, timestamp: str, report_link: str) -> dict[str, Any]:
-    updated = dict(metadata)
-    updated["status"] = "completed"
-    updated["completed_by"] = actor
-    updated["completed_at"] = timestamp
-    updated["needs_owner"] = False
-    updated["approval_required"] = False
-    updated["owner_review_required"] = False
-    if updated.get("active_session_id") not in (None, ""):
-        updated["last_session_id"] = updated.get("active_session_id")
-    updated.pop("active_session_id", None)
-    updated.pop("needs_owner_reasons", None)
-    updated["artifact_links"] = _append_unique_list(updated.get("artifact_links"), report_link)
-    return updated
+    # AIPOS-R4A: 走转移引擎统一处理（一机制一实现）
+    from tools.aipos_cli.transition_engine import apply_transition_metadata
+    return apply_transition_metadata(
+        metadata=metadata,
+        transition_name="complete",
+        actor=actor,
+        timestamp=timestamp,
+        schema=None,  # 引擎内部自动加载
+        repo_root=None,
+        report_link=report_link,
+    )
 
 
 def _prepare_reopen(metadata: dict[str, Any], actor: str, timestamp: str, reason: str) -> dict[str, Any]:
-    updated = dict(metadata)
-    updated["status"] = "pending"
-    updated["reopened_by"] = actor
-    updated["reopened_at"] = timestamp
-    updated["reopen_reason"] = reason
-    updated["needs_owner"] = False
-    updated.pop("active_session_id", None)
-    updated.pop("claim_id", None)
-    # AIPOS-348: when reopening from completed, clear completion fields (preserve history)
-    updated.pop("completed_by", None)
-    updated.pop("completed_at", None)
-    updated.pop("blocked_by", None)
-    updated.pop("blocked_at", None)
-    updated.pop("block_reason", None)
-    return updated
+    # AIPOS-R4A: 走转移引擎统一处理（一机制一实现）
+    from tools.aipos_cli.transition_engine import apply_transition_metadata
+    return apply_transition_metadata(
+        metadata=metadata,
+        transition_name="reopen",
+        actor=actor,
+        timestamp=timestamp,
+        schema=None,  # 引擎内部自动加载
+        repo_root=None,
+        reason=reason,
+    )
 
 
 def _prepare_withdraw(metadata: dict[str, Any], actor: str, timestamp: str, reason: str) -> dict[str, Any]:

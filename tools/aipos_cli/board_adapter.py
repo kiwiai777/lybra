@@ -1943,14 +1943,21 @@ def _mcp_return_record_plan(
     return_id = return_id or build_runtime_id("return", task_id, returned_at, canonical_agent_instance)
     session_path = session_record_path(repo_root, task_id, session_id)
     return_path = return_record_path(repo_root, task_id, return_id)
+    
+    # AIPOS-R4A: return 幂等性——如果 return_id 已存在，生成新的（修实撞④）
+    if return_path.exists():
+        # 添加微秒后缀确保唯一性
+        import time
+        microsecond_suffix = str(int(time.time() * 1_000_000) % 1_000_000).zfill(6)
+        return_id = f"{return_id}_{microsecond_suffix}"
+        return_path = return_record_path(repo_root, task_id, return_id)
+    
     root = repo_root.resolve()  # AIPOS-240 (F-o3-19): record paths are .resolve()d; symlink-safe render
     session_rel = str(session_path.resolve().relative_to(root))
     return_rel = str(return_path.resolve().relative_to(root))
     blocking: list[str] = []
     if not session_path.exists():
         blocking.append(f"Session record does not exist: {session_rel}")
-    if return_path.exists():
-        blocking.append(f"Return record already exists: {return_rel}")
     existing_metadata: dict[str, Any] = {}
     existing_body = ""
     if session_path.exists():
@@ -3097,8 +3104,15 @@ def _build_audit_verdict_preview(
     if normalized_verdict == "WAIVED" and not str(owner_waiver_ref or "").strip():
         blocking_reasons.append("WAIVER_REQUIRES_OWNER_EVIDENCE: owner_waiver_ref is required for WAIVED")
 
-    if audit_task.get("queue_state") != "claimed" or audit_metadata.get("status") != "claimed":
-        blocking_reasons.append("AUDIT_TASK_NOT_CLAIMED: audit task must be claimed")
+    # AIPOS-R4A: 允许已 completed 的 R 卡接受复审裁决（修实撞②）
+    # FIX 轮场景：首轮 R 卡已 completed，复审需要能落新裁决
+    audit_queue_state = audit_task.get("queue_state")
+    audit_fm_status = audit_metadata.get("status")
+    if audit_queue_state not in ("claimed", "completed") or audit_fm_status not in ("claimed", "completed"):
+        blocking_reasons.append(f"AUDIT_TASK_NOT_CLAIMABLE: audit task must be claimed or completed (found queue={audit_queue_state}, status={audit_fm_status})")
+    # 状态一致性检查
+    if audit_queue_state != audit_fm_status:
+        blocking_reasons.append(f"AUDIT_TASK_STATE_MISMATCH: queue_state={audit_queue_state} but frontmatter status={audit_fm_status}")
     if audit_metadata.get("reviewed_task_id") != reviewed_task.get("task_id"):
         blocking_reasons.append("REVIEWED_TASK_MISMATCH: audit task reviewed_task_id does not match request")
     if audit_claim_id and str(audit_metadata.get("claim_id") or "") != audit_claim_id:
@@ -3355,9 +3369,18 @@ def _auto_close_audit_card_on_verdict(
         metadata, body, _ = parse_markdown_frontmatter(text)
         if not isinstance(metadata, dict):
             return None
-        metadata["status"] = "completed"
+        # AIPOS-R4A: 走转移引擎统一处理（一机制一实现）
+        from tools.aipos_cli.transition_engine import apply_transition_metadata
+        metadata = apply_transition_metadata(
+            metadata=metadata,
+            transition_name="complete",
+            actor=actor,
+            timestamp=None,  # 引擎自动生成
+            repo_root=repo_root,
+        )
+        # 保留原有 closed_by/at 作为额外来源记录
         metadata["closed_by"] = f"verdict:{verdict_id}"
-        metadata["closed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        metadata["closed_at"] = metadata["completed_at"]  # 复用引擎生成的时间戳
         metadata["auto_closed_by"] = "AIPOS-354"
         rendered = render_task_markdown(metadata, body)
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4511,9 +4534,18 @@ def converge_r_cards(
                     })
                     continue
                 # Actually move the card
-                fm["status"] = "completed"
+                # AIPOS-R4A: 走转移引擎统一处理（一机制一实现）
+                from tools.aipos_cli.transition_engine import apply_transition_metadata
+                fm = apply_transition_metadata(
+                    metadata=fm,
+                    transition_name="complete",
+                    actor=actor,
+                    timestamp=None,  # 引擎自动生成
+                    repo_root=resolved_root,
+                )
+                # 保留原有 closed_by/at 作为额外来源记录
                 fm["closed_by"] = f"verdict:{latest_verdict_id}" if latest_verdict_id else "batch_convergence"
-                fm["closed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                fm["closed_at"] = fm["completed_at"]  # 复用引擎生成的时间戳
                 fm["auto_closed_by"] = "AIPOS-354_batch_convergence"
                 rendered = render_task_markdown(fm, body)
                 target_path = resolved_root / "5_tasks" / "queue" / "completed" / card_file.name
@@ -4635,9 +4667,18 @@ def mark_concluded_task(
                 safety_notice="AIPOS-354 mark_concluded dry-run. No files written.",
             )
         # Confirm: move card to completed/
-        fm["status"] = "completed"
+        # AIPOS-R4A: 走转移引擎统一处理（一机制一实现）
+        from tools.aipos_cli.transition_engine import apply_transition_metadata
+        fm = apply_transition_metadata(
+            metadata=fm,
+            transition_name="complete",
+            actor=actor_text,
+            timestamp=None,  # 引擎自动生成
+            repo_root=resolved_root,
+        )
+        # 保留原有 closed_by/at 作为额外来源记录
         fm["closed_by"] = "conclusion_marker"
-        fm["closed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fm["closed_at"] = fm["completed_at"]  # 复用引擎生成的时间戳
         fm["conclusion_report_ref"] = report_ref or ""
         fm["conclusion_note"] = note or ""
         fm["auto_closed_by"] = "AIPOS-354_mark_concluded"
@@ -4935,7 +4976,16 @@ def close_task(
                 # Update frontmatter status to completed before moving
                 audit_text = audit_source_path.read_text(encoding="utf-8")
                 audit_metadata, audit_body, _ = parse_markdown_frontmatter(audit_text)
-                audit_metadata["status"] = "completed"
+                # AIPOS-R4A: 走转移引擎统一处理（一机制一实现）
+                from tools.aipos_cli.transition_engine import apply_transition_metadata
+                audit_metadata = apply_transition_metadata(
+                    metadata=audit_metadata,
+                    transition_name="complete",
+                    actor=actor_text,
+                    timestamp=None,  # 引擎自动生成
+                    repo_root=resolved_root,
+                )
+                # 保留额外跟踪字段
                 audit_metadata["auto_closed_with_parent"] = resolved_task_id
                 audit_metadata["auto_closed_via"] = closure_id
                 rendered = render_task_markdown(audit_metadata, audit_body)
