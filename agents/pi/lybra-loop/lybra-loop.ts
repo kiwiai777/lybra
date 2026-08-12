@@ -1,0 +1,348 @@
+/**
+ * lybra-loop —— pi 扩展本体:让 lybra-executor 自动【发起】领卡循环。
+ *
+ * 命令(命名对齐 _shared/LYBRA-NAMING.md + 产品 skills/lybra-executor/SKILL.md):
+ *   /lybra on [maxN]   启动循环(默认 max 1 张,防失控)
+ *   /lybra off         停止循环
+ *   /lybra status      查看状态
+ *   /lybra-tick        (手动)立即执行一轮 tick;自动链不依赖命令路由
+ *
+ * 它只做"发起",不做"授权"(红线):claim 放行与否永远由 gate 判定(AIPOS-250 信封)——
+ *   • 信封内(PreAuthorized)→ gate 一阶段落盘 claim → 扩展冷启动执行
+ *   • 信封外(Supervised,owner_confirmation_required=true)→ 跳过记录,绝不自动 confirm
+ *   • BLOCK/失败 → 循环立停
+ *
+ * 机制要点(详见 DESIGN.md):
+ *   • 连接器面:node http 直连 gate /mcp(gate-client.ts),不 shell 调 Python CLI。
+ *   • gate 被动:轮询宿主全在 agent 侧(非阻塞 followUp 链),gate 不推送/不唤醒。
+ *   • 一卡一会话:claim 放行 → ctx.newSession 冷启动(同 _shared/extensions/claim.ts)。
+ *   • 跨 session 状态:模块级 loopState(ESM 缓存跨 session 替换存活)+ agent_settled 续跑。
+ *   • F-EXT001-4(FIX1):tick 机制 — **直接函数调用**,不经 sendUserMessage/命令路由
+ *     (pi 的 sendUserMessage 永不触发命令,只落文本给模型;定时器/生命周期钩子直接调 doTick,
+ *     零 LLM 参与、零上下文污染;/lybra-tick 命令仅作手动触发入口)。
+ */
+
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { loadConfig, ConfigError, GateMcpClient } from "./gate-client.ts";
+import { buildKickoff } from "./loop-decisions.ts";
+import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
+
+// 模块级:跨 session 替换存活(ESM 模块缓存,同进程唯一)。对齐 claim.ts 的 pendingModel 原理。
+let loopState: LoopState = freshState();
+let currentGateUrl = "";
+let currentRole = "";
+let currentActor = "";
+let currentTokenFp = "(none)";
+let currentClient: GateMcpClient | null = null;
+let currentLogger: Logger | null = null;
+let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+// release 触发的 newSession 是循环自驱的,session_shutdown 不应据此停循环(区别于用户 /new)。
+let expectingSwap = false;
+
+// F-EXT001-6(FIX2): 默认日志路径迁移到 Lybra 产品仓任务卡目录(旧 contrib 路径已废弃)
+const LOG_PATH_DEFAULT = `${process.env.HOME || ""}/projects/lybra/task_cards/LYBRA-EXT-001/loop.log`;
+
+function clearTimer() {
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    pendingTimer = null;
+  }
+}
+
+function scheduleNextTick(pi: ExtensionAPI, ctx: any, delayMs: number) {
+  clearTimer();
+  pendingTimer = setTimeout(() => {
+    pendingTimer = null;
+    if (!loopState.on) return; // 期间被 off
+    // F-EXT001-4(FIX1):直接调用 tick 函数,不经 sendUserMessage(永不触发命令)
+    doTick(pi, ctx).catch((e) => {
+      // F-EXT001-8(FIX4):不再静默吞错,落日志
+      currentLogger?.warn("scheduleNextTick-doTick-error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    });
+  }, delayMs);
+}
+
+function stopLoop(
+  ctx: { ui?: { notify?: (m: string, l?: string) => void } },
+  reason: string,
+  level: "info" | "warn" | "error" = "warn",
+) {
+  loopState.on = false;
+  loopState.stoppedReason = reason;
+  clearTimer();
+  currentLogger?.write(level === "error" ? "ERROR" : level === "warn" ? "WARN" : "INFO", "loop-stopped", { reason });
+  ctx.ui?.notify?.(`lybra 循环停止:${reason}`, level);
+}
+
+function getSessionId(ctx: any): string {
+  try {
+    const id = ctx?.sessionManager?.getSessionId?.();
+    return id ? String(id) : "lybra-loop-session";
+  } catch {
+    return "lybra-loop-session";
+  }
+}
+
+// F-EXT001-4(FIX1):tick 核心函数,直接调用(零 LLM 参与,零上下文污染)
+async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
+  if (!loopState.on) return;
+  if (!currentClient || !currentLogger) {
+    stopLoop(ctx, "内部状态缺失(client/logger),请重新 /lybra on", "error");
+    return;
+  }
+  let config;
+  try {
+    config = loadConfig(process.env);
+  } catch (e) {
+    stopLoop(ctx, `配置失效:${e instanceof Error ? e.message : String(e)}`, "error");
+    return;
+  }
+  loopState.running = true;
+  try {
+    const outcome = await executeTick({
+      client: currentClient,
+      actor: config.actor,
+      agentInstance: config.agentInstance,
+      ownerPolicyRef: config.ownerPolicyRef,
+      workspaceRoot: config.workspaceRoot,
+      activeSessionId: getSessionId(ctx),
+      state: loopState,
+      logger: currentLogger,
+    });
+
+    if (outcome.kind === "release") {
+      loopState.released += 1;
+      currentLogger.info("release", {
+        task_id: outcome.task.task_id,
+        card: outcome.cardAbsPath,
+        policy: outcome.policyId || "?",
+        released: loopState.released,
+        maxN: loopState.maxN,
+      });
+      if (loopState.released >= loopState.maxN) {
+        currentLogger.info("release-last", { task_id: outcome.task.task_id });
+      }
+      ctx.ui.notify(
+        `放行 ${outcome.task.task_id}(PreAuthorized)→ 冷启动执行 [${loopState.released}/${loopState.maxN}]`,
+        "info",
+      );
+      // F-EXT001-8(FIX4):running 标志复位前置到 newSession 之前,确保任何路径(含 stale 异常)下可达
+      loopState.running = false;
+      expectingSwap = true;
+      const kickoff = buildKickoff(outcome.cardAbsPath);
+      try {
+        const result = await ctx.newSession({
+          withSession: async (freshCtx) => {
+            await freshCtx.sendUserMessage(kickoff);
+          },
+        });
+        if (result?.cancelled) {
+          expectingSwap = false;
+          stopLoop(ctx, "newSession 被拦截(循环停)", "warn");
+        }
+      } catch (e) {
+        // F-EXT001-8(FIX4):newSession 异常(stale ctx 等)不再静默吞掉,落日志
+        expectingSwap = false;
+        currentLogger.warn("release-newSession-error", {
+          task_id: outcome.task.task_id,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        stopLoop(ctx, `newSession 异常:${e instanceof Error ? e.message : String(e)}`, "error");
+      }
+      return; // session 已替换;续跑靠新 session 的 agent_settled + session_start 双保险
+    }
+
+    if (outcome.kind === "stop") {
+      stopLoop(ctx, outcome.reason, "warn");
+      return;
+    }
+
+    // wait:轮询
+    const elapsed = Date.now() - (loopState as { cycleStartMs: number }).cycleStartMs;
+    if (elapsed >= config.maxWaitSec * 1000) {
+      stopLoop(ctx, `轮询超时(${config.maxWaitSec}s)无信封内可认领卡`, "info");
+      return;
+    }
+    const remain = config.maxWaitSec * 1000 - elapsed;
+    const nextMs = Math.min(config.pollIntervalSec * 1000, remain);
+    currentLogger.info("wait-poll", { reason: outcome.reason, nextMs });
+    // F-EXT001-8(FIX4):wait 路径复位 running,防定时器触发前 running 一直 true 拦截其他入口
+    loopState.running = false;
+    scheduleNextTick(pi, ctx, nextMs);
+  } catch (e) {
+    stopLoop(ctx, `tick 异常:${e instanceof Error ? e.message : String(e)}`, "error");
+  } finally {
+    // F-EXT001-8(FIX4):release 路径已前置复位 running;finally 保底兜所有其他路径
+    loopState.running = false;
+  }
+}
+
+export default function (pi: ExtensionAPI) {
+  // --- 续跑:maxN>1 时,新 session 的卡执行完(settle)→ 直接调 tick ---
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (!loopState.on) return;
+    if (loopState.released >= loopState.maxN) {
+      stopLoop(ctx, `达到 maxN(${loopState.maxN}),已放行 ${loopState.released} 张`, "info");
+      return;
+    }
+    if (loopState.running) return; // 防重入
+    // F-EXT001-4(FIX1):直接调用,不经 sendUserMessage
+    doTick(pi, ctx).catch((e) => {
+      // F-EXT001-8(FIX4):不再静默吞错,落日志
+      currentLogger?.warn("agent_settled-doTick-error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    });
+  });
+
+  // --- session 生命周期:reload 不断;用户 /new|resume|fork|quit 停;循环自驱 newSession 不停 ---
+  pi.on("session_shutdown", async (event, ctx) => {
+    if (expectingSwap) {
+      // 循环自己触发的 newSession:清 flag + 定时器,但保留循环状态供新 session 续跑
+      expectingSwap = false;
+      clearTimer();
+      return;
+    }
+    if (event.reason === "reload") return; // /reload:循环继续(session_start 再续)
+    clearTimer();
+    if (loopState.on) stopLoop(ctx, `session ${event.reason}(循环中断)`, "warn");
+  });
+
+  pi.on("session_start", async (event) => {
+    // F-EXT001-8(FIX4):双保险机制 — reload 时续跑 + 自驱 newSession(expectingSwap)时也续跑,防 agent_settled 单点失效
+    if (loopState.on && (event.reason === "reload" || expectingSwap)) {
+      if (expectingSwap) {
+        currentLogger?.info("session_start-swap-resume", { reason: event.reason });
+        expectingSwap = false; // 清 flag,防重复触发
+      }
+      if (loopState.running) return; // 防重入(agent_settled 可能先到)
+      // F-EXT001-4(FIX1):直接调用,不经 sendUserMessage
+      doTick(pi, event as any).catch((e) => {
+        // F-EXT001-8(FIX4):不再静默吞错,落日志
+        currentLogger?.warn("session_start-doTick-error", {
+          reason: event.reason,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
+    }
+  });
+
+  // --- /lybra:on | off | status ---
+  pi.registerCommand("lybra", {
+    description: "lybra-loop 自动领卡循环:on [maxN] | off | status[v0]",
+    handler: async (args, ctx) => {
+      const parts = String(args || "").trim().split(/\s+/);
+      const sub = parts[0] || "status";
+
+      if (sub === "off") {
+        if (!loopState.on) {
+          ctx.ui.notify("lybra 循环未在运行", "info");
+          return;
+        }
+        stopLoop(ctx, "用户 /lybra off", "info");
+        return;
+      }
+
+      if (sub === "status") {
+        const fp = currentTokenFp;
+        ctx.ui.notify(
+          [
+            `lybra-loop 状态:`,
+            `  运行中: ${loopState.on ? "是" : "否"}`,
+            `  已放行: ${loopState.released}/${loopState.maxN}`,
+            `  停止原因: ${loopState.stoppedReason || "(无)"}`,
+            `  gate: ${currentGateUrl || "(未配置)"}  role: ${currentRole || "-"}  actor: ${currentActor || "-"}`,
+            `  token: ${fp}`,
+          ].join("\n"),
+          "info",
+        );
+        return;
+      }
+
+      if (sub === "on") {
+        if (loopState.on) {
+          ctx.ui.notify("lybra 循环已在运行,先 /lybra off 再启动", "warn");
+          return;
+        }
+        let maxN = 1;
+        if (parts[1]) {
+          const n = Number(parts[1]);
+          if (!Number.isFinite(n) || n < 1 || !Number.isInteger(n)) {
+            ctx.ui.notify(`maxN 无效:${parts[1]}(需正整数)`, "error");
+            return;
+          }
+          maxN = n;
+        }
+
+        // 配置(必需项缺失即停,绝不猜 actor/policy)
+        let config;
+        try {
+          config = loadConfig(process.env);
+        } catch (e) {
+          ctx.ui.notify(`配置错误,循环未启动:${e instanceof Error ? e.message : String(e)}`, "error");
+          return;
+        }
+        currentGateUrl = config.gateUrl;
+        currentRole = config.role;
+        currentActor = config.actor;
+
+        // gate 连通性自检(initialize)
+        const client = new GateMcpClient(config.gateUrl, config.token);
+        try {
+          await client.initialize();
+        } catch (e) {
+          ctx.ui.notify(
+            `gate 连接失败(${config.gateUrl}),循环未启动:${e instanceof Error ? e.message : String(e)}\n` +
+              `确认 Owner 已 lybra serve、且 ${process.env.LYBRA_CONNECTION_JSON || "~/.lybra/local/connection.json"} 可达`,
+            "error",
+          );
+          return;
+        }
+        currentTokenFp = client.tokenFingerprint;
+        currentClient = client;
+        currentLogger = new Logger(process.env.LYBRA_LOOP_LOG || LOG_PATH_DEFAULT);
+
+        loopState = freshState();
+        loopState.on = true;
+        loopState.maxN = maxN;
+        (loopState as { cycleStartMs: number }).cycleStartMs = Date.now();
+        currentLogger.info("loop-on", {
+          maxN,
+          gate: config.gateUrl,
+          actor: config.actor,
+          interval: config.intervalSec,
+          maxWait: config.maxWaitSec,
+          token: currentTokenFp,
+        });
+
+        ctx.ui.notify(
+          `lybra on:启动自动领卡循环(maxN=${maxN},interval=${config.intervalSec}s,maxWait=${config.maxWaitSec}s)。\n` +
+            `只放行信封内(PreAuthorized)卡;信封外跳过;BLOCK/失败立停。/lybra off 可停。`,
+          "info",
+        );
+        // F-EXT001-4(FIX1):非阻塞,直接调用第一轮 tick(不经 sendUserMessage)
+        doTick(pi, ctx).catch((e) => {
+          // F-EXT001-8(FIX4):不再静默吞错,落日志
+          currentLogger.warn("lybra-on-first-tick-error", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        });
+        return;
+      }
+
+      ctx.ui.notify("用法:/lybra on [maxN] | /lybra off | /lybra status", "warn");
+    },
+  });
+
+  // --- /lybra-tick:手动触发入口(自动链不依赖它,直接调 doTick)---
+  // F-EXT001-4(FIX1):保留命令仅作人工手动触发,自动轮询链不经此路径
+  pi.registerCommand("lybra-tick", {
+    description: "(手动)立即执行一轮 lybra-loop tick;自动链不依赖命令路由",
+    handler: async (_args, ctx) => {
+      // 直接调用 doTick,与自动链同路径
+      await doTick(pi, ctx);
+    },
+  });
+}
