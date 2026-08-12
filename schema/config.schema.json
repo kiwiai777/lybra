@@ -91,6 +91,12 @@
           "type": "string",
           "required": false,
           "description": "Code repository path (for code tasks)"
+        },
+        "worktree_root": {
+          "type": "string",
+          "required": false,
+          "description": "Root directory for task-specific worktrees (AIPOS-R5A)",
+          "default": "{code_repo}/.worktrees"
         }
       }
     }

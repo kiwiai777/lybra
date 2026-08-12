@@ -395,6 +395,43 @@ def finalize_task(
             "operations": operations,
         }
     
+    # AIPOS-R5A: Worktree 合并和清理（finalize 收敛）
+    worktree_merged = False
+    worktree_cleaned = False
+    try:
+        from tools.worktree_manager import WorktreeManager
+        wt_manager = WorktreeManager.from_workspace_config(workspace_root)
+        branch_name = wt_manager.branch_name_for_task(task_id)
+        
+        # 检查是否存在该任务的分支
+        if wt_manager._branch_exists(branch_name):
+            if not dry_run:
+                # 合并 worktree 分支到 main
+                merge_result = wt_manager.merge_to_main(
+                    branch_name=branch_name,
+                    strategy='squash',  # 默认 squash 策略
+                    main_branch='main'
+                )
+                operations.append(f"Merged {branch_name} to main (squash)")
+                worktree_merged = True
+                
+                # 删除 worktree
+                cleanup_result = wt_manager.cleanup_task(
+                    task_id=task_id,
+                    remove_branch=True,
+                    force=False
+                )
+                if cleanup_result['worktree_removed']:
+                    operations.append(f"Removed worktree for {task_id}")
+                if cleanup_result['branch_deleted']:
+                    operations.append(f"Deleted branch {branch_name}")
+                worktree_cleaned = True
+            else:
+                operations.append(f"DRY-RUN: Would merge {branch_name} to main and cleanup")
+    except Exception as exc:
+        # Worktree 处理失败不阻塞 finalize（可能本就没用 worktree）
+        operations.append(f"Worktree cleanup warning: {exc}")
+    
     # Check if there are changes to commit
     if _git_status_clean(workspace_root):
         return {

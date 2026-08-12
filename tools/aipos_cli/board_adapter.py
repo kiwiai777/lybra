@@ -1761,12 +1761,14 @@ def _queue_mutation_preview(
     if operation == "queue_claim" and verdict != "BLOCK":
         task_metadata = _task.get("metadata", {}) if _task else {}
         task_project = task_metadata.get("project", "")
+        # AIPOS-R5A: worktree 信息从实际执行结果读取
+        worktree_path = result.get("worktree_path")
         response["context"] = {
             "project": task_project,
             "workspace_root": str(resolved_root),
             "code_repo": str(resolved_root),  # 默认与workspace_root相同
             "task_state": result.get("to_state", ""),
-            "worktree": None,  # worktree隔离在R5实现
+            "worktree": worktree_path,
         }
     
     allow_execute = verdict != "BLOCK" and operation == "queue_claim" and (not with_records or bool(mcp_claim_metadata))

@@ -761,6 +761,34 @@ def mutate_queue_task(
     source_path.unlink()
     result["wrote"] = True
     result["moved"] = True
+    
+    # AIPOS-R5A: claim 时创建 worktree (仅 code 任务)
+    if action == "claim":
+        task_mode = updated_metadata.get("task_mode", "")
+        if task_mode == "code":
+            try:
+                from tools.worktree_manager import WorktreeManager
+                wt_manager = WorktreeManager.from_workspace_config(repo_root)
+                task_id_val = str(updated_metadata.get("task_id", ""))
+                worktree_path, branch_name = wt_manager.create_worktree(task_id_val)
+                
+                # 更新卡片的 worktree 字段
+                updated_metadata["active_worktree_path"] = str(worktree_path)
+                updated_metadata["active_worktree_branch"] = branch_name
+                
+                # 重新渲染并写入
+                rendered_markdown = render_task_markdown(updated_metadata, source_body)
+                target_path.write_text(rendered_markdown, encoding="utf-8")
+                
+                result["updated_frontmatter"] = updated_metadata
+                result["worktree_created"] = True
+                result["worktree_path"] = str(worktree_path)
+                result["worktree_branch"] = branch_name
+            except Exception as exc:
+                # worktree 创建失败不阻塞 claim，记录警告
+                result["warnings"].append(f"Worktree creation failed: {exc}")
+                result["worktree_created"] = False
+    
     return result
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation

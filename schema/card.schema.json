@@ -156,6 +156,16 @@
       "required": false,
       "description": "Active session identifier (runtime field)"
     },
+    "active_worktree_path": {
+      "type": "string",
+      "required": false,
+      "description": "Active worktree path for this task (runtime field, AIPOS-R5A)"
+    },
+    "active_worktree_branch": {
+      "type": "string",
+      "required": false,
+      "description": "Active worktree branch name (runtime field, AIPOS-R5A)"
+    },
     "last_session_id": {
       "type": "string",
       "required": false,
@@ -679,6 +689,8 @@
     "claimed_by",
     "claimed_at",
     "active_session_id",
+    "active_worktree_path",
+    "active_worktree_branch",
     "last_session_id",
     "session_started_at",
     "completed_by",

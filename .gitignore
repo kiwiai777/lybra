@@ -32,3 +32,6 @@ web/board/.board_config.json
 # AIPOS-333: deploy snapshots (gate runs from .deploy/current, not working tree)
 .deploy/
 5_tasks/
+
+# AIPOS-R5A: worktree 目录=生成物不入库 (Owner 红线⑤)
+.worktrees/
