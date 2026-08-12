@@ -241,11 +241,13 @@ def test_finalize_deploy_failure_does_not_block_finalize(mock_subprocess, mock_g
     assert result["deployed"] is False
     assert result["deployment_skipped"] is False
     assert result["deployment_error"] is not None
-    assert "Deployment validation failed" in result["deployment_error"]
+    # F-R4B2-3: Updated error message format (invoke_lybra_deploy wraps subprocess error)
+    assert ("Deployment validation failed" in result["deployment_error"] or 
+            "Failed to invoke lybra-deploy" in result["deployment_error"])
     
     # Verify operations show deployment failure
     operations = result["operations"]
-    assert any("Deployment FAILED" in op for op in operations)
+    assert any("Deployment FAILED" in op or "lybra-deploy FAILED" in op for op in operations)
 
 
 @patch("tools.aipos_cli.finalize.subprocess.run")
