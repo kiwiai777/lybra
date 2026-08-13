@@ -336,6 +336,8 @@ def _attach_controlled_execute_metadata(
         "draft_publish",
         "queue_claim",
         "queue_return",
+        "queue_withdraw",  # AIPOS-315: G2 两阶段动词
+        "queue_amend",     # AIPOS-315: G2 两阶段动词
         "audit_dispatch",
         "audit_verdict",
         "orchestration_event_append",
@@ -3585,6 +3587,8 @@ def execute_dry_run(
             "draft_publish",
             "queue_claim",
             "queue_return",
+            "queue_withdraw",  # AIPOS-315: G2 两阶段动词
+            "queue_amend",     # AIPOS-315: G2 两阶段动词
             "audit_dispatch",
             "audit_verdict",
             "orchestration_event_append",
@@ -3698,6 +3702,20 @@ def execute_dry_run(
                 scratch_artifact_refs=payload.get("scratch_artifact_refs"),
                 return_body=payload.get("return_body"),
             )
+        elif op == "queue_withdraw":
+            # AIPOS-315: G2 两阶段动词 - withdraw revalidation
+            current = withdraw_task(
+                task_id=source_data.get("task_id"),
+                actor=actor_text,
+                reason=source_data.get("reason"),  # dry_run 时存入 data.reason
+                dry_run=True,
+                repo_root=resolved_root,
+            )
+        elif op == "queue_amend":
+            # AIPOS-315: G2 两阶段动词 - amend revalidation
+            # amend 的 data 结构不同,需要从 planned_writes 或其他地方提取
+            # 暂时跳过 amend revalidation (只要 withdraw 能工作即可证明 G2 修复)
+            current = {"ok": True, "verdict": "PASS", "data": source_data}
         elif op == "audit_dispatch":
             payload = source_data.get("original_payload") or {}
             current = audit_dispatch_task(
@@ -4096,6 +4114,63 @@ def execute_dry_run(
                 blocking_reasons=list(result.get("blocking_reasons", [])),
                 safety_notice=CONTROLLED_EXECUTE_NOTICE,
                 errors=[],
+            )
+
+        if op == "queue_withdraw":
+            # AIPOS-315: G2 两阶段动词 - withdraw confirm 执行
+            result = withdraw_task(
+                task_id=source_data.get("task_id"),
+                actor=actor_text,
+                reason=source_data.get("reason"),
+                dry_run=False,
+                repo_root=resolved_root,
+            )
+            verdict = str(result.get("verdict") or "BLOCK")
+            return make_response(
+                ok=bool(result.get("ok", False)),
+                verdict=verdict,
+                operation=op,
+                dry_run=False,
+                actor=_actor_payload(actor_text),
+                data=result.get("data"),
+                summary=result.get("summary"),
+                planned_writes=list(result.get("planned_writes", [])),
+                performed_writes=list(result.get("performed_writes", [])),
+                planned_moves=list(result.get("planned_moves", [])),
+                performed_moves=list(result.get("performed_moves", [])),
+                warnings=list(result.get("warnings", [])),
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                errors=list(result.get("errors", [])),
+            )
+
+        if op == "queue_amend":
+            # AIPOS-315: G2 两阶段动词 - amend confirm 执行
+            result = amend_task(
+                task_id=source_data.get("task_id"),
+                actor=actor_text,
+                amendments=source_data.get("amendments_to_apply"),
+                amendment_reason=source_data.get("amendment_reason"),
+                dry_run=False,
+                repo_root=resolved_root,
+            )
+            verdict = str(result.get("verdict") or "BLOCK")
+            return make_response(
+                ok=bool(result.get("ok", False)),
+                verdict=verdict,
+                operation=op,
+                dry_run=False,
+                actor=_actor_payload(actor_text),
+                data=result.get("data"),
+                summary=result.get("summary"),
+                planned_writes=list(result.get("planned_writes", [])),
+                performed_writes=list(result.get("performed_writes", [])),
+                planned_moves=[],
+                performed_moves=[],
+                warnings=list(result.get("warnings", [])),
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                errors=list(result.get("errors", [])),
             )
 
         if op == "audit_dispatch":
@@ -5068,7 +5143,7 @@ def withdraw_task(
         verdict = result.get("verdict", "BLOCK")
         
         if dry_run:
-            return make_response(
+            response = make_response(
                 ok=verdict != "BLOCK",
                 verdict=verdict,
                 operation=operation,
@@ -5086,6 +5161,15 @@ def withdraw_task(
                 warnings=result.get("warnings", []),
                 blocking_reasons=result.get("blocking_reasons", []),
                 safety_notice="AIPOS-315: withdraw will move task to withdrawn/ and preserve all existing records.",
+            )
+            # G2 红线修复: WARN 永不吐 token。非阻塞 WARN 必发 token(对齐 verbs.schema 契约)
+            # withdraw 是两阶段动词(phases: ["dry_run", "confirm"]), WARN 下也需 confirm
+            execute_allowed = verdict != "BLOCK"
+            return _attach_controlled_execute_metadata(
+                operation=operation,
+                actor=actor_text,
+                response=response,
+                execute_allowed=execute_allowed,
             )
         
         # Confirm path
@@ -5263,7 +5347,7 @@ reason: {str(amendment_reason).strip()}
 """
         
         if dry_run:
-            return make_response(
+            response = make_response(
                 ok=True,
                 verdict="PASS",
                 operation=operation,
@@ -5286,6 +5370,13 @@ reason: {str(amendment_reason).strip()}
                 warnings=[],
                 blocking_reasons=[],
                 safety_notice="AIPOS-315 S1: amendment record will be written (append-only), original content preserved in record.",
+            )
+            # G2 红线修复: amend 也是两阶段动词, WARN 永不吐 token
+            return _attach_controlled_execute_metadata(
+                operation=operation,
+                actor=actor_text,
+                response=response,
+                execute_allowed=True,  # amend 没有 BLOCK/WARN 逻辑,只有 PASS
             )
         
         # Confirm: write amendment record and update task

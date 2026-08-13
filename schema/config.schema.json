@@ -110,6 +110,11 @@
     "auditor_loop_default": 7119,
     "tunnel_default": 7120
   },
+  "timeouts": {
+    "description": "Timeout configuration — single source for all timeout defaults. 坑② 修复(R5B前置): timeoutMs 从配置读取,不写死。顾问实测证明网络路径等速(127.0.0.1 vs tailscale 均 2.2s/461卡),真凶在连接器内部预算累加(initialize+queueTasks+claimDryRun+taskPreview 串行)。",
+    "gate_mcp_request_ms": 30000,
+    "gate_mcp_request_description": "Gate MCP 单次请求超时(ms)。默认 30s 对齐 LOOP-REDESIGN 护栏常量审查;实测本机单次操作 <3s,30s 为多次串行累加留足容错预算。计时日志(fetch-timing/dryrun-timing/preview-timing/tick-total-timing)用于排查慢点。"
+  },
   "urls": {
     "description": "URL patterns and defaults",
     "gate_local": "http://127.0.0.1:7118",
