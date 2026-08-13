@@ -1765,10 +1765,12 @@ def _queue_mutation_preview(
         task_project = task_metadata.get("project", "")
         # AIPOS-R5A: worktree 信息从实际执行结果读取
         worktree_path = result.get("worktree_path")
+        # AIPOS-R6A F-002修复: code_repo 从 project.json 真解析，禁硬编码
+        product_code_repo = _resolve_product_code_repo(resolved_root)
         response["context"] = {
             "project": task_project,
             "workspace_root": str(resolved_root),
-            "code_repo": str(resolved_root),  # 默认与workspace_root相同
+            "code_repo": str(product_code_repo) if product_code_repo else str(resolved_root),
             "task_state": result.get("to_state", ""),
             "worktree": worktree_path,
         }
@@ -2476,6 +2478,22 @@ def return_task(
     scratch_artifact_refs: Any = None,
     return_body: str | None = None,
 ) -> dict[str, Any]:
+    # AIPOS-R6A F-003修复: CLI return 强制 dry-run，禁直接执行（平行loop路径）
+    # 只有 MCP gate (通过 mcp_return_metadata) 可以非 dry-run 执行
+    # CLI 必须走 dry-run preview → MCP confirm 两阶段
+    if not dry_run and not mcp_return_metadata:
+        return blocked_response(
+            operation="queue_return",
+            dry_run=False,
+            category="CLI_DIRECT_EXECUTE_FORBIDDEN",
+            message=(
+                "CLI queue return no longer supports direct execution (AIPOS-R6A F-003). "
+                "Use MCP gate tools instead: lybra_queue_return_dry_run + lybra_queue_return_confirm. "
+                "CLI can only preview (--dry-run flag required)."
+            ),
+            actor=_actor_payload(str(actor or "").strip()),
+            safety_notice=CONTROLLED_EXECUTE_NOTICE,
+        )
     try:
         actor_text = str(actor or "").strip()
         instance_text = str(agent_instance or "").strip()
@@ -3068,9 +3086,28 @@ def _build_audit_verdict_preview(
     if audit_session_id and str(audit_metadata.get("active_session_id") or "") != audit_session_id:
         blocking_reasons.append("AUDIT_SESSION_MISMATCH: audit_session_id does not match audit task")
 
-    reviewed_executor_instance = str(audit_metadata.get("reviewed_executor_instance") or reviewed_metadata.get("executor_completed_by") or "").strip()
+    # AIPOS-R6A F-004修复: 从 return record 自动提取 reviewed_executor_instance
+    # 审计卡可能没有 reviewed_executor_instance 字段，但 return record 里有
+    reviewed_executor_instance = str(audit_metadata.get("reviewed_executor_instance") or "").strip()
     if not reviewed_executor_instance:
-        blocking_reasons.append("MISSING_EXECUTOR_INSTANCE: reviewed executor instance is required")
+        # 尝试从 reviewed_return_record_ref 加载 return record
+        return_record_ref = str(reviewed_return_record_ref or audit_metadata.get("reviewed_return_record_ref") or "").strip()
+        if return_record_ref:
+            try:
+                # return record 路径: 5_tasks/records/returns/<TASK_ID>/<return_id>.md
+                return_record_path = repo_root / "5_tasks" / "records" / "returns" / reviewed_task_id / f"{return_record_ref}.md"
+                if return_record_path.exists():
+                    return_record_content = return_record_path.read_text(encoding="utf-8")
+                    return_record_fm, _, _ = parse_markdown_frontmatter(return_record_content)
+                    return_record_fm = _normalize_return_value(return_record_fm)
+                    reviewed_executor_instance = str(return_record_fm.get("canonical_agent_instance") or "").strip()
+            except Exception:
+                pass  # 失败就用 fallback
+    # Fallback: 从 reviewed_metadata 读取 executor_completed_by
+    if not reviewed_executor_instance:
+        reviewed_executor_instance = str(reviewed_metadata.get("executor_completed_by") or "").strip()
+    if not reviewed_executor_instance:
+        blocking_reasons.append("MISSING_EXECUTOR_INSTANCE: reviewed executor instance is required (not found in audit card, return record, or reviewed task)")
     if reviewed_executor_instance and canonical_agent_instance == reviewed_executor_instance:
         blocking_reasons.append("INDEPENDENCE_FAILED: auditor must be distinct from reviewed_executor_instance")
     elif reviewed_executor_instance:
