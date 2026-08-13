@@ -1769,23 +1769,7 @@ def _match_claim_envelope(
     # The claim's agent_instance (and actor) MUST match the canonical instance bound to the
     # request token in connection.json. No binding or mismatch → fall back Supervised.
     # This is the authoritative identity source (Owner-minted token binding), not self-reported.
-    cap_token = _capability_token()
-    bound = str(cap_token.get("agent_instance") or "").strip()
-    # AIPOS-R6A FIX2 诊断日志（临时，写到/tmp便于查看）
-    import sys
-    from datetime import datetime
-    debug_log = f"/tmp/lybra_preauth_debug_{datetime.now().strftime('%Y%m%d')}.log"
-    try:
-        with open(debug_log, "a") as f:
-            f.write(f"\n=== {datetime.now().isoformat()} ===\n")
-            f.write(f"cap_token keys: {list(cap_token.keys())}\n")
-            f.write(f"bound: '{bound}'\n")
-            f.write(f"canonical_agent_instance: '{canonical_agent_instance}'\n")
-            f.write(f"actor: '{actor}'\n")
-            f.write(f"bound == canonical: {bound == canonical_agent_instance}\n")
-            f.write(f"bound == actor: {bound == actor}\n")
-    except Exception:
-        pass
+    bound = str(_capability_token().get("agent_instance") or "").strip()
     if not bound:
         # Token has no agent_instance binding → PreAuthorized unavailable (backward-compatible).
         return None, "binding_absent"
