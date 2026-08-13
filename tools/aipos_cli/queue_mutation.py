@@ -540,7 +540,9 @@ def mutate_queue_task(
     # (绕过 gate 控制执行流程，不产生真实的 claim/return 记录，"卡面假成功")
     # CLI 只能预览(dry-run=True)，真实变更必须走 MCP gate 工具。
     # 实撞案例：CONN-LOOP-2/R5B 各被骗一次
-    if not dry_run:
+    # AIPOS-R6A FIX2: 例外：board_adapter 调用（profiles 参数存在）是合法的 MCP 路径
+    # （包括 PreAuthorized autorelease、MCP confirm），允许非 dry-run 执行
+    if not dry_run and profiles is None:
         raise ValueError(
             f"CLI queue {action} no longer supports direct execution (AIPOS-R6A removal of parallel loop paths). "
             f"Use MCP gate tools instead: lybra_queue_claim_dry_run + lybra_queue_claim_confirm for claim, "
