@@ -21,6 +21,8 @@ SUPPORTED_OPERATIONS = {
     "draft_publish",
     "queue_claim",
     "queue_return",
+    "queue_withdraw",  # AIPOS-315: G2 两阶段动词
+    "queue_amend",     # AIPOS-315: G2 两阶段动词
     "orchestration_event_append",
     "planner_iteration_append",
     "intake_submit",
