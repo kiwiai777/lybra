@@ -275,5 +275,49 @@
         "session binding per project"
       ]
     }
+  },
+  "governance_worktree": {
+    "description": "AIPOS-R5B: Per-project governance worktree configuration — 解决 FND-24 多项目共用一工作树推送相撞。复用 R5A worktree_manager.py 一机制一实现。",
+    "branch_semantics": {
+      "gov_prefix": {
+        "pattern": "gov/<project>",
+        "semantic": "collection_lane",
+        "description": "收集车道(collection lane)非特性分叉 — 每次收账即 merge 回 main, 差距不过夜。与 LOOP-REDESIGN §6 '分叉活不过一张卡' 红线不冲突(语义声明在此, 非硬编码特判)。",
+        "lifecycle": "persistent per-project branch + dedicated worktree",
+        "merge_policy": "frequent convergence to main (不过夜)"
+      },
+      "card_prefix": {
+        "pattern": "card/<task_id>",
+        "semantic": "ephemeral_task_branch",
+        "description": "临时任务分支 — 分叉活不过一张卡, finalize 时 merge + 删分支 + 删 worktree",
+        "lifecycle": "created on claim, deleted on finalize"
+      }
+    },
+    "path_constraints": {
+      "description": "越界校验规则 — gov/<project> 分支 commit 只许碰指定路径",
+      "per_project_allowed_pattern": "2_projects/<project>/**",
+      "common_paths_whitelist": [
+        "governance/decision_log.md",
+        "governance/project_status.md",
+        "governance/roadmap.md",
+        "5_tasks/records/**",
+        "stage_archive/**",
+        "README.md"
+      ],
+      "violation_policy": "BLOCK with explicit file list"
+    },
+    "merge_convergence": {
+      "description": "merge 收敛动词 — 一条命令合所有 gov/<project> 回 main 并 push",
+      "operation": "merge_all_gov_branches",
+      "strategy": "no-ff merge (保留历史)",
+      "conflict_resolution": "目录隔离 → 零冲突预期; 真冲突 → 越界改他人目录 → BLOCK 列文件",
+      "single_truth": "origin main = 唯一真相, 禁第二 origin/镜像"
+    },
+    "coexistence": {
+      "description": "共存期策略 — 现有直推 main 流程照常",
+      "current_workflows_unchanged": true,
+      "agency_chris_kaia_untouched": "本卡零接触 agency/chris 工作流, kaia-kb 只读",
+      "migration_deferred": "切换另行安排, 非本卡范围"
+    }
   }
 }
