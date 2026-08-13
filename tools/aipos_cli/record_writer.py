@@ -750,6 +750,7 @@ def build_mcp_audit_verdict_record_markdown(
     findings_summary: str | None,
     evidence_refs: list[str],
     recommended_next_action: str | None,
+    owner_waiver_ref: str | None = None,  # AIPOS-R6A 靶子④: 仲裁/豁免一等公民
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
@@ -782,6 +783,7 @@ def build_mcp_audit_verdict_record_markdown(
         "findings_summary_present": bool(findings_summary),
         "evidence_refs": evidence_refs,
         "recommended_next_action": recommended_next_action or "",
+        "owner_waiver_ref": owner_waiver_ref or "",  # AIPOS-R6A 靶子④: 仲裁/豁免引用
         "dry_run_id": dry_run_id or "",
         "dry_run_snapshot_hash": dry_run_snapshot_hash or "",
         "confirmation_ref": confirmation_ref or "",

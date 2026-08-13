@@ -3185,6 +3185,7 @@ def _build_audit_verdict_preview(
         findings_summary=findings_summary,
         evidence_refs=evidence_refs,
         recommended_next_action=recommended_next_action,
+        owner_waiver_ref=owner_waiver_ref,  # AIPOS-R6A 靶子④: 接线 waiver 引用
         agent_runtime=agent_runtime,
     )
     session_markdown = ""
@@ -3392,6 +3393,28 @@ def audit_verdict_task(
             raise ValueError("reviewed_task_id is required")
         if not verdict_text:
             raise ValueError("verdict is required")
+        
+        # AIPOS-R6A 靶子⑧: 记录属主校验 — audit_verdicts 只接受 auditor 角色
+        # (执行体补字段篡改 verdict 实证·.bak 铁证)
+        # 角色推导：agent_instance 包含角色前缀（如 audit.*, auditor.*, exec.*, advisor.*）
+        role_prefix = instance_text.split(".")[0].lower() if "." in instance_text else ""
+        if role_prefix not in {"audit", "auditor"}:
+            return {
+                "verdict": "BLOCK",
+                "task_id": reviewed_id,
+                "actor": actor_text,
+                "dry_run": dry_run,
+                "blocking_reasons": [
+                    f"ROLE_VIOLATION: audit_verdict can only be submitted by auditor role. "
+                    f"Current agent_instance '{instance_text}' (role: {role_prefix or 'unknown'}) is not authorized. "
+                    f"Only instances with 'audit.*' or 'auditor.*' prefix can write to records/audit_verdicts/. "
+                    f"防止执行体/其他角色篡改裁决记录。"
+                ],
+                "warnings": [],
+                "data": {},
+                "message": "Audit verdict submission blocked: role violation",
+            }
+        
         resolved_root = _resolve_repo_root(repo_root)
         response = _build_audit_verdict_preview(
             audit_task_id=audit_task_id,
