@@ -4979,6 +4979,8 @@ def close_task(
             governance_warnings.append("stage_archive/ directory not found")
 
         # Build the complete mutation (claimed → completed)
+        # AIPOS-R6A FIX3: 传入profiles，标记为board_adapter调用，避免被靶②CLI拦截误伤
+        profiles = load_agent_profiles(resolved_root)
         report_link = evidence_ref
         mutation_result = mutate_queue_task(
             resolved_root,
@@ -4988,6 +4990,7 @@ def close_task(
             report_link=report_link,
             dry_run=dry_run,
             with_records=False,
+            profiles=profiles,
         )
 
         # Build response
