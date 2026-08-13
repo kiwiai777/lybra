@@ -99,6 +99,17 @@ class WorktreeManager:
         """
         self.code_repo = Path(code_repo).resolve()
         
+        # AIPOS-R6A 靶子⑦: worktree供给bug根治 — 硬断言 code_repo ≠ 治理仓
+        # 全量实证：R5A起每张卡都被错建了治理仓树（已全拆）
+        # 治理仓特征：路径包含 ai-project-os（简单可靠的识别方法）
+        repo_path_str = str(self.code_repo)
+        if 'ai-project-os' in repo_path_str:
+            raise ValueError(
+                f"BLOCKED: WorktreeManager cannot operate on governance repo ({self.code_repo}). "
+                f"Worktrees must only be created in product repos (e.g., ~/projects/lybra). "
+                f"治理仓从此无代码可改，化石树已被铲除。 (AIPOS-R6A 靶子⑦)"
+            )
+        
         if worktree_root:
             self.worktree_root = Path(worktree_root).resolve()
         else:

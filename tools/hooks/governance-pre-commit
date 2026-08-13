@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# AIPOS-R6A 靶子⑨: 治理仓 pre-commit 钩子
+# 防止代码文件进入治理仓 commit
+
+set -e
+
+# 代码文件扩展名黑名单
+CODE_EXTENSIONS=(
+    "py" "js" "ts" "tsx" "jsx"
+    "java" "go" "rs" "c" "cpp"
+    "sh" "bash" "rb" "php" "swift"
+)
+
+# 检查 staged 文件
+echo "🔍 AIPOS-R6A: Checking for code files in governance repo..."
+
+blocked_files=()
+
+# 获取所有 staged 文件
+while IFS= read -r file; do
+    # 跳过删除的文件
+    if [ ! -f "$file" ]; then
+        continue
+    fi
+    
+    # 检查文件扩展名
+    extension="${file##*.}"
+    for ext in "${CODE_EXTENSIONS[@]}"; do
+        if [ "$extension" = "$ext" ]; then
+            blocked_files+=("$file")
+            break
+        fi
+    done
+done < <(git diff --cached --name-only --diff-filter=ACM)
+
+# 如果发现代码文件，拒绝 commit
+if [ ${#blocked_files[@]} -gt 0 ]; then
+    echo ""
+    echo "❌ BLOCKED: Code files detected in governance repo commit"
+    echo ""
+    echo "治理仓从此无代码可改 (AIPOS-R6A 靶子⑨)。"
+    echo "Governance repo should only contain:"
+    echo "  - Documentation (*.md)"
+    echo "  - Configuration files (*.json, *.yaml)"
+    echo "  - Task cards and records"
+    echo ""
+    echo "Blocked files:"
+    for file in "${blocked_files[@]}"; do
+        echo "  - $file"
+    done
+    echo ""
+    echo "Solution: Move code to product repo (~/projects/lybra)"
+    echo ""
+    exit 1
+fi
+
+echo "✅ No code files detected. Commit allowed."
+exit 0

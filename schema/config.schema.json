@@ -294,17 +294,34 @@
       }
     },
     "path_constraints": {
-      "description": "越界校验规则 — gov/<project> 分支 commit 只许碰指定路径",
+      "description": "AIPOS-R6A 靶子⑨: 治理仓路径白名单 — 明确哪些路径可写。代码文件(.py/.js/.ts等)一律禁止，只允许文档、记录、配置。",
       "per_project_allowed_pattern": "2_projects/<project>/**",
       "common_paths_whitelist": [
-        "governance/decision_log.md",
-        "governance/project_status.md",
-        "governance/roadmap.md",
+        "governance/**/*.md",
+        "0_control_plane/**",
+        "2_projects/**",
         "5_tasks/records/**",
+        "5_tasks/policies/**",
+        "5_tasks/queue/**/*.md",
         "stage_archive/**",
-        "README.md"
+        "README.md",
+        "*.md"
       ],
-      "violation_policy": "BLOCK with explicit file list"
+      "violation_policy": "BLOCK with explicit file list. Code files in governance repo = protocol violation (治理仓从此无代码可改).",
+      "code_files_blacklist": [
+        "**/*.py",
+        "**/*.js",
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.jsx",
+        "**/*.java",
+        "**/*.go",
+        "**/*.rs",
+        "**/*.c",
+        "**/*.cpp",
+        "**/*.sh",
+        "**/*.bash"
+      ]
     },
     "merge_convergence": {
       "description": "merge 收敛动词 — 一条命令合所有 gov/<project> 回 main 并 push",

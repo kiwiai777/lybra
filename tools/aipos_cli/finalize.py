@@ -65,6 +65,58 @@ def _git_status_clean(repo_root: Path) -> bool:
         return False
 
 
+def _git_local_origin_synced(repo_root: Path) -> bool:
+    """Check if local HEAD is synced with origin (AIPOS-R6A 靶子③: push判据修正).
+    
+    Returns:
+        True if local HEAD == origin/HEAD (or origin doesn't exist)
+        False if local has unpushed commits
+    
+    Context:
+        working tree clean ≠ already pushed. A clean tree with unpushed commits
+        should trigger push, not skip as "nothing to do".
+    """
+    try:
+        # Get current branch
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(repo_root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        branch = branch_result.stdout.strip()
+        
+        # Get local HEAD
+        local_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        local_head = local_result.stdout.strip()
+        
+        # Try to get origin HEAD
+        origin_result = subprocess.run(
+            ["git", "rev-parse", f"origin/{branch}"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+        
+        # If origin doesn't exist, consider synced (no remote to push to)
+        if origin_result.returncode != 0:
+            return True
+        
+        origin_head = origin_result.stdout.strip()
+        return local_head == origin_head
+        
+    except subprocess.CalledProcessError:
+        # If git commands fail, assume not synced (safe default)
+        return False
+
+
 def _check_deployment_integrity(repo_root: Path) -> dict[str, Any]:
     """Check if .deploy/current symlink points to HEAD (AIPOS-369 assertion).
     
@@ -342,6 +394,38 @@ def finalize_task(
 
     operations.append(f"Governance root (audit verdicts): {governance_root}")
     operations.append(f"Product repo root (git ops): {workspace_root}")
+    
+    # AIPOS-R6A 靶子⑦: finalize 场地根治 — 硬拒治理仓 git 操作
+    # workspace_root 必须是产品仓，绝不能是治理仓（218f8b7 实证：治理仓大扫除卷入 agency 记录）
+    try:
+        ws_resolved = workspace_root.resolve()
+        gov_resolved = governance_root.resolve()
+        
+        # 检查 workspace_root 是否在治理仓路径下
+        if ws_resolved == gov_resolved or str(ws_resolved).startswith(str(gov_resolved) + "/"):
+            return {
+                "verdict": "BLOCK",
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": dry_run,
+                "can_finalize": False,
+                "integrity_check": None,
+                "branch_check": None,
+                "committed": False,
+                "pushed": False,
+                "deployed": False,
+                "deployment_skipped": False,
+                "deployment_error": None,
+                "commit_hash": None,
+                "message": (
+                    f"BLOCKED: workspace_root ({ws_resolved}) is inside governance_root ({gov_resolved}). "
+                    f"finalize git operations MUST run in product repo only. "
+                    f"治理仓 git 归 N6 收账节点(顾问职责), executor 无权操作。"
+                ),
+                "operations": operations,
+            }
+    except Exception as exc:
+        operations.append(f"Warning: Could not verify workspace/governance separation: {exc}")
 
     # AIPOS-FND-14: display-only — surface the task_cards AUDIT-REPORT frontmatter verdict
     # (if any) alongside the real gate verdict for operator visibility. Never judged.
@@ -461,24 +545,120 @@ def finalize_task(
         operations.append(f"Worktree cleanup warning: {exc}")
     
     # Check if there are changes to commit
+    # AIPOS-R6A 靶子③: finalize push判据修正 — working tree clean ≠ already pushed
+    # 需要检查 local vs origin 同步状态
     if _git_status_clean(workspace_root):
-        return {
-            "verdict": "PASS",
-            "task_id": task_id,
-            "actor": actor,
-            "dry_run": dry_run,
-            "can_finalize": True,
-            "integrity_check": integrity,
-            "branch_check": branch_check,
-            "committed": False,
-            "pushed": False,
-            "deployed": False,
-            "deployment_skipped": False,
-            "deployment_error": None,
-            "commit_hash": _git_rev_parse_head(workspace_root),
-            "message": "No changes to commit (working tree clean)",
-            "operations": operations,
-        }
+        synced = _git_local_origin_synced(workspace_root)
+        
+        # Case 1: working tree clean + synced → 真正无事可做
+        if synced:
+            return {
+                "verdict": "PASS",
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": dry_run,
+                "can_finalize": True,
+                "integrity_check": integrity,
+                "branch_check": branch_check,
+                "committed": False,
+                "pushed": False,
+                "deployed": False,
+                "deployment_skipped": False,
+                "deployment_error": None,
+                "commit_hash": _git_rev_parse_head(workspace_root),
+                "message": "No changes to commit (working tree clean and synced with origin)",
+                "operations": operations,
+            }
+        
+        # Case 2: working tree clean but not synced → 需要 push (如果 push=True)
+        if not push:
+            return {
+                "verdict": "PASS",
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": dry_run,
+                "can_finalize": True,
+                "integrity_check": integrity,
+                "branch_check": branch_check,
+                "committed": False,
+                "pushed": False,
+                "deployed": False,
+                "deployment_skipped": False,
+                "deployment_error": None,
+                "commit_hash": _git_rev_parse_head(workspace_root),
+                "message": "Working tree clean but unpushed commits exist (use --push to push)",
+                "operations": operations,
+            }
+        
+        # Case 3: working tree clean, not synced, push=True → 执行 push
+        if dry_run:
+            operations.append("DRY-RUN: Would push unpushed commits to remote")
+            return {
+                "verdict": "PASS",
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": True,
+                "can_finalize": True,
+                "integrity_check": integrity,
+                "branch_check": branch_check,
+                "committed": False,
+                "pushed": False,
+                "deployed": False,
+                "deployment_skipped": False,
+                "deployment_error": None,
+                "commit_hash": _git_rev_parse_head(workspace_root),
+                "message": "DRY-RUN: Would push unpushed commits",
+                "operations": operations,
+            }
+        
+        # Actually push
+        try:
+            operations.append("Pushing unpushed commits to remote...")
+            subprocess.run(
+                ["git", "push"],
+                cwd=str(workspace_root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            operations.append("Push successful")
+            
+            return {
+                "verdict": "PASS",
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": False,
+                "can_finalize": True,
+                "integrity_check": integrity,
+                "branch_check": branch_check,
+                "committed": False,
+                "pushed": True,
+                "deployed": False,
+                "deployment_skipped": True,
+                "deployment_error": None,
+                "commit_hash": _git_rev_parse_head(workspace_root),
+                "message": "Pushed unpushed commits (no new changes to commit)",
+                "operations": operations,
+            }
+        except subprocess.CalledProcessError as e:
+            operations.append(f"Push failed: {e.stderr}")
+            return {
+                "verdict": "FAIL",
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": False,
+                "can_finalize": False,
+                "integrity_check": integrity,
+                "branch_check": branch_check,
+                "committed": False,
+                "pushed": False,
+                "deployed": False,
+                "deployment_skipped": False,
+                "deployment_error": None,
+                "commit_hash": None,
+                "message": f"Push failed: {e.stderr}",
+                "operations": operations,
+            }
     
     if dry_run:
         operations.append("DRY-RUN: Would commit changes")

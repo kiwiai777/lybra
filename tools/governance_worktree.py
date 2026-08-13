@@ -37,25 +37,26 @@ class GovernanceWorktreeManager:
     def __init__(self, governance_root: Path):
         """Initialize governance worktree manager.
         
+        **DEPRECATED (AIPOS-R6A 靶子⑦): 治理仓不应该创建 worktree**
+        
+        治理仓从此无代码可改，化石树已被铲除。所有 worktree 都应该在产品仓创建。
+        本类保留仅用于兼容性，但 create_gov_worktree 将硬拒绝。
+        
         Args:
             governance_root: Governance repository root path
+        
+        Raises:
+            ValueError: Always raises (governance repo cannot create worktrees)
         """
         self.governance_root = Path(governance_root).resolve()
         
-        # Load schema configuration
-        schema = load_schema('config')
-        gov_config = schema.get('governance_worktree', {})
-        
-        # 复用 R5A WorktreeManager
-        worktree_root = self.governance_root / '.worktrees' / 'gov'
-        self.wt_manager = WorktreeManager(
-            code_repo=self.governance_root,
-            worktree_root=worktree_root
+        # AIPOS-R6A 靶子⑦: 治理仓物理墙 — 硬拒绝创建 worktree
+        raise ValueError(
+            f"DEPRECATED: GovernanceWorktreeManager cannot create worktrees in governance repo. "
+            f"Governance repo ({self.governance_root}) is read-only for code operations. "
+            f"All worktrees must be created in product repos (use WorktreeManager directly). "
+            f"治理仓从此无代码可改，化石树已被铲除。 (AIPOS-R6A 靶子⑦)"
         )
-        
-        # Load path constraints from schema
-        path_config = gov_config.get('path_constraints', {})
-        self.common_whitelist = path_config.get('common_paths_whitelist', [])
     
     def gov_branch_name(self, project: str) -> str:
         """Get gov branch name for a project.
