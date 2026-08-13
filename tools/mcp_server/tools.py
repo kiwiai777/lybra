@@ -1769,12 +1769,21 @@ def _match_claim_envelope(
     # The claim's agent_instance (and actor) MUST match the canonical instance bound to the
     # request token in connection.json. No binding or mismatch → fall back Supervised.
     # This is the authoritative identity source (Owner-minted token binding), not self-reported.
-    bound = str(_capability_token().get("agent_instance") or "").strip()
+    cap_token = _capability_token()
+    bound = str(cap_token.get("agent_instance") or "").strip()
+    # AIPOS-R6A FIX2 诊断日志
+    import sys
+    print(f"[DEBUG _match_claim_envelope] cap_token keys: {list(cap_token.keys())}", file=sys.stderr)
+    print(f"[DEBUG _match_claim_envelope] bound: '{bound}'", file=sys.stderr)
+    print(f"[DEBUG _match_claim_envelope] canonical_agent_instance: '{canonical_agent_instance}'", file=sys.stderr)
+    print(f"[DEBUG _match_claim_envelope] actor: '{actor}'", file=sys.stderr)
     if not bound:
         # Token has no agent_instance binding → PreAuthorized unavailable (backward-compatible).
+        print(f"[DEBUG _match_claim_envelope] RETURN: binding_absent", file=sys.stderr)
         return None, "binding_absent"
     if bound != canonical_agent_instance or bound != actor:
         # Identity mismatch: claim self-report doesn't match token authority → fall back Supervised.
+        print(f"[DEBUG _match_claim_envelope] RETURN: binding_mismatch (bound={bound}, canonical={canonical_agent_instance}, actor={actor})", file=sys.stderr)
         return None, "binding_mismatch"
     policy = load_policy(repo_root, owner_policy_ref)
     if policy is None:
