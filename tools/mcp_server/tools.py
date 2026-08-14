@@ -37,6 +37,7 @@ from tools.aipos_cli.autonomy_policy import (
     count_preauthorized_claims,
     load_policy,
     match_claim_envelope,
+    trace_envelope,
 )
 from tools.aipos_cli.agent_profiles import load_agent_profiles, registry_available, resolve_instance_id
 from tools.aipos_cli.controlled_execute import get_dry_run
@@ -1769,29 +1770,66 @@ def _match_claim_envelope(
     # The claim's agent_instance (and actor) MUST match the canonical instance bound to the
     # request token in connection.json. No binding or mismatch → fall back Supervised.
     # This is the authoritative identity source (Owner-minted token binding), not self-reported.
-    bound = str(_capability_token().get("agent_instance") or "").strip()
+    # AIPOS-PRERELEASE-1: trace every outer envelope condition to stderr (→ journald) as
+    # gate-side evidence (repo_root / capability identity / binding / policy load / snapshot /
+    # queue_state / released count / final release switch). The inner match_claim_envelope
+    # emits its own per-predicate trace. Behavior is unchanged — only observability is added.
+    cap = _capability_token()
+    bound = str(cap.get("agent_instance") or "").strip()
+    claiming_role = str(cap.get("role") or "").strip()
+    trace = {
+        "phase": "_match_claim_envelope",
+        "repo_root": str(repo_root),
+        "request_project": REQUEST_PROJECT.get(),
+        "owner_policy_ref": owner_policy_ref,
+        "task_id": task_id,
+        "task_path": task_path,
+        "canonical_agent_instance": canonical_agent_instance,
+        "actor": actor,
+        "capability": {
+            "agent_instance": bound,
+            "role": claiming_role,
+            "projects": cap.get("projects"),
+            "default_project": cap.get("default_project"),
+        },
+    }
+
+    def _emit(stage, matched_policy_id, binding_status, **extra):
+        t = dict(trace)
+        t["stage"] = stage
+        t["matched_policy_id"] = matched_policy_id
+        t["binding_status"] = binding_status
+        t.update(extra)
+        trace_envelope(t)
+
     if not bound:
         # Token has no agent_instance binding → PreAuthorized unavailable (backward-compatible).
+        _emit("identity_gate", None, "binding_absent", reason="token has no agent_instance binding")
         return None, "binding_absent"
     if bound != canonical_agent_instance or bound != actor:
         # Identity mismatch: claim self-report doesn't match token authority → fall back Supervised.
+        _emit("identity_gate", None, "binding_mismatch", reason="claim self-report does not match token-bound agent_instance")
         return None, "binding_mismatch"
     policy = load_policy(repo_root, owner_policy_ref)
     if policy is None:
+        _emit("policy_load", None, None, policy_loaded=False)
         return None, None
     snapshot = load_task_snapshot(repo_root, task_id=task_id, path=task_path)
     if snapshot is None:
+        _emit("snapshot_load", None, None, policy_loaded=True, snapshot_loaded=False)
         return None, None
     # Envelope auto-release covers only pending (claimable) queue tasks — anything else drops to
     # the Supervised path (which will itself surface why the task is not claimable).
-    if str(snapshot.get("queue_state") or "").strip() != "pending":
+    queue_state = str(snapshot.get("queue_state") or "").strip()
+    if queue_state != "pending":
+        _emit("queue_state_guard", None, None, policy_loaded=True, snapshot_loaded=True,
+              queue_state=queue_state, reason="envelope covers pending tasks only")
         return None, None
     released = count_preauthorized_claims(repo_root, owner_policy_ref)
     # AIPOS-363 S4: carry the calling role so an envelope may name an AIPOS-352 custom role
     # (e.g. agent_or_role: kaia-asst) and still match an agent claiming under that role.
     # The role is read from the Owner-minted capability token (authoritative, not self-reported).
-    claiming_role = str(_capability_token().get("role") or "").strip()
-    matched, _reason = match_claim_envelope(
+    matched, inner_reason = match_claim_envelope(
         policy=policy,
         task_id=str(snapshot.get("task_id") or task_id or ""),
         task_mode=str(snapshot.get("task_mode") or ""),
@@ -1802,6 +1840,10 @@ def _match_claim_envelope(
         released_count=released,
         claiming_role=claiming_role or None,
     )
+    _emit("final", owner_policy_ref if matched else None, None,
+          policy_loaded=True, snapshot_loaded=True, queue_state=queue_state,
+          released_count=released, inner_matched=matched, inner_reason=inner_reason,
+          release_switch=matched)
     return (owner_policy_ref, None) if matched else (None, None)
 
 

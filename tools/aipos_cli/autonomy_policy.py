@@ -13,7 +13,10 @@ and the owner_decision writer can share it without an import cycle.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +33,27 @@ AUTONOMY_MODE_PREAUTHORIZED = "PreAuthorized"
 POLICY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$")
 POLICY_STATUS_ACTIVE = "active"
 POLICY_STATUSES = {"active", "expired", "revoked"}
+
+
+# AIPOS-PRERELEASE-1: permanent gate-side audit trace for PreAuthorized envelope decisions.
+# Emits one JSON line to stderr (→ journald under lybra-dev-gate.service) so an envelope match
+# or a Supervised fallback is observable from gate evidence — not agent self-report. Low
+# volume: fires only on PreAuthorized claim attempts (the envelope path).
+_ENVELOPE_LOGGER = logging.getLogger("lybra.envelope")
+if not _ENVELOPE_LOGGER.handlers:
+    _h = logging.StreamHandler(sys.stderr)
+    _h.setFormatter(logging.Formatter("%(message)s"))
+    _ENVELOPE_LOGGER.addHandler(_h)
+_ENVELOPE_LOGGER.setLevel(logging.INFO)
+_ENVELOPE_LOGGER.propagate = False
+
+
+def trace_envelope(payload: dict[str, Any]) -> None:
+    """Emit one structured envelope-decision trace line (JSON). Best-effort: never raises."""
+    try:
+        _ENVELOPE_LOGGER.info("[ENVELOPE_TRACE] " + json.dumps(payload, default=str, sort_keys=True))
+    except Exception:
+        pass
 
 # FLAT bounded-map frontmatter (AIPOS-219 P5 idiom: depth-1, readable on bare python).
 # task_selector is flattened into three explicit fields; task_ids is a YAML list.
@@ -215,61 +239,105 @@ def match_claim_envelope(
     """Strict-AND envelope match for a claim. Returns (matched, reason). Every predicate must
     hold; any miss returns matched=False with a human reason (偏窄 fail-safe). The caller uses
     matched=True to auto-release (one-stage direct write) and matched=False to fall back to
-    Supervised (per-task owner_confirm)."""
-    if not isinstance(policy, dict):
-        return False, "no policy artifact resolved for owner_policy_ref"
-    if policy.get("mode") != AUTONOMY_MODE_PREAUTHORIZED:
-        return False, f"policy mode is not {AUTONOMY_MODE_PREAUTHORIZED}"
-    if policy.get("status") != POLICY_STATUS_ACTIVE:
-        return False, f"policy status is {policy.get('status') or 'unset'}, not active"
-    if not policy.get("approved_by_owner"):
-        return False, "policy is not approved_by_owner"
+    Supervised (per-task owner_confirm).
 
-    active_from = _parse_iso(policy.get("active_from"))
-    expires_at = _parse_iso(policy.get("expires_at"))
-    if active_from is None or expires_at is None:
-        return False, "policy time window is missing or unparseable"
-    if now < active_from:
-        return False, "policy is not yet active (active_from in the future)"
-    if now >= expires_at:
-        return False, "policy has expired (expires_at reached)"
-
-    # agent/role: match the concrete instance/actor OR a role label the caller carries.
-    # AIPOS-363 S4: the role label may be a built-in role name OR an AIPOS-352 registered
-    # custom role (e.g. kaia-asst). The claiming_role comes from the Owner-minted capability
-    # token (authoritative identity, not self-reported), so it is safe to match against. This
-    # does NOT loosen coverage: an envelope naming role R covers only agents whose token role
-    # is exactly R (or whose instance/actor is exactly R) — agents of any other role still
-    # fall back to Supervised (偏窄 fail-safe preserved).
-    covered = str(policy.get("agent_or_role") or "").strip()
+    AIPOS-PRERELEASE-1: every predicate's input and judgment is traced to stderr (→ journald)
+    as gate-side evidence, so a match or fallback is observable without agent self-report.
+    Behavior is unchanged — only observability is added.
+    """
+    # ── evaluate every predicate (full picture for the trace) ─────────────
+    is_dict = isinstance(policy, dict)
+    covered = str(policy.get("agent_or_role") or "").strip() if is_dict else ""
     identity = {str(agent_instance or "").strip(), str(actor or "").strip()}
     if claiming_role:
         identity.add(str(claiming_role).strip())
     identity.discard("")
-    if not covered or covered not in identity:
-        return False, "claiming agent/role is not covered by policy.agent_or_role"
 
-    # task_selector: strict, no wildcards. At least one selector dimension must be present and
-    # ALL present dimensions must match (precise set or explicit class).
-    sel_mode = str(policy.get("task_selector_task_mode") or "").strip()
-    sel_project = str(policy.get("task_selector_project") or "").strip()
-    sel_ids = list(policy.get("task_selector_task_ids") or [])
-    if not (sel_mode or sel_project or sel_ids):
-        return False, "policy task_selector is empty (no wildcard auto-release)"
-    if sel_ids and str(task_id or "").strip() not in sel_ids:
-        return False, "task_id is not in policy task_selector.task_ids"
-    if sel_mode and str(task_mode or "").strip() != sel_mode:
-        return False, "task_mode does not match policy task_selector.task_mode"
-    if sel_project and str(project or "").strip() != sel_project:
-        return False, "project does not match policy task_selector.project"
+    sel_mode = str(policy.get("task_selector_task_mode") or "").strip() if is_dict else ""
+    sel_project = str(policy.get("task_selector_project") or "").strip() if is_dict else ""
+    sel_ids = list(policy.get("task_selector_task_ids") or []) if is_dict else []
 
-    max_tasks = int(policy.get("max_tasks") or 0)
-    if max_tasks <= 0:
-        return False, "policy max_tasks is not a positive bound"
-    if released_count >= max_tasks:
-        return False, f"policy count bound reached ({released_count}/{max_tasks})"
+    active_from = _parse_iso(policy.get("active_from")) if is_dict else None
+    expires_at = _parse_iso(policy.get("expires_at")) if is_dict else None
+    tw_parseable = active_from is not None and expires_at is not None
 
-    return True, f"matched policy {policy.get('policy_id')} (released {released_count}/{max_tasks})"
+    try:
+        max_tasks = int(policy.get("max_tasks") or 0) if is_dict else 0
+    except (TypeError, ValueError):
+        max_tasks = 0
+
+    predicates = {
+        "policy_is_dict": is_dict,
+        "mode": is_dict and policy.get("mode") == AUTONOMY_MODE_PREAUTHORIZED,
+        "status_active": is_dict and policy.get("status") == POLICY_STATUS_ACTIVE,
+        "approved_by_owner": bool(policy.get("approved_by_owner")) if is_dict else False,
+        "time_window_parseable": tw_parseable,
+        "time_window_active": tw_parseable and (active_from <= now < expires_at),
+        "agent_or_role": bool(covered) and covered in identity,
+        "task_selector_present": bool(sel_mode or sel_project or sel_ids),
+        "task_id_in_ids": (not sel_ids) or (str(task_id or "").strip() in sel_ids),
+        "task_mode": (not sel_mode) or (str(task_mode or "").strip() == sel_mode),
+        "project": (not sel_project) or (str(project or "").strip() == sel_project),
+        "max_tasks_positive": max_tasks > 0,
+        "count_bound": released_count < max_tasks,
+    }
+
+    # ── first-failing reason (preserves original short-circuit order & strings) ──
+    if not is_dict:
+        reason = "no policy artifact resolved for owner_policy_ref"
+    elif policy.get("mode") != AUTONOMY_MODE_PREAUTHORIZED:
+        reason = f"policy mode is not {AUTONOMY_MODE_PREAUTHORIZED}"
+    elif policy.get("status") != POLICY_STATUS_ACTIVE:
+        reason = f"policy status is {policy.get('status') or 'unset'}, not active"
+    elif not policy.get("approved_by_owner"):
+        reason = "policy is not approved_by_owner"
+    elif active_from is None or expires_at is None:
+        reason = "policy time window is missing or unparseable"
+    elif now < active_from:
+        reason = "policy is not yet active (active_from in the future)"
+    elif now >= expires_at:
+        reason = "policy has expired (expires_at reached)"
+    elif not covered or covered not in identity:
+        reason = "claiming agent/role is not covered by policy.agent_or_role"
+    elif not (sel_mode or sel_project or sel_ids):
+        reason = "policy task_selector is empty (no wildcard auto-release)"
+    elif sel_ids and str(task_id or "").strip() not in sel_ids:
+        reason = "task_id is not in policy task_selector.task_ids"
+    elif sel_mode and str(task_mode or "").strip() != sel_mode:
+        reason = "task_mode does not match policy task_selector.task_mode"
+    elif sel_project and str(project or "").strip() != sel_project:
+        reason = "project does not match policy task_selector.project"
+    elif max_tasks <= 0:
+        reason = "policy max_tasks is not a positive bound"
+    elif released_count >= max_tasks:
+        reason = f"policy count bound reached ({released_count}/{max_tasks})"
+    else:
+        reason = f"matched policy {policy.get('policy_id')} (released {released_count}/{max_tasks})"
+
+    matched = all(predicates.values())
+    trace_envelope({
+        "phase": "match_claim_envelope",
+        "policy_id": policy.get("policy_id") if is_dict else None,
+        "task_id": task_id,
+        "inputs": {
+            "task_mode": task_mode,
+            "project": project,
+            "agent_instance": agent_instance,
+            "actor": actor,
+            "claiming_role": claiming_role,
+            "now": now.isoformat(),
+            "released_count": released_count,
+            "policy_agent_or_role": covered,
+            "policy_task_selector": {"task_mode": sel_mode, "project": sel_project, "task_ids": sel_ids},
+            "policy_active_from": policy.get("active_from") if is_dict else None,
+            "policy_expires_at": policy.get("expires_at") if is_dict else None,
+            "policy_max_tasks": max_tasks,
+        },
+        "predicates": predicates,
+        "matched": matched,
+        "reason": reason,
+    })
+    return matched, reason
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)
