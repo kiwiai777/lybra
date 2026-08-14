@@ -828,8 +828,8 @@ class AdvisorPump:
                 # PASS verdict: task should move to completed/
                 completed_path = self.workspace_root / "5_tasks" / "queue" / "completed" / f"{task_id.lower()}.md"
                 return completed_path.exists()
-            elif expected_verdict in (Verdict.FAIL, "REQUEST_CHANGES"):
-                # FAIL/REQUEST_CHANGES: task should stay in claimed (正确行为)
+            elif expected_verdict in (Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER):
+                # FAIL/BLOCK/WARN/NEEDS_OWNER: task should stay in claimed (正确行为)
                 claimed_path = self.workspace_root / "5_tasks" / "queue" / "claimed" / f"{task_id.lower()}.md"
                 return claimed_path.exists()
         

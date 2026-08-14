@@ -2923,7 +2923,8 @@ def _build_audit_dispatch_preview(
         if existing_verdicts:
             latest_verdict = max(existing_verdicts, key=_verdict_time)
             latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
-            if latest_verdict_value not in {Verdict.FAIL, "REQUEST_CHANGES", "BLOCKED"}:
+            # AIPOS-R6J: 非终态裁决允许re-dispatch(FAIL/BLOCK/WARN/NEEDS_OWNER)
+            if latest_verdict_value not in {Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER}:
                 # 非 FAIL/REQUEST_CHANGES,不允许 re-dispatch
                 blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
             # else: FAIL/REQUEST_CHANGES,允许 re-dispatch,不 BLOCK
@@ -3272,12 +3273,10 @@ def _build_audit_verdict_preview(
         blocking_reasons.append("INSTANCE_MISMATCH: actor must equal canonical agent_instance for Supervised MCP audit_verdict")
 
     normalized_verdict = verdict_value.upper().strip()
-    if normalized_verdict == "CHANGES":
-        normalized_verdict = "REQUEST_CHANGES"
-    if normalized_verdict not in {Verdict.PASS, Verdict.FAIL, "REQUEST_CHANGES", "BLOCKED", "WAIVED"}:
-        blocking_reasons.append("INVALID_VERDICT: verdict must be PASS, FAIL, REQUEST_CHANGES, BLOCKED, or WAIVED")
-    if normalized_verdict == "WAIVED" and not str(owner_waiver_ref or "").strip():
-        blocking_reasons.append("WAIVER_REQUIRES_OWNER_EVIDENCE: owner_waiver_ref is required for WAIVED")
+    # AIPOS-R6J: verdict值域单一源——从schema_constants.Verdict读取,禁手写集合
+    valid_verdicts = {Verdict.PASS, Verdict.PASS_WITH_NOTES, Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER}
+    if normalized_verdict not in valid_verdicts:
+        blocking_reasons.append(f"INVALID_VERDICT: verdict must be one of {sorted(valid_verdicts)}")
 
     # AIPOS-R4A: 允许已 completed 的 R 卡接受复审裁决（修实撞②）
     # FIX 轮场景：首轮 R 卡已 completed，复审需要能落新裁决

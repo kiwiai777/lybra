@@ -1167,9 +1167,9 @@ class LybraTui(App):
         # this is a pure loop-position overlay. PASS → forward; FAIL/REQUEST_CHANGES → back to the
         # executor. The blocking reason itself lives in L3 (we don't parallel-author it here).
         v = verdict.upper()
-        if v in (Verdict.FAIL, "REQUEST_CHANGES", Verdict.BLOCK):
+        if v in (Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER):
             self._system("↳ 审计未通过。看 L3 记录的 blocking 原因,退回执行者修后重走 return→/confirm。")
-        elif v in (Verdict.PASS, "APPROVE", "APPROVED"):
+        elif v in (Verdict.PASS, Verdict.PASS_WITH_NOTES, "APPROVE", "APPROVED"):
             self._system("↳ 审计通过。该任务这一环已闭合。")
 
     # --- AIPOS-226 (Slice 2): local Owner actions (NOT gate, NOT copilot) ----------

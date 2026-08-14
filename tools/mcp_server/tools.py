@@ -4320,7 +4320,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "audit_session_id": {"type": "string"},
                 "audit_dispatch_record_ref": {"type": "string"},
                 "reviewed_return_record_ref": {"type": "string"},
-                "verdict": {"type": "string", "enum": [Verdict.PASS, Verdict.FAIL, "REQUEST_CHANGES", "CHANGES", "BLOCKED", "WAIVED"]},
+                "verdict": {"type": "string", "enum": [Verdict.PASS, Verdict.PASS_WITH_NOTES, Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER]},
                 "findings_summary": {"type": "string"},
                 "evidence_refs": {"type": "array", "items": {"type": "string"}},
                 "recommended_next_action": {"type": "string"},
