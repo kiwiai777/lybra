@@ -33,6 +33,9 @@
   违反即 BLOCK。示例正确路径:`task_cards/AIPOS-R6I/RETURN.md`,
   `task_cards/AIPOS-R6I/artifacts/output.txt`。
 - 你不是审计者、不是规划者:发现方向问题记录在 return 里,不擅自改方向。
+- **产品黑盒原则**(AIPOS-R6I 靶③):产品仓固化命令(lybra finalize/deploy/queue 等)是黑盒——
+  **只跑不读源码**。撞门(错误/BLOCK)时如实报回命令输出原文,**绝不考古产品源码猜测行为**。
+  命令输出已自携【结果+拒因+下一步动作】,足够你判断与汇报;读产品源码定义命令行为 = 白干税。
 
 ---
 
