@@ -2041,6 +2041,107 @@ def _return_owner_reasons() -> list[str]:
     return ["MCP Supervised queue_return requires explicit Owner confirmation for this dry-run preview"]
 
 
+def _check_return_coverage(
+    *,
+    declared_scope: str,
+    actual_refs: list[str],
+    result_summary: str,
+) -> dict[str, Any]:
+    """AIPOS-R6E 靶④: return覆盖度对照——卡面artifact_scope vs 实际artifact_refs
+    
+    简化实现:按中英文分隔符拆分artifact_scope为大项清单,逐项检查是否在artifact_refs
+    或result_summary中出现(启发式匹配,宽松策略避免误报)。
+    
+    Returns:
+        {
+            "has_missing_items": bool,
+            "coverage_summary": str,
+            "declared_items": list[str],
+            "covered_items": list[str],
+            "missing_items": list[str],
+        }
+    """
+    import re
+    
+    if not declared_scope:
+        # 无artifact_scope声明,无需检查
+        return {
+            "has_missing_items": False,
+            "coverage_summary": "No artifact_scope declared",
+            "declared_items": [],
+            "covered_items": [],
+            "missing_items": [],
+        }
+    
+    # 按中英文分隔符拆分大项(优先逗号/顿号,其次加号/斜杠)
+    # 先按逗号/顿号拆分(主分隔符)
+    if ',' in declared_scope or '、' in declared_scope:
+        declared_items = re.split(r'[,、]+', declared_scope)
+    else:
+        # 无逗号时才按其他分隔符
+        declared_items = re.split(r'[;,;+/\s]+', declared_scope)
+    declared_items = [item.strip() for item in declared_items if item.strip()]
+    
+    if not declared_items:
+        return {
+            "has_missing_items": False,
+            "coverage_summary": "Empty artifact_scope",
+            "declared_items": [],
+            "covered_items": [],
+            "missing_items": [],
+        }
+    
+    # 合并所有实际交付证据文本
+    evidence_text = " ".join(actual_refs) + " " + result_summary
+    evidence_lower = evidence_text.lower()
+    
+    # 启发式匹配:检查每个大项是否在证据文本中出现
+    covered_items = []
+    missing_items = []
+    
+    for item in declared_items:
+        # 宽松匹配策略:提取所有字母数字词,任一词匹配即算覆盖
+        # 例: "修复部署脚本" -> ["修复", "部署", "脚本"] 或 "deploy"
+        item_lower = item.lower()
+        
+        # 策略1: 完整词匹配(去除标点后)
+        clean_item = re.sub(r'[^a-z0-9\u4e00-\u9fff]+', '', item_lower)
+        if clean_item and clean_item in evidence_lower.replace("_", "").replace("-", "").replace("/", ""):
+            covered_items.append(item)
+            continue
+        
+        # 策略2: 提取关键词(>2字的中英文词)
+        keywords = re.findall(r'[a-z]{3,}|[\u4e00-\u9fff]{2,}', item_lower)
+        matched = False
+        for kw in keywords:
+            if kw in evidence_lower:
+                matched = True
+                break
+        
+        if matched:
+            covered_items.append(item)
+        else:
+            # 策略3: 去除动词前缀后再匹配
+            core_item = re.sub(r'^(修复|添加|实现|完成|更新|fix|add|implement|complete|update)\s*', '', item, flags=re.IGNORECASE)
+            core_keywords = re.findall(r'[a-z]{3,}|[\u4e00-\u9fff]{2,}', core_item.lower())
+            core_matched = any(kw in evidence_lower for kw in core_keywords)
+            
+            if core_matched:
+                covered_items.append(item)
+            else:
+                missing_items.append(item)
+    
+    coverage_rate = len(covered_items) / len(declared_items) if declared_items else 0
+    
+    return {
+        "has_missing_items": len(missing_items) > 0,
+        "coverage_summary": f"{len(covered_items)}/{len(declared_items)} items covered ({coverage_rate:.0%})",
+        "declared_items": declared_items,
+        "covered_items": covered_items,
+        "missing_items": missing_items,
+    }
+
+
 def _unsafe_return_ref(value: str) -> bool:
     if not value:
         return False
@@ -2204,6 +2305,20 @@ def _build_return_preview(
         blocking_reasons.append("SESSION_MISMATCH: active_session_id does not match claimed task")
     if any(_unsafe_return_ref(ref) for ref in [*artifact_refs, completion_report_ref or ""]):
         blocking_reasons.append("Return evidence refs must be repo-relative or approved workspace-relative and secret-free")
+    
+    # AIPOS-R6E 靶④: return覆盖度对照——卡面artifact_scope与实际artifact_refs差异结构化
+    artifact_scope = str(source_metadata.get("artifact_scope") or "").strip()
+    coverage_check = _check_return_coverage(
+        declared_scope=artifact_scope,
+        actual_refs=artifact_refs,
+        result_summary=result_summary or "",
+    )
+    if coverage_check.get("has_missing_items"):
+        # 有缺项→标记partial,差异落入响应数据
+        warnings.append(
+            f"Return coverage: {coverage_check.get('coverage_summary')}. "
+            f"Missing items will be recorded as partial delivery."
+        )
     
     # AIPOS-FND-5: code 卡交回门检测未提交代码
     # AIPOS-R4B-2 N3: 交回门按卡 scope — 只检查本卡声明的路径，不全仓扫描
