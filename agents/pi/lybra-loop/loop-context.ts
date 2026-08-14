@@ -81,8 +81,32 @@ export class ConnectionResolver {
   }
 
   /**
+   * 加载 .lybra/role 文件 (JSON 或纯文本兼容)
+   */
+  static loadRoleFile(lybraDir: string): { role: string; instance?: string; owner_policy_ref?: string } | null {
+    const roleFile = join(lybraDir, "role");
+    if (!existsSync(roleFile)) {
+      return null;
+    }
+
+    try {
+      const content = readFileSync(roleFile, "utf-8").trim();
+      // 尝试 JSON 格式 (新格式)
+      if (content.startsWith("{")) {
+        const data = JSON.parse(content);
+        return data as { role: string; instance?: string; owner_policy_ref?: string };
+      }
+      // 纯文本格式 (旧格式,仅 role)
+      return { role: content };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * 解析 gate URL
-   * Precedence: 显式参数 → env → .lybra/ 自发现
+   * Precedence: 显式参数 → .lybra/自发现 → env仅覆盖
+   * AIPOS-R6H: env 降为最低优先级,消除env注入病
    */
   static resolveGateUrl(opts: {
     workspaceRoot?: string;
@@ -96,13 +120,7 @@ export class ConnectionResolver {
       return opts.explicitUrl;
     }
 
-    // 环境变量覆盖
-    const envUrl = env.LYBRA_GATE_URL?.trim();
-    if (envUrl) {
-      return envUrl;
-    }
-
-    // 自动发现 .lybra/
+    // 自动发现 .lybra/ (优先级高于env)
     if (opts.workspaceRoot) {
       const lybraDir = this.discoverLybraDir(opts.workspaceRoot);
       if (lybraDir) {
@@ -113,9 +131,15 @@ export class ConnectionResolver {
             return rpcUrl;
           }
         } catch {
-          // 自发现失败, 继续fallback
+          // 自发现失败, 继续
         }
       }
+    }
+
+    // 环境变量覆盖 (最低优先级)
+    const envUrl = env.LYBRA_GATE_URL?.trim();
+    if (envUrl) {
+      return envUrl;
     }
 
     // 默认 fallback
@@ -124,7 +148,8 @@ export class ConnectionResolver {
 
   /**
    * 解析 token
-   * Precedence: 显式参数 → env → .lybra/ 自发现 (按 agent_instance 或 role 匹配)
+   * Precedence: 显式参数 → .lybra/自发现 → env仅覆盖
+   * AIPOS-R6H: env 降为最低优先级
    */
   static resolveToken(opts: {
     workspaceRoot?: string;
@@ -140,13 +165,7 @@ export class ConnectionResolver {
       return opts.explicitToken;
     }
 
-    // 环境变量覆盖
-    const envToken = env.LYBRA_TOKEN?.trim();
-    if (envToken) {
-      return envToken;
-    }
-
-    // 自动发现 .lybra/connection.json
+    // 自动发现 .lybra/connection.json (优先级高于env)
     if (opts.workspaceRoot) {
       const lybraDir = this.discoverLybraDir(opts.workspaceRoot);
       if (lybraDir) {
@@ -181,15 +200,148 @@ export class ConnectionResolver {
             }
           }
         } catch {
-          // 自发现失败, 继续fallback
+          // 自发现失败, 继续
         }
       }
+    }
+
+    // 环境变量覆盖 (最低优先级)
+    const envToken = env.LYBRA_TOKEN?.trim();
+    if (envToken) {
+      return envToken;
     }
 
     throw new Error(
       `Cannot resolve token for role=${opts.role}, agentInstance=${opts.agentInstance}. ` +
       "Provide explicit token, set LYBRA_TOKEN env, or ensure .lybra/connection.json exists."
     );
+  }
+
+  /**
+   * 解析 actor (agent_instance)
+   * Precedence: 显式参数 → .lybra/role文件 → .lybra/actor文件 → env仅覆盖
+   */
+  static resolveActor(opts: {
+    workspaceRoot?: string;
+    env?: Record<string, string | undefined>;
+    explicitActor?: string;
+  }): string | null {
+    const env = opts.env ?? process.env;
+
+    // 显式参数
+    if (opts.explicitActor) {
+      return opts.explicitActor;
+    }
+
+    // 自动发现 .lybra/role (JSON格式含instance)
+    if (opts.workspaceRoot) {
+      const lybraDir = this.discoverLybraDir(opts.workspaceRoot);
+      if (lybraDir) {
+        const roleData = this.loadRoleFile(lybraDir);
+        if (roleData?.instance) {
+          return roleData.instance;
+        }
+
+        // fallback: .lybra/actor (纯文本)
+        const actorFile = join(lybraDir, "actor");
+        if (existsSync(actorFile)) {
+          try {
+            return readFileSync(actorFile, "utf-8").trim();
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+
+    // env 覆盖 (最低优先级)
+    const envActor = env.LYBRA_ACTOR?.trim();
+    if (envActor) {
+      return envActor;
+    }
+
+    return null;
+  }
+
+  /**
+   * 解析 owner_policy_ref
+   * Precedence: 显式参数 → .lybra/role文件 → .lybra/policy文件 → env仅覆盖
+   */
+  static resolveOwnerPolicyRef(opts: {
+    workspaceRoot?: string;
+    env?: Record<string, string | undefined>;
+    explicitPolicy?: string;
+  }): string | null {
+    const env = opts.env ?? process.env;
+
+    // 显式参数
+    if (opts.explicitPolicy) {
+      return opts.explicitPolicy;
+    }
+
+    // 自动发现 .lybra/role (JSON格式含owner_policy_ref)
+    if (opts.workspaceRoot) {
+      const lybraDir = this.discoverLybraDir(opts.workspaceRoot);
+      if (lybraDir) {
+        const roleData = this.loadRoleFile(lybraDir);
+        if (roleData?.owner_policy_ref) {
+          return roleData.owner_policy_ref;
+        }
+
+        // fallback: .lybra/policy (纯文本)
+        const policyFile = join(lybraDir, "policy");
+        if (existsSync(policyFile)) {
+          try {
+            return readFileSync(policyFile, "utf-8").trim();
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+
+    // env 覆盖 (最低优先级)
+    const envPolicy = env.LYBRA_OWNER_POLICY_REF?.trim();
+    if (envPolicy) {
+      return envPolicy;
+    }
+
+    return null;
+  }
+
+  /**
+   * 解析 workspace_root
+   * Precedence: 显式参数 → .lybra/connection.json → env仅覆盖
+   * AIPOS-R6H: 拒绝治理仓当工位 (workspace_root 必须是产品仓或agent工位)
+   */
+  static resolveWorkspaceRoot(opts: {
+    env?: Record<string, string | undefined>;
+    explicitRoot?: string;
+  }): string | null {
+    const env = opts.env ?? process.env;
+
+    // 显式参数
+    if (opts.explicitRoot) {
+      return opts.explicitRoot;
+    }
+
+    // TODO: 如果当前目录下有 .lybra/connection.json 且含 workspace_root,用它
+    // 当前简化实现:仅从env读取
+
+    // env 覆盖
+    const envRoot = env.LYBRA_WORKSPACE_ROOT?.trim();
+    if (envRoot) {
+      // AIPOS-R6H: 校验不是治理仓 (治理仓路径通常含 ai-project-os)
+      if (envRoot.includes("ai-project-os")) {
+        throw new Error(
+          `workspace_root cannot be governance repo (ai-project-os): ${envRoot}. ` +
+          "Use product repo or agent workstation path."
+        );
+      }
+      return envRoot;
+    }
+
+    return null;
   }
 
   /**

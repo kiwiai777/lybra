@@ -49,9 +49,15 @@ function nodeTransport(
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const lib = u.protocol === "https:" ? https : http;
+    // AIPOS-R6H: 禁用环境代理（trust_env=False 同义），防止代理劫持 gate 直连
+    const agent = lib === https ? new https.Agent({ proxy: false as any }) : new http.Agent({ proxy: false as any });
     const req = lib.request(
       url,
-      { method: "POST", headers: { ...headers, "Content-Length": Buffer.byteLength(body) } },
+      { 
+        method: "POST", 
+        headers: { ...headers, "Content-Length": Buffer.byteLength(body) },
+        agent, // 使用禁用代理的 agent
+      },
       (res) => {
         let text = "";
         res.setEncoding("utf-8");

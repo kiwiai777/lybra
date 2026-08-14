@@ -98,19 +98,17 @@ class ConnectionResolver:
         env: dict[str, str] | None = None,
         explicit_url: str | None = None,
     ) -> str:
-        """Resolve gate URL with precedence: explicit → env → .lybra/ discovery."""
+        """Resolve gate URL with precedence: explicit → .lybra/ discovery → env override.
+        
+        AIPOS-R6H: env降为最低优先级,消除env注入病
+        """
         source_env = env if env is not None else os.environ
         
         # Explicit parameter (highest priority)
         if explicit_url:
             return explicit_url
         
-        # Environment override
-        env_url = source_env.get("LYBRA_GATE_URL", "").strip()
-        if env_url:
-            return env_url
-        
-        # Auto-discovery from .lybra/
+        # Auto-discovery from .lybra/ (优先级高于env)
         if workspace_root:
             lybra_dir = ConnectionResolver.discover_lybra_dir(workspace_root)
             if lybra_dir:
@@ -124,6 +122,11 @@ class ConnectionResolver:
                 except (FileNotFoundError, ValueError, KeyError):
                     pass
         
+        # Environment override (最低优先级)
+        env_url = source_env.get("LYBRA_GATE_URL", "").strip()
+        if env_url:
+            return env_url
+        
         # Default fallback (AIPOS-R4B-1: from config.schema)
         return f"{get_config_default_gate_url()}/mcp"
     
@@ -136,7 +139,9 @@ class ConnectionResolver:
         env: dict[str, str] | None = None,
         explicit_token: str | None = None,
     ) -> str:
-        """Resolve role token with precedence: explicit → env → .lybra/ discovery.
+        """Resolve role token with precedence: explicit → .lybra/ discovery → env override.
+        
+        AIPOS-R6H: env降为最低优先级
         
         Args:
             workspace_root: Workspace root for .lybra/ discovery
@@ -157,12 +162,7 @@ class ConnectionResolver:
         if explicit_token:
             return explicit_token
         
-        # Environment override
-        env_token = source_env.get("LYBRA_TOKEN", "").strip()
-        if env_token:
-            return env_token
-        
-        # Auto-discovery from .lybra/connection.json
+        # Auto-discovery from .lybra/connection.json (优先级高于env)
         if workspace_root:
             lybra_dir = ConnectionResolver.discover_lybra_dir(workspace_root)
             if lybra_dir:
@@ -187,6 +187,11 @@ class ConnectionResolver:
                 except (FileNotFoundError, ValueError, KeyError) as exc:
                     # Discovery failed, fall through to error
                     pass
+        
+        # Environment override (最低优先级)
+        env_token = source_env.get("LYBRA_TOKEN", "").strip()
+        if env_token:
+            return env_token
         
         raise ValueError(
             f"Cannot resolve token for role={role}, agent_instance={agent_instance}. "

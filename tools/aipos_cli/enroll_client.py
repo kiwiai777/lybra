@@ -219,22 +219,42 @@ def write_connection_json(lybra_dir: Path, connection_data: dict[str, Any]) -> N
         os.chmod(connection_file, 0o600)
 
 
-def write_role_file(lybra_dir: Path, role: str) -> None:
-    """写入 .lybra/role 文件(纯文本,单行角色名)。"""
+def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = None, owner_policy_ref: str | None = None) -> None:
+    """写入 .lybra/role 文件(统一JSON格式,AIPOS-R6H靶②)。
+    
+    Args:
+        lybra_dir: .lybra目录路径
+        role: 角色名
+        agent_instance: agent_instance(可选)
+        owner_policy_ref: owner策略引用(可选)
+    """
     role_file = lybra_dir / "role"
-    role_file.write_text(role + "\n", encoding="utf-8")
+    role_data = {
+        "role": role,
+    }
+    if agent_instance:
+        role_data["instance"] = agent_instance
+    if owner_policy_ref:
+        role_data["owner_policy_ref"] = owner_policy_ref
+    
+    role_file.write_text(json.dumps(role_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     role_file.chmod(0o644)
 
 
 def write_actor_file(lybra_dir: Path, actor: str) -> None:
-    """写入 .lybra/actor 文件(纯文本,单行 actor/instance 标识)。"""
+    """写入 .lybra/actor 文件(纯文本,单行actor/instance标识)。
+    
+    DEPRECATED: 仅为向后兼容保留。新代码应使用 write_role_file 的 JSON 格式。
+    """
     actor_file = lybra_dir / "actor"
     actor_file.write_text(actor + "\n", encoding="utf-8")
     actor_file.chmod(0o644)
 
 
 def write_policy_file(lybra_dir: Path, policy: str | None) -> None:
-    """写入 .lybra/policy 文件(纯文本,单行 policy ref)。
+    """写入 .lybra/policy 文件(纯文本,单行policy ref)。
+    
+    DEPRECATED: 仅为向后兼容保留。新代码应使用 write_role_file 的 JSON 格式。
     
     如果 policy 为 None,不写入(保留现有或不创建)。
     """
@@ -323,17 +343,9 @@ def enroll(
     write_connection_json(lybra_dir, connection_data)
     files_written = ["connection.json"]
     
-    # Step 6: 写入自发现配置文件
-    write_role_file(lybra_dir, role)
+    # Step 6: 写入自发现配置文件 (统一JSON格式)
+    write_role_file(lybra_dir, role, agent_instance, policy)
     files_written.append("role")
-    
-    if agent_instance:
-        write_actor_file(lybra_dir, agent_instance)
-        files_written.append("actor")
-    
-    write_policy_file(lybra_dir, policy)
-    if policy:
-        files_written.append("policy")
     
     return {
         "ok": True,

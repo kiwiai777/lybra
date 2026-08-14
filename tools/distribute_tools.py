@@ -64,7 +64,11 @@ def _primitive_copy_tree(
         }
 
     try:
-        if target_path.exists():
+        # AIPOS-R6H靶③: 存在性检查改查分发落点本体(非wrapper)
+        # 对于file类条目,检查文件本身;对于目录,检查目录本身
+        target_exists = target_path.exists()
+        
+        if target_exists:
             if not force:
                 return {
                     "ok": False,
@@ -73,7 +77,11 @@ def _primitive_copy_tree(
                     "target": str(target_path),
                     "error": "Target exists (use --force to overwrite)",
                 }
-            shutil.rmtree(target_path)
+            # 强制覆盖:删除已存在的目标
+            if target_path.is_dir():
+                shutil.rmtree(target_path)
+            else:
+                target_path.unlink()
 
         # 如果有filter,只拷贝指定子项
         if filter_include and source_path.is_dir():
@@ -88,11 +96,20 @@ def _primitive_copy_tree(
                         shutil.copy2(item_src, item_dst)
         else:
             # 完整拷贝
-            if source_path.is_dir():
-                shutil.copytree(source_path, target_path)
-            else:
+            # AIPOS-R6H靶③: file类条目按文件拷贝(消Not a directory)
+            if source_path.is_file():
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, target_path)
+            elif source_path.is_dir():
+                shutil.copytree(source_path, target_path)
+            else:
+                return {
+                    "ok": False,
+                    "action": "copy_tree",
+                    "source": str(source_path),
+                    "target": str(target_path),
+                    "error": f"Source is neither file nor directory: {source_path}",
+                }
 
         return {
             "ok": True,
