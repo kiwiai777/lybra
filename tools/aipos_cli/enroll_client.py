@@ -23,14 +23,68 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import socket
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 try:
     import urllib.request
     import urllib.error
 except ImportError:
     raise RuntimeError("This script requires Python 3.x with urllib")
+
+
+def is_same_host(gate_url: str) -> bool:
+    """判定 gate host 是否解析到本机 (AIPOS-R6K件①)。
+    
+    同机判定逻辑:
+    1. gate host 是 loopback 地址(127.0.0.1/localhost/::1)
+    2. gate host 解析的 IP 与本机 IP 有交集
+    
+    Returns:
+        True if gate is on same host, False otherwise
+    """
+    try:
+        parsed = urlparse(gate_url)
+        host = parsed.hostname or parsed.netloc.split(':')[0]
+        
+        # 直接是 loopback
+        if host in ('127.0.0.1', 'localhost', '::1'):
+            return True
+        
+        # 解析 gate host 的 IP
+        gate_ips = set(addr[4][0] for addr in socket.getaddrinfo(host, None))
+        
+        # 获取本机所有 IP
+        local_ips = {'127.0.0.1', '::1'}
+        hostname = socket.gethostname()
+        try:
+            local_ips.update(addr[4][0] for addr in socket.getaddrinfo(hostname, None))
+        except Exception:
+            pass
+        
+        # 判定交集
+        return bool(gate_ips & local_ips)
+    except Exception:
+        return False
+
+
+def normalize_gate_url_for_same_host(gate_url: str) -> str:
+    """同机时规范化为 loopback URL (AIPOS-R6K件①: 免疫代理劫持)。
+    
+    Args:
+        gate_url: 原始 gate URL
+    
+    Returns:
+        同机时返回 http://127.0.0.1:<port>,跨机返回原URL
+    """
+    if not is_same_host(gate_url):
+        return gate_url
+    
+    parsed = urlparse(gate_url)
+    port = parsed.port or 7118
+    return f"http://127.0.0.1:{port}"
 
 
 def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | None = None) -> dict[str, Any]:
@@ -77,6 +131,11 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
         'Authorization': f'Bearer {bootstrap_token}',
     }
     
+    # AIPOS-R6K件②: 禁用环境代理(trust_env=False同义)。
+    # Gate流量永不经系统代理,对所有gate地址(不仅loopback)生效。
+    proxy_handler = urllib.request.ProxyHandler({})
+    opener = urllib.request.build_opener(proxy_handler)
+    
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode('utf-8'),
@@ -85,7 +144,7 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
     )
     
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with opener.open(req, timeout=30) as response:
             result = json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8', errors='replace')
@@ -153,11 +212,17 @@ def load_or_create_connection_json(lybra_dir: Path, gate_url: str) -> dict[str, 
     
     # 确保 mcp 配置存在(用于 ConnectionResolver)
     # ConnectionResolver expects rpc_url to be the full MCP endpoint URL
+    # AIPOS-R6K件①: 同机时写 loopback URL (免疫代理劫持)
+    normalized_gate_url = normalize_gate_url_for_same_host(gate_url)
     if "mcp" not in data:
-        mcp_url = gate_url if gate_url.endswith("/mcp") else f"{gate_url}/mcp"
+        mcp_url = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
         data["mcp"] = {
             "rpc_url": mcp_url,
         }
+    else:
+        # 更新现有 mcp.rpc_url (幂等:如已存在也更新为规范化 URL)
+        mcp_url = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
+        data["mcp"]["rpc_url"] = mcp_url
     
     # 确保 config_version 存在
     if "config_version" not in data:

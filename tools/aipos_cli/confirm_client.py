@@ -23,11 +23,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib import request as _request
+from urllib.parse import urlparse
 
 from tools.schema_constants import RecordType
 
@@ -117,6 +119,64 @@ class GateError(RuntimeError):
     pass
 
 
+def _diagnose_connection_failure(base_url: str, error: Exception) -> str:
+    """AIPOS-R6K件④: 连接失败双路诊断(loopback vs 配置URL)。
+    
+    当gate连接失败时,自动探测:
+    1. 配置的URL是否可达
+    2. loopback (127.0.0.1:同端口) 是否可达
+    
+    如果loopback可达但配置URL不可达,判定为代理劫持,给出修法。
+    """
+    try:
+        parsed = urlparse(base_url)
+        host = parsed.hostname or parsed.netloc.split(':')[0]
+        port = parsed.port or 7118
+        
+        # 探测配置URL的连通性
+        config_reachable = False
+        try:
+            sock = socket.create_connection((host, port), timeout=2)
+            sock.close()
+            config_reachable = True
+        except Exception:
+            pass
+        
+        # 探测loopback的连通性(如果配置URL不是loopback)
+        loopback_reachable = False
+        if host not in ('127.0.0.1', 'localhost', '::1'):
+            try:
+                sock = socket.create_connection(('127.0.0.1', port), timeout=2)
+                sock.close()
+                loopback_reachable = True
+            except Exception:
+                pass
+        
+        # 诊断结论
+        diagnosis = f"\n\n🔍 连接诊断 (AIPOS-R6K件④双路探测):\n"
+        diagnosis += f"  配置URL: {base_url}\n"
+        diagnosis += f"  配置URL可达: {'✓' if config_reachable else '✗'}\n"
+        
+        if host not in ('127.0.0.1', 'localhost', '::1'):
+            diagnosis += f"  Loopback可达: {'✓' if loopback_reachable else '✗'}\n"
+            
+            if loopback_reachable and not config_reachable:
+                diagnosis += f"\n  ⚠️  结论: 代理劫持 — 域名被系统代理拦截,但loopback直达正常。\n"
+                diagnosis += f"  ✅ 修法: 使用 http://127.0.0.1:{port} 替代 {base_url}\n"
+                diagnosis += f"         或在 connection.json 中将 gate_url 改为 loopback地址。\n"
+            elif not config_reachable and not loopback_reachable:
+                diagnosis += f"\n  ⚠️  结论: gate服务未运行 — 配置URL和loopback均不可达。\n"
+                diagnosis += f"  ✅ 修法: 确认 gate 服务已启动 (lybra serve)。\n"
+        else:
+            if not config_reachable:
+                diagnosis += f"\n  ⚠️  结论: gate服务未运行 — loopback不可达。\n"
+                diagnosis += f"  ✅ 修法: 确认 gate 服务已启动 (lybra serve)。\n"
+        
+        return diagnosis
+    except Exception:
+        return ""
+
+
 class GateClient:
     """Streamable-HTTP MCP client for the Owner confirm workflow."""
 
@@ -125,7 +185,8 @@ class GateClient:
         self._token = token  # raw token: never logged or returned
         self._session_id: str | None = None
         self._timeout = timeout
-        # Bypass any ambient HTTP proxy for loopback gate calls.
+        # AIPOS-R6K件②: Bypass any ambient HTTP proxy for gate calls (trust_env=False同义).
+        # Gate流量永不经系统代理,对所有gate地址(不仅loopback)生效。
         self._opener = _request.build_opener(_request.ProxyHandler({}))
         self._next_id = 0
 
@@ -144,27 +205,35 @@ class GateClient:
         if self._session_id:
             headers[SESSION_HEADER] = self._session_id
         req = _request.Request(f"{self._base_url}/mcp", data=body, headers=headers, method="POST")
-        with self._opener.open(req, timeout=self._timeout) as response:
-            issued = response.headers.get(SESSION_HEADER)
-            if issued:
-                self._session_id = issued
-            raw = response.read().decode("utf-8")
-            ctype = (response.headers.get("Content-Type") or "").lower()
-            # AIPOS-296B/296C: gate 内容协商，Accept 含 SSE 时返回 SSE 单事件包裹。
-            # 本客户端声明接受 SSE (ACCEPT_STREAMABLE)，须解析 data: 行提取 JSON-RPC。
-            # gate 当前只发单事件 (initialize/tool call)，取最后一条非空 data: 行。
-            if "text/event-stream" in ctype:
-                datas = [ln[5:].lstrip() for ln in raw.splitlines() if ln.startswith("data:")]
-                if not datas:
-                    # SSE 流无 data 行（空响应或格式错误）→ 无法提取 JSON-RPC
-                    raise GateError("SSE response contains no data events")
-                try:
-                    payload = json.loads(datas[-1])
-                except (json.JSONDecodeError, ValueError) as exc:
-                    raise GateError(f"SSE data event is not valid JSON: {exc}")
-            else:
-                # application/json 路径（原有逻辑）
-                payload = json.loads(raw)
+        
+        # AIPOS-R6K件④: 连接失败时触发双路诊断
+        try:
+            with self._opener.open(req, timeout=self._timeout) as response:
+                issued = response.headers.get(SESSION_HEADER)
+                if issued:
+                    self._session_id = issued
+                raw = response.read().decode("utf-8")
+                ctype = (response.headers.get("Content-Type") or "").lower()
+                # AIPOS-296B/296C: gate 内容协商，Accept 含 SSE 时返回 SSE 单事件包裹。
+                # 本客户端声明接受 SSE (ACCEPT_STREAMABLE)，须解析 data: 行提取 JSON-RPC。
+                # gate 当前只发单事件 (initialize/tool call)，取最后一条非空 data: 行。
+                if "text/event-stream" in ctype:
+                    datas = [ln[5:].lstrip() for ln in raw.splitlines() if ln.startswith("data:")]
+                    if not datas:
+                        # SSE 流无 data 行（空响应或格式错误）→ 无法提取 JSON-RPC
+                        raise GateError("SSE response contains no data events")
+                    try:
+                        payload = json.loads(datas[-1])
+                    except (json.JSONDecodeError, ValueError) as exc:
+                        raise GateError(f"SSE data event is not valid JSON: {exc}")
+                else:
+                    # application/json 路径（原有逻辑）
+                    payload = json.loads(raw)
+        except (_request.URLError, OSError, ConnectionError, TimeoutError) as exc:
+            # 连接层失败: 启动双路诊断
+            diagnosis = _diagnose_connection_failure(self._base_url, exc)
+            raise GateError(f"Failed to connect to gate: {exc}{diagnosis}") from exc
+        
         if isinstance(payload, dict) and payload.get("error"):
             raise GateError(str(payload["error"].get("message") or payload["error"]))
         return payload.get("result") if isinstance(payload, dict) else None

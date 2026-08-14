@@ -336,6 +336,17 @@ def _config_defaults(workspace_root: Path) -> dict[str, Any]:
     }
 
 
+def _normalize_mcp_host_for_config(host: str) -> str:
+    """AIPOS-R6K件③: MCP配置生成 loopback 优先。
+    
+    如果 host 是 loopback 或默认值(0.0.0.0/127.0.0.1),规范化为 127.0.0.1。
+    这确保 pi 自带 MCP 通道配置也走 loopback,免疫代理劫持。
+    """
+    if host in ('127.0.0.1', 'localhost', '::1', '0.0.0.0', ''):
+        return '127.0.0.1'
+    return host
+
+
 def _resolve_workspace_for_command(args: argparse.Namespace) -> Path:
     explicit_root = getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None)
     return resolve_workspace_root(explicit_root=explicit_root)
@@ -505,6 +516,8 @@ def build_mcp_config_report(args: argparse.Namespace, env: dict[str, str] | None
     workspace_root = _resolve_workspace_for_command(args)
     defaults = _config_defaults(workspace_root)
     host = str(getattr(args, "host", None) or defaults["mcp_host"])
+    # AIPOS-R6K件③: loopback 优先(免疫代理劫持)
+    normalized_host = _normalize_mcp_host_for_config(host)
     port = int(getattr(args, "port", None) or defaults["mcp_port"])
     token_env = str(getattr(args, "transport_token_env", None) or defaults["transport_token_env"])
     capability_env = str(getattr(args, "capability_token_env", None) or defaults["capability_token_env"])
@@ -513,8 +526,8 @@ def build_mcp_config_report(args: argparse.Namespace, env: dict[str, str] | None
     return {
         "operation": "mcp_config",
         "workspace_root": str(workspace_root),
-        "endpoint": f"http://{host}:{port}/mcp",
-        "sse_endpoint": f"http://{host}:{port}/sse",
+        "endpoint": f"http://{normalized_host}:{port}/mcp",
+        "sse_endpoint": f"http://{normalized_host}:{port}/sse",
         "server_command": f"lybra mcp --workspace-root {workspace_root}",
         "server_env": {
             "AIPOS_WORKSPACE_ROOT": str(workspace_root),
@@ -526,6 +539,7 @@ def build_mcp_config_report(args: argparse.Namespace, env: dict[str, str] | None
             "transport_token_env": token_env,
             "capability_token_env": capability_env,
             "capability_token_note": "LYBRA_CAPABILITY_TOKEN is consumed by the Lybra MCP server process for tool visibility.",
+            "proxy_exempt": True,  # AIPOS-R6K件③: 明示代理豁免
         },
         "fingerprints": {
             token_env: _secret_fingerprint(transport_raw),
