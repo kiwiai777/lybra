@@ -1,5 +1,6 @@
-"""AIPOS-R4B-2: Enhanced finalize — 一条命令真 push+deploy+部署分支强制.
+"""AIPOS-R4B-2: Deploy gate helpers — 一条命令真 push+deploy+部署分支强制.
 
+AIPOS-R6C: Renamed from finalize_enhanced.py to deploy_gate.py for neutral naming.
 AIPOS-FINALIZE-FIX-1 (2026-08-12): lybra-deploy 路径从产品仓根解析,禁 cwd 猜测。
 
 finalize 收口：读 gate 真裁决(PASS前提) → 产品仓commit校验 → push → lybra-deploy

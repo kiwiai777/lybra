@@ -483,7 +483,7 @@ def finalize_task(
         }
     
     # AIPOS-R4B-2: 部署分支强制 — finalize/deploy 只允许从 main 分支
-    from tools.aipos_cli.finalize_enhanced import check_deployment_branch
+    from tools.aipos_cli.deploy_gate import check_deployment_branch
     
     branch_check = check_deployment_branch(workspace_root, required_branch="main")
     operations.append(f"Branch check: {branch_check['message']}")
@@ -742,7 +742,7 @@ def finalize_task(
         
         if deploy:
             # 显式 deploy 模式：直接调用 lybra-deploy
-            from tools.aipos_cli.finalize_enhanced import invoke_lybra_deploy, verify_deployment_version
+            from tools.aipos_cli.deploy_gate import invoke_lybra_deploy, verify_deployment_version
             
             operations.append("ℹ️  Invoking lybra-deploy (explicit deploy mode)...")
             deploy_result = invoke_lybra_deploy(workspace_root)
@@ -806,7 +806,7 @@ def finalize_task(
         else:
             # F-R4B2-3: FND-9 Auto-deploy gate-side changes (无论 push 与否都检查)
             from tools.aipos_cli.gate_drift import check_gate_drift
-            from tools.aipos_cli.finalize_enhanced import invoke_lybra_deploy
+            from tools.aipos_cli.deploy_gate import invoke_lybra_deploy
             
             drift_check = check_gate_drift(workspace_root)
             operations.append(f"Drift check: {drift_check['message']}")

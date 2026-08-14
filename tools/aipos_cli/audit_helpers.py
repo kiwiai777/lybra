@@ -1,4 +1,6 @@
-"""AIPOS-R4B-2: Audit verdict CLI self-service — 审计裁决自助落库.
+"""AIPOS-R4B-2: Audit helpers — 审计裁决自助落库.
+
+AIPOS-R6C: Renamed from audit_verdict_helper.py to audit_helpers.py for neutral naming.
 
 审计 pi 自发现身份（从 LoopContext/自发现）→ dry_run → confirm → verdict record 落库。
 参数从 LoopContext 出，审计 pi 不再要 GateClient snippet。
@@ -121,20 +123,17 @@ def resolve_audit_context(
                     actor = token_entry.get("actor") or agent_instance
                     break
             
-            # F-R4B2-2: Try to get policy reference (priority: explicit > policy.json > env)
-            policy_file = lybra_dir / "policy.json"
-            if policy_file.exists():
-                import json
-                policy_data = json.loads(policy_file.read_text(encoding="utf-8"))
-                owner_policy_ref = policy_data.get("policy_id")
+            # AIPOS-R6C ⑩: policy_ref 自发现全序 (policy_resolver → env → 显式)
+            from tools.aipos_cli.policy_resolver import find_active_policy
+            owner_policy_ref = find_active_policy(workspace_root, role=role, policy_type="dev")
+            
+            # Env override if set
+            if not owner_policy_ref:
+                import os
+                owner_policy_ref = os.environ.get("LYBRA_OWNER_POLICY_REF")
     except Exception:
         # Discovery failed, use fallback
         pass
-    
-    # F-R4B2-2: Fallback to env if policy not found in config
-    if not owner_policy_ref:
-        import os
-        owner_policy_ref = os.environ.get("LYBRA_OWNER_POLICY_REF")
     
     if token and gate_url:
         source = "explicit"

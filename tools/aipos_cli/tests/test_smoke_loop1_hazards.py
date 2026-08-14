@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tools.aipos_cli.audit_verdict_helper import derive_audit_task_id
+from tools.aipos_cli.audit_helpers import derive_audit_task_id
 from tools.aipos_cli.task_progress_writer import write_task_progress_event
 
 

@@ -976,18 +976,28 @@ def _run_dispatch(args: argparse.Namespace) -> dict[str, Any]:
     # Owner policy ref: explicit or use task's declared policy
     owner_policy_ref = args.owner_policy_ref
     if not owner_policy_ref:
+        # AIPOS-R6C ⑩: 自发现全序 (.lybra/role → env → 显式)
         # Try to load task and extract policy from frontmatter
         try:
             from tools.aipos_cli.task_loader import find_task_by_id, find_repo_root
+            from tools.aipos_cli.policy_resolver import find_active_policy
+            
             repo_root = find_repo_root(workspace_root)
             task, _ = find_task_by_id(task_id, repo_root)
             if task:
                 metadata = task.get("metadata", {})
-                owner_policy_ref = metadata.get("owner_policy_ref") or "pol_lybra_dev_8"
-            else:
-                owner_policy_ref = "pol_lybra_dev_8"  # Default PreAuthorized envelope
-        except Exception:
-            owner_policy_ref = "pol_lybra_dev_8"
+                owner_policy_ref = metadata.get("owner_policy_ref")
+            
+            # Fallback to policy resolver autodiscovery
+            if not owner_policy_ref:
+                owner_policy_ref = find_active_policy(workspace_root, role="exec", policy_type="dev")
+            
+            if not owner_policy_ref:
+                print("Error: Could not resolve owner_policy_ref. Specify --owner-policy-ref or ensure active policy exists.", file=sys.stderr)
+                sys.exit(1)
+        except Exception as e:
+            print(f"Error resolving owner_policy_ref: {e}", file=sys.stderr)
+            sys.exit(1)
     
     # Material root: explicit > default
     material_root = args.material_root or "~/.lybra/work"
@@ -3386,7 +3396,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "audit-verdict":
         # AIPOS-R4B-2 N4: 审计裁决自助 — 从 LoopContext 自发现身份参数
         from tools.aipos_cli.confirm_client import GateClient
-        from tools.aipos_cli.audit_verdict_helper import (
+        from tools.aipos_cli.audit_helpers import (
             resolve_audit_context,
             build_audit_verdict_dry_run_args,
             build_audit_verdict_confirm_args,
