@@ -333,23 +333,23 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         for path, directory_task_id in _iter_record_files(sessions_root)
     ]
     publishes = [
-        _build_record(path, repo_root, "publish", directory_task_id)
+        _build_record(path, repo_root, RecordType.PUBLISH, directory_task_id)
         for path, directory_task_id in _iter_record_files(publishes_root)
     ]
     claims = [
-        _build_record(path, repo_root, "claim", directory_task_id)
+        _build_record(path, repo_root, RecordType.CLAIM, directory_task_id)
         for path, directory_task_id in _iter_record_files(claims_root)
     ]
     returns = [
-        _build_record(path, repo_root, "return", directory_task_id)
+        _build_record(path, repo_root, RecordType.RETURN, directory_task_id)
         for path, directory_task_id in _iter_record_files(returns_root)
     ]
     audit_dispatches = [
-        _build_record(path, repo_root, "audit_dispatch", directory_task_id)
+        _build_record(path, repo_root, RecordType.AUDIT_DISPATCH, directory_task_id)
         for path, directory_task_id in _iter_record_files(audit_dispatches_root)
     ]
     audit_verdicts = [
-        _build_record(path, repo_root, "audit_verdict", directory_task_id)
+        _build_record(path, repo_root, RecordType.AUDIT_VERDICT, directory_task_id)
         for path, directory_task_id in _iter_record_files(audit_verdicts_root)
     ]
     owner_decisions = [
@@ -366,7 +366,7 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         for path, directory_task_id in _iter_record_files(owner_verifications_root)
     ]
     closures = [
-        _build_record(path, repo_root, "closure", directory_task_id)
+        _build_record(path, repo_root, RecordType.CLOSURE, directory_task_id)
         for path, directory_task_id in _iter_record_files(closures_root)
     ]
 
@@ -694,22 +694,22 @@ def check_task_record_refs(task: dict[str, Any], records: dict[str, Any]) -> dic
             "audit_task_id": str(task_id),
         }
     checks = [
-        _check_ref("claim_id", task_id, metadata.get("claim_id"), "claim", records),
+        _check_ref("claim_id", task_id, metadata.get("claim_id"), RecordType.CLAIM, records),
         _check_ref("active_session_id", task_id, metadata.get("active_session_id"), "session", records),
         _check_ref("last_session_id", task_id, metadata.get("last_session_id"), "session", records),
     ]
     return_ref = metadata.get("return_record_ref") or metadata.get("return_event_ref")
     if return_ref:
-        checks.append(_check_ref("return_record_ref", task_id, return_ref, "return", records))
+        checks.append(_check_ref("return_record_ref", task_id, return_ref, RecordType.RETURN, records))
     dispatch_ref = metadata.get("audit_dispatch_record_ref")
     if dispatch_ref:
         checks.append(
-            _check_ref("audit_dispatch_record_ref", task_id, dispatch_ref, "audit_dispatch", records, **audit_context)
+            _check_ref("audit_dispatch_record_ref", task_id, dispatch_ref, RecordType.AUDIT_DISPATCH, records, **audit_context)
         )
     verdict_ref = metadata.get("related_audit_verdict_ref")
     if verdict_ref:
         checks.append(
-            _check_ref("related_audit_verdict_ref", task_id, verdict_ref, "audit_verdict", records, **audit_context)
+            _check_ref("related_audit_verdict_ref", task_id, verdict_ref, RecordType.AUDIT_VERDICT, records, **audit_context)
         )
 
     warnings = [item["message"] for item in checks if item["level"] == "warn"]

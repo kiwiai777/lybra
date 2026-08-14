@@ -13,6 +13,8 @@ S8: Binds to AIPOS-304 D1/D2/D6 concrete definitions.
 """
 from __future__ import annotations
 
+from tools.schema_constants import RecordType
+
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -97,13 +99,13 @@ _CODE_NO_DEPLOY_CHAIN = GateChain(
         GateChainStep(
             verb_name="lybra_audit_dispatch_dry_run",
             required_params=["actor", "agent_instance", "autonomy_mode", "owner_policy_ref", "audit_task_id", "audit_agent_instance"],
-            scope_needed="audit_dispatch",
+            scope_needed=RecordType.AUDIT_DISPATCH,
             description="派审（dry-run 预览）",
         ),
         GateChainStep(
             verb_name="lybra_audit_verdict_dry_run",
             required_params=["reviewed_task_id", "actor", "agent_instance", "autonomy_mode", "owner_policy_ref", "verdict"],
-            scope_needed="audit_verdict",
+            scope_needed=RecordType.AUDIT_VERDICT,
             description="审计裁决（dry-run 预览）",
         ),
         GateChainStep(
@@ -212,13 +214,13 @@ _CODE_WITH_DEPLOY_CHAIN = GateChain(
         GateChainStep(
             verb_name="lybra_audit_dispatch_dry_run",
             required_params=["actor", "agent_instance", "autonomy_mode", "owner_policy_ref", "audit_task_id", "audit_agent_instance"],
-            scope_needed="audit_dispatch",
+            scope_needed=RecordType.AUDIT_DISPATCH,
             description="派审",
         ),
         GateChainStep(
             verb_name="lybra_audit_verdict_dry_run",
             required_params=["reviewed_task_id", "actor", "agent_instance", "autonomy_mode", "owner_policy_ref", "verdict"],
-            scope_needed="audit_verdict",
+            scope_needed=RecordType.AUDIT_VERDICT,
             description="审计裁决",
         ),
         # Deploy gate: owner_verify required, irreversible confirmation

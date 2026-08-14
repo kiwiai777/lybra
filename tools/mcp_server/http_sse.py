@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from .server import JsonRpcError, _error, handle_request
 from .tools import request_capability_scope
 from tools.schema_loader import get_config_port  # AIPOS-R4B-1: gate port single-sourced
+from tools.schema_constants import Verdict
 
 DEFAULT_HTTP_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = get_config_port("gate_default")  # AIPOS-R4B-1: from config.schema (was hardcoded 7118)

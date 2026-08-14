@@ -40,7 +40,7 @@ import os
 import subprocess
 import sys
 import time
-from tools.schema_constants import Verdict
+from tools.schema_constants import RecordType, Verdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -719,7 +719,7 @@ class AdvisorPump:
                 
                 # AIPOS-324 S3: Use generic doorway verification with bounded retry
                 landed = self._verify_doorway_with_retry(
-                    operation="return",
+                    operation=RecordType.RETURN,
                     task_id=task_id,
                     check_fn=lambda: self._verify_return_landed(task_id, return_id),
                     max_retries=1,
@@ -828,7 +828,7 @@ class AdvisorPump:
                 # PASS verdict: task should move to completed/
                 completed_path = self.workspace_root / "5_tasks" / "queue" / "completed" / f"{task_id.lower()}.md"
                 return completed_path.exists()
-            elif expected_verdict in ("FAIL", "REQUEST_CHANGES"):
+            elif expected_verdict in (Verdict.FAIL, "REQUEST_CHANGES"):
                 # FAIL/REQUEST_CHANGES: task should stay in claimed (正确行为)
                 claimed_path = self.workspace_root / "5_tasks" / "queue" / "claimed" / f"{task_id.lower()}.md"
                 return claimed_path.exists()

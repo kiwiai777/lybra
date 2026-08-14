@@ -940,32 +940,32 @@ def append_mcp_audit_verdict_session_event(
 
 
 def claim_record_paths(repo_root: Path, task_id: str, claim_id: str, session_id: str) -> tuple[Path, Path]:
-    claim_path = ensure_safe_record_path(repo_root, expected_claim_log_path(repo_root, task_id, claim_id), "claim_log", task_id)
-    session_path = ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), "session_record", task_id)
+    claim_path = ensure_safe_record_path(repo_root, expected_claim_log_path(repo_root, task_id, claim_id), RecordType.CLAIM_LOG, task_id)
+    session_path = ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), RecordType.SESSION_RECORD, task_id)
     return claim_path, session_path
 
 
 def session_record_path(repo_root: Path, task_id: str, session_id: str) -> Path:
-    return ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), "session_record", task_id)
+    return ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), RecordType.SESSION_RECORD, task_id)
 
 
 def return_record_path(repo_root: Path, task_id: str, return_id: str) -> Path:
-    return ensure_safe_record_path(repo_root, expected_return_record_path(repo_root, task_id, return_id), "return_record", task_id)
+    return ensure_safe_record_path(repo_root, expected_return_record_path(repo_root, task_id, return_id), RecordType.RETURN_RECORD, task_id)
 
 
 def audit_dispatch_record_path(repo_root: Path, task_id: str, dispatch_id: str) -> Path:
     path = repo_root / AUDIT_DISPATCHES_ROOT / task_id / f"{dispatch_id}.md"
-    return ensure_safe_record_path(repo_root, path, "audit_dispatch_record", task_id)
+    return ensure_safe_record_path(repo_root, path, RecordType.AUDIT_DISPATCH_RECORD, task_id)
 
 
 def audit_verdict_record_path(repo_root: Path, task_id: str, verdict_id: str) -> Path:
     path = repo_root / AUDIT_VERDICTS_ROOT / task_id / f"{verdict_id}.md"
-    return ensure_safe_record_path(repo_root, path, "audit_verdict_record", task_id)
+    return ensure_safe_record_path(repo_root, path, RecordType.AUDIT_VERDICT_RECORD, task_id)
 
 
 def closure_record_path(repo_root: Path, task_id: str, closure_id: str) -> Path:
     path = repo_root / CLOSURES_ROOT / task_id / f"{closure_id}.md"
-    return ensure_safe_record_path(repo_root, path, "closure_record", task_id)
+    return ensure_safe_record_path(repo_root, path, RecordType.CLOSURE_RECORD, task_id)
 
 
 def build_closure_record_markdown(

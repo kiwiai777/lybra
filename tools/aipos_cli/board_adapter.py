@@ -1896,8 +1896,8 @@ def _mcp_claim_record_plan(
     return {
         "record_blocking_reasons": blocking,
         "record_writes": [
-            _mcp_record_write_plan(claim_rel, "claim_record", would_write=not blocking),
-            _mcp_record_write_plan(session_rel, "session_record", would_write=not blocking),
+            _mcp_record_write_plan(claim_rel, RecordType.CLAIM_RECORD, would_write=not blocking),
+            _mcp_record_write_plan(session_rel, RecordType.SESSION_RECORD, would_write=not blocking),
         ],
         "record_previews": [
             {"path": claim_rel, "record_type": RecordType.CLAIM_RECORD, "rendered_markdown": claim_markdown},
@@ -2011,8 +2011,8 @@ def _mcp_return_record_plan(
         "return_record_path": return_rel,
         "session_record_path": session_rel,
         "record_blocking_reasons": blocking,
-        "record_writes": [_mcp_record_write_plan(return_rel, "return_record", would_write=not blocking)],
-        "record_updates": [_mcp_record_write_plan(session_rel, "session_record", would_update=not blocking)],
+        "record_writes": [_mcp_record_write_plan(return_rel, RecordType.RETURN_RECORD, would_write=not blocking)],
+        "record_updates": [_mcp_record_write_plan(session_rel, RecordType.SESSION_RECORD, would_update=not blocking)],
         "record_previews": [
             {"path": return_rel, "record_type": RecordType.RETURN_RECORD, "rendered_markdown": return_markdown},
             {"path": session_rel, "record_type": RecordType.SESSION_RECORD, "rendered_markdown": session_markdown},
@@ -2860,7 +2860,7 @@ def _build_audit_dispatch_preview(
         owner_policy_ref=owner_policy_ref,
         dispatched_at=timestamp,
     )
-    record_writes = [_mcp_record_write_plan(dispatch_rel, "audit_dispatch_record", would_write=not blocking_reasons)]
+    record_writes = [_mcp_record_write_plan(dispatch_rel, RecordType.AUDIT_DISPATCH_RECORD, would_write=not blocking_reasons)]
     data = {
         "source_task_id": source_task.get("task_id"),
         "task_id": source_task.get("task_id"),
@@ -2904,7 +2904,7 @@ def _build_audit_dispatch_preview(
     response = make_response(
         ok=True,
         verdict=verdict,
-        operation="audit_dispatch",
+        operation=RecordType.AUDIT_DISPATCH,
         dry_run=dry_run,
         actor=_actor_payload(actor),
         data=data,
@@ -2978,7 +2978,7 @@ def audit_dispatch_task(
         )
         if dry_run:
             return _attach_controlled_execute_metadata(
-                operation="audit_dispatch",
+                operation=RecordType.AUDIT_DISPATCH,
                 actor=actor_text,
                 response=response,
                 execute_allowed=response.get("verdict") != Verdict.BLOCK,
@@ -3259,8 +3259,8 @@ def _build_audit_verdict_preview(
         "verdict": normalized_verdict,
         "audit_verdict_record_path": verdict_rel,
         "audit_session_record_path": session_rel,
-        "record_writes": [_mcp_record_write_plan(verdict_rel, "audit_verdict_record", would_write=not blocking_reasons)],
-        "record_updates": [_mcp_record_write_plan(session_rel, "session_record", would_update=not blocking_reasons)] if session_rel else [],
+        "record_writes": [_mcp_record_write_plan(verdict_rel, RecordType.AUDIT_VERDICT_RECORD, would_write=not blocking_reasons)],
+        "record_updates": [_mcp_record_write_plan(session_rel, RecordType.SESSION_RECORD, would_update=not blocking_reasons)] if session_rel else [],
         "record_previews": [
             {"path": verdict_rel, "record_type": RecordType.AUDIT_VERDICT_RECORD, "rendered_markdown": verdict_markdown},
             {"path": session_rel, "record_type": RecordType.SESSION_RECORD, "rendered_markdown": session_markdown},
@@ -3296,7 +3296,7 @@ def _build_audit_verdict_preview(
     response = make_response(
         ok=True,
         verdict=verdict,
-        operation="audit_verdict",
+        operation=RecordType.AUDIT_VERDICT,
         dry_run=dry_run,
         actor=_actor_payload(actor),
         data=data,
@@ -3475,7 +3475,7 @@ def audit_verdict_task(
         )
         if dry_run:
             return _attach_controlled_execute_metadata(
-                operation="audit_verdict",
+                operation=RecordType.AUDIT_VERDICT,
                 actor=actor_text,
                 response=response,
                 execute_allowed=response.get("verdict") != Verdict.BLOCK,

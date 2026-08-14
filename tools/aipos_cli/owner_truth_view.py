@@ -111,7 +111,7 @@ def _phrase_for_event(record_type: str | None, metadata: dict[str, Any]) -> str:
     if rt == RecordType.AUDIT_VERDICT:
         verdict = str(metadata.get("verdict") or "").strip().upper() or "待判决"
         return f"审计员判决：{verdict}"
-    if rt in ("owner_decision", "owner_decision_record"):
+    if rt in (RecordType.OWNER_DECISION, RecordType.OWNER_DECISION_RECORD):
         return "Owner 作出裁定"
     if rt == "session":
         return "系统开启了会话"
@@ -646,7 +646,7 @@ def _enrich_event_agent_info(
         "round": None,
     }
     # 本轮: this record's own runtime (return/claim only).
-    if record is not None and record_type in ("return", "claim"):
+    if record is not None and record_type in (RecordType.RETURN, RecordType.CLAIM):
         bundle = _runtime_bundle_from_record(record)
         if bundle:
             metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}

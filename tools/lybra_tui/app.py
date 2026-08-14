@@ -76,6 +76,7 @@ def _observe_error_face(payload: dict[str, Any]) -> str | None:
 from tools.lybra_tui.agents_view import render_agents
 from tools.lybra_tui.presentation import LYBRA_GREEN, banner, color_enabled
 from tools.lybra_tui.state import COPILOT_MODE, MODES, TuiSession
+from tools.schema_constants import RecordType, Verdict
 
 # --- the /command set (Owner ruling 1: `/gates`, not `/confirm`) -------------------
 # (command, one-line description). Order is the /help + autocomplete order.
@@ -1166,9 +1167,9 @@ class LybraTui(App):
         # this is a pure loop-position overlay. PASS → forward; FAIL/REQUEST_CHANGES → back to the
         # executor. The blocking reason itself lives in L3 (we don't parallel-author it here).
         v = verdict.upper()
-        if v in ("FAIL", "REQUEST_CHANGES", "BLOCK"):
+        if v in (Verdict.FAIL, "REQUEST_CHANGES", Verdict.BLOCK):
             self._system("↳ 审计未通过。看 L3 记录的 blocking 原因,退回执行者修后重走 return→/confirm。")
-        elif v in ("PASS", "APPROVE", "APPROVED"):
+        elif v in (Verdict.PASS, "APPROVE", "APPROVED"):
             self._system("↳ 审计通过。该任务这一环已闭合。")
 
     # --- AIPOS-226 (Slice 2): local Owner actions (NOT gate, NOT copilot) ----------

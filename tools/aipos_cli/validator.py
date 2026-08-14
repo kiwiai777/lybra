@@ -18,7 +18,7 @@ from tools.aipos_cli.agent_profiles import (
 from tools.aipos_cli.authority_scanner import build_authority_report
 from tools.aipos_cli.records import check_task_record_refs, find_records_for_task
 from tools.aipos_cli.task_complexity import validate_task_complexity
-from tools.schema_constants import Verdict
+from tools.schema_constants import RecordType, Verdict
 
 VERDICT_PRIORITY = {
     Verdict.PASS: 0,
@@ -195,8 +195,8 @@ def build_records_diagnostics(records: dict[str, Any], tasks: list[dict[str, Any
 
     for record_type, items in (
         ("session", records.get("sessions", [])),
-        ("publish", records.get("publishes", [])),
-        ("claim", records.get("claims", [])),
+        (RecordType.PUBLISH, records.get("publishes", [])),
+        (RecordType.CLAIM, records.get("claims", [])),
     ):
         for record in items:
             record_id = record.get("record_id")
@@ -404,7 +404,7 @@ def validate_task(
             if _is_missing(metadata.get(field)):
                 _add(blocking_reasons, f"Claimed task missing {field}")
         if not _is_missing(metadata.get("claim_id")) and not _valid_runtime_id(
-            metadata.get("claim_id"), "claim", task_id
+            metadata.get("claim_id"), RecordType.CLAIM, task_id
         ):
             _add(blocking_reasons, "Invalid claim_id format on claimed task")
         if not _is_missing(metadata.get("active_session_id")) and not _valid_runtime_id(

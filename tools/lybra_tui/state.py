@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from tools.schema_constants import RecordType, Verdict
 from tools.aipos_cli.confirm_client import (
     GateClient,
     Preview,

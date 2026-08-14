@@ -796,7 +796,7 @@ def _execute_controlled_from_dry_run_envelope(
 ) -> dict[str, Any]:
     operation = "controlled_execute_confirm"
     envelope_operation = str(envelope.get("operation") or "")
-    if envelope_operation not in {"intake_submit", "owner_decision_record", TEMPLATE_OPERATION}:
+    if envelope_operation not in {"intake_submit", RecordType.OWNER_DECISION_RECORD, TEMPLATE_OPERATION}:
         return blocked_response(
             operation=operation,
             dry_run=False,

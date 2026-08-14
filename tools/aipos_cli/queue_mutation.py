@@ -408,8 +408,8 @@ def _prepare_records_plan(
             created_at=timestamp,
         )
         result["record_writes"] = [
-            _build_record_plan(Path(result["claim_log_path"]), "claim_log", would_write=not result["record_blocking_reasons"]),
-            _build_record_plan(Path(result["session_record_path"]), "session_record", would_write=not result["record_blocking_reasons"]),
+            _build_record_plan(Path(result["claim_log_path"]), RecordType.CLAIM_LOG, would_write=not result["record_blocking_reasons"]),
+            _build_record_plan(Path(result["session_record_path"]), RecordType.SESSION_RECORD, would_write=not result["record_blocking_reasons"]),
         ]
         result["record_previews"] = [
             {"path": result["claim_log_path"], "record_type": RecordType.CLAIM_LOG, "rendered_markdown": claim_markdown},
@@ -472,7 +472,7 @@ def _prepare_records_plan(
             current_state="pending",
             event_line=f"{timestamp} reopened by {actor}: {reason}",
         )
-    result["record_updates"] = [_build_record_plan(Path(result["session_record_path"]), "session_record", would_update=True)]
+    result["record_updates"] = [_build_record_plan(Path(result["session_record_path"]), RecordType.SESSION_RECORD, would_update=True)]
     result["record_previews"] = [
         {"path": result["session_record_path"], "record_type": RecordType.SESSION_RECORD, "rendered_markdown": updated_markdown}
     ]

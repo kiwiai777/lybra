@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 import yaml
 
+from tools.schema_constants import Verdict
+
 
 def count_consecutive_failures(workspace_root: Path, task_id: str) -> dict[str, Any]:
     """统计任务连败次数(纯读记录,不造状态)。
