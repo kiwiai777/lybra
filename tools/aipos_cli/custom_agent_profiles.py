@@ -463,7 +463,7 @@ def confirm_profile_draft(
     rebuilt.update(
         {
             "dry_run": False,
-            "verdict": "PASS",
+            "verdict": Verdict.PASS,
             "performed_writes": rebuilt["planned_writes"],
             "execute_allowed": None,
             "data": {**rebuilt["data"], "registry_validation": revalidated, "wrote": True},
@@ -472,4 +472,5 @@ def confirm_profile_draft(
     return rebuilt
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import Verdict
 check_direct_invocation(__name__)

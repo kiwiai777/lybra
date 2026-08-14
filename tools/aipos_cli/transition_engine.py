@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tools.schema_constants import RecordType
+
 # AIPOS-R4A F-1: 使用唯一 schema loader（tools/schema_loader.py）
 # AIPOS-R4B-1 FIX-2: schema_loader 导入移至函数内(惰性),避免 CLI 早期导入链在 editable-install
 # 环境下 ModuleNotFoundError。见 AUDIT-R4B-1 F-R4B1-1。
@@ -113,7 +115,7 @@ def apply_transition_metadata(
         updated.pop("auto_closed_with_parent", None)
         updated.pop("auto_closed_via", None)
     
-    elif transition_name == "claim":
+    elif transition_name == RecordType.CLAIM:
         updated["status"] = "claimed"
         updated["claimed_by"] = actor
         if "claim_id" in extra_fields:

@@ -774,7 +774,7 @@ def import_project_structure(
     }
 
     if dry_run:
-        result["verdict"] = "PASS" if not result.get("blocking_reasons") else "BLOCK"
+        result["verdict"] = Verdict.PASS if not result.get("blocking_reasons") else Verdict.BLOCK
         return result
 
     # Execute: create directories and write files
@@ -854,4 +854,5 @@ def import_project_from_yaml(
     )
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import Verdict
 check_direct_invocation(__name__)

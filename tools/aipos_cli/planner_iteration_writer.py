@@ -271,7 +271,7 @@ def build_iteration_append_plan(repo_root: Path, payload: dict[str, Any], *, act
     result: dict[str, Any] = {
         "action": "planner_iteration_append",
         "actor": actor_value or iteration.get("planner_agent_instance") or iteration.get("planner_agent"),
-        "verdict": "BLOCK" if blocking else "PASS",
+        "verdict": Verdict.BLOCK if blocking else Verdict.PASS,
         "blocking_reasons": blocking,
         "warnings": [],
         "target_path": target_rel,
@@ -301,25 +301,25 @@ def append_planner_iteration(
 ) -> dict[str, Any]:
     result = build_iteration_append_plan(repo_root, payload, actor=actor)
     result["dry_run"] = dry_run
-    result["would_write"] = result["verdict"] != "BLOCK"
+    result["would_write"] = result["verdict"] != Verdict.BLOCK
 
     if dry_run:
         result["wrote"] = False
         return result
 
-    if result["verdict"] == "BLOCK":
+    if result["verdict"] == Verdict.BLOCK:
         result["wrote"] = False
         return result
 
     if not expected_hash:
-        result["verdict"] = "BLOCK"
+        result["verdict"] = Verdict.BLOCK
         result["blocking_reasons"] = ["expected hash is required for non-dry-run append"]
         result["would_write"] = False
         result["wrote"] = False
         return result
 
     if expected_hash != result["write_snapshot_hash"]:
-        result["verdict"] = "BLOCK"
+        result["verdict"] = Verdict.BLOCK
         result["blocking_reasons"] = ["expected hash does not match current append plan"]
         result["would_write"] = False
         result["wrote"] = False
@@ -338,4 +338,5 @@ def append_planner_iteration(
     return result
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import Verdict
 check_direct_invocation(__name__)

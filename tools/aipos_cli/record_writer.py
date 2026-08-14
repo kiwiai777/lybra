@@ -8,6 +8,7 @@ from typing import Any
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.records import expected_claim_log_path, expected_closure_record_path, expected_return_record_path, expected_session_record_path
 from tools.schema_loader import get_enum_values
+from tools.schema_constants import RecordType, Verdict
 
 # Record type constants from enums.schema.json (single source)
 # FND-47: 禁字面量漂移 - 所有 record_type 值从 enums.schema 读取
@@ -90,17 +91,17 @@ def _resolved_within(base_dir: Path, candidate: Path) -> bool:
 
 def ensure_safe_record_path(repo_root: Path, path: Path, record_type: str, task_id: str) -> Path:
     validate_safe_task_id(task_id)
-    if record_type == "claim_log":
+    if record_type == RecordType.CLAIM_LOG:
         root = (repo_root / CLAIMS_ROOT / task_id).resolve()
-    elif record_type == "session_record":
+    elif record_type == RecordType.SESSION_RECORD:
         root = (repo_root / SESSIONS_ROOT / task_id).resolve()
-    elif record_type == "return_record":
+    elif record_type == RecordType.RETURN_RECORD:
         root = (repo_root / RETURNS_ROOT / task_id).resolve()
-    elif record_type == "audit_dispatch_record":
+    elif record_type == RecordType.AUDIT_DISPATCH_RECORD:
         root = (repo_root / AUDIT_DISPATCHES_ROOT / task_id).resolve()
-    elif record_type == "audit_verdict_record":
+    elif record_type == RecordType.AUDIT_VERDICT_RECORD:
         root = (repo_root / AUDIT_VERDICTS_ROOT / task_id).resolve()
-    elif record_type == "closure_record":
+    elif record_type == RecordType.CLOSURE_RECORD:
         root = (repo_root / CLOSURES_ROOT / task_id).resolve()
     else:
         raise ValueError(f"Unsupported record_type: {record_type}")
@@ -367,7 +368,7 @@ def build_claim_log_markdown(
     created_at: str,
 ) -> str:
     metadata = {
-        "record_type": "claim_log",
+        "record_type": RecordType.CLAIM_LOG,
         "claim_id": claim_id,
         "task_id": task_id,
         "task_path": task_path,
@@ -405,7 +406,7 @@ def build_session_record_markdown(
     created_at: str,
 ) -> str:
     metadata = {
-        "record_type": "session_record",
+        "record_type": RecordType.SESSION_RECORD,
         "session_id": session_id,
         "task_id": task_id,
         "task_path": task_path,
@@ -471,7 +472,7 @@ def build_mcp_claim_record_markdown(
     confirmer: dict[str, Any] | None = None,
 ) -> str:
     metadata = {
-        "record_type": "claim_record",
+        "record_type": RecordType.CLAIM_RECORD,
         "event_type": "mcp_queue_claim",
         "claim_id": claim_id,
         "task_id": task_id,
@@ -534,7 +535,7 @@ def build_mcp_claim_session_record_markdown(
     autonomy_mode: str = "Supervised",
 ) -> str:
     metadata = {
-        "record_type": "session_record",
+        "record_type": RecordType.SESSION_RECORD,
         "session_id": session_id,
         "task_id": task_id,
         "task_path": task_path,
@@ -591,7 +592,7 @@ def build_mcp_return_record_markdown(
     confirmer: dict[str, Any] | None = None,
 ) -> str:
     metadata = {
-        "record_type": "return_record",
+        "record_type": RecordType.RETURN_RECORD,
         "event_type": "mcp_queue_return",
         "return_id": return_id,
         "task_id": task_id,
@@ -680,7 +681,7 @@ def build_mcp_audit_dispatch_record_markdown(
     confirmation_ref: str | None = None,
 ) -> str:
     metadata = {
-        "record_type": "audit_dispatch_record",
+        "record_type": RecordType.AUDIT_DISPATCH_RECORD,
         "event_type": "mcp_audit_dispatch",
         "dispatch_id": dispatch_id,
         "reviewed_task_id": reviewed_task_id,
@@ -692,7 +693,7 @@ def build_mcp_audit_dispatch_record_markdown(
         "audit_task_id": audit_task_id,
         "audit_task_path": audit_task_path,
         "surface": "mcp",
-        "operation": "audit_dispatch",
+        "operation": RecordType.AUDIT_DISPATCH,
         "autonomy_mode": "Supervised",
         "actor": actor,
         "canonical_agent_instance": canonical_agent_instance,
@@ -757,7 +758,7 @@ def build_mcp_audit_verdict_record_markdown(
     agent_runtime: dict[str, Any] | None = None,
 ) -> str:
     metadata = {
-        "record_type": "audit_verdict_record",
+        "record_type": RecordType.AUDIT_VERDICT_RECORD,
         "event_type": "mcp_audit_verdict",
         "verdict_id": verdict_id,
         "verdict": verdict,
@@ -774,7 +775,7 @@ def build_mcp_audit_verdict_record_markdown(
         "auditor_instance": auditor_instance,
         "independence_distinct_instance": auditor_instance != reviewed_executor_instance,
         "surface": "mcp",
-        "operation": "audit_verdict",
+        "operation": RecordType.AUDIT_VERDICT,
         "autonomy_mode": "Supervised",
         "actor": actor,
         "canonical_agent_instance": canonical_agent_instance,
@@ -787,7 +788,7 @@ def build_mcp_audit_verdict_record_markdown(
         "dry_run_id": dry_run_id or "",
         "dry_run_snapshot_hash": dry_run_snapshot_hash or "",
         "confirmation_ref": confirmation_ref or "",
-        "dependency_audit_status_after": "PASS" if verdict == "PASS" else verdict,
+        "dependency_audit_status_after": Verdict.PASS if verdict == Verdict.PASS else verdict,
         "finalize_performed": False,
         "accepted_work_unblocked": False,
         "lease_status": "proposed",
@@ -847,7 +848,7 @@ def update_session_record_markdown(
         event_count = 0
     metadata["event_count"] = event_count + 1
     metadata.setdefault("actor", actor)
-    metadata.setdefault("record_type", "session_record")
+    metadata.setdefault("record_type", RecordType.SESSION_RECORD)
     body = existing_body.rstrip()
     if "## Events" not in body:
         body = "\n".join([body, "", "## Events"]).strip()
@@ -881,7 +882,7 @@ def append_mcp_return_session_event(
     metadata.setdefault("actor", actor)
     metadata.setdefault("canonical_agent_instance", canonical_agent_instance)
     metadata.setdefault("owner_policy_ref", owner_policy_ref)
-    metadata.setdefault("record_type", "session_record")
+    metadata.setdefault("record_type", RecordType.SESSION_RECORD)
     body = existing_body.rstrip()
     if "## Events" not in body:
         body = "\n".join([body, "", "## Events"]).strip()
@@ -909,7 +910,7 @@ def append_mcp_audit_verdict_session_event(
 ) -> str:
     metadata = dict(existing_metadata)
     metadata["updated_at"] = timestamp
-    metadata["session_status"] = "audit_verdict"
+    metadata["session_status"] = RecordType.AUDIT_VERDICT
     metadata["current_state"] = "claimed"
     metadata.setdefault("lease_status", "proposed")
     metadata.setdefault("lease_path", "claim_only")
@@ -923,7 +924,7 @@ def append_mcp_audit_verdict_session_event(
     metadata.setdefault("actor", actor)
     metadata.setdefault("canonical_agent_instance", canonical_agent_instance)
     metadata.setdefault("owner_policy_ref", owner_policy_ref)
-    metadata.setdefault("record_type", "session_record")
+    metadata.setdefault("record_type", RecordType.SESSION_RECORD)
     body = existing_body.rstrip()
     if "## Events" not in body:
         body = "\n".join([body, "", "## Events"]).strip()
@@ -939,32 +940,32 @@ def append_mcp_audit_verdict_session_event(
 
 
 def claim_record_paths(repo_root: Path, task_id: str, claim_id: str, session_id: str) -> tuple[Path, Path]:
-    claim_path = ensure_safe_record_path(repo_root, expected_claim_log_path(repo_root, task_id, claim_id), "claim_log", task_id)
-    session_path = ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), "session_record", task_id)
+    claim_path = ensure_safe_record_path(repo_root, expected_claim_log_path(repo_root, task_id, claim_id), RecordType.CLAIM_LOG, task_id)
+    session_path = ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), RecordType.SESSION_RECORD, task_id)
     return claim_path, session_path
 
 
 def session_record_path(repo_root: Path, task_id: str, session_id: str) -> Path:
-    return ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), "session_record", task_id)
+    return ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), RecordType.SESSION_RECORD, task_id)
 
 
 def return_record_path(repo_root: Path, task_id: str, return_id: str) -> Path:
-    return ensure_safe_record_path(repo_root, expected_return_record_path(repo_root, task_id, return_id), "return_record", task_id)
+    return ensure_safe_record_path(repo_root, expected_return_record_path(repo_root, task_id, return_id), RecordType.RETURN_RECORD, task_id)
 
 
 def audit_dispatch_record_path(repo_root: Path, task_id: str, dispatch_id: str) -> Path:
     path = repo_root / AUDIT_DISPATCHES_ROOT / task_id / f"{dispatch_id}.md"
-    return ensure_safe_record_path(repo_root, path, "audit_dispatch_record", task_id)
+    return ensure_safe_record_path(repo_root, path, RecordType.AUDIT_DISPATCH_RECORD, task_id)
 
 
 def audit_verdict_record_path(repo_root: Path, task_id: str, verdict_id: str) -> Path:
     path = repo_root / AUDIT_VERDICTS_ROOT / task_id / f"{verdict_id}.md"
-    return ensure_safe_record_path(repo_root, path, "audit_verdict_record", task_id)
+    return ensure_safe_record_path(repo_root, path, RecordType.AUDIT_VERDICT_RECORD, task_id)
 
 
 def closure_record_path(repo_root: Path, task_id: str, closure_id: str) -> Path:
     path = repo_root / CLOSURES_ROOT / task_id / f"{closure_id}.md"
-    return ensure_safe_record_path(repo_root, path, "closure_record", task_id)
+    return ensure_safe_record_path(repo_root, path, RecordType.CLOSURE_RECORD, task_id)
 
 
 def build_closure_record_markdown(
@@ -988,7 +989,7 @@ def build_closure_record_markdown(
     AIPOS-289: warnings (governance account drift) are written to frontmatter.
     """
     metadata = {
-        "record_type": "closure_record",
+        "record_type": RecordType.CLOSURE_RECORD,
         "event_type": "mcp_queue_close",
         "closure_id": closure_id,
         "task_id": task_id,

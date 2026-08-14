@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any
 from urllib import request as _request
 
+from tools.schema_constants import RecordType
+
 ACCEPT_STREAMABLE = "application/json, text/event-stream"
 SESSION_HEADER = "Mcp-Session-Id"
 PROTOCOL_VERSION = "2025-03-26"
@@ -216,7 +218,7 @@ class GateClient:
             reasons = structured.get("blocking_reasons") or structured.get("errors") or structured
             raise GateError(f"{op} dry-run produced no token: {reasons}")
         # publish confirm replays only actor (no agent_instance/owner_policy_ref).
-        replay_keys = ("actor",) if op == "publish" else _REPLAY_KEYS
+        replay_keys = ("actor",) if op == RecordType.PUBLISH else _REPLAY_KEYS
         replay = {key: dry_run_args.get(key) for key in replay_keys}
         return Preview(
             op=op,
@@ -247,7 +249,7 @@ class GateClient:
             "owner_confirmation_token": owner_confirmation_literal,
         }
         # publish confirm replays only actor; claim/return replay the 3 identity args (RF-4).
-        replay_keys = ("actor",) if preview.op == "publish" else _REPLAY_KEYS
+        replay_keys = ("actor",) if preview.op == RecordType.PUBLISH else _REPLAY_KEYS
         for key in replay_keys:
             if preview.replay_args.get(key) is not None:
                 arguments[key] = preview.replay_args.get(key)
@@ -303,7 +305,6 @@ def _fmt_ttl(seconds: float | None) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
-
     parser = argparse.ArgumentParser(
         prog="lybra confirm",
         description="Interactive Owner confirm client over the gate (F-c7 fix). The owner token is read internally; never pass it on the command line.",
@@ -346,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         print("invalid selection.")
         return 2
 
-    if gate["op"] == "claim":
+    if gate["op"] == RecordType.CLAIM:
         dry_args = claim_args_from_task(gate["task"], owner_policy_ref=args.owner_policy_ref)
     else:
         dry_args = return_args_from_task(gate["task"], result_summary=args.result_summary)

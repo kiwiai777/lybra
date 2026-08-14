@@ -7,6 +7,7 @@ from typing import Any
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_loader import QUEUE_STATES
 from tools.aipos_cli.task_complexity import complexity_payload, validate_task_complexity
+from tools.schema_constants import Verdict
 
 # AIPOS-R0: Schema-based validation
 try:
@@ -284,7 +285,7 @@ def validate_draft_metadata(
         _add(blocking_reasons, message)
     classification_warnings = list(complexity["warnings"])
 
-    verdict = "BLOCK" if blocking_reasons else ("WARN" if warnings else "PASS")
+    verdict = Verdict.BLOCK if blocking_reasons else (Verdict.WARN if warnings else Verdict.PASS)
     return {
         "task_id": task_id,
         "verdict": verdict,
@@ -304,7 +305,7 @@ def validate_draft_file(repo_root: Path, provided_path: str | Path) -> dict[str,
             "action": "draft_validate",
             "path": str(Path(provided_path)),
             "task_id": None,
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "blocking_reasons": [f"Draft path does not exist: {provided_path}"],
             "warnings": [],
             "frontmatter": {},

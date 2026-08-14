@@ -44,13 +44,14 @@ from tools.aipos_cli.records import find_records_for_task, load_records
 from tools.aipos_cli.task_loader import find_repo_root
 from tools.aipos_cli.workspace_config import _project_candidates, has_workspace_queue, resolve_home_root
 from tools.schema_loader import get_role_scopes, load_schema
+from tools.schema_constants import RecordType, Verdict
 
 
 READ_ONLY_NOTICE = "Lybra MCP exposes read tools by default. Write tools are visible only with scoped capability."
 CAPABILITY_ENV_VAR = "LYBRA_CAPABILITY_TOKEN"
 REQUEST_CAPABILITY: ContextVar[dict[str, Any] | None] = ContextVar("lybra_mcp_request_capability", default=None)
 INTAKE_SCOPE = "intake_submit"
-OWNER_DECISION_SCOPE = "owner_decision_record"
+OWNER_DECISION_SCOPE = RecordType.OWNER_DECISION_RECORD
 DRAFT_PUBLISH_SCOPE = "draft_publish"
 # AIPOS-249 (planner slice): the planner's ONLY write scope — land a task-card DRAFT into
 # 5_tasks/drafts/ (a proposal zone, path-locked by DRAFTS_DIR + draft_slug). This is NOT
@@ -61,8 +62,8 @@ DRAFT_PUBLISH_SCOPE = "draft_publish"
 DRAFT_SUBMIT_SCOPE = "draft_submit"
 QUEUE_CLAIM_SCOPE = "queue_claim"
 QUEUE_RETURN_SCOPE = "queue_return"
-AUDIT_DISPATCH_SCOPE = "audit_dispatch"
-AUDIT_VERDICT_SCOPE = "audit_verdict"
+AUDIT_DISPATCH_SCOPE = RecordType.AUDIT_DISPATCH
+AUDIT_VERDICT_SCOPE = RecordType.AUDIT_VERDICT
 # AIPOS-283: queue_close scope — executor/advisor(planner) can call.
 # This is NOT owner-gated: the close verb is the finalize settlement step
 # that the executor calls after work is returned. It requires closure_evidence
@@ -233,7 +234,7 @@ def _generate_next_action(current_state: str, task_mode: str, operation: str) ->
     
     # 根据当前操作决定下一步
     # N1 claim -> N2 execute (报 started)
-    if operation == "claim" and current_state == "claimed":
+    if operation == RecordType.CLAIM and current_state == "claimed":
         return {
             "verb": "lybra_task_progress",
             "params_hint": "event_type=started, 开始执行任务",
@@ -272,7 +273,7 @@ def _generate_next_action(current_state: str, task_mode: str, operation: str) ->
             }
     
     # N4 audit verdict PASS -> N5 finalize (code only)
-    if operation == "audit_verdict" and task_mode == "code":
+    if operation == RecordType.AUDIT_VERDICT and task_mode == "code":
         return {
             "verb": "lybra_finalize",
             "params_hint": "commit 到产品仓，push，deploy（如适用）",
@@ -337,14 +338,14 @@ def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str
                 # 根据 operation 决定操作类型
                 op_type = operation
                 if "claim" in operation:
-                    op_type = "claim"
+                    op_type = RecordType.CLAIM
                 elif "return" in operation:
                     if "confirm" in operation:
                         op_type = "return_confirm"
                     else:
                         op_type = "return_dry_run"
                 elif "audit" in operation:
-                    op_type = "audit_verdict"
+                    op_type = RecordType.AUDIT_VERDICT
                 elif "finalize" in operation:
                     op_type = "finalize"
                 elif "close" in operation:
@@ -370,7 +371,7 @@ def _teaching_error(
     return _tool_result(
         {
             "ok": False,
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "operation": "mcp_write_tool",
             "error_code": error_code,
             "message": message,
@@ -395,7 +396,7 @@ def _error_result(message: str, *, category: str = "VALIDATION_ERROR") -> dict[s
     return _tool_result(
         {
             "ok": False,
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "operation": "mcp_tool_call",
             "safety_notice": READ_ONLY_NOTICE,
             "errors": [{"category": category, "message": message, "details": {}}],
@@ -1164,8 +1165,8 @@ def _decorate_queue_return_dry_run(response: dict[str, Any], *, args: dict[str, 
 
 
 def _decorate_audit_dry_run(response: dict[str, Any], *, args: dict[str, Any], canonical_agent_instance: str, operation: str) -> dict[str, Any]:
-    confirm_tool = "lybra_audit_dispatch_confirm" if operation == "audit_dispatch" else "lybra_audit_verdict_confirm"
-    owner_reasons = _audit_dispatch_owner_reasons() if operation == "audit_dispatch" else _audit_verdict_owner_reasons()
+    confirm_tool = "lybra_audit_dispatch_confirm" if operation == RecordType.AUDIT_DISPATCH else "lybra_audit_verdict_confirm"
+    owner_reasons = _audit_dispatch_owner_reasons() if operation == RecordType.AUDIT_DISPATCH else _audit_verdict_owner_reasons()
     data = response.get("data") if isinstance(response.get("data"), dict) else {}
     response["surface"] = "mcp"
     response["autonomy_mode"] = "Supervised"
@@ -1177,7 +1178,7 @@ def _decorate_audit_dry_run(response: dict[str, Any], *, args: dict[str, Any], c
     response["audit_dispatch_record_ref"] = data.get("audit_dispatch_record_ref")
     response["verdict"] = response.get("verdict")
     blocking_text = " ".join(str(item) for item in response.get("blocking_reasons", []))
-    if response.get("verdict") == "BLOCK" and not response.get("error_code"):
+    if response.get("verdict") == Verdict.BLOCK and not response.get("error_code"):
         if "INDEPENDENCE_FAILED" in blocking_text:
             response["error_code"] = "INDEPENDENCE_FAILED"
         elif "MISSING_RETURN_RECORD" in blocking_text:
@@ -1466,7 +1467,7 @@ def lybra_task_preview(arguments: dict[str, Any] | None = None) -> dict[str, Any
                 return _tool_result(
                     {
                         "ok": False,
-                        "verdict": "BLOCK",
+                        "verdict": Verdict.BLOCK,
                         "error_code": "CLAIM_REQUIRED",
                         "operation": "lybra_task_preview",
                         "message": (
@@ -1526,7 +1527,7 @@ def lybra_return_content(arguments: dict[str, Any] | None = None) -> dict[str, A
     return _tool_result(
         {
             "ok": True,
-            "verdict": "PASS",
+            "verdict": Verdict.PASS,
             "operation": "return_content",
             "task_id": task_id,
             "return_body_path": return_body_rel,
@@ -1559,14 +1560,14 @@ def lybra_intake_submit_dry_run(arguments: dict[str, Any] | None = None) -> dict
     args = arguments or {}
     response = submit_external_intake(args, dry_run=True, repo_root=_repo_root(), actor=str(args.get("actor") or "mcp.client"))
     text = " ".join(str(item) for item in response.get("blocking_reasons", []))
-    if response.get("verdict") == "BLOCK" and "Invalid source_tag format" in text:
+    if response.get("verdict") == Verdict.BLOCK and "Invalid source_tag format" in text:
         return _teaching_error(
             "INVALID_SOURCE",
             "source_tag is invalid for external intake.",
             "Use a lowercase registered source_tag from external_intake_registry.md, then call lybra_intake_submit_dry_run again.",
             doc_ref="AIPOS-106 External Intake Registry Protocol; AIPOS-107 source_tag field",
         )
-    return _tool_result(response, is_error=not bool(response.get("ok", False)) or response.get("verdict") == "BLOCK")
+    return _tool_result(response, is_error=not bool(response.get("ok", False)) or response.get("verdict") == Verdict.BLOCK)
 
 
 def lybra_intake_submit_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1596,7 +1597,7 @@ def lybra_owner_decision_record_dry_run(arguments: dict[str, Any] | None = None)
         return _scope_denied_result_for(OWNER_DECISION_SCOPE, "owner decision record tools")
     args = arguments or {}
     response = record_owner_decision(args, dry_run=True, repo_root=_repo_root(), actor=str(args.get("actor") or "mcp.client"))
-    if response.get("verdict") == "BLOCK":
+    if response.get("verdict") == Verdict.BLOCK:
         return _map_owner_decision_dry_run_error(response)
     return _tool_result(response, is_error=not bool(response.get("ok", False)))
 
@@ -1669,7 +1670,7 @@ def lybra_draft_publish_dry_run(arguments: dict[str, Any] | None = None) -> dict
         owner_confirmation_required_override=False,
         owner_confirmation_reasons_override=None,
     )
-    return _tool_result(response, is_error=not bool(response.get("ok", False)) or response.get("verdict") == "BLOCK")
+    return _tool_result(response, is_error=not bool(response.get("ok", False)) or response.get("verdict") == Verdict.BLOCK)
 
 
 def lybra_draft_publish_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1723,7 +1724,7 @@ def lybra_draft_submit_dry_run(arguments: dict[str, Any] | None = None) -> dict[
         return _scope_denied_result_for(DRAFT_SUBMIT_SCOPE, "planner draft submit tools")
     args = arguments or {}
     response = create_draft(args, dry_run=True, repo_root=_repo_root(), actor=str(args.get("actor") or "mcp.client"))
-    return _tool_result(response, is_error=not bool(response.get("ok", False)) or response.get("verdict") == "BLOCK")
+    return _tool_result(response, is_error=not bool(response.get("ok", False)) or response.get("verdict") == Verdict.BLOCK)
 
 
 def lybra_draft_submit_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1851,7 +1852,7 @@ def _preauthorized_claim_autorelease(
         mcp_claim_metadata=claim_meta,
     )
     dry_run_token = str(dry.get("dry_run_token") or "").strip()
-    if dry.get("verdict") == "BLOCK" or not dry_run_token:
+    if dry.get("verdict") == Verdict.BLOCK or not dry_run_token:
         # Not auto-releasable (e.g. the task is no longer claimable). Surface the preview/blocks.
         decorated = _decorate_queue_claim_dry_run(dry, args=args, canonical_agent_instance=canonical_agent_instance)
         return _tool_result(decorated, is_error=True)
@@ -2005,7 +2006,7 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         ),
     )
     decorated = _decorate_queue_claim_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance)
-    if decorated.get("verdict") == "BLOCK":
+    if decorated.get("verdict") == Verdict.BLOCK:
         return _tool_result(decorated, is_error=True)
     return _tool_result(decorated, is_error=not bool(decorated.get("ok", False)))
 
@@ -2245,7 +2246,7 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
         return_body=args.get("return_body") if isinstance(args.get("return_body"), str) else None,
     )
     decorated = _decorate_queue_return_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance)
-    if decorated.get("verdict") == "BLOCK":
+    if decorated.get("verdict") == Verdict.BLOCK:
         return _tool_result(decorated, is_error=True)
     return _tool_result(decorated, is_error=not bool(decorated.get("ok", False)))
 
@@ -2434,7 +2435,7 @@ def lybra_audit_dispatch_dry_run(arguments: dict[str, Any] | None = None) -> dic
             f"Supervised MCP audit_dispatch does not accept these fields: {', '.join(forbidden)}.",
             "Remove automatic, credential, lease, finalize, accepted-work, runtime, and scheduler fields; then run dry-run again.",
         )
-    canonical_agent_instance, error = _validate_supervised_audit_args(args, operation="audit_dispatch")
+    canonical_agent_instance, error = _validate_supervised_audit_args(args, operation=RecordType.AUDIT_DISPATCH)
     if error is not None:
         return error
     response = audit_dispatch_task(
@@ -2451,8 +2452,8 @@ def lybra_audit_dispatch_dry_run(arguments: dict[str, Any] | None = None) -> dic
         dry_run=True,
         repo_root=_repo_root(),
     )
-    decorated = _decorate_audit_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance, operation="audit_dispatch")
-    return _tool_result(decorated, is_error=decorated.get("verdict") == "BLOCK" or not bool(decorated.get("ok", False)))
+    decorated = _decorate_audit_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance, operation=RecordType.AUDIT_DISPATCH)
+    return _tool_result(decorated, is_error=decorated.get("verdict") == Verdict.BLOCK or not bool(decorated.get("ok", False)))
 
 
 def lybra_audit_dispatch_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2483,7 +2484,7 @@ def lybra_audit_dispatch_confirm(arguments: dict[str, Any] | None = None) -> dic
         )
     canonical_agent_instance, error = _validate_supervised_audit_args(
         {"actor": actor, "agent_instance": agent_instance, "owner_policy_ref": owner_policy_ref, "autonomy_mode": "Supervised"},
-        operation="audit_dispatch",
+        operation=RecordType.AUDIT_DISPATCH,
     )
     if error is not None:
         return error
@@ -2494,7 +2495,7 @@ def lybra_audit_dispatch_confirm(arguments: dict[str, Any] | None = None) -> dic
             "dry_run_token was not found in this MCP server process, or it expired.",
             "Dry-run tokens are currently process-local. Run lybra_audit_dispatch_dry_run again, review the new preview, then confirm.",
         )
-    if token.operation != "audit_dispatch":
+    if token.operation != RecordType.AUDIT_DISPATCH:
         return _audit_error(
             "INCOMPATIBLE_DRY_RUN",
             "dry_run_token was recognized but is not compatible with lybra_audit_dispatch_confirm.",
@@ -2526,7 +2527,7 @@ def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict
             f"Supervised MCP audit_verdict does not accept these fields: {', '.join(forbidden)}.",
             "Remove automatic, credential, lease, finalize, accepted-work, runtime, and scheduler fields; then run dry-run again.",
         )
-    canonical_agent_instance, error = _validate_supervised_audit_args(args, operation="audit_verdict")
+    canonical_agent_instance, error = _validate_supervised_audit_args(args, operation=RecordType.AUDIT_VERDICT)
     if error is not None:
         return error
     response = audit_verdict_task(
@@ -2549,8 +2550,8 @@ def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict
         dry_run=True,
         repo_root=_repo_root(),
     )
-    decorated = _decorate_audit_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance, operation="audit_verdict")
-    return _tool_result(decorated, is_error=decorated.get("verdict") == "BLOCK" or not bool(decorated.get("ok", False)))
+    decorated = _decorate_audit_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance, operation=RecordType.AUDIT_VERDICT)
+    return _tool_result(decorated, is_error=decorated.get("verdict") == Verdict.BLOCK or not bool(decorated.get("ok", False)))
 
 
 def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2581,7 +2582,7 @@ def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict
         )
     canonical_agent_instance, error = _validate_supervised_audit_args(
         {"actor": actor, "agent_instance": agent_instance, "owner_policy_ref": owner_policy_ref, "autonomy_mode": "Supervised"},
-        operation="audit_verdict",
+        operation=RecordType.AUDIT_VERDICT,
     )
     if error is not None:
         return error
@@ -2592,7 +2593,7 @@ def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict
             "dry_run_token was not found in this MCP server process, or it expired.",
             "Dry-run tokens are currently process-local. Run lybra_audit_verdict_dry_run again, review the new preview, then confirm.",
         )
-    if token.operation != "audit_verdict":
+    if token.operation != RecordType.AUDIT_VERDICT:
         return _audit_error(
             "INCOMPATIBLE_DRY_RUN",
             "dry_run_token was recognized but is not compatible with lybra_audit_verdict_confirm.",
@@ -2693,7 +2694,7 @@ def lybra_bench_audit_submit_dry_run(arguments: dict[str, Any] | None = None) ->
         dry_run=True,
         repo_root=_repo_root(),
     )
-    return _tool_result(response, is_error=response.get("verdict") == "BLOCK" or not bool(response.get("ok", False)))
+    return _tool_result(response, is_error=response.get("verdict") == Verdict.BLOCK or not bool(response.get("ok", False)))
 
 
 def lybra_bench_audit_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2792,7 +2793,7 @@ def lybra_queue_close_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         dry_run=True,
         repo_root=_repo_root(),
     )
-    if response.get("verdict") == "BLOCK":
+    if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
     # Add MCP decoration
     response["surface"] = "mcp"
@@ -2838,7 +2839,7 @@ def lybra_queue_close_confirm(arguments: dict[str, Any] | None = None) -> dict[s
         dry_run=False,
         repo_root=_repo_root(),
     )
-    if response.get("verdict") == "BLOCK":
+    if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
     response["surface"] = "mcp"
     response["operation"] = "queue_close"
@@ -2881,7 +2882,7 @@ def lybra_mark_concluded(arguments: dict[str, Any] | None = None) -> dict[str, A
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
         return _tool_result({
-            "ok": False, "verdict": "BLOCK", "operation": "mark_concluded",
+            "ok": False, "verdict": Verdict.BLOCK, "operation": "mark_concluded",
             "blocking_reasons": ["TASK_ID_REQUIRED: task_id is required"],
         }, is_error=True)
     response = mark_concluded_task(
@@ -2934,7 +2935,7 @@ def lybra_queue_withdraw_dry_run(arguments: dict[str, Any] | None = None) -> dic
         dry_run=True,
         repo_root=_repo_root(),
     )
-    if response.get("verdict") == "BLOCK":
+    if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
     response["surface"] = "mcp"
     response["operation"] = "queue_withdraw"
@@ -2979,7 +2980,7 @@ def lybra_queue_withdraw_confirm(arguments: dict[str, Any] | None = None) -> dic
         dry_run=False,
         repo_root=_repo_root(),
     )
-    if response.get("verdict") == "BLOCK":
+    if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
     response["surface"] = "mcp"
     response["operation"] = "queue_withdraw"
@@ -3033,7 +3034,7 @@ def lybra_queue_amend_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         dry_run=True,
         repo_root=_repo_root(),
     )
-    if response.get("verdict") == "BLOCK":
+    if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
     response["surface"] = "mcp"
     response["operation"] = "queue_amend"
@@ -3086,7 +3087,7 @@ def lybra_queue_amend_confirm(arguments: dict[str, Any] | None = None) -> dict[s
         dry_run=False,
         repo_root=_repo_root(),
     )
-    if response.get("verdict") == "BLOCK":
+    if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
     response["surface"] = "mcp"
     response["operation"] = "queue_amend"
@@ -3171,7 +3172,7 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
         
         # Build frontmatter
         metadata = {
-            "record_type": "task_progress_event",
+            "record_type": RecordType.TASK_PROGRESS_EVENT,
             "event_type": event_type,
             "task_id": task_id,
             "actor": actor,
@@ -4198,7 +4199,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "audit_session_id": {"type": "string"},
                 "audit_dispatch_record_ref": {"type": "string"},
                 "reviewed_return_record_ref": {"type": "string"},
-                "verdict": {"type": "string", "enum": ["PASS", "FAIL", "REQUEST_CHANGES", "CHANGES", "BLOCKED", "WAIVED"]},
+                "verdict": {"type": "string", "enum": [Verdict.PASS, Verdict.FAIL, "REQUEST_CHANGES", "CHANGES", "BLOCKED", "WAIVED"]},
                 "findings_summary": {"type": "string"},
                 "evidence_refs": {"type": "array", "items": {"type": "string"}},
                 "recommended_next_action": {"type": "string"},

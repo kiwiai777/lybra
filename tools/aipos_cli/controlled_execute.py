@@ -10,8 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-
-
+from tools.schema_constants import RecordType
 
 DEFAULT_TTL_SECONDS = 600
 MAX_TTL_SECONDS = 1800
@@ -208,7 +207,7 @@ def _stable_planned_writes(items: Any, *, operation: str | None = None) -> list[
         if not isinstance(item, dict):
             continue
         path = _normalize_relpath(item.get("path"))
-        if operation == "queue_return" and item.get("record_type") in {"return_record", "ingested_artifact"}:
+        if operation == "queue_return" and item.get("record_type") in {RecordType.RETURN_RECORD, RecordType.INGESTED_ARTIFACT}:
             # These paths embed the timestamp-derived return_id. Exclude the path
             # from the hash; ingestion content integrity is covered separately by
             # scratch_ingestion_digest (AIPOS-196a R-B).

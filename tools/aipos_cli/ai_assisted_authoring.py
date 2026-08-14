@@ -16,6 +16,7 @@ from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, m
 from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN, snapshot_hash
 from tools.aipos_cli.draft_writer import create_draft
 from tools.aipos_cli.record_writer import render_markdown
+from tools.schema_constants import RecordType, Verdict
 
 
 
@@ -169,7 +170,7 @@ def _proposal_policy_blocks(fixture: dict[str, Any], frontmatter: dict[str, Any]
 def _provenance_metadata(attempt: dict[str, Any]) -> dict[str, Any]:
     estimate = attempt.get("token_cost_estimate")
     return {
-        "record_type": "ai_authoring_provenance",
+        "record_type": RecordType.AI_AUTHORING_PROVENANCE,
         "attempt_id": attempt["attempt_id"],
         "intent_id": attempt["intent_id"],
         "adapter_id": attempt["adapter_id"],
@@ -258,7 +259,7 @@ def _authoring_preview_response(
     if not blocking and draft_target:
         planned_writes = [
             {"path": draft_target, "kind": "create", "type": "draft_markdown"},
-            {"path": provenance_rel.as_posix(), "kind": "create", "type": "ai_authoring_provenance"},
+            {"path": provenance_rel.as_posix(), "kind": "create", "type": RecordType.AI_AUTHORING_PROVENANCE},
         ]
 
     verdict = derive_verdict(
@@ -741,7 +742,7 @@ def confirm_live_authoring_draft(
         return rebuilt
     proposal_frontmatter = proposal["frontmatter"]
     draft_result = create_draft(repo_root, proposal_frontmatter, proposal["body"], dry_run=False)
-    if draft_result.get("verdict") == "BLOCK" or not draft_result.get("wrote"):
+    if draft_result.get("verdict") == Verdict.BLOCK or not draft_result.get("wrote"):
         return blocked_response(
             operation=LIVE_OPERATION,
             dry_run=False,
@@ -758,7 +759,7 @@ def confirm_live_authoring_draft(
     rebuilt.update(
         {
             "dry_run": False,
-            "verdict": "PASS",
+            "verdict": Verdict.PASS,
             "performed_writes": rebuilt["planned_writes"],
             "execute_allowed": None,
             "data": {**rebuilt["data"], "draft_result": draft_result, "wrote": True},
@@ -813,7 +814,7 @@ def confirm_authoring_draft(
         return blocked_response(operation=AUTHORING_OPERATION, dry_run=False, category="REVALIDATION_FAILED", message="AI authoring preview snapshot mismatch; run draft again", actor=_actor_payload(actor), safety_notice=SAFETY_NOTICE)
     proposal = rebuilt["data"]["proposal"]
     draft_result = create_draft(repo_root, proposal["frontmatter"], proposal["body"], dry_run=False)
-    if draft_result.get("verdict") == "BLOCK" or not draft_result.get("wrote"):
+    if draft_result.get("verdict") == Verdict.BLOCK or not draft_result.get("wrote"):
         return blocked_response(operation=AUTHORING_OPERATION, dry_run=False, category="REVALIDATION_FAILED", message="standard draft write failed during AI authoring confirm", actor=_actor_payload(actor), data={"draft_result": draft_result}, safety_notice=SAFETY_NOTICE)
     provenance_rel = Path(rebuilt["data"]["provenance_path"])
     provenance_target = repo_root / provenance_rel
@@ -822,7 +823,7 @@ def confirm_authoring_draft(
     rebuilt.update(
         {
             "dry_run": False,
-            "verdict": "PASS",
+            "verdict": Verdict.PASS,
             "performed_writes": rebuilt["planned_writes"],
             "execute_allowed": None,
             "data": {**rebuilt["data"], "draft_result": draft_result, "wrote": True},

@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat as stat_module
+from tools.schema_constants import RecordType
 from pathlib import Path
 from typing import Any
 
@@ -270,8 +271,8 @@ def perform_scratch_ingestion(
             {
                 "path": str(item["workspace_rel"]),
                 "kind": "create",
-                "type": "ingested_artifact",
-                "record_type": "ingested_artifact",
+                "type": RecordType.INGESTED_ARTIFACT,
+                "record_type": RecordType.INGESTED_ARTIFACT,
                 "content_sha256": actual,
                 "wrote": True,
             }

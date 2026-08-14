@@ -76,6 +76,7 @@ def _observe_error_face(payload: dict[str, Any]) -> str | None:
 from tools.lybra_tui.agents_view import render_agents
 from tools.lybra_tui.presentation import LYBRA_GREEN, banner, color_enabled
 from tools.lybra_tui.state import COPILOT_MODE, MODES, TuiSession
+from tools.schema_constants import RecordType, Verdict
 
 # --- the /command set (Owner ruling 1: `/gates`, not `/confirm`) -------------------
 # (command, one-line description). Order is the /help + autocomplete order.
@@ -786,11 +787,11 @@ class LybraTui(App):
                 op = self._pending_confirm["op"]
                 task_id = self._pending_confirm["task_id"]
 
-                if op == "claim":
+                if op == RecordType.CLAIM:
                     question = f"确认把 {task_id} 批给 {actor} (claim) 吗?"
-                elif op == "return":
+                elif op == RecordType.RETURN:
                     question = f"确认接受 {actor} 的 {task_id} return 吗?"
-                elif op == "publish":
+                elif op == RecordType.PUBLISH:
                     question = f"确认发布草稿 {task_id} 到队列吗?"
                 else:
                     question = f"确认执行 {op} {task_id} 吗?"
@@ -1025,11 +1026,11 @@ class LybraTui(App):
             return
 
         # 3. 展示 preview + 自然语言问句
-        if op == "claim":
+        if op == RecordType.CLAIM:
             question = f"确认把 {task_id} 批给 {assigned_to} (claim) 吗?"
-        elif op == "return":
+        elif op == RecordType.RETURN:
             question = f"确认接受 {assigned_to} 的 {task_id} return 吗?"
-        elif op == "publish":
+        elif op == RecordType.PUBLISH:
             question = f"确认发布草稿 {task_id} 到队列吗?"
         else:
             question = f"确认执行 {op} {task_id} 吗?"
@@ -1100,12 +1101,12 @@ class LybraTui(App):
         # successful confirm. `actor` is the canonical claimant recorded by the pending machine
         # and already validated actor==canonical by the gate (R-3: transmit verbatim, never a
         # derived/friendly name — aliases are a separate slice).
-        if op == "claim":
+        if op == RecordType.CLAIM:
             who = actor or "(未归因)"
             self._system(
                 f"→ 已批给 {who}。通知 agent 开工;完成后回 /gates 看 return gate 再 /confirm。"
             )
-        elif op == "return":
+        elif op == RecordType.RETURN:
             self._system(f"→ 任务已 RETURNED。下一步 /audit {task_id} 看判定。")
 
     def _observe_error_face(self, payload: dict[str, Any]) -> str | None:
@@ -1166,9 +1167,9 @@ class LybraTui(App):
         # this is a pure loop-position overlay. PASS → forward; FAIL/REQUEST_CHANGES → back to the
         # executor. The blocking reason itself lives in L3 (we don't parallel-author it here).
         v = verdict.upper()
-        if v in ("FAIL", "REQUEST_CHANGES", "BLOCK"):
+        if v in (Verdict.FAIL, "REQUEST_CHANGES", Verdict.BLOCK):
             self._system("↳ 审计未通过。看 L3 记录的 blocking 原因,退回执行者修后重走 return→/confirm。")
-        elif v in ("PASS", "APPROVE", "APPROVED"):
+        elif v in (Verdict.PASS, "APPROVE", "APPROVED"):
             self._system("↳ 审计通过。该任务这一环已闭合。")
 
     # --- AIPOS-226 (Slice 2): local Owner actions (NOT gate, NOT copilot) ----------

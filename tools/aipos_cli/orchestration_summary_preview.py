@@ -261,7 +261,7 @@ def build_orchestration_summary_preview(
     result = {
         "action": "orchestration_summary_preview",
         "orchestration_id": orchestration_id,
-        "verdict": "BLOCK" if blocking else ("NEEDS_OWNER" if conflicts else "PASS"),
+        "verdict": Verdict.BLOCK if blocking else (Verdict.NEEDS_OWNER if conflicts else Verdict.PASS),
         "blocking_reasons": blocking,
         "warnings": warnings,
         "source_refs": source_refs,
@@ -283,4 +283,5 @@ def build_orchestration_summary_preview(
     return result
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import Verdict
 check_direct_invocation(__name__)

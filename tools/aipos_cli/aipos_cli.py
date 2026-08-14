@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import sys
+from tools.schema_constants import RecordType, Verdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -146,7 +147,7 @@ def _filter_needs_owner(report: dict[str, Any]) -> dict[str, Any]:
     filtered = [
         task
         for task in report["tasks"]
-        if task["verdict"] == "NEEDS_OWNER"
+        if task["verdict"] == Verdict.NEEDS_OWNER
         or task["metadata"].get("needs_owner") is True
         or task["metadata"].get("owner_review_required") is True
         or task["metadata"].get("approval_required") is True
@@ -709,7 +710,7 @@ def _run_top_level_init(args: argparse.Namespace) -> int:
         # AIPOS-272: Print onboarding guide after successful init
         if not args.dry_run and result.get("ok") and not result.get("blocking_reasons"):
             _print_onboarding_guide(output, variables.get("project_id", "workspace"))
-    return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
+    return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
 
 
 def build_validate_json_report(report: dict[str, Any], records: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -795,7 +796,7 @@ def _execute_controlled_from_dry_run_envelope(
 ) -> dict[str, Any]:
     operation = "controlled_execute_confirm"
     envelope_operation = str(envelope.get("operation") or "")
-    if envelope_operation not in {"intake_submit", "owner_decision_record", TEMPLATE_OPERATION}:
+    if envelope_operation not in {"intake_submit", RecordType.OWNER_DECISION_RECORD, TEMPLATE_OPERATION}:
         return blocked_response(
             operation=operation,
             dry_run=False,
@@ -837,7 +838,7 @@ def _execute_controlled_from_dry_run_envelope(
 
     if envelope_operation == "intake_submit":
         current = submit_external_intake(payload, dry_run=True, repo_root=repo_root, actor=actor)
-    elif envelope_operation == "owner_decision_record":
+    elif envelope_operation == RecordType.OWNER_DECISION_RECORD:
         current = record_owner_decision(payload, dry_run=True, repo_root=repo_root, actor=actor)
     else:
         variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
@@ -889,7 +890,7 @@ def _execute_controlled_from_dry_run_envelope(
             "target_path": result.get("target_path"),
             "wrote": result.get("wrote", False),
         }
-    elif envelope_operation == "owner_decision_record":
+    elif envelope_operation == RecordType.OWNER_DECISION_RECORD:
         result = build_owner_decision_record(repo_root, payload, actor=actor, dry_run=False)
         summary = {
             "decision_id": result.get("decision_id"),
@@ -1991,7 +1992,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_draft_result_text(result))
-            return 1 if result.get("verdict") == "BLOCK" else 0
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
         if args.draft_command == "validate":
             try:
@@ -2003,7 +2004,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_draft_result_text(result))
-            return 1 if result.get("verdict") == "BLOCK" else 0
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
         if args.draft_command == "list":
             result = list_drafts(repo_root)
@@ -2023,7 +2024,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_draft_result_text(result))
-            return 1 if result.get("verdict") == "BLOCK" else 0
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
         print(f"Unknown draft command: {args.draft_command}", file=sys.stderr)
         return 2
@@ -2062,7 +2063,7 @@ def main(argv: list[str] | None = None) -> int:
                     workspace_root = Path(getattr(args, "workspace_root", None) or ".").expanduser()
                 result = stop_report(workspace_root, connection_target=connection_target)
                 print(render_json(result))
-                return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
+                return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
             workspace_root = _resolve_workspace_for_command(args)
             if args.serve_command == "start":
                 result = start_report(
@@ -2122,7 +2123,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_connection_table(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
 
     # AIPOS-346 S5: roles subcommand
     if args.command == "roles":
@@ -2346,7 +2347,7 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 2
-        return 1 if isinstance(result, dict) and (result.get("verdict") == "BLOCK" or result.get("blocking_reasons")) else 0
+        return 1 if isinstance(result, dict) and (result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons")) else 0
 
     if args.command == "workspace":
         if not getattr(args, "workspace_command", None):
@@ -2388,7 +2389,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
     if args.command == "project":
         if not getattr(args, "project_command", None):
@@ -2725,7 +2726,7 @@ def main(argv: list[str] | None = None) -> int:
             elif result.get('deployment_skipped'):
                 print("\nℹ️  Deployment skipped (no gate-side changes)")
         
-        return 0 if result.get("verdict") == "PASS" else 1
+        return 0 if result.get("verdict") == Verdict.PASS else 1
 
     try:
         repo_root = _find_repo_root_for_args(args)
@@ -2771,7 +2772,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_json(result))
-            return 1 if result.get("verdict") == "BLOCK" else 0
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
         parser.print_help()
         return 2
 
@@ -2848,7 +2849,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
 
     if args.command == "ai-author":
         if not getattr(args, "ai_author_command", None):
@@ -2903,7 +2904,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" or result.get("blocking_reasons") else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
 
     if args.command == "queue" and getattr(args, "queue_command", None) in {"claim", "block", "complete", "reopen"}:
         profiles = load_agent_profiles(repo_root)
@@ -2934,7 +2935,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_queue_mutation_text(result))
-        return 1 if result.get("verdict") == "BLOCK" else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "amend":
         from tools.aipos_cli.board_adapter import amend_task
@@ -2959,7 +2960,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "withdraw":
         from tools.aipos_cli.board_adapter import withdraw_task
@@ -2978,7 +2979,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "return-repair":
         # AIPOS-370F2: return-repair — diagnose and repair stuck return
@@ -3044,8 +3045,8 @@ def main(argv: list[str] | None = None) -> int:
                             profiles=profiles,
                             with_records=False,
                         )
-                        if block_result.get("verdict") == "BLOCK":
-                            diagnosis["verdict"] = "BLOCK"
+                        if block_result.get("verdict") == Verdict.BLOCK:
+                            diagnosis["verdict"] = Verdict.BLOCK
                             diagnosis["repair_error"] = f"Block failed: {block_result.get('blocking_reasons')}"
                             print(render_json(diagnosis), file=sys.stderr)
                             return 1
@@ -3061,8 +3062,8 @@ def main(argv: list[str] | None = None) -> int:
                             profiles=profiles,
                             with_records=False,
                         )
-                        if reopen_result.get("verdict") == "BLOCK":
-                            diagnosis["verdict"] = "BLOCK"
+                        if reopen_result.get("verdict") == Verdict.BLOCK:
+                            diagnosis["verdict"] = Verdict.BLOCK
                             diagnosis["repair_error"] = f"Reopen failed: {reopen_result.get('blocking_reasons')}"
                             print(render_json(diagnosis), file=sys.stderr)
                             return 1
@@ -3077,8 +3078,8 @@ def main(argv: list[str] | None = None) -> int:
                             profiles=profiles,
                             with_records=True,
                         )
-                        if reclaim_result.get("verdict") == "BLOCK":
-                            diagnosis["verdict"] = "BLOCK"
+                        if reclaim_result.get("verdict") == Verdict.BLOCK:
+                            diagnosis["verdict"] = Verdict.BLOCK
                             diagnosis["repair_error"] = f"Reclaim failed: {reclaim_result.get('blocking_reasons')}"
                             print(render_json(diagnosis), file=sys.stderr)
                             return 1
@@ -3099,7 +3100,7 @@ def main(argv: list[str] | None = None) -> int:
             elif task.get("queue_state") == "claimed" and task_returns:
                 diagnosis["diagnosis"].append(f"Task has {len(task_returns)} return record(s) but still in claimed state")
                 diagnosis["recommended_action"] = "State inconsistency detected; requires manual queue state correction"
-                diagnosis["verdict"] = "BLOCK"
+                diagnosis["verdict"] = Verdict.BLOCK
             else:
                 diagnosis["diagnosis"].append(f"Task is in {task.get('queue_state')} state")
                 diagnosis["recommended_action"] = "No stuck return detected"
@@ -3113,7 +3114,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(diagnosis))
         else:
             print(render_json(diagnosis))
-        return 1 if diagnosis.get("verdict") == "BLOCK" else 0
+        return 1 if diagnosis.get("verdict") == Verdict.BLOCK else 0
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "return":
         # AIPOS-FND-1: queue return — wrap board_adapter.return_task
@@ -3147,7 +3148,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
     if args.command == "orchestration":
         if getattr(args, "orchestration_command", None) == "event" and getattr(args, "event_command", None) == "append":
@@ -3167,7 +3168,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_json(result))
-            return 1 if result.get("verdict") == "BLOCK" else 0
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
         if (
             getattr(args, "orchestration_command", None) == "iteration"
             and getattr(args, "iteration_command", None) == "append"
@@ -3188,7 +3189,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_json(result))
-            return 1 if result.get("verdict") == "BLOCK" else 0
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
         if (
             getattr(args, "orchestration_command", None) == "summary"
             and getattr(args, "summary_command", None) == "preview"
@@ -3209,7 +3210,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_json(result))
-            return 1 if result.get("verdict") == "BLOCK" else 0
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
         if (
             getattr(args, "orchestration_command", None) == "loop"
             and getattr(args, "loop_command", None) == "preview"
@@ -3223,7 +3224,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_json(result))
-            return 1 if result.get("verdict") == "BLOCK" else 0
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
         else:
             parser.print_help()
             return 2
@@ -3246,7 +3247,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
     try:
         tasks = load_all_tasks(repo_root)
@@ -3279,7 +3280,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
     if args.command == "queue":
         if args.json:
@@ -3378,7 +3379,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_json(result))
-            return 1 if result.get("verdict") == "BLOCK" else 0
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
         parser.print_help()
         return 2
 
@@ -3745,7 +3746,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
     if args.command == "bench-audit":
         # Wrap bench_audit_writer (local variant)
@@ -3784,7 +3785,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
     if args.command == "owner-verify":
         # Wrap owner_verification_writer (local variant)
@@ -3819,7 +3820,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
     if args.command == "converge":
         # Wrap converge_r_cards from board_adapter
@@ -3840,7 +3841,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" or not result.get("ok") else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK or not result.get("ok") else 0
 
     if args.command == "mark-concluded":
         # Wrap mark_concluded_task from board_adapter
@@ -3864,7 +3865,7 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(render_json(result))
-        return 1 if result.get("verdict") == "BLOCK" or not result.get("ok") else 0
+        return 1 if result.get("verdict") == Verdict.BLOCK or not result.get("ok") else 0
 
     print(f"Unknown command: {args.command}", file=sys.stderr)
     return 2

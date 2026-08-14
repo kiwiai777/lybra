@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tools.schema_constants import RecordType, Verdict
+
 # AIPOS-SMOKE-LOOP-1 FIX (task-progress session 真落盘):
 # 事件记录写到 records/events/<task_id>/ 后,还必须追加更新对应 session record
 # (records/sessions/<task_id>/<session_id>.md)——后者才是 N2 执行期真相载体
@@ -149,7 +151,7 @@ def write_task_progress_event(
     if not queue_dir.is_dir():
         return {
             "ok": False,
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "operation": "task_progress",
             "blocking_reasons": [
                 f"Not a Lybra workspace: {repo_root} (missing 5_tasks/queue). "
@@ -161,7 +163,7 @@ def write_task_progress_event(
     if event_type not in ("started", "progress", "completed", "blocked"):
         return {
             "ok": False,
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "operation": "task_progress",
             "blocking_reasons": [
                 f"Invalid event_type: {event_type}. Must be one of: started, progress, completed, blocked."
@@ -180,7 +182,7 @@ def write_task_progress_event(
     
     # Build frontmatter
     metadata: dict[str, Any] = {
-        "record_type": "task_progress_event",
+        "record_type": RecordType.TASK_PROGRESS_EVENT,
         "event_type": event_type,
         "task_id": task_id,
         "actor": actor,
@@ -252,7 +254,7 @@ def write_task_progress_event(
         if session_path is None:
             # session 不可解析 = 真问题, 响亮报错 (禁吞错)
             result["ok"] = False
-            result["verdict"] = "BLOCK"
+            result["verdict"] = Verdict.BLOCK
             result["recorded"] = False
             result["blocking_reasons"] = [
                 f"task_progress event was written to {event_file.relative_to(repo_root)} "
@@ -276,7 +278,7 @@ def write_task_progress_event(
     except Exception as exc:
         # 任何 session 更新异常都响亮报错, 绝不吞 (R4A F-3 同款红线)
         result["ok"] = False
-        result["verdict"] = "BLOCK"
+        result["verdict"] = Verdict.BLOCK
         result["recorded"] = False
         result["blocking_reasons"] = [
             f"task_progress event was written but session record update FAILED: {type(exc).__name__}: {exc}"

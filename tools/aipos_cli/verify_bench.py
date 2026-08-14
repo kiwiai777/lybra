@@ -365,7 +365,7 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
         }
         return make_response(
             ok=True,
-            verdict="WARN" if warnings else "PASS",
+            verdict=Verdict.WARN if warnings else Verdict.PASS,
             operation=operation,
             dry_run=False,
             data=data,
@@ -381,7 +381,7 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
     except Exception as exc:
         return make_response(
             ok=False,
-            verdict="BLOCK",
+            verdict=Verdict.BLOCK,
             operation=operation,
             dry_run=False,
             data={"stations": [], "previewable": [], "closed_excluded": [], "writes_enabled": False},
@@ -411,7 +411,7 @@ def _stage_note(stage: str | None) -> str:
 def _empty(operation: str) -> dict[str, Any]:
     return make_response(
         ok=True,
-        verdict="PASS",
+        verdict=Verdict.PASS,
         operation=operation,
         dry_run=False,
         data={"stations": [], "previewable": [], "closed_excluded": [], "writes_enabled": False, "resolution_enabled": False},
@@ -426,4 +426,5 @@ def _empty(operation: str) -> dict[str, Any]:
     )
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import Verdict
 check_direct_invocation(__name__)

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 import re
 
+from tools.schema_constants import Verdict
+
 
 def parse_fix_round(task_id: str) -> dict[str, Any]:
     """解析任务 ID 中的 fix 轮次。
@@ -70,7 +72,7 @@ def derive_next_round(
     is_review = parsed["is_review"]
     
     # 场景 1: 审计 PASS → 完成
-    if verdict_result in ["PASS", "PASS_WITH_NOTES"]:
+    if verdict_result in [Verdict.PASS, Verdict.PASS_WITH_NOTES]:
         return {
             "action": "pass_complete",
             "next_task_id": None,
@@ -78,7 +80,7 @@ def derive_next_round(
         }
     
     # 场景 2: 审计 FAIL
-    if verdict_result == "FAIL":
+    if verdict_result == Verdict.FAIL:
         # 2a. 当前是复审轮(R) → 派生下一 fix 轮
         if is_review:
             next_round = current_round + 1

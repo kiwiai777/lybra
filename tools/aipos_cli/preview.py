@@ -110,10 +110,10 @@ def build_preview(
                     })
 
     verdict = task["verdict"]
-    can_start = verdict in {"PASS", "WARN"}
-    copy_allowed = verdict in {"PASS", "WARN"}
-    claim_allowed = verdict in {"PASS", "WARN"}
-    run_locally_allowed = verdict in {"PASS", "WARN"}
+    can_start = verdict in {Verdict.PASS, Verdict.WARN}
+    copy_allowed = verdict in {Verdict.PASS, Verdict.WARN}
+    claim_allowed = verdict in {Verdict.PASS, Verdict.WARN}
+    run_locally_allowed = verdict in {Verdict.PASS, Verdict.WARN}
     proposed_session_id = f"session_{task_id}_{stamp}_{actor_slug}"
     proposed_claim_id = f"claim_{task_id}_{stamp}_{actor_slug}"
     existing_records = find_records_for_task(records, task_id) if records is not None else {"sessions": [], "claims": []}
@@ -214,4 +214,5 @@ def build_preview(
     }
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import Verdict
 check_direct_invocation(__name__)

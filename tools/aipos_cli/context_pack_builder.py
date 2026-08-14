@@ -10,6 +10,7 @@ from tools.aipos_cli.orchestration_summary_preview import build_orchestration_su
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import find_task_by_id, load_all_tasks, load_task_by_path
 from tools.aipos_cli.validator import validate_single_task
+from tools.schema_constants import Verdict
 
 
 
@@ -256,13 +257,13 @@ def build_context_pack_preview(
     source = task_payload.get("task_id") if task_payload else orchestration_id or "unknown"
 
     if blocking_reasons:
-        verdict = "BLOCK"
+        verdict = Verdict.BLOCK
     elif needs_owner_reasons:
-        verdict = "NEEDS_OWNER"
+        verdict = Verdict.NEEDS_OWNER
     elif warnings:
-        verdict = "WARN"
+        verdict = Verdict.WARN
     else:
-        verdict = "PASS"
+        verdict = Verdict.PASS
 
     disabled_capabilities = [
         "writes",

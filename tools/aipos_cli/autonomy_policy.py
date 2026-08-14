@@ -20,6 +20,7 @@ from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.record_writer import CLAIMS_ROOT, render_markdown
+from tools.schema_constants import RecordType
 
 
 
@@ -80,7 +81,7 @@ def build_autonomy_policy_markdown(
     owner_decision_record grant path — the presence of this on-disk artifact IS the Owner's
     one hand-confirmation (red line 1: pre-authorization is not delegation)."""
     metadata = {
-        "record_type": "owner_autonomy_policy",
+        "record_type": RecordType.OWNER_AUTONOMY_POLICY,
         "policy_id": policy_id,
         "mode": AUTONOMY_MODE_PREAUTHORIZED,
         "status": status,
@@ -123,7 +124,7 @@ def normalize_policy(metadata: dict[str, Any]) -> dict[str, Any] | None:
     it is not a well-formed owner_autonomy_policy."""
     if not isinstance(metadata, dict):
         return None
-    if str(metadata.get("record_type") or "").strip() != "owner_autonomy_policy":
+    if str(metadata.get("record_type") or "").strip() != RecordType.OWNER_AUTONOMY_POLICY:
         return None
     policy_id = str(metadata.get("policy_id") or "").strip()
     if not policy_id or not POLICY_ID_PATTERN.fullmatch(policy_id):

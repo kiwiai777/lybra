@@ -54,6 +54,10 @@
         {
           "value": "WARN",
           "description": "Warning issued, non-blocking"
+        },
+        {
+          "value": "NEEDS_OWNER",
+          "description": "Requires owner decision/confirmation before proceeding"
         }
       ]
     },

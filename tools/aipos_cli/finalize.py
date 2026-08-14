@@ -5,7 +5,7 @@ AIPOS-FINALIZE-FIX-1 (2026-08-12): 三项红线修正:
      绝不操作治理仓 (governance_root)。records/queue 文件由 gate 动词写入,治理仓 git
      归 N6 收账节点 (顾问职责),executor 无权推治理仓。
   ② deploy 失败 → finalize 整体 FAIL — deploy 子步失败 (显式或自动) 必须返回
-     verdict="FAIL" + exit 非0,禁止吞错报成功。
+     verdict=Verdict.FAIL + exit 非0,禁止吞错报成功。
   ③ lybra-deploy 路径从产品仓根解析 — repo_root / "tools" / "lybra-deploy",
      禁止 cwd 猜测,符合 config.schema 标准位置。
 
@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.schema_loader import get_enum_values
+from tools.schema_constants import RecordType, Verdict
 
 # FND-47: record_type 从 enums.schema 读取（单一源）
 _RECORD_TYPE_ENUM_CACHE: list[str] | None = None
@@ -260,7 +261,7 @@ def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, An
         record_type = str(metadata.get("record_type") or "").strip()
         valid_types = _get_valid_record_types()
         # Accept audit_verdict* family (audit_verdict, audit_verdict_record)
-        if not (record_type in valid_types and record_type.startswith("audit_verdict")):
+        if not (record_type in valid_types and record_type.startswith(RecordType.AUDIT_VERDICT)):
             continue
         verdict_value = str(metadata.get("verdict") or "").strip().upper()
         verdict_at = str(metadata.get("verdict_at") or metadata.get("timestamp") or "")
@@ -289,7 +290,7 @@ def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, An
 
     latest = max(candidates, key=lambda c: c["verdict_at"])
 
-    if latest["verdict"] in {"PASS", "PASS_WITH_NOTES"}:
+    if latest["verdict"] in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
         return {
             "can_finalize": True,
             "task_id": task_id,
@@ -346,7 +347,7 @@ def finalize_task(
 
     Returns:
         {
-            "verdict": "PASS" | "BLOCK" | "FAIL",  # AIPOS-FINALIZE-FIX-1: deploy fail -> FAIL
+            "verdict": Verdict.PASS | "BLOCK" | "FAIL",  # AIPOS-FINALIZE-FIX-1: deploy fail -> FAIL
             "task_id": str,
             "actor": str,
             "dry_run": bool,
@@ -376,7 +377,7 @@ def finalize_task(
         except FileNotFoundError as exc:
             operations.append(f"Cannot resolve governance root: {exc}")
             return {
-                "verdict": "BLOCK",
+                "verdict": Verdict.BLOCK,
                 "task_id": task_id,
                 "actor": actor,
                 "dry_run": dry_run,
@@ -404,7 +405,7 @@ def finalize_task(
         # 检查 workspace_root 是否在治理仓路径下
         if ws_resolved == gov_resolved or str(ws_resolved).startswith(str(gov_resolved) + "/"):
             return {
-                "verdict": "BLOCK",
+                "verdict": Verdict.BLOCK,
                 "task_id": task_id,
                 "actor": actor,
                 "dry_run": dry_run,
@@ -442,7 +443,7 @@ def finalize_task(
     
     if not finalize_check["can_finalize"]:
         return {
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "task_id": task_id,
             "actor": actor,
             "dry_run": dry_run,
@@ -464,7 +465,7 @@ def finalize_task(
     
     if not integrity["integrity_ok"]:
         return {
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "task_id": task_id,
             "actor": actor,
             "dry_run": dry_run,
@@ -490,7 +491,7 @@ def finalize_task(
     # 如果要 push 或 deploy，必须在 main 分支上
     if (push or deploy) and not branch_check["on_required_branch"]:
         return {
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "task_id": task_id,
             "actor": actor,
             "dry_run": dry_run,
@@ -553,7 +554,7 @@ def finalize_task(
         # Case 1: working tree clean + synced → 真正无事可做
         if synced:
             return {
-                "verdict": "PASS",
+                "verdict": Verdict.PASS,
                 "task_id": task_id,
                 "actor": actor,
                 "dry_run": dry_run,
@@ -573,7 +574,7 @@ def finalize_task(
         # Case 2: working tree clean but not synced → 需要 push (如果 push=True)
         if not push:
             return {
-                "verdict": "PASS",
+                "verdict": Verdict.PASS,
                 "task_id": task_id,
                 "actor": actor,
                 "dry_run": dry_run,
@@ -594,7 +595,7 @@ def finalize_task(
         if dry_run:
             operations.append("DRY-RUN: Would push unpushed commits to remote")
             return {
-                "verdict": "PASS",
+                "verdict": Verdict.PASS,
                 "task_id": task_id,
                 "actor": actor,
                 "dry_run": True,
@@ -624,7 +625,7 @@ def finalize_task(
             operations.append("Push successful")
             
             return {
-                "verdict": "PASS",
+                "verdict": Verdict.PASS,
                 "task_id": task_id,
                 "actor": actor,
                 "dry_run": False,
@@ -643,7 +644,7 @@ def finalize_task(
         except subprocess.CalledProcessError as e:
             operations.append(f"Push failed: {e.stderr}")
             return {
-                "verdict": "FAIL",
+                "verdict": Verdict.FAIL,
                 "task_id": task_id,
                 "actor": actor,
                 "dry_run": False,
@@ -667,7 +668,7 @@ def finalize_task(
         if deploy:
             operations.append("DRY-RUN: Would run lybra-deploy")
         return {
-            "verdict": "PASS",
+            "verdict": Verdict.PASS,
             "task_id": task_id,
             "actor": actor,
             "dry_run": True,
@@ -765,7 +766,7 @@ def finalize_task(
                     deployment_error = verification["message"]
                     operations.append(f"✗ Deployment verification FAILED: {verification['message']}")
                     return {
-                        "verdict": "FAIL",
+                        "verdict": Verdict.FAIL,
                         "task_id": task_id,
                         "actor": actor,
                         "dry_run": False,
@@ -786,7 +787,7 @@ def finalize_task(
                 deployment_error = deploy_result["stderr"]
                 operations.append(f"✗ lybra-deploy FAILED: {deploy_result['stderr'][:200]}")
                 return {
-                    "verdict": "FAIL",
+                    "verdict": Verdict.FAIL,
                     "task_id": task_id,
                     "actor": actor,
                     "dry_run": False,
@@ -829,7 +830,7 @@ def finalize_task(
                     deployment_error = deploy_result["stderr"]
                     operations.append(f"✗ Auto-deployment FAILED: {deploy_result['stderr'][:200]}")
                     return {
-                        "verdict": "FAIL",
+                        "verdict": Verdict.FAIL,
                         "task_id": task_id,
                         "actor": actor,
                         "dry_run": False,
@@ -860,7 +861,7 @@ def finalize_task(
             final_message += f" but deployment FAILED: {deployment_error[:100]}"
         
         return {
-            "verdict": "PASS",
+            "verdict": Verdict.PASS,
             "task_id": task_id,
             "actor": actor,
             "dry_run": False,
@@ -880,7 +881,7 @@ def finalize_task(
     except subprocess.CalledProcessError as e:
         operations.append(f"Git operation failed: {e.stderr}")
         return {
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "task_id": task_id,
             "actor": actor,
             "dry_run": False,

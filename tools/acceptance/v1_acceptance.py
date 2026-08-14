@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from tools.schema_constants import RecordType
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -92,7 +93,7 @@ md = build_mcp_return_record_markdown(
     completion_report_ref=None,
 )
 data, body, warnings = parse_markdown_frontmatter(md)
-assert data.get("record_type") == "return_record", f"round-trip (a) failed: record_type={data.get('record_type')!r}"
+assert data.get("record_type") == RecordType.RETURN_RECORD, f"round-trip (a) failed: record_type={data.get('record_type')!r}"
 assert data.get("artifact_refs") == ["docs/out #1.md", "5_tasks/records/r.md"], f"round-trip (a) artifact_refs wrong: {data.get('artifact_refs')!r}"
 assert warnings == [], f"round-trip (a) unexpected warnings: {warnings}"
 print("CORRECTNESS_A_PASS")

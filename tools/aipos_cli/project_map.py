@@ -33,6 +33,7 @@ from typing import Any
 
 from tools.aipos_cli.adapter_response import make_response
 from tools.aipos_cli.workspace_config import has_workspace_queue
+from tools.schema_constants import Verdict
 
 
 
@@ -332,12 +333,12 @@ def get_project_map(repo_root: str | Path | None = None) -> dict[str, Any]:
         governance_dir = resolved / "governance"
         direction_recent = _read_direction_log_recent(governance_dir)
 
-        verdict = "PASS"
+        verdict = Verdict.PASS
         if not milestones and not current:
             warnings.append("project-map.md parsed but has no milestones/current; region hidden.")
-            verdict = "WARN"
+            verdict = Verdict.WARN
         elif warnings:  # AIPOS-276: deprecation warnings should result in WARN verdict
-            verdict = "WARN"
+            verdict = Verdict.WARN
 
         data = {
             "available": True,
@@ -390,7 +391,7 @@ def get_project_map(repo_root: str | Path | None = None) -> dict[str, Any]:
     except Exception as exc:  # never raise on a read surface
         return make_response(
             ok=False,
-            verdict="BLOCK",
+            verdict=Verdict.BLOCK,
             operation=operation,
             dry_run=False,
             data={"available": False},
@@ -408,7 +409,7 @@ def get_project_map(repo_root: str | Path | None = None) -> dict[str, Any]:
 def _empty(operation: str) -> dict[str, Any]:
     return make_response(
         ok=True,
-        verdict="PASS",
+        verdict=Verdict.PASS,
         operation=operation,
         dry_run=False,
         data={"available": False, "writes_enabled": False},

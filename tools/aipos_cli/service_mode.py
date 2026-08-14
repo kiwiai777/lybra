@@ -155,7 +155,7 @@ def _permission_issue(path: Path, required_mode: int, *, target_label: str, seve
             path=path,
             observed_mode=None,
             required_mode=required_mode,
-            severity="WARN",
+            severity=Verdict.WARN,
             message=f"Could not inspect {target_label} permissions; treat it as a local secret path.",
             fix_command=f"chmod {required_mode:03o} {path}",
         )
@@ -166,7 +166,7 @@ def _permission_issue(path: Path, required_mode: int, *, target_label: str, seve
         path=path,
         observed_mode=observed,
         required_mode=required_mode,
-        severity="WARN" if downgraded else severity,
+        severity=Verdict.WARN if downgraded else severity,
         message=(
             f"{target_label} permissions are too broad. Required {required_mode:04o}; observed {observed:04o}. "
             + ("Permissions may not be faithfully enforceable on this filesystem; warning only." if downgraded else "Fix before loading or writing service tokens.")
@@ -210,7 +210,7 @@ def check_service_permissions(
         local_dir,
         REQUIRED_LOCAL_DIR_MODE,
         target_label=".lybra/local directory",
-        severity="BLOCK" if for_secret_use else "WARN",
+        severity=Verdict.BLOCK if for_secret_use else Verdict.WARN,
     )
     if dir_issue:
         issues.append(dir_issue)
@@ -218,12 +218,12 @@ def check_service_permissions(
         connection_path,
         REQUIRED_CONNECTION_MODE,
         target_label="connection.json",
-        severity="BLOCK" if for_secret_use else "WARN",
+        severity=Verdict.BLOCK if for_secret_use else Verdict.WARN,
     )
     if file_issue:
         issues.append(file_issue)
-    blocking = [issue.to_dict() for issue in issues if issue.severity == "BLOCK"]
-    warnings = [issue.to_dict() for issue in issues if issue.severity != "BLOCK"]
+    blocking = [issue.to_dict() for issue in issues if issue.severity == Verdict.BLOCK]
+    warnings = [issue.to_dict() for issue in issues if issue.severity != Verdict.BLOCK]
     return blocking, warnings
 
 
@@ -628,7 +628,7 @@ def render_connection_table(report: dict[str, Any]) -> str:
             workspace_status = f"{workspace_root_str} ⚠️  (SUSPICIOUS TEMP PATH)"
             workspace_warning = {
                 "message": f"Workspace root appears to be a temporary test directory: {workspace_root_str}",
-                "severity": "WARN",
+                "severity": Verdict.WARN,
                 "likely_cause": "Test pollution (AIPOS-327 S2)",
                 "fix_command": "lybra serve stop && lybra serve start --workspace-root <real_workspace>",
             }
@@ -709,7 +709,7 @@ def status_report(workspace_root: Path, *, connection_target: Path | None = None
     return {
         "operation": "serve_status",
         "ok": not blocking,
-        "verdict": "PASS",
+        "verdict": Verdict.PASS,
         "workspace_root": str(workspace_root),
         "connection_path": str(path),
         "connection": redacted_connection(config) if config else None,
@@ -866,7 +866,7 @@ def rotate_report(
             # Only warn if there IS an existing config but some unselected roles are missing
             warnings.append({
                 "message": f"Unselected role without existing tokens (will be freshly minted): {', '.join(missing_existing)}",
-                "severity": "WARN",
+                "severity": Verdict.WARN,
             })
         # Restore unselected roles' existing token entries
         new_tokens = []
@@ -913,7 +913,7 @@ def rotate_report(
     result: dict[str, Any] = {
         "operation": "serve_rotate",
         "ok": True,
-        "verdict": "PASS",
+        "verdict": Verdict.PASS,
         "workspace_root": str(workspace_root),
         "connection_path": str(connection_path(workspace_root, connection_target=connection_target)),
         "connection": redacted_connection(config),
@@ -1005,7 +1005,7 @@ def start_report(
         return {
             "operation": "serve_start",
             "ok": True,
-            "verdict": "PASS",
+            "verdict": Verdict.PASS,
             "workspace_root": str(workspace_root),
             "connection_path": str(connection_path(workspace_root, connection_target=connection_target)),
             "connection": redacted_connection(config),
@@ -1217,7 +1217,7 @@ def _run_supervisor(
     return {
         "operation": "serve_start",
         "ok": True,
-        "verdict": "PASS",
+        "verdict": Verdict.PASS,
         "workspace_root": str(workspace_root),
         "connection": redacted_connection(config),
         "supervisor_printed": True,
@@ -1242,7 +1242,7 @@ def stop_report(workspace_root: Path, *, connection_target: Path | None = None) 
     warnings: list[dict[str, Any]] = []
     stopped: list[dict[str, Any]] = []
     if not path.exists():
-        return {"operation": "serve_stop", "ok": True, "verdict": "PASS", "workspace_root": str(workspace_root), "stopped": [], "warnings": [{"message": "No service_state.json found; nothing to stop."}], "blocking_reasons": []}
+        return {"operation": "serve_stop", "ok": True, "verdict": Verdict.PASS, "workspace_root": str(workspace_root), "stopped": [], "warnings": [{"message": "No service_state.json found; nothing to stop."}], "blocking_reasons": []}
     data = json.loads(path.read_text(encoding="utf-8"))
     processes = data.get("processes") if isinstance(data, dict) else []
     for proc in processes if isinstance(processes, list) else []:
@@ -1258,7 +1258,7 @@ def stop_report(workspace_root: Path, *, connection_target: Path | None = None) 
             warnings.append({"message": f"Process already exited: {pid}", "pid": pid})
         except PermissionError:
             warnings.append({"message": f"Permission denied stopping service-owned process: {pid}", "pid": pid})
-    return {"operation": "serve_stop", "ok": True, "verdict": "PASS", "workspace_root": str(workspace_root), "stopped": stopped, "warnings": warnings, "blocking_reasons": []}
+    return {"operation": "serve_stop", "ok": True, "verdict": Verdict.PASS, "workspace_root": str(workspace_root), "stopped": stopped, "warnings": warnings, "blocking_reasons": []}
 
 
 def _ports_in_use(targets: list[tuple[str, int, str]]) -> list[tuple[str, int, str]]:
@@ -1304,7 +1304,7 @@ def _blocked(
     return {
         "operation": operation,
         "ok": False,
-        "verdict": "BLOCK",
+        "verdict": Verdict.BLOCK,
         "workspace_root": str(workspace_root),
         "connection_path": str(connection_path(workspace_root, connection_target=connection_target)),
         "connection": None,
@@ -1414,7 +1414,7 @@ def roles_list_report(workspace_root: Path, *, connection_target: Path | None = 
         return {
             "operation": "roles_list",
             "ok": False,
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "workspace_root": str(workspace_root),
             "blocking_reasons": [{"message": "Cross-workspace role management is not allowed. The connection target must be within the workspace."}],
             "roles": [],
@@ -1425,7 +1425,7 @@ def roles_list_report(workspace_root: Path, *, connection_target: Path | None = 
         return {
             "operation": "roles_list",
             "ok": False,
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "workspace_root": str(workspace_root),
             "blocking_reasons": [{"message": f"Connection config not found at {conn_path}"}],
             "roles": [],
@@ -1465,7 +1465,7 @@ def roles_list_report(workspace_root: Path, *, connection_target: Path | None = 
     return {
         "operation": "roles_list",
         "ok": True,
-        "verdict": "PASS",
+        "verdict": Verdict.PASS,
         "workspace_root": str(workspace_root),
         "connection_path": str(conn_path),
         "roles": roles,
@@ -1486,7 +1486,7 @@ def roles_reconcile_report(
         return {
             "operation": "roles_reconcile",
             "ok": False,
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "workspace_root": str(workspace_root),
             "blocking_reasons": [{"message": "Cross-workspace role management is not allowed."}],
             "missing": [],
@@ -1500,7 +1500,7 @@ def roles_reconcile_report(
         return {
             "operation": "roles_reconcile",
             "ok": False,
-            "verdict": "BLOCK",
+            "verdict": Verdict.BLOCK,
             "workspace_root": str(workspace_root),
             "blocking_reasons": [{"message": f"Connection config not found at {conn_path}"}],
             "missing": [],
@@ -1540,7 +1540,7 @@ def roles_reconcile_report(
     return {
         "operation": "roles_reconcile",
         "ok": True,
-        "verdict": "PASS" if not (missing or extra or non_compliant) else "WARN",
+        "verdict": Verdict.PASS if not (missing or extra or non_compliant) else Verdict.WARN,
         "workspace_root": str(workspace_root),
         "connection_path": str(conn_path),
         "missing": missing,
@@ -1552,4 +1552,5 @@ def roles_reconcile_report(
 
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import Verdict
 check_direct_invocation(__name__)

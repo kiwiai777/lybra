@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from tools.schema_constants import RecordType, Verdict
 from tools.aipos_cli.confirm_client import (
     GateClient,
     Preview,
@@ -137,9 +138,9 @@ class TuiSession:
 
     def preview_gate(self, gate: dict[str, Any], *, owner_policy_ref: str = "owner_policy:supervised", result_summary: str = "owner-confirmed return") -> Preview:
         op = gate["op"]
-        if op == "claim":
+        if op == RecordType.CLAIM:
             args = claim_args_from_task(gate["task"], owner_policy_ref=owner_policy_ref)
-        elif op == "return":
+        elif op == RecordType.RETURN:
             args = return_args_from_task(gate["task"], result_summary=result_summary)
         else:
             raise ValueError(f"unsupported gate op {op!r}")
@@ -177,7 +178,7 @@ class TuiSession:
     def confirm(self, preview: Preview, owner_literal: str) -> dict[str, Any]:
         # Esc / empty literal = reject (the caller passes "" to cancel; never auto-supply).
         if not owner_literal:
-            return {"ok": False, "verdict": "BLOCK", "error_code": "CANCELLED", "message": "Owner did not confirm."}
+            return {"ok": False, "verdict": Verdict.BLOCK, "error_code": "CANCELLED", "message": "Owner did not confirm."}
         return self._client.confirm(preview, owner_literal)
 
 

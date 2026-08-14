@@ -246,7 +246,7 @@ def _record_line(record: dict[str, Any], kind: str) -> str:
     extras: list[str] = []
     if kind == "session" and record.get("session_status"):
         extras.append(f"status={record.get('session_status')}")
-    if kind == "claim" and record.get("claimed_by"):
+    if kind == RecordType.CLAIM and record.get("claimed_by"):
         extras.append(f"claimed_by={record.get('claimed_by')}")
     suffix = f" [{' '.join(extras)}]" if extras else ""
     return f"- {record_id} | {timestamp} | {record.get('path') or '-'}{suffix}"
@@ -454,4 +454,5 @@ def render_preview_text(preview: dict[str, Any]) -> str:
     return "\n".join(lines)
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import RecordType
 check_direct_invocation(__name__)
