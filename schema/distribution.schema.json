@@ -134,10 +134,10 @@
       "applies_to_roles": ["advisor"],
       "operation": "copy_tree",
       "filter": {
-        "include": ["block-and-report", "task-closure-loop", "truth-first-drafting", "write-return"]
+        "include": ["block-and-report", "card-author", "task-closure-loop", "truth-first-drafting", "write-return"]
       },
       "version_strategy": "git_commit_hash",
-      "notes": "Advisor-specific skill set"
+      "notes": "Advisor-specific skill set (AIPOS-R6E ⑥: card-author = 顾问出卡检查表)"
     },
     {
       "distribution_id": "executor-charter",

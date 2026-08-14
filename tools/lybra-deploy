@@ -269,6 +269,24 @@ except Exception:
 cmd_deploy() {
     log "Starting deploy from working tree..."
 
+    # ── AIPOS-R6E ①: Branch enforcement (P0) ───────────────────────────
+    # Only main branch may be deployed to production gate.
+    # Prevents accidental deployment of experimental/feature branches.
+    local current_branch
+    current_branch=$(cd "$PRODUCT_REPO" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    if [[ "$current_branch" != "main" ]]; then
+        err "DEPLOY BLOCKED: Only 'main' branch may be deployed."
+        err "  Current branch: $current_branch"
+        err "  Required branch: main"
+        err ""
+        err "To deploy, first merge your changes to main:"
+        err "  git checkout main"
+        err "  git merge $current_branch"
+        err "  lybra-deploy"
+        exit 1
+    fi
+    log "✓ Branch check: on main"
+
     # Gather version info
     local git_hash git_timestamp
     git_hash=$(cd "$PRODUCT_REPO" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")

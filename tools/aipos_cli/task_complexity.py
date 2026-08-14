@@ -111,6 +111,37 @@ def validate_task_complexity(
         else:
             warnings.append("Code-mode task omits task_class and defaults to simple; review whether complex-class governance is required")
 
+    # AIPOS-R6E 靶⑤: N0容量lint——启发式WARN交付大项>3或验证+修复+清账混装
+    artifact_scope = _text(metadata.get("artifact_scope"))
+    if artifact_scope:
+        # 按中文或英文分隔符拆分大项
+        import re
+        # 支持:中文顿号、中英文逗号、加号、分号等
+        major_items = re.split(r'[、,;,;+/\s]+', artifact_scope)
+        major_items = [item.strip() for item in major_items if item.strip()]
+        
+        if len(major_items) > 3:
+            warnings.append(
+                f"N0 capacity lint: artifact_scope declares {len(major_items)} major items (>{3}). "
+                f"Consider splitting into multiple focused cards for better autonomy and audit clarity."
+            )
+        
+        # 检测验证+修复+清账混装(常见反模式)
+        scope_lower = artifact_scope.lower()
+        mixed_concerns = []
+        if any(keyword in scope_lower for keyword in ['验证', 'verify', 'validate', 'test']):
+            mixed_concerns.append('verification')
+        if any(keyword in scope_lower for keyword in ['修复', 'fix', 'repair', 'patch']):
+            mixed_concerns.append('fix')
+        if any(keyword in scope_lower for keyword in ['清账', 'cleanup', 'reconcile', '收尾']):
+            mixed_concerns.append('cleanup')
+        
+        if len(mixed_concerns) >= 2:
+            warnings.append(
+                f"N0 capacity lint: artifact_scope mixes {'+'.join(mixed_concerns)}. "
+                f"Verification, fixes, and cleanup should typically be separate cards for clear acceptance criteria."
+            )
+
     if task_class != "complex":
         return {
             "blocking_reasons": blocking_reasons,
