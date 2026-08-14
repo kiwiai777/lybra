@@ -248,6 +248,7 @@ def _generate_next_action(current_state: str, task_mode: str, operation: str) ->
             "verb": "lybra_queue_return_dry_run",
             "params_hint": "autonomy_mode=Supervised, 携带 result_summary 和 artifact_refs",
             "auth_note": "executor 使用 queue_return scope 归还工作；328机制：executor持dry_run_token自行confirm, owner_confirmation_token为参数字面量OWNER_CONFIRMED",
+            "reminder": "⚠️ 干完必发completed信号(lybra_task_progress event_type=completed), 否则不会自动return",
         }
     
     # N3 return dry-run -> return confirm

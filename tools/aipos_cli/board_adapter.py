@@ -2143,12 +2143,27 @@ def _check_return_coverage(
 
 
 def _unsafe_return_ref(value: str) -> bool:
+    """AIPOS-R6F靶③: return材料位置校验——拒绝/tmp与仓外路径。
+    
+    合法路径:
+    - 仓内相对路径 (task_cards/<task_id>/...)
+    - 工作区相对路径 (5_tasks/records/...)
+    
+    非法路径:
+    - /tmp/ 路径
+    - 绝对路径
+    - .. 父目录遍历
+    - 密钥标记 (api_key, token=, ...)
+    """
     if not value:
         return False
     lowered = value.lower()
     if any(marker in lowered for marker in ("api_key", "bearer ", "token=", "password=", "secret=")):
         return True
     raw = Path(value)
+    # AIPOS-R6F靶③: 拒绝 /tmp 路径
+    if str(raw).startswith("/tmp/") or str(raw).startswith("/tmp") or "/tmp/" in str(raw):
+        return True
     return raw.is_absolute() or ".." in raw.parts
 
 
@@ -2303,8 +2318,17 @@ def _build_return_preview(
         blocking_reasons.append("CLAIM_ID_MISMATCH: claim_id does not match claimed task")
     if active_session_id and str(source_metadata.get("active_session_id") or "").strip() != active_session_id:
         blocking_reasons.append("SESSION_MISMATCH: active_session_id does not match claimed task")
-    if any(_unsafe_return_ref(ref) for ref in [*artifact_refs, completion_report_ref or ""]):
-        blocking_reasons.append("Return evidence refs must be repo-relative or approved workspace-relative and secret-free")
+    
+    # AIPOS-R6F靶③: return材料位置校验——拒绝/tmp与仓外路径
+    unsafe_refs = [ref for ref in [*artifact_refs, completion_report_ref or ""] if _unsafe_return_ref(ref)]
+    if unsafe_refs:
+        task_id_for_example = str(task.get("task_id") or "TASK-ID")
+        blocking_reasons.append(
+            f"UNSAFE_RETURN_REF: return材料路径必须在治理工作区 task_cards/<task_id>/ 内，"
+            f"禁止 /tmp 与仓外路径。非法路径: {unsafe_refs}. "
+            f"正确落点示例: task_cards/{task_id_for_example}/RETURN.md, "
+            f"task_cards/{task_id_for_example}/artifacts/output.txt"
+        )
     
     # AIPOS-R6E 靶④: return覆盖度对照——卡面artifact_scope与实际artifact_refs差异结构化
     artifact_scope = str(source_metadata.get("artifact_scope") or "").strip()
