@@ -368,7 +368,34 @@ def _teaching_error(
     suggested_next_action: str,
     *,
     doc_ref: str = DISCIPLINE_DOC_REF,
+    verb_name: str | None = None,
+    example_args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Teaching error with optional verb parameter shape (AIPOS-R6E ⑧)
+    
+    Args:
+        error_code: Error code
+        message: Human-readable error message
+        suggested_next_action: What to do next
+        doc_ref: Documentation reference
+        verb_name: Optional verb name to include parameter shape
+        example_args: Optional copyable example arguments
+    """
+    details: dict[str, Any] = {
+        "suggested_next_action": suggested_next_action,
+        "doc_ref": doc_ref,
+    }
+    
+    # AIPOS-R6E ⑧: 错误报文自带参数shape+可抄示例
+    if verb_name:
+        # 从 verbs.schema.json 加载参数定义(简化版:仅包含常见动词)
+        param_shape = _get_verb_param_shape(verb_name)
+        if param_shape:
+            details["parameter_shape"] = param_shape
+    
+    if example_args:
+        details["copyable_example"] = example_args
+    
     return _tool_result(
         {
             "ok": False,
@@ -382,15 +409,54 @@ def _teaching_error(
                 {
                     "category": error_code,
                     "message": message,
-                    "details": {
-                        "suggested_next_action": suggested_next_action,
-                        "doc_ref": doc_ref,
-                    },
+                    "details": details,
                 }
             ],
         },
         is_error=True,
     )
+
+
+def _get_verb_param_shape(verb_name: str) -> dict[str, Any] | None:
+    """AIPOS-R6E ⑧: 从 verbs.schema.json 获取动词参数shape
+    
+    简化实现:硬编码常见动词的必填参数。完整实现应从 schema 动态加载。
+    """
+    # 常见动词的必填参数(简化版)
+    verb_shapes = {
+        "lybra_queue_amend_dry_run": {
+            "required": ["task_id", "amendments", "amendment_reason", "actor"],
+            "example": {
+                "task_id": "TASK-123",
+                "amendments": {"title": "Updated title"},
+                "amendment_reason": "Clarify scope per owner feedback",
+                "actor": "advisor.lybra",
+            }
+        },
+        "lybra_owner_decision_record": {
+            "required": ["decision_id", "task_id", "decision_type", "decision", "rationale", "actor"],
+            "example": {
+                "decision_id": "DEC-001",
+                "task_id": "TASK-123",
+                "decision_type": "scope_change",
+                "decision": "approved",
+                "rationale": "Aligns with project roadmap",
+                "actor": "owner",
+            }
+        },
+        "lybra_queue_return_dry_run": {
+            "required": ["task_id", "actor", "agent_instance", "owner_policy_ref", "result_summary", "autonomy_mode"],
+            "example": {
+                "task_id": "TASK-123",
+                "actor": "exec.lybra.kiwiai-dev",
+                "agent_instance": "exec.lybra.kiwiai-dev",
+                "owner_policy_ref": "pol_lybra_dev_9",
+                "result_summary": "Completed all deliverables",
+                "autonomy_mode": "Supervised",
+            }
+        },
+    }
+    return verb_shapes.get(verb_name)
 
 
 def _error_result(message: str, *, category: str = "VALIDATION_ERROR") -> dict[str, Any]:
@@ -3780,6 +3846,18 @@ READ_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "lybra_gate_guidance",
+        "description": "AIPOS-R6E ⑦: Gate self-describing help - returns verb usage guidance with complete parameter shapes and copyable examples. Query by verb_name for detailed usage, or omit to list all available verbs for your role. Zero source-code archaeology.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "verb_name": {"type": "string", "description": "Optional: specific verb to get detailed usage for (e.g., 'lybra_queue_return_dry_run')"},
+                "role": {"type": "string", "description": "Optional: query verbs for a specific role (executor/auditor/advisor/owner)"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "lybra_task_preview",
         "description": "Build a read-only task session preview for one task by task_id or path. Set include_body=true to receive the task card body markdown (requires queue_claim scope).",
         "inputSchema": {
@@ -4742,6 +4820,154 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
     # AIPOS-362: enrollment verbs - enroll_code/revoke/list are owner-gated (always visible); enroll_exchange is PUBLIC (always visible)
     descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_roles_enroll"))
     return descriptors
+
+
+def lybra_gate_guidance(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-R6E ⑧: Gate自描述闭环——返回动词用法指南
+    
+    根据调用者角色返回其token面可用动词的完整参数shape+示例。
+    目标:任何角色撞墙时产品自答,零源码考古。
+    
+    Args:
+        verb_name: 可选,查询特定动词的用法
+        role: 可选,查询特定角色的可用动词
+    
+    Returns:
+        如果verb_name提供:该动词的详细用法(参数shape+示例)
+        否则:当前角色可用的所有动词清单
+    """
+    args = arguments or {}
+    verb_name = str(args.get("verb_name") or "").strip()
+    requested_role = str(args.get("role") or "").strip()
+    
+    # 确定当前角色
+    cap = _capability_token()
+    current_role = str(cap.get("role") or "").strip() or "unknown"
+    
+    # 常见动词的用法指南(简化版)
+    verb_guides = {
+        "lybra_queue_return_dry_run": {
+            "description": "Preview task return (executor reports completion)",
+            "scope_required": "queue_return",
+            "roles": ["executor"],
+            "required_parameters": {
+                "task_id": "Task ID to return (e.g., 'AIPOS-R6E')",
+                "actor": "Agent instance returning the task",
+                "agent_instance": "Same as actor for Supervised mode",
+                "owner_policy_ref": "Policy reference (e.g., 'pol_lybra_dev_9')",
+                "autonomy_mode": "Must be 'Supervised'",
+                "result_summary": "Summary of work completed",
+            },
+            "optional_parameters": {
+                "artifact_refs": "List of changed files",
+                "active_session_id": "Session ID for tracking",
+            },
+            "example": {
+                "task_id": "AIPOS-R6E",
+                "actor": "exec.lybra.kiwiai-dev",
+                "agent_instance": "exec.lybra.kiwiai-dev",
+                "owner_policy_ref": "pol_lybra_dev_9",
+                "autonomy_mode": "Supervised",
+                "result_summary": "Completed all six targets",
+                "artifact_refs": ["tools/lybra-deploy", "tests/test_r6e_write_contract.py"],
+            },
+            "next_step": "Call lybra_queue_return_confirm with the dry_run_token and owner_confirmation_token='OWNER_CONFIRMED'",
+        },
+        "lybra_queue_amend_dry_run": {
+            "description": "Preview task amendment (modify pending task metadata)",
+            "scope_required": "queue_amend",
+            "roles": ["advisor", "owner"],
+            "required_parameters": {
+                "task_id": "Task ID to amend (must be in pending/ state)",
+                "amendments": "Dict of frontmatter fields to update (e.g., {'title': 'New title'})",
+                "amendment_reason": "Reason for this amendment",
+                "actor": "Agent performing the amendment",
+            },
+            "example": {
+                "task_id": "AIPOS-R6E",
+                "amendments": {"title": "Updated title per owner feedback"},
+                "amendment_reason": "Clarify scope based on design review",
+                "actor": "advisor.lybra",
+            },
+            "next_step": "Call lybra_queue_amend_confirm with the dry_run_token",
+        },
+        "lybra_owner_decision_record": {
+            "description": "Record owner decision on a task or policy matter",
+            "scope_required": "owner_decision_record",
+            "roles": ["owner"],
+            "required_parameters": {
+                "decision_id": "Unique decision ID (e.g., 'DEC-001')",
+                "task_id": "Related task ID (or 'N/A' for policy decisions)",
+                "decision_type": "Type: scope_change, priority_change, resource_allocation, etc.",
+                "decision": "Decision outcome: approved, rejected, deferred, amended",
+                "rationale": "Reason for this decision",
+                "actor": "Owner actor",
+            },
+            "example": {
+                "decision_id": "DEC-R6E-001",
+                "task_id": "AIPOS-R6E",
+                "decision_type": "scope_change",
+                "decision": "approved",
+                "rationale": "Aligns with zero-manual-intervention roadmap",
+                "actor": "owner",
+            },
+        },
+        "lybra_mark_concluded": {
+            "description": "Mark a task as concluded (report-style audit bypass)",
+            "scope_required": "queue_close",
+            "roles": ["auditor", "advisor", "owner"],
+            "required_parameters": {
+                "task_id": "Task ID to conclude",
+                "actor": "Agent marking conclusion",
+            },
+            "optional_parameters": {
+                "report_path": "Path to audit report",
+                "conclusion_note": "Brief conclusion note",
+            },
+            "example": {
+                "task_id": "AIPOS-R6E",
+                "actor": "audit.lybra",
+                "conclusion_note": "All six targets verified and passing tests",
+            },
+        },
+    }
+    
+    # 如果查询特定动词
+    if verb_name:
+        if verb_name in verb_guides:
+            guide = verb_guides[verb_name]
+            return _tool_result({
+                "ok": True,
+                "verb_name": verb_name,
+                "guide": guide,
+                "current_role": current_role,
+            })
+        else:
+            return _tool_result({
+                "ok": False,
+                "error": f"No guidance available for verb: {verb_name}",
+                "available_verbs": list(verb_guides.keys()),
+                "suggestion": "Check verb name spelling or use lybra_gate_guidance without verb_name to list all available verbs",
+            })
+    
+    # 否则返回当前角色可用的动词清单
+    role_to_check = requested_role if requested_role else current_role
+    available_verbs = []
+    
+    for verb, guide in verb_guides.items():
+        if role_to_check in guide.get("roles", []) or role_to_check == "owner":
+            available_verbs.append({
+                "verb_name": verb,
+                "description": guide["description"],
+                "scope_required": guide.get("scope_required"),
+            })
+    
+    return _tool_result({
+        "ok": True,
+        "role": role_to_check,
+        "available_verbs": available_verbs,
+        "usage": "Call lybra_gate_guidance with verb_name parameter to get detailed usage for a specific verb",
+    })
 
 
 TOOL_DESCRIPTORS = READ_TOOL_DESCRIPTORS
