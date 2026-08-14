@@ -2167,6 +2167,67 @@ def _unsafe_return_ref(value: str) -> bool:
     return raw.is_absolute() or ".." in raw.parts
 
 
+def _validate_return_artifact_refs(
+    artifact_refs: list[str],
+    completion_report_ref: str | None,
+    task_id: str,
+    repo_root: Path,
+) -> list[str]:
+    """AIPOS-R6I 靶①: return材料存在性+落点双校验(杀报告漂移家族)。
+    
+    对 artifact_refs 和 completion_report_ref 逐条检查:
+    1. 存在性: 文件必须存在于 repo_root
+    2. 落点: 必须在治理工作区 task_cards/<task_id>/ 内
+    
+    Args:
+        artifact_refs: 声明的 artifact 路径列表
+        completion_report_ref: 可选的 completion report 路径
+        task_id: 任务 ID
+        repo_root: 仓库根路径
+    
+    Returns:
+        blocking_reasons 列表, 空列表表示全部通过
+    """
+    blocking_reasons: list[str] = []
+    expected_prefix = f"task_cards/{task_id}/"
+    
+    all_refs = [*artifact_refs]
+    if completion_report_ref:
+        all_refs.append(completion_report_ref)
+    
+    for ref in all_refs:
+        if not ref or not ref.strip():
+            continue
+        
+        ref_stripped = ref.strip()
+        
+        # 检查落点: 必须在 task_cards/<task_id>/ 内
+        if not ref_stripped.startswith(expected_prefix):
+            blocking_reasons.append(
+                f"RETURN_ARTIFACT_WRONG_LOCATION: 报告材料 '{ref_stripped}' 不在正确落点。"
+                f"必须在 {expected_prefix} 内 (治理工作区 task_cards/<task_id>/)。"
+                f"示例正确路径: {expected_prefix}RETURN.md, {expected_prefix}artifacts/output.txt"
+            )
+            continue
+        
+        # 检查存在性: 文件必须存在
+        ref_path = repo_root / ref_stripped
+        if not ref_path.exists():
+            blocking_reasons.append(
+                f"RETURN_ARTIFACT_NOT_FOUND: 报告材料 '{ref_stripped}' 不存在于仓库。"
+                f"路径必须存在: {ref_path}。如文件在产品仓,需先复制到治理工作区 {expected_prefix}"
+            )
+            continue
+        
+        # 检查不是目录
+        if ref_path.is_dir():
+            blocking_reasons.append(
+                f"RETURN_ARTIFACT_IS_DIRECTORY: 报告材料 '{ref_stripped}' 是目录,必须是文件。"
+            )
+    
+    return blocking_reasons
+
+
 class ProductRepoNotConfigured(ValueError):
     """AIPOS-FND-5F1: raised when the governance workspace's project.json does not carry a
     valid ``code_repo`` mapping. Callers must surface this as an actionable blocking reason,
@@ -2329,6 +2390,17 @@ def _build_return_preview(
             f"正确落点示例: task_cards/{task_id_for_example}/RETURN.md, "
             f"task_cards/{task_id_for_example}/artifacts/output.txt"
         )
+    
+    # AIPOS-R6I 靶①: return材料存在性+落点双校验(杀报告漂移家族)
+    task_id_text = str(task.get("task_id") or "")
+    if task_id_text:
+        artifact_validation_errors = _validate_return_artifact_refs(
+            artifact_refs=artifact_refs,
+            completion_report_ref=completion_report_ref,
+            task_id=task_id_text,
+            repo_root=repo_root,
+        )
+        blocking_reasons.extend(artifact_validation_errors)
     
     # AIPOS-R6E 靶④: return覆盖度对照——卡面artifact_scope与实际artifact_refs差异结构化
     artifact_scope = str(source_metadata.get("artifact_scope") or "").strip()

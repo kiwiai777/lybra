@@ -2715,17 +2715,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             print(render_json(result))
         else:
-            # Text output
+            # AIPOS-R6I 靶③: 自描述补CLI面 - 输出必自携结果+拒因+下一步动作
+            verdict = result['verdict']
+            print(f"\n=== Finalize Result ===")
             print(f"Task: {result['task_id']}")
             print(f"Actor: {result['actor']}")
-            print(f"Verdict: {result['verdict']}")
-            print(f"Message: {result['message']}")
+            print(f"Verdict: {verdict}")
+            print(f"\nMessage: {result['message']}")
+            
             if result.get('operations'):
                 print("\nOperations:")
                 for op in result['operations']:
                     print(f"  - {op}")
+            
             if result.get('commit_hash'):
-                print(f"\nCommit: {result['commit_hash']}")
+                print(f"\n✓ Commit: {result['commit_hash']}")
             
             # AIPOS-FND-9: Show deployment status
             if result.get('deployed'):
@@ -2735,6 +2739,33 @@ def main(argv: list[str] | None = None) -> int:
                 print("   Manual deployment required: run 'lybra-deploy'")
             elif result.get('deployment_skipped'):
                 print("\nℹ️  Deployment skipped (no gate-side changes)")
+            
+            # AIPOS-R6I 靶③: 下一步动作指引
+            print("\n=== Next Steps ===")
+            if verdict == Verdict.PASS:
+                if result.get('committed') and result.get('pushed'):
+                    print("✓ Task finalized and pushed to remote.")
+                    if result.get('deployed'):
+                        print("✓ Changes deployed to gate.")
+                        print("\nAction: Task complete. Run 'lybra queue close --task-id <ID>' to mark as concluded.")
+                    else:
+                        print("\nAction: Changes committed but deployment pending. Run 'lybra-deploy' if needed.")
+                elif result.get('committed'):
+                    print("✓ Changes committed locally.")
+                    print("\nAction: Push changes with 'git push' or re-run with --push flag.")
+                elif result.get('dry_run'):
+                    print("ℹ️  Dry-run mode - no changes made.")
+                    print("\nAction: Review the operations above. Run without --dry-run to commit.")
+            elif verdict == Verdict.BLOCK:
+                print("❌ Finalize blocked.")
+                print("\nAction: Resolve the blocking reasons listed above before retrying.")
+                if not result.get('can_finalize'):
+                    print("  - Ensure audit verdict is PASS/PASS_WITH_NOTES in governance records.")
+            else:  # FAIL
+                print("❌ Finalize failed.")
+                print("\nAction: Check error messages above and resolve issues before retrying.")
+            
+            print()
         
         return 0 if result.get("verdict") == Verdict.PASS else 1
 

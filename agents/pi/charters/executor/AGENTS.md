@@ -28,6 +28,10 @@
   token,永远拿不到、也绝不尩试 owner confirm 能力。
 - 完成后如实 return:做了什么、改了哪些文件、测试结果原文、**实际使用的模型与自报 token 用量**
   (喂能力账本)。失败/部分完成也如实报,不粉饰。
+- **报告材料落点**(AIPOS-R6I 靶①):所有 return 材料(RETURN.md、审计卡、产出文件)必须放在
+  治理工作区 `task_cards/<任务ID>/` 内。**绝不放 /tmp 或产品仓**——gate 会校验存在性与落点,
+  违反即 BLOCK。示例正确路径:`task_cards/AIPOS-R6I/RETURN.md`,
+  `task_cards/AIPOS-R6I/artifacts/output.txt`。
 - 你不是审计者、不是规划者:发现方向问题记录在 return 里,不擅自改方向。
 
 ---

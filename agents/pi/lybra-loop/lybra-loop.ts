@@ -68,6 +68,109 @@ function scheduleNextTick(pi: ExtensionAPI, ctx: any, delayMs: number) {
 }
 
 /**
+ * AIPOS-R6I 靶②: 检查是否有 PASS/PASS_WITH_NOTES 裁决，如有则自动 finalize+close。
+ * 包含存量收敛: 启动时扫描已有 PASS 裁决但未 finalize 的卡自动补收。
+ */
+async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
+  if (!currentClient || !currentLogger) return false;
+  
+  let config;
+  try {
+    config = loadConfig(process.env);
+  } catch {
+    return false;
+  }
+  
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  
+  // 扫描所有有 PASS 裁决的任务
+  const verdictsRoot = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts");
+  if (!fs.existsSync(verdictsRoot)) return false;
+  
+  const taskDirs = fs.readdirSync(verdictsRoot, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
+  
+  for (const taskId of taskDirs) {
+    const verdictDir = path.join(verdictsRoot, taskId);
+    const verdictFiles = fs.readdirSync(verdictDir)
+      .filter((f) => f.startsWith("verdict_") && f.endsWith(".md"))
+      .sort();
+    
+    if (verdictFiles.length === 0) continue;
+    
+    // 读取最新裁决
+    const latestVerdictFile = path.join(verdictDir, verdictFiles[verdictFiles.length - 1]);
+    const verdictContent = fs.readFileSync(latestVerdictFile, "utf-8");
+    
+    // 从 frontmatter 提取 verdict
+    const verdictMatch = verdictContent.match(/^verdict:\s*([A-Z_]+)$/m);
+    if (!verdictMatch) continue;
+    
+    const verdict = verdictMatch[1].trim();
+    if (verdict !== "PASS" && verdict !== "PASS_WITH_NOTES") continue;
+    
+    // 检查是否已 finalize (5_tasks/records/finalize/<task_id>/)
+    const finalizeDir = path.join(config.workspaceRoot, "5_tasks/records/finalize", taskId);
+    if (fs.existsSync(finalizeDir)) continue;
+    
+    // 检查任务是否仍在 claimed 状态（未 close）
+    const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${taskId.toLowerCase()}.md`);
+    if (!fs.existsSync(taskCardPath)) continue;
+    
+    // 自动 finalize
+    currentLogger.info("auto-finalize-start", {
+      task_id: taskId,
+      verdict,
+      verdict_file: latestVerdictFile,
+    });
+    
+    try {
+      const { execSync } = await import("node:child_process");
+      
+      // 调用 lybra finalize --push --deploy
+      const finalizeCmd = `lybra finalize --task-id ${taskId} --actor ${config.actor} --push --deploy`;
+      const finalizeOutput = execSync(finalizeCmd, {
+        cwd: config.workspaceRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      });
+      
+      currentLogger.info("auto-finalize-success", {
+        task_id: taskId,
+        output: finalizeOutput.slice(0, 500),
+      });
+      
+      // 调用 lybra queue close
+      const closeCmd = `lybra queue close --task-id ${taskId} --actor ${config.actor} --closure-evidence "Auto-finalized after ${verdict}"`;
+      const closeOutput = execSync(closeCmd, {
+        cwd: config.workspaceRoot,
+        encoding: "utf-8",
+        stdio: "pipe",
+      });
+      
+      currentLogger.info("auto-close-success", {
+        task_id: taskId,
+        output: closeOutput.slice(0, 500),
+      });
+      
+      ctx.ui?.notify?.(`自动 finalize+close 任务 ${taskId} (${verdict})`, "info");
+      
+      return true;
+    } catch (e) {
+      currentLogger.error("auto-finalize-failed", {
+        task_id: taskId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      // 失败不停循环，继续处理其他任务
+    }
+  }
+  
+  return false;
+}
+
+/**
  * AIPOS-CONN-LOOP-2 ①: 检查是否有 completed 事件，如有则自动 return。
  * 完成判定 = task-progress completed 事件（既有动词兼职完成信号）。
  * return 素材自动组装 = result_summary(取 completed 事件 summary) + artifact_refs(取卡分支 commit 文件清单)。
@@ -291,6 +394,8 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
     const remain = config.maxWaitSec * 1000 - elapsed;
     const nextMs = Math.min(config.pollIntervalSec * 1000, remain);
     currentLogger.info("wait-poll", { reason: outcome.reason, nextMs });
+    // AIPOS-R6I 靶③: 轮询结果可见 - 打印等待原因
+    ctx.ui?.notify?.(`轮询: ${outcome.reason}，${Math.round(nextMs / 1000)}s 后再拉`, "info");
     // F-EXT001-8(FIX4):wait 路径复位 running,防定时器触发前 running 一直 true 拦截其他入口
     loopState.running = false;
     scheduleNextTick(pi, ctx, nextMs);
@@ -306,6 +411,13 @@ export default function (pi: ExtensionAPI) {
   // --- 续跑:maxN>1 时,新 session 的卡执行完(settle)→ 直接调 tick ---
   pi.on("agent_settled", async (_event, ctx) => {
     if (!loopState.on) return;
+    
+    // AIPOS-R6I 靶②: 检查是否有 PASS 裁决，如有则自动 finalize+close
+    await tryAutoFinalizeOnPassVerdict(ctx).catch((e) => {
+      currentLogger?.warn("agent_settled-auto-finalize-error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    });
     
     // AIPOS-CONN-LOOP-2 ①: 检查是否有 completed 事件，如有则自动 return
     if (currentTaskId) {
@@ -459,11 +571,28 @@ export default function (pi: ExtensionAPI) {
           token: currentTokenFp,
         });
 
+        // AIPOS-R6I 靶③: loop可感知反馈 - 启动时打印详细信息
+        const queueInfo = await client.queueTasks().catch(() => []);
+        const queueCount = queueInfo.length;
+        const nextPollSec = config.intervalSec;
+        
         ctx.ui.notify(
-          `lybra on:启动自动领卡循环(maxN=${maxN},interval=${config.intervalSec}s,maxWait=${config.maxWaitSec}s)。\n` +
-            `只放行信封内(PreAuthorized)卡;信封外跳过;BLOCK/失败立停。/lybra off 可停。`,
+          [
+            `lybra on: 已连 gate · 身份 ${config.role} · 信封 ${config.ownerPolicyRef} · 队列 ${queueCount} 张 · ${nextPollSec}s 后再拉`,
+            `  启动自动领卡循环 (maxN=${maxN}, interval=${config.intervalSec}s, maxWait=${config.maxWaitSec}s)`,
+            `  只放行信封内(PreAuthorized)卡; 信封外跳过; BLOCK/失败立停`,
+            `  /lybra off 可停; /lybra status 查看状态`,
+          ].join("\n"),
           "info",
         );
+        
+        // AIPOS-R6I 靶②: 存量收敛 - 启动时扫描已有 PASS 裁决但未 finalize 的卡自动补收
+        tryAutoFinalizeOnPassVerdict(ctx).catch((e) => {
+          currentLogger.warn("startup-auto-finalize-error", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        });
+        
         // F-EXT001-4(FIX1):非阻塞,直接调用第一轮 tick(不经 sendUserMessage)
         doTick(pi, ctx).catch((e) => {
           // F-EXT001-8(FIX4):不再静默吞错,落日志
