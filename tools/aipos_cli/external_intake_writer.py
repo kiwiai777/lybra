@@ -9,6 +9,7 @@ from typing import Any
 
 from tools.aipos_cli.draft_writer import render_markdown_task_card
 from tools.aipos_cli.workspace_config import has_workspace_queue
+from tools.schema_constants import RecordType, Verdict
 
 
 
@@ -281,11 +282,11 @@ def build_external_intake_draft(
                 "path": target_path,
                 "kind": "create",
                 "type": "draft_markdown",
-                "record_type": "external_intake_draft",
+                "record_type": RecordType.EXTERNAL_INTAKE_DRAFT,
             }
         )
 
-    verdict = "BLOCK" if blocking_reasons else ("WARN" if warnings else "PASS")
+    verdict = Verdict.BLOCK if blocking_reasons else (Verdict.WARN if warnings else Verdict.PASS)
     result: dict[str, Any] = {
         "action": "intake_submit",
         "dry_run": dry_run,
@@ -296,7 +297,7 @@ def build_external_intake_draft(
         "blocking_reasons": blocking_reasons,
         "warnings": warnings,
         "planned_writes": planned_writes,
-        "would_write": verdict != "BLOCK" and bool(target_path),
+        "would_write": verdict != Verdict.BLOCK and bool(target_path),
         "rendered_markdown": rendered_markdown,
         "original_payload": normalized_payload,
         "capability_scope": scope,
@@ -306,7 +307,7 @@ def build_external_intake_draft(
     if dry_run:
         return result
 
-    if verdict == "BLOCK" or target_file is None:
+    if verdict == Verdict.BLOCK or target_file is None:
         result["wrote"] = False
         return result
 

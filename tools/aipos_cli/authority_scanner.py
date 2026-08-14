@@ -6,6 +6,7 @@ from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.records import check_task_record_refs
+from tools.schema_constants import RecordType
 
 
 
@@ -238,13 +239,13 @@ def classify_task_authority(task: dict[str, Any], records: dict[str, Any]) -> di
 def _record_subject_known(record: dict[str, Any], task_ids: set[str]) -> bool:
     record_type = record.get("record_type")
     task_id = str(record.get("task_id") or "")
-    if record_type in {"session", "publish", "claim", "return"}:
+    if record_type in {"session", RecordType.PUBLISH, RecordType.CLAIM, RecordType.RETURN}:
         return task_id in task_ids
-    if record_type in {"audit_dispatch", "audit_verdict"}:
+    if record_type in {RecordType.AUDIT_DISPATCH, RecordType.AUDIT_VERDICT}:
         reviewed = str(record.get("reviewed_task_id") or task_id or "")
         audit_task = str(record.get("audit_task_id") or "")
         return reviewed in task_ids and (not audit_task or audit_task in task_ids)
-    if record_type == "owner_decision_record":
+    if record_type == RecordType.OWNER_DECISION_RECORD:
         related_task_id = str(record.get("task_id") or "")
         return not related_task_id or related_task_id in task_ids
     return True

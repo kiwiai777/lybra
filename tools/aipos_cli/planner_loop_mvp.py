@@ -9,6 +9,7 @@ from tools.aipos_cli.orchestration_summary_preview import build_orchestration_su
 from tools.aipos_cli.orchestration_timeline_preview import build_orchestration_timeline_preview
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import load_all_tasks
+from tools.schema_constants import Verdict
 
 
 
@@ -43,7 +44,7 @@ def _planner_draft_candidates(repo_root: Path, orchestration_id: str) -> list[di
             continue
         publish_status = _safe_text(frontmatter.get("publish_status")) or _safe_text(frontmatter.get("draft_status"))
         owner_gate = frontmatter.get("needs_owner") is True or publish_status in {"needs_owner", "blocked"}
-        publish_ready = publish_status == "approved_for_publish" and validation.get("verdict") in {"PASS", "WARN"} and not owner_gate
+        publish_ready = publish_status == "approved_for_publish" and validation.get("verdict") in {Verdict.PASS, Verdict.WARN} and not owner_gate
         candidates.append(
             {
                 "task_id": _safe_text(frontmatter.get("task_id")),
@@ -154,7 +155,7 @@ def build_planner_loop_mvp_preview(repo_root: Path, orchestration_id: str, *, ac
     owner_reasons = list(dict.fromkeys(str(item) for item in owner_reasons if str(item)))
     publish_ready = [draft for draft in drafts if draft.get("publish_ready")]
 
-    verdict = "BLOCK" if blocking_reasons else ("NEEDS_OWNER" if recommended_step.get("requires_owner") and not publish_ready else "PASS")
+    verdict = Verdict.BLOCK if blocking_reasons else (Verdict.NEEDS_OWNER if recommended_step.get("requires_owner") and not publish_ready else Verdict.PASS)
     return {
         "action": "planner_loop_mvp_preview",
         "orchestration_id": orchestration_id,
@@ -213,7 +214,7 @@ def build_planner_loop_mvp_preview(repo_root: Path, orchestration_id: str, *, ac
         "source_refs": list(dict.fromkeys(list(summary.get("source_refs", [])) + list(timeline.get("source_refs", [])) + ["5_tasks/drafts/"])),
         "warnings": warnings,
         "blocking_reasons": blocking_reasons,
-        "needs_owner_reasons": owner_reasons if verdict == "NEEDS_OWNER" else [],
+        "needs_owner_reasons": owner_reasons if verdict == Verdict.NEEDS_OWNER else [],
         "safety_notice": "AIPOS-75 planner loop MVP is a single-step coordinator preview. It writes no files, launches no runtime, polls no queue, runs no agents, publishes or claims nothing, and returns no execute token.",
     }
 # AIPOS-316: Guard against direct invocation

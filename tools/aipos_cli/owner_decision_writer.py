@@ -285,7 +285,7 @@ def _metadata(record: dict[str, Any]) -> dict[str, Any]:
     approval_scope = record["approval_scope"]
     evidence = record["owner_approval_evidence"]
     return {
-        "record_type": "owner_decision_record",
+        "record_type": RecordType.OWNER_DECISION_RECORD,
         "decision_id": record["decision_id"],
         "decision_type": record["decision_type"],
         "decision_status": record["decision_status"],
@@ -424,7 +424,7 @@ def _synthesize_policy_grant_record(
         "external_ref": external_ref,
     }
     approval_scope = {
-        "operation": "owner_decision_record",
+        "operation": RecordType.OWNER_DECISION_RECORD,
         "authority_boundary": f"arm PreAuthorized autonomy envelope {policy_id}",
         "allowed_next_action": "preauthorized_claim_autorelease",
         "expires_at": expires_at or None,
@@ -539,7 +539,7 @@ def build_owner_decision_record(
                 "path": target_path,
                 "kind": "create",
                 "type": "record_markdown",
-                "record_type": "owner_decision_record",
+                "record_type": RecordType.OWNER_DECISION_RECORD,
             }
         )
 
@@ -570,13 +570,13 @@ def build_owner_decision_record(
                 "path": policy_path,
                 "kind": "create",
                 "type": "record_markdown",
-                "record_type": "owner_autonomy_policy",
+                "record_type": RecordType.OWNER_AUTONOMY_POLICY,
             }
         )
 
-    verdict = "BLOCK" if blocking_reasons else ("WARN" if warnings else "PASS")
+    verdict = Verdict.BLOCK if blocking_reasons else (Verdict.WARN if warnings else Verdict.PASS)
     result: dict[str, Any] = {
-        "action": "owner_decision_record",
+        "action": RecordType.OWNER_DECISION_RECORD,
         "dry_run": dry_run,
         "decision_id": decision_id or None,
         "target_path": target_path,
@@ -584,7 +584,7 @@ def build_owner_decision_record(
         "blocking_reasons": blocking_reasons,
         "warnings": warnings,
         "planned_writes": planned_writes,
-        "would_write": verdict != "BLOCK" and bool(target_path),
+        "would_write": verdict != Verdict.BLOCK and bool(target_path),
         "rendered_markdown": rendered_markdown,
         "original_payload": normalized_record,
         # read from the record (defined in BOTH branches) — the grant path never binds a local
@@ -600,7 +600,7 @@ def build_owner_decision_record(
     if dry_run:
         return result
 
-    if verdict == "BLOCK" or target_file is None:
+    if verdict == Verdict.BLOCK or target_file is None:
         result["wrote"] = False
         return result
 
@@ -613,4 +613,5 @@ def build_owner_decision_record(
     return result
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import RecordType, Verdict
 check_direct_invocation(__name__)

@@ -26,6 +26,7 @@ import re
 
 from tools.aipos_cli.records import load_records
 from tools.aipos_cli.task_loader import load_all_tasks
+from tools.schema_constants import RecordType, Verdict
 
 
 
@@ -99,15 +100,15 @@ def _role_for_event(record_type: str | None) -> str:
 def _phrase_for_event(record_type: str | None, metadata: dict[str, Any]) -> str:
     """Full human sentence for one event (人话化). Falls back to verb + record_type."""
     rt = record_type or ""
-    if rt == "publish":
+    if rt == RecordType.PUBLISH:
         return "Owner 发布了任务"
-    if rt == "claim":
+    if rt == RecordType.CLAIM:
         return "执行者领取了任务（信封自动放行）"
-    if rt == "return":
+    if rt == RecordType.RETURN:
         return "执行者交付了任务"
-    if rt == "audit_dispatch":
+    if rt == RecordType.AUDIT_DISPATCH:
         return "审计员受理了审计"
-    if rt == "audit_verdict":
+    if rt == RecordType.AUDIT_VERDICT:
         verdict = str(metadata.get("verdict") or "").strip().upper() or "待判决"
         return f"审计员判决：{verdict}"
     if rt in ("owner_decision", "owner_decision_record"):
@@ -302,11 +303,11 @@ def _record_summary(record: dict[str, Any]) -> str | None:
     findings_summary; otherwise the first substantive body line."""
     body = record.get("body") or ""
     record_type = record.get("record_type")
-    if record_type == "return":
+    if record_type == RecordType.RETURN:
         return _extract_summary_field(body, ("Result summary", "结果摘要"))
-    if record_type == "audit_verdict":
+    if record_type == RecordType.AUDIT_VERDICT:
         return _extract_summary_field(body, ("Findings summary", "审计结论"))
-    if record_type == "owner_decision_record":
+    if record_type == RecordType.OWNER_DECISION_RECORD:
         metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
         return _extract_summary_field(body, ("Summary", "Decision")) or (
             str(metadata.get("decision_status")) if metadata.get("decision_status") else None
@@ -373,16 +374,16 @@ def build_timeline_event(record: dict[str, Any]) -> dict[str, Any]:
         "timestamp": _record_timestamp(record),
         "verb": RECORD_VERBS.get(record_type, record_type or "记录"),
         "summary": summary,
-        "verdict": metadata.get("verdict") if record_type == "audit_verdict" else None,
+        "verdict": metadata.get("verdict") if record_type == RecordType.AUDIT_VERDICT else None,
         # AIPOS-261 (人话化): human role + full sentence. The raw instance stays on
         # `actor`; the face leads with the Chinese role so the feed reads like speech.
         "role": _role_for_event(record_type),
         "phrase": _phrase_for_event(record_type, metadata),
     }
-    if record_type == "return":
+    if record_type == RecordType.RETURN:
         # result_summary is the already-recorded return evidence (pinned key).
         event["result_summary"] = summary
-    if record_type == "audit_verdict":
+    if record_type == RecordType.AUDIT_VERDICT:
         # findings_summary is the already-recorded audit evidence (pinned key).
         event["findings_summary"] = summary
     return event
@@ -421,7 +422,7 @@ def derive_true_stage(
         return "closed"
     # An audit (R) execution card: closed once the reviewed main card is judged.
     if upper_id.endswith("R") and main_verdict:
-        return "verdict_pass" if str(main_verdict).upper() == "PASS" else "verdict_fail"
+        return "verdict_pass" if str(main_verdict).upper() == Verdict.PASS else "verdict_fail"
     verdicts = recs.get("audit_verdicts") or []
     if verdicts:
         # Sort by timestamp to get chronological order (earliest first)
@@ -436,7 +437,7 @@ def derive_true_stage(
         latest_verdict = str(
             (sorted_verdicts[-1].get("metadata") or {}).get("verdict") or ""
         ).strip().upper()
-        if latest_verdict == "FAIL":
+        if latest_verdict == Verdict.FAIL:
             return "verdict_fail"
         return "verdict_pass"
     if recs.get("audit_dispatches"):
@@ -754,7 +755,7 @@ def _build_stage_chain(
             "key": "audit",
             "label": f"审计 {len(verdict_values)} 轮",
             "detail": "→".join(verdict_values),
-            "state": "done" if final_verdict == "PASS" else "fail",
+            "state": "done" if final_verdict == Verdict.PASS else "fail",
         })
     elif final_verdict:
         label = f"经 {fix_rounds} 轮修复" if fix_rounds else "审计"
@@ -762,7 +763,7 @@ def _build_stage_chain(
             "key": "audit",
             "label": label,
             "detail": final_verdict,
-            "state": "done" if final_verdict == "PASS" else "fail",
+            "state": "done" if final_verdict == Verdict.PASS else "fail",
         })
     elif main_delivered:
         steps.append({"key": "audit", "label": "审计", "state": "active"})

@@ -6,6 +6,8 @@
 from datetime import datetime, timezone
 from typing import Any
 
+from tools.schema_constants import Verdict
+
 # AIPOS-340F3 — 配置:claimed 中途态"近期 started"判据阈值(秒)。
 # 卡 rule 2:"近期"判据用事件时间戳,阈值进配置,不判活只读事实。
 # 超过此阈值未刷新 started 视为非"近期"(无活跃执行信号)。
@@ -126,7 +128,7 @@ def infer_next_action(state: dict[str, Any]) -> dict[str, Any]:
     # 4. 审计 FAIL → fix 派工（等顾问出 fix 卡）
     if latest_verdict:
         verdict_result = latest_verdict.get("verdict_result") or latest_verdict.get("result")
-        if verdict_result == "FAIL":
+        if verdict_result == Verdict.FAIL:
             # fix 卡由顾问出（S3：卡内容判断留人）
             # 检查是否已有 fix 卡（queue/pending/ 下的 <ID>F* 卡）
             # 简化：这里只输出"等待顾问出 fix 卡"
@@ -136,7 +138,7 @@ def infer_next_action(state: dict[str, Any]) -> dict[str, Any]:
                 "requires_human_judgment": True,
                 "human_judgment_reason": "fix 卡正文内容 = 卡内容判断（S3 边界），顾问出",
             }
-        elif verdict_result in ["PASS", "PASS_WITH_NOTES"]:
+        elif verdict_result in [Verdict.PASS, Verdict.PASS_WITH_NOTES]:
             # 审计 PASS → finalize（如果授权）
             needs_owner_verify = state["task_frontmatter"].get("owner_verify") == "required"
             if needs_owner_verify:

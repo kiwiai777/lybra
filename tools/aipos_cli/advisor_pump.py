@@ -40,6 +40,7 @@ import os
 import subprocess
 import sys
 import time
+from tools.schema_constants import Verdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -427,10 +428,10 @@ class AdvisorPump:
                     self._handle_executor_event(path_str)
         
         elif kind == "stall":
-            log(f"Watch stall detected: {event.get('reason', 'unknown')}", "WARN")
+            log(f"Watch stall detected: {event.get('reason', 'unknown')}", Verdict.WARN)
         
         elif kind == "end":
-            log(f"Watch ended: {event.get('reason', 'unknown')}", "WARN")
+            log(f"Watch ended: {event.get('reason', 'unknown')}", Verdict.WARN)
     
     def _handle_return_artifact(self, path_str: str) -> None:
         """Handle new RETURN artifact detection (auto_settle).
@@ -823,7 +824,7 @@ class AdvisorPump:
         
         # If expected_verdict specified, check state transition requirements
         if expected_verdict:
-            if expected_verdict == "PASS":
+            if expected_verdict == Verdict.PASS:
                 # PASS verdict: task should move to completed/
                 completed_path = self.workspace_root / "5_tasks" / "queue" / "completed" / f"{task_id.lower()}.md"
                 return completed_path.exists()
@@ -1568,7 +1569,7 @@ def validate_and_dispatch(
     """
     result: dict[str, Any] = {
         "ok": True,
-        "verdict": "PASS",
+        "verdict": Verdict.PASS,
         "kickoff": "",
         "errors": [],
         "metrics": {},
@@ -1587,7 +1588,7 @@ def validate_and_dispatch(
         
         if not card_path.exists():
             result["ok"] = False
-            result["verdict"] = "BLOCK"
+            result["verdict"] = Verdict.BLOCK
             result["errors"].append(f"任务卡不存在: {card_path}")
             return result
         
@@ -1595,7 +1596,7 @@ def validate_and_dispatch(
             card_content = card_path.read_text(encoding="utf-8")
         except OSError as exc:
             result["ok"] = False
-            result["verdict"] = "BLOCK"
+            result["verdict"] = Verdict.BLOCK
             result["errors"].append(f"读取任务卡失败: {exc}")
             return result
     else:
@@ -1608,7 +1609,7 @@ def validate_and_dispatch(
         result["kickoff"] = kickoff
     except Exception as exc:
         result["ok"] = False
-        result["verdict"] = "BLOCK"
+        result["verdict"] = Verdict.BLOCK
         result["errors"].append(f"生成 kickoff 失败: {exc}")
         return result
     
@@ -1623,7 +1624,7 @@ def validate_and_dispatch(
         
         if not budget_ok:
             result["ok"] = False
-            result["verdict"] = "BLOCK"
+            result["verdict"] = Verdict.BLOCK
             result["errors"].append(budget_error)
             return result
         
@@ -1636,7 +1637,7 @@ def validate_and_dispatch(
         
         if not repetition_ok:
             result["ok"] = False
-            result["verdict"] = "BLOCK"
+            result["verdict"] = Verdict.BLOCK
             result["errors"].append(repetition_error)
             return result
     

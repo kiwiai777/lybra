@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.record_writer import render_markdown
+from tools.schema_constants import RecordType, Verdict
 
 
 
@@ -88,7 +89,7 @@ def _normalize_text(value: Any, field: str, blocking_reasons: list[str], max_len
 def _metadata(record: dict[str, Any]) -> dict[str, Any]:
     """Builds frontmatter metadata for the verification record."""
     return {
-        "record_type": "owner_verification",
+        "record_type": RecordType.OWNER_VERIFICATION,
         "task_id": record["task_id"],
         "decision": record["decision"],
         "decided_by": record["decided_by"],
@@ -203,10 +204,10 @@ def build_owner_verification_record(
             "path": target_path,
             "kind": "create",
             "type": "record_markdown",
-            "record_type": "owner_verification",
+            "record_type": RecordType.OWNER_VERIFICATION,
         })
     
-    verdict = "BLOCK" if blocking_reasons else ("WARN" if warnings else "PASS")
+    verdict = Verdict.BLOCK if blocking_reasons else (Verdict.WARN if warnings else Verdict.PASS)
     
     result: dict[str, Any] = {
         "action": "owner_verification_record",
@@ -218,14 +219,14 @@ def build_owner_verification_record(
         "blocking_reasons": blocking_reasons,
         "warnings": warnings,
         "planned_writes": planned_writes,
-        "would_write": verdict != "BLOCK" and bool(target_path),
+        "would_write": verdict != Verdict.BLOCK and bool(target_path),
         "rendered_markdown": rendered_markdown,
         "original_payload": normalized_record,
     }
     
     # Write file if not dry_run and no blocking reasons
     if not dry_run:
-        if verdict == "BLOCK" or target_file is None:
+        if verdict == Verdict.BLOCK or target_file is None:
             result["wrote"] = False
             return result
         

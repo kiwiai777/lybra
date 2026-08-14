@@ -18,6 +18,7 @@ from tools.aipos_cli.queue_mutation import render_task_markdown
 from tools.aipos_cli.records import expected_publish_record_path
 from tools.aipos_cli.task_loader import find_task_by_id
 from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
+from tools.schema_constants import RecordType
 
 
 
@@ -319,8 +320,8 @@ def derive_audit_task_on_return(
             {
                 "path": str(publish_record_path.relative_to(repo_root)),
                 "kind": "create",
-                "type": "publish_record",
-                "record_type": "publish_record",
+                "type": RecordType.PUBLISH_RECORD,
+                "record_type": RecordType.PUBLISH_RECORD,
             },
         ],
     }

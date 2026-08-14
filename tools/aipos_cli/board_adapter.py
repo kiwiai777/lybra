@@ -12,9 +12,6 @@ from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, e
 from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles, registry_available, resolve_instance_id
 from tools.aipos_cli.audit_derivation import derive_audit_task_on_return
 from tools.aipos_cli.artifact_ingest import (
-
-
-
     _as_ref_list,
     approved_scratch_root,
     has_scratch_request,
@@ -86,6 +83,7 @@ from tools.aipos_cli.workspace_templates import (
     build_workspace_init_plan,
     execute_workspace_init,
 )
+from tools.schema_constants import RecordType, Verdict
 
 READ_SAFETY_NOTICE = "Read-only local Board adapter call. No files are written."
 MUTATION_DRY_RUN_NOTICE = (
@@ -255,7 +253,7 @@ def _normalize_exception(operation: str, exc: Exception, *, dry_run: bool, actor
 
     return make_response(
         ok=False,
-        verdict="BLOCK",
+        verdict=Verdict.BLOCK,
         operation=operation,
         dry_run=dry_run,
         actor=actor,
@@ -427,7 +425,7 @@ def get_health(repo_root: str | Path | None = None) -> dict[str, Any]:
         }
         return make_response(
             ok=True,
-            verdict="PASS",
+            verdict=Verdict.PASS,
             operation=operation,
             dry_run=False,
             data=data,
@@ -506,7 +504,7 @@ def get_needs_owner(repo_root: str | Path | None = None) -> dict[str, Any]:
         filtered = [
             task
             for task in report["tasks"]
-            if task.get("verdict") == "NEEDS_OWNER"
+            if task.get("verdict") == Verdict.NEEDS_OWNER
             or task.get("metadata", {}).get("needs_owner") is True
             or task.get("metadata", {}).get("owner_review_required") is True
             or task.get("metadata", {}).get("approval_required") is True
@@ -652,7 +650,7 @@ def get_advisor_pending_items(repo_root: str | Path | None = None) -> dict[str, 
         
         return make_response(
             ok=True,
-            verdict="PASS",
+            verdict=Verdict.PASS,
             operation=operation,
             dry_run=False,
             data={
@@ -731,7 +729,7 @@ def get_governance(repo_root: str | Path | None = None, *, project: str | None =
         }
         return make_response(
             ok=True,
-            verdict="WARN" if missing else "PASS",
+            verdict=Verdict.WARN if missing else Verdict.PASS,
             operation=operation,
             dry_run=False,
             data=data,
@@ -782,7 +780,7 @@ def get_orchestration_index(repo_root: str | Path | None = None) -> dict[str, An
         warnings = [] if entries else ["No orchestration ids found in this workspace."]
         return make_response(
             ok=True,
-            verdict="PASS" if entries else "WARN",
+            verdict=Verdict.PASS if entries else Verdict.WARN,
             operation=operation,
             dry_run=False,
             data=data,
@@ -880,7 +878,7 @@ def get_drafts(repo_root: str | Path | None = None) -> dict[str, Any]:
         payload = {"drafts_dir": report.get("drafts_dir"), "drafts": report.get("drafts", [])}
         return make_response(
             ok=True,
-            verdict="PASS",
+            verdict=Verdict.PASS,
             operation=operation,
             dry_run=False,
             data=payload,
@@ -910,14 +908,14 @@ def get_external_intake_review(repo_root: str | Path | None = None) -> dict[str,
         }
         return make_response(
             ok=True,
-            verdict="PASS" if drafts else "WARN",
+            verdict=Verdict.PASS if drafts else Verdict.WARN,
             operation=operation,
             dry_run=False,
             data=data,
             summary={
                 "total": len(drafts),
-                "ready": sum(1 for item in drafts if item.get("verdict") == "PASS"),
-                "blocked": sum(1 for item in drafts if item.get("verdict") == "BLOCK"),
+                "ready": sum(1 for item in drafts if item.get("verdict") == Verdict.PASS),
+                "blocked": sum(1 for item in drafts if item.get("verdict") == Verdict.BLOCK),
                 "needs_owner": sum(1 for item in drafts if item.get("needs_owner") is True),
             },
             warnings=[] if drafts else ["No external intake drafts found."],
@@ -946,7 +944,7 @@ def get_owner_decision_records(repo_root: str | Path | None = None) -> dict[str,
         }
         return make_response(
             ok=True,
-            verdict="PASS" if records else "WARN",
+            verdict=Verdict.PASS if records else Verdict.WARN,
             operation=operation,
             dry_run=False,
             data=data,
@@ -999,7 +997,7 @@ def get_orchestration_summary_preview(
         )
         return make_response(
             ok=not bool(result.get("blocking_reasons")),
-            verdict=str(result.get("verdict") or "PASS"),
+            verdict=str(result.get("verdict") or Verdict.PASS),
             operation=operation,
             dry_run=True,
             data=result,
@@ -1039,7 +1037,7 @@ def get_orchestration_timeline_preview(
         ]
         return make_response(
             ok=not bool(result.get("blocking_reasons")),
-            verdict=str(result.get("verdict") or "PASS"),
+            verdict=str(result.get("verdict") or Verdict.PASS),
             operation=operation,
             dry_run=True,
             data=result,
@@ -1091,7 +1089,7 @@ def get_planner_loop_mvp_preview(
         }
         return make_response(
             ok=not bool(result.get("blocking_reasons")),
-            verdict=str(result.get("verdict") or "PASS"),
+            verdict=str(result.get("verdict") or Verdict.PASS),
             operation=operation,
             dry_run=True,
             actor=_actor_payload(actor),
@@ -1135,7 +1133,7 @@ def get_context_pack_preview(
         )
         return make_response(
             ok=not bool(result.get("blocking_reasons")),
-            verdict=str(result.get("verdict") or "PASS"),
+            verdict=str(result.get("verdict") or Verdict.PASS),
             operation=operation,
             dry_run=True,
             data=result,
@@ -1232,7 +1230,7 @@ def create_draft(
             operation=operation,
             actor=actor,
             response=response,
-            execute_allowed=verdict != "BLOCK",
+            execute_allowed=verdict != Verdict.BLOCK,
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
@@ -1294,7 +1292,7 @@ def submit_external_intake(
             operation=operation,
             actor=actor,
             response=response,
-            execute_allowed=verdict != "BLOCK",
+            execute_allowed=verdict != Verdict.BLOCK,
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
@@ -1306,7 +1304,7 @@ def record_owner_decision(
     repo_root: str | Path | None = None,
     actor: str | None = None,
 ) -> dict[str, Any]:
-    operation = "owner_decision_record"
+    operation = RecordType.OWNER_DECISION_RECORD
     try:
         if not isinstance(payload, Mapping):
             raise TypeError("payload must be a mapping")
@@ -1358,7 +1356,7 @@ def record_owner_decision(
             operation=operation,
             actor=actor,
             response=response,
-            execute_allowed=verdict != "BLOCK",
+            execute_allowed=verdict != Verdict.BLOCK,
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
@@ -1435,7 +1433,7 @@ def record_owner_verification(
             operation=operation,
             actor=actor,
             response=response,
-            execute_allowed=verdict != "BLOCK",
+            execute_allowed=verdict != Verdict.BLOCK,
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
@@ -1527,7 +1525,7 @@ def bench_audit_submit(
             operation=operation,
             actor=actor,
             response=response,
-            execute_allowed=verdict != "BLOCK",
+            execute_allowed=verdict != Verdict.BLOCK,
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
@@ -1619,7 +1617,7 @@ def publish_draft(
             operation=operation,
             actor=actor,
             response=response,
-            execute_allowed=verdict != "BLOCK",
+            execute_allowed=verdict != Verdict.BLOCK,
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
@@ -1661,12 +1659,12 @@ def _queue_mutation_preview(
         with_records=with_records,
         claim_id_override=(
             str(mcp_claim_metadata.get("planned_claim_id") or "").strip()
-            if action == "claim" and isinstance(mcp_claim_metadata, dict)
+            if action == RecordType.CLAIM and isinstance(mcp_claim_metadata, dict)
             else None
         ),
         session_id_override=(
             str(mcp_claim_metadata.get("planned_session_id") or "").strip()
-            if action == "claim" and isinstance(mcp_claim_metadata, dict)
+            if action == RecordType.CLAIM and isinstance(mcp_claim_metadata, dict)
             else None
         ),
     )
@@ -1728,9 +1726,9 @@ def _queue_mutation_preview(
             if reason_text not in result["blocking_reasons"]:
                 result["blocking_reasons"].append(reason_text)
         if record_plan.get("record_blocking_reasons"):
-            verdict = "BLOCK"
-    owner_required = verdict == "NEEDS_OWNER"
-    owner_reasons = needs_owner_reasons if verdict == "NEEDS_OWNER" else []
+            verdict = Verdict.BLOCK
+    owner_required = verdict == Verdict.NEEDS_OWNER
+    owner_reasons = needs_owner_reasons if verdict == Verdict.NEEDS_OWNER else []
     if owner_confirmation_required_override is not None:
         owner_required = bool(owner_confirmation_required_override)
         owner_reasons = list(owner_confirmation_reasons_override or [])
@@ -1760,7 +1758,7 @@ def _queue_mutation_preview(
         errors=[],
     )
     # AIPOS-R1: claim 返回 LoopContext 字段
-    if operation == "queue_claim" and verdict != "BLOCK":
+    if operation == "queue_claim" and verdict != Verdict.BLOCK:
         task_metadata = _task.get("metadata", {}) if _task else {}
         task_project = task_metadata.get("project", "")
         # AIPOS-R5A: worktree 信息从实际执行结果读取
@@ -1775,7 +1773,7 @@ def _queue_mutation_preview(
             "worktree": worktree_path,
         }
     
-    allow_execute = verdict != "BLOCK" and operation == "queue_claim" and (not with_records or bool(mcp_claim_metadata))
+    allow_execute = verdict != Verdict.BLOCK and operation == "queue_claim" and (not with_records or bool(mcp_claim_metadata))
     if with_records:
         response["execute_allowed"] = False
         response["execute_blocking_reasons"] = ["with_records execute is not enabled in AIPOS-38"]
@@ -1902,8 +1900,8 @@ def _mcp_claim_record_plan(
             _mcp_record_write_plan(session_rel, "session_record", would_write=not blocking),
         ],
         "record_previews": [
-            {"path": claim_rel, "record_type": "claim_record", "rendered_markdown": claim_markdown},
-            {"path": session_rel, "record_type": "session_record", "rendered_markdown": session_markdown},
+            {"path": claim_rel, "record_type": RecordType.CLAIM_RECORD, "rendered_markdown": claim_markdown},
+            {"path": session_rel, "record_type": RecordType.SESSION_RECORD, "rendered_markdown": session_markdown},
         ],
         "claim_record_path": claim_rel,
         "session_record_path": session_rel,
@@ -2016,8 +2014,8 @@ def _mcp_return_record_plan(
         "record_writes": [_mcp_record_write_plan(return_rel, "return_record", would_write=not blocking)],
         "record_updates": [_mcp_record_write_plan(session_rel, "session_record", would_update=not blocking)],
         "record_previews": [
-            {"path": return_rel, "record_type": "return_record", "rendered_markdown": return_markdown},
-            {"path": session_rel, "record_type": "session_record", "rendered_markdown": session_markdown},
+            {"path": return_rel, "record_type": RecordType.RETURN_RECORD, "rendered_markdown": return_markdown},
+            {"path": session_rel, "record_type": RecordType.SESSION_RECORD, "rendered_markdown": session_markdown},
         ],
         "return_record_markdown": return_markdown,
         "session_record_markdown": session_markdown,
@@ -2031,7 +2029,7 @@ def _write_mcp_return_records(repo_root: Path, record_plan: dict[str, Any]) -> l
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(preview.get("rendered_markdown") or ""), encoding="utf-8")
         item = {"path": str(preview.get("path")), "record_type": preview.get("record_type")}
-        if preview.get("record_type") == "return_record":
+        if preview.get("record_type") == RecordType.RETURN_RECORD:
             item["wrote"] = True
         else:
             item["updated"] = True
@@ -2352,8 +2350,8 @@ def _build_return_preview(
         {
             "path": item.get("workspace_rel"),
             "kind": "create",
-            "type": "ingested_artifact",
-            "record_type": "ingested_artifact",
+            "type": RecordType.INGESTED_ARTIFACT,
+            "record_type": RecordType.INGESTED_ARTIFACT,
         }
         for item in ingestion_plan.get("ingestions", [])
     ]
@@ -2447,8 +2445,8 @@ def _build_return_preview(
         warnings=warnings,
         blocking_reasons=blocking_reasons,
         needs_owner_reasons=[],
-        owner_confirmation_required=verdict != "BLOCK",
-        owner_confirmation_reasons=_return_owner_reasons() if verdict != "BLOCK" else [],
+        owner_confirmation_required=verdict != Verdict.BLOCK,
+        owner_confirmation_reasons=_return_owner_reasons() if verdict != Verdict.BLOCK else [],
         safety_notice=CONTROLLED_EXECUTE_NOTICE,
         errors=[],
     )
@@ -2540,9 +2538,9 @@ def return_task(
                 operation="queue_return",
                 actor=actor_text,
                 response=response,
-                execute_allowed=response.get("verdict") != "BLOCK",
+                execute_allowed=response.get("verdict") != Verdict.BLOCK,
             )
-        if response.get("verdict") == "BLOCK":
+        if response.get("verdict") == Verdict.BLOCK:
             return response
         data = response.get("data") if isinstance(response.get("data"), dict) else {}
         # AIPOS-196a: ingest scratch artifacts before any truth write so an
@@ -2701,10 +2699,10 @@ def _build_audit_dispatch_preview(
         # 有已有裁决,检查最新裁决状态
         latest_verdict = max(existing_verdicts, key=_verdict_time)
         latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
-        if latest_verdict_value in {"PASS", "PASS_WITH_NOTES"}:
+        if latest_verdict_value in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
             blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS (terminal state, cannot overturn)")
         # FAIL/REQUEST_CHANGES/BLOCKED 等非终态:允许 re-dispatch,不 BLOCK
-    elif source_metadata.get("dependency_audit_status") == "PASS":
+    elif source_metadata.get("dependency_audit_status") == Verdict.PASS:
         # 兜底:metadata 显示 PASS 但没找到 verdict 记录(数据不一致)
         blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS")
     
@@ -2714,7 +2712,7 @@ def _build_audit_dispatch_preview(
         if existing_verdicts:
             latest_verdict = max(existing_verdicts, key=_verdict_time)
             latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
-            if latest_verdict_value not in {"FAIL", "REQUEST_CHANGES", "BLOCKED"}:
+            if latest_verdict_value not in {Verdict.FAIL, "REQUEST_CHANGES", "BLOCKED"}:
                 # 非 FAIL/REQUEST_CHANGES,不允许 re-dispatch
                 blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
             # else: FAIL/REQUEST_CHANGES,允许 re-dispatch,不 BLOCK
@@ -2882,7 +2880,7 @@ def _build_audit_dispatch_preview(
         "dispatch_id": dispatch_id,
         "audit_dispatch_record_path": dispatch_rel,
         "record_writes": record_writes,
-        "record_previews": [{"path": dispatch_rel, "record_type": "audit_dispatch_record", "rendered_markdown": dispatch_markdown}],
+        "record_previews": [{"path": dispatch_rel, "record_type": RecordType.AUDIT_DISPATCH_RECORD, "rendered_markdown": dispatch_markdown}],
         "owner_policy_ref": owner_policy_ref,
         "canonical_agent_instance": canonical_agent_instance,
         "reviewed_executor_instance": reviewed_executor_instance,
@@ -2914,14 +2912,14 @@ def _build_audit_dispatch_preview(
         planned_writes=[
             {"path": source_rel, "kind": "update", "type": "task_markdown"},
             {"path": audit_rel, "kind": "create", "type": "task_markdown"},
-            {"path": dispatch_rel, "kind": "create", "type": "record_markdown", "record_type": "audit_dispatch_record"},
+            {"path": dispatch_rel, "kind": "create", "type": "record_markdown", "record_type": RecordType.AUDIT_DISPATCH_RECORD},
         ],
         planned_moves=[],
         warnings=warnings,
         blocking_reasons=blocking_reasons,
         needs_owner_reasons=[],
-        owner_confirmation_required=verdict != "BLOCK",
-        owner_confirmation_reasons=_dispatch_owner_reasons() if verdict != "BLOCK" else [],
+        owner_confirmation_required=verdict != Verdict.BLOCK,
+        owner_confirmation_reasons=_dispatch_owner_reasons() if verdict != Verdict.BLOCK else [],
         safety_notice=CONTROLLED_EXECUTE_NOTICE,
         errors=[],
     )
@@ -2983,9 +2981,9 @@ def audit_dispatch_task(
                 operation="audit_dispatch",
                 actor=actor_text,
                 response=response,
-                execute_allowed=response.get("verdict") != "BLOCK",
+                execute_allowed=response.get("verdict") != Verdict.BLOCK,
             )
-        if response.get("verdict") == "BLOCK":
+        if response.get("verdict") == Verdict.BLOCK:
             return response
         data = response.get("data") if isinstance(response.get("data"), dict) else {}
         (resolved_root / str(data.get("target_path") or "")).write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
@@ -3065,7 +3063,7 @@ def _build_audit_verdict_preview(
     normalized_verdict = verdict_value.upper().strip()
     if normalized_verdict == "CHANGES":
         normalized_verdict = "REQUEST_CHANGES"
-    if normalized_verdict not in {"PASS", "FAIL", "REQUEST_CHANGES", "BLOCKED", "WAIVED"}:
+    if normalized_verdict not in {Verdict.PASS, Verdict.FAIL, "REQUEST_CHANGES", "BLOCKED", "WAIVED"}:
         blocking_reasons.append("INVALID_VERDICT: verdict must be PASS, FAIL, REQUEST_CHANGES, BLOCKED, or WAIVED")
     if normalized_verdict == "WAIVED" and not str(owner_waiver_ref or "").strip():
         blocking_reasons.append("WAIVER_REQUIRES_OWNER_EVIDENCE: owner_waiver_ref is required for WAIVED")
@@ -3158,7 +3156,7 @@ def _build_audit_verdict_preview(
 
     if any(_unsafe_return_ref(ref) for ref in evidence_refs):
         blocking_reasons.append("Audit evidence refs must be repo-relative or approved workspace-relative and secret-free")
-    if normalized_verdict == "PASS" and not (findings_summary or evidence_refs):
+    if normalized_verdict == Verdict.PASS and not (findings_summary or evidence_refs):
         blocking_reasons.append("MISSING_VERDICT_EVIDENCE: PASS requires findings_summary or evidence_refs")
 
     timestamp = planned_verdict_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -3174,7 +3172,7 @@ def _build_audit_verdict_preview(
         # 有已有裁决,检查最新裁决状态
         latest_verdict = max(existing_verdicts, key=_verdict_time)
         latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
-        if latest_verdict_value in {"PASS", "PASS_WITH_NOTES"}:
+        if latest_verdict_value in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
             blocking_reasons.append(f"Audit verdict cannot overturn PASS: reviewed task already has terminal PASS verdict")
         # FAIL/REQUEST_CHANGES/BLOCKED 等非终态:允许 supersede,继续写新 verdict
     
@@ -3186,9 +3184,9 @@ def _build_audit_verdict_preview(
     updated_reviewed["audit_verdict"] = normalized_verdict
     updated_reviewed["audit_verdict_at"] = timestamp
     updated_reviewed["audit_verdict_by"] = canonical_agent_instance or actor
-    if normalized_verdict == "PASS":
-        updated_reviewed["dependency_audit_status"] = "PASS"
-        updated_reviewed["audit_status"] = "PASS"
+    if normalized_verdict == Verdict.PASS:
+        updated_reviewed["dependency_audit_status"] = Verdict.PASS
+        updated_reviewed["audit_status"] = Verdict.PASS
     else:
         updated_reviewed["dependency_audit_status"] = normalized_verdict
         updated_reviewed["audit_status"] = normalized_verdict
@@ -3264,8 +3262,8 @@ def _build_audit_verdict_preview(
         "record_writes": [_mcp_record_write_plan(verdict_rel, "audit_verdict_record", would_write=not blocking_reasons)],
         "record_updates": [_mcp_record_write_plan(session_rel, "session_record", would_update=not blocking_reasons)] if session_rel else [],
         "record_previews": [
-            {"path": verdict_rel, "record_type": "audit_verdict_record", "rendered_markdown": verdict_markdown},
-            {"path": session_rel, "record_type": "session_record", "rendered_markdown": session_markdown},
+            {"path": verdict_rel, "record_type": RecordType.AUDIT_VERDICT_RECORD, "rendered_markdown": verdict_markdown},
+            {"path": session_rel, "record_type": RecordType.SESSION_RECORD, "rendered_markdown": session_markdown},
         ],
         "owner_policy_ref": owner_policy_ref,
         "canonical_agent_instance": canonical_agent_instance,
@@ -3306,15 +3304,15 @@ def _build_audit_verdict_preview(
         planned_writes=[
             {"path": reviewed_rel, "kind": "update", "type": "task_markdown"},
             {"path": audit_rel, "kind": "update", "type": "task_markdown"},
-            {"path": verdict_rel, "kind": "create", "type": "record_markdown", "record_type": "audit_verdict_record"},
-            {"path": session_rel, "kind": "update", "type": "record_markdown", "record_type": "session_record"},
+            {"path": verdict_rel, "kind": "create", "type": "record_markdown", "record_type": RecordType.AUDIT_VERDICT_RECORD},
+            {"path": session_rel, "kind": "update", "type": "record_markdown", "record_type": RecordType.SESSION_RECORD},
         ],
         planned_moves=[],
         warnings=warnings,
         blocking_reasons=blocking_reasons,
         needs_owner_reasons=[],
-        owner_confirmation_required=verdict != "BLOCK",
-        owner_confirmation_reasons=_verdict_owner_reasons() if verdict != "BLOCK" else [],
+        owner_confirmation_required=verdict != Verdict.BLOCK,
+        owner_confirmation_reasons=_verdict_owner_reasons() if verdict != Verdict.BLOCK else [],
         safety_notice=CONTROLLED_EXECUTE_NOTICE,
         errors=[],
     )
@@ -3437,7 +3435,7 @@ def audit_verdict_task(
         role_prefix = instance_text.split(".")[0].lower() if "." in instance_text else ""
         if role_prefix not in {"audit", "auditor"}:
             return {
-                "verdict": "BLOCK",
+                "verdict": Verdict.BLOCK,
                 "task_id": reviewed_id,
                 "actor": actor_text,
                 "dry_run": dry_run,
@@ -3480,9 +3478,9 @@ def audit_verdict_task(
                 operation="audit_verdict",
                 actor=actor_text,
                 response=response,
-                execute_allowed=response.get("verdict") != "BLOCK",
+                execute_allowed=response.get("verdict") != Verdict.BLOCK,
             )
-        if response.get("verdict") == "BLOCK":
+        if response.get("verdict") == Verdict.BLOCK:
             return response
         data = response.get("data") if isinstance(response.get("data"), dict) else {}
         (resolved_root / str(data.get("target_path") or "")).write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
@@ -3495,7 +3493,7 @@ def audit_verdict_task(
             path = resolved_root / str(preview.get("path") or "")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(str(preview.get("rendered_markdown") or ""), encoding="utf-8")
-            kind = "create" if preview.get("record_type") == "audit_verdict_record" else "update"
+            kind = "create" if preview.get("record_type") == RecordType.AUDIT_VERDICT_RECORD else "update"
             performed.append({"path": str(preview.get("path")), "kind": kind, "type": "record_markdown", "record_type": preview.get("record_type")})
         response["dry_run"] = False
         response["data"]["wrote"] = True
@@ -3538,7 +3536,7 @@ def _append_response(
     }
     owner_reasons = ["AIPOS-77 append-only planner loop persistence requires explicit Owner confirmation."]
     response = make_response(
-        ok=verdict != "BLOCK",
+        ok=verdict != Verdict.BLOCK,
         verdict=verdict,
         operation=operation,
         dry_run=True,
@@ -3553,10 +3551,10 @@ def _append_response(
         planned_moves=[],
         warnings=list(result.get("warnings", [])),
         blocking_reasons=list(result.get("blocking_reasons", [])),
-        needs_owner_reasons=owner_reasons if verdict != "BLOCK" else [],
-        owner_confirmation_required=verdict != "BLOCK",
-        owner_confirmation_reasons=owner_reasons if verdict != "BLOCK" else [],
-        execute_allowed=verdict != "BLOCK",
+        needs_owner_reasons=owner_reasons if verdict != Verdict.BLOCK else [],
+        owner_confirmation_required=verdict != Verdict.BLOCK,
+        owner_confirmation_reasons=owner_reasons if verdict != Verdict.BLOCK else [],
+        execute_allowed=verdict != Verdict.BLOCK,
         execute_blocking_reasons=list(result.get("blocking_reasons", [])),
         dry_run_token=None,
         safety_notice=CONTROLLED_EXECUTE_NOTICE,
@@ -3566,7 +3564,7 @@ def _append_response(
         operation=operation,
         actor=actor,
         response=response,
-        execute_allowed=verdict != "BLOCK",
+        execute_allowed=verdict != Verdict.BLOCK,
     )
 
 
@@ -3733,7 +3731,7 @@ def execute_dry_run(
         elif op == "intake_submit":
             payload = source_data.get("original_payload") or {}
             current = submit_external_intake(payload, dry_run=True, repo_root=resolved_root, actor=actor_text)
-        elif op == "owner_decision_record":
+        elif op == RecordType.OWNER_DECISION_RECORD:
             payload = source_data.get("original_payload") or {}
             current = record_owner_decision(payload, dry_run=True, repo_root=resolved_root, actor=actor_text)
         elif op == "owner_verification_record":
@@ -3775,8 +3773,8 @@ def execute_dry_run(
             # AIPOS-315: G2 两阶段动词 - amend revalidation
             # amend 的 data 结构不同,需要从 planned_writes 或其他地方提取
             # 暂时跳过 amend revalidation (只要 withdraw 能工作即可证明 G2 修复)
-            current = {"ok": True, "verdict": "PASS", "data": source_data}
-        elif op == "audit_dispatch":
+            current = {"ok": True, "verdict": Verdict.PASS, "data": source_data}
+        elif op == RecordType.AUDIT_DISPATCH:
             payload = source_data.get("original_payload") or {}
             current = audit_dispatch_task(
                 source_task_id=payload.get("source_task_id"),
@@ -3794,7 +3792,7 @@ def execute_dry_run(
                 dry_run=True,
                 repo_root=resolved_root,
             )
-        elif op == "audit_verdict":
+        elif op == RecordType.AUDIT_VERDICT:
             payload = source_data.get("original_payload") or {}
             current = audit_verdict_task(
                 audit_task_id=payload.get("audit_task_id"),
@@ -4031,7 +4029,7 @@ def execute_dry_run(
                 errors=[],
             )
 
-        if op == "owner_decision_record":
+        if op == RecordType.OWNER_DECISION_RECORD:
             payload = source_data.get("original_payload") or {}
             result = backend_build_owner_decision_record(
                 resolved_root,
@@ -4157,7 +4155,7 @@ def execute_dry_run(
                 scratch_artifact_refs=payload.get("scratch_artifact_refs"),
                 return_body=payload.get("return_body"),
             )
-            verdict = str(result.get("verdict") or "BLOCK")
+            verdict = str(result.get("verdict") or Verdict.BLOCK)
             return make_response(
                 ok=bool(result.get("data", {}).get("wrote", False)) if isinstance(result.get("data"), dict) else False,
                 verdict=verdict,
@@ -4185,7 +4183,7 @@ def execute_dry_run(
                 dry_run=False,
                 repo_root=resolved_root,
             )
-            verdict = str(result.get("verdict") or "BLOCK")
+            verdict = str(result.get("verdict") or Verdict.BLOCK)
             return make_response(
                 ok=bool(result.get("ok", False)),
                 verdict=verdict,
@@ -4214,7 +4212,7 @@ def execute_dry_run(
                 dry_run=False,
                 repo_root=resolved_root,
             )
-            verdict = str(result.get("verdict") or "BLOCK")
+            verdict = str(result.get("verdict") or Verdict.BLOCK)
             return make_response(
                 ok=bool(result.get("ok", False)),
                 verdict=verdict,
@@ -4233,7 +4231,7 @@ def execute_dry_run(
                 errors=list(result.get("errors", [])),
             )
 
-        if op == "audit_dispatch":
+        if op == RecordType.AUDIT_DISPATCH:
             payload = source_data.get("original_payload") or {}
             result = audit_dispatch_task(
                 source_task_id=payload.get("source_task_id"),
@@ -4251,7 +4249,7 @@ def execute_dry_run(
                 dry_run=False,
                 repo_root=resolved_root,
             )
-            verdict = str(result.get("verdict") or "BLOCK")
+            verdict = str(result.get("verdict") or Verdict.BLOCK)
             return make_response(
                 ok=bool(result.get("data", {}).get("wrote", False)) if isinstance(result.get("data"), dict) else False,
                 verdict=verdict,
@@ -4270,7 +4268,7 @@ def execute_dry_run(
                 errors=[],
             )
 
-        if op == "audit_verdict":
+        if op == RecordType.AUDIT_VERDICT:
             payload = source_data.get("original_payload") or {}
             result = audit_verdict_task(
                 audit_task_id=payload.get("audit_task_id"),
@@ -4294,7 +4292,7 @@ def execute_dry_run(
                 dry_run=False,
                 repo_root=resolved_root,
             )
-            verdict = str(result.get("verdict") or "BLOCK")
+            verdict = str(result.get("verdict") or Verdict.BLOCK)
             return make_response(
                 ok=bool(result.get("data", {}).get("wrote", False)) if isinstance(result.get("data"), dict) else False,
                 verdict=verdict,
@@ -4390,7 +4388,7 @@ def execute_dry_run(
                 for reason_text in record_plan.get("record_blocking_reasons", []):
                     if reason_text not in result["blocking_reasons"]:
                         result["blocking_reasons"].append(reason_text)
-                result["verdict"] = "BLOCK"
+                result["verdict"] = Verdict.BLOCK
             else:
                 record_performed_writes = _write_mcp_claim_records(resolved_root, record_plan)
                 result["records_enabled"] = True
@@ -4399,7 +4397,7 @@ def execute_dry_run(
                 _mark_record_write_report_performed(result)
                 result["claim_record_path"] = record_plan["claim_record_path"]
                 result["session_record_path"] = record_plan["session_record_path"]
-        verdict = str(result.get("verdict") or "BLOCK")
+        verdict = str(result.get("verdict") or Verdict.BLOCK)
         planned_record_writes = [
             {"path": item.get("path"), "kind": "create", "type": "record_markdown", "record_type": item.get("record_type")}
             for item in source_data.get("record_writes", [])
@@ -4742,7 +4740,7 @@ def mark_concluded_task(
         if dry_run:
             return make_response(
                 ok=True,
-                verdict="PASS",
+                verdict=Verdict.PASS,
                 operation=operation,
                 dry_run=True,
                 actor=_actor_payload(actor_text),
@@ -4776,7 +4774,7 @@ def mark_concluded_task(
         card_file.unlink()
         return make_response(
             ok=True,
-            verdict="PASS",
+            verdict=Verdict.PASS,
             operation=operation,
             dry_run=False,
             actor=_actor_payload(actor_text),
@@ -4998,10 +4996,10 @@ def close_task(
             combined_warnings = list(mutation_result.get("warnings", []))
             combined_warnings.extend(governance_warnings)
             return make_response(
-                ok=mutation_result.get("verdict") != "BLOCK",
+                ok=mutation_result.get("verdict") != Verdict.BLOCK,
                 operation=operation,
                 dry_run=True,
-                verdict=mutation_result.get("verdict", "PASS"),
+                verdict=mutation_result.get("verdict", Verdict.PASS),
                 data={
                     "task_id": resolved_task_id,
                     "source_path": source_path,
@@ -5022,12 +5020,12 @@ def close_task(
             )
 
         # Confirm: execute the mutation
-        if mutation_result.get("verdict") == "BLOCK":
+        if mutation_result.get("verdict") == Verdict.BLOCK:
             return make_response(
                 ok=False,
                 operation=operation,
                 dry_run=False,
-                verdict="BLOCK",
+                verdict=Verdict.BLOCK,
                 data={"task_id": resolved_task_id, "mutation_result": mutation_result},
                 blocking_reasons=mutation_result.get("blocking_reasons", []),
                 safety_notice="AIPOS-283 queue_close blocked by mutation validation.",
@@ -5091,7 +5089,7 @@ def close_task(
             ok=True,
             operation=operation,
             dry_run=False,
-            verdict=mutation_result.get("verdict", "PASS"),
+            verdict=mutation_result.get("verdict", Verdict.PASS),
             data={
                 "task_id": resolved_task_id,
                 "source_path": source_path,
@@ -5203,11 +5201,11 @@ def withdraw_task(
         )
         
         # Build response
-        verdict = result.get("verdict", "BLOCK")
+        verdict = result.get("verdict", Verdict.BLOCK)
         
         if dry_run:
             response = make_response(
-                ok=verdict != "BLOCK",
+                ok=verdict != Verdict.BLOCK,
                 verdict=verdict,
                 operation=operation,
                 dry_run=True,
@@ -5227,7 +5225,7 @@ def withdraw_task(
             )
             # G2 红线修复: WARN 永不吐 token。非阻塞 WARN 必发 token(对齐 verbs.schema 契约)
             # withdraw 是两阶段动词(phases: ["dry_run", "confirm"]), WARN 下也需 confirm
-            execute_allowed = verdict != "BLOCK"
+            execute_allowed = verdict != Verdict.BLOCK
             return _attach_controlled_execute_metadata(
                 operation=operation,
                 actor=actor_text,
@@ -5236,10 +5234,10 @@ def withdraw_task(
             )
         
         # Confirm path
-        if verdict == "BLOCK":
+        if verdict == Verdict.BLOCK:
             return make_response(
                 ok=False,
-                verdict="BLOCK",
+                verdict=Verdict.BLOCK,
                 operation=operation,
                 dry_run=False,
                 actor=_actor_payload(actor_text),
@@ -5412,7 +5410,7 @@ reason: {str(amendment_reason).strip()}
         if dry_run:
             response = make_response(
                 ok=True,
-                verdict="PASS",
+                verdict=Verdict.PASS,
                 operation=operation,
                 dry_run=True,
                 actor=_actor_payload(actor_text),

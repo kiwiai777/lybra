@@ -169,7 +169,7 @@ def build_orchestration_timeline_preview(repo_root: Path, orchestration_id: str)
     return {
         "action": "orchestration_timeline_preview",
         "orchestration_id": orchestration_id,
-        "verdict": "BLOCK" if blocking_reasons else ("NEEDS_OWNER" if owner_attention_items or conflicts else ("WARN" if warnings else "PASS")),
+        "verdict": Verdict.BLOCK if blocking_reasons else (Verdict.NEEDS_OWNER if owner_attention_items or conflicts else (Verdict.WARN if warnings else Verdict.PASS)),
         "blocking_reasons": blocking_reasons,
         "warnings": warnings,
         "conflicts": conflicts,
@@ -196,4 +196,5 @@ def build_orchestration_timeline_preview(repo_root: Path, orchestration_id: str)
     }
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import Verdict
 check_direct_invocation(__name__)

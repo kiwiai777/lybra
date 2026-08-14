@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from tools.schema_constants import Verdict
+
 
 
 
@@ -36,7 +38,7 @@ ENVELOPE_FIELDS = [
     "errors",
 ]
 
-VALID_VERDICTS = {"PASS", "WARN", "NEEDS_OWNER", "BLOCK"}
+VALID_VERDICTS = {Verdict.PASS, Verdict.WARN, Verdict.NEEDS_OWNER, Verdict.BLOCK}
 
 ERROR_CATEGORIES = {
     "VALIDATION_ERROR",
@@ -83,21 +85,21 @@ def derive_verdict(
     blocking_reasons: list[str] | None = None,
     warnings: list[str] | None = None,
     needs_owner_reasons: list[str] | None = None,
-    fallback: str = "PASS",
+    fallback: str = Verdict.PASS,
 ) -> str:
     if blocking_reasons:
-        return "BLOCK"
+        return Verdict.BLOCK
     if needs_owner_reasons:
-        return "NEEDS_OWNER"
+        return Verdict.NEEDS_OWNER
     if warnings:
-        return "WARN"
-    return fallback if fallback in VALID_VERDICTS else "PASS"
+        return Verdict.WARN
+    return fallback if fallback in VALID_VERDICTS else Verdict.PASS
 
 
 def make_response(
     *,
     ok: bool = True,
-    verdict: str = "PASS",
+    verdict: str = Verdict.PASS,
     operation: str,
     dry_run: bool,
     actor: Any = None,
@@ -125,7 +127,7 @@ def make_response(
 ) -> dict[str, Any]:
     return {
         "ok": ok,
-        "verdict": verdict if verdict in VALID_VERDICTS else "BLOCK",
+        "verdict": verdict if verdict in VALID_VERDICTS else Verdict.BLOCK,
         "operation": operation,
         "dry_run": dry_run,
         "actor": actor,
@@ -175,7 +177,7 @@ def blocked_response(
 ) -> dict[str, Any]:
     return make_response(
         ok=False,
-        verdict="BLOCK",
+        verdict=Verdict.BLOCK,
         operation=operation,
         dry_run=dry_run,
         actor=actor,

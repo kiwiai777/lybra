@@ -219,7 +219,7 @@ def render_publish_record(
     confirmer = confirmer if isinstance(confirmer, dict) else {}
     warnings = warnings if isinstance(warnings, list) else []
     metadata = {
-        "record_type": "publish_record",
+        "record_type": RecordType.PUBLISH_RECORD,
         "task_id": task_id,
         "publish_id": publish_id,
         "actor": actor or "unknown",
@@ -415,18 +415,18 @@ def create_draft(
     }
 
     if dry_run:
-        result["would_write"] = validation["verdict"] != "BLOCK" and bool(target_path)
+        result["would_write"] = validation["verdict"] != Verdict.BLOCK and bool(target_path)
         result["rendered_markdown"] = rendered_markdown
         return result
 
-    if validation["verdict"] == "BLOCK" or not target_path:
+    if validation["verdict"] == Verdict.BLOCK or not target_path:
         result["wrote"] = False
         return result
 
     drafts_root = repo_root / DRAFTS_DIR
     target_file = repo_root / target_path
     if target_file.exists():
-        result["verdict"] = "BLOCK"
+        result["verdict"] = Verdict.BLOCK
         result["wrote"] = False
         result["blocking_reasons"] = [*result["blocking_reasons"], f"Draft file already exists: {target_path}"]
         return result
@@ -529,7 +529,7 @@ def publish_draft(
         "action": "draft_validate",
         "path": str(Path(draft_path)),
         "task_id": None,
-        "verdict": "BLOCK",
+        "verdict": Verdict.BLOCK,
         "blocking_reasons": [],
         "warnings": [],
         "frontmatter": {},
@@ -540,7 +540,7 @@ def publish_draft(
         "source_path": source_rel,
         "target_path": None,
         "task_id": None,
-        "verdict": "BLOCK",
+        "verdict": Verdict.BLOCK,
         "blocking_reasons": [],
         "warnings": [],
         "planned_writes": [],
@@ -604,8 +604,8 @@ def publish_draft(
             {
                 "path": publish_record_rel,
                 "kind": "create",
-                "type": "publish_record",
-                "record_type": "publish_record",
+                "type": RecordType.PUBLISH_RECORD,
+                "record_type": RecordType.PUBLISH_RECORD,
             }
         ]
 
@@ -633,10 +633,10 @@ def publish_draft(
 
     classification_warnings = list(validation.get("classification_warnings", []))
     verdict_warnings = [warning for warning in validation["warnings"] if warning not in classification_warnings]
-    result["verdict"] = "BLOCK" if validation["blocking_reasons"] else ("WARN" if verdict_warnings else "PASS")
+    result["verdict"] = Verdict.BLOCK if validation["blocking_reasons"] else (Verdict.WARN if verdict_warnings else Verdict.PASS)
     result["blocking_reasons"] = list(validation["blocking_reasons"])
     result["classification_warnings"] = classification_warnings
-    result["would_write"] = result["verdict"] != "BLOCK" and bool(result["target_path"])
+    result["would_write"] = result["verdict"] != Verdict.BLOCK and bool(result["target_path"])
     result["validation"] = {
         "action": "draft_validate",
         "path": str(source_path.resolve().relative_to(root)),  # AIPOS-240: symlink-safe
@@ -652,7 +652,7 @@ def publish_draft(
         result["rendered_markdown"] = rendered_markdown
         return result
 
-    if result["verdict"] == "BLOCK" or not result["target_path"]:
+    if result["verdict"] == Verdict.BLOCK or not result["target_path"]:
         result["wrote"] = False
         return result
 
@@ -685,11 +685,12 @@ def publish_draft(
     result["record_writes"] = [
         {
             "path": str(publish_record_path.relative_to(repo_root)),
-            "record_type": "publish_record",
+            "record_type": RecordType.PUBLISH_RECORD,
             "wrote": True,
         }
     ]
     return result
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import RecordType, Verdict
 check_direct_invocation(__name__)

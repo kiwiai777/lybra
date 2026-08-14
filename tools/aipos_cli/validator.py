@@ -18,12 +18,13 @@ from tools.aipos_cli.agent_profiles import (
 from tools.aipos_cli.authority_scanner import build_authority_report
 from tools.aipos_cli.records import check_task_record_refs, find_records_for_task
 from tools.aipos_cli.task_complexity import validate_task_complexity
+from tools.schema_constants import Verdict
 
 VERDICT_PRIORITY = {
-    "PASS": 0,
-    "WARN": 1,
-    "NEEDS_OWNER": 2,
-    "BLOCK": 3,
+    Verdict.PASS: 0,
+    Verdict.WARN: 1,
+    Verdict.NEEDS_OWNER: 2,
+    Verdict.BLOCK: 3,
 }
 
 REQUIRED_FIELDS = [
@@ -85,12 +86,12 @@ def _derive_verdict(
     needs_owner_reasons: list[str],
 ) -> str:
     if blocking_reasons:
-        return "BLOCK"
+        return Verdict.BLOCK
     if needs_owner_reasons:
-        return "NEEDS_OWNER"
+        return Verdict.NEEDS_OWNER
     if warnings:
-        return "WARN"
-    return "PASS"
+        return Verdict.WARN
+    return Verdict.PASS
 
 
 def _normalize_record_ref_check(check: dict[str, Any]) -> dict[str, Any]:
@@ -463,10 +464,10 @@ def validate_task(
 
     verdict = _derive_verdict(blocking_reasons, warnings, needs_owner_reasons)
     recommended_action = {
-        "PASS": "start_session",
-        "WARN": "acknowledge_and_continue",
-        "NEEDS_OWNER": "send_to_needs_owner",
-        "BLOCK": "do_not_execute",
+        Verdict.PASS: "start_session",
+        Verdict.WARN: "acknowledge_and_continue",
+        Verdict.NEEDS_OWNER: "send_to_needs_owner",
+        Verdict.BLOCK: "do_not_execute",
     }[verdict]
     if "Queue directory does not match frontmatter status" in blocking_reasons:
         recommended_action = "repair_status_frontmatter"

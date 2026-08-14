@@ -67,7 +67,7 @@ def count_consecutive_failures(workspace_root: Path, task_id: str) -> dict[str, 
     failure_history = []
     
     for v in verdicts_sorted:
-        if v["verdict"] == "FAIL":
+        if v["verdict"] == Verdict.FAIL:
             consecutive_failures += 1
             failure_history.append(v)
         else:

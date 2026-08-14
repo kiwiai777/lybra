@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
+from tools.schema_constants import RecordType
 
 
 # ---------------------------------------------------------------------------
@@ -56,12 +57,12 @@ def _record_rel_dir(record_kind: str, task_id: str, reviewed_task_id: str | None
     - audit_verdict(审计裁决):落在【被审卡 ID】目录(非审计卡 ID)—— 当日 P0 失效的根因。
     - claim / event:落在【自身 ID】目录。
     """
-    if record_kind == "audit_verdict":
+    if record_kind == RecordType.AUDIT_VERDICT:
         # 裁决归被审卡(原执行卡)的 ID 目录
         return f"{AUDIT_VERDICTS_DIR}/{reviewed_task_id or task_id}"
-    if record_kind == "return":
+    if record_kind == RecordType.RETURN:
         return f"{RETURNS_DIR}/{task_id}"
-    if record_kind == "claim":
+    if record_kind == RecordType.CLAIM:
         return f"{CLAIMS_DIR}/{task_id}"
     if record_kind == "event":
         return f"{EVENTS_DIR}/{task_id}"
@@ -840,7 +841,7 @@ def run_pump_dispatch(
             result["claim"] = verify  # 复用 claim 槽位,下游渲染一致
             if not verify["ok"]:
                 return _fail("claim", verify["reason"])
-    result["step"] = "claim"
+    result["step"] = RecordType.CLAIM
 
     # 步骤5:拉起(launch-check)
     if do_launch:

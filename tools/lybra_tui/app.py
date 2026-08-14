@@ -786,11 +786,11 @@ class LybraTui(App):
                 op = self._pending_confirm["op"]
                 task_id = self._pending_confirm["task_id"]
 
-                if op == "claim":
+                if op == RecordType.CLAIM:
                     question = f"确认把 {task_id} 批给 {actor} (claim) 吗?"
-                elif op == "return":
+                elif op == RecordType.RETURN:
                     question = f"确认接受 {actor} 的 {task_id} return 吗?"
-                elif op == "publish":
+                elif op == RecordType.PUBLISH:
                     question = f"确认发布草稿 {task_id} 到队列吗?"
                 else:
                     question = f"确认执行 {op} {task_id} 吗?"
@@ -1025,11 +1025,11 @@ class LybraTui(App):
             return
 
         # 3. 展示 preview + 自然语言问句
-        if op == "claim":
+        if op == RecordType.CLAIM:
             question = f"确认把 {task_id} 批给 {assigned_to} (claim) 吗?"
-        elif op == "return":
+        elif op == RecordType.RETURN:
             question = f"确认接受 {assigned_to} 的 {task_id} return 吗?"
-        elif op == "publish":
+        elif op == RecordType.PUBLISH:
             question = f"确认发布草稿 {task_id} 到队列吗?"
         else:
             question = f"确认执行 {op} {task_id} 吗?"
@@ -1100,12 +1100,12 @@ class LybraTui(App):
         # successful confirm. `actor` is the canonical claimant recorded by the pending machine
         # and already validated actor==canonical by the gate (R-3: transmit verbatim, never a
         # derived/friendly name — aliases are a separate slice).
-        if op == "claim":
+        if op == RecordType.CLAIM:
             who = actor or "(未归因)"
             self._system(
                 f"→ 已批给 {who}。通知 agent 开工;完成后回 /gates 看 return gate 再 /confirm。"
             )
-        elif op == "return":
+        elif op == RecordType.RETURN:
             self._system(f"→ 任务已 RETURNED。下一步 /audit {task_id} 看判定。")
 
     def _observe_error_face(self, payload: dict[str, Any]) -> str | None:

@@ -25,6 +25,7 @@ from typing import Any
 
 from tools.aipos_cli.bench_evidence import run_ring2_checks, checklist_human_summary
 from tools.aipos_cli.record_writer import render_markdown
+from tools.schema_constants import RecordType, Verdict
 
 
 BENCH_AUDIT_DIR = Path("5_tasks/records/bench_audit")
@@ -94,7 +95,7 @@ def _normalize_evidence_refs(value: Any, blocking_reasons: list[str]) -> list[di
 
 def _metadata(record: dict[str, Any]) -> dict[str, Any]:
     return {
-        "record_type": "bench_audit",
+        "record_type": RecordType.BENCH_AUDIT,
         "task_id": record["task_id"],
         "evidence_type": record.get("evidence_type") or None,
         "conclusion": record["conclusion"],
@@ -248,10 +249,10 @@ def build_bench_audit_record(
             "path": target_path,
             "kind": "create",
             "type": "record_markdown",
-            "record_type": "bench_audit",
+            "record_type": RecordType.BENCH_AUDIT,
         })
 
-    verdict = "BLOCK" if blocking_reasons else ("WARN" if warnings else "PASS")
+    verdict = Verdict.BLOCK if blocking_reasons else (Verdict.WARN if warnings else Verdict.PASS)
 
     result: dict[str, Any] = {
         "action": "bench_audit_record",
@@ -264,7 +265,7 @@ def build_bench_audit_record(
         "blocking_reasons": blocking_reasons,
         "warnings": warnings,
         "planned_writes": planned_writes,
-        "would_write": verdict != "BLOCK" and bool(target_path),
+        "would_write": verdict != Verdict.BLOCK and bool(target_path),
         "rendered_markdown": rendered_markdown,
         "checklist": checklist,
         "ring2_summary": ring2_summary,
@@ -279,7 +280,7 @@ def build_bench_audit_record(
     }
 
     if not dry_run:
-        if verdict == "BLOCK" or target_file is None:
+        if verdict == Verdict.BLOCK or target_file is None:
             result["wrote"] = False
             return result
         target_file.parent.mkdir(parents=True, exist_ok=True)

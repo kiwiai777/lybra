@@ -62,7 +62,7 @@ def _structured_error(
 ) -> dict[str, Any]:
     return {
         "ok": False,
-        "verdict": "BLOCK",
+        "verdict": Verdict.BLOCK,
         "error_code": error_code,
         "message": message,
         "suggested_next_action": suggested_next_action,

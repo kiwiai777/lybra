@@ -6,6 +6,7 @@ from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_loader import _serialize_dates
+from tools.schema_constants import RecordType
 
 
 
@@ -79,12 +80,12 @@ def _build_record(
 
     id_field = {
         "session": "session_id",
-        "claim": "claim_id",
-        "publish": "publish_id",
-        "return": "return_id",
-        "audit_dispatch": "dispatch_id",
-        "audit_verdict": "verdict_id",
-        "closure": "closure_id",
+        RecordType.CLAIM: "claim_id",
+        RecordType.PUBLISH: "publish_id",
+        RecordType.RETURN: "return_id",
+        RecordType.AUDIT_DISPATCH: "dispatch_id",
+        RecordType.AUDIT_VERDICT: "verdict_id",
+        RecordType.CLOSURE: "closure_id",
     }[record_type]
     task_id = metadata.get("task_id") or directory_task_id
     record_id = metadata.get(id_field) or path.stem
@@ -124,7 +125,7 @@ def _build_record(
                 "actor": metadata.get("actor"),
             }
         )
-    elif record_type == "claim":
+    elif record_type == RecordType.CLAIM:
         record.update(
             {
                 "claim_id": record_id,
@@ -134,7 +135,7 @@ def _build_record(
                 "claim_source": metadata.get("claim_source"),
             }
         )
-    elif record_type == "publish":
+    elif record_type == RecordType.PUBLISH:
         record.update(
             {
                 "publish_id": record_id,
@@ -145,7 +146,7 @@ def _build_record(
                 "published_task_ref": metadata.get("published_task_ref"),
             }
         )
-    elif record_type == "return":
+    elif record_type == RecordType.RETURN:
         record.update(
             {
                 "return_id": record_id,
@@ -159,7 +160,7 @@ def _build_record(
                 "actor": metadata.get("actor") or metadata.get("returned_by"),
             }
         )
-    elif record_type == "audit_dispatch":
+    elif record_type == RecordType.AUDIT_DISPATCH:
         record.update(
             {
                 "dispatch_id": record_id,
@@ -172,7 +173,7 @@ def _build_record(
                 "actor": metadata.get("actor"),
             }
         )
-    elif record_type == "closure":
+    elif record_type == RecordType.CLOSURE:
         record.update(
             {
                 "closure_id": record_id,
@@ -230,11 +231,11 @@ def _build_owner_decision_record(path: Path, repo_root: Path) -> dict[str, Any]:
         warnings.append(
             f"owner decision record filename mismatch: filename={path.stem} metadata={metadata.get('decision_id')}"
         )
-    if metadata.get("record_type") not in (None, "owner_decision_record"):
+    if metadata.get("record_type") not in (None, RecordType.OWNER_DECISION_RECORD):
         warnings.append(f"owner decision record_type mismatch: {metadata.get('record_type')}")
 
     return _serialize_dates({
-        "record_type": "owner_decision_record",
+        "record_type": RecordType.OWNER_DECISION_RECORD,
         "record_id": decision_id,
         "decision_id": decision_id,
         "decision_type": metadata.get("decision_type"),
@@ -296,7 +297,7 @@ def _build_owner_verification_record(
         )
 
     record = {
-        "record_type": "owner_verification",
+        "record_type": RecordType.OWNER_VERIFICATION,
         "record_id": path.stem,
         "task_id": task_id,
         "decision": metadata.get("decision"),
@@ -590,10 +591,10 @@ def _check_ref(
 
     index_name = {
         "session": "session_index",
-        "claim": "claim_index",
-        "return": "return_index",
-        "audit_dispatch": "audit_dispatch_index",
-        "audit_verdict": "audit_verdict_index",
+        RecordType.CLAIM: "claim_index",
+        RecordType.RETURN: "return_index",
+        RecordType.AUDIT_DISPATCH: "audit_dispatch_index",
+        RecordType.AUDIT_VERDICT: "audit_verdict_index",
     }[record_type]
     matches = list(records.get(index_name, {}).get(str(record_id), []))
     normalized_matches = [
@@ -670,7 +671,7 @@ def _record_ref_matches_task_context(
 ) -> bool:
     if task_id and record.get("task_id") == task_id:
         return True
-    if record_type not in {"audit_dispatch", "audit_verdict"}:
+    if record_type not in {RecordType.AUDIT_DISPATCH, RecordType.AUDIT_VERDICT}:
         return False
     if not (task_id and reviewed_task_id and audit_task_id):
         return False

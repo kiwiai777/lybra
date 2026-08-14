@@ -292,7 +292,7 @@ def _mutation_metadata(
     session_id_override: str | None = None,
 ) -> dict[str, Any]:
     timestamp = _utc_now()
-    if action == "claim":
+    if action == RecordType.CLAIM:
         return _prepare_claim(
             metadata,
             actor,
@@ -329,7 +329,7 @@ def _base_result(source_path: Path, repo_root: Path, source_task: dict[str, Any]
         "from_state": source_task.get("queue_state"),
         "to_state": to_state,
         "actor": actor,
-        "verdict": "PASS",
+        "verdict": Verdict.PASS,
         "blocking_reasons": [],
         "warnings": [],
         "classification_warnings": [],
@@ -379,7 +379,7 @@ def _prepare_records_plan(
     }
     task_target_path = str(source_task.get("path") or "")
 
-    if action == "claim":
+    if action == RecordType.CLAIM:
         claim_id = str(updated_metadata.get("claim_id") or "")
         session_id = str(updated_metadata.get("active_session_id") or "")
         claim_path, session_path = claim_record_paths(repo_root, task_id, claim_id, session_id)
@@ -412,8 +412,8 @@ def _prepare_records_plan(
             _build_record_plan(Path(result["session_record_path"]), "session_record", would_write=not result["record_blocking_reasons"]),
         ]
         result["record_previews"] = [
-            {"path": result["claim_log_path"], "record_type": "claim_log", "rendered_markdown": claim_markdown},
-            {"path": result["session_record_path"], "record_type": "session_record", "rendered_markdown": session_markdown},
+            {"path": result["claim_log_path"], "record_type": RecordType.CLAIM_LOG, "rendered_markdown": claim_markdown},
+            {"path": result["session_record_path"], "record_type": RecordType.SESSION_RECORD, "rendered_markdown": session_markdown},
         ]
         result["claim_log_markdown"] = claim_markdown
         result["session_record_markdown"] = session_markdown
@@ -474,7 +474,7 @@ def _prepare_records_plan(
         )
     result["record_updates"] = [_build_record_plan(Path(result["session_record_path"]), "session_record", would_update=True)]
     result["record_previews"] = [
-        {"path": result["session_record_path"], "record_type": "session_record", "rendered_markdown": updated_markdown}
+        {"path": result["session_record_path"], "record_type": RecordType.SESSION_RECORD, "rendered_markdown": updated_markdown}
     ]
     result["session_record_markdown"] = updated_markdown
     return result
@@ -518,7 +518,7 @@ def _check_for_pass_audit_verdict(repo_root: Path, task_id: str) -> bool:
     
     # Sort by verdict_at (latest first), then check if latest is PASS/PASS_WITH_NOTES
     latest_verdict = max(verdicts, key=lambda v: v["verdict_at"])
-    return latest_verdict["verdict"] in {"PASS", "PASS_WITH_NOTES"}
+    return latest_verdict["verdict"] in {Verdict.PASS, Verdict.PASS_WITH_NOTES}
 
 
 def mutate_queue_task(
@@ -738,31 +738,31 @@ def mutate_queue_task(
     )
 
     if result["blocking_reasons"]:
-        result["verdict"] = "BLOCK"
+        result["verdict"] = Verdict.BLOCK
     elif needs_owner_reasons:
-        result["verdict"] = "NEEDS_OWNER"
+        result["verdict"] = Verdict.NEEDS_OWNER
     elif [warning for warning in result["warnings"] if warning not in result["classification_warnings"]]:
-        result["verdict"] = "WARN"
+        result["verdict"] = Verdict.WARN
     else:
-        result["verdict"] = "PASS"
+        result["verdict"] = Verdict.PASS
 
-    result["would_write"] = result["verdict"] != "BLOCK"
-    result["would_move"] = result["verdict"] != "BLOCK"
+    result["would_write"] = result["verdict"] != Verdict.BLOCK
+    result["would_move"] = result["verdict"] != Verdict.BLOCK
     if dry_run:
         result["rendered_markdown"] = rendered_markdown
         if with_records and record_plan.get("record_previews"):
             result["record_previews"] = record_plan["record_previews"]
         return result
-    if result["verdict"] == "BLOCK":
+    if result["verdict"] == Verdict.BLOCK:
         return result
 
     if with_records:
         for item in record_plan.get("record_writes", []):
             path = repo_root / str(item["path"])
             path.parent.mkdir(parents=True, exist_ok=True)
-            if item["record_type"] == "claim_log":
+            if item["record_type"] == RecordType.CLAIM_LOG:
                 path.write_text(str(record_plan["claim_log_markdown"]), encoding="utf-8")
-            elif item["record_type"] == "session_record":
+            elif item["record_type"] == RecordType.SESSION_RECORD:
                 path.write_text(str(record_plan["session_record_markdown"]), encoding="utf-8")
             item["wrote"] = True
         for item in record_plan.get("record_updates", []):
@@ -777,7 +777,7 @@ def mutate_queue_task(
     result["moved"] = True
     
     # AIPOS-R5A: claim 时创建 worktree (仅 code 任务)
-    if action == "claim":
+    if action == RecordType.CLAIM:
         task_mode = updated_metadata.get("task_mode", "")
         if task_mode == "code":
             try:
@@ -806,4 +806,5 @@ def mutate_queue_task(
     return result
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
+from tools.schema_constants import RecordType, Verdict
 check_direct_invocation(__name__)

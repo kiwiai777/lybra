@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 import yaml
+from tools.schema_constants import RecordType
 
 
 # role 参数值 → agent_or_role 字段中应包含的子串
@@ -105,7 +106,7 @@ def find_active_policy(
 
             # Must be an autonomy policy record
             record_type = str(meta.get("record_type") or "").strip()
-            if record_type and record_type != "owner_autonomy_policy":
+            if record_type and record_type != RecordType.OWNER_AUTONOMY_POLICY:
                 continue
 
             if not _is_policy_active_and_valid(meta, now):

@@ -8,6 +8,7 @@ from tools.aipos_cli.controlled_execute import get_dry_run, is_expired
 from tools.aipos_cli.authority_scanner import classify_task_authority
 from tools.aipos_cli.records import check_task_record_refs, find_records_for_task
 from tools.aipos_cli.task_loader import load_all_tasks, load_task_by_path
+from tools.schema_constants import Verdict
 
 
 
@@ -173,12 +174,12 @@ def _dry_run_staleness(dry_run_token: str | None, expected_operation: str | None
 
 def _derive_verdict(blocking: list[str], needs_owner: list[str], warnings: list[str]) -> str:
     if blocking:
-        return "BLOCK"
+        return Verdict.BLOCK
     if needs_owner:
-        return "NEEDS_OWNER"
+        return Verdict.NEEDS_OWNER
     if warnings:
-        return "WARN"
-    return "PASS"
+        return Verdict.WARN
+    return Verdict.PASS
 
 
 def build_state_recovery_preview(
@@ -318,7 +319,7 @@ def build_state_recovery_preview(
                     "source_refs": [_source_ref(task.get("path"))],
                 }
             )
-        if metadata.get("dependency_audit_status") != "PASS":
+        if metadata.get("dependency_audit_status") != Verdict.PASS:
             warnings.append("audit_readiness is ready but audit PASS is still pending")
             staleness.append(
                 {
@@ -422,8 +423,8 @@ def build_state_recovery_preview(
 
     verdict = _derive_verdict(blocking, needs_owner, warnings)
     effective_truth = bool(authority.get("effective_truth", True))
-    if not effective_truth and verdict == "PASS":
-        verdict = "WARN"
+    if not effective_truth and verdict == Verdict.PASS:
+        verdict = Verdict.WARN
     return {
         "action": "state_recovery_preview",
         "protocol_ref": "AIPOS-172 State Staleness and Provenance Protocol",
@@ -466,11 +467,11 @@ def build_state_recovery_preview(
 def _recommended_action(verdict: str, completeness: str, metadata: dict[str, Any], effective_truth: bool = True) -> str:
     if not effective_truth:
         return "Treat this file as non-effective truth until Owner reviews authority provenance; do not use it to drive mutation."
-    if verdict == "BLOCK":
+    if verdict == Verdict.BLOCK:
         return "Resolve contradictory durable state before any mutation or recovery action."
-    if verdict == "NEEDS_OWNER":
+    if verdict == Verdict.NEEDS_OWNER:
         return "Route conflicting provenance to Owner review before continuing."
-    if metadata.get("audit_readiness") == "ready" and metadata.get("dependency_audit_status") != "PASS":
+    if metadata.get("audit_readiness") == "ready" and metadata.get("dependency_audit_status") != Verdict.PASS:
         return "Create or run the separately gated independent audit path; do not finalize from audit readiness alone."
     if completeness in {"partial", "missing"}:
         return "Treat missing provenance as a gap; use separate Owner-gated records or recovery writers if durable repair is needed."
