@@ -3174,20 +3174,39 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "queue" and getattr(args, "queue_command", None) == "return":
         # AIPOS-FND-1: queue return — wrap board_adapter.return_task
         from tools.aipos_cli.board_adapter import return_task
+        # AIPOS-R6L 大项B②: CLI actor解析接入统一resolver
+        from tools.aipos_cli.agent_profiles import load_agent_profiles, canonical_agent
+        # AIPOS-R6L 大项C①: CLI自描述报错
+        from tools.aipos_cli.cli_self_describe import wrap_error_with_verb_help
         
         artifact_refs = None
         if args.artifact_refs:
             try:
                 artifact_refs = json.loads(args.artifact_refs)
             except json.JSONDecodeError as exc:
-                print(f"Error: Invalid JSON in --artifact-refs: {exc}", file=sys.stderr)
+                error_msg = f"Error: Invalid JSON in --artifact-refs: {exc}"
+                print(wrap_error_with_verb_help(error_msg, "lybra_queue_return", repo_root), file=sys.stderr)
                 return 1
+        
+        # 解析actor和agent_instance，使用canonical_agent规范化
+        try:
+            profiles = load_agent_profiles(repo_root)
+            # 如果没有提供agent_instance，使用actor作为agent_instance
+            agent_instance = args.agent_instance if hasattr(args, 'agent_instance') and args.agent_instance else args.actor
+            # 规范化为canonical agent instance
+            canonical_instance = canonical_agent(agent_instance, profiles)
+            # actor也规范化
+            canonical_actor = canonical_agent(args.actor, profiles)
+        except Exception as exc:
+            # 如果profiles加载失败，回退到原始值
+            canonical_actor = args.actor
+            canonical_instance = args.agent_instance if hasattr(args, 'agent_instance') and args.agent_instance else args.actor
         
         try:
             result = return_task(
                 task_id=args.task_id,
-                actor=args.actor,
-                agent_instance=args.agent_instance,
+                actor=canonical_actor,
+                agent_instance=canonical_instance,
                 owner_policy_ref=args.owner_policy_ref,
                 result_summary=args.result_summary,
                 artifact_refs=artifact_refs,
@@ -3196,7 +3215,8 @@ def main(argv: list[str] | None = None) -> int:
                 repo_root=repo_root,
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
-            print(f"Error: {exc}", file=sys.stderr)
+            error_msg = f"Error: {exc}"
+            print(wrap_error_with_verb_help(error_msg, "lybra_queue_return", repo_root), file=sys.stderr)
             return 1
         
         if args.json:

@@ -384,6 +384,63 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
     }
 
     if (outcome.kind === "stop") {
+      // AIPOS-R6L 大项A①: held分支先查completed事件，有→走return，没有→才stop
+      // 冷会话可接管：以records为准，不依赖内存currentTaskId
+      // 从outcome.reason提取task_id（格式："已持有 TASK-ID — ..."）
+      const heldMatch = outcome.reason.match(/已持有\s+([A-Z0-9-]+)/);
+      if (heldMatch) {
+        const heldTaskId = heldMatch[1];
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        
+        // 检查是否有 completed 事件
+        const eventsDir = path.join(config.workspaceRoot, "5_tasks/records/events", heldTaskId);
+        let hasCompleted = false;
+        if (fs.existsSync(eventsDir)) {
+          const files = fs.readdirSync(eventsDir);
+          hasCompleted = files.some((f) => f.startsWith("completed_") && f.endsWith(".md"));
+        }
+        
+        if (hasCompleted) {
+          // 有completed事件，走return流程
+          currentLogger.info("held-with-completed", { task_id: heldTaskId });
+          ctx.ui?.notify?.(`检测到 ${heldTaskId} 已completed，执行自动return`, "info");
+          
+          // 设置 currentTaskId 供tryAutoReturn使用
+          currentTaskId = heldTaskId;
+          
+          // 查找 worktree 路径（从任务卡读取）
+          const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${heldTaskId.toLowerCase()}.md`);
+          if (fs.existsSync(taskCardPath)) {
+            try {
+              const cardContent = fs.readFileSync(taskCardPath, "utf-8");
+              const worktreeMatch = cardContent.match(/active_worktree_path:\s*['"]?([^'"\n]+)['"]?/i);
+              if (worktreeMatch) {
+                currentWorktreePath = worktreeMatch[1].trim();
+              }
+            } catch (e) {
+              currentLogger.warn("held-read-card-failed", { task_id: heldTaskId, error: String(e) });
+            }
+          }
+          
+          // 调用 tryAutoReturn
+          const returned = await tryAutoReturn(ctx);
+          if (returned) {
+            // return成功，继续轮询下一张卡
+            if (loopState.released < loopState.maxN) {
+              loopState.running = false; // 确保复位
+              scheduleNextTick(pi, ctx, 1000); // 1秒后再拉
+            }
+            return;
+          } else {
+            // return失败，记录错误但不停循环
+            currentLogger.warn("held-auto-return-failed", { task_id: heldTaskId });
+            ctx.ui?.notify?.(`自动return ${heldTaskId} 失败，请手动处理`, "warn");
+          }
+        }
+      }
+      
+      // 没有completed事件，或return失败，按原逻辑stop
       stopLoop(ctx, outcome.reason, "warn");
       return;
     }
