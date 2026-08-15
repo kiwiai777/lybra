@@ -678,7 +678,7 @@ export default function (pi: ExtensionAPI) {
         
         ctx.ui.notify(
           [
-            `lybra on: 已连 gate · 身份 ${config.role} · 信封 ${config.ownerPolicyRef} · 队列 ${queueCount} 张 · ${nextPollSec}s 后再拉`,
+            `lybra on: 已连 gate · 身份 ${config.agentInstance} · 信封 ${config.ownerPolicyRef} · 队列 ${queueCount} 张 · ${nextPollSec}s 后再拉`,
             `  启动自动领卡循环 (maxN=${maxN}, interval=${config.intervalSec}s, maxWait=${config.maxWaitSec}s)`,
             `  只放行信封内(PreAuthorized)卡; 信封外跳过; BLOCK/失败立停`,
             `  /lybra off 可停; /lybra status 查看状态`,

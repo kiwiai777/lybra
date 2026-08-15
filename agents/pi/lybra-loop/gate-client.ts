@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import { ConnectionResolver } from "./loop-context.ts";
 
 export type AnyDict = Record<string, unknown>;
 
@@ -311,98 +312,59 @@ function envInt(env: NodeJS.ProcessEnv, key: string, fallback: number, min: numb
   return n;
 }
 
-function readTokenFromConnection(path: string, role: string): string {
-  let data: unknown;
-  try {
-    data = JSON.parse(readFileSync(path, "utf-8"));
-  } catch (e) {
-    throw new ConfigError(`读取 connection.json 失败(${path}):${e instanceof Error ? e.message : String(e)}`);
-  }
-  const tokens = (data as { tokens?: unknown })?.tokens;
-  if (!Array.isArray(tokens)) throw new ConfigError(`connection.json(${path}) 无 tokens 数组`);
-  for (const item of tokens) {
-    if (item && typeof item === "object" && (item as { role?: unknown }).role === role) {
-      const t = (item as { token?: unknown }).token;
-      if (typeof t === "string" && t.trim()) return t.trim();
-    }
-  }
-  throw new ConfigError(`connection.json(${path}) 找不到 role=${role} 的 token`);
-}
+
 
 /**
  * 从 env 组装配置。必需项缺失 ⇒ ConfigError(本扩展绝不猜 actor/policy 等)。
  * 
- * AIPOS-R6K件⑤接线债修复:优先级对齐 Python LoopContext.ConnectionResolver:
+ * AIPOS-R6O 真接线:复用 ConnectionResolver,优先级对齐 Python LoopContext:
  *   显式参数(最高) → .lybra自发现 → env覆盖(最低)
  * 
  * env 表见 DESIGN.md §配置。
  */
 export function loadConfig(env: NodeJS.ProcessEnv): LoopConfig {
-  const actor = (env.LYBRA_ACTOR || "").trim();
-  if (!actor) throw new ConfigError("LYBRA_ACTOR 未设置(你的 actor 名,需与卡 assigned_to/agent_instance 对得上)");
-
-  const role = (env.LYBRA_ROLE || "executor").trim();
-  const workspaceRoot = (env.LYBRA_WORKSPACE_ROOT || "").trim();
+  // 1. 解析 workspace_root (需要它才能自发现 .lybra/)
+  const workspaceRoot = ConnectionResolver.resolveWorkspaceRoot({ env });
   if (!workspaceRoot) {
     throw new ConfigError("LYBRA_WORKSPACE_ROOT 未设置(gate workspace 根,卡 path 相对它拼绝对路径)");
   }
 
-  // AIPOS-R6K件⑤: gate_url 优先级 = .lybra自发现 → env覆盖
-  let gateUrl = "";
-  let token = "";
-  
-  // 1. 尝试从 .lybra/connection.json 自发现(最高优先级)
-  const lybraDir = `${workspaceRoot}/.lybra`;
-  const connectionJson = `${lybraDir}/connection.json`;
-  let discoveredFromLybra = false;
-  
-  try {
-    const data = JSON.parse(readFileSync(connectionJson, "utf-8")) as {
-      mcp?: { rpc_url?: string };
-      tokens?: Array<{ role?: string; token?: string }>;
-    };
-    
-    // 自发现 gate_url
-    if (data.mcp?.rpc_url) {
-      gateUrl = data.mcp.rpc_url.replace(/\/mcp$/, ""); // 去掉 /mcp 后缀
-      discoveredFromLybra = true;
-    }
-    
-    // 自发现 token
-    if (data.tokens && Array.isArray(data.tokens)) {
-      for (const item of data.tokens) {
-        if (item && item.role === role && typeof item.token === "string" && item.token.trim()) {
-          token = item.token.trim();
-          break;
-        }
-      }
-    }
-  } catch (e) {
-    // .lybra 不存在或解析失败,降级到 env
-  }
-  
-  // 2. env 作 fallback(最低优先级)
-  if (!gateUrl) {
-    gateUrl = (env.LYBRA_GATE_URL || "http://127.0.0.1:7118").trim();
-  }
-  
-  if (!token) {
-    const envToken = (env.LYBRA_MCP_TOKEN || "").trim();
-    if (envToken) {
-      token = envToken;
-    }
-  }
-  
-  if (!token) {
+  // 2. 解析 role (用于 token 匹配)
+  const role = (env.LYBRA_ROLE || "executor").trim();
+
+  // 3. 解析 actor (显式参数 → .lybra/role → .lybra/actor → env)
+  const actor = ConnectionResolver.resolveActor({ workspaceRoot, env });
+  if (!actor) {
     throw new ConfigError(
-      `无 token:设 LYBRA_MCP_TOKEN,或确保 ${connectionJson} 含 role=${role} 的 token。`,
+      "LYBRA_ACTOR 未设置(你的 actor 名,需与卡 assigned_to/agent_instance 对得上)。" +
+      "设置 LYBRA_ACTOR env,或确保 .lybra/role 文件含 instance 字段。"
     );
   }
 
-  const ownerPolicyRef = (env.LYBRA_OWNER_POLICY_REF || "").trim();
+  const agentInstance = (env.LYBRA_AGENT_INSTANCE || actor).trim();
+
+  // 4. 解析 owner_policy_ref (显式参数 → .lybra/role → .lybra/policy → env)
+  const ownerPolicyRef = ConnectionResolver.resolveOwnerPolicyRef({ workspaceRoot, env });
   if (!ownerPolicyRef) {
     throw new ConfigError(
-      "LYBRA_OWNER_POLICY_REF 未设置(PreAuthorized claim 需指向 Owner 签发的信封 policy id;信封外卡会被跳过)",
+      "LYBRA_OWNER_POLICY_REF 未设置(PreAuthorized claim 需指向 Owner 签发的信封 policy id;信封外卡会被跳过)。" +
+      "设置 LYBRA_OWNER_POLICY_REF env,或确保 .lybra/role 文件含 owner_policy_ref 字段。"
+    );
+  }
+
+  // 5. 解析 gate_url (显式参数 → .lybra/connection.json → env)
+  let gateUrl = ConnectionResolver.resolveGateUrl({ workspaceRoot, env });
+  // ConnectionResolver.resolveGateUrl 返回完整 URL 含 /mcp 后缀,需去掉(GateMcpClient.baseUrl 会自己拼)
+  gateUrl = gateUrl.replace(/\/mcp$/, "");
+
+  // 6. 解析 token (显式参数 → .lybra/connection.json[role/instance匹配] → env)
+  let token: string;
+  try {
+    token = ConnectionResolver.resolveToken({ workspaceRoot, role, agentInstance, env });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new ConfigError(
+      `无 token:${msg}。设 LYBRA_TOKEN env,或确保 .lybra/connection.json 含 role=${role} 的 token。`
     );
   }
 
@@ -411,7 +373,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): LoopConfig {
     token,
     role,
     actor,
-    agentInstance: (env.LYBRA_AGENT_INSTANCE || actor).trim(),
+    agentInstance,
     intervalSec: envInt(env, "LYBRA_LOOP_INTERVAL", 60, 30),
     maxWaitSec: envInt(env, "LYBRA_LOOP_MAX_WAIT", 1800, 1),
     workspaceRoot,
