@@ -269,6 +269,27 @@
         }
       ]
     },
+    "artifact_ref_type": {
+      "description": "Artifact reference types (AIPOS-R6L 大项B①)",
+      "values": [
+        {
+          "value": "file_path",
+          "description": "File path reference - checked for existence and location"
+        },
+        {
+          "value": "commit",
+          "description": "Git commit reference - checked for reachability in repo"
+        },
+        {
+          "value": "record_ref",
+          "description": "Record reference - checked for existence in records/"
+        },
+        {
+          "value": "url",
+          "description": "URL reference - external resource"
+        }
+      ]
+    },
     "autonomy_mode": {
       "description": "Agent autonomy modes",
       "values": [

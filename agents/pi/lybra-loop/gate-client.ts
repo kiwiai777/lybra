@@ -268,6 +268,19 @@ export class GateMcpClient {
     }
     return structured as AnyDict;
   }
+
+  // AIPOS-R6L 大项A②: 添加 queueClose 方法，走 MCP 而非 CLI
+  async queueClose(args: AnyDict): Promise<AnyDict> {
+    const result = await this._rpc("tools/call", { name: "lybra_queue_close", arguments: args });
+    if (!result || typeof result !== "object") {
+      throw new GateError("queue_close returned no result");
+    }
+    const structured = (result as { structuredContent?: unknown }).structuredContent;
+    if (!structured || typeof structured !== "object") {
+      throw new GateError("queue_close returned no structuredContent");
+    }
+    return structured as AnyDict;
+  }
 }
 
 // ---------------------------------------------------------------------------

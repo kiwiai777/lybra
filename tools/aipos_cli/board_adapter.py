@@ -2174,10 +2174,19 @@ def _validate_return_artifact_refs(
     repo_root: Path,
 ) -> list[str]:
     """AIPOS-R6I 靶①: return材料存在性+落点双校验(杀报告漂移家族)。
+    AIPOS-R6L 大项B①: 按artifact_ref类型分派验证(file_path|commit|record_ref|url)。
     
     对 artifact_refs 和 completion_report_ref 逐条检查:
-    1. 存在性: 文件必须存在于 repo_root
-    2. 落点: 必须在治理工作区 task_cards/<task_id>/ 内
+    - file_path: 检查落点在 task_cards/<task_id>/ + 存在性
+    - commit: 检查Git仓库可达性
+    - record_ref: 检查records/<type>/<id>/存在性
+    - url: 跳过验证(外部资源)
+    
+    类型识别:
+    - 以 commit: 或 sha256: 开头 → commit类型
+    - 以 record: 或包含 /records/ → record_ref类型
+    - 以 http:// 或 https:// 开头 → url类型
+    - 其他 → file_path类型(默认)
     
     Args:
         artifact_refs: 声明的 artifact 路径列表
@@ -2188,6 +2197,8 @@ def _validate_return_artifact_refs(
     Returns:
         blocking_reasons 列表, 空列表表示全部通过
     """
+    import subprocess
+    
     blocking_reasons: list[str] = []
     expected_prefix = f"task_cards/{task_id}/"
     
@@ -2201,29 +2212,74 @@ def _validate_return_artifact_refs(
         
         ref_stripped = ref.strip()
         
-        # 检查落点: 必须在 task_cards/<task_id>/ 内
-        if not ref_stripped.startswith(expected_prefix):
-            blocking_reasons.append(
-                f"RETURN_ARTIFACT_WRONG_LOCATION: 报告材料 '{ref_stripped}' 不在正确落点。"
-                f"必须在 {expected_prefix} 内 (治理工作区 task_cards/<task_id>/)。"
-                f"示例正确路径: {expected_prefix}RETURN.md, {expected_prefix}artifacts/output.txt"
-            )
-            continue
+        # AIPOS-R6L 大项B①: 类型识别与分派验证
+        if ref_stripped.startswith(("commit:", "sha256:")):
+            # commit类型: 检查Git仓库可达性
+            commit_hash = ref_stripped.split(":", 1)[1].strip() if ":" in ref_stripped else ref_stripped
+            try:
+                # 检查commit是否在产品仓中可达
+                result = subprocess.run(
+                    ["git", "cat-file", "-e", commit_hash],
+                    cwd=repo_root,
+                    capture_output=True,
+                    timeout=5,
+                )
+                if result.returncode != 0:
+                    blocking_reasons.append(
+                        f"RETURN_ARTIFACT_COMMIT_NOT_FOUND: commit引用 '{ref_stripped}' 在仓库中不可达。"
+                    )
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                blocking_reasons.append(
+                    f"RETURN_ARTIFACT_COMMIT_CHECK_FAILED: 无法验证commit '{ref_stripped}': {e}"
+                )
         
-        # 检查存在性: 文件必须存在
-        ref_path = repo_root / ref_stripped
-        if not ref_path.exists():
-            blocking_reasons.append(
-                f"RETURN_ARTIFACT_NOT_FOUND: 报告材料 '{ref_stripped}' 不存在于仓库。"
-                f"路径必须存在: {ref_path}。如文件在产品仓,需先复制到治理工作区 {expected_prefix}"
-            )
-            continue
+        elif ref_stripped.startswith("record:") or "/records/" in ref_stripped:
+            # record_ref类型: 检查records目录存在性
+            if ref_stripped.startswith("record:"):
+                record_path = ref_stripped.split(":", 1)[1].strip()
+            else:
+                record_path = ref_stripped
+            
+            # 规范化路径: 如果以 5_tasks/records/ 开头，保留；否则假设相对路径
+            if not record_path.startswith("5_tasks/records/"):
+                record_path = f"5_tasks/records/{record_path}"
+            
+            ref_full_path = repo_root / record_path
+            if not ref_full_path.exists():
+                blocking_reasons.append(
+                    f"RETURN_ARTIFACT_RECORD_NOT_FOUND: record引用 '{ref_stripped}' 不存在。"
+                    f"路径: {ref_full_path}"
+                )
         
-        # 检查不是目录
-        if ref_path.is_dir():
-            blocking_reasons.append(
-                f"RETURN_ARTIFACT_IS_DIRECTORY: 报告材料 '{ref_stripped}' 是目录,必须是文件。"
-            )
+        elif ref_stripped.startswith(("http://", "https://")):
+            # url类型: 跳过验证(外部资源)
+            pass
+        
+        else:
+            # file_path类型(默认): 检查落点+存在性
+            # 检查落点: 必须在 task_cards/<task_id>/ 内
+            if not ref_stripped.startswith(expected_prefix):
+                blocking_reasons.append(
+                    f"RETURN_ARTIFACT_WRONG_LOCATION: 报告材料 '{ref_stripped}' 不在正确落点。"
+                    f"必须在 {expected_prefix} 内 (治理工作区 task_cards/<task_id>/)。"
+                    f"示例正确路径: {expected_prefix}RETURN.md, {expected_prefix}artifacts/output.txt"
+                )
+                continue
+            
+            # 检查存在性: 文件必须存在
+            ref_path = repo_root / ref_stripped
+            if not ref_path.exists():
+                blocking_reasons.append(
+                    f"RETURN_ARTIFACT_NOT_FOUND: 报告材料 '{ref_stripped}' 不存在于仓库。"
+                    f"路径必须存在: {ref_path}。如文件在产品仓,需先复制到治理工作区 {expected_prefix}"
+                )
+                continue
+            
+            # 检查不是目录
+            if ref_path.is_dir():
+                blocking_reasons.append(
+                    f"RETURN_ARTIFACT_IS_DIRECTORY: 报告材料 '{ref_stripped}' 是目录,必须是文件。"
+                )
     
     return blocking_reasons
 

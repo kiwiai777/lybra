@@ -129,8 +129,9 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
     try {
       const { execSync } = await import("node:child_process");
       
-      // 调用 lybra finalize --push --deploy
-      const finalizeCmd = `lybra finalize --task-id ${taskId} --actor ${config.actor} --push --deploy`;
+      // AIPOS-R6L 大项A②: 部署bin绝对路径（禁裸命令赌PATH）
+      const lybraBin = path.join(config.workspaceRoot, "../../../lybra/bin/lybra");
+      const finalizeCmd = `${lybraBin} finalize --task-id ${taskId} --actor ${config.actor} --push --deploy`;
       const finalizeOutput = execSync(finalizeCmd, {
         cwd: config.workspaceRoot,
         encoding: "utf-8",
@@ -142,27 +143,29 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
         output: finalizeOutput.slice(0, 500),
       });
       
-      // 调用 lybra queue close
-      const closeCmd = `lybra queue close --task-id ${taskId} --actor ${config.actor} --closure-evidence "Auto-finalized after ${verdict}"`;
-      const closeOutput = execSync(closeCmd, {
-        cwd: config.workspaceRoot,
-        encoding: "utf-8",
-        stdio: "pipe",
+      // AIPOS-R6L 大项A②: close走MCP queue_close（CLI无此子命令）
+      const closeResp = await currentClient.queueClose({
+        task_id: taskId,
+        actor: config.actor,
+        closure_evidence: `Auto-finalized after ${verdict}`,
       });
       
       currentLogger.info("auto-close-success", {
         task_id: taskId,
-        output: closeOutput.slice(0, 500),
+        close_response: closeResp,
       });
       
       ctx.ui?.notify?.(`自动 finalize+close 任务 ${taskId} (${verdict})`, "info");
       
       return true;
     } catch (e) {
+      const errMsg = `自动finalize失败: ${taskId} - ${e instanceof Error ? e.message : String(e)}`;
       currentLogger.error("auto-finalize-failed", {
         task_id: taskId,
         error: e instanceof Error ? e.message : String(e),
       });
+      // AIPOS-R6L 大项A②: 失败必出声（ctx.ui.notify，禁只进日志）
+      ctx.ui?.notify?.(errMsg, "error");
       // 失败不停循环，继续处理其他任务
     }
   }
@@ -392,7 +395,15 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
       return;
     }
     const remain = config.maxWaitSec * 1000 - elapsed;
-    const nextMs = Math.min(config.pollIntervalSec * 1000, remain);
+    const nextMs = Math.min(config.intervalSec * 1000, remain);
+    // AIPOS-R6L 大项A③: 非有限值兜底 - 防配置错误导致 NaN 空转
+    if (!Number.isFinite(nextMs) || nextMs <= 0) {
+      const msg = `轮询间隔非法(nextMs=${nextMs}, intervalSec=${config.intervalSec}) - 停止循环`;
+      currentLogger.error("invalid-poll-interval", { nextMs, intervalSec: config.intervalSec, remain });
+      ctx.ui?.notify?.(msg, "error");
+      stopLoop(ctx, msg, "error");
+      return;
+    }
     currentLogger.info("wait-poll", { reason: outcome.reason, nextMs });
     // AIPOS-R6I 靶③: 轮询结果可见 - 打印等待原因
     ctx.ui?.notify?.(`轮询: ${outcome.reason}，${Math.round(nextMs / 1000)}s 后再拉`, "info");
