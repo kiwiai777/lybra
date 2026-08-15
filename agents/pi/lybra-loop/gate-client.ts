@@ -270,15 +270,28 @@ export class GateMcpClient {
     return structured as AnyDict;
   }
 
-  // AIPOS-R6L 大项A②: 添加 queueClose 方法，走 MCP 而非 CLI
-  async queueClose(args: AnyDict): Promise<AnyDict> {
-    const result = await this._rpc("tools/call", { name: "lybra_queue_close", arguments: args });
+  /** AIPOS-R6P 靶①: queue_close dry-run。返回 structuredContent。 */
+  async queueCloseDryRun(args: AnyDict): Promise<AnyDict> {
+    const result = await this._rpc("tools/call", { name: "lybra_queue_close_dry_run", arguments: args });
     if (!result || typeof result !== "object") {
-      throw new GateError("queue_close returned no result");
+      throw new GateError("queue_close_dry_run returned no result");
     }
     const structured = (result as { structuredContent?: unknown }).structuredContent;
     if (!structured || typeof structured !== "object") {
-      throw new GateError("queue_close returned no structuredContent");
+      throw new GateError("queue_close_dry_run returned no structuredContent");
+    }
+    return structured as AnyDict;
+  }
+
+  /** AIPOS-R6P 靶①: queue_close confirm。返回 structuredContent。 */
+  async queueCloseConfirm(args: AnyDict): Promise<AnyDict> {
+    const result = await this._rpc("tools/call", { name: "lybra_queue_close_confirm", arguments: args });
+    if (!result || typeof result !== "object") {
+      throw new GateError("queue_close_confirm returned no result");
+    }
+    const structured = (result as { structuredContent?: unknown }).structuredContent;
+    if (!structured || typeof structured !== "object") {
+      throw new GateError("queue_close_confirm returned no structuredContent");
     }
     return structured as AnyDict;
   }
@@ -324,7 +337,8 @@ function envInt(env: NodeJS.ProcessEnv, key: string, fallback: number, min: numb
  */
 export function loadConfig(env: NodeJS.ProcessEnv): LoopConfig {
   // 1. 解析 workspace_root (需要它才能自发现 .lybra/)
-  const workspaceRoot = ConnectionResolver.resolveWorkspaceRoot({ env });
+  // AIPOS-R6P 靶③: loadConfig 用于 gate/loop,需要治理工作区语义
+  const workspaceRoot = ConnectionResolver.resolveGateWorkspace({ env });
   if (!workspaceRoot) {
     throw new ConfigError("LYBRA_WORKSPACE_ROOT 未设置(gate workspace 根,卡 path 相对它拼绝对路径)");
   }

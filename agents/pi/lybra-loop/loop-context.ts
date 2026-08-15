@@ -310,11 +310,12 @@ export class ConnectionResolver {
   }
 
   /**
-   * 解析 workspace_root
+   * 解析 gate workspace (治理工作区语义)
+   * 用途: loop/gate/queue/records 操作 — 队列、任务卡、records 都在治理工作区
    * Precedence: 显式参数 → .lybra/connection.json → env仅覆盖
-   * AIPOS-R6H: 拒绝治理仓当工位 (workspace_root 必须是产品仓或agent工位)
+   * AIPOS-R6P 靶③: **允许治理仓** (ai-project-os),不做路径校验
    */
-  static resolveWorkspaceRoot(opts: {
+  static resolveGateWorkspace(opts: {
     env?: Record<string, string | undefined>;
     explicitRoot?: string;
   }): string | null {
@@ -331,11 +332,47 @@ export class ConnectionResolver {
     // env 覆盖
     const envRoot = env.LYBRA_WORKSPACE_ROOT?.trim();
     if (envRoot) {
+      return envRoot;
+    }
+
+    return null;
+  }
+
+  /**
+   * 解析 code repo (产品仓语义)
+   * 用途: finalize/worktree/git 操作 — 需要产品仓路径,不能是治理仓
+   * Precedence: 显式参数 → .lybra/connection.json → env仅覆盖
+   * AIPOS-R6H + R6P 靶③: **拒绝治理仓** (ai-project-os)
+   */
+  static resolveCodeRepo(opts: {
+    env?: Record<string, string | undefined>;
+    explicitRoot?: string;
+  }): string | null {
+    const env = opts.env ?? process.env;
+
+    // 显式参数
+    if (opts.explicitRoot) {
+      // 校验不是治理仓
+      if (opts.explicitRoot.includes("ai-project-os")) {
+        throw new Error(
+          `code repo cannot be governance repo (ai-project-os): ${opts.explicitRoot}. ` +
+          "Use product repo path for finalize/worktree operations."
+        );
+      }
+      return opts.explicitRoot;
+    }
+
+    // TODO: 如果当前目录下有 .lybra/connection.json 且含 workspace_root,用它
+    // 当前简化实现:仅从env读取
+
+    // env 覆盖
+    const envRoot = env.LYBRA_WORKSPACE_ROOT?.trim();
+    if (envRoot) {
       // AIPOS-R6H: 校验不是治理仓 (治理仓路径通常含 ai-project-os)
       if (envRoot.includes("ai-project-os")) {
         throw new Error(
-          `workspace_root cannot be governance repo (ai-project-os): ${envRoot}. ` +
-          "Use product repo or agent workstation path."
+          `code repo cannot be governance repo (ai-project-os): ${envRoot}. ` +
+          "Use product repo path for finalize/worktree operations."
         );
       }
       return envRoot;
