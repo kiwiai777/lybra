@@ -3174,9 +3174,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "queue" and getattr(args, "queue_command", None) == "return":
         # AIPOS-FND-1: queue return — wrap board_adapter.return_task
         from tools.aipos_cli.board_adapter import return_task
-        # AIPOS-R6L 大项B②: CLI actor解析接入统一resolver
         from tools.aipos_cli.agent_profiles import load_agent_profiles, canonical_agent
-        # AIPOS-R6L 大项C①: CLI自描述报错
         from tools.aipos_cli.cli_self_describe import wrap_error_with_verb_help
         
         artifact_refs = None
