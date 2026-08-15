@@ -318,6 +318,10 @@ function readTokenFromConnection(path: string, role: string): string {
 
 /**
  * 从 env 组装配置。必需项缺失 ⇒ ConfigError(本扩展绝不猜 actor/policy 等)。
+ * 
+ * AIPOS-R6K件⑤接线债修复:优先级对齐 Python LoopContext.ConnectionResolver:
+ *   显式参数(最高) → .lybra自发现 → env覆盖(最低)
+ * 
  * env 表见 DESIGN.md §配置。
  */
 export function loadConfig(env: NodeJS.ProcessEnv): LoopConfig {
@@ -325,21 +329,61 @@ export function loadConfig(env: NodeJS.ProcessEnv): LoopConfig {
   if (!actor) throw new ConfigError("LYBRA_ACTOR 未设置(你的 actor 名,需与卡 assigned_to/agent_instance 对得上)");
 
   const role = (env.LYBRA_ROLE || "executor").trim();
-  const connectionJson = (env.LYBRA_CONNECTION_JSON || `${process.env.HOME || ""}/.lybra/local/connection.json`).trim();
+  const workspaceRoot = (env.LYBRA_WORKSPACE_ROOT || "").trim();
+  if (!workspaceRoot) {
+    throw new ConfigError("LYBRA_WORKSPACE_ROOT 未设置(gate workspace 根,卡 path 相对它拼绝对路径)");
+  }
 
-  // token:env 直给优先;否则 connection.json 按 role 读(SKILL.md:LYBRA_MCP_TOKEN)
+  // AIPOS-R6K件⑤: gate_url 优先级 = .lybra自发现 → env覆盖
+  let gateUrl = "";
   let token = "";
-  const envToken = (env.LYBRA_MCP_TOKEN || "").trim();
-  if (envToken) {
-    token = envToken;
-  } else {
-    try {
-      token = readTokenFromConnection(connectionJson, role);
-    } catch (e) {
-      throw new ConfigError(
-        `无 token:设 LYBRA_MCP_TOKEN,或确保 connection.json(${connectionJson})含 role=${role} 的 token。${e instanceof Error ? e.message : ""}`,
-      );
+  
+  // 1. 尝试从 .lybra/connection.json 自发现(最高优先级)
+  const lybraDir = `${workspaceRoot}/.lybra`;
+  const connectionJson = `${lybraDir}/connection.json`;
+  let discoveredFromLybra = false;
+  
+  try {
+    const data = JSON.parse(readFileSync(connectionJson, "utf-8")) as {
+      mcp?: { rpc_url?: string };
+      tokens?: Array<{ role?: string; token?: string }>;
+    };
+    
+    // 自发现 gate_url
+    if (data.mcp?.rpc_url) {
+      gateUrl = data.mcp.rpc_url.replace(/\/mcp$/, ""); // 去掉 /mcp 后缀
+      discoveredFromLybra = true;
     }
+    
+    // 自发现 token
+    if (data.tokens && Array.isArray(data.tokens)) {
+      for (const item of data.tokens) {
+        if (item && item.role === role && typeof item.token === "string" && item.token.trim()) {
+          token = item.token.trim();
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    // .lybra 不存在或解析失败,降级到 env
+  }
+  
+  // 2. env 作 fallback(最低优先级)
+  if (!gateUrl) {
+    gateUrl = (env.LYBRA_GATE_URL || "http://127.0.0.1:7118").trim();
+  }
+  
+  if (!token) {
+    const envToken = (env.LYBRA_MCP_TOKEN || "").trim();
+    if (envToken) {
+      token = envToken;
+    }
+  }
+  
+  if (!token) {
+    throw new ConfigError(
+      `无 token:设 LYBRA_MCP_TOKEN,或确保 ${connectionJson} 含 role=${role} 的 token。`,
+    );
   }
 
   const ownerPolicyRef = (env.LYBRA_OWNER_POLICY_REF || "").trim();
@@ -349,13 +393,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): LoopConfig {
     );
   }
 
-  const workspaceRoot = (env.LYBRA_WORKSPACE_ROOT || "").trim();
-  if (!workspaceRoot) {
-    throw new ConfigError("LYBRA_WORKSPACE_ROOT 未设置(gate workspace 根,卡 path 相对它拼绝对路径)");
-  }
-
   return {
-    gateUrl: (env.LYBRA_GATE_URL || "http://127.0.0.1:7118").trim(),
+    gateUrl,
     token,
     role,
     actor,
