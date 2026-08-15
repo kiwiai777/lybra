@@ -1,0 +1,34 @@
+{
+  "config_version": 1,
+  "mcp": {
+    "rpc_url": "http://127.0.0.1:7118/mcp"
+  },
+  "tokens": [
+    {
+      "agent_instance": "exec.lybra.kiwiai-dev",
+      "fingerprint": "sha256:80669da3e1e5",
+      "role": "executor",
+      "scopes": [
+        "queue_claim",
+        "queue_return",
+        "queue_close",
+        "task_progress",
+        "bench_audit_submit"
+      ],
+      "token": "AWL5-FdKTmC6uVpQlpjFU6UlndpT_sM595TE8tB8RD0",
+      "token_ref": "svc-executor"
+    },
+    {
+      "agent_instance": "audit.lybra.kiwiai-dev",
+      "fingerprint": "sha256:a378a83ce0e7",
+      "role": "auditor",
+      "scopes": [
+        "queue_claim",
+        "audit_verdict",
+        "task_progress"
+      ],
+      "token": "dG8Z-R67pnDyCqBK6AUaeVb2Ze8P9Z-kyDd4LLAwyyk",
+      "token_ref": "svc-auditor"
+    }
+  ]
+}
