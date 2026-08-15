@@ -111,6 +111,14 @@ def _generate_example(verb_name: str, params: dict[str, Any]) -> str:
 
 
 def wrap_error_with_verb_help(error_msg: str, verb_name: str, repo_root: Path | None = None) -> str:
-    """包装错误信息，附加动词帮助。"""
-    help_text = generate_verb_help(verb_name, repo_root)
+    """包装错误信息，附加动词帮助。
+    
+    如果动词在schema中未定义，提供通用错误指引而不是失败。
+    """
+    try:
+        help_text = generate_verb_help(verb_name, repo_root)
+    except Exception:
+        # 动词未在schema中定义，提供通用帮助
+        help_text = f"\n动词 {verb_name} 的详细帮助信息不可用。\n请检查参数是否完整，或参考文档。"
+    
     return f"{error_msg}\n{help_text}"

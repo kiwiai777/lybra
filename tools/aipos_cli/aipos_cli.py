@@ -2690,6 +2690,7 @@ def main(argv: list[str] | None = None) -> int:
         # --workspace-root仅作override,废除cwd猜测(08-12实撞:误传治理仓致越权提交)
         from tools.aipos_cli.finalize import finalize_task
         from tools.aipos_cli.workspace_config import resolve_workspace_root
+        from tools.aipos_cli.cli_self_describe import wrap_error_with_verb_help
         
         # finalize doesn't require full 5_tasks/queue structure, only task_cards/ and git
         if args.workspace_root:
@@ -2704,8 +2705,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 repo_root = resolve_workspace_root()
             except Exception as e:
-                print(f"Error: Cannot auto-discover workspace root: {e}", file=sys.stderr)
-                print("Provide --workspace-root explicitly or run from within a Lybra workspace.", file=sys.stderr)
+                error_msg = f"Error: Cannot auto-discover workspace root: {e}"
+                print(wrap_error_with_verb_help(error_msg, "lybra_finalize", None), file=sys.stderr)
                 return 1
 
         # AIPOS-FND-14: governance_root (owns 5_tasks/records/audit_verdicts/) is resolved
@@ -2716,15 +2717,20 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.governance_root).expanduser().resolve() if getattr(args, "governance_root", None) else None
         )
 
-        result = finalize_task(
-            task_id=args.task_id,
-            actor=args.actor,
-            workspace_root=repo_root,
-            governance_root=governance_root,
-            dry_run=args.dry_run,
-            push=args.push,
-            deploy=getattr(args, 'deploy', False),
-        )
+        try:
+            result = finalize_task(
+                task_id=args.task_id,
+                actor=args.actor,
+                workspace_root=repo_root,
+                governance_root=governance_root,
+                dry_run=args.dry_run,
+                push=args.push,
+                deploy=getattr(args, 'deploy', False),
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            error_msg = f"Error: {exc}"
+            print(wrap_error_with_verb_help(error_msg, "lybra_finalize", None), file=sys.stderr)
+            return 1
         
         if args.json:
             print(render_json(result))
@@ -3919,21 +3925,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "mark-concluded":
         # Wrap mark_concluded_task from board_adapter
         from tools.aipos_cli.board_adapter import mark_concluded_task
+        from tools.aipos_cli.cli_self_describe import wrap_error_with_verb_help
         
         try:
             repo_root = _find_repo_root_for_args(args)
         except FileNotFoundError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
+            error_msg = f"Error: {exc}"
+            print(wrap_error_with_verb_help(error_msg, "lybra_mark_concluded", None), file=sys.stderr)
             return 1
         
-        result = mark_concluded_task(
-            task_id=args.task_id,
-            repo_root=repo_root,
-            actor=args.actor,
-            report_path=args.report_path,
-            conclusion_note=args.conclusion_note,
-            dry_run=args.dry_run,
-        )
+        try:
+            result = mark_concluded_task(
+                task_id=args.task_id,
+                repo_root=repo_root,
+                actor=args.actor,
+                report_path=args.report_path,
+                conclusion_note=args.conclusion_note,
+                dry_run=args.dry_run,
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            error_msg = f"Error: {exc}"
+            print(wrap_error_with_verb_help(error_msg, "lybra_mark_concluded", None), file=sys.stderr)
+            return 1
         if args.json:
             print(render_json(result))
         else:
