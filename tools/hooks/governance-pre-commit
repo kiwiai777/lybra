@@ -1,22 +1,42 @@
 #!/usr/bin/env bash
-# AIPOS-R6A 靶子⑨: 治理仓 pre-commit 钩子
-# 防止代码文件进入治理仓 commit
+# AIPOS-R6M 大项B: 治理仓 pre-commit 钩子扩展
+# ①防止代码文件进入治理仓 commit (R6A 靶子⑨)
+# ②治理决策类.md无状态头→拒并给模板
+# ③decision_log/内文件只许新增禁修改(append-only)
+# ④5_tasks/records/**新增文件必须携机器出生标记
 
 set -e
 
-# 代码文件扩展名黑名单
+# 代码文件扩展名黑名单 (大项B①)
 CODE_EXTENSIONS=(
     "py" "js" "ts" "tsx" "jsx"
     "java" "go" "rs" "c" "cpp"
     "sh" "bash" "rb" "php" "swift"
 )
 
-# 检查 staged 文件
-echo "🔍 AIPOS-R6A: Checking for code files in governance repo..."
+# 治理决策类文档路径模式 (大项B②)
+GOVERNANCE_DOCS_PATTERN="^governance/.*\.md$"
+
+# decision_log 路径模式 (大项B③)
+DECISION_LOG_PATTERN="^governance/decision_log/"
+
+# records 路径模式 (大项B④)
+RECORDS_PATTERN="^.*5_tasks/records/"
+
+echo "🔍 AIPOS-R6M: Checking governance repo commit..."
 
 blocked_files=()
+blocked_reasons=()
 
 # 获取所有 staged 文件
+staged_files=$(git diff --cached --name-only --diff-filter=ACM)
+
+if [ -z "$staged_files" ]; then
+    echo "✅ No files to check."
+    exit 0
+fi
+
+# 大项B①: 检查代码文件
 while IFS= read -r file; do
     # 跳过删除的文件
     if [ ! -f "$file" ]; then
@@ -28,31 +48,84 @@ while IFS= read -r file; do
     for ext in "${CODE_EXTENSIONS[@]}"; do
         if [ "$extension" = "$ext" ]; then
             blocked_files+=("$file")
+            blocked_reasons+=("Code file blocked (B①)")
             break
         fi
     done
-done < <(git diff --cached --name-only --diff-filter=ACM)
+done <<< "$staged_files"
 
-# 如果发现代码文件，拒绝 commit
+# 大项B②: 检查治理决策类文档状态头
+while IFS= read -r file; do
+    if [ ! -f "$file" ]; then
+        continue
+    fi
+    
+    if [[ "$file" =~ $GOVERNANCE_DOCS_PATTERN ]]; then
+        # 检查文件是否有frontmatter状态头
+        if ! grep -q "^---$" "$file" 2>/dev/null; then
+            blocked_files+=("$file")
+            blocked_reasons+=("Missing frontmatter status header (B②)")
+            continue
+        fi
+        
+        # 提取frontmatter并检查status字段
+        frontmatter=$(awk '/^---$/{if(++count==2) exit} count==1' "$file")
+        if ! echo "$frontmatter" | grep -q "^status:"; then
+            blocked_files+=("$file")
+            blocked_reasons+=("Missing 'status' field in frontmatter (B②)")
+        fi
+    fi
+done <<< "$staged_files"
+
+# 大项B③: decision_log/ append-only执法
+modified_decision_log_files=$(git diff --cached --name-only --diff-filter=M | grep "$DECISION_LOG_PATTERN" || true)
+if [ -n "$modified_decision_log_files" ]; then
+    while IFS= read -r file; do
+        blocked_files+=("$file")
+        blocked_reasons+=("decision_log/ is append-only, modifications forbidden (B③)")
+    done <<< "$modified_decision_log_files"
+fi
+
+# 大项B④: records/**新增文件必须携机器出生标记
+new_record_files=$(git diff --cached --name-only --diff-filter=A | grep "$RECORDS_PATTERN" || true)
+if [ -n "$new_record_files" ]; then
+    while IFS= read -r file; do
+        if [ ! -f "$file" ]; then
+            continue
+        fi
+        
+        # 检查是否有机器出生标记 (record_type字段)
+        if ! grep -q "^record_type:" "$file" 2>/dev/null; then
+            blocked_files+=("$file")
+            blocked_reasons+=("New record lacks machine-generated marker 'record_type' (B④)")
+        fi
+    done <<< "$new_record_files"
+fi
+
+# 如果发现违规文件，拒绝 commit
 if [ ${#blocked_files[@]} -gt 0 ]; then
     echo ""
-    echo "❌ BLOCKED: Code files detected in governance repo commit"
+    echo "❌ BLOCKED: Governance repo commit violates AIPOS-R6M file-level guardrails"
     echo ""
-    echo "治理仓从此无代码可改 (AIPOS-R6A 靶子⑨)。"
-    echo "Governance repo should only contain:"
-    echo "  - Documentation (*.md)"
-    echo "  - Configuration files (*.json, *.yaml)"
-    echo "  - Task cards and records"
-    echo ""
-    echo "Blocked files:"
-    for file in "${blocked_files[@]}"; do
-        echo "  - $file"
+    echo "Violations:"
+    for i in "${!blocked_files[@]}"; do
+        echo "  - ${blocked_files[$i]}: ${blocked_reasons[$i]}"
     done
     echo ""
-    echo "Solution: Move code to product repo (~/projects/lybra)"
+    echo "Governance file-level guardrails (AIPOS-R6M 大项B):"
+    echo "  ① Code files forbidden in governance repo"
+    echo "  ② Governance docs (governance/*.md) require frontmatter with 'status' field"
+    echo "     Template:"
+    echo "     ---"
+    echo "     status: active"
+    echo "     decided_at: <ISO8601>"
+    echo "     superseded_by: <ref or null>"
+    echo "     ---"
+    echo "  ③ decision_log/ is append-only (modifications forbidden)"
+    echo "  ④ New records (5_tasks/records/**) require machine-generated marker"
     echo ""
     exit 1
 fi
 
-echo "✅ No code files detected. Commit allowed."
+echo "✅ All governance guardrails passed. Commit allowed."
 exit 0

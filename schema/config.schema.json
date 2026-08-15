@@ -182,6 +182,48 @@
         "relative_to": "governance_root",
         "path": "stage_archive/",
         "description": "Stage completion archive directory"
+      },
+      "decision_log_dir": {
+        "relative_to": "governance_root",
+        "path": "governance/decision_log/",
+        "description": "Decision log directory (AIPOS-R6M 大项A②: decision粒度机器触发)",
+        "structure": "YYYY-MM/YYYY-MM-DD-<slug>.md",
+        "semantics": "决策粒度·事件驱动·当天落 - 只记改变未来行为规则的单点决定"
+      },
+      "stage_archives_dir": {
+        "relative_to": "governance_root",
+        "path": "governance/stage_archives/",
+        "description": "Stage archives directory (AIPOS-R6M 大项A③: stage粒度门票机制)",
+        "structure": "<NN>-<stage>.md",
+        "semantics": "阶段粒度·低频·阶段关账才写 - 三个月后的人只读这一篇+其后decision_log即可上手"
+      },
+      "foundation_backlog": {
+        "relative_to": "governance_root",
+        "path": "governance/FOUNDATION-BACKLOG.md",
+        "description": "Foundation backlog (AIPOS-R6M 大项A①: card粒度编年史)",
+        "semantics": "卡粒度编年史 - close时校验本卡条目存在(或excuse_ref豁免)"
+      }
+    },
+    "timeline_enforcement": {
+      "description": "AIPOS-R6M 大项A: 三粒度机器触发机制 (Owner 2026-08-15终裁: 名字、目录内命名、记与不记, 全是机器的事)",
+      "card_level": {
+        "trigger": "queue_close",
+        "check": "FOUNDATION-BACKLOG.md contains task_id entry OR closure_evidence.excuse_ref present",
+        "enforcement": "BLOCK if missing",
+        "rationale": "原'decision_log每卡追加'语义废除(73次无人理WARN遗迹), 改为卡编年史校验"
+      },
+      "decision_level": {
+        "trigger": "owner_decision_record confirm (落库成功)",
+        "action": "auto-generate decision_log pointer entry",
+        "path_pattern": "governance/decision_log/YYYY-MM/YYYY-MM-DD-<slug>-auto-pointer.md",
+        "content": "一句话结论 + decided_by + 指向记录路径 (固化命名)",
+        "enforcement": "automatic (silent failure does not block main flow)"
+      },
+      "stage_level": {
+        "trigger": "stage transition actions (阶段关账/迁移门/发布门)",
+        "check": "stage_archives/<stage>.md exists for this stage",
+        "enforcement": "BLOCK if missing (门票机制)",
+        "rationale": "阶段快照=转换前提, 缺快照=未关账=不许转换"
       }
     }
   },

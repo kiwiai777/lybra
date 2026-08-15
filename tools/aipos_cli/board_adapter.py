@@ -4303,6 +4303,22 @@ def execute_dry_run(
                 actor=actor_text,
                 dry_run=False,
             )
+            
+            # AIPOS-R6M 大项A②: 决策粒度机器触发 - owner_decision_record落库时自动生成decision_log指针条目
+            if result.get("wrote") and result.get("decision_id"):
+                original_payload = result.get("original_payload") or {}
+                decision_summary = str(original_payload.get("decision_summary") or "Owner decision")
+                decided_by = str(original_payload.get("decided_by_ref") or actor_text or "unknown")
+                record_path = str(result.get("target_path") or "")
+                
+                _auto_generate_decision_log_pointer(
+                    resolved_root,
+                    result["decision_id"],
+                    decision_summary,
+                    decided_by,
+                    record_path,
+                )
+            
             verdict = derive_verdict(
                 blocking_reasons=list(result.get("blocking_reasons", [])),
                 warnings=list(result.get("warnings", [])),
@@ -5057,6 +5073,65 @@ def mark_concluded_task(
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(str(actor or "")))
 
 
+def _auto_generate_decision_log_pointer(
+    repo_root: Path,
+    decision_id: str,
+    decision_summary: str,
+    decided_by: str,
+    record_path: str,
+) -> bool:
+    """AIPOS-R6M 大项A②: 决策粒度机器触发 - owner_decision_record落库时自动生成decision_log指针条目
+    
+    Returns:
+        True if pointer was written, False if skipped (already exists or error)
+    """
+    try:
+        from datetime import datetime, timezone
+        
+        governance_dir = repo_root / "governance"
+        decision_log_dir = governance_dir / "decision_log"
+        
+        # 生成 YYYY-MM 目录
+        now = datetime.now(timezone.utc)
+        year_month = now.strftime("%Y-%m")
+        month_dir = decision_log_dir / year_month
+        month_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 生成文件名: YYYY-MM-DD-<slug>.md
+        date_str = now.strftime("%Y-%m-%d")
+        # 从 decision_id 提取 slug (移除时间戳部分)
+        slug = decision_id.split("_")[0] if "_" in decision_id else decision_id
+        filename = f"{date_str}-{slug}-auto-pointer.md"
+        pointer_file = month_dir / filename
+        
+        # 如果文件已存在，跳过
+        if pointer_file.exists():
+            return False
+        
+        # 生成指针内容（固化命名·一句话+decided_by+指向记录路径）
+        content = f"""---
+status: active
+decided_at: {now.isoformat().replace('+00:00', 'Z')}
+decision_type: auto_pointer
+auto_generated: true
+---
+
+## {decision_summary}
+
+**Decided by**: {decided_by}
+
+**Record**: `{record_path}`
+
+**Auto-generated pointer** (AIPOS-R6M 大项A②): This entry was automatically created when the owner_decision_record was written.
+"""
+        
+        pointer_file.write_text(content, encoding="utf-8")
+        return True
+    except Exception:
+        # 静默失败，不影响主流程
+        return False
+
+
 def close_task(
     *,
     task_id: str | None = None,
@@ -5182,46 +5257,47 @@ def close_task(
         closure_evidence_bundle = {"type": evidence_type, "ref": evidence_ref}
         closure_path = closure_record_path(resolved_root, resolved_task_id, closure_id)
 
-        # AIPOS-289 S1+S2: governance account inspection (read-only, append WARN to closure record)
+        # AIPOS-R6M 大项A①: 卡粒度机器触发 - close时校验FOUNDATION-BACKLOG存在本卡条目
+        # 原'decision_log每卡追加'语义废除(73次无人理的WARN遗迹), decision_log改为只记决策粒度
+        governance_dir = resolved_root / "governance"
+        foundation_backlog_path = governance_dir / "FOUNDATION-BACKLOG.md"
+        
+        # 检查FOUNDATION-BACKLOG是否存在本卡条目 (或closure携excuse_ref豁免)
+        backlog_entry_found = False
+        excuse_ref = closure_evidence.get("excuse_ref")  # 豁免引用
+        
+        if not excuse_ref:
+            if foundation_backlog_path.is_file():
+                import re
+                backlog_text = foundation_backlog_path.read_text(encoding="utf-8", errors="replace")
+                # 严格匹配task_id作为单词边界
+                pattern = re.compile(r'\b' + re.escape(resolved_task_id) + r'\b')
+                if pattern.search(backlog_text):
+                    backlog_entry_found = True
+            
+            # 缺条目且无豁免 → BLOCK
+            if not backlog_entry_found:
+                return blocked_response(
+                    operation=operation,
+                    dry_run=dry_run,
+                    category="MISSING_BACKLOG_ENTRY",
+                    message=f"Task {resolved_task_id} lacks entry in FOUNDATION-BACKLOG.md. Cannot close without backlog entry or excuse_ref.",
+                    actor=_actor_payload(actor_text),
+                    data={
+                        "task_id": resolved_task_id,
+                        "foundation_backlog_path": str(foundation_backlog_path.relative_to(resolved_root)),
+                        "excuse_ref": None,
+                        "remedy": "Add task entry to FOUNDATION-BACKLOG.md or provide excuse_ref in closure_evidence"
+                    },
+                    safety_notice="AIPOS-R6M: Close requires FOUNDATION-BACKLOG entry (card-level chronicle). 73 WARN遗迹升级为BLOCK.",
+                )
+        
+        # 保留旧的stage_archive检查作为WARN (不BLOCK)
         governance_warnings: list[str] = []
         
-        # S1: decision_log scan (双名兼容: decision_log.md 或 decision_log/)
-        decision_log_found = False
-        governance_dir = resolved_root / "governance"
-        decision_log_file = governance_dir / "decision_log.md"
-        decision_log_dir = governance_dir / "decision_log"
-        
-        if decision_log_file.is_file():
-            decision_log_found = True
-            decision_log_text = decision_log_file.read_text(encoding="utf-8", errors="replace")
-            # More strict match: task_id as word boundary (not substring)
-            import re
-            if not re.search(r'\b' + re.escape(resolved_task_id) + r'\b', decision_log_text):
-                governance_warnings.append(f"decision_log.md lacks entry for {resolved_task_id}")
-        elif decision_log_dir.is_dir():
-            decision_log_found = True
-            # Scan all .md files in decision_log/ for the task_id
-            task_found = False
-            import re
-            pattern = re.compile(r'\b' + re.escape(resolved_task_id) + r'\b')
-            for entry in decision_log_dir.rglob("*.md"):
-                if entry.is_file():
-                    try:
-                        content = entry.read_text(encoding="utf-8", errors="replace")
-                        if pattern.search(content):
-                            task_found = True
-                            break
-                    except (OSError, UnicodeDecodeError):
-                        pass
-            if not task_found:
-                governance_warnings.append(f"decision_log/ lacks entry for {resolved_task_id}")
-        
-        if not decision_log_found:
-            governance_warnings.append("decision_log not found (expected decision_log.md or decision_log/)")
-        
-        # S2: stage_archive/ freshness (default threshold: 30 days)
+        # AIPOS-R6M: stage_archives鲜度检查 (WARN, 不BLOCK - 阶段粒度由转换门票机制执法)
         stage_archive_threshold_days = 30
-        stage_archive_dir = resolved_root / "stage_archive"
+        stage_archive_dir = resolved_root / "governance" / "stage_archives"
         if stage_archive_dir.is_dir():
             latest_mtime = 0.0
             for entry in stage_archive_dir.rglob("*"):
