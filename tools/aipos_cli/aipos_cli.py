@@ -29,7 +29,7 @@ from tools.aipos_cli.renderer import (
     render_task_detail_text,
     render_validate_text,
 )
-from tools.aipos_cli.agent_profiles import actor_matches_task, availability_for_actor, load_agent_profiles
+from tools.aipos_cli.agent_profiles import actor_matches_task, availability_for_actor, load_agent_profiles, canonical_agent
 from tools.aipos_cli.context_pack_builder import build_context_pack_preview
 from tools.aipos_cli.ai_assisted_authoring import (
     build_authoring_draft,
@@ -3174,8 +3174,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "queue" and getattr(args, "queue_command", None) == "return":
         # AIPOS-FND-1: queue return — wrap board_adapter.return_task
         from tools.aipos_cli.board_adapter import return_task
-        from tools.aipos_cli.agent_profiles import load_agent_profiles, canonical_agent
         from tools.aipos_cli.cli_self_describe import wrap_error_with_verb_help
+        # AIPOS-R6L 大项B②: canonical_agent 已在顶部导入 (line 32)
         
         artifact_refs = None
         if args.artifact_refs:
