@@ -145,7 +145,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
       
       // AIPOS-R6L 大项A②: 部署bin绝对路径（禁裸命令赌PATH）
       const lybraBin = path.join(codeRepo, ".deploy/current/bin/lybra");
-      const finalizeCmd = `${lybraBin} --workspace-root ${config.workspaceRoot} finalize --task-id ${taskId} --actor ${config.actor} --push --deploy`;
+      const finalizeCmd = `${lybraBin} --workspace-root ${codeRepo} finalize --task-id ${taskId} --actor ${config.actor} --push --deploy`;
       const finalizeOutput = execSync(finalizeCmd, {
         cwd: codeRepo,
         encoding: "utf-8",
