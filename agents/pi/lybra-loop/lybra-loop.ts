@@ -111,9 +111,12 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
     const verdict = verdictMatch[1].trim();
     if (verdict !== "PASS" && verdict !== "PASS_WITH_NOTES") continue;
     
-    // 检查是否已 finalize (5_tasks/records/finalize/<task_id>/)
-    const finalizeDir = path.join(config.workspaceRoot, "5_tasks/records/finalize", taskId);
-    if (fs.existsSync(finalizeDir)) continue;
+    // 检查是否已 close (按 closure 记录判定)
+    const closureDir = path.join(config.workspaceRoot, "5_tasks/records/closures", taskId);
+    if (fs.existsSync(closureDir)) {
+      const closureFiles = fs.readdirSync(closureDir).filter(f => f.startsWith("closure_") && f.endsWith(".md"));
+      if (closureFiles.length > 0) continue;
+    }
     
     // 检查任务是否仍在 claimed 状态（未 close）
     const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${taskId.toLowerCase()}.md`);
@@ -157,11 +160,23 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
         output: finalizeOutput.slice(0, 500),
       });
       
-      // AIPOS-R6L 大项A②: close走MCP queue_close（CLI无此子命令）
-      const closeResp = await currentClient.queueClose({
+      // AIPOS-R6N: close 改两阶段 dry_run + confirm
+      const closeDryResp = await currentClient.queueCloseDryRun({
         task_id: taskId,
         actor: config.actor,
         closure_evidence: `Auto-finalized after ${verdict}`,
+      });
+      
+      const closeDryToken = closeDryResp.dry_run_token;
+      if (!closeDryToken) {
+        currentLogger.error("auto-close-no-dry-token", { task_id: taskId, response: closeDryResp });
+        continue;
+      }
+      
+      const closeResp = await currentClient.queueCloseConfirm({
+        dry_run_token: String(closeDryToken),
+        actor: config.actor,
+        owner_confirmation_token: "OWNER_CONFIRMED",
       });
       
       currentLogger.info("auto-close-success", {
