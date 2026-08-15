@@ -129,11 +129,25 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
     try {
       const { execSync } = await import("node:child_process");
       
+      // AIPOS-R6L 第三轮修复(a): 读取 project.json 的 code_repo，显式传产品仓根（禁用 cwd 猜）
+      let codeRepo = path.join(config.workspaceRoot, "../../../lybra"); // fallback
+      try {
+        const projectJsonPath = path.join(config.workspaceRoot, "project.json");
+        if (fs.existsSync(projectJsonPath)) {
+          const projectJson = JSON.parse(fs.readFileSync(projectJsonPath, "utf-8"));
+          if (projectJson.code_repo) {
+            codeRepo = projectJson.code_repo;
+          }
+        }
+      } catch (e) {
+        currentLogger.warn("project-json-parse-failed", { error: String(e) });
+      }
+      
       // AIPOS-R6L 大项A②: 部署bin绝对路径（禁裸命令赌PATH）
-      const lybraBin = path.join(config.workspaceRoot, "../../../lybra/bin/lybra");
-      const finalizeCmd = `${lybraBin} finalize --task-id ${taskId} --actor ${config.actor} --push --deploy`;
+      const lybraBin = path.join(codeRepo, ".deploy/current/bin/lybra");
+      const finalizeCmd = `${lybraBin} --workspace-root ${config.workspaceRoot} finalize --task-id ${taskId} --actor ${config.actor} --push --deploy`;
       const finalizeOutput = execSync(finalizeCmd, {
-        cwd: config.workspaceRoot,
+        cwd: codeRepo,
         encoding: "utf-8",
         stdio: "pipe",
       });
@@ -482,9 +496,12 @@ export default function (pi: ExtensionAPI) {
     
     // AIPOS-R6I 靶②: 检查是否有 PASS 裁决，如有则自动 finalize+close
     await tryAutoFinalizeOnPassVerdict(ctx).catch((e) => {
+      const errMsg = `agent_settled auto-finalize 错误: ${e instanceof Error ? e.message : String(e)}`;
       currentLogger?.warn("agent_settled-auto-finalize-error", {
         error: e instanceof Error ? e.message : String(e),
       });
+      // AIPOS-R6L 第三轮修复(b): 失败必出声
+      ctx.ui?.notify?.(errMsg, "error");
     });
     
     // AIPOS-CONN-LOOP-2 ①: 检查是否有 completed 事件，如有则自动 return
@@ -656,9 +673,12 @@ export default function (pi: ExtensionAPI) {
         
         // AIPOS-R6I 靶②: 存量收敛 - 启动时扫描已有 PASS 裁决但未 finalize 的卡自动补收
         tryAutoFinalizeOnPassVerdict(ctx).catch((e) => {
+          const errMsg = `启动时 auto-finalize 错误: ${e instanceof Error ? e.message : String(e)}`;
           currentLogger.warn("startup-auto-finalize-error", {
             error: e instanceof Error ? e.message : String(e),
           });
+          // AIPOS-R6L 第三轮修复(b): 失败必出声
+          ctx.ui?.notify?.(errMsg, "error");
         });
         
         // F-EXT001-4(FIX1):非阻塞,直接调用第一轮 tick(不经 sendUserMessage)
