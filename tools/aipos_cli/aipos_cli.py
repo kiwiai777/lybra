@@ -1883,6 +1883,7 @@ def build_parser() -> argparse.ArgumentParser:
     governance_commit_parser.add_argument("--task-id", required=True, help="Task ID for governance closure")
     governance_commit_parser.add_argument("--actor", required=True, help="Actor performing governance commit")
     governance_commit_parser.add_argument("--governance-root", help="Governance workspace root; defaults to auto-discovery")
+    governance_commit_parser.add_argument("--workspace-root", help="Product repo root (for schema resolution); defaults to ~/projects/lybra")
     governance_commit_parser.add_argument("--no-push", action="store_true", help="Commit but do not push (default: push)")
     governance_commit_parser.add_argument("--message", help="Custom commit message")
     governance_commit_parser.add_argument("--dry-run", action="store_true", help="Validate without committing")
@@ -2731,6 +2732,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "governance-commit":
         # AIPOS-R7A2 靶②: N6 收账提交(校验四件→commit→push)
+        # AIPOS-R7A2 FIX-1: 传入 repo_root 用于 schema 解析
         from tools.aipos_cli.governance_commit import governance_commit
         from tools.aipos_cli.workspace_config import resolve_workspace_root
         
@@ -2746,11 +2748,28 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Error: Cannot auto-discover governance root: {e}", file=sys.stderr)
                 return 1
         
+        # Resolve repo_root (产品仓根,用于定位 schema/config.schema.json)
+        # governance-commit 通常由顾问在治理仓调用,但 schema 在产品仓
+        # 使用 workspace_root 参数或从环境自动发现
+        if args.workspace_root:
+            repo_root = Path(args.workspace_root).expanduser().resolve()
+        else:
+            # 尝试从治理仓配置或环境变量发现产品仓位置
+            # 默认假设产品仓在 ~/projects/lybra (kiwiai-dev 标准位置)
+            from pathlib import Path
+            default_repo_root = Path.home() / "projects" / "lybra"
+            if default_repo_root.is_dir():
+                repo_root = default_repo_root
+            else:
+                print(f"Error: Cannot locate product repo for schema resolution. Use --workspace-root to specify.", file=sys.stderr)
+                return 1
+        
         try:
             result = governance_commit(
                 governance_root=governance_root,
                 task_id=args.task_id,
                 actor=args.actor,
+                repo_root=repo_root,
                 dry_run=args.dry_run,
                 push=not args.no_push,
                 message=args.message,
