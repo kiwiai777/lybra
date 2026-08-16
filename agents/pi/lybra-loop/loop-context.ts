@@ -53,11 +53,24 @@ export interface TokenData {
 export class ConnectionResolver {
   /**
    * 自动发现 .lybra/ 目录
+   * AIPOS-R6Q 靶①: 从会话 cwd 向上查找工位 .lybra (不从治理仓 workspaceRoot 找)
+   * 确保同机多角色各自锚定自己的工位,不会混成同一身份
    */
-  static discoverLybraDir(workspaceRoot: string): string | null {
-    const lybraDir = join(workspaceRoot, ".lybra");
-    if (existsSync(lybraDir)) {
-      return lybraDir;
+  static discoverLybraDir(startDir?: string): string | null {
+    const { realpathSync } = require("node:fs");
+    let currentDir = startDir ? realpathSync(startDir) : process.cwd();
+    const { parse } = require("node:path");
+    const root = parse(currentDir).root;
+
+    while (currentDir !== root) {
+      const lybraDir = join(currentDir, ".lybra");
+      if (existsSync(lybraDir)) {
+        return lybraDir;
+      }
+      // 向上一级
+      const parentDir = join(currentDir, "..");
+      currentDir = realpathSync(parentDir);
+      if (currentDir === root) break;
     }
     return null;
   }
@@ -107,6 +120,7 @@ export class ConnectionResolver {
    * 解析 gate URL
    * Precedence: 显式参数 → .lybra/自发现 → env仅覆盖
    * AIPOS-R6H: env 降为最低优先级,消除env注入病
+   * AIPOS-R6Q 靶①: 自发现从 cwd 向上查找工位 .lybra
    */
   static resolveGateUrl(opts: {
     workspaceRoot?: string;
@@ -120,19 +134,17 @@ export class ConnectionResolver {
       return opts.explicitUrl;
     }
 
-    // 自动发现 .lybra/ (优先级高于env)
-    if (opts.workspaceRoot) {
-      const lybraDir = this.discoverLybraDir(opts.workspaceRoot);
-      if (lybraDir) {
-        try {
-          const config = this.loadConnectionConfig(lybraDir);
-          const rpcUrl = config.mcp?.rpc_url;
-          if (rpcUrl) {
-            return rpcUrl;
-          }
-        } catch {
-          // 自发现失败, 继续
+    // 自动发现 .lybra/ (优先级高于env) - 从 cwd 向上查找
+    const lybraDir = this.discoverLybraDir();
+    if (lybraDir) {
+      try {
+        const config = this.loadConnectionConfig(lybraDir);
+        const rpcUrl = config.mcp?.rpc_url;
+        if (rpcUrl) {
+          return rpcUrl;
         }
+      } catch {
+        // 自发现失败, 继续
       }
     }
 
@@ -150,6 +162,7 @@ export class ConnectionResolver {
    * 解析 token
    * Precedence: 显式参数 → .lybra/自发现 → env仅覆盖
    * AIPOS-R6H: env 降为最低优先级
+   * AIPOS-R6Q 靶①: 自发现从 cwd 向上查找工位 .lybra
    */
   static resolveToken(opts: {
     workspaceRoot?: string;
@@ -165,43 +178,41 @@ export class ConnectionResolver {
       return opts.explicitToken;
     }
 
-    // 自动发现 .lybra/connection.json (优先级高于env)
-    if (opts.workspaceRoot) {
-      const lybraDir = this.discoverLybraDir(opts.workspaceRoot);
-      if (lybraDir) {
-        try {
-          const config = this.loadConnectionConfig(lybraDir);
-          const tokens = config.tokens;
-          if (!Array.isArray(tokens)) {
-            throw new Error("tokens must be an array");
-          }
-
-          // 按 agent_instance 匹配 (最具体)
-          if (opts.agentInstance) {
-            for (const tokenEntry of tokens) {
-              if (tokenEntry.agent_instance === opts.agentInstance) {
-                const token = tokenEntry.token;
-                if (token) {
-                  return token;
-                }
-              }
-            }
-          }
-
-          // 按 role 匹配
-          if (opts.role) {
-            for (const tokenEntry of tokens) {
-              if (tokenEntry.role === opts.role) {
-                const token = tokenEntry.token;
-                if (token) {
-                  return token;
-                }
-              }
-            }
-          }
-        } catch {
-          // 自发现失败, 继续
+    // 自动发现 .lybra/connection.json (优先级高于env) - 从 cwd 向上查找
+    const lybraDir = this.discoverLybraDir();
+    if (lybraDir) {
+      try {
+        const config = this.loadConnectionConfig(lybraDir);
+        const tokens = config.tokens;
+        if (!Array.isArray(tokens)) {
+          throw new Error("tokens must be an array");
         }
+
+        // 按 agent_instance 匹配 (最具体)
+        if (opts.agentInstance) {
+          for (const tokenEntry of tokens) {
+            if (tokenEntry.agent_instance === opts.agentInstance) {
+              const token = tokenEntry.token;
+              if (token) {
+                return token;
+              }
+            }
+          }
+        }
+
+        // 按 role 匹配
+        if (opts.role) {
+          for (const tokenEntry of tokens) {
+            if (tokenEntry.role === opts.role) {
+              const token = tokenEntry.token;
+              if (token) {
+                return token;
+              }
+            }
+          }
+        }
+      } catch {
+        // 自发现失败, 继续
       }
     }
 
@@ -220,6 +231,7 @@ export class ConnectionResolver {
   /**
    * 解析 actor (agent_instance)
    * Precedence: 显式参数 → .lybra/role文件 → .lybra/actor文件 → env仅覆盖
+   * AIPOS-R6Q 靶①: 自发现从 cwd 向上查找工位 .lybra
    */
   static resolveActor(opts: {
     workspaceRoot?: string;
@@ -233,23 +245,21 @@ export class ConnectionResolver {
       return opts.explicitActor;
     }
 
-    // 自动发现 .lybra/role (JSON格式含instance)
-    if (opts.workspaceRoot) {
-      const lybraDir = this.discoverLybraDir(opts.workspaceRoot);
-      if (lybraDir) {
-        const roleData = this.loadRoleFile(lybraDir);
-        if (roleData?.instance) {
-          return roleData.instance;
-        }
+    // 自动发现 .lybra/role (JSON格式含instance) - 从 cwd 向上查找
+    const lybraDir = this.discoverLybraDir();
+    if (lybraDir) {
+      const roleData = this.loadRoleFile(lybraDir);
+      if (roleData?.instance) {
+        return roleData.instance;
+      }
 
-        // fallback: .lybra/actor (纯文本)
-        const actorFile = join(lybraDir, "actor");
-        if (existsSync(actorFile)) {
-          try {
-            return readFileSync(actorFile, "utf-8").trim();
-          } catch {
-            // ignore
-          }
+      // fallback: .lybra/actor (纯文本)
+      const actorFile = join(lybraDir, "actor");
+      if (existsSync(actorFile)) {
+        try {
+          return readFileSync(actorFile, "utf-8").trim();
+        } catch {
+          // ignore
         }
       }
     }
@@ -266,6 +276,7 @@ export class ConnectionResolver {
   /**
    * 解析 owner_policy_ref
    * Precedence: 显式参数 → .lybra/role文件 → .lybra/policy文件 → env仅覆盖
+   * AIPOS-R6Q 靶①: 自发现从 cwd 向上查找工位 .lybra
    */
   static resolveOwnerPolicyRef(opts: {
     workspaceRoot?: string;
@@ -279,23 +290,21 @@ export class ConnectionResolver {
       return opts.explicitPolicy;
     }
 
-    // 自动发现 .lybra/role (JSON格式含owner_policy_ref)
-    if (opts.workspaceRoot) {
-      const lybraDir = this.discoverLybraDir(opts.workspaceRoot);
-      if (lybraDir) {
-        const roleData = this.loadRoleFile(lybraDir);
-        if (roleData?.owner_policy_ref) {
-          return roleData.owner_policy_ref;
-        }
+    // 自动发现 .lybra/role (JSON格式含owner_policy_ref) - 从 cwd 向上查找
+    const lybraDir = this.discoverLybraDir();
+    if (lybraDir) {
+      const roleData = this.loadRoleFile(lybraDir);
+      if (roleData?.owner_policy_ref) {
+        return roleData.owner_policy_ref;
+      }
 
-        // fallback: .lybra/policy (纯文本)
-        const policyFile = join(lybraDir, "policy");
-        if (existsSync(policyFile)) {
-          try {
-            return readFileSync(policyFile, "utf-8").trim();
-          } catch {
-            // ignore
-          }
+      // fallback: .lybra/policy (纯文本)
+      const policyFile = join(lybraDir, "policy");
+      if (existsSync(policyFile)) {
+        try {
+          return readFileSync(policyFile, "utf-8").trim();
+        } catch {
+          // ignore
         }
       }
     }
@@ -312,8 +321,9 @@ export class ConnectionResolver {
   /**
    * 解析 gate workspace (治理工作区语义)
    * 用途: loop/gate/queue/records 操作 — 队列、任务卡、records 都在治理工作区
-   * Precedence: 显式参数 → .lybra/connection.json → env仅覆盖
+   * Precedence: 显式参数 → .lybra/connection.json (workspace_root) → env仅覆盖
    * AIPOS-R6P 靶③: **允许治理仓** (ai-project-os),不做路径校验
+   * AIPOS-R6Q 靶②: 真实现(工位 .lybra/connection.json → 项目配置 → env覆盖)
    */
   static resolveGateWorkspace(opts: {
     env?: Record<string, string | undefined>;
@@ -326,10 +336,21 @@ export class ConnectionResolver {
       return opts.explicitRoot;
     }
 
-    // TODO: 如果当前目录下有 .lybra/connection.json 且含 workspace_root,用它
-    // 当前简化实现:仅从env读取
+    // 从工位 .lybra/connection.json 读取 workspace_root
+    const lybraDir = this.discoverLybraDir();
+    if (lybraDir) {
+      try {
+        const config = this.loadConnectionConfig(lybraDir);
+        const workspaceRoot = config.workspace_root;
+        if (workspaceRoot) {
+          return workspaceRoot;
+        }
+      } catch {
+        // 自发现失败, 继续
+      }
+    }
 
-    // env 覆盖
+    // env 覆盖 (最低优先级)
     const envRoot = env.LYBRA_WORKSPACE_ROOT?.trim();
     if (envRoot) {
       return envRoot;
@@ -343,6 +364,7 @@ export class ConnectionResolver {
    * 用途: finalize/worktree/git 操作 — 需要产品仓路径,不能是治理仓
    * Precedence: 显式参数 → .lybra/connection.json → env仅覆盖
    * AIPOS-R6H + R6P 靶③: **拒绝治理仓** (ai-project-os)
+   * AIPOS-R6Q 靶②: 真实现(工位 .lybra/connection.json → 项目配置 → env覆盖)
    */
   static resolveCodeRepo(opts: {
     env?: Record<string, string | undefined>;
@@ -362,8 +384,25 @@ export class ConnectionResolver {
       return opts.explicitRoot;
     }
 
-    // TODO: 如果当前目录下有 .lybra/connection.json 且含 workspace_root,用它
-    // 当前简化实现:仅从env读取
+    // 从工位 .lybra/connection.json 读取 workspace_root (但拒绝治理仓)
+    const lybraDir = this.discoverLybraDir();
+    if (lybraDir) {
+      try {
+        const config = this.loadConnectionConfig(lybraDir);
+        const workspaceRoot = config.workspace_root;
+        if (workspaceRoot) {
+          // 校验不是治理仓
+          if (workspaceRoot.includes("ai-project-os")) {
+            // 治理仓路径跳过,不抛错(因为可能是审计工位等合法治理仓工位)
+            // 继续尝试 env
+          } else {
+            return workspaceRoot;
+          }
+        }
+      } catch {
+        // 自发现失败, 继续
+      }
+    }
 
     // env 覆盖
     const envRoot = env.LYBRA_WORKSPACE_ROOT?.trim();

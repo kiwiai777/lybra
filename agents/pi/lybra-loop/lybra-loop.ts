@@ -70,14 +70,22 @@ function scheduleNextTick(pi: ExtensionAPI, ctx: any, delayMs: number) {
 /**
  * AIPOS-R6I 靶②: 检查是否有 PASS/PASS_WITH_NOTES 裁决，如有则自动 finalize+close。
  * 包含存量收敛: 启动时扫描已有 PASS 裁决但未 finalize 的卡自动补收。
+ * AIPOS-R6Q 靶③: 全程可观测(禁静默return) - 开始/候选卡/每卡判定/失败原因一律出声
  */
 async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
-  if (!currentClient || !currentLogger) return false;
+  if (!currentClient || !currentLogger) {
+    currentLogger?.warn("sweep-no-client", { reason: "currentClient or currentLogger not initialized" });
+    ctx.ui?.notify?.("sweep 跳过:客户端或日志器未初始化", "warn");
+    return false;
+  }
   
   let config;
   try {
     config = loadConfig(process.env);
-  } catch {
+  } catch (e) {
+    const msg = `sweep 配置加载失败: ${e instanceof Error ? e.message : String(e)}`;
+    currentLogger.warn("sweep-config-failed", { error: String(e) });
+    ctx.ui?.notify?.(msg, "error");
     return false;
   }
   
@@ -86,11 +94,30 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
   
   // 扫描所有有 PASS 裁决的任务
   const verdictsRoot = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts");
-  if (!fs.existsSync(verdictsRoot)) return false;
+  if (!fs.existsSync(verdictsRoot)) {
+    const msg = `sweep 裁决目录不存在: ${verdictsRoot}`;
+    currentLogger.warn("sweep-no-verdicts-dir", { path: verdictsRoot });
+    ctx.ui?.notify?.(msg, "warn");
+    return false;
+  }
+  
+  currentLogger.info("sweep-start", { verdicts_root: verdictsRoot });
+  ctx.ui?.notify?.("开始扫描 PASS 裁决卡...", "info");
   
   const taskDirs = fs.readdirSync(verdictsRoot, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
+  
+  if (taskDirs.length === 0) {
+    currentLogger.info("sweep-no-tasks", {});
+    ctx.ui?.notify?.("sweep: 无裁决目录", "info");
+    return false;
+  }
+  
+  currentLogger.info("sweep-scan-tasks", { count: taskDirs.length, tasks: taskDirs });
+  ctx.ui?.notify?.(`扫描到 ${taskDirs.length} 个裁决目录`, "info");
+  
+  let processedCount = 0;
   
   for (const taskId of taskDirs) {
     const verdictDir = path.join(verdictsRoot, taskId);
@@ -98,7 +125,10 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
       .filter((f) => f.startsWith("verdict_") && f.endsWith(".md"))
       .sort();
     
-    if (verdictFiles.length === 0) continue;
+    if (verdictFiles.length === 0) {
+      currentLogger.info("sweep-skip-no-verdict", { task_id: taskId, reason: "no verdict files" });
+      continue;
+    }
     
     // 读取最新裁决
     const latestVerdictFile = path.join(verdictDir, verdictFiles[verdictFiles.length - 1]);
@@ -106,21 +136,33 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
     
     // 从 frontmatter 提取 verdict
     const verdictMatch = verdictContent.match(/^verdict:\s*([A-Z_]+)$/m);
-    if (!verdictMatch) continue;
+    if (!verdictMatch) {
+      currentLogger.info("sweep-skip-no-verdict-field", { task_id: taskId, reason: "verdict field not found" });
+      continue;
+    }
     
     const verdict = verdictMatch[1].trim();
-    if (verdict !== "PASS" && verdict !== "PASS_WITH_NOTES") continue;
+    if (verdict !== "PASS" && verdict !== "PASS_WITH_NOTES") {
+      currentLogger.info("sweep-skip-not-pass", { task_id: taskId, verdict, reason: "verdict not PASS/PASS_WITH_NOTES" });
+      continue;
+    }
     
     // 检查是否已 close (按 closure 记录判定)
     const closureDir = path.join(config.workspaceRoot, "5_tasks/records/closures", taskId);
     if (fs.existsSync(closureDir)) {
       const closureFiles = fs.readdirSync(closureDir).filter(f => f.startsWith("closure_") && f.endsWith(".md"));
-      if (closureFiles.length > 0) continue;
+      if (closureFiles.length > 0) {
+        currentLogger.info("sweep-skip-already-closed", { task_id: taskId, reason: "already has closure record" });
+        continue;
+      }
     }
     
     // 检查任务是否仍在 claimed 状态（未 close）
     const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${taskId.toLowerCase()}.md`);
-    if (!fs.existsSync(taskCardPath)) continue;
+    if (!fs.existsSync(taskCardPath)) {
+      currentLogger.info("sweep-skip-not-claimed", { task_id: taskId, reason: "task card not in claimed" });
+      continue;
+    }
     
     // 自动 finalize
     currentLogger.info("auto-finalize-start", {
@@ -128,6 +170,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
       verdict,
       verdict_file: latestVerdictFile,
     });
+    ctx.ui?.notify?.(`候选卡: ${taskId} (${verdict}) - 开始 finalize`, "info");
     
     try {
       const { execSync } = await import("node:child_process");
@@ -159,6 +202,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
         task_id: taskId,
         output: finalizeOutput.slice(0, 500),
       });
+      ctx.ui?.notify?.(`finalize 成功: ${taskId}`, "info");
       
       // AIPOS-R6N: close 改两阶段 dry_run + confirm
       const closeDryResp = await currentClient.queueCloseDryRun({
@@ -169,7 +213,9 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
       
       const closeDryToken = closeDryResp.dry_run_token;
       if (!closeDryToken) {
+        const msg = `auto-close dry_run 无 token: ${taskId}`;
         currentLogger.error("auto-close-no-dry-token", { task_id: taskId, response: closeDryResp });
+        ctx.ui?.notify?.(msg, "error");
         continue;
       }
       
@@ -185,6 +231,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
       });
       
       ctx.ui?.notify?.(`自动 finalize+close 任务 ${taskId} (${verdict})`, "info");
+      processedCount++;
       
       return true;
     } catch (e) {
@@ -197,6 +244,11 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
       ctx.ui?.notify?.(errMsg, "error");
       // 失败不停循环，继续处理其他任务
     }
+  }
+  
+  if (processedCount === 0) {
+    currentLogger.info("sweep-complete-no-action", { scanned: taskDirs.length });
+    ctx.ui?.notify?.(`sweep 完成: 扫描 ${taskDirs.length} 张卡，无需处理`, "info");
   }
   
   return false;
