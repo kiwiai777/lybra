@@ -652,6 +652,54 @@ def validate_all_enum_refs(repo_root: Path | None = None) -> bool:
     return True
 
 
+def get_governance_structure(repo_root: Path | None = None) -> dict[str, Any]:
+    """Read the governance directory tree from config.schema (single source).
+
+    AIPOS-R6M: 命名与路径一律读 config.schema 治理目录树, 代码零写死。
+    Returns the ``governance_structure`` object (with ``paths`` and
+    ``timeline_enforcement``). Raises SchemaLoadError if missing/malformed.
+    """
+    config = load_schema("config", repo_root)
+    gs = config.get("governance_structure")
+    if not isinstance(gs, dict):
+        raise SchemaLoadError("config.schema governance_structure missing or invalid")
+    return gs
+
+
+def get_governance_path(key: str, repo_root: Path | None = None) -> dict[str, Any]:
+    """Get a single governance directory-tree path entry from config.schema.
+
+    Args:
+        key: path key under ``governance_structure.paths`` (e.g. ``stage_archive``,
+            ``governance_docs``, ``decision_log_dir``, ``records``, ``tasks_root``).
+
+    Returns the entry dict (``relative_to`` + ``path`` + ...). Raises SchemaLoadError
+    if the key is missing or not a dict.
+    """
+    gs = get_governance_structure(repo_root)
+    paths = gs.get("paths")
+    if not isinstance(paths, dict):
+        raise SchemaLoadError("config.schema governance_structure.paths missing or invalid")
+    entry = paths.get(key)
+    if not isinstance(entry, dict):
+        raise SchemaLoadError(f"config.schema governance_structure.paths.{key} missing or invalid")
+    return entry
+
+
+def resolve_governance_path(key: str, governance_root: Path, repo_root: Path | None = None) -> Path:
+    """Resolve a governance directory-tree path to an absolute path under governance_root.
+
+    Reads the ``path`` from config.schema (single source) and joins it under
+    ``governance_root``. Never hardcodes a directory name.
+    """
+    entry = get_governance_path(key, repo_root)
+    raw = str(entry.get("path") or "").strip()
+    rel = raw.strip("/")
+    if not rel:
+        raise SchemaLoadError(f"config.schema governance_structure.paths.{key}.path is empty")
+    return Path(governance_root) / rel
+
+
 # Convenience exports
 __all__ = [
     "SchemaLoadError",
@@ -675,6 +723,9 @@ __all__ = [
     "get_builtin_role_classes",
     "get_config_port",
     "get_config_default_gate_url",
+    "get_governance_structure",
+    "get_governance_path",
+    "resolve_governance_path",
     "is_field_defined",
     "validate_field_value",
     "get_all_defined_fields",

@@ -20,13 +20,13 @@
 
 #### ① 读 stage_archives 最新一篇 = 当前坐标
 
-路径：`governance/stage_archives/<NN>-<stage>.md`
+路径：`stage_archive/<date>_<stage-name>.md` (治理工作区根下, 见 config.schema governance_structure.paths.stage_archive)
 
 - 查找编号最大的阶段归档文件
 - 这是"三个月后的人只读这一篇+其后的 decision_log 即可上手"的基线
 - 包含：阶段目标/交付清单/关键裁决指针/遗留账/下一阶段入口
 
-**如果 stage_archives/ 为空或不存在**：从 FOUNDATION-BACKLOG.md 和 LOOP-REDESIGN.md 开始。
+**如果 stage_archive/ 为空或不存在**：从 FOUNDATION-BACKLOG.md 和 LOOP-REDESIGN.md 开始。
 
 #### ② 读该篇之后的 decision_log 全部条目 = 增量真相
 
@@ -100,7 +100,7 @@ superseded_by: <ref>   # 如果 superseded，指向新文档
 
 ### 场景 1: 冷启动会话，需要了解当前 loop 设计
 
-1. 读 `governance/stage_archives/` 找最新篇（如果为空，读 LOOP-REDESIGN.md）
+1. 读 `stage_archive/` 找最新篇（如果为空，读 LOOP-REDESIGN.md）
 2. 读该篇标注的日期之后的所有 `decision_log/2026-08/*.md`
 3. 如果看到 LOOP-REDESIGN.md 文件头有 `status: active`，那就是当前权威
 4. 如果看到两份设计文档互相冲突，检查 decision_log 有无 superseding 记录

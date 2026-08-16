@@ -181,7 +181,9 @@
       "stage_archive": {
         "relative_to": "governance_root",
         "path": "stage_archive/",
-        "description": "Stage completion archive directory"
+        "description": "Stage completion archive directory (AIPOS-R6M 大项A③: stage粒度门票机制 — 单一源, 与 n6_closure_checklist/governance_worktree whitelist 同用此键)",
+        "structure": "<date>_<stage-name>.md (历史快照, 最新一篇=当前坐标)",
+        "semantics": "阶段粒度·低频·阶段关账才写 - 三个月后的人只读最新一篇+其后decision_log即可上手"
       },
       "decision_log_dir": {
         "relative_to": "governance_root",
@@ -189,13 +191,6 @@
         "description": "Decision log directory (AIPOS-R6M 大项A②: decision粒度机器触发)",
         "structure": "YYYY-MM/YYYY-MM-DD-<slug>.md",
         "semantics": "决策粒度·事件驱动·当天落 - 只记改变未来行为规则的单点决定"
-      },
-      "stage_archives_dir": {
-        "relative_to": "governance_root",
-        "path": "governance/stage_archives/",
-        "description": "Stage archives directory (AIPOS-R6M 大项A③: stage粒度门票机制)",
-        "structure": "<NN>-<stage>.md",
-        "semantics": "阶段粒度·低频·阶段关账才写 - 三个月后的人只读这一篇+其后decision_log即可上手"
       },
       "foundation_backlog": {
         "relative_to": "governance_root",
@@ -220,8 +215,9 @@
         "enforcement": "automatic (silent failure does not block main flow)"
       },
       "stage_level": {
-        "trigger": "stage transition actions (阶段关账/迁移门/发布门)",
-        "check": "stage_archives/<stage>.md exists for this stage",
+        "trigger": "stage transition actions (阶段关账/迁移门/发布门, e.g. finalize)",
+        "path_key": "stage_archive",
+        "check": "governance_structure.paths.stage_archive 指向的目录存在且含至少一篇阶段快照(.md, 排除 README.md/index)",
         "enforcement": "BLOCK if missing (门票机制)",
         "rationale": "阶段快照=转换前提, 缺快照=未关账=不许转换"
       }

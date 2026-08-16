@@ -313,6 +313,75 @@ def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, An
     }
 
 
+def check_stage_archive_gate(governance_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+    """AIPOS-R6M 大项A③: 阶段粒度门票 — stage transition (finalize/发布门) 前校验阶段快照存在。
+
+    判据与路径从 config.schema 治理目录树读
+    (``timeline_enforcement.stage_level.path_key`` + ``governance_structure.paths.<key>``),
+    代码零写死。缺阶段快照 → BLOCK (门票机制: 阶段快照=转换前提, 缺快照=未关账=不许转换)。
+
+    Args:
+        governance_root: 治理工作区根 (拥有 stage_archive/ 的根, 非产品仓)。
+        repo_root: 产品仓根 (用于定位 schema/config.schema.json 单一源)。
+
+    Returns:
+        {"passed": bool, "message": str, "stage_archive_dir": str|None,
+         "snapshot_count": int, "path_key": str|None}
+    """
+    try:
+        from tools.schema_loader import get_governance_structure, resolve_governance_path
+
+        gs = get_governance_structure(repo_root)
+        stage_level = (gs.get("timeline_enforcement") or {}).get("stage_level") or {}
+        path_key = str(stage_level.get("path_key") or "stage_archive")
+        stage_dir = resolve_governance_path(path_key, governance_root, repo_root)
+    except Exception as exc:
+        return {
+            "passed": False,
+            "message": f"Stage gate config load failed: {exc}",
+            "stage_archive_dir": None,
+            "snapshot_count": 0,
+            "path_key": None,
+        }
+
+    if not stage_dir.is_dir():
+        return {
+            "passed": False,
+            "message": (
+                f"Stage gate BLOCK: stage archive dir missing ({stage_dir}). "
+                "阶段快照=转换前提, 缺快照=未关账=不许转换 (AIPOS-R6M 大项A③)."
+            ),
+            "stage_archive_dir": str(stage_dir),
+            "snapshot_count": 0,
+            "path_key": path_key,
+        }
+
+    # 阶段快照 = 目录内 .md 文件, 排除 README/index (索引非阶段快照)。
+    snapshots = sorted(
+        p for p in stage_dir.glob("*.md")
+        if p.name.lower() not in {"readme.md", "index.md"}
+    )
+    if not snapshots:
+        return {
+            "passed": False,
+            "message": (
+                f"Stage gate BLOCK: no stage snapshot in {stage_dir} (empty or index-only). "
+                "阶段快照=转换前提, 缺快照=未关账=不许转换 (AIPOS-R6M 大项A③)."
+            ),
+            "stage_archive_dir": str(stage_dir),
+            "snapshot_count": 0,
+            "path_key": path_key,
+        }
+
+    return {
+        "passed": True,
+        "message": f"Stage gate OK: {len(snapshots)} stage snapshot(s) in {stage_dir}",
+        "stage_archive_dir": str(stage_dir),
+        "snapshot_count": len(snapshots),
+        "path_key": path_key,
+    }
+
+
 def finalize_task(
     task_id: str,
     actor: str,
@@ -458,7 +527,30 @@ def finalize_task(
             "message": finalize_check["reason"],
             "operations": operations,
         }
-    
+
+    # AIPOS-R6M 大项A③: 阶段粒度门票 — finalize(发布门) 前校验 stage_archive 快照存在。
+    # 判据与路径从 config.schema 治理目录树读(代码零写死), 缺快照 → BLOCK。
+    stage_gate = check_stage_archive_gate(governance_root, repo_root=workspace_root)
+    operations.append(f"Stage gate: {stage_gate['message']}")
+    if not stage_gate["passed"]:
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "can_finalize": True,
+            "integrity_check": None,
+            "committed": False,
+            "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
+            "commit_hash": None,
+            "stage_gate": stage_gate,
+            "message": stage_gate["message"],
+            "operations": operations,
+        }
+
     # Check deployment integrity (current==HEAD)
     integrity = _check_deployment_integrity(workspace_root)
     operations.append(f"Deployment integrity: {integrity['message']}")

@@ -9,20 +9,36 @@ import pytest
 from tools.aipos_cli.finalize import finalize_task
 
 
+# AIPOS-R6M FIX-1: finalize_task now gates on stage_archive (大项A③). The auto-deploy
+# tests exercise git/deploy behavior, not the stage gate — mock it out so they stay focused.
+_STAGE_GATE_OK = {
+    "passed": True,
+    "message": "Stage gate OK (mocked)",
+    "stage_archive_dir": None,
+    "snapshot_count": 1,
+    "path_key": "stage_archive",
+}
+
+
 @pytest.fixture
 def mock_git_setup(tmp_path):
-    """Setup a mock git repository structure."""
+    """Setup mock product-repo + governance-root structures (two-root, matches real layout)."""
+    # AIPOS-R6A 靶子⑦: finalize 硬拒 workspace_root == governance_root。单根测试已失效,
+    # 改为分离双根: product=产品仓(git/deploy 操作), gov=治理仓(审计裁决 + stage_archive)。
+    product_root = tmp_path / "product"
+    gov_root = tmp_path / "gov"
+    product_root.mkdir()
+    gov_root.mkdir()
+
     # Create task_cards structure (display-only report; NOT judged by finalize anymore)
-    task_dir = tmp_path / "task_cards" / "TEST-TASK"
+    task_dir = product_root / "task_cards" / "TEST-TASK"
     task_dir.mkdir(parents=True)
     audit_report = task_dir / "AUDIT-REPORT-001.md"
     audit_report.write_text("# Audit Report\n(no frontmatter, as real reports ship today)\n")
 
     # AIPOS-FND-14: finalize eligibility now reads the AUTHORITATIVE gate audit_verdict_record
     # under governance_root/5_tasks/records/audit_verdicts/<task_id>/*.md, not the report above.
-    # This fixture uses tmp_path as BOTH governance_root and workspace_root (single-root test
-    # setup), so the verdict record lives under tmp_path/5_tasks/records/audit_verdicts/.
-    verdicts_dir = tmp_path / "5_tasks" / "records" / "audit_verdicts" / "TEST-TASK"
+    verdicts_dir = gov_root / "5_tasks" / "records" / "audit_verdicts" / "TEST-TASK"
     verdicts_dir.mkdir(parents=True)
     verdict_record = verdicts_dir / "verdict_TEST-TASK_20260101_000000_audit-test.md"
     verdict_record.write_text(
@@ -35,32 +51,41 @@ def mock_git_setup(tmp_path):
         "# MCP Audit Verdict Record\n"
     )
 
+    # AIPOS-R6M FIX-1: stage_archive 门票 — 治理仓需含阶段快照 (check_stage_archive_gate
+    # 在测试中被 mock, 此目录仅用于真实双根语义, 不影响断言)。
+    stage_archive = gov_root / "stage_archive"
+    stage_archive.mkdir()
+    (stage_archive / "2026-06-03_mcp-claim-and-bounded-delegation.md").write_text(
+        "# Stage snapshot\n", encoding="utf-8"
+    )
+
     # Create .deploy structure
-    deploy_dir = tmp_path / ".deploy"
+    deploy_dir = product_root / ".deploy"
     current_dir = deploy_dir / "releases" / "20260808_120000-abc1234"
     current_dir.mkdir(parents=True)
-    
+
     version_file = current_dir / "VERSION"
     version_file.write_text(
         "git_commit: abc1234567890abcdef1234567890abcdef1234\n"
     )
-    
+
     current_link = deploy_dir / "current"
     current_link.symlink_to(current_dir)
-    
+
     # Create lybra-deploy script
-    deploy_script = tmp_path / "tools" / "lybra-deploy"
+    deploy_script = product_root / "tools" / "lybra-deploy"
     deploy_script.parent.mkdir(parents=True)
     deploy_script.write_text("#!/bin/bash\necho 'Deployed successfully'\n")
     deploy_script.chmod(0o755)
-    
-    return tmp_path
+
+    return product_root, gov_root
 
 
 @patch("tools.aipos_cli.finalize.subprocess.run")
-def test_finalize_auto_deploy_gate_side_changes(mock_subprocess, mock_git_setup):
+@patch("tools.aipos_cli.finalize.check_stage_archive_gate", return_value=_STAGE_GATE_OK)
+def test_finalize_auto_deploy_gate_side_changes(mock_stage_gate, mock_subprocess, mock_git_setup):
     """Test that finalize auto-deploys when gate-side changes are detected."""
-    workspace_root = mock_git_setup
+    workspace_root, governance_root = mock_git_setup
     
     # Mock git commands
     def subprocess_side_effect(*args, **kwargs):
@@ -103,7 +128,7 @@ def test_finalize_auto_deploy_gate_side_changes(mock_subprocess, mock_git_setup)
         task_id="TEST-TASK",
         actor="test-actor",
         workspace_root=workspace_root,
-        governance_root=workspace_root,
+        governance_root=governance_root,
         dry_run=False,
         push=False,
     )
@@ -124,9 +149,10 @@ def test_finalize_auto_deploy_gate_side_changes(mock_subprocess, mock_git_setup)
 
 
 @patch("tools.aipos_cli.finalize.subprocess.run")
-def test_finalize_skip_deploy_cli_side_only(mock_subprocess, mock_git_setup):
+@patch("tools.aipos_cli.finalize.check_stage_archive_gate", return_value=_STAGE_GATE_OK)
+def test_finalize_skip_deploy_cli_side_only(mock_stage_gate, mock_subprocess, mock_git_setup):
     """Test that finalize skips deployment for CLI-side only changes."""
-    workspace_root = mock_git_setup
+    workspace_root, governance_root = mock_git_setup
     
     # Mock git commands - CLI-side changes only
     def subprocess_side_effect(*args, **kwargs):
@@ -164,7 +190,7 @@ def test_finalize_skip_deploy_cli_side_only(mock_subprocess, mock_git_setup):
         task_id="TEST-TASK",
         actor="test-actor",
         workspace_root=workspace_root,
-        governance_root=workspace_root,
+        governance_root=governance_root,
         dry_run=False,
         push=False,
     )
@@ -184,9 +210,13 @@ def test_finalize_skip_deploy_cli_side_only(mock_subprocess, mock_git_setup):
 
 
 @patch("tools.aipos_cli.finalize.subprocess.run")
-def test_finalize_deploy_failure_does_not_block_finalize(mock_subprocess, mock_git_setup):
-    """Test that deployment failure doesn't block finalize (commit still succeeds)."""
-    workspace_root = mock_git_setup
+@patch("tools.aipos_cli.finalize.check_stage_archive_gate", return_value=_STAGE_GATE_OK)
+def test_finalize_deploy_failure_does_not_block_finalize(mock_stage_gate, mock_subprocess, mock_git_setup):
+    """AIPOS-FINALIZE-FIX-1: deploy 失败 → finalize 整体 FAIL, 但 commit 已发生 (不粉饰为 PASS)。
+
+    验证部署失败被如实记录: verdict=FAIL, committed=True, deployment_error 非空。
+    """
+    workspace_root, governance_root = mock_git_setup
     
     # Mock git commands with deployment failure
     def subprocess_side_effect(*args, **kwargs):
@@ -228,13 +258,13 @@ def test_finalize_deploy_failure_does_not_block_finalize(mock_subprocess, mock_g
         task_id="TEST-TASK",
         actor="test-actor",
         workspace_root=workspace_root,
-        governance_root=workspace_root,
+        governance_root=governance_root,
         dry_run=False,
         push=False,
     )
     
-    # Verify finalize succeeded (commit went through)
-    assert result["verdict"] == "PASS"
+    # AIPOS-FINALIZE-FIX-1: deploy 失败 → finalize 整体 FAIL (commit 已发生, 但不报成功)。
+    assert result["verdict"] == "FAIL"
     assert result["committed"] is True
     
     # Verify deployment failed but was recorded
@@ -245,15 +275,16 @@ def test_finalize_deploy_failure_does_not_block_finalize(mock_subprocess, mock_g
     assert ("Deployment validation failed" in result["deployment_error"] or 
             "Failed to invoke lybra-deploy" in result["deployment_error"])
     
-    # Verify operations show deployment failure
+    # Verify operations show deployment failure (auto-deploy / explicit-deploy / verify 路径)
     operations = result["operations"]
-    assert any("Deployment FAILED" in op or "lybra-deploy FAILED" in op for op in operations)
+    assert any("FAILED" in op and "deploy" in op.lower() for op in operations)
 
 
 @patch("tools.aipos_cli.finalize.subprocess.run")
-def test_finalize_no_drift_no_deploy(mock_subprocess, mock_git_setup):
+@patch("tools.aipos_cli.finalize.check_stage_archive_gate", return_value=_STAGE_GATE_OK)
+def test_finalize_no_drift_no_deploy(mock_stage_gate, mock_subprocess, mock_git_setup):
     """Test that finalize doesn't deploy when there's no drift."""
-    workspace_root = mock_git_setup
+    workspace_root, governance_root = mock_git_setup
     
     # Mock git commands - no drift (HEAD == deployed)
     def subprocess_side_effect(*args, **kwargs):
@@ -282,7 +313,7 @@ def test_finalize_no_drift_no_deploy(mock_subprocess, mock_git_setup):
         task_id="TEST-TASK",
         actor="test-actor",
         workspace_root=workspace_root,
-        governance_root=workspace_root,
+        governance_root=governance_root,
         dry_run=False,
         push=False,
     )

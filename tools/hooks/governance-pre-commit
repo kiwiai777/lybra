@@ -1,108 +1,155 @@
 #!/usr/bin/env bash
-# AIPOS-R6M 大项B: 治理仓 pre-commit 钩子扩展
-# ①防止代码文件进入治理仓 commit (R6A 靶子⑨)
-# ②治理决策类.md无状态头→拒并给模板
-# ③decision_log/内文件只许新增禁修改(append-only)
-# ④5_tasks/records/**新增文件必须携机器出生标记
+# AIPOS-R6M 大项B: 治理仓 pre-commit 钩子(文件面护栏)
+#   ① 代码文件禁止 (R6A 靶子⑨)
+#   ② 治理决策类 .md 无状态头 frontmatter → 拒并给模板
+#   ③ decision_log/ append-only (只许新增禁修改)
+#   ④ 5_tasks/records/** 新增文件必须携机器出生标记 (record_type)
+#
+# AIPOS-R6M FIX-1: 路径定义从 config.schema 治理目录树读(单一源),
+#   仓内相对前缀动态计算(治理仓 git 根 ≠ 治理工作区根时, 如 2_projects/lybra/,
+#   不再写死 ^governance/ 前缀)。
 
 set -e
 
-# 代码文件扩展名黑名单 (大项B①)
-CODE_EXTENSIONS=(
-    "py" "js" "ts" "tsx" "jsx"
-    "java" "go" "rs" "c" "cpp"
-    "sh" "bash" "rb" "php" "swift"
-)
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-# 治理决策类文档路径模式 (大项B②)
-GOVERNANCE_DOCS_PATTERN="^governance/.*\.md$"
+# ---- 单一源: config.schema (LYBRA_SCHEMA_DIR 可覆盖默认产品仓) ----
+SCHEMA_DIR="${LYBRA_SCHEMA_DIR:-$HOME/projects/lybra/schema}"
+CONFIG_SCHEMA="$SCHEMA_DIR/config.schema.json"
+if [ ! -f "$CONFIG_SCHEMA" ]; then
+    echo "❌ BLOCKED: config.schema not found at $CONFIG_SCHEMA (single source unavailable; set LYBRA_SCHEMA_DIR)"
+    exit 1
+fi
 
-# decision_log 路径模式 (大项B③)
-DECISION_LOG_PATTERN="^governance/decision_log/"
+# ---- 从 config.schema 解析治理目录树路径 + 定位治理工作区根 + 输出给 bash ----
+eval "$(python3 - "$REPO_ROOT" "$CONFIG_SCHEMA" <<'PY'
+import json, os, sys
 
-# records 路径模式 (大项B④)
-RECORDS_PATTERN="^.*5_tasks/records/"
+repo_root, schema_path = sys.argv[1], sys.argv[2]
+d = json.load(open(schema_path))
+gs = d.get("governance_structure", {}) or {}
+paths = gs.get("paths", {}) or {}
 
-echo "🔍 AIPOS-R6M: Checking governance repo commit..."
+def rel(key, default):
+    return str((paths.get(key) or {}).get("path") or default).strip("/")
+
+gov_docs = rel("governance_docs", "governance")
+decision_log = rel("decision_log_dir", "governance/decision_log")
+tasks_root = rel("tasks_root", "5_tasks")
+records = rel("records", "records")
+records_full = f"{tasks_root}/{records}".strip("/")
+
+# 治理工作区根 = repo_root 下同时含 gov_docs 首段 与 tasks_root 首段 的目录
+gov_seg = gov_docs.split("/")[0]
+tasks_seg = tasks_root.split("/")[0]
+ws_root = repo_root
+for dirpath, dirnames, filenames in os.walk(repo_root):
+    depth = dirpath[len(repo_root.rstrip('/')):].count(os.sep)
+    dirnames[:] = [x for x in dirnames if x not in (".git", "node_modules")]
+    if depth >= 4:
+        dirnames[:] = []
+        continue
+    if os.path.isdir(os.path.join(dirpath, gov_seg)) and os.path.isdir(os.path.join(dirpath, tasks_seg)):
+        ws_root = dirpath
+        break
+
+def sh(s):
+    return "'" + s.replace("'", "'\\''") + "'"
+
+print(f"GOV_WS_ROOT={sh(ws_root)}")
+print(f"GOV_DOCS_REL={sh(gov_docs)}")
+print(f"DECISION_LOG_REL={sh(decision_log)}")
+print(f"RECORDS_REL={sh(records_full)}")
+PY
+)"
+
+# ---- 仓内相对前缀(动态计算, 不写死) ----
+if [ "$GOV_WS_ROOT" = "$REPO_ROOT" ]; then
+    PREFIX=""
+else
+    PREFIX="${GOV_WS_ROOT#"$REPO_ROOT"/}/"
+fi
+
+GOV_DOCS_PREFIX="${PREFIX}${GOV_DOCS_REL}/"
+DECISION_LOG_PREFIX="${PREFIX}${DECISION_LOG_REL}/"
+RECORDS_PREFIX="${PREFIX}${RECORDS_REL}/"
+
+echo "🔍 AIPOS-R6M: governance guardrails (ws_prefix=${PREFIX:-<repo-root>/})"
+
+# 代码文件扩展名黑名单 (大项B①, 保留 R6A)
+CODE_EXTENSIONS=(py js ts tsx jsx java go rs c cpp sh bash rb php swift)
 
 blocked_files=()
 blocked_reasons=()
 
-# 获取所有 staged 文件
-staged_files=$(git diff --cached --name-only --diff-filter=ACM)
+# 文件是否以某仓内相对前缀开头(前缀动态, 非写死 ^governance/)
+under_prefix() {
+    case "$1" in
+        "$2"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+staged_files="$(git diff --cached --name-only --diff-filter=ACM)"
 
 if [ -z "$staged_files" ]; then
     echo "✅ No files to check."
     exit 0
 fi
 
-# 大项B①: 检查代码文件
+# 大项B①: 代码文件禁止
 while IFS= read -r file; do
-    # 跳过删除的文件
-    if [ ! -f "$file" ]; then
-        continue
-    fi
-    
-    # 检查文件扩展名
+    [ -z "$file" ] && continue
+    [ ! -f "$file" ] && continue
     extension="${file##*.}"
     for ext in "${CODE_EXTENSIONS[@]}"; do
         if [ "$extension" = "$ext" ]; then
             blocked_files+=("$file")
-            blocked_reasons+=("Code file blocked (B①)")
+            blocked_reasons+=("Code file forbidden in governance repo (B①)")
             break
         fi
     done
 done <<< "$staged_files"
 
-# 大项B②: 检查治理决策类文档状态头
+# 大项B②: 治理决策类 .md 需状态头 frontmatter (status 字段)
 while IFS= read -r file; do
-    if [ ! -f "$file" ]; then
-        continue
-    fi
-    
-    if [[ "$file" =~ $GOVERNANCE_DOCS_PATTERN ]]; then
-        # 检查文件是否有frontmatter状态头
-        if ! grep -q "^---$" "$file" 2>/dev/null; then
+    [ -z "$file" ] && continue
+    [ ! -f "$file" ] && continue
+    if under_prefix "$file" "$GOV_DOCS_PREFIX" && [[ "$file" == *.md ]]; then
+        if ! grep -q '^---$' "$file" 2>/dev/null; then
             blocked_files+=("$file")
             blocked_reasons+=("Missing frontmatter status header (B②)")
             continue
         fi
-        
-        # 提取frontmatter并检查status字段
-        frontmatter=$(awk '/^---$/{if(++count==2) exit} count==1' "$file")
-        if ! echo "$frontmatter" | grep -q "^status:"; then
+        frontmatter=$(awk 'BEGIN{n=0} /^---$/{n++; next} {if(n==1) print}' "$file")
+        if ! printf '%s\n' "$frontmatter" | grep -q '^status:'; then
             blocked_files+=("$file")
             blocked_reasons+=("Missing 'status' field in frontmatter (B②)")
         fi
     fi
 done <<< "$staged_files"
 
-# 大项B③: decision_log/ append-only执法
-modified_decision_log_files=$(git diff --cached --name-only --diff-filter=M | grep "$DECISION_LOG_PATTERN" || true)
-if [ -n "$modified_decision_log_files" ]; then
-    while IFS= read -r file; do
+# 大项B③: decision_log/ append-only (禁修改, 只许新增)
+while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    if under_prefix "$file" "$DECISION_LOG_PREFIX"; then
         blocked_files+=("$file")
         blocked_reasons+=("decision_log/ is append-only, modifications forbidden (B③)")
-    done <<< "$modified_decision_log_files"
-fi
+    fi
+done < <(git diff --cached --name-only --diff-filter=M)
 
-# 大项B④: records/**新增文件必须携机器出生标记
-new_record_files=$(git diff --cached --name-only --diff-filter=A | grep "$RECORDS_PATTERN" || true)
-if [ -n "$new_record_files" ]; then
-    while IFS= read -r file; do
-        if [ ! -f "$file" ]; then
-            continue
-        fi
-        
-        # 检查是否有机器出生标记 (record_type字段)
-        if ! grep -q "^record_type:" "$file" 2>/dev/null; then
+# 大项B④: records/** 新增文件必须携机器出生标记 (record_type 字段)
+while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    [ ! -f "$file" ] && continue
+    if under_prefix "$file" "$RECORDS_PREFIX"; then
+        if ! grep -q '^record_type:' "$file" 2>/dev/null; then
             blocked_files+=("$file")
             blocked_reasons+=("New record lacks machine-generated marker 'record_type' (B④)")
         fi
-    done <<< "$new_record_files"
-fi
+    fi
+done < <(git diff --cached --name-only --diff-filter=A)
 
-# 如果发现违规文件，拒绝 commit
 if [ ${#blocked_files[@]} -gt 0 ]; then
     echo ""
     echo "❌ BLOCKED: Governance repo commit violates AIPOS-R6M file-level guardrails"
@@ -112,17 +159,16 @@ if [ ${#blocked_files[@]} -gt 0 ]; then
         echo "  - ${blocked_files[$i]}: ${blocked_reasons[$i]}"
     done
     echo ""
-    echo "Governance file-level guardrails (AIPOS-R6M 大项B):"
+    echo "Guardrails (AIPOS-R6M 大项B):"
     echo "  ① Code files forbidden in governance repo"
-    echo "  ② Governance docs (governance/*.md) require frontmatter with 'status' field"
-    echo "     Template:"
+    echo "  ② Governance docs (governance/*.md) require frontmatter with 'status' field:"
     echo "     ---"
     echo "     status: active"
     echo "     decided_at: <ISO8601>"
     echo "     superseded_by: <ref or null>"
     echo "     ---"
     echo "  ③ decision_log/ is append-only (modifications forbidden)"
-    echo "  ④ New records (5_tasks/records/**) require machine-generated marker"
+    echo "  ④ New records (5_tasks/records/**) require machine-generated 'record_type' marker"
     echo ""
     exit 1
 fi
