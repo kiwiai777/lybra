@@ -3902,7 +3902,11 @@ def main(argv: list[str] | None = None) -> int:
         from tools.aipos_cli.transition_engine import resolve_next_step_from_schema
         
         try:
-            workspace_root = args.workspace_root or workspace
+            if args.workspace_root:
+                workspace_root = Path(args.workspace_root)
+            else:
+                workspace_root = _find_repo_root_for_args(args)
+            
             result = resolve_next_step_from_schema(
                 task_id=args.task_id,
                 workspace_root=workspace_root,

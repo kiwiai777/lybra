@@ -260,20 +260,25 @@ def resolve_next_step_from_schema(
         }
     """
     from tools.schema_loader import load_schema
-    from tools.aipos_cli.task_loader import load_task_card
+    from tools.aipos_cli.task_loader import find_task_by_id
     
     # 加载 schema
     transitions_schema = load_schema("transitions", repo_root=None)
     
     # 加载任务卡
     workspace_root = Path(workspace_root)
-    task_card = load_task_card(task_id, workspace_root)
+    task_card, _ = find_task_by_id(task_id, workspace_root)
     
     if not task_card:
         raise ValueError(f"Task {task_id} not found in workspace {workspace_root}")
     
-    current_status = task_card.get("status", "unknown")
+    # task_loader 返回的字典中 status 信息在 queue_state 或 frontmatter_status
+    queue_state = task_card.get("queue_state", "unknown")
+    frontmatter_status = task_card.get("frontmatter_status", "unknown")
+    # 优先使用 frontmatter_status(卡内声明), fallback 到 queue_state(目录名)
+    current_status = frontmatter_status if frontmatter_status not in (None, "unknown") else queue_state
     task_mode = task_card.get("task_mode", "code")
+    verdict = task_card.get("metadata", {}).get("verdict") or task_card.get("metadata", {}).get("audit_verdict")
     
     # 从 main_flow 查找当前状态对应的下一步
     main_flow = transitions_schema.get("main_flow", {})
@@ -290,7 +295,6 @@ def resolve_next_step_from_schema(
     
     # 特殊判断：已有 verdict 的 returned 卡
     if current_status == "returned":
-        verdict = task_card.get("verdict") or task_card.get("audit_verdict")
         if verdict == "PASS":
             next_step_map["returned"] = "N5_finalize"
         elif verdict in ("FAIL", "BLOCK"):
