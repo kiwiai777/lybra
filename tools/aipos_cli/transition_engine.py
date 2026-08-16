@@ -226,3 +226,177 @@ def validate_transition(
             return False, f"Invalid source state for {transition_name}: expected {from_states}, got {current_state}"
     
     return True, f"Valid transition: {current_state} → {to_state}"
+
+
+def resolve_next_step_from_schema(
+    task_id: str,
+    workspace_root: Path,
+) -> dict[str, Any]:
+    """AIPOS-R7A: 从 transitions.schema 解析下一步动作
+    
+    读取任务卡当前状态，查询 transitions.schema 确定下一步:
+    - 动词名称
+    - 完整参数
+    - 触发者（谁执行）
+    - 授权语义
+    
+    禁记忆叙述：所有信息必须从 schema + 卡状态派生，不依赖口述。
+    
+    Args:
+        task_id: 任务 ID
+        workspace_root: 工作区根目录
+    
+    Returns:
+        {
+            "task_id": str,
+            "current_state": str,
+            "next_step": str,  # 节点名称，如 "return", "audit", "finalize"
+            "triggered_by": str,  # 如 "executor", "auditor", "advisor"
+            "command": str,  # 可执行命令字符串
+            "verb": str,  # gate 动词名称（如有）
+            "parameters": dict,  # 命令参数
+            "authorization": str,  # 授权语义说明
+            "notes": str,  # 附加说明
+        }
+    """
+    from tools.schema_loader import load_schema
+    from tools.aipos_cli.task_loader import load_task_card
+    
+    # 加载 schema
+    transitions_schema = load_schema("transitions", repo_root=None)
+    
+    # 加载任务卡
+    workspace_root = Path(workspace_root)
+    task_card = load_task_card(task_id, workspace_root)
+    
+    if not task_card:
+        raise ValueError(f"Task {task_id} not found in workspace {workspace_root}")
+    
+    current_status = task_card.get("status", "unknown")
+    task_mode = task_card.get("task_mode", "code")
+    
+    # 从 main_flow 查找当前状态对应的下一步
+    main_flow = transitions_schema.get("main_flow", {})
+    nodes = main_flow.get("nodes", [])
+    
+    # 状态 -> 节点映射
+    next_step_map = {
+        "pending": "N1_claim",
+        "claimed": "N3_return",  # 执行中，下一步是 return
+        "returned": "N4_audit",
+        "audit_pass": "N5_finalize",
+        "finalized": "N6_close",
+    }
+    
+    # 特殊判断：已有 verdict 的 returned 卡
+    if current_status == "returned":
+        verdict = task_card.get("verdict") or task_card.get("audit_verdict")
+        if verdict == "PASS":
+            next_step_map["returned"] = "N5_finalize"
+        elif verdict in ("FAIL", "BLOCK"):
+            next_step_map["returned"] = "reopen_or_fix"
+    
+    # 非代码卡跳过独立审计
+    if task_mode in ("docs", "governance", "config") and current_status == "returned":
+        next_step_map["returned"] = "advisor_review"
+    
+    next_node_id = next_step_map.get(current_status)
+    
+    if not next_node_id:
+        return {
+            "task_id": task_id,
+            "current_state": current_status,
+            "next_step": "unknown",
+            "triggered_by": "unknown",
+            "command": "",
+            "verb": "",
+            "parameters": {},
+            "authorization": "",
+            "notes": f"No transition defined for state: {current_status}",
+        }
+    
+    # 查找对应节点详情
+    node_detail = None
+    for node in nodes:
+        if node.get("node_id") == next_node_id.split("_")[0]:  # N1, N3, N4, N5, N6
+            node_detail = node
+            break
+    
+    if not node_detail:
+        node_detail = {"name": next_node_id, "verb": "unknown", "trigger": "unknown"}
+    
+    node_name = node_detail.get("name", next_node_id)
+    verb = node_detail.get("verb", "")
+    trigger = node_detail.get("trigger", "unknown")
+    
+    # 构建命令
+    command_parts = []
+    parameters = {}
+    authorization = ""
+    
+    if node_name == "claim":
+        command_parts = [
+            f"lybra queue claim --task-id {task_id}",
+            f"--actor executor --agent-instance exec.lybra.kiwiai-dev",
+            f"--autonomy-mode PreAuthorized",
+        ]
+        parameters = {
+            "task_id": task_id,
+            "autonomy_mode": "PreAuthorized",
+        }
+        authorization = "Executor self-claim under PreAuthorized envelope"
+    
+    elif node_name == "return":
+        command_parts = [
+            f"lybra queue return --task-id {task_id}",
+            f"--actor executor --agent-instance exec.lybra.kiwiai-dev",
+        ]
+        parameters = {"task_id": task_id}
+        authorization = "Executor self-confirm return (328 甲案)"
+    
+    elif node_name == "audit":
+        if task_mode in ("docs", "governance", "config"):
+            command_parts = [f"# Non-code task: advisor reviews and submits verdict via gate"]
+            authorization = "Advisor review (non-code fast lane)"
+        else:
+            command_parts = [
+                f"lybra audit dispatch --task-id {task_id}",
+                f"--auditor-instance auditor.lybra.kiwiai-dev",
+            ]
+            parameters = {"task_id": task_id}
+            authorization = "Advisor dispatches to independent auditor"
+    
+    elif node_name == "finalize":
+        command_parts = [
+            f"lybra finalize --task-id {task_id}",
+            f"--actor executor --workspace-root ~/projects/lybra",
+            f"--push --deploy",
+        ]
+        parameters = {"task_id": task_id, "push": True, "deploy": True}
+        authorization = "Executor finalizes after audit PASS"
+    
+    elif node_name == "close":
+        command_parts = [f"# Auto-close when evidence complete; advisor runs governance backlog"]
+        parameters = {"task_id": task_id}
+        authorization = "System auto-close + advisor governance backlog"
+    
+    else:
+        command_parts = [f"# Next step: {node_name}"]
+    
+    command = " ".join(command_parts)
+    
+    notes = node_detail.get("notes", "")
+    if not notes:
+        notes = node_detail.get("description", "")
+    
+    return {
+        "task_id": task_id,
+        "current_state": current_status,
+        "next_step": node_name,
+        "triggered_by": trigger,
+        "command": command,
+        "verb": verb,
+        "parameters": parameters,
+        "authorization": authorization,
+        "notes": notes,
+    }

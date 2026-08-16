@@ -1759,6 +1759,33 @@ def build_parser() -> argparse.ArgumentParser:
     envelope_mint_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     envelope_mint_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    envelope_revoke_parser = envelope_subparsers.add_parser("revoke", help="Revoke (disable) an autonomy envelope")
+    envelope_revoke_parser.add_argument("--policy-id", required=True, help="Policy ID to revoke")
+    envelope_revoke_parser.add_argument("--revocation-reason", required=True, help="Reason for revocation")
+    envelope_revoke_parser.add_argument("--actor", default="owner", help="Actor (default: owner)")
+    envelope_revoke_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    envelope_revoke_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    envelope_renew_parser = envelope_subparsers.add_parser("renew", help="Renew/extend an existing envelope")
+    envelope_renew_parser.add_argument("--policy-id", required=True, help="Policy ID to renew")
+    envelope_renew_parser.add_argument("--add-tasks", type=int, help="Additional tasks to add to quota")
+    envelope_renew_parser.add_argument("--new-expiry", help="New expiration datetime (ISO8601)")
+    envelope_renew_parser.add_argument("--decision-summary", required=True, help="Decision summary for renewal")
+    envelope_renew_parser.add_argument("--actor", default="owner", help="Actor (default: owner)")
+    envelope_renew_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    envelope_renew_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-R7A: Owner decision record (arbitration, exemptions)
+    owner_decision_parser = subparsers.add_parser("owner-decision", help="Record owner decision (arbitration, exemptions, policy changes)")
+    owner_decision_parser.add_argument("--decision-id", required=True, help="Unique decision ID")
+    owner_decision_parser.add_argument("--decision-type", required=True, help="Decision type (e.g., arbitration, exemption)")
+    owner_decision_parser.add_argument("--decision-summary", required=True, help="Decision summary")
+    owner_decision_parser.add_argument("--task-id", help="Related task ID (for arbitration)")
+    owner_decision_parser.add_argument("--actor", default="owner", help="Actor (default: owner)")
+    owner_decision_parser.add_argument("--context-refs", help="JSON array of context references")
+    owner_decision_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    owner_decision_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     home_parser = subparsers.add_parser("home", help="Governance home operations (Owner-explicit, local only)")
     home_subparsers = home_parser.add_subparsers(dest="home_command")
     home_git_init_parser = home_subparsers.add_parser("git-init", help="One-shot, transparent local git init of the home (no remote, no push)")
@@ -1776,6 +1803,12 @@ def build_parser() -> argparse.ArgumentParser:
     turn_scan_parser = turn_subparsers.add_parser("scan", help="Scan all tasks and show next-step list")
     turn_scan_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
     turn_scan_parser.add_argument("--mode", choices=["manual", "auto"], default="manual", help="Dispatch mode")
+
+    # AIPOS-R7A: next-step navigation (reads transitions.schema, no memory narrative)
+    next_step_parser = subparsers.add_parser("next-step", help="AIPOS-R7A: Show next-step command with full parameters from transitions.schema")
+    next_step_parser.add_argument("--task-id", required=True, help="Task ID to resolve")
+    next_step_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
+    next_step_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-FND-1: Five missing loop-step CLIs (wrap existing gate verbs/backend functions)
     # 1. task progress - wrap lybra_task_progress (tools.py:2847)
@@ -2836,6 +2869,69 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(render_json(result))
             return 1 if result.get("verdict") == Verdict.BLOCK else 0
+        
+        elif args.envelope_command == "revoke":
+            # Revoke envelope by creating superseding decision
+            payload = {
+                "decision_id": f"revoke-{args.policy_id}",
+                "decision_type": "envelope_revocation",
+                "actor": args.actor,
+                "decided_by_ref": args.actor,
+                "decision_summary": f"Revoke envelope {args.policy_id}: {args.revocation_reason}",
+                "revoked_policy_id": args.policy_id,
+                "revocation_reason": args.revocation_reason,
+            }
+            try:
+                result = record_owner_decision(
+                    payload,
+                    dry_run=args.dry_run,
+                    repo_root=repo_root,
+                    actor=args.actor,
+                )
+            except (FileNotFoundError, OSError, ValueError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            if args.json:
+                print(render_json(result))
+            else:
+                print(render_json(result))
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
+        
+        elif args.envelope_command == "renew":
+            # Renew envelope by creating new policy with updated limits
+            if not args.add_tasks and not args.new_expiry:
+                print("Error: Must specify --add-tasks or --new-expiry (or both)", file=sys.stderr)
+                return 1
+            
+            payload = {
+                "decision_id": f"renew-{args.policy_id}",
+                "decision_type": "envelope_renewal",
+                "actor": args.actor,
+                "decided_by_ref": args.actor,
+                "decision_summary": args.decision_summary,
+                "renewed_policy_id": args.policy_id,
+            }
+            if args.add_tasks:
+                payload["add_tasks"] = args.add_tasks
+            if args.new_expiry:
+                payload["new_expiry"] = args.new_expiry
+            
+            try:
+                result = record_owner_decision(
+                    payload,
+                    dry_run=args.dry_run,
+                    repo_root=repo_root,
+                    actor=args.actor,
+                )
+            except (FileNotFoundError, OSError, ValueError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            if args.json:
+                print(render_json(result))
+            else:
+                print(render_json(result))
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
+        
         parser.print_help()
         return 2
 
@@ -3801,6 +3897,33 @@ def main(argv: list[str] | None = None) -> int:
             print("turn-advancer subcommand required: next | scan", file=sys.stderr)
             return 2
 
+    if args.command == "next-step":
+        # AIPOS-R7A: next-step navigation from transitions.schema
+        from tools.aipos_cli.transition_engine import resolve_next_step_from_schema
+        
+        try:
+            workspace_root = args.workspace_root or workspace
+            result = resolve_next_step_from_schema(
+                task_id=args.task_id,
+                workspace_root=workspace_root,
+            )
+            if args.json:
+                print(render_json(result))
+            else:
+                # Human-readable output
+                print(f"Task: {result['task_id']}")
+                print(f"Current state: {result['current_state']}")
+                print(f"Next step: {result['next_step']}")
+                print(f"Triggered by: {result['triggered_by']}")
+                print(f"\nCommand:")
+                print(f"  {result['command']}")
+                if result.get('notes'):
+                    print(f"\nNotes: {result['notes']}")
+            return 0
+        except Exception as exc:
+            print(f"Error resolving next-step: {exc}", file=sys.stderr)
+            return 1
+
     # AIPOS-FND-1: Five missing loop-step CLI implementations
     if args.command == "task-progress":
         # Wrap task progress writer (local variant, bypasses MCP scope)
@@ -3862,6 +3985,46 @@ def main(argv: list[str] | None = None) -> int:
             actor=args.actor,
             dry_run=args.dry_run,
         )
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
+
+    if args.command == "owner-decision":
+        # AIPOS-R7A: Record owner decision (arbitration, exemptions, policy changes)
+        try:
+            repo_root = _find_repo_root_for_args(args)
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        
+        payload = {
+            "decision_id": args.decision_id,
+            "decision_type": args.decision_type,
+            "actor": args.actor,
+            "decided_by_ref": args.actor,
+            "decision_summary": args.decision_summary,
+        }
+        if args.task_id:
+            payload["applies_to"] = {"task_id": args.task_id}
+        if args.context_refs:
+            try:
+                payload["context_refs"] = json.loads(args.context_refs)
+            except json.JSONDecodeError as exc:
+                print(f"Error: Invalid JSON in --context-refs: {exc}", file=sys.stderr)
+                return 1
+        
+        try:
+            result = record_owner_decision(
+                payload,
+                dry_run=args.dry_run,
+                repo_root=repo_root,
+                actor=args.actor,
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
         if args.json:
             print(render_json(result))
         else:
