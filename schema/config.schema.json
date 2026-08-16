@@ -219,6 +219,13 @@
         "structure": "YYYY-MM/YYYY-MM-DD-<slug>.md",
         "semantics": "决策粒度·事件驱动·当天落 - 只记改变未来行为规则的单点决定"
       },
+      "task_cards": {
+        "relative_to": "governance_root",
+        "path": "task_cards/",
+        "description": "Task cards archive directory (AIPOS-R7A2 FIX-2: N6 收账清单第①件台账条目)",
+        "structure": "<TASK_ID>/<files>",
+        "semantics": "任务台账条目 - 每张卡完成后留存 RETURN.md/AUDIT-REPORT.md/CLOSURE.md 等归档文件"
+      },
       "foundation_backlog": {
         "relative_to": "governance_root",
         "path": "governance/FOUNDATION-BACKLOG.md",

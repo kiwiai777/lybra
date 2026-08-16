@@ -48,27 +48,46 @@ def check_governance_completeness(
     missing = []
     details = {}
     
-    # ① 本卡台账条目 (task_cards/<ID>/)
-    # AIPOS-R7A2 FIX-1: task_cards 路径从 schema 解析
+    # AIPOS-R7A2 FIX-2: 四件解析统一为“解析失败即显式报错/BLOCK”,禁静默降级到硬编码
+    
+    # ① 本卡台账条目 (task_cards/<ID>/) + ④ 归档文件检查
+    # AIPOS-R7A2 FIX-2: task_cards 路径从 schema 解析,失败即 BLOCK
     try:
         task_cards_root = resolve_governance_path("task_cards", governance_root, repo_root)
+        task_cards_dir = task_cards_root / task_id
+        
+        if task_cards_dir.is_dir():
+            details["task_cards"] = {
+                "exists": True,
+                "path": str(task_cards_dir),
+                "files": [f.name for f in task_cards_dir.iterdir()],
+            }
+            
+            # ④ task_cards 归档 (RETURN.md/AUDIT-REPORT.md/CLOSURE.md)
+            archive_files = [
+                f.name for f in task_cards_dir.iterdir()
+                if f.name in ["RETURN.md", "AUDIT-REPORT.md", "CLOSURE.md"]
+            ]
+            
+            if not archive_files:
+                missing.append(f"task_cards/{task_id}/ 缺少归档文件 (RETURN.md/AUDIT-REPORT.md/CLOSURE.md)")
+            
+            details["archive_files"] = {
+                "exists": len(archive_files) > 0,
+                "files": archive_files,
+            }
+        else:
+            missing.append(f"task_cards/{task_id}/ (台账条目不存在)")
+            details["task_cards"] = {"exists": False}
+            details["archive_files"] = {"exists": False, "files": []}
     except Exception as exc:
-        # task_cards 未在 schema 定义,回退硬编码 (但标记为已知技术债)
-        task_cards_root = governance_root / "task_cards"
-    
-    task_cards_dir = task_cards_root / task_id
-    if task_cards_dir.is_dir():
-        details["task_cards"] = {
-            "exists": True,
-            "path": str(task_cards_dir),
-            "files": [f.name for f in task_cards_dir.iterdir()],
-        }
-    else:
-        missing.append(f"task_cards/{task_id}/ (台账条目不存在)")
-        details["task_cards"] = {"exists": False}
+        # AIPOS-R7A2 FIX-2: 移除 fallback,解析失败显式报错
+        missing.append(f"task_cards/ (路径解析失败: {exc})")
+        details["task_cards"] = {"exists": False, "error": str(exc)}
+        details["archive_files"] = {"exists": False, "error": str(exc)}
     
     # ② decision_log 指针 (如适用)
-    # AIPOS-R7A2 FIX-1: decision_log 路径从 schema 解析
+    # AIPOS-R7A2 FIX-2: decision_log 路径从 schema 解析,失败显式报错
     try:
         decision_log_dir = resolve_governance_path("decision_log_dir", governance_root, repo_root)
         # 在 decision_log/ 下查找与本任务相关的条目 (按 YYYY-MM/YYYY-MM-DD-<slug>.md 结构)
@@ -85,25 +104,23 @@ def check_governance_completeness(
             "path": str(decision_log_dir),
         }
     except Exception as exc:
-        # decision_log_dir 不存在或未定义,不作为 BLOCK 条件
+        # AIPOS-R7A2 FIX-2: decision_log 解析失败也显式报错 (BLOCK)
+        missing.append(f"decision_log_dir/ (路径解析失败: {exc})")
         details["decision_log"] = {
             "applicable": False,
             "error": str(exc),
         }
     
     # ③ 阶段快照 (stage_archive/)
-    # AIPOS-R7A2 FIX-1: stage_archive 路径从 schema 解析 (同 finalize.py 模式)
+    # AIPOS-R7A2 FIX-2: stage_archive 路径从 schema 解析,失败显式报错 (同 finalize.py 模式)
     try:
         stage_archive_dir = resolve_governance_path("stage_archive", governance_root, repo_root)
         
         stage_snapshots = []
         if stage_archive_dir.is_dir():
             # 阶段快照 = *.md 文件 (排除 README/index)
-            # 查找包含 task_id 的快照文件
             for snapshot_file in stage_archive_dir.glob("*.md"):
                 if snapshot_file.name.lower() not in {"readme.md", "index.md"}:
-                    # 检查文件内容或文件名是否与 task_id 相关
-                    # 简化:只要存在 stage_archive/*.md 就认为有快照 (阶段收口才强制)
                     stage_snapshots.append(snapshot_file.name)
         
         details["stage_snapshots"] = {
@@ -112,36 +129,17 @@ def check_governance_completeness(
             "path": str(stage_archive_dir),
         }
         
-        # AIPOS-R7A2 FIX-1 F-2修复: stage_snapshots 为空时应报缺
-        # 但注意:并非所有任务都需要阶段快照 (只有阶段收口卡需要)
-        # 这里简化为:如果 stage_archive/ 存在但为空,发出警告但不 BLOCK
-        # (更精确的判断需要任务元数据标记 is_stage_closure)
+        # 阶段快照为空时不强制 BLOCK (允许非阶段收口卡无快照)
         if not stage_snapshots and stage_archive_dir.is_dir():
-            # 不加入 missing (允许非阶段收口卡没有快照)
             details["stage_snapshots"]["note"] = "Stage archive directory exists but no snapshots found (OK for non-stage-closure tasks)"
     
     except Exception as exc:
+        # AIPOS-R7A2 FIX-2: stage_archive 解析失败显式报错 (BLOCK)
         missing.append(f"stage_archive/ (路径解析失败: {exc})")
         details["stage_snapshots"] = {
             "applicable": False,
             "error": str(exc),
         }
-    
-    # ④ task_cards 归档 (RETURN.md/AUDIT-REPORT.md/CLOSURE.md)
-    archive_files = []
-    if task_cards_dir.is_dir():
-        archive_files = [
-            f.name for f in task_cards_dir.iterdir()
-            if f.name in ["RETURN.md", "AUDIT-REPORT.md", "CLOSURE.md"]
-        ]
-    
-    if not archive_files and task_cards_dir.is_dir():
-        missing.append(f"task_cards/{task_id}/ 缺少归档文件 (RETURN.md/AUDIT-REPORT.md/CLOSURE.md)")
-    
-    details["archive_files"] = {
-        "exists": len(archive_files) > 0,
-        "files": archive_files,
-    }
     
     return {
         "complete": len(missing) == 0,
