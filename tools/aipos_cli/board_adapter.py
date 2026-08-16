@@ -3432,9 +3432,14 @@ def _build_audit_verdict_preview(
     verdict_rel = str(verdict_path.resolve().relative_to(root))
     
     # AIPOS-FND-7F1: 检查已有裁决,PASS 终态不可翻案,FAIL/REQUEST_CHANGES 允许 supersede
+    # AIPOS-R6S 大项A③: round 序号 — reopen 后的新 round 允许新的终态裁决。
     reviewed_task_id_for_verdict = str(reviewed_task.get("task_id") or "")
     existing_verdicts = records.get("task_audit_verdicts", {}).get(reviewed_task_id_for_verdict, [])
-    if existing_verdicts:
+    try:
+        reviewed_round = int((reviewed_metadata or {}).get("round") or 1)
+    except (TypeError, ValueError):
+        reviewed_round = 1
+    if existing_verdicts and reviewed_round <= 1:
         # 有已有裁决,检查最新裁决状态
         latest_verdict = max(existing_verdicts, key=_verdict_time)
         latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
@@ -5224,7 +5229,13 @@ def close_task(
 
         # Check if already closed (idempotency)
         task_closures = records.get("task_closures", {}).get(resolved_task_id, [])
-        if task_closures:
+        # AIPOS-R6S 大项A③: round 序号 — reopen 后的新 round 允许再次 close(旧 round
+        # 的 closure 不拦新 round; append-only 历史保留)。
+        try:
+            current_round = int(selected_task.get("round") or 1)
+        except (TypeError, ValueError):
+            current_round = 1
+        if task_closures and current_round <= 1:
             return blocked_response(
                 operation=operation,
                 dry_run=dry_run,

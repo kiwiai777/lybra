@@ -113,14 +113,28 @@ def check_deployment_branch(repo_root: Path, *, required_branch: str = "main") -
         }
 
 
-def invoke_lybra_deploy(repo_root: Path) -> dict[str, Any]:
+def invoke_lybra_deploy(
+    repo_root: Path,
+    *,
+    verdict_ref: str | None = None,
+    dev_override: bool = False,
+    reason: str | None = None,
+    actor: str | None = None,
+) -> dict[str, Any]:
     """调用 lybra-deploy 脚本执行部署。
     
     AIPOS-FINALIZE-FIX-1: 脚本路径从产品仓根解析 (repo_root / "tools" / "lybra-deploy"),
     禁止依赖 cwd 猜测。config.schema 定义此路径为标准位置。
+
+    AIPOS-R6S 大项B②: deploy 授权判据 — 仅 verdict_ref(finalize 传本卡 PASS 裁决 id)
+    或 dev_override(须显式 --reason), 缺授权即拒(由 lybra-deploy 脚本执行)。
     
     Args:
         repo_root: 产品仓根路径 (必须是产品仓,不是治理仓)
+        verdict_ref: PASS 裁决 id(audited 授权)
+        dev_override: 未审 dev 部署
+        reason: dev_override 的显式理由
+        actor: 执行部署的 actor
     
     Returns:
         {
@@ -140,11 +154,32 @@ def invoke_lybra_deploy(repo_root: Path) -> dict[str, Any]:
             "stderr": f"lybra-deploy script not found at expected location: {deploy_script} (resolved from repo_root={repo_root})",
             "returncode": 1,
         }
+
+    # AIPOS-R6S 大项B②: 组装授权参数(缺授权即拒由脚本执行)
+    from tools.aipos_cli.deployment_record import resolve_authorization
+    auth_type, auth_ref = resolve_authorization(
+        verdict_ref=verdict_ref, dev_override=dev_override, reason=reason
+    )
+    if auth_type is None:
+        return {
+            "success": False,
+            "stdout": "",
+            "stderr": "deploy requires authorization: verdict_ref or dev_override(--reason) — 缺授权即拒 (AIPOS-R6S 大项B②)",
+            "returncode": 2,
+        }
+
+    argv = [str(deploy_script)]
+    if auth_type == "verdict_ref":
+        argv += ["--verdict-ref", auth_ref]
+    else:
+        argv += ["--dev-override", "--reason", auth_ref]
+    if actor:
+        argv += ["--actor", actor]
     
     try:
         # AIPOS-FINALIZE-FIX-1: cwd 设为产品仓根,确保脚本在正确上下文执行
         result = subprocess.run(
-            [str(deploy_script)],
+            argv,
             cwd=str(repo_root),
             capture_output=True,
             text=True,

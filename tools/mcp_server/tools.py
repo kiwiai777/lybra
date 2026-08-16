@@ -1478,7 +1478,17 @@ def lybra_gate_version(arguments: dict[str, Any] | None = None) -> dict[str, Any
                 version_info["git_commit"] = commit
                 version_info["git_commit_short"] = commit[:7]
                 version_info["source"] = "VERSION_file"
-                return _tool_result(version_info)
+            
+            # AIPOS-R6S 大项B③: 自曝 deployment_provenance + 授权引用
+            prov = re.search(r'^deployment_provenance:\s*(\S+)\s*$', version_content, re.MULTILINE)
+            if prov:
+                version_info["deployment_provenance"] = prov.group(1).strip()
+            auth_type = re.search(r'^authorization_type:\s*(\S+)\s*$', version_content, re.MULTILINE)
+            if auth_type:
+                version_info["authorization_type"] = auth_type.group(1).strip()
+            auth_ref = re.search(r'^authorization_ref:\s*(.+?)\s*$', version_content, re.MULTILINE)
+            if auth_ref:
+                version_info["authorization_ref"] = auth_ref.group(1).strip()
         except Exception as e:
             version_info["version_file_error"] = str(e)
 
@@ -3688,6 +3698,11 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
         lybra_dir = ensure_lybra_dir(root)
         connection_data = load_or_create_connection_json(lybra_dir, gate_url=None)  # 保留现有 gate_url
         rotated = upsert_token_entry(connection_data, token_entry)
+        # AIPOS-R6S 大项C③: 同角色多 token 收敛(移除 test.* 陈旧 token)
+        from tools.aipos_cli.enroll_client import converge_role_tokens
+        removed_instances, converged = converge_role_tokens(connection_data, role)
+        if converged:
+            print(f"[enroll_exchange] Converged same-role tokens (removed test.*: {removed_instances})", file=sys.stderr)
         write_connection_json(lybra_dir, connection_data)
         print(f"[enroll_exchange] Token written to {lybra_dir}/connection.json (rotated={rotated})", file=sys.stderr)
         

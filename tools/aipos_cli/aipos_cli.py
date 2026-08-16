@@ -1596,6 +1596,7 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://<host>:<gate-port>)")
     roles_enroll_parser.add_argument("--policy", help="Optional policy reference")
     roles_enroll_parser.add_argument("--bootstrap-token", help="Bootstrap token for HTTP transport auth (any valid token; or set LYBRA_BOOTSTRAP_TOKEN)")
+    roles_enroll_parser.add_argument("--verify", action="store_true", help="AIPOS-R6S 大项C②: enroll 后立刻用新 token 调一次 gate, 不通即报错并回滚")
     roles_enroll_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
@@ -2343,6 +2344,7 @@ def main(argv: list[str] | None = None) -> int:
                         workspace_root=workspace_root,
                         policy=getattr(args, "policy", None),
                         bootstrap_token=getattr(args, "bootstrap_token", None),
+                        verify=bool(getattr(args, "verify", False)),
                     )
                     if getattr(args, "json", False):
                         print(render_json(result))

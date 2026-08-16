@@ -29,6 +29,43 @@ VERSION_FILE="$DEPLOY_DIR/VERSION"
 GATE_SERVICE="lybra-dev-gate.service"
 MAX_RELEASES=5  # keep last N releases (oldest pruned on each deploy)
 
+# ── AIPOS-R6S 大项B②: deploy 授权判据(缺授权即拒)──────────────────────
+# 仅 verdict_ref(finalize 传本卡 PASS 裁决 id) 或 dev_override(须显式 --reason)。
+DEPLOY_VERDICT_REF=""
+DEPLOY_DEV_OVERRIDE=0
+DEPLOY_REASON=""
+DEPLOY_ACTOR=""
+GOVERNANCE_ROOT=""
+DEPLOY_AUTH_TYPE=""
+DEPLOY_AUTH_REF=""
+DEPLOY_PROVENANCE=""
+
+parse_authorization_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --verdict-ref) DEPLOY_VERDICT_REF="${2:-}"; shift 2 ;;
+            --dev-override) DEPLOY_DEV_OVERRIDE=1; shift ;;
+            --reason) DEPLOY_REASON="${2:-}"; shift 2 ;;
+            --actor) DEPLOY_ACTOR="${2:-}"; shift 2 ;;
+            --governance-root) GOVERNANCE_ROOT="${2:-}"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+}
+
+resolve_governance_root() {
+    # 从 connection.json 的 workspace_root 派生治理工作区根(单一源)。
+    if [[ -n "$GOVERNANCE_ROOT" ]]; then
+        return 0
+    fi
+    local conn_json="/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json"
+    GOVERNANCE_ROOT=$(python3 -c "import json; print(json.load(open('$conn_json')).get('workspace_root',''))" 2>/dev/null || echo "")
+    if [[ -z "$GOVERNANCE_ROOT" ]]; then
+        err "Cannot resolve governance root (pass --governance-root)"
+        exit 1
+    fi
+}
+
 # ── rsync excludes ──────────────────────────────────────────────────────
 # Things that must NOT appear in the runtime snapshot.
 # Credentials (.lybra/, .env) are referenced by absolute path, never copied.
@@ -287,6 +324,31 @@ cmd_deploy() {
     fi
     log "✓ Branch check: on main"
 
+    # ── AIPOS-R6S 大项B②: 授权判据 — 缺授权即拒 ────────────────────
+    resolve_governance_root
+    if [[ -n "$DEPLOY_VERDICT_REF" ]]; then
+        DEPLOY_AUTH_TYPE="verdict_ref"
+        DEPLOY_AUTH_REF="$DEPLOY_VERDICT_REF"
+        DEPLOY_PROVENANCE="audited"
+    elif [[ "$DEPLOY_DEV_OVERRIDE" == "1" ]]; then
+        if [[ -z "$DEPLOY_REASON" ]]; then
+            err "DEPLOY BLOCKED: --dev-override requires --reason <text> (缺授权即拒)."
+            exit 1
+        fi
+        DEPLOY_AUTH_TYPE="dev_override"
+        DEPLOY_AUTH_REF="$DEPLOY_REASON"
+        DEPLOY_PROVENANCE="dev_override"
+    else
+        err "DEPLOY BLOCKED: deploy requires authorization (缺授权即拒)."
+        err "  Authorized: lybra-deploy --verdict-ref <pass_verdict_id>"
+        err "  Dev:       lybra-deploy --dev-override --reason <explicit reason>"
+        exit 1
+    fi
+    if [[ -z "$DEPLOY_ACTOR" ]]; then
+        DEPLOY_ACTOR=$(cd "$PRODUCT_REPO" && git config user.name 2>/dev/null || whoami 2>/dev/null || echo "(unknown)")
+    fi
+    log "✓ Authorization check: ${DEPLOY_AUTH_TYPE}=${DEPLOY_AUTH_REF} (provenance=${DEPLOY_PROVENANCE})"
+
     # Gather version info
     local git_hash git_timestamp
     git_hash=$(cd "$PRODUCT_REPO" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -328,6 +390,9 @@ git_short: ${git_hash}
 built_at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 working_tree_dirty: ${dirty_flag:-no}
 deploy_script: $(readlink -f "$0")
+deployment_provenance: ${DEPLOY_PROVENANCE}
+authorization_type: ${DEPLOY_AUTH_TYPE}
+authorization_ref: ${DEPLOY_AUTH_REF}
 EOF
     log "  Snapshot created: $staging_dir"
 
@@ -626,6 +691,26 @@ except Exception:
         log "  ⚠ Working tree was dirty at deploy time"
     fi
 
+    # ── AIPOS-R6S 大项B①: 落 deployment_record(commit/actor/时间/authorization)──
+    log "Writing deployment_record..."
+    local rec_cmd=(
+        python3 -m tools.aipos_cli.deployment_record
+        --governance-root "$GOVERNANCE_ROOT"
+        --commit "$(cd "$PRODUCT_REPO" && git rev-parse HEAD)"
+        --actor "$DEPLOY_ACTOR"
+        --runtime-directory "$release_dir"
+    )
+    if [[ "$DEPLOY_AUTH_TYPE" == "verdict_ref" ]]; then
+        rec_cmd+=(--verdict-ref "$DEPLOY_AUTH_REF")
+    else
+        rec_cmd+=(--dev-override --reason "$DEPLOY_AUTH_REF")
+    fi
+    if (cd "$PRODUCT_REPO" && "${rec_cmd[@]}" 2>&1); then
+        log "  ✓ deployment_record written"
+    else
+        log "  ⚠ deployment_record write failed (deploy itself succeeded)"
+    fi
+
     # ── Prune old releases ──────────────────────────────────────────────
     _prune_releases
 
@@ -691,6 +776,8 @@ _prune_releases() {
 main() {
     local cmd="${1:-deploy}"
     shift 2>/dev/null || true
+    # AIPOS-R6S 大项B②: 解析授权参数(仅 deploy 需要; status/rollback/verify 忽略)
+    parse_authorization_args "$@"
 
     case "$cmd" in
         deploy)    cmd_deploy ;;
@@ -699,7 +786,7 @@ main() {
         validate)  cmd_validate "$@" ;;
         verify)    cmd_verify ;;
         -h|--help|help)
-            echo "Usage: lybra-deploy [command]"
+            echo "Usage: lybra-deploy [command] [authorization]"
             echo ""
             echo "Commands:"
             echo "  deploy     (default) Snapshot working tree, validate, switch, restart gate"
@@ -708,12 +795,20 @@ main() {
             echo "  validate   Check if working tree can be imported (no deploy)"
             echo "  verify     Verify deployment integrity: current==HEAD + live gate HTTP check (AIPOS-369)"
             echo ""
+            echo "Authorization (deploy only, REQUIRED — AIPOS-R6S 大项B② 缺授权即拒):"
+            echo "  --verdict-ref <id>   Audited deploy: PASS audit verdict id (deployment_provenance=audited)"
+            echo "  --dev-override       Unaudited dev deploy (deployment_provenance=dev_override)"
+            echo "  --reason <text>      Required when using --dev-override"
+            echo "  --actor <name>       Deploying actor (default: git user.name)"
+            echo "  --governance-root <p>  Governance workspace root (default: from connection.json)"
+            echo ""
             echo "AIPOS-333: gate runtime isolation from working tree."
             echo "AIPOS-369: deployment integrity verification."
+            echo "AIPOS-R6S: deployment authorization + deployment_record."
             ;;
         *)
             err "Unknown command: $cmd"
-            echo "Usage: lybra-deploy [deploy|status|rollback|validate|verify]" >&2
+            echo "Usage: lybra-deploy [deploy|status|rollback|validate|verify] [--verdict-ref|--dev-override ...]" >&2
             exit 2
             ;;
     esac

@@ -118,12 +118,76 @@ def _git_local_origin_synced(repo_root: Path) -> bool:
         return False
 
 
-def _check_deployment_integrity(repo_root: Path) -> dict[str, Any]:
-    """Check if .deploy/current symlink points to HEAD (AIPOS-369 assertion).
-    
+def _read_deploy_current(repo_root: Path) -> dict[str, str | None]:
+    """读 .deploy/current/VERSION 的 git_commit / deployment_provenance / authorization_ref。"""
+    deploy_dir = repo_root / ".deploy"
+    current_link = deploy_dir / "current"
+    result: dict[str, str | None] = {"current_commit": None, "provenance": None, "authorization_ref": None}
+    if not current_link.exists():
+        return result
+    version_file = current_link / "VERSION"
+    if not version_file.exists():
+        return result
+    text = version_file.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if line.startswith("git_commit:"):
+            result["current_commit"] = line.split(":", 1)[1].strip()
+        elif line.startswith("deployment_provenance:"):
+            result["provenance"] = line.split(":", 1)[1].strip()
+        elif line.startswith("authorization_ref:"):
+            result["authorization_ref"] = line.split(":", 1)[1].strip()
+    return result
+
+
+def _task_id_from_commit_subject(subject: str) -> str | None:
+    """从 commit 主题提取 task_id(如 'feat(AIPOS-R6S): ...' 或 'AIPOS-R6S: ...')。"""
+    import re
+    m = re.search(r"feat\(([^)]+)\)", subject)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"^([A-Z][A-Z0-9]*-[A-Z0-9]+)", subject.strip())
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _commits_between(repo_root: Path, current_commit: str, head_commit: str) -> list[dict[str, str]]:
+    """current..HEAD 的 commit 列表(按新旧序), 每项 {hash, subject}。"""
+    try:
+        result = subprocess.run(
+            ["git", "log", "--format=%H %s", f"{current_commit}..{head_commit}"],
+            cwd=str(repo_root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        return []
+    commits: list[dict[str, str]] = []
+    for line in result.stdout.strip().splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(" ", 1)
+        commits.append({"hash": parts[0], "subject": parts[1] if len(parts) > 1 else ""})
+    return commits
+
+
+def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = None) -> dict[str, Any]:
+    """AIPOS-R6S 大项B⑤: 部署完整性区间校验(current..HEAD 每个 commit 都属已 PASS 的卡)。
+
+    取代原 current==HEAD 简单相等(堆叠两张已审卡被误拦=实证)。
+    语义:
+      - 无部署 → OK(首次 commit, 无漂移可校验)
+      - provenance=dev_override → 拒(finalize 拒绝在 dev_override 上结算, 大项B④)
+      - current == HEAD → OK
+      - current..HEAD 每个 commit 均属已 PASS 的卡 → OK(待 deploy 追平)
+      - 否则 → 拒, 列出缺审 commit
+
     Returns:
-        {"integrity_ok": bool, "current_commit": str, "head_commit": str, "message": str}
+        {"integrity_ok": bool, "current_commit": str|None, "head_commit": str,
+         "provenance": str|None, "missing_commits": list[str], "message": str}
     """
+    head_commit = _git_rev_parse_head(repo_root)
     deploy_dir = repo_root / ".deploy"
     current_link = deploy_dir / "current"
     
@@ -132,43 +196,101 @@ def _check_deployment_integrity(repo_root: Path) -> dict[str, Any]:
         return {
             "integrity_ok": True,
             "current_commit": None,
-            "head_commit": _git_rev_parse_head(repo_root),
+            "head_commit": head_commit,
+            "provenance": None,
+            "missing_commits": [],
             "message": "No .deploy/current symlink (no deployment yet - OK for commit)",
         }
+
+    deployed = _read_deploy_current(repo_root)
+    current_commit = deployed["current_commit"]
+    provenance = deployed["provenance"]
     
-    # Read VERSION file from current deployment
-    version_file = current_link / "VERSION"
-    if not version_file.exists():
+    if not current_commit:
         return {
             "integrity_ok": False,
             "current_commit": None,
-            "head_commit": _git_rev_parse_head(repo_root),
-            "message": ".deploy/current/VERSION does not exist",
+            "head_commit": head_commit,
+            "provenance": provenance,
+            "missing_commits": [],
+            "message": ".deploy/current/VERSION missing git_commit field",
         }
-    
-    version_data = version_file.read_text(encoding="utf-8")
-    current_commit = None
-    for line in version_data.splitlines():
-        if line.startswith("git_commit:"):
-            current_commit = line.split(":", 1)[1].strip()
-            break
-    
-    head_commit = _git_rev_parse_head(repo_root)
-    
+
+    # AIPOS-R6S 大项B④: provenance=dev_override → finalize 拒绝在其上结算
+    if provenance == "dev_override":
+        return {
+            "integrity_ok": False,
+            "current_commit": current_commit,
+            "head_commit": head_commit,
+            "provenance": provenance,
+            "missing_commits": [],
+            "message": (
+                f"Deployment provenance=dev_override (current={current_commit[:8]}). "
+                "finalize 拒绝在 dev_override 部署上结算 —— 必须先用审过的 commit 重部署 "
+                "(lybra-deploy --verdict-ref <pass_verdict_id>)。"
+            ),
+        }
+
     if current_commit == head_commit:
         return {
             "integrity_ok": True,
             "current_commit": current_commit,
             "head_commit": head_commit,
+            "provenance": provenance,
+            "missing_commits": [],
             "message": f"Deployment integrity OK: current == HEAD ({head_commit[:8]})",
         }
-    else:
+
+    # 区间校验: current..HEAD 每个 commit 都属已 PASS 的卡
+    commits = _commits_between(repo_root, current_commit, head_commit)
+    if not commits:
+        # current 不是 HEAD 祖先(分叉/漂移), 保守拒
         return {
             "integrity_ok": False,
             "current_commit": current_commit,
             "head_commit": head_commit,
-            "message": f"DRIFT: current ({current_commit[:8] if current_commit else 'unknown'}) != HEAD ({head_commit[:8]})",
+            "provenance": provenance,
+            "missing_commits": [],
+            "message": (
+                f"DRIFT: current ({current_commit[:8]}) is not an ancestor of HEAD ({head_commit[:8]})"
+            ),
         }
+
+    missing: list[str] = []
+    if governance_root is not None:
+        for c in commits:
+            task_id = _task_id_from_commit_subject(c["subject"])
+            if not task_id:
+                missing.append(f"{c['hash'][:8]} (无 task_id: {c['subject'][:40]})")
+                continue
+            verdict_check = check_task_can_finalize(task_id, governance_root)
+            if not verdict_check["can_finalize"]:
+                missing.append(f"{c['hash'][:8]} ({task_id}: {verdict_check['reason'][:60]})")
+
+    if missing:
+        return {
+            "integrity_ok": False,
+            "current_commit": current_commit,
+            "head_commit": head_commit,
+            "provenance": provenance,
+            "missing_commits": missing,
+            "message": (
+                f"区间校验失败: current({current_commit[:8]})..HEAD({head_commit[:8]}) "
+                f"存在 {len(missing)} 个缺审 commit: {', '.join(missing)}"
+            ),
+        }
+
+    return {
+        "integrity_ok": True,
+        "current_commit": current_commit,
+        "head_commit": head_commit,
+        "provenance": provenance,
+        "missing_commits": [],
+        "message": (
+            f"区间校验 OK: current({current_commit[:8]})..HEAD({head_commit[:8]}) "
+            f"共 {len(commits)} 个 commit 均属已 PASS 的卡"
+        ),
+    }
 
 
 def _report_frontmatter_verdict_for_display(workspace_root: Path, task_id: str) -> dict[str, Any]:
@@ -837,7 +959,7 @@ def finalize_task(
             from tools.aipos_cli.deploy_gate import invoke_lybra_deploy, verify_deployment_version
             
             operations.append("ℹ️  Invoking lybra-deploy (explicit deploy mode)...")
-            deploy_result = invoke_lybra_deploy(workspace_root)
+            deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor)
             
             if deploy_result["success"]:
                 operations.append("✓ lybra-deploy completed successfully")
@@ -907,7 +1029,7 @@ def finalize_task(
                 # Gate-side changes detected - auto-deploy
                 operations.append("⚠️  Gate-side changes detected - triggering auto-deploy...")
                 
-                deploy_result = invoke_lybra_deploy(workspace_root)
+                deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor)
                 if deploy_result["success"]:
                     operations.append("✓ Deployment completed successfully")
                     # Append deployment output (first 10 lines)

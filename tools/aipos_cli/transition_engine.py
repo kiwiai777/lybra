@@ -96,6 +96,25 @@ def apply_transition_metadata(
             updated["reopen_reason"] = extra_fields["reason"]
         
         updated["needs_owner"] = False
+
+        # AIPOS-R6S 大项A③: round 序号 — reopen 递增, 使多轮 FIX 有完整生命周期。
+        # 下游 close/audit 用 round 区分旧终态(旧 round 的 closure/verdict 不拦新 round)。
+        try:
+            prev_round = int(updated.get("round") or 1)
+        except (TypeError, ValueError):
+            prev_round = 1
+        updated["round"] = prev_round + 1
+        # 重置 closure/verdict 终态字段(新 round 下不再被旧终态字段污染)
+        updated.pop("finalized", None)
+        updated.pop("finalized_at", None)
+        updated.pop("finalize_commit_hash", None)
+        updated.pop("finalize_return_ref", None)
+        updated.pop("verdict", None)
+        updated.pop("verdict_ref", None)
+        updated.pop("audit_verdict", None)
+        updated.pop("audit_verdict_at", None)
+        updated.pop("audit_verdict_by", None)
+        updated.pop("related_audit_verdict_ref", None)
         
         # AIPOS-R4A FIX-2: malformed 修复路径，清理 active_session_id → last_session_id
         if updated.get("active_session_id") not in (None, ""):

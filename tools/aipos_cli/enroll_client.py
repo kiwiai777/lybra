@@ -79,12 +79,76 @@ def normalize_gate_url_for_same_host(gate_url: str) -> str:
     Returns:
         同机时返回 http://127.0.0.1:<port>,跨机返回原URL
     """
+    if not gate_url:
+        return gate_url
     if not is_same_host(gate_url):
         return gate_url
     
     parsed = urlparse(gate_url)
     port = parsed.port or 7118
     return f"http://127.0.0.1:{port}"
+
+
+def verify_token_against_gate(gate_url: str, token: str, *, timeout: int = 15) -> tuple[bool, str]:
+    """AIPOS-R6S 大项C②: enroll --verify — 用新铸 token 立刻调一次 gate, 验真通。
+
+    调一个只读工具 (lybra_gate_version), 成功 → (True, detail); 失败(401/拒)→ (False, detail)。
+    """
+    url = f"{gate_url.rstrip('/')}/mcp"
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "lybra_gate_version", "arguments": {}},
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    proxy_handler = urllib.request.ProxyHandler({})
+    opener = urllib.request.build_opener(proxy_handler)
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with opener.open(req, timeout=timeout) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return False, f"HTTP {e.code}: {e.read().decode('utf-8', errors='replace')[:200]}"
+    except Exception as e:
+        return False, f"verify request failed: {e}"
+    if "error" in result:
+        return False, f"gate error: {json.dumps(result['error'])[:200]}"
+    return True, "gate accepted new token (lybra_gate_version ok)"
+
+
+def converge_role_tokens(connection_data: dict[str, Any], role: str) -> tuple[list[str], bool]:
+    """AIPOS-R6S 大项C③: 同角色多 token 收敛。
+
+    移除该角色下 agent_instance 以 'test.' 开头的陈旧测试 token(治理仓 executor 仍3条含
+    两条 test.* 的实证)。保留真实绑定实例 token。返回 (removed_instances, changed)。
+    """
+    tokens = connection_data.get("tokens")
+    if not isinstance(tokens, list):
+        return [], False
+    removed: list[str] = []
+    kept: list[dict[str, Any]] = []
+    changed = False
+    for entry in tokens:
+        if not isinstance(entry, dict):
+            kept.append(entry)
+            continue
+        if entry.get("role") != role:
+            kept.append(entry)
+            continue
+        instance = str(entry.get("agent_instance") or "")
+        if instance.startswith("test."):
+            removed.append(instance)
+            changed = True
+            continue
+        kept.append(entry)
+    if changed:
+        connection_data["tokens"] = kept
+    return removed, changed
 
 
 def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | None = None) -> dict[str, Any]:
@@ -213,16 +277,20 @@ def load_or_create_connection_json(lybra_dir: Path, gate_url: str) -> dict[str, 
     # 确保 mcp 配置存在(用于 ConnectionResolver)
     # ConnectionResolver expects rpc_url to be the full MCP endpoint URL
     # AIPOS-R6K件①: 同机时写 loopback URL (免疫代理劫持)
-    normalized_gate_url = normalize_gate_url_for_same_host(gate_url)
-    if "mcp" not in data:
-        mcp_url = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
-        data["mcp"] = {
-            "rpc_url": mcp_url,
-        }
-    else:
-        # 更新现有 mcp.rpc_url (幂等:如已存在也更新为规范化 URL)
-        mcp_url = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
-        data["mcp"]["rpc_url"] = mcp_url
+    # AIPOS-R6S 大项C①: gate_url=None 时不触碰 mcp 配置(保留现有 rpc_url)——
+    # enroll_exchange 在 gate 侧注册 token 时传 None, 此前的 None.endswith 崩溃导致
+    # token 从未写进 gate 认可列表(新铸 token 被拒的根因)。
+    if gate_url:
+        normalized_gate_url = normalize_gate_url_for_same_host(gate_url)
+        if "mcp" not in data:
+            mcp_url = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
+            data["mcp"] = {
+                "rpc_url": mcp_url,
+            }
+        else:
+            # 更新现有 mcp.rpc_url (幂等:如已存在也更新为规范化 URL)
+            mcp_url = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
+            data["mcp"]["rpc_url"] = mcp_url
     
     # 确保 config_version 存在
     if "config_version" not in data:
@@ -338,6 +406,7 @@ def enroll(
     workspace_root: Path,
     policy: str | None = None,
     bootstrap_token: str | None = None,
+    verify: bool = False,
 ) -> dict[str, Any]:
     """执行完整的 enroll 流程。
     
@@ -347,6 +416,7 @@ def enroll(
         workspace_root: Workspace root(落配置的目标目录,不需要预先存在)
         policy: Optional policy reference(如未提供,从 gate 返回中提取或不设置)
         bootstrap_token: Optional bootstrap token for HTTP transport auth(any valid token)
+        verify: AIPOS-R6S 大项C② — enroll 后立刻用新 token 调一次 gate, 不通即报错并回滚
     
     Returns:
         {
@@ -360,6 +430,7 @@ def enroll(
             "workspace_root": str,
             "lybra_dir": str,
             "files_written": list[str],
+            "verify": dict | None,  # AIPOS-R6S 大项C②
         }
     
     Raises:
@@ -391,6 +462,7 @@ def enroll(
     agent_instance = token_entry.get("agent_instance")
     fingerprint = token_entry.get("fingerprint", "(unknown)")
     scopes = token_entry.get("scopes", [])
+    token_value = token_entry.get("token")
     
     if not role:
         raise RuntimeError("token_entry missing 'role' field")
@@ -412,6 +484,28 @@ def enroll(
     write_role_file(lybra_dir, role, agent_instance, policy)
     files_written.append("role")
     
+    # Step 7 (AIPOS-R6S 大项C②): 可选 --verify — 新 token 调一次 gate, 不通即回滚
+    verify_result = None
+    if verify:
+        if not token_value:
+            raise RuntimeError("token_entry missing 'token' — cannot verify")
+        ok, detail = verify_token_against_gate(gate_url, token_value)
+        verify_result = {"ok": ok, "detail": detail}
+        if not ok:
+            # 回滚: 移除刚写入的 token(禁静默留坏配置)
+            try:
+                rollback_data = load_or_create_connection_json(lybra_dir, gate_url)
+                rollback_data["tokens"] = [
+                    t for t in rollback_data.get("tokens", [])
+                    if not (t.get("agent_instance") == agent_instance or (not agent_instance and t.get("role") == role))
+                ]
+                write_connection_json(lybra_dir, rollback_data)
+            except Exception as rb_exc:
+                raise RuntimeError(
+                    f"enroll --verify FAILED ({detail}) and rollback also failed: {rb_exc}"
+                ) from rb_exc
+            raise RuntimeError(f"enroll --verify FAILED: {detail} — token 已回滚, 未留下坏配置")
+    
     return {
         "ok": True,
         "operation": "enroll",
@@ -423,6 +517,7 @@ def enroll(
         "workspace_root": str(workspace_root),
         "lybra_dir": str(lybra_dir),
         "files_written": files_written,
+        "verify": verify_result,
     }
 
 
@@ -441,6 +536,7 @@ def main() -> int:
     parser.add_argument("--workspace", help="Workspace root(defaults to current directory)")
     parser.add_argument("--policy", help="Optional policy reference")
     parser.add_argument("--bootstrap-token", help="Bootstrap token for HTTP transport auth (any valid token; or set LYBRA_BOOTSTRAP_TOKEN)")
+    parser.add_argument("--verify", action="store_true", help="AIPOS-R6S 大项C②: enroll 后立刻用新 token 调一次 gate, 不通即报错并回滚")
     parser.add_argument("--quiet", action="store_true", help="Suppress non-error output")
     parser.add_argument("--json", action="store_true", help="Output JSON")
     
@@ -459,6 +555,7 @@ def main() -> int:
             workspace_root=workspace_root,
             policy=args.policy,
             bootstrap_token=getattr(args, 'bootstrap_token', None),
+            verify=bool(getattr(args, 'verify', False)),
         )
     except RuntimeError as e:
         if args.json:

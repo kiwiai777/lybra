@@ -101,6 +101,33 @@
       }
     }
   },
+  "lybra_dir_authority": {
+    "description": "AIPOS-R6S 大项C④: .lybra 配置源的权威关系 — 工位级 vs 机器级。连接器/CLI 的 gate_url/actor/token/policy 自发现必须先锚定工位级 .lybra(会话 cwd 向上找), 机器级 ~/.lybra/local 只是回退(第二源), 永不与工位级混用。gate 工作区(队列/records)与产品仓(最终化/git)的 workspace_root 语义同族拆分, 见 resolveGateWorkspace/resolveCodeRepo。",
+    "sources": [
+      {
+        "name": "workstation",
+        "path": "<session-cwd-upward>/.lybra",
+        "authority": "primary",
+        "holds": ["connection.json (gate_url/token)", "role (role/instance/owner_policy_ref)", "actor", "policy"],
+        "note": "同机多角色各自锚定自己的工位, 禁从治理仓 workspaceRoot 找 .lybra (锚点错 = 同机全解析成同一身份)"
+      },
+      {
+        "name": "machine",
+        "path": "~/.lybra/local",
+        "authority": "fallback",
+        "holds": ["connection.json (gate_url fallback only)"],
+        "note": "只在工位级缺失时作回退读; 工位级存在时永不优先。今晨 loop 取到域名 URL 即因读了机器级 → 现为隐式第二源, 此处定死"
+      },
+      {
+        "name": "env",
+        "authority": "lowest_override",
+        "holds": ["LYBRA_GATE_URL", "LYBRA_TOKEN", "LYBRA_ACTOR", "LYBRA_OWNER_POLICY_REF", "LYBRA_WORKSPACE_ROOT"],
+        "note": "env 仅覆盖, 优先级最低, 不构成权威源"
+      }
+    ],
+    "same_host_rule": "同机时 gate_url 一律 loopback (http://127.0.0.1:<port>), 免疫代理劫道 (AIPOS-R6K 契约)",
+    "precedence": "显式参数 > 工位 .lybra (primary) > 机器级 ~/.lybra/local (fallback) > env (lowest)"
+  },
   "ports": {
     "description": "Service port configuration — single source for all port defaults. AIPOS-R4B-1: code reads these via schema_loader.get_config_port(); the 35 hardcoded 7117/7118 references in tools/ (non-test) route through here. board_default added (was missing: board port 7117 had no single source).",
     "board_default": 7117,

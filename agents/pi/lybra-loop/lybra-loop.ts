@@ -104,6 +104,15 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
   const fs = await import("node:fs");
   const path = await import("node:path");
   
+  // AIPOS-R6S 大项A②: sweep 执行范围按角色能力判定(roles.schema scopes)。
+  // finalize+close 属 executor 车道(queue_close scope); 审计工位不应跑 finalize(今日实证越界)。
+  if (config.role !== "executor") {
+    const msg = `sweep 跳过: 当前角色 ${config.role || "?"} 不具 finalize/close 能力(roles.schema scopes), 不跑 finalize`;
+    currentLogger.info("sweep-skip-role", { role: config.role });
+    ctx.ui?.notify?.(msg, "info");
+    return false;
+  }
+  
   // 扫描所有有 PASS 裁决的任务
   const verdictsRoot = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts");
   if (!fs.existsSync(verdictsRoot)) {
@@ -130,6 +139,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
   ctx.ui?.notify?.(`扫描到 ${taskDirs.length} 个裁决目录`, "info");
   
   let processedCount = 0;
+  const skipped: { task_id: string; reason: string }[] = [];
   
   for (const taskId of taskDirs) {
     const verdictDir = path.join(verdictsRoot, taskId);
@@ -139,6 +149,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
     
     if (verdictFiles.length === 0) {
       currentLogger.info("sweep-skip-no-verdict", { task_id: taskId, reason: "no verdict files" });
+      skipped.push({ task_id: taskId, reason: "无裁决文件" });
       continue;
     }
     
@@ -150,12 +161,14 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
     const verdictMatch = verdictContent.match(/^verdict:\s*([A-Z_]+)$/m);
     if (!verdictMatch) {
       currentLogger.info("sweep-skip-no-verdict-field", { task_id: taskId, reason: "verdict field not found" });
+      skipped.push({ task_id: taskId, reason: "裁决字段缺失" });
       continue;
     }
     
     const verdict = verdictMatch[1].trim();
     if (verdict !== "PASS" && verdict !== "PASS_WITH_NOTES") {
       currentLogger.info("sweep-skip-not-pass", { task_id: taskId, verdict, reason: "verdict not PASS/PASS_WITH_NOTES" });
+      skipped.push({ task_id: taskId, reason: `裁决为 ${verdict}(非 PASS)` });
       continue;
     }
     
@@ -165,6 +178,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
       const closureFiles = fs.readdirSync(closureDir).filter(f => f.startsWith("closure_") && f.endsWith(".md"));
       if (closureFiles.length > 0) {
         currentLogger.info("sweep-skip-already-closed", { task_id: taskId, reason: "already has closure record" });
+        skipped.push({ task_id: taskId, reason: "已有 closure 记录" });
         continue;
       }
     }
@@ -173,6 +187,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
     const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${taskId.toLowerCase()}.md`);
     if (!fs.existsSync(taskCardPath)) {
       currentLogger.info("sweep-skip-not-claimed", { task_id: taskId, reason: "task card not in claimed" });
+      skipped.push({ task_id: taskId, reason: "卡不在 claimed 队列" });
       continue;
     }
     
@@ -238,6 +253,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
         const msg = `auto-close dry_run BLOCK: ${taskId} - ${JSON.stringify(detail)}`;
         currentLogger.error("auto-close-blocked", { task_id: taskId, response: closeDryResp });
         ctx.ui?.notify?.(msg, "error");
+        skipped.push({ task_id: taskId, reason: "close dry_run BLOCK" });
         continue;
       }
       
@@ -250,8 +266,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
       
       ctx.ui?.notify?.(`自动 finalize+close 任务 ${taskId} (${verdict})`, "info");
       processedCount++;
-      
-      return true;
+      // AIPOS-R6S 大项A①: 收完一张继续下一张(不再首张成功即 return)
     } catch (e) {
       const errMsg = `自动finalize失败: ${taskId} - ${e instanceof Error ? e.message : String(e)}`;
       currentLogger.error("auto-finalize-failed", {
@@ -260,16 +275,26 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
       });
       // AIPOS-R6L 大项A②: 失败必出声（ctx.ui.notify，禁只进日志）
       ctx.ui?.notify?.(errMsg, "error");
+      skipped.push({ task_id: taskId, reason: `finalize 失败: ${e instanceof Error ? e.message : String(e)}` });
       // 失败不停循环，继续处理其他任务
     }
   }
   
-  if (processedCount === 0) {
-    currentLogger.info("sweep-complete-no-action", { scanned: taskDirs.length });
-    ctx.ui?.notify?.(`sweep 完成: 扫描 ${taskDirs.length} 张卡，无需处理`, "info");
+  // AIPOS-R6S 大项A①: 末尾汇总 — 本轮收 N 张/跳过 M 张及原因
+  const summaryParts: string[] = [`sweep 完成: 本轮收 ${processedCount} 张`];
+  if (skipped.length > 0) {
+    summaryParts.push(`跳过 ${skipped.length} 张`);
+    for (const s of skipped) {
+      summaryParts.push(`  - ${s.task_id}: ${s.reason}`);
+    }
+  } else if (processedCount === 0) {
+    summaryParts.push(`扫描 ${taskDirs.length} 张卡，无需处理`);
   }
+  const summaryMsg = summaryParts.join("\n");
+  currentLogger.info("sweep-complete", { processed: processedCount, skipped: skipped.length, skipped_list: skipped });
+  ctx.ui?.notify?.(summaryMsg, "info");
   
-  return false;
+  return processedCount > 0;
 }
 
 /**

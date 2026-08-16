@@ -101,6 +101,10 @@
           "description": "Claim record (deprecated, use claim)"
         },
         {
+          "value": "deployment_record",
+          "description": "Deployment record (AIPOS-R6S 大项B: commit/actor/timestamp/authorization/provenance)"
+        },
+        {
           "value": "closure",
           "description": "Task closure record"
         },
@@ -423,6 +427,19 @@
         {
           "value": "critical",
           "description": "Critical risk"
+        }
+      ]
+    },
+    "deployment_provenance": {
+      "description": "Deployment provenance — how the deployed commit was authorized (AIPOS-R6S 大项B). audited = deployed via a PASS verdict_ref; dev_override = deployed without audit (explicit --reason required). finalize refuses to settle on dev_override provenance.",
+      "values": [
+        {
+          "value": "audited",
+          "description": "Deployed commit authorized by a PASS audit verdict (verdict_ref)"
+        },
+        {
+          "value": "dev_override",
+          "description": "Deployed without audit — explicit dev override with a required reason"
         }
       ]
     },
