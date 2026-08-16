@@ -762,28 +762,106 @@ def finalize_task(
     # Check if there are changes to commit
     # AIPOS-R6A 靶子③: finalize push判据修正 — working tree clean ≠ already pushed
     # 需要检查 local vs origin 同步状态
+    # AIPOS-R7A2 靶①(P0): clean-tree 早退必须检查 deploy 状态,禁静默跳过
     if _git_status_clean(workspace_root):
         synced = _git_local_origin_synced(workspace_root)
+        current_commit = _git_rev_parse_head(workspace_root)
         
-        # Case 1: working tree clean + synced → 真正无事可做
+        # AIPOS-R7A2 靶①: 检查当前 commit 是否已部署
+        # 有 PASS 裁决 + 未部署 → 必须 deploy 或显式 FAIL
+        deployed_info = _read_deploy_current(workspace_root)
+        deployed_commit = deployed_info.get("current_commit")
+        needs_deploy = (deployed_commit != current_commit)
+        
+        # Case 1: working tree clean + synced → 检查 deploy 状态
         if synced:
-            return {
-                "verdict": Verdict.PASS,
-                "task_id": task_id,
-                "actor": actor,
-                "dry_run": dry_run,
-                "can_finalize": True,
-                "integrity_check": integrity,
-                "branch_check": branch_check,
-                "committed": False,
-                "pushed": False,
-                "deployed": False,
-                "deployment_skipped": False,
-                "deployment_error": None,
-                "commit_hash": _git_rev_parse_head(workspace_root),
-                "message": "No changes to commit (working tree clean and synced with origin)",
-                "operations": operations,
-            }
+            if needs_deploy:
+                # AIPOS-R7A2 靶①(P0): 未部署但有 PASS 裁决 → 必须 deploy,不可静默跳过
+                # 进入 finalize 说明已有 PASS 裁决,commit 未部署是闭环缺口,必须补
+                operations.append(f"⚠️  Current commit {current_commit[:8]} not deployed (deployed: {deployed_commit[:8] if deployed_commit else 'none'})")
+                operations.append("⚠️  PASS 裁决下的 commit 必须部署,触发强制 deploy...")
+                
+                from tools.aipos_cli.deploy_gate import invoke_lybra_deploy, verify_deployment_version
+                
+                deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor)
+                if deploy_result["success"]:
+                    operations.append("✓ Deploy completed successfully")
+                    verification = verify_deployment_version(workspace_root, current_commit)
+                    if verification["verified"]:
+                        return {
+                            "verdict": Verdict.PASS,
+                            "task_id": task_id,
+                            "actor": actor,
+                            "dry_run": dry_run,
+                            "can_finalize": True,
+                            "integrity_check": integrity,
+                            "branch_check": branch_check,
+                            "committed": False,
+                            "pushed": False,
+                            "deployed": True,
+                            "deployment_skipped": False,
+                            "deployment_error": None,
+                            "commit_hash": current_commit,
+                            "message": f"No changes to commit, deployed {current_commit[:8]} to close gap",
+                            "operations": operations,
+                        }
+                    else:
+                        # Deploy 验证失败 → FAIL
+                        return {
+                            "verdict": Verdict.FAIL,
+                            "task_id": task_id,
+                            "actor": actor,
+                            "dry_run": dry_run,
+                            "can_finalize": True,
+                            "integrity_check": integrity,
+                            "branch_check": branch_check,
+                            "committed": False,
+                            "pushed": False,
+                            "deployed": False,
+                            "deployment_skipped": False,
+                            "deployment_error": verification["message"],
+                            "commit_hash": current_commit,
+                            "message": f"Deploy verification failed: {verification['message']}",
+                            "operations": operations,
+                        }
+                else:
+                    # Deploy 失败 → FAIL
+                    return {
+                        "verdict": Verdict.FAIL,
+                        "task_id": task_id,
+                        "actor": actor,
+                        "dry_run": dry_run,
+                        "can_finalize": True,
+                        "integrity_check": integrity,
+                        "branch_check": branch_check,
+                        "committed": False,
+                        "pushed": False,
+                        "deployed": False,
+                        "deployment_skipped": False,
+                        "deployment_error": deploy_result["stderr"],
+                        "commit_hash": current_commit,
+                        "message": f"Deploy failed: {deploy_result['stderr'][:200]}",
+                        "operations": operations,
+                    }
+            else:
+                # 已部署 → 真正无事可做
+                return {
+                    "verdict": Verdict.PASS,
+                    "task_id": task_id,
+                    "actor": actor,
+                    "dry_run": dry_run,
+                    "can_finalize": True,
+                    "integrity_check": integrity,
+                    "branch_check": branch_check,
+                    "committed": False,
+                    "pushed": False,
+                    "deployed": False,
+                    "deployment_skipped": True,
+                    "deployment_error": None,
+                    "commit_hash": current_commit,
+                    "message": "No changes to commit (working tree clean, synced, and deployed)",
+                    "operations": operations,
+                }
         
         # Case 2: working tree clean but not synced → 需要 push (如果 push=True)
         if not push:
@@ -800,7 +878,7 @@ def finalize_task(
                 "deployed": False,
                 "deployment_skipped": False,
                 "deployment_error": None,
-                "commit_hash": _git_rev_parse_head(workspace_root),
+                "commit_hash": current_commit,
                 "message": "Working tree clean but unpushed commits exist (use --push to push)",
                 "operations": operations,
             }
@@ -808,6 +886,8 @@ def finalize_task(
         # Case 3: working tree clean, not synced, push=True → 执行 push
         if dry_run:
             operations.append("DRY-RUN: Would push unpushed commits to remote")
+            if needs_deploy:
+                operations.append("DRY-RUN: Would deploy to close deployment gap")
             return {
                 "verdict": Verdict.PASS,
                 "task_id": task_id,
@@ -821,7 +901,7 @@ def finalize_task(
                 "deployed": False,
                 "deployment_skipped": False,
                 "deployment_error": None,
-                "commit_hash": _git_rev_parse_head(workspace_root),
+                "commit_hash": current_commit,
                 "message": "DRY-RUN: Would push unpushed commits",
                 "operations": operations,
             }
@@ -838,23 +918,90 @@ def finalize_task(
             )
             operations.append("Push successful")
             
-            return {
-                "verdict": Verdict.PASS,
-                "task_id": task_id,
-                "actor": actor,
-                "dry_run": False,
-                "can_finalize": True,
-                "integrity_check": integrity,
-                "branch_check": branch_check,
-                "committed": False,
-                "pushed": True,
-                "deployed": False,
-                "deployment_skipped": True,
-                "deployment_error": None,
-                "commit_hash": _git_rev_parse_head(workspace_root),
-                "message": "Pushed unpushed commits (no new changes to commit)",
-                "operations": operations,
-            }
+            # AIPOS-R7A2 靶①: push 成功后检查 deploy 需求
+            if needs_deploy:
+                operations.append(f"⚠️  Current commit {current_commit[:8]} not deployed (deployed: {deployed_commit[:8] if deployed_commit else 'none'})")
+                operations.append("Triggering deploy after push...")
+                
+                from tools.aipos_cli.deploy_gate import invoke_lybra_deploy, verify_deployment_version
+                
+                deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor)
+                if deploy_result["success"]:
+                    operations.append("✓ Deploy completed successfully")
+                    verification = verify_deployment_version(workspace_root, current_commit)
+                    if verification["verified"]:
+                        return {
+                            "verdict": Verdict.PASS,
+                            "task_id": task_id,
+                            "actor": actor,
+                            "dry_run": False,
+                            "can_finalize": True,
+                            "integrity_check": integrity,
+                            "branch_check": branch_check,
+                            "committed": False,
+                            "pushed": True,
+                            "deployed": True,
+                            "deployment_skipped": False,
+                            "deployment_error": None,
+                            "commit_hash": current_commit,
+                            "message": "Pushed and deployed successfully",
+                            "operations": operations,
+                        }
+                    else:
+                        return {
+                            "verdict": Verdict.FAIL,
+                            "task_id": task_id,
+                            "actor": actor,
+                            "dry_run": False,
+                            "can_finalize": True,
+                            "integrity_check": integrity,
+                            "branch_check": branch_check,
+                            "committed": False,
+                            "pushed": True,
+                            "deployed": False,
+                            "deployment_skipped": False,
+                            "deployment_error": verification["message"],
+                            "commit_hash": current_commit,
+                            "message": f"Pushed but deploy verification failed: {verification['message']}",
+                            "operations": operations,
+                        }
+                else:
+                    return {
+                        "verdict": Verdict.FAIL,
+                        "task_id": task_id,
+                        "actor": actor,
+                        "dry_run": False,
+                        "can_finalize": True,
+                        "integrity_check": integrity,
+                        "branch_check": branch_check,
+                        "committed": False,
+                        "pushed": True,
+                        "deployed": False,
+                        "deployment_skipped": False,
+                        "deployment_error": deploy_result["stderr"],
+                        "commit_hash": current_commit,
+                        "message": f"Pushed but deploy failed: {deploy_result['stderr'][:200]}",
+                        "operations": operations,
+                    }
+            else:
+                # 已部署,只需 push
+                return {
+                    "verdict": Verdict.PASS,
+                    "task_id": task_id,
+                    "actor": actor,
+                    "dry_run": False,
+                    "can_finalize": True,
+                    "integrity_check": integrity,
+                    "branch_check": branch_check,
+                    "committed": False,
+                    "pushed": True,
+                    "deployed": False,
+                    "deployment_skipped": True,
+                    "deployment_error": None,
+                    "commit_hash": current_commit,
+                    "message": "Pushed unpushed commits (already deployed)",
+                    "operations": operations,
+                }
         except subprocess.CalledProcessError as e:
             operations.append(f"Push failed: {e.stderr}")
             return {

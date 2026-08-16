@@ -1878,6 +1878,16 @@ def build_parser() -> argparse.ArgumentParser:
     gate_drift_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     gate_drift_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-R7A2 靶②: governance-commit (顾问收口一条命令)
+    governance_commit_parser = subparsers.add_parser("governance-commit", help="AIPOS-R7A2: N6 收账提交(校验四件→commit→push)")
+    governance_commit_parser.add_argument("--task-id", required=True, help="Task ID for governance closure")
+    governance_commit_parser.add_argument("--actor", required=True, help="Actor performing governance commit")
+    governance_commit_parser.add_argument("--governance-root", help="Governance workspace root; defaults to auto-discovery")
+    governance_commit_parser.add_argument("--no-push", action="store_true", help="Commit but do not push (default: push)")
+    governance_commit_parser.add_argument("--message", help="Custom commit message")
+    governance_commit_parser.add_argument("--dry-run", action="store_true", help="Validate without committing")
+    governance_commit_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     return parser
 
 
@@ -2718,6 +2728,109 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if not result['has_drift'] else 1
         
         return 2
+
+    if args.command == "governance-commit":
+        # AIPOS-R7A2 靶②: N6 收账提交(校验四件→commit→push)
+        from tools.aipos_cli.governance_commit import governance_commit
+        from tools.aipos_cli.workspace_config import resolve_workspace_root
+        
+        # Resolve governance root
+        if args.governance_root:
+            governance_root = Path(args.governance_root).expanduser().resolve()
+        elif args.global_workspace_root:
+            governance_root = Path(args.global_workspace_root).expanduser().resolve()
+        else:
+            try:
+                governance_root = resolve_workspace_root()
+            except Exception as e:
+                print(f"Error: Cannot auto-discover governance root: {e}", file=sys.stderr)
+                return 1
+        
+        try:
+            result = governance_commit(
+                governance_root=governance_root,
+                task_id=args.task_id,
+                actor=args.actor,
+                dry_run=args.dry_run,
+                push=not args.no_push,
+                message=args.message,
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        
+        if args.json:
+            print(render_json(result))
+        else:
+            # Text output
+            verdict = result['verdict']
+            print(f"\n=== Governance Commit Result ===")
+            print(f"Task: {result['task_id']}")
+            print(f"Actor: {result['actor']}")
+            print(f"Verdict: {verdict}")
+            print(f"\nMessage: {result['message']}")
+            
+            if result.get('operations'):
+                print("\nOperations:")
+                for op in result['operations']:
+                    print(f"  - {op}")
+            
+            # 显示完整性检查详情
+            if result.get('completeness_check'):
+                check = result['completeness_check']
+                print("\n=== N6 收账清单 ===")
+                
+                details = check.get('details', {})
+                
+                # task_cards
+                if details.get('task_cards', {}).get('exists'):
+                    files = details['task_cards'].get('files', [])
+                    print(f"✓ task_cards/{result['task_id']}/ ({len(files)} files)")
+                else:
+                    print(f"✗ task_cards/{result['task_id']}/ (missing)")
+                
+                # decision_log
+                decision = details.get('decision_log', {})
+                if decision.get('applicable'):
+                    print(f"✓ decision_log pointer ({len(decision.get('files', []))} files)")
+                
+                # stage_snapshots
+                snapshots = details.get('stage_snapshots', {}).get('snapshots', [])
+                if snapshots:
+                    print(f"✓ stage snapshots ({len(snapshots)} snapshots)")
+                
+                # archive_files
+                archive = details.get('archive_files', {})
+                if archive.get('exists'):
+                    print(f"✓ archive files ({', '.join(archive.get('files', []))})")
+                else:
+                    print("✗ archive files (missing RETURN/AUDIT-REPORT/CLOSURE)")
+                
+                if not check['complete']:
+                    print("\n缺少:")
+                    for item in check['missing']:
+                        print(f"  - {item}")
+            
+            if result.get('commit_hash'):
+                print(f"\n✓ Commit: {result['commit_hash']}")
+            
+            if result.get('pushed'):
+                print("✓ Pushed to remote")
+            
+            print("\n=== Next Steps ===")
+            if verdict == Verdict.PASS:
+                if result.get('committed') and result.get('pushed'):
+                    print("N6 收账完成,治理记录已同步")
+                elif result.get('committed'):
+                    print("已 commit,但未 push (use --no-push to skip push)")
+                else:
+                    print("无待提交更改,治理记录已是最新")
+            elif verdict == Verdict.BLOCK:
+                print("请补充缺失的收账文件后重试")
+            else:
+                print("操作失败,请查看错误信息")
+        
+        return 0 if result['verdict'] == Verdict.PASS else 1
 
     if args.command == "finalize":
         # AIPOS-FND-2: Finalize PASS task (git commit/push)

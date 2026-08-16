@@ -990,8 +990,36 @@ class AdvisorPump:
             dry_run_token = dry_result.get("dry_run_token")
             
             if not dry_run_token:
-                reasons = dry_result.get("blocking_reasons") or dry_result
-                log(f"Close dry-run blocked: {reasons}", "ERROR")
+                # AIPOS-R7A2 靶③: sweep 失败带出 gate 拒因
+                # 打印完整的 error_code + blocking_reasons + errors
+                error_code = dry_result.get("error_code", "UNKNOWN")
+                blocking_reasons = dry_result.get("blocking_reasons", [])
+                errors = dry_result.get("errors", [])
+                verdict = dry_result.get("verdict", "UNKNOWN")
+                
+                log(f"Close dry-run BLOCKED:", "ERROR")
+                log(f"  verdict: {verdict}", "ERROR")
+                log(f"  error_code: {error_code}", "ERROR")
+                
+                if blocking_reasons:
+                    log(f"  blocking_reasons:", "ERROR")
+                    for reason in blocking_reasons:
+                        log(f"    - {reason}", "ERROR")
+                
+                if errors:
+                    log(f"  errors:", "ERROR")
+                    for err in errors:
+                        if isinstance(err, dict):
+                            cat = err.get("category", "UNKNOWN")
+                            msg = err.get("message", "")
+                            log(f"    - [{cat}] {msg}", "ERROR")
+                        else:
+                            log(f"    - {err}", "ERROR")
+                
+                # Fallback: 如果没有结构化错误,打印原始响应
+                if not blocking_reasons and not errors:
+                    log(f"  raw response: {dry_result}", "ERROR")
+                
                 return False
             
             log(f"Close dry-run succeeded: {dry_run_token}", "INFO")
@@ -1008,8 +1036,35 @@ class AdvisorPump:
             confirm_result = self.gate_client.call_tool("lybra_queue_close_confirm", confirm_args)
             
             if not confirm_result.get("ok"):
-                error_msg = confirm_result.get("message", "Unknown error")
-                log(f"Close confirm failed: {error_msg}", "ERROR")
+                # AIPOS-R7A2 靶③: confirm 失败也打印完整错误
+                error_code = confirm_result.get("error_code", "UNKNOWN")
+                blocking_reasons = confirm_result.get("blocking_reasons", [])
+                errors = confirm_result.get("errors", [])
+                verdict = confirm_result.get("verdict", "UNKNOWN")
+                
+                log(f"Close confirm FAILED:", "ERROR")
+                log(f"  verdict: {verdict}", "ERROR")
+                log(f"  error_code: {error_code}", "ERROR")
+                
+                if blocking_reasons:
+                    log(f"  blocking_reasons:", "ERROR")
+                    for reason in blocking_reasons:
+                        log(f"    - {reason}", "ERROR")
+                
+                if errors:
+                    log(f"  errors:", "ERROR")
+                    for err in errors:
+                        if isinstance(err, dict):
+                            cat = err.get("category", "UNKNOWN")
+                            msg = err.get("message", "")
+                            log(f"    - [{cat}] {msg}", "ERROR")
+                        else:
+                            log(f"    - {err}", "ERROR")
+                
+                if not blocking_reasons and not errors:
+                    error_msg = confirm_result.get("message", "Unknown error")
+                    log(f"  message: {error_msg}", "ERROR")
+                
                 return False
             
             log(f"Close confirm succeeded: {task_id}", "INFO")
