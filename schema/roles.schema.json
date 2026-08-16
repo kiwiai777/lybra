@@ -63,12 +63,25 @@
     },
     {
       "role": "advisor",
+      "token_ref": "svc-advisor",
+      "scopes": [
+        "draft_submit",
+        "draft_publish",
+        "queue_amend",
+        "queue_withdraw",
+        "mark_concluded",
+        "audit_dispatch",
+        "owner_decision_record",
+        "envelope_mint",
+        "envelope_revoke",
+        "envelope_renew"
+      ],
       "naming": { "prefix": "advisor" },
       "tool_package": {
         "extensions": ["lybra-loop"],
-        "skills": ["block-and-report", "task-closure-loop", "truth-first-drafting", "write-return"]
+        "skills": ["advisor-commands", "block-and-report", "card-author", "task-closure-loop", "truth-first-drafting", "truth-navigator", "write-return"]
       },
-      "_note": "Distribute/naming target only. NOT a mintable gate role (absent from service_mode.ROLE_SPECS): has no token_ref/scopes. This captures the pre-R4B-1 advisor/planner split observed in code (advisor_pump labels actors 'advisor.*'; gate credential is 'planner'). Reconciling advisor↔planner is a separate semantic decision, out of R4B-1 scope; this registry faithfully records current truth."
+      "_note": "AIPOS-R7A FIX-2: advisor now mintable. Scopes cover advisor lane: draft/amend/withdraw/conclude/dispatch/decisions/envelopes. Explicitly EXCLUDES finalize (executor-only) and product-repo writes (advisor永不碰产品仓)."
     }
   ],
   "custom_roles": {
