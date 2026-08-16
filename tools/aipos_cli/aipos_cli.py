@@ -2756,7 +2756,6 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # 尝试从治理仓配置或环境变量发现产品仓位置
             # 默认假设产品仓在 ~/projects/lybra (kiwiai-dev 标准位置)
-            from pathlib import Path
             default_repo_root = Path.home() / "projects" / "lybra"
             if default_repo_root.is_dir():
                 repo_root = default_repo_root
