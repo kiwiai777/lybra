@@ -9,8 +9,8 @@
  * 与 tools/loop_context.py 同构, 以 schema/conformance/ 夹具锁定一致性。
  */
 
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { join, parse } from "node:path";
 
 export interface LoopContext {
   project: string;
@@ -57,9 +57,7 @@ export class ConnectionResolver {
    * 确保同机多角色各自锚定自己的工位,不会混成同一身份
    */
   static discoverLybraDir(startDir?: string): string | null {
-    const { realpathSync } = require("node:fs");
     let currentDir = startDir ? realpathSync(startDir) : process.cwd();
-    const { parse } = require("node:path");
     const root = parse(currentDir).root;
 
     while (currentDir !== root) {

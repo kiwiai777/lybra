@@ -13,6 +13,7 @@ declare -a files=(
   "tests/lybra-loop.test.ts"
   "tests/tick-mechanism.test.ts"
   "tests/f8-running-flag.test.ts"
+  "tests/verbs-conformance.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do

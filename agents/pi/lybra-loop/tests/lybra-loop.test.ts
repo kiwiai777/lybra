@@ -12,6 +12,10 @@
  * 跑法:`node tests/lybra-loop.test.ts`。
  */
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 const NOTES: string[] = [];
 let failures = 0;
 const checks: Array<[string, boolean]> = [];
@@ -77,6 +81,11 @@ check("注册了 session_start handler", typeof handlers["session_start"] === "f
 
 // 保存/恢复 env
 const SAVED_ENV = { ...process.env };
+// 隔离 .lybra 自发现:loadConfig 从 cwd 向上找 .lybra,测试需在无 .lybra 祖先的干净目录跑,
+// 否则会找到真 ~/projects/lybra/.lybra 配置使 env 断言失效(AIPOS-R6Q 行为)。
+const originalCwd = process.cwd();
+const cleanCwd = mkdtempSync(join(tmpdir(), "lybra-loop-clean-cwd-"));
+process.chdir(cleanCwd);
 function setEnv(env: Record<string, string | undefined>) {
   // 彻底清当前 process.env 里所有 LYBRA_*(不只快照里的,避免 case 间残留)
   for (const k of Object.keys(process.env)) if (k.startsWith("LYBRA_")) delete process.env[k];
@@ -137,34 +146,41 @@ function clearLybraEnv() {
   check("/lybra on abc → maxN 无效", notifies[0].m.includes("maxN 无效"));
 }
 
-// --- on 配置红线:缺 actor ---
+// --- on 配置红线:缺 workspaceRoot(loadConfig 最先查 workspaceRoot)---
 {
   clearLybraEnv();
   const { ctx, notifies } = makeMockCtx();
   await commands.lybra.handler("on", ctx);
+  check("on 缺 workspaceRoot → 配置错误含 LYBRA_WORKSPACE_ROOT", notifies[0].m.includes("LYBRA_WORKSPACE_ROOT"));
+  check("on 缺 workspaceRoot → 未启动(notify 是 error)", notifies[0].l === "error");
+}
+// --- on 配置红线:缺 actor ---
+{
+  setEnv({ LYBRA_WORKSPACE_ROOT: "/r" });
+  const { ctx, notifies } = makeMockCtx();
+  await commands.lybra.handler("on", ctx);
   check("on 缺 actor → 配置错误", notifies[0].m.includes("配置错误") && notifies[0].m.includes("LYBRA_ACTOR"));
-  check("on 缺 actor → 未启动(notify 是 error)", notifies[0].l === "error");
 }
 // --- on 配置红线:缺 ownerPolicyRef ---
 {
-  setEnv({ LYBRA_ACTOR: "me", LYBRA_MCP_TOKEN: "x" });
+  setEnv({ LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ACTOR: "me" });
   const { ctx, notifies } = makeMockCtx();
   await commands.lybra.handler("on", ctx);
   check("on 缺 ownerPolicyRef → 配置错误含 LYBRA_OWNER_POLICY_REF", notifies[0].m.includes("LYBRA_OWNER_POLICY_REF"));
 }
-// --- on 配置红线:缺 workspaceRoot ---
+// --- on 配置红线:缺 token ---
 {
-  setEnv({ LYBRA_ACTOR: "me", LYBRA_MCP_TOKEN: "x", LYBRA_OWNER_POLICY_REF: "p" });
+  setEnv({ LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ACTOR: "me", LYBRA_OWNER_POLICY_REF: "p" });
   const { ctx, notifies } = makeMockCtx();
   await commands.lybra.handler("on", ctx);
-  check("on 缺 workspaceRoot → 配置错误含 LYBRA_WORKSPACE_ROOT", notifies[0].m.includes("LYBRA_WORKSPACE_ROOT"));
+  check("on 缺 token → 配置错误含 token", notifies[0].m.includes("token"));
 }
 
 // --- on 连接自检:gate 不可达(端口1)⇒ 报错不启动 ---
 {
   setEnv({
     LYBRA_ACTOR: "me",
-    LYBRA_MCP_TOKEN: "secret-tok",
+    LYBRA_TOKEN: "secret-tok",
     LYBRA_OWNER_POLICY_REF: "p",
     LYBRA_WORKSPACE_ROOT: "/r",
     LYBRA_GATE_URL: "http://127.0.0.1:1",
@@ -186,6 +202,9 @@ NOTES.push("agent_settled 续跑 / 轮询定时器链(F-EXT001-4:FIX1 直接调 
 // 恢复 env
 clearLybraEnv();
 for (const [k, v] of Object.entries(SAVED_ENV)) if (k.startsWith("LYBRA_")) process.env[k] = v;
+// 恢复 cwd 并清理隔离目录
+process.chdir(originalCwd);
+rmSync(cleanCwd, { recursive: true, force: true });
 
 // --- 汇总 ---
 for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);

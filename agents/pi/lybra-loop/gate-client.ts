@@ -13,9 +13,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ConnectionResolver } from "./loop-context.ts";
 
 export type AnyDict = Record<string, unknown>;
@@ -140,6 +142,113 @@ export function parseSsePayload(text: string): unknown {
 }
 
 // ---------------------------------------------------------------------------
+// 动词 catalog:verb 名/参数 shape/两阶段语义的单一源 = schema/verbs.schema.json。
+// 连接器不再逐动词手写方法/参数名:verb 名由调用方传入,参数 shape 读 schema。
+// ---------------------------------------------------------------------------
+
+export interface VerbParamSchema {
+  type?: "string" | "integer" | "boolean" | "array" | "object";
+  description?: string;
+  $enum?: string;
+  properties?: Record<string, VerbParamSchema>;
+  items?: { type?: string };
+}
+
+export interface VerbDefinition {
+  description?: string;
+  phase?: "single" | "dry_run" | "confirm";
+  base_verb?: string;
+  confirm_verb?: string;
+  dry_run_verb?: string;
+  confirm_via?: "dry_run_token" | "replay_args";
+  required_scope?: string | null;
+  parameters?: {
+    type?: string;
+    properties?: Record<string, VerbParamSchema>;
+    required?: string[];
+    additionalProperties?: boolean;
+  };
+}
+
+export interface VerbCatalog {
+  schema_version?: string;
+  verbs: Record<string, VerbDefinition>;
+}
+
+/** 定位 schema 目录(env 优先 → 模块目录向上找 schema/ → cwd 向上找 → 默认产品仓)。 */
+function findSchemaFile(schemaDir?: string): string {
+  const candidates: string[] = [];
+  if (schemaDir) candidates.push(schemaDir);
+  const envDir = process.env.LYBRA_SCHEMA_DIR?.trim();
+  if (envDir) candidates.push(envDir);
+  try {
+    candidates.push(dirname(fileURLToPath(import.meta.url)));
+  } catch {
+    // import.meta.url 不可用(罕见)→ 跳过
+  }
+  candidates.push(process.cwd());
+  for (const start of candidates) {
+    let dir = start;
+    for (let i = 0; i < 10; i++) {
+      const f = join(dir, "schema", "verbs.schema.json");
+      if (existsSync(f)) return f;
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  const home = process.env.HOME || "";
+  if (home) {
+    const f = join(home, "projects", "lybra", "schema", "verbs.schema.json");
+    if (existsSync(f)) return f;
+  }
+  throw new ConfigError("未找到 verbs.schema.json(设 LYBRA_SCHEMA_DIR 指向 schema 目录, 或从 lybra 产品仓运行)");
+}
+
+/** 加载 verb catalog(启动即读 schema;schema 缺/坏 → ConfigError)。 */
+export function loadVerbCatalog(schemaDir?: string): VerbCatalog {
+  const file = findSchemaFile(schemaDir);
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf-8");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new ConfigError(`读 verbs.schema.json 失败(${file}): ${msg}`);
+  }
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new ConfigError(`verbs.schema.json 非合法 JSON(${file}): ${msg}`);
+  }
+  if (!data || typeof data !== "object" || !(data as { verbs?: unknown }).verbs || typeof (data as { verbs: unknown }).verbs !== "object") {
+    throw new ConfigError(`verbs.schema.json 缺 verbs 表(${file})`);
+  }
+  return data as VerbCatalog;
+}
+
+/**
+ * 加载期校验:连接器依赖的每个动词及其必填参数必须在 schema 中存在。
+ * schema 缺动词 / 改错必填参数名 → 启动即抛 ConfigError(禁运行时才炸)。
+ */
+export function validateRequiredVerbs(catalog: VerbCatalog, required: Record<string, string[]>): void {
+  const verbs = catalog.verbs;
+  for (const [verbName, params] of Object.entries(required)) {
+    const verb = verbs[verbName];
+    if (!verb) {
+      throw new ConfigError(`verbs.schema 缺动词 ${verbName}(连接器依赖,启动即停)`);
+    }
+    const props = verb.parameters?.properties ?? {};
+    for (const p of params) {
+      if (!(p in props)) {
+        throw new ConfigError(`verbs.schema 动词 ${verbName} 缺必填参数 ${p}(连接器依赖,启动即停)`);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GateMcpClient
 // ---------------------------------------------------------------------------
 
@@ -150,18 +259,22 @@ export class GateMcpClient {
   private _nextId = 0;
   private readonly _timeoutMs: number;
   private readonly _transport: Transport;
+  private _verbs: VerbCatalog | null = null;
+  private readonly _schemaDir: string | null;
   readonly baseUrl: string;
   readonly token: string;
 
   constructor(
     baseUrl: string,
     token: string,
-    opts: { transport?: Transport; timeoutMs?: number } = {},
+    opts: { transport?: Transport; timeoutMs?: number; verbs?: VerbCatalog; schemaDir?: string } = {},
   ) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.token = token;
     this._timeoutMs = opts.timeoutMs ?? 10000;
     this._transport = opts.transport ?? nodeTransport;
+    this._verbs = opts.verbs ?? null;
+    this._schemaDir = opts.schemaDir ?? null;
   }
 
   get tokenFingerprint(): string {
@@ -207,93 +320,62 @@ export class GateMcpClient {
     await this._rpc("initialize", { protocolVersion: PROTOCOL_VERSION });
   }
 
-  /** 唯一读面(对齐 agent_connector:queue_tasks = lybra_queue_list)。 */
-  async queueTasks(): Promise<AnyDict[]> {
-    const result = await this._rpc("tools/call", { name: "lybra_queue_list", arguments: {} });
-    if (!result || typeof result !== "object") return [];
+  /** 通用调用器:按 schema 校验参数后发 tools/call,返回 structuredContent。 */
+  async callTool(name: string, args: AnyDict): Promise<AnyDict> {
+    const catalog = this._verbs ?? (this._verbs = loadVerbCatalog(this._schemaDir ?? undefined));
+    const verb = catalog.verbs[name];
+    if (!verb) {
+      throw new GateError(`verb 未在 schema 中定义: ${name}`);
+    }
+    const params = verb.parameters ?? {};
+    const properties = (params.properties ?? {}) as Record<string, VerbParamSchema>;
+    const required = params.required ?? [];
+    const missing = required.filter((p) => args[p] === undefined || args[p] === null);
+    if (missing.length) {
+      throw new GateError(`verb ${name} 缺必填参数: ${missing.join(", ")}`);
+    }
+    const unknown = Object.keys(args).filter((k) => !(k in properties));
+    if (unknown.length) {
+      throw new GateError(`verb ${name} 含 schema 未定义参数: ${unknown.join(", ")}`);
+    }
+    for (const [k, v] of Object.entries(args)) {
+      if (v === undefined || v === null) continue;
+      const spec = properties[k];
+      if (!spec) continue;
+      const t = spec.type;
+      if (t === "object" && (typeof v !== "object" || Array.isArray(v))) {
+        throw new GateError(`verb ${name} 参数 ${k} 需 object, 实为 ${Array.isArray(v) ? "array" : typeof v}`);
+      }
+      if (t === "array" && !Array.isArray(v)) {
+        throw new GateError(`verb ${name} 参数 ${k} 需 array, 实为 ${typeof v}`);
+      }
+      if (t === "integer" && typeof v !== "number") {
+        throw new GateError(`verb ${name} 参数 ${k} 需 integer, 实为 ${typeof v}`);
+      }
+      if (t === "boolean" && typeof v !== "boolean") {
+        throw new GateError(`verb ${name} 参数 ${k} 需 boolean, 实为 ${typeof v}`);
+      }
+      if (t === "string" && typeof v !== "string") {
+        throw new GateError(`verb ${name} 参数 ${k} 需 string, 实为 ${typeof v}`);
+      }
+    }
+    const result = await this._rpc("tools/call", { name, arguments: args });
+    if (!result || typeof result !== "object") {
+      throw new GateError(`${name} 返回无 result`);
+    }
     const structured = (result as { structuredContent?: unknown }).structuredContent;
-    if (!structured || typeof structured !== "object") return [];
+    if (!structured || typeof structured !== "object") {
+      throw new GateError(`${name} 返回无 structuredContent`);
+    }
+    return structured as AnyDict;
+  }
+
+  /** 唯一读面(对齐 agent_connector:queue_tasks = lybra_queue_list)。走 schema 通用调用器。 */
+  async queueTasks(): Promise<AnyDict[]> {
+    const structured = await this.callTool("lybra_queue_list", {});
     const data = (structured as { data?: unknown }).data;
     const tasks = data && typeof data === "object" ? (data as { tasks?: unknown }).tasks : undefined;
     return Array.isArray(tasks) ? (tasks as AnyDict[]) : [];
-  }
-
-  /** claim dry-run(对齐 confirm_client._CLAIM_DRY_RUN)。返回 structuredContent。 */
-  async claimDryRun(args: AnyDict): Promise<AnyDict> {
-    const result = await this._rpc("tools/call", { name: "lybra_queue_claim_dry_run", arguments: args });
-    if (!result || typeof result !== "object") {
-      throw new GateError("claim_dry_run returned no result");
-    }
-    const structured = (result as { structuredContent?: unknown }).structuredContent;
-    if (!structured || typeof structured !== "object") {
-      throw new GateError("claim_dry_run returned no structuredContent");
-    }
-    return structured as AnyDict;
-  }
-
-  /** AIPOS-363F1: task preview(取完整卡 markdown,include_body=true)。返回 structuredContent。 */
-  async taskPreview(args: AnyDict): Promise<AnyDict> {
-    const result = await this._rpc("tools/call", { name: "lybra_task_preview", arguments: args });
-    if (!result || typeof result !== "object") {
-      throw new GateError("task_preview returned no result");
-    }
-    const structured = (result as { structuredContent?: unknown }).structuredContent;
-    if (!structured || typeof structured !== "object") {
-      throw new GateError("task_preview returned no structuredContent");
-    }
-    return structured as AnyDict;
-  }
-
-  /** AIPOS-CONN-LOOP-2 ①: queue_return dry-run。返回 structuredContent。 */
-  async returnDryRun(args: AnyDict): Promise<AnyDict> {
-    const result = await this._rpc("tools/call", { name: "lybra_queue_return_dry_run", arguments: args });
-    if (!result || typeof result !== "object") {
-      throw new GateError("queue_return_dry_run returned no result");
-    }
-    const structured = (result as { structuredContent?: unknown }).structuredContent;
-    if (!structured || typeof structured !== "object") {
-      throw new GateError("queue_return_dry_run returned no structuredContent");
-    }
-    return structured as AnyDict;
-  }
-
-  /** AIPOS-CONN-LOOP-2 ①: queue_return confirm (executor自确认,328机制)。返回 structuredContent。 */
-  async returnConfirm(args: AnyDict): Promise<AnyDict> {
-    const result = await this._rpc("tools/call", { name: "lybra_queue_return_confirm", arguments: args });
-    if (!result || typeof result !== "object") {
-      throw new GateError("queue_return_confirm returned no result");
-    }
-    const structured = (result as { structuredContent?: unknown }).structuredContent;
-    if (!structured || typeof structured !== "object") {
-      throw new GateError("queue_return_confirm returned no structuredContent");
-    }
-    return structured as AnyDict;
-  }
-
-  /** AIPOS-R6P 靶①: queue_close dry-run。返回 structuredContent。 */
-  async queueCloseDryRun(args: AnyDict): Promise<AnyDict> {
-    const result = await this._rpc("tools/call", { name: "lybra_queue_close_dry_run", arguments: args });
-    if (!result || typeof result !== "object") {
-      throw new GateError("queue_close_dry_run returned no result");
-    }
-    const structured = (result as { structuredContent?: unknown }).structuredContent;
-    if (!structured || typeof structured !== "object") {
-      throw new GateError("queue_close_dry_run returned no structuredContent");
-    }
-    return structured as AnyDict;
-  }
-
-  /** AIPOS-R6P 靶①: queue_close confirm。返回 structuredContent。 */
-  async queueCloseConfirm(args: AnyDict): Promise<AnyDict> {
-    const result = await this._rpc("tools/call", { name: "lybra_queue_close_confirm", arguments: args });
-    if (!result || typeof result !== "object") {
-      throw new GateError("queue_close_confirm returned no result");
-    }
-    const structured = (result as { structuredContent?: unknown }).structuredContent;
-    if (!structured || typeof structured !== "object") {
-      throw new GateError("queue_close_confirm returned no structuredContent");
-    }
-    return structured as AnyDict;
   }
 }
 

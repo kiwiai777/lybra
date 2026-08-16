@@ -23,7 +23,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadConfig, ConfigError, GateMcpClient } from "./gate-client.ts";
+import { loadConfig, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs } from "./gate-client.ts";
 import { buildKickoff } from "./loop-decisions.ts";
 import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
 
@@ -44,6 +44,18 @@ let currentWorktreePath: string | null = null;
 
 // F-EXT001-6(FIX2): 默认日志路径迁移到 Lybra 产品仓任务卡目录(旧 contrib 路径已废弃)
 const LOG_PATH_DEFAULT = `${process.env.HOME || ""}/projects/lybra/task_cards/LYBRA-EXT-001/loop.log`;
+
+// AIPOS-R6R: 连接器依赖的 verb + 必填参数清单(单一声明, 启动时对 schema 校验)。
+// 动词名/参数名只此一处声明, 不再逐动词手写方法; 校验读 schema/verbs.schema.json。
+const REQUIRED_VERBS: Record<string, string[]> = {
+  lybra_queue_list: [],
+  lybra_task_preview: [],
+  lybra_queue_claim_dry_run: ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
+  lybra_queue_return_dry_run: ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
+  lybra_queue_return_confirm: ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
+  lybra_queue_close_dry_run: ["task_id", "actor", "closure_evidence"],
+  lybra_queue_close_confirm: ["task_id", "actor", "closure_evidence"],
+};
 
 function clearTimer() {
   if (pendingTimer) {
@@ -204,26 +216,32 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
       });
       ctx.ui?.notify?.(`finalize 成功: ${taskId}`, "info");
       
-      // AIPOS-R6N: close 改两阶段 dry_run + confirm
-      const closeDryResp = await currentClient.queueCloseDryRun({
+      // AIPOS-R6R: close 两阶段(dry_run 预览 → confirm 执行)。
+      // closure_evidence 是对象(非扁平字符串), close confirm 重放 task_id+actor+closure_evidence(无 dry_run_token)。
+      let finalizeCommitHash = "";
+      try {
+        finalizeCommitHash = execSync("git rev-parse HEAD", { cwd: codeRepo, encoding: "utf-8" }).trim();
+      } catch (e) {
+        currentLogger.warn("auto-close-get-hash-failed", { task_id: taskId, error: String(e) });
+      }
+      const closeArgs = {
         task_id: taskId,
         actor: config.actor,
-        closure_evidence: `Auto-finalized after ${verdict}`,
-      });
+        closure_evidence: finalizeCommitHash
+          ? { finalize_commit_hash: finalizeCommitHash }
+          : { finalize_return_ref: `finalize_${taskId}` },
+      };
       
-      const closeDryToken = closeDryResp.dry_run_token;
-      if (!closeDryToken) {
-        const msg = `auto-close dry_run 无 token: ${taskId}`;
-        currentLogger.error("auto-close-no-dry-token", { task_id: taskId, response: closeDryResp });
+      const closeDryResp = await currentClient.callTool("lybra_queue_close_dry_run", closeArgs);
+      if (closeDryResp.verdict === "BLOCK" || closeDryResp.isError === true) {
+        const detail = closeDryResp.blocking_reasons || closeDryResp.errors || closeDryResp.message || JSON.stringify(closeDryResp);
+        const msg = `auto-close dry_run BLOCK: ${taskId} - ${JSON.stringify(detail)}`;
+        currentLogger.error("auto-close-blocked", { task_id: taskId, response: closeDryResp });
         ctx.ui?.notify?.(msg, "error");
         continue;
       }
       
-      const closeResp = await currentClient.queueCloseConfirm({
-        dry_run_token: String(closeDryToken),
-        actor: config.actor,
-        owner_confirmation_token: "OWNER_CONFIRMED",
-      });
+      const closeResp = await currentClient.callTool("lybra_queue_close_confirm", closeArgs);
       
       currentLogger.info("auto-close-success", {
         task_id: taskId,
@@ -320,7 +338,7 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
   });
   
   try {
-    const dryRunResp = await currentClient.returnDryRun({
+    const dryRunResp = await currentClient.callTool("lybra_queue_return_dry_run", {
       task_id: currentTaskId,
       actor: config.actor,
       agent_instance: config.agentInstance,
@@ -338,7 +356,7 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
     }
     
     // AIPOS-328: executor 自确认 return (owner_confirmation_token = OWNER_CONFIRMED 字面量)
-    const confirmResp = await currentClient.returnConfirm({
+    const confirmResp = await currentClient.callTool("lybra_queue_return_confirm", {
       dry_run_token: String(dryRunToken),
       actor: config.actor,
       agent_instance: config.agentInstance,
@@ -694,8 +712,21 @@ export default function (pi: ExtensionAPI) {
         currentRole = config.role;
         currentActor = config.actor;
 
+        // AIPOS-R6R: 启动即校验 schema(缺动词/改错必填参数名 → 报错不启动)。
+        let verbCatalog;
+        try {
+          verbCatalog = loadVerbCatalog();
+          validateRequiredVerbs(verbCatalog, REQUIRED_VERBS);
+        } catch (e) {
+          ctx.ui.notify(
+            `schema 校验失败,循环未启动:${e instanceof Error ? e.message : String(e)}`,
+            "error",
+          );
+          return;
+        }
+
         // gate 连通性自检(initialize)
-        const client = new GateMcpClient(config.gateUrl, config.token);
+        const client = new GateMcpClient(config.gateUrl, config.token, { verbs: verbCatalog });
         try {
           await client.initialize();
         } catch (e) {

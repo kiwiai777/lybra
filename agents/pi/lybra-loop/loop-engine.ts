@@ -10,14 +10,11 @@ import { appendFileSync, existsSync, renameSync, statSync } from "node:fs";
 import { logLine, classifyTasks, decideClaimDryRun, resolveCardPath, type AnyDict } from "./loop-decisions.ts";
 
 /** executeTick 需要的 gate 读面(GateMcpClient 实现它;测试传 mock)。
- * AIPOS-CONN-LOOP-2: 添加 return 方法支持自动归还。
+ * AIPOS-R6R: 读面收缩为唯一读 + 通用调用器(verb 名由调用方传入, 参数 shape 读 schema)。
  */
 export interface GateReadFace {
   queueTasks(): Promise<AnyDict[]>;
-  claimDryRun(args: AnyDict): Promise<AnyDict>;
-  taskPreview(args: AnyDict): Promise<AnyDict>; // AIPOS-363F1: 取完整卡(include_body)
-  returnDryRun(args: AnyDict): Promise<AnyDict>; // AIPOS-CONN-LOOP-2 ①: queue_return dry-run
-  returnConfirm(args: AnyDict): Promise<AnyDict>; // AIPOS-CONN-LOOP-2 ①: queue_return confirm
+  callTool(name: string, args: AnyDict): Promise<AnyDict>;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +160,7 @@ export async function executeTick(ctx: TickContext): Promise<TickOutcome> {
     }
     let resp: AnyDict;
     try {
-      resp = await client.claimDryRun(claimArgs);
+      resp = await client.callTool("lybra_queue_claim_dry_run", claimArgs);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.error("claim-dryrun-failed", { task_id: taskId, error: msg });
@@ -181,7 +178,7 @@ export async function executeTick(ctx: TickContext): Promise<TickOutcome> {
 
       // 从 gate 取完整卡并写本地(材料化)
       try {
-        const previewResp = await client.taskPreview({
+        const previewResp = await client.callTool("lybra_task_preview", {
           task_id: taskId,
           actor: ctx.actor,
           include_body: true,

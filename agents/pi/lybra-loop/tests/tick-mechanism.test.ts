@@ -57,10 +57,12 @@ import { readFileSync } from "node:fs";
 const loopSrc = readFileSync(new URL("../lybra-loop.ts", import.meta.url), "utf8");
 check("doTick 有 try-catch 块", loopSrc.includes("async function doTick") && loopSrc.includes("} catch"));
 check("scheduleNextTick 有 catch 块", loopSrc.includes("function scheduleNextTick") && /doTick.*\.catch/.test(loopSrc));
-// agent_settled 块中包含 doTick 和 .catch
+// agent_settled 块中包含 doTick 和 .catch(块体较长,取到下一个事件 handler 为止)
+const agentSettledStart = loopSrc.indexOf('pi.on("agent_settled"');
+const agentSettledEnd = loopSrc.indexOf('pi.on("session_shutdown"', agentSettledStart);
 const agentSettledBlock = loopSrc.slice(
-  loopSrc.indexOf('pi.on("agent_settled"'),
-  loopSrc.indexOf('pi.on("agent_settled"') + 500
+  agentSettledStart,
+  agentSettledEnd > agentSettledStart ? agentSettledEnd : agentSettledStart + 4000
 );
 check("agent_settled 有 doTick 调用", agentSettledBlock.includes("doTick(pi, ctx)"));
 check("agent_settled 有 catch 块", agentSettledBlock.includes(".catch("));

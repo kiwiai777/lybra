@@ -1,18 +1,18 @@
 {
-  "schema_version": "1.0.0",
-  "description": "Lybra verb contracts - parameters, responses, and two-phase semantics",
-  "last_updated": "2026-08-11",
+  "schema_version": "2.0.0",
+  "description": "Lybra verb contracts — single source of truth for gate tool names, parameter shapes, and two-phase (dry_run → confirm) semantics. Keyed by ACTUAL gate tool name (verb full name includes the phase suffix). Connectors derive verb name + parameter shape from this file at load time; a missing verb or a wrong required-param name fails at startup, not at runtime.",
+  "last_updated": "2026-08-16",
+  "source_of_truth": "This file mirrors the live gate registry (tools/list). It is the ONLY place a connector may learn a verb name or a parameter shape. No handwritten per-verb wrappers in connectors.",
   "two_phase_protocol": {
-    "description": "All mutation verbs follow dry_run → confirm two-phase pattern",
+    "description": "Mutation verbs follow dry_run → confirm two-phase pattern. dry_run previews without side effects and (for claim/return) returns a dry_run_token; confirm executes.",
     "phases": {
       "dry_run": {
         "purpose": "Preview operation without side effects",
-        "returns": "Operation plan, validation results, and dry_run_token for confirmation"
+        "returns": "Operation plan, validation results, and (for claim/return) dry_run_token for confirmation"
       },
       "confirm": {
-        "purpose": "Execute the operation with dry_run_token from preview",
-        "requires": "Valid dry_run_token from a recent dry_run call",
-        "executes": "Actual mutation based on validated plan"
+        "purpose": "Execute the operation",
+        "requires": "claim/return: valid dry_run_token from the dry_run phase. close: replays task_id + actor + closure_evidence (no dry_run_token)."
       }
     }
   },
@@ -27,385 +27,244 @@
     ]
   },
   "verbs": {
-    "lybra_draft_publish": {
-      "description": "Publish a draft task to pending queue (N0 - task creation node)",
-      "phases": ["dry_run", "confirm"],
-      "dry_run_parameters": {
-        "path": {
-          "type": "string",
-          "required": true,
-          "description": "Path to draft file (relative to repo root)"
-        },
-        "actor": {
-          "type": "string",
-          "required": false,
-          "description": "Actor performing the publish"
-        },
-        "repo_root": {
-          "type": "string",
-          "required": false,
-          "description": "Repository root path (auto-detected if not provided)"
-        }
-      },
-      "dry_run_response": {
-        "ok": {"type": "boolean", "description": "Operation success status"},
-        "verdict": {"type": "string", "$enum": "validation_verdict", "description": "Validation verdict"},
-        "task_id": {"type": "string", "description": "Task identifier"},
-        "source_path": {"type": "string", "description": "Source draft path"},
-        "target_path": {"type": "string", "description": "Target pending queue path"},
-        "would_write": {"type": "boolean", "description": "Whether files would be written"},
-        "validation": {"type": "object", "description": "Full validation results"},
-        "blocking_reasons": {"type": "array", "items": {"type": "string"}, "description": "Blocking issues"},
-        "warnings": {"type": "array", "items": {"type": "string"}, "description": "Non-blocking warnings"},
-        "dry_run_token": {"type": "string", "description": "Token for confirm phase"}
-      },
-      "confirm_parameters": {
-        "dry_run_token": {
-          "type": "string",
-          "required": true,
-          "description": "Token from dry_run phase"
-        },
-        "owner_confirmation": {
-          "type": "string",
-          "required": false,
-          "description": "Owner confirmation token if required"
-        }
-      },
-      "validation_rules": {
-        "schema_validation": "All fields validated against card.schema.json",
-        "required_fields": "Missing required fields cause BLOCK verdict",
-        "undefined_fields": "Unknown fields cause WARN or BLOCK (configurable)",
-        "typo_detection": "Misspelled field names are detected and reported",
-        "enum_validation": "Enum fields validated against enums.schema.json",
-        "runtime_fields": "Runtime fields in draft cause BLOCK verdict"
+    "lybra_queue_list": {
+      "description": "Read the task queue (executor's only read surface).",
+      "phase": "single",
+      "required_scope": null,
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
       }
     },
-    "lybra_queue_claim": {
-      "description": "Claim a pending task (N1 - task claim node)",
-      "phases": ["dry_run", "confirm"],
-      "dry_run_parameters": {
-        "task_id": {
-          "type": "string",
-          "required": true,
-          "description": "Task identifier to claim"
+    "lybra_task_preview": {
+      "description": "Read-only task session preview by task_id or path. include_body=true returns the card body markdown (requires queue_claim scope).",
+      "phase": "single",
+      "required_scope": null,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string", "description": "Task identifier" },
+          "path": { "type": "string", "description": "Task card path" },
+          "actor": { "type": "string", "description": "Requesting actor" },
+          "include_body": { "type": "boolean", "description": "Include card body markdown (requires queue_claim scope)" }
         },
-        "actor": {
-          "type": "string",
-          "required": true,
-          "description": "Agent/role claiming the task"
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    "lybra_return_content": {
+      "description": "Read-only: return RETURN.md body for a returned task (auditor cross-machine evidence). Requires queue_claim scope.",
+      "phase": "single",
+      "required_scope": null,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string", "description": "Task whose RETURN.md to read" }
         },
-        "agent_instance": {
-          "type": "string",
-          "required": true,
-          "description": "Specific agent instance identifier"
+        "required": ["task_id"],
+        "additionalProperties": false
+      }
+    },
+    "lybra_queue_claim_dry_run": {
+      "description": "Claim a pending task (preview; PreAuthorized may release in one phase).",
+      "phase": "dry_run",
+      "base_verb": "lybra_queue_claim",
+      "confirm_verb": "lybra_queue_claim_confirm",
+      "confirm_via": "dry_run_token",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string", "description": "Task to claim (selector: task_id XOR task_path)" },
+          "task_path": { "type": "string", "description": "Task path (selector: task_id XOR task_path)" },
+          "actor": { "type": "string", "description": "Agent claiming the task" },
+          "agent_instance": { "type": "string", "description": "Specific agent instance" },
+          "autonomy_mode": { "type": "string", "$enum": "autonomy_mode", "description": "Supervised | PreAuthorized" },
+          "owner_policy_ref": { "type": "string", "description": "Owner policy reference" },
+          "runtime_profile": { "type": "string", "description": "Runtime profile (e.g. cc)" },
+          "active_session_id": { "type": "string", "description": "Active session identifier" },
+          "context_bundle_ack": { "type": "string", "description": "Context bundle acknowledgement" },
+          "with_records": { "type": "boolean", "description": "Include records in response" },
+          "claim_reason": { "type": "string", "description": "Reason for claiming" },
+          "actual_model": { "type": "string", "description": "Self-reported model identifier" },
+          "reported_tokens": { "type": "integer", "description": "Self-reported token usage" }
         },
-        "autonomy_mode": {
-          "type": "string",
-          "$enum": "autonomy_mode",
-          "required": true,
-          "description": "Autonomy mode for this claim"
+        "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
+        "additionalProperties": false
+      }
+    },
+    "lybra_queue_claim_confirm": {
+      "description": "Confirm a claim dry-run (Owner-gated: requires owner_confirmation_token).",
+      "phase": "confirm",
+      "base_verb": "lybra_queue_claim",
+      "dry_run_verb": "lybra_queue_claim_dry_run",
+      "confirm_via": "dry_run_token",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dry_run_token": { "type": "string", "description": "Token from dry_run phase" },
+          "actor": { "type": "string" },
+          "agent_instance": { "type": "string" },
+          "owner_policy_ref": { "type": "string" },
+          "owner_confirmation_token": { "type": "string", "description": "Owner confirmation literal" }
         },
-        "owner_policy_ref": {
-          "type": "string",
-          "required": false,
-          "description": "Owner policy reference"
-        }
-      },
-      "dry_run_response": {
-        "ok": {"type": "boolean"},
-        "verdict": {"type": "string", "$enum": "validation_verdict"},
-        "task_id": {"type": "string"},
-        "claim_id": {"type": "string", "description": "Generated claim identifier"},
-        "context": {
-          "type": "object",
-          "description": "LoopContext fields returned by gate",
-          "fields": {
-            "project": "string",
-            "workspace_root": "string",
-            "code_repo": "string",
-            "task_state": "string",
-            "worktree": "string"
+        "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
+        "additionalProperties": false
+      }
+    },
+    "lybra_queue_return_dry_run": {
+      "description": "Return completed work (preview).",
+      "phase": "dry_run",
+      "base_verb": "lybra_queue_return",
+      "confirm_verb": "lybra_queue_return_confirm",
+      "confirm_via": "dry_run_token",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string" },
+          "task_path": { "type": "string" },
+          "actor": { "type": "string" },
+          "agent_instance": { "type": "string" },
+          "autonomy_mode": { "type": "string", "$enum": "autonomy_mode", "description": "Supervised for executor return" },
+          "owner_policy_ref": { "type": "string" },
+          "claim_id": { "type": "string" },
+          "active_session_id": { "type": "string" },
+          "result_summary": { "type": "string" },
+          "artifact_refs": { "type": "array", "items": { "type": "string" } },
+          "scratch_dir": { "type": "string" },
+          "scratch_artifact_refs": { "type": "array", "items": { "type": "string" } },
+          "completion_report_ref": { "type": "string" },
+          "executor_status": { "type": "string", "description": "completed (single allowed value)" },
+          "audit_readiness": { "type": "string", "description": "ready (single allowed value)" },
+          "return_reason": { "type": "string" },
+          "return_body": { "type": "string", "description": "RETURN.md body text (gate writes task_cards/<ID>/RETURN.md on confirm)" },
+          "actual_model": { "type": "string" },
+          "reported_tokens": { "type": "integer" },
+          "agent_runtime": {
+            "type": "object",
+            "description": "Agent-reported runtime bundle (never verified)",
+            "properties": {
+              "harness": { "type": "string" },
+              "model_self_reported": { "type": "string" },
+              "tokens_in": { "type": "integer" },
+              "tokens_out": { "type": "integer" }
+            },
+            "additionalProperties": false
           }
         },
-        "held_check": {"type": "object", "description": "Held task check results by (project, instance)"},
-        "dry_run_token": {"type": "string"}
+        "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
+        "additionalProperties": false
+      }
+    },
+    "lybra_queue_return_confirm": {
+      "description": "Confirm a return dry-run (AIPOS-328: executor self-confirm via owner_confirmation_token).",
+      "phase": "confirm",
+      "base_verb": "lybra_queue_return",
+      "dry_run_verb": "lybra_queue_return_dry_run",
+      "confirm_via": "dry_run_token",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dry_run_token": { "type": "string" },
+          "actor": { "type": "string" },
+          "agent_instance": { "type": "string" },
+          "owner_policy_ref": { "type": "string" },
+          "owner_confirmation_token": { "type": "string" }
+        },
+        "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
+        "additionalProperties": false
+      }
+    },
+    "lybra_queue_close_dry_run": {
+      "description": "Close a task (preview). closure_evidence is an OBJECT, not a flat string.",
+      "phase": "dry_run",
+      "base_verb": "lybra_queue_close",
+      "confirm_verb": "lybra_queue_close_confirm",
+      "confirm_via": "replay_args",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string" },
+          "actor": { "type": "string" },
+          "closure_evidence": {
+            "type": "object",
+            "description": "At least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref.",
+            "properties": {
+              "finalize_commit_hash": { "type": "string" },
+              "finalize_return_ref": { "type": "string" },
+              "owner_verification_ref": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": ["task_id", "actor", "closure_evidence"],
+        "additionalProperties": false
+      }
+    },
+    "lybra_queue_close_confirm": {
+      "description": "Confirm close. Replays task_id + actor + closure_evidence (NO dry_run_token — close confirm takes the full args again).",
+      "phase": "confirm",
+      "base_verb": "lybra_queue_close",
+      "dry_run_verb": "lybra_queue_close_dry_run",
+      "confirm_via": "replay_args",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string" },
+          "actor": { "type": "string" },
+          "closure_evidence": {
+            "type": "object",
+            "description": "At least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref.",
+            "properties": {
+              "finalize_commit_hash": { "type": "string" },
+              "finalize_return_ref": { "type": "string" },
+              "owner_verification_ref": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": ["task_id", "actor", "closure_evidence"],
+        "additionalProperties": false
       }
     },
     "lybra_task_progress": {
-      "description": "Report task progress (N2 - execution phase)",
-      "phases": ["single_phase"],
+      "description": "Report task progress (single-phase). NOTE: field is event_type, NOT status.",
+      "phase": "single",
+      "required_scope": "task_progress",
       "parameters": {
-        "task_id": {
-          "type": "string",
-          "required": true,
-          "description": "Task identifier"
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string", "description": "Task being reported on" },
+          "event_type": { "type": "string", "$enum": "progress_status", "description": "started | progress | completed | blocked" },
+          "actor": { "type": "string", "description": "Agent instance reporting" },
+          "summary": { "type": "string" },
+          "model_self_reported": { "type": "string" },
+          "stage": { "type": "string" },
+          "reason": { "type": "string" }
         },
-        "status": {
-          "type": "string",
-          "$enum": "progress_status",
-          "required": true,
-          "description": "Progress status"
-        },
-        "message": {
-          "type": "string",
-          "required": false,
-          "description": "Progress message"
-        },
-        "actor": {
-          "type": "string",
-          "required": true,
-          "description": "Agent reporting progress"
-        }
-      },
-      "response": {
-        "ok": {"type": "boolean"},
-        "recorded": {"type": "boolean", "description": "Whether progress was recorded"}
+        "required": ["task_id", "event_type", "actor"],
+        "additionalProperties": false
       }
     },
-    "lybra_queue_return": {
-      "description": "Return completed work (N3 - task return node)",
-      "phases": ["dry_run", "confirm"],
-      "dry_run_parameters": {
-        "task_id": {
-          "type": "string",
-          "required": true,
-          "description": "Task identifier"
+    "lybra_bench_audit_submit_dry_run": {
+      "description": "Submit a bench-audit evidence bundle (dry_run).",
+      "phase": "dry_run",
+      "base_verb": "lybra_bench_audit_submit",
+      "confirm_via": "dry_run_token",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string" },
+          "actor": { "type": "string" },
+          "evidence_type": { "type": "string", "description": "deploy | config | content | research" },
+          "task_mode": { "type": "string", "description": "deploy | config | content | research" },
+          "conclusion": { "type": "string", "description": "pass | pass_with_notes | fail | needs_human" },
+          "evidence_refs": { "type": "array", "items": { "type": "object" }, "description": "[{check_id, ref, note?}]" },
+          "notes": { "type": "string" }
         },
-        "actor": {
-          "type": "string",
-          "required": true,
-          "description": "Agent returning the task"
-        },
-        "completion_notes": {
-          "type": "string",
-          "required": false,
-          "description": "Completion notes"
-        },
-        "artifact_refs": {
-          "type": "array",
-          "items": {"type": "string"},
-          "required": false,
-          "description": "References to artifacts produced"
-        },
-        "autonomy_mode": {
-          "type": "string",
-          "required": true,
-          "description": "Autonomy mode for return"
-        },
-        "owner_policy_ref": {
-          "type": "string",
-          "required": false,
-          "description": "Owner policy reference"
-        }
-      },
-      "dry_run_response": {
-        "ok": {"type": "boolean"},
-        "verdict": {"type": "string", "$enum": "validation_verdict"},
-        "return_id": {"type": "string", "description": "Generated return identifier"},
-        "commit_check": {"type": "object", "description": "Commit verification results"},
-        "dry_run_token": {"type": "string"}
-      },
-      "idempotency": "Return is idempotent and recoverable - retry after failure is safe"
-    },
-    "lybra_audit_dispatch": {
-      "description": "Dispatch task for audit (N4 entry - audit assignment)",
-      "phases": ["dry_run", "confirm"],
-      "dry_run_parameters": {
-        "task_id": {
-          "type": "string",
-          "required": true,
-          "description": "Task to audit"
-        },
-        "auditor": {
-          "type": "string",
-          "required": true,
-          "description": "Assigned auditor"
-        },
-        "actor": {
-          "type": "string",
-          "required": true,
-          "description": "Actor dispatching audit"
-        }
-      },
-      "dry_run_response": {
-        "ok": {"type": "boolean"},
-        "verdict": {"type": "string"},
-        "audit_task_id": {"type": "string", "description": "Generated audit task identifier"},
-        "dry_run_token": {"type": "string"}
-      }
-    },
-    "lybra_audit_verdict": {
-      "description": "Submit audit verdict (N4 - audit verdict node)",
-      "phases": ["dry_run", "confirm"],
-      "dry_run_parameters": {
-        "task_id": {
-          "type": "string",
-          "required": true,
-          "description": "Task being audited"
-        },
-        "verdict": {
-          "type": "string",
-          "$enum": "verdict",
-          "required": true,
-          "description": "Audit verdict"
-        },
-        "notes": {
-          "type": "string",
-          "required": false,
-          "description": "Audit notes"
-        },
-        "auditor": {
-          "type": "string",
-          "required": true,
-          "description": "Auditor submitting verdict"
-        }
-      },
-      "dry_run_response": {
-        "ok": {"type": "boolean"},
-        "verdict": {"type": "string"},
-        "verdict_id": {"type": "string", "description": "Generated verdict record identifier"},
-        "dry_run_token": {"type": "string"}
-      }
-    },
-    "lybra_finalize": {
-      "description": "Finalize task - commit, push, deploy (N5 - finalize node)",
-      "phases": ["dry_run", "confirm"],
-      "prerequisites": "Requires PASS verdict from audit (N4)",
-      "dry_run_parameters": {
-        "task_id": {
-          "type": "string",
-          "required": true,
-          "description": "Task to finalize"
-        },
-        "actor": {
-          "type": "string",
-          "required": true,
-          "description": "Agent finalizing"
-        }
-      },
-      "dry_run_response": {
-        "ok": {"type": "boolean"},
-        "verdict": {"type": "string"},
-        "commit_plan": {"type": "object", "description": "Planned commit details"},
-        "push_plan": {"type": "object", "description": "Planned push details"},
-        "deploy_plan": {"type": "object", "description": "Planned deploy details (if applicable)"},
-        "dry_run_token": {"type": "string"}
-      },
-      "confirm_actions": [
-        "Commit changes with precise pathspec (no add -A)",
-        "Push to remote",
-        "Deploy if specified"
-      ]
-    },
-    "lybra_queue_close": {
-      "description": "Close and archive task (N6 - closure node)",
-      "phases": ["dry_run", "confirm"],
-      "dry_run_parameters": {
-        "task_id": {
-          "type": "string",
-          "required": true,
-          "description": "Task to close"
-        },
-        "closure_evidence_ref": {
-          "type": "string",
-          "required": true,
-          "description": "Reference to closure evidence"
-        },
-        "actor": {
-          "type": "string",
-          "required": true,
-          "description": "Actor closing task"
-        }
-      },
-      "dry_run_response": {
-        "ok": {"type": "boolean"},
-        "verdict": {"type": "string"},
-        "closure_id": {"type": "string"},
-        "governance_updates": {
-          "type": "object",
-          "description": "Planned governance document updates (decision_log, etc.)"
-        },
-        "dry_run_token": {"type": "string"}
-      },
-      "governance_updates": [
-        "Append to decision_log",
-        "Update project_status if needed",
-        "Update roadmap if needed",
-        "Archive task card to 5_tasks/queue/completed/",
-        "Push governance repo changes"
-      ],
-      "automation": "N6 auto-advances when closure evidence is complete"
-    },
-    "lybra_queue_withdraw": {
-      "description": "Withdraw task from queue (G2 - maintenance verb)",
-      "phases": ["dry_run", "confirm"],
-      "dry_run_parameters": {
-        "task_id": {
-          "type": "string",
-          "required": true,
-          "description": "Task to withdraw"
-        },
-        "reason": {
-          "type": "string",
-          "required": true,
-          "description": "Reason for withdrawal"
-        },
-        "actor": {
-          "type": "string",
-          "required": true,
-          "description": "Actor withdrawing task"
-        }
-      },
-      "preserves_records": true,
-      "non_blocking_warns": "Malformed or legacy tasks can always be withdrawn"
-    },
-    "lybra_queue_amend": {
-      "description": "Amend pending task metadata/body (G2 - maintenance verb)",
-      "phases": ["dry_run", "confirm"],
-      "constraints": "Only pending tasks can be amended",
-      "dry_run_parameters": {
-        "task_id": {
-          "type": "string",
-          "required": true,
-          "description": "Task to amend"
-        },
-        "amendments": {
-          "type": "object",
-          "required": true,
-          "description": "Field amendments"
-        },
-        "actor": {
-          "type": "string",
-          "required": true,
-          "description": "Actor amending task"
-        }
-      },
-      "preserves_history": "Amendment history tracked in metadata"
-    },
-    "lybra_owner_decision": {
-      "description": "Record owner decision (G1 - owner gate)",
-      "phases": ["dry_run", "confirm"],
-      "dry_run_parameters": {
-        "task_id": {
-          "type": "string",
-          "required": false,
-          "description": "Related task (if applicable)"
-        },
-        "decision": {
-          "type": "string",
-          "required": true,
-          "description": "Owner decision"
-        },
-        "decision_type": {
-          "type": "string",
-          "required": true,
-          "description": "Type of decision"
-        },
-        "actor": {
-          "type": "string",
-          "required": true,
-          "description": "Owner making decision"
-        }
+        "required": ["task_id", "actor", "conclusion"],
+        "additionalProperties": false
       }
     }
   }

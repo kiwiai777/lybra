@@ -18,6 +18,7 @@ function check(name: string, ok: boolean) {
 }
 
 const tmp = mkdtempSync(join(tmpdir(), "lybra-engine-"));
+const wsRoot = mkdtempSync(join(tmpdir(), "lybra-ws-"));
 const logPath = join(tmp, "loop.log");
 const logger = new Logger(logPath);
 function mkCtx(client: GateReadFace, state = freshState()): TickContext {
@@ -26,7 +27,7 @@ function mkCtx(client: GateReadFace, state = freshState()): TickContext {
     actor: "me",
     agentInstance: "me",
     ownerPolicyRef: "pol-1",
-    workspaceRoot: "/ws",
+    workspaceRoot: wsRoot,
     activeSessionId: "sess-x",
     state,
     logger,
@@ -37,8 +38,14 @@ function mockClient(tasks: AnyDict[], claimRespByTask: Record<string, AnyDict>):
     async queueTasks() {
       return tasks;
     },
-    async claimDryRun(args: AnyDict) {
-      return claimRespByTask[String(args.task_id)];
+    async callTool(name: string, args: AnyDict) {
+      if (name === "lybra_queue_claim_dry_run") {
+        return claimRespByTask[String(args.task_id)];
+      }
+      if (name === "lybra_task_preview") {
+        return { data: { rendered_card_markdown: "# card\n\nbody" } };
+      }
+      return {};
     },
   };
 }
@@ -71,7 +78,7 @@ r = await executeTick(
 );
 check("信封内 → release", r.kind === "release" && r.task.task_id === "T");
 // F-EXT001-7(FIX3):放行后路径推导为 claimed 位置
-check("release cardAbsPath=claimed", r.kind === "release" && r.cardAbsPath === "/ws/5_tasks/queue/claimed/T.md");
+check("release cardAbsPath=claimed", r.kind === "release" && r.cardAbsPath === `${wsRoot}/5_tasks/queue/claimed/t.md`);
 check("cardAbsPath 不含 pending", r.kind === "release" && !r.cardAbsPath.includes("queue/pending/"));
 
 // 5. 信封外(Supervised)单张 → 全跳过 → stop
@@ -95,7 +102,7 @@ r = await executeTick(
 );
 check("混合:跳过信封外、放行信封内", r.kind === "release" && r.task.task_id === "IN");
 // F-EXT001-7(FIX3):放行后路径为 claimed
-check("混合放行:cardAbsPath=claimed", r.kind === "release" && r.cardAbsPath === "/ws/5_tasks/queue/claimed/IN.md");
+check("混合放行:cardAbsPath=claimed", r.kind === "release" && r.cardAbsPath === `${wsRoot}/5_tasks/queue/claimed/in.md`);
 
 // 7. BLOCK → 立停(不跳过继续)
 r = await executeTick(
@@ -108,24 +115,24 @@ r = await executeTick(
 );
 check("BLOCK → stop(立停,不试 GOOD)", r.kind === "stop" && r.reason.includes("BLOCK"));
 
-// 8. claimDryRun 抛错 → stop
+// 8. callTool(claim) 抛错 → stop
 const throwingClient: GateReadFace = {
   async queueTasks() {
     return [pending("T")];
   },
-  async claimDryRun() {
+  async callTool() {
     throw new Error("connection reset");
   },
 };
 r = await executeTick(mkCtx(throwingClient));
-check("claimDryRun 抛错 → stop", r.kind === "stop" && r.reason.includes("connection reset"));
+check("callTool(claim) 抛错 → stop", r.kind === "stop" && r.reason.includes("connection reset"));
 
 // 9. queueTasks 抛错 → stop
 const fetchThrow: GateReadFace = {
   async queueTasks() {
     throw new Error("gate down");
   },
-  async claimDryRun() {
+  async callTool() {
     return {};
   },
 };
@@ -170,6 +177,7 @@ const after = readFileSync(logPath, "utf-8");
 check("轮转后新文件含 after-rotate", after.includes("after-rotate"));
 
 rmSync(tmp, { recursive: true, force: true });
+rmSync(wsRoot, { recursive: true, force: true });
 
 // --- 汇总 ---
 for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
