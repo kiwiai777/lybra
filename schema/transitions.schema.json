@@ -183,7 +183,7 @@
         "records": {
           "audit_dispatch": {
             "record_type": "audit_dispatch",
-            "location": "5_tasks/records/audit_dispatch/<task_id>/dispatch_*.md",
+            "location": "5_tasks/records/audit_dispatches/<task_id>/dispatch_*.md",
             "fields": ["record_type", "task_id", "audit_task_id", "dispatched_by", "dispatched_at", "auditor_assigned", "return_record_ref"]
           },
           "audit_verdict": {
@@ -223,7 +223,7 @@
         ],
         "records": {
           "record_type": "deployment_record",
-          "location": "5_tasks/records/finalizations/<task_id>/finalization_*.md",
+          "location": "5_tasks/records/deployments/<task_id>/deployment_*.md",
           "fields": ["record_type", "task_id", "commit", "actor", "timestamp", "authorization", "verdict_ref", "deployed", "deployment_provenance"]
         },
         "next_trigger": "executor closes task (N6)",
