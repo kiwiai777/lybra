@@ -579,6 +579,11 @@
       "required": false,
       "description": "Planner agent instance"
     },
+    "reviewer": {
+      "type": "string",
+      "required": false,
+      "description": "Reviewer for complex-class tasks (distinct from planner and executor)"
+    },
     "planner_model_tier": {
       "type": "string",
       "required": false,
@@ -677,6 +682,33 @@
       "type": "string",
       "required": false,
       "description": "Task body content (markdown)"
+    },
+    "draft_status": {
+      "type": "string",
+      "required": false,
+      "description": "Draft status (draft-only field)"
+    },
+    "draft_created_by": {
+      "type": "string",
+      "required": false,
+      "description": "Draft creator (draft-only field)"
+    },
+    "draft_created_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Draft creation timestamp (draft-only field)"
+    },
+    "draft_updated_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "description": "Draft last update timestamp (draft-only field)"
+    },
+    "draft_publish_target": {
+      "type": "string",
+      "required": false,
+      "description": "Draft publish target path (draft-only field)"
     }
   },
   "runtime_fields": [

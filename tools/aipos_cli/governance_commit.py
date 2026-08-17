@@ -279,15 +279,51 @@ def governance_commit(
     commit_msg = message or f"chore(governance): N6 收账 {task_id}\n\nActor: {actor}\nType: governance_commit"
     
     try:
-        # Stage all changes in governance repo
+        # AIPOS-R8B 大项A: Stage all changes in governance repo with pathspec限定到 governance_root
+        # 防止 git add -A 越界 stage 其他项目(如 kiwiaiagency)的文件
         subprocess.run(
-            ["git", "add", "-A"],
+            ["git", "add", "-A", "--", "."],
             cwd=str(governance_root),
             check=True,
             capture_output=True,
             text=True,
         )
-        operations.append("Staged all governance changes (git add -A)")
+        operations.append(f"Staged all governance changes (git add -A -- . in {governance_root})")
+        
+        # AIPOS-R8B 大项A②: 断言 staged 文件全部落在 governance_root 内,越界即 BLOCK
+        staged_files_result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=str(governance_root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        staged_files = [f.strip() for f in staged_files_result.stdout.split('\n') if f.strip()]
+        
+        # 检查 staged 文件是否全部在 governance_root 内(相对路径不应以 ../ 开头)
+        out_of_scope = []
+        for staged_file in staged_files:
+            # 相对路径以 ../ 开头或包含 ../ 说明越界
+            if staged_file.startswith('../') or '/../' in staged_file:
+                out_of_scope.append(staged_file)
+        
+        if out_of_scope:
+            operations.append(f"SCOPE VIOLATION: {len(out_of_scope)} staged files outside governance_root")
+            out_of_scope_list = '\n  - '.join(out_of_scope[:10])  # 最多列10个
+            if len(out_of_scope) > 10:
+                out_of_scope_list += f'\n  - ... and {len(out_of_scope) - 10} more'
+            return {
+                "verdict": Verdict.BLOCK,
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": False,
+                "completeness_check": completeness,
+                "committed": False,
+                "pushed": False,
+                "commit_hash": None,
+                "message": f"SCOPE VIOLATION: Staged files outside governance root (G3 铁律):\n  - {out_of_scope_list}",
+                "operations": operations,
+            }
         
         # Commit with explicit identity
         subprocess.run(

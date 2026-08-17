@@ -561,6 +561,42 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
             currentLogger.warn("held-auto-return-failed", { task_id: heldTaskId });
             ctx.ui?.notify?.(`自动return ${heldTaskId} 失败，请手动处理`, "warn");
           }
+        } else {
+          // AIPOS-R8B 大项C①: held 且无 completed → 投递卡正文复工（会话中断后自动续做）
+          currentLogger.info("held-resume", { task_id: heldTaskId });
+          ctx.ui?.notify?.(`复工：继续执行 ${heldTaskId}`, "info");
+          
+          // 读取任务卡正文并投递
+          const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${heldTaskId.toLowerCase()}.md`);
+          if (fs.existsSync(taskCardPath)) {
+            try {
+              const cardContent = fs.readFileSync(taskCardPath, "utf-8");
+              // 投递卡内容到当前会话
+              await ctx.reply({
+                type: "text",
+                text: `# 复工任务: ${heldTaskId}\n\n${cardContent}`,
+              });
+              
+              // 设置 currentTaskId 供后续使用
+              currentTaskId = heldTaskId;
+              
+              // 提取 worktree 路径
+              const worktreeMatch = cardContent.match(/active_worktree_path:\s*['"]?([^'"\n]+)['"]?/i);
+              if (worktreeMatch) {
+                currentWorktreePath = worktreeMatch[1].trim();
+              }
+              
+              // 停止循环，让执行体在当前会话继续工作
+              stopLoop(ctx, `已复工 ${heldTaskId}，继续在当前会话执行`, "info");
+              return;
+            } catch (e) {
+              currentLogger.error("held-resume-failed", { task_id: heldTaskId, error: String(e) });
+              ctx.ui?.notify?.(`复工失败: ${e instanceof Error ? e.message : String(e)}`, "error");
+            }
+          } else {
+            currentLogger.warn("held-resume-no-card", { task_id: heldTaskId, expected_path: taskCardPath });
+            ctx.ui?.notify?.(`任务卡不存在: ${taskCardPath}`, "warn");
+          }
         }
       }
       
@@ -726,9 +762,15 @@ export default function (pi: ExtensionAPI) {
         }
 
         // 配置(必需项缺失即停,绝不猜 actor/policy)
+        // AIPOS-R8B 大项C④: 启动阶段带耗时显示
+        const startMs = Date.now();
+        ctx.ui?.notify?.("[1/5] 加载配置...", "info");
+        
         let config;
         try {
           config = loadConfig(process.env);
+          const configMs = Date.now() - startMs;
+          ctx.ui?.notify?.(`[1/5] 配置加载完成 (${configMs}ms)`, "info");
         } catch (e) {
           ctx.ui.notify(`配置错误,循环未启动:${e instanceof Error ? e.message : String(e)}`, "error");
           return;
@@ -738,10 +780,14 @@ export default function (pi: ExtensionAPI) {
         currentActor = config.actor;
 
         // AIPOS-R6R: 启动即校验 schema(缺动词/改错必填参数名 → 报错不启动)。
+        ctx.ui?.notify?.("[2/5] 校验 schema...", "info");
         let verbCatalog;
         try {
+          const schemaStartMs = Date.now();
           verbCatalog = loadVerbCatalog();
           validateRequiredVerbs(verbCatalog, REQUIRED_VERBS);
+          const schemaMs = Date.now() - schemaStartMs;
+          ctx.ui?.notify?.(`[2/5] Schema 校验完成 (${schemaMs}ms)`, "info");
         } catch (e) {
           ctx.ui.notify(
             `schema 校验失败,循环未启动:${e instanceof Error ? e.message : String(e)}`,
@@ -751,9 +797,14 @@ export default function (pi: ExtensionAPI) {
         }
 
         // gate 连通性自检(initialize)
-        const client = new GateMcpClient(config.gateUrl, config.token, { verbs: verbCatalog });
+        // AIPOS-R8B 大项C②: 使用配置的超时预算
+        ctx.ui?.notify?.(`[3/5] 连接 gate (${config.gateUrl})...`, "info");
+        const client = new GateMcpClient(config.gateUrl, config.token, { verbs: verbCatalog, timeoutMs: config.timeoutMs });
         try {
+          const gateStartMs = Date.now();
           await client.initialize();
+          const gateMs = Date.now() - gateStartMs;
+          ctx.ui?.notify?.(`[3/5] Gate 连接成功 (${gateMs}ms, timeout=${config.timeoutMs}ms)`, "info");
         } catch (e) {
           ctx.ui.notify(
             `gate 连接失败(${config.gateUrl}),循环未启动:${e instanceof Error ? e.message : String(e)}\n` +
@@ -780,9 +831,14 @@ export default function (pi: ExtensionAPI) {
         });
 
         // AIPOS-R6I 靶③: loop可感知反馈 - 启动时打印详细信息
+        // AIPOS-R8B 大项C④: 带耗时显示
+        ctx.ui?.notify?.("[4/5] 查询队列...", "info");
+        const queueStartMs = Date.now();
         const queueInfo = await client.queueTasks().catch(() => []);
+        const queueMs = Date.now() - queueStartMs;
         const queueCount = queueInfo.length;
         const nextPollSec = config.intervalSec;
+        ctx.ui?.notify?.(`[4/5] 队列查询完成 (${queueMs}ms, ${queueCount} 张卡)`, "info");
         
         ctx.ui.notify(
           [
@@ -795,6 +851,9 @@ export default function (pi: ExtensionAPI) {
         );
         
         // AIPOS-R6I 靶②: 存量收敛 - 启动时扫描已有 PASS 裁决但未 finalize 的卡自动补收
+        // AIPOS-R8B 大项C④: sweep 带耗时显示
+        ctx.ui?.notify?.("[5/5] 存量收敛(sweep)...", "info");
+        const sweepStartMs = Date.now();
         tryAutoFinalizeOnPassVerdict(ctx).catch((e) => {
           const errMsg = `启动时 auto-finalize 错误: ${e instanceof Error ? e.message : String(e)}`;
           currentLogger.warn("startup-auto-finalize-error", {
@@ -802,6 +861,11 @@ export default function (pi: ExtensionAPI) {
           });
           // AIPOS-R6L 第三轮修复(b): 失败必出声
           ctx.ui?.notify?.(errMsg, "error");
+        }).finally(() => {
+          const sweepMs = Date.now() - sweepStartMs;
+          ctx.ui?.notify?.(`[5/5] 存量收敛完成 (${sweepMs}ms)`, "info");
+          const totalMs = Date.now() - startMs;
+          ctx.ui?.notify?.(`✓ 启动完成，总耗时 ${totalMs}ms`, "info");
         });
         
         // F-EXT001-4(FIX1):非阻塞,直接调用第一轮 tick(不经 sendUserMessage)

@@ -393,6 +393,7 @@ export interface LoopConfig {
   maxWaitSec: number;
   workspaceRoot: string;
   ownerPolicyRef: string;
+  timeoutMs: number; // AIPOS-R8B 大项C②: 超时预算可配置
 }
 
 export class ConfigError extends Error {}
@@ -474,5 +475,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): LoopConfig {
     maxWaitSec: envInt(env, "LYBRA_LOOP_MAX_WAIT", 1800, 1),
     workspaceRoot,
     ownerPolicyRef,
+    // AIPOS-R8B 大项C②: 超时预算可配,默认 30s(实测 claim 4.07s, 留足余量)
+    timeoutMs: envInt(env, "LYBRA_GATE_TIMEOUT_MS", 30000, 5000),
   };
 }

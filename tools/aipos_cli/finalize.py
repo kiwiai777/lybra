@@ -1050,15 +1050,72 @@ def finalize_task(
     commit_msg = f"feat({task_id}): finalize PASS task\n\nActor: {actor}\nAudit: {finalize_check['verdict']}"
     
     try:
-        # Stage all changes
+        # AIPOS-R8B 大项A: Stage changes with pathspec限定到 workspace_root (产品仓)
+        # 防止 git add -A 越界 stage 治理仓或其他项目的文件
         subprocess.run(
-            ["git", "add", "-A"],
+            ["git", "add", "-A", "--", "."],
             cwd=str(workspace_root),
             check=True,
             capture_output=True,
             text=True,
         )
-        operations.append("Staged all changes (git add -A)")
+        operations.append(f"Staged all changes (git add -A -- . in {workspace_root})")
+        
+        # AIPOS-R8B 大项A②: 断言 staged 文件全部落在 workspace_root 内,越界即 BLOCK
+        staged_files_result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=str(workspace_root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        staged_files = [f.strip() for f in staged_files_result.stdout.split('\n') if f.strip()]
+        
+        # 检查 staged 文件是否全部在 workspace_root 内(相对路径不应以 ../ 开头)
+        # 同时检查敏感路径(.lybra/connection.json 等)不应被 stage
+        out_of_scope = []
+        sensitive_files = []
+        for staged_file in staged_files:
+            # 相对路径以 ../ 开头或包含 ../ 说明越界
+            if staged_file.startswith('../') or '/../' in staged_file:
+                out_of_scope.append(staged_file)
+            # 敏感路径检查 (AIPOS-R6K token 泄漏同病根)
+            if staged_file.startswith('.lybra/') and any(sensitive in staged_file for sensitive in ['connection.json', 'role', 'token']):
+                sensitive_files.append(staged_file)
+        
+        if out_of_scope:
+            operations.append(f"SCOPE VIOLATION: {len(out_of_scope)} staged files outside workspace_root")
+            out_of_scope_list = '\n  - '.join(out_of_scope[:10])  # 最多列10个
+            if len(out_of_scope) > 10:
+                out_of_scope_list += f'\n  - ... and {len(out_of_scope) - 10} more'
+            return {
+                "verdict": Verdict.FAIL,
+                "task_id": task_id,
+                "actor": actor,
+                "finalize_check": finalize_check,
+                "committed": False,
+                "pushed": False,
+                "deployed": False,
+                "commit_hash": None,
+                "message": f"SCOPE VIOLATION: Staged files outside workspace root (G3 铁律):\n  - {out_of_scope_list}",
+                "operations": operations,
+            }
+        
+        if sensitive_files:
+            operations.append(f"SENSITIVE FILES BLOCKED: {len(sensitive_files)} credential/config files")
+            sensitive_list = '\n  - '.join(sensitive_files)
+            return {
+                "verdict": Verdict.FAIL,
+                "task_id": task_id,
+                "actor": actor,
+                "finalize_check": finalize_check,
+                "committed": False,
+                "pushed": False,
+                "deployed": False,
+                "commit_hash": None,
+                "message": f"SENSITIVE FILES: Cannot commit credentials/config to product repo:\n  - {sensitive_list}",
+                "operations": operations,
+            }
         
         # Commit with explicit identity
         subprocess.run(

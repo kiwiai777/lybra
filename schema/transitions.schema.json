@@ -25,6 +25,11 @@
           "Task card moved to 5_tasks/queue/pending/",
           "Publish record created"
         ],
+        "records": {
+          "record_type": "publish",
+          "location": "5_tasks/records/publishes/<task_id>/publish_*.md",
+          "fields": ["record_type", "task_id", "actor", "timestamp", "draft_path", "published_path"]
+        },
         "next_trigger": "executor claims task (N1)",
         "idempotent": false,
         "notes": "Draft template generated from card.schema required fields"
@@ -59,6 +64,11 @@
           "Session record created",
           "Task bound to session and worktree"
         ],
+        "records": {
+          "record_type": "claim",
+          "location": "5_tasks/records/claims/<task_id>/claim_*.md",
+          "fields": ["record_type", "task_id", "claim_id", "actor", "agent_instance", "claimed_at", "autonomy_mode", "owner_policy_ref"]
+        },
         "next_trigger": "executor completes work (N2→N3)",
         "idempotent": true,
         "notes": "Claim binds task to specific session and worktree"
@@ -86,6 +96,11 @@
           "completed - work done",
           "blocked - cannot proceed"
         ],
+        "records": {
+          "record_type": "task_progress_event",
+          "location": "5_tasks/records/events/<task_id>/{started|progress|completed|blocked}_*.md",
+          "fields": ["record_type", "task_id", "event_type", "actor", "timestamp", "summary", "model_self_reported"]
+        },
         "commit_requirement": "Executor must commit changes before return (commit-before-return)",
         "next_trigger": "executor returns work (N3)",
         "idempotent": "N/A (ongoing work phase)",
@@ -109,6 +124,11 @@
           "Return record created with completion notes and artifact refs",
           "Session updated"
         ],
+        "records": {
+          "record_type": "return",
+          "location": "5_tasks/records/returns/<task_id>/return_*.md",
+          "fields": ["record_type", "task_id", "return_id", "actor", "returned_at", "artifact_refs", "completion_summary", "performed_writes"]
+        },
         "next_trigger": "audit dispatch (N4) or advisor review (non-code) or direct close (N6)",
         "idempotent": true,
         "recoverable": true,
@@ -160,6 +180,18 @@
         "outputs": [
           "Audit verdict record created"
         ],
+        "records": {
+          "audit_dispatch": {
+            "record_type": "audit_dispatch",
+            "location": "5_tasks/records/audit_dispatch/<task_id>/dispatch_*.md",
+            "fields": ["record_type", "task_id", "audit_task_id", "dispatched_by", "dispatched_at", "auditor_assigned", "return_record_ref"]
+          },
+          "audit_verdict": {
+            "record_type": "audit_verdict",
+            "location": "5_tasks/records/audit_verdicts/<task_id>/verdict_*.md",
+            "fields": ["record_type", "task_id", "audit_task_id", "verdict", "verdict_id", "auditor", "verdict_at", "findings", "reviewed_executor_instance"]
+          }
+        },
         "next_trigger": "PASS/PASS_WITH_NOTES → executor finalizes (N5); FAIL → fix loop; BLOCK → escalation",
         "notes": "Non-code tasks skip N4, use advisor review instead (gate still records verdict)"
       },
@@ -189,6 +221,11 @@
           "Finalize record created",
           "Deployment completed (if applicable)"
         ],
+        "records": {
+          "record_type": "deployment_record",
+          "location": "5_tasks/records/finalizations/<task_id>/finalization_*.md",
+          "fields": ["record_type", "task_id", "commit", "actor", "timestamp", "authorization", "verdict_ref", "deployed", "deployment_provenance"]
+        },
         "next_trigger": "executor closes task (N6)",
         "notes": "Non-code tasks skip N5, advisor review handles governance updates directly"
       },
@@ -253,6 +290,11 @@
           "Governance documents updated",
           "Governance repo pushed to remote"
         ],
+        "records": {
+          "record_type": "closure",
+          "location": "5_tasks/records/closures/<task_id>/closure_*.md",
+          "fields": ["record_type", "task_id", "closed_by", "closed_at", "closure_evidence_ref", "governance_commit_hash"]
+        },
         "idempotent": true,
         "notes": "N6 includes full governance reconciliation - fixed update list in config.schema"
       }
