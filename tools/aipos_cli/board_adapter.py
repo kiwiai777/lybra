@@ -5707,6 +5707,31 @@ def amend_task(
             else:
                 updated_metadata[key] = value
         
+        # AIPOS-R8B 大项A① (c): 校验修改后的字段值(与 draft publish 共用同一 schema 校验)
+        from tools.schema_loader import validate_field_value
+        validation_errors = []
+        for key, value in amendments.items():
+            if key == "body":
+                continue  # body 不在 schema 校验范围
+            is_valid, error_msg = validate_field_value(key, value)
+            if not is_valid and error_msg:
+                validation_errors.append(error_msg)
+        
+        if validation_errors:
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="INVALID_AMENDMENT_VALUE",
+                message=f"Amendment validation failed: {'; '.join(validation_errors)}",
+                actor=_actor_payload(actor_text),
+                data={
+                    "task_id": task.get("task_id"),
+                    "validation_errors": validation_errors,
+                    "recommended_action": "Ensure amended field values conform to schema enum constraints."
+                },
+                safety_notice="AIPOS-R8B: amendments must conform to schema (shared validation with draft publish)."
+            )
+        
         # Build amendment record
         amendment_timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         amendment_id = build_runtime_id("amendment", task.get("task_id"), amendment_timestamp, actor_text)

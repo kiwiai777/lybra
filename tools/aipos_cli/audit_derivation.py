@@ -306,11 +306,43 @@ def derive_audit_task_on_return(
     publish_record_path.parent.mkdir(parents=True, exist_ok=True)
     publish_record_path.write_text(publish_record_markdown, encoding="utf-8")
     
+    # AIPOS-R8B F-N4: 补写 dispatch_record (与 lybra_audit_dispatch 共用同一 writer)
+    # 自动派生审计卡时也必须落 dispatch 记录,否则裁决提交时会被 MISSING_AUDIT_DISPATCH_RECORD 拒绝
+    from tools.aipos_cli.record_writer import build_mcp_audit_dispatch_record_markdown
+    
+    dispatch_id = f"dispatch_{audit_task_id}_{published_at.replace(':', '').replace('-', '').replace('Z', '')}_gate-derivation"
+    dispatch_record_markdown = build_mcp_audit_dispatch_record_markdown(
+        dispatch_id=dispatch_id,
+        reviewed_task_id=source_task_id,
+        reviewed_task_path=source_path,
+        reviewed_return_record_ref=return_record_ref,
+        reviewed_executor_instance=str(source_metadata.get("executor_completed_by") or source_metadata.get("claimed_by") or ""),
+        reviewed_executor_claim_id=str(source_metadata.get("claim_id") or ""),
+        reviewed_executor_session_id=str(source_metadata.get("active_session_id") or source_metadata.get("last_session_id") or ""),
+        audit_task_id=audit_task_id,
+        audit_task_path=audit_task_path,
+        actor="gate_derivation",
+        canonical_agent_instance="gate_derivation",
+        owner_policy_ref="auto_derivation_on_return",
+        dispatched_at=published_at,
+        dry_run_id=None,
+        dry_run_snapshot_hash=None,
+        confirmation_ref="auto_confirmed_gate_derivation",
+    )
+    
+    # dispatch 记录路径: 5_tasks/records/audit_dispatches/<reviewed_task_id>/dispatch_*.md
+    dispatch_record_dir = repo_root / "5_tasks" / "records" / "audit_dispatches" / source_task_id
+    dispatch_record_filename = f"dispatch_{published_at.replace(':', '').replace('-', '').replace('Z', '')}.md"
+    dispatch_record_path = dispatch_record_dir / dispatch_record_filename
+    dispatch_record_path.parent.mkdir(parents=True, exist_ok=True)
+    dispatch_record_path.write_text(dispatch_record_markdown, encoding="utf-8")
+    
     return {
         "derived": True,
         "audit_task_id": audit_task_id,
         "audit_task_path": audit_task_path,
         "publish_record_path": str(publish_record_path.relative_to(repo_root)),
+        "dispatch_record_path": str(dispatch_record_path.relative_to(repo_root)),
         "performed_writes": [
             {
                 "path": audit_task_path,
@@ -322,6 +354,12 @@ def derive_audit_task_on_return(
                 "kind": "create",
                 "type": RecordType.PUBLISH_RECORD,
                 "record_type": RecordType.PUBLISH_RECORD,
+            },
+            {
+                "path": str(dispatch_record_path.relative_to(repo_root)),
+                "kind": "create",
+                "type": RecordType.AUDIT_DISPATCH_RECORD,
+                "record_type": RecordType.AUDIT_DISPATCH_RECORD,
             },
         ],
     }
