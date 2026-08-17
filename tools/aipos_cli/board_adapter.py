@@ -5712,6 +5712,7 @@ def amend_task(
         amendment_id = build_runtime_id("amendment", task.get("task_id"), amendment_timestamp, actor_text)
         
         amendment_record = {
+            "record_type": "amendment_record",
             "amendment_id": amendment_id,
             "task_id": task.get("task_id"),
             "amended_by": actor_text,
@@ -5730,6 +5731,7 @@ def amend_task(
         amendment_path = amendments_dir / amendment_filename
         
         amendment_markdown = f"""---
+record_type: amendment_record
 amendment_id: {amendment_id}
 task_id: {task.get('task_id')}
 amended_by: {actor_text}

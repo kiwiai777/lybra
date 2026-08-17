@@ -1278,6 +1278,24 @@ def finalize_task(
         elif deployment_error:
             final_message += f" but deployment FAILED: {deployment_error[:100]}"
         
+        # AIPOS-R8B 大项B F-3.1: 写 finalization 记录(必落,按 task_id 分目录)
+        if not dry_run:
+            try:
+                from tools.aipos_cli.finalization_record import write_finalization_record
+                fin_result = write_finalization_record(
+                    governance_root=governance_root,
+                    task_id=task_id,
+                    actor=actor,
+                    commit=commit_hash,
+                    authorization_type="verdict_ref",
+                    authorization_ref=finalize_check.get("verdict_id", "unknown"),
+                    deployed=deployed,
+                    deployment_record_ref=None,  # TODO: 从 deployment_record 返回值获取
+                )
+                operations.append(f"Finalization record written: {fin_result['path']}")
+            except Exception as e:
+                operations.append(f"⚠️  Finalization record write failed: {e}")
+        
         return {
             "verdict": Verdict.PASS,
             "task_id": task_id,

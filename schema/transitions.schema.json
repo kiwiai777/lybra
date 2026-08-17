@@ -222,9 +222,20 @@
           "Deployment completed (if applicable)"
         ],
         "records": {
-          "record_type": "deployment_record",
-          "location": "5_tasks/records/deployments/<task_id>/deployment_*.md",
-          "fields": ["record_type", "task_id", "commit", "actor", "timestamp", "authorization", "verdict_ref", "deployed", "deployment_provenance"]
+          "finalization": {
+            "record_type": "finalization_record",
+            "location": "5_tasks/records/finalizations/<task_id>/finalization_*.md",
+            "fields": ["record_type", "task_id", "actor", "finalized_at", "commit", "authorization_type", "authorization_ref", "deployed", "deployment_record_ref"],
+            "required": true,
+            "description": "Finalization record must be written for every finalize operation, regardless of deployment"
+          },
+          "deployment": {
+            "record_type": "deployment_record",
+            "location": "5_tasks/records/deployments/<commit>/deployment_*.md",
+            "fields": ["record_type", "commit", "actor", "deployed_at", "authorization_type", "authorization_ref", "deployment_provenance"],
+            "required": false,
+            "description": "Deployment record is written only when actual deployment occurs; keyed by commit (cross-task)"
+          }
         },
         "next_trigger": "executor closes task (N6)",
         "notes": "Non-code tasks skip N5, advisor review handles governance updates directly"

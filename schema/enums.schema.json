@@ -215,6 +215,10 @@
         {
           "value": "config",
           "description": "Configuration task - advisor review, skip independent audit"
+        },
+        {
+          "value": "audit",
+          "description": "Audit task (R cards) - gate-generated to review completed work"
         }
       ]
     },
