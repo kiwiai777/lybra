@@ -168,7 +168,7 @@ def invoke_lybra_deploy(
             "returncode": 2,
         }
 
-    argv = [str(deploy_script)]
+    argv = [str(deploy_script), "deploy"]
     if auth_type == "verdict_ref":
         argv += ["--verdict-ref", auth_ref]
     else:
