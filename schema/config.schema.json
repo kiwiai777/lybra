@@ -335,7 +335,8 @@
         "project_id": "string",
         "governance_root": "path",
         "code_repo": "path (optional)",
-        "workspace_root": "path"
+        "workspace_root": "path",
+        "card_policy": "path (optional, relative to governance_root) — AIPOS-R8C: points to a declaration file defining project-specific card validation rules. Product executor is semantics-blind; it only checks field existence + value domain per the declared rules. When absent, behavior is identical to pre-R8C (zero-invasion)."
       }
     },
     "scope_isolation": {

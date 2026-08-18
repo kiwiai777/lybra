@@ -22,6 +22,13 @@ try:
 except ImportError:
     SCHEMA_AVAILABLE = False
 
+# AIPOS-R8C: Project-declarable card policy (zero-invasion)
+try:
+    from tools.card_policy_loader import evaluate_card_policy_rules
+    CARD_POLICY_AVAILABLE = True
+except ImportError:
+    CARD_POLICY_AVAILABLE = False
+
 
 
 
@@ -208,11 +215,23 @@ def validate_draft_metadata(
     # (LOOP-REDESIGN v2 §5/§6 一机制一实现),这里禁传 repo_root 给任何 schema 查询。
     # repo_root 参数仍用于草稿路径/碰撞等 repo-relative 操作,仅 schema 查询剥离它。
     if SCHEMA_AVAILABLE:
+        # AIPOS-R8C: collect card_policy-declared field names so we don't warn
+        # about them as "unknown" — they are project-declared, not typos.
+        card_policy_fields: set[str] = set()
+        if CARD_POLICY_AVAILABLE:
+            from tools.card_policy_loader import get_card_policy_rules
+            for _rule in get_card_policy_rules(governance_root=repo_root, repo_root=None):
+                _fname = _rule.get("field")
+                if isinstance(_fname, str) and _fname:
+                    card_policy_fields.add(_fname)
+
         # Check for undefined/misspelled fields
         all_defined_fields = get_all_defined_fields()
         for field_name in metadata.keys():
             if field_name == "body":  # body is special, not in frontmatter schema
                 continue
+            if field_name in card_policy_fields:
+                continue  # AIPOS-R8C: project-declared field, not unknown
             if not is_field_defined(field_name):
                 # Check for likely typos (similar field names)
                 similar = [f for f in all_defined_fields if f.lower().replace('_', '') == field_name.lower().replace('_', '')]
@@ -237,6 +256,8 @@ def validate_draft_metadata(
         for field_name, value in metadata.items():
             if field_name == "body" or _is_missing(value):
                 continue
+            if field_name in card_policy_fields:
+                continue  # AIPOS-R8C: card_policy fields validated by policy rules, not schema
             is_valid, error_msg = validate_field_value(field_name, value)
             if not is_valid and error_msg:
                 _add(blocking_reasons, error_msg)
@@ -279,6 +300,20 @@ def validate_draft_metadata(
     for field in RECOMMENDED_FIELDS:
         if _is_missing(metadata.get(field)):
             _add(warnings, f"Missing recommended field: {field}")
+
+    # AIPOS-R8C: Project-declarable card policy rules (zero-invasion)
+    # If the project has a card_policy declaration, evaluate its rules.
+    # When no declaration exists, this is a no-op (behavior identical to pre-R8C).
+    if CARD_POLICY_AVAILABLE:
+        policy_blocking, policy_warnings = evaluate_card_policy_rules(
+            metadata,
+            governance_root=repo_root,
+            repo_root=None,  # schema resolution uses product repo auto-detect
+        )
+        for message in policy_blocking:
+            _add(blocking_reasons, message)
+        for message in policy_warnings:
+            _add(warnings, message)
 
     complexity = validate_task_complexity(metadata, enforce_dependency_gate=False)
     for message in complexity["blocking_reasons"]:

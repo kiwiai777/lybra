@@ -23,6 +23,13 @@ from tools.aipos_cli.draft_validator import (
 from tools.aipos_cli.records import expected_publish_record_path
 from tools.aipos_cli.task_complexity import validate_task_complexity
 
+# AIPOS-R8C: card_policy placeholder fields for draft create
+try:
+    from tools.card_policy_loader import get_card_policy_placeholder_fields
+    CARD_POLICY_AVAILABLE = True
+except ImportError:
+    CARD_POLICY_AVAILABLE = False
+
 
 def _check_project_map_staleness(repo_root: Path, validation: dict[str, Any]) -> None:
     """AIPOS-276: project-map staleness check (publish gate warning hook).
@@ -387,6 +394,15 @@ def create_draft(
     *,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    # AIPOS-R8C: pre-populate placeholder fields from project card_policy
+    if CARD_POLICY_AVAILABLE:
+        placeholders = get_card_policy_placeholder_fields(
+            governance_root=repo_root, repo_root=None
+        )
+        for field_name, placeholder_value in placeholders.items():
+            if field_name not in metadata or metadata[field_name] in (None, ""):
+                metadata[field_name] = placeholder_value
+
     normalized = _normalized_metadata(metadata)
     rendered_markdown = render_markdown_task_card(normalized, body or default_draft_body())
     validation = validate_draft_metadata(repo_root, normalized)
