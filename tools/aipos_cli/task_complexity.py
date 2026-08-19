@@ -9,7 +9,7 @@ from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 
 ALLOWED_TASK_CLASSES = {"simple", "complex"}
 CODE_TASK_MODES = {"code", "coding"}
-AUDIT_PASS_VALUES = {"pass", "passed"}
+AUDIT_PASS_VALUES = {"pass", "passed", "pass_with_notes"}
 DEPENDENCY_CONDITIONS = {"executor_completion", "audit_readiness", "audit_pass"}
 
 
@@ -208,7 +208,7 @@ def validate_task_complexity(
                 from pathlib import Path as _Path
                 gov = _Path(governance_root)
                 for dep_tid in depends_on_list:
-                    verdict_dir = gov / "5_tasks" / "records" / "audit_verdicts" / dep_tid.lower()
+                    verdict_dir = gov / "5_tasks" / "records" / "audit_verdicts" / dep_tid
                     if verdict_dir.is_dir():
                         for vf in verdict_dir.glob("*.md"):
                             try:
