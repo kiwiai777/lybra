@@ -17,6 +17,7 @@ AIPOS-FND-9: Auto-deploy gate-side changes after commit to prevent "committed bu
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -403,6 +404,255 @@ def check_stage_archive_gate(governance_root: Path, repo_root: Path | None = Non
     }
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-C3C: N5 branch_integration 声明驱动 — 卡分支整合 (merge --no-ff)
+# 声明是唯一真相: 分支命名/合并策略/信息格式/冲突策略全在 transitions.schema N5。
+# finalize 读声明执行, 归属解析器读同一份声明; 生成什么格式就解析什么格式。
+# ---------------------------------------------------------------------------
+
+_DEFAULT_BRANCH_INTEGRATION = {
+    "branch_pattern": "card/{task_id}",
+    "merge_strategy": "no-ff",
+    "merge_message_format": "Merge {branch}: {summary} ({verdict_id})",
+}
+
+
+def _load_branch_integration(repo_root: Path) -> dict[str, Any]:
+    """读 N5.branch_integration 声明 (单一真相); schema 缺失/损坏时回退默认。
+
+    回退仅用于 schema 目录不存在的环境 (单元测试夹具), 且回退值与声明一致。
+    """
+    try:
+        from tools.schema_loader import get_branch_integration
+        branch_integration = get_branch_integration(repo_root)
+        if isinstance(branch_integration, dict):
+            return branch_integration
+    except Exception:
+        pass
+    return dict(_DEFAULT_BRANCH_INTEGRATION)
+
+
+def _branch_name_for_task(branch_pattern: str, task_id: str) -> str:
+    """按声明 branch_pattern 派生分支名 ('card/{task_id}' → 'card/AIPOS-C3C')."""
+    return branch_pattern.replace("{task_id}", task_id)
+
+
+def _git_branch_exists(repo_root: Path, branch_name: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", f"refs/heads/{branch_name}"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except subprocess.CalledProcessError:
+        return False
+
+
+def _git_branch_merged_into_head(repo_root: Path, branch_name: str) -> bool:
+    """分支 tip 是否为 HEAD 祖先 (已合并)。"""
+    try:
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", branch_name, "HEAD"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except subprocess.CalledProcessError:
+        return False
+
+
+def _git_current_branch(repo_root: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def _git_conflict_files(repo_root: Path) -> list[str]:
+    """列出未合并 (冲突) 路径 (git diff --diff-filter=U)。"""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=U"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+        return [f.strip() for f in result.stdout.splitlines() if f.strip()]
+    except subprocess.CalledProcessError:
+        return []
+
+
+def _task_title_summary(governance_root: Path, task_id: str) -> str:
+    """Best-effort: 从治理仓任务卡 frontmatter title 提炼摘要 (剥离 task_id 前缀)。
+
+    查找顺序: 5_tasks/queue/{claimed,completed,pending}/<id>.md → task_cards/<ID>/CARD.md。
+    失败返回空串 (摘要非归属关键, 归属由 branch 卡号 + verdict_id 裁决号保证)。
+    """
+    candidates: list[Path] = []
+    queue_dir = governance_root / "5_tasks" / "queue"
+    for state in ("claimed", "completed", "pending"):
+        state_dir = queue_dir / state
+        if not state_dir.is_dir():
+            continue
+        for card in state_dir.glob("*.md"):
+            if card.stem.lower() == task_id.lower():
+                candidates.append(card)
+    card_md = governance_root / "task_cards" / task_id / "CARD.md"
+    if card_md.exists():
+        candidates.append(card_md)
+
+    for path in candidates:
+        try:
+            from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+            metadata, _body, _warnings = parse_markdown_frontmatter(
+                path.read_text(encoding="utf-8")
+            )
+            title = str(metadata.get("title") or "").strip()
+            if title:
+                if title.startswith(task_id):
+                    title = title[len(task_id):]
+                summary = title.lstrip(" :：-–—").strip()
+                if summary:
+                    return summary
+        except Exception:
+            continue
+    return ""
+
+
+def _integrate_card_branch(
+    task_id: str,
+    verdict_id: str | None,
+    workspace_root: Path,
+    governance_root: Path,
+    dry_run: bool,
+    operations: list[str],
+    branch_integration: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """AIPOS-C3C: 按 N5 branch_integration 声明执行卡分支整合 (merge --no-ff)。
+
+    ①按 branch_pattern 派生分支名 → 找 card/<task_id>
+    ②存在且未合并 → 检查工作树干净 + 当前在 main → merge --no-ff
+      (信息格式由 merge_message_format 声明保证归属: 含卡号 + 裁决号)
+    ③冲突 → 中止出声, 列冲突文件, 绝不自动解, main 无半合并残留
+    ④分支不存在 → 跳过出声 "无卡分支, 跳过整合"
+    ⑤已合并 → 跳过出声
+    分支保留 (不删除), 与既有惯例一致。
+
+    Returns:
+        {"branch_name", "action", "blocked", "message", "conflict_files"}
+    """
+    if branch_integration is None:
+        branch_integration = _load_branch_integration(workspace_root)
+
+    branch_pattern = str(branch_integration.get("branch_pattern") or "card/{task_id}")
+    merge_strategy = str(branch_integration.get("merge_strategy") or "no-ff")
+    message_format = str(
+        branch_integration.get("merge_message_format")
+        or "Merge {branch}: {summary} ({verdict_id})"
+    )
+    main_branch = "main"
+
+    branch_name = _branch_name_for_task(branch_pattern, task_id)
+    base = {"branch_name": branch_name, "blocked": False, "conflict_files": []}
+
+    operations.append(
+        f"Branch integration (N5 branch_integration): pattern={branch_pattern!r}, "
+        f"strategy={merge_strategy}"
+    )
+
+    # ① 找分支
+    if not _git_branch_exists(workspace_root, branch_name):
+        message = f"无卡分支 {branch_name} (直提 main 的历史卡/无代码卡), 跳过整合"
+        operations.append(f"  → {message}")
+        return {**base, "action": "skipped_no_branch", "message": message}
+
+    # 已合并? (分支 tip 为 HEAD 祖先)
+    if _git_branch_merged_into_head(workspace_root, branch_name):
+        message = f"分支 {branch_name} 已合并 (tip 为 main 祖先), 跳过整合"
+        operations.append(f"  → {message}")
+        return {**base, "action": "skipped_already_merged", "message": message}
+
+    # ② 前置: 工作树干净 + 当前在 main
+    if not _git_status_clean(workspace_root):
+        message = f"工作树不干净, 无法合并 {branch_name} — 先处理未提交改动"
+        operations.append(f"  → BLOCKED: {message}")
+        return {**base, "blocked": True, "action": "blocked_not_clean", "message": message}
+
+    current_branch = _git_current_branch(workspace_root)
+    if current_branch != main_branch:
+        message = f"当前在 '{current_branch}', 不在 {main_branch} — 无法合并 {branch_name}"
+        operations.append(f"  → BLOCKED: {message}")
+        return {**base, "blocked": True, "action": "blocked_not_on_main", "message": message}
+
+    # 合并信息 (声明格式保证归属: 含卡号 + 裁决号)
+    summary = _task_title_summary(governance_root, task_id)
+    merge_message = (
+        message_format
+        .replace("{branch}", branch_name)
+        .replace("{summary}", summary)
+        .replace("{verdict_id}", verdict_id or "unknown")
+    )
+    merge_message = re.sub(r"\s{2,}", " ", merge_message).strip()
+
+    if dry_run:
+        message = (
+            f"DRY-RUN: 将 merge --no-ff {branch_name} → {main_branch}, "
+            f"信息: {merge_message!r}"
+        )
+        operations.append(f"  → {message}")
+        return {**base, "action": "merged", "message": message, "dry_run": True}
+
+    # ③ merge --no-ff
+    merge_cmd = ["git", "merge", "--no-ff", branch_name, "-m", merge_message]
+    operations.append(f"  → 执行: {' '.join(merge_cmd)}")
+    result = subprocess.run(
+        merge_cmd,
+        cwd=str(workspace_root),
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        # 冲突 → 列文件 → abort → main 无半合并残留
+        conflict_files = _git_conflict_files(workspace_root)
+        operations.append(f"  → 冲突! 冲突文件: {conflict_files}")
+        subprocess.run(
+            ["git", "merge", "--abort"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+        )
+        clean_after_abort = _git_status_clean(workspace_root)
+        message = (
+            f"合并冲突, 中止 (main 无半合并残留): {len(conflict_files)} 个冲突文件 — "
+            + (", ".join(conflict_files[:10]) if conflict_files else "(无 U 路径)")
+        )
+        if not clean_after_abort:
+            message += " [警告: abort 后工作树仍不干净]"
+        operations.append(f"  → BLOCKED: {message}")
+        return {
+            **base,
+            "blocked": True,
+            "action": "blocked_conflict",
+            "message": message,
+            "conflict_files": conflict_files,
+        }
+
+    operations.append(f"  → ✓ 已合并 {branch_name} (no-ff), 分支保留不删除")
+    return {**base, "action": "merged", "message": f"已合并 {branch_name} (no-ff)"}
+
+
 def finalize_task(
     task_id: str,
     actor: str,
@@ -621,42 +871,36 @@ def finalize_task(
             "operations": operations,
         }
     
-    # AIPOS-R5A: Worktree 合并和清理（finalize 收敛）
-    worktree_merged = False
-    worktree_cleaned = False
-    try:
-        from tools.worktree_manager import WorktreeManager
-        wt_manager = WorktreeManager.from_workspace_config(workspace_root)
-        branch_name = wt_manager.branch_name_for_task(task_id)
-        
-        # 检查是否存在该任务的分支
-        if wt_manager._branch_exists(branch_name):
-            if not dry_run:
-                # 合并 worktree 分支到 main
-                merge_result = wt_manager.merge_to_main(
-                    branch_name=branch_name,
-                    strategy='squash',  # 默认 squash 策略
-                    main_branch='main'
-                )
-                operations.append(f"Merged {branch_name} to main (squash)")
-                worktree_merged = True
-                
-                # 删除 worktree
-                cleanup_result = wt_manager.cleanup_task(
-                    task_id=task_id,
-                    remove_branch=True,
-                    force=False
-                )
-                if cleanup_result['worktree_removed']:
-                    operations.append(f"Removed worktree for {task_id}")
-                if cleanup_result['branch_deleted']:
-                    operations.append(f"Deleted branch {branch_name}")
-                worktree_cleaned = True
-            else:
-                operations.append(f"DRY-RUN: Would merge {branch_name} to main and cleanup")
-    except Exception as exc:
-        # Worktree 处理失败不阻塞 finalize（可能本就没用 worktree）
-        operations.append(f"Worktree cleanup warning: {exc}")
+    # AIPOS-C3C: N5 branch_integration 声明驱动 — 卡分支整合 (merge --no-ff, 保留分支)
+    # 取代 AIPOS-R5A 的 squash 合并 + 删分支。规则活在 N5 声明, 代码零写死;
+    # 冲突→中止出声列文件, 缺分支→跳过出声, 绝不自动解/绝不删分支。
+    integrate = _integrate_card_branch(
+        task_id=task_id,
+        verdict_id=finalize_check.get("verdict_id"),
+        workspace_root=workspace_root,
+        governance_root=governance_root,
+        dry_run=dry_run,
+        operations=operations,
+    )
+    if integrate["blocked"]:
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "can_finalize": True,
+            "integrity_check": integrity,
+            "branch_check": branch_check,
+            "committed": False,
+            "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
+            "commit_hash": None,
+            "branch_integration": integrate,
+            "message": integrate["message"],
+            "operations": operations,
+        }
     
     # Check if there are changes to commit
     # AIPOS-R6A 靶子③: finalize push判据修正 — working tree clean ≠ already pushed

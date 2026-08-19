@@ -290,6 +290,33 @@ def get_transition_node(node_id: str, repo_root: Path | None = None) -> dict[str
     return None
 
 
+def get_branch_integration(repo_root: Path | None = None) -> dict[str, Any]:
+    """Read N5.branch_integration declaration from transitions.schema.json (single source).
+    
+    AIPOS-C3C: 卡分支整合的唯一真相。finalize 合并信息生成与
+    deployment_authorization._task_id_from_commit_subject 归属解析读同一份声明:
+    生成什么格式就解析什么格式, 代码零写死。
+    
+    Args:
+        repo_root: Repository root path (auto-detected if not provided)
+        
+    Returns:
+        The branch_integration declaration dict
+        
+    Raises:
+        SchemaLoadError: If missing or malformed
+    """
+    transitions_schema = load_schema("transitions", repo_root)
+    nodes = transitions_schema.get("nodes", {})
+    n5 = nodes.get("N5", {}) if isinstance(nodes, dict) else {}
+    branch_integration = n5.get("branch_integration")
+    if not isinstance(branch_integration, dict):
+        raise SchemaLoadError(
+            "transitions.schema.json N5.branch_integration missing or invalid"
+        )
+    return branch_integration
+
+
 def get_task_mode_routing(task_mode: str, repo_root: Path | None = None) -> dict[str, Any] | None:
     """Get workflow routing for a task_mode.
     
@@ -713,6 +740,7 @@ __all__ = [
     "get_verb_contract",
     "get_transition_node",
     "get_task_mode_routing",
+    "get_branch_integration",
     "get_role_spec",
     "get_role_scopes",
     "get_role_tool_package",
