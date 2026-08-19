@@ -152,4 +152,4 @@ superseded_by: null
 
 ---
 
-**此 skill 母本住产品仓 `agents/pi/skills/truth-navigator/`，纳入 distribution 规格按角色类别分发到工位。**
+**此 skill 母本住产品仓 `agents/skills/truth-navigator/`，纳入 distribution 规格按角色类别分发到工位。**

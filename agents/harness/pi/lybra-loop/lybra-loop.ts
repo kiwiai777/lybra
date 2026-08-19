@@ -26,6 +26,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs, type LoopConfig } from "./gate-client.ts";
 import { buildKickoff } from "./loop-decisions.ts";
 import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
+// AIPOS-C4B 大项B: 版本信号 — 本地版本戳读取 + 清单比对
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // 模块级:跨 session 替换存活(ESM 模块缓存,同进程唯一)。对齐 claim.ts 的 pendingModel 原理。
 let loopState: LoopState = freshState();
@@ -73,6 +77,60 @@ function buildProvenanceBanner(config: LoopConfig): string {
     lines.push(`  ${key}=${p.value} (${src})`);
   }
   return lines.join("\n");
+}
+
+/**
+ * AIPOS-C4B 大项B: 版本信号。
+ *
+ * 连接器版本戳 = 分发器生成的源 commit 短哈希(写在 _distributed/.version-{role}
+ * 的 version 字段), 取代顾问手工注入的 dist-2026xxxx 戳(已退役)。
+ * 连接器模块位于 _distributed/extensions/lybra-loop/, 上溯三级即 _distributed/。
+ */
+function distRoot(): string {
+  try {
+    return dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+  } catch {
+    return process.cwd();
+  }
+}
+
+function readLocalVersion(role: string): string | null {
+  try {
+    const p = join(distRoot(), `.version-${role}`);
+    if (!existsSync(p)) return null;
+    const data = JSON.parse(readFileSync(p, "utf-8"));
+    const v = data && typeof data === "object" ? (data as { version?: unknown }).version : null;
+    return typeof v === "string" && v ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildVersionLine(config: LoopConfig): string {
+  const local = readLocalVersion(config.role);
+  return `lybra-loop 版本: ${local ?? "(无版本戳 — 请 lybra sync)"}`;
+}
+
+/**
+ * AIPOS-C4B 大项B: 清单比对(提示级, 绝不拒跑)。
+ * 落后 → behind=true, 出声"落后, 请 lybra sync + /reload"; 不落后 → null。
+ * gate 无此动词 / 连接失败 → error 非空, 但循环照跑。
+ */
+async function checkManifestFreshness(
+  client: GateMcpClient | null,
+  config: LoopConfig,
+): Promise<{ behind: boolean; local: string | null; remote: string | null; error?: string }> {
+  const local = readLocalVersion(config.role);
+  if (!client) return { behind: false, local, remote: null };
+  try {
+    const m = await client.callTool("lybra_distribution_manifest", {});
+    const remote = typeof (m as { product_commit?: unknown }).product_commit === "string"
+      ? (m as { product_commit: string }).product_commit
+      : null;
+    return { behind: !!(local && remote && local !== remote), local, remote };
+  } catch (e) {
+    return { behind: false, local, remote: null, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 function clearTimer() {
@@ -840,18 +898,35 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (sub === "status") {
+        // AIPOS-C4B 大项B: /lybra status 随时可查 — 版本戳 + 清单比对 + provenance 横幅
+        // (复现 C2 横幅被冷启动换屏吞掉 → status 可查, 不依赖 on 瞬间的屏)
         const fp = currentTokenFp;
-        ctx.ui.notify(
-          [
-            `lybra-loop 状态:`,
-            `  运行中: ${loopState.on ? "是" : "否"}`,
-            `  已放行: ${loopState.released}/${loopState.maxN}`,
-            `  停止原因: ${loopState.stoppedReason || "(无)"}`,
-            `  gate: ${currentGateUrl || "(未配置)"}  role: ${currentRole || "-"}  actor: ${currentActor || "-"}`,
-            `  token: ${fp}`,
-          ].join("\n"),
-          "info",
-        );
+        const lines: string[] = [
+          `lybra-loop 状态:`,
+          `  运行中: ${loopState.on ? "是" : "否"}`,
+          `  已放行: ${loopState.released}/${loopState.maxN}`,
+          `  停止原因: ${loopState.stoppedReason || "(无)"}`,
+          `  gate: ${currentGateUrl || "(未配置)"}  role: ${currentRole || "-"}  actor: ${currentActor || "-"}`,
+          `  token: ${fp}`,
+        ];
+        // 版本戳 + provenance + 清单比对(能拿到 config/client 就尽量答)
+        try {
+          const config = loadConfig(process.env);
+          lines.push(buildVersionLine(config));
+          lines.push(`[身份来源自曝]\n${buildProvenanceBanner(config)}`);
+          const fres = await checkManifestFreshness(currentClient, config);
+          if (fres.error) {
+            lines.push(`  清单比对: 无法比对(${fres.error})`);
+          } else if (fres.behind) {
+            lines.push(`  ⚠ 落后: 本地 ${fres.local} vs 线上 ${fres.remote} — 请 lybra sync + /reload`);
+          } else {
+            lines.push(`  清单比对: 最新(本地 ${fres.local ?? "?"} == 线上 ${fres.remote ?? "?"})`);
+          }
+        } catch (e) {
+          // 配置未就绪时不阻断 status(如 /lybra status 早于 /lybra on)
+          lines.push(`  版本/来源: 配置未就绪(${e instanceof Error ? e.message : String(e)})`);
+        }
+        ctx.ui.notify(lines.join("\n"), "info");
         return;
       }
 
@@ -893,6 +968,9 @@ export default function (pi: ExtensionAPI) {
           `[身份来源自曝]\n${buildProvenanceBanner(config)}`,
           "info",
         );
+
+        // AIPOS-C4B 大项B: 启动即报版本戳(分发器生成的源 commit 短哈希)
+        ctx.ui?.notify?.(buildVersionLine(config), "info");
 
         // AIPOS-R6R: 启动即校验 schema(缺动词/改错必填参数名 → 报错不启动)。
         ctx.ui?.notify?.("[2/5] 校验 schema...", "info");
@@ -954,16 +1032,23 @@ export default function (pi: ExtensionAPI) {
         const queueCount = queueInfo.length;
         const nextPollSec = config.intervalSec;
         ctx.ui?.notify?.(`[4/5] 队列查询完成 (${queueMs}ms, ${queueCount} 张卡)`, "info");
-        
-        ctx.ui.notify(
-          [
-            `lybra on: 已连 gate · 身份 ${config.agentInstance} · 信封 ${config.ownerPolicyRef} · 队列 ${queueCount} 张 · ${nextPollSec}s 后再拉`,
-            `  启动自动领卡循环 (maxN=${maxN}, interval=${config.intervalSec}s, maxWait=${config.maxWaitSec}s)`,
-            `  只放行信封内(PreAuthorized)卡; 信封外跳过; BLOCK/失败立停`,
-            `  /lybra off 可停; /lybra status 查看状态`,
-          ].join("\n"),
-          "info",
-        );
+
+        // AIPOS-C4B 大项B: loop 启动自检发现落后时出声但不拒跑(提示级, 不做强制门)
+        const freshness = await checkManifestFreshness(client, config);
+        const onLines: string[] = [
+          `lybra on: 已连 gate · 身份 ${config.agentInstance} · 信封 ${config.ownerPolicyRef} · 队列 ${queueCount} 张 · ${nextPollSec}s 后再拉`,
+          `  启动自动领卡循环 (maxN=${maxN}, interval=${config.intervalSec}s, maxWait=${config.maxWaitSec}s)`,
+          `  只放行信封内(PreAuthorized)卡; 信封外跳过; BLOCK/失败立停`,
+          `  /lybra off 可停; /lybra status 查看状态`,
+        ];
+        if (freshness.error) {
+          onLines.push(`  清单比对: 无法比对(${freshness.error})`);
+        } else if (freshness.behind) {
+          onLines.push(`  ⚠ 落后: 本地 ${freshness.local} vs 线上 ${freshness.remote} — 请 lybra sync + /reload`);
+        } else {
+          onLines.push(`  清单比对: 最新(本地 ${freshness.local ?? "?"} == 线上 ${freshness.remote ?? "?"})`);
+        }
+        ctx.ui.notify(onLines.join("\n"), "info");
         
         // AIPOS-R6I 靶②: 存量收敛 - 启动时扫描已有 PASS 裁决但未 finalize 的卡自动补收
         // AIPOS-R8B 大项C④: sweep 带耗时显示
