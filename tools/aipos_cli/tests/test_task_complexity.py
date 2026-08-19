@@ -126,7 +126,7 @@ class TaskComplexityTests(unittest.TestCase):
             "dependency_condition": "audit_pass",
         }
         pending = validate_single_task(self.write_task(**common, dependency_audit_status="pending"))
-        self.assertIn("Complex-class dependent task is blocked until dependency_audit_status is PASS", pending["blocking_reasons"])
+        self.assertIn("Complex-class dependent task is blocked until dependency_audit_status is PASS (or audit_verdict record exists)", pending["blocking_reasons"])
         passed = validate_single_task(self.write_task(**common, dependency_audit_status="PASS"))
         self.assertEqual(passed["verdict"], "PASS")
 
@@ -211,7 +211,7 @@ class TaskComplexityTests(unittest.TestCase):
         self.assertTrue(created["wrote"])
         published = publish_draft(self.repo_root, str(created["target_path"]), dry_run=True)
         self.assertEqual(published["verdict"], "BLOCK")
-        self.assertIn("Complex-class dependent task is blocked until dependency_audit_status is PASS", published["blocking_reasons"])
+        self.assertIn("Complex-class dependent task is blocked until dependency_audit_status is PASS (or audit_verdict record exists)", published["blocking_reasons"])
 
 
 if __name__ == "__main__":
