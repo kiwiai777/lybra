@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# AIPOS-R6M 大项B: 治理仓 pre-commit 钩子(文件面护栏)
+# AIPOS-R6M 大项B + AIPOS-A1 大项A③: 治理仓 pre-commit 钩子(文件面护栏)
 #   ① 代码文件禁止 (R6A 靶子⑨)
-#   ② 治理决策类 .md 无状态头 frontmatter → 拒并给模板
+#   ② 治理决策类 .md 无状态头 frontmatter → 拒并给模板 (格式规则从声明读)
 #   ③ decision_log/ append-only (只许新增禁修改)
 #   ④ 5_tasks/records/** 新增文件必须携机器出生标记 (record_type)
 #
 # AIPOS-R6M FIX-1: 路径定义从 config.schema 治理目录树读(单一源),
 #   仓内相对前缀动态计算(治理仓 git 根 ≠ 治理工作区根时, 如 2_projects/lybra/,
 #   不再写死 ^governance/ 前缀)。
+#
+# AIPOS-A1 大项A③: 格式规则(必填 frontmatter 字段)从
+#   config.schema governance_structure.file_declarations 读取,
+#   产生侧(CLI)与出口侧(hook)共用同一份声明。改一处两侧跟随。
 
 set -e
 
@@ -21,7 +25,7 @@ if [ ! -f "$CONFIG_SCHEMA" ]; then
     exit 1
 fi
 
-# ---- 从 config.schema 解析治理目录树路径 + 定位治理工作区根 + 输出给 bash ----
+# ---- 从 config.schema 解析治理目录树路径 + 文件声明 + 定位治理工作区根 + 输出给 bash ----
 eval "$(python3 - "$REPO_ROOT" "$CONFIG_SCHEMA" <<'PY'
 import json, os, sys
 
@@ -29,6 +33,7 @@ repo_root, schema_path = sys.argv[1], sys.argv[2]
 d = json.load(open(schema_path))
 gs = d.get("governance_structure", {}) or {}
 paths = gs.get("paths", {}) or {}
+file_decls = gs.get("file_declarations", {}) or {}
 
 def rel(key, default):
     return str((paths.get(key) or {}).get("path") or default).strip("/")
@@ -38,6 +43,15 @@ decision_log = rel("decision_log_dir", "governance/decision_log")
 tasks_root = rel("tasks_root", "5_tasks")
 records = rel("records", "records")
 records_full = f"{tasks_root}/{records}".strip("/")
+
+# AIPOS-A1: 从 file_declarations 读取各类文件的必填 frontmatter 字段
+def get_required_fm(decl_key):
+    decl = file_decls.get(decl_key, {}) or {}
+    fields = decl.get("required_frontmatter", []) or []
+    return "|".join(fields)
+
+gov_doc_fm = get_required_fm("governance_doc")
+record_fm = get_required_fm("record_file")
 
 # 治理工作区根 = repo_root 下同时含 gov_docs 首段 与 tasks_root 首段 的目录
 gov_seg = gov_docs.split("/")[0]
@@ -60,6 +74,8 @@ print(f"GOV_WS_ROOT={sh(ws_root)}")
 print(f"GOV_DOCS_REL={sh(gov_docs)}")
 print(f"DECISION_LOG_REL={sh(decision_log)}")
 print(f"RECORDS_REL={sh(records_full)}")
+print(f"GOV_DOC_REQUIRED_FM={sh(gov_doc_fm)}")
+print(f"RECORD_REQUIRED_FM={sh(record_fm)}")
 PY
 )"
 
@@ -111,21 +127,26 @@ while IFS= read -r file; do
     done
 done <<< "$staged_files"
 
-# 大项B②: 治理决策类 .md 需状态头 frontmatter (status 字段)
+# 大项B②: 治理决策类 .md 需 frontmatter (必填字段从 file_declarations 声明读取)
+# AIPOS-A1: 必填字段列表来自 GOV_DOC_REQUIRED_FM (config.schema governance_structure.file_declarations.governance_doc.required_frontmatter)
+IFS='|' read -ra GOV_DOC_FM_FIELDS <<< "$GOV_DOC_REQUIRED_FM"
 while IFS= read -r file; do
     [ -z "$file" ] && continue
     [ ! -f "$file" ] && continue
     if under_prefix "$file" "$GOV_DOCS_PREFIX" && [[ "$file" == *.md ]]; then
         if ! grep -q '^---$' "$file" 2>/dev/null; then
             blocked_files+=("$file")
-            blocked_reasons+=("Missing frontmatter status header (B②)")
+            blocked_reasons+=("Missing frontmatter (B②, required: ${GOV_DOC_REQUIRED_FM})")
             continue
         fi
         frontmatter=$(awk 'BEGIN{n=0} /^---$/{n++; next} {if(n==1) print}' "$file")
-        if ! printf '%s\n' "$frontmatter" | grep -q '^status:'; then
-            blocked_files+=("$file")
-            blocked_reasons+=("Missing 'status' field in frontmatter (B②)")
-        fi
+        for fm_field in "${GOV_DOC_FM_FIELDS[@]}"; do
+            [ -z "$fm_field" ] && continue
+            if ! printf '%s\n' "$frontmatter" | grep -q "^${fm_field}:"; then
+                blocked_files+=("$file")
+                blocked_reasons+=("Missing '${fm_field}' field in frontmatter (B②, declared in config.schema file_declarations.governance_doc)")
+            fi
+        done
     fi
 done <<< "$staged_files"
 
@@ -138,15 +159,20 @@ while IFS= read -r file; do
     fi
 done < <(git diff --cached --name-only --diff-filter=M)
 
-# 大项B④: records/** 新增文件必须携机器出生标记 (record_type 字段)
+# 大项B④: records/** 新增文件必须携机器出生标记 (必填字段从 file_declarations 声明读取)
+# AIPOS-A1: 必填字段列表来自 RECORD_REQUIRED_FM (config.schema governance_structure.file_declarations.record_file.required_frontmatter)
+IFS='|' read -ra RECORD_FM_FIELDS <<< "$RECORD_REQUIRED_FM"
 while IFS= read -r file; do
     [ -z "$file" ] && continue
     [ ! -f "$file" ] && continue
     if under_prefix "$file" "$RECORDS_PREFIX"; then
-        if ! grep -q '^record_type:' "$file" 2>/dev/null; then
-            blocked_files+=("$file")
-            blocked_reasons+=("New record lacks machine-generated marker 'record_type' (B④)")
-        fi
+        for fm_field in "${RECORD_FM_FIELDS[@]}"; do
+            [ -z "$fm_field" ] && continue
+            if ! grep -q "^${fm_field}:" "$file" 2>/dev/null; then
+                blocked_files+=("$file")
+                blocked_reasons+=("New record lacks required field '${fm_field}' (B④, declared in config.schema file_declarations.record_file)")
+            fi
+        done
     fi
 done < <(git diff --cached --name-only --diff-filter=A)
 
@@ -159,16 +185,15 @@ if [ ${#blocked_files[@]} -gt 0 ]; then
         echo "  - ${blocked_files[$i]}: ${blocked_reasons[$i]}"
     done
     echo ""
-    echo "Guardrails (AIPOS-R6M 大项B):"
+    echo "Guardrails (AIPOS-R6M 大项B + AIPOS-A1 声明驱动):"
     echo "  ① Code files forbidden in governance repo"
-    echo "  ② Governance docs (governance/*.md) require frontmatter with 'status' field:"
+    echo "  ② Governance docs require frontmatter with declared fields:"
+    echo "     Required fields (from config.schema file_declarations.governance_doc): ${GOV_DOC_REQUIRED_FM}"
     echo "     ---"
     echo "     status: active"
-    echo "     decided_at: <ISO8601>"
-    echo "     superseded_by: <ref or null>"
     echo "     ---"
     echo "  ③ decision_log/ is append-only (modifications forbidden)"
-    echo "  ④ New records (5_tasks/records/**) require machine-generated 'record_type' marker"
+    echo "  ④ New records require declared fields (from config.schema file_declarations.record_file): ${RECORD_REQUIRED_FM}"
     echo ""
     exit 1
 fi
