@@ -192,6 +192,36 @@
         "git_operations": "commit (产品仓) + push",
         "lybra_deploy": "调用 lybra-deploy --verdict-ref <verdict_id>",
         "deployment_verification": "断言 .deploy/current/VERSION git_commit == HEAD"
+      },
+      "branch_integration": {
+        "description": "AIPOS-C3C: 卡分支整合声明——卡分支怎么回 main 由本声明说了算, finalize 照声明自动做, 代码零写死。声明先行: 合并规则只写在这一段; finalize 合并信息生成与归属解析器 (deployment_authorization._task_id_from_commit_subject) 读同一份声明, 生成什么格式就解析什么格式。",
+        "branch_pattern": "card/{task_id}",
+        "branch_pattern_note": "{task_id} 为占位符, finalize 以实际 task_id 替换; 解析器将 {task_id} 转为任务 ID 捕获组, 与 feat/fix/chore(ID) 家族兼容",
+        "merge_strategy": "no-ff",
+        "merge_strategy_note": "保留分支历史, 不 squash, 不 ff-only",
+        "merge_message_format": "Merge {branch}: {summary} ({verdict_id})",
+        "merge_message_fields": {
+          "branch": "分支名(由 branch_pattern 派生, 含卡号, 保证归属)",
+          "summary": "卡标题摘要(来自任务卡 title, 剥离 task_id 前缀)",
+          "verdict_id": "最新门生 PASS 裁决 id(含裁决号, 保证归属)"
+        },
+        "attribution_guarantee": "合并信息必含卡号(经 branch)+裁决号(经 verdict_id), 区间校验据此判归属, 缺一即拒",
+        "conflict_policy": {
+          "action": "halt_and_report",
+          "list_conflict_files": true,
+          "auto_resolve": false,
+          "description": "冲突→中止并出声, 列冲突文件, 绝不自动解, main 无半合并残留"
+        },
+        "missing_branch_policy": {
+          "action": "skip_and_report",
+          "description": "分支不存在(直提 main 的历史卡/无代码卡)→跳过整合并出声"
+        },
+        "already_merged_policy": {
+          "action": "skip_and_report",
+          "description": "分支已合并(分支 tip 为 main 祖先)→跳过整合并出声"
+        },
+        "branch_retention": "preserve",
+        "branch_retention_note": "保留分支不删除, 与既有惯例一致"
       }
     },
     "N6": {
