@@ -147,33 +147,46 @@ function clearLybraEnv() {
 }
 
 // --- on 配置红线:缺 workspaceRoot(loadConfig 最先查 workspaceRoot)---
+// AIPOS-C2/R8B: 启动输出含 [1/5] 进度 notify, 错误 notify 不再在 notifies[0], 需按 error 级别查找。
 {
   clearLybraEnv();
   const { ctx, notifies } = makeMockCtx();
   await commands.lybra.handler("on", ctx);
-  check("on 缺 workspaceRoot → 配置错误含 LYBRA_WORKSPACE_ROOT", notifies[0].m.includes("LYBRA_WORKSPACE_ROOT"));
-  check("on 缺 workspaceRoot → 未启动(notify 是 error)", notifies[0].l === "error");
+  const err = notifies.find((n) => n.l === "error");
+  check("on 缺 workspaceRoot → 配置错误含 LYBRA_WORKSPACE_ROOT", !!err && err.m.includes("LYBRA_WORKSPACE_ROOT"));
+  check("on 缺 workspaceRoot → 未启动(notify 是 error)", !!err);
 }
-// --- on 配置红线:缺 actor ---
+// --- on 配置红线:缺 role (AIPOS-C2: role 不再静默缺省 executor) ---
 {
   setEnv({ LYBRA_WORKSPACE_ROOT: "/r" });
   const { ctx, notifies } = makeMockCtx();
   await commands.lybra.handler("on", ctx);
-  check("on 缺 actor → 配置错误", notifies[0].m.includes("配置错误") && notifies[0].m.includes("LYBRA_ACTOR"));
+  const err = notifies.find((n) => n.l === "error");
+  check("on 缺 role → 配置错误含 LYBRA_ROLE", !!err && err.m.includes("LYBRA_ROLE"));
+}
+// --- on 配置红线:缺 actor ---
+{
+  setEnv({ LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ROLE: "executor" });
+  const { ctx, notifies } = makeMockCtx();
+  await commands.lybra.handler("on", ctx);
+  const err = notifies.find((n) => n.l === "error");
+  check("on 缺 actor → 配置错误", !!err && err.m.includes("配置错误") && err.m.includes("LYBRA_ACTOR"));
 }
 // --- on 配置红线:缺 ownerPolicyRef ---
 {
-  setEnv({ LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ACTOR: "me" });
+  setEnv({ LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ROLE: "executor", LYBRA_ACTOR: "me" });
   const { ctx, notifies } = makeMockCtx();
   await commands.lybra.handler("on", ctx);
-  check("on 缺 ownerPolicyRef → 配置错误含 LYBRA_OWNER_POLICY_REF", notifies[0].m.includes("LYBRA_OWNER_POLICY_REF"));
+  const err = notifies.find((n) => n.l === "error");
+  check("on 缺 ownerPolicyRef → 配置错误含 LYBRA_OWNER_POLICY_REF", !!err && err.m.includes("LYBRA_OWNER_POLICY_REF"));
 }
 // --- on 配置红线:缺 token ---
 {
-  setEnv({ LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ACTOR: "me", LYBRA_OWNER_POLICY_REF: "p" });
+  setEnv({ LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ROLE: "executor", LYBRA_ACTOR: "me", LYBRA_OWNER_POLICY_REF: "p" });
   const { ctx, notifies } = makeMockCtx();
   await commands.lybra.handler("on", ctx);
-  check("on 缺 token → 配置错误含 token", notifies[0].m.includes("token"));
+  const err = notifies.find((n) => n.l === "error");
+  check("on 缺 token → 配置错误含 token", !!err && err.m.includes("token"));
 }
 
 // --- on 连接自检:gate 不可达(端口1)⇒ 报错不启动 ---
@@ -181,16 +194,18 @@ function clearLybraEnv() {
   setEnv({
     LYBRA_ACTOR: "me",
     LYBRA_TOKEN: "secret-tok",
+    LYBRA_ROLE: "executor",
     LYBRA_OWNER_POLICY_REF: "p",
     LYBRA_WORKSPACE_ROOT: "/r",
     LYBRA_GATE_URL: "http://127.0.0.1:1",
   });
   const { ctx, notifies } = makeMockCtx();
   await commands.lybra.handler("on", ctx);
-  const msg = notifies[0]?.m || "";
+  const err = notifies.find((n) => n.l === "error");
+  const msg = err?.m || "";
   check("on gate 不可达 → 连接错误", msg.includes("gate 连接失败"));
   check("on gate 不可达 → 提示 lybra serve", msg.includes("lybra serve"));
-  check("on gate 不可达 → error 级别", notifies[0].l === "error");
+  check("on gate 不可达 → error 级别", !!err);
   // 没有调用 sendUserMessage(因为没启动;F-EXT001-4:FIX1 后 tick 不经 sendUserMessage)
   check("on gate 不可达 → 没有 sendUserMessage 调用", sent.length === 0);
 }

@@ -250,11 +250,14 @@ def ensure_lybra_dir(workspace_root: Path) -> Path:
     return lybra_dir
 
 
-def load_or_create_connection_json(lybra_dir: Path, gate_url: str) -> dict[str, Any]:
+def load_or_create_connection_json(lybra_dir: Path, gate_url: str, workspace_root: Path | None = None) -> dict[str, Any]:
     """加载现有 connection.json 或创建新的。
     
     幂等:如果已存在,保留现有结构(board/mcp/其他 tokens);
     如果不存在,创建最小结构。
+    
+    AIPOS-C2 大项B: 铸全 workspace_root (config.schema 必填键)。
+    已入册工位重跑 enroll 即补全; 已有正确值则保留 (幂等, 不动 token)。
     """
     connection_file = lybra_dir / "connection.json"
     
@@ -291,6 +294,13 @@ def load_or_create_connection_json(lybra_dir: Path, gate_url: str) -> dict[str, 
             # 更新现有 mcp.rpc_url (幂等:如已存在也更新为规范化 URL)
             mcp_url = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
             data["mcp"]["rpc_url"] = mcp_url
+    
+    # AIPOS-C2 大项B: 铸全 workspace_root (config.schema 必填键, 顾问手补的授权例外就此退役)。
+    # 已有正确值则保留 (幂等补铸, 不覆盖), 缺则写入。
+    if workspace_root is not None:
+        existing_root = data.get("workspace_root")
+        if not existing_root:
+            data["workspace_root"] = str(workspace_root)
     
     # 确保 config_version 存在
     if "config_version" not in data:
@@ -352,6 +362,24 @@ def write_connection_json(lybra_dir: Path, connection_data: dict[str, Any]) -> N
         os.chmod(connection_file, 0o600)
 
 
+def validate_connection_complete(connection_data: dict[str, Any]) -> list[str]:
+    """AIPOS-C2 大项B: 铸全校验 —— connection.json 按 config.schema 必填键逐键检查。
+    
+    返回缺失键列表 (空 = 完整)。缺键 = enroll 失败出声, 不落半成品。
+    """
+    missing: list[str] = []
+    if not connection_data.get("workspace_root"):
+        missing.append("workspace_root")
+    mcp = connection_data.get("mcp")
+    if not isinstance(mcp, dict) or not mcp.get("rpc_url"):
+        missing.append("mcp.rpc_url")
+    if not isinstance(connection_data.get("tokens"), list):
+        missing.append("tokens")
+    if "config_version" not in connection_data:
+        missing.append("config_version")
+    return missing
+
+
 def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = None, owner_policy_ref: str | None = None) -> None:
     """写入 .lybra/role 文件(统一JSON格式,AIPOS-R6H靶②)。
     
@@ -401,7 +429,7 @@ def write_policy_file(lybra_dir: Path, policy: str | None) -> None:
 
 def enroll(
     *,
-    code: str,
+    code: str | None = None,
     gate_url: str,
     workspace_root: Path,
     policy: str | None = None,
@@ -411,7 +439,8 @@ def enroll(
     """执行完整的 enroll 流程。
     
     Args:
-        code: Enrollment code(从 owner/advisor 获得)
+        code: Enrollment code(从 owner/advisor 获得)。None = 幂等补铸模式 (AIPOS-C2 大项B):
+              只按 config.schema 必填键铸全 connection.json (含 workspace_root), 不动 token。
         gate_url: Gate MCP URL
         workspace_root: Workspace root(落配置的目标目录,不需要预先存在)
         policy: Optional policy reference(如未提供,从 gate 返回中提取或不设置)
@@ -421,8 +450,8 @@ def enroll(
     Returns:
         {
             "ok": bool,
-            "operation": "enroll",
-            "role": str,
+            "operation": "enroll" | "backfill",
+            "role": str | None,
             "agent_instance": str | None,
             "fingerprint": str,
             "scopes": list[str],
@@ -445,44 +474,63 @@ def enroll(
     # FIX-1: 确保 workspace_root 存在(对空目录新机零手工上线)
     workspace_root.mkdir(parents=True, exist_ok=True)
     
-    # Step 1: Exchange enrollment code for token
-    try:
-        exchange_result = exchange_enrollment_code(gate_url, code, bootstrap_token)
-    except RuntimeError as exc:
-        raise RuntimeError(f"Enrollment exchange failed: {exc}") from exc
-    
-    if not exchange_result.get("ok"):
-        raise RuntimeError(f"Enrollment exchange returned ok=False: {exchange_result.get('message', 'unknown error')}")
-    
-    token_entry = exchange_result.get("token_entry")
-    if not token_entry:
-        raise RuntimeError("No token_entry in exchange response")
-    
-    role = token_entry.get("role")
-    agent_instance = token_entry.get("agent_instance")
-    fingerprint = token_entry.get("fingerprint", "(unknown)")
-    scopes = token_entry.get("scopes", [])
-    token_value = token_entry.get("token")
-    
-    if not role:
-        raise RuntimeError("token_entry missing 'role' field")
-    
     # Step 2: 确保 .lybra/ 目录存在
     lybra_dir = ensure_lybra_dir(workspace_root)
     
-    # Step 3: 加载或创建 connection.json
-    connection_data = load_or_create_connection_json(lybra_dir, gate_url)
+    role: str | None = None
+    agent_instance: str | None = None
+    fingerprint = "(none)"
+    scopes: list[str] = []
+    token_entry: dict[str, Any] | None = None
+    token_value: str | None = None
+    rotated = False
     
-    # Step 4: Upsert token entry(幂等)
-    rotated = upsert_token_entry(connection_data, token_entry)
+    # Step 1: Exchange enrollment code for token (backfill 模式 code=None 则跳过, 不动 token)
+    if code is not None:
+        try:
+            exchange_result = exchange_enrollment_code(gate_url, code, bootstrap_token)
+        except RuntimeError as exc:
+            raise RuntimeError(f"Enrollment exchange failed: {exc}") from exc
+        
+        if not exchange_result.get("ok"):
+            raise RuntimeError(f"Enrollment exchange returned ok=False: {exchange_result.get('message', 'unknown error')}")
+        
+        token_entry = exchange_result.get("token_entry")
+        if not token_entry:
+            raise RuntimeError("No token_entry in exchange response")
+        
+        role = token_entry.get("role")
+        agent_instance = token_entry.get("agent_instance")
+        fingerprint = token_entry.get("fingerprint", "(unknown)")
+        scopes = token_entry.get("scopes", [])
+        token_value = token_entry.get("token")
+        
+        if not role:
+            raise RuntimeError("token_entry missing 'role' field")
+    
+    # Step 3: 加载或创建 connection.json (AIPOS-C2 大项B: 铸全 workspace_root)
+    connection_data = load_or_create_connection_json(lybra_dir, gate_url, workspace_root)
+    
+    # Step 4: Upsert token entry(幂等; backfill 模式 token_entry=None 则不动 token)
+    if token_entry is not None:
+        rotated = upsert_token_entry(connection_data, token_entry)
+    
+    # AIPOS-C2 大项B: 铸全校验 —— 缺必填键则失败出声, 不落半成品
+    missing = validate_connection_complete(connection_data)
+    if missing:
+        raise RuntimeError(
+            f"enroll 铸全失败: connection.json 缺必填键 {', '.join(missing)} "
+            f"(声明见 config.schema#identity_resolution)。不落半成品。"
+        )
     
     # Step 5: 写入 connection.json
     write_connection_json(lybra_dir, connection_data)
     files_written = ["connection.json"]
     
-    # Step 6: 写入自发现配置文件 (统一JSON格式)
-    write_role_file(lybra_dir, role, agent_instance, policy)
-    files_written.append("role")
+    # Step 6: 写入自发现配置文件 (统一JSON格式); backfill 模式不动 role/token
+    if code is not None and role:
+        write_role_file(lybra_dir, role, agent_instance, policy)
+        files_written.append("role")
     
     # Step 7 (AIPOS-R6S 大项C②): 可选 --verify — 新 token 调一次 gate, 不通即回滚
     verify_result = None
@@ -494,7 +542,7 @@ def enroll(
         if not ok:
             # 回滚: 移除刚写入的 token(禁静默留坏配置)
             try:
-                rollback_data = load_or_create_connection_json(lybra_dir, gate_url)
+                rollback_data = load_or_create_connection_json(lybra_dir, gate_url, workspace_root)
                 rollback_data["tokens"] = [
                     t for t in rollback_data.get("tokens", [])
                     if not (t.get("agent_instance") == agent_instance or (not agent_instance and t.get("role") == role))
@@ -508,7 +556,7 @@ def enroll(
     
     return {
         "ok": True,
-        "operation": "enroll",
+        "operation": "backfill" if code is None else "enroll",
         "role": role,
         "agent_instance": agent_instance,
         "fingerprint": fingerprint,
@@ -531,12 +579,13 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    parser.add_argument("--code", required=True, help="Enrollment code(from owner/advisor)")
+    parser.add_argument("--code", required=False, help="Enrollment code(from owner/advisor); 省略 + --backfill = 幂等补铸模式(不触 token)")
     parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://host:<gate-port>)")
     parser.add_argument("--workspace", help="Workspace root(defaults to current directory)")
     parser.add_argument("--policy", help="Optional policy reference")
     parser.add_argument("--bootstrap-token", help="Bootstrap token for HTTP transport auth (any valid token; or set LYBRA_BOOTSTRAP_TOKEN)")
     parser.add_argument("--verify", action="store_true", help="AIPOS-R6S 大项C②: enroll 后立刻用新 token 调一次 gate, 不通即报错并回滚")
+    parser.add_argument("--backfill", action="store_true", help="AIPOS-C2 大项B: 幂等补铸模式 —— 只按 config.schema 必填键铸全 connection.json (含 workspace_root), 不动 token")
     parser.add_argument("--quiet", action="store_true", help="Suppress non-error output")
     parser.add_argument("--json", action="store_true", help="Output JSON")
     
@@ -550,7 +599,7 @@ def main() -> int:
     
     try:
         result = enroll(
-            code=args.code,
+            code=None if args.backfill else args.code,
             gate_url=args.gate_url,
             workspace_root=workspace_root,
             policy=args.policy,

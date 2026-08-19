@@ -128,6 +128,91 @@
     "same_host_rule": "同机时 gate_url 一律 loopback (http://127.0.0.1:<port>), 免疫代理劫道 (AIPOS-R6K 契约)",
     "precedence": "显式参数 > 工位 .lybra (primary) > 机器级 ~/.lybra/local (fallback) > env (lowest)"
   },
+  "identity_resolution": {
+    "description": "AIPOS-C2 大项A: 身份/连接配置每个键的解析优先级在此声明 —— config.schema 是身份配置域唯一真相。loader(gate-client loadConfig / ConnectionResolver / loop-context)按此声明解析。总序: 显式参数 > 工位 .lybra (role 文件 + connection.json) > env (仅兜底)。任何必填键解析不到 = 出声并停(报缺哪个键 + 找过哪几层), 禁静默缺省、禁套用无关归因。role 与 actor 必须同源(同一 .lybra/role)。",
+    "precedence": ["explicit", "workstation", "env"],
+    "env_fallback_marker": "⚠",
+    "keys": {
+      "role": {
+        "required": true,
+        "no_default": true,
+        "sources": [
+          { "layer": "explicit", "param": "explicitRole" },
+          { "layer": "workstation", "file": ".lybra/role", "field": "role" },
+          { "layer": "env", "var": "LYBRA_ROLE" }
+        ],
+        "note": "旧实现 role=env.LYBRA_ROLE||'executor' 静默缺省 executor → 审计工位自认执行体越界跑 finalize (2026-08-18 台账)。缺省已删除, 解析不到即停。"
+      },
+      "actor": {
+        "required": true,
+        "no_default": true,
+        "sources": [
+          { "layer": "explicit", "param": "explicitActor" },
+          { "layer": "workstation", "file": ".lybra/role", "field": "instance" },
+          { "layer": "workstation", "file": ".lybra/actor", "field": "(plain text, 兼容旧格式)" },
+          { "layer": "env", "var": "LYBRA_ACTOR" }
+        ]
+      },
+      "agent_instance": {
+        "required": true,
+        "no_default": true,
+        "sources": [
+          { "layer": "explicit", "param": "explicitAgentInstance" },
+          { "layer": "workstation", "file": ".lybra/role", "field": "instance" },
+          { "layer": "env", "var": "LYBRA_AGENT_INSTANCE" }
+        ],
+        "note": "与 actor 同源 (.lybra/role.instance); 缺省时回退 actor 值(同一身份名), 非静默冒充。"
+      },
+      "owner_policy_ref": {
+        "required": true,
+        "no_default": true,
+        "sources": [
+          { "layer": "explicit", "param": "explicitOwnerPolicyRef" },
+          { "layer": "workstation", "file": ".lybra/role", "field": "owner_policy_ref" },
+          { "layer": "workstation", "file": ".lybra/policy", "field": "(plain text, 兼容旧格式)" },
+          { "layer": "env", "var": "LYBRA_OWNER_POLICY_REF" }
+        ]
+      },
+      "token": {
+        "required": true,
+        "no_default": true,
+        "sources": [
+          { "layer": "explicit", "param": "explicitToken" },
+          { "layer": "workstation", "file": ".lybra/connection.json", "field": "tokens[] (agent_instance 匹配 → role 匹配)" },
+          { "layer": "env", "var": "LYBRA_TOKEN" }
+        ],
+        "note": "token 进程内使用, 永不回显; 日志只出 fingerprint (sha256 前 12 位)。"
+      },
+      "workspace_root": {
+        "required": true,
+        "no_default": true,
+        "sources": [
+          { "layer": "explicit", "param": "explicitWorkspaceRoot" },
+          { "layer": "workstation", "file": ".lybra/connection.json", "field": "workspace_root" },
+          { "layer": "env", "var": "LYBRA_WORKSPACE_ROOT" }
+        ]
+      },
+      "gate_url": {
+        "required": true,
+        "schema_default": "urls.gate_local",
+        "sources": [
+          { "layer": "explicit", "param": "explicitGateUrl" },
+          { "layer": "workstation", "file": ".lybra/connection.json", "field": "mcp.rpc_url" },
+          { "layer": "env", "var": "LYBRA_GATE_URL" },
+          { "layer": "schema_default", "ref": "urls.gate_local" }
+        ],
+        "note": "唯一允许 schema 缺省的键 (urls.gate_local 单源在 config.schema); 其余身份键一律 no_default。"
+      },
+      "log_path": {
+        "required": false,
+        "sources": [
+          { "layer": "explicit", "param": "explicitLogPath" },
+          { "layer": "env", "var": "LYBRA_LOOP_LOG" },
+          { "layer": "schema_default", "ref": "path_conventions.task_cards/<TASK>/loop.log" }
+        ]
+      }
+    }
+  },
   "ports": {
     "description": "Service port configuration — single source for all port defaults. AIPOS-R4B-1: code reads these via schema_loader.get_config_port(); the 35 hardcoded 7117/7118 references in tools/ (non-test) route through here. board_default added (was missing: board port 7117 had no single source).",
     "board_default": 7117,

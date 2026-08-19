@@ -43,16 +43,22 @@ function expectConfigError(env: NodeJS.ProcessEnv, label: string, needle: string
   }
 }
 
-// loadConfig 校验顺序:workspaceRoot → actor → ownerPolicyRef → token(缺更前的项先抛)。
+// loadConfig 校验顺序: workspaceRoot → role → actor → ownerPolicyRef → token (缺更前的项先抛)。
+// AIPOS-C2: role 不再静默缺省 executor, 现在也是必填键。
 expectConfigError({}, "缺 workspaceRoot", "LYBRA_WORKSPACE_ROOT");
-expectConfigError({ LYBRA_WORKSPACE_ROOT: "/r" }, "缺 actor", "LYBRA_ACTOR");
+expectConfigError({ LYBRA_WORKSPACE_ROOT: "/r" }, "缺 role", "LYBRA_ROLE");
 expectConfigError(
-  { LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ACTOR: "me" },
+  { LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ROLE: "executor" },
+  "缺 actor",
+  "LYBRA_ACTOR",
+);
+expectConfigError(
+  { LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ROLE: "executor", LYBRA_ACTOR: "me" },
   "缺 ownerPolicyRef",
   "LYBRA_OWNER_POLICY_REF",
 );
 expectConfigError(
-  { LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ACTOR: "me", LYBRA_OWNER_POLICY_REF: "p" },
+  { LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ROLE: "executor", LYBRA_ACTOR: "me", LYBRA_OWNER_POLICY_REF: "p" },
   "缺 token",
   "token",
 );
@@ -61,6 +67,7 @@ expectConfigError(
 const ok = loadConfig({
   LYBRA_ACTOR: "me",
   LYBRA_TOKEN: "secret-token",
+  LYBRA_ROLE: "executor",
   LYBRA_OWNER_POLICY_REF: "pol-1",
   LYBRA_WORKSPACE_ROOT: "/root",
   LYBRA_AGENT_INSTANCE: "inst-1",
@@ -70,12 +77,15 @@ check("loadConfig:actor", ok.actor === "me");
 check("loadConfig:agentInstance 默认=actor", ok.agentInstance === "inst-1");
 check("loadConfig:ownerPolicyRef", ok.ownerPolicyRef === "pol-1");
 check("loadConfig:interval 默认 60", ok.intervalSec === 60);
+check("loadConfig:provenance 存在", !!ok.provenance && ok.provenance.role.value === "executor");
+check("loadConfig:role 来源 env", ok.provenance.role.source === "env:LYBRA_ROLE" && ok.provenance.role.viaEnv === true);
 
 // interval 下限 30
 try {
   loadConfig({
     LYBRA_ACTOR: "me",
     LYBRA_TOKEN: "x",
+    LYBRA_ROLE: "executor",
     LYBRA_OWNER_POLICY_REF: "p",
     LYBRA_WORKSPACE_ROOT: "/r",
     LYBRA_LOOP_INTERVAL: "10",
