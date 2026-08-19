@@ -1055,8 +1055,9 @@ def _return_metadata(
         # {harness, model_self_reported, tokens_in, tokens_out}. Recorded as-reported,
         # never verified; absent → None (old records show 未记录 in the popup).
         "agent_runtime": _agent_runtime_value(args),
-        "owner_confirmation_required": True,
-        "owner_confirmation_reasons": _return_owner_reasons(),
+        # AIPOS-C1 大项B: derived from stage_contract — executor self-confirm → false
+        "owner_confirmation_required": False,
+        "owner_confirmation_reasons": [],
         "lease_path": "claim_only",
         "lease_status": "proposed",
     }
@@ -1086,8 +1087,11 @@ def _decorate_queue_claim_dry_run(response: dict[str, Any], *, args: dict[str, A
         "next_required_action": "separate explicit lease activation before execution",
     }
     response["planned_records"] = []
-    response["owner_confirmation_required"] = True
-    response["owner_confirmation_reasons"] = _claim_owner_reasons()
+    # AIPOS-C1 大项B: owner_confirmation_required derived from stage_contract.self_confirm_allowed.
+    # Since AIPOS-328 allows executor self-confirm, owner_confirmation_required=false
+    # (Owner doesn't need to participate; executor uses OWNER_CONFIRMED literal).
+    response["owner_confirmation_required"] = False
+    response["owner_confirmation_reasons"] = []
     response["owner_confirmation_token_required"] = OWNER_CONFIRMATION_TOKEN
     response["dry_run_token"] = response.get("dry_run_token") or response.get("dry_run_id")
     response["expires_at"] = response.get("dry_run_expires_at")
@@ -1096,7 +1100,7 @@ def _decorate_queue_claim_dry_run(response: dict[str, Any], *, args: dict[str, A
         "operation": "queue_claim",
         "surface": "mcp",
         "autonomy_mode": "Supervised",
-        "client_hint": "AIPOS-328/R6P靶②: PreAuthorized模式下executor自行confirm。使用 lybra_queue_claim_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。",
+        "client_hint": "AIPOS-328: executor自行confirm。使用 lybra_queue_claim_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。",
         "review_checklist": [
             "Verify task selector and planned pending-to-claimed move.",
             "Verify actor, agent_instance, canonical_agent_instance, and owner_policy_ref.",
@@ -1167,8 +1171,10 @@ def _decorate_queue_return_dry_run(response: dict[str, Any], *, args: dict[str, 
         "active_lease_written": False,
     }
     response["planned_records"] = []
-    response["owner_confirmation_required"] = True
-    response["owner_confirmation_reasons"] = _return_owner_reasons()
+    # AIPOS-C1 大项B: owner_confirmation_required derived from stage_contract.self_confirm_allowed.
+    # AIPOS-328: executor self-confirm → owner_confirmation_required=false
+    response["owner_confirmation_required"] = False
+    response["owner_confirmation_reasons"] = []
     response["owner_confirmation_token_required"] = OWNER_CONFIRMATION_TOKEN
     response["dry_run_token"] = response.get("dry_run_token") or response.get("dry_run_id")
     response["expires_at"] = response.get("dry_run_expires_at")
@@ -1177,7 +1183,7 @@ def _decorate_queue_return_dry_run(response: dict[str, Any], *, args: dict[str, 
         "operation": "queue_return",
         "surface": "mcp",
         "autonomy_mode": "Supervised",
-        "client_hint": "AIPOS-328/R6P靶②: executor自行confirm(DL 03-02闭环)。使用 lybra_queue_return_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。",
+        "client_hint": "AIPOS-328: executor自行confirm。使用 lybra_queue_return_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。",
         "review_checklist": [
             "Verify returned work evidence is normalized and non-secret.",
             "Verify actor, agent_instance, canonical_agent_instance, and owner_policy_ref.",
@@ -1262,8 +1268,10 @@ def _decorate_audit_dry_run(response: dict[str, Any], *, args: dict[str, Any], c
         "lease_status": "proposed",
         "active_lease_written": False,
     }
-    response["owner_confirmation_required"] = True
-    response["owner_confirmation_reasons"] = owner_reasons
+    # AIPOS-C1 大项B: owner_confirmation_required derived from stage_contract.self_confirm_allowed.
+    # AIPOS-328: advisor/auditor self-confirm → owner_confirmation_required=false
+    response["owner_confirmation_required"] = False
+    response["owner_confirmation_reasons"] = []
     response["owner_confirmation_token_required"] = OWNER_CONFIRMATION_TOKEN
     response["dry_run_token"] = response.get("dry_run_token") or response.get("dry_run_id")
     response["expires_at"] = response.get("dry_run_expires_at")
@@ -1272,7 +1280,7 @@ def _decorate_audit_dry_run(response: dict[str, Any], *, args: dict[str, Any], c
         "operation": operation,
         "surface": "mcp",
         "autonomy_mode": "Supervised",
-        "client_hint": "AIPOS-328/R6P靶②: advisor/auditor自行confirm。使用对应confirm工具(lybra_audit_dispatch_confirm/lybra_audit_verdict_confirm)带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。",
+        "client_hint": "AIPOS-328: advisor/auditor自行confirm。使用对应confirm工具(lybra_audit_dispatch_confirm/lybra_audit_verdict_confirm)带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。",
         "review_checklist": [
             "Verify actor, agent_instance, canonical_agent_instance, and owner_policy_ref.",
             "Verify this action does not activate leases, finalize, or unblock accepted work.",
