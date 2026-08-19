@@ -9,6 +9,7 @@ echo "========================================================"
 declare -a files=(
   "tests/loop-decisions.test.ts"
   "tests/gate-client.test.ts"
+  "tests/c2-identity-resolution.test.ts"
   "tests/loop-engine.test.ts"
   "tests/lybra-loop.test.ts"
   "tests/tick-mechanism.test.ts"

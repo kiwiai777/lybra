@@ -23,7 +23,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadConfig, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs } from "./gate-client.ts";
+import { loadConfig, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs, type LoopConfig } from "./gate-client.ts";
 import { buildKickoff } from "./loop-decisions.ts";
 import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
 
@@ -56,6 +56,24 @@ const REQUIRED_VERBS: Record<string, string[]> = {
   lybra_queue_close_dry_run: ["task_id", "actor", "closure_evidence"],
   lybra_queue_close_confirm: ["task_id", "actor", "closure_evidence"],
 };
+
+/**
+ * AIPOS-C2 大项C: 来源自曝横幅 —— 对每个关键值打印取自哪一层。
+ * env 兜底命中 / env 被降级 → 标 ⚠ (2026-08-18 若有此横幅, 毒 env 案第一张截图即破)。
+ */
+function buildProvenanceBanner(config: LoopConfig): string {
+  const order = ["role", "actor", "agent_instance", "owner_policy_ref", "workspace_root", "gate_url", "token"];
+  const lines: string[] = [];
+  for (const key of order) {
+    const p = config.provenance?.[key];
+    if (!p) continue;
+    let src = p.source;
+    if (p.viaEnv) src = `${src} ⚠兜底`;
+    if (p.envDowngraded) src = `${src} ⚠env被降级`;
+    lines.push(`  ${key}=${p.value} (${src})`);
+  }
+  return lines.join("\n");
+}
 
 function clearTimer() {
   if (pendingTimer) {
@@ -778,6 +796,12 @@ export default function (pi: ExtensionAPI) {
         currentGateUrl = config.gateUrl;
         currentRole = config.role;
         currentActor = config.actor;
+
+        // AIPOS-C2 大项C: 来源自曝横幅 (每个键打印取自哪一层, env 兜底/被降级标 ⚠)
+        ctx.ui?.notify?.(
+          `[身份来源自曝]\n${buildProvenanceBanner(config)}`,
+          "info",
+        );
 
         // AIPOS-R6R: 启动即校验 schema(缺动词/改错必填参数名 → 报错不启动)。
         ctx.ui?.notify?.("[2/5] 校验 schema...", "info");

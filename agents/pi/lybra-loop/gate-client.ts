@@ -176,7 +176,7 @@ export interface VerbCatalog {
 }
 
 /** 定位 schema 目录(env 优先 → 模块目录向上找 schema/ → cwd 向上找 → 默认产品仓)。 */
-function findSchemaFile(schemaDir?: string): string {
+function findSchemaJson(fileName: string, schemaDir?: string): string {
   const candidates: string[] = [];
   if (schemaDir) candidates.push(schemaDir);
   const envDir = process.env.LYBRA_SCHEMA_DIR?.trim();
@@ -190,7 +190,7 @@ function findSchemaFile(schemaDir?: string): string {
   for (const start of candidates) {
     let dir = start;
     for (let i = 0; i < 10; i++) {
-      const f = join(dir, "schema", "verbs.schema.json");
+      const f = join(dir, "schema", fileName);
       if (existsSync(f)) return f;
       const parent = dirname(dir);
       if (parent === dir) break;
@@ -199,10 +199,40 @@ function findSchemaFile(schemaDir?: string): string {
   }
   const home = process.env.HOME || "";
   if (home) {
-    const f = join(home, "projects", "lybra", "schema", "verbs.schema.json");
+    const f = join(home, "projects", "lybra", "schema", fileName);
     if (existsSync(f)) return f;
   }
-  throw new ConfigError("未找到 verbs.schema.json(设 LYBRA_SCHEMA_DIR 指向 schema 目录, 或从 lybra 产品仓运行)");
+  throw new ConfigError(`未找到 ${fileName}(设 LYBRA_SCHEMA_DIR 指向 schema 目录, 或从 lybra 产品仓运行)`);
+}
+
+function findSchemaFile(schemaDir?: string): string {
+  return findSchemaJson("verbs.schema.json", schemaDir);
+}
+
+/**
+ * AIPOS-C2 大项A: 加载 config.schema.json —— 身份配置域的唯一真相。
+ * loadConfig 依赖它: gate_url 唯一允许的 schema 缺省 (urls.gate_local) 从这里出。
+ */
+export function loadConfigSchema(): { urls?: { gate_local?: string } } {
+  const file = findSchemaJson("config.schema.json");
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf-8");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new ConfigError(`读 config.schema.json 失败(${file}): ${msg}`);
+  }
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new ConfigError(`config.schema.json 非合法 JSON(${file}): ${msg}`);
+  }
+  if (!data || typeof data !== "object") {
+    throw new ConfigError(`config.schema.json 非对象(${file})`);
+  }
+  return data as { urls?: { gate_local?: string } };
 }
 
 /** 加载 verb catalog(启动即读 schema;schema 缺/坏 → ConfigError)。 */
@@ -383,6 +413,14 @@ export class GateMcpClient {
 // 配置读取:env + connection.json(SKILL.md:LYBRA_MCP_TOKEN 或 ~/.lybra/local/connection.json)
 // ---------------------------------------------------------------------------
 
+export interface ProvenanceEntry {
+  key: string;
+  value: string;
+  source: string;
+  viaEnv: boolean;         // env 兜底命中 (横幅标 ⚠)
+  envDowngraded: boolean;  // env 有值但被更高层压过 (横幅标 ⚠)
+}
+
 export interface LoopConfig {
   gateUrl: string;
   token: string; // 进程内使用,调用方负责不回显
@@ -394,6 +432,7 @@ export interface LoopConfig {
   workspaceRoot: string;
   ownerPolicyRef: string;
   timeoutMs: number; // AIPOS-R8B 大项C②: 超时预算可配置
+  provenance: Record<string, ProvenanceEntry>; // AIPOS-C2 大项C: 每个键的来源自曝
 }
 
 export class ConfigError extends Error {}
@@ -408,74 +447,84 @@ function envInt(env: NodeJS.ProcessEnv, key: string, fallback: number, min: numb
   return n;
 }
 
-
+/**
+ * 每个身份/连接键找过的层 (config.schema#identity_resolution 声明). 用于出声并停的报错。
+ */
+const RESOLUTION_LAYERS: Record<string, string> = {
+  workspace_root: "显式参数 → 工位 .lybra/connection.json(workspace_root) → env:LYBRA_WORKSPACE_ROOT",
+  role: "显式参数 → 工位 .lybra/role(role) → env:LYBRA_ROLE",
+  actor: "显式参数 → 工位 .lybra/role(instance) → .lybra/actor → env:LYBRA_ACTOR",
+  agent_instance: "显式参数 → 工位 .lybra/role(instance) → env:LYBRA_AGENT_INSTANCE",
+  owner_policy_ref: "显式参数 → 工位 .lybra/role(owner_policy_ref) → .lybra/policy → env:LYBRA_OWNER_POLICY_REF",
+  gate_url: "显式参数 → 工位 .lybra/connection.json(mcp.rpc_url) → env:LYBRA_GATE_URL → schema:urls.gate_local",
+  token: "显式参数 → 工位 .lybra/connection.json(tokens, instance/role 匹配) → env:LYBRA_TOKEN",
+};
 
 /**
- * 从 env 组装配置。必需项缺失 ⇒ ConfigError(本扩展绝不猜 actor/policy 等)。
- * 
- * AIPOS-R6O 真接线:复用 ConnectionResolver,优先级对齐 Python LoopContext:
- *   显式参数(最高) → .lybra自发现 → env覆盖(最低)
- * 
- * env 表见 DESIGN.md §配置。
+ * 从 env 组装配置。必需项缺失 ⇒ ConfigError(本扩展绝不猜 actor/policy/role 等)。
+ *
+ * AIPOS-C2 大项A: 解析优先级由 config.schema#identity_resolution 声明 (显式 → 工位 .lybra → env 仅兜底),
+ * loader 照声明执行, 删除全部硬编码缺省 (尤其 `|| "executor"`)。
+ * 任何必填键解析不到 = 出声并停 (报缺哪个键 + 找过哪几层), 禁静默缺省。
+ * 同时自曝每个键的来源 (provenance), 供 /lybra on 启动横幅打印 (大项C)。
  */
 export function loadConfig(env: NodeJS.ProcessEnv): LoopConfig {
-  // 1. 解析 workspace_root (需要它才能自发现 .lybra/)
-  // AIPOS-R6P 靶③: loadConfig 用于 gate/loop,需要治理工作区语义
-  const workspaceRoot = ConnectionResolver.resolveGateWorkspace({ env });
-  if (!workspaceRoot) {
-    throw new ConfigError("LYBRA_WORKSPACE_ROOT 未设置(gate workspace 根,卡 path 相对它拼绝对路径)");
+  // config.schema 是身份配置域唯一真相: gate_url 唯一 schema 缺省 (urls.gate_local) 从这里出。
+  const schema = loadConfigSchema();
+  const schemaGateUrl = schema.urls?.gate_local;
+
+  const resolved = ConnectionResolver.resolveIdentity({ env, schemaGateUrl });
+
+  // 出声并停: 必填键解析不到 → ConfigError (报缺哪个键 + 找过哪几层)。顺序对齐旧实现。
+  const required = [
+    resolved.workspaceRoot,
+    resolved.role,
+    resolved.actor,
+    resolved.agentInstance,
+    resolved.ownerPolicyRef,
+    resolved.gateUrl,
+    resolved.token,
+  ];
+  for (const r of required) {
+    if (!r.value) {
+      throw new ConfigError(
+        `身份配置缺键 ${r.key}: ${RESOLUTION_LAYERS[r.key] ?? "显式参数/工位 .lybra/env"} 均未解析到 (来源=${r.source})。` +
+        `禁止静默缺省。声明见 config.schema#identity_resolution.keys.${r.key}。`
+      );
+    }
   }
 
-  // 2. 解析 role (用于 token 匹配)
-  const role = (env.LYBRA_ROLE || "executor").trim();
+  const gateUrl = resolved.gateUrl.value!.replace(/\/mcp$/, "");
+  const token = resolved.token.value!;
 
-  // 3. 解析 actor (显式参数 → .lybra/role → .lybra/actor → env)
-  const actor = ConnectionResolver.resolveActor({ workspaceRoot, env });
-  if (!actor) {
-    throw new ConfigError(
-      "LYBRA_ACTOR 未设置(你的 actor 名,需与卡 assigned_to/agent_instance 对得上)。" +
-      "设置 LYBRA_ACTOR env,或确保 .lybra/role 文件含 instance 字段。"
-    );
-  }
-
-  const agentInstance = (env.LYBRA_AGENT_INSTANCE || actor).trim();
-
-  // 4. 解析 owner_policy_ref (显式参数 → .lybra/role → .lybra/policy → env)
-  const ownerPolicyRef = ConnectionResolver.resolveOwnerPolicyRef({ workspaceRoot, env });
-  if (!ownerPolicyRef) {
-    throw new ConfigError(
-      "LYBRA_OWNER_POLICY_REF 未设置(PreAuthorized claim 需指向 Owner 签发的信封 policy id;信封外卡会被跳过)。" +
-      "设置 LYBRA_OWNER_POLICY_REF env,或确保 .lybra/role 文件含 owner_policy_ref 字段。"
-    );
-  }
-
-  // 5. 解析 gate_url (显式参数 → .lybra/connection.json → env)
-  let gateUrl = ConnectionResolver.resolveGateUrl({ workspaceRoot, env });
-  // ConnectionResolver.resolveGateUrl 返回完整 URL 含 /mcp 后缀,需去掉(GateMcpClient.baseUrl 会自己拼)
-  gateUrl = gateUrl.replace(/\/mcp$/, "");
-
-  // 6. 解析 token (显式参数 → .lybra/connection.json[role/instance匹配] → env)
-  let token: string;
-  try {
-    token = ConnectionResolver.resolveToken({ workspaceRoot, role, agentInstance, env });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new ConfigError(
-      `无 token:${msg}。设 LYBRA_TOKEN env,或确保 .lybra/connection.json 含 role=${role} 的 token。`
-    );
-  }
+  const prov = (r: typeof resolved.role, displayValue: string): ProvenanceEntry => ({
+    key: r.key,
+    value: displayValue,
+    source: r.source,
+    viaEnv: r.viaEnv,
+    envDowngraded: r.envDowngraded,
+  });
 
   return {
     gateUrl,
     token,
-    role,
-    actor,
-    agentInstance,
+    role: resolved.role.value!,
+    actor: resolved.actor.value!,
+    agentInstance: resolved.agentInstance.value!,
     intervalSec: envInt(env, "LYBRA_LOOP_INTERVAL", 60, 30),
     maxWaitSec: envInt(env, "LYBRA_LOOP_MAX_WAIT", 1800, 1),
-    workspaceRoot,
-    ownerPolicyRef,
+    workspaceRoot: resolved.workspaceRoot.value!,
+    ownerPolicyRef: resolved.ownerPolicyRef.value!,
     // AIPOS-R8B 大项C②: 超时预算可配,默认 30s(实测 claim 4.07s, 留足余量)
     timeoutMs: envInt(env, "LYBRA_GATE_TIMEOUT_MS", 30000, 5000),
+    provenance: {
+      workspace_root: prov(resolved.workspaceRoot, resolved.workspaceRoot.value!),
+      role: prov(resolved.role, resolved.role.value!),
+      actor: prov(resolved.actor, resolved.actor.value!),
+      agent_instance: prov(resolved.agentInstance, resolved.agentInstance.value!),
+      owner_policy_ref: prov(resolved.ownerPolicyRef, resolved.ownerPolicyRef.value!),
+      gate_url: prov(resolved.gateUrl, resolved.gateUrl.value!),
+      token: prov(resolved.token, tokenFingerprint(token)), // token 永不回显, 只出 fingerprint
+    },
   };
 }
