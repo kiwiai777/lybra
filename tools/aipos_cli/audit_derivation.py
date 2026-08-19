@@ -8,6 +8,7 @@ executor self-authoring of audit cards. Zero LLM, zero new dependencies.
 from __future__ import annotations
 
 import hashlib
+import json
 import socket
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,67 @@ from tools.schema_constants import RecordType
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _resolve_code_repo(repo_root: Path | None) -> str:
+    """AIPOS-A1 大项C: 从项目注册表读 code_repo 绝对路径(禁写死)。"""
+    if repo_root is None:
+        return "<unresolved>"
+    project_json = repo_root / "project.json"
+    if project_json.is_file():
+        try:
+            data = json.loads(project_json.read_text(encoding="utf-8"))
+            code_repo = str(data.get("code_repo") or "").strip()
+            if code_repo:
+                return code_repo
+        except (json.JSONDecodeError, OSError):
+            pass
+    # 尝试从治理仓的 project.json 读(多项目场景)
+    for candidate in [repo_root / "2_projects" / "lybra" / "project.json"]:
+        if candidate.is_file():
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+                code_repo = str(data.get("code_repo") or "").strip()
+                if code_repo:
+                    return code_repo
+            except (json.JSONDecodeError, OSError):
+                pass
+    return "<unresolved>"
+
+
+def _resolve_governance_task_cards_path(repo_root: Path | None) -> str:
+    """AIPOS-A1 大项C: 报告落点绝对路径(治理仓 task_cards)。"""
+    if repo_root is None:
+        return "<unresolved>"
+    # 治理仓 = repo_root 本身(产品仓场景)或其上级(治理仓场景)
+    task_cards = repo_root / "task_cards"
+    if task_cards.is_dir():
+        return str(task_cards.resolve())
+    # 尝试在治理仓结构下找
+    for candidate in [repo_root / "2_projects" / "lybra" / "task_cards"]:
+        if candidate.is_dir():
+            return str(candidate.resolve())
+    return str((repo_root / "task_cards").resolve())
+
+
+def build_forensic_anchor_section(
+    source_task_id: str,
+    repo_root: Path | None = None,
+) -> str:
+    """AIPOS-A1 大项C: 构建取证锚点段(注入审计卡 governance_refs)。
+
+    路径值全部来自声明/注册表, 禁写死。内容基准=AIPOS-C1R2 实证有效的那段。
+    """
+    code_repo = _resolve_code_repo(repo_root)
+    task_cards_path = _resolve_governance_task_cards_path(repo_root)
+
+    return (
+        "\n## 取证锚点(AIPOS-A1 大项C: 默认注入, 路径来自注册表)\n\n"
+        f"- **产品仓绝对路径**: `{code_repo}` (读 project.json code_repo, 禁写死)\n"
+        f"- **禁 checkout 卡分支**: 用 `git diff main...card/{source_task_id}` 取证(不切换工作区)\n"
+        f"- **报告落点绝对路径**: `{task_cards_path}/{source_task_id}/` (治理仓 task_cards)\n"
+        "- **不存在结论必须附**: `pwd` + 命令 + 输出(三条缺一即无效证据)\n"
+    )
 
 
 def _task_filename_for(task_id: str) -> str:
@@ -162,6 +224,15 @@ def build_derived_audit_task(
         if key in source_metadata:
             audit_metadata[key] = source_metadata[key]
     
+    # AIPOS-A1 大项C: 注入取证锚点到 governance_refs(路径来自注册表)
+    code_repo = _resolve_code_repo(repo_root)
+    task_cards_path = _resolve_governance_task_cards_path(repo_root)
+    forensic_anchors = [
+        f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | 禁checkout卡分支(git diff main...card/{source_task_id}) | 报告落点={task_cards_path}/{source_task_id}/ | 不存在结论必附pwd+命令+输出",
+    ]
+    existing_governance_refs = list(audit_metadata.get("governance_refs") or [])
+    audit_metadata["governance_refs"] = existing_governance_refs + forensic_anchors
+    
     # Build body (mechanical signpost) — AIPOS-338 S2: fixed audit instructions
     artifact_list = "\n".join(f"- `{ref}`" for ref in artifact_refs) if artifact_refs else "- (see return record)"
     
@@ -183,8 +254,11 @@ Independent audit of task `{source_task_id}`.
   2. **产物可用**:产物满足原卡验收断言(不是"看起来对",是"断言过")。
   两条任一不过 → FAIL。
 - **报告落位**:`<workspace>/5_tasks/records/audit_verdicts/{source_task_id}/verdict_*.md`(裁决归被审卡 ID 目录)。
-- **如实报红线**:结论三值 PASS / PASS_WITH_NOTES / FAIL(附 F-* 清单);失败如实报,禁止"应该没问题"。
+- **如实报红线**:结论三值 PASS / PASS_WITH_NOTES / FAIL(附 F-* 清单);失败如实报,禁止“应该没问题”。
 """
+    # AIPOS-A1 大项C: 注入取证锚点段(路径来自注册表, 禁写死)
+    audit_body += build_forensic_anchor_section(source_task_id, repo_root)
+
     if branch_id == "code_with_deploy":
         audit_body += (
             "\n## 部署门提醒(AIPOS-338 S6)\n"

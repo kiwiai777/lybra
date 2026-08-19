@@ -1908,6 +1908,66 @@ def build_parser() -> argparse.ArgumentParser:
     governance_commit_parser.add_argument("--dry-run", action="store_true", help="Validate without committing")
     governance_commit_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-A1 大项A: governance add 子命令族(产生侧治理写入 CLI)
+    governance_parser = subparsers.add_parser("governance", help="AIPOS-A1: 治理文件操作(产生侧写入 CLI, 声明驱动)")
+    governance_subparsers = governance_parser.add_subparsers(dest="governance_command")
+
+    # governance add
+    governance_add_parser = governance_subparsers.add_parser("add", help="AIPOS-A1: 生成治理文件骨架(声明驱动, 格式从 config.schema 读取)")
+    governance_add_subparsers = governance_add_parser.add_subparsers(dest="governance_add_type")
+
+    # governance add decision
+    gov_add_decision = governance_add_subparsers.add_parser("decision", help="生成 decision_log 条目骨架")
+    gov_add_decision.add_argument("--title", "-t", default="", help="Decision title (used for slug)")
+    gov_add_decision.add_argument("--status", default="active", help="Status field (default: active)")
+    gov_add_decision.add_argument("--decided-at", help="ISO8601 timestamp (default: now)")
+    gov_add_decision.add_argument("--body", help="Body content (or use --body-file)")
+    gov_add_decision.add_argument("--body-file", help="Path to file with body content")
+    gov_add_decision.add_argument("--governance-root", required=True, help="Governance workspace root")
+    gov_add_decision.add_argument("--workspace-root", help="Product repo root (for schema resolution)")
+    gov_add_decision.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    gov_add_decision.add_argument("--json", action="store_true", help="Output JSON")
+
+    # governance add stage
+    gov_add_stage = governance_add_subparsers.add_parser("stage", help="生成 stage_archive 快照骨架")
+    gov_add_stage.add_argument("--stage-name", "-s", required=True, help="Stage name")
+    gov_add_stage.add_argument("--status", default="archived", help="Status field (default: archived)")
+    gov_add_stage.add_argument("--snapshot-date", help="Snapshot date (default: today)")
+    gov_add_stage.add_argument("--body", help="Body content")
+    gov_add_stage.add_argument("--body-file", help="Path to file with body content")
+    gov_add_stage.add_argument("--governance-root", required=True, help="Governance workspace root")
+    gov_add_stage.add_argument("--workspace-root", help="Product repo root (for schema resolution)")
+    gov_add_stage.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    gov_add_stage.add_argument("--json", action="store_true", help="Output JSON")
+
+    # governance add doc
+    gov_add_doc = governance_add_subparsers.add_parser("doc", help="生成 governance doc 骨架")
+    gov_add_doc.add_argument("--name", "-n", required=True, help="Document name (used for filename)")
+    gov_add_doc.add_argument("--title", "-t", default="", help="Document title")
+    gov_add_doc.add_argument("--status", default="active", help="Status field (default: active)")
+    gov_add_doc.add_argument("--body", help="Body content")
+    gov_add_doc.add_argument("--body-file", help="Path to file with body content")
+    gov_add_doc.add_argument("--governance-root", required=True, help="Governance workspace root")
+    gov_add_doc.add_argument("--workspace-root", help="Product repo root (for schema resolution)")
+    gov_add_doc.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    gov_add_doc.add_argument("--json", action="store_true", help="Output JSON")
+
+    # governance add record
+    gov_add_record = governance_add_subparsers.add_parser("record", help="生成 record 骨架")
+    gov_add_record.add_argument("--record-type", "-r", required=True, help="Record type (e.g. claim, return)")
+    gov_add_record.add_argument("--task-id", "-i", required=True, help="Task ID")
+    gov_add_record.add_argument("--body", help="Body content")
+    gov_add_record.add_argument("--body-file", help="Path to file with body content")
+    gov_add_record.add_argument("--governance-root", required=True, help="Governance workspace root")
+    gov_add_record.add_argument("--workspace-root", help="Product repo root (for schema resolution)")
+    gov_add_record.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    gov_add_record.add_argument("--json", action="store_true", help="Output JSON")
+
+    # governance list-declarations
+    gov_list_decl = governance_subparsers.add_parser("list-declarations", help="列出所有文件声明(格式/命名/必填字段)")
+    gov_list_decl.add_argument("--workspace-root", help="Product repo root (for schema resolution)")
+    gov_list_decl.add_argument("--json", action="store_true", help="Output JSON")
+
     return parser
 
 
@@ -2868,6 +2928,128 @@ def main(argv: list[str] | None = None) -> int:
                 print("操作失败,请查看错误信息")
         
         return 0 if result['verdict'] == Verdict.PASS else 1
+
+    if args.command == "governance":
+        # AIPOS-A1 大项A: governance add 子命令族(产生侧治理写入 CLI)
+        from tools.aipos_cli.governance_add import (
+            add_decision, add_stage, add_doc, add_record, list_declarations,
+        )
+
+        gov_cmd = getattr(args, "governance_command", None)
+
+        if gov_cmd == "list-declarations":
+            repo_root = None
+            if getattr(args, "workspace_root", None):
+                repo_root = Path(args.workspace_root).expanduser().resolve()
+            else:
+                default_repo = Path.home() / "projects" / "lybra"
+                if default_repo.is_dir():
+                    repo_root = default_repo
+            result = list_declarations(repo_root)
+            if getattr(args, "json", False):
+                print(render_json(result))
+            else:
+                print("\n=== File Declarations (config.schema governance_structure.file_declarations) ===")
+                for key, decl in result.get("declarations", {}).items():
+                    print(f"\n  [{key}]")
+                    print(f"    Path key: {decl.get('path_key', '')}")
+                    print(f"    Naming: {decl.get('naming_pattern', '')}")
+                    print(f"    Required frontmatter: {decl.get('required_frontmatter', [])}")
+                    print(f"    Append-only: {decl.get('append_only', False)}")
+                    print(f"    Description: {decl.get('description', '')}")
+            return 0
+
+        if gov_cmd != "add":
+            print("Usage: lybra governance add <decision|stage|doc|record> [options]")
+            print("       lybra governance list-declarations")
+            return 2
+
+        add_type = getattr(args, "governance_add_type", None)
+        if not add_type:
+            print("Usage: lybra governance add <decision|stage|doc|record> [options]")
+            return 2
+
+        governance_root = Path(args.governance_root).expanduser().resolve()
+        repo_root = None
+        if getattr(args, "workspace_root", None):
+            repo_root = Path(args.workspace_root).expanduser().resolve()
+        else:
+            default_repo = Path.home() / "projects" / "lybra"
+            if default_repo.is_dir():
+                repo_root = default_repo
+
+        # Resolve body content
+        body_content = getattr(args, "body", None) or ""
+        body_file = getattr(args, "body_file", None)
+        if body_file:
+            body_path = Path(body_file).expanduser().resolve()
+            if body_path.is_file():
+                body_content = body_path.read_text(encoding="utf-8")
+            else:
+                print(f"Error: body file not found: {body_path}", file=sys.stderr)
+                return 1
+
+        dry_run = getattr(args, "dry_run", False)
+        use_json = getattr(args, "json", False)
+
+        if add_type == "decision":
+            result = add_decision(
+                governance_root,
+                title=getattr(args, "title", "") or "",
+                status=getattr(args, "status", "active"),
+                decided_at=getattr(args, "decided_at", None),
+                body=body_content,
+                repo_root=repo_root,
+                dry_run=dry_run,
+            )
+        elif add_type == "stage":
+            result = add_stage(
+                governance_root,
+                stage_name=getattr(args, "stage_name", "") or "",
+                status=getattr(args, "status", "archived"),
+                snapshot_date=getattr(args, "snapshot_date", None),
+                body=body_content,
+                repo_root=repo_root,
+                dry_run=dry_run,
+            )
+        elif add_type == "doc":
+            result = add_doc(
+                governance_root,
+                name=getattr(args, "name", "") or "",
+                title=getattr(args, "title", "") or "",
+                status=getattr(args, "status", "active"),
+                body=body_content,
+                repo_root=repo_root,
+                dry_run=dry_run,
+            )
+        elif add_type == "record":
+            result = add_record(
+                governance_root,
+                record_type=getattr(args, "record_type", "") or "",
+                task_id=getattr(args, "task_id", "") or "",
+                body=body_content,
+                repo_root=repo_root,
+                dry_run=dry_run,
+            )
+        else:
+            print(f"Unknown governance add type: {add_type}", file=sys.stderr)
+            return 1
+
+        if use_json:
+            print(render_json(result))
+        else:
+            if result.get("ok"):
+                print(f"\u2713 {result.get('message', 'OK')}")
+                if result.get("dry_run"):
+                    print(f"  [DRY-RUN] Target: {result.get('target_path', '')}")
+                    print(f"  Required frontmatter: {result.get('required_frontmatter', [])}")
+                else:
+                    print(f"  Path: {result.get('target_path', '')}")
+            else:
+                print(f"\u2717 {result.get('error', 'Unknown error')}")
+                print(f"  {result.get('message', '')}")
+
+        return 0 if result.get("ok") else 1
 
     if args.command == "finalize":
         # AIPOS-FND-2: Finalize PASS task (git commit/push)

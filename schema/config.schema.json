@@ -318,6 +318,53 @@
         "semantics": "卡粒度编年史 - close时校验本卡条目存在(或excuse_ref豁免)"
       }
     },
+    "file_declarations": {
+      "description": "AIPOS-A1 大项A: 治理文件可执行声明 — 产生侧(CLI)与出口侧(hook)共用同一份。每类治理文件的必填 frontmatter、命名规则、落点目录、append-only 属性在此声明。改一处两侧跟随。",
+      "decision_log_entry": {
+        "path_key": "decision_log_dir",
+        "naming_pattern": "YYYY-MM/YYYY-MM-DD-<slug>.md",
+        "required_frontmatter": ["status", "decided_at", "superseded_by"],
+        "append_only": true,
+        "description": "决策日志条目 — append-only, 只许新增禁修改",
+        "template_frontmatter": {
+          "status": "active",
+          "decided_at": "<ISO8601>",
+          "superseded_by": null
+        }
+      },
+      "stage_archive_snapshot": {
+        "path_key": "stage_archive",
+        "naming_pattern": "<date>_<stage-name>.md",
+        "required_frontmatter": ["status", "stage_name", "snapshot_date"],
+        "append_only": false,
+        "description": "阶段快照 — 阶段关账时写, 最新一篇=当前坐标",
+        "template_frontmatter": {
+          "status": "archived",
+          "stage_name": "<stage-name>",
+          "snapshot_date": "<YYYY-MM-DD>"
+        }
+      },
+      "governance_doc": {
+        "path_key": "governance_docs",
+        "naming_pattern": "<name>.md",
+        "required_frontmatter": ["status"],
+        "append_only": false,
+        "description": "治理文档(governance/*.md) — 必须有 status 字段",
+        "template_frontmatter": {
+          "status": "active"
+        }
+      },
+      "record_file": {
+        "path_key": "records",
+        "naming_pattern": "<record_type>_<task_id>_<timestamp>_<agent>.md",
+        "required_frontmatter": ["record_type"],
+        "append_only": true,
+        "description": "记录文件(5_tasks/records/**) — 必须携机器出生标记 record_type",
+        "template_frontmatter": {
+          "record_type": "<record_type>"
+        }
+      }
+    },
     "timeline_enforcement": {
       "description": "AIPOS-R6M 大项A: 三粒度机器触发机制 (Owner 2026-08-15终裁: 名字、目录内命名、记与不记, 全是机器的事)",
       "card_level": {
