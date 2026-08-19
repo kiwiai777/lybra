@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.draft_writer import render_publish_record, stable_publish_id
+from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.queue_mutation import render_task_markdown
 from tools.aipos_cli.records import expected_publish_record_path
 from tools.aipos_cli.task_loader import find_task_by_id
@@ -363,6 +364,140 @@ def derive_audit_task_on_return(
             },
         ],
     }
+
+
+def derive_repair_card_on_fail(
+    *,
+    governance_root: Path,
+    reviewed_task_id: str,
+    audit_task_id: str,
+    verdict_id: str,
+    fail_reason: str,
+    actor: str,
+) -> dict[str, Any]:
+    """AIPOS-C3B 大项C⑤: 审计 FAIL 自动派审——审计员判 FAIL 时自动派一张'修复卡'回队列。
+
+    避免死等: executor 不用等 owner 手动建卡, 系统自动建修复卡。
+
+    Args:
+        governance_root: 治理仓根目录
+        reviewed_task_id: 被审任务 ID
+        audit_task_id: 审计任务 ID (e.g. APOS-123R)
+        verdict_id: 裁决记录 ID
+        fail_reason: FAIL 原因摘要
+        actor: 操作者
+
+    Returns:
+        {
+            "derived": bool,
+            "repair_task_id": str,
+            "repair_task_path": str,
+            "message": str,
+        }
+    """
+    # 生成修复卡 ID: 原任务 ID + "-fix" + 轮次
+    # 检查已有多少轮修复卡
+    existing_fix_count = 0
+    queue_dir = governance_root / "5_tasks" / "queue" / "pending"
+    if queue_dir.is_dir():
+        for f in queue_dir.glob("*.md"):
+            if f.stem.startswith(f"{reviewed_task_id.lower()}-fix"):
+                existing_fix_count += 1
+    # 也检查 claimed/
+    claimed_dir = governance_root / "5_tasks" / "queue" / "claimed"
+    if claimed_dir.is_dir():
+        for f in claimed_dir.glob("*.md"):
+            if f.stem.startswith(f"{reviewed_task_id.lower()}-fix"):
+                existing_fix_count += 1
+
+    fix_round = existing_fix_count + 1
+    repair_task_id = f"{reviewed_task_id}-fix{fix_round}"
+
+    # 检查是否已存在(幂等)
+    repair_filename = _task_filename_for(repair_task_id)
+    for qdir in [queue_dir, claimed_dir]:
+        if qdir.is_dir() and (qdir / repair_filename).exists():
+            return {
+                "derived": False,
+                "repair_task_id": repair_task_id,
+                "repair_task_path": str(qdir / repair_filename),
+                "message": f"修复卡已存在: {repair_task_id}",
+            }
+
+    # 读取原任务卡获取元数据
+    source_card = None
+    for qdir in [queue_dir, claimed_dir, governance_root / "5_tasks" / "queue" / "completed"]:
+        candidate = qdir / _task_filename_for(reviewed_task_id)
+        if candidate.exists():
+            source_card = candidate
+            break
+
+    source_metadata = {}
+    source_body = ""
+    if source_card:
+        try:
+            text = source_card.read_text(encoding="utf-8")
+            source_metadata, source_body, _ = parse_markdown_frontmatter(text)
+        except Exception:
+            pass
+
+    project = str(source_metadata.get("project") or "lybra")
+
+    # 构建修复卡
+    repair_metadata = {
+        "task_id": repair_task_id,
+        "title": f"Fix: {source_metadata.get('title', reviewed_task_id)} (round {fix_round})",
+        "project": project,
+        "assigned_to": source_metadata.get("assigned_to", "executor_lybra"),
+        "agent_instance": source_metadata.get("agent_instance", "executor.lybra.kiwiai-dev"),
+        "context_bundle": source_metadata.get("context_bundle", "default"),
+        "task_mode": source_metadata.get("task_mode", "code"),
+        "task_class": source_metadata.get("task_class", "simple"),
+        "priority": source_metadata.get("priority", "high"),
+        "status": "pending",
+        "created_by": "gate_derivation",
+        "created_at": _utc_now(),
+        "derived_from_verdict_id": verdict_id,
+        "derived_from_audit_task_id": audit_task_id,
+        "fix_round": fix_round,
+        "depends_on": [],
+        "anchor_refs": source_metadata.get("anchor_refs", ["g1_owner_gate"]),
+        "artifact_scope": source_metadata.get("artifact_scope", ""),
+    }
+
+    repair_body = f"""## 修复任务 (第 {fix_round} 轮)
+
+审计任务 {audit_task_id} 裁决 FAIL, 自动派生此修复卡。
+
+### FAIL 原因
+
+{fail_reason}
+
+### 原始任务正文(供参考)
+
+{source_body}
+
+### 修复要求
+
+1. 根据 FAIL 原因修复问题
+2. 重新执行并 return
+3. 系统会自动派生新的审计任务
+"""
+
+    # 写卡
+    target_path = queue_dir / repair_filename
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    rendered = render_task_markdown(repair_metadata, repair_body)
+    target_path.write_text(rendered, encoding="utf-8")
+
+    return {
+        "derived": True,
+        "repair_task_id": repair_task_id,
+        "repair_task_path": str(target_path.relative_to(governance_root)),
+        "message": f"已自动派生修复卡: {repair_task_id} (第 {fix_round} 轮)",
+    }
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

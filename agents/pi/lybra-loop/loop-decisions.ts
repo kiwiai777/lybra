@@ -163,6 +163,7 @@ export function buildKickoff(cardAbsPath: string): string {
     `执行已为你认领(PreAuthorized 放行)的任务卡:${cardAbsPath}`,
     `按你 AGENTS.md 里的知识入口去读这张卡并独立执行,一切以卡+知识入口为准,不依赖任何历史上下文。`,
     `遇护栏拦截即说明并停,不绕过。`,
+    `最后一步必须是 gate 提交, 没有门记录=没做完。`,
   ].join("\n");
 }
 

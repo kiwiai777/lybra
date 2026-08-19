@@ -65,7 +65,7 @@ from tools.aipos_cli.planner_loop_mvp import build_planner_loop_mvp_preview
 from tools.aipos_cli.planner_iteration_writer import append_planner_iteration, load_iteration_payload_from_json
 from tools.aipos_cli.preview import build_preview
 from tools.aipos_cli.queue_mutation import mutate_queue_task
-from tools.aipos_cli.records import load_records
+from tools.aipos_cli.records import load_records, expected_session_record_path
 from tools.aipos_cli.service_mode import (
     render_connection_table,
     roles_list_report,
@@ -1397,6 +1397,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     state_parser = subparsers.add_parser("state", help="Read-only state recovery and provenance previews")
     state_subparsers = state_parser.add_subparsers(dest="state_command")
+    # AIPOS-C3B 大项C①: state lint — 卡状态三方一致 lint(队列目录×frontmatter status×records)
+    lint_parser = state_subparsers.add_parser("lint", help="AIPOS-C3B: 卡状态三方一致 lint(队列目录×frontmatter×records)")
+    lint_parser.add_argument("--workspace-root", type=Path, default=None, help="Governance workspace root (default: auto-detect)")
+    lint_parser.add_argument("--task-id", default=None, help="Limit to specific task ID")
+    lint_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-C3B 大项C③: state repair — 按 records 重建卡一致状态
+    repair_parser = state_subparsers.add_parser("repair", help="AIPOS-C3B: 按 records 重建卡一致状态(坏卡修复)")
+    repair_parser.add_argument("--task-id", required=True, help="Task ID to repair")
+    repair_parser.add_argument("--workspace-root", type=Path, default=None, help="Governance workspace root (default: auto-detect)")
+    repair_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    repair_parser.add_argument("--json", action="store_true", help="Output JSON")
     recovery_parser = state_subparsers.add_parser("recovery", help="State recovery preview operations")
     recovery_subparsers = recovery_parser.add_subparsers(dest="recovery_command")
     recovery_preview_parser = recovery_subparsers.add_parser("preview", help="Preview file-authoritative recovery state")
@@ -3602,8 +3613,56 @@ def main(argv: list[str] | None = None) -> int:
     report = validate_tasks(tasks, current_actor=actor, records=records, profiles=profiles)
 
     if args.command == "state":
+        state_cmd = getattr(args, "state_command", None)
+
+        # AIPOS-C3B 大项C①: state lint
+        if state_cmd == "lint":
+            from tools.aipos_cli.state_lint import run_state_lint
+            ws_root = getattr(args, "workspace_root", None)
+            if ws_root is None:
+                from tools.aipos_cli.workspace_config import resolve_workspace_root
+                ws_root = resolve_workspace_root()
+            result = run_state_lint(
+                governance_root=Path(ws_root),
+                task_id_filter=getattr(args, "task_id", None),
+            )
+            if getattr(args, "json", False):
+                print(render_json(result))
+            else:
+                issues = result.get("issues", [])
+                if not issues:
+                    print(f"✓ state lint OK: {result['scanned']} 张卡扫描, 无断层")
+                else:
+                    print(f"✗ state lint: {len(issues)} 断层(扫描 {result['scanned']} 张卡)")
+                    for issue in issues:
+                        print(f"  - [{issue['severity']}] {issue['task_id']}: {issue['message']}")
+            return 1 if issues else 0
+
+        # AIPOS-C3B 大项C③: state repair
+        if state_cmd == "repair":
+            from tools.aipos_cli.state_lint import repair_task_state
+            ws_root = getattr(args, "workspace_root", None)
+            if ws_root is None:
+                from tools.aipos_cli.workspace_config import resolve_workspace_root
+                ws_root = resolve_workspace_root()
+            result = repair_task_state(
+                governance_root=Path(ws_root),
+                task_id=args.task_id,
+                dry_run=getattr(args, "dry_run", False),
+            )
+            if getattr(args, "json", False):
+                print(render_json(result))
+            else:
+                if result.get("repaired"):
+                    print(f"✓ 已修复 {args.task_id}: {result['message']}")
+                elif result.get("dry_run"):
+                    print(f"(dry-run) 会修复 {args.task_id}: {result['message']}")
+                else:
+                    print(f"无需修复 {args.task_id}: {result['message']}")
+            return 0
+
         if (
-            getattr(args, "state_command", None) != "recovery"
+            state_cmd != "recovery"
             or getattr(args, "recovery_command", None) != "preview"
         ):
             parser.print_help()
