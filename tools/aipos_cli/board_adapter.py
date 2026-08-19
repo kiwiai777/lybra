@@ -3797,6 +3797,28 @@ def audit_verdict_task(
         if auto_closed:
             response["data"]["auto_closed_audit_card"] = auto_closed
             response.setdefault("performed_moves", []).append(auto_closed)
+        # AIPOS-C3B 大项C⑤: 审计 FAIL 自动派修复卡——避免死等
+        normalized_verdict_value = str(data.get("normalized_verdict") or verdict_text or "").upper()
+        if normalized_verdict_value in {"FAIL", "BLOCK"}:
+            try:
+                from tools.aipos_cli.audit_derivation import derive_repair_card_on_fail
+                repair_result = derive_repair_card_on_fail(
+                    governance_root=resolved_root,
+                    reviewed_task_id=reviewed_id,
+                    audit_task_id=str(data.get("audit_task_id") or audit_task_id or ""),
+                    verdict_id=str(data.get("verdict_id") or planned_verdict_id or ""),
+                    fail_reason=str(findings_summary or "(no reason provided)")[:500],
+                    actor=actor_text,
+                )
+                if repair_result.get("derived"):
+                    response["data"]["auto_derived_repair_card"] = repair_result
+                    response.setdefault("performed_writes", []).append({
+                        "path": repair_result.get("repair_task_path"),
+                        "kind": "create",
+                        "type": "derived_repair_task",
+                    })
+            except Exception as e:
+                response.setdefault("warnings", []).append(f"Auto-derive repair card failed: {e}")
         return response
     except Exception as exc:
         return _normalize_exception("audit_verdict", exc, dry_run=dry_run, actor=_actor_payload(actor))
@@ -4906,16 +4928,29 @@ def converge_r_cards(
                 if not verdicts_dir.is_dir():
                     skipped.append({"task_id": task_id, "reason": f"no verdicts dir for {reviewed_task_id}"})
                     continue
-                verdict_files = sorted(verdicts_dir.glob("verdict_*.md"))
-                if not verdict_files:
-                    skipped.append({"task_id": task_id, "reason": f"no verdict records for {reviewed_task_id}"})
+                # AIPOS-C3B 大项B①②: 按 frontmatter 时间戳取最新, 禁按文件名排序;
+                # 只认门生记录(具备 record_type/verdict_id/verdict_at 机器特征)
+                verdict_candidates = []
+                for vf in verdicts_dir.glob("*.md"):
+                    try:
+                        vfm, _, _ = parse_markdown_frontmatter(vf.read_text(encoding="utf-8"))
+                    except Exception:
+                        continue
+                    if not isinstance(vfm, dict):
+                        continue
+                    # 门生标记检查
+                    rt = str(vfm.get("record_type") or "").strip()
+                    vid = str(vfm.get("verdict_id") or "").strip()
+                    vat = str(vfm.get("verdict_at") or "").strip()
+                    if rt != "audit_verdict_record" or not vid or not vat:
+                        continue  # 手写文件,忽略
+                    verdict_candidates.append({"path": vf, "verdict_id": vid, "verdict_at": vat})
+                if not verdict_candidates:
+                    skipped.append({"task_id": task_id, "reason": f"no gate-born verdict records for {reviewed_task_id}"})
                     continue
-                # Get the latest verdict_id for closure metadata
-                latest_verdict_id = ""
-                if verdict_files:
-                    vfm, _, _ = parse_markdown_frontmatter(verdict_files[-1].read_text(encoding="utf-8"))
-                    if isinstance(vfm, dict):
-                        latest_verdict_id = str(vfm.get("verdict_id") or "")
+                # 按 verdict_at 时间戳取最新
+                latest_candidate = max(verdict_candidates, key=lambda c: c["verdict_at"])
+                latest_verdict_id = latest_candidate["verdict_id"]
                 if dry_run:
                     converged.append({
                         "task_id": task_id,

@@ -244,6 +244,38 @@ def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = 
     }
 
 
+def _ensure_finalization_record(
+    governance_root: Path,
+    task_id: str,
+    actor: str,
+    commit_hash: str,
+    verdict_id: str | None,
+    deployed: bool,
+    operations: list[str],
+) -> None:
+    """AIPOS-C3B 大项B③: 写 finalization 记录(必落)。
+    
+    所有 finalize PASS 路径(含 working-tree-clean 早退)都必须调用此函数,
+    确保 finalizations/ 目录有记录。三次 finalize 成功但 finalizations/ 全空
+    的实撞必须不再发生。
+    """
+    try:
+        from tools.aipos_cli.finalization_record import write_finalization_record
+        fin_result = write_finalization_record(
+            governance_root=governance_root,
+            task_id=task_id,
+            actor=actor,
+            commit=commit_hash,
+            authorization_type="verdict_ref",
+            authorization_ref=verdict_id or "unknown",
+            deployed=deployed,
+            deployment_record_ref=None,
+        )
+        operations.append(f"Finalization record written: {fin_result['path']}")
+    except Exception as e:
+        operations.append(f"⚠️  Finalization record write failed: {e}")
+
+
 def _report_frontmatter_verdict_for_display(workspace_root: Path, task_id: str) -> dict[str, Any]:
     """AIPOS-FND-14: best-effort, DISPLAY-ONLY lookup of the human-authored
     task_cards/<task_id>/AUDIT-REPORT-*.md frontmatter ``verdict:`` field.
@@ -655,6 +687,7 @@ def finalize_task(
                     operations.append("✓ Deploy completed successfully")
                     verification = verify_deployment_version(workspace_root, current_commit)
                     if verification["verified"]:
+                        _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
                         return {
                             "verdict": Verdict.PASS,
                             "task_id": task_id,
@@ -712,6 +745,7 @@ def finalize_task(
                     }
             else:
                 # 已部署 → 真正无事可做
+                _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
                 return {
                     "verdict": Verdict.PASS,
                     "task_id": task_id,
@@ -797,6 +831,7 @@ def finalize_task(
                     operations.append("✓ Deploy completed successfully")
                     verification = verify_deployment_version(workspace_root, current_commit)
                     if verification["verified"]:
+                        _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
                         return {
                             "verdict": Verdict.PASS,
                             "task_id": task_id,
@@ -852,6 +887,7 @@ def finalize_task(
                     }
             else:
                 # 已部署,只需 push
+                _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
                 return {
                     "verdict": Verdict.PASS,
                     "task_id": task_id,
@@ -1145,23 +1181,9 @@ def finalize_task(
         elif deployment_error:
             final_message += f" but deployment FAILED: {deployment_error[:100]}"
         
-        # AIPOS-R8B 大项B F-3.1: 写 finalization 记录(必落,按 task_id 分目录)
+        # AIPOS-C3B 大项B③: 写 finalization 记录(必落,统一用 helper)
         if not dry_run:
-            try:
-                from tools.aipos_cli.finalization_record import write_finalization_record
-                fin_result = write_finalization_record(
-                    governance_root=governance_root,
-                    task_id=task_id,
-                    actor=actor,
-                    commit=commit_hash,
-                    authorization_type="verdict_ref",
-                    authorization_ref=finalize_check.get("verdict_id", "unknown"),
-                    deployed=deployed,
-                    deployment_record_ref=None,  # TODO: 从 deployment_record 返回值获取
-                )
-                operations.append(f"Finalization record written: {fin_result['path']}")
-            except Exception as e:
-                operations.append(f"⚠️  Finalization record write failed: {e}")
+            _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), deployed, operations)
         
         return {
             "verdict": Verdict.PASS,

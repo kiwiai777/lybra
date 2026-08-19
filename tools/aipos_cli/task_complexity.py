@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+
 
 
 
@@ -89,6 +91,7 @@ def validate_task_complexity(
     metadata: dict[str, Any],
     *,
     enforce_dependency_gate: bool,
+    governance_root: "Path | None" = None,  # AIPOS-C3B 大项C④: 用于读 records 校验 audit_pass
 ) -> dict[str, list[str]]:
     blocking_reasons: list[str] = []
     warnings: list[str] = []
@@ -197,9 +200,32 @@ def validate_task_complexity(
                     "Complex-class dependent task is blocked until dependency_audit_readiness is ready"
                 )
         else:
-            dependency_audit_status = _lower(metadata.get("dependency_audit_status"))
-            if dependency_audit_status not in AUDIT_PASS_VALUES:
-                blocking_reasons.append("Complex-class dependent task is blocked until dependency_audit_status is PASS")
+            # AIPOS-C3B 大项C④: audit_pass 依赖校验改读 records(禁 frontmatter 自证)
+            # 检查被依赖任务的 audit_verdict 记录是否存在 PASS
+            depends_on_list = _as_list(metadata.get("depends_on"))
+            audit_pass_verified = False
+            if governance_root is not None and depends_on_list:
+                from pathlib import Path as _Path
+                gov = _Path(governance_root)
+                for dep_tid in depends_on_list:
+                    verdict_dir = gov / "5_tasks" / "records" / "audit_verdicts" / dep_tid.lower()
+                    if verdict_dir.is_dir():
+                        for vf in verdict_dir.glob("*.md"):
+                            try:
+                                vtext = vf.read_text(encoding="utf-8")
+                                vfm, _, _ = parse_markdown_frontmatter(vtext)
+                                if _lower(vfm.get("verdict")) in AUDIT_PASS_VALUES:
+                                    audit_pass_verified = True
+                                    break
+                            except Exception:
+                                continue
+                    if audit_pass_verified:
+                        break
+            if not audit_pass_verified:
+                # fallback: 旧 frontmatter 字段(向后兼容,但仅当无 records 时)
+                dependency_audit_status = _lower(metadata.get("dependency_audit_status"))
+                if dependency_audit_status not in AUDIT_PASS_VALUES:
+                    blocking_reasons.append("Complex-class dependent task is blocked until dependency_audit_status is PASS (or audit_verdict record exists)")
 
     return {
         "blocking_reasons": blocking_reasons,

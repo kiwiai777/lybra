@@ -98,17 +98,102 @@ function scheduleNextTick(pi: ExtensionAPI, ctx: any, delayMs: number) {
 }
 
 /**
- * AIPOS-R6I 靶②: 检查是否有 PASS/PASS_WITH_NOTES 裁决，如有则自动 finalize+close。
- * 包含存量收敛: 启动时扫描已有 PASS 裁决但未 finalize 的卡自动补收。
- * AIPOS-R6Q 靶③: 全程可观测(禁静默return) - 开始/候选卡/每卡判定/失败原因一律出声
+ * AIPOS-C3B 大项D③: sweep 候选集反转 — 从 queue/claimed(0-2 张)反查裁决,
+ * 替代遍历 151 裁决目录。出声=一行汇总+仅异常逐条。
+ *
+ * AIPOS-C3B 大项B①: 裁决选取按 frontmatter 时间戳取最新, 禁按文件名排序。
+ * AIPOS-C3B 大项B②: 只认门生记录(具备 record_type/verdict_id/verdict_at 机器特征),
+ *   手写文件忽略+warn。
  */
+
+/** 从 frontmatter 文本提取简单 YAML 标量值(不引完整 YAML 解析器) */
+function extractFrontmatterField(content: string, field: string): string | null {
+  // Match both `field: value` and `field: 'value'` / `field: "value"`
+  const re = new RegExp(`^${field}:\\s*['"]?([^'"\\n]*)['"]?\\s*$`, "m");
+  const m = content.match(re);
+  return m ? m[1].trim() : null;
+}
+
+/**
+ * AIPOS-C3B 大项B②: 检查裁决文件是否具备门生标记(record_type + verdict_id + verdict_at)。
+ * 手写文件(缺少机器特征)返回 false。
+ */
+function isGateBornVerdict(content: string): { authentic: boolean; reason?: string } {
+  const recordType = extractFrontmatterField(content, "record_type");
+  const verdictId = extractFrontmatterField(content, "verdict_id");
+  const verdictAt = extractFrontmatterField(content, "verdict_at");
+  if (!recordType || !verdictId || !verdictAt) {
+    return { authentic: false, reason: `缺少门生标记(record_type=${!!recordType}, verdict_id=${!!verdictId}, verdict_at=${!!verdictAt})` };
+  }
+  if (recordType !== "audit_verdict_record") {
+    return { authentic: false, reason: `record_type=${recordType}(预期 audit_verdict_record)` };
+  }
+  return { authentic: true };
+}
+
+/**
+ * AIPOS-C3B 大项B①: 从裁决目录中按 frontmatter verdict_at 时间戳选取最新门生裁决。
+ * 禁按文件名排序。手写文件(缺门生标记)忽略+warn。
+ */
+function selectLatestGateVerdict(
+  fs: any,
+  verdictDir: string,
+  logger: Logger | null,
+  taskId: string,
+): { verdict: string; verdictAt: string; verdictId: string; filePath: string } | null {
+  let files: string[];
+  try {
+    files = fs.readdirSync(verdictDir)
+      .filter((f: string) => f.endsWith(".md"));
+  } catch {
+    return null;
+  }
+  if (files.length === 0) return null;
+
+  const candidates: { verdict: string; verdictAt: string; verdictId: string; filePath: string }[] = [];
+  const rejected: string[] = [];
+
+  for (const f of files) {
+    const filePath = `${verdictDir}/${f}`;
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, "utf-8");
+    } catch {
+      rejected.push(`${f}: 读取失败`);
+      continue;
+    }
+    const auth = isGateBornVerdict(content);
+    if (!auth.authentic) {
+      rejected.push(`${f}: ${auth.reason}`);
+      continue;
+    }
+    const verdictVal = extractFrontmatterField(content, "verdict") || "";
+    const verdictAt = extractFrontmatterField(content, "verdict_at") || "";
+    const verdictId = extractFrontmatterField(content, "verdict_id") || f.replace(/\.md$/, "");
+    if (!verdictVal) {
+      rejected.push(`${f}: verdict 字段缺失`);
+      continue;
+    }
+    candidates.push({ verdict: verdictVal.toUpperCase(), verdictAt, verdictId, filePath });
+  }
+
+  if (rejected.length > 0) {
+    logger?.warn("sweep-rejected-verdicts", { task_id: taskId, rejected });
+  }
+  if (candidates.length === 0) return null;
+
+  // AIPOS-C3B 大项B①: 按 verdict_at 时间戳取最新(禁按文件名排序)
+  candidates.sort((a, b) => (a.verdictAt > b.verdictAt ? -1 : a.verdictAt < b.verdictAt ? 1 : 0));
+  return candidates[0];
+}
+
 async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
   if (!currentClient || !currentLogger) {
     currentLogger?.warn("sweep-no-client", { reason: "currentClient or currentLogger not initialized" });
     ctx.ui?.notify?.("sweep 跳过:客户端或日志器未初始化", "warn");
     return false;
   }
-  
+
   let config;
   try {
     config = loadConfig(process.env);
@@ -118,139 +203,94 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
     ctx.ui?.notify?.(msg, "error");
     return false;
   }
-  
+
   const fs = await import("node:fs");
   const path = await import("node:path");
-  
+
   // AIPOS-R6S 大项A②: sweep 执行范围按角色能力判定(roles.schema scopes)。
-  // finalize+close 属 executor 车道(queue_close scope); 审计工位不应跑 finalize(今日实证越界)。
   if (config.role !== "executor") {
     const msg = `sweep 跳过: 当前角色 ${config.role || "?"} 不具 finalize/close 能力(roles.schema scopes), 不跑 finalize`;
     currentLogger.info("sweep-skip-role", { role: config.role });
     ctx.ui?.notify?.(msg, "info");
     return false;
   }
-  
-  // 扫描所有有 PASS 裁决的任务
-  const verdictsRoot = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts");
-  if (!fs.existsSync(verdictsRoot)) {
-    const msg = `sweep 裁决目录不存在: ${verdictsRoot}`;
-    currentLogger.warn("sweep-no-verdicts-dir", { path: verdictsRoot });
-    ctx.ui?.notify?.(msg, "warn");
+
+  // AIPOS-C3B 大项D③: 候选集反转 — 从 queue/claimed 反查裁决(替代遍历 151 裁决目录)
+  const claimedDir = path.join(config.workspaceRoot, "5_tasks/queue/claimed");
+  if (!fs.existsSync(claimedDir)) {
+    currentLogger.info("sweep-no-claimed-dir", {});
+    ctx.ui?.notify?.("sweep: claimed 队列为空", "info");
     return false;
   }
-  
-  currentLogger.info("sweep-start", { verdicts_root: verdictsRoot });
-  ctx.ui?.notify?.("开始扫描 PASS 裁决卡...", "info");
-  
-  const taskDirs = fs.readdirSync(verdictsRoot, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name);
-  
-  if (taskDirs.length === 0) {
-    currentLogger.info("sweep-no-tasks", {});
-    ctx.ui?.notify?.("sweep: 无裁决目录", "info");
+
+  const claimedCards = fs.readdirSync(claimedDir)
+    .filter((f: string) => f.endsWith(".md"));
+
+  if (claimedCards.length === 0) {
+    currentLogger.info("sweep-no-claimed-cards", {});
+    ctx.ui?.notify?.("sweep: 无 claimed 卡", "info");
     return false;
   }
-  
-  currentLogger.info("sweep-scan-tasks", { count: taskDirs.length, tasks: taskDirs });
-  ctx.ui?.notify?.(`扫描到 ${taskDirs.length} 个裁决目录`, "info");
-  
+
+  currentLogger.info("sweep-start", { claimed_count: claimedCards.length });
+
   let processedCount = 0;
-  const skipped: { task_id: string; reason: string }[] = [];
-  
-  for (const taskId of taskDirs) {
-    const verdictDir = path.join(verdictsRoot, taskId);
-    const verdictFiles = fs.readdirSync(verdictDir)
-      .filter((f) => f.startsWith("verdict_") && f.endsWith(".md"))
-      .sort();
-    
-    if (verdictFiles.length === 0) {
-      currentLogger.info("sweep-skip-no-verdict", { task_id: taskId, reason: "no verdict files" });
-      skipped.push({ task_id: taskId, reason: "无裁决文件" });
+  const anomalies: { task_id: string; reason: string }[] = [];
+
+  for (const cardFile of claimedCards) {
+    // 从卡文件名提取 task_id
+    const taskId = cardFile.replace(/\.md$/i, "").toUpperCase();
+    const cardPath = path.join(claimedDir, cardFile);
+
+    // 反查裁决目录
+    const verdictDir = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts", taskId);
+    if (!fs.existsSync(verdictDir)) {
+      // 无裁决目录 = 还在执行中,不是异常
       continue;
     }
-    
-    // 读取最新裁决
-    const latestVerdictFile = path.join(verdictDir, verdictFiles[verdictFiles.length - 1]);
-    const verdictContent = fs.readFileSync(latestVerdictFile, "utf-8");
-    
-    // 从 frontmatter 提取 verdict
-    const verdictMatch = verdictContent.match(/^verdict:\s*([A-Z_]+)$/m);
-    if (!verdictMatch) {
-      currentLogger.info("sweep-skip-no-verdict-field", { task_id: taskId, reason: "verdict field not found" });
-      skipped.push({ task_id: taskId, reason: "裁决字段缺失" });
+
+    // AIPOS-C3B 大项B①②: 按时间戳选最新门生裁决
+    const latest = selectLatestGateVerdict(fs, verdictDir, currentLogger, taskId);
+    if (!latest) {
+      anomalies.push({ task_id: taskId, reason: "裁决目录存在但无门生裁决" });
       continue;
     }
-    
-    const verdict = verdictMatch[1].trim();
-    if (verdict !== "PASS" && verdict !== "PASS_WITH_NOTES") {
-      currentLogger.info("sweep-skip-not-pass", { task_id: taskId, verdict, reason: "verdict not PASS/PASS_WITH_NOTES" });
-      skipped.push({ task_id: taskId, reason: `裁决为 ${verdict}(非 PASS)` });
+    if (latest.verdict !== "PASS" && latest.verdict !== "PASS_WITH_NOTES") {
+      // 非 PASS 裁决 = 还在审计循环中,不是异常
       continue;
     }
-    
-    // 检查是否已 close (按 closure 记录判定)
+
+    // 检查是否已 close
     const closureDir = path.join(config.workspaceRoot, "5_tasks/records/closures", taskId);
     if (fs.existsSync(closureDir)) {
-      const closureFiles = fs.readdirSync(closureDir).filter(f => f.startsWith("closure_") && f.endsWith(".md"));
-      if (closureFiles.length > 0) {
-        currentLogger.info("sweep-skip-already-closed", { task_id: taskId, reason: "already has closure record" });
-        skipped.push({ task_id: taskId, reason: "已有 closure 记录" });
-        continue;
-      }
+      const closureFiles = fs.readdirSync(closureDir).filter((f: string) => f.startsWith("closure_") && f.endsWith(".md"));
+      if (closureFiles.length > 0) continue; // 已结案,跳过
     }
-    
-    // 检查任务是否仍在 claimed 状态（未 close）
-    const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${taskId.toLowerCase()}.md`);
-    if (!fs.existsSync(taskCardPath)) {
-      currentLogger.info("sweep-skip-not-claimed", { task_id: taskId, reason: "task card not in claimed" });
-      skipped.push({ task_id: taskId, reason: "卡不在 claimed 队列" });
-      continue;
-    }
-    
-    // 自动 finalize
-    currentLogger.info("auto-finalize-start", {
-      task_id: taskId,
-      verdict,
-      verdict_file: latestVerdictFile,
-    });
-    ctx.ui?.notify?.(`候选卡: ${taskId} (${verdict}) - 开始 finalize`, "info");
-    
+
+    // 候选卡: 有 PASS 裁决 + 未 close → 自动 finalize+close
+    currentLogger.info("auto-finalize-start", { task_id: taskId, verdict: latest.verdict, verdict_at: latest.verdictAt });
+    ctx.ui?.notify?.(`sweep 候选: ${taskId} (${latest.verdict})`, "info");
+
     try {
       const { execSync } = await import("node:child_process");
-      
-      // AIPOS-R6L 第三轮修复(a): 读取 project.json 的 code_repo，显式传产品仓根（禁用 cwd 猜）
-      let codeRepo = path.join(config.workspaceRoot, "../../../lybra"); // fallback
+
+      let codeRepo = path.join(config.workspaceRoot, "../../../lybra");
       try {
         const projectJsonPath = path.join(config.workspaceRoot, "project.json");
         if (fs.existsSync(projectJsonPath)) {
           const projectJson = JSON.parse(fs.readFileSync(projectJsonPath, "utf-8"));
-          if (projectJson.code_repo) {
-            codeRepo = projectJson.code_repo;
-          }
+          if (projectJson.code_repo) codeRepo = projectJson.code_repo;
         }
       } catch (e) {
         currentLogger.warn("project-json-parse-failed", { error: String(e) });
       }
-      
-      // AIPOS-R6L 大项A②: 部署bin绝对路径（禁裸命令赌PATH）
+
       const lybraBin = path.join(codeRepo, ".deploy/current/bin/lybra");
       const finalizeCmd = `${lybraBin} --workspace-root ${codeRepo} finalize --task-id ${taskId} --actor ${config.actor} --push --deploy`;
-      const finalizeOutput = execSync(finalizeCmd, {
-        cwd: codeRepo,
-        encoding: "utf-8",
-        stdio: "pipe",
-      });
-      
-      currentLogger.info("auto-finalize-success", {
-        task_id: taskId,
-        output: finalizeOutput.slice(0, 500),
-      });
-      ctx.ui?.notify?.(`finalize 成功: ${taskId}`, "info");
-      
-      // AIPOS-R6R: close 两阶段(dry_run 预览 → confirm 执行)。
-      // closure_evidence 是对象(非扁平字符串), close confirm 重放 task_id+actor+closure_evidence(无 dry_run_token)。
+      const finalizeOutput = execSync(finalizeCmd, { cwd: codeRepo, encoding: "utf-8", stdio: "pipe" });
+
+      currentLogger.info("auto-finalize-success", { task_id: taskId, output: finalizeOutput.slice(0, 500) });
+
       let finalizeCommitHash = "";
       try {
         finalizeCommitHash = execSync("git rev-parse HEAD", { cwd: codeRepo, encoding: "utf-8" }).trim();
@@ -264,54 +304,39 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
           ? { finalize_commit_hash: finalizeCommitHash }
           : { finalize_return_ref: `finalize_${taskId}` },
       };
-      
+
       const closeDryResp = await currentClient.callTool("lybra_queue_close_dry_run", closeArgs);
       if (closeDryResp.verdict === "BLOCK" || closeDryResp.isError === true) {
         const detail = closeDryResp.blocking_reasons || closeDryResp.errors || closeDryResp.message || JSON.stringify(closeDryResp);
         const msg = `auto-close dry_run BLOCK: ${taskId} - ${JSON.stringify(detail)}`;
         currentLogger.error("auto-close-blocked", { task_id: taskId, response: closeDryResp });
         ctx.ui?.notify?.(msg, "error");
-        skipped.push({ task_id: taskId, reason: "close dry_run BLOCK" });
+        anomalies.push({ task_id: taskId, reason: "close dry_run BLOCK" });
         continue;
       }
-      
-      const closeResp = await currentClient.callTool("lybra_queue_close_confirm", closeArgs);
-      
-      currentLogger.info("auto-close-success", {
-        task_id: taskId,
-        close_response: closeResp,
-      });
-      
-      ctx.ui?.notify?.(`自动 finalize+close 任务 ${taskId} (${verdict})`, "info");
+
+      await currentClient.callTool("lybra_queue_close_confirm", closeArgs);
+      currentLogger.info("auto-close-success", { task_id: taskId });
+      ctx.ui?.notify?.(`sweep 收: ${taskId} (${latest.verdict})`, "info");
       processedCount++;
-      // AIPOS-R6S 大项A①: 收完一张继续下一张(不再首张成功即 return)
     } catch (e) {
-      const errMsg = `自动finalize失败: ${taskId} - ${e instanceof Error ? e.message : String(e)}`;
-      currentLogger.error("auto-finalize-failed", {
-        task_id: taskId,
-        error: e instanceof Error ? e.message : String(e),
-      });
-      // AIPOS-R6L 大项A②: 失败必出声（ctx.ui.notify，禁只进日志）
+      const errMsg = `sweep finalize 失败: ${taskId} - ${e instanceof Error ? e.message : String(e)}`;
+      currentLogger.error("auto-finalize-failed", { task_id: taskId, error: String(e) });
       ctx.ui?.notify?.(errMsg, "error");
-      skipped.push({ task_id: taskId, reason: `finalize 失败: ${e instanceof Error ? e.message : String(e)}` });
-      // 失败不停循环，继续处理其他任务
+      anomalies.push({ task_id: taskId, reason: `finalize 失败` });
     }
   }
-  
-  // AIPOS-R6S 大项A①: 末尾汇总 — 本轮收 N 张/跳过 M 张及原因
-  const summaryParts: string[] = [`sweep 完成: 本轮收 ${processedCount} 张`];
-  if (skipped.length > 0) {
-    summaryParts.push(`跳过 ${skipped.length} 张`);
-    for (const s of skipped) {
-      summaryParts.push(`  - ${s.task_id}: ${s.reason}`);
-    }
-  } else if (processedCount === 0) {
-    summaryParts.push(`扫描 ${taskDirs.length} 张卡，无需处理`);
-  }
-  const summaryMsg = summaryParts.join("\n");
-  currentLogger.info("sweep-complete", { processed: processedCount, skipped: skipped.length, skipped_list: skipped });
+
+  // AIPOS-C3B 大项D③: 出声=一行汇总+仅异常逐条
+  const total = claimedCards.length;
+  const summaryMsg = anomalies.length > 0
+    ? `sweep: ${total} claimed, 收 ${processedCount} 张, ${anomalies.length} 异常(${anomalies.map(a => a.task_id).join(",")})`
+    : processedCount > 0
+      ? `sweep: ${total} claimed, 收 ${processedCount} 张`
+      : `sweep: ${total} claimed, 无需处理`;
+  currentLogger.info("sweep-complete", { processed: processedCount, claimed: total, anomalies });
   ctx.ui?.notify?.(summaryMsg, "info");
-  
+
   return processedCount > 0;
 }
 
@@ -392,9 +417,25 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
       active_session_id: getSessionId(ctx),
     });
     
+    // AIPOS-C3B 大项D②: dry_run 被拒时拒因上屏(现只埋日志), 检测 SESSION_MISMATCH 自动建议 return-repair
+    if (dryRunResp.verdict === "BLOCK" || dryRunResp.isError === true) {
+      const reasons = dryRunResp.blocking_reasons || dryRunResp.errors || [];
+      const reasonText = Array.isArray(reasons) ? reasons.join("; ") : String(reasons);
+      const isSessionMismatch = reasonText.includes("SESSION_MISMATCH");
+      const onScreenMsg = `auto-return ${currentTaskId} 被拒: ${reasonText}`;
+      currentLogger.error("auto-return-blocked", { task_id: currentTaskId, reasons, isSessionMismatch });
+      ctx.ui?.notify?.(onScreenMsg, "error");
+      if (isSessionMismatch) {
+        ctx.ui?.notify?.(`建议执行: lybra queue return-repair --task-id ${currentTaskId} --actor ${config.actor}`, "warn");
+      }
+      return false;
+    }
+
     const dryRunToken = dryRunResp.dry_run_token;
     if (!dryRunToken) {
+      const msg = `auto-return ${currentTaskId}: 无 dry_run_token(响应异常)`;
       currentLogger.error("auto-return-no-token", { task_id: currentTaskId, response: dryRunResp });
+      ctx.ui?.notify?.(msg, "error");
       return false;
     }
     
@@ -420,10 +461,17 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
     
     return true;
   } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    const isSessionMismatch = errMsg.includes("SESSION_MISMATCH");
     currentLogger.error("auto-return-failed", {
       task_id: currentTaskId,
-      error: e instanceof Error ? e.message : String(e),
+      error: errMsg,
     });
+    // AIPOS-C3B 大项D②: 拒因上屏
+    ctx.ui?.notify?.(`auto-return ${currentTaskId} 失败: ${errMsg}`, "error");
+    if (isSessionMismatch) {
+      ctx.ui?.notify?.(`建议执行: lybra queue return-repair --task-id ${currentTaskId} --actor ${config.actor}`, "warn");
+    }
     return false;
   }
 }
@@ -580,15 +628,58 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
             ctx.ui?.notify?.(`自动return ${heldTaskId} 失败，请手动处理`, "warn");
           }
         } else {
+          // AIPOS-C3B 大项D①: held-resume 罩审计车道
+          // 审计卡(task_mode=audit)的完成判据 = verdict 记录是否落库(N4)
+          // 审计卡 claimed + 报告在 + 无 verdict → 复工提示"只差提交裁决"
+          const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${heldTaskId.toLowerCase()}.md`);
+          let isAuditCard = false;
+          let cardContent = "";
+          if (fs.existsSync(taskCardPath)) {
+            try {
+              cardContent = fs.readFileSync(taskCardPath, "utf-8");
+              isAuditCard = /task_mode:\s*audit/i.test(cardContent) || /created_by:\s*gate_derivation/i.test(cardContent);
+            } catch {
+              // ignore
+            }
+          }
+
+          if (isAuditCard) {
+            // 审计车道: 检查 verdict 记录是否已落库
+            const reviewedMatch = cardContent.match(/reviewed_task_id:\s*['"]?([^'"\n]+)['"]?/i);
+            const reviewedTaskId = reviewedMatch ? reviewedMatch[1].trim() : heldTaskId.replace(/R$/i, "");
+            const verdictDir = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts", reviewedTaskId);
+            let hasVerdict = false;
+            if (fs.existsSync(verdictDir)) {
+              const vFiles = fs.readdirSync(verdictDir).filter((f: string) => f.endsWith(".md"));
+              hasVerdict = vFiles.length > 0;
+            }
+            if (!hasVerdict) {
+              currentLogger.info("held-audit-no-verdict", { task_id: heldTaskId, reviewed_task_id: reviewedTaskId });
+              ctx.ui?.notify?.(`复工：${heldTaskId} 是审计卡，只差提交裁决(verdict 未落库)`, "info");
+              // 投递卡内容让 auditor 继续提交裁决
+              if (cardContent) {
+                await ctx.reply({
+                  type: "text",
+                  text: `# 复工任务(审计车道): ${heldTaskId}\n\n审计卡 claimed + 无 verdict 记录 → 只差提交裁决。\n\n${cardContent}`,
+                });
+                currentTaskId = heldTaskId;
+                stopLoop(ctx, `已复工审计卡 ${heldTaskId}，等待提交裁决`, "info");
+                return;
+              }
+            } else {
+              currentLogger.info("held-audit-has-verdict", { task_id: heldTaskId });
+              ctx.ui?.notify?.(`审计卡 ${heldTaskId} 已有 verdict，无需复工`, "info");
+            }
+          }
+
           // AIPOS-R8B 大项C①: held 且无 completed → 投递卡正文复工（会话中断后自动续做）
           currentLogger.info("held-resume", { task_id: heldTaskId });
           ctx.ui?.notify?.(`复工：继续执行 ${heldTaskId}`, "info");
           
           // 读取任务卡正文并投递
-          const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${heldTaskId.toLowerCase()}.md`);
           if (fs.existsSync(taskCardPath)) {
             try {
-              const cardContent = fs.readFileSync(taskCardPath, "utf-8");
+              if (!cardContent) cardContent = fs.readFileSync(taskCardPath, "utf-8");
               // 投递卡内容到当前会话
               await ctx.reply({
                 type: "text",

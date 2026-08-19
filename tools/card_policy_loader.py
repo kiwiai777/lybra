@@ -89,6 +89,9 @@ def get_project_card_policy_path(
         governance_root / ".lybra" / "card_policy.json",
         governance_root / "config" / "card_policy.json",
     ]
+    # AIPOS-C3B 大项C⑥: also check 2_projects/<project_id>/ (multi-project layout)
+    if project_id:
+        candidates.append(governance_root / "2_projects" / project_id / "card_policy.json")
 
     for candidate in candidates:
         if candidate.is_file():
@@ -143,6 +146,44 @@ def get_card_policy_rules(
         return []
 
     return rules
+
+
+def get_card_policy_all_declared_fields(
+    governance_root: Path | str,
+    project_id: str | None = None,
+    repo_root: Path | None = None,
+) -> set[str]:
+    """AIPOS-C3B 大项C⑥: 返回 card_policy 声明的所有字段名(含 rules + _suspended_rules)。
+
+    用于 unknown-field 白名单:policy 声明的字段不应被 card.schema 报 unknown。
+    这解决了死锁二号:policy 声明字段(如 anchor_refs)不在 card.schema 中,
+    不加白名单会撞 unknown-field;不加 rule 会撞 policy required = 死锁。
+    """
+    declaration_path = get_project_card_policy_path(governance_root, project_id, repo_root)
+    if declaration_path is None:
+        return set()
+
+    try:
+        declaration = load_card_policy_declaration(declaration_path)
+    except SchemaLoadError:
+        return set()
+
+    fields: set[str] = set()
+    # Collect from active rules
+    rules = declaration.get("rules")
+    if isinstance(rules, list):
+        for rule in rules:
+            fname = rule.get("field")
+            if isinstance(fname, str) and fname:
+                fields.add(fname)
+    # Collect from suspended rules (AIPOS-C3B 大项C⑥)
+    suspended = declaration.get("_suspended_rules")
+    if isinstance(suspended, list):
+        for rule in suspended:
+            fname = rule.get("field")
+            if isinstance(fname, str) and fname:
+                fields.add(fname)
+    return fields
 
 
 # ---------------------------------------------------------------------------
