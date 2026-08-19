@@ -3024,19 +3024,25 @@ def _build_audit_dispatch_preview(
         blocking_reasons.append("INVALID_AUDIT_TASK_ID: audit_task_id is required")
     audit_rel = f"5_tasks/queue/pending/{_task_filename_for(task_id_text)}.md"
     audit_path = repo_root / audit_rel
+    # AIPOS-C1 大项C②: idempotent audit dispatch — if audit card already exists,
+    # treat as warning (not block). The dispatch supplements the record instead of deadlocking.
+    audit_task_already_exists = False
     if audit_path.exists():
-        blocking_reasons.append(f"AUDIT_TASK_TARGET_EXISTS: {audit_rel}")
+        audit_task_already_exists = True
+        # Was: blocking_reasons.append(f"AUDIT_TASK_TARGET_EXISTS: {audit_rel}")
     if task_id_text:
         _existing, matches = find_task_by_id(task_id_text, repo_root)
         if matches:
-            blocking_reasons.append(f"AUDIT_TASK_ID_EXISTS: {task_id_text}")
+            audit_task_already_exists = True
+            # Was: blocking_reasons.append(f"AUDIT_TASK_ID_EXISTS: {task_id_text}")
 
     timestamp = planned_dispatched_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     dispatch_id = planned_dispatch_id or build_runtime_id("dispatch", str(source_task.get("task_id") or ""), timestamp, canonical_agent_instance or actor)
     dispatch_path = audit_dispatch_record_path(repo_root, str(source_task.get("task_id") or ""), dispatch_id)
     dispatch_rel = str(dispatch_path.resolve().relative_to(repo_root.resolve()))  # AIPOS-240: symlink-safe
-    if dispatch_path.exists():
-        blocking_reasons.append(f"Audit dispatch record already exists: {dispatch_rel}")
+    # AIPOS-C1 大项C②: dispatch record idempotent — if already exists, will be updated (not blocked)
+    dispatch_record_already_exists = dispatch_path.exists()
+    # Was: blocking_reasons.append(f"Audit dispatch record already exists: {dispatch_rel}")
 
     # AIPOS-229 (Slice 5): de-hardcode the "lybra" project literal. Prefer the source task's
     # project; otherwise resolve the active project from the home model. NO literal fallback — if
@@ -3167,7 +3173,16 @@ def _build_audit_dispatch_preview(
             "planned_dispatch_id": dispatch_id,
             "planned_dispatched_at": timestamp,
         },
+        # AIPOS-C1 大项C②: idempotent dispatch flags
+        "idempotent_supplement": audit_task_already_exists or dispatch_record_already_exists,
+        "audit_task_already_existed": audit_task_already_exists,
+        "dispatch_record_already_existed": dispatch_record_already_exists,
     }
+    # AIPOS-C1: add idempotent warnings (not blocks)
+    if audit_task_already_exists:
+        warnings.append(f"AUDIT_TASK_ALREADY_EXISTS_IDEMPOTENT: {task_id_text} — supplementing dispatch record (not blocking)")
+    if dispatch_record_already_exists:
+        warnings.append(f"DISPATCH_RECORD_ALREADY_EXISTS_IDEMPOTENT: {dispatch_rel} — updating dispatch record (not blocking)")
     verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)
     response = make_response(
         ok=True,
@@ -3257,8 +3272,11 @@ def audit_dispatch_task(
         (resolved_root / str(data.get("target_path") or "")).write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
         audit_path = resolved_root / str(data.get("audit_task_path") or "")
         audit_path.parent.mkdir(parents=True, exist_ok=True)
+        # AIPOS-C1 大项C②: idempotent — if audit card already exists, skip creating it
+        # (it was created by a prior dispatch). Still update source + dispatch record.
+        audit_task_kind = "update" if audit_path.exists() else "create"
         audit_path.write_text(str(data.get("audit_task_markdown") or ""), encoding="utf-8")
-        performed = [{"path": data.get("target_path"), "kind": "update", "type": "task_markdown"}, {"path": data.get("audit_task_path"), "kind": "create", "type": "task_markdown"}]
+        performed = [{"path": data.get("target_path"), "kind": "update", "type": "task_markdown"}, {"path": data.get("audit_task_path"), "kind": audit_task_kind, "type": "task_markdown"}]
         for preview in data.get("record_previews", []):
             path = resolved_root / str(preview.get("path") or "")
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -5022,6 +5040,32 @@ def mark_concluded_task(
                 category="PARSE_ERROR",
                 message=f"Failed to parse frontmatter from {card_file}.",
                 actor=_actor_payload(actor_text),
+            )
+        # AIPOS-C1 大项C①: precondition — target card must NOT have a formal verdict.
+        # If it does, refuse and redirect to lybra_queue_close.
+        records = load_records(resolved_root)
+        existing_verdicts = records.get("task_audit_verdicts", {}).get(tid, [])
+        if existing_verdicts:
+            latest_verdict = max(existing_verdicts, key=_verdict_time)
+            latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="FORMAL_VERDICT_EXISTS",
+                message=(
+                    f"Task {tid} has a formal audit verdict ({latest_verdict_value}). "
+                    f"mark-concluded is for bypass scenarios without formal verdicts. "
+                    f"Use 'lybra queue close' (lybra_queue_close_dry_run) instead."
+                ),
+                actor=_actor_payload(actor_text),
+                data={
+                    "task_id": tid,
+                    "existing_verdict": latest_verdict_value,
+                    "redirect_verb": "lybra_queue_close_dry_run",
+                    "redirect_cli": "lybra queue close",
+                    "redirect_hint": f"Task {tid} has formal verdict {latest_verdict_value}. Use 'lybra queue close --task-id {tid} --actor <ACTOR> --closure-evidence ...' instead.",
+                },
+                safety_notice="AIPOS-C1: mark-concluded precondition: no formal verdict allowed. Use queue_close for cards with verdicts.",
             )
         closure_ref = report_ref or f"note:{note[:80]}"
         if dry_run:

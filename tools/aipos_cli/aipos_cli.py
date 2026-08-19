@@ -1345,6 +1345,14 @@ def build_parser() -> argparse.ArgumentParser:
     queue_return_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     queue_return_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-C1 大项A: queue close subcommand (derived from verbs.schema lybra_queue_close)
+    queue_close_parser = queue_subparsers.add_parser("close", help="Close a claimed task with closure evidence (AIPOS-283)")
+    queue_close_parser.add_argument("--task-id", required=True, help="Task ID to close")
+    queue_close_parser.add_argument("--actor", required=True, help="Actor performing the close")
+    queue_close_parser.add_argument("--closure-evidence", required=True, help="JSON object with at least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref")
+    queue_close_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    queue_close_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     my_tasks_parser = subparsers.add_parser("my-tasks", help="Render tasks for an actor")
     my_tasks_parser.add_argument("--actor", required=True, help="Role instance or agent instance")
     my_tasks_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -3452,6 +3460,31 @@ def main(argv: list[str] | None = None) -> int:
             print(wrap_error_with_verb_help(error_msg, "lybra_queue_return", repo_root), file=sys.stderr)
             return 1
         
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
+
+    # AIPOS-C1 大项A: queue close — wrap board_adapter.close_task
+    if args.command == "queue" and getattr(args, "queue_command", None) == "close":
+        from tools.aipos_cli.board_adapter import close_task
+        try:
+            closure_evidence = json.loads(args.closure_evidence)
+        except json.JSONDecodeError as exc:
+            print(f"Error: Invalid JSON in --closure-evidence: {exc}", file=sys.stderr)
+            return 1
+        try:
+            result = close_task(
+                task_id=args.task_id,
+                actor=args.actor,
+                closure_evidence=closure_evidence,
+                dry_run=args.dry_run,
+                repo_root=repo_root,
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
         if args.json:
             print(render_json(result))
         else:

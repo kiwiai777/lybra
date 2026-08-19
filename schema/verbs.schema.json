@@ -1,8 +1,17 @@
 {
-  "schema_version": "2.0.0",
-  "description": "Lybra verb contracts — single source of truth for gate tool names, parameter shapes, and two-phase (dry_run → confirm) semantics. Keyed by ACTUAL gate tool name (verb full name includes the phase suffix). Connectors derive verb name + parameter shape from this file at load time; a missing verb or a wrong required-param name fails at startup, not at runtime.",
-  "last_updated": "2026-08-16",
-  "source_of_truth": "This file mirrors the live gate registry (tools/list). It is the ONLY place a connector may learn a verb name or a parameter shape. No handwritten per-verb wrappers in connectors.",
+  "schema_version": "2.1.0",
+  "description": "Lybra verb contracts — single source of truth for gate tool names, parameter shapes, two-phase (dry_run → confirm) semantics, stage contracts, preconditions, and response field derivation. CLI, MCP, manual, and response hints are ALL projections of this file. No handwritten second source.",
+  "last_updated": "2026-08-19",
+  "source_of_truth": "This file is the ONLY place a connector may learn a verb name, parameter shape, stage contract, or response field derivation. CLI subcommands, MCP response fields, and advisor manual verb references are generated from this file. No handwritten per-verb wrappers anywhere.",
+  "aipos_c1": {
+    "purpose": "AIPOS-C1: verbs.schema as the single truth for the verb surface. CLI/MCP/manual/response-hints are four projections.",
+    "projections": {
+      "cli": "tools/aipos_cli/aipos_cli.py — queue subcommands derived from verbs with surface=cli or phase declarations",
+      "mcp_response": "tools/mcp_server/tools.py — owner_confirmation_required and client_hint derived from stage_contract.self_confirm_allowed",
+      "manual": "tools/generate_advisor_commands.py — ADVISOR-COMMANDS verb reference section generated from this schema",
+      "assertion": "tools/test_aipos_c1_surface_consistency.py — validates all projections match this schema"
+    }
+  },
   "two_phase_protocol": {
     "description": "Mutation verbs follow dry_run → confirm two-phase pattern. dry_run previews without side effects and (for claim/return) returns a dry_run_token; confirm executes.",
     "phases": {
@@ -26,11 +35,27 @@
       "Executor can proceed through WARN to completion"
     ]
   },
+  "response_field_derivation": {
+    "description": "Rules for deriving MCP response fields from stage_contract. Single source — no handwritten conditionals in tools.py.",
+    "rules": {
+      "owner_confirmation_required": "true if stage_contract.self_confirm_allowed is empty (no one can self-confirm); false otherwise",
+      "client_hint": "Generated from stage_contract.self_confirm_allowed: if non-empty, hint says 'self-confirm allowed with OWNER_CONFIRMED literal'; if empty, hint says 'owner must confirm via owner scope'",
+      "dry_run_token_emitted": "true if stage_contract.dry_run_emits_token is true"
+    }
+  },
   "verbs": {
     "lybra_queue_list": {
       "description": "Read the task queue (executor's only read surface).",
       "phase": "single",
       "required_scope": null,
+      "surface": ["cli", "mcp"],
+      "cli_command": "lybra queue list",
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
       "parameters": {
         "type": "object",
         "properties": {},
@@ -42,6 +67,13 @@
       "description": "Read-only task session preview by task_id or path. include_body=true returns the card body markdown (requires queue_claim scope).",
       "phase": "single",
       "required_scope": null,
+      "surface": ["mcp"],
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -58,6 +90,13 @@
       "description": "Read-only: return RETURN.md body for a returned task (auditor cross-machine evidence). Requires queue_claim scope.",
       "phase": "single",
       "required_scope": null,
+      "surface": ["mcp"],
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -73,6 +112,16 @@
       "base_verb": "lybra_queue_claim",
       "confirm_verb": "lybra_queue_claim_confirm",
       "confirm_via": "dry_run_token",
+      "surface": ["cli", "mcp"],
+      "cli_command": "lybra queue claim",
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": true,
+        "self_confirm_allowed": ["executor_with_owner_confirmed_literal"],
+        "self_confirm_mechanism": "AIPOS-328: executor passes owner_confirmation_token='OWNER_CONFIRMED' literal (not a secret, not owner scope)",
+        "owner_confirmation_required_in_response": false,
+        "client_hint_template": "AIPOS-328: executor自行confirm。使用 lybra_queue_claim_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。"
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -95,11 +144,18 @@
       }
     },
     "lybra_queue_claim_confirm": {
-      "description": "Confirm a claim dry-run (Owner-gated: requires owner_confirmation_token).",
+      "description": "Confirm a claim dry-run (AIPOS-328: self-confirm via owner_confirmation_token literal).",
       "phase": "confirm",
       "base_verb": "lybra_queue_claim",
       "dry_run_verb": "lybra_queue_claim_dry_run",
       "confirm_via": "dry_run_token",
+      "surface": ["mcp"],
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": ["executor_with_owner_confirmed_literal"],
+        "owner_confirmation_required_in_response": false
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -107,7 +163,7 @@
           "actor": { "type": "string" },
           "agent_instance": { "type": "string" },
           "owner_policy_ref": { "type": "string" },
-          "owner_confirmation_token": { "type": "string", "description": "Owner confirmation literal" }
+          "owner_confirmation_token": { "type": "string", "description": "Owner confirmation literal (AIPOS-328: 'OWNER_CONFIRMED')" }
         },
         "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
         "additionalProperties": false
@@ -119,6 +175,16 @@
       "base_verb": "lybra_queue_return",
       "confirm_verb": "lybra_queue_return_confirm",
       "confirm_via": "dry_run_token",
+      "surface": ["cli", "mcp"],
+      "cli_command": "lybra queue return",
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": true,
+        "self_confirm_allowed": ["executor_with_owner_confirmed_literal"],
+        "self_confirm_mechanism": "AIPOS-328: executor passes owner_confirmation_token='OWNER_CONFIRMED' literal",
+        "owner_confirmation_required_in_response": false,
+        "client_hint_template": "AIPOS-328: executor自行confirm。使用 lybra_queue_return_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。"
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -163,6 +229,13 @@
       "base_verb": "lybra_queue_return",
       "dry_run_verb": "lybra_queue_return_dry_run",
       "confirm_via": "dry_run_token",
+      "surface": ["mcp"],
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": ["executor_with_owner_confirmed_literal"],
+        "owner_confirmation_required_in_response": false
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -182,6 +255,17 @@
       "base_verb": "lybra_queue_close",
       "confirm_verb": "lybra_queue_close_confirm",
       "confirm_via": "replay_args",
+      "surface": ["cli", "mcp"],
+      "cli_command": "lybra queue close",
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": false,
+        "confirm_mechanism": "replay_args: confirm replays task_id + actor + closure_evidence (no dry_run_token)",
+        "self_confirm_allowed": ["executor_with_queue_close_scope"],
+        "self_confirm_mechanism": "Executor with queue_close scope can close directly; no owner_confirmation_token needed",
+        "owner_confirmation_required_in_response": false,
+        "client_hint_template": "Executor可直接close(queue_close scope)。使用 lybra queue close --task-id <ID> --actor <ACTOR> --closure-evidence '<JSON>'。无需owner确认。"
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -208,6 +292,15 @@
       "base_verb": "lybra_queue_close",
       "dry_run_verb": "lybra_queue_close_dry_run",
       "confirm_via": "replay_args",
+      "surface": ["cli", "mcp"],
+      "cli_command": "lybra queue close",
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": false,
+        "confirm_mechanism": "replay_args",
+        "self_confirm_allowed": ["executor_with_queue_close_scope"],
+        "owner_confirmation_required_in_response": false
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -232,6 +325,14 @@
       "description": "Report task progress (single-phase). NOTE: field is event_type, NOT status.",
       "phase": "single",
       "required_scope": "task_progress",
+      "surface": ["cli", "mcp"],
+      "cli_command": "lybra task-progress",
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -252,6 +353,13 @@
       "phase": "dry_run",
       "base_verb": "lybra_bench_audit_submit",
       "confirm_via": "dry_run_token",
+      "surface": ["mcp"],
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": true,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": true
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -264,6 +372,81 @@
           "notes": { "type": "string" }
         },
         "required": ["task_id", "actor", "conclusion"],
+        "additionalProperties": false
+      }
+    },
+    "lybra_mark_concluded": {
+      "description": "Mark a task as concluded (bypass path for report-style audits). AIPOS-C1: precondition = target card must NOT have a formal verdict; if it does, refuse and point to lybra_queue_close.",
+      "phase": "single",
+      "surface": ["cli", "mcp"],
+      "cli_command": "lybra converge mark-concluded",
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
+      "preconditions": [
+        {
+          "id": "no_formal_verdict",
+          "description": "Target card must NOT have a formal audit verdict (PASS/PASS_WITH_NOTES/FAIL/BLOCK). If a formal verdict exists, the card must be closed via lybra_queue_close, not mark-concluded.",
+          "on_violation": "reject_with_redirect",
+          "redirect_verb": "lybra_queue_close_dry_run",
+          "redirect_hint": "Task {task_id} has a formal verdict ({verdict}). Use 'lybra queue close' instead of mark-concluded."
+        }
+      ],
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": { "type": "string", "description": "Task ID to mark concluded" },
+          "actor": { "type": "string", "description": "Actor marking concluded" },
+          "report_path": { "type": "string", "description": "Report path (optional)" },
+          "conclusion_note": { "type": "string", "description": "Conclusion note (optional)" },
+          "dry_run": { "type": "boolean", "description": "Preview without writing" }
+        },
+        "required": ["task_id"],
+        "additionalProperties": false
+      }
+    },
+    "lybra_audit_dispatch_dry_run": {
+      "description": "Dispatch an audit (preview). AIPOS-C1: idempotent — if audit card already exists, supplements dispatch record instead of blocking.",
+      "phase": "dry_run",
+      "base_verb": "lybra_audit_dispatch",
+      "confirm_verb": "lybra_audit_dispatch_confirm",
+      "confirm_via": "dry_run_token",
+      "surface": ["cli", "mcp"],
+      "cli_command": "lybra audit dispatch",
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": true,
+        "self_confirm_allowed": ["advisor_with_owner_confirmed_literal"],
+        "self_confirm_mechanism": "AIPOS-328: advisor/auditor self-confirm with OWNER_CONFIRMED literal",
+        "owner_confirmation_required_in_response": false,
+        "client_hint_template": "AIPOS-328: advisor/auditor自行confirm。使用 lybra_audit_dispatch_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。"
+      },
+      "preconditions": [
+        {
+          "id": "audit_idempotent",
+          "description": "If the audit task card already exists (AUDIT_TASK_ID_EXISTS), supplement the dispatch record instead of blocking. The dispatch is idempotent — re-dispatching for the same source+audit pair updates the dispatch record.",
+          "on_violation": "idempotent_supplement",
+          "supplement_action": "update_dispatch_record_and_proceed"
+        }
+      ],
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source_task_id": { "type": "string", "description": "Task being audited" },
+          "source_path": { "type": "string", "description": "Task path (alternative to source_task_id)" },
+          "actor": { "type": "string", "description": "Dispatching actor" },
+          "agent_instance": { "type": "string", "description": "Dispatching agent instance" },
+          "owner_policy_ref": { "type": "string", "description": "Owner policy reference" },
+          "audit_task_id": { "type": "string", "description": "Audit task identifier" },
+          "audit_task_title": { "type": "string", "description": "Audit task title" },
+          "audit_by": { "type": "string", "description": "Auditor agent" },
+          "audit_agent_instance": { "type": "string", "description": "Auditor agent instance" },
+          "dispatch_reason": { "type": "string", "description": "Reason for dispatch" }
+        },
+        "required": ["actor", "agent_instance", "owner_policy_ref", "audit_task_id", "audit_agent_instance"],
         "additionalProperties": false
       }
     }
