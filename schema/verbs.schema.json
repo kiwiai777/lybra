@@ -48,7 +48,10 @@
       "description": "Read the task queue (executor's only read surface).",
       "phase": "single",
       "required_scope": null,
-      "surface": ["cli", "mcp"],
+      "surface": [
+        "cli",
+        "mcp"
+      ],
       "cli_command": "lybra queue list",
       "stage_contract": {
         "two_stage": false,
@@ -63,11 +66,33 @@
         "additionalProperties": false
       }
     },
-    "lybra_task_preview": {
-      "description": "Read-only task session preview by task_id or path. include_body=true returns the card body markdown (requires queue_claim scope).",
+    "lybra_distribution_manifest": {
+      "description": "AIPOS-C4B: Return the distribution manifest for the caller's role (file list + sha256 hashes + source commit per distributable). Worker-side lybra sync compares local _distributed against this and pulls only diffs. Passive, read-only, role-scoped.",
       "phase": "single",
       "required_scope": null,
-      "surface": ["mcp"],
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    "lybra_distribution_fetch": {
+      "description": "AIPOS-C4B: Return base64 file content for requested distribution files (by distribution_id + paths). Paths validated against role manifest; traversal/out-of-manifest paths rejected. Worker-initiated pull, zero push.",
+      "phase": "single",
+      "required_scope": null,
+      "surface": [
+        "mcp"
+      ],
       "stage_contract": {
         "two_stage": false,
         "dry_run_emits_token": false,
@@ -77,10 +102,57 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "string", "description": "Task identifier" },
-          "path": { "type": "string", "description": "Task card path" },
-          "actor": { "type": "string", "description": "Requesting actor" },
-          "include_body": { "type": "boolean", "description": "Include card body markdown (requires queue_claim scope)" }
+          "distribution_id": {
+            "type": "string",
+            "description": "Distribution entry id (e.g. executor-loop-extension)"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "File paths relative to the distribution source"
+          }
+        },
+        "required": [
+          "distribution_id",
+          "paths"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_task_preview": {
+      "description": "Read-only task session preview by task_id or path. include_body=true returns the card body markdown (requires queue_claim scope).",
+      "phase": "single",
+      "required_scope": null,
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Task identifier"
+          },
+          "path": {
+            "type": "string",
+            "description": "Task card path"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Requesting actor"
+          },
+          "include_body": {
+            "type": "boolean",
+            "description": "Include card body markdown (requires queue_claim scope)"
+          }
         },
         "required": [],
         "additionalProperties": false
@@ -90,7 +162,9 @@
       "description": "Read-only: return RETURN.md body for a returned task (auditor cross-machine evidence). Requires queue_claim scope.",
       "phase": "single",
       "required_scope": null,
-      "surface": ["mcp"],
+      "surface": [
+        "mcp"
+      ],
       "stage_contract": {
         "two_stage": false,
         "dry_run_emits_token": false,
@@ -100,9 +174,14 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "string", "description": "Task whose RETURN.md to read" }
+          "task_id": {
+            "type": "string",
+            "description": "Task whose RETURN.md to read"
+          }
         },
-        "required": ["task_id"],
+        "required": [
+          "task_id"
+        ],
         "additionalProperties": false
       }
     },
@@ -112,12 +191,17 @@
       "base_verb": "lybra_queue_claim",
       "confirm_verb": "lybra_queue_claim_confirm",
       "confirm_via": "dry_run_token",
-      "surface": ["cli", "mcp"],
+      "surface": [
+        "cli",
+        "mcp"
+      ],
       "cli_command": "lybra queue claim",
       "stage_contract": {
         "two_stage": true,
         "dry_run_emits_token": true,
-        "self_confirm_allowed": ["executor_with_owner_confirmed_literal"],
+        "self_confirm_allowed": [
+          "executor_with_owner_confirmed_literal"
+        ],
         "self_confirm_mechanism": "AIPOS-328: executor passes owner_confirmation_token='OWNER_CONFIRMED' literal (not a secret, not owner scope)",
         "owner_confirmation_required_in_response": false,
         "client_hint_template": "AIPOS-328: executor自行confirm。使用 lybra_queue_claim_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。"
@@ -125,21 +209,66 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "string", "description": "Task to claim (selector: task_id XOR task_path)" },
-          "task_path": { "type": "string", "description": "Task path (selector: task_id XOR task_path)" },
-          "actor": { "type": "string", "description": "Agent claiming the task" },
-          "agent_instance": { "type": "string", "description": "Specific agent instance" },
-          "autonomy_mode": { "type": "string", "$enum": "autonomy_mode", "description": "Supervised | PreAuthorized" },
-          "owner_policy_ref": { "type": "string", "description": "Owner policy reference" },
-          "runtime_profile": { "type": "string", "description": "Runtime profile (e.g. cc)" },
-          "active_session_id": { "type": "string", "description": "Active session identifier" },
-          "context_bundle_ack": { "type": "string", "description": "Context bundle acknowledgement" },
-          "with_records": { "type": "boolean", "description": "Include records in response" },
-          "claim_reason": { "type": "string", "description": "Reason for claiming" },
-          "actual_model": { "type": "string", "description": "Self-reported model identifier" },
-          "reported_tokens": { "type": "integer", "description": "Self-reported token usage" }
+          "task_id": {
+            "type": "string",
+            "description": "Task to claim (selector: task_id XOR task_path)"
+          },
+          "task_path": {
+            "type": "string",
+            "description": "Task path (selector: task_id XOR task_path)"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Agent claiming the task"
+          },
+          "agent_instance": {
+            "type": "string",
+            "description": "Specific agent instance"
+          },
+          "autonomy_mode": {
+            "type": "string",
+            "$enum": "autonomy_mode",
+            "description": "Supervised | PreAuthorized"
+          },
+          "owner_policy_ref": {
+            "type": "string",
+            "description": "Owner policy reference"
+          },
+          "runtime_profile": {
+            "type": "string",
+            "description": "Runtime profile (e.g. cc)"
+          },
+          "active_session_id": {
+            "type": "string",
+            "description": "Active session identifier"
+          },
+          "context_bundle_ack": {
+            "type": "string",
+            "description": "Context bundle acknowledgement"
+          },
+          "with_records": {
+            "type": "boolean",
+            "description": "Include records in response"
+          },
+          "claim_reason": {
+            "type": "string",
+            "description": "Reason for claiming"
+          },
+          "actual_model": {
+            "type": "string",
+            "description": "Self-reported model identifier"
+          },
+          "reported_tokens": {
+            "type": "integer",
+            "description": "Self-reported token usage"
+          }
         },
-        "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
+        "required": [
+          "actor",
+          "agent_instance",
+          "autonomy_mode",
+          "owner_policy_ref"
+        ],
         "additionalProperties": false
       }
     },
@@ -149,23 +278,45 @@
       "base_verb": "lybra_queue_claim",
       "dry_run_verb": "lybra_queue_claim_dry_run",
       "confirm_via": "dry_run_token",
-      "surface": ["mcp"],
+      "surface": [
+        "mcp"
+      ],
       "stage_contract": {
         "two_stage": true,
         "dry_run_emits_token": false,
-        "self_confirm_allowed": ["executor_with_owner_confirmed_literal"],
+        "self_confirm_allowed": [
+          "executor_with_owner_confirmed_literal"
+        ],
         "owner_confirmation_required_in_response": false
       },
       "parameters": {
         "type": "object",
         "properties": {
-          "dry_run_token": { "type": "string", "description": "Token from dry_run phase" },
-          "actor": { "type": "string" },
-          "agent_instance": { "type": "string" },
-          "owner_policy_ref": { "type": "string" },
-          "owner_confirmation_token": { "type": "string", "description": "Owner confirmation literal (AIPOS-328: 'OWNER_CONFIRMED')" }
+          "dry_run_token": {
+            "type": "string",
+            "description": "Token from dry_run phase"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          },
+          "owner_policy_ref": {
+            "type": "string"
+          },
+          "owner_confirmation_token": {
+            "type": "string",
+            "description": "Owner confirmation literal (AIPOS-328: 'OWNER_CONFIRMED')"
+          }
         },
-        "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
+        "required": [
+          "dry_run_token",
+          "actor",
+          "agent_instance",
+          "owner_policy_ref",
+          "owner_confirmation_token"
+        ],
         "additionalProperties": false
       }
     },
@@ -175,12 +326,17 @@
       "base_verb": "lybra_queue_return",
       "confirm_verb": "lybra_queue_return_confirm",
       "confirm_via": "dry_run_token",
-      "surface": ["cli", "mcp"],
+      "surface": [
+        "cli",
+        "mcp"
+      ],
       "cli_command": "lybra queue return",
       "stage_contract": {
         "two_stage": true,
         "dry_run_emits_token": true,
-        "self_confirm_allowed": ["executor_with_owner_confirmed_literal"],
+        "self_confirm_allowed": [
+          "executor_with_owner_confirmed_literal"
+        ],
         "self_confirm_mechanism": "AIPOS-328: executor passes owner_confirmation_token='OWNER_CONFIRMED' literal",
         "owner_confirmation_required_in_response": false,
         "client_hint_template": "AIPOS-328: executor自行confirm。使用 lybra_queue_return_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。"
@@ -188,38 +344,100 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "string" },
-          "task_path": { "type": "string" },
-          "actor": { "type": "string" },
-          "agent_instance": { "type": "string" },
-          "autonomy_mode": { "type": "string", "$enum": "autonomy_mode", "description": "Supervised for executor return" },
-          "owner_policy_ref": { "type": "string" },
-          "claim_id": { "type": "string" },
-          "active_session_id": { "type": "string" },
-          "result_summary": { "type": "string" },
-          "artifact_refs": { "type": "array", "items": { "type": "string" } },
-          "scratch_dir": { "type": "string" },
-          "scratch_artifact_refs": { "type": "array", "items": { "type": "string" } },
-          "completion_report_ref": { "type": "string" },
-          "executor_status": { "type": "string", "description": "completed (single allowed value)" },
-          "audit_readiness": { "type": "string", "description": "ready (single allowed value)" },
-          "return_reason": { "type": "string" },
-          "return_body": { "type": "string", "description": "RETURN.md body text (gate writes task_cards/<ID>/RETURN.md on confirm)" },
-          "actual_model": { "type": "string" },
-          "reported_tokens": { "type": "integer" },
+          "task_id": {
+            "type": "string"
+          },
+          "task_path": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          },
+          "autonomy_mode": {
+            "type": "string",
+            "$enum": "autonomy_mode",
+            "description": "Supervised for executor return"
+          },
+          "owner_policy_ref": {
+            "type": "string"
+          },
+          "claim_id": {
+            "type": "string"
+          },
+          "active_session_id": {
+            "type": "string"
+          },
+          "result_summary": {
+            "type": "string"
+          },
+          "artifact_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scratch_dir": {
+            "type": "string"
+          },
+          "scratch_artifact_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "completion_report_ref": {
+            "type": "string"
+          },
+          "executor_status": {
+            "type": "string",
+            "description": "completed (single allowed value)"
+          },
+          "audit_readiness": {
+            "type": "string",
+            "description": "ready (single allowed value)"
+          },
+          "return_reason": {
+            "type": "string"
+          },
+          "return_body": {
+            "type": "string",
+            "description": "RETURN.md body text (gate writes task_cards/<ID>/RETURN.md on confirm)"
+          },
+          "actual_model": {
+            "type": "string"
+          },
+          "reported_tokens": {
+            "type": "integer"
+          },
           "agent_runtime": {
             "type": "object",
             "description": "Agent-reported runtime bundle (never verified)",
             "properties": {
-              "harness": { "type": "string" },
-              "model_self_reported": { "type": "string" },
-              "tokens_in": { "type": "integer" },
-              "tokens_out": { "type": "integer" }
+              "harness": {
+                "type": "string"
+              },
+              "model_self_reported": {
+                "type": "string"
+              },
+              "tokens_in": {
+                "type": "integer"
+              },
+              "tokens_out": {
+                "type": "integer"
+              }
             },
             "additionalProperties": false
           }
         },
-        "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
+        "required": [
+          "actor",
+          "agent_instance",
+          "autonomy_mode",
+          "owner_policy_ref"
+        ],
         "additionalProperties": false
       }
     },
@@ -229,23 +447,43 @@
       "base_verb": "lybra_queue_return",
       "dry_run_verb": "lybra_queue_return_dry_run",
       "confirm_via": "dry_run_token",
-      "surface": ["mcp"],
+      "surface": [
+        "mcp"
+      ],
       "stage_contract": {
         "two_stage": true,
         "dry_run_emits_token": false,
-        "self_confirm_allowed": ["executor_with_owner_confirmed_literal"],
+        "self_confirm_allowed": [
+          "executor_with_owner_confirmed_literal"
+        ],
         "owner_confirmation_required_in_response": false
       },
       "parameters": {
         "type": "object",
         "properties": {
-          "dry_run_token": { "type": "string" },
-          "actor": { "type": "string" },
-          "agent_instance": { "type": "string" },
-          "owner_policy_ref": { "type": "string" },
-          "owner_confirmation_token": { "type": "string" }
+          "dry_run_token": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          },
+          "owner_policy_ref": {
+            "type": "string"
+          },
+          "owner_confirmation_token": {
+            "type": "string"
+          }
         },
-        "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
+        "required": [
+          "dry_run_token",
+          "actor",
+          "agent_instance",
+          "owner_policy_ref",
+          "owner_confirmation_token"
+        ],
         "additionalProperties": false
       }
     },
@@ -255,13 +493,18 @@
       "base_verb": "lybra_queue_close",
       "confirm_verb": "lybra_queue_close_confirm",
       "confirm_via": "replay_args",
-      "surface": ["cli", "mcp"],
+      "surface": [
+        "cli",
+        "mcp"
+      ],
       "cli_command": "lybra queue close",
       "stage_contract": {
         "two_stage": true,
         "dry_run_emits_token": false,
         "confirm_mechanism": "replay_args: confirm replays task_id + actor + closure_evidence (no dry_run_token)",
-        "self_confirm_allowed": ["executor_with_queue_close_scope"],
+        "self_confirm_allowed": [
+          "executor_with_queue_close_scope"
+        ],
         "self_confirm_mechanism": "Executor with queue_close scope can close directly; no owner_confirmation_token needed",
         "owner_confirmation_required_in_response": false,
         "client_hint_template": "Executor可直接close(queue_close scope)。使用 lybra queue close --task-id <ID> --actor <ACTOR> --closure-evidence '<JSON>'。无需owner确认。"
@@ -269,20 +512,34 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "string" },
-          "actor": { "type": "string" },
+          "task_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
           "closure_evidence": {
             "type": "object",
             "description": "At least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref.",
             "properties": {
-              "finalize_commit_hash": { "type": "string" },
-              "finalize_return_ref": { "type": "string" },
-              "owner_verification_ref": { "type": "string" }
+              "finalize_commit_hash": {
+                "type": "string"
+              },
+              "finalize_return_ref": {
+                "type": "string"
+              },
+              "owner_verification_ref": {
+                "type": "string"
+              }
             },
             "additionalProperties": false
           }
         },
-        "required": ["task_id", "actor", "closure_evidence"],
+        "required": [
+          "task_id",
+          "actor",
+          "closure_evidence"
+        ],
         "additionalProperties": false
       }
     },
@@ -292,32 +549,51 @@
       "base_verb": "lybra_queue_close",
       "dry_run_verb": "lybra_queue_close_dry_run",
       "confirm_via": "replay_args",
-      "surface": ["cli", "mcp"],
+      "surface": [
+        "cli",
+        "mcp"
+      ],
       "cli_command": "lybra queue close",
       "stage_contract": {
         "two_stage": true,
         "dry_run_emits_token": false,
         "confirm_mechanism": "replay_args",
-        "self_confirm_allowed": ["executor_with_queue_close_scope"],
+        "self_confirm_allowed": [
+          "executor_with_queue_close_scope"
+        ],
         "owner_confirmation_required_in_response": false
       },
       "parameters": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "string" },
-          "actor": { "type": "string" },
+          "task_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
           "closure_evidence": {
             "type": "object",
             "description": "At least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref.",
             "properties": {
-              "finalize_commit_hash": { "type": "string" },
-              "finalize_return_ref": { "type": "string" },
-              "owner_verification_ref": { "type": "string" }
+              "finalize_commit_hash": {
+                "type": "string"
+              },
+              "finalize_return_ref": {
+                "type": "string"
+              },
+              "owner_verification_ref": {
+                "type": "string"
+              }
             },
             "additionalProperties": false
           }
         },
-        "required": ["task_id", "actor", "closure_evidence"],
+        "required": [
+          "task_id",
+          "actor",
+          "closure_evidence"
+        ],
         "additionalProperties": false
       }
     },
@@ -325,7 +601,10 @@
       "description": "Report task progress (single-phase). NOTE: field is event_type, NOT status.",
       "phase": "single",
       "required_scope": "task_progress",
-      "surface": ["cli", "mcp"],
+      "surface": [
+        "cli",
+        "mcp"
+      ],
       "cli_command": "lybra task-progress",
       "stage_contract": {
         "two_stage": false,
@@ -336,15 +615,37 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "string", "description": "Task being reported on" },
-          "event_type": { "type": "string", "$enum": "progress_status", "description": "started | progress | completed | blocked" },
-          "actor": { "type": "string", "description": "Agent instance reporting" },
-          "summary": { "type": "string" },
-          "model_self_reported": { "type": "string" },
-          "stage": { "type": "string" },
-          "reason": { "type": "string" }
+          "task_id": {
+            "type": "string",
+            "description": "Task being reported on"
+          },
+          "event_type": {
+            "type": "string",
+            "$enum": "progress_status",
+            "description": "started | progress | completed | blocked"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Agent instance reporting"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "model_self_reported": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
         },
-        "required": ["task_id", "event_type", "actor"],
+        "required": [
+          "task_id",
+          "event_type",
+          "actor"
+        ],
         "additionalProperties": false
       }
     },
@@ -353,7 +654,9 @@
       "phase": "dry_run",
       "base_verb": "lybra_bench_audit_submit",
       "confirm_via": "dry_run_token",
-      "surface": ["mcp"],
+      "surface": [
+        "mcp"
+      ],
       "stage_contract": {
         "two_stage": true,
         "dry_run_emits_token": true,
@@ -363,22 +666,50 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "string" },
-          "actor": { "type": "string" },
-          "evidence_type": { "type": "string", "description": "deploy | config | content | research" },
-          "task_mode": { "type": "string", "description": "deploy | config | content | research" },
-          "conclusion": { "type": "string", "description": "pass | pass_with_notes | fail | needs_human" },
-          "evidence_refs": { "type": "array", "items": { "type": "object" }, "description": "[{check_id, ref, note?}]" },
-          "notes": { "type": "string" }
+          "task_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "evidence_type": {
+            "type": "string",
+            "description": "deploy | config | content | research"
+          },
+          "task_mode": {
+            "type": "string",
+            "description": "deploy | config | content | research"
+          },
+          "conclusion": {
+            "type": "string",
+            "description": "pass | pass_with_notes | fail | needs_human"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "[{check_id, ref, note?}]"
+          },
+          "notes": {
+            "type": "string"
+          }
         },
-        "required": ["task_id", "actor", "conclusion"],
+        "required": [
+          "task_id",
+          "actor",
+          "conclusion"
+        ],
         "additionalProperties": false
       }
     },
     "lybra_mark_concluded": {
       "description": "Mark a task as concluded (bypass path for report-style audits). AIPOS-C1: precondition = target card must NOT have a formal verdict; if it does, refuse and point to lybra_queue_close.",
       "phase": "single",
-      "surface": ["cli", "mcp"],
+      "surface": [
+        "cli",
+        "mcp"
+      ],
       "cli_command": "lybra converge mark-concluded",
       "stage_contract": {
         "two_stage": false,
@@ -398,13 +729,30 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "task_id": { "type": "string", "description": "Task ID to mark concluded" },
-          "actor": { "type": "string", "description": "Actor marking concluded" },
-          "report_path": { "type": "string", "description": "Report path (optional)" },
-          "conclusion_note": { "type": "string", "description": "Conclusion note (optional)" },
-          "dry_run": { "type": "boolean", "description": "Preview without writing" }
+          "task_id": {
+            "type": "string",
+            "description": "Task ID to mark concluded"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Actor marking concluded"
+          },
+          "report_path": {
+            "type": "string",
+            "description": "Report path (optional)"
+          },
+          "conclusion_note": {
+            "type": "string",
+            "description": "Conclusion note (optional)"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Preview without writing"
+          }
         },
-        "required": ["task_id"],
+        "required": [
+          "task_id"
+        ],
         "additionalProperties": false
       }
     },
@@ -414,12 +762,17 @@
       "base_verb": "lybra_audit_dispatch",
       "confirm_verb": "lybra_audit_dispatch_confirm",
       "confirm_via": "dry_run_token",
-      "surface": ["cli", "mcp"],
+      "surface": [
+        "cli",
+        "mcp"
+      ],
       "cli_command": "lybra audit dispatch",
       "stage_contract": {
         "two_stage": true,
         "dry_run_emits_token": true,
-        "self_confirm_allowed": ["advisor_with_owner_confirmed_literal"],
+        "self_confirm_allowed": [
+          "advisor_with_owner_confirmed_literal"
+        ],
         "self_confirm_mechanism": "AIPOS-328: advisor/auditor self-confirm with OWNER_CONFIRMED literal",
         "owner_confirmation_required_in_response": false,
         "client_hint_template": "AIPOS-328: advisor/auditor自行confirm。使用 lybra_audit_dispatch_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。"
@@ -435,18 +788,54 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "source_task_id": { "type": "string", "description": "Task being audited" },
-          "source_path": { "type": "string", "description": "Task path (alternative to source_task_id)" },
-          "actor": { "type": "string", "description": "Dispatching actor" },
-          "agent_instance": { "type": "string", "description": "Dispatching agent instance" },
-          "owner_policy_ref": { "type": "string", "description": "Owner policy reference" },
-          "audit_task_id": { "type": "string", "description": "Audit task identifier" },
-          "audit_task_title": { "type": "string", "description": "Audit task title" },
-          "audit_by": { "type": "string", "description": "Auditor agent" },
-          "audit_agent_instance": { "type": "string", "description": "Auditor agent instance" },
-          "dispatch_reason": { "type": "string", "description": "Reason for dispatch" }
+          "source_task_id": {
+            "type": "string",
+            "description": "Task being audited"
+          },
+          "source_path": {
+            "type": "string",
+            "description": "Task path (alternative to source_task_id)"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Dispatching actor"
+          },
+          "agent_instance": {
+            "type": "string",
+            "description": "Dispatching agent instance"
+          },
+          "owner_policy_ref": {
+            "type": "string",
+            "description": "Owner policy reference"
+          },
+          "audit_task_id": {
+            "type": "string",
+            "description": "Audit task identifier"
+          },
+          "audit_task_title": {
+            "type": "string",
+            "description": "Audit task title"
+          },
+          "audit_by": {
+            "type": "string",
+            "description": "Auditor agent"
+          },
+          "audit_agent_instance": {
+            "type": "string",
+            "description": "Auditor agent instance"
+          },
+          "dispatch_reason": {
+            "type": "string",
+            "description": "Reason for dispatch"
+          }
         },
-        "required": ["actor", "agent_instance", "owner_policy_ref", "audit_task_id", "audit_agent_instance"],
+        "required": [
+          "actor",
+          "agent_instance",
+          "owner_policy_ref",
+          "audit_task_id",
+          "audit_agent_instance"
+        ],
         "additionalProperties": false
       }
     }

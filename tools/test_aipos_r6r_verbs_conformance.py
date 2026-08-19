@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AIPOS-R6R Conformance 测试 (Python 侧) —— 锁定 verbs.schema.json 的动词契约。
 
-与 TS 测试 (agents/pi/lybra-loop/tests/verbs-conformance.test.ts) 读同一份 schema,
+与 TS 测试 (agents/harness/pi/lybra-loop/tests/verbs-conformance.test.ts) 读同一份 schema,
 断言同一份预期契约(verb 名 / 必填参数 / 两阶段语义 / 关键参数 shape)。
 若 schema 漂移(缺动词、改错参数名、两阶段语义变), 两侧同时失败 —— 契约单一源。
 

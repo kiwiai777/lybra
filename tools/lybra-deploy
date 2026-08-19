@@ -396,6 +396,16 @@ authorization_ref: ${DEPLOY_AUTH_REF}
 EOF
     log "  Snapshot created: $staging_dir"
 
+    # ── AIPOS-C4B 大项A①: deploy 时随发布目录生成分发清单 manifest ──
+    # 每个分发物 = 文件列表 + sha256 + 源 commit; gate 拉取面(gate 被动)读它。
+    # 从 staging 快照构建(与将上线的内容一致), 版本戳取 VERSION.git_commit。
+    log "  Building distribution manifest..."
+    if (cd "$staging_dir" && python3 -m tools.distribution_manifest --repo-root "$staging_dir" --out "$staging_dir/dist/manifest.json" 2>&1); then
+        log "  ✓ distribution manifest written: $staging_dir/dist/manifest.json"
+    else
+        log "  ⚠ distribution manifest build failed (deploy continues; gate falls back to on-the-fly build)"
+    fi
+
     # ── Step 2: validate ────────────────────────────────────────────────
     log "Step 2/5: Validating import..."
     if ! (cd "$staging_dir" && python3 -c "import tools.aipos_cli.aipos_cli" 2>&1); then

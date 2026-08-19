@@ -1523,6 +1523,103 @@ def lybra_gate_version(arguments: dict[str, Any] | None = None) -> dict[str, Any
     return _tool_result(version_info)
 
 
+def _gate_runtime_root() -> Path:
+    """AIPOS-C4B: gate 自身的运行时快照根 (.deploy/current, 经 symlink 解析)。
+
+    与 lybra_gate_version 同源: tools.py 被加载自 .deploy/current,
+    __file__.resolve() 跟随 symlink 得到真实快照目录, 分发清单/文件内容从此读。
+    """
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def lybra_distribution_manifest(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-C4B 大项A②: 分发清单拉取面(gate 被动, 只读)。
+
+    返回调用者角色(token 的 role)应得的分发清单: 每个分发物的文件列表 + sha256 哈希
+    + 源 commit。工位侧 `lybra sync` 据此对比本地 _distributed 并只拉差异。
+
+    红线: 本动词被动、只读, 不发治理内容, 不做任何推送。范围按角色 scope ——
+    只返回调用者自己的角色清单, 不信任参数里的 role。
+    """
+    _ = arguments or {}
+    cap = _capability_token()
+    role = str(cap.get("role") or "").strip()
+    if not role:
+        return _error_result("lybra_distribution_manifest: cannot resolve caller role", category="SCOPE_ERROR")
+
+    from tools.distribution_manifest import build_role_manifest, get_product_commit
+    root = _gate_runtime_root()
+    try:
+        role_manifest = build_role_manifest(root, role)
+    except FileNotFoundError as e:
+        return _error_result(f"distribution source missing in gate runtime: {e}", category="DISTRIBUTION_ERROR")
+    except ValueError as e:
+        return _error_result(f"distribution manifest build failed: {e}", category="DISTRIBUTION_ERROR")
+
+    payload = {
+        "ok": True,
+        "manifest_version": 1,
+        "product_commit": get_product_commit(root),
+        "role": role,
+        "harness": role_manifest["harness"],
+        "distributions": role_manifest["distributions"],
+    }
+    return _tool_result(payload)
+
+
+def lybra_distribution_fetch(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-C4B 大项A②: 分发文件内容拉取(gate 被动, 只读)。
+
+    按 distribution_id + 文件相对路径返回 base64 内容。路径经分发清单校验,
+    越界(path traversal / 非清单内文件)即拒。工位发起 pull; 本动词零推送。
+    """
+    args = arguments or {}
+    cap = _capability_token()
+    role = str(cap.get("role") or "").strip()
+    if not role:
+        return _error_result("lybra_distribution_fetch: cannot resolve caller role", category="SCOPE_ERROR")
+
+    distribution_id = str(args.get("distribution_id") or "").strip()
+    paths = args.get("paths")
+    if not distribution_id or not isinstance(paths, list) or not paths:
+        return _error_result("lybra_distribution_fetch requires distribution_id + paths[]")
+
+    from tools.distribution_manifest import build_role_manifest
+    import base64
+    root = _gate_runtime_root()
+    try:
+        role_manifest = build_role_manifest(root, role)
+    except (FileNotFoundError, ValueError) as e:
+        return _error_result(f"distribution manifest build failed: {e}", category="DISTRIBUTION_ERROR")
+
+    dist = next((d for d in role_manifest["distributions"] if d["distribution_id"] == distribution_id), None)
+    if dist is None:
+        return _error_result(f"distribution_id not in role manifest: {distribution_id}", category="DISTRIBUTION_ERROR")
+
+    # 合法路径集合(白名单): 只允许清单内声明的文件
+    allowed: dict[str, str] = {}
+    for f in dist["files"]:
+        allowed[f["path"]] = f["sha256"]
+
+    src_root = (root / dist["source_path"]).resolve()
+    if dist.get("source_is_file"):
+        # 文件型分发物(charter/schema): source_path 就是文件本身, 读面是它的父目录
+        src_root = src_root.parent
+    files: list[dict[str, Any]] = []
+    for rel in paths:
+        rel_s = str(rel)
+        if rel_s not in allowed:
+            return _error_result(f"path not in manifest for {distribution_id}: {rel_s}", category="DISTRIBUTION_ERROR")
+        abs_path = (src_root / rel_s).resolve()
+        # path traversal 防护: 解析后必须仍在源目录内
+        if not str(abs_path).startswith(str(src_root) + "/") or not abs_path.is_file():
+            return _error_result(f"path escapes distribution source: {rel_s}", category="DISTRIBUTION_ERROR")
+        content = abs_path.read_bytes()
+        files.append({"path": rel_s, "content_b64": base64.b64encode(content).decode("ascii")})
+
+    return _tool_result({"ok": True, "distribution_id": distribution_id, "files": files})
+
+
 def lybra_validate(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     _ = arguments or {}
     return _tool_result(get_validate(repo_root=_repo_root()))
@@ -3798,6 +3895,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
     "lybra_gate_version": lybra_gate_version,
+    "lybra_distribution_manifest": lybra_distribution_manifest,
+    "lybra_distribution_fetch": lybra_distribution_fetch,
     "lybra_task_preview": lybra_task_preview,
     "lybra_return_content": lybra_return_content,
     "lybra_validate": lybra_validate,
@@ -3866,6 +3965,28 @@ READ_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_distribution_manifest",
+        "description": "AIPOS-C4B: Return the distribution manifest for the caller's role (file list + sha256 hashes + source commit per distributable). Worker-side `lybra sync` compares local _distributed against this and pulls only diffs. Passive, read-only, role-scoped.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_distribution_fetch",
+        "description": "AIPOS-C4B: Return base64 file content for requested distribution files (by distribution_id + paths). Paths are validated against the role manifest; traversal/out-of-manifest paths are rejected. Worker-initiated pull only, zero push.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "distribution_id": {"type": "string", "description": "Distribution entry id (e.g. executor-loop-extension)"},
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "File paths relative to the distribution source"},
+            },
+            "required": ["distribution_id", "paths"],
             "additionalProperties": False,
         },
     },

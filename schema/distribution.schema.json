@@ -34,7 +34,7 @@
       "description": "Lybra loop connector extension for executor role",
       "source": {
         "repo": "lybra",
-        "path": "agents/pi/lybra-loop"
+        "path": "agents/harness/pi/lybra-loop"
       },
       "target": {
         "harness": "pi",
@@ -51,7 +51,7 @@
       "description": "Skills package for executor role",
       "source": {
         "repo": "lybra",
-        "path": "agents/pi/skills"
+        "path": "agents/skills"
       },
       "target": {
         "harness": "pi",
@@ -71,7 +71,7 @@
       "description": "Lybra loop connector extension for auditor role",
       "source": {
         "repo": "lybra",
-        "path": "agents/pi/lybra-loop"
+        "path": "agents/harness/pi/lybra-loop"
       },
       "target": {
         "harness": "pi",
@@ -88,7 +88,7 @@
       "description": "Skills package for auditor role",
       "source": {
         "repo": "lybra",
-        "path": "agents/pi/skills"
+        "path": "agents/skills"
       },
       "target": {
         "harness": "pi",
@@ -108,7 +108,7 @@
       "description": "Lybra loop connector extension for advisor role",
       "source": {
         "repo": "lybra",
-        "path": "agents/pi/lybra-loop"
+        "path": "agents/harness/pi/lybra-loop"
       },
       "target": {
         "harness": "pi",
@@ -125,7 +125,7 @@
       "description": "Skills package for advisor role",
       "source": {
         "repo": "lybra",
-        "path": "agents/pi/skills"
+        "path": "agents/skills"
       },
       "target": {
         "harness": "pi",
@@ -145,7 +145,7 @@
       "description": "Role charter (contract) for executor role",
       "source": {
         "repo": "lybra",
-        "path": "agents/pi/charters/executor/AGENTS.md"
+        "path": "agents/roles/executor/AGENTS.md"
       },
       "target": {
         "harness": "pi",
@@ -163,7 +163,7 @@
       "description": "Role charter (contract) for auditor role",
       "source": {
         "repo": "lybra",
-        "path": "agents/pi/charters/auditor/AGENTS.md"
+        "path": "agents/roles/auditor/AGENTS.md"
       },
       "target": {
         "harness": "pi",
@@ -181,7 +181,7 @@
       "description": "Role charter (contract) for advisor role",
       "source": {
         "repo": "lybra",
-        "path": "agents/pi/charters/advisor/AGENTS.md"
+        "path": "agents/roles/advisor/AGENTS.md"
       },
       "target": {
         "harness": "pi",
