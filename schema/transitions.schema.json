@@ -1,439 +1,299 @@
 {
-  "schema_version": "1.0.0",
-  "description": "Lybra state machine transition table - declarative workflow for N0→N6 main flow + G1-G3 cross-cutting",
-  "last_updated": "2026-08-11",
-  "main_flow": {
-    "description": "Main task lifecycle nodes N0→N6 - unidirectional progression",
-    "nodes": [
-      {
-        "node_id": "N0",
-        "name": "publish",
-        "description": "Task creation and publication to pending queue",
-        "trigger": "planner or advisor",
-        "from_state": "draft",
-        "to_state": "pending",
-        "verb": "lybra_draft_publish",
-        "validation": [
-          "Schema validation against card.schema.json",
-          "Required fields check",
-          "Undefined/misspelled field detection",
-          "Enum value validation",
-          "Runtime fields forbidden in draft",
-          "Task ID uniqueness check"
-        ],
-        "outputs": [
-          "Task card moved to 5_tasks/queue/pending/",
-          "Publish record created"
-        ],
-        "records": {
-          "record_type": "publish",
-          "location": "5_tasks/records/publishes/<task_id>/publish_*.md",
-          "fields": ["record_type", "task_id", "actor", "timestamp", "draft_path", "published_path"]
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Lybra Task State Transitions Schema",
+  "description": "AIPOS-C3: 状态机守卫单一真相——转移=声明(前态+守卫+记录+后态),执行器只读声明。每一次门的拒绝与放行都能指回此 schema 里的一行。设计出处:2026-08-18-gate-c-refactor-four-roots.md(C3)",
+  "version": "1.0.0",
+  "nodes": {
+    "N0": {
+      "name": "publish",
+      "description": "草稿发布为正式任务卡",
+      "from_states": ["draft"],
+      "to_state": "pending",
+      "guards": {
+        "dependency_audit": {
+          "description": "依赖项必须有门生 PASS 裁决(禁 frontmatter 自证)",
+          "check": "all_dependencies_have_gate_pass_verdict",
+          "error_message": "依赖项缺少门生 PASS 裁决,禁止发布 (N0 依赖校验)"
         },
-        "next_trigger": "executor claims task (N1)",
-        "idempotent": false,
-        "notes": "Draft template generated from card.schema required fields"
+        "required_fields": {
+          "description": "必填字段由 card.schema 定义",
+          "check": "card_schema_validation",
+          "error_message": "任务卡字段不符合 card.schema"
+        }
       },
-      {
-        "node_id": "N1",
-        "name": "claim",
-        "description": "Task claim by executor",
-        "trigger": "executor agent",
-        "from_state": "pending",
-        "to_state": "claimed",
-        "verb": "lybra_queue_claim",
-        "context_return": {
-          "description": "Gate returns LoopContext fields on claim",
-          "fields": [
-            "project",
-            "workspace_root",
-            "code_repo",
-            "task_state",
-            "worktree"
-          ]
-        },
-        "checks": [
-          "Task is claimable (pending state)",
-          "Agent matches assigned_to (or claim_policy allows)",
-          "Held check by (project, instance) - no conflicting active claims",
-          "Policy allows claim (autonomy_mode, claim limits)"
-        ],
-        "outputs": [
-          "Task card moved to 5_tasks/queue/claimed/",
-          "Claim record created",
-          "Session record created",
-          "Task bound to session and worktree"
-        ],
-        "records": {
-          "record_type": "claim",
-          "location": "5_tasks/records/claims/<task_id>/claim_*.md",
-          "fields": ["record_type", "task_id", "claim_id", "actor", "agent_instance", "claimed_at", "autonomy_mode", "owner_policy_ref"]
-        },
-        "next_trigger": "executor completes work (N2→N3)",
-        "idempotent": true,
-        "notes": "Claim binds task to specific session and worktree"
+      "record": {
+        "type": "publish",
+        "location": "5_tasks/records/publishes/{task_id}/publish_{task_id}_{timestamp}_{actor}.md",
+        "required_fields": ["task_id", "actor", "published_at", "record_type"],
+        "gate_written_markers": ["record_type: publish", "published_at"]
       },
-      {
-        "node_id": "N2",
-        "name": "execute",
-        "description": "Task execution phase - executor performs work",
-        "trigger": "executor agent (in claimed session)",
-        "state": "claimed (no state change, work in progress)",
-        "progress_verb": "lybra_task_progress",
-        "materialization": {
-          "description": "Gate materializes context for executor",
-          "363F1": "Task card body and frontmatter",
-          "363F2": "Referenced files declared in card"
-        },
-        "controlled_write": {
-          "description": "Executor writes within declared scope",
-          "artifact_policy": "Determines write permissions",
-          "output_target": "Declares write scope"
-        },
-        "progress_reporting": [
-          "started - work begins",
-          "progress - intermediate updates",
-          "completed - work done",
-          "blocked - cannot proceed"
-        ],
-        "records": {
-          "record_type": "task_progress_event",
-          "location": "5_tasks/records/events/<task_id>/{started|progress|completed|blocked}_*.md",
-          "fields": ["record_type", "task_id", "event_type", "actor", "timestamp", "summary", "model_self_reported"]
-        },
-        "commit_requirement": "Executor must commit changes before return (commit-before-return)",
-        "next_trigger": "executor returns work (N3)",
-        "idempotent": "N/A (ongoing work phase)",
-        "notes": "This is the actual work phase, not a state transition node"
-      },
-      {
-        "node_id": "N3",
-        "name": "return",
-        "description": "Executor returns completed work",
-        "trigger": "executor agent",
-        "from_state": "claimed",
-        "to_state": "returned",
-        "verb": "lybra_queue_return",
-        "checks": [
-          "Task is claimed by returning agent",
-          "Commit check - changes are committed",
-          "Session is active"
-        ],
-        "outputs": [
-          "Task card moved to 5_tasks/queue/returned/",
-          "Return record created with completion notes and artifact refs",
-          "Session updated"
-        ],
-        "records": {
-          "record_type": "return",
-          "location": "5_tasks/records/returns/<task_id>/return_*.md",
-          "fields": ["record_type", "task_id", "return_id", "actor", "returned_at", "artifact_refs", "completion_summary", "performed_writes"]
-        },
-        "next_trigger": "audit dispatch (N4) or advisor review (non-code) or direct close (N6)",
-        "idempotent": true,
-        "recoverable": true,
-        "notes": "Return is idempotent - retry after failure produces clean re-recording"
-      },
-      {
-        "node_id": "N4",
-        "name": "audit",
-        "description": "Independent audit of completed work",
-        "trigger": "auditor agent (after audit_dispatch)",
-        "state": "returned (no state change during audit)",
-        "applies_to": "task_mode=code tasks only",
-        "skip_for": ["docs", "governance", "config"],
-        "audit_dispatch_verb": "lybra_audit_dispatch",
-        "audit_verdict_verb": "lybra_audit_verdict",
-        "flow": [
-          "Gate auto-generates audit task (R card)",
-          "Owner or owner-dispatch assigns auditor",
-          "Auditor claims R card",
-          "Auditor reviews work and submits verdict"
-        ],
-        "verdicts": [
-          {
-            "verdict": "PASS",
-            "description": "Work approved, proceed to finalize",
-            "next": "N5 finalize"
-          },
-          {
-            "verdict": "PASS_WITH_NOTES",
-            "description": "Work approved with advisory notes",
-            "next": "N5 finalize"
-          },
-          {
-            "verdict": "FAIL",
-            "description": "Work requires fixes",
-            "next": "Fix loop (max 2 iterations, then escalate to advisor)"
-          },
-          {
-            "verdict": "BLOCK",
-            "description": "Blocking issue, cannot proceed",
-            "next": "Escalate to owner/advisor"
-          },
-          {
-            "verdict": "WARN",
-            "description": "Warning issued, non-blocking",
-            "next": "Record warning, continue flow"
-          }
-        ],
-        "outputs": [
-          "Audit verdict record created"
-        ],
-        "records": {
-          "audit_dispatch": {
-            "record_type": "audit_dispatch",
-            "location": "5_tasks/records/audit_dispatches/<task_id>/dispatch_*.md",
-            "fields": ["record_type", "task_id", "audit_task_id", "dispatched_by", "dispatched_at", "auditor_assigned", "return_record_ref"]
-          },
-          "audit_verdict": {
-            "record_type": "audit_verdict",
-            "location": "5_tasks/records/audit_verdicts/<task_id>/verdict_*.md",
-            "fields": ["record_type", "task_id", "audit_task_id", "verdict", "verdict_id", "auditor", "verdict_at", "findings", "reviewed_executor_instance"]
-          }
-        },
-        "next_trigger": "PASS/PASS_WITH_NOTES → executor finalizes (N5); FAIL → fix loop; BLOCK → escalation",
-        "notes": "Non-code tasks skip N4, use advisor review instead (gate still records verdict)"
-      },
-      {
-        "node_id": "N5",
-        "name": "finalize",
-        "description": "Commit to product repo, push, and deploy",
-        "trigger": "executor agent (after PASS verdict)",
-        "prerequisite": "Audit verdict = PASS or PASS_WITH_NOTES (gate enforces via FND-14)",
-        "applies_to": "task_mode=code tasks only",
-        "skip_for": ["docs", "governance", "config"],
-        "verb": "lybra_finalize",
-        "actions": [
-          "Commit changes to product repo with precise pathspec (no add -A)",
-          "Push to remote repository",
-          "Deploy if deployment is specified",
-          "Update finalize status in task card"
-        ],
-        "safety_checks": [
-          "No cwd fallback (explicit paths only)",
-          "No add -A (precise pathspec from task)",
-          "Verify remote tracking branch",
-          "Deployment sanity checks"
-        ],
-        "outputs": [
-          "Product repo commit and push",
-          "Finalize record created",
-          "Deployment completed (if applicable)"
-        ],
-        "records": {
-          "finalization": {
-            "record_type": "finalization_record",
-            "location": "5_tasks/records/finalizations/<task_id>/finalization_*.md",
-            "fields": ["record_type", "task_id", "actor", "finalized_at", "commit", "authorization_type", "authorization_ref", "deployed", "deployment_record_ref"],
-            "required": true,
-            "description": "Finalization record must be written for every finalize operation, regardless of deployment"
-          },
-          "deployment": {
-            "record_type": "deployment_record",
-            "location": "5_tasks/records/deployments/<commit>/deployment_*.md",
-            "fields": ["record_type", "commit", "actor", "deployed_at", "authorization_type", "authorization_ref", "deployment_provenance"],
-            "required": false,
-            "description": "Deployment record is written only when actual deployment occurs; keyed by commit (cross-task)"
-          }
-        },
-        "next_trigger": "executor closes task (N6)",
-        "notes": "Non-code tasks skip N5, advisor review handles governance updates directly"
-      },
-      {
-        "node_id": "N6",
-        "name": "close",
-        "description": "Task closure and governance updates",
-        "trigger": "executor (automatic when closure evidence complete) or advisor",
-        "from_state": "returned or completed",
-        "to_state": "completed",
-        "verb": "lybra_queue_close",
-        "phases": [
-          {
-            "phase": "closure_record",
-            "description": "Create closure record with evidence",
-            "evidence_required": true
-          },
-          {
-            "phase": "governance_updates",
-            "description": "Update governance documents",
-            "updates": [
-              {
-                "file": "governance/decision_log.md",
-                "action": "append",
-                "description": "Append task completion to decision log"
-              },
-              {
-                "file": "governance/project_status.md",
-                "action": "update",
-                "description": "Update project status (if relevant sections exist)"
-              },
-              {
-                "file": "governance/roadmap.md",
-                "action": "update",
-                "description": "Update roadmap (if milestones affected)"
-              },
-              {
-                "file": "stage_archive/{stage}/",
-                "action": "archive",
-                "description": "Stage archive (on stage completion boundary)",
-                "condition": "stage_completion"
-              }
-            ]
-          },
-          {
-            "phase": "task_archive",
-            "description": "Archive task card",
-            "action": "Move task card to 5_tasks/queue/completed/{task_id}.md"
-          },
-          {
-            "phase": "governance_push",
-            "description": "Push governance repo changes",
-            "action": "git push governance repo",
-            "critical": true,
-            "notes": "Push is part of N6 node (lesson from 2026-08-11: commit without push = incomplete closure)"
-          }
-        ],
-        "automation": "Auto-advances when closure evidence is complete (證據齊→自動推進)",
-        "outputs": [
-          "Task card in 5_tasks/queue/completed/",
-          "Closure record created",
-          "Governance documents updated",
-          "Governance repo pushed to remote"
-        ],
-        "records": {
-          "record_type": "closure",
-          "location": "5_tasks/records/closures/<task_id>/closure_*.md",
-          "fields": ["record_type", "task_id", "closed_by", "closed_at", "closure_evidence_ref", "governance_commit_hash"]
-        },
-        "idempotent": true,
-        "notes": "N6 includes full governance reconciliation - fixed update list in config.schema"
-      }
-    ]
-  },
-  "task_mode_routing": {
-    "description": "Task workflow routing based on task_mode field",
-    "routes": {
-      "code": {
-        "description": "Code implementation tasks",
-        "flow": "N0 → N1 → N2 → N3 → N4 (independent audit) → N5 (finalize) → N6 (close)",
-        "audit": "Independent audit required (N4)",
-        "finalize": "Commit/push to product repo (N5)"
-      },
-      "docs": {
-        "description": "Documentation tasks",
-        "flow": "N0 → N1 → N2 → N3 → advisor_review → N6 (close)",
-        "audit": "Advisor review replaces N4",
-        "skip_nodes": ["N4", "N5"],
-        "notes": "Advisor review verdict recorded via gate (gate落record), preserves audit trail"
-      },
-      "governance": {
-        "description": "Governance document tasks",
-        "flow": "N0 → N1 → N2 → N3 → advisor_review → N6 (close)",
-        "audit": "Advisor review replaces N4",
-        "skip_nodes": ["N4", "N5"],
-        "notes": "Direct governance updates, advisor must not audit own work"
-      },
-      "config": {
-        "description": "Configuration tasks",
-        "flow": "N0 → N1 → N2 → N3 → advisor_review → N6 (close)",
-        "audit": "Advisor review replaces N4",
-        "skip_nodes": ["N4", "N5"],
-        "notes": "Config changes reviewed by advisor, skip independent audit"
+      "automation": {
+        "queue_placement": "moves card to 5_tasks/queue/pending/",
+        "frontmatter_update": "status: pending"
       }
     },
-    "advisor_review_rules": [
-      "Advisor review for docs/governance/config is equivalent to independent audit for accountability",
-      "Advisor verdict still recorded via gate (not verbal, not manual notes)",
-      "Card header audit: required can force independent audit even for non-code",
-      "Advisor cannot audit own executed work (that escalates to Owner or independent auditor)",
-      "Advisor review maintains second-pair-of-eyes principle"
-    ]
-  },
-  "cross_cutting": {
-    "description": "Cross-cutting concerns G1-G3 - not tied to specific nodes, span entire lifecycle",
-    "g1_owner_gate": {
-      "name": "Owner Gate",
-      "description": "Owner confirmation and verification gates",
-      "applies_to": "All operations requiring owner approval",
-      "triggers": [
-        "Supervised autonomy_mode claim/return confirm",
-        "owner_verify=true tasks (after PASS, before finalize)",
-        "Owner veto (any time)"
-      ],
-      "verbs": [
-        "lybra_owner_decision",
-        "owner confirmation on claim_confirm/return_confirm"
-      ],
-      "rules": [
-        "Owner confirm scope separate from operation scope",
-        "Executor cannot self-confirm (even with OWNER_CONFIRMED literal)",
-        "Owner veto available at any point in lifecycle",
-        "Owner decisions recorded via gate"
-      ]
-    },
-    "g2_maintenance": {
-      "name": "Maintenance Verbs",
-      "description": "Queue maintenance operations",
-      "verbs": [
-        {
-          "verb": "lybra_queue_withdraw",
-          "description": "Withdraw task from queue (any state)",
-          "non_blocking_warn": true,
-          "preserves_records": true,
-          "notes": "Malformed/legacy tasks can always be withdrawn"
+    "N1": {
+      "name": "claim",
+      "description": "认领任务(executor 取任务进入执行)",
+      "from_states": ["pending"],
+      "to_state": "claimed",
+      "guards": {
+        "claim_policy": {
+          "description": "claim_policy 字段控制谁能认领",
+          "check": "claim_policy_authorization",
+          "error_message": "claim_policy 拒绝:不符合认领授权条件"
         },
-        {
-          "verb": "lybra_queue_amend",
-          "description": "Amend pending task metadata/body",
-          "constraint": "Only pending tasks",
-          "preserves_history": true
-        },
-        {
-          "verb": "lybra_task_reopen",
-          "description": "Reopen completed/blocked task",
-          "constraint": "Requires reason and owner approval"
+        "no_active_claim": {
+          "description": "任务不能被重复认领",
+          "check": "no_existing_active_claim",
+          "error_message": "任务已被认领,禁止重复认领"
         }
-      ],
-      "warn_behavior": "Non-blocking WARN never consumes tokens, never blocks operations"
+      },
+      "record": {
+        "type": "claim",
+        "location": "5_tasks/records/claims/{task_id}/claim_{task_id}_{timestamp}_{agent_instance}.md",
+        "required_fields": ["claim_id", "task_id", "agent_instance", "claimed_at", "record_type"],
+        "gate_written_markers": ["record_type: claim", "claimed_at", "claim_id"]
+      },
+      "automation": {
+        "queue_placement": "moves card to 5_tasks/queue/claimed/",
+        "frontmatter_update": "status: claimed, claimed_by: <agent_instance>, claimed_at: <timestamp>, claim_id: <claim_id>"
+      }
     },
-    "g3_derivation_dispatch": {
-      "name": "Derivation and Dispatch",
-      "description": "Task derivation and audit dispatch",
-      "operations": [
-        {
-          "operation": "audit_derivation",
-          "description": "Gate mechanically derives R card from parent task",
-          "trigger": "Task return (N3)",
-          "applies_to": "task_mode=code only",
-          "notes": "Auto-generated audit tasks never enter queue (direct assignment)"
-        },
-        {
-          "operation": "audit_dispatch",
-          "description": "Owner-dispatch assigns auditor to R card",
-          "trigger": "Manual dispatch by owner or owner-dispatch role",
-          "verb": "lybra_audit_dispatch"
+    "N2": {
+      "name": "return",
+      "description": "执行者归还任务(executor 交回工作)",
+      "from_states": ["claimed"],
+      "to_state": "returned",
+      "guards": {
+        "valid_claimer": {
+          "description": "只有当前 claimer 可以 return",
+          "check": "actor_matches_current_claimer",
+          "error_message": "只有任务的当前 claimer 可以 return"
         }
-      ]
+      },
+      "record": {
+        "type": "return",
+        "location": "5_tasks/records/returns/{task_id}/return_{task_id}_{timestamp}_{agent_instance}.md",
+        "required_fields": ["task_id", "agent_instance", "returned_at", "record_type", "return_status"],
+        "gate_written_markers": ["record_type: return", "returned_at"]
+      },
+      "automation": {
+        "queue_placement": "stays in claimed/ (awaiting audit)",
+        "frontmatter_update": "adds return_record_ref"
+      }
+    },
+    "N3": {
+      "name": "audit_dispatch",
+      "description": "派发审计任务",
+      "from_states": ["returned"],
+      "to_state": "audit_dispatched",
+      "guards": {
+        "has_return_record": {
+          "description": "必须有 return 记录",
+          "check": "return_record_exists",
+          "error_message": "缺少 return 记录,无法派发审计"
+        }
+      },
+      "record": {
+        "type": "audit_dispatch",
+        "location": "5_tasks/records/audit_dispatches/{task_id}/dispatch_{task_id}_{timestamp}_{actor}.md",
+        "required_fields": ["dispatch_id", "reviewed_task_id", "audit_task_id", "dispatched_at", "record_type"],
+        "gate_written_markers": ["record_type: audit_dispatch", "dispatched_at", "dispatch_id"]
+      },
+      "automation": {
+        "creates_audit_card": "生成 {task_id}R 审计任务卡",
+        "places_in_queue": "5_tasks/queue/pending/ (审计卡)"
+      }
+    },
+    "N4": {
+      "name": "audit_verdict",
+      "description": "审计裁决(auditor 提交审计结果)",
+      "from_states": ["audit_dispatched"],
+      "to_state": "verdict_issued",
+      "guards": {
+        "auditor_role": {
+          "description": "必须是 auditor 角色",
+          "check": "role_is_auditor",
+          "error_message": "只有 auditor 角色可以提交裁决"
+        },
+        "has_audit_dispatch": {
+          "description": "必须有审计派发记录",
+          "check": "audit_dispatch_exists",
+          "error_message": "缺少审计派发记录,无法提交裁决"
+        }
+      },
+      "record": {
+        "type": "audit_verdict",
+        "location": "5_tasks/records/audit_verdicts/{reviewed_task_id}/verdict_{reviewed_task_id}_{timestamp}_{auditor_instance}.md",
+        "required_fields": ["verdict_id", "verdict", "reviewed_task_id", "auditor_instance", "verdict_at", "record_type"],
+        "gate_written_markers": ["record_type: audit_verdict_record", "verdict_at", "verdict_id"],
+        "allowed_verdict_values": ["PASS", "PASS_WITH_NOTES", "FAIL", "BLOCK"]
+      },
+      "automation": {
+        "on_PASS": "允许 finalize (N5)",
+        "on_FAIL": "自动派生复审卡 (N3 复用,大项C⑤)",
+        "frontmatter_update": "reviewed task 的 dependency_audit_status"
+      },
+      "completion_check": {
+        "description": "审计车道的完成判据:verdict 记录已落库",
+        "check": "verdict_record_exists_in_records_dir"
+      }
+    },
+    "N5": {
+      "name": "finalize",
+      "description": "结算(commit + push + deploy 到生产)",
+      "from_states": ["verdict_issued"],
+      "to_state": "finalized",
+      "guards": {
+        "has_pass_verdict": {
+          "description": "必须有门生 PASS 或 PASS_WITH_NOTES 裁决",
+          "check": "latest_gate_verdict_is_pass",
+          "allowed_verdict_values": ["PASS", "PASS_WITH_NOTES"],
+          "error_message": "最新门生裁决不是 PASS,无法 finalize"
+        },
+        "verdict_record_authentic": {
+          "description": "裁决记录必须是门生(非手写),具备 record_type: audit_verdict_record 等机器特征",
+          "check": "verdict_record_has_gate_markers",
+          "gate_markers": ["record_type: audit_verdict_record", "verdict_id", "verdict_at"],
+          "error_message": "裁决记录缺少门生标记,疑似手写,拒绝 finalize"
+        },
+        "deployment_authorization": {
+          "description": "部署授权:verdict_ref(审计授权) 或 dev_override(开发覆盖,需 reason)",
+          "check": "has_valid_deployment_authorization",
+          "authorization_types": ["verdict_ref", "dev_override"],
+          "error_message": "缺少部署授权 (verdict_ref 或 dev_override --reason)"
+        },
+        "commit_coverage": {
+          "description": "区间校验:current..HEAD 每个 commit 都属已 PASS 的卡",
+          "check": "all_commits_have_pass_verdict",
+          "error_message": "区间内存在未审 commit,拒绝部署"
+        },
+        "no_dev_override_base": {
+          "description": "禁止在 dev_override 部署上结算",
+          "check": "current_deployment_not_dev_override",
+          "error_message": "当前部署 provenance=dev_override,finalize 拒绝在其上结算"
+        }
+      },
+      "record": {
+        "type": "finalization",
+        "location": "5_tasks/records/finalizations/{task_id}/finalization_{task_id}_{timestamp}_{actor}.md",
+        "required_fields": ["task_id", "actor", "commit", "finalized_at", "authorization_type", "authorization_ref", "record_type"],
+        "gate_written_markers": ["record_type: finalization", "finalized_at"]
+      },
+      "deployment_record": {
+        "type": "deployment",
+        "location": "5_tasks/records/deployments/deployment_{timestamp}_{commit_short}.md",
+        "required_fields": ["commit", "actor", "deployed_at", "authorization_type", "authorization_ref", "deployment_provenance", "record_type"],
+        "gate_written_markers": ["record_type: deployment", "deployed_at"],
+        "deployment_provenance_values": ["audited", "dev_override"]
+      },
+      "automation": {
+        "git_operations": "commit (产品仓) + push",
+        "lybra_deploy": "调用 lybra-deploy --verdict-ref <verdict_id>",
+        "deployment_verification": "断言 .deploy/current/VERSION git_commit == HEAD"
+      }
+    },
+    "N6": {
+      "name": "close",
+      "description": "任务结案(归档到 completed)",
+      "from_states": ["finalized", "verdict_issued"],
+      "to_state": "completed",
+      "guards": {
+        "has_closure_authorization": {
+          "description": "需要 owner 或授权角色",
+          "check": "actor_has_close_scope",
+          "error_message": "缺少 close 权限"
+        }
+      },
+      "record": {
+        "type": "closure",
+        "location": "5_tasks/records/closures/{task_id}/closure_{task_id}_{timestamp}_{actor}.md",
+        "required_fields": ["task_id", "actor", "closed_at", "record_type"],
+        "gate_written_markers": ["record_type: closure", "closed_at"]
+      },
+      "automation": {
+        "queue_placement": "moves card to 5_tasks/queue/completed/",
+        "frontmatter_update": "status: completed, closed_at: <timestamp>"
+      }
+    },
+    "reopen": {
+      "name": "reopen",
+      "description": "重新打开已关闭任务(大项C②:完整回 pending 或原地重开,禁中间态)",
+      "from_states": ["completed", "claimed"],
+      "to_state": "pending_or_claimed",
+      "guards": {
+        "owner_authorization": {
+          "description": "只有 owner 可以 reopen",
+          "check": "actor_is_owner",
+          "error_message": "只有 owner 可以 reopen 任务"
+        }
+      },
+      "modes": {
+        "full_reset": {
+          "description": "完整回 pending:移回 pending/ + 清空 claim 字段",
+          "to_state": "pending",
+          "automation": {
+            "queue_placement": "moves to 5_tasks/queue/pending/",
+            "frontmatter_update": "status: pending, 清空 claimed_by/claimed_at/claim_id"
+          }
+        },
+        "resume_claim": {
+          "description": "原地重开:保留 claim,状态回 claimed",
+          "to_state": "claimed",
+          "automation": {
+            "queue_placement": "moves to 5_tasks/queue/claimed/",
+            "frontmatter_update": "status: claimed, 保留 claimed_by/claimed_at/claim_id"
+          }
+        }
+      },
+      "record": {
+        "type": "reopen",
+        "location": "5_tasks/records/events/{task_id}/reopen_{task_id}_{timestamp}_{actor}.md",
+        "required_fields": ["task_id", "actor", "reopened_at", "reopen_mode", "record_type"],
+        "gate_written_markers": ["record_type: reopen", "reopened_at"]
+      }
     }
   },
-  "idempotency_guarantees": {
-    "description": "Idempotency and retry behavior for all nodes",
-    "rules": {
-      "N0_publish": "Not idempotent - duplicate task_id blocked at validation",
-      "N1_claim": "Idempotent - re-claim same task by same agent safe",
-      "N2_execute": "N/A (ongoing work, not a transaction)",
-      "N3_return": "Idempotent - retry produces clean re-recording",
-      "N4_audit": "Idempotent - re-submit verdict safe",
-      "N5_finalize": "Idempotent - re-finalize checks existing commit/push",
-      "N6_close": "Idempotent - re-close safe, governance updates merge"
+  "record_authenticity": {
+    "description": "门生记录的机器特征,用于区分门生记录与手写文件",
+    "gate_markers": {
+      "common": ["record_type", "timestamp或{event}_at字段"],
+      "claim": ["claim_id", "claimed_at", "record_type: claim"],
+      "return": ["returned_at", "record_type: return"],
+      "audit_dispatch": ["dispatch_id", "dispatched_at", "record_type: audit_dispatch"],
+      "audit_verdict": ["verdict_id", "verdict_at", "record_type: audit_verdict_record"],
+      "finalization": ["finalized_at", "record_type: finalization"],
+      "deployment": ["deployed_at", "record_type: deployment"],
+      "closure": ["closed_at", "record_type: closure"]
     },
-    "general_principle": "All state transitions are idempotent and recoverable - retry after failure is safe"
+    "rejection_policy": "手写文件(缺少门生标记)必须被忽略并 warn,绝不参与状态判定"
   },
-  "state_gaps": {
-    "description": "Completeness check - no unreachable states",
-    "coverage": "All queue states reachable via declared transitions",
-    "unreachable_states": [],
-    "notes": "Any gap here = visible hole in schema, not runtime surprise"
+  "state_consistency": {
+    "description": "卡状态三方一致性 lint (大项C①)",
+    "three_sources": [
+      "队列目录 (5_tasks/queue/{pending|claimed|completed}/)",
+      "frontmatter status 字段",
+      "records 目录最新记录推导的状态"
+    ],
+    "lint_checks": [
+      "completed 卡必须有 closure 记录,否则 = 断层",
+      "claimed 卡必须有 claim 记录且 status=claimed,否则 = 断层",
+      "pending 卡 status 不应是 claimed/completed,否则 = 断层"
+    ],
+    "repair_verb": {
+      "name": "lybra state repair",
+      "description": "大项C③:输入 task_id,门按 records 重建卡的一致状态",
+      "operation": "读 records 推导真实状态 → 修正 frontmatter + 移动队列目录"
+    }
+  },
+  "meta": {
+    "schema_authority": "本文件是状态机域的唯一真相。门的每次拒绝/放行/落记录都指回此 schema。",
+    "design_source": "governance/decision_log/2026-08/2026-08-18-gate-c-refactor-four-roots.md (C3)",
+    "related_schemas": [
+      "card.schema.json (卡字段定义)",
+      "enums.schema.json (record_type 等枚举)",
+      "config.schema.json (治理目录树路径)"
+    ]
   }
 }

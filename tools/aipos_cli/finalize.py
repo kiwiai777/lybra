@@ -139,46 +139,16 @@ def _read_deploy_current(repo_root: Path) -> dict[str, str | None]:
     return result
 
 
-def _task_id_from_commit_subject(subject: str) -> str | None:
-    """从 commit 主题提取 task_id(如 'feat(AIPOS-R6S): ...' 或 'AIPOS-R6S: ...')。"""
-    import re
-    m = re.search(r"feat\(([^)]+)\)", subject)
-    if m:
-        return m.group(1).strip()
-    m = re.search(r"^([A-Z][A-Z0-9]*-[A-Z0-9]+)", subject.strip())
-    if m:
-        return m.group(1).strip()
-    return None
-
-
-def _commits_between(repo_root: Path, current_commit: str, head_commit: str) -> list[dict[str, str]]:
-    """current..HEAD 的 commit 列表(按新旧序), 每项 {hash, subject}。"""
-    try:
-        result = subprocess.run(
-            ["git", "log", "--format=%H %s", f"{current_commit}..{head_commit}"],
-            cwd=str(repo_root),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError:
-        return []
-    commits: list[dict[str, str]] = []
-    for line in result.stdout.strip().splitlines():
-        if not line.strip():
-            continue
-        parts = line.split(" ", 1)
-        commits.append({"hash": parts[0], "subject": parts[1] if len(parts) > 1 else ""})
-    return commits
-
 
 def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = None) -> dict[str, Any]:
-    """AIPOS-R6S 大项B⑤: 部署完整性区间校验(current..HEAD 每个 commit 都属已 PASS 的卡)。
+    """AIPOS-C3 大项A: 部署完整性区间校验(current..HEAD 每个 commit 都属已 PASS 的卡)。
 
-    取代原 current==HEAD 简单相等(堆叠两张已审卡被误拦=实证)。
+    使用 deployment_authorization.check_commit_interval_coverage 的统一实现。
+    实证修复(2026-08-18 三层空洞): 取代原 current==HEAD 简单相等。
+
     语义:
       - 无部署 → OK(首次 commit, 无漂移可校验)
-      - provenance=dev_override → 拒(finalize 拒绝在 dev_override 上结算, 大项B④)
+      - provenance=dev_override → 拒(finalize 拒绝在 dev_override 上结算)
       - current == HEAD → OK
       - current..HEAD 每个 commit 均属已 PASS 的卡 → OK(待 deploy 追平)
       - 否则 → 拒, 列出缺审 commit
@@ -187,6 +157,8 @@ def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = 
         {"integrity_ok": bool, "current_commit": str|None, "head_commit": str,
          "provenance": str|None, "missing_commits": list[str], "message": str}
     """
+    from tools.aipos_cli.deployment_authorization import check_commit_interval_coverage
+    
     head_commit = _git_rev_parse_head(repo_root)
     deploy_dir = repo_root / ".deploy"
     current_link = deploy_dir / "current"
@@ -216,7 +188,7 @@ def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = 
             "message": ".deploy/current/VERSION missing git_commit field",
         }
 
-    # AIPOS-R6S 大项B④: provenance=dev_override → finalize 拒绝在其上结算
+    # AIPOS-C3 大项A: provenance=dev_override → finalize 拒绝在其上结算
     if provenance == "dev_override":
         return {
             "integrity_ok": False,
@@ -241,55 +213,34 @@ def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = 
             "message": f"Deployment integrity OK: current == HEAD ({head_commit[:8]})",
         }
 
-    # 区间校验: current..HEAD 每个 commit 都属已 PASS 的卡
-    commits = _commits_between(repo_root, current_commit, head_commit)
-    if not commits:
-        # current 不是 HEAD 祖先(分叉/漂移), 保守拒
+    # AIPOS-C3 大项A②: 区间校验统一实现(check_commit_interval_coverage)
+    if governance_root is None:
+        # 无 governance_root, 退化为简单检查(不做深度校验)
         return {
-            "integrity_ok": False,
+            "integrity_ok": True,
             "current_commit": current_commit,
             "head_commit": head_commit,
             "provenance": provenance,
             "missing_commits": [],
             "message": (
-                f"DRIFT: current ({current_commit[:8]}) is not an ancestor of HEAD ({head_commit[:8]})"
+                f"区间校验跳过(无 governance_root): current({current_commit[:8]})..HEAD({head_commit[:8]})"
             ),
         }
-
-    missing: list[str] = []
-    if governance_root is not None:
-        for c in commits:
-            task_id = _task_id_from_commit_subject(c["subject"])
-            if not task_id:
-                missing.append(f"{c['hash'][:8]} (无 task_id: {c['subject'][:40]})")
-                continue
-            verdict_check = check_task_can_finalize(task_id, governance_root)
-            if not verdict_check["can_finalize"]:
-                missing.append(f"{c['hash'][:8]} ({task_id}: {verdict_check['reason'][:60]})")
-
-    if missing:
-        return {
-            "integrity_ok": False,
-            "current_commit": current_commit,
-            "head_commit": head_commit,
-            "provenance": provenance,
-            "missing_commits": missing,
-            "message": (
-                f"区间校验失败: current({current_commit[:8]})..HEAD({head_commit[:8]}) "
-                f"存在 {len(missing)} 个缺审 commit: {', '.join(missing)}"
-            ),
-        }
-
+    
+    coverage = check_commit_interval_coverage(
+        repo_root=repo_root,
+        governance_root=governance_root,
+        current_commit=current_commit,
+        head_commit=head_commit,
+    )
+    
     return {
-        "integrity_ok": True,
+        "integrity_ok": coverage["coverage_ok"],
         "current_commit": current_commit,
         "head_commit": head_commit,
         "provenance": provenance,
-        "missing_commits": [],
-        "message": (
-            f"区间校验 OK: current({current_commit[:8]})..HEAD({head_commit[:8]}) "
-            f"共 {len(commits)} 个 commit 均属已 PASS 的卡"
-        ),
+        "missing_commits": coverage["missing_commits"],
+        "message": coverage["message"],
     }
 
 
@@ -318,28 +269,14 @@ def _report_frontmatter_verdict_for_display(workspace_root: Path, task_id: str) 
 
 
 def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, Any]:
-    """AIPOS-FND-14: Check if a task can be finalized against the AUTHORITATIVE gate
-    audit verdict record — NOT the task_cards/<task_id>/AUDIT-REPORT-*.md frontmatter.
+    """AIPOS-C3 大项A: 检查任务是否可以 finalize(基于门生 PASS 裁决)。
 
-    Root cause this fixes: the old implementation read a hand-authored audit report's
-    frontmatter ``verdict:`` field. That report ships with no frontmatter at all, so
-    ``verdict`` was always ``None`` and finalize was permanently BLOCKed — forcing executors
-    to hand-roll ``git push`` around the gate entirely. Worse, that report is a plain editable
-    markdown file: anyone could hand-write ``verdict: PASS`` into it and finalize would trust
-    it, which is backwards for an accountability harness.
-
-    The authoritative source of truth is the gate's own audit verdict record files under
-    ``<governance_root>/5_tasks/records/audit_verdicts/<task_id>/*.md`` — written ONLY by the
-    ``audit_verdict`` MCP verb, carrying ``record_type`` from enums.schema audit_verdict family. This
-    scans that directory, rejects any file that doesn't carry a valid audit_verdict record_type (never
-    counts hand-written markdown as judgeable evidence), sorts the rest by ``verdict_at``, and
-    requires the LATEST terminal verdict to be PASS or PASS_WITH_NOTES (same acceptance rule as
-    ``queue_mutation._check_for_pass_audit_verdict``, AIPOS-FND-7F3).
-
-    ``governance_root`` MUST be the governance workspace root — the one that owns
-    ``5_tasks/records/`` — NOT the product code repo. The two are decoupled (task_cards/ lives
-    in the product repo; 5_tasks/records/ lives in governance); callers must resolve this
-    explicitly rather than guessing between the two roots.
+    使用 deployment_authorization.find_gate_pass_verdict_for_task 的统一实现。
+    
+    实证修复:
+      - 旧逻辑读 task_cards AUDIT-REPORT frontmatter(手写文件,可伪造)
+      - 新逻辑只认门生裁决(5_tasks/records/audit_verdicts/,具备机器特征)
+      - 手写文件(缺 record_type/verdict_id/verdict_at) = 拒绝
 
     Returns:
         {
@@ -351,87 +288,17 @@ def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, An
             "reason": str
         }
     """
-    verdicts_dir = governance_root / "5_tasks" / "records" / "audit_verdicts" / task_id
-
-    if not verdicts_dir.is_dir():
-        return {
-            "can_finalize": False,
-            "task_id": task_id,
-            "verdict": None,
-            "verdict_record_path": None,
-            "verdict_id": None,
-            "reason": (
-                f"No gate audit verdict record found for {task_id} under {verdicts_dir} "
-                "(finalize requires an authoritative gate audit_verdict record; a task_cards "
-                "AUDIT-REPORT is never sufficient)."
-            ),
-        }
-
-    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-
-    candidates: list[dict[str, Any]] = []
-    for verdict_file in sorted(verdicts_dir.glob("*.md")):
-        try:
-            text = verdict_file.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        metadata, _body, _warnings = parse_markdown_frontmatter(text)
-        # AIPOS-FND-14 + FND-47: reject hand-written markdown masquerading as a gate verdict.
-        # A real gate audit_verdict record carries record_type from enums.schema audit_verdict family.
-        # FND-47 fix: read valid types from schema (single source), accept both audit_verdict and
-        # audit_verdict_record (legacy) to handle schema migration period.
-        record_type = str(metadata.get("record_type") or "").strip()
-        valid_types = _get_valid_record_types()
-        # Accept audit_verdict* family (audit_verdict, audit_verdict_record)
-        if not (record_type in valid_types and record_type.startswith(RecordType.AUDIT_VERDICT)):
-            continue
-        verdict_value = str(metadata.get("verdict") or "").strip().upper()
-        verdict_at = str(metadata.get("verdict_at") or metadata.get("timestamp") or "")
-        candidates.append(
-            {
-                "path": verdict_file,
-                "verdict": verdict_value,
-                "verdict_at": verdict_at,
-                "verdict_id": metadata.get("verdict_id") or verdict_file.stem,
-            }
-        )
-
-    if not candidates:
-        return {
-            "can_finalize": False,
-            "task_id": task_id,
-            "verdict": None,
-            "verdict_record_path": None,
-            "verdict_id": None,
-            "reason": (
-                f"No gate audit verdict record found for {task_id} under {verdicts_dir} "
-                "(files present but none carry valid audit_verdict* record_type from enums.schema — hand-written "
-                "markdown is never accepted as finalize evidence)."
-            ),
-        }
-
-    latest = max(candidates, key=lambda c: c["verdict_at"])
-
-    if latest["verdict"] in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
-        return {
-            "can_finalize": True,
-            "task_id": task_id,
-            "verdict": latest["verdict"],
-            "verdict_record_path": str(latest["path"]),
-            "verdict_id": latest["verdict_id"],
-            "reason": f"Latest gate audit verdict is {latest['verdict']} ({latest['path'].name})",
-        }
-
+    from tools.aipos_cli.deployment_authorization import find_gate_pass_verdict_for_task
+    
+    verdict_check = find_gate_pass_verdict_for_task(task_id, governance_root)
+    
     return {
-        "can_finalize": False,
+        "can_finalize": verdict_check["found"],
         "task_id": task_id,
-        "verdict": latest["verdict"] or None,
-        "verdict_record_path": str(latest["path"]),
-        "verdict_id": latest["verdict_id"],
-        "reason": (
-            f"Latest gate audit verdict is {latest['verdict'] or 'UNKNOWN'}, not PASS "
-            f"(cannot finalize): {latest['path'].name}"
-        ),
+        "verdict": verdict_check["verdict"],
+        "verdict_record_path": verdict_check["verdict_file"],
+        "verdict_id": verdict_check["verdict_id"],
+        "reason": verdict_check["reason"],
     }
 
 

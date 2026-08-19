@@ -120,9 +120,11 @@ def invoke_lybra_deploy(
     dev_override: bool = False,
     reason: str | None = None,
     actor: str | None = None,
+    governance_root: Path | None = None,
 ) -> dict[str, Any]:
     """调用 lybra-deploy 脚本执行部署。
     
+    AIPOS-C3 大项A: 新增 verdict_ref 校验 — 裁决必须真实存在(门生)且覆盖待部署 commit。
     AIPOS-FINALIZE-FIX-1: 脚本路径从产品仓根解析 (repo_root / "tools" / "lybra-deploy"),
     禁止依赖 cwd 猜测。config.schema 定义此路径为标准位置。
 
@@ -135,6 +137,7 @@ def invoke_lybra_deploy(
         dev_override: 未审 dev 部署
         reason: dev_override 的显式理由
         actor: 执行部署的 actor
+        governance_root: 治理工作区根(用于 verdict_ref 校验),None 则从 connection.json 解析
     
     Returns:
         {
@@ -154,6 +157,86 @@ def invoke_lybra_deploy(
             "stderr": f"lybra-deploy script not found at expected location: {deploy_script} (resolved from repo_root={repo_root})",
             "returncode": 1,
         }
+
+    # AIPOS-C3 大项A③: verdict_ref 授权校验(门生真实性 + commit 覆盖)
+    if verdict_ref:
+        # 解析 governance_root
+        if governance_root is None:
+            from tools.aipos_cli.workspace_config import resolve_workspace_root
+            try:
+                governance_root = resolve_workspace_root()
+            except FileNotFoundError as e:
+                return {
+                    "success": False,
+                    "stdout": "",
+                    "stderr": f"Cannot resolve governance_root for verdict_ref validation: {e}",
+                    "returncode": 2,
+                }
+        
+        # 获取待部署的 commit 列表(current..HEAD)
+        try:
+            current_result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(repo_root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            head_commit = current_result.stdout.strip()
+            
+            # 读取 .deploy/current/VERSION 的 git_commit
+            version_file = repo_root / ".deploy" / "current" / "VERSION"
+            current_commit = None
+            if version_file.exists():
+                for line in version_file.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("git_commit:"):
+                        current_commit = line.split(":", 1)[1].strip()
+                        break
+            
+            commits_to_deploy: list[str] = []
+            if current_commit and current_commit != head_commit:
+                # 有部署漂移,获取 current..HEAD 的 commit 列表
+                commits_result = subprocess.run(
+                    ["git", "log", "--format=%H", f"{current_commit}..{head_commit}"],
+                    cwd=str(repo_root),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                commits_to_deploy = [c.strip() for c in commits_result.stdout.strip().splitlines() if c.strip()]
+            else:
+                # 首次部署或 current==HEAD,待部署的只有 HEAD
+                commits_to_deploy = [head_commit]
+        except subprocess.CalledProcessError as e:
+            return {
+                "success": False,
+                "stdout": "",
+                "stderr": f"Failed to determine commits to deploy: {e}",
+                "returncode": 2,
+            }
+        
+        # 校验 verdict_ref 覆盖所有待部署 commit
+        from tools.aipos_cli.deployment_authorization import check_verdict_ref_authorization
+        
+        auth_check = check_verdict_ref_authorization(
+            verdict_ref=verdict_ref,
+            governance_root=governance_root,
+            commits_to_deploy=commits_to_deploy,
+            repo_root=repo_root,
+        )
+        
+        if not auth_check["authorized"]:
+            uncovered_detail = ""
+            if auth_check["uncovered_commits"]:
+                uncovered_detail = "\n未覆盖的 commit:\n  " + "\n  ".join(auth_check["uncovered_commits"][:5])
+                if len(auth_check["uncovered_commits"]) > 5:
+                    uncovered_detail += f"\n  ... 及 {len(auth_check['uncovered_commits']) - 5} 个更多"
+            return {
+                "success": False,
+                "stdout": "",
+                "stderr": f"verdict_ref 授权校验失败: {auth_check['message']}{uncovered_detail}",
+                "returncode": 2,
+            }
 
     # AIPOS-R6S 大项B②: 组装授权参数(缺授权即拒由脚本执行)
     from tools.aipos_cli.deployment_record import resolve_authorization
@@ -175,6 +258,8 @@ def invoke_lybra_deploy(
         argv += ["--dev-override", "--reason", auth_ref]
     if actor:
         argv += ["--actor", actor]
+    if governance_root:
+        argv += ["--governance-root", str(governance_root)]
     
     try:
         # AIPOS-FINALIZE-FIX-1: cwd 设为产品仓根,确保脚本在正确上下文执行
