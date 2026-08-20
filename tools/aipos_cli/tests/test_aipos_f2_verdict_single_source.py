@@ -190,6 +190,28 @@ class TestRecordsFiltering(unittest.TestCase):
         hw_warnings = records.get("hand_written_verdict_warnings", [])
         self.assertEqual(len(hw_warnings), 0)
 
+    def test_hand_written_pass_does_not_lock_overturn(self):
+        """AIPOS-F12 大项A 验收①: 手写 PASS 不构成终态, overturn 检查不被锁。
+
+        board_adapter 的 overturn/终态锁检查读 load_records 的 task_audit_verdicts
+        (F2 过滤后), 手写件对此透明。此处按源码同一谓词验证: 手写 PASS 在场时
+        不存在『已有终端 PASS』。
+        """
+        from tools.aipos_cli.records import load_records
+
+        verdicts_dir = self.tmpdir / "5_tasks" / "records" / "audit_verdicts" / "AIPOS-TEST-7"
+        verdicts_dir.mkdir(parents=True)
+        _make_hand_written_verdict(verdicts_dir, "AIPOS-TEST-7", "PASS")
+
+        records = load_records(self.tmpdir)
+        existing = records.get("task_audit_verdicts", {}).get("AIPOS-TEST-7", [])
+        terminal_pass = any(
+            str(v.get("verdict", "")).upper().strip() in {"PASS", "PASS_WITH_NOTES"}
+            for v in existing
+        )
+        self.assertFalse(terminal_pass, "手写 PASS 不应触发 overturn 终态锁(对门内一切检查透明)")
+        self.assertEqual(len(existing), 0)
+
 
 class TestQueueMutationGateBorn(unittest.TestCase):
     """queue_mutation._check_for_pass_audit_verdict 只认门生。"""
