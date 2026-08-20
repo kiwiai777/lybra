@@ -2927,7 +2927,7 @@ def main(argv: list[str] | None = None) -> int:
                 elif result.get('committed'):
                     print("已 commit,但未 push (use --no-push to skip push)")
                 else:
-                    print("无待提交更改,治理记录已是最新")
+                    print("无待收内容, 治理仓已最新 (no-op, EXIT=0)")
             elif verdict == Verdict.BLOCK:
                 print("请补充缺失的收账文件后重试")
             else:
