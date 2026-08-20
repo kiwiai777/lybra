@@ -1298,7 +1298,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     sync_parser = subparsers.add_parser("sync", help="AIPOS-C4B: worker-initiated distribution pull (lybra sync)")
-    sync_parser.add_argument("--harness-root", default=None, help="Harness root (auto-discovered from cwd if omitted)")
+    sync_parser.add_argument("--harness-root", default=None, help="Harness root (REQUIRED: no cwd guessing; fallback env LYBRA_HARNESS_ROOT)")
     sync_parser.add_argument("--gate-url", default=None, help="Gate MCP URL (auto from .lybra if omitted)")
     sync_parser.add_argument("--token", default=None, help="Bearer token (auto from .lybra connection.json if omitted)")
     sync_parser.add_argument("--json", action="store_true", help="Output JSON")
