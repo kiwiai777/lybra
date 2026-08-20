@@ -293,6 +293,26 @@ def _generate_next_action(current_state: str, task_mode: str, operation: str) ->
     return None
 
 
+def _load_envelope_guard_declaration(error_code: str | None) -> dict[str, Any] | None:
+    """Load envelope guard declaration from transitions.schema.json by error_code.
+    AIPOS-F9: returns the guard declaration including next_step, or None if not found."""
+    if not error_code:
+        return None
+    try:
+        schema_path = Path("schema/transitions.schema.json")
+        if not schema_path.exists():
+            return None
+        with open(schema_path, "r", encoding="utf-8") as f:
+            schema = json.load(f)
+        envelope_guards = schema.get("envelope_guards", {}).get("guards", {})
+        for guard_name, guard_def in envelope_guards.items():
+            if isinstance(guard_def, dict) and guard_def.get("error_code") == error_code:
+                return guard_def
+        return None
+    except Exception:
+        return None
+
+
 def _tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str, Any]:
     capability = REQUEST_CAPABILITY.get()
     if isinstance(capability, dict) and capability.get("source") == "service_v0" and isinstance(payload, dict):
@@ -1067,7 +1087,7 @@ def _return_metadata(
     }
 
 
-def _decorate_queue_claim_dry_run(response: dict[str, Any], *, args: dict[str, Any], canonical_agent_instance: str) -> dict[str, Any]:
+def _decorate_queue_claim_dry_run(response: dict[str, Any], *, args: dict[str, Any], canonical_agent_instance: str, envelope_error_info: dict[str, Any] | None = None) -> dict[str, Any]:
     data = response.get("data")
     if not isinstance(data, dict):
         data = {}
@@ -1078,6 +1098,9 @@ def _decorate_queue_claim_dry_run(response: dict[str, Any], *, args: dict[str, A
     response["agent_instance"] = str(args.get("agent_instance") or "").strip()
     response["canonical_agent_instance"] = canonical_agent_instance
     response["owner_policy_ref"] = str(args.get("owner_policy_ref") or "").strip()
+    # AIPOS-F9: attach envelope_error if PreAuthorized mode fell back to Supervised
+    if envelope_error_info:
+        response["envelope_error"] = envelope_error_info
     response["claim_policy"] = (
         data.get("updated_frontmatter", {}).get("claim_policy")
         if isinstance(data.get("updated_frontmatter"), dict)
@@ -1948,11 +1971,12 @@ def _match_claim_envelope(
     task_path: str | None,
     canonical_agent_instance: str,
     actor: str,
-) -> tuple[str | None, str | None]:
-    """Return (owner_policy_ref, binding_status) iff it names an active Owner-signed envelope that strictly
-    matches this claim; else (None, binding_status_reason). Loading a policy for a ref that
-    does not resolve returns (None, None) (★A1 anti-forgery: a ref to a nonexistent/unauthorized policy
-    grants nothing). binding_status is informational for identity_provenance when falling back Supervised."""
+) -> tuple[str | None, str | None, str | None]:
+    """Return (owner_policy_ref, binding_status, error_code) iff it names an active Owner-signed envelope that strictly
+    matches this claim; else (None, binding_status_reason, error_code). Loading a policy for a ref that
+    does not resolve returns (None, None, None) (★A1 anti-forgery: a ref to a nonexistent/unauthorized policy
+    grants nothing). binding_status is informational for identity_provenance when falling back Supervised.
+    AIPOS-F9: error_code maps to transitions.schema.json envelope_guards for structured next_step."""
     # AIPOS-250B: PreAuthorized identity gate (zero-dependency, token authority).
     # The claim's agent_instance (and actor) MUST match the canonical instance bound to the
     # request token in connection.json. No binding or mismatch → fall back Supervised.
@@ -1992,31 +2016,31 @@ def _match_claim_envelope(
     if not bound:
         # Token has no agent_instance binding → PreAuthorized unavailable (backward-compatible).
         _emit("identity_gate", None, "binding_absent", reason="token has no agent_instance binding")
-        return None, "binding_absent"
+        return None, "binding_absent", None
     if bound != canonical_agent_instance or bound != actor:
         # Identity mismatch: claim self-report doesn't match token authority → fall back Supervised.
         _emit("identity_gate", None, "binding_mismatch", reason="claim self-report does not match token-bound agent_instance")
-        return None, "binding_mismatch"
+        return None, "binding_mismatch", None
     policy = load_policy(repo_root, owner_policy_ref)
     if policy is None:
         _emit("policy_load", None, None, policy_loaded=False)
-        return None, None
+        return None, None, None
     snapshot = load_task_snapshot(repo_root, task_id=task_id, path=task_path)
     if snapshot is None:
         _emit("snapshot_load", None, None, policy_loaded=True, snapshot_loaded=False)
-        return None, None
+        return None, None, None
     # Envelope auto-release covers only pending (claimable) queue tasks — anything else drops to
     # the Supervised path (which will itself surface why the task is not claimable).
     queue_state = str(snapshot.get("queue_state") or "").strip()
     if queue_state != "pending":
         _emit("queue_state_guard", None, None, policy_loaded=True, snapshot_loaded=True,
               queue_state=queue_state, reason="envelope covers pending tasks only")
-        return None, None
+        return None, None, None
     released = count_preauthorized_claims(repo_root, owner_policy_ref)
     # AIPOS-363 S4: carry the calling role so an envelope may name an AIPOS-352 custom role
     # (e.g. agent_or_role: kaia-asst) and still match an agent claiming under that role.
     # The role is read from the Owner-minted capability token (authoritative, not self-reported).
-    matched, inner_reason = match_claim_envelope(
+    matched, inner_reason, error_code = match_claim_envelope(
         policy=policy,
         task_id=str(snapshot.get("task_id") or task_id or ""),
         task_mode=str(snapshot.get("task_mode") or ""),
@@ -2030,8 +2054,8 @@ def _match_claim_envelope(
     _emit("final", owner_policy_ref if matched else None, None,
           policy_loaded=True, snapshot_loaded=True, queue_state=queue_state,
           released_count=released, inner_matched=matched, inner_reason=inner_reason,
-          release_switch=matched)
-    return (owner_policy_ref, None) if matched else (None, None)
+          error_code=error_code, release_switch=matched)
+    return (owner_policy_ref, None, None) if matched else (None, None, error_code)
 
 
 def _preauthorized_claim_autorelease(
@@ -2082,7 +2106,7 @@ def _preauthorized_claim_autorelease(
     dry_run_token = str(dry.get("dry_run_token") or "").strip()
     if dry.get("verdict") == Verdict.BLOCK or not dry_run_token:
         # Not auto-releasable (e.g. the task is no longer claimable). Surface the preview/blocks.
-        decorated = _decorate_queue_claim_dry_run(dry, args=args, canonical_agent_instance=canonical_agent_instance)
+        decorated = _decorate_queue_claim_dry_run(dry, args=args, canonical_agent_instance=canonical_agent_instance, envelope_error_info=None)
         return _tool_result(decorated, is_error=True)
     executed = execute_dry_run(
         dry_run_token,
@@ -2194,7 +2218,7 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
     # miss / expiry / count-bound / forged ref falls back to the Supervised per-task preview.
     binding_status = None
     if requested_mode == AUTONOMY_MODE_PREAUTHORIZED:
-        matched_policy_id, binding_status = _match_claim_envelope(
+        matched_policy_id, binding_status, envelope_error_code = _match_claim_envelope(
             repo_root,
             owner_policy_ref=owner_policy_ref,
             task_id=task_id,
@@ -2214,6 +2238,17 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
                 reg_available=reg_available,
             )
         # fall through to a Supervised preview (fail-safe: 回落 Supervised 逐单).
+        # AIPOS-F9: if envelope mismatch, attach error_code and next_step from schema declaration
+        envelope_error_info = None
+        if envelope_error_code:
+            guard_decl = _load_envelope_guard_declaration(envelope_error_code)
+            if guard_decl:
+                envelope_error_info = {
+                    "error_code": envelope_error_code,
+                    "error_message": guard_decl.get("error_message"),
+                    "severity": guard_decl.get("severity"),
+                    "next_step": guard_decl.get("next_step"),
+                }
 
     response = claim_task(
         task_id=task_id,
@@ -2233,7 +2268,7 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
             binding_status=binding_status,
         ),
     )
-    decorated = _decorate_queue_claim_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance)
+    decorated = _decorate_queue_claim_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance, envelope_error_info=envelope_error_info)
     if decorated.get("verdict") == Verdict.BLOCK:
         return _tool_result(decorated, is_error=True)
     return _tool_result(decorated, is_error=not bool(decorated.get("ok", False)))
