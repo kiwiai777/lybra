@@ -21,25 +21,46 @@ from pathlib import Path
 from typing import Any
 
 from tools.schema_constants import Verdict
+from tools.schema_loader import SchemaLoadError
 
 
-# AIPOS-C3C: 任务 ID 形态 (兼容 feat/fix/chore(ID) 家族 + merge 信息归属解析)
-_TASK_ID_RE = r"[A-Z][A-Z0-9]*-[A-Z0-9]+"
+# AIPOS-F5: "什么长得像本项目的卡号"是项目属性 —— 声明一处 (card_policy.json 的
+# task_id_pattern), 归属解析与一切判卡号的调用点只读它。解析器零内置默认 (C2 原则):
+# 声明缺失即出声报错。lybra 声明 AIPOS-[A-Z0-9]+, 别的项目声明自己的。
 # conventional-commit 前缀家族 (2026-08-19 实锤: 只认 feat 前缀漏掉 fix/chore, A1 被迫两跳)
 _CONVENTIONAL_PREFIX_RE = re.compile(r"^(?:feat|fix|chore|docs|refactor|test|perf)\(([^)]+)\)")
-_BARE_TASK_ID_RE = re.compile(r"^([A-Z][A-Z0-9]*-[A-Z0-9]+)")
 
 _DEFAULT_BRANCH_PATTERN = "card/{task_id}"
 
 
-def _branch_pattern_regex(repo_root: Path | None = None) -> str | None:
+def _resolve_task_id_pattern(governance_root: Path | None, repo_root: Path | None = None) -> str:
+    """AIPOS-F5: 读项目声明的 task_id_pattern (单源, card_policy.json/R8C 同构)。
+
+    返回正则片段 (如 "AIPOS-[A-Z0-9]+"), 可被 fullmatch/match/search 直接使用。
+    缺失时出声报错 (C2 原则: 无内置默认模式)。
+    """
+    if governance_root is None:
+        raise SchemaLoadError(
+            "归属解析需要 governance_root 才能读项目声明的 task_id_pattern (card_policy.json)"
+        )
+    from tools.card_policy_loader import get_task_id_pattern
+    pattern = get_task_id_pattern(governance_root, repo_root=repo_root)
+    if not pattern:
+        raise SchemaLoadError(
+            f"项目未声明 task_id_pattern (card_policy.json @ {governance_root}); "
+            "卡号形状是项目属性, 解析器无内置默认, 无法做归属解析 (C2 原则)"
+        )
+    return pattern
+
+
+def _branch_pattern_regex(repo_root: Path | None = None, task_id_pattern: str | None = None) -> str | None:
     """从 N5.branch_integration.branch_pattern 声明派生任务 ID 捕获正则 (读同一份声明)。
 
-    例如 'card/{task_id}' → 'card/([A-Z][A-Z0-9]*-[A-Z0-9]+)'。
+    例如 'card/{task_id}' + task_id_pattern 'AIPOS-[A-Z0-9]+' → 'card/(AIPOS-[A-Z0-9]+)'。
     声明缺失/损坏时回退到默认 'card/{task_id}' (单元测试夹具无 schema 目录)。
 
     Returns:
-        正则字符串, 或 None (branch_pattern 不含 {task_id} 占位符)
+        正则字符串, 或 None (branch_pattern 不含 {task_id} 占位符 或 无 task_id_pattern)
     """
     pattern = _DEFAULT_BRANCH_PATTERN
     try:
@@ -55,34 +76,50 @@ def _branch_pattern_regex(repo_root: Path | None = None) -> str | None:
     prefix = pattern.split("{task_id}", 1)[0]
     if not prefix:
         return None
-    return re.escape(prefix) + f"({_TASK_ID_RE})"
+    if not task_id_pattern:
+        return None
+    return re.escape(prefix) + f"({task_id_pattern})"
 
 
-def _task_id_from_commit_subject(subject: str, repo_root: Path | None = None) -> str | None:
+def _task_id_from_commit_subject(
+    subject: str,
+    repo_root: Path | None = None,
+    governance_root: Path | None = None,
+) -> str | None:
     """从 commit 主题提取 task_id。
 
-    AIPOS-C3C: 读同一份 N5.branch_integration 声明——生成什么格式就解析什么格式。
-    兼容家族:
+    AIPOS-F5: 卡号形状读项目声明 (task_id_pattern), 各规则抓取物必须匹配声明模式,
+    不匹配则继续尝试其它规则。兼容家族:
       1. feat/fix/chore/docs/refactor/test/perf(TASK-ID): ... (conventional 前缀)
       2. TASK-ID: ... (裸前缀, 历史卡)
       3. Merge <branch_pattern>/<TASK-ID>: ... (merge --no-ff 信息, 声明保证归属含卡号)
+      4. 信息任意位置的模式命中 (如句尾括号 "(AIPOS-F3)" —— 858655a 回归夹具)
+
+    Raises:
+        SchemaLoadError: 项目未声明 task_id_pattern (C2 原则, 无内置默认)。
     """
+    task_id_pattern = _resolve_task_id_pattern(governance_root, repo_root)
+
     # 1. conventional 前缀家族
     m = _CONVENTIONAL_PREFIX_RE.search(subject)
     if m:
         candidate = m.group(1).strip()
-        if re.fullmatch(_TASK_ID_RE, candidate):
+        if re.fullmatch(task_id_pattern, candidate):
             return candidate
     # 2. 裸 TASK-ID 前缀
-    m = _BARE_TASK_ID_RE.search(subject.strip())
+    m = re.match(task_id_pattern, subject.strip())
     if m:
-        return m.group(1)
+        return m.group(0)
     # 3. merge 信息 (branch_pattern 声明)
-    pattern_regex = _branch_pattern_regex(repo_root)
+    pattern_regex = _branch_pattern_regex(repo_root, task_id_pattern)
     if pattern_regex:
         m = re.search(pattern_regex, subject)
         if m:
             return m.group(1)
+    # 4. AIPOS-F5: 信息任意位置的模式命中 (句尾括号等)
+    m = re.search(task_id_pattern, subject)
+    if m:
+        return m.group(0)
     return None
 
 
@@ -360,7 +397,18 @@ def check_commit_interval_coverage(
     missing: list[str] = []
     
     for commit in commits:
-        task_id = _task_id_from_commit_subject(commit["subject"], repo_root=repo_root)
+        try:
+            task_id = _task_id_from_commit_subject(
+                commit["subject"], repo_root=repo_root, governance_root=governance_root
+            )
+        except SchemaLoadError as e:
+            # AIPOS-F5: 声明缺失 = 出声停 (C2 原则), 不静默跳过
+            return {
+                "coverage_ok": False,
+                "total_commits": len(commits),
+                "missing_commits": [],
+                "message": f"归属解析声明缺失 (task_id_pattern): {e}",
+            }
         
         if not task_id:
             missing.append(
@@ -507,10 +555,24 @@ def check_verdict_ref_authorization(
                 text=True,
             )
             subject = result.stdout.strip()
-            task_id = _task_id_from_commit_subject(subject, repo_root=repo_root)
         except subprocess.CalledProcessError:
             uncovered.append(f"{commit_hash[:8]}: 无法读取 commit message")
             continue
+        
+        try:
+            task_id = _task_id_from_commit_subject(
+                subject, repo_root=repo_root, governance_root=governance_root
+            )
+        except SchemaLoadError as e:
+            # AIPOS-F5: 声明缺失 = 出声停 (C2 原则)
+            return {
+                "authorized": False,
+                "verdict_id": verdict_ref,
+                "reviewed_task_id": reviewed_task_id,
+                "verdict": verdict_value,
+                "uncovered_commits": commits_to_deploy,
+                "message": f"归属解析声明缺失 (task_id_pattern): {e}",
+            }
         
         if not task_id:
             uncovered.append(f"{commit_hash[:8]}: commit message 无 task_id ({subject[:40]})")

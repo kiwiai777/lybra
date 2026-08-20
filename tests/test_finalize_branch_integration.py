@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -26,6 +27,21 @@ from tools.aipos_cli.finalize import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# AIPOS-F5: 卡号形状读项目声明 (card_policy.json task_id_pattern), 解析器零内置默认。
+_TASK_ID_PATTERN = "AIPOS-[A-Z0-9]+"
+
+
+@pytest.fixture
+def gov_root(tmp_path):
+    """临时治理工作区, 声明 task_id_pattern (卡号形状单源, R8C 同构)。"""
+    gov = tmp_path / "gov"
+    gov.mkdir()
+    (gov / "card_policy.json").write_text(
+        json.dumps({"schema_version": "1.0.0", "task_id_pattern": _TASK_ID_PATTERN}),
+        encoding="utf-8",
+    )
+    return gov
 
 _BRANCH_INTEGRATION = {
     "branch_pattern": "card/{task_id}",
@@ -65,26 +81,26 @@ def _make_branch(repo: Path, branch: str, message: str, file: str, content: str)
 # 1. 归属解析器
 # ---------------------------------------------------------------------------
 
-def test_task_id_from_commit_subject_conventional_family():
-    assert _task_id_from_commit_subject("feat(AIPOS-C3): 大项A", repo_root=REPO_ROOT) == "AIPOS-C3"
-    assert _task_id_from_commit_subject("fix(AIPOS-C3B): FIX轮", repo_root=REPO_ROOT) == "AIPOS-C3B"
-    assert _task_id_from_commit_subject("chore(AIPOS-C4): 清理", repo_root=REPO_ROOT) == "AIPOS-C4"
-    assert _task_id_from_commit_subject("docs(AIPOS-C1): 手册", repo_root=REPO_ROOT) == "AIPOS-C1"
+def test_task_id_from_commit_subject_conventional_family(gov_root):
+    assert _task_id_from_commit_subject("feat(AIPOS-C3): 大项A", repo_root=REPO_ROOT, governance_root=gov_root) == "AIPOS-C3"
+    assert _task_id_from_commit_subject("fix(AIPOS-C3B): FIX轮", repo_root=REPO_ROOT, governance_root=gov_root) == "AIPOS-C3B"
+    assert _task_id_from_commit_subject("chore(AIPOS-C4): 清理", repo_root=REPO_ROOT, governance_root=gov_root) == "AIPOS-C4"
+    assert _task_id_from_commit_subject("docs(AIPOS-C1): 手册", repo_root=REPO_ROOT, governance_root=gov_root) == "AIPOS-C1"
 
 
-def test_task_id_from_commit_subject_bare_prefix():
-    assert _task_id_from_commit_subject("AIPOS-C2: 身份配置单一真相", repo_root=REPO_ROOT) == "AIPOS-C2"
+def test_task_id_from_commit_subject_bare_prefix(gov_root):
+    assert _task_id_from_commit_subject("AIPOS-C2: 身份配置单一真相", repo_root=REPO_ROOT, governance_root=gov_root) == "AIPOS-C2"
 
 
-def test_task_id_from_commit_subject_merge_message_declaration():
+def test_task_id_from_commit_subject_merge_message_declaration(gov_root):
     subject = "Merge card/AIPOS-A1: 顾问产生侧工具化 (PASS_WITH_NOTES verdict_AIPOS-A1_20260819_143222)"
-    assert _task_id_from_commit_subject(subject, repo_root=REPO_ROOT) == "AIPOS-A1"
+    assert _task_id_from_commit_subject(subject, repo_root=REPO_ROOT, governance_root=gov_root) == "AIPOS-A1"
     # 旧格式 (含引号) 也因 branch_pattern 声明被捕获
-    assert _task_id_from_commit_subject("Merge branch 'card/AIPOS-C3B'", repo_root=REPO_ROOT) == "AIPOS-C3B"
+    assert _task_id_from_commit_subject("Merge branch 'card/AIPOS-C3B'", repo_root=REPO_ROOT, governance_root=gov_root) == "AIPOS-C3B"
 
 
-def test_task_id_from_commit_subject_no_id():
-    assert _task_id_from_commit_subject("Initial commit", repo_root=REPO_ROOT) is None
+def test_task_id_from_commit_subject_no_id(gov_root):
+    assert _task_id_from_commit_subject("Initial commit", repo_root=REPO_ROOT, governance_root=gov_root) is None
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +108,7 @@ def test_task_id_from_commit_subject_no_id():
 # ---------------------------------------------------------------------------
 
 def test_branch_pattern_regex_reads_declaration():
-    regex = _branch_pattern_regex(REPO_ROOT)
+    regex = _branch_pattern_regex(REPO_ROOT, _TASK_ID_PATTERN)
     assert regex is not None
     import re
     m = re.search(regex, "Merge card/AIPOS-C3C: summary (verdict_X)")
