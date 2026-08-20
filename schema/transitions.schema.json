@@ -3,6 +3,23 @@
   "title": "Lybra Task State Transitions Schema",
   "description": "AIPOS-C3: 状态机守卫单一真相——转移=声明(前态+守卫+记录+后态),执行器只读声明。每一次门的拒绝与放行都能指回此 schema 里的一行。设计出处:2026-08-18-gate-c-refactor-four-roots.md(C3)",
   "version": "1.0.0",
+  "next_step_structure": {
+    "description": "AIPOS-F9: 每条守卫/终态声明的 next_step 结构——找谁+做什么+(可给则给)命令。渲染层原样带出,出声点绝不手写下一步文案(散落即野读者)。",
+    "fields": {
+      "audience": {
+        "description": "按 roles.schema 引用角色:self(执行者自己可恢复)/advisor(顾问)/owner(Owner)",
+        "allowed_values": ["self", "advisor", "owner"]
+      },
+      "action": {
+        "description": "人话一句:告诉用户下一步做什么",
+        "type": "string"
+      },
+      "command": {
+        "description": "若 audience=self 且可执行,给准确命令;否则 null",
+        "type": "string or null"
+      }
+    }
+  },
   "severity_semantics": {
     "description": "AIPOS-F4 大项B: 每条守卫声明携严重级语义 — 渲染层只读此声明做映射, 出声点不得自定级别。设计出处: 2026-08-20-错误输出分级红色error次数真需要人出手的次数.md",
     "tiers": {
@@ -41,13 +58,23 @@
           "description": "依赖项必须有门生 PASS 裁决(禁 frontmatter 自证)",
           "check": "all_dependencies_have_gate_pass_verdict",
           "error_message": "依赖项缺少门生 PASS 裁决,禁止发布 (N0 依赖校验)",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "检查依赖项任务是否已完成审计,补充缺失的门生 PASS 裁决后重新发布",
+            "command": null
+          }
         },
         "required_fields": {
           "description": "必填字段由 card.schema 定义",
           "check": "card_schema_validation",
           "error_message": "任务卡字段不符合 card.schema",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "修正任务卡中不符合 card.schema 的字段后重新发布",
+            "command": null
+          }
         }
       },
       "record": {
@@ -81,14 +108,24 @@
           "description": "claim_policy 字段控制谁能认领",
           "check": "claim_policy_authorization",
           "error_message": "claim_policy 拒绝:不符合认领授权条件",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "检查任务卡 claim_policy 字段与当前执行者授权,确认执行者是否有权认领此任务",
+            "command": null
+          }
         },
         "no_active_claim": {
           "description": "任务不能被重复认领",
           "check": "no_existing_active_claim",
           "error_message": "任务已被认领,禁止重复认领",
           "severity": "auto_recoverable",
-          "recovery": "终态锁挡重复:任务已在 claim 状态,无需重复认领;预期行为=跳过本卡,让下一轮/既有会话继续"
+          "recovery": "终态锁挡重复:任务已在 claim 状态,无需重复认领;预期行为=跳过本卡,让下一轮/既有会话继续",
+          "next_step": {
+            "audience": "self",
+            "action": "任务已在执行中,无需重复认领,继续执行即可",
+            "command": null
+          }
         }
       },
       "record": {
@@ -124,7 +161,12 @@
           "description": "只有当前 claimer 可以 return",
           "check": "actor_matches_current_claimer",
           "error_message": "只有任务的当前 claimer 可以 return",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "检查任务的当前 claimer,确认是否需要由原 claimer 完成 return 或重新分配任务",
+            "command": null
+          }
         }
       },
       "record": {
@@ -159,7 +201,12 @@
           "description": "必须有 return 记录",
           "check": "return_record_exists",
           "error_message": "缺少 return 记录,无法派发审计",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "确认执行者是否已完成 return,检查 records/returns/ 目录是否有对应记录",
+            "command": null
+          }
         }
       },
       "record": {
@@ -195,13 +242,23 @@
           "description": "必须是 auditor 角色",
           "check": "role_is_auditor",
           "error_message": "只有 auditor 角色可以提交裁决",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "确认当前执行者是否具有 auditor 角色权限,或分配给具有审计权限的 agent",
+            "command": null
+          }
         },
         "has_audit_dispatch": {
           "description": "必须有审计派发记录",
           "check": "audit_dispatch_exists",
           "error_message": "缺少审计派发记录,无法提交裁决",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "检查是否已派发审计任务,确认 records/audit_dispatches/ 是否有对应记录",
+            "command": null
+          }
         }
       },
       "record": {
@@ -257,7 +314,12 @@
           ],
           "error_message": "最新门生裁决不是 PASS,无法 finalize",
           "severity": "auto_recoverable",
-          "recovery": "审计位无 finalize 能力提示:裁决未 PASS 前不具 finalize 能力,属设计预期;下一步=等审计 PASS 后再 finalize"
+          "recovery": "审计位无 finalize 能力提示:裁决未 PASS 前不具 finalize 能力,属设计预期;下一步=等审计 PASS 后再 finalize",
+          "next_step": {
+            "audience": "self",
+            "action": "等待审计 PASS 后再执行 finalize",
+            "command": null
+          }
         },
         "verdict_record_authentic": {
           "description": "裁决记录必须是门生(非手写),具备 record_type: audit_verdict_record 等机器特征",
@@ -268,7 +330,12 @@
             "verdict_at"
           ],
           "error_message": "裁决记录缺少门生标记,疑似手写,拒绝 finalize",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "裁决记录疑似手写,请通过门(gate)重新生成正规裁决记录",
+            "command": null
+          }
         },
         "deployment_authorization": {
           "description": "部署授权:verdict_ref(审计授权) 或 dev_override(开发覆盖,需 reason)",
@@ -278,19 +345,34 @@
             "dev_override"
           ],
           "error_message": "缺少部署授权 (verdict_ref 或 dev_override --reason)",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "提供 verdict_ref(审计 PASS 的裁决 ID)或使用 dev_override 模式并提供 --reason",
+            "command": null
+          }
         },
         "commit_coverage": {
           "description": "区间校验:current..HEAD 每个 commit 都属已 PASS 的卡",
           "check": "all_commits_have_pass_verdict",
           "error_message": "区间内存在未审 commit,拒绝部署",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "检查区间内未审 commit,确保所有 commit 都关联已 PASS 的任务卡",
+            "command": null
+          }
         },
         "no_dev_override_base": {
           "description": "禁止在 dev_override 部署上结算",
           "check": "current_deployment_not_dev_override",
           "error_message": "当前部署 provenance=dev_override,finalize 拒绝在其上结算",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "当前部署是 dev_override 来源,需要先部署一个 audited 来源的基线后才能继续 finalize",
+            "command": null
+          }
         }
       },
       "record": {
@@ -380,7 +462,12 @@
           "description": "需要 owner 或授权角色",
           "check": "actor_has_close_scope",
           "error_message": "缺少 close 权限",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "owner",
+            "action": "任务结案需要 owner 或具有 close scope 的角色执行",
+            "command": null
+          }
         }
       },
       "record": {
@@ -415,7 +502,12 @@
           "description": "只有 owner 可以 reopen",
           "check": "actor_is_owner",
           "error_message": "只有 owner 可以 reopen 任务",
-          "severity": "needs_human"
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "owner",
+            "action": "重新打开已关闭任务需要 owner 权限",
+            "command": null
+          }
         }
       },
       "modes": {
@@ -532,5 +624,120 @@
       "close PASS 判定(queue_mutation)"
     ],
     "hand_written_policy": "手写文件对门彻底透明——不构成终态,不参与选取,不阻塞正规提交"
+  },
+  "envelope_guards": {
+    "description": "AIPOS-F9 大项B: PreAuthorized 信封守卫声明——信封不匹配的每种原因都声明 next_step(找谁+做什么)。门响应原样带出,绝不手写散落文案。",
+    "guards": {
+      "policy_not_found": {
+        "error_code": "ENVELOPE_POLICY_NOT_FOUND",
+        "error_message": "信封策略未找到 (owner_policy_ref 无法解析)",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "检查 owner_policy_ref 是否正确,确认对应的信封策略文件是否存在于 5_tasks/policies/ 目录",
+          "command": null
+        }
+      },
+      "policy_not_yet_active": {
+        "error_code": "ENVELOPE_NOT_YET_ACTIVE",
+        "error_message": "信封尚未生效 (当前时间早于 active_from)",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "信封策略尚未生效。请等待至 active_from 时间,或请顾问修改信封的 active_from 时间。查看当前信封状态: /lybra status",
+          "command": null
+        }
+      },
+      "policy_expired": {
+        "error_code": "ENVELOPE_EXPIRED",
+        "error_message": "信封已过期 (当前时间已超过 expires_at)",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "信封策略已过期。请顾问续期信封 (owner_decision envelope 路径) 或发放新信封。查看当前信封状态: /lybra status",
+          "command": null
+        }
+      },
+      "quota_exhausted": {
+        "error_code": "ENVELOPE_QUOTA_EXHAUSTED",
+        "error_message": "信封额度已用尽 (released_count >= max_tasks)",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "信封额度已用尽。请顾问续期信封增加 max_tasks 额度,或发放新信封。查看当前信封状态: /lybra status",
+          "command": null
+        }
+      },
+      "selector_task_id_mismatch": {
+        "error_code": "ENVELOPE_SELECTOR_TASK_ID_MISMATCH",
+        "error_message": "任务 ID 不在信封的 task_selector.task_ids 列表中",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "当前任务 ID 不在信封覆盖范围内。请顾问修改信封的 task_selector 添加此任务 ID,或使用 Supervised 模式逐单确认",
+          "command": null
+        }
+      },
+      "selector_task_mode_mismatch": {
+        "error_code": "ENVELOPE_SELECTOR_TASK_MODE_MISMATCH",
+        "error_message": "任务 task_mode 与信封的 task_selector.task_mode 不匹配",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "当前任务 task_mode 不在信封覆盖范围内。请顾问修改信封的 task_selector 或使用 Supervised 模式逐单确认",
+          "command": null
+        }
+      },
+      "selector_project_mismatch": {
+        "error_code": "ENVELOPE_SELECTOR_PROJECT_MISMATCH",
+        "error_message": "任务 project 与信封的 task_selector.project 不匹配",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "当前任务 project 不在信封覆盖范围内。请顾问修改信封的 task_selector 或使用 Supervised 模式逐单确认",
+          "command": null
+        }
+      },
+      "agent_not_covered": {
+        "error_code": "ENVELOPE_AGENT_NOT_COVERED",
+        "error_message": "当前 agent/role 不在信封的 agent_or_role 覆盖范围内",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "当前执行者不在信封授权范围内。请顾问修改信封的 agent_or_role 添加此执行者,或使用 Supervised 模式逐单确认",
+          "command": null
+        }
+      },
+      "policy_not_approved": {
+        "error_code": "ENVELOPE_NOT_APPROVED",
+        "error_message": "信封策略未获 owner 批准 (approved_by_owner 为 false)",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "owner",
+          "action": "信封策略需要 owner 批准后才能生效。请 owner 审核并批准此信封策略",
+          "command": null
+        }
+      },
+      "policy_not_active_status": {
+        "error_code": "ENVELOPE_STATUS_NOT_ACTIVE",
+        "error_message": "信封策略状态不是 active",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "信封策略状态不是 active。请顾问检查并激活信封策略。查看当前信封状态: /lybra status",
+          "command": null
+        }
+      },
+      "identity_binding_mismatch": {
+        "error_code": "ENVELOPE_IDENTITY_MISMATCH",
+        "error_message": "执行者身份与 token 绑定的 agent_instance 不匹配",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "执行者身份验证失败。请检查 token 绑定的 agent_instance 是否与请求中的一致,或使用 Supervised 模式",
+          "command": null
+        }
+      }
+    }
   }
 }

@@ -35,6 +35,19 @@ POLICY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$")
 POLICY_STATUS_ACTIVE = "active"
 POLICY_STATUSES = {"active", "expired", "revoked"}
 
+# AIPOS-F9: envelope guard error codes (map to transitions.schema.json envelope_guards)
+ENVELOPE_ERROR_POLICY_NOT_FOUND = "ENVELOPE_POLICY_NOT_FOUND"
+ENVELOPE_ERROR_NOT_YET_ACTIVE = "ENVELOPE_NOT_YET_ACTIVE"
+ENVELOPE_ERROR_EXPIRED = "ENVELOPE_EXPIRED"
+ENVELOPE_ERROR_QUOTA_EXHAUSTED = "ENVELOPE_QUOTA_EXHAUSTED"
+ENVELOPE_ERROR_SELECTOR_TASK_ID_MISMATCH = "ENVELOPE_SELECTOR_TASK_ID_MISMATCH"
+ENVELOPE_ERROR_SELECTOR_TASK_MODE_MISMATCH = "ENVELOPE_SELECTOR_TASK_MODE_MISMATCH"
+ENVELOPE_ERROR_SELECTOR_PROJECT_MISMATCH = "ENVELOPE_SELECTOR_PROJECT_MISMATCH"
+ENVELOPE_ERROR_AGENT_NOT_COVERED = "ENVELOPE_AGENT_NOT_COVERED"
+ENVELOPE_ERROR_NOT_APPROVED = "ENVELOPE_NOT_APPROVED"
+ENVELOPE_ERROR_STATUS_NOT_ACTIVE = "ENVELOPE_STATUS_NOT_ACTIVE"
+ENVELOPE_ERROR_IDENTITY_MISMATCH = "ENVELOPE_IDENTITY_MISMATCH"
+
 
 # AIPOS-PRERELEASE-1: permanent gate-side audit trace for PreAuthorized envelope decisions.
 # Emits one JSON line to stderr (→ journald under lybra-dev-gate.service) so an envelope match
@@ -236,15 +249,15 @@ def match_claim_envelope(
     now: datetime,
     released_count: int,
     claiming_role: str | None = None,
-) -> tuple[bool, str]:
-    """Strict-AND envelope match for a claim. Returns (matched, reason). Every predicate must
-    hold; any miss returns matched=False with a human reason (偏窄 fail-safe). The caller uses
-    matched=True to auto-release (one-stage direct write) and matched=False to fall back to
-    Supervised (per-task owner_confirm).
+) -> tuple[bool, str, str | None]:
+    """Strict-AND envelope match for a claim. Returns (matched, reason, error_code). Every predicate must
+    hold; any miss returns matched=False with a human reason and error_code (maps to transitions.schema.json
+    envelope_guards). The caller uses matched=True to auto-release (one-stage direct write) and matched=False
+    to fall back to Supervised (per-task owner_confirm).
 
+    AIPOS-F9: error_code maps to transitions.schema.json envelope_guards for structured next_step.
     AIPOS-PRERELEASE-1: every predicate's input and judgment is traced to stderr (→ journald)
     as gate-side evidence, so a match or fallback is observable without agent self-report.
-    Behavior is unchanged — only observability is added.
     """
     # ── evaluate every predicate (full picture for the trace) ─────────────
     is_dict = isinstance(policy, dict)
@@ -284,36 +297,53 @@ def match_claim_envelope(
     }
 
     # ── first-failing reason (preserves original short-circuit order & strings) ──
+    # AIPOS-F9: each failure case gets an error_code that maps to transitions.schema.json envelope_guards
+    error_code = None
     if not is_dict:
         reason = "no policy artifact resolved for owner_policy_ref"
+        error_code = ENVELOPE_ERROR_POLICY_NOT_FOUND
     elif policy.get("mode") != AUTONOMY_MODE_PREAUTHORIZED:
         reason = f"policy mode is not {AUTONOMY_MODE_PREAUTHORIZED}"
+        error_code = None  # mode mismatch not in envelope_guards (config error)
     elif policy.get("status") != POLICY_STATUS_ACTIVE:
         reason = f"policy status is {policy.get('status') or 'unset'}, not active"
+        error_code = ENVELOPE_ERROR_STATUS_NOT_ACTIVE
     elif not policy.get("approved_by_owner"):
         reason = "policy is not approved_by_owner"
+        error_code = ENVELOPE_ERROR_NOT_APPROVED
     elif active_from is None or expires_at is None:
         reason = "policy time window is missing or unparseable"
+        error_code = None  # unparseable time (config error)
     elif now < active_from:
-        reason = "policy is not yet active (active_from in the future)"
+        reason = f"policy is not yet active (active_from={policy.get('active_from')})"
+        error_code = ENVELOPE_ERROR_NOT_YET_ACTIVE
     elif now >= expires_at:
-        reason = "policy has expired (expires_at reached)"
+        reason = f"policy has expired (expires_at={policy.get('expires_at')})"
+        error_code = ENVELOPE_ERROR_EXPIRED
     elif not covered or covered not in identity:
         reason = "claiming agent/role is not covered by policy.agent_or_role"
+        error_code = ENVELOPE_ERROR_AGENT_NOT_COVERED
     elif not (sel_mode or sel_project or sel_ids):
         reason = "policy task_selector is empty (no wildcard auto-release)"
+        error_code = None  # empty selector (config error)
     elif sel_ids and str(task_id or "").strip() not in sel_ids:
         reason = "task_id is not in policy task_selector.task_ids"
+        error_code = ENVELOPE_ERROR_SELECTOR_TASK_ID_MISMATCH
     elif sel_mode and str(task_mode or "").strip() != sel_mode:
         reason = "task_mode does not match policy task_selector.task_mode"
+        error_code = ENVELOPE_ERROR_SELECTOR_TASK_MODE_MISMATCH
     elif sel_project and str(project or "").strip() != sel_project:
         reason = "project does not match policy task_selector.project"
+        error_code = ENVELOPE_ERROR_SELECTOR_PROJECT_MISMATCH
     elif max_tasks <= 0:
         reason = "policy max_tasks is not a positive bound"
+        error_code = None  # invalid max_tasks (config error)
     elif released_count >= max_tasks:
         reason = f"policy count bound reached ({released_count}/{max_tasks})"
+        error_code = ENVELOPE_ERROR_QUOTA_EXHAUSTED
     else:
         reason = f"matched policy {policy.get('policy_id')} (released {released_count}/{max_tasks})"
+        error_code = None  # success, no error
 
     matched = all(predicates.values())
     trace_envelope({
@@ -337,8 +367,9 @@ def match_claim_envelope(
         "predicates": predicates,
         "matched": matched,
         "reason": reason,
+        "error_code": error_code,
     })
-    return matched, reason
+    return matched, reason, error_code
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)
