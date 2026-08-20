@@ -371,6 +371,7 @@ def _teaching_error(
     doc_ref: str = DISCIPLINE_DOC_REF,
     verb_name: str | None = None,
     example_args: dict[str, Any] | None = None,
+    severity: str = "needs_human",
 ) -> dict[str, Any]:
     """Teaching error with optional verb parameter shape (AIPOS-R6E ⑧)
     
@@ -381,6 +382,7 @@ def _teaching_error(
         doc_ref: Documentation reference
         verb_name: Optional verb name to include parameter shape
         example_args: Optional copyable example arguments
+        severity: AIPOS-F4 严重级(auto_recoverable/needs_human/bug)——渲染层只读此值映射, 禁现场定级
     """
     details: dict[str, Any] = {
         "suggested_next_action": suggested_next_action,
@@ -404,12 +406,14 @@ def _teaching_error(
             "operation": "mcp_write_tool",
             "error_code": error_code,
             "message": message,
+            "severity": severity,
             "suggested_next_action": suggested_next_action,
             "doc_ref": doc_ref,
             "errors": [
                 {
                     "category": error_code,
                     "message": message,
+                    "severity": severity,
                     "details": details,
                 }
             ],

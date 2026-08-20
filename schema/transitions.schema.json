@@ -3,6 +3,31 @@
   "title": "Lybra Task State Transitions Schema",
   "description": "AIPOS-C3: 状态机守卫单一真相——转移=声明(前态+守卫+记录+后态),执行器只读声明。每一次门的拒绝与放行都能指回此 schema 里的一行。设计出处:2026-08-18-gate-c-refactor-four-roots.md(C3)",
   "version": "1.0.0",
+  "severity_semantics": {
+    "description": "AIPOS-F4 大项B: 每条守卫声明携严重级语义 — 渲染层只读此声明做映射, 出声点不得自定级别。设计出处: 2026-08-20-错误输出分级红色error次数真需要人出手的次数.md",
+    "tiers": {
+      "auto_recoverable": {
+        "level": "warn",
+        "semantics": "流程会自动重试/让路(脏树等下一轮、兜底网撞会话绑定、终态锁挡重复、审计位无 finalize 能力提示)。附 recovery(预期行为+下一步)文案, 用户无需出手。",
+        "requires_recovery_text": true
+      },
+      "needs_human": {
+        "level": "error",
+        "semantics": "需要人出手(冲突 halt/授权造假/配置解析不到/信封外)。红色只留给这类。",
+        "requires_recovery_text": false
+      },
+      "bug": {
+        "level": "error",
+        "semantics": "真 bug(崩溃/渲染失败)。error 且必须修。",
+        "requires_recovery_text": false
+      }
+    },
+    "mapping": {
+      "auto_recoverable": "warn",
+      "needs_human": "error",
+      "bug": "error"
+    }
+  },
   "nodes": {
     "N0": {
       "name": "publish",
@@ -15,12 +40,14 @@
         "dependency_audit": {
           "description": "依赖项必须有门生 PASS 裁决(禁 frontmatter 自证)",
           "check": "all_dependencies_have_gate_pass_verdict",
-          "error_message": "依赖项缺少门生 PASS 裁决,禁止发布 (N0 依赖校验)"
+          "error_message": "依赖项缺少门生 PASS 裁决,禁止发布 (N0 依赖校验)",
+          "severity": "needs_human"
         },
         "required_fields": {
           "description": "必填字段由 card.schema 定义",
           "check": "card_schema_validation",
-          "error_message": "任务卡字段不符合 card.schema"
+          "error_message": "任务卡字段不符合 card.schema",
+          "severity": "needs_human"
         }
       },
       "record": {
@@ -53,12 +80,15 @@
         "claim_policy": {
           "description": "claim_policy 字段控制谁能认领",
           "check": "claim_policy_authorization",
-          "error_message": "claim_policy 拒绝:不符合认领授权条件"
+          "error_message": "claim_policy 拒绝:不符合认领授权条件",
+          "severity": "needs_human"
         },
         "no_active_claim": {
           "description": "任务不能被重复认领",
           "check": "no_existing_active_claim",
-          "error_message": "任务已被认领,禁止重复认领"
+          "error_message": "任务已被认领,禁止重复认领",
+          "severity": "auto_recoverable",
+          "recovery": "终态锁挡重复:任务已在 claim 状态,无需重复认领;预期行为=跳过本卡,让下一轮/既有会话继续"
         }
       },
       "record": {
@@ -93,7 +123,8 @@
         "valid_claimer": {
           "description": "只有当前 claimer 可以 return",
           "check": "actor_matches_current_claimer",
-          "error_message": "只有任务的当前 claimer 可以 return"
+          "error_message": "只有任务的当前 claimer 可以 return",
+          "severity": "needs_human"
         }
       },
       "record": {
@@ -127,7 +158,8 @@
         "has_return_record": {
           "description": "必须有 return 记录",
           "check": "return_record_exists",
-          "error_message": "缺少 return 记录,无法派发审计"
+          "error_message": "缺少 return 记录,无法派发审计",
+          "severity": "needs_human"
         }
       },
       "record": {
@@ -162,12 +194,14 @@
         "auditor_role": {
           "description": "必须是 auditor 角色",
           "check": "role_is_auditor",
-          "error_message": "只有 auditor 角色可以提交裁决"
+          "error_message": "只有 auditor 角色可以提交裁决",
+          "severity": "needs_human"
         },
         "has_audit_dispatch": {
           "description": "必须有审计派发记录",
           "check": "audit_dispatch_exists",
-          "error_message": "缺少审计派发记录,无法提交裁决"
+          "error_message": "缺少审计派发记录,无法提交裁决",
+          "severity": "needs_human"
         }
       },
       "record": {
@@ -221,7 +255,9 @@
             "PASS",
             "PASS_WITH_NOTES"
           ],
-          "error_message": "最新门生裁决不是 PASS,无法 finalize"
+          "error_message": "最新门生裁决不是 PASS,无法 finalize",
+          "severity": "auto_recoverable",
+          "recovery": "审计位无 finalize 能力提示:裁决未 PASS 前不具 finalize 能力,属设计预期;下一步=等审计 PASS 后再 finalize"
         },
         "verdict_record_authentic": {
           "description": "裁决记录必须是门生(非手写),具备 record_type: audit_verdict_record 等机器特征",
@@ -231,7 +267,8 @@
             "verdict_id",
             "verdict_at"
           ],
-          "error_message": "裁决记录缺少门生标记,疑似手写,拒绝 finalize"
+          "error_message": "裁决记录缺少门生标记,疑似手写,拒绝 finalize",
+          "severity": "needs_human"
         },
         "deployment_authorization": {
           "description": "部署授权:verdict_ref(审计授权) 或 dev_override(开发覆盖,需 reason)",
@@ -240,17 +277,20 @@
             "verdict_ref",
             "dev_override"
           ],
-          "error_message": "缺少部署授权 (verdict_ref 或 dev_override --reason)"
+          "error_message": "缺少部署授权 (verdict_ref 或 dev_override --reason)",
+          "severity": "needs_human"
         },
         "commit_coverage": {
           "description": "区间校验:current..HEAD 每个 commit 都属已 PASS 的卡",
           "check": "all_commits_have_pass_verdict",
-          "error_message": "区间内存在未审 commit,拒绝部署"
+          "error_message": "区间内存在未审 commit,拒绝部署",
+          "severity": "needs_human"
         },
         "no_dev_override_base": {
           "description": "禁止在 dev_override 部署上结算",
           "check": "current_deployment_not_dev_override",
-          "error_message": "当前部署 provenance=dev_override,finalize 拒绝在其上结算"
+          "error_message": "当前部署 provenance=dev_override,finalize 拒绝在其上结算",
+          "severity": "needs_human"
         }
       },
       "record": {
@@ -339,7 +379,8 @@
         "has_closure_authorization": {
           "description": "需要 owner 或授权角色",
           "check": "actor_has_close_scope",
-          "error_message": "缺少 close 权限"
+          "error_message": "缺少 close 权限",
+          "severity": "needs_human"
         }
       },
       "record": {
@@ -373,7 +414,8 @@
         "owner_authorization": {
           "description": "只有 owner 可以 reopen",
           "check": "actor_is_owner",
-          "error_message": "只有 owner 可以 reopen 任务"
+          "error_message": "只有 owner 可以 reopen 任务",
+          "severity": "needs_human"
         }
       },
       "modes": {

@@ -722,6 +722,8 @@
           "id": "no_formal_verdict",
           "description": "Target card must NOT have a formal audit verdict (PASS/PASS_WITH_NOTES/FAIL/BLOCK). If a formal verdict exists, the card must be closed via lybra_queue_close, not mark-concluded.",
           "on_violation": "reject_with_redirect",
+          "severity": "auto_recoverable",
+          "recovery": "已有门生裁决 → 改用 lybra queue close 结案(非 mark-concluded);下一步=走 close 动词",
           "redirect_verb": "lybra_queue_close_dry_run",
           "redirect_hint": "Task {task_id} has a formal verdict ({verdict}). Use 'lybra queue close' instead of mark-concluded."
         }
@@ -782,6 +784,8 @@
           "id": "audit_idempotent",
           "description": "If the audit task card already exists (AUDIT_TASK_ID_EXISTS), supplement the dispatch record instead of blocking. The dispatch is idempotent — re-dispatching for the same source+audit pair updates the dispatch record.",
           "on_violation": "idempotent_supplement",
+          "severity": "auto_recoverable",
+          "recovery": "审计卡已存在 → 幂等补记派发记录而非阻断;预期行为=自动续补,用户无需出手",
           "supplement_action": "update_dispatch_record_and_proceed"
         }
       ],

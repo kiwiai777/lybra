@@ -10,6 +10,8 @@ import {
   logLine,
   actorMatches,
   isHolder,
+  stringifyReasons,
+  severityToLevel,
 } from "../loop-decisions.ts";
 
 let failures = 0;
@@ -168,6 +170,23 @@ const parsed = JSON.parse(line);
 check("logLine 是合法 JSON", typeof parsed === "object");
 check("logLine 含 ts/level/action", parsed.ts && parsed.level === "INFO" && parsed.action === "release");
 check("logLine 不含 token", !/token|bearer|secret/i.test(line));
+
+// --- AIPOS-F4: 严重级→级别 映射 + [object Object] 拒因序列化 ---
+eq("severity auto_recoverable → warn", severityToLevel("auto_recoverable"), "warn");
+eq("severity needs_human → error", severityToLevel("needs_human"), "error");
+eq("severity bug → error", severityToLevel("bug"), "error");
+eq("severity 缺省 → error", severityToLevel(undefined), "error");
+eq("severity 未知 → error", severityToLevel("unknown-tier"), "error");
+// [object Object] 修复实证: 对象数组(如 _teaching_error 的 errors)逐项取 message, 不裸 join
+eq(
+  "拒因对象数组序列化(修复 [object Object])",
+  stringifyReasons([{ category: "X", message: "SESSION_MISMATCH: ...", details: {} }]),
+  "SESSION_MISMATCH: ...",
+);
+eq("拒因字符串数组拼接", stringifyReasons(["a", "b"]), "a; b");
+eq("拒因单字符串直通", stringifyReasons("just a string"), "just a string");
+eq("拒因空 → 空串", stringifyReasons(null), "");
+check("拒因序列化不含 [object Object]", !stringifyReasons([{ message: "m" }]).includes("[object Object]"));
 
 // --- 汇总 ---
 for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);

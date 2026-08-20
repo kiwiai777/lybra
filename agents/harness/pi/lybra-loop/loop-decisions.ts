@@ -16,6 +16,62 @@ export const AUTONOMY_SUPERVISED = "Supervised";
 export type AnyDict = Record<string, unknown>;
 
 // ---------------------------------------------------------------------------
+// AIPOS-F4 大项B/C: 严重级→级别 单一映射(渲染层只引此函数, 禁现场定级)
+// 与 schema/transitions.schema.json severity_semantics.mapping 对齐:
+//   auto_recoverable → warn;needs_human / bug → error;未知/缺省 → error(保守)。
+// ---------------------------------------------------------------------------
+
+export type NotifyLevel = "info" | "warn" | "error";
+
+export const SEVERITY_LEVELS: Record<string, NotifyLevel> = {
+  auto_recoverable: "warn",
+  needs_human: "error",
+  bug: "error",
+};
+
+export const DEFAULT_SEVERITY = "needs_human";
+
+export function severityToLevel(severity: string | null | undefined): NotifyLevel {
+  if (!severity) return "error";
+  return SEVERITY_LEVELS[severity] ?? "error";
+}
+
+/**
+ * 把 gate 应答里的拒因(blocking_reasons/errors/message)序列化为可读文本。
+ * 修复 [object Object]: 拒绝理由可能是字符串数组, 也可能是 {category,message,details}
+ * 对象数组(如 _teaching_error 的 errors) —— 逐项取 message/字符串化, 不再裸 join。
+ */
+export function stringifyReasons(reasons: unknown): string {
+  if (reasons == null) return "";
+  if (typeof reasons === "string") return reasons;
+  if (Array.isArray(reasons)) {
+    const parts = reasons.map((r) => {
+      if (typeof r === "string") return r;
+      if (r && typeof r === "object") {
+        const o = r as AnyDict;
+        if (typeof o.message === "string") return o.message;
+        if (typeof o.error === "string") return o.error;
+        try {
+          return JSON.stringify(o);
+        } catch {
+          return "";
+        }
+      }
+      return String(r);
+    });
+    return parts.filter(Boolean).join("; ");
+  }
+  if (typeof reasons === "object") {
+    try {
+      return JSON.stringify(reasons);
+    } catch {
+      return String(reasons);
+    }
+  }
+  return String(reasons);
+}
+
+// ---------------------------------------------------------------------------
 // 三态分类 —— 与 tools/aipos_cli/agent_connector.py:classify / _is_holder 对齐
 // ---------------------------------------------------------------------------
 
