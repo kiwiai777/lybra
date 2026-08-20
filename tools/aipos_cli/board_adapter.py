@@ -2973,6 +2973,16 @@ def _build_audit_dispatch_preview(
         # 兜底:metadata 显示 PASS 但没找到 verdict 记录(数据不一致)
         blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS")
     
+    # AIPOS-F2 ③立墙带路: 检测手写文件在场时附加提示
+    from tools.aipos_cli.audit_helpers import detect_hand_written_verdicts, HAND_WRITTEN_VERDICT_NOTICE
+    _hw_dispatch = detect_hand_written_verdicts(
+        repo_root / "5_tasks" / "records" / "audit_verdicts" / source_task_id_for_verdict
+    )
+    if _hw_dispatch:
+        warnings.append(HAND_WRITTEN_VERDICT_NOTICE)
+        for _hw in _hw_dispatch:
+            warnings.append(f"  ignored: {_hw['file']} ({_hw['reason']})")
+    
     # re-dispatch 检查:如果前轮是非终态(FAIL/REQUEST_CHANGES),允许新 audit_task_id
     if source_metadata.get("related_audit_task_ref") or source_metadata.get("audit_dispatch_record_ref"):
         # 已有 dispatch 记录
@@ -3475,6 +3485,16 @@ def _build_audit_verdict_preview(
         if latest_verdict_value in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
             blocking_reasons.append(f"Audit verdict cannot overturn PASS: reviewed task already has terminal PASS verdict")
         # FAIL/REQUEST_CHANGES/BLOCKED 等非终态:允许 supersede,继续写新 verdict
+    
+    # AIPOS-F2 ③立墙带路: 检测手写文件在场时附加提示
+    from tools.aipos_cli.audit_helpers import detect_hand_written_verdicts, HAND_WRITTEN_VERDICT_NOTICE
+    _hw_verdicts = detect_hand_written_verdicts(
+        repo_root / "5_tasks" / "records" / "audit_verdicts" / reviewed_task_id_for_verdict
+    )
+    if _hw_verdicts:
+        warnings.append(HAND_WRITTEN_VERDICT_NOTICE)
+        for _hw in _hw_verdicts:
+            warnings.append(f"  ignored: {_hw['file']} ({_hw['reason']})")
     
     if verdict_path.exists():
         blocking_reasons.append(f"Audit verdict record already exists: {verdict_rel}")
@@ -4939,8 +4959,9 @@ def converge_r_cards(
                 if not verdicts_dir.is_dir():
                     skipped.append({"task_id": task_id, "reason": f"no verdicts dir for {reviewed_task_id}"})
                     continue
-                # AIPOS-C3B 大项B①②: 按 frontmatter 时间戳取最新, 禁按文件名排序;
-                # 只认门生记录(具备 record_type/verdict_id/verdict_at 机器特征)
+                # AIPOS-C3B 大项B①② + AIPOS-F2: 按 frontmatter 时间戳取最新, 禁按文件名排序;
+                # 只认门生记录——统一调 audit_helpers.is_gate_born_verdict_metadata
+                from tools.aipos_cli.audit_helpers import is_gate_born_verdict_metadata
                 verdict_candidates = []
                 for vf in verdicts_dir.glob("*.md"):
                     try:
@@ -4949,12 +4970,11 @@ def converge_r_cards(
                         continue
                     if not isinstance(vfm, dict):
                         continue
-                    # 门生标记检查
-                    rt = str(vfm.get("record_type") or "").strip()
-                    vid = str(vfm.get("verdict_id") or "").strip()
-                    vat = str(vfm.get("verdict_at") or "").strip()
-                    if rt != "audit_verdict_record" or not vid or not vat:
+                    # AIPOS-F2: 门生标记检查走共享函数(单源)
+                    if not is_gate_born_verdict_metadata(vfm):
                         continue  # 手写文件,忽略
+                    vid = str(vfm.get("verdict_id") or "").strip()
+                    vat = str(vfm.get("verdict_at") or vfm.get("timestamp") or "").strip()
                     verdict_candidates.append({"path": vf, "verdict_id": vid, "verdict_at": vat})
                 if not verdict_candidates:
                     skipped.append({"task_id": task_id, "reason": f"no gate-born verdict records for {reviewed_task_id}"})

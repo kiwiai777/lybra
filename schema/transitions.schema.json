@@ -7,7 +7,9 @@
     "N0": {
       "name": "publish",
       "description": "草稿发布为正式任务卡",
-      "from_states": ["draft"],
+      "from_states": [
+        "draft"
+      ],
       "to_state": "pending",
       "guards": {
         "dependency_audit": {
@@ -24,8 +26,16 @@
       "record": {
         "type": "publish",
         "location": "5_tasks/records/publishes/{task_id}/publish_{task_id}_{timestamp}_{actor}.md",
-        "required_fields": ["task_id", "actor", "published_at", "record_type"],
-        "gate_written_markers": ["record_type: publish", "published_at"]
+        "required_fields": [
+          "task_id",
+          "actor",
+          "published_at",
+          "record_type"
+        ],
+        "gate_written_markers": [
+          "record_type: publish",
+          "published_at"
+        ]
       },
       "automation": {
         "queue_placement": "moves card to 5_tasks/queue/pending/",
@@ -35,7 +45,9 @@
     "N1": {
       "name": "claim",
       "description": "认领任务(executor 取任务进入执行)",
-      "from_states": ["pending"],
+      "from_states": [
+        "pending"
+      ],
       "to_state": "claimed",
       "guards": {
         "claim_policy": {
@@ -52,8 +64,18 @@
       "record": {
         "type": "claim",
         "location": "5_tasks/records/claims/{task_id}/claim_{task_id}_{timestamp}_{agent_instance}.md",
-        "required_fields": ["claim_id", "task_id", "agent_instance", "claimed_at", "record_type"],
-        "gate_written_markers": ["record_type: claim", "claimed_at", "claim_id"]
+        "required_fields": [
+          "claim_id",
+          "task_id",
+          "agent_instance",
+          "claimed_at",
+          "record_type"
+        ],
+        "gate_written_markers": [
+          "record_type: claim",
+          "claimed_at",
+          "claim_id"
+        ]
       },
       "automation": {
         "queue_placement": "moves card to 5_tasks/queue/claimed/",
@@ -63,7 +85,9 @@
     "N2": {
       "name": "return",
       "description": "执行者归还任务(executor 交回工作)",
-      "from_states": ["claimed"],
+      "from_states": [
+        "claimed"
+      ],
       "to_state": "returned",
       "guards": {
         "valid_claimer": {
@@ -75,8 +99,17 @@
       "record": {
         "type": "return",
         "location": "5_tasks/records/returns/{task_id}/return_{task_id}_{timestamp}_{agent_instance}.md",
-        "required_fields": ["task_id", "agent_instance", "returned_at", "record_type", "return_status"],
-        "gate_written_markers": ["record_type: return", "returned_at"]
+        "required_fields": [
+          "task_id",
+          "agent_instance",
+          "returned_at",
+          "record_type",
+          "return_status"
+        ],
+        "gate_written_markers": [
+          "record_type: return",
+          "returned_at"
+        ]
       },
       "automation": {
         "queue_placement": "stays in claimed/ (awaiting audit)",
@@ -86,7 +119,9 @@
     "N3": {
       "name": "audit_dispatch",
       "description": "派发审计任务",
-      "from_states": ["returned"],
+      "from_states": [
+        "returned"
+      ],
       "to_state": "audit_dispatched",
       "guards": {
         "has_return_record": {
@@ -98,8 +133,18 @@
       "record": {
         "type": "audit_dispatch",
         "location": "5_tasks/records/audit_dispatches/{task_id}/dispatch_{task_id}_{timestamp}_{actor}.md",
-        "required_fields": ["dispatch_id", "reviewed_task_id", "audit_task_id", "dispatched_at", "record_type"],
-        "gate_written_markers": ["record_type: audit_dispatch", "dispatched_at", "dispatch_id"]
+        "required_fields": [
+          "dispatch_id",
+          "reviewed_task_id",
+          "audit_task_id",
+          "dispatched_at",
+          "record_type"
+        ],
+        "gate_written_markers": [
+          "record_type: audit_dispatch",
+          "dispatched_at",
+          "dispatch_id"
+        ]
       },
       "automation": {
         "creates_audit_card": "生成 {task_id}R 审计任务卡",
@@ -109,7 +154,9 @@
     "N4": {
       "name": "audit_verdict",
       "description": "审计裁决(auditor 提交审计结果)",
-      "from_states": ["audit_dispatched"],
+      "from_states": [
+        "audit_dispatched"
+      ],
       "to_state": "verdict_issued",
       "guards": {
         "auditor_role": {
@@ -126,9 +173,28 @@
       "record": {
         "type": "audit_verdict",
         "location": "5_tasks/records/audit_verdicts/{reviewed_task_id}/verdict_{reviewed_task_id}_{timestamp}_{auditor_instance}.md",
-        "required_fields": ["verdict_id", "verdict", "reviewed_task_id", "auditor_instance", "verdict_at", "record_type"],
-        "gate_written_markers": ["record_type: audit_verdict_record", "verdict_at", "verdict_id"],
-        "allowed_verdict_values": ["PASS", "PASS_WITH_NOTES", "FAIL", "BLOCK"]
+        "required_fields": [
+          "verdict_id",
+          "verdict",
+          "reviewed_task_id",
+          "auditor_instance",
+          "verdict_at",
+          "record_type"
+        ],
+        "gate_written_markers": [
+          "record_type: audit_verdict_record",
+          "verdict_at",
+          "verdict_id"
+        ],
+        "allowed_verdict_values": [
+          "PASS",
+          "PASS_WITH_NOTES",
+          "FAIL",
+          "BLOCK"
+        ],
+        "record_authenticity_ref": "#/record_authenticity/gate_markers/audit_verdict",
+        "authenticity_check": "audit_helpers.is_gate_born_verdict_metadata",
+        "authenticity_policy": "手写文件(缺少门生标记)必须被忽略并 warn,绝不参与终态判定(AIPOS-F2)"
       },
       "automation": {
         "on_PASS": "允许 finalize (N5)",
@@ -143,25 +209,37 @@
     "N5": {
       "name": "finalize",
       "description": "结算(commit + push + deploy 到生产)",
-      "from_states": ["verdict_issued"],
+      "from_states": [
+        "verdict_issued"
+      ],
       "to_state": "finalized",
       "guards": {
         "has_pass_verdict": {
           "description": "必须有门生 PASS 或 PASS_WITH_NOTES 裁决",
           "check": "latest_gate_verdict_is_pass",
-          "allowed_verdict_values": ["PASS", "PASS_WITH_NOTES"],
+          "allowed_verdict_values": [
+            "PASS",
+            "PASS_WITH_NOTES"
+          ],
           "error_message": "最新门生裁决不是 PASS,无法 finalize"
         },
         "verdict_record_authentic": {
           "description": "裁决记录必须是门生(非手写),具备 record_type: audit_verdict_record 等机器特征",
           "check": "verdict_record_has_gate_markers",
-          "gate_markers": ["record_type: audit_verdict_record", "verdict_id", "verdict_at"],
+          "gate_markers": [
+            "record_type: audit_verdict_record",
+            "verdict_id",
+            "verdict_at"
+          ],
           "error_message": "裁决记录缺少门生标记,疑似手写,拒绝 finalize"
         },
         "deployment_authorization": {
           "description": "部署授权:verdict_ref(审计授权) 或 dev_override(开发覆盖,需 reason)",
           "check": "has_valid_deployment_authorization",
-          "authorization_types": ["verdict_ref", "dev_override"],
+          "authorization_types": [
+            "verdict_ref",
+            "dev_override"
+          ],
           "error_message": "缺少部署授权 (verdict_ref 或 dev_override --reason)"
         },
         "commit_coverage": {
@@ -178,15 +256,40 @@
       "record": {
         "type": "finalization",
         "location": "5_tasks/records/finalizations/{task_id}/finalization_{task_id}_{timestamp}_{actor}.md",
-        "required_fields": ["task_id", "actor", "commit", "finalized_at", "authorization_type", "authorization_ref", "record_type"],
-        "gate_written_markers": ["record_type: finalization", "finalized_at"]
+        "required_fields": [
+          "task_id",
+          "actor",
+          "commit",
+          "finalized_at",
+          "authorization_type",
+          "authorization_ref",
+          "record_type"
+        ],
+        "gate_written_markers": [
+          "record_type: finalization",
+          "finalized_at"
+        ]
       },
       "deployment_record": {
         "type": "deployment",
         "location": "5_tasks/records/deployments/deployment_{timestamp}_{commit_short}.md",
-        "required_fields": ["commit", "actor", "deployed_at", "authorization_type", "authorization_ref", "deployment_provenance", "record_type"],
-        "gate_written_markers": ["record_type: deployment", "deployed_at"],
-        "deployment_provenance_values": ["audited", "dev_override"]
+        "required_fields": [
+          "commit",
+          "actor",
+          "deployed_at",
+          "authorization_type",
+          "authorization_ref",
+          "deployment_provenance",
+          "record_type"
+        ],
+        "gate_written_markers": [
+          "record_type: deployment",
+          "deployed_at"
+        ],
+        "deployment_provenance_values": [
+          "audited",
+          "dev_override"
+        ]
       },
       "automation": {
         "git_operations": "commit (产品仓) + push",
@@ -227,7 +330,10 @@
     "N6": {
       "name": "close",
       "description": "任务结案(归档到 completed)",
-      "from_states": ["finalized", "verdict_issued"],
+      "from_states": [
+        "finalized",
+        "verdict_issued"
+      ],
       "to_state": "completed",
       "guards": {
         "has_closure_authorization": {
@@ -239,8 +345,16 @@
       "record": {
         "type": "closure",
         "location": "5_tasks/records/closures/{task_id}/closure_{task_id}_{timestamp}_{actor}.md",
-        "required_fields": ["task_id", "actor", "closed_at", "record_type"],
-        "gate_written_markers": ["record_type: closure", "closed_at"]
+        "required_fields": [
+          "task_id",
+          "actor",
+          "closed_at",
+          "record_type"
+        ],
+        "gate_written_markers": [
+          "record_type: closure",
+          "closed_at"
+        ]
       },
       "automation": {
         "queue_placement": "moves card to 5_tasks/queue/completed/",
@@ -250,7 +364,10 @@
     "reopen": {
       "name": "reopen",
       "description": "重新打开已关闭任务(大项C②:完整回 pending 或原地重开,禁中间态)",
-      "from_states": ["completed", "claimed"],
+      "from_states": [
+        "completed",
+        "claimed"
+      ],
       "to_state": "pending_or_claimed",
       "guards": {
         "owner_authorization": {
@@ -280,22 +397,58 @@
       "record": {
         "type": "reopen",
         "location": "5_tasks/records/events/{task_id}/reopen_{task_id}_{timestamp}_{actor}.md",
-        "required_fields": ["task_id", "actor", "reopened_at", "reopen_mode", "record_type"],
-        "gate_written_markers": ["record_type: reopen", "reopened_at"]
+        "required_fields": [
+          "task_id",
+          "actor",
+          "reopened_at",
+          "reopen_mode",
+          "record_type"
+        ],
+        "gate_written_markers": [
+          "record_type: reopen",
+          "reopened_at"
+        ]
       }
     }
   },
   "record_authenticity": {
     "description": "门生记录的机器特征,用于区分门生记录与手写文件",
     "gate_markers": {
-      "common": ["record_type", "timestamp或{event}_at字段"],
-      "claim": ["claim_id", "claimed_at", "record_type: claim"],
-      "return": ["returned_at", "record_type: return"],
-      "audit_dispatch": ["dispatch_id", "dispatched_at", "record_type: audit_dispatch"],
-      "audit_verdict": ["verdict_id", "verdict_at", "record_type: audit_verdict_record"],
-      "finalization": ["finalized_at", "record_type: finalization"],
-      "deployment": ["deployed_at", "record_type: deployment"],
-      "closure": ["closed_at", "record_type: closure"]
+      "common": [
+        "record_type",
+        "timestamp或{event}_at字段"
+      ],
+      "claim": [
+        "claim_id",
+        "claimed_at",
+        "record_type: claim"
+      ],
+      "return": [
+        "returned_at",
+        "record_type: return"
+      ],
+      "audit_dispatch": [
+        "dispatch_id",
+        "dispatched_at",
+        "record_type: audit_dispatch"
+      ],
+      "audit_verdict": [
+        "verdict_id",
+        "verdict_at",
+        "record_type: audit_verdict_record"
+      ],
+      "finalization": [
+        "finalized_at",
+        "record_type: finalization"
+      ],
+      "deployment": [
+        "deployed_at",
+        "record_type: deployment"
+      ],
+      "closure": [
+        "closed_at",
+        "record_type: closure"
+      ]
     },
     "rejection_policy": "手写文件(缺少门生标记)必须被忽略并 warn,绝不参与状态判定"
   },
@@ -325,5 +478,17 @@
       "enums.schema.json (record_type 等枚举)",
       "config.schema.json (治理目录树路径)"
     ]
+  },
+  "single_source_policy": {
+    "description": "裁决存在性全系统只许一处定义:audit_helpers.is_gate_born_verdict_metadata (AIPOS-F2)",
+    "applies_to": [
+      "终态锁(audit_verdict 拒重复提交)",
+      "真相选取(sweep/finalize/close 选裁决)",
+      "依赖校验(task_complexity depends_on)",
+      "派审 ALREADY_PASSED 判定(audit_dispatch)",
+      "mark_concluded 前置检查",
+      "close PASS 判定(queue_mutation)"
+    ],
+    "hand_written_policy": "手写文件对门彻底透明——不构成终态,不参与选取,不阻塞正规提交"
   }
 }

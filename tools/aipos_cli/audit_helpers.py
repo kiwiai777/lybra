@@ -237,6 +237,112 @@ def build_audit_verdict_confirm_args(
     }
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F2: 裁决存在性单源——门生特征校验共享函数
+# ---------------------------------------------------------------------------
+
+def is_gate_born_verdict_metadata(metadata: dict) -> bool:
+    """AIPOS-F2: 判断裁决 frontmatter 是否具备门生标记(单一声明)。
+
+    门生标记定义来自 schema/transitions.schema.json 的 record_authenticity:
+      - record_type: 以 'audit_verdict' 开头
+      - verdict_id: 非空且以 'verdict_' 开头
+      - verdict_at: 非空(ISO8601 时间戳)
+
+    手写文件(缺少以上任一标记)返回 False。
+    此函数是全系统唯一判定:"某条裁决记录是否门生"。
+    终态锁(audit_verdict 拒重复提交)、真相选取(sweep/finalize/close 选裁决)、
+    依赖校验、派审 ALREADY_PASSED 判定——全部调此函数,不各自实现。
+
+    Args:
+        metadata: 已解析的 frontmatter dict(可以是 record dict 的 metadata 字段,
+                  也可以直接是从文件解析出的 frontmatter)
+
+    Returns:
+        True = 门生记录, False = 手写文件或缺少必要标记
+    """
+    if not isinstance(metadata, dict):
+        return False
+    record_type = str(metadata.get("record_type") or "").strip()
+    verdict_id = str(metadata.get("verdict_id") or "").strip()
+    verdict_at_raw = metadata.get("verdict_at") or metadata.get("timestamp") or ""
+    verdict_at = str(verdict_at_raw).strip()
+
+    if not record_type.startswith("audit_verdict"):
+        return False
+    if not verdict_id or not verdict_id.startswith("verdict_"):
+        return False
+    if not verdict_at:
+        return False
+    return True
+
+
+def is_gate_born_verdict_record(record: dict) -> bool:
+    """AIPOS-F2: 判断 load_records() 返回的 verdict record dict 是否门生。
+
+    record 可能是两种结构:
+      1. 顶层就有 record_type/verdict_id/verdict_at(records.py _build_record 的 else 分支)
+      2. metadata 子 dict 里有这些字段
+
+    本函数两种都查,任一命中即门生。
+    """
+    if not isinstance(record, dict):
+        return False
+    # 结构 1: 顶层字段(_build_record else 分支把 verdict_id/verdict_at 放顶层)
+    if is_gate_born_verdict_metadata(record):
+        return True
+    # 结构 2: metadata 子 dict
+    nested = record.get("metadata")
+    if isinstance(nested, dict) and is_gate_born_verdict_metadata(nested):
+        return True
+    return False
+
+
+def detect_hand_written_verdicts(verdicts_dir: Path) -> list[dict]:
+    """AIPOS-F2 ③立墙带路: 扫描裁决目录,返回手写文件列表(含原因)。
+
+    用于 audit_verdict dry_run 应答中附加提示:
+    "检测到非门生裁决文件已忽略;裁决只经门产生,勿手写落盘"
+
+    Args:
+        verdicts_dir: 5_tasks/records/audit_verdicts/<task_id>/ 路径
+
+    Returns:
+        [{"file": str, "reason": str}, ...]
+    """
+    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+
+    rejected: list[dict] = []
+    if not verdicts_dir.is_dir():
+        return rejected
+    for vf in sorted(verdicts_dir.glob("*.md")):
+        try:
+            text = vf.read_text(encoding="utf-8")
+            fm, _, _ = parse_markdown_frontmatter(text)
+        except Exception:
+            rejected.append({"file": vf.name, "reason": "解析失败"})
+            continue
+        if not is_gate_born_verdict_metadata(fm):
+            # 推断原因
+            rt = str(fm.get("record_type") or "").strip() if isinstance(fm, dict) else ""
+            vid = str(fm.get("verdict_id") or "").strip() if isinstance(fm, dict) else ""
+            vat = str(fm.get("verdict_at") or fm.get("timestamp") or "").strip() if isinstance(fm, dict) else ""
+            reasons = []
+            if not rt.startswith("audit_verdict"):
+                reasons.append(f"record_type='{rt}'")
+            if not vid or not vid.startswith("verdict_"):
+                reasons.append(f"verdict_id='{vid}'")
+            if not vat:
+                reasons.append("verdict_at 缺失")
+            rejected.append({"file": vf.name, "reason": "; ".join(reasons) if reasons else "缺少门生标记"})
+    return rejected
+
+
+HAND_WRITTEN_VERDICT_NOTICE = (
+    "检测到非门生裁决文件已忽略;裁决只经门产生,勿手写落盘"
+)
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

@@ -136,6 +136,7 @@ class TestFailRereviewAllowed(unittest.TestCase):
             {
                 "record_id": "verdict_FND-1_20260808_audit-test-dev",
                 "record_type": "audit_verdict_record",
+                "verdict_id": "verdict_FND-1_20260808_audit-test-dev",
                 "reviewed_task_id": "FND-1",
                 "audit_task_id": "FND-1R1",
                 "verdict": "FAIL",
@@ -273,6 +274,7 @@ class TestPassVerdictTerminal(unittest.TestCase):
             {
                 "record_id": "verdict_TEST-PASS_20260808_audit-test-dev",
                 "record_type": "audit_verdict_record",
+                "verdict_id": "verdict_TEST-PASS_20260808_audit-test-dev",
                 "reviewed_task_id": "TEST-PASS",
                 "verdict": "PASS",
                 "verdict_at": "2026-08-08T01:00:00Z",
@@ -326,6 +328,7 @@ class TestPassVerdictTerminal(unittest.TestCase):
             {
                 "record_id": "verdict_TEST-PASS2_20260808_audit-test-dev",
                 "record_type": "audit_verdict_record",
+                "verdict_id": "verdict_TEST-PASS2_20260808_audit-test-dev",
                 "reviewed_task_id": "TEST-PASS2",
                 "verdict": "PASS",
                 "verdict_at": "2026-08-08T01:00:00Z",
@@ -440,6 +443,7 @@ class TestRequestChangesRereviewAllowed(unittest.TestCase):
             {
                 "record_id": "verdict_TEST-RC_20260808_audit-test-dev",
                 "record_type": "audit_verdict_record",
+                "verdict_id": "verdict_TEST-RC_20260808_audit-test-dev",
                 "reviewed_task_id": "TEST-RC",
                 "verdict": "REQUEST_CHANGES",
                 "verdict_at": "2026-08-08T01:00:00Z",
