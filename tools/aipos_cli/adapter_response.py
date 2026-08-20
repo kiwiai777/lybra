@@ -68,11 +68,13 @@ def error_entry(
     *,
     field: str | None = None,
     details: dict[str, Any] | None = None,
+    severity: str = "needs_human",
 ) -> dict[str, Any]:
     normalized = category if category in ERROR_CATEGORIES else "INTERNAL_ERROR"
     entry: dict[str, Any] = {
         "category": normalized,
         "message": message,
+        "severity": severity,
         "details": details or {},
     }
     if field is not None:
@@ -174,6 +176,7 @@ def blocked_response(
     owner_confirmation_required: bool = False,
     owner_confirmation_reasons: list[str] | None = None,
     safety_notice: str = "",
+    severity: str = "needs_human",
 ) -> dict[str, Any]:
     return make_response(
         ok=False,
@@ -192,7 +195,7 @@ def blocked_response(
         owner_confirmation_required=owner_confirmation_required,
         owner_confirmation_reasons=owner_confirmation_reasons,
         safety_notice=safety_notice,
-        errors=[error_entry(category, message, field=field)],
+        errors=[error_entry(category, message, field=field, severity=severity)],
     )
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation

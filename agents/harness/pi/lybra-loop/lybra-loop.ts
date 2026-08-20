@@ -24,7 +24,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs, type LoopConfig } from "./gate-client.ts";
-import { buildKickoff } from "./loop-decisions.ts";
+import { buildKickoff, stringifyReasons, severityToLevel } from "./loop-decisions.ts";
 import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
 // AIPOS-C4B 大项B: 版本信号 — 本地版本戳读取 + 清单比对
 import { readFileSync, existsSync } from "node:fs";
@@ -398,13 +398,20 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
 
       await currentClient.callTool("lybra_queue_close_confirm", closeArgs);
       currentLogger.info("auto-close-success", { task_id: taskId });
-      ctx.ui?.notify?.(`sweep 收: ${taskId} (${latest.verdict})`, "info");
+      // AIPOS-F4 大项C: 收账成功升为可见 info 一行(合并 <hash>/部署 <hash>/close)。
+      const settleHash = finalizeCommitHash ? finalizeCommitHash.slice(0, 8) : "?";
+      ctx.ui?.notify?.(`已收账 ${taskId}: 合并 ${settleHash}/部署 ${settleHash}/close`, "info");
       processedCount++;
     } catch (e) {
-      const errMsg = `sweep finalize 失败: ${taskId} - ${e instanceof Error ? e.message : String(e)}`;
-      currentLogger.error("auto-finalize-failed", { task_id: taskId, error: String(e) });
-      ctx.ui?.notify?.(errMsg, "error");
-      anomalies.push({ task_id: taskId, reason: `finalize 失败` });
+      const rawErr = e instanceof Error ? e.message : String(e);
+      // AIPOS-F4 大项B/C: 脏树/可重试类失败属 auto_recoverable → warn + 下一步(等下一轮); 其余 → error。
+      const isDirtyTree = /工作树不干净|dirty|uncommitted|changes not staged|working tree/i.test(rawErr);
+      const level = isDirtyTree ? "warn" : "error";
+      const nextStep = isDirtyTree ? " 下一步: 等下一轮 sweep 再试(脏树自动让路)" : "";
+      const errMsg = `sweep finalize 失败: ${taskId} - ${rawErr}${nextStep}`;
+      currentLogger.error("auto-finalize-failed", { task_id: taskId, error: rawErr, isDirtyTree });
+      ctx.ui?.notify?.(errMsg, level);
+      anomalies.push({ task_id: taskId, reason: isDirtyTree ? "脏树让路等下一轮" : "finalize 失败" });
     }
   }
 
@@ -439,7 +446,18 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
   } catch {
     return false;
   }
-  
+
+  // AIPOS-F4 大项D: 兜底网让路 — auto-return 发起前先查 returns/ 已有记录 → 静默跳过。
+  // 本任务已有 return 记录(上轮已交回)则不再重复发起, 也不出声(避免红错刷屏)。
+  const returnsDir = path.join(config.workspaceRoot, "5_tasks/records/returns", currentTaskId);
+  if (fs.existsSync(returnsDir)) {
+    const returnFiles = fs.readdirSync(returnsDir).filter((f) => f.startsWith("return_") && f.endsWith(".md"));
+    if (returnFiles.length > 0) {
+      currentLogger.info("auto-return-skip-already-returned", { task_id: currentTaskId, count: returnFiles.length });
+      return false;
+    }
+  }
+
   const eventsDir = path.join(config.workspaceRoot, "5_tasks/records/events", currentTaskId);
   if (!fs.existsSync(eventsDir)) return false;
   
@@ -498,16 +516,20 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
       active_session_id: getSessionId(ctx),
     });
     
-    // AIPOS-C3B 大项D②: dry_run 被拒时拒因上屏(现只埋日志), 检测 SESSION_MISMATCH 自动建议 return-repair
+    // AIPOS-F4 大项C/D: dry_run 被拒时拒因上屏(声明→级别映射, 禁现场定级)。
+    // [object Object] 修复: 用 stringifyReasons 逐项取 message, 不再裸 join 对象数组。
+    // 兜底网撞会话绑定(SESSION_MISMATCH)属 auto_recoverable → 降 info(非红错), 附"下一步"。
     if (dryRunResp.verdict === "BLOCK" || dryRunResp.isError === true) {
       const reasons = dryRunResp.blocking_reasons || dryRunResp.errors || [];
-      const reasonText = Array.isArray(reasons) ? reasons.join("; ") : String(reasons);
+      const reasonText = stringifyReasons(reasons);
       const isSessionMismatch = reasonText.includes("SESSION_MISMATCH");
+      const severity = (dryRunResp as any).severity || (isSessionMismatch ? "auto_recoverable" : "needs_human");
+      const level = severityToLevel(severity);
       const onScreenMsg = `auto-return ${currentTaskId} 被拒: ${reasonText}`;
-      currentLogger.error("auto-return-blocked", { task_id: currentTaskId, reasons, isSessionMismatch });
-      ctx.ui?.notify?.(onScreenMsg, "error");
+      currentLogger.error("auto-return-blocked", { task_id: currentTaskId, reasons, isSessionMismatch, severity, level });
+      ctx.ui?.notify?.(onScreenMsg, level);
       if (isSessionMismatch) {
-        ctx.ui?.notify?.(`建议执行: lybra queue return-repair --task-id ${currentTaskId} --actor ${config.actor}`, "warn");
+        ctx.ui?.notify?.(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info");
       }
       return false;
     }
@@ -548,10 +570,10 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
       task_id: currentTaskId,
       error: errMsg,
     });
-    // AIPOS-C3B 大项D②: 拒因上屏
-    ctx.ui?.notify?.(`auto-return ${currentTaskId} 失败: ${errMsg}`, "error");
+    // AIPOS-F4 大项D: 拒因上屏 — SESSION_MISMATCH 属 auto_recoverable → info, 其余 → error
+    ctx.ui?.notify?.(`auto-return ${currentTaskId} 失败: ${errMsg}`, isSessionMismatch ? "info" : "error");
     if (isSessionMismatch) {
-      ctx.ui?.notify?.(`建议执行: lybra queue return-repair --task-id ${currentTaskId} --actor ${config.actor}`, "warn");
+      ctx.ui?.notify?.(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info");
     }
     return false;
   }
