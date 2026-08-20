@@ -167,6 +167,70 @@ class TestSyncPureFunctions:
         assert data["version"] == remote["product_commit"]
 
 
+class TestHarnessRootResolution:
+    """AIPOS-F3: sync 工位根解析——裸跑禁猜角色, 解析不到即出声停。"""
+
+    def test_no_harness_root_no_env_raises_with_tried(self, monkeypatch):
+        """无 --harness-root + 无 env → 报错并列出找过哪几层。"""
+        monkeypatch.delenv("LYBRA_HARNESS_ROOT", raising=False)
+        with pytest.raises(ValueError, match="无法确定 harness-root") as exc_info:
+            ds.resolve_sync_context()
+        msg = str(exc_info.value)
+        assert "--harness-root=<未提供>" in msg
+        assert "LYBRA_HARNESS_ROOT=<未设置>" in msg
+        assert "正确用法" in msg
+
+    def _make_enrolled_harness(self, path: Path, role: str, token: str = "test-token") -> Path:
+        """Helper: 创建一个已 enroll 的工位目录。"""
+        path.mkdir(parents=True, exist_ok=True)
+        lybra = path / ".lybra"
+        lybra.mkdir()
+        (lybra / "role").write_text(role)
+        (lybra / "connection.json").write_text(json.dumps({
+            "mcp": {"rpc_url": "http://localhost:7118/mcp"},
+            "tokens": [{"role": role, "token": token}],
+        }))
+        return path
+
+    def test_env_fallback(self, monkeypatch, tmp_path):
+        """LYBRA_HARNESS_ROOT 环境变量可作为 fallback。"""
+        harness = self._make_enrolled_harness(tmp_path / "my-harness", "executor", "test-token-123")
+        monkeypatch.setenv("LYBRA_HARNESS_ROOT", str(harness))
+        ctx = ds.resolve_sync_context()
+        assert ctx["harness_root"] == harness.resolve()
+        assert ctx["role"] == "executor"
+
+    def test_explicit_overrides_env(self, monkeypatch, tmp_path):
+        """显式 --harness-root 优先于 env。"""
+        explicit = self._make_enrolled_harness(tmp_path / "explicit-harness", "auditor", "test-token-456")
+        monkeypatch.setenv("LYBRA_HARNESS_ROOT", str(tmp_path / "other"))
+        ctx = ds.resolve_sync_context(harness_root=explicit)
+        assert ctx["harness_root"] == explicit.resolve()
+        assert ctx["role"] == "auditor"
+
+
+class TestValidateEnrolled:
+    """AIPOS-F3: 落盘前校验目标为已 enroll 工位。"""
+
+    def test_no_lybra_dir_rejected(self, tmp_path):
+        """无 .lybra/ 目录 → 拒绝。"""
+        with pytest.raises(ValueError, match="不是已注册工位"):
+            ds._validate_enrolled(tmp_path)
+
+    def test_no_role_file_rejected(self, tmp_path):
+        """有 .lybra/ 但无 role 文件 → 拒绝。"""
+        (tmp_path / ".lybra").mkdir()
+        with pytest.raises(ValueError, match="未完成 enroll"):
+            ds._validate_enrolled(tmp_path)
+
+    def test_enrolled_accepted(self, tmp_path):
+        """有 .lybra/role → 通过。"""
+        lybra = tmp_path / ".lybra"
+        lybra.mkdir()
+        (lybra / "role").write_text("executor")
+        ds._validate_enrolled(tmp_path)  # 不抛即过
+
+
 class TestGatePullSurface:
     def _cap(self) -> str:
         return '{"role":"executor","token_ref":"svc-executor","expires_at":"2099-01-01T00:00:00Z"}'

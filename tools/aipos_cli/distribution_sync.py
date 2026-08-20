@@ -21,9 +21,12 @@ from pathlib import Path
 from typing import Any
 
 
-def discover_harness_root(start: Path | None = None) -> Path | None:
-    """从当前目录向上找含 .lybra/ 的工位根(harness root)。"""
-    cur = (start or Path.cwd()).resolve()
+def _discover_harness_root_from(start: Path) -> Path | None:
+    """从给定目录向上找含 .lybra/ 的工位根(harness root)。
+
+    仅供显式起点使用; 不再以 cwd 为默认起点(防裸跑猜错工位)。
+    """
+    cur = start.resolve()
     if cur.is_file():
         cur = cur.parent
     for _ in range(10):
@@ -33,6 +36,22 @@ def discover_harness_root(start: Path | None = None) -> Path | None:
             break
         cur = cur.parent
     return None
+
+
+def _validate_enrolled(root: Path) -> None:
+    """校验目标为已 enroll 工位(有 .lybra/role); 否则拒绝, 零写入。"""
+    lybra_dir = root / ".lybra"
+    role_file = lybra_dir / "role"
+    if not lybra_dir.is_dir():
+        raise ValueError(
+            f"harness root '{root}' 没有 .lybra/ 目录 — 不是已注册工位, 拒绝写入。\n"
+            f"  正确用法: lybra sync --harness-root <你的工位根>"
+        )
+    if not role_file.is_file():
+        raise ValueError(
+            f"harness root '{root}' 有 .lybra/ 但缺少 role 文件 — 未完成 enroll, 拒绝写入。\n"
+            f"  先执行: lybra enroll --role <role> --harness-root '{root}'"
+        )
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -53,16 +72,48 @@ def resolve_sync_context(
     gate_url: str | None = None,
     token: str | None = None,
 ) -> dict[str, Any]:
-    """解析 sync 身份/连接(harnes 根 → role → gate_url → token)。
+    """解析 sync 身份/连接(harness 根 → role → gate_url → token)。
+
+    harness-root 解析序(禁按 cwd 猜):
+      1. 显式参数 --harness-root
+      2. 环境变量 LYBRA_HARNESS_ROOT
+      3. 解析不到 → 出声报错退出(列出找过哪几层)
 
     无静默缺省: 解析不到即抛错(工位 .lybra 是身份单一真相)。
     """
     from tools.loop_context import ConnectionResolver
 
-    root = harness_root or discover_harness_root()
+    tried: list[str] = []
+    root: Path | None = None
+
+    # 1. 显式参数
+    if harness_root is not None:
+        root = harness_root.resolve()
+        tried.append(f"--harness-root={root}")
+    else:
+        tried.append("--harness-root=<未提供>")
+
+    # 2. 环境变量
     if root is None:
-        raise ValueError("cannot discover harness root (no .lybra/ found upward); pass --harness-root")
-    root = root.resolve()
+        env_root = os.environ.get("LYBRA_HARNESS_ROOT")
+        if env_root:
+            root = Path(env_root).resolve()
+            tried.append(f"LYBRA_HARNESS_ROOT={root}")
+        else:
+            tried.append("LYBRA_HARNESS_ROOT=<未设置>")
+
+    # 3. 解析不到 → 出声
+    if root is None:
+        raise ValueError(
+            "sync: 无法确定 harness-root(禁按 cwd 猜角色)。找过:\n"
+            + "\n".join(f"  - {t}" for t in tried)
+            + "\n  正确用法: lybra sync --harness-root <你的工位根>\n"
+            + "  或设环境变量: LYBRA_HARNESS_ROOT=<你的工位根> lybra sync"
+        )
+
+    # 落盘前校验: 目标必须为已 enroll 工位(有 .lybra/role); 校验失败零写入
+    _validate_enrolled(root)
+
     lybra_dir = root / ".lybra"
 
     identity = ConnectionResolver.resolve_identity(workspace_root=root)
@@ -202,6 +253,7 @@ def sync(*, harness_root: Path | None = None, gate_url: str | None = None, token
     from tools.aipos_cli.confirm_client import GateClient
 
     ctx = resolve_sync_context(harness_root=harness_root, gate_url=gate_url, token=token)
+    # 注: _validate_enrolled 已在 resolve_sync_context 内调用, 此处无需重复
 
     client = GateClient(ctx["gate_url"], ctx["token"])
     client.initialize()
@@ -255,7 +307,7 @@ def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="AIPOS-C4B: lybra sync — worker-initiated distribution pull")
-    parser.add_argument("--harness-root", default=None, help="Harness root (auto-discovered from cwd if omitted)")
+    parser.add_argument("--harness-root", default=None, help="Harness root (REQUIRED: no cwd guessing; fallback env LYBRA_HARNESS_ROOT)")
     parser.add_argument("--gate-url", default=None, help="Gate MCP URL (auto from .lybra if omitted)")
     parser.add_argument("--token", default=None, help="Bearer token (auto from .lybra connection.json if omitted)")
     parser.add_argument("--json", action="store_true", help="Output JSON")
