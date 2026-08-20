@@ -29,7 +29,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadConfig, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs, type LoopConfig } from "./gate-client.ts";
+import { loadConfig, loadConfigSchema, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs, type LoopConfig, type GateTerritoryDeclaration } from "./gate-client.ts";
 import { buildKickoff, stringifyReasons, severityToLevel } from "./loop-decisions.ts";
 import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
 // AIPOS-C4B 大项B: 版本信号 — 本地版本戳读取 + 清单比对
@@ -215,15 +215,21 @@ function extractFrontmatterField(content: string, field: string): string | null 
  * AIPOS-C3B 大项B②: 检查裁决文件是否具备门生标记(record_type + verdict_id + verdict_at)。
  * 手写文件(缺少机器特征)返回 false。
  */
-function isGateBornVerdict(content: string): { authentic: boolean; reason?: string } {
+export function isGateBornVerdict(content: string): { authentic: boolean; reason?: string } {
+  // AIPOS-F12 大项A/B: 与 Python 单源 audit_helpers.is_gate_born_verdict_metadata 同规则
+  // (record_type 以 'audit_verdict' 开头 + verdict_id 以 'verdict_' 开头 + verdict_at 非空),
+  // 不再使用更严的 record_type === 'audit_verdict_record'(第二定义, 会与门内判定不一致)。
   const recordType = extractFrontmatterField(content, "record_type");
   const verdictId = extractFrontmatterField(content, "verdict_id");
   const verdictAt = extractFrontmatterField(content, "verdict_at");
   if (!recordType || !verdictId || !verdictAt) {
     return { authentic: false, reason: `缺少门生标记(record_type=${!!recordType}, verdict_id=${!!verdictId}, verdict_at=${!!verdictAt})` };
   }
-  if (recordType !== "audit_verdict_record") {
-    return { authentic: false, reason: `record_type=${recordType}(预期 audit_verdict_record)` };
+  if (!recordType.startsWith("audit_verdict")) {
+    return { authentic: false, reason: `record_type=${recordType}(预期 audit_verdict* 家族)` };
+  }
+  if (!verdictId.startsWith("verdict_")) {
+    return { authentic: false, reason: `verdict_id=${verdictId}(预期 verdict_* 命名)` };
   }
   return { authentic: true };
 }
@@ -284,6 +290,175 @@ function selectLatestGateVerdict(
   return candidates[0];
 }
 
+// ---------------------------------------------------------------------------
+// AIPOS-F12 大项B: 门领地保护路径声明读取 + sweep 自动隔离(消毒)
+// ---------------------------------------------------------------------------
+
+/** 从 config.schema governance_structure.gate_territory 读保护路径声明(单源, 禁硬编码)。 */
+export function readGateTerritoryDeclaration(): GateTerritoryDeclaration {
+  const schema = loadConfigSchema();
+  const territory = schema?.governance_structure?.gate_territory;
+  if (!territory) {
+    return { protected_paths: [], quarantine_dir: "", superseded_suffix: ".superseded" };
+  }
+  return {
+    protected_paths: Array.isArray(territory.protected_paths) ? territory.protected_paths : [],
+    quarantine_dir: territory.quarantine_dir || "governance/quarantine/",
+    superseded_suffix: territory.superseded_suffix || ".superseded",
+    quarantine_policy: territory.quarantine_policy,
+  };
+}
+
+/**
+ * AIPOS-F12 大项B: 扫描门领地保护路径内的非门生裁决文件, 自动移 quarantine。
+ * 门生判定用 isGateBornVerdict(与门内 F2 同规则, 大项A 同一单源)。
+ * 拿不准(有 verdict_ 机器标记但未知 record_type)只出声不动文件(禁误伤)。
+ */
+export function quarantineHandWrittenVerdicts(
+  fs: any,
+  path: any,
+  config: LoopConfig,
+  logger: Logger | null,
+): { quarantined: number; emittedUncertain: number } {
+  const territory = readGateTerritoryDeclaration();
+  const protectedPaths = (territory?.protected_paths ?? []).filter((p) => typeof p === "string" && p.length > 0);
+  if (protectedPaths.length === 0) {
+    logger?.info("quarantine-skip-no-declaration", {});
+    return { quarantined: 0, emittedUncertain: 0 };
+  }
+  const quarantineDir = (territory?.quarantine_dir || "governance/quarantine/").replace(/\/+$/, "");
+  const suffix = territory?.superseded_suffix || ".superseded";
+  const workspaceRoot = config.workspaceRoot.replace(/\/+$/, "");
+  let quarantined = 0;
+  let emittedUncertain = 0;
+
+  for (const protectedRel of protectedPaths) {
+    const protectedAbs = path.join(workspaceRoot, protectedRel);
+    const verdictsRoot = path.join(protectedAbs, "audit_verdicts");
+    if (!fs.existsSync(verdictsRoot)) continue;
+    let taskDirs: string[];
+    try {
+      taskDirs = fs.readdirSync(verdictsRoot);
+    } catch {
+      continue;
+    }
+    for (const taskDir of taskDirs) {
+      const dir = path.join(verdictsRoot, taskDir);
+      let stat;
+      try {
+        stat = fs.statSync(dir);
+      } catch {
+        continue;
+      }
+      if (!stat.isDirectory()) continue;
+      let files: string[];
+      try {
+        files = fs.readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const f of files) {
+        if (!f.endsWith(".md")) continue;
+        const filePath = path.join(dir, f);
+        let content: string;
+        try {
+          content = fs.readFileSync(filePath, "utf-8");
+        } catch {
+          continue;
+        }
+        const auth = isGateBornVerdict(content);
+        if (auth.authentic) continue; // 门生记录, 零误伤
+        const verdictId = extractFrontmatterField(content, "verdict_id");
+        if (verdictId && verdictId.startsWith("verdict_")) {
+          // 拿不准: 有机器标记但未知 record_type → 只出声不动
+          logger?.warn("quarantine-uncertain-skip", { file: filePath, reason: "有 verdict_id 机器标记但非门生, 拿不准只出声不动" });
+          liveCtx?.ui?.notify?.(`sweep 隔离跳过(拿不准): ${filePath} — 有机器标记但非门生, 只出声不动`, "warn");
+          emittedUncertain++;
+          continue;
+        }
+        // 明确手写(缺门生标记)→ 隔离
+        const targetDir = path.join(workspaceRoot, quarantineDir);
+        const targetPath = path.join(targetDir, `${f}${suffix}`);
+        try {
+          fs.mkdirSync(targetDir, { recursive: true });
+          fs.renameSync(filePath, targetPath);
+        } catch (e) {
+          logger?.warn("quarantine-move-failed", { file: filePath, error: e instanceof Error ? e.message : String(e) });
+          continue;
+        }
+        const readmePath = path.join(targetDir, "README.md");
+        const line = `- \`${f}${suffix}\` — AIPOS-F12 sweep 自动隔离(${new Date().toISOString()}): 非门生裁决手写件, 原路径 ${filePath}。裁决由门落盘, 勿手写进 records/。`;
+        try {
+          if (fs.existsSync(readmePath)) {
+            fs.appendFileSync(readmePath, line + "\n", "utf-8");
+          } else {
+            fs.writeFileSync(readmePath, `---\nstatus: active\ndecided_at: '${new Date().toISOString()}'\nsuperseded_by: null\n---\n# 手写残稿隔离区\n\n${line}\n`, "utf-8");
+          }
+        } catch (e) {
+          logger?.warn("quarantine-readme-failed", { error: e instanceof Error ? e.message : String(e) });
+        }
+        const nextStep = `已隔离到 ${targetPath}; 提醒该工位: 裁决由门落盘, 勿手写进 records/`;
+        logger?.warn("quarantine-hand-written", { file: filePath, moved_to: targetPath, next_step: nextStep });
+        liveCtx?.ui?.notify?.(`sweep 隔离手写件: ${filePath} → ${targetPath}; ${nextStep}`, "warn");
+        quarantined++;
+      }
+    }
+  }
+  return { quarantined, emittedUncertain };
+}
+
+// ---------------------------------------------------------------------------
+// AIPOS-F12 大项C: pi 工具层写拦截(条件项) — 命中门领地保护路径的写操作直接拒
+// ---------------------------------------------------------------------------
+
+let writeGuardCfg: { workspaceRoot: string; protectedPaths: string[] } | null = null;
+
+function refreshWriteGuard(): void {
+  try {
+    const config = loadConfig(process.env);
+    const territory = readGateTerritoryDeclaration();
+    const protectedPaths = (territory?.protected_paths ?? []).filter((p) => typeof p === "string" && p.length > 0);
+    writeGuardCfg = { workspaceRoot: config.workspaceRoot.replace(/\/+$/, ""), protectedPaths };
+  } catch {
+    writeGuardCfg = null;
+  }
+}
+
+/** 判断一个绝对/相对写目标是否落在门领地保护路径内。 */
+export function isProtectedWriteTarget(target: string, wsRoot: string, protectedPaths: string[]): boolean {
+  const p = target.trim();
+  if (!p) return false;
+  const abs = p.startsWith("/") ? p : `${wsRoot}/${p.replace(/^\.?\//, "")}`;
+  const normalized = abs.replace(/\/+$/, "");
+  for (const rel of protectedPaths) {
+    const protAbs = `${wsRoot}/${rel}`.replace(/\/+$/, "");
+    if (normalized === protAbs || normalized.startsWith(protAbs + "/")) return true;
+  }
+  return false;
+}
+
+/** 从工具调用取写目标(write/edit 有 path; bash 只拦明确的写重定向进保护路径)。 */
+export function extractWriteTargets(toolName: string, input: any): string[] {
+  const name = String(toolName || "");
+  const targets: string[] = [];
+  if (name === "write" || name === "edit") {
+    const p = input?.path ?? input?.file_path;
+    if (typeof p === "string" && p) targets.push(p);
+    return targets;
+  }
+  if (name === "bash") {
+    const cmd = typeof input?.command === "string" ? input.command : "";
+    // 只抓 `>`, `>>`, `2>`, `tee` 的写目标(保守, 不做完整 shell 解析)。
+    const re = /(?:2?>>?|tee(?: -a)?)\s+([^\s;&|]+)/g;
+    let m;
+    while ((m = re.exec(cmd)) !== null) {
+      targets.push(m[1]);
+    }
+    return targets;
+  }
+  return targets;
+}
+
 // AIPOS-C3D 大项A: sweep 防重入标志 — 启动存量收敛与每轮 tick 可能并发触发同一 sweep,
 // 双 finalize 会引发 deploy 竞态;单线程下 check+set 无 await 间隔, 原子生效。
 let sweepInFlight = false;
@@ -335,6 +510,17 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
     currentLogger.info("sweep-skip-role", { role: config.role });
     liveCtx?.ui?.notify?.(msg, "info");
     return false;
+  }
+
+  // AIPOS-F12 大项B: sweep 自动隔离 — 扫描门领地保护路径内非门生文件移 quarantine。
+  // 放在 claimed 队列检查之前, 即使队列为空也每轮消毒(禁误伤: 门生零动, 拿不准只出声)。
+  try {
+    const q = quarantineHandWrittenVerdicts(fs, path, config, currentLogger);
+    if (q.quarantined > 0 || q.emittedUncertain > 0) {
+      currentLogger.info("quarantine-done", { quarantined: q.quarantined, uncertain: q.emittedUncertain });
+    }
+  } catch (e) {
+    currentLogger?.warn("quarantine-error", { error: e instanceof Error ? e.message : String(e) });
   }
 
   // AIPOS-C3B 大项D③: 候选集反转 — 从 queue/claimed 反查裁决(替代遍历 151 裁决目录)
@@ -1014,6 +1200,28 @@ async function doTick(): Promise<void> {
 export default function (pi: ExtensionAPI) {
   // AIPOS-F10:每次 session 装载立即刷新 livePi — 定时器/钩子从模块级引用取,不闭包捕获。
   livePi = pi;
+
+  // AIPOS-F12 大项C: pi 工具层写拦截 — 命中门领地保护路径的 write/edit/bash 写操作直接拒。
+  pi.on("tool_call", async (event) => {
+    try {
+      if (!writeGuardCfg) refreshWriteGuard();
+      if (!writeGuardCfg) return; // 配置未就绪, 无法判定保护路径, 不拦(禁误伤)
+      const ev = event as any;
+      const toolName = String(ev?.toolName || "");
+      const targets = extractWriteTargets(toolName, ev?.input);
+      if (targets.length === 0) return;
+      for (const t of targets) {
+        if (isProtectedWriteTarget(t, writeGuardCfg.workspaceRoot, writeGuardCfg.protectedPaths)) {
+          const msg = `写保护路径被拒(门领地): ${t} — 报告落 task_cards/<ID>/, 裁决走门, 勿手写进 records/queue/`;
+          currentLogger?.warn("protected-write-blocked", { tool: toolName, target: t });
+          liveCtx?.ui?.notify?.(msg, "warn");
+          return { block: true, reason: msg };
+        }
+      }
+    } catch {
+      // 拦截逻辑自身异常绝不误伤工具执行(安全网自身不扩大)。
+    }
+  });
 
   // --- 续跑:maxN>1 时,新 session 的卡执行完(settle)→ 直接调 tick ---
   pi.on("agent_settled", async (_event, ctx) => {

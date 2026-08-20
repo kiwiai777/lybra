@@ -213,7 +213,21 @@ function findSchemaFile(schemaDir?: string): string {
  * AIPOS-C2 大项A: 加载 config.schema.json —— 身份配置域的唯一真相。
  * loadConfig 依赖它: gate_url 唯一允许的 schema 缺省 (urls.gate_local) 从这里出。
  */
-export function loadConfigSchema(): { urls?: { gate_local?: string } } {
+export interface GateTerritoryDeclaration {
+  protected_paths?: string[];
+  quarantine_dir?: string;
+  superseded_suffix?: string;
+  quarantine_policy?: string;
+}
+
+export interface ConfigSchemaShape {
+  urls?: { gate_local?: string };
+  governance_structure?: {
+    gate_territory?: GateTerritoryDeclaration;
+  };
+}
+
+export function loadConfigSchema(): ConfigSchemaShape {
   const file = findSchemaJson("config.schema.json");
   let raw: string;
   try {
@@ -232,7 +246,7 @@ export function loadConfigSchema(): { urls?: { gate_local?: string } } {
   if (!data || typeof data !== "object") {
     throw new ConfigError(`config.schema.json 非对象(${file})`);
   }
-  return data as { urls?: { gate_local?: string } };
+  return data as ConfigSchemaShape;
 }
 
 /** 加载 verb catalog(启动即读 schema;schema 缺/坏 → ConfigError)。 */

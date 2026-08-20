@@ -387,6 +387,16 @@
         "enforcement": "BLOCK if missing (门票机制)",
         "rationale": "阶段快照=转换前提, 缺快照=未关账=不许转换"
       }
+    },
+    "gate_territory": {
+      "description": "AIPOS-F12 大项B: 门领地保护路径声明 — records/ 与 queue/ 下记录类目录由门生落盘, 非门生文件由周期 sweep 自动隔离。值=声明列表(相对 governance_root), 禁硬编码。",
+      "protected_paths": [
+        "5_tasks/records/",
+        "5_tasks/queue/"
+      ],
+      "quarantine_dir": "governance/quarantine/",
+      "superseded_suffix": ".superseded",
+      "quarantine_policy": "非门生文件移入 quarantine_dir(原文件名 + superseded_suffix), README.md 追加一行; 出声 severity=warn, next_step=指明已隔离位置 + 提醒该工位'裁决由门落盘'。拿不准(有机器标记但未知 record_type)只出声不动文件。"
     }
   },
   "n6_closure_checklist": {

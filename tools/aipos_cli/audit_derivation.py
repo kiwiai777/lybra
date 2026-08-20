@@ -91,6 +91,44 @@ def build_forensic_anchor_section(
     )
 
 
+def build_gate_territory_discipline_section(
+    source_task_id: str,
+    repo_root: Path | None = None,
+) -> str:
+    """AIPOS-F12 大项D: 门领地纪律 + 精确提交配方(注入审计卡, 手动/自动共用)。
+
+    动词名与参数名派生自 gate 注册表 (verb_contract), 禁写死;报告落点路径来自注册表。
+    改声明值(动词改名 / task_cards 路径)→ 注入跟随, 无需改本函数。
+    """
+    from tools.aipos_cli.verb_contract import get_verb_contract, resolve_gate_verbs
+
+    verbs = resolve_gate_verbs()
+    dry = verbs.get("audit_verdict_dry_run") or {}
+    dry_name = str(dry.get("name") or "lybra_audit_verdict_dry_run")
+    confirm_name = str(dry.get("confirm_pair") or dry_name.replace("_dry_run", "_confirm"))
+    dry_params = list(dry.get("required_params") or [])
+    confirm_contract = get_verb_contract(confirm_name) or {}
+    confirm_params = list(confirm_contract.get("required_params") or [])
+
+    task_cards_path = _resolve_governance_task_cards_path(repo_root)
+
+    dry_params_inline = "`, `".join(dry_params)
+    confirm_params_inline = "`, `".join(confirm_params)
+
+    return (
+        "\n## 门领地纪律(AIPOS-F12 大项D: 注入, 手动/自动共用)\n\n"
+        "- **records/ = 门领地**:裁决记录由门落盘, 绝不手写进 `5_tasks/records/`。"
+        "手写进 records 一经 sweep 发现即隔离(`governance/quarantine/`)并记违纪。\n"
+        f"- **审计报告草稿只能落**:`{task_cards_path}/{{audit_id}}/`"
+        "(治理仓 task_cards, 禁落 records/)。\n"
+        "- **精确提交配方(参数名派生自 gate 注册表 verb_contract, 禁写死)**\n"
+        f"  1. 预览:`{dry_name}`, 必填 `{dry_params_inline}`"
+        "(裁决三值 PASS / PASS_WITH_NOTES / FAIL)。\n"
+        f"  2. 审阅预览无 BLOCK 后确认:`{confirm_name}`, 必填 `{confirm_params_inline}`;"
+        "其中 `owner_confirmation_token='OWNER_CONFIRMED'`(字面常量, 非秘密)。\n"
+    )
+
+
 def _task_filename_for(task_id: str) -> str:
     """Generate normalized filename for task_id (matches board_adapter convention)."""
     value = "".join(char.lower() if char.isalnum() else "-" for char in task_id).strip("-")
@@ -258,6 +296,9 @@ Independent audit of task `{source_task_id}`.
 """
     # AIPOS-A1 大项C: 注入取证锚点段(路径来自注册表, 禁写死)
     audit_body += build_forensic_anchor_section(source_task_id, repo_root)
+
+    # AIPOS-F12 大项D: 注入门领地纪律 + 精确提交配方(手动/自动共用, 值来自声明)
+    audit_body += build_gate_territory_discipline_section(source_task_id, repo_root)
 
     if branch_id == "code_with_deploy":
         audit_body += (
