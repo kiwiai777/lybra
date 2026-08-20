@@ -446,7 +446,21 @@
           "description": "分支已合并(分支 tip 为 main 祖先)→跳过整合并出声"
         },
         "branch_retention": "preserve",
-        "branch_retention_note": "保留分支不删除, 与既有惯例一致"
+        "branch_retention_note": "保留分支不删除, 与既有惯例一致",
+        "auto_checkout": true,
+        "auto_checkout_note": "AIPOS-F11 大项A: 卡分支整合前, 若当前在非 main 分支且工作树干净, finalize 自行 checkout main 并出声; 置 false 回退为停下喊人。代码只读此声明, 不写死开关; 脏树不受此开关影响, 仍 halt+出声。",
+        "auto_checkout_next_step": {
+          "dirty_tree": {
+            "audience": "self",
+            "action": "处理未提交改动(提交或还原)后重试 finalize; 或手动 checkout main 后重试",
+            "command": null
+          },
+          "not_on_main": {
+            "audience": "self",
+            "action": "手动切回 main 分支后重试 finalize(auto_checkout 已关闭或切回失败)",
+            "command": "git checkout main"
+          }
+        }
       }
     },
     "N6": {
