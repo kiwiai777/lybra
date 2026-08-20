@@ -414,6 +414,19 @@ _DEFAULT_BRANCH_INTEGRATION = {
     "branch_pattern": "card/{task_id}",
     "merge_strategy": "no-ff",
     "merge_message_format": "Merge {branch}: {summary} ({verdict_id})",
+    "auto_checkout": True,
+    "auto_checkout_next_step": {
+        "dirty_tree": {
+            "audience": "self",
+            "action": "处理未提交改动(提交或还原)后重试 finalize; 或手动 checkout main 后重试",
+            "command": None,
+        },
+        "not_on_main": {
+            "audience": "self",
+            "action": "手动切回 main 分支后重试 finalize(auto_checkout 已关闭或切回失败)",
+            "command": "git checkout main",
+        },
+    },
 }
 
 
@@ -450,11 +463,15 @@ def _git_branch_exists(repo_root: Path, branch_name: str) -> bool:
         return False
 
 
-def _git_branch_merged_into_head(repo_root: Path, branch_name: str) -> bool:
-    """分支 tip 是否为 HEAD 祖先 (已合并)。"""
+def _git_branch_merged_into_main(repo_root: Path, branch_name: str) -> bool:
+    """AIPOS-C3C/F11: 分支 tip 是否为 main 祖先 (已合并进 main)。
+
+    F11 前 HEAD 恒为 main (交回前切回 main 纪律), 查 HEAD 等价查 main; auto_checkout 落地后
+    HEAD 可能停在卡分支, 必须显式查 main, 否则卡分支对自身恒"已合并"→ 误跳过整合。
+    """
     try:
         result = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", branch_name, "HEAD"],
+            ["git", "merge-base", "--is-ancestor", branch_name, "main"],
             cwd=str(repo_root),
             capture_output=True,
             text=True,
@@ -491,6 +508,113 @@ def _git_conflict_files(repo_root: Path) -> list[str]:
         return [f.strip() for f in result.stdout.splitlines() if f.strip()]
     except subprocess.CalledProcessError:
         return []
+
+
+def _git_dirty_files(repo_root: Path) -> list[str]:
+    """AIPOS-F11 大项A: 列出工作树未提交改动 (git status --porcelain)。"""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(repo_root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    except subprocess.CalledProcessError:
+        return []
+
+
+def _render_next_step(branch_integration: dict[str, Any], key: str) -> str:
+    """AIPOS-F11 大项A / F9: 从 branch_integration.auto_checkout_next_step 读 next_step 并渲染。
+
+    出声点绝不手写下一步文案(F9 野读者); 只读声明 (audience/action/command)。
+    """
+    ns = (branch_integration.get("auto_checkout_next_step") or {}).get(key) or {}
+    action = str(ns.get("action") or "").strip()
+    if not action:
+        return ""
+    audience = str(ns.get("audience") or "self")
+    command = ns.get("command")
+    parts = [f"下一步({audience}): {action}"]
+    if command:
+        parts.append(f"命令: {command}")
+    return " | ".join(parts)
+
+
+def _blocked_dirty_tree(
+    workspace_root: Path,
+    branch_integration: dict[str, Any],
+    branch_name: str,
+) -> dict[str, Any]:
+    """AIPOS-F11 大项A: 脏树拒绝体 — halt + 脏文件清单 + next_step (按 F9)。"""
+    dirty_files = _git_dirty_files(workspace_root)
+    dirty_list = "    - " + "\n    - ".join(dirty_files[:10]) if dirty_files else "    - (无法列出脏文件)"
+    if len(dirty_files) > 10:
+        dirty_list += f"\n    - ... 等 {len(dirty_files)} 个文件"
+    next_step = _render_next_step(branch_integration, "dirty_tree")
+    message = (
+        f"工作树不干净, 无法合并 {branch_name} — 先处理未提交改动。"
+        f"\n  脏文件:\n{dirty_list}"
+        + (f"\n  {next_step}" if next_step else "")
+    )
+    return {"blocked": True, "action": "blocked_not_clean", "message": message}
+
+
+def _ensure_on_main_branch(
+    workspace_root: Path,
+    branch_integration: dict[str, Any],
+    operations: list[str],
+    main_branch: str = "main",
+) -> dict[str, Any] | None:
+    """AIPOS-F11 大项A: auto_checkout 声明驱动 — 确保工作树在 main 分支。
+
+    非 main 且树干净 + auto_checkout=true → 自行 checkout main 并出声;
+    脏树 → 停下(halt+出声, 附脏文件 + next_step);
+    auto_checkout=false → 停下喊人。已在 main → 放行 (脏树留给 merge/commit 步骤处理)。
+
+    Returns:
+        None = 已在 main(可继续); 否则返回拒绝体 {"blocked", "action", "message"}。
+    """
+    auto_checkout = bool(branch_integration.get("auto_checkout", True))
+    current_branch = _git_current_branch(workspace_root)
+    if current_branch == main_branch:
+        return None
+
+    if auto_checkout and _git_status_clean(workspace_root):
+        co_result = subprocess.run(
+            ["git", "checkout", main_branch],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+        )
+        if co_result.returncode != 0:
+            next_step = _render_next_step(branch_integration, "not_on_main")
+            message = (
+                f"auto_checkout 切回 {main_branch} 失败: "
+                f"{(co_result.stderr or co_result.stdout or '').strip() or 'unknown'}"
+                + (f"\n  {next_step}" if next_step else "")
+            )
+            operations.append(f"  → BLOCKED: {message}")
+            return {"blocked": True, "action": "blocked_checkout_failed", "message": message}
+        operations.append(
+            f"  → ℹ️ 已自动切回 {main_branch} (auto_checkout 声明, 原分支 {current_branch})"
+        )
+        return None
+
+    if not _git_status_clean(workspace_root):
+        blk = _blocked_dirty_tree(workspace_root, branch_integration, f"(当前分支 {current_branch})")
+        operations.append(f"  → BLOCKED: {blk['message']}")
+        return blk
+
+    next_step = _render_next_step(branch_integration, "not_on_main")
+    message = (
+        f"声明 auto_checkout=false, 当前在 '{current_branch}' 未自动切回 {main_branch} "
+        f"— 需人工切回 main 后再 finalize"
+        + (f"\n  {next_step}" if next_step else "")
+    )
+    operations.append(f"  → BLOCKED: {message}")
+    return {"blocked": True, "action": "blocked_auto_checkout_disabled", "message": message}
 
 
 def _task_title_summary(governance_root: Path, task_id: str) -> str:
@@ -577,23 +701,25 @@ def _integrate_card_branch(
         operations.append(f"  → {message}")
         return {**base, "action": "skipped_no_branch", "message": message}
 
-    # 已合并? (分支 tip 为 HEAD 祖先)
-    if _git_branch_merged_into_head(workspace_root, branch_name):
+    # 已合并进 main? (分支 tip 为 main 祖先)
+    if _git_branch_merged_into_main(workspace_root, branch_name):
         message = f"分支 {branch_name} 已合并 (tip 为 main 祖先), 跳过整合"
         operations.append(f"  → {message}")
         return {**base, "action": "skipped_already_merged", "message": message}
 
     # ② 前置: 工作树干净 + 当前在 main
-    if not _git_status_clean(workspace_root):
-        message = f"工作树不干净, 无法合并 {branch_name} — 先处理未提交改动"
-        operations.append(f"  → BLOCKED: {message}")
-        return {**base, "blocked": True, "action": "blocked_not_clean", "message": message}
+    # AIPOS-F11 大项A: auto_checkout 声明驱动 — 非 main 且树干净 → 自行 checkout main 并出声;
+    # 脏树 → 保持现行为(halt+出声, 按 F9 带 next_step); auto_checkout=false → 停下喊人。
+    # 开关值只读声明, 代码零写死; 逻辑单源在 _ensure_on_main_branch。
+    ensure_main = _ensure_on_main_branch(workspace_root, branch_integration, operations, main_branch)
+    if ensure_main is not None:
+        return {**base, **ensure_main}
 
-    current_branch = _git_current_branch(workspace_root)
-    if current_branch != main_branch:
-        message = f"当前在 '{current_branch}', 不在 {main_branch} — 无法合并 {branch_name}"
-        operations.append(f"  → BLOCKED: {message}")
-        return {**base, "blocked": True, "action": "blocked_not_on_main", "message": message}
+    # 合并前置: 已在 main 后工作树仍可能脏(直提 main 场景), git merge 需干净树。
+    if not _git_status_clean(workspace_root):
+        blk = _blocked_dirty_tree(workspace_root, branch_integration, branch_name)
+        operations.append(f"  → BLOCKED: {blk['message']}")
+        return {**base, **blk}
 
     # 合并信息 (声明格式保证归属: 含卡号 + 裁决号)
     summary = _task_title_summary(governance_root, task_id)
@@ -845,6 +971,31 @@ def finalize_task(
             "operations": operations,
         }
     
+    # AIPOS-F11 大项A: auto_checkout 声明驱动 — 部署分支强制之前先确保在 main。
+    # 必须在 check_deployment_branch 之前执行, 否则卡分支上直接判"非 main"拦下,
+    # 永远到不了整合步骤的自动切回("交回前切回 main"纪律就此退役)。
+    branch_integration = _load_branch_integration(workspace_root)
+    ensure_main = _ensure_on_main_branch(workspace_root, branch_integration, operations)
+    if ensure_main is not None:
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "can_finalize": True,
+            "integrity_check": integrity,
+            "branch_check": None,
+            "committed": False,
+            "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
+            "commit_hash": None,
+            "branch_integration": ensure_main,
+            "message": ensure_main["message"],
+            "operations": operations,
+        }
+
     # AIPOS-R4B-2: 部署分支强制 — finalize/deploy 只允许从 main 分支
     from tools.aipos_cli.deploy_gate import check_deployment_branch
     
@@ -881,6 +1032,7 @@ def finalize_task(
         governance_root=governance_root,
         dry_run=dry_run,
         operations=operations,
+        branch_integration=branch_integration,
     )
     if integrate["blocked"]:
         return {

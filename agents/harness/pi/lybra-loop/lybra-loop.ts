@@ -152,6 +152,31 @@ function clearTimer() {
   }
 }
 
+/**
+ * AIPOS-F11 大项B: 从子进程异常提取 stderr 末尾若干行。
+ * execSync 抛错时 message 只有 "Command failed: ...", stderr 全在 e.stderr;
+ * 而 finalize CLI 的诊断正文(Message/Operations)实际落在 stdout。
+ * 故 stderr 优先、stdout 补充 —— 纯管道, 只取文本, 不改任何级别判断。
+ */
+function subprocessFailureTail(err: unknown, maxLines = 12): string {
+  const obj = (err ?? {}) as { stderr?: unknown; stdout?: unknown };
+  const parts: string[] = [];
+  for (const key of ["stderr", "stdout"] as const) {
+    const v = obj[key];
+    let text = "";
+    if (typeof v === "string") {
+      text = v;
+    } else if (v && typeof v === "object" && typeof (v as { toString?: () => string }).toString === "function") {
+      text = String(v);
+    }
+    if (text) {
+      const tail = text.replace(/\r\n/g, "\n").split("\n").slice(-maxLines).join("\n");
+      parts.push(`[${key}] ${tail}`);
+    }
+  }
+  return parts.join("\n");
+}
+
 // AIPOS-F10:定时器不捕获 ctx/pi — 每次 tick 从 liveCtx/livePi 取当前活引用。
 // 根治 /reload 后定时器持 stale ctx 导致的 "extension ctx is stale" 静死。
 function scheduleNextTick(delayMs: number) {
@@ -420,12 +445,17 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
       processedCount++;
     } catch (e) {
       const rawErr = e instanceof Error ? e.message : String(e);
+      // AIPOS-F11 大项B: stderr/stdout 透传 — execSync 失败 message 只有 "Command failed" 一句,
+      // 诊断正文全在 e.stderr/e.stdout。末尾若干行并入错误输出与 loop 日志 detail
+      // (纯管道, 不改任何级别判断 — 级别仍由 F4 声明管)。
+      const failureTail = subprocessFailureTail(e, 12);
       // AIPOS-F4 大项B/C: 脏树/可重试类失败属 auto_recoverable → warn + 下一步(等下一轮); 其余 → error。
       const isDirtyTree = /工作树不干净|dirty|uncommitted|changes not staged|working tree/i.test(rawErr);
       const level = isDirtyTree ? "warn" : "error";
       const nextStep = isDirtyTree ? " 下一步: 等下一轮 sweep 再试(脏树自动让路)" : "";
-      const errMsg = `sweep finalize 失败: ${taskId} - ${rawErr}${nextStep}`;
-      currentLogger.error("auto-finalize-failed", { task_id: taskId, error: rawErr, isDirtyTree });
+      const tailBlock = failureTail ? `\n  子进程输出尾行:\n${failureTail}` : "";
+      const errMsg = `sweep finalize 失败: ${taskId} - ${rawErr}${tailBlock}${nextStep}`;
+      currentLogger.error("auto-finalize-failed", { task_id: taskId, error: rawErr, failure_tail: failureTail, isDirtyTree });
       liveCtx?.ui?.notify?.(errMsg, level);
       anomalies.push({ task_id: taskId, reason: isDirtyTree ? "脏树让路等下一轮" : "finalize 失败" });
     }
@@ -489,6 +519,7 @@ async function tryAutoReturn(): Promise<boolean> {
       const vFiles = fs.readdirSync(verdictDir).filter((f: string) => f.endsWith(".md"));
       if (vFiles.length > 0) {
         currentLogger.info("auto-return-skip-audit-verdict-exists", { task_id: currentTaskId, reviewed_task_id: reviewedTaskId, verdict_count: vFiles.length });
+        resetRuntimeState("审计卡已裁(verdict 已落库)歇手");
         return false;
       }
     }
@@ -505,6 +536,7 @@ async function tryAutoReturn(): Promise<boolean> {
     const returnFiles = fs.readdirSync(returnsDir).filter((f) => f.startsWith("return_") && f.endsWith(".md"));
     if (returnFiles.length > 0) {
       currentLogger.info("auto-return-skip-already-returned", { task_id: currentTaskId, count: returnFiles.length });
+      resetRuntimeState("已交回(returns 已有记录)歇手");
       return false;
     }
   }
@@ -609,9 +641,8 @@ async function tryAutoReturn(): Promise<boolean> {
     
     liveCtx?.ui?.notify?.(`自动归还任务 ${currentTaskId}`, "info");
     
-    // 清空当前任务信息
-    currentTaskId = null;
-    currentWorktreePath = null;
+    // AIPOS-F11 大项C: 清空当前任务信息(单源复位函数)
+    resetRuntimeState("auto-return 成功");
     
     return true;
   } catch (e) {
@@ -628,6 +659,19 @@ async function tryAutoReturn(): Promise<boolean> {
     }
     return false;
   }
+}
+
+// AIPOS-F11 大项C: 运行态复位单源 — currentTaskId/currentWorktreePath 的清零只此一处。
+// 凡 settle 判定成立(含全部歇手分支)与 loop-on 启动皆调用; 歇手分支复位时出声卡号+复位原因。
+// 禁在各分支各写一份清零(此前只在 auto-return 成功路径一处, 歇手分支不清 → 周期 sweep 永久误判
+// "有卡在跑"让路, 收账全停且零出声 —— 2026-08-20 实撞)。
+function resetRuntimeState(reason: string): void {
+  if (!currentTaskId && !currentWorktreePath) return; // 无残留, 静默(loop-on 启动时常见)
+  const runningCard = currentTaskId ?? "(未知卡号)";
+  currentTaskId = null;
+  currentWorktreePath = null;
+  currentLogger?.info("runtime-state-reset", { task_id: runningCard, reason });
+  liveCtx?.ui?.notify?.(`运行态复位: ${runningCard} — ${reason}`, "info");
 }
 
 // AIPOS-F10:stopLoop 不接收 ctx 参数 — 从 liveCtx 取活引用。
@@ -1201,6 +1245,10 @@ export default function (pi: ExtensionAPI) {
           maxWait: config.maxWaitSec,
           token: currentTokenFp,
         });
+
+        // AIPOS-F11 大项C: loop-on 启动复位模块级残留(上一轮歇手未清/中断残留),
+        // 否则周期 sweep 会误判"有卡在跑"永久让路。
+        resetRuntimeState("loop-on 启动复位");
 
         // AIPOS-R6I 靶③: loop可感知反馈 - 启动时打印详细信息
         // AIPOS-R8B 大项C④: 带耗时显示
