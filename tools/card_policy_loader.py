@@ -424,6 +424,33 @@ def get_card_policy_placeholder_fields(
     return placeholders
 
 
+def get_task_id_pattern(
+    governance_root: Path | str,
+    project_id: str | None = None,
+    repo_root: Path | None = None,
+) -> str | None:
+    """AIPOS-F5: 读项目声明的 task_id_pattern (卡号形状声明位, R8C 同构)。
+
+    "什么长得像本项目的卡号"是项目属性, 声明一处 (card_policy.json 的
+    task_id_pattern), 归属解析与一切判卡号的调用点只读它。lybra 声明
+    `AIPOS-[A-Z0-9]+`, 别的项目声明自己的 (换项目三问过关)。
+
+    返回声明的正则片段字符串 (如 "AIPOS-[A-Z0-9]+"), 或 None 表示项目未声明
+    (调用方必须出声报错 —— C2 原则: 无内置默认模式)。
+    """
+    declaration_path = get_project_card_policy_path(governance_root, project_id, repo_root)
+    if declaration_path is None:
+        return None
+    try:
+        declaration = load_card_policy_declaration(declaration_path)
+    except SchemaLoadError:
+        return None
+    pattern = declaration.get("task_id_pattern")
+    if isinstance(pattern, str) and pattern.strip():
+        return pattern.strip()
+    return None
+
+
 __all__ = [
     "get_project_card_policy_path",
     "load_card_policy_declaration",
@@ -431,4 +458,5 @@ __all__ = [
     "resolve_values_from",
     "evaluate_card_policy_rules",
     "get_card_policy_placeholder_fields",
+    "get_task_id_pattern",
 ]
