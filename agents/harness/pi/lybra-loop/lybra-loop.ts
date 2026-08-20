@@ -15,11 +15,17 @@
  * 机制要点(详见 DESIGN.md):
  *   • 连接器面:node http 直连 gate /mcp(gate-client.ts),不 shell 调 Python CLI。
  *   • gate 被动:轮询宿主全在 agent 侧(非阻塞 followUp 链),gate 不推送/不唤醒。
- *   • 一卡一会话:claim 放行 → ctx.newSession 冷启动(同 _shared/extensions/claim.ts)。
+ *   • 一卡一会话:claim 放行 → liveCtx.newSession 冷启动(同 _shared/extensions/claim.ts)。
  *   • 跨 session 状态:模块级 loopState(ESM 缓存跨 session 替换存活)+ agent_settled 续跑。
  *   • F-EXT001-4(FIX1):tick 机制 — **直接函数调用**,不经 sendUserMessage/命令路由
  *     (pi 的 sendUserMessage 永不触发命令,只落文本给模型;定时器/生命周期钩子直接调 doTick,
  *     零 LLM 参与、零上下文污染;/lybra-tick 命令仅作手动触发入口)。
+ *   • AIPOS-F10(ctx 生命周期修真):全部 ctx 消费点统一到 claim.ts 范式 ——
+ *     模块级 liveCtx/livePi(每次 session 装载/事件/命令入口刷新),定时器/钩子绝不闭包
+ *     捕获 ctx(那些在 session 替换后变 stale 对象)。三病象根治:
+ *     ①冷启动 newSession 摔 → 定时器用 liveCtx(由 session_start 刷新)
+ *     ②/reload 后 stale → reload 清定时器,session_start 用新 ctx 重调度
+ *     ③复工 ctx.reply 摔 → 改用 sendUserMessage(对齐 claim.ts);session_start 取第二参数 ctx
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -45,6 +51,12 @@ let expectingSwap = false;
 // AIPOS-CONN-LOOP-2 ①: 跟踪当前执行的任务ID和worktree路径，用于自动return
 let currentTaskId: string | null = null;
 let currentWorktreePath: string | null = null;
+
+// AIPOS-F10: 活 ctx/pi 引用 — 每次 session 装载/命令入口/事件回调时刷新。
+// 定时器/钩子绝不闭包捕获 ctx(那些在 session 替换后变 stale 对象,调用即抛)。
+// 对齐 claim.ts 范式:只用 withSession 回调的 freshCtx 或 session_start 的新 ctx。
+let livePi: ExtensionAPI | null = null;
+let liveCtx: any = null;
 
 // F-EXT001-6(FIX2): 默认日志路径迁移到 Lybra 产品仓任务卡目录(旧 contrib 路径已废弃)
 const LOG_PATH_DEFAULT = `${process.env.HOME || ""}/projects/lybra/task_cards/LYBRA-EXT-001/loop.log`;
@@ -140,13 +152,15 @@ function clearTimer() {
   }
 }
 
-function scheduleNextTick(pi: ExtensionAPI, ctx: any, delayMs: number) {
+// AIPOS-F10:定时器不捕获 ctx/pi — 每次 tick 从 liveCtx/livePi 取当前活引用。
+// 根治 /reload 后定时器持 stale ctx 导致的 "extension ctx is stale" 静死。
+function scheduleNextTick(delayMs: number) {
   clearTimer();
   pendingTimer = setTimeout(() => {
     pendingTimer = null;
     if (!loopState.on) return; // 期间被 off
     // F-EXT001-4(FIX1):直接调用 tick 函数,不经 sendUserMessage(永不触发命令)
-    doTick(pi, ctx).catch((e) => {
+    doTick().catch((e) => {
       // F-EXT001-8(FIX4):不再静默吞错,落日志
       currentLogger?.warn("scheduleNextTick-doTick-error", {
         error: e instanceof Error ? e.message : String(e),
@@ -249,7 +263,8 @@ function selectLatestGateVerdict(
 // 双 finalize 会引发 deploy 竞态;单线程下 check+set 无 await 间隔, 原子生效。
 let sweepInFlight = false;
 
-async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
+// AIPOS-F10:不接收 ctx — 内部从 liveCtx 取活引用。
+async function tryAutoFinalizeOnPassVerdict(): Promise<boolean> {
   if (sweepInFlight) {
     currentLogger?.info("sweep-skip-inflight", {});
     return false;
@@ -257,7 +272,7 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
   sweepInFlight = true;
   let result = false;
   try {
-    result = await tryAutoFinalizeOnPassVerdictCore(ctx);
+    result = await tryAutoFinalizeOnPassVerdictCore();
   } catch (e) {
     // 保底: core 内部应自洽不抛, 意外抛了也落日志并复位标志(不静默吞)
     currentLogger?.warn("sweep-unexpected-error", {
@@ -268,10 +283,11 @@ async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
   return result;
 }
 
-async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
+// AIPOS-F10:不接收 ctx — 内部从 liveCtx 取活引用。
+async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
   if (!currentClient || !currentLogger) {
     currentLogger?.warn("sweep-no-client", { reason: "currentClient or currentLogger not initialized" });
-    ctx.ui?.notify?.("sweep 跳过:客户端或日志器未初始化", "warn");
+    liveCtx?.ui?.notify?.("sweep 跳过:客户端或日志器未初始化", "warn");
     return false;
   }
 
@@ -281,7 +297,7 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
   } catch (e) {
     const msg = `sweep 配置加载失败: ${e instanceof Error ? e.message : String(e)}`;
     currentLogger.warn("sweep-config-failed", { error: String(e) });
-    ctx.ui?.notify?.(msg, "error");
+    liveCtx?.ui?.notify?.(msg, "error");
     return false;
   }
 
@@ -292,7 +308,7 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
   if (config.role !== "executor") {
     const msg = `sweep 跳过: 当前角色 ${config.role || "?"} 不具 finalize/close 能力(roles.schema scopes), 不跑 finalize`;
     currentLogger.info("sweep-skip-role", { role: config.role });
-    ctx.ui?.notify?.(msg, "info");
+    liveCtx?.ui?.notify?.(msg, "info");
     return false;
   }
 
@@ -300,7 +316,7 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
   const claimedDir = path.join(config.workspaceRoot, "5_tasks/queue/claimed");
   if (!fs.existsSync(claimedDir)) {
     currentLogger.info("sweep-no-claimed-dir", {});
-    ctx.ui?.notify?.("sweep: claimed 队列为空", "info");
+    liveCtx?.ui?.notify?.("sweep: claimed 队列为空", "info");
     return false;
   }
 
@@ -309,7 +325,7 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
 
   if (claimedCards.length === 0) {
     currentLogger.info("sweep-no-claimed-cards", {});
-    ctx.ui?.notify?.("sweep: 无 claimed 卡", "info");
+    liveCtx?.ui?.notify?.("sweep: 无 claimed 卡", "info");
     return false;
   }
 
@@ -350,7 +366,7 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
 
     // 候选卡: 有 PASS 裁决 + 未 close → 自动 finalize+close
     currentLogger.info("auto-finalize-start", { task_id: taskId, verdict: latest.verdict, verdict_at: latest.verdictAt });
-    ctx.ui?.notify?.(`sweep 候选: ${taskId} (${latest.verdict})`, "info");
+    liveCtx?.ui?.notify?.(`sweep 候选: ${taskId} (${latest.verdict})`, "info");
 
     try {
       const { execSync } = await import("node:child_process");
@@ -391,7 +407,7 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
         const detail = closeDryResp.blocking_reasons || closeDryResp.errors || closeDryResp.message || JSON.stringify(closeDryResp);
         const msg = `auto-close dry_run BLOCK: ${taskId} - ${JSON.stringify(detail)}`;
         currentLogger.error("auto-close-blocked", { task_id: taskId, response: closeDryResp });
-        ctx.ui?.notify?.(msg, "error");
+        liveCtx?.ui?.notify?.(msg, "error");
         anomalies.push({ task_id: taskId, reason: "close dry_run BLOCK" });
         continue;
       }
@@ -400,7 +416,7 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
       currentLogger.info("auto-close-success", { task_id: taskId });
       // AIPOS-F4 大项C: 收账成功升为可见 info 一行(合并 <hash>/部署 <hash>/close)。
       const settleHash = finalizeCommitHash ? finalizeCommitHash.slice(0, 8) : "?";
-      ctx.ui?.notify?.(`已收账 ${taskId}: 合并 ${settleHash}/部署 ${settleHash}/close`, "info");
+      liveCtx?.ui?.notify?.(`已收账 ${taskId}: 合并 ${settleHash}/部署 ${settleHash}/close`, "info");
       processedCount++;
     } catch (e) {
       const rawErr = e instanceof Error ? e.message : String(e);
@@ -410,7 +426,7 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
       const nextStep = isDirtyTree ? " 下一步: 等下一轮 sweep 再试(脏树自动让路)" : "";
       const errMsg = `sweep finalize 失败: ${taskId} - ${rawErr}${nextStep}`;
       currentLogger.error("auto-finalize-failed", { task_id: taskId, error: rawErr, isDirtyTree });
-      ctx.ui?.notify?.(errMsg, level);
+      liveCtx?.ui?.notify?.(errMsg, level);
       anomalies.push({ task_id: taskId, reason: isDirtyTree ? "脏树让路等下一轮" : "finalize 失败" });
     }
   }
@@ -423,7 +439,7 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
       ? `sweep: ${total} claimed, 收 ${processedCount} 张`
       : `sweep: ${total} claimed, 无需处理`;
   currentLogger.info("sweep-complete", { processed: processedCount, claimed: total, anomalies });
-  ctx.ui?.notify?.(summaryMsg, "info");
+  liveCtx?.ui?.notify?.(summaryMsg, "info");
 
   return processedCount > 0;
 }
@@ -433,7 +449,8 @@ async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
  * 完成判定 = task-progress completed 事件（既有动词兼职完成信号）。
  * return 素材自动组装 = result_summary(取 completed 事件 summary) + artifact_refs(取卡分支 commit 文件清单)。
  */
-async function tryAutoReturn(ctx: any): Promise<boolean> {
+// AIPOS-F10:不接收 ctx — 内部从 liveCtx 取活引用。
+async function tryAutoReturn(): Promise<boolean> {
   if (!currentTaskId || !currentClient || !currentLogger) return false;
   
   const fs = await import("node:fs");
@@ -547,7 +564,7 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
       owner_policy_ref: config.ownerPolicyRef,
       result_summary: summary || "Task completed (auto-return)",
       artifact_refs: artifactRefs.length > 0 ? artifactRefs : undefined,
-      active_session_id: getSessionId(ctx),
+      active_session_id: getSessionId(),
     });
     
     // AIPOS-F4 大项C/D: dry_run 被拒时拒因上屏(声明→级别映射, 禁现场定级)。
@@ -561,9 +578,9 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
       const level = severityToLevel(severity);
       const onScreenMsg = `auto-return ${currentTaskId} 被拒: ${reasonText}`;
       currentLogger.error("auto-return-blocked", { task_id: currentTaskId, reasons, isSessionMismatch, severity, level });
-      ctx.ui?.notify?.(onScreenMsg, level);
+      liveCtx?.ui?.notify?.(onScreenMsg, level);
       if (isSessionMismatch) {
-        ctx.ui?.notify?.(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info");
+        liveCtx?.ui?.notify?.(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info");
       }
       return false;
     }
@@ -572,7 +589,7 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
     if (!dryRunToken) {
       const msg = `auto-return ${currentTaskId}: 无 dry_run_token(响应异常)`;
       currentLogger.error("auto-return-no-token", { task_id: currentTaskId, response: dryRunResp });
-      ctx.ui?.notify?.(msg, "error");
+      liveCtx?.ui?.notify?.(msg, "error");
       return false;
     }
     
@@ -590,7 +607,7 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
       verdict: confirmResp.verdict || confirmResp.ok ? "ok" : "unknown",
     });
     
-    ctx.ui?.notify?.(`自动归还任务 ${currentTaskId}`, "info");
+    liveCtx?.ui?.notify?.(`自动归还任务 ${currentTaskId}`, "info");
     
     // 清空当前任务信息
     currentTaskId = null;
@@ -605,16 +622,16 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
       error: errMsg,
     });
     // AIPOS-F4 大项D: 拒因上屏 — SESSION_MISMATCH 属 auto_recoverable → info, 其余 → error
-    ctx.ui?.notify?.(`auto-return ${currentTaskId} 失败: ${errMsg}`, isSessionMismatch ? "info" : "error");
+    liveCtx?.ui?.notify?.(`auto-return ${currentTaskId} 失败: ${errMsg}`, isSessionMismatch ? "info" : "error");
     if (isSessionMismatch) {
-      ctx.ui?.notify?.(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info");
+      liveCtx?.ui?.notify?.(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info");
     }
     return false;
   }
 }
 
+// AIPOS-F10:stopLoop 不接收 ctx 参数 — 从 liveCtx 取活引用。
 function stopLoop(
-  ctx: { ui?: { notify?: (m: string, l?: string) => void } },
   reason: string,
   level: "info" | "warn" | "error" = "warn",
 ) {
@@ -622,30 +639,36 @@ function stopLoop(
   loopState.stoppedReason = reason;
   clearTimer();
   currentLogger?.write(level === "error" ? "ERROR" : level === "warn" ? "WARN" : "INFO", "loop-stopped", { reason });
-  ctx.ui?.notify?.(`lybra 循环停止:${reason}`, level);
+  liveCtx?.ui?.notify?.(`lybra 循环停止:${reason}`, level);
 }
 
-function getSessionId(ctx: any): string {
+// AIPOS-F10:getSessionId 从 liveCtx 取,不接收外部 ctx 参数。
+function getSessionId(): string {
   try {
-    const id = ctx?.sessionManager?.getSessionId?.();
+    const id = liveCtx?.sessionManager?.getSessionId?.();
     return id ? String(id) : "lybra-loop-session";
   } catch {
     return "lybra-loop-session";
   }
 }
 
-// F-EXT001-4(FIX1):tick 核心函数,直接调用(零 LLM 参与,零上下文污染)
-async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
+// AIPOS-F10:doTick 不接收 pi/ctx 参数 — 从 livePi/liveCtx 取当前活引用。
+// 根治三病象:①定时器闭包 stale ctx(newSession 摔) ②/reload 后 stale ctx ③session_start 传 event 非 ctx(reply 摔)。
+async function doTick(): Promise<void> {
   if (!loopState.on) return;
   if (!currentClient || !currentLogger) {
-    stopLoop(ctx, "内部状态缺失(client/logger),请重新 /lybra on", "error");
+    stopLoop("内部状态缺失(client/logger),请重新 /lybra on", "error");
+    return;
+  }
+  if (!liveCtx) {
+    stopLoop("liveCtx 未初始化(无活会话),请重新 /lybra on", "error");
     return;
   }
   let config;
   try {
     config = loadConfig(process.env);
   } catch (e) {
-    stopLoop(ctx, `配置失效:${e instanceof Error ? e.message : String(e)}`, "error");
+    stopLoop(`配置失效:${e instanceof Error ? e.message : String(e)}`, "error");
     return;
   }
   loopState.running = true;
@@ -653,7 +676,7 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
     // AIPOS-C3D 大项A: 轮询内周期 sweep — 每轮 tick 前尝试一次收账。
     // 已在跑卡(currentTaskId 非空 = released 未 settle)期间不 sweep, 避免干扰当前会话。
     if (!currentTaskId) {
-      await tryAutoFinalizeOnPassVerdict(ctx).catch((e) => {
+      await tryAutoFinalizeOnPassVerdict().catch((e) => {
         currentLogger?.warn("tick-sweep-error", {
           error: e instanceof Error ? e.message : String(e),
         });
@@ -665,7 +688,7 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
       agentInstance: config.agentInstance,
       ownerPolicyRef: config.ownerPolicyRef,
       workspaceRoot: config.workspaceRoot,
-      activeSessionId: getSessionId(ctx),
+      activeSessionId: getSessionId(),
       state: loopState,
       logger: currentLogger,
     });
@@ -689,7 +712,7 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
       if (loopState.released >= loopState.maxN) {
         currentLogger.info("release-last", { task_id: outcome.task.task_id });
       }
-      ctx.ui.notify(
+      liveCtx.ui.notify(
         `放行 ${outcome.task.task_id}(PreAuthorized)→ 冷启动执行 [${loopState.released}/${loopState.maxN}]`,
         "info",
       );
@@ -698,14 +721,16 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
       expectingSwap = true;
       const kickoff = buildKickoff(outcome.cardAbsPath);
       try {
-        const result = await ctx.newSession({
+        // AIPOS-F10:用 liveCtx.newSession(当前活 ctx),对齐 claim.ts 范式:
+        // withSession 回调里只用 freshCtx,绝不捕获旧 ctx。
+        const result = await liveCtx.newSession({
           withSession: async (freshCtx) => {
             await freshCtx.sendUserMessage(kickoff);
           },
         });
         if (result?.cancelled) {
           expectingSwap = false;
-          stopLoop(ctx, "newSession 被拦截(循环停)", "warn");
+          stopLoop("newSession 被拦截(循环停)", "warn");
         }
       } catch (e) {
         // F-EXT001-8(FIX4):newSession 异常(stale ctx 等)不再静默吞掉,落日志
@@ -714,7 +739,10 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
           task_id: outcome.task.task_id,
           error: e instanceof Error ? e.message : String(e),
         });
-        stopLoop(ctx, `newSession 异常:${e instanceof Error ? e.message : String(e)}`, "error");
+        // AIPOS-F10:降级出声(禁裸抛) — newSession 失败说明 ctx 能力缺失,提示用户手动操作
+        const errMsg = e instanceof Error ? e.message : String(e);
+        stopLoop(`newSession 异常:${errMsg}`, "error");
+        liveCtx?.ui?.notify?.(`下一步: 请在 Pi 对话框手动 /claim 任务卡`, "info");
       }
       return; // session 已替换;续跑靠新 session 的 agent_settled + session_start 双保险
     }
@@ -740,7 +768,7 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
         if (hasCompleted) {
           // 有completed事件，走return流程
           currentLogger.info("held-with-completed", { task_id: heldTaskId });
-          ctx.ui?.notify?.(`检测到 ${heldTaskId} 已completed，执行自动return`, "info");
+          liveCtx?.ui?.notify?.(`检测到 ${heldTaskId} 已completed，执行自动return`, "info");
           
           // 设置 currentTaskId 供tryAutoReturn使用
           currentTaskId = heldTaskId;
@@ -760,18 +788,18 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
           }
           
           // 调用 tryAutoReturn
-          const returned = await tryAutoReturn(ctx);
+          const returned = await tryAutoReturn();
           if (returned) {
             // return成功，继续轮询下一张卡
             if (loopState.released < loopState.maxN) {
               loopState.running = false; // 确保复位
-              scheduleNextTick(pi, ctx, 1000); // 1秒后再拉
+              scheduleNextTick(1000); // 1秒后再拉
             }
             return;
           } else {
             // return失败，记录错误但不停循环
             currentLogger.warn("held-auto-return-failed", { task_id: heldTaskId });
-            ctx.ui?.notify?.(`自动return ${heldTaskId} 失败，请手动处理`, "warn");
+            liveCtx?.ui?.notify?.(`自动return ${heldTaskId} 失败，请手动处理`, "warn");
           }
         } else {
           // AIPOS-C3B 大项D①: held-resume 罩审计车道
@@ -801,26 +829,36 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
             }
             if (!hasVerdict) {
               currentLogger.info("held-audit-no-verdict", { task_id: heldTaskId, reviewed_task_id: reviewedTaskId });
-              ctx.ui?.notify?.(`复工：${heldTaskId} 是审计卡，只差提交裁决(verdict 未落库)`, "info");
-              // 投递卡内容让 auditor 继续提交裁决
+              liveCtx?.ui?.notify?.(`复工：${heldTaskId} 是审计卡，只差提交裁决(verdict 未落库)`, "info");
+              // AIPOS-F10:投递卡内容让 auditor 继续提交裁决。
+              // 用 sendUserMessage(对齐 claim.ts 范式),不用 ctx.reply(不存在的方法)。
               if (cardContent) {
-                await ctx.reply({
-                  type: "text",
-                  text: `# 复工任务(审计车道): ${heldTaskId}\n\n审计卡 claimed + 无 verdict 记录 → 只差提交裁决。\n\n${cardContent}`,
-                });
+                try {
+                  await liveCtx.sendUserMessage(
+                    `# 复工任务(审计车道): ${heldTaskId}\n\n审计卡 claimed + 无 verdict 记录 → 只差提交裁决。\n\n${cardContent}`,
+                  );
+                } catch (sendErr) {
+                  // AIPOS-F10:能力缺失时降级出声,禁裸抛
+                  currentLogger.warn("held-audit-sendUserMessage-failed", {
+                    task_id: heldTaskId,
+                    error: sendErr instanceof Error ? sendErr.message : String(sendErr),
+                  });
+                  liveCtx?.ui?.notify?.(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn");
+                  liveCtx?.ui?.notify?.(`下一步: 请在 Pi 对话框手动提交裁决`, "info");
+                }
                 currentTaskId = heldTaskId;
-                stopLoop(ctx, `已复工审计卡 ${heldTaskId}，等待提交裁决`, "info");
+                stopLoop(`已复工审计卡 ${heldTaskId}，等待提交裁决`, "info");
                 return;
               }
             } else {
               currentLogger.info("held-audit-has-verdict", { task_id: heldTaskId });
-              ctx.ui?.notify?.(`审计卡 ${heldTaskId} 已有 verdict，无需复工`, "info");
+              liveCtx?.ui?.notify?.(`审计卡 ${heldTaskId} 已有 verdict，无需复工`, "info");
             }
           }
 
           // AIPOS-R8B 大项C①: held 且无 completed → 投递卡正文复工（会话中断后自动续做）
           currentLogger.info("held-resume", { task_id: heldTaskId });
-          ctx.ui?.notify?.(`复工：继续执行 ${heldTaskId}`, "info");
+          liveCtx?.ui?.notify?.(`复工：继续执行 ${heldTaskId}`, "info");
           
           // 读取任务卡正文并投递
           if (fs.existsSync(taskCardPath)) {
@@ -857,11 +895,19 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
                   });
                 }
               }
-              // 投递卡内容到当前会话
-              await ctx.reply({
-                type: "text",
-                text: resumeText,
-              });
+              // AIPOS-F10:投递卡内容到当前会话。用 sendUserMessage(对齐 claim.ts 范式),
+              // 不用 ctx.reply(不存在的方法 —— 病象③的根因)。
+              try {
+                await liveCtx.sendUserMessage(resumeText);
+              } catch (sendErr) {
+                // AIPOS-F10:能力缺失时降级出声,禁裸抛
+                currentLogger.warn("held-resume-sendUserMessage-failed", {
+                  task_id: heldTaskId,
+                  error: sendErr instanceof Error ? sendErr.message : String(sendErr),
+                });
+                liveCtx?.ui?.notify?.(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn");
+                liveCtx?.ui?.notify?.(`下一步: 请在 Pi 对话框手动 /claim 任务卡`, "info");
+              }
               
               // 设置 currentTaskId 供后续使用
               currentTaskId = heldTaskId;
@@ -873,28 +919,28 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
               }
               
               // 停止循环，让执行体在当前会话继续工作
-              stopLoop(ctx, `已复工 ${heldTaskId}，继续在当前会话执行`, "info");
+              stopLoop(`已复工 ${heldTaskId}，继续在当前会话执行`, "info");
               return;
             } catch (e) {
               currentLogger.error("held-resume-failed", { task_id: heldTaskId, error: String(e) });
-              ctx.ui?.notify?.(`复工失败: ${e instanceof Error ? e.message : String(e)}`, "error");
+              liveCtx?.ui?.notify?.(`复工失败: ${e instanceof Error ? e.message : String(e)}`, "error");
             }
           } else {
             currentLogger.warn("held-resume-no-card", { task_id: heldTaskId, expected_path: taskCardPath });
-            ctx.ui?.notify?.(`任务卡不存在: ${taskCardPath}`, "warn");
+            liveCtx?.ui?.notify?.(`任务卡不存在: ${taskCardPath}`, "warn");
           }
         }
       }
       
       // 没有completed事件，或return失败，按原逻辑stop
-      stopLoop(ctx, outcome.reason, "warn");
+      stopLoop(outcome.reason, "warn");
       return;
     }
 
     // wait:轮询
     const elapsed = Date.now() - (loopState as { cycleStartMs: number }).cycleStartMs;
     if (elapsed >= config.maxWaitSec * 1000) {
-      stopLoop(ctx, `轮询超时(${config.maxWaitSec}s)无信封内可认领卡`, "info");
+      stopLoop(`轮询超时(${config.maxWaitSec}s)无信封内可认领卡`, "info");
       return;
     }
     const remain = config.maxWaitSec * 1000 - elapsed;
@@ -903,18 +949,18 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
     if (!Number.isFinite(nextMs) || nextMs <= 0) {
       const msg = `轮询间隔非法(nextMs=${nextMs}, intervalSec=${config.intervalSec}) - 停止循环`;
       currentLogger.error("invalid-poll-interval", { nextMs, intervalSec: config.intervalSec, remain });
-      ctx.ui?.notify?.(msg, "error");
-      stopLoop(ctx, msg, "error");
+      liveCtx?.ui?.notify?.(msg, "error");
+      stopLoop(msg, "error");
       return;
     }
     currentLogger.info("wait-poll", { reason: outcome.reason, nextMs });
     // AIPOS-R6I 靶③: 轮询结果可见 - 打印等待原因
-    ctx.ui?.notify?.(`轮询: ${outcome.reason}，${Math.round(nextMs / 1000)}s 后再拉`, "info");
+    liveCtx?.ui?.notify?.(`轮询: ${outcome.reason}，${Math.round(nextMs / 1000)}s 后再拉`, "info");
     // F-EXT001-8(FIX4):wait 路径复位 running,防定时器触发前 running 一直 true 拦截其他入口
     loopState.running = false;
-    scheduleNextTick(pi, ctx, nextMs);
+    scheduleNextTick(nextMs);
   } catch (e) {
-    stopLoop(ctx, `tick 异常:${e instanceof Error ? e.message : String(e)}`, "error");
+    stopLoop(`tick 异常:${e instanceof Error ? e.message : String(e)}`, "error");
   } finally {
     // F-EXT001-8(FIX4):release 路径已前置复位 running;finally 保底兜所有其他路径
     loopState.running = false;
@@ -922,28 +968,32 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
 }
 
 export default function (pi: ExtensionAPI) {
+  // AIPOS-F10:每次 session 装载立即刷新 livePi — 定时器/钩子从模块级引用取,不闭包捕获。
+  livePi = pi;
+
   // --- 续跑:maxN>1 时,新 session 的卡执行完(settle)→ 直接调 tick ---
   pi.on("agent_settled", async (_event, ctx) => {
+    liveCtx = ctx; // AIPOS-F10:刷新活引用
     if (!loopState.on) return;
     
     // AIPOS-R6I 靶②: 检查是否有 PASS 裁决，如有则自动 finalize+close
-    await tryAutoFinalizeOnPassVerdict(ctx).catch((e) => {
+    await tryAutoFinalizeOnPassVerdict().catch((e) => {
       const errMsg = `agent_settled auto-finalize 错误: ${e instanceof Error ? e.message : String(e)}`;
       currentLogger?.warn("agent_settled-auto-finalize-error", {
         error: e instanceof Error ? e.message : String(e),
       });
       // AIPOS-R6L 第三轮修复(b): 失败必出声
-      ctx.ui?.notify?.(errMsg, "error");
+      liveCtx?.ui?.notify?.(errMsg, "error");
     });
     
     // AIPOS-CONN-LOOP-2 ①: 检查是否有 completed 事件，如有则自动 return
     if (currentTaskId) {
-      const returned = await tryAutoReturn(ctx);
+      const returned = await tryAutoReturn();
       if (returned) {
         // return 成功后，如果还未达到 maxN，继续轮询下一张卡
         if (loopState.released < loopState.maxN) {
           if (!loopState.running) {
-            doTick(pi, ctx).catch((e) => {
+            doTick().catch((e) => {
               currentLogger?.warn("agent_settled-post-return-tick-error", {
                 error: e instanceof Error ? e.message : String(e),
               });
@@ -955,12 +1005,12 @@ export default function (pi: ExtensionAPI) {
     }
     
     if (loopState.released >= loopState.maxN) {
-      stopLoop(ctx, `达到 maxN(${loopState.maxN}),已放行 ${loopState.released} 张`, "info");
+      stopLoop(`达到 maxN(${loopState.maxN}),已放行 ${loopState.released} 张`, "info");
       return;
     }
     if (loopState.running) return; // 防重入
     // F-EXT001-4(FIX1):直接调用,不经 sendUserMessage
-    doTick(pi, ctx).catch((e) => {
+    doTick().catch((e) => {
       // F-EXT001-8(FIX4):不再静默吞错,落日志
       currentLogger?.warn("agent_settled-doTick-error", {
         error: e instanceof Error ? e.message : String(e),
@@ -970,18 +1020,27 @@ export default function (pi: ExtensionAPI) {
 
   // --- session 生命周期:reload 不断;用户 /new|resume|fork|quit 停;循环自驱 newSession 不停 ---
   pi.on("session_shutdown", async (event, ctx) => {
+    liveCtx = ctx; // AIPOS-F10:刷新活引用(虽然即将关闭,但 stopLoop 可能用到)
     if (expectingSwap) {
       // 循环自己触发的 newSession:清 flag + 定时器,但保留循环状态供新 session 续跑
       expectingSwap = false;
       clearTimer();
       return;
     }
-    if (event.reason === "reload") return; // /reload:循环继续(session_start 再续)
+    // AIPOS-F10:reload 也清定时器 — 旧定时器闭包的 ctx/pi 即将 stale,
+    // 由 session_start 的新 ctx 重新调度。根治病象②。
+    if (event.reason === "reload") {
+      clearTimer();
+      return; // /reload:循环继续(session_start 再续)
+    }
     clearTimer();
-    if (loopState.on) stopLoop(ctx, `session ${event.reason}(循环中断)`, "warn");
+    if (loopState.on) stopLoop(`session ${event.reason}(循环中断)`, "warn");
   });
 
-  pi.on("session_start", async (event) => {
+  // AIPOS-F10:session_start 必须捕获第二参数 ctx(=当前活会话的 ctx)。
+  // 旧代码只取 event 然后 event as any 当 ctx 用 —— 病象③的根因。
+  pi.on("session_start", async (event, ctx) => {
+    liveCtx = ctx; // AIPOS-F10:刷新活引用 — 新 session 的 ctx 替代旧 session 的 stale ctx
     // F-EXT001-8(FIX4):双保险机制 — reload 时续跑 + 自驱 newSession(expectingSwap)时也续跑,防 agent_settled 单点失效
     if (loopState.on && (event.reason === "reload" || expectingSwap)) {
       if (expectingSwap) {
@@ -990,7 +1049,7 @@ export default function (pi: ExtensionAPI) {
       }
       if (loopState.running) return; // 防重入(agent_settled 可能先到)
       // F-EXT001-4(FIX1):直接调用,不经 sendUserMessage
-      doTick(pi, event as any).catch((e) => {
+      doTick().catch((e) => {
         // F-EXT001-8(FIX4):不再静默吞错,落日志
         currentLogger?.warn("session_start-doTick-error", {
           reason: event.reason,
@@ -1004,6 +1063,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("lybra", {
     description: "lybra-loop 自动领卡循环:on [maxN] | off | status[v0]",
     handler: async (args, ctx) => {
+      liveCtx = ctx; // AIPOS-F10:命令入口刷新活引用
       const parts = String(args || "").trim().split(/\s+/);
       const sub = parts[0] || "status";
 
@@ -1012,7 +1072,7 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("lybra 循环未在运行", "info");
           return;
         }
-        stopLoop(ctx, "用户 /lybra off", "info");
+        stopLoop("用户 /lybra off", "info");
         return;
       }
 
@@ -1173,7 +1233,7 @@ export default function (pi: ExtensionAPI) {
         // AIPOS-R8B 大项C④: sweep 带耗时显示
         ctx.ui?.notify?.("[5/5] 存量收敛(sweep)...", "info");
         const sweepStartMs = Date.now();
-        tryAutoFinalizeOnPassVerdict(ctx).catch((e) => {
+        tryAutoFinalizeOnPassVerdict().catch((e) => {
           const errMsg = `启动时 auto-finalize 错误: ${e instanceof Error ? e.message : String(e)}`;
           currentLogger.warn("startup-auto-finalize-error", {
             error: e instanceof Error ? e.message : String(e),
@@ -1188,7 +1248,7 @@ export default function (pi: ExtensionAPI) {
         });
         
         // F-EXT001-4(FIX1):非阻塞,直接调用第一轮 tick(不经 sendUserMessage)
-        doTick(pi, ctx).catch((e) => {
+        doTick().catch((e) => {
           // F-EXT001-8(FIX4):不再静默吞错,落日志
           currentLogger.warn("lybra-on-first-tick-error", {
             error: e instanceof Error ? e.message : String(e),
@@ -1206,8 +1266,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("lybra-tick", {
     description: "(手动)立即执行一轮 lybra-loop tick;自动链不依赖命令路由",
     handler: async (_args, ctx) => {
+      liveCtx = ctx; // AIPOS-F10:命令入口刷新活引用
       // 直接调用 doTick,与自动链同路径
-      await doTick(pi, ctx);
+      await doTick();
     },
   });
 }

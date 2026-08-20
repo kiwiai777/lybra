@@ -36,7 +36,8 @@ const lines = source.split("\n");
     let newSessionLine = -1;
     let runningResetLine = -1;
     for (let i = releaseBlockStart; i < lines.length; i++) {
-      if (lines[i].includes("await ctx.newSession(") || lines[i].includes("await ctx.newSession({")) {
+      // AIPOS-F10: newSession 调用从 ctx 改为 liveCtx
+      if (lines[i].includes("newSession(") || lines[i].includes("newSession({")) {
         newSessionLine = i;
         break;
       }
