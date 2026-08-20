@@ -64,7 +64,8 @@ const agentSettledBlock = loopSrc.slice(
   agentSettledStart,
   agentSettledEnd > agentSettledStart ? agentSettledEnd : agentSettledStart + 4000
 );
-check("agent_settled 有 doTick 调用", agentSettledBlock.includes("doTick(pi, ctx)"));
+// AIPOS-F10:doTick 不再接收 pi/ctx 参数 — 从模块级 liveCtx/livePi 取活引用
+check("agent_settled 有 doTick 调用", agentSettledBlock.includes("doTick()"));
 check("agent_settled 有 catch 块", agentSettledBlock.includes(".catch("));
 
 // --- 5. 源码断言:不存在 sendUserMessage("/lybra-tick") ---
