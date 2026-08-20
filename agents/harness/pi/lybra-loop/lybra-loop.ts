@@ -245,7 +245,30 @@ function selectLatestGateVerdict(
   return candidates[0];
 }
 
+// AIPOS-C3D 大项A: sweep 防重入标志 — 启动存量收敛与每轮 tick 可能并发触发同一 sweep,
+// 双 finalize 会引发 deploy 竞态;单线程下 check+set 无 await 间隔, 原子生效。
+let sweepInFlight = false;
+
 async function tryAutoFinalizeOnPassVerdict(ctx: any): Promise<boolean> {
+  if (sweepInFlight) {
+    currentLogger?.info("sweep-skip-inflight", {});
+    return false;
+  }
+  sweepInFlight = true;
+  let result = false;
+  try {
+    result = await tryAutoFinalizeOnPassVerdictCore(ctx);
+  } catch (e) {
+    // 保底: core 内部应自洽不抛, 意外抛了也落日志并复位标志(不静默吞)
+    currentLogger?.warn("sweep-unexpected-error", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  sweepInFlight = false;
+  return result;
+}
+
+async function tryAutoFinalizeOnPassVerdictCore(ctx: any): Promise<boolean> {
   if (!currentClient || !currentLogger) {
     currentLogger?.warn("sweep-no-client", { reason: "currentClient or currentLogger not initialized" });
     ctx.ui?.notify?.("sweep 跳过:客户端或日志器未初始化", "warn");
@@ -571,6 +594,15 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
   }
   loopState.running = true;
   try {
+    // AIPOS-C3D 大项A: 轮询内周期 sweep — 每轮 tick 前尝试一次收账。
+    // 已在跑卡(currentTaskId 非空 = released 未 settle)期间不 sweep, 避免干扰当前会话。
+    if (!currentTaskId) {
+      await tryAutoFinalizeOnPassVerdict(ctx).catch((e) => {
+        currentLogger?.warn("tick-sweep-error", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
+    }
     const outcome = await executeTick({
       client: currentClient,
       actor: config.actor,
@@ -738,10 +770,41 @@ async function doTick(pi: ExtensionAPI, ctx: any): Promise<void> {
           if (fs.existsSync(taskCardPath)) {
             try {
               if (!cardContent) cardContent = fs.readFileSync(taskCardPath, "utf-8");
+              // AIPOS-C3D 大项B: 复工附带裁决 — 若该卡存在门生裁决(N4 声明位置), 随卡正文投递最新裁决全文
+              let resumeText = `# 复工任务: ${heldTaskId}\n\n${cardContent}`;
+              const verdictDir = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts", heldTaskId);
+              if (fs.existsSync(verdictDir)) {
+                const latest = selectLatestGateVerdict(fs, verdictDir, currentLogger, heldTaskId);
+                if (latest) {
+                  let verdictFull = "";
+                  try {
+                    verdictFull = fs.readFileSync(latest.filePath, "utf-8");
+                  } catch {
+                    verdictFull = `(读取裁决文件失败: ${latest.filePath})`;
+                  }
+                  const kindLabel =
+                    latest.verdict === "FAIL"
+                      ? "FAIL 整改复工"
+                      : latest.verdict === "PASS" || latest.verdict === "PASS_WITH_NOTES"
+                        ? "PASS 待收尾"
+                        : `裁决 ${latest.verdict}`;
+                  resumeText =
+                    `# 复工任务: ${heldTaskId}(此为 ${kindLabel})\n\n` +
+                    `> 带最新门生裁决全文(${latest.verdictId}, verdict_at=${latest.verdictAt})。\n` +
+                    `> findings 以顾问核定为准, 有驳回顾问会另行说明。\n\n` +
+                    `--- 最新门生裁决全文 ---\n\n${verdictFull}\n\n` +
+                    `--- 任务卡正文 ---\n\n${cardContent}`;
+                  currentLogger.info("held-resume-with-verdict", {
+                    task_id: heldTaskId,
+                    verdict: latest.verdict,
+                    verdict_id: latest.verdictId,
+                  });
+                }
+              }
               // 投递卡内容到当前会话
               await ctx.reply({
                 type: "text",
-                text: `# 复工任务: ${heldTaskId}\n\n${cardContent}`,
+                text: resumeText,
               });
               
               // 设置 currentTaskId 供后续使用
