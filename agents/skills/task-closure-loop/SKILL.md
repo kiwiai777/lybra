@@ -11,14 +11,13 @@ description: 任务闭环 v3 标准工序:executor 执行后自产审计卡,audi
 **★ v4 统一落位(2026-07-25 Owner 敲死,根治漂移)**:一个任务的全部工件在唯一目录
 `~/projects/lybra/task_cards/<ID>/`:CARD.md / RETURN.md / AUDIT-<ID>.md /
 AUDIT-REPORT-<ID>.md / FIX-n.md / FINALIZE.md。任何角色不得把任务工件写到该目录之外。
-**审计 PASS → 顾问复核后直接签发 FINALIZE.md,无需 Owner 逐单批准**;Owner 真人核验只在
+**审计 PASS → 循环自动收账**(finalize+deploy+close,F11 已上线);Owner 真人核验只在
 CARD.md 头部声明 `owner_verify: required` 时插入(PASS 后、FINALIZE 前)。
 
 ```
 顾问出执行卡 → executor 执行 + write-return + 自产审计卡(投队列)
  → auditor 独立审【准绳=原执行卡】 → FAIL:F-* 打回修 → 复审(有界)
- → PASS → 顾问复核 + 治理档 → Owner 批 finalize【独立门】
- → 薄 finalize 卡 → executor 推产品仓 → 顾问收账
+ → PASS → 循环自动收账(finalize+deploy+close,F11 已上线)
 ```
 
 ## 各角色工位
@@ -40,8 +39,8 @@ CARD.md 头部声明 `owner_verify: required` 时插入(PASS 后、FINALIZE 前)
    (写明僵持点),不再自行循环。
 
 **顾问(工位只有三点)**:出卡、仲裁(BLOCK / 审计死锁 / 范围漂移 / 验收歧义)、
-PASS 后复核+治理档+收账(**收账含**:把终版审计卡与审计报告归档进治理仓
-`5_tasks/queue/completed/`,版本化留痕——过渡期动作,gate 派生落地后自动化)。不在执行↔审计之间充当串行工位。
+监控自动循环(F11 已上线:审计 PASS 后循环自动 finalize+deploy+close,
+顾问只监控异常)。不在执行↔审计之间充当串行工位。
 
 **Owner(授权门)**:finalize 批准独立于审计 PASS——审过≠可发布;可经预授权信封把
 某类小片的 finalize 整批授权(授权即身份语义)。
