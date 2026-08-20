@@ -106,7 +106,63 @@ under_prefix() {
     esac
 }
 
-staged_files="$(git diff --cached --name-only --diff-filter=ACM)"
+# ---- 统一读取层 (AIPOS-F6): 所有 git 路径枚举必须经此函数, 强制 core.quotepath=false ----
+# git 默认 quotepath=true 会把非 ASCII 路径八进制转义+加引号, 导致 B①/B②/B③/B④ 前缀匹配
+# 全部失配(护栏被文件名语言击穿)。全 hook 只此一种做法: 读取层统一禁用转义。
+git_name_only() {
+    local filter="$1" dir="${2:-}"
+    if [ -n "$dir" ]; then
+        git -C "$dir" -c core.quotepath=false diff --cached --name-only --diff-filter="$filter"
+    else
+        git -c core.quotepath=false diff --cached --name-only --diff-filter="$filter"
+    fi
+}
+
+# ---- 自检 (AIPOS-F6 靶②, C2: 护栏禁静默降级) ----
+# 内置非 ASCII 样例路径, 验证读取层+匹配层对非 ASCII 不降级。
+# 任一自测失败 → hook 自身报错拒绝放行(绝不静默失守)。成功则静默。
+self_test_nonascii() {
+    local sample="决策日志_非ASCII自检.md"
+    local tmpd out
+
+    # ① 匹配层自测: 非 ASCII 样例必须命中 decision_log 前缀
+    if ! under_prefix "${DECISION_LOG_PREFIX}${sample}" "$DECISION_LOG_PREFIX"; then
+        echo "❌ BLOCKED: hook self-test FAILED — 非 ASCII 样例路径未命中护栏前缀(匹配层被击穿)。拒绝放行。"
+        return 1
+    fi
+
+    # ② 读取层自测: 用同一读取函数在临时仓枚举非 ASCII 文件, 必须原样输出(未被 quotepath 转义)
+    tmpd="$(mktemp -d 2>/dev/null)"
+    if [ -z "$tmpd" ] || [ ! -d "$tmpd" ]; then
+        echo "❌ BLOCKED: hook self-test 无法创建临时目录(mktemp 失败)。拒绝放行。"
+        return 1
+    fi
+    if ! git -C "$tmpd" init -q 2>/dev/null; then
+        rm -rf "$tmpd"
+        echo "❌ BLOCKED: hook self-test 无法初始化临时仓(git init 失败)。拒绝放行。"
+        return 1
+    fi
+    printf 'x\n' > "$tmpd/$sample"
+    if ! git -C "$tmpd" add -- "$sample" 2>/dev/null; then
+        rm -rf "$tmpd"
+        echo "❌ BLOCKED: hook self-test 无法暂存非 ASCII 样例(git add 失败)。拒绝放行。"
+        return 1
+    fi
+    out="$(git_name_only ACM "$tmpd" 2>/dev/null || true)"
+    rm -rf "$tmpd"
+
+    if ! printf '%s\n' "$out" | grep -qF "$sample"; then
+        echo "❌ BLOCKED: hook self-test FAILED — git 读取层对非 ASCII 路径输出了转义形式(core.quotepath 未禁用), 护栏被击穿。拒绝放行。"
+        return 1
+    fi
+    return 0
+}
+
+if ! self_test_nonascii; then
+    exit 1
+fi
+
+staged_files="$(git_name_only ACM)"
 
 if [ -z "$staged_files" ]; then
     echo "✅ No files to check."
@@ -157,7 +213,7 @@ while IFS= read -r file; do
         blocked_files+=("$file")
         blocked_reasons+=("decision_log/ is append-only, modifications forbidden (B③)")
     fi
-done < <(git diff --cached --name-only --diff-filter=M)
+done < <(git_name_only M)
 
 # 大项B④: records/** 新增文件必须携机器出生标记 (必填字段从 file_declarations 声明读取)
 # AIPOS-A1: 必填字段列表来自 RECORD_REQUIRED_FM (config.schema governance_structure.file_declarations.record_file.required_frontmatter)
@@ -174,7 +230,7 @@ while IFS= read -r file; do
             fi
         done
     fi
-done < <(git diff --cached --name-only --diff-filter=A)
+done < <(git_name_only A)
 
 if [ ${#blocked_files[@]} -gt 0 ]; then
     echo ""
