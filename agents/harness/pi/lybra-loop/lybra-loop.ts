@@ -447,6 +447,40 @@ async function tryAutoReturn(ctx: any): Promise<boolean> {
     return false;
   }
 
+  // AIPOS-F7 大项A: 兜底网读节点完成判据 — auto-return 发起前,按被持卡对应节点
+  // (从卡 task_mode 判定 N2-return 或 N4-verdict)读 transitions.schema 声明的完成记录:
+  // 该记录已存在 → 卡已完成 → 网静默歇手。禁 role==auditor 特例判断,一切以节点声明为准。
+  // N2(execution)=return 存在即歇;N4(audit)=verdict 存在即歇。
+  const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${currentTaskId.toLowerCase()}.md`);
+  let isAuditCard = false;
+  let cardContent = "";
+  if (fs.existsSync(taskCardPath)) {
+    try {
+      cardContent = fs.readFileSync(taskCardPath, "utf-8");
+      isAuditCard = /task_mode:\s*audit/i.test(cardContent) || /created_by:\s*gate_derivation/i.test(cardContent);
+    } catch {
+      // ignore read error, fall through to existing logic
+    }
+  }
+
+  if (isAuditCard) {
+    // N4 完成判据:verdict 记录已落库 → 审计卡已完成 → 兜底网静默歇手
+    const reviewedMatch = cardContent.match(/reviewed_task_id:\s*['"]?([^'"\n]+)['"]?/i);
+    const reviewedTaskId = reviewedMatch ? reviewedMatch[1].trim() : currentTaskId.replace(/R$/i, "");
+    const verdictDir = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts", reviewedTaskId);
+    if (fs.existsSync(verdictDir)) {
+      const vFiles = fs.readdirSync(verdictDir).filter((f: string) => f.endsWith(".md"));
+      if (vFiles.length > 0) {
+        currentLogger.info("auto-return-skip-audit-verdict-exists", { task_id: currentTaskId, reviewed_task_id: reviewedTaskId, verdict_count: vFiles.length });
+        return false;
+      }
+    }
+    // 审计卡无 verdict → 还在执行中,不走 auto-return(审计卡完成判据=N4,不走 N2 return)
+    currentLogger.info("auto-return-skip-audit-no-verdict-yet", { task_id: currentTaskId, reviewed_task_id: reviewedTaskId });
+    return false;
+  }
+
+  // N2 完成判据:return 记录已落库 → 执行卡已完成 → 兜底网静默歇手
   // AIPOS-F4 大项D: 兜底网让路 — auto-return 发起前先查 returns/ 已有记录 → 静默跳过。
   // 本任务已有 return 记录(上轮已交回)则不再重复发起, 也不出声(避免红错刷屏)。
   const returnsDir = path.join(config.workspaceRoot, "5_tasks/records/returns", currentTaskId);

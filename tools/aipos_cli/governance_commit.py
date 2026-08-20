@@ -202,26 +202,8 @@ def governance_commit(
     
     operations.append(f"Governance root: {governance_root}")
     
-    # ① 校验 N6 收账清单四件齐全
-    completeness = check_governance_completeness(governance_root, task_id, repo_root)
-    operations.append(f"Completeness check: {'PASS' if completeness['complete'] else 'FAIL'}")
-    
-    if not completeness["complete"]:
-        missing_items = "\n  - ".join(completeness["missing"])
-        return {
-            "verdict": Verdict.BLOCK,
-            "task_id": task_id,
-            "actor": actor,
-            "dry_run": dry_run,
-            "completeness_check": completeness,
-            "committed": False,
-            "pushed": False,
-            "commit_hash": None,
-            "message": f"N6 收账清单不完整,缺少:\n  - {missing_items}",
-            "operations": operations,
-        }
-    
-    # ② 检查是否有待提交的更改
+    # AIPOS-F7 大项B①: 先查 git status — 无待收内容 → info "无待收内容, 治理仓已最新" + EXIT=0
+    # (F4 no-op 档)。放在完整性校验之前:仓已干净则无需校验,避免无变更场景误触 BLOCK。
     try:
         status_result = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -239,11 +221,12 @@ def governance_commit(
                 "task_id": task_id,
                 "actor": actor,
                 "dry_run": dry_run,
-                "completeness_check": completeness,
+                "completeness_check": None,
                 "committed": False,
                 "pushed": False,
                 "commit_hash": None,
-                "message": "N6 收账清单完整,但无待提交更改",
+                "message": "无待收内容, 治理仓已最新",
+                "severity": "info",
                 "operations": operations,
             }
     except subprocess.CalledProcessError as e:
@@ -252,11 +235,30 @@ def governance_commit(
             "task_id": task_id,
             "actor": actor,
             "dry_run": dry_run,
-            "completeness_check": completeness,
+            "completeness_check": None,
             "committed": False,
             "pushed": False,
             "commit_hash": None,
             "message": f"Git status check failed: {e.stderr}",
+            "operations": operations,
+        }
+    
+    # ① 校验 N6 收账清单四件齐全(仅在有变更时校验)
+    completeness = check_governance_completeness(governance_root, task_id, repo_root)
+    operations.append(f"Completeness check: {'PASS' if completeness['complete'] else 'FAIL'}")
+    
+    if not completeness["complete"]:
+        missing_items = "\n  - ".join(completeness["missing"])
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "completeness_check": completeness,
+            "committed": False,
+            "pushed": False,
+            "commit_hash": None,
+            "message": f"N6 收账清单不完整,缺少:\n  - {missing_items}",
             "operations": operations,
         }
     
