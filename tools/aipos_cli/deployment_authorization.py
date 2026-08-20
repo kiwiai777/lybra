@@ -108,7 +108,7 @@ def _commits_between(repo_root: Path, current_commit: str, head_commit: str) -> 
 
 
 def check_verdict_record_authentic(verdict_file: Path) -> dict[str, Any]:
-    """AIPOS-C3 大项A①: 裁决记录真实性校验 — 门生 vs 手写。
+    """AIPOS-C3 大项A① + AIPOS-F2: 裁决记录真实性校验 — 门生 vs 手写。
     
     门生记录必须具备 transitions.schema.json 声明的机器特征:
       - record_type: audit_verdict_record (或 audit_verdict, schema 迁移期兼容)
@@ -116,6 +116,9 @@ def check_verdict_record_authentic(verdict_file: Path) -> dict[str, Any]:
       - verdict_at: ISO8601 时间戳
     
     手写文件(缺少以上任一标记) = 拒绝,绝不参与 finalize 判定。
+    
+    AIPOS-F2: 门生判定核心逻辑委托给 audit_helpers.is_gate_born_verdict_metadata
+    (单源声明),本函数保留详细诊断输出但判定结果与共享函数一致。
     
     Args:
         verdict_file: 裁决文件路径
@@ -146,7 +149,18 @@ def check_verdict_record_authentic(verdict_file: Path) -> dict[str, Any]:
     verdict_id = str(metadata.get("verdict_id") or "").strip()
     verdict_at = str(metadata.get("verdict_at") or metadata.get("timestamp") or "").strip()
     
-    # 检查 record_type: 必须是 audit_verdict_record 或 audit_verdict
+    # AIPOS-F2: 核心判定走共享函数(单源)
+    from tools.aipos_cli.audit_helpers import is_gate_born_verdict_metadata
+    if is_gate_born_verdict_metadata(metadata):
+        return {
+            "authentic": True,
+            "reason": "门生记录:具备完整机器特征(record_type + verdict_id + verdict_at)",
+            "record_type": record_type,
+            "verdict_id": verdict_id,
+            "verdict_at": verdict_at,
+        }
+    
+    # 详细诊断信息(保留原有逐字段报错)
     if not record_type.startswith("audit_verdict"):
         return {
             "authentic": False,
@@ -155,8 +169,6 @@ def check_verdict_record_authentic(verdict_file: Path) -> dict[str, Any]:
             "verdict_id": verdict_id,
             "verdict_at": verdict_at,
         }
-    
-    # 检查 verdict_id: 必须存在且符合命名约定
     if not verdict_id or not verdict_id.startswith("verdict_"):
         return {
             "authentic": False,
@@ -165,8 +177,6 @@ def check_verdict_record_authentic(verdict_file: Path) -> dict[str, Any]:
             "verdict_id": verdict_id,
             "verdict_at": verdict_at,
         }
-    
-    # 检查 verdict_at: 必须存在
     if not verdict_at:
         return {
             "authentic": False,
@@ -175,10 +185,10 @@ def check_verdict_record_authentic(verdict_file: Path) -> dict[str, Any]:
             "verdict_id": verdict_id,
             "verdict_at": verdict_at,
         }
-    
+    # Should not reach here (is_gate_born_verdict_metadata would have returned True)
     return {
-        "authentic": True,
-        "reason": "门生记录:具备完整机器特征(record_type + verdict_id + verdict_at)",
+        "authentic": False,
+        "reason": "缺少门生标记: 未知原因",
         "record_type": record_type,
         "verdict_id": verdict_id,
         "verdict_at": verdict_at,

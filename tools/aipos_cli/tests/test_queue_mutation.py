@@ -538,15 +538,18 @@ class QueueMutationTests(unittest.TestCase):
         content = content.replace("---", "---\naudit: required", 1)
         task_path.write_text(content, encoding="utf-8")
 
-        # Write PASS verdict
+        # Write PASS verdict (AIPOS-F2: must include gate-born markers)
         verdict_content = """---
+record_type: audit_verdict_record
+verdict_id: verdict_AIPOS-FND-4-PASS_20260820_test
 verdict: PASS
 task_id: AIPOS-FND-4-PASS
 auditor: test.auditor
+verdict_at: '2026-08-20T07:00:00Z'
 ---
 Passed audit.
 """
-        self.write_file("5_tasks/records/audit_verdicts/AIPOS-FND-4-PASS/verdict_1.md", verdict_content)
+        self.write_file("5_tasks/records/audit_verdicts/AIPOS-FND-4-PASS/verdict_AIPOS-FND-4-PASS_20260820_test.md", verdict_content)
 
         result = mutate_queue_task(
             self.repo_root,
@@ -575,15 +578,18 @@ Passed audit.
         content = content.replace("---", "---\naudit: required", 1)
         task_path.write_text(content, encoding="utf-8")
 
-        # Write PASS_WITH_NOTES verdict
+        # Write PASS_WITH_NOTES verdict (AIPOS-F2: must include gate-born markers)
         verdict_content = """---
+record_type: audit_verdict_record
+verdict_id: verdict_AIPOS-FND-4-PASS-NOTES_20260820_test
 verdict: PASS_WITH_NOTES
 task_id: AIPOS-FND-4-PASS-NOTES
 auditor: test.auditor
+verdict_at: '2026-08-20T07:00:00Z'
 ---
 Passed with minor notes.
 """
-        self.write_file("5_tasks/records/audit_verdicts/AIPOS-FND-4-PASS-NOTES/verdict_1.md", verdict_content)
+        self.write_file("5_tasks/records/audit_verdicts/AIPOS-FND-4-PASS-NOTES/verdict_AIPOS-FND-4-PASS-NOTES_20260820_test.md", verdict_content)
 
         result = mutate_queue_task(
             self.repo_root,
@@ -612,15 +618,18 @@ Passed with minor notes.
         content = content.replace("---", "---\naudit: required", 1)
         task_path.write_text(content, encoding="utf-8")
 
-        # Write FAIL verdict
+        # Write FAIL verdict (AIPOS-F2: must include gate-born markers)
         verdict_content = """---
+record_type: audit_verdict_record
+verdict_id: verdict_AIPOS-FND-4-FAIL_20260820_test
 verdict: FAIL
 task_id: AIPOS-FND-4-FAIL
 auditor: test.auditor
+verdict_at: '2026-08-20T07:00:00Z'
 ---
 Failed audit.
 """
-        self.write_file("5_tasks/records/audit_verdicts/AIPOS-FND-4-FAIL/verdict_1.md", verdict_content)
+        self.write_file("5_tasks/records/audit_verdicts/AIPOS-FND-4-FAIL/verdict_AIPOS-FND-4-FAIL_20260820_test.md", verdict_content)
 
         result = mutate_queue_task(
             self.repo_root,

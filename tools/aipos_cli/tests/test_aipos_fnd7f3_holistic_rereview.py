@@ -110,6 +110,7 @@ class TestRereviewCompleteEndToEnd(unittest.TestCase):
             self.root / "5_tasks/records/audit_verdicts/TEST-1/verdict_TEST-1_20260808_080700_audit-test-dev.md",
             {
                 "record_type": "audit_verdict",
+                "verdict_id": "verdict_TEST-1_20260808_080700_audit-test-dev",
                 "task_id": "TEST-1",
                 "audit_task_id": "TEST-1R1",
                 "auditor": "audit.test.dev",
@@ -272,6 +273,7 @@ class TestRereviewCompleteEndToEnd(unittest.TestCase):
             self.root / "5_tasks/records/audit_verdicts/TEST-2/verdict_TEST-2_20260808_080000_audit-test-dev.md",
             {
                 "record_type": "audit_verdict_record",
+                "verdict_id": "verdict_TEST-2_20260808_080000_audit-test-dev",
                 "verdict": "PASS",
                 "reviewed_task_id": "TEST-2",
                 "verdict_at": "2026-08-08T08:00:00Z",
@@ -283,6 +285,7 @@ class TestRereviewCompleteEndToEnd(unittest.TestCase):
             self.root / "5_tasks/records/audit_verdicts/TEST-2/verdict_TEST-2_20260808_090000_audit-test-dev.md",
             {
                 "record_type": "audit_verdict_record",
+                "verdict_id": "verdict_TEST-2_20260808_090000_audit-test-dev",
                 "verdict": "FAIL",
                 "reviewed_task_id": "TEST-2",
                 "verdict_at": "2026-08-08T09:00:00Z",
@@ -327,11 +330,12 @@ class TestRereviewCompleteEndToEnd(unittest.TestCase):
             {"record_id": "return_TEST-3_20260808_exec-test-dev", "record_type": "return_record", "task_id": "TEST-3"},
         )
         
-        # 裁决1:只有 timestamp(旧格式)
+        # 裁决1:只有 timestamp(旧格式) — AIPOS-F2: 必须有 verdict_id
         _write_md(
             self.root / "5_tasks/records/audit_verdicts/TEST-3/verdict_TEST-3_old.md",
             {
                 "record_type": "audit_verdict",
+                "verdict_id": "verdict_TEST-3_old_20260808",
                 "verdict": "FAIL",
                 "timestamp": "2026-08-08T08:00:00Z",
             },
@@ -342,16 +346,19 @@ class TestRereviewCompleteEndToEnd(unittest.TestCase):
             self.root / "5_tasks/records/audit_verdicts/TEST-3/verdict_TEST-3_new.md",
             {
                 "record_type": "audit_verdict_record",
+                "verdict_id": "verdict_TEST-3_new_20260808",
                 "verdict": "PASS",
                 "verdict_at": "2026-08-08T09:00:00Z",
             },
         )
         
         # 裁决3:既无 verdict_at 也无 timestamp(极端边缘,应兜底为空字符串)
+        # AIPOS-F2: 无 verdict_at → 非门生 → 被忽略(这正是死锁五号修复的语义)
         _write_md(
             self.root / "5_tasks/records/audit_verdicts/TEST-3/verdict_TEST-3_broken.md",
             {
                 "record_type": "audit_verdict",
+                "verdict_id": "verdict_TEST-3_broken",
                 "verdict": "BLOCKED",
             },
         )
@@ -421,6 +428,7 @@ class TestPassTerminalSemantic(unittest.TestCase):
             self.root / "5_tasks/records/audit_verdicts/PASS-TEST/verdict_PASS-TEST_20260808_audit-test-dev.md",
             {
                 "record_type": "audit_verdict_record",
+                "verdict_id": "verdict_PASS-TEST_20260808_audit-test-dev",
                 "verdict": "PASS_WITH_NOTES",
                 "reviewed_task_id": "PASS-TEST",
                 "verdict_at": "2026-08-08T08:00:00Z",

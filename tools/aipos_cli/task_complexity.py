@@ -210,10 +210,15 @@ def validate_task_complexity(
                 for dep_tid in depends_on_list:
                     verdict_dir = gov / "5_tasks" / "records" / "audit_verdicts" / dep_tid
                     if verdict_dir.is_dir():
+                        # AIPOS-F2: 依赖校验也走门生单源判定
+                        from tools.aipos_cli.audit_helpers import is_gate_born_verdict_metadata
                         for vf in verdict_dir.glob("*.md"):
                             try:
                                 vtext = vf.read_text(encoding="utf-8")
                                 vfm, _, _ = parse_markdown_frontmatter(vtext)
+                                # AIPOS-F2: 只认门生记录,手写文件跳过
+                                if not is_gate_born_verdict_metadata(vfm):
+                                    continue
                                 if _lower(vfm.get("verdict")) in AUDIT_PASS_VALUES:
                                     audit_pass_verified = True
                                     break

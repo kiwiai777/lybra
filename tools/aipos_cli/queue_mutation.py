@@ -481,11 +481,13 @@ def _prepare_records_plan(
 
 
 def _check_for_pass_audit_verdict(repo_root: Path, task_id: str) -> bool:
-    """AIPOS-FND-7F3: check if a task's LATEST audit verdict is PASS/PASS_WITH_NOTES.
+    """AIPOS-FND-7F3 + AIPOS-F2: check if a task's LATEST gate-born audit verdict is PASS/PASS_WITH_NOTES.
 
-    Scans 5_tasks/records/audit_verdicts/<task_id>/ for verdict records, sorts by verdict_at
+    Scans 5_tasks/records/audit_verdicts/<task_id>/ for **gate-born** verdict records
+    (AIPOS-F2: hand-written files are ignored — same single-source check as
+    audit_helpers.is_gate_born_verdict_metadata), sorts by verdict_at
     (null-safe: verdict_at > timestamp > empty string), and checks if the LATEST is PASS.
-    Returns True only if the most recent verdict allows task completion.
+    Returns True only if the most recent gate-born verdict allows task completion.
     
     This ensures the re-review flow works correctly:
     - FAIL(T1) → re-audit → PASS(T2) → complete ✅ (latest=PASS)
@@ -499,11 +501,17 @@ def _check_for_pass_audit_verdict(repo_root: Path, task_id: str) -> bool:
     if not verdicts_dir.is_dir():
         return False
     
+    # AIPOS-F2: 导入共享门生判定函数
+    from tools.aipos_cli.audit_helpers import is_gate_born_verdict_metadata
+    
     verdicts = []
     for verdict_file in verdicts_dir.glob("*.md"):
         try:
             text = verdict_file.read_text(encoding="utf-8")
             metadata, _, _ = parse_markdown_frontmatter(text)
+            # AIPOS-F2: 只认门生记录,手写文件跳过
+            if not is_gate_born_verdict_metadata(metadata):
+                continue
             verdict_value = str(metadata.get("verdict") or "").strip().upper()
             # Extract timestamp for sorting (null-safe, same as _verdict_time in board_adapter)
             # Convert to string to ensure consistent comparison (metadata may parse as datetime)

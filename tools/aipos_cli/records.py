@@ -9,6 +9,33 @@ from tools.aipos_cli.task_loader import _serialize_dates
 from tools.schema_constants import RecordType
 
 
+def _is_gate_born_verdict_record(record: dict) -> bool:
+    """AIPOS-F2: 内联门生判定(避免 records.py ↔ audit_helpers.py 循环导入)。
+
+    判定逻辑与 audit_helpers.is_gate_born_verdict_record 完全一致:
+    record_type 以 'audit_verdict' 开头 + verdict_id 以 'verdict_' 开头 + verdict_at 非空。
+    """
+    if not isinstance(record, dict):
+        return False
+    # 顶层字段(_build_record else 分支把 verdict_id/verdict_at 放顶层)
+    rt = str(record.get("record_type") or "").strip()
+    vid = str(record.get("verdict_id") or "").strip()
+    vat_raw = record.get("verdict_at") or record.get("timestamp") or ""
+    vat = str(vat_raw).strip()
+    if rt.startswith("audit_verdict") and vid.startswith("verdict_") and vat:
+        return True
+    # metadata 子 dict
+    nested = record.get("metadata")
+    if isinstance(nested, dict):
+        nrt = str(nested.get("record_type") or "").strip()
+        nvid = str(nested.get("verdict_id") or "").strip()
+        nvat_raw = nested.get("verdict_at") or nested.get("timestamp") or ""
+        nvat = str(nvat_raw).strip()
+        if nrt.startswith("audit_verdict") and nvid.startswith("verdict_") and nvat:
+            return True
+    return False
+
+
 
 
 
@@ -348,10 +375,22 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         _build_record(path, repo_root, RecordType.AUDIT_DISPATCH, directory_task_id)
         for path, directory_task_id in _iter_record_files(audit_dispatches_root)
     ]
-    audit_verdicts = [
+    audit_verdicts_all = [
         _build_record(path, repo_root, RecordType.AUDIT_VERDICT, directory_task_id)
         for path, directory_task_id in _iter_record_files(audit_verdicts_root)
     ]
+    # AIPOS-F2: 裁决存在性单源——只认门生记录,手写文件过滤掉并记录警告
+    audit_verdicts: list[dict[str, Any]] = []
+    hand_written_verdict_warnings: list[str] = []
+    for rec in audit_verdicts_all:
+        if _is_gate_born_verdict_record(rec):
+            audit_verdicts.append(rec)
+        else:
+            hand_written_verdict_warnings.append(
+                f"hand-written verdict ignored: {rec.get('path', '?')} "
+                f"(缺少门生标记 record_type/verdict_id/verdict_at;"
+                f"裁决只经门产生,勿手写落盘)"
+            )
     owner_decisions = [
         _build_owner_decision_record(path, repo_root)
         for path in _iter_owner_decision_files(owner_decisions_root)
@@ -552,6 +591,7 @@ def load_records(repo_root: Path) -> dict[str, Any]:
         "task_owner_verifications": dict(task_owner_verifications),
         "closure_index": dict(closure_index),
         "task_closures": dict(task_closures),
+        "hand_written_verdict_warnings": hand_written_verdict_warnings,
     }
 
 
