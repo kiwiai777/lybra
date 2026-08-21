@@ -76,7 +76,9 @@ export class Logger {
 export type TickOutcome =
   | { kind: "release"; task: AnyDict; cardAbsPath: string; policyId?: string }
   | { kind: "stop"; reason: string }
-  | { kind: "wait"; reason: string };
+  | { kind: "wait"; reason: string }
+  // AIPOS-F16 余热: 额度尽(released>=maxN)→ 不领新卡, 循环不整停(由 lybra-loop 判在途卡终停)
+  | { kind: "cooldown"; reason: string };
 
 export interface TickContext {
   client: GateReadFace;
@@ -136,6 +138,18 @@ export async function executeTick(ctx: TickContext): Promise<TickOutcome> {
   if (cls === "held") {
     logger.info("stop-held", { task_ids: held.map((t) => t.task_id) });
     return { kind: "stop", reason: `已持有 ${held.map((t) => t.task_id).join(",")} —— 一卡一会话,先 return 再接新活` };
+  }
+
+  // AIPOS-F16 余热: 额度尽(released>=maxN)→ 只判不领 — 队列照拉(held 复工网在上面照常可达),
+  // 但绝不对 pending 卡发起 claim; 循环是否终停由本工位在途卡决定(lybra-loop 的 cooldown 分支判)。
+  if (state.released >= state.maxN) {
+    logger.info("cooldown-no-claim", {
+      released: state.released,
+      maxN: state.maxN,
+      claimable: claimable.length,
+      held: held.length,
+    });
+    return { kind: "cooldown", reason: `额度已用完(${state.released}/${state.maxN}), 余热收尾中(不领新卡)` };
   }
 
   // 过滤本周期已试过的(避免对信封外卡反复 dry-run)

@@ -18,6 +18,7 @@ declare -a files=(
   "tests/f11-runtime-reset.test.ts"
   "tests/f12-gate-territory.test.ts"
   "tests/f17-derivation-homology.test.ts"
+  "tests/f16-cooldown.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
