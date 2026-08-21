@@ -227,6 +227,26 @@
     "gate_mcp_request_ms": 30000,
     "gate_mcp_request_description": "Gate MCP 单次请求超时(ms)。默认 30s 对齐 LOOP-REDESIGN 护栏常量审查;实测本机单次操作 <3s,30s 为多次串行累加留足容错预算。计时日志(fetch-timing/dryrun-timing/preview-timing/tick-total-timing)用于排查慢点。"
   },
+  "watermark": {
+    "description": "AIPOS-F19: 工位水位自检 — 磁盘/tmpfs 越阈出声带路(loop-on 启动 + status 常驻行 + 周期 tick 低频复查), 根治同机项目互踩无预警(2026-08-21 /tmp 互踩事故: agency 残骸顶满共用 tmpfs, pi 崩溃零预警)。全部阈值/路径/周期/话术素材在此声明, 连接器禁写死; 只喊不代删(决策留人), 不自动清理任何文件。",
+    "thresholds": {
+      "warn_percent": 80,
+      "critical_percent": 90,
+      "semantics": "used_percent = (blocks - bavail) / blocks * 100(df 口径, statfs)。越 warn → voice(persistent=true) 一行: 路径+水位+next_step; 越 critical → 追加 critical_extra_line 一句(只提醒不自动停, 决策留人)。"
+    },
+    "check_paths": [
+      { "path": "{workspace_root}", "label": "workspace" },
+      { "path": "/tmp", "label": "tmp" }
+    ],
+    "check_paths_note": "检查路径集 = workspace 所在盘 + /tmp。{workspace_root} 占位符在检查时替换为连接器解析到的 workspace_root(治理工作区所在盘); 其余按字面绝对路径。",
+    "periodic_tick_interval": 10,
+    "periodic_tick_note": "每 N 个 doTick 低频复查一次(启动自检与 status 常驻检查不受此限); N 必须 ≥1。",
+    "clearable_items": "产品仓 .worktrees/ 下已 finalize 的卡 worktree、治理工作区 task_cards/<卡号>/ 下临时产物、npm 缓存(npm cache clean --force)",
+    "next_step_template": "非 lybra 数据勿自行清理, 通报占用方; lybra 可清项={clearable_items}",
+    "critical_extra_line": "写入随时失败, 建议暂停领新卡",
+    "noise_reduction": "同路径同级别不重复喊(状态变化才再喊); 状态 ∈ ok|warn|critical, 降噪状态模块级跨 session 存活。",
+    "voice_persistence": "越阈出声走 voice() 单出口(F15), persistent=true(F15B 双写: 会话 entry + voice-journal.md)。"
+  },
   "urls": {
     "description": "URL patterns and defaults",
     "gate_local": "http://127.0.0.1:7118",

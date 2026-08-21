@@ -29,11 +29,11 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadConfig, loadConfigSchema, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs, type LoopConfig, type GateTerritoryDeclaration } from "./gate-client.ts";
+import { loadConfig, loadConfigSchema, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs, type LoopConfig, type GateTerritoryDeclaration, type ConfigSchemaShape } from "./gate-client.ts";
 import { buildKickoff, stringifyReasons, severityToLevel, planCooldownStep } from "./loop-decisions.ts";
 import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
 // AIPOS-C4B 大项B: 版本信号 — 本地版本戳读取 + 清单比对
-import { readFileSync, existsSync, appendFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, appendFileSync, writeFileSync, mkdirSync, statfsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,6 +71,212 @@ let currentWorktreePath: string | null = null;
 // AIPOS-F16: 余热转入声门门 — 额度尽转余热的出声只发一次(转入时刻), 后续余热 tick 不重复刷屏。
 // 模式本身不入状态机: 余热 ≡ loopState.on && released>=maxN(现算现用)。
 let cooldownAnnounced = false;
+
+// ---------------------------------------------------------------------------
+// AIPOS-F19: 工位水位自检 — 磁盘/tmpfs 越阈出声带路(只喊不代删, 决策留人)
+// ---------------------------------------------------------------------------
+// 声明单源 = config.schema#watermark(阈值/路径/周期/话术素材全在 schema, 禁写死)。
+// 三处检查: ①loop-on 启动自检 ②status 面板常驻"水位"行(各路径 used%/free)
+//           ③周期 tick 低频复查(每 N tick, N=schema#watermark.periodic_tick_interval)。
+// 出声走 voice() 单出口(F15), persistent=true(F15B 双写 journal);
+// 降噪: 同路径同级别不重复喊(状态变化才再喊), 状态模块级跨 session 存活。
+// 本卡明确不做: 自动清理任何文件(只喊不动手)、跨项目文件操作、自动停循环。
+// ---------------------------------------------------------------------------
+
+export type WatermarkLevel = "ok" | "warn" | "critical";
+export type WatermarkSource = "startup" | "tick" | "status";
+
+export interface WatermarkReading {
+  path: string;
+  label: string;
+  usedPercent: number; // df 口径: (blocks-bavail)/blocks*100
+  freeBytes: number;
+  totalBytes: number;
+  level: WatermarkLevel;
+  error?: string; // statfs 失败时置位(level 判 ok 不出声)
+}
+
+export interface WatermarkCheckConfig {
+  warnPercent: number;
+  criticalPercent: number;
+  checkPaths: Array<{ path: string; label: string }>;
+  periodicTickInterval: number;
+  clearableItems: string;
+  nextStepTemplate: string;
+  criticalExtraLine: string;
+}
+
+/** 模块级: 水位降噪状态(同路径同级别不重复喊)+ tick 计数(周期复查)。跨 session 存活。 */
+const watermarkLastLevels = new Map<string, WatermarkLevel>();
+let watermarkTickCounter = 0;
+
+/**
+ * 读 config.schema#watermark → 检查配置。
+ * 声明缺失/不完整/非法 → null(检查跳过 + warn 日志, 禁写死兜底 —— 阈值跟随声明,
+ * 改声明即改行为; 声明坏了宁可不出声也不拿写死值误报)。
+ */
+export function parseWatermarkConfig(schema: ConfigSchemaShape | null | undefined): WatermarkCheckConfig | null {
+  const w = schema?.watermark;
+  if (!w || typeof w !== "object") return null;
+  const warnPercent = Number(w.thresholds?.warn_percent);
+  const criticalPercent = Number(w.thresholds?.critical_percent);
+  if (!Number.isFinite(warnPercent) || !Number.isFinite(criticalPercent)) return null;
+  if (warnPercent < 0 || warnPercent > 100 || criticalPercent < 0 || criticalPercent > 100) return null;
+  if (criticalPercent < warnPercent) return null;
+  const checkPaths = Array.isArray(w.check_paths)
+    ? w.check_paths
+        .filter((p) => p && typeof (p as { path?: unknown }).path === "string" && (p as { path: string }).path)
+        .map((p) => ({ path: String((p as { path: string }).path), label: String((p as { label?: unknown }).label || (p as { path: string }).path) }))
+    : [];
+  if (checkPaths.length === 0) return null;
+  const intervalRaw = Number(w.periodic_tick_interval);
+  if (!Number.isFinite(intervalRaw) || intervalRaw < 1) return null;
+  const clearableItems = typeof w.clearable_items === "string" ? w.clearable_items.trim() : "";
+  const nextStepTemplate = typeof w.next_step_template === "string" ? w.next_step_template.trim() : "";
+  const criticalExtraLine = typeof w.critical_extra_line === "string" ? w.critical_extra_line.trim() : "";
+  if (!clearableItems || !nextStepTemplate || !criticalExtraLine) return null;
+  return {
+    warnPercent,
+    criticalPercent,
+    checkPaths,
+    periodicTickInterval: Math.floor(intervalRaw),
+    clearableItems,
+    nextStepTemplate,
+    criticalExtraLine,
+  };
+}
+
+/** {workspace_root} 占位符解析(其余路径按字面)。声明: config.schema#watermark.check_paths_note。 */
+export function resolveWatermarkPaths(
+  checkPaths: Array<{ path: string; label: string }>,
+  workspaceRoot: string,
+): Array<{ path: string; label: string }> {
+  return checkPaths.map(({ path, label }) => ({
+    path: path.includes("{workspace_root}") ? path.split("{workspace_root}").join(workspaceRoot) : path,
+    label,
+  }));
+}
+
+/** 纯: usage% → 级别(越 critical 优先于 warn)。 */
+export function computeWatermarkLevel(usedPercent: number, warnPercent: number, criticalPercent: number): WatermarkLevel {
+  if (usedPercent >= criticalPercent) return "critical";
+  if (usedPercent >= warnPercent) return "warn";
+  return "ok";
+}
+
+/** statfs 读盘(df 口径, statfsFn 可注入便于单测)。失败 → error 置位。 */
+export function readDiskUsage(
+  statfsFn: (p: string) => { bsize: number; blocks: number; bavail: number },
+  path: string,
+): { usedPercent: number; freeBytes: number; totalBytes: number; error?: undefined } | { error: string } {
+  try {
+    const st = statfsFn(path);
+    if (!st || !Number.isFinite(st.bsize) || !Number.isFinite(st.blocks) || st.blocks <= 0) {
+      return { error: `statfs 返回非法(${path})` };
+    }
+    const totalBytes = st.blocks * st.bsize;
+    const freeBytes = (st.bavail ?? 0) * st.bsize;
+    const usedPercent = ((st.blocks - (st.bavail ?? 0)) / st.blocks) * 100;
+    return { usedPercent, freeBytes, totalBytes };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function fmtWatermarkGB(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)}GB`;
+}
+
+/** status 面板水位行: 各路径 used%/free + 级别标记(常驻, 不受降噪限制 — 查询非告警)。 */
+export function buildWatermarkStatusLine(readings: WatermarkReading[]): string {
+  if (readings.length === 0) return "(无读数)";
+  return readings
+    .map((r) => {
+      if (r.error) return `${r.label}(${r.path}) 读取失败`;
+      const mark = r.level === "critical" ? "🔴" : r.level === "warn" ? "⚠" : "";
+      return `${r.label}(${r.path}) ${r.usedPercent.toFixed(1)}%${mark ? ` ${mark}${r.level === "critical" ? "危急" : "警告"}` : ""} 剩 ${fmtWatermarkGB(r.freeBytes)}`;
+    })
+    .join(" | ");
+}
+
+/** 越阈出声文本(warn/critical)。素材全来自 schema 声明(next_step/可清项/危急句)。 */
+export function buildWatermarkVoiceMessage(r: WatermarkReading, cfg: WatermarkCheckConfig): string {
+  const nextStep = cfg.nextStepTemplate.split("{clearable_items}").join(cfg.clearableItems);
+  const head = `[水位${r.level === "critical" ? "危急" : "警告"}] ${r.path} 已用 ${r.usedPercent.toFixed(1)}% (剩 ${fmtWatermarkGB(r.freeBytes)})`;
+  if (r.level === "critical") {
+    return `${head} — ${cfg.criticalExtraLine} | next_step: ${nextStep}`;
+  }
+  return `${head} — next_step: ${nextStep}`;
+}
+
+/** 降噪判定: 越阈且级别变化才出声(同路径同级别不重复喊; 恢复 ok 不出声 — 正常水位零噪音)。 */
+export function watermarkShouldVoice(path: string, level: WatermarkLevel, last: Map<string, WatermarkLevel>): boolean {
+  if (level === "ok") return false;
+  return last.get(path) !== level;
+}
+
+/**
+ * 跑一次水位检查: statfs 各声明路径 → 级别 → 降噪出声(voice persistent)+ 日志。返回 readings。
+ * 三处检查点统一入口: startup / tick / status(source 仅入日志与降噪语义相同)。
+ * 只读不动手: 不清理任何文件、不停循环(决策留人)。
+ */
+function runWatermarkCheck(workspaceRoot: string, source: WatermarkSource): { readings: WatermarkReading[]; declared: boolean } {
+  let schema: ConfigSchemaShape;
+  try {
+    schema = loadConfigSchema();
+  } catch (e) {
+    currentLogger?.warn("watermark-schema-load-failed", { source, error: e instanceof Error ? e.message : String(e) });
+    return { readings: [], declared: false };
+  }
+  const cfg = parseWatermarkConfig(schema);
+  if (!cfg) {
+    currentLogger?.warn("watermark-not-declared", { source, note: "config.schema 缺/坏 watermark 声明, 水位检查跳过(禁写死兜底)" });
+    return { readings: [], declared: false };
+  }
+  const readings: WatermarkReading[] = [];
+  for (const { path, label } of resolveWatermarkPaths(cfg.checkPaths, workspaceRoot)) {
+    const usage = readDiskUsage(statfsSync, path);
+    if ("error" in usage && usage.error) {
+      readings.push({ path, label, usedPercent: 0, freeBytes: 0, totalBytes: 0, level: "ok", error: usage.error });
+      currentLogger?.warn("watermark-statfs-failed", { source, path, error: usage.error });
+      continue;
+    }
+    const u = usage as { usedPercent: number; freeBytes: number; totalBytes: number };
+    const level = computeWatermarkLevel(u.usedPercent, cfg.warnPercent, cfg.criticalPercent);
+    const reading: WatermarkReading = { path, label, usedPercent: u.usedPercent, freeBytes: u.freeBytes, totalBytes: u.totalBytes, level };
+    readings.push(reading);
+    const prev = watermarkLastLevels.get(path) ?? "(none)";
+    if (watermarkShouldVoice(path, level, watermarkLastLevels)) {
+      currentLogger?.info("watermark-alert", {
+        source,
+        path,
+        used_percent: Number(u.usedPercent.toFixed(1)),
+        free_gb: Number((u.freeBytes / 1024 ** 3).toFixed(1)),
+        level,
+        prev,
+      });
+      // AIPOS-F19: 越阈出声走 voice() 单出口(F15), persistent=true(F15B 双写 journal)
+      voice(buildWatermarkVoiceMessage(reading, cfg), level === "critical" ? "error" : "warn", true);
+    } else if (level !== "ok") {
+      currentLogger?.info("watermark-alert-suppressed", { source, path, level, prev, reason: "同路径同级别不重复喊" });
+    }
+    if (prev !== level) {
+      currentLogger?.info("watermark-level-change", { source, path, from: prev, to: level });
+    }
+    watermarkLastLevels.set(path, level);
+  }
+  return { readings, declared: true };
+}
+
+/** 周期复查门: tick 计数对 schema 声明的 interval 取模(schema 读失败 → 本轮不查, 下轮再试)。 */
+function isWatermarkTickDue(): boolean {
+  try {
+    const cfg = parseWatermarkConfig(loadConfigSchema());
+    return !!cfg && watermarkTickCounter % cfg.periodicTickInterval === 0;
+  } catch {
+    return false;
+  }
+}
 
 // AIPOS-F10: 活 ctx/pi 引用 — 每次 session 装载/命令入口/事件回调时刷新。
 // 定时器/钩子绝不闭包捕获 ctx(那些在 session 替换后变 stale 对象,调用即抛)。
@@ -1220,6 +1426,16 @@ async function doTick(): Promise<void> {
   }
   loopState.running = true;
   try {
+    // AIPOS-F19: 周期 tick 低频复查水位(每 N tick, N=schema#watermark.periodic_tick_interval)。
+    // 只读只喊: 越阈出声(persistent)带路, 不停循环不代删(决策留人)。
+    watermarkTickCounter += 1;
+    if (isWatermarkTickDue()) {
+      try {
+        runWatermarkCheck(config.workspaceRoot, "tick");
+      } catch (e) {
+        currentLogger?.warn("watermark-tick-error", { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
     // AIPOS-C3D 大项A: 轮询内周期 sweep — 每轮 tick 前尝试一次收账。
     // 已在跑卡(currentTaskId 非空 = released 未 settle)期间不 sweep, 避免干扰当前会话。
     if (!currentTaskId) {
@@ -1743,6 +1959,19 @@ export default function (pi: ExtensionAPI) {
         } else {
           lines.push(`  最近关键事件: 暂无`);
         }
+        // AIPOS-F19: 水位行常驻(检查点②/③) — 各路径 used%/free + 级别标记;
+        // 状态变化时同样走降噪出声(与启动/周期同一状态机, 同路径同级别不重复喊)。
+        try {
+          const wmConfig = loadConfig(process.env);
+          const wmStatus = runWatermarkCheck(wmConfig.workspaceRoot, "status");
+          if (wmStatus.declared) {
+            lines.push(`  水位: ${buildWatermarkStatusLine(wmStatus.readings)}`);
+          } else {
+            lines.push(`  水位: 未声明(config.schema 缺/坏 watermark 声明, 检查跳过)`);
+          }
+        } catch (e) {
+          lines.push(`  水位: 检查失败(${e instanceof Error ? e.message : String(e)})`);
+        }
         // AIPOS-F15C: 在途卡行 — 显示本工位在途卡及其下一步(读门 lybra_gate_guidance)
         try {
           const config = loadConfig(process.env);
@@ -1902,6 +2131,20 @@ export default function (pi: ExtensionAPI) {
         // AIPOS-F11 大项C: loop-on 启动复位模块级残留(上一轮歇手未清/中断残留),
         // 否则周期 sweep 会误判"有卡在跑"永久让路。
         resetRuntimeState("loop-on 启动复位");
+
+        // AIPOS-F19: 启动自检水位(检查点①/③) — statfs 各声明路径对 schema 阈值,
+        // 越阈出声(persistent)带路; 降噪状态不重置(同路径同级别不重复喊)。
+        watermarkTickCounter = 0; // 周期复查节奏随循环重启重计
+        try {
+          const wmStartup = runWatermarkCheck(config.workspaceRoot, "startup");
+          if (wmStartup.declared && wmStartup.readings.length > 0) {
+            ctx.ui?.notify?.(`[水位自检] ${buildWatermarkStatusLine(wmStartup.readings)}`, "info");
+          } else if (!wmStartup.declared) {
+            ctx.ui?.notify?.("[水位自检] 跳过(config.schema 缺/坏 watermark 声明, 禁写死兜底)", "warn");
+          }
+        } catch (e) {
+          currentLogger?.warn("watermark-startup-error", { error: e instanceof Error ? e.message : String(e) });
+        }
 
         // AIPOS-R6I 靶③: loop可感知反馈 - 启动时打印详细信息
         // AIPOS-R8B 大项C④: 带耗时显示

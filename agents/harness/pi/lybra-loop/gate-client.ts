@@ -231,6 +231,18 @@ export interface ConfigSchemaShape {
   governance_structure?: {
     gate_territory?: GateTerritoryDeclaration;
   };
+  // AIPOS-F19: 水位自检声明(阈值/路径/周期/话术素材全在 schema, 连接器禁写死)
+  watermark?: WatermarkSchemaSection;
+}
+
+/** AIPOS-F19: config.schema#watermark 声明的形状(解析侧宽松, 严格校验在 parseWatermarkConfig)。 */
+export interface WatermarkSchemaSection {
+  thresholds?: { warn_percent?: unknown; critical_percent?: unknown };
+  check_paths?: Array<{ path?: unknown; label?: unknown }>;
+  periodic_tick_interval?: unknown;
+  clearable_items?: unknown;
+  next_step_template?: unknown;
+  critical_extra_line?: unknown;
 }
 
 export function loadConfigSchema(): ConfigSchemaShape {
