@@ -5,6 +5,7 @@
  *   /lybra on [maxN]   启动循环(默认 max 1 张,防失控)
  *   /lybra off         停止循环
  *   /lybra status      查看状态
+ *   /lybra sync        拉新分发(AIPOS-F20: 薄壳投影既有 lybra sync CLI, 成功后 /reload 生效)
  *   /lybra-tick        (手动)立即执行一轮 tick;自动链不依赖命令路由
  *
  * 它只做"发起",不做"授权"(红线):claim 放行与否永远由 gate 判定(AIPOS-250 信封)——
@@ -30,6 +31,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, loadConfigSchema, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs, type LoopConfig, type GateTerritoryDeclaration, type ConfigSchemaShape } from "./gate-client.ts";
+import { ConnectionResolver } from "./loop-context.ts";
 import { buildKickoff, stringifyReasons, severityToLevel, planCooldownStep } from "./loop-decisions.ts";
 import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
 // AIPOS-C4B 大项B: 版本信号 — 本地版本戳读取 + 清单比对
@@ -533,12 +535,13 @@ function readLocalVersion(role: string): string | null {
 
 function buildVersionLine(config: LoopConfig): string {
   const local = readLocalVersion(config.role);
-  return `lybra-loop 版本: ${local ?? "(无版本戳 — 请 lybra sync)"}`;
+  // AIPOS-F20: 无版本戳带路改指 /lybra sync(入会话, 不再要求切 shell)
+  return `lybra-loop 版本: ${local ?? "(无版本戳 — 请 /lybra sync)"}`;
 }
 
 /**
  * AIPOS-C4B 大项B: 清单比对(提示级, 绝不拒跑)。
- * 落后 → behind=true, 出声"落后, 请 lybra sync + /reload"; 不落后 → null。
+ * 落后 → behind=true, 出声"落后, /lybra sync 后 /reload"(AIPOS-F20 文案更新); 不落后 → null。
  * gate 无此动词 / 连接失败 → error 非空, 但循环照跑。
  */
 async function checkManifestFreshness(
@@ -563,6 +566,104 @@ function clearTimer() {
     clearTimeout(pendingTimer);
     pendingTimer = null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// AIPOS-F20: /lybra sync —— 薄壳投影既有 lybra sync CLI(工位拉新不出 pi)
+// ---------------------------------------------------------------------------
+// 锚点: 连接器 /lybra 命令族(on/off/status 既有)+ 既有 lybra sync CLI(C4B 建, 分发单源)。
+// Δ=0 薄壳: 子进程调用本机 lybra CLI 的 sync, --harness-root=自身工位根(从身份声明推得);
+// 禁在连接器里第二遍实现同步逻辑(CLI 单源不动)。
+// CLI bin 路径来源入声明不写死: 优先 .lybra/connection.json 声明键 lybra_bin,
+// 缺省探测 <code_repo>/.deploy/current/bin/lybra(与 sweep finalize 同源), 均不可得 →
+// 出声带路("本机未装 lybra CLI, 远程工位分发通道见 known-debt")并如实失败。
+// 本卡明确不做: 远程工位网络分发通道(known-debt 记明, 迁移后议);
+// /reload 自动化(pi 能力边界, 只提示不代按)。
+// ---------------------------------------------------------------------------
+
+/** AIPOS-F20: 自身 harness root(工作站根 = 含 .lybra/ 的目录, 身份声明单源)。发现失败 → null。 */
+export function resolveSyncHarnessRoot(lybraDir: string | null): string | null {
+  return lybraDir ? dirname(lybraDir) : null;
+}
+
+export interface LybraBinResolution {
+  bin: string | null;
+  source: string;
+  tried: string[];
+}
+
+/**
+ * AIPOS-F20: lybra CLI bin 路径解析(声明键优先, 缺省探测, 均不可得 → null)。
+ * 层级: ① .lybra/connection.json 可选声明键 lybra_bin(文件存在才用)
+ *      ② workspace project.json#code_repo → <code_repo>/.deploy/current/bin/lybra
+ *      ③ 缺省 <workspaceRoot>/../../../lybra/.deploy/current/bin/lybra(与 sweep finalize 同款)
+ * workspaceRoot 未显式给时从 connection.json#workspace_root 补读(单次读同一声明文件)。
+ */
+export function resolveLybraBin(
+  fs: { existsSync(p: string): boolean; readFileSync(p: string, enc: string): string },
+  path: { join(...s: string[]): string },
+  opts: { workspaceRoot?: string; lybraDir: string | null },
+): LybraBinResolution {
+  const tried: string[] = [];
+  // ① 声明键(connection.json#lybra_bin, 可选; 顺带补读 workspace_root)
+  let conn: { lybra_bin?: unknown; workspace_root?: unknown } | null = null;
+  if (opts.lybraDir) {
+    try {
+      const connPath = path.join(opts.lybraDir, "connection.json");
+      if (fs.existsSync(connPath)) {
+        conn = JSON.parse(fs.readFileSync(connPath, "utf-8")) as { lybra_bin?: unknown; workspace_root?: unknown };
+      }
+    } catch {
+      conn = null; // 读/解析失败 → 走缺省探测层
+    }
+  }
+  const declared = typeof conn?.lybra_bin === "string" ? conn.lybra_bin.trim() : "";
+  if (declared) {
+    if (fs.existsSync(declared)) {
+      return { bin: declared, source: "声明键 connection.json#lybra_bin", tried };
+    }
+    tried.push(`声明键 lybra_bin=${declared}(文件不存在)`);
+  }
+  // ② project.json#code_repo(sweep finalize 同源)
+  let workspaceRoot = opts.workspaceRoot || "";
+  if (!workspaceRoot && typeof conn?.workspace_root === "string" && conn.workspace_root) {
+    workspaceRoot = conn.workspace_root;
+  }
+  let codeRepo = "";
+  let codeRepoSource = "";
+  try {
+    const pjPath = path.join(workspaceRoot, "project.json");
+    if (fs.existsSync(pjPath)) {
+      const pj = JSON.parse(fs.readFileSync(pjPath, "utf-8")) as { code_repo?: unknown };
+      if (typeof pj?.code_repo === "string" && pj.code_repo) {
+        codeRepo = pj.code_repo;
+        codeRepoSource = "project.json#code_repo";
+      }
+    }
+  } catch {
+    // project.json 读/解析失败 → 用缺省
+  }
+  if (!codeRepo) {
+    codeRepo = path.join(workspaceRoot, "../../../lybra");
+    codeRepoSource = "缺省 workspace/../../../lybra";
+  }
+  // ③ 缺省探测点(卡内声明)
+  const probe = path.join(codeRepo, ".deploy/current/bin/lybra");
+  if (fs.existsSync(probe)) {
+    return { bin: probe, source: `探测 ${codeRepoSource} → .deploy/current/bin/lybra`, tried };
+  }
+  tried.push(probe);
+  return { bin: null, source: "(均不可得)", tried };
+}
+
+/** AIPOS-F20: sync stdout 尾行(最后一个非空行, 供 voice 透传)。 */
+export function extractSyncTailLine(stdout: string): string {
+  const lines = String(stdout || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  return lines.length > 0 ? lines[lines.length - 1] : "";
 }
 
 /**
@@ -1918,7 +2019,7 @@ export default function (pi: ExtensionAPI) {
 
   // --- /lybra:on | off | status ---
   pi.registerCommand("lybra", {
-    description: "lybra-loop 自动领卡循环:on [maxN] | off | status[v0]",
+    description: "lybra-loop 自动领卡循环:on [maxN] | off | status | sync",
     handler: async (args, ctx) => {
       liveCtx = ctx; // AIPOS-F10:命令入口刷新活引用
       const parts = String(args || "").trim().split(/\s+/);
@@ -2012,10 +2113,11 @@ export default function (pi: ExtensionAPI) {
           if (fres.error) {
             lines.push(`  清单比对: 无法比对(${fres.error})`);
           } else if (fres.behind) {
-            lines.push(`  ⚠ 落后: 本地 ${fres.local ?? "(无)"} vs 线上 ${fres.remote ?? "(无)"} — 请 lybra sync + /reload`);
+            lines.push(`  ⚠ 落后: 本地 ${fres.local ?? "(无)"} vs 线上 ${fres.remote ?? "(无)"} — /lybra sync 后 /reload`);
             // AIPOS-F18-fix2 F-C-1: status 落后分支同样出声带路(与启动分支同款, persistent=true,
             // 原卡大项C声明覆盖"连接器启动与 status 的清单比对"两侧)
-            voice(`分发落后(本地${fres.local}/线上${fres.remote}), 请 /reload`, "warn", true);
+            // AIPOS-F20: next_step 文案改指 /lybra sync(入会话拉新, 不出 pi)
+            voice(`分发落后(本地${fres.local}/线上${fres.remote}), /lybra sync 后 /reload`, "warn", true);
           } else {
             // remote 为 null 表示无法从门获取对端版本(如门未部署/网络问题)
             const localV = fres.local ?? "(无本地版本戳)";
@@ -2031,6 +2133,66 @@ export default function (pi: ExtensionAPI) {
           lines.push(`  版本/来源: 配置未就绪(${e instanceof Error ? e.message : String(e)})`);
         }
         ctx.ui.notify(lines.join("\n"), "info");
+        return;
+      }
+
+      if (sub === "sync") {
+        // AIPOS-F20: 薄壳投影既有 lybra sync CLI —— 工位拉新不出 pi(同一实现零复制)。
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        // ① harness root: 身份声明(.lybra 所在目录 = 自身工位根)
+        const lybraDir = ConnectionResolver.discoverLybraDir();
+        const harnessRoot = resolveSyncHarnessRoot(lybraDir);
+        if (!harnessRoot) {
+          const msg = "sync 失败: 未发现工位 .lybra(身份声明), 无法推得 harness root — 请从工位根目录启动 pi 后重试";
+          currentLogger?.error("sync-no-harness-root", {});
+          voice(msg, "error", true);
+          ctx.ui.notify(msg, "error");
+          return;
+        }
+        // ② bin 路径: 声明键优先 → 缺省探测(loadConfig 失败不阻断, bin 解析可从 connection.json 补读)
+        let workspaceRoot = "";
+        try {
+          workspaceRoot = loadConfig(process.env).workspaceRoot;
+        } catch (e) {
+          currentLogger?.warn("sync-config-load-failed", { error: e instanceof Error ? e.message : String(e) });
+        }
+        const binRes = resolveLybraBin(fs, path, { workspaceRoot, lybraDir });
+        if (!binRes.bin) {
+          const msg =
+            `sync 失败: 本机未装 lybra CLI(bin 均不可得` +
+            (binRes.tried.length > 0 ? `, 试过: ${binRes.tried.join("; ")}` : "") +
+            `) — 远程工位分发通道见 known-debt`;
+          currentLogger?.error("sync-no-bin", { tried: binRes.tried, harness_root: harnessRoot });
+          voice(msg, "error", true);
+          ctx.ui.notify(msg, "error");
+          return;
+        }
+        // ③ 子进程薄壳投影 + 原样透传(禁在连接器里第二遍实现同步逻辑)
+        ctx.ui.notify(`[sync] ${binRes.bin} sync --harness-root ${harnessRoot}\n  (bin 来源: ${binRes.source})`, "info");
+        try {
+          const { execFileSync } = await import("node:child_process");
+          const stdout = execFileSync(binRes.bin, ["sync", "--harness-root", harnessRoot], {
+            encoding: "utf-8",
+            stdio: "pipe",
+            timeout: 180000, // sync 走网络拉取, 预算 3 分钟
+          });
+          currentLogger?.info("sync-success", { bin: binRes.bin, harness_root: harnessRoot, source: binRes.source });
+          // 原样透传输出(全文上屏, 不改写)
+          ctx.ui.notify(String(stdout).trim() || "(sync 无输出)", "info");
+          // stdout 尾行入 voice(persistent=true)
+          const tail = extractSyncTailLine(String(stdout));
+          if (tail) voice(tail, "info", true);
+          // 成功后提示 /reload 生效(本卡明确不做 /reload 自动化)
+          voice("sync 完成: 请 /reload 生效", "info", true);
+        } catch (e) {
+          const errMsg = e instanceof Error ? e.message : String(e);
+          const tail = subprocessFailureTail(e, 8);
+          const msg = `sync 失败: ${errMsg}${tail ? `\n  子进程输出尾行:\n${tail}` : ""}`;
+          currentLogger?.error("sync-failed", { bin: binRes.bin, harness_root: harnessRoot, error: errMsg, failure_tail: tail });
+          voice(msg, "error", true);
+          ctx.ui.notify(msg, "error");
+        }
         return;
       }
 
@@ -2167,9 +2329,10 @@ export default function (pi: ExtensionAPI) {
         if (freshness.error) {
           onLines.push(`  清单比对: 无法比对(${freshness.error})`);
         } else if (freshness.behind) {
-          onLines.push(`  ⚠ 落后: 本地 ${freshness.local} vs 线上 ${freshness.remote} — 请 lybra sync + /reload`);
+          onLines.push(`  ⚠ 落后: 本地 ${freshness.local} vs 线上 ${freshness.remote} — /lybra sync 后 /reload`);
           // AIPOS-F18 大项C: 版本戳带路 — 不一致时出声(persistent=true)
-          voice(`分发落后(本地${freshness.local}/线上${freshness.remote}), 请 /reload`, "warn", true);
+          // AIPOS-F20: next_step 文案改指 /lybra sync(入会话拉新, 不出 pi)
+          voice(`分发落后(本地${freshness.local}/线上${freshness.remote}), /lybra sync 后 /reload`, "warn", true);
         } else {
           onLines.push(`  清单比对: 最新(本地 ${freshness.local ?? "?"} == 线上 ${freshness.remote ?? "?"})`);
         }
@@ -2203,7 +2366,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      ctx.ui.notify("用法:/lybra on [maxN] | /lybra off | /lybra status", "warn");
+      ctx.ui.notify("用法:/lybra on [maxN] | /lybra off | /lybra status | /lybra sync", "warn");
     },
   });
 

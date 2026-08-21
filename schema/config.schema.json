@@ -22,6 +22,11 @@
           "type": "string",
           "required": false,
           "description": "Workspace root path (can be inferred)"
+        },
+        "lybra_bin": {
+          "type": "string",
+          "required": false,
+          "description": "AIPOS-F20: absolute path to local lybra CLI bin (e.g. /path/to/lybra/.deploy/current/bin/lybra). Optional declaration key for the /lybra sync thin-shell projection; when absent the connector probes <code_repo>/.deploy/current/bin/lybra"
         }
       }
     },

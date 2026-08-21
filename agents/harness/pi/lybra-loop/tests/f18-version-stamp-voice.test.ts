@@ -4,6 +4,8 @@
  * 原卡大项C声明: "连接器启动与 status 的清单比对, 可得且不一致 → voice() 出声
  * (persistent=true): '分发落后(本地x/线上y), 请 /reload'; 不可得维持诚实原因"。
  * R2 裁决 F-C-1: 启动半边已有, status 落后分支只有文本行无 voice(), 且无夹具 —— 本夹具补全。
+ * AIPOS-F20: 落后 next_step 文案更新为 '/lybra sync 后 /reload'(入会话拉新, 不出 pi),
+ * 本夹具同步跟随新文案(验收④: 落后 warn 文案跟随声明变化)。
  *
  * 验证策略(与 f15b 同款源断言惯例):
  *   ① 两处落后分支(status 与 on)都有持久 voice() 出声, 话术含 本地/线上 版本与 /reload 指引;
@@ -31,16 +33,16 @@ const loopSrc = readFileSync(new URL("../lybra-loop.ts", import.meta.url), "utf8
 // ① 两处落后分支都有持久出声(status 半边 = 本夹具的新增覆盖点)
 // ---------------------------------------------------------------------------
 {
-  const voiceLines = loopSrc.match(/voice\(`分发落后\(本地\$\{[^}]+\}\/线上\$\{[^}]+\}\), 请 \/reload`, "warn", true\)/g) || [];
+  const voiceLines = loopSrc.match(/voice\(`分发落后\(本地\$\{[^}]+\}\/线上\$\{[^}]+\}\), \/lybra sync 后 \/reload`, "warn", true\)/g) || [];
   check(
     "① 落后出声行恰有两处(status 分支 + 启动分支)",
     voiceLines.length === 2,
     `实际找到 ${voiceLines.length} 处`,
   );
 
-  // status 半边定位: 出声行之前应能找到 status 语境特征(清单比对修复注释/请 lybra sync 文本行)
+  // status 半边定位: 出声行之前应能找到 status 语境特征(清单比对修复注释//lybra sync 文本行)
   const statusIdx = loopSrc.indexOf("AIPOS-F15C: 清单比对修复");
-  const firstVoiceIdx = loopSrc.indexOf('voice(`分发落后(本地${fres.local}/线上${fres.remote}), 请 /reload`, "warn", true)');
+  const firstVoiceIdx = loopSrc.indexOf('voice(`分发落后(本地${fres.local}/线上${fres.remote}), /lybra sync 后 /reload`, "warn", true)');
   check(
     "① status 落后分支(清单比对区)先于启动分支持有出声",
     statusIdx !== -1 && firstVoiceIdx !== -1 && firstVoiceIdx > statusIdx,
@@ -55,9 +57,9 @@ const loopSrc = readFileSync(new URL("../lybra-loop.ts", import.meta.url), "utf8
 // ② persistent=true + 话术要素(版本对 + /reload 指引)
 // ---------------------------------------------------------------------------
 {
-  const both = loopSrc.match(/voice\(`分发落后\([^)]*\), 请 \/reload`, "warn", true\)/g) || [];
+  const both = loopSrc.match(/voice\(`分发落后\([^)]*\), \/lybra sync 后 \/reload`, "warn", true\)/g) || [];
   check(
-    "② 两处出声均 persistent=true 且话术含 /reload 指引",
+    "② 两处出声均 persistent=true 且话术含 /lybra sync 后 /reload 指引",
     both.length === 2 && both.every((l) => l.includes('"warn", true')),
   );
 }
