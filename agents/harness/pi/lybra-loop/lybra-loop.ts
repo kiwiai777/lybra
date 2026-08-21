@@ -33,9 +33,26 @@ import { loadConfig, loadConfigSchema, ConfigError, GateMcpClient, loadVerbCatal
 import { buildKickoff, stringifyReasons, severityToLevel, planCooldownStep } from "./loop-decisions.ts";
 import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
 // AIPOS-C4B 大项B: 版本信号 — 本地版本戳读取 + 清单比对
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, appendFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// AIPOS-F15B: pi-tui 组件懒加载 — 扩展被 pi 装载时可解析(经 pi 模块链),
+// headless 测试环境解析失败返回空对象(调用方 try/catch 兜底)。
+// 用 createRequire 而非顶层 import: 顶层值导入会让无 pi-tui 的测试环境直接崩。
+let _piTui: typeof import("@earendil-works/pi-tui") | null | undefined;
+function piTui(): typeof import("@earendil-works/pi-tui") {
+  if (_piTui === undefined) {
+    try {
+      _piTui = createRequire(import.meta.url)("@earendil-works/pi-tui") as typeof import("@earendil-works/pi-tui");
+    } catch {
+      _piTui = null;
+    }
+  }
+  if (!_piTui) throw new Error("pi-tui not resolvable (headless env)");
+  return _piTui;
+}
 
 // 模块级:跨 session 替换存活(ESM 模块缓存,同进程唯一)。对齐 claim.ts 的 pendingModel 原理。
 let loopState: LoopState = freshState();
@@ -66,9 +83,15 @@ interface VoiceMessage {
   text: string;
   level: "info" | "warn" | "error";
   timestamp: number;
+  persistent?: boolean; // AIPOS-F15B: 关键事件标记
 }
 const voiceBuffer: VoiceMessage[] = [];
 const VOICE_BUFFER_MAX = 50; // 防刷屏
+
+// AIPOS-F15B: 出声持久化 — 关键事件(收账/复工/终停/异常BLOCK)写入 voice journal,
+// Owner 事后回看对话记录/journal 文件即可,不用盯住 20 秒。
+// 双写通道:①pi.appendEntry(会话持久,不入 LLM 上下文)+②voice-journal.md(文件兜底)。
+const VOICE_JOURNAL_MAX_ENTRIES = 200; // 文件内最多保留条数(轮转)
 
 /**
  * 统一出声函数 — 内聚所有上屏调用点,liveCtx 未就绪时入缓冲。
@@ -77,37 +100,136 @@ const VOICE_BUFFER_MAX = 50; // 防刷屏
  * outcome ∈ direct(句柄好直接上屏) / buffered(句柄未就绪入缓冲) /
  *           no-handle(句柄作废丢弃,WARN) / dropped(缓冲超限丢弃)。
  * 禁另造第二条出声路 —— 所有上屏文本必过此函数。
+ *
+ * AIPOS-F15B: persistent=true 时双写 — notify(即时)+ 会话持久 entry + journal 文件。
+ * 关键事件(收账/复工/终停/异常BLOCK)置 true;轮询心跳等噪音置 false(只 notify)。
  */
-function voice(text: string, level: "info" | "warn" | "error" = "info"): void {
+function voice(text: string, level: "info" | "warn" | "error" = "info", persistent: boolean = false): void {
   const textHead = text.slice(0, 40);
   if (liveCtx?.ui?.notify) {
     // liveCtx 就绪 → 即时上屏
     try {
       liveCtx.ui.notify(text, level);
-      currentLogger?.info("voice-attempt", { outcome: "direct", level, text_head: textHead });
+      currentLogger?.info("voice-attempt", { outcome: "direct", level, text_head: textHead, persistent });
     } catch (e) {
       // notify 自身抛错 → 句柄作废(冷启动/reload 后 stale 对象)
       currentLogger?.warn("voice-attempt", {
         outcome: "no-handle",
         level,
         text_head: textHead,
+        persistent,
         error: e instanceof Error ? e.message : String(e),
       });
     }
   } else {
     // liveCtx 未就绪 → 入缓冲
-    voiceBuffer.push({ text, level, timestamp: Date.now() });
-    currentLogger?.info("voice-attempt", { outcome: "buffered", level, text_head: textHead });
+    voiceBuffer.push({ text, level, timestamp: Date.now(), persistent });
+    currentLogger?.info("voice-attempt", { outcome: "buffered", level, text_head: textHead, persistent });
     if (voiceBuffer.length > VOICE_BUFFER_MAX) {
       voiceBuffer.shift(); // 丢最旧
       currentLogger?.warn("voice-attempt", { outcome: "dropped", level: "warn", text_head: "(oldest)" });
     }
+  }
+  // AIPOS-F15B: persistent=true → 双写持久通道(notify 之上额外落盘)
+  if (persistent) {
+    persistVoiceEntry(text, level);
+  }
+}
+
+/**
+ * AIPOS-F15B: 持久化关键事件 — 双写通道:
+ * ① livePi.appendEntry("lybra-voice", ...) — 会话持久,不入 LLM 上下文,配合 renderer 在对话记录可见。
+ * ② voice-journal.md 文件追加 — 跨会话兜底(appendEntry 随 session 走,journal 文件独立存活)。
+ * 任一通道失败不影响另一通道(日志记 warn,不抛)。
+ */
+function persistVoiceEntry(text: string, level: "info" | "warn" | "error"): void {
+  const ts = new Date().toISOString();
+  // 通道①: pi 会话持久 entry(不入 LLM 上下文)
+  try {
+    livePi?.appendEntry("lybra-voice", { text, level, timestamp: ts });
+    currentLogger?.info("voice-persist-entry", { level, text_head: text.slice(0, 40) });
+  } catch (e) {
+    currentLogger?.warn("voice-persist-entry-failed", {
+      level,
+      text_head: text.slice(0, 40),
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  // 通道②: voice-journal.md 文件追加(跨会话兜底)
+  try {
+    const journalPath = getVoiceJournalPath();
+    if (journalPath) {
+      const levelTag = level === "error" ? "🔴" : level === "warn" ? "🟡" : "🟢";
+      const line = `- \`${ts}\` ${levelTag} [${level}] ${text}\n`;
+      if (!existsSync(journalPath)) {
+        mkdirSync(dirname(journalPath), { recursive: true });
+        writeFileSync(journalPath, `# Lybra Voice Journal (关键事件持久记录)\n\n> 收账/复工/终停/异常 双写于此;轮询心跳不入。\n> 最近 ${VOICE_JOURNAL_MAX_ENTRIES} 条保留。\n\n`, "utf-8");
+      }
+      appendFileSync(journalPath, line, "utf-8");
+      // 轮转:超过上限时只保留最后 N 条
+      rotateVoiceJournal(journalPath);
+    }
+  } catch (e) {
+    currentLogger?.warn("voice-persist-journal-failed", {
+      level,
+      text_head: text.slice(0, 40),
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/** voice-journal.md 路径(与 loop.log 同目录)。 */
+function getVoiceJournalPath(): string | null {
+  try {
+    const logPath = process.env.LYBRA_LOOP_LOG || LOG_PATH_DEFAULT;
+    return `${dirname(logPath)}/voice-journal.md`;
+  } catch {
+    return null;
+  }
+}
+
+/** 轮转 voice journal:超过 VOICE_JOURNAL_MAX_ENTRIES 条时只保留最后 N 条。 */
+function rotateVoiceJournal(journalPath: string): void {
+  try {
+    if (!existsSync(journalPath)) return;
+    const content = readFileSync(journalPath, "utf-8");
+    const lines = content.split("\n");
+    // 找 header 结束位置(第一个 `- ` 行之前)
+    let headerEnd = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith("- `")) { headerEnd = i; break; }
+    }
+    if (headerEnd === 0) return; // 无条目
+    const header = lines.slice(0, headerEnd).join("\n");
+    const entries = lines.slice(headerEnd).filter((l) => l.startsWith("- `"));
+    if (entries.length <= VOICE_JOURNAL_MAX_ENTRIES) return;
+    const kept = entries.slice(-VOICE_JOURNAL_MAX_ENTRIES);
+    writeFileSync(journalPath, `${header}\n${kept.join("\n")}\n`, "utf-8");
+  } catch {
+    // 轮转失败不影响主流程
+  }
+}
+
+/**
+ * AIPOS-F15B: 读 voice journal 最近 N 条(供 /lybra status 显示)。
+ */
+function readVoiceJournalRecent(n: number = 10): string[] {
+  try {
+    const journalPath = getVoiceJournalPath();
+    if (!journalPath) return [];
+    if (!existsSync(journalPath)) return [];
+    const content = readFileSync(journalPath, "utf-8");
+    const lines = content.split("\n").filter((l) => l.startsWith("- `"));
+    return lines.slice(-n);
+  } catch {
+    return [];
   }
 }
 
 /**
  * session_start 时刷新 liveCtx 后按序补发缓冲话术。
  * AIPOS-F15 大项A: 每条补发必落 voice-attempt(outcome=flushed/no-handle)。
+ * AIPOS-F15B: 补发时 persistent 标记的话术也走双写(补发=延迟的 persistent 事件)。
  */
 function flushVoiceBuffer(): void {
   if (voiceBuffer.length === 0) return;
@@ -125,12 +247,17 @@ function flushVoiceBuffer(): void {
     const msg = voiceBuffer.shift()!;
     try {
       liveCtx.ui.notify(msg.text, msg.level);
-      currentLogger?.info("voice-attempt", { outcome: "flushed", level: msg.level, text_head: msg.text.slice(0, 40) });
+      currentLogger?.info("voice-attempt", { outcome: "flushed", level: msg.level, text_head: msg.text.slice(0, 40), persistent: msg.persistent || false });
+      // AIPOS-F15B: 补发时也走持久化(延迟的 persistent 事件)
+      if (msg.persistent) {
+        persistVoiceEntry(msg.text, msg.level);
+      }
     } catch (e) {
       currentLogger?.warn("voice-attempt", {
         outcome: "no-handle",
         level: msg.level,
         text_head: msg.text.slice(0, 40),
+        persistent: msg.persistent || false,
         error: e instanceof Error ? e.message : String(e),
       });
     }
@@ -503,7 +630,7 @@ export function quarantineHandWrittenVerdicts(
         if (verdictId && verdictId.startsWith("verdict_")) {
           // 拿不准: 有机器标记但未知 record_type → 只出声不动
           logger?.warn("quarantine-uncertain-skip", { file: filePath, reason: "有 verdict_id 机器标记但非门生, 拿不准只出声不动" });
-          voice(`sweep 隔离跳过(拿不准): ${filePath} — 有机器标记但非门生, 只出声不动`, "warn");
+          voice(`sweep 隔离跳过(拿不准): ${filePath} — 有机器标记但非门生, 只出声不动`, "warn", false);
           emittedUncertain++;
           continue;
         }
@@ -530,7 +657,7 @@ export function quarantineHandWrittenVerdicts(
         }
         const nextStep = `已隔离到 ${targetPath}; 提醒该工位: 裁决由门落盘, 勿手写进 records/`;
         logger?.warn("quarantine-hand-written", { file: filePath, moved_to: targetPath, next_step: nextStep });
-        voice(`sweep 隔离手写件: ${filePath} → ${targetPath}; ${nextStep}`, "warn");
+        voice(`sweep 隔离手写件: ${filePath} → ${targetPath}; ${nextStep}`, "warn", false);
         quarantined++;
       }
     }
@@ -653,7 +780,7 @@ async function tryAutoFinalizeOnPassVerdict(): Promise<boolean> {
 async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
   if (!currentClient || !currentLogger) {
     currentLogger?.warn("sweep-no-client", { reason: "currentClient or currentLogger not initialized" });
-    voice("sweep 跳过:客户端或日志器未初始化", "warn");
+    voice("sweep 跳过:客户端或日志器未初始化", "warn", false);
     return false;
   }
 
@@ -663,7 +790,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
   } catch (e) {
     const msg = `sweep 配置加载失败: ${e instanceof Error ? e.message : String(e)}`;
     currentLogger.warn("sweep-config-failed", { error: String(e) });
-    voice(msg, "error");
+    voice(msg, "error", true);
     return false;
   }
 
@@ -674,7 +801,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
   if (config.role !== "executor") {
     const msg = `sweep 跳过: 当前角色 ${config.role || "?"} 不具 finalize/close 能力(roles.schema scopes), 不跑 finalize`;
     currentLogger.info("sweep-skip-role", { role: config.role });
-    voice(msg, "info");
+    voice(msg, "info", false);
     return false;
   }
 
@@ -693,7 +820,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
   const claimedDir = path.join(config.workspaceRoot, "5_tasks/queue/claimed");
   if (!fs.existsSync(claimedDir)) {
     currentLogger.info("sweep-no-claimed-dir", {});
-    voice("sweep: claimed 队列为空", "info");
+    voice("sweep: claimed 队列为空", "info", false);
     return false;
   }
 
@@ -702,7 +829,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
 
   if (claimedCards.length === 0) {
     currentLogger.info("sweep-no-claimed-cards", {});
-    voice("sweep: 无 claimed 卡", "info");
+    voice("sweep: 无 claimed 卡", "info", false);
     return false;
   }
 
@@ -720,7 +847,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
       const fmTaskId = extractFrontmatterField(cardContent, "task_id");
       if (!fmTaskId) {
         currentLogger?.warn("sweep-card-no-frontmatter-task-id", { cardFile });
-        voice(`sweep 跳过: ${cardFile} 无 frontmatter task_id`, "warn");
+        voice(`sweep 跳过: ${cardFile} 无 frontmatter task_id`, "warn", false);
         continue;
       }
       taskId = fmTaskId;
@@ -733,7 +860,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
     const verdictDir = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts", taskId);
     if (!fs.existsSync(verdictDir)) {
       // AIPOS-F17 大项C: 无裁决目录 = 等待中, 出声一行(终结全静默)。
-      voice(`${taskId}: 等待裁决落库中 (next_step: 裁决落库后自动收账, 无需操作)`, "info");
+      voice(`${taskId}: 等待裁决落库中 (next_step: 裁决落库后自动收账, 无需操作)`, "info", false);
       continue;
     }
 
@@ -757,7 +884,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
 
     // 候选卡: 有 PASS 裁决 + 未 close → 自动 finalize+close
     currentLogger.info("auto-finalize-start", { task_id: taskId, verdict: latest.verdict, verdict_at: latest.verdictAt });
-    voice(`sweep 候选: ${taskId} (${latest.verdict})`, "info");
+    voice(`sweep 候选: ${taskId} (${latest.verdict})`, "info", false);
 
     try {
       const { execSync } = await import("node:child_process");
@@ -798,7 +925,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
         const detail = closeDryResp.blocking_reasons || closeDryResp.errors || closeDryResp.message || JSON.stringify(closeDryResp);
         const msg = `auto-close dry_run BLOCK: ${taskId} - ${JSON.stringify(detail)}`;
         currentLogger.error("auto-close-blocked", { task_id: taskId, response: closeDryResp });
-        voice(msg, "error");
+        voice(msg, "error", true);
         anomalies.push({ task_id: taskId, reason: "close dry_run BLOCK" });
         continue;
       }
@@ -807,7 +934,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
       currentLogger.info("auto-close-success", { task_id: taskId });
       // AIPOS-F4 大项C: 收账成功升为可见 info 一行(合并 <hash>/部署 <hash>/close)。
       const settleHash = finalizeCommitHash ? finalizeCommitHash.slice(0, 8) : "?";
-      voice(`已收账 ${taskId}: 合并 ${settleHash}/部署 ${settleHash}/close`, "info");
+      voice(`已收账 ${taskId}: 合并 ${settleHash}/部署 ${settleHash}/close`, "info", true);
       processedCount++;
     } catch (e) {
       const rawErr = e instanceof Error ? e.message : String(e);
@@ -822,7 +949,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
       const tailBlock = failureTail ? `\n  子进程输出尾行:\n${failureTail}` : "";
       const errMsg = `sweep finalize 失败: ${taskId} - ${rawErr}${tailBlock}${nextStep}`;
       currentLogger.error("auto-finalize-failed", { task_id: taskId, error: rawErr, failure_tail: failureTail, isDirtyTree });
-      voice(errMsg, level);
+      voice(errMsg, level, true);
       anomalies.push({ task_id: taskId, reason: isDirtyTree ? "脏树让路等下一轮" : "finalize 失败" });
     }
   }
@@ -835,7 +962,7 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
       ? `sweep: ${total} claimed, 收 ${processedCount} 张`
       : `sweep: ${total} claimed, 无需处理`;
   currentLogger.info("sweep-complete", { processed: processedCount, claimed: total, anomalies });
-  voice(summaryMsg, "info");
+  voice(summaryMsg, "info", false);
 
   return processedCount > 0;
 }
@@ -985,9 +1112,9 @@ async function tryAutoReturn(): Promise<boolean> {
       const level = severityToLevel(severity);
       const onScreenMsg = `auto-return ${currentTaskId} 被拒: ${reasonText}`;
       currentLogger.error("auto-return-blocked", { task_id: currentTaskId, reasons, isSessionMismatch, severity, level });
-      voice(onScreenMsg, level);
+      voice(onScreenMsg, level, true);
       if (isSessionMismatch) {
-        voice(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info");
+        voice(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info", false);
       }
       return false;
     }
@@ -996,7 +1123,7 @@ async function tryAutoReturn(): Promise<boolean> {
     if (!dryRunToken) {
       const msg = `auto-return ${currentTaskId}: 无 dry_run_token(响应异常)`;
       currentLogger.error("auto-return-no-token", { task_id: currentTaskId, response: dryRunResp });
-      voice(msg, "error");
+      voice(msg, "error", true);
       return false;
     }
     
@@ -1014,7 +1141,7 @@ async function tryAutoReturn(): Promise<boolean> {
       verdict: confirmResp.verdict || confirmResp.ok ? "ok" : "unknown",
     });
     
-    voice(`自动归还任务 ${currentTaskId}`, "info");
+    voice(`自动归还任务 ${currentTaskId}`, "info", true);
     
     // AIPOS-F11 大项C: 清空当前任务信息(单源复位函数)
     resetRuntimeState("auto-return 成功");
@@ -1028,9 +1155,9 @@ async function tryAutoReturn(): Promise<boolean> {
       error: errMsg,
     });
     // AIPOS-F4 大项D: 拒因上屏 — SESSION_MISMATCH 属 auto_recoverable → info, 其余 → error
-    voice(`auto-return ${currentTaskId} 失败: ${errMsg}`, isSessionMismatch ? "info" : "error");
+    voice(`auto-return ${currentTaskId} 失败: ${errMsg}`, isSessionMismatch ? "info" : "error", true);
     if (isSessionMismatch) {
-      voice(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info");
+      voice(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info", false);
     }
     return false;
   }
@@ -1046,7 +1173,7 @@ function resetRuntimeState(reason: string): void {
   currentTaskId = null;
   currentWorktreePath = null;
   currentLogger?.info("runtime-state-reset", { task_id: runningCard, reason });
-  voice(`运行态复位: ${runningCard} — ${reason}`, "info");
+  voice(`运行态复位: ${runningCard} — ${reason}`, "info", false);
 }
 
 // AIPOS-F10:stopLoop 不接收 ctx 参数 — 从 liveCtx 取活引用。
@@ -1059,7 +1186,7 @@ function stopLoop(
   clearTimer();
   cooldownAnnounced = false; // AIPOS-F16: 循环停即复位余热出声门门(下次 on 重新转入才再出声)
   currentLogger?.write(level === "error" ? "ERROR" : level === "warn" ? "WARN" : "INFO", "loop-stopped", { reason });
-  voice(`lybra 循环停止:${reason}`, level);
+  voice(`lybra 循环停止:${reason}`, level, true);
 }
 
 // AIPOS-F10:getSessionId 从 liveCtx 取,不接收外部 ctx 参数。
@@ -1136,6 +1263,7 @@ async function doTick(): Promise<void> {
       voice(
         `放行 ${outcome.task.task_id}(PreAuthorized)→ 冷启动执行 [${loopState.released}/${loopState.maxN}]`,
         "info",
+        true,
       );
       // F-EXT001-8(FIX4):running 标志复位前置到 newSession 之前,确保任何路径(含 stale 异常)下可达
       loopState.running = false;
@@ -1163,7 +1291,7 @@ async function doTick(): Promise<void> {
         // AIPOS-F10:降级出声(禁裸抛) — newSession 失败说明 ctx 能力缺失,提示用户手动操作
         const errMsg = e instanceof Error ? e.message : String(e);
         stopLoop(`newSession 异常:${errMsg}`, "error");
-        voice(`下一步: 请在 Pi 对话框手动 /claim 任务卡`, "info");
+        voice(`下一步: 请在 Pi 对话框手动 /claim 任务卡`, "info", false);
       }
       return; // session 已替换;续跑靠新 session 的 agent_settled + session_start 双保险
     }
@@ -1202,7 +1330,7 @@ async function doTick(): Promise<void> {
         if (hasCompleted) {
           // 有completed事件，走return流程
           currentLogger.info("held-with-completed", { task_id: heldTaskId });
-          voice(`检测到 ${heldTaskId} 已completed，执行自动return`, "info");
+          voice(`检测到 ${heldTaskId} 已completed，执行自动return`, "info", false);
           
           // 设置 currentTaskId 供tryAutoReturn使用
           currentTaskId = heldTaskId;
@@ -1232,7 +1360,7 @@ async function doTick(): Promise<void> {
           } else {
             // return失败，记录错误但不停循环
             currentLogger.warn("held-auto-return-failed", { task_id: heldTaskId });
-            voice(`自动return ${heldTaskId} 失败，请手动处理`, "warn");
+            voice(`自动return ${heldTaskId} 失败，请手动处理`, "warn", true);
           }
         } else {
           // AIPOS-C3B 大项D①: held-resume 罩审计车道
@@ -1262,7 +1390,7 @@ async function doTick(): Promise<void> {
             }
             if (!hasVerdict) {
               currentLogger.info("held-audit-no-verdict", { task_id: heldTaskId, reviewed_task_id: reviewedTaskId });
-              voice(`复工：${heldTaskId} 是审计卡，只差提交裁决(verdict 未落库)`, "info");
+              voice(`复工：${heldTaskId} 是审计卡，只差提交裁决(verdict 未落库)`, "info", true);
               // AIPOS-F10:投递卡内容让 auditor 继续提交裁决。
               // 用 sendUserMessage(对齐 claim.ts 范式),不用 ctx.reply(不存在的方法)。
               if (cardContent) {
@@ -1276,8 +1404,8 @@ async function doTick(): Promise<void> {
                     task_id: heldTaskId,
                     error: sendErr instanceof Error ? sendErr.message : String(sendErr),
                   });
-                  voice(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn");
-                  voice(`下一步: 请在 Pi 对话框手动提交裁决`, "info");
+                  voice(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn", true);
+                  voice(`下一步: 请在 Pi 对话框手动提交裁决`, "info", false);
                 }
                 currentTaskId = heldTaskId;
                 stopLoop(`已复工审计卡 ${heldTaskId}，等待提交裁决`, "info");
@@ -1285,13 +1413,13 @@ async function doTick(): Promise<void> {
               }
             } else {
               currentLogger.info("held-audit-has-verdict", { task_id: heldTaskId });
-              voice(`审计卡 ${heldTaskId} 已有 verdict，无需复工`, "info");
+              voice(`审计卡 ${heldTaskId} 已有 verdict，无需复工`, "info", false);
             }
           }
 
           // AIPOS-R8B 大项C①: held 且无 completed → 投递卡正文复工（会话中断后自动续做）
           currentLogger.info("held-resume", { task_id: heldTaskId });
-          voice(`复工：继续执行 ${heldTaskId}`, "info");
+          voice(`复工：继续执行 ${heldTaskId}`, "info", true);
           
           // 读取任务卡正文并投递
           if (fs.existsSync(taskCardPath)) {
@@ -1338,8 +1466,8 @@ async function doTick(): Promise<void> {
                   task_id: heldTaskId,
                   error: sendErr instanceof Error ? sendErr.message : String(sendErr),
                 });
-                voice(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn");
-                voice(`下一步: 请在 Pi 对话框手动 /claim 任务卡`, "info");
+                voice(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn", true);
+                voice(`下一步: 请在 Pi 对话框手动 /claim 任务卡`, "info", false);
               }
               
               // 设置 currentTaskId 供后续使用
@@ -1356,11 +1484,11 @@ async function doTick(): Promise<void> {
               return;
             } catch (e) {
               currentLogger.error("held-resume-failed", { task_id: heldTaskId, error: String(e) });
-              voice(`复工失败: ${e instanceof Error ? e.message : String(e)}`, "error");
+              voice(`复工失败: ${e instanceof Error ? e.message : String(e)}`, "error", true);
             }
           } else {
             currentLogger.warn("held-resume-no-card", { task_id: heldTaskId, expected_path: taskCardPath });
-            voice(`任务卡不存在: ${taskCardPath}`, "warn");
+            voice(`任务卡不存在: ${taskCardPath}`, "warn", true);
           }
         }
       }
@@ -1381,10 +1509,10 @@ async function doTick(): Promise<void> {
       currentLogger.info("cooldown-step", { in_flight: inFlight, plan: plan.action, reason: outcome.reason });
       if (plan.action === "terminal-stop") {
         stopLoop(plan.reason, "info");
-        voice(`下一步: 如需继续领卡请 /lybra on N`, "info");
+        voice(`下一步: 如需继续领卡请 /lybra on N`, "info", false);
         return;
       }
-      voice(plan.voiceLine, "info");
+      voice(plan.voiceLine, "info", false);
       loopState.running = false;
       scheduleNextTick(plan.nextMs);
       return;
@@ -1402,13 +1530,13 @@ async function doTick(): Promise<void> {
     if (!Number.isFinite(nextMs) || nextMs <= 0) {
       const msg = `轮询间隔非法(nextMs=${nextMs}, intervalSec=${config.intervalSec}) - 停止循环`;
       currentLogger.error("invalid-poll-interval", { nextMs, intervalSec: config.intervalSec, remain });
-      voice(msg, "error");
+      voice(msg, "error", true);
       stopLoop(msg, "error");
       return;
     }
     currentLogger.info("wait-poll", { reason: outcome.reason, nextMs });
     // AIPOS-R6I 靶③: 轮询结果可见 - 打印等待原因
-    voice(`轮询: ${outcome.reason}，${Math.round(nextMs / 1000)}s 后再拉`, "info");
+    voice(`轮询: ${outcome.reason}，${Math.round(nextMs / 1000)}s 后再拉`, "info", false);
     // F-EXT001-8(FIX4):wait 路径复位 running,防定时器触发前 running 一直 true 拦截其他入口
     loopState.running = false;
     scheduleNextTick(nextMs);
@@ -1424,6 +1552,29 @@ export default function (pi: ExtensionAPI) {
   // AIPOS-F10:每次 session 装载立即刷新 livePi — 定时器/钩子从模块级引用取,不闭包捕获。
   livePi = pi;
 
+  // AIPOS-F15B: 注册 voice journal entry renderer — 关键事件在对话记录中可见(不入 LLM 上下文)。
+  // 渲染为对话记录中的一行: 图标 + 时间 + 文本(对齐 pi 官方 entry-renderer 示例的 Box/Text 范式)。
+  try {
+    pi.registerEntryRenderer("lybra-voice", (entry: any, _opts: any, theme: any) => {
+      const data = entry?.data ?? {};
+      const levelTag = data.level === "error" ? "🔴" : data.level === "warn" ? "🟡" : "🟢";
+      const ts = data.timestamp || "";
+      const text = data.text || "";
+      // pi-tui 组件(官方范式):经 createRequire 从 pi 的模块链解析;
+      // headless 测试环境(无 pi-tui)解析失败 → 返回 null(不渲染但 entry 仍持久存于 session)。
+      try {
+        const { Box, Text } = piTui();
+        const box = new Box(0, 0, (t: string) => (theme?.bg ? theme.bg("customMessageBg", t) : t));
+        box.addChild(new Text(`${levelTag} ${ts} ${text}`, 0, 0));
+        return box;
+      } catch {
+        return null as any;
+      }
+    });
+  } catch {
+    // renderer 注册失败不影响主流程(journal 文件兜底)
+  }
+
   // AIPOS-F12 大项C: pi 工具层写拦截 — 命中门领地保护路径的 write/edit/bash 写操作直接拒。
   pi.on("tool_call", async (event) => {
     try {
@@ -1437,7 +1588,7 @@ export default function (pi: ExtensionAPI) {
         if (isProtectedWriteTarget(t, writeGuardCfg.workspaceRoot, writeGuardCfg.protectedPaths)) {
           const msg = `写保护路径被拒(门领地): ${t} — 报告落 task_cards/<ID>/, 裁决走门, 勿手写进 records/queue/`;
           currentLogger?.warn("protected-write-blocked", { tool: toolName, target: t });
-          voice(msg, "warn");
+          voice(msg, "warn", true);
           return { block: true, reason: msg };
         }
       }
@@ -1458,7 +1609,7 @@ export default function (pi: ExtensionAPI) {
         error: e instanceof Error ? e.message : String(e),
       });
       // AIPOS-R6L 第三轮修复(b): 失败必出声
-      voice(errMsg, "error");
+      voice(errMsg, "error", true);
     });
     
     // AIPOS-CONN-LOOP-2 ①: 检查是否有 completed 事件，如有则自动 return
@@ -1485,7 +1636,7 @@ export default function (pi: ExtensionAPI) {
       currentLogger?.info("cooldown-enter", { released: loopState.released, maxN: loopState.maxN });
       if (!cooldownAnnounced) {
         cooldownAnnounced = true;
-        voice(`额度已用完(${loopState.released}/${loopState.maxN}), 余热收尾中 — 不再领新卡, 在途卡收完即停`, "info");
+        voice(`额度已用完(${loopState.released}/${loopState.maxN}), 余热收尾中 — 不再领新卡, 在途卡收完即停`, "info", true);
       }
       if (!loopState.running) {
         doTick().catch((e) => {
@@ -1582,6 +1733,16 @@ export default function (pi: ExtensionAPI) {
         lines.push(`  停止原因: ${loopState.stoppedReason || "(无)"}`);
         lines.push(`  gate: ${currentGateUrl || "(未配置)"}  role: ${currentRole || "-"}  actor: ${currentActor || "-"}`);
         lines.push(`  token: ${fp}`);
+        // AIPOS-F15B: 关键事件回看 — voice journal 最近 10 条(收账/复工/终停/异常BLOCK)
+        const recentVoice = readVoiceJournalRecent(10);
+        if (recentVoice.length > 0) {
+          lines.push(`  最近关键事件(voice journal, 最多 10 条):`);
+          for (const v of recentVoice) {
+            lines.push(`    ${v.replace(/^- /, "")}`);
+          }
+        } else {
+          lines.push(`  最近关键事件: (无 — journal 未建或无条目)`);
+        }
         // 版本戳 + provenance + 清单比对(能拿到 config/client 就尽量答)
         try {
           const config = loadConfig(process.env);
