@@ -503,6 +503,66 @@
         "frontmatter_update": "status: completed, closed_at: <timestamp>"
       }
     },
+    "fix_card_closure": {
+      "name": "fix_card_closure",
+      "description": "AIPOS-F18: fix卡终局声明——fix卡close(PASS族)时自动为原卡派生复审卡,原卡不再孤儿。门读声明执行,禁代码内写死语义。",
+      "trigger_condition": {
+        "description": "fix卡(derived_from_audit_task_id非空族)close且终局∈PASS族时触发",
+        "check": "task_is_fix_card AND close_verdict_in_PASS_family",
+        "PASS_family_verdicts": ["PASS", "PASS_WITH_NOTES"],
+        "fix_card_identifier": "derived_from_audit_task_id field is non-empty"
+      },
+      "automation": {
+        "description": "门自动为原卡派生复审卡,注入准绳,复审PASS后原卡走既有sweep收账(零新机制)",
+        "actions": [
+          {
+            "step": 1,
+            "action": "derive_re_audit_for_source_task",
+            "description": "为原卡(derived_from_audit_task_id指向的卡)派生复审卡",
+            "audit_card_naming": "见 revision_card_numbering 模式"
+          },
+          {
+            "step": 2,
+            "action": "inject_audit_criteria",
+            "description": "注入准绳到复审卡",
+            "criteria_template": "原卡缺陷已由 <fix卡ID> 修复并 close(裁决 <verdict_id>), 复审基准=修复后现状"
+          },
+          {
+            "step": 3,
+            "action": "source_task_auto_sweep_on_audit_pass",
+            "description": "复审PASS落库后原卡走既有sweep收账(复用N4/N5机制)"
+          }
+        ]
+      },
+      "revision_card_numbering": {
+        "description": "AIPOS-F18大项B: 复审卡号演进模式——派生writer遇R已存在→按声明模式演进R2/R3…",
+        "pattern": "<原卡ID>R[迭代序号]",
+        "sequence_rule": "首次派生用R,已存在R则用R2,已存在R2则用R3,依此类推",
+        "example": "F8→F8R(首轮)→F8R2(复审)→F8R3(再复审)",
+        "schema_validation": "派生产物照F17过schema自检"
+      },
+      "toggle": {
+        "enabled": true,
+        "description": "开关置关→回退为不派生(验完还原)",
+        "config_location": "可通过配置开关控制是否启用自动派生"
+      },
+      "record": {
+        "type": "fix_closure_derivation",
+        "location": "5_tasks/records/fix_closures/{fix_task_id}/derivation_{fix_task_id}_{timestamp}.md",
+        "required_fields": [
+          "fix_task_id",
+          "source_task_id",
+          "derived_audit_task_id",
+          "verdict_id",
+          "derived_at",
+          "record_type"
+        ],
+        "gate_written_markers": [
+          "record_type: fix_closure_derivation",
+          "derived_at"
+        ]
+      }
+    },
     "reopen": {
       "name": "reopen",
       "description": "重新打开已关闭任务(大项C②:完整回 pending 或原地重开,禁中间态)",

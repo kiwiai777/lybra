@@ -1922,6 +1922,8 @@ export default function (pi: ExtensionAPI) {
           onLines.push(`  清单比对: 无法比对(${freshness.error})`);
         } else if (freshness.behind) {
           onLines.push(`  ⚠ 落后: 本地 ${freshness.local} vs 线上 ${freshness.remote} — 请 lybra sync + /reload`);
+          // AIPOS-F18 大项C: 版本戳带路 — 不一致时出声(persistent=true)
+          voice(`分发落后(本地${freshness.local}/线上${freshness.remote}), 请 /reload`, "warn", true);
         } else {
           onLines.push(`  清单比对: 最新(本地 ${freshness.local ?? "?"} == 线上 ${freshness.remote ?? "?"})`);
         }

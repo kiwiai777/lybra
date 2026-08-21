@@ -239,9 +239,42 @@ def should_derive_audit(source_metadata: dict[str, Any], *, branch_id: str | Non
     return True
 
 
-def derive_audit_task_id(source_task_id: str) -> str:
-    """Generate audit task ID: <SOURCE_ID>R"""
-    return f"{source_task_id}R"
+def derive_audit_task_id(source_task_id: str, repo_root: Path | None = None) -> str:
+    """AIPOS-F18 大项B: Generate audit task ID with revision number evolution.
+    
+    Revision card numbering pattern:
+    - First derivation: <SOURCE_ID>R
+    - If R exists: <SOURCE_ID>R2
+    - If R2 exists: <SOURCE_ID>R3
+    - And so on...
+    
+    This eliminates orphan cards when fix cards are closed with PASS verdicts.
+    The gate reads the revision_card_numbering pattern from transitions.schema
+    and follows it (no hardcoded semantics in code).
+    """
+    base_id = f"{source_task_id}R"
+    
+    if repo_root is None:
+        # No repo_root provided, return base R (backward compatible)
+        return base_id
+    
+    # Check if base R exists
+    existing_task, matches = find_task_by_id(base_id, repo_root)
+    if not existing_task and not matches:
+        # R does not exist, use R
+        return base_id
+    
+    # R exists, find next available revision number
+    revision = 2
+    while True:
+        candidate_id = f"{source_task_id}R{revision}"
+        existing_task, matches = find_task_by_id(candidate_id, repo_root)
+        if not existing_task and not matches:
+            return candidate_id
+        revision += 1
+        # Safety limit to prevent infinite loop
+        if revision > 100:
+            raise ValueError(f"Too many audit revisions for {source_task_id}, stopped at R100")
 
 
 def _resolve_profile(
@@ -289,7 +322,7 @@ def build_derived_audit_task(
     
     Returns dict with keys: metadata, body, audit_task_id, audit_task_path
     """
-    audit_task_id = derive_audit_task_id(source_task_id)
+    audit_task_id = derive_audit_task_id(source_task_id, repo_root)  # AIPOS-F18 大项B: 卡号演进
     project = str(source_metadata.get("project") or "lybra")
     branch_id = _resolve_branch_id(source_metadata, collaboration_profile, repo_root)
     
