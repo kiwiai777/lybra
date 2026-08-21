@@ -21,6 +21,7 @@ from tools.aipos_cli.records import expected_publish_record_path
 from tools.aipos_cli.task_loader import find_task_by_id
 from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
 from tools.schema_constants import RecordType
+from tools.schema_loader import get_required_card_fields  # AIPOS-F17 大项A: schema 单源必填集
 
 
 
@@ -613,7 +614,7 @@ def derive_repair_card_on_fail(
 
     project = str(source_metadata.get("project") or "lybra")
 
-    # 构建修复卡
+    # AIPOS-F17 大项A: 构建修复卡 — 必填字段从 schema 单源派生, 值承继原卡, 禁手写第二份清单。
     repair_metadata = {
         "task_id": repair_task_id,
         "title": f"Fix: {source_metadata.get('title', reviewed_task_id)} (round {fix_round})",
@@ -634,6 +635,29 @@ def derive_repair_card_on_fail(
         "anchor_refs": source_metadata.get("anchor_refs", ["g1_owner_gate"]),
         "artifact_scope": source_metadata.get("artifact_scope", ""),
     }
+
+    # AIPOS-F17 大项A: 从 schema 必填集补全——值承继原卡, 原卡无则用安全默认值。
+    # 禁手写第二份字段清单; schema 改即自动跟随。
+    _required_fields = get_required_card_fields()
+    _inherit_defaults = {
+        "needs_owner": False,
+        "output_target": source_metadata.get("output_target", ""),
+        "artifact_policy": source_metadata.get("artifact_policy", "formal_write"),
+    }
+    for field in _required_fields:
+        if field not in repair_metadata or repair_metadata[field] is None:
+            if field in source_metadata and source_metadata[field] is not None:
+                repair_metadata[field] = source_metadata[field]
+            elif field in _inherit_defaults:
+                repair_metadata[field] = _inherit_defaults[field]
+
+    # AIPOS-F17 大项A: 产前自检——产物必过与 publish 相同的 schema 必填校验。
+    _missing = [f for f in _required_fields if f not in repair_metadata or repair_metadata[f] is None]
+    if _missing:
+        raise ValueError(
+            f"AIPOS-F17 派生自检 FAIL: 修复卡 {repair_task_id} 缺必填字段 {_missing}。"
+            f" schema 单源 = {_required_fields}"
+        )
 
     repair_body = f"""## 修复任务 (第 {fix_round} 轮)
 
