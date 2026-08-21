@@ -66,6 +66,15 @@ verdict_at: '2026-08-20T09:00:00Z'
 ---
 `, "utf-8");
 
+  // AIPOS-F14 大项C: sweep 只扫活动卡(queue/claimed)目录, 测试需建一张活动卡
+  const claimedDir = path.join(root, "5_tasks/queue/claimed");
+  mkdirSync(claimedDir, { recursive: true });
+  writeFileSync(path.join(claimedDir, "aipos-f12test.md"), `---
+task_id: AIPOS-F12TEST
+status: claimed
+---
+`, "utf-8");
+
   const result = mod.quarantineHandWrittenVerdicts(fs, path, { workspaceRoot: root }, null);
 
   const qdir = path.join(root, "governance/quarantine");

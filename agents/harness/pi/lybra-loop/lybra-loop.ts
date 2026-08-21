@@ -362,11 +362,53 @@ export function readGateTerritoryDeclaration(): GateTerritoryDeclaration {
     quarantine_dir: territory.quarantine_dir || "governance/quarantine/",
     superseded_suffix: territory.superseded_suffix || ".superseded",
     quarantine_policy: territory.quarantine_policy,
+    era_exemption: territory.era_exemption,
   };
 }
 
 /**
- * AIPOS-F12 大项B: 扫描门领地保护路径内的非门生裁决文件, 自动移 quarantine。
+ * AIPOS-F14 大项C: 构建活动卡集合(queue/claimed 下的 task_id)。
+ * 与收账同源(C3B):只扫活动卡对应的裁决目录, 不遍历全量 records/。
+ * 返回 Set<string> of task_ids (目录名 = task_id 的规范化形式)。
+ */
+export function buildActiveTaskIdSet(
+  fs: any,
+  path: any,
+  workspaceRoot: string,
+): Set<string> {
+  const activeIds = new Set<string>();
+  const claimedDir = path.join(workspaceRoot, "5_tasks", "queue", "claimed");
+  if (!fs.existsSync(claimedDir)) return activeIds;
+  let files: string[];
+  try {
+    files = fs.readdirSync(claimedDir).filter((f: string) => f.endsWith(".md"));
+  } catch {
+    return activeIds;
+  }
+  for (const f of files) {
+    const filePath = path.join(claimedDir, f);
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+    const taskId = extractFrontmatterField(content, "task_id");
+    if (taskId) {
+      // 目录名 = task_id 的小写连字符形式(与 board_adapter._task_filename_for 一致)
+      activeIds.add(taskId);
+      // 也加规范化目录名形式
+      const normalized = taskId.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+      activeIds.add(normalized);
+    }
+  }
+  return activeIds;
+}
+
+/**
+ * AIPOS-F12 大项B + AIPOS-F14 大项C: 扫描门领地保护路径内的非门生裁决文件, 自动移 quarantine。
+ * AIPOS-F14 大项C: 候选集改为只扫活动卡(queue/claimed)对应的裁决目录, 与收账同源(C3B)。
+ * 全量 records/ 追溯扫描退役(不再遍历所有裁决目录)。
  * 门生判定用 isGateBornVerdict(与门内 F2 同规则, 大项A 同一单源)。
  * 拿不准(有 verdict_ 机器标记但未知 record_type)只出声不动文件(禁误伤)。
  */
@@ -388,6 +430,10 @@ export function quarantineHandWrittenVerdicts(
   let quarantined = 0;
   let emittedUncertain = 0;
 
+  // AIPOS-F14 大项C: 只扫活动卡对应的裁决目录(与收账同源 C3B)
+  const activeTaskIds = buildActiveTaskIdSet(fs, path, workspaceRoot);
+  logger?.info("quarantine-active-task-set", { size: activeTaskIds.size });
+
   for (const protectedRel of protectedPaths) {
     const protectedAbs = path.join(workspaceRoot, protectedRel);
     const verdictsRoot = path.join(protectedAbs, "audit_verdicts");
@@ -399,6 +445,11 @@ export function quarantineHandWrittenVerdicts(
       continue;
     }
     for (const taskDir of taskDirs) {
+      // AIPOS-F14 大项C: 只扫活动卡目录, 非活动卡目录出声跳过
+      if (!activeTaskIds.has(taskDir)) {
+        logger?.info("quarantine-skip-inactive-task", { task_dir: taskDir, reason: "非活动卡(queue/claimed)目录, 不扫" });
+        continue;
+      }
       const dir = path.join(verdictsRoot, taskDir);
       let stat;
       try {
