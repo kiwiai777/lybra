@@ -260,7 +260,7 @@ function scheduleNextTick(delayMs: number) {
  */
 
 /** 从 frontmatter 文本提取简单 YAML 标量值(不引完整 YAML 解析器) */
-function extractFrontmatterField(content: string, field: string): string | null {
+export function extractFrontmatterField(content: string, field: string): string | null {
   // Match both `field: value` and `field: 'value'` / `field: "value"`
   const re = new RegExp(`^${field}:\\s*['"]?([^'"\\n]*)['"]?\\s*$`, "m");
   const m = content.match(re);
@@ -653,14 +653,28 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
   const anomalies: { task_id: string; reason: string }[] = [];
 
   for (const cardFile of claimedCards) {
-    // 从卡文件名提取 task_id
-    const taskId = cardFile.replace(/\.md$/i, "").toUpperCase();
+    // AIPOS-F17 大项B: task_id 从卡 frontmatter 读, 文件名仅作目录索引, 禁 toUpperCase 猜测。
     const cardPath = path.join(claimedDir, cardFile);
+    let taskId: string;
+    try {
+      const cardContent = fs.readFileSync(cardPath, "utf-8");
+      const fmTaskId = extractFrontmatterField(cardContent, "task_id");
+      if (!fmTaskId) {
+        currentLogger?.warn("sweep-card-no-frontmatter-task-id", { cardFile });
+        voice(`sweep 跳过: ${cardFile} 无 frontmatter task_id`, "warn");
+        continue;
+      }
+      taskId = fmTaskId;
+    } catch (e) {
+      currentLogger?.warn("sweep-card-read-failed", { cardFile, error: e instanceof Error ? e.message : String(e) });
+      continue;
+    }
 
     // 反查裁决目录
     const verdictDir = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts", taskId);
     if (!fs.existsSync(verdictDir)) {
-      // 无裁决目录 = 还在执行中,不是异常
+      // AIPOS-F17 大项C: 无裁决目录 = 等待中, 出声一行(终结全静默)。
+      voice(`${taskId}: 等待裁决落库中 (next_step: 裁决落库后自动收账, 无需操作)`, "info");
       continue;
     }
 
