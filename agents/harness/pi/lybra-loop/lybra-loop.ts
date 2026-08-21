@@ -67,35 +67,53 @@ interface VoiceMessage {
 const voiceBuffer: VoiceMessage[] = [];
 const VOICE_BUFFER_MAX = 50; // 防刷屏
 
-/** 统一出声函数 — 内聚所有 liveCtx?.ui?.notify 调用点,liveCtx 未就绪时入缓冲。 */
+/**
+ * 统一出声函数 — 内聚所有上屏调用点,liveCtx 未就绪时入缓冲。
+ * AIPOS-F15 大项A: 每次调用必落 voice-attempt 日志(outcome+level+text_head),
+ * 审计/顾问从此可从日志证明每句话的去向。
+ * outcome ∈ direct(句柄好直接上屏) / buffered(句柄未就绪入缓冲) /
+ *           no-handle(句柄作废丢弃,WARN) / dropped(缓冲超限丢弃)。
+ * 禁另造第二条出声路 —— 所有上屏文本必过此函数。
+ */
 function voice(text: string, level: "info" | "warn" | "error" = "info"): void {
+  const textHead = text.slice(0, 40);
   if (liveCtx?.ui?.notify) {
     // liveCtx 就绪 → 即时上屏
     try {
       liveCtx.ui.notify(text, level);
+      currentLogger?.info("voice-attempt", { outcome: "direct", level, text_head: textHead });
     } catch (e) {
-      // notify 自身抛错(罕见)→ 降级落日志,不阻断主逻辑
-      currentLogger?.warn("voice-notify-failed", {
+      // notify 自身抛错 → 句柄作废(冷启动/reload 后 stale 对象)
+      currentLogger?.warn("voice-attempt", {
+        outcome: "no-handle",
+        level,
+        text_head: textHead,
         error: e instanceof Error ? e.message : String(e),
-        text: text.slice(0, 100),
       });
     }
   } else {
-    // liveCtx 未就绪 → 入缓冲 + 落日志一行
+    // liveCtx 未就绪 → 入缓冲
     voiceBuffer.push({ text, level, timestamp: Date.now() });
+    currentLogger?.info("voice-attempt", { outcome: "buffered", level, text_head: textHead });
     if (voiceBuffer.length > VOICE_BUFFER_MAX) {
       voiceBuffer.shift(); // 丢最旧
-      currentLogger?.warn("voice-buffer-overflow", { dropped: 1 });
+      currentLogger?.warn("voice-attempt", { outcome: "dropped", level: "warn", text_head: "(oldest)" });
     }
-    currentLogger?.info("voice-buffered", { level, text: text.slice(0, 100) });
   }
 }
 
-/** session_start 时刷新 liveCtx 后按序补发缓冲话术。 */
+/**
+ * session_start 时刷新 liveCtx 后按序补发缓冲话术。
+ * AIPOS-F15 大项A: 每条补发必落 voice-attempt(outcome=flushed/no-handle)。
+ */
 function flushVoiceBuffer(): void {
   if (voiceBuffer.length === 0) return;
   if (!liveCtx?.ui?.notify) {
-    currentLogger?.warn("voice-flush-skip-no-ctx", { buffered: voiceBuffer.length });
+    currentLogger?.warn("voice-attempt", {
+      outcome: "no-handle",
+      level: "warn",
+      text_head: `(flush-skip ${voiceBuffer.length} msgs, no ctx)`,
+    });
     return;
   }
   const count = voiceBuffer.length;
@@ -104,10 +122,13 @@ function flushVoiceBuffer(): void {
     const msg = voiceBuffer.shift()!;
     try {
       liveCtx.ui.notify(msg.text, msg.level);
+      currentLogger?.info("voice-attempt", { outcome: "flushed", level: msg.level, text_head: msg.text.slice(0, 40) });
     } catch (e) {
-      currentLogger?.warn("voice-flush-item-failed", {
+      currentLogger?.warn("voice-attempt", {
+        outcome: "no-handle",
+        level: msg.level,
+        text_head: msg.text.slice(0, 40),
         error: e instanceof Error ? e.message : String(e),
-        text: msg.text.slice(0, 100),
       });
     }
   }
@@ -1072,7 +1093,8 @@ async function doTick(): Promise<void> {
       if (loopState.released >= loopState.maxN) {
         currentLogger.info("release-last", { task_id: outcome.task.task_id });
       }
-      liveCtx.ui.notify(
+      // AIPOS-F15 大项B: 统一走 voice() 单出口,禁另造第二条出声路
+      voice(
         `放行 ${outcome.task.task_id}(PreAuthorized)→ 冷启动执行 [${loopState.released}/${loopState.maxN}]`,
         "info",
       );
