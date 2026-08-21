@@ -30,7 +30,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, loadConfigSchema, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs, type LoopConfig, type GateTerritoryDeclaration } from "./gate-client.ts";
-import { buildKickoff, stringifyReasons, severityToLevel } from "./loop-decisions.ts";
+import { buildKickoff, stringifyReasons, severityToLevel, planCooldownStep } from "./loop-decisions.ts";
 import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
 // AIPOS-C4B 大项B: 版本信号 — 本地版本戳读取 + 清单比对
 import { readFileSync, existsSync } from "node:fs";
@@ -51,6 +51,9 @@ let expectingSwap = false;
 // AIPOS-CONN-LOOP-2 ①: 跟踪当前执行的任务ID和worktree路径，用于自动return
 let currentTaskId: string | null = null;
 let currentWorktreePath: string | null = null;
+// AIPOS-F16: 余热转入声门门 — 额度尽转余热的出声只发一次(转入时刻), 后续余热 tick 不重复刷屏。
+// 模式本身不入状态机: 余热 ≡ loopState.on && released>=maxN(现算现用)。
+let cooldownAnnounced = false;
 
 // AIPOS-F10: 活 ctx/pi 引用 — 每次 session 装载/命令入口/事件回调时刷新。
 // 定时器/钩子绝不闭包捕获 ctx(那些在 session 替换后变 stale 对象,调用即抛)。
@@ -587,6 +590,41 @@ export function extractWriteTargets(toolName: string, input: any): string[] {
   return targets;
 }
 
+/**
+ * AIPOS-F16: 本工位在途卡清点 — 扫 queue/claimed(既有 sweep 候选集), 只数
+ * frontmatter claimed_by == 本工位实例 且卡号读自 frontmatter(F17: 禁从文件名猜)的卡。
+ * 审计位等他人工位的卡不算(它们的收口归各自工位); close 后卡离开 claimed, 天然出集。
+ */
+export function findInFlightCards(
+  fs: any,
+  path: any,
+  workspaceRoot: string,
+  agentInstance: string,
+): string[] {
+  const claimedDir = path.join(workspaceRoot, "5_tasks", "queue", "claimed");
+  let files: string[];
+  try {
+    files = fs.readdirSync(claimedDir).filter((f: string) => f.endsWith(".md"));
+  } catch {
+    return [];
+  }
+  const ids: string[] = [];
+  for (const f of files) {
+    let content: string;
+    try {
+      content = fs.readFileSync(path.join(claimedDir, f), "utf-8");
+    } catch {
+      continue;
+    }
+    const claimedBy = extractFrontmatterField(content, "claimed_by");
+    if (!claimedBy || claimedBy !== agentInstance) continue; // 非本工位(如审计位)不算在途
+    const taskId = extractFrontmatterField(content, "task_id");
+    if (!taskId) continue; // AIPOS-F17: 卡号读 frontmatter, 缺则跳过(禁猜文件名)
+    ids.push(taskId);
+  }
+  return ids;
+}
+
 // AIPOS-C3D 大项A: sweep 防重入标志 — 启动存量收敛与每轮 tick 可能并发触发同一 sweep,
 // 双 finalize 会引发 deploy 竞态;单线程下 check+set 无 await 间隔, 原子生效。
 let sweepInFlight = false;
@@ -1019,6 +1057,7 @@ function stopLoop(
   loopState.on = false;
   loopState.stoppedReason = reason;
   clearTimer();
+  cooldownAnnounced = false; // AIPOS-F16: 循环停即复位余热出声门门(下次 on 重新转入才再出声)
   currentLogger?.write(level === "error" ? "ERROR" : level === "warn" ? "WARN" : "INFO", "loop-stopped", { reason });
   voice(`lybra 循环停止:${reason}`, level);
 }
@@ -1146,10 +1185,9 @@ async function doTick(): Promise<void> {
           currentLogger.info("held-settle-card-gone", { task_id: heldTaskId, reason: "卡已被门收编, 无需交回" });
           resetRuntimeState(`${heldTaskId} 已由门收编, 无需交回`);
           // settle 后继续轮询下一张卡(如未达 maxN)
-          if (loopState.released < loopState.maxN) {
-            loopState.running = false;
-            scheduleNextTick(1000);
-          }
+          // AIPOS-F16: 额度尽时也不再就此沉默 — 下一 tick 自判余热(executeTick 只判不领)
+          loopState.running = false;
+          scheduleNextTick(1000);
           return;
         }
         
@@ -1187,10 +1225,9 @@ async function doTick(): Promise<void> {
           const returned = await tryAutoReturn();
           if (returned) {
             // return成功，继续轮询下一张卡
-            if (loopState.released < loopState.maxN) {
-              loopState.running = false; // 确保复位
-              scheduleNextTick(1000); // 1秒后再拉
-            }
+            // AIPOS-F16: 额度尽时也不再就此沉默 — 下一 tick 自判余热(executeTick 只判不领)
+            loopState.running = false; // 确保复位
+            scheduleNextTick(1000); // 1秒后再拉
             return;
           } else {
             // return失败，记录错误但不停循环
@@ -1333,6 +1370,26 @@ async function doTick(): Promise<void> {
       return;
     }
 
+    // AIPOS-F16 余热 tick 收口: 额度尽(executeTick 只判不领)→ 只剩收尾判定。
+    // sweep 收账已在 tick 前跑过(上丈 !currentTaskId 分支), held 复工网在 stop 分支照常可达;
+    // 此处只判: queue/claimed 无本工位在途卡 → 终停(停语带路); 否则按 interval 继续余热。
+    if (outcome.kind === "cooldown") {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const inFlight = findInFlightCards(fs, path, config.workspaceRoot, config.agentInstance);
+      const plan = planCooldownStep(inFlight, loopState.released, loopState.maxN, config.intervalSec);
+      currentLogger.info("cooldown-step", { in_flight: inFlight, plan: plan.action, reason: outcome.reason });
+      if (plan.action === "terminal-stop") {
+        stopLoop(plan.reason, "info");
+        voice(`下一步: 如需继续领卡请 /lybra on N`, "info");
+        return;
+      }
+      voice(plan.voiceLine, "info");
+      loopState.running = false;
+      scheduleNextTick(plan.nextMs);
+      return;
+    }
+
     // wait:轮询
     const elapsed = Date.now() - (loopState as { cycleStartMs: number }).cycleStartMs;
     if (elapsed >= config.maxWaitSec * 1000) {
@@ -1408,22 +1465,35 @@ export default function (pi: ExtensionAPI) {
     if (currentTaskId) {
       const returned = await tryAutoReturn();
       if (returned) {
-        // return 成功后，如果还未达到 maxN，继续轮询下一张卡
-        if (loopState.released < loopState.maxN) {
-          if (!loopState.running) {
-            doTick().catch((e) => {
-              currentLogger?.warn("agent_settled-post-return-tick-error", {
-                error: e instanceof Error ? e.message : String(e),
-              });
+        // return 成功后照常续跑 — 额度未尽继续领新卡;
+        // AIPOS-F16: 额度尽时 doTick 自判余热(executeTick 只判不领), 不再整停循环
+        if (!loopState.running) {
+          doTick().catch((e) => {
+            currentLogger?.warn("agent_settled-post-return-tick-error", {
+              error: e instanceof Error ? e.message : String(e),
             });
-          }
+          });
         }
         return;
       }
     }
-    
+
     if (loopState.released >= loopState.maxN) {
-      stopLoop(`达到 maxN(${loopState.maxN}),已放行 ${loopState.released} 张`, "info");
+      // AIPOS-F16 余热(取代旧“达到 maxN 即整停”): 额度只管新领卡, 不陪绑在途卡的收账与复工。
+      // 转入余热: 循环不停, 不再领新卡; sweep 收账 + held 复工网照常, 在途卡收口才终停。
+      // /lybra off 仍即时停(用户显式优先, off handler 不经此路径)。
+      currentLogger?.info("cooldown-enter", { released: loopState.released, maxN: loopState.maxN });
+      if (!cooldownAnnounced) {
+        cooldownAnnounced = true;
+        voice(`额度已用完(${loopState.released}/${loopState.maxN}), 余热收尾中 — 不再领新卡, 在途卡收完即停`, "info");
+      }
+      if (!loopState.running) {
+        doTick().catch((e) => {
+          currentLogger?.warn("agent_settled-cooldown-tick-error", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        });
+      }
       return;
     }
     if (loopState.running) return; // 防重入
@@ -1504,10 +1574,14 @@ export default function (pi: ExtensionAPI) {
           `lybra-loop 状态:`,
           `  运行中: ${loopState.on ? "是" : "否"}`,
           `  已放行: ${loopState.released}/${loopState.maxN}`,
-          `  停止原因: ${loopState.stoppedReason || "(无)"}`,
-          `  gate: ${currentGateUrl || "(未配置)"}  role: ${currentRole || "-"}  actor: ${currentActor || "-"}`,
-          `  token: ${fp}`,
         ];
+        // AIPOS-F16: 额度尽且循环仍在跑 = 余热收尾中(不领新卡, 在途卡收完即停)
+        if (loopState.on && loopState.released >= loopState.maxN) {
+          lines.push(`  模式: 余热收尾中(额度尽, 不领新卡, 在途卡收完即停; /lybra off 可停)`);
+        }
+        lines.push(`  停止原因: ${loopState.stoppedReason || "(无)"}`);
+        lines.push(`  gate: ${currentGateUrl || "(未配置)"}  role: ${currentRole || "-"}  actor: ${currentActor || "-"}`);
+        lines.push(`  token: ${fp}`);
         // 版本戳 + provenance + 清单比对(能拿到 config/client 就尽量答)
         try {
           const config = loadConfig(process.env);
@@ -1612,6 +1686,7 @@ export default function (pi: ExtensionAPI) {
         loopState = freshState();
         loopState.on = true;
         loopState.maxN = maxN;
+        cooldownAnnounced = false; // AIPOS-F16: 每次 on 重置余热转入声门门
         (loopState as { cycleStartMs: number }).cycleStartMs = Date.now();
         currentLogger.info("loop-on", {
           maxN,

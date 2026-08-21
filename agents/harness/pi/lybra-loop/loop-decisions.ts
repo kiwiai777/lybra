@@ -203,6 +203,38 @@ export function decideClaimDryRun(resp: AnyDict | null | undefined, taskId: stri
 }
 
 // ---------------------------------------------------------------------------
+// AIPOS-F16: 余热收尾决策(纯) — 额度尽后循环不整停, 只停新领卡。
+// ---------------------------------------------------------------------------
+
+export type CooldownPlan =
+  | { action: "terminal-stop"; reason: string }
+  | { action: "wait"; voiceLine: string; nextMs: number };
+
+/**
+ * AIPOS-F16 余热步进:额度用尽(released>=maxN)后每轮 tick 只判在途卡。
+ *  • 在途卡(claimed_by=本工位且未收口)= 0 → 终停, 停语带路(/lybra on N)。
+ *  • 仍有在途卡 → 继续余热等待(interval 秒后再收)。
+ */
+export function planCooldownStep(
+  inFlightTaskIds: string[],
+  released: number,
+  maxN: number,
+  intervalSec: number,
+): CooldownPlan {
+  if (inFlightTaskIds.length === 0) {
+    return {
+      action: "terminal-stop",
+      reason: `额度用尽(${released}/${maxN})且在途卡全部收口`,
+    };
+  }
+  return {
+    action: "wait",
+    voiceLine: `余热: 在途卡 ${inFlightTaskIds.length} 张(${inFlightTaskIds.join(",")}), ${intervalSec}s 后再收`,
+    nextMs: Math.max(1, Math.round(intervalSec * 1000)),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 纯文本生成
 // ---------------------------------------------------------------------------
 
