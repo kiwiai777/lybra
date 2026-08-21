@@ -1741,7 +1741,37 @@ export default function (pi: ExtensionAPI) {
             lines.push(`    ${v.replace(/^- /, "")}`);
           }
         } else {
-          lines.push(`  最近关键事件: (无 — journal 未建或无条目)`);
+          lines.push(`  最近关键事件: 暂无`);
+        }
+        // AIPOS-F15C: 在途卡行 — 显示本工位在途卡及其下一步(读门 lybra_gate_guidance)
+        try {
+          const config = loadConfig(process.env);
+          const fs = await import("node:fs");
+          const path = await import("node:path");
+          const inFlight = findInFlightCards(fs, path, config.workspaceRoot, config.agentInstance);
+          if (inFlight.length > 0) {
+            lines.push(`  在途卡(${inFlight.length} 张):`);
+            for (const taskId of inFlight) {
+              let nextStep = "";
+              if (currentClient) {
+                try {
+                  const guidance = await currentClient.callTool("lybra_gate_guidance", {
+                    task_id: taskId,
+                    role: config.role,
+                  });
+                  const desc = guidance?.guidance?.description || guidance?.description || "";
+                  nextStep = desc ? ` → ${desc}` : "";
+                } catch {
+                  nextStep = " (无法获取下一步)";
+                }
+              }
+              lines.push(`    ${taskId}${nextStep}`);
+            }
+          } else {
+            lines.push(`  在途卡: 无`);
+          }
+        } catch (e) {
+          lines.push(`  在途卡: 查询失败(${e instanceof Error ? e.message : String(e)})`);
         }
         // 版本戳 + provenance + 清单比对(能拿到 config/client 就尽量答)
         try {
@@ -1749,12 +1779,20 @@ export default function (pi: ExtensionAPI) {
           lines.push(buildVersionLine(config));
           lines.push(`[身份来源自曝]\n${buildProvenanceBanner(config)}`);
           const fres = await checkManifestFreshness(currentClient, config);
+          // AIPOS-F15C: 清单比对修复 — remote 为 null 时显示原因而非 "?"
           if (fres.error) {
             lines.push(`  清单比对: 无法比对(${fres.error})`);
           } else if (fres.behind) {
-            lines.push(`  ⚠ 落后: 本地 ${fres.local} vs 线上 ${fres.remote} — 请 lybra sync + /reload`);
+            lines.push(`  ⚠ 落后: 本地 ${fres.local ?? "(无)"} vs 线上 ${fres.remote ?? "(无)"} — 请 lybra sync + /reload`);
           } else {
-            lines.push(`  清单比对: 最新(本地 ${fres.local ?? "?"} == 线上 ${fres.remote ?? "?"})`);
+            // remote 为 null 表示无法从门获取对端版本(如门未部署/网络问题)
+            const localV = fres.local ?? "(无本地版本戳)";
+            const remoteV = fres.remote;
+            if (!remoteV) {
+              lines.push(`  清单比对: 本地 ${localV}, 线上版本无法获取(gate 无响应或未部署)`);
+            } else {
+              lines.push(`  清单比对: 最新(本地 ${localV} == 线上 ${remoteV})`);
+            }
           }
         } catch (e) {
           // 配置未就绪时不阻断 status(如 /lybra status 早于 /lybra on)
