@@ -218,6 +218,12 @@ export interface GateTerritoryDeclaration {
   quarantine_dir?: string;
   superseded_suffix?: string;
   quarantine_policy?: string;
+  era_exemption?: {
+    description?: string;
+    era_boundary?: string;
+    era_boundary_description?: string;
+    exemption_rule?: string;
+  };
 }
 
 export interface ConfigSchemaShape {

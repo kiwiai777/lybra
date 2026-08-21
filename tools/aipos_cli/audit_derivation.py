@@ -95,10 +95,13 @@ def build_gate_territory_discipline_section(
     source_task_id: str,
     repo_root: Path | None = None,
 ) -> str:
-    """AIPOS-F12 大项D: 门领地纪律 + 精确提交配方(注入审计卡, 手动/自动共用)。
+    """AIPOS-F12 大项D + AIPOS-F14 大项A: 门领地纪律 + 精确提交配方(注入审计卡, 手动/自动共用)。
 
     动词名与参数名派生自 gate 注册表 (verb_contract), 禁写死;报告落点路径来自注册表。
     改声明值(动词改名 / task_cards 路径)→ 注入跟随, 无需改本函数。
+
+    AIPOS-F14 大项A: 配方补全二选一参数(audit_task_id/audit_task_path),
+    从 verb_contract optional_params 识别 _select_task_input 对, 每参数附用途一句。
     """
     from tools.aipos_cli.verb_contract import get_verb_contract, resolve_gate_verbs
 
@@ -106,17 +109,36 @@ def build_gate_territory_discipline_section(
     dry = verbs.get("audit_verdict_dry_run") or {}
     dry_name = str(dry.get("name") or "lybra_audit_verdict_dry_run")
     confirm_name = str(dry.get("confirm_pair") or dry_name.replace("_dry_run", "_confirm"))
-    dry_params = list(dry.get("required_params") or [])
+    dry_required = list(dry.get("required_params") or [])
+    dry_optional = list(dry.get("optional_params") or [])
     confirm_contract = get_verb_contract(confirm_name) or {}
     confirm_params = list(confirm_contract.get("required_params") or [])
 
+    # AIPOS-F14 大项A: 识别 _select_task_input 二选一参数对
+    # 规则: optional_params 中同时存在 <X>_id 和 <X>_path → 二选一(selector pair)
+    selector_pairs = _find_selector_pairs(dry_optional)
+    selector_names: list[str] = []
+    selector_descriptions: list[str] = []
+    for pair_id, pair_path, usage in selector_pairs:
+        selector_names.extend([pair_id, pair_path])
+        selector_descriptions.append(f"`{pair_id}` / `{pair_path}` 二选一({usage})")
+
     task_cards_path = _resolve_governance_task_cards_path(repo_root)
 
-    dry_params_inline = "`, `".join(dry_params)
+    dry_params_inline = "`, `".join(dry_required)
     confirm_params_inline = "`, `".join(confirm_params)
 
+    # 构建二选一参数说明段
+    selector_section = ""
+    if selector_descriptions:
+        selector_lines = "\n".join(f"     - {desc}" for desc in selector_descriptions)
+        selector_section = (
+            f"\n  1.5 二选一 selector(参数名派生自 verb_contract optional_params, 禁写死):\n"
+            f"{selector_lines}\n"
+        )
+
     return (
-        "\n## 门领地纪律(AIPOS-F12 大项D: 注入, 手动/自动共用)\n\n"
+        "\n## 门领地纪律(AIPOS-F12 大项D + AIPOS-F14 大项A: 注入, 手动/自动共用)\n\n"
         "- **records/ = 门领地**:裁决记录由门落盘, 绝不手写进 `5_tasks/records/`。"
         "手写进 records 一经 sweep 发现即隔离(`governance/quarantine/`)并记违纪。\n"
         f"- **审计报告草稿只能落**:`{task_cards_path}/{{audit_id}}/`"
@@ -124,9 +146,42 @@ def build_gate_territory_discipline_section(
         "- **精确提交配方(参数名派生自 gate 注册表 verb_contract, 禁写死)**\n"
         f"  1. 预览:`{dry_name}`, 必填 `{dry_params_inline}`"
         "(裁决三值 PASS / PASS_WITH_NOTES / FAIL)。\n"
+        f"{selector_section}"
         f"  2. 审阅预览无 BLOCK 后确认:`{confirm_name}`, 必填 `{confirm_params_inline}`;"
         "其中 `owner_confirmation_token='OWNER_CONFIRMED'`(字面常量, 非秘密)。\n"
     )
+
+
+def _find_selector_pairs(optional_params: list[str]) -> list[tuple[str, str, str]]:
+    """AIPOS-F14 大项A: 从 optional_params 识别 _select_task_input 二选一参数对。
+
+    规则: 同时存在 <stem>_id 和 <stem>_path → 一对 selector。
+    返回 [(id_param, path_param, usage_description)]。
+
+    用途描述从已知 selector 语义表取; 未知 stem 给通用描述。
+    """
+    # 已知 selector 语义表(stem → 用途描述)
+    _SELECTOR_USAGE = {
+        "audit_task": "指定被审审计卡(ID 或路径)",
+        "task": "指定任务(ID 或路径)",
+        "source": "指定源任务(ID 或路径)",
+        "reviewed_task": "指定被审任务(ID 或路径)",
+    }
+    opt_set = set(optional_params)
+    seen: set[str] = set()
+    pairs: list[tuple[str, str, str]] = []
+    for p in sorted(optional_params):
+        if p in seen:
+            continue
+        if p.endswith("_id"):
+            stem = p[:-3]  # strip _id
+            path_candidate = f"{stem}_path"
+            if path_candidate in opt_set:
+                usage = _SELECTOR_USAGE.get(stem, f"指定 {stem}(ID 或路径)")
+                pairs.append((p, path_candidate, usage))
+                seen.add(p)
+                seen.add(path_candidate)
+    return pairs
 
 
 def _task_filename_for(task_id: str) -> str:

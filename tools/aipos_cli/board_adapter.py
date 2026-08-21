@@ -191,10 +191,24 @@ def _governance_doc(repo_root: Path, name: str, rel_path: str) -> dict[str, Any]
     return doc
 
 
-def _select_task_input(task_id: str | None, path: str | Path | None) -> tuple[str | None, str | None]:
+def _select_task_input(
+    task_id: str | None,
+    path: str | Path | None,
+    *,
+    id_param_name: str = "task_id",
+    path_param_name: str = "path",
+) -> tuple[str | None, str | None]:
+    """AIPOS-F14 大项B: 报错参数名取 verb_contract 实名(禁写死别名)。
+
+    id_param_name / path_param_name 由调用方传入, 对应 verb_contract 中的真实参数名。
+    默认值保持向后兼容(queue/return 等动词确实用 task_id / task_path)。
+    """
     normalized_path = _normalize_path(path) if path is not None else None
     if bool(task_id) == bool(normalized_path):
-        raise ValueError("Exactly one of task_id or path must be provided")
+        raise ValueError(
+            f"Exactly one of {id_param_name} or {path_param_name} must be provided. "
+            f"Example: {id_param_name}='AIPOS-F13R'"
+        )
     return task_id, normalized_path
 
 
@@ -2356,8 +2370,20 @@ def _task_filename_for(task_id: str) -> str:
     return value or "task"
 
 
-def _select_task(repo_root: Path, *, task_id: str | None, path: str | Path | None) -> dict[str, Any]:
-    selected_task_id, selected_path = _select_task_input(task_id, path)
+def _select_task(
+    repo_root: Path,
+    *,
+    task_id: str | None,
+    path: str | Path | None,
+    id_param_name: str = "task_id",
+    path_param_name: str = "path",
+) -> dict[str, Any]:
+    """AIPOS-F14 大项B: 透传参数实名到 _select_task_input, 报错文案用实名。"""
+    selected_task_id, selected_path = _select_task_input(
+        task_id, path,
+        id_param_name=id_param_name,
+        path_param_name=path_param_name,
+    )
     if selected_task_id:
         selected, matches = find_task_by_id(selected_task_id, repo_root)
         if not matches:
@@ -2933,7 +2959,11 @@ def _build_audit_dispatch_preview(
     planned_dispatch_id: str | None = None,
     planned_dispatched_at: str | None = None,
 ) -> dict[str, Any]:
-    source_task = _select_task(repo_root, task_id=source_task_id, path=source_path)
+    # AIPOS-F14 大项B: 报错参数名取 verb_contract 实名(source_task_id/source_task_path)
+    source_task = _select_task(
+        repo_root, task_id=source_task_id, path=source_path,
+        id_param_name="source_task_id", path_param_name="source_task_path",
+    )
     source_rel = str(source_task.get("path") or "")
     source_file = repo_root / source_rel
     source_metadata, source_body, parse_warnings = parse_markdown_frontmatter(source_file.read_text(encoding="utf-8"))
@@ -3337,7 +3367,11 @@ def _build_audit_verdict_preview(
     planned_verdict_at: str | None = None,
     agent_runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    audit_task = _select_task(repo_root, task_id=audit_task_id, path=audit_task_path)
+    # AIPOS-F14 大项B: 报错参数名取 verb_contract 实名(audit_task_id/audit_task_path)
+    audit_task = _select_task(
+        repo_root, task_id=audit_task_id, path=audit_task_path,
+        id_param_name="audit_task_id", path_param_name="audit_task_path",
+    )
     audit_rel = str(audit_task.get("path") or "")
     audit_file = repo_root / audit_rel
     audit_metadata, audit_body, audit_parse_warnings = parse_markdown_frontmatter(audit_file.read_text(encoding="utf-8"))

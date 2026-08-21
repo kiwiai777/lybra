@@ -396,7 +396,13 @@
       ],
       "quarantine_dir": "governance/quarantine/",
       "superseded_suffix": ".superseded",
-      "quarantine_policy": "非门生文件移入 quarantine_dir(原文件名 + superseded_suffix), README.md 追加一行; 出声 severity=warn, next_step=指明已隔离位置 + 提醒该工位'裁决由门落盘'。拿不准(有机器标记但未知 record_type)只出声不动文件。"
+      "quarantine_policy": "非门生文件移入 quarantine_dir(原文件名 + superseded_suffix), README.md 追加一行; 出声 severity=warn, next_step=指明已隔离位置 + 提醒该工位'裁决由门落盘'。拿不准(有机器标记但未知 record_type)只出声不动文件。",
+      "era_exemption": {
+        "description": "AIPOS-F14 大项C: 存量豁免声明 — F2 门生标记上线前的裁决天生无标记, sweep 不追溯执法。界桩=F2 上线时点, 值写声明禁写代码。",
+        "era_boundary": "2026-08-20T00:00:00Z",
+        "era_boundary_description": "F2 门生机器标记(record_type/verdict_id/verdict_at)上线时点。此前诞生的裁决无标记=正常, 非违纪。",
+        "exemption_rule": "sweep 隔离候选集只扫 queue/claimed 活动卡对应的裁决目录(与收账同源 C3B); 全量 records/ 追溯扫描退役。活动卡目录内的无标记文件才视为手写嫌疑; 非活动卡目录不扫只出声。"
+      }
     }
   },
   "n6_closure_checklist": {
