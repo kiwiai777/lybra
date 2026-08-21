@@ -1784,6 +1784,9 @@ export default function (pi: ExtensionAPI) {
             lines.push(`  清单比对: 无法比对(${fres.error})`);
           } else if (fres.behind) {
             lines.push(`  ⚠ 落后: 本地 ${fres.local ?? "(无)"} vs 线上 ${fres.remote ?? "(无)"} — 请 lybra sync + /reload`);
+            // AIPOS-F18-fix2 F-C-1: status 落后分支同样出声带路(与启动分支同款, persistent=true,
+            // 原卡大项C声明覆盖"连接器启动与 status 的清单比对"两侧)
+            voice(`分发落后(本地${fres.local}/线上${fres.remote}), 请 /reload`, "warn", true);
           } else {
             // remote 为 null 表示无法从门获取对端版本(如门未部署/网络问题)
             const localV = fres.local ?? "(无本地版本戳)";

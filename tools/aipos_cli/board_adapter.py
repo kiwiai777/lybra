@@ -5281,6 +5281,92 @@ auto_generated: true
         return False
 
 
+def _code_repo_schema_root() -> Path:
+    """AIPOS-F18-fix2 F-B-1: transitions.schema 真实所在根 = 运行代码所在仓根。
+
+    委托 schema_loader.code_repo_schema_root(唯一实现): 门以 release 目录运行
+    (AIPOS-333 运行时隔离), 产品仓/dev 仓根均含 schema/; 治理工作区根
+    (resolved_root)没有 schema/ —— 旧实现以治理根为解析根必 SchemaLoadError,
+    开关置关在真实门语境永不可达。调用时动态 import, 测试可替换根。
+    """
+    from tools.schema_loader import code_repo_schema_root
+
+    return code_repo_schema_root()
+
+
+def _write_fix_closure_derivation_record(
+    *,
+    resolved_root: Path,
+    fix_card_closure_node: dict[str, Any],
+    fix_task_id: str,
+    source_task_id: str,
+    derived_audit_task_id: str,
+    verdict_id: str,
+    derived_at: str,
+) -> str | None:
+    """AIPOS-F18-fix2 F-F-1: 按声明写 fix_closures 派生记录(门生记录, append-only)。
+
+    位置模板/必填字段/门标记全部取自 transitions.schema 的 fix_card_closure.record 声明,
+    改声明即跟随;声明缺字段时按声明原字面默认兜底。返回工作区相对路径。
+    """
+    record_decl = dict(fix_card_closure_node.get("record") or {})
+    location_tpl = str(
+        record_decl.get("location")
+        or "5_tasks/records/fix_closures/{fix_task_id}/derivation_{fix_task_id}_{timestamp}.md"
+    )
+    ts_compact = (
+        str(derived_at or "")
+        .replace("-", "")
+        .replace(":", "")
+        .replace("T", "_")
+        .replace("Z", "")
+    )
+    record_rel = location_tpl.format(fix_task_id=fix_task_id, timestamp=ts_compact)
+
+    fields = {
+        "record_type": "fix_closure_derivation",
+        "event_type": "fix_closure_derivation",
+        "fix_task_id": fix_task_id,
+        "source_task_id": source_task_id,
+        "derived_audit_task_id": derived_audit_task_id,
+        "verdict_id": verdict_id,
+        "derived_at": derived_at,
+        "derived_by": "gate_fix_closure_derivation",
+    }
+    required = list(record_decl.get("required_fields") or []) or [
+        "fix_task_id",
+        "source_task_id",
+        "derived_audit_task_id",
+        "verdict_id",
+        "derived_at",
+        "record_type",
+    ]
+    # 声明的必填字段逐项落 frontmatter(缺值的必填字段以空串落盘并保留键, 缺口可见)
+    fm_lines = [f"{k}: {fields.get(k, '')}" for k in required]
+    fm_lines.extend(f"{k}: {v}" for k, v in fields.items() if k not in required)
+    fm_text = "\n".join(fm_lines)
+
+    body = f"""---
+{fm_text}
+---
+# Fix Closure Derivation Record: {fix_task_id}
+
+fix卡 close(PASS族)触发 `fix_card_closure` 级联: 为原卡派生复审卡(卡号模式见声明 revision_card_numbering)。
+
+- fix卡: `{fix_task_id}`(裁决 `{verdict_id}`)
+- 原卡: `{source_task_id}`
+- 派生复审卡: `{derived_audit_task_id}`
+- 派生时间: `{derived_at}`
+- 声明源: transitions.schema.json `nodes.fix_card_closure`(位置模板/必填字段/门标记均来自该声明)
+
+本记录为门生记录(append-only), 由 queue_close 级联自动写入;手写件会被 sweep 隔离。
+"""
+    record_path = resolved_root / record_rel
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(body, encoding="utf-8")
+    return record_rel
+
+
 def close_task(
     *,
     task_id: str | None = None,
@@ -5397,6 +5483,17 @@ def close_task(
 
         # Find related audit-derived cards (<task_id>R pattern)
         source_path = str(selected_task.get("path") or "")
+        # AIPOS-F18-fix2: fix卡元数据必须在mutation(claimed→completed移动)前读取——
+        # 级联块在移动之后执行, 从旧claimed/路径再读必扑空→静默跳过级联(R2未列名的伴生
+        # 缺陷, F-A-1活体实测暴露)。
+        fix_card_metadata: dict[str, Any] = {}
+        try:
+            _fix_card_file = resolved_root / source_path
+            if _fix_card_file.is_file():
+                _fix_fm, _, _ = parse_markdown_frontmatter(_fix_card_file.read_text(encoding="utf-8"))
+                fix_card_metadata = _normalize_return_value(_fix_fm) or {}
+        except Exception:
+            fix_card_metadata = {}
         related_audit_refs: list[str] = []
         audit_task_id = resolved_task_id + "R"
         try:
@@ -5580,33 +5677,29 @@ def close_task(
         derived_audit_for_source_task: str | None = None
         fix_derivation_result: dict[str, Any] | None = None
         
-        # 检查是否为fix卡(derived_from_audit_task_id非空)
-        source_task_metadata_for_fix = source_metadata if 'source_metadata' in dir() else None
-        if source_task_metadata_for_fix is None:
-            # 从卡文件读取 metadata
-            source_task_file_for_fix = resolved_root / source_path
-            if source_task_file_for_fix.is_file():
-                try:
-                    source_task_text_for_fix = source_task_file_for_fix.read_text(encoding="utf-8")
-                    source_task_metadata_for_fix, _, _ = parse_markdown_frontmatter(source_task_text_for_fix)
-                    source_task_metadata_for_fix = _normalize_return_value(source_task_metadata_for_fix)
-                except Exception:
-                    source_task_metadata_for_fix = {}
-        
-        derived_from_audit_task_id = str(source_task_metadata_for_fix.get("derived_from_audit_task_id") or "").strip() if source_task_metadata_for_fix else ""
+        # 检查是否为fix卡(derived_from_audit_task_id非空)——元数据已在上文mutation前读取
+        derived_from_audit_task_id = str(fix_card_metadata.get("derived_from_audit_task_id") or "").strip()
         
         if derived_from_audit_task_id:
             # 这是fix卡,检查终局是否∈PASS族
             # AIPOS-F18 fix1: 门读声明执行, 检查 toggle.enabled 开关
-            fix_card_closure_enabled = True  # 默认启用
+            # AIPOS-F18-fix2 F-B-1: schema解析根改到运行代码所在仓根(门release/产品仓均含schema/,
+            # 治理工作区根无schema/必SchemaLoadError→开关置关静默失效的缺陷已修);
+            # 读取前清缓存, 让"置关→还原"实测对运行中的门立即可见;读失败出声不再静默吞。
+            fix_card_closure_enabled = True  # 默认启用(声明读取失败保持fail-open)
+            fix_card_closure_node: dict[str, Any] = {}
             try:
-                from tools.schema_loader import load_schema
-                transitions_schema = load_schema("transitions", resolved_root)
-                fix_card_closure_node = transitions_schema.get("nodes", {}).get("fix_card_closure", {})
-                toggle = fix_card_closure_node.get("toggle", {})
+                from tools.schema_loader import clear_cache, load_schema
+
+                clear_cache()
+                transitions_schema = load_schema("transitions", _code_repo_schema_root())
+                fix_card_closure_node = transitions_schema.get("nodes", {}).get("fix_card_closure", {}) or {}
+                toggle = fix_card_closure_node.get("toggle", {}) or {}
                 fix_card_closure_enabled = bool(toggle.get("enabled", True))
-            except Exception:
-                pass  # schema读取失败保持默认启用
+            except Exception as schema_exc:  # 声明读取失败不阻断close
+                governance_warnings.append(
+                    f"fix_card_closure声明读取失败(开关保持默认启用): {schema_exc}"
+                )
             
             if not fix_card_closure_enabled:
                 # 开关置关,回退为不派生(验完还原)
@@ -5626,17 +5719,14 @@ def close_task(
                     try:
                         from tools.aipos_cli.audit_derivation import derive_audit_task_id
                         
-                        # 原卡ID = derived_from_audit_task_id (去掉R后缀)
-                        source_task_id_for_reaudit = derived_from_audit_task_id.rstrip("R").rstrip("R2").rstrip("R3").rstrip("R4").rstrip("R5")
-                        # 更精确地提取原卡ID
-                        if derived_from_audit_task_id.endswith("R"):
-                            source_task_id_for_reaudit = derived_from_audit_task_id[:-1]
-                        elif derived_from_audit_task_id[-2:].startswith("R"):
-                            # R2, R3 等格式
-                            import re
-                            match = re.match(r"^(.+)R\d+$", derived_from_audit_task_id)
-                            if match:
-                                source_task_id_for_reaudit = match.group(1)
+                        # 原卡ID = derived_from_audit_task_id 去掉R后缀
+                        # (AIPOS-F18-fix2 F-H-1: 清理冗余rstrip链, 正则一式盖全 R/R2/R3…)
+                        import re
+
+                        _src_match = re.match(r"^(.+)R\d*$", derived_from_audit_task_id)
+                        source_task_id_for_reaudit = (
+                            _src_match.group(1) if _src_match else derived_from_audit_task_id
+                        )
                         
                         # 使用卡号演进模式生成复审卡ID
                         derived_audit_for_source_task = derive_audit_task_id(source_task_id_for_reaudit, resolved_root)
@@ -5670,7 +5760,6 @@ def close_task(
                                 "created_by": "gate_fix_closure_derivation",
                                 "needs_owner": False,
                                 "derived_from_fix_task": resolved_task_id,
-                                "derived_from_audit_task_id": derived_from_audit_task_id,
                                 "reviewed_task_id": source_task_id_for_reaudit,
                                 "reviewed_task_path": source_task_path_for_reaudit,
                                 "fix_verdict_id": verdict_id_for_criteria,
@@ -5690,15 +5779,15 @@ def close_task(
 ## 复审要点
 1. 验证原卡 FAIL 中指出的问题已被修复
 2. 验证修复后的代码/配置能够正常工作
-3. 硾认没有引入新的问题
+3. 确认没有引入新的问题
 
 ## 裁决
 - PASS: 原卡可以收账
 - FAIL: 需要继续修复
 """
                             
-                            # 写入复审卡
-                            reaudit_task_path = resolved_root / "5_tasks" / "queue" / "pending" / f"{derived_audit_for_source_task}.md"
+                            # 写入复审卡(文件名对齐队列小写惯例, 如 aipos-f18r2.md)
+                            reaudit_task_path = resolved_root / "5_tasks" / "queue" / "pending" / f"{derived_audit_for_source_task.lower()}.md"
                             reaudit_task_path.parent.mkdir(parents=True, exist_ok=True)
                             reaudit_markdown = render_task_markdown(reaudit_metadata, reaudit_body)
                             reaudit_task_path.write_text(reaudit_markdown, encoding="utf-8")
@@ -5709,11 +5798,24 @@ def close_task(
                                 "fix_task_id": resolved_task_id,
                                 "fix_verdict_id": verdict_id_for_criteria,
                             }
+
+                            # AIPOS-F18-fix2 F-F-1: 按声明写fix_closures门生记录
+                            # (位置模板/必填字段/门标记均取自transitions.schema fix_card_closure.record)
+                            _fc_record_rel = _write_fix_closure_derivation_record(
+                                resolved_root=resolved_root,
+                                fix_card_closure_node=fix_card_closure_node,
+                                fix_task_id=resolved_task_id,
+                                source_task_id=source_task_id_for_reaudit,
+                                derived_audit_task_id=derived_audit_for_source_task,
+                                verdict_id=verdict_id_for_criteria,
+                                derived_at=timestamp,
+                            )
+                            if _fc_record_rel:
+                                fix_derivation_result["fix_closure_record_path"] = _fc_record_rel
                             
                     except Exception as e:
-                        # 派生失败不阻断close,只记录warning
+                        # 派生失败不阻断close,只记录warning(AIPOS-F18-fix2 F-E-1: 删重复append,警告只留except内一处)
                         governance_warnings.append(f"fix卡复审派生失败: {e}")
-                    governance_warnings.append(f"fix卡复审派生失败: {e}")
 
         # Auto-close related audit-derived cards (direct move, bypassing actor-match
         # validation since this is a system consequence of parent closure, not an

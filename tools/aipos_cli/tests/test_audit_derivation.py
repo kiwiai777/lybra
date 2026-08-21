@@ -151,9 +151,13 @@ class TestAuditDerivation(unittest.TestCase):
         self.assertEqual(publish_metadata["published_task_ref"], "5_tasks/queue/pending/aipos-123r.md")
 
         # Verify performed_writes
-        self.assertEqual(len(result["performed_writes"]), 2)
+        # (AIPOS-F18-fix2 F-D-1: 修陈旧断言——return自动派审特性(auto_derivation_on_return)
+        #  新增第3写 audit_dispatch_record, 时间线实证如 dispatch_AIPOS-F18R_20260821T105459;
+        #  原断言停在2写系特性落地后未同步)
+        self.assertEqual(len(result["performed_writes"]), 3)
         self.assertEqual(result["performed_writes"][0]["type"], "derived_audit_task")
         self.assertEqual(result["performed_writes"][1]["type"], "publish_record")
+        self.assertEqual(result["performed_writes"][2]["type"], "audit_dispatch_record")
 
     def test_derive_audit_task_on_return_idempotency_existing_task(self) -> None:
         # First derivation

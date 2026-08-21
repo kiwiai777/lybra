@@ -544,7 +544,7 @@
       "toggle": {
         "enabled": true,
         "description": "开关置关→回退为不派生(验完还原)",
-        "config_location": "可通过配置开关控制是否启用自动派生"
+        "config_location": "本文件 nodes.fix_card_closure.toggle.enabled(AIPOS-F18-fix2 F-B-1: 门读声明执行, 解析根=运行代码所在仓根——门release/产品仓均含schema/, 治理工作区根无schema/;每次close前清缓存重读, 置关/还原对运行中的门立即可见)"
       },
       "record": {
         "type": "fix_closure_derivation",

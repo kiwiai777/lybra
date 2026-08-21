@@ -62,6 +62,17 @@ def _find_repo_root(start: Path | None = None) -> Path:
     raise SchemaLoadError(f"Could not find schema/ directory from {start}")
 
 
+def code_repo_schema_root() -> Path:
+    """AIPOS-F18-fix2 F-B-1: 运行代码所在仓根 = schema/ 真实所在根。
+
+    门以 release 目录运行(AIPOS-333 运行时隔离), 产品仓/dev 仓根均含 schema/;
+    治理工作区根(5_tasks 所在根)没有 schema/。声明类读取(toggle/模式/记录位置)
+    必须以本根解析, 否则真实门语境必 SchemaLoadError→声明静默失效。
+    唯一实现;调用方应在调用时动态 import 以便测试替换。
+    """
+    return Path(__file__).resolve().parents[1]
+
+
 def _load_json_file(path: Path) -> dict[str, Any]:
     """Load and parse JSON file.
     

@@ -239,42 +239,66 @@ def should_derive_audit(source_metadata: dict[str, Any], *, branch_id: str | Non
     return True
 
 
+def _declared_revision_suffixes() -> list[str] | None:
+    """AIPOS-F18-fix2 F-G-1: 从声明读卡号演进模式(transitions.schema fix_card_closure.revision_card_numbering.pattern)。
+
+    pattern 形如 ``<原卡ID>R[迭代序号]``: ``<原卡ID>`` = 原卡占位, ``[迭代序号]`` = 序号槽。
+    依声明生成后缀序列 ['R','R2','R3',…](第1轮序号槽为空, 其后为数字), 上限R100;
+    声明不可读/不可解析 → 返回 None(调用方回退内置序列, 行为与旧版一致)。
+    改声明模式即改行为(验收②"卡号演进模式改声明跟随"由此实现)。
+    """
+    try:
+        from tools.schema_loader import clear_cache, code_repo_schema_root, load_schema
+
+        clear_cache()  # 让模式声明的现场修改(改完还原)对运行中的门立即可见
+        schema = load_schema("transitions", code_repo_schema_root())  # F-B-1同根: 代码所在仓根
+        pattern = str(
+            ((schema.get("nodes", {}) or {}).get("fix_card_closure", {}) or {})
+            .get("revision_card_numbering", {})
+            .get("pattern")
+            or ""
+        )
+        if "<原卡ID>" not in pattern or "[迭代序号]" not in pattern:
+            return None
+        suffix_tpl = pattern.split("<原卡ID>", 1)[1]
+        return [
+            suffix_tpl.replace("[迭代序号]", "" if n == 1 else str(n))
+            for n in range(1, 101)
+        ]
+    except Exception:
+        return None
+
+
 def derive_audit_task_id(source_task_id: str, repo_root: Path | None = None) -> str:
     """AIPOS-F18 大项B: Generate audit task ID with revision number evolution.
-    
-    Revision card numbering pattern:
+
+    AIPOS-F18-fix2 F-G-1: 卡号演进模式改声明读取——后缀序列优先取
+    transitions.schema 的 fix_card_closure.revision_card_numbering.pattern
+    (门读声明执行, 禁代码内写死语义);声明不可读/不可解析时回退内置 R→R2→…→R100。
+
+    Revision card numbering pattern (declaration default):
     - First derivation: <SOURCE_ID>R
     - If R exists: <SOURCE_ID>R2
     - If R2 exists: <SOURCE_ID>R3
     - And so on...
-    
+
     This eliminates orphan cards when fix cards are closed with PASS verdicts.
-    The gate reads the revision_card_numbering pattern from transitions.schema
-    and follows it (no hardcoded semantics in code).
     """
-    base_id = f"{source_task_id}R"
-    
+    declared = _declared_revision_suffixes()
+    suffixes = declared if declared else ["R"] + [f"R{i}" for i in range(2, 101)]
+
     if repo_root is None:
-        # No repo_root provided, return base R (backward compatible)
-        return base_id
-    
-    # Check if base R exists
-    existing_task, matches = find_task_by_id(base_id, repo_root)
-    if not existing_task and not matches:
-        # R does not exist, use R
-        return base_id
-    
-    # R exists, find next available revision number
-    revision = 2
-    while True:
-        candidate_id = f"{source_task_id}R{revision}"
+        # No repo_root provided, return first suffix (backward compatible)
+        return f"{source_task_id}{suffixes[0]}"
+
+    for suffix in suffixes:
+        candidate_id = f"{source_task_id}{suffix}"
         existing_task, matches = find_task_by_id(candidate_id, repo_root)
         if not existing_task and not matches:
             return candidate_id
-        revision += 1
-        # Safety limit to prevent infinite loop
-        if revision > 100:
-            raise ValueError(f"Too many audit revisions for {source_task_id}, stopped at R100")
+    raise ValueError(
+        f"Too many audit revisions for {source_task_id}, stopped at {source_task_id}{suffixes[-1]}"
+    )
 
 
 def _resolve_profile(
@@ -322,7 +346,11 @@ def build_derived_audit_task(
     
     Returns dict with keys: metadata, body, audit_task_id, audit_task_path
     """
-    audit_task_id = derive_audit_task_id(source_task_id, repo_root)  # AIPOS-F18 大项B: 卡号演进
+    # AIPOS-F18-fix2: return派生保持首号幂等——R已存在时由上层"already exists"跳过, 不演进;
+    # 卡号演进(R2/R3…)只属于 fix_card_closure 级联路径(close 时带 repo_root 调
+    # derive_audit_task_id)。R1 把演进塞进共用路径破坏了 return 幂等(同卡二次 return
+    # 会两派 R2), 由 test_derive_audit_task_on_return_idempotency_existing_task 钉住。
+    audit_task_id = derive_audit_task_id(source_task_id, repo_root=None)
     project = str(source_metadata.get("project") or "lybra")
     branch_id = _resolve_branch_id(source_metadata, collaboration_profile, repo_root)
     
