@@ -5597,72 +5597,87 @@ def close_task(
         
         if derived_from_audit_task_id:
             # 这是fix卡,检查终局是否∈PASS族
-            # 从 records 获取最新裁决
-            fix_task_verdicts = records.get("task_audit_verdicts", {}).get(resolved_task_id, [])
-            latest_fix_verdict = None
-            if fix_task_verdicts:
-                latest_fix_verdict = max(fix_task_verdicts, key=_verdict_time)
+            # AIPOS-F18 fix1: 门读声明执行, 检查 toggle.enabled 开关
+            fix_card_closure_enabled = True  # 默认启用
+            try:
+                from tools.schema_loader import load_schema
+                transitions_schema = load_schema("transitions", resolved_root)
+                fix_card_closure_node = transitions_schema.get("nodes", {}).get("fix_card_closure", {})
+                toggle = fix_card_closure_node.get("toggle", {})
+                fix_card_closure_enabled = bool(toggle.get("enabled", True))
+            except Exception:
+                pass  # schema读取失败保持默认启用
             
-            fix_verdict_value = str(latest_fix_verdict.get("verdict", "") if latest_fix_verdict else "").upper().strip()
-            pass_family = {Verdict.PASS, Verdict.PASS_WITH_NOTES}
-            
-            if fix_verdict_value in pass_family:
-                # fix卡close且终局∈PASS族,为原卡派生复审卡
-                try:
-                    from tools.aipos_cli.audit_derivation import derive_audit_task_id
-                    
-                    # 原卡ID = derived_from_audit_task_id (去掉R后缀)
-                    source_task_id_for_reaudit = derived_from_audit_task_id.rstrip("R").rstrip("R2").rstrip("R3").rstrip("R4").rstrip("R5")
-                    # 更精确地提取原卡ID
-                    if derived_from_audit_task_id.endswith("R"):
-                        source_task_id_for_reaudit = derived_from_audit_task_id[:-1]
-                    elif derived_from_audit_task_id[-2:].startswith("R"):
-                        # R2, R3 等格式
-                        import re
-                        match = re.match(r"^(.+)R\d+$", derived_from_audit_task_id)
-                        if match:
-                            source_task_id_for_reaudit = match.group(1)
-                    
-                    # 使用卡号演进模式生成复审卡ID
-                    derived_audit_for_source_task = derive_audit_task_id(source_task_id_for_reaudit, resolved_root)
-                    
-                    # 获取裁决ID用于准绳注入
-                    verdict_id_for_criteria = str(latest_fix_verdict.get("verdict_id") or "") if latest_fix_verdict else ""
-                    
-                    # 构建复审卡
-                    # 查找原卡信息
-                    source_task_for_reaudit = _select_task(resolved_root, task_id=source_task_id_for_reaudit, path=None)
-                    source_task_path_for_reaudit = str(source_task_for_reaudit.get("path") or "")
-                    source_task_file_for_reaudit = resolved_root / source_task_path_for_reaudit
-                    
-                    if source_task_file_for_reaudit.is_file():
-                        source_task_text_for_reaudit = source_task_file_for_reaudit.read_text(encoding="utf-8")
-                        source_task_metadata_for_reaudit, source_task_body_for_reaudit, _ = parse_markdown_frontmatter(source_task_text_for_reaudit)
-                        source_task_metadata_for_reaudit = _normalize_return_value(source_task_metadata_for_reaudit)
+            if not fix_card_closure_enabled:
+                # 开关置关,回退为不派生(验完还原)
+                governance_warnings.append("fix卡复审派生已关闭(transitions.schema fix_card_closure.toggle.enabled=false)")
+            else:
+                # 从 records 获取最新裁决
+                fix_task_verdicts = records.get("task_audit_verdicts", {}).get(resolved_task_id, [])
+                latest_fix_verdict = None
+                if fix_task_verdicts:
+                    latest_fix_verdict = max(fix_task_verdicts, key=_verdict_time)
+                
+                fix_verdict_value = str(latest_fix_verdict.get("verdict", "") if latest_fix_verdict else "").upper().strip()
+                pass_family = {Verdict.PASS, Verdict.PASS_WITH_NOTES}
+                
+                if fix_verdict_value in pass_family:
+                    # fix卡close且终局∈PASS族,为原卡派生复审卡
+                    try:
+                        from tools.aipos_cli.audit_derivation import derive_audit_task_id
                         
-                        # 构建复审卡metadata
-                        reaudit_metadata = {
-                            "task_id": derived_audit_for_source_task,
-                            "title": f"复审 {source_task_id_for_reaudit} (fix卡 {resolved_task_id} 已修复)",
-                            "project": str(source_task_metadata_for_reaudit.get("project") or "lybra"),
-                            "assigned_to": "audit",
-                            "agent_instance": str(source_task_metadata_for_reaudit.get("agent_instance") or "audit.lybra.kiwiai-dev"),
-                            "context_bundle": source_task_metadata_for_reaudit.get("context_bundle", "default"),
-                            "task_mode": "audit",
-                            "task_class": "simple",
-                            "priority": source_task_metadata_for_reaudit.get("priority", "medium"),
-                            "status": "pending",
-                            "created_by": "gate_fix_closure_derivation",
-                            "needs_owner": False,
-                            "derived_from_fix_task": resolved_task_id,
-                            "derived_from_audit_task_id": derived_from_audit_task_id,
-                            "reviewed_task_id": source_task_id_for_reaudit,
-                            "reviewed_task_path": source_task_path_for_reaudit,
-                            "fix_verdict_id": verdict_id_for_criteria,
-                        }
+                        # 原卡ID = derived_from_audit_task_id (去掉R后缀)
+                        source_task_id_for_reaudit = derived_from_audit_task_id.rstrip("R").rstrip("R2").rstrip("R3").rstrip("R4").rstrip("R5")
+                        # 更精确地提取原卡ID
+                        if derived_from_audit_task_id.endswith("R"):
+                            source_task_id_for_reaudit = derived_from_audit_task_id[:-1]
+                        elif derived_from_audit_task_id[-2:].startswith("R"):
+                            # R2, R3 等格式
+                            import re
+                            match = re.match(r"^(.+)R\d+$", derived_from_audit_task_id)
+                            if match:
+                                source_task_id_for_reaudit = match.group(1)
                         
-                        # 构建复审卡body(注入准绳)
-                        reaudit_body = f"""## 复审任务
+                        # 使用卡号演进模式生成复审卡ID
+                        derived_audit_for_source_task = derive_audit_task_id(source_task_id_for_reaudit, resolved_root)
+                        
+                        # 获取裁决ID用于准绳注入
+                        verdict_id_for_criteria = str(latest_fix_verdict.get("verdict_id") or "") if latest_fix_verdict else ""
+                        
+                        # 构建复审卡
+                        # 查找原卡信息
+                        source_task_for_reaudit = _select_task(resolved_root, task_id=source_task_id_for_reaudit, path=None)
+                        source_task_path_for_reaudit = str(source_task_for_reaudit.get("path") or "")
+                        source_task_file_for_reaudit = resolved_root / source_task_path_for_reaudit
+                        
+                        if source_task_file_for_reaudit.is_file():
+                            source_task_text_for_reaudit = source_task_file_for_reaudit.read_text(encoding="utf-8")
+                            source_task_metadata_for_reaudit, source_task_body_for_reaudit, _ = parse_markdown_frontmatter(source_task_text_for_reaudit)
+                            source_task_metadata_for_reaudit = _normalize_return_value(source_task_metadata_for_reaudit)
+                            
+                            # 构建复审卡metadata
+                            reaudit_metadata = {
+                                "task_id": derived_audit_for_source_task,
+                                "title": f"复审 {source_task_id_for_reaudit} (fix卡 {resolved_task_id} 已修复)",
+                                "project": str(source_task_metadata_for_reaudit.get("project") or "lybra"),
+                                "assigned_to": "audit",
+                                "agent_instance": str(source_task_metadata_for_reaudit.get("agent_instance") or "audit.lybra.kiwiai-dev"),
+                                "context_bundle": source_task_metadata_for_reaudit.get("context_bundle", "default"),
+                                "task_mode": "audit",
+                                "task_class": "simple",
+                                "priority": source_task_metadata_for_reaudit.get("priority", "medium"),
+                                "status": "pending",
+                                "created_by": "gate_fix_closure_derivation",
+                                "needs_owner": False,
+                                "derived_from_fix_task": resolved_task_id,
+                                "derived_from_audit_task_id": derived_from_audit_task_id,
+                                "reviewed_task_id": source_task_id_for_reaudit,
+                                "reviewed_task_path": source_task_path_for_reaudit,
+                                "fix_verdict_id": verdict_id_for_criteria,
+                            }
+                            
+                            # 构建复审卡body(注入准绳)
+                            reaudit_body = f"""## 复审任务
 原卡缺陷已由 fix卡 `{resolved_task_id}` 修复并 close(裁决 `{verdict_id_for_criteria}`)。
 
 **复审基准 = 修复后现状**
@@ -5675,28 +5690,29 @@ def close_task(
 ## 复审要点
 1. 验证原卡 FAIL 中指出的问题已被修复
 2. 验证修复后的代码/配置能够正常工作
-3. 确认没有引入新的问题
+3. 硾认没有引入新的问题
 
 ## 裁决
 - PASS: 原卡可以收账
 - FAIL: 需要继续修复
 """
-                        
-                        # 写入复审卡
-                        reaudit_task_path = resolved_root / "5_tasks" / "queue" / "pending" / f"{derived_audit_for_source_task}.md"
-                        reaudit_task_path.parent.mkdir(parents=True, exist_ok=True)
-                        reaudit_markdown = render_task_markdown(reaudit_metadata, reaudit_body)
-                        reaudit_task_path.write_text(reaudit_markdown, encoding="utf-8")
-                        
-                        fix_derivation_result = {
-                            "derived_audit_task_id": derived_audit_for_source_task,
-                            "source_task_id": source_task_id_for_reaudit,
-                            "fix_task_id": resolved_task_id,
-                            "fix_verdict_id": verdict_id_for_criteria,
-                        }
-                        
-                except Exception as e:
-                    # 派生失败不阻断close,只记录warning
+                            
+                            # 写入复审卡
+                            reaudit_task_path = resolved_root / "5_tasks" / "queue" / "pending" / f"{derived_audit_for_source_task}.md"
+                            reaudit_task_path.parent.mkdir(parents=True, exist_ok=True)
+                            reaudit_markdown = render_task_markdown(reaudit_metadata, reaudit_body)
+                            reaudit_task_path.write_text(reaudit_markdown, encoding="utf-8")
+                            
+                            fix_derivation_result = {
+                                "derived_audit_task_id": derived_audit_for_source_task,
+                                "source_task_id": source_task_id_for_reaudit,
+                                "fix_task_id": resolved_task_id,
+                                "fix_verdict_id": verdict_id_for_criteria,
+                            }
+                            
+                    except Exception as e:
+                        # 派生失败不阻断close,只记录warning
+                        governance_warnings.append(f"fix卡复审派生失败: {e}")
                     governance_warnings.append(f"fix卡复审派生失败: {e}")
 
         # Auto-close related audit-derived cards (direct move, bypassing actor-match
