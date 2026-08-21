@@ -33,9 +33,10 @@ def repo(tmp_path: Path) -> Path:
     (root / "5_tasks" / "records" / "returns" / "AIPOS-TEST-001").mkdir(parents=True, exist_ok=True)
     (root / "5_tasks" / "records" / "closures").mkdir(parents=True, exist_ok=True)
 
-    # AIPOS-289: create governance structure with decision_log/ and stage_archive/
+    # AIPOS-289: create governance structure with decision_log/ and stage_archives/
+    # (AIPOS-F18-fix2 F-D-1: 夹具目录同步 R6M 新位置 governance/stage_archives/ 复数)
     (root / "governance" / "decision_log").mkdir(parents=True, exist_ok=True)
-    (root / "stage_archive").mkdir(parents=True, exist_ok=True)
+    (root / "governance" / "stage_archives").mkdir(parents=True, exist_ok=True)
     
     # Create a decision_log entry for AIPOS-TEST-001
     decision_log = root / "governance" / "decision_log" / "2026-08.md"
@@ -47,7 +48,7 @@ def repo(tmp_path: Path) -> Path:
     )
     
     # Create a recent stage_archive entry
-    stage_file = root / "stage_archive" / "2026-08-01_test_stage.md"
+    stage_file = root / "governance" / "stage_archives" / "2026-08-01_test_stage.md"
     stage_file.write_text("# Test Stage\n", encoding="utf-8")
 
     # Create a claimed task card (with all REQUIRED_FIELDS from validator.py)
@@ -419,14 +420,17 @@ class TestGovernanceAccountInspection:
         )
         assert result.get("ok", True)
         warnings = result.get("warnings", [])
-        assert any("decision_log" in str(w).lower() and "AIPOS-TEST-002" in str(w) for w in warnings)
+        # AIPOS-F18-fix2 F-D-1: 修陈旧断言——R6M 大项A① 已废除"decision_log每卡追加"WARN
+        # (73次无人理的WARN遗迹);缺账号条目改为 A1 自动生成 FOUNDATION-BACKLOG 条目,
+        # 不再对 decision_log 出声。
+        assert not any("decision_log" in str(w).lower() for w in warnings), warnings
 
-        # Closure record should contain the warning
+        # Closure record should not carry decision_log warning either
         records = load_records(root)
         closures = records.get("task_closures", {}).get("AIPOS-TEST-002", [])
         assert len(closures) == 1
         closure_warnings = closures[0].get("warnings", [])
-        assert any("decision_log" in str(w).lower() for w in closure_warnings)
+        assert not any("decision_log" in str(w).lower() for w in closure_warnings), closure_warnings
 
     def test_stale_stage_archive_warns(self, tmp_path: Path) -> None:
         """S2: close when stage_archive/ is stale -> WARN in closure record."""
@@ -437,15 +441,16 @@ class TestGovernanceAccountInspection:
         (root / "5_tasks" / "records" / "returns" / "AIPOS-TEST-003").mkdir(parents=True, exist_ok=True)
         (root / "5_tasks" / "records" / "closures").mkdir(parents=True, exist_ok=True)
         (root / "governance" / "decision_log").mkdir(parents=True, exist_ok=True)
-        (root / "stage_archive").mkdir(parents=True, exist_ok=True)
+        # (AIPOS-F18-fix2 F-D-1: 夹具目录同步 R6M 新位置 governance/stage_archives/)
+        (root / "governance" / "stage_archives").mkdir(parents=True, exist_ok=True)
         (root / "project.json").write_text('{"project": "lybra"}\n', encoding="utf-8")
 
         decision_log = root / "governance" / "decision_log" / "2026-08.md"
         decision_log.write_text("# August 2026 Decisions\n\n## AIPOS-TEST-003\n\nDecision entry.\n", encoding="utf-8")
         
-        # Create a stage_archive file and backdate it by 60 days
+        # Create a stage_archives file and backdate it by 60 days
         import time
-        stage_file = root / "stage_archive" / "old_stage.md"
+        stage_file = root / "governance" / "stage_archives" / "old_stage.md"
         stage_file.write_text("# Old Stage\n", encoding="utf-8")
         old_time = time.time() - (60 * 86400)  # 60 days ago
         import os
