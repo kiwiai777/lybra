@@ -3930,6 +3930,56 @@ def lybra_roles_enroll_list(arguments: dict[str, Any] | None = None) -> dict[str
     })
 
 
+def lybra_roles_reload(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F21: hot-reload the gate's token registry from connection.json.
+
+    Owner-gated (bearer role must be owner + owner_authorization_ref required).
+    Called by `lybra roles rotate` right after the new tokens land on disk,
+    authenticated with the PRE-rotation owner token (still valid until this
+    reload takes effect). Response carries the reloaded registry view as
+    non-secret fingerprints ONLY — raw tokens never appear in any response.
+    """
+    args = arguments or {}
+    owner_authorization_ref = str(args.get("owner_authorization_ref") or "").strip() or None
+    if not owner_authorization_ref:
+        return _error_result(
+            "Missing required parameter: owner_authorization_ref. "
+            "Token registry reload is owner-gated (AIPOS-F21)."
+        )
+    cap = _capability_token()
+    if str(cap.get("role") or "") != "owner":
+        return _teaching_error(
+            "SCOPE_DENIED",
+            f"Token registry reload requires the owner role; this bearer's role is '{cap.get('role') or 'unknown'}'.",
+            "Re-run with a bearer token whose role is 'owner' (e.g., the pre-rotation owner token "
+            "that `lybra roles rotate` uses internally).",
+            doc_ref="AIPOS-F21 roles rotate two-phase rotation",
+        )
+    _reload_token_registry()
+    from datetime import datetime as _dt, timezone as _tz
+    reloaded_at = _dt.now(_tz.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    from tools.mcp_server import http_sse
+    entries: list[dict[str, Any]] = []
+    server = http_sse._CURRENT_SERVER
+    if server is not None and getattr(server.lybra_config, "service_role_registry", None):
+        for entry in server.lybra_config.service_role_registry.values():
+            if isinstance(entry, dict):
+                entries.append({
+                    "role": str(entry.get("role") or ""),
+                    "instance": entry.get("agent_instance"),
+                    "fingerprint": str(entry.get("fingerprint") or ""),
+                })
+    entries.sort(key=lambda item: (item["role"], item["instance"] or ""))
+    return _tool_result({
+        "ok": True,
+        "operation": "roles_reload",
+        "reloaded_at": reloaded_at,
+        "token_count": len(entries),
+        "registry_view": entries,
+        "security_notice": "Fingerprints only; raw tokens never appear in responses.",
+    })
+
+
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_queue_list": lybra_queue_list,
     "lybra_project_status": lybra_project_status,
@@ -3976,6 +4026,7 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_roles_enroll_exchange": lybra_roles_enroll_exchange,
     "lybra_roles_enroll_revoke": lybra_roles_enroll_revoke,
     "lybra_roles_enroll_list": lybra_roles_enroll_list,
+    "lybra_roles_reload": lybra_roles_reload,
 }
 
 
@@ -4940,6 +4991,23 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "lybra_roles_reload",
+        "description": (
+            "AIPOS-F21: hot-reload the gate's token registry from connection.json "
+            "(called by `lybra roles rotate` after new tokens land on disk). "
+            "Owner-gated: bearer role must be owner + owner_authorization_ref required. "
+            "Response carries the reloaded registry as non-secret fingerprints only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "owner_authorization_ref": {"type": "string", "description": "Reference to owner authorization for this reload (AIPOS-F21)."},
+            },
+            "required": ["owner_authorization_ref"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -5003,6 +5071,8 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
     descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_roles_register") or tool["name"].startswith("lybra_roles_remove"))
     # AIPOS-362: enrollment verbs - enroll_code/revoke/list are owner-gated (always visible); enroll_exchange is PUBLIC (always visible)
     descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_roles_enroll"))
+    # AIPOS-F21: registry reload is owner-role-gated at call time; keep visible for discoverability
+    descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"] == "lybra_roles_reload")
     return descriptors
 
 

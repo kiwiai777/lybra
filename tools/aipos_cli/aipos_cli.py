@@ -1594,11 +1594,21 @@ def build_parser() -> argparse.ArgumentParser:
     roles_register_parser.add_argument("--owner-authorization-ref", help="AIPOS-346F2: reference to owner authorization for this registration")
     roles_register_parser.add_argument("--reason", default="", help="Reason for registering this custom role")
     roles_register_parser.add_argument("--json", action="store_true", help="Output JSON")
-    roles_remove_parser = roles_subparsers.add_parser("remove", help="AIPOS-352F1: remove a custom role (idempotent)")
-    roles_remove_parser.add_argument("name", help="Custom role name to remove")
+    roles_remove_parser = roles_subparsers.add_parser("remove", help="AIPOS-352F1: remove a custom role (idempotent); AIPOS-F21: --instance removes a token entry from connection.json")
+    roles_remove_parser.add_argument("name", nargs="?", help="Custom role name to remove (or omit when using --instance)")
+    roles_remove_parser.add_argument("--instance", help="AIPOS-F21: remove the token entry bound to this agent_instance (e.g., test.mac.aipos362) from connection.json")
     roles_remove_parser.add_argument("--owner-authorization-ref", help="AIPOS-346F2: reference to owner authorization for this removal")
     roles_remove_parser.add_argument("--reason", default="", help="Reason for removing this custom role")
     roles_remove_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F21: two-phase service-token rotation (credential rotation as a product action)
+    roles_rotate_parser = roles_subparsers.add_parser("rotate", help="AIPOS-F21: rotate service tokens in connection.json (two-phase: --dry-run preview; execution needs --owner-authorization-ref)")
+    roles_rotate_parser.add_argument("--dry-run", action="store_true", help="Phase 1: preview the fingerprints that would be rotated; lands NO change")
+    roles_rotate_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this rotation (required for execution)")
+    roles_rotate_parser.add_argument("--role", help="Comma-separated role subset to rotate (e.g., executor or executor,auditor); omit to rotate all roles")
+    roles_rotate_parser.add_argument("--actor", help="Who is performing the rotation (recorded in the rotation record)")
+    roles_rotate_parser.add_argument("--reason", default="", help="Reason for this rotation")
+    roles_rotate_parser.add_argument("--no-reload", action="store_true", help="Skip the gate hot-reload attempt (still prints restart guidance)")
+    roles_rotate_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-362: enrollment code management (remote agent credential enrollment)
     roles_enroll_code_parser = roles_subparsers.add_parser("enroll-code", help="AIPOS-362: generate a one-time enrollment code for remote agent credential bootstrap")
     roles_enroll_code_parser.add_argument("--role", required=True, help="Role to bind (e.g., executor, auditor, or custom role)")
@@ -1975,6 +1985,41 @@ def build_parser() -> argparse.ArgumentParser:
     gov_list_decl.add_argument("--json", action="store_true", help="Output JSON")
 
     return parser
+
+
+def _render_token_lifecycle_result(result: dict[str, Any]) -> None:
+    """AIPOS-F21: human rendering for roles rotate / remove --instance.
+
+    Prints fingerprints ONLY — the raw token plaintext never reaches stdout.
+    """
+    if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons"):
+        print(f"BLOCKED ({result.get('operation')}): ")
+        for item in result.get("blocking_reasons") or []:
+            print(f"  - {item.get('message') if isinstance(item, dict) else item}")
+        return
+    print(f"OK ({result.get('operation')})")
+    for entry in result.get("would_rotate") or []:
+        label = entry.get("instance") or "(unbound)"
+        print(f"  would rotate  {entry.get('role', ''):<16} {label:<36} {entry.get('fingerprint', '')}")
+    for entry in result.get("rotated") or []:
+        label = entry.get("instance") or "(unbound)"
+        print(f"  rotated       {entry.get('role', ''):<16} {label:<36} {entry.get('old_fingerprint', '')} -> {entry.get('new_fingerprint', '')}")
+    for entry in result.get("removed") or []:
+        label = entry.get("instance") or "(unbound)"
+        print(f"  removed       {entry.get('role', ''):<16} {label:<36} {entry.get('fingerprint', '')}")
+    if result.get("backup_path"):
+        print(f"  backup: {result['backup_path']} (0600)")
+    for key in ("rotation_record", "removal_record"):
+        if result.get(key):
+            print(f"  record: {result[key]}")
+    if result.get("gate_reload"):
+        print(f"  gate reload: {result['gate_reload']}")
+    for line in result.get("restart_guidance") or []:
+        print(f"  {line}")
+    if result.get("dry_run"):
+        print("  Dry-run only: nothing was written.")
+    for line in result.get("next_steps") or []:
+        print(line)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2356,6 +2401,34 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"  Owner authorization ref: {owner_auth_ref}")
                     print(f"  Active custom roles: {list(updated.keys())}")
             elif args.roles_command == "remove":
+                instance = str(getattr(args, "instance", "") or "").strip() or None
+                name = str(getattr(args, "name", "") or "").strip() or None
+                if instance and name:
+                    print("Error: pass either a custom role name or --instance, not both", file=sys.stderr)
+                    return 1
+                if not instance and not name:
+                    print("Error: roles remove requires a custom role name or --instance <agent_instance>", file=sys.stderr)
+                    return 1
+                if instance:
+                    # AIPOS-F21: instance-token removal from connection.json (with record + gate reload)
+                    from tools.aipos_cli.token_rotation import remove_instance_report
+                    owner_auth_ref = str(getattr(args, "owner_authorization_ref", "") or "").strip() or None
+                    if not owner_auth_ref:
+                        print("Error: --owner-authorization-ref is required for instance token removal", file=sys.stderr)
+                        return 1
+                    result = remove_instance_report(
+                        workspace_root,
+                        instance=instance,
+                        owner_authorization_ref=owner_auth_ref,
+                        actor=owner_auth_ref,
+                        reason=str(getattr(args, "reason", "") or "").strip(),
+                        connection_target=connection_target,
+                    )
+                    if getattr(args, "json", False):
+                        print(render_json(result))
+                    else:
+                        _render_token_lifecycle_result(result)
+                    return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
                 # AIPOS-352F1: remove a custom role
                 from tools.aipos_cli.custom_roles import remove_custom_role
                 owner_auth_ref = str(getattr(args, "owner_authorization_ref", "") or "").strip() or None
@@ -2381,6 +2454,26 @@ def main(argv: list[str] | None = None) -> int:
                     if owner_auth_ref:
                         print(f"  Owner authorization ref: {owner_auth_ref}")
                     print(f"  Active custom roles: {list(updated.keys())}")
+            elif args.roles_command == "rotate":
+                # AIPOS-F21: two-phase service-token rotation
+                from tools.aipos_cli.token_rotation import rotate_tokens_report
+                roles_arg = str(getattr(args, "role", "") or "").strip()
+                roles_list = [r.strip() for r in roles_arg.split(",") if r.strip()] or None
+                result = rotate_tokens_report(
+                    workspace_root,
+                    dry_run=bool(getattr(args, "dry_run", False)),
+                    roles=roles_list,
+                    owner_authorization_ref=str(getattr(args, "owner_authorization_ref", "") or "").strip() or None,
+                    actor=str(getattr(args, "actor", "") or "").strip() or None,
+                    reason=str(getattr(args, "reason", "") or "").strip(),
+                    connection_target=connection_target,
+                    reload_gate=not bool(getattr(args, "no_reload", False)),
+                )
+                if getattr(args, "json", False):
+                    print(render_json(result))
+                else:
+                    _render_token_lifecycle_result(result)
+                return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
             elif args.roles_command == "enroll-code":
                 # AIPOS-362: generate enrollment code
                 from tools.aipos_cli.enrollment import create_enrollment_code
