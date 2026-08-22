@@ -159,6 +159,14 @@
         {
           "value": "task_progress_event",
           "description": "Task progress event record"
+        },
+        {
+          "value": "token_rotation",
+          "description": "AIPOS-F21: service-token rotation record (fingerprints only, never plaintext)"
+        },
+        {
+          "value": "token_removal",
+          "description": "AIPOS-F21: token-entry removal record (fingerprints only, never plaintext)"
         }
       ]
     },
