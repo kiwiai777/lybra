@@ -24,6 +24,8 @@ import json
 import os
 import secrets
 import socket
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -154,28 +156,36 @@ def converge_role_tokens(connection_data: dict[str, Any], role: str) -> tuple[li
 def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | None = None) -> dict[str, Any]:
     """调用 gate 的 lybra_roles_enroll_exchange MCP 动词兑换 enrollment code。
     
+    AIPOS-F23: code 可为自包含码(LYBRAENROLL1.*)——内嵌零 scope 运输凭证作 transport 认证,
+    不再需要任何 bootstrap token(码即运输认证); 旧裸码仍走 bootstrap token 路径(顾问内部用)。
+    
     Args:
         gate_url: Gate MCP URL (e.g., http://host:<gate-port>)
-        code: Enrollment code
-        bootstrap_token: Optional bootstrap token for HTTP transport auth.
-                        If not provided, tries LYBRA_BOOTSTRAP_TOKEN env var.
-                        Note: enrollment exchange itself is "public" (no scope required),
-                        but HTTP transport layer requires *some* valid bearer token.
+        code: Enrollment code(自包含码或旧裸码)
+        bootstrap_token: 旧裸码路径的 transport 凭证(自包含码自动忽略; 缺省读 LYBRA_BOOTSTRAP_TOKEN)
     
     Returns:
         MCP response dict with token_entry
     
     Raises:
-        RuntimeError: If exchange fails
+        RuntimeError: If exchange fails (含 ok=False 的原因与下一步, F9 标准)
     """
-    # Resolve bootstrap token: explicit > env > error
-    if not bootstrap_token:
+    from tools.aipos_cli.enrollment import decode_self_contained_code
+
+    sc = decode_self_contained_code(code)
+    inner_code = code
+    if sc is not None:
+        # F23: 自包含码 —— 内嵌运输凭证即 transport 认证(bootstrap 要求删除)
+        bootstrap_token = sc["transport_token"]
+        inner_code = sc["code"]
+    elif not bootstrap_token:
         bootstrap_token = os.environ.get("LYBRA_BOOTSTRAP_TOKEN", "").strip()
     if not bootstrap_token:
         raise RuntimeError(
-            "Bootstrap token required for HTTP transport authentication.\n"
-            "Provide via --bootstrap-token or set LYBRA_BOOTSTRAP_TOKEN env var.\n"
-            "Note: any valid token works (enrollment code is the real auth)."
+            "Bootstrap token required for HTTP transport authentication (legacy plain code).\n"
+            "Provide via --bootstrap-token or set LYBRA_BOOTSTRAP_TOKEN env var, or better: use a "
+            "self-contained code (LYBRAENROLL1.*) from `lybra roles enroll-code` — 码即运输认证, 无需 bootstrap。\n"
+            "Example: lybra roles enroll --code LYBRAENROLL1.<base64> --workspace ~/my-workstation"
         )
     
     url = f"{gate_url.rstrip('/')}/mcp"
@@ -185,7 +195,7 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
         "method": "tools/call",
         "params": {
             "name": "lybra_roles_enroll_exchange",
-            "arguments": {"code": code}
+            "arguments": {"code": inner_code}
         }
     }
     
@@ -196,7 +206,6 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
     }
     
     # AIPOS-R6K件②: 禁用环境代理(trust_env=False同义)。
-    # Gate流量永不经系统代理,对所有gate地址(不仅loopback)生效。
     proxy_handler = urllib.request.ProxyHandler({})
     opener = urllib.request.build_opener(proxy_handler)
     
@@ -212,9 +221,12 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
             result = json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8', errors='replace')
-        raise RuntimeError(f"HTTP {e.code}: {error_body}")
+        raise RuntimeError(f"HTTP {e.code}: {error_body[:300]}")
     except urllib.error.URLError as e:
-        raise RuntimeError(f"Failed to connect to gate: {e.reason}")
+        raise RuntimeError(
+            f"Failed to connect to gate ({url}): {e.reason}\n"
+            "下一步: 确认 gate 已 lybra serve 且地址可达; 自包含码内嵌 gate 地址, 码与 gate 不匹配时会走到这里。"
+        )
     except Exception as e:
         raise RuntimeError(f"Exchange failed: {e}")
     
@@ -228,19 +240,36 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
     
     # MCP result contains structuredContent with the actual tool response
     mcp_result = result["result"]
+    parsed: dict[str, Any] | None = None
     if "structuredContent" in mcp_result:
-        return mcp_result["structuredContent"]
+        parsed = mcp_result["structuredContent"]
     
     # Fallback: try to parse from content[0].text (legacy format)
-    if "content" in mcp_result and mcp_result["content"]:
+    if parsed is None and "content" in mcp_result and mcp_result["content"]:
         text_content = mcp_result["content"][0].get("text", "")
         if text_content:
             try:
-                return json.loads(text_content)
+                parsed = json.loads(text_content)
             except json.JSONDecodeError:
-                pass
+                parsed = None
     
-    raise RuntimeError(f"Cannot parse MCP response: {json.dumps(mcp_result)[:200]}")
+    if parsed is None:
+        raise RuntimeError(f"Cannot parse MCP response: {json.dumps(mcp_result)[:200]}")
+    
+    # F23 大項目C②: ok=False 必带原因与下一步(F9)——透传 gate 的 teaching error 字段
+    if not parsed.get("ok"):
+        reason = str(parsed.get("message") or parsed.get("error") or "unknown error")
+        next_step = str(parsed.get("suggested_next_action") or "")
+        details = parsed.get("details") if isinstance(parsed.get("details"), dict) else {}
+        if not next_step and isinstance(details, dict):
+            next_step = str(details.get("suggested_next_action") or "")
+        err_code = str(parsed.get("error_code") or "")
+        raise RuntimeError(
+            f"Enrollment exchange returned ok=False: {reason}"
+            + (f" (error_code={err_code})" if err_code else "")
+            + (f"\n下一步: {next_step}" if next_step else "")
+        )
+    return parsed
 
 
 def ensure_lybra_dir(workspace_root: Path) -> Path:
@@ -380,8 +409,90 @@ def validate_connection_complete(connection_data: dict[str, Any]) -> list[str]:
     return missing
 
 
-def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = None, owner_policy_ref: str | None = None) -> None:
+def is_governance_workspace(path: Path, governance_root: str | None = None) -> bool:
+    """F23 验收⑧/第九坑防护: 判定目标是否治理工作区(enroll 禁落治理仓)。
+
+    判据(任一命中即治理工作区):
+    ① 目标路径绝对化后 == 自包含码内嵌的 governance_root
+    ② 目标下存在 5_tasks/queue 目录(治理仓结构签名)
+    工位目录(pi harness 目录)不含这些结构 —— 历史实录: 误写把治理仓 .lybra/role
+    污染成 auditor 身份(第九坑)。
+    """
+    target = Path(path).resolve()
+    if governance_root:
+        try:
+            if target == Path(governance_root).expanduser().resolve():
+                return True
+        except (OSError, RuntimeError):
+            pass
+    return (target / "5_tasks" / "queue").is_dir()
+
+
+def land_enrollment_code(
+    gate_url: str,
+    code: str,
+    *,
+    transport_token: str | None = None,
+    landed_detail: str = "",
+) -> bool:
+    """F23 验收⑦: 落盘成功后调 lybra_roles_enroll_land 关闭 grace 窗口。
+
+    落盘失败时绝不调(码留在 grace 窗口内可免费重试)。失败不抛 —— 上层已落盘成功,
+    land 失败只降级为告警(码最终由 grace 过期自然消费, 不影响工位可用性)。
+    """
+    from tools.aipos_cli.enrollment import decode_self_contained_code
+    sc = decode_self_contained_code(code)
+    inner_code = sc["code"] if sc is not None else code
+    bearer = transport_token or (sc["transport_token"] if sc is not None else "")
+    if not bearer:
+        bearer = os.environ.get("LYBRA_BOOTSTRAP_TOKEN", "").strip()
+    url = f"{gate_url.rstrip('/')}/mcp"
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "lybra_roles_enroll_land",
+            "arguments": {"code": inner_code, "landed_detail": landed_detail[:400]},
+        },
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {bearer}",
+    }
+    proxy_handler = urllib.request.ProxyHandler({})
+    opener = urllib.request.build_opener(proxy_handler)
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
+    )
+    try:
+        with opener.open(req, timeout=15) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except Exception as e:
+        print(f"[enroll] WARNING: land call failed (码将由 grace 窗口过期自然消费): {e}", file=sys.stderr)
+        return False
+    parsed = None
+    mcp_result = result.get("result") or {}
+    if isinstance(mcp_result, dict):
+        if "structuredContent" in mcp_result:
+            parsed = mcp_result["structuredContent"]
+        elif mcp_result.get("content"):
+            try:
+                parsed = json.loads(mcp_result["content"][0].get("text", ""))
+            except (json.JSONDecodeError, KeyError, IndexError):
+                parsed = None
+    if not (isinstance(parsed, dict) and parsed.get("ok")):
+        print(f"[enroll] WARNING: land returned not-ok: {json.dumps(parsed)[:200] if parsed else result}", file=sys.stderr)
+        return False
+    return True
+
+
+def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = None, owner_policy_ref: str | None = None) -> list[str]:
     """写入 .lybra/role 文件(统一JSON格式,AIPOS-R6H靶②)。
+    
+    AIPOS-F23 验收⑨: 合并保留既有键 —— 禁整文件覆盖。既有 owner_policy_ref 等键
+    若新值未提供则原样保留; 新值提供则覆盖。返回实际写入的键清单。
     
     Args:
         lybra_dir: .lybra目录路径
@@ -390,16 +501,24 @@ def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = Non
         owner_policy_ref: owner策略引用(可选)
     """
     role_file = lybra_dir / "role"
-    role_data = {
-        "role": role,
-    }
+    role_data: dict[str, Any] = {}
+    # 验收⑨: 先读既有文件(存在且合法 JSON 则并入, 既有键默认保留)
+    if role_file.exists():
+        try:
+            existing = json.loads(role_file.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                role_data = dict(existing)
+        except (json.JSONDecodeError, OSError):
+            role_data = {}
+    role_data["role"] = role
     if agent_instance:
         role_data["instance"] = agent_instance
     if owner_policy_ref:
         role_data["owner_policy_ref"] = owner_policy_ref
-    
+    role_data["enrolled_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     role_file.write_text(json.dumps(role_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     role_file.chmod(0o644)
+    return sorted(role_data.keys())
 
 
 def write_actor_file(lybra_dir: Path, actor: str) -> None:
@@ -439,12 +558,13 @@ def enroll(
     """执行完整的 enroll 流程。
     
     Args:
-        code: Enrollment code(从 owner/advisor 获得)。None = 幂等补铸模式 (AIPOS-C2 大项B):
+        code: Enrollment code(自包含码 LYBRAENROLL1.* 或旧裸码; 从 owner/advisor 获得)。None = 幂等补铸模式 (AIPOS-C2 大项B):
               只按 config.schema 必填键铸全 connection.json (含 workspace_root), 不动 token。
-        gate_url: Gate MCP URL
-        workspace_root: Workspace root(落配置的目标目录,不需要预先存在)
+        gate_url: Gate MCP URL(自包含码可传内嵌地址, 此参数仅作显式覆盖/兼容)
+        workspace_root: Workspace root(落配置的目标目录,不需要预先存在; 必须是工位目录 ——
+              治理工作区会被拒绝, F23 验收⑧/第九坑)
         policy: Optional policy reference(如未提供,从 gate 返回中提取或不设置)
-        bootstrap_token: Optional bootstrap token for HTTP transport auth(any valid token)
+        bootstrap_token: 旧裸码路径的 transport 凭证(自包含码自动忽略)
         verify: AIPOS-R6S 大项C② — enroll 后立刻用新 token 调一次 gate, 不通即报错并回滚
     
     Returns:
@@ -459,21 +579,43 @@ def enroll(
             "workspace_root": str,
             "lybra_dir": str,
             "files_written": list[str],
+            "landed": bool | None,  # F23: 落盘确认(grace 窗口关闭); backfill 为 None
             "verify": dict | None,  # AIPOS-R6S 大项C②
         }
     
     Raises:
-        RuntimeError: If enrollment fails
+        RuntimeError: If enrollment fails (含 F9 带路文案)
     
     Note:
         FIX-1: workspace_root 不需要预先存在。Enroll 只需要落 .lybra/ 配置,
         不需要队列结构(队列在 gate 侧)。新机零手工上线。
+        F23: 交换与落盘原子 —— 落盘成功才调 land; 落盘抛异常则不 land,
+        码留在 grace 窗口内可免费重试(返回同一 token)。
     """
+    from tools.aipos_cli.enrollment import decode_self_contained_code
+
     workspace_root = workspace_root.resolve()
-    
+
+    # F23: 自包含码解析(内嵌 gate 地址优先; 显式 gate_url 参数可覆盖)
+    sc = decode_self_contained_code(code) if code is not None else None
+    governance_root: str | None = None
+    effective_gate_url = gate_url
+    if sc is not None:
+        governance_root = sc.get("governance_root") or None
+        if not (gate_url and gate_url.strip()):
+            effective_gate_url = sc["gate_url"]
+
     # FIX-1: 确保 workspace_root 存在(对空目录新机零手工上线)
     workspace_root.mkdir(parents=True, exist_ok=True)
-    
+
+    # F23 验收⑧/第九坑: enroll 落盘只有一个目标 —— 工位 .lybra/; 治理工作区拒绝
+    if code is not None and is_governance_workspace(workspace_root, governance_root):
+        raise RuntimeError(
+            f"enroll 目标是治理工作区({workspace_root}), 拒绝落盘 —— enroll 只落工位目录 .lybra/。\n"
+            "下一步: 在工位目录(pi harness 目录)运行, 或用 --workspace 指向工位目录。\n"
+            "可抄示例: lybra roles enroll --code <码> --workspace ~/workstations/my-agent"
+        )
+
     # Step 2: 确保 .lybra/ 目录存在
     lybra_dir = ensure_lybra_dir(workspace_root)
     
@@ -484,11 +626,12 @@ def enroll(
     token_entry: dict[str, Any] | None = None
     token_value: str | None = None
     rotated = False
+    landed: bool | None = None
     
     # Step 1: Exchange enrollment code for token (backfill 模式 code=None 则跳过, 不动 token)
     if code is not None:
         try:
-            exchange_result = exchange_enrollment_code(gate_url, code, bootstrap_token)
+            exchange_result = exchange_enrollment_code(effective_gate_url, code, bootstrap_token)
         except RuntimeError as exc:
             raise RuntimeError(f"Enrollment exchange failed: {exc}") from exc
         
@@ -509,7 +652,7 @@ def enroll(
             raise RuntimeError("token_entry missing 'role' field")
     
     # Step 3: 加载或创建 connection.json (AIPOS-C2 大项B: 铸全 workspace_root)
-    connection_data = load_or_create_connection_json(lybra_dir, gate_url, workspace_root)
+    connection_data = load_or_create_connection_json(lybra_dir, effective_gate_url, workspace_root)
     
     # Step 4: Upsert token entry(幂等; backfill 模式 token_entry=None 则不动 token)
     if token_entry is not None:
@@ -527,22 +670,31 @@ def enroll(
     write_connection_json(lybra_dir, connection_data)
     files_written = ["connection.json"]
     
-    # Step 6: 写入自发现配置文件 (统一JSON格式); backfill 模式不动 role/token
+    # Step 6: 写入自发现配置文件 (统一JSON格式, 验收⑨合并保留既有键); backfill 模式不动 role/token
     if code is not None and role:
         write_role_file(lybra_dir, role, agent_instance, policy)
         files_written.append("role")
+
+    # F23 验收⑦: 落盘全部成功后才 land(关 grace 窗口, 码彻底消费); land 失败仅告警
+    if code is not None:
+        landed = land_enrollment_code(
+            effective_gate_url,
+            code,
+            transport_token=(sc["transport_token"] if sc is not None else None),
+            landed_detail=f"workstation={workspace_root} files={files_written}",
+        )
     
     # Step 7 (AIPOS-R6S 大项C②): 可选 --verify — 新 token 调一次 gate, 不通即回滚
     verify_result = None
     if verify:
         if not token_value:
             raise RuntimeError("token_entry missing 'token' — cannot verify")
-        ok, detail = verify_token_against_gate(gate_url, token_value)
+        ok, detail = verify_token_against_gate(effective_gate_url, token_value)
         verify_result = {"ok": ok, "detail": detail}
         if not ok:
             # 回滚: 移除刚写入的 token(禁静默留坏配置)
             try:
-                rollback_data = load_or_create_connection_json(lybra_dir, gate_url, workspace_root)
+                rollback_data = load_or_create_connection_json(lybra_dir, effective_gate_url, workspace_root)
                 rollback_data["tokens"] = [
                     t for t in rollback_data.get("tokens", [])
                     if not (t.get("agent_instance") == agent_instance or (not agent_instance and t.get("role") == role))
@@ -565,7 +717,9 @@ def enroll(
         "workspace_root": str(workspace_root),
         "lybra_dir": str(lybra_dir),
         "files_written": files_written,
+        "landed": landed,
         "verify": verify_result,
+        "next_step": "上岗完成: 接着 /lybra sync 然后 /reload" if code is not None else None,
     }
 
 

@@ -140,7 +140,10 @@ const loopSrc = readFileSync(new URL("../lybra-loop.ts", import.meta.url), "utf8
     /execFileSync\(binRes\.bin, \["sync", "--harness-root", harnessRoot\]/.test(loopSrc),
   );
   // ② 禁第二遍实现同步逻辑: sync 处理块内无 fetch/http 调用、无逐文件写循环(只透传)
-  const syncBlock = loopSrc.slice(loopSrc.indexOf('if (sub === "sync")'), loopSrc.indexOf('if (sub === "on")'));
+  // (AIPOS-F23: 块窗口精确到 sync 分支自身 —— 下一个 if (sub === ...) 为界, 不吞后续新增子命令)
+  const syncStart = loopSrc.indexOf('if (sub === "sync")');
+  const nextBranch = loopSrc.indexOf('\n      if (sub ===', syncStart + 10);
+  const syncBlock = loopSrc.slice(syncStart, nextBranch === -1 ? undefined : nextBranch);
   check(
     "B: 薄壳红线 — sync 块内无 fetch/http(第二遍实现同步逻辑)",
     !/fetch\(|http\.request|https\.request/.test(syncBlock),

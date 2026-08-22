@@ -48,6 +48,11 @@ class HttpSseConfig:
     keepalive_seconds: float = DEFAULT_KEEPALIVE_SECONDS
     max_keepalive_events: int | None = None
     service_role_registry: dict[str, dict[str, Any]] | None = None
+    # AIPOS-F23 FIX: 热重载必须回到启动时的同一凭据源(此前 reload 硬猜 home_root,
+    # --service-connection-json 模式的 gate 一重载就换成 home 注册表 → 自我丢凭据)。
+    # mode: "connection"(单 connection.json)| "home_root"(统一 home 注册表)| None(单 token 模式)
+    service_registry_mode: str | None = None
+    service_registry_source: str | None = None
     # AIPOS-356: when True, set SO_REUSEPORT on the listening socket so a new
     # process can bind the same port while the old one is still draining.
     # This enables zero-downtime deploy (graceful handoff between snapshots).
@@ -480,46 +485,62 @@ class LybraMcpHttpSseServer(ThreadingHTTPServer):
         super().server_bind()
     
     def reload_token_registry(self) -> None:
-        """FIX-2: 热重载 token registry(从 connection.json 重新加载)。"""
+        """FIX-2: 热重载 token registry(从启动时的同一凭据源重新加载)。
+
+        AIPOS-F23 FIX: reload 回到 config.service_registry_source(--service-connection-json 的
+        gate 重载同一文件; --home-root 的 gate 重载同一 home)。旧实现硬猜 home_root 默认路径,
+        connection 模式的 gate 一重载就整表换成 home 注册表(自我丢凭据, 活体发现于 F23 验收)。
+        mode 未知(旧进程/测试构造)时保持旧回退行为。
+        """
         from pathlib import Path
         debug_log = Path("/tmp/reload_debug.log")
-        
+
         with debug_log.open("a") as f:
             f.write(f"\n=== reload_token_registry() started ===\n")
             f.write(f"service_role_registry is None: {self.lybra_config.service_role_registry is None}\n")
             f.flush()
-        
+
         if self.lybra_config.service_role_registry is None:
             return  # 单 token 模式,无需重载
-        
-        # 根据启动模式重新加载 registry
-        # Gate 现在用 home_root 模式启动(--home-root),需要从 unified registry 重载
+
+        mode = getattr(self.lybra_config, "service_registry_mode", None)
+        source = getattr(self.lybra_config, "service_registry_source", None)
         try:
+            if mode == "connection" and source:
+                # F23 FIX: connection 模式 → 重载同一 connection.json
+                self.lybra_config.service_role_registry = load_service_role_registry(source)
+                print(f"[HTTP/SSE] Token registry reloaded from connection.json: {source}", file=sys.stderr)
+                return
+            if mode == "home_root" and source:
+                self.lybra_config.service_role_registry = load_unified_service_role_registry(source)
+                print(f"[HTTP/SSE] Token registry reloaded from home_root: {source}", file=sys.stderr)
+                return
+
+            # 旧回退(启动源未记录): 尝试从环境变量或默认路径获取 home_root
             import os
-            
-            # 尝试从环境变量或默认路径获取 home_root
+
             home_root_str = os.environ.get('LYBRA_HOME_ROOT', '').strip()
             if not home_root_str:
                 # 默认: ~/ai-project-os/2_projects (kiwiai 标准部署)
                 home_root_str = str(Path.home() / 'ai-project-os' / '2_projects')
-            
+
             home_root = Path(home_root_str).expanduser().resolve()
-            
+
             with debug_log.open("a") as f:
                 f.write(f"home_root: {home_root}\n")
                 f.write(f"home_root exists: {home_root.exists()}\n")
                 f.flush()
-            
+
             if home_root.exists():
                 # 使用 load_unified_service_role_registry (home 模式)
                 old_count = len(self.lybra_config.service_role_registry)
                 self.lybra_config.service_role_registry = load_unified_service_role_registry(home_root)
                 new_count = len(self.lybra_config.service_role_registry)
-                
+
                 with debug_log.open("a") as f:
                     f.write(f"Registry reloaded: {old_count} -> {new_count} tokens\n")
                     f.flush()
-                
+
                 print(f"[HTTP/SSE] Token registry reloaded from home_root: {home_root} ({old_count}->{new_count} tokens)", file=sys.stderr)
             else:
                 with debug_log.open("a") as f:
@@ -684,6 +705,8 @@ def service_config_from_connection(host: str, port: int, keepalive_seconds: floa
         token="",
         keepalive_seconds=keepalive_seconds,
         service_role_registry=load_service_role_registry(connection_json),
+        service_registry_mode="connection",
+        service_registry_source=str(Path(connection_json).expanduser().resolve()),
         reuse_port=reuse_port,
     )
 
@@ -696,5 +719,7 @@ def service_config_from_home_root(host: str, port: int, keepalive_seconds: float
         token="",
         keepalive_seconds=keepalive_seconds,
         service_role_registry=load_unified_service_role_registry(home_root),
+        service_registry_mode="home_root",
+        service_registry_source=str(Path(home_root).expanduser().resolve()),
         reuse_port=reuse_port,
     )

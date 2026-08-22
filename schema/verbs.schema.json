@@ -758,6 +758,203 @@
         "additionalProperties": false
       }
     },
+    "lybra_enroll_code_dry_run": {
+      "description": "AIPOS-F23: advisor-driven enrollment code issuance (preview). Issues a SELF-CONTAINED code embedding gate_url/governance_root/transport credential (base64). Owner-gated via owner_authorization_ref. Same implementation as CLI `lybra roles enroll-code` (single issuance source, two projections).",
+      "phase": "dry_run",
+      "base_verb": "lybra_enroll_code",
+      "confirm_verb": "lybra_enroll_code_confirm",
+      "confirm_via": "dry_run_token",
+      "surface": [
+        "cli",
+        "mcp"
+      ],
+      "cli_command": "lybra roles enroll-code",
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": true,
+        "self_confirm_allowed": [
+          "advisor_with_owner_confirmed_literal"
+        ],
+        "self_confirm_mechanism": "AIPOS-328: advisor self-confirm with owner_confirmation_token='OWNER_CONFIRMED' literal",
+        "owner_confirmation_required_in_response": false,
+        "client_hint_template": "AIPOS-328: 顾问自行confirm。使用 lybra_enroll_code_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。confirm 输出含可转贴的 /lybra enroll 指令文本。"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "Role to bind (e.g., executor, auditor, or registered custom role)"
+          },
+          "instance": {
+            "type": "string",
+            "description": "Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance"
+          },
+          "ttl": {
+            "type": "integer",
+            "description": "Code time-to-live in seconds (default 86400 = 24h; also bounds the embedded transport credential)"
+          },
+          "gate_url": {
+            "type": "string",
+            "description": "Externally reachable gate URL to embed (e.g., http://host:7118); defaults to connection.json mcp.rpc_url if non-loopback, else http://127.0.0.1:7118"
+          },
+          "owner_authorization_ref": {
+            "type": "string",
+            "description": "Reference to owner authorization for this enrollment (owner-gated)"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for generating this enrollment code"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Issuing actor"
+          },
+          "agent_instance": {
+            "type": "string",
+            "description": "Issuing agent instance"
+          }
+        },
+        "required": [
+          "role",
+          "owner_authorization_ref"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_enroll_code_confirm": {
+      "description": "AIPOS-F23: confirm enrollment code issuance. Mints the self-contained code and returns a paste-ready session instruction: /lybra enroll <code>",
+      "phase": "confirm",
+      "base_verb": "lybra_enroll_code",
+      "dry_run_verb": "lybra_enroll_code_dry_run",
+      "confirm_via": "dry_run_token",
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [
+          "advisor_with_owner_confirmed_literal"
+        ],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dry_run_token": {
+            "type": "string",
+            "description": "Token from lybra_enroll_code_dry_run"
+          },
+          "owner_confirmation_token": {
+            "type": "string",
+            "description": "Owner confirmation literal (AIPOS-328: 'OWNER_CONFIRMED')"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dry_run_token",
+          "owner_confirmation_token"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_roles_enroll_exchange": {
+      "description": "AIPOS-362/F23: exchange an enrollment code (plain or self-contained) for a capability token. PUBLIC at operation level — the code itself is the authentication (transport auth = embedded transport credential for self-contained codes). Atomic landing (F23): first exchange opens a grace window (code retryable for the SAME token until landed or grace expiry); client calls lybra_roles_enroll_land after writing workstation config.",
+      "phase": "single",
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Enrollment code (self-contained LYBRAENROLL1.<base64> or plain code)"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_roles_enroll_land": {
+      "description": "AIPOS-F23: confirm the workstation landed its config (marks the enrollment landed; closes the grace window; after this the code is fully consumed). PUBLIC at operation level — called with the same code (code itself is the auth).",
+      "phase": "single",
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Enrollment code (self-contained or plain) that was exchanged"
+          },
+          "landed_detail": {
+            "type": "string",
+            "description": "Optional landing evidence note (e.g. workstation root + files written)"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_roles_enroll_revoke": {
+      "description": "AIPOS-362: revoke an enrollment code. Idempotent. Owner-gated: requires owner_authorization_ref.",
+      "phase": "single",
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "code_id": {
+            "type": "string",
+            "description": "Enrollment code ID to revoke"
+          },
+          "owner_authorization_ref": {
+            "type": "string",
+            "description": "Reference to owner authorization for this revocation"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for revoking"
+          }
+        },
+        "required": [
+          "code_id",
+          "owner_authorization_ref"
+        ],
+        "additionalProperties": false
+      }
+    },
     "lybra_audit_dispatch_dry_run": {
       "description": "Dispatch an audit (preview). AIPOS-C1: idempotent — if audit card already exists, supplements dispatch record instead of blocking.",
       "phase": "dry_run",

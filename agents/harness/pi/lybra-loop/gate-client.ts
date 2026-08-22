@@ -439,6 +439,39 @@ export class GateMcpClient {
     const tasks = data && typeof data === "object" ? (data as { tasks?: unknown }).tasks : undefined;
     return Array.isArray(tasks) ? (tasks as AnyDict[]) : [];
   }
+
+  /**
+   * AIPOS-F23: 无 schema 原始调用器 —— /lybra enroll 专用。
+   *
+   * 新工位上岗时(一贴 /lybra enroll)机器上还没有分发 schema(那是 /lybra sync 的事),
+   * 所以 enroll 链路不能依赖 callTool 的 schema 校验。本方法直接发 tools/call 并解析
+   * structuredContent(或 legacy content[0].text),不读 verbs.schema.json。
+   * 仅限 enroll 家族动词(exchange/land/gate_version)——其余动词一律走 schema 校验的 callTool。
+   */
+  async callToolRaw(name: string, args: AnyDict): Promise<AnyDict> {
+    const result = await this._rpc("tools/call", { name, arguments: args });
+    if (!result || typeof result !== "object") {
+      throw new GateError(`${name} 返回无 result`);
+    }
+    const structured = (result as { structuredContent?: unknown }).structuredContent;
+    if (structured && typeof structured === "object") {
+      return structured as AnyDict;
+    }
+    // legacy: content[0].text(JSON 字符串)
+    const content = (result as { content?: unknown }).content;
+    if (Array.isArray(content) && content.length > 0) {
+      const text = (content[0] as { text?: unknown }).text;
+      if (typeof text === "string" && text) {
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed && typeof parsed === "object") return parsed as AnyDict;
+        } catch {
+          // 非JSON → 落到下面的报错
+        }
+      }
+    }
+    throw new GateError(`${name} 返回无 structuredContent`);
+  }
 }
 
 // ---------------------------------------------------------------------------
