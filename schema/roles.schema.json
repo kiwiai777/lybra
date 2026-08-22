@@ -57,9 +57,9 @@
     {
       "role": "planner",
       "token_ref": "svc-planner",
-      "scopes": ["draft_submit", "draft_publish"],
+      "scopes": ["draft_submit", "draft_publish", "queue_amend", "audit_dispatch", "envelope_mint"],
       "naming": { "prefix": "planner" },
-      "_note": "BYO external planning advisor's credential (gate role = planner). No tool_package in current distribute mapping."
+      "_note": "AIPOS-F24 大项C: planner scopes 扩充至产生侧动词集(draft/amend/dispatch/mint)。BYO external planning advisor's credential. No tool_package."
     },
     {
       "role": "advisor",

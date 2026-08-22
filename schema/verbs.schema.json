@@ -959,6 +959,296 @@
         "additionalProperties": false
       }
     },
+    "lybra_project_new_dry_run": {
+      "description": "AIPOS-F24: scaffold a fresh project under the governance home (preview). Creates queue structure, project.json, decision_log stub, and connection.json skeleton with mcp.rpc_url from gate config. Owner-gated via owner_authorization_ref. CLI薄壳模式: lybra project new 是本动词的薄壳,唯一实现在门内(调用 workspace_config.scaffold_project)。",
+      "phase": "dry_run",
+      "base_verb": "lybra_project_new",
+      "confirm_verb": "lybra_project_new_confirm",
+      "confirm_via": "dry_run_token",
+      "surface": [
+        "cli",
+        "mcp"
+      ],
+      "cli_command": "lybra project new",
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": true,
+        "self_confirm_allowed": [
+          "planner_with_owner_confirmed_literal"
+        ],
+        "self_confirm_mechanism": "AIPOS-F24: planner/advisor self-confirm with OWNER_CONFIRMED literal",
+        "owner_confirmation_required_in_response": false,
+        "client_hint_template": "项目顾问自行confirm。使用 lybra_project_new_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'。"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Project name (becomes <home>/<name>)"
+          },
+          "code_repo": {
+            "type": "string",
+            "description": "Optional absolute path to the project's code repo"
+          },
+          "home_root": {
+            "type": "string",
+            "description": "Governance home root; defaults to gate's serving home"
+          },
+          "collaboration_profile": {
+            "type": "object",
+            "description": "Optional collaboration profile settings"
+          },
+          "owner_authorization_ref": {
+            "type": "string",
+            "description": "Owner authorization reference (owner-gated)"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Provenance actor (registered_by)"
+          },
+          "agent_instance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "owner_authorization_ref"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_project_new_confirm": {
+      "description": "AIPOS-F24: confirm project scaffold creation",
+      "phase": "confirm",
+      "base_verb": "lybra_project_new",
+      "dry_run_verb": "lybra_project_new_dry_run",
+      "confirm_via": "dry_run_token",
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [
+          "planner_with_owner_confirmed_literal"
+        ],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dry_run_token": {
+            "type": "string",
+            "description": "Token from lybra_project_new_dry_run"
+          },
+          "owner_confirmation_token": {
+            "type": "string",
+            "description": "OWNER_CONFIRMED literal"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dry_run_token",
+          "owner_confirmation_token"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_project_set_repo_dry_run": {
+      "description": "AIPOS-F24: set/update a project's code_repo mapping (preview). Owner-gated. CLI薄壳: lybra project set-repo 是本动词的薄壳。",
+      "phase": "dry_run",
+      "base_verb": "lybra_project_set_repo",
+      "confirm_verb": "lybra_project_set_repo_confirm",
+      "confirm_via": "dry_run_token",
+      "surface": [
+        "cli",
+        "mcp"
+      ],
+      "cli_command": "lybra project set-repo",
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": true,
+        "self_confirm_allowed": [
+          "planner_with_owner_confirmed_literal"
+        ],
+        "owner_confirmation_required_in_response": false,
+        "client_hint_template": "项目顾问自行confirm。"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Established project name"
+          },
+          "code_repo": {
+            "type": "string",
+            "description": "Absolute path to the code repo"
+          },
+          "home_root": {
+            "type": "string",
+            "description": "Governance home root"
+          },
+          "owner_authorization_ref": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "code_repo",
+          "owner_authorization_ref"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_project_set_repo_confirm": {
+      "description": "AIPOS-F24: confirm code_repo update",
+      "phase": "confirm",
+      "base_verb": "lybra_project_set_repo",
+      "dry_run_verb": "lybra_project_set_repo_dry_run",
+      "confirm_via": "dry_run_token",
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [
+          "planner_with_owner_confirmed_literal"
+        ],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dry_run_token": {
+            "type": "string"
+          },
+          "owner_confirmation_token": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dry_run_token",
+          "owner_confirmation_token"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_roles_register_dry_run": {
+      "description": "AIPOS-F24: register a custom role (name → builtin class mapping) in project.json (preview). Owner-gated. CLI薄壳: lybra roles register 是本动词的薄壳。",
+      "phase": "dry_run",
+      "base_verb": "lybra_roles_register",
+      "confirm_verb": "lybra_roles_register_confirm",
+      "confirm_via": "dry_run_token",
+      "surface": [
+        "cli",
+        "mcp"
+      ],
+      "cli_command": "lybra roles register",
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": true,
+        "self_confirm_allowed": [
+          "planner_with_owner_confirmed_literal"
+        ],
+        "owner_confirmation_required_in_response": false,
+        "client_hint_template": "项目顾问自行confirm。"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Custom role name"
+          },
+          "builtin_class": {
+            "type": "string",
+            "description": "Built-in role class to map to"
+          },
+          "workspace_root": {
+            "type": "string",
+            "description": "Workspace root; defaults to gate's serving workspace"
+          },
+          "owner_authorization_ref": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "builtin_class",
+          "owner_authorization_ref"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_roles_register_confirm": {
+      "description": "AIPOS-F24: confirm custom role registration",
+      "phase": "confirm",
+      "base_verb": "lybra_roles_register",
+      "dry_run_verb": "lybra_roles_register_dry_run",
+      "confirm_via": "dry_run_token",
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [
+          "planner_with_owner_confirmed_literal"
+        ],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dry_run_token": {
+            "type": "string"
+          },
+          "owner_confirmation_token": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dry_run_token",
+          "owner_confirmation_token"
+        ],
+        "additionalProperties": false
+      }
+    },
     "lybra_audit_dispatch_dry_run": {
       "description": "Dispatch an audit (preview). AIPOS-C1: idempotent — if audit card already exists, supplements dispatch record instead of blocking.",
       "phase": "dry_run",

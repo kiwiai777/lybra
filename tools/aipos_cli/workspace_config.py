@@ -660,6 +660,36 @@ def write_project_json(
     return path
 
 
+def _write_connection_skeleton(workspace_root: Path, rpc_url: str) -> None:
+    """AIPOS-F24 大项D: Write connection.json skeleton with mcp.rpc_url.
+    
+    Minimal skeleton for project initialization (before lybra serve). Contains:
+    - config_version, mode, workspace_root
+    - mcp.rpc_url (from gate's own config)
+    - empty tokens list (populated by lybra serve or enroll)
+    
+    This allows project advisors to use gate verbs immediately after project creation.
+    """
+    local_dir = workspace_root / ".lybra"
+    local_dir.mkdir(parents=True, exist_ok=True)
+    
+    connection_file = local_dir / "connection.json"
+    skeleton = {
+        "config_version": 1,
+        "mode": "service_v0",
+        "workspace_root": str(workspace_root),
+        "local_only": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "mcp": {
+            "rpc_url": rpc_url
+        },
+        "tokens": [],
+        "secrets_notice": "Raw role tokens are local secrets. Anyone who can read this file can use the listed local role scopes."
+    }
+    
+    connection_file.write_text(json.dumps(skeleton, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def scaffold_project(
     home_root: str | Path,
     name: str,
@@ -667,6 +697,7 @@ def scaffold_project(
     code_repo: str | Path | None = None,
     registered_by: str = "owner",
     collaboration_profile: dict[str, Any] | None = None,
+    gate_rpc_url: str | None = None,
 ) -> Path:
     """Owner scaffold of a fresh per-project truth root under the home.
 
@@ -678,6 +709,9 @@ def scaffold_project(
     
     AIPOS-335: collaboration_profile is optional. When provided, it will be written to
     project.json; when None, project.json will not have this field (for backward compatibility).
+    
+    AIPOS-F24 (大项D): gate_rpc_url is optional. When provided (from gate verb), writes a
+    connection.json skeleton with mcp.rpc_url. CLI callers omit this (backward compat).
     """
     clean = str(name).strip()
     if not clean:
@@ -701,6 +735,11 @@ def scaffold_project(
         decision_log.write_text(f"# {clean} Decision Log\n", encoding="utf-8")
 
     write_project_json(root, clean, code_repo=code_repo, registered_by=registered_by, collaboration_profile=collaboration_profile)
+    
+    # AIPOS-F24 大项D: connection.json 骨架(含 mcp.rpc_url)
+    if gate_rpc_url:
+        _write_connection_skeleton(root, gate_rpc_url)
+    
     return root
 
 

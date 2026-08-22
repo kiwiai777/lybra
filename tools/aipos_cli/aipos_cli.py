@@ -2382,33 +2382,76 @@ def main(argv: list[str] | None = None) -> int:
                     if result.get("unbound"):
                         print(f"Unbound roles: {', '.join(result['unbound'])}")
             elif args.roles_command == "register":
-                # AIPOS-352F1: register a custom role
-                from tools.aipos_cli.custom_roles import register_custom_role
+                # AIPOS-F24 大项A: 薄壳模式 - 调用门动词 lybra_roles_register
+                from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token
                 owner_auth_ref = str(getattr(args, "owner_authorization_ref", "") or "").strip() or None
                 reason = str(getattr(args, "reason", "") or "").strip()
-                by = owner_auth_ref or "owner"
-                updated = register_custom_role(
-                    workspace_root,
-                    args.name,
-                    args.builtin_class,
-                    by=by,
-                    reason=reason or (f"owner-authorization-ref: {owner_auth_ref}" if owner_auth_ref else ""),
-                )
-                result = {
-                    "ok": True,
-                    "operation": "roles_register",
-                    "name": args.name,
-                    "builtin_class": args.builtin_class,
-                    "owner_authorization_ref": owner_auth_ref,
-                    "custom_roles": updated,
-                }
-                if getattr(args, "json", False):
-                    print(render_json(result))
-                else:
-                    print(f"Registered custom role '{args.name}' → class '{args.builtin_class}'")
-                    if owner_auth_ref:
-                        print(f"  Owner authorization ref: {owner_auth_ref}")
-                    print(f"  Active custom roles: {list(updated.keys())}")
+                
+                if not owner_auth_ref:
+                    print("Error: --owner-authorization-ref is required (owner-gated)", file=sys.stderr)
+                    return 1
+                
+                # 连接信息
+                conn_override = getattr(args, "connection_json", None)
+                connection_target = Path(conn_override).expanduser() if conn_override else None
+                conn_path = Path(connection_target or (workspace_root / ".lybra" / "connection.json")).expanduser()
+                if not conn_path.exists():
+                    print(f"Error: connection.json not found: {conn_path}", file=sys.stderr)
+                    print("Hint: 在治理工作区运行或 --connection-json 指定", file=sys.stderr)
+                    return 1
+                
+                conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
+                rpc_url = str(((conn_data.get("mcp") or {}).get("rpc_url")) or "").strip()
+                if not rpc_url:
+                    print(f"Error: connection.json has no mcp.rpc_url: {conn_path}", file=sys.stderr)
+                    return 1
+                
+                base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
+                token = None
+                for role in ("advisor", "planner", "owner"):
+                    try:
+                        token = load_owner_token(connection_json=conn_path, role=role)
+                        break
+                    except ValueError:
+                        continue
+                if not token:
+                    print(f"Error: no usable token in {conn_path}", file=sys.stderr)
+                    return 1
+                
+                try:
+                    client = GateClient(base_url, token, timeout=30.0)
+                    dry = client.call_tool("lybra_roles_register_dry_run", {
+                        "name": args.name,
+                        "builtin_class": args.builtin_class,
+                        "workspace_root": str(workspace_root),
+                        "owner_authorization_ref": owner_auth_ref,
+                        "reason": reason,
+                        "actor": "cli:roles-register",
+                    })
+                    if not dry.get("ok"):
+                        print(f"Error: gate rejected: {json.dumps(dry, ensure_ascii=False)[:800]}", file=sys.stderr)
+                        return 1
+                    
+                    confirm = client.call_tool("lybra_roles_register_confirm", {
+                        "dry_run_token": dry.get("dry_run_token"),
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                        "actor": "cli:roles-register",
+                    })
+                    if not confirm.get("ok"):
+                        print(f"Error: gate rejected confirm: {json.dumps(confirm, ensure_ascii=False)[:800]}", file=sys.stderr)
+                        return 1
+                    
+                    result = confirm
+                    if getattr(args, "json", False):
+                        print(render_json(result))
+                    else:
+                        print(f"Registered custom role '{args.name}' → class '{args.builtin_class}' (via gate verb)")
+                        if owner_auth_ref:
+                            print(f"  Owner authorization ref: {owner_auth_ref}")
+                        print(f"  Active custom roles: {list(result.get('custom_roles', {}).keys())}")
+                except GateError as exc:
+                    print(f"Error: gate call failed: {exc}", file=sys.stderr)
+                    return 1
             elif args.roles_command == "remove":
                 instance = str(getattr(args, "instance", "") or "").strip() or None
                 name = str(getattr(args, "name", "") or "").strip() or None
@@ -2771,24 +2814,161 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 home = resolve_home_root(explicit_root=args.home_root)
             if args.project_command == "new":
-                # AIPOS-335 S2: 交互式询问项目类型
+                # AIPOS-F24 大项A: 薄壳模式 - 调用门动词 lybra_project_new
+                # 保留交互式询问(CLI 侧体验),但实际创建走门动词
+                from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token
+                
                 collaboration_profile = _ask_project_type_interactive()
-                root = scaffold_project(
-                    home, args.name, code_repo=args.code_repo, registered_by=args.actor,
-                    collaboration_profile=collaboration_profile
-                )
-                print(f"Created project root: {root}")
-                print(f"project.json: {project_json_path(root)}")
-                if collaboration_profile:
-                    print(f"collaboration_profile: {collaboration_profile}")
-                print(f"next: lybra serve with LYBRA_HOME_ROOT={home}")
-                print("tokens: lybra serve writes <workspace>/.lybra/connection.json")
+                
+                # 需要 owner_authorization_ref
+                owner_auth_ref = getattr(args, "owner_authorization_ref", None)
+                if not owner_auth_ref:
+                    print("Error: --owner-authorization-ref is required (owner-gated)", file=sys.stderr)
+                    print("Hint: project creation requires owner authorization.", file=sys.stderr)
+                    return 1
+                
+                # 连接信息 (从 home 推导连接配置)
+                # 对于 project new,我们需要有一个已存在的门服务
+                # 暂时使用环境变量或默认连接
+                conn_path = Path("~/.lybra/connection.json").expanduser()
+                if not conn_path.exists():
+                    # 降级:直接调用本地函数(向后兼容)
+                    root = scaffold_project(
+                        home, args.name, code_repo=args.code_repo, registered_by=args.actor,
+                        collaboration_profile=collaboration_profile
+                    )
+                    print(f"Created project root: {root} (local fallback)")
+                    print(f"project.json: {project_json_path(root)}")
+                    if collaboration_profile:
+                        print(f"collaboration_profile: {collaboration_profile}")
+                    print(f"next: lybra serve with LYBRA_HOME_ROOT={home}")
+                    return 0
+                
+                conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
+                rpc_url = str(((conn_data.get("mcp") or {}).get("rpc_url")) or "").strip()
+                if not rpc_url:
+                    # 降级:本地调用
+                    root = scaffold_project(
+                        home, args.name, code_repo=args.code_repo, registered_by=args.actor,
+                        collaboration_profile=collaboration_profile
+                    )
+                    print(f"Created project root: {root} (local fallback)")
+                    return 0
+                
+                base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
+                token = None
+                for role in ("advisor", "planner", "owner"):
+                    try:
+                        token = load_owner_token(connection_json=conn_path, role=role)
+                        break
+                    except ValueError:
+                        continue
+                if not token:
+                    print(f"Error: no usable token in {conn_path}", file=sys.stderr)
+                    return 1
+                
+                try:
+                    client = GateClient(base_url, token, timeout=30.0)
+                    dry = client.call_tool("lybra_project_new_dry_run", {
+                        "name": args.name,
+                        "code_repo": args.code_repo,
+                        "home_root": str(home),
+                        "collaboration_profile": collaboration_profile,
+                        "owner_authorization_ref": owner_auth_ref,
+                        "actor": args.actor,
+                    })
+                    if not dry.get("ok"):
+                        print(f"Error: gate rejected: {json.dumps(dry, ensure_ascii=False)[:800]}", file=sys.stderr)
+                        return 1
+                    
+                    confirm = client.call_tool("lybra_project_new_confirm", {
+                        "dry_run_token": dry.get("dry_run_token"),
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                        "actor": args.actor,
+                    })
+                    if not confirm.get("ok"):
+                        print(f"Error: gate rejected confirm: {json.dumps(confirm, ensure_ascii=False)[:800]}", file=sys.stderr)
+                        return 1
+                    
+                    root = Path(confirm.get("project_root"))
+                    print(f"Created project root: {root} (via gate verb)")
+                    print(f"project.json: {project_json_path(root)}")
+                    if collaboration_profile:
+                        print(f"collaboration_profile: {collaboration_profile}")
+                    if confirm.get("connection_json_written"):
+                        print(f".lybra/connection.json: written with mcp.rpc_url")
+                    print(f"next: {'; '.join(confirm.get('next_steps', []))}")
+                except GateError as exc:
+                    print(f"Error: gate call failed: {exc}", file=sys.stderr)
+                    return 1
                 return 0
             if args.project_command == "set-repo":
-                root = set_project_repo(
-                    home, args.name, args.code_repo, registered_by=args.actor
-                )
-                print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()}")
+                # AIPOS-F24 大项A: 薄壳模式
+                from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token
+                
+                owner_auth_ref = getattr(args, "owner_authorization_ref", None)
+                if not owner_auth_ref:
+                    print("Error: --owner-authorization-ref is required (owner-gated)", file=sys.stderr)
+                    return 1
+                
+                conn_path = Path("~/.lybra/connection.json").expanduser()
+                if not conn_path.exists():
+                    # 降级
+                    root = set_project_repo(
+                        home, args.name, args.code_repo, registered_by=args.actor
+                    )
+                    print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()} (local fallback)")
+                    return 0
+                
+                conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
+                rpc_url = str(((conn_data.get("mcp") or {}).get("rpc_url")) or "").strip()
+                if not rpc_url:
+                    # 降级
+                    root = set_project_repo(
+                        home, args.name, args.code_repo, registered_by=args.actor
+                    )
+                    print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()} (local fallback)")
+                    return 0
+                
+                base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
+                token = None
+                for role in ("advisor", "planner", "owner"):
+                    try:
+                        token = load_owner_token(connection_json=conn_path, role=role)
+                        break
+                    except ValueError:
+                        continue
+                if not token:
+                    print(f"Error: no usable token", file=sys.stderr)
+                    return 1
+                
+                try:
+                    client = GateClient(base_url, token, timeout=30.0)
+                    dry = client.call_tool("lybra_project_set_repo_dry_run", {
+                        "name": args.name,
+                        "code_repo": args.code_repo,
+                        "home_root": str(home),
+                        "owner_authorization_ref": owner_auth_ref,
+                        "actor": args.actor,
+                    })
+                    if not dry.get("ok"):
+                        print(f"Error: {json.dumps(dry, ensure_ascii=False)[:800]}", file=sys.stderr)
+                        return 1
+                    
+                    confirm = client.call_tool("lybra_project_set_repo_confirm", {
+                        "dry_run_token": dry.get("dry_run_token"),
+                        "owner_confirmation_token": "OWNER_CONFIRMED",
+                        "actor": args.actor,
+                    })
+                    if not confirm.get("ok"):
+                        print(f"Error: {json.dumps(confirm, ensure_ascii=False)[:800]}", file=sys.stderr)
+                        return 1
+                    
+                    root = Path(confirm.get("project_root"))
+                    print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()} (via gate verb)")
+                except GateError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    return 1
                 return 0
             if args.project_command == "list":
                 # AIPOS-335 S4: 存量项目盘点
