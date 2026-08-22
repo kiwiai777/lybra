@@ -45,7 +45,9 @@ def _utc_now() -> str:
 
 
 def _stamp_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    # millisecond precision: same-second record/backup writes must never collide
+    # (F21 live finding: two removals in one second overwrote the first record)
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")[:-3]
 
 
 def secret_fingerprint(raw: str) -> str:
@@ -108,6 +110,10 @@ def _atomic_write_config(path: Path, config: dict[str, Any]) -> None:
 def _backup_config(path: Path) -> Path:
     """Timestamped 0600 backup of the current connection.json (pre-rotation)."""
     backup = path.with_name(f"{path.name}.bak-{_stamp_now()}")
+    n = 1
+    while backup.exists():
+        n += 1
+        backup = path.with_name(f"{path.name}.bak-{_stamp_now()}-{n}")
     shutil.copy2(path, backup)
     os.chmod(backup, REQUIRED_CONNECTION_MODE)
     return backup
@@ -192,6 +198,10 @@ def _write_record(
     records_dir = _records_dir(workspace_root)
     records_dir.mkdir(parents=True, exist_ok=True)
     path = records_dir / filename
+    n = 1
+    while path.exists():
+        n += 1
+        path = records_dir / filename.replace(".md", f"-{n}.md")
     fm_lines = ["---"]
     for key in sorted(frontmatter):
         fm_lines.append(f"{key}: {frontmatter[key]}")
