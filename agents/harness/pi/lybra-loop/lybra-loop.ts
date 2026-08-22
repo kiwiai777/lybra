@@ -645,11 +645,14 @@ export function resolveLybraBin(
   } catch {
     // project.json 读/解析失败 → 用缺省
   }
+  // AIPOS-F25 大项C: code_repo 未注册时才拼缺省路径，禁 lybra/lybra 双叠
+  // (chris 实撞: code_repo="~/projects/lybra" 时拼 workspace/../../../lybra 成双叠)
   if (!codeRepo) {
+    // 仅当 project.json 不存在或无 code_repo 声明时，才拼缺省相对路径
     codeRepo = path.join(workspaceRoot, "../../../lybra");
     codeRepoSource = "缺省 workspace/../../../lybra";
   }
-  // ③ 缺省探测点(卡内声明)
+  // ③ 探测点: <code_repo>/.deploy/current/bin/lybra
   const probe = path.join(codeRepo, ".deploy/current/bin/lybra");
   if (fs.existsSync(probe)) {
     return { bin: probe, source: `探测 ${codeRepoSource} → .deploy/current/bin/lybra`, tried };

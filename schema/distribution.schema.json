@@ -264,5 +264,30 @@
       "4. Zero code change to distribute_tools.py engine (data-driven)"
     ],
     "forbidden": "Custom code / plugins in distribute_tools.py. New primitive = product repo task + audit. Per §4: 'distribution WHAT = data, HOW = fixed engine'."
+  },
+  "applies_to_roles_syntax": {
+    "description": "AIPOS-F25 大项B: applies_to_roles 支持角色类引用，禁止逐 role 硬编码清单",
+    "formats": [
+      {
+        "format": "builtin role name",
+        "example": "executor",
+        "description": "直接匹配内建角色名"
+      },
+      {
+        "format": "class reference",
+        "example": "class:executor",
+        "description": "匹配该类下所有角色（含自定义角色）。custom role 按注册表所属 class 匹配。"
+      },
+      {
+        "format": "custom role name",
+        "example": "kiwiaiops",
+        "description": "直接匹配自定义角色名，或通过其注册表 class 匹配 class: 引用"
+      }
+    ],
+    "rationale": "禁止为每个自定义角色在 distribution.schema 硬编码条目——新角色自动继承其 class 的分发规则。",
+    "example": {
+      "applies_to_roles": ["class:executor"],
+      "matches": ["executor", "kiwiaiops (if class=executor)", "任何注册为 executor 类的自定义角色"]
+    }
   }
 }
