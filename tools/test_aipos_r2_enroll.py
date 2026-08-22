@@ -55,7 +55,7 @@ def test_enroll_flow():
     print(f"\n[Setup] Loading bootstrap token for transport auth...")
     if not BOOTSTRAP_CONNECTION.exists():
         print(f"❌ Cannot find connection.json for bootstrap token: {BOOTSTRAP_CONNECTION}")
-        return False
+        raise AssertionError("R2 enroll flow failed (see ❌ above)")
     
     real_conn_data = json.loads(BOOTSTRAP_CONNECTION.read_text())
     bootstrap_token = None
@@ -67,7 +67,7 @@ def test_enroll_flow():
     
     if not bootstrap_token:
         print(f"❌ No valid token found for bootstrap")
-        return False
+        raise AssertionError("R2 enroll flow failed (see ❌ above)")
     
     print(f"✓ Bootstrap token loaded (for HTTP transport auth only)")
     
@@ -91,21 +91,23 @@ def test_enroll_flow():
         
         if not result or not result.get("ok"):
             print("❌ Failed to generate enrollment code")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
-        enrollment = result["enrollment"]
-        code = enrollment["code"]
-        code_id = enrollment["code_id"]
+        # F23: CLI 出自包含码; F24A: CLI 薄壳化, 码由门动词在门进程内铸出(运输凭证热重载即活)
+        code = result["self_contained_code"]
+        code_id = result["code_id"]
         
         print(f"✓ Generated: {code_id}")
-        print(f"  Role: {enrollment['role']}, Instance: {enrollment['instance']}")
-        print(f"  Code fingerprint: {enrollment['fingerprint']}")
+        print(f"  Role: {result['role']}, Instance: {result.get('instance')}")
+        print(f"  Code fingerprint: {result['fingerprint']}")
+        print(f"  Governance root: {result.get('governance_root')}")
+        print(f"  Issued via: {result.get('issued_via')}")
         
         # 验证:token 不在输出中
-        if "token" in result.get("enrollment", {}) and len(result["enrollment"].get("token", "")) > 10:
-            print("❌ SECURITY VIOLATION: Token leaked in enrollment code generation output!")
-            return False
-        print("✓ Security check: Token not in enrollment code output")
+        if "transport_token" in result or "token" in result:
+            print("❌ SECURITY VIOLATION: Raw token leaked in enrollment code generation output!")
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
+        print("✓ Security check: No raw token field in output (fingerprints only; 自包含码本身单次展示)")
         
         # Step 2: 使用 enrollment code 进行 enroll
         print(f"\n[2] Enrolling with code at test workspace...")
@@ -117,15 +119,14 @@ def test_enroll_flow():
                 gate_url=GATE_URL,
                 workspace_root=test_workspace,
                 policy=None,
-                bootstrap_token=bootstrap_token,
             )
         except RuntimeError as exc:
             print(f"❌ Enroll failed: {exc}")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         if not enroll_result.get("ok"):
             print("❌ Enroll returned ok=False")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         print(f"✓ Enroll successful")
         print(f"  Role: {enroll_result['role']}")
@@ -140,14 +141,14 @@ def test_enroll_flow():
         lybra_dir = test_workspace / ".lybra"
         if not lybra_dir.is_dir():
             print(f"❌ .lybra/ directory not created")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         print(f"✓ .lybra/ directory exists")
         
         # 验证 connection.json
         connection_file = lybra_dir / "connection.json"
         if not connection_file.is_file():
             print(f"❌ connection.json not created")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         # 检查权限
         import stat
@@ -155,32 +156,32 @@ def test_enroll_flow():
         perms = stat.S_IMODE(mode)
         if perms != 0o600:
             print(f"❌ connection.json has wrong permissions: {oct(perms)} (expected 0o600)")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         print(f"✓ connection.json exists with 0600 permissions")
         
         # 检查内容
         connection_data = json.loads(connection_file.read_text())
         if "tokens" not in connection_data:
             print(f"❌ connection.json missing 'tokens' field")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         tokens = connection_data["tokens"]
         if len(tokens) != 1:
             print(f"❌ Expected 1 token, got {len(tokens)}")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         token_entry = tokens[0]
         if token_entry.get("role") != "executor":
             print(f"❌ Token role mismatch: {token_entry.get('role')}")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         if token_entry.get("agent_instance") != "test.enroll.aipos-r2":
             print(f"❌ Token instance mismatch: {token_entry.get('agent_instance')}")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         if "token" not in token_entry or len(token_entry["token"]) < 10:
             print(f"❌ Token value missing or invalid")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         print(f"✓ connection.json contains valid token entry")
         
@@ -188,25 +189,24 @@ def test_enroll_flow():
         role_file = lybra_dir / "role"
         if not role_file.is_file():
             print(f"❌ role file not created")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
-        role_content = role_file.read_text().strip()
-        if role_content != "executor":
-            print(f"❌ role file content mismatch: {role_content}")
-            return False
-        print(f"✓ role file exists with correct content")
+        try:
+            role_data = json.loads(role_file.read_text())
+        except json.JSONDecodeError:
+            print(f"❌ role file is not valid JSON (F23 统一 JSON 格式)")
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
+        if role_data.get("role") != "executor" or role_data.get("instance") != "test.enroll.aipos-r2":
+            print(f"❌ role file role/instance mismatch: {role_data}")
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
+        print(f"✓ role file exists (JSON, role+instance correct)")
         
-        # 验证 actor 文件
-        actor_file = lybra_dir / "actor"
-        if not actor_file.is_file():
-            print(f"❌ actor file not created")
-            return False
-        
-        actor_content = actor_file.read_text().strip()
-        if actor_content != "test.enroll.aipos-r2":
-            print(f"❌ actor file content mismatch: {actor_content}")
-            return False
-        print(f"✓ actor file exists with correct content")
+        # F23: enroll 落盘文件集 = connection.json + role(actor 文件已随 F23 格式统一移除)
+        written = set(enroll_result.get("files_written") or [])
+        if not {"connection.json", "role"} <= written:
+            print(f"❌ files_written mismatch: {sorted(written)}")
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
+        print(f"✓ files_written = {sorted(written)} (F23 文件集)")
         
         # Step 4: 使用自发现配置(验证 ConnectionResolver)
         print(f"\n[4] Testing auto-discovery with ConnectionResolver...")
@@ -222,11 +222,11 @@ def test_enroll_flow():
             )
         except ValueError as exc:
             print(f"❌ ConnectionResolver failed to discover token: {exc}")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         if discovered_token != token_entry["token"]:
             print(f"❌ Discovered token mismatch")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         print(f"✓ ConnectionResolver auto-discovered token successfully")
         
         # 验证 gate URL 自发现
@@ -246,11 +246,11 @@ def test_enroll_flow():
         expected_url = GATE_URL + "/mcp"
         if discovered_url != expected_url:
             print(f"❌ Discovered gate URL mismatch: {discovered_url} (expected {expected_url})")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         print(f"✓ ConnectionResolver auto-discovered gate URL successfully")
         
         # Note: 不调用 gate 验证新 token(需要 gate 重载才能识别新 token)
-        print(f"  (Gate call skipped: newly minted token not in gate's runtime registry yet)")
+        print(f"  (New token is live: in-server issuance hot-reloads the registry — Step2 exchange 即活体证据, F23/F24A)")
         
         # Step 5: 测试幂等性(重复 enroll 同 instance 应轮换 token)
         print(f"\n[5] Testing idempotency (re-enrolling same instance)...")
@@ -267,9 +267,9 @@ def test_enroll_flow():
         
         if not result2 or not result2.get("ok"):
             print("❌ Failed to generate second enrollment code")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
-        code2 = result2["enrollment"]["code"]
+        code2 = result2["self_contained_code"]
         old_token = token_entry["token"]
         
         # 再次 enroll
@@ -279,15 +279,14 @@ def test_enroll_flow():
                 gate_url=GATE_URL,
                 workspace_root=test_workspace,
                 policy=None,
-                bootstrap_token=bootstrap_token,
             )
         except RuntimeError as exc:
             print(f"❌ Second enroll failed: {exc}")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         if not enroll_result2.get("rotated"):
             print(f"❌ Expected rotated=True for second enroll")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         print(f"✓ Second enroll rotated token (idempotent)")
         
         # 验证 token 已更新
@@ -296,11 +295,11 @@ def test_enroll_flow():
         
         if new_token == old_token:
             print(f"❌ Token not rotated (same token value)")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         if len(connection_data2["tokens"]) != 1:
             print(f"❌ Token count changed after rotation: {len(connection_data2['tokens'])}")
-            return False
+            raise AssertionError("R2 enroll flow failed (see ❌ above)")
         
         print(f"✓ Token rotated successfully (new token != old token)")
         

@@ -678,6 +678,15 @@ export function extractSyncTailLine(stdout: string): string {
 // 落盘只有一个目标: 本工位 .lybra/(治理工作区拒写, 第九坑防护)。
 // ---------------------------------------------------------------------------
 
+/**
+ * F24A 大項C: enroll 产品侧故障带路(禁裸干)。
+ * 治 2026-08-22 现场: 新工位无章程 agent 拿到 401 即钻产品源码谋划重启 gate(serve stop)。
+ * 凡属产品侧/门侧故障类的 enroll 失败(交换拒/门不可达/返回残缺/连通验证不过),
+ * 文案必附本带路: 禁自行诊断修复, 报告顾问即可。用法类错误(码格式/用法)不附, 各自有 teaching。
+ */
+const ENROLL_PRODUCT_FAULT_GUIDE =
+  "此为产品侧故障, 与你无关, 禁自行诊断修复门/服务/部署(禁 serve stop/重启 gate/改配置/考古产品源码), 把上面报错原文报告顾问即可。";
+
 /** F23: 自包含码前缀(与产品仓 enrollment.py SELF_CONTAINED_CODE_PREFIX 同源同值)。 */
 const ENROLL_CODE_PREFIX = "LYBRAENROLL1.";
 
@@ -2394,7 +2403,7 @@ export default function (pi: ExtensionAPI) {
           if (!exchange.ok) {
             const reason = String(exchange.message || exchange.error || "unknown");
             const next = String(exchange.suggested_next_action || (exchange.details && exchange.details.suggested_next_action) || "");
-            failEnroll(`交换失败: ${reason}${next ? `\n下一步: ${next}` : ""}`);
+            failEnroll(`交换失败: ${reason}${next ? `\n下一步: ${next}` : ""}\n${ENROLL_PRODUCT_FAULT_GUIDE}`);
             return;
           }
           const tokenEntry = (exchange.token_entry || {}) as Record<string, unknown>;
@@ -2402,7 +2411,7 @@ export default function (pi: ExtensionAPI) {
           const instance = typeof tokenEntry.agent_instance === "string" ? tokenEntry.agent_instance : null;
           const roleToken = String(tokenEntry.token || "");
           if (!role || !roleToken) {
-            failEnroll("交换返回缺 token_entry(role/token)—— 请顾问检查 gate 侧日志后重新发码。");
+            failEnroll(`交换返回缺 token_entry(role/token)—— 请顾问检查 gate 侧日志后重新发码。\n${ENROLL_PRODUCT_FAULT_GUIDE}`);
             return;
           }
           // ③ 落盘工位 .lybra/(合并保留既有键, 验收⑨; 写失败不 land, 码可免费重试, 验收⑦)
@@ -2456,6 +2465,7 @@ export default function (pi: ExtensionAPI) {
             `  落盘: ${lybraDir}/${files.map((f) => f).join(", ")}(工位目录, 合并保留既有键)`,
             `  land: ${landed ? "已确认(码彻底消费)" : "⚠ 确认失败(码将由 grace 窗口过期自然消费, 不影响使用)"}`,
             `  连通验证: ${verifyOk ? `✓ ${verifyDetail}` : `✗ ${verifyDetail}`}`,
+            ...(verifyOk ? [] : [ENROLL_PRODUCT_FAULT_GUIDE]),
             `下一步: /lybra sync 然后 /reload`,
           ].join("\n");
           currentLogger?.info("enroll-success", { role, instance, target_root: targetRoot, landed, verify_ok: verifyOk });
@@ -2464,7 +2474,7 @@ export default function (pi: ExtensionAPI) {
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           failEnroll(
-            `enroll 失败: ${msg}\n(落盘前失败 = 码未消费, grace 窗口内可原样重贴 /lybra enroll <同码> 重试)`,
+            `enroll 失败: ${msg}\n(落盘前失败 = 码未消费, grace 窗口内可原样重贴 /lybra enroll <同码> 重试)\n${ENROLL_PRODUCT_FAULT_GUIDE}`,
           );
         }
         return;

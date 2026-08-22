@@ -383,11 +383,15 @@ class TestVerbSchemaRegistration(unittest.TestCase):
         self.assertIn("owner_confirmation_token", required)
 
     def test_cli_projection_same_implementation(self):
-        """CLI roles enroll-code 是同一实现的第二投影(源级: 调 issue_self_contained_code, 不再直调 create_enrollment_code)。"""
+        """F24A 新契约: CLI roles enroll-code 是调门动词的薄壳(单实现=门进程内)。
+        源级断言: 调 lybra_enroll_code_dry_run/confirm; 不再直接调 issue_self_contained_code
+        /create_enrollment_code(本地发码路径已废除 —— 死凭证类缺陷根除, 验收⑤)。"""
         cli_src = (Path(__file__).resolve().parents[1] / "aipos_cli.py").read_text(encoding="utf-8")
         enroll_code_section = cli_src[cli_src.index('roles_command == "enroll-code"'):]
         enroll_code_section = enroll_code_section[:enroll_code_section.index('roles_command == "enroll-revoke"')]
-        self.assertIn("issue_self_contained_code", enroll_code_section)
+        self.assertIn('lybra_enroll_code_dry_run', enroll_code_section)
+        self.assertIn('lybra_enroll_code_confirm', enroll_code_section)
+        self.assertNotIn("issue_self_contained_code", enroll_code_section)
         self.assertNotIn("create_enrollment_code(", enroll_code_section)
 
 

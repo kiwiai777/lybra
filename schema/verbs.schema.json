@@ -759,7 +759,7 @@
       }
     },
     "lybra_enroll_code_dry_run": {
-      "description": "AIPOS-F23: advisor-driven enrollment code issuance (preview). Issues a SELF-CONTAINED code embedding gate_url/governance_root/transport credential (base64). Owner-gated via owner_authorization_ref. Same implementation as CLI `lybra roles enroll-code` (single issuance source, two projections).",
+      "description": "AIPOS-F23: advisor-driven enrollment code issuance (preview). Issues a SELF-CONTAINED code embedding gate_url/governance_root/transport credential (base64). Owner-gated via owner_authorization_ref. F24A: CLI `lybra roles enroll-code` is a THIN SHELL over this verb (in-server issuance is the single path; unknown parameters are rejected fail-closed).",
       "phase": "dry_run",
       "base_verb": "lybra_enroll_code",
       "confirm_verb": "lybra_enroll_code_confirm",
@@ -797,6 +797,10 @@
           "gate_url": {
             "type": "string",
             "description": "Externally reachable gate URL to embed (e.g., http://host:7118); defaults to connection.json mcp.rpc_url if non-loopback, else http://127.0.0.1:7118"
+          },
+          "governance_root": {
+            "type": "string",
+            "description": "Governance workspace root to embed in the code (F24A): bare registered project name or absolute path <home>/<project>; validated against the project registry (5_tasks/queue + project.json), unknown/unregistered roots are rejected fail-closed. Defaults to the issuing gate's serving workspace root (same root as exchange/land)."
           },
           "owner_authorization_ref": {
             "type": "string",

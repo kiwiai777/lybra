@@ -3739,14 +3739,109 @@ def _enroll_code_dry_run_store_prune(now: datetime | None = None) -> None:
         _ENROLL_CODE_DRY_RUNS.pop(token, None)
 
 
+# F24A: 发码动词已知参数面(未知参数一律报错, 禁静默吞 —— F24 证据②)
+_ENROLL_CODE_KNOWN_ARGS = frozenset({
+    "role", "instance", "ttl", "gate_url", "governance_root",
+    "owner_authorization_ref", "reason", "actor", "agent_instance",
+})
+# F24A: lybra_enroll_code_confirm 已知参数面
+_ENROLL_CODE_CONFIRM_KNOWN_ARGS = frozenset({
+    "dry_run_token", "owner_confirmation_token", "actor", "agent_instance",
+})
+
+
+def _list_registered_projects(home_root: Path) -> list[str]:
+    """F24A: 项目注册表 —— 扫描 home 下已建立项目(5_tasks/queue + project.json 双标记)。
+
+    与 workspace_config.resolve_project_root 同一判据(单一真相=双标记), 只读不建。
+    """
+    names: list[str] = []
+    try:
+        for child in sorted(home_root.iterdir()):
+            if child.is_dir() and has_workspace_queue(child) and (child / "project.json").is_file():
+                names.append(child.name)
+    except OSError:
+        pass
+    return names
+
+
+def _resolve_governance_root_arg(value: Any) -> tuple[str | None, dict[str, Any] | None]:
+    """F24A: governance_root 从项目注册表校验(验收②: 不存在的根必报错)。
+
+    接受两种形式(均须命中注册表, fail-closed):
+      - 裸项目名(如 "lybra")→ 解析 <home>/<name>
+      - 绝对路径 → 必须等于 <home>/<某已注册项目> 的解析值
+    返回 (resolved_absolute, None) 或 (None, teaching_error)。
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None, None
+    try:
+        home = resolve_home_root()
+    except Exception as exc:
+        return None, _teaching_error(
+            "GOVERNANCE_ROOT_UNRESOLVABLE",
+            f"Cannot resolve the home root to validate governance_root against the project registry: {exc}",
+            "Ensure LYBRA_HOME_ROOT / global config points at the projects home, then retry.",
+        )
+    registered = _list_registered_projects(home)
+    # ① 裸项目名直接命中注册表
+    if raw in registered:
+        return str((home / raw).resolve()), None
+    # ② 绝对路径 → 必须是 <home>/<已注册项目>
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        resolved_candidate = str(candidate.resolve())
+        for name in registered:
+            if resolved_candidate == str((home / name).resolve()):
+                return resolved_candidate, None
+    listing = ", ".join(registered) if registered else "(none — home root has no established projects)"
+    return None, _teaching_error(
+        "UNKNOWN_GOVERNANCE_ROOT",
+        f"governance_root {raw!r} is not a registered project under {home} "
+        f"(registry = 5_tasks/queue + project.json). Registered projects: {listing}",
+        "Pass a registered project name or its absolute path under the home root, then retry. "
+        "Unknown/unregistered roots are rejected fail-closed (F24A 验收②: 未知根必报错, 不静默吞).",
+        example_args={
+            "role": "executor", "instance": "exec.lybra.mac1", "ttl": 86400,
+            "owner_authorization_ref": "<owner-authorization-ref>",
+            "governance_root": registered[0] if registered else "<home>/<registered-project>",
+        },
+    )
+
+
 def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """F23: 发码参数校验(dry_run 与 CLI 共用)。返回 (validated, teaching_error)。"""
+    """F23/F24A: 发码参数校验(dry_run 与单相动词共用)。返回 (validated, teaching_error)。
+
+    F24A: ①未知参数一律报错(禁静默吞, F24 证据②); ②governance_root 从项目注册表校验
+    (不存在的根必报错); 缺省回落发码门服务的工作区根(与交换/land 同根)。
+    """
+    unknown = sorted(set(args) - _ENROLL_CODE_KNOWN_ARGS)
+    if unknown:
+        return {}, _teaching_error(
+            "UNKNOWN_PARAMETER",
+            f"lybra_enroll_code_* received unknown parameter(s): {', '.join(unknown)}. "
+            f"Known parameters: {', '.join(sorted(_ENROLL_CODE_KNOWN_ARGS))}.",
+            "Retry with only the known parameters. Unknown parameters are rejected fail-closed "
+            "(F24A: 未知参数必报错, 禁静默吞 —— 拼错参数名不会被当作已生效).",
+            example_args={
+                "role": "executor", "instance": "exec.lybra.mac1", "ttl": 86400,
+                "owner_authorization_ref": "<owner-authorization-ref>",
+                "governance_root": "<home>/<registered-project>",
+            },
+        )
     role = str(args.get("role") or "").strip()
     instance = str(args.get("instance") or "").strip() or None
     ttl_raw = args.get("ttl")
     gate_url = str(args.get("gate_url") or "").strip() or None
+    governance_root_raw = str(args.get("governance_root") or "").strip() or None
     owner_authorization_ref = str(args.get("owner_authorization_ref") or "").strip() or None
     reason = str(args.get("reason") or "").strip()
+    governance_root: str | None = None
+    if governance_root_raw:
+        governance_root, err = _resolve_governance_root_arg(governance_root_raw)
+        if err is not None:
+            return {}, err
     if not role:
         return {}, _teaching_error(
             "MISSING_ROLE",
@@ -3796,6 +3891,7 @@ def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], di
         "instance": instance,
         "ttl": ttl,
         "gate_url": gate_url,
+        "governance_root": governance_root,
         "owner_authorization_ref": owner_authorization_ref,
         "reason": reason,
     }
@@ -3814,6 +3910,7 @@ def lybra_enroll_code_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
     if err is not None:
         return err
 
+    from tools.aipos_cli.enrollment import ENROLL_DEFAULT_TTL_SECONDS
     actor = str(args.get("actor") or "mcp.client").strip()
     now = datetime.now(timezone.utc)
     token = f"enrolldr_{os.urandom(16).hex()}"
@@ -3836,6 +3933,7 @@ def lybra_enroll_code_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         "owner_authorization_ref": validated["owner_authorization_ref"],
         "reason": validated["reason"] or "(none)",
         "gate_url": validated["gate_url"] or "(缺省推导: connection.json mcp.rpc_url 非 loopback, 否则 http://127.0.0.1:7118)",
+        "governance_root": validated["governance_root"] or "(缺省回落: 发码门服务的工作区根, 与交换/land 同根)",
         "will_mint": [
             "enrollment record (single-use + TTL + revocable, AIPOS-362 面不动)",
             "transport credential (zero-scope, TTL 与码一致, 注册进 gate connection.json)",
@@ -3864,6 +3962,14 @@ def lybra_enroll_code_confirm(arguments: dict[str, Any] | None = None) -> dict[s
     workstation's pi session: /lybra enroll <code>
     """
     args = arguments or {}
+    unknown = sorted(set(args) - _ENROLL_CODE_CONFIRM_KNOWN_ARGS)
+    if unknown:
+        return _teaching_error(
+            "UNKNOWN_PARAMETER",
+            f"lybra_enroll_code_confirm received unknown parameter(s): {', '.join(unknown)}. "
+            f"Known parameters: {', '.join(sorted(_ENROLL_CODE_CONFIRM_KNOWN_ARGS))}.",
+            "Retry with only the known parameters (governance_root 等发码参数属于 dry_run 阶段, confirm 只认 dry_run_token/owner_confirmation_token).",
+        )
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     owner_confirmation_token = str(args.get("owner_confirmation_token") or "").strip()
     if not dry_run_token:
@@ -3917,6 +4023,7 @@ def lybra_enroll_code_confirm(arguments: dict[str, Any] | None = None) -> dict[s
             instance=validated["instance"],
             ttl_seconds=validated["ttl"],
             gate_url=validated["gate_url"],
+            governance_root=validated.get("governance_root"),
             by=validated["owner_authorization_ref"],
             reason=validated["reason"] or f"owner-authorization-ref: {validated['owner_authorization_ref']}",
         )
@@ -3946,7 +4053,8 @@ def lybra_roles_enroll_code(arguments: dict[str, Any] | None = None) -> dict[str
 
     Owner-gated: requires owner_authorization_ref.
     F23: delegates to the SAME issuance implementation as lybra_enroll_code_confirm
-    (issue_self_contained_code — 发码只有一份实现, CLI `roles enroll-code` 同源).
+    (issue_self_contained_code — 发码只有一份实现, 且只住在门进程内; F24A 起 CLI roles
+    enroll-code 改为调门动词的薄壳, 不再直接调本实现 —— 死凭证类缺陷根除).
     The returned self-contained code embeds gate_url/governance_root/transport credential.
     """
     args = arguments or {}
@@ -3962,6 +4070,7 @@ def lybra_roles_enroll_code(arguments: dict[str, Any] | None = None) -> dict[str
             instance=validated["instance"],
             ttl_seconds=validated["ttl"],
             gate_url=validated["gate_url"],
+            governance_root=validated.get("governance_root"),
             by=validated["owner_authorization_ref"],
             reason=validated["reason"] or f"owner-authorization-ref: {validated['owner_authorization_ref']}",
         )
