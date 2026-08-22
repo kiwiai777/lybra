@@ -42,9 +42,9 @@ const translations = {
     'overview.new_project_modal.project_name_en': '英文名称（可选）',
     'overview.new_project_modal.project_name_en_hint': '用于英文界面显示，留空则使用项目名称',
     'overview.new_project_modal.option_a': '复制命令（推荐）',
-    'overview.new_project_modal.option_a_desc': '在终端运行此命令初始化工作区:',
-    'overview.new_project_modal.option_b': '服务端初始化',
-    'overview.new_project_modal.option_b_desc': '让服务器创建并注册工作区（需要文件写入权限）:',
+    'overview.new_project_modal.option_a_desc': 'AIPOS-F24: 项目顾问自助全流程。Owner 先发 planner 码,项目顾问持码完成项目初始化与后续角色注册,无需 lybra 顾问参与:',
+    'overview.new_project_modal.option_b': '服务端初始化（兼容旧流程）',
+    'overview.new_project_modal.option_b_desc': '让服务器创建并注册工作区（需要文件写入权限）。新项目推荐走选项 A 的自助流程:',
     // AIPOS-293 S4: Option C — Import existing project
     'overview.new_project_modal.option_c': '导入已有项目',
     'overview.new_project_modal.option_c_desc': '将现有项目接入 Lybra。先预览结构，确认后再导入——不会删除任何源文件。',

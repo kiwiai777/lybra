@@ -4,7 +4,7 @@ import json
 import os
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -202,6 +202,16 @@ def _repo_root() -> Path:
         return resolve_project_root(home, project)
     # Legacy: process-level workspace resolution (AIPOS_WORKSPACE_ROOT or upward search)
     return find_repo_root()
+
+
+def _load_gate_connection_config() -> dict[str, Any]:
+    """AIPOS-F24: Load gate's own connection.json for extracting rpc_url.
+    
+    Used by project_new to write connection.json skeleton with gate's rpc_url.
+    """
+    from tools.aipos_cli.service_mode import load_connection_config
+    root = _repo_root()
+    return load_connection_config(root)
 
 
 def _json_text(payload: dict[str, Any]) -> str:
@@ -3718,6 +3728,320 @@ def lybra_roles_remove(arguments: dict[str, Any] | None = None) -> dict[str, Any
         "operation": "roles_remove",
         "name": name,
         "owner_authorization_ref": owner_authorization_ref,
+        "custom_roles": updated,
+    })
+
+
+# ============================================================================
+# AIPOS-F24: project/roles 薄壳动词 - 调用 workspace_config 既有函数
+# ============================================================================
+
+_PROJECT_NEW_DRY_RUNS: dict[str, dict[str, Any]] = {}
+_PROJECT_SET_REPO_DRY_RUNS: dict[str, dict[str, Any]] = {}
+_ROLES_REGISTER_DRY_RUNS: dict[str, dict[str, Any]] = {}
+
+
+def lybra_project_new_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F24 大项A: scaffold project (preview).
+    
+    薄壳模式: 调用 workspace_config.scaffold_project,唯一实现。
+    Owner-gated via owner_authorization_ref.
+    """
+    args = arguments or {}
+    name = str(args.get("name") or "").strip()
+    code_repo = str(args.get("code_repo") or "").strip() or None
+    home_root = str(args.get("home_root") or "").strip() or None
+    owner_auth_ref = str(args.get("owner_authorization_ref") or "").strip()
+    actor = str(args.get("actor") or "mcp.client").strip()
+    collaboration_profile = args.get("collaboration_profile")
+    
+    if not name:
+        return _teaching_error(
+            "MISSING_NAME",
+            "Missing required parameter: name",
+            "Provide project name (e.g., 'my-project')."
+        )
+    if not owner_auth_ref:
+        return _teaching_error(
+            "MISSING_OWNER_AUTHORIZATION",
+            "Missing required parameter: owner_authorization_ref (owner-gated)",
+            "Project creation requires owner authorization."
+        )
+    
+    # 推导 home_root (默认为门服务的 home)
+    if not home_root:
+        from tools.aipos_cli.workspace_config import resolve_home_root
+        try:
+            home_root = str(resolve_home_root())
+        except Exception as exc:
+            return _error_result(f"Cannot resolve home_root: {exc}")
+    
+    # 生成 dry_run_token
+    now = datetime.now(timezone.utc)
+    token = f"projnewdr_{os.urandom(16).hex()}"
+    expires_at = (now + timedelta(seconds=600)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    
+    _PROJECT_NEW_DRY_RUNS[token] = {
+        "name": name,
+        "code_repo": code_repo,
+        "home_root": home_root,
+        "owner_authorization_ref": owner_auth_ref,
+        "actor": actor,
+        "collaboration_profile": collaboration_profile,
+        "created_at": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "expires_at": expires_at,
+    }
+    
+    from pathlib import Path
+    project_root = Path(home_root).expanduser() / name
+    
+    preview = {
+        "name": name,
+        "home_root": home_root,
+        "project_root": str(project_root),
+        "code_repo": code_repo or "(none)",
+        "collaboration_profile": collaboration_profile or "(none)",
+        "will_create": [
+            "5_tasks/queue/{pending,claimed,active,concluded}",
+            "5_tasks/{records,drafts,orchestration}",
+            "governance/decision_log.md",
+            "project.json",
+            ".lybra/connection.json (skeleton with mcp.rpc_url)",
+        ],
+    }
+    
+    return _tool_result({
+        "ok": True,
+        "operation": "project_new_dry_run",
+        "preview": preview,
+        "dry_run_token": token,
+        "dry_run_expires_at": expires_at,
+        "client_hint": "项目顾问自行confirm。使用 lybra_project_new_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'。",
+    })
+
+
+def lybra_project_new_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F24: confirm project scaffold creation."""
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    owner_confirmation = str(args.get("owner_confirmation_token") or "").strip()
+    
+    if not dry_run_token:
+        return _teaching_error(
+            "MISSING_DRY_RUN_TOKEN",
+            "Missing dry_run_token from lybra_project_new_dry_run.",
+            "Call lybra_project_new_dry_run first."
+        )
+    
+    if dry_run_token not in _PROJECT_NEW_DRY_RUNS:
+        return _teaching_error(
+            "INVALID_DRY_RUN_TOKEN",
+            "Invalid or expired dry_run_token.",
+            "Retry with lybra_project_new_dry_run."
+        )
+    
+    if owner_confirmation != "OWNER_CONFIRMED":
+        return _teaching_error(
+            "INVALID_OWNER_CONFIRMATION",
+            "owner_confirmation_token must be literal 'OWNER_CONFIRMED'.",
+            "Retry with owner_confirmation_token='OWNER_CONFIRMED'."
+        )
+    
+    validated = _PROJECT_NEW_DRY_RUNS.pop(dry_run_token)
+    
+    # 调用 workspace_config.scaffold_project (唯一实现)
+    from tools.aipos_cli.workspace_config import scaffold_project
+    from pathlib import Path
+    
+    # 获取门的 rpc_url 用于 connection.json 骨架
+    gate_rpc_url = None
+    try:
+        conn_cfg = _load_gate_connection_config()
+        gate_rpc_url = conn_cfg.get("mcp", {}).get("rpc_url")
+    except Exception:
+        pass  # 降级:不写 connection.json 骨架
+    
+    try:
+        root = scaffold_project(
+            validated["home_root"],
+            validated["name"],
+            code_repo=validated["code_repo"],
+            registered_by=validated["actor"],
+            collaboration_profile=validated["collaboration_profile"],
+            gate_rpc_url=gate_rpc_url,
+        )
+    except Exception as exc:
+        return _error_result(f"Project scaffold failed: {exc}")
+    
+    return _tool_result({
+        "ok": True,
+        "operation": "project_new_confirm",
+        "project_root": str(root),
+        "name": validated["name"],
+        "connection_json_written": gate_rpc_url is not None,
+        "next_steps": [
+            "项目已创建",
+            "发 planner 码给项目顾问: lybra_enroll_code (role=planner)",
+            "项目顾问可开始发工位码、注册角色等自助操作",
+        ],
+    })
+
+
+def lybra_project_set_repo_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F24: set/update code_repo (preview)."""
+    args = arguments or {}
+    name = str(args.get("name") or "").strip()
+    code_repo = str(args.get("code_repo") or "").strip()
+    home_root = str(args.get("home_root") or "").strip() or None
+    owner_auth_ref = str(args.get("owner_authorization_ref") or "").strip()
+    actor = str(args.get("actor") or "mcp.client").strip()
+    
+    if not name:
+        return _teaching_error("MISSING_NAME", "Missing required parameter: name", "")
+    if not code_repo:
+        return _teaching_error("MISSING_CODE_REPO", "Missing required parameter: code_repo", "")
+    if not owner_auth_ref:
+        return _teaching_error("MISSING_OWNER_AUTHORIZATION", "owner-gated", "")
+    
+    if not home_root:
+        from tools.aipos_cli.workspace_config import resolve_home_root
+        try:
+            home_root = str(resolve_home_root())
+        except Exception as exc:
+            return _error_result(f"Cannot resolve home_root: {exc}")
+    
+    now = datetime.now(timezone.utc)
+    token = f"setrepodr_{os.urandom(16).hex()}"
+    expires_at = (now + timedelta(seconds=600)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    
+    _PROJECT_SET_REPO_DRY_RUNS[token] = {
+        "name": name,
+        "code_repo": code_repo,
+        "home_root": home_root,
+        "owner_authorization_ref": owner_auth_ref,
+        "actor": actor,
+        "created_at": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "expires_at": expires_at,
+    }
+    
+    return _tool_result({
+        "ok": True,
+        "operation": "project_set_repo_dry_run",
+        "preview": {"name": name, "code_repo": code_repo, "home_root": home_root},
+        "dry_run_token": token,
+        "dry_run_expires_at": expires_at,
+        "client_hint": "使用 lybra_project_set_repo_confirm 确认。",
+    })
+
+
+def lybra_project_set_repo_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F24: confirm code_repo update."""
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    owner_confirmation = str(args.get("owner_confirmation_token") or "").strip()
+    
+    if not dry_run_token or dry_run_token not in _PROJECT_SET_REPO_DRY_RUNS:
+        return _teaching_error("INVALID_DRY_RUN_TOKEN", "Invalid or expired token", "")
+    if owner_confirmation != "OWNER_CONFIRMED":
+        return _teaching_error("INVALID_OWNER_CONFIRMATION", "Must be 'OWNER_CONFIRMED'", "")
+    
+    validated = _PROJECT_SET_REPO_DRY_RUNS.pop(dry_run_token)
+    
+    from tools.aipos_cli.workspace_config import set_project_repo
+    try:
+        root = set_project_repo(
+            validated["home_root"],
+            validated["name"],
+            validated["code_repo"],
+            registered_by=validated["actor"],
+        )
+    except Exception as exc:
+        return _error_result(f"set_project_repo failed: {exc}")
+    
+    return _tool_result({
+        "ok": True,
+        "operation": "project_set_repo_confirm",
+        "project_root": str(root),
+        "code_repo": validated["code_repo"],
+    })
+
+
+def lybra_roles_register_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F24: register custom role (preview)."""
+    args = arguments or {}
+    name = str(args.get("name") or "").strip()
+    builtin_class = str(args.get("builtin_class") or "").strip()
+    workspace_root = str(args.get("workspace_root") or "").strip() or None
+    owner_auth_ref = str(args.get("owner_authorization_ref") or "").strip()
+    reason = str(args.get("reason") or "").strip()
+    actor = str(args.get("actor") or "mcp.client").strip()
+    
+    if not name:
+        return _teaching_error("MISSING_NAME", "Missing required parameter: name", "")
+    if not builtin_class:
+        return _teaching_error("MISSING_BUILTIN_CLASS", "Missing required parameter: builtin_class", "")
+    if not owner_auth_ref:
+        return _teaching_error("MISSING_OWNER_AUTHORIZATION", "owner-gated", "")
+    
+    if not workspace_root:
+        workspace_root = str(_repo_root())
+    
+    now = datetime.now(timezone.utc)
+    token = f"rolesregdr_{os.urandom(16).hex()}"
+    expires_at = (now + timedelta(seconds=600)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    
+    _ROLES_REGISTER_DRY_RUNS[token] = {
+        "name": name,
+        "builtin_class": builtin_class,
+        "workspace_root": workspace_root,
+        "owner_authorization_ref": owner_auth_ref,
+        "reason": reason,
+        "actor": actor,
+        "created_at": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "expires_at": expires_at,
+    }
+    
+    return _tool_result({
+        "ok": True,
+        "operation": "roles_register_dry_run",
+        "preview": {"name": name, "builtin_class": builtin_class},
+        "dry_run_token": token,
+        "dry_run_expires_at": expires_at,
+        "client_hint": "使用 lybra_roles_register_confirm 确认。",
+    })
+
+
+def lybra_roles_register_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F24: confirm custom role registration."""
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    owner_confirmation = str(args.get("owner_confirmation_token") or "").strip()
+    
+    if not dry_run_token or dry_run_token not in _ROLES_REGISTER_DRY_RUNS:
+        return _teaching_error("INVALID_DRY_RUN_TOKEN", "Invalid or expired token", "")
+    if owner_confirmation != "OWNER_CONFIRMED":
+        return _teaching_error("INVALID_OWNER_CONFIRMATION", "Must be 'OWNER_CONFIRMED'", "")
+    
+    validated = _ROLES_REGISTER_DRY_RUNS.pop(dry_run_token)
+    
+    from tools.aipos_cli.custom_roles import register_custom_role
+    from pathlib import Path
+    try:
+        updated = register_custom_role(
+            Path(validated["workspace_root"]),
+            validated["name"],
+            validated["builtin_class"],
+            by=validated["owner_authorization_ref"],
+            reason=validated["reason"] or f"owner-authorization-ref: {validated['owner_authorization_ref']}",
+        )
+    except Exception as exc:
+        return _error_result(f"register_custom_role failed: {exc}")
+    
+    return _tool_result({
+        "ok": True,
+        "operation": "roles_register_confirm",
+        "name": validated["name"],
+        "builtin_class": validated["builtin_class"],
         "custom_roles": updated,
     })
 
