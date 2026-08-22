@@ -187,6 +187,7 @@ def issue_self_contained_code(
     instance: str | None = None,
     ttl_seconds: int | None = None,
     gate_url: str | None = None,
+    governance_root: str | None = None,
     by: str = "owner",
     reason: str = "",
 ) -> dict[str, Any]:
@@ -197,6 +198,10 @@ def issue_self_contained_code(
       - 运输通行凭证(零 scope, 注册进 gate connection.json)
       - 自包含码(encode_self_contained_code)
       - 可转贴的会话指令文本: "/lybra enroll <自包含码>"
+
+    F24A: governance_root 显式参数优先(调用方=门动词, 已从项目注册表校验); 缺省回落
+    workspace_root(记录/运输凭证所在根, 与交换/land 同根 —— 交换面不认识别的根)。
+    发码必须发生在门进程内(CLI 只许薄壳): 运输凭证注册与门内存注册表同进程, 才能热重载即活。
     """
     root = _workspace_root_path(workspace_root)
     effective_ttl = int(ttl_seconds) if ttl_seconds and int(ttl_seconds) > 0 else ENROLL_DEFAULT_TTL_SECONDS
@@ -216,11 +221,12 @@ def issue_self_contained_code(
         root, ttl_seconds=effective_ttl, code_id=enrollment["code_id"]
     )
 
-    # ③ 自包含码(gate_url 缺省推导, 显式参数优先)
+    # ③ 自包含码(gate_url 缺省推导, 显式参数优先; governance_root 同理 —— F24A)
     resolved_gate_url = (gate_url or "").strip() or resolve_gate_url_default(root)
+    resolved_governance_root = (governance_root or "").strip() or str(root)
     self_contained = encode_self_contained_code(
         gate_url=resolved_gate_url,
-        governance_root=str(root),
+        governance_root=resolved_governance_root,
         transport_token=transport_entry["token"],
         code=enrollment["code"],
     )
@@ -238,7 +244,7 @@ def issue_self_contained_code(
         "ttl_seconds": effective_ttl,
         "expires_at": enrollment.get("expires_at"),
         "gate_url": resolved_gate_url,
-        "governance_root": str(root),
+        "governance_root": resolved_governance_root,
         "transport_token_fingerprint": transport_entry.get("fingerprint"),
         "transport_token_expires_at": transport_entry.get("expires_at"),
         "fingerprint": enrollment["fingerprint"],
