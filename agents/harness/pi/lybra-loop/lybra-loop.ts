@@ -6,6 +6,8 @@
  *   /lybra off         停止循环
  *   /lybra status      查看状态
  *   /lybra sync        拉新分发(AIPOS-F20: 薄壳投影既有 lybra sync CLI, 成功后 /reload 生效)
+ *   /lybra enroll <码>  工位一贴上岗(AIPOS-F23: 自包含码→交换→落盘工位 .lybra/→land→连通验证,
+ *                        接着 /lybra sync 然后 /reload; 裸机等价: lybra roles enroll --code <码>)
  *   /lybra-tick        (手动)立即执行一轮 tick;自动链不依赖命令路由
  *
  * 它只做"发起",不做"授权"(红线):claim 放行与否永远由 gate 判定(AIPOS-250 信封)——
@@ -664,6 +666,153 @@ export function extractSyncTailLine(stdout: string): string {
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
   return lines.length > 0 ? lines[lines.length - 1] : "";
+}
+
+// ---------------------------------------------------------------------------
+// AIPOS-F23: /lybra enroll —— 工位一贴上岗(自包含码解析→交换→落盘→land→连通验证)
+// ---------------------------------------------------------------------------
+// 锚点: F20 /lybra 命令族投影 + 既有 enroll_client 交换流(交换/TTL/撤销面沿用, 单源在门侧)。
+// 码格式唯一定义处 = 产品仓 tools/aipos_cli/enrollment.py(encode_self_contained_code);
+// 本侧只做结构性解析(前缀 + base64url + JSON 字段抽取), 配方不入连接器(禁第二份发码/码格式逻辑)。
+// bootstrap-token 要求已删除: 码内嵌零 scope 运输凭证即 transport 认证(码即运输认证)。
+// 落盘只有一个目标: 本工位 .lybra/(治理工作区拒写, 第九坑防护)。
+// ---------------------------------------------------------------------------
+
+/** F23: 自包含码前缀(与产品仓 enrollment.py SELF_CONTAINED_CODE_PREFIX 同源同值)。 */
+const ENROLL_CODE_PREFIX = "LYBRAENROLL1.";
+
+export interface SelfContainedCode {
+  v: number;
+  gate_url: string;
+  governance_root: string;
+  transport_token: string;
+  code: string;
+}
+
+/** F23: base64url → string(无 padding 容错, 等价 Python base64.urlsafe_b64decode)。 */
+function base64UrlDecode(input: string): string {
+  // JS 的 (-len)%4 带符号(与 Python 不同), 用 (4 - len%4) % 4 保持非负
+  const pad = (4 - (input.length % 4)) % 4;
+  const b64 = input + "=".repeat(pad);
+  return Buffer.from(b64, "base64url").toString("utf-8");
+}
+
+/**
+ * F23: 解析自包含码。非自包含码(旧裸码)返回 null(调用方走带 --gate-url 的旧路径)。
+ * 损坏/版本不识别 → 抛错(带原因与下一步, F9)。
+ */
+export function parseSelfContainedCode(text: string): SelfContainedCode | null {
+  const s = String(text || "").trim();
+  if (!s.startsWith(ENROLL_CODE_PREFIX)) return null;
+  const b64 = s.slice(ENROLL_CODE_PREFIX.length);
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(base64UrlDecode(b64)) as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      "自包含码损坏(无法解码 base64/JSON)\n下一步: 向顾问重新发码(lybra_enroll_code_dry_run/confirm), 整条原样转贴。",
+    );
+  }
+  if (payload.v !== 1) {
+    throw new Error(
+      `自包含码版本不识别(v=${String(payload.v)})\n下一步: 工位连接器版本过旧 —— 请更新连接器后重贴; 或向顾问重新发码。`,
+    );
+  }
+  const gateUrl = String(payload.gate_url || "").trim();
+  const transportToken = String(payload.transport_token || "").trim();
+  const code = String(payload.code || "").trim();
+  if (!gateUrl || !transportToken || !code) {
+    throw new Error(
+      "自包含码缺必填字段(gate_url/transport_token/code)\n下一步: 向顾问重新发码后整条原样转贴。",
+    );
+  }
+  return {
+    v: 1,
+    gate_url: gateUrl,
+    governance_root: String(payload.governance_root || ""),
+    transport_token: transportToken,
+    code,
+  };
+}
+
+/** F23: enroll 目标工位根 —— 已有 .lybra 则其父(重铸/轮换); 否则 pi 会话 cwd(新工位约定: 从工位根启动 pi)。 */
+export function resolveEnrollTargetRoot(lybraDir: string | null, cwd?: string): string {
+  if (lybraDir) return dirname(lybraDir);
+  return cwd || process.cwd();
+}
+
+/** F23: 治理工作区防护(验收⑧/第九坑) —— 目标 == 码内嵌 governance_root 或含 5_tasks/queue 结构签名 → 拒写。 */
+export function isGovernanceWorkspace(
+  fs: { existsSync(p: string): boolean },
+  path: { join(...s: string[]): string },
+  targetRoot: string,
+  governanceRoot: string,
+): boolean {
+  if (governanceRoot && resolveComparable(governanceRoot) === resolveComparable(targetRoot)) return true;
+  return fs.existsSync(path.join(targetRoot, "5_tasks", "queue"));
+}
+
+function resolveComparable(p: string): string {
+  const norm = p.replace(/\/+$/, "");
+  return norm.endsWith("/.lybra") ? norm.slice(0, -"/.lybra".length) : norm;
+}
+
+/** F23: 合并写 .lybra/role(验收⑨: 保留既有键 owner_policy_ref 等, 禁整文件覆盖)。 */
+export function mergeRoleFile(
+  existingContent: string | null,
+  role: string,
+  instance: string | null,
+): Record<string, unknown> {
+  let data: Record<string, unknown> = {};
+  if (existingContent) {
+    try {
+      const parsed = JSON.parse(existingContent);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        data = { ...(parsed as Record<string, unknown>) };
+      }
+    } catch {
+      // 旧纯文本格式(单行 role)或损坏 → 从空开始(不保留无法解析的内容)
+    }
+  }
+  data.role = role;
+  if (instance) data.instance = instance;
+  data.enrolled_at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  return data;
+}
+
+/** F23: connection.json 合并(保留既有键; tokens 按 agent_instance/role upsert)。 */
+export function upsertEnrollConnection(
+  existing: Record<string, unknown> | null,
+  gateUrl: string,
+  workspaceRoot: string,
+  tokenEntry: Record<string, unknown>,
+): Record<string, unknown> {
+  const data: Record<string, unknown> = existing ? { ...existing } : {};
+  const agentInstance = typeof tokenEntry.agent_instance === "string" ? tokenEntry.agent_instance : null;
+  const role = typeof tokenEntry.role === "string" ? tokenEntry.role : "";
+  const tokens = Array.isArray(data.tokens) ? [...(data.tokens as unknown[])] : [];
+  let matchedIdx = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i] as Record<string, unknown>;
+    if (agentInstance && t.agent_instance === agentInstance) {
+      matchedIdx = i;
+      break;
+    }
+    if (!agentInstance && !t.agent_instance && t.role === role) {
+      matchedIdx = i;
+      break;
+    }
+  }
+  if (matchedIdx >= 0) tokens[matchedIdx] = tokenEntry;
+  else tokens.push(tokenEntry);
+  data.tokens = tokens;
+  // mcp.rpc_url = 规范化 gate 地址(与 Python 端 normalize_gate_url_for_same_host 同源: loopback 化由工位侧网络环境决定, 此处直存码内嵌地址)
+  const normalized = gateUrl.replace(/\/+$/, "");
+  const mcpUrl = normalized.endsWith("/mcp") ? normalized : `${normalized}/mcp`;
+  data.mcp = { ...(typeof data.mcp === "object" && data.mcp ? (data.mcp as Record<string, unknown>) : {}), rpc_url: mcpUrl };
+  if (!data.workspace_root) data.workspace_root = workspaceRoot;
+  if (!("config_version" in data)) data.config_version = 1;
+  return data;
 }
 
 /**
@@ -2019,7 +2168,7 @@ export default function (pi: ExtensionAPI) {
 
   // --- /lybra:on | off | status ---
   pi.registerCommand("lybra", {
-    description: "lybra-loop 自动领卡循环:on [maxN] | off | status | sync",
+    description: "lybra-loop 自动领卡循环:on [maxN] | off | status | sync | enroll <码>",
     handler: async (args, ctx) => {
       liveCtx = ctx; // AIPOS-F10:命令入口刷新活引用
       const parts = String(args || "").trim().split(/\s+/);
@@ -2192,6 +2341,131 @@ export default function (pi: ExtensionAPI) {
           currentLogger?.error("sync-failed", { bin: binRes.bin, harness_root: harnessRoot, error: errMsg, failure_tail: tail });
           voice(msg, "error", true);
           ctx.ui.notify(msg, "error");
+        }
+        return;
+      }
+
+      if (sub === "enroll") {
+        // AIPOS-F23: 工位一贴上岗 —— /lybra enroll <自包含码>(F20 命令族同构投影)。
+        // 流: 解析码→治理仓防护→交换(码即运输认证, 无 bootstrap)→落盘工位 .lybra/→land→连通验证→带路。
+        // 交换与落盘原子(验收⑦): 落盘抛错则不 land, 码留在 grace 窗口可原样重贴。
+        const rawCode = parts.slice(1).join("").trim();
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        const failEnroll = (msg: string) => {
+          currentLogger?.error("enroll-failed", { msg });
+          voice(msg, "error", true);
+          ctx.ui.notify(msg, "error");
+        };
+        if (!rawCode) {
+          failEnroll(
+            "用法: /lybra enroll LYBRAENROLL1.<码>(顾问 confirm 输出的整条转贴; 裸机等价: lybra roles enroll --code <码>)",
+          );
+          return;
+        }
+        let sc: SelfContainedCode | null = null;
+        try {
+          sc = parseSelfContainedCode(rawCode);
+        } catch (e) {
+          failEnroll(e instanceof Error ? e.message : String(e));
+          return;
+        }
+        if (!sc) {
+          failEnroll(
+            "码不是自包含码(需 LYBRAENROLL1. 前缀)。\n下一步: 请顾问用 lybra_enroll_code_dry_run/confirm 重新发码, 整条 /lybra enroll <码> 转贴过来。",
+          );
+          return;
+        }
+        // ① 目标工位根: 已有 .lybra → 其父(重铸); 否则 cwd(新工位约定: 从工位根启动 pi)
+        const lybraDir0 = ConnectionResolver.discoverLybraDir();
+        const targetRoot = resolveEnrollTargetRoot(lybraDir0);
+        if (isGovernanceWorkspace(fs, path, targetRoot, sc.governance_root)) {
+          failEnroll(
+            `enroll 目标是治理工作区(${targetRoot}), 拒绝落盘 —— enroll 只落工位目录 .lybra/。\n下一步: 在工位目录(pi harness 目录)重新运行 /lybra enroll <同码>(grace 窗口内同码可免费重试)。`,
+          );
+          return;
+        }
+        ctx.ui.notify(`[enroll] 解析自包含码 ✓  gate=${sc.gate_url}  目标工位=${targetRoot}/.lybra/`, "info");
+        try {
+          const { GateMcpClient } = await import("./gate-client.ts");
+          // ② 交换: 运输凭证(码内嵌, 零 scope)即 transport 认证
+          const transportClient = new GateMcpClient(sc.gate_url, sc.transport_token, { timeoutMs: 30000 });
+          const exchange = await transportClient.callToolRaw("lybra_roles_enroll_exchange", { code: sc.code });
+          if (!exchange.ok) {
+            const reason = String(exchange.message || exchange.error || "unknown");
+            const next = String(exchange.suggested_next_action || (exchange.details && exchange.details.suggested_next_action) || "");
+            failEnroll(`交换失败: ${reason}${next ? `\n下一步: ${next}` : ""}`);
+            return;
+          }
+          const tokenEntry = (exchange.token_entry || {}) as Record<string, unknown>;
+          const role = String(tokenEntry.role || "");
+          const instance = typeof tokenEntry.agent_instance === "string" ? tokenEntry.agent_instance : null;
+          const roleToken = String(tokenEntry.token || "");
+          if (!role || !roleToken) {
+            failEnroll("交换返回缺 token_entry(role/token)—— 请顾问检查 gate 侧日志后重新发码。");
+            return;
+          }
+          // ③ 落盘工位 .lybra/(合并保留既有键, 验收⑨; 写失败不 land, 码可免费重试, 验收⑦)
+          const lybraDir = path.join(targetRoot, ".lybra");
+          fs.mkdirSync(lybraDir, { recursive: true, mode: 0o700 });
+          const connPath = path.join(lybraDir, "connection.json");
+          let existingConn: Record<string, unknown> | null = null;
+          if (fs.existsSync(connPath)) {
+            try {
+              const parsed = JSON.parse(fs.readFileSync(connPath, "utf-8"));
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) existingConn = parsed;
+            } catch {
+              existingConn = null; // 损坏重建
+            }
+          }
+          const rolePath = path.join(lybraDir, "role");
+          const existingRole = fs.existsSync(rolePath) ? fs.readFileSync(rolePath, "utf-8") : null;
+          const connData = upsertEnrollConnection(existingConn, sc.gate_url, targetRoot, tokenEntry);
+          fs.writeFileSync(connPath, JSON.stringify(connData, null, 2) + "\n", { mode: 0o600 });
+          fs.chmodSync(connPath, 0o600);
+          const roleData = mergeRoleFile(existingRole, role, instance);
+          fs.writeFileSync(rolePath, JSON.stringify(roleData, null, 2) + "\n", { mode: 0o644 });
+          // ④ land: 落盘成功才关 grace 窗口(失败仅告警, 不阻断)
+          let landed = false;
+          try {
+            const landRes = await transportClient.callToolRaw("lybra_roles_enroll_land", {
+              code: sc.code,
+              landed_detail: `workstation=${targetRoot} files=connection.json,role`,
+            });
+            landed = Boolean(landRes.ok);
+          } catch (e) {
+            currentLogger?.warn("enroll-land-failed", { error: e instanceof Error ? e.message : String(e) });
+          }
+          // ⑤ 连通验证: 新 token 调一次 gate(lybra_gate_version)
+          let verifyOk = false;
+          let verifyDetail = "";
+          try {
+            const verifyClient = new GateMcpClient(sc.gate_url, roleToken, { timeoutMs: 20000 });
+            const ver = await verifyClient.callToolRaw("lybra_gate_version", {});
+            verifyOk = Boolean(ver.ok) || !("ok" in ver); // gate_version 无 ok 字段也算通(2xx 到达即认证通过)
+            verifyDetail = verifyOk ? "新 token 调 lybra_gate_version 通过" : JSON.stringify(ver).slice(0, 160);
+          } catch (e) {
+            verifyDetail = e instanceof Error ? e.message : String(e);
+          }
+          const fp = String(tokenEntry.fingerprint || "(unknown)");
+          const files = ["connection.json", "role"];
+          const lines = [
+            `✓ 上岗完成(enroll)`,
+            `  Role: ${role}${instance ? `  Instance: ${instance}` : ""}`,
+            `  Token fingerprint: ${fp}`,
+            `  落盘: ${lybraDir}/${files.map((f) => f).join(", ")}(工位目录, 合并保留既有键)`,
+            `  land: ${landed ? "已确认(码彻底消费)" : "⚠ 确认失败(码将由 grace 窗口过期自然消费, 不影响使用)"}`,
+            `  连通验证: ${verifyOk ? `✓ ${verifyDetail}` : `✗ ${verifyDetail}`}`,
+            `下一步: /lybra sync 然后 /reload`,
+          ].join("\n");
+          currentLogger?.info("enroll-success", { role, instance, target_root: targetRoot, landed, verify_ok: verifyOk });
+          voice(`上岗完成 role=${role} 落盘=${lybraDir} — 接着 /lybra sync 然后 /reload`, "info", true);
+          ctx.ui.notify(lines, verifyOk ? "info" : "warn");
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          failEnroll(
+            `enroll 失败: ${msg}\n(落盘前失败 = 码未消费, grace 窗口内可原样重贴 /lybra enroll <同码> 重试)`,
+          );
         }
         return;
       }

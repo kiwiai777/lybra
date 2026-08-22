@@ -51,6 +51,10 @@ from tools.schema_constants import RecordType, Verdict
 READ_ONLY_NOTICE = "Lybra MCP exposes read tools by default. Write tools are visible only with scoped capability."
 CAPABILITY_ENV_VAR = "LYBRA_CAPABILITY_TOKEN"
 REQUEST_CAPABILITY: ContextVar[dict[str, Any] | None] = ContextVar("lybra_mcp_request_capability", default=None)
+
+# AIPOS-F23: enroll-code 两阶段 dry-run token 存储(内存 + TTL 600s)。
+# 轻量专用存储: 发码不属于 controlled_execute 队列操作面, 不入其 plan/snapshot 机制。
+_ENROLL_CODE_DRY_RUNS: dict[str, dict[str, Any]] = {}
 INTAKE_SCOPE = "intake_submit"
 OWNER_DECISION_SCOPE = RecordType.OWNER_DECISION_RECORD
 DRAFT_PUBLISH_SCOPE = "draft_publish"
@@ -3718,95 +3722,391 @@ def lybra_roles_remove(arguments: dict[str, Any] | None = None) -> dict[str, Any
     })
 
 
-def lybra_roles_enroll_code(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """AIPOS-362: generate a one-time enrollment code for remote agent credential bootstrap.
+def _enroll_code_dry_run_store_prune(now: datetime | None = None) -> None:
+    """F23: 清理过期的 enroll-code dry-run token。"""
+    now = now or datetime.now(timezone.utc)
+    expired = []
+    for token, rec in _ENROLL_CODE_DRY_RUNS.items():
+        try:
+            exp = datetime.fromisoformat(str(rec.get("expires_at", "")).replace("Z", "+00:00"))
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp <= now:
+                expired.append(token)
+        except ValueError:
+            expired.append(token)
+    for token in expired:
+        _ENROLL_CODE_DRY_RUNS.pop(token, None)
 
-    Owner-gated: requires owner_authorization_ref.
-    The enrollment code is NOT a token — it's a temporary credential that can be exchanged
-    for a real token via lybra_roles_enroll_exchange.
-    """
-    from tools.aipos_cli.enrollment import create_enrollment_code
-    args = arguments or {}
+
+def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """F23: 发码参数校验(dry_run 与 CLI 共用)。返回 (validated, teaching_error)。"""
     role = str(args.get("role") or "").strip()
     instance = str(args.get("instance") or "").strip() or None
-    ttl = args.get("ttl")
+    ttl_raw = args.get("ttl")
+    gate_url = str(args.get("gate_url") or "").strip() or None
     owner_authorization_ref = str(args.get("owner_authorization_ref") or "").strip() or None
     reason = str(args.get("reason") or "").strip()
     if not role:
-        return _error_result("Missing required parameter: role")
-    if not owner_authorization_ref:
-        return _error_result(
-            "Missing required parameter: owner_authorization_ref. "
-            "Enrollment code generation is owner-gated (AIPOS-362 security model)."
+        return {}, _teaching_error(
+            "MISSING_ROLE",
+            "Missing required parameter: role.",
+            "Provide role (e.g. executor/auditor/advisor or a registered custom role). "
+            "Example: lybra_enroll_code_dry_run with {\"role\": \"executor\", "
+            "\"instance\": \"exec.lybra.mac1\", \"ttl\": 86400, "
+            "\"owner_authorization_ref\": \"<owner-authorization-ref>\"}",
+            example_args={"role": "executor", "instance": "exec.lybra.mac1", "ttl": 86400,
+                          "owner_authorization_ref": "<owner-authorization-ref>"},
         )
-    if ttl is not None:
+    if not owner_authorization_ref:
+        return {}, _teaching_error(
+            "MISSING_OWNER_AUTHORIZATION",
+            "Missing required parameter: owner_authorization_ref. "
+            "Enrollment code generation is owner-gated (AIPOS-362 security model).",
+            "Provide a reference to the Owner authorization decision (e.g. the decision_log id "
+            "or task id authorizing this enrollment), then retry.",
+            example_args={"role": role, "instance": instance or "exec.lybra.mac1", "ttl": 86400,
+                          "owner_authorization_ref": "<owner-authorization-ref>"},
+        )
+    ttl: int | None = None
+    if ttl_raw is not None:
         try:
-            ttl = int(ttl)
+            ttl = int(ttl_raw)
             if ttl <= 0:
-                return _error_result("ttl must be a positive integer (seconds)")
+                raise ValueError
         except (ValueError, TypeError):
-            return _error_result("ttl must be a positive integer (seconds)")
+            return {}, _teaching_error(
+                "INVALID_TTL",
+                f"ttl must be a positive integer (seconds); got: {ttl_raw!r}",
+                "Retry with ttl as a positive integer (e.g. 86400 for 24h), or omit for the default 86400.",
+            )
+    # role must resolve (built-in or custom)
+    from tools.aipos_cli.custom_roles import resolve_role_to_class
+    root = _repo_root()
+    role_class = resolve_role_to_class(role, root)
+    if not role_class:
+        return {}, _teaching_error(
+            "UNKNOWN_ROLE",
+            f"Unknown role: {role}. Role must be a built-in or registered custom role.",
+            "Use a built-in role (executor/auditor/advisor/owner/planner) or register the custom role first "
+            "(lybra_roles_register), then retry.",
+        )
+    validated = {
+        "role": role,
+        "instance": instance,
+        "ttl": ttl,
+        "gate_url": gate_url,
+        "owner_authorization_ref": owner_authorization_ref,
+        "reason": reason,
+    }
+    return validated, None
+
+
+def lybra_enroll_code_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F23: advisor-driven enrollment code issuance (preview).
+
+    Two-phase per verbs.schema stage_contract: dry_run validates and previews,
+    confirm mints the self-contained code (single issuance implementation shared
+    with CLI `lybra roles enroll-code`). Owner-gated via owner_authorization_ref.
+    """
+    args = arguments or {}
+    validated, err = _validate_enroll_code_args(args)
+    if err is not None:
+        return err
+
+    actor = str(args.get("actor") or "mcp.client").strip()
+    now = datetime.now(timezone.utc)
+    token = f"enrolldr_{os.urandom(16).hex()}"
+    expires_at = now.replace(microsecond=0)
+    from datetime import timedelta
+    expires_at = (expires_at + timedelta(seconds=600)).isoformat().replace("+00:00", "Z")
+    _ENROLL_CODE_DRY_RUNS[token] = {
+        "validated": validated,
+        "actor": actor,
+        "created_at": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "expires_at": expires_at,
+    }
+    _enroll_code_dry_run_store_prune(now)
+
+    effective_ttl = validated["ttl"] or ENROLL_DEFAULT_TTL_SECONDS
+    preview = {
+        "role": validated["role"],
+        "instance": validated["instance"],
+        "ttl_seconds": effective_ttl,
+        "owner_authorization_ref": validated["owner_authorization_ref"],
+        "reason": validated["reason"] or "(none)",
+        "gate_url": validated["gate_url"] or "(缺省推导: connection.json mcp.rpc_url 非 loopback, 否则 http://127.0.0.1:7118)",
+        "will_mint": [
+            "enrollment record (single-use + TTL + revocable, AIPOS-362 面不动)",
+            "transport credential (zero-scope, TTL 与码一致, 注册进 gate connection.json)",
+            "self-contained code (LYBRAENROLL1.<base64>, 内嵌 gate_url/governance_root/运输凭证)",
+        ],
+        "confirm_output": "/lybra enroll <自包含码> 可转贴会话指令文本",
+    }
+    return _tool_result({
+        "ok": True,
+        "operation": "enroll_code_dry_run",
+        "preview": preview,
+        "dry_run_token": token,
+        "dry_run_expires_at": expires_at,
+        "client_hint": (
+            "AIPOS-328: 顾问自行confirm。使用 lybra_enroll_code_confirm 带上 dry_run_token 与 "
+            "owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。confirm 输出含可转贴的 "
+            "/lybra enroll 指令文本。"
+        ),
+    })
+
+
+def lybra_enroll_code_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F23: confirm enrollment code issuance — mints the self-contained code.
+
+    Returns paste_text: a session instruction the Owner can paste into the new
+    workstation's pi session: /lybra enroll <code>
+    """
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    owner_confirmation_token = str(args.get("owner_confirmation_token") or "").strip()
+    if not dry_run_token:
+        return _teaching_error(
+            "MISSING_DRY_RUN_TOKEN",
+            "lybra_enroll_code_confirm requires dry_run_token from lybra_enroll_code_dry_run.",
+            "Call lybra_enroll_code_dry_run first, then pass its dry_run_token here.",
+        )
+    if owner_confirmation_token != OWNER_CONFIRMATION_TOKEN:
+        return _teaching_error(
+            "OWNER_CONFIRMATION_REQUIRED",
+            "lybra_enroll_code_confirm requires owner_confirmation_token: OWNER_CONFIRMED (AIPOS-328).",
+            "Retry confirm with owner_confirmation_token set to the literal OWNER_CONFIRMED "
+            "(公开常量, 非秘密; Owner 不需参与此步骤).",
+        )
+    record = _ENROLL_CODE_DRY_RUNS.get(dry_run_token)
+    if record is None:
+        return _teaching_error(
+            "STALE_DRY_RUN",
+            f"dry_run_token not found or expired: {dry_run_token[:16]}...",
+            "Run lybra_enroll_code_dry_run again and confirm with the new dry_run_token "
+            "(dry-run token TTL = 600s, in-memory).",
+        )
+    try:
+        exp = datetime.fromisoformat(str(record.get("expires_at")).replace("Z", "+00:00"))
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp <= datetime.now(timezone.utc):
+            _ENROLL_CODE_DRY_RUNS.pop(dry_run_token, None)
+            return _teaching_error(
+                "TOKEN_EXPIRED",
+                "The dry_run_token expired before confirm.",
+                "Run lybra_enroll_code_dry_run again and confirm with the new dry_run_token.",
+            )
+    except ValueError:
+        pass
+    # 一次性消费(confirm 后 token 作废)
+    _ENROLL_CODE_DRY_RUNS.pop(dry_run_token, None)
+
+    root = _repo_root()
+    validated = record["validated"]
+    from tools.aipos_cli.enrollment import (
+        ENROLL_DEFAULT_TTL_SECONDS,
+        issue_self_contained_code,
+    )
     root = _repo_root()
     try:
-        enrollment = create_enrollment_code(
+        result = issue_self_contained_code(
             root,
-            role=role,
-            instance=instance,
-            ttl_seconds=ttl,
-            by=owner_authorization_ref,
-            reason=reason or f"owner-authorization-ref: {owner_authorization_ref}",
+            role=validated["role"],
+            instance=validated["instance"],
+            ttl_seconds=validated["ttl"],
+            gate_url=validated["gate_url"],
+            by=validated["owner_authorization_ref"],
+            reason=validated["reason"] or f"owner-authorization-ref: {validated['owner_authorization_ref']}",
+        )
+    except Exception as exc:
+        return _error_result(f"Enrollment code issuance failed: {exc}")
+
+    # 热重载: 运输凭证即刻生效(码发出去马上就能用)
+    try:
+        _reload_token_registry()
+    except Exception:
+        pass
+
+    result["operation"] = "enroll_code_confirm"
+    result["paste_instruction"] = (
+        "把下面这条整体转贴到新工位的 pi 会话(Owner 唯一要做的事):\n" + result["paste_text"]
+    )
+    result["next_step"] = "转贴上面那条 /lybra enroll 指令到新工位 pi 会话 → 工位自动完成交换/落盘/连通验证"
+    result["security_notice"] = (
+        "自包含码内嵌零 scope 运输凭证(仅够过 transport 层调兑换动词), 真正凭据是兑换出的角色 token; "
+        "码单次 + TTL + 可撤销(lybra_roles_enroll_revoke)。"
+    )
+    return _tool_result(result)
+
+
+def lybra_roles_enroll_code(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-362/F23: generate a one-time enrollment code for remote agent credential bootstrap.
+
+    Owner-gated: requires owner_authorization_ref.
+    F23: delegates to the SAME issuance implementation as lybra_enroll_code_confirm
+    (issue_self_contained_code — 发码只有一份实现, CLI `roles enroll-code` 同源).
+    The returned self-contained code embeds gate_url/governance_root/transport credential.
+    """
+    args = arguments or {}
+    validated, err = _validate_enroll_code_args(args)
+    if err is not None:
+        return err
+    from tools.aipos_cli.enrollment import issue_self_contained_code
+    root = _repo_root()
+    try:
+        result = issue_self_contained_code(
+            root,
+            role=validated["role"],
+            instance=validated["instance"],
+            ttl_seconds=validated["ttl"],
+            gate_url=validated["gate_url"],
+            by=validated["owner_authorization_ref"],
+            reason=validated["reason"] or f"owner-authorization-ref: {validated['owner_authorization_ref']}",
         )
     except ValueError as exc:
         return _error_result(f"Enrollment code creation failed: {exc}")
+    try:
+        _reload_token_registry()
+    except Exception:
+        pass
     return _tool_result({
         "ok": True,
         "operation": "roles_enroll_code",
-        "enrollment": enrollment,
-        "security_notice": "The enrollment code is shown only once. Token values never appear in logs or responses.",
+        "code_id": result["code_id"],
+        "self_contained_code": result["self_contained_code"],
+        "paste_text": result["paste_text"],
+        "paste_instruction": (
+            "把下面这条整体转贴到新工位的 pi 会话(Owner 唯一要做的事):\n" + result["paste_text"]
+        ),
+        "enrollment": {
+            "code_id": result["code_id"],
+            "fingerprint": result["fingerprint"],
+            "role": result["role"],
+            "instance": result["instance"],
+            "expires_at": result.get("expires_at"),
+        },
+        "security_notice": (
+            "The enrollment code is shown only once. Token values never appear in logs or responses. "
+            "F23: self-contained code embeds a zero-scope transport credential; the code is the "
+            "single-use + TTL + revocable auth."
+        ),
     })
 
 
 def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """AIPOS-362: exchange an enrollment code for a capability token.
+    """AIPOS-362/F23: exchange an enrollment code for a capability token.
 
-    This is a PUBLIC endpoint (no token required). The enrollment code itself is the authentication.
-    Once exchanged, the code is marked as used and cannot be reused.
-    The token value is returned ONLY in this response and never logged.
-    
+    This is a PUBLIC endpoint at operation level (no scope required). Authentication =
+    the code itself: for self-contained codes (LYBRAENROLL1.*) the embedded zero-scope
+    transport credential is the HTTP transport auth (F23: bootstrap-token 要求删除, 码即运输认证);
+    legacy plain codes still rely on any valid bearer at transport layer.
+
+    F23 验收⑦ (交换与落盘原子): first exchange mints the token and opens a grace window —
+    the code is retryable for the SAME token until the workstation lands (lybra_roles_enroll_land)
+    or the grace window expires. Landing failure never burns the code silently.
+
+    F23 大项C②: every ok=False path carries reason + next step (F9 teaching errors).
+
     FIX-2: Gate 侧必须注册新铸 token 到凭据源并即时生效。
     """
-    from tools.aipos_cli.enrollment import get_enrollment_status, mark_enrollment_used
+    from tools.aipos_cli.enrollment import (
+        decode_self_contained_code,
+        get_enrollment_status,
+        mark_enrollment_used,
+    )
     import secrets
     args = arguments or {}
-    code = str(args.get("code") or "").strip()
-    if not code:
-        return _error_result("Missing required parameter: code")
-    
+    raw_code = str(args.get("code") or "").strip()
+    if not raw_code:
+        return _teaching_error(
+            "MISSING_CODE",
+            "Missing required parameter: code.",
+            "Pass the enrollment code (self-contained LYBRAENROLL1.<base64> from lybra_enroll_code_confirm, "
+            "or a plain code). Example: {\"code\": \"LYBRAENROLL1.eyJ...\"}",
+            example_args={"code": "LYBRAENROLL1.<base64>"},
+        )
+
+    # F23: 自包含码 → 取内层裸码(运输凭证已在 transport 层用掉, 不进业务参数)
+    code = raw_code
+    sc = decode_self_contained_code(raw_code)
+    if sc is not None:
+        code = sc["code"]
+
     root = _repo_root()
     try:
         status, record = get_enrollment_status(root, code)
     except Exception as exc:
-        return _error_result(f"Enrollment exchange failed: {exc}")
-    
-    if status != "pending":
-        return _error_result(f"Enrollment code is {status}. Valid codes can only be used once.")
+        return _teaching_error(
+            "EXCHANGE_FAILED",
+            f"Enrollment exchange failed: {exc}",
+            "Retry; if it persists, ask the advisor to inspect .lybra/enrollments.json on the gate side.",
+        )
+
     if not record:
-        return _error_result("Enrollment code not found or expired")
-    
+        return _teaching_error(
+            "CODE_NOT_FOUND",
+            "Enrollment code not found (or it is a plain legacy code issued by another gate).",
+            "Use the exact self-contained code from the advisor's confirm output "
+            "(/lybra enroll LYBRAENROLL1.<base64>). If it was issued for another gate/workspace, "
+            "ask the advisor to re-issue against this gate.",
+        )
+    if status == "revoked":
+        return _teaching_error(
+            "CODE_REVOKED",
+            f"Enrollment code is revoked (code_id={record.get('code_id')}, revoked_at={record.get('revoked_at')}).",
+            "The code was revoked by the owner/advisor. Ask for a fresh code (lybra_enroll_code_dry_run/confirm).",
+        )
+    if status == "expired":
+        return _teaching_error(
+            "CODE_EXPIRED",
+            f"Enrollment code is expired (expires_at={record.get('expires_at')}).",
+            "Ask the advisor for a fresh code (lybra_enroll_code_dry_run/confirm with a longer ttl).",
+        )
+
+    # --- F23 验收⑦: grace 窗口内重试 → 返回同一 token(不重铸, 码不白烧) ---
+    if status == "used":
+        minted = record.get("minted_token_entry") or {}
+        if not record.get("landed_at") and minted:
+            return _tool_result({
+                "ok": True,
+                "operation": "roles_enroll_exchange",
+                "retry": True,
+                "reason": "落盘重试: grace 窗口内同码免费重试, 返回同一 token(未重铸)",
+                "grace_until": record.get("grace_until"),
+                "token_entry": minted,
+                "landing_required": True,
+                "security_notice": "Store this token securely with 0600 permissions. It will not be shown again.",
+            })
+        return _teaching_error(
+            "CODE_ALREADY_USED",
+            "Enrollment code is already used (单次码, 已消费)."
+            + (f" Landed at {record.get('landed_at')}." if record.get("landed_at")
+               else f" Landing grace expired at {record.get('grace_until')} (token was minted but the workstation never landed it)."),
+            "Ask the advisor for a fresh code (lybra_enroll_code_dry_run/confirm); "
+            "this one cannot be reused.",
+        )
+
     # Generate token for the bound role
     role = record["role"]
     instance = record.get("instance")
-    
+
     # Mint a new token (same logic as service_mode._role_token_entry)
     token = secrets.token_urlsafe(32)
     from tools.aipos_cli.service_mode import secret_fingerprint, ROLE_SPECS
     from tools.aipos_cli.custom_roles import resolve_role_to_class
-    
+
     # Resolve role to class (handles custom roles)
     role_class = resolve_role_to_class(role, root)
     if not role_class:
-        return _error_result(f"Unknown role: {role}. Role must be a built-in or registered custom role.")
-    
+        return _teaching_error(
+            "UNKNOWN_ROLE",
+            f"Unknown role: {role}. Role must be a built-in or registered custom role.",
+            "The role was removed after the code was issued. Ask the advisor to re-issue "
+            "(lybra_enroll_code_dry_run/confirm) with a valid role.",
+        )
+
     # Find the role spec
     spec = None
     for s in ROLE_SPECS:
@@ -3815,7 +4115,7 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
             break
     if not spec:
         return _error_result(f"Role class '{role_class}' not found in ROLE_SPECS")
-    
+
     # Build token entry
     token_entry = {
         "role": role,
@@ -3828,7 +4128,7 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
         token_entry["role_class"] = role_class
     if instance:
         token_entry["agent_instance"] = instance
-    
+
     # FIX-2: 注册 token 到 gate workspace connection.json
     from tools.aipos_cli.enroll_client import (
         load_or_create_connection_json,
@@ -3849,7 +4149,7 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
             print(f"[enroll_exchange] Converged same-role tokens (removed test.*: {removed_instances})", file=sys.stderr)
         write_connection_json(lybra_dir, connection_data)
         print(f"[enroll_exchange] Token written to {lybra_dir}/connection.json (rotated={rotated})", file=sys.stderr)
-        
+
         # 热加载: 通知当前 gate 进程重载 token registry
         print(f"[enroll_exchange] Calling _reload_token_registry()", file=sys.stderr)
         _reload_token_registry()
@@ -3862,19 +4162,77 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
         print(f"[enroll_exchange] ERROR in token registration: {exc}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         rotated = False
-    
-    # Mark code as used
+
+    # F23 验收⑦: 标记 used 时携带铸出的 token_entry + grace 窗口(落盘前中断 → 同码免费重试)
     try:
-        mark_enrollment_used(root, code)
+        used_record = mark_enrollment_used(root, code, token_entry=token_entry)
     except ValueError as exc:
-        return _error_result(f"Failed to mark enrollment code as used: {exc}")
-    
+        return _teaching_error(
+            "CODE_ALREADY_USED",
+            str(exc),
+            "Ask the advisor for a fresh code (lybra_enroll_code_dry_run/confirm).",
+        )
+
     return _tool_result({
         "ok": True,
         "operation": "roles_enroll_exchange",
         "token_entry": token_entry,
         "rotated": rotated,
+        "landing_required": True,
+        "grace_until": used_record.get("grace_until"),
+        "landing_instruction": (
+            "落盘 .lybra/ 成功后调 lybra_roles_enroll_land {\"code\": \"<同码>\"} 关闭 grace 窗口; "
+            "落盘失败可原样重试(窗口内同码返回同一 token)。"
+        ),
         "security_notice": "Store this token securely with 0600 permissions. It will not be shown again.",
+    })
+
+
+def lybra_roles_enroll_land(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F23 验收⑦/⑧: workstation confirms it landed .lybra/ config.
+
+    PUBLIC at operation level (the code itself is the auth — same as exchange).
+    Marks the enrollment landed: closes the grace window; the code is fully consumed.
+    Idempotent: landing twice succeeds (retry=True).
+    """
+    from tools.aipos_cli.enrollment import decode_self_contained_code, land_enrollment
+    args = arguments or {}
+    raw_code = str(args.get("code") or "").strip()
+    if not raw_code:
+        return _teaching_error(
+            "MISSING_CODE",
+            "Missing required parameter: code.",
+            "Pass the SAME enrollment code that was exchanged. Example: {\"code\": \"LYBRAENROLL1.<base64>\"}",
+            example_args={"code": "LYBRAENROLL1.<base64>"},
+        )
+    code = raw_code
+    sc = decode_self_contained_code(raw_code)
+    if sc is not None:
+        code = sc["code"]
+    root = _repo_root()
+    detail = str(args.get("landed_detail") or "").strip()
+    try:
+        record = land_enrollment(root, code, landed_detail=detail)
+    except ValueError as exc:
+        msg = str(exc)
+        if "not found" in msg:
+            return _teaching_error(
+                "CODE_NOT_FOUND",
+                msg,
+                "Use the exact code that was exchanged on this gate.",
+            )
+        return _teaching_error(
+            "LAND_ORDER_VIOLATION",
+            msg,
+            "Call lybra_roles_enroll_exchange first, land after the workstation .lybra/ write succeeds.",
+        )
+    return _tool_result({
+        "ok": True,
+        "operation": "roles_enroll_land",
+        "code_id": record.get("code_id"),
+        "landed_at": record.get("landed_at"),
+        "retry": bool(record.get("retry")),
+        "note": "码已彻底消费(单次); 工位上岗完成 — 接着 /lybra sync 然后 /reload",
     })
 
 
@@ -4024,6 +4382,9 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_roles_remove": lybra_roles_remove,
     "lybra_roles_enroll_code": lybra_roles_enroll_code,
     "lybra_roles_enroll_exchange": lybra_roles_enroll_exchange,
+    "lybra_roles_enroll_land": lybra_roles_enroll_land,
+    "lybra_enroll_code_dry_run": lybra_enroll_code_dry_run,
+    "lybra_enroll_code_confirm": lybra_enroll_code_confirm,
     "lybra_roles_enroll_revoke": lybra_roles_enroll_revoke,
     "lybra_roles_enroll_list": lybra_roles_enroll_list,
     "lybra_roles_reload": lybra_roles_reload,
@@ -4922,20 +5283,96 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "lybra_roles_enroll_code",
+        "name": "lybra_enroll_code_dry_run",
         "description": (
-            "AIPOS-362: generate a one-time enrollment code for remote agent credential bootstrap. "
-            "Owner-gated: requires owner_authorization_ref. "
-            "The enrollment code can be exchanged for a capability token via lybra_roles_enroll_exchange. "
-            "The code is NOT a token — it's a temporary credential that can be safely transmitted to the remote agent. "
-            "Token values never appear in logs or agent-facing outputs."
+            "AIPOS-F23: advisor-driven enrollment code issuance (preview). Issues a SELF-CONTAINED code "
+            "(LYBRAENROLL1.<base64>) embedding gate_url/governance_root/zero-scope transport credential. "
+            "Owner-gated: requires owner_authorization_ref. Same single issuance implementation as CLI "
+            "`lybra roles enroll-code`. confirm returns a paste-ready /lybra enroll instruction."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "role": {"type": "string", "description": "Role to bind (e.g., executor, auditor, or custom role)."},
+                "role": {"type": "string", "description": "Role to bind (e.g., executor, auditor, or registered custom role)."},
                 "instance": {"type": "string", "description": "Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance."},
-                "ttl": {"type": "integer", "description": "Time-to-live in seconds; omit for no expiration."},
+                "ttl": {"type": "integer", "description": "Code TTL seconds (default 86400 = 24h; also bounds the embedded transport credential)."},
+                "gate_url": {"type": "string", "description": "Externally reachable gate URL to embed; defaults to connection.json mcp.rpc_url (non-loopback) or http://127.0.0.1:7118."},
+                "owner_authorization_ref": {"type": "string", "description": "Reference to owner authorization for this enrollment (owner-gated)."},
+                "reason": {"type": "string", "description": "Reason for generating this enrollment code."},
+                "actor": {"type": "string", "description": "Issuing actor."},
+                "agent_instance": {"type": "string", "description": "Issuing agent instance."},
+            },
+            "required": ["role", "owner_authorization_ref"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_enroll_code_confirm",
+        "description": (
+            "AIPOS-F23: confirm enrollment code issuance. Mints the self-contained code and returns "
+            "paste_text — a session instruction the Owner pastes into the new workstation's pi: "
+            "/lybra enroll <code>. Advisor self-confirm with owner_confirmation_token='OWNER_CONFIRMED' (AIPOS-328)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run_token": {"type": "string", "description": "Token from lybra_enroll_code_dry_run."},
+                "owner_confirmation_token": {"type": "string", "description": "Owner confirmation literal (AIPOS-328: 'OWNER_CONFIRMED')."},
+                "actor": {"type": "string", "description": "Confirming actor."},
+                "agent_instance": {"type": "string", "description": "Confirming agent instance."},
+            },
+            "required": ["dry_run_token", "owner_confirmation_token"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_roles_enroll_exchange",
+        "description": (
+            "AIPOS-362/F23: exchange an enrollment code (self-contained LYBRAENROLL1.* or plain) for a capability token. "
+            "PUBLIC at operation level — the code itself is the authentication (self-contained codes carry their own "
+            "zero-scope transport credential; no bootstrap token needed). Atomic landing (F23): retryable for the SAME "
+            "token inside the grace window until lybra_roles_enroll_land. ok=False always carries reason + next step."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Enrollment code (self-contained LYBRAENROLL1.<base64> or plain)."},
+            },
+            "required": ["code"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_roles_enroll_land",
+        "description": (
+            "AIPOS-F23: workstation confirms it landed .lybra/ config — closes the landing grace window, "
+            "the code is fully consumed (single-use). PUBLIC at operation level (same code = auth). Idempotent."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "The SAME enrollment code that was exchanged."},
+                "landed_detail": {"type": "string", "description": "Optional landing evidence note (workstation root + files written)."},
+            },
+            "required": ["code"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_roles_enroll_code",
+        "description": (
+            "AIPOS-362/F23: generate a one-time SELF-CONTAINED enrollment code (single-phase legacy surface; "
+            "the two-phase advisor verb is lybra_enroll_code_dry_run/confirm). Owner-gated: requires "
+            "owner_authorization_ref. Delegates to the SAME issuance implementation (发码只有一份实现). "
+            "Returns paste_text — the /lybra enroll instruction to paste into the new workstation's pi session."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "role": {"type": "string", "description": "Role to bind (e.g., executor, auditor, or registered custom role)."},
+                "instance": {"type": "string", "description": "Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance."},
+                "ttl": {"type": "integer", "description": "Code TTL seconds (default 86400 = 24h; also bounds the embedded transport credential)."},
+                "gate_url": {"type": "string", "description": "Externally reachable gate URL to embed; defaults to connection.json mcp.rpc_url (non-loopback) or http://127.0.0.1:7118."},
                 "owner_authorization_ref": {"type": "string", "description": "Reference to owner authorization for this enrollment."},
                 "reason": {"type": "string", "description": "Reason for generating this enrollment code."},
             },
@@ -4944,29 +5381,10 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "lybra_roles_enroll_exchange",
-        "description": (
-            "AIPOS-362: exchange an enrollment code for a capability token. "
-            "PUBLIC endpoint (no token required) — the enrollment code itself is the authentication. "
-            "Once exchanged, the code is marked as used and cannot be reused. "
-            "The token value is returned ONLY in this response and never logged. "
-            "Remote agents should save the token with 0600 permissions."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string", "description": "Enrollment code to exchange."},
-            },
-            "required": ["code"],
-            "additionalProperties": False,
-        },
-    },
-    {
         "name": "lybra_roles_enroll_revoke",
         "description": (
-            "AIPOS-362: revoke an enrollment code. Idempotent. "
-            "Owner-gated: requires owner_authorization_ref. "
-            "Revoked codes cannot be exchanged for tokens."
+            "AIPOS-362: revoke an enrollment code (and thereby its embedded transport credential's purpose). "
+            "Idempotent. Owner-gated: requires owner_authorization_ref. Revoked codes cannot be exchanged."
         ),
         "inputSchema": {
             "type": "object",

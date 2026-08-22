@@ -1613,7 +1613,8 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_code_parser = roles_subparsers.add_parser("enroll-code", help="AIPOS-362: generate a one-time enrollment code for remote agent credential bootstrap")
     roles_enroll_code_parser.add_argument("--role", required=True, help="Role to bind (e.g., executor, auditor, or custom role)")
     roles_enroll_code_parser.add_argument("--instance", help="Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance")
-    roles_enroll_code_parser.add_argument("--ttl", type=int, help="Time-to-live in seconds; omit for no expiration")
+    roles_enroll_code_parser.add_argument("--ttl", type=int, help="Time-to-live in seconds (default 86400 = 24h; also bounds the embedded transport credential)")
+    roles_enroll_code_parser.add_argument("--gate-url", help="Externally reachable gate URL to embed (default: connection.json mcp.rpc_url if non-loopback, else http://127.0.0.1:7118)")
     roles_enroll_code_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this enrollment")
     roles_enroll_code_parser.add_argument("--reason", default="", help="Reason for generating this enrollment code")
     roles_enroll_code_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1626,11 +1627,12 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_list_parser.add_argument("--json", action="store_true", help="Output JSON")
     
     # AIPOS-R2: enroll command (client-side enrollment: exchange code + write .lybra/ config)
-    roles_enroll_parser = roles_subparsers.add_parser("enroll", help="AIPOS-R2: enroll this machine/agent (exchange enrollment code + write .lybra/ config)")
-    roles_enroll_parser.add_argument("--code", required=True, help="Enrollment code (from owner/advisor)")
-    roles_enroll_parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://<host>:<gate-port>)")
+    roles_enroll_parser = roles_subparsers.add_parser("enroll", help="AIPOS-R2/F23: enroll this workstation (exchange enrollment code + write .lybra/ config). Self-contained code carries gate URL; run from the workstation directory")
+    roles_enroll_parser.add_argument("--code", required=True, help="Enrollment code (self-contained LYBRAENROLL1.* from owner/advisor, or legacy plain code)")
+    roles_enroll_parser.add_argument("--gate-url", help="Gate MCP URL override (self-contained codes embed it; legacy plain codes require this or LYBRA_GATE_URL)")
+    roles_enroll_parser.add_argument("--workspace", help="Workstation root (defaults to current directory — must be the workstation dir, NOT the governance workspace)")
     roles_enroll_parser.add_argument("--policy", help="Optional policy reference")
-    roles_enroll_parser.add_argument("--bootstrap-token", help="Bootstrap token for HTTP transport auth (any valid token; or set LYBRA_BOOTSTRAP_TOKEN)")
+    roles_enroll_parser.add_argument("--bootstrap-token", help="Legacy plain codes only: bootstrap token for HTTP transport auth (self-contained codes need none)")
     roles_enroll_parser.add_argument("--verify", action="store_true", help="AIPOS-R6S 大项C②: enroll 后立刻用新 token 调一次 gate, 不通即报错并回滚")
     roles_enroll_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -2332,10 +2334,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             # FIX-1: roles enroll 不需要 5_tasks/queue 结构(只落 .lybra/ 配置)
             if args.roles_command == "enroll":
-                # enroll 自己创建 workspace_root,不需要预先存在
-                explicit_root = getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None)
+                # enroll 自己创建 workspace_root,不需要预先存在。
+                # F23 大项C①: 缺省当前目录(工位目录约定 = pi 从工位根启动), 报错必带可抄示例。
+                explicit_root = (
+                    getattr(args, "workspace", None)
+                    or getattr(args, "workspace_root", None)
+                    or getattr(args, "global_workspace_root", None)
+                )
                 if not explicit_root:
-                    raise ValueError("roles enroll requires explicit --workspace-root")
+                    explicit_root = os.getcwd()
                 workspace_root = Path(explicit_root).expanduser().resolve()
                 connection_target = None
             else:
@@ -2475,47 +2482,63 @@ def main(argv: list[str] | None = None) -> int:
                     _render_token_lifecycle_result(result)
                 return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
             elif args.roles_command == "enroll-code":
-                # AIPOS-362: generate enrollment code
-                from tools.aipos_cli.enrollment import create_enrollment_code
+                # AIPOS-362/F23: generate SELF-CONTAINED enrollment code
+                # (同一实现两投影: 与门动词 lybra_enroll_code_confirm 共用 issue_self_contained_code)
+                from tools.aipos_cli.enrollment import issue_self_contained_code
                 owner_auth_ref = str(getattr(args, "owner_authorization_ref", "") or "").strip() or None
                 reason = str(getattr(args, "reason", "") or "").strip()
-                by = owner_auth_ref or "owner"
                 ttl = getattr(args, "ttl", None)
                 instance = getattr(args, "instance", None)
-                enrollment = create_enrollment_code(
+                gate_url_arg = str(getattr(args, "gate_url", "") or "").strip() or None
+                if not args.role:
+                    raise ValueError(
+                        "roles enroll-code requires --role.\n"
+                        "可抄示例: lybra roles enroll-code --role executor --instance exec.lybra.mac1 "
+                        "--ttl 86400 --owner-authorization-ref <owner-authorization-ref>"
+                    )
+                if not owner_auth_ref:
+                    raise ValueError(
+                        "roles enroll-code requires --owner-authorization-ref (发码是 owner-gated).\n"
+                        "可抄示例: lybra roles enroll-code --role executor --owner-authorization-ref <owner-authorization-ref>"
+                    )
+                result = issue_self_contained_code(
                     workspace_root,
                     role=args.role,
                     instance=instance,
                     ttl_seconds=ttl,
-                    by=by,
-                    reason=reason or (f"owner-authorization-ref: {owner_auth_ref}" if owner_auth_ref else ""),
+                    gate_url=gate_url_arg,
+                    by=owner_auth_ref,
+                    reason=reason or f"owner-authorization-ref: {owner_auth_ref}",
                 )
-                # FIX-2: --json 输出稳定含 code/code_id/fingerprint 在顶层
-                result = {
+                # FIX-2: --json 输出稳定含 self_contained_code/code_id/fingerprint 在顶层
+                result_out = {
                     "ok": True,
                     "operation": "roles_enroll_code",
-                    "code": enrollment["code"],
-                    "code_id": enrollment["code_id"],
-                    "fingerprint": enrollment["fingerprint"],
-                    "role": enrollment["role"],
-                    "instance": enrollment.get("instance"),
-                    "expires_at": enrollment.get("expires_at"),
-                    "created_at": enrollment["created_at"],
-                    "enrollment": enrollment,  # 完整记录保留在 enrollment 字段
+                    "code_id": result["code_id"],
+                    "self_contained_code": result["self_contained_code"],
+                    "paste_text": result["paste_text"],
+                    "fingerprint": result["fingerprint"],
+                    "role": result["role"],
+                    "instance": result.get("instance"),
+                    "expires_at": result.get("expires_at"),
+                    "gate_url": result.get("gate_url"),
+                    "transport_token_fingerprint": result.get("transport_token_fingerprint"),
                 }
                 if getattr(args, "json", False):
-                    print(render_json(result))
+                    print(render_json(result_out))
                 else:
-                    print(f"Generated enrollment code for role '{args.role}'")
+                    print(f"Generated SELF-CONTAINED enrollment code for role '{args.role}'")
                     if instance:
                         print(f"  Instance: {instance}")
-                    print(f"  Code ID: {enrollment['code_id']}")
-                    print(f"  Fingerprint: {enrollment['fingerprint']}")
+                    print(f"  Code ID: {result['code_id']}")
+                    print(f"  Fingerprint: {result['fingerprint']}")
+                    print(f"  Gate URL: {result['gate_url']}")
                     if ttl:
-                        print(f"  Expires at: {enrollment['expires_at']}")
-                    print(f"\n  Enrollment code (give this to the remote agent):")
-                    print(f"  {enrollment['code']}")
-                    print(f"\n  ⚠ This code is shown only once. Store it securely or share it immediately.")
+                        print(f"  Expires at: {result['expires_at']}")
+                    print(f"\n  把下面这条整体转贴到新工位的 pi 会话(Owner 唯一要做的事):")
+                    print(f"  {result['paste_text']}")
+                    print(f"\n  ⚠ 码单次 + TTL + 可撤销; 内嵌零 scope 运输凭证(码即运输认证, 无需 bootstrap token)。")
+                    print(f"  ⚠ This code is shown only once. Share it immediately.")
             elif args.roles_command == "enroll-revoke":
                 # AIPOS-362: revoke enrollment code
                 from tools.aipos_cli.enrollment import revoke_enrollment_code
@@ -2557,12 +2580,25 @@ def main(argv: list[str] | None = None) -> int:
                         expires = code.get('expires_at') or '(never)'
                         print(f"{code['code_id']:<24} {code['role']:<16} {inst:<32} {code['status']:<10} {expires}")
             elif args.roles_command == "enroll":
-                # AIPOS-R2: client-side enrollment (exchange code + write .lybra/ config)
+                # AIPOS-R2/F23: client-side enrollment (exchange code + write .lybra/ config)
                 from tools.aipos_cli.enroll_client import enroll
+                gate_url_arg = str(getattr(args, "gate_url", "") or "").strip()
+                if not gate_url_arg:
+                    gate_url_arg = os.environ.get("LYBRA_GATE_URL", "").strip()
+                # F23: 自包含码内嵌 gate 地址 —— gate_url 可省; 旧裸码必须有(F9 带可抄示例)
+                from tools.aipos_cli.enrollment import decode_self_contained_code
+                is_self_contained = decode_self_contained_code(args.code or "") is not None
+                if not gate_url_arg and not is_self_contained:
+                    raise ValueError(
+                        "roles enroll requires --gate-url for legacy plain codes "
+                        "(自包含码 LYBRAENROLL1.* 内嵌 gate 地址, 无需此参数)。\n"
+                        "可抄示例: lybra roles enroll --code LYBRAENROLL1.<base64> --workspace ~/workstations/my-agent\n"
+                        "旧码示例:   lybra roles enroll --code <裸码> --gate-url http://<host>:7118 --workspace ~/workstations/my-agent"
+                    )
                 try:
                     result = enroll(
                         code=args.code,
-                        gate_url=args.gate_url,
+                        gate_url=gate_url_arg,
                         workspace_root=workspace_root,
                         policy=getattr(args, "policy", None),
                         bootstrap_token=getattr(args, "bootstrap_token", None),
@@ -2581,11 +2617,18 @@ def main(argv: list[str] | None = None) -> int:
                             print(f"  ⟳ Token rotated (replaced existing credential)")
                         else:
                             print(f"  ✓ New credential registered")
-                        print(f"\n  Configuration written to: {result['lybra_dir']}/")
+                        # F23 大项C③: 输出的落盘路径与实际一致且为工位目录
+                        print(f"\n  Configuration written to: {result['lybra_dir']}/ (工位目录)")
                         for fname in result['files_written']:
                             print(f"    - {fname}")
+                        if result.get('landed') is True:
+                            print(f"  ✓ 落盘已确认(码已消费, grace 窗口关闭)")
+                        elif result.get('landed') is False:
+                            print(f"  ⚠ 落盘成功但 land 确认失败(码将由 grace 窗口过期自然消费, 不影响使用)")
                         print(f"\n⚠ Enrollment code has been consumed and cannot be reused.")
                         print(f"⚠ Token is stored with 0600 permissions in connection.json")
+                        if result.get('next_step'):
+                            print(f"\n下一步: {result['next_step']}")
                 except RuntimeError as exc:
                     print(f"Error: {exc}", file=sys.stderr)
                     return 2

@@ -23,6 +23,7 @@ declare -a files=(
   "tests/f18-version-stamp-voice.test.ts"
   "tests/f19-watermark.test.ts"
   "tests/f20-sync-command.test.ts"
+  "tests/f23-enroll-command.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
