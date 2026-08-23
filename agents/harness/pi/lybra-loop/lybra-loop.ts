@@ -488,6 +488,9 @@ const REQUIRED_VERBS: Record<string, string[]> = {
   lybra_queue_return_confirm: ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
   lybra_queue_close_dry_run: ["task_id", "actor", "closure_evidence"],
   lybra_queue_close_confirm: ["task_id", "actor", "closure_evidence"],
+  // AIPOS-F35 大项B: 审计裁决托管动词(F29大项E补做)
+  lybra_audit_verdict_dry_run: ["reviewed_task_id", "actor", "agent_instance", "owner_policy_ref", "verdict"],
+  lybra_audit_verdict_confirm: ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
 };
 
 /**
@@ -1523,22 +1526,116 @@ async function tryAutoReturn(): Promise<boolean> {
         const findings = findingsMatch ? findingsMatch[1].trim() : "";
         const auditSummary = summaryMatch ? summaryMatch[1].trim() : `Audit ${verdict}`;
         
+        // AIPOS-F35 大项B: 审计裁决托管(F29大项E补做) — 复用F33托管骨架,同一门动词
+        // 审计模型写完报告即停手 → 连接器自动完成 audit_verdict 两跳(dry_run + confirm)
+        // 报告缺裁决三值 → 出声带路,不提交
+        
         currentLogger.info("auto-audit-from-report", {
           task_id: currentTaskId,
           reviewed_task_id: reviewedTaskId,
           verdict,
+          findings_length: findings.length,
           report_path: reportPath,
         });
         
-        // 调用 audit_verdict_dry_run (需要实现审计动词调用，暂时记录TODO)
-        // TODO: 实现审计裁决的自动 dry_run + confirm 逻辑
-        // 类似 return 的 lybra_queue_return_dry_run / lybra_queue_return_confirm
-        // 需要 lybra_audit_verdict_dry_run / lybra_audit_verdict_confirm
-        
-        voice(`审计报告就位: ${currentTaskId} → ${verdict}, 托管裁决提交(TODO: 实现审计动词调用)`, "info", true);
-        
-        // 暂时保持原有行为: 报告就位后不继续执行return逻辑
-        return false;
+        try {
+          // 提取任务卡元数据(audit_claim_id, audit_session_id等)
+          const cardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${currentTaskId.toLowerCase()}.md`);
+          let auditClaimId: string | undefined;
+          let auditSessionId: string | undefined;
+          let auditDispatchRef: string | undefined;
+          let reviewedReturnRef: string | undefined;
+          
+          if (fs.existsSync(cardPath)) {
+            try {
+              const cardContent = fs.readFileSync(cardPath, "utf-8");
+              const claimMatch = cardContent.match(/claim_id:\s*['"]*([^'"\n]+)['"]/i);
+              const sessionMatch = cardContent.match(/active_session_id:\s*['"]*([^'"\n]+)['"]/i);
+              const dispatchMatch = cardContent.match(/audit_dispatch_record_ref:\s*['"]*([^'"\n]+)['"]/i);
+              const returnMatch = cardContent.match(/reviewed_return_record_ref:\s*['"]*([^'"\n]+)['"]/i);
+              
+              if (claimMatch) auditClaimId = claimMatch[1].trim();
+              if (sessionMatch) auditSessionId = sessionMatch[1].trim();
+              if (dispatchMatch) auditDispatchRef = dispatchMatch[1].trim();
+              if (returnMatch) reviewedReturnRef = returnMatch[1].trim();
+            } catch (e) {
+              currentLogger.warn("auto-audit-read-card-failed", {
+                task_id: currentTaskId,
+                error: e instanceof Error ? e.message : String(e),
+              });
+            }
+          }
+          
+          // 调用 lybra_audit_verdict_dry_run(复用F33托管骨架)
+          const dryRunResp = await currentClient.callTool("lybra_audit_verdict_dry_run", {
+            audit_task_id: currentTaskId,
+            reviewed_task_id: reviewedTaskId,
+            actor: config.actor,
+            agent_instance: config.agentInstance,
+            owner_policy_ref: config.ownerPolicyRef,
+            audit_claim_id: auditClaimId,
+            audit_session_id: auditSessionId || getSessionId(),
+            audit_dispatch_record_ref: auditDispatchRef,
+            reviewed_return_record_ref: reviewedReturnRef,
+            verdict,
+            findings_summary: findings || auditSummary,
+            evidence_refs: [],
+          });
+          
+          // 检查dry_run响应(对齐return托管的拒因处理)
+          if (dryRunResp.verdict === "BLOCK" || dryRunResp.isError === true) {
+            const reasons = dryRunResp.blocking_reasons || dryRunResp.errors || [];
+            const reasonText = stringifyReasons(reasons);
+            const severity = (dryRunResp as any).severity || "needs_human";
+            const level = severityToLevel(severity);
+            const onScreenMsg = `auto-audit-verdict ${currentTaskId} 被拒: ${reasonText}`;
+            currentLogger.error("auto-audit-verdict-blocked", { task_id: currentTaskId, reasons, severity, level });
+            voice(onScreenMsg, level, true);
+            voice(`下一步: 请检查拒因并修正后重试`, "warn", false);
+            return false;
+          }
+          
+          const dryRunToken = dryRunResp.dry_run_token;
+          if (!dryRunToken) {
+            const msg = `auto-audit-verdict ${currentTaskId}: 无 dry_run_token(响应异常)`;
+            currentLogger.error("auto-audit-verdict-no-token", { task_id: currentTaskId, response: dryRunResp });
+            voice(msg, "error", true);
+            return false;
+          }
+          
+          // 调用 lybra_audit_verdict_confirm(AIPOS-328: auditor自确认)
+          const confirmResp = await currentClient.callTool("lybra_audit_verdict_confirm", {
+            dry_run_token: String(dryRunToken),
+            actor: config.actor,
+            agent_instance: config.agentInstance,
+            owner_policy_ref: config.ownerPolicyRef,
+            owner_confirmation_token: "OWNER_CONFIRMED",
+          });
+          
+          currentLogger.info("auto-audit-verdict-success", {
+            task_id: currentTaskId,
+            reviewed_task_id: reviewedTaskId,
+            verdict,
+            confirm_verdict: confirmResp.verdict || confirmResp.ok ? "ok" : "unknown",
+          });
+          
+          voice(`自动提交审计裁决 ${currentTaskId} → ${verdict}`, "info", true);
+          
+          // 审计裁决成功 → 清空任务信息,歇手
+          resetRuntimeState("auto-audit-verdict 成功");
+          return true;
+          
+        } catch (e) {
+          const errMsg = e instanceof Error ? e.message : String(e);
+          currentLogger.error("auto-audit-verdict-failed", {
+            task_id: currentTaskId,
+            reviewed_task_id: reviewedTaskId,
+            error: errMsg,
+          });
+          voice(`auto-audit-verdict ${currentTaskId} 失败: ${errMsg}`, "error", true);
+          voice(`下一步: 请检查错误并重试`, "warn", false);
+          return false;
+        }
         
       } catch (e) {
         currentLogger.error("auto-audit-read-report-failed", {
@@ -1969,31 +2066,42 @@ async function doTick(): Promise<void> {
             if (!hasVerdict) {
               currentLogger.info("held-audit-no-verdict", { task_id: heldTaskId, reviewed_task_id: reviewedTaskId });
               voice(`复工：${heldTaskId} 是审计卡，只差提交裁决(verdict 未落库)`, "info", true);
-              // AIPOS-F10:投递卡内容让 auditor 继续提交裁决。
-              // 用 sendUserMessage(对齐 claim.ts 范式),不用 ctx.reply(不存在的方法)。
-              // AIPOS-F29B 大项B: 复工投递回归修复
+              // AIPOS-F35 大项A: 审计车道冷启动修真 — 用 liveCtx.newSession (F10 范式),
+              // 不用 sendUserMessage(实撞 F34R: "liveCtx.newSession is not a function")。
+              // 对齐 claim.ts + release 路径: withSession 回调内只用 freshCtx。
               if (cardContent) {
                 try {
-                  if (!liveCtx || !liveCtx.sendUserMessage) {
-                    throw new Error("liveCtx.sendUserMessage 不可用(ctx 未就绪)");
+                  if (!liveCtx || !liveCtx.newSession) {
+                    throw new Error("liveCtx.newSession 不可用(ctx 未就绪或非 F10 范式)");
                   }
-                  await liveCtx.sendUserMessage(
-                    `# 复工任务(审计车道): ${heldTaskId}\n\n审计卡 claimed + 无 verdict 记录 → 只差提交裁决。\n\n${cardContent}`,
-                  );
-                  // AIPOS-F26 大项E: 投递成功后才设置 currentTaskId 和 stopLoop("已复工")
-                  currentTaskId = heldTaskId;
-                  stopLoop(`已复工审计卡 ${heldTaskId}，等待提交裁决`, "info");
-                  return;
-                } catch (sendErr) {
-                  // AIPOS-F26 大项E: 投递失败禁报成功 — 停止语报失败 + next_step, 禁"已复工"
-                  // AIPOS-F29B 大项C: 带路语错配修复 - 审计车道应该说"继续提交裁决"而不是"手动提交"
-                  currentLogger.warn("held-audit-sendUserMessage-failed", {
-                    task_id: heldTaskId,
-                    error: sendErr instanceof Error ? sendErr.message : String(sendErr),
+                  currentTaskId = heldTaskId; // 复工前设置(投递可能异常,但 currentTaskId 需对齐)
+                  loopState.running = false; // newSession 前复位 running
+                  expectingSwap = true; // 标记预期会话更替
+                  const auditKickoff = `# 复工任务(审计车道): ${heldTaskId}\n\n审计卡 claimed + 无 verdict 记录 → 只差提交裁决。\n\n${cardContent}`;
+                  const result = await liveCtx.newSession({
+                    withSession: async (freshCtx) => {
+                      await freshCtx.sendUserMessage(auditKickoff);
+                    },
                   });
-                  voice(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn", true);
-                  voice(`下一步: 会话 ctx 未就绪,请稍后循环会自动重试; 或在 Pi 对话框继续提交裁决 ${heldTaskId}`, "info", false);
-                  stopLoop(`复工投递失败: ${heldTaskId}`, "error");
+                  if (result?.cancelled) {
+                    expectingSwap = false;
+                    stopLoop("newSession 被拦截(审计复工取消)", "warn");
+                  } else {
+                    // 成功投递 → 循环停,等新 session 的 agent_settled 续跑
+                    stopLoop(`已复工审计卡 ${heldTaskId}，等待提交裁决`, "info");
+                  }
+                  return;
+                } catch (newSessionErr) {
+                  // AIPOS-F35 大项A: newSession 异常时降级出声,不静默吞(对齐 release 路径)
+                  expectingSwap = false;
+                  const errMsg = newSessionErr instanceof Error ? newSessionErr.message : String(newSessionErr);
+                  currentLogger.warn("held-audit-newSession-failed", {
+                    task_id: heldTaskId,
+                    error: errMsg,
+                  });
+                  voice(`复工审计卡 newSession 异常: ${errMsg}`, "error", true);
+                  voice(`下一步: 会话 ctx 能力缺失,请在 Pi 对话框手动 /claim ${heldTaskId}`, "info", false);
+                  stopLoop(`审计复工 newSession 异常: ${heldTaskId}`, "error");
                   return;
                 }
               }

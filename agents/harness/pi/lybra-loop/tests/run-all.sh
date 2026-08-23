@@ -29,6 +29,9 @@ declare -a files=(
   "tests/f32-custom-role-envelope.test.ts"
   "tests/f32b-gate-registry-source.test.ts"
   "tests/f33-return-homology.test.ts"
+  "tests/f35a-audit-cold-start.test.ts"
+  "tests/f35b-audit-verdict-hosted.test.ts"
+  "tests/f35c-hyphenated-task-id.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
