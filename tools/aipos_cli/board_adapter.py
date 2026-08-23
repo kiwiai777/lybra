@@ -2459,8 +2459,11 @@ def _build_return_preview(
 
     if claim_id and str(source_metadata.get("claim_id") or "").strip() != claim_id:
         blocking_reasons.append("CLAIM_ID_MISMATCH: claim_id does not match claimed task")
+    # AIPOS-F34 大项A: 绑定放宽为工位双锁(service token + agent_instance)。
+    # 会话字段仍记录入 original_payload(可问责证据保留), 但不作为拒绝条件。
+    # 冒交防线由上方 CLAIMANT_MISMATCH(agent_instance 匹配) + 服务层 token 校验保证。
     if active_session_id and str(source_metadata.get("active_session_id") or "").strip() != active_session_id:
-        blocking_reasons.append("SESSION_MISMATCH: active_session_id does not match claimed task")
+        warnings.append(f"SESSION_DRIFT: active_session_id changed (claimed={source_metadata.get('active_session_id')}, returned={active_session_id}); recorded but not blocking (AIPOS-F34)")
     
     # AIPOS-R6F靶③: return材料位置校验——拒绝/tmp与仓外路径
     unsafe_refs = [ref for ref in [*artifact_refs, completion_report_ref or ""] if _unsafe_return_ref(ref)]

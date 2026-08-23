@@ -1662,18 +1662,23 @@ async function tryAutoReturn(): Promise<boolean> {
     
     // AIPOS-F4 大项C/D: dry_run 被拒时拒因上屏(声明→级别映射, 禁现场定级)。
     // [object Object] 修复: 用 stringifyReasons 逐项取 message, 不再裸 join 对象数组。
-    // 兜底网撞会话绑定(SESSION_MISMATCH)属 auto_recoverable → 降 info(非红错), 附"下一步"。
+    // AIPOS-F34 大项B: 带路语禁撒谎——被拒时不声称"已交回", 报真因+真下一步。
     if (dryRunResp.verdict === "BLOCK" || dryRunResp.isError === true) {
       const reasons = dryRunResp.blocking_reasons || dryRunResp.errors || [];
       const reasonText = stringifyReasons(reasons);
-      const isSessionMismatch = reasonText.includes("SESSION_MISMATCH");
-      const severity = (dryRunResp as any).severity || (isSessionMismatch ? "auto_recoverable" : "needs_human");
+      const severity = (dryRunResp as any).severity || "needs_human";
       const level = severityToLevel(severity);
       const onScreenMsg = `auto-return ${currentTaskId} 被拒: ${reasonText}`;
-      currentLogger.error("auto-return-blocked", { task_id: currentTaskId, reasons, isSessionMismatch, severity, level });
+      currentLogger.error("auto-return-blocked", { task_id: currentTaskId, reasons, severity, level });
       voice(onScreenMsg, level, true);
-      if (isSessionMismatch) {
-        voice(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info", false);
+      // AIPOS-F34 大项B: 先查 F2 单源(returns/)再出声, 无记录则报真因+真下一步
+      const f2ReturnsDir = path.join(config.workspaceRoot, "5_tasks/records/returns", currentTaskId);
+      const hasReturnRecords = fs.existsSync(f2ReturnsDir) &&
+        fs.readdirSync(f2ReturnsDir).filter((f) => f.startsWith("return_") && f.endsWith(".md")).length > 0;
+      if (hasReturnRecords) {
+        voice(`任务已由本工位交回(returns 有记录), 无需处理`, "info", false);
+      } else {
+        voice(`下一步: 请检查拒因并修正后重试, 或走 /lybra return 手动交回`, "warn", false);
       }
       return false;
     }
@@ -1708,15 +1713,19 @@ async function tryAutoReturn(): Promise<boolean> {
     return true;
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
-    const isSessionMismatch = errMsg.includes("SESSION_MISMATCH");
     currentLogger.error("auto-return-failed", {
       task_id: currentTaskId,
       error: errMsg,
     });
-    // AIPOS-F4 大项D: 拒因上屏 — SESSION_MISMATCH 属 auto_recoverable → info, 其余 → error
-    voice(`auto-return ${currentTaskId} 失败: ${errMsg}`, isSessionMismatch ? "info" : "error", true);
-    if (isSessionMismatch) {
-      voice(`下一步: 任务已由本工位交回(returns 已有记录), 无需处理`, "info", false);
+    // AIPOS-F34 大项B: 带路语禁撒谎——失败时报真因+真下一步, 不谎称"已交回"
+    voice(`auto-return ${currentTaskId} 失败: ${errMsg}`, "error", true);
+    const f2ReturnsDirCatch = path.join(config.workspaceRoot, "5_tasks/records/returns", currentTaskId);
+    const hasReturnRecordsCatch = fs.existsSync(f2ReturnsDirCatch) &&
+      fs.readdirSync(f2ReturnsDirCatch).filter((f) => f.startsWith("return_") && f.endsWith(".md")).length > 0;
+    if (hasReturnRecordsCatch) {
+      voice(`任务已由本工位交回(returns 有记录), 无需处理`, "info", false);
+    } else {
+      voice(`下一步: 请检查错误并重试, 或走 /lybra return 手动交回`, "warn", false);
     }
     return false;
   }

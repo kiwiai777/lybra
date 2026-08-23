@@ -2385,5 +2385,96 @@ class McpToolTests(unittest.TestCase):
         self.assertEqual(result["return_body"], return_body_text)
 
 
+    # ---------------------------------------------------------------------------
+    # AIPOS-F34 大项A: 会话更替夹具——return 时 session_id 不同不再阻塞(放宽为工位双锁)
+    # ---------------------------------------------------------------------------
+    def test_aipos_f34_session_drift_no_longer_blocks_return(self) -> None:
+        """AIPOS-F34: 会话更替后交回不再被 SESSION_MISMATCH 阻塞。"""
+        self.write_return_task()
+        # 设置正确的 artifact 落点(在 task_cards/<ID>/ 内)
+        task_dir = self.repo_root / "task_cards" / "AIPOS-MCP-RETURN"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        (task_dir / "RETURN.md").write_text("# Return\nDone.\n", encoding="utf-8")
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            # 模拟 claim 后会话更替: active_session_id 与 claim 记录不同
+            result = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_dry_run",
+                    self.return_payload(
+                        active_session_id="session_AIPOS-MCP-RETURN_20260603_agent-01_NEW",
+                        artifact_refs=["task_cards/AIPOS-MCP-RETURN/RETURN.md"],
+                        completion_report_ref="task_cards/AIPOS-MCP-RETURN/RETURN.md",
+                    ),
+                )
+            )
+
+        # AIPOS-F34: 会话更替不再阻塞——blocking_reasons 中不应有 SESSION_MISMATCH
+        session_mismatch_blocks = [
+            r for r in result.get("blocking_reasons", [])
+            if "SESSION_MISMATCH" in str(r)
+        ]
+        self.assertEqual(
+            session_mismatch_blocks, [],
+            f"AIPOS-F34: SESSION_MISMATCH 不应再阻塞 return, 但得到: {session_mismatch_blocks}"
+        )
+        # AIPOS-F34: SESSION_DRIFT 应作为 warning 出现(非 blocking)
+        session_drift_warnings = [
+            w for w in result.get("warnings", [])
+            if "SESSION_DRIFT" in str(w)
+        ]
+        self.assertTrue(
+            len(session_drift_warnings) > 0,
+            f"AIPOS-F34: SESSION_DRIFT 应作为 warning 出现, 但得到 warnings: {result.get('warnings', [])}"
+        )
+        # 会话字段仍记录入 original_payload(可问责证据保留)
+        data = result.get("data", {})
+        original = data.get("original_payload", {}) if isinstance(data, dict) else {}
+        self.assertEqual(
+            original.get("active_session_id"),
+            "session_AIPOS-MCP-RETURN_20260603_agent-01_NEW",
+            "AIPOS-F34: 会话字段仍应记录入 original_payload"
+        )
+
+    # ---------------------------------------------------------------------------
+    # AIPOS-F34 冒交负夹具: 他工位 token 或他 agent_instance 交回必拒
+    # ---------------------------------------------------------------------------
+    def test_aipos_f34_impostor_return_still_blocked(self) -> None:
+        """AIPOS-F34: 冒交负夹具——他工位 agent_instance 交回仍被拒。"""
+        self.write_return_task()
+        # 设置正确的 artifact 落点
+        task_dir = self.repo_root / "task_cards" / "AIPOS-MCP-RETURN"
+        task_dir.mkdir(parents=True, exist_ok=True)
+        (task_dir / "RETURN.md").write_text("# Return\nDone.\n", encoding="utf-8")
+        env = {
+            "AIPOS_WORKSPACE_ROOT": str(self.repo_root),
+            "LYBRA_CAPABILITY_TOKEN": self.capability_token(operations=["queue_return", "owner_confirm"]),
+        }
+        with patch.dict(os.environ, env, clear=True):
+            # 他工位 agent_instance 尝试交回
+            result = self.assert_tool_ok(
+                self.call_tool(
+                    "lybra_queue_return_dry_run",
+                    self.return_payload(
+                        actor="agent-02",
+                        agent_instance="agent-02",
+                        artifact_refs=["task_cards/AIPOS-MCP-RETURN/RETURN.md"],
+                        completion_report_ref="task_cards/AIPOS-MCP-RETURN/RETURN.md",
+                    ),
+                )
+            )
+
+        self.assertEqual(result["verdict"], "BLOCK")
+        # 工位双锁防线: 他工位被 identity/policy 层面拒绝(可能是 CLAIMANT_MISMATCH 或 specific_instance_only)
+        blocking_text = " ".join(str(r) for r in result.get("blocking_reasons", []))
+        self.assertTrue(
+            "CLAIMANT_MISMATCH" in blocking_text or "specific_instance_only" in blocking_text or "does not match" in blocking_text,
+            f"AIPOS-F34 冒交负夹具: 他工位 agent_instance 应被拒, 得到: {result.get('blocking_reasons')}"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
