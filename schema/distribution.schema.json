@@ -154,8 +154,9 @@
       "applies_to_roles": ["executor"],
       "operation": "copy_tree",
       "version_strategy": "git_commit_hash",
+      "seed_only": true,
       "gitignore": true,
-      "notes": "Charter is a generated artifact, not committed to harness repo. Source of truth lives in lybra product repo."
+      "notes": "AIPOS-F27: seed_only=true — charter 只播种不覆盖(工位主权文件)。目标已存在即跳过+出声(含差异指纹)。Source of truth lives in lybra product repo."
     },
     {
       "distribution_id": "auditor-charter",
@@ -172,8 +173,9 @@
       "applies_to_roles": ["auditor"],
       "operation": "copy_tree",
       "version_strategy": "git_commit_hash",
+      "seed_only": true,
       "gitignore": true,
-      "notes": "Charter is a generated artifact, not committed to harness repo"
+      "notes": "AIPOS-F27: seed_only=true — charter 只播种不覆盖(工位主权文件)。目标已存在即跳过+出声(含差异指纹)。"
     },
     {
       "distribution_id": "advisor-charter",
@@ -190,8 +192,9 @@
       "applies_to_roles": ["advisor"],
       "operation": "copy_tree",
       "version_strategy": "git_commit_hash",
+      "seed_only": true,
       "gitignore": true,
-      "notes": "Charter is a generated artifact, not committed to harness repo. AIPOS-R7A: advisor charter defines advisor role boundaries and workflow."
+      "notes": "AIPOS-F27: seed_only=true — charter 只播种不覆盖(工位主权文件)。目标已存在即跳过+出声(含差异指纹)。AIPOS-R7A: advisor charter defines advisor role boundaries and workflow."
     },
     {
       "distribution_id": "transitions-schema",
@@ -264,6 +267,12 @@
       "4. Zero code change to distribute_tools.py engine (data-driven)"
     ],
     "forbidden": "Custom code / plugins in distribute_tools.py. New primitive = product repo task + audit. Per §4: 'distribution WHAT = data, HOW = fixed engine'."
+  },
+  "seed_only_semantics": {
+    "description": "AIPOS-F27 大项A: seed_only 属性语义 — charter 类分发加 seed_only 属性:目标存在即跳过+出声提示差异指纹",
+    "rule": "kind=charter 的分发条目强制 seed_only=true(安全默认)。目标文件已存在时:跳过写入+输出双方内容指纹(sha256 截断);目标不存在时:正常播种。即使 --force 也不覆盖(charter=工位主权文件,分发器不可践踏)。",
+    "fingerprint_diff_format": "source=sha256:<16hex> target=sha256:<16hex> DIFFER 或 identical (sha256:<16hex>)",
+    "applies_to": "kind=charter 的所有条目(本引擎硬编码;schema 显式声明 seed_only=true 仅为可读性)"
   },
   "applies_to_roles_semantics": {
     "description": "AIPOS-F26 大项C: applies_to_roles 匹配语义 — 内建角色名直接匹配, 自定义角色按其注册表 class 展开匹配",

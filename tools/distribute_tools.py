@@ -277,15 +277,53 @@ def get_distributions_for_role(role: str, spec: dict[str, Any], project_root: Pa
     return matched
 
 
+def _fingerprint_diff(source_path: Path, target_path: Path) -> str:
+    """AIPOS-F27 大项A: 计算源与目标的差异指纹(用于 seed_only 跳过时的出声提示)。
+    
+    Returns:
+        简短差异描述字符串
+    """
+    import hashlib
+    
+    def _file_hash(p: Path) -> str:
+        if not p.exists():
+            return "<missing>"
+        if p.is_file():
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            return h.hexdigest()[:16]
+        # 目录: 递归哈希所有文件
+        h = hashlib.sha256()
+        for child in sorted(p.rglob("*")):
+            if child.is_file():
+                h.update(child.relative_to(p).as_posix().encode())
+                with open(child, "rb") as f:
+                    for chunk in iter(lambda: f.read(65536), b""):
+                        h.update(chunk)
+        return h.hexdigest()[:16]
+    
+    src_hash = _file_hash(source_path)
+    tgt_hash = _file_hash(target_path)
+    
+    if src_hash == tgt_hash:
+        return f"identical (sha256:{src_hash})"
+    return f"source=sha256:{src_hash} target=sha256:{tgt_hash} DIFFER"
+
+
 def execute_distribution(
     dist: dict[str, Any], target_harness_root: Path, *, force: bool = False, version: str = "unknown"
 ) -> dict[str, Any]:
     """执行单个分发条目
     
+    AIPOS-F27 大项A: charter kind 强制 seed_only — 目标已存在即跳过+出声(含差异指纹),
+    即使 --force 也不覆盖(工位主权文件不可践踏)。
+    
     Args:
         dist: distribution条目(来自schema)
         target_harness_root: 目标harness根目录
-        force: 强制覆盖
+        force: 强制覆盖(charter kind 忽略此标志)
         version: 源版本(git commit hash)
     
     Returns:
@@ -311,6 +349,26 @@ def execute_distribution(
     else:
         # 其他(extensions/skills)写到父目录的_distributed/
         target_path = target_harness_root.parent / target_rel_path
+
+    # AIPOS-F27 大项A: charter kind 强制 seed_only — 目标存在即跳过+出声
+    # 无论 schema 是否显式声明 seed_only, charter kind 一律 seed_only(安全默认)
+    seed_only = kind == "charter" or dist.get("seed_only", False)
+    
+    if seed_only and target_path.exists():
+        diff = _fingerprint_diff(source_path, target_path)
+        return {
+            "ok": True,
+            "action": "seed_only_skip",
+            "source": str(source_path),
+            "target": str(target_path),
+            "error": None,
+            "seed_only": True,
+            "fingerprint_diff": diff,
+            "message": f"Charter target exists, skipping (seed_only): {target_path} — {diff}",
+            "distribution_id": dist_id,
+            "kind": kind,
+            "source_commit": version,
+        }
 
     # 执行原语
     if operation == "copy_tree":
@@ -383,7 +441,21 @@ def distribute_to_harness(target_harness_root: Path, role: str, *, force: bool =
     for dist in distributions:
         result = execute_distribution(dist, target_harness_root, force=force, version=version)
         
-        if result["ok"]:
+        if result.get("seed_only") and result.get("action") == "seed_only_skip":
+            # AIPOS-F27 大项A: charter seed_only 跳过 — 出声含差异指纹
+            diff = result.get("fingerprint_diff", "")
+            results["skipped"].append(
+                f"{result['distribution_id']} (seed_only): target exists — {diff}"
+            )
+            distribution_records.append({
+                "distribution_id": result["distribution_id"],
+                "kind": result["kind"],
+                "source_commit": version,
+                "target_path": result.get("target", "unknown"),
+                "seed_only_skipped": True,
+                "fingerprint_diff": diff,
+            })
+        elif result["ok"]:
             results["distributed"].append(
                 f"{result['distribution_id']} ({result['kind']}): {result.get('source', '?')} → {result.get('target', '?')}"
             )
@@ -464,6 +536,8 @@ def main() -> int:
                 print(f"\n⊙ Skipped ({len(result['skipped'])}):")
                 for item in result["skipped"]:
                     print(f"  - {item}")
+                    if "seed_only" in item:
+                        print(f"    (charter seed_only: 工位主权文件不可践踏, 目标已存在即跳过)")
             
             if result["errors"]:
                 print(f"\n✗ Errors ({len(result['errors'])}):")
