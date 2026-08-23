@@ -765,11 +765,32 @@ def dispatch_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]
     request_project = _resolve_request_project(args)
     
     # Set request project context and dispatch
-    with request_project_scope(request_project):
-        denied = _project_gate_denied()
-        if denied is not None:
-            return denied
-        return handler(args)
+    # AIPOS-F30: Single exception wrapper for all tools - programming errors must surface with full traceback
+    try:
+        with request_project_scope(request_project):
+            denied = _project_gate_denied()
+            if denied is not None:
+                return denied
+            return handler(args)
+    except Exception as exc:
+        import traceback
+        import sys
+        # Programming errors (UnboundLocalError, NameError, etc.) must surface with full traceback
+        # to aid debugging. The error_type in response data helps distinguish programming bugs from runtime issues.
+        exc_type = exc.__class__.__name__
+        is_programming_error = isinstance(exc, (NameError, UnboundLocalError, AttributeError, TypeError))
+        if is_programming_error:
+            print(f"[dispatch_tool] PROGRAMMING ERROR in {name}: {exc_type}: {exc}", file=sys.stderr)
+        else:
+            print(f"[dispatch_tool] Internal error in {name}: {exc}", file=sys.stderr)
+        print(f"[dispatch_tool] Full traceback follows:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        # Return structured error response (MCP tool result format)
+        return {
+            "content": [{"type": "text", "text": f"Internal tool error: {exc_type}: {exc}"}],
+            "isError": True,
+            "_meta": {"error_code": "INTERNAL_TOOL_ERROR", "error_type": exc_type},
+        }
 
 
 def _intake_scope_allowed() -> bool:
@@ -2236,6 +2257,9 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
     # the Owner-signed envelope, and the gate is the executor of that already-granted policy. Any
     # miss / expiry / count-bound / forged ref falls back to the Supervised per-task preview.
     binding_status = None
+    # AIPOS-F30: Initialize envelope_error_info before conditional blocks to prevent UnboundLocalError
+    # when requested_mode is Supervised (skips the PreAuthorized block but still references the variable)
+    envelope_error_info = None
     if requested_mode == AUTONOMY_MODE_PREAUTHORIZED:
         matched_policy_id, binding_status, envelope_error_code = _match_claim_envelope(
             repo_root,
@@ -2258,7 +2282,6 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
             )
         # fall through to a Supervised preview (fail-safe: 回落 Supervised 逐单).
         # AIPOS-F9: if envelope mismatch, attach error_code and next_step from schema declaration
-        envelope_error_info = None
         if envelope_error_code:
             guard_decl = _load_envelope_guard_declaration(envelope_error_code)
             if guard_decl:
