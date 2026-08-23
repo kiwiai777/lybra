@@ -204,6 +204,7 @@ def enroll_deliver_local(
         lybra_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         
         # 4a. connection.json (AIPOS-R6K件①: 同机写 loopback URL)
+        # AIPOS-F27 大项D: 铸全 connection.json — workspace_root/mcp.rpc_url/tokens 三全
         normalized_gate_url = normalize_gate_url_for_same_host(gate_url)
         connection_file = lybra_dir / "connection.json"
         if connection_file.exists():
@@ -211,11 +212,15 @@ def enroll_deliver_local(
         else:
             conn_data = {
                 "config_version": 1,
+                "workspace_root": str(workspace_root),
                 "mcp": {
                     "rpc_url": normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp",
                 },
                 "tokens": [],
             }
+        # AIPOS-F27 大项D: 幂等补铸 workspace_root(已有正确值则保留)
+        if not conn_data.get("workspace_root"):
+            conn_data["workspace_root"] = str(workspace_root)
         
         # 更新 mcp.rpc_url (幂等:如已存在也更新为规范化 URL)
         if "mcp" not in conn_data:

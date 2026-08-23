@@ -2738,8 +2738,8 @@ def main(argv: list[str] | None = None) -> int:
                             print(f"  ⟳ Token rotated (replaced existing credential)")
                         else:
                             print(f"  ✓ New credential registered")
-                        # F23 大项C③: 输出的落盘路径与实际一致且为工位目录
-                        print(f"\n  Configuration written to: {result['lybra_dir']}/ (工位目录)")
+                        # AIPOS-F27 大项B: 输出落点字符串与实际路径 assert 相等(禁错标)
+                        print(f"\n  Configuration written to: {result['lybra_dir']}/")
                         for fname in result['files_written']:
                             print(f"    - {fname}")
                         if result.get('landed') is True:
