@@ -274,30 +274,37 @@ describe("F33-③: C2 解析单源", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 测试④: 会话更替场景 — SESSION_MISMATCH 家族消灭
+// 测试④: 会话更替场景 — AIPOS-F34 门侧绑定放宽+带路语禁撒谎
 // ---------------------------------------------------------------------------
-describe("F33-④: 会话更替场景", () => {
-  it("托管层: tryAutoReturn 处理 SESSION_MISMATCH 为 auto_recoverable", () => {
+describe("F33-④: 会话更替场景 (F34 门侧绑定放宽+带路语禁撒谎)", () => {
+  it("托管层: tryAutoReturn 带路语禁撒谎——被拒时不谎称'已交回'", () => {
     const source = readFileSync(
       join(PROJECT_ROOT, "agents/harness/pi/lybra-loop/lybra-loop.ts"),
       "utf-8"
     );
     
-    // tryAutoReturn 应将 SESSION_MISMATCH 视为 auto_recoverable
+    // tryAutoReturn 应存在
     const tryAutoReturnMatch = source.match(/async function tryAutoReturn[\s\S]*?^}/m);
     assert.ok(tryAutoReturnMatch, "tryAutoReturn 函数应存在");
     const tryAutoReturnBody = tryAutoReturnMatch![0];
     
+    // AIPOS-F34 大项B: 被拒时先查 F2 单源(returns/)再出声
     assert.ok(
-      tryAutoReturnBody.includes("SESSION_MISMATCH"),
-      "tryAutoReturn 应处理 SESSION_MISMATCH"
+      tryAutoReturnBody.includes("5_tasks/records/returns"),
+      "tryAutoReturn 被拒时应先查 returns/ 目录(F2 单源)"
     );
+    // AIPOS-F34 大项B: 不应有旧版撒谎语句(无条件声称'已交回')
     assert.ok(
-      tryAutoReturnBody.includes("auto_recoverable"),
-      "SESSION_MISMATCH 应标为 auto_recoverable(非红错)"
+      !tryAutoReturnBody.includes("任务已由本工位交回(returns 已有记录), 无需处理"),
+      "tryAutoReturn 不应无条件声称'已交回'——应先查 F2 再出声"
+    );
+    // AIPOS-F34 大项B: 无记录时应报真因+真下一步
+    assert.ok(
+      tryAutoReturnBody.includes("请检查拒因并修正后重试") || tryAutoReturnBody.includes("请检查错误并重试"),
+      "tryAutoReturn 无返回记录时应报真下一步"
     );
     
-    console.log("✓ SESSION_MISMATCH: 标为 auto_recoverable, 不阻塞");
+    console.log("✓ F34 带路语禁撒谎: 先查 F2 单源再出声, 无记录报真因+真下一步");
   });
 });
 
