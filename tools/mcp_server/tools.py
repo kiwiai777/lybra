@@ -4591,9 +4591,12 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
         token_entry["agent_instance"] = instance
 
     # AIPOS-F25 大项A: 凭据项目域推导 — projects 从 governance_root 推导(自包含码内嵌)
-    # 自包含码携带 governance_root → 读 project.json#name → projects=[name]
+    # 自包含码携带 governance_root → 读 project.json#project → projects=[project]
     # 缺省回落 workspace (记录存储位置) → 同样读 project.json。
-    # 推导失败(无 project.json / 无 name 字段) → projects=[] (不静默回落 lybra, 调用方自行推断)。
+    # 推导失败(无 project.json / 无 project 字段) → projects=[] (不静默回落 lybra, 调用方自行推断)。
+    # AIPOS-F31 热修: project.json 的规范键是 "project"(write_project_json 单源),
+    # F25 起读 "name" 键 — 真实项目(如 chris-huibojin)全数 project.json 都用 "project" 键,
+    # 导致铸出的凭据 projects=[] + projects_enforced=False(预演五号实锤)。
     if sc is not None and sc.get("governance_root"):
         governance_root = sc["governance_root"]
     else:
@@ -4602,12 +4605,12 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
     from tools.aipos_cli.workspace_config import read_project_json
     try:
         project_data = read_project_json(governance_root)
-        project_name = str(project_data.get("name") or "").strip()
+        project_name = str(project_data.get("project") or project_data.get("name") or "").strip()
         if project_name:
             token_entry["projects"] = [project_name]
             token_entry["projects_enforced"] = True
         else:
-            # project.json 存在但无 name → projects=[] (禁静默回落)
+            # project.json 存在但无 project/name → projects=[] (禁静默回落)
             token_entry["projects"] = []
             token_entry["projects_enforced"] = False
     except Exception:
@@ -4615,8 +4618,11 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
         token_entry["projects"] = []
         token_entry["projects_enforced"] = False
 
-    # AIPOS-F28 大项A: 注册 token 到 gate 声明源(门重启后仍在)
-    # FIX: 必须写入 gate 启动时的声明源(service_registry_source),不是 _repo_root()
+    # AIPOS-F31 热修: F28(05e556e) 在此使用了 http_sse._CURRENT_SERVER 却从未 import ——
+    # NameError 每次必炸(被下方 except 吞成 warning), token 从未登记进任何声明源,
+    # _reload_token_registry 也从未执行 → 新铸 token 是门侧孤魂 → enroll --verify 401 →
+    # R6S 回滚把 tokens[] 清空(2026-08-23 预演四/五实锤: 骨架齐 + tokens:[] 空)。
+    from tools.mcp_server import http_sse as _http_sse
     from tools.aipos_cli.enroll_client import (
         load_or_create_connection_json,
         upsert_token_entry,
@@ -4627,7 +4633,8 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
     print(f"[enroll_exchange] AIPOS-F28: Registering token to gate declaration source", file=sys.stderr)
     try:
         # 获取 gate 声明源(启动时扫描的 connection.json)
-        server = http_sse._CURRENT_SERVER
+        # AIPOS-F31: 用本地导入别名(上方已 from tools.mcp_server import http_sse as _http_sse)
+        server = _http_sse._CURRENT_SERVER
         if server is None:
             raise RuntimeError("Gate server instance not available (_CURRENT_SERVER is None)")
         
@@ -4663,31 +4670,26 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
             print(f"[enroll_exchange] Token written to declaration source: {conn_path} (rotated={rotated})", file=sys.stderr)
             
         elif registry_mode == "home_root" and registry_source:
-            # home 模式: 从码内治理根(registry_source)推导项目,写入对应 connection.json
-            # AIPOS-F28B 大项A: 必须写入码内治理根工作区,不是自包含码的 governance_root
+            # home 模式: 登记写入码内治理根工作区(<home_root>/<project> 项目工作区)
+            # AIPOS-F31 热修: F28B(8e4ca88) 把落点映射成 home_root/"2_projects"/<project_name> ——
+            # 双层嵌套错路径(项目是 home_root 的直接子目录, 见 _project_candidates:
+            # 子目录名即项目名, 不存在 2_projects 中间层), 写进去注册表永远扫不到。
+            # 正确落点: governance_root 本身就是 <home_root>/<project> 项目工作区 ——
+            #   ① 治理根是 home_root 直接子目录 → 写该治理根工作区(加载面按项目归属 projects);
+            #   ② 否则 → 写 home 级 .lybra/connection.json(加载面也读, 默认 projects=["*"])。
             from pathlib import Path
             import json
             
-            # 使用码内治理根(registry_source)推导项目工作区
-            # governance_root 来自自包含码,可能指向 lybra 工作区(项目域推导用),但登记落点必须是码内治理根
-            home_root = Path(registry_source)
-            # 从 governance_root(自包含码)提取项目名,映射到治理根下的项目工作区
-            project_root = home_root  # 默认写到治理根自身的 connection.json
-            if governance_root and governance_root != str(root):
-                # 尝试从 governance_root 读取 project.json 获取项目名
-                from tools.aipos_cli.workspace_config import read_project_json
-                try:
-                    project_data = read_project_json(governance_root)
-                    project_name = str(project_data.get("name") or "").strip()
-                    if project_name:
-                        # 映射到 home_root/2_projects/<project_name>
-                        project_root = home_root / "2_projects" / project_name
-                        print(f"[enroll_exchange] Mapped project '{project_name}' to {project_root}", file=sys.stderr)
-                except Exception as e:
-                    print(f"[enroll_exchange] Failed to read project from governance_root, using home_root: {e}", file=sys.stderr)
+            home_root = Path(registry_source).expanduser().resolve()
+            project_root = home_root  # 默认 home 级注册表
+            if governance_root:
+                gov_path = Path(governance_root).expanduser().resolve()
+                if gov_path.parent == home_root:
+                    project_root = gov_path  # 治理根即项目工作区, 直写
+                    print(f"[enroll_exchange] Target project workspace: {project_root}", file=sys.stderr)
             
             lybra_dir = ensure_lybra_dir(project_root)
-            print(f"[enroll_exchange] Writing to home_root mode project: {project_root}/.lybra/connection.json", file=sys.stderr)
+            print(f"[enroll_exchange] Writing to home_root mode registry: {lybra_dir}/connection.json", file=sys.stderr)
             
             connection_data = load_or_create_connection_json(lybra_dir, gate_url=None)
             rotated = upsert_token_entry(connection_data, token_entry)

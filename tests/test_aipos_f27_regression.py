@@ -607,5 +607,166 @@ class TestBinEntryIronRule:
                 )
 
 
+# ==============================================================================
+# AIPOS-F31 大項B: E2E 断言加强 — 从"形状"到"可用性"
+# ==============================================================================
+
+class TestUnattendedE2EGateLive:
+    """AIPOS-F31: 无人陪跑 E2E 同夹具加强 —— tokens 非空 + 用落盘凭据实调门。
+
+    2026-08-23 预演五号实锤: 落盘 connection.json 骨架齐(cwd/rpc_url/workspace_root)
+    但 tokens:[] 空 —— 门侧登记断链(F28 05e556e 在 lybra_roles_enroll_exchange 引入
+    NameError: http_sse 未导入) + enroll --verify 401 回滚清空 tokens。
+    形状断言(键存在/isinstance list)挡不住空数组 —— 本夹具断到可用性:
+
+      空目录经 bin/lybra enroll(含 --verify, 预演五号同形) →
+      ① 落盘 tokens 非空 ② 用落盘凭据 GateClient initialize +
+      一次只读动词(lybra_gate_version) 实调门成功。
+
+    活体链路: 真 gate 子进程(serve-http --home-root) + 发码经门动词两阶段 +
+    enroll 经 bin 铁律。任何一环断(登记/热重载/verify)本夹具即红。
+    """
+
+    def _free_port(self) -> int:
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    def _seed_home(self, tmp_path: Path) -> tuple[Path, Path, str]:
+        """临时 home 根 + 单项目(含 owner 种子凭据); 返回 (home, project_root, owner_token)。"""
+        import secrets
+        home = tmp_path / "home"
+        project = home / "proj_main"
+        (project / "5_tasks" / "queue").mkdir(parents=True)
+        (project / "project.json").write_text(
+            json.dumps({"project": "proj_main", "code_repo": None,
+                        "registered_at": "2026-01-01T00:00:00Z",
+                        "registered_by": "f31-fixture", "config_version": 1}),
+            encoding="utf-8")
+        token = secrets.token_urlsafe(32)
+        import hashlib
+        conn = {
+            "config_version": 1,
+            "mcp": {"rpc_url": ""},
+            "tokens": [{
+                "role": "owner",
+                "token": token,
+                "token_ref": "svc-owner",
+                "scopes": ["queue_claim", "queue_return", "owner_confirm",
+                           "draft_publish", "owner_decision_record",
+                           "queue_amend", "queue_withdraw"],
+                "fingerprint": "sha256:" + hashlib.sha256(token.encode()).hexdigest()[:12],
+                "agent_instance": "owner.f31.fixture",
+            }],
+        }
+        (project / ".lybra").mkdir()
+        (project / ".lybra" / "connection.json").write_text(
+            json.dumps(conn, indent=2), encoding="utf-8")
+        return home, project, token
+
+    def _gate_call(self, port: int, token: str, name: str, arguments: dict) -> dict:
+        """直发 JSON-RPC tools/call(测试自愾, 不依赖 GateClient)。"""
+        import urllib.request
+        payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                              "params": {"name": name, "arguments": arguments}}).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/mcp", data=payload, method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json",
+                     "Authorization": f"Bearer {token}"})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=20) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+        return result["result"].get("structuredContent", {})
+
+    def test_e2e_enroll_lands_usable_credential(self, tmp_path):
+        """预演五号场景重放(F31 验收①):
+
+        空目录经 bin/lybra enroll --verify → tokens 非空 → 落盘凭据实调门成功。
+        断到可用性(能调通门), 不是形状 —— tokens:[] 空数组在此必红。
+        """
+        import time
+        import signal
+        repo_root = Path(__file__).resolve().parents[1]
+        home, project, owner_token = self._seed_home(tmp_path)
+        port = self._free_port()
+
+        gate_log = tmp_path / "gate.log"
+        env = {**os.environ,
+               "PYTHONPATH": str(repo_root),
+               "LYBRA_HOME_ROOT": str(home)}
+        gate = subprocess.Popen(
+            [sys.executable, "-m", "tools.mcp_server", "serve-http",
+             "--host", "127.0.0.1", "--port", str(port),
+             "--home-root", str(home)],
+            cwd=str(repo_root), env=env, start_new_session=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        try:
+            # 等门就绪(最多 15s)
+            deadline = time.time() + 15
+            ready = False
+            while time.time() < deadline:
+                try:
+                    self._gate_call(port, owner_token, "lybra_gate_version", {})
+                    ready = True
+                    break
+                except Exception:
+                    time.sleep(0.3)
+            assert ready, "gate 子进程 15s 内未就绪"
+
+            # 发码经门动词两阶段(顾问同形): dry_run + confirm
+            dry = self._gate_call(port, owner_token, "lybra_enroll_code_dry_run", {
+                "role": "planner", "instance": "planner.f31-e2e.kiwiai-dev",
+                "ttl": 600, "owner_authorization_ref": "f31-e2e-fixture",
+                "gate_url": f"http://127.0.0.1:{port}"})
+            assert dry.get("ok"), f"dry_run failed: {dry}"
+            conf = self._gate_call(port, owner_token, "lybra_enroll_code_confirm", {
+                "dry_run_token": dry["dry_run_token"],
+                "owner_confirmation_token": "OWNER_CONFIRMED"})
+            assert conf.get("ok"), f"confirm failed: {conf}"
+            sc = conf["self_contained_code"]
+
+            # 空目录工位 + 经 bin 铁律 enroll(含 --verify, 预演五号同形)
+            workstation = tmp_path / "ws"
+            workstation.mkdir()
+            proc = subprocess.run(
+                [str(repo_root / "bin" / "lybra"), "roles", "enroll",
+                 "--code", sc, "--verify"],
+                cwd=str(workstation), capture_output=True, text=True, timeout=90,
+                env={**os.environ, "PYTHONPATH": str(repo_root)})
+            assert proc.returncode == 0, (
+                f"enroll --verify 失败(exit={proc.returncode}):\n"
+                f"stdout: {proc.stdout[-800:]}\nstderr: {proc.stderr[-800:]}")
+
+            # ① tokens 非空(空数组 = 预演五号回归, 必红)
+            landed = json.loads(
+                (workstation / ".lybra" / "connection.json").read_text(encoding="utf-8"))
+            tokens = landed.get("tokens")
+            assert isinstance(tokens, list) and len(tokens) > 0, (
+                f"落盘 tokens 为空/缺失(预演五号回归): {json.dumps(landed)[:400]}")
+            entry = next(t for t in tokens if t.get("role") == "planner")
+            assert entry.get("token"), "落盘 token 字段为空"
+            rpc_url = str((landed.get("mcp") or {}).get("rpc_url") or "")
+            assert rpc_url, "落盘 mcp.rpc_url 缺失"
+
+            # ② 用落盘凭据实调门: GateClient initialize + 只读动词 lybra_gate_version
+            # (GateClient base_url = 门根地址, rpc_url 是完整端点 — 剥 /mcp 后缀)
+            from tools.aipos_cli.confirm_client import GateClient
+            gate_root = rpc_url[: -len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
+            client = GateClient(gate_root, entry["token"], timeout=20)
+            client.initialize()
+            ver = client.call_tool("lybra_gate_version", {})
+            assert ver.get("ok") is True, f"落盘凭据调门失败: {json.dumps(ver)[:400]}"
+        finally:
+            try:
+                os.killpg(os.getpgid(gate.pid), signal.SIGTERM)
+                gate.wait(timeout=10)
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(gate.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
