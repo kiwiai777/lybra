@@ -1333,6 +1333,156 @@
         ],
         "additionalProperties": false
       }
+    },
+    "lybra_audit_verdict_dry_run": {
+      "description": "Submit audit verdict (preview). AIPOS-F35: auditor submits verdict after writing audit report.",
+      "phase": "dry_run",
+      "base_verb": "lybra_audit_verdict",
+      "confirm_verb": "lybra_audit_verdict_confirm",
+      "confirm_via": "dry_run_token",
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": true,
+        "self_confirm_allowed": [
+          "auditor_with_owner_confirmed_literal"
+        ],
+        "self_confirm_mechanism": "AIPOS-328: auditor passes owner_confirmation_token='OWNER_CONFIRMED' literal",
+        "owner_confirmation_required_in_response": false,
+        "client_hint_template": "AIPOS-328: auditor自行confirm。使用 lybra_audit_verdict_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "audit_task_id": {
+            "type": "string",
+            "description": "Audit task ID (e.g., AIPOS-123R)"
+          },
+          "audit_task_path": {
+            "type": "string"
+          },
+          "reviewed_task_id": {
+            "type": "string",
+            "description": "Task being audited (e.g., AIPOS-123)"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          },
+          "owner_policy_ref": {
+            "type": "string"
+          },
+          "audit_claim_id": {
+            "type": "string"
+          },
+          "audit_session_id": {
+            "type": "string"
+          },
+          "audit_dispatch_record_ref": {
+            "type": "string"
+          },
+          "reviewed_return_record_ref": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string",
+            "description": "PASS | FAIL | PASS_WITH_NOTES | BLOCK"
+          },
+          "findings_summary": {
+            "type": "string",
+            "description": "Audit findings summary"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "recommended_next_action": {
+            "type": "string"
+          },
+          "owner_waiver_ref": {
+            "type": "string"
+          },
+          "agent_runtime": {
+            "type": "object",
+            "description": "Agent-reported runtime bundle",
+            "properties": {
+              "harness": {
+                "type": "string"
+              },
+              "model_self_reported": {
+                "type": "string"
+              },
+              "tokens_in": {
+                "type": "integer"
+              },
+              "tokens_out": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "reviewed_task_id",
+          "actor",
+          "agent_instance",
+          "owner_policy_ref",
+          "verdict"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_audit_verdict_confirm": {
+      "description": "Confirm an audit verdict dry-run (AIPOS-328: auditor self-confirm via owner_confirmation_token).",
+      "phase": "confirm",
+      "base_verb": "lybra_audit_verdict",
+      "dry_run_verb": "lybra_audit_verdict_dry_run",
+      "confirm_via": "dry_run_token",
+      "surface": [
+        "mcp"
+      ],
+      "stage_contract": {
+        "two_stage": true,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [
+          "auditor_with_owner_confirmed_literal"
+        ],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dry_run_token": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          },
+          "owner_policy_ref": {
+            "type": "string"
+          },
+          "owner_confirmation_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dry_run_token",
+          "actor",
+          "agent_instance",
+          "owner_policy_ref",
+          "owner_confirmation_token"
+        ],
+        "additionalProperties": false
+      }
     }
   }
 }
