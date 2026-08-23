@@ -20,7 +20,7 @@ for (const python of candidates) {
     python,
     ["-m", "tools.aipos_cli.aipos_cli", ...process.argv.slice(2)],
     {
-      cwd: packageRoot,
+      cwd: process.cwd(),
       env: { ...process.env, PYTHONPATH: pythonPath },
       stdio: "inherit"
     }

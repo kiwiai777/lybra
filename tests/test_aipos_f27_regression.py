@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -459,6 +460,150 @@ class TestFixturePermanent:
             if dist.get("kind") == "charter":
                 assert dist.get("seed_only") is True, (
                     f"charter 条目 {dist['distribution_id']} 缺 seed_only=true"
+                )
+
+
+# ==============================================================================
+# AIPOS-F27B: bin 包装 cwd 透传 —— 一行修复验证 + 夹具必走用户入口铁律
+# ==============================================================================
+
+class TestBinCwdPassthrough:
+    """AIPOS-F27B 验收①: bin/lybra 透传调用方 cwd(不再强制切 packageRoot)"""
+
+    BIN_LYBRA = Path(__file__).resolve().parents[1] / "bin" / "lybra"
+
+    def test_bin_lybra_passes_cwd_through(self, tmp_path):
+        """从任意 cwd 经 bin/lybra 执行,Python 进程看到的 cwd = 调用方 cwd"""
+        # 探针脚本:打印 cwd 后退出
+        probe_script = tmp_path / "cwd_probe.py"
+        probe_script.write_text(
+            'import os,sys; print(f"CWD_PROBE:{os.getcwd()}",flush=True); sys.exit(0)\n',
+            encoding="utf-8",
+        )
+        # 包装器:替代 python,实际跑探针
+        wrapper = tmp_path / "probe_python.sh"
+        wrapper.write_text(
+            f'#!/bin/bash\nexec python3 {probe_script} "$@"\n',
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+
+        # 从 tmp_path(任意 cwd)跑 bin/lybra
+        caller_cwd = tmp_path / "user_workdir"
+        caller_cwd.mkdir()
+        result = subprocess.run(
+            [str(self.BIN_LYBRA)],
+            cwd=str(caller_cwd),
+            env={**os.environ, "LYBRA_PYTHON": str(wrapper)},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert "CWD_PROBE:" in result.stdout, (
+            f"探针无输出,bin/lybra 可能未启动 Python: stderr={result.stderr}"
+        )
+        reported_cwd = result.stdout.strip().split("CWD_PROBE:")[1].splitlines()[0]
+        assert reported_cwd == str(caller_cwd), (
+            f"bin/lybra cwd 透传失败: Python 看到 {reported_cwd}, "
+            f"期望 {caller_cwd}(调用方 cwd)"
+        )
+
+    def test_bin_lybra_cwd_not_package_root(self, tmp_path):
+        """bin/lybra 不再强制 cwd=packageRoot(元凶修复验证)"""
+        package_root = Path(__file__).resolve().parents[1]
+
+        probe_script = tmp_path / "cwd_probe2.py"
+        probe_script.write_text(
+            'import os,sys; print(f"CWD_PROBE:{os.getcwd()}",flush=True); sys.exit(0)\n',
+            encoding="utf-8",
+        )
+        wrapper = tmp_path / "probe_python2.sh"
+        wrapper.write_text(
+            f'#!/bin/bash\nexec python3 {probe_script} "$@"\n',
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+
+        # 从 tmp_path(明确不是 packageRoot)跑
+        result = subprocess.run(
+            [str(self.BIN_LYBRA)],
+            cwd=str(tmp_path),
+            env={**os.environ, "LYBRA_PYTHON": str(wrapper)},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        reported_cwd = result.stdout.strip().split("CWD_PROBE:")[1].splitlines()[0]
+        assert reported_cwd != str(package_root), (
+            f"bin/lybra 仍强制 cwd=packageRoot({package_root}): "
+            f"一行修复被回退!"
+        )
+
+    def test_bin_lybra_source_has_cwd_process_cwd(self):
+        """静态检查: bin/lybra 源码包含 cwd: process.cwd()"""
+        source = self.BIN_LYBRA.read_text(encoding="utf-8")
+        assert "cwd: process.cwd()" in source, (
+            "bin/lybra 缺少 cwd: process.cwd() —— 一行修复被回退!"
+        )
+        assert "cwd: packageRoot" not in source, (
+            "bin/lybra 仍含 cwd: packageRoot —— 元凶未修!"
+        )
+
+
+class TestBinEntryIronRule:
+    """AIPOS-F27B 验收③: 夹具必走用户入口铁律 —— grep 断言测试目录内
+    对 aipos_cli 的 subprocess 调用一律经 bin/lybra(白名单例外注明理由)"""
+
+    # 白名单:以下文件允许 python -m 直调(注明理由)
+    WHITELIST = {
+        # test_aipos_316_guards.py: 测试 tools/aipos_cli/*.py 模块无 __main__ 时的
+        # 退出行为,必须用 python -m 直调才能验证模块级 guard(测的是模块本身,不是用户入口)
+        "test_aipos_316_guards.py",
+        # f23_live_acceptance.sh 中 gate 启动用 python -m tools.mcp_server(不是 aipos_cli,
+        # 是起测试 gate 服务,不属于用户可见 CLI 行为)
+        "f23_live_acceptance.sh",  # 已改走 bin/lybra 做 enroll,但 gate 启动仍需 python -m mcp_server
+    }
+
+    def test_no_direct_aipos_cli_subprocess_in_tests(self):
+        """grep 断言: tests/ 下 subprocess 调用 aipos_cli 一律经 bin/lybra"""
+        tests_dir = Path(__file__).resolve().parent
+        violations = []
+
+        for py_file in tests_dir.rglob("*.py"):
+            if py_file.name in self.WHITELIST:
+                continue
+            if "__pycache__" in str(py_file):
+                continue
+            content = py_file.read_text(encoding="utf-8", errors="replace")
+            # 检查是否有 subprocess 直调 aipos_cli 模块(应走 bin/lybra)
+            for i, line in enumerate(content.splitlines(), 1):
+                if "subprocess" in line or "Popen" in line or "check_output" in line:
+                    if "tools.aipos_cli" in line and "python" in line:
+                        violations.append(
+                            f"{py_file.relative_to(tests_dir.parent)}:{i}: {line.strip()}"
+                        )
+
+        assert not violations, (
+            f"发现 {len(violations)} 处 python -m tools.aipos_cli 直调(应走 bin/lybra):\n"
+            + "\n".join(violations)
+            + "\n铁律:验收用户可见行为的夹具必须经 bin/lybra 入口调用"
+        )
+
+    def test_f23_live_acceptance_uses_bin_lybra_for_enroll(self):
+        """f23_live_acceptance.sh 的 enroll 调用走 bin/lybra(非 python -m 直调)"""
+        script = (
+            Path(__file__).resolve().parents[1]
+            / "tools" / "aipos_cli" / "tests" / "f23_live_acceptance.sh"
+        )
+        if not script.exists():
+            pytest.skip("f23_live_acceptance.sh not found")
+        content = script.read_text(encoding="utf-8")
+        # 检查 enroll 调用走 bin/lybra
+        for line in content.splitlines():
+            if "enroll" in line and "python3 -m tools.aipos_cli" in line:
+                raise AssertionError(
+                    f"f23_live_acceptance.sh 仍用 python -m 直调 enroll: {line.strip()}\n"
+                    f"铁律:走 bin/lybra 用户入口"
                 )
 
 
