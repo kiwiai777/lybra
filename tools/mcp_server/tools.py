@@ -4640,14 +4640,31 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
             print(f"[enroll_exchange] Token written to declaration source: {conn_path} (rotated={rotated})", file=sys.stderr)
             
         elif registry_mode == "home_root" and registry_source:
-            # home 模式: 从 governance_root 推导项目,写入对应 connection.json
+            # home 模式: 从码内治理根(registry_source)推导项目,写入对应 connection.json
+            # AIPOS-F28B 大项A: 必须写入码内治理根工作区,不是自包含码的 governance_root
             from pathlib import Path
             import json
             
-            # 使用自包含码的 governance_root 或回退到 root
-            target_root = Path(governance_root) if governance_root else root
-            lybra_dir = ensure_lybra_dir(target_root)
-            print(f"[enroll_exchange] Writing to home_root mode project: {target_root}/.lybra/connection.json", file=sys.stderr)
+            # 使用码内治理根(registry_source)推导项目工作区
+            # governance_root 来自自包含码,可能指向 lybra 工作区(项目域推导用),但登记落点必须是码内治理根
+            home_root = Path(registry_source)
+            # 从 governance_root(自包含码)提取项目名,映射到治理根下的项目工作区
+            project_root = home_root  # 默认写到治理根自身的 connection.json
+            if governance_root and governance_root != str(root):
+                # 尝试从 governance_root 读取 project.json 获取项目名
+                from tools.aipos_cli.workspace_config import read_project_json
+                try:
+                    project_data = read_project_json(governance_root)
+                    project_name = str(project_data.get("name") or "").strip()
+                    if project_name:
+                        # 映射到 home_root/2_projects/<project_name>
+                        project_root = home_root / "2_projects" / project_name
+                        print(f"[enroll_exchange] Mapped project '{project_name}' to {project_root}", file=sys.stderr)
+                except Exception as e:
+                    print(f"[enroll_exchange] Failed to read project from governance_root, using home_root: {e}", file=sys.stderr)
+            
+            lybra_dir = ensure_lybra_dir(project_root)
+            print(f"[enroll_exchange] Writing to home_root mode project: {project_root}/.lybra/connection.json", file=sys.stderr)
             
             connection_data = load_or_create_connection_json(lybra_dir, gate_url=None)
             rotated = upsert_token_entry(connection_data, token_entry)
