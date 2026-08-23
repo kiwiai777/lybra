@@ -26,8 +26,8 @@
 - 涉及 Lybra gate 的操作(claim/return 等)用卡内给出的 MCP 连接信息
   (默认:gate `http://127.0.0.1:7118`,connection.json 路径以卡为准);你只走 executor 角色
   token,永远拿不到、也绝不尝试 owner confirm 能力。
-- 完成后如实 return:做了什么、改了哪些文件、测试结果原文、**实际使用的模型与自报 token 用量**
-  (喂能力账本)。失败/部分完成也如实报,不粉饰。
+- **模型职责终点=写完 RETURN.md**(含"一句话结论"节,放在 `task_cards/<任务ID>/RETURN.md`);
+  门提交(return dry_run+confirm)由连接器从 RETURN.md 机器提取并托管提交,模型无需手动调用 gate 动词。
 - **报告材料落点**(AIPOS-R6I 靶①):所有 return 材料(RETURN.md、审计卡、产出文件)必须放在
   治理工作区 `task_cards/<任务ID>/` 内。**绝不放 /tmp 或产品仓**——gate 会校验存在性与落点,
   违反即 BLOCK。示例正确路径:`task_cards/AIPOS-R6I/RETURN.md`,

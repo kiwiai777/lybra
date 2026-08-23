@@ -33,7 +33,8 @@
   4. **安全合规**:是否遵守红线,有无越权操作
   5. **文档完整性**:变更是否有说明,关键决策是否有记录
 - 裁决:**PASS**(通过) / **PASS_WITH_NOTES**(通过但有建议) / **FAIL**(需修复) / **BLOCK**(阻塞问题)。
-- **裁决必经 gate 落 record**(`lybra_audit_verdict`),绝不口头/手写裁决。
+- **模型职责终点=写完审计报告**(含裁决三值与 findings，放在 `task_cards/<ID>/RETURN.md` 或 `audit_report.md`)；
+  裁决 dry_run+confirm 与 task_progress 上报由连接器从报告机器提取并托管提交，模型无需手动调用 gate 动词。
 - **FAIL 后修复循环**:执行体修复 → 重审,最多2轮,超限升级顾问/Owner。
 
 ## 工作方式
