@@ -44,9 +44,13 @@ from tools.mcp_server.tools import get_role_scopes
 
 
 def _make_workspace():
-    """Create a temp workspace with a minimal project.json."""
-    tmpdir = tempfile.mkdtemp(prefix="aipos352_test_")
-    ws = Path(tmpdir)
+    """AIPOS-F32B: home_root 形工作区夹具——门注册表(connection.json tokens)拓扑。
+
+    ws = home/ws352: project.json + 5_tasks/queue 候选标记 + .lybra/ 凭据库。
+    """
+    home = Path(tempfile.mkdtemp(prefix="aipos352_home_"))
+    ws = home / "ws352"
+    ws.mkdir()
     project_json = {
         "project": "test_project",
         "naming_profile": {
@@ -57,6 +61,8 @@ def _make_workspace():
         },
     }
     (ws / "project.json").write_text(json.dumps(project_json, indent=2) + "\n")
+    (ws / "5_tasks" / "queue").mkdir(parents=True)  # 项目候选标记(统一注册表扫描用)
+    (ws / ".lybra").mkdir()
     # Create governance dir for trail
     (ws / "governance" / "decision_log").mkdir(parents=True, exist_ok=True)
     return ws
@@ -245,7 +251,7 @@ class TestTokenMinting(unittest.TestCase):
 
 
 class TestAntiPrivilegeEscalation(unittest.TestCase):
-    """Test that the registry NEVER carries scope fields."""
+    """Test that the registry NEVER grants scopes beyond the builtin class."""
 
     def setUp(self):
         self.ws = _make_workspace()
@@ -260,13 +266,17 @@ class TestAntiPrivilegeEscalation(unittest.TestCase):
             # Only field allowed: "class"
             self.assertEqual(set(entry.keys()), {"class"})
 
-    def test_project_json_custom_roles_no_scopes(self):
+    def test_gate_registry_entry_scopes_derived_from_class(self, ):
+        """AIPOS-F32B: 注册表条目(connection.json)的 scopes 只能从 ROLE_SPECS 按类派生,
+        无自铸权限; project.json 不再是注册表(无 custom_roles 键写入)。"""
         register_custom_role(self.ws, "kiwiaiops", "executor")
+        reg = json.loads((self.ws / ".lybra" / "connection.json").read_text())
+        entry = next(t for t in reg["tokens"] if t.get("role") == "kiwiaiops")
+        executor_spec = next(s for s in ROLE_SPECS if s["role"] == "executor")
+        self.assertEqual(entry["scopes"], list(executor_spec["scopes"]))
+        # project.json 不被写入注册表(第二来源已删, AIPOS-F32B)
         project_json = json.loads((self.ws / "project.json").read_text())
-        custom_roles = project_json.get("custom_roles", {})
-        for name, entry in custom_roles.items():
-            self.assertNotIn("scopes", entry)
-            self.assertEqual(set(entry.keys()), {"class"})
+        self.assertNotIn("custom_roles", project_json)
 
 
 class TestBuiltinRolesZeroRegression(unittest.TestCase):

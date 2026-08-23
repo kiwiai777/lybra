@@ -1,11 +1,11 @@
-"""AIPOS-F32 回归夹具: 信封解析认自定义角色——按 roles 注册表 class 匹配。
+"""AIPOS-F32/F32B 回归夹具: 信封解析认自定义角色——按门注册表 class 匹配。
 
 病根(顾问实撞): policy_resolver._policy_matches_role 只做 agent_or_role 点分量
 对固定词 exec/audit 的直配 → 自定义角色信封(hbj-coder.chris-huibojin.kiwiai-dev)
 永不匹配 → chris 发卡链 BLOCK "cannot resolve policy envelope"。
 
-修法(与 F26C 分发类展开同一修法同一单源): 自定义角色分量经工作区 roles 注册表
-(project.json custom_roles, 单源=tools/aipos_cli/custom_roles.load_custom_roles)
+修法(与 F26C 分发类展开同一修法同一单源): 自定义角色分量经**门注册表**
+(connection.json tokens, 与凭据同源; AIPOS-F32B 从 project.json 归位到此处)
 解析所属内建类后匹配; 既有直配语义(exec↔exec)原样保留。
 
 验收覆盖:
@@ -99,42 +99,111 @@ report_mode: separate_doc
 draft validate + publish --dry-run 全绿, 契约节信封 = pol_chris_coder_1。
 """
 
-# 注册表形态 = 真 chris 发卡链目标态(hbj-coder→executor, hbj-auditor→auditor;
-# 与 lybra 工作区 project.json 现存登记同形)
-PROJECT_JSON_WITH_CUSTOM_ROLES = {
-    "code_repo": "/tmp/nonexistent/chris-huibojin",
-    "config_version": 1,
-    "project": "chris-huibojin",
-    "registered_at": "2026-08-10T00:00:00Z",
-    "registered_by": "kiwi",
-    "custom_roles": {
-        "hbj-auditor": {"class": "auditor"},
-        "hbj-coder": {"class": "executor"},
+# 门注册表形态 = 真 chris 发卡链目标态(AIPOS-F32B: connection.json tokens,
+# 与凭据同源; hbj-coder→executor, hbj-auditor→auditor, 逐形拷贝真条目字段面,
+# token 全部合成——真凭据永不入夹具)。真拓扑: hbj 条目实际登记在 lybra 工作区
+# 的凭据库, chris 工作区自己的 connection.json 只有运输凭证——夹具同构复刻。
+GATE_REGISTRY_TOKENS = [
+    # lybra 工作区凭据库(门中央库的一员): 内建 + 自定义角色条目
+    {
+        "agent_instance": "exec.fx.kiwiai-dev",
+        "fingerprint": "sha256:fx0000000001",
+        "projects": ["chris-fx"],
+        "projects_enforced": True,
+        "role": "hbj-coder",
+        "role_class": "executor",
+        "scopes": ["queue_claim", "queue_return", "task_progress"],
+        "token": "fx-synthetic-token-hbj-coder-0000000001",
+        "token_ref": "svc-hbj-coder",
     },
-}
+    {
+        "agent_instance": "audit.fx.kiwiai-dev",
+        "fingerprint": "sha256:fx0000000002",
+        "projects": ["chris-fx"],
+        "projects_enforced": True,
+        "role": "hbj-auditor",
+        "role_class": "auditor",
+        "scopes": ["queue_claim", "audit_verdict", "task_progress"],
+        "token": "fx-synthetic-token-hbj-auditor-0000002",
+        "token_ref": "svc-hbj-auditor",
+    },
+]
 
 
 def make_fixture_workspace(tmp_path: Path, *, custom_roles: dict | None = None) -> Path:
-    """chris 形工作区夹具: project.json(自定义角色注册表)+两份信封+草稿+连接骨架。"""
-    ws = tmp_path / "chris-huibojin-fx"
-    (ws / "5_tasks" / "policies").mkdir(parents=True)
-    (ws / "5_tasks" / "drafts").mkdir(parents=True)
-    (ws / "5_tasks" / "queue").mkdir(parents=True)
-    (ws / ".lybra").mkdir()
+    """chris 形门拓扑夹具(AIPOS-F32B): home_root 下两工作区。
 
-    project = dict(PROJECT_JSON_WITH_CUSTOM_ROLES)
-    if custom_roles is not None:
-        project["custom_roles"] = custom_roles
-    (ws / "project.json").write_text(json.dumps(project, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    - home/lybra-fx: hbj-* 实际登记处(门凭据库条目在 lybra 工作区, 真拓扑同构)
+    - home/chris-fx: 发卡工作区——信封/草稿在此; 自身 connection.json 只有
+      运输凭证(真 chris 工作区同构), project.json 无 custom_roles(空 {})。
+    custom_roles 参数: 覆盖门注册表的自定义角色集({name: class}), 默认 hbj 双角色。
+    """
+    home = tmp_path / "gate-home"
+    ws = home / "chris-fx"          # 发卡工作区(返回值)
+    reg_ws = home / "lybra-fx"      # 注册表所在工作区
+    for w in (ws, reg_ws):
+        (w / "5_tasks" / "policies").mkdir(parents=True)
+        (w / "5_tasks" / "drafts").mkdir(parents=True)
+        (w / "5_tasks" / "queue").mkdir(parents=True)
+        (w / ".lybra").mkdir()
+
+    # chris-fx: project.json 无 custom_roles(顾问实测真 chris 工作区为空 {})
+    (ws / "project.json").write_text(json.dumps({
+        "code_repo": "/tmp/nonexistent/chris-fx",
+        "config_version": 1,
+        "project": "chris-fx",
+        "registered_at": "2026-08-10T00:00:00Z",
+        "registered_by": "kiwi",
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    # chris-fx 自身 connection.json: 只有运输凭证(已过期) + mcp 骨架, 无自定义角色
+    (ws / ".lybra" / "connection.json").write_text(json.dumps({
+        "config_version": 1,
+        "mcp": {"rpc_url": "http://127.0.0.1:7999/mcp"},
+        "tokens": [
+            {
+                "agent_instance": "enroll_fx0001",
+                "expires_at": "2026-08-22T17:36:09Z",
+                "fingerprint": "sha256:fx0000000003",
+                "role": "enroll-transport",
+                "scopes": [],
+                "token": "fx-synthetic-token-enroll-0000003",
+                "token_ref": "svc-enroll-transport",
+            },
+        ],
+    }, indent=2) + "\n", encoding="utf-8")
 
     (ws / "5_tasks" / "policies" / "pol_chris_coder_1.md").write_text(POLICY_CODER, encoding="utf-8")
     (ws / "5_tasks" / "policies" / "pol_chris_audit_1.md").write_text(POLICY_AUDIT, encoding="utf-8")
     (ws / "5_tasks" / "drafts" / "hbj-f32-fx-1.md").write_text(DRAFT_CUSTOM_ROLE, encoding="utf-8")
 
-    # 连接骨架: 只需 mcp.rpc_url 形状(信封解析不连门)
-    (ws / ".lybra" / "connection.json").write_text(json.dumps({
+    # lybra-fx: 门注册表(自定义角色真登记处)
+    (reg_ws / "project.json").write_text(json.dumps({
+        "code_repo": "/tmp/nonexistent/lybra-fx",
         "config_version": 1,
-        "mcp": {"rpc_url": "http://127.0.0.1:7999/mcp"},
+        "project": "lybra-fx",
+        "registered_at": "2026-08-10T00:00:00Z",
+        "registered_by": "kiwi",
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    registry_tokens = list(GATE_REGISTRY_TOKENS)
+    if custom_roles is not None:
+        registry_tokens = [
+            {
+                "agent_instance": f"{name}.fx.kiwiai-dev",
+                "fingerprint": f"sha256:fx00{name[:8]}",
+                "projects": ["chris-fx"],
+                "projects_enforced": True,
+                "role": name,
+                "role_class": entry["class"],
+                "scopes": [],
+                "token": f"fx-synthetic-token-{name}",
+                "token_ref": f"svc-{name}",
+            }
+            for name, entry in custom_roles.items()
+        ]
+    (reg_ws / ".lybra" / "connection.json").write_text(json.dumps({
+        "config_version": 1,
+        "tokens": registry_tokens,
     }, indent=2) + "\n", encoding="utf-8")
     return ws
 
@@ -210,7 +279,21 @@ class TestAcceptance1CustomRoleChainViaBin:
         assert "pol_chris_audit_1" in section
 
 
-# ── 验收③: 注册表改 class → 匹配跟随(验完还原) ───────────────────────────────
+# ── 验收③: 门注册表改 class → 匹配跟随(验完还原) ──────────────────────────
+
+
+def _gate_registry_file(ws: Path) -> Path:
+    """夹具门注册表文件(lybra-fx 工作区凭据库)。"""
+    return ws.parent / "lybra-fx" / ".lybra" / "connection.json"
+
+
+def _flip_registry_class(ws: Path, role: str, new_class: str) -> None:
+    reg = _gate_registry_file(ws)
+    data = json.loads(reg.read_text(encoding="utf-8"))
+    for item in data.get("tokens", []):
+        if isinstance(item, dict) and item.get("role") == role:
+            item["role_class"] = new_class
+    reg.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 class TestAcceptance3RegistryClassFlip:
@@ -218,39 +301,31 @@ class TestAcceptance3RegistryClassFlip:
         from tools.aipos_cli.policy_resolver import find_active_policy
 
         ws = make_fixture_workspace(tmp_path)
-        project_json = ws / "project.json"
 
         # 基态: audit 类信封可解析
         assert find_active_policy(ws, role="audit", policy_type="audit") == "pol_chris_audit_1"
 
-        # 翻转: hbj-auditor 改挂 executor → audit 类无信封可解析(匹配跟随注册表)
-        data = json.loads(project_json.read_text(encoding="utf-8"))
-        data["custom_roles"]["hbj-auditor"]["class"] = "executor"
-        project_json.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        # 翻转: hbj-auditor 改挂 executor → audit 类无信封可解析(匹配跟随门注册表)
+        _flip_registry_class(ws, "hbj-auditor", "executor")
         assert find_active_policy(ws, role="audit", policy_type="audit") is None
 
         # 还原 → 恢复
-        data["custom_roles"]["hbj-auditor"]["class"] = "auditor"
-        project_json.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _flip_registry_class(ws, "hbj-auditor", "auditor")
         assert find_active_policy(ws, role="audit", policy_type="audit") == "pol_chris_audit_1"
 
     def test_flip_hbj_coder_class_and_back(self, tmp_path):
         from tools.aipos_cli.policy_resolver import find_active_policy
 
         ws = make_fixture_workspace(tmp_path)
-        project_json = ws / "project.json"
 
         assert find_active_policy(ws, role="exec", policy_type="dev") == "pol_chris_coder_1"
 
         # 翻转: hbj-coder 改挂 auditor → exec 类无信封可解析
-        data = json.loads(project_json.read_text(encoding="utf-8"))
-        data["custom_roles"]["hbj-coder"]["class"] = "auditor"
-        project_json.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _flip_registry_class(ws, "hbj-coder", "auditor")
         assert find_active_policy(ws, role="exec", policy_type="dev") is None
 
         # 还原 → 恢复
-        data["custom_roles"]["hbj-coder"]["class"] = "executor"
-        project_json.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _flip_registry_class(ws, "hbj-coder", "executor")
         assert find_active_policy(ws, role="exec", policy_type="dev") == "pol_chris_coder_1"
 
 

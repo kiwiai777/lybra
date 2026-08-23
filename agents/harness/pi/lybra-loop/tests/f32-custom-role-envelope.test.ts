@@ -1,20 +1,20 @@
 /**
- * AIPOS-F32 专项测试 —— 自定义角色发卡链信封解析(经 bin, 入 run-all)。
+ * AIPOS-F32/F32B 专项测试 —— 自定义角色发卡链信封解析(经 bin, 入 run-all)。
  *
  * 病根: policy_resolver._policy_matches_role 只做 agent_or_role 点分量对固定词
  * exec/audit 直配 → 自定义角色信封(hbj-coder.chris-huibojin.kiwiai-dev)永不匹配
  * → chris 发卡链 draft publish BLOCK "cannot resolve policy envelope"。
  *
- * 修法(与 F26C 分发类展开同一单源): 自定义角色分量经工作区 roles 注册表
- * (project.json custom_roles)解析所属内建类后匹配; 直配语义保留。
+ * 修法(与 F26C 分发类展开同一单源): 自定义角色分量按**门注册表**
+ * (connection.json tokens, 与凭据同源; AIPOS-F32B 从 project.json 归位到此处)
+ * 所属内建类匹配; 直配语义保留。
  *
  * 夹具层(活体经 bin, 工作树 bin/lybra —— 测的是仓库当前实现, 非部署快照):
- *  A. chris 形工作区(注册表 hbj-coder→executor) draft publish --dry-run:
+ *  A. chris 形门拓扑(hbj 注册在 lybra-fx 凭据库) draft publish --dry-run:
  *     非 BLOCK + 契约节信封 = pol_chris_coder_1;
- *  B. 因果负对照: 同工作区摘掉 custom_roles 注册表 → BLOCK "cannot resolve
- *     policy envelope"(证明匹配唯一来源=注册表, 非新映射表);
- *  C. audit 侧: 注册表 hbj-auditor→auditor 时 publish --dry-run 的审计链
- *     信封可解析(契约节渲染不缺信封);
+ *  B. 因果负对照: 门注册表无 hbj 条目(真 chris 拓扑——自身凭据文件只有过期
+ *     运输凭证) → BLOCK "cannot resolve policy envelope";
+ *  C. audit 侧: 注册表 hbj-auditor→auditor 时审计链信封可解析;
  *  D. 源级断言: policy_resolver 无自建角色→类映射(防碎片化红线)。
  *
  * 跑法: node tests/f32-custom-role-envelope.test.ts (依赖 python3 + bin/lybra)
@@ -104,34 +104,113 @@ report_mode: separate_doc
 draft publish --dry-run 应按注册表 class 解析信封到 pol_chris_coder_1。
 `;
 
-/** chris 形工作区夹具; withRegistry=false 时 project.json 不带 custom_roles(负对照)。 */
+/**
+ * chris 形门拓扑夹具(AIPOS-F32B): home_root 下两工作区。
+ * withRegistry=true → lybra-fx 凭据库登记 hbj 双角色(真拓扑同构);
+ * withRegistry=false → 无门注册表(真 chris 现状: 自身凭据文件只有过期运输凭证)。
+ */
 function makeFixture(root: string, withRegistry: boolean): string {
-  const ws = join(root, withRegistry ? "chris-fx-registry" : "chris-fx-bare");
+  const home = join(root, withRegistry ? "fx-registry" : "fx-bare");
+  const ws = join(home, "chris-huibojin-fx");
   mkdirSync(join(ws, "5_tasks", "policies"), { recursive: true });
   mkdirSync(join(ws, "5_tasks", "drafts"), { recursive: true });
   mkdirSync(join(ws, "5_tasks", "queue"), { recursive: true });
   mkdirSync(join(ws, ".lybra"), { recursive: true });
-  const project: Record<string, unknown> = {
-    code_repo: "/tmp/nonexistent/chris-huibojin",
-    config_version: 1,
-    project: "chris-huibojin",
-    registered_at: "2026-08-10T00:00:00Z",
-    registered_by: "kiwi",
-  };
-  if (withRegistry) {
-    project["custom_roles"] = {
-      "hbj-auditor": { class: "auditor" },
-      "hbj-coder": { class: "executor" },
-    };
-  }
-  writeFileSync(join(ws, "project.json"), JSON.stringify(project, null, 2) + "\n");
+  // chris 工作区 project.json 无 custom_roles(顾问实测真 chris 工作区为空 {})
+  writeFileSync(
+    join(ws, "project.json"),
+    JSON.stringify(
+      {
+        code_repo: "/tmp/nonexistent/chris-huibojin",
+        config_version: 1,
+        project: "chris-huibojin",
+        registered_at: "2026-08-10T00:00:00Z",
+        registered_by: "kiwi",
+      },
+      null,
+      2,
+    ) + "\n",
+  );
   writeFileSync(join(ws, "5_tasks", "policies", "pol_chris_coder_1.md"), POLICY_CODER);
   writeFileSync(join(ws, "5_tasks", "policies", "pol_chris_audit_1.md"), POLICY_AUDIT);
   writeFileSync(join(ws, "5_tasks", "drafts", "hbj-f32-ts-1.md"), DRAFT);
+  // chris 自身凭据文件: 只有已过期运输凭证 + mcp 骨架(真 chris 同构, 无自定义角色)
   writeFileSync(
     join(ws, ".lybra", "connection.json"),
-    JSON.stringify({ config_version: 1, mcp: { rpc_url: "http://127.0.0.1:7999/mcp" } }, null, 2) + "\n",
+    JSON.stringify(
+      {
+        config_version: 1,
+        mcp: { rpc_url: "http://127.0.0.1:7999/mcp" },
+        tokens: [
+          {
+            agent_instance: "enroll_f32ts01",
+            expires_at: "2026-08-22T17:36:09Z",
+            fingerprint: "sha256:f32ts00001",
+            role: "enroll-transport",
+            scopes: [],
+            token: "fx-synthetic-token-enroll-f32ts-01",
+            token_ref: "svc-enroll-transport",
+          },
+        ],
+      },
+      null,
+      2,
+    ) + "\n",
   );
+  if (withRegistry) {
+    // 门凭据库(lybra 工作区): hbj-* 实际登记处(token 全合成, 真凭据永不入夹具)
+    const regWs = join(home, "lybra-fx");
+    mkdirSync(join(regWs, "5_tasks", "queue"), { recursive: true });
+    mkdirSync(join(regWs, ".lybra"), { recursive: true });
+    writeFileSync(
+      join(regWs, "project.json"),
+      JSON.stringify(
+        {
+          code_repo: "/tmp/nonexistent/lybra-fx",
+          config_version: 1,
+          project: "lybra-fx",
+          registered_at: "2026-08-10T00:00:00Z",
+          registered_by: "kiwi",
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    writeFileSync(
+      join(regWs, ".lybra", "connection.json"),
+      JSON.stringify(
+        {
+          config_version: 1,
+          tokens: [
+            {
+              agent_instance: "hbj-coder.chris-huibojin.kiwiai-dev",
+              fingerprint: "sha256:f32ts00002",
+              projects: ["chris-huibojin"],
+              projects_enforced: true,
+              role: "hbj-coder",
+              role_class: "executor",
+              scopes: ["queue_claim", "queue_return", "task_progress"],
+              token: "fx-synthetic-token-hbj-coder-f32ts",
+              token_ref: "svc-hbj-coder",
+            },
+            {
+              agent_instance: "hbj-auditor.chris-huibojin.kiwiai-dev",
+              fingerprint: "sha256:f32ts00003",
+              projects: ["chris-huibojin"],
+              projects_enforced: true,
+              role: "hbj-auditor",
+              role_class: "auditor",
+              scopes: ["queue_claim", "audit_verdict", "task_progress"],
+              token: "fx-synthetic-token-hbj-auditor-f32ts",
+              token_ref: "svc-hbj-auditor",
+            },
+          ],
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+  }
   return ws;
 }
 
@@ -148,7 +227,7 @@ function runPublishDryRun(ws: string): PublishResult {
   // BLOCK 时 bin 退出码非零, 用 spawnSync 捕获 stdout 再解析(不丢负对照证据)。
   const proc = spawnSync(
     binLybra,
-    ["draft", "publish", "--path", "5_tasks/drafts/hbj-f32-ts-1.md", "--dry-run", "--json"],
+    ["--workspace-root", ws, "draft", "publish", "--path", "5_tasks/drafts/hbj-f32-ts-1.md", "--dry-run", "--json"],
     { cwd: ws, encoding: "utf-8", timeout: 120_000 },
   );
   if (proc.error) throw proc.error;
@@ -165,12 +244,12 @@ function runPublishDryRun(ws: string): PublishResult {
 {
   const fx = mkdtempSync(join(tmpdir(), "f32-envelope-"));
   try {
-    // --- A. 注册表在位 → 信封解析到 pol_chris_coder_1 ---
+    // --- A. 门注册表在位(lybra-fx 凭据库登记 hbj) → 信封解析到 pol_chris_coder_1 ---
     try {
       const r = runPublishDryRun(makeFixture(fx, true));
       const blocked = (r.blocking_reasons || []).some((b) => String(b).includes("cannot resolve policy envelope"));
       check(
-        "A: 注册表在位 → publish --dry-run 非BLOCK且不撞信封墙",
+        "A: 门注册表在位 → publish --dry-run 非BLOCK且不撞信封墙",
         r.verdict !== "BLOCK" && !blocked,
         `verdict=${r.verdict} blocking=${JSON.stringify(r.blocking_reasons)}`,
       );
@@ -184,17 +263,17 @@ function runPublishDryRun(ws: string): PublishResult {
       check("A: 注册表在位 → publish --dry-run 非BLOCK且不撞信封墙", false, String(e));
     }
 
-    // --- B. 因果负对照: 摘掉注册表 → 旧病复发(证明匹配唯一来源=注册表) ---
+    // --- B. 因果负对照: 门注册表无 hbj 条目(真 chris 现状拓扑) → 旧病复发 ---
     try {
       const r = runPublishDryRun(makeFixture(fx, false));
       const blocked = (r.blocking_reasons || []).some((b) => String(b).includes("cannot resolve policy envelope"));
       check(
-        "B: 无注册表 → BLOCK cannot resolve policy envelope(负对照)",
+        "B: 无门注册表 → BLOCK cannot resolve policy envelope(负对照)",
         r.verdict === "BLOCK" && blocked,
         `verdict=${r.verdict} blocking=${JSON.stringify(r.blocking_reasons).slice(0, 200)}`,
       );
     } catch (e) {
-      check("B: 无注册表 → BLOCK cannot resolve policy envelope(负对照)", false, String(e));
+      check("B: 无门注册表 → BLOCK cannot resolve policy envelope(负对照)", false, String(e));
     }
 
     // --- C. audit 侧信封: 注册表 hbj-auditor→auditor(契约节渲染内部会解析
@@ -202,7 +281,7 @@ function runPublishDryRun(ws: string): PublishResult {
     //     audit 全链走 Python 侧夹具 test_aipos_f32_custom_role_envelope.py) ---
     check(
       "C: 夹具含双信封(exec+audit 形工作区)",
-      readFileSync(join(fx, "chris-fx-registry", "5_tasks", "policies", "pol_chris_audit_1.md"), "utf-8").includes(
+      readFileSync(join(fx, "fx-registry", "chris-huibojin-fx", "5_tasks", "policies", "pol_chris_audit_1.md"), "utf-8").includes(
         "hbj-auditor.chris-huibojin.kiwiai-dev",
       ),
     );

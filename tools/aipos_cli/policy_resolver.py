@@ -82,6 +82,11 @@ def _policy_matches_role(
     "hbj-coder.chris-huibojin.kiwiai-dev" 在注册表 {"hbj-coder": {"class":
     "executor"}} 下匹配 role="exec"。既有直配语义(exec↔exec)原样保留;
     custom_roles 未提供/为空时行为与旧版完全一致。
+
+    AIPOS-F32B: 注册表 = 门注册表(connection.json tokens, 与凭据同源), 经
+    custom_roles.load_custom_roles 统一加载(与 F26C 分发类展开同一加载函数)。
+    本函数的 custom_roles 参数**仅限测试注入**; 生产调用方(find_active_policy)
+    一律默认从注册表取, 禁调用方自喂注册表变体。
     """
     agent_or_role = str(meta.get("agent_or_role") or "").strip()
     if not agent_or_role:
@@ -97,11 +102,12 @@ def _policy_matches_role(
             return True
 
     # AIPOS-F32: custom-role class match. Each dot component is looked up in the
-    # workspace custom-roles registry ({name: {"class": builtin_class}}, loaded from
-    # project.json — the same single source F26C's distribution class expansion reads).
+    # gate custom-roles registry ({name: {"class": builtin_class}}, loaded from the
+    # GATE registry — connection.json tokens via custom_roles.load_custom_roles,
+    # the same single loader F26C's distribution class expansion reads).
     # A component that IS a registered custom role matches when its registered class
     # is one of the requested role's builtin classes. Registry is owner-gated, so this
-    # grants nothing beyond what the workspace already registered (anti-escalation).
+    # grants nothing beyond what the gate already registered (anti-escalation).
     if custom_roles:
         target_classes = _builtin_class_candidates(role)
         if target_classes:
@@ -137,8 +143,9 @@ def find_active_policy(
     if not policies_dir.exists():
         return None
 
-    # AIPOS-F32: 工作区自定义角色注册表(project.json 单源; 与 F26C 分发类展开同源)。
-    # 只加载一次, 防御式: 注册表不可得 → 退回旧版直配语义。
+    # AIPOS-F32B: 门级自定义角色注册表(connection.json tokens 单源; 与 F26C 分发类
+    # 展开同一加载函数 custom_roles.load_custom_roles)。只加载一次, 防御式:
+    # 注册表不可得 → 退回旧版直配语义。
     custom_roles: dict[str, dict[str, str]] | None = None
     try:
         from tools.aipos_cli.custom_roles import load_custom_roles
