@@ -614,7 +614,8 @@ def _validate_token_entry(item: dict[str, Any], source_label: str, index: int) -
         return False, f"entry [{index}] in {source_label}: missing or empty 'token'"
     role = str(item.get("role") or "").strip()
     if not role:
-        return False, f"entry [{index}] in {source_label} (token={token[:8]}...): missing or empty 'role'"
+        fp = _token_fingerprint(token)
+        return False, f"entry [{index}] in {source_label} (fingerprint={fp}): missing or empty 'role'"
     token_ref = str(item.get("token_ref") or "").strip()
     if not token_ref:
         return False, f"entry [{index}] in {source_label} (role={role}): missing or empty 'token_ref'"
