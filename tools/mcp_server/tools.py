@@ -1588,10 +1588,13 @@ def lybra_distribution_manifest(arguments: dict[str, Any] | None = None) -> dict
     if not role:
         return _error_result("lybra_distribution_manifest: cannot resolve caller role", category="SCOPE_ERROR")
 
+    # AIPOS-F26 大项C: pass role_class to support custom role class expansion
+    role_class = str(cap.get("role_class") or "").strip() or None
+
     from tools.distribution_manifest import build_role_manifest, get_product_commit
     root = _gate_runtime_root()
     try:
-        role_manifest = build_role_manifest(root, role)
+        role_manifest = build_role_manifest(root, role, role_class=role_class)
     except FileNotFoundError as e:
         return _error_result(f"distribution source missing in gate runtime: {e}", category="DISTRIBUTION_ERROR")
     except ValueError as e:
@@ -1628,8 +1631,10 @@ def lybra_distribution_fetch(arguments: dict[str, Any] | None = None) -> dict[st
     from tools.distribution_manifest import build_role_manifest
     import base64
     root = _gate_runtime_root()
+    # AIPOS-F26 大项C: pass role_class to support custom role class expansion
+    role_class = str(cap.get("role_class") or "").strip() or None
     try:
-        role_manifest = build_role_manifest(root, role)
+        role_manifest = build_role_manifest(root, role, role_class=role_class)
     except (FileNotFoundError, ValueError) as e:
         return _error_result(f"distribution manifest build failed: {e}", category="DISTRIBUTION_ERROR")
 
