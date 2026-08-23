@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# AIPOS-R6M 大项B + AIPOS-A1 大项A③: 治理仓 pre-commit 钩子(文件面护栏)
+# AIPOS-R6M 大项B + AIPOS-A1 大项A③ + AIPOS-F29 大项C: 治理仓 pre-commit 钩子(文件面护栏)
 #   ① 代码文件禁止 (R6A 靶子⑨)
 #   ② 治理决策类 .md 无状态头 frontmatter → 拒并给模板 (格式规则从声明读)
 #   ③ decision_log/ append-only (只许新增禁修改)
 #   ④ 5_tasks/records/** 新增文件必须携机器出生标记 (record_type)
+#   ⑤ 治理仓 HEAD 必须是 main 分支 (F29: 执行体禁把卡分支开进治理仓)
 #
 # AIPOS-R6M FIX-1: 路径定义从 config.schema 治理目录树读(单一源),
 #   仓内相对前缀动态计算(治理仓 git 根 ≠ 治理工作区根时, 如 2_projects/lybra/,
@@ -232,16 +233,32 @@ while IFS= read -r file; do
     fi
 done < <(git_name_only A)
 
+# 大项B⑤ (AIPOS-F29): 治理仓主分支闸 — HEAD 必须是 main 分支
+# 执行体两次把卡分支开进治理仓(F13/F28), 纪律文字管不住就机器管。
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$CURRENT_BRANCH" != "main" ]; then
+    echo ""
+    echo "❌ BLOCKED: Governance repo commit must be on 'main' branch (AIPOS-F29 大项C)"
+    echo ""
+    echo "Current branch: $CURRENT_BRANCH"
+    echo ""
+    echo "治理仓永远停 main, 卡分支只开在产品仓。"
+    echo "下一步: 切回 main 分支后重试提交"
+    echo "  git checkout main"
+    echo ""
+    exit 1
+fi
+
 if [ ${#blocked_files[@]} -gt 0 ]; then
     echo ""
-    echo "❌ BLOCKED: Governance repo commit violates AIPOS-R6M file-level guardrails"
+    echo "❌ BLOCKED: Governance repo commit violates AIPOS-R6M + F29 file-level guardrails"
     echo ""
     echo "Violations:"
     for i in "${!blocked_files[@]}"; do
         echo "  - ${blocked_files[$i]}: ${blocked_reasons[$i]}"
     done
     echo ""
-    echo "Guardrails (AIPOS-R6M 大项B + AIPOS-A1 声明驱动):"
+    echo "Guardrails (AIPOS-R6M 大项B + AIPOS-A1 声明驱动 + F29 大项C):"
     echo "  ① Code files forbidden in governance repo"
     echo "  ② Governance docs require frontmatter with declared fields:"
     echo "     Required fields (from config.schema file_declarations.governance_doc): ${GOV_DOC_REQUIRED_FM}"
@@ -250,6 +267,7 @@ if [ ${#blocked_files[@]} -gt 0 ]; then
     echo "     ---"
     echo "  ③ decision_log/ is append-only (modifications forbidden)"
     echo "  ④ New records require declared fields (from config.schema file_declarations.record_file): ${RECORD_REQUIRED_FM}"
+    echo "  ⑤ Governance repo must be on 'main' branch (F29)"
     echo ""
     exit 1
 fi

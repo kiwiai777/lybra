@@ -1493,7 +1493,63 @@ async function tryAutoReturn(): Promise<boolean> {
         return false;
       }
     }
-    // 审计卡无 verdict → 还在执行中,不走 auto-return(审计卡完成判据=N4,不走 N2 return)
+    
+    // AIPOS-F29 大项E: 审计车道同构托管 — 侦测审计报告(task_cards/<ID>/RETURN.md 或 audit_report.md)
+    // 报告就位 → 提取裁决三值(verdict/findings/summary) → 托管 audit_verdict 提交
+    const auditReportPath = path.join(config.workspaceRoot, "task_cards", currentTaskId, "RETURN.md");
+    const altReportPath = path.join(config.workspaceRoot, "task_cards", currentTaskId, "audit_report.md");
+    const reportPath = fs.existsSync(auditReportPath) ? auditReportPath : (fs.existsSync(altReportPath) ? altReportPath : null);
+    
+    if (reportPath) {
+      try {
+        const reportContent = fs.readFileSync(reportPath, "utf-8");
+        
+        // 提取裁决三值: verdict(PASS/FAIL/PASS_WITH_NOTES/BLOCK), findings, summary
+        const verdictMatch = reportContent.match(/##\s*裁决[^\n]*\n+\**verdict\**:\s*(PASS|FAIL|PASS_WITH_NOTES|BLOCK)/i) ||
+                             reportContent.match(/verdict:\s*(PASS|FAIL|PASS_WITH_NOTES|BLOCK)/i);
+        const findingsMatch = reportContent.match(/##\s*Findings[^\n]*\n+([\s\S]+?)(?=##|$)/i) ||
+                              reportContent.match(/##\s*发现[^\n]*\n+([\s\S]+?)(?=##|$)/i);
+        const summaryMatch = reportContent.match(/##\s*一句话结论[^\n]*\n+([^\n#]+)/i) ||
+                             reportContent.match(/##\s*Summary[^\n]*\n+([^\n#]+)/i);
+        
+        if (!verdictMatch) {
+          const msg = `审计报告就位但缺裁决字段(verdict: PASS|FAIL|PASS_WITH_NOTES|BLOCK), 请补充后重试`;
+          currentLogger.warn("auto-audit-missing-verdict", { task_id: currentTaskId, report_path: reportPath });
+          voice(msg, "warn", true);
+          return false;
+        }
+        
+        const verdict = verdictMatch[1].toUpperCase();
+        const findings = findingsMatch ? findingsMatch[1].trim() : "";
+        const auditSummary = summaryMatch ? summaryMatch[1].trim() : `Audit ${verdict}`;
+        
+        currentLogger.info("auto-audit-from-report", {
+          task_id: currentTaskId,
+          reviewed_task_id: reviewedTaskId,
+          verdict,
+          report_path: reportPath,
+        });
+        
+        // 调用 audit_verdict_dry_run (需要实现审计动词调用，暂时记录TODO)
+        // TODO: 实现审计裁决的自动 dry_run + confirm 逻辑
+        // 类似 return 的 lybra_queue_return_dry_run / lybra_queue_return_confirm
+        // 需要 lybra_audit_verdict_dry_run / lybra_audit_verdict_confirm
+        
+        voice(`审计报告就位: ${currentTaskId} → ${verdict}, 托管裁决提交(TODO: 实现审计动词调用)`, "info", true);
+        
+        // 暂时保持原有行为: 报告就位后不继续执行return逻辑
+        return false;
+        
+      } catch (e) {
+        currentLogger.error("auto-audit-read-report-failed", {
+          task_id: currentTaskId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        return false;
+      }
+    }
+    
+    // 审计卡无 verdict 且无报告 → 还在执行中,不走 auto-return(审计卡完成判据=N4,不走 N2 return)
     currentLogger.info("auto-return-skip-audit-no-verdict-yet", { task_id: currentTaskId, reviewed_task_id: reviewedTaskId });
     return false;
   }
@@ -1511,24 +1567,59 @@ async function tryAutoReturn(): Promise<boolean> {
     }
   }
 
-  const eventsDir = path.join(config.workspaceRoot, "5_tasks/records/events", currentTaskId);
-  if (!fs.existsSync(eventsDir)) return false;
-  
-  // 查找 completed_*.md 文件
-  const files = fs.readdirSync(eventsDir);
-  const completedFiles = files.filter((f) => f.startsWith("completed_") && f.endsWith(".md"));
-  if (completedFiles.length === 0) return false;
-  
-  // 读取最新的 completed 事件
-  completedFiles.sort();
-  const latestCompleted = path.join(eventsDir, completedFiles[completedFiles.length - 1]);
-  const eventContent = fs.readFileSync(latestCompleted, "utf-8");
-  
-  // 从 frontmatter 提取 summary
+  // AIPOS-F29 大项A: 优先侦测 RETURN.md(治理工作区 task_cards/<ID>/RETURN.md)
+  // 存在 → 从"一句话结论"节提取 summary, 托管交回(模型职责终点=写完 RETURN.md);
+  // 不存在 → 回退兜底网(completed 事件)。
   let summary = "";
-  const summaryMatch = eventContent.match(/^summary:\s*['"]?([^'"\n]+)['"]?$/m);
-  if (summaryMatch) {
-    summary = summaryMatch[1].trim();
+  let returnMdExists = false;
+  const returnMdPath = path.join(config.workspaceRoot, "task_cards", currentTaskId, "RETURN.md");
+  
+  if (fs.existsSync(returnMdPath)) {
+    returnMdExists = true;
+    try {
+      const returnContent = fs.readFileSync(returnMdPath, "utf-8");
+      // 提取"一句话结论"节(## 一句话结论 或 ## 一句话结论/## Summary 等变体)
+      const conclusionMatch = returnContent.match(/##\s*一句话结论[^\n]*\n+([^\n#]+)/i) ||
+                              returnContent.match(/##\s*Summary[^\n]*\n+([^\n#]+)/i) ||
+                              returnContent.match(/##\s*结论[^\n]*\n+([^\n#]+)/i);
+      if (conclusionMatch) {
+        summary = conclusionMatch[1].trim();
+      } else {
+        // 缺"一句话结论"节 → 出声带路,不瞎填
+        const msg = `RETURN.md 就位但缺"一句话结论"节, 请补充后重试(## 一句话结论)`;
+        currentLogger.warn("auto-return-missing-conclusion", { task_id: currentTaskId, return_md_path: returnMdPath });
+        voice(msg, "warn", true);
+        return false;
+      }
+      currentLogger.info("auto-return-from-return-md", { task_id: currentTaskId, summary, return_md_path: returnMdPath });
+    } catch (e) {
+      currentLogger.error("auto-return-read-return-md-failed", {
+        task_id: currentTaskId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return false;
+    }
+  } else {
+    // 回退兜底网: completed 事件
+    const eventsDir = path.join(config.workspaceRoot, "5_tasks/records/events", currentTaskId);
+    if (!fs.existsSync(eventsDir)) return false;
+    
+    // 查找 completed_*.md 文件
+    const files = fs.readdirSync(eventsDir);
+    const completedFiles = files.filter((f) => f.startsWith("completed_") && f.endsWith(".md"));
+    if (completedFiles.length === 0) return false;
+    
+    // 读取最新的 completed 事件
+    completedFiles.sort();
+    const latestCompleted = path.join(eventsDir, completedFiles[completedFiles.length - 1]);
+    const eventContent = fs.readFileSync(latestCompleted, "utf-8");
+    
+    // 从 frontmatter 提取 summary
+    const summaryMatch = eventContent.match(/^summary:\s*['"]?([^'"\n]+)['"]?$/m);
+    if (summaryMatch) {
+      summary = summaryMatch[1].trim();
+    }
+    currentLogger.info("auto-return-from-completed-event", { task_id: currentTaskId, summary });
   }
   
   // 从 worktree git log 提取 artifact_refs（最近一次 commit 的文件列表）

@@ -151,14 +151,14 @@
     },
     "N2": {
       "name": "return",
-      "description": "执行者归还任务(executor 交回工作)",
+      "description": "执行者归还任务(executor 交回工作)。AIPOS-F29: 绑定校验从会话级放宽为工位级(token+agent_instance双锁,防冒交;会话更替时连接器以工位身份完成交回,SESSION_MISMATCH家族消灭)。",
       "from_states": [
         "claimed"
       ],
       "to_state": "returned",
       "guards": {
         "valid_claimer": {
-          "description": "只有当前 claimer 可以 return",
+          "description": "只有当前 claimer 可以 return (AIPOS-F29: 工位绑定,不再强制会话绑定)",
           "check": "actor_matches_current_claimer",
           "error_message": "只有任务的当前 claimer 可以 return",
           "severity": "needs_human",
