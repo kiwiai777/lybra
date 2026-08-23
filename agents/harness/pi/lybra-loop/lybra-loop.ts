@@ -2587,6 +2587,130 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      if (sub === "return") {
+        // AIPOS-F33 大项B: /lybra return — 工位自救交回(同一执行函数, 同一门动词)
+        // 参数全从工位身份声明自解析(C2 解析单源), 模型或用户皆可一条命令完成交回。
+        // 实现: 调 lybra_queue_return_dry_run + lybra_queue_return_confirm(与 tryAutoReturn 同一门动词)。
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        let config;
+        try {
+          config = loadConfig(process.env);
+        } catch (e) {
+          const msg = `配置错误, 无法交回: ${e instanceof Error ? e.message : String(e)}`;
+          currentLogger?.error("return-config-failed", { error: msg });
+          ctx.ui.notify(msg, "error");
+          return;
+        }
+        // 解析 task_id: 命令行参数 > currentTaskId
+        const taskArg = parts.slice(1).join(" ").trim();
+        const taskId = taskArg || currentTaskId;
+        if (!taskId) {
+          ctx.ui.notify("用法: /lybra return [TASK-ID]\n  无参数时使用当前在途卡(currentTaskId)", "warn");
+          return;
+        }
+        // 检查卡是否在 claimed
+        const claimedCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${taskId.toLowerCase()}.md`);
+        if (!fs.existsSync(claimedCardPath)) {
+          ctx.ui.notify(`卡 ${taskId} 不在 claimed 状态(已被门收走或从未认领)`, "warn");
+          return;
+        }
+        // 读 RETURN.md 提取 summary
+        const returnMdPath = path.join(config.workspaceRoot, "task_cards", taskId, "RETURN.md");
+        let summary = "Task completed (workspace return)";
+        if (fs.existsSync(returnMdPath)) {
+          try {
+            const returnContent = fs.readFileSync(returnMdPath, "utf-8");
+            const conclusionMatch = returnContent.match(/##\s*一句话结论[^\n]*\n+([^\n#]+)/i) ||
+                                    returnContent.match(/##\s*Summary[^\n]*\n+([^\n#]+)/i) ||
+                                    returnContent.match(/##\s*结论[^\n]*\n+([^\n#]+)/i);
+            if (conclusionMatch) {
+              summary = conclusionMatch[1].trim();
+            }
+          } catch (e) {
+            currentLogger?.warn("return-read-return-md-failed", { task_id: taskId, error: String(e) });
+          }
+        }
+        // 从 worktree git log 提取 artifact_refs
+        let artifactRefs: string[] = [];
+        let worktreePath = "";
+        try {
+          const cardContent = fs.readFileSync(claimedCardPath, "utf-8");
+          const worktreeMatch = cardContent.match(/active_worktree_path:\s*['"]?([^'"\n]+)['"]?/i);
+          if (worktreeMatch) {
+            worktreePath = worktreeMatch[1].trim();
+          }
+        } catch { /* ignore */ }
+        if (worktreePath && fs.existsSync(worktreePath)) {
+          try {
+            const { execSync } = await import("node:child_process");
+            const gitOutput = execSync("git diff-tree --no-commit-id --name-only -r HEAD", {
+              cwd: worktreePath,
+              encoding: "utf-8",
+            });
+            artifactRefs = gitOutput.trim().split("\n").filter((f) => f.trim());
+          } catch { /* ignore */ }
+        }
+        // 确保 gate 连接可用
+        if (!currentClient) {
+          try {
+            const verbCatalog = loadVerbCatalog();
+            currentClient = new GateMcpClient(config.gateUrl, config.token, { verbs: verbCatalog, timeoutMs: config.timeoutMs });
+            await currentClient.initialize();
+            currentTokenFp = currentClient.tokenFingerprint;
+          } catch (e) {
+            const msg = `gate 连接失败: ${e instanceof Error ? e.message : String(e)}`;
+            ctx.ui.notify(msg, "error");
+            return;
+          }
+        }
+        ctx.ui.notify(`交回 ${taskId}...`, "info");
+        try {
+          // 同一门动词: lybra_queue_return_dry_run(与 tryAutoReturn 同源)
+          const dryRunResp = await currentClient.callTool("lybra_queue_return_dry_run", {
+            task_id: taskId,
+            actor: config.actor,
+            agent_instance: config.agentInstance,
+            autonomy_mode: "Supervised",
+            owner_policy_ref: config.ownerPolicyRef,
+            result_summary: summary,
+            artifact_refs: artifactRefs.length > 0 ? artifactRefs : undefined,
+            active_session_id: getSessionId(),
+          });
+          if (dryRunResp.verdict === "BLOCK" || dryRunResp.isError === true) {
+            const reasons = dryRunResp.blocking_reasons || dryRunResp.errors || [];
+            const reasonText = stringifyReasons(reasons);
+            ctx.ui.notify(`交回被拒: ${reasonText}`, "error");
+            return;
+          }
+          const dryRunToken = dryRunResp.dry_run_token;
+          if (!dryRunToken) {
+            ctx.ui.notify("交回失败: 无 dry_run_token", "error");
+            return;
+          }
+          // 同一门动词: lybra_queue_return_confirm(AIPOS-328 executor 自确认)
+          const confirmResp = await currentClient.callTool("lybra_queue_return_confirm", {
+            dry_run_token: String(dryRunToken),
+            actor: config.actor,
+            agent_instance: config.agentInstance,
+            owner_policy_ref: config.ownerPolicyRef,
+            owner_confirmation_token: "OWNER_CONFIRMED",
+          });
+          currentLogger?.info("workspace-return-success", { task_id: taskId });
+          voice(`工位交回完成: ${taskId}`, "info", true);
+          ctx.ui.notify(`✓ 已交回 ${taskId}`, "info");
+          // 如果交回的是当前在途卡, 复位运行态
+          if (taskId === currentTaskId) {
+            resetRuntimeState("/lybra return 手动交回");
+          }
+        } catch (e) {
+          const msg = `交回失败: ${e instanceof Error ? e.message : String(e)}`;
+          currentLogger?.error("workspace-return-failed", { task_id: taskId, error: msg });
+          ctx.ui.notify(msg, "error");
+        }
+        return;
+      }
+
       if (sub === "on") {
         if (loopState.on) {
           ctx.ui.notify("lybra 循环已在运行,先 /lybra off 再启动", "warn");
@@ -2800,7 +2924,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      ctx.ui.notify("用法:/lybra on [maxN] | /lybra off | /lybra status | /lybra sync", "warn");
+      ctx.ui.notify("用法:/lybra on [maxN] | /lybra off | /lybra status | /lybra sync | /lybra return [TASK-ID]", "warn");
     },
   });
 
