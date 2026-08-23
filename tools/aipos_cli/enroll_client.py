@@ -745,7 +745,24 @@ def main() -> int:
     
     args = parser.parse_args()
     
-    workspace_root = Path(args.workspace or os.getcwd()).expanduser().resolve()
+    # AIPOS-F28 大项C: workspace_root 默认取码内治理根(工位场景正确路径)
+    # 只有显式传 --workspace 时才覆盖(兼容性)
+    if args.workspace:
+        # 显式指定 --workspace: 尊重用户意图
+        workspace_root = Path(args.workspace).expanduser().resolve()
+    else:
+        # 未指定 --workspace: 尝试从自包含码提取 governance_root
+        from tools.aipos_cli.enrollment import decode_self_contained_code
+        code_to_check = None if args.backfill else args.code
+        sc = decode_self_contained_code(code_to_check) if code_to_check else None
+        if sc and sc.get("governance_root"):
+            # 码内包含治理根: 用它作为 workspace_root(工位场景)
+            workspace_root = Path(sc["governance_root"]).expanduser().resolve()
+            if not args.quiet and not args.json:
+                print(f"Using governance_root from code as workspace: {workspace_root}")
+        else:
+            # 无码或码内无 governance_root: 回退到 cwd(旧行为兼容)
+            workspace_root = Path(os.getcwd()).expanduser().resolve()
     
     if not args.quiet and not args.json:
         print(f"Enrolling with gate: {args.gate_url}")

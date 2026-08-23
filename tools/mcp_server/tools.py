@@ -4592,7 +4592,8 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
         token_entry["projects"] = []
         token_entry["projects_enforced"] = False
 
-    # FIX-2: 注册 token 到 gate workspace connection.json
+    # AIPOS-F28 大项A: 注册 token 到 gate 声明源(门重启后仍在)
+    # FIX: 必须写入 gate 启动时的声明源(service_registry_source),不是 _repo_root()
     from tools.aipos_cli.enroll_client import (
         load_or_create_connection_json,
         upsert_token_entry,
@@ -4600,18 +4601,76 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
         ensure_lybra_dir,
     )
     import sys
-    print(f"[enroll_exchange] FIX-2: Registering token to gate workspace", file=sys.stderr)
+    print(f"[enroll_exchange] AIPOS-F28: Registering token to gate declaration source", file=sys.stderr)
     try:
-        lybra_dir = ensure_lybra_dir(root)
-        connection_data = load_or_create_connection_json(lybra_dir, gate_url=None)  # 保留现有 gate_url
-        rotated = upsert_token_entry(connection_data, token_entry)
-        # AIPOS-R6S 大项C③: 同角色多 token 收敛(移除 test.* 陈旧 token)
-        from tools.aipos_cli.enroll_client import converge_role_tokens
-        removed_instances, converged = converge_role_tokens(connection_data, role)
-        if converged:
-            print(f"[enroll_exchange] Converged same-role tokens (removed test.*: {removed_instances})", file=sys.stderr)
-        write_connection_json(lybra_dir, connection_data)
-        print(f"[enroll_exchange] Token written to {lybra_dir}/connection.json (rotated={rotated})", file=sys.stderr)
+        # 获取 gate 声明源(启动时扫描的 connection.json)
+        server = http_sse._CURRENT_SERVER
+        if server is None:
+            raise RuntimeError("Gate server instance not available (_CURRENT_SERVER is None)")
+        
+        registry_mode = getattr(server.lybra_config, "service_registry_mode", None)
+        registry_source = getattr(server.lybra_config, "service_registry_source", None)
+        
+        print(f"[enroll_exchange] registry_mode={registry_mode}, source={registry_source}", file=sys.stderr)
+        
+        if registry_mode == "connection" and registry_source:
+            # 单文件模式: 直接写入声明源 connection.json
+            from pathlib import Path
+            import json
+            conn_path = Path(registry_source).expanduser().resolve()
+            print(f"[enroll_exchange] Writing to connection mode source: {conn_path}", file=sys.stderr)
+            
+            # 读取现有数据
+            if conn_path.exists():
+                connection_data = json.loads(conn_path.read_text(encoding="utf-8"))
+            else:
+                connection_data = {"tokens": []}
+            
+            # 更新 token
+            rotated = upsert_token_entry(connection_data, token_entry)
+            
+            # AIPOS-R6S 大项C③: 同角色多 token 收敛(移除 test.* 陈旧 token)
+            from tools.aipos_cli.enroll_client import converge_role_tokens
+            removed_instances, converged = converge_role_tokens(connection_data, role)
+            if converged:
+                print(f"[enroll_exchange] Converged same-role tokens (removed test.*: {removed_instances})", file=sys.stderr)
+            
+            # 写回文件
+            conn_path.write_text(json.dumps(connection_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            print(f"[enroll_exchange] Token written to declaration source: {conn_path} (rotated={rotated})", file=sys.stderr)
+            
+        elif registry_mode == "home_root" and registry_source:
+            # home 模式: 从 governance_root 推导项目,写入对应 connection.json
+            from pathlib import Path
+            import json
+            
+            # 使用自包含码的 governance_root 或回退到 root
+            target_root = Path(governance_root) if governance_root else root
+            lybra_dir = ensure_lybra_dir(target_root)
+            print(f"[enroll_exchange] Writing to home_root mode project: {target_root}/.lybra/connection.json", file=sys.stderr)
+            
+            connection_data = load_or_create_connection_json(lybra_dir, gate_url=None)
+            rotated = upsert_token_entry(connection_data, token_entry)
+            
+            from tools.aipos_cli.enroll_client import converge_role_tokens
+            removed_instances, converged = converge_role_tokens(connection_data, role)
+            if converged:
+                print(f"[enroll_exchange] Converged same-role tokens (removed test.*: {removed_instances})", file=sys.stderr)
+            
+            write_connection_json(lybra_dir, connection_data)
+            print(f"[enroll_exchange] Token written to {lybra_dir}/connection.json (rotated={rotated})", file=sys.stderr)
+        else:
+            # 未知模式或缺少配置:回退到旧行为(写 root,但打警告)
+            print(f"[enroll_exchange] WARNING: Unknown registry mode or missing source, falling back to root", file=sys.stderr)
+            lybra_dir = ensure_lybra_dir(root)
+            connection_data = load_or_create_connection_json(lybra_dir, gate_url=None)
+            rotated = upsert_token_entry(connection_data, token_entry)
+            from tools.aipos_cli.enroll_client import converge_role_tokens
+            removed_instances, converged = converge_role_tokens(connection_data, role)
+            if converged:
+                print(f"[enroll_exchange] Converged same-role tokens (removed test.*: {removed_instances})", file=sys.stderr)
+            write_connection_json(lybra_dir, connection_data)
+            print(f"[enroll_exchange] Token written to fallback {lybra_dir}/connection.json (rotated={rotated})", file=sys.stderr)
 
         # 热加载: 通知当前 gate 进程重载 token registry
         print(f"[enroll_exchange] Calling _reload_token_registry()", file=sys.stderr)
@@ -4621,7 +4680,7 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
         # 注册失败不阻断 exchange(客户端已有 token),但记录警告
         import logging
         import traceback
-        logging.warning(f"FIX-2: Failed to register token to gate workspace: {exc}")
+        logging.warning(f"AIPOS-F28: Failed to register token to gate declaration source: {exc}")
         print(f"[enroll_exchange] ERROR in token registration: {exc}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         rotated = False
