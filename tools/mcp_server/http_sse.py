@@ -124,64 +124,76 @@ def _authorization_error(header_value: str | None, expected_token: str) -> dict[
 
 
 def _service_role_capability(header_value: str | None, registry: dict[str, dict[str, Any]]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    supplied, error = _extract_bearer(header_value)
-    if error is not None:
-        return None, error
-    # AIPOS-F26 大项B: lookup by fingerprint (registry keys are fingerprints, not plaintext tokens).
-    fp = _token_fingerprint(str(supplied or ""))
-    entry = registry.get(fp)
-    if not isinstance(entry, dict):
-        return None, _structured_error(
-            "INVALID_BEARER_TOKEN",
-            "Bearer token did not match a configured local service role token.",
-            "Use a token from .lybra/connection.json for the intended local role, or run `lybra serve status` to inspect redacted refs.",
-            doc_ref="AIPOS-189 Service Mode v0 Protocol",
-        )
-    expires_at = str(entry.get("expires_at") or "2999-01-01T00:00:00Z")
+    # AIPOS-F28 大项B: 查询异常不500复验 — 任何异常都返回干净的401+带路
     try:
-        parsed_expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        if parsed_expires.tzinfo is None:
-            parsed_expires = parsed_expires.replace(tzinfo=timezone.utc)
-    except ValueError:
+        supplied, error = _extract_bearer(header_value)
+        if error is not None:
+            return None, error
+        # AIPOS-F26 大项B: lookup by fingerprint (registry keys are fingerprints, not plaintext tokens).
+        fp = _token_fingerprint(str(supplied or ""))
+        entry = registry.get(fp)
+        if not isinstance(entry, dict):
+            return None, _structured_error(
+                "INVALID_BEARER_TOKEN",
+                "Bearer token did not match a configured local service role token.",
+                "Use a token from .lybra/connection.json for the intended local role, or run `lybra serve status` to inspect redacted refs.",
+                doc_ref="AIPOS-189 Service Mode v0 Protocol",
+            )
+        expires_at = str(entry.get("expires_at") or "2999-01-01T00:00:00Z")
+        try:
+            parsed_expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if parsed_expires.tzinfo is None:
+                parsed_expires = parsed_expires.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None, _structured_error(
+                "INVALID_SERVICE_ROLE_TOKEN_EXPIRY",
+                "Configured local service role token has an invalid expires_at value.",
+                "Run `lybra serve rotate` to mint a fresh local role token registry.",
+                doc_ref="AIPOS-189 Service Mode v0 Protocol",
+            )
+        if parsed_expires <= datetime.now(timezone.utc):
+            return None, _structured_error(
+                "EXPIRED_BEARER_TOKEN",
+                "Local service role token is expired.",
+                "Run `lybra serve rotate` to mint fresh local role tokens and reconnect.",
+                doc_ref="AIPOS-189 Service Mode v0 Protocol",
+            )
+        scopes = entry.get("scopes") if isinstance(entry.get("scopes"), list) else []
+        capability = {
+            "token_ref": str(entry.get("token_ref") or ""),
+            "role": str(entry.get("role") or ""),
+            "operations": [str(item) for item in scopes],
+            "expires_at": expires_at,
+            # AIPOS-197: non-secret fingerprint of the bearer, for confirmer attribution
+            # in provenance records (never the raw token).
+            "fingerprint": str(entry.get("fingerprint") or ""),
+            "source": "service_v0",
+        }
+        # AIPOS-228/229: carry the `projects` dimension into the capability. As of Slice 5 the gate
+        # ENFORCES it (project gate at the dispatch choke-point). Present only when the token carries
+        # it, so a token without `projects` yields a byte-identical capability (and scope_basis).
+        if entry.get("projects"):
+            capability["projects"] = [str(item) for item in entry.get("projects") or []]
+            capability["projects_enforced"] = True
+        # AIPOS-250B: carry `agent_instance` binding (PreAuthorized identity authority).
+        # Present only when the token carries it (executor role with --executor-instance).
+        # No binding -> PreAuthorized unavailable (backward-compatible: falls back Supervised).
+        if entry.get("agent_instance"):
+            capability["agent_instance"] = str(entry.get("agent_instance"))
+        # AIPOS-352: carry `role_class` for custom role scope resolution.
+        if entry.get("role_class"):
+            capability["role_class"] = str(entry.get("role_class"))
+        return capability, None
+    except Exception as exc:
+        # AIPOS-F28 大项B: 凭据查询任何异常都返回401(禁500)
+        import sys
+        print(f"[HTTP/SSE] Credential lookup exception (returning 401): {exc}", file=sys.stderr)
         return None, _structured_error(
-            "INVALID_SERVICE_ROLE_TOKEN_EXPIRY",
-            "Configured local service role token has an invalid expires_at value.",
-            "Run `lybra serve rotate` to mint a fresh local role token registry.",
-            doc_ref="AIPOS-189 Service Mode v0 Protocol",
+            "CREDENTIAL_LOOKUP_ERROR",
+            "Credential lookup failed due to internal error.",
+            "Contact the gate administrator. The token may be malformed or the registry may be corrupted.",
+            doc_ref="AIPOS-F28 Credential Lookup Error Handling",
         )
-    if parsed_expires <= datetime.now(timezone.utc):
-        return None, _structured_error(
-            "EXPIRED_BEARER_TOKEN",
-            "Local service role token is expired.",
-            "Run `lybra serve rotate` to mint fresh local role tokens and reconnect.",
-            doc_ref="AIPOS-189 Service Mode v0 Protocol",
-        )
-    scopes = entry.get("scopes") if isinstance(entry.get("scopes"), list) else []
-    capability = {
-        "token_ref": str(entry.get("token_ref") or ""),
-        "role": str(entry.get("role") or ""),
-        "operations": [str(item) for item in scopes],
-        "expires_at": expires_at,
-        # AIPOS-197: non-secret fingerprint of the bearer, for confirmer attribution
-        # in provenance records (never the raw token).
-        "fingerprint": str(entry.get("fingerprint") or ""),
-        "source": "service_v0",
-    }
-    # AIPOS-228/229: carry the `projects` dimension into the capability. As of Slice 5 the gate
-    # ENFORCES it (project gate at the dispatch choke-point). Present only when the token carries
-    # it, so a token without `projects` yields a byte-identical capability (and scope_basis).
-    if entry.get("projects"):
-        capability["projects"] = [str(item) for item in entry.get("projects") or []]
-        capability["projects_enforced"] = True
-    # AIPOS-250B: carry `agent_instance` binding (PreAuthorized identity authority).
-    # Present only when the token carries it (executor role with --executor-instance).
-    # No binding -> PreAuthorized unavailable (backward-compatible: falls back Supervised).
-    if entry.get("agent_instance"):
-        capability["agent_instance"] = str(entry.get("agent_instance"))
-    # AIPOS-352: carry `role_class` for custom role scope resolution.
-    if entry.get("role_class"):
-        capability["role_class"] = str(entry.get("role_class"))
-    return capability, None
 
 
 def _json_response(
