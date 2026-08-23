@@ -1349,6 +1349,9 @@ def build_parser() -> argparse.ArgumentParser:
     queue_return_parser.add_argument("--artifact-refs", help="JSON array of artifact references")
     queue_return_parser.add_argument("--completion-report-ref", help="Completion report reference")
     queue_return_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    queue_return_parser.add_argument("--confirm", action="store_true", help="AIPOS-F33: Two-step gate return (dry_run + confirm via MCP, executor self-confirm). Thin shell over same gate verbs as /lybra return and tryAutoReturn.")
+    queue_return_parser.add_argument("--connection-json", help="Path to connection.json (for --confirm gate access)")
+    queue_return_parser.add_argument("--active-session-id", help="Active session ID (for --confirm)")
     queue_return_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-C1 大项A: queue close subcommand (derived from verbs.schema lybra_queue_close)
@@ -4009,7 +4012,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "return":
         # AIPOS-FND-1: queue return — wrap board_adapter.return_task
-        from tools.aipos_cli.board_adapter import return_task
+        # AIPOS-F33 大项C: --confirm 薄壳模式(调同一门动词, 补上"CLI只有dry-run"的历史缺口)
         from tools.aipos_cli.cli_self_describe import wrap_error_with_verb_help
         # AIPOS-R6L 大项B②: canonical_agent 已在顶部导入 (line 32)
         
@@ -4036,6 +4039,93 @@ def main(argv: list[str] | None = None) -> int:
             canonical_actor = args.actor
             canonical_instance = args.agent_instance if hasattr(args, 'agent_instance') and args.agent_instance else args.actor
         
+        # AIPOS-F33 大项C: --confirm 薄壳模式 — 调同一门动词(dry_run + confirm)
+        # 三层(托管/工位/CLI)共用同一执行函数与同一门动词, 禁第二实现。
+        if getattr(args, "confirm", False):
+            from tools.aipos_cli.confirm_client import GateClient, load_owner_token
+            # 解析 connection.json 路径
+            conn_json_path = getattr(args, "connection_json", None)
+            if not conn_json_path:
+                # 默认路径: 从 repo_root 找 .lybra/connection.json
+                default_conn = Path(repo_root) / ".lybra" / "connection.json"
+                if default_conn.exists():
+                    conn_json_path = str(default_conn)
+                else:
+                    # 回退: 环境变量
+                    conn_json_path = os.environ.get("LYBRA_CONNECTION_JSON")
+            if not conn_json_path:
+                print("Error: --confirm needs connection.json (use --connection-json or set LYBRA_CONNECTION_JSON)", file=sys.stderr)
+                return 1
+            try:
+                executor_token = load_owner_token(connection_json=conn_json_path, role="executor")
+            except ValueError as exc:
+                print(f"Error: cannot load executor token: {exc}", file=sys.stderr)
+                return 1
+            # 从 connection.json 读 gate URL
+            try:
+                conn_data = json.loads(Path(conn_json_path).read_text(encoding="utf-8"))
+                gate_url = conn_data.get("mcp", {}).get("rpc_url", "").replace("/mcp", "")
+                if not gate_url:
+                    gate_url = conn_data.get("mcp", {}).get("url", "")
+                if not gate_url:
+                    print("Error: cannot determine gate URL from connection.json", file=sys.stderr)
+                    return 1
+            except (json.JSONDecodeError, OSError) as exc:
+                print(f"Error: cannot read connection.json: {exc}", file=sys.stderr)
+                return 1
+            try:
+                client = GateClient(gate_url, executor_token)
+                client.initialize()
+                # Step 1: dry_run (同一门动词: lybra_queue_return_dry_run)
+                dry_run_args = {
+                    "task_id": args.task_id,
+                    "actor": canonical_actor,
+                    "agent_instance": canonical_instance,
+                    "autonomy_mode": "Supervised",
+                    "owner_policy_ref": args.owner_policy_ref,
+                    "result_summary": args.result_summary,
+                }
+                if artifact_refs:
+                    dry_run_args["artifact_refs"] = artifact_refs
+                if getattr(args, "completion_report_ref", None):
+                    dry_run_args["completion_report_ref"] = args.completion_report_ref
+                if getattr(args, "active_session_id", None):
+                    dry_run_args["active_session_id"] = args.active_session_id
+                dry_run_resp = client.call_tool("lybra_queue_return_dry_run", dry_run_args)
+                # 检查 BLOCK
+                verdict = dry_run_resp.get("verdict", "")
+                if verdict == "BLOCK" or dry_run_resp.get("isError"):
+                    reasons = dry_run_resp.get("blocking_reasons") or dry_run_resp.get("errors") or []
+                    print(f"Return BLOCKED: {reasons}", file=sys.stderr)
+                    if args.json:
+                        print(render_json(dry_run_resp))
+                    return 1
+                dry_run_token = dry_run_resp.get("dry_run_token")
+                if not dry_run_token:
+                    print("Error: no dry_run_token in response", file=sys.stderr)
+                    if args.json:
+                        print(render_json(dry_run_resp))
+                    return 1
+                # Step 2: confirm (同一门动词: lybra_queue_return_confirm, AIPOS-328 executor自确认)
+                confirm_resp = client.call_tool("lybra_queue_return_confirm", {
+                    "dry_run_token": str(dry_run_token),
+                    "actor": canonical_actor,
+                    "agent_instance": canonical_instance,
+                    "owner_policy_ref": args.owner_policy_ref,
+                    "owner_confirmation_token": "OWNER_CONFIRMED",
+                })
+                if args.json:
+                    print(render_json(confirm_resp))
+                else:
+                    print(f"Return confirmed for {args.task_id}")
+                return 0
+            except Exception as exc:
+                error_msg = f"Error: {exc}"
+                print(wrap_error_with_verb_help(error_msg, "lybra_queue_return", repo_root), file=sys.stderr)
+                return 1
+        
+        # 原有路径: board_adapter.return_task (dry-run only, AIPOS-R6A F-003)
+        from tools.aipos_cli.board_adapter import return_task
         try:
             result = return_task(
                 task_id=args.task_id,
