@@ -4562,6 +4562,31 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
     if instance:
         token_entry["agent_instance"] = instance
 
+    # AIPOS-F25 大项A: 凭据项目域推导 — projects 从 governance_root 推导(自包含码内嵌)
+    # 自包含码携带 governance_root → 读 project.json#name → projects=[name]
+    # 缺省回落 workspace (记录存储位置) → 同样读 project.json。
+    # 推导失败(无 project.json / 无 name 字段) → projects=[] (不静默回落 lybra, 调用方自行推断)。
+    if sc is not None and sc.get("governance_root"):
+        governance_root = sc["governance_root"]
+    else:
+        governance_root = str(root)  # fallback: 记录存储位置(既有行为兼容)
+    
+    from tools.aipos_cli.workspace_config import read_project_json
+    try:
+        project_data = read_project_json(governance_root)
+        project_name = str(project_data.get("name") or "").strip()
+        if project_name:
+            token_entry["projects"] = [project_name]
+            token_entry["projects_enforced"] = True
+        else:
+            # project.json 存在但无 name → projects=[] (禁静默回落)
+            token_entry["projects"] = []
+            token_entry["projects_enforced"] = False
+    except Exception:
+        # project.json 不存在或读取失败 → projects=[] (禁静默回落 lybra)
+        token_entry["projects"] = []
+        token_entry["projects_enforced"] = False
+
     # FIX-2: 注册 token 到 gate workspace connection.json
     from tools.aipos_cli.enroll_client import (
         load_or_create_connection_json,

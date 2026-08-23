@@ -238,18 +238,43 @@ def load_distribution_spec() -> dict[str, Any]:
         raise ValueError(f"Failed to load distribution.schema.json: {e}") from e
 
 
-def get_distributions_for_role(role: str, spec: dict[str, Any]) -> list[dict[str, Any]]:
+def get_distributions_for_role(role: str, spec: dict[str, Any], project_root: Path | None = None) -> list[dict[str, Any]]:
     """获取适用于某角色的所有分发条目
     
+    AIPOS-F25 大项B: 支持角色类引用(class:executor)。applies_to_roles 可包含:
+    - 内建角色名: "executor" / "auditor" / "advisor"
+    - 角色类引用: "class:executor" (匹配该类下所有角色,含自定义角色)
+    - 自定义角色按注册表所属 class 匹配
+    
     Args:
-        role: 角色名(executor/auditor/advisor)
+        role: 角色名(内建或自定义)
         spec: distribution schema内容
+        project_root: 产品仓根目录(用于解析自定义角色 class)
     
     Returns:
         适用的distribution条目列表
     """
+    from tools.aipos_cli.custom_roles import resolve_role_to_class
+    
+    # 解析角色到其 builtin class
+    role_class = resolve_role_to_class(role, project_root) if project_root else role
+    if not role_class:
+        role_class = role  # fallback: 按原名匹配
+    
     all_distributions = spec.get("distributions", [])
-    return [d for d in all_distributions if role in d.get("applies_to_roles", [])]
+    matched = []
+    for d in all_distributions:
+        applies = d.get("applies_to_roles", [])
+        # 直接角色名匹配
+        if role in applies:
+            matched.append(d)
+            continue
+        # 角色类引用匹配 (class:executor)
+        class_ref = f"class:{role_class}"
+        if class_ref in applies:
+            matched.append(d)
+            continue
+    return matched
 
 
 def execute_distribution(
@@ -315,7 +340,7 @@ def distribute_to_harness(target_harness_root: Path, role: str, *, force: bool =
     
     Args:
         target_harness_root: harness 根目录(如 ~/projects/kiwiai-pi/lybra-executor)
-        role: 角色类别(executor/auditor/advisor)
+        role: 角色类别(内建或自定义角色名)
         force: 强制覆盖已存在的文件
     
     Returns:
@@ -329,8 +354,8 @@ def distribute_to_harness(target_harness_root: Path, role: str, *, force: bool =
     spec = load_distribution_spec()
     version = get_product_repo_version()
 
-    # 获取适用于该角色的所有分发条目
-    distributions = get_distributions_for_role(role, spec)
+    # 获取适用于该角色的所有分发条目 (AIPOS-F25 大项B: 传递产品仓根以解析自定义角色类)
+    distributions = get_distributions_for_role(role, spec, project_root=REPO_ROOT)
     if not distributions:
         return {
             "ok": False,
