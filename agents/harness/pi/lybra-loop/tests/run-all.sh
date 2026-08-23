@@ -32,6 +32,7 @@ declare -a files=(
   "tests/f35a-audit-cold-start.test.ts"
   "tests/f35b-audit-verdict-hosted.test.ts"
   "tests/f35c-hyphenated-task-id.test.ts"
+  "tests/f36-first-tick-cold-start.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
