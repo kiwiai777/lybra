@@ -77,7 +77,8 @@ PYEOF
 
 echo "=== [3] 新工位一贴上岗(CLI 等价命令, 不传 --gate-url: 码内嵌; 验收②⑦⑧⑨) ==="
 cd "$STATION"
-python3 -m tools.aipos_cli.aipos_cli roles enroll --code "$(cat /tmp/f23_live_code1.txt)" --verify --json > /tmp/f23_live_enroll.json 2>/tmp/f23_live_enroll.err || { cat /tmp/f23_live_enroll.err; exit 1; }
+# AIPOS-F27B: 走 bin/lybra 用户入口(禁 python -m 直调——夹具入口≠用户入口是三连假绿元凶)
+/home/kiwi/projects/lybra/bin/lybra roles enroll --code "$(cat /tmp/f23_live_code1.txt)" --verify --json > /tmp/f23_live_enroll.json 2>/tmp/f23_live_enroll.err || { cat /tmp/f23_live_enroll.err; exit 1; }
 python3 - <<'PYEOF'
 import json
 r = json.load(open("/tmp/f23_live_enroll.json"))
@@ -143,7 +144,8 @@ echo "=== [6] 同码免费重试(验收⑦): 中断的 code2 重贴到工位2 �
 STATION2="$TMP/fresh-station2"
 mkdir -p "$STATION2"
 cd "$STATION2"
-python3 -m tools.aipos_cli.aipos_cli roles enroll --code "$(cat /tmp/f23_live_code2.txt)" --verify --json > /tmp/f23_live_enroll2.json 2>/tmp/f23_live_enroll2.err || { cat /tmp/f23_live_enroll2.err; exit 1; }
+# AIPOS-F27B: 走 bin/lybra 用户入口
+/home/kiwi/projects/lybra/bin/lybra roles enroll --code "$(cat /tmp/f23_live_code2.txt)" --verify --json > /tmp/f23_live_enroll2.json 2>/tmp/f23_live_enroll2.err || { cat /tmp/f23_live_enroll2.err; exit 1; }
 python3 - <<'PYEOF2'
 import json
 r = json.load(open("/tmp/f23_live_enroll2.json"))
