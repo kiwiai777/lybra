@@ -111,8 +111,19 @@ def list_files_with_hashes(root: Path, *, include_filter: list[str] | None = Non
     return entries
 
 
-def build_role_manifest(repo_root: Path, role: str) -> dict[str, Any]:
-    """为一个角色构建分发清单(该角色应得件 + 文件列表 + 哈希 + 源 commit)。"""
+def build_role_manifest(repo_root: Path, role: str, *, role_class: str | None = None) -> dict[str, Any]:
+    """为一个角色构建分发清单(该角色应得件 + 文件列表 + 哈希 + 源 commit)。
+
+    AIPOS-F26 大项C: class expansion — custom roles match distributions by their
+    registered class (from capability's role_class field), not by literal name.
+    Example: hbj-coder (role_class=executor) matches applies_to_roles=["executor"].
+
+    Args:
+        repo_root: Product repo root path.
+        role: The role name (e.g., "executor", "hbj-coder").
+        role_class: Optional builtin class for custom roles (from capability token).
+                    If None, falls back to role name itself (built-in role behavior).
+    """
     root = Path(repo_root)
     try:
         spec = load_schema("distribution", repo_root=root)
@@ -122,8 +133,14 @@ def build_role_manifest(repo_root: Path, role: str) -> dict[str, Any]:
     version = get_product_commit(root)
     distributions: list[dict[str, Any]] = []
 
+    # AIPOS-F26 大项C: effective class for matching. Custom roles carry role_class
+    # from the capability token (AIPOS-352). Built-in roles: role_class=None → use role name.
+    effective_class = role_class if role_class else role
+
     for dist in spec.get("distributions", []):
-        if role not in dist.get("applies_to_roles", []):
+        applies_to = dist.get("applies_to_roles", [])
+        # Match if the role itself OR its effective class is in applies_to_roles.
+        if role not in applies_to and effective_class not in applies_to:
             continue
         dist_id = dist.get("distribution_id", "unknown")
         kind = dist.get("kind", "unknown")

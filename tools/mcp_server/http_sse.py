@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
@@ -76,6 +77,16 @@ def _structured_error(
     }
 
 
+def _token_fingerprint(token: str) -> str:
+    """AIPOS-F26 大项B: sha256 fingerprint of a bearer token.
+
+    Registry keys are fingerprints — plaintext tokens NEVER appear as dict keys
+    and NEVER appear in logs/diagnostics. The raw token is kept only in the value
+    (for expiry/scope checks) and is excluded from all diagnostic output.
+    """
+    return "fp:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:24]
+
+
 def _extract_bearer(header_value: str | None) -> tuple[str | None, dict[str, Any] | None]:
     if not header_value:
         return None, _structured_error(
@@ -116,7 +127,9 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
     supplied, error = _extract_bearer(header_value)
     if error is not None:
         return None, error
-    entry = registry.get(str(supplied or ""))
+    # AIPOS-F26 大项B: lookup by fingerprint (registry keys are fingerprints, not plaintext tokens).
+    fp = _token_fingerprint(str(supplied or ""))
+    entry = registry.get(fp)
     if not isinstance(entry, dict):
         return None, _structured_error(
             "INVALID_BEARER_TOKEN",
@@ -590,7 +603,33 @@ def config_from_env(host: str, port: int, keepalive_seconds: float, *, reuse_por
     )
 
 
-def load_service_role_registry(connection_json: str | Path) -> dict[str, dict[str, Any]]:
+def _validate_token_entry(item: dict[str, Any], source_label: str, index: int) -> tuple[bool, str]:
+    """AIPOS-F26 大项A 入表校验: validate a token entry has required fields.
+
+    Required: token (non-empty), role (non-empty), token_ref (non-empty).
+    Returns (is_valid, reason). Malformed entries are rejected with a warning.
+    """
+    token = str(item.get("token") or "").strip()
+    if not token:
+        return False, f"entry [{index}] in {source_label}: missing or empty 'token'"
+    role = str(item.get("role") or "").strip()
+    if not role:
+        fp = _token_fingerprint(token)
+        return False, f"entry [{index}] in {source_label} (fingerprint={fp}): missing or empty 'role'"
+    token_ref = str(item.get("token_ref") or "").strip()
+    if not token_ref:
+        return False, f"entry [{index}] in {source_label} (role={role}): missing or empty 'token_ref'"
+    return True, ""
+
+
+def load_service_role_registry(connection_json: str | Path, *, error_stream: TextIO = sys.stderr) -> dict[str, dict[str, Any]]:
+    """Load service role registry from a connection.json file.
+
+    AIPOS-F26 大项A 注册表三刀:
+      1. 来源单源化: only accept entries with required fields (token, role, token_ref).
+      2. 入表校验: malformed entries are rejected with a warning (出声).
+      3. 大项B: registry keys are sha256 fingerprints, not plaintext tokens.
+    """
     path = Path(connection_json).expanduser().resolve()
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -599,43 +638,55 @@ def load_service_role_registry(connection_json: str | Path) -> dict[str, dict[st
     tokens = data.get("tokens")
     if not isinstance(tokens, list):
         raise ValueError(f"Service connection config tokens must be a list: {path}")
-    for item in tokens:
+    source_label = str(path)
+    for index, item in enumerate(tokens):
         if not isinstance(item, dict):
+            print(f"Warning: non-dict entry [{index}] in {source_label}, skipped", file=error_stream)
+            continue
+        # AIPOS-F26 大项A: 入表校验 — malformed entries rejected with warning.
+        valid, reason = _validate_token_entry(item, source_label, index)
+        if not valid:
+            print(f"Warning: rejected {reason}", file=error_stream)
             continue
         token = str(item.get("token") or "").strip()
-        if not token:
+        # AIPOS-F26 大项B: key = sha256 fingerprint (plaintext token never a dict key).
+        fp = _token_fingerprint(token)
+        if fp in registry:
+            print(f"Warning: duplicate fingerprint {fp} in {source_label}, keeping first", file=error_stream)
             continue
-        registry[token] = {
+        registry[fp] = {
             "role": str(item.get("role") or ""),
             "token_ref": str(item.get("token_ref") or ""),
             "scopes": [str(scope) for scope in item.get("scopes", []) if str(scope).strip()] if isinstance(item.get("scopes"), list) else [],
             "expires_at": str(item.get("expires_at") or "2999-01-01T00:00:00Z"),
             # AIPOS-197: connection.json already stores a non-secret fingerprint per token.
             "fingerprint": str(item.get("fingerprint") or ""),
+            # AIPOS-F26 大项B: plaintext token stored in value only (for expiry/scope checks).
+            # NEVER logged, NEVER used as dict key.
+            "_token": token,
         }
-        # AIPOS-242 (F-NEW, found live): this registry DROPPED the `projects` dimension that
-        # `rotate --project` mints into connection.json — so `_service_role_capability`'s
-        # entry.get("projects") (AIPOS-228/229, ~:149) was ALWAYS empty and the project gate never
-        # engaged on the real HTTP serve path (live PROJECT_SCOPE_DENIED was unreachable end to
-        # end). Carry it through. Absent/[] → no key (R-ii back-compat: capability byte-identical
-        # for tokens without `projects`). The gate itself (_project_gate) is untouched.
+        # AIPOS-242: carry `projects` dimension.
         if isinstance(item.get("projects"), list) and item.get("projects"):
-            registry[token]["projects"] = [str(p) for p in item["projects"]]
-        # AIPOS-250B: carry `agent_instance` binding (PreAuthorized identity authority).
-        # Same silent-drop trap as AIPOS-242 F-NEW: must explicitly copy or field vanishes at runtime.
-        # Present only when connection.json token carries it (executor + --executor-instance).
+            registry[fp]["projects"] = [str(p) for p in item["projects"]]
+        # AIPOS-250B: carry `agent_instance` binding.
         if item.get("agent_instance"):
-            registry[token]["agent_instance"] = str(item["agent_instance"])
+            registry[fp]["agent_instance"] = str(item["agent_instance"])
         # AIPOS-352: carry `role_class` for custom role scope resolution.
         if item.get("role_class"):
-            registry[token]["role_class"] = str(item["role_class"])
+            registry[fp]["role_class"] = str(item["role_class"])
     if not registry:
         raise ValueError(f"Service connection config contains no usable role tokens: {path}")
     return registry
 
 
 def load_unified_service_role_registry(home_root: str | Path, *, error_stream: TextIO = sys.stderr) -> dict[str, dict[str, Any]]:
-    """AIPOS-294C: Load and unify all service role registries under home_root.
+    """AIPOS-294C + AIPOS-F26: Load and unify all service role registries under home_root.
+
+    AIPOS-F26 大项A 注册表三刀 applied:
+      1. 来源单源化: only valid service entries from each connection.json (validation in load_service_role_registry).
+      2. 入表校验: malformed entries rejected with warning (delegated to load_service_role_registry).
+      3. 查询异常隔离: single project failure does not crash the whole load (per-project try/except).
+      大项B: registry keys are fingerprints (delegated to load_service_role_registry).
 
     Combines:
       - home_root/.lybra/connection.json (if exists) — cross-project identities
@@ -645,51 +696,53 @@ def load_unified_service_role_registry(home_root: str | Path, *, error_stream: T
       - Token entry ALREADY HAS `projects` → respect it verbatim (cross-project [*] / multi-project)
       - Token entry LACKS `projects` → default to source project (home-level defaults to ["*"])
 
-    Collision: same token in multiple files → warn, keep first-seen.
-    Token values are NEVER rewritten.
+    Collision: same fingerprint in multiple files → warn, keep first-seen.
+    Token values are NEVER rewritten. Plaintext tokens NEVER appear in logs.
     """
     from tools.aipos_cli.workspace_config import _project_candidates
 
     home_path = Path(home_root).expanduser().resolve()
     unified: dict[str, dict[str, Any]] = {}
-    seen_sources: dict[str, str] = {}  # token -> source_label
+    seen_sources: dict[str, str] = {}  # fingerprint -> source_label
 
     # 1. Load home-level registry (cross-project identities)
     home_connection = home_path / ".lybra" / "connection.json"
     if home_connection.exists():
         try:
-            home_registry = load_service_role_registry(home_connection)
-            for token, entry in home_registry.items():
+            home_registry = load_service_role_registry(home_connection, error_stream=error_stream)
+            for fp, entry in home_registry.items():
                 # Home-level tokens without explicit projects default to ["*"]
                 if "projects" not in entry:
                     entry["projects"] = ["*"]
-                unified[token] = entry
-                seen_sources[token] = "home"
+                unified[fp] = entry
+                seen_sources[fp] = "home"
         except Exception as exc:
             print(f"Warning: failed to load home registry {home_connection}: {exc}", file=error_stream)
 
-    # 2. Load each project's registry
+    # 2. Load each project's registry (AIPOS-F26: single project failure ≠ whole load crash)
     project_names = _project_candidates(home_path)
     for proj_name in project_names:
         proj_connection = home_path / proj_name / ".lybra" / "connection.json"
         if not proj_connection.exists():
             continue
         try:
-            proj_registry = load_service_role_registry(proj_connection)
-            for token, entry in proj_registry.items():
-                if token in unified:
+            proj_registry = load_service_role_registry(proj_connection, error_stream=error_stream)
+            for fp, entry in proj_registry.items():
+                if fp in unified:
+                    # AIPOS-F26 大项B: collision warning uses fingerprint, never plaintext token.
                     print(
-                        f"Warning: token collision — {token[:16]}... found in both {seen_sources[token]} "
-                        f"and project '{proj_name}'; keeping {seen_sources[token]} entry",
+                        f"Warning: fingerprint collision — {fp} found in both {seen_sources[fp]} "
+                        f"and project '{proj_name}'; keeping {seen_sources[fp]} entry",
                         file=error_stream,
                     )
                     continue
                 # Project-level tokens without explicit projects default to [source_project]
                 if "projects" not in entry:
                     entry["projects"] = [proj_name]
-                unified[token] = entry
-                seen_sources[token] = f"project '{proj_name}'"
+                unified[fp] = entry
+                seen_sources[fp] = f"project '{proj_name}'"
         except Exception as exc:
+            # AIPOS-F26 大项A 查询异常隔离: single project load failure does not crash whole registry.
             print(f"Warning: failed to load project registry {proj_connection}: {exc}", file=error_stream)
 
     if not unified:

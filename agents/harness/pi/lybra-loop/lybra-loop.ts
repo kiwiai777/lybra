@@ -1876,18 +1876,21 @@ async function doTick(): Promise<void> {
                   await liveCtx.sendUserMessage(
                     `# 复工任务(审计车道): ${heldTaskId}\n\n审计卡 claimed + 无 verdict 记录 → 只差提交裁决。\n\n${cardContent}`,
                   );
+                  // AIPOS-F26 大项E: 投递成功后才设置 currentTaskId 和 stopLoop("已复工")
+                  currentTaskId = heldTaskId;
+                  stopLoop(`已复工审计卡 ${heldTaskId}，等待提交裁决`, "info");
+                  return;
                 } catch (sendErr) {
-                  // AIPOS-F10:能力缺失时降级出声,禁裸抛
+                  // AIPOS-F26 大项E: 投递失败禁报成功 — 停止语报失败 + next_step, 禁"已复工"
                   currentLogger.warn("held-audit-sendUserMessage-failed", {
                     task_id: heldTaskId,
                     error: sendErr instanceof Error ? sendErr.message : String(sendErr),
                   });
                   voice(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn", true);
                   voice(`下一步: 请在 Pi 对话框手动提交裁决`, "info", false);
+                  stopLoop(`复工投递失败: ${heldTaskId}`, "error");
+                  return;
                 }
-                currentTaskId = heldTaskId;
-                stopLoop(`已复工审计卡 ${heldTaskId}，等待提交裁决`, "info");
-                return;
               }
             } else {
               currentLogger.info("held-audit-has-verdict", { task_id: heldTaskId });
@@ -1938,28 +1941,27 @@ async function doTick(): Promise<void> {
               // 不用 ctx.reply(不存在的方法 —— 病象③的根因)。
               try {
                 await liveCtx.sendUserMessage(resumeText);
+                // AIPOS-F26 大项E: 投递成功后才设置 currentTaskId/worktree 和 stopLoop("已复工")
+                currentTaskId = heldTaskId;
+                // 提取 worktree 路径
+                const worktreeMatch = cardContent.match(/active_worktree_path:\s*['"]?([^'"\n]+)['"]?/i);
+                if (worktreeMatch) {
+                  currentWorktreePath = worktreeMatch[1].trim();
+                }
+                // 停止循环，让执行体在当前会话继续工作
+                stopLoop(`已复工 ${heldTaskId}，继续在当前会话执行`, "info");
+                return;
               } catch (sendErr) {
-                // AIPOS-F10:能力缺失时降级出声,禁裸抛
+                // AIPOS-F26 大项E: 投递失败禁报成功 — 停止语报失败 + next_step, 禁"已复工"
                 currentLogger.warn("held-resume-sendUserMessage-failed", {
                   task_id: heldTaskId,
                   error: sendErr instanceof Error ? sendErr.message : String(sendErr),
                 });
                 voice(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn", true);
                 voice(`下一步: 请在 Pi 对话框手动 /claim 任务卡`, "info", false);
+                stopLoop(`复工投递失败: ${heldTaskId}`, "error");
+                return;
               }
-              
-              // 设置 currentTaskId 供后续使用
-              currentTaskId = heldTaskId;
-              
-              // 提取 worktree 路径
-              const worktreeMatch = cardContent.match(/active_worktree_path:\s*['"]?([^'"\n]+)['"]?/i);
-              if (worktreeMatch) {
-                currentWorktreePath = worktreeMatch[1].trim();
-              }
-              
-              // 停止循环，让执行体在当前会话继续工作
-              stopLoop(`已复工 ${heldTaskId}，继续在当前会话执行`, "info");
-              return;
             } catch (e) {
               currentLogger.error("held-resume-failed", { task_id: heldTaskId, error: String(e) });
               voice(`复工失败: ${e instanceof Error ? e.message : String(e)}`, "error", true);
