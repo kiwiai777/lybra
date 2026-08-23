@@ -17,6 +17,25 @@ _ROLE_MATCH_SUBSTRINGS: dict[str, list[str]] = {
 }
 
 
+def _builtin_class_candidates(role: str) -> set[str]:
+    """AIPOS-F32: role 参数(exec/audit 或内建全名)对应的内建类名集合。
+
+    从 roles 注册表单源(schema roles.schema.json,经 schema_loader)推导,
+    本文件不自建 role→class 映射(防碎片化;与 F26C 分发类展开同一单源)。
+    例: role="exec" → {"executor"};role="audit" → {"auditor"};
+    role="executor"(全名) → {"executor"}。加载失败 → 空集合(退回直配语义)。
+    """
+    clean = str(role or "").strip().lower()
+    if not clean:
+        return set()
+    try:
+        from tools.schema_loader import get_all_role_names
+        names = {str(n).strip().lower() for n in get_all_role_names()}
+    except Exception:
+        return set()
+    return {n for n in names if n == clean or n.startswith(clean)}
+
+
 def _parse_policy_frontmatter(content: str) -> dict[str, Any] | None:
     """Parse YAML frontmatter from a policy markdown file. Returns None on failure."""
     if not content.startswith("---"):
@@ -46,13 +65,23 @@ def _is_policy_active_and_valid(meta: dict[str, Any], now: datetime) -> bool:
     return True
 
 
-def _policy_matches_role(meta: dict[str, Any], role: str) -> bool:
+def _policy_matches_role(
+    meta: dict[str, Any],
+    role: str,
+    custom_roles: dict[str, dict[str, str]] | None = None,
+) -> bool:
     """Check if a policy's agent_or_role field matches the requested role.
 
     AIPOS-343: matching is by frontmatter content, NOT filename.
     The agent_or_role field (e.g. "exec.lybra.kiwiai-dev") contains the role
     as a prefix component. We check if any of the role's expected substrings
     appear as a dot-separated component.
+
+    AIPOS-F32: 自定义角色按 roles 注册表所属内建类匹配(与 F26C 分发类展开同一修法、
+    同一注册表单源), 而非点分量对固定词 exec/audit。例: agent_or_role
+    "hbj-coder.chris-huibojin.kiwiai-dev" 在注册表 {"hbj-coder": {"class":
+    "executor"}} 下匹配 role="exec"。既有直配语义(exec↔exec)原样保留;
+    custom_roles 未提供/为空时行为与旧版完全一致。
     """
     agent_or_role = str(meta.get("agent_or_role") or "").strip()
     if not agent_or_role:
@@ -66,6 +95,22 @@ def _policy_matches_role(meta: dict[str, Any], role: str) -> bool:
     for substr in expected_substrings:
         if substr.lower() in components:
             return True
+
+    # AIPOS-F32: custom-role class match. Each dot component is looked up in the
+    # workspace custom-roles registry ({name: {"class": builtin_class}}, loaded from
+    # project.json — the same single source F26C's distribution class expansion reads).
+    # A component that IS a registered custom role matches when its registered class
+    # is one of the requested role's builtin classes. Registry is owner-gated, so this
+    # grants nothing beyond what the workspace already registered (anti-escalation).
+    if custom_roles:
+        target_classes = _builtin_class_candidates(role)
+        if target_classes:
+            for comp in components:
+                entry = custom_roles.get(comp)
+                if isinstance(entry, dict):
+                    cls = str(entry.get("class") or "").strip().lower()
+                    if cls and cls in target_classes:
+                        return True
     return False
 
 
@@ -92,6 +137,15 @@ def find_active_policy(
     if not policies_dir.exists():
         return None
 
+    # AIPOS-F32: 工作区自定义角色注册表(project.json 单源; 与 F26C 分发类展开同源)。
+    # 只加载一次, 防御式: 注册表不可得 → 退回旧版直配语义。
+    custom_roles: dict[str, dict[str, str]] | None = None
+    try:
+        from tools.aipos_cli.custom_roles import load_custom_roles
+        custom_roles = load_custom_roles(workspace_root)
+    except Exception:
+        custom_roles = None
+
     # AIPOS-343: scan ALL .md files, not a hardcoded filename pattern
     policy_files = sorted(policies_dir.glob("*.md"), reverse=True)  # 最新文件优先
 
@@ -112,7 +166,7 @@ def find_active_policy(
             if not _is_policy_active_and_valid(meta, now):
                 continue
 
-            if not _policy_matches_role(meta, role):
+            if not _policy_matches_role(meta, role, custom_roles=custom_roles):
                 continue
 
             policy_id = meta.get("policy_id")
