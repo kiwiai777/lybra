@@ -1940,6 +1940,20 @@ async function doTick(): Promise<void> {
         "info",
         true,
       );
+      
+      // AIPOS-F36 大项A: 投递前判断 ctx 就绪 — liveCtx.newSession 不可用时不投递不停循环,下一 tick 重试
+      if (!liveCtx || typeof liveCtx.newSession !== "function") {
+        currentLogger.warn("release-ctx-not-ready", {
+          task_id: outcome.task.task_id,
+          reason: "liveCtx.newSession 不可用(ctx 未就绪)",
+        });
+        // AIPOS-F36 大项C: 话术与行为一致 — 称重试则必重试(不停循环,下一 tick 重投)
+        voice(`放行 ${outcome.task.task_id} 待投递: ctx 未就绪，稍后循环会自动重试`, "warn", false);
+        loopState.running = false;
+        scheduleNextTick(1000); // 1秒后重试
+        return;
+      }
+      
       // F-EXT001-8(FIX4):running 标志复位前置到 newSession 之前,确保任何路径(含 stale 异常)下可达
       loopState.running = false;
       expectingSwap = true;
@@ -1963,12 +1977,14 @@ async function doTick(): Promise<void> {
           task_id: outcome.task.task_id,
           error: e instanceof Error ? e.message : String(e),
         });
-        // AIPOS-F10:降级出声(禁裸抛) — newSession 失败说明 ctx 能力缺失,提示用户手动操作
+        // AIPOS-F36 大项B: ctx 异常属可恢复态 — 不停循环(下一 tick 会重试),只出声
+        // AIPOS-F36 大项C: 话术与行为一致
         const errMsg = e instanceof Error ? e.message : String(e);
-        stopLoop(`newSession 异常:${errMsg}`, "error");
-        voice(`下一步: 请在 Pi 对话框手动 /claim 任务卡`, "info", false);
+        voice(`放行 ${outcome.task.task_id} 投递异常: ${errMsg}，稍后循环会自动重试`, "warn", true);
+        loopState.running = false;
+        scheduleNextTick(2000); // 2秒后重试
       }
-      return; // session 已替换;续跑靠新 session 的 agent_settled + session_start 双保险
+      return; // session 已替换或待重试;续跑靠新 session 的 agent_settled + session_start 双保险
     }
 
     if (outcome.kind === "stop") {
@@ -2069,11 +2085,22 @@ async function doTick(): Promise<void> {
               // AIPOS-F35 大项A: 审计车道冷启动修真 — 用 liveCtx.newSession (F10 范式),
               // 不用 sendUserMessage(实撞 F34R: "liveCtx.newSession is not a function")。
               // 对齐 claim.ts + release 路径: withSession 回调内只用 freshCtx。
+              
+              // AIPOS-F36 大项A: 投递前判断 ctx 就绪 — liveCtx.newSession 不可用时不投递不停循环,下一 tick 重试
+              if (!liveCtx || typeof liveCtx.newSession !== "function") {
+                currentLogger.warn("held-audit-ctx-not-ready", {
+                  task_id: heldTaskId,
+                  reason: "liveCtx.newSession 不可用(ctx 未就绪)",
+                });
+                // AIPOS-F36 大项C: 话术与行为一致 — 称重试则必重试(不停循环,下一 tick 重投)
+                voice(`复工审计卡 ${heldTaskId} 待投递: ctx 未就绪，稍后循环会自动重试`, "warn", false);
+                loopState.running = false;
+                scheduleNextTick(1000); // 1秒后重试
+                return;
+              }
+              
               if (cardContent) {
                 try {
-                  if (!liveCtx || !liveCtx.newSession) {
-                    throw new Error("liveCtx.newSession 不可用(ctx 未就绪或非 F10 范式)");
-                  }
                   currentTaskId = heldTaskId; // 复工前设置(投递可能异常,但 currentTaskId 需对齐)
                   loopState.running = false; // newSession 前复位 running
                   expectingSwap = true; // 标记预期会话更替
@@ -2092,16 +2119,17 @@ async function doTick(): Promise<void> {
                   }
                   return;
                 } catch (newSessionErr) {
-                  // AIPOS-F35 大项A: newSession 异常时降级出声,不静默吞(对齐 release 路径)
+                  // AIPOS-F36 大项B: ctx 异常属可恢复态 — 不停循环(下一 tick 会重试),只出声
+                  // AIPOS-F36 大项C: 话术与行为一致
                   expectingSwap = false;
                   const errMsg = newSessionErr instanceof Error ? newSessionErr.message : String(newSessionErr);
                   currentLogger.warn("held-audit-newSession-failed", {
                     task_id: heldTaskId,
                     error: errMsg,
                   });
-                  voice(`复工审计卡 newSession 异常: ${errMsg}`, "error", true);
-                  voice(`下一步: 会话 ctx 能力缺失,请在 Pi 对话框手动 /claim ${heldTaskId}`, "info", false);
-                  stopLoop(`审计复工 newSession 异常: ${heldTaskId}`, "error");
+                  voice(`复工审计卡 ${heldTaskId} 投递异常: ${errMsg}，稍后循环会自动重试`, "warn", true);
+                  loopState.running = false;
+                  scheduleNextTick(2000); // 2秒后重试
                   return;
                 }
               }
@@ -2154,10 +2182,21 @@ async function doTick(): Promise<void> {
               // 不用 ctx.reply(不存在的方法 —— 病象③的根因)。
               // AIPOS-F29B 大项B: 复工投递回归修复 - F26D 修过的投递 API
               // (确保 liveCtx 可用且调用正确的 API)
+              
+              // AIPOS-F36 大项A: 投递前判断 ctx 就绪 — liveCtx.sendUserMessage 不可用时不投递不停循环,下一 tick 重试
+              if (!liveCtx || typeof liveCtx.sendUserMessage !== "function") {
+                currentLogger.warn("held-resume-ctx-not-ready", {
+                  task_id: heldTaskId,
+                  reason: "liveCtx.sendUserMessage 不可用(ctx 未就绪)",
+                });
+                // AIPOS-F36 大项C: 话术与行为一致 — 称重试则必重试(不停循环,下一 tick 重投)
+                voice(`复工 ${heldTaskId} 待投递: ctx 未就绪，稍后循环会自动重试`, "warn", false);
+                loopState.running = false;
+                scheduleNextTick(1000); // 1秒后重试
+                return;
+              }
+              
               try {
-                if (!liveCtx || !liveCtx.sendUserMessage) {
-                  throw new Error("liveCtx.sendUserMessage 不可用(ctx 未就绪)");
-                }
                 await liveCtx.sendUserMessage(resumeText);
                 // AIPOS-F26 大项E: 投递成功后才设置 currentTaskId/worktree 和 stopLoop("已复工")
                 currentTaskId = heldTaskId;
@@ -2170,15 +2209,15 @@ async function doTick(): Promise<void> {
                 stopLoop(`已复工 ${heldTaskId}，继续在当前会话执行`, "info");
                 return;
               } catch (sendErr) {
-                // AIPOS-F26 大项E: 投递失败禁报成功 — 停止语报失败 + next_step, 禁"已复工"
-                // AIPOS-F29B 大项C: 带路语错配修复 - held 场景应该说"继续执行"而不是"手动 /claim"
+                // AIPOS-F36 大项B: ctx 异常属可恢复态 — 不停循环(下一 tick 会重试),只出声
+                // AIPOS-F36 大项C: 话术与行为一致
                 currentLogger.warn("held-resume-sendUserMessage-failed", {
                   task_id: heldTaskId,
                   error: sendErr instanceof Error ? sendErr.message : String(sendErr),
                 });
-                voice(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn", true);
-                voice(`下一步: 会话 ctx 未就绪,请稍后循环会自动重试; 或在 Pi 对话框继续执行 ${heldTaskId}`, "info", false);
-                stopLoop(`复工投递失败: ${heldTaskId}`, "error");
+                voice(`复工 ${heldTaskId} 投递异常: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}，稍后循环会自动重试`, "warn", true);
+                loopState.running = false;
+                scheduleNextTick(2000); // 2秒后重试
                 return;
               }
             } catch (e) {
