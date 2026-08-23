@@ -1962,8 +1962,12 @@ async function doTick(): Promise<void> {
               voice(`复工：${heldTaskId} 是审计卡，只差提交裁决(verdict 未落库)`, "info", true);
               // AIPOS-F10:投递卡内容让 auditor 继续提交裁决。
               // 用 sendUserMessage(对齐 claim.ts 范式),不用 ctx.reply(不存在的方法)。
+              // AIPOS-F29B 大项B: 复工投递回归修复
               if (cardContent) {
                 try {
+                  if (!liveCtx || !liveCtx.sendUserMessage) {
+                    throw new Error("liveCtx.sendUserMessage 不可用(ctx 未就绪)");
+                  }
                   await liveCtx.sendUserMessage(
                     `# 复工任务(审计车道): ${heldTaskId}\n\n审计卡 claimed + 无 verdict 记录 → 只差提交裁决。\n\n${cardContent}`,
                   );
@@ -1973,12 +1977,13 @@ async function doTick(): Promise<void> {
                   return;
                 } catch (sendErr) {
                   // AIPOS-F26 大项E: 投递失败禁报成功 — 停止语报失败 + next_step, 禁"已复工"
+                  // AIPOS-F29B 大项C: 带路语错配修复 - 审计车道应该说"继续提交裁决"而不是"手动提交"
                   currentLogger.warn("held-audit-sendUserMessage-failed", {
                     task_id: heldTaskId,
                     error: sendErr instanceof Error ? sendErr.message : String(sendErr),
                   });
                   voice(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn", true);
-                  voice(`下一步: 请在 Pi 对话框手动提交裁决`, "info", false);
+                  voice(`下一步: 会话 ctx 未就绪,请稍后循环会自动重试; 或在 Pi 对话框继续提交裁决 ${heldTaskId}`, "info", false);
                   stopLoop(`复工投递失败: ${heldTaskId}`, "error");
                   return;
                 }
@@ -2030,7 +2035,12 @@ async function doTick(): Promise<void> {
               }
               // AIPOS-F10:投递卡内容到当前会话。用 sendUserMessage(对齐 claim.ts 范式),
               // 不用 ctx.reply(不存在的方法 —— 病象③的根因)。
+              // AIPOS-F29B 大项B: 复工投递回归修复 - F26D 修过的投递 API
+              // (确保 liveCtx 可用且调用正确的 API)
               try {
+                if (!liveCtx || !liveCtx.sendUserMessage) {
+                  throw new Error("liveCtx.sendUserMessage 不可用(ctx 未就绪)");
+                }
                 await liveCtx.sendUserMessage(resumeText);
                 // AIPOS-F26 大项E: 投递成功后才设置 currentTaskId/worktree 和 stopLoop("已复工")
                 currentTaskId = heldTaskId;
@@ -2044,12 +2054,13 @@ async function doTick(): Promise<void> {
                 return;
               } catch (sendErr) {
                 // AIPOS-F26 大项E: 投递失败禁报成功 — 停止语报失败 + next_step, 禁"已复工"
+                // AIPOS-F29B 大项C: 带路语错配修复 - held 场景应该说"继续执行"而不是"手动 /claim"
                 currentLogger.warn("held-resume-sendUserMessage-failed", {
                   task_id: heldTaskId,
                   error: sendErr instanceof Error ? sendErr.message : String(sendErr),
                 });
                 voice(`复工投递失败: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`, "warn", true);
-                voice(`下一步: 请在 Pi 对话框手动 /claim 任务卡`, "info", false);
+                voice(`下一步: 会话 ctx 未就绪,请稍后循环会自动重试; 或在 Pi 对话框继续执行 ${heldTaskId}`, "info", false);
                 stopLoop(`复工投递失败: ${heldTaskId}`, "error");
                 return;
               }
@@ -2722,19 +2733,62 @@ export default function (pi: ExtensionAPI) {
         // AIPOS-R8B 大项C④: sweep 带耗时显示
         ctx.ui?.notify?.("[5/5] 存量收敛(sweep)...", "info");
         const sweepStartMs = Date.now();
-        tryAutoFinalizeOnPassVerdict().catch((e) => {
+        await tryAutoFinalizeOnPassVerdict().catch((e) => {
           const errMsg = `启动时 auto-finalize 错误: ${e instanceof Error ? e.message : String(e)}`;
           currentLogger.warn("startup-auto-finalize-error", {
             error: e instanceof Error ? e.message : String(e),
           });
           // AIPOS-R6L 第三轮修复(b): 失败必出声
           ctx.ui?.notify?.(errMsg, "error");
-        }).finally(() => {
-          const sweepMs = Date.now() - sweepStartMs;
-          ctx.ui?.notify?.(`[5/5] 存量收敛完成 (${sweepMs}ms)`, "info");
-          const totalMs = Date.now() - startMs;
-          ctx.ui?.notify?.(`✓ 启动完成，总耗时 ${totalMs}ms`, "info");
         });
+        const sweepMs = Date.now() - sweepStartMs;
+        ctx.ui?.notify?.(`[5/5] 存量收敛完成 (${sweepMs}ms)`, "info");
+
+        // AIPOS-F29B 大项A: held-startup 托管接线 - 启动遇在途卡且 RETURN.md 就位→走同一托管函数
+        // (F29 托管唯一实现: settle 路已有, 禁复制第二份托管逻辑; 2026-08-23 实撞=reload 后仍投递复工)
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        const inFlightAtStartup = findInFlightCards(fs, path, config.workspaceRoot, config.agentInstance);
+        if (inFlightAtStartup.length > 0) {
+          currentLogger?.info("startup-held-check", { in_flight: inFlightAtStartup });
+          for (const heldTaskId of inFlightAtStartup) {
+            // 检查 RETURN.md 是否就位
+            const returnMdPath = path.join(config.workspaceRoot, "task_cards", heldTaskId, "RETURN.md");
+            if (fs.existsSync(returnMdPath)) {
+              currentLogger?.info("startup-held-return-ready", { task_id: heldTaskId, return_md: returnMdPath });
+              voice(`启动检测: ${heldTaskId} RETURN.md 就位, 托管交回`, "info", true);
+              // 设置 currentTaskId 供tryAutoReturn 使用
+              currentTaskId = heldTaskId;
+              // 提取 worktree 路径
+              const taskCardPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed", `${heldTaskId.toLowerCase()}.md`);
+              if (fs.existsSync(taskCardPath)) {
+                try {
+                  const cardContent = fs.readFileSync(taskCardPath, "utf-8");
+                  const worktreeMatch = cardContent.match(/active_worktree_path:\s*['"]+([^'"\n]+)['"]/i);
+                  if (worktreeMatch) {
+                    currentWorktreePath = worktreeMatch[1].trim();
+                  }
+                } catch (e) {
+                  currentLogger?.warn("startup-held-read-card-failed", { task_id: heldTaskId, error: String(e) });
+                }
+              }
+              // 调用托管函数（F29 托管唯一实现）
+              const returned = await tryAutoReturn();
+              if (returned) {
+                voice(`启动托管交回成功: ${heldTaskId}`, "info", true);
+              } else {
+                voice(`启动托管交回失败: ${heldTaskId}, 请检查日志`, "warn", true);
+              }
+              // 只处理第一张在途卡（一卡一会话原则）
+              break;
+            } else {
+              currentLogger?.info("startup-held-no-return", { task_id: heldTaskId, reason: "RETURN.md 未就位, 继续轮询" });
+            }
+          }
+        }
+        
+        const totalMs = Date.now() - startMs;
+        ctx.ui?.notify?.(`✓ 启动完成，总耗时 ${totalMs}ms`, "info");
         
         // F-EXT001-4(FIX1):非阻塞,直接调用第一轮 tick(不经 sendUserMessage)
         doTick().catch((e) => {
