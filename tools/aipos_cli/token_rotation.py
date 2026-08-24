@@ -108,15 +108,48 @@ def _atomic_write_config(path: Path, config: dict[str, Any]) -> None:
 
 
 def _backup_config(path: Path) -> Path:
-    """Timestamped 0600 backup of the current connection.json (pre-rotation)."""
-    backup = path.with_name(f"{path.name}.bak-{_stamp_now()}")
+    """Timestamped 0600 backup of the current connection.json (pre-rotation).
+    
+    AIPOS-F37 大项C: 副本改名为不可误读形态 — .backup-connection-{timestamp}.json.disabled
+    (禁 .bak- 前缀防误读; .disabled 后缀明确不可用; connection 明确内容)。
+    """
+    # AIPOS-F37: 新格式 .backup-connection-{timestamp}.json.disabled
+    stamp = _stamp_now()
+    backup = path.parent / f".backup-connection-{stamp}.json.disabled"
     n = 1
     while backup.exists():
         n += 1
-        backup = path.with_name(f"{path.name}.bak-{_stamp_now()}-{n}")
+        backup = path.parent / f".backup-connection-{stamp}-{n}.json.disabled"
     shutil.copy2(path, backup)
     os.chmod(backup, REQUIRED_CONNECTION_MODE)
     return backup
+
+
+def _cleanup_legacy_backups(lybra_dir: Path) -> list[str]:
+    """AIPOS-F37 大项C: 清理旧格式副本 (.bak-* 格式) → 改名为 .disabled 后缀。
+    
+    Returns:
+        list[str]: 清理的文件列表(相对名)
+    """
+    if not lybra_dir.is_dir():
+        return []
+    
+    cleaned = []
+    # 查找 connection.json.bak-* 格式的旧副本
+    for bakfile in lybra_dir.glob("connection.json.bak-*"):
+        if not bakfile.is_file():
+            continue
+        # 改名为 .backup-connection-{original_suffix}.json.disabled
+        suffix = bakfile.name.replace("connection.json.bak-", "")
+        newname = lybra_dir / f".backup-connection-legacy-{suffix}.json.disabled"
+        try:
+            bakfile.rename(newname)
+            cleaned.append(bakfile.name)
+        except OSError:
+            # 改名失败不中断
+            pass
+    
+    return cleaned
 
 
 def _gate_base_url(config: dict[str, Any]) -> str | None:
@@ -316,6 +349,8 @@ def rotate_tokens_report(
 
     try:
         backup_path = _backup_config(conn_path)
+        # AIPOS-F37 大项C: 清理旧格式副本 (.bak-* → .disabled)
+        cleaned = _cleanup_legacy_backups(conn_path.parent)
         _atomic_write_config(conn_path, config)
     except OSError as exc:
         return {**base, "ok": False, "verdict": Verdict.BLOCK,
@@ -360,6 +395,9 @@ def rotate_tokens_report(
         "gate_reload": gate_reload,
         "reload_detail": reload_result.get("detail") if reload_result.get("ok") else reload_result.get("reason"),
     }
+    # AIPOS-F37 大项C: 报告清理的旧副本
+    if cleaned:
+        result["legacy_backups_cleaned"] = cleaned
     if gate_reload != "hot_reload_ok":
         result["restart_guidance"] = _restart_guidance(config)
     result["next_steps"] = _reenroll_guidance(preview, config)
@@ -413,6 +451,8 @@ def remove_instance_report(
     config["tokens"] = kept
     try:
         backup_path = _backup_config(conn_path)
+        # AIPOS-F37 大项C: 清理旧格式副本 (.bak-* → .disabled)
+        cleaned = _cleanup_legacy_backups(conn_path.parent)
         _atomic_write_config(conn_path, config)
     except OSError as exc:
         return {**base, "ok": False, "verdict": Verdict.BLOCK,
@@ -457,6 +497,9 @@ def remove_instance_report(
         "gate_reload": gate_reload,
         "reload_detail": reload_result.get("detail") if reload_result.get("ok") else reload_result.get("reason"),
     }
+    # AIPOS-F37 大项C: 报告清理的旧副本
+    if cleaned:
+        result["legacy_backups_cleaned"] = cleaned
     if gate_reload != "hot_reload_ok":
         result["restart_guidance"] = _restart_guidance(config)
     return result

@@ -287,6 +287,34 @@
         "authenticity_check": "audit_helpers.is_gate_born_verdict_metadata",
         "authenticity_policy": "手写文件(缺少门生标记)必须被忽略并 warn,绝不参与终态判定(AIPOS-F2)"
       },
+      "audit_report": {
+        "description": "AIPOS-F37 大项B: 审计报告落点与字段声明——托管解析与派审注入读同一份,禁散落",
+        "location_candidates": [
+          "task_cards/{audit_task_id}/RETURN.md",
+          "task_cards/{audit_task_id}/audit_report.md"
+        ],
+        "location_priority": "RETURN.md 优先,不存在则回退 audit_report.md",
+        "required_fields": [
+          {
+            "field": "verdict",
+            "format": "verdict: PASS|FAIL|PASS_WITH_NOTES|BLOCK",
+            "description": "裁决三值(大写),托管据此提交门生裁决记录"
+          },
+          {
+            "field": "findings",
+            "format": "## Findings 或 ## 发现",
+            "description": "审计发现(可为空字符串)"
+          },
+          {
+            "field": "summary",
+            "format": "## 一句话结论 或 ## Summary",
+            "description": "一句话结论(必填),托管提取为 findings_summary"
+          }
+        ],
+        "托管解析源": "lybra-loop.ts tryAutoReturn() 审计车道分支(1503-1650行)",
+        "派审注入源": "F14 writer 派生审计卡时注入报告骨架(含 verdict: 行)",
+        "single_source_policy": "报告契约只有一份声明(本段);托管解析/派审注入/审计体写作都读此声明,禁代码内写死第二份"
+      },
       "automation": {
         "on_PASS": "允许 finalize (N5)",
         "on_FAIL": "自动派生复审卡 (N3 复用,大项C⑤)",
