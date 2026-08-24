@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -9,6 +10,12 @@ from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.records import expected_claim_log_path, expected_closure_record_path, expected_return_record_path, expected_session_record_path
 from tools.schema_loader import get_enum_values
 from tools.schema_constants import RecordType, Verdict
+
+# AIPOS-F22B: YAML 序列化器 (可选依赖, zerodep 核心使用 stdlib fallback)
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    yaml = None  # noqa: F841
 
 # Record type constants from enums.schema.json (single source)
 # FND-47: 禁字面量漂移 - 所有 record_type 值从 enums.schema 读取
@@ -113,51 +120,74 @@ def ensure_safe_record_path(repo_root: Path, path: Path, record_type: str, task_
     return resolved
 
 
-def _yaml_scalar(value: Any) -> str:
+def _stdlib_yaml_scalar(value: Any) -> str:
+    """stdlib YAML scalar emitter — 使用 json.dumps 转义字符串 (AIPOS-F22B).
+
+    json.dumps 输出的双引号字符串是合法的 YAML 双引号标量, 且被 zerodep 回退解析器支持.
+    """
     if value is True:
         return "true"
     if value is False:
         return "false"
     if value is None:
-        return ""
+        return "null"
     if isinstance(value, (int, float)):
         return str(value)
+    # 字符串: 使用 json.dumps 输出双引号 YAML 标量
     text = str(value)
-    if text == "":
-        return ""
-    if any(char in text for char in [":", "#", "[", "]", "{", "}", "\n"]) or text != text.strip():
-        return "'" + text.replace("'", "''") + "'"
-    return text
+    return json.dumps(text)
 
 
 def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None = None) -> str:
+    """Render markdown with YAML frontmatter.
+
+    AIPOS-F22B: frontmatter 一律经 YAML 序列化器 (safe_dump 或等价) 输出, 禁字符串拼接.
+    使用 yaml.safe_dump (PyYAML 可用时) 或 stdlib fallback.
+    """
     ordered_keys = [key for key in (order or []) if key in metadata]
     ordered_keys.extend(sorted(key for key in metadata if key not in ordered_keys))
-    lines = ["---"]
+
+    # 构建保持插入顺序的 dict (Python 3.7+ dict 有序)
+    ordered_meta: dict[str, Any] = {}
     for key in ordered_keys:
-        value = _normalize_value(metadata[key])
+        ordered_meta[key] = _normalize_value(metadata[key])
+
+    if yaml is not None:
+        # 主路径: 使用 yaml.safe_dump
+        yaml_text = yaml.safe_dump(
+            ordered_meta,
+            sort_keys=False,
+            allow_unicode=True,
+            default_flow_style=False,
+            width=1000000,  # 禁换行
+        )
+        # safe_dump 输出末尾有换行, 去除后再拼接
+        yaml_text = yaml_text.rstrip("\n")
+        return f"---\n{yaml_text}\n---\n{body.rstrip()}\n"
+
+    # stdlib fallback: 逐行构建 (列表/嵌套映射复用原有逻辑, 标量使用 _stdlib_yaml_scalar)
+    lines = ["---"]
+    for key, value in ordered_meta.items():
         if isinstance(value, list):
             if not value:
-                lines.append(f"{key}: []")  # AIPOS-218: explicit empty list (no []/None ambiguity)
+                lines.append(f"{key}: []")
                 continue
             lines.append(f"{key}:")
             for item in value:
-                lines.append(f"- {_yaml_scalar(item)}")
+                lines.append(f"- {_stdlib_yaml_scalar(item)}")
             continue
-        # AIPOS-261: bounded depth-1 nested map (e.g. agent_runtime). Round-trips through
-        # both PyYAML and the stdlib fallback parser (which supports depth-1 maps). Deeper
-        # structures are intentionally not emitted by any writer.
         if isinstance(value, dict):
             if not value:
                 lines.append(f"{key}: " + "{}")
                 continue
             lines.append(f"{key}:")
             for sub_key, sub_val in value.items():
-                lines.append(f"  {sub_key}: {_yaml_scalar(sub_val)}")
+                lines.append(f"  {sub_key}: {_stdlib_yaml_scalar(sub_val)}")
             continue
-        lines.append(f"{key}: {_yaml_scalar(value)}")
+        lines.append(f"{key}: {_stdlib_yaml_scalar(value)}")
     lines.extend(["---", body.rstrip(), ""])
     return "\n".join(lines)
+
 
 
 CLAIM_FRONTMATTER_ORDER = [

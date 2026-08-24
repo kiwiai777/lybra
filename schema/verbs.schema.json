@@ -1426,6 +1426,11 @@
               }
             },
             "additionalProperties": false
+          },
+          "autonomy_mode": {
+            "type": "string",
+            "$enum": "autonomy_mode",
+            "description": "Supervised for audit verdict (AIPOS-F22B)"
           }
         },
         "required": [
@@ -1433,7 +1438,8 @@
           "actor",
           "agent_instance",
           "owner_policy_ref",
-          "verdict"
+          "verdict",
+          "autonomy_mode"
         ],
         "additionalProperties": false
       }
@@ -1472,6 +1478,11 @@
           },
           "owner_confirmation_token": {
             "type": "string"
+          },
+          "autonomy_mode": {
+            "type": "string",
+            "$enum": "autonomy_mode",
+            "description": "Supervised for audit verdict (AIPOS-F22B)"
           }
         },
         "required": [
@@ -1479,7 +1490,8 @@
           "actor",
           "agent_instance",
           "owner_policy_ref",
-          "owner_confirmation_token"
+          "owner_confirmation_token",
+          "autonomy_mode"
         ],
         "additionalProperties": false
       }
