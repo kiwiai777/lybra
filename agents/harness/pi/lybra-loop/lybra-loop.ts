@@ -2087,6 +2087,35 @@ async function doTick(): Promise<void> {
             if (!hasVerdict) {
               currentLogger.info("held-audit-no-verdict", { task_id: heldTaskId, reviewed_task_id: reviewedTaskId });
               voice(`复工：${heldTaskId} 是审计卡，只差提交裁决(verdict 未落库)`, "info", true);
+              
+              // AIPOS-F37 大项A: held 路调同一托管函数(F29/F29B/本次同族第三次收口)
+              // 审计报告就位 → 走托管函数提交裁决, 禁投递复工(F22BR 实撞: held-audit-ctx-not-ready 死循环)
+              const auditReportPath = path.join(config.workspaceRoot, "task_cards", heldTaskId, "RETURN.md");
+              const altReportPath = path.join(config.workspaceRoot, "task_cards", heldTaskId, "audit_report.md");
+              const reportReady = fs.existsSync(auditReportPath) || fs.existsSync(altReportPath);
+              
+              if (reportReady) {
+                currentLogger.info("held-audit-report-ready", { task_id: heldTaskId, reviewed_task_id: reviewedTaskId });
+                voice(`held 审计卡 ${heldTaskId} 报告就位, 托管提交裁决`, "info", true);
+                // 设置 currentTaskId 供 tryAutoReturn 使用(审计车道走同一托管函数)
+                currentTaskId = heldTaskId;
+                // 提取 worktree 路径
+                const worktreeMatch = cardContent.match(/active_worktree_path:\s*['"]?([^'"\n]+)['"]?/i);
+                if (worktreeMatch) {
+                  currentWorktreePath = worktreeMatch[1].trim();
+                }
+                // 调用托管函数(F29 托管唯一实现: settle 路与 held 路调同一函数)
+                const submitted = await tryAutoReturn();
+                if (submitted) {
+                  voice(`held 托管提交裁决成功: ${heldTaskId}`, "info", true);
+                  resetRuntimeState("held-audit 托管成功歇手");
+                } else {
+                  voice(`held 托管提交裁决失败: ${heldTaskId}, 请检查日志`, "warn", true);
+                }
+                return;
+              }
+              
+              // 报告未就位 → 投递复工(保留既有逻辑)
               // AIPOS-F35 大项A: 审计车道冷启动修真 — 用 liveCtx.newSession (F10 范式),
               // 不用 sendUserMessage(实撞 F34R: "liveCtx.newSession is not a function")。
               // 对齐 claim.ts + release 路径: withSession 回调内只用 freshCtx。
@@ -2148,6 +2177,32 @@ async function doTick(): Promise<void> {
           currentLogger.info("held-resume", { task_id: heldTaskId });
           voice(`复工：继续执行 ${heldTaskId}`, "info", true);
           
+          // AIPOS-F37 大项A扩展: 执行车道 held 路托管接线 — RETURN.md 就位→走托管函数(与审计车道复用同一托管)
+          const returnMdPath = path.join(config.workspaceRoot, "task_cards", heldTaskId, "RETURN.md");
+          if (fs.existsSync(returnMdPath)) {
+            currentLogger.info("held-exec-return-ready", { task_id: heldTaskId });
+            voice(`held 执行卡 ${heldTaskId} RETURN.md 就位, 托管交回`, "info", true);
+            // 设置 currentTaskId 供 tryAutoReturn 使用
+            currentTaskId = heldTaskId;
+            // 提取 worktree 路径
+            if (cardContent) {
+              const worktreeMatch = cardContent.match(/active_worktree_path:\s*['"]?([^'"\n]+)['"]?/i);
+              if (worktreeMatch) {
+                currentWorktreePath = worktreeMatch[1].trim();
+              }
+            }
+            // 调用托管函数(执行车道与审计车道复用同一托管函数)
+            const returned = await tryAutoReturn();
+            if (returned) {
+              voice(`held 托管交回成功: ${heldTaskId}`, "info", true);
+              resetRuntimeState("held-exec 托管成功歇手");
+            } else {
+              voice(`held 托管交回失败: ${heldTaskId}, 请检查日志`, "warn", true);
+            }
+            return;
+          }
+          
+          // RETURN.md 未就位 → 投递复工(保留既有逻辑)
           // 读取任务卡正文并投递
           if (fs.existsSync(taskCardPath)) {
             try {
@@ -2796,6 +2851,23 @@ export default function (pi: ExtensionAPI) {
           const dryResp = await currentClient!.callTool("lybra_queue_claim_dry_run", dryRunArgs);
           if (dryResp.verdict === "BLOCK" || dryResp.isError) {
             const reasons = dryResp.blocking_reasons || dryResp.errors || [];
+            // AIPOS-F37 增补: 重复认领幂等 — 识别门返回的状态机类 BLOCK(期望 pending 实为 claimed)
+            // 为“已持有,继续执行”,出人话并继续,禁止以“应答语义不明”停循环
+            const alreadyClaimedReason = reasons.find((r: any) => 
+              (r.message || "").includes("claimed") || 
+              (r.message || "").includes("已被认领") ||
+              (r.error_code || "") === "INVALID_STATE_TRANSITION"
+            );
+            if (alreadyClaimedReason) {
+              const msg = `卡 ${taskId} 已持有(claimed),继续执行`;
+              currentLogger?.info("claim-already-held", { task_id: taskId });
+              voice(msg, "info", false);
+              ctx.ui.notify(msg, "info");
+              // 设置 currentTaskId 以便继续执行
+              currentTaskId = taskId;
+              return;
+            }
+            // 其他 BLOCK 原因 → 正常报错
             const msg = `认领被 BLOCK: ${stringifyReasons(reasons)}`;
             currentLogger?.warn("claim-blocked", { task_id: taskId, reasons });
             ctx.ui.notify(msg, "warn");
