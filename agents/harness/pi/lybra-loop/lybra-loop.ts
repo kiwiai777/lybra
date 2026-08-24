@@ -2790,7 +2790,7 @@ export default function (pi: ExtensionAPI) {
             autonomy_mode: "Supervised",
             owner_policy_ref: config.ownerPolicyRef,
           };
-          const dryResp = await currentClient!.call("lybra_queue_claim_dry_run", dryRunArgs);
+          const dryResp = await currentClient!.callTool("lybra_queue_claim_dry_run", dryRunArgs);
           if (dryResp.verdict === "BLOCK" || dryResp.isError) {
             const reasons = dryResp.blocking_reasons || dryResp.errors || [];
             const msg = `认领被 BLOCK: ${stringifyReasons(reasons)}`;
@@ -2811,7 +2811,7 @@ export default function (pi: ExtensionAPI) {
             owner_policy_ref: config.ownerPolicyRef,
             owner_confirmation_token: "OWNER_CONFIRMED",
           };
-          const confirmResp = await currentClient!.call("lybra_queue_claim_confirm", confirmArgs);
+          const confirmResp = await currentClient!.callTool("lybra_queue_claim_confirm", confirmArgs);
           if (confirmResp.isError) {
             const errors = confirmResp.errors || [];
             ctx.ui.notify(`认领 confirm 失败: ${stringifyReasons(errors)}`, "error");

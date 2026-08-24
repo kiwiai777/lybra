@@ -17,7 +17,13 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.confirm_client import GateClient, load_owner_token
-from tools.aipos_cli.response_render import render_json
+from tools.aipos_cli.renderer import render_json
+
+
+def _fail(error: str) -> tuple[int, dict[str, Any]]:
+    """错误路径必须出声(exit 1 + stderr): 静默失败 = 不可审计(F22-fix1 可观测性补齐)"""
+    print(f"two_phase_shell_factory: {error}", file=sys.stderr)
+    return 1, {"error": error}
 
 
 def execute_two_phase_verb(
@@ -46,7 +52,7 @@ def execute_two_phase_verb(
     try:
         token = load_owner_token(connection_json=connection_json_path, role=role)
     except ValueError as exc:
-        return 1, {"error": f"cannot load {role} token: {exc}"}
+        return _fail(f"cannot load {role} token: {exc}")
 
     try:
         conn_data = json.loads(Path(connection_json_path).read_text(encoding="utf-8"))
@@ -54,23 +60,23 @@ def execute_two_phase_verb(
         if not gate_url:
             gate_url = conn_data.get("mcp", {}).get("url", "")
         if not gate_url:
-            return 1, {"error": "cannot determine gate URL from connection.json"}
+            return _fail("cannot determine gate URL from connection.json")
     except (json.JSONDecodeError, OSError) as exc:
-        return 1, {"error": f"cannot read connection.json: {exc}"}
+        return _fail(f"cannot read connection.json: {exc}")
 
     # 2. 初始化 gate 客户端
     try:
         client = GateClient(gate_url, token)
         client.initialize()
     except Exception as exc:
-        return 1, {"error": f"gate client init failed: {exc}"}
+        return _fail(f"gate client init failed: {exc}")
 
     # 3. Step 1: dry_run
     dry_run_verb = f"{verb_base}_dry_run"
     try:
         dry_run_resp = client.call_tool(dry_run_verb, args_dict)
     except Exception as exc:
-        return 1, {"error": f"{dry_run_verb} failed: {exc}"}
+        return _fail(f"{dry_run_verb} failed: {exc}")
 
     # 检查 BLOCK
     verdict = dry_run_resp.get("verdict", "")
@@ -107,7 +113,7 @@ def execute_two_phase_verb(
     try:
         confirm_resp = client.call_tool(confirm_verb, confirm_args)
     except Exception as exc:
-        return 1, {"error": f"{confirm_verb} failed: {exc}"}
+        return _fail(f"{confirm_verb} failed: {exc}")
 
     # 5. 输出结果
     if json_output:
@@ -145,7 +151,7 @@ def execute_single_phase_via_gate(
     try:
         token = load_owner_token(connection_json=connection_json_path, role=role)
     except ValueError as exc:
-        return 1, {"error": f"cannot load {role} token: {exc}"}
+        return _fail(f"cannot load {role} token: {exc}")
 
     try:
         conn_data = json.loads(Path(connection_json_path).read_text(encoding="utf-8"))
@@ -153,9 +159,9 @@ def execute_single_phase_via_gate(
         if not gate_url:
             gate_url = conn_data.get("mcp", {}).get("url", "")
         if not gate_url:
-            return 1, {"error": "cannot determine gate URL from connection.json"}
+            return _fail("cannot determine gate URL from connection.json")
     except (json.JSONDecodeError, OSError) as exc:
-        return 1, {"error": f"cannot read connection.json: {exc}"}
+        return _fail(f"cannot read connection.json: {exc}")
 
     # 2. 初始化 gate 客户端并调用
     try:
@@ -163,7 +169,7 @@ def execute_single_phase_via_gate(
         client.initialize()
         resp = client.call_tool(verb_name, args_dict)
     except Exception as exc:
-        return 1, {"error": f"{verb_name} failed: {exc}"}
+        return _fail(f"{verb_name} failed: {exc}")
 
     # 3. 检查结果
     if resp.get("isError"):

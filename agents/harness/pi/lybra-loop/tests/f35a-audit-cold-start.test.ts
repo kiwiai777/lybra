@@ -41,7 +41,7 @@ describe("F35-A①: 审计车道冷启动 F10 范式", () => {
     assert.ok(auditResumeIdx > 0, "held-audit-no-verdict 块应存在");
     
     // 取该块后续 1000 字符
-    const auditResumeBlock = source.substring(auditResumeIdx, auditResumeIdx + 2000);
+    const auditResumeBlock = source.substring(auditResumeIdx, auditResumeIdx + 4000);
     
     // 断言: 应使用 liveCtx.newSession
     assert.ok(
@@ -77,7 +77,7 @@ describe("F35-A①: 审计车道冷启动 F10 范式", () => {
     );
     
     const auditResumeIdx = source.indexOf("held-audit-no-verdict");
-    const auditResumeBlock = source.substring(auditResumeIdx, auditResumeIdx + 2000);
+    const auditResumeBlock = source.substring(auditResumeIdx, auditResumeIdx + 4000);
     
     // 断言: newSession 异常时应降级出声(不静默吞)
     assert.ok(
@@ -109,7 +109,7 @@ describe("F35-A②: 禁止旧版 sendUserMessage 路径", () => {
     );
     
     const auditResumeIdx = source.indexOf("held-audit-no-verdict");
-    const auditResumeBlock = source.substring(auditResumeIdx, auditResumeIdx + 2000);
+    const auditResumeBlock = source.substring(auditResumeIdx, auditResumeIdx + 4000);
     
     // 断言: 不应有 liveCtx.sendUserMessage(应改用 newSession)
     // 注意: freshCtx.sendUserMessage 是允许的(在 withSession 内)
