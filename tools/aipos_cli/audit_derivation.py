@@ -501,6 +501,41 @@ def derive_audit_task_on_return(
     audit_task_id = audit_spec["audit_task_id"]
     audit_task_path = audit_spec["audit_task_path"]
     audit_task_file = repo_root / audit_task_path
+    audit_metadata = audit_spec["metadata"]
+
+    # AIPOS-F38 大项A(F17 原则覆盖全部 writer): 必填字段从 schema 单源补全(值承继原卡,
+    # 缺则安全默认), 再产前自检——产物必过与 publish/修复卡 writer 同一的 schema 必填校验;
+    # 审计身份必须是注册表审计实例(_derive_audit_instance 同一实现), 禁承继原卡执行实例。
+    _required_fields = get_required_card_fields()
+    _inherit_defaults = {
+        "needs_owner": False,
+        "output_target": source_metadata.get("output_target", ""),
+        "artifact_policy": source_metadata.get("artifact_policy", "formal_write"),
+    }
+    for _field in _required_fields:
+        if _field not in audit_metadata or audit_metadata[_field] is None:
+            if _field in source_metadata and source_metadata[_field] is not None:
+                audit_metadata[_field] = source_metadata[_field]
+            elif _field in _inherit_defaults:
+                audit_metadata[_field] = _inherit_defaults[_field]
+    _missing = [f for f in _required_fields if f not in audit_metadata or audit_metadata[f] is None]
+    _expected_instance = _derive_audit_instance(str(source_metadata.get("project") or "lybra"))
+    if audit_metadata.get("agent_instance") != _expected_instance:
+        return {
+            "derived": False,
+            "reason": (
+                f"AIPOS-F38 派生校验 FAIL: 审计卡 {audit_task_id} 审计身份 "
+                f"{audit_metadata.get('agent_instance')} ≠ 注册表审计实例 {_expected_instance}(禁承继原卡)"
+            ),
+        }
+    if _missing:
+        return {
+            "derived": False,
+            "reason": (
+                f"AIPOS-F38 派生校验 FAIL: 审计卡 {audit_task_id} 缺必填字段 {_missing}。"
+                f" schema 单源 = {_required_fields}"
+            ),
+        }
     
     # Idempotency: check if audit task already exists
     existing_task, matches = find_task_by_id(audit_task_id, repo_root)

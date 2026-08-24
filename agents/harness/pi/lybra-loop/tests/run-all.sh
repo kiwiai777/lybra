@@ -37,6 +37,9 @@ declare -a files=(
   "tests/f37a-held-resume-redgreen.test.ts"
   "tests/f37b-credential-copy-redgreen.test.ts"
   "tests/f37c-claim-idempotent-redgreen.test.ts"
+  "tests/f38a-derivation-validation.test.ts"
+  "tests/f38b-inflight-quota.test.ts"
+  "tests/f38c-claim-idempotent.test.ts"
   "tests/f22-advisor-onboarding.test.ts"
 )
 overall=0

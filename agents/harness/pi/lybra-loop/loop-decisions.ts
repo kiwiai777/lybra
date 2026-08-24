@@ -146,6 +146,7 @@ export function classifyTasks(tasks: AnyDict[], actor: string): ClassifyResult {
 export type ClaimDecision =
   | { action: "release"; taskId: string; policyId?: string; reason: string }
   | { action: "skip-envelope"; taskId: string; reason: string }
+  | { action: "already-held"; taskId: string; reason: string }
   | { action: "stop-block"; taskId?: string; reason: string }
   | { action: "stop-error"; reason: string };
 
@@ -161,12 +162,31 @@ export function decideClaimDryRun(resp: AnyDict | null | undefined, taskId: stri
     (resp as { preauthorized_release?: unknown }).preauthorized_release === true ||
     (resp as { autonomy_mode?: unknown }).autonomy_mode === AUTONOMY_PREAUTHORIZED;
 
-  // 2. 技术拒绝/失败(含 PreAuthorized 请求但任务不再可 claim 的 BLOCK)⇒ 立停
+  // 2. 技术拒绝/失败(含 PreAuthorized 请求但任务不再可 claim 的 BLOCK)⇒ 先做状态机幂等识别, 再立停
   if (isError || verdict === "BLOCK") {
     const reasons =
       (resp as { blocking_reasons?: unknown }).blocking_reasons ||
       (resp as { owner_confirmation_reasons?: unknown }).owner_confirmation_reasons ||
       [];
+    // AIPOS-F38 大项C: 状态机 BLOCK 幂等识别 — 门拒因里出现“已认领/状态不匹配”类
+    // (期望 pending 实为 claimed)不是故障, 是门在说“这张卡已是 claimed”。识别为
+    // already-held 交调用方按持有者分流(本工位→继续执行;他人→跳过出声),
+    // 禁以“应答语义不明”停循环。真门 blocking_reasons 为字符串数组
+    // (2026-08-24 实捕), 匹配器兼容 string|object 两形态。
+    const reasonText = (r: unknown): string =>
+      typeof r === "string" ? r : String((r as AnyDict | null)?.message || "");
+    const alreadyClaimed =
+      Array.isArray(reasons) &&
+      reasons.some(
+        (r) => reasonText(r).includes("claimed") || reasonText(r).includes("已被认领"),
+      );
+    if (alreadyClaimed) {
+      return {
+        action: "already-held",
+        taskId,
+        reason: `状态机 BLOCK=已认领(幂等识别): ${stringifyReasons(reasons)}`,
+      };
+    }
     const detail = Array.isArray(reasons) && reasons.length ? JSON.stringify(reasons) : verdict || "no reasons";
     return { action: "stop-block", taskId, reason: `gate BLOCK(isError=${isError}): ${detail}` };
   }
