@@ -2853,10 +2853,15 @@ export default function (pi: ExtensionAPI) {
             const reasons = dryResp.blocking_reasons || dryResp.errors || [];
             // AIPOS-F37 增补: 重复认领幂等 — 识别门返回的状态机类 BLOCK(期望 pending 实为 claimed)
             // 为“已持有,继续执行”,出人话并继续,禁止以“应答语义不明”停循环
-            const alreadyClaimedReason = reasons.find((r: any) => 
-              (r.message || "").includes("claimed") || 
-              (r.message || "").includes("已被认领") ||
-              (r.error_code || "") === "INVALID_STATE_TRANSITION"
+            // AIPOS-F37-fix1-fix1: 真门 blocking_reasons 为字符串数组(2026-08-24 实捕
+            // "Invalid transition for claim: expected source state pending, found claimed"),
+            // 匹配器兼容 string|object 两形态, 防对真门返回不生效
+            const reasonText = (r: any): string => (typeof r === "string" ? r : (r?.message || ""));
+            const reasonErrorCode = (r: any): string => ((r && typeof r === "object" && r.error_code) || "");
+            const alreadyClaimedReason = reasons.find((r: any) =>
+              reasonText(r).includes("claimed") ||
+              reasonText(r).includes("已被认领") ||
+              reasonErrorCode(r) === "INVALID_STATE_TRANSITION"
             );
             if (alreadyClaimedReason) {
               const msg = `卡 ${taskId} 已持有(claimed),继续执行`;
