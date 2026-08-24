@@ -249,16 +249,141 @@ class TestRoleFileMergeAndGuards(unittest.TestCase):
             self.assertFalse(is_governance_workspace(station, str(base / "gov_ws")))
 
     def test_enroll_refuses_governance_target(self):
+        """F23⑧ + AIPOS-F22D: 工位角色类(executor)在治理工作区仍被拒。"""
         from tools.aipos_cli.enroll_client import enroll
         with tempfile.TemporaryDirectory(prefix="f23_refuse_") as tmp:
             root = _make_gate_root(tmp)
             result = issue_self_contained_code(root, role="executor", by="t")
             sc = result["self_contained_code"]
-            with self.assertRaises(RuntimeError) as ctx_err:
-                enroll(code=sc, gate_url="", workspace_root=root)
+            # AIPOS-F22D: 守卫延迟到 exchange 之后, 需 mock exchange
+            mock_exchange_result = {
+                "ok": True,
+                "token_entry": {
+                    "role": "executor",
+                    "agent_instance": "exec.test",
+                    "fingerprint": "fp_test",
+                    "scopes": ["executor"],
+                    "token": "tok_test",
+                },
+            }
+            with patch("tools.aipos_cli.enroll_client.exchange_enrollment_code", return_value=mock_exchange_result):
+                with self.assertRaises(RuntimeError) as ctx_err:
+                    enroll(code=sc, gate_url="", workspace_root=root)
             msg = str(ctx_err.exception)
             self.assertIn("治理工作区", msg)
             self.assertIn("可抄示例", msg)  # F9: 带路文案
+            self.assertIn("executor", msg)  # AIPOS-F22D: 角色类信息
+
+    def test_enroll_planner_allowed_in_governance_workspace(self):
+        """AIPOS-F22D: 顾问角色类(planner)允许落治理工作区。"""
+        from tools.aipos_cli.enroll_client import enroll
+        with tempfile.TemporaryDirectory(prefix="f22d_planner_") as tmp:
+            root = _make_gate_root(tmp)
+            result = issue_self_contained_code(root, role="planner", by="t")
+            sc = result["self_contained_code"]
+            mock_exchange_result = {
+                "ok": True,
+                "token_entry": {
+                    "role": "planner",
+                    "agent_instance": "plan.chris",
+                    "fingerprint": "fp_plan",
+                    "scopes": ["planner"],
+                    "token": "tok_plan",
+                },
+            }
+            with patch("tools.aipos_cli.enroll_client.exchange_enrollment_code", return_value=mock_exchange_result):
+                with patch("tools.aipos_cli.enroll_client.land_enrollment_code", return_value=True):
+                    enroll_result = enroll(code=sc, gate_url="", workspace_root=root)
+            self.assertTrue(enroll_result["ok"])
+            self.assertEqual(enroll_result["role"], "planner")
+
+    def test_enroll_advisor_allowed_in_governance_workspace(self):
+        """AIPOS-F22D: 顾问角色类(advisor)允许落治理工作区。"""
+        from tools.aipos_cli.enroll_client import enroll
+        with tempfile.TemporaryDirectory(prefix="f22d_advisor_") as tmp:
+            root = _make_gate_root(tmp)
+            result = issue_self_contained_code(root, role="advisor", by="t")
+            sc = result["self_contained_code"]
+            mock_exchange_result = {
+                "ok": True,
+                "token_entry": {
+                    "role": "advisor",
+                    "agent_instance": "adv.chris",
+                    "fingerprint": "fp_adv",
+                    "scopes": ["advisor"],
+                    "token": "tok_adv",
+                },
+            }
+            with patch("tools.aipos_cli.enroll_client.exchange_enrollment_code", return_value=mock_exchange_result):
+                with patch("tools.aipos_cli.enroll_client.land_enrollment_code", return_value=True):
+                    enroll_result = enroll(code=sc, gate_url="", workspace_root=root)
+            self.assertTrue(enroll_result["ok"])
+            self.assertEqual(enroll_result["role"], "advisor")
+
+    def test_enroll_auditor_refused_in_governance_workspace(self):
+        """AIPOS-F22D: 工位角色类(auditor)在治理工作区被拒(负夹具)。"""
+        from tools.aipos_cli.enroll_client import enroll
+        with tempfile.TemporaryDirectory(prefix="f22d_auditor_") as tmp:
+            root = _make_gate_root(tmp)
+            result = issue_self_contained_code(root, role="auditor", by="t")
+            sc = result["self_contained_code"]
+            mock_exchange_result = {
+                "ok": True,
+                "token_entry": {
+                    "role": "auditor",
+                    "agent_instance": "audit.test",
+                    "fingerprint": "fp_audit",
+                    "scopes": ["auditor"],
+                    "token": "tok_audit",
+                },
+            }
+            with patch("tools.aipos_cli.enroll_client.exchange_enrollment_code", return_value=mock_exchange_result):
+                with self.assertRaises(RuntimeError) as ctx_err:
+                    enroll(code=sc, gate_url="", workspace_root=root)
+            msg = str(ctx_err.exception)
+            self.assertIn("治理工作区", msg)
+            self.assertIn("auditor", msg)
+
+    def test_enroll_custom_role_executor_class_refused(self):
+        """AIPOS-F22D: 自定义角色按注册表 class 走对应分支(hbj-coder→executor类→被拒)。"""
+        from tools.aipos_cli.enroll_client import enroll, _resolve_role_class_for_guard
+        # 直接测试角色类解析: 未知自定义角色回落自身(安全侧=工位类)
+        role_class = _resolve_role_class_for_guard("hbj-coder", Path("/tmp"))
+        # hbj-coder 不在注册表, 回落自身, 不是 planner/advisor → 工位类
+        self.assertNotIn(role_class, ("planner", "advisor"))
+
+    def test_enroll_planner_in_workstation_still_works(self):
+        """AIPOS-F22D: 顾问角色类在工位目录也正常工作(不限制)。"""
+        from tools.aipos_cli.enroll_client import enroll
+        with tempfile.TemporaryDirectory(prefix="f22d_plan_ws_") as tmp:
+            # 工位目录(无 5_tasks/queue 结构)
+            workstation = Path(tmp) / "workstation"
+            workstation.mkdir()
+            # 治理根(用于 governance_root 比对)
+            gov_root = Path(tmp) / "gov_root"
+            gov_root.mkdir()
+            (gov_root / ".lybra").mkdir(parents=True, exist_ok=True)
+            (gov_root / ".lybra" / "connection.json").write_text(json.dumps({
+                "config_version": 1,
+                "mcp": {"rpc_url": "http://127.0.0.1:7118/mcp"},
+                "tokens": [],
+            }), encoding="utf-8")
+            result = issue_self_contained_code(gov_root, role="planner", by="t")
+            sc = result["self_contained_code"]
+            mock_exchange_result = {
+                "ok": True,
+                "token_entry": {
+                    "role": "planner",
+                    "agent_instance": "plan.ws",
+                    "fingerprint": "fp_ws",
+                    "scopes": ["planner"],
+                    "token": "tok_ws",
+                },
+            }
+            with patch("tools.aipos_cli.enroll_client.exchange_enrollment_code", return_value=mock_exchange_result):
+                with patch("tools.aipos_cli.enroll_client.land_enrollment_code", return_value=True):
+                    enroll_result = enroll(code=sc, gate_url="", workspace_root=workstation)
+            self.assertTrue(enroll_result["ok"])
 
 
 class TestMcpVerbs(unittest.TestCase):
