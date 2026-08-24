@@ -8,6 +8,8 @@
  *   /lybra sync        拉新分发(AIPOS-F20: 薄壳投影既有 lybra sync CLI, 成功后 /reload 生效)
  *   /lybra enroll <码>  工位一贴上岗(AIPOS-F23: 自包含码→交换→落盘工位 .lybra/→land→连通验证,
  *                        接着 /lybra sync 然后 /reload; 裸机等价: lybra roles enroll --code <码>)
+ *   /lybra claim <ID>  工位自救认领(AIPOS-F22: 参数从身份声明自解析, 调同一门动词)
+ *   /lybra return [ID] 工位自救交回(AIPOS-F33: 参数从身份声明自解析, 调同一门动词)
  *   /lybra-tick        (手动)立即执行一轮 tick;自动链不依赖命令路由
  *
  * 它只做"发起",不做"授权"(红线):claim 放行与否永远由 gate 判定(AIPOS-250 信封)——
@@ -2739,6 +2741,93 @@ export default function (pi: ExtensionAPI) {
           failEnroll(
             `enroll 失败: ${msg}\n(落盘前失败 = 码未消费, grace 窗口内可原样重贴 /lybra enroll <同码> 重试)\n${ENROLL_PRODUCT_FAULT_GUIDE}`,
           );
+        }
+        return;
+      }
+
+      if (sub === "claim") {
+        // AIPOS-F22 大项C: /lybra claim — 工位自救认领(同一执行函数, 同一门动词)
+        // 参数全从工位身份声明自解析(C2 解析单源), 模型或用户皆可一条命令完成认领。
+        // 实现: 调 lybra_queue_claim_dry_run + lybra_queue_claim_confirm(与 loop-on 同一门动词)。
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        let config;
+        try {
+          config = loadConfig(process.env);
+        } catch (e) {
+          const msg = `配置错误, 无法认领: ${e instanceof Error ? e.message : String(e)}`;
+          currentLogger?.error("claim-config-failed", { error: msg });
+          ctx.ui.notify(msg, "error");
+          return;
+        }
+        // 解析 task_id: 命令行参数必填
+        const taskArg = parts.slice(1).join(" ").trim();
+        if (!taskArg) {
+          ctx.ui.notify("用法: /lybra claim <TASK-ID>", "warn");
+          return;
+        }
+        const taskId = taskArg;
+        // 确保 gate 连接可用
+        if (!currentClient) {
+          try {
+            const verbCatalog = loadVerbCatalog();
+            currentClient = new GateMcpClient(config.gateUrl, config.token, { verbs: verbCatalog, timeoutMs: config.timeoutMs });
+            await currentClient.initialize();
+            currentTokenFp = currentClient.tokenFingerprint;
+          } catch (e) {
+            const msg = `gate 连接失败: ${e instanceof Error ? e.message : String(e)}`;
+            ctx.ui.notify(msg, "error");
+            return;
+          }
+        }
+        ctx.ui.notify(`认领 ${taskId}...`, "info");
+        try {
+          // 同一门动词: lybra_queue_claim_dry_run
+          const dryRunArgs = {
+            task_id: taskId,
+            actor: config.actor,
+            agent_instance: config.actor,
+            autonomy_mode: "Supervised",
+            owner_policy_ref: config.ownerPolicyRef,
+          };
+          const dryResp = await currentClient!.callTool("lybra_queue_claim_dry_run", dryRunArgs);
+          if (dryResp.verdict === "BLOCK" || dryResp.isError) {
+            const reasons = dryResp.blocking_reasons || dryResp.errors || [];
+            const msg = `认领被 BLOCK: ${stringifyReasons(reasons)}`;
+            currentLogger?.warn("claim-blocked", { task_id: taskId, reasons });
+            ctx.ui.notify(msg, "warn");
+            return;
+          }
+          const dryRunToken = dryResp.dry_run_token;
+          if (!dryRunToken) {
+            ctx.ui.notify("dry_run 未返回 token", "error");
+            return;
+          }
+          // 同一门动词: lybra_queue_claim_confirm (AIPOS-328 executor自确认)
+          const confirmArgs = {
+            dry_run_token: String(dryRunToken),
+            actor: config.actor,
+            agent_instance: config.actor,
+            owner_policy_ref: config.ownerPolicyRef,
+            owner_confirmation_token: "OWNER_CONFIRMED",
+          };
+          const confirmResp = await currentClient!.callTool("lybra_queue_claim_confirm", confirmArgs);
+          if (confirmResp.isError) {
+            const errors = confirmResp.errors || [];
+            ctx.ui.notify(`认领 confirm 失败: ${stringifyReasons(errors)}`, "error");
+            return;
+          }
+          // 成功: 更新模块级 currentTaskId
+          currentTaskId = taskId;
+          const claimId = confirmResp.claim_id || "(unknown)";
+          const msg = `✓ 认领成功: ${taskId} (claim_id: ${claimId})`;
+          currentLogger?.info("claim-success", { task_id: taskId, claim_id: claimId });
+          voice(msg, "info", true);
+          ctx.ui.notify(msg, "info");
+        } catch (e) {
+          const msg = `认领异常: ${e instanceof Error ? e.message : String(e)}`;
+          currentLogger?.error("claim-exception", { task_id: taskId, error: msg });
+          ctx.ui.notify(msg, "error");
         }
         return;
       }

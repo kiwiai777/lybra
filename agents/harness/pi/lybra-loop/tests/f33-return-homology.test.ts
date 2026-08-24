@@ -172,26 +172,31 @@ describe("F33-②: 三层同源证明", () => {
       join(PROJECT_ROOT, "tools/aipos_cli/aipos_cli.py"),
       "utf-8"
     );
+    // AIPOS-F22 大项B: return --confirm 已收编进薄壳工厂(删手写实现)。
+    // 同源真相移至工厂: CLI 路由工厂(verb_base), 工厂构造同一门动词 + OWNER_CONFIRMED。
+    const factory = readFileSync(
+      join(PROJECT_ROOT, "tools/aipos_cli/two_phase_shell_factory.py"),
+      "utf-8"
+    );
     
-    // CLI --confirm 薄壳应调用同一门动词
     assert.ok(
       source.includes('"--confirm"'),
       "CLI 应有 --confirm 参数"
     );
     assert.ok(
-      source.includes('"lybra_queue_return_dry_run"'),
-      "CLI --confirm 应调用 lybra_queue_return_dry_run"
+      source.includes('verb_base="lybra_queue_return"') && source.includes("execute_two_phase_verb"),
+      "CLI --confirm 应路由薄壳工厂(verb_base=lybra_queue_return)"
     );
     assert.ok(
-      source.includes('"lybra_queue_return_confirm"'),
-      "CLI --confirm 应调用 lybra_queue_return_confirm"
+      factory.includes('dry_run_verb = f"{verb_base}_dry_run"') && factory.includes('confirm_verb = f"{verb_base}_confirm"'),
+      "工厂应构造 lybra_queue_return_dry_run + confirm 同一门动词"
     );
     assert.ok(
-      source.includes('"OWNER_CONFIRMED"'),
-      "CLI --confirm 应使用 OWNER_CONFIRMED 自确认"
+      factory.includes('"OWNER_CONFIRMED"'),
+      "工厂应使用 OWNER_CONFIRMED 自确认"
     );
     
-    console.log("✓ CLI层: queue return --confirm 使用同一门动词");
+    console.log("✓ CLI层: queue return --confirm 使用同一门动词(经薄壳工厂单源)");
   });
 
   it("防碎片化: 无第二交回路径", () => {
