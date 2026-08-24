@@ -104,12 +104,52 @@ def normalize_gate_url_for_same_host(gate_url: str) -> str:
     return f"http://127.0.0.1:{port}"
 
 
-def validate_workspace_root(workspace_root: str) -> None:
-    """校验workspace_root不是治理仓(AIPOS-R6H靶②)"""
-    if "ai-project-os" in workspace_root:
+def _get_role_class(role: str, workspace_root: str | None = None) -> str | None:
+    """获取角色类(AIPOS-F22 大项A: F23⑧守卫按角色类判定落点)
+    
+    Args:
+        role: 角色名(builtin或custom)
+        workspace_root: workspace路径(用于加载custom roles注册表)
+    
+    Returns:
+        角色类名(executor/auditor/planner/advisor等)或None
+    """
+    try:
+        from tools.aipos_cli.custom_roles import resolve_role_to_class
+        return resolve_role_to_class(role, workspace_root)
+    except Exception:
+        # 降级:无法解析时返回角色名自身(builtin roles映射到自己)
+        return role
+
+
+def validate_workspace_root(workspace_root: str, role: str) -> None:
+    """校验workspace_root按角色类判定(AIPOS-F22 F23⑧)
+    
+    策略(按角色类,从roles.schema.json单源):
+      - 工位角色类(executor/auditor及其custom roles) → 必须工位目录,拒绝治理仓
+      - 顾问角色类(planner/advisor及其custom roles) → 允许治理仓,也允许工位
+      - 其他角色类(owner/copilot等) → 保持既有判据(拒绝治理仓)
+    
+    Args:
+        workspace_root: workspace路径
+        role: 角色名
+    
+    Raises:
+        ValueError: 工位角色类在治理仓时拒绝
+    """
+    role_class = _get_role_class(role, workspace_root)
+    is_governance = "ai-project-os" in workspace_root
+    
+    # 顾问角色类:允许治理仓,也允许工位(任何路径都通过)
+    if role_class in ("planner", "advisor"):
+        return
+    
+    # 工位角色类(executor/auditor)+其他角色:拒绝治理仓
+    if is_governance:
         raise ValueError(
-            f"workspace_root cannot be governance repo (ai-project-os): {workspace_root}. "
-            "Use product repo or agent workstation path."
+            f"workspace_root cannot be governance repo (ai-project-os) for role class '{role_class}': {workspace_root}. "
+            "Use product repo or agent workstation path. "
+            "(Only planner/advisor roles may use governance workspace.)"
         )
 
 
@@ -164,7 +204,7 @@ def enroll_deliver_local(
         操作结果字典
     """
     # 1. 校验workspace_root
-    validate_workspace_root(str(workspace_root))
+    validate_workspace_root(str(workspace_root), role)
     
     # 2. Owner签发enrollment code
     from tools.aipos_cli.enrollment import create_enrollment_code

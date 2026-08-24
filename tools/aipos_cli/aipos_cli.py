@@ -1305,6 +1305,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     queue_claim_parser = queue_subparsers.add_parser("claim", help="Move a task from pending to claimed")
     _queue_mutation_arguments(queue_claim_parser)
+    queue_claim_parser.add_argument("--confirm", action="store_true", help="AIPOS-F22: Two-phase gate claim (dry_run + confirm via薄壳工厂, executor self-confirm)")
+    queue_claim_parser.add_argument("--connection-json", help="Path to connection.json (for --confirm gate access)")
+    queue_claim_parser.add_argument("--agent-instance", help="Agent instance (for --confirm)")
+    queue_claim_parser.add_argument("--owner-policy-ref", help="Owner policy ref (for --confirm)")
+    queue_claim_parser.add_argument("--autonomy-mode", default="Supervised", help="Autonomy mode (for --confirm)")
+    queue_claim_parser.add_argument("--active-session-id", help="Active session ID (for --confirm)")
 
     queue_block_parser = queue_subparsers.add_parser("block", help="Move a task from claimed to blocked")
     _queue_mutation_arguments(queue_block_parser)
@@ -1501,6 +1507,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verdict_parser.add_argument("--reviewed-return-record-ref", help="Reviewed return record reference")
     audit_verdict_parser.add_argument("--recommended-next-action", help="Recommended next action")
     audit_verdict_parser.add_argument("--owner-waiver-ref", help="Owner waiver reference")
+    audit_verdict_parser.add_argument("--confirm", action="store_true", help="AIPOS-F22: Two-phase gate verdict (dry_run + confirm via薄壳工厂, auditor self-confirm)")
     audit_verdict_parser.add_argument("--gate-url", default=None, help="Gate MCP server URL (default: http://127.0.0.1:7118)")
     audit_verdict_parser.add_argument("--connection-json", help="Path to connection.json (default: .lybra/connection.json in workspace)")
     audit_verdict_parser.add_argument("--token-role", default="auditor", help="Token role in connection.json (default: auditor)")
@@ -1863,6 +1870,8 @@ def build_parser() -> argparse.ArgumentParser:
     task_progress_parser.add_argument("--model-self-reported", help="Model used (for capability ledger)")
     task_progress_parser.add_argument("--stage", help="Current stage (optional)")
     task_progress_parser.add_argument("--reason", help="Reason (for blocked events)")
+    task_progress_parser.add_argument("--confirm", action="store_true", help="AIPOS-F22: Use gate MCP (via薄壳工厂) instead of local write")
+    task_progress_parser.add_argument("--connection-json", help="Path to connection.json (for --confirm gate access)")
     task_progress_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # 3. bench-audit - wrap lybra_bench_audit_submit_dry_run/confirm (tools.py:2398/2449)
@@ -3800,6 +3809,44 @@ def main(argv: list[str] | None = None) -> int:
         print(render_json(result))
         return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
 
+    # AIPOS-F22 大项B: queue claim --confirm（薄壳工厂模式）
+    if args.command == "queue" and getattr(args, "queue_command", None) == "claim" and getattr(args, "confirm", False):
+        from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb
+        import os
+        
+        # 解析 connection.json 路径
+        conn_json_path = getattr(args, "connection_json", None)
+        if not conn_json_path:
+            default_conn = Path(repo_root) / ".lybra" / "connection.json"
+            if default_conn.exists():
+                conn_json_path = str(default_conn)
+            else:
+                conn_json_path = os.environ.get("LYBRA_CONNECTION_JSON")
+        if not conn_json_path:
+            print("Error: --confirm needs connection.json (use --connection-json or set LYBRA_CONNECTION_JSON)", file=sys.stderr)
+            return 1
+        
+        # 构造动词参数（按 verbs.schema 的 lybra_queue_claim_dry_run）
+        verb_args = {
+            "task_id": getattr(args, "task_id", None),
+            "task_path": getattr(args, "path", None),
+            "actor": args.actor,
+            "agent_instance": getattr(args, "agent_instance", args.actor),
+            "autonomy_mode": getattr(args, "autonomy_mode", "Supervised"),
+            "owner_policy_ref": getattr(args, "owner_policy_ref", "pol_lybra_dev_9"),
+        }
+        if getattr(args, "active_session_id", None):
+            verb_args["active_session_id"] = args.active_session_id
+        
+        exit_code, _ = execute_two_phase_verb(
+            verb_base="lybra_queue_claim",
+            args_dict=verb_args,
+            connection_json_path=conn_json_path,
+            role="executor",
+            json_output=getattr(args, "json", False),
+        )
+        return exit_code
+    
     if args.command == "queue" and getattr(args, "queue_command", None) in {"claim", "block", "complete", "reopen"}:
         profiles = load_agent_profiles(repo_root)
         # AIPOS-370F2: file-CLI claim now defaults to with_records=True to align session record
@@ -4039,90 +4086,48 @@ def main(argv: list[str] | None = None) -> int:
             canonical_actor = args.actor
             canonical_instance = args.agent_instance if hasattr(args, 'agent_instance') and args.agent_instance else args.actor
         
-        # AIPOS-F33 大项C: --confirm 薄壳模式 — 调同一门动词(dry_run + confirm)
+        # AIPOS-F22 大项B: --confirm 薄壳工厂模式（替代 AIPOS-F33 手写实现）
         # 三层(托管/工位/CLI)共用同一执行函数与同一门动词, 禁第二实现。
         if getattr(args, "confirm", False):
-            from tools.aipos_cli.confirm_client import GateClient, load_owner_token
+            from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb
+            import os
+            
             # 解析 connection.json 路径
             conn_json_path = getattr(args, "connection_json", None)
             if not conn_json_path:
-                # 默认路径: 从 repo_root 找 .lybra/connection.json
                 default_conn = Path(repo_root) / ".lybra" / "connection.json"
                 if default_conn.exists():
                     conn_json_path = str(default_conn)
                 else:
-                    # 回退: 环境变量
                     conn_json_path = os.environ.get("LYBRA_CONNECTION_JSON")
             if not conn_json_path:
                 print("Error: --confirm needs connection.json (use --connection-json or set LYBRA_CONNECTION_JSON)", file=sys.stderr)
                 return 1
-            try:
-                executor_token = load_owner_token(connection_json=conn_json_path, role="executor")
-            except ValueError as exc:
-                print(f"Error: cannot load executor token: {exc}", file=sys.stderr)
-                return 1
-            # 从 connection.json 读 gate URL
-            try:
-                conn_data = json.loads(Path(conn_json_path).read_text(encoding="utf-8"))
-                gate_url = conn_data.get("mcp", {}).get("rpc_url", "").replace("/mcp", "")
-                if not gate_url:
-                    gate_url = conn_data.get("mcp", {}).get("url", "")
-                if not gate_url:
-                    print("Error: cannot determine gate URL from connection.json", file=sys.stderr)
-                    return 1
-            except (json.JSONDecodeError, OSError) as exc:
-                print(f"Error: cannot read connection.json: {exc}", file=sys.stderr)
-                return 1
-            try:
-                client = GateClient(gate_url, executor_token)
-                client.initialize()
-                # Step 1: dry_run (同一门动词: lybra_queue_return_dry_run)
-                dry_run_args = {
-                    "task_id": args.task_id,
-                    "actor": canonical_actor,
-                    "agent_instance": canonical_instance,
-                    "autonomy_mode": "Supervised",
-                    "owner_policy_ref": args.owner_policy_ref,
-                    "result_summary": args.result_summary,
-                }
-                if artifact_refs:
-                    dry_run_args["artifact_refs"] = artifact_refs
-                if getattr(args, "completion_report_ref", None):
-                    dry_run_args["completion_report_ref"] = args.completion_report_ref
-                if getattr(args, "active_session_id", None):
-                    dry_run_args["active_session_id"] = args.active_session_id
-                dry_run_resp = client.call_tool("lybra_queue_return_dry_run", dry_run_args)
-                # 检查 BLOCK
-                verdict = dry_run_resp.get("verdict", "")
-                if verdict == "BLOCK" or dry_run_resp.get("isError"):
-                    reasons = dry_run_resp.get("blocking_reasons") or dry_run_resp.get("errors") or []
-                    print(f"Return BLOCKED: {reasons}", file=sys.stderr)
-                    if args.json:
-                        print(render_json(dry_run_resp))
-                    return 1
-                dry_run_token = dry_run_resp.get("dry_run_token")
-                if not dry_run_token:
-                    print("Error: no dry_run_token in response", file=sys.stderr)
-                    if args.json:
-                        print(render_json(dry_run_resp))
-                    return 1
-                # Step 2: confirm (同一门动词: lybra_queue_return_confirm, AIPOS-328 executor自确认)
-                confirm_resp = client.call_tool("lybra_queue_return_confirm", {
-                    "dry_run_token": str(dry_run_token),
-                    "actor": canonical_actor,
-                    "agent_instance": canonical_instance,
-                    "owner_policy_ref": args.owner_policy_ref,
-                    "owner_confirmation_token": "OWNER_CONFIRMED",
-                })
-                if args.json:
-                    print(render_json(confirm_resp))
-                else:
-                    print(f"Return confirmed for {args.task_id}")
-                return 0
-            except Exception as exc:
-                error_msg = f"Error: {exc}"
-                print(wrap_error_with_verb_help(error_msg, "lybra_queue_return", repo_root), file=sys.stderr)
-                return 1
+            
+            # 构造动词参数（按 verbs.schema 的 lybra_queue_return_dry_run）
+            verb_args = {
+                "task_id": args.task_id,
+                "actor": canonical_actor,
+                "agent_instance": canonical_instance,
+                "autonomy_mode": "Supervised",
+                "owner_policy_ref": args.owner_policy_ref,
+                "result_summary": args.result_summary,
+            }
+            if artifact_refs:
+                verb_args["artifact_refs"] = artifact_refs
+            if getattr(args, "completion_report_ref", None):
+                verb_args["completion_report_ref"] = args.completion_report_ref
+            if getattr(args, "active_session_id", None):
+                verb_args["active_session_id"] = args.active_session_id
+            
+            exit_code, _ = execute_two_phase_verb(
+                verb_base="lybra_queue_return",
+                args_dict=verb_args,
+                connection_json_path=conn_json_path,
+                role="executor",
+                json_output=args.json,
+            )
+            return exit_code
         
         # 原有路径: board_adapter.return_task (dry-run only, AIPOS-R6A F-003)
         from tools.aipos_cli.board_adapter import return_task
@@ -4483,6 +4488,76 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
+    # AIPOS-F22 大项B: audit-verdict --confirm（薄壳工厂模式）
+    if args.command == "audit-verdict" and getattr(args, "confirm", False):
+        from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb
+        import os
+        
+        # 解析 connection.json 路径
+        conn_json_path = getattr(args, "connection_json", None)
+        if not conn_json_path:
+            workspace_candidate = Path(repo_root).parent if repo_root else Path.cwd()
+            default_conn = workspace_candidate / ".lybra" / "connection.json"
+            if default_conn.exists():
+                conn_json_path = str(default_conn)
+            else:
+                default_conn = Path(repo_root or Path.cwd()) / ".lybra" / "connection.json"
+                if default_conn.exists():
+                    conn_json_path = str(default_conn)
+        if not conn_json_path:
+            conn_json_path = os.environ.get("LYBRA_CONNECTION_JSON")
+        if not conn_json_path:
+            print("Error: --confirm needs connection.json (use --connection-json or set LYBRA_CONNECTION_JSON)", file=sys.stderr)
+            return 1
+        
+        # 解析 evidence_refs
+        evidence_refs = None
+        if getattr(args, "evidence_refs", None):
+            try:
+                evidence_refs = json.loads(args.evidence_refs)
+            except json.JSONDecodeError as exc:
+                print(f"Error: Invalid JSON in --evidence-refs: {exc}", file=sys.stderr)
+                return 1
+        
+        # 构造动词参数（按 verbs.schema 的 lybra_audit_verdict_dry_run）
+        verb_args = {
+            "reviewed_task_id": args.reviewed_task_id,
+            "verdict": args.verdict,
+        }
+        if getattr(args, "audit_task_id", None):
+            verb_args["audit_task_id"] = args.audit_task_id
+        if getattr(args, "actor", None):
+            verb_args["actor"] = args.actor
+        if getattr(args, "agent_instance", None):
+            verb_args["agent_instance"] = args.agent_instance
+        if getattr(args, "owner_policy_ref", None):
+            verb_args["owner_policy_ref"] = args.owner_policy_ref
+        if getattr(args, "findings_summary", None):
+            verb_args["findings_summary"] = args.findings_summary
+        if evidence_refs:
+            verb_args["evidence_refs"] = evidence_refs
+        if getattr(args, "audit_claim_id", None):
+            verb_args["audit_claim_id"] = args.audit_claim_id
+        if getattr(args, "audit_session_id", None):
+            verb_args["audit_session_id"] = args.audit_session_id
+        if getattr(args, "audit_dispatch_record_ref", None):
+            verb_args["audit_dispatch_record_ref"] = args.audit_dispatch_record_ref
+        if getattr(args, "reviewed_return_record_ref", None):
+            verb_args["reviewed_return_record_ref"] = args.reviewed_return_record_ref
+        if getattr(args, "recommended_next_action", None):
+            verb_args["recommended_next_action"] = args.recommended_next_action
+        if getattr(args, "owner_waiver_ref", None):
+            verb_args["owner_waiver_ref"] = args.owner_waiver_ref
+        
+        exit_code, _ = execute_two_phase_verb(
+            verb_base="lybra_audit_verdict",
+            args_dict=verb_args,
+            connection_json_path=conn_json_path,
+            role=getattr(args, "token_role", "auditor"),
+            json_output=getattr(args, "json", False),
+        )
+        return exit_code
+    
     if args.command == "audit-verdict":
         # AIPOS-R4B-2 N4: 审计裁决自助 — 从 LoopContext 自发现身份参数
         from tools.aipos_cli.confirm_client import GateClient
@@ -4851,6 +4926,47 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error resolving next-step: {exc}", file=sys.stderr)
             return 1
 
+    # AIPOS-F22 大项B: task-progress --confirm（薄壳工厂模式，经 gate MCP）
+    if args.command == "task-progress" and getattr(args, "confirm", False):
+        from tools.aipos_cli.two_phase_shell_factory import execute_single_phase_via_gate
+        import os
+        
+        # 解析 connection.json 路径
+        conn_json_path = getattr(args, "connection_json", None)
+        if not conn_json_path:
+            default_conn = Path(repo_root) / ".lybra" / "connection.json"
+            if default_conn.exists():
+                conn_json_path = str(default_conn)
+            else:
+                conn_json_path = os.environ.get("LYBRA_CONNECTION_JSON")
+        if not conn_json_path:
+            print("Error: --confirm needs connection.json (use --connection-json or set LYBRA_CONNECTION_JSON)", file=sys.stderr)
+            return 1
+        
+        # 构造动词参数（按 verbs.schema 的 lybra_task_progress）
+        verb_args = {
+            "task_id": args.task_id,
+            "event_type": args.event_type,
+            "actor": args.actor,
+        }
+        if getattr(args, "summary", None):
+            verb_args["summary"] = args.summary
+        if getattr(args, "model_self_reported", None):
+            verb_args["model_self_reported"] = args.model_self_reported
+        if getattr(args, "stage", None):
+            verb_args["stage"] = args.stage
+        if getattr(args, "reason", None):
+            verb_args["reason"] = args.reason
+        
+        exit_code, _ = execute_single_phase_via_gate(
+            verb_name="lybra_task_progress",
+            args_dict=verb_args,
+            connection_json_path=conn_json_path,
+            role="executor",  # task_progress 需要 task_progress scope（executor/auditor 都有）
+            json_output=getattr(args, "json", False),
+        )
+        return exit_code
+    
     # AIPOS-FND-1: Five missing loop-step CLI implementations
     if args.command == "task-progress":
         # Wrap task progress writer (local variant, bypasses MCP scope)
