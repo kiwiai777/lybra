@@ -168,7 +168,11 @@ describe("F38-大项C 状态机 BLOCK 幂等识别 — 先红后绿", () => {
     const block = head.slice(start, head.indexOf("const dryRunToken", start));
     const stringForm = /typeof\s+r\s*===?\s*"string"/.test(block);
     const holderSplit = block.includes("claim-skip-other-holder") && block.includes("claim-already-held");
-    const pre = gitOut(["show", `main:${LOOP_REL}`]);
+    // F38 前 = merge-base(分支基于的世界); F37-fix1-fix1 合入 main 后 main: 已含
+    // 同一字符串形态修复, 故红腿基准不再用 main: 而用 merge-base(语义不弱化:
+    // 修前确实只查对象形态)。
+    const baseSha = gitOut(["merge-base", "main", "HEAD"]).trim();
+    const pre = gitOut(["show", `${baseSha}:${LOOP_REL}`]);
     const preStart = pre.indexOf('callTool("lybra_queue_claim_dry_run"');
     const preBlock = pre.slice(preStart, pre.indexOf("const dryRunToken", preStart));
     const preStringForm = /typeof\s+r\s*===?\s*"string"/.test(preBlock);

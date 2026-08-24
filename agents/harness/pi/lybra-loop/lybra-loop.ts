@@ -2858,13 +2858,19 @@ export default function (pi: ExtensionAPI) {
           const dryResp = await currentClient!.callTool("lybra_queue_claim_dry_run", dryRunArgs);
           if (dryResp.verdict === "BLOCK" || dryResp.isError) {
             const reasons = dryResp.blocking_reasons || dryResp.errors || [];
-            // AIPOS-F38 大项C(承接 F37-fix1-fix1): 状态机类 BLOCK 幂等识别 — 真门
-            // blocking_reasons 为字符串数组(2026-08-24 实捕), 匹配器兼容 string|object;
+            // AIPOS-F37 增补: 重复认领幂等 — 识别门返回的状态机类 BLOCK(期望 pending 实为 claimed)
+            // 为“已持有,继续执行”,出人话并继续,禁止以“应答语义不明”停循环
+            // AIPOS-F37-fix1-fix1: 真门 blocking_reasons 为字符串数组(2026-08-24 实捕
+            // "Invalid transition for claim: expected source state pending, found claimed"),
+            // 匹配器兼容 string|object 两形态, 防对真门返回不生效
+            // AIPOS-F38 大项C(合并解决): 承接上述匹配器(取 main 侧超集, 含 error_code 形态),
             // 认领撞"已 claimed"时按持有者分流: 本工位持有→继续执行; 他人持有→跳过并出声。
-            // 禁以"应答语义不明"停循环。
             const reasonText = (r: any): string => (typeof r === "string" ? r : (r?.message || ""));
+            const reasonErrorCode = (r: any): string => ((r && typeof r === "object" && r.error_code) || "");
             const alreadyClaimedReason = reasons.find((r: any) =>
-              reasonText(r).includes("claimed") || reasonText(r).includes("已被认领")
+              reasonText(r).includes("claimed") ||
+              reasonText(r).includes("已被认领") ||
+              reasonErrorCode(r) === "INVALID_STATE_TRANSITION"
             );
             if (alreadyClaimedReason) {
               const fs = await import("node:fs");

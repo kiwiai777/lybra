@@ -36,11 +36,12 @@ describe("F35-A①: 审计车道冷启动 F10 范式", () => {
       "utf-8"
     );
     
-    // 查找审计车道 held-resume 块
-    const auditResumeIdx = source.indexOf("held-audit-no-verdict");
-    assert.ok(auditResumeIdx > 0, "held-audit-no-verdict 块应存在");
+    // 查找审计车道 held-resume 块(AIPOS-F37-fix1-fix1: 锚点改到 F35 冷启动派发块本身,
+    // F37 托管接线(报告就位先走托管)合法地插在其前, 固定窗口不再跨越它)
+    const auditResumeIdx = source.indexOf("AIPOS-F35 大项A: 审计车道冷启动修真");
+    assert.ok(auditResumeIdx > 0, "审计车道冷启动派发块(F35)应存在");
     
-    // 取该块后续 1000 字符
+    // 取该块后续 4000 字符
     const auditResumeBlock = source.substring(auditResumeIdx, auditResumeIdx + 4000);
     
     // 断言: 应使用 liveCtx.newSession
@@ -76,7 +77,7 @@ describe("F35-A①: 审计车道冷启动 F10 范式", () => {
       "utf-8"
     );
     
-    const auditResumeIdx = source.indexOf("held-audit-no-verdict");
+    const auditResumeIdx = source.indexOf("AIPOS-F35 大项A: 审计车道冷启动修真");
     const auditResumeBlock = source.substring(auditResumeIdx, auditResumeIdx + 4000);
     
     // 断言: newSession 异常时应降级出声(不静默吞)
@@ -108,7 +109,7 @@ describe("F35-A②: 禁止旧版 sendUserMessage 路径", () => {
       "utf-8"
     );
     
-    const auditResumeIdx = source.indexOf("held-audit-no-verdict");
+    const auditResumeIdx = source.indexOf("AIPOS-F35 大项A: 审计车道冷启动修真");
     const auditResumeBlock = source.substring(auditResumeIdx, auditResumeIdx + 4000);
     
     // 断言: 不应有 liveCtx.sendUserMessage(应改用 newSession)
