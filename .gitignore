@@ -22,6 +22,8 @@ test-results/
 .lybra/auth-log.jsonl
 # F-271-6: remember secret (server-side signing key for long-lived cookies)
 .lybra/remember_secret
+# AIPOS-F22B (R6K 止血): .lybra/ 为 gate 运行态目录, 含凭据与角色文件, 不入产品仓 (历史已含 token, Owner 裁定止血+记账不轮换)
+.lybra/
 
 # AIPOS-272 FIX-3: board 多工作区配置(部署物,不入产品代码树)
 web/board/.board_config.json

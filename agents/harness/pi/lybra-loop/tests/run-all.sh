@@ -23,6 +23,7 @@ declare -a files=(
   "tests/f18-version-stamp-voice.test.ts"
   "tests/f19-watermark.test.ts"
   "tests/f20-sync-command.test.ts"
+  "tests/f22b-yaml-serialization.test.ts"
   "tests/f23-enroll-command.test.ts"
   "tests/f24a-enroll-guardrails.test.ts"
   "tests/f29b-hosted-return.test.ts"

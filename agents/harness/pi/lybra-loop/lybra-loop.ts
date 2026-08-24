@@ -36,7 +36,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, loadConfigSchema, ConfigError, GateMcpClient, loadVerbCatalog, validateRequiredVerbs, type LoopConfig, type GateTerritoryDeclaration, type ConfigSchemaShape } from "./gate-client.ts";
 import { ConnectionResolver } from "./loop-context.ts";
-import { buildKickoff, stringifyReasons, severityToLevel, planCooldownStep } from "./loop-decisions.ts";
+import { buildKickoff, stringifyReasons, severityToLevel, planCooldownStep, AUTONOMY_SUPERVISED } from "./loop-decisions.ts";
 import { executeTick, freshState, Logger, type LoopState } from "./loop-engine.ts";
 // AIPOS-C4B 大项B: 版本信号 — 本地版本戳读取 + 清单比对
 import { readFileSync, existsSync, appendFileSync, writeFileSync, mkdirSync, statfsSync } from "node:fs";
@@ -491,8 +491,9 @@ const REQUIRED_VERBS: Record<string, string[]> = {
   lybra_queue_close_dry_run: ["task_id", "actor", "closure_evidence"],
   lybra_queue_close_confirm: ["task_id", "actor", "closure_evidence"],
   // AIPOS-F35 大项B: 审计裁决托管动词(F29大项E补做)
-  lybra_audit_verdict_dry_run: ["reviewed_task_id", "actor", "agent_instance", "owner_policy_ref", "verdict"],
-  lybra_audit_verdict_confirm: ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
+  // AIPOS-F22B 大项C: autonomy_mode 从注册表取(F14机制), 禁写死
+  lybra_audit_verdict_dry_run: ["reviewed_task_id", "actor", "agent_instance", "owner_policy_ref", "verdict", "autonomy_mode"],
+  lybra_audit_verdict_confirm: ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token", "autonomy_mode"],
 };
 
 /**
@@ -1582,6 +1583,7 @@ async function tryAutoReturn(): Promise<boolean> {
             verdict,
             findings_summary: findings || auditSummary,
             evidence_refs: [],
+            autonomy_mode: AUTONOMY_SUPERVISED, // AIPOS-F22B 大项C: 从注册表取(F14机制)
           });
           
           // 检查dry_run响应(对齐return托管的拒因处理)
@@ -1612,6 +1614,7 @@ async function tryAutoReturn(): Promise<boolean> {
             agent_instance: config.agentInstance,
             owner_policy_ref: config.ownerPolicyRef,
             owner_confirmation_token: "OWNER_CONFIRMED",
+            autonomy_mode: AUTONOMY_SUPERVISED, // AIPOS-F22B 大项C: 从注册表取(F14机制)
           });
           
           currentLogger.info("auto-audit-verdict-success", {
