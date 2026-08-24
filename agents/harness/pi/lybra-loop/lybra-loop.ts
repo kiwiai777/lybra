@@ -1219,6 +1219,13 @@ export function findInFlightCards(
     }
     const claimedBy = extractFrontmatterField(content, "claimed_by");
     if (!claimedBy || claimedBy !== agentInstance) continue; // 非本工位(如审计位)不算在途
+    // AIPOS-F38 大项B: 已交回待收账的卡不占名额 — executor_status=completed 或
+    // audit_readiness=ready 即已交回(与 gate already_returned / loop-decisions isReturned
+    // 同一谓词);收账仍由 sweep 负责,不在此处收。
+    if (
+      extractFrontmatterField(content, "executor_status") === "completed" ||
+      extractFrontmatterField(content, "audit_readiness") === "ready"
+    ) continue;
     const taskId = extractFrontmatterField(content, "task_id");
     if (!taskId) continue; // AIPOS-F17: 卡号读 frontmatter, 缺则跳过(禁猜文件名)
     ids.push(taskId);
@@ -2851,20 +2858,39 @@ export default function (pi: ExtensionAPI) {
           const dryResp = await currentClient!.callTool("lybra_queue_claim_dry_run", dryRunArgs);
           if (dryResp.verdict === "BLOCK" || dryResp.isError) {
             const reasons = dryResp.blocking_reasons || dryResp.errors || [];
-            // AIPOS-F37 增补: 重复认领幂等 — 识别门返回的状态机类 BLOCK(期望 pending 实为 claimed)
-            // 为“已持有,继续执行”,出人话并继续,禁止以“应答语义不明”停循环
-            const alreadyClaimedReason = reasons.find((r: any) => 
-              (r.message || "").includes("claimed") || 
-              (r.message || "").includes("已被认领") ||
-              (r.error_code || "") === "INVALID_STATE_TRANSITION"
+            // AIPOS-F38 大项C(承接 F37-fix1-fix1): 状态机类 BLOCK 幂等识别 — 真门
+            // blocking_reasons 为字符串数组(2026-08-24 实捕), 匹配器兼容 string|object;
+            // 认领撞"已 claimed"时按持有者分流: 本工位持有→继续执行; 他人持有→跳过并出声。
+            // 禁以"应答语义不明"停循环。
+            const reasonText = (r: any): string => (typeof r === "string" ? r : (r?.message || ""));
+            const alreadyClaimedReason = reasons.find((r: any) =>
+              reasonText(r).includes("claimed") || reasonText(r).includes("已被认领")
             );
             if (alreadyClaimedReason) {
-              const msg = `卡 ${taskId} 已持有(claimed),继续执行`;
-              currentLogger?.info("claim-already-held", { task_id: taskId });
-              voice(msg, "info", false);
-              ctx.ui.notify(msg, "info");
-              // 设置 currentTaskId 以便继续执行
-              currentTaskId = taskId;
+              const fs = await import("node:fs");
+              const path = await import("node:path");
+              const heldCardPath = path.join(
+                config.workspaceRoot, "5_tasks", "queue", "claimed", `${taskId.toLowerCase()}.md`,
+              );
+              let holder = "";
+              try {
+                holder = extractFrontmatterField(fs.readFileSync(heldCardPath, "utf-8"), "claimed_by") || "";
+              } catch {
+                // 卡不可读时 holder 留空, 按他人持有处理(保守: 不冒领继续)
+              }
+              if (holder === config.actor) {
+                const msg = `卡 ${taskId} 已持有(claimed),继续执行`;
+                currentLogger?.info("claim-already-held", { task_id: taskId, holder });
+                voice(msg, "info", false);
+                ctx.ui.notify(msg, "info");
+                // 设置 currentTaskId 以便继续执行
+                currentTaskId = taskId;
+                return;
+              }
+              const msg = `卡 ${taskId} 已被他人持有(claimed_by=${holder || "?"}),跳过`;
+              currentLogger?.warn("claim-skip-other-holder", { task_id: taskId, holder: holder || "?" });
+              voice(msg, "warn", false);
+              ctx.ui.notify(msg, "warn");
               return;
             }
             // 其他 BLOCK 原因 → 正常报错

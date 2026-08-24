@@ -251,6 +251,20 @@ export async function executeTick(ctx: TickContext): Promise<TickOutcome> {
     if (dec.action === "skip-envelope") {
       continue; // 跳过这张,试下一张(不绕)
     }
+    // AIPOS-F38 大项C: already-held 幂等分流 — 本工位持有→停语带“已持有 <ID>”复用
+    // lybra-loop stop 分支的 held 复工网(继续执行, 禁停循环); 他人持有→跳过出声试下一张。
+    if (dec.action === "already-held") {
+      const holder = String((task.metadata as AnyDict | undefined)?.claimed_by || "");
+      if (holder === ctx.actor) {
+        logger.info("claim-already-held-resume", { task_id: taskId, holder });
+        return {
+          kind: "stop",
+          reason: `已持有 ${taskId} —— 一卡一会话,状态机幂等识别,复用复工网`,
+        };
+      }
+      logger.warn("claim-skip-other-holder", { task_id: taskId, holder: holder || "?" });
+      continue;
+    }
     // stop-block / stop-error → 立停
     return { kind: "stop", reason: dec.reason };
   }

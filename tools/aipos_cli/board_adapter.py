@@ -3163,6 +3163,15 @@ def _build_audit_dispatch_preview(
     # AIPOS-A1 大项C: 手动派审也注入取证锚点段(路径来自注册表, 禁写死)
     from tools.aipos_cli.audit_derivation import build_forensic_anchor_section
     audit_body += build_forensic_anchor_section(str(source_task.get("task_id") or ""), repo_root)
+    # AIPOS-F38 大项A(F17 原则覆盖全部 writer): 产前自检——派生审计卡必过同一 schema 必填校验,
+    # 不合规即拒并出声(BLOCK + 人话拒因);审计身份由上方 resolve_instance_id/INDEPENDENCE 把关。
+    from tools.schema_loader import get_required_card_fields
+    _required_fields = get_required_card_fields()
+    _missing = [f for f in _required_fields if f not in audit_metadata or audit_metadata[f] is None]
+    if _missing:
+        blocking_reasons.append(
+            f"AIPOS-F38 派生校验 FAIL: 审计卡 {task_id_text} 缺必填字段 {_missing}。schema 单源 = {_required_fields}"
+        )
     audit_markdown = render_task_markdown(audit_metadata, audit_body)
 
     updated_source_metadata = dict(source_metadata)
@@ -5748,13 +5757,20 @@ def close_task(
                             source_task_metadata_for_reaudit, source_task_body_for_reaudit, _ = parse_markdown_frontmatter(source_task_text_for_reaudit)
                             source_task_metadata_for_reaudit = _normalize_return_value(source_task_metadata_for_reaudit)
                             
+                            # AIPOS-F38 大项A: 审计身份取 roles 注册表审计实例(audit_derivation 同一实现),
+                            # 禁承继原卡执行实例(承继会让审计卡落到执行工位名下, 零 amend 不成立)
+                            from tools.aipos_cli.audit_derivation import _derive_audit_assigned_to, _derive_audit_instance
+                            _reaudit_project = str(source_task_metadata_for_reaudit.get("project") or "lybra")
+                            _reaudit_audit_instance = _derive_audit_instance(_reaudit_project)
+                            _reaudit_assigned_to = _derive_audit_assigned_to(_reaudit_project)
+                            
                             # 构建复审卡metadata
                             reaudit_metadata = {
                                 "task_id": derived_audit_for_source_task,
                                 "title": f"复审 {source_task_id_for_reaudit} (fix卡 {resolved_task_id} 已修复)",
-                                "project": str(source_task_metadata_for_reaudit.get("project") or "lybra"),
-                                "assigned_to": "audit",
-                                "agent_instance": str(source_task_metadata_for_reaudit.get("agent_instance") or "audit.lybra.kiwiai-dev"),
+                                "project": _reaudit_project,
+                                "assigned_to": _reaudit_assigned_to,
+                                "agent_instance": _reaudit_audit_instance,
                                 "context_bundle": source_task_metadata_for_reaudit.get("context_bundle", "default"),
                                 "task_mode": "audit",
                                 "task_class": "simple",
@@ -5790,6 +5806,30 @@ def close_task(
 """
                             
                             # 写入复审卡(文件名对齐队列小写惯例, 如 aipos-f18r2.md)
+                            # AIPOS-F38 大项A(F17 原则覆盖全部 writer): 产前自检——必填字段从
+                            # schema 单源补全后仍缺、或审计身份不等于注册表实例 → 拒并出声
+                            # (raise → 上层 except 记 governance_warning, 不写坏卡)
+                            from tools.schema_loader import get_required_card_fields
+                            _required_fields = get_required_card_fields()
+                            _inherit_defaults = {
+                                "needs_owner": False,
+                                "output_target": str(source_task_metadata_for_reaudit.get("output_target") or ""),
+                                "artifact_policy": str(source_task_metadata_for_reaudit.get("artifact_policy") or "formal_write"),
+                            }
+                            for _field in _required_fields:
+                                if _field not in reaudit_metadata or reaudit_metadata[_field] is None:
+                                    if _field in source_task_metadata_for_reaudit and source_task_metadata_for_reaudit[_field] is not None:
+                                        reaudit_metadata[_field] = source_task_metadata_for_reaudit[_field]
+                                    elif _field in _inherit_defaults:
+                                        reaudit_metadata[_field] = _inherit_defaults[_field]
+                            _missing = [f for f in _required_fields if f not in reaudit_metadata or reaudit_metadata[f] is None]
+                            if _missing or reaudit_metadata.get("agent_instance") != _reaudit_audit_instance:
+                                raise ValueError(
+                                    f"AIPOS-F38 派生校验 FAIL: 复审卡 {derived_audit_for_source_task}"
+                                    f" 缺必填字段 {_missing} 或审计身份 {reaudit_metadata.get('agent_instance')}"
+                                    f" ≠ 注册表审计实例 {_reaudit_audit_instance}(禁承继原卡)。"
+                                    f" schema 单源 = {_required_fields}"
+                                )
                             reaudit_task_path = resolved_root / "5_tasks" / "queue" / "pending" / f"{derived_audit_for_source_task.lower()}.md"
                             reaudit_task_path.parent.mkdir(parents=True, exist_ok=True)
                             reaudit_markdown = render_task_markdown(reaudit_metadata, reaudit_body)
