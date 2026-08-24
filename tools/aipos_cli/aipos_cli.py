@@ -3812,8 +3812,7 @@ def main(argv: list[str] | None = None) -> int:
     # AIPOS-F22 大项B: queue claim --confirm（薄壳工厂模式）
     if args.command == "queue" and getattr(args, "queue_command", None) == "claim" and getattr(args, "confirm", False):
         from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb
-        import os
-        
+
         # 解析 connection.json 路径
         conn_json_path = getattr(args, "connection_json", None)
         if not conn_json_path:
@@ -4090,8 +4089,7 @@ def main(argv: list[str] | None = None) -> int:
         # 三层(托管/工位/CLI)共用同一执行函数与同一门动词, 禁第二实现。
         if getattr(args, "confirm", False):
             from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb
-            import os
-            
+
             # 解析 connection.json 路径
             conn_json_path = getattr(args, "connection_json", None)
             if not conn_json_path:
@@ -4491,8 +4489,7 @@ def main(argv: list[str] | None = None) -> int:
     # AIPOS-F22 大项B: audit-verdict --confirm（薄壳工厂模式）
     if args.command == "audit-verdict" and getattr(args, "confirm", False):
         from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb
-        import os
-        
+
         # 解析 connection.json 路径
         conn_json_path = getattr(args, "connection_json", None)
         if not conn_json_path:
@@ -4929,8 +4926,7 @@ def main(argv: list[str] | None = None) -> int:
     # AIPOS-F22 大项B: task-progress --confirm（薄壳工厂模式，经 gate MCP）
     if args.command == "task-progress" and getattr(args, "confirm", False):
         from tools.aipos_cli.two_phase_shell_factory import execute_single_phase_via_gate
-        import os
-        
+
         # 解析 connection.json 路径
         conn_json_path = getattr(args, "connection_json", None)
         if not conn_json_path:
