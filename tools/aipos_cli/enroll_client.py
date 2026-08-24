@@ -428,6 +428,27 @@ def is_governance_workspace(path: Path, governance_root: str | None = None) -> b
     return (target / "5_tasks" / "queue").is_dir()
 
 
+def _resolve_role_class_for_guard(role: str, workspace_root: Path) -> str:
+    """AIPOS-F22D: 守卫内角色类解析(单源: roles 注册表 class, 禁自建名单)。
+
+    判据:
+    - 内建角色(executor/auditor/planner/advisor/owner/copilot/owner-dispatch) → 角色名即类名
+    - 自定义角色 → 从注册表查 role_class(如 hbj-coder → executor)
+    - 解析失败 → 回落为角色名自身(安全侧: 未知角色按工位类处理, 拒绝治理仓)
+
+    此函数仅用于守卫判定, 不在守卫内自建角色名单——真相来自注册表。
+    """
+    try:
+        from tools.aipos_cli.custom_roles import resolve_role_to_class
+        resolved = resolve_role_to_class(role, str(workspace_root))
+        if resolved:
+            return resolved
+    except Exception:
+        pass
+    # 降级: 内建角色名即类名; 未知角色回落自身(安全侧)
+    return role
+
+
 def land_enrollment_code(
     gate_url: str,
     code: str,
@@ -608,13 +629,9 @@ def enroll(
     # FIX-1: 确保 workspace_root 存在(对空目录新机零手工上线)
     workspace_root.mkdir(parents=True, exist_ok=True)
 
-    # F23 验收⑧/第九坑: enroll 落盘只有一个目标 —— 工位 .lybra/; 治理工作区拒绝
-    if code is not None and is_governance_workspace(workspace_root, governance_root):
-        raise RuntimeError(
-            f"enroll 目标是治理工作区({workspace_root}), 拒绝落盘 —— enroll 只落工位目录 .lybra/。\n"
-            "下一步: 在工位目录(pi harness 目录)运行, 或用 --workspace 指向工位目录。\n"
-            "可抄示例: lybra roles enroll --code <码> --workspace ~/workstations/my-agent"
-        )
+    # AIPOS-F22D: 治理工作区守卫延迟到 exchange 之后(需先知道 role 才能按角色类判定)
+    # 工位角色类(executor/auditor 及其自定义角色)维持拒绝; 顾问角色类(planner/advisor)允许
+    _gov_workspace = is_governance_workspace(workspace_root, governance_root) if code is not None else False
 
     # Step 2: 确保 .lybra/ 目录存在
     lybra_dir = ensure_lybra_dir(workspace_root)
@@ -650,6 +667,19 @@ def enroll(
         
         if not role:
             raise RuntimeError("token_entry missing 'role' field")
+        
+        # AIPOS-F22D: 治理工作区守卫——按角色类判定(F23⑧ 第九坑防护升级)
+        # 工位角色类(executor/auditor)→拒绝; 顾问角色类(planner/advisor)→允许
+        if _gov_workspace:
+            _role_class = _resolve_role_class_for_guard(role, workspace_root)
+            if _role_class not in ("planner", "advisor"):
+                raise RuntimeError(
+                    f"enroll 目标是治理工作区({workspace_root}), 角色 {role}(类={_role_class}) 拒绝落盘 —— "
+                    f"工位角色类(executor/auditor)只落工位目录 .lybra/。\n"
+                    "下一步: 在工位目录(pi harness 目录)运行, 或用 --workspace 指向工位目录。\n"
+                    "可抄示例: lybra roles enroll --code <码> --workspace ~/workstations/my-agent\n"
+                    "(顾问角色类 planner/advisor 允许落治理工作区)"
+                )
     
     # Step 3: 加载或创建 connection.json (AIPOS-C2 大项B: 铸全 workspace_root)
     connection_data = load_or_create_connection_json(lybra_dir, effective_gate_url, workspace_root)
