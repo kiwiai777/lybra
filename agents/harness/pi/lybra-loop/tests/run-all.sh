@@ -34,6 +34,9 @@ declare -a files=(
   "tests/f35b-audit-verdict-hosted.test.ts"
   "tests/f35c-hyphenated-task-id.test.ts"
   "tests/f36-first-tick-cold-start.test.ts"
+  "tests/f37a-held-resume-redgreen.test.ts"
+  "tests/f37b-credential-copy-redgreen.test.ts"
+  "tests/f37c-claim-idempotent-redgreen.test.ts"
   "tests/f22-advisor-onboarding.test.ts"
 )
 overall=0
