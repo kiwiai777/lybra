@@ -5962,41 +5962,51 @@ def withdraw_task(
         # Load task to check session activity
         task = _select_task(resolved_root, task_id=selected_task_id, path=selected_path)
         
-        # S3: in-transit protection - check for active session
+        # AIPOS-F41 B3: 在途卡可撤性修真 - claimed 但无活动会话的卡应允许撤回或改卡
+        # 判据与 F38 "在途=未交回"同源:
+        # - 已有 return 记录 = 不在途(可撤)
+        # - claimed 且无 return, 但无活动会话 = 可撤(如 F40 被代按认领后从未开工)
+        # - claimed 且无 return, 且有近期活跃会话 = 真在途(保护)
         active_session_id = task.get("metadata", {}).get("active_session_id")
-        if active_session_id and dry_run:  # Only check on dry_run, confirm assumes user verified
-            # Load records to check if session is recent/active
+        task_status = task.get("metadata", {}).get("status")
+        
+        if task_status == "claimed" and active_session_id and dry_run:
+            # 检查是否已有 return 记录(已交回 = 不在途)
             from tools.aipos_cli.records import load_records
             records = load_records(resolved_root)
-            sessions = records.get("sessions", [])
+            returns = records.get("returns", [])
+            has_return = any(r.get("task_id") == selected_task_id for r in returns)
             
-            # Check if there's a recent session (within last hour as heuristic)
-            from datetime import datetime, timedelta, timezone
-            now = datetime.now(timezone.utc)
-            for session in sessions:
-                if session.get("session_id") == active_session_id:
-                    # Session records use 'created_at', not 'timestamp'
-                    session_timestamp = session.get("created_at") or session.get("timestamp", "")
-                    if session_timestamp:
-                        try:
-                            session_time = datetime.fromisoformat(session_timestamp.replace("Z", "+00:00"))
-                            if now - session_time < timedelta(hours=1):
-                                return blocked_response(
-                                    operation=operation,
-                                    dry_run=dry_run,
-                                    category="ACTIVE_SESSION",
-                                    message=f"Task has active session {active_session_id} from less than 1 hour ago. Cannot withdraw task that may be in-transit.",
-                                    actor=_actor_payload(actor_text),
-                                    data={
-                                        "task_id": task.get("task_id"),
-                                        "active_session_id": active_session_id,
-                                        "session_timestamp": session_timestamp,
-                                        "recommended_action": "Wait for session to complete or explicitly confirm withdrawal with override."
-                                    },
-                                    safety_notice="AIPOS-315 S3: in-transit protection prevents silent withdrawal of active work."
-                                )
-                        except (ValueError, TypeError):
-                            pass
+            if not has_return:
+                # 无 return 记录,检查会话是否活跃(近期有动静)
+                sessions = records.get("sessions", [])
+                from datetime import datetime, timedelta, timezone
+                now = datetime.now(timezone.utc)
+                
+                for session in sessions:
+                    if session.get("session_id") == active_session_id:
+                        session_timestamp = session.get("created_at") or session.get("timestamp", "")
+                        if session_timestamp:
+                            try:
+                                session_time = datetime.fromisoformat(session_timestamp.replace("Z", "+00:00"))
+                                # 保护窗口从 1 小时扩大到 24 小时(避免误伤跨天在途卡)
+                                if now - session_time < timedelta(hours=24):
+                                    return blocked_response(
+                                        operation=operation,
+                                        dry_run=dry_run,
+                                        category="ACTIVE_SESSION",
+                                        message=f"Task has active session {active_session_id} from less than 24 hours ago (created at {session_timestamp}). Cannot withdraw task that may be in-transit.",
+                                        actor=_actor_payload(actor_text),
+                                        data={
+                                            "task_id": task.get("task_id"),
+                                            "active_session_id": active_session_id,
+                                            "session_timestamp": session_timestamp,
+                                            "recommended_action": "Wait for session to complete/return, or explicitly confirm withdrawal acknowledging work loss risk."
+                                        },
+                                        safety_notice="AIPOS-F41 B3: in-transit protection (24h window). Claimed+no-return+recent-session = true in-transit."
+                                    )
+                            except (ValueError, TypeError):
+                                pass
         
         # Call mutate_queue_task directly
         from tools.aipos_cli.queue_mutation import mutate_queue_task

@@ -114,13 +114,15 @@
         "draft_submit",
         "draft_publish",
         "queue_amend",
+        "queue_withdraw",
+        "queue_claim",
         "audit_dispatch",
         "envelope_mint"
       ],
       "naming": {
         "prefix": "planner"
       },
-      "_note": "AIPOS-F24 大项C: planner scopes 扩充至产生侧动词集(draft/amend/dispatch/mint)。BYO external planning advisor's credential. No tool_package."
+      "_note": "AIPOS-F41 大项B2: planner scopes 增加 queue_withdraw(限本项目卡撤废卡)+queue_claim(claim自确认,沿用328路线)。顾问遇链条卡点时可自主推进,无需每步等Owner。BYO external planning advisor's credential. No tool_package."
     },
     {
       "role": "advisor",
