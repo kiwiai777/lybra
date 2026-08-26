@@ -17,12 +17,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from tools.aipos_cli.hard_rules_extractor import (
     extract_hard_rules_from_handbook,
     extract_diagnostic_checklist_from_handbook,
+    _resolve_governance_root,
 )
+
+# 产品仓根 = 测试文件所在 tests/ 的父目录(可移植,禁硬编码绝对路径)
+_PRODUCT_REPO = Path(__file__).resolve().parent.parent
 
 
 def test_hard_rules_extraction():
     """测试从顾问手册提取硬规矩。"""
-    gov_root = Path.home() / "ai-project-os" / "2_projects" / "lybra"
+    gov_root = _resolve_governance_root()
     result = extract_hard_rules_from_handbook(gov_root)
     
     print("=" * 80)
@@ -49,7 +53,7 @@ def test_hard_rules_extraction():
 
 def test_diagnostic_checklist_extraction():
     """测试从顾问手册提取诊断清单。"""
-    gov_root = Path.home() / "ai-project-os" / "2_projects" / "lybra"
+    gov_root = _resolve_governance_root()
     result = extract_diagnostic_checklist_from_handbook(gov_root)
     
     print("\n" + "=" * 80)
@@ -78,7 +82,7 @@ def test_charters_contain_hard_rules():
     print("测试3: 章程包含硬规矩节")
     print("=" * 80)
     
-    product_repo = Path.home() / "projects" / "lybra"
+    product_repo = _PRODUCT_REPO
     roles = ["executor", "auditor", "advisor"]
     
     for role in roles:
@@ -111,7 +115,7 @@ def test_roles_schema_planner_scopes():
     print("=" * 80)
     
     import json
-    product_repo = Path.home() / "projects" / "lybra"
+    product_repo = _PRODUCT_REPO
     schema_path = product_repo / "schema" / "roles.schema.json"
     
     schema = json.loads(schema_path.read_text(encoding="utf-8"))

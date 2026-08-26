@@ -53,6 +53,19 @@ for f in "${files[@]}"; do
     overall=1
   fi
 done
+
+# ── AIPOS-F41B: 分发一致性夹具(经 bin 入常驻) ──────────────────
+# 验证章程硬规矩分发与手册单一真相源一致(Δ=0,既有 Python 测试)
+echo
+echo "── tests/test_aipos_f41_hard_rules.py (分发一致性) ──────────────────────────────────────────"
+REPO_ROOT="$(cd "$(dirname "$0")/../../../../.." && pwd)"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f41_hard_rules.py"; then
+  echo "✓ tests/test_aipos_f41_hard_rules.py PASS"
+else
+  echo "✗ tests/test_aipos_f41_hard_rules.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

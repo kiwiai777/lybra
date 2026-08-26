@@ -180,18 +180,45 @@ def extract_diagnostic_checklist_from_handbook(governance_root: Path) -> dict[st
     }
 
 
+def _resolve_governance_root() -> Path:
+    """解析治理仓根路径(与 C2 身份解析单源同处取值)。
+
+    解析链:LYBRA_WORKSPACE_ROOT 环境变量 → .lybra/connection.json workspace_root → 标准位置降级。
+    禁新建解析函数,复用 loop_context 既有 ConnectionResolver 取值逻辑。
+    """
+    import os
+    import json
+
+    # ① 环境变量(与 C2 identity resolution 同源)
+    env_root = os.environ.get("LYBRA_WORKSPACE_ROOT", "").strip()
+    if env_root:
+        return Path(env_root)
+
+    # ② .lybra/connection.json(与 C2 同源)
+    cwd = Path.cwd()
+    for parent in [cwd, *cwd.parents]:
+        conn_file = parent / ".lybra" / "connection.json"
+        if conn_file.is_file():
+            try:
+                conn = json.loads(conn_file.read_text(encoding="utf-8"))
+                ws = conn.get("workspace_root", "").strip()
+                if ws:
+                    return Path(ws)
+            except Exception:
+                pass
+            # .lybra 找到了但无 workspace_root → 其父目录即治理仓
+            return parent
+
+    # ③ 降级:标准位置
+    return Path.home() / "ai-project-os" / "2_projects" / "lybra"
+
+
 def render_hard_rules_for_charter() -> str:
     """渲染硬规矩节供章程红线节使用(追加到现有红线后)。
 
     AIPOS-F41 大项A: 章程红线节追加硬规矩(与派审注入同源)。
     """
-    # 假设从workspace根调用,先定位治理仓
-    from tools.loop_context import discover_governance_root
-    try:
-        gov_root = discover_governance_root()
-    except Exception:
-        # 降级:假设调用者在产品仓,治理仓在标准位置
-        gov_root = Path.home() / "ai-project-os" / "2_projects" / "lybra"
+    gov_root = _resolve_governance_root()
 
     result = extract_hard_rules_from_handbook(gov_root)
     if not result["ok"]:
@@ -220,11 +247,7 @@ def render_hard_rules_for_charter() -> str:
 
 def render_diagnostic_checklist_for_advisor_skill() -> str:
     """渲染诊断清单供顾问技能使用(AIPOS-F41 大项B1)。"""
-    from tools.loop_context import discover_governance_root
-    try:
-        gov_root = discover_governance_root()
-    except Exception:
-        gov_root = Path.home() / "ai-project-os" / "2_projects" / "lybra"
+    gov_root = _resolve_governance_root()
 
     result = extract_diagnostic_checklist_from_handbook(gov_root)
     if not result["ok"]:
