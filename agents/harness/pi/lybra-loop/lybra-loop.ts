@@ -497,6 +497,40 @@ const REQUIRED_VERBS: Record<string, string[]> = {
 };
 
 /**
+ * AIPOS-F43 大项A: Drop RETURN.md skeleton on delivery.
+ * 投递时自动落盘 RETURN.md 骨架(内容单源=卡面)。
+ * 已存在则跳过(幂等,不覆盖已有内容)。
+ */
+async function dropReturnSkeleton(taskId: string, cardAbsPath: string, workspaceRoot: string): Promise<void> {
+  const { renderReturnSkeleton } = await import("./loop-decisions.js");
+  const { readFileSync, writeFileSync, existsSync, mkdirSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  
+  // RETURN.md 路径
+  const returnDir = join(workspaceRoot, "task_cards", taskId);
+  const returnPath = join(returnDir, "RETURN.md");
+  
+  // 已存在则跳过(幂等)
+  if (existsSync(returnPath)) {
+    return;
+  }
+  
+  // 读取卡内容
+  if (!existsSync(cardAbsPath)) {
+    throw new Error(`Card not found: ${cardAbsPath}`);
+  }
+  
+  const cardMarkdown = readFileSync(cardAbsPath, "utf-8");
+  
+  // 渲染骨架
+  const skeleton = renderReturnSkeleton(cardMarkdown, taskId);
+  
+  // 写入
+  mkdirSync(returnDir, { recursive: true });
+  writeFileSync(returnPath, skeleton, "utf-8");
+}
+
+/**
  * AIPOS-C2 大项C: 来源自曝横幅 —— 对每个关键值打印取自哪一层。
  * env 兜底命中 / env 被降级 → 标 ⚠ (2026-08-18 若有此横幅, 毒 env 案第一张截图即破)。
  */
@@ -1953,6 +1987,17 @@ async function doTick(): Promise<void> {
         true,
       );
       
+      // AIPOS-F43 大项A: 投递即落 RETURN.md 骨架(内容单源=卡面)
+      try {
+        await dropReturnSkeleton(outcome.task.task_id, outcome.cardAbsPath, config.workspaceRoot);
+      } catch (e) {
+        currentLogger.warn("release-drop-skeleton-failed", {
+          task_id: outcome.task.task_id,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        // 骨架落盘失败不阻断投递,只记录警告
+      }
+      
       // AIPOS-F36 大项A: 投递前判断 ctx 就绪 — liveCtx.newSession 不可用时不投递不停循环,下一 tick 重试
       if (!liveCtx || typeof liveCtx.newSession !== "function") {
         currentLogger.warn("release-ctx-not-ready", {
@@ -1999,11 +2044,30 @@ async function doTick(): Promise<void> {
       return; // session 已替换或待重试;续跑靠新 session 的 agent_settled + session_start 双保险
     }
 
+    // AIPOS-F43 大项B: guidance outcome 处理(空闲带路)
+    if (outcome.kind === "guidance") {
+      const { buildHeldGuidance } = await import("./loop-decisions.js");
+      const guidanceMsg = buildHeldGuidance(outcome.taskId, outcome.returnPath, outcome.acceptanceText);
+      
+      currentLogger.info("held-guidance", {
+        task_id: outcome.taskId,
+        return_path: outcome.returnPath,
+      });
+      
+      voice(guidanceMsg, "info", true);
+      
+      // guidance 不停循环,继续轮询(等待用户完成工作)
+      loopState.running = false;
+      scheduleNextTick(5000);
+      return;
+    }
+
     if (outcome.kind === "stop") {
       // AIPOS-R6L 大项A①: held分支先查completed事件，有→走return，没有→才stop
       // 冷会话可接管：以records为准，不依赖内存currentTaskId
       // 从outcome.reason提取task_id（格式："已持有 TASK-ID — ..."）
-      const heldMatch = outcome.reason.match(/已持有\s+([A-Z0-9-]+)/);
+      // AIPOS-F43-fix1: 修复卡号截断bug - 正则改为匹配完整task_id(含小写字母)
+      const heldMatch = outcome.reason.match(/已持有\s+([A-Z0-9a-z_-]+)/);
       if (heldMatch) {
         const heldTaskId = heldMatch[1];
         const fs = await import("node:fs");

@@ -261,6 +261,16 @@ export function planCooldownStep(
 /** 冷启动 kickoff(措辞对齐 _shared/extensions/claim.ts;token/密钥永不出现)。
  * F-EXT001-7(FIX3):断言钉 — kickoff 引用的路径必须是放行后位置(claimed),不含 pending。
  */
+/**
+ * AIPOS-F43 大项C: 纪律注入全路径覆盖.
+ * The single-source discipline injection text (F41 注入 writer).
+ * All three delivery paths (cold start / resume / re-deliver) must carry this exact text.
+ */
+export const DISCIPLINE_INJECTION = [
+  `最后一步必须是 gate 提交,没有门记录=没做完。`,
+  `盘上已有 RETURN.md 骨架(连接器投递时自动落盘)——读它即知身在何卡、欠什么。`,
+].join("\n");
+
 export function buildKickoff(cardAbsPath: string): string {
   // F-EXT001-7(FIX3):断言钉 — 放行后路径必须在 claimed,不在 pending
   if (cardAbsPath.includes("queue/pending/")) {
@@ -271,7 +281,7 @@ export function buildKickoff(cardAbsPath: string): string {
     `执行已为你认领(PreAuthorized 放行)的任务卡:${cardAbsPath}`,
     `按你 AGENTS.md 里的知识入口去读这张卡并独立执行,一切以卡+知识入口为准,不依赖任何历史上下文。`,
     `遇护栏拦截即说明并停,不绕过。`,
-    `最后一步必须是 gate 提交, 没有门记录=没做完。`,
+    DISCIPLINE_INJECTION,  // AIPOS-F43 大项C: 携带纪律注入(F41 单源)
   ].join("\n");
 }
 
@@ -289,4 +299,158 @@ export function resolveCardPath(taskPath: unknown, workspaceRoot: string): strin
 export function logLine(level: "INFO" | "WARN" | "ERROR", action: string, detail: Record<string, unknown>): string {
   const ts = new Date().toISOString();
   return JSON.stringify({ ts, level, action, detail });
+}
+
+// ---------------------------------------------------------------------------
+// AIPOS-F43 大项A: 投递即落 RETURN.md 骨架
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse YAML frontmatter from card markdown.
+ * Returns empty object if no frontmatter found.
+ */
+export function parseCardFrontmatter(cardMarkdown: string): AnyDict {
+  const trimmed = cardMarkdown.trimStart();
+  if (!trimmed.startsWith("---")) return {};
+  const endIdx = trimmed.indexOf("---", 3);
+  if (endIdx === -1) return {};
+  
+  const yamlText = trimmed.slice(3, endIdx);
+  const result: AnyDict = {};
+  
+  // Simple YAML parser for frontmatter (key: value format)
+  for (const line of yamlText.split("\n")) {
+    const colonIdx = line.indexOf(":");
+    if (colonIdx === -1) continue;
+    const key = line.slice(0, colonIdx).trim();
+    const value = line.slice(colonIdx + 1).trim();
+    if (key) result[key] = value;
+  }
+  
+  return result;
+}
+
+/**
+ * Extract acceptance section from card markdown.
+ * Looks for "## 验收" or "## 审计对象" headings.
+ */
+export function extractAcceptanceSection(cardMarkdown: string): string {
+  const lines = cardMarkdown.split("\n");
+  let inSection = false;
+  const acceptanceLines: string[] = [];
+  
+  for (const line of lines) {
+    if (line.match(/^##\s+(验收|审计对象)/)) {
+      inSection = true;
+      acceptanceLines.push(line);
+      continue;
+    }
+    if (inSection) {
+      if (line.match(/^##\s+/)) {
+        // Hit next section, stop
+        break;
+      }
+      acceptanceLines.push(line);
+    }
+  }
+  
+  return acceptanceLines.join("\n").trim();
+}
+
+/**
+ * Render RETURN.md skeleton from card markdown.
+ * AIPOS-F43 大项A: 内容单源=卡面(frontmatter + 验收节).
+ * Supports both executor cards (交付报告) and audit cards (审计报告).
+ */
+export function renderReturnSkeleton(cardMarkdown: string, taskId: string): string {
+  const fm = parseCardFrontmatter(cardMarkdown);
+  const taskMode = String(fm.task_mode || "code");
+  const acceptanceSection = extractAcceptanceSection(cardMarkdown);
+  
+  if (taskMode === "audit") {
+    // Audit card skeleton
+    return [
+      `# ${taskId} 审计报告`,
+      ``,
+      `## 审计裁决`,
+      ``,
+      `verdict: (PASS / FAIL / BLOCK)`,
+      ``,
+      `## 一句话结论`,
+      ``,
+      `(待填写)`,
+      ``,
+      `## 验收清单`,
+      ``,
+      acceptanceSection || "(无验收清单)",
+      ``,
+      `---`,
+      `(骨架由连接器投递时自动落盘,内容单源=卡面。审计体完成后填写上方各节。)`,
+    ].join("\n");
+  } else {
+    // Executor card skeleton
+    return [
+      `# ${taskId} 交付报告`,
+      ``,
+      `## 一句话结论`,
+      ``,
+      `(待填写)`,
+      ``,
+      `## 状态`,
+      ``,
+      `IN_PROGRESS`,
+      ``,
+      `## 验收清单`,
+      ``,
+      acceptanceSection || "(无验收清单)",
+      ``,
+      `---`,
+      `(骨架由连接器投递时自动落盘,内容单源=卡面。执行体完成后填写上方各节。)`,
+    ].join("\n");
+  }
+}
+
+/**
+ * Parse RETURN.md status line.
+ * Returns the status value or null if not found.
+ */
+export function parseReturnStatus(returnContent: string): string | null {
+  const lines = returnContent.split("\n");
+  let inStatusSection = false;
+  
+  for (const line of lines) {
+    if (line.match(/^##\s+状态/)) {
+      inStatusSection = true;
+      continue;
+    }
+    if (inStatusSection) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith("#")) {
+        return trimmed;
+      }
+    }
+  }
+  
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// AIPOS-F43 大项B: 空闲带路(held + IN_PROGRESS → 具体指引)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build held guidance message with specific context.
+ * AIPOS-F43 大项B: 出声含卡ID/报告路径/剩余验收项 + 纪律注入.
+ */
+export function buildHeldGuidance(taskId: string, returnPath: string, acceptanceText: string): string {
+  return [
+    `复工提醒:你的工位持有卡 ${taskId},盘上已有 RETURN.md 骨架(状态:IN_PROGRESS)。`,
+    ``,
+    `报告路径:${returnPath}`,
+    ``,
+    `剩余验收项:`,
+    acceptanceText || "(无验收清单)",
+    ``,
+    DISCIPLINE_INJECTION,
+  ].join("\n");
 }

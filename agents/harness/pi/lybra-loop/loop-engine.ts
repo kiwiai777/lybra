@@ -78,7 +78,9 @@ export type TickOutcome =
   | { kind: "stop"; reason: string }
   | { kind: "wait"; reason: string }
   // AIPOS-F16 余热: 额度尽(released>=maxN)→ 不领新卡, 循环不整停(由 lybra-loop 判在途卡终停)
-  | { kind: "cooldown"; reason: string };
+  | { kind: "cooldown"; reason: string }
+  // AIPOS-F43 大项B: held + IN_PROGRESS → 具体带路
+  | { kind: "guidance"; taskId: string; returnPath: string; acceptanceText: string };
 
 export interface TickContext {
   client: GateReadFace;
@@ -134,9 +136,40 @@ export async function executeTick(ctx: TickContext): Promise<TickOutcome> {
   const { state: cls, held, claimable } = classifyTasks(tasks, ctx.actor);
   logger.info("fetched", { state: cls, held: held.length, claimable: claimable.length });
 
-  // 一 session 一 task:已持有 → 停(先 return 手头的)
+  // 一 session 一 task:已持有 → 检测 RETURN.md 状态，提供具体带路（AIPOS-F43 大项B）
   if (cls === "held") {
     logger.info("stop-held", { task_ids: held.map((t) => t.task_id) });
+    
+    // AIPOS-F43 大项B: 检测 RETURN.md 状态
+    if (held.length === 1) {
+      const heldTaskId = held[0].task_id;
+      const returnPath = `${ctx.workspaceRoot}/task_cards/${heldTaskId}/RETURN.md`;
+      
+      try {
+        // 读取 RETURN.md
+        const fs = await import("node:fs");
+        if (fs.existsSync(returnPath)) {
+          const returnContent = fs.readFileSync(returnPath, "utf-8");
+          const { parseReturnStatus, extractAcceptanceSection } = await import("./loop-decisions.js");
+          const status = parseReturnStatus(returnContent);
+          
+          if (status === "IN_PROGRESS") {
+            // 状态为 IN_PROGRESS → 返回 guidance
+            const acceptanceText = extractAcceptanceSection(returnContent);
+            return {
+              kind: "guidance",
+              taskId: heldTaskId,
+              returnPath,
+              acceptanceText,
+            };
+          }
+        }
+      } catch (e) {
+        // RETURN.md 读取失败，降级为泛泛 stop
+        logger.warn("held-return-read-failed", { task_id: held[0].task_id, error: String(e) });
+      }
+    }
+    
     return { kind: "stop", reason: `已持有 ${held.map((t) => t.task_id).join(",")} —— 一卡一会话,先 return 再接新活` };
   }
 
