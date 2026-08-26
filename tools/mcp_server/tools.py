@@ -205,25 +205,50 @@ def _repo_root() -> Path:
 
 
 def _resolve_queue_workspace(args: dict[str, Any] | None) -> Path:
-    """AIPOS-F42: Resolve workspace root for queue verbs.
+    """AIPOS-F42-fix1: Resolve workspace root for queue verbs with projects_enforced validation.
     
     Resolution order:
-    1. Explicit workspace_root from args (if provided)
+    1. Explicit workspace_root from args (if provided) → validate against token projects scope
     2. Token project scope → resolved via _repo_root()
     3. Never silently fall back to gate's own workspace
     
-    This ensures that agents can explicitly specify which workspace to operate on,
-    and the gate never silently uses the wrong workspace.
+    AIPOS-F42-fix1 (F-1): When workspace_root is explicit AND token has projects scope,
+    validate that the target workspace's project is authorized. Prevents cross-project
+    leakage (e.g., lybra-scoped token accessing chris-huibojin workspace).
     """
     if args and args.get("workspace_root"):
         explicit = Path(str(args["workspace_root"]).strip()).expanduser().resolve()
-        if explicit.exists():
-            return explicit
-        # If explicit workspace_root does not exist, error with guidance
-        raise ValueError(
-            f"workspace_root does not exist: {explicit}. "
-            f"Check the path and ensure the workspace is accessible."
-        )
+        if not explicit.exists():
+            # If explicit workspace_root does not exist, error with guidance
+            raise ValueError(
+                f"workspace_root does not exist: {explicit}. "
+                f"Check the path and ensure the workspace is accessible."
+            )
+        
+        # AIPOS-F42-fix1 (F-1): Validate projects_enforced when workspace is explicit
+        token = _capability_token()
+        projects = token.get("projects")
+        if projects:  # Token has project scope → validate
+            # Resolve the target project from the explicit workspace
+            try:
+                target_project = _resolve_active_project_for(explicit, None)
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                raise ValueError(
+                    f"Cannot resolve project for workspace_root {explicit}: {exc}. "
+                    f"Ensure the workspace contains a valid project configuration."
+                )
+            
+            # Check if target_project is in token's authorized projects
+            if target_project not in [str(p) for p in projects]:
+                token_projects = list(projects) if isinstance(projects, list) else []
+                raise ValueError(
+                    f"PROJECT_SCOPE_DENIED: Token is scoped to projects {token_projects}, "
+                    f"but workspace_root resolves to project '{target_project}'. "
+                    f"Use a token authorized for '{target_project}' or operate within an authorized workspace."
+                )
+        
+        return explicit
+    
     # Fall back to token project scope resolution
     result = _repo_root()
     return result
