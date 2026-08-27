@@ -662,22 +662,45 @@ def derive_repair_card_on_fail(
             "message": str,
         }
     """
-    # 生成修复卡 ID: 原任务 ID + "-fix" + 轮次
-    # 检查已有多少轮修复卡
-    existing_fix_count = 0
-    queue_dir = governance_root / "5_tasks" / "queue" / "pending"
-    if queue_dir.is_dir():
-        for f in queue_dir.glob("*.md"):
-            if f.stem.startswith(f"{reviewed_task_id.lower()}-fix"):
-                existing_fix_count += 1
-    # 也检查 claimed/
-    claimed_dir = governance_root / "5_tasks" / "queue" / "claimed"
-    if claimed_dir.is_dir():
-        for f in claimed_dir.glob("*.md"):
-            if f.stem.startswith(f"{reviewed_task_id.lower()}-fix"):
-                existing_fix_count += 1
+    # AIPOS-F44B-fix1-fix1 幂等第三层: 级联终局判——已收账原卡不再派复审卡且留声
+    from tools.aipos_cli.records import load_records
+    records = load_records(governance_root)
+    task_closures = records.get("task_closures", {}).get(reviewed_task_id, [])
+    if task_closures:
+        # 原卡已有 closure 记录 = 已收账，不再派修复卡
+        closure_ids = [c.get("closure_id") for c in task_closures]
+        return {
+            "derived": False,
+            "repair_task_id": "",
+            "repair_task_path": "",
+            "message": (
+                f"级联终局判: 原卡 {reviewed_task_id} 已收账 (closures: {', '.join(closure_ids)}), "
+                f"不再派生修复卡 (AIPOS-F44B-fix1-fix1 幂等第三层)"
+            ),
+        }
 
-    fix_round = existing_fix_count + 1
+    # 生成修复卡 ID: 原任务 ID + "-fix" + 轮次
+    # AIPOS-F44B-fix1-fix1: fix 序号递增——按已有 fix 链递增（而非文件数）
+    # 检查已有多少轮修复卡（从 records 的 task_claims/task_returns 读取，单一数据源）
+    existing_fix_rounds = set()
+    queue_dir = governance_root / "5_tasks" / "queue" / "pending"
+    claimed_dir = governance_root / "5_tasks" / "queue" / "claimed"
+    completed_dir = governance_root / "5_tasks" / "queue" / "completed"
+    
+    # 扫描所有队列目录，找到已有的 fix 序号
+    for qdir in [queue_dir, claimed_dir, completed_dir]:
+        if qdir.is_dir():
+            for f in qdir.glob("*.md"):
+                if f.stem.startswith(f"{reviewed_task_id.lower()}-fix"):
+                    # 提取 fix 序号（如 AIPOS-F42-fix2 -> 2）
+                    try:
+                        suffix = f.stem.split("-fix")[-1]
+                        round_num = int(suffix)
+                        existing_fix_rounds.add(round_num)
+                    except (ValueError, IndexError):
+                        pass
+
+    fix_round = (max(existing_fix_rounds) + 1) if existing_fix_rounds else 1
     repair_task_id = f"{reviewed_task_id}-fix{fix_round}"
 
     # 检查是否已存在(幂等)

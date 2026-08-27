@@ -1531,11 +1531,38 @@ async function tryAutoReturn(): Promise<boolean> {
 
   if (isAuditCard) {
     // N4 完成判据:verdict 记录已落库 → 审计卡已完成 → 兜底网静默歇手
+    // AIPOS-F44B-fix1-fix1 幂等第一层: 托管提交前查本轮 audit_task 是否已有裁决，有则跳过
     const reviewedMatch = cardContent.match(/reviewed_task_id:\s*['"]?([^'"\n]+)['"]?/i);
     const reviewedTaskId = reviewedMatch ? reviewedMatch[1].trim() : currentTaskId.replace(/R$/i, "");
     const verdictDir = path.join(config.workspaceRoot, "5_tasks/records/audit_verdicts", reviewedTaskId);
     if (fs.existsSync(verdictDir)) {
       const vFiles = fs.readdirSync(verdictDir).filter((f: string) => f.endsWith(".md"));
+      
+      // 幂等第一层: 检查是否已有本轮 audit_task 的裁决
+      for (const vFile of vFiles) {
+        try {
+          const vContent = fs.readFileSync(path.join(verdictDir, vFile), "utf-8");
+          const auditTaskMatch = vContent.match(/audit_task_id:\s*['"]?([^'"\n]+)['"]?/i);
+          if (auditTaskMatch && auditTaskMatch[1].trim() === currentTaskId) {
+            currentLogger.info("auto-return-skip-audit-verdict-already-submitted", {
+              task_id: currentTaskId,
+              reviewed_task_id: reviewedTaskId,
+              verdict_file: vFile,
+              reason: "本轮审计卡已有裁决(幂等第一层)"
+            });
+            resetRuntimeState("审计卡已裁(本轮 verdict 已落库)歇手");
+            return false;
+          }
+        } catch (e) {
+          // 读取失败，继续检查其他文件
+          currentLogger.warn("verdict-file-read-error", {
+            file: vFile,
+            error: e instanceof Error ? e.message : String(e)
+          });
+        }
+      }
+      
+      // 原有逻辑: 检查是否有任意裁决（旧逻辑，作为兜底）
       if (vFiles.length > 0) {
         currentLogger.info("auto-return-skip-audit-verdict-exists", { task_id: currentTaskId, reviewed_task_id: reviewedTaskId, verdict_count: vFiles.length });
         resetRuntimeState("审计卡已裁(verdict 已落库)歇手");

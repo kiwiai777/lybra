@@ -3577,6 +3577,17 @@ def _build_audit_verdict_preview(
     
     if verdict_path.exists():
         blocking_reasons.append(f"Audit verdict record already exists: {verdict_rel}")
+    
+    # AIPOS-F44B-fix1-fix1 幂等第二层: 门侧拒收同一 audit_task 的重复裁决
+    # 检查 current_round_verdicts 是否已有本 audit_task_id 的裁决
+    if current_round_verdicts:
+        # 已有本轮审计卡的裁决，拒绝重复提交
+        existing_verdict_ids = [v.get("verdict_id") for v in current_round_verdicts]
+        blocking_reasons.append(
+            f"DUPLICATE_AUDIT_VERDICT: audit_task {audit_task_id} already submitted verdict(s). "
+            f"Existing: {', '.join(existing_verdict_ids)}. "
+            f"(幂等第二层: 同一审计卡不可重复提交裁决)"
+        )
 
     updated_reviewed = dict(reviewed_metadata)
     updated_reviewed["related_audit_verdict_ref"] = verdict_id
