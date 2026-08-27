@@ -204,6 +204,56 @@ def _repo_root() -> Path:
     return find_repo_root()
 
 
+def _resolve_queue_workspace(args: dict[str, Any] | None) -> Path:
+    """AIPOS-F42-fix1: Resolve workspace root for queue verbs with projects_enforced validation.
+    
+    Resolution order:
+    1. Explicit workspace_root from args (if provided) → validate against token projects scope
+    2. Token project scope → resolved via _repo_root()
+    3. Never silently fall back to gate's own workspace
+    
+    AIPOS-F42-fix1 (F-1): When workspace_root is explicit AND token has projects scope,
+    validate that the target workspace's project is authorized. Prevents cross-project
+    leakage (e.g., lybra-scoped token accessing chris-huibojin workspace).
+    """
+    if args and args.get("workspace_root"):
+        explicit = Path(str(args["workspace_root"]).strip()).expanduser().resolve()
+        if not explicit.exists():
+            # If explicit workspace_root does not exist, error with guidance
+            raise ValueError(
+                f"workspace_root does not exist: {explicit}. "
+                f"Check the path and ensure the workspace is accessible."
+            )
+        
+        # AIPOS-F42-fix1 (F-1): Validate projects_enforced when workspace is explicit
+        token = _capability_token()
+        projects = token.get("projects")
+        if projects:  # Token has project scope → validate
+            # Resolve the target project from the explicit workspace
+            try:
+                target_project = _resolve_active_project_for(explicit, None)
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                raise ValueError(
+                    f"Cannot resolve project for workspace_root {explicit}: {exc}. "
+                    f"Ensure the workspace contains a valid project configuration."
+                )
+            
+            # Check if target_project is in token's authorized projects
+            if target_project not in [str(p) for p in projects]:
+                token_projects = list(projects) if isinstance(projects, list) else []
+                raise ValueError(
+                    f"PROJECT_SCOPE_DENIED: Token is scoped to projects {token_projects}, "
+                    f"but workspace_root resolves to project '{target_project}'. "
+                    f"Use a token authorized for '{target_project}' or operate within an authorized workspace."
+                )
+        
+        return explicit
+    
+    # Fall back to token project scope resolution
+    result = _repo_root()
+    return result
+
+
 def _load_gate_connection_config() -> dict[str, Any]:
     """AIPOS-F24: Load gate's own connection.json for extracting rpc_url.
     
@@ -2225,7 +2275,7 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
     if selector_error is not None:
         return selector_error
 
-    repo_root = _repo_root()
+    repo_root = _resolve_queue_workspace(args)
     resolved = _resolve_claim_instance(agent_instance, repo_root)
     resolution = resolved["resolution"]
     canonical_agent_instance = str(resolved.get("canonical_agent_instance") or "").strip()
@@ -2348,7 +2398,7 @@ def lybra_queue_claim_confirm(arguments: dict[str, Any] | None = None) -> dict[s
             "Pass the same actor, agent_instance, and owner_policy_ref reviewed in the dry-run preview.",
         )
 
-    repo_root = _repo_root()
+    repo_root = _resolve_queue_workspace(args)
     resolved = _resolve_claim_instance(agent_instance, repo_root)
     resolution = resolved["resolution"]
     canonical_agent_instance = str(resolved.get("canonical_agent_instance") or "").strip()
@@ -2503,7 +2553,7 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
             "Call lybra_queue_return_dry_run with exactly one task selector.",
         )
 
-    repo_root = _repo_root()
+    repo_root = _resolve_queue_workspace(args)
     resolved = _resolve_claim_instance(agent_instance, repo_root)
     resolution = resolved["resolution"]
     canonical_agent_instance = str(resolved.get("canonical_agent_instance") or "").strip()
@@ -2591,7 +2641,7 @@ def lybra_queue_return_confirm(arguments: dict[str, Any] | None = None) -> dict[
             "Pass the same actor, agent_instance, and owner_policy_ref reviewed in the confirmation_preview.",
         )
 
-    repo_root = _repo_root()
+    repo_root = _resolve_queue_workspace(args)
     resolved = _resolve_claim_instance(agent_instance, repo_root)
     resolution = resolved["resolution"]
     canonical_agent_instance = str(resolved.get("canonical_agent_instance") or "").strip()
@@ -2704,7 +2754,7 @@ def _validate_supervised_audit_args(args: dict[str, Any], *, operation: str) -> 
             "agent_instance is required and must resolve to one canonical concrete instance.",
             "Pass the canonical agent_instance or a non-ambiguous legacy instance ID.",
         )
-    repo_root = _repo_root()
+    repo_root = _resolve_queue_workspace(args)
     resolved = _resolve_claim_instance(agent_instance, repo_root)
     resolution = resolved["resolution"]
     canonical_agent_instance = str(resolved.get("canonical_agent_instance") or "").strip()
@@ -2755,7 +2805,7 @@ def lybra_audit_dispatch_dry_run(arguments: dict[str, Any] | None = None) -> dic
         audit_agent_instance=str(args.get("audit_agent_instance") or "").strip(),
         dispatch_reason=str(args.get("dispatch_reason") or "").strip() or None,
         dry_run=True,
-        repo_root=_repo_root(),
+        repo_root=_resolve_queue_workspace(args),
     )
     decorated = _decorate_audit_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance, operation=RecordType.AUDIT_DISPATCH)
     return _tool_result(decorated, is_error=decorated.get("verdict") == Verdict.BLOCK or not bool(decorated.get("ok", False)))
@@ -2811,7 +2861,7 @@ def lybra_audit_dispatch_confirm(arguments: dict[str, Any] | None = None) -> dic
         return _audit_error("OWNER_POLICY_MISMATCH", "owner_policy_ref does not match the dry-run preview.", "Run dry-run again or confirm with the reviewed owner_policy_ref.")
     if str(source_data.get("canonical_agent_instance") or "") != canonical_agent_instance:
         return _audit_error("INSTANCE_MISMATCH", "agent_instance does not match the dry-run preview.", "Run dry-run again or confirm with the reviewed agent_instance.")
-    response = execute_dry_run(dry_run_token, actor, owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=_repo_root())
+    response = execute_dry_run(dry_run_token, actor, owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=_resolve_queue_workspace(args))
     if not response.get("ok", False):
         return _map_controlled_execute_error(response, dry_run_tool="lybra_audit_dispatch_dry_run")
     response["surface"] = "mcp"
@@ -2853,7 +2903,7 @@ def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict
         owner_waiver_ref=str(args.get("owner_waiver_ref") or "").strip() or None,
         agent_runtime=_agent_runtime_value(args),
         dry_run=True,
-        repo_root=_repo_root(),
+        repo_root=_resolve_queue_workspace(args),
     )
     decorated = _decorate_audit_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance, operation=RecordType.AUDIT_VERDICT)
     return _tool_result(decorated, is_error=decorated.get("verdict") == Verdict.BLOCK or not bool(decorated.get("ok", False)))
@@ -2909,7 +2959,7 @@ def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict
         return _audit_error("OWNER_POLICY_MISMATCH", "owner_policy_ref does not match the dry-run preview.", "Run dry-run again or confirm with the reviewed owner_policy_ref.")
     if str(source_data.get("canonical_agent_instance") or "") != canonical_agent_instance:
         return _audit_error("INSTANCE_MISMATCH", "agent_instance does not match the dry-run preview.", "Run dry-run again or confirm with the reviewed agent_instance.")
-    response = execute_dry_run(dry_run_token, actor, owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=_repo_root())
+    response = execute_dry_run(dry_run_token, actor, owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=_resolve_queue_workspace(args))
     if not response.get("ok", False):
         return _map_controlled_execute_error(response, dry_run_tool="lybra_audit_verdict_dry_run")
     response["surface"] = "mcp"
@@ -3096,7 +3146,7 @@ def lybra_queue_close_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         actor=actor,
         closure_evidence=closure_evidence,
         dry_run=True,
-        repo_root=_repo_root(),
+        repo_root=_resolve_queue_workspace(args),
     )
     if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
@@ -3142,7 +3192,7 @@ def lybra_queue_close_confirm(arguments: dict[str, Any] | None = None) -> dict[s
         actor=actor,
         closure_evidence=closure_evidence,
         dry_run=False,
-        repo_root=_repo_root(),
+        repo_root=_resolve_queue_workspace(args),
     )
     if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
@@ -3238,7 +3288,7 @@ def lybra_queue_withdraw_dry_run(arguments: dict[str, Any] | None = None) -> dic
         actor=actor,
         reason=reason,
         dry_run=True,
-        repo_root=_repo_root(),
+        repo_root=_resolve_queue_workspace(args),
     )
     if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
@@ -3283,7 +3333,7 @@ def lybra_queue_withdraw_confirm(arguments: dict[str, Any] | None = None) -> dic
         actor=actor,
         reason=reason,
         dry_run=False,
-        repo_root=_repo_root(),
+        repo_root=_resolve_queue_workspace(args),
     )
     if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
@@ -3337,7 +3387,7 @@ def lybra_queue_amend_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         amendments=amendments,
         amendment_reason=amendment_reason,
         dry_run=True,
-        repo_root=_repo_root(),
+        repo_root=_resolve_queue_workspace(args),
     )
     if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
@@ -3390,7 +3440,7 @@ def lybra_queue_amend_confirm(arguments: dict[str, Any] | None = None) -> dict[s
         amendments=amendments,
         amendment_reason=amendment_reason,
         dry_run=False,
-        repo_root=_repo_root(),
+        repo_root=_resolve_queue_workspace(args),
     )
     if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
@@ -3446,7 +3496,7 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
     
     # Write event record
     try:
-        repo_root = _repo_root()
+        repo_root = _resolve_queue_workspace(args)
         # AIPOS-357: event write root guard — task progress events MUST land in the
         # Lybra governance workspace (a root containing 5_tasks/queue), never the
         # product repo (which has no 5_tasks/queue). If _repo_root() resolved to a
@@ -5313,6 +5363,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "claim_reason": {"type": "string"},
                 "actual_model": {"type": "string"},
                 "reported_tokens": {"type": "integer"},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
             "additionalProperties": False,
@@ -5334,6 +5385,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "agent_instance": {"type": "string"},
                 "owner_policy_ref": {"type": "string"},
                 "owner_confirmation_token": {"type": "string"},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
             "additionalProperties": False,
@@ -5380,6 +5432,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                     },
                     "additionalProperties": False
                 },
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],
             "additionalProperties": False,
@@ -5401,6 +5454,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "agent_instance": {"type": "string"},
                 "owner_policy_ref": {"type": "string"},
                 "owner_confirmation_token": {"type": "string"},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
             "additionalProperties": False,
@@ -5430,6 +5484,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "audit_by": {"type": "string"},
                 "audit_agent_instance": {"type": "string"},
                 "dispatch_reason": {"type": "string"},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref", "audit_task_id", "audit_agent_instance"],
             "additionalProperties": False,
@@ -5451,6 +5506,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "agent_instance": {"type": "string"},
                 "owner_policy_ref": {"type": "string"},
                 "owner_confirmation_token": {"type": "string"},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
             "additionalProperties": False,
@@ -5495,6 +5551,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                     },
                     "additionalProperties": False
                 },
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["reviewed_task_id", "actor", "agent_instance", "autonomy_mode", "owner_policy_ref", "verdict"],
             "additionalProperties": False,
@@ -5516,6 +5573,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "agent_instance": {"type": "string"},
                 "owner_policy_ref": {"type": "string"},
                 "owner_confirmation_token": {"type": "string"},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
             "additionalProperties": False,
@@ -5601,6 +5659,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                     },
                     "additionalProperties": False,
                 },
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["task_id", "actor", "closure_evidence"],
             "additionalProperties": False,
@@ -5629,6 +5688,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                     },
                     "additionalProperties": False,
                 },
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["task_id", "actor", "closure_evidence"],
             "additionalProperties": False,
@@ -5687,6 +5747,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "task_id": {"type": "string"},
                 "actor": {"type": "string"},
                 "reason": {"type": "string", "description": "Why this task is being withdrawn."},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["task_id", "actor", "reason"],
             "additionalProperties": False,
@@ -5705,6 +5766,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "task_id": {"type": "string"},
                 "actor": {"type": "string"},
                 "reason": {"type": "string"},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["task_id", "actor", "reason"],
             "additionalProperties": False,
@@ -5729,6 +5791,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                     "additionalProperties": True,
                 },
                 "amendment_reason": {"type": "string", "description": "Why this amendment is needed."},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["task_id", "actor", "amendments", "amendment_reason"],
             "additionalProperties": False,
@@ -5751,6 +5814,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                     "additionalProperties": True,
                 },
                 "amendment_reason": {"type": "string"},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["task_id", "actor", "amendments", "amendment_reason"],
             "additionalProperties": False,
@@ -5775,6 +5839,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "model_self_reported": {"type": "string", "description": "Optional self-reported model identifier."},
                 "stage": {"type": "string", "description": "Optional stage marker (e.g., 'analysis', 'implementation')."},
                 "reason": {"type": "string", "description": "Optional reason (e.g., for blocked events)."},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["task_id", "event_type", "actor"],
             "additionalProperties": False,

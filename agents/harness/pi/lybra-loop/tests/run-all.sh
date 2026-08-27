@@ -55,6 +55,17 @@ for f in "${files[@]}"; do
 done
 
 # ── AIPOS-F41B: 分发一致性夹具(经 bin 入常驻) ──────────────────
+# AIPOS-F43-fix1: held卡号截断修复 + F43三大项
+echo
+echo "── tests/f43-fix1-comprehensive.test.ts ───────────────────────────────────────────────────"
+if node tests/f43-fix1-comprehensive.test.ts > /dev/null 2>&1; then
+  echo "✓ tests/f43-fix1-comprehensive.test.ts PASS"
+else
+  echo "✗ tests/f43-fix1-comprehensive.test.ts FAIL"
+  overall=1
+fi
+
+
 # 验证章程硬规矩分发与手册单一真相源一致(Δ=0,既有 Python 测试)
 echo
 echo "── tests/test_aipos_f41_hard_rules.py (分发一致性) ──────────────────────────────────────────"
