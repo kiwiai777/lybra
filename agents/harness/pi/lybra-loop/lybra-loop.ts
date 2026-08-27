@@ -77,6 +77,8 @@ let currentWorktreePath: string | null = null;
 // AIPOS-F16: 余热转入声门门 — 额度尽转余热的出声只发一次(转入时刻), 后续余热 tick 不重复刷屏。
 // 模式本身不入状态机: 余热 ≡ loopState.on && released>=maxN(现算现用)。
 let cooldownAnnounced = false;
+// AIPOS-F44C ⑥: 复工提醒去重 — 同卡同状态只出一次，状态变化才再出
+let lastResumeVoice: { taskId: string; status: string } | null = null;
 
 // ---------------------------------------------------------------------------
 // AIPOS-F19: 工位水位自检 — 磁盘/tmpfs 越阈出声带路(只喊不代删, 决策留人)
@@ -1541,13 +1543,11 @@ async function tryAutoReturn(): Promise<boolean> {
       }
     }
     
-    // AIPOS-F29 大项E: 审计车道同构托管 — 侦测审计报告(task_cards/<ID>/RETURN.md 或 audit_report.md)
-    // 报告就位 → 提取裁决三值(verdict/findings/summary) → 托管 audit_verdict 提交
-    const auditReportPath = path.join(config.workspaceRoot, "task_cards", currentTaskId, "RETURN.md");
-    const altReportPath = path.join(config.workspaceRoot, "task_cards", currentTaskId, "audit_report.md");
-    const reportPath = fs.existsSync(auditReportPath) ? auditReportPath : (fs.existsSync(altReportPath) ? altReportPath : null);
+    // AIPOS-F29 大项E: 审计车道同构托管 — 侦测审计报告(task_cards/<ID>/RETURN.md)
+    // AIPOS-F44C ⑥: 读报单文件收敛 — 只读 RETURN.md，删除 audit_report.md 备份逻辑
+    const reportPath = path.join(config.workspaceRoot, "task_cards", currentTaskId, "RETURN.md");
     
-    if (reportPath) {
+    if (fs.existsSync(reportPath)) {
       try {
         const reportContent = fs.readFileSync(reportPath, "utf-8");
         
@@ -2045,6 +2045,7 @@ async function doTick(): Promise<void> {
     }
 
     // AIPOS-F43 大项B: guidance outcome 处理(空闲带路)
+    // AIPOS-F44C ⑥: 输出分级 — guidance 是给模型的路标，不刷 Owner 屏
     if (outcome.kind === "guidance") {
       const { buildHeldGuidance } = await import("./loop-decisions.js");
       const guidanceMsg = buildHeldGuidance(outcome.taskId, outcome.returnPath, outcome.acceptanceText);
@@ -2054,7 +2055,16 @@ async function doTick(): Promise<void> {
         return_path: outcome.returnPath,
       });
       
-      voice(guidanceMsg, "info", true);
+      // guidance 只给模型(工位路标)，不给 Owner
+      if (liveCtx?.sendUserMessage) {
+        try {
+          liveCtx.sendUserMessage(guidanceMsg);
+        } catch (e) {
+          currentLogger.warn("held-guidance-send-failed", {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
       
       // guidance 不停循环,继续轮询(等待用户完成工作)
       loopState.running = false;
@@ -2157,13 +2167,18 @@ async function doTick(): Promise<void> {
             }
             if (!hasVerdict) {
               currentLogger.info("held-audit-no-verdict", { task_id: heldTaskId, reviewed_task_id: reviewedTaskId });
-              voice(`复工：${heldTaskId} 是审计卡，只差提交裁决(verdict 未落库)`, "info", true);
+              // AIPOS-F44C ⑥: 复工提醒去重 — 同卡同状态只出一次
+              const voiceKey = `${heldTaskId}:audit-no-verdict`;
+              if (!lastResumeVoice || lastResumeVoice.taskId !== heldTaskId || lastResumeVoice.status !== "audit-no-verdict") {
+                voice(`复工：${heldTaskId} 是审计卡，只差提交裁决(verdict 未落库)`, "info", true);
+                lastResumeVoice = { taskId: heldTaskId, status: "audit-no-verdict" };
+              }
               
               // AIPOS-F37 大项A: held 路调同一托管函数(F29/F29B/本次同族第三次收口)
               // 审计报告就位 → 走托管函数提交裁决, 禁投递复工(F22BR 实撞: held-audit-ctx-not-ready 死循环)
+              // AIPOS-F44C ⑥: 读报单文件收敛 — 只读 RETURN.md
               const auditReportPath = path.join(config.workspaceRoot, "task_cards", heldTaskId, "RETURN.md");
-              const altReportPath = path.join(config.workspaceRoot, "task_cards", heldTaskId, "audit_report.md");
-              const reportReady = fs.existsSync(auditReportPath) || fs.existsSync(altReportPath);
+              const reportReady = fs.existsSync(auditReportPath);
               
               if (reportReady) {
                 currentLogger.info("held-audit-report-ready", { task_id: heldTaskId, reviewed_task_id: reviewedTaskId });
@@ -2246,7 +2261,11 @@ async function doTick(): Promise<void> {
 
           // AIPOS-R8B 大项C①: held 且无 completed → 投递卡正文复工（会话中断后自动续做）
           currentLogger.info("held-resume", { task_id: heldTaskId });
-          voice(`复工：继续执行 ${heldTaskId}`, "info", true);
+          // AIPOS-F44C ⑥: 复工提醒去重 — 同卡同状态只出一次
+          if (!lastResumeVoice || lastResumeVoice.taskId !== heldTaskId || lastResumeVoice.status !== "exec-resume") {
+            voice(`复工：继续执行 ${heldTaskId}`, "info", true);
+            lastResumeVoice = { taskId: heldTaskId, status: "exec-resume" };
+          }
           
           // AIPOS-F37 大项A扩展: 执行车道 held 路托管接线 — RETURN.md 就位→走托管函数(与审计车道复用同一托管)
           const returnMdPath = path.join(config.workspaceRoot, "task_cards", heldTaskId, "RETURN.md");
@@ -2600,7 +2619,9 @@ export default function (pi: ExtensionAPI) {
           lines.push(`  模式: 余热收尾中(额度尽, 不领新卡, 在途卡收完即停; /lybra off 可停)`);
         }
         lines.push(`  停止原因: ${loopState.stoppedReason || "(无)"}`);
-        lines.push(`  gate: ${currentGateUrl || "(未配置)"}  role: ${currentRole || "-"}  actor: ${currentActor || "-"}`);
+        // AIPOS-F44C ⑤: status 文案说人话 — 循环未启动时说明如何启动，禁"(未配置)"字眼
+        const gateDisplay = currentGateUrl || "循环未启动, /lybra on 启动";
+        lines.push(`  gate: ${gateDisplay}  role: ${currentRole || "-"}  actor: ${currentActor || "-"}`);
         lines.push(`  token: ${fp}`);
         // AIPOS-F15B: 关键事件回看 — voice journal 最近 10 条(收账/复工/终停/异常BLOCK)
         const recentVoice = readVoiceJournalRecent(10);
@@ -2675,7 +2696,8 @@ export default function (pi: ExtensionAPI) {
             const localV = fres.local ?? "(无本地版本戳)";
             const remoteV = fres.remote;
             if (!remoteV) {
-              lines.push(`  清单比对: 本地 ${localV}, 线上版本无法获取(gate 无响应或未部署)`);
+              // AIPOS-F44C ⑤: 清单比对瞬时失败说"稍后重试"非"未部署"
+              lines.push(`  清单比对: 本地 ${localV}, 线上版本暂时无法获取(稍后重试)`);
             } else {
               lines.push(`  清单比对: 最新(本地 ${localV} == 线上 ${remoteV})`);
             }

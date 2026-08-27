@@ -3494,34 +3494,22 @@ def _build_audit_verdict_preview(
     # 派生审计(created_by=gate_derivation)检查 publish_index;
     # 非派生审计(手发卡)检查 audit_dispatch_index。
     # 关键:两条路径都必须有记录,不再区分首审/复审。
-    # AIPOS-F44B①: 派生判据放宽——gate_fix_closure_derivation 也属派生(级联修复)
-    created_by = str(audit_metadata.get("created_by") or "").strip()
-    is_derived_audit = created_by in ("gate_derivation", "gate_fix_closure_derivation")
+    is_derived_audit = str(audit_metadata.get("created_by") or "").strip() == "gate_derivation"
     dispatch_ref = str(audit_dispatch_record_ref or audit_metadata.get("audit_dispatch_record_ref") or reviewed_metadata.get("audit_dispatch_record_ref") or "").strip()
     
     if is_derived_audit:
         # 派生模式:出处 = 派生 publish 记录(publish_id 确定性可解析)
         if not dispatch_ref:
             dispatch_ref = stable_publish_id(str(audit_task.get("task_id") or ""))
-        # AIPOS-F44B②: ref 归一化——接受三种写法: publish_id 原值 / 带.md / 文件名
-        # publish_index 的键 = publish_id (如 publish_aipos-f45r, 不带 .md)
-        normalized_ref = dispatch_ref.replace(".md", "").replace("5_tasks/records/publishes/", "").split("/")[-1]
         if not dispatch_ref:
             blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: audit dispatch record ref is required")
-        elif not records.get("publish_index", {}).get(normalized_ref):
-            # AIPOS-F44B②: BLOCK 文案直接给出应传的 ref 值(publish_id 原值)
-            expected_ref = stable_publish_id(str(audit_task.get("task_id") or ""))
-            blocking_reasons.append(
-                f"MISSING_AUDIT_DISPATCH_RECORD: derivation publish ref does not resolve to a record. "
-                f"Expected ref format: '{expected_ref}' (publish_id without .md suffix)"
-            )
+        elif not records.get("publish_index", {}).get(dispatch_ref):
+            blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: derivation publish ref does not resolve to a record")
     else:
         # 非派生模式(手发卡):必须有 audit_dispatch 记录
-        # AIPOS-F44B②: ref 归一化——接受三种写法
-        normalized_ref = dispatch_ref.replace(".md", "").replace("5_tasks/records/audit_dispatches/", "").split("/")[-1]
         if not dispatch_ref:
             blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: audit dispatch record ref is required (non-derived audit must be dispatched via audit_dispatch_task)")
-        elif not records.get("audit_dispatch_index", {}).get(normalized_ref):
+        elif not records.get("audit_dispatch_index", {}).get(dispatch_ref):
             blocking_reasons.append("MISSING_AUDIT_DISPATCH_RECORD: dispatch ref does not resolve to a record")
     return_ref = str(reviewed_return_record_ref or audit_metadata.get("reviewed_return_record_ref") or reviewed_metadata.get("return_record_ref") or reviewed_metadata.get("return_event_ref") or "").strip()
     if not return_ref:
@@ -3552,15 +3540,26 @@ def _build_audit_verdict_preview(
     
     # AIPOS-FND-7F1: 检查已有裁决,PASS 终态不可翻案,FAIL/REQUEST_CHANGES 允许 supersede
     # AIPOS-R6S 大项A③: round 序号 — reopen 后的新 round 允许新的终态裁决。
+    # AIPOS-F44C ⑥: 轮次判定 — 按 audit_task_id 维度判定"已裁"，不是 reviewed_task 名下任意历史裁决
     reviewed_task_id_for_verdict = str(reviewed_task.get("task_id") or "")
+    audit_task_id = str(audit_task.get("task_id") or "")
     existing_verdicts = records.get("task_audit_verdicts", {}).get(reviewed_task_id_for_verdict, [])
+    
+    # 筛选出本轮审计卡的裁决（audit_task_id 维度）
+    current_round_verdicts = [
+        v for v in existing_verdicts
+        if str(v.get("audit_task_id") or "") == audit_task_id
+    ]
+    
     try:
         reviewed_round = int((reviewed_metadata or {}).get("round") or 1)
     except (TypeError, ValueError):
         reviewed_round = 1
-    if existing_verdicts and reviewed_round <= 1:
-        # 有已有裁决,检查最新裁决状态
-        latest_verdict = max(existing_verdicts, key=_verdict_time)
+    
+    # 只检查本轮审计卡的裁决，而非 reviewed_task 的所有历史裁决
+    if current_round_verdicts and reviewed_round <= 1:
+        # 有本轮裁决,检查最新裁决状态
+        latest_verdict = max(current_round_verdicts, key=_verdict_time)
         latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
         if latest_verdict_value in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
             blocking_reasons.append(f"Audit verdict cannot overturn PASS: reviewed task already has terminal PASS verdict")
