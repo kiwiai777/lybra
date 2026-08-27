@@ -153,6 +153,43 @@ else
   overall=1
 fi
 
+# AIPOS-F49: N3交回自检门四条判据(夹具入常驻/改动面在界内/有测试/RETURN非骨架)
+echo
+echo "── tests/test_aipos_f49_criterion_1_test_in_runall.py (判据① 夹具入常驻) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f49_criterion_1_test_in_runall.py"; then
+  echo "✓ tests/test_aipos_f49_criterion_1_test_in_runall.py PASS"
+else
+  echo "✗ tests/test_aipos_f49_criterion_1_test_in_runall.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f49_criterion_2_changes_in_scope.py (判据② 改动面在界内) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f49_criterion_2_changes_in_scope.py"; then
+  echo "✓ tests/test_aipos_f49_criterion_2_changes_in_scope.py PASS"
+else
+  echo "✗ tests/test_aipos_f49_criterion_2_changes_in_scope.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f49_criterion_3_has_tests.py (判据③ 有测试) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f49_criterion_3_has_tests.py"; then
+  echo "✓ tests/test_aipos_f49_criterion_3_has_tests.py PASS"
+else
+  echo "✗ tests/test_aipos_f49_criterion_3_has_tests.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f49_criterion_4_return_not_skeleton.py (判据④ RETURN非骨架) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f49_criterion_4_return_not_skeleton.py"; then
+  echo "✓ tests/test_aipos_f49_criterion_4_return_not_skeleton.py PASS"
+else
+  echo "✗ tests/test_aipos_f49_criterion_4_return_not_skeleton.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F44D-A: CLI角色解析不写死——自定义角色项目可用(chris迁移直接阻塞)
 echo
 echo "── tests/test_aipos_f44d_a_role_resolution_redgreen.py (先红后绿) ──────────────────────────────"
