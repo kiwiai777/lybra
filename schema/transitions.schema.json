@@ -494,6 +494,8 @@
     "N6": {
       "name": "close",
       "description": "任务结案(归档到 completed)",
+      "manual": true,
+      "manual_note": "AIPOS-F45: close 是 owner 职责节点，需人工决策结案时机（依赖项收齐/governance-commit 完成等），显式标注 manual",
       "from_states": [
         "finalized",
         "verdict_issued"
@@ -594,6 +596,8 @@
     "reopen": {
       "name": "reopen",
       "description": "重新打开已关闭任务(大项C②:完整回 pending 或原地重开,禁中间态)",
+      "manual": true,
+      "manual_note": "AIPOS-F45: reopen 是 owner 职责节点，需人工决策重开理由与模式（full_reset/resume_claim），显式标注 manual",
       "from_states": [
         "completed",
         "claimed"
