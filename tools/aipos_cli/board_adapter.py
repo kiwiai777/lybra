@@ -2507,7 +2507,10 @@ def _check_test_in_runall(
             return blocking_reasons  # git 失败，跳过检查
         
         changed_files = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-        test_files = [f for f in changed_files if "test" in f.lower()]
+        test_files = [
+            f for f in changed_files 
+            if "test" in f.lower() and not f.endswith("run-all.sh")
+        ]
         
         if not test_files:
             return blocking_reasons  # 无 test 文件，跳过
