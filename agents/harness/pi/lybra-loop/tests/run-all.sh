@@ -87,6 +87,16 @@ else
   overall=1
 fi
 
+# AIPOS-F47: 裁决提交会话绑定放宽(F34 同款)
+echo
+echo "── tests/test_aipos_f47_verdict_session_drift.py (裁决会话放宽) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f47_verdict_session_drift.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f47_verdict_session_drift.py PASS"
+else
+  echo "✗ tests/test_aipos_f47_verdict_session_drift.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
