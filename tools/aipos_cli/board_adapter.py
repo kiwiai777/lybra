@@ -3519,6 +3519,7 @@ def _build_audit_verdict_preview(
     # AIPOS-F44 ⑦: 会话记录不作为判决条件(F34 return 同款)。
     # 会话 ID 仍记录到 verdict record(可问责证据), 但不存在/不匹配不阻塞。
     session_id = str(audit_session_id or audit_metadata.get("active_session_id") or "").strip()
+    session_path = None  # 初始化，避免后续引用未定义变量
     if not session_id:
         warnings.append("AUDIT_SESSION_RECORD_ABSENT: audit session id not provided; recorded but not blocking (AIPOS-F44-⑦)")
     else:
