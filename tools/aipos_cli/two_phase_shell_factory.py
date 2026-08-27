@@ -26,10 +26,10 @@ def resolve_role_from_connection(
     required_role_class: str,
     repo_root: Path | None = None,
 ) -> str:
-    """AIPOS-F44D-A: 从连接文件+注册表解析实际角色名
+    """AIPOS-F44D-A-fix1: 从连接文件+注册表解析实际角色名
     
     问题: CLI 两阶段薄壳写死 role="executor", 导致自定义角色项目全断。
-    解决: 按连接文件实有角色 + roles 注册表角色类匹配。
+    解决: 优先从 token.role_class 读取，回退到 schema 注册表。
     
     Args:
         connection_json_path: connection.json 路径
@@ -52,15 +52,15 @@ def resolve_role_from_connection(
     if not tokens:
         raise ValueError(f"no tokens found in {connection_json_path}")
     
-    # 2. 读取 roles 注册表 (如果有 repo_root)
+    # 2. 读取 roles 注册表 (回退方案, 如果有 repo_root)
     role_class_map = {}  # {role_name: role_class}
     if repo_root:
-        roles_schema_path = repo_root / "0_ontology" / "schemas" / "roles.schema.yaml"
+        # AIPOS-F44D-A-fix1: 修正路径为 roles.schema.json (不是 .yaml)
+        roles_schema_path = repo_root / "0_ontology" / "schemas" / "roles.schema.json"
         if roles_schema_path.exists():
             try:
-                import yaml
-                roles_data = yaml.safe_load(roles_schema_path.read_text(encoding="utf-8"))
-                for role_def in roles_data.get("roles", []):
+                schema_data = json.loads(roles_schema_path.read_text(encoding="utf-8"))
+                for role_def in schema_data.get("roles", []):
                     role_name = role_def.get("role")
                     role_class = role_def.get("class")
                     if role_name and role_class:
@@ -76,7 +76,12 @@ def resolve_role_from_connection(
             continue
         available_roles.append(role)
         
-        # 优先按注册表角色类匹配
+        # AIPOS-F44D-A-fix1: 优先从 token 的 role_class 字段读取 (现成的, 零解析成本)
+        token_role_class = token.get("role_class")
+        if token_role_class and token_role_class == required_role_class:
+            return role
+        
+        # 回退: 按注册表角色类匹配
         if role in role_class_map:
             if role_class_map[role] == required_role_class:
                 return role
@@ -88,8 +93,9 @@ def resolve_role_from_connection(
     raise ValueError(
         f"No role with class '{required_role_class}' found in {connection_json_path}. "
         f"Available roles: {', '.join(available_roles)}. "
-        f"Please use a connection.json with a {required_role_class}-class role, "
-        f"or register your custom role in roles.schema.yaml with class={required_role_class}."
+        f"Please use a connection.json with a {required_role_class}-class role "
+        f"(add 'role_class: {required_role_class}' to the token entry), "
+        f"or register your custom role in 0_ontology/schemas/roles.schema.json with class={required_role_class}."
     )
 
 
