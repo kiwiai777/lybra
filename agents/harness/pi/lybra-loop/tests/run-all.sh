@@ -77,6 +77,26 @@ else
   overall=1
 fi
 
+# AIPOS-F44A: 门应答开口三项(额度告知+报错带路+N6待办)
+echo
+echo "── tests/test_aipos_f44a_response_opening.py (门应答开口三项) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f44a_response_opening.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f44a_response_opening.py PASS"
+else
+  echo "✗ tests/test_aipos_f44a_response_opening.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F47: 裁决提交会话绑定放宽(F34 同款)
+echo
+echo "── tests/test_aipos_f47_verdict_session_drift.py (裁决会话放宽) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f47_verdict_session_drift.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f47_verdict_session_drift.py PASS"
+else
+  echo "✗ tests/test_aipos_f47_verdict_session_drift.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

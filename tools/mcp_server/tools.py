@@ -654,22 +654,24 @@ def _scope_denied_result() -> dict[str, Any]:
 
 def _scope_denied_result_for(scope: str, label: str) -> dict[str, Any]:
     # AIPOS-330 S4: Actionable rejection — say who holds this scope.
+    # AIPOS-F44A ④: Enhanced to explicitly state "this step requires X role"
     from tools.aipos_cli.verb_contract import who_holds_scope
     holders = who_holds_scope(scope)
     holders_text = ", ".join(holders) if holders else "(no role currently holds this scope)"
     return _teaching_error(
         "SCOPE_DENIED",
         f"Connection capability does not include '{scope}'; {label} are not available. "
-        f"Roles that hold '{scope}': {holders_text}.",
+        f"This step requires one of these roles: {holders_text}.",
         (
             f"Bearer transport auth may still be valid, but scoped mutation tools stay hidden until "
             f"LYBRA_CAPABILITY_TOKEN contains operations: [\"{scope}\"]. "
-            f"Roles holding this scope: {holders_text}. "
+            f"This operation requires one of these roles: {holders_text}. "
+            f"If you need this capability, switch to a token with the required role or ask your advisor to delegate the command. "
             f"If you are the auditor and the scope is 'audit_verdict', your token DOES hold it — "
             f"the 'owner' in 'owner_confirmation_token' is a parameter name, not a scope requirement. "
             f"Run `lybra mcp doctor` to inspect redacted effective scopes."
         ),
-        doc_ref="AIPOS-109 capability token scope-gated tool visibility; AIPOS-330 S4 actionable rejection",
+        doc_ref="AIPOS-109 capability token scope-gated tool visibility; AIPOS-330 S4 actionable rejection; AIPOS-F44A error guidance",
     )
 
 
@@ -2061,12 +2063,13 @@ def _match_claim_envelope(
     task_path: str | None,
     canonical_agent_instance: str,
     actor: str,
-) -> tuple[str | None, str | None, str | None]:
-    """Return (owner_policy_ref, binding_status, error_code) iff it names an active Owner-signed envelope that strictly
-    matches this claim; else (None, binding_status_reason, error_code). Loading a policy for a ref that
-    does not resolve returns (None, None, None) (★A1 anti-forgery: a ref to a nonexistent/unauthorized policy
+) -> tuple[str | None, str | None, str | None, dict[str, Any] | None]:
+    """Return (owner_policy_ref, binding_status, error_code, quota_info) iff it names an active Owner-signed envelope that strictly
+    matches this claim; else (None, binding_status_reason, error_code, None). Loading a policy for a ref that
+    does not resolve returns (None, None, None, None) (★A1 anti-forgery: a ref to a nonexistent/unauthorized policy
     grants nothing). binding_status is informational for identity_provenance when falling back Supervised.
-    AIPOS-F9: error_code maps to transitions.schema.json envelope_guards for structured next_step."""
+    AIPOS-F9: error_code maps to transitions.schema.json envelope_guards for structured next_step.
+    AIPOS-F44A: quota_info carries remaining quota and low water warning when matched."""
     # AIPOS-250B: PreAuthorized identity gate (zero-dependency, token authority).
     # The claim's agent_instance (and actor) MUST match the canonical instance bound to the
     # request token in connection.json. No binding or mismatch → fall back Supervised.
@@ -2106,26 +2109,26 @@ def _match_claim_envelope(
     if not bound:
         # Token has no agent_instance binding → PreAuthorized unavailable (backward-compatible).
         _emit("identity_gate", None, "binding_absent", reason="token has no agent_instance binding")
-        return None, "binding_absent", None
+        return None, "binding_absent", None, None
     if bound != canonical_agent_instance or bound != actor:
         # Identity mismatch: claim self-report doesn't match token authority → fall back Supervised.
         _emit("identity_gate", None, "binding_mismatch", reason="claim self-report does not match token-bound agent_instance")
-        return None, "binding_mismatch", None
+        return None, "binding_mismatch", None, None
     policy = load_policy(repo_root, owner_policy_ref)
     if policy is None:
         _emit("policy_load", None, None, policy_loaded=False)
-        return None, None, None
+        return None, None, None, None
     snapshot = load_task_snapshot(repo_root, task_id=task_id, path=task_path)
     if snapshot is None:
         _emit("snapshot_load", None, None, policy_loaded=True, snapshot_loaded=False)
-        return None, None, None
+        return None, None, None, None
     # Envelope auto-release covers only pending (claimable) queue tasks — anything else drops to
     # the Supervised path (which will itself surface why the task is not claimable).
     queue_state = str(snapshot.get("queue_state") or "").strip()
     if queue_state != "pending":
         _emit("queue_state_guard", None, None, policy_loaded=True, snapshot_loaded=True,
               queue_state=queue_state, reason="envelope covers pending tasks only")
-        return None, None, None
+        return None, None, None, None
     released = count_preauthorized_claims(repo_root, owner_policy_ref)
     # AIPOS-363 S4: carry the calling role so an envelope may name an AIPOS-352 custom role
     # (e.g. agent_or_role: kaia-asst) and still match an agent claiming under that role.
@@ -2145,7 +2148,25 @@ def _match_claim_envelope(
           policy_loaded=True, snapshot_loaded=True, queue_state=queue_state,
           released_count=released, inner_matched=matched, inner_reason=inner_reason,
           error_code=error_code, release_switch=matched)
-    return (owner_policy_ref, None, None) if matched else (None, None, error_code)
+    # AIPOS-F44A ①: Compute quota info for matched envelopes (remaining count + low water warning)
+    quota_info = None
+    if matched:
+        try:
+            max_tasks = int(policy.get("max_tasks") or 0)
+            if max_tasks > 0:
+                remaining = max_tasks - released
+                quota_info = {
+                    "released": released,
+                    "max_tasks": max_tasks,
+                    "remaining": remaining,
+                }
+                # Low water warning: remaining ≤ 10% of max_tasks
+                if remaining <= max_tasks * 0.1:
+                    quota_info["low_water_warning"] = True
+                    quota_info["warning_message"] = f"信封额度低水位:剩余 {remaining}/{max_tasks} (≤10%)。请顾问续期信封或发放新信封。"
+        except (TypeError, ValueError):
+            pass
+    return (owner_policy_ref, None, None, quota_info) if matched else (None, None, error_code, None)
 
 
 def _preauthorized_claim_autorelease(
@@ -2158,6 +2179,7 @@ def _preauthorized_claim_autorelease(
     policy_id: str,
     resolution_label: str,
     reg_available: bool,
+    quota_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One-stage PreAuthorized release: run a claim dry-run with owner_confirmation NOT required
     (the envelope already authorized it), then immediately execute it. The executor never calls
@@ -2233,6 +2255,9 @@ def _preauthorized_claim_autorelease(
         "result": executed.get("verdict"),
         "dry_run_id": dry_run_token,
     }
+    # AIPOS-F44A ①: Attach quota_info with low water warning if present
+    if quota_info:
+        executed["envelope_quota"] = quota_info
     return _tool_result(executed, is_error=False)
 
 
@@ -2310,8 +2335,9 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
     # AIPOS-F30: Initialize envelope_error_info before conditional blocks to prevent UnboundLocalError
     # when requested_mode is Supervised (skips the PreAuthorized block but still references the variable)
     envelope_error_info = None
+    quota_info = None
     if requested_mode == AUTONOMY_MODE_PREAUTHORIZED:
-        matched_policy_id, binding_status, envelope_error_code = _match_claim_envelope(
+        matched_policy_id, binding_status, envelope_error_code, quota_info = _match_claim_envelope(
             repo_root,
             owner_policy_ref=owner_policy_ref,
             task_id=task_id,
@@ -2329,6 +2355,7 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
                 policy_id=matched_policy_id,
                 resolution_label=resolution_label,
                 reg_available=reg_available,
+                quota_info=quota_info,
             )
         # fall through to a Supervised preview (fail-safe: 回落 Supervised 逐单).
         # AIPOS-F9: if envelope mismatch, attach error_code and next_step from schema declaration

@@ -243,9 +243,19 @@ def _normalize_exception(operation: str, exc: Exception, *, dry_run: bool, actor
     category = "INTERNAL_ERROR"
     field: str | None = None
     lowered = message.lower()
+    # AIPOS-F44A ④: Enhanced guidance for common errors
+    suggested_next_action = None
 
     if isinstance(exc, FileNotFoundError):
         category = "NOT_FOUND"
+        # AIPOS-F44A ④: "No task found" with three candidate reasons + actions
+        if "no task found" in lowered:
+            suggested_next_action = (
+                "Task not found. Three common reasons:\n"
+                "1. No publish record: Task may be a draft. Action: Run 'lybra draft publish <task_id>' to publish it.\n"
+                "2. Workspace mismatch: Task may be in a different workspace. Action: Check workspace_root or switch to correct workspace.\n"
+                "3. Task already closed: Task may have reached a terminal state (completed/cancelled). Action: Check task status in queue/completed/ or queue/cancelled/."
+            )
     elif isinstance(exc, ValueError):
         category = "VALIDATION_ERROR"
         if "duplicate task_id" in lowered:
@@ -265,6 +275,11 @@ def _normalize_exception(operation: str, exc: Exception, *, dry_run: bool, actor
     elif isinstance(exc, KeyError | TypeError):
         category = "BACKEND_CONTRACT_MISMATCH"
 
+    errors = [error_entry(category, message, field=field)]
+    # AIPOS-F44A ④: Add suggested_next_action to error details
+    if suggested_next_action:
+        errors[0]["details"]["suggested_next_action"] = suggested_next_action
+
     return make_response(
         ok=False,
         verdict=Verdict.BLOCK,
@@ -279,7 +294,7 @@ def _normalize_exception(operation: str, exc: Exception, *, dry_run: bool, actor
         owner_confirmation_required=False,
         owner_confirmation_reasons=[],
         safety_notice=READ_SAFETY_NOTICE if dry_run is False and operation.startswith("get_") else MUTATION_DRY_RUN_NOTICE,
-        errors=[error_entry(category, message, field=field)],
+        errors=errors,
     )
 
 
@@ -3432,8 +3447,11 @@ def _build_audit_verdict_preview(
         blocking_reasons.append("REVIEWED_TASK_MISMATCH: audit task reviewed_task_id does not match request")
     if audit_claim_id and str(audit_metadata.get("claim_id") or "") != audit_claim_id:
         blocking_reasons.append("AUDIT_CLAIM_MISMATCH: audit_claim_id does not match audit task")
+    # AIPOS-F44 ⑦: 裁决动词会话绑定放宽到工位双锁(token+agent_instance)。
+    # 会话字段仍记录(可问责证据保留), 但不作为拒绝条件(F34 return 同款)。
+    # 冒交防线由 INSTANCE_MISMATCH(agent_instance 匹配) + 服务层 token 校验保证。
     if audit_session_id and str(audit_metadata.get("active_session_id") or "") != audit_session_id:
-        blocking_reasons.append("AUDIT_SESSION_MISMATCH: audit_session_id does not match audit task")
+        warnings.append(f"AUDIT_SESSION_DRIFT: audit_session_id changed (claimed={audit_metadata.get('active_session_id')}, verdict={audit_session_id}); recorded but not blocking (AIPOS-F44-⑦)")
 
     # AIPOS-R6A F-004修复: 从 return record 自动提取 reviewed_executor_instance
     # 审计卡可能没有 reviewed_executor_instance 字段，但 return record 里有
@@ -3498,12 +3516,16 @@ def _build_audit_verdict_preview(
         blocking_reasons.append("MISSING_RETURN_RECORD: reviewed return record ref is required")
     elif not records.get("return_index", {}).get(return_ref):
         blocking_reasons.append("MISSING_RETURN_RECORD: reviewed return record ref does not resolve to a record")
+    # AIPOS-F44 ⑦: 会话记录不作为判决条件(F34 return 同款)。
+    # 会话 ID 仍记录到 verdict record(可问责证据), 但不存在/不匹配不阻塞。
     session_id = str(audit_session_id or audit_metadata.get("active_session_id") or "").strip()
+    session_path = None  # 初始化，避免后续引用未定义变量
     if not session_id:
-        blocking_reasons.append("MISSING_AUDIT_SESSION_RECORD: audit session id is required")
-    session_path = session_record_path(repo_root, str(audit_task.get("task_id") or ""), session_id) if session_id else None
-    if session_path is None or not session_path.exists():
-        blocking_reasons.append("MISSING_AUDIT_SESSION_RECORD: audit session record does not exist")
+        warnings.append("AUDIT_SESSION_RECORD_ABSENT: audit session id not provided; recorded but not blocking (AIPOS-F44-⑦)")
+    else:
+        session_path = session_record_path(repo_root, str(audit_task.get("task_id") or ""), session_id)
+        if session_path is None or not session_path.exists():
+            warnings.append(f"AUDIT_SESSION_RECORD_MISSING: audit session record does not exist at {session_path}; recorded but not blocking (AIPOS-F44-⑦)")
 
     if any(_unsafe_return_ref(ref) for ref in evidence_refs):
         blocking_reasons.append("Audit evidence refs must be repo-relative or approved workspace-relative and secret-free")
@@ -5650,6 +5672,12 @@ def close_task(
                     "related_audit_task_refs": related_audit_refs,
                     "mutation_preview": mutation_result,
                     "governance_warnings": governance_warnings,
+                    # AIPOS-F44A ⑥: N6 next_step preview in dry_run
+                    "next_step_preview": {
+                        "audience": "advisor",
+                        "action": "任务将 close，完成后待 N6 governance-commit。",
+                        "command": f"cd {resolved_root} && git add governance/ 5_tasks/records/closures/{resolved_task_id}/ && git commit -m 'N6: governance commit for {resolved_task_id}'",
+                    },
                 },
                 blocking_reasons=mutation_result.get("blocking_reasons", []),
                 warnings=combined_warnings,
@@ -5898,31 +5926,39 @@ def close_task(
 
         combined_warnings = list(mutation_result.get("warnings", []))
         combined_warnings.extend(governance_warnings)
+        # AIPOS-F44A ⑥: Add N6 next_step to close success response
+        response_data = {
+            "task_id": resolved_task_id,
+            "source_path": source_path,
+            "target_path": mutation_result.get("target_path"),
+            "from_state": "claimed",
+            "to_state": "completed",
+            "closure_id": closure_id,
+            "closure_record_path": str(closure_path.resolve().relative_to(resolved_root.resolve())),
+            "closure_evidence": closure_evidence_bundle,
+            "return_record_ref": return_record_ref,
+            "related_audit_task_refs": related_audit_refs,
+            "auto_closed_audit_cards": auto_closed,
+            "auto_generated_backlog_entry": auto_generated_backlog_entry,  # AIPOS-A1 大项B
+            "fix_derivation_result": fix_derivation_result,  # AIPOS-F18 大项A: fix卡派生复审结果
+            "mutation_result": {
+                "moved": mutation_result.get("moved"),
+                "wrote": mutation_result.get("wrote"),
+            },
+            "governance_warnings": governance_warnings,
+            # AIPOS-F44A ⑥: N6 next_step - governance commit
+            "next_step": {
+                "audience": "advisor",
+                "action": "任务已 close，待 N6 governance-commit （将 closure 记录、FOUNDATION-BACKLOG 等治理档提交到治理仓）。",
+                "command": f"cd {resolved_root} && git add governance/ 5_tasks/records/closures/{resolved_task_id}/ && git commit -m 'N6: governance commit for {resolved_task_id}'",
+            },
+        }
         return make_response(
             ok=True,
             operation=operation,
             dry_run=False,
             verdict=mutation_result.get("verdict", Verdict.PASS),
-            data={
-                "task_id": resolved_task_id,
-                "source_path": source_path,
-                "target_path": mutation_result.get("target_path"),
-                "from_state": "claimed",
-                "to_state": "completed",
-                "closure_id": closure_id,
-                "closure_record_path": str(closure_path.resolve().relative_to(resolved_root.resolve())),
-                "closure_evidence": closure_evidence_bundle,
-                "return_record_ref": return_record_ref,
-                "related_audit_task_refs": related_audit_refs,
-                "auto_closed_audit_cards": auto_closed,
-                "auto_generated_backlog_entry": auto_generated_backlog_entry,  # AIPOS-A1 大项B
-                "fix_derivation_result": fix_derivation_result,  # AIPOS-F18 大项A: fix卡派生复审结果
-                "mutation_result": {
-                    "moved": mutation_result.get("moved"),
-                    "wrote": mutation_result.get("wrote"),
-                },
-                "governance_warnings": governance_warnings,
-            },
+            data=response_data,
             warnings=combined_warnings,
             safety_notice="AIPOS-283/289 queue_close completed. Closure record written (append-only)." + (" FOUNDATION-BACKLOG entry auto-generated (AIPOS-A1)." if auto_generated_backlog_entry else "") + (f" 派生复审卡 {derived_audit_for_source_task}(AIPOS-F18)." if derived_audit_for_source_task else ""),
         )

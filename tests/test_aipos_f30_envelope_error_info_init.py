@@ -91,7 +91,8 @@ class TestEnvelopeErrorInfoInitialization:
                         mock_selector.return_value = ("TEST-TASK-001", None, None)
                         with patch("tools.mcp_server.tools._match_claim_envelope") as mock_match:
                             # PreAuthorized路径:envelope不匹配,回落Supervised
-                            mock_match.return_value = (None, "envelope_mismatch", "ENVELOPE_EXPIRED")
+                            # AIPOS-F44A: _match_claim_envelope now returns 4 values (added quota_info)
+                            mock_match.return_value = (None, "envelope_mismatch", "ENVELOPE_EXPIRED", None)
                             with patch("tools.mcp_server.tools._load_envelope_guard_declaration") as mock_guard:
                                 mock_guard.return_value = {
                                     "error_message": "Envelope expired",
