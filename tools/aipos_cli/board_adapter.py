@@ -3447,8 +3447,11 @@ def _build_audit_verdict_preview(
         blocking_reasons.append("REVIEWED_TASK_MISMATCH: audit task reviewed_task_id does not match request")
     if audit_claim_id and str(audit_metadata.get("claim_id") or "") != audit_claim_id:
         blocking_reasons.append("AUDIT_CLAIM_MISMATCH: audit_claim_id does not match audit task")
+    # AIPOS-F44 ⑦: 裁决动词会话绑定放宽到工位双锁(token+agent_instance)。
+    # 会话字段仍记录(可问责证据保留), 但不作为拒绝条件(F34 return 同款)。
+    # 冒交防线由 INSTANCE_MISMATCH(agent_instance 匹配) + 服务层 token 校验保证。
     if audit_session_id and str(audit_metadata.get("active_session_id") or "") != audit_session_id:
-        blocking_reasons.append("AUDIT_SESSION_MISMATCH: audit_session_id does not match audit task")
+        warnings.append(f"AUDIT_SESSION_DRIFT: audit_session_id changed (claimed={audit_metadata.get('active_session_id')}, verdict={audit_session_id}); recorded but not blocking (AIPOS-F44-⑦)")
 
     # AIPOS-R6A F-004修复: 从 return record 自动提取 reviewed_executor_instance
     # 审计卡可能没有 reviewed_executor_instance 字段，但 return record 里有
@@ -3513,12 +3516,15 @@ def _build_audit_verdict_preview(
         blocking_reasons.append("MISSING_RETURN_RECORD: reviewed return record ref is required")
     elif not records.get("return_index", {}).get(return_ref):
         blocking_reasons.append("MISSING_RETURN_RECORD: reviewed return record ref does not resolve to a record")
+    # AIPOS-F44 ⑦: 会话记录不作为判决条件(F34 return 同款)。
+    # 会话 ID 仍记录到 verdict record(可问责证据), 但不存在/不匹配不阻塞。
     session_id = str(audit_session_id or audit_metadata.get("active_session_id") or "").strip()
     if not session_id:
-        blocking_reasons.append("MISSING_AUDIT_SESSION_RECORD: audit session id is required")
-    session_path = session_record_path(repo_root, str(audit_task.get("task_id") or ""), session_id) if session_id else None
-    if session_path is None or not session_path.exists():
-        blocking_reasons.append("MISSING_AUDIT_SESSION_RECORD: audit session record does not exist")
+        warnings.append("AUDIT_SESSION_RECORD_ABSENT: audit session id not provided; recorded but not blocking (AIPOS-F44-⑦)")
+    else:
+        session_path = session_record_path(repo_root, str(audit_task.get("task_id") or ""), session_id)
+        if session_path is None or not session_path.exists():
+            warnings.append(f"AUDIT_SESSION_RECORD_MISSING: audit session record does not exist at {session_path}; recorded but not blocking (AIPOS-F44-⑦)")
 
     if any(_unsafe_return_ref(ref) for ref in evidence_refs):
         blocking_reasons.append("Audit evidence refs must be repo-relative or approved workspace-relative and secret-free")
