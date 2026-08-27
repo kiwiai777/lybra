@@ -190,6 +190,16 @@ else
   overall=1
 fi
 
+# AIPOS-F49-fix1: owner_confirmation_token 强制放行机制（Owner底线：Lybra永不阻塞项目）
+echo
+echo "── tests/test_aipos_f49_fix1_owner_waiver.py (Owner放行机制) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f49_fix1_owner_waiver.py"; then
+  echo "✓ tests/test_aipos_f49_fix1_owner_waiver.py PASS"
+else
+  echo "✗ tests/test_aipos_f49_fix1_owner_waiver.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F44D-A: CLI角色解析不写死——自定义角色项目可用(chris迁移直接阻塞)
 echo
 echo "── tests/test_aipos_f44d_a_role_resolution_redgreen.py (先红后绿) ──────────────────────────────"
