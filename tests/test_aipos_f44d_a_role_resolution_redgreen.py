@@ -45,16 +45,17 @@ def test_red_hardcoded_executor():
 def test_green_resolve_custom_role():
     """绿测试: resolve_role_from_connection 成功解析自定义角色"""
     
-    # 创建自定义角色连接文件 + roles.schema.yaml
+    # 创建自定义角色连接文件 + roles.schema.json
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
         
-        # 连接文件
+        # 连接文件 (AIPOS-F44D-A-fix1: 添加 role_class 字段)
         conn_path = tmpdir / "connection.json"
         conn_data = {
             "tokens": [
                 {
                     "role": "hbj-coder",
+                    "role_class": "executor",  # 优先从这里读取
                     "agent_instance": "code.hbj.local",
                     "token": "test-token-123",
                     "scopes": ["queue_claim", "queue_return"]
@@ -63,19 +64,25 @@ def test_green_resolve_custom_role():
         }
         conn_path.write_text(json.dumps(conn_data), encoding="utf-8")
         
-        # roles.schema.yaml (注册表)
+        # roles.schema.json (注册表，回退方案)
         schema_dir = tmpdir / "0_ontology" / "schemas"
         schema_dir.mkdir(parents=True)
-        schema_path = schema_dir / "roles.schema.yaml"
-        schema_content = """roles:
-  - role: hbj-coder
-    class: executor
-    description: Chris project custom executor
-  - role: hbj-auditor
-    class: auditor
-    description: Chris project custom auditor
-"""
-        schema_path.write_text(schema_content, encoding="utf-8")
+        schema_path = schema_dir / "roles.schema.json"
+        schema_content = {
+            "roles": [
+                {
+                    "role": "hbj-coder",
+                    "class": "executor",
+                    "description": "Chris project custom executor"
+                },
+                {
+                    "role": "hbj-auditor",
+                    "class": "auditor",
+                    "description": "Chris project custom auditor"
+                }
+            ]
+        }
+        schema_path.write_text(json.dumps(schema_content), encoding="utf-8")
         
         # 测试新代码: resolve_role_from_connection
         from tools.aipos_cli.two_phase_shell_factory import resolve_role_from_connection
@@ -93,7 +100,7 @@ def test_green_resolve_custom_role():
 def test_green_standard_roles_backward_compatible():
     """绿测试: 标准角色 (executor/auditor) 向后兼容"""
     
-    # 创建标准角色连接文件（无 roles.schema.yaml）
+    # 创建标准角色连接文件（无 role_class，无 roles.schema.json）
     with tempfile.TemporaryDirectory() as tmpdir:
         conn_path = Path(tmpdir) / "connection.json"
         conn_data = {
@@ -107,7 +114,7 @@ def test_green_standard_roles_backward_compatible():
         }
         conn_path.write_text(json.dumps(conn_data), encoding="utf-8")
         
-        # 测试: 无注册表时降级为名字匹配
+        # 测试: 无 role_class、无注册表时降级为名字匹配
         from tools.aipos_cli.two_phase_shell_factory import resolve_role_from_connection
         
         resolved_role = resolve_role_from_connection(
@@ -121,8 +128,8 @@ def test_green_standard_roles_backward_compatible():
 
 
 if __name__ == "__main__":
-    print("=== AIPOS-F44D-A 先红后绿测试 ===")
+    print("=== AIPOS-F44D-A-fix1 先红后绿测试 ===")
     test_red_hardcoded_executor()
     test_green_resolve_custom_role()
     test_green_standard_roles_backward_compatible()
-    print("✓ AIPOS-F44D-A 先红后绿测试全部通过")
+    print("✓ AIPOS-F44D-A-fix1 先红后绿测试全部通过")
