@@ -577,9 +577,21 @@ def check_verdict_ref_authorization(
         if not task_id:
             uncovered.append(f"{commit_hash[:8]}: commit message 无 task_id ({subject[:40]})")
         elif task_id != reviewed_task_id:
-            uncovered.append(
-                f"{commit_hash[:8]}: 属于 {task_id}, 但裁决审的是 {reviewed_task_id} (跨卡挪用)"
-            )
+            # AIPOS-F44B③: 修复轮承接——FAIL 卡的 commit 由其 fix 链末端 PASS 裁决自动承接
+            # 判断: task_id 是否为 reviewed_task_id 的原始卡 (reviewed_task_id 是其 fix)
+            is_fix_chain = False
+            if "-fix" in reviewed_task_id.lower():
+                # reviewed_task_id 是修复卡 (如 AIPOS-F42-fix2)
+                # task_id 可能是原卡 (如 AIPOS-F42) 或更早的 fix (如 AIPOS-F42-fix1)
+                base_task = reviewed_task_id.split("-fix")[0]
+                if task_id == base_task or task_id.startswith(f"{base_task}-fix"):
+                    # 属于同一 fix 链，允许承接
+                    is_fix_chain = True
+            
+            if not is_fix_chain:
+                uncovered.append(
+                    f"{commit_hash[:8]}: 属于 {task_id}, 但裁决审的是 {reviewed_task_id} (跨卡挪用)"
+                )
     
     if uncovered:
         return {
