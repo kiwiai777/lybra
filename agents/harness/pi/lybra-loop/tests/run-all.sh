@@ -200,6 +200,16 @@ else
   overall=1
 fi
 
+# AIPOS-F49-fix1-fix1: 修复 owner_confirmation_token 数据流断裂（注入到 mcp_return_metadata）
+echo
+echo "── tests/test_aipos_f49_fix1_fix1_dataflow.py (数据流贯通) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f49_fix1_fix1_dataflow.py"; then
+  echo "✓ tests/test_aipos_f49_fix1_fix1_dataflow.py PASS"
+else
+  echo "✗ tests/test_aipos_f49_fix1_fix1_dataflow.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F44D-A: CLI角色解析不写死——自定义角色项目可用(chris迁移直接阻塞)
 echo
 echo "── tests/test_aipos_f44d_a_role_resolution_redgreen.py (先红后绿) ──────────────────────────────"
