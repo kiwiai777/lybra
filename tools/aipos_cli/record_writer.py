@@ -620,6 +620,8 @@ def build_mcp_return_record_markdown(
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
     confirmer: dict[str, Any] | None = None,
+    self_check_waived: bool = False,
+    self_check_waiver_reason: str | None = None,
 ) -> str:
     metadata = {
         "record_type": RecordType.RETURN_RECORD,
@@ -672,6 +674,12 @@ def build_mcp_return_record_markdown(
     # key — the popup reads absent-key as 未记录.
     if isinstance(agent_runtime, dict) and agent_runtime:
         metadata["agent_runtime"] = dict(agent_runtime)
+    
+    # AIPOS-F49-fix1: self_check_waived 标记（Owner 强制放行）
+    if self_check_waived:
+        metadata["self_check_waived"] = True
+        if self_check_waiver_reason:
+            metadata["self_check_waiver_reason"] = self_check_waiver_reason
     body = "\n".join(
         [
             f"# MCP Return Record: {return_id}",

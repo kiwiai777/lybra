@@ -1969,6 +1969,8 @@ def _mcp_return_record_plan(
     dry_run_snapshot_hash: str | None = None,
     return_id: str | None = None,
     confirmer: dict[str, Any] | None = None,
+    self_check_waived: bool = False,
+    self_check_waiver_reason: str | None = None,
 ) -> dict[str, Any]:
     claim_id = str(source_metadata.get("claim_id") or "")
     session_id = str(source_metadata.get("active_session_id") or "")
@@ -2022,6 +2024,8 @@ def _mcp_return_record_plan(
         dry_run_snapshot_hash=dry_run_snapshot_hash,
         confirmation_ref=confirmation_ref,
         confirmer=confirmer,
+        self_check_waived=self_check_waived,
+        self_check_waiver_reason=self_check_waiver_reason,
     )
     session_markdown = ""
     if not blocking:
@@ -2940,6 +2944,8 @@ def _build_return_preview(
             agent_runtime=mcp_return_metadata.get("agent_runtime") if isinstance(mcp_return_metadata, dict) and isinstance(mcp_return_metadata.get("agent_runtime"), dict) else None,
             return_id=return_id or None,
             confirmer=mcp_return_metadata.get("confirmer") if isinstance(mcp_return_metadata.get("confirmer"), dict) else None,
+            self_check_waived=data.get("self_check_waived", False),
+            self_check_waiver_reason=data.get("self_check_waiver_reason"),
         )
         if record_plan.get("record_blocking_reasons"):
             blocking_reasons.extend(str(item) for item in record_plan.get("record_blocking_reasons", []))
@@ -3051,7 +3057,30 @@ def _build_return_preview(
         completion_report_ref=completion_report_ref,
         claim_snapshot=claim_snapshot,
     )
+    
+    # AIPOS-F49-fix1: owner_confirmation_token 强制放行机制
+    # 若自检失败但调用带 owner_confirmation_token, 则放行并标记 waived
+    self_check_waived = False
+    waiver_reason = None
+    if self_check_reasons and mcp_return_metadata:
+        owner_token = mcp_return_metadata.get("owner_confirmation_token")
+        if owner_token:
+            # Owner 强制放行，豁免自检
+            self_check_waived = True
+            waiver_reason = f"Owner confirmation token provided, waived {len(self_check_reasons)} self-check failures"
+            # 记录被豁免的判据（留痕）
+            warnings.extend([
+                f"SELF_CHECK_WAIVED: {reason}" for reason in self_check_reasons
+            ])
+            # 清空 blocking_reasons 中的自检失败（放行）
+            self_check_reasons = []
+    
     blocking_reasons.extend(self_check_reasons)
+    
+    # AIPOS-F49-fix1: 将 waiver 信息添加到 data 中，供 return 记录使用
+    if self_check_waived:
+        data["self_check_waived"] = True
+        data["self_check_waiver_reason"] = waiver_reason
 
     verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)
     response = make_response(
