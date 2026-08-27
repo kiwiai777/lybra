@@ -97,6 +97,34 @@ else
   overall=1
 fi
 
+# AIPOS-F44B-fix1: 派生与部署语义三项(级联终局判+修复轮承接+裁决提交解析病)
+echo
+echo "── tests/test_aipos_f44b_cascade_terminal.py (级联终局判) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f44b_cascade_terminal.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f44b_cascade_terminal.py PASS"
+else
+  echo "✗ tests/test_aipos_f44b_cascade_terminal.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f44b_fix_chain_inheritance.py (修复轮承接) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f44b_fix_chain_inheritance.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f44b_fix_chain_inheritance.py PASS"
+else
+  echo "✗ tests/test_aipos_f44b_fix_chain_inheritance.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f44b_verdict_dispatch_ref.py (裁决提交解析病) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f44b_verdict_dispatch_ref.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f44b_verdict_dispatch_ref.py PASS"
+else
+  echo "✗ tests/test_aipos_f44b_verdict_dispatch_ref.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
