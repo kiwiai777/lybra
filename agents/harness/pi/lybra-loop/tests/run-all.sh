@@ -77,6 +77,16 @@ else
   overall=1
 fi
 
+# AIPOS-F44A: 门应答开口三项(额度告知+报错带路+N6待办)
+echo
+echo "── tests/test_aipos_f44a_response_opening.py (门应答开口三项) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f44a_response_opening.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f44a_response_opening.py PASS"
+else
+  echo "✗ tests/test_aipos_f44a_response_opening.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
