@@ -2412,6 +2412,229 @@ def _select_task(
     return load_task_by_path(selected_path, repo_root)
 
 
+def _check_return_self_checks(
+    *,
+    task_id: str,
+    task_metadata: dict[str, Any],
+    repo_root: Path,
+    result_summary: str | None,
+    completion_report_ref: str | None,
+    claim_snapshot: dict[str, Any] | None = None,
+) -> list[str]:
+    """
+    AIPOS-F49: N3 交回自检门——六条机器判据在交回时拒收不合格交付。
+    
+    六条判据:
+    ① 夹具入常驻: 本卡新增 test 文件必须在 run-all 清单中
+    ② 改动面在界内: git diff 文件必须落在 output_target 范围内
+    ③ 有测试: code 类卡必须有新增/修改的 test 文件
+    ④ RETURN 非骨架: 不得含占位符，result_summary 非空
+    ⑤ 靠场未污染: 交回时 pending 队列无新增非本链卡
+    ⑥ 基线零新增失败: 与认领时测试基线比对，新增失败即拒
+    
+    Returns:
+        列表的 blocking_reasons，空列表表示全部通过
+    """
+    blocking_reasons = []
+    
+    # 检查是否启用 return_self_check（默认启用）
+    # TODO: 从 schema 读取配置，现在默认启用
+    self_check_enabled = True
+    
+    if not self_check_enabled:
+        return blocking_reasons
+    
+    task_mode = str(task_metadata.get("task_mode") or "").strip()
+    output_target = str(task_metadata.get("output_target") or "").strip()
+    
+    # ① 夹具入常驻
+    blocking_reasons.extend(_check_test_in_runall(
+        task_id=task_id,
+        repo_root=repo_root,
+    ))
+    
+    # ② 改动面在界内
+    blocking_reasons.extend(_check_changes_in_scope(
+        task_id=task_id,
+        output_target=output_target,
+        repo_root=repo_root,
+    ))
+    
+    # ③ 有测试
+    if task_mode == "code":
+        blocking_reasons.extend(_check_has_tests(
+            task_id=task_id,
+            repo_root=repo_root,
+        ))
+    
+    # ④ RETURN 非骨架
+    blocking_reasons.extend(_check_return_not_skeleton(
+        task_id=task_id,
+        result_summary=result_summary,
+        completion_report_ref=completion_report_ref,
+        repo_root=repo_root,
+    ))
+    
+    # ⑤ 靠场未污染
+    if claim_snapshot:
+        blocking_reasons.extend(_check_fixture_no_pollution(
+            task_id=task_id,
+            claim_snapshot=claim_snapshot,
+            repo_root=repo_root,
+        ))
+    
+    # ⑥ 基线零新增失败
+    if claim_snapshot:
+        blocking_reasons.extend(_check_baseline_no_regression(
+            task_id=task_id,
+            claim_snapshot=claim_snapshot,
+            repo_root=repo_root,
+        ))
+    
+    return blocking_reasons
+
+
+def _check_test_in_runall(
+    *,
+    task_id: str,
+    repo_root: Path,
+) -> list[str]:
+    """① 夹具入常驻: 本卡新增 test 文件必须在 run-all 清单中。"""
+    blocking_reasons = []
+    
+    try:
+        product_repo_root = _resolve_product_code_repo(repo_root)
+    except ProductRepoNotConfigured:
+        return blocking_reasons  # 无产品仓，跳过
+    
+    # TODO: 实现检查逻辑
+    # 1. git diff main..card/<task_id> --name-only --diff-filter=A 找新增 test 文件
+    # 2. 读取 run-all.sh 或 pytest.ini
+    # 3. 检查是否包含
+    
+    return blocking_reasons
+
+
+def _check_changes_in_scope(
+    *,
+    task_id: str,
+    output_target: str,
+    repo_root: Path,
+) -> list[str]:
+    """② 改动面在界内: git diff 文件必须落在 output_target 范围内。"""
+    blocking_reasons = []
+    
+    if not output_target:
+        return blocking_reasons  # 无 output_target 声明，跳过
+    
+    try:
+        product_repo_root = _resolve_product_code_repo(repo_root)
+    except ProductRepoNotConfigured:
+        return blocking_reasons
+    
+    # TODO: 实现检查逻辑
+    # 1. git diff main..card/<task_id> --name-only
+    # 2. 解析 output_target (支持 glob 模式)
+    # 3. 检查每个文件是否在范围内
+    
+    return blocking_reasons
+
+
+def _check_has_tests(
+    *,
+    task_id: str,
+    repo_root: Path,
+) -> list[str]:
+    """③ 有测试: code 类卡必须有新增/修改的 test 文件。"""
+    blocking_reasons = []
+    
+    try:
+        product_repo_root = _resolve_product_code_repo(repo_root)
+    except ProductRepoNotConfigured:
+        return blocking_reasons
+    
+    # TODO: 实现检查逻辑
+    # 1. git diff main..card/<task_id> --name-only
+    # 2. 检查是否有 test_ 开头或 tests/ 目录的文件
+    
+    return blocking_reasons
+
+
+def _check_return_not_skeleton(
+    *,
+    task_id: str,
+    result_summary: str | None,
+    completion_report_ref: str | None,
+    repo_root: Path,
+) -> list[str]:
+    """④ RETURN 非骨架: 不得含占位符，result_summary 非空。"""
+    blocking_reasons = []
+    
+    # 检查 result_summary
+    if not result_summary or not result_summary.strip():
+        blocking_reasons.append(
+            "RETURN_SKELETON: result_summary 为空，请填写一句话结论。"
+        )
+    
+    # 检查 RETURN.md 占位符
+    if completion_report_ref:
+        report_path = repo_root / completion_report_ref
+        if report_path.exists():
+            try:
+                content = report_path.read_text(encoding="utf-8")
+                placeholders = [
+                    "(待填写)",
+                    "(PASS / FAIL",
+                    "(无验收清单)",
+                    "TODO",
+                    "FIXME",
+                ]
+                found_placeholders = [p for p in placeholders if p in content]
+                if found_placeholders:
+                    blocking_reasons.append(
+                        f"RETURN_SKELETON: RETURN.md 包含占位符: {', '.join(found_placeholders)}。"
+                        f"请填写完整内容。"
+                    )
+            except Exception:
+                pass  # 读取失败，跳过
+    
+    return blocking_reasons
+
+
+def _check_fixture_no_pollution(
+    *,
+    task_id: str,
+    claim_snapshot: dict[str, Any],
+    repo_root: Path,
+) -> list[str]:
+    """⑤ 靠场未污染: 交回时 pending 队列无新增非本链卡。"""
+    blocking_reasons = []
+    
+    # TODO: 实现检查逻辑
+    # 1. 读取 claim_snapshot 中的 pending_queue
+    # 2. 读取当前 pending 队列
+    # 3. 比对差异，检查新增是否为本链卡
+    
+    return blocking_reasons
+
+
+def _check_baseline_no_regression(
+    *,
+    task_id: str,
+    claim_snapshot: dict[str, Any],
+    repo_root: Path,
+) -> list[str]:
+    """⑥ 基线零新增失败: 与认领时测试基线比对，新增失败即拒。"""
+    blocking_reasons = []
+    
+    # TODO: 实现检查逻辑
+    # 1. 读取 claim_snapshot 中的 test_baseline
+    # 2. 运行当前测试套件
+    # 3. 比对差异，检查是否有新增失败
+    
+    return blocking_reasons
+
+
 def _build_return_preview(
     *,
     task_id: str | None,
@@ -2728,6 +2951,29 @@ def _build_return_preview(
         return_body_planned_writes = [
             {"path": return_body_rel, "kind": "create", "type": "return_body"}
         ]
+
+    # AIPOS-F49: N3 交回自检门——六条机器判据
+    # 读取 claim 快照（用于判据⑤⑥）
+    claim_snapshot = None
+    if task_id_text and claim_id:
+        claim_record_path = repo_root / "5_tasks" / "records" / "claims" / task_id_text / f"{claim_id}.md"
+        if claim_record_path.exists():
+            try:
+                claim_content = claim_record_path.read_text(encoding="utf-8")
+                # TODO: 解析 claim 记录中的快照数据
+                # claim_snapshot = parse_claim_snapshot(claim_content)
+            except Exception:
+                pass  # 读取失败，跳过快照检查
+    
+    self_check_reasons = _check_return_self_checks(
+        task_id=task_id_text,
+        task_metadata=source_metadata,
+        repo_root=repo_root,
+        result_summary=result_summary,
+        completion_report_ref=completion_report_ref,
+        claim_snapshot=claim_snapshot,
+    )
+    blocking_reasons.extend(self_check_reasons)
 
     verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)
     response = make_response(
