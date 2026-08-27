@@ -4936,6 +4936,14 @@ def execute_dry_run(
         if op == "queue_return":
             payload = source_data.get("original_payload") or {}
             mcp_return_metadata = source_data.get("mcp_return") if isinstance(source_data.get("mcp_return"), dict) else None
+            # AIPOS-F49-fix1-fix1: 注入 owner_confirmation_token 到 mcp_return_metadata
+            # 修复数据流断裂：owner_confirmation_token 是 execute_dry_run 的参数(4407行),
+            # 但 _build_return_preview 的放行逻辑(3066行)从 mcp_return_metadata 取值。
+            # 两条道接不上 → 放行分支永远不触发。方案B：调用前注入。
+            if owner_confirmation_token:
+                if mcp_return_metadata is None:
+                    mcp_return_metadata = {}
+                mcp_return_metadata["owner_confirmation_token"] = owner_confirmation_token
             result = return_task(
                 task_id=payload.get("task_id"),
                 path=payload.get("path"),
