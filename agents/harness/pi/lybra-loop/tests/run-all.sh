@@ -153,6 +153,25 @@ else
   overall=1
 fi
 
+# AIPOS-F44D-A: CLI角色解析不写死——自定义角色项目可用(chris迁移直接阻塞)
+echo
+echo "── tests/test_aipos_f44d_a_role_resolution_redgreen.py (先红后绿) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f44d_a_role_resolution_redgreen.py"; then
+  echo "✓ tests/test_aipos_f44d_a_role_resolution_redgreen.py PASS"
+else
+  echo "✗ tests/test_aipos_f44d_a_role_resolution_redgreen.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f44d_a_role_resolution_negative.py (负夹具) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f44d_a_role_resolution_negative.py"; then
+  echo "✓ tests/test_aipos_f44d_a_role_resolution_negative.py PASS"
+else
+  echo "✗ tests/test_aipos_f44d_a_role_resolution_negative.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
