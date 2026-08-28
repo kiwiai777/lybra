@@ -705,11 +705,22 @@ def _resolve_active_project_for(resolved_root: Path, project: str | None) -> str
     """Resolve the active project (AIPOS-225 Slice 1): reuse Slice 0 resolve_active_project,
     sourced from the workspace .lybra/config.json `active_project`. Real ambiguity (no config
     entry and no single-project fallback) fails closed (PROJECT_AMBIGUOUS) — no project literal."""
+    import sys
+    print(f"[F52-TRACE-RAPF] _resolve_active_project_for called", file=sys.stderr)
+    print(f"[F52-TRACE-RAPF]   resolved_root: '{resolved_root}'", file=sys.stderr)
+    print(f"[F52-TRACE-RAPF]   project: '{project}'", file=sys.stderr)
+    
     config: dict[str, Any] = {}
     config_path = find_workspace_config(resolved_root)
+    print(f"[F52-TRACE-RAPF]   find_workspace_config returned: '{config_path}'", file=sys.stderr)
     if config_path is not None:
         config = load_workspace_config(config_path)
-    return resolve_active_project(resolved_root, explicit=project, config=config)
+        print(f"[F52-TRACE-RAPF]   load_workspace_config returned: {config}", file=sys.stderr)
+    
+    print(f"[F52-TRACE-RAPF]   About to call resolve_active_project(home_root='{resolved_root}', explicit='{project}', config=...)", file=sys.stderr)
+    result = resolve_active_project(resolved_root, explicit=project, config=config)
+    print(f"[F52-TRACE-RAPF]   resolve_active_project returned: '{result}'", file=sys.stderr)
+    return result
 
 
 def _resolve_governance_dir(resolved_root: Path, project: str) -> tuple[Path, str]:
