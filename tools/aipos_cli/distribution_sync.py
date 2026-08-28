@@ -289,6 +289,10 @@ def sync(*, harness_root: Path | None = None, gate_url: str | None = None, token
 
     manifest_path = write_local_manifest(ctx["harness_root"], remote)
 
+    # AIPOS-F54 ⑪: 信封更换后的产品更新路径 —— sync 时按生效信封校正 .lybra/role#owner_policy_ref,
+    # 顾问无须手写文件(推导不出/路径不可读则非致命告警, 不阻断分发)。
+    policy_correction = _correct_owner_policy_ref(ctx["harness_root"], ctx["role"])
+
     return {
         "ok": True,
         "role": ctx["role"],
@@ -300,7 +304,52 @@ def sync(*, harness_root: Path | None = None, gate_url: str | None = None, token
         "changes": results,
         "manifest_path": str(manifest_path),
         "local_files": local_files,
+        "owner_policy_correction": policy_correction,
     }
+
+
+def _correct_owner_policy_ref(harness_root: Path, role: str) -> dict[str, Any]:
+    """按当前生效信封校正 role#owner_policy_ref(信封更替后无须手写文件)。
+
+    单源: connection.json#governance_root → 5_tasks/policies 信封工件; 判定复用
+    workstation_wiring.derive_effective_owner_policy_ref。读不到治理根/推导不出 →
+    非致命告警(sync 的本职是分发, 不因信封缺失阻断)。
+    """
+    import json as _json
+
+    lybra_dir = harness_root / ".lybra"
+    out: dict[str, Any] = {"checked": True}
+    try:
+        conn = _json.loads((lybra_dir / "connection.json").read_text(encoding="utf-8"))
+    except (OSError, _json.JSONDecodeError):
+        return {"checked": False, "note": "connection.json 不可读, 跳过信封校正"}
+    gov_root = str(conn.get("governance_root") or "").strip() or None
+    instance = None
+    role_file = lybra_dir / "role"
+    try:
+        rd = _json.loads(role_file.read_text(encoding="utf-8"))
+        instance = str(rd.get("instance") or "") or None
+        current = str(rd.get("owner_policy_ref") or "") or None
+    except (OSError, _json.JSONDecodeError):
+        current = None
+
+    from tools.aipos_cli.workstation_wiring import derive_effective_owner_policy_ref
+
+    derived, reason = derive_effective_owner_policy_ref(gov_root, role=role, agent_instance=instance)
+    out["derived"] = derived
+    out["reason"] = reason
+    if derived and derived != current:
+        from tools.aipos_cli.enroll_client import write_role_file
+
+        write_role_file(lybra_dir, role, instance, derived)
+        out["updated"] = {"from": current, "to": derived}
+    elif derived == current and derived:
+        out["updated"] = None
+        out["note"] = "已与生效信封一致"
+    else:
+        out["updated"] = None
+        out["note"] = f"未推导出生效信封({reason}), 保留现值 {current}"
+    return out
 
 
 def main() -> int:

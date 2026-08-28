@@ -226,6 +226,21 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
             result = json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8', errors='replace')
+        # AIPOS-F54 同族并入④: 运输凭证 401 分类——区分码已消费/码过期/运输凭证失效,
+        # 给出"请顾问重签"的可执行出口(chris auditor 实撞笼统 401)。
+        if e.code == 401:
+            lowered = error_body.lower()
+            if "expired" in lowered or "过期" in error_body:
+                hint = "运输凭证已过期(码内嵌运输凭证超出 TTL)"
+            elif "revoked" in lowered or "吊销" in error_body:
+                hint = "运输凭证已被吊销"
+            else:
+                hint = "运输凭证失效(码内嵌运输凭证不被门接受: 可能已被消费/重签/属于其他门)"
+            raise RuntimeError(
+                f"HTTP 401: {hint}。原文: {error_body[:200]}\n"
+                "下一步: 请顾问重签新码 —— lybra roles enroll-code --role <角色> "
+                "--instance <实例> --owner-authorization-ref <owner授权引用>, 拿到新码后重跑 enroll。"
+            )
         raise RuntimeError(f"HTTP {e.code}: {error_body[:300]}")
     except urllib.error.URLError as e:
         raise RuntimeError(
@@ -268,9 +283,19 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
         details = parsed.get("details") if isinstance(parsed.get("details"), dict) else {}
         if not next_step and isinstance(details, dict):
             next_step = str(details.get("suggested_next_action") or "")
-        err_code = str(parsed.get("error_code") or "")
+        # AIPOS-F54 同族并入④: 业务错误分类(码已消费/码过期/码已吊销/码不存在)带重签出口
+        err_code = str(parsed.get("error_code") or parsed.get("code") or "")
+        category = {
+            "CODE_ALREADY_USED": "码已消费(单次码, 不可重用)",
+            "CODE_EXPIRED": "码已过期(TTL 超窗)",
+            "CODE_REVOKED": "码已被吊销",
+            "CODE_NOT_FOUND": "码不存在(可能属于其他门/工作区)",
+        }.get(err_code)
+        if category and not next_step:
+            next_step = ("请顾问重签新码 —— lybra roles enroll-code --role <角色> "
+                         "--instance <实例> --owner-authorization-ref <owner授权引用>")
         raise RuntimeError(
-            f"Enrollment exchange returned ok=False: {reason}"
+            f"Enrollment exchange returned ok=False: {category + ' — ' if category else ''}{reason}"
             + (f" (error_code={err_code})" if err_code else "")
             + (f"\n下一步: {next_step}" if next_step else "")
         )
@@ -631,7 +656,9 @@ def enroll(
         if not (gate_url and gate_url.strip()):
             effective_gate_url = sc["gate_url"]
 
-    # FIX-1: 确保 workspace_root 存在(对空目录新机零手工上线)
+    # FIX-1: 确保目标目录存在(对空目录新机零手工上线)
+    # AIPOS-F54 同族并入③: 目录不存在时自动创建并出声(chris 实撞 cd: No such file or directory)
+    created_workspace_dir = not workspace_root.exists()
     workspace_root.mkdir(parents=True, exist_ok=True)
 
     # AIPOS-F22D: 治理工作区守卫延迟到 exchange 之后(需先知道 role 才能按角色类判定)
@@ -689,6 +716,22 @@ def enroll(
     # Step 3: 加载或创建 connection.json (AIPOS-C2 大项B: 铸全 workspace_root)
     connection_data = load_or_create_connection_json(lybra_dir, effective_gate_url, workspace_root)
     
+    # AIPOS-F54 ③: lybra_bin —— 指向实际部署位(运行中 bin 优先, 否则探测 .deploy/current);
+    # 推导不出则不写(留空会让 /lybra sync 探测, 探测失败时 sync 会带路, 禁静默写错路径)
+    from tools.aipos_cli.workstation_wiring import (
+        materialize_pi_wiring,
+        resolve_deployed_lybra_bin,
+        resolve_role_class,
+        verify_minimum_bootable_set,
+    )
+    if not str(connection_data.get("lybra_bin") or "").strip():
+        _bin = resolve_deployed_lybra_bin()
+        if _bin:
+            connection_data["lybra_bin"] = _bin
+    # AIPOS-F54 ②: governance_root 入声明(自包含码携带; sync 据此重推生效信封)
+    if governance_root and not str(connection_data.get("governance_root") or "").strip():
+        connection_data["governance_root"] = str(Path(governance_root).expanduser())
+    
     # Step 4: Upsert token entry(幂等; backfill 模式 token_entry=None 则不动 token)
     if token_entry is not None:
         rotated = upsert_token_entry(connection_data, token_entry)
@@ -706,9 +749,48 @@ def enroll(
     files_written = ["connection.json"]
     
     # Step 6: 写入自发现配置文件 (统一JSON格式, 验收⑨合并保留既有键); backfill 模式不动 role/token
+    wiring_report: dict[str, Any] | None = None
+    policy_derivation: dict[str, Any] | None = None
     if code is not None and role:
-        write_role_file(lybra_dir, role, agent_instance, policy)
-        files_written.append("role")
+        # AIPOS-F54 ②: owner_policy_ref 按角色类从门侧生效信封推导(禁硬编码 policy id)
+        from tools.aipos_cli.workstation_wiring import derive_effective_owner_policy_ref
+        effective_gov_root = str(connection_data.get("governance_root") or "").strip() or None
+        derived_policy, policy_reason = derive_effective_owner_policy_ref(
+            effective_gov_root, role=role, agent_instance=agent_instance,
+        )
+        policy_derivation = {"policy_id": derived_policy, "reason": policy_reason}
+        role_class = resolve_role_class(role, token_entry)
+        if derived_policy:
+            write_role_file(lybra_dir, role, agent_instance, derived_policy)
+            files_written.append("role(含 owner_policy_ref)")
+        elif role_class in ("executor", "auditor"):
+            # 卡面②: 推导不出 → 报错带路, 禁静默留空导致循环起不来(验收⑩)
+            raise RuntimeError(
+                f"enroll 推导 owner_policy_ref 失败: {policy_reason}。\n"
+                "下一步: 请先为该角色铸信封(owner_autonomy_policy, PreAuthorized), 命令示例: \n"
+                "  lybra owner-decision ... 铸 owner_autonomy_policy 后重跑 enroll;\n"
+                "或顾问代设置: lybra sync 会按生效信封校正该键。"
+            )
+        else:
+            # 非循环角色类(advisor/planner 等): 仅告警不阻断
+            write_role_file(lybra_dir, role, agent_instance, None)
+            files_written.append("role(无 owner_policy_ref, 非循环角色类仅告警)")
+            policy_derivation["warning"] = True
+    elif code is None:
+        # backfill 模式: 从既有 .lybra/role 读角色, 补齐接线(修复既有残缺工位)
+        role_file = lybra_dir / "role"
+        if role_file.is_file():
+            try:
+                _rd = json.loads(role_file.read_text(encoding="utf-8"))
+                role = str(_rd.get("role") or "") or None
+            except (json.JSONDecodeError, OSError):
+                role = None
+    
+    # AIPOS-F54 ①: .pi 接线 + AGENTS.md 占位(seed_only 幂等, 已存在跳过不覆盖)
+    if role:
+        role_class = resolve_role_class(role, token_entry)
+        wiring_report = materialize_pi_wiring(workspace_root, role=role, role_class=role_class)
+        files_written.append(".pi/接线")
 
     # F23 验收⑦: 落盘全部成功后才 land(关 grace 窗口, 码彻底消费); land 失败仅告警
     if code is not None:
@@ -741,6 +823,9 @@ def enroll(
                 ) from rb_exc
             raise RuntimeError(f"enroll --verify FAILED: {detail} — token 已回滚, 未留下坏配置")
     
+    # AIPOS-F54 ⑮: 可启动最小集逐项校验(缺项逐项点名, 禁"少一个键整个起不来但不知道少哪个")
+    bootable_check = verify_minimum_bootable_set(workspace_root)
+    
     return {
         "ok": True,
         "operation": "backfill" if code is None else "enroll",
@@ -754,7 +839,11 @@ def enroll(
         "files_written": files_written,
         "landed": landed,
         "verify": verify_result,
-        "next_step": "上岗完成: 接着 /lybra sync 然后 /reload" if code is not None else None,
+        "created_workspace_dir": created_workspace_dir,
+        "policy_derivation": policy_derivation,
+        "wiring": wiring_report,
+        "minimum_bootable_set": bootable_check,
+        "next_step": ("上岗完成: 接着 /lybra sync 然后 /reload" if code is not None else None),
     }
 
 
