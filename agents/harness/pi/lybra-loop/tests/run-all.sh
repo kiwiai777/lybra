@@ -229,6 +229,16 @@ else
   overall=1
 fi
 
+# AIPOS-F49-fix1-fix1-fix1: 修复 UnboundLocalError - data.get() 前向引用
+echo
+echo "── tests/test_aipos_f49_fix1_fix1_fix1_dataflow_fix.py ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f49_fix1_fix1_fix1_dataflow_fix.py"; then
+  echo "✓ tests/test_aipos_f49_fix1_fix1_fix1_dataflow_fix.py PASS"
+else
+  echo "✗ tests/test_aipos_f49_fix1_fix1_fix1_dataflow_fix.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
