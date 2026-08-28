@@ -2920,6 +2920,47 @@ def _build_return_preview(
     if return_reason:
         updated_metadata["return_reason"] = return_reason
 
+    # AIPOS-F49: N3 交回自检门——六条机器判据
+    # 读取 claim 快照（用于判据⑤⑥）
+    claim_snapshot = None
+    if task_id_text and claim_id:
+        claim_record_path = repo_root / "5_tasks" / "records" / "claims" / task_id_text / f"{claim_id}.md"
+        if claim_record_path.exists():
+            try:
+                claim_content = claim_record_path.read_text(encoding="utf-8")
+                # TODO: 解析 claim 记录中的快照数据
+                # claim_snapshot = parse_claim_snapshot(claim_content)
+            except Exception:
+                pass  # 读取失败，跳过快照检查
+    
+    self_check_reasons = _check_return_self_checks(
+        task_id=task_id_text,
+        task_metadata=source_metadata,
+        repo_root=repo_root,
+        result_summary=result_summary,
+        completion_report_ref=completion_report_ref,
+        claim_snapshot=claim_snapshot,
+    )
+    
+    # AIPOS-F49-fix1: owner_confirmation_token 强制放行机制
+    # 若自检失败但调用带 owner_confirmation_token, 则放行并标记 waived
+    self_check_waived = False
+    waiver_reason = None
+    if self_check_reasons and mcp_return_metadata:
+        owner_token = mcp_return_metadata.get("owner_confirmation_token")
+        if owner_token:
+            # Owner 强制放行，豁免自检
+            self_check_waived = True
+            waiver_reason = f"Owner confirmation token provided, waived {len(self_check_reasons)} self-check failures"
+            # 记录被豁免的判据（留痕）
+            warnings.extend([
+                f"SELF_CHECK_WAIVED: {reason}" for reason in self_check_reasons
+            ])
+            # 清空 blocking_reasons 中的自检失败（放行）
+            self_check_reasons = []
+    
+    blocking_reasons.extend(self_check_reasons)
+
     record_plan: dict[str, Any] = {
         "record_writes": [],
         "record_updates": [],
@@ -2944,8 +2985,8 @@ def _build_return_preview(
             agent_runtime=mcp_return_metadata.get("agent_runtime") if isinstance(mcp_return_metadata, dict) and isinstance(mcp_return_metadata.get("agent_runtime"), dict) else None,
             return_id=return_id or None,
             confirmer=mcp_return_metadata.get("confirmer") if isinstance(mcp_return_metadata.get("confirmer"), dict) else None,
-            self_check_waived=data.get("self_check_waived", False),
-            self_check_waiver_reason=data.get("self_check_waiver_reason"),
+            self_check_waived=self_check_waived,
+            self_check_waiver_reason=waiver_reason,
         )
         if record_plan.get("record_blocking_reasons"):
             blocking_reasons.extend(str(item) for item in record_plan.get("record_blocking_reasons", []))
@@ -3036,47 +3077,6 @@ def _build_return_preview(
             {"path": return_body_rel, "kind": "create", "type": "return_body"}
         ]
 
-    # AIPOS-F49: N3 交回自检门——六条机器判据
-    # 读取 claim 快照（用于判据⑤⑥）
-    claim_snapshot = None
-    if task_id_text and claim_id:
-        claim_record_path = repo_root / "5_tasks" / "records" / "claims" / task_id_text / f"{claim_id}.md"
-        if claim_record_path.exists():
-            try:
-                claim_content = claim_record_path.read_text(encoding="utf-8")
-                # TODO: 解析 claim 记录中的快照数据
-                # claim_snapshot = parse_claim_snapshot(claim_content)
-            except Exception:
-                pass  # 读取失败，跳过快照检查
-    
-    self_check_reasons = _check_return_self_checks(
-        task_id=task_id_text,
-        task_metadata=source_metadata,
-        repo_root=repo_root,
-        result_summary=result_summary,
-        completion_report_ref=completion_report_ref,
-        claim_snapshot=claim_snapshot,
-    )
-    
-    # AIPOS-F49-fix1: owner_confirmation_token 强制放行机制
-    # 若自检失败但调用带 owner_confirmation_token, 则放行并标记 waived
-    self_check_waived = False
-    waiver_reason = None
-    if self_check_reasons and mcp_return_metadata:
-        owner_token = mcp_return_metadata.get("owner_confirmation_token")
-        if owner_token:
-            # Owner 强制放行，豁免自检
-            self_check_waived = True
-            waiver_reason = f"Owner confirmation token provided, waived {len(self_check_reasons)} self-check failures"
-            # 记录被豁免的判据（留痕）
-            warnings.extend([
-                f"SELF_CHECK_WAIVED: {reason}" for reason in self_check_reasons
-            ])
-            # 清空 blocking_reasons 中的自检失败（放行）
-            self_check_reasons = []
-    
-    blocking_reasons.extend(self_check_reasons)
-    
     # AIPOS-F49-fix1: 将 waiver 信息添加到 data 中，供 return 记录使用
     if self_check_waived:
         data["self_check_waived"] = True
