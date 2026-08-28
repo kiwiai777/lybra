@@ -704,23 +704,47 @@ def get_agents(repo_root: str | Path | None = None) -> dict[str, Any]:
 def _resolve_active_project_for(resolved_root: Path, project: str | None) -> str:
     """Resolve the active project (AIPOS-225 Slice 1): reuse Slice 0 resolve_active_project,
     sourced from the workspace .lybra/config.json `active_project`. Real ambiguity (no config
-    entry and no single-project fallback) fails closed (PROJECT_AMBIGUOUS) — no project literal."""
+    entry and no single-project fallback) fails closed (PROJECT_AMBIGUOUS) — no project literal.
+    
+    AIPOS-F52: 显式 workspace_root 时，从该路径的 project.json#project 读取项目名，
+    而不是回落到全局 active_project。保证项目无关性，禁项目名硬编码。
+    """
     import sys
     print(f"[F52-TRACE-RAPF] _resolve_active_project_for called", file=sys.stderr)
     print(f"[F52-TRACE-RAPF]   resolved_root: '{resolved_root}'", file=sys.stderr)
     print(f"[F52-TRACE-RAPF]   project: '{project}'", file=sys.stderr)
     
-    config: dict[str, Any] = {}
-    config_path = find_workspace_config(resolved_root)
-    print(f"[F52-TRACE-RAPF]   find_workspace_config returned: '{config_path}'", file=sys.stderr)
-    if config_path is not None:
-        config = load_workspace_config(config_path)
-        print(f"[F52-TRACE-RAPF]   load_workspace_config returned: {config}", file=sys.stderr)
-    
-    print(f"[F52-TRACE-RAPF]   About to call resolve_active_project(home_root='{resolved_root}', explicit='{project}', config=...)", file=sys.stderr)
-    result = resolve_active_project(resolved_root, explicit=project, config=config)
-    print(f"[F52-TRACE-RAPF]   resolve_active_project returned: '{result}'", file=sys.stderr)
-    return result
+    # AIPOS-F52: 显式 workspace_root 时，直接从 project.json 读取项目名
+    # 与凭据推导用同一个函数 read_project_json，单源。
+    from tools.aipos_cli.workspace_config import read_project_json
+    try:
+        project_data = read_project_json(str(resolved_root))
+        print(f"[F52-TRACE-RAPF]   read_project_json returned: {project_data}", file=sys.stderr)
+        project_name = str(project_data.get("project") or project_data.get("name") or "").strip()
+        print(f"[F52-TRACE-RAPF]   Extracted project_name from project.json: '{project_name}'", file=sys.stderr)
+        if project_name:
+            print(f"[F52-TRACE-RAPF]   Returning project from project.json: '{project_name}'", file=sys.stderr)
+            return project_name
+        else:
+            # project.json 存在但无 project/name 字段 → 报错带路
+            error_msg = (
+                f"PROJECT_NOT_FOUND: {resolved_root}/project.json exists but missing 'project' field. "
+                f"Add 'project' field to project.json or ensure the workspace is properly initialized."
+            )
+            print(f"[F52-TRACE-RAPF]   ERROR: {error_msg}", file=sys.stderr)
+            raise ValueError(error_msg)
+    except FileNotFoundError:
+        # project.json 不存在 → 报错带路
+        error_msg = (
+            f"PROJECT_NOT_FOUND: {resolved_root}/project.json not found. "
+            f"Ensure the workspace path is correct and contains a valid project.json."
+        )
+        print(f"[F52-TRACE-RAPF]   ERROR: {error_msg}", file=sys.stderr)
+        raise FileNotFoundError(error_msg)
+    except Exception as exc:
+        error_msg = f"PROJECT_RESOLUTION_ERROR: Failed to read project.json from {resolved_root}: {exc}"
+        print(f"[F52-TRACE-RAPF]   ERROR: {error_msg}", file=sys.stderr)
+        raise ValueError(error_msg)
 
 
 def _resolve_governance_dir(resolved_root: Path, project: str) -> tuple[Path, str]:
