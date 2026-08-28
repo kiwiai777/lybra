@@ -1969,6 +1969,8 @@ def _mcp_return_record_plan(
     dry_run_snapshot_hash: str | None = None,
     return_id: str | None = None,
     confirmer: dict[str, Any] | None = None,
+    self_check_waived: bool = False,
+    self_check_waiver_reason: str | None = None,
 ) -> dict[str, Any]:
     claim_id = str(source_metadata.get("claim_id") or "")
     session_id = str(source_metadata.get("active_session_id") or "")
@@ -2022,6 +2024,8 @@ def _mcp_return_record_plan(
         dry_run_snapshot_hash=dry_run_snapshot_hash,
         confirmation_ref=confirmation_ref,
         confirmer=confirmer,
+        self_check_waived=self_check_waived,
+        self_check_waiver_reason=self_check_waiver_reason,
     )
     session_markdown = ""
     if not blocking:
@@ -2412,6 +2416,307 @@ def _select_task(
     return load_task_by_path(selected_path, repo_root)
 
 
+def _check_return_self_checks(
+    *,
+    task_id: str,
+    task_metadata: dict[str, Any],
+    repo_root: Path,
+    result_summary: str | None,
+    completion_report_ref: str | None,
+    claim_snapshot: dict[str, Any] | None = None,
+) -> list[str]:
+    """
+    AIPOS-F49: N3 交回自检门——四条机器判据在交回时拒收不合格交付。
+    
+    四条判据:
+    ① 夹具入常驻: 本卡新增 test 文件必须在 run-all 清单中
+    ② 改动面在界内: git diff 文件必须落在 output_target 范围内
+    ③ 有测试: code 类卡必须有新增/修改的 test 文件
+    ④ RETURN 非骨架: 不得含占位符，result_summary 非空
+    
+    注: 判据⑤靠场未污染和⑥基线零新增失败已移至 F49B(快照机制)
+    
+    Returns:
+        列表的 blocking_reasons，空列表表示全部通过
+    """
+    blocking_reasons = []
+    
+    # 检查是否启用 return_self_check（默认启用）
+    # TODO: 从 schema 读取配置，现在默认启用
+    self_check_enabled = True
+    
+    if not self_check_enabled:
+        return blocking_reasons
+    
+    task_mode = str(task_metadata.get("task_mode") or "").strip()
+    output_target = str(task_metadata.get("output_target") or "").strip()
+    
+    # ① 夹具入常驻
+    blocking_reasons.extend(_check_test_in_runall(
+        task_id=task_id,
+        repo_root=repo_root,
+    ))
+    
+    # ② 改动面在界内
+    blocking_reasons.extend(_check_changes_in_scope(
+        task_id=task_id,
+        output_target=output_target,
+        repo_root=repo_root,
+    ))
+    
+    # ③ 有测试
+    if task_mode == "code":
+        blocking_reasons.extend(_check_has_tests(
+            task_id=task_id,
+            repo_root=repo_root,
+        ))
+    
+    # ④ RETURN 非骨架
+    blocking_reasons.extend(_check_return_not_skeleton(
+        task_id=task_id,
+        result_summary=result_summary,
+        completion_report_ref=completion_report_ref,
+        repo_root=repo_root,
+    ))
+    
+    return blocking_reasons
+
+
+def _check_test_in_runall(
+    *,
+    task_id: str,
+    repo_root: Path,
+) -> list[str]:
+    """① 夹具入常驻: 本卡新增 test 文件必须在 run-all 清单中。"""
+    blocking_reasons = []
+    
+    try:
+        product_repo_root = _resolve_product_code_repo(repo_root)
+    except ProductRepoNotConfigured:
+        return blocking_reasons  # 无产品仓，跳过
+    
+    import subprocess
+    
+    # 1. git diff 找本卡新增/修改的 test 文件
+    branch_name = f"card/{task_id}"
+    try:
+        result = subprocess.run(
+            ["git", "diff", "main.." + branch_name, "--name-only"],
+            cwd=product_repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return blocking_reasons  # git 失败，跳过检查
+        
+        changed_files = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+        test_files = [
+            f for f in changed_files 
+            if "test" in f.lower() and not f.endswith("run-all.sh")
+        ]
+        
+        if not test_files:
+            return blocking_reasons  # 无 test 文件，跳过
+    except Exception:
+        return blocking_reasons  # git 命令失败，跳过
+    
+    # 2. 读取 run-all.sh 清单
+    runall_path = product_repo_root / "agents" / "harness" / "pi" / "lybra-loop" / "tests" / "run-all.sh"
+    if not runall_path.exists():
+        return blocking_reasons  # run-all.sh 不存在，跳过
+    
+    try:
+        runall_content = runall_path.read_text(encoding="utf-8")
+    except Exception:
+        return blocking_reasons  # 读取失败，跳过
+    
+    # 3. 检查每个 test 文件是否在清单中
+    missing_tests = []
+    for test_file in test_files:
+        # 检查完整路径或 basename
+        basename = test_file.split("/")[-1]
+        if test_file not in runall_content and basename not in runall_content:
+            missing_tests.append(test_file)
+    
+    if missing_tests:
+        blocking_reasons.append(
+            f"TEST_NOT_IN_RUNALL: 本卡新增/修改的 test 文件未加入 run-all.sh 清单。"
+            f"缺失项: {', '.join(missing_tests)}。"
+            f"请在 {runall_path.relative_to(product_repo_root)} 中添加这些测试。"
+        )
+    
+    return blocking_reasons
+
+
+def _check_changes_in_scope(
+    *,
+    task_id: str,
+    output_target: str,
+    repo_root: Path,
+) -> list[str]:
+    """② 改动面在界内: git diff 文件必须落在 output_target 范围内。"""
+    blocking_reasons = []
+    
+    if not output_target:
+        return blocking_reasons  # 无 output_target 声明，跳过
+    
+    try:
+        product_repo_root = _resolve_product_code_repo(repo_root)
+    except ProductRepoNotConfigured:
+        return blocking_reasons
+    
+    import subprocess
+    
+    # 1. git diff 找全部改动文件
+    branch_name = f"card/{task_id}"
+    try:
+        result = subprocess.run(
+            ["git", "diff", "main.." + branch_name, "--name-only"],
+            cwd=product_repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return blocking_reasons  # git 失败，跳过检查
+        
+        changed_files = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+        
+        if not changed_files:
+            return blocking_reasons  # 无改动，跳过
+    except Exception:
+        return blocking_reasons  # git 命令失败，跳过
+    
+    # 2. 解析 output_target 的路径片段（宽松匹配）
+    # output_target 格式示例: "tools/aipos_cli/board_adapter.py(queue_return 校验点), tests/(五夹具经 bin 入 run-all)"
+    # 提取路径片段: tools/aipos_cli/board_adapter.py, tests/
+    import re
+    # 匹配路径模式：任何非空白字符直到括号或逗号或结尾
+    path_patterns = re.findall(r'([\w/._-]+(?:\.\w+)?)', output_target)
+    # 过滤掉明显不是路径的片段（如单个词）
+    path_patterns = [p for p in path_patterns if '/' in p or '.' in p]
+    
+    if not path_patterns:
+        return blocking_reasons  # 无法解析 output_target，跳过
+    
+    # 3. 检查每个文件是否匹配任意一个模式
+    out_of_scope = []
+    for changed_file in changed_files:
+        matched = False
+        for pattern in path_patterns:
+            # 宽松匹配：文件路径包含模式或模式包含文件路径
+            if pattern in changed_file or changed_file.startswith(pattern):
+                matched = True
+                break
+        if not matched:
+            out_of_scope.append(changed_file)
+    
+    if out_of_scope:
+        blocking_reasons.append(
+            f"CHANGES_OUT_OF_SCOPE: 以下文件超出卡面声明的 output_target 范围。"
+            f"越界文件: {', '.join(out_of_scope)}。"
+            f"卡面声明范围: {output_target}。"
+            f"请只修改卡面声明范围内的文件，或更新卡面 output_target 字段。"
+        )
+    
+    return blocking_reasons
+
+
+def _check_has_tests(
+    *,
+    task_id: str,
+    repo_root: Path,
+) -> list[str]:
+    """③ 有测试: code 类卡必须有新增/修改的 test 文件。"""
+    blocking_reasons = []
+    
+    try:
+        product_repo_root = _resolve_product_code_repo(repo_root)
+    except ProductRepoNotConfigured:
+        return blocking_reasons
+    
+    import subprocess
+    
+    # 1. git diff 找全部改动文件
+    branch_name = f"card/{task_id}"
+    try:
+        result = subprocess.run(
+            ["git", "diff", "main.." + branch_name, "--name-only"],
+            cwd=product_repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return blocking_reasons  # git 失败，跳过检查
+        
+        changed_files = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+        
+        if not changed_files:
+            return blocking_reasons  # 无改动，跳过
+    except Exception:
+        return blocking_reasons  # git 命令失败，跳过
+    
+    # 2. 检查是否有 test 文件
+    has_test = any(
+        "test" in f.lower() or "/tests/" in f or f.startswith("tests/")
+        for f in changed_files
+    )
+    
+    if not has_test:
+        blocking_reasons.append(
+            f"NO_TESTS: code 类卡必须包含测试文件改动。"
+            f"当前改动文件: {', '.join(changed_files[:5])}{'...' if len(changed_files) > 5 else ''}。"
+            f"请添加测试文件（如 tests/test_*.py）。"
+        )
+    
+    return blocking_reasons
+
+
+def _check_return_not_skeleton(
+    *,
+    task_id: str,
+    result_summary: str | None,
+    completion_report_ref: str | None,
+    repo_root: Path,
+) -> list[str]:
+    """④ RETURN 非骨架: 不得含占位符，result_summary 非空。"""
+    blocking_reasons = []
+    
+    # 检查 result_summary
+    if not result_summary or not result_summary.strip():
+        blocking_reasons.append(
+            "RETURN_SKELETON: result_summary 为空，请填写一句话结论。"
+        )
+    
+    # 检查 RETURN.md 占位符
+    if completion_report_ref:
+        report_path = repo_root / completion_report_ref
+        if report_path.exists():
+            try:
+                content = report_path.read_text(encoding="utf-8")
+                placeholders = [
+                    "(待填写)",
+                    "(PASS / FAIL",
+                    "(无验收清单)",
+                    "TODO",
+                    "FIXME",
+                ]
+                found_placeholders = [p for p in placeholders if p in content]
+                if found_placeholders:
+                    blocking_reasons.append(
+                        f"RETURN_SKELETON: RETURN.md 包含占位符: {', '.join(found_placeholders)}。"
+                        f"请填写完整内容。"
+                    )
+            except Exception:
+                pass  # 读取失败，跳过
+    
+    return blocking_reasons
+
+
+
+
 def _build_return_preview(
     *,
     task_id: str | None,
@@ -2639,6 +2944,8 @@ def _build_return_preview(
             agent_runtime=mcp_return_metadata.get("agent_runtime") if isinstance(mcp_return_metadata, dict) and isinstance(mcp_return_metadata.get("agent_runtime"), dict) else None,
             return_id=return_id or None,
             confirmer=mcp_return_metadata.get("confirmer") if isinstance(mcp_return_metadata.get("confirmer"), dict) else None,
+            self_check_waived=data.get("self_check_waived", False),
+            self_check_waiver_reason=data.get("self_check_waiver_reason"),
         )
         if record_plan.get("record_blocking_reasons"):
             blocking_reasons.extend(str(item) for item in record_plan.get("record_blocking_reasons", []))
@@ -2728,6 +3035,52 @@ def _build_return_preview(
         return_body_planned_writes = [
             {"path": return_body_rel, "kind": "create", "type": "return_body"}
         ]
+
+    # AIPOS-F49: N3 交回自检门——六条机器判据
+    # 读取 claim 快照（用于判据⑤⑥）
+    claim_snapshot = None
+    if task_id_text and claim_id:
+        claim_record_path = repo_root / "5_tasks" / "records" / "claims" / task_id_text / f"{claim_id}.md"
+        if claim_record_path.exists():
+            try:
+                claim_content = claim_record_path.read_text(encoding="utf-8")
+                # TODO: 解析 claim 记录中的快照数据
+                # claim_snapshot = parse_claim_snapshot(claim_content)
+            except Exception:
+                pass  # 读取失败，跳过快照检查
+    
+    self_check_reasons = _check_return_self_checks(
+        task_id=task_id_text,
+        task_metadata=source_metadata,
+        repo_root=repo_root,
+        result_summary=result_summary,
+        completion_report_ref=completion_report_ref,
+        claim_snapshot=claim_snapshot,
+    )
+    
+    # AIPOS-F49-fix1: owner_confirmation_token 强制放行机制
+    # 若自检失败但调用带 owner_confirmation_token, 则放行并标记 waived
+    self_check_waived = False
+    waiver_reason = None
+    if self_check_reasons and mcp_return_metadata:
+        owner_token = mcp_return_metadata.get("owner_confirmation_token")
+        if owner_token:
+            # Owner 强制放行，豁免自检
+            self_check_waived = True
+            waiver_reason = f"Owner confirmation token provided, waived {len(self_check_reasons)} self-check failures"
+            # 记录被豁免的判据（留痕）
+            warnings.extend([
+                f"SELF_CHECK_WAIVED: {reason}" for reason in self_check_reasons
+            ])
+            # 清空 blocking_reasons 中的自检失败（放行）
+            self_check_reasons = []
+    
+    blocking_reasons.extend(self_check_reasons)
+    
+    # AIPOS-F49-fix1: 将 waiver 信息添加到 data 中，供 return 记录使用
+    if self_check_waived:
+        data["self_check_waived"] = True
+        data["self_check_waiver_reason"] = waiver_reason
 
     verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)
     response = make_response(

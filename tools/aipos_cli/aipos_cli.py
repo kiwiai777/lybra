@@ -3837,11 +3837,23 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "active_session_id", None):
             verb_args["active_session_id"] = args.active_session_id
         
+        # AIPOS-F44D-A: 角色解析不写死
+        from tools.aipos_cli.two_phase_shell_factory import resolve_role_from_connection
+        try:
+            role = resolve_role_from_connection(
+                connection_json_path=conn_json_path,
+                required_role_class="executor",
+                repo_root=repo_root,
+            )
+        except ValueError as exc:
+            print(f"Error resolving role: {exc}", file=sys.stderr)
+            return 1
+        
         exit_code, _ = execute_two_phase_verb(
             verb_base="lybra_queue_claim",
             args_dict=verb_args,
             connection_json_path=conn_json_path,
-            role="executor",
+            role=role,
             json_output=getattr(args, "json", False),
         )
         return exit_code
@@ -4118,11 +4130,23 @@ def main(argv: list[str] | None = None) -> int:
             if getattr(args, "active_session_id", None):
                 verb_args["active_session_id"] = args.active_session_id
             
+            # AIPOS-F44D-A: 角色解析不写死
+            from tools.aipos_cli.two_phase_shell_factory import resolve_role_from_connection
+            try:
+                role = resolve_role_from_connection(
+                    connection_json_path=conn_json_path,
+                    required_role_class="executor",
+                    repo_root=repo_root,
+                )
+            except ValueError as exc:
+                print(f"Error resolving role: {exc}", file=sys.stderr)
+                return 1
+            
             exit_code, _ = execute_two_phase_verb(
                 verb_base="lybra_queue_return",
                 args_dict=verb_args,
                 connection_json_path=conn_json_path,
-                role="executor",
+                role=role,
                 json_output=args.json,
             )
             return exit_code
@@ -4954,11 +4978,32 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "reason", None):
             verb_args["reason"] = args.reason
         
+        # AIPOS-F44D-A: 角色解析不写死
+        # task_progress 需要 task_progress scope（executor/auditor 都有）
+        from tools.aipos_cli.two_phase_shell_factory import resolve_role_from_connection
+        try:
+            role = resolve_role_from_connection(
+                connection_json_path=conn_json_path,
+                required_role_class="executor",  # 默认 executor，如果不存在则尝试 auditor
+                repo_root=repo_root,
+            )
+        except ValueError:
+            # 降级尝试 auditor (因为 auditor 也有 task_progress scope)
+            try:
+                role = resolve_role_from_connection(
+                    connection_json_path=conn_json_path,
+                    required_role_class="auditor",
+                    repo_root=repo_root,
+                )
+            except ValueError as exc:
+                print(f"Error resolving role: {exc}", file=sys.stderr)
+                return 1
+        
         exit_code, _ = execute_single_phase_via_gate(
             verb_name="lybra_task_progress",
             args_dict=verb_args,
             connection_json_path=conn_json_path,
-            role="executor",  # task_progress 需要 task_progress scope（executor/auditor 都有）
+            role=role,
             json_output=getattr(args, "json", False),
         )
         return exit_code
