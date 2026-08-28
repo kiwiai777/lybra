@@ -216,8 +216,13 @@ def _resolve_queue_workspace(args: dict[str, Any] | None) -> Path:
     validate that the target workspace's project is authorized. Prevents cross-project
     leakage (e.g., lybra-scoped token accessing chris-huibojin workspace).
     """
+    import sys
+    print(f"[F52-TRACE-QWS] _resolve_queue_workspace called", file=sys.stderr)
+    print(f"[F52-TRACE-QWS] args: {args}", file=sys.stderr)
+    
     if args and args.get("workspace_root"):
         explicit = Path(str(args["workspace_root"]).strip()).expanduser().resolve()
+        print(f"[F52-TRACE-QWS] Explicit workspace_root: '{explicit}'", file=sys.stderr)
         if not explicit.exists():
             # If explicit workspace_root does not exist, error with guidance
             raise ValueError(
@@ -228,11 +233,15 @@ def _resolve_queue_workspace(args: dict[str, Any] | None) -> Path:
         # AIPOS-F42-fix1 (F-1): Validate projects_enforced when workspace is explicit
         token = _capability_token()
         projects = token.get("projects")
+        print(f"[F52-TRACE-QWS] Token projects: {projects}", file=sys.stderr)
         if projects:  # Token has project scope → validate
             # Resolve the target project from the explicit workspace
+            print(f"[F52-TRACE-QWS] About to call _resolve_active_project_for(explicit='{explicit}', None)", file=sys.stderr)
             try:
                 target_project = _resolve_active_project_for(explicit, None)
+                print(f"[F52-TRACE-QWS] _resolve_active_project_for returned: '{target_project}'", file=sys.stderr)
             except (ValueError, FileNotFoundError, OSError) as exc:
+                print(f"[F52-TRACE-QWS] _resolve_active_project_for raised: {type(exc).__name__}: {exc}", file=sys.stderr)
                 raise ValueError(
                     f"Cannot resolve project for workspace_root {explicit}: {exc}. "
                     f"Ensure the workspace contains a valid project configuration."
@@ -241,16 +250,19 @@ def _resolve_queue_workspace(args: dict[str, Any] | None) -> Path:
             # Check if target_project is in token's authorized projects
             if target_project not in [str(p) for p in projects]:
                 token_projects = list(projects) if isinstance(projects, list) else []
+                print(f"[F52-TRACE-QWS] PROJECT_SCOPE_DENIED: target='{target_project}' not in token={token_projects}", file=sys.stderr)
                 raise ValueError(
                     f"PROJECT_SCOPE_DENIED: Token is scoped to projects {token_projects}, "
                     f"but workspace_root resolves to project '{target_project}'. "
                     f"Use a token authorized for '{target_project}' or operate within an authorized workspace."
                 )
         
+        print(f"[F52-TRACE-QWS] Returning explicit: '{explicit}'", file=sys.stderr)
         return explicit
     
     # Fall back to token project scope resolution
     result = _repo_root()
+    print(f"[F52-TRACE-QWS] No explicit workspace_root, fallback to _repo_root(): '{result}'", file=sys.stderr)
     return result
 
 
@@ -1477,9 +1489,15 @@ def lybra_queue_list(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     """
     args = arguments or {}
     
+    # AIPOS-F52 临时打点: 跟踪 workspace_root → project 解析链路
+    import sys
+    print(f"[F52-TRACE-QLIST] queue_list called", file=sys.stderr)
+    print(f"[F52-TRACE-QLIST] args.get('workspace_root'): '{args.get('workspace_root')}'", file=sys.stderr)
+    
     # AIPOS-F50 大项B: 与 claim 走同样的 workspace 寻址
     # _resolve_queue_workspace: 显式 workspace_root + token 域验证, 或 token 项目域推导
     repo_root = _resolve_queue_workspace(args)
+    print(f"[F52-TRACE-QLIST] _resolve_queue_workspace returned: '{repo_root}'", file=sys.stderr)
     
     # AIPOS-R1: 从token提取project和instance scope
     token = _capability_token()
@@ -1488,12 +1506,16 @@ def lybra_queue_list(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     
     # 解析实际项目（与 workspace 寻址一致）
     project_scope: str | None = None
+    print(f"[F52-TRACE-QLIST] About to call _resolve_active_project_for(repo_root='{repo_root}', project=None)", file=sys.stderr)
     try:
         project_scope = _resolve_active_project_for(repo_root, None)
-    except (ValueError, FileNotFoundError, OSError):
+        print(f"[F52-TRACE-QLIST] _resolve_active_project_for returned: '{project_scope}'", file=sys.stderr)
+    except (ValueError, FileNotFoundError, OSError) as e:
+        print(f"[F52-TRACE-QLIST] _resolve_active_project_for raised: {type(e).__name__}: {e}", file=sys.stderr)
         # 无法解析项目时，回退到 token 单项目推断（保持向后兼容）
         if projects and isinstance(projects, list) and len(projects) == 1:
             project_scope = str(projects[0])
+            print(f"[F52-TRACE-QLIST] Fallback to token single project: '{project_scope}'", file=sys.stderr)
     
     # AIPOS-F50: workspace 解析出的项目必须在 token 的 projects 域内（_resolve_queue_workspace 已校验）
     # 这里仅确保 project_scope 非空
