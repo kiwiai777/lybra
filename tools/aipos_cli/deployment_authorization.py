@@ -445,6 +445,156 @@ def check_commit_interval_coverage(
     }
 
 
+def _find_fix_chain_terminal(task_id: str, governance_root: Path) -> str | None:
+    """AIPOS-F53: 查找 fix 链的末端任务 ID（从 F18 派生记录读取）。
+    
+    fix 链关系从 fix_closures 目录的 derivation 记录中读取，记录格式：
+      - fix_task_id: 当前 fix 卡 ID
+      - source_task_id: 原始卡 ID
+    
+    递归查找：task_id → fix_task_id → fix_task_id → ... 直到没有下一级。
+    
+    Args:
+        task_id: 起始任务 ID
+        governance_root: 治理工作区根
+    
+    Returns:
+        链末端的任务 ID，如果没有 fix 链则返回 None
+    """
+    fix_closures_root = governance_root / "5_tasks" / "records" / "fix_closures"
+    if not fix_closures_root.exists():
+        return None
+    
+    current = task_id
+    visited = set()  # 防止循环
+    
+    while True:
+        if current in visited:
+            # 检测到循环，停止
+            return None
+        visited.add(current)
+        
+        # 查找以 current 为 source_task_id 的 derivation 记录
+        next_fix = None
+        for task_dir in fix_closures_root.glob("*"):
+            if not task_dir.is_dir():
+                continue
+            for deriv_file in task_dir.glob("derivation_*.md"):
+                try:
+                    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+                    text = deriv_file.read_text(encoding="utf-8")
+                    metadata, _body, _warnings = parse_markdown_frontmatter(text)
+                    source = str(metadata.get("source_task_id") or "").strip()
+                    fix_task = str(metadata.get("fix_task_id") or "").strip()
+                    
+                    if source == current and fix_task:
+                        next_fix = fix_task
+                        break
+                except Exception:
+                    continue
+            if next_fix:
+                break
+        
+        if not next_fix:
+            # 没有下一级，current 是链末端
+            return current if current != task_id else None
+        
+        current = next_fix
+
+
+def _find_continuation_task(task_id: str, governance_root: Path) -> str | None:
+    """AIPOS-F53: 查找结案-承接关系中的承接任务（从 conclusion_note 解析）。
+    
+    结案-承接形态：卡 A 因卡面缺陷结案，由续卡 B 承接。
+    判据：A 的任务卡 conclusion_note 中包含承接声明（如 "由续卡 TASK-B 承接"）。
+    
+    Args:
+        task_id: 结案任务 ID
+        governance_root: 治理工作区根
+    
+    Returns:
+        承接任务 ID，如果没有承接关系则返回 None
+    """
+    # 查找任务卡（可能在 completed/claimed/pending 等目录）
+    queue_root = governance_root / "5_tasks" / "queue"
+    task_file = None
+    
+    for status_dir in ["completed", "claimed", "pending"]:
+        potential = queue_root / status_dir / f"{task_id.lower()}.md"
+        if potential.exists():
+            task_file = potential
+            break
+    
+    if not task_file:
+        return None
+    
+    try:
+        from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+        text = task_file.read_text(encoding="utf-8")
+        metadata, _body, _warnings = parse_markdown_frontmatter(text)
+        conclusion_note = str(metadata.get("conclusion_note") or "").strip()
+        
+        if not conclusion_note:
+            return None
+        
+        # 解析承接声明（匹配 "由续卡 TASK-ID 承接" 或 "由 TASK-ID 承接" 等模式）
+        # 使用项目声明的 task_id_pattern
+        try:
+            task_id_pattern = _resolve_task_id_pattern(governance_root)
+            # 查找 "承接" 关键字附近的任务 ID
+            import re
+            # 匹配 "由...承接" 或 "承接" 附近的任务 ID
+            match = re.search(rf"(?:由.*?({task_id_pattern}).*?承接|承接.*?({task_id_pattern}))", conclusion_note)
+            if match:
+                continuation_id = match.group(1) or match.group(2)
+                return continuation_id
+        except SchemaLoadError:
+            pass
+    except Exception:
+        pass
+    
+    return None
+
+
+def _resolve_task_lineage(task_id: str, governance_root: Path) -> list[str]:
+    """AIPOS-F53: 解析任务的完整世系（fix 链 + 结案-承接链）。
+    
+    返回从 task_id 开始的完整世系链，包括：
+    1. task_id 自身
+    2. 所有 fix 链任务（递归查找）
+    3. 结案-承接关系（如果有）
+    
+    Args:
+        task_id: 起始任务 ID
+        governance_root: 治理工作区根
+    
+    Returns:
+        世系列表，按优先级排序（链末端优先）
+    """
+    lineage = [task_id]
+    visited = {task_id}
+    
+    # 1. 查找 fix 链末端
+    terminal = _find_fix_chain_terminal(task_id, governance_root)
+    if terminal and terminal not in visited:
+        lineage.append(terminal)
+        visited.add(terminal)
+    
+    # 2. 查找结案-承接关系
+    continuation = _find_continuation_task(task_id, governance_root)
+    if continuation and continuation not in visited:
+        lineage.append(continuation)
+        visited.add(continuation)
+        
+        # 递归查找承接任务的 fix 链
+        cont_terminal = _find_fix_chain_terminal(continuation, governance_root)
+        if cont_terminal and cont_terminal not in visited:
+            lineage.append(cont_terminal)
+            visited.add(cont_terminal)
+    
+    return lineage
+
+
 def check_verdict_ref_authorization(
     verdict_ref: str,
     governance_root: Path,
@@ -577,11 +727,16 @@ def check_verdict_ref_authorization(
         if not task_id:
             uncovered.append(f"{commit_hash[:8]}: commit message 无 task_id ({subject[:40]})")
         elif task_id != reviewed_task_id:
-            uncovered.append(
-                f"{commit_hash[:8]}: 属于 {task_id}, 但裁决审的是 {reviewed_task_id} (跨卡挪用)"
-            )
+            # AIPOS-F53: 修复轮承接判定 — 检查 commit 所属任务的世系是否包含 reviewed_task_id
+            # 世系包括: fix 链 + 结案-承接关系
+            commit_lineage = _resolve_task_lineage(task_id, governance_root)
+            if reviewed_task_id not in commit_lineage:
+                uncovered.append(
+                    f"{commit_hash[:8]}: 属于 {task_id}, 但裁决审的是 {reviewed_task_id} (跨卡挪用)"
+                )
     
     if uncovered:
+        # AIPOS-F53: 拒绝时给出 dev_override 出口引导
         return {
             "authorized": False,
             "verdict_id": verdict_ref,
@@ -590,7 +745,9 @@ def check_verdict_ref_authorization(
             "uncovered_commits": uncovered,
             "message": (
                 f"verdict_ref '{verdict_ref}' 未覆盖所有待部署 commit: "
-                f"{len(uncovered)}/{len(commits_to_deploy)} 个 commit 不属于 {reviewed_task_id}"
+                f"{len(uncovered)}/{len(commits_to_deploy)} 个 commit 不属于 {reviewed_task_id}。\n"
+                f"如确需部署，请 Owner 授权 dev_override: "
+                f"lybra-deploy deploy --dev-override --reason '<Owner 授权原因>'"
             ),
         }
     
