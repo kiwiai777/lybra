@@ -28,9 +28,18 @@ sys.path.insert(0, str(REPO))
 from tools.aipos_cli.records import load_records, clear_records_cache  # noqa: E402
 
 
+def _prefix_rev() -> str:
+    """红侧基线 = 缓存引入提交之父(防时间性地雷: main 合入修复后 main: 自爆)。"""
+    out = subprocess.run(
+        ["git", "-C", str(REPO), "log", "main", "-S", "_RECORDS_GROUP_CACHE",
+         "--format=%H", "--reverse", "--", "tools/aipos_cli/records.py"],
+        capture_output=True, text=True).stdout.strip().splitlines()
+    return f"{out[0]}^" if out else "main"
+
+
 def _load_prefix_module():
     src = subprocess.run(
-        ["git", "-C", str(REPO), "show", "main:tools/aipos_cli/records.py"],
+        ["git", "-C", str(REPO), "show", f"{_prefix_rev()}:tools/aipos_cli/records.py"],
         capture_output=True, text=True, check=True,
     ).stdout
     tmp = Path(tempfile.mkdtemp(prefix="f55-prefix-")) / "records_prefix.py"
