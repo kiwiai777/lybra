@@ -8,22 +8,37 @@
       {
         "name": "copy_tree",
         "description": "Recursively copy directory tree from source to target",
-        "parameters": ["source_path", "target_path", "force_overwrite"]
+        "parameters": [
+          "source_path",
+          "target_path",
+          "force_overwrite"
+        ]
       },
       {
         "name": "render_config",
         "description": "Render config template with substitutions",
-        "parameters": ["template_path", "target_path", "variables"]
+        "parameters": [
+          "template_path",
+          "target_path",
+          "variables"
+        ]
       },
       {
         "name": "mint_credential",
         "description": "Mint role credential via gate (enroll flow)",
-        "parameters": ["role", "agent_instance", "projects"]
+        "parameters": [
+          "role",
+          "agent_instance",
+          "projects"
+        ]
       },
       {
         "name": "write_manifest",
         "description": "Write version/provenance manifest",
-        "parameters": ["target_path", "manifest_data"]
+        "parameters": [
+          "target_path",
+          "manifest_data"
+        ]
       }
     ]
   },
@@ -40,7 +55,9 @@
         "harness": "pi",
         "relative_path": "_distributed/extensions/lybra-loop"
       },
-      "applies_to_roles": ["executor"],
+      "applies_to_roles": [
+        "executor"
+      ],
       "operation": "copy_tree",
       "version_strategy": "git_commit_hash",
       "notes": "Main loop connector - unified for all roles that run loops"
@@ -57,10 +74,18 @@
         "harness": "pi",
         "relative_path": "_distributed/skills"
       },
-      "applies_to_roles": ["executor"],
+      "applies_to_roles": [
+        "executor"
+      ],
       "operation": "copy_tree",
       "filter": {
-        "include": ["block-and-report", "chunked-io", "finalize-slice", "task-closure-loop", "write-return"]
+        "include": [
+          "block-and-report",
+          "chunked-io",
+          "finalize-slice",
+          "task-closure-loop",
+          "write-return"
+        ]
       },
       "version_strategy": "git_commit_hash",
       "notes": "Filtered skill set per role requirements from roles.schema.json"
@@ -77,7 +102,9 @@
         "harness": "pi",
         "relative_path": "_distributed/extensions/lybra-loop"
       },
-      "applies_to_roles": ["auditor"],
+      "applies_to_roles": [
+        "auditor"
+      ],
       "operation": "copy_tree",
       "version_strategy": "git_commit_hash",
       "notes": "Same loop connector, role-specific behavior via token scopes"
@@ -94,10 +121,18 @@
         "harness": "pi",
         "relative_path": "_distributed/skills"
       },
-      "applies_to_roles": ["auditor"],
+      "applies_to_roles": [
+        "auditor"
+      ],
       "operation": "copy_tree",
       "filter": {
-        "include": ["audit-independent-evidence", "block-and-report", "chunked-io", "task-closure-loop", "write-return"]
+        "include": [
+          "audit-independent-evidence",
+          "block-and-report",
+          "chunked-io",
+          "task-closure-loop",
+          "write-return"
+        ]
       },
       "version_strategy": "git_commit_hash",
       "notes": "Auditor-specific skill set"
@@ -114,7 +149,9 @@
         "harness": "pi",
         "relative_path": "_distributed/extensions/lybra-loop"
       },
-      "applies_to_roles": ["advisor"],
+      "applies_to_roles": [
+        "advisor"
+      ],
       "operation": "copy_tree",
       "version_strategy": "git_commit_hash",
       "notes": "Advisor uses same loop infrastructure"
@@ -131,10 +168,20 @@
         "harness": "pi",
         "relative_path": "_distributed/skills"
       },
-      "applies_to_roles": ["advisor"],
+      "applies_to_roles": [
+        "advisor"
+      ],
       "operation": "copy_tree",
       "filter": {
-        "include": ["advisor-commands", "block-and-report", "card-author", "task-closure-loop", "truth-first-drafting", "truth-navigator", "write-return"]
+        "include": [
+          "advisor-commands",
+          "block-and-report",
+          "card-author",
+          "task-closure-loop",
+          "truth-first-drafting",
+          "truth-navigator",
+          "write-return"
+        ]
       },
       "version_strategy": "git_commit_hash",
       "notes": "Advisor-specific skill set (AIPOS-R6E ⑥: card-author = 顾问出卡检查表; AIPOS-R6M 大项C②: truth-navigator = 时间线导航)"
@@ -151,7 +198,9 @@
         "harness": "pi",
         "relative_path": "AGENTS.md"
       },
-      "applies_to_roles": ["executor"],
+      "applies_to_roles": [
+        "executor"
+      ],
       "operation": "copy_tree",
       "version_strategy": "git_commit_hash",
       "seed_only": true,
@@ -170,7 +219,9 @@
         "harness": "pi",
         "relative_path": "AGENTS.md"
       },
-      "applies_to_roles": ["auditor"],
+      "applies_to_roles": [
+        "auditor"
+      ],
       "operation": "copy_tree",
       "version_strategy": "git_commit_hash",
       "seed_only": true,
@@ -189,7 +240,9 @@
         "harness": "pi",
         "relative_path": "AGENTS.md"
       },
-      "applies_to_roles": ["advisor"],
+      "applies_to_roles": [
+        "advisor"
+      ],
       "operation": "copy_tree",
       "version_strategy": "git_commit_hash",
       "seed_only": true,
@@ -208,7 +261,11 @@
         "harness": "pi",
         "relative_path": "_distributed/schema/transitions.schema.json"
       },
-      "applies_to_roles": ["executor", "auditor", "advisor"],
+      "applies_to_roles": [
+        "executor",
+        "auditor",
+        "advisor"
+      ],
       "operation": "copy_tree",
       "version_strategy": "git_commit_hash",
       "notes": "Transitions schema 经 R3分发包下发到工位（生成物不入库）。连接器执行器从此schema读取转移规则，零特判。"
@@ -226,7 +283,12 @@
   },
   "manifest_schema": {
     "description": "Standard manifest written to target_root/.version-{role} after distribution",
-    "required_fields": ["version", "role", "distributed_at", "distributions"],
+    "required_fields": [
+      "version",
+      "role",
+      "distributed_at",
+      "distributions"
+    ],
     "example": {
       "version": "b0d056e",
       "role": "executor",
@@ -279,9 +341,75 @@
     "rule": "applies_to_roles 数组中只写内建角色名(如 executor, auditor)。构建器(build_role_manifest)在匹配时自动解析自定义角色的 class: 若自定义角色 hbj-coder 的 class=executor, 则 applies_to_roles=[\"executor\"] 的分发物自动包含 hbj-coder。",
     "forbidden": "class: 前缀语法已删除(AIPOS-F26)。applies_to_roles 中禁止出现 class:executor 等写法——直接在构建器中按注册表 class 展开。",
     "example": {
-      "applies_to_roles": ["executor"],
+      "applies_to_roles": [
+        "executor"
+      ],
       "matches_for_builtin": "executor → 直接匹配",
       "matches_for_custom": "hbj-coder (class=executor in project.json) → 构建器解析 class → 匹配 executor → 自动包含"
     }
+  },
+  "minimum_bootable_set": {
+    "description": "AIPOS-F54: workstation minimum bootable set — every item enroll must land in one action so a fresh workstation can start pi and run /lybra on with ZERO manual editing. Single source for the missing-item check (each missing item named individually; never 'one missing key breaks everything with no name'). Seeded seed_only: existing files are never overwritten (user customization preserved). Declared here per card acceptance #15 ('config.schema 或分发清单择一').",
+    "items": [
+      {
+        "name": ".lybra/connection.json",
+        "kind": "file",
+        "path": ".lybra/connection.json",
+        "description": "Gate connection + credentials + workspace_root + lybra_bin + governance_root"
+      },
+      {
+        "name": ".lybra/role",
+        "kind": "file",
+        "path": ".lybra/role",
+        "description": "Role identity incl. owner_policy_ref (derived from the effective owner_autonomy_policy envelope)"
+      },
+      {
+        "name": "connection.json#lybra_bin",
+        "kind": "json_key",
+        "container": ".lybra/connection.json",
+        "key": "lybra_bin",
+        "path": ".lybra/connection.json",
+        "value_must_exist": true,
+        "description": "Points at the actual CLI deployment so /lybra sync works without probing (dangling path = missing; the TS resolver then probes and reports)"
+      },
+      {
+        "name": "role#owner_policy_ref",
+        "kind": "json_key",
+        "container": ".lybra/role",
+        "key": "owner_policy_ref",
+        "path": ".lybra/role",
+        "description": "Effective owner_autonomy_policy id — without it the loop cannot start (identity resolution fails)"
+      },
+      {
+        "name": "AGENTS.md",
+        "kind": "file",
+        "path": "AGENTS.md",
+        "description": "Charter placeholder seeded from the distribution source; full charter via /lybra sync"
+      },
+      {
+        "name": ".pi/settings.json",
+        "kind": "file",
+        "path": ".pi/settings.json",
+        "description": "Minimal pi settings (defaultProvider/enableSkillCommands/skills; NO defaultModel, NO extensions array)"
+      },
+      {
+        "name": ".pi/extensions/claim.ts",
+        "kind": "file",
+        "path": ".pi/extensions/claim.ts",
+        "description": "Claim extension mount — relative symlink to ../../../_shared/extensions/claim.ts"
+      },
+      {
+        "name": ".pi/extensions/lybra-loop.ts",
+        "kind": "file",
+        "path": ".pi/extensions/lybra-loop.ts",
+        "description": "Loop extension mount — REAL forwarding file (NOT a symlink: multi-file extensions lose sibling modules through symlinks)"
+      },
+      {
+        "name": ".pi/skills/",
+        "kind": "symlink_dir",
+        "path": ".pi/skills",
+        "description": "Per-skill relative symlinks to ../../../_distributed/skills/<name>, allocated by role_class from roles.schema tool_package"
+      }
+    ]
   }
 }

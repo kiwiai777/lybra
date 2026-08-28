@@ -306,6 +306,16 @@ else
   overall=1
 fi
 
+# AIPOS-F54: 新工位一条命令配齐(enroll 落可启动最小集: .pi接线+owner_policy_ref+lybra_bin)
+echo
+echo "── tests/test_aipos_f54.py (工位可启动最小集) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f54.py"; then
+  echo "✓ tests/test_aipos_f54.py PASS"
+else
+  echo "✗ tests/test_aipos_f54.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
