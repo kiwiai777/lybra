@@ -4676,10 +4676,17 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
     # AIPOS-F31 热修: project.json 的规范键是 "project"(write_project_json 单源),
     # F25 起读 "name" 键 — 真实项目(如 chris-huibojin)全数 project.json 都用 "project" 键,
     # 导致铸出的凭据 projects=[] + projects_enforced=False(预演五号实锤)。
+    # AIPOS-F50-fix1: governance_root 为空字符串时禁回落 root —— root 是门自身工作区(lybra),
+    # 不是治理根。空 governance_root 应触发推导失败 (projects=[], projects_enforced=False)。
     if sc is not None and sc.get("governance_root"):
         governance_root = sc["governance_root"]
     else:
-        governance_root = str(root)  # fallback: 记录存储位置(既有行为兼容)
+        # 旧码(无自包含结构)或 governance_root 为空 → 回落 workspace (记录存储位置)
+        # 注意: 仅当 sc 为 None 时才回落, 空 governance_root 不回落
+        if sc is None:
+            governance_root = str(root)  # 旧码兼容: 用记录存储位置
+        else:
+            governance_root = ""  # 空 governance_root → 触发推导失败
     
     from tools.aipos_cli.workspace_config import read_project_json
     try:
