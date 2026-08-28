@@ -249,6 +249,16 @@ else
   overall=1
 fi
 
+# AIPOS-F50-fix1: governance_root 回落修复
+echo
+echo "── tests/test_aipos_f50_fix1_governance_root_fallback.py ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f50_fix1_governance_root_fallback.py"; then
+  echo "✓ tests/test_aipos_f50_fix1_governance_root_fallback.py PASS"
+else
+  echo "✗ tests/test_aipos_f50_fix1_governance_root_fallback.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

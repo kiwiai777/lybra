@@ -223,7 +223,10 @@ def issue_self_contained_code(
 
     # ③ 自包含码(gate_url 缺省推导, 显式参数优先; governance_root 同理 —— F24A)
     resolved_gate_url = (gate_url or "").strip() or resolve_gate_url_default(root)
-    resolved_governance_root = (governance_root or "").strip() or str(root)
+    # AIPOS-F50-fix1: governance_root 禁回落 workspace_root —— workspace_root 是发码门的工作区
+    # (可能是 lybra), 不一定是治理根。governance_root 为空时应保持空, 让 enroll_exchange
+    # 的推导失败逻辑处理 (projects=[], projects_enforced=False)。
+    resolved_governance_root = (governance_root or "").strip()
     self_contained = encode_self_contained_code(
         gate_url=resolved_gate_url,
         governance_root=resolved_governance_root,
