@@ -4678,31 +4678,48 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
     # 导致铸出的凭据 projects=[] + projects_enforced=False(预演五号实锤)。
     # AIPOS-F50-fix1: governance_root 为空字符串时禁回落 root —— root 是门自身工作区(lybra),
     # 不是治理根。空 governance_root 应触发推导失败 (projects=[], projects_enforced=False)。
+    
+    # AIPOS-F52 临时打点: 跟踪 projects 推导链路
+    import sys
+    print(f"[F52-TRACE] enroll_exchange start for role={role}, instance={instance}", file=sys.stderr)
+    print(f"[F52-TRACE] sc is None: {sc is None}", file=sys.stderr)
+    if sc is not None:
+        print(f"[F52-TRACE] sc.get('governance_root'): '{sc.get('governance_root')}'", file=sys.stderr)
+    
     if sc is not None and sc.get("governance_root"):
         governance_root = sc["governance_root"]
+        print(f"[F52-TRACE] Branch: sc has governance_root, using: '{governance_root}'", file=sys.stderr)
     else:
         # 旧码(无自包含结构)或 governance_root 为空 → 回落 workspace (记录存储位置)
         # 注意: 仅当 sc 为 None 时才回落, 空 governance_root 不回落
         if sc is None:
             governance_root = str(root)  # 旧码兼容: 用记录存储位置
+            print(f"[F52-TRACE] Branch: sc is None, fallback to root: '{governance_root}'", file=sys.stderr)
         else:
             governance_root = ""  # 空 governance_root → 触发推导失败
+            print(f"[F52-TRACE] Branch: sc exists but empty governance_root, set to empty string", file=sys.stderr)
     
     from tools.aipos_cli.workspace_config import read_project_json
+    print(f"[F52-TRACE] About to read_project_json('{governance_root}')", file=sys.stderr)
     try:
         project_data = read_project_json(governance_root)
+        print(f"[F52-TRACE] read_project_json returned: {project_data}", file=sys.stderr)
         project_name = str(project_data.get("project") or project_data.get("name") or "").strip()
+        print(f"[F52-TRACE] Extracted project_name: '{project_name}'", file=sys.stderr)
         if project_name:
             token_entry["projects"] = [project_name]
             token_entry["projects_enforced"] = True
+            print(f"[F52-TRACE] Set token_entry['projects'] = {token_entry['projects']}, enforced=True", file=sys.stderr)
         else:
             # project.json 存在但无 project/name → projects=[] (禁静默回落)
             token_entry["projects"] = []
             token_entry["projects_enforced"] = False
-    except Exception:
+            print(f"[F52-TRACE] Empty project_name, set projects=[], enforced=False", file=sys.stderr)
+    except Exception as e:
         # project.json 不存在或读取失败 → projects=[] (禁静默回落 lybra)
         token_entry["projects"] = []
         token_entry["projects_enforced"] = False
+        print(f"[F52-TRACE] Exception reading project.json: {e}, set projects=[], enforced=False", file=sys.stderr)
 
     # AIPOS-F31 热修: F28(05e556e) 在此使用了 http_sse._CURRENT_SERVER 却从未 import ——
     # NameError 每次必炸(被下方 except 吞成 warning), token 从未登记进任何声明源,
@@ -4743,7 +4760,9 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
                 connection_data = {"tokens": []}
             
             # 更新 token
+            print(f"[F52-TRACE] Before upsert (connection mode), token_entry['projects'] = {token_entry.get('projects')}", file=sys.stderr)
             rotated = upsert_token_entry(connection_data, token_entry)
+            print(f"[F52-TRACE] After upsert (connection mode), token_entry['projects'] = {token_entry.get('projects')}", file=sys.stderr)
             
             # AIPOS-R6S 大项C③: 同角色多 token 收敛(移除 test.* 陈旧 token)
             from tools.aipos_cli.enroll_client import converge_role_tokens
@@ -4778,7 +4797,13 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
             print(f"[enroll_exchange] Writing to home_root mode registry: {lybra_dir}/connection.json", file=sys.stderr)
             
             connection_data = load_or_create_connection_json(lybra_dir, gate_url=None)
+            print(f"[F52-TRACE] Before upsert (home_root mode), token_entry['projects'] = {token_entry.get('projects')}", file=sys.stderr)
             rotated = upsert_token_entry(connection_data, token_entry)
+            print(f"[F52-TRACE] After upsert (home_root mode), token_entry['projects'] = {token_entry.get('projects')}", file=sys.stderr)
+            print(f"[F52-TRACE] In connection_data, tokens with role={role}:", file=sys.stderr)
+            for t in connection_data.get('tokens', []):
+                if t.get('role') == role:
+                    print(f"[F52-TRACE]   instance={t.get('agent_instance')}, projects={t.get('projects')}", file=sys.stderr)
             
             from tools.aipos_cli.enroll_client import converge_role_tokens
             removed_instances, converged = converge_role_tokens(connection_data, role)
@@ -4823,6 +4848,9 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
             "Ask the advisor for a fresh code (lybra_enroll_code_dry_run/confirm).",
         )
 
+    print(f"[F52-TRACE] Before returning, token_entry['projects'] = {token_entry.get('projects')}", file=sys.stderr)
+    print(f"[F52-TRACE] enroll_exchange complete for role={role}, instance={instance}", file=sys.stderr)
+    
     return _tool_result({
         "ok": True,
         "operation": "roles_enroll_exchange",
