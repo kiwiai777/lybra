@@ -173,11 +173,15 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
     from tools.aipos_cli.enrollment import decode_self_contained_code
 
     sc = decode_self_contained_code(code)
+    # AIPOS-F52: 修复 CLI 只发内层 code 导致门侧解码失败的问题。
+    # 门侧需要完整的自包含码来解析 governance_root 等元数据。
+    # 修复前: inner_code = sc["code"] —— 只发内层短码
+    # 修复后: inner_code = code —— 发完整自包含码 LYBRAENROLL1.*
     inner_code = code
     if sc is not None:
         # F23: 自包含码 —— 内嵌运输凭证即 transport 认证(bootstrap 要求删除)
         bootstrap_token = sc["transport_token"]
-        inner_code = sc["code"]
+        # 保留 inner_code = code (完整自包含码), 不再提取 sc["code"]
     elif not bootstrap_token:
         bootstrap_token = os.environ.get("LYBRA_BOOTSTRAP_TOKEN", "").strip()
     if not bootstrap_token:
@@ -189,13 +193,14 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
         )
     
     url = f"{gate_url.rstrip('/')}/mcp"
+    # AIPOS-F52: 发送完整自包含码(不是 sc["code"] 内层短码)
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
         "params": {
             "name": "lybra_roles_enroll_exchange",
-            "arguments": {"code": inner_code}
+            "arguments": {"code": inner_code}  # inner_code = code (完整自包含码)
         }
     }
     
