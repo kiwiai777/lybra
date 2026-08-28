@@ -239,6 +239,16 @@ else
   overall=1
 fi
 
+# AIPOS-F50: 凭据 projects 域按治理根推导 + queue_list 口径统一
+echo
+echo "── tests/test_aipos_f50_projects_derivation.py ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f50_projects_derivation.py"; then
+  echo "✓ tests/test_aipos_f50_projects_derivation.py PASS"
+else
+  echo "✗ tests/test_aipos_f50_projects_derivation.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
