@@ -1,12 +1,146 @@
 from __future__ import annotations
 
+import os
+import threading
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_loader import _serialize_dates
 from tools.schema_constants import RecordType
+
+# ---------------------------------------------------------------------------
+# AIPOS-F55: 进程内缓存 + 子目录增量 + 按需加载
+#
+# 唯一缓存实现(Owner 防碎片化红线①):挂在 load_records 唯一入口, 禁在
+# board_adapter / mcp_server / CLI 另加一层。
+# 失效判据 = 文件系统事实(每个子目录的 (relpath, mtime_ns, size) 指纹; 红线⑤:
+# 禁手工版本号/写入点通知)——同进程写后立即可读与跨进程可见同源(红线①②)。
+# 防半写(红线③):组内扫描前后双指纹, 不一致则重扫一次(有界重试)。
+# 零新持久物(红线②):缓存只在进程内存, 进程退出即失效; 不写索引文件/不建缓存目录。
+# ---------------------------------------------------------------------------
+
+_RECORDS_CACHE_LOCK = threading.RLock()
+# key=(repo_root_str, group) → (fingerprint, parsed_records_list, hand_written_warnings)
+_RECORDS_GROUP_CACHE: dict[tuple[str, str], tuple[tuple, list[dict[str, Any]], list[str]]] = {}
+
+#: 分组名 → (子目录名, 记录构造方式)。standard 类直接用 kind 作为 record_type;
+#: owner_decisions 为平铺目录(无任务子目录), owner_verification/owner_decision 为专用构造器。
+_GROUP_KINDS: dict[str, tuple[str, str]] = {
+    "sessions": ("sessions", "session"),
+    "publishes": ("publishes", RecordType.PUBLISH),
+    "claims": ("claims", RecordType.CLAIM),
+    "returns": ("returns", RecordType.RETURN),
+    "audit_dispatches": ("audit_dispatches", RecordType.AUDIT_DISPATCH),
+    "audit_verdicts": ("audit_verdicts", RecordType.AUDIT_VERDICT),
+    "owner_decisions": ("owner_decisions", "owner_decision"),
+    "owner_verifications": ("owner_verifications", "owner_verification"),
+    "closures": ("closures", RecordType.CLOSURE),
+}
+
+
+def _group_fingerprint(group_root: Path) -> tuple | None:
+    """组指纹 = 按 (相对路径, mtime_ns, size) 排序元组(纯文件系统事实, 跨进程生效)。
+
+    None = 目录不存在。成本 = 一次 scandir 遍历(不读文件内容), 千级文件毫秒量级。
+    """
+    if not group_root.is_dir():
+        return None
+    entries: list[tuple[str, int, int]] = []
+    stack = [group_root]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for entry in it:
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                    elif entry.name.endswith(".md") and entry.is_file(follow_symlinks=False):
+                        entries.append((entry.path, st.st_mtime_ns, st.st_size))
+        except OSError:
+            continue
+    entries.sort()
+    return tuple(entries)
+
+
+def _build_group_records(
+    repo_root: Path,
+    group_root: Path,
+    group: str,
+    kind: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """解析单个分组(语义与 F55 前完全一致, 含裁决门生过滤)。"""
+    if kind == "owner_decision":
+        return (
+            [_build_owner_decision_record(path, repo_root) for path in _iter_owner_decision_files(group_root)],
+            [],
+        )
+    if kind == "owner_verification":
+        return (
+            [
+                _build_owner_verification_record(path, repo_root, directory_task_id)
+                for path, directory_task_id in _iter_record_files(group_root)
+            ],
+            [],
+        )
+    records = [
+        _build_record(path, repo_root, kind, directory_task_id)
+        for path, directory_task_id in _iter_record_files(group_root)
+    ]
+    if group == "audit_verdicts":
+        from tools.aipos_cli.audit_helpers import is_gate_born_verdict_record
+
+        kept: list[dict[str, Any]] = []
+        hand_written: list[str] = []
+        for rec in records:
+            if is_gate_born_verdict_record(rec):
+                kept.append(rec)
+            else:
+                hand_written.append(
+                    f"hand-written verdict ignored: {rec.get('path', '?')} "
+                    f"(缺少门生标记 record_type/verdict_id/verdict_at;"
+                    f"裁决只经门产生,勿手写落盘)"
+                )
+        return kept, hand_written
+    return records, []
+
+
+def _load_group_cached(repo_root: Path, group: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """带指纹缓存的分组加载(增量: 未变组复用, 变更组重扫+双指纹防半写)。"""
+    subdir, kind = _GROUP_KINDS[group]
+    group_root = repo_root / "5_tasks" / "records" / subdir
+    cache_key = (str(repo_root), group)
+    records: list[dict[str, Any]] = []
+    hand_written: list[str] = []
+    for _attempt in range(2):  # 红线③: 双指纹有界重试
+        fp_before = _group_fingerprint(group_root)
+        if fp_before is None:
+            with _RECORDS_CACHE_LOCK:
+                _RECORDS_GROUP_CACHE.pop(cache_key, None)
+            return [], []
+        with _RECORDS_CACHE_LOCK:
+            cached = _RECORDS_GROUP_CACHE.get(cache_key)
+            if cached is not None and cached[0] == fp_before:
+                return list(cached[1]), list(cached[2])
+        records, hand_written = _build_group_records(repo_root, group_root, group, kind)
+        fp_after = _group_fingerprint(group_root)
+        if fp_after == fp_before:
+            with _RECORDS_CACHE_LOCK:
+                _RECORDS_GROUP_CACHE[cache_key] = (fp_before, records, hand_written)
+            return list(records), list(hand_written)
+        # 扫描期间组内发生变更(可能读到半写): 重扫一次
+    return records, hand_written
+
+
+def clear_records_cache() -> None:
+    """清空进程内记录缓存(测试靶场用; 生产路径靠指纹自动失效)。"""
+    with _RECORDS_CACHE_LOCK:
+        _RECORDS_GROUP_CACHE.clear()
 
 
 def expected_session_record_path(repo_root: Path, task_id: str, session_id: str) -> Path:
@@ -199,11 +333,16 @@ def _build_record(
     return _serialize_dates(record)
 
 
-def _iter_record_files(root: Path) -> list[tuple[Path, str]]:
+def _iter_record_files(root: Path, task_filter: str | None = None) -> list[tuple[Path, str]]:
     if not root.exists():
         return []
     files: list[tuple[Path, str]] = []
-    for task_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+    task_dirs = (
+        [root / task_filter] if task_filter else sorted(path for path in root.iterdir() if path.is_dir())
+    )
+    for task_dir in task_dirs:
+        if not task_dir.is_dir():
+            continue
         for path in sorted(task_dir.iterdir()):
             if path.is_file() and path.suffix == ".md":
                 files.append((path, task_dir.name))
@@ -314,7 +453,20 @@ def _build_owner_verification_record(
     return _serialize_dates(record)
 
 
-def load_records(repo_root: Path) -> dict[str, Any]:
+def load_records(
+    repo_root: Path,
+    *,
+    groups: Iterable[str] | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    """加载门记录(唯一入口; AIPOS-F55 起带进程内指纹缓存与增量)。
+
+    默认行为与 F55 前完全一致(红线④):全量加载, 返回结构不变。
+    可选参数(均不影响默认):
+      groups: 只加载指定分组(如 {"claims", "returns"});未列分组为空集。
+      task_id: 只加载该任务名下子目录(标准分组按 <group>/<task_id>/ 取; 平铺的
+               owner_decisions 不受此约束)。子集加载不走缓存(子集本身便宜)。
+    """
     records_root = repo_root / "5_tasks" / "records"
     sessions_root = records_root / "sessions"
     publishes_root = records_root / "publishes"
@@ -325,62 +477,59 @@ def load_records(repo_root: Path) -> dict[str, Any]:
     owner_decisions_root = records_root / "owner_decisions"
     owner_verifications_root = records_root / "owner_verifications"
     closures_root = records_root / "closures"
-    sessions = [
-        _build_record(path, repo_root, "session", directory_task_id)
-        for path, directory_task_id in _iter_record_files(sessions_root)
-    ]
-    publishes = [
-        _build_record(path, repo_root, RecordType.PUBLISH, directory_task_id)
-        for path, directory_task_id in _iter_record_files(publishes_root)
-    ]
-    claims = [
-        _build_record(path, repo_root, RecordType.CLAIM, directory_task_id)
-        for path, directory_task_id in _iter_record_files(claims_root)
-    ]
-    returns = [
-        _build_record(path, repo_root, RecordType.RETURN, directory_task_id)
-        for path, directory_task_id in _iter_record_files(returns_root)
-    ]
-    audit_dispatches = [
-        _build_record(path, repo_root, RecordType.AUDIT_DISPATCH, directory_task_id)
-        for path, directory_task_id in _iter_record_files(audit_dispatches_root)
-    ]
-    audit_verdicts_all = [
-        _build_record(path, repo_root, RecordType.AUDIT_VERDICT, directory_task_id)
-        for path, directory_task_id in _iter_record_files(audit_verdicts_root)
-    ]
-    # AIPOS-F2: 裁决存在性单源——只认门生记录,手写文件过滤掉并记录警告。
-    # AIPOS-F12 大项A: 判定改调共享单源 audit_helpers.is_gate_born_verdict_record,
-    # 删除本模块内联副本(不再有第二定义)。惰性导入避免 records ↔ audit_helpers 循环。
-    from tools.aipos_cli.audit_helpers import is_gate_born_verdict_record
-    audit_verdicts: list[dict[str, Any]] = []
-    hand_written_verdict_warnings: list[str] = []
-    for rec in audit_verdicts_all:
-        if is_gate_born_verdict_record(rec):
-            audit_verdicts.append(rec)
-        else:
-            hand_written_verdict_warnings.append(
-                f"hand-written verdict ignored: {rec.get('path', '?')} "
-                f"(缺少门生标记 record_type/verdict_id/verdict_at;"
-                f"裁决只经门产生,勿手写落盘)"
+
+    requested = list(groups) if groups is not None else None
+    if requested is not None:
+        unknown = [g for g in requested if g not in _GROUP_KINDS]
+        if unknown:
+            raise ValueError(
+                f"load_records(groups=...): 未知分组 {unknown}; 合法分组 = {sorted(_GROUP_KINDS)}"
             )
-    owner_decisions = [
-        _build_owner_decision_record(path, repo_root)
-        for path in _iter_owner_decision_files(owner_decisions_root)
-    ]
-    # AIPOS-274F1: owner_verifications (approve/reject records written by the
-    # verify-bench buttons, AIPOS-273) were on disk but never loaded here —
-    # verify_bench.py's station-exclusion logic had no way to see an Owner
-    # approval that predates the closure unit's FZ return, so an already-
-    # verified task (263) kept reappearing on the 待验站.
-    owner_verifications = [
-        _build_owner_verification_record(path, repo_root, directory_task_id)
-        for path, directory_task_id in _iter_record_files(owner_verifications_root)
-    ]
-    closures = [
-        _build_record(path, repo_root, RecordType.CLOSURE, directory_task_id)
-        for path, directory_task_id in _iter_record_files(closures_root)
-    ]
+    subset_mode = requested is not None or task_id is not None
+    active_groups = set(requested) if requested is not None else set(_GROUP_KINDS)
+
+    def _group(name: str) -> tuple[list[dict[str, Any]], list[str]]:
+        if name not in active_groups:
+            return [], []
+        if subset_mode:
+            subdir, kind = _GROUP_KINDS[name]
+            group_root = records_root / subdir
+            if task_id is not None and kind not in ("owner_decision",):
+                # 按需: 只迭代该任务子目录
+                if kind == "owner_verification":
+                    recs = [
+                        _build_owner_verification_record(p, repo_root, tid)
+                        for p, tid in _iter_record_files(group_root, task_filter=task_id)
+                    ]
+                    return recs, []
+                recs = [
+                    _build_record(p, repo_root, kind, tid)
+                    for p, tid in _iter_record_files(group_root, task_filter=task_id)
+                ]
+                if name == "audit_verdicts":
+                    from tools.aipos_cli.audit_helpers import is_gate_born_verdict_record
+
+                    kept = [r for r in recs if is_gate_born_verdict_record(r)]
+                    hw = [
+                        f"hand-written verdict ignored: {r.get('path', '?')} "
+                        f"(缺少门生标记 record_type/verdict_id/verdict_at;"
+                        f"裁决只经门产生,勿手写落盘)"
+                        for r in recs if not is_gate_born_verdict_record(r)
+                    ]
+                    return kept, hw
+                return recs, []
+            return _build_group_records(repo_root, group_root, name, kind)
+        return _load_group_cached(repo_root, name)
+
+    sessions, _ = _group("sessions")
+    publishes, _ = _group("publishes")
+    claims, _ = _group("claims")
+    returns, _ = _group("returns")
+    audit_dispatches, _ = _group("audit_dispatches")
+    audit_verdicts, hand_written_verdict_warnings = _group("audit_verdicts")
+    owner_decisions, _ = _group("owner_decisions")
+    owner_verifications, _ = _group("owner_verifications")
+    closures, _ = _group("closures")
 
     warnings: list[str] = []
     parse_errors: list[str] = []

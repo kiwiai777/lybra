@@ -29,9 +29,18 @@ sys.path.insert(0, str(REPO))
 # 前置: 从 git main 取修复前 enroll_client(红线侧真源码)
 # ---------------------------------------------------------------------------
 
+def _prefix_rev() -> str:
+    """红侧基线 = 接线引入提交的父(防时间性地雷: main 合入修复后 main: 自爆)。"""
+    out = subprocess.run(
+        ["git", "-C", str(REPO), "log", "main", "--diff-filter=A", "--format=%H", "-1",
+         "--", "tools/aipos_cli/workstation_wiring.py"],
+        capture_output=True, text=True).stdout.strip()
+    return f"{out}^" if out else "main"
+
+
 def _load_prefix_module():
     src = subprocess.run(
-        ["git", "-C", str(REPO), "show", "main:tools/aipos_cli/enroll_client.py"],
+        ["git", "-C", str(REPO), "show", f"{_prefix_rev()}:tools/aipos_cli/enroll_client.py"],
         capture_output=True, text=True, check=True,
     ).stdout
     tmp = Path(tempfile.mkdtemp(prefix="f54-prefix-")) / "enroll_client_prefix.py"
@@ -114,10 +123,20 @@ def _self_contained_code(gov_root: Path) -> str:
 
 
 def _enroll(mod, ws: Path, gov: Path, token_entry: dict) -> dict:
-    code = _self_contained_code(gov)
-    p1, p2 = _patch_module(mod, token_entry)
-    with p1, p2:
-        return mod.enroll(code=code, gate_url="", workspace_root=ws)
+    # 环境自足: 裸仓/worktree 无 .deploy 部署时补 stub bin(真仓部署存在则零动作)
+    stub = REPO / ".deploy" / "current" / "bin" / "lybra"
+    made = not stub.exists()
+    if made:
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text("#!/bin/sh\n", encoding="utf-8")
+    try:
+        code = _self_contained_code(gov)
+        p1, p2 = _patch_module(mod, token_entry)
+        with p1, p2:
+            return mod.enroll(code=code, gate_url="", workspace_root=ws)
+    finally:
+        if made:
+            stub.unlink(missing_ok=True)
 
 
 def _fresh_ws(tmp: Path, name: str = "ws") -> Path:
