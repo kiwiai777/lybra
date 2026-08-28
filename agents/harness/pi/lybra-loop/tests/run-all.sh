@@ -269,6 +269,43 @@ else
   overall=1
 fi
 
+# AIPOS-F53: 修复轮承接判定 (fix链末端裁决覆盖原卡commit)
+echo
+echo "── tests/test_aipos_f53_fix_chain_lineage.py ─────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f53_fix_chain_lineage.py"; then
+  echo "✓ tests/test_aipos_f53_fix_chain_lineage.py PASS"
+else
+  echo "✗ tests/test_aipos_f53_fix_chain_lineage.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f53_continuation_lineage.py ──────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f53_continuation_lineage.py"; then
+  echo "✓ tests/test_aipos_f53_continuation_lineage.py PASS"
+else
+  echo "✗ tests/test_aipos_f53_continuation_lineage.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f53_orphan_rejection.py ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f53_orphan_rejection.py"; then
+  echo "✓ tests/test_aipos_f53_orphan_rejection.py PASS"
+else
+  echo "✗ tests/test_aipos_f53_orphan_rejection.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f53_real_world_replay.py ─────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f53_real_world_replay.py"; then
+  echo "✓ tests/test_aipos_f53_real_world_replay.py PASS"
+else
+  echo "✗ tests/test_aipos_f53_real_world_replay.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
