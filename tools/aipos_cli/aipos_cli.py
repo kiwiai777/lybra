@@ -2754,6 +2754,34 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"\n  Configuration written to: {result['lybra_dir']}/")
                         for fname in result['files_written']:
                             print(f"    - {fname}")
+                        # AIPOS-F54 ③: 目标目录自动创建并出声
+                        if result.get('created_workspace_dir'):
+                            print(f"\n  ✓ 目标目录不存在, 已自动创建: {result['workspace_root']}")
+                        # AIPOS-F54 ①: 接线逐项报告(seed_only 跳过项也出声)
+                        wiring = result.get('wiring') or {}
+                        if wiring:
+                            print(f"\n  工位接线(role_class={wiring.get('role_class')}):")
+                            for item, info in (wiring.get('items') or {}).items():
+                                if item == 'skills':
+                                    links = info.get('links') or {}
+                                    print(f"    - .pi/skills/ ({info.get('count')} 项, 按角色类分配)")
+                                    for sname, sinfo in links.items():
+                                        print(f"        · {sname}: {sinfo.get('status')} → {sinfo.get('target_exists')}")
+                                else:
+                                    status = info.get('status') if isinstance(info, dict) else info
+                                    print(f"    - {item}: {status}")
+                        # AIPOS-F54 ⑮: 可启动最小集逐项校验(缺项逐项点名)
+                        mbs = result.get('minimum_bootable_set') or {}
+                        if mbs:
+                            if mbs.get('ok'):
+                                print(f"\n  ✓ 可启动最小集全部就绪({len(mbs.get('checks') or [])} 项)")
+                            else:
+                                print(f"\n  ⚠ 可启动最小集缺项: {', '.join(mbs.get('missing') or [])}")
+                        pd_ = result.get('policy_derivation')
+                        if pd_ and pd_.get('policy_id'):
+                            print(f"\n  ✓ owner_policy_ref 已推导: {pd_['policy_id']}")
+                        elif pd_ and pd_.get('warning'):
+                            print(f"\n  ⚠ 未推导 owner_policy_ref(非循环角色类): {pd_.get('reason')}")
                         if result.get('landed') is True:
                             print(f"  ✓ 落盘已确认(码已消费, grace 窗口关闭)")
                         elif result.get('landed') is False:
