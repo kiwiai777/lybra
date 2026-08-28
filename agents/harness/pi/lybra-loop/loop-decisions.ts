@@ -332,9 +332,24 @@ export function parseCardFrontmatter(cardMarkdown: string): AnyDict {
 
 /**
  * Extract acceptance section from card markdown.
- * Looks for "## 验收" or "## 审计对象" headings.
+ * AIPOS-F44C ⑥: 骨架验收清单渲染修复 — 从 governance_refs 提取验收项，禁另建验收字段。
+ * 卡面 governance_refs 内实际格式:'验收(...):①...②...'，提取此原文不再只找## 验收标题。
+ * Falls back to "## 验收" or "## 审计对象" headings if no governance_refs found.
  */
 export function extractAcceptanceSection(cardMarkdown: string): string {
+  // 先尝试从 governance_refs 提取
+  const governanceMatch = cardMarkdown.match(/governance_refs:[\s\S]*?\n-\s*['"]?验收\([^)]*\):([^'"\n]+)/i);
+  if (governanceMatch) {
+    const acceptanceText = governanceMatch[1].trim();
+    // 拆分项(①②③ 或 ⑴⑵⑶ 等编号)
+    const items = acceptanceText.split(/[①-⑯⑴-⒇]/g).filter(s => s.trim());
+    if (items.length > 0) {
+      return items.map((item, idx) => `${idx + 1}. ${item.trim()}`).join('\n');
+    }
+    return acceptanceText;
+  }
+  
+  // 备用：从## 验收标题提取
   const lines = cardMarkdown.split("\n");
   let inSection = false;
   const acceptanceLines: string[] = [];

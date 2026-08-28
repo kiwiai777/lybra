@@ -3540,15 +3540,26 @@ def _build_audit_verdict_preview(
     
     # AIPOS-FND-7F1: 检查已有裁决,PASS 终态不可翻案,FAIL/REQUEST_CHANGES 允许 supersede
     # AIPOS-R6S 大项A③: round 序号 — reopen 后的新 round 允许新的终态裁决。
+    # AIPOS-F44C ⑥: 轮次判定 — 按 audit_task_id 维度判定"已裁"，不是 reviewed_task 名下任意历史裁决
     reviewed_task_id_for_verdict = str(reviewed_task.get("task_id") or "")
+    audit_task_id = str(audit_task.get("task_id") or "")
     existing_verdicts = records.get("task_audit_verdicts", {}).get(reviewed_task_id_for_verdict, [])
+    
+    # 筛选出本轮审计卡的裁决（audit_task_id 维度）
+    current_round_verdicts = [
+        v for v in existing_verdicts
+        if str(v.get("audit_task_id") or "") == audit_task_id
+    ]
+    
     try:
         reviewed_round = int((reviewed_metadata or {}).get("round") or 1)
     except (TypeError, ValueError):
         reviewed_round = 1
-    if existing_verdicts and reviewed_round <= 1:
-        # 有已有裁决,检查最新裁决状态
-        latest_verdict = max(existing_verdicts, key=_verdict_time)
+    
+    # 只检查本轮审计卡的裁决，而非 reviewed_task 的所有历史裁决
+    if current_round_verdicts and reviewed_round <= 1:
+        # 有本轮裁决,检查最新裁决状态
+        latest_verdict = max(current_round_verdicts, key=_verdict_time)
         latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
         if latest_verdict_value in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
             blocking_reasons.append(f"Audit verdict cannot overturn PASS: reviewed task already has terminal PASS verdict")
@@ -3566,6 +3577,17 @@ def _build_audit_verdict_preview(
     
     if verdict_path.exists():
         blocking_reasons.append(f"Audit verdict record already exists: {verdict_rel}")
+    
+    # AIPOS-F44B-fix1-fix1 幂等第二层: 门侧拒收同一 audit_task 的重复裁决
+    # 检查 current_round_verdicts 是否已有本 audit_task_id 的裁决
+    if current_round_verdicts:
+        # 已有本轮审计卡的裁决，拒绝重复提交
+        existing_verdict_ids = [v.get("verdict_id") for v in current_round_verdicts]
+        blocking_reasons.append(
+            f"DUPLICATE_AUDIT_VERDICT: audit_task {audit_task_id} already submitted verdict(s). "
+            f"Existing: {', '.join(existing_verdict_ids)}. "
+            f"(幂等第二层: 同一审计卡不可重复提交裁决)"
+        )
 
     updated_reviewed = dict(reviewed_metadata)
     updated_reviewed["related_audit_verdict_ref"] = verdict_id
