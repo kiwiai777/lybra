@@ -1471,23 +1471,37 @@ def lybra_queue_list(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     AIPOS-R1 scope铁律: 按调用者token的(project, instance)返回任务。
     单项目token=该项目;多项目token=显式project参数或推断。
     绝不返回home-root全项目视图。
+    
+    AIPOS-F50 大项B: 口径统一——workspace_root 或治理根可解析时以其为准并与 token 域求交集,
+    与 claim 走同样的 _resolve_queue_workspace 逻辑（而非仅看 token 域）。
     """
     args = arguments or {}
+    
+    # AIPOS-F50 大项B: 与 claim 走同样的 workspace 寻址
+    # _resolve_queue_workspace: 显式 workspace_root + token 域验证, 或 token 项目域推导
+    repo_root = _resolve_queue_workspace(args)
     
     # AIPOS-R1: 从token提取project和instance scope
     token = _capability_token()
     projects = token.get("projects")
     agent_instance = token.get("agent_instance")
     
-    # 确定project scope
+    # 解析实际项目（与 workspace 寻址一致）
     project_scope: str | None = None
-    if projects:
-        if isinstance(projects, list):
+    try:
+        project_scope = _resolve_active_project_for(repo_root, None)
+    except (ValueError, FileNotFoundError, OSError):
+        # 无法解析项目时，回退到 token 单项目推断（保持向后兼容）
+        if projects and isinstance(projects, list) and len(projects) == 1:
+            project_scope = str(projects[0])
+    
+    # AIPOS-F50: workspace 解析出的项目必须在 token 的 projects 域内（_resolve_queue_workspace 已校验）
+    # 这里仅确保 project_scope 非空
+    if not project_scope:
+        if projects and isinstance(projects, list):
             if len(projects) == 1:
-                # 单项目token: 自动推断为该项目
                 project_scope = str(projects[0])
             elif len(projects) > 1:
-                # 多项目token: 需要显式参数或default_project
                 explicit_project = args.get("project")
                 if explicit_project:
                     project_scope = str(explicit_project)
@@ -1496,8 +1510,6 @@ def lybra_queue_list(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
                     if default_project:
                         project_scope = str(default_project)
                     else:
-                        # 多项目token无显式参数且无default_project: 必须报错
-                        # (不尝试推断active project,因为租户token可能没有workspace访问权限)
                         raise ValueError(
                             f"Multi-project token (projects={projects}) requires explicit 'project' argument "
                             f"or 'default_project' in token. Cannot infer project scope."
@@ -1505,16 +1517,6 @@ def lybra_queue_list(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     
     # Instance scope用于held检查(在classify时使用)
     instance_scope = str(agent_instance) if agent_instance else None
-    
-    # AIPOS-R1-FIX2: 根据project_scope动态解析workspace_root
-    # 租户token可能没有全局workspace访问权限,必须从project_scope推导
-    if project_scope:
-        from tools.aipos_cli.workspace_config import resolve_home_root, resolve_project_root
-        home = resolve_home_root()
-        repo_root = resolve_project_root(home, project_scope)
-    else:
-        # Legacy: 无project scope时使用全局workspace
-        repo_root = _repo_root()
     
     return _tool_result(get_queue(
         repo_root=repo_root,
