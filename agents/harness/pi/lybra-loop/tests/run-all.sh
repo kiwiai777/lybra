@@ -259,6 +259,16 @@ else
   overall=1
 fi
 
+# AIPOS-F52: 两层回落根治 (CLI 传完整自包含码 + workspace_root→project 从 project.json 读取)
+echo
+echo "── tests/test_aipos_f52_two_layer_fallback_fix.py ────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f52_two_layer_fallback_fix.py"; then
+  echo "✓ tests/test_aipos_f52_two_layer_fallback_fix.py PASS"
+else
+  echo "✗ tests/test_aipos_f52_two_layer_fallback_fix.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
