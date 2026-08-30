@@ -199,40 +199,33 @@ def write_task_progress_event(
     if reason:
         metadata["reason"] = reason
     
-    # Build markdown
-    lines = ["---"]
-    for key in ["record_type", "event_type", "task_id", "actor", "agent_instance", "timestamp", "model_self_reported", "stage", "summary", "reason"]:
-        if key in metadata and metadata[key]:
-            value = metadata[key]
-            # YAML escape for special chars
-            needs_quoting = any(char in str(value) for char in [":", "#", "[", "]", "{", "}", "\n"]) or str(value) != str(value).strip()
-            if needs_quoting:
-                escaped_value = str(value).replace("'", "''")
-                lines.append(f"{key}: '{escaped_value}'")
-            else:
-                lines.append(f"{key}: {value}")
-    lines.append("---")
-    lines.append(f"# Task Progress Event: {event_type}")
-    lines.append("")
-    lines.append(f"Agent `{actor}` reported {event_type} for task `{task_id}` at {timestamp}.")
-    lines.append("")
+    # Build markdown — AIPOS-F46: 收敛到 F22B 单源 (record_writer.render_markdown)
+    from tools.aipos_cli.record_writer import render_markdown as _render_markdown_single_source
+
+    body_lines = [
+        f"# Task Progress Event: {event_type}",
+        "",
+        f"Agent `{actor}` reported {event_type} for task `{task_id}` at {timestamp}.",
+        "",
+    ]
     if summary:
-        lines.append("## Summary")
-        lines.append("")
-        lines.append(summary)
-        lines.append("")
+        body_lines.extend(["## Summary", "", summary, ""])
     if reason:
-        lines.append("## Reason")
-        lines.append("")
-        lines.append(reason)
-        lines.append("")
-    lines.append("---")
-    lines.append("")
-    lines.append("This event was reported via the `lybra task-progress` CLI command (AIPOS-FND-1).")
-    lines.append("Same write logic as the task_progress MCP verb (AIPOS-323).")
-    lines.append("")
-    
-    event_file.write_text("\n".join(lines), encoding="utf-8")
+        body_lines.extend(["## Reason", "", reason, ""])
+    body_lines.extend([
+        "---",
+        "",
+        "This event was reported via the `lybra task-progress` CLI command (AIPOS-FND-1).",
+        "Same write logic as the task_progress MCP verb (AIPOS-323).",
+        "",
+    ])
+    body = "\n".join(body_lines)
+
+    event_order = ["record_type", "event_type", "task_id", "actor", "agent_instance",
+                   "timestamp", "model_self_reported", "stage", "summary", "reason"]
+    event_markdown = _render_markdown_single_source(metadata, body, event_order)
+
+    event_file.write_text(event_markdown, encoding="utf-8")
     
     # AIPOS-SMOKE-LOOP-1 FIX: 追加更新 session record (N2 真相载体)。session 找不到/不存在
     # 必须响亮报错 —— 不再 ok:True 实没写 session (HAZARD-LEDGER 08-12 行12)。
