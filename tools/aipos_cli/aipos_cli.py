@@ -1824,6 +1824,24 @@ def build_parser() -> argparse.ArgumentParser:
     envelope_renew_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     envelope_renew_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-F57: Onboarding guide (from 0 to first card running)
+    onboarding_parser = subparsers.add_parser("onboarding", help="AIPOS-F57: From 0 to first card running — full onboarding guide (zero manual editing)")
+    onboarding_subparsers = onboarding_parser.add_subparsers(dest="onboarding_command")
+    onboarding_guide_parser = onboarding_subparsers.add_parser("guide", help="Generate step-by-step onboarding guide for a new project")
+    onboarding_guide_parser.add_argument("project_name", help="Project name (the project you're onboarding)")
+    onboarding_guide_parser.add_argument("--home-root", help="Governance home root (defaults to LYBRA_HOME_ROOT env or ~/.lybra/projects)")
+    onboarding_guide_parser.add_argument("--gate-url", help="Gate URL (defaults to LYBRA_GATE_URL env or http://127.0.0.1:7118)")
+    onboarding_guide_parser.add_argument("--code-repo", help="Optional code repo path")
+    onboarding_guide_parser.add_argument("--actor", help="Actor name (defaults to $USER or owner)")
+    onboarding_guide_parser.add_argument("--workspace-dir", help="Workstation directory path (defaults to ~/<project>-workstation)")
+    onboarding_guide_parser.add_argument("--json", action="store_true", help="Output JSON")
+    onboarding_check_parser = onboarding_subparsers.add_parser("check", help="Check prerequisites for a specific onboarding step")
+    onboarding_check_parser.add_argument("project_name", help="Project name")
+    onboarding_check_parser.add_argument("--step", type=int, required=True, help="Step number to check (1-6)")
+    onboarding_check_parser.add_argument("--home-root", help="Governance home root")
+    onboarding_check_parser.add_argument("--workspace-dir", help="Workstation directory")
+    onboarding_check_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     # AIPOS-R7A: Owner decision record (arbitration, exemptions)
     owner_decision_parser = subparsers.add_parser("owner-decision", help="Record owner decision (arbitration, exemptions, policy changes)")
     owner_decision_parser.add_argument("--decision-id", required=True, help="Unique decision ID")
@@ -3704,6 +3722,52 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             return 1 if result.get("verdict") == Verdict.BLOCK else 0
         
+        parser.print_help()
+        return 2
+
+    if args.command == "onboarding":
+        if not getattr(args, "onboarding_command", None):
+            parser.print_help()
+            return 2
+        from tools.aipos_cli.onboarding import (
+            generate_onboarding_guide,
+            format_guide_text,
+            validate_step_prerequisites,
+        )
+        if args.onboarding_command == "guide":
+            guide = generate_onboarding_guide(
+                args.project_name,
+                home_root=args.home_root,
+                gate_url=args.gate_url,
+                code_repo=args.code_repo,
+                actor=args.actor,
+                workspace_dir=args.workspace_dir,
+            )
+            if args.json:
+                print(render_json(guide))
+            else:
+                print(format_guide_text(guide))
+            return 0
+        elif args.onboarding_command == "check":
+            result = validate_step_prerequisites(
+                args.step,
+                project_name=args.project_name,
+                home_root=args.home_root,
+                workspace_dir=args.workspace_dir,
+            )
+            if args.json:
+                print(render_json(result))
+            else:
+                if result["ok"]:
+                    print(f"✓ Step {args.step} prerequisites satisfied")
+                else:
+                    print(f"✗ Step {args.step} prerequisites not satisfied")
+                    print(f"Missing: {', '.join(result['missing'])}")
+                    if result["guidance"]:
+                        print("\nGuidance:")
+                        for g in result["guidance"]:
+                            print(f"  - {g}")
+            return 0 if result["ok"] else 1
         parser.print_help()
         return 2
 

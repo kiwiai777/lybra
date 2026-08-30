@@ -175,6 +175,7 @@
       "filter": {
         "include": [
           "advisor-commands",
+          "lybra-onboarding",
           "block-and-report",
           "card-author",
           "task-closure-loop",

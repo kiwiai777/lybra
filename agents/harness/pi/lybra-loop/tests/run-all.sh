@@ -41,6 +41,7 @@ declare -a files=(
   "tests/f38b-inflight-quota.test.ts"
   "tests/f38c-claim-idempotent.test.ts"
   "tests/f22-advisor-onboarding.test.ts"
+  "tests/f57-onboarding-guide.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
