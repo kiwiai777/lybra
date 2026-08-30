@@ -327,6 +327,16 @@ else
   overall=1
 fi
 
+# AIPOS-F57: 从0接新项目全流程固化(一条命令上岗+接入skill随分发下发)
+echo
+echo "── tools/aipos_cli/tests/test_aipos_f57_onboarding.py (从0接新项目全流程) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos_f57_onboarding.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos_f57_onboarding.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos_f57_onboarding.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F55: 门记录加载加缓存与增量(正确性三红线+性能先红后绿)
 echo
 echo "── tests/test_aipos_f55.py (记录缓存与增量) ──────────────────────────────────────────"
