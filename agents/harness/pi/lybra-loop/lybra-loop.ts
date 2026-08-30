@@ -2072,9 +2072,10 @@ async function doTick(): Promise<void> {
     }
 
     // AIPOS-F43 大项B: guidance outcome 处理(空闲带路)
-    // AIPOS-F44C ⑥: 输出分级 — guidance 是给模型的路标，不刷 Owner 屏
+    // AIPOS-F44C ⑦: 输出分级 — 模型路标走 sendUserMessage(工位内部);Owner 操作指引走 voice(单出口 F15)
+    // AIPOS-F56: 追加一行 Owner 可复制唤醒指令(走 voice 单出口,与 F44C⑦共用同一受众分级)
     if (outcome.kind === "guidance") {
-      const { buildHeldGuidance } = await import("./loop-decisions.js");
+      const { buildHeldGuidance, buildOwnerWakeupLine } = await import("./loop-decisions.js");
       const guidanceMsg = buildHeldGuidance(outcome.taskId, outcome.returnPath, outcome.acceptanceText);
       
       currentLogger.info("held-guidance", {
@@ -2082,7 +2083,7 @@ async function doTick(): Promise<void> {
         return_path: outcome.returnPath,
       });
       
-      // guidance 只给模型(工位路标)，不给 Owner
+      // 模型路标:sendUserMessage(工位内部,不入 Owner 屏)
       if (liveCtx?.sendUserMessage) {
         try {
           liveCtx.sendUserMessage(guidanceMsg);
@@ -2091,6 +2092,23 @@ async function doTick(): Promise<void> {
             error: e instanceof Error ? e.message : String(e),
           });
         }
+      }
+      
+      // AIPOS-F56: Owner 唤醒行 — 走 voice() 单出口(F15),F44C⑦受众分级(Owner 面)
+      // AIPOS-F44C ⑥: 节流 — 同卡同状态只出一次(与复工提醒共用 lastResumeVoice 机制)
+      if (!lastResumeVoice || lastResumeVoice.taskId !== outcome.taskId || lastResumeVoice.status !== "guidance") {
+        const wakeupLine = buildOwnerWakeupLine(outcome.taskId, outcome.cardAbsPath, currentRole);
+        voice(wakeupLine, "info", true);
+        lastResumeVoice = { taskId: outcome.taskId, status: "guidance" };
+        currentLogger.info("held-guidance-owner-wakeup", {
+          task_id: outcome.taskId,
+          wakeup_line: wakeupLine,
+        });
+      } else {
+        currentLogger.info("held-guidance-owner-wakeup-suppressed", {
+          task_id: outcome.taskId,
+          reason: "同卡同状态不重复出声(F44C⑦节流)",
+        });
       }
       
       // guidance 不停循环,继续轮询(等待用户完成工作)
