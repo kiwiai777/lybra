@@ -309,7 +309,7 @@ def ensure_lybra_dir(workspace_root: Path) -> Path:
     return lybra_dir
 
 
-def load_or_create_connection_json(lybra_dir: Path, gate_url: str, workspace_root: Path | None = None) -> dict[str, Any]:
+def load_or_create_connection_json(lybra_dir: Path, gate_url: str, workspace_root: Path | None = None, *, governance_root: str | None = None) -> dict[str, Any]:
     """加载现有 connection.json 或创建新的。
     
     幂等:如果已存在,保留现有结构(board/mcp/其他 tokens);
@@ -317,6 +317,11 @@ def load_or_create_connection_json(lybra_dir: Path, gate_url: str, workspace_roo
     
     AIPOS-C2 大项B: 铸全 workspace_root (config.schema 必填键)。
     已入册工位重跑 enroll 即补全; 已有正确值则保留 (幂等, 不动 token)。
+    
+    AIPOS-F54-fix1: workspace_root 单源 = governance_root(码内治理根)。
+    当 governance_root 可用时,始终覆盖 connection.json#workspace_root(禁 harness root 混入);
+    当 governance_root 不可用时,回退到 workspace_root 参数(旧行为兼容)。
+    governance_root 参数同时写入 connection.json#governance_root(显式声明)。
     """
     connection_file = lybra_dir / "connection.json"
     
@@ -354,12 +359,17 @@ def load_or_create_connection_json(lybra_dir: Path, gate_url: str, workspace_roo
             mcp_url = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
             data["mcp"]["rpc_url"] = mcp_url
     
-    # AIPOS-C2 大项B: 铸全 workspace_root (config.schema 必填键, 顾问手补的授权例外就此退役)。
-    # 已有正确值则保留 (幂等补铸, 不覆盖), 缺则写入。
-    if workspace_root is not None:
-        existing_root = data.get("workspace_root")
-        if not existing_root:
-            data["workspace_root"] = str(workspace_root)
+    # AIPOS-F54-fix1: workspace_root 单源 = governance_root(码内治理根, 禁 harness root 混入)。
+    # governance_root 可用时始终覆盖(已入册工位重跑 enroll 即校正);
+    # governance_root 不可用时回退到 workspace_root 参数(旧行为兼容, 如 backfill 模式)。
+    effective_ws_root: str | None = None
+    if governance_root:
+        effective_ws_root = str(Path(governance_root).expanduser().resolve())
+        data["governance_root"] = effective_ws_root
+    elif workspace_root is not None:
+        effective_ws_root = str(workspace_root)
+    if effective_ws_root:
+        data["workspace_root"] = effective_ws_root
     
     # 确保 config_version 存在
     if "config_version" not in data:
@@ -714,23 +724,27 @@ def enroll(
                 )
     
     # Step 3: 加载或创建 connection.json (AIPOS-C2 大项B: 铸全 workspace_root)
-    connection_data = load_or_create_connection_json(lybra_dir, effective_gate_url, workspace_root)
+    # AIPOS-F54-fix1: workspace_root 单源 = governance_root(码内治理根);
+    # .lybra/ 物理位置 = harness workspace_root(工位目录); 两者分离。
+    connection_data = load_or_create_connection_json(
+        lybra_dir, effective_gate_url, workspace_root,
+        governance_root=governance_root,
+    )
     
-    # AIPOS-F54 ③: lybra_bin —— 指向实际部署位(运行中 bin 优先, 否则探测 .deploy/current);
+    # AIPOS-F54-fix1 ③: lybra_bin —— 指向实际部署位(运行中 bin 优先, 否则探测 .deploy/current);
     # 推导不出则不写(留空会让 /lybra sync 探测, 探测失败时 sync 会带路, 禁静默写错路径)
+    # 始终校正(已入册工位重跑 enroll 即补铸/校正, 禁"已有错值则保留")
     from tools.aipos_cli.workstation_wiring import (
         materialize_pi_wiring,
         resolve_deployed_lybra_bin,
         resolve_role_class,
         verify_minimum_bootable_set,
     )
-    if not str(connection_data.get("lybra_bin") or "").strip():
-        _bin = resolve_deployed_lybra_bin()
-        if _bin:
-            connection_data["lybra_bin"] = _bin
-    # AIPOS-F54 ②: governance_root 入声明(自包含码携带; sync 据此重推生效信封)
-    if governance_root and not str(connection_data.get("governance_root") or "").strip():
-        connection_data["governance_root"] = str(Path(governance_root).expanduser())
+    _bin = resolve_deployed_lybra_bin()
+    if _bin:
+        connection_data["lybra_bin"] = _bin
+    # AIPOS-F54-fix1 ②: governance_root 已在 load_or_create_connection_json 写入(单源)
+    # 此处不再重复写(避免两处写入不一致)
     
     # Step 4: Upsert token entry(幂等; backfill 模式 token_entry=None 则不动 token)
     if token_entry is not None:
@@ -811,7 +825,7 @@ def enroll(
         if not ok:
             # 回滚: 移除刚写入的 token(禁静默留坏配置)
             try:
-                rollback_data = load_or_create_connection_json(lybra_dir, effective_gate_url, workspace_root)
+                rollback_data = load_or_create_connection_json(lybra_dir, effective_gate_url, workspace_root, governance_root=governance_root)
                 rollback_data["tokens"] = [
                     t for t in rollback_data.get("tokens", [])
                     if not (t.get("agent_instance") == agent_instance or (not agent_instance and t.get("role") == role))

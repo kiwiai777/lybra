@@ -174,10 +174,19 @@ def derive_effective_owner_policy_ref(
 # ---------------------------------------------------------------------------
 
 def resolve_deployed_lybra_bin() -> str | None:
-    """推导本机 lybra CLI 部署位:运行中的 bin 本身优先, 否则探测代码仓 .deploy/current。"""
-    argv0 = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
+    """推导本机 lybra CLI 部署位:运行中的 bin 本身优先(跟随 symlink 到部署位), 否则探测代码仓 .deploy/current。
+
+    AIPOS-F54-fix1: 跟随 symlink —— sys.argv[0] 可能是外部符号链接,
+    实际部署位在 .deploy/current/bin/lybra。跟随后返回真实路径。
+    禁硬编码任何绝对路径字面量。
+    """
+    argv0 = Path(sys.argv[0]) if sys.argv and sys.argv[0] else None
     if argv0 and argv0.name == "lybra" and argv0.is_file():
-        return str(argv0)
+        # Follow symlink to actual deployment location
+        resolved = argv0.resolve()
+        if resolved.is_file():
+            return str(resolved)
+        return str(argv0.resolve()) if argv0.is_absolute() else str(argv0.absolute())
     repo_root = Path(__file__).resolve().parents[2]
     probe = repo_root / ".deploy" / "current" / "bin" / "lybra"
     if probe.is_file():
@@ -274,6 +283,9 @@ def minimum_bootable_set_items() -> list[dict[str, str]]:
 
     声明落位 = 分发清单(卡面⑮"config.schema 或分发清单择一"; 本卡 output_target 声明
     schema/distribution.schema.json, 故落此件)。
+
+    AIPOS-F54-fix1: 追加 workspace_root_match 检查项(代码内补铸, schema 未更新前
+    由代码保证自检覆盖; schema 更新后此处自动去重)。
     """
     from tools.schema_loader import load_schema
 
@@ -281,11 +293,25 @@ def minimum_bootable_set_items() -> list[dict[str, str]]:
     section = dist.get("minimum_bootable_set")
     items = section.get("items") if isinstance(section, dict) else section
     items = items or []
-    return [dict(item) for item in items if isinstance(item, dict) and item.get("name")]
+    result = [dict(item) for item in items if isinstance(item, dict) and item.get("name")]
+    # AIPOS-F54-fix1: 补铸 workspace_root_match(若 schema 尚未声明则追加; 已声明则跳过)
+    if not any(str(i.get("kind") or "") == "workspace_root_match" for i in result):
+        result.append({
+            "name": "connection.json#workspace_root==governance_root",
+            "kind": "workspace_root_match",
+            "container": ".lybra/connection.json",
+            "path": ".lybra/connection.json",
+            "description": "workspace_root must equal governance_root (single source: code governance_root; harness root must not leak in). Missing or mismatched = missing item.",
+        })
+    return result
 
 
 def verify_minimum_bootable_set(workspace_root: Path) -> dict[str, Any]:
-    """逐项核对可启动最小集; 缺项逐项点名(禁"少一个键整个起不来但不知道少哪个")。"""
+    """逐项核对可启动最小集; 缺项逐项点名(禁"少一个键整个起不来但不知道少哪个")。
+
+    AIPOS-F54-fix1: 新增 workspace_root_match 检查 —— workspace_root 须等于 governance_root
+    (单源: 码内治理根)。harness root 混入 = 缺项。
+    """
     root = Path(workspace_root)
     checks: list[dict[str, Any]] = []
     for item in minimum_bootable_set_items():
@@ -304,6 +330,20 @@ def verify_minimum_bootable_set(workspace_root: Path) -> dict[str, Any]:
                 # ⑭ 值须指向实际存在的文件(如 lybra_bin 悬空 = 缺项, sync 侧另有探测回落)
                 if present and item.get("value_must_exist") and isinstance(value, str):
                     present = Path(value).expanduser().is_file()
+            except (OSError, json.JSONDecodeError):
+                present = False
+        elif kind == "workspace_root_match":
+            # AIPOS-F54-fix1: workspace_root 须等于 governance_root(单源: 码内治理根)
+            container = root / str(item.get("container") or "")
+            try:
+                data = json.loads(container.read_text(encoding="utf-8"))
+                ws = str(data.get("workspace_root") or "").strip()
+                gov = str(data.get("governance_root") or "").strip()
+                if not ws or not gov:
+                    present = False
+                else:
+                    # 规范化比较(消除 symlink/trailing slash 差异)
+                    present = Path(ws).resolve() == Path(gov).resolve()
             except (OSError, json.JSONDecodeError):
                 present = False
         else:

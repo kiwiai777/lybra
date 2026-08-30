@@ -316,6 +316,16 @@ else
   overall=1
 fi
 
+# AIPOS-F54-fix1: 可启动最小集补齐 lybra_bin + workspace_root 单源校正
+echo
+echo "── tools/aipos_cli/tests/test_aipos_f54_fix1.py (lybra_bin+workspace_root 补齐) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos_f54_fix1.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos_f54_fix1.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos_f54_fix1.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F55: 门记录加载加缓存与增量(正确性三红线+性能先红后绿)
 echo
 echo "── tests/test_aipos_f55.py (记录缓存与增量) ──────────────────────────────────────────"
