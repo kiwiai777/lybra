@@ -336,6 +336,16 @@ else
   overall=1
 fi
 
+# AIPOS-F51: 自检门豁免出口修真——dry_run阶段即可豁免+越界拒收给出可执行出口
+echo
+echo "── tests/test_aipos_f51_self_check_waiver_dry_run.py (自检门豁免出口修真) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f51_self_check_waiver_dry_run.py"; then
+  echo "✓ tests/test_aipos_f51_self_check_waiver_dry_run.py PASS"
+else
+  echo "✗ tests/test_aipos_f51_self_check_waiver_dry_run.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

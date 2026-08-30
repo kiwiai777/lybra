@@ -1173,6 +1173,9 @@ def _return_metadata(
         "owner_confirmation_reasons": [],
         "lease_path": "claim_only",
         "lease_status": "proposed",
+        # AIPOS-F51: pass owner_confirmation_token through so dry_run self-check
+        # waiver is reachable at the same stage as the判据 (not only at confirm).
+        "owner_confirmation_token": str(args.get("owner_confirmation_token") or "").strip() or None,
     }
 
 
@@ -5471,6 +5474,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                     },
                     "additionalProperties": False
                 },
+                "owner_confirmation_token": {"type": "string", "description": "AIPOS-F51: optional waiver token for self-check exemption at dry_run stage. Set to OWNER_CONFIRMED to waive self-check failures (degrades to warnings). Must match the confirm-stage token."},
                 "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["actor", "agent_instance", "autonomy_mode", "owner_policy_ref"],

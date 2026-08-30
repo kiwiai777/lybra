@@ -152,8 +152,13 @@ def execute_two_phase_verb(
 
     # 3. Step 1: dry_run
     dry_run_verb = f"{verb_base}_dry_run"
+    # AIPOS-F51: for queue_return, inject owner_confirmation_token into dry_run
+    # so self-check waiver is reachable at the same stage as the判据.
+    dry_run_args = dict(args_dict)
+    if verb_base == "lybra_queue_return":
+        dry_run_args["owner_confirmation_token"] = owner_confirmation_literal
     try:
-        dry_run_resp = client.call_tool(dry_run_verb, args_dict)
+        dry_run_resp = client.call_tool(dry_run_verb, dry_run_args)
     except Exception as exc:
         return _fail(f"{dry_run_verb} failed: {exc}")
 

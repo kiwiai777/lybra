@@ -2565,6 +2565,9 @@ def _check_test_in_runall(
             f"TEST_NOT_IN_RUNALL: 本卡新增/修改的 test 文件未加入 run-all.sh 清单。"
             f"缺失项: {', '.join(missing_tests)}。"
             f"请在 {runall_path.relative_to(product_repo_root)} 中添加这些测试。"
+            f"出口: ①若属卡面漏列, 请顾问 amend output_target 后重试; "
+            f"②若确属越界, 请回退该文件; "
+            f"③若文件正确, 在 run-all.sh 的 files 数组中加入该测试路径。"
         )
     
     return blocking_reasons
@@ -2638,7 +2641,9 @@ def _check_changes_in_scope(
             f"CHANGES_OUT_OF_SCOPE: 以下文件超出卡面声明的 output_target 范围。"
             f"越界文件: {', '.join(out_of_scope)}。"
             f"卡面声明范围: {output_target}。"
-            f"请只修改卡面声明范围内的文件，或更新卡面 output_target 字段。"
+            f"出口: ①若属卡面漏列, 请顾问 amend output_target 后重试; "
+            f"②若确属越界, 请回退该文件(git checkout main -- <file>); "
+            f"③若需保留改动, 请顾问重发任务卡覆盖全部根因文件。"
         )
     
     return blocking_reasons
@@ -2689,7 +2694,8 @@ def _check_has_tests(
         blocking_reasons.append(
             f"NO_TESTS: code 类卡必须包含测试文件改动。"
             f"当前改动文件: {', '.join(changed_files[:5])}{'...' if len(changed_files) > 5 else ''}。"
-            f"请添加测试文件（如 tests/test_*.py）。"
+            f"出口: ①添加测试文件(如 tests/test_<feature>.py)并加入 run-all.sh; "
+            f"②若本卡确无需测试(纯配置/纯文档), 请顾问 amend task_mode 为非 code。"
         )
     
     return blocking_reasons
@@ -2709,6 +2715,8 @@ def _check_return_not_skeleton(
     if not result_summary or not result_summary.strip():
         blocking_reasons.append(
             "RETURN_SKELETON: result_summary 为空，请填写一句话结论。"
+            "出口: 在 RETURN.md 的‘一句话结论’节填写实际完成描述,"
+            "并确保 result_summary 字段非空。"
         )
     
     # 检查 RETURN.md 占位符
@@ -2728,7 +2736,8 @@ def _check_return_not_skeleton(
                 if found_placeholders:
                     blocking_reasons.append(
                         f"RETURN_SKELETON: RETURN.md 包含占位符: {', '.join(found_placeholders)}。"
-                        f"请填写完整内容。"
+                        f"出口: 将 RETURN.md 中所有占位符替换为实际内容,"
+                        f"确保一句话结论、做了什么、改动清单等节均已填写。"
                     )
             except Exception:
                 pass  # 读取失败，跳过
@@ -4546,6 +4555,12 @@ def execute_dry_run(
         elif op == "queue_return":
             payload = source_data.get("original_payload") or {}
             mcp_return_metadata = source_data.get("mcp_return") if isinstance(source_data.get("mcp_return"), dict) else None
+            # AIPOS-F51: inject owner_confirmation_token into mcp_return_metadata for dry_run
+            # so self-check waiver is reachable at the same stage as the判据 (not only at confirm).
+            if owner_confirmation_token:
+                if mcp_return_metadata is None:
+                    mcp_return_metadata = {}
+                mcp_return_metadata["owner_confirmation_token"] = owner_confirmation_token
             current = return_task(
                 task_id=payload.get("task_id"),
                 path=payload.get("path"),
