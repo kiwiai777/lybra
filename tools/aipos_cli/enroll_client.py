@@ -837,6 +837,12 @@ def enroll(
                 ) from rb_exc
             raise RuntimeError(f"enroll --verify FAILED: {detail} — token 已回滚, 未留下坏配置")
     
+    # AIPOS-F58: 工位私有状态自我保护 —— 把 .lybra/ 凭据路径登记进 .git/info/exclude
+    # 防止邻居项目 `git stash -u` 连坐抹掉凭据(不碰 .gitignore, 幂等, 无 git 静默跳过)
+    from tools.aipos_cli.git_exclude import collect_enroll_exclude_paths, register_git_exclude
+    exclude_paths = collect_enroll_exclude_paths(workspace_root, files_written)
+    git_exclude_report = register_git_exclude(workspace_root, exclude_paths)
+
     # AIPOS-F54 ⑮: 可启动最小集逐项校验(缺项逐项点名, 禁"少一个键整个起不来但不知道少哪个")
     bootable_check = verify_minimum_bootable_set(workspace_root)
     
@@ -857,6 +863,7 @@ def enroll(
         "policy_derivation": policy_derivation,
         "wiring": wiring_report,
         "minimum_bootable_set": bootable_check,
+        "git_exclude": git_exclude_report,
         "next_step": ("上岗完成: 接着 /lybra sync 然后 /reload" if code is not None else None),
     }
 
