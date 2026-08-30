@@ -17,6 +17,7 @@ from tools.aipos_cli.record_writer import (
     build_session_record_markdown,
     claim_record_paths,
     load_session_record,
+    render_markdown as _render_markdown_single_source,
     session_record_path,
     update_session_record_markdown,
     validate_safe_task_id,
@@ -128,19 +129,12 @@ def _normalize_value(value: Any) -> Any:
 
 
 def render_task_markdown(metadata: dict[str, Any], body: str) -> str:
-    ordered_keys = [key for key in FRONTMATTER_ORDER if key in metadata]
-    ordered_keys.extend(sorted(key for key in metadata if key not in ordered_keys))
-    lines = ["---"]
-    for key in ordered_keys:
-        value = metadata[key]
-        if isinstance(value, list):
-            lines.append(f"{key}:")
-            for item in value:
-                lines.append(f"- {_yaml_scalar(item)}")
-            continue
-        lines.append(f"{key}: {_yaml_scalar(value)}")
-    lines.extend(["---", body.rstrip(), ""])
-    return "\n".join(lines)
+    """AIPOS-F46: 收敛到 F22B 单源 (record_writer.render_markdown).
+
+    原实现用本地 _yaml_scalar 拼接, 不处理 **bold**/"/full-width colon 等毒字段,
+    第五次复发后以卡收口: 全部写卡路径统一走 safe_dump 单源.
+    """
+    return _render_markdown_single_source(metadata, body, FRONTMATTER_ORDER)
 
 
 def _resolved_within(base_dir: Path, candidate: Path) -> bool:

@@ -138,11 +138,50 @@ def _stdlib_yaml_scalar(value: Any) -> str:
     return json.dumps(text)
 
 
+def _self_check_yaml(yaml_text: str, ordered_meta: dict[str, Any]) -> None:
+    """AIPOS-F46 末道自检: 渲染后 safe_load 回读, 失败即报错拒写, 禁落坏卡.
+
+    验证:
+    1. safe_load 能解析(不抛异常)
+    2. 解析结果是 dict
+    3. 关键标量值 roundtrip 一致(字符串值不被类型误判)
+    """
+    try:
+        if yaml is not None:
+            parsed = yaml.safe_load(yaml_text)
+        else:
+            from tools.aipos_cli.frontmatter import _fallback_parse
+            parsed, _warnings = _fallback_parse(yaml_text)
+    except Exception as exc:
+        raise ValueError(
+            f"AIPOS-F46 self-check FAIL: rendered YAML is unparseable: {exc}. "
+            f"This means a poison field (e.g. **bold**:colon\"quote) was not properly "
+            f"escaped. Refusing to write bad card."
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"AIPOS-F46 self-check FAIL: rendered YAML parsed to {type(parsed).__name__}, "
+            f"expected dict. Refusing to write bad card."
+        )
+    # Spot-check: string values must roundtrip as strings (not be coerced to bool/int/null)
+    for key, original_value in ordered_meta.items():
+        if isinstance(original_value, str) and original_value:
+            parsed_value = parsed.get(key)
+            if not isinstance(parsed_value, str):
+                raise ValueError(
+                    f"AIPOS-F46 self-check FAIL: field '{key}' was string {original_value!r} "
+                    f"but roundtripped as {type(parsed_value).__name__} ({parsed_value!r}). "
+                    f"Refusing to write bad card."
+                )
+
+
 def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None = None) -> str:
     """Render markdown with YAML frontmatter.
 
     AIPOS-F22B: frontmatter 一律经 YAML 序列化器 (safe_dump 或等价) 输出, 禁字符串拼接.
     使用 yaml.safe_dump (PyYAML 可用时) 或 stdlib fallback.
+
+    AIPOS-F46: 末道自检——渲染后 safe_load 回读, 失败即报错拒写, 禁落坏卡.
     """
     ordered_keys = [key for key in (order or []) if key in metadata]
     ordered_keys.extend(sorted(key for key in metadata if key not in ordered_keys))
@@ -163,6 +202,8 @@ def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None
         )
         # safe_dump 输出末尾有换行, 去除后再拼接
         yaml_text = yaml_text.rstrip("\n")
+        # AIPOS-F46 末道自检
+        _self_check_yaml(yaml_text, ordered_meta)
         return f"---\n{yaml_text}\n---\n{body.rstrip()}\n"
 
     # stdlib fallback: 逐行构建 (列表/嵌套映射复用原有逻辑, 标量使用 _stdlib_yaml_scalar)
@@ -185,6 +226,9 @@ def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None
                 lines.append(f"  {sub_key}: {_stdlib_yaml_scalar(sub_val)}")
             continue
         lines.append(f"{key}: {_stdlib_yaml_scalar(value)}")
+    # AIPOS-F46 末道自检 (stdlib fallback path)
+    fallback_yaml_text = "\n".join(lines[1:-2])  # strip --- delimiters and body
+    _self_check_yaml(fallback_yaml_text, ordered_meta)
     lines.extend(["---", body.rstrip(), ""])
     return "\n".join(lines)
 

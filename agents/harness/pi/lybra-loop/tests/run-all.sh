@@ -326,6 +326,16 @@ else
   overall=1
 fi
 
+# AIPOS-F46: 写卡序列化全量收敛(毒字段夹具+末道自检+grep断言)
+echo
+echo "── tests/test_aipos_f46_serialization_convergence.py (写卡序列化全量收敛) ──────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f46_serialization_convergence.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f46_serialization_convergence.py PASS"
+else
+  echo "✗ tests/test_aipos_f46_serialization_convergence.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

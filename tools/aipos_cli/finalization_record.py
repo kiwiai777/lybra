@@ -55,9 +55,13 @@ def record_path(governance_root: Path, task_id: str, timestamp: str) -> Path:
 
 
 def render_record_markdown(frontmatter: dict[str, Any]) -> str:
-    """渲染 finalization 记录 Markdown"""
-    import yaml
-    
+    """渲染 finalization 记录 Markdown.
+
+    AIPOS-F46: 收敛到 F22B 单源 (record_writer.render_markdown).
+    原实现用 yaml.dump 直接拼接, 绕过 safe_dump 单源.
+    """
+    from tools.aipos_cli.record_writer import render_markdown as _render_markdown_single_source
+
     body = f"""# Finalization Record: {frontmatter['task_id']}
 
 - **task_id**: {frontmatter['task_id']}
@@ -68,11 +72,11 @@ def render_record_markdown(frontmatter: dict[str, Any]) -> str:
 - **authorization_ref**: {frontmatter['authorization_ref']}
 - **deployed**: {frontmatter['deployed']}
 """
-    
+
     if frontmatter.get("deployment_record_ref"):
         body += f"- **deployment_record_ref**: {frontmatter['deployment_record_ref']}\n"
-    
-    return f"---\n{yaml.dump(frontmatter, allow_unicode=True, sort_keys=False)}---\n{body}"
+
+    return _render_markdown_single_source(frontmatter, body)
 
 
 def write_finalization_record(

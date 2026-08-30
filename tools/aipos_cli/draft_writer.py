@@ -21,6 +21,7 @@ from tools.aipos_cli.draft_validator import (
     validate_draft_metadata,
 )
 from tools.aipos_cli.records import expected_publish_record_path
+from tools.aipos_cli.record_writer import render_markdown as _render_markdown_single_source
 from tools.aipos_cli.task_complexity import validate_task_complexity
 
 # AIPOS-R8C: card_policy placeholder fields for draft create
@@ -163,42 +164,24 @@ def _yaml_scalar(value: Any) -> str:
 
 
 def _record_frontmatter(metadata: dict[str, Any], order: list[str]) -> str:
-    ordered_keys = [key for key in order if key in metadata]
-    ordered_keys.extend(sorted(key for key in metadata if key not in ordered_keys))
-    lines = ["---"]
-    for key in ordered_keys:
-        value = metadata[key]
-        if isinstance(value, list):
-            if not value:
-                lines.append(f"{key}: []")  # AIPOS-218: explicit empty list (no []/None ambiguity)
-                continue
-            lines.append(f"{key}:")
-            for item in value:
-                lines.append(f"- {_yaml_scalar(item)}")
-            continue
-        lines.append(f"{key}: {_yaml_scalar(value)}")
-    lines.extend(["---", ""])
-    return "\n".join(lines)
+    """AIPOS-F46: 收敛到 F22B 单源 (record_writer.render_markdown)."""
+    # render_markdown adds body, but _record_frontmatter only needs the frontmatter block
+    # We pass empty body and strip trailing content
+    result = _render_markdown_single_source(metadata, "", order)
+    # render_markdown returns "---\nyaml\n---\nbody\n"; we want just "---\nyaml\n---\n"
+    # Extract just the frontmatter block
+    parts = result.split("---\n", 2)
+    if len(parts) >= 3:
+        return f"---\n{parts[1]}---\n"
+    return result
 
 
 def render_markdown_task_card(metadata: dict[str, Any], body: str) -> str:
-    ordered_keys = [key for key in FRONTMATTER_ORDER if key in metadata]
-    ordered_keys.extend(sorted(key for key in metadata if key not in ordered_keys))
+    """AIPOS-F46: 收敛到 F22B 单源 (record_writer.render_markdown).
 
-    lines = ["---"]
-    for key in ordered_keys:
-        value = metadata[key]
-        if isinstance(value, list):
-            if not value:
-                lines.append(f"{key}: []")  # AIPOS-218: explicit empty list (no []/None ambiguity)
-                continue
-            lines.append(f"{key}:")
-            for item in value:
-                lines.append(f"- {_yaml_scalar(item)}")
-            continue
-        lines.append(f"{key}: {_yaml_scalar(value)}")
-    lines.extend(["---", body.rstrip(), ""])
-    return "\n".join(lines)
+    原实现用本地 _yaml_scalar 拼接, 不处理 **bold**/"/full-width colon 等毒字段.
+    """
+    return _render_markdown_single_source(metadata, body, FRONTMATTER_ORDER)
 
 
 def stable_publish_id(task_id: str) -> str:
