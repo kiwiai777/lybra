@@ -336,6 +336,16 @@ else
   overall=1
 fi
 
+# AIPOS-F56: 空闲带路出一行可复制指令(Owner 唤醒行)
+echo
+echo "── tests/test_aipos_f56_wakeup_line.py (空闲唤醒行) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f56_wakeup_line.py"; then
+  echo "✓ tests/test_aipos_f56_wakeup_line.py PASS"
+else
+  echo "✗ tests/test_aipos_f56_wakeup_line.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F46: 写卡序列化全量收敛(毒字段夹具+末道自检+grep断言)
 echo
 echo "── tests/test_aipos_f46_serialization_convergence.py (写卡序列化全量收敛) ──────────────────────────────"

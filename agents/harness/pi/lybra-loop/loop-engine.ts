@@ -80,7 +80,8 @@ export type TickOutcome =
   // AIPOS-F16 余热: 额度尽(released>=maxN)→ 不领新卡, 循环不整停(由 lybra-loop 判在途卡终停)
   | { kind: "cooldown"; reason: string }
   // AIPOS-F43 大项B: held + IN_PROGRESS → 具体带路
-  | { kind: "guidance"; taskId: string; returnPath: string; acceptanceText: string };
+  // AIPOS-F56: 追加 cardAbsPath 供 Owner 唤醒行渲染
+  | { kind: "guidance"; taskId: string; returnPath: string; acceptanceText: string; cardAbsPath: string };
 
 export interface TickContext {
   client: GateReadFace;
@@ -156,11 +157,15 @@ export async function executeTick(ctx: TickContext): Promise<TickOutcome> {
           if (status === "IN_PROGRESS") {
             // 状态为 IN_PROGRESS → 返回 guidance
             const acceptanceText = extractAcceptanceSection(returnContent);
+            // AIPOS-F56: 卡绝对路径(供 Owner 唤醒行渲染)
+            const claimedDir = `${ctx.workspaceRoot.replace(/\/+$/, "")}/5_tasks/queue/claimed`;
+            const cardAbsPath = `${claimedDir}/${heldTaskId.toLowerCase()}.md`;
             return {
               kind: "guidance",
               taskId: heldTaskId,
               returnPath,
               acceptanceText,
+              cardAbsPath,
             };
           }
         }
