@@ -1652,7 +1652,8 @@ async function tryAutoReturn(): Promise<boolean> {
     // AIPOS-F44C ⑥: 读报单文件收敛 — 只读 RETURN.md，删除 audit_report.md 备份逻辑
     const reportPath = path.join(config.workspaceRoot, "task_cards", currentTaskId, "RETURN.md");
     
-    if (fs.existsSync(reportPath)) {
+    // AIPOS-F60-fix1: settle 路与 held 两路同源 — 复用 isReturnMdSubstantive, 禁 fs.existsSync(骨架永真)
+    if (isReturnMdSubstantive(reportPath, "audit")) {
       try {
         const reportContent = fs.readFileSync(reportPath, "utf-8");
         
@@ -1795,6 +1796,12 @@ async function tryAutoReturn(): Promise<boolean> {
         });
         return false;
       }
+    } else if (fs.existsSync(reportPath)) {
+      // AIPOS-F60-fix1: 骨架检测 — 文件存在但内容未填写, 不提交交回, 出声带可执行出口
+      const msg = `审计报告就位但内容为骨架(含"(待填写)"), 请补写裁决字段(verdict: PASS|FAIL|PASS_WITH_NOTES|BLOCK)及"一句话结论"节后重试`;
+      currentLogger.warn("auto-return-audit-skeleton", { task_id: currentTaskId, report_path: reportPath });
+      voice(msg, "warn", true);
+      return false;
     }
     
     // 审计卡无 verdict 且无报告 → 还在执行中,不走 auto-return(审计卡完成判据=N4,不走 N2 return)
@@ -1822,7 +1829,8 @@ async function tryAutoReturn(): Promise<boolean> {
   let returnMdExists = false;
   const returnMdPath = path.join(config.workspaceRoot, "task_cards", currentTaskId, "RETURN.md");
   
-  if (fs.existsSync(returnMdPath)) {
+  // AIPOS-F60-fix1: settle 路与 held 两路同源 — 复用 isReturnMdSubstantive, 禁 fs.existsSync(骨架永真)
+  if (isReturnMdSubstantive(returnMdPath, "exec")) {
     returnMdExists = true;
     try {
       const returnContent = fs.readFileSync(returnMdPath, "utf-8");
@@ -1847,6 +1855,12 @@ async function tryAutoReturn(): Promise<boolean> {
       });
       return false;
     }
+  } else if (fs.existsSync(returnMdPath)) {
+    // AIPOS-F60-fix1: 骨架检测 — 文件存在但内容未填写, 不提交交回, 出声带可执行出口
+    const msg = `RETURN.md 就位但内容为骨架(含"(待填写)"), 请补写"一句话结论"节(## 一句话结论)后重试`;
+    currentLogger.warn("auto-return-skeleton", { task_id: currentTaskId, return_md_path: returnMdPath });
+    voice(msg, "warn", true);
+    return false;
   } else {
     // 回退兜底网: completed 事件
     const eventsDir = path.join(config.workspaceRoot, "5_tasks/records/events", currentTaskId);
