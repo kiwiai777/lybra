@@ -3950,7 +3950,31 @@ def main(argv: list[str] | None = None) -> int:
         )
         return exit_code
     
-    if args.command == "queue" and getattr(args, "queue_command", None) in {"claim", "block", "complete", "reopen"}:
+    # AIPOS-F61 大项①: CLI `queue complete` 收敛到 close_task 单一 writer。
+    # 禁存在"只搬文件不落记录"的旁路——complete 与 close 走同一条路径。
+    if args.command == "queue" and getattr(args, "queue_command", None) == "complete":
+        from tools.aipos_cli.board_adapter import close_task as _close_task
+        # 从 --report-link 自动派生 closure_evidence(禁只搬文件)
+        _report_link = getattr(args, "report_link", None) or ""
+        _closure_evidence = {"finalize_return_ref": _report_link} if _report_link else {}
+        try:
+            result = _close_task(
+                task_id=getattr(args, "task_id", None),
+                actor=args.actor,
+                closure_evidence=_closure_evidence,
+                dry_run=args.dry_run,
+                repo_root=repo_root,
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == Verdict.BLOCK else 0
+
+    if args.command == "queue" and getattr(args, "queue_command", None) in {"claim", "block", "reopen"}:
         profiles = load_agent_profiles(repo_root)
         # AIPOS-370F2: file-CLI claim now defaults to with_records=True to align session record
         # creation with gate-verb claim, eliminating the "Session record does not exist" blocker
