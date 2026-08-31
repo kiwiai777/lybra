@@ -165,13 +165,37 @@ def _gate_base_url(config: dict[str, Any]) -> str | None:
 
 
 def _owner_token_from(config: dict[str, Any]) -> str | None:
-    """Pre-rotation owner token, in-memory only (never printed)."""
-    for entry in _token_list(config):
-        if entry.get("role") == "owner":
-            token = str(entry.get("token") or "").strip()
-            if token:
-                return token
-    return None
+    """Pre-rotation owner token, in-memory only (never printed).
+    
+    AIPOS-F59: Delegates to token_resolver.get_token_for_role_and_project().
+    No project filtering here (rotation context doesn't have workspace_root).
+    """
+    try:
+        from tools.aipos_cli.token_resolver import get_token_for_role_and_project
+        # Construct a temporary connection.json-like dict for the resolver
+        temp_config = {"tokens": _token_list(config)}
+        # Write to a temp file since token_resolver expects a file path
+        import tempfile
+        import json
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(temp_config, f)
+            temp_path = f.name
+        try:
+            return get_token_for_role_and_project(temp_path, "owner", project=None)
+        finally:
+            import os
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
+    except Exception:
+        # Fallback to old logic for back-compat
+        for entry in _token_list(config):
+            if entry.get("role") == "owner":
+                token = str(entry.get("token") or "").strip()
+                if token:
+                    return token
+        return None
 
 
 def _attempt_gate_reload(

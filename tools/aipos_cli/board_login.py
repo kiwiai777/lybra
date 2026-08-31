@@ -63,34 +63,38 @@ def load_role_token(
 ) -> tuple[str, str]:
     """读 connection.json 拿一个角色 token。返回 ``(token, role_used)``。
 
+    AIPOS-F59: Delegates to token_resolver.get_token_for_role_and_project().
+
     - ``role`` 给定:精确取该角色(缺失抛错)。
     - ``role`` 为 None:优先 ``owner``,否则取 **第一个** 带 token 的条目(文件权即身份,
       能读此文件者即工作区主人;具体哪个角色仅影响看板视图)。
     原始 token 仅进程内使用,调用方绝不打印(用 :func:`token_fingerprint` 汇报)。
     """
+    from tools.aipos_cli.token_resolver import get_token_for_role_and_project
     path = Path(connection_json or DEFAULT_CONNECTION_JSON).expanduser().resolve()
+    
+    # No project filtering in board_login context (back-compat)
+    if role is not None:
+        tok = get_token_for_role_and_project(path, role, project=None)
+        return tok, role
+    
+    # role=None: try preferred roles in order
+    preferred = ("owner", "owner-dispatch", "auditor", "executor")
+    for want in preferred:
+        try:
+            tok = get_token_for_role_and_project(path, want, project=None)
+            return tok, want
+        except ValueError:
+            continue
+    
+    # Fallback: read connection.json and find any token
     data = json.loads(path.read_text(encoding="utf-8"))
     tokens = data.get("tokens") if isinstance(data, dict) else None
-    if not isinstance(tokens, list) or not tokens:
-        raise ValueError(f"connection.json {path} 没有 tokens 条目")
-    if role is not None:
+    if isinstance(tokens, list):
         for item in tokens:
-            if isinstance(item, dict) and str(item.get("role") or "") == role:
-                tok = str(item.get("token") or "").strip()
-                if not tok:
-                    raise ValueError(f"角色 {role!r} 在 {path} 没有 token")
-                return tok, role
-        raise ValueError(f"角色 {role!r} 未在 {path} 中找到")
-    # role=None:优先 owner 系,否则第一个有 token 的条目。
-    preferred = ("owner", "owner-dispatch", "auditor", "executor")
-    pool = [t for t in tokens if isinstance(t, dict) and (t.get("token") or "").strip()]
-    for want in preferred:
-        for item in pool:
-            if str(item.get("role") or "") == want:
+            if isinstance(item, dict) and (item.get("token") or "").strip():
                 return str(item["token"]).strip(), str(item.get("role"))
-    if pool:
-        item = pool[0]
-        return str(item["token"]).strip(), str(item.get("role"))
+    
     raise ValueError(f"{path} 中没有任何带 token 的角色条目")
 
 

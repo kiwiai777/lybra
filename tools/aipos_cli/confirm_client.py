@@ -63,11 +63,20 @@ def token_fingerprint(token: str) -> str:
     return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
 
 
-def load_owner_token(*, connection_json: str | Path | None = None, role: str = "owner", token_env: str | None = None) -> str:
-    """Read a role token internally. Either from a connection.json (by role) or an env var.
+def load_owner_token(*, connection_json: str | Path | None = None, role: str = "owner", token_env: str | None = None, project: str | None = None) -> str:
+    """Read a role token internally. Either from a connection.json (by role + project) or an env var.
+
+    AIPOS-F59: Now delegates to token_resolver.get_token_for_role_and_project() for
+    (role, project_domain) selection. The old "take first by role" logic is removed.
 
     The raw token is returned for in-process use only; callers must never print it.
     Prefer a connection.json + role so the token never touches the command line.
+    
+    Args:
+        connection_json: Path to .lybra/connection.json
+        role: Role name (default "owner")
+        token_env: Environment variable name to read token from (takes precedence)
+        project: Project domain for token filtering (default None = skip project filtering)
     """
     if token_env:
         value = os.environ.get(token_env, "").strip()
@@ -76,15 +85,9 @@ def load_owner_token(*, connection_json: str | Path | None = None, role: str = "
         return value
     if connection_json is None:
         raise ValueError("provide connection_json (+ role) or token_env to source the token")
-    path = Path(connection_json).expanduser().resolve()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    for item in data.get("tokens", []):
-        if isinstance(item, dict) and item.get("role") == role:
-            token = str(item.get("token") or "").strip()
-            if not token:
-                raise ValueError(f"role {role!r} in {path} has no token")
-            return token
-    raise ValueError(f"role {role!r} not found in {path}")
+    # AIPOS-F59: Delegate to the single token resolution implementation
+    from tools.aipos_cli.token_resolver import get_token_for_role_and_project
+    return get_token_for_role_and_project(connection_json, role, project)
 
 
 @dataclass

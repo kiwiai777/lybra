@@ -326,16 +326,17 @@ def step_expand_kickoff_lenient(
 # ---------------------------------------------------------------------------
 
 def _load_role_token(connection_json: Path, role: str) -> str | None:
-    """从 connection.json 取某角色的 token(只按名引用,不回显)。"""
+    """从 connection.json 取某角色的 token(只按名引用,不回显)。
+    
+    AIPOS-F59: Delegates to token_resolver.get_token_for_role_and_project().
+    Project domain is not resolved here (orchestration context doesn't have workspace_root).
+    """
     try:
-        data = json.loads(connection_json.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        from tools.aipos_cli.token_resolver import get_token_for_role_and_project
+        # No project filtering in orchestration context (back-compat)
+        return get_token_for_role_and_project(connection_json, role, project=None)
+    except (ValueError, OSError):
         return None
-    for item in data.get("tokens", []):
-        if isinstance(item, dict) and item.get("role") == role:
-            tok = (item.get("token") or "").strip()
-            return tok or None
-    return None
 
 
 def _claim_record_landed(workspace_root: Path, task_id: str) -> Path | None:
