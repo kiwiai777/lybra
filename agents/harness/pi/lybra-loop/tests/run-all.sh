@@ -357,6 +357,16 @@ else
   overall=1
 fi
 
+# AIPOS-F58: 工位私有状态自我保护(git exclude 登记, 防 `git stash -u` 连坐抹凭据)
+echo
+echo "── tools/aipos_cli/tests/test_aipos_f58_git_exclude.py (工位 git exclude 保护) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos_f58_git_exclude.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos_f58_git_exclude.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos_f58_git_exclude.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F46: 写卡序列化全量收敛(毒字段夹具+末道自检+grep断言)
 echo
 echo "── tests/test_aipos_f46_serialization_convergence.py (写卡序列化全量收敛) ──────────────────────────────"

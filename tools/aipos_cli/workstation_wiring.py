@@ -271,6 +271,14 @@ def materialize_pi_wiring(
         status = _seed_symlink(link, SKILL_SYMLINK_TEMPLATE.format(name=name))
         skills_report[name] = {"status": status, "target_exists": link.exists()}
     items["skills"] = {"count": len(skills), "links": skills_report}
+
+    # AIPOS-F58: 把 .pi/ 接线路径登记进 .git/info/exclude(防 `git stash -u` 连坐抹掉)
+    from tools.aipos_cli.git_exclude import collect_wiring_exclude_paths, register_git_exclude
+    wiring_exclude_paths = collect_wiring_exclude_paths(workspace_root)
+    if wiring_exclude_paths:
+        git_exclude_report = register_git_exclude(workspace_root, wiring_exclude_paths)
+        report["git_exclude"] = git_exclude_report
+
     return report
 
 
