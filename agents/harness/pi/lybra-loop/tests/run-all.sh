@@ -367,6 +367,16 @@ else
   overall=1
 fi
 
+# AIPOS-F59: token 选取按 (role, 项目域)、旧条目留痕退场
+echo
+echo "── tests/test_token_resolver.py (token resolver 统一实现) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_token_resolver.py" -v --tb=short; then
+  echo "✓ tests/test_token_resolver.py PASS"
+else
+  echo "✗ tests/test_token_resolver.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F46: 写卡序列化全量收敛(毒字段夹具+末道自检+grep断言)
 echo
 echo "── tests/test_aipos_f46_serialization_convergence.py (写卡序列化全量收敛) ──────────────────────────────"

@@ -275,15 +275,20 @@ class AdvisorPump:
         scope), change role filter to 'executor' and remove owner_confirmation_token.
         """
         try:
-            conn_data = json.loads(self.connection_json.read_text(encoding="utf-8"))
-            owner_token = None
-            for item in conn_data.get("tokens", []):
-                if isinstance(item, dict) and item.get("role") == "owner":
-                    owner_token = item.get("token", "").strip()
-                    break
-            if not owner_token:
-                log("ERROR: owner token not found in connection.json", "ERROR")
-                raise ValueError("owner token not found")
+            # AIPOS-F59: Delegate to token_resolver for (role, project_domain) selection
+            from tools.aipos_cli.token_resolver import get_token_for_role_and_project
+            # Resolve project domain from workspace_root
+            project_domain = None
+            try:
+                from tools.aipos_cli.workspace_config import read_project_json
+                project_json = read_project_json(self.workspace_root)
+                project_domain = project_json.get("project")
+            except Exception:
+                # Fallback: no project filtering (back-compat)
+                pass
+            owner_token = get_token_for_role_and_project(
+                self.connection_json, "owner", project_domain
+            )
             
             self.gate_client = GateClient(self.gate_url, owner_token)
             self.gate_client.initialize()

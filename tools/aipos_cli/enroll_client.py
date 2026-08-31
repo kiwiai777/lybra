@@ -381,36 +381,48 @@ def load_or_create_connection_json(lybra_dir: Path, gate_url: str, workspace_roo
 def upsert_token_entry(connection_data: dict[str, Any], token_entry: dict[str, Any]) -> bool:
     """将 token entry 插入或更新到 connection.json tokens[] 中。
     
-    幂等:如果已存在同 agent_instance 或同 role(无 instance)的 token,替换;
-    否则追加。
+    AIPOS-F59: 旧条目留痕退场 — 匹配的旧 token 标记为 retired (不删除),新 token 追加。
+    
+    幂等:如果已存在同 agent_instance 或同 role(无 instance)的 token,标记为 retired;
+    新 token 总是追加到末尾。这样确保新 token 排在后面,但因为 token_resolver 会
+    过滤 retired 条目,所以新 token 会被选中。
     
     Returns:
-        True if rotated (replaced existing), False if new
+        True if rotated (retired existing), False if new
     """
+    from datetime import datetime, timezone
     tokens = connection_data["tokens"]
     agent_instance = token_entry.get("agent_instance")
     role = token_entry.get("role")
     
-    # 查找匹配的现有 token
-    matched_idx = None
-    for idx, existing in enumerate(tokens):
+    # 查找匹配的现有 token 并标记为 retired
+    rotated = False
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    for existing in tokens:
+        if not isinstance(existing, dict):
+            continue
+        if existing.get("retired"):
+            # 已经 retired,跳过
+            continue
+        
         # 优先匹配 agent_instance
         if agent_instance and existing.get("agent_instance") == agent_instance:
-            matched_idx = idx
-            break
+            existing["retired"] = True
+            existing["retired_at"] = now
+            existing["retired_reason"] = "superseded by re-enrollment"
+            rotated = True
+            continue
         # 其次匹配 role(仅当两者都无 agent_instance)
         if not agent_instance and not existing.get("agent_instance") and existing.get("role") == role:
-            matched_idx = idx
-            break
+            existing["retired"] = True
+            existing["retired_at"] = now
+            existing["retired_reason"] = "superseded by re-enrollment"
+            rotated = True
+            continue
     
-    if matched_idx is not None:
-        # 轮换:替换现有 token
-        tokens[matched_idx] = token_entry
-        return True
-    else:
-        # 新增
-        tokens.append(token_entry)
-        return False
+    # 新 token 总是追加到末尾 (即使 retired 了旧的)
+    tokens.append(token_entry)
+    return rotated
 
 
 def write_connection_json(lybra_dir: Path, connection_data: dict[str, Any]) -> None:

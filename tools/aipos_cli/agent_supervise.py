@@ -579,22 +579,20 @@ def run_supervise(
 
 
 def init_gate_client(connection_json: Path, gate_url: str) -> GateClient | None:
-    """Initialize gate client for death reporting (executor token)."""
+    """Initialize gate client for death reporting (executor token).
+    
+    AIPOS-F59: Delegates to token_resolver.get_token_for_role_and_project().
+    """
     try:
         if not connection_json.exists():
             log(f"WARNING: connection.json not found: {connection_json}")
             return None
         
-        conn_data = json.loads(connection_json.read_text(encoding="utf-8"))
-        executor_token = None
-        for item in conn_data.get("tokens", []):
-            if isinstance(item, dict) and item.get("role") == "executor":
-                executor_token = item.get("token", "").strip()
-                break
-        
-        if not executor_token:
-            log("WARNING: executor token not found in connection.json")
-            return None
+        from tools.aipos_cli.token_resolver import get_token_for_role_and_project
+        # No project filtering here (supervise context doesn't have workspace_root)
+        executor_token = get_token_for_role_and_project(
+            connection_json, "executor", project=None
+        )
         
         gate_client = GateClient(gate_url, executor_token)
         gate_client.initialize()
