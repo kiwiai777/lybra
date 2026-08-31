@@ -1447,9 +1447,37 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
         continue;
       }
 
-      await currentClient.callTool("lybra_queue_close_confirm", closeArgs);
+      // AIPOS-F60: 两阶段正确传参 — confirm 必须带 dry_run_token + owner_confirmation_token
+      // 修法: 从 dry_run 应答取 token, confirm 传两阶段参数, 且校验 confirm 应答
+      const closeDryRunToken = closeDryResp.dry_run_token;
+      if (!closeDryRunToken) {
+        const msg = `auto-close ${taskId}: dry_run 应答无 dry_run_token(响应异常), 无法收账`;
+        currentLogger.error("auto-close-no-token", { task_id: taskId, response: closeDryResp });
+        voice(msg, "error", true);
+        anomalies.push({ task_id: taskId, reason: "close dry_run 无 token" });
+        continue;
+      }
+
+      const closeConfirmResp = await currentClient.callTool("lybra_queue_close_confirm", {
+        ...closeArgs,
+        dry_run_token: String(closeDryRunToken),
+        owner_confirmation_token: "OWNER_CONFIRMED",
+      });
+
+      // AIPOS-F60: 必须校验 confirm 应答 — 失败走异常路出声带出口, 禁无条件报成功
+      if (closeConfirmResp.verdict === "BLOCK" || closeConfirmResp.isError === true) {
+        const detail = closeConfirmResp.blocking_reasons || closeConfirmResp.errors || closeConfirmResp.message || JSON.stringify(closeConfirmResp);
+        const msg = `auto-close confirm BLOCK: ${taskId} - ${JSON.stringify(detail)}`;
+        currentLogger.error("auto-close-confirm-blocked", { task_id: taskId, response: closeConfirmResp });
+        voice(msg, "error", true);
+        voice(`下一步: 请检查 close confirm 拒因并重试, 或人肉调 lybra queue-close ${taskId}`, "warn", true);
+        anomalies.push({ task_id: taskId, reason: "close confirm BLOCK" });
+        continue;
+      }
+
       currentLogger.info("auto-close-success", { task_id: taskId });
       // AIPOS-F4 大项C: 收账成功升为可见 info 一行(合并 <hash>/部署 <hash>/close)。
+      // AIPOS-F60: 出声文案须与实际落库一致 — 此处 confirm 已成功, close 记录已落库
       const settleHash = finalizeCommitHash ? finalizeCommitHash.slice(0, 8) : "?";
       voice(`已收账 ${taskId}: 合并 ${settleHash}/部署 ${settleHash}/close`, "info", true);
       processedCount++;
@@ -1482,6 +1510,46 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
   voice(summaryMsg, "info", false);
 
   return processedCount > 0;
+}
+
+/**
+ * AIPOS-F60: RETURN.md 就位判据 — 判内容不判存在。
+ *
+ * 根因: F43 在认领那刻就落 RETURN 骨架, fs.existsSync 永真 → held 路每次都走
+ * 托管提交/交回、拿骨架占位符去提交、必失败、return 死路; 真正该跑的投递复工
+ * 自愈分支变成永不可达的死代码。
+ *
+ * 两条车道(审计+执行)共用此函数, 收敛为单一实现。
+ *
+ * @param returnMdPath RETURN.md 绝对路径
+ * @param lane "audit" | "exec" — 审计车道检查 verdict 是否真实; 执行车道检查一句话结论是否非占位
+ * @returns true = RETURN.md 存在且有实质内容(非骨架), 可走托管提交/交回
+ */
+function isReturnMdSubstantive(returnMdPath: string, lane: "audit" | "exec"): boolean {
+  const fs = require("node:fs") as typeof import("node:fs");
+  if (!fs.existsSync(returnMdPath)) return false;
+
+  let content: string;
+  try {
+    content = fs.readFileSync(returnMdPath, "utf-8");
+  } catch {
+    return false;
+  }
+
+  // 骨架标志: 含 "(待填写)" 或 "骨架由连接器投递时自动落盘" → 未填写
+  const isSkeleton = /\(待填写\)/.test(content) || /骨架由连接器投递时自动落盘/.test(content);
+  if (isSkeleton) return false;
+
+  if (lane === "audit") {
+    // 审计车道: 必须有真实 verdict(不是占位符 "(PASS / FAIL / BLOCK)")
+    const verdictMatch = content.match(/verdict:\s*(PASS|FAIL|PASS_WITH_NOTES|BLOCK)\b/i);
+    if (!verdictMatch) return false;
+    // 排除占位符形式: "(PASS / FAIL / BLOCK)"
+    if (/verdict:\s*\(PASS\s*\/\s*FAIL/i.test(content)) return false;
+  }
+
+  // 执行车道: 只要不是骨架(已在上面排除)即视为有实质内容
+  return true;
 }
 
 /**
@@ -2222,8 +2290,9 @@ async function doTick(): Promise<void> {
               // AIPOS-F37 大项A: held 路调同一托管函数(F29/F29B/本次同族第三次收口)
               // 审计报告就位 → 走托管函数提交裁决, 禁投递复工(F22BR 实撞: held-audit-ctx-not-ready 死循环)
               // AIPOS-F44C ⑥: 读报单文件收敛 — 只读 RETURN.md
+              // AIPOS-F60: 判内容不判存在 — 骨架恒存在则判据永真, 复工分支变死代码
               const auditReportPath = path.join(config.workspaceRoot, "task_cards", heldTaskId, "RETURN.md");
-              const reportReady = fs.existsSync(auditReportPath);
+              const reportReady = isReturnMdSubstantive(auditReportPath, "audit");
               
               if (reportReady) {
                 currentLogger.info("held-audit-report-ready", { task_id: heldTaskId, reviewed_task_id: reviewedTaskId });
@@ -2241,7 +2310,7 @@ async function doTick(): Promise<void> {
                   voice(`held 托管提交裁决成功: ${heldTaskId}`, "info", true);
                   resetRuntimeState("held-audit 托管成功歇手");
                 } else {
-                  voice(`held 托管提交裁决失败: ${heldTaskId}, 请检查日志`, "warn", true);
+                  voice(`held 托管提交裁决失败: ${heldTaskId}, RETURN.md 可能缺 verdict 字段(应填 PASS/FAIL/PASS_WITH_NOTES/BLOCK), 请补充后重试`, "warn", true);
                 }
                 return;
               }
@@ -2313,8 +2382,9 @@ async function doTick(): Promise<void> {
           }
           
           // AIPOS-F37 大项A扩展: 执行车道 held 路托管接线 — RETURN.md 就位→走托管函数(与审计车道复用同一托管)
+          // AIPOS-F60: 判内容不判存在 — 与审计车道共用 isReturnMdSubstantive, 骨架恒存在则判据永真
           const returnMdPath = path.join(config.workspaceRoot, "task_cards", heldTaskId, "RETURN.md");
-          if (fs.existsSync(returnMdPath)) {
+          if (isReturnMdSubstantive(returnMdPath, "exec")) {
             currentLogger.info("held-exec-return-ready", { task_id: heldTaskId });
             voice(`held 执行卡 ${heldTaskId} RETURN.md 就位, 托管交回`, "info", true);
             // 设置 currentTaskId 供 tryAutoReturn 使用
@@ -2332,7 +2402,7 @@ async function doTick(): Promise<void> {
               voice(`held 托管交回成功: ${heldTaskId}`, "info", true);
               resetRuntimeState("held-exec 托管成功歇手");
             } else {
-              voice(`held 托管交回失败: ${heldTaskId}, 请检查日志`, "warn", true);
+              voice(`held 托管交回失败: ${heldTaskId}, RETURN.md 可能缺“一句话结论”节或内容未填写, 请补充后重试`, "warn", true);
             }
             return;
           }
