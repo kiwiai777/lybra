@@ -41,6 +41,7 @@ declare -a files=(
   "tests/f38b-inflight-quota.test.ts"
   "tests/f38c-claim-idempotent.test.ts"
   "tests/f22-advisor-onboarding.test.ts"
+  "tests/f57-onboarding-guide.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
@@ -323,6 +324,16 @@ if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/t
   echo "✓ tools/aipos_cli/tests/test_aipos_f54_fix1.py PASS"
 else
   echo "✗ tools/aipos_cli/tests/test_aipos_f54_fix1.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F57: 从0接新项目全流程固化(一条命令上岗+接入skill随分发下发)
+echo
+echo "── tools/aipos_cli/tests/test_aipos_f57_onboarding.py (从0接新项目全流程) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos_f57_onboarding.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos_f57_onboarding.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos_f57_onboarding.py FAIL"
   overall=1
 fi
 
