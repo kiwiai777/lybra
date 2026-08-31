@@ -398,6 +398,16 @@ else
   overall=1
 fi
 
+# AIPOS-F61: 收尾原子化与结算状态一次读齐
+echo
+echo "── tests/test_aipos_f61_settle_atomicity.py (收尾原子化) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f61_settle_atomicity.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f61_settle_atomicity.py PASS"
+else
+  echo "✗ tests/test_aipos_f61_settle_atomicity.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

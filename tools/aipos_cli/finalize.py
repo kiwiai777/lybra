@@ -654,6 +654,26 @@ def _task_title_summary(governance_root: Path, task_id: str) -> str:
     return ""
 
 
+def _find_similar_branches(repo_root: Path, task_id: str) -> list[str]:
+    """AIPOS-F61: 找与 task_id 相近的本地分支(帮用户定位命名错误)。
+
+    列出所有包含 task_id 的本地分支。
+    """
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--list", "--format=%(refname:short)"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return []
+        all_branches = [b.strip() for b in result.stdout.strip().split("\n") if b.strip()]
+        return [b for b in all_branches if task_id in b]
+    except Exception:
+        return []
+
+
 def _integrate_card_branch(
     task_id: str,
     verdict_id: str | None,
@@ -662,6 +682,8 @@ def _integrate_card_branch(
     dry_run: bool,
     operations: list[str],
     branch_integration: dict[str, Any] | None = None,
+    task_mode: str | None = None,
+    output_target: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-C3C: 按 N5 branch_integration 声明执行卡分支整合 (merge --no-ff)。
 
@@ -669,7 +691,7 @@ def _integrate_card_branch(
     ②存在且未合并 → 检查工作树干净 + 当前在 main → merge --no-ff
       (信息格式由 merge_message_format 声明保证归属: 含卡号 + 裁决号)
     ③冲突 → 中止出声, 列冲突文件, 绝不自动解, main 无半合并残留
-    ④分支不存在 → 跳过出声 "无卡分支, 跳过整合"
+    ④分支不存在 → 代码任务(task_mode=code)硬 BLOCK(AIPOS-F61); 非代码任务跳过出声
     ⑤已合并 → 跳过出声
     分支保留 (不删除), 与既有惯例一致。
 
@@ -697,6 +719,23 @@ def _integrate_card_branch(
 
     # ① 找分支
     if not _git_branch_exists(workspace_root, branch_name):
+        # AIPOS-F61: 代码任务分支不存在 = 硬 BLOCK(禁假报成功 + 写错误 finalization 记录)
+        # 非代码任务(无 output_target 或 task_mode != code)仍允许跳过
+        is_code_task = (
+            task_mode == "code"
+            or (output_target and str(output_target).strip())
+        )
+        if is_code_task:
+            similar = _find_similar_branches(workspace_root, task_id)
+            similar_text = ", ".join(similar[:5]) if similar else "(无相近分支)"
+            message = (
+                f"BLOCKED: 未找到声明分支 {branch_name} (task_mode={task_mode or '?'}, "
+                f"output_target={output_target or '?'}). "
+                f"现有相近分支: {similar_text}. "
+                f"可执行出口: 改名分支为 {branch_name}, 或在卡面指定正确分支模式。"
+            )
+            operations.append(f"  → {message}")
+            return {**base, "action": "blocked_branch_not_found", "blocked": True, "message": message}
         message = f"无卡分支 {branch_name} (直提 main 的历史卡/无代码卡), 跳过整合"
         operations.append(f"  → {message}")
         return {**base, "action": "skipped_no_branch", "message": message}
@@ -1024,7 +1063,21 @@ def finalize_task(
     
     # AIPOS-C3C: N5 branch_integration 声明驱动 — 卡分支整合 (merge --no-ff, 保留分支)
     # 取代 AIPOS-R5A 的 squash 合并 + 删分支。规则活在 N5 声明, 代码零写死;
-    # 冲突→中止出声列文件, 缺分支→跳过出声, 绝不自动解/绝不删分支。
+    # 冲突→中止出声列文件, 缺分支→代码任务 BLOCK(AIPOS-F61), 绝不自动解/绝不删分支。
+    # AIPOS-F61: 读卡面 task_mode/output_target 传给分支整合, 代码任务缺分支=硬 BLOCK
+    _task_mode_for_branch: str | None = None
+    _output_target_for_branch: str | None = None
+    try:
+        from tools.aipos_cli.task_loader import find_task_by_id as _find_task
+        _matches = _find_task(task_id, governance_root)
+        if _matches[1]:
+            _task_meta = _matches[1][0].get("metadata", {}) or _matches[1][0]
+            _task_mode_for_branch = str(_task_meta.get("task_mode") or "").strip() or None
+            _ot = _task_meta.get("output_target")
+            if _ot:
+                _output_target_for_branch = str(_ot).strip() if not isinstance(_ot, list) else ", ".join(str(x) for x in _ot)
+    except Exception:
+        pass  # 读卡失败不阻断, 降级为旧行为(跳过)
     integrate = _integrate_card_branch(
         task_id=task_id,
         verdict_id=finalize_check.get("verdict_id"),
@@ -1033,6 +1086,8 @@ def finalize_task(
         dry_run=dry_run,
         operations=operations,
         branch_integration=branch_integration,
+        task_mode=_task_mode_for_branch,
+        output_target=_output_target_for_branch,
     )
     if integrate["blocked"]:
         return {
@@ -1054,6 +1109,10 @@ def finalize_task(
             "operations": operations,
         }
     
+    # AIPOS-F61: 跟踪是否有实际合并动作作——clean-tree 路径只有在实际合并时才写 finalization 记录
+    # 防止把上一张卡的 commit 误记为本卡的 finalization 证据(F58 假成功根因)
+    _actual_merge_happened = integrate.get("action") == "merged"
+
     # Check if there are changes to commit
     # AIPOS-R6A 靶子③: finalize push判据修正 — working tree clean ≠ already pushed
     # 需要检查 local vs origin 同步状态
@@ -1083,7 +1142,11 @@ def finalize_task(
                     operations.append("✓ Deploy completed successfully")
                     verification = verify_deployment_version(workspace_root, current_commit)
                     if verification["verified"]:
-                        _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                        # AIPOS-F61: 只有实际合并才写 finalization 记录(禁把上一张卡的 commit 当证据)
+                        if _actual_merge_happened:
+                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                        else:
+                            operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                         return {
                             "verdict": Verdict.PASS,
                             "task_id": task_id,
@@ -1141,7 +1204,11 @@ def finalize_task(
                     }
             else:
                 # 已部署 → 真正无事可做
-                _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                # AIPOS-F61: 只有实际合并才写 finalization 记录
+                if _actual_merge_happened:
+                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                else:
+                    operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                 return {
                     "verdict": Verdict.PASS,
                     "task_id": task_id,
@@ -1227,7 +1294,11 @@ def finalize_task(
                     operations.append("✓ Deploy completed successfully")
                     verification = verify_deployment_version(workspace_root, current_commit)
                     if verification["verified"]:
-                        _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                        # AIPOS-F61: 只有实际合并才写 finalization 记录
+                        if _actual_merge_happened:
+                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                        else:
+                            operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                         return {
                             "verdict": Verdict.PASS,
                             "task_id": task_id,
@@ -1283,7 +1354,11 @@ def finalize_task(
                     }
             else:
                 # 已部署,只需 push
-                _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                # AIPOS-F61: 只有实际合并才写 finalization 记录
+                if _actual_merge_happened:
+                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                else:
+                    operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                 return {
                     "verdict": Verdict.PASS,
                     "task_id": task_id,

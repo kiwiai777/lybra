@@ -1392,12 +1392,21 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
       continue;
     }
 
-    // 检查是否已 close
+    // AIPOS-F61 大项③: 结算状态一次读齐三类记录(禁只读其一)
+    // ① closure 记录
     const closureDir = path.join(config.workspaceRoot, "5_tasks/records/closures", taskId);
-    if (fs.existsSync(closureDir)) {
-      const closureFiles = fs.readdirSync(closureDir).filter((f: string) => f.startsWith("closure_") && f.endsWith(".md"));
-      if (closureFiles.length > 0) continue; // 已结案,跳过
-    }
+    const hasClosure = fs.existsSync(closureDir) &&
+      fs.readdirSync(closureDir).filter((f: string) => f.startsWith("closure_") && f.endsWith(".md")).length > 0;
+    // ② finalization 记录
+    const finDir = path.join(config.workspaceRoot, "5_tasks/records/finalizations", taskId);
+    const hasFinalization = fs.existsSync(finDir) &&
+      fs.readdirSync(finDir).filter((f: string) => f.startsWith("finalization_") && f.endsWith(".md")).length > 0;
+    // ③ 队列位置 (claimed/ = 未结案)
+    const claimedPath = path.join(config.workspaceRoot, "5_tasks/queue/claimed");
+    const isInClaimed = fs.existsSync(claimedPath) &&
+      fs.readdirSync(claimedPath).some((f: string) => f.toLowerCase().includes(taskId.toLowerCase()));
+    // 三类齐全 = 已结算
+    if (hasClosure && hasFinalization && !isInClaimed) continue; // 已结案,跳过
 
     // 候选卡: 有 PASS 裁决 + 未 close → 自动 finalize+close
     currentLogger.info("auto-finalize-start", { task_id: taskId, verdict: latest.verdict, verdict_at: latest.verdictAt });
@@ -1458,10 +1467,11 @@ async function tryAutoFinalizeOnPassVerdictCore(): Promise<boolean> {
         continue;
       }
 
+      // AIPOS-F61: close 降为单阶段 — 机械步不赼 OWNER_CONFIRMED
+      // executor 的 close 是结算动作, 不是发布动作, 无需 owner 二次确认
       const closeConfirmResp = await currentClient.callTool("lybra_queue_close_confirm", {
         ...closeArgs,
         dry_run_token: String(closeDryRunToken),
-        owner_confirmation_token: "OWNER_CONFIRMED",
       });
 
       // AIPOS-F60: 必须校验 confirm 应答 — 失败走异常路出声带出口, 禁无条件报成功

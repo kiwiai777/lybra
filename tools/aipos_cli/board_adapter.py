@@ -6774,6 +6774,93 @@ reason: {str(amendment_reason).strip()}
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
+def read_settlement_status(
+    task_id: str,
+    repo_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F61 大项③: 结算状态一次读齐三类记录。
+
+    禁只读其一或只看队列目录位置。一次调用读齐:
+    1. 队列位置 (pending/claimed/completed/blocked/withdrawn)
+    2. closure 记录 (records/closures/<task_id>/)
+    3. finalization 记录 (records/finalizations/<task_id>/)
+
+    Returns:
+        {
+            "task_id": str,
+            "queue_position": {"state": str, "path": str | None},
+            "closure_records": list[dict],  # 每条 closure 的 frontmatter
+            "finalization_records": list[dict],  # 每条 finalization 的 frontmatter
+            "is_settled": bool,  # 三类记录齐全 = 已结算
+            "missing": list[str],  # 缺哪些
+        }
+    """
+    resolved_root = _resolve_repo_root(repo_root)
+    result: dict[str, Any] = {
+        "task_id": task_id,
+        "queue_position": {"state": "unknown", "path": None},
+        "closure_records": [],
+        "finalization_records": [],
+        "is_settled": False,
+        "missing": [],
+    }
+
+    # ① 队列位置
+    try:
+        matches = find_task_by_id(task_id, resolved_root)
+        if matches[1]:
+            task_info = matches[1][0]
+            result["queue_position"] = {
+                "state": str(task_info.get("queue_state") or "unknown"),
+                "path": str(task_info.get("path") or ""),
+            }
+    except (ValueError, FileNotFoundError, OSError):
+        result["missing"].append("queue_position")
+
+    # ② closure 记录
+    try:
+        closure_dir = resolved_root / "5_tasks" / "records" / "closures" / task_id
+        if closure_dir.is_dir():
+            for closure_file in sorted(closure_dir.glob("close_*.md")):
+                try:
+                    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+                    fm, _, _ = parse_markdown_frontmatter(closure_file.read_text(encoding="utf-8"))
+                    fm["_path"] = str(closure_file.relative_to(resolved_root))
+                    result["closure_records"].append(fm)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    if not result["closure_records"]:
+        result["missing"].append("closure_record")
+
+    # ③ finalization 记录
+    try:
+        fin_dir = resolved_root / "5_tasks" / "records" / "finalizations" / task_id
+        if fin_dir.is_dir():
+            for fin_file in sorted(fin_dir.glob("finalization_*.md")):
+                try:
+                    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+                    fm, _, _ = parse_markdown_frontmatter(fin_file.read_text(encoding="utf-8"))
+                    fm["_path"] = str(fin_file.relative_to(resolved_root))
+                    result["finalization_records"].append(fm)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    if not result["finalization_records"]:
+        result["missing"].append("finalization_record")
+
+    # 判定是否已结算: 队列在 completed + 有 closure + 有 finalization
+    result["is_settled"] = (
+        result["queue_position"]["state"] == "completed"
+        and bool(result["closure_records"])
+        and bool(result["finalization_records"])
+    )
+
+    return result
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)
