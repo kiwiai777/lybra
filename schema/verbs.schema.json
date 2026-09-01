@@ -1427,6 +1427,30 @@
             },
             "additionalProperties": false
           },
+          "artifact_subject": {
+            "type": "object",
+            "description": "AIPOS-F70: 裁决绑定的精确产物(commit SHA/tree hash). task_mode=code 的被审卡必须提供此参数,否则 BLOCK (fail-closed).",
+            "properties": {
+              "repository": {
+                "type": "string",
+                "description": "仓库标识(如 lybra, 项目无关设计)"
+              },
+              "commit_sha": {
+                "type": "string",
+                "description": "被审 commit 的完整 SHA (40字符)"
+              },
+              "tree_hash": {
+                "type": "string",
+                "description": "被审 commit 的 tree hash (40字符, Git tree object SHA)"
+              },
+              "package_digest": {
+                "type": "string",
+                "description": "部署类卡的包摘要(可选, 如 sha256:...)"
+              }
+            },
+            "required": ["repository", "commit_sha", "tree_hash"],
+            "additionalProperties": false
+          },
           "autonomy_mode": {
             "type": "string",
             "$enum": "autonomy_mode",

@@ -235,19 +235,24 @@ def check_verdict_record_authentic(verdict_file: Path) -> dict[str, Any]:
 def find_gate_pass_verdict_for_task(
     task_id: str,
     governance_root: Path,
+    required_commit_sha: str | None = None,
 ) -> dict[str, Any]:
-    """AIPOS-C3 大项A: 为指定 task_id 查找门生 PASS 裁决。
+    """AIPOS-C3 大项A + AIPOS-F70: 为指定 task_id 查找门生 PASS 裁决(支持精确 SHA 匹配)。
     
-    查找规则(transitions.schema N5.guards):
+    查找规则(transitions.schema N5.guards + AIPOS-F70):
       1. 扫描 5_tasks/records/audit_verdicts/{task_id}/*.md
       2. 拒绝手写文件(check_verdict_record_authentic)
       3. 按 verdict_at 排序,取最新
-      4. 最新裁决 verdict ∈ {PASS, PASS_WITH_NOTES} → 返回成功
-      5. 否则 → 拒绝
+      4. 最新裁决 verdict ∈ {PASS, PASS_WITH_NOTES} → 检查 artifact_subject
+      5. AIPOS-F70: 如果提供了 required_commit_sha,裁决必须精确覆盖该 commit
+         - 裁决有 artifact_subject.commit_sha → 精确匹配
+         - 裁决无 artifact_subject (存量 legacy) → 警告但放行
+      6. 否则 → 拒绝
     
     Args:
         task_id: 任务 ID
         governance_root: 治理工作区根(拥有 5_tasks/records/)
+        required_commit_sha: (可选) 要求裁决覆盖的精确 commit SHA (AIPOS-F70)
     
     Returns:
         {
@@ -256,6 +261,8 @@ def find_gate_pass_verdict_for_task(
             "verdict_id": str | None,
             "verdict_file": str | None,
             "verdict_at": str | None,
+            "artifact_subject": dict | None,  # AIPOS-F70: 裁决自述的产物
+            "is_legacy_verdict": bool,  # AIPOS-F70: 无 artifact_subject 的存量裁决
             "reason": str,
         }
     """
@@ -290,12 +297,16 @@ def find_gate_pass_verdict_for_task(
             verdict_value = str(metadata.get("verdict") or "").strip().upper()
             verdict_at = str(metadata.get("verdict_at") or metadata.get("timestamp") or "")
             verdict_id = str(metadata.get("verdict_id") or verdict_file.stem)
+            # AIPOS-F70: 提取 artifact_subject
+            artifact_subject = metadata.get("artifact_subject") if isinstance(metadata.get("artifact_subject"), dict) else None
             
             candidates.append({
                 "path": verdict_file,
                 "verdict": verdict_value,
                 "verdict_at": verdict_at,
                 "verdict_id": verdict_id,
+                "artifact_subject": artifact_subject,
+                "metadata": metadata,
             })
         except Exception as e:
             rejected_files.append(f"{verdict_file.name}: 解析失败 {e}")
@@ -311,21 +322,75 @@ def find_gate_pass_verdict_for_task(
             "verdict_id": None,
             "verdict_file": None,
             "verdict_at": None,
+            "artifact_subject": None,
+            "is_legacy_verdict": False,
             "reason": reason,
         }
     
     # 按 verdict_at 排序,取最新
     latest = max(candidates, key=lambda c: c["verdict_at"])
     
+    # AIPOS-F70: 判断是否为 legacy 裁决 (无 artifact_subject)
+    is_legacy = latest["artifact_subject"] is None
+    
     if latest["verdict"] in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
-        return {
-            "found": True,
-            "verdict": latest["verdict"],
-            "verdict_id": latest["verdict_id"],
-            "verdict_file": str(latest["path"]),
-            "verdict_at": latest["verdict_at"],
-            "reason": f"最新门生裁决: {latest['verdict']} ({latest['path'].name})",
-        }
+        # AIPOS-F70: 如果要求精确 commit SHA 匹配
+        if required_commit_sha:
+            if is_legacy:
+                # 存量 legacy 裁决 -> 警告但放行
+                return {
+                    "found": True,
+                    "verdict": latest["verdict"],
+                    "verdict_id": latest["verdict_id"],
+                    "verdict_file": str(latest["path"]),
+                    "verdict_at": latest["verdict_at"],
+                    "artifact_subject": None,
+                    "is_legacy_verdict": True,
+                    "reason": f"最新门生裁决: {latest['verdict']} ({latest['path'].name}), 但是 legacy 裁决 (无 artifact_subject), 警告放行",
+                }
+            else:
+                # 新裁决: 精确匹配 commit_sha
+                verdict_commit_sha = str(latest["artifact_subject"].get("commit_sha") or "").strip()
+                if verdict_commit_sha.lower() == required_commit_sha.lower():
+                    return {
+                        "found": True,
+                        "verdict": latest["verdict"],
+                        "verdict_id": latest["verdict_id"],
+                        "verdict_file": str(latest["path"]),
+                        "verdict_at": latest["verdict_at"],
+                        "artifact_subject": latest["artifact_subject"],
+                        "is_legacy_verdict": False,
+                        "reason": f"最新门生裁决: {latest['verdict']} ({latest['path'].name}), 精确覆盖 commit {required_commit_sha[:8]}",
+                    }
+                else:
+                    # commit SHA 不匹配 -> 拒绝
+                    return {
+                        "found": False,
+                        "verdict": latest["verdict"],
+                        "verdict_id": latest["verdict_id"],
+                        "verdict_file": str(latest["path"]),
+                        "verdict_at": latest["verdict_at"],
+                        "artifact_subject": latest["artifact_subject"],
+                        "is_legacy_verdict": False,
+                        "reason": (
+                            f"AIPOS-F70: 裁决 commit_sha 不匹配. "
+                            f"裁决覆盖: {verdict_commit_sha[:8] if verdict_commit_sha else 'None'}, "
+                            f"要求: {required_commit_sha[:8]}. "
+                            f"产物已变化,须复审 ({latest['path'].name})"
+                        ),
+                    }
+        else:
+            # 未要求精确匹配 (旧逻辑, finalize 不带 required_commit_sha)
+            return {
+                "found": True,
+                "verdict": latest["verdict"],
+                "verdict_id": latest["verdict_id"],
+                "verdict_file": str(latest["path"]),
+                "verdict_at": latest["verdict_at"],
+                "artifact_subject": latest["artifact_subject"],
+                "is_legacy_verdict": is_legacy,
+                "reason": f"最新门生裁决: {latest['verdict']} ({latest['path'].name})",
+            }
     
     return {
         "found": False,
@@ -333,6 +398,8 @@ def find_gate_pass_verdict_for_task(
         "verdict_id": latest["verdict_id"],
         "verdict_file": str(latest["path"]),
         "verdict_at": latest["verdict_at"],
+        "artifact_subject": latest["artifact_subject"],
+        "is_legacy_verdict": is_legacy,
         "reason": f"最新门生裁决不是 PASS: {latest['verdict']} ({latest['path'].name})",
     }
 
@@ -416,9 +483,17 @@ def check_commit_interval_coverage(
             )
             continue
         
-        verdict_check = find_gate_pass_verdict_for_task(task_id, governance_root)
+        # AIPOS-F70: 精确 SHA 匹配 — 裁决必须覆盖该 commit
+        verdict_check = find_gate_pass_verdict_for_task(
+            task_id, governance_root, required_commit_sha=commit["hash"]
+        )
         
         if not verdict_check["found"]:
+            # AIPOS-F70: 区分 legacy 裁决的警告
+            if verdict_check.get("is_legacy_verdict"):
+                # legacy 裁决警告但放行 (已在 find_gate_pass_verdict_for_task 中处理)
+                # 这里不应该进入,因为 legacy found=True
+                pass
             missing.append(
                 f"{commit['hash'][:8]} ({task_id}): {verdict_check['reason'][:80]}"
             )
