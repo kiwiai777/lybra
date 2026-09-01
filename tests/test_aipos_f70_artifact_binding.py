@@ -88,17 +88,249 @@ class TestVerdictDryRunFailClosed:
     """验收②: 新裁决缺artifact_subject→BLOCK(fail-closed)"""
 
     def test_code_task_missing_artifact_subject_blocks(self):
-        """task_mode=code的被审卡缺artifact_subject→BLOCK"""
-        # 需要实际的task文件来测试,跳过单元测试,改为集成测试验证
-        pytest.skip("需要完整repo环境,在集成测试中验证")
+        """task_mode=code的被审卡缺artifact_subject→BLOCK
+        
+        AIPOS-F70-fix1: 将 skip 改为单元测试,用 _build_audit_verdict_preview 直接测试校验逻辑。
+        完整的两跳集成测试在 test_aipos_f70_fix1_snapshot_stable.py 覆盖。
+        """
+        # 使用 _build_audit_verdict_preview 的最小化 mock 测试校验逻辑
+        # 这个测试验证: task_mode=code 且缺 artifact_subject 时,blocking_reasons 包含 AIPOS-F70 错误
+        # 实际的两跳流程(dry_run → confirm)在 test_aipos_f70_fix1 中测试
+        from unittest.mock import MagicMock, patch
+        from tools.aipos_cli.board_adapter import _build_audit_verdict_preview
+        from pathlib import Path
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            # 创建最小结构
+            (repo_root / "5_tasks" / "queue" / "claimed").mkdir(parents=True)
+            (repo_root / "5_tasks" / "records" / "returns" / "TASK-X").mkdir(parents=True)
+            (repo_root / "5_tasks" / "records" / "publishes").mkdir(parents=True)
+            (repo_root / "5_tasks" / "records" / "sessions" / "AUDIT-X").mkdir(parents=True)
+            (repo_root / "0_control_plane" / "agent_profiles").mkdir(parents=True)
+            
+            # 被审任务(code 模式)
+            task_x = repo_root / "5_tasks" / "queue" / "claimed" / "TASK-X.md"
+            task_x.write_text(
+                "---\ntask_id: TASK-X\nstatus: claimed\ntask_mode: code\n---\n# X\n",
+                encoding="utf-8"
+            )
+            
+            # 审计任务
+            audit_x = repo_root / "5_tasks" / "queue" / "claimed" / "AUDIT-X.md"
+            audit_x.write_text(
+                "---\ntask_id: AUDIT-X\nstatus: claimed\nreviewed_task_id: TASK-X\n"
+                "created_by: gate_derivation\nreviewed_executor_instance: exec.test\n---\n# Audit\n",
+                encoding="utf-8"
+            )
+            
+            # 支撑记录
+            (repo_root / "5_tasks" / "records" / "returns" / "TASK-X" / "return_x.md").write_text(
+                "---\nrecord_type: return_record\ncanonical_agent_instance: exec.test\n---\n# R\n",
+                encoding="utf-8"
+            )
+            (repo_root / "5_tasks" / "records" / "publishes" / "publish_AUDIT-X.md").write_text(
+                "---\nrecord_type: publish_record\npublish_id: publish_AUDIT-X\n---\n# P\n",
+                encoding="utf-8"
+            )
+            (repo_root / "5_tasks" / "records" / "sessions" / "AUDIT-X" / "session_x.md").write_text(
+                "---\nrecord_type: session_record\nsession_id: session_x\nevent_count: 0\n---\n# S\n",
+                encoding="utf-8"
+            )
+            (repo_root / "0_control_plane" / "agent_profiles" / "profiles.yaml").write_text(
+                "agents:\n  - id: exec.test\n    role: executor\n  - id: audit.test\n    role: auditor\n",
+                encoding="utf-8"
+            )
+            
+            # 调用 preview(缺 artifact_subject)
+            result = _build_audit_verdict_preview(
+                audit_task_id="AUDIT-X",
+                audit_task_path=None,
+                reviewed_task_id="TASK-X",
+                actor="audit.test",
+                agent_instance="audit.test",
+                owner_policy_ref="pol_test",
+                audit_claim_id=None,
+                audit_session_id="session_x",
+                audit_dispatch_record_ref="publish_AUDIT-X",
+                reviewed_return_record_ref="return_x",
+                verdict_value="PASS",
+                findings_summary="Good",
+                evidence_refs=["task_cards/TASK-X/evidence.md"],
+                recommended_next_action=None,
+                owner_waiver_ref=None,
+                repo_root=repo_root,
+                dry_run=True,
+                artifact_subject=None,  # 故意缺失
+            )
+            
+            # 验证: BLOCK + AIPOS-F70 错误
+            blocking_reasons = result.get("blocking_reasons", [])
+            assert any("AIPOS-F70" in r and "artifact_subject" in r for r in blocking_reasons), (
+                f"task_mode=code 缺 artifact_subject 应 BLOCK,实际 blocking_reasons: {blocking_reasons}"
+            )
 
     def test_code_task_with_artifact_subject_passes_validation(self):
-        """task_mode=code提供artifact_subject→通过校验"""
-        pytest.skip("需要完整repo环境,在集成测试中验证")
+        """task_mode=code提供artifact_subject→通过校验
+        
+        AIPOS-F70-fix1: 将 skip 改为单元测试。
+        """
+        from tools.aipos_cli.board_adapter import _build_audit_verdict_preview
+        from pathlib import Path
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            # 创建最小结构(复用上一个测试的逻辑)
+            (repo_root / "5_tasks" / "queue" / "claimed").mkdir(parents=True)
+            (repo_root / "5_tasks" / "records" / "returns" / "TASK-Y").mkdir(parents=True)
+            (repo_root / "5_tasks" / "records" / "publishes").mkdir(parents=True)
+            (repo_root / "5_tasks" / "records" / "sessions" / "AUDIT-Y").mkdir(parents=True)
+            (repo_root / "0_control_plane" / "agent_profiles").mkdir(parents=True)
+            
+            task_y = repo_root / "5_tasks" / "queue" / "claimed" / "TASK-Y.md"
+            task_y.write_text(
+                "---\ntask_id: TASK-Y\nstatus: claimed\ntask_mode: code\n---\n# Y\n",
+                encoding="utf-8"
+            )
+            
+            audit_y = repo_root / "5_tasks" / "queue" / "claimed" / "AUDIT-Y.md"
+            audit_y.write_text(
+                "---\ntask_id: AUDIT-Y\nstatus: claimed\nreviewed_task_id: TASK-Y\n"
+                "created_by: gate_derivation\nreviewed_executor_instance: exec.test\n---\n# Audit\n",
+                encoding="utf-8"
+            )
+            
+            (repo_root / "5_tasks" / "records" / "returns" / "TASK-Y" / "return_y.md").write_text(
+                "---\nrecord_type: return_record\ncanonical_agent_instance: exec.test\n---\n# R\n",
+                encoding="utf-8"
+            )
+            (repo_root / "5_tasks" / "records" / "publishes" / "publish_AUDIT-Y.md").write_text(
+                "---\nrecord_type: publish_record\npublish_id: publish_AUDIT-Y\n---\n# P\n",
+                encoding="utf-8"
+            )
+            (repo_root / "5_tasks" / "records" / "sessions" / "AUDIT-Y" / "session_y.md").write_text(
+                "---\nrecord_type: session_record\nsession_id: session_y\nevent_count: 0\n---\n# S\n",
+                encoding="utf-8"
+            )
+            (repo_root / "0_control_plane" / "agent_profiles" / "profiles.yaml").write_text(
+                "agents:\n  - id: exec.test\n    role: executor\n  - id: audit.test\n    role: auditor\n",
+                encoding="utf-8"
+            )
+            
+            # 调用 preview(提供 artifact_subject)
+            result = _build_audit_verdict_preview(
+                audit_task_id="AUDIT-Y",
+                audit_task_path=None,
+                reviewed_task_id="TASK-Y",
+                actor="audit.test",
+                agent_instance="audit.test",
+                owner_policy_ref="pol_test",
+                audit_claim_id=None,
+                audit_session_id="session_y",
+                audit_dispatch_record_ref="publish_AUDIT-Y",
+                reviewed_return_record_ref="return_y",
+                verdict_value="PASS",
+                findings_summary="Good",
+                evidence_refs=["task_cards/TASK-Y/evidence.md"],
+                recommended_next_action=None,
+                owner_waiver_ref=None,
+                repo_root=repo_root,
+                dry_run=True,
+                artifact_subject={
+                    "repository": "test-repo",
+                    "commit_sha": "a" * 40,
+                    "tree_hash": "b" * 40,
+                },
+            )
+            
+            # 验证: 没有 AIPOS-F70 artifact_subject 相关 blocking_reasons
+            blocking_reasons = result.get("blocking_reasons", [])
+            artifact_blocks = [r for r in blocking_reasons if "AIPOS-F70" in r and "artifact_subject" in r]
+            assert not artifact_blocks, (
+                f"task_mode=code 提供 artifact_subject 不应 BLOCK,实际 artifact_subject blocking: {artifact_blocks}"
+            )
 
     def test_invalid_commit_sha_format_blocks(self):
-        """commit_sha格式不合法→BLOCK"""
-        pytest.skip("需要完整repo环境,在集成测试中验证")
+        """commit_sha格式不合法→BLOCK
+        
+        AIPOS-F70-fix1: 将 skip 改为单元测试。
+        """
+        from tools.aipos_cli.board_adapter import _build_audit_verdict_preview
+        from pathlib import Path
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            # 创建最小结构
+            (repo_root / "5_tasks" / "queue" / "claimed").mkdir(parents=True)
+            (repo_root / "5_tasks" / "records" / "returns" / "TASK-Z").mkdir(parents=True)
+            (repo_root / "5_tasks" / "records" / "publishes").mkdir(parents=True)
+            (repo_root / "5_tasks" / "records" / "sessions" / "AUDIT-Z").mkdir(parents=True)
+            (repo_root / "0_control_plane" / "agent_profiles").mkdir(parents=True)
+            
+            task_z = repo_root / "5_tasks" / "queue" / "claimed" / "TASK-Z.md"
+            task_z.write_text(
+                "---\ntask_id: TASK-Z\nstatus: claimed\ntask_mode: code\n---\n# Z\n",
+                encoding="utf-8"
+            )
+            
+            audit_z = repo_root / "5_tasks" / "queue" / "claimed" / "AUDIT-Z.md"
+            audit_z.write_text(
+                "---\ntask_id: AUDIT-Z\nstatus: claimed\nreviewed_task_id: TASK-Z\n"
+                "created_by: gate_derivation\nreviewed_executor_instance: exec.test\n---\n# Audit\n",
+                encoding="utf-8"
+            )
+            
+            (repo_root / "5_tasks" / "records" / "returns" / "TASK-Z" / "return_z.md").write_text(
+                "---\nrecord_type: return_record\ncanonical_agent_instance: exec.test\n---\n# R\n",
+                encoding="utf-8"
+            )
+            (repo_root / "5_tasks" / "records" / "publishes" / "publish_AUDIT-Z.md").write_text(
+                "---\nrecord_type: publish_record\npublish_id: publish_AUDIT-Z\n---\n# P\n",
+                encoding="utf-8"
+            )
+            (repo_root / "5_tasks" / "records" / "sessions" / "AUDIT-Z" / "session_z.md").write_text(
+                "---\nrecord_type: session_record\nsession_id: session_z\nevent_count: 0\n---\n# S\n",
+                encoding="utf-8"
+            )
+            (repo_root / "0_control_plane" / "agent_profiles" / "profiles.yaml").write_text(
+                "agents:\n  - id: exec.test\n    role: executor\n  - id: audit.test\n    role: auditor\n",
+                encoding="utf-8"
+            )
+            
+            # 调用 preview(提供无效 commit_sha 格式)
+            result = _build_audit_verdict_preview(
+                audit_task_id="AUDIT-Z",
+                audit_task_path=None,
+                reviewed_task_id="TASK-Z",
+                actor="audit.test",
+                agent_instance="audit.test",
+                owner_policy_ref="pol_test",
+                audit_claim_id=None,
+                audit_session_id="session_z",
+                audit_dispatch_record_ref="publish_AUDIT-Z",
+                reviewed_return_record_ref="return_z",
+                verdict_value="PASS",
+                findings_summary="Good",
+                evidence_refs=["task_cards/TASK-Z/evidence.md"],
+                recommended_next_action=None,
+                owner_waiver_ref=None,
+                repo_root=repo_root,
+                dry_run=True,
+                artifact_subject={
+                    "repository": "test-repo",
+                    "commit_sha": "invalid_sha",  # 无效格式
+                    "tree_hash": "b" * 40,
+                },
+            )
+            
+            # 验证: BLOCK + commit_sha 格式错误
+            blocking_reasons = result.get("blocking_reasons", [])
+            assert any("commit_sha" in r and "格式错误" in r for r in blocking_reasons), (
+                f"commit_sha 格式错误应 BLOCK,实际 blocking_reasons: {blocking_reasons}"
+            )
 
 
 class TestPreciseCommitMatching:
