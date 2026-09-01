@@ -197,12 +197,67 @@ def _check_audit_card(workspace_root: Path, task_id: str) -> bool:
 # 推导核心:状态 → 下一步节点 + 角色 + 命令
 # ---------------------------------------------------------------------------
 
-def _resolve_active_policy(workspace_root: Path, role: str = "exec") -> str | None:
-    """从工作区读活跃信封。失败返回 None。"""
+def _extract_return_summary(workspace_root: Path, task_id: str) -> str | None:
+    """从 RETURN.md 提取一句话结论。
+    
+    第4轮③: result_summary 必须从 RETURN.md「一句话结论」节提取,不存在→该步不该是return。
+    """
     try:
-        from tools.aipos_cli.policy_resolver import find_active_policy
-        governance_root = Path(os.getenv("LYBRA_GOVERNANCE_ROOT", workspace_root))
-        return find_active_policy(governance_root, role=role, policy_type="dev")
+        task_cards_root = _resolve_governance_path_with_relative("task_cards", workspace_root)
+        return_path = task_cards_root / task_id / "RETURN.md"
+        
+        if not return_path.is_file():
+            return None
+        
+        content = return_path.read_text(encoding="utf-8")
+        
+        # 查找「一句话结论」节
+        lines = content.split("\n")
+        in_summary_section = False
+        for i, line in enumerate(lines):
+            if "一句话结论" in line or "## 一句话" in line:
+                in_summary_section = True
+                continue
+            if in_summary_section:
+                # 跳过空行
+                if not line.strip():
+                    continue
+                # 遇到下一个标题,结束
+                if line.startswith("##"):
+                    break
+                # 找到内容
+                if line.strip():
+                    # 去掉 **完成** 等格式标记
+                    summary = line.strip().lstrip("*").rstrip("*").strip()
+                    # 去掉句号
+                    summary = summary.rstrip("。")
+                    return summary
+        
+        return None
+    except Exception:
+        return None
+
+
+def _resolve_active_policy(workspace_root: Path, task_id: str, role: str = "exec") -> str | None:
+    """从 records/claims 最新记录读取当前有效信封。
+    
+    第4轮要求:推导必须只认记录,从 records/claims 最新成功认领取当前信封,禁用陈旧来源。
+    """
+    try:
+        records_root = _resolve_governance_path_with_relative("records", workspace_root)
+        claims_dir = records_root / "claims" / task_id
+        
+        if not claims_dir.is_dir():
+            return None
+        
+        # 找最新记录(按修改时间)
+        claim_files = sorted(claims_dir.glob("claim_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not claim_files:
+            return None
+        
+        # 读 frontmatter
+        latest_claim = _read_frontmatter(claim_files[0])
+        return latest_claim.get("owner_policy_ref")
     except Exception:
         return None
 
@@ -390,7 +445,7 @@ def derive_next_step(
         verdict = verdict_fm.get("verdict", "PASS")
         actor = verdict_fm.get("actor") or assigned_to or "<auditor>"
         agent_inst = verdict_fm.get("agent_instance") or assigned_to or "<auditor-instance>"
-        policy_ref = _resolve_active_policy(workspace_root, role="audit")
+        policy_ref = _resolve_active_policy(workspace_root, task_id, role="audit")
         
         cmd = _build_verdict_submit_command(
             reviewed_task_id=reviewed_task_id,
@@ -437,7 +492,7 @@ def derive_next_step(
     if queue_dir == "pending":
         actor = assigned_to or "<executor>"
         agent_inst = assigned_to or "<executor-instance>"
-        policy_ref = _resolve_active_policy(workspace_root, role="exec")
+        policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
         cmd = _build_copyable_command(
             verb_base="claim",
             task_id=task_id,
@@ -485,11 +540,14 @@ def derive_next_step(
             if has_audit_card:
                 # 审计卡已生成,需派审
                 audit_id = f"{task_id}R"
-                policy_ref = _resolve_active_policy(workspace_root, role="exec")
+                policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
+                # 第4轮②: 派审是 owner-dispatch 的动词,不是 exec
+                dispatch_actor = "owner-dispatch.lybra.kiwiai-dev"
+                dispatch_agent = "owner-dispatch.lybra.kiwiai-dev"
                 cmd = _build_audit_dispatch_command(
                     task_id=task_id,
-                    actor=claimer,
-                    agent_instance=claimer,
+                    actor=dispatch_actor,
+                    agent_instance=dispatch_agent,
                     owner_policy_ref=policy_ref,
                     connection_json=conn_arg,
                     audit_task_id=audit_id,
@@ -536,7 +594,24 @@ def derive_next_step(
 
         # 有 RETURN.md 但还没 return 记录 → 交回工作(N2)
         if has_return_artifact:
-            policy_ref = _resolve_active_policy(workspace_root, role="exec")
+            # 第4轮③: 从 RETURN.md 提取 result_summary
+            result_summary = _extract_return_summary(workspace_root, task_id)
+            if not result_summary:
+                # RETURN.md 存在但无法提取一句话结论,fail-closed
+                return {
+                    "task_id": task_id,
+                    "derivable": False,
+                    "current_node": "claim",
+                    "current_state": "claimed",
+                    "triggered_by": "executor",
+                    "command": "",
+                    "verb": "",
+                    "missing_records": ["RETURN.md 存在但无法提取一句话结论"],
+                    "suggested_action": "检查 RETURN.md 是否包含『一句话结论』节",
+                    "notes": "RETURN.md 格式不完整,推导不出",
+                }
+            
+            policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
             cmd = _build_copyable_command(
                 verb_base="return",
                 task_id=task_id,
@@ -545,7 +620,7 @@ def derive_next_step(
                 autonomy_mode="Supervised",
                 owner_policy_ref=policy_ref,
                 connection_json=conn_arg,
-                extra_args={"result-summary": '"work completed"'},
+                extra_args={"result-summary": f'"{result_summary}"'},
             )
             return {
                 "task_id": task_id,

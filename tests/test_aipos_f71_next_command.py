@@ -206,7 +206,16 @@ def _create_return_artifact(ws: Path, task_id: str) -> Path:
     task_work_dir = ws / "task_cards" / task_id
     task_work_dir.mkdir(parents=True, exist_ok=True)
     ret_file = task_work_dir / "RETURN.md"
-    ret_file.write_text("# Return\n\nWork completed.\n")
+    ret_file.write_text("""# Return
+
+## 一句话结论
+
+**完成**。工作已完成。
+
+## 改动清单
+
+Work completed.
+""")
     return ret_file
 
 
