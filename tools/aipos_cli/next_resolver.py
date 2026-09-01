@@ -130,6 +130,21 @@ def _check_return_artifact(workspace_root: Path, task_id: str) -> bool:
     return (task_work_dir / "RETURN.md").is_file()
 
 
+def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
+    """检查审计裁决报告是否存在(task_cards/<ID>R/VERDICT-<ID>R.md)。返回路径或 None。"""
+    if not task_id.upper().endswith("R"):
+        return None
+    task_work_dir = workspace_root / "task_cards" / task_id
+    verdict_file = task_work_dir / f"VERDICT-{task_id}.md"
+    if verdict_file.is_file():
+        return verdict_file
+    # 也尝试小写
+    verdict_file2 = task_work_dir / f"verdict-{task_id.lower()}.md"
+    if verdict_file2.is_file():
+        return verdict_file2
+    return None
+
+
 def _check_audit_card(workspace_root: Path, task_id: str) -> bool:
     """检查审计卡是否已生成(<ID>R 在 queue 中)。"""
     audit_id = f"{task_id}R"
@@ -316,16 +331,67 @@ def derive_next_step(
     records = _read_task_records(workspace_root, task_id)
     has_return_artifact = _check_return_artifact(workspace_root, task_id)
     has_audit_card = _check_audit_card(workspace_root, task_id)
+    verdict_artifact = _check_verdict_artifact(workspace_root, task_id)
 
     task_mode = fm.get("task_mode", "code")
     assigned_to = fm.get("assigned_to") or fm.get("agent_instance") or ""
     audit_required = fm.get("audit") == "required"
     owner_verify = fm.get("owner_verify") == "required"
+    is_audit_card = task_id.upper().endswith("R")
 
     connection_json = _find_connection_json(workspace_root)
 
     # 公共参数
     conn_arg = connection_json
+
+    # -----------------------------------------------------------------------
+    # 审计卡特殊处理: claimed + 有 verdict 报告 → 提交裁决
+    # -----------------------------------------------------------------------
+    if is_audit_card and queue_dir == "claimed" and verdict_artifact:
+        # 从 verdict 报告提取参数
+        verdict_fm = _read_frontmatter(verdict_artifact)
+        reviewed_task_id = verdict_fm.get("reviewed_task_id") or task_id.rstrip("Rr")
+        verdict = verdict_fm.get("verdict", "PASS")
+        actor = verdict_fm.get("actor") or assigned_to or "<auditor>"
+        agent_inst = verdict_fm.get("agent_instance") or assigned_to or "<auditor-instance>"
+        policy_ref = _resolve_active_policy(workspace_root, role="audit")
+        
+        cmd = _build_verdict_submit_command(
+            reviewed_task_id=reviewed_task_id,
+            audit_task_id=task_id,
+            actor=actor,
+            agent_instance=agent_inst,
+            owner_policy_ref=policy_ref,
+            connection_json=conn_arg,
+            verdict=verdict,
+        )
+        return {
+            "task_id": task_id,
+            "derivable": True,
+            "current_node": "audit_verdict",
+            "current_state": "claimed",
+            "triggered_by": "auditor",
+            "command": cmd,
+            "verb": "lybra_audit_verdict_dry_run",
+            "missing_records": [],
+            "suggested_action": "提交审计裁决",
+            "notes": f"N4: 审计卡 claimed + VERDICT 报告存在,需提交裁决",
+        }
+    
+    # 审计卡 claimed 但无 verdict 报告 → 不可推导
+    if is_audit_card and queue_dir == "claimed" and not verdict_artifact:
+        return {
+            "task_id": task_id,
+            "derivable": False,
+            "current_node": "claim",
+            "current_state": "claimed",
+            "triggered_by": "auditor",
+            "command": "",
+            "verb": "",
+            "missing_records": [f"VERDICT-{task_id}.md 审计报告"],
+            "suggested_action": "等待 auditor 完成审计并生成 VERDICT 报告",
+            "notes": "审计卡 claimed + 无 VERDICT 报告,等待审计员完成工作",
+        }
 
     # -----------------------------------------------------------------------
     # 按 queue 位置 + 记录推导下一步

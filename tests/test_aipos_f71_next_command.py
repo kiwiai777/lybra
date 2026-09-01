@@ -190,6 +190,22 @@ def _create_return_artifact(ws: Path, task_id: str) -> Path:
     return ret_file
 
 
+def _create_verdict_artifact(ws: Path, audit_task_id: str, reviewed_task_id: str, verdict: str = "PASS") -> Path:
+    """创建 VERDICT 审计报告。"""
+    task_work_dir = ws / "task_cards" / audit_task_id
+    task_work_dir.mkdir(parents=True, exist_ok=True)
+    verdict_file = task_work_dir / f"VERDICT-{audit_task_id}.md"
+    content = f"""---
+reviewed_task_id: {reviewed_task_id}
+verdict: {verdict}
+actor: audit.lybra.kiwiai-dev
+agent_instance: audit.lybra.kiwiai-dev
+---
+# Verdict\n\n{verdict}\n"""
+    verdict_file.write_text(content)
+    return verdict_file
+
+
 def _create_audit_card(queue_dir: Path, task_id: str) -> Path:
     """创建审计卡 <task_id>R。"""
     audit_id = f"{task_id}R"
@@ -259,6 +275,28 @@ class TestColdStartLifecycle:
         assert "--source-task-id TEST-003" in result["command"]
         assert "--audit-task-id TEST-003R" in result["command"]
         assert "lybra_audit_dispatch_dry_run" in result["verb"]
+
+    def test_audit_card_with_verdict(self, cold_start_workspace: Path):
+        """N4: 审计卡 claimed + VERDICT 报告 → 推导 audit verdict 命令。"""
+        from tools.aipos_cli.next_resolver import derive_next_step
+
+        ws = cold_start_workspace
+        queue_dir = ws / "5_tasks" / "queue"
+        _create_task_card(queue_dir, "TEST-003R", "claimed", task_mode="audit", assigned_to="audit.lybra.kiwiai-dev")
+        _create_verdict_artifact(ws, "TEST-003R", "TEST-003", "PASS")
+
+        result = derive_next_step("TEST-003R", ws)
+
+        assert result["derivable"] is True
+        assert result["current_state"] == "claimed"
+        assert result["current_node"] == "audit_verdict"
+        assert result["triggered_by"] == "auditor"
+        assert "lybra audit verdict" in result["command"]
+        assert "--reviewed-task-id TEST-003" in result["command"]
+        assert "--audit-task-id TEST-003R" in result["command"]
+        assert "--verdict PASS" in result["command"]
+        assert "--confirm" in result["command"]
+        assert "lybra_audit_verdict_dry_run" in result["verb"]
 
     def test_completed(self, cold_start_workspace: Path):
         """N6: completed 卡 → 无下一步。"""
