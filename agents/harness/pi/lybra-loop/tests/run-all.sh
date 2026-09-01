@@ -410,6 +410,16 @@ else
   overall=1
 fi
 
+# AIPOS-F63: fail-closed普查与改造—统一必填校验,占位符检测,空证据拒收,needs_owner执行
+echo
+echo "── tests/test_aipos_f63_fail_closed.py (fail-closed普查与改造) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f63_fail_closed.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f63_fail_closed.py PASS"
+else
+  echo "✗ tests/test_aipos_f63_fail_closed.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
