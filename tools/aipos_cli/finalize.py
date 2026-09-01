@@ -301,8 +301,8 @@ def _report_frontmatter_verdict_for_display(workspace_root: Path, task_id: str) 
         return {"report_path": None, "report_verdict": None}
 
 
-def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, Any]:
-    """AIPOS-C3 大项A: 检查任务是否可以 finalize(基于门生 PASS 裁决)。
+def check_task_can_finalize(task_id: str, governance_root: Path, commit_sha: str | None = None) -> dict[str, Any]:
+    """AIPOS-C3 大项A + AIPOS-F70: 检查任务是否可以 finalize(基于门生 PASS 裁决 + 精确 SHA 核对)。
 
     使用 deployment_authorization.find_gate_pass_verdict_for_task 的统一实现。
     
@@ -310,6 +310,16 @@ def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, An
       - 旧逻辑读 task_cards AUDIT-REPORT frontmatter(手写文件,可伪造)
       - 新逻辑只认门生裁决(5_tasks/records/audit_verdicts/,具备机器特征)
       - 手写文件(缺 record_type/verdict_id/verdict_at) = 拒绝
+    
+    AIPOS-F70:
+      - 如果提供 commit_sha,裁决必须精确覆盖该 commit
+      - 裁决有 artifact_subject.commit_sha → 精确匹配
+      - 裁决无 artifact_subject (legacy) → 警告但放行
+
+    Args:
+        task_id: 任务 ID
+        governance_root: 治理工作区根
+        commit_sha: (可选) 待 finalize 的 commit SHA,用于精确核对 (AIPOS-F70)
 
     Returns:
         {
@@ -318,12 +328,14 @@ def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, An
             "verdict": str | None,
             "verdict_record_path": str | None,
             "verdict_id": str | None,
+            "is_legacy_verdict": bool,  # AIPOS-F70
             "reason": str
         }
     """
     from tools.aipos_cli.deployment_authorization import find_gate_pass_verdict_for_task
     
-    verdict_check = find_gate_pass_verdict_for_task(task_id, governance_root)
+    # AIPOS-F70: 传递 commit_sha 进行精确核对
+    verdict_check = find_gate_pass_verdict_for_task(task_id, governance_root, required_commit_sha=commit_sha)
     
     return {
         "can_finalize": verdict_check["found"],
@@ -331,6 +343,7 @@ def check_task_can_finalize(task_id: str, governance_root: Path) -> dict[str, An
         "verdict": verdict_check["verdict"],
         "verdict_record_path": verdict_check["verdict_file"],
         "verdict_id": verdict_check["verdict_id"],
+        "is_legacy_verdict": verdict_check.get("is_legacy_verdict", False),  # AIPOS-F70
         "reason": verdict_check["reason"],
     }
 
@@ -942,9 +955,21 @@ def finalize_task(
             f"{report_display['report_verdict']!r} at {report_display['report_path']}"
         )
 
-    # Check if task can be finalized (gate audit verdict = PASS)
-    finalize_check = check_task_can_finalize(task_id, governance_root)
+    # AIPOS-F70: 获取当前 HEAD commit SHA 用于精确核对
+    current_head = _git_rev_parse_head(workspace_root)
+    if current_head:
+        operations.append(f"Current HEAD: {current_head[:8]}")
+
+    # Check if task can be finalized (gate audit verdict = PASS + 精确 SHA 覆盖)
+    finalize_check = check_task_can_finalize(task_id, governance_root, commit_sha=current_head if current_head else None)
     operations.append(f"Checked finalize eligibility: {finalize_check['reason']}")
+    
+    # AIPOS-F70: legacy 裁决警告
+    if finalize_check.get("is_legacy_verdict"):
+        operations.append(
+            "WARNING: 裁决为 legacy 版本 (无 artifact_subject), "
+            "无法精确核对 commit SHA. 建议复审以获取精确裁决。"
+        )
     
     if not finalize_check["can_finalize"]:
         return {

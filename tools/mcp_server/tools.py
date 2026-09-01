@@ -2974,6 +2974,7 @@ def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict
         recommended_next_action=str(args.get("recommended_next_action") or "").strip() or None,
         owner_waiver_ref=str(args.get("owner_waiver_ref") or "").strip() or None,
         agent_runtime=_agent_runtime_value(args),
+        artifact_subject=args.get("artifact_subject") if isinstance(args.get("artifact_subject"), dict) else None,
         dry_run=True,
         repo_root=_resolve_queue_workspace(args),
     )

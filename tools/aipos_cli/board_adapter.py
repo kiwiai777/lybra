@@ -3828,6 +3828,7 @@ def _build_audit_verdict_preview(
     planned_verdict_id: str | None = None,
     planned_verdict_at: str | None = None,
     agent_runtime: dict[str, Any] | None = None,
+    artifact_subject: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # AIPOS-F14 大项B: 报错参数名取 verb_contract 实名(audit_task_id/audit_task_path)
     audit_task = _select_task(
@@ -3868,6 +3869,52 @@ def _build_audit_verdict_preview(
     valid_verdicts = {Verdict.PASS, Verdict.PASS_WITH_NOTES, Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER}
     if normalized_verdict not in valid_verdicts:
         blocking_reasons.append(f"INVALID_VERDICT: verdict must be one of {sorted(valid_verdicts)}")
+
+    # AIPOS-F70: artifact_subject fail-closed 校验 (task_mode=code 的被审卡必须提供)
+    # 读取被审任务的 task_mode
+    reviewed_task_mode = str(reviewed_metadata.get("task_mode") or "").strip()
+    if reviewed_task_mode == "code":
+        if not artifact_subject or not isinstance(artifact_subject, dict):
+            blocking_reasons.append(
+                "AIPOS-F70: task_mode=code 的被审卡必须提供 artifact_subject 参数 "
+                "(repository + commit_sha + tree_hash), 缺失即 BLOCK (fail-closed)"
+            )
+        else:
+            # 校验必需字段
+            repository = str(artifact_subject.get("repository") or "").strip()
+            commit_sha = str(artifact_subject.get("commit_sha") or "").strip()
+            tree_hash = str(artifact_subject.get("tree_hash") or "").strip()
+            
+            missing_fields = []
+            if not repository:
+                missing_fields.append("repository")
+            if not commit_sha:
+                missing_fields.append("commit_sha")
+            if not tree_hash:
+                missing_fields.append("tree_hash")
+            
+            if missing_fields:
+                blocking_reasons.append(
+                    f"AIPOS-F70: artifact_subject 缺少必需字段: {', '.join(missing_fields)}. "
+                    "task_mode=code 必须提供完整的 repository + commit_sha + tree_hash"
+                )
+            else:
+                # 校验 commit_sha 和 tree_hash 格式 (40字符十六进制)
+                import re
+                if not re.fullmatch(r'[0-9a-f]{40}', commit_sha):
+                    blocking_reasons.append(
+                        f"AIPOS-F70: artifact_subject.commit_sha 格式错误 (应为40字符十六进制): '{commit_sha}'"
+                    )
+                if not re.fullmatch(r'[0-9a-f]{40}', tree_hash):
+                    blocking_reasons.append(
+                        f"AIPOS-F70: artifact_subject.tree_hash 格式错误 (应为40字符十六进制): '{tree_hash}'"
+                    )
+    elif artifact_subject:
+        # 非 code 类卡提供了 artifact_subject -> 记录但不阻塞(前向兼容)
+        warnings.append(
+            f"AIPOS-F70: task_mode={reviewed_task_mode or 'unspecified'} 的卡提供了 artifact_subject, "
+            "将记录到裁决但不强制要求 (当前仅 task_mode=code 强制)"
+        )
 
     # AIPOS-R4A: 允许已 completed 的 R 卡接受复审裁决（修实撞②）
     # FIX 轮场景：首轮 R 卡已 completed，复审需要能落新裁决
@@ -4071,6 +4118,7 @@ def _build_audit_verdict_preview(
         recommended_next_action=recommended_next_action,
         owner_waiver_ref=owner_waiver_ref,  # AIPOS-R6A 靶子④: 接线 waiver 引用
         agent_runtime=agent_runtime,
+        artifact_subject=artifact_subject,  # AIPOS-F70: 产物指纹
     )
     session_markdown = ""
     session_rel = str(session_path.resolve().relative_to(root)) if session_path else ""  # AIPOS-240: symlink-safe
@@ -4258,6 +4306,7 @@ def audit_verdict_task(
     planned_verdict_id: str | None = None,
     planned_verdict_at: str | None = None,
     agent_runtime: dict[str, Any] | None = None,
+    artifact_subject: dict[str, Any] | None = None,
     dry_run: bool = True,
     repo_root: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -4319,6 +4368,7 @@ def audit_verdict_task(
             planned_verdict_id=str(planned_verdict_id or "").strip() or None,
             planned_verdict_at=str(planned_verdict_at or "").strip() or None,
             agent_runtime=agent_runtime,
+            artifact_subject=artifact_subject,
             repo_root=resolved_root,
             dry_run=dry_run,
         )

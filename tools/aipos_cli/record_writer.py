@@ -852,6 +852,7 @@ def build_mcp_audit_verdict_record_markdown(
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
     agent_runtime: dict[str, Any] | None = None,
+    artifact_subject: dict[str, Any] | None = None,  # AIPOS-F70: 产物指纹
 ) -> str:
     metadata = {
         "record_type": RecordType.AUDIT_VERDICT_RECORD,
@@ -897,6 +898,11 @@ def build_mcp_audit_verdict_record_markdown(
     # as 未记录, and existing verdict tests/frontmatter stay byte-identical.
     if isinstance(agent_runtime, dict) and agent_runtime:
         metadata["agent_runtime"] = dict(agent_runtime)
+    # AIPOS-F70: artifact_subject 写入裁决记录 (只在提供时写入, 存量裁决无此字段)
+    # 新裁决: task_mode=code 的被审卡必须提供 (gate 侧已 fail-closed 校验)
+    # 存量裁决: 无此字段 -> finalize/deploy 以警告放行并标注 legacy-verdict
+    if isinstance(artifact_subject, dict) and artifact_subject:
+        metadata["artifact_subject"] = dict(artifact_subject)
     body = "\n".join(
         [
             f"# MCP Audit Verdict Record: {verdict_id}",
