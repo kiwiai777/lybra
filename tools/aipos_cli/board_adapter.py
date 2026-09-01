@@ -2444,6 +2444,7 @@ def _check_return_self_checks(
     repo_root: Path,
     result_summary: str | None,
     completion_report_ref: str | None,
+    artifact_refs: list[str],
     claim_snapshot: dict[str, Any] | None = None,
 ) -> list[str]:
     """
@@ -3006,6 +3007,7 @@ def _build_return_preview(
         repo_root=repo_root,
         result_summary=result_summary,
         completion_report_ref=completion_report_ref,
+        artifact_refs=artifact_refs,
         claim_snapshot=claim_snapshot,
     )
     

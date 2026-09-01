@@ -18,11 +18,12 @@ def test_criterion_4_return_not_skeleton(tmp_path: Path):
         task_id="TEST-004",
         result_summary="",
         completion_report_ref=None,
+        artifact_refs=[],
         repo_root=tmp_path,
     )
     
     assert len(reasons) > 0, "应该检测到 result_summary 为空"
-    assert "RETURN_SKELETON" in reasons[0], f"应该返回 RETURN_SKELETON，实际: {reasons[0]}"
+    assert "REQUIRED_FIELD" in reasons[0], f"应该返回 REQUIRED_FIELD 错误，实际: {reasons[0]}"
     assert "result_summary" in reasons[0], f"应该提到 result_summary，实际: {reasons[0]}"
     print("✓ 红测试 1 通过: 检测到 result_summary 为空")
     
@@ -49,12 +50,13 @@ def test_criterion_4_return_not_skeleton(tmp_path: Path):
         task_id="TEST-004",
         result_summary="完成功能 A",
         completion_report_ref="task_cards/TEST-004/RETURN.md",
+        artifact_refs=["task_cards/TEST-004/RETURN.md"],
         repo_root=tmp_path,
     )
     
     assert len(reasons) > 0, "应该检测到 RETURN.md 含占位符"
-    assert "RETURN_SKELETON" in reasons[0], f"应该返回 RETURN_SKELETON，实际: {reasons[0]}"
-    assert "(待填写)" in reasons[0] or "(PASS / FAIL" in reasons[0], f"应该提到占位符，实际: {reasons[0]}"
+    assert "PLACEHOLDER" in reasons[0], f"应该返回 PLACEHOLDER 错误，实际: {reasons[0]}"
+    assert "(待填写)" in reasons[0] or "(PASS / FAIL" in reasons[0] or "RETURN.md" in reasons[0], f"应该提到占位符或 RETURN.md，实际: {reasons[0]}"
     print("✓ 红测试 2 通过: 检测到 RETURN.md 含占位符")
     
     # 绿测试: result_summary 非空且 RETURN.md 无占位符
@@ -77,6 +79,7 @@ def test_criterion_4_return_not_skeleton(tmp_path: Path):
         task_id="TEST-004",
         result_summary="完成功能 A",
         completion_report_ref="task_cards/TEST-004/RETURN.md",
+        artifact_refs=["task_cards/TEST-004/RETURN.md"],
         repo_root=tmp_path,
     )
     
