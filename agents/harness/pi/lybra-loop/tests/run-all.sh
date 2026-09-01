@@ -441,6 +441,16 @@ else
 fi
 
 echo
+# AIPOS-F71: next单一推导实现—合并turn-advancer+next-step,schema单一读取口,审计裁决推导
+echo "── tests/test_aipos_f71_next_command.py (next单一推导实现) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f71_next_command.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f71_next_command.py PASS"
+else
+  echo "✗ tests/test_aipos_f71_next_command.py FAIL"
+  overall=1
+fi
+
+echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
   echo " ALL TEST FILES PASS"
