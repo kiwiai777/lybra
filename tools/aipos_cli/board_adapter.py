@@ -2444,6 +2444,7 @@ def _check_return_self_checks(
     repo_root: Path,
     result_summary: str | None,
     completion_report_ref: str | None,
+    artifact_refs: list[str],
     claim_snapshot: dict[str, Any] | None = None,
 ) -> list[str]:
     """
@@ -2497,6 +2498,7 @@ def _check_return_self_checks(
         task_id=task_id,
         result_summary=result_summary,
         completion_report_ref=completion_report_ref,
+        artifact_refs=artifact_refs,
         repo_root=repo_root,
     ))
     
@@ -2706,41 +2708,77 @@ def _check_return_not_skeleton(
     task_id: str,
     result_summary: str | None,
     completion_report_ref: str | None,
+    artifact_refs: list[str],
     repo_root: Path,
 ) -> list[str]:
-    """④ RETURN 非骨架: 不得含占位符，result_summary 非空。"""
+    """④ RETURN 非骨架: 不得含占位符，result_summary 非空。
+    
+    AIPOS-F63 修复: fail-closed 改造
+    - result_summary 必须检查占位符（原来只查空不查占位符）
+    - completion_report_ref 为空即拒（原来为空就跳过整段检查）
+    - artifact_refs 为空即拒（AIPOS-F63 追加甲）
+    - 文件不存在即拒（原来不存在就跳过）
+    - 读取失败即拒（原来失败就跳过）
+    """
+    from tools.aipos_cli.validation_common import (
+        check_required_field,
+        check_file_ref_exists,
+        check_placeholder_in_text,
+    )
+    
     blocking_reasons = []
     
-    # 检查 result_summary
-    if not result_summary or not result_summary.strip():
-        blocking_reasons.append(
-            "RETURN_SKELETON: result_summary 为空，请填写一句话结论。"
-            "出口: 在 RETURN.md 的‘一句话结论’节填写实际完成描述,"
-            "并确保 result_summary 字段非空。"
+    # AIPOS-F63: result_summary 必填且检查占位符（原来只查空）
+    blocking_reasons.extend(
+        check_required_field(
+            result_summary,
+            "result_summary",
+            check_placeholders=True,
         )
+    )
     
-    # 检查 RETURN.md 占位符
-    if completion_report_ref:
-        report_path = repo_root / completion_report_ref
-        if report_path.exists():
+    # AIPOS-F63: completion_report_ref 必填（原来为空就跳过检查）
+    blocking_reasons.extend(
+        check_required_field(
+            completion_report_ref,
+            "completion_report_ref",
+            check_placeholders=False,
+        )
+    )
+    
+    # AIPOS-F63 追加甲: artifact_refs 必填且非空
+    blocking_reasons.extend(
+        check_required_field(
+            artifact_refs,
+            "artifact_refs",
+            check_placeholders=False,
+        )
+    )
+    
+    # AIPOS-F63: 文件必须存在（原来不存在就跳过）
+    if completion_report_ref and completion_report_ref.strip():
+        file_check = check_file_ref_exists(
+            completion_report_ref,
+            "completion_report_ref",
+            repo_root,
+            required=True,
+        )
+        blocking_reasons.extend(file_check)
+        
+        # 只有文件存在时才检查内容占位符
+        if not file_check:
+            report_path = repo_root / completion_report_ref
             try:
                 content = report_path.read_text(encoding="utf-8")
-                placeholders = [
-                    "(待填写)",
-                    "(PASS / FAIL",
-                    "(无验收清单)",
-                    "TODO",
-                    "FIXME",
-                ]
-                found_placeholders = [p for p in placeholders if p in content]
-                if found_placeholders:
-                    blocking_reasons.append(
-                        f"RETURN_SKELETON: RETURN.md 包含占位符: {', '.join(found_placeholders)}。"
-                        f"出口: 将 RETURN.md 中所有占位符替换为实际内容,"
-                        f"确保一句话结论、做了什么、改动清单等节均已填写。"
-                    )
-            except Exception:
-                pass  # 读取失败，跳过
+                blocking_reasons.extend(
+                    check_placeholder_in_text(content, "RETURN.md 内容")
+                )
+            except Exception as e:
+                # AIPOS-F63: 读取失败即拒（原来失败就跳过）
+                blocking_reasons.append(
+                    f"FILE_READ_FAILED: 无法读取 RETURN.md 文件 {completion_report_ref}: {e}。"
+                    f"出口: 确保文件可读，检查文件权限和编码。"
+                )
     
     return blocking_reasons
 
@@ -2969,6 +3007,7 @@ def _build_return_preview(
         repo_root=repo_root,
         result_summary=result_summary,
         completion_report_ref=completion_report_ref,
+        artifact_refs=artifact_refs,
         claim_snapshot=claim_snapshot,
     )
     
@@ -3925,8 +3964,12 @@ def _build_audit_verdict_preview(
 
     if any(_unsafe_return_ref(ref) for ref in evidence_refs):
         blocking_reasons.append("Audit evidence refs must be repo-relative or approved workspace-relative and secret-free")
-    if normalized_verdict == Verdict.PASS and not (findings_summary or evidence_refs):
-        blocking_reasons.append("MISSING_VERDICT_EVIDENCE: PASS requires findings_summary or evidence_refs")
+    
+    # AIPOS-F63: PASS类裁决必须带非空证据（evidence_refs 或 findings_summary 至少一项非空）
+    if normalized_verdict in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
+        from tools.aipos_cli.validation_common import check_evidence_refs_non_empty
+        evidence_check = check_evidence_refs_non_empty(evidence_refs, findings_summary)
+        blocking_reasons.extend(evidence_check)
 
     timestamp = planned_verdict_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     verdict_id = planned_verdict_id or build_runtime_id("verdict", str(reviewed_task.get("task_id") or ""), timestamp, canonical_agent_instance or actor)

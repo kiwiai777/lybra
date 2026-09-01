@@ -2193,6 +2193,44 @@ def _preauthorized_claim_autorelease(
     claim_confirm and never holds owner_confirm scope — the gate performs the write as the executor
     of the Owner-signed policy. The claim record self-attributes autonomy_mode=PreAuthorized +
     owner_policy_ref=<policy_id>."""
+    
+    # AIPOS-F63 追加丙: needs_owner 字段必须执行——true 则 PreAuthorized 不得放行
+    from tools.aipos_cli.task_loader import load_task_by_path, find_task_by_id
+    try:
+        if task_id:
+            task, _ = find_task_by_id(task_id, repo_root)
+        elif task_path:
+            task = load_task_by_path(repo_root / task_path, repo_root)
+        else:
+            task = None
+        
+        if task:
+            task_metadata = task.get("metadata", {})
+            needs_owner = task_metadata.get("needs_owner")
+            if needs_owner is True:
+                # needs_owner: true 的任务不能被 PreAuthorized 自动放行
+                error_response = {
+                    "ok": False,
+                    "verdict": Verdict.BLOCK,
+                    "operation": "lybra_queue_claim_dry_run",
+                    "error_code": "NEEDS_OWNER_GATE",
+                    "error_message": (
+                        f"Task {task_id or task_path} has needs_owner: true. "
+                        "PreAuthorized autonomy mode cannot auto-release tasks requiring Owner review."
+                    ),
+                    "next_step": (
+                        "Use autonomy_mode: Supervised for per-task Owner confirmation, "
+                        "or have Owner remove needs_owner flag from the task card."
+                    ),
+                    "blocking_reasons": [
+                        "NEEDS_OWNER_GATE: PreAuthorized mode blocked by needs_owner: true flag"
+                    ],
+                }
+                return _tool_result(error_response, is_error=True)
+    except Exception:
+        # 任务加载失败，继续正常流程（会在后续 claim_task 中被捕获）
+        pass
+    
     confirmer = {
         # The runtime "confirmer" is the Owner-signed policy, not any live token — honest
         # attribution: no agent pressed a button at runtime (red line 1).
