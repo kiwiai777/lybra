@@ -3405,7 +3405,7 @@ def _build_audit_dispatch_preview(
         blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS")
     
     # AIPOS-F2 ③立墙带路: 检测手写文件在场时附加提示
-    from tools.aipos_cli.audit_helpers import detect_hand_written_verdicts, HAND_WRITTEN_VERDICT_NOTICE
+    from tools.aipos_cli.audit_helpers import detect_hand_written_verdicts, HAND_WRITTEN_VERDICT_NOTICE, is_dispatch_chain_valid
     _hw_dispatch = detect_hand_written_verdicts(
         repo_root / "5_tasks" / "records" / "audit_verdicts" / source_task_id_for_verdict
     )
@@ -3414,20 +3414,32 @@ def _build_audit_dispatch_preview(
         for _hw in _hw_dispatch:
             warnings.append(f"  ignored: {_hw['file']} ({_hw['reason']})")
     
-    # re-dispatch 检查:如果前轮是非终态(FAIL/REQUEST_CHANGES),允许新 audit_task_id
+    # AIPOS-F72: 派审链有效性判据(manual dispatch 与 auto derivation 同源)
+    # 链有效 ⇔ (审计卡 pending/claimed 在途) 或 (源卡已有裁决)
+    # 审计卡 concluded/withdrawn 且零裁决 → 链失效,放行 re-dispatch
+    superseded_ref = None  # AIPOS-F72: 初始化 superseded_ref
     if source_metadata.get("related_audit_task_ref") or source_metadata.get("audit_dispatch_record_ref"):
-        # 已有 dispatch 记录
-        if existing_verdicts:
-            latest_verdict = max(existing_verdicts, key=_verdict_time)
-            latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
-            # AIPOS-R6J: 非终态裁决允许re-dispatch(FAIL/BLOCK/WARN/NEEDS_OWNER)
-            if latest_verdict_value not in {Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER}:
-                # 非 FAIL/REQUEST_CHANGES,不允许 re-dispatch
+        chain_valid, superseded_ref = is_dispatch_chain_valid(source_metadata, existing_verdicts, repo_root)
+        if chain_valid:
+            # 链有效:审计在途或已有裁决 → BLOCK
+            if existing_verdicts:
+                latest_verdict = max(existing_verdicts, key=_verdict_time)
+                latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
+                # AIPOS-R6J: 非终态裁决允许re-dispatch(FAIL/BLOCK/WARN/NEEDS_OWNER)
+                if latest_verdict_value not in {Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER}:
+                    blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
+            else:
+                # 审计卡在途(pending/claimed),BLOCK
                 blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
-            # else: FAIL/REQUEST_CHANGES,允许 re-dispatch,不 BLOCK
         else:
-            # 没有 verdict 记录,但有 dispatch(审计进行中),BLOCK
-            blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
+            # 链失效:旧审计卡已废且零裁决 → 放行,但须出声披露旧链
+            if superseded_ref:
+                warnings.append(f"SUPERSEDING_DEAD_DISPATCH_CHAIN: old audit card {superseded_ref} is concluded with zero verdicts; allowing re-dispatch (new dispatch will record supersedes={superseded_ref})")
+
+    # AIPOS-F72: 若放行 re-dispatch,记录 supersedes 引用
+    supersedes_dispatch_ref = None
+    if superseded_ref:
+        supersedes_dispatch_ref = str(source_metadata.get("audit_dispatch_record_ref") or source_metadata.get("related_audit_task_ref") or "").strip()
 
     reviewed_return_record_ref = str(source_metadata.get("return_record_ref") or source_metadata.get("return_event_ref") or "").strip()
     if not reviewed_return_record_ref:
@@ -3594,6 +3606,7 @@ def _build_audit_dispatch_preview(
         canonical_agent_instance=canonical_agent_instance,
         owner_policy_ref=owner_policy_ref,
         dispatched_at=timestamp,
+        supersedes=supersedes_dispatch_ref,  # AIPOS-F72: 记录被取代的旧链
     )
     record_writes = [_mcp_record_write_plan(dispatch_rel, RecordType.AUDIT_DISPATCH_RECORD, would_write=not blocking_reasons)]
     data = {

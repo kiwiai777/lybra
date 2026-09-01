@@ -209,14 +209,16 @@ def _derive_audit_assigned_to(project: str) -> str:
     return f"audit_{project}"
 
 
-def should_derive_audit(source_metadata: dict[str, Any], *, branch_id: str | None = None) -> bool:
+def should_derive_audit(source_metadata: dict[str, Any], *, branch_id: str | None = None, repo_root: Path | None = None) -> bool:
     """
     Check if audit task should be derived.
+    
+    AIPOS-F72: 使用与 manual dispatch 同一的链有效性判据。
     
     Returns False if:
     - audit: none in frontmatter
     - task_mode is audit (AIPOS-256 F-253-3: prevent infinite R chain)
-    - already has related_audit_task_ref or audit_dispatch_record_ref (idempotency)
+    - already has valid dispatch chain (AIPOS-F72: audit card pending/claimed OR has verdicts)
     - AIPOS-338 S6②: non-code branch does NOT derive an independent R card
       (it walks the bench path described in the card's own contract section)
     """
@@ -228,9 +230,24 @@ def should_derive_audit(source_metadata: dict[str, Any], *, branch_id: str | Non
     if str(source_metadata.get("task_mode", "")).strip().lower() == "audit":
         return False
     
-    # Already dispatched (idempotency)
+    # AIPOS-F72: 链有效性判据(与 manual dispatch 同源)
     if source_metadata.get("related_audit_task_ref") or source_metadata.get("audit_dispatch_record_ref"):
-        return False
+        if repo_root is None:
+            # Backward compatible: 无 repo_root 时保守阻止
+            return False
+        
+        from tools.aipos_cli.audit_helpers import is_dispatch_chain_valid
+        from tools.aipos_cli.records import load_records
+        
+        records = load_records(repo_root)
+        source_task_id = str(source_metadata.get("task_id") or "").strip()
+        existing_verdicts = records.get("task_audit_verdicts", {}).get(source_task_id, [])
+        
+        chain_valid, _ = is_dispatch_chain_valid(source_metadata, existing_verdicts, repo_root)
+        if chain_valid:
+            # 链有效:审计在途或已有裁决 → 不派生
+            return False
+        # 链失效:旧审计卡已废且零裁决 → 允许派生
     
     # AIPOS-338 S6②: non-code branch → bench audit path, no independent R card
     if branch_id == "noncode_bench_audit":
@@ -478,8 +495,8 @@ def derive_audit_task_on_return(
     """
     # AIPOS-338 S6: resolve the branch; non-code branches do not derive an R card
     branch_id = _resolve_branch_id(source_metadata, collaboration_profile, repo_root)
-    # Check if should derive
-    if not should_derive_audit(source_metadata, branch_id=branch_id):
+    # Check if should derive (AIPOS-F72: pass repo_root for chain validity check)
+    if not should_derive_audit(source_metadata, branch_id=branch_id, repo_root=repo_root):
         audit_opt = str(source_metadata.get("audit", "")).strip().lower()
         if audit_opt == "none":
             return {"derived": False, "reason": "audit: none in source task frontmatter"}
