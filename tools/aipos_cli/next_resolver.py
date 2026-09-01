@@ -27,6 +27,37 @@ from typing import Any
 
 from tools.schema_loader import resolve_governance_path
 
+# 产品仓根(schema 所在地)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_governance_path_with_relative(key: str, governance_root: Path) -> Path:
+    """解析治理路径,处理 relative_to 链。
+    
+    如 queue 相对于 tasks_root,需递归解析:
+    tasks_root → 5_tasks/
+    queue → tasks_root + queue/ = 5_tasks/queue/
+    """
+    from tools.schema_loader import get_governance_path, resolve_governance_path
+    
+    entry = get_governance_path(key, REPO_ROOT)
+    relative_to = entry.get("relative_to")
+    
+    # governance_root 是终点,直接返回根目录
+    if key == "governance_root" or not relative_to:
+        # 无 relative_to 或到达根,直接用 path
+        rel_path = str(entry.get("path", "")).strip().strip("/")
+        if not rel_path:
+            # governance_root 没有 path,返回根本身
+            return governance_root
+        return governance_root / rel_path
+    else:
+        # 递归解析父路径
+        parent_path = _resolve_governance_path_with_relative(relative_to, governance_root)
+        # 拼接当前路径
+        rel_path = str(entry.get("path", "")).strip().strip("/")
+        return parent_path / rel_path
+
 # ---------------------------------------------------------------------------
 # 状态 → 节点映射(读 transitions.schema.json nodes 声明)
 # ---------------------------------------------------------------------------
@@ -57,7 +88,7 @@ def _read_frontmatter(task_path: Path) -> dict[str, Any]:
 
 def _find_task_in_queue(workspace_root: Path, task_id: str) -> tuple[Path | None, str | None]:
     """在 queue/ 目录中找任务卡。返回 (path, queue_dir_name)。"""
-    queue_root = resolve_governance_path("queue", workspace_root, workspace_root)
+    queue_root = _resolve_governance_path_with_relative("queue", workspace_root)
     for status_dir in ["pending", "claimed", "completed", "blocked"]:
         # 卡文件名可能是 task_id 的小写
         task_file = queue_root / status_dir / f"{task_id.lower()}.md"
@@ -85,7 +116,7 @@ def _find_latest_record(records_dir: Path, prefix: str) -> dict[str, Any] | None
 
 def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     """读取任务的全部记录状态。纯读事实,不判活。"""
-    records_root = resolve_governance_path("records", workspace_root, workspace_root)
+    records_root = _resolve_governance_path_with_relative("records", workspace_root)
 
     result: dict[str, Any] = {
         "latest_claim": None,
@@ -129,7 +160,7 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
 
 def _check_return_artifact(workspace_root: Path, task_id: str) -> bool:
     """检查 RETURN.md 是否存在(task_cards/<ID>/RETURN.md)。"""
-    task_cards_root = resolve_governance_path("task_cards", workspace_root, workspace_root)
+    task_cards_root = _resolve_governance_path_with_relative("task_cards", workspace_root)
     task_work_dir = task_cards_root / task_id
     return (task_work_dir / "RETURN.md").is_file()
 
@@ -138,7 +169,7 @@ def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
     """检查审计裁决报告是否存在(task_cards/<ID>R/VERDICT-<ID>R.md)。返回路径或 None。"""
     if not task_id.upper().endswith("R"):
         return None
-    task_cards_root = resolve_governance_path("task_cards", workspace_root, workspace_root)
+    task_cards_root = _resolve_governance_path_with_relative("task_cards", workspace_root)
     task_work_dir = task_cards_root / task_id
     verdict_file = task_work_dir / f"VERDICT-{task_id}.md"
     if verdict_file.is_file():
@@ -153,7 +184,7 @@ def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
 def _check_audit_card(workspace_root: Path, task_id: str) -> bool:
     """检查审计卡是否已生成(<ID>R 在 queue 中)。"""
     audit_id = f"{task_id}R"
-    queue_root = resolve_governance_path("queue", workspace_root, workspace_root)
+    queue_root = _resolve_governance_path_with_relative("queue", workspace_root)
     for status_dir in ["pending", "claimed", "completed"]:
         if (queue_root / status_dir / f"{audit_id.lower()}.md").is_file():
             return True
@@ -615,7 +646,7 @@ def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
     按优先级排序:pending(先出) > claimed(有 return 产物) > claimed(无产物) > blocked。
     """
     workspace_root = Path(workspace_root)
-    queue_root = resolve_governance_path("queue", workspace_root, workspace_root)
+    queue_root = _resolve_governance_path_with_relative("queue", workspace_root)
     results: list[dict[str, Any]] = []
 
     # 扫描 pending + claimed(活跃任务)
