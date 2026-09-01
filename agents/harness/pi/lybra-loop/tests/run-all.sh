@@ -431,6 +431,16 @@ else
 fi
 
 echo
+# AIPOS-F70: 裁决绑精确产物—artifact_subject带commit_sha/tree_hash,finalize/deploy精确SHA核对
+echo "── tests/test_aipos_f70_artifact_binding.py (裁决绑精确产物) ──────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f70_artifact_binding.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f70_artifact_binding.py PASS"
+else
+  echo "✗ tests/test_aipos_f70_artifact_binding.py FAIL"
+  overall=1
+fi
+
+echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
   echo " ALL TEST FILES PASS"
