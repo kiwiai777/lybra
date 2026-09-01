@@ -761,6 +761,7 @@ def build_mcp_audit_dispatch_record_markdown(
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
+    supersedes: str | None = None,
 ) -> str:
     metadata = {
         "record_type": RecordType.AUDIT_DISPATCH_RECORD,
@@ -792,22 +793,35 @@ def build_mcp_audit_dispatch_record_markdown(
         "lease_path": "claim_only",
         "active_lease_written": False,
     }
-    body = "\n".join(
-        [
-            f"# MCP Audit Dispatch Record: {dispatch_id}",
+    # AIPOS-F72: supersedes 引用(放行 re-dispatch 时记录旧链)
+    if supersedes:
+        metadata["supersedes"] = supersedes
+    
+    body_lines = [
+        f"# MCP Audit Dispatch Record: {dispatch_id}",
+        "",
+        "## Summary",
+        "",
+        f"- Task `{reviewed_task_id}` was dispatched for independent audit as `{audit_task_id}`.",
+        f"- Reviewed executor instance: `{reviewed_executor_instance}`.",
+        f"- Owner policy: `{owner_policy_ref}`.",
+    ]
+    if supersedes:
+        body_lines.extend([
             "",
-            "## Summary",
+            "## Re-dispatch Note (AIPOS-F72)",
             "",
-            f"- Task `{reviewed_task_id}` was dispatched for independent audit as `{audit_task_id}`.",
-            f"- Reviewed executor instance: `{reviewed_executor_instance}`.",
-            f"- Owner policy: `{owner_policy_ref}`.",
-            "",
-            "## Boundary",
-            "",
-            "This record creates audit-dispatch provenance only. It does not claim the audit task, launch an auditor, record a verdict, finalize, activate a lease, or unblock dependent work.",
-            "",
-        ]
-    )
+            f"This dispatch supersedes a prior dead dispatch chain: `{supersedes}`.",
+            "The previous audit card was concluded with zero verdicts (e.g., 'no substance to audit').",
+        ])
+    body_lines.extend([
+        "",
+        "## Boundary",
+        "",
+        "This record creates audit-dispatch provenance only. It does not claim the audit task, launch an auditor, record a verdict, finalize, activate a lease, or unblock dependent work.",
+        "",
+    ])
+    body = "\n".join(body_lines)
     return render_markdown(metadata, body, MCP_AUDIT_DISPATCH_FRONTMATTER_ORDER)
 
 

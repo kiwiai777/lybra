@@ -343,6 +343,91 @@ HAND_WRITTEN_VERDICT_NOTICE = (
 )
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F72: 派审链有效性判据——manual dispatch 与 auto derivation 同源
+# ---------------------------------------------------------------------------
+
+def is_dispatch_chain_valid(
+    source_metadata: dict[str, Any],
+    existing_verdicts: list[dict[str, Any]],
+    repo_root: Path,
+) -> tuple[bool, str | None]:
+    """AIPOS-F72: 判断派审链是否有效(阻止 re-dispatch)。
+
+    **链有效 ⇔ 以下任一成立**:
+    1. 链指向的审计卡状态 ∈ {pending, claimed}(审计在途)
+    2. 源卡已有正式裁决(不论审计卡当前状态)
+
+    **链失效 → 放行 re-dispatch**:
+    - 审计卡已 concluded/withdrawn **且** 源卡零裁决(如 F63R 废卡场景)
+
+    **Fail-closed**: 审计卡状态不可读/不确定 → 返回 True(拒绝,出声)
+
+    Args:
+        source_metadata: 源任务 frontmatter
+        existing_verdicts: records['task_audit_verdicts'][source_task_id]
+        repo_root: 治理仓根目录
+
+    Returns:
+        (is_valid, superseded_audit_ref | None)
+        - is_valid=True: 链有效,应 BLOCK re-dispatch
+        - is_valid=False: 链失效,放行 re-dispatch;superseded_audit_ref 为旧审计卡引用
+    """
+    from tools.aipos_cli.task_loader import find_task_by_id
+
+    # 提取链指向的审计卡引用
+    audit_ref = str(source_metadata.get("related_audit_task_ref") or "").strip()
+    if not audit_ref:
+        audit_ref = str(source_metadata.get("audit_dispatch_record_ref") or "").strip()
+        # dispatch_record_ref 形如 "5_tasks/records/audit_dispatches/<task>/dispatch_*.md"
+        # 从中提取审计卡 ID(需读 dispatch record)
+        if audit_ref and "/audit_dispatches/" in audit_ref:
+            try:
+                dispatch_file = repo_root / audit_ref
+                if dispatch_file.exists():
+                    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+                    disp_text = dispatch_file.read_text(encoding="utf-8")
+                    disp_meta, _, _ = parse_markdown_frontmatter(disp_text)
+                    audit_ref = str(disp_meta.get("audit_task_id") or "").strip()
+            except Exception:
+                # Fail-closed: 不能确定审计卡 ID → 保守拒绝
+                return (True, None)
+
+    if not audit_ref:
+        # 无链引用 = 未派审,不阻塞
+        return (False, None)
+
+    # 检查源卡是否已有裁决
+    if existing_verdicts:
+        # 已有裁决 → 链有效(不论审计卡状态)
+        return (True, None)
+
+    # 零裁决场景:查审计卡实际状态
+    try:
+        audit_task, matches = find_task_by_id(audit_ref, repo_root)
+        if not audit_task:
+            # Fail-closed: 审计卡不可读 → 保守拒绝
+            return (True, None)
+
+        audit_status = str(audit_task.get("metadata", {}).get("status") or "").strip().lower()
+        audit_queue_state = str(audit_task.get("queue_state") or "").strip().lower()
+
+        # 审计卡在途(pending/claimed) → 链有效
+        if audit_status in {"pending", "claimed"} or audit_queue_state in {"pending", "claimed"}:
+            return (True, None)
+
+        # 审计卡已终结(concluded/withdrawn/completed)且零裁决 → 链失效,放行
+        if audit_status in {"concluded", "withdrawn", "completed"} or audit_queue_state in {"concluded", "withdrawn", "completed"}:
+            return (False, audit_ref)
+
+        # 其他状态(如 blocked):保守拒绝
+        return (True, None)
+
+    except Exception:
+        # Fail-closed: 查询失败 → 保守拒绝
+        return (True, None)
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

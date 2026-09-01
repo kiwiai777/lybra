@@ -421,6 +421,16 @@ else
 fi
 
 echo
+# AIPOS-F72: 派审幂等判据修真—dispatch链指向废卡/零裁决时不得挡复派
+echo "── tests/test_aipos_f72_dispatch_chain_validity.py (派审幂等判据修真) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f72_dispatch_chain_validity.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f72_dispatch_chain_validity.py PASS"
+else
+  echo "✗ tests/test_aipos_f72_dispatch_chain_validity.py FAIL"
+  overall=1
+fi
+
+echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
   echo " ALL TEST FILES PASS"
