@@ -90,6 +90,26 @@ def cold_start_workspace(tmp_path: Path) -> Path:
     }
     (schemas_dir / "verbs.schema.json").write_text(json.dumps(verbs))
 
+    # config.schema.json (最小版 - 提供 governance_structure.paths)
+    config = {
+        "version": "2025-01-01",
+        "governance_structure": {
+            "paths": {
+                "tasks_root": {"path": "5_tasks/"},
+                "queue": {"path": "5_tasks/queue/"},
+                "records": {"path": "5_tasks/records/"},
+                "task_cards": {"path": "task_cards/"},
+            }
+        },
+    }
+    (schemas_dir / "config.schema.json").write_text(json.dumps(config))
+
+    # schema 目录(与 schemas 不同,schema_loader 期望的路径)
+    schema_dir = gov / "schema"
+    schema_dir.mkdir(parents=True)
+    # 复制 config.schema.json 到 schema/ (schema_loader 从这里读)
+    (schema_dir / "config.schema.json").write_text(json.dumps(config))
+
     # queue 目录
     queue_root = gov / "5_tasks" / "queue"
     (queue_root / "pending").mkdir(parents=True)

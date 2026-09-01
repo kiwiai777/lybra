@@ -14,6 +14,8 @@ token 值永不出现在输出。
 - --task-id:单卡模式
 
 项目无关:推导全由声明 + 工作区推导,不写死项目名。
+
+AIPOS-F71 返工第5件:所有治理路径经 schema_loader 单一读取口,禁手拼路径字面量。
 """
 from __future__ import annotations
 
@@ -22,6 +24,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from tools.schema_loader import resolve_governance_path
 
 # ---------------------------------------------------------------------------
 # 状态 → 节点映射(读 transitions.schema.json nodes 声明)
@@ -53,7 +57,7 @@ def _read_frontmatter(task_path: Path) -> dict[str, Any]:
 
 def _find_task_in_queue(workspace_root: Path, task_id: str) -> tuple[Path | None, str | None]:
     """在 queue/ 目录中找任务卡。返回 (path, queue_dir_name)。"""
-    queue_root = workspace_root / "5_tasks" / "queue"
+    queue_root = resolve_governance_path("queue", workspace_root, workspace_root)
     for status_dir in ["pending", "claimed", "completed", "blocked"]:
         # 卡文件名可能是 task_id 的小写
         task_file = queue_root / status_dir / f"{task_id.lower()}.md"
@@ -81,7 +85,7 @@ def _find_latest_record(records_dir: Path, prefix: str) -> dict[str, Any] | None
 
 def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     """读取任务的全部记录状态。纯读事实,不判活。"""
-    records_root = workspace_root / "5_tasks" / "records"
+    records_root = resolve_governance_path("records", workspace_root, workspace_root)
 
     result: dict[str, Any] = {
         "latest_claim": None,
@@ -125,8 +129,8 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
 
 def _check_return_artifact(workspace_root: Path, task_id: str) -> bool:
     """检查 RETURN.md 是否存在(task_cards/<ID>/RETURN.md)。"""
-    # 产品仓 task_cards 是工作产物区
-    task_work_dir = workspace_root / "task_cards" / task_id
+    task_cards_root = resolve_governance_path("task_cards", workspace_root, workspace_root)
+    task_work_dir = task_cards_root / task_id
     return (task_work_dir / "RETURN.md").is_file()
 
 
@@ -134,7 +138,8 @@ def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
     """检查审计裁决报告是否存在(task_cards/<ID>R/VERDICT-<ID>R.md)。返回路径或 None。"""
     if not task_id.upper().endswith("R"):
         return None
-    task_work_dir = workspace_root / "task_cards" / task_id
+    task_cards_root = resolve_governance_path("task_cards", workspace_root, workspace_root)
+    task_work_dir = task_cards_root / task_id
     verdict_file = task_work_dir / f"VERDICT-{task_id}.md"
     if verdict_file.is_file():
         return verdict_file
@@ -148,7 +153,7 @@ def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
 def _check_audit_card(workspace_root: Path, task_id: str) -> bool:
     """检查审计卡是否已生成(<ID>R 在 queue 中)。"""
     audit_id = f"{task_id}R"
-    queue_root = workspace_root / "5_tasks" / "queue"
+    queue_root = resolve_governance_path("queue", workspace_root, workspace_root)
     for status_dir in ["pending", "claimed", "completed"]:
         if (queue_root / status_dir / f"{audit_id.lower()}.md").is_file():
             return True
@@ -610,7 +615,7 @@ def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
     按优先级排序:pending(先出) > claimed(有 return 产物) > claimed(无产物) > blocked。
     """
     workspace_root = Path(workspace_root)
-    queue_root = workspace_root / "5_tasks" / "queue"
+    queue_root = resolve_governance_path("queue", workspace_root, workspace_root)
     results: list[dict[str, Any]] = []
 
     # 扫描 pending + claimed(活跃任务)
