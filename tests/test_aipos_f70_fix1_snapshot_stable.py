@@ -463,15 +463,16 @@ class TestDryRunConfirmTwoHop:
             "---\ntask_id: TASK-X\ntitle: T\nassigned_to: exec.test\ncontext_bundle: t\ntask_mode: code\n"
             "priority: normal\nneeds_owner: false\noutput_target: t.py\nartifact_policy: formal_write\n"
             "status: claimed\ncreated_by: t\nclaimed_by: exec.test\nagent_instance: exec.test\n"
-            "claim_id: c\nclaimed_at: '2026-09-01T10:00:00Z'\nactive_session_id: s\n---\n# T\n"
+            "claim_id: claim_TASK-X_20260901_100000_exec-test\nclaimed_at: '2026-09-01T10:00:00Z'\n"
+            "active_session_id: session_exec_TASK-X\n---\n# T\n"
         )
         (workspace / "5_tasks" / "queue" / "claimed" / "audit-task-x.md").write_text(
             "---\ntask_id: AUDIT-TASK-X\ntitle: A\nassigned_to: audit.test\ncontext_bundle: t\n"
             "task_mode: audit\npriority: normal\nneeds_owner: false\noutput_target: verdict\n"
             "artifact_policy: record_only\nstatus: claimed\ncreated_by: gate_derivation\n"
             "reviewed_task_id: TASK-X\nclaimed_by: audit.test\nagent_instance: audit.test\n"
-            "claim_id: ca\nclaimed_at: '2026-09-01T11:00:00Z'\nactive_session_id: sa\n"
-            "reviewed_executor_instance: exec.test\n---\n# A\n"
+            "claim_id: claim_AUDIT-TASK-X_20260901_110000_audit-test\nclaimed_at: '2026-09-01T11:00:00Z'\n"
+            "active_session_id: sa\nreviewed_executor_instance: exec.test\n---\n# A\n"
         )
         (workspace / "5_tasks" / "records" / "returns" / "TASK-X" / "r.md").write_text(
             "---\nrecord_type: return_record\ncanonical_agent_instance: exec.test\n---\n# R\n"
@@ -539,3 +540,112 @@ class TestDryRunConfirmTwoHop:
         assert payload.get("artifact_subject") is not None, "artifact_subject 必须被保存到 original_payload"
         assert payload["artifact_subject"]["repository"] == "r"
         assert payload["artifact_subject"]["commit_sha"] == "a" * 40
+
+
+    def test_non_code_task_without_artifact_subject_stable(self, tmp_path):
+        """
+        对照测试:非 code 任务(如 doc)不需要 artifact_subject,两跳也应稳定。
+        
+        覆盖「测试为什么三轮都没拦住」的另一半:
+        R2 测试用的被审卡虽声明 task_mode=code,但 claim_id 格式错误导致 BLOCK,
+        从而未真正测试到 artifact_subject 传递。
+        
+        这里补充两个场景:
+        1. code 卡 + artifact_subject (主测试已覆盖)
+        2. doc 卡不需要 artifact_subject (本测试)
+        """
+        from tools.aipos_cli.board_adapter import audit_verdict_task
+        from tools.aipos_cli.controlled_execute import snapshot_hash
+        
+        workspace = tmp_path / "test_non_code_workspace"
+        workspace.mkdir()
+        
+        (workspace / "5_tasks" / "queue" / "claimed").mkdir(parents=True)
+        (workspace / "5_tasks" / "records" / "returns" / "TASK-DOC").mkdir(parents=True)
+        (workspace / "5_tasks" / "records" / "publishes").mkdir(parents=True)
+        (workspace / "5_tasks" / "records" / "sessions" / "AUDIT-TASK-DOC").mkdir(parents=True)
+        (workspace / "0_control_plane" / "agent_profiles").mkdir(parents=True)
+        (workspace / "task_cards" / "TASK-DOC").mkdir(parents=True)
+        
+        (workspace / "0_control_plane" / "agent_profiles" / "profiles.yaml").write_text(
+            "agents:\n  - id: audit.test\n    role: auditor\n  - id: exec.test\n    role: executor\n"
+        )
+        # 被审卡:task_mode=doc (非 code)
+        (workspace / "5_tasks" / "queue" / "claimed" / "task-doc.md").write_text(
+            "---\ntask_id: TASK-DOC\ntitle: Doc Task\nassigned_to: exec.test\ncontext_bundle: t\ntask_mode: doc\n"
+            "priority: normal\nneeds_owner: false\noutput_target: doc.md\nartifact_policy: formal_write\n"
+            "status: claimed\ncreated_by: t\nclaimed_by: exec.test\nagent_instance: exec.test\n"
+            "claim_id: claim_TASK-DOC_20260901_100000_exec-test\nclaimed_at: '2026-09-01T10:00:00Z'\n"
+            "active_session_id: session_exec_TASK-DOC\n---\n# Doc Task\n"
+        )
+        (workspace / "5_tasks" / "queue" / "claimed" / "audit-task-doc.md").write_text(
+            "---\ntask_id: AUDIT-TASK-DOC\ntitle: Audit Doc\nassigned_to: audit.test\ncontext_bundle: t\n"
+            "task_mode: audit\npriority: normal\nneeds_owner: false\noutput_target: verdict\n"
+            "artifact_policy: record_only\nstatus: claimed\ncreated_by: gate_derivation\n"
+            "reviewed_task_id: TASK-DOC\nclaimed_by: audit.test\nagent_instance: audit.test\n"
+            "claim_id: claim_AUDIT-TASK-DOC_20260901_110000_audit-test\nclaimed_at: '2026-09-01T11:00:00Z'\n"
+            "active_session_id: sa_doc\nreviewed_executor_instance: exec.test\n---\n# Audit Doc\n"
+        )
+        (workspace / "5_tasks" / "records" / "returns" / "TASK-DOC" / "r.md").write_text(
+            "---\nrecord_type: return_record\ncanonical_agent_instance: exec.test\n---\n# R\n"
+        )
+        (workspace / "task_cards" / "TASK-DOC" / "RETURN.md").write_text("# Done\n")
+        (workspace / "5_tasks" / "records" / "publishes" / "p_doc.md").write_text(
+            "---\nrecord_type: publish_record\npublish_id: p_doc\n---\n# P\n"
+        )
+        (workspace / "5_tasks" / "records" / "sessions" / "AUDIT-TASK-DOC" / "sa_doc.md").write_text(
+            "---\nrecord_type: session_record\nsession_id: sa_doc\nevent_count: 0\n---\n# S\n"
+        )
+        
+        # 第一发 dry_run (doc 卡不需要 artifact_subject)
+        dry_run_response = audit_verdict_task(
+            audit_task_id="AUDIT-TASK-DOC",
+            reviewed_task_id="TASK-DOC",
+            actor="audit.test",
+            agent_instance="audit.test",
+            owner_policy_ref="pol",
+            verdict="PASS",
+            findings_summary="OK",
+            evidence_refs=["task_cards/TASK-DOC/RETURN.md"],
+            audit_session_id="sa_doc",
+            audit_dispatch_record_ref="p_doc",
+            reviewed_return_record_ref="r",
+            artifact_subject=None,  # doc 卡不需要
+            dry_run=True,
+            repo_root=workspace,
+        )
+        
+        dry_run_hash = snapshot_hash("audit_verdict", "audit.test", dry_run_response)
+        
+        # 模拟 confirm 时的 revalidation
+        payload = dry_run_response["data"]["original_payload"]
+        confirm_response = audit_verdict_task(
+            audit_task_id=payload["audit_task_id"],
+            reviewed_task_id=payload["reviewed_task_id"],
+            actor=payload["actor"],
+            agent_instance=payload["agent_instance"],
+            owner_policy_ref=payload["owner_policy_ref"],
+            verdict=payload["verdict"],
+            findings_summary=payload["findings_summary"],
+            evidence_refs=payload["evidence_refs"],
+            audit_session_id=payload["audit_session_id"],
+            audit_dispatch_record_ref=payload["audit_dispatch_record_ref"],
+            reviewed_return_record_ref=payload["reviewed_return_record_ref"],
+            artifact_subject=payload.get("artifact_subject"),  # 应为 None
+            planned_verdict_id=payload.get("planned_verdict_id"),
+            planned_verdict_at=payload.get("planned_verdict_at"),
+            dry_run=True,
+            repo_root=workspace,
+        )
+        
+        confirm_hash = snapshot_hash("audit_verdict", "audit.test", confirm_response)
+        
+        # 验证:两个 hash 必须相等(doc 卡场景)
+        assert dry_run_hash == confirm_hash, (
+            f"doc 卡 dry_run → confirm 快照 hash 必须匹配!\n"
+            f"dry_run hash: {dry_run_hash}\n"
+            f"confirm hash: {confirm_hash}\n"
+        )
+        
+        # 验证:payload 中 artifact_subject 应为 None
+        assert payload.get("artifact_subject") is None, "doc 卡不应有 artifact_subject"
