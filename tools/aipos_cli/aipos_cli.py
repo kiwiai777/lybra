@@ -1434,12 +1434,12 @@ def build_parser() -> argparse.ArgumentParser:
     agents_parser = subparsers.add_parser("agents", help="Render agent profiles")
     agents_parser.add_argument("--json", action="store_true", help="Output JSON")
 
-    # AIPOS-358: auditor thin shell (退役私有编排,定时器直驱 turn-advancer)
+    # AIPOS-358: auditor thin shell (退役私有编排,定时器直驱 lybra next)
     auditor_parser = subparsers.add_parser("auditor", help="AIPOS-358: Auditor daemon operations (thin shell)")
     auditor_subparsers = auditor_parser.add_subparsers(dest="auditor_command")
     auditor_loop_parser = auditor_subparsers.add_parser(
         "loop",
-        help="AIPOS-358: Auditor thin shell daemon. Calls turn-advancer scan --mode auto on a timer. Never exits due to business results."
+        help="AIPOS-358: Auditor thin shell daemon. Calls lybra next on a timer. Never exits due to business results."
     )
     auditor_loop_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root (治理仓)")
     auditor_loop_parser.add_argument("--interval", type=float, default=20.0, help="Scan interval seconds (default: 20)")
@@ -1452,10 +1452,10 @@ def build_parser() -> argparse.ArgumentParser:
     auditor_loop_parser.add_argument("--runtime-cmd", help=argparse.SUPPRESS)
     auditor_loop_parser.add_argument("--timeout", type=float, help=argparse.SUPPRESS)
     auditor_loop_parser.add_argument("--claim-transient-tries", type=int, help=argparse.SUPPRESS)
-    # AIPOS-358: auditor launch (执行出口, 由 turn-advancer dispatch_audit 调用)
+    # AIPOS-358: auditor launch (执行出口, 由 lybra next 推导的审计命令调用)
     auditor_launch_parser = auditor_subparsers.add_parser(
         "launch",
-        help="AIPOS-358: Launch auditor agent for a specific audit card (called by turn-advancer dispatch_audit)."
+        help="AIPOS-358: Launch auditor agent for a specific audit card (called by lybra next derived audit command)."
     )
     auditor_launch_parser.add_argument("--task-id", required=True, help="Audit task ID")
     auditor_launch_parser.add_argument("--reviewed-task-id", default="", help="Reviewed (audited) task ID")
@@ -1860,21 +1860,26 @@ def build_parser() -> argparse.ArgumentParser:
     home_git_init_parser.add_argument("--project", help="Init at <home>/<project> instead of the home root (topology B); default is workspace-level (topology A)")
     home_git_init_parser.add_argument("--actor", default=default_actor, help="Commit identity actor; defaults to $USER or owner")
 
-    # AIPOS-340: Turn advancer (next-step command resolver)
-    turn_parser = subparsers.add_parser("turn-advancer", help="AIPOS-340: Resolve next-step command for turn-based workflow")
-    turn_subparsers = turn_parser.add_subparsers(dest="turn_command")
-    turn_next_parser = turn_subparsers.add_parser("next", help="Resolve next command for a single task")
-    turn_next_parser.add_argument("task_id", help="Task ID to resolve")
-    turn_next_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
-    turn_next_parser.add_argument("--mode", choices=["manual", "auto"], default="manual", help="Dispatch mode: manual (print) or auto (execute)")
-    turn_scan_parser = turn_subparsers.add_parser("scan", help="Scan all tasks and show next-step list")
-    turn_scan_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
-    turn_scan_parser.add_argument("--mode", choices=["manual", "auto"], default="manual", help="Dispatch mode")
+    # AIPOS-F71: lybra next — 唯一推导实现(合并 turn-advancer + next-step)
+    next_parser = subparsers.add_parser("next", help="AIPOS-F71: 推导下一步(唯一实现)。无参=项目级扫描;--task-id=单卡")
+    next_parser.add_argument("--task-id", help="Task ID to resolve (omit for project scan)")
+    next_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
+    next_parser.add_argument("--json", action="store_true", help="Output JSON")
 
-    # AIPOS-R7A: next-step navigation (reads transitions.schema, no memory narrative)
-    next_step_parser = subparsers.add_parser("next-step", help="AIPOS-R7A: Show next-step command with full parameters from transitions.schema")
+    # AIPOS-F71: 退役旧入口 — turn-advancer 与 next-step 保留为兼容转发(输出退役提示)
+    turn_parser = subparsers.add_parser("turn-advancer", help="[RETIRED by AIPOS-F71] Use 'lybra next' instead")
+    turn_subparsers = turn_parser.add_subparsers(dest="turn_command")
+    turn_next_parser = turn_subparsers.add_parser("next", help="[RETIRED] Use 'lybra next --task-id <ID>'")
+    turn_next_parser.add_argument("task_id", help="Task ID to resolve")
+    turn_next_parser.add_argument("--workspace-root", type=Path, help="Workspace root")
+    turn_next_parser.add_argument("--mode", choices=["manual", "auto"], default="manual", help="[RETIRED]")
+    turn_scan_parser = turn_subparsers.add_parser("scan", help="[RETIRED] Use 'lybra next'")
+    turn_scan_parser.add_argument("--workspace-root", type=Path, help="Workspace root")
+    turn_scan_parser.add_argument("--mode", choices=["manual", "auto"], default="manual", help="[RETIRED]")
+
+    next_step_parser = subparsers.add_parser("next-step", help="[RETIRED by AIPOS-F71] Use 'lybra next --task-id <ID>' instead")
     next_step_parser.add_argument("--task-id", required=True, help="Task ID to resolve")
-    next_step_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
+    next_step_parser.add_argument("--workspace-root", type=Path, help="Workspace root")
     next_step_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-FND-1: Five missing loop-step CLIs (wrap existing gate verbs/backend functions)
@@ -4576,7 +4581,7 @@ def main(argv: list[str] | None = None) -> int:
             argv = ["--workspace-root", args.workspace_root, "--interval", str(args.interval)]
             return auditor_loop_main(argv)
         if getattr(args, "auditor_command", None) == "launch":
-            # AIPOS-358: auditor launch (execution出口, called by turn-advancer dispatch_audit)
+            # AIPOS-358: auditor launch (execution出口, called by lybra next derived audit command)
             from tools.aipos_cli.auditor_runtime import launch_auditor_runtime
             product_repo = (args.product_repo or Path.home() / "projects" / "lybra").expanduser().resolve()
             ws = args.workspace_root.expanduser().resolve()
@@ -4989,79 +4994,54 @@ def main(argv: list[str] | None = None) -> int:
             print(render_preview_text(preview))
         return 0
 
-    if args.command == "turn-advancer":
-        # AIPOS-340: Turn advancer (next-step resolver)
-        from tools.turn_advancer import resolve_next_command
-        from tools.turn_advancer.resolver import scan_all_tasks
-        
-        workspace_root = args.workspace_root or workspace
-        
-        if args.turn_command == "next":
-            try:
-                result = resolve_next_command(
-                    task_id=args.task_id,
-                    workspace_root=workspace_root,
-                    dispatch_mode=args.mode,
-                )
-                exit_code = 0
-                # AIPOS-340F6:auto 模式接真执行出口(subprocess + 退出码透传 + 前后留痕 +
-                # 判断留人拒绝);manual 模式零回归(仅解析打印,不执行)。
-                if args.mode == "auto":
-                    from tools.turn_advancer.auto_executor import execute_auto
-                    actor = os.environ.get("LYBRA_AUTO_ACTOR", "turn_advancer_auto")
-                    result["execution"] = execute_auto(
-                        result, workspace_root, actor=actor
-                    )
-                    exit_code = int(result["execution"]["exit_code"])
-                print(render_json(result))
-                return exit_code
-            except Exception as exc:
-                print(f"Error resolving next command: {exc}", file=sys.stderr)
-                return 1
-        
-        elif args.turn_command == "scan":
-            try:
-                results = scan_all_tasks(workspace_root, dispatch_mode=args.mode)
-                print(render_json({"tasks": results, "total": len(results)}))
+    # AIPOS-F71: lybra next — 唯一推导实现
+    if args.command == "next":
+        from tools.aipos_cli.next_resolver import derive_next_step, scan_project, format_output, format_scan_output
+
+        try:
+            ws_root = getattr(args, "workspace_root", None) or _find_repo_root_for_args(args)
+            json_mode = getattr(args, "json", False)
+
+            if args.task_id:
+                # 单卡模式
+                result = derive_next_step(args.task_id, ws_root)
+                print(format_output(result, json_mode=json_mode))
+                return 0 if result.get("derivable") else 1
+            else:
+                # 项目级扫描
+                results = scan_project(ws_root)
+                print(format_scan_output(results, json_mode=json_mode))
                 return 0
-            except Exception as exc:
-                print(f"Error scanning tasks: {exc}", file=sys.stderr)
-                return 1
-        
+        except Exception as exc:
+            print(f"Error in lybra next: {exc}", file=sys.stderr)
+            return 1
+
+    # AIPOS-F71: 退役入口 — turn-advancer 与 next-step 转发到 next
+    if args.command == "turn-advancer":
+        print("[RETIRED] 'lybra turn-advancer' is retired by AIPOS-F71. Use 'lybra next' instead.", file=sys.stderr)
+        from tools.aipos_cli.next_resolver import derive_next_step, scan_project, format_output, format_scan_output
+        ws_root = getattr(args, "workspace_root", None) or _find_repo_root_for_args(args)
+        json_mode = getattr(args, "json", False)
+        if args.turn_command == "next":
+            result = derive_next_step(args.task_id, ws_root)
+            print(format_output(result, json_mode=json_mode))
+            return 0 if result.get("derivable") else 1
+        elif args.turn_command == "scan":
+            results = scan_project(ws_root)
+            print(format_scan_output(results, json_mode=json_mode))
+            return 0
         else:
-            print("turn-advancer subcommand required: next | scan", file=sys.stderr)
+            print("Usage: lybra next [--task-id <ID>]", file=sys.stderr)
             return 2
 
     if args.command == "next-step":
-        # AIPOS-R7A: next-step navigation from transitions.schema
-        from tools.aipos_cli.transition_engine import resolve_next_step_from_schema
-        
-        try:
-            if args.workspace_root:
-                workspace_root = Path(args.workspace_root)
-            else:
-                workspace_root = _find_repo_root_for_args(args)
-            
-            result = resolve_next_step_from_schema(
-                task_id=args.task_id,
-                workspace_root=workspace_root,
-            )
-            if args.json:
-                print(render_json(result))
-            else:
-                # Human-readable output
-                print(f"Task: {result['task_id']}")
-                print(f"Current state: {result['current_state']}")
-                print(f"Next step: {result['next_step']}")
-                print(f"Triggered by: {result['triggered_by']}")
-                print(f"\nCommand:")
-                print(f"  {result['command']}")
-                if result.get('notes'):
-                    print(f"\nNotes: {result['notes']}")
-            return 0
-        except Exception as exc:
-            print(f"Error resolving next-step: {exc}", file=sys.stderr)
-            return 1
+        print("[RETIRED] 'lybra next-step' is retired by AIPOS-F71. Use 'lybra next --task-id <ID>' instead.", file=sys.stderr)
+        from tools.aipos_cli.next_resolver import derive_next_step, format_output
+        ws_root = getattr(args, "workspace_root", None) or _find_repo_root_for_args(args)
+        json_mode = getattr(args, "json", False)
+        result = derive_next_step(args.task_id, ws_root)
+        print(format_output(result, json_mode=json_mode))
+        return 0 if result.get("derivable") else 1
 
     # AIPOS-F22 大项B: task-progress --confirm（薄壳工厂模式，经 gate MCP）
     if args.command == "task-progress" and getattr(args, "confirm", False):
