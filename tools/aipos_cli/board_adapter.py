@@ -4187,6 +4187,7 @@ def _build_audit_verdict_preview(
             "agent_runtime": agent_runtime,
             "planned_verdict_id": verdict_id,
             "planned_verdict_at": timestamp,
+            "artifact_subject": artifact_subject,
         },
     }
     verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)

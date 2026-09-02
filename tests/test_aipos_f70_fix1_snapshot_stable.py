@@ -429,3 +429,113 @@ class TestSnapshotMechanismProjectAgnostic:
                 f"快照机制 import 了产品逻辑模块: {forbidden}\n"
                 f"快照机制应保持纯门内,不依赖产品特定逻辑"
             )
+
+
+class TestDryRunConfirmTwoHop:
+    """AIPOS-F70-fix1-R2: 验证 dry_run → confirm 全两跳成功(活体实锤的另一半)"""
+
+    def test_dry_run_then_confirm_snapshot_match(self, tmp_path):
+        """
+        核心测试:单发 dry_run → 立即 confirm,快照必须匹配。
+        
+        AIPOS-F70-fix1-R2 返工:补齐「没测的另一半」。
+        原修复只测了连续两发 dry_run hash 相等,但 confirm 时 revalidation 仍 SNAPSHOT_MISMATCH。
+        根因:artifact_subject 没有被保存到 original_payload,confirm 时丢失该参数导致 blocking_reasons 不同。
+        """
+        from tools.aipos_cli.board_adapter import audit_verdict_task
+        from tools.aipos_cli.controlled_execute import snapshot_hash
+        
+        # 构造最小化靶场
+        workspace = tmp_path / "test_confirm_workspace"
+        workspace.mkdir()
+        
+        (workspace / "5_tasks" / "queue" / "claimed").mkdir(parents=True)
+        (workspace / "5_tasks" / "records" / "returns" / "TASK-X").mkdir(parents=True)
+        (workspace / "5_tasks" / "records" / "publishes").mkdir(parents=True)
+        (workspace / "5_tasks" / "records" / "sessions" / "AUDIT-TASK-X").mkdir(parents=True)
+        (workspace / "0_control_plane" / "agent_profiles").mkdir(parents=True)
+        (workspace / "task_cards" / "TASK-X").mkdir(parents=True)
+        
+        (workspace / "0_control_plane" / "agent_profiles" / "profiles.yaml").write_text(
+            "agents:\n  - id: audit.test\n    role: auditor\n  - id: exec.test\n    role: executor\n"
+        )
+        (workspace / "5_tasks" / "queue" / "claimed" / "task-x.md").write_text(
+            "---\ntask_id: TASK-X\ntitle: T\nassigned_to: exec.test\ncontext_bundle: t\ntask_mode: code\n"
+            "priority: normal\nneeds_owner: false\noutput_target: t.py\nartifact_policy: formal_write\n"
+            "status: claimed\ncreated_by: t\nclaimed_by: exec.test\nagent_instance: exec.test\n"
+            "claim_id: c\nclaimed_at: '2026-09-01T10:00:00Z'\nactive_session_id: s\n---\n# T\n"
+        )
+        (workspace / "5_tasks" / "queue" / "claimed" / "audit-task-x.md").write_text(
+            "---\ntask_id: AUDIT-TASK-X\ntitle: A\nassigned_to: audit.test\ncontext_bundle: t\n"
+            "task_mode: audit\npriority: normal\nneeds_owner: false\noutput_target: verdict\n"
+            "artifact_policy: record_only\nstatus: claimed\ncreated_by: gate_derivation\n"
+            "reviewed_task_id: TASK-X\nclaimed_by: audit.test\nagent_instance: audit.test\n"
+            "claim_id: ca\nclaimed_at: '2026-09-01T11:00:00Z'\nactive_session_id: sa\n"
+            "reviewed_executor_instance: exec.test\n---\n# A\n"
+        )
+        (workspace / "5_tasks" / "records" / "returns" / "TASK-X" / "r.md").write_text(
+            "---\nrecord_type: return_record\ncanonical_agent_instance: exec.test\n---\n# R\n"
+        )
+        (workspace / "task_cards" / "TASK-X" / "RETURN.md").write_text("# Done\n")
+        (workspace / "5_tasks" / "records" / "publishes" / "p.md").write_text(
+            "---\nrecord_type: publish_record\npublish_id: p\n---\n# P\n"
+        )
+        (workspace / "5_tasks" / "records" / "sessions" / "AUDIT-TASK-X" / "sa.md").write_text(
+            "---\nrecord_type: session_record\nsession_id: sa\nevent_count: 0\n---\n# S\n"
+        )
+        
+        # 第一发 dry_run
+        dry_run_response = audit_verdict_task(
+            audit_task_id="AUDIT-TASK-X",
+            reviewed_task_id="TASK-X",
+            actor="audit.test",
+            agent_instance="audit.test",
+            owner_policy_ref="pol",
+            verdict="PASS",
+            findings_summary="OK",
+            evidence_refs=["task_cards/TASK-X/RETURN.md"],
+            audit_session_id="sa",
+            audit_dispatch_record_ref="p",
+            reviewed_return_record_ref="r",
+            artifact_subject={"repository": "r", "commit_sha": "a" * 40, "tree_hash": "b" * 40},
+            dry_run=True,
+            repo_root=workspace,
+        )
+        
+        dry_run_hash = snapshot_hash("audit_verdict", "audit.test", dry_run_response)
+        
+        # 模拟 confirm 时的 revalidation:从 original_payload 重新调用
+        payload = dry_run_response["data"]["original_payload"]
+        confirm_response = audit_verdict_task(
+            audit_task_id=payload["audit_task_id"],
+            reviewed_task_id=payload["reviewed_task_id"],
+            actor=payload["actor"],
+            agent_instance=payload["agent_instance"],
+            owner_policy_ref=payload["owner_policy_ref"],
+            verdict=payload["verdict"],
+            findings_summary=payload["findings_summary"],
+            evidence_refs=payload["evidence_refs"],
+            audit_session_id=payload["audit_session_id"],
+            audit_dispatch_record_ref=payload["audit_dispatch_record_ref"],
+            reviewed_return_record_ref=payload["reviewed_return_record_ref"],
+            artifact_subject=payload.get("artifact_subject"),
+            planned_verdict_id=payload.get("planned_verdict_id"),
+            planned_verdict_at=payload.get("planned_verdict_at"),
+            dry_run=True,
+            repo_root=workspace,
+        )
+        
+        confirm_hash = snapshot_hash("audit_verdict", "audit.test", confirm_response)
+        
+        # 验证:两个 hash 必须相等
+        assert dry_run_hash == confirm_hash, (
+            f"dry_run → confirm 快照 hash 必须匹配!\n"
+            f"dry_run hash: {dry_run_hash}\n"
+            f"confirm hash: {confirm_hash}\n"
+            f"这是 AIPOS-F70-fix1-R2 要修复的问题:artifact_subject 未保存到 original_payload"
+        )
+        
+        # 验证:artifact_subject 被正确保存
+        assert payload.get("artifact_subject") is not None, "artifact_subject 必须被保存到 original_payload"
+        assert payload["artifact_subject"]["repository"] == "r"
+        assert payload["artifact_subject"]["commit_sha"] == "a" * 40
