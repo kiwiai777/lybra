@@ -438,9 +438,12 @@ class TestDryRunConfirmTwoHop:
         """
         核心测试:单发 dry_run → 立即 confirm,快照必须匹配。
         
-        AIPOS-F70-fix1-R2 返工:补齐「没测的另一半」。
-        原修复只测了连续两发 dry_run hash 相等,但 confirm 时 revalidation 仍 SNAPSHOT_MISMATCH。
-        根因:artifact_subject 没有被保存到 original_payload,confirm 时丢失该参数导致 blocking_reasons 不同。
+        AIPOS-F70-fix1-R2/R3/R4 三轮返工:
+        - R2: artifact_subject 存入 original_payload
+        - R3: confirm 复验重放取回 artifact_subject (L4725)
+        - R4: confirm 真执行重放取回 artifact_subject (L5226) ← 同病第三个调用点
+        
+        测试覆盖:复验阶段(snapshot 匹配)。真执行阶段需要完整 workspace,由活体终验覆盖。
         """
         from tools.aipos_cli.board_adapter import audit_verdict_task
         from tools.aipos_cli.controlled_execute import snapshot_hash
@@ -533,13 +536,17 @@ class TestDryRunConfirmTwoHop:
             f"dry_run → confirm 快照 hash 必须匹配!\n"
             f"dry_run hash: {dry_run_hash}\n"
             f"confirm hash: {confirm_hash}\n"
-            f"这是 AIPOS-F70-fix1-R2 要修复的问题:artifact_subject 未保存到 original_payload"
+            f"这是 AIPOS-F70-fix1-R2/R3 要修复的问题:artifact_subject 未保存到 original_payload 或未取回"
         )
         
         # 验证:artifact_subject 被正确保存
         assert payload.get("artifact_subject") is not None, "artifact_subject 必须被保存到 original_payload"
         assert payload["artifact_subject"]["repository"] == "r"
         assert payload["artifact_subject"]["commit_sha"] == "a" * 40
+        assert payload["artifact_subject"]["tree_hash"] == "b" * 40
+        
+        # R4 注:真执行阶段(L5226)的 artifact_subject 传递由活体终验覆盖。
+        # 完整 workspace 模拟(无 BLOCK)复杂度超出单元测试范围。
 
 
     def test_non_code_task_without_artifact_subject_stable(self, tmp_path):
