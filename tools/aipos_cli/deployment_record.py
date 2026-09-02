@@ -142,9 +142,18 @@ def write_deployment_record(
     path = record_path(governance_root, commit, frontmatter["deployed_at"])
     if dry_run:
         return {"ok": True, "path": str(path), "wrote": False, "frontmatter": frontmatter}
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_record_markdown(frontmatter), encoding="utf-8")
-    return {"ok": True, "path": str(path), "wrote": True, "frontmatter": frontmatter}
+    
+    # AIPOS-F64: 统一写入器
+    from tools.aipos_cli.record_writer import write_records_atomic
+    deployment_id = f"deployment_{frontmatter['deployed_at']}_{commit[:8]}"
+    deployment_markdown = render_record_markdown(frontmatter)
+    
+    write_result = write_records_atomic(
+        repo_root=governance_root,
+        records=[("deployment", deployment_id, deployment_markdown)],
+    )
+    
+    return {"ok": True, "path": write_result["paths"][0], "wrote": True, "frontmatter": frontmatter}
 
 
 def main(argv: list[str] | None = None) -> int:

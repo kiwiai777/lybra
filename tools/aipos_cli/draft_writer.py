@@ -661,29 +661,33 @@ def publish_draft(
     target_file.write_text(rendered_markdown, encoding="utf-8")
     publish_id = str(result["publish_id"])
     publish_record_path = expected_publish_record_path(repo_root, str(task_id), publish_id)
-    publish_record_path.parent.mkdir(parents=True, exist_ok=True)
     source_sha256 = hashlib.sha256(source_markdown.encode("utf-8")).hexdigest()
     published_sha256 = hashlib.sha256(rendered_markdown.encode("utf-8")).hexdigest()
     published_at = _utc_now()
-    publish_record_path.write_text(
-        render_publish_record(
-            task_id=str(task_id),
-            publish_id=publish_id,
-            actor=actor,
-            source_draft_ref=source_rel,
-            published_task_ref=str(result["target_path"]),
-            source_sha256=source_sha256,
-            published_sha256=published_sha256,
-            published_at=published_at,
-            confirmer=confirmer,
-            warnings=validation["warnings"],
-        ),
-        encoding="utf-8",
+    publish_markdown = render_publish_record(
+        task_id=str(task_id),
+        publish_id=publish_id,
+        actor=actor,
+        source_draft_ref=source_rel,
+        published_task_ref=str(result["target_path"]),
+        source_sha256=source_sha256,
+        published_sha256=published_sha256,
+        published_at=published_at,
+        confirmer=confirmer,
+        warnings=validation["warnings"],
     )
+    
+    # AIPOS-F64: 统一写入器
+    from tools.aipos_cli.record_writer import write_records_atomic
+    write_result = write_records_atomic(
+        repo_root=repo_root,
+        records=[("publish", publish_id, publish_markdown)],
+    )
+    
     result["wrote"] = True
     result["record_writes"] = [
         {
-            "path": str(publish_record_path.relative_to(repo_root)),
+            "path": write_result["paths"][0],
             "record_type": RecordType.PUBLISH_RECORD,
             "wrote": True,
         }

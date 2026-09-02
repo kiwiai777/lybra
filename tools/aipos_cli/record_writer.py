@@ -1131,6 +1131,119 @@ def build_closure_record_markdown(
         "closure_evidence_ref", "return_record_ref", "related_audit_task_refs",
         "warnings",
     ])
+# ---------------------------------------------------------------------------
+# AIPOS-F64: 单一记录写入器 (唯一实现点)
+#
+# 所有记录写入经此函数。调用方只需提供markdown内容,由此函数负责:
+# 1. 路径解析 (复用既有 *_record_path 函数)
+# 2. 原子写入 (多条记录全落或全不落)
+# 3. 路径安全校验
+# ---------------------------------------------------------------------------
+
+def write_records_atomic(
+    repo_root: Path,
+    records: list[tuple[str, str, str]],
+) -> dict[str, Any]:
+    """单一记录写入器 (AIPOS-F64 唯一实现点)。
+    
+    Args:
+        repo_root: 工作区根目录
+        records: 待写入记录列表,每项为 (record_type, record_id, markdown_content)
+    
+    Returns:
+        dict 包含 ok, paths (写入的路径列表), wrote (是否真正写入)
+    
+    原子性保证:
+        - 多条记录要么全落要么全不落
+        - 失败时抛异常,已写入的文件会被清理
+    
+    示例:
+        records = [
+            ("claim", "claim_TASK-1_20260902_120000_agent", claim_markdown),
+            ("session", "session_TASK-1_20260902_120000", session_markdown),
+        ]
+        result = write_records_atomic(repo_root, records)
+    """
+    if not records:
+        return {"ok": True, "wrote": False, "paths": [], "record_count": 0}
+    
+    # 解析路径 (先全部解析,再统一写入)
+    resolved: list[tuple[Path, str]] = []
+    for record_type, record_id, markdown in records:
+        # 根据record_type路由到对应的路径函数
+        # 这里简化处理:从record_id提取task_id (格式: <type>_<task_id>_...)
+        parts = record_id.split("_")
+        if len(parts) < 2:
+            raise ValueError(f"Invalid record_id format: {record_id}")
+        task_id = parts[1]  # 提取task_id
+        
+        # 标准化record_type (支持字符串和RecordType常量)
+        record_type_str = str(record_type)
+        if record_type == "claim" or record_type == RecordType.CLAIM:
+            record_type_for_path = RecordType.CLAIM_LOG
+            path = expected_claim_log_path(repo_root, task_id, record_id)
+        elif record_type == "session" or record_type == RecordType.SESSION_RECORD:
+            record_type_for_path = RecordType.SESSION_RECORD
+            path = session_record_path(repo_root, task_id, record_id)
+        elif record_type == "return" or record_type == RecordType.RETURN:
+            record_type_for_path = RecordType.RETURN_RECORD
+            path = return_record_path(repo_root, task_id, record_id)
+        elif record_type == "audit_dispatch" or record_type == RecordType.AUDIT_DISPATCH:
+            record_type_for_path = RecordType.AUDIT_DISPATCH_RECORD
+            path = audit_dispatch_record_path(repo_root, task_id, record_id)
+        elif record_type == "audit_verdict" or record_type == RecordType.AUDIT_VERDICT:
+            record_type_for_path = RecordType.AUDIT_VERDICT_RECORD
+            path = audit_verdict_record_path(repo_root, task_id, record_id)
+        elif record_type == "closure" or record_type == RecordType.CLOSURE_RECORD:
+            record_type_for_path = RecordType.CLOSURE_RECORD
+            path = closure_record_path(repo_root, task_id, record_id)
+        elif record_type == "publish" or record_type == "publish_record":
+            record_type_for_path = None  # publish不在ensure_safe_record_path支持列表
+            from tools.aipos_cli.records import expected_publish_record_path
+            path = expected_publish_record_path(repo_root, task_id, record_id)
+        elif record_type == "finalization":
+            record_type_for_path = None  # 不在RecordType枚举中
+            # finalization记录路径在finalization_record.py中定义
+            # 格式: 5_tasks/records/finalizations/<task_id>/finalization_<ts>.md
+            ts = record_id.split("_")[-1] if "_" in record_id else record_id
+            path = repo_root / "5_tasks" / "records" / "finalizations" / task_id / f"finalization_{ts}.md"
+        elif record_type == "deployment":
+            record_type_for_path = None  # 不在RecordType枚举中
+            # deployment记录路径在deployment_record.py中定义
+            # 格式: 5_tasks/records/deployments/deployment_<ts>_<commit_short>.md
+            path = repo_root / "5_tasks" / "records" / "deployments" / f"{record_id}.md"
+        else:
+            raise ValueError(f"Unknown record_type: {record_type}")
+        
+        # 路径安全校验 (只对RecordType枚举中的类型校验)
+        if record_type_for_path is not None:
+            ensure_safe_record_path(repo_root, path, record_type_for_path, task_id)
+        resolved.append((path, markdown))
+    
+    # 原子写入:全部路径检查通过后才开始写
+    written_paths: list[str] = []
+    try:
+        for path, markdown in resolved:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(markdown, encoding="utf-8")
+            written_paths.append(str(path.relative_to(repo_root)))
+    except Exception as exc:
+        # 失败时尝试清理已写入的文件
+        for written_path_str in written_paths:
+            try:
+                (repo_root / written_path_str).unlink(missing_ok=True)
+            except Exception:
+                pass
+        raise RuntimeError(f"记录写入失败 (已回滚): {exc}") from exc
+    
+    return {
+        "ok": True,
+        "wrote": True,
+        "paths": written_paths,
+        "record_count": len(written_paths),
+    }
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)
