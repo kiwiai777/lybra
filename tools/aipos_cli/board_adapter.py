@@ -6339,6 +6339,7 @@ def close_task(
                                 "context_bundle": source_task_metadata_for_reaudit.get("context_bundle", "default"),
                                 "task_mode": "audit",
                                 "task_class": "simple",
+                                "audit": "none",  # AIPOS-F64-fix1 F-5-1: 审计卡不需要再次审计
                                 "priority": source_task_metadata_for_reaudit.get("priority", "medium"),
                                 "status": "pending",
                                 "created_by": "gate_fix_closure_derivation",

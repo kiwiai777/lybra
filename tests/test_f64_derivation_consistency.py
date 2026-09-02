@@ -47,8 +47,9 @@ def test_all_derivations_use_simple_audit_none():
     print("检查 gate_fix_closure_derivation...")
     # 直接读取代码验证
     assert '"task_class": "simple"' in content, "fix_closure应使用simple"
-    # fix_closure没有显式设置audit:none,但它也产出审计卡,应该一致
-    print("  ✓ 代码已验证使用 task_class=simple")
+    # AIPOS-F64-fix1: fix_closure 也应该有 audit: none
+    assert '"audit": "none"' in content and 'AIPOS-F64-fix1' in content, "fix_closure应使用audit:none (F64-fix1 F-5-1 修复)"
+    print("  ✓ 代码已验证使用 task_class=simple, audit=none")
     
     print("\n✅ 三个派生口卡形一致性验证通过 (task_class=simple, audit=none)")
 

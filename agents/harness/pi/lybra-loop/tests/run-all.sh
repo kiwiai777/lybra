@@ -487,6 +487,14 @@ else
   overall=1
 fi
 
+echo "── tests/test_f64_fix1_schema_driven.py (schema声明驱动) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_f64_fix1_schema_driven.py"; then
+  echo "✓ tests/test_f64_fix1_schema_driven.py PASS"
+else
+  echo "✗ tests/test_f64_fix1_schema_driven.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

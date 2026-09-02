@@ -108,9 +108,16 @@ def _update_session_record(
     else:
         new_body = (new_body + "\n\n## Events\n\n" + event_line) if new_body else ("## Events\n\n" + event_line)
 
-    session_path.write_text(render_markdown(metadata, new_body, order), encoding="utf-8")
+    # AIPOS-F64-fix1: 迁移到统一 writer (write_records_atomic)
+    from tools.aipos_cli.record_writer import write_records_atomic
+    
+    session_markdown = render_markdown(metadata, new_body, order)
+    session_record_id = session_path.stem  # e.g., "session_TASK-1_20260902_120000"
+    records_to_write = [("session", session_record_id, session_markdown)]
+    write_result = write_records_atomic(repo_root, records_to_write)
+    
     return {
-        "ok": True,
+        "ok": write_result["ok"],
         "session_record_path": str(session_path.resolve().relative_to(repo_root)),
         "session_id": metadata.get("session_id"),
         "event_count": metadata["event_count"],
@@ -225,7 +232,12 @@ def write_task_progress_event(
                    "timestamp", "model_self_reported", "stage", "summary", "reason"]
     event_markdown = _render_markdown_single_source(metadata, body, event_order)
 
-    event_file.write_text(event_markdown, encoding="utf-8")
+    # AIPOS-F64-fix1: 迁移到统一 writer (write_records_atomic)
+    from tools.aipos_cli.record_writer import write_records_atomic
+    
+    event_record_id = event_file.stem  # e.g., "event_TASK-1_20260902_120000"
+    records_to_write = [("event", event_record_id, event_markdown)]
+    write_result = write_records_atomic(repo_root, records_to_write)
     
     # AIPOS-SMOKE-LOOP-1 FIX: 追加更新 session record (N2 真相载体)。session 找不到/不存在
     # 必须响亮报错 —— 不再 ok:True 实没写 session (HAZARD-LEDGER 08-12 行12)。
