@@ -470,6 +470,24 @@ else
 fi
 
 echo
+# AIPOS-F64: 单一记录写入器—收敛到record_writer.py,派生口卡形统一(simple+audit:none)
+echo "── tests/test_f64_unified_writer.py (单一记录写入器) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_f64_unified_writer.py"; then
+  echo "✓ tests/test_f64_unified_writer.py PASS"
+else
+  echo "✗ tests/test_f64_unified_writer.py FAIL"
+  overall=1
+fi
+
+echo "── tests/test_f64_derivation_consistency.py (派生口卡形一致性) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_f64_derivation_consistency.py"; then
+  echo "✓ tests/test_f64_derivation_consistency.py PASS"
+else
+  echo "✗ tests/test_f64_derivation_consistency.py FAIL"
+  overall=1
+fi
+
+echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
   echo " ALL TEST FILES PASS"

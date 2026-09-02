@@ -3558,12 +3558,13 @@ def _build_audit_dispatch_preview(
         "agent_instance": audit_agent_instance,
         "context_bundle": source_metadata.get("context_bundle") or "default",
         "task_mode": "audit",
-        "task_class": "complex",
+        "task_class": "simple",  # AIPOS-F64: 单源卡形 (F72R为准, 消灭 complex 分叉)
         "model_tier": source_metadata.get("model_tier") or "L2",
         "priority": source_metadata.get("priority") or "medium",
         "status": "pending",
         "created_by": actor,
         "needs_owner": False,
+        "audit": "none",  # AIPOS-F64: 单源卡形 - 审计卡不需要再次审计
         "planner_agent": "owner_planner",
         "reviewer": "owner_review",
         "audit_by": audit_agent_instance,
