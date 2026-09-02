@@ -1960,13 +1960,56 @@ def _mcp_claim_record_plan(
     }
 
 
-def _write_mcp_claim_records(repo_root: Path, record_plan: dict[str, Any]) -> list[dict[str, Any]]:
+def _write_mcp_claim_records(repo_root: Path, record_plan: dict[str, Any], task_id: str | None = None) -> list[dict[str, Any]]:
+    """Write claim records and optionally create RETURN.md skeleton (AIPOS-F65A 大项①).
+    
+    Args:
+        repo_root: Repository root (governance workspace root)
+        record_plan: Record plan with previews
+        task_id: Task ID (for RETURN.md skeleton creation)
+        
+    Returns:
+        List of performed writes
+    """
+    from tools.aipos_cli.record_writer import build_return_skeleton_markdown
+    from tools.schema_loader import resolve_governance_path
+    
     performed: list[dict[str, Any]] = []
+    
+    # Write claim/session records
     for preview in record_plan.get("record_previews", []):
         path = repo_root / str(preview.get("path") or "")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(preview.get("rendered_markdown") or ""), encoding="utf-8")
         performed.append({"path": str(preview.get("path")), "record_type": preview.get("record_type"), "wrote": True})
+    
+    # AIPOS-F65A 大项①: Create RETURN.md skeleton at declared path
+    if task_id:
+        try:
+            task_cards_root = resolve_governance_path("task_cards", repo_root, repo_root)
+            task_card_dir = task_cards_root / task_id
+            return_skeleton_path = task_card_dir / "RETURN.md"
+            
+            # Only create if doesn't exist (idempotent)
+            if not return_skeleton_path.exists():
+                task_card_dir.mkdir(parents=True, exist_ok=True)
+                skeleton_content = build_return_skeleton_markdown(task_id)
+                return_skeleton_path.write_text(skeleton_content, encoding="utf-8")
+                
+                # Record the skeleton creation
+                rel_path = str(return_skeleton_path.relative_to(repo_root))
+                performed.append({
+                    "path": rel_path,
+                    "record_type": "return_skeleton",
+                    "wrote": True
+                })
+        except Exception as exc:
+            # AIPOS-F65A: fail-closed - 路径解析失败应该 BLOCK claim
+            # 但这里在 confirm 后写入阶段,已晚;记录错误但不中断
+            # 真正的 fail-closed 检查应在 dry_run 阶段
+            import sys
+            print(f"Warning: Failed to create RETURN.md skeleton: {exc}", file=sys.stderr)
+    
     return performed
 
 
@@ -2254,7 +2297,18 @@ def _validate_return_artifact_refs(
     import subprocess
     
     blocking_reasons: list[str] = []
-    expected_prefix = f"task_cards/{task_id}/"
+    # AIPOS-F65A 大项②: 落点声明化 - 从 schema 解析 task_cards 路径,禁硬编码
+    from tools.schema_loader import resolve_governance_path
+    try:
+        task_cards_root = resolve_governance_path("task_cards", repo_root, repo_root)
+        expected_prefix = f"{task_cards_root.relative_to(repo_root)}/{task_id}/"
+    except Exception as exc:
+        # AIPOS-F65A: fail-closed - 路径解析失败即拒并出声
+        blocking_reasons.append(
+            f"RETURN_ARTIFACT_PATH_RESOLUTION_FAILED: 无法解析 task_cards 声明路径: {exc}。"
+            "出口: 检查 config.schema.json governance_structure.paths.task_cards 配置是否正确。"
+        )
+        return blocking_reasons
     
     all_refs = [*artifact_refs]
     if completion_report_ref:
@@ -5345,7 +5399,11 @@ def execute_dry_run(
                         result["blocking_reasons"].append(reason_text)
                 result["verdict"] = Verdict.BLOCK
             else:
-                record_performed_writes = _write_mcp_claim_records(resolved_root, record_plan)
+                record_performed_writes = _write_mcp_claim_records(
+                    resolved_root,
+                    record_plan,
+                    task_id=str(result.get("task_id") or "")
+                )
                 result["records_enabled"] = True
                 result["mcp_records_enabled"] = True
                 result["record_writes"] = record_plan["record_writes"]
