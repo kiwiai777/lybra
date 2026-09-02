@@ -758,19 +758,35 @@ def mutate_queue_task(
     if result["verdict"] == Verdict.BLOCK:
         return result
 
+    # AIPOS-F64-fix1: 迁移到统一 writer (write_records_atomic)
     if with_records:
+        from tools.aipos_cli.record_writer import write_records_atomic
+        
+        records_to_write = []
         for item in record_plan.get("record_writes", []):
-            path = repo_root / str(item["path"])
-            path.parent.mkdir(parents=True, exist_ok=True)
+            record_type_str = str(item["record_type"]).lower().replace("recordtype.", "")
+            record_id = Path(item["path"]).stem  # 从路径提取 record_id
+            
             if item["record_type"] == RecordType.CLAIM_LOG:
-                path.write_text(str(record_plan["claim_log_markdown"]), encoding="utf-8")
+                markdown_content = str(record_plan["claim_log_markdown"])
+                records_to_write.append(("claim", record_id, markdown_content))
             elif item["record_type"] == RecordType.SESSION_RECORD:
-                path.write_text(str(record_plan["session_record_markdown"]), encoding="utf-8")
-            item["wrote"] = True
+                markdown_content = str(record_plan["session_record_markdown"])
+                records_to_write.append(("session", record_id, markdown_content))
+        
+        # 原子写入所有新建记录
+        if records_to_write:
+            write_result = write_records_atomic(repo_root, records_to_write)
+            for item in record_plan.get("record_writes", []):
+                item["wrote"] = write_result["ok"]
+        
+        # 更新既有记录
         for item in record_plan.get("record_updates", []):
-            path = repo_root / str(item["path"])
-            path.write_text(str(record_plan["session_record_markdown"]), encoding="utf-8")
-            item["updated"] = True
+            record_id = Path(item["path"]).stem
+            markdown_content = str(record_plan["session_record_markdown"])
+            update_records = [("session", record_id, markdown_content)]
+            write_result = write_records_atomic(repo_root, update_records)
+            item["updated"] = write_result["ok"]
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(rendered_markdown, encoding="utf-8")

@@ -588,12 +588,10 @@ def derive_audit_task_on_return(
     )
     
     publish_record_path = expected_publish_record_path(repo_root, audit_task_id, publish_id)
-    publish_record_path.parent.mkdir(parents=True, exist_ok=True)
-    publish_record_path.write_text(publish_record_markdown, encoding="utf-8")
     
     # AIPOS-R8B F-N4: 补写 dispatch_record (与 lybra_audit_dispatch 共用同一 writer)
     # 自动派生审计卡时也必须落 dispatch 记录,否则裁决提交时会被 MISSING_AUDIT_DISPATCH_RECORD 拒绝
-    from tools.aipos_cli.record_writer import build_mcp_audit_dispatch_record_markdown
+    from tools.aipos_cli.record_writer import build_mcp_audit_dispatch_record_markdown, write_records_atomic
     
     dispatch_id = f"dispatch_{audit_task_id}_{published_at.replace(':', '').replace('-', '').replace('Z', '')}_gate-derivation"
     dispatch_record_markdown = build_mcp_audit_dispatch_record_markdown(
@@ -615,19 +613,23 @@ def derive_audit_task_on_return(
         confirmation_ref="auto_confirmed_gate_derivation",
     )
     
-    # dispatch 记录路径: 5_tasks/records/audit_dispatches/<reviewed_task_id>/dispatch_*.md
-    dispatch_record_dir = repo_root / "5_tasks" / "records" / "audit_dispatches" / source_task_id
-    dispatch_record_filename = f"dispatch_{published_at.replace(':', '').replace('-', '').replace('Z', '')}.md"
-    dispatch_record_path = dispatch_record_dir / dispatch_record_filename
-    dispatch_record_path.parent.mkdir(parents=True, exist_ok=True)
-    dispatch_record_path.write_text(dispatch_record_markdown, encoding="utf-8")
+    # AIPOS-F64: 统一写入器 - 原子写入publish和dispatch两条记录
+    write_result = write_records_atomic(
+        repo_root=repo_root,
+        records=[
+            ("publish", publish_id, publish_record_markdown),
+            ("audit_dispatch", dispatch_id, dispatch_record_markdown),
+        ],
+    )
+    
+    dispatch_record_path = repo_root / write_result["paths"][1]  # 第二条记录是dispatch
     
     return {
         "derived": True,
         "audit_task_id": audit_task_id,
         "audit_task_path": audit_task_path,
-        "publish_record_path": str(publish_record_path.relative_to(repo_root)),
-        "dispatch_record_path": str(dispatch_record_path.relative_to(repo_root)),
+        "publish_record_path": write_result["paths"][0],
+        "dispatch_record_path": write_result["paths"][1],
         "performed_writes": [
             {
                 "path": audit_task_path,

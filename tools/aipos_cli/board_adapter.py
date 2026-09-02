@@ -3558,12 +3558,13 @@ def _build_audit_dispatch_preview(
         "agent_instance": audit_agent_instance,
         "context_bundle": source_metadata.get("context_bundle") or "default",
         "task_mode": "audit",
-        "task_class": "complex",
+        "task_class": "simple",  # AIPOS-F64: 单源卡形 (F72R为准, 消灭 complex 分叉)
         "model_tier": source_metadata.get("model_tier") or "L2",
         "priority": source_metadata.get("priority") or "medium",
         "status": "pending",
         "created_by": actor,
         "needs_owner": False,
+        "audit": "none",  # AIPOS-F64: 单源卡形 - 审计卡不需要再次审计
         "planner_agent": "owner_planner",
         "reviewer": "owner_review",
         "audit_by": audit_agent_instance,
@@ -5923,10 +5924,13 @@ fix卡 close(PASS族)触发 `fix_card_closure` 级联: 为原卡派生复审卡(
 
 本记录为门生记录(append-only), 由 queue_close 级联自动写入;手写件会被 sweep 隔离。
 """
-    record_path = resolved_root / record_rel
-    record_path.parent.mkdir(parents=True, exist_ok=True)
-    record_path.write_text(body, encoding="utf-8")
-    return record_rel
+    # AIPOS-F64: 统一写入器
+    from tools.aipos_cli.record_writer import write_records_atomic
+    write_result = write_records_atomic(
+        repo_root=resolved_root,
+        records=[("closure", closure_id, body)],
+    )
+    return write_result["paths"][0]
 
 
 def close_task(
@@ -6237,8 +6241,13 @@ def close_task(
             warnings=governance_warnings or None,
         )
         closure_path_resolved = resolved_root / closure_path
-        closure_path_resolved.parent.mkdir(parents=True, exist_ok=True)
-        closure_path_resolved.write_text(closure_markdown, encoding="utf-8")
+        
+        # AIPOS-F64: 统一写入器
+        from tools.aipos_cli.record_writer import write_records_atomic
+        write_result = write_records_atomic(
+            repo_root=resolved_root,
+            records=[("closure", closure_id, closure_markdown)],
+        )
 
         # AIPOS-F18 大项A: fix卡close后自动派生原卡复审卡
         # fix卡是 derived_from_audit_task_id 非空的卡, close且终局∈PASS族时触发
@@ -6330,6 +6339,7 @@ def close_task(
                                 "context_bundle": source_task_metadata_for_reaudit.get("context_bundle", "default"),
                                 "task_mode": "audit",
                                 "task_class": "simple",
+                                "audit": "none",  # AIPOS-F64-fix1 F-5-1: 审计卡不需要再次审计
                                 "priority": source_task_metadata_for_reaudit.get("priority", "medium"),
                                 "status": "pending",
                                 "created_by": "gate_fix_closure_derivation",
