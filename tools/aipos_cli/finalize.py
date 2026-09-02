@@ -955,13 +955,55 @@ def finalize_task(
             f"{report_display['report_verdict']!r} at {report_display['report_path']}"
         )
 
-    # AIPOS-F70: 获取当前 HEAD commit SHA 用于精确核对
+    # AIPOS-F70-fix2: 比对对象 = 待整合的卡分支顶端 (裁决绑的正是它), 非 main HEAD
+    # ① 先获取 branch_integration 声明
+    branch_integration = _load_branch_integration(workspace_root)
+    branch_pattern = str(branch_integration.get("branch_pattern") or "card/{task_id}")
+    branch_name = _branch_name_for_task(branch_pattern, task_id)
+    
+    # ② 获取卡分支顶端 commit (如果分支存在且未合并)
+    required_commit_sha: str | None = None
     current_head = _git_rev_parse_head(workspace_root)
-    if current_head:
-        operations.append(f"Current HEAD: {current_head[:8]}")
+    
+    if _git_branch_exists(workspace_root, branch_name):
+        # 获取分支 tip
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", branch_name],
+                cwd=str(workspace_root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            branch_tip = result.stdout.strip()
+        except subprocess.CalledProcessError:
+            branch_tip = None
+        
+        if branch_tip and not _git_branch_merged_into_main(workspace_root, branch_name):
+            # 分支存在且未合并 → 裁决核对对象 = 卡分支 tip
+            required_commit_sha = branch_tip
+            operations.append(
+                f"F70-fix2: 裁决核对对象 = 卡分支 {branch_name} tip ({required_commit_sha[:8]}), "
+                f"main HEAD = {current_head[:8] if current_head else 'unknown'}"
+            )
+        else:
+            # 分支已合并 → 不传 required_commit_sha (由 find_gate_pass_verdict_for_task 从裁决 artifact_subject 推导)
+            # 已合并场景: 分支 tip 已进 main, 裁决绑的就是分支原tip, 不应要求匹配 merge commit
+            required_commit_sha = None
+            operations.append(
+                f"F70-fix2: 分支 {branch_name} 已合并, 裁决核对从 artifact_subject 推导 "
+                f"(当前 main HEAD = {current_head[:8] if current_head else 'unknown'})"
+            )
+    else:
+        # 分支不存在 (直提 main 历史卡 / 非代码卡) → 用 main HEAD (向后兼容)
+        required_commit_sha = current_head
+        operations.append(
+            f"F70-fix2: 无卡分支 {branch_name} (历史卡/非代码卡), 裁决核对对象 = main HEAD "
+            f"({current_head[:8] if current_head else 'unknown'})"
+        )
 
-    # Check if task can be finalized (gate audit verdict = PASS + 精确 SHA 覆盖)
-    finalize_check = check_task_can_finalize(task_id, governance_root, commit_sha=current_head if current_head else None)
+    # Check if task can be finalized (gate audit verdict = PASS + 精确 SHA 覆盖卡分支 tip)
+    finalize_check = check_task_can_finalize(task_id, governance_root, commit_sha=required_commit_sha)
     operations.append(f"Checked finalize eligibility: {finalize_check['reason']}")
     
     # AIPOS-F70: legacy 裁决警告
@@ -1038,7 +1080,7 @@ def finalize_task(
     # AIPOS-F11 大项A: auto_checkout 声明驱动 — 部署分支强制之前先确保在 main。
     # 必须在 check_deployment_branch 之前执行, 否则卡分支上直接判"非 main"拦下,
     # 永远到不了整合步骤的自动切回("交回前切回 main"纪律就此退役)。
-    branch_integration = _load_branch_integration(workspace_root)
+    # (branch_integration 已在上方 F70-fix2 修复中加载, 此处不重复)
     ensure_main = _ensure_on_main_branch(workspace_root, branch_integration, operations)
     if ensure_main is not None:
         return {

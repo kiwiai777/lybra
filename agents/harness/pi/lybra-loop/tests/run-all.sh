@@ -451,6 +451,16 @@ else
 fi
 
 echo
+# AIPOS-F70-fix2: finalize比对对象修正—审的是卡分支,比对对象=卡分支tip而非main HEAD
+echo "── tests/test_aipos_f70_fix2_verdict_comparison_target.py (比对对象修正) ──────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f70_fix2_verdict_comparison_target.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f70_fix2_verdict_comparison_target.py PASS"
+else
+  echo "✗ tests/test_aipos_f70_fix2_verdict_comparison_target.py FAIL"
+  overall=1
+fi
+
+echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
   echo " ALL TEST FILES PASS"
