@@ -1364,6 +1364,45 @@ def write_records_atomic(
     }
 
 
+def build_return_skeleton_markdown(task_id: str) -> str:
+    """Build RETURN.md skeleton with fixed section headings (AIPOS-F65A 大项①).
+    
+    Claim confirm 时门在声明位创建骨架, 执行体只填不选址。
+    骨架含固定节标题, 带占位符提示填写, 被 F60-fix1 isReturnMdSubstantive 检测拦截。
+    
+    Args:
+        task_id: 任务 ID
+        
+    Returns:
+        RETURN.md skeleton markdown content
+    """
+    return f"""# RETURN — {task_id}
+
+## 一句话结论
+(待填写: 一句话概括任务完成情况)
+
+## 改动清单
+(待填写: 列出所有改动的文件及改动性质)
+
+| 文件 | 改动性质 |
+|------|----------|
+| (待填写) | (待填写) |
+
+## 验收对账
+(待填写: 对照任务卡验收项, 逐项说明完成情况)
+
+## 测试原文
+(待填写: 粘贴测试运行的完整输出)
+
+```
+(待填写: 测试命令及输出)
+```
+
+## 排除物 + 理由
+(待填写: 如有未完成项, 列出原因; 无则写"无排除物")
+"""
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

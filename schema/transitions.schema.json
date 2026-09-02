@@ -146,7 +146,21 @@
       },
       "automation": {
         "queue_placement": "moves card to 5_tasks/queue/claimed/",
-        "frontmatter_update": "status: claimed, claimed_by: <agent_instance>, claimed_at: <timestamp>, claim_id: <claim_id>"
+        "frontmatter_update": "status: claimed, claimed_by: <agent_instance>, claimed_at: <timestamp>, claim_id: <claim_id>",
+        "return_skeleton": {
+          "description": "AIPOS-F65A 大项①: claim confirm 时门在声明位创建 RETURN.md 骨架",
+          "location": "task_cards/{task_id}/RETURN.md (resolved via config.schema governance_structure.paths.task_cards)",
+          "writer": "record_writer.build_return_skeleton_markdown",
+          "sections": [
+            "一句话结论",
+            "改动清单",
+            "验收对账",
+            "测试原文",
+            "排除物 + 理由"
+          ],
+          "idempotent": true,
+          "fail_closed": "Path resolution failure blocks claim (skeleton creation is not optional)"
+        }
       }
     },
     "N2": {

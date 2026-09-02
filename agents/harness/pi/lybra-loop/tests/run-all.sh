@@ -360,6 +360,16 @@ else
   overall=1
 fi
 
+# AIPOS-F65A: 报告链止血三件(claim建骨架+return校验落位+双目录消灭)
+echo
+echo "── tests/test_aipos_f65a_return_skeleton.py (报告链止血三件) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f65a_return_skeleton.py"; then
+  echo "✓ tests/test_aipos_f65a_return_skeleton.py PASS"
+else
+  echo "✗ tests/test_aipos_f65a_return_skeleton.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F58: 工位私有状态自我保护(git exclude 登记, 防 `git stash -u` 连坐抹凭据)
 echo
 echo "── tools/aipos_cli/tests/test_aipos_f58_git_exclude.py (工位 git exclude 保护) ──────────────────────────────────────────"
