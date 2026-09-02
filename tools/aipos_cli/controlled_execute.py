@@ -212,6 +212,11 @@ def _stable_planned_writes(items: Any, *, operation: str | None = None) -> list[
             # from the hash; ingestion content integrity is covered separately by
             # scratch_ingestion_digest (AIPOS-196a R-B).
             path = None
+        if operation == "audit_verdict" and item.get("record_type") in {RecordType.AUDIT_VERDICT_RECORD, RecordType.SESSION_RECORD}:
+            # AIPOS-F70-fix1: verdict record paths embed timestamp-derived verdict_id.
+            # Session records are also updated during verdict dry_run.
+            # Exclude both from snapshot hash to align with queue_return behavior.
+            path = None
         stable.append(
             {
                 "path": path,
@@ -247,6 +252,10 @@ def build_snapshot_payload(operation: str, actor: str, plan: dict[str, Any]) -> 
     if operation == "queue_return" and isinstance(original_payload, dict):
         original_payload = dict(original_payload)
         original_payload.pop("planned_returned_at", None)
+    if operation == "audit_verdict" and isinstance(original_payload, dict):
+        original_payload = dict(original_payload)
+        original_payload.pop("planned_verdict_at", None)
+        original_payload.pop("planned_verdict_id", None)
     payload = {
         "operation": operation,
         "actor": actor,

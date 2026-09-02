@@ -441,6 +441,16 @@ else
 fi
 
 echo
+# AIPOS-F70-fix1: 裁决干运行快照稳定性修复—排除易变timestamp/verdict_id,对齐queue_return机制
+echo "── tests/test_aipos_f70_fix1_snapshot_stable.py (裁决快照稳定性) ──────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f70_fix1_snapshot_stable.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f70_fix1_snapshot_stable.py PASS"
+else
+  echo "✗ tests/test_aipos_f70_fix1_snapshot_stable.py FAIL"
+  overall=1
+fi
+
+echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
   echo " ALL TEST FILES PASS"
