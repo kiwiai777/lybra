@@ -35,8 +35,11 @@ def test_all_derivations_use_simple_audit_none():
     
     # 2. 手动audit_dispatch (board_adapter.py:L3561)
     print("检查 manual audit_dispatch...")
-    # 直接读取代码验证
-    with open("tools/aipos_cli/board_adapter.py") as f:
+    # 直接读取代码验证 - 使用仓根推导路径
+    test_file_path = Path(__file__).resolve()
+    repo_root = test_file_path.parent.parent
+    board_adapter_path = repo_root / "tools" / "aipos_cli" / "board_adapter.py"
+    with open(board_adapter_path) as f:
         content = f.read()
         # 找到_build_audit_dispatch_preview中的audit_metadata
         assert '"task_class": "simple"' in content, "manual dispatch应使用simple"
