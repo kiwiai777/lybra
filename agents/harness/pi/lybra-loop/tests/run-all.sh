@@ -42,6 +42,9 @@ declare -a files=(
   "tests/f38c-claim-idempotent.test.ts"
   "tests/f22-advisor-onboarding.test.ts"
   "tests/f57-onboarding-guide.test.ts"
+  "tests/f60-held-skeleton-dead-code.test.ts"
+  "tests/f60-fix1-settle-skeleton.test.ts"
+  "tests/f62-deadlock-root-cause.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
@@ -377,6 +380,16 @@ else
   overall=1
 fi
 
+# AIPOS-F59: token 选取按 (role, 项目域)、旧条目留痕退场
+echo
+echo "── tests/test_token_resolver.py (token resolver 统一实现) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_token_resolver.py" -v --tb=short; then
+  echo "✓ tests/test_token_resolver.py PASS"
+else
+  echo "✗ tests/test_token_resolver.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F46: 写卡序列化全量收敛(毒字段夹具+末道自检+grep断言)
 echo
 echo "── tests/test_aipos_f46_serialization_convergence.py (写卡序列化全量收敛) ──────────────────────────────"
@@ -394,6 +407,101 @@ if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f51_self_check_w
   echo "✓ tests/test_aipos_f51_self_check_waiver_dry_run.py PASS"
 else
   echo "✗ tests/test_aipos_f51_self_check_waiver_dry_run.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F61: 收尾原子化与结算状态一次读齐
+echo
+echo "── tests/test_aipos_f61_settle_atomicity.py (收尾原子化) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f61_settle_atomicity.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f61_settle_atomicity.py PASS"
+else
+  echo "✗ tests/test_aipos_f61_settle_atomicity.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F63: fail-closed普查与改造—统一必填校验,占位符检测,空证据拒收,needs_owner执行
+echo
+echo "── tests/test_aipos_f63_fail_closed.py (fail-closed普查与改造) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f63_fail_closed.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f63_fail_closed.py PASS"
+else
+  echo "✗ tests/test_aipos_f63_fail_closed.py FAIL"
+  overall=1
+fi
+
+echo
+# AIPOS-F72: 派审幂等判据修真—dispatch链指向废卡/零裁决时不得挡复派
+echo "── tests/test_aipos_f72_dispatch_chain_validity.py (派审幂等判据修真) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f72_dispatch_chain_validity.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f72_dispatch_chain_validity.py PASS"
+else
+  echo "✗ tests/test_aipos_f72_dispatch_chain_validity.py FAIL"
+  overall=1
+fi
+
+echo
+# AIPOS-F70: 裁决绑精确产物—artifact_subject带commit_sha/tree_hash,finalize/deploy精确SHA核对
+echo "── tests/test_aipos_f70_artifact_binding.py (裁决绑精确产物) ──────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f70_artifact_binding.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f70_artifact_binding.py PASS"
+else
+  echo "✗ tests/test_aipos_f70_artifact_binding.py FAIL"
+  overall=1
+fi
+
+echo
+# AIPOS-F70-fix1: 裁决干运行快照稳定性修复—排除易变timestamp/verdict_id,对齐queue_return机制
+echo "── tests/test_aipos_f70_fix1_snapshot_stable.py (裁决快照稳定性) ──────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f70_fix1_snapshot_stable.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f70_fix1_snapshot_stable.py PASS"
+else
+  echo "✗ tests/test_aipos_f70_fix1_snapshot_stable.py FAIL"
+  overall=1
+fi
+
+echo
+# AIPOS-F70-fix2: finalize比对对象修正—审的是卡分支,比对对象=卡分支tip而非main HEAD
+echo "── tests/test_aipos_f70_fix2_verdict_comparison_target.py (比对对象修正) ──────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f70_fix2_verdict_comparison_target.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f70_fix2_verdict_comparison_target.py PASS"
+else
+  echo "✗ tests/test_aipos_f70_fix2_verdict_comparison_target.py FAIL"
+  overall=1
+fi
+
+echo
+# AIPOS-F71: next单一推导实现—合并turn-advancer+next-step,schema单一读取口,审计裁决推导
+echo "── tests/test_aipos_f71_next_command.py (next单一推导实现) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f71_next_command.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f71_next_command.py PASS"
+else
+  echo "✗ tests/test_aipos_f71_next_command.py FAIL"  overall=1
+fi
+
+echo
+# AIPOS-F64: 单一记录写入器—收敛到record_writer.py,派生口卡形统一(simple+audit:none)
+echo "── tests/test_f64_unified_writer.py (单一记录写入器) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_f64_unified_writer.py"; then
+  echo "✓ tests/test_f64_unified_writer.py PASS"
+else
+  echo "✗ tests/test_f64_unified_writer.py FAIL"
+  overall=1
+fi
+
+echo "── tests/test_f64_derivation_consistency.py (派生口卡形一致性) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_f64_derivation_consistency.py"; then
+  echo "✓ tests/test_f64_derivation_consistency.py PASS"
+else
+  echo "✗ tests/test_f64_derivation_consistency.py FAIL"
+  overall=1
+fi
+
+echo "── tests/test_f64_fix1_schema_driven.py (schema声明驱动) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_f64_fix1_schema_driven.py"; then
+  echo "✓ tests/test_f64_fix1_schema_driven.py PASS"
+else
+  echo "✗ tests/test_f64_fix1_schema_driven.py FAIL"
   overall=1
 fi
 

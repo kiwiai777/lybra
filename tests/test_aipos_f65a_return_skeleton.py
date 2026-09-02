@@ -235,6 +235,46 @@ def test_f65a_dual_directory_eliminated():
         print(f"⊙ 治理工作区不存在,跳过双目录检查")
 
 
+def test_f65a_skeleton_path_resolution_failure_blocks_claim():
+    """验收⑤ (F-1-2): 骨架路径解析失败阻断 claim"""
+    from tools.aipos_cli.board_adapter import _write_mcp_claim_records
+    from pathlib import Path
+    import tempfile
+    import json
+    
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_root = Path(tmp)
+        task_id = "TEST-F65A-FAIL"
+        
+        # 创建无效的 config.schema.json (缺少 task_cards 配置)
+        schema_dir = repo_root / "schema"
+        schema_dir.mkdir()
+        config_schema = {
+            "governance_structure": {
+                "paths": {
+                    # 故意缺失 task_cards 配置
+                }
+            }
+        }
+        (schema_dir / "config.schema.json").write_text(
+            json.dumps(config_schema), encoding="utf-8"
+        )
+        
+        # 创建空 record_plan
+        record_plan = {"record_previews": []}
+        
+        # 验证: 路径解析失败应阻断 claim
+        try:
+            _write_mcp_claim_records(repo_root, record_plan, task_id=task_id)
+            assert False, "应该抛出 RuntimeError 阻断 claim"
+        except RuntimeError as e:
+            error_msg = str(e)
+            assert "RETURN_SKELETON_PATH_RESOLUTION_FAILED" in error_msg, \
+                f"Expected RETURN_SKELETON_PATH_RESOLUTION_FAILED, got: {error_msg}"
+            assert "出口" in error_msg, "应该给出出口"
+            print(f"✓ 路径解析失败正确阻断 claim: {error_msg[:80]}...")
+
+
 if __name__ == "__main__":
     print("=" * 70)
     print(" AIPOS-F65A: 报告链止血三件测试")
@@ -255,6 +295,9 @@ if __name__ == "__main__":
         
         print("\n[验收④] 双目录消灭")
         test_f65a_dual_directory_eliminated()
+        
+        print("\n[验收⑤] 骨架路径解析失败阻断claim")
+        test_f65a_skeleton_path_resolution_failure_blocks_claim()
         
         print("\n" + "=" * 70)
         print(" ✓ ALL TESTS PASSED")

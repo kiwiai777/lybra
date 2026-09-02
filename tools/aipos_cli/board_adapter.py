@@ -2004,11 +2004,12 @@ def _write_mcp_claim_records(repo_root: Path, record_plan: dict[str, Any], task_
                     "wrote": True
                 })
         except Exception as exc:
-            # AIPOS-F65A: fail-closed - 路径解析失败应该 BLOCK claim
-            # 但这里在 confirm 后写入阶段,已晚;记录错误但不中断
-            # 真正的 fail-closed 检查应在 dry_run 阶段
-            import sys
-            print(f"Warning: Failed to create RETURN.md skeleton: {exc}", file=sys.stderr)
+            # AIPOS-F65A: fail-closed - 路径解析失败即阻断 claim 并出声给出口
+            # transitions.schema 已声明 fail_closed: "Path resolution failure blocks claim (skeleton creation is not optional)"
+            raise RuntimeError(
+                f"RETURN_SKELETON_PATH_RESOLUTION_FAILED: 无法创建 RETURN.md 骨架 - 路径解析失败: {exc}。"
+                f"出口: 检查 config.schema.json governance_structure.paths.task_cards 配置是否正确。"
+            ) from exc
     
     return performed
 
