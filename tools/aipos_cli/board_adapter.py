@@ -4741,6 +4741,7 @@ def execute_dry_run(
                 agent_runtime=payload.get("agent_runtime"),
                 planned_verdict_id=payload.get("planned_verdict_id"),
                 planned_verdict_at=payload.get("planned_verdict_at"),
+                artifact_subject=payload.get("artifact_subject"),
                 dry_run=True,
                 repo_root=resolved_root,
             )
