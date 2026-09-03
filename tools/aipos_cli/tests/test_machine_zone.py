@@ -206,10 +206,19 @@ def test_output_target_coverage_missing_block(tmp_repo: Path):
 
 
 def test_schema_change_auto_follows(tmp_repo: Path):
-    """验证：schema 改声明 → 新卡自动跟随（先红后绿验收条款①）。"""
+    """验证：schema 改声明 → 新卡自动跟随（先红后绿验收条款①）。
+    
+    真实改 transitions.schema branch_pattern，断言纪律段生成结果随动的前后对照。
+    """
+    from tools.aipos_cli.machine_zone import derive_machine_zone_纪律段
+    
     # Before: branch_pattern = "card/{task_id}"
-    metadata_before = {"task_id": "TEST-001", "created_by": "advisor.test"}
-    machine_before = derive_machine_zone_fields(metadata_before, tmp_repo)
+    metadata = {"task_id": "TEST-001", "created_by": "advisor.test"}
+    discipline_before = derive_machine_zone_纪律段("TEST-001", metadata, tmp_repo)
+    
+    # 断言初始状态：纪律段包含 card/TEST-001
+    assert "card/TEST-001" in discipline_before, f"期望纪律段包含 'card/TEST-001'，实际: {discipline_before}"
+    assert "wip/TEST-001" not in discipline_before
     
     # Change schema: branch_pattern = "wip/{task_id}"
     transitions_schema = {
@@ -230,12 +239,16 @@ def test_schema_change_auto_follows(tmp_repo: Path):
     from tools.schema_loader import clear_cache
     clear_cache()
     
-    # After: new draft should follow new pattern (纪律段 would reference wip/{task_id})
-    metadata_after = {"task_id": "TEST-001", "created_by": "advisor.test"}
-    machine_after = derive_machine_zone_fields(metadata_after, tmp_repo)
+    # After: 新建草稿自动随声明变为 wip/<ID>
+    discipline_after = derive_machine_zone_纪律段("TEST-001", metadata, tmp_repo)
+    
+    # 断言改动后状态：纪律段包含 wip/TEST-001（不再是 card/）
+    assert "wip/TEST-001" in discipline_after, f"期望纪律段包含 'wip/TEST-001'，实际: {discipline_after}"
+    assert "card/TEST-001" not in discipline_after, "schema 改后不应再包含旧的 card/ 前缀"
     
     # Machine zone fields themselves don't contain branch name (that's in 纪律段)
     # but derivation function should pick up new schema without hardcoded values
+    machine_after = derive_machine_zone_fields(metadata, tmp_repo)
     assert machine_after["draft_status"] == "draft"  # Still works after schema change
 
 
