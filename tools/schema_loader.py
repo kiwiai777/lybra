@@ -459,6 +459,44 @@ def get_builtin_role_classes(repo_root: Path | None = None) -> list[str]:
     return list(custom.get("builtin_classes") or get_all_role_names(repo_root))
 
 
+def get_machine_zone_fields(repo_root: Path | None = None) -> list[str]:
+    """Get list of machine-zone fields from card.schema (AIPOS-F68 single source).
+    
+    Machine zone = fields derived from schema declarations that advisors cannot
+    hand-edit. draft_create generates them; draft_publish validates they match.
+    
+    Returns:
+        List of field names in machine zone
+    """
+    card_schema = load_schema("card", repo_root)
+    machine_zone = card_schema.get("machine_zone", {})
+    return list(machine_zone.get("fields", []))
+
+
+def get_advisor_zone_fields(repo_root: Path | None = None) -> list[str]:
+    """Get list of advisor-zone fields from card.schema (AIPOS-F68 single source).
+    
+    Advisor zone = fields requiring human judgment that machine cannot generate.
+    
+    Returns:
+        List of field names in advisor zone
+    """
+    card_schema = load_schema("card", repo_root)
+    advisor_zone = card_schema.get("advisor_zone", {})
+    return list(advisor_zone.get("fields", []))
+
+
+def get_machine_zone_body_sections(repo_root: Path | None = None) -> list[dict[str, Any]]:
+    """Get list of machine-generated body sections from card.schema (AIPOS-F68).
+    
+    Returns:
+        List of section definitions (section_name, description, source)
+    """
+    card_schema = load_schema("card", repo_root)
+    machine_zone = card_schema.get("machine_zone", {})
+    return list(machine_zone.get("body_sections", []))
+
+
 # ---------------------------------------------------------------------------
 # Config value accessors (AIPOS-R4B-1 / LOOP-REDESIGN v2 §5-4)
 # Single source for port / URL defaults. Replaces 35 hardcoded 7117/7118 refs.
@@ -772,4 +810,7 @@ __all__ = [
     "clear_cache",
     "cross_validate_schemas",
     "validate_all_enum_refs",
+    "get_machine_zone_fields",
+    "get_advisor_zone_fields",
+    "get_machine_zone_body_sections",
 ]
