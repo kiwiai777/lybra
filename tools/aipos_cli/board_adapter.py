@@ -1977,7 +1977,8 @@ def _create_return_skeleton(repo_root: Path, task_id: str) -> dict[str, Any] | N
     from tools.schema_loader import resolve_governance_path
     
     try:
-        task_cards_root = resolve_governance_path("task_cards", repo_root, repo_root)
+        # AIPOS-F65A-fix2-R3 症③: schema以产品仓为根(与F71-R3/finalize同款),治理路径以治理仓为根
+        task_cards_root = resolve_governance_path("task_cards", repo_root, _code_repo_schema_root())
         task_card_dir = task_cards_root / task_id
         return_skeleton_path = task_card_dir / "RETURN.md"
         
@@ -2318,9 +2319,10 @@ def _validate_return_artifact_refs(
     
     blocking_reasons: list[str] = []
     # AIPOS-F65A 大项②: 落点声明化 - 从 schema 解析 task_cards 路径,禁硬编码
+    # AIPOS-F65A-fix2-R3 症③: schema以产品仓为根(与F71-R3/finalize同款),治理路径以治理仓为根
     from tools.schema_loader import resolve_governance_path
     try:
-        task_cards_root = resolve_governance_path("task_cards", repo_root, repo_root)
+        task_cards_root = resolve_governance_path("task_cards", repo_root, _code_repo_schema_root())
         expected_prefix = f"{task_cards_root.relative_to(repo_root)}/{task_id}/"
     except Exception as exc:
         # AIPOS-F65A: fail-closed - 路径解析失败即拒并出声
