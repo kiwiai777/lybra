@@ -1,14 +1,13 @@
 /**
- * lybra-loop 本体测试 —— factory 注册 + 命令路由 + 配置/连接红线(headless 可测部分)。
+ * lybra-loop 本体测试 —— factory 注册 + 降级回声行为(AIPOS-F65C 件②)。
+ *
+ * AIPOS-F65C 件②: lybra-loop 已封存,/lybra 任意子命令均返回降级提示(引导用户使用 CLI)。
+ * 旧循环行为(on/off/status/maxN/配置红线/连接自检)已退役,对应测试已删除。
  *
  * 用 mock pi/ctx 直接调 factory,验:
  *  • factory 加载不抛、注册了 lybra/lybra-tick 命令 + 三个事件 handler。
- *  • /lybra on 的配置红线:缺 actor/policy/workspaceRoot ⇒ 报错不启动。
- *  • /lybra on 的连接自检:gate 不可达 ⇒ 报错不启动。
- *  • maxN 解析:0/非整数/非数字 ⇒ 报错;默认 1。
- *  • /lybra off(未运行)、/lybra status、未知子命令 ⇒ 正确反馈。
+ *  • /lybra <任意子命令> → 封存提示文案(引导使用 lybra CLI)。
  *
- * on 的"成功放行+冷启动"路径需真 gate + newSession,无法 headless ⇒ 见 TEST-EVIDENCE 眼验剧本。
  * 跑法:`node tests/lybra-loop.test.ts`。
  */
 
@@ -98,121 +97,34 @@ function clearLybraEnv() {
   setEnv({});
 }
 
-// --- /lybra(无参)= status ---
-{
+// --- AIPOS-F65C 件②: /lybra 任意子命令 → 封存提示 ---
+const deprecationTestCases = [
+  { args: "", desc: "/lybra 无参" },
+  { args: "on", desc: "/lybra on" },
+  { args: "off", desc: "/lybra off" },
+  { args: "status", desc: "/lybra status" },
+  { args: "sync", desc: "/lybra sync" },
+  { args: "enroll test-code", desc: "/lybra enroll" },
+  { args: "unknown", desc: "/lybra unknown" },
+];
+
+for (const { args, desc } of deprecationTestCases) {
   clearLybraEnv();
   const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("", ctx);
-  check("/lybra 无参 → status notify", notifies.length === 1 && notifies[0].m.includes("lybra-loop 状态"));
+  await commands.lybra.handler(args, ctx);
+  
+  const hasDeprecationNotice = notifies.some(n => 
+    n.m.includes("已封存") || n.m.includes("AIPOS-F65C")
+  );
+  const hasCLIGuidance = notifies.some(n => 
+    n.m.includes("lybra CLI") || n.m.includes("lybra next") || n.m.includes("lybra queue")
+  );
+  const isWarnLevel = notifies.some(n => n.l === "warn");
+  
+  check(`${desc} → 封存提示`, hasDeprecationNotice);
+  check(`${desc} → CLI 引导`, hasCLIGuidance);
+  check(`${desc} → warn 级别`, isWarnLevel);
 }
-
-// --- /lybra status ---
-{
-  clearLybraEnv();
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("status", ctx);
-  check("/lybra status → notify 状态", notifies[0].m.includes("运行中"));
-  check("/lybra status → 含 已放行 计数", notifies[0].m.includes("已放行"));
-}
-
-// --- /lybra off(未运行)---
-{
-  clearLybraEnv();
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("off", ctx);
-  check("/lybra off 未运行 → 提示未运行", notifies[0].m.includes("未在运行"));
-}
-
-// --- /lybra 未知子命令 → 用法 ---
-{
-  clearLybraEnv();
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("foo", ctx);
-  check("/lybra foo → 用法提示", notifies[0].m.includes("用法"));
-}
-
-// --- maxN 解析 ---
-{
-  clearLybraEnv();
-  setEnv({ LYBRA_ACTOR: "me", LYBRA_MCP_TOKEN: "x", LYBRA_OWNER_POLICY_REF: "p", LYBRA_WORKSPACE_ROOT: "/r", LYBRA_GATE_URL: "http://127.0.0.1:1" });
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("on 0", ctx);
-  check("/lybra on 0 → maxN 无效", notifies[0].m.includes("maxN 无效"));
-}
-{
-  setEnv({ LYBRA_ACTOR: "me", LYBRA_MCP_TOKEN: "x", LYBRA_OWNER_POLICY_REF: "p", LYBRA_WORKSPACE_ROOT: "/r", LYBRA_GATE_URL: "http://127.0.0.1:1" });
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("on abc", ctx);
-  check("/lybra on abc → maxN 无效", notifies[0].m.includes("maxN 无效"));
-}
-
-// --- on 配置红线:缺 workspaceRoot(loadConfig 最先查 workspaceRoot)---
-// AIPOS-C2/R8B: 启动输出含 [1/5] 进度 notify, 错误 notify 不再在 notifies[0], 需按 error 级别查找。
-{
-  clearLybraEnv();
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("on", ctx);
-  const err = notifies.find((n) => n.l === "error");
-  check("on 缺 workspaceRoot → 配置错误含 LYBRA_WORKSPACE_ROOT", !!err && err.m.includes("LYBRA_WORKSPACE_ROOT"));
-  check("on 缺 workspaceRoot → 未启动(notify 是 error)", !!err);
-}
-// --- on 配置红线:缺 role (AIPOS-C2: role 不再静默缺省 executor) ---
-{
-  setEnv({ LYBRA_WORKSPACE_ROOT: "/r" });
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("on", ctx);
-  const err = notifies.find((n) => n.l === "error");
-  check("on 缺 role → 配置错误含 LYBRA_ROLE", !!err && err.m.includes("LYBRA_ROLE"));
-}
-// --- on 配置红线:缺 actor ---
-{
-  setEnv({ LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ROLE: "executor" });
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("on", ctx);
-  const err = notifies.find((n) => n.l === "error");
-  check("on 缺 actor → 配置错误", !!err && err.m.includes("配置错误") && err.m.includes("LYBRA_ACTOR"));
-}
-// --- on 配置红线:缺 ownerPolicyRef ---
-{
-  setEnv({ LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ROLE: "executor", LYBRA_ACTOR: "me" });
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("on", ctx);
-  const err = notifies.find((n) => n.l === "error");
-  check("on 缺 ownerPolicyRef → 配置错误含 LYBRA_OWNER_POLICY_REF", !!err && err.m.includes("LYBRA_OWNER_POLICY_REF"));
-}
-// --- on 配置红线:缺 token ---
-{
-  setEnv({ LYBRA_WORKSPACE_ROOT: "/r", LYBRA_ROLE: "executor", LYBRA_ACTOR: "me", LYBRA_OWNER_POLICY_REF: "p" });
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("on", ctx);
-  const err = notifies.find((n) => n.l === "error");
-  check("on 缺 token → 配置错误含 token", !!err && err.m.includes("token"));
-}
-
-// --- on 连接自检:gate 不可达(端口1)⇒ 报错不启动 ---
-{
-  setEnv({
-    LYBRA_ACTOR: "me",
-    LYBRA_TOKEN: "secret-tok",
-    LYBRA_ROLE: "executor",
-    LYBRA_OWNER_POLICY_REF: "p",
-    LYBRA_WORKSPACE_ROOT: "/r",
-    LYBRA_GATE_URL: "http://127.0.0.1:1",
-  });
-  const { ctx, notifies } = makeMockCtx();
-  await commands.lybra.handler("on", ctx);
-  const err = notifies.find((n) => n.l === "error");
-  const msg = err?.m || "";
-  check("on gate 不可达 → 连接错误", msg.includes("gate 连接失败"));
-  check("on gate 不可达 → 提示 lybra serve", msg.includes("lybra serve"));
-  check("on gate 不可达 → error 级别", !!err);
-  // 没有调用 sendUserMessage(因为没启动;F-EXT001-4:FIX1 后 tick 不经 sendUserMessage)
-  check("on gate 不可达 → 没有 sendUserMessage 调用", sent.length === 0);
-}
-
-// --- on 成功路径无法 headless(需真 gate + newSession),记 NOTE ---
-NOTES.push("on 成功(配置齐 + gate 可达 + 信封内卡)→ 冷启动 newSession:需真 gate + pi session,无法 headless。见 TEST-EVIDENCE 眼验剧本。");
-NOTES.push("agent_settled 续跑 / 轮询定时器链(F-EXT001-4:FIX1 直接调 doTick) / session_shutdown expectingSwap:依赖 pi 事件循环 + 真 session 替换,无法 headless。见 TEST-EVIDENCE。");
 
 // 恢复 env
 clearLybraEnv();
@@ -224,8 +136,32 @@ rmSync(cleanCwd, { recursive: true, force: true });
 // --- 汇总 ---
 for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
 if (NOTES.length) {
-  console.log("\n--- NOTES(不可 headless 测的,见 TEST-EVIDENCE)---");
+  console.log("\n--- NOTES ---");
   for (const n of NOTES) console.log(`  • ${n}`);
 }
+
+// 记录删除的测试
+console.log("\n--- AIPOS-F65C 件② 删除的测试(已死循环行为)---");
+const deletedTests = [
+  "/lybra 无参 → status notify (旧 status 逻辑已死)",
+  "/lybra status → notify 状态 (旧 status 逻辑已死)",
+  "/lybra status → 含 已放行 计数 (旧 status 逻辑已死)",
+  "/lybra off 未运行 → 提示未运行 (旧 off 逻辑已死)",
+  "/lybra foo → 用法提示 (已改为封存提示)",
+  "/lybra on 0 → maxN 无效 (旧 maxN 解析已死)",
+  "/lybra on abc → maxN 无效 (旧 maxN 解析已死)",
+  "on 缺 workspaceRoot → 配置错误 (旧 on 配置红线已死)",
+  "on 缺 role → 配置错误 (旧 on 配置红线已死)",
+  "on 缺 actor → 配置错误 (旧 on 配置红线已死)",
+  "on 缺 ownerPolicyRef → 配置错误 (旧 on 配置红线已死)",
+  "on 缺 token → 配置错误 (旧 on 配置红线已死)",
+  "on gate 不可达 → 连接错误 (旧 on 连接自检已死)",
+  "on gate 不可达 → 提示 lybra serve (旧 on 连接自检已死)",
+  "on gate 不可达 → error 级别 (旧 on 连接自检已死)",
+  "on gate 不可达 → 没有 sendUserMessage (旧 on 连接自检已死)",
+];
+console.log(`共删除 ${deletedTests.length} 个测试,原因:测试已死的循环行为(on/off/status/maxN/配置红线/连接自检)`);
+for (const t of deletedTests) console.log(`  • ${t}`);
+
 console.log(failures === 0 ? `\nALL ${checks.length} PASS` : `\n${failures}/${checks.length} FAILED`);
 process.exit(failures === 0 ? 0 : 1);

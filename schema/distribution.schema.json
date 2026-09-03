@@ -242,11 +242,6 @@
       "distributed_at": "2026-08-12T13:45:00Z",
       "distributions": [
         {
-          "distribution_id": "executor-loop-extension",
-          "source_commit": "b0d056e",
-          "target_path": "_distributed/extensions/lybra-loop"
-        },
-        {
           "distribution_id": "executor-skills",
           "source_commit": "b0d056e",
           "target_path": "_distributed/skills"
@@ -344,12 +339,6 @@
         "kind": "file",
         "path": ".pi/extensions/claim.ts",
         "description": "Claim extension mount — relative symlink to ../../../_shared/extensions/claim.ts"
-      },
-      {
-        "name": ".pi/extensions/lybra-loop.ts",
-        "kind": "file",
-        "path": ".pi/extensions/lybra-loop.ts",
-        "description": "Loop extension mount — REAL forwarding file (NOT a symlink: multi-file extensions lose sibling modules through symlinks)"
       },
       {
         "name": ".pi/skills/",
