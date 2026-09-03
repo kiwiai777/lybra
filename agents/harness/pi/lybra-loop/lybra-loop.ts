@@ -2728,9 +2728,21 @@ export default function (pi: ExtensionAPI) {
   });
 
   // --- /lybra:on | off | status ---
+  // AIPOS-F65C 件②: lybra-loop 运行时已封存,仅保留降级回声(提示用 CLI)
   pi.registerCommand("lybra", {
-    description: "lybra-loop 自动领卡循环:on [maxN] | off | status | sync | enroll <码>",
+    description: "[已封存] lybra-loop 已迁移至终端 CLI,请使用: lybra next | lybra queue claim ...",
     handler: async (args, ctx) => {
+      ctx.ui.notify(
+        "lybra-loop 扩展已封存(AIPOS-F65C 件②)。\n" +
+        "请在终端使用 lybra CLI 命令:\n" +
+        "  - lybra next          # 查看下一步任务\n" +
+        "  - lybra queue claim   # 认领任务\n" +
+        "  - lybra queue return  # 归还任务\n" +
+        "详见: lybra --help",
+        "warn"
+      );
+      return;
+      // 以下为原循环逻辑(已封存,不再执行)
       liveCtx = ctx; // AIPOS-F10:命令入口刷新活引用
       const parts = String(args || "").trim().split(/\s+/);
       const sub = parts[0] || "status";

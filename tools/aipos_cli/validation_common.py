@@ -26,6 +26,8 @@ def check_placeholder_in_text(text: str | None, field_name: str) -> list[str]:
     检查文本字段是否包含占位符。
     
     AIPOS-F63: 占位符检测作用于所有文本字段，不只文件。
+    AIPOS-F65C 件④: 区分「引用」与「实际空白」——占位符须独占一行或为节内容全部，
+    反引号代码块与引用上下文不命中。
     
     Returns:
         blocking_reasons: 发现占位符时返回拒绝理由列表
@@ -34,10 +36,35 @@ def check_placeholder_in_text(text: str | None, field_name: str) -> list[str]:
     if not text:
         return blocking_reasons
     
-    found_placeholders = [p for p in PLACEHOLDER_PATTERNS if p in text]
-    if found_placeholders:
+    # AIPOS-F65C 件④: 逐行检查,占位符独占一行才命中(不在代码块、不在描述中引用)
+    lines = text.split('\n')
+    in_code_block = False
+    found_standalone_placeholders = []
+    
+    for line in lines:
+        # 跟踪代码块边界(```)
+        if line.strip().startswith('```'):
+            in_code_block = not in_code_block
+            continue
+        
+        # 代码块内不检查
+        if in_code_block:
+            continue
+        
+        stripped = line.strip()
+        # 占位符独占一行(前后只有空白、标点、引号)
+        # 判据: 去除常见前导(列表标记、引号)后,整行只是一个占位符
+        content = stripped.lstrip('- *>"\' ').rstrip('"\' ')
+        
+        for placeholder in PLACEHOLDER_PATTERNS:
+            # 整行内容就是占位符(或占位符+少量标点)
+            if content == placeholder or content.strip('.,;:!?') == placeholder:
+                if placeholder not in found_standalone_placeholders:
+                    found_standalone_placeholders.append(placeholder)
+    
+    if found_standalone_placeholders:
         blocking_reasons.append(
-            f"PLACEHOLDER_DETECTED: {field_name} 包含占位符: {', '.join(found_placeholders)}。"
+            f"PLACEHOLDER_DETECTED: {field_name} 包含占位符: {', '.join(found_standalone_placeholders)}。"
             f"出口: 将 {field_name} 中所有占位符替换为实际内容。"
         )
     return blocking_reasons
