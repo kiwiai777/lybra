@@ -282,5 +282,46 @@ def test_branch_pattern_missing_raises_error(tmp_repo: Path):
     assert "可执行出口" in error_msg
 
 
+def test_queue_path_missing_raises_error(tmp_repo: Path):
+    """验证：queue.path 声明缺失时 raise 报错（fail-closed），禁静默回退写死值。"""
+    from tools.aipos_cli.machine_zone import derive_machine_zone_fields
+    
+    # Remove queue.path from schema
+    config_schema_path = tmp_repo / "schema" / "config.schema.json"
+    config = json.loads(config_schema_path.read_text())
+    del config["governance_structure"]["paths"]["queue"]["path"]
+    config_schema_path.write_text(json.dumps(config, indent=2))
+    
+    # Should raise ValueError with actionable message
+    metadata = {"task_id": "TEST-001", "created_by": "advisor.test"}
+    with pytest.raises(ValueError) as exc_info:
+        derive_machine_zone_fields(metadata, tmp_repo)
+    
+    error_msg = str(exc_info.value)
+    assert "queue.path" in error_msg
+    assert "声明缺失" in error_msg
+    assert "可执行出口" in error_msg
+
+
+def test_task_cards_path_missing_raises_error(tmp_repo: Path):
+    """验证：task_cards.path 声明缺失时 raise 报错（fail-closed），禁静默回退写死值。"""
+    from tools.aipos_cli.machine_zone import derive_machine_zone_纪律段
+    from tools.schema_loader import SchemaLoadError
+    
+    # Remove task_cards from schema
+    config_schema_path = tmp_repo / "schema" / "config.schema.json"
+    config = json.loads(config_schema_path.read_text())
+    del config["governance_structure"]["paths"]["task_cards"]
+    config_schema_path.write_text(json.dumps(config, indent=2))
+    
+    # Should raise SchemaLoadError (from schema_loader.resolve_governance_path)
+    metadata = {"task_id": "TEST-001", "created_by": "advisor.test"}
+    with pytest.raises(SchemaLoadError) as exc_info:
+        derive_machine_zone_纪律段("TEST-001", metadata, tmp_repo)
+    
+    error_msg = str(exc_info.value)
+    assert "task_cards" in error_msg
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

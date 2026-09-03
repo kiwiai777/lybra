@@ -67,8 +67,17 @@ def derive_machine_zone_fields(
     
     if "draft_publish_target" in machine_fields:
         # Read queue path from config.schema governance_structure.paths (single source)
-        # Always return relative path (not absolute) for consistency with legacy behavior
-        machine["draft_publish_target"] = "5_tasks/queue/pending/"
+        # Fail-closed: schema declaration missing → raise with actionable exit
+        from tools.schema_loader import get_governance_path
+        queue_path_entry = get_governance_path("queue", repo_root)
+        queue_relative = queue_path_entry.get("path")
+        if not queue_relative:
+            raise ValueError(
+                "config.schema.json governance_structure.paths.queue.path 声明缺失。"
+                "可执行出口: 在 schema 中声明 queue.path (如 '5_tasks/queue/')"
+            )
+        # Append pending/ subdirectory
+        machine["draft_publish_target"] = queue_relative.rstrip("/") + "/pending/"
     
     return machine
 
@@ -114,13 +123,10 @@ def derive_machine_zone_纪律段(
         lines.append("- **工作起点**: 从当前 main 拉取")
         
         # Read report path from config.schema governance_structure.paths (single source)
-        try:
-            task_cards_root = resolve_governance_path("task_cards", repo_root, repo_root)
-            report_path = task_cards_root / task_id / "RETURN.md"
-            lines.append(f"- **报告落点**: `{report_path}` (读自 config.schema governance_structure.paths.task_cards)")
-        except Exception:
-            # Fallback if path resolution fails
-            lines.append(f"- **报告落点**: `task_cards/{task_id}/RETURN.md`")
+        # Fail-closed: path resolution fails → raise with actionable exit
+        task_cards_root = resolve_governance_path("task_cards", repo_root, repo_root)
+        report_path = task_cards_root / task_id / "RETURN.md"
+        lines.append(f"- **报告落点**: `{report_path}` (读自 config.schema governance_structure.paths.task_cards)")
         
         lines.append("- **治理仓**: 永远停在 main 分支，不 commit")
         lines.append("- **写完停手**: 等待托管/审计，不自行 push")
@@ -128,11 +134,6 @@ def derive_machine_zone_纪律段(
     except ValueError:
         # Re-raise ValueError (fail-closed: schema declaration missing)
         raise
-    except Exception:
-        # If schema reading fails for other reasons, provide minimal fallback
-        lines.append("## 工作纪律")
-        lines.append("")
-        lines.append("- 分支与报告路径由 schema 声明，请检查 schema 配置")
     
     return "\n".join(lines)
 
