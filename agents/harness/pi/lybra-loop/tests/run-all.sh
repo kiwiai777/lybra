@@ -380,6 +380,34 @@ else
   overall=1
 fi
 
+# AIPOS-F65C: 卫生杂项三件(坏frontmatter修复·封存连接器剔除·未知子命令出声·占位符检测改进)
+echo
+echo "── tests/test_f65c_frontmatter_repair.py (件① 坏frontmatter修复通路) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_f65c_frontmatter_repair.py"; then
+  echo "✓ tests/test_f65c_frontmatter_repair.py PASS"
+else
+  echo "✗ tests/test_f65c_frontmatter_repair.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_f65c_unknown_subcommand.py (件③ 未知子命令出声) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_f65c_unknown_subcommand.py"; then
+  echo "✓ tests/test_f65c_unknown_subcommand.py PASS"
+else
+  echo "✗ tests/test_f65c_unknown_subcommand.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_f65c_placeholder_detection.py (件④ 占位符检测改进) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_f65c_placeholder_detection.py"; then
+  echo "✓ tests/test_f65c_placeholder_detection.py PASS"
+else
+  echo "✗ tests/test_f65c_placeholder_detection.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F58: 工位私有状态自我保护(git exclude 登记, 防 `git stash -u` 连坐抹凭据)
 echo
 echo "── tools/aipos_cli/tests/test_aipos_f58_git_exclude.py (工位 git exclude 保护) ──────────────────────────────────────────"

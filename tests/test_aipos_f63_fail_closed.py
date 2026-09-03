@@ -24,20 +24,46 @@ class TestPlaceholderDetection:
             assert pattern in PLACEHOLDER_PATTERNS, f"Missing placeholder: {pattern}"
     
     def test_detect_placeholder_in_text(self):
-        """验证能检测文本中的占位符"""
-        text = "这是一个(待填写)的文本"
-        reasons = check_placeholder_in_text(text, "test_field")
+        """AIPOS-F65C 件④ 行为变更:占位符须独占一行才拦截
+        
+        旧判据(F63):任意出现即中 → 引用描述也拦
+        新判据(F65C 件④):独占一行/节内容仅为占位符才中 → 引用描述不拦
+        """
+        # 引用描述:不拦截
+        text_with_reference = "这是一个(待填写)的文本"
+        reasons = check_placeholder_in_text(text_with_reference, "test_field")
+        assert len(reasons) == 0, "引用描述中的占位符不应被拦截"
+        
+        # 独占一行:拦截
+        text_standalone = "(待填写)"
+        reasons = check_placeholder_in_text(text_standalone, "test_field")
         assert len(reasons) == 1
         assert "PLACEHOLDER_DETECTED" in reasons[0]
         assert "(待填写)" in reasons[0]
     
     def test_detect_multiple_placeholders(self):
-        """验证能检测多个占位符"""
-        text = "TODO: 实现这个功能 FIXME: 修复 bug"
-        reasons = check_placeholder_in_text(text, "test_field")
+        """AIPOS-F65C 件④ 行为变更:占位符须独占一行才拦截
+        
+        旧判据:TODO/FIXME 出现在描述句中即中
+        新判据:须独占一行才中
+        """
+        # 描述句中:不拦截
+        text_in_sentence = "TODO: 实现这个功能 FIXME: 修复 bug"
+        reasons = check_placeholder_in_text(text_in_sentence, "test_field")
+        assert len(reasons) == 0, "描述句中的 TODO/FIXME 不应被拦截"
+        
+        # 独占行:拦截
+        text_standalone = """## 待办
+
+TODO
+
+## 修复
+
+FIXME
+"""
+        reasons = check_placeholder_in_text(text_standalone, "test_field")
         assert len(reasons) == 1
-        assert "TODO" in reasons[0]
-        assert "FIXME" in reasons[0]
+        assert "TODO" in reasons[0] or "FIXME" in reasons[0]
     
     def test_no_placeholder_passes(self):
         """验证无占位符时通过"""

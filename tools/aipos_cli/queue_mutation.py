@@ -275,6 +275,136 @@ def _prepare_withdraw(metadata: dict[str, Any], actor: str, timestamp: str, reas
     )
 
 
+def repair_bad_frontmatter(
+    repo_root: Path,
+    task_id: str,
+    actor: str,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """AIPOS-F65C 件①: 修复坏 frontmatter YAML(最小修复通路)。
+    
+    策略:读取原始文本,定位 frontmatter,修复常见 YAML 错误(未引号的 ** 等),
+    写回并记录 amendment。容忍坏 frontmatter,不依赖完整解析。
+    """
+    from tools.aipos_cli.task_loader import find_task_by_id
+    import re
+    
+    result = {
+        "operation": "repair_frontmatter",
+        "task_id": task_id,
+        "actor": actor,
+        "dry_run": dry_run,
+        "repairs_made": [],
+        "verdict": "OK",
+    }
+    
+    # 找到任务卡文件(不依赖 frontmatter 解析)
+    task_path = None
+    queue_states = ["pending", "claimed", "blocked", "completed", "withdrawn"]
+    for state in queue_states:
+        candidate = repo_root / "5_tasks" / "queue" / state / f"{task_id.lower()}.md"
+        if candidate.exists():
+            task_path = candidate
+            break
+    
+    if not task_path:
+        result["verdict"] = "BLOCK"
+        result["blocking_reasons"] = [f"Task file not found for {task_id}"]
+        return result
+    
+    # 读取原始内容
+    try:
+        original_text = task_path.read_text(encoding="utf-8")
+    except Exception as e:
+        result["verdict"] = "BLOCK"
+        result["blocking_reasons"] = [f"Failed to read task file: {e}"]
+        return result
+    
+    # 定位 frontmatter 边界
+    lines = original_text.split("\n")
+    if not lines or not lines[0].strip() == "---":
+        result["verdict"] = "BLOCK"
+        result["blocking_reasons"] = ["No frontmatter start delimiter found"]
+        return result
+    
+    end_index = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end_index = i
+            break
+    
+    if end_index is None:
+        result["verdict"] = "BLOCK"
+        result["blocking_reasons"] = ["No frontmatter end delimiter found"]
+        return result
+    
+    # 修复 frontmatter 中的常见 YAML 错误
+    repaired_lines = []
+    for i in range(1, end_index):
+        line = lines[i]
+        original_line = line
+        
+        # 修复未引号的 ** (Markdown 加粗标记,YAML 中是别名语法)
+        # 策略1: 列表项值中如果包含 ** 且未被引号包围,则用单引号包围整个值
+        if line.strip().startswith("-") and "**" in line:
+            # 列表项: - 'value with **'
+            match = re.match(r"^(\s*-\s+)(.*)$", line)
+            if match:
+                indent_and_dash = match.group(1)
+                value = match.group(2)
+                # 如果值未被引号包围且包含 **,用单引号包围
+                if not (value.startswith(("'", '"')) and value.endswith(("'", '"'))):
+                    # 转义单引号
+                    escaped_value = value.replace("'", "''")
+                    line = f"{indent_and_dash}'{escaped_value}'"
+                    result["repairs_made"].append(f"Line {i+1}: quoted value with ** in list item")
+        
+        # 策略2: 键值对中如果值以 ** 开头且未被引号包围,则用单引号包围
+        elif ":" in line and "**" in line:
+            match = re.match(r"^([^:]+):\s*(.*)$", line)
+            if match:
+                key = match.group(1)
+                value = match.group(2)
+                # 如果值非空且未被引号包围且包含 **,用单引号包围
+                if value and not (value.startswith(("'", '"')) and value.endswith(("'", '"'))):
+                    # 转义单引号
+                    escaped_value = value.replace("'", "''")
+                    line = f"{key}: '{escaped_value}'"
+                    result["repairs_made"].append(f"Line {i+1}: quoted value with ** in key-value pair")
+        
+        repaired_lines.append(line)
+    
+    if not result["repairs_made"]:
+        result["verdict"] = "OK"
+        result["message"] = "No repairs needed (frontmatter appears valid)"
+        return result
+    
+    # 构建修复后的内容
+    repaired_text = "\n".join(
+        [lines[0]] + repaired_lines + lines[end_index:]
+    )
+    
+    result["repairs_count"] = len(result["repairs_made"])
+    
+    if not dry_run:
+        # 写回修复后的文件
+        try:
+            task_path.write_text(repaired_text, encoding="utf-8")
+            result["file_written"] = str(task_path)
+            
+            # 记录 amendment
+            amendment_note = f"AIPOS-F65C frontmatter repair by {actor}: {len(result['repairs_made'])} fix(es) applied"
+            result["amendment_note"] = amendment_note
+            # TODO: 如果需要,可以在这里调用 amendment 记录函数
+            
+        except Exception as e:
+            result["verdict"] = "BLOCK"
+            result["blocking_reasons"] = [f"Failed to write repaired file: {e}"]
+            return result
+    
+    return result
+
+
 def _mutation_metadata(
     action: str,
     metadata: dict[str, Any],

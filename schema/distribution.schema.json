@@ -43,25 +43,7 @@
     ]
   },
   "distributions": [
-    {
-      "distribution_id": "executor-loop-extension",
-      "kind": "extension",
-      "description": "Lybra loop connector extension for executor role",
-      "source": {
-        "repo": "lybra",
-        "path": "agents/harness/pi/lybra-loop"
-      },
-      "target": {
-        "harness": "pi",
-        "relative_path": "_distributed/extensions/lybra-loop"
-      },
-      "applies_to_roles": [
-        "executor"
-      ],
-      "operation": "copy_tree",
-      "version_strategy": "git_commit_hash",
-      "notes": "Main loop connector - unified for all roles that run loops"
-    },
+
     {
       "distribution_id": "executor-skills",
       "kind": "skills",
@@ -90,25 +72,7 @@
       "version_strategy": "git_commit_hash",
       "notes": "Filtered skill set per role requirements from roles.schema.json"
     },
-    {
-      "distribution_id": "auditor-loop-extension",
-      "kind": "extension",
-      "description": "Lybra loop connector extension for auditor role",
-      "source": {
-        "repo": "lybra",
-        "path": "agents/harness/pi/lybra-loop"
-      },
-      "target": {
-        "harness": "pi",
-        "relative_path": "_distributed/extensions/lybra-loop"
-      },
-      "applies_to_roles": [
-        "auditor"
-      ],
-      "operation": "copy_tree",
-      "version_strategy": "git_commit_hash",
-      "notes": "Same loop connector, role-specific behavior via token scopes"
-    },
+
     {
       "distribution_id": "auditor-skills",
       "kind": "skills",
@@ -137,25 +101,7 @@
       "version_strategy": "git_commit_hash",
       "notes": "Auditor-specific skill set"
     },
-    {
-      "distribution_id": "advisor-loop-extension",
-      "kind": "extension",
-      "description": "Lybra loop connector extension for advisor role",
-      "source": {
-        "repo": "lybra",
-        "path": "agents/harness/pi/lybra-loop"
-      },
-      "target": {
-        "harness": "pi",
-        "relative_path": "_distributed/extensions/lybra-loop"
-      },
-      "applies_to_roles": [
-        "advisor"
-      ],
-      "operation": "copy_tree",
-      "version_strategy": "git_commit_hash",
-      "notes": "Advisor uses same loop infrastructure"
-    },
+
     {
       "distribution_id": "advisor-skills",
       "kind": "skills",
@@ -296,11 +242,6 @@
       "distributed_at": "2026-08-12T13:45:00Z",
       "distributions": [
         {
-          "distribution_id": "executor-loop-extension",
-          "source_commit": "b0d056e",
-          "target_path": "_distributed/extensions/lybra-loop"
-        },
-        {
           "distribution_id": "executor-skills",
           "source_commit": "b0d056e",
           "target_path": "_distributed/skills"
@@ -398,12 +339,6 @@
         "kind": "file",
         "path": ".pi/extensions/claim.ts",
         "description": "Claim extension mount — relative symlink to ../../../_shared/extensions/claim.ts"
-      },
-      {
-        "name": ".pi/extensions/lybra-loop.ts",
-        "kind": "file",
-        "path": ".pi/extensions/lybra-loop.ts",
-        "description": "Loop extension mount — REAL forwarding file (NOT a symlink: multi-file extensions lose sibling modules through symlinks)"
       },
       {
         "name": ".pi/skills/",

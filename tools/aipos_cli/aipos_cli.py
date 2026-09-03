@@ -1345,6 +1345,13 @@ def build_parser() -> argparse.ArgumentParser:
     queue_return_repair_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     queue_return_repair_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-F65C 件①: queue repair subcommand (repair bad frontmatter YAML)
+    queue_repair_parser = queue_subparsers.add_parser("repair", help="AIPOS-F65C: Repair bad frontmatter in task card (minimal fix for unparseable YAML)")
+    queue_repair_parser.add_argument("--task-id", required=True, help="Task ID to repair")
+    queue_repair_parser.add_argument("--actor", required=True, help="Actor performing the repair")
+    queue_repair_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    queue_repair_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     # AIPOS-FND-1: queue return subcommand (same-machine task return)
     queue_return_parser = queue_subparsers.add_parser("return", help="Return completed task (same-machine)")
     queue_return_parser.add_argument("--task-id", required=True, help="Task ID to return")
@@ -4188,6 +4195,27 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_json(diagnosis))
         return 1 if diagnosis.get("verdict") == Verdict.BLOCK else 0
+
+    if args.command == "queue" and getattr(args, "queue_command", None) == "repair":
+        # AIPOS-F65C 件①: repair bad frontmatter
+        from tools.aipos_cli.queue_mutation import repair_bad_frontmatter
+        
+        try:
+            result = repair_bad_frontmatter(
+                repo_root=repo_root,
+                task_id=args.task_id,
+                actor=args.actor,
+                dry_run=args.dry_run,
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        
+        if args.json:
+            print(render_json(result))
+        else:
+            print(render_json(result))
+        return 1 if result.get("verdict") == "BLOCK" else 0
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "return":
         # AIPOS-FND-1: queue return — wrap board_adapter.return_task
