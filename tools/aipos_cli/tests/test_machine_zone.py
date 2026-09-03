@@ -261,5 +261,26 @@ def test_no_hardcoded_paths_in_machine_zone():
         )
 
 
+def test_branch_pattern_missing_raises_error(tmp_repo: Path):
+    """验证：branch_pattern 声明缺失时 raise 报错（fail-closed），禁静默回退写死值。"""
+    from tools.aipos_cli.machine_zone import derive_machine_zone_纪律段
+    
+    # Remove branch_pattern from schema
+    transitions_schema_path = tmp_repo / "schema" / "transitions.schema.json"
+    transitions = json.loads(transitions_schema_path.read_text())
+    del transitions["nodes"]["N5"]["branch_integration"]["branch_pattern"]
+    transitions_schema_path.write_text(json.dumps(transitions, indent=2))
+    
+    # Should raise ValueError with actionable message
+    metadata = {"task_id": "TEST-001", "created_by": "advisor.test"}
+    with pytest.raises(ValueError) as exc_info:
+        derive_machine_zone_纪律段("TEST-001", metadata, tmp_repo)
+    
+    error_msg = str(exc_info.value)
+    assert "branch_pattern" in error_msg
+    assert "声明缺失" in error_msg
+    assert "可执行出口" in error_msg
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -99,7 +99,12 @@ def derive_machine_zone_纪律段(
     # Read branch integration from transitions.schema (single source)
     try:
         branch_integration = get_branch_integration(repo_root)
-        branch_pattern = branch_integration.get("branch_pattern", "card/{task_id}")
+        branch_pattern = branch_integration.get("branch_pattern")
+        if not branch_pattern:
+            raise ValueError(
+                "transitions.schema.json N5.branch_integration.branch_pattern 声明缺失。"
+                "可执行出口: 在 schema 中声明 branch_pattern (如 'card/{task_id}')"
+            )
         # Substitute {task_id} placeholder
         branch_name = branch_pattern.replace("{task_id}", task_id)
         
@@ -120,8 +125,11 @@ def derive_machine_zone_纪律段(
         lines.append("- **治理仓**: 永远停在 main 分支，不 commit")
         lines.append("- **写完停手**: 等待托管/审计，不自行 push")
         
+    except ValueError:
+        # Re-raise ValueError (fail-closed: schema declaration missing)
+        raise
     except Exception:
-        # If schema reading fails, provide minimal fallback
+        # If schema reading fails for other reasons, provide minimal fallback
         lines.append("## 工作纪律")
         lines.append("")
         lines.append("- 分支与报告路径由 schema 声明，请检查 schema 配置")
