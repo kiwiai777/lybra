@@ -370,6 +370,16 @@ else
   overall=1
 fi
 
+# AIPOS-F65A-fix2: PreAuthorized一段式认领骨架创建(主路接入)
+echo
+echo "── tests/test_aipos_f65a_fix2_preauthorized_skeleton.py (PreAuthorized一段式骨架) ──────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f65a_fix2_preauthorized_skeleton.py"; then
+  echo "✓ tests/test_aipos_f65a_fix2_preauthorized_skeleton.py PASS"
+else
+  echo "✗ tests/test_aipos_f65a_fix2_preauthorized_skeleton.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F58: 工位私有状态自我保护(git exclude 登记, 防 `git stash -u` 连坐抹凭据)
 echo
 echo "── tools/aipos_cli/tests/test_aipos_f58_git_exclude.py (工位 git exclude 保护) ──────────────────────────────────────────"
