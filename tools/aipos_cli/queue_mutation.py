@@ -787,6 +787,21 @@ def mutate_queue_task(
             update_records = [("session", record_id, markdown_content)]
             write_result = write_records_atomic(repo_root, update_records)
             item["updated"] = write_result["ok"]
+        
+        # AIPOS-F65A-fix2: Create RETURN.md skeleton for claim actions
+        if action == RecordType.CLAIM:
+            from tools.aipos_cli.board_adapter import _create_return_skeleton
+            task_id_for_skeleton = str(updated_metadata.get("task_id", "")).strip()
+            if task_id_for_skeleton:
+                try:
+                    skeleton_result = _create_return_skeleton(repo_root, task_id_for_skeleton)
+                    if skeleton_result:
+                        # Record the skeleton creation (informational, doesn't block)
+                        result["skeleton_created"] = True
+                        result["skeleton_path"] = skeleton_result["path"]
+                except Exception as skeleton_exc:
+                    # Skeleton creation failure blocks claim (fail-closed)
+                    raise skeleton_exc
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(rendered_markdown, encoding="utf-8")

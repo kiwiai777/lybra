@@ -1960,6 +1960,50 @@ def _mcp_claim_record_plan(
     }
 
 
+def _create_return_skeleton(repo_root: Path, task_id: str) -> dict[str, Any] | None:
+    """Create RETURN.md skeleton at declared path (AIPOS-F65A-fix2 单一实现点).
+    
+    Args:
+        repo_root: Repository root (governance workspace root)
+        task_id: Task ID (for RETURN.md skeleton creation)
+        
+    Returns:
+        dict with path, record_type, wrote if skeleton was created; None if already exists
+        
+    Raises:
+        RuntimeError: If path resolution fails (fail-closed semantic)
+    """
+    from tools.aipos_cli.record_writer import build_return_skeleton_markdown
+    from tools.schema_loader import resolve_governance_path
+    
+    try:
+        task_cards_root = resolve_governance_path("task_cards", repo_root, repo_root)
+        task_card_dir = task_cards_root / task_id
+        return_skeleton_path = task_card_dir / "RETURN.md"
+        
+        # Only create if doesn't exist (idempotent)
+        if not return_skeleton_path.exists():
+            task_card_dir.mkdir(parents=True, exist_ok=True)
+            skeleton_content = build_return_skeleton_markdown(task_id)
+            return_skeleton_path.write_text(skeleton_content, encoding="utf-8")
+            
+            # Record the skeleton creation
+            rel_path = str(return_skeleton_path.relative_to(repo_root))
+            return {
+                "path": rel_path,
+                "record_type": "return_skeleton",
+                "wrote": True
+            }
+        return None
+    except Exception as exc:
+        # AIPOS-F65A: fail-closed - 路径解析失败即阻断 claim 并出声给出口
+        # transitions.schema 已声明 fail_closed: "Path resolution failure blocks claim (skeleton creation is not optional)"
+        raise RuntimeError(
+            f"RETURN_SKELETON_PATH_RESOLUTION_FAILED: 无法创建 RETURN.md 骨架 - 路径解析失败: {exc}。"
+            f"出口: 检查 config.schema.json governance_structure.paths.task_cards 配置是否正确。"
+        ) from exc
+
+
 def _write_mcp_claim_records(repo_root: Path, record_plan: dict[str, Any], task_id: str | None = None) -> list[dict[str, Any]]:
     """Write claim records and optionally create RETURN.md skeleton (AIPOS-F65A 大项①).
     
@@ -1971,9 +2015,6 @@ def _write_mcp_claim_records(repo_root: Path, record_plan: dict[str, Any], task_
     Returns:
         List of performed writes
     """
-    from tools.aipos_cli.record_writer import build_return_skeleton_markdown
-    from tools.schema_loader import resolve_governance_path
-    
     performed: list[dict[str, Any]] = []
     
     # Write claim/session records
@@ -1983,33 +2024,11 @@ def _write_mcp_claim_records(repo_root: Path, record_plan: dict[str, Any], task_
         path.write_text(str(preview.get("rendered_markdown") or ""), encoding="utf-8")
         performed.append({"path": str(preview.get("path")), "record_type": preview.get("record_type"), "wrote": True})
     
-    # AIPOS-F65A 大项①: Create RETURN.md skeleton at declared path
+    # AIPOS-F65A-fix2: Create RETURN.md skeleton via shared function
     if task_id:
-        try:
-            task_cards_root = resolve_governance_path("task_cards", repo_root, repo_root)
-            task_card_dir = task_cards_root / task_id
-            return_skeleton_path = task_card_dir / "RETURN.md"
-            
-            # Only create if doesn't exist (idempotent)
-            if not return_skeleton_path.exists():
-                task_card_dir.mkdir(parents=True, exist_ok=True)
-                skeleton_content = build_return_skeleton_markdown(task_id)
-                return_skeleton_path.write_text(skeleton_content, encoding="utf-8")
-                
-                # Record the skeleton creation
-                rel_path = str(return_skeleton_path.relative_to(repo_root))
-                performed.append({
-                    "path": rel_path,
-                    "record_type": "return_skeleton",
-                    "wrote": True
-                })
-        except Exception as exc:
-            # AIPOS-F65A: fail-closed - 路径解析失败即阻断 claim 并出声给出口
-            # transitions.schema 已声明 fail_closed: "Path resolution failure blocks claim (skeleton creation is not optional)"
-            raise RuntimeError(
-                f"RETURN_SKELETON_PATH_RESOLUTION_FAILED: 无法创建 RETURN.md 骨架 - 路径解析失败: {exc}。"
-                f"出口: 检查 config.schema.json governance_structure.paths.task_cards 配置是否正确。"
-            ) from exc
+        skeleton_result = _create_return_skeleton(repo_root, task_id)
+        if skeleton_result:
+            performed.append(skeleton_result)
     
     return performed
 
