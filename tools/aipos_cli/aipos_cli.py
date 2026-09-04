@@ -1970,6 +1970,13 @@ def build_parser() -> argparse.ArgumentParser:
     governance_commit_parser.add_argument("--dry-run", action="store_true", help="Validate without committing")
     governance_commit_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-F67: lybra brief — 顾问真相派生(冷启动简报算出来,不写出来)
+    brief_parser = subparsers.add_parser("brief", help="AIPOS-F67: 冷启动简报(阶段坐标+增量真相+在途三查+契约清单+新鲜度)")
+    brief_parser.add_argument("--workspace-root", help="Governance workspace root; defaults to current directory")
+    brief_parser.add_argument("--repo-root", help="Product repo root (for schema resolution); defaults to auto-detection")
+    brief_parser.add_argument("--since", help="Only show decisions since this date (YYYY-MM-DD)")
+    brief_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     # AIPOS-A1 大项A: governance add 子命令族(产生侧治理写入 CLI)
     governance_parser = subparsers.add_parser("governance", help="AIPOS-A1: 治理文件操作(产生侧写入 CLI, 声明驱动)")
     governance_subparsers = governance_parser.add_subparsers(dest="governance_command")
@@ -3398,6 +3405,30 @@ def main(argv: list[str] | None = None) -> int:
                 print("操作失败,请查看错误信息")
         
         return 0 if result['verdict'] == Verdict.PASS else 1
+
+    if args.command == "brief":
+        # AIPOS-F67: lybra brief — 顾问真相派生(冷启动简报算出来,不写出来)
+        from tools.aipos_cli.brief import run_brief
+
+        # 遵循全局 --workspace-root 取参路径 (R6L: 同名参数全动词统一语义)
+        # 全局位 > 子命令位 > None
+        workspace_root = getattr(args, "global_workspace_root", None) or getattr(args, "workspace_root", None)
+        if workspace_root:
+            workspace_root = Path(workspace_root).expanduser().resolve()
+        
+        repo_root = getattr(args, "repo_root", None)
+        if repo_root:
+            repo_root = Path(repo_root).expanduser().resolve()
+        
+        output_format = "json" if getattr(args, "json", False) else "text"
+        since = getattr(args, "since", None)
+        
+        return run_brief(
+            workspace_root=workspace_root,
+            repo_root=repo_root,
+            output_format=output_format,
+            since=since,
+        )
 
     if args.command == "governance":
         # AIPOS-A1 大项A: governance add 子命令族(产生侧治理写入 CLI)

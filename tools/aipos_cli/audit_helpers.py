@@ -5,7 +5,7 @@ AIPOS-R6C: Renamed from audit_verdict_helper.py to audit_helpers.py for neutral 
 审计 pi 自发现身份（从 LoopContext/自发现）→ dry_run → confirm → verdict record 落库。
 参数从 LoopContext 出，审计 pi 不再要 GateClient snippet。
 
-设计权威: LOOP-REDESIGN v2 §2 N4 (审计自助, 收编FND-15)
+设计权威: DESIGN v2 §2 N4 (审计自助, 收编FND-15)
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from tools.loop_context import ConnectionResolver, LoopContext
 def derive_audit_task_id(reviewed_task_id: str, repo_root: Path | None = None) -> str | None:
     """AIPOS-SMOKE-LOOP-1 FIX (坑①): 由被审任务 ID 派生审计 R 卡 task_id。
 
-    CLI `--audit-task-id` 标可选但 gate 动词必填 (HAZARD-LEDGER 08-12 行11)。
+    CLI `--audit-task-id` 标可选但 gate 动词必填 (LEDGER 08-12 行11)。
     约定:审计 R 卡 task_id 形如 ``{reviewed}R`` / ``{reviewed}R1`` 等,且
     frontmatter ``derived_from == reviewed_task_id`` (gate 派生时盖章)。
     本函数查治理队列找唯一匹配的 R 卡;拿不准(0 或 >1 命中)返回 None,让 CLI 响亮报错。

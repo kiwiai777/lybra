@@ -212,7 +212,7 @@ def validate_draft_metadata(
     # AIPOS-SMOKE-LOOP-1 / R4A F-1 同款修复: schema 单一源在产品仓 (schema/),
     # 绝不能随本函数的 repo_root(发卡时=governance 项目根,无 schema/)去解析 →
     # FileNotFoundError。schema_loader.* 默认 repo_root=None 自动定位产品仓
-    # (LOOP-REDESIGN v2 §5/§6 一机制一实现),这里禁传 repo_root 给任何 schema 查询。
+    # (DESIGN v2 §5/§6 一机制一实现),这里禁传 repo_root 给任何 schema 查询。
     # repo_root 参数仍用于草稿路径/碰撞等 repo-relative 操作,仅 schema 查询剥离它。
     if SCHEMA_AVAILABLE:
         # AIPOS-R8C + AIPOS-C3B 大项C⑥: collect card_policy-declared field names

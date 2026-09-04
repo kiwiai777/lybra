@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "description": "Lybra distribution specification - declarative rules for distributing tools/credentials/config/charters to harness workstations. Per LOOP-REDESIGN v2 §4: distribution WHAT = data (this schema), distribution HOW = fixed primitives (distribute_tools.py engine). New distribution entry = add data row, zero code change. Replaces hardcoded ROLE_TOOL_MAPPING.",
+  "description": "Lybra distribution specification - declarative rules for distributing tools/credentials/config/charters to harness workstations. Per DESIGN v2 §4: distribution WHAT = data (this schema), distribution HOW = fixed primitives (distribute_tools.py engine). New distribution entry = add data row, zero code change. Replaces hardcoded ROLE_TOOL_MAPPING.",
   "last_updated": "2026-08-12",
   "primitives": {
     "description": "Fixed distribution primitives (implemented in distribute_tools.py engine). These are the ONLY operations; plugins/custom code forbidden per §4 design decision (supply-chain + auditability).",

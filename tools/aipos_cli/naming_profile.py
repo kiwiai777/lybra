@@ -44,7 +44,7 @@ def _registry_prefix_mapping() -> dict[str, str]:
     """Build the role→prefix map from the roles registry (single source, AIPOS-R4B-1).
 
     Replaces the previous hardcoded DEFAULT_PREFIX_MAPPING dict. Each registry
-    role's naming.prefix is the prefix (LOOP-REDESIGN v2 §5-6). A role without a
+    role's naming.prefix is the prefix (DESIGN v2 §5-6). A role without a
     prefix is skipped. New role = add naming.prefix to the registry; naming picks
     it up with zero code change.
     """

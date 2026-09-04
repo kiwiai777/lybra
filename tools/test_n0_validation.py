@@ -202,7 +202,7 @@ memory_scope: none
 referenced_files:
 - some/file.txt
 governance_refs:
-- governance/LOOP-REDESIGN.md
+- governance/DESIGN.md
 ---
 # Test Task
 

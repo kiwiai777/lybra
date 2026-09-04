@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AIPOS-C1 大项D: Generate ADVISOR-COMMANDS verb reference from verbs.schema.json.
+"""AIPOS-C1 大项D: Generate COMMANDS verb reference from verbs.schema.json.
 
 This tool generates the verb reference section of the advisor manual from
 the single source of truth (verbs.schema.json). The generated output has a
@@ -9,7 +9,7 @@ Usage:
     python3 tools/generate_advisor_commands.py [--output <path>]
 
 If --output is not specified, prints to stdout.
-The generated content replaces the verb reference section in ADVISOR-COMMANDS.md.
+The generated content replaces the verb reference section in COMMANDS.md.
 """
 from __future__ import annotations
 

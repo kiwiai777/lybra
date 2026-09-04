@@ -1,6 +1,6 @@
 """AIPOS-R5A: Worktree 生命周期管理 — 一个模块一份实现。
 
-设计权威: LOOP-REDESIGN v2 §7 R5
+设计权威: DESIGN v2 §7 R5
 
 每张 code 卡独立 worktree 执行:
 - claim 时为该卡建/用专属 git worktree

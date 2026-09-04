@@ -1,6 +1,6 @@
 """AIPOS-R6S 大项B①: deployment_record — 每次 deploy 落一条机器可核的记录。
 
-设计权威: HAZARD-LEDGER 2026-08-16 (deploy 是当前唯一无 records 的固化点, 已两次"未审先
+设计权威: LEDGER 2026-08-16 (deploy 是当前唯一无 records 的固化点, 已两次"未审先
 deploy") + 迁移门第⑤条(固化点全通 = 每点至少一条真实机器产物)。
 
 record_type=deployment_record (enums.schema 唯一值域源), 落点

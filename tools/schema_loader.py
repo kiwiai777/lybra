@@ -1,6 +1,6 @@
 """Lybra Schema Loader - Single source of truth loader for all schema files.
 
-This is the ONLY schema loading implementation. Per LOOP-REDESIGN v2 §6:
+This is the ONLY schema loading implementation. Per DESIGN v2 §6:
 "一机制一实现总红线" - adding a second schema loader = audit FAIL.
 
 All code (gate, CLI, connectors) must use this loader. Cross-language implementations
@@ -348,7 +348,7 @@ def get_task_mode_routing(task_mode: str, repo_root: Path | None = None) -> dict
 
 
 # ---------------------------------------------------------------------------
-# Role registry accessors (AIPOS-R4B-1 / LOOP-REDESIGN v2 §5-6)
+# Role registry accessors (AIPOS-R4B-1 / DESIGN v2 §5-6)
 # Single source for role category definitions: scopes / tool package / naming.
 # Replaces ROLE_TOOL_MAPPING (distribute), _resolve_role_scopes (gate),
 # DEFAULT_PREFIX_MAPPING (naming_profile), and 20 scattered instance-name literals.
@@ -498,7 +498,7 @@ def get_machine_zone_body_sections(repo_root: Path | None = None) -> list[dict[s
 
 
 # ---------------------------------------------------------------------------
-# Config value accessors (AIPOS-R4B-1 / LOOP-REDESIGN v2 §5-4)
+# Config value accessors (AIPOS-R4B-1 / DESIGN v2 §5-4)
 # Single source for port / URL defaults. Replaces 35 hardcoded 7117/7118 refs.
 # ---------------------------------------------------------------------------
 
