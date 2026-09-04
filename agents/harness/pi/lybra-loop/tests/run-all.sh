@@ -571,6 +571,16 @@ else
   overall=1
 fi
 
+# AIPOS-F67: lybra brief命令实现(零新解析器+fail-closed+冷启动四问)
+echo
+echo "── tests/test_aipos_f67_brief.py (lybra brief冷启动简报) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f67_brief.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f67_brief.py PASS"
+else
+  echo "✗ tests/test_aipos_f67_brief.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
