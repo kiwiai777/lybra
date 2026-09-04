@@ -324,6 +324,9 @@ def _normalized_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         normalized["task_class"] = "simple"
     if normalized.get("complexity_note") in (None, ""):
         normalized.pop("complexity_note", None)
+    
+    # AIPOS-F68: Derive machine zone from schema (single source)
+    # Legacy fields below are kept for backward compatibility during transition
     task_id = normalized.get("task_id")
     created_by = normalized.get("created_by")
     timestamp = _utc_now()
@@ -580,6 +583,47 @@ def publish_draft(
     # AIPOS-276: project-map staleness check (publish gate warning hook)
     # If project-map.md exists and updated > 3 days before most recent return record, warn.
     _check_project_map_staleness(repo_root, validation)
+    
+    # AIPOS-F68 大项②: Machine zone validation - prevent advisor hand-edits
+    # Gracefully degrade if schema not available (存量兼容③)
+    # AIPOS-F68 大项②: Machine zone validation - prevent advisor hand-edits
+    # Backward compatibility: SchemaLoadError (schema declaration missing) → warning (legacy repos)
+    # Other exceptions: re-raise (fail-closed)
+    # Validation failures: block (hand-edited machine zone)
+    try:
+        from tools.aipos_cli.machine_zone import (
+            validate_machine_zone_unchanged,
+            validate_output_target_coverage,
+        )
+        from tools.schema_loader import SchemaLoadError
+        
+        machine_valid, machine_reasons = validate_machine_zone_unchanged(metadata, repo_root)
+        if not machine_valid:
+            for reason in machine_reasons:
+                if reason not in validation["blocking_reasons"]:
+                    validation["blocking_reasons"].append(reason)
+        
+        # AIPOS-F68 大项②: output_target coverage validation
+        anchor_refs = metadata.get("anchor_refs", [])
+        if not isinstance(anchor_refs, list):
+            anchor_refs = []
+        governance_refs = metadata.get("governance_refs", [])
+        if not isinstance(governance_refs, list):
+            governance_refs = []
+        all_refs = anchor_refs + governance_refs
+        
+        coverage_valid, coverage_reasons = validate_output_target_coverage(metadata, all_refs)
+        if not coverage_valid:
+            for reason in coverage_reasons:
+                if reason not in validation["blocking_reasons"]:
+                    validation["blocking_reasons"].append(reason)
+    except SchemaLoadError:
+        # Legacy compatibility: schema declaration missing (存量卡)
+        # Add warning but allow publish to proceed
+        validation["warnings"].append(
+            "机器区声明缺失 (schema 不完整)，存量兼容跳过机器区校验。"
+            "新项目请确保 schema/card.schema.json 包含 machine_zone 声明。"
+        )
     
     result["task_id"] = validation["task_id"]
     result["warnings"] = list(validation["warnings"])

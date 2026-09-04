@@ -543,6 +543,25 @@ else
   overall=1
 fi
 
+# AIPOS-F68: 任务卡机器生成区——schema已定的一律机器派生
+echo
+echo "── tools/aipos_cli/tests/test_machine_zone.py (机器区派生与校验) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_machine_zone.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_machine_zone.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_machine_zone.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tools/aipos_cli/tests/test_machine_zone_integration.py (机器区集成测试) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_machine_zone_integration.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_machine_zone_integration.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_machine_zone_integration.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
