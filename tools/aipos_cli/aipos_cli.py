@@ -3410,7 +3410,9 @@ def main(argv: list[str] | None = None) -> int:
         # AIPOS-F67: lybra brief — 顾问真相派生(冷启动简报算出来,不写出来)
         from tools.aipos_cli.brief import run_brief
 
-        workspace_root = getattr(args, "workspace_root", None)
+        # 遵循全局 --workspace-root 取参路径 (R6L: 同名参数全动词统一语义)
+        # 全局位 > 子命令位 > None
+        workspace_root = getattr(args, "global_workspace_root", None) or getattr(args, "workspace_root", None)
         if workspace_root:
             workspace_root = Path(workspace_root).expanduser().resolve()
         

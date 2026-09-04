@@ -237,5 +237,65 @@ status: pending
     # 完整验证需要捕获 stdout 并解析 JSON，但基本冷启动已覆盖
 
 
+def test_brief_global_workspace_root_flag(tmp_path: Path) -> None:
+    """全局 --workspace-root 参数传递测试（R6L: 同名参数全动词统一语义）。
+    
+    验证全局位和子命令位传参行为一致。
+    """
+    import subprocess
+    import sys
+    
+    gov_root = tmp_path / "governance_workspace"
+    gov_root.mkdir()
+    
+    # 创建最小夹具
+    stage_dir = gov_root / "stage_archive"
+    stage_dir.mkdir()
+    (gov_root / "governance" / "decision_log").mkdir(parents=True)
+    (gov_root / "governance").mkdir(exist_ok=True)
+    
+    tasks_root = gov_root / "5_tasks"
+    queue_dir = tasks_root / "queue"
+    for subdir in ["pending", "claimed"]:
+        (queue_dir / subdir).mkdir(parents=True)
+    
+    records_dir = tasks_root / "records"
+    for record_type in ["claims", "returns", "closures"]:
+        (records_dir / record_type).mkdir(parents=True)
+    
+    # 测试全局位传参: lybra --workspace-root <path> brief --json
+    result_global = subprocess.run(
+        [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "--workspace-root", str(gov_root), "brief", "--json"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).parent.parent,
+    )
+    
+    assert result_global.returncode == 0, f"全局位传参应成功，stderr: {result_global.stderr}"
+    assert "stage" in result_global.stdout, "全局位传参应输出 stage 信息"
+    
+    # 测试子命令位传参: lybra brief --workspace-root <path> --json
+    result_subcommand = subprocess.run(
+        [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "brief", "--workspace-root", str(gov_root), "--json"],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).parent.parent,
+    )
+    
+    assert result_subcommand.returncode == 0, f"子命令位传参应成功，stderr: {result_subcommand.stderr}"
+    assert "stage" in result_subcommand.stdout, "子命令位传参应输出 stage 信息"
+    
+    # 验证两种传参方式输出一致（排除时间戳等动态字段）
+    import json
+    output_global = json.loads(result_global.stdout)
+    output_subcommand = json.loads(result_subcommand.stdout)
+    
+    # 验证关键字段一致
+    assert output_global["queue"]["pending"] == output_subcommand["queue"]["pending"], \
+        "全局位和子命令位传参应产生一致的 queue.pending 值"
+    assert output_global["stage"]["snapshot_count"] == output_subcommand["stage"]["snapshot_count"], \
+        "全局位和子命令位传参应产生一致的 stage.snapshot_count 值"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
