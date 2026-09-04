@@ -68,10 +68,11 @@ def _get_stage_snapshot_info(governance_root: Path, repo_root: Path | None = Non
             "days_since_snapshot": None,
         }
     
-    # 获取所有快照 (排除 README/index)
+    # 获取所有快照 (排除 README/index) - 按 mtime 排序（最新的在最后）
     snapshots = sorted(
-        p for p in stage_dir.glob("*.md")
-        if p.name.lower() not in {"readme.md", "index.md"}
+        (p for p in stage_dir.glob("*.md")
+         if p.name.lower() not in {"readme.md", "index.md"}),
+        key=lambda p: p.stat().st_mtime
     )
     
     if not snapshots:
@@ -87,7 +88,7 @@ def _get_stage_snapshot_info(governance_root: Path, repo_root: Path | None = Non
     
     # 解析 frontmatter
     try:
-        fm, _ = parse_markdown_frontmatter(latest.read_text(encoding="utf-8"))
+        fm, _, _ = parse_markdown_frontmatter(latest.read_text(encoding="utf-8"))
         snapshot_date = fm.get("snapshot_date")
         stage_name = fm.get("stage_name")
     except Exception:
@@ -127,10 +128,15 @@ def _get_decision_log_entries(
     Returns:
         按时间排序的 decision 条目列表, 每项含 {path, frontmatter, decided_at_dt}
     """
-    decision_log_dir = resolve_governance_path("decision_log_dir", governance_root, repo_root)
+    try:
+        decision_log_dir = resolve_governance_path("decision_log_dir", governance_root, repo_root)
+    except Exception as e:
+        # Fail-closed: 路径解析失败
+        raise ValueError(f"decision_log_dir resolution failed: {e}")
     
     if not decision_log_dir.is_dir():
-        return []
+        # Fail-closed: 目录不存在
+        raise ValueError(f"decision_log directory does not exist: {decision_log_dir}")
     
     entries = []
     
@@ -142,7 +148,7 @@ def _get_decision_log_entries(
         for md_file in sorted(month_dir.glob("*.md")):
             try:
                 content = md_file.read_text(encoding="utf-8")
-                fm, body = parse_markdown_frontmatter(content)
+                fm, body, _ = parse_markdown_frontmatter(content)
                 
                 # 解析 decided_at
                 decided_at = fm.get("decided_at")
@@ -191,10 +197,15 @@ def _get_governance_docs(governance_root: Path, repo_root: Path | None = None) -
     Returns:
         治理文档列表, 每项含 {path, name, status, jurisdiction, conflicts}
     """
-    governance_docs_dir = resolve_governance_path("governance_docs", governance_root, repo_root)
+    try:
+        governance_docs_dir = resolve_governance_path("governance_docs", governance_root, repo_root)
+    except Exception as e:
+        # Fail-closed: 路径解析失败
+        raise ValueError(f"governance_docs resolution failed: {e}")
     
     if not governance_docs_dir.is_dir():
-        return []
+        # Fail-closed: 目录不存在
+        raise ValueError(f"governance_docs directory does not exist: {governance_docs_dir}")
     
     docs = []
     
@@ -204,7 +215,7 @@ def _get_governance_docs(governance_root: Path, repo_root: Path | None = None) -
         
         try:
             content = md_file.read_text(encoding="utf-8")
-            fm, body = parse_markdown_frontmatter(content)
+            fm, body, _ = parse_markdown_frontmatter(content)
             
             status = fm.get("status", "").lower()
             jurisdiction = fm.get("jurisdiction", "")
@@ -241,6 +252,36 @@ def _get_governance_docs(governance_root: Path, repo_root: Path | None = None) -
     return active_docs
 
 
+def _resolve_nested_governance_path(key: str, governance_root: Path, repo_root: Path | None = None) -> Path:
+    """解析嵌套 relative_to 的治理路径 (e.g., queue relative_to tasks_root)。
+    
+    resolve_governance_path 只支持一层 relative_to governance_root，
+    对于 queue/records/drafts 等需要手动嵌套解析。
+    """
+    from tools.schema_loader import get_governance_structure
+    
+    gs = get_governance_structure(repo_root)
+    paths = gs.get("paths", {})
+    entry = paths.get(key, {})
+    
+    if not entry:
+        raise ValueError(f"Path key '{key}' not found in governance_structure.paths")
+    
+    relative_to = entry.get("relative_to", "governance_root")
+    path_str = str(entry.get("path", "")).strip().strip("/")
+    
+    if not path_str:
+        raise ValueError(f"Path key '{key}' has empty path")
+    
+    # 嵌套解析
+    if relative_to == "governance_root":
+        return governance_root / path_str
+    else:
+        # 递归解析父路径
+        parent_path = _resolve_nested_governance_path(relative_to, governance_root, repo_root)
+        return parent_path / path_str
+
+
 def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     """获取队列摘要 (转调 records.py 读取 queue 状态)。
     
@@ -263,9 +304,34 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> 
     returns = records_data.get("returns", [])
     closures = records_data.get("closures", [])
     
-    # 统计队列状态 (通过扫描 queue 目录)
-    gs = get_governance_structure(repo_root)
-    queue_dir = resolve_governance_path("queue", governance_root, repo_root)
+    # 统计队列状态 (通过扫描 queue 目录) - 使用嵌套路径解析
+    try:
+        queue_dir = _resolve_nested_governance_path("queue", governance_root, repo_root)
+    except Exception as e:
+        # Fail-closed: 路径不存在 → 报错而非返回全零
+        return {
+            "error": f"Queue directory resolution failed: {e}",
+            "pending": None,
+            "claimed": None,
+            "returned": None,
+            "completed": None,
+            "blocked": None,
+            "withdrawn": None,
+            "in_flight": [],
+        }
+    
+    if not queue_dir.exists():
+        # Fail-closed: 目录不存在 → 报错而非返回全零
+        return {
+            "error": f"Queue directory does not exist: {queue_dir}",
+            "pending": None,
+            "claimed": None,
+            "returned": None,
+            "completed": None,
+            "blocked": None,
+            "withdrawn": None,
+            "in_flight": [],
+        }
     
     counts = {}
     for subdir in ["pending", "claimed", "returned", "completed", "blocked", "withdrawn"]:
@@ -284,7 +350,7 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> 
         for card_file in sorted(claimed_dir.glob("*.md")):
             try:
                 content = card_file.read_text(encoding="utf-8")
-                fm, _ = parse_markdown_frontmatter(content)
+                fm, _, _ = parse_markdown_frontmatter(content)
                 task_id = fm.get("task_id")
                 
                 if not task_id:
@@ -397,6 +463,14 @@ def run_brief(
         # 3. 队列摘要
         queue_summary = _get_queue_summary(workspace_root, repo_root)
         
+        # Fail-closed: 检查 queue_summary 是否有错误
+        if "error" in queue_summary:
+            print(f"Error: {queue_summary['error']}", file=sys.stderr)
+            print(f"\nQueue path resolution failed. Please verify:", file=sys.stderr)
+            print(f"  - Workspace root: {workspace_root}", file=sys.stderr)
+            print(f"  - Expected queue structure: <workspace>/5_tasks/queue/", file=sys.stderr)
+            return 1
+        
         # 4. 治理文档清单
         governance_docs = _get_governance_docs(workspace_root, repo_root)
         
@@ -410,7 +484,7 @@ def run_brief(
             result = {
                 "stage": {
                     "latest_snapshot": str(stage_info["latest_snapshot"]) if stage_info["latest_snapshot"] else None,
-                    "snapshot_date": stage_info["snapshot_date"],
+                    "snapshot_date": str(stage_info["snapshot_date"]) if stage_info["snapshot_date"] else None,
                     "stage_name": stage_info["stage_name"],
                     "snapshot_count": stage_info["snapshot_count"],
                     "days_since_snapshot": stage_info["days_since_snapshot"],
@@ -418,7 +492,7 @@ def run_brief(
                 "decisions": [
                     {
                         "path": str(d["path"]),
-                        "decided_at": d["frontmatter"].get("decided_at"),
+                        "decided_at": str(d["frontmatter"].get("decided_at")) if d["frontmatter"].get("decided_at") else None,
                         "status": d["frontmatter"].get("status"),
                         "title": d["path"].stem,
                     }
@@ -460,11 +534,16 @@ def run_brief(
             print()
             
             # 2. 增量真相
-            print(f"【2. 增量真相】(decision_log, 自快照后 active 条目)")
+            print(f"【２. 增量真相】(decision_log, 自快照后 active 条目)")
             if decisions:
                 print(f"  共 {len(decisions)} 条:")
                 for d in decisions[:20]:  # 最多显示 20 条
-                    decided_at = d["frontmatter"].get("decided_at", "")[:10]  # YYYY-MM-DD
+                    decided_at_raw = d["frontmatter"].get("decided_at", "")
+                    # decided_at 可能是字符串或 datetime 对象
+                    if isinstance(decided_at_raw, str):
+                        decided_at = decided_at_raw[:10]  # YYYY-MM-DD
+                    else:
+                        decided_at = str(decided_at_raw)[:10] if decided_at_raw else ""
                     title = d["path"].stem
                     print(f"    - [{decided_at}] {title}")
                 if len(decisions) > 20:
