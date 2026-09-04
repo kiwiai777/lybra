@@ -299,3 +299,52 @@ def test_brief_global_workspace_root_flag(tmp_path: Path) -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_retired_docs_no_references() -> None:
+    """验证已退役文档在代码中无残留引用（AIPOS-F67杀五）。
+    
+    COLD-START.md / project_status.md / roadmap.md 已退役，
+    代码中不应再有引用（测试/历史文档除外）。
+    """
+    import subprocess
+    from pathlib import Path
+    
+    repo_root = Path(__file__).parent.parent
+    
+    # 搜索三个已删文件名的引用
+    retired_files = ["project_status.md", "roadmap.md", "COLD-START.md"]
+    
+    for filename in retired_files:
+        result = subprocess.run(
+            [
+                "grep", "-rn", filename,
+                "--include=*.py",
+                "--include=*.json",
+                "--include=*.ts",
+                "--include=*.js",
+                str(repo_root),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        
+        # 过滤测试文件和文档引用
+        lines = [
+            line for line in result.stdout.splitlines()
+            if not any(excl in line for excl in [
+                "test_aipos_f67",  # 本测试文件
+                ".deploy/",         # 部署归档
+                "/.md:",            # markdown 文档中的引用
+                "decision_log",     # decision_log 中的历史记录
+                "/tests/",          # 测试文件中的夹具数据
+            ])
+        ]
+        
+        assert len(lines) == 0, (
+            f"已退役文档 {filename} 仍有代码引用:\n" + "\n".join(lines[:5])
+        )
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

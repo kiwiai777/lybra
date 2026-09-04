@@ -447,8 +447,6 @@ def governance_paths(project_root: str | Path) -> dict[str, Path]:
     governance = root / "governance"
     return {
         "decision_log": governance / "decision_log.md",
-        "project_status": governance / "project_status.md",
-        "roadmap": governance / "roadmap.md",
         "stage_archive": root / "stage_archive",
         "workspace_artifacts": root / "workspace_artifacts",
     }

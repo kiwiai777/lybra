@@ -579,16 +579,6 @@
         "description": "Append task completion decision to decision log"
       },
       {
-        "file": "governance/project_status.md",
-        "action": "update_section",
-        "description": "Update relevant sections in project status"
-      },
-      {
-        "file": "governance/roadmap.md",
-        "action": "update_section",
-        "description": "Update roadmap if task affects milestones"
-      },
-      {
         "file": "5_tasks/queue/completed/{task_id}.md",
         "action": "move",
         "description": "Move task card to completed queue"

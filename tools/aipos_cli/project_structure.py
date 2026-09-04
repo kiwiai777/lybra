@@ -50,8 +50,6 @@ STANDARD_FIVE_PIECE = [
 # Canonical governance files mapping
 CANONICAL_GOVERNANCE_FILES = {
     "decision_log": "governance/decision_log.md",
-    "project_status": "governance/project_status.md",
-    "roadmap": "governance/roadmap.md",
     "project_map": "governance/project-map.md",
 }
 
@@ -828,7 +826,7 @@ def _build_migration_checklist(
     lines.append("")
     lines.append("1. Review each document above for relevance and currency")
     lines.append("2. Copy/move documents to their target paths as needed")
-    lines.append("3. Update governance files (decision_log, project_status, etc.)")
+    lines.append("3. Update governance files (decision_log, etc.)")
     lines.append("4. Mark items as ✅ done when migration is complete")
     lines.append("")
     lines.append("**Red line:** This import process NEVER deletes source files.")

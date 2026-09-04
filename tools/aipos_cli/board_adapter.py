@@ -104,7 +104,7 @@ HEALTH_NOTICE = "Local module adapter health check only. No CLI runtime bridge, 
 def _verdict_time(v: dict[str, Any]) -> str:
     """Extract verdict timestamp in null-safe manner: verdict_at > timestamp > empty string."""
     return v.get("verdict_at") or v.get("timestamp") or ""
-_GOVERNANCE_DOC_KEYS = ("decision_log", "project_status", "roadmap")
+_GOVERNANCE_DOC_KEYS = ("decision_log",)
 GOVERNANCE_FILES = {key: governance_paths(Path("."))[key].name for key in _GOVERNANCE_DOC_KEYS}
 GOVERNANCE_EXCERPT_CHARS = 12000
 
