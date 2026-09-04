@@ -2,7 +2,7 @@
 
 设计权威: AIPOS-F41 大项A(硬规矩下发工位,单源生成)。
 
-单一真相源: governance/ADVISOR-COMMANDS.md 的 "## 0.5. 硬规矩" 节。
+单一真相源: governance/COMMANDS.md (契约层固化名,AIPOS-F67) 的 "## 0.5. 硬规矩" 节。
 消费方:
   - 章程分发(agents/roles/*/AGENTS.md 红线节追加)
   - 派审注入(audit task card 自带硬规矩提醒)
@@ -16,7 +16,29 @@ from pathlib import Path
 from typing import Any
 
 
-def extract_hard_rules_from_handbook(governance_root: Path) -> dict[str, Any]:
+def _get_commands_handbook_path(governance_root: Path, repo_root: Path | None = None) -> Path:
+    """从 config.schema 契约文档声明获取 COMMANDS.md 路径 (AIPOS-F67 契约层固化)。
+    
+    优先使用声明名 'commands',回退到旧名 'COMMANDS' (兼容存量项目)。
+    """
+    try:
+        from tools.schema_loader import get_governance_structure, resolve_governance_path
+        
+        gs = get_governance_structure(repo_root)
+        gov_docs_entry = gs.get("paths", {}).get("governance_docs", {})
+        files = gov_docs_entry.get("files", {})
+        
+        # 优先使用声明名
+        commands_filename = files.get("commands", "COMMANDS.md")
+        
+        governance_docs_dir = resolve_governance_path("governance_docs", governance_root, repo_root)
+        return governance_docs_dir / commands_filename
+    except Exception:
+        # 回退到旧名 (兼容)
+        return governance_root / "governance" / "COMMANDS.md"
+
+
+def extract_hard_rules_from_handbook(governance_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     """从顾问手册提取硬规矩节内容(单一真相源)。
 
     Returns:
@@ -29,7 +51,7 @@ def extract_hard_rules_from_handbook(governance_root: Path) -> dict[str, Any]:
             "error": str | None,
         }
     """
-    handbook = governance_root / "governance" / "ADVISOR-COMMANDS.md"
+    handbook = _get_commands_handbook_path(governance_root, repo_root)
     if not handbook.is_file():
         return {
             "ok": False,
@@ -95,7 +117,7 @@ def extract_hard_rules_from_handbook(governance_root: Path) -> dict[str, Any]:
     }
 
 
-def extract_diagnostic_checklist_from_handbook(governance_root: Path) -> dict[str, Any]:
+def extract_diagnostic_checklist_from_handbook(governance_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     """从顾问手册提取诊断清单节内容(单一真相源,AIPOS-F41 大项B1)。
 
     Returns:
@@ -109,7 +131,7 @@ def extract_diagnostic_checklist_from_handbook(governance_root: Path) -> dict[st
             "error": str | None,
         }
     """
-    handbook = governance_root / "governance" / "ADVISOR-COMMANDS.md"
+    handbook = _get_commands_handbook_path(governance_root, repo_root)
     if not handbook.is_file():
         return {
             "ok": False,
@@ -228,7 +250,7 @@ def render_hard_rules_for_charter() -> str:
         "",
         "## 🟡 硬规矩(门交互与职责边界 — AIPOS-F41 下发)",
         "",
-        "> **单一真相源**: governance/ADVISOR-COMMANDS.md § 0.5。修改手册 → 章程与派审注入同步跟随。",
+        "> **单一真相源**: governance/COMMANDS.md § 0.5。修改手册 → 章程与派审注入同步跟随。",
         "",
     ]
 
@@ -256,7 +278,7 @@ def render_diagnostic_checklist_for_advisor_skill() -> str:
     lines = [
         "## 阻塞分诊速查(AIPOS-F41 B1 — 30秒定位卡点)",
         "",
-        "> **单一真相源**: governance/ADVISOR-COMMANDS.md § 6.9。修改手册 → 工位技能自动同步。",
+        "> **单一真相源**: governance/COMMANDS.md § 6.9。修改手册 → 工位技能自动同步。",
         "",
     ]
 

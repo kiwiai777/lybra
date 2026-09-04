@@ -1,6 +1,6 @@
 """AIPOS-C4B 大项A③: `lybra sync` — 工位发起 pull 的单机分发闭环。
 
-设计权威: LOOP-REDESIGN v2 §4(分发器 pull-over-单门)+ 本卡大项A。
+设计权威: DESIGN v2 §4(分发器 pull-over-单门)+ 本卡大项A。
 
 红线:
 - **工位发起 pull**, 禁任何 gate/顾问侧 ssh 推送; gate 被动。

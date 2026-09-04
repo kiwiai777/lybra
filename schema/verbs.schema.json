@@ -8,7 +8,7 @@
     "projections": {
       "cli": "tools/aipos_cli/aipos_cli.py — queue subcommands derived from verbs with surface=cli or phase declarations",
       "mcp_response": "tools/mcp_server/tools.py — owner_confirmation_required and client_hint derived from stage_contract.self_confirm_allowed",
-      "manual": "tools/generate_advisor_commands.py — ADVISOR-COMMANDS verb reference section generated from this schema",
+      "manual": "tools/generate_advisor_commands.py — COMMANDS verb reference section generated from this schema",
       "assertion": "tools/test_aipos_c1_surface_consistency.py — validates all projections match this schema"
     }
   },

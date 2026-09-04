@@ -42,7 +42,7 @@ def _build_role_specs_from_registry() -> tuple[dict[str, Any], ...]:
     """Build ROLE_SPECS from the roles registry (single source, AIPOS-R4B-1 / §5-6).
 
     Role category definitions (role / token_ref / scopes) live in
-    schema/roles.schema.json (LOOP-REDESIGN v2 §5-6 角色注册表). service_mode
+    schema/roles.schema.json (DESIGN v2 §5-6 角色注册表). service_mode
     composes them into the cred-minting ROLE_SPECS tuple used by serve-rotate.
     Editing a role's scopes = edit the registry; the change takes effect for BOTH
     gate decisions (mcp_server/tools.py reads the registry via schema_loader) and

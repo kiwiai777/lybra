@@ -1,7 +1,7 @@
 /**
  * AIPOS-R1: LoopContext + ConnectionResolver (TS 实现)
  * 
- * 设计权威: LOOP-REDESIGN v2 §3
+ * 设计权威: DESIGN v2 §3
  * 
  * LoopContext: 解析一次贯穿动词的不可变上下文
  * ConnectionResolver: 连接→token解析器 (precedence: 显式 → env → 自发现)

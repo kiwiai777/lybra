@@ -113,20 +113,33 @@
         "name": "workstation",
         "path": "<session-cwd-upward>/.lybra",
         "authority": "primary",
-        "holds": ["connection.json (gate_url/token)", "role (role/instance/owner_policy_ref)", "actor", "policy"],
+        "holds": [
+          "connection.json (gate_url/token)",
+          "role (role/instance/owner_policy_ref)",
+          "actor",
+          "policy"
+        ],
         "note": "同机多角色各自锚定自己的工位, 禁从治理仓 workspaceRoot 找 .lybra (锚点错 = 同机全解析成同一身份)"
       },
       {
         "name": "machine",
         "path": "~/.lybra/local",
         "authority": "fallback",
-        "holds": ["connection.json (gate_url fallback only)"],
+        "holds": [
+          "connection.json (gate_url fallback only)"
+        ],
         "note": "只在工位级缺失时作回退读; 工位级存在时永不优先。今晨 loop 取到域名 URL 即因读了机器级 → 现为隐式第二源, 此处定死"
       },
       {
         "name": "env",
         "authority": "lowest_override",
-        "holds": ["LYBRA_GATE_URL", "LYBRA_TOKEN", "LYBRA_ACTOR", "LYBRA_OWNER_POLICY_REF", "LYBRA_WORKSPACE_ROOT"],
+        "holds": [
+          "LYBRA_GATE_URL",
+          "LYBRA_TOKEN",
+          "LYBRA_ACTOR",
+          "LYBRA_OWNER_POLICY_REF",
+          "LYBRA_WORKSPACE_ROOT"
+        ],
         "note": "env 仅覆盖, 优先级最低, 不构成权威源"
       }
     ],
@@ -135,16 +148,30 @@
   },
   "identity_resolution": {
     "description": "AIPOS-C2 大项A: 身份/连接配置每个键的解析优先级在此声明 —— config.schema 是身份配置域唯一真相。loader(gate-client loadConfig / ConnectionResolver / loop-context)按此声明解析。总序: 显式参数 > 工位 .lybra (role 文件 + connection.json) > env (仅兜底)。任何必填键解析不到 = 出声并停(报缺哪个键 + 找过哪几层), 禁静默缺省、禁套用无关归因。role 与 actor 必须同源(同一 .lybra/role)。",
-    "precedence": ["explicit", "workstation", "env"],
+    "precedence": [
+      "explicit",
+      "workstation",
+      "env"
+    ],
     "env_fallback_marker": "⚠",
     "keys": {
       "role": {
         "required": true,
         "no_default": true,
         "sources": [
-          { "layer": "explicit", "param": "explicitRole" },
-          { "layer": "workstation", "file": ".lybra/role", "field": "role" },
-          { "layer": "env", "var": "LYBRA_ROLE" }
+          {
+            "layer": "explicit",
+            "param": "explicitRole"
+          },
+          {
+            "layer": "workstation",
+            "file": ".lybra/role",
+            "field": "role"
+          },
+          {
+            "layer": "env",
+            "var": "LYBRA_ROLE"
+          }
         ],
         "note": "旧实现 role=env.LYBRA_ROLE||'executor' 静默缺省 executor → 审计工位自认执行体越界跑 finalize (2026-08-18 台账)。缺省已删除, 解析不到即停。"
       },
@@ -152,19 +179,43 @@
         "required": true,
         "no_default": true,
         "sources": [
-          { "layer": "explicit", "param": "explicitActor" },
-          { "layer": "workstation", "file": ".lybra/role", "field": "instance" },
-          { "layer": "workstation", "file": ".lybra/actor", "field": "(plain text, 兼容旧格式)" },
-          { "layer": "env", "var": "LYBRA_ACTOR" }
+          {
+            "layer": "explicit",
+            "param": "explicitActor"
+          },
+          {
+            "layer": "workstation",
+            "file": ".lybra/role",
+            "field": "instance"
+          },
+          {
+            "layer": "workstation",
+            "file": ".lybra/actor",
+            "field": "(plain text, 兼容旧格式)"
+          },
+          {
+            "layer": "env",
+            "var": "LYBRA_ACTOR"
+          }
         ]
       },
       "agent_instance": {
         "required": true,
         "no_default": true,
         "sources": [
-          { "layer": "explicit", "param": "explicitAgentInstance" },
-          { "layer": "workstation", "file": ".lybra/role", "field": "instance" },
-          { "layer": "env", "var": "LYBRA_AGENT_INSTANCE" }
+          {
+            "layer": "explicit",
+            "param": "explicitAgentInstance"
+          },
+          {
+            "layer": "workstation",
+            "file": ".lybra/role",
+            "field": "instance"
+          },
+          {
+            "layer": "env",
+            "var": "LYBRA_AGENT_INSTANCE"
+          }
         ],
         "note": "与 actor 同源 (.lybra/role.instance); 缺省时回退 actor 值(同一身份名), 非静默冒充。"
       },
@@ -172,19 +223,43 @@
         "required": true,
         "no_default": true,
         "sources": [
-          { "layer": "explicit", "param": "explicitOwnerPolicyRef" },
-          { "layer": "workstation", "file": ".lybra/role", "field": "owner_policy_ref" },
-          { "layer": "workstation", "file": ".lybra/policy", "field": "(plain text, 兼容旧格式)" },
-          { "layer": "env", "var": "LYBRA_OWNER_POLICY_REF" }
+          {
+            "layer": "explicit",
+            "param": "explicitOwnerPolicyRef"
+          },
+          {
+            "layer": "workstation",
+            "file": ".lybra/role",
+            "field": "owner_policy_ref"
+          },
+          {
+            "layer": "workstation",
+            "file": ".lybra/policy",
+            "field": "(plain text, 兼容旧格式)"
+          },
+          {
+            "layer": "env",
+            "var": "LYBRA_OWNER_POLICY_REF"
+          }
         ]
       },
       "token": {
         "required": true,
         "no_default": true,
         "sources": [
-          { "layer": "explicit", "param": "explicitToken" },
-          { "layer": "workstation", "file": ".lybra/connection.json", "field": "tokens[] (agent_instance 匹配 → role 匹配)" },
-          { "layer": "env", "var": "LYBRA_TOKEN" }
+          {
+            "layer": "explicit",
+            "param": "explicitToken"
+          },
+          {
+            "layer": "workstation",
+            "file": ".lybra/connection.json",
+            "field": "tokens[] (agent_instance 匹配 → role 匹配)"
+          },
+          {
+            "layer": "env",
+            "var": "LYBRA_TOKEN"
+          }
         ],
         "note": "token 进程内使用, 永不回显; 日志只出 fingerprint (sha256 前 12 位)。"
       },
@@ -192,28 +267,60 @@
         "required": true,
         "no_default": true,
         "sources": [
-          { "layer": "explicit", "param": "explicitWorkspaceRoot" },
-          { "layer": "workstation", "file": ".lybra/connection.json", "field": "workspace_root" },
-          { "layer": "env", "var": "LYBRA_WORKSPACE_ROOT" }
+          {
+            "layer": "explicit",
+            "param": "explicitWorkspaceRoot"
+          },
+          {
+            "layer": "workstation",
+            "file": ".lybra/connection.json",
+            "field": "workspace_root"
+          },
+          {
+            "layer": "env",
+            "var": "LYBRA_WORKSPACE_ROOT"
+          }
         ]
       },
       "gate_url": {
         "required": true,
         "schema_default": "urls.gate_local",
         "sources": [
-          { "layer": "explicit", "param": "explicitGateUrl" },
-          { "layer": "workstation", "file": ".lybra/connection.json", "field": "mcp.rpc_url" },
-          { "layer": "env", "var": "LYBRA_GATE_URL" },
-          { "layer": "schema_default", "ref": "urls.gate_local" }
+          {
+            "layer": "explicit",
+            "param": "explicitGateUrl"
+          },
+          {
+            "layer": "workstation",
+            "file": ".lybra/connection.json",
+            "field": "mcp.rpc_url"
+          },
+          {
+            "layer": "env",
+            "var": "LYBRA_GATE_URL"
+          },
+          {
+            "layer": "schema_default",
+            "ref": "urls.gate_local"
+          }
         ],
         "note": "唯一允许 schema 缺省的键 (urls.gate_local 单源在 config.schema); 其余身份键一律 no_default。"
       },
       "log_path": {
         "required": false,
         "sources": [
-          { "layer": "explicit", "param": "explicitLogPath" },
-          { "layer": "env", "var": "LYBRA_LOOP_LOG" },
-          { "layer": "schema_default", "ref": "path_conventions.task_cards/<TASK>/loop.log" }
+          {
+            "layer": "explicit",
+            "param": "explicitLogPath"
+          },
+          {
+            "layer": "env",
+            "var": "LYBRA_LOOP_LOG"
+          },
+          {
+            "layer": "schema_default",
+            "ref": "path_conventions.task_cards/<TASK>/loop.log"
+          }
         ]
       }
     }
@@ -230,7 +337,7 @@
   "timeouts": {
     "description": "Timeout configuration — single source for all timeout defaults. 坑② 修复(R5B前置): timeoutMs 从配置读取,不写死。顾问实测证明网络路径等速(127.0.0.1 vs tailscale 均 2.2s/461卡),真凶在连接器内部预算累加(initialize+queueTasks+claimDryRun+taskPreview 串行)。",
     "gate_mcp_request_ms": 30000,
-    "gate_mcp_request_description": "Gate MCP 单次请求超时(ms)。默认 30s 对齐 LOOP-REDESIGN 护栏常量审查;实测本机单次操作 <3s,30s 为多次串行累加留足容错预算。计时日志(fetch-timing/dryrun-timing/preview-timing/tick-total-timing)用于排查慢点。"
+    "gate_mcp_request_description": "Gate MCP 单次请求超时(ms)。默认 30s 对齐 DESIGN 护栏常量审查;实测本机单次操作 <3s,30s 为多次串行累加留足容错预算。计时日志(fetch-timing/dryrun-timing/preview-timing/tick-total-timing)用于排查慢点。"
   },
   "watermark": {
     "description": "AIPOS-F19: 工位水位自检 — 磁盘/tmpfs 越阈出声带路(loop-on 启动 + status 常驻行 + 周期 tick 低频复查), 根治同机项目互踩无预警(2026-08-21 /tmp 互踩事故: agency 残骸顶满共用 tmpfs, pi 崩溃零预警)。全部阈值/路径/周期/话术素材在此声明, 连接器禁写死; 只喊不代删(决策留人), 不自动清理任何文件。",
@@ -240,8 +347,14 @@
       "semantics": "used_percent = (blocks - bavail) / blocks * 100(df 口径, statfs)。越 warn → voice(persistent=true) 一行: 路径+水位+next_step; 越 critical → 追加 critical_extra_line 一句(只提醒不自动停, 决策留人)。"
     },
     "check_paths": [
-      { "path": "{workspace_root}", "label": "workspace" },
-      { "path": "/tmp", "label": "tmp" }
+      {
+        "path": "{workspace_root}",
+        "label": "workspace"
+      },
+      {
+        "path": "/tmp",
+        "label": "tmp"
+      }
     ],
     "check_paths_note": "检查路径集 = workspace 所在盘 + /tmp。{workspace_root} 占位符在检查时替换为连接器解析到的 workspace_root(治理工作区所在盘); 其余按字面绝对路径。",
     "periodic_tick_interval": 10,
@@ -267,12 +380,15 @@
       "governance_docs": {
         "relative_to": "governance_root",
         "path": "governance/",
-        "description": "Governance documents directory",
+        "description": "Governance documents directory - contract layer (7 fixed docs per AIPOS-F67)",
         "files": {
-          "decision_log": "decision_log.md",
-          "project_status": "project_status.md",
-          "roadmap": "roadmap.md",
-          "loop_design": "LOOP-REDESIGN.md"
+          "readme": "README.md",
+          "discipline": "DISCIPLINE.md",
+          "roles": "ROLES.md",
+          "commands": "COMMANDS.md",
+          "design": "DESIGN.md",
+          "principles": "PRINCIPLES.md",
+          "ledger": "LEDGER.md"
         }
       },
       "tasks_root": {
@@ -348,7 +464,11 @@
       "decision_log_entry": {
         "path_key": "decision_log_dir",
         "naming_pattern": "YYYY-MM/YYYY-MM-DD-<slug>.md",
-        "required_frontmatter": ["status", "decided_at", "superseded_by"],
+        "required_frontmatter": [
+          "status",
+          "decided_at",
+          "superseded_by"
+        ],
         "append_only": true,
         "description": "决策日志条目 — append-only, 只许新增禁修改",
         "template_frontmatter": {
@@ -360,7 +480,11 @@
       "stage_archive_snapshot": {
         "path_key": "stage_archive",
         "naming_pattern": "<date>_<stage-name>.md",
-        "required_frontmatter": ["status", "stage_name", "snapshot_date"],
+        "required_frontmatter": [
+          "status",
+          "stage_name",
+          "snapshot_date"
+        ],
         "append_only": false,
         "description": "阶段快照 — 阶段关账时写, 最新一篇=当前坐标",
         "template_frontmatter": {
@@ -372,7 +496,9 @@
       "governance_doc": {
         "path_key": "governance_docs",
         "naming_pattern": "<name>.md",
-        "required_frontmatter": ["status"],
+        "required_frontmatter": [
+          "status"
+        ],
         "append_only": false,
         "description": "治理文档(governance/*.md) — 必须有 status 字段",
         "template_frontmatter": {
@@ -382,11 +508,25 @@
       "record_file": {
         "path_key": "records",
         "naming_pattern": "<record_type>_<task_id>_<timestamp>_<agent>.md",
-        "required_frontmatter": ["record_type"],
+        "required_frontmatter": [
+          "record_type"
+        ],
         "append_only": true,
         "description": "记录文件(5_tasks/records/**) — 必须携机器出生标记 record_type",
         "template_frontmatter": {
           "record_type": "<record_type>"
+        }
+      },
+      "contract_doc": {
+        "path_key": "governance_docs",
+        "naming_pattern": "<name>.md",
+        "required_frontmatter": [
+          "status"
+        ],
+        "append_only": false,
+        "description": "契约层文档 (README/DISCIPLINE/ROLES/COMMANDS/DESIGN/PRINCIPLES/LEDGER) - 项目无关固化结构",
+        "template_frontmatter": {
+          "status": "active"
         }
       }
     },
@@ -528,7 +668,7 @@
       "gov_prefix": {
         "pattern": "gov/<project>",
         "semantic": "collection_lane",
-        "description": "收集车道(collection lane)非特性分叉 — 每次收账即 merge 回 main, 差距不过夜。与 LOOP-REDESIGN §6 '分叉活不过一张卡' 红线不冲突(语义声明在此, 非硬编码特判)。",
+        "description": "收集车道(collection lane)非特性分叉 — 每次收账即 merge 回 main, 差距不过夜。与 DESIGN §6 '分叉活不过一张卡' 红线不冲突(语义声明在此, 非硬编码特判)。",
         "lifecycle": "persistent per-project branch + dedicated worktree",
         "merge_policy": "frequent convergence to main (不过夜)"
       },

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AIPOS-R2: lybra enroll — 一条命令铸角色凭据+落.lybra自发现配置(新机/新角色零手工上线)
 
-设计权威: LOOP-REDESIGN v2 §4 (gate分发器) + §7 R2
+设计权威: DESIGN v2 §4 (gate分发器) + §7 R2
 
 功能:
 1. 使用 enrollment code 从 gate 兑换 role credential

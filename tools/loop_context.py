@@ -1,6 +1,6 @@
 """AIPOS-R1: LoopContext — 解析一次贯穿动词的不可变上下文。
 
-设计权威: LOOP-REDESIGN v2 §3
+设计权威: DESIGN v2 §3
 
 LoopContext 包含:
 - project: 项目标识

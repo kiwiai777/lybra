@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "description": "Lybra Role Registry — single source of truth for role category definitions. LOOP-REDESIGN v2 §5-6 (角色注册表): each role category's complete definition lives here. enroll (scopes) / distribute (tool package) / instance naming derivation ALL read from this registry — new role = add one entry, zero code change. Read via the unique loader (tools/schema_loader).",
+  "description": "Lybra Role Registry — single source of truth for role category definitions. DESIGN v2 §5-6 (角色注册表): each role category's complete definition lives here. enroll (scopes) / distribute (tool package) / instance naming derivation ALL read from this registry — new role = add one entry, zero code change. Read via the unique loader (tools/schema_loader).",
   "last_updated": "2026-08-12",
   "source_of_truth_note": "This file is the ONLY place role categories are defined. AIPOS-R4B-1: replaces ROLE_TOOL_MAPPING (distribute_tools.py), _resolve_role_scopes (mcp_server/tools.py), 20 scattered instance-name literals, and the hardcoded DEFAULT_PREFIX_MAPPING (naming_profile.py). Per 一机制一实现 (§6), introducing a second role-definition source = audit FAIL.",
   "naming": {

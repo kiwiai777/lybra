@@ -19,7 +19,7 @@ from tools.schema_constants import RecordType, Verdict
 # 事件记录写到 records/events/<task_id>/ 后,还必须追加更新对应 session record
 # (records/sessions/<task_id>/<session_id>.md)——后者才是 N2 执行期真相载体
 # (claim 时创建, claim/return/audit 共用)。原实现只写 event 文件却报 ok:True,
-# 属"报 OK 实没写"隐患(HAZARD-LEDGER 08-12 行12)。session 不存在必须响亮报错(禁吞错)。
+# 属"报 OK 实没写"隐患(LEDGER 08-12 行12)。session 不存在必须响亮报错(禁吞错)。
 
 
 # event_type -> session_status / current_state (session record 是 N2 真相载体)
@@ -240,7 +240,7 @@ def write_task_progress_event(
     write_result = write_records_atomic(repo_root, records_to_write)
     
     # AIPOS-SMOKE-LOOP-1 FIX: 追加更新 session record (N2 真相载体)。session 找不到/不存在
-    # 必须响亮报错 —— 不再 ok:True 实没写 session (HAZARD-LEDGER 08-12 行12)。
+    # 必须响亮报错 —— 不再 ok:True 实没写 session (LEDGER 08-12 行12)。
     result = {
         "ok": True,
         "operation": "task_progress",

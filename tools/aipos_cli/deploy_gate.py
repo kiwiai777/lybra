@@ -6,7 +6,7 @@ AIPOS-FINALIZE-FIX-1 (2026-08-12): lybra-deploy 路径从产品仓根解析,禁 
 finalize 收口：读 gate 真裁决(PASS前提) → 产品仓commit校验 → push → lybra-deploy
 → VERSION对齐断言，全程一条命令。含部署分支强制：部署commit必须在main，否则拒。
 
-设计权威: LOOP-REDESIGN v2 §2 N5 (finalize自助, 收编FND-18) + §6 (部署分支强制②)
+设计权威: DESIGN v2 §2 N5 (finalize自助, 收编FND-18) + §6 (部署分支强制②)
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from typing import Any
 def check_deployment_branch(repo_root: Path, *, required_branch: str = "main") -> dict[str, Any]:
     """AIPOS-R4B-2 部署分支强制：检查当前 commit 是否在部署分支上。
     
-    LOOP-REDESIGN v2 §6 分支集成卫生②：只从单一部署分支部署（lybra-deploy
+    DESIGN v2 §6 分支集成卫生②：只从单一部署分支部署（lybra-deploy
     校验部署commit在部署分支上，否则拒）。这是 agency F7 险情同款防护的代码化。
     
     Args:

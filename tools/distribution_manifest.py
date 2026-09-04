@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AIPOS-C4B 大项A: 分发清单(manifest)构建器 — 单一真相的机器可读快照。
 
-设计权威: LOOP-REDESIGN v2 §4(分发器)+ 本卡大项A。
+设计权威: DESIGN v2 §4(分发器)+ 本卡大项A。
 
 本模块是分发清单的**唯一实现**(一机制一实现)。它把 distribution.schema.json
 声明的分发规格(每个分发物: 连接器 extensions / skills / charters / schema)

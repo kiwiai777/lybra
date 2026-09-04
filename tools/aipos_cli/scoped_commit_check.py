@@ -3,7 +3,7 @@
 交回门的未提交检查只看【本卡 artifact_scope/output_target 内】改动，
 不再全仓级检查。非 code 卡不查 code_repo；他人在途/既有 untracked 不误拦。
 
-设计权威: LOOP-REDESIGN v2 §2 N3 (交回门按卡scope, 收编FND-16)
+设计权威: DESIGN v2 §2 N3 (交回门按卡scope, 收编FND-16)
 """
 from __future__ import annotations
 
