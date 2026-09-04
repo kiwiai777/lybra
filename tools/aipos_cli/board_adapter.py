@@ -702,35 +702,18 @@ def get_agents(repo_root: str | Path | None = None) -> dict[str, Any]:
 
 
 def _resolve_active_project_for(resolved_root: Path, project: str | None) -> str:
-    """Resolve the active project (AIPOS-225 Slice 1): reuse Slice 0 resolve_active_project,
-    sourced from the workspace .lybra/config.json `active_project`. Real ambiguity (no config
-    entry and no single-project fallback) fails closed (PROJECT_AMBIGUOUS) — no project literal.
+    """Resolve the active project (AIPOS-F66: 调用统一解析器).
     
     AIPOS-F52: 显式 workspace_root 时，从该路径的 project.json#project 读取项目名，
     而不是回落到全局 active_project。保证项目无关性，禁项目名硬编码。
+    
+    AIPOS-F66: 收敛到统一解析器 ProjectResolver。
     """
-    # AIPOS-F52: 显式 workspace_root 时，直接从 project.json 读取项目名
-    # 与凭据推导用同一个函数 read_project_json，单源。
-    from tools.aipos_cli.workspace_config import read_project_json
-    try:
-        project_data = read_project_json(str(resolved_root))
-        project_name = str(project_data.get("project") or project_data.get("name") or "").strip()
-        if project_name:
-            return project_name
-        else:
-            # project.json 存在但无 project/name 字段 → 报错带路
-            raise ValueError(
-                f"PROJECT_NOT_FOUND: {resolved_root}/project.json exists but missing 'project' field. "
-                f"Add 'project' field to project.json or ensure the workspace is properly initialized."
-            )
-    except FileNotFoundError:
-        # project.json 不存在 → 报错带路
-        raise FileNotFoundError(
-            f"PROJECT_NOT_FOUND: {resolved_root}/project.json not found. "
-            f"Ensure the workspace path is correct and contains a valid project.json."
-        )
-    except Exception as exc:
-        raise ValueError(f"PROJECT_RESOLUTION_ERROR: Failed to read project.json from {resolved_root}: {exc}")
+    from tools.project_resolution import ProjectResolver
+    return ProjectResolver.resolve_project(
+        explicit_project=project,
+        workspace_root=resolved_root
+    )
 
 
 def _resolve_governance_dir(resolved_root: Path, project: str) -> tuple[Path, str]:
@@ -6404,8 +6387,18 @@ def close_task(
                             
                             # AIPOS-F38 大项A: 审计身份取 roles 注册表审计实例(audit_derivation 同一实现),
                             # 禁承继原卡执行实例(承继会让审计卡落到执行工位名下, 零 amend 不成立)
+                            # AIPOS-F66: 去除 "lybra" 字面量回落,改用统一解析器
                             from tools.aipos_cli.audit_derivation import _derive_audit_assigned_to, _derive_audit_instance
-                            _reaudit_project = str(source_task_metadata_for_reaudit.get("project") or "lybra")
+                            _reaudit_project = source_task_metadata_for_reaudit.get("project")
+                            if not _reaudit_project:
+                                try:
+                                    _reaudit_project = _resolve_active_project_for(repo_root, None)
+                                except (ValueError, FileNotFoundError, OSError):
+                                    # 无法解析项目时,不应静默回落到 "lybra",应该报错
+                                    blocking_reasons.append(
+                                        "PROJECT_UNRESOLVED: reaudit project could not be resolved from source task metadata or workspace"
+                                    )
+                                    _reaudit_project = "UNRESOLVED"  # 占位,让后续逻辑可以继续但会BLOCK
                             _reaudit_audit_instance = _derive_audit_instance(_reaudit_project)
                             _reaudit_assigned_to = _derive_audit_assigned_to(_reaudit_project)
                             

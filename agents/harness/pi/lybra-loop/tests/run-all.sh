@@ -273,6 +273,15 @@ else
   overall=1
 fi
 
+echo
+echo "── tests/test_aipos_f66_project_resolution_convergence.py ────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f66_project_resolution_convergence.py" -v; then
+  echo "✓ tests/test_aipos_f66_project_resolution_convergence.py PASS"
+else
+  echo "✗ tests/test_aipos_f66_project_resolution_convergence.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F53: 修复轮承接判定 (fix链末端裁决覆盖原卡commit)
 echo
 echo "── tests/test_aipos_f53_fix_chain_lineage.py ─────────────────────────────────────────"

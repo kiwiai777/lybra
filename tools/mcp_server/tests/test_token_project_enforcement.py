@@ -45,7 +45,8 @@ class ProjectEnforcementTests(unittest.TestCase):
     # --- R-α: 30 gated / 0 exempt (AIPOS-242: +lybra_project_status; AIPOS-249: +2 draft_submit; AIPOS-283: +2 queue_close; AIPOS-315: +2 withdraw +2 amend; AIPOS-320: +1 return_content; AIPOS-323: +1 task_progress; AIPOS-330: +1 gate_guidance) --
     def test_all_tool_handlers_are_project_gated_no_exemptions(self) -> None:
         # Count updated for new tools added since AIPOS-229
-        self.assertEqual(len(TOOL_HANDLERS), 43)  # contract: a new tool must be counted + gated
+        # AIPOS-F66: 更新工具数量 43 → 49 (反映实际工具数)
+        self.assertEqual(len(TOOL_HANDLERS), 49)  # contract: a new tool must be counted + gated
         # AIPOS-FND-17: Use multi-project token to force legacy resolution path
         with patch.object(gate, "_repo_root", return_value="/tmp/x"), patch.object(
             gate, "_resolve_active_project_for", return_value="proj-A"

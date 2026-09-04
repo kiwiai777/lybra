@@ -200,22 +200,9 @@ class ConnectionResolver:
     
     @staticmethod
     def resolve_project_from_token(token_data: dict[str, Any]) -> str | None:
-        """Extract project from token data (for multi-project tokens)."""
-        projects = token_data.get("projects")
-        if not projects:
-            return None
-        
-        if isinstance(projects, list):
-            # Single-project token
-            if len(projects) == 1:
-                return str(projects[0])
-            
-            # Multi-project token: check default_project
-            default_project = token_data.get("default_project")
-            if default_project:
-                return str(default_project)
-        
-        return None
+        """Extract project from token data (AIPOS-F66: 调用统一解析器)."""
+        from tools.project_resolution import ProjectResolver
+        return ProjectResolver._extract_project_from_token(token_data)
     
     @staticmethod
     def resolve_role(

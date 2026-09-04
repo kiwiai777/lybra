@@ -371,7 +371,7 @@ def resolve_active_project(
     global_config: dict[str, Any] | None = None,
     config: dict[str, Any] | None = None,
 ) -> str:
-    """Resolve the active project name.
+    """Resolve the active project name (AIPOS-F66: 调用统一解析器).
 
     AIPOS-226 §1.3 + AIPOS-230 §1a precedence (SEQUENTIAL fallback):
       1. --project / explicit
@@ -382,44 +382,25 @@ def resolve_active_project(
       5. single-project fallback (exactly one <home>/<child> with 5_tasks/queue AND project.json)
       6. else fail-closed ValueError("PROJECT_AMBIGUOUS: ...")
 
-    Compatibility: an in-workspace `config` carrying active_project still wins at step 3 (the
-    AIPOS-225 path is byte-identical); when it is absent/empty, resolution now FALLS THROUGH to the
-    global runtime config (step 4) instead of dead-ending — this is what makes `/project switch`
-    effective. fail-closed is unchanged: only when ALL sources are empty -> PROJECT_AMBIGUOUS.
+    AIPOS-F66: 收敛到统一解析器 ProjectResolver。
     """
+    from tools.project_resolution import ProjectResolver
+    
+    # 处理 in-workspace config (step 3 优先级)
+    # 如果 config 提供了且有 active_project, 则直接返回 (兼容 AIPOS-225)
     source_env = env if env is not None else os.environ
-    if explicit and str(explicit).strip():
-        return str(explicit).strip()
-
-    env_val = str(source_env.get(ACTIVE_PROJECT_ENV) or "").strip()
-    if env_val:
-        return env_val
-
+    in_workspace_project = None
     if config is not None:
-        from_config = active_project_from_config(config)
-        if from_config:
-            return from_config
-    # AIPOS-230 §1a: SEQUENTIAL fallback (was a mutually-exclusive `else`). When the active project
-    # is still unresolved — including the common case where board_adapter passes a non-None but
-    # EMPTY in-workspace config — ALWAYS try the global runtime ~/.lybra/config.json active_project.
-    # The previous `else` made any non-None config dead-end the chain, so the global value was never
-    # read and `/project switch` (which writes it) was a no-op. Slice-1 byte-compat is preserved:
-    # an in-workspace config carrying active_project still wins above (returned before this point).
-    if global_config is None:
-        global_config = load_global_config(source_env)
-    from_global = global_config_active_project(global_config)
-    if from_global:
-        return from_global
-
-    home = Path(home_root).expanduser().resolve()
-    candidates = _project_candidates(home)
-    if len(candidates) == 1:
-        return candidates[0]
-
-    raise ValueError(
-        "PROJECT_AMBIGUOUS: could not resolve an active project via --project, "
-        f"{ACTIVE_PROJECT_ENV}, ~/.lybra/config.json active_project, or a single-project "
-        f"fallback under {home} (found {len(candidates)} candidate project(s): {candidates})."
+        in_workspace_project = active_project_from_config(config)
+    
+    # 如果 in-workspace config 有值, 则作为 explicit_project 传入 (保证优先级)
+    effective_explicit = explicit or in_workspace_project
+    
+    return ProjectResolver.resolve_project(
+        explicit_project=effective_explicit,
+        home_root=Path(home_root).expanduser().resolve(),
+        env=source_env,
+        global_config=global_config
     )
 
 

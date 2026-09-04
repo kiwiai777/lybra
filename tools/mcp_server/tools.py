@@ -686,16 +686,18 @@ def _scope_denied_result_for(scope: str, label: str) -> dict[str, Any]:
 
 
 def _capability_in_project(active_project: str) -> bool:
-    """True if the request's active_project is within the token's `projects`.
+    """True if the request's active_project is within the token's `projects` (AIPOS-F66: 调用统一执法器).
 
     AIPOS-229 §2: a token WITHOUT a `projects` field is NOT narrowed by project -> True (back-compat
     byte-identical). With `projects`, membership decides. Callers MUST check presence first (R-ii)
     so an absent-`projects` token never triggers active_project resolution.
+    
+    AIPOS-F66: 收敛到统一执法器 ProjectEnforcer。
     """
-    projects = _capability_token().get("projects")
-    if not projects:
-        return True
-    return active_project in [str(p) for p in projects]
+    from tools.project_resolution import ProjectEnforcer
+    token_data = _capability_token()
+    allowed, _ = ProjectEnforcer.check_project_scope(token_data, active_project)
+    return allowed
 
 
 def _project_scope_denied_result(detail: str) -> dict[str, Any]:
