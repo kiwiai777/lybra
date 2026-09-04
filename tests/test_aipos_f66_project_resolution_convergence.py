@@ -172,6 +172,19 @@ def test_f66_project_resolution_convergence(tmp_path):
         f"token 应优先于 workspace: {resolved_token}"
     print("  ✓ token > workspace")
     
+    # AIPOS-226 §1.3: env 优先于 in-workspace config (F66-R2 审计 F-001)
+    # 创建 in-workspace config
+    from tools.aipos_cli.workspace_config import resolve_active_project
+    in_workspace_config = {"active_project": "from-config"}
+    resolved_env_wins = resolve_active_project(
+        home_root=tmp_path,
+        env={"LYBRA_ACTIVE_PROJECT": "from-env"},
+        config=in_workspace_config
+    )
+    assert resolved_env_wins == "from-env", \
+        f"AIPOS-226 §1.3: env 应优先于 in-workspace config: {resolved_env_wins}"
+    print("  ✓ env > in-workspace config (AIPOS-226 §1.3)")
+    
     print()
     
     # 验收 7: 负面测试 - 无法解析时应失败

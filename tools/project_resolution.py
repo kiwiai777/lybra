@@ -76,9 +76,12 @@ class ProjectResolver:
                 return project_from_workspace
         
         # 4. env: LYBRA_ACTIVE_PROJECT
-        env_project = str(source_env.get("LYBRA_ACTIVE_PROJECT", "")).strip()
-        if env_project:
-            return env_project
+        # 注意:如果 env 包含 __skip_env_check__(来自 resolve_active_project),跳过此步骤
+        skip_env = isinstance(env, dict) and "__skip_env_check__" in env
+        if not skip_env:
+            env_project = str(source_env.get("LYBRA_ACTIVE_PROJECT", "")).strip()
+            if env_project:
+                return env_project
         
         # 5. global ~/.lybra/config.json active_project
         if global_config is None:

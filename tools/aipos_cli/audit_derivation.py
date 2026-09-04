@@ -368,7 +368,16 @@ def build_derived_audit_task(
     # derive_audit_task_id)。R1 把演进塞进共用路径破坏了 return 幂等(同卡二次 return
     # 会两派 R2), 由 test_derive_audit_task_on_return_idempotency_existing_task 钉住。
     audit_task_id = derive_audit_task_id(source_task_id, repo_root=None)
-    project = str(source_metadata.get("project") or "lybra")
+    
+    # AIPOS-F66 F-002: 项目名取不到=raise 带出口(fail-closed),禁默认 lybra
+    project = source_metadata.get("project")
+    if not project:
+        raise ValueError(
+            f"PROJECT_REQUIRED: derive_audit_card_on_return 无法从 source task {source_task_id} "
+            f"metadata 获取 project 字段。审计卡派生需要明确项目名,禁默认回落。"
+        )
+    project = str(project)
+    
     branch_id = _resolve_branch_id(source_metadata, collaboration_profile, repo_root)
     
     audit_metadata = {
@@ -536,7 +545,19 @@ def derive_audit_task_on_return(
             elif _field in _inherit_defaults:
                 audit_metadata[_field] = _inherit_defaults[_field]
     _missing = [f for f in _required_fields if f not in audit_metadata or audit_metadata[f] is None]
-    _expected_instance = _derive_audit_instance(str(source_metadata.get("project") or "lybra"))
+    
+    # AIPOS-F66 F-002: 项目名取不到=raise 带出口(fail-closed),禁默认 lybra
+    source_project = source_metadata.get("project")
+    if not source_project:
+        return {
+            "derived": False,
+            "reason": (
+                f"AIPOS-F38 派生校验 FAIL: 源任务 {source_task_id} 缺少 project 字段,"
+                f"无法推导审计实例。审计卡派生需要明确项目名,禁默认回落。"
+            ),
+        }
+    
+    _expected_instance = _derive_audit_instance(str(source_project))
     if audit_metadata.get("agent_instance") != _expected_instance:
         return {
             "derived": False,
@@ -750,7 +771,14 @@ def derive_repair_card_on_fail(
         except Exception:
             pass
 
-    project = str(source_metadata.get("project") or "lybra")
+    # AIPOS-F66 F-002: 项目名取不到=raise 带出口(fail-closed),禁默认 lybra
+    project = source_metadata.get("project")
+    if not project:
+        raise ValueError(
+            f"PROJECT_REQUIRED: derive_repair_card 无法从 reviewed task {reviewed_task_id} "
+            f"metadata 获取 project 字段。修复卡派生需要明确项目名,禁默认回落。"
+        )
+    project = str(project)
 
     # AIPOS-F17 大项A: 构建修复卡 — 必填字段从 schema 单源派生, 值承继原卡, 禁手写第二份清单。
     repair_metadata = {

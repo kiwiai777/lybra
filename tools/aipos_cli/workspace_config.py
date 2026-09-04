@@ -386,21 +386,33 @@ def resolve_active_project(
     """
     from tools.project_resolution import ProjectResolver
     
-    # 处理 in-workspace config (step 3 优先级)
-    # 如果 config 提供了且有 active_project, 则直接返回 (兼容 AIPOS-225)
     source_env = env if env is not None else os.environ
+    
+    # AIPOS-226 §1.3 优先级: explicit > env > in-workspace config > global > single-project
+    # 1. 显式参数
+    if explicit:
+        return explicit
+    
+    # 2. env
+    env_project = source_env.get("LYBRA_ACTIVE_PROJECT", "").strip() or None
+    if env_project:
+        return env_project
+    
+    # 3. in-workspace config
     in_workspace_project = None
     if config is not None:
         in_workspace_project = active_project_from_config(config)
+    if in_workspace_project:
+        return in_workspace_project
     
-    # 如果 in-workspace config 有值, 则作为 explicit_project 传入 (保证优先级)
-    effective_explicit = explicit or in_workspace_project
-    
+    # 4-6: 让 ProjectResolver 处理 global config 和 single-project fallback
+    # 传入原始 env(包含 HOME),但 ProjectResolver 会跳过 LYBRA_ACTIVE_PROJECT 检查(因为已在上面处理)
+    # 注意:必须传入 source_env 让 load_global_config 能找到 HOME
     return ProjectResolver.resolve_project(
-        explicit_project=effective_explicit,
+        explicit_project=None,
         home_root=Path(home_root).expanduser().resolve(),
-        env=source_env,
-        global_config=global_config
+        env={"__skip_env_check__": "true", **source_env},  # 特殊标记 + 保留 HOME 等环境变量
+        global_config=global_config  # 可能是 None,让 ProjectResolver 自动加载
     )
 
 
