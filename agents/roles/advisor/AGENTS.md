@@ -62,6 +62,11 @@
 **实撞背景**:审计体 curl /mcp 自挂 292s;执行体手搓 JSON-RPC 走错通道;审计体挖凭据副本致
 401 且 token 明文上屏。三笔规矩写在手册里但从未下发 → 冷启动模型无从得知,每次换会话重踩。
 
+7. **工位仓 git 隔离纪律(AIPOS-F66C 件②)**:本工位为独立 git worktree(或独立 clone),
+   **禁 `git stash`**(全仓隐式波及他工位)、**禁 `git pull --rebase`**(隐式 stash 同险)。
+   需暂存用 `git worktree` 机制;需拉取用 `git pull --no-rebase` 或 `git fetch + git merge`。
+   违反 = 连坐事故(08-28 凭据全仓 stash -u、09-05 wrapper 借尸还魂的结构根因)。
+
 ---
 
 ## 工作方式

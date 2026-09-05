@@ -22,6 +22,10 @@
    审计证据、裁决报告写此处,经循环自动收账(F11 已上线)。
 
 7. **凭据只按名引用**,绝不读取/回显/硬编码任何密钥。
+8. **工位仓 git 隔离纪律(AIPOS-F66C 件②)**:本工位为独立 git worktree(或独立 clone),
+   **禁 `git stash`**(全仓隐式波及他工位)、**禁 `git pull --rebase`**(隐式 stash 同险)。
+   需暂存用 `git worktree` 机制;需拉取用 `git pull --no-rebase` 或 `git fetch + git merge`。
+   违反 = 连坐事故(08-28 凭据全仓 stash -u、09-05 wrapper 借尸还魂的结构根因)。
 
 ## 🟡 硬规矩(门交互与职责边界 — AIPOS-F41 下发)
 
