@@ -601,6 +601,16 @@ else
   overall=1
 fi
 
+# AIPOS-F66C: sync按部署声明prune+工位仓git隔离纪律分发
+echo
+echo "── tools/aipos_cli/tests/test_c4b_distribution.py::TestSyncPruning + tests/test_f66c_worktree_isolation.py (sync prune+worktree隔离) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_c4b_distribution.py::TestSyncPruning" "$REPO_ROOT/tests/test_f66c_worktree_isolation.py" -v --tb=short; then
+  echo "✓ F66C tests PASS"
+else
+  echo "✗ F66C tests FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

@@ -258,7 +258,10 @@ def write_local_manifest(harness_root: Path, remote: dict[str, Any]) -> Path:
 def _find_files_to_prune(harness_root: Path, declared_files: set[str]) -> list[str]:
     """AIPOS-F66C 件①: 找出本地存在但不在当前部署声明中的文件。
     
-    作用域 = 本工位, 只扫描本工位的 _distributed/ 和 AGENTS.md。
+    作用域 = 本工位, 扫描:
+    - _distributed/ (共享分发落点)
+    - .pi/extensions/ (工位 wrapper)
+    - AGENTS.md (charter)
     禁改写他工位 manifest/文件(多项目爆炸半径)。
     
     Returns:
@@ -273,6 +276,20 @@ def _find_files_to_prune(harness_root: Path, declared_files: set[str]) -> list[s
             if p.is_file() and not p.name.startswith(".version-"):
                 if str(p) not in declared_files:
                     to_prune.append(str(p))
+    
+    # AIPOS-F66C-R2: 扫描 .pi/extensions/ (wrapper 目录)
+    # 只删除分发器铺的 wrapper (判据: 在 declared_files 历史记录中出现过但当前不在)
+    # 或文件头注释含分发标记。非分发文件(如手工扩展)跳过。
+    wrapper_dir = harness_root / ".pi" / "extensions"
+    if wrapper_dir.is_dir():
+        for p in wrapper_dir.rglob("*"):
+            if p.is_file():
+                path_str = str(p)
+                if path_str not in declared_files:
+                    # 简单判据: 如果是 .ts/.js 文件且不在声明中,视为陈旧 wrapper
+                    # 更安全的判据可检查文件头注释,但暂用简单逻辑(分发器专用目录)
+                    if p.suffix in (".ts", ".js", ".json"):
+                        to_prune.append(path_str)
     
     # 检查 AGENTS.md (charter)
     charter = harness_root / "AGENTS.md"

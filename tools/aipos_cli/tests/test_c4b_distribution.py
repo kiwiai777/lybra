@@ -148,6 +148,30 @@ class TestSyncPruning:
         assert not (harness.parent / "_distributed" / "old" / "nested").exists()
         assert not (harness.parent / "_distributed" / "old").exists()
 
+    def test_prune_wrapper_files(self):
+        """AIPOS-F66C-R2: 测试 wrapper 目录下陈旧文件被 prune。"""
+        tmp = Path(tempfile.mkdtemp())
+        harness = tmp / "lybra-auditor"
+        harness.mkdir()
+
+        # 创建陈旧 wrapper
+        wrapper_dir = harness / ".pi" / "extensions"
+        wrapper_dir.mkdir(parents=True, exist_ok=True)
+        stale_wrapper = wrapper_dir / "old-extension.ts"
+        stale_wrapper.write_text("// old wrapper content")
+
+        # 声明为空(不包含此wrapper)
+        declared = set()
+        to_prune = ds._find_files_to_prune(harness, declared)
+
+        # 应找到陈旧wrapper
+        assert str(stale_wrapper) in to_prune
+
+        # 执行prune
+        result = ds._prune_files(to_prune)
+        assert result["pruned_count"] >= 1
+        assert not stale_wrapper.exists()
+
     def test_compute_diffs_returns_prune_list(self):
         """测试 compute_diffs 返回应删除文件列表。"""
         tmp = Path(tempfile.mkdtemp())
