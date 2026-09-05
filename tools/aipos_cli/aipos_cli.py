@@ -1293,6 +1293,13 @@ def build_parser() -> argparse.ArgumentParser:
     draft_publish_parser.add_argument("--dry-run", action="store_true", help="Validate and render without writing")
     draft_publish_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-F74 件②: draft regen-machine-zone subcommand
+    draft_regen_parser = draft_subparsers.add_parser("regen-machine-zone", help="AIPOS-F74: Regenerate machine zone for pending cards")
+    draft_regen_parser.add_argument("--task-id", help="Task ID to regenerate (if omitted, process all pending cards)")
+    draft_regen_parser.add_argument("--actor", required=True, help="Actor performing the regeneration")
+    draft_regen_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    draft_regen_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     queue_parser = subparsers.add_parser("queue", help="Render task queue")
     queue_subparsers = queue_parser.add_subparsers(dest="queue_command")
     queue_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -2276,6 +2283,42 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_draft_result_text(result))
+            return 1 if result.get("verdict") == Verdict.BLOCK else 0
+
+        if args.draft_command == "regen-machine-zone":
+            try:
+                from tools.aipos_cli.draft_writer import regen_machine_zone_for_pending
+                from tools.aipos_cli.board_adapter import _resolve_product_code_repo
+                
+                # AIPOS-F74-R2: 分离治理根与产品根 - schema 在产品仓
+                governance_root = repo_root
+                product_root = _resolve_product_code_repo(governance_root)
+                
+                result = regen_machine_zone_for_pending(
+                    governance_root,
+                    product_root,
+                    task_id=args.task_id,
+                    actor=args.actor,
+                    dry_run=args.dry_run,
+                )
+            except (OSError, ValueError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            if args.json:
+                print(render_json(result))
+            else:
+                # Render simple text output
+                if result.get("verdict") == Verdict.BLOCK:
+                    print(f"BLOCKED: {result.get('message', 'Unknown error')}")
+                    if result.get("blocking_reasons"):
+                        for reason in result["blocking_reasons"]:
+                            print(f"  - {reason}")
+                else:
+                    print(result.get("message", "Success"))
+                    if result.get("data", {}).get("updated_cards"):
+                        print(f"\nUpdated {len(result['data']['updated_cards'])} card(s):")
+                        for card in result["data"]["updated_cards"]:
+                            print(f"  - {card}")
             return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
         print(f"Unknown draft command: {args.draft_command}", file=sys.stderr)
