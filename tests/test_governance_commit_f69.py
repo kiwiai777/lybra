@@ -297,3 +297,86 @@ def test_completeness_check_with_optional_taskid():
     
     # 完整性应该为 True（因为跳过了必填项）
     assert result["complete"] is True or "stage_archive" in str(result["missing"])
+
+
+def test_rebase_rejects_outofscope_dirty_tree(governance_repo):
+    """P0 红测试: rebase 前检查范围外脏树 — 有未提交变更必须拒绝且毫发无损
+    
+    简化版测试：验证当 git rebase 遇到 staged 文件时会报错，
+    且我们的错误处理正确返回 BLOCK 并保护文件。
+    
+    真实场景模拟困难（需要多项目治理仓结构），本测试验证核心逻辑。
+    """
+    local = governance_repo["governance_root"]
+    remote = governance_repo["remote"]
+    
+    # ① 创建并提交第一个任务
+    task_id = "TEST-F69"
+    task_dir = local / "task_cards" / task_id
+    task_dir.mkdir(parents=True)
+    (task_dir / "RETURN.md").write_text("# Return\nTest return")
+    
+    subprocess.run(["git", "add", "-A"], cwd=str(local), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "First commit"], cwd=str(local), check=True, capture_output=True)
+    subprocess.run(["git", "push"], cwd=str(local), check=True, capture_output=True)
+    
+    # ② 模拟远端前进
+    other_clone = governance_repo["local"].parent / "other_clone_dirty"
+    subprocess.run(["git", "clone", str(remote), str(other_clone)], check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Other User"], cwd=str(other_clone), check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "other@example.com"], cwd=str(other_clone), check=True, capture_output=True)
+    
+    (other_clone / "other_commit.md").write_text("# Remote advanced")
+    subprocess.run(["git", "add", "other_commit.md"], cwd=str(other_clone), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Remote update"], cwd=str(other_clone), check=True, capture_output=True)
+    subprocess.run(["git", "push"], cwd=str(other_clone), check=True, capture_output=True)
+    
+    # ③ 在 local 添加本卡的新内容
+    (task_dir / "AUDIT-REPORT.md").write_text("# Audit\nTest audit")
+    
+    # ④ 手动创建一个范围外的 staged 文件（模拟门操作）
+    # 注意：放在不同路径下，模拟多项目结构
+    other_proj_dir = local / "other_project"
+    other_proj_dir.mkdir(exist_ok=True)
+    out_of_scope_file = other_proj_dir / "门操作文件.json"
+    original_content = '{"operation": "queue_move", "timestamp": "2026-09-05T10:00:00Z"}'
+    out_of_scope_file.write_text(original_content)
+    subprocess.run(["git", "add", str(out_of_scope_file.relative_to(local))], cwd=str(local), check=True, capture_output=True)
+    
+    # ⑤ 执行 governance_commit
+    # 预期：检测到范围外 staged 文件，rebase 前 BLOCK
+    result = governance_commit(
+        governance_root=local,
+        task_id=task_id,
+        actor="test-executor",
+        repo_root=governance_repo["schema_root"],
+        dry_run=False,
+        push=True,
+    )
+    
+    # ⑥ 验证文件完整性
+    assert out_of_scope_file.exists(), "范围外文件被删除！"
+    assert out_of_scope_file.read_text() == original_content, "范围外文件内容被修改！"
+    
+    # ⑦ 验证返回 BLOCK
+    assert result["verdict"] == Verdict.BLOCK, (
+        f"检测到范围外 staged 文件时必须 BLOCK。当前 verdict={result['verdict']}"
+    )
+    
+    # ⑧ 验证错误消息
+    error_msg = result.get("message", "")
+    assert "staged" in error_msg or "committed" in error_msg, (
+        f"错误消息必须说明有 staged 文件: {error_msg}"
+    )
+    assert "处理" in error_msg or "commit" in error_msg, (
+        f"错误消息必须给出可执行出口: {error_msg}"
+    )
+    
+    # ⑦ 断言: 范围外文件逐字节不变(最关键!)
+    assert out_of_scope_file.exists(), "范围外文件被删除了!"
+    actual_content = out_of_scope_file.read_text()
+    assert actual_content == original_content, (
+        f"范围外文件内容被修改!\n"
+        f"原始: {original_content}\n"
+        f"实际: {actual_content}"
+    )

@@ -301,6 +301,45 @@ def governance_commit(
         commit_msg = message or f"chore(governance): 治理批次更新\n\nActor: {actor}\nType: governance_commit"
     
     try:
+        # P0 修复(AIPOS-F69-R2): commit 前检查是否有范围外 staged 文件
+        # 实锤(2026-09-05): 顾问治理仓有门刚落的账(staged 但未 commit),
+        # governance-commit 会把这些也一起 commit,然后 rebase 可能导致问题
+        # 修法: 在 git add 之前检查是否有 staged 文件,如果有则 BLOCK
+        pre_staged_result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=str(governance_root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        pre_staged_files = [f.strip() for f in pre_staged_result.stdout.split('\n') if f.strip()]
+        
+        if pre_staged_files:
+            # 有 staged 文件 → BLOCK(这些可能是门刚落的账)
+            operations.append(f"Blocked: {len(pre_staged_files)} pre-staged files detected")
+            file_list = '\n  - '.join(pre_staged_files[:10])
+            if len(pre_staged_files) > 10:
+                file_list += f'\n  - ... and {len(pre_staged_files) - 10} more'
+            return {
+                "verdict": Verdict.BLOCK,
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": dry_run,
+                "completeness_check": None,
+                "committed": False,
+                "pushed": False,
+                "commit_hash": None,
+                "message": (
+                    f"治理仓有已 staged 但未 committed 的文件,必须先处理(fail-closed,禁混入本次提交)。\n\n"
+                    f"检测到 {len(pre_staged_files)} 个 staged 文件:\n  - {file_list}\n\n"
+                    f"可执行出口:\n"
+                    f"1. 先提交这些文件: cd {governance_root} && git commit -m '...'\n"
+                    f"2. 或取消 stage: cd {governance_root} && git reset HEAD\n"
+                    f"3. 禁止混入本次提交 — 这些可能是门刚落的账,必须独立提交以保持原子性"
+                ),
+                "operations": operations,
+            }
+        
         # AIPOS-R8B 大项A: Stage all changes in governance repo with pathspec限定到 governance_root
         # 防止 git add -A 越界 stage 其他项目(如 kiwiaiagency)的文件
         subprocess.run(
@@ -433,6 +472,61 @@ def governance_commit(
                     if merge_base != local_head:
                         # 远端已前进,需要 rebase
                         operations.append(f"Remote has advanced ({remote_head[:8]}), rebasing...")
+                        
+                        # P0 修复(AIPOS-F69-R2): rebase 前检查范围外脏树
+                        # 实锤(2026-09-05): 顾问跑验收①时,治理仓有门刚落的账(队列移动+claim记录)未提交,
+                        # rebase 把这些全冲掉 → 违反原子性精神内核(别人的未提交状态不是脏数据)
+                        # 修法: 有范围外未提交变更 → 拒绝执行并出声,给可执行出口
+                        status_result = subprocess.run(
+                            ["git", "status", "--porcelain"],
+                            cwd=str(governance_root),
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        )
+                        status_lines = status_result.stdout.strip().split("\n") if status_result.stdout.strip() else []
+                        
+                        # 过滤出范围外的未提交变更(排除本次已提交的文件)
+                        # git status --porcelain 格式: XY filename
+                        # X=staged状态, Y=working tree状态
+                        # 我们关心的是任何非本次提交的变更(M/A/D/R/C/U/?? 开头,且不在本次提交里)
+                        # 本次提交已经 commit 完成,所以任何剩余的变更都是范围外的
+                        out_of_scope_changes = []
+                        for line in status_lines:
+                            if not line.strip():
+                                continue
+                            # 任何未提交变更(包括 staged 和 unstaged)都是范围外的
+                            # 因为本次提交已经完成,工作树应该干净
+                            status_code = line[:2]
+                            filename = line[3:] if len(line) > 3 else ""
+                            # 排除未追踪文件(??)- 这些不会被 rebase 影响
+                            if status_code != "??":
+                                out_of_scope_changes.append(line)
+                        
+                        if out_of_scope_changes:
+                            # 有范围外未提交变更 → BLOCK
+                            operations.append(f"Blocked: {len(out_of_scope_changes)} out-of-scope uncommitted changes detected")
+                            return {
+                                "verdict": Verdict.BLOCK,
+                                "task_id": task_id,
+                                "actor": actor,
+                                "dry_run": False,
+                                "completeness_check": completeness,
+                                "committed": True,
+                                "pushed": False,
+                                "commit_hash": commit_hash,
+                                "message": (
+                                    f"治理仓有未落库的变更,rebase 前必须处理(fail-closed,禁自动清理)。\n\n"
+                                    f"检测到 {len(out_of_scope_changes)} 个范围外未提交变更:\n"
+                                    + "\n".join(f"  {line}" for line in out_of_scope_changes[:10])
+                                    + (f"\n  ... 还有 {len(out_of_scope_changes) - 10} 个" if len(out_of_scope_changes) > 10 else "")
+                                    + "\n\n可执行出口:\n"
+                                    f"1. 先落库其它变更: cd {governance_root} && lybra governance-commit ...\n"
+                                    f"2. 或明示处理(stash/reset): cd {governance_root} && git status\n"
+                                    f"3. 禁用任何形式的自动清理 — 这些可能是门刚落的账"
+                                ),
+                                "operations": operations,
+                            }
                         
                         # AIPOS-F69 大项②: 只 rebase 本项目路径 — 复用 R6M 既有 pathspec
                         # 这里的 governance_root 就是本项目的工作区,因为每个项目有自己的治理工作区
