@@ -194,7 +194,14 @@ def invoke_lybra_deploy(
                         break
             
             commits_to_deploy: list[str] = []
-            if current_commit and current_commit != head_commit:
+            is_empty_interval = False
+            
+            if current_commit and current_commit == head_commit:
+                # AIPOS-F74 件③: 空区间(current==HEAD, 无待部署 commit)
+                # 拒绝无声 no-op 授权,必须显式 --reason 或真正有新 commit
+                is_empty_interval = True
+                commits_to_deploy = []  # 空区间
+            elif current_commit and current_commit != head_commit:
                 # 有部署漂移,获取 current..HEAD 的 commit 列表
                 commits_result = subprocess.run(
                     ["git", "log", "--format=%H", f"{current_commit}..{head_commit}"],
@@ -205,7 +212,7 @@ def invoke_lybra_deploy(
                 )
                 commits_to_deploy = [c.strip() for c in commits_result.stdout.strip().splitlines() if c.strip()]
             else:
-                # 首次部署或 current==HEAD,待部署的只有 HEAD
+                # 首次部署(无 current commit),待部署的只有 HEAD
                 commits_to_deploy = [head_commit]
         except subprocess.CalledProcessError as e:
             return {
@@ -215,28 +222,78 @@ def invoke_lybra_deploy(
                 "returncode": 2,
             }
         
-        # 校验 verdict_ref 覆盖所有待部署 commit
-        from tools.aipos_cli.deployment_authorization import check_verdict_ref_authorization
+        # AIPOS-F74 件③: verdict_ref 的门生真实性校验无论区间是否为空一律执行
+        # 防止假 ref + 空区间组合绕过校验
+        from tools.aipos_cli.deployment_authorization import check_verdict_record_authentic
         
-        auth_check = check_verdict_ref_authorization(
-            verdict_ref=verdict_ref,
-            governance_root=governance_root,
-            commits_to_deploy=commits_to_deploy,
-            repo_root=repo_root,
-        )
+        # 查找 verdict_ref 文件
+        verdicts_root = governance_root / "5_tasks" / "records" / "audit_verdicts"
+        verdict_file: Path | None = None
+        for task_dir in sorted(verdicts_root.glob("*")):
+            if not task_dir.is_dir():
+                continue
+            for vf in task_dir.glob("*.md"):
+                if verdict_ref in vf.stem:
+                    verdict_file = vf
+                    break
+            if verdict_file:
+                break
         
-        if not auth_check["authorized"]:
-            uncovered_detail = ""
-            if auth_check["uncovered_commits"]:
-                uncovered_detail = "\n未覆盖的 commit:\n  " + "\n  ".join(auth_check["uncovered_commits"][:5])
-                if len(auth_check["uncovered_commits"]) > 5:
-                    uncovered_detail += f"\n  ... 及 {len(auth_check['uncovered_commits']) - 5} 个更多"
+        if not verdict_file or not verdict_file.exists():
             return {
                 "success": False,
                 "stdout": "",
-                "stderr": f"verdict_ref 授权校验失败: {auth_check['message']}{uncovered_detail}",
+                "stderr": f"verdict_ref '{verdict_ref}' 未找到对应的门生裁决文件 (AIPOS-F74: 无论区间是否为空一律校验)",
                 "returncode": 2,
             }
+        
+        # 校验裁决真实性（无论区间是否为空）
+        auth_check = check_verdict_record_authentic(verdict_file)
+        if not auth_check["authentic"]:
+            return {
+                "success": False,
+                "stdout": "",
+                "stderr": f"verdict_ref '{verdict_ref}' 不是门生记录: {auth_check['reason']} (AIPOS-F74: 无论区间是否为空一律校验)",
+                "returncode": 2,
+            }
+        
+        # AIPOS-F74 件③: 空区间重部署须显式 --reason 或拒（禁无声 no-op 授权）
+        if is_empty_interval:
+            if not reason or not reason.strip():
+                return {
+                    "success": False,
+                    "stdout": "",
+                    "stderr": (
+                        "EMPTY_INTERVAL_REDEPLOYMENT: current == HEAD (无待部署 commit), "
+                        "空区间重部署须显式 --reason 说明理由。"
+                        "出口: 添加 --reason '重新构建/环境修复/...' 或提交新 commit 后再部署。"
+                    ),
+                    "returncode": 2,
+                }
+        
+        # 校验 verdict_ref 覆盖所有待部署 commit（仅当非空区间时）
+        if commits_to_deploy:
+            from tools.aipos_cli.deployment_authorization import check_verdict_ref_authorization
+            
+            auth_check = check_verdict_ref_authorization(
+                verdict_ref=verdict_ref,
+                governance_root=governance_root,
+                commits_to_deploy=commits_to_deploy,
+                repo_root=repo_root,
+            )
+            
+            if not auth_check["authorized"]:
+                uncovered_detail = ""
+                if auth_check["uncovered_commits"]:
+                    uncovered_detail = "\n未覆盖的 commit:\n  " + "\n  ".join(auth_check["uncovered_commits"][:5])
+                    if len(auth_check["uncovered_commits"]) > 5:
+                        uncovered_detail += f"\n  ... 及 {len(auth_check['uncovered_commits']) - 5} 个更多"
+                return {
+                    "success": False,
+                    "stdout": "",
+                    "stderr": f"verdict_ref 授权校验失败: {auth_check['message']}{uncovered_detail}",
+                    "returncode": 2,
+                }
 
     # AIPOS-R6S 大项B②: 组装授权参数(缺授权即拒由脚本执行)
     from tools.aipos_cli.deployment_record import resolve_authorization

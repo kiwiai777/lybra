@@ -2507,13 +2507,14 @@ def _check_return_self_checks(
     claim_snapshot: dict[str, Any] | None = None,
 ) -> list[str]:
     """
-    AIPOS-F49: N3 交回自检门——四条机器判据在交回时拒收不合格交付。
+    AIPOS-F49: N3 交回自检门——五条机器判据在交回时拒收不合格交付。
     
-    四条判据:
+    五条判据:
     ① 夹具入常驻: 本卡新增 test 文件必须在 run-all 清单中
     ② 改动面在界内: git diff 文件必须落在 output_target 范围内
     ③ 有测试: code 类卡必须有新增/修改的 test 文件
     ④ RETURN 非骨架: 不得含占位符，result_summary 非空
+    ⑤ 分支合规 (AIPOS-F74): card/{task_id} 分支存在、含本卡提交、基座合法
     
     注: 判据⑤靠场未污染和⑥基线零新增失败已移至 F49B(快照机制)
     
@@ -2560,6 +2561,14 @@ def _check_return_self_checks(
         artifact_refs=artifact_refs,
         repo_root=repo_root,
     ))
+    
+    # ⑤ 分支合规 (AIPOS-F74): 仅对 task_mode=code 的执行卡检查
+    if task_mode == "code":
+        blocking_reasons.extend(_check_branch_compliance(
+            task_id=task_id,
+            task_metadata=task_metadata,
+            repo_root=repo_root,
+        ))
     
     return blocking_reasons
 
@@ -2842,6 +2851,162 @@ def _check_return_not_skeleton(
     return blocking_reasons
 
 
+def _check_branch_compliance(
+    *,
+    task_id: str,
+    task_metadata: dict[str, Any],
+    repo_root: Path,
+) -> list[str]:
+    """⑤ 分支合规 (AIPOS-F74): card/{task_id} 分支存在、含本卡提交、基座合法。
+    
+    AIPOS-F74 件①: 交回自检判据⑤「分支合规」— 门上拦分支丢失。
+    
+    三条子判据:
+    1. card/{task_id} 分支存在(名按 N5.branch_integration 声明推导)
+    2. 分支包含本卡至少一笔提交
+    3. merge-base 为当前 main(或 fix 卡声明的合法基座)
+    
+    任一不满足 = 拒并给出口(明示正确命令)。
+    fail-closed: 豁免走既有 §9 通道(owner_confirmation_token)。
+    
+    注: 判据仅施于 task_mode=code 的执行卡,审计卡(R 卡, 无代码分支)自动豁免。
+    """
+    blocking_reasons = []
+    
+    try:
+        product_repo_root = _resolve_product_code_repo(repo_root)
+    except ProductRepoNotConfigured:
+        # 无产品仓配置,跳过分支检查
+        return blocking_reasons
+    
+    import subprocess
+    
+    # 从 N5.branch_integration 读取分支模式
+    try:
+        from tools.schema_loader import get_branch_integration
+        branch_integration = get_branch_integration(product_repo_root)
+        branch_pattern = str(branch_integration.get("branch_pattern") or "card/{task_id}")
+        branch_name = branch_pattern.replace("{task_id}", task_id)
+    except Exception:
+        # Schema 读取失败,使用默认模式
+        branch_name = f"card/{task_id}"
+    
+    # 子判据 1: 分支存在
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", branch_name],
+            cwd=product_repo_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            blocking_reasons.append(
+                f"BRANCH_NOT_FOUND: 分支 '{branch_name}' 不存在。"
+                f"出口: 在产品仓执行 'git checkout -b {branch_name}' 创建分支,"
+                f"提交代码后再交回。"
+            )
+            # 分支不存在,后续检查无法进行
+            return blocking_reasons
+    except subprocess.TimeoutExpired:
+        blocking_reasons.append(
+            f"BRANCH_CHECK_TIMEOUT: git 命令超时,无法验证分支 '{branch_name}'。"
+        )
+        return blocking_reasons
+    except Exception as e:
+        blocking_reasons.append(
+            f"BRANCH_CHECK_FAILED: 无法验证分支 '{branch_name}': {e}。"
+        )
+        return blocking_reasons
+    
+    # 子判据 2: 分支包含本卡至少一笔提交
+    try:
+        result = subprocess.run(
+            ["git", "log", f"main..{branch_name}", "--oneline"],
+            cwd=product_repo_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            commits = [line for line in result.stdout.strip().split("\n") if line.strip()]
+            if not commits:
+                blocking_reasons.append(
+                    f"BRANCH_NO_COMMITS: 分支 '{branch_name}' 相对 main 没有新提交。"
+                    f"出口: 在产品仓 '{branch_name}' 分支提交代码:"
+                    f"'git add <files> && git commit -m \"feat({task_id}): <message>\"',"
+                    f"然后再交回。"
+                )
+        else:
+            # git log 失败,可能是分支与 main 无共同祖先
+            blocking_reasons.append(
+                f"BRANCH_DIVERGED: 分支 '{branch_name}' 与 main 无共同历史,无法对比提交。"
+                f"出口: 检查分支是否从正确的 main 创建。"
+            )
+    except subprocess.TimeoutExpired:
+        blocking_reasons.append(
+            f"BRANCH_COMMIT_CHECK_TIMEOUT: git log 超时,无法验证分支 '{branch_name}' 的提交。"
+        )
+    except Exception as e:
+        blocking_reasons.append(
+            f"BRANCH_COMMIT_CHECK_FAILED: 无法验证分支 '{branch_name}' 的提交: {e}。"
+        )
+    
+    # 子判据 3: merge-base 为当前 main(或 fix 卡声明的合法基座)
+    # 读取 fix 卡的合法基座(如果有)
+    expected_base = "main"  # 默认基座
+    fix_base_branch = str(task_metadata.get("fix_base_branch") or "").strip()
+    if fix_base_branch:
+        expected_base = fix_base_branch
+    
+    try:
+        # 获取 merge-base
+        result = subprocess.run(
+            ["git", "merge-base", branch_name, expected_base],
+            cwd=product_repo_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            merge_base = result.stdout.strip()
+            # 获取 expected_base 的当前 commit
+            result_base = subprocess.run(
+                ["git", "rev-parse", expected_base],
+                cwd=product_repo_root,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result_base.returncode == 0:
+                base_commit = result_base.stdout.strip()
+                if merge_base != base_commit:
+                    blocking_reasons.append(
+                        f"BRANCH_WRONG_BASE: 分支 '{branch_name}' 的基座不是当前 {expected_base}。"
+                        f"merge-base: {merge_base[:8]}, 当前 {expected_base}: {base_commit[:8]}。"
+                        f"出口: 在产品仓执行 'git checkout {branch_name} && git rebase {expected_base}' "
+                        f"将分支变基到最新 {expected_base},或重新从当前 {expected_base} 创建分支。"
+                    )
+            else:
+                blocking_reasons.append(
+                    f"BRANCH_BASE_CHECK_FAILED: 无法获取 {expected_base} 的当前 commit。"
+                )
+        else:
+            # merge-base 失败,可能是分支与基座无共同祖先
+            blocking_reasons.append(
+                f"BRANCH_NO_COMMON_ANCESTOR: 分支 '{branch_name}' 与 {expected_base} 无共同祖先。"
+                f"出口: 检查分支是否从正确的 {expected_base} 创建。"
+            )
+    except subprocess.TimeoutExpired:
+        blocking_reasons.append(
+            f"BRANCH_BASE_CHECK_TIMEOUT: git merge-base 超时,无法验证分支 '{branch_name}' 的基座。"
+        )
+    except Exception as e:
+        blocking_reasons.append(
+            f"BRANCH_BASE_CHECK_FAILED: 无法验证分支 '{branch_name}' 的基座: {e}。"
+        )
+    
+    return blocking_reasons
 
 
 def _build_return_preview(

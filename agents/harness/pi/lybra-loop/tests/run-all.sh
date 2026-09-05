@@ -591,6 +591,16 @@ else
   overall=1
 fi
 
+# AIPOS-F74: 交回自检判据⑤分支合规+存量卡机器区重生成+deploy空区间授权洞
+echo
+echo "── tools/aipos_cli/tests/test_aipos_f74.py (判据⑤分支合规+机器区重生成+deploy授权) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos_f74.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos_f74.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos_f74.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

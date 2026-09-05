@@ -737,6 +737,200 @@ def publish_draft(
         }
     ]
     return result
+
+
+def regen_machine_zone_for_pending(
+    repo_root: Path,
+    *,
+    task_id: str | None = None,
+    actor: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """AIPOS-F74 件②: 对 pending 存量卡重生成机器区与机器纪律段。
+    
+    对指定任务卡(或所有 pending 卡)重新派生机器区字段与纪律段,
+    经门 amend 落卡(留 amendment 记录),顾问区零触碰。
+    
+    Args:
+        repo_root: 治理工作区根
+        task_id: 指定任务 ID(若缺省则处理所有 pending 卡)
+        actor: 执行重生成的 actor
+        dry_run: 预览不写入
+    
+    Returns:
+        {
+            "verdict": "APPROVE" | "BLOCK",
+            "message": str,
+            "data": {
+                "updated_cards": list[str],  # 更新的卡号列表
+                "amendments": list[dict],     # 每张卡的修改详情
+            },
+            "blocking_reasons": list[str],
+        }
+    """
+    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+    from tools.aipos_cli.machine_zone import derive_machine_zone_fields, derive_machine_zone_纪律段
+    from tools.aipos_cli.queue_mutation import amend_task
+    from tools.schema_constants import Verdict
+    
+    blocking_reasons = []
+    updated_cards = []
+    amendments_detail = []
+    
+    pending_dir = repo_root / "5_tasks" / "queue" / "pending"
+    if not pending_dir.exists():
+        return {
+            "verdict": Verdict.BLOCK,
+            "message": f"Pending directory not found: {pending_dir}",
+            "blocking_reasons": [f"PENDING_DIR_NOT_FOUND: {pending_dir}"],
+            "data": {"updated_cards": [], "amendments": []},
+        }
+    
+    # 确定要处理的任务卡列表
+    if task_id:
+        # 单张卡
+        task_files = []
+        for card_file in pending_dir.glob("*.md"):
+            try:
+                text = card_file.read_text(encoding="utf-8")
+                metadata, _body, _warnings = parse_markdown_frontmatter(text)
+                if str(metadata.get("task_id") or "").strip().upper() == task_id.upper():
+                    task_files.append(card_file)
+                    break
+            except Exception:
+                continue
+        
+        if not task_files:
+            return {
+                "verdict": Verdict.BLOCK,
+                "message": f"Task {task_id} not found in pending",
+                "blocking_reasons": [f"TASK_NOT_FOUND: {task_id} not in pending directory"],
+                "data": {"updated_cards": [], "amendments": []},
+            }
+    else:
+        # 所有 pending 卡
+        task_files = list(pending_dir.glob("*.md"))
+    
+    # 处理每张卡
+    for card_file in task_files:
+        try:
+            text = card_file.read_text(encoding="utf-8")
+            metadata, body, _warnings = parse_markdown_frontmatter(text)
+            
+            card_task_id = str(metadata.get("task_id") or "").strip()
+            if not card_task_id:
+                blocking_reasons.append(f"MISSING_TASK_ID: {card_file.name} lacks task_id")
+                continue
+            
+            # 重新派生机器区字段
+            try:
+                new_machine_zone = derive_machine_zone_fields(metadata, repo_root)
+            except Exception as e:
+                blocking_reasons.append(f"DERIVE_FAILED ({card_task_id}): {e}")
+                continue
+            
+            # 比较变化
+            amendments = {}
+            for field, new_value in new_machine_zone.items():
+                old_value = metadata.get(field)
+                # 跳过时间戳字段(不更新它们)
+                if field in {"draft_created_at", "draft_updated_at"}:
+                    continue
+                if old_value != new_value:
+                    amendments[field] = new_value
+            
+            # 重新派生机器纪律段
+            try:
+                new_discipline_section = derive_machine_zone_纪律段(card_task_id, metadata, repo_root)
+                # 查找 body 中是否有旧的纪律段,如果有则替换
+                # 简单处理:如果 body 中有 "## 工作纪律" 节,则替换整个节
+                if "## 工作纪律" in body:
+                    # 找到该节的开始和结束
+                    import re
+                    # 匹配从 "## 工作纪律" 到下一个 "##" 或文末
+                    pattern = r"(## 工作纪律.*?)(?=\n## |\Z)"
+                    new_body = re.sub(pattern, new_discipline_section, body, flags=re.DOTALL)
+                    if new_body != body:
+                        # body 变化了,记录为 amendment
+                        amendments["_body_updated"] = True
+                        body = new_body
+            except Exception as e:
+                # 纪律段派生失败,警告但不阻塞
+                pass
+            
+            if not amendments:
+                # 无变化,跳过
+                continue
+            
+            # 使用 amend_task 更新卡
+            if not dry_run:
+                # 准备 amendments dict(移除 _body_updated 标记)
+                body_updated = amendments.pop("_body_updated", False)
+                
+                try:
+                    amend_result = amend_task(
+                        repo_root=repo_root,
+                        task_id=card_task_id,
+                        actor=actor,
+                        amendments=amendments,
+                        amendment_reason=f"AIPOS-F74: 机器区重生成 (regen-machine-zone)",
+                        dry_run=False,
+                        new_body=body if body_updated else None,
+                    )
+                    
+                    if amend_result.get("verdict") == Verdict.BLOCK:
+                        blocking_reasons.append(
+                            f"AMEND_FAILED ({card_task_id}): {amend_result.get('message', 'Unknown error')}"
+                        )
+                        continue
+                except Exception as e:
+                    blocking_reasons.append(f"AMEND_FAILED ({card_task_id}): {e}")
+                    continue
+            
+            updated_cards.append(card_task_id)
+            amendments_detail.append({
+                "task_id": card_task_id,
+                "amendments": amendments,
+            })
+            
+        except Exception as e:
+            blocking_reasons.append(f"PROCESS_FAILED ({card_file.name}): {e}")
+            continue
+    
+    if blocking_reasons:
+        return {
+            "verdict": Verdict.BLOCK,
+            "message": f"Regeneration encountered {len(blocking_reasons)} error(s)",
+            "blocking_reasons": blocking_reasons,
+            "data": {
+                "updated_cards": updated_cards,
+                "amendments": amendments_detail,
+            },
+        }
+    
+    if not updated_cards:
+        return {
+            "verdict": Verdict.APPROVE,
+            "message": "No cards needed regeneration (all machine zones already up-to-date)",
+            "blocking_reasons": [],
+            "data": {
+                "updated_cards": [],
+                "amendments": [],
+            },
+        }
+    
+    action = "Would update" if dry_run else "Updated"
+    return {
+        "verdict": Verdict.APPROVE,
+        "message": f"{action} {len(updated_cards)} card(s) machine zone",
+        "blocking_reasons": [],
+        "data": {
+            "updated_cards": updated_cards,
+            "amendments": amendments_detail,
+        },
+    }
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 from tools.schema_constants import RecordType, Verdict
