@@ -161,20 +161,23 @@ def _file_target_path(harness_root: Path, dist: dict[str, Any], file_rel: str) -
 def compute_diffs(
     harness_root: Path,
     remote: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """对比本地与远端清单, 返回 [(dist, [path...])] 差异与本地缺失文件提示。
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    """对比本地与远端清单, 返回 [(dist, [path...])] 差异、应存在文件清单、应删除文件清单。
 
     本地状态 = 直接哈希目标落点上的文件(不依赖本地 manifest, 防陈旧)。
+    
+    AIPOS-F66C 件①: 按部署声明 prune — 返回应存在文件清单(declared_files)
+    与应删除文件清单(to_prune)。声明剔除 = 盘面清除(落点+manifest 重生)。
     """
     to_fetch: list[dict[str, Any]] = []
-    local_files: list[str] = []
+    declared_files: set[str] = set()  # 所有声明中应存在的文件
 
     for dist in remote.get("distributions", []):
         need: list[str] = []
         for f in dist.get("files", []):
             rel = f["path"]
             local_path = _file_target_path(harness_root, dist, rel)
-            local_files.append(str(local_path))
+            declared_files.add(str(local_path))
             if not local_path.is_file():
                 need.append(rel)
                 continue
@@ -186,7 +189,10 @@ def compute_diffs(
         if need:
             to_fetch.append({"dist": dist, "paths": need})
 
-    return to_fetch, local_files
+    # AIPOS-F66C 件①: 找出本地存在但声明中不存在的文件(应删除)
+    to_prune = _find_files_to_prune(harness_root, declared_files)
+
+    return to_fetch, list(declared_files), to_prune
 
 
 def apply_fetch(
@@ -213,12 +219,17 @@ def apply_fetch(
 
 
 def write_local_manifest(harness_root: Path, remote: dict[str, Any]) -> Path:
-    """写/更新 _distributed/.version-{role}(含文件哈希, 供连接器版本自答)。"""
+    """写/更新 _distributed/.version-{role}(含文件哈希, 供连接器版本自答)。
+    
+    AIPOS-F66C 件①: manifest 由部署声明每次重生, 禁累积, 禁从陈旧 manifest 复活已剔除条目。
+    本函数每次从 remote(当前部署声明) 完全重建 manifest, 不读取/合并旧 manifest。
+    """
     role = remote.get("role", "unknown")
     manifest_dir = harness_root.parent / "_distributed"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = manifest_dir / f".version-{role}"
 
+    # AIPOS-F66C 件①: manifest 每次从当前部署声明完全重生(禁累积旧条目)
     distributions = []
     for dist in remote.get("distributions", []):
         distributions.append({
@@ -239,8 +250,66 @@ def write_local_manifest(harness_root: Path, remote: dict[str, Any]) -> Path:
         "synced_at": _now_iso(),
         "distributions": distributions,
     }
+    # 直接覆盖写入(不读取旧 manifest), 实现每次重生
     manifest_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest_path
+
+
+def _find_files_to_prune(harness_root: Path, declared_files: set[str]) -> list[str]:
+    """AIPOS-F66C 件①: 找出本地存在但不在当前部署声明中的文件。
+    
+    作用域 = 本工位, 只扫描本工位的 _distributed/ 和 AGENTS.md。
+    禁改写他工位 manifest/文件(多项目爆炸半径)。
+    
+    Returns:
+        应删除的文件路径列表(绝对路径)
+    """
+    to_prune: list[str] = []
+    
+    # 扫描 _distributed/ 下的所有文件
+    distributed_dir = harness_root.parent / "_distributed"
+    if distributed_dir.is_dir():
+        for p in distributed_dir.rglob("*"):
+            if p.is_file() and not p.name.startswith(".version-"):
+                if str(p) not in declared_files:
+                    to_prune.append(str(p))
+    
+    # 检查 AGENTS.md (charter)
+    charter = harness_root / "AGENTS.md"
+    if charter.is_file() and str(charter) not in declared_files:
+        # charter 一般都在声明中, 但如果确实被移除了(角色废弃), 也应清理
+        to_prune.append(str(charter))
+    
+    return to_prune
+
+
+def _prune_files(paths: list[str]) -> dict[str, Any]:
+    """AIPOS-F66C 件①: 删除不在当前部署声明中的文件。
+    
+    返回删除结果统计。
+    """
+    pruned = []
+    errors = []
+    
+    for p_str in paths:
+        p = Path(p_str)
+        try:
+            if p.is_file():
+                p.unlink()
+                pruned.append(str(p))
+                # 清理空目录(自底向上)
+                parent = p.parent
+                while parent.exists() and not any(parent.iterdir()):
+                    parent.rmdir()
+                    parent = parent.parent
+        except Exception as e:
+            errors.append(f"{p}: {e}")
+    
+    return {
+        "pruned_count": len(pruned),
+        "pruned_files": pruned,
+        "errors": errors,
+    }
 
 
 def _now_iso() -> str:
@@ -262,7 +331,10 @@ def sync(*, harness_root: Path | None = None, gate_url: str | None = None, token
     if not remote.get("ok"):
         return {"ok": False, "error": f"gate manifest not ok: {remote}", "role": ctx["role"]}
 
-    diffs, local_files = compute_diffs(ctx["harness_root"], remote)
+    diffs, declared_files, to_prune = compute_diffs(ctx["harness_root"], remote)
+
+    # AIPOS-F66C 件①: prune 不在声明中的文件(声明剔除=盘面清除)
+    prune_result = _prune_files(to_prune) if to_prune else {"pruned_count": 0, "pruned_files": [], "errors": []}
 
     fetched_total = 0
     results = []
@@ -301,9 +373,12 @@ def sync(*, harness_root: Path | None = None, gate_url: str | None = None, token
         "harness_root": str(ctx["harness_root"]),
         "distributions_checked": len(remote.get("distributions", [])),
         "files_fetched": fetched_total,
+        "files_pruned": prune_result["pruned_count"],
         "changes": results,
         "manifest_path": str(manifest_path),
-        "local_files": local_files,
+        "declared_files": declared_files,
+        "pruned_files": prune_result["pruned_files"],
+        "prune_errors": prune_result["errors"],
         "owner_policy_correction": policy_correction,
     }
 
@@ -381,9 +456,15 @@ def main() -> int:
         if result.get("ok"):
             print(f"sync ok · role={result['role']} · product_commit={result['product_commit']}")
             print(f"  harness: {result['harness_root']}")
-            print(f"  distributions checked: {result['distributions_checked']}, files fetched: {result['files_fetched']}")
+            print(f"  distributions checked: {result['distributions_checked']}, files fetched: {result['files_fetched']}, files pruned: {result.get('files_pruned', 0)}")
             for c in result.get("changes", []):
                 print(f"  - {c['distribution_id']}: {c['files_written']} file(s) → {c['target_path']}")
+            if result.get('pruned_files'):
+                print(f"  pruned (不在声明): {len(result['pruned_files'])} file(s)")
+                for pf in result['pruned_files'][:5]:  # 最多显示5个
+                    print(f"    - {pf}")
+                if len(result['pruned_files']) > 5:
+                    print(f"    ... and {len(result['pruned_files']) - 5} more")
             print(f"  manifest: {result['manifest_path']}")
             print("  下一步: /reload 让新扩展/技能生效")
         else:

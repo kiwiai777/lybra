@@ -39,7 +39,7 @@ class TestManifestBuilder:
         exec_m = m["roles"]["executor"]
         assert exec_m["harness"] == "pi"
         kinds = {d["kind"] for d in exec_m["distributions"]}
-        assert kinds >= {"extension", "skills", "charter", "schema"}
+        assert kinds >= {"skills", "charter", "schema"}
         for d in exec_m["distributions"]:
             assert d["source_commit"], d["distribution_id"]
             assert len(d["files"]) > 0
@@ -78,6 +78,135 @@ class TestManifestBuilder:
         assert target_base_for_kind("extension") == "harness_parent"
         assert target_base_for_kind("skills") == "harness_parent"
         assert target_base_for_kind("schema") == "harness_parent"
+
+
+class TestSyncPruning:
+    """AIPOS-F66C 件①: sync 按部署声明 prune 且禁从陈旧 manifest 复活。"""
+
+    def _remote_minimal(self) -> dict:
+        """只有一个 charter 分发的最小清单(用于测试剔除其他文件)。"""
+        return {
+            "role": "executor",
+            "product_commit": "abc123abc123",
+            "harness": "pi",
+            "distributions": [
+                {
+                    "distribution_id": "executor-charter",
+                    "kind": "charter",
+                    "source_commit": "abc123abc123",
+                    "source_is_file": True,
+                    "target_base": "harness_root",
+                    "target_path": "AGENTS.md",
+                    "files": [{"path": "AGENTS.md", "sha256": _sha(b"charter"), "size": 7}],
+                },
+            ],
+        }
+
+    def test_prune_finds_undeclared_files(self):
+        """测试 _find_files_to_prune 能找到不在声明中的文件。"""
+        tmp = Path(tempfile.mkdtemp())
+        harness = tmp / "lybra-executor"
+        harness.mkdir()
+
+        # 创建一些文件
+        charter = harness / "AGENTS.md"
+        charter.write_text("charter")
+        stale_ext = harness.parent / "_distributed" / "extensions" / "old-ext" / "file.ts"
+        stale_ext.parent.mkdir(parents=True, exist_ok=True)
+        stale_ext.write_text("old")
+        stale_skill = harness.parent / "_distributed" / "skills" / "removed-skill" / "SKILL.md"
+        stale_skill.parent.mkdir(parents=True, exist_ok=True)
+        stale_skill.write_text("removed")
+
+        # 声明只包含 charter
+        declared = {str(charter)}
+        to_prune = ds._find_files_to_prune(harness, declared)
+
+        # 应找到两个 _distributed 下的陈旧文件
+        assert str(stale_ext) in to_prune
+        assert str(stale_skill) in to_prune
+        assert len(to_prune) == 2
+
+    def test_prune_removes_files_and_cleans_dirs(self):
+        """测试 _prune_files 删除文件并清理空目录。"""
+        tmp = Path(tempfile.mkdtemp())
+        harness = tmp / "lybra-executor"
+        harness.mkdir()
+
+        # 创建待删除文件
+        stale = harness.parent / "_distributed" / "old" / "nested" / "file.txt"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("to be removed")
+
+        assert stale.exists()
+        result = ds._prune_files([str(stale)])
+
+        assert result["pruned_count"] == 1
+        assert str(stale) in result["pruned_files"]
+        assert not stale.exists()
+        # 空目录应被清理
+        assert not (harness.parent / "_distributed" / "old" / "nested").exists()
+        assert not (harness.parent / "_distributed" / "old").exists()
+
+    def test_compute_diffs_returns_prune_list(self):
+        """测试 compute_diffs 返回应删除文件列表。"""
+        tmp = Path(tempfile.mkdtemp())
+        harness = tmp / "lybra-executor"
+        harness.mkdir()
+
+        # 本地有陈旧文件
+        stale = harness.parent / "_distributed" / "extensions" / "removed" / "old.ts"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("old")
+
+        # 远端声明不包含此文件
+        remote = self._remote_minimal()
+        diffs, declared, to_prune = ds.compute_diffs(harness, remote)
+
+        assert str(stale) in to_prune
+        assert len(to_prune) >= 1
+
+    def test_manifest_regenerated_not_accumulated(self):
+        """测试 manifest 每次从声明重生,不累积陈旧条目。"""
+        tmp = Path(tempfile.mkdtemp())
+        harness = tmp / "lybra-executor"
+        harness.mkdir()
+
+        # 第一次: 写入包含多个分发物的 manifest
+        old_remote = {
+            "role": "executor",
+            "product_commit": "old123",
+            "distributions": [
+                {
+                    "distribution_id": "executor-charter",
+                    "kind": "charter",
+                    "source_commit": "old123",
+                    "target_path": "AGENTS.md",
+                    "files": [{"path": "AGENTS.md", "sha256": "hash1"}],
+                },
+                {
+                    "distribution_id": "removed-extension",
+                    "kind": "extension",
+                    "source_commit": "old123",
+                    "target_path": "_distributed/extensions/removed",
+                    "files": [{"path": "file.ts", "sha256": "hash2"}],
+                },
+            ],
+        }
+        manifest_path = ds.write_local_manifest(harness, old_remote)
+        old_manifest = json.loads(manifest_path.read_text())
+        assert len(old_manifest["distributions"]) == 2
+
+        # 第二次: 只包含 charter 的新声明
+        new_remote = self._remote_minimal()
+        manifest_path = ds.write_local_manifest(harness, new_remote)
+        new_manifest = json.loads(manifest_path.read_text())
+
+        # manifest 应完全重生,只有1个分发物,removed-extension 不复活
+        assert len(new_manifest["distributions"]) == 1
+        assert new_manifest["distributions"][0]["distribution_id"] == "executor-charter"
+        assert new_manifest["version"] == "abc123abc123"
+        assert not any(d["distribution_id"] == "removed-extension" for d in new_manifest["distributions"])
 
 
 class TestSyncPureFunctions:
@@ -122,7 +251,7 @@ class TestSyncPureFunctions:
         stale.parent.mkdir(parents=True, exist_ok=True)
         stale.write_text("old")
 
-        diffs, _ = ds.compute_diffs(harness, remote)
+        diffs, declared, to_prune = ds.compute_diffs(harness, remote)
         by_id = {d["dist"]["distribution_id"]: d["paths"] for d in diffs}
         assert "gate-client.ts" in by_id["executor-loop-extension"]
         assert "loop-engine.ts" in by_id["executor-loop-extension"]
@@ -141,7 +270,7 @@ class TestSyncPureFunctions:
         assert (harness / "AGENTS.md").read_bytes() == b"charter"
 
         # 二次 sync: 无差异
-        diffs2, _ = ds.compute_diffs(harness, remote)
+        diffs2, _, _ = ds.compute_diffs(harness, remote)
         assert diffs2 == []
 
     def test_apply_fetch_rejects_hash_mismatch(self):

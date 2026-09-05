@@ -19,6 +19,10 @@
 4. **commit 纪律(2026-08-12 Owner 对齐 LOOP-REDESIGN v2·取代旧"不 commit"条)**:code 卡 **commit-before-return 是义务**(gate 强制, FND-5)——实现完成即在本卡 worktree/分支 commit(精确 pathspec, 禁 `add -A`);**push main + deploy = N5 finalize 步**(审计 PASS 后, 或卡内链路声明);**治理仓永不 commit/push**(顾问的笔)。
 5. **凭据只按名引用**,绝不读取/回显/硬编码任何密钥;需要密钥输入走 secure-input 流程。
 6. **遇护栏拦截 / 卡内信息不足 / 越界诱惑:说明并停**,不绕过、不自作主张扩权。
+7. **工位仓 git 隔离纪律(AIPOS-F66C 件②)**:本工位为独立 git worktree(或独立 clone),
+   **禁 `git stash`**(全仓隐式波及他工位)、**禁 `git pull --rebase`**(隐式 stash 同险)。
+   需暂存用 `git worktree` 机制;需拉取用 `git pull --no-rebase` 或 `git fetch + git merge`。
+   违反 = 连坐事故(08-28 凭据全仓 stash -u、09-05 wrapper 借尸还魂的结构根因)。
 
 ## 🟡 硬规矩(门交互与职责边界 — AIPOS-F41 下发)
 
