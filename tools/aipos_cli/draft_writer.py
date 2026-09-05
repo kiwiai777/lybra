@@ -770,8 +770,7 @@ def regen_machine_zone_for_pending(
     """
     from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
     from tools.aipos_cli.machine_zone import derive_machine_zone_fields, derive_machine_zone_纪律段
-    from tools.aipos_cli.queue_mutation import amend_task
-    from tools.schema_constants import Verdict
+    from tools.aipos_cli.board_adapter import amend_task
     
     blocking_reasons = []
     updated_cards = []
@@ -780,7 +779,7 @@ def regen_machine_zone_for_pending(
     pending_dir = repo_root / "5_tasks" / "queue" / "pending"
     if not pending_dir.exists():
         return {
-            "verdict": Verdict.BLOCK,
+            "verdict": "BLOCK",
             "message": f"Pending directory not found: {pending_dir}",
             "blocking_reasons": [f"PENDING_DIR_NOT_FOUND: {pending_dir}"],
             "data": {"updated_cards": [], "amendments": []},
@@ -802,7 +801,7 @@ def regen_machine_zone_for_pending(
         
         if not task_files:
             return {
-                "verdict": Verdict.BLOCK,
+                "verdict": "BLOCK",
                 "message": f"Task {task_id} not found in pending",
                 "blocking_reasons": [f"TASK_NOT_FOUND: {task_id} not in pending directory"],
                 "data": {"updated_cards": [], "amendments": []},
@@ -878,7 +877,7 @@ def regen_machine_zone_for_pending(
                         new_body=body if body_updated else None,
                     )
                     
-                    if amend_result.get("verdict") == Verdict.BLOCK:
+                    if amend_result.get("verdict") == "BLOCK":
                         blocking_reasons.append(
                             f"AMEND_FAILED ({card_task_id}): {amend_result.get('message', 'Unknown error')}"
                         )
@@ -899,7 +898,7 @@ def regen_machine_zone_for_pending(
     
     if blocking_reasons:
         return {
-            "verdict": Verdict.BLOCK,
+            "verdict": "BLOCK",
             "message": f"Regeneration encountered {len(blocking_reasons)} error(s)",
             "blocking_reasons": blocking_reasons,
             "data": {
@@ -910,7 +909,7 @@ def regen_machine_zone_for_pending(
     
     if not updated_cards:
         return {
-            "verdict": Verdict.APPROVE,
+            "verdict": "APPROVE",
             "message": "No cards needed regeneration (all machine zones already up-to-date)",
             "blocking_reasons": [],
             "data": {
@@ -921,7 +920,7 @@ def regen_machine_zone_for_pending(
     
     action = "Would update" if dry_run else "Updated"
     return {
-        "verdict": Verdict.APPROVE,
+        "verdict": "APPROVE",
         "message": f"{action} {len(updated_cards)} card(s) machine zone",
         "blocking_reasons": [],
         "data": {

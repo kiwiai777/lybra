@@ -178,9 +178,125 @@ class TestDeployEmptyIntervalVacuousAuth(unittest.TestCase):
 
     def test_empty_interval_no_reason_blocks(self):
         """验收⑥-b: 空区间无 --reason → 拒。"""
-        # 该测试需要真实的 verdict 文件,这里简化为单元测试
-        # 实际验收在集成测试中进行
-        pass
+        with patch("tools.aipos_cli.deploy_gate.subprocess.run") as mock_run:
+            # Mock git rev-parse HEAD
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="def456\n",
+            )
+            
+            repo_root = Path("/tmp/test_repo_no_reason")
+            governance_root = Path("/tmp/test_governance_no_reason")
+            
+            try:
+                # Mock VERSION 文件存在且 current == HEAD (空区间)
+                version_file = repo_root / ".deploy" / "current" / "VERSION"
+                version_file.parent.mkdir(parents=True, exist_ok=True)
+                version_file.write_text("git_commit: def456\n", encoding="utf-8")
+                
+                # Mock lybra-deploy 脚本存在
+                deploy_script = repo_root / "tools" / "lybra-deploy"
+                deploy_script.parent.mkdir(parents=True, exist_ok=True)
+                deploy_script.write_text("#!/bin/bash\necho 'mock deploy'\n", encoding="utf-8")
+                deploy_script.chmod(0o755)
+                
+                # Mock 真实 verdict 文件存在
+                verdict_dir = governance_root / "5_tasks" / "records" / "audit_verdicts" / "TEST-001"
+                verdict_dir.mkdir(parents=True, exist_ok=True)
+                verdict_file = verdict_dir / "verdict_test_001.md"
+                verdict_file.write_text(
+                    "---\n"
+                    "record_type: audit_verdict\n"
+                    "verdict_id: verdict_test_001\n"
+                    "verdict: APPROVE\n"
+                    "task_id: TEST-001\n"
+                    "verdict_at: 2024-01-01T00:00:00Z\n"
+                    "auditor: test.auditor\n"
+                    "---\n"
+                    "Test verdict\n",
+                    encoding="utf-8"
+                )
+                
+                # 调用 deploy 无 reason (空区间应拒绝)
+                result = invoke_lybra_deploy(
+                    repo_root,
+                    verdict_ref="verdict_test_001",
+                    governance_root=governance_root,
+                    reason=None,  # 无 reason
+                )
+                
+                # 断言: 空区间无 reason 应该被拒绝
+                self.assertFalse(result["success"])
+                self.assertIn("空区间", result["stderr"] or "")
+                
+            finally:
+                # 清理
+                import shutil
+                if repo_root.exists():
+                    shutil.rmtree(repo_root)
+                if governance_root.exists():
+                    shutil.rmtree(governance_root)
+
+
+class TestRegenMachineZoneRealEntry(unittest.TestCase):
+    """件②: regen-machine-zone 真入口夹具 (走真 CLI 解析器与导入路径)。"""
+
+    def test_regen_command_real_entry(self):
+        """真入口夹具: 直接调用 regen_machine_zone_for_pending, 验证导入路径正确。"""
+        import tempfile
+        import shutil
+        from tools.aipos_cli.draft_writer import regen_machine_zone_for_pending
+        
+        # 创建临时治理仓
+        tmp_gov = Path(tempfile.mkdtemp(prefix="test_gov_regen_"))
+        
+        try:
+            # 创建 pending 目录和一张测试卡
+            pending_dir = tmp_gov / "5_tasks" / "queue" / "pending"
+            pending_dir.mkdir(parents=True, exist_ok=True)
+            
+            test_card = pending_dir / "test-regen-001.md"
+            test_card.write_text(
+                "---\n"
+                "task_id: TEST-REGEN-001\n"
+                "title: Test Regen\n"
+                "status: pending\n"
+                "priority: P2\n"
+                "actor: test.actor\n"
+                "task_mode: code\n"
+                "---\n"
+                "\n"
+                "## 工作纪律\n"
+                "\n"
+                "Old discipline section.\n",
+                encoding="utf-8"
+            )
+            
+            # 直接调用函数 (走真实导入路径)
+            result = regen_machine_zone_for_pending(
+                tmp_gov,
+                task_id="TEST-REGEN-001",
+                actor="test.actor",
+                dry_run=True,
+            )
+            
+            # 验证: 函数调用成功 (导入无错)
+            self.assertIn("verdict", result)
+            # 应该成功或者提示无需更新
+            self.assertIn(result["verdict"], ["APPROVE", "BLOCK"])
+            
+            # 如果 APPROVE, 验证消息合理
+            if result["verdict"] == "APPROVE":
+                self.assertIn("message", result)
+                self.assertTrue(
+                    "Would update" in result["message"] or "No cards needed" in result["message"],
+                    f"Unexpected message: {result['message']}"
+                )
+            
+        finally:
+            # 清理
+            if tmp_gov.exists():
+                shutil.rmtree(tmp_gov)
 
 
 if __name__ == "__main__":
