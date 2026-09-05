@@ -581,6 +581,16 @@ else
   overall=1
 fi
 
+# AIPOS-F69: 顾问侧治理落库唯一口——governance_commit解绑卡号+并发安全+push后校验
+echo
+echo "── tests/test_governance_commit_f69.py (治理落库唯一口) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_governance_commit_f69.py" -v --tb=short; then
+  echo "✓ tests/test_governance_commit_f69.py PASS"
+else
+  echo "✗ tests/test_governance_commit_f69.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
