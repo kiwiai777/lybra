@@ -865,8 +865,10 @@ def regen_machine_zone_for_pending(
             
             # 使用 amend_task 更新卡
             if not dry_run:
-                # 准备 amendments dict(移除 _body_updated 标记)
+                # F-1: body 更新放进 amendments["body"] (amend_task 无 new_body 参数)
                 body_updated = amendments.pop("_body_updated", False)
+                if body_updated:
+                    amendments["body"] = body
                 
                 try:
                     amend_result = amend_task(
@@ -876,7 +878,6 @@ def regen_machine_zone_for_pending(
                         amendments=amendments,
                         amendment_reason=f"AIPOS-F74: 机器区重生成 (regen-machine-zone)",
                         dry_run=False,
-                        new_body=body if body_updated else None,
                     )
                     
                     if amend_result.get("verdict") == "BLOCK":

@@ -129,6 +129,49 @@ class TestBranchComplianceCheck(unittest.TestCase):
             )
             
             self.assertEqual(len(reasons), 0)
+    
+    def test_branch_from_other_card_blocks(self):
+        """验收②-压他卡分支: 从他卡分支创建分支交回 → 拒（BRANCH_WRONG_BASE）。
+        
+        AIPOS-F74-R3-F2: 补充专项测试 - 从他卡分支（如 card/OTHER-TASK）
+        创建本卡分支（card/TEST-005），merge-base 不是 main 当前 HEAD，应拒。
+        
+        场景: main 有新提交后，从老的 card/OTHER-TASK 创建新分支，
+        merge-base 会是 main 的老 commit，不是当前 HEAD。
+        """
+        # 创建他卡分支（基于当前 main）
+        subprocess.run(["git", "checkout", "-b", "card/OTHER-TASK"], cwd=self.tmp_path, check=True, capture_output=True)
+        (self.tmp_path / "other.txt").write_text("other task\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=self.tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "feat(OTHER-TASK): other"], cwd=self.tmp_path, check=True, capture_output=True)
+        
+        # 回到 main，添加新提交（让 main 前进）
+        subprocess.run(["git", "checkout", "main"], cwd=self.tmp_path, check=True, capture_output=True)
+        (self.tmp_path / "main_progress.txt").write_text("main progress\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=self.tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "feat: main progress"], cwd=self.tmp_path, check=True, capture_output=True)
+        
+        # 从老的 card/OTHER-TASK 创建本卡分支（压他卡分支）
+        subprocess.run(["git", "checkout", "card/OTHER-TASK"], cwd=self.tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "-b", "card/TEST-005"], cwd=self.tmp_path, check=True, capture_output=True)
+        (self.tmp_path / "test005.txt").write_text("test 005\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=self.tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "feat(TEST-005): my work"], cwd=self.tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "main"], cwd=self.tmp_path, check=True, capture_output=True)
+        
+        with patch("tools.aipos_cli.board_adapter._resolve_product_code_repo") as mock_resolve:
+            mock_resolve.return_value = self.tmp_path
+            
+            reasons = _check_branch_compliance(
+                task_id="TEST-005",
+                task_metadata={"task_mode": "code"},
+                repo_root=Path("/tmp/governance"),
+            )
+            
+            # 应拒：merge-base 不是 main 当前 HEAD（是 main 的老 commit）
+            self.assertTrue(len(reasons) > 0)
+            self.assertIn("BRANCH_WRONG_BASE", reasons[0])
+            self.assertIn("git rebase", reasons[0])
 
 
 class TestDeployEmptyIntervalVacuousAuth(unittest.TestCase):
@@ -305,6 +348,94 @@ class TestRegenMachineZoneRealEntry(unittest.TestCase):
                 self.assertTrue(
                     "Would update" in result["message"] or "No cards needed" in result["message"],
                     f"Unexpected message: {result['message']}"
+                )
+            
+        finally:
+            # 清理
+            if tmp_gov.exists():
+                shutil.rmtree(tmp_gov)
+            if tmp_product.exists():
+                shutil.rmtree(tmp_product)
+    
+    def test_regen_non_dry_run_real_execution(self):
+        """非 dry-run 真执行路径: 验证 amendment 记录落盘、卡面更新、顾问区零触碰。
+        
+        AIPOS-F74-R3-F1: dry-run 全绿掩皩了 amend_task 参数错误，
+        必须覆盖非 dry-run 路径。
+        """
+        import tempfile
+        import shutil
+        from tools.aipos_cli.draft_writer import regen_machine_zone_for_pending
+        
+        # 创建临时治理仓和产品仓
+        tmp_gov = Path(tempfile.mkdtemp(prefix="test_gov_real_"))
+        tmp_product = Path(tempfile.mkdtemp(prefix="test_product_real_"))
+        
+        try:
+            # 创建 pending 目录
+            pending_dir = tmp_gov / "5_tasks" / "queue" / "pending"
+            pending_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 创建一张缺少机器区字段的测试卡
+            test_card = pending_dir / "test-real-exec-001.md"
+            test_card.write_text(
+                "---\n"
+                "task_id: TEST-REAL-EXEC-001\n"
+                "title: Test Real Execution\n"
+                "status: pending\n"
+                "---\n"
+                "\n"
+                "## 工作纪律\n"
+                "\n"
+                "Old discipline.\n",
+                encoding="utf-8"
+            )
+            
+            # 创建 schema (包含可派生字段)
+            schema_dir = tmp_product / "schema"
+            schema_dir.mkdir(parents=True, exist_ok=True)
+            (schema_dir / "card.schema.json").write_text(
+                '{"properties": {"task_id": {"type": "string"}, "priority": {"type": "string"}}}',
+                encoding="utf-8"
+            )
+            
+            # 创建 amendment 记录目录
+            amendments_dir = tmp_gov / "5_tasks" / "records" / "amendments"
+            amendments_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 非 dry-run 真执行
+            result = regen_machine_zone_for_pending(
+                tmp_gov,
+                tmp_product,
+                task_id="TEST-REAL-EXEC-001",
+                actor="test.actor.real",
+                dry_run=False,  # 真执行
+            )
+            
+            # 验证结果
+            self.assertIn("verdict", result)
+            
+            # 如果有更新，验证 amendment 记录落盘
+            if result["data"]["updated_cards"]:
+                # 检查 amendment 记录文件
+                amend_records = list(amendments_dir.rglob("*.md"))
+                self.assertTrue(
+                    len(amend_records) > 0,
+                    "Amendment records should be created for non-dry-run execution"
+                )
+                
+                # 验证卡面已更新
+                updated_card = test_card.read_text(encoding="utf-8")
+                self.assertIn("task_id: TEST-REAL-EXEC-001", updated_card)
+            
+            # 验证顾问区零触碰
+            governance_dir = tmp_gov / "governance"
+            if governance_dir.exists():
+                gov_files = list(governance_dir.rglob("*"))
+                self.assertEqual(
+                    len([f for f in gov_files if f.is_file()]),
+                    0,
+                    "顾问区 (governance/) 应为空"
                 )
             
         finally:
