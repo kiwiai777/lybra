@@ -398,14 +398,19 @@ def create_draft(
     if task_id:
         try:
             from tools.aipos_cli.machine_zone import derive_machine_zone_纪律段
-            discipline_section = derive_machine_zone_纪律段(task_id, normalized, repo_root)
+            from tools.schema_loader import SchemaLoadError
+            # F76-R2: governance_root for path resolution, product_root=None for schema auto-detect
+            discipline_section = derive_machine_zone_纪律段(
+                task_id, normalized, governance_root=repo_root, product_root=None
+            )
             # Append discipline section to body if not already present
             if "## 工作纪律" not in task_body:
                 task_body = task_body.rstrip() + "\n\n" + discipline_section + "\n"
-        except Exception:
-            # Fail-closed: schema declaration missing → preserve existing behavior (存量兼容)
-            # Don't block draft creation for legacy repos without schema
-            pass
+        except SchemaLoadError as e:
+            # F76-R2: schema declaration missing → warn but don't block (存量兼容)
+            result.setdefault("warnings", []).append(
+                f"工作纪律节派生失败(存量兼容): {e}"
+            )
     
     rendered_markdown = render_markdown_task_card(normalized, task_body)
     validation = validate_draft_metadata(repo_root, normalized)
@@ -639,7 +644,10 @@ def publish_draft(
         task_id_for_section = metadata.get("task_id")
         if task_id_for_section:
             from tools.aipos_cli.machine_zone import derive_machine_zone_纪律段
-            expected_discipline = derive_machine_zone_纪律段(task_id_for_section, metadata, repo_root)
+            # F76-R2: governance_root for path resolution, product_root=None for schema auto-detect
+            expected_discipline = derive_machine_zone_纪律段(
+                task_id_for_section, metadata, governance_root=repo_root, product_root=None
+            )
             
             # Check if section exists in body
             if "## 工作纪律" not in body:
@@ -887,7 +895,10 @@ def regen_machine_zone_for_pending(
             
             # 重新派生机器纪律段 (三口一函数: 唯一派生源)
             try:
-                new_discipline_section = derive_machine_zone_纪律段(card_task_id, metadata, product_root)
+                # F76-R2: governance_root for path resolution, product_root for schema reading
+                new_discipline_section = derive_machine_zone_纪律段(
+                    card_task_id, metadata, governance_root=governance_root, product_root=product_root
+                )
                 
                 # 查找 body 中是否有旧的纪律段
                 if "## 工作纪律" in body:

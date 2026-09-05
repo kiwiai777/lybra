@@ -46,7 +46,10 @@ def test_f76_derive_function_exists():
     repo_root = Path(__file__).parent.parent.parent.parent
     
     metadata = {"task_id": "TEST"}
-    result = derive_machine_zone_纪律段("TEST", metadata, repo_root)
+    # F76-R2: governance_root for path resolution, product_root=None for schema auto-detect
+    result = derive_machine_zone_纪律段(
+        "TEST", metadata, governance_root=repo_root, product_root=None
+    )
     
     assert "## 工作纪律" in result
     assert "card/TEST" in result

@@ -85,7 +85,9 @@ def derive_machine_zone_fields(
 def derive_machine_zone_纪律段(
     task_id: str,
     metadata: dict[str, Any],
-    repo_root: Path,
+    governance_root: Path,
+    *,
+    product_root: Path | None = None,
 ) -> str:
     """Derive machine-generated 纪律段 (discipline section) from schema.
     
@@ -95,10 +97,13 @@ def derive_machine_zone_纪律段(
     
     All values read through schema_loader, no hardcoded literals.
     
+    AIPOS-F76-R2: Separated governance_root (path resolution) from product_root (schema reading).
+    
     Args:
         task_id: Task ID for path substitution
         metadata: Task card metadata (for task_mode, output_target, etc.)
-        repo_root: Repository root
+        governance_root: Governance repo root (for path resolution like task_cards/)
+        product_root: Product repo root (for schema reading; auto-detected if None)
         
     Returns:
         Markdown string for discipline section
@@ -107,7 +112,7 @@ def derive_machine_zone_纪律段(
     
     # Read branch integration from transitions.schema (single source)
     try:
-        branch_integration = get_branch_integration(repo_root)
+        branch_integration = get_branch_integration(product_root)
         branch_pattern = branch_integration.get("branch_pattern")
         if not branch_pattern:
             raise ValueError(
@@ -124,7 +129,7 @@ def derive_machine_zone_纪律段(
         
         # Read report path from config.schema governance_structure.paths (single source)
         # Fail-closed: path resolution fails → raise with actionable exit
-        task_cards_root = resolve_governance_path("task_cards", repo_root, repo_root)
+        task_cards_root = resolve_governance_path("task_cards", governance_root, product_root)
         report_path = task_cards_root / task_id / "RETURN.md"
         lines.append(f"- **报告落点**: `{report_path}` (读自 config.schema governance_structure.paths.task_cards)")
         

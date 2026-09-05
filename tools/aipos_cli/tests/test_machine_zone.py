@@ -214,7 +214,9 @@ def test_schema_change_auto_follows(tmp_repo: Path):
     
     # Before: branch_pattern = "card/{task_id}"
     metadata = {"task_id": "TEST-001", "created_by": "advisor.test"}
-    discipline_before = derive_machine_zone_纪律段("TEST-001", metadata, tmp_repo)
+    discipline_before = derive_machine_zone_纪律段(
+        "TEST-001", metadata, governance_root=tmp_repo, product_root=tmp_repo
+    )
     
     # 断言初始状态：纪律段包含 card/TEST-001
     assert "card/TEST-001" in discipline_before, f"期望纪律段包含 'card/TEST-001'，实际: {discipline_before}"
@@ -240,7 +242,9 @@ def test_schema_change_auto_follows(tmp_repo: Path):
     clear_cache()
     
     # After: 新建草稿自动随声明变为 wip/<ID>
-    discipline_after = derive_machine_zone_纪律段("TEST-001", metadata, tmp_repo)
+    discipline_after = derive_machine_zone_纪律段(
+        "TEST-001", metadata, governance_root=tmp_repo, product_root=tmp_repo
+    )
     
     # 断言改动后状态：纪律段包含 wip/TEST-001（不再是 card/）
     assert "wip/TEST-001" in discipline_after, f"期望纪律段包含 'wip/TEST-001'，实际: {discipline_after}"
@@ -287,7 +291,9 @@ def test_branch_pattern_missing_raises_error(tmp_repo: Path):
     # Should raise ValueError with actionable message
     metadata = {"task_id": "TEST-001", "created_by": "advisor.test"}
     with pytest.raises(ValueError) as exc_info:
-        derive_machine_zone_纪律段("TEST-001", metadata, tmp_repo)
+        derive_machine_zone_纪律段(
+            "TEST-001", metadata, governance_root=tmp_repo, product_root=tmp_repo
+        )
     
     error_msg = str(exc_info.value)
     assert "branch_pattern" in error_msg
@@ -330,7 +336,9 @@ def test_task_cards_path_missing_raises_error(tmp_repo: Path):
     # Should raise SchemaLoadError (from schema_loader.resolve_governance_path)
     metadata = {"task_id": "TEST-001", "created_by": "advisor.test"}
     with pytest.raises(SchemaLoadError) as exc_info:
-        derive_machine_zone_纪律段("TEST-001", metadata, tmp_repo)
+        derive_machine_zone_纪律段(
+            "TEST-001", metadata, governance_root=tmp_repo, product_root=tmp_repo
+        )
     
     error_msg = str(exc_info.value)
     assert "task_cards" in error_msg
