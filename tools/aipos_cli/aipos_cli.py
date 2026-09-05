@@ -2288,8 +2288,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.draft_command == "regen-machine-zone":
             try:
                 from tools.aipos_cli.draft_writer import regen_machine_zone_for_pending
+                from tools.aipos_cli.board_adapter import _resolve_product_code_repo
+                
+                # AIPOS-F74-R2: 分离治理根与产品根 - schema 在产品仓
+                governance_root = repo_root
+                product_root = _resolve_product_code_repo(governance_root)
+                
                 result = regen_machine_zone_for_pending(
-                    repo_root,
+                    governance_root,
+                    product_root,
                     task_id=args.task_id,
                     actor=args.actor,
                     dry_run=args.dry_run,

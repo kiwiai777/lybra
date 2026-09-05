@@ -242,16 +242,21 @@ class TestRegenMachineZoneRealEntry(unittest.TestCase):
     """件②: regen-machine-zone 真入口夹具 (走真 CLI 解析器与导入路径)。"""
 
     def test_regen_command_real_entry(self):
-        """真入口夹具: 直接调用 regen_machine_zone_for_pending, 验证导入路径正确。"""
+        """真入口夹具: 直接调用 regen_machine_zone_for_pending, 验证导入路径正确。
+        
+        AIPOS-F74-R2: 分根夹具 - governance_root 与 product_root 必须不同目录。
+        同目录永远测不出 schema 路径双义。
+        """
         import tempfile
         import shutil
         from tools.aipos_cli.draft_writer import regen_machine_zone_for_pending
         
-        # 创建临时治理仓
+        # 创建临时治理仓和产品仓 (分离目录)
         tmp_gov = Path(tempfile.mkdtemp(prefix="test_gov_regen_"))
+        tmp_product = Path(tempfile.mkdtemp(prefix="test_product_regen_"))
         
         try:
-            # 创建 pending 目录和一张测试卡
+            # 创建 pending 目录和一张测试卡 (在治理仓)
             pending_dir = tmp_gov / "5_tasks" / "queue" / "pending"
             pending_dir.mkdir(parents=True, exist_ok=True)
             
@@ -272,9 +277,18 @@ class TestRegenMachineZoneRealEntry(unittest.TestCase):
                 encoding="utf-8"
             )
             
-            # 直接调用函数 (走真实导入路径)
+            # 创建 schema 目录 (在产品仓)
+            schema_dir = tmp_product / "schema"
+            schema_dir.mkdir(parents=True, exist_ok=True)
+            (schema_dir / "card.schema.json").write_text(
+                '{"properties": {"task_id": {"type": "string"}}}',
+                encoding="utf-8"
+            )
+            
+            # 直接调用函数 (走真实导入路径，分离治理根与产品根)
             result = regen_machine_zone_for_pending(
-                tmp_gov,
+                tmp_gov,       # governance_root
+                tmp_product,   # product_root
                 task_id="TEST-REGEN-001",
                 actor="test.actor",
                 dry_run=True,
@@ -297,6 +311,8 @@ class TestRegenMachineZoneRealEntry(unittest.TestCase):
             # 清理
             if tmp_gov.exists():
                 shutil.rmtree(tmp_gov)
+            if tmp_product.exists():
+                shutil.rmtree(tmp_product)
 
 
 if __name__ == "__main__":

@@ -740,19 +740,21 @@ def publish_draft(
 
 
 def regen_machine_zone_for_pending(
-    repo_root: Path,
+    governance_root: Path,
+    product_root: Path,
     *,
     task_id: str | None = None,
     actor: str,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """AIPOS-F74 件②: 对 pending 存量卡重生成机器区与机器纪律段。
+    """AIPOS-F74 件② (R2 修复): 对 pending 存量卡重生成机器区与机器纪律段。
     
     对指定任务卡(或所有 pending 卡)重新派生机器区字段与纪律段,
     经门 amend 落卡(留 amendment 记录),顾问区零触碰。
     
     Args:
-        repo_root: 治理工作区根
+        governance_root: 治理工作区根 (pending 卡所在位置)
+        product_root: 产品仓根 (schema 所在位置，派生机器区的数据源)
         task_id: 指定任务 ID(若缺省则处理所有 pending 卡)
         actor: 执行重生成的 actor
         dry_run: 预览不写入
@@ -776,7 +778,7 @@ def regen_machine_zone_for_pending(
     updated_cards = []
     amendments_detail = []
     
-    pending_dir = repo_root / "5_tasks" / "queue" / "pending"
+    pending_dir = governance_root / "5_tasks" / "queue" / "pending"
     if not pending_dir.exists():
         return {
             "verdict": "BLOCK",
@@ -823,7 +825,7 @@ def regen_machine_zone_for_pending(
             
             # 重新派生机器区字段
             try:
-                new_machine_zone = derive_machine_zone_fields(metadata, repo_root)
+                new_machine_zone = derive_machine_zone_fields(metadata, product_root)
             except Exception as e:
                 blocking_reasons.append(f"DERIVE_FAILED ({card_task_id}): {e}")
                 continue
@@ -840,7 +842,7 @@ def regen_machine_zone_for_pending(
             
             # 重新派生机器纪律段
             try:
-                new_discipline_section = derive_machine_zone_纪律段(card_task_id, metadata, repo_root)
+                new_discipline_section = derive_machine_zone_纪律段(card_task_id, metadata, product_root)
                 # 查找 body 中是否有旧的纪律段,如果有则替换
                 # 简单处理:如果 body 中有 "## 工作纪律" 节,则替换整个节
                 if "## 工作纪律" in body:
@@ -868,7 +870,7 @@ def regen_machine_zone_for_pending(
                 
                 try:
                     amend_result = amend_task(
-                        repo_root=repo_root,
+                        repo_root=governance_root,
                         task_id=card_task_id,
                         actor=actor,
                         amendments=amendments,
