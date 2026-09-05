@@ -153,12 +153,31 @@ class TestSyncPruning:
         tmp = Path(tempfile.mkdtemp())
         harness = tmp / "lybra-auditor"
         harness.mkdir()
+        (harness / ".lybra").mkdir()
+        (harness / ".lybra" / "role").write_text(json.dumps({"role": "auditor"}))
 
-        # 创建陈旧 wrapper
+        # 创建陈旧 wrapper (带分发标记)
         wrapper_dir = harness / ".pi" / "extensions"
         wrapper_dir.mkdir(parents=True, exist_ok=True)
         stale_wrapper = wrapper_dir / "old-extension.ts"
-        stale_wrapper.write_text("// old wrapper content")
+        stale_wrapper.write_text("// @lybra-distributed\n// old wrapper content")
+
+        # 创建 manifest 历史 (包含此wrapper)
+        manifest_dir = harness.parent / "_distributed"
+        manifest_dir.mkdir(exist_ok=True)
+        manifest_path = manifest_dir / ".version-auditor"
+        manifest_data = {
+            "role": "auditor",
+            "distributions": [
+                {
+                    "distribution_id": "old-extension",
+                    "target_base": "harness_root",
+                    "target_path": ".pi/extensions",
+                    "files": [{"path": "old-extension.ts", "sha256": "abc" * 21 + "ab"}]
+                }
+            ]
+        }
+        manifest_path.write_text(json.dumps(manifest_data, indent=2))
 
         # 声明为空(不包含此wrapper)
         declared = set()
@@ -171,6 +190,86 @@ class TestSyncPruning:
         result = ds._prune_files(to_prune)
         assert result["pruned_count"] >= 1
         assert not stale_wrapper.exists()
+
+    def test_prune_preserves_non_distributed_files(self):
+        """AIPOS-F66C-R3 P0修复: 陈旧wrapper被prune,非分发文件(claim.ts)逐字节不变。
+        
+        先红后绿夹具:
+        - 声明内wrapper: current.ts
+        - 陈旧wrapper: old.ts (在manifest历史中,不在当前声明)
+        - 非分发文件: claim.ts (从未在manifest,工位自有扩展)
+        
+        sync后: 只有old.ts消失, current.ts和claim.ts逐字节不变。
+        """
+        tmp = Path(tempfile.mkdtemp())
+        harness = tmp / "lybra-auditor"
+        harness.mkdir()
+        (harness / ".lybra").mkdir()
+        
+        # 创建 role 文件
+        (harness / ".lybra" / "role").write_text(json.dumps({"role": "auditor"}))
+        
+        # 创建 wrapper 目录
+        wrapper_dir = harness / ".pi" / "extensions"
+        wrapper_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 1. 声明内wrapper
+        current_wrapper = wrapper_dir / "current.ts"
+        current_content = "// @lybra-distributed\n// current wrapper\nexport {};"
+        current_wrapper.write_text(current_content)
+        
+        # 2. 陈旧wrapper (有分发标记,但不在当前声明)
+        old_wrapper = wrapper_dir / "old.ts"
+        old_content = "// @lybra-distributed\n// old wrapper\nexport {};"
+        old_wrapper.write_text(old_content)
+        
+        # 3. 非分发文件 (claim.ts, 无分发标记)
+        claim_file = wrapper_dir / "claim.ts"
+        claim_content = "// User extension for /claim command\nexport const claimCommand = () => {};"
+        claim_file.write_text(claim_content)
+        
+        # 创建陈旧manifest (包含current.ts和old.ts,不含claim.ts)
+        manifest_dir = harness.parent / "_distributed"
+        manifest_dir.mkdir(exist_ok=True)
+        manifest_path = manifest_dir / ".version-auditor"
+        manifest_data = {
+            "role": "auditor",
+            "distributions": [
+                {
+                    "distribution_id": "auditor-extension",
+                    "target_base": "harness_root",
+                    "target_path": ".pi/extensions",
+                    "files": [
+                        {"path": "current.ts", "sha256": "abc" * 21 + "ab"},
+                        {"path": "old.ts", "sha256": "def" * 21 + "ef"},  # 陈旧
+                    ]
+                }
+            ]
+        }
+        manifest_path.write_text(json.dumps(manifest_data, indent=2))
+        
+        # 当前声明: 只含current.ts
+        declared_files = {str(current_wrapper)}
+        
+        # 执行prune
+        to_prune = ds._find_files_to_prune(harness, declared_files)
+        
+        # 断言: 只有old.ts在prune列表中
+        assert str(old_wrapper) in to_prune, "old.ts应被prune"
+        assert str(current_wrapper) not in to_prune, "current.ts不应被prune"
+        assert str(claim_file) not in to_prune, "claim.ts(非分发文件)不应被prune"
+        
+        # 执行删除
+        result = ds._prune_files(to_prune)
+        
+        # 验证结果
+        assert not old_wrapper.exists(), "old.ts应被删除"
+        assert current_wrapper.exists(), "current.ts应保留"
+        assert claim_file.exists(), "claim.ts应保留"
+        
+        # 逐字节验证内容不变
+        assert current_wrapper.read_text() == current_content, "current.ts内容应不变"
+        assert claim_file.read_text() == claim_content, "claim.ts内容应不变"
 
     def test_compute_diffs_returns_prune_list(self):
         """测试 compute_diffs 返回应删除文件列表。"""
