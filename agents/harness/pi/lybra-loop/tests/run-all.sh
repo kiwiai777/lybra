@@ -611,6 +611,16 @@ else
   overall=1
 fi
 
+# AIPOS-F76: 机器区补完——create/publish/regen三口共用同一纪律段派生函数+regen按卡阶段派生禁重置draft标记
+echo
+echo "── tools/aipos_cli/tests/test_aipos_f76_integration.py (工作纪律section三口一函数) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos_f76_integration.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos_f76_integration.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos_f76_integration.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

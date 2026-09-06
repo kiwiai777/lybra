@@ -390,7 +390,29 @@ def create_draft(
                 metadata[field_name] = placeholder_value
 
     normalized = _normalized_metadata(metadata)
-    rendered_markdown = render_markdown_task_card(normalized, body or default_draft_body())
+    
+    # AIPOS-F76 件①: Inject machine-generated 工作纪律 section into body
+    # Use the single-source derive function (F68 established, now wiring to create path)
+    task_body = body or default_draft_body()
+    task_id = normalized.get("task_id")
+    if task_id:
+        try:
+            from tools.aipos_cli.machine_zone import derive_machine_zone_纪律段
+            from tools.schema_loader import SchemaLoadError
+            # F76-R2: governance_root for path resolution, product_root=None for schema auto-detect
+            discipline_section = derive_machine_zone_纪律段(
+                task_id, normalized, governance_root=repo_root, product_root=None
+            )
+            # Append discipline section to body if not already present
+            if "## 工作纪律" not in task_body:
+                task_body = task_body.rstrip() + "\n\n" + discipline_section + "\n"
+        except SchemaLoadError as e:
+            # F76-R2: schema declaration missing → warn but don't block (存量兼容)
+            result.setdefault("warnings", []).append(
+                f"工作纪律节派生失败(存量兼容): {e}"
+            )
+    
+    rendered_markdown = render_markdown_task_card(normalized, task_body)
     validation = validate_draft_metadata(repo_root, normalized)
     target_path = validation["target_path"]
     planned_writes = []
@@ -617,6 +639,39 @@ def publish_draft(
             for reason in coverage_reasons:
                 if reason not in validation["blocking_reasons"]:
                     validation["blocking_reasons"].append(reason)
+        
+        # AIPOS-F76 件①: Validate 工作纪律 section exists and matches current derivation
+        task_id_for_section = metadata.get("task_id")
+        if task_id_for_section:
+            from tools.aipos_cli.machine_zone import derive_machine_zone_纪律段
+            # F76-R2: governance_root for path resolution, product_root=None for schema auto-detect
+            expected_discipline = derive_machine_zone_纪律段(
+                task_id_for_section, metadata, governance_root=repo_root, product_root=None
+            )
+            
+            # Check if section exists in body
+            if "## 工作纪律" not in body:
+                # Missing section: legacy compatibility warning (存量卡 from before F76)
+                validation["warnings"].append(
+                    "工作纪律节缺失 (F76前创建的卡)，存量兼容允许发布。"
+                    "建议: 重新 draft create 或使用 regen 补充该节。"
+                )
+            else:
+                # Section exists: validate it matches current derivation
+                import re
+                # Extract the actual discipline section from body
+                pattern = r"(## 工作纪律.*?)(?=\n## |\Z)"
+                match = re.search(pattern, body, re.DOTALL)
+                if match:
+                    actual_discipline = match.group(1).strip()
+                    expected_discipline_normalized = expected_discipline.strip()
+                    
+                    if actual_discipline != expected_discipline_normalized:
+                        validation["blocking_reasons"].append(
+                            "工作纪律节被手改，与 schema 派生不一致。"
+                            "机器区由 schema 派生，禁止手动编辑。"
+                            "可执行出口: 删除手改内容，重新 draft create 或使用 regen 更新该节"
+                        )
     except SchemaLoadError:
         # Legacy compatibility: schema declaration missing (存量卡)
         # Add warning but allow publish to proceed
@@ -747,10 +802,15 @@ def regen_machine_zone_for_pending(
     actor: str,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """AIPOS-F74 件② (R2 修复): 对 pending 存量卡重生成机器区与机器纪律段。
+    """AIPOS-F76 件② (F74 首用两缺修复): 对 pending 存量卡重生成机器纪律段。
     
-    对指定任务卡(或所有 pending 卡)重新派生机器区字段与纪律段,
+    对指定任务卡(或所有 pending 卡)重新派生纪律段,
     经门 amend 落卡(留 amendment 记录),顾问区零触碰。
+    
+    AIPOS-F76 修复:
+    1. 按卡阶段派生: pending/claimed 卡禁重置 draft_status (只更新纪律段)
+    2. 纪律段缺失时追加(不是只替换既有节)
+    3. 三口一函数: derive_machine_zone_纪律段 是唯一派生源
     
     Args:
         governance_root: 治理工作区根 (pending 卡所在位置)
@@ -771,7 +831,7 @@ def regen_machine_zone_for_pending(
         }
     """
     from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-    from tools.aipos_cli.machine_zone import derive_machine_zone_fields, derive_machine_zone_纪律段
+    from tools.aipos_cli.machine_zone import derive_machine_zone_纪律段
     from tools.aipos_cli.board_adapter import amend_task
     
     blocking_reasons = []
@@ -823,38 +883,38 @@ def regen_machine_zone_for_pending(
                 blocking_reasons.append(f"MISSING_TASK_ID: {card_file.name} lacks task_id")
                 continue
             
-            # 重新派生机器区字段
-            try:
-                new_machine_zone = derive_machine_zone_fields(metadata, product_root)
-            except Exception as e:
-                blocking_reasons.append(f"DERIVE_FAILED ({card_task_id}): {e}")
-                continue
+            # AIPOS-F76 件②: 检测卡阶段 (pending/claimed)
+            # pending 目录下的卡默认为 pending, 但可能已 claimed (有 claim_id/claimed_by)
+            card_stage = "pending"
+            if metadata.get("status") == "claimed" or metadata.get("claimed_by") or metadata.get("claim_id"):
+                card_stage = "claimed"
             
-            # 比较变化
+            # AIPOS-F76 件②: pending/claimed 卡禁重置 draft_status
+            # 只更新纪律段, 不触碰 frontmatter 机器区字段
             amendments = {}
-            for field, new_value in new_machine_zone.items():
-                old_value = metadata.get(field)
-                # 跳过时间戳字段(不更新它们)
-                if field in {"draft_created_at", "draft_updated_at"}:
-                    continue
-                if old_value != new_value:
-                    amendments[field] = new_value
             
-            # 重新派生机器纪律段
+            # 重新派生机器纪律段 (三口一函数: 唯一派生源)
             try:
-                new_discipline_section = derive_machine_zone_纪律段(card_task_id, metadata, product_root)
-                # 查找 body 中是否有旧的纪律段,如果有则替换
-                # 简单处理:如果 body 中有 "## 工作纪律" 节,则替换整个节
+                # F76-R2: governance_root for path resolution, product_root for schema reading
+                new_discipline_section = derive_machine_zone_纪律段(
+                    card_task_id, metadata, governance_root=governance_root, product_root=product_root
+                )
+                
+                # 查找 body 中是否有旧的纪律段
                 if "## 工作纪律" in body:
-                    # 找到该节的开始和结束
+                    # 已有节: 替换
                     import re
                     # 匹配从 "## 工作纪律" 到下一个 "##" 或文末
                     pattern = r"(## 工作纪律.*?)(?=\n## |\Z)"
                     new_body = re.sub(pattern, new_discipline_section, body, flags=re.DOTALL)
                     if new_body != body:
-                        # body 变化了,记录为 amendment
-                        amendments["_body_updated"] = True
+                        amendments["body"] = new_body
                         body = new_body
+                else:
+                    # AIPOS-F76 件②: 缺失时追加 (与 create 同一函数同一节名)
+                    new_body = body.rstrip() + "\n\n" + new_discipline_section + "\n"
+                    amendments["body"] = new_body
+                    body = new_body
             except Exception as e:
                 # 纪律段派生失败,警告但不阻塞
                 pass
@@ -865,18 +925,13 @@ def regen_machine_zone_for_pending(
             
             # 使用 amend_task 更新卡
             if not dry_run:
-                # F-1: body 更新放进 amendments["body"] (amend_task 无 new_body 参数)
-                body_updated = amendments.pop("_body_updated", False)
-                if body_updated:
-                    amendments["body"] = body
-                
                 try:
                     amend_result = amend_task(
                         repo_root=governance_root,
                         task_id=card_task_id,
                         actor=actor,
                         amendments=amendments,
-                        amendment_reason=f"AIPOS-F74: 机器区重生成 (regen-machine-zone)",
+                        amendment_reason=f"AIPOS-F76: 机器区补完 (纪律段写入卡面)",
                         dry_run=False,
                     )
                     
