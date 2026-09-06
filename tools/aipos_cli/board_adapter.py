@@ -141,6 +141,32 @@ def _actor_payload(actor: str | None) -> dict[str, Any] | None:
     return {"actor": str(actor)}
 
 
+def _read_fix_derivation_mode(repo_root: Path) -> str:
+    """AIPOS-F75 件①: 读取 transitions.schema.json 中的 fix_derivation.mode 声明。
+    
+    默认 manual (不派生)。门读此声明执行，禁代码内写死默认行为。
+    """
+    try:
+        import json
+        schema_path = repo_root / "schema" / "transitions.schema.json"
+        if not schema_path.exists():
+            # schema 文件不存在，使用默认值 manual
+            return "manual"
+        data = json.loads(schema_path.read_text(encoding="utf-8"))
+        # 读取 nodes.N4.fix_derivation.mode
+        nodes = data.get("nodes", {})
+        n4 = nodes.get("N4", {})
+        fix_derivation = n4.get("fix_derivation", {})
+        mode = str(fix_derivation.get("mode", "manual")).strip().lower()
+        # 只允许 auto 或 manual
+        if mode not in {"auto", "manual"}:
+            return "manual"
+        return mode
+    except Exception:
+        # 解析失败，使用默认值 manual (fail-closed)
+        return "manual"
+
+
 def _normalize_path(path: str | Path | None, *, field: str = "path") -> str | None:
     if path is None:
         return None
@@ -4633,28 +4659,38 @@ def audit_verdict_task(
         if auto_closed:
             response["data"]["auto_closed_audit_card"] = auto_closed
             response.setdefault("performed_moves", []).append(auto_closed)
-        # AIPOS-C3B 大项C⑤: 审计 FAIL 自动派修复卡——避免死等
+        # AIPOS-F75 件①: 检查 fix_derivation 开关 — 默认 manual (不派生)
         normalized_verdict_value = str(data.get("normalized_verdict") or verdict_text or "").upper()
         if normalized_verdict_value in {"FAIL", "BLOCK"}:
-            try:
-                from tools.aipos_cli.audit_derivation import derive_repair_card_on_fail
-                repair_result = derive_repair_card_on_fail(
-                    governance_root=resolved_root,
-                    reviewed_task_id=reviewed_id,
-                    audit_task_id=str(data.get("audit_task_id") or audit_task_id or ""),
-                    verdict_id=str(data.get("verdict_id") or planned_verdict_id or ""),
-                    fail_reason=str(findings_summary or "(no reason provided)")[:500],
-                    actor=actor_text,
-                )
-                if repair_result.get("derived"):
-                    response["data"]["auto_derived_repair_card"] = repair_result
-                    response.setdefault("performed_writes", []).append({
-                        "path": repair_result.get("repair_task_path"),
-                        "kind": "create",
-                        "type": "derived_repair_task",
-                    })
-            except Exception as e:
-                response.setdefault("warnings", []).append(f"Auto-derive repair card failed: {e}")
+            # 读取 transitions.schema.json 中的 fix_derivation 声明
+            fix_derivation_mode = _read_fix_derivation_mode(resolved_root)
+            if fix_derivation_mode == "auto":
+                # 只有显式声明 auto 时才派生修复卡
+                try:
+                    from tools.aipos_cli.audit_derivation import derive_repair_card_on_fail
+                    repair_result = derive_repair_card_on_fail(
+                        governance_root=resolved_root,
+                        reviewed_task_id=reviewed_id,
+                        audit_task_id=str(data.get("audit_task_id") or audit_task_id or ""),
+                        verdict_id=str(data.get("verdict_id") or planned_verdict_id or ""),
+                        fail_reason=str(findings_summary or "(no reason provided)")[:500],
+                        actor=actor_text,
+                    )
+                    if repair_result.get("derived"):
+                        response["data"]["auto_derived_repair_card"] = repair_result
+                        response.setdefault("performed_writes", []).append({
+                            "path": repair_result.get("repair_task_path"),
+                            "kind": "create",
+                            "type": "derived_repair_task",
+                        })
+                except Exception as e:
+                    response.setdefault("warnings", []).append(f"Auto-derive repair card failed: {e}")
+            else:
+                # manual 模式:不派生,提示使用 queue_rework
+                response.setdefault("data", {})["fix_derivation_skipped"] = {
+                    "mode": fix_derivation_mode,
+                    "message": f"FAIL 裁决已落库,fix_derivation={fix_derivation_mode} 不派生修复卡。请顾问使用 queue_rework 追加返工节到卡面。",
+                }
         return response
     except Exception as exc:
         return _normalize_exception("audit_verdict", exc, dry_run=dry_run, actor=_actor_payload(actor))
@@ -7216,6 +7252,80 @@ def read_settlement_status(
     )
 
     return result
+
+
+def queue_rework_task(
+    *,
+    task_id: str,
+    verdict_ref: str,
+    focus_items: list[str],
+    acceptance_criteria: str = "",
+    actor: str | None = None,
+    agent_instance: str | None = None,
+    owner_policy_ref: str | None = None,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F75 件②: queue_rework 门动词 — 对 claimed 卡追加返工轮次。
+    
+    两阶段: dry_run 预览 + confirm 执行。
+    受限 amend: 只允许修改 rework_rounds，禁触其他字段。
+    """
+    try:
+        actor_text = str(actor or "").strip()
+        instance_text = str(agent_instance or "").strip()
+        if not actor_text:
+            raise ValueError("actor is required")
+        if not instance_text:
+            raise ValueError("agent_instance is required")
+        if not task_id:
+            raise ValueError("task_id is required")
+        if not verdict_ref:
+            raise ValueError("verdict_ref is required")
+        if not focus_items:
+            raise ValueError("focus_items is required (at least one item)")
+        
+        # 检查角色: 只有 advisor 可以追加返工节
+        role_prefix = instance_text.split(".")[0].lower() if "." in instance_text else ""
+        if role_prefix not in {"advisor", "advise"}:
+            return {
+                "verdict": Verdict.BLOCK,
+                "task_id": task_id,
+                "actor": actor_text,
+                "dry_run": dry_run,
+                "blocking_reasons": [
+                    f"ROLE_VIOLATION: queue_rework 只能由 advisor 角色执行。"
+                    f"当前 agent_instance '{instance_text}' (角色: {role_prefix or 'unknown'}) 未授权。"
+                ],
+                "warnings": [],
+                "data": {},
+                "message": "Queue rework blocked: role violation",
+            }
+        
+        resolved_root = _resolve_repo_root(repo_root)
+        
+        from tools.aipos_cli.queue_mutation import queue_rework_add_round
+        result = queue_rework_add_round(
+            repo_root=resolved_root,
+            task_id=task_id,
+            verdict_ref=verdict_ref,
+            focus_items=focus_items,
+            acceptance_criteria=acceptance_criteria,
+            actor=actor_text,
+            dry_run=dry_run,
+        )
+        
+        if dry_run:
+            return _attach_controlled_execute_metadata(
+                operation="queue_rework",
+                actor=actor_text,
+                response=result,
+                execute_allowed=result.get("verdict") != Verdict.BLOCK,
+            )
+        
+        return result
+    except Exception as exc:
+        return _normalize_exception("queue_rework", exc, dry_run=dry_run, actor=_actor_payload(actor))
 
 
 # AIPOS-316: Guard against direct invocation

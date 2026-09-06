@@ -3045,6 +3045,126 @@ def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-F75 件②: queue_rework (add rework round to claimed card)
+# ---------------------------------------------------------------------------
+
+QUEUE_REWORK_SCOPE = "queue_rework"
+
+
+def _queue_rework_scope_allowed() -> bool:
+    """Check if the current token holds queue_rework scope (advisor)."""
+    return _capability_has_scope(QUEUE_REWORK_SCOPE)
+
+
+def _queue_rework_error(error_code: str, message: str, suggested_next_action: str) -> dict[str, Any]:
+    return _teaching_error(
+        error_code,
+        message,
+        suggested_next_action,
+        doc_ref="AIPOS-F75 queue_rework (add rework round to claimed card)",
+    )
+
+
+def lybra_queue_rework_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F75 件②: Add rework round to claimed card — dry-run preview.
+    
+    对 claimed 卡追加返工轮次，受限 amend: 只允许修改 rework_rounds 字段。
+    轮次上限 2 轮，超限拒绝。每次追加留 amendment 记录。
+    
+    Requires: queue_rework scope (advisor only).
+    """
+    if not _queue_rework_scope_allowed():
+        return _scope_denied_result_for(QUEUE_REWORK_SCOPE, "queue_rework tools (advisor only)")
+    args = arguments or {}
+    task_id = str(args.get("task_id") or "").strip()
+    verdict_ref = str(args.get("verdict_ref") or "").strip()
+    focus_items = args.get("focus_items", [])
+    acceptance_criteria = str(args.get("acceptance_criteria") or "").strip()
+    actor = str(args.get("actor") or "").strip()
+    agent_instance = str(args.get("agent_instance") or "").strip()
+    owner_policy_ref = str(args.get("owner_policy_ref") or "").strip()
+    
+    if not task_id:
+        return _queue_rework_error("TASK_ID_REQUIRED", "task_id is required", "Provide the task_id of the claimed card")
+    if not verdict_ref:
+        return _queue_rework_error("VERDICT_REF_REQUIRED", "verdict_ref is required", "Provide the verdict_ref (FAIL verdict record ID)")
+    if not focus_items or not isinstance(focus_items, list):
+        return _queue_rework_error("FOCUS_ITEMS_REQUIRED", "focus_items is required (list of strings)", "Provide at least one focus item")
+    if not actor:
+        return _queue_rework_error("ACTOR_REQUIRED", "actor is required", "Provide the actor (advisor)")
+    if not agent_instance:
+        return _queue_rework_error("AGENT_INSTANCE_REQUIRED", "agent_instance is required", "Provide the agent_instance (advisor)")
+    
+    from tools.aipos_cli.board_adapter import queue_rework_task
+    response = queue_rework_task(
+        task_id=task_id,
+        verdict_ref=verdict_ref,
+        focus_items=focus_items,
+        acceptance_criteria=acceptance_criteria,
+        actor=actor,
+        agent_instance=agent_instance,
+        owner_policy_ref=owner_policy_ref,
+        dry_run=True,
+        repo_root=_resolve_queue_workspace(args),
+    )
+    
+    if response.get("verdict") == Verdict.BLOCK:
+        return _tool_result(response, is_error=True)
+    
+    return _tool_result(response, is_error=False)
+
+
+def lybra_queue_rework_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F75 件②: Confirm adding rework round to claimed card.
+    
+    Requires dry_run_token from lybra_queue_rework_dry_run.
+    """
+    if not _queue_rework_scope_allowed():
+        return _scope_denied_result_for(QUEUE_REWORK_SCOPE, "queue_rework tools (advisor only)")
+    args = arguments or {}
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    if not dry_run_token:
+        return _queue_rework_error(
+            "DRY_RUN_REQUIRED",
+            "lybra_queue_rework_confirm requires dry_run_token from a prior lybra_queue_rework_dry_run response.",
+            "Call lybra_queue_rework_dry_run first, review the preview, then confirm with its dry_run_token.",
+        )
+    if str(args.get("owner_confirmation_token") or "").strip() != OWNER_CONFIRMATION_TOKEN:
+        return _queue_rework_error(
+            "OWNER_CONFIRMATION_REQUIRED",
+            "queue_rework confirm requires owner_confirmation_token: OWNER_CONFIRMED.",
+            "Present the dry-run preview to Owner (or advisor self-confirm), then retry with owner_confirmation_token set to OWNER_CONFIRMED.",
+        )
+    
+    actor = str(args.get("actor") or "").strip()
+    if not actor:
+        return _queue_rework_error("ACTOR_REQUIRED", "actor is required on confirm", "Pass the same actor reviewed in the dry-run preview")
+    
+    token = get_dry_run(dry_run_token)
+    if token is None:
+        return _queue_rework_error(
+            "STALE_DRY_RUN",
+            "dry_run_token was not found in this MCP server process, or it expired.",
+            "Run lybra_queue_rework_dry_run again, review the new preview, then confirm.",
+        )
+    if token.operation != "queue_rework":
+        return _queue_rework_error(
+            "INCOMPATIBLE_DRY_RUN",
+            "dry_run_token was recognized but is not compatible with lybra_queue_rework_confirm.",
+            "Confirm only with a token produced by lybra_queue_rework_dry_run.",
+        )
+    
+    response = execute_dry_run(dry_run_token, actor, owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=_resolve_queue_workspace(args))
+    if not response.get("ok", False):
+        return _tool_result(response, is_error=True)
+    
+    response["surface"] = "mcp"
+    response["autonomy_mode"] = "Supervised"
+    return _tool_result(response, is_error=False)
+
+
+
+# ---------------------------------------------------------------------------
 # AIPOS-336: bench audit submit/confirm (non-code branch audit)
 # ---------------------------------------------------------------------------
 
@@ -5061,6 +5181,8 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_audit_dispatch_confirm": lybra_audit_dispatch_confirm,
     "lybra_audit_verdict_dry_run": lybra_audit_verdict_dry_run,
     "lybra_audit_verdict_confirm": lybra_audit_verdict_confirm,
+    "lybra_queue_rework_dry_run": lybra_queue_rework_dry_run,
+    "lybra_queue_rework_confirm": lybra_queue_rework_confirm,
     "lybra_bench_audit_submit_dry_run": lybra_bench_audit_submit_dry_run,
     "lybra_bench_audit_confirm": lybra_bench_audit_confirm,
     "lybra_queue_close_dry_run": lybra_queue_close_dry_run,
@@ -5660,6 +5782,52 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_queue_rework_dry_run",
+        "description": (
+            "AIPOS-F75 件②: Add rework round to claimed card — dry-run preview. "
+            "对 claimed 卡追加返工轮次，受限 amend: 只允许修改 rework_rounds 字段，禁触其他区。"
+            "轮次上限 2 轮，超限拒绝。每次追加留 amendment 记录。"
+            "Requires: queue_rework scope (advisor only)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Task ID (must be in claimed state)."},
+                "verdict_ref": {"type": "string", "description": "FAIL verdict record ID that triggered this rework."},
+                "focus_items": {
+                    "type": "array",
+                    "description": "List of focus items (point-fix checklist).",
+                    "items": {"type": "string"},
+                },
+                "acceptance_criteria": {"type": "string", "description": "Optional acceptance criteria for this rework round."},
+                "actor": {"type": "string", "description": "Actor (advisor)."},
+                "agent_instance": {"type": "string", "description": "Agent instance (advisor role)."},
+                "owner_policy_ref": {"type": "string", "description": "Owner policy reference."},
+                "workspace_root": {"type": "string", "description": "Explicit workspace root."},
+            },
+            "required": ["task_id", "verdict_ref", "focus_items", "actor", "agent_instance"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_queue_rework_confirm",
+        "description": (
+            "AIPOS-F75 件②: Confirm adding rework round to claimed card. "
+            "Requires dry_run_token from lybra_queue_rework_dry_run."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "dry_run_token": {"type": "string", "description": "Token from lybra_queue_rework_dry_run."},
+                "actor": {"type": "string", "description": "Confirming actor (advisor)."},
+                "owner_confirmation_token": {"type": "string", "description": "Must be OWNER_CONFIRMED."},
+                "workspace_root": {"type": "string", "description": "Explicit workspace root."},
+            },
+            "required": ["dry_run_token", "actor", "owner_confirmation_token"],
             "additionalProperties": False,
         },
     },

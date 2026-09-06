@@ -635,7 +635,31 @@ def derive_next_step(
                 "notes": "N1→N2: RETURN.md 已生成,需执行 return 动词",
             }
 
-        # 无 return 记录也无 RETURN.md → 等待执行体完成,或事实不足
+        # 无 return 记录也无 RETURN.md → 检查是否有返工节 (AIPOS-F75 件③)
+        rework_rounds = fm.get("rework_rounds", [])
+        if isinstance(rework_rounds, list) and rework_rounds:
+            # 有返工节,输出点杀清单
+            latest_round = rework_rounds[-1]
+            focus_items = latest_round.get("focus_items", [])
+            round_num = latest_round.get("round", len(rework_rounds))
+            verdict_ref = latest_round.get("verdict_ref", "")
+            
+            focus_text = "\n".join(f"  - {item}" for item in focus_items) if focus_items else "  (无具体项)"
+            
+            return {
+                "task_id": task_id,
+                "derivable": True,
+                "current_node": "claim",
+                "current_state": "claimed",
+                "triggered_by": "executor",
+                "command": "",
+                "verb": "",
+                "missing_records": [],
+                "suggested_action": f"执行第 {round_num} 轮返工，完成后生成 RETURN.md 并执行 return",
+                "notes": f"AIPOS-F75: 卡面有返工节 (第 {round_num} 轮，依据 {verdict_ref})，点杀清单:\n{focus_text}",
+                "rework_round": latest_round,
+            }
+        
         # 检查 events 是否有失败信号
         events = records.get("events", [])
         has_blocked = any(
