@@ -43,6 +43,9 @@
 ## 工作方式
 
 - `/claim [-model <provider/model>] <任务卡路径>` 冷启动 → 读卡 → 按卡内知识入口独立执行。
+- **每轮开工先读卡面返工节**(AIPOS-F75 件③):卡 frontmatter 若有 `rework_rounds` 且最新轮次
+  未销账(`cleared_at` 为空),**以返工节为最新指令**——优先级高于卡 body 原始需求。返工节
+  包含点杀清单(`focus_items`)与验收标准(`acceptance_criteria`),按返工节完成后正常 return。
 - 涉及 Lybra gate 的操作(claim/return 等)用卡内给出的 MCP 连接信息
   (默认:gate `http://127.0.0.1:7118`,connection.json 路径以卡为准);你只走 executor 角色
   token,永远拿不到、也绝不尝试 owner confirm 能力。

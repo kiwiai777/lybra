@@ -967,6 +967,123 @@ def mutate_queue_task(
                 result["worktree_created"] = False
     
     return result
+
+
+def build_rework_round(
+    *,
+    repo_root: Path,
+    task_id: str,
+    verdict_ref: str,
+    focus_items: list[str],
+    acceptance_criteria: str = "",
+    actor: str,
+) -> dict[str, Any]:
+    """AIPOS-F75 件②: 构建返工轮次对象 (校验 + 构造, 不写磁盘)。
+    
+    磁盘操作由 amend_task 完成，本函数只负责校验与构造 round 对象。
+    """
+    from datetime import datetime, timezone
+    import json
+    
+    # 1. 找到任务卡
+    task_path, queue_dir = None, None
+    queue_root = repo_root / "5_tasks" / "queue"
+    for status_dir in ["claimed"]:
+        candidate = queue_root / status_dir / f"{task_id.lower()}.md"
+        if candidate.is_file():
+            task_path, queue_dir = candidate, status_dir
+            break
+    
+    if not task_path:
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": True,
+            "blocking_reasons": [
+                "NOT_CLAIMED: 任务卡 {task_id} 不在 claimed 状态，只能对 claimed 卡追加返工节。".format(task_id=task_id)
+            ],
+            "warnings": [],
+            "data": {},
+        }
+    
+    # 2. 读取卡内容
+    try:
+        metadata, body, warnings = _read_task_markdown(task_path)
+    except (json.JSONDecodeError, OSError) as e:
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": True,
+            "blocking_reasons": [f"读取任务卡失败: {e}"],
+            "warnings": [],
+            "data": {},
+        }
+    
+    # 3. 检查轮次上限
+    rework_rounds = metadata.get("rework_rounds", [])
+    if not isinstance(rework_rounds, list):
+        rework_rounds = []
+    
+    # 读取上限声明 (默认 2)
+    max_rounds = 2
+    try:
+        schema_path = repo_root / "schema" / "transitions.schema.json"
+        if schema_path.exists():
+            schema_data = json.loads(schema_path.read_text(encoding="utf-8"))
+            max_rounds = schema_data.get("nodes", {}).get("queue_rework", {}).get("guards", {}).get("rework_limit", {}).get("max_rounds", 2)
+    except (json.JSONDecodeError, OSError) as e:
+        # fail-closed: 解析失败使用默认值，但记录 warning
+        warnings.append(f"Failed to read max_rounds from schema: {e}, using default 2")
+    
+    next_round = len(rework_rounds) + 1
+    if next_round > max_rounds:
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": True,
+            "blocking_reasons": [
+                f"返工轮次已达上限 ({max_rounds} 轮)，需升仲裁。当前已有 {len(rework_rounds)} 轮。"
+            ],
+            "warnings": warnings,
+            "data": {"current_rounds": len(rework_rounds), "max_rounds": max_rounds},
+        }
+    
+    # 4. 构建新返工轮次
+    now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    new_round = {
+        "round": next_round,
+        "verdict_ref": verdict_ref,
+        "created_at": now_iso,
+        "created_by": actor,
+        "focus_items": focus_items,
+    }
+    if acceptance_criteria:
+        new_round["acceptance_criteria"] = acceptance_criteria
+    
+    # 5. 构造更新后的 rework_rounds
+    updated_rework_rounds = rework_rounds + [new_round]
+    
+    return {
+        "verdict": Verdict.PASS,
+        "task_id": task_id,
+        "actor": actor,
+        "dry_run": True,
+        "blocking_reasons": [],
+        "warnings": warnings,
+        "data": {
+            "task_path": str(task_path.relative_to(repo_root)),
+            "round_added": next_round,
+            "total_rounds": len(updated_rework_rounds),
+            "max_rounds": max_rounds,
+            "new_round": new_round,
+            "updated_rework_rounds": updated_rework_rounds,
+        },
+    }
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 from tools.schema_constants import RecordType, Verdict

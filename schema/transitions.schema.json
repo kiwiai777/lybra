@@ -331,8 +331,18 @@
       },
       "automation": {
         "on_PASS": "允许 finalize (N5)",
-        "on_FAIL": "自动派生复审卡 (N3 复用,大项C⑤)",
+        "on_FAIL": "根据 fix_derivation 声明决定是否派生修复卡 (AIPOS-F75 件①: 默认 manual)",
         "frontmatter_update": "reviewed task 的 dependency_audit_status"
+      },
+      "fix_derivation": {
+        "description": "AIPOS-F75 件①: FAIL 后修复卡派生控制 — 默认关闭,改为 opt-in",
+        "mode": "manual",
+        "allowed_values": ["auto", "manual"],
+        "semantics": {
+          "auto": "FAIL 裁决落库时自动派生修复卡(旧行为,现需显式声明)",
+          "manual": "FAIL 裁决落库时不派生修复卡,改用 queue_rework 追加返工节到卡面(默认)"
+        },
+        "note": "门读此声明执行,禁代码内写死默认行为。既有派生实现保留但受此声明控制。"
       },
       "completion_check": {
         "description": "审计车道的完成判据:verdict 记录已落库",
@@ -662,6 +672,84 @@
           "record_type: reopen",
           "reopened_at"
         ]
+      }
+    },
+    "queue_rework": {
+      "name": "queue_rework",
+      "description": "AIPOS-F75 件②: 返工节追加到卡面 — 对 claimed 卡受限 amend,只允许追加/更新 rework_rounds,禁触其他区",
+      "manual": true,
+      "manual_note": "AIPOS-F75: queue_rework 是顾问职责节点,需人工决策返工内容与验收标准",
+      "from_states": [
+        "claimed"
+      ],
+      "to_state": "claimed",
+      "guards": {
+        "advisor_authorization": {
+          "description": "只有 advisor 可以追加返工节",
+          "check": "actor_is_advisor",
+          "error_message": "只有 advisor 可以追加返工节",
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "返工节追加需要 advisor 权限",
+            "command": null
+          }
+        },
+        "rework_limit": {
+          "description": "返工轮次不得超过声明的上限(默认 2 轮)",
+          "check": "rework_rounds_within_limit",
+          "error_message": "返工轮次已达上限,需升仲裁",
+          "severity": "needs_human",
+          "max_rounds": 2,
+          "next_step": {
+            "audience": "advisor",
+            "action": "返工轮次已达上限,建议升仲裁或重新评估任务",
+            "command": null
+          }
+        },
+        "schema_validation": {
+          "description": "返工节结构必须符合 card.schema.json rework_rounds 定义",
+          "check": "rework_round_schema_valid",
+          "error_message": "返工节结构不符合 schema",
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "检查返工节数据结构是否符合 card.schema.json rework_rounds 定义",
+            "command": null
+          }
+        },
+        "claimed_only": {
+          "description": "只能对 claimed 状态的卡追加返工节",
+          "check": "task_is_claimed",
+          "error_message": "只能对 claimed 状态的卡追加返工节",
+          "severity": "needs_human",
+          "next_step": {
+            "audience": "advisor",
+            "action": "确认任务卡当前状态为 claimed",
+            "command": null
+          }
+        }
+      },
+      "record": {
+        "type": "rework_amendment",
+        "location": "5_tasks/records/amendments/{task_id}/rework_{task_id}_{round}_{timestamp}_{actor}.md",
+        "required_fields": [
+          "task_id",
+          "actor",
+          "amended_at",
+          "amendment_type",
+          "round",
+          "record_type"
+        ],
+        "gate_written_markers": [
+          "record_type: rework_amendment",
+          "amended_at"
+        ]
+      },
+      "automation": {
+        "queue_placement": "stays in claimed/ (卡继续在 claimed,等待执行)",
+        "frontmatter_update": "追加或更新 rework_rounds 数组,留 amendment 记录",
+        "restricted_amend": "只允许修改 rework_rounds 字段,禁触 machine_zone 与 advisor_zone 其他字段"
       }
     }
   },

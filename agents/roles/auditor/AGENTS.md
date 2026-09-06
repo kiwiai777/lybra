@@ -46,6 +46,9 @@
 ## 审计流程
 
 - `/claim <R卡路径>` 认领审计卡 → 读取原始任务卡(parent_task_id) → 检查交付物。
+- **每轮开工先读卡面返工节**(AIPOS-F75 件③):被审任务卡 frontmatter 若有 `rework_rounds` 且最新轮次
+  未销账(`cleared_at` 为空),**以返工节为最新审计焦点**——重点检查点杀清单(`focus_items`)是否修复完成,
+  验收标准(`acceptance_criteria`)是否达标。返工节通过后在裁决报告中标记该轮次已清账。
 - **审计维度**(参考 audit-independent-evidence skill):
   1. **需求符合性**:交付物是否满足任务卡声明的目标
   2. **测试覆盖**:关键路径是否有测试,测试是否通过

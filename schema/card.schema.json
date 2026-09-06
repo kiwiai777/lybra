@@ -709,6 +709,27 @@
       "type": "string",
       "required": false,
       "description": "Draft publish target path (draft-only field)"
+    },
+    "rework_rounds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "round": {"type": "number"},
+          "verdict_ref": {"type": "string"},
+          "created_at": {"type": "string", "format": "iso8601"},
+          "created_by": {"type": "string"},
+          "focus_items": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "acceptance_criteria": {"type": "string"},
+          "cleared_at": {"type": "string", "format": "iso8601"},
+          "cleared_by": {"type": "string"}
+        }
+      },
+      "required": false,
+      "description": "AIPOS-F75 件②: 返工轮次记录 — 每轮包含轮次/依据裁决ref/点杀清单/验收标准/销账时间戳。只能通过 queue_rework 门动词追加,禁手写"
     }
   },
   "runtime_fields": [
@@ -738,7 +759,8 @@
     "finalize_status",
     "claim_source",
     "claim_match_basis",
-    "claim_requirements_hash"
+    "claim_requirements_hash",
+    "rework_rounds"
   ],
   "forbidden_in_draft": [
     "claim_id",

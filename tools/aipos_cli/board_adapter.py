@@ -141,6 +141,34 @@ def _actor_payload(actor: str | None) -> dict[str, Any] | None:
     return {"actor": str(actor)}
 
 
+def _read_fix_derivation_mode(repo_root: Path) -> str:
+    """AIPOS-F75 件①: 读取 transitions.schema.json 中的 fix_derivation.mode 声明。
+    
+    默认 manual (不派生)。门读此声明执行，禁代码内写死默认行为。
+    """
+    import json
+    schema_path = repo_root / "schema" / "transitions.schema.json"
+    if not schema_path.exists():
+        # schema 文件不存在，使用默认值 manual
+        return "manual"
+    try:
+        data = json.loads(schema_path.read_text(encoding="utf-8"))
+        # 读取 nodes.N4.fix_derivation.mode
+        nodes = data.get("nodes", {})
+        n4 = nodes.get("N4", {})
+        fix_derivation = n4.get("fix_derivation", {})
+        mode = str(fix_derivation.get("mode", "manual")).strip().lower()
+        # 只允许 auto 或 manual
+        if mode not in {"auto", "manual"}:
+            return "manual"
+        return mode
+    except (json.JSONDecodeError, OSError) as e:
+        # 解析失败，使用默认值 manual (fail-closed)，但记录 warning
+        import warnings
+        warnings.warn(f"Failed to parse transitions.schema.json for fix_derivation mode: {e}, defaulting to manual")
+        return "manual"
+
+
 def _normalize_path(path: str | Path | None, *, field: str = "path") -> str | None:
     if path is None:
         return None
@@ -4439,6 +4467,21 @@ def _build_audit_verdict_preview(
         safety_notice=CONTROLLED_EXECUTE_NOTICE,
         errors=[],
     )
+    
+    # AIPOS-F75 件①: dry_run 预览也要包含 fix_derivation 决策
+    if normalized_verdict in {"FAIL", "BLOCK"}:
+        fix_derivation_mode = _read_fix_derivation_mode(repo_root)
+        if fix_derivation_mode == "auto":
+            # auto模式会派生,在data中标记
+            response["data"]["fix_derivation_mode"] = "auto"
+            response["data"]["will_derive_repair_card"] = True
+        else:
+            # manual模式不派生,明确告知
+            response["data"]["fix_derivation_skipped"] = {
+                "mode": fix_derivation_mode,
+                "message": f"FAIL 裁决已落库,fix_derivation={fix_derivation_mode} 不派生修复卡。请顾问使用 queue_rework 追加返工节到卡面。",
+            }
+    
     return response
 
 
@@ -4633,28 +4676,39 @@ def audit_verdict_task(
         if auto_closed:
             response["data"]["auto_closed_audit_card"] = auto_closed
             response.setdefault("performed_moves", []).append(auto_closed)
-        # AIPOS-C3B 大项C⑤: 审计 FAIL 自动派修复卡——避免死等
-        normalized_verdict_value = str(data.get("normalized_verdict") or verdict_text or "").upper()
+        # AIPOS-F75 件①: 检查 fix_derivation 开关 — 默认 manual (不派生)
+        # 从 data 中读取 verdict 字段
+        normalized_verdict_value = str(data.get("verdict") or verdict_text or "").upper()
         if normalized_verdict_value in {"FAIL", "BLOCK"}:
-            try:
-                from tools.aipos_cli.audit_derivation import derive_repair_card_on_fail
-                repair_result = derive_repair_card_on_fail(
-                    governance_root=resolved_root,
-                    reviewed_task_id=reviewed_id,
-                    audit_task_id=str(data.get("audit_task_id") or audit_task_id or ""),
-                    verdict_id=str(data.get("verdict_id") or planned_verdict_id or ""),
-                    fail_reason=str(findings_summary or "(no reason provided)")[:500],
-                    actor=actor_text,
-                )
-                if repair_result.get("derived"):
-                    response["data"]["auto_derived_repair_card"] = repair_result
-                    response.setdefault("performed_writes", []).append({
-                        "path": repair_result.get("repair_task_path"),
-                        "kind": "create",
-                        "type": "derived_repair_task",
-                    })
-            except Exception as e:
-                response.setdefault("warnings", []).append(f"Auto-derive repair card failed: {e}")
+            # 读取 transitions.schema.json 中的 fix_derivation 声明
+            fix_derivation_mode = _read_fix_derivation_mode(resolved_root)
+            if fix_derivation_mode == "auto":
+                # 只有显式声明 auto 时才派生修复卡
+                try:
+                    from tools.aipos_cli.audit_derivation import derive_repair_card_on_fail
+                    repair_result = derive_repair_card_on_fail(
+                        governance_root=resolved_root,
+                        reviewed_task_id=reviewed_id,
+                        audit_task_id=str(data.get("audit_task_id") or audit_task_id or ""),
+                        verdict_id=str(data.get("verdict_id") or planned_verdict_id or ""),
+                        fail_reason=str(findings_summary or "(no reason provided)")[:500],
+                        actor=actor_text,
+                    )
+                    if repair_result.get("derived"):
+                        response["data"]["auto_derived_repair_card"] = repair_result
+                        response.setdefault("performed_writes", []).append({
+                            "path": repair_result.get("repair_task_path"),
+                            "kind": "create",
+                            "type": "derived_repair_task",
+                        })
+                except Exception as e:
+                    response.setdefault("warnings", []).append(f"Auto-derive repair card failed: {e}")
+            else:
+                # manual 模式:不派生,提示使用 queue_rework
+                response.setdefault("data", {})["fix_derivation_skipped"] = {
+                    "mode": fix_derivation_mode,
+                    "message": f"FAIL 裁决已落库,fix_derivation={fix_derivation_mode} 不派生修复卡。请顾问使用 queue_rework 追加返工节到卡面。",
+                }
         return response
     except Exception as exc:
         return _normalize_exception("audit_verdict", exc, dry_run=dry_run, actor=_actor_payload(actor))
@@ -6912,13 +6966,20 @@ def amend_task(
     actor: str | None = None,
     amendments: dict[str, Any] | None = None,
     amendment_reason: str | None = None,
+    amendment_type: str | None = None,
+    restricted_fields: set[str] | None = None,
     dry_run: bool = True,
     repo_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """AIPOS-315: amend a pending (unclaimed) task's frontmatter or body.
     
+    AIPOS-F75: 受限模式(restricted_fields 非空)允许对 claimed 卡修改指定字段。
+    
     Only works on pending tasks. Claimed tasks cannot be amended (in-transit work
     should not have requirements changed underneath it).
+    
+    EXCEPTION: restricted mode (restricted_fields != None) allows amending claimed
+    tasks but ONLY for fields in restricted_fields set. All other fields blocked.
     
     Writes amendment record to records/amendments/<task_id>/ (append-only).
     """
@@ -6957,21 +7018,62 @@ def amend_task(
         task = _select_task(resolved_root, task_id=selected_task_id, path=selected_path)
         task_path_obj = resolved_root / str(task["path"])
         
-        # S1: Only allow amending pending tasks
-        if task.get("queue_state") != "pending":
-            return blocked_response(
-                operation=operation,
-                dry_run=dry_run,
-                category="NOT_PENDING",
-                message=f"Task is in {task.get('queue_state')} state. Only pending (unclaimed) tasks can be amended.",
-                actor=_actor_payload(actor_text),
-                data={
-                    "task_id": task.get("task_id"),
-                    "current_state": task.get("queue_state"),
-                    "recommended_action": "Amendments are only allowed on pending tasks to avoid changing requirements for in-transit work."
-                },
-                safety_notice="AIPOS-315 S1: claimed tasks cannot be amended (would change requirements mid-execution)."
-            )
+        # AIPOS-F75: 受限模式判据
+        is_restricted_mode = restricted_fields is not None
+        current_state = task.get("queue_state")
+        
+        # S1: Only allow amending pending tasks (UNLESS restricted mode for claimed)
+        if not is_restricted_mode:
+            # 普通模式: 只允许 pending
+            if current_state != "pending":
+                return blocked_response(
+                    operation=operation,
+                    dry_run=dry_run,
+                    category="NOT_PENDING",
+                    message=f"Task is in {current_state} state. Only pending (unclaimed) tasks can be amended.",
+                    actor=_actor_payload(actor_text),
+                    data={
+                        "task_id": task.get("task_id"),
+                        "current_state": current_state,
+                        "recommended_action": "Amendments are only allowed on pending tasks to avoid changing requirements for in-transit work."
+                    },
+                    safety_notice="AIPOS-315 S1: claimed tasks cannot be amended (would change requirements mid-execution)."
+                )
+        else:
+            # 受限模式: 只允许 claimed
+            if current_state != "claimed":
+                return blocked_response(
+                    operation=operation,
+                    dry_run=dry_run,
+                    category="RESTRICTED_MODE_NOT_CLAIMED",
+                    message=f"Restricted mode amend requires task to be claimed, but it is {current_state}.",
+                    actor=_actor_payload(actor_text),
+                    data={
+                        "task_id": task.get("task_id"),
+                        "current_state": current_state,
+                        "restricted_fields": list(restricted_fields),
+                        "recommended_action": "Restricted amendments are only for claimed tasks (in-transit controlled updates)."
+                    },
+                    safety_notice="AIPOS-F75: restricted amend only applies to claimed tasks for controlled field updates (e.g. rework_rounds)."
+                )
+            # 检查 amendments 中的字段是否在允许清单内
+            disallowed = set(amendments.keys()) - restricted_fields
+            if disallowed:
+                return blocked_response(
+                    operation=operation,
+                    dry_run=dry_run,
+                    category="RESTRICTED_FIELD_VIOLATION",
+                    message=f"Restricted mode only allows amending {restricted_fields}, but attempted to amend: {disallowed}",
+                    actor=_actor_payload(actor_text),
+                    data={
+                        "task_id": task.get("task_id"),
+                        "restricted_fields": list(restricted_fields),
+                        "attempted_fields": list(amendments.keys()),
+                        "disallowed_fields": list(disallowed),
+                        "recommended_action": "Only amend fields within restricted_fields set."
+                    },
+                    safety_notice="AIPOS-F75: restricted amend must not touch fields outside restricted_fields."
+                )
         
         # Read current task content
         task_text = task_path_obj.read_text(encoding="utf-8")
@@ -7027,6 +7129,7 @@ def amend_task(
             "amended_by": actor_text,
             "amended_at": amendment_timestamp,
             "reason": str(amendment_reason).strip(),
+            "amendment_type": str(amendment_type or "general").strip(),
             "original_metadata": original_metadata,
             "updated_metadata": updated_metadata,
             "original_body": original_body if body_changed else None,
@@ -7045,6 +7148,7 @@ amendment_id: {amendment_id}
 task_id: {task.get('task_id')}
 amended_by: {actor_text}
 amended_at: {amendment_timestamp}
+amendment_type: {str(amendment_type or 'general').strip()}
 reason: {str(amendment_reason).strip()}
 ---
 
@@ -7052,6 +7156,9 @@ reason: {str(amendment_reason).strip()}
 
 ## Reason
 {str(amendment_reason).strip()}
+
+## Amendment Type
+{str(amendment_type or 'general').strip()}
 
 ## Fields Changed
 {chr(10).join(f"- {k}" for k in amendments.keys())}
@@ -7216,6 +7323,97 @@ def read_settlement_status(
     )
 
     return result
+
+
+def queue_rework_task(
+    *,
+    task_id: str,
+    verdict_ref: str,
+    focus_items: list[str],
+    acceptance_criteria: str = "",
+    actor: str | None = None,
+    agent_instance: str | None = None,
+    owner_policy_ref: str | None = None,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F75 件②: queue_rework 门动词 — 对 claimed 卡追加返工轮次。
+    
+    两阶段: dry_run 预览 + confirm 执行。
+    受限 amend: 只允许修改 rework_rounds，禁触其他字段。
+    
+    复用 amend_task 的受限模式完成写卡+落记录。
+    """
+    try:
+        actor_text = str(actor or "").strip()
+        instance_text = str(agent_instance or "").strip()
+        if not actor_text:
+            raise ValueError("actor is required")
+        if not instance_text:
+            raise ValueError("agent_instance is required")
+        if not task_id:
+            raise ValueError("task_id is required")
+        if not verdict_ref:
+            raise ValueError("verdict_ref is required")
+        if not focus_items:
+            raise ValueError("focus_items is required (at least one item)")
+        
+        # 检查角色: 只有 advisor 可以追加返工节
+        role_prefix = instance_text.split(".")[0].lower() if "." in instance_text else ""
+        if role_prefix not in {"advisor", "advise"}:
+            return {
+                "verdict": Verdict.BLOCK,
+                "task_id": task_id,
+                "actor": actor_text,
+                "dry_run": dry_run,
+                "blocking_reasons": [
+                    f"ROLE_VIOLATION: queue_rework 只能由 advisor 角色执行。"
+                    f"当前 agent_instance '{instance_text}' (角色: {role_prefix or 'unknown'}) 未授权。"
+                ],
+                "warnings": [],
+                "data": {},
+                "message": "Queue rework blocked: role violation",
+            }
+        
+        resolved_root = _resolve_repo_root(repo_root)
+        
+        # 构建新返工轮次 (校验 + 构造)
+        from tools.aipos_cli.queue_mutation import build_rework_round
+        round_result = build_rework_round(
+            repo_root=resolved_root,
+            task_id=task_id,
+            verdict_ref=verdict_ref,
+            focus_items=focus_items,
+            acceptance_criteria=acceptance_criteria,
+            actor=actor_text,
+        )
+        
+        if round_result.get("verdict") == Verdict.BLOCK:
+            return round_result
+        
+        # 调用 amend_task 的受限模式
+        new_rounds = round_result["data"]["updated_rework_rounds"]
+        result = amend_task(
+            task_id=task_id,
+            actor=actor_text,
+            amendments={"rework_rounds": new_rounds},
+            amendment_reason=f"Add rework round {round_result['data']['round_added']} based on verdict {verdict_ref}",
+            amendment_type="add_rework_round",
+            restricted_fields={"rework_rounds"},
+            dry_run=dry_run,
+            repo_root=resolved_root,
+        )
+        
+        # 增强返回信息
+        if result.get("ok"):
+            result.setdefault("data", {})["round_added"] = round_result["data"]["round_added"]
+            result.setdefault("data", {})["total_rounds"] = round_result["data"]["total_rounds"]
+            result.setdefault("data", {})["max_rounds"] = round_result["data"]["max_rounds"]
+            result.setdefault("data", {})["rework_round"] = round_result["data"]["new_round"]
+        
+        return result
+    except Exception as exc:
+        return _normalize_exception("queue_rework", exc, dry_run=dry_run, actor=_actor_payload(actor))
 
 
 # AIPOS-316: Guard against direct invocation
