@@ -92,9 +92,10 @@ def _check_project_map_staleness(repo_root: Path, validation: dict[str, Any]) ->
             if warning not in validation["warnings"]:
                 validation["warnings"].append(warning)
     
-    except Exception:
+    except (FileNotFoundError, KeyError, ValueError, OSError) as exc:
         # Graceful degradation: staleness check is advisory, never fails publish
-        pass
+        import warnings
+        warnings.warn(f"PROJECT_MAP staleness check failed: {exc}")
 
 EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "agent-01"
 EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET = "workspace_artifacts/external_intake"

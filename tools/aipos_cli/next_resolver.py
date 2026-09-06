@@ -135,8 +135,10 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     returns_dir = records_root / "returns" / task_id
     result["latest_return"] = _find_latest_record(returns_dir, "return")
 
-    # audit_dispatches
-    dispatches_dir = records_root / "audit_dispatches" / task_id
+    # audit_dispatches (AIPOS-F73 前置一: 门写在审计卡 ID 目录下,如 AIPOS-F75R)
+    # 派审记录在 audit_dispatches/<audit_task_id>/ 而非 <task_id>/
+    audit_task_id = f"{task_id}R"
+    dispatches_dir = records_root / "audit_dispatches" / audit_task_id
     result["latest_audit_dispatch"] = _find_latest_record(dispatches_dir, "dispatch")
 
     # audit_verdicts (keyed by reviewed_task_id)
@@ -941,11 +943,8 @@ def execute_derived_action(
     elif "queue close" in command:
         action_type = "close"
     
-    # 添加 connection.json 参数 (如果提供且命令中没有)
-    if connection_json and "--connection-json" not in command:
-        command += f" --connection-json {connection_json}"
-    
     # AIPOS-F73件②: 每步过门零旁路 — 执行产品 CLI
+    # AIPOS-F73项目3: 命令已经包含所有必要参数,不再盲加 --connection-json
     try:
         result = subprocess.run(
             shlex.split(command),

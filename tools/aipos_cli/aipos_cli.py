@@ -4039,9 +4039,10 @@ def main(argv: list[str] | None = None) -> int:
                     # 也检查 task_mode (如果明确标记为 audit)
                     elif task_meta.get("task_mode") == "audit":
                         required_role_class = "auditor"
-            except Exception:
+            except (FileNotFoundError, KeyError, ValueError) as exc:
                 # 无法加载任务卡,使用默认值
-                pass
+                import warnings
+                warnings.warn(f"无法从任务卡推导角色类型: {exc}")
         
         try:
             role = resolve_role_from_connection(
