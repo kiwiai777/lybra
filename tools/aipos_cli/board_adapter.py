@@ -4467,6 +4467,21 @@ def _build_audit_verdict_preview(
         safety_notice=CONTROLLED_EXECUTE_NOTICE,
         errors=[],
     )
+    
+    # AIPOS-F75 件①: dry_run 预览也要包含 fix_derivation 决策
+    if normalized_verdict in {"FAIL", "BLOCK"}:
+        fix_derivation_mode = _read_fix_derivation_mode(repo_root)
+        if fix_derivation_mode == "auto":
+            # auto模式会派生,在data中标记
+            response["data"]["fix_derivation_mode"] = "auto"
+            response["data"]["will_derive_repair_card"] = True
+        else:
+            # manual模式不派生,明确告知
+            response["data"]["fix_derivation_skipped"] = {
+                "mode": fix_derivation_mode,
+                "message": f"FAIL 裁决已落库,fix_derivation={fix_derivation_mode} 不派生修复卡。请顾问使用 queue_rework 追加返工节到卡面。",
+            }
+    
     return response
 
 
@@ -4662,7 +4677,8 @@ def audit_verdict_task(
             response["data"]["auto_closed_audit_card"] = auto_closed
             response.setdefault("performed_moves", []).append(auto_closed)
         # AIPOS-F75 件①: 检查 fix_derivation 开关 — 默认 manual (不派生)
-        normalized_verdict_value = str(data.get("normalized_verdict") or verdict_text or "").upper()
+        # 从 data 中读取 verdict 字段
+        normalized_verdict_value = str(data.get("verdict") or verdict_text or "").upper()
         if normalized_verdict_value in {"FAIL", "BLOCK"}:
             # 读取 transitions.schema.json 中的 fix_derivation 声明
             fix_derivation_mode = _read_fix_derivation_mode(resolved_root)

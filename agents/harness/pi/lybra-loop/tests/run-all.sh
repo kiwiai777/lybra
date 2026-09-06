@@ -621,6 +621,16 @@ else
   overall=1
 fi
 
+# AIPOS-F75: FAIL后修复通路单一化——自动fix派生默认关闭+返工节进卡面+章程与next联动
+echo
+echo "── tools/aipos_cli/tests/test_aipos_f75_rework_path_unification.py (FAIL修复通路单一化) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos_f75_rework_path_unification.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos_f75_rework_path_unification.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos_f75_rework_path_unification.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

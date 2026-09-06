@@ -1001,7 +1001,7 @@ def build_rework_round(
             "actor": actor,
             "dry_run": True,
             "blocking_reasons": [
-                f"任务卡 {task_id} 不在 claimed 状态，只能对 claimed 卡追加返工节。"
+                "NOT_CLAIMED: 任务卡 {task_id} 不在 claimed 状态，只能对 claimed 卡追加返工节。".format(task_id=task_id)
             ],
             "warnings": [],
             "data": {},
@@ -1067,7 +1067,7 @@ def build_rework_round(
     updated_rework_rounds = rework_rounds + [new_round]
     
     return {
-        "verdict": Verdict.ALLOW,
+        "verdict": Verdict.PASS,
         "task_id": task_id,
         "actor": actor,
         "dry_run": True,

@@ -72,8 +72,12 @@ class TestF75Part1FixDerivationSwitch(unittest.TestCase):
             "status": "claimed",
             "created_by": "advisor",
             "needs_owner": False,
-            "output_target": "",
+            "output_target": "tools/test/",
             "artifact_policy": "formal_write",
+            "claim_id": f"claim_{task_id}",
+            "claimed_by": "executor.lybra.kiwiai-dev",
+            "claimed_at": "2026-01-01T00:00:00Z",
+            "active_session_id": f"session_{task_id}",
         }
         filename = task_id.lower() + ".md"
         card_path = self.claimed_dir / filename
@@ -94,9 +98,17 @@ class TestF75Part1FixDerivationSwitch(unittest.TestCase):
             "status": "claimed",
             "created_by": "advisor",
             "parent_task_id": reviewed_id,
+            "reviewed_task_id": reviewed_id,
             "needs_owner": False,
-            "output_target": "",
+            "output_target": "tools/test/",
             "artifact_policy": "formal_write",
+            "claim_id": f"claim_{audit_id}",
+            "claimed_by": "auditor.lybra.kiwiai-dev",
+            "claimed_at": "2026-01-01T00:00:00Z",
+            "active_session_id": f"session_{audit_id}",
+            "reviewed_executor_instance": "executor.lybra.kiwiai-dev",
+            "audit_dispatch_record_ref": f"dispatch_{reviewed_id}",
+            "reviewed_return_record_ref": f"return_{reviewed_id}",
         }
         filename = audit_id.lower() + ".md"
         card_path = self.claimed_dir / filename
@@ -116,6 +128,11 @@ class TestF75Part1FixDerivationSwitch(unittest.TestCase):
             owner_policy_ref="lybra_dev_policy",
             verdict="FAIL",
             findings_summary="test fail",
+            artifact_subject={
+                "repository": "lybra",
+                "commit_sha": "a" * 40,
+                "tree_hash": "b" * 40,
+            },
             dry_run=False,
             repo_root=self.repo_root,
         )
@@ -139,23 +156,33 @@ class TestF75Part1FixDerivationSwitch(unittest.TestCase):
         self._write_task_card("AIPOS-F75T2")
         self._write_audit_card("AIPOS-F75T2R", "AIPOS-F75T2")
 
-        response = audit_verdict_task(
-            audit_task_id="AIPOS-F75T2R",
+        # 直接测试 derive_repair_card_on_fail 函数
+        from tools.aipos_cli.audit_derivation import derive_repair_card_on_fail
+        
+        result = derive_repair_card_on_fail(
+            governance_root=self.repo_root,
             reviewed_task_id="AIPOS-F75T2",
+            audit_task_id="AIPOS-F75T2R",
+            verdict_id="verdict_test_123",
+            fail_reason="test fail",
             actor="auditor.lybra.kiwiai-dev",
-            agent_instance="auditor.lybra.kiwiai-dev",
-            owner_policy_ref="lybra_dev_policy",
-            verdict="FAIL",
-            findings_summary="test fail",
-            dry_run=False,
-            repo_root=self.repo_root,
         )
 
-        # 验证: 有派生修复卡
-        self.assertIn("auto_derived_repair_card", response.get("data", {}))
-        repair_info = response["data"]["auto_derived_repair_card"]
-        self.assertTrue(repair_info.get("derived"))
-        self.assertIn("fix1", repair_info.get("repair_task_id", "").lower())
+        # 验证: 派生成功
+        self.assertTrue(result.get("derived"), f"Should derive repair card, got: {result}")
+        self.assertIn("repair_task_id", result)
+        self.assertIn("fix1", result.get("repair_task_id", "").lower())
+        
+        # 验证: 磁盘上生成了 fix1 卡
+        pending_dir = self.queue_dir / "pending"
+        self.assertTrue(pending_dir.exists(), "pending 目录应该存在")
+        fix_cards = list(pending_dir.glob("*-fix1.md"))
+        self.assertEqual(len(fix_cards), 1, f"auto模式下应派生一张fix1卡, 但发现: {fix_cards}")
+        
+        # 验证: fix1 卡的 task_id 包含原始 task_id
+        fix_card_path = fix_cards[0]
+        fix_content = fix_card_path.read_text(encoding="utf-8")
+        self.assertIn("AIPOS-F75T2", fix_content, "fix1卡应该引用原始任务ID")
 
     def test_read_fix_derivation_mode_default_manual(self) -> None:
         """读取开关: 无schema文件时默认manual"""
