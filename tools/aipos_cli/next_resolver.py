@@ -858,3 +858,128 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
         lines.append("")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F73件②③: next --run 机器扣扳机 — 推导后立即执行
+# ---------------------------------------------------------------------------
+
+def execute_derived_action(
+    derivation: dict[str, Any],
+    workspace_root: Path,
+    connection_json: str | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F73件②: 执行推导出的下一步动作。
+    
+    铁律三条:
+    1. 单步即退禁循环 (连接器病根禁复刻)
+    2. 每步过门零旁路 (全部通过薄壳 CLI 执行)
+    3. fail-closed 非零退出带拒因
+    
+    推导结果 → 执行:
+    - pending → claim (执行 lybra queue claim --confirm)
+    - claimed + RETURN.md → return (执行 lybra queue return --confirm)
+    - claimed + VERDICT → verdict (执行 lybra audit verdict --confirm)
+    - returned + audit card → dispatch (执行 lybra audit dispatch --confirm)
+    - verdict PASS → finalize + close
+    
+    Args:
+        derivation: derive_next_step() 的返回结果
+        workspace_root: 治理仓根目录
+        connection_json: connection.json 路径 (可选)
+    
+    Returns:
+        {
+            "ok": bool,
+            "action_type": str,  # "claim" | "return" | "verdict" | "dispatch" | "finalize" | "close" | "none"
+            "message": str,
+            "command": str,  # 实际执行的命令
+            "exit_code": int,
+            "output": str,
+        }
+    """
+    import subprocess
+    import shlex
+    
+    if not derivation.get("derivable"):
+        return {
+            "ok": False,
+            "action_type": "none",
+            "message": f"不可推导: {', '.join(derivation.get('missing_records', []))}",
+            "command": "",
+            "exit_code": 1,
+            "output": "",
+        }
+    
+    task_id = derivation.get("task_id", "")
+    current_node = derivation.get("current_node", "")
+    command = derivation.get("command", "").strip()
+    
+    # 如果推导出的命令是注释或空,说明需要人工介入
+    if not command or command.startswith("#"):
+        return {
+            "ok": False,
+            "action_type": "manual",
+            "message": f"需要人工介入: {derivation.get('suggested_action', '?')}",
+            "command": command,
+            "exit_code": 0,
+            "output": "",
+        }
+    
+    # 确定 action_type
+    action_type = "unknown"
+    if "queue claim" in command:
+        action_type = "claim"
+    elif "queue return" in command:
+        action_type = "return"
+    elif "audit verdict" in command:
+        action_type = "verdict"
+    elif "audit dispatch" in command:
+        action_type = "dispatch"
+    elif "finalize" in command:
+        action_type = "finalize"
+    elif "queue close" in command:
+        action_type = "close"
+    
+    # 添加 connection.json 参数 (如果提供且命令中没有)
+    if connection_json and "--connection-json" not in command:
+        command += f" --connection-json {connection_json}"
+    
+    # AIPOS-F73件②: 每步过门零旁路 — 执行产品 CLI
+    try:
+        result = subprocess.run(
+            shlex.split(command),
+            capture_output=True,
+            text=True,
+            timeout=120,  # 2分钟超时
+        )
+        
+        success = result.returncode == 0
+        output = result.stdout + result.stderr
+        
+        return {
+            "ok": success,
+            "action_type": action_type,
+            "message": f"{action_type} {'成功' if success else '失败'}",
+            "command": command,
+            "exit_code": result.returncode,
+            "output": output,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "action_type": action_type,
+            "message": f"{action_type} 超时 (>120s)",
+            "command": command,
+            "exit_code": 124,
+            "output": "Command timed out after 120 seconds",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "action_type": action_type,
+            "message": f"{action_type} 执行异常: {exc}",
+            "command": command,
+            "exit_code": 1,
+            "output": str(exc),
+        }

@@ -1881,6 +1881,8 @@ def build_parser() -> argparse.ArgumentParser:
     next_parser = subparsers.add_parser("next", help="AIPOS-F71: 推导下一步(唯一实现)。无参=项目级扫描;--task-id=单卡")
     next_parser.add_argument("--task-id", help="Task ID to resolve (omit for project scan)")
     next_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
+    next_parser.add_argument("--run", action="store_true", help="AIPOS-F73件②③: 机器扣扳机 — 推导后立即执行命令（单步即退，禁循环）")
+    next_parser.add_argument("--connection-json", help="Path to connection.json (for --run gate access)")
     next_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-F71: 退役旧入口 — turn-advancer 与 next-step 保留为兼容转发(输出退役提示)
@@ -5142,18 +5144,36 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # AIPOS-F71: lybra next — 唯一推导实现
+    # AIPOS-F73件②③: --run 机器扣扳机 (推导 + 执行)
     if args.command == "next":
         from tools.aipos_cli.next_resolver import derive_next_step, scan_project, format_output, format_scan_output
 
         try:
             ws_root = getattr(args, "workspace_root", None) or _find_repo_root_for_args(args)
             json_mode = getattr(args, "json", False)
+            run_mode = getattr(args, "run", False)
 
             if args.task_id:
                 # 单卡模式
                 result = derive_next_step(args.task_id, ws_root)
-                print(format_output(result, json_mode=json_mode))
-                return 0 if result.get("derivable") else 1
+                
+                if run_mode and result.get("derivable"):
+                    # AIPOS-F73件③: 推导后立即执行
+                    from tools.aipos_cli.next_resolver import execute_derived_action
+                    conn_json = getattr(args, "connection_json", None)
+                    exec_result = execute_derived_action(result, ws_root, conn_json)
+                    if json_mode:
+                        print(render_json(exec_result))
+                    else:
+                        print(f"Action: {exec_result.get('action_type', '?')}")
+                        if exec_result.get("ok"):
+                            print(f"✓ {exec_result.get('message', 'Success')}")
+                        else:
+                            print(f"✗ {exec_result.get('message', 'Failed')}", file=sys.stderr)
+                    return 0 if exec_result.get("ok") else 1
+                else:
+                    print(format_output(result, json_mode=json_mode))
+                    return 0 if result.get("derivable") else 1
             else:
                 # 项目级扫描
                 results = scan_project(ws_root)
@@ -5161,6 +5181,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
         except Exception as exc:
             print(f"Error in lybra next: {exc}", file=sys.stderr)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
             return 1
 
     # AIPOS-F71: 退役入口 — turn-advancer 与 next-step 转发到 next
