@@ -18,10 +18,12 @@
       "role_class": "executor",
       "token_ref": "svc-executor",
       "scopes": [
+        "queue_claim",
+        "queue_return",
+        "queue_close",
         "task_progress",
         "bench_audit_submit"
       ],
-      "_scope_removed_aipos_f73": "queue_claim, queue_return, queue_close (件④: 执行体零门 — 认领/交回/close 由产品 lybra next --run 执行)",
       "naming": {
         "prefix": "exec"
       },
@@ -74,9 +76,10 @@
       "role_class": "auditor",
       "token_ref": "svc-auditor",
       "scopes": [
+        "queue_claim",
+        "audit_verdict",
         "task_progress"
       ],
-      "_scope_removed_aipos_f73": "queue_claim, audit_verdict (件④: 审计体零门 — 认领/裁决由产品 lybra next --run 执行)",
       "naming": {
         "prefix": "audit"
       },
