@@ -750,62 +750,6 @@
         "queue_placement": "stays in claimed/ (卡继续在 claimed,等待执行)",
         "frontmatter_update": "追加或更新 rework_rounds 数组,留 amendment 记录",
         "restricted_amend": "只允许修改 rework_rounds 字段,禁触 machine_zone 与 advisor_zone 其他字段"
-      },
-      "rework_round_structure": {
-        "description": "返工轮次结构定义(与 card.schema.json rework_rounds 一致)",
-        "fields": [
-          {
-            "field": "round",
-            "type": "number",
-            "required": true,
-            "description": "返工轮次序号(从 1 开始)"
-          },
-          {
-            "field": "verdict_ref",
-            "type": "string",
-            "required": true,
-            "description": "依据的 FAIL 裁决记录 ID"
-          },
-          {
-            "field": "created_at",
-            "type": "string",
-            "format": "iso8601",
-            "required": true,
-            "description": "返工节创建时间"
-          },
-          {
-            "field": "created_by",
-            "type": "string",
-            "required": true,
-            "description": "创建者(advisor)"
-          },
-          {
-            "field": "focus_items",
-            "type": "array",
-            "items": {"type": "string"},
-            "required": true,
-            "description": "点杀清单(具体修复项)"
-          },
-          {
-            "field": "acceptance_criteria",
-            "type": "string",
-            "required": false,
-            "description": "验收标准"
-          },
-          {
-            "field": "cleared_at",
-            "type": "string",
-            "format": "iso8601",
-            "required": false,
-            "description": "销账时间(返工完成并通过审计)"
-          },
-          {
-            "field": "cleared_by",
-            "type": "string",
-            "required": false,
-            "description": "销账者(通常是 auditor)"
-          }
-        ]
       }
     }
   },

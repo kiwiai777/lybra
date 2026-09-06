@@ -759,7 +759,8 @@
     "finalize_status",
     "claim_source",
     "claim_match_basis",
-    "claim_requirements_hash"
+    "claim_requirements_hash",
+    "rework_rounds"
   ],
   "forbidden_in_draft": [
     "claim_id",

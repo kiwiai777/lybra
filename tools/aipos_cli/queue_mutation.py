@@ -969,7 +969,7 @@ def mutate_queue_task(
     return result
 
 
-def queue_rework_add_round(
+def build_rework_round(
     *,
     repo_root: Path,
     task_id: str,
@@ -977,13 +977,10 @@ def queue_rework_add_round(
     focus_items: list[str],
     acceptance_criteria: str = "",
     actor: str,
-    dry_run: bool = True,
 ) -> dict[str, Any]:
-    """AIPOS-F75 件②: 对 claimed 卡追加返工轮次。
+    """AIPOS-F75 件②: 构建返工轮次对象 (校验 + 构造, 不写磁盘)。
     
-    受限 amend: 只允许追加/更新 rework_rounds 字段，禁触其他区。
-    轮次上限: 默认 2 轮，超限拒绝。
-    留记录: 每次追加写 amendment 记录。
+    磁盘操作由 amend_task 完成，本函数只负责校验与构造 round 对象。
     """
     from datetime import datetime, timezone
     import json
@@ -1002,7 +999,7 @@ def queue_rework_add_round(
             "verdict": Verdict.BLOCK,
             "task_id": task_id,
             "actor": actor,
-            "dry_run": dry_run,
+            "dry_run": True,
             "blocking_reasons": [
                 f"任务卡 {task_id} 不在 claimed 状态，只能对 claimed 卡追加返工节。"
             ],
@@ -1013,12 +1010,12 @@ def queue_rework_add_round(
     # 2. 读取卡内容
     try:
         metadata, body, warnings = _read_task_markdown(task_path)
-    except Exception as e:
+    except (json.JSONDecodeError, OSError) as e:
         return {
             "verdict": Verdict.BLOCK,
             "task_id": task_id,
             "actor": actor,
-            "dry_run": dry_run,
+            "dry_run": True,
             "blocking_reasons": [f"读取任务卡失败: {e}"],
             "warnings": [],
             "data": {},
@@ -1036,8 +1033,9 @@ def queue_rework_add_round(
         if schema_path.exists():
             schema_data = json.loads(schema_path.read_text(encoding="utf-8"))
             max_rounds = schema_data.get("nodes", {}).get("queue_rework", {}).get("guards", {}).get("rework_limit", {}).get("max_rounds", 2)
-    except Exception:
-        pass
+    except (json.JSONDecodeError, OSError) as e:
+        # fail-closed: 解析失败使用默认值，但记录 warning
+        warnings.append(f"Failed to read max_rounds from schema: {e}, using default 2")
     
     next_round = len(rework_rounds) + 1
     if next_round > max_rounds:
@@ -1045,11 +1043,11 @@ def queue_rework_add_round(
             "verdict": Verdict.BLOCK,
             "task_id": task_id,
             "actor": actor,
-            "dry_run": dry_run,
+            "dry_run": True,
             "blocking_reasons": [
                 f"返工轮次已达上限 ({max_rounds} 轮)，需升仲裁。当前已有 {len(rework_rounds)} 轮。"
             ],
-            "warnings": [],
+            "warnings": warnings,
             "data": {"current_rounds": len(rework_rounds), "max_rounds": max_rounds},
         }
     
@@ -1065,43 +1063,14 @@ def queue_rework_add_round(
     if acceptance_criteria:
         new_round["acceptance_criteria"] = acceptance_criteria
     
-    # 5. 更新 metadata
-    updated_metadata = metadata.copy()
+    # 5. 构造更新后的 rework_rounds
     updated_rework_rounds = rework_rounds + [new_round]
-    updated_metadata["rework_rounds"] = updated_rework_rounds
     
-    # 6. 渲染新卡
-    rendered_markdown = render_task_markdown(updated_metadata, body)
-    
-    # 7. 准备记录
-    amendment_id = f"rework_{task_id}_{next_round}_{now_iso.replace(':', '').replace('-', '')}"
-    amendment_record_path = repo_root / "5_tasks" / "records" / "amendments" / task_id / f"{amendment_id}_{actor}.md"
-    amendment_record = f"""---
-record_type: rework_amendment
-task_id: {task_id}
-actor: {actor}
-amended_at: {now_iso}
-amendment_type: add_rework_round
-round: {next_round}
-verdict_ref: {verdict_ref}
----
-
-# Rework Amendment - Round {next_round}
-
-## Focus Items
-
-{chr(10).join(f'- {item}' for item in focus_items)}
-
-## Acceptance Criteria
-
-{acceptance_criteria or '(not specified)'}
-"""
-    
-    result = {
+    return {
         "verdict": Verdict.ALLOW,
         "task_id": task_id,
         "actor": actor,
-        "dry_run": dry_run,
+        "dry_run": True,
         "blocking_reasons": [],
         "warnings": warnings,
         "data": {
@@ -1109,22 +1078,10 @@ verdict_ref: {verdict_ref}
             "round_added": next_round,
             "total_rounds": len(updated_rework_rounds),
             "max_rounds": max_rounds,
-            "rework_round": new_round,
-            "rendered_markdown": rendered_markdown,
-            "amendment_record_path": str(amendment_record_path.relative_to(repo_root)),
-            "amendment_record": amendment_record,
+            "new_round": new_round,
+            "updated_rework_rounds": updated_rework_rounds,
         },
     }
-    
-    if not dry_run:
-        # 写入卡文件
-        task_path.write_text(rendered_markdown, encoding="utf-8")
-        # 写入 amendment 记录
-        amendment_record_path.parent.mkdir(parents=True, exist_ok=True)
-        amendment_record_path.write_text(amendment_record, encoding="utf-8")
-        result["data"]["wrote"] = True
-    
-    return result
 
 
 # AIPOS-316: Guard against direct invocation
