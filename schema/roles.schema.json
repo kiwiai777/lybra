@@ -18,11 +18,7 @@
       "role_class": "executor",
       "token_ref": "svc-executor",
       "scopes": [
-        "queue_claim",
-        "queue_return",
-        "queue_close",
-        "task_progress",
-        "bench_audit_submit"
+        "task_progress"
       ],
       "naming": {
         "prefix": "exec"
@@ -38,7 +34,8 @@
           "task-closure-loop",
           "write-return"
         ]
-      }
+      },
+      "_note": "AIPOS-F73件④: executor scope 收为 [task_progress] (去 queue_claim/queue_return/queue_close)。认领/交回/关闭由产品在模型身外执行。"
     },
     {
       "role": "owner",
@@ -76,8 +73,6 @@
       "role_class": "auditor",
       "token_ref": "svc-auditor",
       "scopes": [
-        "queue_claim",
-        "audit_verdict",
         "task_progress"
       ],
       "naming": {
@@ -94,7 +89,8 @@
           "task-closure-loop",
           "write-return"
         ]
-      }
+      },
+      "_note": "AIPOS-F73件④: auditor scope 收为 [task_progress] (去 queue_claim/audit_verdict)。认领/裁决由产品在模型身外执行。"
     },
     {
       "role": "copilot",
