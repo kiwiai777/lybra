@@ -63,66 +63,6 @@
       "version_strategy": "git_commit_hash",
       "notes": "AIPOS-F73B: Single master go.ts extension. Queries product for claimed task by agent_instance (read from .lybra/role .instance), switches worktree, outputs startup report. Replaces dual bash scripts."
     },
-    {
-      "distribution_id": "go-extension",
-      "kind": "extension",
-      "description": "AIPOS-F73B件③: No-parameter /go command (pi extension). Single source for all roles, reads .lybra/role for instance identity.",
-      "source": {
-        "repo": "lybra",
-        "path": "agents/harness/pi/_shared/extensions/go.ts"
-      },
-      "target": {
-        "harness": "pi",
-        "relative_path": "_shared/extensions/go.ts"
-      },
-      "applies_to_roles": [
-        "executor",
-        "auditor"
-      ],
-      "operation": "copy_tree",
-      "version_strategy": "git_commit_hash",
-      "notes": "AIPOS-F73B: Single master go.ts extension. Queries product for claimed task by agent_instance (read from .lybra/role .instance), switches worktree, outputs startup report. Replaces dual bash scripts."
-    },
-    {
-      "distribution_id": "executor-go-command",
-      "kind": "command",
-      "description": "AIPOS-F73B件③: Executor workstation no-parameter go command (source lives in product repo)",
-      "source": {
-        "repo": "lybra",
-        "path": "agents/harness/pi/lybra-executor/go"
-      },
-      "target": {
-        "harness": "pi",
-        "relative_path": "go"
-      },
-      "applies_to_roles": [
-        "executor"
-      ],
-      "operation": "copy_tree",
-      "version_strategy": "git_commit_hash",
-      "executable": true,
-      "notes": "AIPOS-F73B: No-parameter command - queries product for claimed task by agent_instance, switches to worktree. Replaces parametered /claim <path>."
-    },
-    {
-      "distribution_id": "auditor-go-command",
-      "kind": "command",
-      "description": "AIPOS-F73B件③: Auditor workstation no-parameter go command (source lives in product repo)",
-      "source": {
-        "repo": "lybra",
-        "path": "agents/harness/pi/lybra-auditor/go"
-      },
-      "target": {
-        "harness": "pi",
-        "relative_path": "go"
-      },
-      "applies_to_roles": [
-        "auditor"
-      ],
-      "operation": "copy_tree",
-      "version_strategy": "git_commit_hash",
-      "executable": true,
-      "notes": "AIPOS-F73B: No-parameter command - queries product for claimed task by agent_instance, switches to worktree. Replaces parametered /claim <path>."
-    },
 
     {
       "distribution_id": "executor-skills",

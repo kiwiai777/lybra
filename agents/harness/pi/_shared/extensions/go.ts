@@ -9,166 +9,119 @@
  * 租约/心跳/调度一概不做。单次查询，无循环，无常驻。
  */
 
-import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
-import { execSync } from 'child_process';
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-interface RoleConfig {
-  role: string;
-  instance: string;
-}
-
-interface ConnectionConfig {
-  workspace_root: string;
-  lybra_bin: string;
-}
-
-interface MyTasksResult {
-  task_id: string;
-  current_state: string;
-  worktree_path?: string;
-}
-
-export function activate(context: vscode.ExtensionContext) {
-  const goCommand = vscode.commands.registerCommand('lybra.go', async () => {
-    try {
-      // 1. 读取工位配置
-      const workstationRoot = getWorkstationRoot();
-      if (!workstationRoot) {
-        vscode.window.showErrorMessage('Cannot determine workstation root (.lybra not found)');
-        return;
-      }
-
-      // 2. 从 .lybra/role 读取 instance
-      const roleConfigPath = path.join(workstationRoot, '.lybra', 'role');
-      if (!fs.existsSync(roleConfigPath)) {
-        vscode.window.showErrorMessage('.lybra/role not found. Run "lybra enroll" first.');
-        return;
-      }
-
-      const roleConfig: RoleConfig = JSON.parse(fs.readFileSync(roleConfigPath, 'utf-8'));
-      const agentInstance = roleConfig.instance;
-      if (!agentInstance) {
-        vscode.window.showErrorMessage('Cannot determine agent instance from .lybra/role');
-        return;
-      }
-
-      // 3. 从 .lybra/connection.json 读取 workspace_root 和 lybra_bin
-      const connectionConfigPath = path.join(workstationRoot, '.lybra', 'connection.json');
-      if (!fs.existsSync(connectionConfigPath)) {
-        vscode.window.showErrorMessage('.lybra/connection.json not found. Run "lybra enroll" first.');
-        return;
-      }
-
-      const connectionConfig: ConnectionConfig = JSON.parse(fs.readFileSync(connectionConfigPath, 'utf-8'));
-      const workspaceRoot = connectionConfig.workspace_root;
-      const lybraBin = connectionConfig.lybra_bin;
-
-      if (!workspaceRoot || !lybraBin) {
-        vscode.window.showErrorMessage('workspace_root or lybra_bin not found in .lybra/connection.json');
-        return;
-      }
-
-      if (!fs.existsSync(lybraBin)) {
-        vscode.window.showErrorMessage(`lybra_bin not found or not executable: ${lybraBin}`);
-        return;
-      }
-
-      // 4. 查询本实例已认领的卡（使用 lybra my-tasks）
-      const myTasksCommand = `${lybraBin} my-tasks --instance ${agentInstance} --json`;
-      let myTasksOutput: string;
+export default function (pi: ExtensionAPI) {
+  pi.registerCommand("go", {
+    description: "查询本实例已认领的任务卡，切换到工作树并发送开工提示",
+    handler: async (args, ctx) => {
       try {
-        myTasksOutput = execSync(myTasksCommand, { encoding: 'utf-8', cwd: workspaceRoot });
+        // 1. 读取工位配置
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        const { exec } = await import("node:child_process");
+        const { promisify } = await import("node:util");
+        const execAsync = promisify(exec);
+
+        // 2. 从 .lybra/role 读取 instance
+        const home = process.env.HOME || "";
+        const workstationRoot = process.cwd();
+        
+        const roleConfigPath = path.join(workstationRoot, ".lybra", "role");
+        if (!fs.existsSync(roleConfigPath)) {
+          ctx.ui.notify(".lybra/role not found. Run 'lybra enroll' first.", "error");
+          return;
+        }
+
+        const roleConfigText = fs.readFileSync(roleConfigPath, "utf-8");
+        const roleConfig = JSON.parse(roleConfigText);
+        const agentInstance = roleConfig.instance;
+        
+        if (!agentInstance) {
+          ctx.ui.notify("Cannot determine agent instance from .lybra/role", "error");
+          return;
+        }
+
+        // 3. 从 .lybra/connection.json 读取 workspace_root 和 lybra_bin
+        const connectionConfigPath = path.join(workstationRoot, ".lybra", "connection.json");
+        if (!fs.existsSync(connectionConfigPath)) {
+          ctx.ui.notify(".lybra/connection.json not found. Run 'lybra enroll' first.", "error");
+          return;
+        }
+
+        const connectionConfigText = fs.readFileSync(connectionConfigPath, "utf-8");
+        const connectionConfig = JSON.parse(connectionConfigText);
+        const workspaceRoot = connectionConfig.workspace_root;
+        const lybraBin = connectionConfig.lybra_bin || "lybra";
+
+        if (!workspaceRoot) {
+          ctx.ui.notify("workspace_root not found in .lybra/connection.json", "error");
+          return;
+        }
+
+        // 4. 查询本实例已认领的卡（使用 lybra my-tasks --actor）
+        const myTasksCommand = `${lybraBin} my-tasks --actor ${agentInstance} --json`;
+        let myTasksOutput: string;
+        try {
+          const result = await execAsync(myTasksCommand, { cwd: workspaceRoot, maxBuffer: 50 * 1024 * 1024 });
+          myTasksOutput = result.stdout;
+        } catch (error: any) {
+          ctx.ui.notify(`Failed to query tasks: ${error.message}`, "error");
+          return;
+        }
+
+        // 解析 my-tasks 输出（返回对象含 tasks 数组）
+        let myTasksData: any;
+        try {
+          myTasksData = JSON.parse(myTasksOutput);
+        } catch (error) {
+          ctx.ui.notify(`Failed to parse my-tasks output: ${error}`, "error");
+          return;
+        }
+
+        // 从 tasks 数组过滤 claimed 状态的卡
+        const tasks = myTasksData.tasks || [];
+        const claimedTasks = tasks.filter((t: any) => t.queue_state === "claimed");
+        
+        if (claimedTasks.length === 0) {
+          ctx.ui.notify(`无已认领卡，等待任务分配...`, "info");
+          return;
+        }
+
+        // 取第一张（如果有多张，优先级逻辑由产品定）
+        const task = claimedTasks[0];
+        const taskId = task.task_id;
+        const taskPath = path.join(workspaceRoot, task.path);
+
+        // 5. 推导 worktree 路径（按 card/<ID> 模式）
+        const worktreePath = path.join(workspaceRoot, "card", taskId);
+        if (!fs.existsSync(worktreePath)) {
+          ctx.ui.notify(
+            `Worktree not found at ${worktreePath}. Run "lybra next --run" to claim and create worktree.`,
+            "error"
+          );
+          return;
+        }
+
+        // 6. 推导报告落点（治理仓 task_cards/<ID>/）
+        const reportDir = path.join(workspaceRoot, "task_cards", taskId);
+        const reportPath = path.join(reportDir, "RETURN.md");
+
+        // 7. 向模型发送开工提示（不包含任何门动词）
+        const roleName = roleConfig.role || "worker";
+        const kickoff = `已认领任务卡 ${taskId}。
+
+工作树路径: ${worktreePath}
+报告落点: ${reportPath}
+任务卡路径: ${taskPath}
+
+按你的 AGENTS.md 执行，完成后写 RETURN.md 到报告落点。`;
+
+        await ctx.sendUserMessage(kickoff);
+
       } catch (error: any) {
-        vscode.window.showErrorMessage(`Failed to query tasks: ${error.message}`);
-        return;
+        ctx.ui.notify(`/go command failed: ${error.message}`, "error");
       }
-
-      // 解析 my-tasks 输出（假设返回 JSON 数组）
-      let myTasks: MyTasksResult[];
-      try {
-        myTasks = JSON.parse(myTasksOutput);
-      } catch (error) {
-        vscode.window.showErrorMessage(`Failed to parse my-tasks output: ${error}`);
-        return;
-      }
-
-      // 过滤 claimed 状态的卡
-      const claimedTasks = myTasks.filter(t => t.current_state === 'claimed');
-      if (claimedTasks.length === 0) {
-        vscode.window.showInformationMessage(`No claimed task for instance ${agentInstance}. Waiting for task assignment...`);
-        return;
-      }
-
-      // 取第一张（如果有多张，优先级逻辑由产品定）
-      const task = claimedTasks[0];
-      const taskId = task.task_id;
-
-      // 5. 推导 worktree 路径（按 distribution.schema 声明的 card/<ID> 模式）
-      const worktreePath = path.join(workspaceRoot, 'card', taskId);
-      if (!fs.existsSync(worktreePath)) {
-        vscode.window.showErrorMessage(`Worktree not found at ${worktreePath}. Run "lybra next --run" to claim and create worktree.`);
-        return;
-      }
-
-      // 6. 推导报告落点（治理仓 task_cards/<ID>/）
-      const reportDir = path.join(workspaceRoot, 'task_cards', taskId);
-      if (!fs.existsSync(reportDir)) {
-        fs.mkdirSync(reportDir, { recursive: true });
-      }
-
-      // 7. 切换工作目录到 worktree（VSCode workspace）
-      const worktreeUri = vscode.Uri.file(worktreePath);
-      await vscode.commands.executeCommand('vscode.openFolder', worktreeUri, false);
-
-      // 8. 向模型发开工提示（通过 Chat API 或显示信息）
-      const roleName = roleConfig.role || 'worker';
-      const message = `
-=== ${roleName.charAt(0).toUpperCase() + roleName.slice(1)} workstation ready ===
-Task ID: ${taskId}
-Worktree: ${worktreePath}
-Report directory: ${reportDir}
-
-Ready to work. Write your RETURN.md to ${reportDir}/RETURN.md when done.
-==================================
-      `.trim();
-
-      vscode.window.showInformationMessage(message);
-
-      // 可选：自动打开任务卡文件
-      const taskCardPath = path.join(workspaceRoot, '5_tasks', 'queue', 'claimed', `${taskId.toLowerCase()}.md`);
-      if (fs.existsSync(taskCardPath)) {
-        const taskCardUri = vscode.Uri.file(taskCardPath);
-        await vscode.workspace.openTextDocument(taskCardUri);
-        await vscode.window.showTextDocument(taskCardUri);
-      }
-
-    } catch (error: any) {
-      vscode.window.showErrorMessage(`/go command failed: ${error.message}`);
-    }
+    },
   });
-
-  context.subscriptions.push(goCommand);
 }
-
-function getWorkstationRoot(): string | null {
-  // 从当前工作目录向上查找 .lybra 目录
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders || workspaceFolders.length === 0) {
-    return null;
-  }
-
-  let currentDir = workspaceFolders[0].uri.fsPath;
-  while (currentDir !== path.dirname(currentDir)) {
-    const lybraDir = path.join(currentDir, '.lybra');
-    if (fs.existsSync(lybraDir)) {
-      return currentDir;
-    }
-    currentDir = path.dirname(currentDir);
-  }
-
-  return null;
-}
-
-export function deactivate() {}
