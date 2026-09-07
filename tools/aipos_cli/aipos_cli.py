@@ -1521,6 +1521,9 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verdict_parser.add_argument("--reviewed-return-record-ref", help="Reviewed return record reference")
     audit_verdict_parser.add_argument("--recommended-next-action", help="Recommended next action")
     audit_verdict_parser.add_argument("--owner-waiver-ref", help="Owner waiver reference")
+    audit_verdict_parser.add_argument("--artifact-subject-repository", help="AIPOS-F73前置②: Repository identifier for artifact_subject (required for code tasks)")
+    audit_verdict_parser.add_argument("--artifact-subject-commit-sha", help="AIPOS-F73前置②: Commit SHA for artifact_subject (required for code tasks)")
+    audit_verdict_parser.add_argument("--artifact-subject-tree-hash", help="AIPOS-F73前置②: Tree hash for artifact_subject (required for code tasks)")
     audit_verdict_parser.add_argument("--confirm", action="store_true", help="AIPOS-F22: Two-phase gate verdict (dry_run + confirm via薄壳工厂, auditor self-confirm)")
     audit_verdict_parser.add_argument("--gate-url", default=None, help="Gate MCP server URL (default: http://127.0.0.1:7118)")
     audit_verdict_parser.add_argument("--connection-json", help="Path to connection.json (default: .lybra/connection.json in workspace)")
@@ -1878,6 +1881,8 @@ def build_parser() -> argparse.ArgumentParser:
     next_parser = subparsers.add_parser("next", help="AIPOS-F71: 推导下一步(唯一实现)。无参=项目级扫描;--task-id=单卡")
     next_parser.add_argument("--task-id", help="Task ID to resolve (omit for project scan)")
     next_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
+    next_parser.add_argument("--run", action="store_true", help="AIPOS-F73件②③: 机器扣扳机 — 推导后立即执行命令（单步即退，禁循环）")
+    next_parser.add_argument("--connection-json", help="Path to connection.json (for --run gate access)")
     next_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-F71: 退役旧入口 — turn-advancer 与 next-step 保留为兼容转发(输出退役提示)
@@ -4016,11 +4021,33 @@ def main(argv: list[str] | None = None) -> int:
             verb_args["active_session_id"] = args.active_session_id
         
         # AIPOS-F44D-A: 角色解析不写死
+        # AIPOS-F73前置③: required_role_class 按任务 task_mode 派生 (修复审计卡无法以 auditor 认领)
         from tools.aipos_cli.two_phase_shell_factory import resolve_role_from_connection
+        from tools.aipos_cli.task_loader import load_task_by_id
+        
+        # 派生 required_role_class: 从任务卡 task_id 推断
+        required_role_class = "executor"  # 默认
+        task_id = getattr(args, "task_id", None)
+        if task_id:
+            try:
+                task_data = load_task_by_id(task_id, repo_root)
+                if task_data:
+                    task_meta = task_data.get("metadata", {})
+                    # 审计卡 (task_id 以 R 结尾) → auditor
+                    if str(task_id).upper().endswith("R"):
+                        required_role_class = "auditor"
+                    # 也检查 task_mode (如果明确标记为 audit)
+                    elif task_meta.get("task_mode") == "audit":
+                        required_role_class = "auditor"
+            except (FileNotFoundError, KeyError, ValueError) as exc:
+                # 无法加载任务卡,使用默认值
+                import warnings
+                warnings.warn(f"无法从任务卡推导角色类型: {exc}")
+        
         try:
             role = resolve_role_from_connection(
                 connection_json_path=conn_json_path,
-                required_role_class="executor",
+                required_role_class=required_role_class,
                 repo_root=repo_root,
             )
         except ValueError as exc:
@@ -4860,6 +4887,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # 显式参数模式（向后兼容）
             from tools.aipos_cli.confirm_client import load_owner_token
+            from tools.loop_context import ConnectionResolver
             
             connection_json_path = args.connection_json
             if not connection_json_path:
@@ -4877,8 +4905,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Error reading token: {exc}", file=sys.stderr)
                 return 1
             
+            # AIPOS-F73前置②: gate_url 默认值解析 (修复 args.gate_url=None 时 AttributeError)
+            resolved_gate_url = ConnectionResolver.resolve_gate_url(
+                workspace_root=workspace_root,
+                explicit_url=args.gate_url,
+            )
+            
             context = {
-                "gate_url": args.gate_url,
+                "gate_url": resolved_gate_url,
                 "token": token,
                 "role": args.token_role,
                 "actor": args.actor,
@@ -4896,6 +4930,19 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         
         # 构建 dry_run 参数
+        # AIPOS-F73前置①: 构建 artifact_subject (code 卡需要)
+        artifact_subject = None
+        if any([
+            getattr(args, 'artifact_subject_repository', None),
+            getattr(args, 'artifact_subject_commit_sha', None),
+            getattr(args, 'artifact_subject_tree_hash', None),
+        ]):
+            artifact_subject = {
+                "repository": getattr(args, 'artifact_subject_repository', ''),
+                "commit_sha": getattr(args, 'artifact_subject_commit_sha', ''),
+                "tree_hash": getattr(args, 'artifact_subject_tree_hash', ''),
+            }
+        
         dry_run_args = build_audit_verdict_dry_run_args(
             reviewed_task_id=args.reviewed_task_id,
             verdict=args.verdict,
@@ -4909,6 +4956,7 @@ def main(argv: list[str] | None = None) -> int:
             reviewed_return_record_ref=getattr(args, 'reviewed_return_record_ref', None),
             recommended_next_action=getattr(args, 'recommended_next_action', None),
             owner_waiver_ref=getattr(args, 'owner_waiver_ref', None),
+            artifact_subject=artifact_subject,
             # AIPOS-SMOKE-LOOP-1 坑①: 传 workspace 作 repo_root, 供派生 audit R 卡 task_id
             repo_root=workspace_root,
         )
@@ -5097,18 +5145,36 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # AIPOS-F71: lybra next — 唯一推导实现
+    # AIPOS-F73件②③: --run 机器扣扳机 (推导 + 执行)
     if args.command == "next":
         from tools.aipos_cli.next_resolver import derive_next_step, scan_project, format_output, format_scan_output
 
         try:
             ws_root = getattr(args, "workspace_root", None) or _find_repo_root_for_args(args)
             json_mode = getattr(args, "json", False)
+            run_mode = getattr(args, "run", False)
 
             if args.task_id:
                 # 单卡模式
                 result = derive_next_step(args.task_id, ws_root)
-                print(format_output(result, json_mode=json_mode))
-                return 0 if result.get("derivable") else 1
+                
+                if run_mode and result.get("derivable"):
+                    # AIPOS-F73件③: 推导后立即执行
+                    from tools.aipos_cli.next_resolver import execute_derived_action
+                    conn_json = getattr(args, "connection_json", None)
+                    exec_result = execute_derived_action(result, ws_root, conn_json)
+                    if json_mode:
+                        print(render_json(exec_result))
+                    else:
+                        print(f"Action: {exec_result.get('action_type', '?')}")
+                        if exec_result.get("ok"):
+                            print(f"✓ {exec_result.get('message', 'Success')}")
+                        else:
+                            print(f"✗ {exec_result.get('message', 'Failed')}", file=sys.stderr)
+                    return 0 if exec_result.get("ok") else 1
+                else:
+                    print(format_output(result, json_mode=json_mode))
+                    return 0 if result.get("derivable") else 1
             else:
                 # 项目级扫描
                 results = scan_project(ws_root)
@@ -5116,6 +5182,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
         except Exception as exc:
             print(f"Error in lybra next: {exc}", file=sys.stderr)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
             return 1
 
     # AIPOS-F71: 退役入口 — turn-advancer 与 next-step 转发到 next

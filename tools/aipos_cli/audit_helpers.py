@@ -163,6 +163,7 @@ def build_audit_verdict_dry_run_args(
     reviewed_return_record_ref: str | None = None,
     recommended_next_action: str | None = None,
     owner_waiver_ref: str | None = None,
+    artifact_subject: dict[str, str] | None = None,
     repo_root: Path | None = None,
 ) -> dict[str, Any]:
     """构建 audit_verdict dry_run 参数（从 context 填充身份字段）。
@@ -210,6 +211,10 @@ def build_audit_verdict_dry_run_args(
         args["recommended_next_action"] = recommended_next_action
     if owner_waiver_ref:
         args["owner_waiver_ref"] = owner_waiver_ref
+    
+    # AIPOS-F73前置②: artifact_subject for code tasks (F70 gate requirement)
+    if artifact_subject:
+        args["artifact_subject"] = artifact_subject
     
     return args
 

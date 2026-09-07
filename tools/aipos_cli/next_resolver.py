@@ -135,8 +135,10 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     returns_dir = records_root / "returns" / task_id
     result["latest_return"] = _find_latest_record(returns_dir, "return")
 
-    # audit_dispatches
-    dispatches_dir = records_root / "audit_dispatches" / task_id
+    # audit_dispatches (AIPOS-F73 前置一: 门写在审计卡 ID 目录下,如 AIPOS-F75R)
+    # 派审记录在 audit_dispatches/<audit_task_id>/ 而非 <task_id>/
+    audit_task_id = f"{task_id}R"
+    dispatches_dir = records_root / "audit_dispatches" / audit_task_id
     result["latest_audit_dispatch"] = _find_latest_record(dispatches_dir, "dispatch")
 
     # audit_verdicts (keyed by reviewed_task_id)
@@ -275,6 +277,72 @@ def _find_connection_json(workspace_root: Path) -> str | None:
     return None
 
 
+def _extract_artifact_subject_from_branch(
+    workspace_root: Path,
+    reviewed_task_id: str,
+    task_mode: str = "code",
+) -> dict[str, str] | None:
+    """AIPOS-F73前置①: 从卡分支 tip 提取 artifact_subject (repository/commit_sha/tree_hash)。
+    
+    Args:
+        workspace_root: 产品仓根目录
+        reviewed_task_id: 被审任务 ID
+        task_mode: 任务模式（code 卡需要 artifact_subject）
+    
+    Returns:
+        artifact_subject dict 或 None（非 code 卡或提取失败）
+    """
+    if task_mode != "code":
+        return None
+    
+    import subprocess
+    
+    # 推导分支名（按 transitions.schema N5.branch_integration.branch_pattern）
+    branch_name = f"card/{reviewed_task_id}"
+    
+    try:
+        # 获取分支 tip commit SHA
+        result = subprocess.run(
+            ["git", "rev-parse", branch_name],
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        
+        commit_sha = result.stdout.strip()
+        if not commit_sha or len(commit_sha) != 40:
+            return None
+        
+        # 获取 tree hash
+        result = subprocess.run(
+            ["git", "rev-parse", f"{commit_sha}^{{tree}}"],
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        
+        tree_hash = result.stdout.strip()
+        if not tree_hash or len(tree_hash) != 40:
+            return None
+        
+        # 推导 repository（从 workspace_root 名称）
+        repository = workspace_root.name
+        
+        return {
+            "repository": repository,
+            "commit_sha": commit_sha,
+            "tree_hash": tree_hash,
+        }
+    except Exception:
+        return None
+
+
 def _build_copyable_command(
     *,
     verb_base: str,
@@ -325,9 +393,6 @@ def _build_audit_dispatch_command(
     parts = ["lybra audit dispatch"]
     parts.append(f"--source-task-id {task_id}")
     parts.append(f"--actor {actor}")
-    parts.append("--confirm")
-    if connection_json:
-        parts.append(f"--connection-json {connection_json}")
     parts.append(f"--agent-instance {agent_instance}")
     if owner_policy_ref:
         parts.append(f"--owner-policy-ref {owner_policy_ref}")
@@ -345,9 +410,13 @@ def _build_verdict_submit_command(
     owner_policy_ref: str | None,
     connection_json: str | None,
     verdict: str = "PASS",
+    artifact_subject: dict[str, str] | None = None,
 ) -> str:
-    """构建审计裁决提交命令。"""
-    parts = ["lybra audit verdict"]
+    """构建审计裁决提交命令。
+    
+    AIPOS-F73前置①: artifact_subject 从卡分支 tip 提取，code 卡必填。
+    """
+    parts = ["lybra audit-verdict"]
     parts.append(f"--reviewed-task-id {reviewed_task_id}")
     parts.append(f"--audit-task-id {audit_task_id}")
     parts.append(f"--actor {actor}")
@@ -358,7 +427,19 @@ def _build_verdict_submit_command(
     if owner_policy_ref:
         parts.append(f"--owner-policy-ref {owner_policy_ref}")
     parts.append(f"--verdict {verdict}")
-    parts.append("--autonomy-mode Supervised")
+    
+    # AIPOS-F73前置①: artifact_subject for code tasks
+    if artifact_subject:
+        repo = artifact_subject.get("repository", "")
+        commit_sha = artifact_subject.get("commit_sha", "")
+        tree_hash = artifact_subject.get("tree_hash", "")
+        if repo:
+            parts.append(f"--artifact-subject-repository {repo}")
+        if commit_sha:
+            parts.append(f"--artifact-subject-commit-sha {commit_sha}")
+        if tree_hash:
+            parts.append(f"--artifact-subject-tree-hash {tree_hash}")
+    
     return " ".join(parts)
 
 
@@ -373,9 +454,6 @@ def _build_close_command(
     parts = ["lybra queue close"]
     parts.append(f"--task-id {task_id}")
     parts.append(f"--actor {actor}")
-    parts.append("--confirm")
-    if connection_json:
-        parts.append(f"--connection-json {connection_json}")
     parts.append(f"--closure-evidence '{closure_evidence_json}'")
     return " ".join(parts)
 
@@ -447,6 +525,14 @@ def derive_next_step(
         agent_inst = verdict_fm.get("agent_instance") or assigned_to or "<auditor-instance>"
         policy_ref = _resolve_active_policy(workspace_root, task_id, role="audit")
         
+        # AIPOS-F73前置①: 从被审卡分支提取 artifact_subject (code 卡必填)
+        reviewed_task_path, _ = _find_task_in_queue(workspace_root, reviewed_task_id)
+        reviewed_fm = _read_frontmatter(reviewed_task_path) if reviewed_task_path else {}
+        reviewed_task_mode = reviewed_fm.get("task_mode", "code")
+        artifact_subject = _extract_artifact_subject_from_branch(
+            workspace_root, reviewed_task_id, reviewed_task_mode
+        )
+        
         cmd = _build_verdict_submit_command(
             reviewed_task_id=reviewed_task_id,
             audit_task_id=task_id,
@@ -455,6 +541,7 @@ def derive_next_step(
             owner_policy_ref=policy_ref,
             connection_json=conn_arg,
             verdict=verdict,
+            artifact_subject=artifact_subject,
         )
         return {
             "task_id": task_id,
@@ -858,3 +945,267 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
         lines.append("")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F73件②③: next --run 机器扣扳机 — 推导后立即执行
+# ---------------------------------------------------------------------------
+
+def _check_branch_has_commits(workspace_root: Path, task_id: str) -> bool:
+    """AIPOS-F73件③: 检查卡分支是否有提交（相对 main）。
+    
+    Args:
+        workspace_root: 产品仓根目录
+        task_id: 任务 ID
+    
+    Returns:
+        True if branch has commits, False otherwise
+    """
+    import subprocess
+    
+    branch_name = f"card/{task_id}"
+    
+    try:
+        # 检查分支是否存在
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", branch_name],
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return False
+        
+        # 检查是否有相对 main 的提交
+        result = subprocess.run(
+            ["git", "rev-list", "--count", f"main..{branch_name}"],
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return False
+        
+        commit_count = int(result.stdout.strip())
+        return commit_count > 0
+    except Exception:
+        return False
+
+
+def _ensure_worktree(workspace_root: Path, task_id: str) -> dict[str, Any]:
+    """AIPOS-F73件②: 确保 worktree 存在（建/复用 card/<ID>）。
+    
+    Args:
+        workspace_root: 产品仓根目录
+        task_id: 任务 ID
+    
+    Returns:
+        {"ok": bool, "worktree_path": str, "message": str}
+    """
+    import subprocess
+    
+    worktree_path = workspace_root / "card" / task_id
+    branch_name = f"card/{task_id}"
+    
+    # 检查 worktree 是否已存在
+    if worktree_path.exists():
+        return {
+            "ok": True,
+            "worktree_path": str(worktree_path),
+            "message": f"Worktree already exists: {worktree_path}",
+        }
+    
+    # 创建 worktree 目录
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        # 检查分支是否已存在
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", branch_name],
+            cwd=workspace_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        branch_exists = result.returncode == 0
+        
+        if branch_exists:
+            # 复用已有分支
+            result = subprocess.run(
+                ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=workspace_root,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        else:
+            # 创建新分支
+            result = subprocess.run(
+                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "main"],
+                cwd=workspace_root,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        
+        if result.returncode != 0:
+            return {
+                "ok": False,
+                "worktree_path": "",
+                "message": f"Failed to create worktree: {result.stderr}",
+            }
+        
+        return {
+            "ok": True,
+            "worktree_path": str(worktree_path),
+            "message": f"Worktree created: {worktree_path}",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "worktree_path": "",
+            "message": f"Exception creating worktree: {exc}",
+        }
+
+def execute_derived_action(
+    derivation: dict[str, Any],
+    workspace_root: Path,
+    connection_json: str | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F73件②③: 执行推导出的下一步动作。
+    
+    铁律三条:
+    1. 单步即退禁循环 (连接器病根禁复刻)
+    2. 每步过门零旁路 (全部通过薄壳 CLI 执行)
+    3. fail-closed 非零退出带拒因
+    
+    推导结果 → 执行:
+    - pending → claim (执行 lybra queue claim --confirm) + 建/复用 worktree
+    - claimed + RETURN.md + 分支有提交 → return (执行 lybra queue return --confirm)
+    - claimed + VERDICT → verdict (执行 lybra audit verdict --confirm)
+    - returned + audit card → dispatch (执行 lybra audit dispatch --confirm)
+    - verdict PASS → finalize --push --deploy → close
+    
+    Args:
+        derivation: derive_next_step() 的返回结果
+        workspace_root: 治理仓根目录
+        connection_json: connection.json 路径 (可选)
+    
+    Returns:
+        {
+            "ok": bool,
+            "action_type": str,  # "claim" | "return" | "verdict" | "dispatch" | "finalize" | "close" | "none"
+            "message": str,
+            "command": str,  # 实际执行的命令
+            "exit_code": int,
+            "output": str,
+            "worktree_path": str | None,  # claim 时返回 worktree 路径
+        }
+    """
+    import subprocess
+    import shlex
+    
+    if not derivation.get("derivable"):
+        return {
+            "ok": False,
+            "action_type": "none",
+            "message": f"不可推导: {', '.join(derivation.get('missing_records', []))}",
+            "command": "",
+            "exit_code": 1,
+            "output": "",
+        }
+    
+    task_id = derivation.get("task_id", "")
+    current_node = derivation.get("current_node", "")
+    command = derivation.get("command", "").strip()
+    
+    # 如果推导出的命令是注释或空,说明需要人工介入
+    if not command or command.startswith("#"):
+        return {
+            "ok": False,
+            "action_type": "manual",
+            "message": f"需要人工介入: {derivation.get('suggested_action', '?')}",
+            "command": command,
+            "exit_code": 0,
+            "output": "",
+        }
+    
+    # 确定 action_type
+    action_type = "unknown"
+    if "queue claim" in command:
+        action_type = "claim"
+    elif "queue return" in command:
+        action_type = "return"
+    elif "audit verdict" in command:
+        action_type = "verdict"
+    elif "audit dispatch" in command:
+        action_type = "dispatch"
+    elif "finalize" in command:
+        action_type = "finalize"
+    elif "queue close" in command:
+        action_type = "close"
+    
+    # AIPOS-F73件②: claim 前先检查分支提交（return 场景）
+    if action_type == "return":
+        has_commits = _check_branch_has_commits(workspace_root, task_id)
+        if not has_commits:
+            return {
+                "ok": False,
+                "action_type": "return",
+                "message": "return 阻塞: 分支无提交",
+                "command": command,
+                "exit_code": 1,
+                "output": f"Branch card/{task_id} has no commits relative to main. Cannot return without commits.",
+            }
+    
+    # AIPOS-F73件②③: 每步过门零旁路 — 执行产品 CLI
+    try:
+        result = subprocess.run(
+            shlex.split(command),
+            capture_output=True,
+            text=True,
+            timeout=120,  # 2分钟超时
+        )
+        
+        success = result.returncode == 0
+        output = result.stdout + result.stderr
+        
+        response = {
+            "ok": success,
+            "action_type": action_type,
+            "message": f"{action_type} {'成功' if success else '失败'}",
+            "command": command,
+            "exit_code": result.returncode,
+            "output": output,
+        }
+        
+        # AIPOS-F73件②: claim 成功后建/复用 worktree
+        if success and action_type == "claim":
+            worktree_result = _ensure_worktree(workspace_root, task_id)
+            response["worktree_path"] = worktree_result.get("worktree_path")
+            if not worktree_result.get("ok"):
+                # worktree 失败不影响 claim 记录（已落地），但要报告
+                response["message"] += f" (worktree 警告: {worktree_result.get('message')})"
+        
+        return response
+        
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "action_type": action_type,
+            "message": f"{action_type} 超时 (>120s)",
+            "command": command,
+            "exit_code": 124,
+            "output": "Command timed out after 120 seconds",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "action_type": action_type,
+            "message": f"{action_type} 执行异常: {exc}",
+            "command": command,
+            "exit_code": 1,
+            "output": str(exc),
+        }

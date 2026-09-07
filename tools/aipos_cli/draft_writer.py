@@ -92,9 +92,10 @@ def _check_project_map_staleness(repo_root: Path, validation: dict[str, Any]) ->
             if warning not in validation["warnings"]:
                 validation["warnings"].append(warning)
     
-    except Exception:
+    except (FileNotFoundError, KeyError, ValueError, OSError) as exc:
         # Graceful degradation: staleness check is advisory, never fails publish
-        pass
+        import warnings
+        warnings.warn(f"PROJECT_MAP staleness check failed: {exc}")
 
 EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "agent-01"
 EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET = "workspace_artifacts/external_intake"
@@ -486,9 +487,39 @@ def _append_gate_contract_section(
     propagates this as a BLOCK, so the user gets a clear error instead of a mute card.
 
     Old cards are not backfilled — only NEW publishes get it.
+    
+    AIPOS-F73件①: executor/auditor 卡面停止渲染门契约节 (代码保留仅供 manual 项目声明开启).
+    判据: assigned_to / agent_instance 包含 'exec' 或 'audit' → 跳过渲染.
     """
     if "【认领与交回】" in rendered_markdown:
         return rendered_markdown  # idempotency: never double-append
+    
+    # AIPOS-F73件①: executor/auditor 角色停止渲染门契约节
+    assigned_to = str(metadata.get("assigned_to") or "").lower()
+    agent_instance = str(metadata.get("agent_instance") or "").lower()
+    
+    # 检查是否为 executor/auditor 角色
+    is_executor_or_auditor = (
+        "exec" in assigned_to or "exec" in agent_instance or
+        "audit" in assigned_to or "audit" in agent_instance
+    )
+    
+    # 检查项目是否显式开启 manual gate mode
+    project_json = repo_root / "project.json"
+    manual_gate_mode = False
+    if project_json.exists():
+        try:
+            import json
+            project_data = json.loads(project_json.read_text(encoding="utf-8"))
+            manual_gate_mode = project_data.get("manual_gate_mode", False)
+        except (json.JSONDecodeError, OSError) as e:
+            # Log warning but continue (fail-open for legacy repos)
+            import sys
+            print(f"Warning: Failed to read project.json: {e}", file=sys.stderr)
+    
+    # executor/auditor 且非 manual mode → 跳过渲染
+    if is_executor_or_auditor and not manual_gate_mode:
+        return rendered_markdown
 
     from tools.aipos_cli.flow_description import resolve_collaboration_profile
     from tools.aipos_cli.gate_contract_section import render_gate_contract_section
@@ -728,6 +759,22 @@ def publish_draft(
             )
         except ContractSectionError as exc:
             validation["blocking_reasons"].append(str(exc))
+        
+        # AIPOS-F73件①: 校验 executor/auditor 卡面不含 lybra_ 动词 (fail-closed)
+        assigned_to = str(publish_metadata.get("assigned_to") or "").lower()
+        agent_instance = str(publish_metadata.get("agent_instance") or "").lower()
+        is_executor_or_auditor = (
+            "exec" in assigned_to or "exec" in agent_instance or
+            "audit" in assigned_to or "audit" in agent_instance
+        )
+        if is_executor_or_auditor:
+            import re
+            lybra_verbs = re.findall(r'lybra_\w+', rendered_markdown)
+            if lybra_verbs:
+                validation["blocking_reasons"].append(
+                    f"AIPOS-F73件①: executor/auditor 卡面不得包含门动词。检测到: {', '.join(set(lybra_verbs))}。"
+                    "执行体/审计体零门——认领/交回由产品 (lybra next --run) 执行，卡面不再渲染门链。"
+                )
 
     classification_warnings = list(validation.get("classification_warnings", []))
     verdict_warnings = [warning for warning in validation["warnings"] if warning not in classification_warnings]

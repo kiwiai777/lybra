@@ -320,7 +320,7 @@ class TestColdStartLifecycle:
         assert result["current_state"] == "claimed"
         assert result["current_node"] == "audit_verdict"
         assert result["triggered_by"] == "auditor"
-        assert "lybra audit verdict" in result["command"]
+        assert "lybra audit-verdict" in result["command"]
         assert "--reviewed-task-id TEST-003" in result["command"]
         assert "--audit-task-id TEST-003R" in result["command"]
         assert "--verdict PASS" in result["command"]
@@ -641,4 +641,4 @@ class TestCopyPasteableCommands:
         assert "--source-task-id" in cmd
         assert "--audit-task-id" in cmd
         assert "--actor" in cmd
-        assert "--confirm" in cmd
+        assert "--confirm" not in cmd
