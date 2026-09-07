@@ -344,6 +344,9 @@ def test_f73_command_templates_parseable():
         _build_verdict_submit_command,
         _build_close_command,
     )
+    from tools.aipos_cli.aipos_cli import build_parser
+    
+    parser = build_parser()
     
     # 1. _build_audit_dispatch_command
     dispatch_cmd = _build_audit_dispatch_command(
@@ -358,8 +361,12 @@ def test_f73_command_templates_parseable():
     # 验证不包含 --confirm 和 --connection-json（REWORK-NOTE 项3）
     assert "--confirm" not in dispatch_cmd, "dispatch 命令不应包含 --confirm"
     assert "--connection-json" not in dispatch_cmd, "dispatch 命令不应包含 --connection-json"
-    assert "--source-task-id TEST-002" in dispatch_cmd
-    assert "--audit-task-id TEST-002R" in dispatch_cmd
+    # 解析不应抛出异常
+    try:
+        args = parser.parse_args(shlex.split(dispatch_cmd)[1:])
+        assert args is not None
+    except SystemExit as e:
+        pytest.fail(f"dispatch 命令解析失败: {dispatch_cmd}, exit code: {e.code}")
     
     # 2. _build_verdict_submit_command
     verdict_cmd = _build_verdict_submit_command(
@@ -376,8 +383,14 @@ def test_f73_command_templates_parseable():
             "tree_hash": "b" * 40,
         },
     )
-    assert "lybra audit verdict" in verdict_cmd
+    assert "lybra audit-verdict" in verdict_cmd, "verdict 命令应使用 audit-verdict（连字符）"
     assert "--artifact-subject-repository test-repo" in verdict_cmd
+    # 解析不应抛出异常
+    try:
+        args = parser.parse_args(shlex.split(verdict_cmd)[1:])
+        assert args is not None
+    except SystemExit as e:
+        pytest.fail(f"verdict 命令解析失败: {verdict_cmd}, exit code: {e.code}")
     
     # 3. _build_close_command
     close_cmd = _build_close_command(
@@ -386,6 +399,12 @@ def test_f73_command_templates_parseable():
         connection_json="/tmp/conn.json",
     )
     assert "lybra queue close" in close_cmd
+    # 解析不应抛出异常
+    try:
+        args = parser.parse_args(shlex.split(close_cmd)[1:])
+        assert args is not None
+    except SystemExit as e:
+        pytest.fail(f"close 命令解析失败: {close_cmd}, exit code: {e.code}")
 
 
 if __name__ == "__main__":

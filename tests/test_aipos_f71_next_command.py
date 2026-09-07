@@ -641,4 +641,4 @@ class TestCopyPasteableCommands:
         assert "--source-task-id" in cmd
         assert "--audit-task-id" in cmd
         assert "--actor" in cmd
-        assert "--confirm" in cmd
+        assert "--confirm" not in cmd

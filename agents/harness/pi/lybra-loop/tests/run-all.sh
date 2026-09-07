@@ -631,6 +631,16 @@ else
   overall=1
 fi
 
+# AIPOS-F73: 执行体零门——next --run机器扣扳机+卡面去门链+token scope收紧(移交F73C)
+echo
+echo "── tests/test_aipos_f73_executor_zero_gate.py (执行体零门) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f73_executor_zero_gate.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f73_executor_zero_gate.py PASS"
+else
+  echo "✗ tests/test_aipos_f73_executor_zero_gate.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

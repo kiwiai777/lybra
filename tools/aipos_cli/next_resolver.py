@@ -416,7 +416,7 @@ def _build_verdict_submit_command(
     
     AIPOS-F73前置①: artifact_subject 从卡分支 tip 提取，code 卡必填。
     """
-    parts = ["lybra audit verdict"]
+    parts = ["lybra audit-verdict"]
     parts.append(f"--reviewed-task-id {reviewed_task_id}")
     parts.append(f"--audit-task-id {audit_task_id}")
     parts.append(f"--actor {actor}")
@@ -427,7 +427,6 @@ def _build_verdict_submit_command(
     if owner_policy_ref:
         parts.append(f"--owner-policy-ref {owner_policy_ref}")
     parts.append(f"--verdict {verdict}")
-    parts.append("--autonomy-mode Supervised")
     
     # AIPOS-F73前置①: artifact_subject for code tasks
     if artifact_subject:
@@ -455,9 +454,6 @@ def _build_close_command(
     parts = ["lybra queue close"]
     parts.append(f"--task-id {task_id}")
     parts.append(f"--actor {actor}")
-    parts.append("--confirm")
-    if connection_json:
-        parts.append(f"--connection-json {connection_json}")
     parts.append(f"--closure-evidence '{closure_evidence_json}'")
     return " ".join(parts)
 
