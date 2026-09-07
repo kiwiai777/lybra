@@ -115,6 +115,9 @@ def execute_two_phase_verb(
     json_output: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """两阶段动词薄壳工厂核心：dry_run → confirm
+    
+    AIPOS-F73B件②: PreAuthorized 模式走一阶段协议（门的一阶段协议已在 F75/F75R 实证可行）。
+    complex 类卡仍走 Supervised 两跳。
 
     Args:
         verb_base: 基础动词名（如 "lybra_queue_claim"）
@@ -150,7 +153,50 @@ def execute_two_phase_verb(
     except Exception as exc:
         return _fail(f"gate client init failed: {exc}")
 
-    # 3. Step 1: dry_run
+    # AIPOS-F73B件②: 判定是否走一阶段协议
+    autonomy_mode = args_dict.get("autonomy_mode", "Supervised")
+    use_one_phase = (autonomy_mode == "PreAuthorized")
+    
+    # 3. Step 1: dry_run（或一阶段提交）
+    if use_one_phase:
+        # AIPOS-F73B件②: PreAuthorized 一阶段——直接提交
+        # 动词名从 xxx_dry_run 改为 xxx_confirm（门的一阶段协议）
+        one_phase_verb = f"{verb_base}_confirm"
+        one_phase_args = dict(args_dict)  # 复制以避免修改原始参数
+        # 一阶段协议不需要 dry_run_token，但需要 owner_policy_ref
+        one_phase_args["actor"] = args_dict.get("actor")
+        one_phase_args["agent_instance"] = args_dict.get("agent_instance")
+        one_phase_args["owner_policy_ref"] = args_dict.get("owner_policy_ref")
+        # 针对特定动词的额外参数
+        if verb_base == "lybra_audit_verdict":
+            one_phase_args["audit_task_id"] = args_dict.get("audit_task_id")
+            one_phase_args["reviewed_task_id"] = args_dict.get("reviewed_task_id")
+        
+        try:
+            one_phase_resp = client.call_tool(one_phase_verb, one_phase_args)
+        except Exception as exc:
+            return _fail(f"{one_phase_verb} failed: {exc}")
+        
+        # 检查结果
+        if one_phase_resp.get("isError") or one_phase_resp.get("verdict") == "BLOCK":
+            reasons = one_phase_resp.get("blocking_reasons") or one_phase_resp.get("errors") or []
+            if json_output:
+                print(render_json(one_phase_resp))
+            else:
+                print(f"{verb_base} BLOCKED: {reasons}", file=sys.stderr)
+            return 1, one_phase_resp
+        
+        # 输出结果
+        if json_output:
+            print(render_json(one_phase_resp))
+        else:
+            op_name = verb_base.replace("lybra_", "").replace("_", " ")
+            task_id = args_dict.get("task_id") or args_dict.get("audit_task_id", "")
+            print(f"{op_name} confirmed (PreAuthorized) for {task_id}")
+        
+        return 0, one_phase_resp
+    
+    # 否则走两阶段协议（Supervised）
     dry_run_verb = f"{verb_base}_dry_run"
     try:
         dry_run_resp = client.call_tool(dry_run_verb, args_dict)

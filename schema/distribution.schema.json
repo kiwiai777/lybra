@@ -43,6 +43,46 @@
     ]
   },
   "distributions": [
+    {
+      "distribution_id": "executor-go-command",
+      "kind": "command",
+      "description": "AIPOS-F73B件③: Executor workstation no-parameter go command (source lives in product repo)",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/harness/pi/lybra-executor/go"
+      },
+      "target": {
+        "harness": "pi",
+        "relative_path": "go"
+      },
+      "applies_to_roles": [
+        "executor"
+      ],
+      "operation": "copy_tree",
+      "version_strategy": "git_commit_hash",
+      "executable": true,
+      "notes": "AIPOS-F73B: No-parameter command - queries product for claimed task by agent_instance, switches to worktree. Replaces parametered /claim <path>."
+    },
+    {
+      "distribution_id": "auditor-go-command",
+      "kind": "command",
+      "description": "AIPOS-F73B件③: Auditor workstation no-parameter go command (source lives in product repo)",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/harness/pi/lybra-auditor/go"
+      },
+      "target": {
+        "harness": "pi",
+        "relative_path": "go"
+      },
+      "applies_to_roles": [
+        "auditor"
+      ],
+      "operation": "copy_tree",
+      "version_strategy": "git_commit_hash",
+      "executable": true,
+      "notes": "AIPOS-F73B: No-parameter command - queries product for claimed task by agent_instance, switches to worktree. Replaces parametered /claim <path>."
+    },
 
     {
       "distribution_id": "executor-skills",
