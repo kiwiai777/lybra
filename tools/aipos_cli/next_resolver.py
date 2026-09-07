@@ -401,6 +401,24 @@ def _build_audit_dispatch_command(
     return " ".join(parts)
 
 
+def _build_close_command(
+    *,
+    task_id: str,
+    actor: str,
+    connection_json: str | None,
+    closure_evidence_json: str,
+) -> str:
+    """构建结案命令 (AIPOS-F73B前置零)。"""
+    parts = ["lybra queue close"]
+    parts.append(f"--task-id {task_id}")
+    parts.append(f"--actor {actor}")
+    if connection_json:
+        parts.append(f"--connection-json {connection_json}")
+    parts.append(f"--closure-evidence '{closure_evidence_json}'")
+    parts.append("--confirm")
+    return " ".join(parts)
+
+
 def _build_verdict_submit_command(
     *,
     reviewed_task_id: str,
@@ -608,8 +626,116 @@ def derive_next_step(
         latest_return = records.get("latest_return")
         claimer = (latest_claim or {}).get("agent_instance") or (latest_claim or {}).get("actor") or assigned_to or "<executor>"
 
-        # 已有 return 记录 → 下一步是审计派发(N3)
+        # 已有 return 记录 → 检查后续节点 N3→N6 (AIPOS-F73B前置零)
         if latest_return:
+            latest_audit_dispatch = records.get("latest_audit_dispatch")
+            latest_verdict = records.get("latest_verdict")
+            latest_closure = records.get("latest_closure")
+            
+            # 检查是否有 finalization 记录
+            finalizations_dir = _resolve_governance_path_with_relative("records", workspace_root) / "finalizations" / task_id
+            has_finalization = finalizations_dir.is_dir() and any(finalizations_dir.glob("finalization_*.md"))
+            
+            # N5→N6: 有 finalization 但无 closure → close
+            if has_finalization and not latest_closure:
+                # 从 finalization 记录提取 closure_evidence
+                closure_evidence_json = '{}'
+                if finalizations_dir.is_dir():
+                    finalization_files = sorted(finalizations_dir.glob("finalization_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    if finalization_files:
+                        fin_fm = _read_frontmatter(finalization_files[0])
+                        # 构造 closure_evidence
+                        import json
+                        closure_evidence = {
+                            "finalize_return_ref": fin_fm.get("finalize_ref", "")
+                        }
+                        closure_evidence_json = json.dumps(closure_evidence)
+                
+                cmd = _build_close_command(
+                    task_id=task_id,
+                    actor="advisor",
+                    connection_json=conn_arg,
+                    closure_evidence_json=closure_evidence_json,
+                )
+                return {
+                    "task_id": task_id,
+                    "derivable": True,
+                    "current_node": "finalize",
+                    "current_state": "claimed",
+                    "triggered_by": "advisor",
+                    "command": cmd,
+                    "verb": "lybra_queue_close_dry_run",
+                    "missing_records": [],
+                    "suggested_action": "结案",
+                    "notes": "N5→N6: 已 finalize,需 close",
+                }
+            
+            # N6: 有 closure → 已完成
+            if latest_closure:
+                return {
+                    "task_id": task_id,
+                    "derivable": False,
+                    "current_node": "close",
+                    "current_state": "claimed",
+                    "triggered_by": "none",
+                    "command": "",
+                    "verb": "",
+                    "missing_records": [],
+                    "suggested_action": "无(任务已结案)",
+                    "notes": "N6: 任务已有 closure 记录,无下一步",
+                }
+            
+            # N4→N5: 有 verdict 但无 finalization → finalize
+            if latest_verdict and not has_finalization:
+                verdict_result = latest_verdict.get("verdict", "")
+                if verdict_result in ("PASS", "PASS_WITH_NOTES"):
+                    # 构造 finalize 命令
+                    cmd = f"lybra finalize --task-id {task_id} --push --deploy --workspace-root {workspace_root} --governance-root {workspace_root}"
+                    return {
+                        "task_id": task_id,
+                        "derivable": True,
+                        "current_node": "audit_verdict",
+                        "current_state": "claimed",
+                        "triggered_by": "advisor",
+                        "command": cmd,
+                        "verb": "lybra_finalize",
+                        "missing_records": [],
+                        "suggested_action": "finalize 并部署",
+                        "notes": f"N4→N5: 裁决 {verdict_result},需 finalize",
+                    }
+                else:
+                    # FAIL/BLOCK 等非 PASS 裁决
+                    return {
+                        "task_id": task_id,
+                        "derivable": False,
+                        "current_node": "audit_verdict",
+                        "current_state": "claimed",
+                        "triggered_by": "executor",
+                        "command": "",
+                        "verb": "",
+                        "missing_records": [],
+                        "suggested_action": f"处理裁决 {verdict_result} (返工或修复)",
+                        "notes": f"N4: 裁决 {verdict_result},需人工处理",
+                    }
+            
+            # N3→N4: 已派审但无 verdict → 等待审计体产物
+            if latest_audit_dispatch and not latest_verdict:
+                audit_id = f"{task_id}R"
+                return {
+                    "task_id": task_id,
+                    "derivable": False,
+                    "current_node": "audit_dispatch",
+                    "current_state": "claimed",
+                    "triggered_by": "auditor",
+                    "command": "",
+                    "verb": "",
+                    "missing_records": [f"审计卡 {audit_id} 的 VERDICT 报告"],
+                    "suggested_action": f"等待审计体完成 {audit_id} 并生成 VERDICT",
+                    "notes": "N3: 已派审,等待审计体产物",
+                    "action": {"type": "await_artifact", "card": audit_id},
+                }
+            
+            # N2→N3: 已 return,检查是否需要派审
             if not has_audit_card and (task_mode == "code" or audit_required):
                 # 审计卡未生成
                 return {
@@ -624,8 +750,8 @@ def derive_next_step(
                     "suggested_action": "executor 自产审计卡(task-closure-loop 标准工序)",
                     "notes": "已 return,审计卡未生成,等待 executor 自产",
                 }
-            if has_audit_card:
-                # 审计卡已生成,需派审
+            if has_audit_card and not latest_audit_dispatch:
+                # 审计卡已生成但未派审,需派审
                 audit_id = f"{task_id}R"
                 policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
                 # 第4轮②: 派审是 owner-dispatch 的动词,不是 exec
@@ -668,15 +794,15 @@ def derive_next_step(
                 }
             return {
                 "task_id": task_id,
-                "derivable": True,
+                "derivable": False,
                 "current_node": "return",
                 "current_state": "claimed",
                 "triggered_by": "advisor",
                 "command": "",
-                "verb": "lybra_audit_dispatch_dry_run",
+                "verb": "",
                 "missing_records": [],
-                "suggested_action": "派发审计",
-                "notes": "已 return,等待审计流程",
+                "suggested_action": "等待审计流程",
+                "notes": "已 return,审计流程进行中",
             }
 
         # 有 RETURN.md 但还没 return 记录 → 交回工作(N2)
