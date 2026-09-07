@@ -320,7 +320,7 @@ class TestColdStartLifecycle:
         assert result["current_state"] == "claimed"
         assert result["current_node"] == "audit_verdict"
         assert result["triggered_by"] == "auditor"
-        assert "lybra audit verdict" in result["command"]
+        assert "lybra audit-verdict" in result["command"]
         assert "--reviewed-task-id TEST-003" in result["command"]
         assert "--audit-task-id TEST-003R" in result["command"]
         assert "--verdict PASS" in result["command"]
