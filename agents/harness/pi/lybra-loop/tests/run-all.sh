@@ -641,6 +641,34 @@ else
   overall=1
 fi
 
+# AIPOS-F73B: 执行体零门·第二刀——认领腿(前置零N3→N6+件①②③)
+echo
+echo "── tests/test_aipos_f73b_pre0_n3_to_n6_chain.py (F73B前置零N3→N6链路) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f73b_pre0_n3_to_n6_chain.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f73b_pre0_n3_to_n6_chain.py PASS"
+else
+  echo "✗ tests/test_aipos_f73b_pre0_n3_to_n6_chain.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f73b_item1_claim_with_role_token.py (F73B件①认领) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f73b_item1_claim_with_role_token.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f73b_item1_claim_with_role_token.py PASS"
+else
+  echo "✗ tests/test_aipos_f73b_item1_claim_with_role_token.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f73b_item2_preauth_protocol.py (F73B件②PreAuthorized协议) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f73b_item2_preauth_protocol.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f73b_item2_preauth_protocol.py PASS"
+else
+  echo "✗ tests/test_aipos_f73b_item2_preauth_protocol.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
