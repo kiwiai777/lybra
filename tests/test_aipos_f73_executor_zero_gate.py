@@ -300,7 +300,7 @@ def test_f73_item1_card_gate_verb_validation_red_green():
 
 
 def test_f73_item4_executor_auditor_scope_tightened():
-    """AIPOS-F73件④: executor/auditor token scope 收为 [task_progress]。"""
+    """AIPOS-F73件④: executor/auditor token scope 收紧 - REWORK: 恢复 main scopes，移交 F73C。"""
     from tools.schema_loader import load_schema
     
     roles_schema = load_schema("roles", REPO_ROOT)
@@ -308,18 +308,19 @@ def test_f73_item4_executor_auditor_scope_tightened():
     
     executor_role = next((r for r in roles if r["role"] == "executor"), None)
     assert executor_role is not None, "应该找到 executor 角色"
-    assert executor_role["scopes"] == ["task_progress"], \
-        f"executor scopes 应该只有 [task_progress]，实际: {executor_role['scopes']}"
+    # REWORK: 恢复 main 的 scopes，移交 F73C
+    assert executor_role["scopes"] == ["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"], \
+        f"executor scopes 应与 main 一致，实际: {executor_role['scopes']}"
     
     auditor_role = next((r for r in roles if r["role"] == "auditor"), None)
     assert auditor_role is not None, "应该找到 auditor 角色"
-    assert auditor_role["scopes"] == ["task_progress"], \
-        f"auditor scopes 应该只有 [task_progress]，实际: {auditor_role['scopes']}"
+    assert auditor_role["scopes"] == ["queue_claim", "audit_verdict", "task_progress"], \
+        f"auditor scopes 应与 main 一致，实际: {auditor_role['scopes']}"
 
 
 def test_f73_item5_advisor_skill_exists():
     """AIPOS-F73件⑤: 顾问 skill 文件存在且包含阶段→命令映射。"""
-    skill_path = REPO_ROOT / "agents" / "harness" / "pi" / "lybra-advisor" / "skills" / "lybra-advisor" / "SKILL.md"
+    skill_path = REPO_ROOT / "agents" / "skills" / "lybra-advisor" / "SKILL.md"
     assert skill_path.exists(), f"顾问 skill 文件应该存在: {skill_path}"
     
     content = skill_path.read_text()
@@ -332,7 +333,59 @@ def test_f73_item5_advisor_skill_exists():
     assert "lybra governance-commit" in content, "应包含 governance-commit 命令"
     
     # 检查退役提示
-    assert "废弃" in content or "❌" in content, "应标记退役命令"
+    assert "退役" in content, "应标记退役命令"
+
+
+def test_f73_command_templates_parseable():
+    """AIPOS-F73 parser夹具: 四个命令模板生成的命令可被 aipos_cli argparse 解析。"""
+    import shlex
+    from tools.aipos_cli.next_resolver import (
+        _build_audit_dispatch_command,
+        _build_verdict_submit_command,
+        _build_close_command,
+    )
+    
+    # 1. _build_audit_dispatch_command
+    dispatch_cmd = _build_audit_dispatch_command(
+        task_id="TEST-002",
+        actor="advisor",
+        agent_instance="advisor.test",
+        owner_policy_ref="pol_test",
+        connection_json="/tmp/conn.json",
+        audit_task_id="TEST-002R",
+        audit_agent_instance="audit.test",
+    )
+    # 验证不包含 --confirm 和 --connection-json（REWORK-NOTE 项3）
+    assert "--confirm" not in dispatch_cmd, "dispatch 命令不应包含 --confirm"
+    assert "--connection-json" not in dispatch_cmd, "dispatch 命令不应包含 --connection-json"
+    assert "--source-task-id TEST-002" in dispatch_cmd
+    assert "--audit-task-id TEST-002R" in dispatch_cmd
+    
+    # 2. _build_verdict_submit_command
+    verdict_cmd = _build_verdict_submit_command(
+        reviewed_task_id="TEST-003",
+        audit_task_id="TEST-003R",
+        actor="audit.test",
+        agent_instance="audit.test.host",
+        owner_policy_ref="pol_test",
+        connection_json="/tmp/conn.json",
+        verdict="PASS",
+        artifact_subject={
+            "repository": "test-repo",
+            "commit_sha": "a" * 40,
+            "tree_hash": "b" * 40,
+        },
+    )
+    assert "lybra audit verdict" in verdict_cmd
+    assert "--artifact-subject-repository test-repo" in verdict_cmd
+    
+    # 3. _build_close_command
+    close_cmd = _build_close_command(
+        task_id="TEST-004",
+        actor="advisor",
+        connection_json="/tmp/conn.json",
+    )
+    assert "lybra queue close" in close_cmd
 
 
 if __name__ == "__main__":

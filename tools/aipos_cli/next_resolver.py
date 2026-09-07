@@ -393,9 +393,6 @@ def _build_audit_dispatch_command(
     parts = ["lybra audit dispatch"]
     parts.append(f"--source-task-id {task_id}")
     parts.append(f"--actor {actor}")
-    parts.append("--confirm")
-    if connection_json:
-        parts.append(f"--connection-json {connection_json}")
     parts.append(f"--agent-instance {agent_instance}")
     if owner_policy_ref:
         parts.append(f"--owner-policy-ref {owner_policy_ref}")

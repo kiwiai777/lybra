@@ -512,8 +512,10 @@ def _append_gate_contract_section(
             import json
             project_data = json.loads(project_json.read_text(encoding="utf-8"))
             manual_gate_mode = project_data.get("manual_gate_mode", False)
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            # Log warning but continue (fail-open for legacy repos)
+            import sys
+            print(f"Warning: Failed to read project.json: {e}", file=sys.stderr)
     
     # executor/auditor 且非 manual mode → 跳过渲染
     if is_executor_or_auditor and not manual_gate_mode:
