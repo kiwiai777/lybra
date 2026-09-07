@@ -1195,12 +1195,185 @@ def _ensure_worktree(workspace_root: Path, task_id: str) -> dict[str, Any]:
             "message": f"Exception creating worktree: {exc}",
         }
 
+
+def _execute_claim_with_role_token(
+    *,
+    task_id: str,
+    workspace_root: Path,
+    connection_json: str | None,
+) -> dict[str, Any]:
+    """AIPOS-F73B件①: pending 卡按角色 token 认领。
+    
+    按 assigned_to/agent_instance 查 roles.schema 取 role_class → connection.json 对应 token。
+    认领后建 worktree、输出 spawn_worker action。
+    
+    Args:
+        task_id: 任务 ID
+        workspace_root: 产品仓根目录
+        connection_json: connection.json 路径（可选）
+    
+    Returns:
+        execute_derived_action 格式的响应
+    """
+    import subprocess
+    import json
+    
+    # 1. 读取任务卡获取 assigned_to
+    task_path, queue_dir = _find_task_in_queue(workspace_root, task_id)
+    if not task_path:
+        return {
+            "ok": False,
+            "action_type": "claim",
+            "message": f"Task {task_id} not found in queue",
+            "command": "",
+            "exit_code": 1,
+            "output": "",
+        }
+    
+    task_fm = _read_frontmatter(task_path)
+    if not task_fm:
+        return {
+            "ok": False,
+            "action_type": "claim",
+            "message": f"Cannot read task frontmatter: {task_path}",
+            "command": "",
+            "exit_code": 1,
+            "output": "",
+        }
+    
+    assigned_to = task_fm.get("assigned_to") or task_fm.get("agent_instance", "")
+    if not assigned_to:
+        return {
+            "ok": False,
+            "action_type": "claim",
+            "message": f"Task {task_id} has no assigned_to or agent_instance",
+            "command": "",
+            "exit_code": 1,
+            "output": "",
+        }
+    
+    # 2. 从 assigned_to 提取 role_class（格式: <prefix>.<project>.<host>）
+    # 按 roles.schema naming.prefix 查找角色
+    prefix = assigned_to.split(".")[0] if "." in assigned_to else assigned_to
+    
+    roles_schema_path = REPO_ROOT / "schema" / "roles.schema.json"
+    try:
+        roles_data = json.loads(roles_schema_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "ok": False,
+            "action_type": "claim",
+            "message": f"Cannot read roles.schema.json: {exc}",
+            "command": "",
+            "exit_code": 1,
+            "output": "",
+        }
+    
+    role_class = None
+    for role in roles_data.get("roles", []):
+        if role.get("naming", {}).get("prefix") == prefix:
+            role_class = role.get("role_class")
+            break
+    
+    if not role_class:
+        return {
+            "ok": False,
+            "action_type": "claim",
+            "message": f"Cannot resolve role_class from assigned_to prefix '{prefix}'",
+            "command": "",
+            "exit_code": 1,
+            "output": "",
+        }
+    
+    # 3. 构建 claim 命令（使用产品 CLI，传递 role 参数）
+    # 产品 CLI 会从 connection.json 读取对应 role 的 token
+    conn_arg = f"--connection-json {connection_json}" if connection_json else ""
+    policy_ref = _resolve_active_policy(workspace_root, task_id, role=role_class)
+    policy_arg = f"--owner-policy-ref {policy_ref}" if policy_ref else ""
+    
+    command = f"lybra queue claim --task-id {task_id} --actor {assigned_to} --agent-instance {assigned_to} {policy_arg} {conn_arg} --confirm".strip()
+    
+    # 4. 执行 claim
+    try:
+        result = subprocess.run(
+            command.split(),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        
+        success = result.returncode == 0
+        output = result.stdout + result.stderr
+        
+        if not success:
+            return {
+                "ok": False,
+                "action_type": "claim",
+                "message": f"claim 失败: {result.returncode}",
+                "command": command,
+                "exit_code": result.returncode,
+                "output": output,
+            }
+        
+        # 5. claim 成功后建 worktree
+        worktree_result = _ensure_worktree(workspace_root, task_id)
+        worktree_path = worktree_result.get("worktree_path", "")
+        
+        if not worktree_result.get("ok"):
+            return {
+                "ok": False,
+                "action_type": "claim",
+                "message": f"claim 成功但 worktree 失败: {worktree_result.get('message')}",
+                "command": command,
+                "exit_code": 1,
+                "output": output + "\n" + worktree_result.get("message", ""),
+                "worktree_path": "",
+            }
+        
+        # 6. 构建 spawn_worker action
+        spawn_action = {
+            "type": "spawn_worker",
+            "card": task_id,
+            "worktree": worktree_path,
+            "instance": assigned_to,
+        }
+        
+        return {
+            "ok": True,
+            "action_type": "claim",
+            "message": "claim 成功 + worktree 已建立",
+            "command": command,
+            "exit_code": 0,
+            "output": output + f"\nWorktree: {worktree_path}",
+            "worktree_path": worktree_path,
+            "spawn_action": spawn_action,
+        }
+        
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "action_type": "claim",
+            "message": "claim 超时 (>120s)",
+            "command": command,
+            "exit_code": 124,
+            "output": "Command timed out after 120 seconds",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "action_type": "claim",
+            "message": f"claim 执行异常: {exc}",
+            "command": command,
+            "exit_code": 1,
+            "output": str(exc),
+        }
+
 def execute_derived_action(
     derivation: dict[str, Any],
     workspace_root: Path,
     connection_json: str | None = None,
 ) -> dict[str, Any]:
-    """AIPOS-F73件②③: 执行推导出的下一步动作。
+    """AIPOS-F73件②③ + F73B件①: 执行推导出的下一步动作。
     
     铁律三条:
     1. 单步即退禁循环 (连接器病根禁复刻)
@@ -1208,7 +1381,7 @@ def execute_derived_action(
     3. fail-closed 非零退出带拒因
     
     推导结果 → 执行:
-    - pending → claim (执行 lybra queue claim --confirm) + 建/复用 worktree
+    - pending → claim (AIPOS-F73B件①: 按角色 token 认领) + 建/复用 worktree + 输出 spawn_worker action
     - claimed + RETURN.md + 分支有提交 → return (执行 lybra queue return --confirm)
     - claimed + VERDICT → verdict (执行 lybra audit verdict --confirm)
     - returned + audit card → dispatch (执行 lybra audit dispatch --confirm)
@@ -1216,7 +1389,7 @@ def execute_derived_action(
     
     Args:
         derivation: derive_next_step() 的返回结果
-        workspace_root: 治理仓根目录
+        workspace_root: 产品仓根目录
         connection_json: connection.json 路径 (可选)
     
     Returns:
@@ -1228,10 +1401,12 @@ def execute_derived_action(
             "exit_code": int,
             "output": str,
             "worktree_path": str | None,  # claim 时返回 worktree 路径
+            "spawn_action": dict | None,  # claim 时输出 spawn_worker action
         }
     """
     import subprocess
     import shlex
+    import json
     
     if not derivation.get("derivable"):
         return {
@@ -1273,7 +1448,15 @@ def execute_derived_action(
     elif "queue close" in command:
         action_type = "close"
     
-    # AIPOS-F73件②: claim 前先检查分支提交（return 场景）
+    # AIPOS-F73B件①: pending 卡特殊处理 — 按角色 token 认领
+    if action_type == "claim" and current_node == "pending":
+        return _execute_claim_with_role_token(
+            task_id=task_id,
+            workspace_root=workspace_root,
+            connection_json=connection_json,
+        )
+    
+    # AIPOS-F73件②: return 前先检查分支提交
     if action_type == "return":
         has_commits = _check_branch_has_commits(workspace_root, task_id)
         if not has_commits:
@@ -1306,14 +1489,6 @@ def execute_derived_action(
             "exit_code": result.returncode,
             "output": output,
         }
-        
-        # AIPOS-F73件②: claim 成功后建/复用 worktree
-        if success and action_type == "claim":
-            worktree_result = _ensure_worktree(workspace_root, task_id)
-            response["worktree_path"] = worktree_result.get("worktree_path")
-            if not worktree_result.get("ok"):
-                # worktree 失败不影响 claim 记录（已落地），但要报告
-                response["message"] += f" (worktree 警告: {worktree_result.get('message')})"
         
         return response
         
