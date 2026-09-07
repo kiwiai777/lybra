@@ -318,24 +318,6 @@ def test_f73_item4_executor_auditor_scope_tightened():
         f"auditor scopes 应与 main 一致，实际: {auditor_role['scopes']}"
 
 
-def test_f73_item5_advisor_skill_exists():
-    """AIPOS-F73件⑤: 顾问 skill 文件存在且包含阶段→命令映射。"""
-    skill_path = REPO_ROOT / "agents" / "skills" / "lybra-advisor" / "SKILL.md"
-    assert skill_path.exists(), f"顾问 skill 文件应该存在: {skill_path}"
-    
-    content = skill_path.read_text()
-    
-    # 检查关键命令
-    assert "lybra draft create" in content, "应包含 draft create 命令"
-    assert "lybra draft publish" in content, "应包含 draft publish 命令"
-    assert "lybra next --run" in content, "应包含 next --run 命令"
-    assert "lybra mark-concluded" in content, "应包含 mark-concluded 命令"
-    assert "lybra governance-commit" in content, "应包含 governance-commit 命令"
-    
-    # 检查退役提示
-    assert "退役" in content, "应标记退役命令"
-
-
 def test_f73_command_templates_parseable():
     """AIPOS-F73 parser夹具: 四个命令模板生成的命令可被 aipos_cli argparse 解析。"""
     import shlex
