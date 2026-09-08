@@ -1233,9 +1233,12 @@ def _execute_claim_with_role_token(
     workspace_root: Path,
     connection_json: str | None,
 ) -> dict[str, Any]:
-    """AIPOS-F73B件①: pending 卡按角色 token 认领。
+    """AIPOS-F73B件① + F73C件⑥返工: pending 卡按 advisor token 认领。
     
-    按 assigned_to/agent_instance 查 roles.schema 取 role_class → connection.json 对应 token。
+    账务动词由驱动方 token 执行、actor=该卡实例:
+    - token: advisor (从 connection.json 读取)
+    - actor: assigned_to/agent_instance (该卡声明的实例)
+    
     认领后建 worktree、输出 spawn_worker action。
     
     Args:
@@ -1283,45 +1286,12 @@ def _execute_claim_with_role_token(
             "output": "",
         }
     
-    # 2. 从 assigned_to 提取 role_class（格式: <prefix>.<project>.<host>）
-    # 按 roles.schema naming.prefix 查找角色
-    prefix = assigned_to.split(".")[0] if "." in assigned_to else assigned_to
-    
-    roles_schema_path = REPO_ROOT / "schema" / "roles.schema.json"
-    try:
-        roles_data = json.loads(roles_schema_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {
-            "ok": False,
-            "action_type": "claim",
-            "message": f"Cannot read roles.schema.json: {exc}",
-            "command": "",
-            "exit_code": 1,
-            "output": "",
-        }
-    
-    role_class = None
-    for role in roles_data.get("roles", []):
-        if role.get("naming", {}).get("prefix") == prefix:
-            role_class = role.get("role_class")
-            break
-    
-    if not role_class:
-        return {
-            "ok": False,
-            "action_type": "claim",
-            "message": f"Cannot resolve role_class from assigned_to prefix '{prefix}'",
-            "command": "",
-            "exit_code": 1,
-            "output": "",
-        }
-    
-    # 3. 构建 claim 命令（使用产品 CLI，传递 role 参数）
-    # 产品 CLI 会从 connection.json 读取对应 role 的 token
+    # 2. AIPOS-F73C件⑥返工: token 固定为 advisor，actor 为该卡实例
     conn_arg = f"--connection-json {connection_json}" if connection_json else ""
-    policy_ref = _resolve_active_policy(workspace_root, task_id, role=role_class)
+    policy_ref = _resolve_active_policy(workspace_root, task_id, role="advisor")
     policy_arg = f"--owner-policy-ref {policy_ref}" if policy_ref else ""
     
+    # 命令: 使用 advisor token (connection.json 默认 role="advisor")
     command = f"lybra queue claim --task-id {task_id} --actor {assigned_to} --agent-instance {assigned_to} {policy_arg} {conn_arg} --confirm".strip()
     
     # 4. 执行 claim

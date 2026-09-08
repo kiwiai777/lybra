@@ -523,9 +523,11 @@ def _append_gate_contract_section(
             if role_class in ("executor", "auditor"):
                 is_executor_or_auditor = True
                 break
-    except Exception:
-        # 注册表读取失败，降级为 fail-open (存量兼容)
-        pass
+    except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError) as exc:
+        # AIPOS-F73C返工④: 注册表读取失败，精确捕获 + warning
+        import sys
+        print(f"Warning: Failed to read roles.schema.json: {exc}", file=sys.stderr)
+        # 降级为 fail-open (存量兼容)
     
     # 检查项目是否显式开启 manual gate mode
     project_json = repo_root / "project.json"
@@ -991,10 +993,19 @@ def regen_machine_zone_for_pending(
                     card_task_id, metadata, governance_root=governance_root, product_root=product_root
                 )
                 
+                # AIPOS-F73C返工⑤: 删除存量卡的「认领与交回」节 (新卡不再生成)
+                import re
+                if "【认领与交回】" in body:
+                    # 匹配从 "【认领与交回】" 到下一个 "##" 或文末
+                    gate_section_pattern = r"## 【认领与交回】.*?(?=\n## |\Z)"
+                    body_without_gate = re.sub(gate_section_pattern, "", body, flags=re.DOTALL)
+                    if body_without_gate != body:
+                        amendments["body"] = body_without_gate
+                        body = body_without_gate
+                
                 # 查找 body 中是否有旧的纪律段
                 if "## 工作纪律" in body:
                     # 已有节: 替换
-                    import re
                     # 匹配从 "## 工作纪律" 到下一个 "##" 或文末
                     pattern = r"(## 工作纪律.*?)(?=\n## |\Z)"
                     new_body = re.sub(pattern, new_discipline_section, body, flags=re.DOTALL)
