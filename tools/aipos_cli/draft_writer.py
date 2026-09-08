@@ -494,15 +494,38 @@ def _append_gate_contract_section(
     if "【认领与交回】" in rendered_markdown:
         return rendered_markdown  # idempotency: never double-append
     
-    # AIPOS-F73件①: executor/auditor 角色停止渲染门契约节
-    assigned_to = str(metadata.get("assigned_to") or "").lower()
-    agent_instance = str(metadata.get("agent_instance") or "").lower()
+    # AIPOS-F73C件①: executor/auditor 角色停止渲染门契约节
+    # 角色判据：读 roles 注册表 role_class (禁子串 exec/audit 猜)
+    assigned_to = str(metadata.get("assigned_to") or "").strip()
+    agent_instance = str(metadata.get("agent_instance") or "").strip()
     
-    # 检查是否为 executor/auditor 角色
-    is_executor_or_auditor = (
-        "exec" in assigned_to or "exec" in agent_instance or
-        "audit" in assigned_to or "audit" in agent_instance
-    )
+    # 从 roles.schema.json 读取角色注册表
+    is_executor_or_auditor = False
+    try:
+        from tools.schema_loader import load_roles_schema
+        roles_schema = load_roles_schema()
+        roles_def = roles_schema.get("roles", [])
+        
+        # 构建 {role_name: role_class} 映射
+        role_class_map = {}
+        for role_def in roles_def:
+            role_name = role_def.get("role")
+            role_class = role_def.get("role_class")
+            if role_name and role_class:
+                role_class_map[role_name] = role_class
+        
+        # 检查 assigned_to / agent_instance 的 role_class
+        for role_candidate in [assigned_to, agent_instance]:
+            if not role_candidate:
+                continue
+            # 直接匹配角色名
+            role_class = role_class_map.get(role_candidate)
+            if role_class in ("executor", "auditor"):
+                is_executor_or_auditor = True
+                break
+    except Exception:
+        # 注册表读取失败，降级为 fail-open (存量兼容)
+        pass
     
     # 检查项目是否显式开启 manual gate mode
     project_json = repo_root / "project.json"
@@ -513,7 +536,7 @@ def _append_gate_contract_section(
             project_data = json.loads(project_json.read_text(encoding="utf-8"))
             manual_gate_mode = project_data.get("manual_gate_mode", False)
         except (json.JSONDecodeError, OSError) as e:
-            # Log warning but continue (fail-open for legacy repos)
+            # 读取失败 → warning 非静默
             import sys
             print(f"Warning: Failed to read project.json: {e}", file=sys.stderr)
     
@@ -760,19 +783,40 @@ def publish_draft(
         except ContractSectionError as exc:
             validation["blocking_reasons"].append(str(exc))
         
-        # AIPOS-F73件①: 校验 executor/auditor 卡面不含 lybra_ 动词 (fail-closed)
-        assigned_to = str(publish_metadata.get("assigned_to") or "").lower()
-        agent_instance = str(publish_metadata.get("agent_instance") or "").lower()
-        is_executor_or_auditor = (
-            "exec" in assigned_to or "exec" in agent_instance or
-            "audit" in assigned_to or "audit" in agent_instance
-        )
+        # AIPOS-F73C件①: 校验 executor/auditor 卡面不含 lybra_ 动词 (fail-closed)
+        # 角色判据：读 roles 注册表 role_class
+        assigned_to = str(publish_metadata.get("assigned_to") or "").strip()
+        agent_instance = str(publish_metadata.get("agent_instance") or "").strip()
+        
+        is_executor_or_auditor = False
+        try:
+            from tools.schema_loader import load_roles_schema
+            roles_schema = load_roles_schema()
+            roles_def = roles_schema.get("roles", [])
+            
+            role_class_map = {}
+            for role_def in roles_def:
+                role_name = role_def.get("role")
+                role_class = role_def.get("role_class")
+                if role_name and role_class:
+                    role_class_map[role_name] = role_class
+            
+            for role_candidate in [assigned_to, agent_instance]:
+                if not role_candidate:
+                    continue
+                role_class = role_class_map.get(role_candidate)
+                if role_class in ("executor", "auditor"):
+                    is_executor_or_auditor = True
+                    break
+        except Exception:
+            pass
+        
         if is_executor_or_auditor:
             import re
             lybra_verbs = re.findall(r'lybra_\w+', rendered_markdown)
             if lybra_verbs:
                 validation["blocking_reasons"].append(
-                    f"AIPOS-F73件①: executor/auditor 卡面不得包含门动词。检测到: {', '.join(set(lybra_verbs))}。"
+                    f"AIPOS-F73C件①: executor/auditor 卡面不得包含门动词。检测到: {', '.join(set(lybra_verbs))}。"
                     "执行体/审计体零门——认领/交回由产品 (lybra next --run) 执行，卡面不再渲染门链。"
                 )
 

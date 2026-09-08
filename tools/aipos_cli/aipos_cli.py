@@ -1382,6 +1382,17 @@ def build_parser() -> argparse.ArgumentParser:
     queue_close_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     queue_close_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-F73C件⑤: queue rework subcommand (顾问追加返工节到卡面)
+    queue_rework_parser = queue_subparsers.add_parser("rework", help="AIPOS-F75: Add rework round to task card (advisor only)")
+    queue_rework_parser.add_argument("--task-id", required=True, help="Task ID to add rework round")
+    queue_rework_parser.add_argument("--actor", required=True, help="Actor (advisor) adding rework round")
+    queue_rework_parser.add_argument("--verdict-ref", required=True, help="Reference to FAIL verdict (audit report path or verdict_id)")
+    queue_rework_parser.add_argument("--focus-items", required=True, help="JSON array of focus items (what to fix)")
+    queue_rework_parser.add_argument("--acceptance-criteria", required=True, help="JSON array of acceptance criteria")
+    queue_rework_parser.add_argument("--connection-json", help="Path to connection.json (for MCP gate access)")
+    queue_rework_parser.add_argument("--confirm", action="store_true", help="Execute two-phase rework (dry_run + confirm via MCP)")
+    queue_rework_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     my_tasks_parser = subparsers.add_parser("my-tasks", help="Render tasks for an actor")
     my_tasks_parser.add_argument("--actor", required=True, help="Role instance or agent instance")
     my_tasks_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -4450,6 +4461,91 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_json(result))
         return 1 if result.get("verdict") == Verdict.BLOCK else 0
+
+    # AIPOS-F73C件⑤: queue rework — two-phase shell (复用 two_phase_shell_factory)
+    if args.command == "queue" and getattr(args, "queue_command", None) == "rework":
+        if not args.confirm:
+            # 没有 --confirm，返回用法提示
+            print("Error: queue rework requires --confirm flag (two-phase via MCP gate)", file=sys.stderr)
+            print("Usage: lybra queue rework --task-id <ID> --actor <advisor> --verdict-ref <ref> \\", file=sys.stderr)
+            print("         --focus-items '[...]' --acceptance-criteria '[...]' --connection-json <path> --confirm", file=sys.stderr)
+            return 1
+        
+        # 解析 JSON 参数
+        try:
+            focus_items = json.loads(args.focus_items)
+            if not isinstance(focus_items, list):
+                raise ValueError("focus_items must be a JSON array")
+        except (json.JSONDecodeError, ValueError) as exc:
+            print(f"Error: Invalid --focus-items JSON: {exc}", file=sys.stderr)
+            return 1
+        
+        try:
+            acceptance_criteria = json.loads(args.acceptance_criteria)
+            if not isinstance(acceptance_criteria, list):
+                raise ValueError("acceptance_criteria must be a JSON array")
+        except (json.JSONDecodeError, ValueError) as exc:
+            print(f"Error: Invalid --acceptance-criteria JSON: {exc}", file=sys.stderr)
+            return 1
+        
+        from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb, resolve_role_from_connection
+        
+        # 解析 connection.json 路径
+        conn_json_path = getattr(args, "connection_json", None)
+        if not conn_json_path:
+            default_conn = Path(repo_root) / ".lybra" / "connection.json"
+            if default_conn.exists():
+                conn_json_path = str(default_conn)
+            else:
+                print(f"Error: --connection-json required (default {default_conn} not found)", file=sys.stderr)
+                return 1
+        
+        # 派生 required_role_class: queue_rework 是 advisor scope
+        required_role_class = "advisor"
+        
+        try:
+            role = resolve_role_from_connection(
+                connection_json_path=conn_json_path,
+                required_role_class=required_role_class,
+                repo_root=repo_root,
+            )
+        except ValueError as exc:
+            print(f"Error resolving advisor role: {exc}", file=sys.stderr)
+            return 1
+        
+        # 构建动词参数
+        args_dict = {
+            "task_id": args.task_id,
+            "actor": args.actor,
+            "verdict_ref": args.verdict_ref,
+            "focus_items": focus_items,
+            "acceptance_criteria": acceptance_criteria,
+        }
+        
+        # 调用两阶段薯壳
+        exit_code, response = execute_two_phase_verb(
+            verb_base="lybra_queue_rework",
+            args_dict=args_dict,
+            connection_json_path=conn_json_path,
+            role=role,
+            json_output=args.json,
+        )
+        
+        if args.json:
+            print(render_json(response))
+        else:
+            # 简单文本输出
+            if response.get("error"):
+                print(f"Error: {response['error']}", file=sys.stderr)
+            elif response.get("result"):
+                result_data = response["result"]
+                print(f"Task: {args.task_id}")
+                print(f"Action: queue_rework")
+                print(f"Status: {result_data.get('status', 'unknown')}")
+                if result_data.get("amendment_id"):
+                    print(f"Amendment ID: {result_data['amendment_id']}")
+        
+        return exit_code
 
     if args.command == "orchestration":
         if getattr(args, "orchestration_command", None) == "event" and getattr(args, "event_command", None) == "append":

@@ -20,6 +20,28 @@ role: advisor
 
 ---
 
+## 工作流阶段表 (AIPOS-F73C件④)
+
+顾问在各阶段的职责与可用命令：
+
+| 阶段 | 职责 | 主要命令 |
+|------|------|----------|
+| **N0 出卡** | 起草与发卡 | `lybra draft create/publish`, `lybra queue amend/withdraw` |
+| **N1 认领** | 监督认领流程 | `lybra next --run` (产品执行), `lybra my-tasks` 查询 |
+| **N2 执行** | 监督进度 | 无直接干预 (executor 写 RETURN.md) |
+| **N3 交回** | 监督交回流程 | `lybra next --run` (产品执行) |
+| **N4 审计** | 审非代码卡 | `lybra audit-verdict` (顾问自审), `lybra audit dispatch` (派审) |
+| **返工** | 追加返工节 | `lybra queue rework --confirm` (AIPOS-F75, F73C件⑤) |
+| **N5 finalize** | 监督交付上线 | `lybra next --run` (产品执行) |
+| **N6 收账** | 编年史+决策记录 | `lybra generate-backlog-entry`, `lybra owner-decision` |
+
+**关键原则**:
+- **认领/交回/finalize 由产品执行** (`lybra next --run`)，顾问不手搓门动词。
+- **返工节只能通过 `lybra queue rework` 追加**，禁手写卡面 rework_rounds 字段。
+- **next-step 导航**：用 `lybra next-step --task-id <ID>` 查询当前状态与下一步动词。
+
+---
+
 ## 命令分类索引
 
 ### 🎯 发卡与改卡(N0 出卡)
@@ -51,6 +73,20 @@ lybra queue amend --task-id AIPOS-XXX --field needs_owner --value false \
 lybra queue withdraw --task-id AIPOS-XXX --reason "duplicate" \
   --actor advisor.lybra.kiwiai-dev
 ```
+
+#### `lybra queue rework`
+**何时用**:追加返工节到卡面(FAIL 裁决后,点杀清单+验收标准)(顾问职责).
+```bash
+lybra queue rework --task-id AIPOS-XXX --actor advisor.lybra.kiwiai-dev \
+  --verdict-ref "task_cards/AIPOS-XXX/audit_report.md" \
+  --focus-items '["fix item 1", "fix item 2"]' \
+  --acceptance-criteria '["criterion 1", "criterion 2"]' \
+  --connection-json ~/.lybra/connection.json --confirm
+```
+**约束**:
+- 只能由 advisor 调用(需 queue_rework scope);
+- 必须带 `--confirm` (两阶段门动词);
+- rework_rounds 字段禁手写,只能通过本命令追加。
 
 ---
 
@@ -173,20 +209,18 @@ cd /home/kiwi/projects/lybra
 3. **压缩后重拼**:上下文压缩丢失手搓片段,顾问要翻文档重写。
 4. **产品命令优势**:参数由 verbs.schema 驱动,缺参自报可抄示例,与 gate 同版本同 deploy。
 
-### 退役清单(ADVISOR-COMMANDS.md 9处)
 
 | 原手搓操作 | 替代产品命令 | 退役日期 |
 |-----------|------------|---------|
-| `GateClient.call_tool("lybra_draft_publish_dry_run", ...)` | `lybra draft publish` | AIPOS-R7A |
-| `GateClient.call_tool("lybra_queue_claim_dry_run", ...)` | `lybra queue claim` | AIPOS-R7A |
-| `GateClient.call_tool("lybra_queue_return_dry_run", ...)` | `lybra queue return` | AIPOS-R7A |
-| `GateClient.call_tool("lybra_queue_amend_confirm", ...)` | `lybra queue amend` | AIPOS-R7A |
+| 手搓 GateClient 片段 | `lybra draft publish/queue claim/return/amend` | AIPOS-F73C |
 | 手写 owner_decisions/*.md | `lybra envelope mint/revoke/renew` | AIPOS-R7A |
 | 手写 owner_decisions/*.md | `lybra owner-decision` | AIPOS-R7A |
 | 手写 audit_verdicts/*.md | `lybra audit-verdict` | 已上线 |
 | 手搓 dispatch 记录 | `lybra audit dispatch` | 已上线 |
 | 口述"下一步做 X" | `lybra next-step` | AIPOS-R7A |
 
+**过渡期豁免**:在所有产品命令上线前,ADVISOR-COMMANDS.md 的手搓片段暂保留作底层参考;
+本卡(AIPOS-F73C)交付后,手搓片段全退役,只保留命令快查表(本 skill)。
 **过渡期豁免**:在所有产品命令上线前,ADVISOR-COMMANDS.md 的手搓片段暂保留作底层参考;
 本卡(AIPOS-R7A)交付后,手搓片段全退役,只保留命令快查表(本 skill)。
 

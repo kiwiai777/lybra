@@ -18,11 +18,7 @@
       "role_class": "executor",
       "token_ref": "svc-executor",
       "scopes": [
-        "queue_claim",
-        "queue_return",
-        "queue_close",
-        "task_progress",
-        "bench_audit_submit"
+        "task_progress"
       ],
       "naming": {
         "prefix": "exec"
@@ -76,8 +72,6 @@
       "role_class": "auditor",
       "token_ref": "svc-auditor",
       "scopes": [
-        "queue_claim",
-        "audit_verdict",
         "task_progress"
       ],
       "naming": {
@@ -133,6 +127,7 @@
         "draft_publish",
         "queue_amend",
         "queue_withdraw",
+        "queue_rework",
         "mark_concluded",
         "audit_dispatch",
         "owner_decision_record",
