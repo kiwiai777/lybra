@@ -499,34 +499,30 @@ def _append_gate_contract_section(
     assigned_to = str(metadata.get("assigned_to") or "").strip()
     agent_instance = str(metadata.get("agent_instance") or "").strip()
     
-    # 从 roles.schema.json 读取角色注册表
+    # AIPOS-F73C返工R2件①: 使用 schema_loader 真实 API
     is_executor_or_auditor = False
     try:
-        from tools.schema_loader import load_roles_schema
-        roles_schema = load_roles_schema()
-        roles_def = roles_schema.get("roles", [])
-        
-        # 构建 {role_name: role_class} 映射
-        role_class_map = {}
-        for role_def in roles_def:
-            role_name = role_def.get("role")
-            role_class = role_def.get("role_class")
-            if role_name and role_class:
-                role_class_map[role_name] = role_class
+        from tools.schema_loader import get_role_spec
         
         # 检查 assigned_to / agent_instance 的 role_class
         for role_candidate in [assigned_to, agent_instance]:
             if not role_candidate:
                 continue
-            # 直接匹配角色名
-            role_class = role_class_map.get(role_candidate)
-            if role_class in ("executor", "auditor"):
-                is_executor_or_auditor = True
-                break
-    except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError) as exc:
-        # AIPOS-F73C返工④: 注册表读取失败，精确捕获 + warning
+            
+            # 从实例名提取 role (格式: <role>.<project>.<host>)
+            role_name = role_candidate.split(".")[0] if "." in role_candidate else role_candidate
+            
+            # 使用 get_role_spec 获取角色定义
+            role_spec = get_role_spec(role_name, repo_root=repo_root)
+            if role_spec:
+                role_class = role_spec.get("role_class")
+                if role_class in ("executor", "auditor"):
+                    is_executor_or_auditor = True
+                    break
+    except (ImportError, FileNotFoundError, OSError, json.JSONDecodeError, KeyError, AttributeError) as exc:
+        # AIPOS-F73C返工R2件①: 注册表读取失败，精确捕获 + warning
         import sys
-        print(f"Warning: Failed to read roles.schema.json: {exc}", file=sys.stderr)
+        print(f"Warning: Failed to get role spec: {exc}", file=sys.stderr)
         # 降级为 fail-open (存量兼容)
     
     # 检查项目是否显式开启 manual gate mode
@@ -534,7 +530,6 @@ def _append_gate_contract_section(
     manual_gate_mode = False
     if project_json.exists():
         try:
-            import json
             project_data = json.loads(project_json.read_text(encoding="utf-8"))
             manual_gate_mode = project_data.get("manual_gate_mode", False)
         except (json.JSONDecodeError, OSError) as e:
@@ -1018,8 +1013,9 @@ def regen_machine_zone_for_pending(
                     amendments["body"] = new_body
                     body = new_body
             except Exception as e:
-                # 纪律段派生失败,警告但不阻塞
-                pass
+                # AIPOS-F73C返工R2件③: 纪律段派生失败,警告但不阻塞
+                import sys
+                print(f"Warning: Failed to derive machine zone for {card_task_id}: {e}", file=sys.stderr)
             
             if not amendments:
                 # 无变化,跳过
