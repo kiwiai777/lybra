@@ -679,6 +679,42 @@ else
 fi
 
 echo
+echo "── tests/test_aipos_f32_custom_role_envelope.py (F32 自定义角色信封(F73C 夹具声明 manual_gate_mode)) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f32_custom_role_envelope.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f32_custom_role_envelope.py PASS"
+else
+  echo "✗ tests/test_aipos_f32_custom_role_envelope.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tests/test_aipos_f32b_gate_registry_source.py (F32B 门注册表单源(F73C 夹具声明 manual_gate_mode)) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f32b_gate_registry_source.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f32b_gate_registry_source.py PASS"
+else
+  echo "✗ tests/test_aipos_f32b_gate_registry_source.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tools/aipos_cli/tests/test_aipos352_custom_roles.py (352 自定义角色 scope 解析(F73C 改为新声明)) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos352_custom_roles.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos352_custom_roles.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos352_custom_roles.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tools/aipos_cli/tests/test_confirm_client.py (confirm_client(F73C executor 零 confirm scope)) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_confirm_client.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_confirm_client.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_confirm_client.py FAIL"
+  overall=1
+fi
+
+echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
   echo " ALL TEST FILES PASS"
