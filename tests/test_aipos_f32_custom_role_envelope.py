@@ -152,6 +152,7 @@ def make_fixture_workspace(tmp_path: Path, *, custom_roles: dict | None = None) 
         "code_repo": "/tmp/nonexistent/chris-fx",
         "config_version": 1,
         "project": "chris-fx",
+        "manual_gate_mode": True,  # AIPOS-F73C: 人肉 gate 项目显式声明, 执行类卡面才保留「认领与交回」节
         "registered_at": "2026-08-10T00:00:00Z",
         "registered_by": "kiwi",
     }, indent=2, sort_keys=True) + "\n", encoding="utf-8")

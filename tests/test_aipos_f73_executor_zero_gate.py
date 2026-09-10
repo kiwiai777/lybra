@@ -308,14 +308,14 @@ def test_f73_item4_executor_auditor_scope_tightened():
     
     executor_role = next((r for r in roles if r["role"] == "executor"), None)
     assert executor_role is not None, "应该找到 executor 角色"
-    # REWORK: 恢复 main 的 scopes，移交 F73C
-    assert executor_role["scopes"] == ["queue_claim", "queue_return", "queue_close", "task_progress", "bench_audit_submit"], \
-        f"executor scopes 应与 main 一致，实际: {executor_role['scopes']}"
+    # AIPOS-F73C 件③(顾问代修): 执行体零门 —— executor 只持 task_progress, 账务动词归 advisor
+    assert executor_role["scopes"] == ["task_progress"], \
+        f"executor scopes 应为 [task_progress], 实际: {executor_role['scopes']}"
     
     auditor_role = next((r for r in roles if r["role"] == "auditor"), None)
     assert auditor_role is not None, "应该找到 auditor 角色"
-    assert auditor_role["scopes"] == ["queue_claim", "audit_verdict", "task_progress"], \
-        f"auditor scopes 应与 main 一致，实际: {auditor_role['scopes']}"
+    assert auditor_role["scopes"] == ["task_progress"], \
+        f"auditor scopes 应为 [task_progress], 实际: {auditor_role['scopes']}"
 
 
 def test_f73_command_templates_parseable():

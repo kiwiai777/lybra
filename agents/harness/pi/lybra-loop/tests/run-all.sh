@@ -670,6 +670,15 @@ else
 fi
 
 echo
+echo "── tests/test_aipos_f73c_zero_gate_closeout.py (F73C 零门收口:角色判据/scope声明/rework CLI) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f73c_zero_gate_closeout.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f73c_zero_gate_closeout.py PASS"
+else
+  echo "✗ tests/test_aipos_f73c_zero_gate_closeout.py FAIL"
+  overall=1
+fi
+
+echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
   echo " ALL TEST FILES PASS"
