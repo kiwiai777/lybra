@@ -638,22 +638,53 @@ def derive_next_step(
             
             # N5→N6: 有 finalization 但无 closure → close
             if has_finalization and not latest_closure:
-                # 从 finalization 记录提取 closure_evidence
-                closure_evidence_json = '{}'
+                # AIPOS-F73C前置零之一: closure_evidence 从记录自填三字段
+                closure_evidence = {}
+                
+                # 1. finalize_commit_hash: 从 finalization 记录读取
                 if finalizations_dir.is_dir():
                     finalization_files = sorted(finalizations_dir.glob("finalization_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
                     if finalization_files:
                         fin_fm = _read_frontmatter(finalization_files[0])
-                        # 构造 closure_evidence
-                        import json
-                        closure_evidence = {
-                            "finalize_return_ref": fin_fm.get("finalize_ref", "")
-                        }
-                        closure_evidence_json = json.dumps(closure_evidence)
+                        if fin_fm.get("commit_hash"):
+                            closure_evidence["finalize_commit_hash"] = fin_fm["commit_hash"]
+                        if fin_fm.get("finalize_ref"):
+                            closure_evidence["finalize_return_ref"] = fin_fm["finalize_ref"]
+                
+                # 2. finalize_return_ref: 从 returns 记录读取
+                returns_dir = _resolve_governance_path_with_relative("records", workspace_root) / "returns" / task_id
+                if returns_dir.is_dir():
+                    return_files = sorted(returns_dir.glob("return_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    if return_files:
+                        ret_fm = _read_frontmatter(return_files[0])
+                        if ret_fm.get("return_id") and "finalize_return_ref" not in closure_evidence:
+                            closure_evidence["finalize_return_ref"] = ret_fm["return_id"]
+                
+                # 3. verdict_ref: 从 audit_verdicts 记录读取
+                if latest_verdict and latest_verdict.get("verdict_id"):
+                    closure_evidence["verdict_ref"] = latest_verdict["verdict_id"]
+                
+                import json
+                closure_evidence_json = json.dumps(closure_evidence)
+                
+                # AIPOS-F73C前置零之一: actor 取工位 .lybra/role 实例或推导核 claimer
+                actor = "advisor"  # 默认
+                try:
+                    role_file = workspace_root / ".lybra" / "role"
+                    if role_file.exists():
+                        role_data = json.loads(role_file.read_text(encoding="utf-8"))
+                        if role_data.get("instance"):
+                            actor = role_data["instance"]
+                except Exception:
+                    # 降级: 从任务卡 assigned_to 或 claimer 读取
+                    if assigned_to:
+                        actor = assigned_to
+                    elif records.get("claims") and records["claims"].get("agent_instance"):
+                        actor = records["claims"]["agent_instance"]
                 
                 cmd = _build_close_command(
                     task_id=task_id,
-                    actor="advisor",
+                    actor=actor,
                     connection_json=conn_arg,
                     closure_evidence_json=closure_evidence_json,
                 )
@@ -662,7 +693,7 @@ def derive_next_step(
                     "derivable": True,
                     "current_node": "finalize",
                     "current_state": "claimed",
-                    "triggered_by": "advisor",
+                    "triggered_by": actor,
                     "command": cmd,
                     "verb": "lybra_queue_close_dry_run",
                     "missing_records": [],
@@ -1202,9 +1233,12 @@ def _execute_claim_with_role_token(
     workspace_root: Path,
     connection_json: str | None,
 ) -> dict[str, Any]:
-    """AIPOS-F73B件①: pending 卡按角色 token 认领。
+    """AIPOS-F73B件① + F73C件⑥返工: pending 卡按 advisor token 认领。
     
-    按 assigned_to/agent_instance 查 roles.schema 取 role_class → connection.json 对应 token。
+    账务动词由驱动方 token 执行、actor=该卡实例:
+    - token: advisor (从 connection.json 读取)
+    - actor: assigned_to/agent_instance (该卡声明的实例)
+    
     认领后建 worktree、输出 spawn_worker action。
     
     Args:
@@ -1252,45 +1286,12 @@ def _execute_claim_with_role_token(
             "output": "",
         }
     
-    # 2. 从 assigned_to 提取 role_class（格式: <prefix>.<project>.<host>）
-    # 按 roles.schema naming.prefix 查找角色
-    prefix = assigned_to.split(".")[0] if "." in assigned_to else assigned_to
-    
-    roles_schema_path = REPO_ROOT / "schema" / "roles.schema.json"
-    try:
-        roles_data = json.loads(roles_schema_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {
-            "ok": False,
-            "action_type": "claim",
-            "message": f"Cannot read roles.schema.json: {exc}",
-            "command": "",
-            "exit_code": 1,
-            "output": "",
-        }
-    
-    role_class = None
-    for role in roles_data.get("roles", []):
-        if role.get("naming", {}).get("prefix") == prefix:
-            role_class = role.get("role_class")
-            break
-    
-    if not role_class:
-        return {
-            "ok": False,
-            "action_type": "claim",
-            "message": f"Cannot resolve role_class from assigned_to prefix '{prefix}'",
-            "command": "",
-            "exit_code": 1,
-            "output": "",
-        }
-    
-    # 3. 构建 claim 命令（使用产品 CLI，传递 role 参数）
-    # 产品 CLI 会从 connection.json 读取对应 role 的 token
+    # 2. AIPOS-F73C件⑥返工: token 固定为 advisor，actor 为该卡实例
     conn_arg = f"--connection-json {connection_json}" if connection_json else ""
-    policy_ref = _resolve_active_policy(workspace_root, task_id, role=role_class)
+    policy_ref = _resolve_active_policy(workspace_root, task_id, role="advisor")
     policy_arg = f"--owner-policy-ref {policy_ref}" if policy_ref else ""
     
+    # 命令: 使用 advisor token (connection.json 默认 role="advisor")
     command = f"lybra queue claim --task-id {task_id} --actor {assigned_to} --agent-instance {assigned_to} {policy_arg} {conn_arg} --confirm".strip()
     
     # 4. 执行 claim
@@ -1433,20 +1434,21 @@ def execute_derived_action(
             "output": "",
         }
     
-    # 确定 action_type
+    # AIPOS-F73C前置零之一: 确定 action_type (按命令真实动词)
+    # 注意先匹配 "queue close" 再匹配 "finalize"，避免 close 命令被误判为 finalize
     action_type = "unknown"
     if "queue claim" in command:
         action_type = "claim"
     elif "queue return" in command:
         action_type = "return"
+    elif "queue close" in command:
+        action_type = "close"
     elif "audit verdict" in command:
         action_type = "verdict"
     elif "audit dispatch" in command:
         action_type = "dispatch"
     elif "finalize" in command:
         action_type = "finalize"
-    elif "queue close" in command:
-        action_type = "close"
     
     # AIPOS-F73B件①: pending 卡特殊处理 — 按角色 token 认领
     if action_type == "claim" and current_node == "pending":

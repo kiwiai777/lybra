@@ -476,6 +476,76 @@ class ContractSectionError(RuntimeError):
     """
 
 
+def _manual_gate_mode(repo_root: Path | None) -> bool:
+    """AIPOS-F73C 件①: 人肉 gate 项目在治理工作区 project.json 声明 manual_gate_mode=true。
+
+    声明为真时执行类卡面保留「认领与交回」节, 且 publish 不做 lybra_ 动词校验(两处同一判据)。
+    读取失败 = warning 非静默, 视为未声明。
+    """
+    if repo_root is None:
+        return False
+    project_json = Path(repo_root) / "project.json"
+    if not project_json.exists():
+        return False
+    try:
+        return bool(json.loads(project_json.read_text(encoding="utf-8")).get("manual_gate_mode", False))
+    except (json.JSONDecodeError, OSError) as exc:
+        import sys
+
+        print(f"Warning: Failed to read project.json: {exc}", file=sys.stderr)
+        return False
+
+
+def _card_role_class(metadata: dict[str, Any], repo_root: Path | None) -> str | None:
+    """AIPOS-F73C 件①(顾问代修, Owner 2026-09-08 仲裁 C): 卡 assigned_to/agent_instance → 角色类别。
+
+    唯一判据来源 = roles 注册表(schema_loader.load_schema("roles")):
+      1. 首段与注册表 `role` 同名(executor/auditor/advisor…);
+      2. 首段与注册表 `naming.prefix` 同名(exec./audit./advisor. 实例名);
+      3. 自定义角色经 custom_roles.resolve_role_to_class(需项目根)。
+    禁子串猜(exec/audit in name)。读不到注册表 = 精确捕获 + warning + None(调用方按"非执行体"
+    处理 = 存量兼容方向, 不静默)。
+    """
+    candidates = [
+        str(metadata.get("assigned_to") or "").strip(),
+        str(metadata.get("agent_instance") or "").strip(),
+    ]
+    try:
+        from tools.schema_loader import SchemaLoadError, load_schema
+        from tools.aipos_cli.custom_roles import resolve_role_to_class
+    except ImportError as exc:  # 产品仓损坏才会到这里, 出声不吞
+        import sys
+
+        print(f"Warning: role registry loader unavailable: {exc}", file=sys.stderr)
+        return None
+    try:
+        # 靶场分根(F76-R2/F71-R3 同款):角色注册表是产品 schema, 从产品仓根解析(None=默认产品根);
+        # 传入的 repo_root 是治理根, 只用于自定义角色(custom_roles 在治理工作区)。
+        roles = load_schema("roles", None).get("roles", [])
+        by_name = {r.get("role"): r for r in roles if r.get("role")}
+        by_prefix = {
+            (r.get("naming") or {}).get("prefix"): r
+            for r in roles
+            if (r.get("naming") or {}).get("prefix")
+        }
+        for cand in candidates:
+            if not cand:
+                continue
+            head = cand.split(".")[0]
+            spec = by_name.get(cand) or by_name.get(head) or by_prefix.get(head)
+            if spec:
+                return str(spec.get("role_class") or spec.get("role"))
+            cls = resolve_role_to_class(head, repo_root)
+            if cls:
+                return str(cls)
+    except (SchemaLoadError, FileNotFoundError, OSError, json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+        # 靶场/存量工作区无注册表 = 声明缺失(F76-R2 同款精确捕获):出 warning, 按"角色未知"处理, 不静默。
+        import sys
+
+        print(f"Warning: role registry unreadable, card role class unknown: {exc}", file=sys.stderr)
+    return None
+
+
 def _append_gate_contract_section(
     repo_root: Path, metadata: dict[str, Any], task_id: str, rendered_markdown: str
 ) -> str:
@@ -494,31 +564,13 @@ def _append_gate_contract_section(
     if "【认领与交回】" in rendered_markdown:
         return rendered_markdown  # idempotency: never double-append
     
-    # AIPOS-F73件①: executor/auditor 角色停止渲染门契约节
-    assigned_to = str(metadata.get("assigned_to") or "").lower()
-    agent_instance = str(metadata.get("agent_instance") or "").lower()
-    
-    # 检查是否为 executor/auditor 角色
-    is_executor_or_auditor = (
-        "exec" in assigned_to or "exec" in agent_instance or
-        "audit" in assigned_to or "audit" in agent_instance
-    )
-    
-    # 检查项目是否显式开启 manual gate mode
-    project_json = repo_root / "project.json"
-    manual_gate_mode = False
-    if project_json.exists():
-        try:
-            import json
-            project_data = json.loads(project_json.read_text(encoding="utf-8"))
-            manual_gate_mode = project_data.get("manual_gate_mode", False)
-        except (json.JSONDecodeError, OSError) as e:
-            # Log warning but continue (fail-open for legacy repos)
-            import sys
-            print(f"Warning: Failed to read project.json: {e}", file=sys.stderr)
-    
-    # executor/auditor 且非 manual mode → 跳过渲染
-    if is_executor_or_auditor and not manual_gate_mode:
+    # AIPOS-F73C件①: executor/auditor 角色停止渲染门契约节
+    # 角色判据:读 roles 注册表(name / naming.prefix / custom_roles), 禁子串猜。
+    # 顾问代修(Owner 2026-09-08 仲裁 C):两处判据共用 _card_role_class 一个实现。
+    is_executor_or_auditor = _card_role_class(metadata, repo_root) in ("executor", "auditor")
+
+    # executor/auditor 且项目未声明 manual gate → 零门卡面, 跳过渲染
+    if is_executor_or_auditor and not _manual_gate_mode(repo_root):
         return rendered_markdown
 
     from tools.aipos_cli.flow_description import resolve_collaboration_profile
@@ -760,19 +812,17 @@ def publish_draft(
         except ContractSectionError as exc:
             validation["blocking_reasons"].append(str(exc))
         
-        # AIPOS-F73件①: 校验 executor/auditor 卡面不含 lybra_ 动词 (fail-closed)
-        assigned_to = str(publish_metadata.get("assigned_to") or "").lower()
-        agent_instance = str(publish_metadata.get("agent_instance") or "").lower()
-        is_executor_or_auditor = (
-            "exec" in assigned_to or "exec" in agent_instance or
-            "audit" in assigned_to or "audit" in agent_instance
-        )
-        if is_executor_or_auditor:
+        # AIPOS-F73C件①: 校验 executor/auditor 卡面不含 lybra_ 动词 (fail-closed)
+        # 角色判据:与渲染侧共用 _card_role_class(顾问代修, 仲裁 C;此前引用不存在的
+        # load_roles_schema 且被 except/pass 吞掉, 判据从未生效)。
+        is_executor_or_auditor = _card_role_class(publish_metadata, repo_root) in ("executor", "auditor")
+
+        if is_executor_or_auditor and not _manual_gate_mode(repo_root):
             import re
             lybra_verbs = re.findall(r'lybra_\w+', rendered_markdown)
             if lybra_verbs:
                 validation["blocking_reasons"].append(
-                    f"AIPOS-F73件①: executor/auditor 卡面不得包含门动词。检测到: {', '.join(set(lybra_verbs))}。"
+                    f"AIPOS-F73C件①: executor/auditor 卡面不得包含门动词。检测到: {', '.join(set(lybra_verbs))}。"
                     "执行体/审计体零门——认领/交回由产品 (lybra next --run) 执行，卡面不再渲染门链。"
                 )
 
@@ -947,10 +997,19 @@ def regen_machine_zone_for_pending(
                     card_task_id, metadata, governance_root=governance_root, product_root=product_root
                 )
                 
+                # AIPOS-F73C返工⑤: 删除存量卡的「认领与交回」节 (新卡不再生成)
+                import re
+                if "【认领与交回】" in body:
+                    # 匹配从 "【认领与交回】" 到下一个 "##" 或文末
+                    gate_section_pattern = r"## 【认领与交回】.*?(?=\n## |\Z)"
+                    body_without_gate = re.sub(gate_section_pattern, "", body, flags=re.DOTALL)
+                    if body_without_gate != body:
+                        amendments["body"] = body_without_gate
+                        body = body_without_gate
+                
                 # 查找 body 中是否有旧的纪律段
                 if "## 工作纪律" in body:
                     # 已有节: 替换
-                    import re
                     # 匹配从 "## 工作纪律" 到下一个 "##" 或文末
                     pattern = r"(## 工作纪律.*?)(?=\n## |\Z)"
                     new_body = re.sub(pattern, new_discipline_section, body, flags=re.DOTALL)
@@ -963,8 +1022,9 @@ def regen_machine_zone_for_pending(
                     amendments["body"] = new_body
                     body = new_body
             except Exception as e:
-                # 纪律段派生失败,警告但不阻塞
-                pass
+                # AIPOS-F73C返工R2件③: 纪律段派生失败,警告但不阻塞
+                import sys
+                print(f"Warning: Failed to derive machine zone for {card_task_id}: {e}", file=sys.stderr)
             
             if not amendments:
                 # 无变化,跳过

@@ -170,9 +170,9 @@ class TestScopeResolution(unittest.TestCase):
         self.assertIsNone(resolve_role_to_class("unknown", self.ws))
 
     def test_resolve_role_scopes_builtin(self):
+        # AIPOS-F73C件③: executor scopes 收紧至 [task_progress]
         scopes = get_role_scopes("executor")
-        self.assertIn("queue_claim", scopes)
-        self.assertIn("queue_return", scopes)
+        self.assertEqual(["task_progress"], scopes)
 
     def test_resolve_role_scopes_custom_via_class(self):
         scopes = get_role_scopes("kiwiaiops", role_class="executor")

@@ -28,12 +28,11 @@
 
 > **单一真相源**: governance/ADVISOR-COMMANDS.md § 0.5。修改手册 → 章程与派审注入同步跟随。
 
-1. **永不 `curl /mcp`**(SSE 长连接,永不返回) — 门交互一律经官方客户端(`confirm_client`)/连接器。
-2. **禁裸拼 JSON-RPC 报文** — confirm 用官方客户端两跳(328 正道:`dry_run` → `confirm`)。
-3. **凭据只从本工位 `.lybra/connection.json` 读** — 禁 `.bak`/副本/其它路径;**token 永不回显上屏**。
-4. **`records/`与`queue/`=门领地** — 裁决/记录由门落盘;报告只落 `task_cards/<卡ID>/`(治理工作区)。
-5. **遇 Lybra 侧报错=停线报告** — 禁自行诊断/修复门与部署;命令输出已自携拒因与下一步。
-6. **交回/裁决职责终点=写完报告** — `RETURN.md`/审计报告写完即停;提交由产品扣扳机层执行(agent 写完产物即停,禁自行调用门动词)。
+1. **你不接触门** — 不调用任何 `lybra_*` 动词、不读 `connection.json`/token。
+2. **凭据只按名引用** — 绝不读取/回显/硬编码任何密钥。
+3. **`records/`与`queue/`=门领地** — 裁决/记录由门落盘;报告只落 `task_cards/<卡ID>/`(治理工作区)。
+4. **遇 Lybra 侧报错=停线报告** — 禁自行诊断/修复门与部署;命令输出已自携拒因与下一步。
+5. **职责终点=写完报告** — `RETURN.md` 写完即停;认领/交回/裁决/finalize 由产品做(产品执行 `lybra next --run` 等命令)。
 
 **实撞背景**:审计体 curl /mcp 自挂 292s;执行体手搓 JSON-RPC 走错通道;审计体挖凭据副本致
 401 且 token 明文上屏。三笔规矩写在手册里但从未下发 → 冷启动模型无从得知,每次换会话重踩。
@@ -50,7 +49,7 @@
   (默认:gate `http://127.0.0.1:7118`,connection.json 路径以卡为准);你只走 executor 角色
   token,永远拿不到、也绝不尝试 owner confirm 能力。
 - **模型职责终点=写完 RETURN.md**(含"一句话结论"节,放在 `task_cards/<任务ID>/RETURN.md`);
-  门提交(return dry_run+confirm)由产品扣扳机层执行,agent 写完 RETURN.md 即停,禁自行调用 gate 动词。
+  认领/交回/finalize 由产品做(产品执行 `lybra next --run` 等命令),agent 写完 RETURN.md 即停。
 - **报告材料落点**(AIPOS-R6I 靶①):所有 return 材料(RETURN.md、审计卡、产出文件)必须放在
   治理工作区 `task_cards/<任务ID>/` 内。**绝不放 /tmp 或产品仓**——gate 会校验存在性与落点,
   违反即 BLOCK。示例正确路径:`task_cards/AIPOS-R6I/RETURN.md`,

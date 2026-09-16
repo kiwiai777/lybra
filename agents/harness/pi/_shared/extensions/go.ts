@@ -117,7 +117,11 @@ export default function (pi: ExtensionAPI) {
 
 按你的 AGENTS.md 执行，完成后写 RETURN.md 到报告落点。`;
 
-        await ctx.sendUserMessage(kickoff);
+        await ctx.newSession({
+          withSession: async (freshCtx) => {
+            await freshCtx.sendUserMessage(kickoff);
+          }
+        });
 
       } catch (error: any) {
         ctx.ui.notify(`/go command failed: ${error.message}`, "error");

@@ -147,6 +147,7 @@ def make_gate_home(tmp_path: Path, *, registry_tokens: list[dict] | None) -> Pat
             "code_repo": f"/tmp/nonexistent/{w.name}",
             "config_version": 1,
             "project": w.name,
+            "manual_gate_mode": True,  # AIPOS-F73C: 人肉 gate 项目显式声明, 执行类卡面才保留「认领与交回」节
             "registered_at": "2026-08-10T00:00:00Z",
             "registered_by": "kiwi",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
