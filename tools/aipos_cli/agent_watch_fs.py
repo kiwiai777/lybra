@@ -421,6 +421,7 @@ def run_fs_watch(
     *,
     sleeper: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    expect_ready: Callable[[list[str]], bool] | None = None,
 ) -> int:
     """Core bounded poll loop (testable: sleeper/clock injectable, no global signal
     state). Returns EXIT_CHANGE (0) on the first change OR expect satisfaction — a
@@ -435,6 +436,10 @@ def run_fs_watch(
     AIPOS-284C --stream mode: emit JSON event lines and continue (no exit 0/3/4).
     AIPOS-284D: --events expect|change|all (F-284C-1抑噪); --timeout 0 = infinite (F-284C-2常驻豁免); kind:end event on exit.
     Event deduplication (S3): track reported expect files, only report new appearances.
+    AIPOS-F73D: ``expect_ready`` (in-process callers only, e.g. ``lybra loop``) — an extra
+    readiness predicate over the matched expect paths. A glob match that the predicate rejects
+    (e.g. a RETURN.md that is still the claim-time skeleton) does NOT satisfy --expect; the
+    loop keeps polling under the same --timeout/--interval bounds. The CLI surface is unchanged.
     """
     interval = DEFAULT_INTERVAL_SECONDS if getattr(args, "interval", None) is None else float(args.interval)
     timeout_arg = getattr(args, "timeout", None)
@@ -542,6 +547,8 @@ def run_fs_watch(
     # S1: 布防即检 — check expect patterns IMMEDIATELY on startup
     if expect_patterns:
         matched = check_expect_patterns(ws, expect_patterns)
+        if matched and expect_ready is not None and not expect_ready(matched):
+            matched = []  # AIPOS-F73D: matched but not ready (e.g. skeleton) → keep waiting
         if matched:
             if stream_mode:
                 # AIPOS-284C: emit event and continue, track reported files
@@ -627,6 +634,8 @@ def run_fs_watch(
         # Check expect patterns on every poll (S1: running检 same as 布防检)
         if expect_patterns and events_filter in ("expect", "all"):
             matched = check_expect_patterns(ws, expect_patterns)
+            if matched and expect_ready is not None and not expect_ready(matched):
+                matched = []  # AIPOS-F73D: matched but not ready → keep waiting
             if matched:
                 if stream_mode:
                     # AIPOS-284C S3: deduplicate — only report new files

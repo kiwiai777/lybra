@@ -201,6 +201,15 @@
       "automation": {
         "queue_placement": "stays in claimed/ (awaiting audit)",
         "frontmatter_update": "adds return_record_ref"
+      },
+      "artifact": {
+        "description": "AIPOS-F73D: 执行体产物落点与就绪判据的唯一声明——推导核(next_resolver._check_return_artifact)与顾问驱动器 lybra loop 的 await 都读这里, 禁散落。",
+        "location": "task_cards/{task_id}/RETURN.md",
+        "location_note": "与 N1.automation.return_skeleton.location 同一路径: 骨架由 claim 创建, 执行体只填不选址",
+        "readiness": {
+          "rule": "文件存在且非骨架: 「一句话结论」节首行非占位符(record_writer.build_return_skeleton_markdown 的 `(待填写` 前缀)",
+          "not_ready_meaning": "骨架/占位 = 执行体尚未交回 → 推导核判 await_artifact, loop 继续经 agent watch 等待"
+        }
       }
     },
     "N3": {
@@ -442,7 +451,14 @@
         "gate_written_markers": [
           "record_type: finalization",
           "finalized_at"
-        ]
+        ],
+        "deploy_status": {
+          "description": "AIPOS-F73D 前置一①: finalization 记录在卡分支 merge + push 成功即落, 不以嵌入部署成功为前提(F73C2 活体: 部署被 F70 覆盖校验拒 → 记录不落 → 推导核停 N4 链断)。部署结果记在 deploy_status 字段; N5→N6 判据 = finalization 记录存在(推导核只读此记录, deployments/ 记录不参与 N5 判据——二选一取此项)。",
+          "field": "deploy_status",
+          "values": ["deployed", "deploy_failed", "skipped", "not_attempted"],
+          "written_when": "merge/push 成功后的每一条出口(部署成功/部署失败/部署验证失败/无需部署)都写; merge 冲突或 push 失败不写",
+          "writer": "finalize._ensure_finalization_record → finalization_record.write_finalization_record(deploy_status=...)"
+        }
       },
       "deployment_record": {
         "type": "deployment",

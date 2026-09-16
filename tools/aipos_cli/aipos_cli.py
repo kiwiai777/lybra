@@ -1896,6 +1896,23 @@ def build_parser() -> argparse.ArgumentParser:
     next_parser.add_argument("--connection-json", help="Path to connection.json (for --run gate access)")
     next_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-F73D: lybra loop — 顾问侧驱动器(信封授权下 watch 产物落盘 → next --run 单步 → 重推导, 直到 completed)。
+    # 参数缺省与退出码只声明在 schema/verbs.schema.json verbs.lybra_loop 一处(argparse 缺省 None, 运行时读声明)。
+    loop_parser = subparsers.add_parser(
+        "loop",
+        help="AIPOS-F73D: 顾问侧驱动器 — Owner 信封授权下有界循环推进一张卡到 completed(复用 agent watch + next --run; 永不唤醒 agent)。"
+        "退出码(verbs.schema lybra_loop.exit_codes): 0=completed, 2=门拒, 3=等待超时/停滞/步数用尽, 4=不可推导/命令不可解析, 5=无信封",
+    )
+    loop_parser.add_argument("--task-id", required=True, help="要推进的卡 ID")
+    loop_parser.add_argument("--envelope", help="policy_id(5_tasks/policies/<id>.md); 缺省扫描 policies/ 取首个匹配本卡与驱动方身份的有效信封")
+    loop_parser.add_argument("--actor", help="驱动方身份(顾问实例); 缺省=治理根 .lybra/role 的 instance, 再缺省 advisor")
+    loop_parser.add_argument("--connection-json", help="透传给 next --run 的 connection.json 路径(token 永不上屏)")
+    loop_parser.add_argument("--workspace-root", type=Path, help="治理根(队列/记录所在); 缺省自发现")
+    loop_parser.add_argument("--max-steps", type=int, default=None, help="硬上限: 推导轮数(含等待轮); 缺省读 verbs.schema(20)")
+    loop_parser.add_argument("--max-wait", type=float, default=None, help="硬上限: 每次等待产物秒数; 缺省读 verbs.schema(沿用 agent watch 1800)")
+    loop_parser.add_argument("--interval", type=float, default=None, help="等待轮询间隔秒(经 agent watch, 禁 sleep 自旋); 缺省读 verbs.schema(15)")
+    loop_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     # AIPOS-F71: 退役旧入口 — turn-advancer 与 next-step 保留为兼容转发(输出退役提示)
     turn_parser = subparsers.add_parser("turn-advancer", help="[RETIRED by AIPOS-F71] Use 'lybra next' instead")
     turn_subparsers = turn_parser.add_subparsers(dest="turn_command")
@@ -4032,28 +4049,36 @@ def main(argv: list[str] | None = None) -> int:
             verb_args["active_session_id"] = args.active_session_id
         
         # AIPOS-F44D-A: 角色解析不写死
-        # AIPOS-F73前置③: required_role_class 按任务 task_mode 派生 (修复审计卡无法以 auditor 认领)
+        # AIPOS-F73D 前置二(顾问 2026-09-16 活体实撞: 原 `from task_loader import load_task_by_id` 不存在 → 部署件 ImportError):
+        # 改用 task_loader 真实 API(iter_queue_task_paths + load_task_file)找卡, 按卡 assigned_to/agent_instance 与
+        # roles 注册表派生 required_role_class(draft_writer._card_role_class 唯一判据; 禁子串猜、禁 task_id 尾字母启发式)。
         from tools.aipos_cli.two_phase_shell_factory import resolve_role_from_connection
-        from tools.aipos_cli.task_loader import load_task_by_id
+        from tools.aipos_cli.task_loader import iter_queue_task_paths, load_task_file
+        from tools.aipos_cli.draft_writer import _card_role_class
         
-        # 派生 required_role_class: 从任务卡 task_id 推断
-        required_role_class = "executor"  # 默认
+        required_role_class = "executor"  # 注册表判不出时的存量默认(出 warning, 不静默)
         task_id = getattr(args, "task_id", None)
-        if task_id:
-            try:
-                task_data = load_task_by_id(task_id, repo_root)
-                if task_data:
-                    task_meta = task_data.get("metadata", {})
-                    # 审计卡 (task_id 以 R 结尾) → auditor
-                    if str(task_id).upper().endswith("R"):
-                        required_role_class = "auditor"
-                    # 也检查 task_mode (如果明确标记为 audit)
-                    elif task_meta.get("task_mode") == "audit":
-                        required_role_class = "auditor"
-            except (FileNotFoundError, KeyError, ValueError) as exc:
-                # 无法加载任务卡,使用默认值
-                import warnings
-                warnings.warn(f"无法从任务卡推导角色类型: {exc}")
+        task_path_arg = getattr(args, "path", None)
+        card_meta: dict[str, Any] | None = None
+        try:
+            if task_path_arg:
+                card_meta = load_task_file(Path(repo_root) / task_path_arg, Path(repo_root)).get("metadata") or {}
+            elif task_id:
+                for _card_path in iter_queue_task_paths(Path(repo_root)):
+                    _loaded = load_task_file(_card_path, Path(repo_root))
+                    if str(_loaded.get("task_id") or "").strip() == str(task_id).strip():
+                        card_meta = _loaded.get("metadata") or {}
+                        break
+        except (OSError, ValueError) as exc:
+            print(f"Warning: 无法读取任务卡, required_role_class 用默认 {required_role_class}: {exc}", file=sys.stderr)
+        if card_meta is None:
+            print(f"Warning: queue 中找不到任务卡 {task_id or task_path_arg}, required_role_class 用默认 {required_role_class}", file=sys.stderr)
+        else:
+            derived_class = _card_role_class(card_meta, Path(repo_root))
+            if derived_class:
+                required_role_class = derived_class
+            else:
+                print(f"Warning: 注册表判不出卡 {task_id or task_path_arg} 的角色类, required_role_class 用默认 {required_role_class}", file=sys.stderr)
         
         try:
             role = resolve_role_from_connection(
@@ -5242,6 +5267,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # AIPOS-F71: lybra next — 唯一推导实现
     # AIPOS-F73件②③: --run 机器扣扳机 (推导 + 执行)
+    if args.command == "loop":
+        # AIPOS-F73D: 顾问侧驱动器薄壳 — 全部逻辑在 loop_driver(复用 next_resolver + agent_watch_fs + autonomy_policy)
+        from tools.aipos_cli.loop_driver import run_loop_cli
+        return run_loop_cli(args)
+
     if args.command == "next":
         from tools.aipos_cli.next_resolver import derive_next_step, scan_project, format_output, format_scan_output
 

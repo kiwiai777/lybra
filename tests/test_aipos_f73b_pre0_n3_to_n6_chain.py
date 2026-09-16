@@ -331,6 +331,17 @@ def test_f73b_pre0_n4_to_n5_finalize(temp_workspace):
     _write_dispatch_record(temp_workspace, task_id)
     _write_verdict_record(temp_workspace, task_id, verdict="PASS")
     
+    # AIPOS-F73D 前置一②: 产品仓根声明缺失 → finalize 不可派生(fail-closed, 禁把治理根当产品仓)
+    result_no_repo = derive_next_step(task_id, temp_workspace)
+    assert result_no_repo["derivable"] is False
+    assert any("code_repo" in m for m in result_no_repo["missing_records"])
+    
+    # 声明 project.json code_repo 后可派生, 命令必带 --actor, --workspace-root=产品仓根, --governance-root=治理根
+    code_repo = temp_workspace.parent / "product"
+    code_repo.mkdir(exist_ok=True)
+    (temp_workspace / "project.json").write_text(
+        json.dumps({"project": "lybra", "code_repo": str(code_repo), "config_version": 1}), encoding="utf-8"
+    )
     result = derive_next_step(task_id, temp_workspace)
     
     assert result["derivable"] is True
@@ -338,6 +349,9 @@ def test_f73b_pre0_n4_to_n5_finalize(temp_workspace):
     assert result["verb"] == "lybra_finalize"
     assert "lybra finalize" in result["command"]
     assert "--push --deploy" in result["command"]
+    assert "--actor " in result["command"]
+    assert f"--workspace-root {code_repo}" in result["command"]
+    assert f"--governance-root {temp_workspace}" in result["command"]
     assert "N4→N5" in result["notes"]
 
 
