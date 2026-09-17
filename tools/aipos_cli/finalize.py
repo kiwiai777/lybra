@@ -253,12 +253,17 @@ def _ensure_finalization_record(
     verdict_id: str | None,
     deployed: bool,
     operations: list[str],
+    deploy_status: str | None = None,
 ) -> None:
     """AIPOS-C3B 大项B③: 写 finalization 记录(必落)。
     
     所有 finalize PASS 路径(含 working-tree-clean 早退)都必须调用此函数,
     确保 finalizations/ 目录有记录。三次 finalize 成功但 finalizations/ 全空
     的实撞必须不再发生。
+
+    AIPOS-F73D 前置一①: merge/push 成功即落记录, 部署失败也落(deploy_status=deploy_failed),
+    值域声明在 transitions.schema N5.record.deploy_status 一处; 推导核 N5→N6 只认此记录。
+    写失败精确捕获 + 出声(operations), 不吞。
     """
     try:
         from tools.aipos_cli.finalization_record import write_finalization_record
@@ -271,9 +276,11 @@ def _ensure_finalization_record(
             authorization_ref=verdict_id or "unknown",
             deployed=deployed,
             deployment_record_ref=None,
+            deploy_status=deploy_status,
         )
-        operations.append(f"Finalization record written: {fin_result['path']}")
-    except Exception as e:
+        operations.append(f"Finalization record written: {fin_result['path']} (deploy_status={fin_result['frontmatter'].get('deploy_status')})")
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"Warning: finalization record write failed for {task_id}: {e}", file=sys.stderr)
         operations.append(f"⚠️  Finalization record write failed: {e}")
 
 
@@ -1233,6 +1240,9 @@ def finalize_task(
                         }
                     else:
                         # Deploy 验证失败 → FAIL
+                        # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
+                        if _actual_merge_happened:
+                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
                         return {
                             "verdict": Verdict.FAIL,
                             "task_id": task_id,
@@ -1252,6 +1262,9 @@ def finalize_task(
                         }
                 else:
                     # Deploy 失败 → FAIL
+                    # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
+                    if _actual_merge_happened:
+                        _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
                     return {
                         "verdict": Verdict.FAIL,
                         "task_id": task_id,
@@ -1273,7 +1286,7 @@ def finalize_task(
                 # 已部署 → 真正无事可做
                 # AIPOS-F61: 只有实际合并才写 finalization 记录
                 if _actual_merge_happened:
-                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, deploy_status="skipped")
                 else:
                     operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                 return {
@@ -1384,6 +1397,9 @@ def finalize_task(
                             "operations": operations,
                         }
                     else:
+                        # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
+                        if _actual_merge_happened:
+                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
                         return {
                             "verdict": Verdict.FAIL,
                             "task_id": task_id,
@@ -1402,6 +1418,9 @@ def finalize_task(
                             "operations": operations,
                         }
                 else:
+                    # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
+                    if _actual_merge_happened:
+                        _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
                     return {
                         "verdict": Verdict.FAIL,
                         "task_id": task_id,
@@ -1423,7 +1442,7 @@ def finalize_task(
                 # 已部署,只需 push
                 # AIPOS-F61: 只有实际合并才写 finalization 记录
                 if _actual_merge_happened:
-                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, deploy_status="skipped")
                 else:
                     operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                 return {
@@ -1624,6 +1643,9 @@ def finalize_task(
                     # AIPOS-FINALIZE-FIX-1: 部署验证失败 → finalize FAIL
                     deployment_error = verification["message"]
                     operations.append(f"✗ Deployment verification FAILED: {verification['message']}")
+                    # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
+                    if pushed:
+                        _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
                     return {
                         "verdict": Verdict.FAIL,
                         "task_id": task_id,
@@ -1645,6 +1667,9 @@ def finalize_task(
                 # AIPOS-FINALIZE-FIX-1: deploy 子步失败 → finalize 整体 FAIL
                 deployment_error = deploy_result["stderr"]
                 operations.append(f"✗ lybra-deploy FAILED: {deploy_result['stderr'][:200]}")
+                # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
+                if pushed:
+                    _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
                 return {
                     "verdict": Verdict.FAIL,
                     "task_id": task_id,
@@ -1688,6 +1713,9 @@ def finalize_task(
                     # AIPOS-FINALIZE-FIX-1: 自动部署失败也必须 FAIL,禁吞错
                     deployment_error = deploy_result["stderr"]
                     operations.append(f"✗ Auto-deployment FAILED: {deploy_result['stderr'][:200]}")
+                    # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
+                    if pushed:
+                        _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
                     return {
                         "verdict": Verdict.FAIL,
                         "task_id": task_id,
@@ -1721,7 +1749,10 @@ def finalize_task(
         
         # AIPOS-C3B 大项B③: 写 finalization 记录(必落,统一用 helper)
         if not dry_run:
-            _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), deployed, operations)
+            _ensure_finalization_record(
+                governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), deployed, operations,
+                deploy_status="deployed" if deployed else ("skipped" if deployment_skipped else "not_attempted"),
+            )
         
         return {
             "verdict": Verdict.PASS,

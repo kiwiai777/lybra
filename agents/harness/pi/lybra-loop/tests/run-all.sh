@@ -714,6 +714,25 @@ else
   overall=1
 fi
 
+# AIPOS-F73D: 顾问侧驱动器 lybra loop(四出口/信封/parser 夹具/前置一二三)+ 本卡改动的存量夹具(agent watch expect_ready; F71/F73B 已在上方登记)
+echo
+echo "── tests/test_aipos_f73d_loop_driver.py (F73D lybra loop 驱动器) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f73d_loop_driver.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f73d_loop_driver.py PASS"
+else
+  echo "✗ tests/test_aipos_f73d_loop_driver.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tools/aipos_cli/tests/test_agent_watch_fs.py (agent watch 哨兵(F73D expect_ready 谓词零回归)) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_agent_watch_fs.py" -v --tb=short -k "not test_module_is_stdlib_only_zero_new_deps"; then
+  echo "✓ tools/aipos_cli/tests/test_agent_watch_fs.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_agent_watch_fs.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

@@ -375,7 +375,7 @@ class TestFailClosed:
         assert result["suggested_action"]
 
     def test_returned_no_audit_card(self, cold_start_workspace: Path):
-        """已 return 但审计卡未生成 → 不可推导。"""
+        """已 return 但审计卡未生成 → 派审(AIPOS-F73D: 审计卡由派审生成, transitions N3.automation; 执行体零门后不再自产审计卡)。"""
         from tools.aipos_cli.next_resolver import derive_next_step
 
         ws = cold_start_workspace
@@ -388,9 +388,10 @@ class TestFailClosed:
 
         result = derive_next_step("TEST-006", ws)
 
-        assert result["derivable"] is False
-        assert "审计卡" in result["missing_records"][0]
-        assert "自产审计卡" in result["suggested_action"]
+        assert result["derivable"] is True
+        assert result["current_node"] == "return"
+        assert "lybra audit dispatch" in result["command"]
+        assert "--audit-task-id TEST-006R" in result["command"]
 
     def test_blocked(self, cold_start_workspace: Path):
         """blocked 卡 → 不可推导(需人工裁定)。"""
