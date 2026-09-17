@@ -23,8 +23,15 @@ def build_finalization_record(
     finalized_at: str | None = None,
     deployed: bool = False,
     deployment_record_ref: str | None = None,
+    deploy_status: str | None = None,
 ) -> dict[str, Any]:
-    """构造 finalization 记录 frontmatter"""
+    """构造 finalization 记录 frontmatter。
+
+    AIPOS-F73D 前置一①: deploy_status 字段(值域声明在 transitions.schema N5.record.deploy_status)——
+    finalization 记录在 merge+push 成功即落, 部署结果只记不阻记录。缺省按 deployed 布尔推导。
+    """
+    if deploy_status is None:
+        deploy_status = "deployed" if deployed else "not_attempted"
     if finalized_at is None:
         finalized_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     
@@ -39,6 +46,7 @@ def build_finalization_record(
         "authorization_type": authorization_type,
         "authorization_ref": authorization_ref,
         "deployed": deployed,
+        "deploy_status": deploy_status,
     }
     
     if deployment_record_ref:
@@ -71,6 +79,7 @@ def render_record_markdown(frontmatter: dict[str, Any]) -> str:
 - **authorization_type**: {frontmatter['authorization_type']}
 - **authorization_ref**: {frontmatter['authorization_ref']}
 - **deployed**: {frontmatter['deployed']}
+- **deploy_status**: {frontmatter['deploy_status']}
 """
 
     if frontmatter.get("deployment_record_ref"):
@@ -91,6 +100,7 @@ def write_finalization_record(
     deployment_record_ref: str | None = None,
     finalized_at: str | None = None,
     dry_run: bool = False,
+    deploy_status: str | None = None,
 ) -> dict[str, Any]:
     """写 finalization_record 到治理工作区 records。返回 {ok, path, wrote}。"""
     frontmatter = build_finalization_record(
@@ -102,6 +112,7 @@ def write_finalization_record(
         deployed=deployed,
         deployment_record_ref=deployment_record_ref,
         finalized_at=finalized_at,
+        deploy_status=deploy_status,
     )
     path = record_path(governance_root, task_id, frontmatter["finalized_at"])
     if dry_run:
@@ -132,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--authorization-type", required=True, help="Authorization type (verdict_ref/dev_override)")
     parser.add_argument("--authorization-ref", required=True, help="Authorization reference")
     parser.add_argument("--deployed", action="store_true", help="Whether deployed")
+    parser.add_argument("--deploy-status", help="AIPOS-F73D: deploy_status (deployed|deploy_failed|skipped|not_attempted; declared in transitions.schema N5)")
     parser.add_argument("--deployment-record-ref", help="Deployment record reference")
     parser.add_argument("--dry-run", action="store_true", help="Preview only")
     args = parser.parse_args(argv)
@@ -146,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         deployed=args.deployed,
         deployment_record_ref=args.deployment_record_ref,
         dry_run=args.dry_run,
+        deploy_status=args.deploy_status,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["ok"] else 1

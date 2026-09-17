@@ -1520,6 +1520,124 @@
         "additionalProperties": false
       }
     },
+    "lybra_loop": {
+      "description": "AIPOS-F73D 顾问侧驱动器 `lybra loop`: Owner 信封授权下, 有界循环推进一张卡到 completed。每轮 = `next` 推导 → 账务命令经 `next --run` 同一执行体(next_resolver.execute_derived_action)执行并重推导; agent 步(spawn_worker/await_artifact)只调既有 `agent watch --expect` 有界等待产物, 永不唤醒 agent(被连接红线); closure 记录存在即 exit 0。本条目是 loop 退出码/参数/信封动词集合的唯一声明; 代码(tools/aipos_cli/loop_driver.py)只读不写死。",
+      "phase": "driver",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra loop",
+      "single_implementation": {
+        "derivation_core": "tools/aipos_cli/next_resolver.derive_next_step (AIPOS-F71 唯一推导核, 禁第二推导核)",
+        "step_executor": "tools/aipos_cli/next_resolver.execute_derived_action (AIPOS-F73 next --run 同一执行体)",
+        "waiter": "tools/aipos_cli/agent_watch_fs.run_fs_watch (AIPOS-268/284 唯一哨兵, expect_ready 谓词 = 推导核可推导)",
+        "envelope": "tools/aipos_cli/autonomy_policy (owner_autonomy_policy 族, 5_tasks/policies/*.md, match_claim_envelope 严格 AND)",
+        "parser_gate": "每条派生命令执行前经 aipos_cli.build_parser().parse_args 解析, 解析失败=exit 4 禁执行 (AIPOS-F73D 前置一③)"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "要推进的卡 ID"
+          },
+          "envelope": {
+            "type": "string",
+            "description": "policy_id (5_tasks/policies/<id>.md); 缺省=扫描 policies/ 取首个匹配本卡与驱动方身份的有效信封"
+          },
+          "actor": {
+            "type": "string",
+            "description": "驱动方身份(顾问实例); 缺省=治理根 .lybra/role 的 instance, 再缺省=advisor"
+          },
+          "connection_json": {
+            "type": "string",
+            "description": "透传给 next --run 的 connection.json 路径(token 永不上屏)"
+          },
+          "workspace_root": {
+            "type": "string",
+            "description": "治理根(队列/记录所在); 缺省=自发现"
+          },
+          "max_steps": {
+            "type": "integer",
+            "default": 20,
+            "minimum": 1,
+            "description": "硬上限: 推导轮数(含等待轮), 超限 exit 3"
+          },
+          "max_wait": {
+            "type": "number",
+            "default": 1800,
+            "minimum": 1,
+            "description": "硬上限: 每次等待产物的秒数(沿用 agent watch --timeout 默认 1800)"
+          },
+          "interval": {
+            "type": "number",
+            "default": 15,
+            "minimum": 0.01,
+            "description": "等待轮询间隔秒(沿用 agent watch --interval 默认 15); 等待一律经 watch, 禁 sleep 自旋"
+          },
+          "json": {
+            "type": "boolean",
+            "description": "JSON 输出"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "completed": {
+          "code": 0,
+          "meaning": "走到 completed(closure 记录存在)"
+        },
+        "gate_rejected": {
+          "code": 2,
+          "meaning": "门拒: 透传拒因原文+出口, 不重试"
+        },
+        "wait_timeout": {
+          "code": 3,
+          "meaning": "等待产物超时/停滞(输出等的是哪份产物), 或 --max-steps 用尽"
+        },
+        "not_derivable": {
+          "code": 4,
+          "meaning": "推导不可推导(输出 missing_records), 或派生命令解析失败/需人工介入"
+        },
+        "no_envelope": {
+          "code": 5,
+          "meaning": "无有效 autonomy 信封(输出 `lybra envelope mint` 申领出口), 或信封未授权该动词"
+        }
+      },
+      "envelope": {
+        "family": "owner_autonomy_policy (5_tasks/policies/<policy_id>.md, 由 `lybra envelope mint` 申领, owner_decision_record 落 grant)",
+        "matcher": "autonomy_policy.match_claim_envelope(策略有效+时间窗+agent_or_role 覆盖驱动方身份或 advisor 角色+task_selector 覆盖本卡+count_bound)",
+        "allowed_verbs": [
+          "claim",
+          "return",
+          "dispatch",
+          "verdict",
+          "finalize",
+          "close"
+        ],
+        "allowed_verbs_note": "loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。"
+      },
+      "await_artifacts": {
+        "executor": {
+          "ref": "transitions.schema.json#/nodes/N2/artifact/location",
+          "meaning": "执行体产物 task_cards/{task_id}/RETURN.md (骨架不算, 判据=推导核)"
+        },
+        "auditor": {
+          "ref": "transitions.schema.json#/nodes/N4/audit_report/location_candidates",
+          "meaning": "审计体产物 task_cards/{audit_task_id}/RETURN.md|audit_report.md 含 verdict frontmatter"
+        }
+      },
+      "invariants": [
+        "永不唤醒 agent: agent 步只等产物, 开会话由 Owner/工位无参命令",
+        "禁静默/禁无限循环: --max-steps 与 --max-wait 为硬上限, 任一出口非零带原文",
+        "禁 sleep 自旋: 等待一律经 agent watch",
+        "token 永不上屏",
+        "禁直调 board_adapter/queue_mutation 做门动作"
+      ]
+    },
     "lybra_governance_commit": {
       "description": "AIPOS-R7A2/F69/F79: governance-repo commit — the ONLY commit path for the truth layer (advisor-side). F79: explicit --paths whitelist (git add -- <paths>, never add -A when given; paths outside the governance root or pointing at another project are rejected fail-closed); --dry-run lists the exact files that would be committed without touching the scene (read-only git status --porcelain / git diff --name-status; no add/reset/stash); after a real commit, git show --name-only HEAD is verified against that manifest. Whole-root mode (no --paths) is reserved for lybra's own workspace; every other project MUST pass --paths. Pre-staged files: inside --paths = accepted into the manifest, outside --paths = rejected and listed. AIPOS-R6M file-level guardrails (pre-commit hook) still apply to the selected files. CLI-only (surface=cli); push reuses the F69 fetch -> rebase -> push -> remote-verify flow.",
       "phase": "single",

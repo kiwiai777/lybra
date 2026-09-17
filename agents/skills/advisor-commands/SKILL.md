@@ -20,25 +20,26 @@ role: advisor
 
 ---
 
-## 工作流阶段表 (AIPOS-F73C件④)
+## 工作流阶段表 (AIPOS-F73C件④ · AIPOS-F73D件④ 加「推进」行)
 
 顾问在各阶段的职责与可用命令：
 
 | 阶段 | 职责 | 主要命令 |
 |------|------|----------|
 | **N0 出卡** | 起草与发卡 | `lybra draft create/publish`, `lybra queue amend/withdraw` |
-| **N1 认领** | 监督认领流程 | `lybra next --run` (产品执行), `lybra my-tasks` 查询 |
-| **N2 执行** | 监督进度 | 无直接干预 (executor 写 RETURN.md) |
-| **N3 交回** | 监督交回流程 | `lybra next --run` (产品执行) |
-| **N4 审计** | 审非代码卡 | `lybra audit-verdict` (顾问自审), `lybra audit dispatch` (派审) |
+| **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物, 永不唤醒 agent) | **`lybra loop --task-id <ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
+| **N1 认领** | 监督认领流程 | `lybra loop`(推进行); 单步查看 `lybra next --task-id <ID>`; `lybra my-tasks` 查询 |
+| **N2 执行** | 监督进度 | 无直接干预 (executor 写 RETURN.md; `lybra loop` 经 agent watch 等它落盘) |
+| **N3 交回** | 监督交回流程 | `lybra loop`(推进行) |
+| **N4 审计** | 审非代码卡 | `lybra audit-verdict` (顾问自审), `lybra audit dispatch` (派审; 代码卡由 `lybra loop` 自动派) |
 | **返工** | 追加返工节 | `lybra queue rework --confirm` (AIPOS-F75, F73C件⑤) |
-| **N5 finalize** | 监督交付上线 | `lybra next --run` (产品执行) |
+| **N5 finalize** | 监督交付上线 | `lybra loop`(推进行) |
 | **N6 收账** | 编年史+决策记录 | `lybra generate-backlog-entry`, `lybra owner-decision` |
 
 **关键原则**:
-- **认领/交回/finalize 由产品执行** (`lybra next --run`)，顾问不手搓门动词。
+- **推进由产品执行** (`lybra loop --task-id <ID>`)，顾问不手搓门动词、不逐步代按。`lybra next --run` 单步入口保留为 loop 的内部执行体与排障单步, **顾问逐步手按 `next --run` 这条人工路径退役**(AIPOS-F73D, Δ=-1)。
 - **返工节只能通过 `lybra queue rework` 追加**，禁手写卡面 rework_rounds 字段。
-- **next-step 导航**：用 `lybra next-step --task-id <ID>` 查询当前状态与下一步动词。
+- **next-step 导航**：用 `lybra next --task-id <ID>` 查询当前状态与下一步动词(`next-step` 已退役转发)。
 
 ---
 
@@ -90,7 +91,17 @@ lybra queue rework --task-id AIPOS-XXX --actor advisor.lybra.kiwiai-dev \
 
 ---
 
-### 🚀 派工与监督
+### 🚀 推进与监督
+
+#### `lybra loop`
+**何时用**:卡已认领(或已发布)后, 顾问用一条命令把它推到 completed(AIPOS-F73D)。前提: Owner 已签发覆盖本卡/本驱动方的 autonomy 信封(`lybra envelope mint`, 见下)。
+```bash
+lybra loop --task-id AIPOS-XXX
+# 可选: --envelope <policy_id> --actor advisor.lybra.kiwiai-dev --max-steps 20 --max-wait 1800 --interval 15 --json
+```
+**每轮**:`next` 推导 → 账务命令(claim/return/dispatch/verdict/finalize/close)先过 argparse 解析再经 `next --run` 同一执行体执行并重推导;agent 步(执行体/审计体在干活)只调 `agent watch --expect` 有界等待产物(执行体=`task_cards/<ID>/RETURN.md`, 审计体=`task_cards/<ID>R/RETURN.md|audit_report.md`, 骨架不算);closure 记录存在即 exit 0。
+**四出口(verbs.schema `lybra_loop.exit_codes` 唯一声明)**:0=completed;2=门拒(透传拒因原文, 不重试);3=等待产物超时/停滞或 --max-steps 用尽(输出等的是哪份产物);4=推导不可推导/派生命令解析失败(输出 missing_records);5=无有效信封(输出 `lybra envelope mint` 申领出口)。
+**红线**:永不唤醒 agent(开会话仍由 Owner/工位无参 `/go`);禁 sleep 自旋(等待一律经 watch);token 永不上屏;禁直调 board_adapter。
 
 #### `lybra audit dispatch`
 **何时用**:派审(手动指定审计者,或 FIX 打回后复审)。
@@ -239,6 +250,7 @@ lybra governance-commit --governance-root <治理根> --actor advisor.<project>.
 | 手写 audit_verdicts/*.md | `lybra audit-verdict` | 已上线 |
 | 手搓 dispatch 记录 | `lybra audit dispatch` | 已上线 |
 | 口述"下一步做 X" | `lybra next-step` | AIPOS-R7A |
+| 顾问逐步手按 `lybra next --run`(代按推进) | `lybra loop --task-id <ID>` | AIPOS-F73D |
 
 **过渡期豁免**:在所有产品命令上线前,ADVISOR-COMMANDS.md 的手搓片段暂保留作底层参考;
 本卡(AIPOS-F73C)交付后,手搓片段全退役,只保留命令快查表(本 skill)。
