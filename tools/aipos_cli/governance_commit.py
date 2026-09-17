@@ -10,15 +10,254 @@ N6 收账清单校验四件齐全:
 缺件明确报哪一件并拒绝;失败不静默。
 
 命令须可由顾问工位 advisor token 使用(无 finalize 权限)。
+
+AIPOS-F79 精确批次提交(chris 总顾问实撞):
+- 件①: ``--paths``/``--paths-file`` 显式白名单 → 只 ``git add -- <paths>``, 绝不 add -A;
+  路径越出治理根或指向他项目 = 拒(fail-closed)。
+- 件②: ``--dry-run`` 输出将提交文件清单(modified/added/deleted/untracked_selected),
+  只读 ``git status --porcelain`` + ``git diff --name-status``, 不 add/不 reset/不 stash。
+- 件③: 正式提交后 ``git show --name-only HEAD`` 与清单逐条比对, 不同即 FAIL 出声;
+  预暂存文件在 --paths 内 = 纳入清单, 在 --paths 外 = 拒并列出。
+- 无 --paths 的整根 ``git add -A -- .`` 仅保留给 lybra 自身工作区; 他项目一律 --paths。
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from tools.schema_constants import Verdict
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F79: 显式路径白名单 + 只读清单
+# ---------------------------------------------------------------------------
+
+# 清单分类(件②): 与 git status/diff 状态码的映射
+MANIFEST_MODIFIED = "modified"
+MANIFEST_ADDED = "added"
+MANIFEST_DELETED = "deleted"
+MANIFEST_UNTRACKED = "untracked_selected"
+
+_GIT_QUOTEPATH_OFF = ["git", "-c", "core.quotepath=false"]
+
+
+def _git_readonly(args: list[str], cwd: Path, *, timeout: int = 30) -> str:
+    """只读 git 调用(status/diff/rev-parse/show); 失败直接抛 CalledProcessError, 禁静默。"""
+    result = subprocess.run(
+        _GIT_QUOTEPATH_OFF + args,
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return result.stdout
+
+
+def _split_nul(raw: str) -> list[str]:
+    return [t for t in raw.split("\0") if t != ""]
+
+
+def resolve_commit_paths(
+    governance_root: Path,
+    paths: list[str] | None,
+    paths_file: Path | str | None,
+) -> dict[str, Any]:
+    """AIPOS-F79 件①: 把 --paths / --paths-file 归一为治理根相对路径白名单。
+
+    二者同一实现: --paths-file 每行一路径(空行与 # 行忽略), 与 --paths 二选一。
+    fail-closed 规则(任一命中即整体拒绝, 不做部分接受):
+      - 两种给法同时出现;
+      - --paths-file 不存在/不可读;
+      - 路径为空 / 指向治理根本身(等价整根 add -A);
+      - 路径(含 ``..``/绝对路径/符号链接解析后)落在治理根之外 —— 含指向他项目。
+
+    Returns:
+        {"selected": bool, "paths": [rel...], "source": "paths"|"paths_file"|None,
+         "rejected": [{"path": str, "reason": str}], "message": str|None}
+    """
+    if not paths and paths_file is None:
+        return {"selected": False, "paths": [], "source": None, "rejected": [], "message": None}
+
+    if paths and paths_file is not None:
+        return {
+            "selected": True,
+            "paths": [],
+            "source": None,
+            "rejected": [{"path": str(paths_file), "reason": "--paths 与 --paths-file 二选一, 不可同时给"}],
+            "message": "--paths 与 --paths-file 二选一, 不可同时给(fail-closed)",
+        }
+
+    raw_entries: list[str]
+    source: str
+    if paths_file is not None:
+        source = "paths_file"
+        pf = Path(paths_file).expanduser()
+        try:
+            content = pf.read_text(encoding="utf-8")
+        except (FileNotFoundError, PermissionError, IsADirectoryError, UnicodeDecodeError) as exc:
+            return {
+                "selected": True,
+                "paths": [],
+                "source": source,
+                "rejected": [{"path": str(pf), "reason": f"--paths-file 不可读: {exc.__class__.__name__}: {exc}"}],
+                "message": f"--paths-file 不可读: {pf} ({exc.__class__.__name__})",
+            }
+        raw_entries = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            raw_entries.append(stripped)
+        if not raw_entries:
+            return {
+                "selected": True,
+                "paths": [],
+                "source": source,
+                "rejected": [{"path": str(pf), "reason": "--paths-file 为空(无有效路径行)"}],
+                "message": f"--paths-file 为空, 无可提交路径: {pf}",
+            }
+    else:
+        source = "paths"
+        raw_entries = [str(p) for p in (paths or [])]
+
+    root_resolved = governance_root.resolve()
+    accepted: list[str] = []
+    rejected: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in raw_entries:
+        candidate = raw.strip()
+        if not candidate:
+            rejected.append({"path": raw, "reason": "空路径"})
+            continue
+        abs_candidate = Path(candidate) if os.path.isabs(candidate) else governance_root / candidate
+        # resolve(): 消掉 ../ 并解析符号链接; 不存在的路径(如已删除文件)也可解析(strict=False)
+        resolved = abs_candidate.resolve()
+        if resolved == root_resolved:
+            rejected.append({"path": raw, "reason": "指向治理根本身 = 整根提交; 请列具体文件/目录, 或去掉 --paths(仅 lybra 自身工作区允许)"})
+            continue
+        if not resolved.is_relative_to(root_resolved):
+            rejected.append({"path": raw, "reason": f"越出治理根 {root_resolved}(他项目或仓外路径, 拒)"})
+            continue
+        rel = resolved.relative_to(root_resolved).as_posix()
+        if rel in seen:
+            continue
+        seen.add(rel)
+        accepted.append(rel)
+
+    if rejected:
+        listing = "\n  - ".join(f"{r['path']}: {r['reason']}" for r in rejected)
+        return {
+            "selected": True,
+            "paths": [],
+            "source": source,
+            "rejected": rejected,
+            "message": (
+                f"--paths 白名单含非法路径, 整体拒绝(fail-closed, 不做部分提交):\n  - {listing}\n\n"
+                f"可执行出口:\n"
+                f"1. 只列治理根 {root_resolved} 内的相对路径(文件或目录)\n"
+                f"2. 他项目内容须在其自己的治理根下用各自的 lybra governance-commit --paths 提交"
+            ),
+        }
+
+    return {"selected": True, "paths": accepted, "source": source, "rejected": [], "message": None}
+
+
+def _git_ws_prefix(governance_root: Path) -> str:
+    """治理根在 git 仓内的相对前缀(如 ``2_projects/chris-huibojin/``; 仓根即治理根时为 ``""``)。"""
+    return _git_readonly(["rev-parse", "--show-prefix"], governance_root).strip()
+
+
+def collect_commit_manifest(governance_root: Path, selected_paths: list[str] | None) -> dict[str, Any]:
+    """AIPOS-F79 件②: 只读取得「将提交的具体文件」清单。
+
+    只用 ``git status --porcelain -uall -z -- <pathspec>``(取未跟踪文件)与
+    ``git diff --name-status --no-renames -z HEAD -- <pathspec>``(取已跟踪的 M/A/D, 即
+    ``git add <pathspec>`` + commit 后相对 HEAD 的净差异)。不 add/不 reset/不 stash。
+
+    selected_paths=None → pathspec ``.``(整根, 即既有 ``git add -A -- .`` 会吞入的范围),
+    并对未跟踪文件数出 warning。
+
+    Returns:
+        {"mode": "paths"|"whole_root", "pathspec": [...], "ws_prefix": str,
+         "files": [{"path": 治理根相对, "repo_path": 仓根相对, "status": 分类}],
+         "counts": {分类: n, "total": n}, "warnings": [str]}
+    """
+    ws_prefix = _git_ws_prefix(governance_root)
+    mode = "paths" if selected_paths else "whole_root"
+    pathspec = list(selected_paths) if selected_paths else ["."]
+
+    def to_gov_rel(repo_path: str) -> str:
+        if ws_prefix and repo_path.startswith(ws_prefix):
+            return repo_path[len(ws_prefix):]
+        return repo_path
+
+    files: dict[str, dict[str, str]] = {}
+
+    # ① 已跟踪文件: HEAD vs 工作树(含已暂存), 即提交后的净差异
+    diff_raw = _git_readonly(
+        ["diff", "--name-status", "--no-renames", "-z", "HEAD", "--"] + pathspec, governance_root
+    )
+    tokens = _split_nul(diff_raw)
+    i = 0
+    while i + 1 < len(tokens):
+        code, repo_path = tokens[i], tokens[i + 1]
+        i += 2
+        letter = code[:1]
+        if letter == "D":
+            status = MANIFEST_DELETED
+        elif letter == "A":
+            status = MANIFEST_ADDED
+        else:  # M / T(类型变更) 均视为 modified
+            status = MANIFEST_MODIFIED
+        files[repo_path] = {"path": to_gov_rel(repo_path), "repo_path": repo_path, "status": status}
+
+    # ② 未跟踪文件: 只取 ?? 行(-uall 展开目录到文件级, 与 git add 后的粒度一致)
+    status_raw = _git_readonly(
+        ["status", "--porcelain", "--untracked-files=all", "-z", "--"] + pathspec, governance_root
+    )
+    tokens = _split_nul(status_raw)
+    i = 0
+    while i < len(tokens):
+        entry = tokens[i]
+        i += 1
+        xy, repo_path = entry[:2], entry[3:]
+        if xy[0] in ("R", "C"):
+            i += 1  # 重命名/复制条目带一个源路径 token, 跳过
+        if xy == "??" and repo_path not in files:
+            files[repo_path] = {"path": to_gov_rel(repo_path), "repo_path": repo_path, "status": MANIFEST_UNTRACKED}
+
+    ordered = sorted(files.values(), key=lambda f: f["repo_path"])
+    counts = {MANIFEST_MODIFIED: 0, MANIFEST_ADDED: 0, MANIFEST_DELETED: 0, MANIFEST_UNTRACKED: 0}
+    for f in ordered:
+        counts[f["status"]] += 1
+    counts["total"] = len(ordered)
+
+    warnings_out: list[str] = []
+    if mode == "whole_root":
+        warnings_out.append(
+            f"无 --paths: 将对治理根整根 git add -A -- . (仅限 lybra 自身工作区; 他项目一律 --paths)"
+        )
+        if counts[MANIFEST_UNTRACKED]:
+            warnings_out.append(
+                f"WARNING: 整根提交会吞入 {counts[MANIFEST_UNTRACKED]} 个未跟踪文件(历史材料会被夹带); "
+                f"请改用 --paths 精确选定"
+            )
+    return {
+        "mode": mode,
+        "pathspec": pathspec,
+        "ws_prefix": ws_prefix,
+        "files": ordered,
+        "counts": counts,
+        "warnings": warnings_out,
+    }
+
+
+def _manifest_repo_paths(manifest: dict[str, Any]) -> list[str]:
+    return sorted(f["repo_path"] for f in manifest["files"])
 
 
 def check_governance_completeness(
@@ -168,6 +407,8 @@ def governance_commit(
     dry_run: bool = False,
     push: bool = True,
     message: str | None = None,
+    paths: list[str] | None = None,
+    paths_file: Path | str | None = None,
 ) -> dict[str, Any]:
     """N6 收账提交:校验四件 → commit → push。
     
@@ -182,6 +423,8 @@ def governance_commit(
         dry_run: 只校验不提交
         push: 是否 push 到远程
         message: commit message (默认自动生成)
+        paths: AIPOS-F79 件① 显式白名单(治理根相对路径, 文件或目录); 给了即只 git add -- <paths>
+        paths_file: 同上, 每行一路径的清单文件(与 paths 二选一)
     
     Returns:
         {
@@ -195,9 +438,33 @@ def governance_commit(
             "commit_hash": str | None,
             "message": str,
             "operations": list[str],
+            "selected_paths": list[str] | None,   # F79: 白名单(无 --paths 为 None)
+            "commit_manifest": dict | None,       # F79: 将提交/已提交文件清单(见 collect_commit_manifest)
         }
     """
     operations = []
+    
+    # AIPOS-F79 件①: 先归一白名单, 非法即整体拒绝(fail-closed), 不碰 git
+    path_selection = resolve_commit_paths(governance_root, paths, paths_file)
+    if path_selection["rejected"]:
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "completeness_check": None,
+            "committed": False,
+            "pushed": False,
+            "commit_hash": None,
+            "message": path_selection["message"],
+            "operations": operations + ["Blocked: --paths whitelist rejected"],
+            "selected_paths": None,
+            "rejected_paths": path_selection["rejected"],
+            "commit_manifest": None,
+        }
+    selected_paths: list[str] | None = path_selection["paths"] if path_selection["selected"] else None
+    if selected_paths is not None:
+        operations.append(f"Path whitelist ({path_selection['source']}): {len(selected_paths)} path(s) — git add限定, 绝不 add -A")
     
     # 校验治理仓目录
     if not governance_root.is_dir():
@@ -218,9 +485,10 @@ def governance_commit(
     
     # AIPOS-F7 大项B①: 先查 git status — 无待收内容 → info "无待收内容, 治理仓已最新" + EXIT=0
     # (F4 no-op 档)。放在完整性校验之前:仓已干净则无需校验,避免无变更场景误触 BLOCK。
+    # AIPOS-F79: 有 --paths 时 status 限定到白名单 pathspec(选定路径外的变更与本次无关)
     try:
         status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain", "--"] + (selected_paths if selected_paths else []),
             cwd=str(governance_root),
             check=True,
             capture_output=True,
@@ -229,7 +497,7 @@ def governance_commit(
         has_changes = bool(status_result.stdout.strip())
         
         if not has_changes:
-            operations.append("No changes to commit")
+            operations.append("No changes to commit" + (" (within --paths)" if selected_paths else ""))
             return {
                 "verdict": Verdict.PASS,
                 "task_id": task_id,
@@ -239,9 +507,11 @@ def governance_commit(
                 "committed": False,
                 "pushed": False,
                 "commit_hash": None,
-                "message": "无待收内容, 治理仓已最新",
+                "message": "无待收内容, 治理仓已最新" + ("(选定 --paths 内无变更)" if selected_paths else ""),
                 "severity": "info",
                 "operations": operations,
+                "selected_paths": selected_paths,
+                "commit_manifest": None,
             }
     except subprocess.CalledProcessError as e:
         return {
@@ -276,37 +546,15 @@ def governance_commit(
             "operations": operations,
         }
     
-    if dry_run:
-        operations.append("DRY-RUN: Would commit and push governance changes")
-        return {
-            "verdict": Verdict.PASS,
-            "task_id": task_id,
-            "actor": actor,
-            "dry_run": True,
-            "completeness_check": completeness,
-            "committed": False,
-            "pushed": False,
-            "commit_hash": None,
-            "message": (
-                "DRY-RUN: N6 收账清单完整,可以提交" if task_id
-                else "DRY-RUN: 治理批次更新检查通过,可以提交"
-            ),
-            "operations": operations,
-        }
-    
-    # ③ Commit (会触发 pre-commit 四检)
-    if task_id:
-        commit_msg = message or f"chore(governance): N6 收账 {task_id}\n\nActor: {actor}\nType: governance_commit"
-    else:
-        commit_msg = message or f"chore(governance): 治理批次更新\n\nActor: {actor}\nType: governance_commit"
-    
+    # P0 修复(AIPOS-F69-R2): commit 前检查是否有范围外 staged 文件
+    # 实锤(2026-09-05): 顾问治理仓有门刚落的账(staged 但未 commit),
+    # governance-commit 会把这些也一起 commit,然后 rebase 可能导致问题
+    # AIPOS-F79 件③: 检查提到 dry-run 之前(dry-run 必须如实预演 BLOCK), 语义改为:
+    #   无 --paths: 任何预暂存 → BLOCK(原样);
+    #   有 --paths: 预暂存在 --paths 内 = 纳入清单可接受; 在 --paths 外 = 拒并列出。
     try:
-        # P0 修复(AIPOS-F69-R2): commit 前检查是否有范围外 staged 文件
-        # 实锤(2026-09-05): 顾问治理仓有门刚落的账(staged 但未 commit),
-        # governance-commit 会把这些也一起 commit,然后 rebase 可能导致问题
-        # 修法: 在 git add 之前检查是否有 staged 文件,如果有则 BLOCK
         pre_staged_result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
+            ["git", "-c", "core.quotepath=false", "diff", "--cached", "--name-only"],
             cwd=str(governance_root),
             check=True,
             capture_output=True,
@@ -314,9 +562,23 @@ def governance_commit(
         )
         pre_staged_files = [f.strip() for f in pre_staged_result.stdout.split('\n') if f.strip()]
         
+        if pre_staged_files and selected_paths:
+            inside_result = subprocess.run(
+                ["git", "-c", "core.quotepath=false", "diff", "--cached", "--name-only", "--"] + selected_paths,
+                cwd=str(governance_root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            inside = {f.strip() for f in inside_result.stdout.split('\n') if f.strip()}
+            outside = [f for f in pre_staged_files if f not in inside]
+            if inside:
+                operations.append(f"Pre-staged within --paths: {len(inside)} file(s) accepted into manifest")
+            pre_staged_files = outside
+        
         if pre_staged_files:
             # 有 staged 文件 → BLOCK(这些可能是门刚落的账)
-            operations.append(f"Blocked: {len(pre_staged_files)} pre-staged files detected")
+            operations.append(f"Blocked: {len(pre_staged_files)} pre-staged files detected" + (" outside --paths" if selected_paths else ""))
             file_list = '\n  - '.join(pre_staged_files[:10])
             if len(pre_staged_files) > 10:
                 file_list += f'\n  - ... and {len(pre_staged_files) - 10} more'
@@ -330,26 +592,135 @@ def governance_commit(
                 "pushed": False,
                 "commit_hash": None,
                 "message": (
-                    f"治理仓有已 staged 但未 committed 的文件,必须先处理(fail-closed,禁混入本次提交)。\n\n"
+                    f"治理仓有已 staged 但未 committed 的文件"
+                    + ("(在 --paths 白名单之外)" if selected_paths else "")
+                    + f",必须先处理(fail-closed,禁混入本次提交)。\n\n"
                     f"检测到 {len(pre_staged_files)} 个 staged 文件:\n  - {file_list}\n\n"
                     f"可执行出口:\n"
                     f"1. 先提交这些文件: cd {governance_root} && git commit -m '...'\n"
-                    f"2. 或取消 stage: cd {governance_root} && git reset HEAD\n"
-                    f"3. 禁止混入本次提交 — 这些可能是门刚落的账,必须独立提交以保持原子性"
+                    f"2. 或取消 stage: cd {governance_root} && git reset HEAD -- <文件>\n"
+                    + ("3. 或把它们加入 --paths 白名单(若确属本批次)\n" if selected_paths else "")
+                    + f"{'4' if selected_paths else '3'}. 禁止混入本次提交 — 这些可能是门刚落的账,必须独立提交以保持原子性"
                 ),
                 "operations": operations,
+                "selected_paths": selected_paths,
+                "pre_staged_outside": pre_staged_files,
+                "commit_manifest": None,
             }
         
-        # AIPOS-R8B 大项A: Stage all changes in governance repo with pathspec限定到 governance_root
-        # 防止 git add -A 越界 stage 其他项目(如 kiwiaiagency)的文件
-        subprocess.run(
-            ["git", "add", "-A", "--", "."],
-            cwd=str(governance_root),
-            check=True,
-            capture_output=True,
-            text=True,
+        # AIPOS-F79 件②: 只读取得将提交文件清单(不 add/不 reset/不 stash)
+        manifest = collect_commit_manifest(governance_root, selected_paths)
+        for w in manifest["warnings"]:
+            operations.append(w)
+        operations.append(
+            f"Manifest ({manifest['mode']}): {manifest['counts']['total']} file(s) — "
+            f"modified={manifest['counts'][MANIFEST_MODIFIED]} added={manifest['counts'][MANIFEST_ADDED]} "
+            f"deleted={manifest['counts'][MANIFEST_DELETED]} untracked_selected={manifest['counts'][MANIFEST_UNTRACKED]}"
         )
-        operations.append(f"Staged all governance changes (git add -A -- . in {governance_root})")
+        
+        if not manifest["files"]:
+            operations.append("No net changes in manifest (nothing would be committed)")
+            return {
+                "verdict": Verdict.PASS,
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": dry_run,
+                "completeness_check": completeness,
+                "committed": False,
+                "pushed": False,
+                "commit_hash": None,
+                "message": "无待收内容, 清单为空(选定路径相对 HEAD 无净变更)",
+                "severity": "info",
+                "operations": operations,
+                "selected_paths": selected_paths,
+                "commit_manifest": manifest,
+            }
+    except subprocess.CalledProcessError as e:
+        operations.append(f"Git read-only inspection failed: {e.stderr}")
+        return {
+            "verdict": Verdict.FAIL,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "completeness_check": completeness,
+            "committed": False,
+            "pushed": False,
+            "commit_hash": None,
+            "message": f"Git inspection failed (status/diff): {e.stderr}",
+            "operations": operations,
+            "selected_paths": selected_paths,
+            "commit_manifest": None,
+        }
+    except subprocess.TimeoutExpired:
+        operations.append("Git read-only inspection timed out")
+        return {
+            "verdict": Verdict.FAIL,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "completeness_check": completeness,
+            "committed": False,
+            "pushed": False,
+            "commit_hash": None,
+            "message": "Git inspection timed out (status/diff)",
+            "operations": operations,
+            "selected_paths": selected_paths,
+            "commit_manifest": None,
+        }
+    
+    if dry_run:
+        operations.append("DRY-RUN: Would commit and push the manifest above (scene untouched: no add/reset/stash)")
+        listing = "\n".join(f"  {f['status']:<18} {f['path']}" for f in manifest["files"])
+        return {
+            "verdict": Verdict.PASS,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": True,
+            "completeness_check": completeness,
+            "committed": False,
+            "pushed": False,
+            "commit_hash": None,
+            "message": (
+                ("DRY-RUN: N6 收账清单完整,可以提交" if task_id else "DRY-RUN: 治理批次更新检查通过,可以提交")
+                + f"\n将提交 {manifest['counts']['total']} 个文件"
+                + (f"(--paths 白名单)" if selected_paths else "(整根 add -A 范围)")
+                + f":\n{listing}"
+                + ("".join(f"\n{w}" for w in manifest["warnings"]) if manifest["warnings"] else "")
+            ),
+            "operations": operations,
+            "selected_paths": selected_paths,
+            "commit_manifest": manifest,
+        }
+    
+    # ③ Commit (会触发 pre-commit 四检)
+    if task_id:
+        commit_msg = message or f"chore(governance): N6 收账 {task_id}\n\nActor: {actor}\nType: governance_commit"
+    else:
+        commit_msg = message or f"chore(governance): 治理批次更新\n\nActor: {actor}\nType: governance_commit"
+    
+    try:
+        if selected_paths:
+            # AIPOS-F79 件①: 只 stage 白名单 pathspec, 绝不 add -A
+            subprocess.run(
+                ["git", "add", "--"] + selected_paths,
+                cwd=str(governance_root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            operations.append(f"Staged whitelist only (git add -- {' '.join(selected_paths)} in {governance_root})")
+        else:
+            # AIPOS-R8B 大项A: Stage all changes in governance repo with pathspec限定到 governance_root
+            # 防止 git add -A 越界 stage 其他项目(如 kiwiaiagency)的文件
+            # AIPOS-F79: 整根模式仅限 lybra 自身工作区; 他项目一律 --paths
+            subprocess.run(
+                ["git", "add", "-A", "--", "."],
+                cwd=str(governance_root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            operations.append(f"Staged all governance changes (git add -A -- . in {governance_root})")
         
         # AIPOS-R8B 大项A②: 断言 staged 文件全部落在 governance_root 内,越界即 BLOCK
         staged_files_result = subprocess.run(
@@ -386,6 +757,34 @@ def governance_commit(
                 "operations": operations,
             }
         
+        # AIPOS-F79 件③: 暂存集必须与清单逐条相同, 否则拒提交并出声(不自动 reset, 禁静默清理)
+        staged_set = set(_git_readonly(["diff", "--cached", "--name-only"], governance_root).split("\n")) - {""}
+        manifest_set = set(_manifest_repo_paths(manifest))
+        if staged_set != manifest_set:
+            extra = sorted(staged_set - manifest_set)
+            missing_from_stage = sorted(manifest_set - staged_set)
+            operations.append(f"MANIFEST MISMATCH before commit: +{len(extra)} unexpected staged, -{len(missing_from_stage)} missing")
+            return {
+                "verdict": Verdict.BLOCK,
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": False,
+                "completeness_check": completeness,
+                "committed": False,
+                "pushed": False,
+                "commit_hash": None,
+                "message": (
+                    "暂存集与 dry-run 清单不一致, 拒绝提交(现场在检查与暂存之间被改动?)。\n"
+                    + (f"多出: {extra}\n" if extra else "")
+                    + (f"缺少: {missing_from_stage}\n" if missing_from_stage else "")
+                    + f"可执行出口: cd {governance_root} && git status && git reset HEAD -- <多出的文件>; 然后重跑 --dry-run 核对清单"
+                ),
+                "operations": operations,
+                "selected_paths": selected_paths,
+                "commit_manifest": manifest,
+                "staged_files": sorted(staged_set),
+            }
+        
         # Commit with explicit identity
         subprocess.run(
             [
@@ -411,6 +810,31 @@ def governance_commit(
         )
         commit_hash = commit_hash_result.stdout.strip()
         operations.append(f"Committed: {commit_hash[:8]}")
+        
+        # AIPOS-F79 件③: 提交后 git show --name-only HEAD 与清单逐条相同, 不同即 FAIL 出声
+        shown_set = set(_git_readonly(["show", "--name-only", "--no-renames", "--format=", "HEAD"], governance_root).split("\n")) - {""}
+        if shown_set != manifest_set:
+            operations.append("POST-COMMIT VERIFICATION FAILED: git show --name-only HEAD != manifest")
+            return {
+                "verdict": Verdict.FAIL,
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": False,
+                "completeness_check": completeness,
+                "committed": True,
+                "pushed": False,
+                "commit_hash": commit_hash,
+                "message": (
+                    f"提交 {commit_hash[:8]} 的文件集与清单不一致, 未 push(fail-closed)。\n"
+                    f"提交内: {sorted(shown_set)}\n清单: {sorted(manifest_set)}\n"
+                    f"可执行出口: cd {governance_root} && git show --name-only HEAD; 核对后决定是否 git reset --soft HEAD~1"
+                ),
+                "operations": operations,
+                "selected_paths": selected_paths,
+                "commit_manifest": manifest,
+                "committed_files": sorted(shown_set),
+            }
+        operations.append(f"Verified: git show --name-only HEAD == manifest ({len(shown_set)} files)")
         
         # ④ Push (N6 语义「漏 push 即未收口」)
         # AIPOS-F69 大项②: 并发安全 — fetch → 若远端前进则只对本项目路径 rebase → push
@@ -540,7 +964,15 @@ def governance_commit(
                                 text=True,
                                 timeout=30,
                             )
-                            operations.append("Rebased successfully")
+                            # AIPOS-F79 顺手修 F69 隐患: rebase 会改写本次 commit 的哈希, 后续
+                            # push 后校验必须用改写后的 HEAD, 否则真 rebase 场景必报「远端不含」假阴性
+                            # (F69 夹具的 clone 落在 master 分支, 从未跑过真 rebase, 故当时未暴露)。
+                            rebased_head = _git_readonly(["rev-parse", "HEAD"], governance_root).strip()
+                            if rebased_head != commit_hash:
+                                operations.append(f"Rebased successfully (commit rewritten {commit_hash[:8]} -> {rebased_head[:8]})")
+                                commit_hash = rebased_head
+                            else:
+                                operations.append("Rebased successfully")
                         except subprocess.CalledProcessError as e:
                             # 冲突 → 拒收并给可执行出口
                             subprocess.run(
@@ -660,6 +1092,8 @@ def governance_commit(
                 else f"治理批次更新完成: {commit_hash[:8]}"
             ) + (" (pushed)" if pushed else ""),
             "operations": operations,
+            "selected_paths": selected_paths,
+            "commit_manifest": manifest,
         }
         
     except subprocess.CalledProcessError as e:
@@ -675,6 +1109,24 @@ def governance_commit(
             "commit_hash": None,
             "message": f"Commit failed: {e.stderr}",
             "operations": operations,
+            "selected_paths": selected_paths,
+            "commit_manifest": manifest,
+        }
+    except subprocess.TimeoutExpired as e:
+        operations.append(f"Git operation timed out: {e.cmd}")
+        return {
+            "verdict": Verdict.FAIL,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": False,
+            "completeness_check": completeness,
+            "committed": False,
+            "pushed": False,
+            "commit_hash": None,
+            "message": f"Git operation timed out: {e.cmd}",
+            "operations": operations,
+            "selected_paths": selected_paths,
+            "commit_manifest": manifest,
         }
 
 

@@ -1519,6 +1519,77 @@
         ],
         "additionalProperties": false
       }
+    },
+    "lybra_governance_commit": {
+      "description": "AIPOS-R7A2/F69/F79: governance-repo commit — the ONLY commit path for the truth layer (advisor-side). F79: explicit --paths whitelist (git add -- <paths>, never add -A when given; paths outside the governance root or pointing at another project are rejected fail-closed); --dry-run lists the exact files that would be committed without touching the scene (read-only git status --porcelain / git diff --name-status; no add/reset/stash); after a real commit, git show --name-only HEAD is verified against that manifest. Whole-root mode (no --paths) is reserved for lybra's own workspace; every other project MUST pass --paths. Pre-staged files: inside --paths = accepted into the manifest, outside --paths = rejected and listed. AIPOS-R6M file-level guardrails (pre-commit hook) still apply to the selected files. CLI-only (surface=cli); push reuses the F69 fetch -> rebase -> push -> remote-verify flow.",
+      "phase": "single",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra governance-commit",
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "type": "string",
+            "description": "Actor performing the governance commit (advisor instance)"
+          },
+          "task_id": {
+            "type": "string",
+            "description": "Task ID for N6 closure (optional; omit for governance batch updates)"
+          },
+          "governance_root": {
+            "type": "string",
+            "description": "Governance workspace root (defaults to auto-discovery)"
+          },
+          "workspace_root": {
+            "type": "string",
+            "description": "Product repo root for schema resolution (defaults to ~/projects/lybra)"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "AIPOS-F79: whitelist of paths relative to the governance root (file or directory; CLI: repeat --paths). When given, ONLY these are staged via git add -- <paths>; add -A is never used. Any path outside the governance root (including other projects, absolute paths, .. escapes, symlinks resolving outside) rejects the whole call. Mandatory for every project other than lybra's own workspace."
+          },
+          "paths_file": {
+            "type": "string",
+            "description": "AIPOS-F79: file with one whitelist path per line (blank and # lines ignored). Same implementation as paths; mutually exclusive with paths."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "AIPOS-F79: validate and emit commit_manifest (files grouped as modified/added/deleted/untracked_selected) WITHOUT touching the scene: no git add/reset/stash. Without paths, lists everything git add -A -- . would swallow and warns with the untracked count."
+          },
+          "no_push": {
+            "type": "boolean",
+            "description": "Commit but do not push (default: push via F69 flow)"
+          },
+          "message": {
+            "type": "string",
+            "description": "Custom commit message (default auto-generated)"
+          },
+          "json": {
+            "type": "boolean",
+            "description": "Emit the result object as JSON (includes selected_paths, commit_manifest, rejected_paths / pre_staged_outside when applicable)"
+          }
+        },
+        "required": [
+          "actor"
+        ],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "0": "PASS — committed (and pushed unless no_push), or no-op (nothing to commit within the selection), or dry_run manifest emitted",
+        "1": "BLOCK/FAIL — e.g. paths outside governance root (rejected_paths), pre-staged files outside --paths (pre_staged_outside), N6 completeness missing, staged set != manifest, pre-commit guardrail (AIPOS-R6M) rejection, post-commit git show != manifest, push/verification failure",
+        "2": "usage error — argparse rejected the arguments (unknown flag / missing --actor)"
+      }
     }
   }
 }

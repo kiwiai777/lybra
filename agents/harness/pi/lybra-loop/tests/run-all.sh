@@ -591,6 +591,16 @@ else
   overall=1
 fi
 
+# AIPOS-F79: governance_commit 精确批次提交——显式 --paths 白名单+dry-run 清单不动现场+正式提交只含选定文件+R6M 护栏照旧
+echo
+echo "── tests/test_governance_commit_f79.py (治理落库精确批次 --paths) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_governance_commit_f79.py" -v --tb=short; then
+  echo "✓ tests/test_governance_commit_f79.py PASS"
+else
+  echo "✗ tests/test_governance_commit_f79.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F74: 交回自检判据⑤分支合规+存量卡机器区重生成+deploy空区间授权洞
 echo
 echo "── tools/aipos_cli/tests/test_aipos_f74.py (判据⑤分支合规+机器区重生成+deploy授权) ────────────────────────────────────────────────────"
