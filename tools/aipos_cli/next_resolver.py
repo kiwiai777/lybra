@@ -124,37 +124,149 @@ def _resolve_worktree_root(workspace_root: Path, code_repo: Path) -> Path:
     return Path(chosen.replace("{code_repo}", str(code_repo))).expanduser()
 
 
-def _return_artifact_path(workspace_root: Path, task_id: str) -> Path:
-    """执行体产物路径: 读 transitions N2.artifact.location(唯一声明), 相对治理根。"""
-    template = str(_transition_node("N2").get("artifact", {}).get("location") or "").strip()
-    if not template:
+def _artifact_ingest_declaration() -> dict[str, Any]:
+    """AIPOS-F78 件④: 读 transitions.schema.json 顶层 artifact_ingest(文件候选/必填 frontmatter 的唯一声明)。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("transitions", REPO_ROOT).get("artifact_ingest")
+    if not isinstance(decl, dict) or "return" not in decl or "verdict" not in decl:
+        raise SchemaLoadError("transitions.schema.json artifact_ingest(return/verdict 落点与必填字段)未声明")
+    return decl
+
+
+def _project_paths(workspace_root: Path) -> dict[str, Any]:
+    """AIPOS-F78 件④: 项目落点声明(project.json paths, 缺省=现行路径)——唯一读取口 workspace_config.project_paths。"""
+    from tools.aipos_cli.workspace_config import project_paths
+
+    return project_paths(workspace_root)
+
+
+def _pick_candidate(directory: Path, candidates: list[str], *, ready: Any = None) -> Path | None:
+    """按候选顺序取首个存在的文件; 通配候选取 mtime 最新; ready(path) 谓词可选(骨架/无 verdict 不算)。"""
+    if not directory.is_dir():
+        return None
+    for cand in candidates:
+        cand = str(cand)
+        if any(ch in cand for ch in "*?["):
+            matches = sorted((p for p in directory.glob(cand) if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)
+        else:
+            matches = [directory / cand] if (directory / cand).is_file() else []
+        for path in matches:
+            if ready is None or ready(path):
+                return path
+    return None
+
+
+def return_artifact_dir(workspace_root: Path, task_id: str) -> Path:
+    """执行体 Return 落点目录 = <paths.return_root>/<task_id>(声明驱动, lybra 默认 task_cards/<ID>)。"""
+    return Path(_project_paths(workspace_root)["return_root"]) / task_id
+
+
+def find_return_artifact(workspace_root: Path, task_id: str) -> Path | None:
+    """AIPOS-F78 件④: 按项目声明找执行体 Return 文件(候选序读 transitions artifact_ingest.return.return_file_candidates)。"""
+    cands = list(_artifact_ingest_declaration()["return"].get("return_file_candidates") or [])
+    if not cands:
         from tools.schema_loader import SchemaLoadError
 
-        raise SchemaLoadError("transitions.schema.json N2.artifact.location 未声明")
-    return workspace_root / template.replace("{task_id}", task_id)
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.return.return_file_candidates 未声明")
+    return _pick_candidate(return_artifact_dir(workspace_root, task_id), cands)
+
+
+def _return_artifact_path(workspace_root: Path, task_id: str) -> Path:
+    """执行体产物路径: 已落盘的 Return 文件; 未落盘时返回声明位默认文件(首个非通配候选)。"""
+    found = find_return_artifact(workspace_root, task_id)
+    if found is not None:
+        return found
+    cands = list(_artifact_ingest_declaration()["return"].get("return_file_candidates") or [])
+    first = next((str(c) for c in cands if not any(ch in str(c) for ch in "*?[")), "RETURN.md")
+    return return_artifact_dir(workspace_root, task_id) / first
+
+
+def executor_artifact_watch(workspace_root: Path, task_id: str) -> tuple[Path, list[str]]:
+    """AIPOS-F78: loop 等待执行体产物的 (watch 根, 相对 glob 列表)——落点读声明; 声明根在治理根外时以落点根为 watch 根。"""
+    directory = return_artifact_dir(workspace_root, task_id)
+    cands = [str(c) for c in (_artifact_ingest_declaration()["return"].get("return_file_candidates") or [])]
+    try:
+        rel = directory.resolve().relative_to(Path(workspace_root).resolve())
+        return Path(workspace_root), [str(rel / c) for c in cands]
+    except ValueError:
+        return directory.parent, [f"{directory.name}/{c}" for c in cands]
+
+
+def verdict_artifact_dir(workspace_root: Path, audit_task_id: str) -> Path:
+    """审计报告落点目录 = <paths.verdict_root>/<audit_task_id>(声明驱动, lybra 默认 task_cards/<ID>R)。"""
+    return Path(_project_paths(workspace_root)["verdict_root"]) / audit_task_id
 
 
 def _audit_report_candidates(workspace_root: Path, audit_task_id: str) -> list[Path]:
-    """审计体产物候选: 读 transitions N4.audit_report.location_candidates(AIPOS-F37 唯一声明), 相对治理根。"""
-    cands = _transition_node("N4").get("audit_report", {}).get("location_candidates") or []
-    return [workspace_root / str(c).replace("{audit_task_id}", audit_task_id) for c in cands]
+    """审计体产物候选: 落点根读项目声明(verdict_root), 文件候选读 transitions artifact_ingest.verdict.verdict_file_candidates
+    (与 N4.audit_report.location_candidates 同序: RETURN.md 优先, 回退 audit_report.md)。"""
+    directory = verdict_artifact_dir(workspace_root, audit_task_id)
+    cands = list(_artifact_ingest_declaration()["verdict"].get("verdict_file_candidates") or [])
+    out: list[Path] = []
+    for cand in cands:
+        cand = str(cand)
+        if any(ch in cand for ch in "*?["):
+            if directory.is_dir():
+                out.extend(sorted((p for p in directory.glob(cand) if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True))
+        else:
+            out.append(directory / cand)
+    return out
 
 
-def _driver_actor(workspace_root: Path, fallback: str = "advisor") -> str:
-    """驱动方身份: 治理根 .lybra/role 的 instance(工位声明), 缺省 fallback。读失败精确捕获 + warning。"""
+def _driver_token_instance(workspace_root: Path, connection_json: str | None = None) -> str:
+    """驱动方 token 绑定的实例: connection.json 中 role_class==roles.schema driver.role_class 的 token 的 agent_instance。"""
     import json
 
-    role_file = workspace_root / ".lybra" / "role"
-    if not role_file.is_file():
-        return fallback
+    from tools.aipos_cli.two_phase_shell_factory import driver_role_class
+
+    conn = connection_json or _find_connection_json(workspace_root)
+    if not conn or not Path(conn).is_file():
+        return ""
     try:
-        role_data = json.loads(role_file.read_text(encoding="utf-8"))
+        tokens = json.loads(Path(conn).read_text(encoding="utf-8")).get("tokens") or []
     except (OSError, ValueError) as exc:
         import sys
 
-        print(f"Warning: {role_file} unreadable, driver actor falls back to {fallback}: {exc}", file=sys.stderr)
-        return fallback
-    return str(role_data.get("instance") or role_data.get("role") or fallback)
+        print(f"Warning: {conn} unreadable, driver instance unresolved: {exc}", file=sys.stderr)
+        return ""
+    wanted = driver_role_class()
+    for tok in tokens:
+        if not isinstance(tok, dict):
+            continue
+        role_class = str(tok.get("role_class") or tok.get("role") or "").strip()
+        if role_class == wanted:
+            return str(tok.get("agent_instance") or "").strip()
+    return ""
+
+
+def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connection_json: str | None = None) -> str:
+    """驱动方身份(AIPOS-F78 前置零②: 禁回退占位 advisor)。
+
+    顺序: ① 治理根 .lybra/role 的 instance(工位声明) → ② connection.json 驱动方 token 绑定的 agent_instance
+    → ③ 调用方显式 fallback(仅靶场/显式传入) → 解析不到返回 ""(调用方 fail-closed: 不可推导 + 点名缺项)。
+    读失败精确捕获 + warning。
+    """
+    import json
+
+    role_file = workspace_root / ".lybra" / "role"
+    if role_file.is_file():
+        try:
+            role_data = json.loads(role_file.read_text(encoding="utf-8"))
+            instance = str(role_data.get("instance") or "").strip()
+            if instance:
+                return instance
+        except (OSError, ValueError) as exc:
+            import sys
+
+            print(f"Warning: {role_file} unreadable, driver actor unresolved from role file: {exc}", file=sys.stderr)
+    instance = _driver_token_instance(workspace_root, connection_json)
+    if instance:
+        return instance
+    return str(fallback or "")
+
+
+DRIVER_ACTOR_MISSING = "驱动方身份(治理根 .lybra/role 的 instance, 或 connection.json 驱动方 token 的 agent_instance)"
 
 
 def _action_type_for_command(command: str) -> str:
@@ -288,19 +400,20 @@ def _check_return_artifact(workspace_root: Path, task_id: str) -> bool:
 
 
 def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
-    """审计体产物就绪判据(唯一): 候选读 transitions N4.audit_report.location_candidates
+    """审计体产物就绪判据(唯一): 落点根读项目声明(verdict_root), 文件候选读 transitions artifact_ingest.verdict
     (RETURN.md 优先, 回退 audit_report.md), 取首个 frontmatter 含 `verdict` 的文件;
     兼容旧命名 VERDICT-<ID>R.md。骨架 RETURN.md(无 verdict)不算。返回路径或 None。"""
     if not task_id.upper().endswith("R"):
         return None
-    task_cards_root = _resolve_governance_path_with_relative("task_cards", workspace_root)
-    task_work_dir = task_cards_root / task_id
+    task_work_dir = verdict_artifact_dir(workspace_root, task_id)
     candidates = list(_audit_report_candidates(workspace_root, task_id))
     candidates.append(task_work_dir / f"VERDICT-{task_id}.md")
     candidates.append(task_work_dir / f"verdict-{task_id.lower()}.md")
+    seen: set[Path] = set()
     for cand in candidates:
-        if not cand.is_file():
+        if cand in seen or not cand.is_file():
             continue
+        seen.add(cand)
         fm = _read_frontmatter(cand)
         if str(fm.get("verdict") or "").strip():
             return cand
@@ -331,42 +444,43 @@ def _extract_return_summary(workspace_root: Path, task_id: str) -> str | None:
     """
     try:
         return_path = _return_artifact_path(workspace_root, task_id)
-        
+
         if not return_path.is_file():
             return None
-        
-        content = return_path.read_text(encoding="utf-8")
-        
-        # 查找「一句话结论」节
-        lines = content.split("\n")
-        in_summary_section = False
-        for i, line in enumerate(lines):
-            if "一句话结论" in line or "## 一句话" in line:
-                in_summary_section = True
-                continue
-            if in_summary_section:
-                # 跳过空行
-                if not line.strip():
-                    continue
-                # 遇到下一个标题,结束
-                if line.startswith("##"):
-                    break
-                # 找到内容
-                if line.strip():
-                    # 去掉 **完成** 等格式标记
-                    summary = line.strip().lstrip("*").rstrip("*").strip()
-                    # 去掉句号
-                    summary = summary.rstrip("。")
-                    if summary.startswith(_RETURN_PLACEHOLDER_PREFIX):
-                        return None  # 骨架占位, 未交回
-                    return summary
-        
-        return None
+
+        return extract_return_summary_text(return_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError) as exc:
         import sys
 
         print(f"Warning: RETURN.md unreadable for {task_id}: {exc}", file=sys.stderr)
         return None
+
+
+def extract_return_summary_text(content: str) -> str | None:
+    """从 Return 正文提取「一句话结论」(唯一解析; 推导核与 artifact ingest 共用)。骨架占位 → None。"""
+    lines = content.split("\n")
+    in_summary_section = False
+    for line in lines:
+        if "一句话结论" in line or "## 一句话" in line:
+            in_summary_section = True
+            continue
+        if in_summary_section:
+            # 跳过空行
+            if not line.strip():
+                continue
+            # 遇到下一个标题,结束
+            if line.startswith("##"):
+                break
+            # 找到内容
+            if line.strip():
+                # 去掉 **完成** 等格式标记
+                summary = line.strip().lstrip("*").rstrip("*").strip()
+                # 去掉句号
+                summary = summary.rstrip("。")
+                if summary.startswith(_RETURN_PLACEHOLDER_PREFIX):
+                    return None  # 骨架占位, 未交回
+                return summary
+    return None
 
 
 def _resolve_active_policy(workspace_root: Path, task_id: str, role: str = "exec") -> str | None:
@@ -515,6 +629,68 @@ def _build_copyable_command(
             parts.append(f"--{k} {v}")
 
     return " ".join(parts)
+
+
+def required_return_frontmatter() -> list[str]:
+    """Return 必填 frontmatter 键(唯一声明: transitions artifact_ingest.return.required_frontmatter)。"""
+    keys = list(_artifact_ingest_declaration()["return"].get("required_frontmatter") or [])
+    if not keys:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.return.required_frontmatter 未声明")
+    return [str(k) for k in keys]
+
+
+def missing_return_frontmatter(frontmatter: dict[str, Any]) -> list[str]:
+    """缺失的 Return 必填 frontmatter 键列表(空值/占位视为缺)。"""
+    missing = []
+    for key in required_return_frontmatter():
+        value = str(frontmatter.get(key) or "").strip()
+        if not value or value.startswith(_RETURN_PLACEHOLDER_PREFIX) or value.startswith("<"):
+            missing.append(key)
+    return missing
+
+
+def build_return_command_from_artifact(
+    workspace_root: Path,
+    task_id: str,
+    *,
+    claimer: str,
+    owner_policy_ref: str | None,
+    connection_json: str | None,
+    result_summary: str,
+    return_path: Path,
+) -> str:
+    """AIPOS-F78 件③: 由 Return 文件派生 `lybra queue return --confirm` 命令(推导核与 artifact ingest 共用, 禁第二路径)。
+
+    completion_report_ref = Return 相对治理根路径; artifact_refs = [<branch>@<commit_sha>]; actual_model = frontmatter.model。
+    """
+    import json as _json
+
+    fm = _read_frontmatter(return_path)
+    try:
+        report_ref = str(Path(return_path).resolve().relative_to(Path(workspace_root).resolve()))
+    except ValueError:
+        report_ref = str(return_path)
+    extra: dict[str, str] = {"result-summary": _json.dumps(result_summary, ensure_ascii=False)}
+    extra["completion-report-ref"] = report_ref
+    branch = str(fm.get("branch") or "").strip()
+    commit_sha = str(fm.get("commit_sha") or "").strip()
+    if branch and commit_sha:
+        extra["artifact-refs"] = "'" + _json.dumps([f"{branch}@{commit_sha}"]) + "'"
+    model = str(fm.get("model") or "").strip()
+    if model:
+        extra["actual-model"] = _json.dumps(model, ensure_ascii=False)
+    return _build_copyable_command(
+        verb_base="return",
+        task_id=task_id,
+        actor=claimer,
+        agent_instance=claimer,
+        autonomy_mode="Supervised",
+        owner_policy_ref=owner_policy_ref,
+        connection_json=connection_json,
+        extra_args=extra,
+    )
 
 
 def _build_audit_dispatch_command(
@@ -778,38 +954,74 @@ def derive_next_step(
             
             # N5→N6: 有 finalization 但无 closure → close
             if has_finalization and not latest_closure:
-                # AIPOS-F73C前置零之一: closure_evidence 从记录自填三字段
+                # AIPOS-F73C前置零之一 + F78 前置零③: closure_evidence 从记录自填三字段, 三字段齐才派生
                 closure_evidence = {}
-                
-                # 1. finalize_commit_hash: 从 finalization 记录读取
+
+                # 1. finalize_commit_hash: 从 finalization 记录读取 merge_commit(F78 声明字段), 兼容 commit/commit_hash
+                fin_fm: dict[str, Any] = {}
                 if finalizations_dir.is_dir():
                     finalization_files = sorted(finalizations_dir.glob("finalization_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
                     if finalization_files:
                         fin_fm = _read_frontmatter(finalization_files[0])
-                        if fin_fm.get("commit_hash"):
-                            closure_evidence["finalize_commit_hash"] = fin_fm["commit_hash"]
-                        if fin_fm.get("finalize_ref"):
-                            closure_evidence["finalize_return_ref"] = fin_fm["finalize_ref"]
-                
+                        merge_commit = str(fin_fm.get("merge_commit") or fin_fm.get("commit") or fin_fm.get("commit_hash") or "").strip()
+                        if merge_commit:
+                            closure_evidence["finalize_commit_hash"] = merge_commit
+
                 # 2. finalize_return_ref: 从 returns 记录读取
                 returns_dir = _resolve_governance_path_with_relative("records", workspace_root) / "returns" / task_id
                 if returns_dir.is_dir():
                     return_files = sorted(returns_dir.glob("return_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
                     if return_files:
                         ret_fm = _read_frontmatter(return_files[0])
-                        if ret_fm.get("return_id") and "finalize_return_ref" not in closure_evidence:
+                        if ret_fm.get("return_id"):
                             closure_evidence["finalize_return_ref"] = ret_fm["return_id"]
-                
+
                 # 3. verdict_ref: 从 audit_verdicts 记录读取
                 if latest_verdict and latest_verdict.get("verdict_id"):
                     closure_evidence["verdict_ref"] = latest_verdict["verdict_id"]
-                
+
+                missing_evidence = [
+                    f"{key}({src})"
+                    for key, src in (
+                        ("finalize_commit_hash", "finalization 记录 merge_commit"),
+                        ("finalize_return_ref", "return 记录 return_id"),
+                        ("verdict_ref", "裁决记录 verdict_id"),
+                    )
+                    if not closure_evidence.get(key)
+                ]
+                if missing_evidence:
+                    return {
+                        "task_id": task_id,
+                        "derivable": False,
+                        "current_node": "finalize",
+                        "current_state": "claimed",
+                        "triggered_by": "advisor",
+                        "command": "",
+                        "verb": "lybra_queue_close_dry_run",
+                        "missing_records": missing_evidence,
+                        "suggested_action": "补齐记录后重推导(finalization 记录须含 merge_commit: transitions N5.record.merge_commit)",
+                        "notes": "N5→N6: closure_evidence 三字段未齐, 不派生 close(AIPOS-F78 前置零③)",
+                    }
+
                 import json
                 closure_evidence_json = json.dumps(closure_evidence)
-                
-                # AIPOS-F73C前置零之一: actor 取工位 .lybra/role 实例(驱动方), 缺省 advisor(单一实现 _driver_actor)
+
+                # AIPOS-F73C前置零之一 + F78 前置零②: actor=驱动方实例(单一实现 _driver_actor), 解析不到即不可推导(禁占位)
                 actor = _driver_actor(workspace_root)
-                
+                if not actor:
+                    return {
+                        "task_id": task_id,
+                        "derivable": False,
+                        "current_node": "finalize",
+                        "current_state": "claimed",
+                        "triggered_by": "advisor",
+                        "command": "",
+                        "verb": "lybra_queue_close_dry_run",
+                        "missing_records": [DRIVER_ACTOR_MISSING],
+                        "suggested_action": "在治理根 .lybra/role 声明 instance, 或 connection.json 驱动方 token 绑定 agent_instance",
+                        "notes": "N5→N6: 驱动方身份解析不到, 不派生 close(AIPOS-F78 前置零②: 禁占位 advisor)",
+                    }
+
                 cmd = _build_close_command(
                     task_id=task_id,
                     actor=actor,
@@ -863,9 +1075,23 @@ def derive_next_step(
                             "suggested_action": "在治理根 project.json 声明 code_repo(lybra project set-repo), 再推导 finalize",
                             "notes": f"N4→N5: 裁决 {verdict_result}, 但产品仓根未声明, 不可派生 finalize 命令",
                         }
+                    finalize_actor = _driver_actor(workspace_root)
+                    if not finalize_actor:
+                        return {
+                            "task_id": task_id,
+                            "derivable": False,
+                            "current_node": "audit_verdict",
+                            "current_state": "claimed",
+                            "triggered_by": "advisor",
+                            "command": "",
+                            "verb": "lybra_finalize",
+                            "missing_records": [DRIVER_ACTOR_MISSING],
+                            "suggested_action": "在治理根 .lybra/role 声明 instance, 或 connection.json 驱动方 token 绑定 agent_instance",
+                            "notes": f"N4→N5: 裁决 {verdict_result}, 但驱动方身份解析不到, 不派生 finalize(AIPOS-F78 前置零②)",
+                        }
                     cmd = _build_finalize_command(
                         task_id=task_id,
-                        actor=_driver_actor(workspace_root),
+                        actor=finalize_actor,
                         code_repo_root=code_repo_root,
                         governance_root=workspace_root,
                     )
@@ -989,17 +1215,35 @@ def derive_next_step(
                     "suggested_action": "检查 RETURN.md 是否包含『一句话结论』节",
                     "notes": "RETURN.md 格式不完整,推导不出",
                 }
-            
+
+            # AIPOS-F78 件③: Return 必填 frontmatter(transitions artifact_ingest.return.required_frontmatter)缺 = 不可推导
+            # (action=artifact_invalid, loop 据此 exit 4 而非空等), 齐则派生与 ingest 同一条 return 命令
+            return_path = _return_artifact_path(workspace_root, task_id)
+            missing_fm = missing_return_frontmatter(_read_frontmatter(return_path))
+            if missing_fm:
+                return {
+                    "task_id": task_id,
+                    "derivable": False,
+                    "current_node": "claim",
+                    "current_state": "claimed",
+                    "triggered_by": "executor",
+                    "command": "",
+                    "verb": "lybra_queue_return_dry_run",
+                    "missing_records": [f"Return frontmatter 缺 {k}" for k in missing_fm],
+                    "suggested_action": f"执行体在 {return_path} 的 frontmatter 补齐 {', '.join(missing_fm)}(声明: transitions.schema artifact_ingest.return.required_frontmatter)",
+                    "notes": "Return 已落盘但必填 frontmatter 不齐, 产品无法铸交回记录(AIPOS-F78 件③ fail-closed)",
+                    "action": {"type": "artifact_invalid", "card": task_id, "path": str(return_path)},
+                }
+
             policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
-            cmd = _build_copyable_command(
-                verb_base="return",
-                task_id=task_id,
-                actor=claimer,
-                agent_instance=claimer,
-                autonomy_mode="Supervised",
+            cmd = build_return_command_from_artifact(
+                workspace_root,
+                task_id,
+                claimer=claimer,
                 owner_policy_ref=policy_ref,
                 connection_json=conn_arg,
-                extra_args={"result-summary": f'"{result_summary}"'},
+                result_summary=result_summary,
+                return_path=return_path,
             )
             return {
                 "task_id": task_id,
@@ -1442,13 +1686,34 @@ def _execute_claim_with_role_token(
             "output": "",
         }
     
-    # 2. AIPOS-F73C件⑥返工: token 固定为 advisor，actor 为该卡实例
+    # 2. AIPOS-F73C件⑥返工 + F78 前置零①: token=驱动方(roles.schema driver), actor/agent_instance=该卡实例。
+    #    claim 的 Supervised confirm 索 owner_confirm(驱动方 token 无此 scope) → 须由 Owner 信封
+    #    (owner_autonomy_policy, F73D 已接)一阶段放行: 找覆盖本卡与驱动方身份的信封, 带 PreAuthorized + policy id。
     conn_arg = f"--connection-json {connection_json}" if connection_json else ""
-    policy_ref = _resolve_active_policy(workspace_root, task_id, role="advisor")
+    from tools.aipos_cli.loop_driver import DRIVER_ROLE, find_envelope  # 延迟导入(loop_driver 依赖本模块)
+
+    driver_actor = _driver_actor(workspace_root, fallback=DRIVER_ROLE, connection_json=connection_json)
+    policy, envelope_reasons = find_envelope(workspace_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor)
+    if policy is not None:
+        policy_ref = str(policy.get("policy_id"))
+        mode_arg = "--autonomy-mode PreAuthorized"
+    else:
+        # 无信封: 仍派生 Supervised 命令(门会索 owner_confirm 并拒), 拒因原文随 output 带出, 不静默
+        policy_ref = _resolve_active_policy(workspace_root, task_id, role="advisor")
+        mode_arg = ""
     policy_arg = f"--owner-policy-ref {policy_ref}" if policy_ref else ""
-    
-    # 命令: 使用 advisor token (connection.json 默认 role="advisor")
-    command = f"lybra queue claim --task-id {task_id} --actor {assigned_to} --agent-instance {assigned_to} {policy_arg} {conn_arg} --confirm".strip()
+
+    command = f"lybra queue claim --task-id {task_id} --actor {assigned_to} --agent-instance {assigned_to} {mode_arg} {policy_arg} {conn_arg} --confirm"
+    command = " ".join(command.split())
+    if policy is None:
+        return {
+            "ok": False,
+            "action_type": "claim",
+            "message": "claim 阻塞: 无覆盖本卡与驱动方身份的 Owner 信封(驱动方 token 无 owner_confirm, Supervised 认领必撞)",
+            "command": command,
+            "exit_code": 5,
+            "output": "\n".join(f"  - {r}" for r in envelope_reasons) or "5_tasks/policies/ 下没有任何信封",
+        }
     
     # 4. 执行 claim
     try:
@@ -1613,7 +1878,23 @@ def execute_derived_action(
                 "exit_code": 1,
                 "output": f"Branch card/{task_id} has no commits relative to main. Cannot return without commits.",
             }
-    
+
+    # AIPOS-F78 件③: return/verdict 步经产物入口(artifact_ingest.ingest_task_artifact): 读项目声明落点找 Return/裁决报告,
+    # 校验必填 frontmatter 与分支 tip==commit_sha, 通过后才执行同一条薄壳命令(单一入口, 禁第二 return/verdict 路径)
+    if action_type in ("return", "verdict"):
+        from tools.aipos_cli.artifact_ingest import validate_task_artifact
+
+        check = validate_task_artifact(task_id, workspace_root)
+        if not check.get("ok"):
+            return {
+                "ok": False,
+                "action_type": action_type,
+                "message": f"{action_type} 阻塞: 产物入口校验拒(AIPOS-F78 件③): {check.get('category')}",
+                "command": command,
+                "exit_code": int(check.get("exit_code") or 4),
+                "output": "\n".join(check.get("reasons") or []),
+            }
+
     # AIPOS-F73件②③: 每步过门零旁路 — 执行产品 CLI
     try:
         result = subprocess.run(

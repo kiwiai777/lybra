@@ -590,11 +590,12 @@ def _find_continuation_task(task_id: str, governance_root: Path) -> str | None:
     Returns:
         承接任务 ID，如果没有承接关系则返回 None
     """
-    # 查找任务卡（可能在 completed/claimed/pending 等目录）
+    # 查找任务卡（可能在 completed/claimed/pending/withdrawn/blocked 等目录）
+    # AIPOS-F78 前置零⑥: 世系扫描含 withdrawn(撤废卡带承接声明时其产物由续卡承接, F53 原只扫三目录 → 撤废卡不入世系不可结案)
     queue_root = governance_root / "5_tasks" / "queue"
     task_file = None
     
-    for status_dir in ["completed", "claimed", "pending"]:
+    for status_dir in ["completed", "claimed", "pending", "withdrawn", "blocked"]:
         potential = queue_root / status_dir / f"{task_id.lower()}.md"
         if potential.exists():
             task_file = potential

@@ -104,6 +104,54 @@
           "default": "{code_repo}/.worktrees"
         }
       }
+    },
+    "project_json": {
+      "description": "AIPOS-F78 件④: 项目落点声明——每个治理根 project.json 的 paths 段。Lybra 读声明找 Return/裁决报告/队列/台账, 禁写死 task_cards/…/RETURN.md; 缺 paths 段 = 用 default(=现行路径, 0 迁移)。chris 形项目(returns 在 5_tasks/records/returns/<ID>/) 只改声明值不迁目录。唯一读取口: workspace_config.project_paths()。",
+      "source_file": "project.json",
+      "schema": {
+        "project": {
+          "type": "string",
+          "required": true,
+          "description": "Project identifier"
+        },
+        "code_repo": {
+          "type": "string",
+          "required": false,
+          "description": "Product repo root (sole authority, ruling 6)"
+        },
+        "paths": {
+          "type": "object",
+          "required": false,
+          "description": "落点声明(相对治理根或绝对路径)。缺段/缺键取 default。",
+          "schema": {
+            "return_root": {
+              "type": "string",
+              "default": "task_cards",
+              "description": "执行体 Return 落点根: Return 文件在 <return_root>/<task_id>/ 下(候选文件名见 transitions.schema artifact_ingest.return_file_candidates)。lybra=task_cards(现行 task_cards/<ID>/RETURN.md); chris=5_tasks/records/returns"
+            },
+            "verdict_root": {
+              "type": "string",
+              "default": "task_cards",
+              "description": "审计报告落点根: 报告在 <verdict_root>/<audit_task_id>/ 下(候选见 transitions.schema artifact_ingest.verdict_file_candidates)。lybra=task_cards; chris=5_tasks/records/audit_verdicts"
+            },
+            "queue_root": {
+              "type": "string",
+              "default": "5_tasks/queue",
+              "description": "队列根(pending/claimed/completed/blocked/withdrawn 子目录)"
+            },
+            "task_cards_root": {
+              "type": "string",
+              "default": "task_cards",
+              "description": "任务台账根(归档 RETURN/AUDIT-REPORT/CLOSURE)"
+            },
+            "manual_gate_mode": {
+              "type": "boolean",
+              "default": false,
+              "description": "人肉 gate 项目(F73C 件①): 卡面保留认领与交回节、publish 不做门动词校验、ingest 不经门。兼容顶层 manual_gate_mode 键"
+            }
+          }
+        }
+      }
     }
   },
   "lybra_dir_authority": {

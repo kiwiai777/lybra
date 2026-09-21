@@ -36,6 +36,9 @@ def temp_workspace(tmp_path):
     (ws / "5_tasks" / "records" / "audit_verdicts").mkdir(parents=True)
     (ws / "5_tasks" / "records" / "finalizations").mkdir(parents=True)
     (ws / "5_tasks" / "records" / "closures").mkdir(parents=True)
+    # AIPOS-F78 前置零②: finalize/close 的 actor=驱动方实例(工位声明 .lybra/role), 占位 advisor 已退役
+    (ws / ".lybra").mkdir()
+    (ws / ".lybra" / "role").write_text(json.dumps({"role": "advisor", "instance": "advisor.lybra.test"}), encoding="utf-8")
     
     return ws
 
@@ -87,6 +90,7 @@ def _write_return_record(workspace, task_id, result_summary="完成"):
     frontmatter = f"""---
 event_type: return
 task_id: {task_id}
+return_id: return_{task_id}_20260908_010000_exec
 result_summary: {result_summary}
 timestamp: 2026-09-08T01:00:00Z
 ---
@@ -205,6 +209,7 @@ def _write_verdict_record(workspace, task_id, verdict="PASS"):
     frontmatter = f"""---
 event_type: verdict
 task_id: {task_id}
+verdict_id: verdict_{task_id}_20260908_030000
 verdict: {verdict}
 timestamp: 2026-09-08T03:00:00Z
 ---
@@ -224,6 +229,7 @@ def _write_finalization_record(workspace, task_id):
 event_type: finalization
 task_id: {task_id}
 finalize_ref: finalize_v1
+merge_commit: {"c" * 40}
 timestamp: 2026-09-08T04:00:00Z
 ---
 

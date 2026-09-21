@@ -10,7 +10,7 @@
 ⑥  grep: 无 sleep 自旋 / 无第二推导核 / 无 board_adapter 直调 / token 零出现
 前置一① finalize merge+push 成功即落 finalization 记录(deploy_status=deploy_failed), 声明在 transitions N5.record.deploy_status
 前置一② 推导核派生 finalize 命令带 --actor, --workspace-root=产品仓根, --governance-root=治理根; 模板 argparse 夹具
-前置二  `queue claim --confirm` 经 CLI 入口真正走到该分支: 无 ImportError, required_role_class 按卡 assigned_to 与注册表派生(禁尾字母启发式)
+前置二  `queue claim --confirm` 经 CLI 入口真正走到该分支: 无 ImportError; AIPOS-F78 前置零① 起 token=驱动方(roles.schema driver), actor=卡实例
 前置三  worktree 落点 = 产品仓根/.worktrees/<ID>(config.schema 声明), 不在治理根下
 """
 from __future__ import annotations
@@ -93,6 +93,8 @@ def gov(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     code_repo = tmp_path / "product"
     code_repo.mkdir()
     _write(root / "project.json", json.dumps({"project": "lybra", "code_repo": str(code_repo), "config_version": 1}))
+    # AIPOS-F78 前置零②: 驱动方身份读工位声明(.lybra/role instance), 禁回退占位 advisor
+    _write(root / ".lybra" / "role", json.dumps({"role": "advisor", "instance": DRIVER}))
     return root
 
 
@@ -121,7 +123,10 @@ def _policy(gov: Path, *, agent_or_role: str = DRIVER, expires: str = "2999-01-0
 
 
 def _substantive_return(task_id: str) -> str:
-    return f"# RETURN — {task_id}\n\n## 一句话结论\n完成。\n\n## 改动清单\n- x\n"
+    # AIPOS-F78 件③: Return 必填 frontmatter(commit_sha/tree_hash/branch/model, 声明 transitions artifact_ingest.return);
+    # 靶场 GateDouble 替代执行体, 不做 tip 核对(核对在 artifact_ingest 夹具 F78 中覆盖)
+    fm = f"---\ncommit_sha: {'a' * 40}\ntree_hash: {'b' * 40}\nbranch: card/{task_id}\nmodel: fixture-model\n---\n"
+    return fm + f"# RETURN — {task_id}\n\n## 一句话结论\n完成。\n\n## 改动清单\n- x\n"
 
 
 class GateDouble:
@@ -312,7 +317,7 @@ def test_f73d_item1_full_lifecycle_claimed_to_completed(gov: Path):
     assert (gov / "5_tasks" / "queue" / "completed" / f"{AUDIT.lower()}.md").is_file()
     # 派生命令原文: finalize 带 --actor 与两根; token 零出现
     fin = [s for s in res.steps if s.action_type == "finalize"][0]
-    assert f"--actor {DRIVER}" in fin.command or "--actor advisor" in fin.command
+    assert f"--actor {DRIVER}" in fin.command  # AIPOS-F78 前置零②: 禁占位 advisor
     assert f"--workspace-root {json.loads((gov / 'project.json').read_text())['code_repo']}" in fin.command
     assert f"--governance-root {gov}" in fin.command
     assert "token" not in text.lower().replace("token 永不上屏", "")
@@ -437,7 +442,7 @@ def test_f73d_pre1_item2_derived_finalize_uses_project_json_code_repo(gov: Path)
     assert d["derivable"] and d["verb"] == "lybra_finalize"
     code_repo = json.loads((gov / "project.json").read_text())["code_repo"]
     assert f"--workspace-root {code_repo}" in d["command"] and f"--governance-root {gov}" in d["command"]
-    assert "--actor advisor" in d["command"]  # 无 .lybra/role → 驱动方缺省 advisor
+    assert f"--actor {DRIVER}" in d["command"]  # AIPOS-F78 前置零②: 驱动方=工位声明实例, 占位 advisor 已退役
     assert str(gov) not in d["command"].split("--workspace-root")[1].split()[0], "治理根不得当产品仓"
 
 
@@ -521,16 +526,17 @@ def _fake_connection(tmp_path: Path, roles: list[str]) -> Path:
 
 
 def test_f73d_pre2_cli_claim_confirm_reaches_branch_and_derives_class_from_registry(gov: Path, tmp_path: Path):
-    # 卡 ID 以 R 结尾但指派给执行体 → 注册表判 executor(禁尾字母启发式); 连接文件只有 auditor → 报错点名 executor
+    # AIPOS-F78 前置零①: 账务动词一律驱动方 token(roles.schema driver.role_class=advisor), actor=卡实例。
+    # 连接文件只有 auditor/executor(已无账务 scope) → 报错点名驱动方角色类, 不再按卡 assigned_to 选 token
     _card(gov, "AIPOS-TESTR", "pending", assigned=EXEC)
-    conn = _fake_connection(tmp_path, ["auditor"])
+    conn = _fake_connection(tmp_path, ["auditor", "executor"])
     proc = _claim_via_cli(gov, "AIPOS-TESTR", conn)
     assert "ImportError" not in proc.stderr and "load_task_by_id" not in proc.stderr, proc.stderr
     assert proc.returncode == 1
-    assert "No role with class 'executor'" in proc.stderr, proc.stderr
-    # 审计体卡(ID 不以 R 结尾)→ auditor; 连接文件有 auditor → 过角色解析, 走到门连接(靶场无门 → 连接失败出声)
+    assert "No role with class 'advisor'" in proc.stderr and "驱动方" in proc.stderr, proc.stderr
+    # 连接文件有驱动方 token → 过角色解析, 走到门连接(靶场无门 → 连接失败出声); actor 仍是卡实例
     _card(gov, "AIPOS-TESTX", "pending", assigned=AUDITOR)
-    proc2 = _claim_via_cli(gov, "AIPOS-TESTX", conn)
+    proc2 = _claim_via_cli(gov, "AIPOS-TESTX", _fake_connection(tmp_path, ["advisor"]))
     assert "ImportError" not in proc2.stderr
     assert "No role with class" not in proc2.stderr, proc2.stderr
     assert "gate client init failed" in proc2.stderr or "cannot load" in proc2.stderr, proc2.stderr

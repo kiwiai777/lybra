@@ -591,6 +591,72 @@ def read_project_json(project_root: str | Path) -> dict[str, Any]:
     return load_workspace_config(path)
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F78 件④: 项目落点声明(project.json paths 段)的唯一读取口。
+# 声明表(键名/默认值)在 config.schema.json configuration_sources.project_json.schema.paths 一处;
+# 缺段/缺键取 default(=现行路径, 0 迁移)。推导核/loop/ingest/渲染器/骨架写入全部经此函数,
+# 禁写死 task_cards/…/RETURN.md 或 5_tasks/records/returns。
+# ---------------------------------------------------------------------------
+
+PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode")
+
+
+def _project_paths_declaration() -> dict[str, dict[str, Any]]:
+    """读 config.schema configuration_sources.project_json.schema.paths.schema(声明缺 = SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (
+        load_schema("config")
+        .get("configuration_sources", {})
+        .get("project_json", {})
+        .get("schema", {})
+        .get("paths", {})
+        .get("schema")
+    )
+    if not isinstance(decl, dict) or not decl:
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.paths.schema 未声明")
+    return decl
+
+
+def project_paths(governance_root: str | Path) -> dict[str, Any]:
+    """AIPOS-F78: 解析项目落点声明。返回 {return_root: Path, verdict_root: Path, queue_root: Path,
+    task_cards_root: Path, manual_gate_mode: bool, declared: {key: bool}}。
+
+    - 相对路径相对治理根; 绝对路径原样(chris 形声明用绝对路径)。
+    - manual_gate_mode: paths 段优先, 兼容顶层 project.json manual_gate_mode(F73C 件①)。
+    - project.json 读失败 = 精确捕获 + warning + 视为未声明(不静默吞)。
+    """
+    root = Path(governance_root)
+    decl = _project_paths_declaration()
+    try:
+        project = read_project_json(root)
+    except (OSError, ValueError) as exc:
+        import sys
+
+        print(f"Warning: project.json unreadable at {root}, using declared default paths: {exc}", file=sys.stderr)
+        project = {}
+    raw_paths = project.get("paths") if isinstance(project.get("paths"), dict) else {}
+    result: dict[str, Any] = {"declared": {}}
+    for key in PROJECT_PATH_KEYS:
+        spec = decl.get(key) or {}
+        default = spec.get("default")
+        declared = key in raw_paths and raw_paths.get(key) not in (None, "")
+        value = raw_paths.get(key) if declared else default
+        if key == "manual_gate_mode":
+            if not declared and "manual_gate_mode" in project:
+                value, declared = project.get("manual_gate_mode"), True
+            result[key] = bool(value)
+        else:
+            if value in (None, ""):
+                from tools.schema_loader import SchemaLoadError
+
+                raise SchemaLoadError(f"config.schema.json project_json.paths.{key} 无 default 且 project.json 未声明")
+            path = Path(str(value)).expanduser()
+            result[key] = path if path.is_absolute() else root / path
+        result["declared"][key] = declared
+    return result
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 

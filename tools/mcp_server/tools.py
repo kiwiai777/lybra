@@ -2064,6 +2064,25 @@ def lybra_draft_submit_confirm(arguments: dict[str, Any] | None = None) -> dict[
     return _tool_result(response, is_error=False)
 
 
+def _driver_token_identity(cap: dict[str, Any]) -> str | None:
+    """AIPOS-F78 前置零①: 请求 token 是否是声明的驱动方(roles.schema driver.role_class)。是 → 返回其角色类名(信封可按角色覆盖);
+    否 → None。声明缺失 = 出声 + None(存量行为)。"""
+    try:
+        from tools.aipos_cli.two_phase_shell_factory import driver_role_class
+
+        wanted = driver_role_class()
+    except Exception as exc:  # SchemaLoadError: 声明缺, 出声不吞, 走存量身份门
+        import sys
+
+        print(f"Warning: roles.schema driver 声明读取失败, 信封身份门按卡实例判定: {exc}", file=sys.stderr)
+        return None
+    role = str(cap.get("role") or "").strip()
+    role_class = str(cap.get("role_class") or "").strip() or role
+    if role_class == wanted:
+        return wanted
+    return None
+
+
 def _match_claim_envelope(
     repo_root: Path,
     *,
@@ -2115,14 +2134,24 @@ def _match_claim_envelope(
         t.update(extra)
         trace_envelope(t)
 
-    if not bound:
-        # Token has no agent_instance binding → PreAuthorized unavailable (backward-compatible).
-        _emit("identity_gate", None, "binding_absent", reason="token has no agent_instance binding")
-        return None, "binding_absent", None, None
-    if bound != canonical_agent_instance or bound != actor:
-        # Identity mismatch: claim self-report doesn't match token authority → fall back Supervised.
-        _emit("identity_gate", None, "binding_mismatch", reason="claim self-report does not match token-bound agent_instance")
-        return None, "binding_mismatch", None, None
+    # AIPOS-F78 前置零①: 账务动词由驱动方 token 提交(roles.schema driver.role_class), actor/agent_instance=卡实例。
+    # 驱动方身份 = token 绑定实例(或其 role_class); 信封 agent_or_role 覆盖驱动方即一阶段放行, 卡实例不参与身份判定。
+    driver_identity = _driver_token_identity(cap)
+    if driver_identity:
+        envelope_instance = bound or driver_identity
+        envelope_actor = envelope_instance
+        _emit("identity_gate", None, "driver_token", reason="ledger verb submitted by declared driver token; envelope identity = driver",
+              driver_identity=driver_identity)
+    else:
+        envelope_instance, envelope_actor = canonical_agent_instance, actor
+        if not bound:
+            # Token has no agent_instance binding → PreAuthorized unavailable (backward-compatible).
+            _emit("identity_gate", None, "binding_absent", reason="token has no agent_instance binding")
+            return None, "binding_absent", None, None
+        if bound != canonical_agent_instance or bound != actor:
+            # Identity mismatch: claim self-report doesn't match token authority → fall back Supervised.
+            _emit("identity_gate", None, "binding_mismatch", reason="claim self-report does not match token-bound agent_instance")
+            return None, "binding_mismatch", None, None
     policy = load_policy(repo_root, owner_policy_ref)
     if policy is None:
         _emit("policy_load", None, None, policy_loaded=False)
@@ -2147,11 +2176,11 @@ def _match_claim_envelope(
         task_id=str(snapshot.get("task_id") or task_id or ""),
         task_mode=str(snapshot.get("task_mode") or ""),
         project=str(snapshot.get("project") or ""),
-        agent_instance=canonical_agent_instance,
-        actor=actor,
+        agent_instance=envelope_instance,
+        actor=envelope_actor,
         now=datetime.now(timezone.utc),
         released_count=released,
-        claiming_role=claiming_role or None,
+        claiming_role=(driver_identity or claiming_role) or None,
     )
     _emit("final", owner_policy_ref if matched else None, None,
           policy_loaded=True, snapshot_loaded=True, queue_state=queue_state,

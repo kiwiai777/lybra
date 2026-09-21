@@ -205,7 +205,7 @@
       "artifact": {
         "description": "AIPOS-F73D: 执行体产物落点与就绪判据的唯一声明——推导核(next_resolver._check_return_artifact)与顾问驱动器 lybra loop 的 await 都读这里, 禁散落。",
         "location": "task_cards/{task_id}/RETURN.md",
-        "location_note": "与 N1.automation.return_skeleton.location 同一路径: 骨架由 claim 创建, 执行体只填不选址",
+        "location_note": "与 N1.automation.return_skeleton.location 同一路径: 骨架由 claim 创建, 执行体只填不选址。AIPOS-F78 件④: 本 location 只是 lybra 形默认值; 推导核/loop/ingest 一律经 workspace_config.project_paths() 读项目 project.json paths.return_root(缺省=task_cards) + artifact_ingest.return_file_candidates 找 Return, 禁写死本路径",
         "readiness": {
           "rule": "文件存在且非骨架: 「一句话结论」节首行非占位符(record_writer.build_return_skeleton_markdown 的 `(待填写` 前缀)",
           "not_ready_meaning": "骨架/占位 = 执行体尚未交回 → 推导核判 await_artifact, loop 继续经 agent watch 等待"
@@ -458,6 +458,11 @@
           "values": ["deployed", "deploy_failed", "skipped", "not_attempted"],
           "written_when": "merge/push 成功后的每一条出口(部署成功/部署失败/部署验证失败/无需部署)都写; merge 冲突或 push 失败不写",
           "writer": "finalize._ensure_finalization_record → finalization_record.write_finalization_record(deploy_status=...)"
+        },
+        "merge_commit": {
+          "description": "AIPOS-F78 前置零③: finalization 记录必含 merge_commit(卡分支 merge --no-ff 后 main 的 HEAD; 直提/已合并场景=finalize 时 HEAD)与 finalize_ref(记录 id)。推导核 N5→N6 派生 close 时读 merge_commit 填 closure_evidence.finalize_commit_hash, 读 return 记录填 finalize_return_ref, 读裁决填 verdict_ref——三字段齐才派生 close, 缺一即不可推导并点名缺项。",
+          "fields": ["merge_commit", "finalize_ref"],
+          "writer": "finalization_record.build_finalization_record"
         }
       },
       "deployment_record": {
@@ -848,6 +853,41 @@
       "close PASS 判定(queue_mutation)"
     ],
     "hand_written_policy": "手写文件对门彻底透明——不构成终态,不参与选取,不阻塞正规提交"
+  },
+  "artifact_ingest": {
+    "description": "AIPOS-F78 件③④: 产物入口唯一声明——执行引擎(pi/codex/claude-code)交回的是「分支 + Return 文件」, 产品 `lybra artifact ingest --task-id <ID>`(由 loop/next --run 触发, 非人用)按此声明找文件、校验必填 frontmatter 与分支 tip, 再走既有 queue return / audit-verdict 薄壳铸记录(禁第二 return/verdict 路径)。落点根读项目 project.json paths(config.schema configuration_sources.project_json.schema.paths), 本节只声明文件候选与必填字段。",
+    "single_implementation": "tools/aipos_cli/artifact_ingest.ingest_task_artifact (CLI: lybra artifact ingest; next_resolver.execute_derived_action 的 return/verdict 步经此入口)",
+    "return": {
+      "root_key": "return_root",
+      "location_pattern": "<return_root>/<task_id>/<candidate>",
+      "return_file_candidates": ["RETURN.md", "return-*.md", "return_*.md", "*.md"],
+      "candidate_rule": "按候选顺序取首个存在的; 通配候选取 mtime 最新; 骨架(一句话结论为占位)不算",
+      "required_frontmatter": ["commit_sha", "tree_hash", "branch", "model"],
+      "checks": [
+        "frontmatter 缺任一必填字段 = 拒(INGEST_FRONTMATTER_MISSING)并列出缺项与出口",
+        "git rev-parse <branch> == commit_sha (分支 tip 精确等于自述 sha), 否则拒(INGEST_TIP_MISMATCH)",
+        "git rev-parse <commit_sha>^{tree} == tree_hash, 否则拒(INGEST_TREE_MISMATCH)",
+        "「一句话结论」非占位, 否则拒(INGEST_SUMMARY_MISSING)"
+      ],
+      "submits_via": "lybra queue return --confirm(驱动方 token, actor=claim 记录实例, completion_report_ref=Return 相对路径, artifact_refs=[<branch>@<commit_sha>], actual_model=model)"
+    },
+    "verdict": {
+      "root_key": "verdict_root",
+      "location_pattern": "<verdict_root>/<audit_task_id>/<candidate>",
+      "verdict_file_candidates": ["RETURN.md", "audit_report.md", "audit-*.md", "verdict-*.md", "*.md"],
+      "candidate_rule": "取首个 frontmatter 含 verdict 的候选(N4.audit_report.location_priority 同序)",
+      "required_frontmatter": ["verdict", "commit_sha"],
+      "checks": [
+        "verdict ∈ N4.record.allowed_verdict_values",
+        "commit_sha == 被审卡分支 tip(git rev-parse card/<reviewed_task_id>), 否则拒(INGEST_TIP_MISMATCH): 审的必须是当前产物"
+      ],
+      "submits_via": "lybra audit-verdict --confirm(驱动方 token, artifact_subject 从被审分支 tip 取 commit_sha/tree_hash)"
+    },
+    "exit_codes": {
+      "0": "记录已落(既有薄壳 exit 0)",
+      "1": "薄壳/门拒(透传原文)",
+      "4": "声明缺/文件缺/frontmatter 缺/sha 不符(fail-closed, 输出缺项与出口)"
+    }
   },
   "envelope_guards": {
     "description": "AIPOS-F9 大项B: PreAuthorized 信封守卫声明——信封不匹配的每种原因都声明 next_step(找谁+做什么)。门响应原样带出,绝不手写散落文案。",

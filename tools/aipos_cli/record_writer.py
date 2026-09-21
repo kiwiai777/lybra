@@ -1376,7 +1376,29 @@ def build_return_skeleton_markdown(task_id: str) -> str:
     Returns:
         RETURN.md skeleton markdown content
     """
-    return f"""# RETURN — {task_id}
+    # AIPOS-F78 件③: 骨架带必填 frontmatter 占位(键名唯一声明 transitions artifact_ingest.return.required_frontmatter);
+    # 执行体填实值(分支 tip / tree / 分支名 / 实际模型), 产品 ingest 据此校验后铸交回记录。占位值不算已填。
+    try:
+        from tools.aipos_cli.next_resolver import required_return_frontmatter
+
+        fm_keys = required_return_frontmatter()
+    except Exception as exc:  # 声明缺失: 出声, 骨架不带 frontmatter(存量兼容方向)
+        import sys
+
+        print(f"Warning: artifact_ingest.return.required_frontmatter 声明读取失败, 骨架不带 frontmatter: {exc}", file=sys.stderr)
+        fm_keys = []
+    hints = {
+        "commit_sha": "(待填写: 卡分支 tip 的完整 40 位 sha)",
+        "tree_hash": "(待填写: git rev-parse <commit_sha>^{tree})",
+        "branch": f"(待填写: 卡分支名, 如 card/{task_id})",
+        "model": "(待填写: 实际模型自报, 如 claude-sonnet-5)",
+    }
+    frontmatter = ""
+    if fm_keys:
+        import json as _json
+
+        frontmatter = "---\n" + "\n".join(f"{k}: {_json.dumps(hints.get(k, '(待填写)'), ensure_ascii=False)}" for k in fm_keys) + "\n---\n"
+    return frontmatter + f"""# RETURN — {task_id}
 
 ## 一句话结论
 (待填写: 一句话概括任务完成情况)
