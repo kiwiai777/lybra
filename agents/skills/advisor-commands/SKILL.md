@@ -205,7 +205,28 @@ cd /home/kiwi/projects/lybra
 1. FOUNDATION-BACKLOG.md 本卡条目(工具生成)
 2. decision_log 指针(如有 Owner 裁定/仲裁/信封授权与吊销)
 3. stage_archive 快照(阶段关账时)
-4. 治理仓 push(push 是节点一部分,不 push = 没收口)
+4. 治理仓 push(push 是节点一部分,不 push = 没收口)—— 只经下面的 `lybra governance-commit`
+
+#### `lybra governance-commit`(治理收尾唯一提交口)
+**何时用**:治理仓落库(N6 收账 / 台账追加 / 裁定入档)。真相层唯一提交口,永不手敲 `git add`/`git commit`。
+**AIPOS-F79 铁律:先 `--dry-run` 看清单,再去掉 `--dry-run` 正式提交;他项目一律 `--paths`。**
+```bash
+# ① 预演:只读列出将提交的具体文件(modified/added/deleted/untracked_selected),不 add/不 reset/不 stash
+lybra governance-commit --governance-root <治理根> --actor advisor.<project>.<host> \
+  --paths governance/ORCHESTRATOR-RESUME.md --paths governance/decision_log/INDEX.md \
+  --dry-run --json
+# ② 正式提交(同一命令去掉 --dry-run):只 git add -- <paths>,提交后 git show --name-only HEAD 与清单逐条核对,再走 F69 fetch→rebase→push
+lybra governance-commit --governance-root <治理根> --actor advisor.<project>.<host> \
+  --paths governance/ORCHESTRATOR-RESUME.md --paths governance/decision_log/INDEX.md
+# 路径多时用清单文件(每行一路径,# 行忽略;与 --paths 二选一,同一实现)
+lybra governance-commit --governance-root <治理根> --actor advisor.<project>.<host> --paths-file /tmp/batch.txt
+```
+**规则**:
+- `--paths` 相对治理根(文件或目录,可重复);越出治理根/指向他项目/`.`(整根)一律拒(fail-closed,退出码 1,`rejected_paths` 列出)。
+- 预暂存文件:在 `--paths` 内 = 纳入清单;在 `--paths` 外 = 拒并列出(`pre_staged_outside`)。
+- **无 `--paths` 的整根提交(`git add -A -- .`)仅限 lybra 自身工作区;他项目(chris 等)一律 `--paths`**——无 `--paths` 的 `--dry-run` 会列出整根范围并 WARNING 标出未跟踪文件数。
+- AIPOS-R6M 文件级护栏(frontmatter/decision_log 只增/record_type)照旧对选定文件生效;禁用「清理/忽略/搬走历史材料」规避,不加 .gitignore。
+- 退出码:0=PASS(含无待收 no-op 与 dry-run);1=BLOCK/FAIL;2=参数用法错误。参数与退出码声明在 `schema/verbs.schema.json` `lybra_governance_commit`。
 
 ---
 

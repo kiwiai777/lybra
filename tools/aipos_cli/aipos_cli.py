@@ -2007,8 +2007,11 @@ def build_parser() -> argparse.ArgumentParser:
     governance_commit_parser.add_argument("--workspace-root", help="Product repo root (for schema resolution); defaults to ~/projects/lybra")
     governance_commit_parser.add_argument("--no-push", action="store_true", help="Commit but do not push (default: push)")
     governance_commit_parser.add_argument("--message", help="Custom commit message")
-    governance_commit_parser.add_argument("--dry-run", action="store_true", help="Validate without committing")
+    governance_commit_parser.add_argument("--dry-run", action="store_true", help="AIPOS-F79: validate and list the exact files that would be committed (read-only: no add/reset/stash)")
     governance_commit_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F79 件①: 显式白名单 — 给了即只 git add -- <paths>, 绝不 add -A; 越出治理根/他项目 = 拒
+    governance_commit_parser.add_argument("--paths", action="append", default=None, metavar="PATH", help="AIPOS-F79: whitelist path relative to governance root (file or dir; repeatable). Only these are staged (git add -- <paths>, never add -A). Paths outside the governance root are rejected. Mandatory for any project other than lybra's own workspace.")
+    governance_commit_parser.add_argument("--paths-file", default=None, metavar="FILE", help="AIPOS-F79: file with one whitelist path per line (blank/# lines ignored); mutually exclusive with --paths")
 
     # AIPOS-F67: lybra brief — 顾问真相派生(冷启动简报算出来,不写出来)
     brief_parser = subparsers.add_parser("brief", help="AIPOS-F67: 冷启动简报(阶段坐标+增量真相+在途三查+契约清单+新鲜度)")
@@ -3404,6 +3407,8 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 push=not args.no_push,
                 message=args.message,
+                paths=args.paths,
+                paths_file=args.paths_file,
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -3419,6 +3424,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Actor: {result['actor']}")
             print(f"Verdict: {verdict}")
             print(f"\nMessage: {result['message']}")
+            
+            # AIPOS-F79 件②: 文件清单(dry-run 为将提交; 正式提交为已提交并经 git show 校验)
+            manifest = result.get('commit_manifest')
+            if manifest:
+                print(f"\n=== 文件清单 ({manifest['mode']}, {manifest['counts']['total']} files) ===")
+                for f in manifest['files']:
+                    print(f"  {f['status']:<18} {f['path']}")
+                for w in manifest.get('warnings', []):
+                    print(f"  ! {w}")
             
             if result.get('operations'):
                 print("\nOperations:")
