@@ -492,6 +492,23 @@
           "description": "Cannot proceed"
         }
       ]
+    },
+    "harness": {
+      "description": "AIPOS-F78 件①: 执行引擎(harness)声明值域。card.schema fields.harness $enum; 缺省由 task_mode 派生(card.schema intent_face.harness.default_by_task_mode)。新 harness = 加一值 + 一个渲染模板, 零代码改动",
+      "values": [
+        {
+          "value": "pi",
+          "description": "pi 工位(开工提示三行, /go 复用)"
+        },
+        {
+          "value": "codex",
+          "description": "OpenAI Codex(Prompt.md + Plan.md 写入工作树根)"
+        },
+        {
+          "value": "claude-code",
+          "description": "Claude Code(CLAUDE.md 片段)"
+        }
+      ]
     }
   }
 }

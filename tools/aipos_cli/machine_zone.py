@@ -256,3 +256,130 @@ def validate_output_target_coverage(
         )
     
     return (len(blocking) == 0, blocking)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F78 件①: 意图面声明派生(harness / lane)——create/publish/regen 三口一函数。
+# 派生规则只声明在 card.schema.json intent_face 一处; 本模块只读不写死。
+# ---------------------------------------------------------------------------
+
+def intent_face_declaration(repo_root: Path | None = None) -> dict[str, Any]:
+    """读 card.schema intent_face(缺 = SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("card", repo_root).get("intent_face")
+    if not isinstance(decl, dict) or "harness" not in decl or "lane" not in decl:
+        raise SchemaLoadError("card.schema.json intent_face(harness/lane 派生表)未声明")
+    return decl
+
+
+def parse_output_target_paths(output_target: str) -> list[str]:
+    """从 output_target 文本解析路径片段(唯一解析函数: lane.paths 派生与交回判据 CHANGES_OUT_OF_SCOPE 共用)。
+
+    规则(与 F49 判据②原实现同口径): 取含 `/` 或 `.` 的 token(如 tools/aipos_cli/, tests/, schema/card.schema.json),
+    去重保序; 中文说明/括号内容不计。
+    """
+    import re
+
+    if not output_target:
+        return []
+    tokens = re.findall(r"([\w/._-]+(?:\.\w+)?)", str(output_target))
+    seen: list[str] = []
+    for tok in tokens:
+        if ("/" in tok or "." in tok) and tok not in seen and not tok.startswith("."):
+            seen.append(tok)
+    return seen
+
+
+def default_harness_for_task_mode(task_mode: str, repo_root: Path | None = None) -> str:
+    """harness 缺省: card.schema intent_face.harness.default_by_task_mode[task_mode](缺条目 = SchemaLoadError)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    table = intent_face_declaration(repo_root).get("harness", {}).get("default_by_task_mode") or {}
+    value = str(table.get(str(task_mode or "").strip()) or "").strip()
+    if not value:
+        raise SchemaLoadError(
+            f"card.schema.json intent_face.harness.default_by_task_mode 未声明 task_mode={task_mode!r} 的缺省 harness"
+        )
+    return value
+
+
+def derive_intent_declarations(
+    metadata: dict[str, Any],
+    governance_root: Path | None,
+    *,
+    product_root: Path | None = None,
+) -> dict[str, Any]:
+    """派生卡意图面的 harness 与 lane(缺则派生, 已有则原样保留)。
+
+    返回 {"harness": str, "lane": {repo, paths, roles}, "derived": [已派生的键], "blocking_reasons": [...]}:
+    - harness: 卡面值 ∈ allowed; 缺省 default_by_task_mode[task_mode]。
+    - lane.repo: 卡面 lane.repo → 治理根 project.json code_repo → 治理根自身。
+    - lane.paths: 卡面 lane.paths → parse_output_target_paths(output_target); 两者皆空 = LANE_REQUIRED。
+    - lane.roles: 卡面 lane.roles → assigned_to/agent_instance 经 roles 注册表解析出的角色类(解析不到 = [])。
+    """
+    decl = intent_face_declaration(product_root)
+    allowed = list(decl.get("harness", {}).get("allowed") or [])
+    blocking: list[str] = []
+    derived: list[str] = []
+
+    harness = str(metadata.get("harness") or "").strip()
+    if not harness:
+        harness = default_harness_for_task_mode(str(metadata.get("task_mode") or ""), product_root)
+        derived.append("harness")
+    if allowed and harness not in allowed:
+        blocking.append(
+            f"HARNESS_INVALID: harness={harness!r} 不在 card.schema intent_face.harness.allowed {allowed}。"
+            f"出口: 改为 {'|'.join(allowed)} 之一"
+        )
+
+    raw_lane = metadata.get("lane") if isinstance(metadata.get("lane"), dict) else {}
+    lane: dict[str, Any] = {}
+
+    repo = str(raw_lane.get("repo") or "").strip()
+    if not repo and governance_root is not None:
+        from tools.aipos_cli.workspace_config import read_project_json
+
+        try:
+            repo = str(read_project_json(governance_root).get("code_repo") or "").strip()
+        except (OSError, ValueError) as exc:
+            import sys
+
+            print(f"Warning: project.json unreadable at {governance_root}, lane.repo falls back to governance root: {exc}", file=sys.stderr)
+        if not repo:
+            repo = str(governance_root)
+    lane["repo"] = repo
+
+    paths = raw_lane.get("paths") if isinstance(raw_lane.get("paths"), list) else []
+    paths = [str(p).strip() for p in paths if str(p).strip()]
+    if not paths:
+        paths = parse_output_target_paths(str(metadata.get("output_target") or ""))
+        if paths:
+            derived.append("lane.paths")
+    if not paths:
+        blocking.append(
+            "LANE_REQUIRED: 卡面无 lane.paths 且 output_target 解析不出任何路径片段(card.schema intent_face.lane.missing_rule)。"
+            "出口: 在草稿 frontmatter 声明 lane: {repo, paths: [...], roles: [...]}, 或在 output_target 写明目录/文件路径"
+        )
+    lane["paths"] = paths
+
+    roles = raw_lane.get("roles") if isinstance(raw_lane.get("roles"), list) else []
+    roles = [str(r).strip() for r in roles if str(r).strip()]
+    if not roles:
+        try:
+            from tools.aipos_cli.draft_writer import _card_role_class
+
+            role_class = _card_role_class(metadata, governance_root)
+        except ImportError as exc:  # 产品仓损坏才会到这里, 出声不吞
+            import sys
+
+            print(f"Warning: role class resolver unavailable: {exc}", file=sys.stderr)
+            role_class = None
+        roles = [role_class] if role_class else []
+        if roles:
+            derived.append("lane.roles")
+    lane["roles"] = roles
+    if not raw_lane:
+        derived.append("lane")
+
+    return {"harness": harness, "lane": lane, "derived": derived, "blocking_reasons": blocking}

@@ -1638,6 +1638,54 @@
         "禁直调 board_adapter/queue_mutation 做门动作"
       ]
     },
+    "lybra_card_render": {
+      "description": "AIPOS-F78 件②: 单一渲染器——把卡的意图面(goal/lane/acceptance/prohibitions/milestones + 工作树/报告落点/卡路径)按 harness 渲染给任何执行引擎。同一源三输出: pi=开工提示三行(/go 复用); codex=Prompt.md+Plan.md 写入工作树根; claude-code=CLAUDE.md 片段。渲染物零门动词/零 token(grep lybra_ = 0)。落点全读项目声明(project.json paths)。",
+      "phase": "render",
+      "surface": ["cli"],
+      "cli_command": "lybra card render",
+      "single_implementation": "tools/aipos_cli/card_render.render_card (intent model 一份, harness 模板由 card.schema intent_face.harness.renderers 声明)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {"type": "string", "description": "卡 ID"},
+          "harness": {"type": "string", "$enum": "harness", "description": "目标引擎; 缺省=卡面 harness, 再缺省=card.schema intent_face.harness.default_by_task_mode[task_mode]"},
+          "workspace_root": {"type": "string", "description": "治理根; 缺省自发现"},
+          "out_dir": {"type": "string", "description": "codex/claude-code 输出目录; 缺省=卡工作树根(config.schema worktree_root/<ID>)"},
+          "stdout": {"type": "boolean", "description": "只打印不落盘"},
+          "json": {"type": "boolean", "description": "JSON 输出(文件名→内容)"}
+        },
+        "required": ["task_id"],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "0": "渲染成功",
+        "1": "卡不存在/声明缺失/harness 非法(输出原因)"
+      }
+    },
+    "lybra_artifact_ingest": {
+      "description": "AIPOS-F78 件③: 产物入口(单一 ingest, 由 loop/next --run 触发, 非人用): 读项目声明落点找 Return/裁决报告, 校验必填 frontmatter(commit_sha/tree_hash/branch/model)与分支 tip==commit_sha, 然后走既有 queue return / audit-verdict 薄壳(驱动方 token)。声明见 transitions.schema artifact_ingest。",
+      "phase": "ingest",
+      "surface": ["cli"],
+      "cli_command": "lybra artifact ingest",
+      "single_implementation": "tools/aipos_cli/artifact_ingest.ingest_task_artifact → next_resolver.execute_derived_action(既有薄壳)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {"type": "string", "description": "卡 ID(执行卡=Return 入口; R 卡=裁决入口)"},
+          "workspace_root": {"type": "string", "description": "治理根; 缺省自发现"},
+          "connection_json": {"type": "string", "description": "connection.json(驱动方 token, 永不上屏)"},
+          "dry_run": {"type": "boolean", "description": "只校验与打印将执行的薄壳命令, 不提交"},
+          "json": {"type": "boolean", "description": "JSON 输出"}
+        },
+        "required": ["task_id"],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "0": "记录已落",
+        "1": "薄壳/门拒(透传)",
+        "4": "声明缺/文件缺/frontmatter 缺/sha 不符(fail-closed)"
+      }
+    },
     "lybra_governance_commit": {
       "description": "AIPOS-R7A2/F69/F79: governance-repo commit — the ONLY commit path for the truth layer (advisor-side). F79: explicit --paths whitelist (git add -- <paths>, never add -A when given; paths outside the governance root or pointing at another project are rejected fail-closed); --dry-run lists the exact files that would be committed without touching the scene (read-only git status --porcelain / git diff --name-status; no add/reset/stash); after a real commit, git show --name-only HEAD is verified against that manifest. Whole-root mode (no --paths) is reserved for lybra's own workspace; every other project MUST pass --paths. Pre-staged files: inside --paths = accepted into the manifest, outside --paths = rejected and listed. AIPOS-R6M file-level guardrails (pre-commit hook) still apply to the selected files. CLI-only (surface=cli); push reuses the F69 fetch -> rebase -> push -> remote-verify flow.",
       "phase": "single",

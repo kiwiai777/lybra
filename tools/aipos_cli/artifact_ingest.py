@@ -297,6 +297,248 @@ def _read_nofollow(path: Path) -> bytes:
         return data
     finally:
         os.close(fd)
+
+
+# ===========================================================================
+# AIPOS-F78 件③: 产物入口(单一 ingest)—— `lybra artifact ingest --task-id <ID>`
+#
+# 执行引擎(pi/codex/claude-code)交回的是「分支 + Return 文件」; 产品按项目声明找文件、校验必填
+# frontmatter 与分支 tip, 再经既有薄壳(queue return / audit-verdict, 驱动方 token)铸记录。
+# 声明: transitions.schema.json artifact_ingest(文件候选/必填字段) + project.json paths(落点根)。
+# 命令构建与执行复用 next_resolver(推导核派生同一条命令, execute_derived_action 同一执行体), 禁第二路径。
+# 上面的 scratch ingestion(AIPOS-196a)是另一件事(confined worker 草稿区拷贝), 两者不互调。
+# ===========================================================================
+
+INGEST_EXIT_REJECTED = 4
+
+
+def _git_out(repo: Path, *argv: str) -> str | None:
+    import subprocess
+
+    try:
+        result = subprocess.run(["git", *argv], cwd=str(repo), capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        import sys
+
+        print(f"Warning: git {' '.join(argv)} failed in {repo}: {exc}", file=sys.stderr)
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _code_repo_for(workspace_root: Path) -> Path:
+    """卡分支所在仓: 治理根 project.json code_repo(唯一权威); 无声明且治理根自身是 git 仓 → 治理根(靶场单根)。"""
+    from tools.aipos_cli.next_resolver import _resolve_code_repo_root
+
+    return _resolve_code_repo_root(workspace_root) or workspace_root
+
+
+def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
+    """校验一张卡的产物(执行卡=Return; R 卡=裁决报告)是否可铸记录。纯校验, 不提交。
+
+    返回 {ok, kind: return|verdict, category, reasons[], path, frontmatter, exit_code}。
+    fail-closed: 声明缺/文件缺/字段缺/sha 不符 = ok=False + 原文 + 出口。
+    """
+    from tools.schema_loader import SchemaLoadError
+    from tools.aipos_cli.next_resolver import (
+        _artifact_ingest_declaration,
+        _check_verdict_artifact,
+        _find_task_in_queue,
+        _read_frontmatter,
+        extract_return_summary_text,
+        find_return_artifact,
+        missing_return_frontmatter,
+        return_artifact_dir,
+    )
+
+    workspace_root = Path(workspace_root)
+    is_audit = task_id.upper().endswith("R")
+    kind = "verdict" if is_audit else "return"
+    out: dict[str, Any] = {"ok": False, "kind": kind, "category": "", "reasons": [], "path": None, "frontmatter": {},
+                           "exit_code": INGEST_EXIT_REJECTED}
+    try:
+        decl = _artifact_ingest_declaration()[kind]
+    except SchemaLoadError as exc:
+        out["category"], out["reasons"] = "INGEST_DECLARATION_MISSING", [str(exc)]
+        return out
+
+    task_path, _queue = _find_task_in_queue(workspace_root, task_id)
+    if not task_path:
+        out["category"], out["reasons"] = "TASK_NOT_FOUND", [f"queue 目录中找不到任务卡 {task_id}"]
+        return out
+    code_repo = _code_repo_for(workspace_root)
+
+    if not is_audit:
+        path = find_return_artifact(workspace_root, task_id)
+        if path is None:
+            cands = list(decl.get("return_file_candidates") or [])
+            out["category"] = "INGEST_RETURN_MISSING"
+            out["reasons"] = [
+                f"未在声明落点 {return_artifact_dir(workspace_root, task_id)} 找到 Return(候选: {', '.join(map(str, cands))})。"
+                f"出口: 执行体把 Return 落到该目录(project.json paths.return_root 声明), 或修正声明"
+            ]
+            return out
+        out["path"] = str(path)
+        fm = _read_frontmatter(path)
+        out["frontmatter"] = fm
+        missing = missing_return_frontmatter(fm)
+        if missing:
+            out["category"] = "INGEST_FRONTMATTER_MISSING"
+            out["reasons"] = [
+                f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.return.required_frontmatter)。"
+                f"出口: 执行体补齐后产品自动重试(loop 重推导)"
+            ]
+            return out
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            out["category"], out["reasons"] = "INGEST_RETURN_UNREADABLE", [f"{path}: {exc}"]
+            return out
+        if not extract_return_summary_text(content):
+            out["category"], out["reasons"] = "INGEST_SUMMARY_MISSING", [f"{path}: 「一句话结论」缺失或仍是骨架占位"]
+            return out
+        branch = str(fm.get("branch")).strip()
+        commit_sha = str(fm.get("commit_sha")).strip()
+        tree_hash = str(fm.get("tree_hash")).strip()
+        tip = _git_out(code_repo, "rev-parse", "--verify", f"{branch}^{{commit}}")
+        if tip is None:
+            out["category"], out["reasons"] = "INGEST_BRANCH_MISSING", [f"{code_repo}: 分支 {branch} 不存在(frontmatter.branch)"]
+            return out
+        if tip != commit_sha:
+            out["category"] = "INGEST_TIP_MISMATCH"
+            out["reasons"] = [
+                f"分支 {branch} tip={tip[:12]} ≠ Return 自述 commit_sha={commit_sha[:12]}。"
+                f"出口: 执行体以分支 tip 更新 Return frontmatter(交回的必须是当前产物)"
+            ]
+            return out
+        tree = _git_out(code_repo, "rev-parse", f"{commit_sha}^{{tree}}")
+        if tree != tree_hash:
+            out["category"] = "INGEST_TREE_MISMATCH"
+            out["reasons"] = [f"{commit_sha[:12]} tree={str(tree)[:12]} ≠ Return 自述 tree_hash={tree_hash[:12]}"]
+            return out
+        out["ok"], out["category"], out["exit_code"] = True, "OK", 0
+        return out
+
+    # R 卡: 裁决报告
+    path = _check_verdict_artifact(workspace_root, task_id)
+    if path is None:
+        out["category"] = "INGEST_VERDICT_MISSING"
+        out["reasons"] = [
+            f"未在声明落点找到含 verdict 的审计报告(project.json paths.verdict_root / {task_id}; "
+            f"候选: {', '.join(map(str, decl.get('verdict_file_candidates') or []))})"
+        ]
+        return out
+    out["path"] = str(path)
+    fm = _read_frontmatter(path)
+    out["frontmatter"] = fm
+    required = [str(k) for k in (decl.get("required_frontmatter") or [])]
+    missing = [k for k in required if not str(fm.get(k) or "").strip()]
+    if missing:
+        out["category"] = "INGEST_FRONTMATTER_MISSING"
+        out["reasons"] = [f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.verdict.required_frontmatter)"]
+        return out
+    reviewed = str(fm.get("reviewed_task_id") or task_id[:-1]).strip()
+    from tools.schema_loader import get_branch_integration
+
+    pattern = str(get_branch_integration().get("branch_pattern") or "card/{task_id}")
+    branch = pattern.replace("{task_id}", reviewed)
+    tip = _git_out(code_repo, "rev-parse", "--verify", f"{branch}^{{commit}}")
+    commit_sha = str(fm.get("commit_sha")).strip()
+    if tip is None:
+        out["category"], out["reasons"] = "INGEST_BRANCH_MISSING", [f"{code_repo}: 被审卡分支 {branch} 不存在"]
+        return out
+    if tip != commit_sha:
+        out["category"] = "INGEST_TIP_MISMATCH"
+        out["reasons"] = [f"被审分支 {branch} tip={tip[:12]} ≠ 报告自述 commit_sha={commit_sha[:12]}: 审的不是当前产物"]
+        return out
+    out["ok"], out["category"], out["exit_code"] = True, "OK", 0
+    return out
+
+
+def ingest_task_artifact(
+    task_id: str,
+    workspace_root: Path,
+    *,
+    connection_json: str | None = None,
+    dry_run: bool = False,
+    execute: Any = None,
+) -> dict[str, Any]:
+    """产物入口主函数: 校验 → 推导核派生同一条薄壳命令 → execute_derived_action(既有执行体)提交。
+
+    返回 {ok, exit_code, category, reasons, command, path, output, message}。execute 可注入(靶场)。
+    """
+    from tools.aipos_cli.next_resolver import derive_next_step, execute_derived_action
+
+    check = validate_task_artifact(task_id, workspace_root)
+    result: dict[str, Any] = {
+        "task_id": task_id, "kind": check["kind"], "ok": False, "exit_code": check["exit_code"],
+        "category": check["category"], "reasons": list(check["reasons"]), "command": "", "path": check["path"],
+        "output": "", "message": "",
+    }
+    if not check["ok"]:
+        result["message"] = f"artifact ingest 拒: {check['category']}"
+        return result
+
+    derivation = derive_next_step(task_id, Path(workspace_root))
+    action_type = derivation.get("verb") or ""
+    expected_verb = "lybra_queue_return_dry_run" if check["kind"] == "return" else "lybra_audit_verdict_dry_run"
+    if not derivation.get("derivable") or action_type != expected_verb:
+        result["category"] = "INGEST_NOT_AT_RETURN_NODE"
+        result["reasons"] = [
+            f"推导核当前节点 {derivation.get('current_node')}/{derivation.get('current_state')} 的动作不是 {expected_verb}: "
+            f"missing={derivation.get('missing_records')}; suggested={derivation.get('suggested_action')}"
+        ]
+        result["message"] = "artifact ingest 拒: 卡不在可交回/可裁决节点"
+        return result
+    result["command"] = str(derivation.get("command") or "")
+    if dry_run:
+        result.update({"ok": True, "exit_code": 0, "category": "DRY_RUN", "message": "校验通过(未提交)"})
+        return result
+    runner = execute or execute_derived_action
+    exec_result = runner(derivation, Path(workspace_root), connection_json)
+    result["ok"] = bool(exec_result.get("ok"))
+    result["exit_code"] = 0 if result["ok"] else int(exec_result.get("exit_code") or 1)
+    result["output"] = str(exec_result.get("output") or "")
+    result["message"] = str(exec_result.get("message") or "")
+    result["category"] = "OK" if result["ok"] else "SHELL_REJECTED"
+    if not result["ok"] and result["output"]:
+        result["reasons"] = [result["output"]]
+    return result
+
+
+def run_ingest_cli(args: Any) -> int:
+    """CLI 入口(`lybra artifact ingest`): 治理根自发现或 --workspace-root; 输出人读或 --json; token 永不上屏。"""
+    import json as _json
+    import sys
+
+    from tools.aipos_cli.aipos_cli import _find_repo_root_for_args
+
+    try:
+        governance_root = Path(getattr(args, "workspace_root", None) or _find_repo_root_for_args(args))
+    except FileNotFoundError as exc:
+        print(f"lybra artifact ingest: cannot resolve governance root: {exc}", file=sys.stderr)
+        return INGEST_EXIT_REJECTED
+    result = ingest_task_artifact(
+        args.task_id, governance_root,
+        connection_json=getattr(args, "connection_json", None), dry_run=bool(getattr(args, "dry_run", False)),
+    )
+    if getattr(args, "json", False):
+        print(_json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        status = "ok" if result["ok"] else f"rejected ({result['category']})"
+        print(f"artifact ingest {args.task_id} [{result['kind']}]: {status}")
+        if result.get("path"):
+            print(f"  artifact: {result['path']}")
+        if result.get("command"):
+            print(f"  command: {result['command']}")
+        for reason in result.get("reasons") or []:
+            print(f"  - {reason}", file=sys.stderr if not result["ok"] else sys.stdout)
+        if result.get("output") and result["ok"]:
+            print(result["output"].rstrip())
+    return int(result["exit_code"])
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

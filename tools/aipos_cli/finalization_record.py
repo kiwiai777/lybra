@@ -24,16 +24,22 @@ def build_finalization_record(
     deployed: bool = False,
     deployment_record_ref: str | None = None,
     deploy_status: str | None = None,
+    merge_commit: str | None = None,
 ) -> dict[str, Any]:
     """构造 finalization 记录 frontmatter。
 
     AIPOS-F73D 前置一①: deploy_status 字段(值域声明在 transitions.schema N5.record.deploy_status)——
     finalization 记录在 merge+push 成功即落, 部署结果只记不阻记录。缺省按 deployed 布尔推导。
+    AIPOS-F78 前置零③: 记录必含 merge_commit(卡分支 merge 后 main HEAD; 缺省=commit)与 finalize_ref(记录 id),
+    推导核 N5→N6 读 merge_commit 填 closure_evidence.finalize_commit_hash(声明: transitions N5.record.merge_commit)。
     """
     if deploy_status is None:
         deploy_status = "deployed" if deployed else "not_attempted"
     if finalized_at is None:
         finalized_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    merge_commit = str(merge_commit or commit or "").strip()
+    if not merge_commit:
+        raise ValueError("finalization 记录缺 merge_commit/commit(AIPOS-F78 前置零③: 三字段齐才派生 close)")
     
     record = {
         "record_type": "finalization_record",
@@ -43,6 +49,8 @@ def build_finalization_record(
         "finalized_at": finalized_at,
         "commit": commit,
         "commit_short": commit[:8],
+        "merge_commit": merge_commit,
+        "finalize_ref": f"finalization_{task_id}_{finalized_at}",
         "authorization_type": authorization_type,
         "authorization_ref": authorization_ref,
         "deployed": deployed,
@@ -74,6 +82,8 @@ def render_record_markdown(frontmatter: dict[str, Any]) -> str:
 
 - **task_id**: {frontmatter['task_id']}
 - **commit**: {frontmatter['commit']}
+- **merge_commit**: {frontmatter['merge_commit']}
+- **finalize_ref**: {frontmatter['finalize_ref']}
 - **actor**: {frontmatter['actor']}
 - **finalized_at**: {frontmatter['finalized_at']}
 - **authorization_type**: {frontmatter['authorization_type']}
@@ -101,6 +111,7 @@ def write_finalization_record(
     finalized_at: str | None = None,
     dry_run: bool = False,
     deploy_status: str | None = None,
+    merge_commit: str | None = None,
 ) -> dict[str, Any]:
     """写 finalization_record 到治理工作区 records。返回 {ok, path, wrote}。"""
     frontmatter = build_finalization_record(
@@ -113,6 +124,7 @@ def write_finalization_record(
         deployment_record_ref=deployment_record_ref,
         finalized_at=finalized_at,
         deploy_status=deploy_status,
+        merge_commit=merge_commit,
     )
     path = record_path(governance_root, task_id, frontmatter["finalized_at"])
     if dry_run:

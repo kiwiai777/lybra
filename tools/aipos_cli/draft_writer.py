@@ -392,6 +392,21 @@ def create_draft(
 
     normalized = _normalized_metadata(metadata)
     
+    # AIPOS-F78 件①: 意图面 harness/lane 缺则派生(create/publish/regen 三口一函数 derive_intent_declarations)
+    _intent_warnings: list[str] = []
+    try:
+        from tools.aipos_cli.machine_zone import derive_intent_declarations
+        from tools.schema_loader import SchemaLoadError as _IntentSchemaLoadError
+
+        _intent = derive_intent_declarations(normalized, repo_root)
+        if not _intent["blocking_reasons"]:
+            normalized.setdefault("harness", _intent["harness"])
+            normalized.setdefault("lane", _intent["lane"])
+        else:
+            _intent_warnings.extend(_intent["blocking_reasons"])
+    except _IntentSchemaLoadError as e:
+        _intent_warnings.append(f"harness/lane 派生失败(声明缺失): {e}")
+    
     # AIPOS-F76 件①: Inject machine-generated 工作纪律 section into body
     # Use the single-source derive function (F68 established, now wiring to create path)
     task_body = body or default_draft_body()
@@ -433,7 +448,7 @@ def create_draft(
         "task_id": normalized.get("task_id"),
         "verdict": validation["verdict"],
         "blocking_reasons": validation["blocking_reasons"],
-        "warnings": validation["warnings"],
+        "warnings": [*validation["warnings"], *_intent_warnings],
         "classification_warnings": list(validation.get("classification_warnings", [])),
         "target_path": target_path,
         "planned_writes": planned_writes,
@@ -460,6 +475,31 @@ def create_draft(
     target_file.write_text(rendered_markdown, encoding="utf-8")
     result["wrote"] = True
     return result
+
+
+def registered_gate_verbs() -> set[str]:
+    """AIPOS-F78 前置零⑧: 门动词全名集合 = verbs.schema verbs[*] 中 surface 含 mcp 的键(card.schema intent_face.gate_verb_check.match)。"""
+    from tools.schema_loader import load_schema
+
+    verbs = load_schema("verbs").get("verbs") or {}
+    return {
+        name for name, spec in verbs.items()
+        if isinstance(spec, dict) and "mcp" in [str(x) for x in (spec.get("surface") or [])]
+    }
+
+
+def find_gate_verbs_in_intent_body(body: str) -> set[str]:
+    """AIPOS-F78 前置零⑧: 在意图面正文(frontmatter 之外)整词匹配注册的 MCP 门动词全名。"""
+    import re
+
+    names = registered_gate_verbs()
+    if not names or not body:
+        return set()
+    found: set[str] = set()
+    for token in re.findall(r"lybra_\w+", body):
+        if token in names:
+            found.add(token)
+    return found
 
 
 def _workspace_gate_url(repo_root: Path) -> str:
@@ -812,17 +852,42 @@ def publish_draft(
         except ContractSectionError as exc:
             validation["blocking_reasons"].append(str(exc))
         
-        # AIPOS-F73C件①: 校验 executor/auditor 卡面不含 lybra_ 动词 (fail-closed)
+        # AIPOS-F78 件①: 意图面 harness/lane 校验——缺则派生(与 create/regen 同一函数), 派生不出(LANE_REQUIRED)= 拒
+        try:
+            from tools.aipos_cli.machine_zone import derive_intent_declarations
+            from tools.schema_loader import SchemaLoadError as _IntentSchemaLoadError
+
+            _intent = derive_intent_declarations(publish_metadata, repo_root)
+            if _intent["blocking_reasons"]:
+                validation["blocking_reasons"].extend(_intent["blocking_reasons"])
+            elif _intent["derived"] and not is_external_intake:
+                publish_metadata = dict(publish_metadata)
+                publish_metadata["harness"] = _intent["harness"]
+                publish_metadata["lane"] = _intent["lane"]
+                rendered_markdown = render_markdown_task_card(publish_metadata, body)
+                # 纪律段/契约节在上面已按 body 追加过的情况: 重新追加(同一函数, 幂等)
+                try:
+                    rendered_markdown = _append_gate_contract_section(repo_root, publish_metadata, str(task_id), rendered_markdown)
+                except ContractSectionError as exc:
+                    validation["blocking_reasons"].append(str(exc))
+                validation["warnings"].append(
+                    f"AIPOS-F78 件①: 已派生意图面字段 {', '.join(_intent['derived'])}(harness={_intent['harness']}, lane.paths={_intent['lane']['paths']})"
+                )
+        except _IntentSchemaLoadError as exc:
+            validation["blocking_reasons"].append(f"AIPOS-F78 件①: harness/lane 声明缺失, 拒发布: {exc}")
+
+        # AIPOS-F73C件①: 校验 executor/auditor 卡面不含门动词 (fail-closed)
         # 角色判据:与渲染侧共用 _card_role_class(顾问代修, 仲裁 C;此前引用不存在的
         # load_roles_schema 且被 except/pass 吞掉, 判据从未生效)。
+        # AIPOS-F78 前置零⑧(F79B 实撞: 裸正则 lybra_\w+ 扫整卡把 pol_lybra_dev_9 / governance_refs 里的动词键名当门动词拒):
+        # 只匹配 verbs.schema 注册的 MCP 动词全名、整词、只扫意图面正文(body), 排除 frontmatter 的策略 id 与文档性引用。
         is_executor_or_auditor = _card_role_class(publish_metadata, repo_root) in ("executor", "auditor")
 
         if is_executor_or_auditor and not _manual_gate_mode(repo_root):
-            import re
-            lybra_verbs = re.findall(r'lybra_\w+', rendered_markdown)
+            lybra_verbs = find_gate_verbs_in_intent_body(body)
             if lybra_verbs:
                 validation["blocking_reasons"].append(
-                    f"AIPOS-F73C件①: executor/auditor 卡面不得包含门动词。检测到: {', '.join(set(lybra_verbs))}。"
+                    f"AIPOS-F73C件①: executor/auditor 卡面不得包含门动词。检测到: {', '.join(sorted(lybra_verbs))}。"
                     "执行体/审计体零门——认领/交回由产品 (lybra next --run) 执行，卡面不再渲染门链。"
                 )
 
@@ -989,6 +1054,23 @@ def regen_machine_zone_for_pending(
             # AIPOS-F76 件②: pending/claimed 卡禁重置 draft_status
             # 只更新纪律段, 不触碰 frontmatter 机器区字段
             amendments = {}
+            
+            # AIPOS-F78 件①: 存量卡补 harness/lane(缺则派生, 同一函数 derive_intent_declarations; 派生不出=出声跳过不阻塞)
+            try:
+                from tools.aipos_cli.machine_zone import derive_intent_declarations
+
+                intent = derive_intent_declarations(metadata, governance_root, product_root=product_root)
+                if intent["blocking_reasons"]:
+                    import sys
+                    print(f"Warning: {card_task_id}: harness/lane 派生失败: {'; '.join(intent['blocking_reasons'])}", file=sys.stderr)
+                else:
+                    if not str(metadata.get("harness") or "").strip():
+                        amendments["harness"] = intent["harness"]
+                    if not isinstance(metadata.get("lane"), dict) or not metadata.get("lane"):
+                        amendments["lane"] = intent["lane"]
+            except Exception as e:  # SchemaLoadError 等: 出声不吞, 不阻塞纪律段重生成
+                import sys
+                print(f"Warning: {card_task_id}: harness/lane 声明读取失败: {e}", file=sys.stderr)
             
             # 重新派生机器纪律段 (三口一函数: 唯一派生源)
             try:

@@ -190,19 +190,25 @@ def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = 
         }
 
     # AIPOS-C3 大项A: provenance=dev_override → finalize 拒绝在其上结算
+    # AIPOS-F78 前置零⑥(F73D/F79 实撞: 一次 dev_override 部署成了 finalize 全局锁): provenance 校验须认
+    # Owner 授权记录(owner_decisions 记录引用该 commit)或世系(该 commit 已被门生 PASS 裁决覆盖)——认得即放行并出声。
     if provenance == "dev_override":
-        return {
-            "integrity_ok": False,
-            "current_commit": current_commit,
-            "head_commit": head_commit,
-            "provenance": provenance,
-            "missing_commits": [],
-            "message": (
-                f"Deployment provenance=dev_override (current={current_commit[:8]}). "
-                "finalize 拒绝在 dev_override 部署上结算 —— 必须先用审过的 commit 重部署 "
-                "(lybra-deploy --verdict-ref <pass_verdict_id>)。"
-            ),
-        }
+        authorized, why = _dev_override_base_authorized(repo_root, governance_root, current_commit)
+        if not authorized:
+            return {
+                "integrity_ok": False,
+                "current_commit": current_commit,
+                "head_commit": head_commit,
+                "provenance": provenance,
+                "missing_commits": [],
+                "message": (
+                    f"Deployment provenance=dev_override (current={current_commit[:8]}). "
+                    "finalize 拒绝在 dev_override 部署上结算 —— 必须先用审过的 commit 重部署 "
+                    "(lybra-deploy --verdict-ref <pass_verdict_id>), 或 Owner 落授权记录(owner-decision 引用该 commit)。"
+                    f" 判定: {why}"
+                ),
+            }
+        print(f"Note: dev_override 部署基线 {current_commit[:8]} 已认可({why}), 继续区间校验", file=sys.stderr)
 
     if current_commit == head_commit:
         return {
@@ -245,6 +251,56 @@ def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = 
     }
 
 
+def _dev_override_base_authorized(repo_root: Path, governance_root: Path | None, current_commit: str) -> tuple[bool, str]:
+    """AIPOS-F78 前置零⑥: dev_override 部署基线是否可认。
+
+    ① Owner 授权记录: 治理根 5_tasks/records/owner_decisions/ 下门生记录(record_type 以 owner_decision 开头)正文/frontmatter
+       引用该 commit(≥8 位前缀); ② 世系: 该 commit 的卡有门生 PASS 裁决精确覆盖(F70)或 legacy 裁决。
+    返回 (authorized, 原因)。governance_root 缺 = 不可认(fail-closed)。
+    """
+    if governance_root is None:
+        return False, "无 governance_root, 无法核对 Owner 授权记录或世系"
+    short = current_commit[:8]
+    decisions_dir = Path(governance_root) / "5_tasks" / "records" / "owner_decisions"
+    if decisions_dir.is_dir():
+        from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+
+        for record in sorted(decisions_dir.rglob("*.md")):
+            try:
+                text = record.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                print(f"Warning: owner decision record unreadable {record}: {exc}", file=sys.stderr)
+                continue
+            metadata, _body, _warn = parse_markdown_frontmatter(text)
+            record_type = str((metadata or {}).get("record_type") or "")
+            if record_type.startswith("owner_decision") and short in text:
+                return True, f"Owner 授权记录 {record.name} 引用 {short}"
+    # 世系: commit 归属卡 + 门生 PASS 覆盖
+    try:
+        from tools.aipos_cli.deployment_authorization import (
+            _task_id_from_commit_subject,
+            find_gate_pass_verdict_for_task,
+        )
+
+        subject = subprocess.run(
+            ["git", "log", "-1", "--format=%s", current_commit],
+            cwd=str(repo_root), capture_output=True, text=True, timeout=10,
+        )
+        if subject.returncode == 0:
+            task_id = _task_id_from_commit_subject(subject.stdout.strip(), repo_root=repo_root, governance_root=Path(governance_root))
+            if task_id:
+                verdict = find_gate_pass_verdict_for_task(task_id, Path(governance_root), required_commit_sha=current_commit)
+                if verdict.get("found"):
+                    return True, f"世系: {task_id} 门生 PASS 裁决 {verdict.get('verdict_id')} 覆盖 {short}"
+                return False, f"世系: {task_id} 无覆盖 {short} 的门生 PASS 裁决({verdict.get('reason')})"
+            return False, f"commit {short} 的提交信息无卡号, 无法追世系; 亦无 Owner 授权记录引用它"
+        return False, f"git log {short} 失败: {subject.stderr.strip()}"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"世系核对异常: {exc}"
+    except Exception as exc:  # SchemaLoadError(task_id_pattern 声明缺)等: 出声不吞
+        return False, f"世系核对声明缺失: {exc}"
+
+
 def _ensure_finalization_record(
     governance_root: Path,
     task_id: str,
@@ -277,6 +333,7 @@ def _ensure_finalization_record(
             deployed=deployed,
             deployment_record_ref=None,
             deploy_status=deploy_status,
+            merge_commit=commit_hash,  # AIPOS-F78 前置零③: merge 后 main HEAD(直提场景=finalize 时 HEAD)
         )
         operations.append(f"Finalization record written: {fin_result['path']} (deploy_status={fin_result['frontmatter'].get('deploy_status')})")
     except (OSError, ValueError, KeyError, TypeError) as e:
@@ -812,6 +869,19 @@ def _integrate_card_branch(
         # 冲突 → 列文件 → abort → main 无半合并残留
         conflict_files = _git_conflict_files(workspace_root)
         operations.append(f"  → 冲突! 冲突文件: {conflict_files}")
+        # AIPOS-F78 前置零⑦(F79 实撞: 并行两卡各在同一 JSON 声明文件加并列键 → 冲突中止): JSON 文件做键级三方合并,
+        # 并列键自动并存, 同键异值才是真冲突; 全部 JSON 冲突解开且无其它冲突 → 完成 merge commit(分支 tip 不变, 裁决绑定仍成立)
+        resolved, unresolved = _resolve_json_conflicts(workspace_root, branch_name, conflict_files, operations)
+        if resolved and not unresolved:
+            commit_result = subprocess.run(
+                ["git", "commit", "--no-verify", "-m", merge_message],
+                cwd=str(workspace_root), capture_output=True, text=True,
+            )
+            if commit_result.returncode == 0:
+                operations.append(f"  → ✓ JSON 键级三方合并后完成 merge {branch_name} (no-ff): {', '.join(resolved)}")
+                return {**base, "action": "merged", "message": f"已合并 {branch_name} (JSON 键级三方合并: {', '.join(resolved)})",
+                        "json_key_merged": resolved}
+            operations.append(f"  → 合并提交失败: {commit_result.stderr.strip()}")
         subprocess.run(
             ["git", "merge", "--abort"],
             cwd=str(workspace_root),
@@ -836,6 +906,92 @@ def _integrate_card_branch(
 
     operations.append(f"  → ✓ 已合并 {branch_name} (no-ff), 分支保留不删除")
     return {**base, "action": "merged", "message": f"已合并 {branch_name} (no-ff)"}
+
+
+def _json_three_way_merge(base: Any, ours: Any, theirs: Any) -> tuple[Any, list[str]]:
+    """键级三方合并(递归 dict): 一侧未改取另一侧; 两侧同改同值取之; 两侧同改异值 = 冲突键。非 dict 视为整体值。"""
+    if isinstance(base, dict) and isinstance(ours, dict) and isinstance(theirs, dict):
+        merged: dict[str, Any] = {}
+        conflicts: list[str] = []
+        for key in list(dict.fromkeys([*base.keys(), *ours.keys(), *theirs.keys()])):
+            b, o, t = base.get(key, _MISSING), ours.get(key, _MISSING), theirs.get(key, _MISSING)
+            if o == t:
+                value = o
+            elif o == b:
+                value = t
+            elif t == b:
+                value = o
+            else:
+                value, sub = _json_three_way_merge(b, o, t) if isinstance(o, dict) and isinstance(t, dict) and isinstance(b, dict) else (_MISSING, [key])
+                if sub:
+                    conflicts.extend(f"{key}.{c}" if c != key else key for c in sub)
+                    continue
+            if value is not _MISSING:
+                merged[key] = value
+        return merged, conflicts
+    if ours == theirs:
+        return ours, []
+    if ours == base:
+        return theirs, []
+    if theirs == base:
+        return ours, []
+    return _MISSING, ["<root>"]
+
+
+_MISSING = object()
+
+
+def _resolve_json_conflicts(
+    workspace_root: Path, branch_name: str, conflict_files: list[str], operations: list[str]
+) -> tuple[list[str], list[str]]:
+    """AIPOS-F78 前置零⑦: 对冲突中的 .json 文件做键级三方合并(base=merge-base, ours=main, theirs=卡分支)。
+    返回 (已解开文件, 未解开文件)。任何解析/键冲突 = 该文件未解开(调用方 abort, 绝不半合并)。"""
+    import json as _json
+
+    if not conflict_files:
+        return [], []
+    mb = subprocess.run(["git", "merge-base", "HEAD", branch_name], cwd=str(workspace_root), capture_output=True, text=True)
+    base_rev = mb.stdout.strip() if mb.returncode == 0 else ""
+    resolved: list[str] = []
+    unresolved: list[str] = []
+    for rel in conflict_files:
+        if not rel.endswith(".json") or not base_rev:
+            unresolved.append(rel)
+            continue
+        versions = {}
+        for label, rev in (("base", base_rev), ("ours", "HEAD"), ("theirs", branch_name)):
+            show = subprocess.run(["git", "show", f"{rev}:{rel}"], cwd=str(workspace_root), capture_output=True, text=True)
+            if show.returncode != 0:
+                versions[label] = {} if label == "base" else None
+                continue
+            try:
+                versions[label] = _json.loads(show.stdout)
+            except ValueError as exc:
+                operations.append(f"  → {rel}@{label} 非合法 JSON, 不做键级合并: {exc}")
+                versions[label] = None
+        if versions.get("ours") is None or versions.get("theirs") is None:
+            unresolved.append(rel)
+            continue
+        merged, conflicts = _json_three_way_merge(versions["base"], versions["ours"], versions["theirs"])
+        if conflicts or merged is _MISSING:
+            operations.append(f"  → {rel}: 同键异值真冲突 {conflicts}, 停(需人解)")
+            unresolved.append(rel)
+            continue
+        indent = 2
+        try:
+            (workspace_root / rel).write_text(_json.dumps(merged, indent=indent, ensure_ascii=False) + "\n", encoding="utf-8")
+        except OSError as exc:
+            operations.append(f"  → {rel}: 写合并结果失败: {exc}")
+            unresolved.append(rel)
+            continue
+        add = subprocess.run(["git", "add", "--", rel], cwd=str(workspace_root), capture_output=True, text=True)
+        if add.returncode != 0:
+            operations.append(f"  → {rel}: git add 失败: {add.stderr.strip()}")
+            unresolved.append(rel)
+            continue
+        operations.append(f"  → {rel}: JSON 键级三方合并成功(并列键并存)")
+        resolved.append(rel)
+    return resolved, unresolved
 
 
 def finalize_task(

@@ -698,6 +698,17 @@ else
   overall=1
 fi
 
+# AIPOS-F78: 引擎无关——前置零①–⑨(驱动方 token/驱动方身份/close 三字段/判据读分支/lane 受限 amend/世系含 withdrawn+dev_override/
+# JSON 键级合并+复审/门动词精确校验/PASS 卡承接) + 件①–④(harness/lane 声明·单一渲染器·artifact ingest·落点读项目声明)
+echo
+echo "── tests/test_aipos_f78_engine_agnostic.py (F78 引擎无关: 前置零①–⑨ + 件①–④, lybra 形/chris 形靶场) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f78_engine_agnostic.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f78_engine_agnostic.py PASS"
+else
+  echo "✗ tests/test_aipos_f78_engine_agnostic.py FAIL"
+  overall=1
+fi
+
 echo
 echo "── tests/test_aipos_f32_custom_role_envelope.py (F32 自定义角色信封(F73C 夹具声明 manual_gate_mode)) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f32_custom_role_envelope.py" -v --tb=short; then

@@ -206,7 +206,14 @@ def _create_return_artifact(ws: Path, task_id: str) -> Path:
     task_work_dir = ws / "task_cards" / task_id
     task_work_dir.mkdir(parents=True, exist_ok=True)
     ret_file = task_work_dir / "RETURN.md"
-    ret_file.write_text("""# Return
+    # AIPOS-F78 件③: Return 必填 frontmatter(commit_sha/tree_hash/branch/model), 缺=不可推导(artifact_invalid)
+    ret_file.write_text(f"""---
+commit_sha: {"a" * 40}
+tree_hash: {"b" * 40}
+branch: card/{task_id}
+model: fixture-model
+---
+# Return
 
 ## 一句话结论
 

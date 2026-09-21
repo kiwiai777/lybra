@@ -178,5 +178,20 @@
     ],
     "scope_resolution": "custom name → builtin class → this registry's role.scopes (call-time, AIPOS-347 link reuse)"
   },
-  "drill_assertion": "Acceptance #1 (new-role drill): add a probe role entry here (with naming prefix + scopes + tool_package) → enroll/distribute/naming all work with ZERO code change → proving 'new role = add one data row'. Drill must be reverted before commit."
+  "drill_assertion": "Acceptance #1 (new-role drill): add a probe role entry here (with naming prefix + scopes + tool_package) → enroll/distribute/naming all work with ZERO code change → proving 'new role = add one data row'. Drill must be reverted before commit.",
+  "driver": {
+    "description": "AIPOS-F78 前置零①: 账务动词的驱动方声明——账务动词(claim/return/dispatch/verdict/close/mark_concluded)一律由驱动方 token 提交, actor/agent_instance=卡实例(执行体/审计体零门, 其 token 无账务 scope)。CLI 薄壳(queue claim/return --confirm, audit-verdict --confirm, artifact ingest)从 connection.json 选 role_class==driver.role_class 的 token; 门侧 PreAuthorized 信封识别驱动方身份(token 绑定实例或 role)而非卡实例。唯一声明, 代码只读。",
+    "role_class": "advisor",
+    "ledger_verbs": [
+      "queue_claim",
+      "queue_return",
+      "audit_dispatch",
+      "audit_verdict",
+      "queue_close",
+      "mark_concluded",
+      "queue_amend",
+      "queue_rework"
+    ],
+    "envelope_identity": "PreAuthorized 一阶段放行时, 信封 agent_or_role 须覆盖驱动方(token 绑定的 agent_instance 或 role_class), 卡实例(actor)不参与身份判定"
+  }
 }

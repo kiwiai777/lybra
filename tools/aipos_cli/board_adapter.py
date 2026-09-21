@@ -1989,9 +1989,11 @@ def _create_return_skeleton(repo_root: Path, task_id: str) -> dict[str, Any] | N
     
     try:
         # AIPOS-F65A-fix2-R3 症③: schema以产品仓为根(与F71-R3/finalize同款),治理路径以治理仓为根
-        task_cards_root = resolve_governance_path("task_cards", repo_root, _code_repo_schema_root())
-        task_card_dir = task_cards_root / task_id
-        return_skeleton_path = task_card_dir / "RETURN.md"
+        # AIPOS-F78 件④: 骨架落点读项目声明(project.json paths.return_root, 缺省=task_cards), 禁写死
+        from tools.aipos_cli.next_resolver import _return_artifact_path
+
+        return_skeleton_path = _return_artifact_path(Path(repo_root), task_id)
+        task_card_dir = return_skeleton_path.parent
         
         # Only create if doesn't exist (idempotent)
         if not return_skeleton_path.exists():
@@ -2560,6 +2562,9 @@ def _check_return_self_checks(
     
     task_mode = str(task_metadata.get("task_mode") or "").strip()
     output_target = str(task_metadata.get("output_target") or "").strip()
+    # AIPOS-F78 前置零⑤: 改动面判据读车道目录 lane.paths(声明), output_target 仅作派生来源
+    lane = task_metadata.get("lane") if isinstance(task_metadata.get("lane"), dict) else {}
+    lane_paths = [str(p).strip() for p in (lane.get("paths") or []) if str(p).strip()] if isinstance(lane.get("paths"), list) else []
     
     # ① 夹具入常驻
     blocking_reasons.extend(_check_test_in_runall(
@@ -2572,6 +2577,7 @@ def _check_return_self_checks(
         task_id=task_id,
         output_target=output_target,
         repo_root=repo_root,
+        lane_paths=lane_paths,
     ))
     
     # ③ 有测试
@@ -2601,12 +2607,59 @@ def _check_return_self_checks(
     return blocking_reasons
 
 
+RUNALL_RELATIVE_PATH = "agents/harness/pi/lybra-loop/tests/run-all.sh"
+
+
+def _card_branch_changed_files(product_repo_root: Path, task_id: str) -> list[str] | None:
+    """AIPOS-F78 前置零④: 卡分支相对其与 main 的合并基的改动文件(`git diff main...card/<ID>`, 三点=merge-base)。
+
+    worktree 模型下 main 与卡分支并行前进, 两点 diff(main..branch)会把 main 上别人的改动反向算进本卡 → 判据必错;
+    三点 diff 只看卡分支自己的提交。git 失败返回 None(调用方跳过, 出 warning)。"""
+    import subprocess
+
+    branch_name = f"card/{task_id}"
+    try:
+        result = subprocess.run(
+            ["git", "diff", f"main...{branch_name}", "--name-only"],
+            cwd=product_repo_root, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        import sys
+
+        print(f"Warning: git diff main...{branch_name} failed: {exc}", file=sys.stderr)
+        return None
+    if result.returncode != 0:
+        return None
+    return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+
+
+def _git_show_on_branch(product_repo_root: Path, task_id: str, relative_path: str) -> str | None:
+    """AIPOS-F78 前置零④: 读卡分支上的文件内容(`git show card/<ID>:<path>`), 不读共用检出文件系统。"""
+    import subprocess
+
+    branch_name = f"card/{task_id}"
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{branch_name}:{relative_path}"],
+            cwd=product_repo_root, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        import sys
+
+        print(f"Warning: git show {branch_name}:{relative_path} failed: {exc}", file=sys.stderr)
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
 def _check_test_in_runall(
     *,
     task_id: str,
     repo_root: Path,
 ) -> list[str]:
-    """① 夹具入常驻: 本卡新增 test 文件必须在 run-all 清单中。"""
+    """① 夹具入常驻: 本卡新增 test 文件必须在 run-all 清单中。
+    AIPOS-F78 前置零④: 改动集与 run-all.sh 都读卡分支(git diff 三点 / git show card/<ID>:path), 不读共用检出。"""
     blocking_reasons = []
     
     try:
@@ -2614,41 +2667,22 @@ def _check_test_in_runall(
     except ProductRepoNotConfigured:
         return blocking_reasons  # 无产品仓，跳过
     
-    import subprocess
+    # 1. 卡分支改动文件中的 test 文件
+    changed_files = _card_branch_changed_files(product_repo_root, task_id)
+    if changed_files is None:
+        return blocking_reasons  # git 失败，跳过检查(已 warning)
+    test_files = [
+        f for f in changed_files 
+        if "test" in f.lower() and not f.endswith("run-all.sh")
+    ]
+    if not test_files:
+        return blocking_reasons  # 无 test 文件，跳过
     
-    # 1. git diff 找本卡新增/修改的 test 文件
-    branch_name = f"card/{task_id}"
-    try:
-        result = subprocess.run(
-            ["git", "diff", "main.." + branch_name, "--name-only"],
-            cwd=product_repo_root,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return blocking_reasons  # git 失败，跳过检查
-        
-        changed_files = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-        test_files = [
-            f for f in changed_files 
-            if "test" in f.lower() and not f.endswith("run-all.sh")
-        ]
-        
-        if not test_files:
-            return blocking_reasons  # 无 test 文件，跳过
-    except Exception:
-        return blocking_reasons  # git 命令失败，跳过
-    
-    # 2. 读取 run-all.sh 清单
-    runall_path = product_repo_root / "agents" / "harness" / "pi" / "lybra-loop" / "tests" / "run-all.sh"
-    if not runall_path.exists():
-        return blocking_reasons  # run-all.sh 不存在，跳过
-    
-    try:
-        runall_content = runall_path.read_text(encoding="utf-8")
-    except Exception:
-        return blocking_reasons  # 读取失败，跳过
+    # 2. 读取卡分支上的 run-all.sh 清单(禁读共用检出文件系统)
+    runall_path = product_repo_root / RUNALL_RELATIVE_PATH
+    runall_content = _git_show_on_branch(product_repo_root, task_id, RUNALL_RELATIVE_PATH)
+    if runall_content is None:
+        return blocking_reasons  # 卡分支上无 run-all.sh(非 lybra 形项目)，跳过
     
     # 3. 检查每个 test 文件是否在清单中
     missing_tests = []
@@ -2676,51 +2710,37 @@ def _check_changes_in_scope(
     task_id: str,
     output_target: str,
     repo_root: Path,
+    lane_paths: list[str] | None = None,
 ) -> list[str]:
-    """② 改动面在界内: git diff 文件必须落在 output_target 范围内。"""
+    """② 改动面在界内: 卡分支改动文件必须落在车道目录内。
+    AIPOS-F78 前置零⑤: 范围 = lane.paths(声明); 无 lane 时由 output_target 解析(同一解析函数 machine_zone.parse_output_target_paths)。
+    AIPOS-F78 前置零④: 改动集读卡分支三点 diff(main...card/<ID>), 不读共用检出。"""
     blocking_reasons = []
     
-    if not output_target:
-        return blocking_reasons  # 无 output_target 声明，跳过
+    path_patterns = [str(p).strip() for p in (lane_paths or []) if str(p).strip()]
+    scope_source = "lane.paths"
+    if not path_patterns:
+        if not output_target:
+            return blocking_reasons  # 无 lane/output_target 声明，跳过
+        from tools.aipos_cli.machine_zone import parse_output_target_paths
+
+        path_patterns = parse_output_target_paths(output_target)
+        scope_source = "output_target"
+    
+    if not path_patterns:
+        return blocking_reasons  # 无法解析 output_target，跳过
     
     try:
         product_repo_root = _resolve_product_code_repo(repo_root)
     except ProductRepoNotConfigured:
         return blocking_reasons
     
-    import subprocess
-    
-    # 1. git diff 找全部改动文件
-    branch_name = f"card/{task_id}"
-    try:
-        result = subprocess.run(
-            ["git", "diff", "main.." + branch_name, "--name-only"],
-            cwd=product_repo_root,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return blocking_reasons  # git 失败，跳过检查
-        
-        changed_files = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-        
-        if not changed_files:
-            return blocking_reasons  # 无改动，跳过
-    except Exception:
-        return blocking_reasons  # git 命令失败，跳过
-    
-    # 2. 解析 output_target 的路径片段（宽松匹配）
-    # output_target 格式示例: "tools/aipos_cli/board_adapter.py(queue_return 校验点), tests/(五夹具经 bin 入 run-all)"
-    # 提取路径片段: tools/aipos_cli/board_adapter.py, tests/
-    import re
-    # 匹配路径模式：任何非空白字符直到括号或逗号或结尾
-    path_patterns = re.findall(r'([\w/._-]+(?:\.\w+)?)', output_target)
-    # 过滤掉明显不是路径的片段（如单个词）
-    path_patterns = [p for p in path_patterns if '/' in p or '.' in p]
-    
-    if not path_patterns:
-        return blocking_reasons  # 无法解析 output_target，跳过
+    # 1. 卡分支改动文件(三点 diff)
+    changed_files = _card_branch_changed_files(product_repo_root, task_id)
+    if changed_files is None:
+        return blocking_reasons  # git 失败，跳过检查(已 warning)
+    if not changed_files:
+        return blocking_reasons  # 无改动，跳过
     
     # 3. 检查每个文件是否匹配任意一个模式
     out_of_scope = []
@@ -2736,10 +2756,10 @@ def _check_changes_in_scope(
     
     if out_of_scope:
         blocking_reasons.append(
-            f"CHANGES_OUT_OF_SCOPE: 以下文件超出卡面声明的 output_target 范围。"
+            f"CHANGES_OUT_OF_SCOPE: 以下文件超出卡面声明的车道范围({scope_source})。"
             f"越界文件: {', '.join(out_of_scope)}。"
-            f"卡面声明范围: {output_target}。"
-            f"出口: ①若属卡面漏列, 请顾问 amend output_target 后重试; "
+            f"卡面声明范围: {', '.join(path_patterns)}。"
+            f"出口: ①若属卡面漏列, 请顾问 `lybra queue amend --restricted --task-id {task_id} --amendments '{{\"lane\": {{...}}}}'` 补车道后重试; "
             f"②若确属越界, 请回退该文件(git checkout main -- <file>); "
             f"③若需保留改动, 请顾问重发任务卡覆盖全部根因文件。"
         )
@@ -2760,27 +2780,12 @@ def _check_has_tests(
     except ProductRepoNotConfigured:
         return blocking_reasons
     
-    import subprocess
-    
-    # 1. git diff 找全部改动文件
-    branch_name = f"card/{task_id}"
-    try:
-        result = subprocess.run(
-            ["git", "diff", "main.." + branch_name, "--name-only"],
-            cwd=product_repo_root,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return blocking_reasons  # git 失败，跳过检查
-        
-        changed_files = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-        
-        if not changed_files:
-            return blocking_reasons  # 无改动，跳过
-    except Exception:
-        return blocking_reasons  # git 命令失败，跳过
+    # 1. 卡分支改动文件(AIPOS-F78 前置零④: 三点 diff, 只看卡分支自己的提交)
+    changed_files = _card_branch_changed_files(product_repo_root, task_id)
+    if changed_files is None:
+        return blocking_reasons  # git 失败，跳过检查(已 warning)
+    if not changed_files:
+        return blocking_reasons  # 无改动，跳过
     
     # 2. 检查是否有 test 文件
     has_test = any(
@@ -3689,7 +3694,13 @@ def _build_audit_dispatch_preview(
         latest_verdict = max(existing_verdicts, key=_verdict_time)
         latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
         if latest_verdict_value in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
-            blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS (terminal state, cannot overturn)")
+            # AIPOS-F78 前置零⑦(F79 实撞): PASS 绑的是裁决自述 artifact_subject.commit_sha; 卡分支 tip 已变(解冲突/追加提交)
+            # → 审过的产物已不是当前产物, 放行为「复审」派审(warn), 而非 AUDIT_ALREADY_PASSED 死锁只能承接卡重审
+            rereview = _pass_verdict_tip_changed(repo_root, source_task_id_for_verdict, latest_verdict)
+            if rereview:
+                warnings.append(f"REREVIEW_TIP_CHANGED: {rereview}")
+            else:
+                blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS (terminal state, cannot overturn)")
         # FAIL/REQUEST_CHANGES/BLOCKED 等非终态:允许 re-dispatch,不 BLOCK
     elif source_metadata.get("dependency_audit_status") == Verdict.PASS:
         # 兜底:metadata 显示 PASS 但没找到 verdict 记录(数据不一致)
@@ -5914,6 +5925,47 @@ def converge_r_cards(
     }
 
 
+def _pass_verdict_tip_changed(repo_root: Path, task_id: str, verdict_record: dict[str, Any]) -> str | None:
+    """AIPOS-F78 前置零⑦: PASS 裁决自述的 artifact_subject.commit_sha 与卡分支当前 tip 不一致 → 返回说明(允许复审); 一致/无法判定 → None。"""
+    import subprocess
+
+    subject = verdict_record.get("artifact_subject") if isinstance(verdict_record.get("artifact_subject"), dict) else None
+    audited_sha = str((subject or {}).get("commit_sha") or "").strip()
+    if not audited_sha:
+        return None  # 存量 legacy 裁决无指纹, 维持终态语义
+    try:
+        product_repo_root = _resolve_product_code_repo(repo_root)
+    except ProductRepoNotConfigured:
+        return None
+    try:
+        from tools.schema_loader import get_branch_integration
+
+        pattern = str(get_branch_integration(_code_repo_schema_root()).get("branch_pattern") or "card/{task_id}")
+    except Exception as exc:  # 声明读取失败: 出声, 维持终态
+        import sys
+
+        print(f"Warning: branch_integration 声明读取失败, 复审判定跳过: {exc}", file=sys.stderr)
+        return None
+    branch_name = pattern.replace("{task_id}", task_id)
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{branch_name}^{{commit}}"],
+            cwd=product_repo_root, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        import sys
+
+        print(f"Warning: git rev-parse {branch_name} failed: {exc}", file=sys.stderr)
+        return None
+    tip = result.stdout.strip() if result.returncode == 0 else ""
+    if not tip or tip == audited_sha:
+        return None
+    return (
+        f"PASS 裁决 {verdict_record.get('verdict_id') or ''} 绑定 {audited_sha[:12]}, 卡分支 {branch_name} tip 已变为 {tip[:12]}; "
+        f"派审类型=复审(re-review), 审计体须对新 tip 重新裁决"
+    )
+
+
 def mark_concluded_task(
     *,
     task_id: str | None = None,
@@ -5990,9 +6042,16 @@ def mark_concluded_task(
         # If it does, refuse and redirect to lybra_queue_close.
         records = load_records(resolved_root)
         existing_verdicts = records.get("task_audit_verdicts", {}).get(tid, [])
+        # AIPOS-F78 前置零⑨(F79B 实撞): 已 PASS 未 finalize 的卡, 顾问可用 mark-concluded 登记承接世系
+        # (conclusion_note 含承接声明), 不再被 FORMAL_VERDICT_EXISTS 挡死; FAIL/BLOCK 仍拒(走 queue_rework)。
+        continuation_id = _continuation_from_note(note, resolved_root)
         if existing_verdicts:
             latest_verdict = max(existing_verdicts, key=_verdict_time)
             latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
+            pass_family = latest_verdict_value in {str(Verdict.PASS), str(Verdict.PASS_WITH_NOTES)}
+            if pass_family and continuation_id:
+                existing_verdicts = []  # 放行: PASS + 承接声明 = 登记承接结案
+        if existing_verdicts:
             return blocked_response(
                 operation=operation,
                 dry_run=dry_run,
@@ -6043,6 +6102,8 @@ def mark_concluded_task(
         fm["conclusion_report_ref"] = report_ref or ""
         fm["conclusion_note"] = note or ""
         fm["auto_closed_by"] = "AIPOS-354_mark_concluded"
+        if continuation_id:
+            fm["continuation_task_id"] = continuation_id  # AIPOS-F78 前置零⑨: 承接世系机器可读(F53 lineage 亦读 conclusion_note)
         rendered = render_task_markdown(fm, body)
         target_path = resolved_root / "5_tasks" / "queue" / "completed" / card_file.name
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -6065,6 +6126,27 @@ def mark_concluded_task(
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(str(actor or "")))
+
+
+def _continuation_from_note(note: str, governance_root: Path) -> str | None:
+    """AIPOS-F78 前置零⑨: 从 conclusion_note 解析承接卡 ID(与 F53 deployment_authorization._find_continuation_task 同一正则口径)。"""
+    if not note:
+        return None
+    import re
+
+    try:
+        from tools.aipos_cli.deployment_authorization import _resolve_task_id_pattern
+
+        task_id_pattern = _resolve_task_id_pattern(governance_root)
+    except Exception as exc:  # 声明缺失(SchemaLoadError 等): 出声, 用通用卡号形
+        import sys
+
+        print(f"Warning: task_id_pattern 声明读取失败, 承接解析用通用形: {exc}", file=sys.stderr)
+        task_id_pattern = r"[A-Za-z][A-Za-z0-9]*-[A-Za-z0-9._-]+"
+    match = re.search(rf"(?:由.*?({task_id_pattern}).*?承接|承接.*?({task_id_pattern}))", note)
+    if match:
+        return match.group(1) or match.group(2)
+    return None
 
 
 def _auto_generate_decision_log_pointer(
@@ -6223,6 +6305,7 @@ def close_task(
     closure_evidence: dict[str, Any] | None = None,
     dry_run: bool = True,
     repo_root: str | Path | None = None,
+    conclusion_note: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-283: gate close verb — move a claimed task to completed/ with closure evidence.
 
@@ -6530,6 +6613,21 @@ def close_task(
             repo_root=resolved_root,
             records=[("closure", closure_id, closure_markdown)],
         )
+
+        # AIPOS-F78 前置零⑨: close 可写 conclusion_note(含承接声明即登记承接世系, F53 lineage 读此字段)
+        note_text = str(conclusion_note or "").strip()
+        if note_text:
+            completed_rel = str(mutation_result.get("target_path") or "")
+            completed_file = resolved_root / completed_rel if completed_rel else None
+            if completed_file is not None and completed_file.is_file():
+                c_meta, c_body, _c_warn = parse_markdown_frontmatter(completed_file.read_text(encoding="utf-8"))
+                c_meta["conclusion_note"] = note_text
+                continuation_id = _continuation_from_note(note_text, resolved_root)
+                if continuation_id:
+                    c_meta["continuation_task_id"] = continuation_id
+                completed_file.write_text(render_task_markdown(c_meta, c_body), encoding="utf-8")
+            else:
+                governance_warnings.append(f"conclusion_note 未写入卡面: 结案后卡路径不可读 ({completed_rel or '?'})")
 
         # AIPOS-F18 大项A: fix卡close后自动派生原卡复审卡
         # fix卡是 derived_from_audit_task_id 非空的卡, close且终局∈PASS族时触发
@@ -6958,6 +7056,18 @@ def withdraw_task(
         )
     except Exception as exc:
         return _normalize_exception("queue_withdraw", exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def restricted_amend_fields() -> set[str]:
+    """AIPOS-F78 前置零⑤: advisor 对 claimed 卡可受限修改的字段集合——唯一声明 card.schema restricted_amend.claimed_card_fields
+    (F75 只写死 {rework_rounds}; 现读声明, 含 output_target/lane)。缺声明 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("card", _code_repo_schema_root()).get("restricted_amend")
+    fields = list((decl or {}).get("claimed_card_fields") or []) if isinstance(decl, dict) else []
+    if not fields:
+        raise SchemaLoadError("card.schema.json restricted_amend.claimed_card_fields 未声明")
+    return {str(f) for f in fields}
 
 
 def amend_task(
@@ -7399,7 +7509,7 @@ def queue_rework_task(
             amendments={"rework_rounds": new_rounds},
             amendment_reason=f"Add rework round {round_result['data']['round_added']} based on verdict {verdict_ref}",
             amendment_type="add_rework_round",
-            restricted_fields={"rework_rounds"},
+            restricted_fields={"rework_rounds"} & restricted_amend_fields(),  # AIPOS-F78 前置零⑤: 子集须在声明内
             dry_run=dry_run,
             repo_root=resolved_root,
         )

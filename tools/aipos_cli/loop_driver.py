@@ -28,6 +28,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, TextIO
 
 from tools.aipos_cli.next_resolver import (
+    DRIVER_ACTOR_MISSING,
     REPO_ROOT,
     _action_type_for_command,
     _driver_actor,
@@ -37,6 +38,7 @@ from tools.aipos_cli.next_resolver import (
     _transition_node,
     derive_next_step,
     execute_derived_action,
+    executor_artifact_watch,
 )
 
 LOOP_VERB = "lybra_loop"
@@ -234,7 +236,11 @@ def check_command_parses(command: str) -> tuple[bool, str]:
 # 等待产物(读 transitions N2.artifact / N4.audit_report 声明)
 # ---------------------------------------------------------------------------
 
-def executor_artifact_patterns(task_id: str) -> list[str]:
+def executor_artifact_patterns(task_id: str, governance_root: Path | None = None) -> list[str]:
+    """AIPOS-F78 件④: 执行体产物等待 glob 读项目声明(project.json paths.return_root + artifact_ingest.return 候选);
+    无治理根(仅取模板)时回退 N2.artifact.location 默认声明。"""
+    if governance_root is not None:
+        return executor_artifact_watch(governance_root, task_id)[1]
     template = str(_transition_node("N2").get("artifact", {}).get("location") or "").strip()
     if not template:
         from tools.schema_loader import SchemaLoadError
@@ -323,7 +329,13 @@ def run_loop(
         return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"),
                           f"queue 目录中找不到任务卡 {task_id}", missing_records=[f"任务卡 {task_id}"])
     task_fm = _read_frontmatter(task_path)
-    driver_actor = actor or _driver_actor(governance_root, fallback=DRIVER_ROLE)
+    # AIPOS-F78 前置零②: 驱动方身份=显式 --actor → 工位声明(.lybra/role instance)→ connection.json 驱动方 token 实例; 禁占位 advisor
+    driver_actor = actor or _driver_actor(governance_root, connection_json=connection_json)
+    if not driver_actor:
+        msg = f"驱动方身份解析不到: 缺 {DRIVER_ACTOR_MISSING}(或显式 --actor)"
+        say(f"lybra loop {task_id}: exit 4 — {msg}")
+        return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), msg,
+                          missing_records=[DRIVER_ACTOR_MISSING])
 
     # 件③ 信封(启动前校验; 无信封 exit 5 带申领出口, 禁裸跑)
     policy, reasons = find_envelope(
@@ -351,11 +363,21 @@ def run_loop(
         derivation = derive(task_id, governance_root)
         target_card = task_id
         wait_patterns: list[str] = []
+        watch_root = governance_root
 
         if not derivation.get("derivable"):
             action = derivation.get("action") or {}
             node = derivation.get("current_node")
             state = derivation.get("current_state")
+            if action.get("type") == "artifact_invalid":
+                # AIPOS-F78 件③: 产物已落盘但必填 frontmatter 不齐 → 不空等, exit 4 点名缺项(执行体补齐后重跑 loop)
+                missing = list(derivation.get("missing_records") or [])
+                msg = f"产物不合规 @ {node}/{state}: {action.get('path')}: missing={missing}; suggested={derivation.get('suggested_action', '')}"
+                steps.append(LoopStep(index, "execute", node, state, task_id, ok=False, message=msg))
+                say(f"[{index}] exit 4 — {msg}")
+                result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
+                result.missing_records, result.suggested_action = missing, str(derivation.get("suggested_action") or "")
+                return result
             if action.get("type") == "await_artifact" and action.get("card"):
                 # N3: 已派审, 审计体在干活 → 审计卡自身可能已可推导(claim 审计卡 / 提交裁决)
                 audit_card = str(action["card"])
@@ -366,8 +388,8 @@ def run_loop(
                     target_card = audit_card
                     wait_patterns = auditor_artifact_patterns(audit_card)
             elif node == "claim" and state == "claimed":
-                # N1→N2: 执行体在干活 → 等 RETURN.md(骨架不算, 判据=推导核)
-                wait_patterns = executor_artifact_patterns(task_id)
+                # N1→N2: 执行体在干活 → 等 Return 落盘(落点读项目声明; 骨架不算, 判据=推导核)
+                watch_root, wait_patterns = executor_artifact_watch(governance_root, task_id)
             else:
                 missing = list(derivation.get("missing_records") or [])
                 msg = f"不可推导 @ {node}/{state}: missing={missing}; suggested={derivation.get('suggested_action', '')}"
@@ -383,11 +405,13 @@ def run_loop(
             say(f"[{index}] wait: {target_card} 产物 {wait_patterns} (≤{max_wait}s, 经 agent watch)")
 
             def _ready(_matched: list[str], _card: str = target_card) -> bool:
-                return bool(derive(_card, governance_root).get("derivable"))
+                # 就绪 = 推导核可推导; 或产物已落盘但不合规(artifact_invalid, AIPOS-F78 件③)——两者都该让 loop 醒来判定, 而非空等到超时
+                d = derive(_card, governance_root)
+                return bool(d.get("derivable")) or (d.get("action") or {}).get("type") == "artifact_invalid"
 
             watch_out = io.StringIO()
             with contextlib.redirect_stdout(watch_out):
-                rc = watch(_watch_args(governance_root, wait_patterns, max_wait=max_wait, interval=interval), expect_ready=_ready)
+                rc = watch(_watch_args(watch_root, wait_patterns, max_wait=max_wait, interval=interval), expect_ready=_ready)
             step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
             if rc != 0:
                 step.ok = False

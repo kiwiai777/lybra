@@ -99,6 +99,31 @@ def resolve_role_from_connection(
     )
 
 
+def driver_role_class(repo_root: Path | None = None) -> str:
+    """AIPOS-F78 前置零①: 账务动词驱动方的角色类——唯一声明 roles.schema.json driver.role_class(缺 = SchemaLoadError)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    driver = load_schema("roles", repo_root).get("driver")
+    role_class = str((driver or {}).get("role_class") or "").strip() if isinstance(driver, dict) else ""
+    if not role_class:
+        raise SchemaLoadError("roles.schema.json driver.role_class(账务动词驱动方)未声明")
+    return role_class
+
+
+def resolve_driver_role_from_connection(*, connection_json_path: str, repo_root: Path | None = None) -> str:
+    """AIPOS-F78 前置零①: 账务动词(claim/return/verdict…)一律用驱动方 token 提交——按 roles.schema driver.role_class
+    从 connection.json 选 token 的 role 名(actor/agent_instance 仍=卡实例, 由调用方传)。无驱动方 token = ValueError 带路。"""
+    wanted = driver_role_class()  # schema 单一源在产品仓(自动定位), 禁随治理根解析
+    try:
+        return resolve_role_from_connection(
+            connection_json_path=connection_json_path, required_role_class=wanted, repo_root=repo_root
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"账务动词须由驱动方 token 提交(roles.schema driver.role_class={wanted}), 但 connection.json 无该角色类 token: {exc}"
+        ) from exc
+
+
 def _fail(error: str) -> tuple[int, dict[str, Any]]:
     """错误路径必须出声(exit 1 + stderr): 静默失败 = 不可审计(F22-fix1 可观测性补齐)"""
     print(f"two_phase_shell_factory: {error}", file=sys.stderr)

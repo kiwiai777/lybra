@@ -1337,6 +1337,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_amend_parser.add_argument("--amendments", required=True, help="JSON dict of amendments")
     queue_amend_parser.add_argument("--amendment-reason", required=True, help="Reason for amendment")
     queue_amend_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    queue_amend_parser.add_argument("--restricted", action="store_true", help="AIPOS-F78 前置零⑤: advisor 对 claimed 卡受限 amend(允许字段读 card.schema restricted_amend.claimed_card_fields: rework_rounds/output_target/lane; 复用 F75 restricted amend)")
     queue_amend_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     queue_withdraw_parser = queue_subparsers.add_parser("withdraw", help="Withdraw a task from queue")
@@ -1368,6 +1369,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_return_parser.add_argument("--owner-policy-ref", required=True, help="Owner policy reference")
     queue_return_parser.add_argument("--artifact-refs", help="JSON array of artifact references")
     queue_return_parser.add_argument("--completion-report-ref", help="Completion report reference")
+    queue_return_parser.add_argument("--actual-model", help="AIPOS-F78 件③: 执行体实际模型自报(来自 Return frontmatter.model, 透传 verbs.schema actual_model)")
     queue_return_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     queue_return_parser.add_argument("--confirm", action="store_true", help="AIPOS-F33: Two-step gate return (dry_run + confirm via MCP, executor self-confirm). Thin shell over same gate verbs as /lybra return and tryAutoReturn.")
     queue_return_parser.add_argument("--connection-json", help="Path to connection.json (for --confirm gate access)")
@@ -1379,6 +1381,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_close_parser.add_argument("--task-id", required=True, help="Task ID to close")
     queue_close_parser.add_argument("--actor", required=True, help="Actor performing the close")
     queue_close_parser.add_argument("--closure-evidence", required=True, help="JSON object with at least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref")
+    queue_close_parser.add_argument("--conclusion-note", help="AIPOS-F78 前置零⑨: 结案说明(含承接声明如「由续卡 <ID> 承接」时登记承接世系, F53 lineage 读此字段)")
     queue_close_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     queue_close_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -1516,6 +1519,7 @@ def build_parser() -> argparse.ArgumentParser:
     # F-R4B2-1: verdict choices 从 enums.schema 读（唯一权威）
     from tools.schema_loader import get_enum_values
     verdict_choices = get_enum_values("verdict")
+    harness_choices = get_enum_values("harness")  # AIPOS-F78 件①: 执行引擎值域(enums.schema harness)
     
     audit_verdict_parser = subparsers.add_parser("audit-verdict", help="Submit audit verdict for a reviewed task (via gate MCP)")
     audit_verdict_parser.add_argument("--audit-task-id", help="Audit task ID (optional)")
@@ -1538,7 +1542,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verdict_parser.add_argument("--confirm", action="store_true", help="AIPOS-F22: Two-phase gate verdict (dry_run + confirm via薄壳工厂, auditor self-confirm)")
     audit_verdict_parser.add_argument("--gate-url", default=None, help="Gate MCP server URL (default: http://127.0.0.1:7118)")
     audit_verdict_parser.add_argument("--connection-json", help="Path to connection.json (default: .lybra/connection.json in workspace)")
-    audit_verdict_parser.add_argument("--token-role", default="auditor", help="Token role in connection.json (default: auditor)")
+    audit_verdict_parser.add_argument("--token-role", default=None, help="Token role in connection.json (AIPOS-F78 前置零①: 缺省=roles.schema driver.role_class 的驱动方 token; 显式指定仅供靶场/人肉 gate)")
     audit_verdict_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-325: pump 子命令 (kickoff 三层制约 + 产品 CLI 入口)
@@ -1912,6 +1916,33 @@ def build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--max-wait", type=float, default=None, help="硬上限: 每次等待产物秒数; 缺省读 verbs.schema(沿用 agent watch 1800)")
     loop_parser.add_argument("--interval", type=float, default=None, help="等待轮询间隔秒(经 agent watch, 禁 sleep 自旋); 缺省读 verbs.schema(15)")
     loop_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-F78 件②: lybra card render — 卡意图面单一渲染器(pi 三行 / codex Prompt.md+Plan.md / claude-code CLAUDE.md 片段)
+    card_parser = subparsers.add_parser("card", help="AIPOS-F78: 卡意图面操作(render)")
+    card_subparsers = card_parser.add_subparsers(dest="card_command")
+    card_render_parser = card_subparsers.add_parser(
+        "render",
+        help="AIPOS-F78 件②: 把卡的意图面按 harness 渲染给执行引擎(同一源三输出; 零门动词/零 token; 落点全读项目声明)",
+    )
+    card_render_parser.add_argument("--task-id", required=True, help="卡 ID")
+    card_render_parser.add_argument("--harness", choices=harness_choices, default=None, help="目标引擎(enums.schema harness); 缺省=卡面 harness, 再缺省=card.schema intent_face.harness.default_by_task_mode")
+    card_render_parser.add_argument("--workspace-root", type=Path, help="治理根; 缺省自发现")
+    card_render_parser.add_argument("--out-dir", help="codex/claude-code 输出目录; 缺省=卡工作树根")
+    card_render_parser.add_argument("--stdout", action="store_true", help="只打印不落盘")
+    card_render_parser.add_argument("--json", action="store_true", help="JSON 输出(文件名→内容)")
+
+    # AIPOS-F78 件③: lybra artifact ingest — 产物入口(由 loop/next --run 触发, 非人用)
+    artifact_parser = subparsers.add_parser("artifact", help="AIPOS-F78: 产物入口(ingest)")
+    artifact_subparsers = artifact_parser.add_subparsers(dest="artifact_command")
+    artifact_ingest_parser = artifact_subparsers.add_parser(
+        "ingest",
+        help="AIPOS-F78 件③: 读项目声明落点找 Return/裁决报告, 校验必填 frontmatter 与分支 tip==commit_sha, 经既有薄壳铸记录(驱动方 token)",
+    )
+    artifact_ingest_parser.add_argument("--task-id", required=True, help="卡 ID(执行卡=Return 入口; R 卡=裁决入口)")
+    artifact_ingest_parser.add_argument("--workspace-root", type=Path, help="治理根; 缺省自发现")
+    artifact_ingest_parser.add_argument("--connection-json", help="connection.json(驱动方 token, 永不上屏)")
+    artifact_ingest_parser.add_argument("--dry-run", action="store_true", help="只校验与打印将执行的薄壳命令, 不提交")
+    artifact_ingest_parser.add_argument("--json", action="store_true", help="JSON 输出")
 
     # AIPOS-F71: 退役旧入口 — turn-advancer 与 next-step 保留为兼容转发(输出退役提示)
     turn_parser = subparsers.add_parser("turn-advancer", help="[RETIRED by AIPOS-F71] Use 'lybra next' instead")
@@ -4072,44 +4103,12 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "active_session_id", None):
             verb_args["active_session_id"] = args.active_session_id
         
-        # AIPOS-F44D-A: 角色解析不写死
-        # AIPOS-F73D 前置二(顾问 2026-09-16 活体实撞: 原 `from task_loader import load_task_by_id` 不存在 → 部署件 ImportError):
-        # 改用 task_loader 真实 API(iter_queue_task_paths + load_task_file)找卡, 按卡 assigned_to/agent_instance 与
-        # roles 注册表派生 required_role_class(draft_writer._card_role_class 唯一判据; 禁子串猜、禁 task_id 尾字母启发式)。
-        from tools.aipos_cli.two_phase_shell_factory import resolve_role_from_connection
-        from tools.aipos_cli.task_loader import iter_queue_task_paths, load_task_file
-        from tools.aipos_cli.draft_writer import _card_role_class
-        
-        required_role_class = "executor"  # 注册表判不出时的存量默认(出 warning, 不静默)
-        task_id = getattr(args, "task_id", None)
-        task_path_arg = getattr(args, "path", None)
-        card_meta: dict[str, Any] | None = None
-        try:
-            if task_path_arg:
-                card_meta = load_task_file(Path(repo_root) / task_path_arg, Path(repo_root)).get("metadata") or {}
-            elif task_id:
-                for _card_path in iter_queue_task_paths(Path(repo_root)):
-                    _loaded = load_task_file(_card_path, Path(repo_root))
-                    if str(_loaded.get("task_id") or "").strip() == str(task_id).strip():
-                        card_meta = _loaded.get("metadata") or {}
-                        break
-        except (OSError, ValueError) as exc:
-            print(f"Warning: 无法读取任务卡, required_role_class 用默认 {required_role_class}: {exc}", file=sys.stderr)
-        if card_meta is None:
-            print(f"Warning: queue 中找不到任务卡 {task_id or task_path_arg}, required_role_class 用默认 {required_role_class}", file=sys.stderr)
-        else:
-            derived_class = _card_role_class(card_meta, Path(repo_root))
-            if derived_class:
-                required_role_class = derived_class
-            else:
-                print(f"Warning: 注册表判不出卡 {task_id or task_path_arg} 的角色类, required_role_class 用默认 {required_role_class}", file=sys.stderr)
+        # AIPOS-F78 前置零①(F73D 活体实撞: 薄壳按卡角色类选 executor/auditor token, 二者已无账务 scope → SCOPE_DENIED):
+        # 账务动词一律驱动方 token(roles.schema driver.role_class), actor/agent_instance=卡实例(verb_args 已按参数带入)。
+        from tools.aipos_cli.two_phase_shell_factory import resolve_driver_role_from_connection
         
         try:
-            role = resolve_role_from_connection(
-                connection_json_path=conn_json_path,
-                required_role_class=required_role_class,
-                repo_root=repo_root,
-            )
+            role = resolve_driver_role_from_connection(connection_json_path=conn_json_path, repo_root=repo_root)
         except ValueError as exc:
             print(f"Error resolving role: {exc}", file=sys.stderr)
             return 1
@@ -4185,12 +4184,22 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as exc:
             print(f"Error: Invalid JSON in --amendments: {exc}", file=sys.stderr)
             return 1
+        # AIPOS-F78 前置零⑤: --restricted → advisor 对 claimed 卡受限 amend, 允许字段唯一声明在 card.schema restricted_amend
+        restricted_fields = None
+        if getattr(args, "restricted", False):
+            from tools.aipos_cli.board_adapter import restricted_amend_fields
+            try:
+                restricted_fields = restricted_amend_fields()
+            except Exception as exc:  # SchemaLoadError 等: 声明缺失即出声停
+                print(f"Error: restricted amend 声明读取失败: {exc}", file=sys.stderr)
+                return 1
         try:
             result = amend_task(
                 task_id=args.task_id,
                 actor=args.actor,
                 amendments=amendments,
                 amendment_reason=args.amendment_reason,
+                restricted_fields=restricted_fields,
                 dry_run=args.dry_run,
                 repo_root=repo_root,
             )
@@ -4439,15 +4448,13 @@ def main(argv: list[str] | None = None) -> int:
                 verb_args["completion_report_ref"] = args.completion_report_ref
             if getattr(args, "active_session_id", None):
                 verb_args["active_session_id"] = args.active_session_id
+            if getattr(args, "actual_model", None):
+                verb_args["actual_model"] = args.actual_model
             
-            # AIPOS-F44D-A: 角色解析不写死
-            from tools.aipos_cli.two_phase_shell_factory import resolve_role_from_connection
+            # AIPOS-F78 前置零①: 账务动词一律驱动方 token(roles.schema driver), actor=卡实例(claimer)
+            from tools.aipos_cli.two_phase_shell_factory import resolve_driver_role_from_connection
             try:
-                role = resolve_role_from_connection(
-                    connection_json_path=conn_json_path,
-                    required_role_class="executor",
-                    repo_root=repo_root,
-                )
+                role = resolve_driver_role_from_connection(connection_json_path=conn_json_path, repo_root=repo_root)
             except ValueError as exc:
                 print(f"Error resolving role: {exc}", file=sys.stderr)
                 return 1
@@ -4499,6 +4506,7 @@ def main(argv: list[str] | None = None) -> int:
                 task_id=args.task_id,
                 actor=args.actor,
                 closure_evidence=closure_evidence,
+                conclusion_note=getattr(args, "conclusion_note", None),
                 dry_run=args.dry_run,
                 repo_root=repo_root,
             )
@@ -4965,11 +4973,28 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "owner_waiver_ref", None):
             verb_args["owner_waiver_ref"] = args.owner_waiver_ref
         
+        # AIPOS-F78 前置零①: 裁决提交亦是账务动词 → 缺省驱动方 token(roles.schema driver); --token-role 显式覆盖
+        verdict_role = getattr(args, "token_role", None)
+        if not verdict_role:
+            from tools.aipos_cli.two_phase_shell_factory import resolve_driver_role_from_connection
+            try:
+                verdict_role = resolve_driver_role_from_connection(connection_json_path=conn_json_path, repo_root=repo_root)
+            except ValueError as exc:
+                print(f"Error resolving role: {exc}", file=sys.stderr)
+                return 1
+        # AIPOS-F73前置②: artifact_subject 从 CLI 参数带入(推导核/ingest 由分支 tip 取)
+        artifact_subject = {
+            k: getattr(args, f"artifact_subject_{k}", None)
+            for k in ("repository", "commit_sha", "tree_hash")
+            if getattr(args, f"artifact_subject_{k}", None)
+        }
+        if artifact_subject:
+            verb_args["artifact_subject"] = artifact_subject
         exit_code, _ = execute_two_phase_verb(
             verb_base="lybra_audit_verdict",
             args_dict=verb_args,
             connection_json_path=conn_json_path,
-            role=getattr(args, "token_role", "auditor"),
+            role=verdict_role,
             json_output=getattr(args, "json", False),
         )
         return exit_code
@@ -5295,6 +5320,22 @@ def main(argv: list[str] | None = None) -> int:
         # AIPOS-F73D: 顾问侧驱动器薄壳 — 全部逻辑在 loop_driver(复用 next_resolver + agent_watch_fs + autonomy_policy)
         from tools.aipos_cli.loop_driver import run_loop_cli
         return run_loop_cli(args)
+
+    if args.command == "card":
+        # AIPOS-F78 件②: 单一渲染器薄壳
+        if getattr(args, "card_command", None) != "render":
+            print("Usage: lybra card render --task-id <ID> [--harness pi|codex|claude-code] [--stdout|--out-dir DIR]", file=sys.stderr)
+            return 2
+        from tools.aipos_cli.card_render import run_render_cli
+        return run_render_cli(args)
+
+    if args.command == "artifact":
+        # AIPOS-F78 件③: 产物入口薄壳(校验后经既有 queue return / audit-verdict 薄壳)
+        if getattr(args, "artifact_command", None) != "ingest":
+            print("Usage: lybra artifact ingest --task-id <ID> [--connection-json PATH] [--dry-run]", file=sys.stderr)
+            return 2
+        from tools.aipos_cli.artifact_ingest import run_ingest_cli
+        return run_ingest_cli(args)
 
     if args.command == "next":
         from tools.aipos_cli.next_resolver import derive_next_step, scan_project, format_output, format_scan_output

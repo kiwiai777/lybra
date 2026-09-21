@@ -94,7 +94,23 @@
     "output_target": {
       "type": "string",
       "required": true,
-      "description": "Target output location or scope"
+      "description": "Target output location or scope (AIPOS-F78: 存量声明; 车道目录以 lane.paths 为准, output_target 仅作 lane.paths 的派生来源与存量兼容)"
+    },
+    "harness": {
+      "type": "string",
+      "required": false,
+      "$enum": "harness",
+      "description": "AIPOS-F78 件①: 执行引擎声明(pi|codex|claude-code)。缺省由 task_mode 派生, 派生表唯一声明在本文件 intent_face.harness.default_by_task_mode; 渲染器 `lybra card render --harness` 按此选模板"
+    },
+    "lane": {
+      "type": "object",
+      "required": false,
+      "description": "AIPOS-F78 件①: 车道(子项目即 lane, 不另建功能) {repo: 产品仓根(缺省 project.json code_repo), paths: [允许改动目录/文件前缀], roles: [允许角色类]}。publish 校验: lane 缺失且无法从 output_target 派生 = 拒(LANE_REQUIRED); 交回判据 CHANGES_OUT_OF_SCOPE 读 lane.paths; advisor 可对 claimed 卡受限 amend(restricted_amend)",
+      "shape": {
+        "repo": "string (absolute path or project.json code_repo)",
+        "paths": "array of string (repo-relative dir/file prefixes)",
+        "roles": "array of string (role classes allowed to work this lane)"
+      }
     },
     "artifact_policy": {
       "type": "string",
@@ -800,6 +816,8 @@
     "fields": [
       "title",
       "output_target",
+      "harness",
+      "lane",
       "governance_refs",
       "anchor_refs"
     ],
@@ -813,6 +831,74 @@
       "硬约束",
       "验收",
       "产品三问"
+    ]
+  },
+  "intent_face": {
+    "description": "AIPOS-F78 件①: 卡意图面声明——执行体只看意图面渲染物(`lybra card render`), 账本面=runtime_fields(门写)。harness/lane 的派生与校验规则只声明在此一处, create/publish/regen 三口同读(machine_zone.derive_intent_declarations)。",
+    "harness": {
+      "allowed": [
+        "pi",
+        "codex",
+        "claude-code"
+      ],
+      "default_by_task_mode": {
+        "code": "pi",
+        "docs": "pi",
+        "governance": "pi",
+        "config": "pi",
+        "audit": "pi"
+      },
+      "renderers": {
+        "pi": "开工提示三行(工作树/报告落点/卡路径), /go 复用",
+        "codex": "Prompt.md + Plan.md 写入工作树根(OpenAI 长任务形制)",
+        "claude-code": "同一内容渲染为 CLAUDE.md 片段"
+      },
+      "rendered_output_rule": "渲染物不含任何 lybra_ 门动词与 token(grep lybra_ = 0)"
+    },
+    "lane": {
+      "required_at_publish": true,
+      "derive": {
+        "repo": "project.json code_repo (治理根声明); 缺声明 = 治理根自身",
+        "paths": "output_target 解析出的路径片段(含 / 或 . 的 token; 与交回判据同一解析函数 machine_zone.parse_output_target_paths)",
+        "roles": "assigned_to/agent_instance 经 roles 注册表解析出的角色类"
+      },
+      "missing_rule": "lane 缺失时按 derive 派生; output_target 亦缺/解析为空 = LANE_REQUIRED 拒发布"
+    },
+    "gate_verb_check": {
+      "description": "AIPOS-F78 前置零⑧: publish 的「意图面不含门动词」校验只匹配 verbs.schema 注册的 MCP 动词全名(surface 含 mcp), 整词匹配, 只扫意图面正文(frontmatter 的策略 id/governance_refs 文档引用不在扫描面)",
+      "scan": "body",
+      "match": "verbs.schema.json verbs[*] where surface contains mcp",
+      "word_boundary": true
+    },
+    "body_sections_rendered": {
+      "goal": [
+        "Goal",
+        "目标",
+        "一句话"
+      ],
+      "acceptance": [
+        "Acceptance Criteria",
+        "验收"
+      ],
+      "prohibitions": [
+        "硬约束",
+        "禁止域",
+        "Prohibitions"
+      ],
+      "milestones": [
+        "里程碑",
+        "Milestones",
+        "做什么"
+      ]
+    }
+  },
+  "restricted_amend": {
+    "description": "AIPOS-F78 前置零⑤(复用 F75 restricted amend): advisor 对 claimed 卡可受限修改的字段清单, 唯一声明。queue_rework 用其子集 {rework_rounds}; `lybra queue amend --restricted` 读全集。",
+    "actor_role_class": "advisor",
+    "claimed_card_fields": [
+      "rework_rounds",
+      "output_target",
+      "lane"
     ]
   }
 }
