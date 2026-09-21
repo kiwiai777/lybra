@@ -4093,6 +4093,7 @@ def _build_audit_verdict_preview(
     planned_verdict_at: str | None = None,
     agent_runtime: dict[str, Any] | None = None,
     artifact_subject: dict[str, Any] | None = None,
+    submitted_by: str | None = None,  # AIPOS-F73E 件②: 提交身份(驱动方 token 实例), 记录字段, 不参与 actor 校验
 ) -> dict[str, Any]:
     # AIPOS-F14 大项B: 报错参数名取 verb_contract 实名(audit_task_id/audit_task_path)
     audit_task = _select_task(
@@ -4383,6 +4384,7 @@ def _build_audit_verdict_preview(
         owner_waiver_ref=owner_waiver_ref,  # AIPOS-R6A 靶子④: 接线 waiver 引用
         agent_runtime=agent_runtime,
         artifact_subject=artifact_subject,  # AIPOS-F70: 产物指纹
+        submitted_by=submitted_by,  # AIPOS-F73E 件②
     )
     session_markdown = ""
     session_rel = str(session_path.resolve().relative_to(root)) if session_path else ""  # AIPOS-240: symlink-safe
@@ -4452,6 +4454,7 @@ def _build_audit_verdict_preview(
             "planned_verdict_id": verdict_id,
             "planned_verdict_at": timestamp,
             "artifact_subject": artifact_subject,
+            "submitted_by": submitted_by,
         },
     }
     verdict = derive_verdict(blocking_reasons=blocking_reasons, warnings=warnings)
@@ -4587,6 +4590,7 @@ def audit_verdict_task(
     planned_verdict_at: str | None = None,
     agent_runtime: dict[str, Any] | None = None,
     artifact_subject: dict[str, Any] | None = None,
+    submitted_by: str | None = None,  # AIPOS-F73E 件②
     dry_run: bool = True,
     repo_root: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -4649,6 +4653,7 @@ def audit_verdict_task(
             planned_verdict_at=str(planned_verdict_at or "").strip() or None,
             agent_runtime=agent_runtime,
             artifact_subject=artifact_subject,
+            submitted_by=str(submitted_by or "").strip() or None,
             repo_root=resolved_root,
             dry_run=dry_run,
         )
@@ -5032,6 +5037,7 @@ def execute_dry_run(
                 planned_verdict_id=payload.get("planned_verdict_id"),
                 planned_verdict_at=payload.get("planned_verdict_at"),
                 artifact_subject=payload.get("artifact_subject"),
+                submitted_by=payload.get("submitted_by"),
                 dry_run=True,
                 repo_root=resolved_root,
             )
@@ -5533,6 +5539,7 @@ def execute_dry_run(
                 planned_verdict_id=payload.get("planned_verdict_id"),
                 planned_verdict_at=payload.get("planned_verdict_at"),
                 artifact_subject=payload.get("artifact_subject"),
+                submitted_by=payload.get("submitted_by"),
                 dry_run=False,
                 repo_root=resolved_root,
             )
@@ -6306,8 +6313,12 @@ def close_task(
     dry_run: bool = True,
     repo_root: str | Path | None = None,
     conclusion_note: str | None = None,
+    submitted_by: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-283: gate close verb — move a claimed task to completed/ with closure evidence.
+
+    AIPOS-F73E 件②: actor 校验按 actor==claimer(queue_mutation complete 判据不变); submitted_by=提交身份(驱动方 token
+    角色实例, MCP 取 capability, CLI 取工位声明)只记进 closure 记录, 声明在 transitions record_authenticity.submission_identity。
 
     Validates:
     - Task is in claimed/ queue state
@@ -6409,7 +6420,9 @@ def close_task(
 
         # Build closure ID
         timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        closure_id = build_runtime_id("close", resolved_task_id, timestamp, actor_text)
+        from tools.aipos_cli.record_writer import CLOSURE_ID_PREFIX
+
+        closure_id = build_runtime_id(CLOSURE_ID_PREFIX, resolved_task_id, timestamp, actor_text)
         return_record_ref = str(task_returns[0].get("path") or "") if task_returns else ""
 
         # Find related audit-derived cards (<task_id>R pattern)
@@ -6604,6 +6617,7 @@ def close_task(
             return_record_ref=return_record_ref,
             related_audit_task_refs=related_audit_refs or None,
             warnings=governance_warnings or None,
+            submitted_by=str(submitted_by or "").strip() or None,
         )
         closure_path_resolved = resolved_root / closure_path
         

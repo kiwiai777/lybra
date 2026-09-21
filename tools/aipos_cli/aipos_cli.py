@@ -4496,6 +4496,7 @@ def main(argv: list[str] | None = None) -> int:
     # AIPOS-C1 大项A: queue close — wrap board_adapter.close_task
     if args.command == "queue" and getattr(args, "queue_command", None) == "close":
         from tools.aipos_cli.board_adapter import close_task
+        from tools.aipos_cli.next_resolver import _driver_actor
         try:
             closure_evidence = json.loads(args.closure_evidence)
         except json.JSONDecodeError as exc:
@@ -4507,6 +4508,8 @@ def main(argv: list[str] | None = None) -> int:
                 actor=args.actor,
                 closure_evidence=closure_evidence,
                 conclusion_note=getattr(args, "conclusion_note", None),
+                # AIPOS-F73E 件②: 本地薄壳无 token, 提交身份=工位声明的驱动方实例(_driver_actor 单一实现); actor 仍=认领实例
+                submitted_by=_driver_actor(repo_root),
                 dry_run=args.dry_run,
                 repo_root=repo_root,
             )

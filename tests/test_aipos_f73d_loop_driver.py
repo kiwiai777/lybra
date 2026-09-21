@@ -42,7 +42,7 @@ from tools.aipos_cli.next_resolver import (  # noqa: E402
     _ensure_worktree,
     derive_next_step,
 )
-from tools.aipos_cli.record_writer import build_return_skeleton_markdown  # noqa: E402
+from tools.aipos_cli.record_writer import CLOSURE_ID_PREFIX, build_return_skeleton_markdown  # noqa: E402
 
 TASK = "AIPOS-F73DT"
 AUDIT = f"{TASK}R"
@@ -179,8 +179,9 @@ class GateDouble:
                    _fm({"record_type": "finalization_record", "task_id": card, "commit": "a" * 40, "commit_hash": "a" * 40,
                         "finalized_at": "2026-09-16T04:00:00Z", "deploy_status": "deployed"}))
         elif action == "close":
-            _write(rec / "closures" / card / f"closure_{card}_{_ts()}_advisor.md",
-                   _fm({"record_type": "closure", "task_id": card, "actor": "advisor", "closed_at": "2026-09-16T05:00:00Z"}))
+            # AIPOS-F73E: 文件名前缀与真门同源(record_writer.CLOSURE_ID_PREFIX = close_*), actor=认领实例, submitted_by=驱动方
+            _write(rec / "closures" / card / f"{CLOSURE_ID_PREFIX}_{card}_{_ts()}_exec.md",
+                   _fm({"record_type": "closure", "task_id": card, "actor": EXEC, "submitted_by": DRIVER, "closed_at": "2026-09-16T05:00:00Z"}))
             src = q / "claimed" / f"{card.lower()}.md"
             (q / "completed" / f"{card.lower()}.md").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
             src.unlink()
@@ -317,7 +318,7 @@ def test_f73d_item1_full_lifecycle_claimed_to_completed(gov: Path):
     assert (gov / "5_tasks" / "queue" / "completed" / f"{AUDIT.lower()}.md").is_file()
     # 派生命令原文: finalize 带 --actor 与两根; token 零出现
     fin = [s for s in res.steps if s.action_type == "finalize"][0]
-    assert f"--actor {DRIVER}" in fin.command  # AIPOS-F78 前置零②: 禁占位 advisor
+    assert f"--actor {EXEC}" in fin.command  # AIPOS-F73E 件①(改写 F78 前置零②): actor=该卡 claim 记录的执行实例, token 归驱动方
     assert f"--workspace-root {json.loads((gov / 'project.json').read_text())['code_repo']}" in fin.command
     assert f"--governance-root {gov}" in fin.command
     assert "token" not in text.lower().replace("token 永不上屏", "")
@@ -442,7 +443,7 @@ def test_f73d_pre1_item2_derived_finalize_uses_project_json_code_repo(gov: Path)
     assert d["derivable"] and d["verb"] == "lybra_finalize"
     code_repo = json.loads((gov / "project.json").read_text())["code_repo"]
     assert f"--workspace-root {code_repo}" in d["command"] and f"--governance-root {gov}" in d["command"]
-    assert f"--actor {DRIVER}" in d["command"]  # AIPOS-F78 前置零②: 驱动方=工位声明实例, 占位 advisor 已退役
+    assert f"--actor {EXEC}" in d["command"] and f"--actor {DRIVER}" not in d["command"]  # AIPOS-F73E 件①: actor=claim 记录实例, 驱动方只持 token
     assert str(gov) not in d["command"].split("--workspace-root")[1].split()[0], "治理根不得当产品仓"
 
 

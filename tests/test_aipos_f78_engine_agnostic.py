@@ -517,19 +517,19 @@ def test_f78_pre0_2_driver_actor_reads_declaration_never_placeholder(tmp_path, m
     assert nr._driver_actor(gov) == ""  # 无工位声明、无连接文件 → 不占位
     conn = _connection(tmp_path, ["advisor"], bound={"advisor": "advisor.lybra.bound"})
     assert nr._driver_actor(gov, connection_json=str(conn)) == "advisor.lybra.bound"
-    # 推导核: 驱动方身份缺 → finalize 不可推导并点名, 不派生 `--actor advisor`
+    # AIPOS-F73E 件①(改写本条后半): finalize/close 的 actor 不再是驱动方而是该卡 claim 记录实例——
+    # 无 claim 记录 → 不可推导并点名 claim 记录; 有 → `--actor <执行实例>`; 驱动方身份只服务信封/claim token, 永不进账务命令 --actor
     task_id = "F78-DRV"
     _card(gov, task_id, "claimed")
-    _claim_record(gov, task_id, EXEC)
     rec = gov / "5_tasks" / "records"
     _write(rec / "returns" / task_id / f"return_{task_id}_x_{EXEC}.md", _fm({"record_type": "return", "task_id": task_id, "return_id": "r1"}))
     _write(rec / "audit_dispatches" / f"{task_id}R" / "dispatch_x.md", _fm({"record_type": "audit_dispatch", "dispatch_id": "d", "reviewed_task_id": task_id}))
     _write(rec / "audit_verdicts" / task_id / "verdict_x.md", _fm({"record_type": "audit_verdict_record", "verdict_id": "verdict_F78_v1", "verdict": "PASS", "verdict_at": "2026-09-21T03:00:00Z"}))
     d = derive_next_step(task_id, gov)
-    assert d["derivable"] is False and d["verb"] == "lybra_finalize" and nr.DRIVER_ACTOR_MISSING in d["missing_records"], d
-    _write(gov / ".lybra" / "role", json.dumps({"role": "advisor", "instance": DRIVER}))
+    assert d["derivable"] is False and d["verb"] == "lybra_finalize" and any("claim 记录" in m for m in d["missing_records"]), d
+    _claim_record(gov, task_id, EXEC)
     d2 = derive_next_step(task_id, gov)
-    assert d2["derivable"] and f"--actor {DRIVER}" in d2["command"]
+    assert d2["derivable"] and f"--actor {EXEC}" in d2["command"] and f"--actor {DRIVER}" not in d2["command"], d2
 
 
 # ---------------------------------------------------------------------------

@@ -813,7 +813,20 @@
         "record_type: closure"
       ]
     },
-    "rejection_policy": "手写文件(缺少门生标记)必须被忽略并 warn,绝不参与状态判定"
+    "rejection_policy": "手写文件(缺少门生标记)必须被忽略并 warn,绝不参与状态判定",
+    "submission_identity": {
+      "description": "AIPOS-F73E(F73C 定案落地): 账务记录两重身份分离——token 归驱动方, actor 归该卡认领实例。唯一声明处; next_resolver._claimer_instance / record_writer._confirmer_fields / board_adapter.close_task 读此口径。",
+      "actor_rule": "actor/agent_instance == claimer: 该卡 claim 记录的 agent_instance(审计卡=审计实例, 执行卡=执行实例); 门校验按 actor==claimer(assigned_to/agent_instance/claimed_by) 判; 禁把驱动方实例当 actor",
+      "actor_source": "5_tasks/records/claims/{task_id}/claim_*.md agent_instance; 无 claim 记录 = 不可推导(exit 4), 禁回退卡面/驱动方",
+      "submitted_by_rule": "submitted_by = 提交该动词的 token 角色实例(roles.schema driver); 只记不判, 永不参与 actor 匹配",
+      "submitted_by_source": {
+        "mcp": "confirming capability token 的 agent_instance 绑定, 缺绑定则 role 名(tools._confirmer_attribution)",
+        "cli_local": "治理根 .lybra/role instance → connection.json 驱动方 token agent_instance(next_resolver._driver_actor)"
+      },
+      "field": "submitted_by",
+      "applies_to": ["claim", "return", "audit_verdict", "closure"],
+      "dispatch_exception": "audit_dispatch 的 actor 保持派审身份声明(owner-dispatch 族), 不按 claimer 判"
+    }
   },
   "state_consistency": {
     "description": "卡状态三方一致性 lint (大项C①)",

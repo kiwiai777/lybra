@@ -243,7 +243,8 @@ def _write_closure_record(workspace, task_id):
     closures_dir = workspace / "5_tasks" / "records" / "closures" / task_id
     closures_dir.mkdir(parents=True, exist_ok=True)
     
-    closure_file = closures_dir / "closure_20260908_050000.md"
+    # AIPOS-F73E: 真门落盘前缀 close_<task>_<ts>_<actor>(record_writer.CLOSURE_ID_PREFIX), 夹具同名
+    closure_file = closures_dir / f"close_{task_id}_20260908_050000_exec.md"
     frontmatter = f"""---
 event_type: closure
 task_id: {task_id}

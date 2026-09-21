@@ -53,6 +53,9 @@ RETURNS_ROOT = RECORDS_ROOT / "returns"
 AUDIT_DISPATCHES_ROOT = RECORDS_ROOT / "audit_dispatches"
 AUDIT_VERDICTS_ROOT = RECORDS_ROOT / "audit_verdicts"
 CLOSURES_ROOT = RECORDS_ROOT / "closures"
+# AIPOS-F73E(顺手实撞): closure_id/文件名前缀——写(board_adapter.close_task)读(next_resolver._read_task_records)同源。
+# 门实际落盘 close_<task>_<ts>_<actor>.md(存量 F73C2/F78 记录皆如此); 读侧曾按 closure_ 找 → 真门 close 后 loop 永看不到闭环记录。
+CLOSURE_ID_PREFIX = "close"
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -287,6 +290,7 @@ MCP_CLAIM_FRONTMATTER_ORDER = [
     "confirmer_role",
     "confirmer_token_ref",
     "confirmer_token_fingerprint",
+    "submitted_by",
     "gate_signature",
     "authority_seal",
     "signature_key_ref",
@@ -351,6 +355,7 @@ MCP_RETURN_FRONTMATTER_ORDER = [
     "confirmer_role",
     "confirmer_token_ref",
     "confirmer_token_fingerprint",
+    "submitted_by",
     "gate_signature",
     "authority_seal",
     "signature_key_ref",
@@ -423,6 +428,7 @@ MCP_AUDIT_VERDICT_FRONTMATTER_ORDER = [
     "dry_run_id",
     "dry_run_snapshot_hash",
     "confirmation_ref",
+    "submitted_by",
     "dependency_audit_status_after",
     "finalize_performed",
     "accepted_work_unblocked",
@@ -516,6 +522,8 @@ def _confirmer_fields(confirmer: dict[str, Any] | None) -> dict[str, Any]:
         "confirmer_role": str(c.get("confirmer_role") or ""),
         "confirmer_token_ref": str(c.get("confirmer_token_ref") or ""),
         "confirmer_token_fingerprint": str(c.get("confirmer_token_fingerprint") or ""),
+        # AIPOS-F73E 件②: 提交身份(驱动方 token 角色实例)只记不判; actor 仍=认领实例(transitions record_authenticity.submission_identity)
+        "submitted_by": str(c.get("submitted_by") or ""),
         "gate_signature": "",
         "authority_seal": "",
         "signature_key_ref": "",
@@ -853,6 +861,7 @@ def build_mcp_audit_verdict_record_markdown(
     confirmation_ref: str | None = None,
     agent_runtime: dict[str, Any] | None = None,
     artifact_subject: dict[str, Any] | None = None,  # AIPOS-F70: 产物指纹
+    submitted_by: str | None = None,  # AIPOS-F73E 件②: 提交身份(驱动方 token 实例), 只记不判
 ) -> str:
     metadata = {
         "record_type": RecordType.AUDIT_VERDICT_RECORD,
@@ -885,6 +894,7 @@ def build_mcp_audit_verdict_record_markdown(
         "dry_run_id": dry_run_id or "",
         "dry_run_snapshot_hash": dry_run_snapshot_hash or "",
         "confirmation_ref": confirmation_ref or "",
+        "submitted_by": str(submitted_by or ""),
         "dependency_audit_status_after": Verdict.PASS if verdict == Verdict.PASS else verdict,
         "finalize_performed": False,
         "accepted_work_unblocked": False,
@@ -1081,6 +1091,7 @@ def build_closure_record_markdown(
     return_record_ref: str | None = None,
     related_audit_task_refs: list[str] | None = None,
     warnings: list[str] | None = None,
+    submitted_by: str | None = None,  # AIPOS-F73E 件②: 提交身份(驱动方), actor=认领实例
 ) -> str:
     """Build a closure record markdown document (AIPOS-283/289).
 
@@ -1099,6 +1110,7 @@ def build_closure_record_markdown(
         "surface": "mcp",
         "operation": "queue_close",
         "actor": actor,
+        "submitted_by": str(submitted_by or ""),
         "closed_at": closed_at,
         "closure_evidence_type": closure_evidence.get("type", "unknown"),
         "closure_evidence_ref": closure_evidence.get("ref", ""),
@@ -1127,7 +1139,7 @@ def build_closure_record_markdown(
             body += f"- {warning}\n"
     return render_markdown(metadata, body, [
         "record_type", "event_type", "closure_id", "task_id", "task_path",
-        "surface", "operation", "actor", "closed_at", "closure_evidence_type",
+        "surface", "operation", "actor", "submitted_by", "closed_at", "closure_evidence_type",
         "closure_evidence_ref", "return_record_ref", "related_audit_task_refs",
         "warnings",
     ])

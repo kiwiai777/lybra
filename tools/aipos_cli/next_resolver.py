@@ -269,6 +269,37 @@ def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connecti
 DRIVER_ACTOR_MISSING = "驱动方身份(治理根 .lybra/role 的 instance, 或 connection.json 驱动方 token 的 agent_instance)"
 
 
+def _claimer_instance(records: dict[str, Any]) -> str:
+    """AIPOS-F73E 件①: 账务动词(return/verdict/finalize/close)的 actor/agent_instance = 该卡 claim 记录的 agent_instance
+    (审计卡=审计实例, 执行卡=执行实例); token 仍归驱动方(two_phase_shell_factory.resolve_driver_role_from_connection)。
+    唯一实现: 只读 claim 记录, 无记录返回 ""(调用方 fail-closed: 不可推导 + 点名缺项), 禁回退卡面/驱动方实例。
+    声明: transitions.schema record_authenticity.submission_identity。"""
+    latest_claim = records.get("latest_claim") or {}
+    return str(latest_claim.get("agent_instance") or latest_claim.get("actor") or "").strip()
+
+
+def _claim_record_missing(task_id: str) -> str:
+    return f"claim 记录 agent_instance(5_tasks/records/claims/{task_id}/claim_*.md, 账务动词 actor 依据)"
+
+
+def _not_derivable_no_claim(task_id: str, *, node: str, state: str, verb: str, triggered_by: str, notes: str) -> dict[str, Any]:
+    """AIPOS-F73E 件①: 无 claim 记录 → 不可推导(exit 4)带出口。"""
+    return {
+        "task_id": task_id,
+        "derivable": False,
+        "current_node": node,
+        "current_state": state,
+        "triggered_by": triggered_by,
+        "command": "",
+        "verb": verb,
+        "missing_records": [_claim_record_missing(task_id)],
+        "suggested_action": f"经门认领 {task_id}(lybra queue claim --confirm)铸 claim 记录后重推导; 手写记录不算(record_authenticity)",
+        "notes": notes,
+        # loop 据此硬停 exit 4(与 artifact_invalid 同款), 不把「缺 claim 记录」误当「执行体/审计体还在干活」空等
+        "action": {"type": "record_missing", "card": task_id, "record": "claim"},
+    }
+
+
 def _action_type_for_command(command: str) -> str:
     """派生命令 → action_type(唯一映射, next --run 与 lybra loop 共用)。
     先匹配 "queue close" 再匹配 "finalize", 避免 close 命令被误判为 finalize。"""
@@ -375,9 +406,11 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     verdicts_dir = records_root / "audit_verdicts" / task_id
     result["latest_verdict"] = _find_latest_record(verdicts_dir, "verdict")
 
-    # closures
+    # closures(AIPOS-F73E: 前缀与门写侧同源 record_writer.CLOSURE_ID_PREFIX——门落 close_*, 读 closure_* 即永远找不到 → loop 不得 exit 0)
+    from tools.aipos_cli.record_writer import CLOSURE_ID_PREFIX
+
     closures_dir = records_root / "closures" / task_id
-    result["latest_closure"] = _find_latest_record(closures_dir, "closure")
+    result["latest_closure"] = _find_latest_record(closures_dir, CLOSURE_ID_PREFIX)
 
     # events
     events_dir = records_root / "events" / task_id
@@ -854,8 +887,12 @@ def derive_next_step(
         verdict_fm = _read_frontmatter(verdict_artifact)
         reviewed_task_id = verdict_fm.get("reviewed_task_id") or task_id.rstrip("Rr")
         verdict = verdict_fm.get("verdict", "PASS")
-        actor = verdict_fm.get("actor") or assigned_to or "<auditor>"
-        agent_inst = verdict_fm.get("agent_instance") or assigned_to or "<auditor-instance>"
+        # AIPOS-F73E 件①: actor/agent_instance = 审计卡 claim 记录的审计实例(禁读报告自报/卡面/驱动方); 无 claim 记录不可推导
+        actor = _claimer_instance(records)
+        if not actor:
+            return _not_derivable_no_claim(task_id, node="audit_verdict", state="claimed", verb="lybra_audit_verdict_dry_run",
+                                           triggered_by="auditor", notes="N4: 审计卡有 VERDICT 报告但无 claim 记录, 裁决 actor 无据(AIPOS-F73E 件①)")
+        agent_inst = actor
         policy_ref = _resolve_active_policy(workspace_root, task_id, role="audit")
         
         # AIPOS-F73前置①: 从被审卡分支提取 artifact_subject (code 卡必填)
@@ -940,7 +977,8 @@ def derive_next_step(
     if queue_dir == "claimed":
         latest_claim = records.get("latest_claim")
         latest_return = records.get("latest_return")
-        claimer = (latest_claim or {}).get("agent_instance") or (latest_claim or {}).get("actor") or assigned_to or "<executor>"
+        # AIPOS-F73E 件①: 账务动词 actor = claim 记录实例(唯一实现 _claimer_instance); 缺记录时各派生点 fail-closed
+        claimer = _claimer_instance(records)
 
         # 已有 return 记录 → 检查后续节点 N3→N6 (AIPOS-F73B前置零)
         if latest_return:
@@ -1006,25 +1044,15 @@ def derive_next_step(
                 import json
                 closure_evidence_json = json.dumps(closure_evidence)
 
-                # AIPOS-F73C前置零之一 + F78 前置零②: actor=驱动方实例(单一实现 _driver_actor), 解析不到即不可推导(禁占位)
-                actor = _driver_actor(workspace_root)
-                if not actor:
-                    return {
-                        "task_id": task_id,
-                        "derivable": False,
-                        "current_node": "finalize",
-                        "current_state": "claimed",
-                        "triggered_by": "advisor",
-                        "command": "",
-                        "verb": "lybra_queue_close_dry_run",
-                        "missing_records": [DRIVER_ACTOR_MISSING],
-                        "suggested_action": "在治理根 .lybra/role 声明 instance, 或 connection.json 驱动方 token 绑定 agent_instance",
-                        "notes": "N5→N6: 驱动方身份解析不到, 不派生 close(AIPOS-F78 前置零②: 禁占位 advisor)",
-                    }
+                # AIPOS-F73E 件①(改写 F78 前置零②): actor = 该卡 claim 记录的执行实例(F73C 定案: token 归驱动方, actor 归认领实例);
+                # 门按 actor==claimer 判(queue_mutation complete), 驱动方实例当 actor 必被拒(F78 活体实撞); 无 claim 记录不可推导
+                if not claimer:
+                    return _not_derivable_no_claim(task_id, node="finalize", state="claimed", verb="lybra_queue_close_dry_run",
+                                                   triggered_by="advisor", notes="N5→N6: 已 finalize 但无 claim 记录, close actor 无据(AIPOS-F73E 件①)")
 
                 cmd = _build_close_command(
                     task_id=task_id,
-                    actor=actor,
+                    actor=claimer,
                     connection_json=conn_arg,
                     closure_evidence_json=closure_evidence_json,
                 )
@@ -1033,7 +1061,7 @@ def derive_next_step(
                     "derivable": True,
                     "current_node": "finalize",
                     "current_state": "claimed",
-                    "triggered_by": actor,
+                    "triggered_by": "advisor",
                     "command": cmd,
                     "verb": "lybra_queue_close_dry_run",
                     "missing_records": [],
@@ -1075,23 +1103,13 @@ def derive_next_step(
                             "suggested_action": "在治理根 project.json 声明 code_repo(lybra project set-repo), 再推导 finalize",
                             "notes": f"N4→N5: 裁决 {verdict_result}, 但产品仓根未声明, 不可派生 finalize 命令",
                         }
-                    finalize_actor = _driver_actor(workspace_root)
-                    if not finalize_actor:
-                        return {
-                            "task_id": task_id,
-                            "derivable": False,
-                            "current_node": "audit_verdict",
-                            "current_state": "claimed",
-                            "triggered_by": "advisor",
-                            "command": "",
-                            "verb": "lybra_finalize",
-                            "missing_records": [DRIVER_ACTOR_MISSING],
-                            "suggested_action": "在治理根 .lybra/role 声明 instance, 或 connection.json 驱动方 token 绑定 agent_instance",
-                            "notes": f"N4→N5: 裁决 {verdict_result}, 但驱动方身份解析不到, 不派生 finalize(AIPOS-F78 前置零②)",
-                        }
+                    # AIPOS-F73E 件①(改写 F78 前置零②): finalize actor = 该卡 claim 记录的执行实例; 无 claim 记录不可推导
+                    if not claimer:
+                        return _not_derivable_no_claim(task_id, node="audit_verdict", state="claimed", verb="lybra_finalize",
+                                                       triggered_by="advisor", notes=f"N4→N5: 裁决 {verdict_result}, 但无 claim 记录, finalize actor 无据(AIPOS-F73E 件①)")
                     cmd = _build_finalize_command(
                         task_id=task_id,
-                        actor=finalize_actor,
+                        actor=claimer,
                         code_repo_root=code_repo_root,
                         governance_root=workspace_root,
                     )
@@ -1235,6 +1253,9 @@ def derive_next_step(
                     "action": {"type": "artifact_invalid", "card": task_id, "path": str(return_path)},
                 }
 
+            if not claimer:
+                return _not_derivable_no_claim(task_id, node="claim", state="claimed", verb="lybra_queue_return_dry_run",
+                                               triggered_by="executor", notes="N1→N2: Return 已落盘但无 claim 记录, return actor 无据(AIPOS-F73E 件①)")
             policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
             cmd = build_return_command_from_artifact(
                 workspace_root,

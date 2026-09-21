@@ -13,6 +13,10 @@ agent 步只等产物、永不唤醒 agent; 四出口、有界、fail-closed。
 每轮: 推导 → 若账务命令: 先过 aipos_cli argparse 解析(失败=exit 4 禁执行) → 执行 → 重推导;
 若 agent 步(执行体在干活 / 已派审等审计体): 经 watch 有界等待产物(产物就绪判据=推导核), 落盘即回到推导;
 closure 记录存在 → exit 0。--max-steps 与 --max-wait 为硬上限; 任一出口非零带原文; token 永不上屏。
+
+身份(AIPOS-F73E 件①, F73C 定案): 驱动方身份(--actor / 工位声明)只用于信封与 claim token; 派生账务命令(return/verdict/
+finalize/close)的 --actor/--agent-instance 一律 = 该卡 claim 记录的认领实例(推导核 _claimer_instance 唯一实现), 无 claim
+记录即 exit 4; 提交身份由门记进记录 submitted_by(transitions record_authenticity.submission_identity)。
 """
 from __future__ import annotations
 
@@ -42,7 +46,9 @@ from tools.aipos_cli.next_resolver import (
 )
 
 LOOP_VERB = "lybra_loop"
-DRIVER_ROLE = "advisor"  # 驱动方角色(roles.schema advisor 持账务动词; 信封 agent_or_role 可写角色名或实例名)
+DRIVER_ROLE = "advisor"
+# 推导核标出的硬停动作: 产物已落盘但不合规(F78 件③) / 账务记录缺(F73E 件①: 无 claim 记录)——都不是"agent 还在干活", 禁空等, exit 4 点名
+HARD_STOP_ACTIONS = frozenset({"artifact_invalid", "record_missing"})  # 驱动方角色(roles.schema advisor 持账务动词; 信封 agent_or_role 可写角色名或实例名)
 
 
 # ---------------------------------------------------------------------------
@@ -367,26 +373,31 @@ def run_loop(
 
         if not derivation.get("derivable"):
             action = derivation.get("action") or {}
+            if action.get("type") == "await_artifact" and action.get("card"):
+                # N3: 已派审, 审计体在干活 → 审计卡自身可能已可推导(claim 审计卡 / 提交裁决); 或已硬停(报告不合规/无 claim 记录)
+                audit_card = str(action["card"])
+                audit_derivation = derive(audit_card, governance_root)
+                audit_action = audit_derivation.get("action") or {}
+                if audit_derivation.get("derivable") or audit_action.get("type") in HARD_STOP_ACTIONS:
+                    derivation, target_card, action = audit_derivation, audit_card, audit_action
+                else:
+                    target_card = audit_card
+                    wait_patterns = auditor_artifact_patterns(audit_card)
             node = derivation.get("current_node")
             state = derivation.get("current_state")
-            if action.get("type") == "artifact_invalid":
-                # AIPOS-F78 件③: 产物已落盘但必填 frontmatter 不齐 → 不空等, exit 4 点名缺项(执行体补齐后重跑 loop)
+            if action.get("type") in HARD_STOP_ACTIONS:
+                # AIPOS-F78 件③ / F73E 件①: 产物已落盘但不合规 / 账务记录缺 → 不空等, exit 4 点名缺项(补齐后重跑 loop)
                 missing = list(derivation.get("missing_records") or [])
-                msg = f"产物不合规 @ {node}/{state}: {action.get('path')}: missing={missing}; suggested={derivation.get('suggested_action', '')}"
-                steps.append(LoopStep(index, "execute", node, state, task_id, ok=False, message=msg))
+                what = "产物不合规" if action.get("type") == "artifact_invalid" else "记录缺失"
+                where = f": {action.get('path')}" if action.get("path") else ""
+                msg = f"{what} @ {node}/{state} ({target_card}){where}: missing={missing}; suggested={derivation.get('suggested_action', '')}"
+                steps.append(LoopStep(index, "execute", node, state, target_card, ok=False, message=msg))
                 say(f"[{index}] exit 4 — {msg}")
                 result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
                 result.missing_records, result.suggested_action = missing, str(derivation.get("suggested_action") or "")
                 return result
-            if action.get("type") == "await_artifact" and action.get("card"):
-                # N3: 已派审, 审计体在干活 → 审计卡自身可能已可推导(claim 审计卡 / 提交裁决)
-                audit_card = str(action["card"])
-                audit_derivation = derive(audit_card, governance_root)
-                if audit_derivation.get("derivable"):
-                    derivation, target_card = audit_derivation, audit_card
-                else:
-                    target_card = audit_card
-                    wait_patterns = auditor_artifact_patterns(audit_card)
+            if derivation.get("derivable") or wait_patterns:
+                pass  # 审计卡可推导 → 下方账务步; 已定等待 → 下方 watch
             elif node == "claim" and state == "claimed":
                 # N1→N2: 执行体在干活 → 等 Return 落盘(落点读项目声明; 骨架不算, 判据=推导核)
                 watch_root, wait_patterns = executor_artifact_watch(governance_root, task_id)
@@ -405,9 +416,9 @@ def run_loop(
             say(f"[{index}] wait: {target_card} 产物 {wait_patterns} (≤{max_wait}s, 经 agent watch)")
 
             def _ready(_matched: list[str], _card: str = target_card) -> bool:
-                # 就绪 = 推导核可推导; 或产物已落盘但不合规(artifact_invalid, AIPOS-F78 件③)——两者都该让 loop 醒来判定, 而非空等到超时
+                # 就绪 = 推导核可推导; 或硬停(产物不合规 F78 件③ / 记录缺 F73E 件①)——都该让 loop 醒来判定, 而非空等到超时
                 d = derive(_card, governance_root)
-                return bool(d.get("derivable")) or (d.get("action") or {}).get("type") == "artifact_invalid"
+                return bool(d.get("derivable")) or (d.get("action") or {}).get("type") in HARD_STOP_ACTIONS
 
             watch_out = io.StringIO()
             with contextlib.redirect_stdout(watch_out):
