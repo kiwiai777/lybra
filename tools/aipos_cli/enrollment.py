@@ -214,6 +214,7 @@ def issue_self_contained_code(
         ttl_seconds=effective_ttl,
         by=by,
         reason=reason,
+        governance_root=(governance_root or "").strip() or None,
     )
 
     # ② 运输通行凭证(TTL 与码一致; 码即认证 —— 码过期凭证同步失效)
@@ -332,6 +333,7 @@ def create_enrollment_code(
     ttl_seconds: int | None = None,
     by: str = "owner",
     reason: str = "",
+    governance_root: str | None = None,
 ) -> dict[str, Any]:
     """创建一个注册码。
     
@@ -368,6 +370,8 @@ def create_enrollment_code(
         "fingerprint": _code_fingerprint(code),
         "role": role,
         "instance": instance,
+        # AIPOS-F78B 件④c: 签给哪个治理根的工位(门注册表唯一口径, enroll-list --workspace-root 按此过滤)
+        "governance_root": str(governance_root or "").strip() or None,
         "status": "pending",
         "created_at": now.isoformat().replace("+00:00", "Z"),
         "expires_at": expires_at.isoformat().replace("+00:00", "Z") if expires_at else None,
@@ -642,6 +646,7 @@ def list_enrollment_codes(workspace_root: str | Path, *, include_code: bool = Fa
             "fingerprint": rec.get("fingerprint", ""),
             "role": rec.get("role", ""),
             "instance": rec.get("instance"),
+            "governance_root": rec.get("governance_root"),
             "status": status,
             "landed": bool(rec.get("landed_at")),
             "created_at": rec.get("created_at"),

@@ -765,6 +765,16 @@ else
   overall=1
 fi
 
+# AIPOS-F78B: chris 形零迁移收口(卡按 frontmatter 查找/finalize_mode external/驱动方一阶段)+ 件④授权执行实撞 + 件⑤ F73E 顺手实撞
+echo
+echo "── tests/test_aipos_f78b_chris_zero_migration.py (F78B chris 形零迁移: find_task_card/external finalize/驱动方一阶段/件④⑤) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f78b_chris_zero_migration.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f78b_chris_zero_migration.py PASS"
+else
+  echo "✗ tests/test_aipos_f78b_chris_zero_migration.py FAIL"
+  overall=1
+fi
+
 echo
 echo "── tools/aipos_cli/tests/test_agent_watch_fs.py (agent watch 哨兵(F73D expect_ready 谓词零回归)) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_agent_watch_fs.py" -v --tb=short -k "not test_module_is_stdlib_only_zero_new_deps"; then

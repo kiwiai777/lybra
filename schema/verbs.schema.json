@@ -359,7 +359,7 @@
           "autonomy_mode": {
             "type": "string",
             "$enum": "autonomy_mode",
-            "description": "Supervised for executor return"
+            "description": "Supervised(执行体两阶段) | PreAuthorized(AIPOS-F78B 件③: 驱动方 token + owner_autonomy_policy 信封一阶段落记录, 不索 owner_confirm)"
           },
           "owner_policy_ref": {
             "type": "string"
@@ -533,6 +533,15 @@
               }
             },
             "additionalProperties": false
+          },
+          "autonomy_mode": {
+            "type": "string",
+            "$enum": "autonomy_mode",
+            "description": "AIPOS-F78B 件③: PreAuthorized = 驱动方 token 经 owner_autonomy_policy 信封一阶段落记录(信封 agent_or_role 覆盖驱动方, verb ∈ lybra_loop.envelope.allowed_verbs); 缺省 Supervised(存量: queue_close scope 直落)"
+          },
+          "owner_policy_ref": {
+            "type": "string",
+            "description": "PreAuthorized 时必填: 覆盖驱动方的信封 policy_id"
           }
         },
         "required": [
@@ -587,6 +596,15 @@
               }
             },
             "additionalProperties": false
+          },
+          "autonomy_mode": {
+            "type": "string",
+            "$enum": "autonomy_mode",
+            "description": "AIPOS-F78B 件③: PreAuthorized = 驱动方 token 经 owner_autonomy_policy 信封一阶段落记录(信封 agent_or_role 覆盖驱动方, verb ∈ lybra_loop.envelope.allowed_verbs); 缺省 Supervised(存量: queue_close scope 直落)"
+          },
+          "owner_policy_ref": {
+            "type": "string",
+            "description": "PreAuthorized 时必填: 覆盖驱动方的信封 policy_id"
           }
         },
         "required": [
@@ -1153,102 +1171,6 @@
         "additionalProperties": false
       }
     },
-    "lybra_roles_register_dry_run": {
-      "description": "AIPOS-F24: register a custom role (name → builtin class mapping) in project.json (preview). Owner-gated. CLI薄壳: lybra roles register 是本动词的薄壳。",
-      "phase": "dry_run",
-      "base_verb": "lybra_roles_register",
-      "confirm_verb": "lybra_roles_register_confirm",
-      "confirm_via": "dry_run_token",
-      "surface": [
-        "cli",
-        "mcp"
-      ],
-      "cli_command": "lybra roles register",
-      "stage_contract": {
-        "two_stage": true,
-        "dry_run_emits_token": true,
-        "self_confirm_allowed": [
-          "planner_with_owner_confirmed_literal"
-        ],
-        "owner_confirmation_required_in_response": false,
-        "client_hint_template": "项目顾问自行confirm。"
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "Custom role name"
-          },
-          "builtin_class": {
-            "type": "string",
-            "description": "Built-in role class to map to"
-          },
-          "workspace_root": {
-            "type": "string",
-            "description": "Workspace root; defaults to gate's serving workspace"
-          },
-          "owner_authorization_ref": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "actor": {
-            "type": "string"
-          },
-          "agent_instance": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "builtin_class",
-          "owner_authorization_ref"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "lybra_roles_register_confirm": {
-      "description": "AIPOS-F24: confirm custom role registration",
-      "phase": "confirm",
-      "base_verb": "lybra_roles_register",
-      "dry_run_verb": "lybra_roles_register_dry_run",
-      "confirm_via": "dry_run_token",
-      "surface": [
-        "mcp"
-      ],
-      "stage_contract": {
-        "two_stage": true,
-        "dry_run_emits_token": false,
-        "self_confirm_allowed": [
-          "planner_with_owner_confirmed_literal"
-        ],
-        "owner_confirmation_required_in_response": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "dry_run_token": {
-            "type": "string"
-          },
-          "owner_confirmation_token": {
-            "type": "string"
-          },
-          "actor": {
-            "type": "string"
-          },
-          "agent_instance": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "dry_run_token",
-          "owner_confirmation_token"
-        ],
-        "additionalProperties": false
-      }
-    },
     "lybra_audit_dispatch_dry_run": {
       "description": "Dispatch an audit (preview). AIPOS-C1: idempotent — if audit card already exists, supplements dispatch record instead of blocking.",
       "phase": "dry_run",
@@ -1454,7 +1376,7 @@
           "autonomy_mode": {
             "type": "string",
             "$enum": "autonomy_mode",
-            "description": "Supervised for audit verdict (AIPOS-F22B)"
+            "description": "Supervised (AIPOS-F22B) | PreAuthorized(AIPOS-F78B 件③: 驱动方 token + owner_autonomy_policy 信封一阶段落记录, 不索 owner_confirm)"
           }
         },
         "required": [
@@ -1506,7 +1428,7 @@
           "autonomy_mode": {
             "type": "string",
             "$enum": "autonomy_mode",
-            "description": "Supervised for audit verdict (AIPOS-F22B)"
+            "description": "Supervised (AIPOS-F22B) | PreAuthorized(AIPOS-F78B 件③: 驱动方 token + owner_autonomy_policy 信封一阶段落记录, 不索 owner_confirm)"
           }
         },
         "required": [
@@ -1517,6 +1439,46 @@
           "owner_confirmation_token",
           "autonomy_mode"
         ],
+        "additionalProperties": false
+      }
+    },
+    "lybra_roles_register": {
+      "description": "AIPOS-352F1/F78B 件④a: register a custom role (name → builtin class) in the gate registry. Owner-gated via owner_authorization_ref. 单一实现(CLI `lybra roles register` 为其薄壳; 未挂入 TOOL_HANDLERS 的 dry_run/confirm 对已删)。落盘根按 workspace_root(token projects scope 校验)。",
+      "phase": "single",
+      "surface": [
+        "cli",
+        "mcp"
+      ],
+      "cli_command": "lybra roles register",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Custom role name"
+          },
+          "builtin_class": {
+            "type": "string",
+            "description": "Built-in role class to map to"
+          },
+          "workspace_root": {
+            "type": "string",
+            "description": "Workspace root(治理根); 缺省 = token 默认项目"
+          },
+          "owner_authorization_ref": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "agent_instance": {
+            "type": "string"
+          }
+        },
+        "required": ["name", "builtin_class", "owner_authorization_ref"],
         "additionalProperties": false
       }
     },
@@ -1618,7 +1580,8 @@
           "finalize",
           "close"
         ],
-        "allowed_verbs_note": "loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。"
+        "allowed_verbs_note": "loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。AIPOS-F78B 件③: 门侧驱动方一阶段放行(queue return/audit-verdict/queue close 的 autonomy_mode=PreAuthorized)也读此集合判 verb 是否在信封授权内(claim 经 _match_claim_envelope, 其余经 _match_driver_envelope, 同一 matcher autonomy_policy.match_claim_envelope)。",
+        "one_stage_release": "驱动方 token(roles.schema driver.role_class 或其 role_class 自定义角色) + autonomy_mode=PreAuthorized + owner_policy_ref 命名的信封(agent_or_role 覆盖驱动方实例/角色类, task_selector 覆盖本卡, 有效/时间窗/额度) → 门在 dry_run 一跳内落记录(preauthorized_release=true), 不索 owner_confirm; 不匹配 = BLOCK + envelope_guards 出口, CLI 薄壳 exit 5(无信封)。"
       },
       "await_artifacts": {
         "executor": {

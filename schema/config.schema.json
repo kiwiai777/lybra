@@ -148,6 +148,12 @@
               "type": "boolean",
               "default": false,
               "description": "人肉 gate 项目(F73C 件①): 卡面保留认领与交回节、publish 不做门动词校验、ingest 不经门。兼容顶层 manual_gate_mode 键"
+            },
+            "finalize_mode": {
+              "type": "string",
+              "default": "internal",
+              "enum": ["internal", "external"],
+              "description": "AIPOS-F78B 件②: finalize 场地。internal=现行(推导核派生 lybra finalize 在本机 merge/push/部署); external=产品仓在别机(chris), PASS 后等外部 FINALIZE 卡的 Return, 经 artifact ingest 铸 finalization 记录再 close。流程与 FINALIZE 卡 ID 规则声明: transitions.schema N5.finalize_mode / artifact_ingest.finalization"
             }
           }
         }

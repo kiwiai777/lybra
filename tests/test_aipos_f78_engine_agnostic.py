@@ -177,7 +177,9 @@ def test_f78_item4_declarations_exist_in_schema_single_source():
     assert "merge_commit" in transitions["nodes"]["N5"]["record"]
     config = json.loads((REPO_ROOT / "schema" / "config.schema.json").read_text(encoding="utf-8"))
     paths = config["configuration_sources"]["project_json"]["schema"]["paths"]["schema"]
-    assert set(paths) == {"return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode"}
+    # AIPOS-F78B 件②: 声明表增 finalize_mode(internal|external, 默认 internal)
+    assert set(paths) == {"return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode"}
+    assert paths["finalize_mode"]["default"] == "internal" and paths["finalize_mode"]["enum"] == ["internal", "external"]
     assert paths["return_root"]["default"] == "task_cards"  # lybra 默认 = 现行路径, 0 迁移
     card = json.loads((REPO_ROOT / "schema" / "card.schema.json").read_text(encoding="utf-8"))
     assert card["fields"]["harness"]["$enum"] == "harness" and card["fields"]["lane"]["type"] == "object"

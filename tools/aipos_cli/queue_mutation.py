@@ -298,14 +298,15 @@ def repair_bad_frontmatter(
         "verdict": "OK",
     }
     
-    # 找到任务卡文件(不依赖 frontmatter 解析)
-    task_path = None
-    queue_states = ["pending", "claimed", "blocked", "completed", "withdrawn"]
-    for state in queue_states:
-        candidate = repo_root / "5_tasks" / "queue" / state / f"{task_id.lower()}.md"
-        if candidate.exists():
-            task_path = candidate
-            break
+    # 找到任务卡文件(AIPOS-F78B 件①: 唯一查找 find_task_card; 坏 YAML 时其正则退路仍按 frontmatter task_id 行匹配, 不按文件名)
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+    try:
+        task_path, _queue_dir = find_task_card(repo_root, task_id)
+    except AmbiguousTaskCard as exc:
+        result["verdict"] = "BLOCK"
+        result["blocking_reasons"] = [str(exc)]
+        return result
     
     if not task_path:
         result["verdict"] = "BLOCK"
@@ -985,14 +986,21 @@ def build_rework_round(
     from datetime import datetime, timezone
     import json
     
-    # 1. 找到任务卡
-    task_path, queue_dir = None, None
-    queue_root = repo_root / "5_tasks" / "queue"
-    for status_dir in ["claimed"]:
-        candidate = queue_root / status_dir / f"{task_id.lower()}.md"
-        if candidate.is_file():
-            task_path, queue_dir = candidate, status_dir
-            break
+    # 1. 找到任务卡(AIPOS-F78B 件①: 唯一查找 find_task_card, 只在 claimed/)
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+    try:
+        task_path, queue_dir = find_task_card(repo_root, task_id, states=("claimed",))
+    except AmbiguousTaskCard as exc:
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": True,
+            "blocking_reasons": [str(exc)],
+            "warnings": [],
+            "data": {},
+        }
     
     if not task_path:
         return {

@@ -63,18 +63,19 @@ def read_task_state(workspace_root: Path, task_id: str) -> dict[str, Any]:
     }
     
     # 1. 找任务卡在哪个 queue 子目录
-    queue_root = workspace_root / "5_tasks" / "queue"
-    for status_dir in ["pending", "claimed", "completed", "blocked"]:
-        task_file = queue_root / status_dir / f"{task_id.lower()}.md"
-        if task_file.is_file():
-            state["queue_status"] = status_dir
-            state["task_path"] = task_file
-            try:
-                fm, _, _ = parse_markdown_frontmatter(task_file.read_text(encoding="utf-8"))
-                state["task_frontmatter"] = fm if isinstance(fm, dict) else {}
-            except Exception:
-                pass
-            break
+    # AIPOS-F78B 件①: 唯一查找 task_loader.find_task_card(frontmatter task_id 匹配, 文件名不限)
+    from tools.aipos_cli.task_loader import find_task_card
+
+    task_file, status_dir = find_task_card(workspace_root, task_id, states=("pending", "claimed", "completed", "blocked"))
+    if task_file is not None:
+        state["queue_status"] = status_dir
+        state["task_path"] = task_file
+        try:
+            fm, _, _ = parse_markdown_frontmatter(task_file.read_text(encoding="utf-8"))
+            state["task_frontmatter"] = fm if isinstance(fm, dict) else {}
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            state["task_frontmatter"] = {}
+            state.setdefault("warnings", []).append(f"task frontmatter unreadable: {task_file}: {exc}")
     
     # 2. 读最新 claim record
     claims_dir = workspace_root / "5_tasks" / "records" / "claims" / task_id

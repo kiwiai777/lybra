@@ -1367,6 +1367,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_return_parser.add_argument("--agent-instance", required=True, help="Agent instance name")
     queue_return_parser.add_argument("--result-summary", required=True, help="Result summary")
     queue_return_parser.add_argument("--owner-policy-ref", required=True, help="Owner policy reference")
+    queue_return_parser.add_argument("--autonomy-mode", default="Supervised", help="AIPOS-F78B 件③: PreAuthorized=驱动方 token 经信封一阶段落记录(--owner-policy-ref=覆盖驱动方的信封); 缺省 Supervised")
     queue_return_parser.add_argument("--artifact-refs", help="JSON array of artifact references")
     queue_return_parser.add_argument("--completion-report-ref", help="Completion report reference")
     queue_return_parser.add_argument("--actual-model", help="AIPOS-F78 件③: 执行体实际模型自报(来自 Return frontmatter.model, 透传 verbs.schema actual_model)")
@@ -1383,6 +1384,10 @@ def build_parser() -> argparse.ArgumentParser:
     queue_close_parser.add_argument("--closure-evidence", required=True, help="JSON object with at least one of: finalize_commit_hash, finalize_return_ref, owner_verification_ref")
     queue_close_parser.add_argument("--conclusion-note", help="AIPOS-F78 前置零⑨: 结案说明(含承接声明如「由续卡 <ID> 承接」时登记承接世系, F53 lineage 读此字段)")
     queue_close_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    queue_close_parser.add_argument("--confirm", action="store_true", help="AIPOS-F78B 件③: 经门 MCP(lybra_queue_close_dry_run/confirm, 两阶段薄壳工厂)而非本地 writer; 驱动方 token")
+    queue_close_parser.add_argument("--connection-json", help="Path to connection.json (for --confirm gate access)")
+    queue_close_parser.add_argument("--autonomy-mode", default="Supervised", help="AIPOS-F78B 件③: PreAuthorized=驱动方 token 经信封一阶段落记录(--owner-policy-ref=覆盖驱动方的信封)")
+    queue_close_parser.add_argument("--owner-policy-ref", help="PreAuthorized 时必填: 覆盖驱动方的信封 policy_id")
     queue_close_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-F73C件⑤: queue rework subcommand (顾问追加返工节到卡面)
@@ -1527,6 +1532,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verdict_parser.add_argument("--actor", help="AIPOS-R4B-2: Actor submitting verdict (auto-discovered if not provided)")
     audit_verdict_parser.add_argument("--agent-instance", help="AIPOS-R4B-2: Agent instance (auto-discovered if not provided)")
     audit_verdict_parser.add_argument("--owner-policy-ref", help="AIPOS-R4B-2: Owner policy reference (auto-discovered if not provided)")
+    audit_verdict_parser.add_argument("--autonomy-mode", default="Supervised", help="AIPOS-F78B 件③: PreAuthorized=驱动方 token 经信封一阶段落记录(--owner-policy-ref=覆盖驱动方的信封); 缺省 Supervised")
     audit_verdict_parser.add_argument("--verdict", required=True, choices=verdict_choices, help="Verdict (from enums.schema.json)")
     audit_verdict_parser.add_argument("--findings-summary", help="Findings summary")
     audit_verdict_parser.add_argument("--evidence-refs", help="JSON list of evidence references")
@@ -2578,8 +2584,10 @@ def main(argv: list[str] | None = None) -> int:
                     return 1
                 
                 try:
+                    # AIPOS-F78B 件④a: 调既有单一动词 lybra_roles_register(owner_authorization_ref 门控, workspace_root 落盘根);
+                    # 旧 dry_run/confirm 对从未挂入 TOOL_HANDLERS(Unknown tool), 已删
                     client = GateClient(base_url, token, timeout=30.0)
-                    dry = client.call_tool("lybra_roles_register_dry_run", {
+                    result = client.call_tool("lybra_roles_register", {
                         "name": args.name,
                         "builtin_class": args.builtin_class,
                         "workspace_root": str(workspace_root),
@@ -2587,20 +2595,9 @@ def main(argv: list[str] | None = None) -> int:
                         "reason": reason,
                         "actor": "cli:roles-register",
                     })
-                    if not dry.get("ok"):
-                        print(f"Error: gate rejected: {json.dumps(dry, ensure_ascii=False)[:800]}", file=sys.stderr)
+                    if not result.get("ok"):
+                        print(f"Error: gate rejected: {json.dumps(result, ensure_ascii=False)[:800]}", file=sys.stderr)
                         return 1
-                    
-                    confirm = client.call_tool("lybra_roles_register_confirm", {
-                        "dry_run_token": dry.get("dry_run_token"),
-                        "owner_confirmation_token": "OWNER_CONFIRMED",
-                        "actor": "cli:roles-register",
-                    })
-                    if not confirm.get("ok"):
-                        print(f"Error: gate rejected confirm: {json.dumps(confirm, ensure_ascii=False)[:800]}", file=sys.stderr)
-                        return 1
-                    
-                    result = confirm
                     if getattr(args, "json", False):
                         print(render_json(result))
                     else:
@@ -2843,17 +2840,41 @@ def main(argv: list[str] | None = None) -> int:
                     if owner_auth_ref:
                         print(f"  Owner authorization ref: {owner_auth_ref}")
             elif args.roles_command == "enroll-list":
-                # AIPOS-362: list enrollment codes
-                from tools.aipos_cli.enrollment import list_enrollment_codes
-                codes = list_enrollment_codes(workspace_root, include_code=False)
-                result = {
-                    "ok": True,
-                    "operation": "roles_enroll_list",
-                    "enrollments": codes,
-                }
+                # AIPOS-362/F78B 件④c: 注册码只住在发码门的注册表(发码/兑换同根), 本地文件不是真相 → 薄壳调门动词
+                # lybra_roles_enroll_list(governance_root=本工作区: 只列签给该治理根工位的码), 与门口径唯一
+                from tools.aipos_cli.confirm_client import GateClient, load_owner_token
+                conn_override = getattr(args, "connection_json", None)
+                conn_path = Path(conn_override or (workspace_root / ".lybra" / "connection.json")).expanduser()
+                if not conn_path.exists():
+                    print(f"Error: connection.json not found: {conn_path}", file=sys.stderr)
+                    print("Hint: enroll-list 读门注册表(发码所在), 需 --connection-json 或在治理工作区运行", file=sys.stderr)
+                    return 1
+                conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
+                rpc_url = str(((conn_data.get("mcp") or {}).get("rpc_url")) or "").strip()
+                if not rpc_url:
+                    print(f"Error: connection.json has no mcp.rpc_url: {conn_path}", file=sys.stderr)
+                    return 1
+                base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
+                token = None
+                for role in ("advisor", "planner", "owner"):
+                    try:
+                        token = load_owner_token(connection_json=conn_path, role=role)
+                        break
+                    except ValueError:
+                        continue
+                if not token:
+                    print(f"Error: no usable token in {conn_path}", file=sys.stderr)
+                    return 1
+                client = GateClient(base_url, token, timeout=30.0)
+                result = client.call_tool("lybra_roles_enroll_list", {"governance_root": str(workspace_root)})
+                if not result.get("ok"):
+                    print(f"Error: gate rejected: {json.dumps(result, ensure_ascii=False)[:800]}", file=sys.stderr)
+                    return 1
+                codes = result.get("enrollments") or []
                 if getattr(args, "json", False):
                     print(render_json(result))
                 else:
+                    print(f"registry: {result.get('registry_root')}  filter governance_root: {result.get('governance_root_filter')}")
                     print(f"{'Code ID':<24} {'Role':<16} {'Instance':<32} {'Status':<10} {'Expires At'}")
                     for code in codes:
                         inst = code.get('instance') or '(any)'
@@ -4438,7 +4459,7 @@ def main(argv: list[str] | None = None) -> int:
                 "task_id": args.task_id,
                 "actor": canonical_actor,
                 "agent_instance": canonical_instance,
-                "autonomy_mode": "Supervised",
+                "autonomy_mode": getattr(args, "autonomy_mode", None) or "Supervised",  # AIPOS-F78B 件③
                 "owner_policy_ref": args.owner_policy_ref,
                 "result_summary": args.result_summary,
             }
@@ -4502,6 +4523,38 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as exc:
             print(f"Error: Invalid JSON in --closure-evidence: {exc}", file=sys.stderr)
             return 1
+        # AIPOS-F78B 件③: --confirm = 经门(lybra_queue_close 两阶段薄壳工厂, 驱动方 token); PreAuthorized + 信封 → 门一阶段落记录
+        if getattr(args, "confirm", False):
+            from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb, resolve_driver_role_from_connection
+
+            conn_json_path = getattr(args, "connection_json", None)
+            if not conn_json_path:
+                default_conn = Path(repo_root) / ".lybra" / "connection.json"
+                conn_json_path = str(default_conn) if default_conn.exists() else os.environ.get("LYBRA_CONNECTION_JSON")
+            if not conn_json_path:
+                print("Error: --confirm needs connection.json (use --connection-json or set LYBRA_CONNECTION_JSON)", file=sys.stderr)
+                return 1
+            verb_args: dict[str, Any] = {
+                "task_id": args.task_id,
+                "actor": args.actor,
+                "closure_evidence": closure_evidence,
+                "autonomy_mode": getattr(args, "autonomy_mode", None) or "Supervised",
+            }
+            if getattr(args, "owner_policy_ref", None):
+                verb_args["owner_policy_ref"] = args.owner_policy_ref
+            try:
+                role = resolve_driver_role_from_connection(connection_json_path=conn_json_path, repo_root=repo_root)
+            except ValueError as exc:
+                print(f"Error resolving role: {exc}", file=sys.stderr)
+                return 1
+            exit_code, _ = execute_two_phase_verb(
+                verb_base="lybra_queue_close",
+                args_dict=verb_args,
+                connection_json_path=conn_json_path,
+                role=role,
+                json_output=args.json,
+            )
+            return exit_code
         try:
             result = close_task(
                 task_id=args.task_id,
@@ -4950,6 +5003,7 @@ def main(argv: list[str] | None = None) -> int:
         verb_args = {
             "reviewed_task_id": args.reviewed_task_id,
             "verdict": args.verdict,
+            "autonomy_mode": getattr(args, "autonomy_mode", None) or "Supervised",  # AIPOS-F78B 件③
         }
         if getattr(args, "audit_task_id", None):
             verb_args["audit_task_id"] = args.audit_task_id

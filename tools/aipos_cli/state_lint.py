@@ -74,15 +74,11 @@ def _derive_state_from_records(governance_root: Path, task_id: str) -> str | Non
 
 
 def _get_queue_state(governance_root: Path, task_id: str) -> tuple[str | None, Path | None]:
-    """获取任务在队列目录中的状态。"""
-    for state, rel_dir in QUEUE_DIRS.items():
-        queue_dir = governance_root / rel_dir
-        if not queue_dir.is_dir():
-            continue
-        card_path = queue_dir / f"{task_id.lower()}.md"
-        if card_path.exists():
-            return state, card_path
-    return None, None
+    """获取任务在队列目录中的状态(AIPOS-F78B 件①: 唯一查找 task_loader.find_task_card; 状态名 = 目录名 = QUEUE_DIRS 键)。"""
+    from tools.aipos_cli.task_loader import find_task_card
+
+    card_path, state = find_task_card(governance_root, task_id, states=tuple(QUEUE_DIRS))
+    return state, card_path
 
 
 def _get_frontmatter_state(card_path: Path) -> str | None:

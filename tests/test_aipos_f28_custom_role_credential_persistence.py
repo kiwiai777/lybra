@@ -281,12 +281,14 @@ class TestLiveAcceptance:
         not Path.home().joinpath("ai-project-os").exists(),
         reason="Live acceptance requires governance workspace"
     )
-    def test_chris_workstation_tokens_survive_restart(self):
+    def test_live_real_gate_chris_workstation_tokens_survive_restart(self):
         """
-        chris工位凭据(hbj-coder/hbj-auditor)在门重启后仍可用
-        
-        验证方式: 检查connection.json是否包含hbj-*角色token
+        chris工位凭据(hbj-coder/hbj-auditor)在门重启后仍可用 —— 活工位用例(名含 real_gate, 基线以 -k "not real_gate" 排除)。
+
+        AIPOS-F78B 件⑤c: 只比对指纹(sha256 指纹 == 注册表记录指纹), 断言消息只带角色名——token 明文永不上屏。
         """
+        from tools.mcp_server.http_sse import _token_fingerprint
+
         governance_root = Path.home() / "ai-project-os" / "2_projects" / "lybra"
         conn_json = governance_root / ".lybra" / "connection.json"
         
@@ -296,15 +298,18 @@ class TestLiveAcceptance:
         conn_data = json.loads(conn_json.read_text(encoding="utf-8"))
         tokens = conn_data.get("tokens", [])
         
-        # 查找hbj-*角色
-        hbj_roles = [t for t in tokens if t.get("role", "").startswith("hbj-")]
+        # 查找hbj-*角色(只保留非秘密字段进断言)
+        hbj_roles = [t for t in tokens if str(t.get("role") or "").startswith("hbj-")]
         
-        # 如果存在hbj角色,验证其完整性
-        if hbj_roles:
-            for t in hbj_roles:
-                assert "token" in t, f"hbj role missing token: {t}"
-                assert "role_class" in t, f"hbj custom role missing role_class: {t}"
-                assert "agent_instance" in t, f"hbj role missing agent_instance: {t}"
+        for t in hbj_roles:
+            role = str(t.get("role"))
+            has_token = bool(str(t.get("token") or "").strip())
+            assert has_token, f"hbj role missing token: role={role}"
+            assert str(t.get("role_class") or "").strip(), f"hbj custom role missing role_class: role={role}"
+            assert str(t.get("agent_instance") or "").strip(), f"hbj role missing agent_instance: role={role}"
+            expected_fp = _token_fingerprint(str(t["token"]))
+            recorded_fp = str(t.get("fingerprint") or "")
+            assert recorded_fp == expected_fp, f"fingerprint mismatch for role={role}: recorded={recorded_fp[:16]}… computed={expected_fp[:16]}…"
 
 
 if __name__ == "__main__":

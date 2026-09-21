@@ -368,12 +368,18 @@ def run_loop(
 
         derivation = derive(task_id, governance_root)
         target_card = task_id
+        ready_card = task_id  # 就绪谓词重推导的卡(缺省=等待目标; external finalize 时=本卡)
         wait_patterns: list[str] = []
         watch_root = governance_root
 
         if not derivation.get("derivable"):
             action = derivation.get("action") or {}
-            if action.get("type") == "await_artifact" and action.get("card"):
+            if action.get("type") == "await_artifact" and action.get("card") and action.get("kind") == "finalize_return":
+                # AIPOS-F78B 件②: finalize_mode=external, N4 PASS 后等外部 FINALIZE 卡的 Return(落点读项目声明, 与执行体 Return 同候选);
+                # 就绪 = 本卡重推导可推导(派生 artifact ingest 铸 finalization 记录)或硬停(Return 不合规)
+                target_card = str(action["card"])
+                watch_root, wait_patterns = executor_artifact_watch(governance_root, target_card)
+            elif action.get("type") == "await_artifact" and action.get("card"):
                 # N3: 已派审, 审计体在干活 → 审计卡自身可能已可推导(claim 审计卡 / 提交裁决); 或已硬停(报告不合规/无 claim 记录)
                 audit_card = str(action["card"])
                 audit_derivation = derive(audit_card, governance_root)
@@ -381,7 +387,7 @@ def run_loop(
                 if audit_derivation.get("derivable") or audit_action.get("type") in HARD_STOP_ACTIONS:
                     derivation, target_card, action = audit_derivation, audit_card, audit_action
                 else:
-                    target_card = audit_card
+                    target_card = ready_card = audit_card
                     wait_patterns = auditor_artifact_patterns(audit_card)
             node = derivation.get("current_node")
             state = derivation.get("current_state")
@@ -415,7 +421,7 @@ def run_loop(
                             artifacts=wait_patterns)
             say(f"[{index}] wait: {target_card} 产物 {wait_patterns} (≤{max_wait}s, 经 agent watch)")
 
-            def _ready(_matched: list[str], _card: str = target_card) -> bool:
+            def _ready(_matched: list[str], _card: str = ready_card) -> bool:
                 # 就绪 = 推导核可推导; 或硬停(产物不合规 F78 件③ / 记录缺 F73E 件①)——都该让 loop 醒来判定, 而非空等到超时
                 d = derive(_card, governance_root)
                 return bool(d.get("derivable")) or (d.get("action") or {}).get("type") in HARD_STOP_ACTIONS

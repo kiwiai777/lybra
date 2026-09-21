@@ -598,7 +598,9 @@ def read_project_json(project_root: str | Path) -> dict[str, Any]:
 # 禁写死 task_cards/…/RETURN.md 或 5_tasks/records/returns。
 # ---------------------------------------------------------------------------
 
-PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode")
+PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode")
+# AIPOS-F78B 件②: 非路径键(值域读声明 enum), 与布尔 manual_gate_mode 一样不做路径解析
+PROJECT_ENUM_KEYS = ("finalize_mode",)
 
 
 def _project_paths_declaration() -> dict[str, dict[str, Any]]:
@@ -646,6 +648,14 @@ def project_paths(governance_root: str | Path) -> dict[str, Any]:
             if not declared and "manual_gate_mode" in project:
                 value, declared = project.get("manual_gate_mode"), True
             result[key] = bool(value)
+        elif key in PROJECT_ENUM_KEYS:
+            allowed = [str(v) for v in (spec.get("enum") or [])]
+            text = str(value or "").strip()
+            if allowed and text not in allowed:
+                raise ValueError(
+                    f"project.json paths.{key}={text!r} 不在声明值域 {allowed}(config.schema project_json.paths.{key}.enum)"
+                )
+            result[key] = text
         else:
             if value in (None, ""):
                 from tools.schema_loader import SchemaLoadError

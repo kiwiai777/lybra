@@ -465,6 +465,12 @@
           "writer": "finalization_record.build_finalization_record"
         }
       },
+      "finalize_mode": {
+        "description": "AIPOS-F78B 件②: finalize 场地由项目声明 project.json paths.finalize_mode(config.schema 声明表, 默认 internal)。internal=现行(推导核派生 `lybra finalize` 在 dev 上 merge/push/部署); external=产品仓不在本机(chris: merge/push 由其 FINALIZE 卡执行, AGENTS §8/§9.4), 裁决 PASS 后推导核不派生 finalize, 改为等待 FINALIZE 卡的 Return 落盘, 经 `lybra artifact ingest --task-id <被审卡>` 读其 frontmatter 铸 finalization 记录(finalization_record.write_finalization_record 同一 writer), 随后 N5→N6 close 证据自填不变。FINALIZE 卡 ID 规则与 Return 必填字段唯一声明: #/artifact_ingest/finalization。",
+        "values": ["internal", "external"],
+        "declaration": "config.schema configuration_sources.project_json.schema.paths.finalize_mode",
+        "external_flow": "N4 PASS → await_artifact(FINALIZE 卡 Return) → artifact ingest 铸 finalization 记录(merge_commit/remote_ref/deploy_status 来自 Return frontmatter) → N6 close"
+      },
       "deployment_record": {
         "type": "deployment",
         "location": "5_tasks/records/deployments/deployment_{timestamp}_{commit_short}.md",
@@ -561,7 +567,8 @@
       },
       "record": {
         "type": "closure",
-        "location": "5_tasks/records/closures/{task_id}/closure_{task_id}_{timestamp}_{actor}.md",
+        "location": "5_tasks/records/closures/{task_id}/close_{task_id}_{timestamp}_{actor}.md",
+        "location_note": "AIPOS-F78B 件⑤a: 文件名前缀 = 写侧真值 record_writer.CLOSURE_ID_PREFIX(close); 推导核读侧同源。声明=真相, 禁两处。",
         "required_fields": [
           "task_id",
           "actor",
@@ -895,6 +902,32 @@
         "commit_sha == 被审卡分支 tip(git rev-parse card/<reviewed_task_id>), 否则拒(INGEST_TIP_MISMATCH): 审的必须是当前产物"
       ],
       "submits_via": "lybra audit-verdict --confirm(驱动方 token, artifact_subject 从被审分支 tip 取 commit_sha/tree_hash)"
+    },
+    "finalization": {
+      "description": "AIPOS-F78B 件②: finalize_mode=external 项目的 finalize 产物入口——被审卡裁决 PASS 后, 外部 FINALIZE 卡(merge/push/部署在产品仓所在机执行)交回的 Return 经 `lybra artifact ingest --task-id <被审卡ID>` 读取, 铸 finalization 记录; internal 项目不走此段。",
+      "finalize_task_id": {
+        "card_field": "finalize_task_id",
+        "suffix": "-FINALIZE",
+        "rule": "被审卡 frontmatter 声明 finalize_task_id 优先; 缺省 = <被审卡ID> + suffix。唯一声明, 推导核/ingest/loop 只读此处。"
+      },
+      "root_key": "return_root",
+      "location_pattern": "<return_root>/<finalize_task_id>/<candidate>",
+      "return_file_candidates_ref": "#/artifact_ingest/return/return_file_candidates",
+      "required_frontmatter": [
+        "merge_commit",
+        "remote_ref",
+        "deploy_status"
+      ],
+      "checks": [
+        "frontmatter 缺任一必填字段 = 拒(INGEST_FRONTMATTER_MISSING, 推导核 action=artifact_invalid, loop exit 4 不空等)",
+        "deploy_status ∈ N5.record.deploy_status.values, 否则拒(INGEST_DEPLOY_STATUS_INVALID)",
+        "被审卡最新门生裁决 ∈ N5.guards.has_pass_verdict.allowed_verdict_values 且尚无 finalization 记录, 否则拒(INGEST_NOT_AT_RETURN_NODE)"
+      ],
+      "record": {
+        "writer": "finalization_record.write_finalization_record(同一 writer; task_id=被审卡, actor=被审卡 claim 记录实例, commit=merge_commit, merge_commit, remote_ref, deploy_status, authorization_type=verdict_ref, authorization_ref=裁决 verdict_id, finalize_return_ref=FINALIZE Return 相对路径)",
+        "extra_fields": ["remote_ref", "finalize_return_ref"]
+      },
+      "derived_command": "lybra artifact ingest --task-id <被审卡ID> --workspace-root <治理根>(action_type=finalize, 信封 allowed_verbs 同 internal finalize)"
     },
     "exit_codes": {
       "0": "记录已落(既有薄壳 exit 0)",

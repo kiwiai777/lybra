@@ -25,8 +25,13 @@ def build_finalization_record(
     deployment_record_ref: str | None = None,
     deploy_status: str | None = None,
     merge_commit: str | None = None,
+    remote_ref: str | None = None,
+    finalize_return_ref: str | None = None,
 ) -> dict[str, Any]:
     """构造 finalization 记录 frontmatter。
+
+    AIPOS-F78B 件②: finalize_mode=external 时同一 writer 由 artifact ingest 调用, 追加 remote_ref(外部 FINALIZE Return 自述的远端 ref)
+    与 finalize_return_ref(FINALIZE Return 相对治理根路径); 声明 transitions artifact_ingest.finalization.record.extra_fields。
 
     AIPOS-F73D 前置一①: deploy_status 字段(值域声明在 transitions.schema N5.record.deploy_status)——
     finalization 记录在 merge+push 成功即落, 部署结果只记不阻记录。缺省按 deployed 布尔推导。
@@ -59,6 +64,10 @@ def build_finalization_record(
     
     if deployment_record_ref:
         record["deployment_record_ref"] = deployment_record_ref
+    if remote_ref:
+        record["remote_ref"] = str(remote_ref).strip()
+    if finalize_return_ref:
+        record["finalize_return_ref"] = str(finalize_return_ref).strip()
     
     return record
 
@@ -94,6 +103,9 @@ def render_record_markdown(frontmatter: dict[str, Any]) -> str:
 
     if frontmatter.get("deployment_record_ref"):
         body += f"- **deployment_record_ref**: {frontmatter['deployment_record_ref']}\n"
+    for extra in ("remote_ref", "finalize_return_ref"):
+        if frontmatter.get(extra):
+            body += f"- **{extra}**: {frontmatter[extra]}\n"
 
     return _render_markdown_single_source(frontmatter, body)
 
@@ -112,12 +124,16 @@ def write_finalization_record(
     dry_run: bool = False,
     deploy_status: str | None = None,
     merge_commit: str | None = None,
+    remote_ref: str | None = None,
+    finalize_return_ref: str | None = None,
 ) -> dict[str, Any]:
     """写 finalization_record 到治理工作区 records。返回 {ok, path, wrote}。"""
     frontmatter = build_finalization_record(
         task_id=task_id,
         actor=actor,
         commit=commit,
+        remote_ref=remote_ref,
+        finalize_return_ref=finalize_return_ref,
         authorization_type=authorization_type,
         authorization_ref=authorization_ref,
         deployed=deployed,

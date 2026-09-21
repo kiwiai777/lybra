@@ -334,10 +334,25 @@ def _code_repo_for(workspace_root: Path) -> Path:
     return _resolve_code_repo_root(workspace_root) or workspace_root
 
 
-def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
-    """校验一张卡的产物(执行卡=Return; R 卡=裁决报告)是否可铸记录。纯校验, 不提交。
+def _external_finalize_pending(workspace_root: Path, task_id: str) -> tuple[bool, dict[str, Any]]:
+    """AIPOS-F78B 件②: 本卡是否处在「finalize_mode=external 且裁决 PASS 且尚无 finalization 记录」——即产物入口应读 FINALIZE Return。
+    返回 (pending, records)。判据读声明: N5.guards.has_pass_verdict.allowed_verdict_values。"""
+    from tools.aipos_cli.next_resolver import _finalize_mode, _read_task_records, _resolve_governance_path_with_relative, _transition_node
 
-    返回 {ok, kind: return|verdict, category, reasons[], path, frontmatter, exit_code}。
+    if _finalize_mode(workspace_root) != "external":
+        return False, {}
+    records = _read_task_records(workspace_root, task_id)
+    verdict = str((records.get("latest_verdict") or {}).get("verdict") or "").strip()
+    allowed = [str(v) for v in (_transition_node("N5").get("guards", {}).get("has_pass_verdict", {}).get("allowed_verdict_values") or [])]
+    fin_dir = _resolve_governance_path_with_relative("records", workspace_root) / "finalizations" / task_id
+    has_finalization = fin_dir.is_dir() and any(fin_dir.glob("finalization_*.md"))
+    return (bool(verdict) and verdict in allowed and not has_finalization), records
+
+
+def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
+    """校验一张卡的产物(执行卡=Return; R 卡=裁决报告; external finalize 且裁决 PASS 的执行卡=FINALIZE 卡 Return)是否可铸记录。纯校验, 不提交。
+
+    返回 {ok, kind: return|verdict|finalization, category, reasons[], path, frontmatter, exit_code}。
     fail-closed: 声明缺/文件缺/字段缺/sha 不符 = ok=False + 原文 + 出口。
     """
     from tools.schema_loader import SchemaLoadError
@@ -348,9 +363,12 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
         _read_frontmatter,
         extract_return_summary_text,
         find_return_artifact,
+        finalize_task_id_for,
+        invalid_finalization_frontmatter,
         missing_return_frontmatter,
         return_artifact_dir,
     )
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard
 
     workspace_root = Path(workspace_root)
     is_audit = task_id.upper().endswith("R")
@@ -358,16 +376,49 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
     out: dict[str, Any] = {"ok": False, "kind": kind, "category": "", "reasons": [], "path": None, "frontmatter": {},
                            "exit_code": INGEST_EXIT_REJECTED}
     try:
-        decl = _artifact_ingest_declaration()[kind]
-    except SchemaLoadError as exc:
-        out["category"], out["reasons"] = "INGEST_DECLARATION_MISSING", [str(exc)]
+        task_path, _queue = _find_task_in_queue(workspace_root, task_id)
+    except AmbiguousTaskCard as exc:
+        out["category"], out["reasons"] = "TASK_AMBIGUOUS", [str(exc)]
         return out
-
-    task_path, _queue = _find_task_in_queue(workspace_root, task_id)
     if not task_path:
-        out["category"], out["reasons"] = "TASK_NOT_FOUND", [f"queue 目录中找不到任务卡 {task_id}"]
+        out["category"], out["reasons"] = "TASK_NOT_FOUND", [f"queue 目录中找不到任务卡 {task_id}(按 frontmatter task_id 查找, 文件名不限)"]
+        return out
+    if not is_audit:
+        pending, records = _external_finalize_pending(workspace_root, task_id)
+        if pending:
+            kind = out["kind"] = "finalization"
+            out["records"] = records
+    try:
+        decl = _artifact_ingest_declaration()[kind]
+    except (SchemaLoadError, KeyError) as exc:
+        out["category"], out["reasons"] = "INGEST_DECLARATION_MISSING", [f"transitions.schema artifact_ingest.{kind}: {exc}"]
         return out
     code_repo = _code_repo_for(workspace_root)
+
+    if kind == "finalization":
+        # AIPOS-F78B 件②: 外部 FINALIZE 卡 Return(落点 return_root/<finalize_task_id>, 与执行体 Return 同一候选序)
+        fin_id = finalize_task_id_for(task_id, _read_frontmatter(task_path))
+        out["finalize_task_id"] = fin_id
+        path = find_return_artifact(workspace_root, fin_id)
+        if path is None:
+            cands = list(_artifact_ingest_declaration()["return"].get("return_file_candidates") or [])
+            out["category"] = "INGEST_RETURN_MISSING"
+            out["reasons"] = [
+                f"未在声明落点 {return_artifact_dir(workspace_root, fin_id)} 找到 FINALIZE 卡 {fin_id} 的 Return(候选: {', '.join(map(str, cands))})。"
+                f"出口: 外部 FINALIZE 卡执行体把 Return 落到该目录(project.json paths.return_root), frontmatter 含 "
+                f"{', '.join(str(k) for k in decl.get('required_frontmatter') or [])}"
+            ]
+            return out
+        out["path"] = str(path)
+        fm = _read_frontmatter(path)
+        out["frontmatter"] = fm
+        problems = invalid_finalization_frontmatter(fm)
+        if problems:
+            out["category"] = "INGEST_FRONTMATTER_MISSING" if any("缺" in p for p in problems) else "INGEST_DEPLOY_STATUS_INVALID"
+            out["reasons"] = [f"{path}: {p}(声明: transitions.schema artifact_ingest.finalization)" for p in problems]
+            return out
+        out["ok"], out["category"], out["exit_code"] = True, "OK", 0
+        return out
 
     if not is_audit:
         path = find_return_artifact(workspace_root, task_id)
@@ -482,7 +533,7 @@ def ingest_task_artifact(
 
     derivation = derive_next_step(task_id, Path(workspace_root))
     action_type = derivation.get("verb") or ""
-    expected_verb = "lybra_queue_return_dry_run" if check["kind"] == "return" else "lybra_audit_verdict_dry_run"
+    expected_verb = {"return": "lybra_queue_return_dry_run", "verdict": "lybra_audit_verdict_dry_run", "finalization": "lybra_finalize"}[check["kind"]]
     if not derivation.get("derivable") or action_type != expected_verb:
         result["category"] = "INGEST_NOT_AT_RETURN_NODE"
         result["reasons"] = [
@@ -494,6 +545,39 @@ def ingest_task_artifact(
     result["command"] = str(derivation.get("command") or "")
     if dry_run:
         result.update({"ok": True, "exit_code": 0, "category": "DRY_RUN", "message": "校验通过(未提交)"})
+        return result
+    if check["kind"] == "finalization":
+        # AIPOS-F78B 件②: 同一 writer(finalization_record.write_finalization_record)铸记录; actor=被审卡 claim 记录实例,
+        # authorization=裁决 verdict_id, commit/merge_commit/remote_ref/deploy_status 来自 FINALIZE Return frontmatter
+        from tools.aipos_cli.finalization_record import write_finalization_record
+        from tools.aipos_cli.next_resolver import _claimer_instance
+
+        records = check.get("records") or {}
+        fm = check["frontmatter"]
+        claimer = _claimer_instance(records)
+        verdict_id = str((records.get("latest_verdict") or {}).get("verdict_id") or "").strip()
+        if not claimer or not verdict_id:
+            result["category"] = "INGEST_RECORD_MISSING"
+            result["reasons"] = [f"finalization 记录依据缺: claim 记录 agent_instance={claimer!r}, 裁决 verdict_id={verdict_id!r}"]
+            result["message"] = "artifact ingest 拒: 记录依据不齐"
+            result["exit_code"] = INGEST_EXIT_REJECTED
+            return result
+        try:
+            rel = str(Path(check["path"]).resolve().relative_to(Path(workspace_root).resolve()))
+        except ValueError:
+            rel = str(check["path"])
+        deploy_status = str(fm.get("deploy_status") or "").strip()
+        merge_commit = str(fm.get("merge_commit") or "").strip()
+        written = write_finalization_record(
+            governance_root=Path(workspace_root), task_id=task_id, actor=claimer, commit=merge_commit, merge_commit=merge_commit,
+            authorization_type="verdict_ref", authorization_ref=verdict_id, deployed=(deploy_status == "deployed"),
+            deploy_status=deploy_status, remote_ref=str(fm.get("remote_ref") or "").strip(), finalize_return_ref=rel,
+        )
+        result["ok"] = bool(written.get("ok"))
+        result["exit_code"] = 0 if result["ok"] else 1
+        result["output"] = str(written.get("path") or "")
+        result["message"] = "finalization 记录已落(external finalize, 来自 FINALIZE Return)" if result["ok"] else "finalization 记录写入失败"
+        result["category"] = "OK" if result["ok"] else "RECORD_WRITE_FAILED"
         return result
     runner = execute or execute_derived_action
     exec_result = runner(derivation, Path(workspace_root), connection_json)

@@ -1911,7 +1911,12 @@ def lybra_owner_decision_record_dry_run(arguments: dict[str, Any] | None = None)
     if not _owner_decision_scope_allowed():
         return _scope_denied_result_for(OWNER_DECISION_SCOPE, "owner decision record tools")
     args = arguments or {}
-    response = record_owner_decision(args, dry_run=True, repo_root=_repo_root(), actor=str(args.get("actor") or "mcp.client"))
+    # AIPOS-F78B 件④b: 按入参 workspace_root 落盘(经 _resolve_queue_workspace 校验 token projects scope), 禁写进 token 默认工作区
+    try:
+        repo_root = _resolve_queue_workspace(args)
+    except ValueError as exc:
+        return _teaching_error("WORKSPACE_ROOT_INVALID", str(exc), "Pass a workspace_root the token is scoped to, or omit it.")
+    response = record_owner_decision(args, dry_run=True, repo_root=repo_root, actor=str(args.get("actor") or "mcp.client"))
     if response.get("verdict") == Verdict.BLOCK:
         return _map_owner_decision_dry_run_error(response)
     return _tool_result(response, is_error=not bool(response.get("ok", False)))
@@ -1946,11 +1951,16 @@ def lybra_owner_decision_record_confirm(arguments: dict[str, Any] | None = None)
                 "Arming a PreAuthorized autonomy envelope requires owner_confirmation_token: OWNER_CONFIRMED.",
                 "Present the policy grant preview to the Owner, then retry confirm with owner_confirmation_token set to OWNER_CONFIRMED.",
             )
+    # AIPOS-F78B 件④b: confirm 与 dry_run 同根(入参 workspace_root, token projects scope 校验)
+    try:
+        repo_root = _resolve_queue_workspace(args)
+    except ValueError as exc:
+        return _teaching_error("WORKSPACE_ROOT_INVALID", str(exc), "Pass the same workspace_root used at dry_run.")
     response = execute_dry_run(
         dry_run_token,
         str(args.get("actor") or "mcp.client"),
         owner_confirmation_token=owner_confirmation_token,
-        repo_root=_repo_root(),
+        repo_root=repo_root,
     )
     if not response.get("ok", False):
         return _map_controlled_execute_error(response, dry_run_tool="lybra_owner_decision_record_dry_run")
@@ -2087,6 +2097,104 @@ def _driver_token_identity(cap: dict[str, Any]) -> str | None:
     return None
 
 
+def _loop_envelope_allowed_verbs() -> set[str]:
+    """AIPOS-F78B 件③: 信封授权的账务动词集合——唯一声明 verbs.schema lybra_loop.envelope.allowed_verbs(loop 与门同读)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    loop = (load_schema("verbs").get("verbs") or {}).get("lybra_loop") or {}
+    verbs = (loop.get("envelope") or {}).get("allowed_verbs") or []
+    if not verbs:
+        raise SchemaLoadError("verbs.schema.json lybra_loop.envelope.allowed_verbs 未声明")
+    return {str(v) for v in verbs}
+
+
+def _envelope_rejection(error_code: str, reason: str, *, verb: str) -> dict[str, Any]:
+    """信封未匹配 → BLOCK + transitions envelope_guards 出口(与 claim 路径同一声明源)。"""
+    guard = _load_envelope_guard_declaration(error_code) or {}
+    next_step = guard.get("next_step") or {}
+    action = str(next_step.get("action") or "请顾问核对信封(5_tasks/policies/)是否覆盖驱动方身份与本卡, 或 `lybra envelope mint` 申领")
+    return _teaching_error(
+        error_code,
+        f"PreAuthorized one-stage {verb} not released: {str(guard.get('error_message') or reason)}",
+        action,
+        severity=str(guard.get("severity") or "needs_human"),
+    )
+
+
+def _match_driver_envelope(
+    repo_root: Path,
+    *,
+    owner_policy_ref: str,
+    task_id: str,
+    verb: str,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """AIPOS-F78B 件③: 驱动方 token 一阶段放行判据(claim 之外的账务动词 return/verdict/close)。
+    请求 token 须为声明的驱动方(roles.schema driver.role_class); verb ∈ verbs.schema lybra_loop.envelope.allowed_verbs;
+    owner_policy_ref 命名的信封经 autonomy_policy.match_claim_envelope(同一 matcher)覆盖驱动方身份(token 绑定实例/角色名/角色类)
+    与本卡。返回 (policy_id, None) 放行, 或 (None, BLOCK 结果)。"""
+    cap = _capability_token()
+    driver_identity = _driver_token_identity(cap)
+    if not driver_identity:
+        return None, _teaching_error(
+            "ENVELOPE_DRIVER_ONLY",
+            f"autonomy_mode PreAuthorized for {verb} is a driver-token one-stage protocol (roles.schema driver.role_class); "
+            f"this bearer's role is '{cap.get('role') or 'unknown'}'.",
+            "Submit ledger verbs with the driver token, or use autonomy_mode Supervised.",
+        )
+    try:
+        allowed = _loop_envelope_allowed_verbs()
+    except Exception as exc:  # SchemaLoadError: 声明缺 = 出声拒, 不静默回落
+        return None, _teaching_error("ENVELOPE_DECLARATION_MISSING", str(exc), "Restore verbs.schema lybra_loop.envelope.allowed_verbs.")
+    if verb not in allowed:
+        return None, _teaching_error(
+            "ENVELOPE_VERB_NOT_ALLOWED",
+            f"verb '{verb}' is not in the envelope-authorized set {sorted(allowed)} (verbs.schema lybra_loop.envelope.allowed_verbs).",
+            "Use autonomy_mode Supervised for this verb.",
+        )
+    policy_ref = str(owner_policy_ref or "").strip()
+    if not policy_ref:
+        return None, _teaching_error("OWNER_POLICY_REF_REQUIRED", "owner_policy_ref (envelope policy_id) is required for PreAuthorized one-stage.",
+                                     "Pass the policy_id of the Owner-signed envelope covering the driver.")
+    policy = load_policy(repo_root, policy_ref)
+    if policy is None:
+        return None, _envelope_rejection("ENVELOPE_POLICY_NOT_FOUND", f"owner_policy_ref {policy_ref} does not resolve", verb=verb)
+    snapshot = load_task_snapshot(repo_root, task_id=task_id, path=None)
+    if snapshot is None:
+        return None, _teaching_error("TASK_NOT_FOUND", f"task {task_id} not found in queue (frontmatter task_id lookup).",
+                                     "Check the task_id; cards are matched by frontmatter task_id, not file name.")
+    bound = str(cap.get("agent_instance") or "").strip()
+    role_name = str(cap.get("role") or "").strip()
+    released = count_preauthorized_claims(repo_root, policy_ref)
+    # 身份集合 = {token 绑定实例(缺则角色类), 角色类, 角色名}——信封 agent_or_role 写其一即覆盖驱动方
+    matched, reason, error_code = match_claim_envelope(
+        policy=policy,
+        task_id=str(snapshot.get("task_id") or task_id),
+        task_mode=str(snapshot.get("task_mode") or ""),
+        project=str(snapshot.get("project") or ""),
+        agent_instance=bound or driver_identity,
+        actor=driver_identity,
+        now=datetime.now(timezone.utc),
+        released_count=released,
+        claiming_role=role_name or driver_identity,
+    )
+    trace_envelope({"phase": "_match_driver_envelope", "verb": verb, "task_id": task_id, "owner_policy_ref": policy_ref,
+                    "driver_identity": driver_identity, "bound": bound, "role": role_name, "matched": matched, "reason": reason,
+                    "error_code": error_code})
+    if not matched:
+        return None, _envelope_rejection(error_code or "ENVELOPE_AGENT_NOT_COVERED", reason, verb=verb)
+    return policy_ref, None
+
+
+def _driver_one_stage_confirmer(policy_id: str) -> dict[str, Any]:
+    """一阶段落记录的 confirmer 归因 = Owner 签的信封(与 claim 自动放行同形), submitted_by 仍=驱动方 token 实例。"""
+    return {
+        "confirmer_role": f"autonomy_policy:{AUTONOMY_MODE_PREAUTHORIZED}",
+        "confirmer_token_ref": policy_id,
+        "confirmer_token_fingerprint": "",
+        "submitted_by": _confirmer_attribution().get("submitted_by"),
+    }
+
+
 def _match_claim_envelope(
     repo_root: Path,
     *,
@@ -2142,8 +2250,9 @@ def _match_claim_envelope(
     # 驱动方身份 = token 绑定实例(或其 role_class); 信封 agent_or_role 覆盖驱动方即一阶段放行, 卡实例不参与身份判定。
     driver_identity = _driver_token_identity(cap)
     if driver_identity:
+        # AIPOS-F78B 件③: 身份集合 = {绑定实例(缺则角色类), 角色类, 角色名}——chris 信封写 agent_or_role: hbj-advisor(自定义角色名)亦覆盖
         envelope_instance = bound or driver_identity
-        envelope_actor = envelope_instance
+        envelope_actor = driver_identity
         _emit("identity_gate", None, "driver_token", reason="ledger verb submitted by declared driver token; envelope identity = driver",
               driver_identity=driver_identity)
     else:
@@ -2184,7 +2293,7 @@ def _match_claim_envelope(
         actor=envelope_actor,
         now=datetime.now(timezone.utc),
         released_count=released,
-        claiming_role=(driver_identity or claiming_role) or None,
+        claiming_role=(claiming_role or driver_identity) or None,
     )
     _emit("final", owner_policy_ref if matched else None, None,
           policy_loaded=True, snapshot_loaded=True, queue_state=queue_state,
@@ -2589,9 +2698,12 @@ def lybra_queue_claim_confirm(arguments: dict[str, Any] | None = None) -> dict[s
 
 
 def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _queue_return_scope_allowed():
-        return _scope_denied_result_for(QUEUE_RETURN_SCOPE, "supervised queue return tools")
     args = arguments or {}
+    # AIPOS-F78B 件③: 驱动方一阶段——autonomy_mode=PreAuthorized 时 Owner 签的信封即授权(不索 queue_return scope / owner_confirm);
+    # 无信封匹配 = BLOCK(envelope_guards 出口), 永不静默回落 Supervised
+    one_stage = str(args.get("autonomy_mode") or "").strip() == AUTONOMY_MODE_PREAUTHORIZED
+    if not one_stage and not _queue_return_scope_allowed():
+        return _scope_denied_result_for(QUEUE_RETURN_SCOPE, "supervised queue return tools")
     forbidden = _forbidden_queue_return_fields(args)
     if forbidden:
         return _queue_return_error(
@@ -2599,11 +2711,11 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
             f"Supervised MCP queue_return does not accept these fields: {', '.join(forbidden)}.",
             "Remove automatic, batch, credential, raw, lease, audit-dispatch, and finalize fields; then run dry-run again.",
         )
-    if str(args.get("autonomy_mode") or "").strip() != "Supervised":
+    if not one_stage and str(args.get("autonomy_mode") or "").strip() != "Supervised":
         return _queue_return_error(
             "INVALID_AUTONOMY_MODE",
-            "lybra_queue_return_dry_run supports only autonomy_mode: Supervised.",
-            "Use autonomy_mode: Supervised. Delegated and Standing remain behind separate Owner gates.",
+            "lybra_queue_return_dry_run supports autonomy_mode: Supervised or PreAuthorized (driver one-stage, AIPOS-F78B).",
+            "Use autonomy_mode: Supervised, or PreAuthorized with the driver token + owner_policy_ref naming the envelope.",
         )
     actor = str(args.get("actor") or "").strip()
     if not actor:
@@ -2661,6 +2773,11 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
         )
 
     repo_root = _resolve_queue_workspace(args)
+    policy_id: str | None = None
+    if one_stage:
+        policy_id, envelope_error = _match_driver_envelope(repo_root, owner_policy_ref=owner_policy_ref, task_id=task_id, verb="return")
+        if envelope_error is not None:
+            return envelope_error
     resolved = _resolve_claim_instance(agent_instance, repo_root)
     resolution = resolved["resolution"]
     canonical_agent_instance = str(resolved.get("canonical_agent_instance") or "").strip()
@@ -2710,6 +2827,30 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
     decorated = _decorate_queue_return_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance)
     if decorated.get("verdict") == Verdict.BLOCK:
         return _tool_result(decorated, is_error=True)
+    if one_stage and policy_id:
+        # 一阶段: 信封已授权 → 门当场执行(复用 F73B claim 自动放行协议: dry_run 同跳 execute, confirmer=信封, 不索 owner_confirm)
+        dry_run_token = str(decorated.get("dry_run_token") or "").strip()
+        if not dry_run_token:
+            return _queue_return_error("DRY_RUN_REQUIRED", "return dry-run produced no dry_run_token; nothing to release.",
+                                       "Fix the blocking reasons in the preview, then retry.")
+        executed = execute_dry_run(
+            dry_run_token,
+            canonical_agent_instance,
+            owner_confirmation_token=OWNER_CONFIRMATION_TOKEN,
+            repo_root=repo_root,
+            confirmer=_driver_one_stage_confirmer(policy_id),
+        )
+        if not executed.get("ok", False):
+            return _map_controlled_execute_error(executed, dry_run_tool="lybra_queue_return_dry_run")
+        executed["surface"] = "mcp"
+        executed["autonomy_mode"] = AUTONOMY_MODE_PREAUTHORIZED
+        executed["owner_policy_ref"] = policy_id
+        executed["preauthorized_release"] = True
+        executed["owner_confirmation_required"] = False
+        executed["agent_instance"] = agent_instance
+        executed["canonical_agent_instance"] = canonical_agent_instance
+        executed.pop("dry_run_token", None)
+        return _tool_result(executed, is_error=False)
     return _tool_result(decorated, is_error=not bool(decorated.get("ok", False)))
 
 
@@ -2838,10 +2979,13 @@ def lybra_queue_return_confirm(arguments: dict[str, Any] | None = None) -> dict[
 
 
 def _validate_supervised_audit_args(args: dict[str, Any], *, operation: str) -> tuple[str, dict[str, Any] | None]:
-    if str(args.get("autonomy_mode") or "").strip() != "Supervised":
+    mode = str(args.get("autonomy_mode") or "").strip()
+    # AIPOS-F78B 件③: audit_verdict 另收 PreAuthorized(驱动方一阶段, 信封判据在 lybra_audit_verdict_dry_run); dispatch 仍只 Supervised
+    if mode != "Supervised" and not (operation == RecordType.AUDIT_VERDICT and mode == AUTONOMY_MODE_PREAUTHORIZED):
         return "", _audit_error(
             "INVALID_AUTONOMY_MODE",
-            f"lybra_{operation}_dry_run supports only autonomy_mode: Supervised.",
+            f"lybra_{operation}_dry_run supports only autonomy_mode: Supervised"
+            + (" or PreAuthorized (driver one-stage, AIPOS-F78B)." if operation == RecordType.AUDIT_VERDICT else "."),
             "Use autonomy_mode: Supervised. Delegated and Standing remain behind separate Owner gates.",
         )
     actor = str(args.get("actor") or "").strip()
@@ -2979,9 +3123,19 @@ def lybra_audit_dispatch_confirm(arguments: dict[str, Any] | None = None) -> dic
 
 
 def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _audit_verdict_scope_allowed():
-        return _scope_denied_result_for(AUDIT_VERDICT_SCOPE, "supervised audit verdict tools")
     args = arguments or {}
+    # AIPOS-F78B 件③: 驱动方一阶段(PreAuthorized + 信封覆盖驱动方与被审卡) 不索 audit_verdict scope / owner_confirm
+    one_stage = str(args.get("autonomy_mode") or "").strip() == AUTONOMY_MODE_PREAUTHORIZED
+    if not one_stage and not _audit_verdict_scope_allowed():
+        return _scope_denied_result_for(AUDIT_VERDICT_SCOPE, "supervised audit verdict tools")
+    policy_id: str | None = None
+    if one_stage:
+        policy_id, envelope_error = _match_driver_envelope(
+            _resolve_queue_workspace(args), owner_policy_ref=str(args.get("owner_policy_ref") or ""),
+            task_id=str(args.get("reviewed_task_id") or "").strip(), verb="verdict",
+        )
+        if envelope_error is not None:
+            return envelope_error
     forbidden = _forbidden_audit_fields(args)
     if forbidden:
         return _audit_error(
@@ -3015,7 +3169,30 @@ def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict
         repo_root=_resolve_queue_workspace(args),
     )
     decorated = _decorate_audit_dry_run(response, args=args, canonical_agent_instance=canonical_agent_instance, operation=RecordType.AUDIT_VERDICT)
-    return _tool_result(decorated, is_error=decorated.get("verdict") == Verdict.BLOCK or not bool(decorated.get("ok", False)))
+    if decorated.get("verdict") == Verdict.BLOCK or not bool(decorated.get("ok", False)):
+        return _tool_result(decorated, is_error=True)
+    if one_stage and policy_id:
+        dry_run_token = str(decorated.get("dry_run_token") or decorated.get("dry_run_id") or "").strip()
+        if not dry_run_token:
+            return _audit_error("DRY_RUN_REQUIRED", "audit_verdict dry-run produced no dry_run_token; nothing to release.",
+                                "Fix the blocking reasons in the preview, then retry.")
+        executed = execute_dry_run(
+            dry_run_token,
+            canonical_agent_instance,
+            owner_confirmation_token=OWNER_CONFIRMATION_TOKEN,
+            repo_root=_resolve_queue_workspace(args),
+            confirmer=_driver_one_stage_confirmer(policy_id),
+        )
+        if not executed.get("ok", False):
+            return _map_controlled_execute_error(executed, dry_run_tool="lybra_audit_verdict_dry_run")
+        executed["surface"] = "mcp"
+        executed["autonomy_mode"] = AUTONOMY_MODE_PREAUTHORIZED
+        executed["owner_policy_ref"] = policy_id
+        executed["preauthorized_release"] = True
+        executed["owner_confirmation_required"] = False
+        executed.pop("dry_run_token", None)
+        return _tool_result(executed, is_error=False)
+    return _tool_result(decorated, is_error=False)
 
 
 def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -3346,9 +3523,11 @@ def lybra_queue_close_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
     Validates: task in claimed/, has return record, evidence present.
     Does NOT require owner_confirm (this is the executor's finalize settlement step).
     """
-    if not _queue_close_scope_allowed():
-        return _scope_denied_result_for(QUEUE_CLOSE_SCOPE, "queue close tools")
     args = arguments or {}
+    # AIPOS-F78B 件③: 驱动方一阶段(PreAuthorized + 信封) 不索 queue_close scope; 匹配即当场 close(confirm 本就是重放参数)
+    one_stage = str(args.get("autonomy_mode") or "").strip() == AUTONOMY_MODE_PREAUTHORIZED
+    if not one_stage and not _queue_close_scope_allowed():
+        return _scope_denied_result_for(QUEUE_CLOSE_SCOPE, "queue close tools")
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
         return _queue_close_error(
@@ -3370,20 +3549,33 @@ def lybra_queue_close_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
             "actor is required.",
             "Pass the actor performing the close.",
         )
+    repo_root = _resolve_queue_workspace(args)
+    policy_id: str | None = None
+    if one_stage:
+        policy_id, envelope_error = _match_driver_envelope(repo_root, owner_policy_ref=str(args.get("owner_policy_ref") or ""),
+                                                           task_id=task_id, verb="close")
+        if envelope_error is not None:
+            return envelope_error
     response = close_task(
         task_id=task_id,
         actor=actor,
         closure_evidence=closure_evidence,
         submitted_by=_confirmer_attribution().get("submitted_by"),  # AIPOS-F73E 件②
-        dry_run=True,
-        repo_root=_resolve_queue_workspace(args),
+        dry_run=not (one_stage and policy_id),
+        repo_root=repo_root,
     )
     if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
     # Add MCP decoration
     response["surface"] = "mcp"
     response["operation"] = "queue_close"
-    response["dry_run"] = True
+    response["dry_run"] = not (one_stage and policy_id)
+    if one_stage and policy_id:
+        response["autonomy_mode"] = AUTONOMY_MODE_PREAUTHORIZED
+        response["owner_policy_ref"] = policy_id
+        response["preauthorized_release"] = True
+        response["owner_confirmation_required"] = False
+        response["confirmer"] = _driver_one_stage_confirmer(policy_id)
     return _tool_result(response, is_error=not bool(response.get("ok", False)))
 
 
@@ -3986,7 +4178,11 @@ def lybra_roles_register(arguments: dict[str, Any] | None = None) -> dict[str, A
             "Custom role registration is owner-gated (AIPOS-346F2). "
             "Provide a reference to the owner authorization decision."
         )
-    root = _repo_root()
+    # AIPOS-F78B 件④a: CLI `roles register` 改调本动词(唯一实现; 未挂入的 dry_run/confirm 对已删); 落盘根按入参 workspace_root
+    try:
+        root = _resolve_queue_workspace(args)
+    except ValueError as exc:
+        return _teaching_error("WORKSPACE_ROOT_INVALID", str(exc), "Pass a workspace_root the token is scoped to, or omit it.")
     try:
         updated = register_custom_role(
             root, name, builtin_class,
@@ -4047,7 +4243,6 @@ def lybra_roles_remove(arguments: dict[str, Any] | None = None) -> dict[str, Any
 
 _PROJECT_NEW_DRY_RUNS: dict[str, dict[str, Any]] = {}
 _PROJECT_SET_REPO_DRY_RUNS: dict[str, dict[str, Any]] = {}
-_ROLES_REGISTER_DRY_RUNS: dict[str, dict[str, Any]] = {}
 
 
 def lybra_project_new_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -4272,86 +4467,6 @@ def lybra_project_set_repo_confirm(arguments: dict[str, Any] | None = None) -> d
         "operation": "project_set_repo_confirm",
         "project_root": str(root),
         "code_repo": validated["code_repo"],
-    })
-
-
-def lybra_roles_register_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """AIPOS-F24: register custom role (preview)."""
-    args = arguments or {}
-    name = str(args.get("name") or "").strip()
-    builtin_class = str(args.get("builtin_class") or "").strip()
-    workspace_root = str(args.get("workspace_root") or "").strip() or None
-    owner_auth_ref = str(args.get("owner_authorization_ref") or "").strip()
-    reason = str(args.get("reason") or "").strip()
-    actor = str(args.get("actor") or "mcp.client").strip()
-    
-    if not name:
-        return _teaching_error("MISSING_NAME", "Missing required parameter: name", "")
-    if not builtin_class:
-        return _teaching_error("MISSING_BUILTIN_CLASS", "Missing required parameter: builtin_class", "")
-    if not owner_auth_ref:
-        return _teaching_error("MISSING_OWNER_AUTHORIZATION", "owner-gated", "")
-    
-    if not workspace_root:
-        workspace_root = str(_repo_root())
-    
-    now = datetime.now(timezone.utc)
-    token = f"rolesregdr_{os.urandom(16).hex()}"
-    expires_at = (now + timedelta(seconds=600)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    
-    _ROLES_REGISTER_DRY_RUNS[token] = {
-        "name": name,
-        "builtin_class": builtin_class,
-        "workspace_root": workspace_root,
-        "owner_authorization_ref": owner_auth_ref,
-        "reason": reason,
-        "actor": actor,
-        "created_at": now.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "expires_at": expires_at,
-    }
-    
-    return _tool_result({
-        "ok": True,
-        "operation": "roles_register_dry_run",
-        "preview": {"name": name, "builtin_class": builtin_class},
-        "dry_run_token": token,
-        "dry_run_expires_at": expires_at,
-        "client_hint": "使用 lybra_roles_register_confirm 确认。",
-    })
-
-
-def lybra_roles_register_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    """AIPOS-F24: confirm custom role registration."""
-    args = arguments or {}
-    dry_run_token = str(args.get("dry_run_token") or "").strip()
-    owner_confirmation = str(args.get("owner_confirmation_token") or "").strip()
-    
-    if not dry_run_token or dry_run_token not in _ROLES_REGISTER_DRY_RUNS:
-        return _teaching_error("INVALID_DRY_RUN_TOKEN", "Invalid or expired token", "")
-    if owner_confirmation != "OWNER_CONFIRMED":
-        return _teaching_error("INVALID_OWNER_CONFIRMATION", "Must be 'OWNER_CONFIRMED'", "")
-    
-    validated = _ROLES_REGISTER_DRY_RUNS.pop(dry_run_token)
-    
-    from tools.aipos_cli.custom_roles import register_custom_role
-    from pathlib import Path
-    try:
-        updated = register_custom_role(
-            Path(validated["workspace_root"]),
-            validated["name"],
-            validated["builtin_class"],
-            by=validated["owner_authorization_ref"],
-            reason=validated["reason"] or f"owner-authorization-ref: {validated['owner_authorization_ref']}",
-        )
-    except Exception as exc:
-        return _error_result(f"register_custom_role failed: {exc}")
-    
-    return _tool_result({
-        "ok": True,
-        "operation": "roles_register_confirm",
-        "name": validated["name"],
-        "builtin_class": validated["builtin_class"],
-        "custom_roles": updated,
     })
 
 
@@ -5129,14 +5244,23 @@ def lybra_roles_enroll_list(arguments: dict[str, Any] | None = None) -> dict[str
     Read-only, no owner-gating required.
     """
     from tools.aipos_cli.enrollment import list_enrollment_codes
+    args = arguments or {}
+    # AIPOS-F78B 件④c: 注册码只住在发码门的注册表(发码/兑换同根 _repo_root); CLI enroll-list 是本动词的薄壳, 口径唯一。
+    # governance_root 入参 = 只列签给该治理根工位的码(记录在发码时登记 governance_root)。
     root = _repo_root()
+    wanted = str(args.get("governance_root") or "").strip()
     try:
         codes = list_enrollment_codes(root, include_code=False)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         return _error_result(f"Failed to list enrollment codes: {exc}")
+    if wanted:
+        wanted_resolved = str(Path(wanted).expanduser().resolve())
+        codes = [c for c in codes if str(Path(str(c.get("governance_root") or "")).expanduser().resolve()) == wanted_resolved]
     return _tool_result({
         "ok": True,
         "operation": "roles_enroll_list",
+        "registry_root": str(root),
+        "governance_root_filter": wanted or None,
         "enrollments": codes,
     })
 
