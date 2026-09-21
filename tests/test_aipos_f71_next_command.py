@@ -277,6 +277,8 @@ class TestColdStartLifecycle:
         ws = cold_start_workspace
         queue_dir = ws / "5_tasks" / "queue"
         _create_task_card(queue_dir, "TEST-002", "claimed")
+        # AIPOS-F73E 件①: return 的 actor 只读 claim 记录(无记录=不可推导), 不再回退卡面 assigned_to
+        _create_record(ws / "5_tasks" / "records", "claims", "TEST-002", "claim", claim_id="claim_TEST-002_x")
         _create_return_artifact(ws, "TEST-002")
 
         result = derive_next_step("TEST-002", ws)
@@ -319,6 +321,9 @@ class TestColdStartLifecycle:
         ws = cold_start_workspace
         queue_dir = ws / "5_tasks" / "queue"
         _create_task_card(queue_dir, "TEST-003R", "claimed", task_mode="audit", assigned_to="audit.lybra.kiwiai-dev")
+        # AIPOS-F73E 件①: verdict 的 actor = 审计卡 claim 记录的审计实例(无记录=不可推导), 不读报告自报/卡面
+        _create_record(ws / "5_tasks" / "records", "claims", "TEST-003R", "claim", claim_id="claim_TEST-003R_x",
+                       actor="audit.lybra.kiwiai-dev", agent_instance="audit.lybra.kiwiai-dev")
         _create_verdict_artifact(ws, "TEST-003R", "TEST-003", "PASS")
 
         result = derive_next_step("TEST-003R", ws)
@@ -619,6 +624,7 @@ class TestCopyPasteableCommands:
         ws = cold_start_workspace
         queue_dir = ws / "5_tasks" / "queue"
         _create_task_card(queue_dir, "TEST-014", "claimed")
+        _create_record(ws / "5_tasks" / "records", "claims", "TEST-014", "claim", claim_id="claim_TEST-014_x")  # AIPOS-F73E 件①
         _create_return_artifact(ws, "TEST-014")
 
         result = derive_next_step("TEST-014", ws)

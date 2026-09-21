@@ -884,10 +884,14 @@ def _confirmer_attribution() -> dict[str, Any]:
     non-Owner/agent self-confirmation. Never includes the raw token.
     """
     cap = _capability_token()
+    # AIPOS-F73E 件②: submitted_by = 提交该动词的 token 角色实例(绑定 agent_instance 优先, 否则角色名); 只记不判,
+    # actor 仍=认领实例(transitions record_authenticity.submission_identity 单一声明)
+    submitted_by = str(cap.get("agent_instance") or cap.get("role") or "")
     return {
         "confirmer_role": str(cap.get("role") or "") or None,
         "confirmer_token_ref": str(cap.get("token_ref") or cap.get("token_id") or "") or None,
         "confirmer_token_fingerprint": str(cap.get("fingerprint") or "") or None,
+        "submitted_by": submitted_by or None,
     }
 
 
@@ -3006,6 +3010,7 @@ def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict
         owner_waiver_ref=str(args.get("owner_waiver_ref") or "").strip() or None,
         agent_runtime=_agent_runtime_value(args),
         artifact_subject=args.get("artifact_subject") if isinstance(args.get("artifact_subject"), dict) else None,
+        submitted_by=_confirmer_attribution().get("submitted_by"),  # AIPOS-F73E 件②: 进 dry-run 快照, confirm 原样承接
         dry_run=True,
         repo_root=_resolve_queue_workspace(args),
     )
@@ -3369,6 +3374,7 @@ def lybra_queue_close_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         task_id=task_id,
         actor=actor,
         closure_evidence=closure_evidence,
+        submitted_by=_confirmer_attribution().get("submitted_by"),  # AIPOS-F73E 件②
         dry_run=True,
         repo_root=_resolve_queue_workspace(args),
     )
@@ -3415,6 +3421,7 @@ def lybra_queue_close_confirm(arguments: dict[str, Any] | None = None) -> dict[s
         task_id=task_id,
         actor=actor,
         closure_evidence=closure_evidence,
+        submitted_by=_confirmer_attribution().get("submitted_by"),  # AIPOS-F73E 件②
         dry_run=False,
         repo_root=_resolve_queue_workspace(args),
     )

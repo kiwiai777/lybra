@@ -755,6 +755,16 @@ else
   overall=1
 fi
 
+# AIPOS-F73E: loop 账务动词身份定案(token=驱动方, actor=该卡认领实例; 门记 submitted_by)+ 改写断言的存量夹具(F73D/F78 上方已登记)
+echo
+echo "── tests/test_aipos_f73e_ledger_identity.py (F73E 账务动词身份: actor=认领实例/submitted_by=驱动方) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f73e_ledger_identity.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f73e_ledger_identity.py PASS"
+else
+  echo "✗ tests/test_aipos_f73e_ledger_identity.py FAIL"
+  overall=1
+fi
+
 echo
 echo "── tools/aipos_cli/tests/test_agent_watch_fs.py (agent watch 哨兵(F73D expect_ready 谓词零回归)) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_agent_watch_fs.py" -v --tb=short -k "not test_module_is_stdlib_only_zero_new_deps"; then
