@@ -3419,6 +3419,10 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # Text output
             verdict = result['verdict']
+            # AIPOS-F79C 件③: 请求了 push 而没推上 → 首行就是 PUSH NOT DONE: <原因>(不得被后文淹没)
+            push_result = result.get('push_result')
+            if result.get('push_requested') and push_result and not push_result.get('pushed') and verdict != Verdict.PASS:
+                print(f"PUSH NOT DONE: {push_result.get('reason')}")
             print(f"\n=== Governance Commit Result ===")
             print(f"Task: {result['task_id']}")
             print(f"Actor: {result['actor']}")
@@ -3480,6 +3484,8 @@ def main(argv: list[str] | None = None) -> int:
             
             if result.get('pushed'):
                 print("✓ Pushed to remote")
+            elif result.get('push_requested') and push_result and not push_result.get('pushed') and verdict != Verdict.PASS:
+                print(f"✗ PUSH NOT DONE: {push_result.get('reason')}")
             
             print("\n=== Next Steps ===")
             if verdict == Verdict.PASS:
@@ -3490,10 +3496,14 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     print("无待收内容, 治理仓已最新 (no-op, EXIT=0)")
             elif verdict == Verdict.BLOCK:
-                print("请补充缺失的收账文件后重试")
+                if result.get('push_requested') and push_result and not push_result.get('pushed'):
+                    print("推送未完成: 按上方 Message 的可执行出口处理后重跑同一命令(本地 commit 已保留)")
+                else:
+                    print("请补充缺失的收账文件后重试")
             else:
                 print("操作失败,请查看错误信息")
         
+        # AIPOS-F79C 件③: pushed=False(请求了 push 时)已由 governance_commit 封口为 verdict != PASS → 非零退出
         return 0 if result['verdict'] == Verdict.PASS else 1
 
     if args.command == "brief":

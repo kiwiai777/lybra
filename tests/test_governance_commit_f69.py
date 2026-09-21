@@ -103,7 +103,7 @@ def test_concurrent_safety_with_rebase(governance_repo):
     
     # 模拟远端已前进：另一个 clone 推送新内容
     other_clone = governance_repo["local"].parent / "other_clone"
-    subprocess.run(["git", "clone", str(remote), str(other_clone)], check=True, capture_output=True)
+    subprocess.run(["git", "clone", "-b", "main", str(remote), str(other_clone)], check=True, capture_output=True)  # AIPOS-F79C: 真落在 main, 远端才真前进(F79 已注: 旧夹具落 master 从未真 rebase)
     subprocess.run(["git", "config", "user.name", "Other User"], cwd=str(other_clone), check=True, capture_output=True)
     subprocess.run(["git", "config", "user.email", "other@example.com"], cwd=str(other_clone), check=True, capture_output=True)
     
@@ -322,7 +322,7 @@ def test_rebase_rejects_outofscope_dirty_tree(governance_repo):
     
     # ② 模拟远端前进
     other_clone = governance_repo["local"].parent / "other_clone_dirty"
-    subprocess.run(["git", "clone", str(remote), str(other_clone)], check=True, capture_output=True)
+    subprocess.run(["git", "clone", "-b", "main", str(remote), str(other_clone)], check=True, capture_output=True)  # AIPOS-F79C: 真落在 main, 远端才真前进(F79 已注: 旧夹具落 master 从未真 rebase)
     subprocess.run(["git", "config", "user.name", "Other User"], cwd=str(other_clone), check=True, capture_output=True)
     subprocess.run(["git", "config", "user.email", "other@example.com"], cwd=str(other_clone), check=True, capture_output=True)
     

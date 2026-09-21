@@ -14,7 +14,7 @@
 ④ R6M 护栏对选定文件仍拦(缺 frontmatter 的 governance/*.md 被拒), 补齐后同一命令通过
 ⑤ 无 --paths 的 dry-run 列出 add -A 范围并 warning 标出 untracked 数量
 ⑦ 本文件入 run-all.sh
-附: --paths-file 与 --paths 同一实现; push 仍走 F69 fetch→rebase→push; CLI --dry-run --json 出清单
+附: --paths-file 与 --paths 同一实现; push 走 F79C 双向判据(fast-forward / 临时 worktree cherry-pick); CLI --dry-run --json 出清单
 """
 from __future__ import annotations
 
@@ -166,8 +166,10 @@ def test_acceptance_1_paths_commit_contains_only_selected_files(rig):
         MANIFEST_MODIFIED: 2, MANIFEST_ADDED: 0, MANIFEST_DELETED: 0, MANIFEST_UNTRACKED: 0, "total": 2,
     }
     ops = " ".join(result["operations"])
-    assert "add -A" not in ops.replace("绝不 add -A", ""), ops
-    assert "git add -- notes/a.md notes/b.md" in ops
+    # AIPOS-F79C 件④: 暂存改为 git add -A -- <paths>(-A 限定在白名单内, 目录 pathspec 内的删除也暂存);
+    # 守卫改为「绝不出现整根 add -A -- .」
+    assert "add -A -- ." not in ops, ops
+    assert "git add -A -- notes/a.md notes/b.md" in ops
     assert "git show --name-only HEAD == manifest" in ops
 
     after = porcelain(repo)
@@ -387,7 +389,10 @@ def test_push_with_paths_keeps_f69_rebase_and_verification(rig, tmp_path):
     assert result["verdict"] == Verdict.PASS, result["message"]
     assert result["committed"] is True and result["pushed"] is True
     ops = " ".join(result["operations"])
-    assert "Fetched from remote" in ops and "Rebased successfully" in ops and "Verified commit" in ops
+    # AIPOS-F79C 件②: 远端前进时不再原地 rebase, 改为临时 linked worktree cherry-pick + push + 本地分支跟进
+    assert "Fetched from remote" in ops and "Remote has advanced" in ops and "Verified commit" in ops
+    assert "Cherry-picked 1 commit(s)" in ops and "Local branch fast-forwarded" in ops and "Temp worktree cleaned: True" in ops
+    assert "Rebased" not in ops and _git(repo, "stash", "list") == ""
     committed = set(_git(repo, "show", "--name-only", "--format=", result["commit_hash"]).split("\n")) - {""}
     assert committed == {f"{GOV_REL}/notes/a.md", f"{GOV_REL}/notes/b.md"}
     assert _git(repo, "branch", "-r", "--contains", result["commit_hash"]).strip()

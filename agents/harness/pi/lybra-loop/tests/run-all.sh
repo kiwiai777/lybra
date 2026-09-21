@@ -601,6 +601,16 @@ else
   overall=1
 fi
 
+# AIPOS-F79C: governance_commit push 假阴性热修——双向 rev-list 判据+远端未前进直接 fast-forward+临时 linked worktree cherry-pick 不碰他人未提交文件+pushed=False 出声+目录 pathspec 内删除暂存
+echo
+echo "── tests/test_governance_commit_f79c.py (治理落库 push 判据/临时 worktree 整合/出声/目录删除) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_governance_commit_f79c.py" -v --tb=short; then
+  echo "✓ tests/test_governance_commit_f79c.py PASS"
+else
+  echo "✗ tests/test_governance_commit_f79c.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F74: 交回自检判据⑤分支合规+存量卡机器区重生成+deploy空区间授权洞
 echo
 echo "── tools/aipos_cli/tests/test_aipos_f74.py (判据⑤分支合规+机器区重生成+deploy授权) ────────────────────────────────────────────────────"
