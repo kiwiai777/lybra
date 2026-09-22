@@ -34,6 +34,9 @@ PUSH_NOT_DONE = "PUSH NOT DONE: "
 TMP_PREFIX = "lybra-governance-commit-"
 
 
+# AIPOS-F79D 件①: governance/*.md 须带 config.schema file_declarations.governance_doc 声明的 frontmatter(四检现在在 governance-commit 内跑)
+LEDGER_BASE = "---\nstatus: active\n---\n# ledger\n- row 1\n"
+
 def _git(cwd: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-c", "core.quotepath=false", *args],
@@ -98,7 +101,7 @@ def rig(tmp_path, monkeypatch):
         (gov / d).mkdir(parents=True)
     for d in ("governance/decision_log", "5_tasks/queue/claimed", "task_cards", "stage_archive"):
         (gov / d / ".gitkeep").write_text("", encoding="utf-8")
-    (gov / "governance" / "LEDGER.md").write_text("# ledger\n- row 1\n", encoding="utf-8")
+    (gov / "governance" / "LEDGER.md").write_text(LEDGER_BASE, encoding="utf-8")  # AIPOS-F79D: 治理文档须带声明 frontmatter(B② 与 hook 同判据)
     (gov / "5_tasks" / "LEDGER.md").write_text("# task ledger\n- t1\n", encoding="utf-8")
     (gov / "5_tasks" / "queue" / "pending" / "card-1.md").write_text("---\ntask_id: X-1\n---\n# card 1\n", encoding="utf-8")
     (gov / "notes" / "a.md").write_text("# note a\n", encoding="utf-8")
@@ -225,7 +228,7 @@ def test_state_b_remote_advanced_integrates_in_temp_worktree_and_ffs_local_branc
 def test_state_c_conflict_blocks_lists_files_cleans_worktree_keeps_local_commit(rig):
     a, remote, gov = rig["a"], rig["remote"], rig["gov"]
     b = rig["make_b"]()
-    (b / GOV_REL / "governance" / "LEDGER.md").write_text("# ledger\n- row 1\n- B's row 2\n", encoding="utf-8")
+    (b / GOV_REL / "governance" / "LEDGER.md").write_text(LEDGER_BASE + "- B's row 2\n", encoding="utf-8")
     _git(b, "add", "--", f"{GOV_REL}/governance/LEDGER.md")
     _git(b, "commit", "-q", "-m", "B: conflicting ledger row")
     _git(b, "push", "-q")
@@ -250,7 +253,7 @@ def test_state_c_conflict_blocks_lists_files_cleans_worktree_keeps_local_commit(
     assert result["commit_hash"] == head(a)
     assert show_names(a) == {f"{GOV_REL}/governance/LEDGER.md"}
     assert remote_tip(remote) == b_tip
-    assert (gov / "governance" / "LEDGER.md").read_text(encoding="utf-8") == "# ledger\n- row 1\n- A's row 2\n"
+    assert (gov / "governance" / "LEDGER.md").read_text(encoding="utf-8") == LEDGER_BASE + "- A's row 2\n"
     assert other_project_fingerprint(a) == other_before
     assert _git(a, "stash", "list") == ""
     assert worktree_count(a) == 1 and leftover_tmp_worktrees() == tmp_before
@@ -405,7 +408,7 @@ def test_piece3_cli_push_not_done_first_line_and_nonzero_exit(rig, monkeypatch):
     a, remote = rig["a"], rig["remote"]
     monkeypatch.setenv("LYBRA_SCHEMA_DIR", str(REPO_ROOT / "schema"))
     b = rig["make_b"]()
-    (b / GOV_REL / "governance" / "LEDGER.md").write_text("# ledger\n- row 1\n- B's row 2\n", encoding="utf-8")
+    (b / GOV_REL / "governance" / "LEDGER.md").write_text(LEDGER_BASE + "- B's row 2\n", encoding="utf-8")
     _git(b, "add", "--", f"{GOV_REL}/governance/LEDGER.md")
     _git(b, "commit", "-q", "-m", "B: conflicting ledger row")
     _git(b, "push", "-q")

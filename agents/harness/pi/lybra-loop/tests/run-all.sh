@@ -795,6 +795,16 @@ else
   overall=1
 fi
 
+# AIPOS-F79D: 治理仓提交门·护栏缺口四件(四检单源模块 hook/CLI 共用·dry-run=正式拒因·工作区根按文件归属·hook 拒后清暂存·session 记录只落声明位+lint RECORD_EMPTY+repair 重铸)
+echo
+echo "── tests/test_aipos_f79d_commit_gate_guardrails.py (F79D 提交门四件: 四检单源/双工作区 ws_prefix/hook 拒后 index 还原/session 声明位+lint+repair) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f79d_commit_gate_guardrails.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f79d_commit_gate_guardrails.py PASS"
+else
+  echo "✗ tests/test_aipos_f79d_commit_gate_guardrails.py FAIL"
+  overall=1
+fi
+
 echo
 echo "── tools/aipos_cli/tests/test_agent_watch_fs.py (agent watch 哨兵(F73D expect_ready 谓词零回归)) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_agent_watch_fs.py" -v --tb=short -k "not test_module_is_stdlib_only_zero_new_deps"; then

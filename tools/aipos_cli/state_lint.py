@@ -7,6 +7,11 @@ state repair: 按 records 重建卡的一致状态(坏卡修复)
   1. 队列目录 (5_tasks/queue/{pending|claimed|completed}/)
   2. frontmatter status 字段
   3. records 目录最新记录推导的状态
+
+AIPOS-F79D 件④: 记录文件面
+  - lint: records/<kind>/<ID>/*.md 为 0 字节 → RECORD_EMPTY(ERROR, 带出口 state repair --task-id)
+  - repair: sessions/<ID>/ 空文件 + claims/<ID>/ 下同名 session 正常份(或仅错位副本) → 按声明位重铸
+    (内容移到 record_writer.session_record_path 声明位, 删空文件与错位副本, 写 repair 记录)
 """
 from __future__ import annotations
 
@@ -16,6 +21,9 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.schema_constants import RecordType
+
+RECORD_EMPTY = "RECORD_EMPTY"
 
 
 QUEUE_DIRS = {
@@ -191,13 +199,187 @@ def run_state_lint(
                 "record_state": record_state,
             })
     
+    # AIPOS-F79D 件④: 0 字节记录文件 → RECORD_EMPTY(F73ER/F78CR 两案: sessions/<ID>/ 下空文件, 正常内容错位在 claims/)
+    for empty in find_empty_record_files(governance_root, task_id_filter):
+        issues.append({
+            "task_id": empty["task_id"],
+            "severity": "ERROR",
+            "code": RECORD_EMPTY,
+            "message": (
+                f"{RECORD_EMPTY}: 记录文件为 0 字节 {empty['path']}({empty['record_kind']}/); "
+                f"出口: lybra state repair --task-id {empty['task_id']} --workspace-root {governance_root}"
+                + ("(sessions/ 空文件按 claims/ 下同名正常份重铸到声明位)" if empty["record_kind"] == "sessions" else "")
+            ),
+            "path": empty["path"],
+            "record_kind": empty["record_kind"],
+        })
+
     return {
         "scanned": len(task_ids),
         "issues": issues,
     }
 
 
+def _records_root(governance_root: Path) -> Path:
+    from tools.aipos_cli.record_writer import RECORDS_ROOT
+
+    return governance_root / RECORDS_ROOT
+
+
+def find_empty_record_files(governance_root: Path, task_id_filter: str | None = None) -> list[dict[str, str]]:
+    """AIPOS-F79D 件④: 列出 records/<kind>/<task_id>/*.md 中的 0 字节文件(只读)。"""
+    root = _records_root(governance_root)
+    found: list[dict[str, str]] = []
+    if not root.is_dir():
+        return found
+    wanted = task_id_filter.upper() if task_id_filter else None
+    for kind_dir in sorted(root.iterdir()):
+        if not kind_dir.is_dir():
+            continue
+        for task_dir in sorted(kind_dir.iterdir()):
+            if not task_dir.is_dir():
+                continue
+            if wanted and task_dir.name.upper() != wanted:
+                continue
+            for record_file in sorted(task_dir.glob("*.md")):
+                if record_file.is_file() and record_file.stat().st_size == 0:
+                    found.append({
+                        "task_id": task_dir.name,
+                        "record_kind": kind_dir.name,
+                        "path": record_file.relative_to(governance_root).as_posix(),
+                    })
+    return found
+
+
+def repair_empty_session_records(
+    governance_root: Path,
+    task_id: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """AIPOS-F79D 件④: 按声明位重铸 session 记录。
+
+    对「sessions/<ID>/ 下 0 字节文件 + claims/<ID>/ 下同名正常份(record_type=session_record)」
+    以及「仅 claims/ 下错位副本」: 内容写到声明位(record_writer.session_record_path), 删空文件与错位副本,
+    写 repair 记录(records/events/<ID>/event_record_repair_<ts>.md)。声明位已有非空内容 → 不覆盖, 列为 unresolved(需人工)。
+    无副本可重铸的空文件 → unresolved。禁吞写失败(写失败即抛)。
+    """
+    from tools.aipos_cli.record_writer import (
+        CLAIMS_ROOT,
+        SESSIONS_ROOT,
+        render_markdown,
+        session_record_path,
+        write_records_atomic,
+    )
+
+    root = governance_root.resolve()
+    task_id = task_id.upper()
+    sessions_dir = root / SESSIONS_ROOT / task_id
+    claims_dir = root / CLAIMS_ROOT / task_id
+    actions: list[str] = []
+    moved: list[dict[str, str]] = []
+    unresolved: list[str] = []
+
+    def rel(path: Path) -> str:
+        return path.resolve().relative_to(root).as_posix()
+
+    misplaced: list[Path] = []
+    if claims_dir.is_dir():
+        for candidate in sorted(claims_dir.glob("*.md")):
+            if not candidate.is_file() or candidate.stat().st_size == 0:
+                continue
+            fm, _body, _warn = parse_markdown_frontmatter(candidate.read_text(encoding="utf-8"))
+            if str(fm.get("record_type") or "").strip() == RecordType.SESSION_RECORD:
+                misplaced.append(candidate)
+
+    for src in misplaced:
+        target = session_record_path(root, task_id, src.stem)
+        if target.exists() and target.stat().st_size > 0:
+            unresolved.append(f"{rel(target)} 已有非空内容, 与错位副本 {rel(src)} 并存, 不覆盖(需人工比对后删其一)")
+            continue
+        had_empty = target.exists()
+        actions.append(
+            f"重铸 session 记录到声明位: {rel(src)} → {rel(target)}"
+            + ("(删 0 字节空文件)" if had_empty else "")
+        )
+        if not dry_run:
+            content = src.read_text(encoding="utf-8")
+            if had_empty:
+                target.unlink()
+            write_records_atomic(root, [("session", src.stem, content)])
+            src.unlink()
+        moved.append({"from": rel(src), "to": rel(target), "removed_empty": "true" if had_empty else "false"})
+
+    if sessions_dir.is_dir():
+        for leftover in sorted(sessions_dir.glob("*.md")):
+            if leftover.is_file() and leftover.stat().st_size == 0:
+                if dry_run and any(m["to"] == rel(leftover) for m in moved):
+                    continue
+                unresolved.append(f"{rel(leftover)} 为 0 字节且 claims/ 下无同名 session 正常份, 无法重铸(需人工)")
+
+    repair_record: str | None = None
+    if moved and not dry_run:
+        timestamp = _utc_now()
+        ts_slug = timestamp.replace("-", "").replace(":", "").replace("T", "_").replace("Z", "")
+        record_id = f"repair_{task_id}_{ts_slug}"  # write_records_atomic 从 record_id 第二段取 task_id
+        metadata = {
+            "record_type": RecordType.TASK_PROGRESS_EVENT,
+            "event_type": "record_repair",
+            "task_id": task_id,
+            "actor": "lybra state repair",
+            "timestamp": timestamp,
+            "repair": "AIPOS-F79D 件④: session 记录按声明位重铸",
+            "moved": [f"{m['from']} -> {m['to']}" for m in moved],
+        }
+        body = "\n".join(
+            ["# Record Repair: session records recast to declared position", ""]
+            + [f"- `{m['from']}` → `{m['to']}`" + (" (removed 0-byte file)" if m["removed_empty"] == "true" else "") for m in moved]
+            + ["", "Declared position: record_writer.session_record_path (records/sessions/<task_id>/). Written by `lybra state repair`.", ""]
+        )
+        markdown = render_markdown(metadata, body, ["record_type", "event_type", "task_id", "actor", "timestamp", "repair", "moved"])
+        written = write_records_atomic(root, [("event", record_id, markdown)])
+        repair_record = written["paths"][0]
+        actions.append(f"写 repair 记录: {repair_record}")
+
+    return {
+        "task_id": task_id,
+        "repaired": bool(moved) and not dry_run,
+        "dry_run": dry_run,
+        "actions": actions,
+        "moved": moved,
+        "unresolved": unresolved,
+        "repair_record": repair_record,
+        "message": (
+            (f"重铸 {len(moved)} 份 session 记录到声明位" if moved else "无错位/空 session 记录")
+            + (f"; {len(unresolved)} 项无法自动重铸" if unresolved else "")
+        ),
+    }
+
+
 def repair_task_state(
+    governance_root: Path,
+    task_id: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """AIPOS-C3B 大项C③ + AIPOS-F79D 件④: 先重铸错位/空 session 记录, 再按 records 重建卡的一致状态。"""
+    task_id = task_id.upper()
+    record_repair = repair_empty_session_records(governance_root, task_id, dry_run=dry_run)
+    state_repair = _repair_queue_state(governance_root, task_id, dry_run=dry_run)
+    actions = list(record_repair["actions"]) + list(state_repair["actions"])
+    message = state_repair["message"]
+    if record_repair["actions"] or record_repair["unresolved"]:
+        message = f"{record_repair['message']}; {message}"
+    return {
+        "task_id": task_id,
+        "repaired": bool(record_repair["repaired"] or state_repair["repaired"]),
+        "dry_run": dry_run,
+        "message": message,
+        "actions": actions,
+        "record_repair": record_repair,
+        "state_repair": {"repaired": state_repair["repaired"], "message": state_repair["message"]},
+    }
+
+
+def _repair_queue_state(
     governance_root: Path,
     task_id: str,
     dry_run: bool = False,

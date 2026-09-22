@@ -2034,11 +2034,14 @@ def _write_mcp_claim_records(repo_root: Path, record_plan: dict[str, Any], task_
     """
     performed: list[dict[str, Any]] = []
     
-    # Write claim/session records
+    # Write claim/session records (AIPOS-F79D 件④: session 落点 = claim_record_paths → records/sessions/<ID>/ 声明位; 禁 0 字节)
     for preview in record_plan.get("record_previews", []):
         path = repo_root / str(preview.get("path") or "")
+        rendered = str(preview.get("rendered_markdown") or "")
+        if not rendered.strip():
+            raise RuntimeError(f"拒写 0 字节记录: {preview.get('path')} ({preview.get('record_type')})")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(preview.get("rendered_markdown") or ""), encoding="utf-8")
+        path.write_text(rendered, encoding="utf-8")
         performed.append({"path": str(preview.get("path")), "record_type": preview.get("record_type"), "wrote": True})
     
     # AIPOS-F65A-fix2: Create RETURN.md skeleton via shared function
@@ -4365,6 +4368,13 @@ def _build_audit_verdict_preview(
     )
     session_markdown = ""
     session_rel = str(session_path.resolve().relative_to(root)) if session_path else ""  # AIPOS-240: symlink-safe
+    if session_path and not session_path.exists():
+        # AIPOS-F79D 件④: 审计 session 记录不在声明位 → 不追加事件、不写空文件(F73ER/F78CR 0 字节文件的病根),
+        # 出声 warning 带出口(存量错位副本用 lybra state repair --task-id 重铸到声明位)。
+        warnings.append(
+            f"Audit session record not found at declared position {session_rel}; no session event appended "
+            f"(no empty file written). Exit: lybra state lint / lybra state repair --task-id {audit_task.get('task_id')}"
+        )
     if session_path and session_path.exists():
         existing_metadata, existing_body, parse_warnings = load_session_record(session_path)
         for warning in parse_warnings:
@@ -4400,11 +4410,14 @@ def _build_audit_verdict_preview(
         "audit_verdict_record_path": verdict_rel,
         "audit_session_record_path": session_rel,
         "record_writes": [_mcp_record_write_plan(verdict_rel, RecordType.AUDIT_VERDICT_RECORD, would_write=not blocking_reasons)],
-        "record_updates": [_mcp_record_write_plan(session_rel, RecordType.SESSION_RECORD, would_update=not blocking_reasons)] if session_rel else [],
+        "record_updates": [_mcp_record_write_plan(session_rel, RecordType.SESSION_RECORD, would_update=not blocking_reasons)] if session_markdown else [],
         "record_previews": [
             {"path": verdict_rel, "record_type": RecordType.AUDIT_VERDICT_RECORD, "rendered_markdown": verdict_markdown},
-            {"path": session_rel, "record_type": RecordType.SESSION_RECORD, "rendered_markdown": session_markdown},
-        ],
+        ] + (
+            # AIPOS-F79D 件④: 只有 session 记录真在声明位(有内容可追加)才进 preview; 禁 0 字节 session 文件
+            [{"path": session_rel, "record_type": RecordType.SESSION_RECORD, "rendered_markdown": session_markdown}]
+            if session_markdown else []
+        ),
         "owner_policy_ref": owner_policy_ref,
         "canonical_agent_instance": canonical_agent_instance,
         "reviewed_executor_instance": reviewed_executor_instance,
@@ -4652,8 +4665,12 @@ def audit_verdict_task(
         ]
         for preview in data.get("record_previews", []):
             path = resolved_root / str(preview.get("path") or "")
+            rendered = str(preview.get("rendered_markdown") or "")
+            if not rendered.strip():
+                # AIPOS-F79D 件④: 禁写 0 字节记录(fail-closed, 不静默落空文件)
+                raise RuntimeError(f"拒写 0 字节记录: {preview.get('path')} ({preview.get('record_type')})")
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(str(preview.get("rendered_markdown") or ""), encoding="utf-8")
+            path.write_text(rendered, encoding="utf-8")
             kind = "create" if preview.get("record_type") == RecordType.AUDIT_VERDICT_RECORD else "update"
             performed.append({"path": str(preview.get("path")), "kind": kind, "type": "record_markdown", "record_type": preview.get("record_type")})
         response["dry_run"] = False

@@ -640,6 +640,60 @@ def governance_commit(
     return _seal_push_outcome(result, push_requested=bool(push) and not dry_run)
 
 
+def _run_guardrails_on_manifest(
+    governance_root: Path,
+    manifest: dict[str, Any],
+    repo_root: Path | None,
+    operations: list[str],
+) -> dict[str, Any] | None:
+    """AIPOS-F79D 件①: 对清单跑 governance_guardrails(B①–B⑤), 与 pre-commit hook 同模块同文案。
+
+    通过 → None(operations 记一行); 拒/声明不可用 → 返回 BLOCK/FAIL 结果骨架(调用方补上下文字段)。
+    读工作树文件内容判 B②/B④, 与 hook 一致(hook 提交的也是工作树状态: add 后 commit)。
+    """
+    from tools.aipos_cli.governance_guardrails import (
+        GuardrailDeclarationError,
+        git_current_branch,
+        git_toplevel,
+        manifest_entries,
+        resolve_schema_dir,
+        run_guardrails,
+    )
+
+    try:
+        git_root = git_toplevel(governance_root)
+        report, _decls, text = run_guardrails(
+            git_root,
+            manifest_entries(manifest),
+            schema_dir=resolve_schema_dir(repo_root),
+            current_branch=git_current_branch(git_root),
+        )
+    except (GuardrailDeclarationError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        operations.append(f"Guardrails (governance_guardrails, same module as pre-commit hook): FAIL — {exc}")
+        return {
+            "verdict": Verdict.FAIL,
+            "message": f"治理仓四检模块不可用, 拒绝放行(fail-closed): {exc}",
+            "operations": operations,
+            "guardrail_report": None,
+        }
+    if report.ok:
+        operations.append(
+            f"Guardrails (governance_guardrails, same module as pre-commit hook): PASS — {report.checked} file(s) checked"
+        )
+        return None
+    operations.append(
+        f"Guardrails (governance_guardrails, same module as pre-commit hook): BLOCK — "
+        f"{len(report.violations)} violation(s)" + ("" if report.branch_ok else f", branch={report.branch} != main")
+    )
+    return {
+        "verdict": Verdict.BLOCK,
+        "message": text,
+        "operations": operations,
+        "guardrail_report": report.to_dict(),
+        "rejected_files": report.to_dict()["rejected_files"],
+    }
+
+
 def _governance_commit_impl(
     governance_root: Path,
     task_id: str | None,
@@ -937,6 +991,23 @@ def _governance_commit_impl(
             "commit_manifest": None,
         }
     
+    # AIPOS-F79D 件①: dry-run 与正式提交前对同一「将提交清单」跑同一四检模块(hook 也调它), 拒因文案同源。
+    # 病根: 2026-09-22 chris dry-run PASS 而正式提交被 hook exit 1 —— 预演从不跑 B①–B④。
+    guardrail_outcome = _run_guardrails_on_manifest(governance_root, manifest, repo_root, operations)
+    if guardrail_outcome is not None:
+        guardrail_outcome.update({
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "completeness_check": completeness,
+            "committed": False,
+            "pushed": False,
+            "commit_hash": None,
+            "selected_paths": selected_paths,
+            "commit_manifest": manifest,
+        })
+        return guardrail_outcome
+
     if dry_run:
         operations.append("DRY-RUN: Would commit and push the manifest above (scene untouched: no add/reset/stash)")
         listing = "\n".join(f"  {f['status']:<18} {f['path']}" for f in manifest["files"])
@@ -1060,6 +1131,7 @@ def _governance_commit_impl(
                 "commit_hash": None,
                 "message": f"SCOPE VIOLATION: Staged files outside governance root (G3 铁律):\n  - {out_of_scope_list}",
                 "operations": operations,
+                "index_restored": True,
             }
         
         # AIPOS-F79 件③: 暂存集必须与清单逐条相同, 否则拒提交并出声
@@ -1090,22 +1162,44 @@ def _governance_commit_impl(
                 "selected_paths": selected_paths,
                 "commit_manifest": manifest,
                 "staged_files": sorted(staged_set),
+                "index_restored": True,
             }
         
         # Commit with explicit identity
-        subprocess.run(
-            [
-                "git",
-                "-c", f"user.name={actor}",
-                "-c", f"user.email={actor}@lybra.local",
-                "commit",
-                "-m", commit_msg,
-            ],
-            cwd=str(governance_root),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        # AIPOS-F79D 件③: commit 子进程非零退出(pre-commit hook 拒)也走 _unstage_this_run —— 还原预暂存快照,
+        # 范围仍限 --paths; 结果带 index_restored=true 与被拒清单。病根: 24 条留 index 反过来挡他项目提交。
+        try:
+            subprocess.run(
+                [
+                    "git",
+                    "-c", f"user.name={actor}",
+                    "-c", f"user.email={actor}@lybra.local",
+                    "commit",
+                    "-m", commit_msg,
+                ],
+                cwd=str(governance_root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            hook_output = ((exc.stdout or "") + (exc.stderr or "")).strip()
+            operations.append(f"Commit rejected by git/pre-commit hook (exit {exc.returncode})")
+            _unstage_this_run(saved_index_tree)
+            rejected_files = sorted(manifest_set)
+            result = _result_base(committed=False, commit_hash=None)
+            result["verdict"] = Verdict.BLOCK
+            result["message"] = (
+                f"治理仓 pre-commit 拒绝提交(exit {exc.returncode}); 本次暂存已清掉(git reset -- {' '.join(stage_pathspec)}), "
+                f"预暂存条目已按快照还原, 暂存区不留半成品。\n\n"
+                f"被拒清单({len(rejected_files)}):\n  - " + "\n  - ".join(rejected_files) + "\n\n"
+                f"hook 输出:\n{hook_output}\n\n"
+                f"可执行出口: 按 hook 输出修正文件后重跑同一命令(先 --dry-run: 同一四检模块, 拒因逐字相同)"
+            )
+            result["index_restored"] = True
+            result["rejected_files"] = rejected_files
+            result["hook_output"] = hook_output
+            return result
         
         # Get commit hash
         commit_hash_result = subprocess.run(

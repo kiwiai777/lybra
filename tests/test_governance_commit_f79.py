@@ -304,9 +304,12 @@ def test_acceptance_4_r6m_guard_still_blocks_selected_governance_doc(rig):
     head_before = head(repo)
     paths = ["governance/no-frontmatter.md", "notes/a.md"]
 
-    # 红: 缺 frontmatter → pre-commit 钩子拒 → FAIL, 无提交, 另一选定文件也未被单独提交(原子)
+    # 红: 缺 frontmatter → 四检拒 → BLOCK, 无提交, 另一选定文件也未被单独提交(原子)
+    # AIPOS-F79D 件①: 四检在 add/commit 之前对清单跑(与 hook 同模块同文案), 拒 = BLOCK(前置判据), 不再等 hook exit 1 变 FAIL
     result = run(rig, paths=paths)
-    assert result["verdict"] == Verdict.FAIL, result
+    assert result["verdict"] == Verdict.BLOCK, result
+    assert result["rejected_files"] == [f"{GOV_REL}/governance/no-frontmatter.md"]
+    assert cached(repo) == "", "四检拒在暂存之前, 暂存区必须为空"
     assert result["committed"] is False and head(repo) == head_before
     assert "frontmatter" in result["message"].lower(), result["message"]
     assert f"{GOV_REL}/governance/no-frontmatter.md" in result["message"]
@@ -334,7 +337,11 @@ def test_acceptance_5_dry_run_without_paths_lists_whole_root_and_warns_untracked
     result = run(rig, dry_run=True)
 
     assert scene_snapshot(repo) == before
-    assert result["verdict"] == Verdict.PASS and result["committed"] is False
+    # AIPOS-F79D 件①: 整根范围含缺 frontmatter 的 governance/no-frontmatter.md → dry-run 与正式提交同判据 = BLOCK
+    # (旧: dry-run PASS 而正式提交被 hook 拒, 即 chris 实撞的判据不对称); 清单与 warning 仍随结果给出, 现场不动
+    assert result["verdict"] == Verdict.BLOCK and result["committed"] is False
+    assert result["rejected_files"] == [f"{GOV_REL}/governance/no-frontmatter.md"]
+    assert "Missing frontmatter (B②" in result["message"]
     assert result["selected_paths"] is None
     manifest = result["commit_manifest"]
     assert manifest["mode"] == "whole_root" and manifest["pathspec"] == ["."]
@@ -351,7 +358,7 @@ def test_acceptance_5_dry_run_without_paths_lists_whole_root_and_warns_untracked
     assert manifest["counts"][MANIFEST_UNTRACKED] == 3
     warnings = "\n".join(manifest["warnings"])
     assert "WARNING" in warnings and "3 个未跟踪文件" in warnings and "--paths" in warnings
-    assert "3 个未跟踪文件" in result["message"]
+    assert "3 个未跟踪文件" in "\n".join(result["operations"])
 
 
 # ---------------------------------------------------------------------------

@@ -1236,6 +1236,12 @@ def _resolve_record_path_from_schema(
         dir_template = location_template[:last_slash]
         filename_template = location_template[last_slash+1:]
     
+    # AIPOS-F79D 件④: 路径包含校验(fail-closed, 不再依赖事后 ensure_safe_record_path + 吞异常):
+    # task_id/record_id 不得含路径分隔或 `..`, 解析结果必须落在声明目录内。
+    validate_safe_task_id(task_id)
+    if "/" in record_id or "\\" in record_id or ".." in record_id or not record_id:
+        raise ValueError(f"Unsafe record_id for records path: {record_id!r}")
+
     # 替换目录中的 {task_id}
     dir_path = dir_template.replace("{task_id}", task_id)
     dir_path = dir_path.replace("{reviewed_task_id}", task_id)  # for audit_verdict
@@ -1244,35 +1250,11 @@ def _resolve_record_path_from_schema(
     # 文件名直接使用 record_id
     filename = f"{record_id}.md"
     
-    if dir_path:
-        return repo_root / dir_path / filename
-    else:
-        return repo_root / filename
-
-
-def _get_record_type_for_validation(record_type: str) -> RecordType | None:
-    """获取用于路径安全校验的 RecordType 常量。
-    
-    Args:
-        record_type: 记录类型字符串
-    
-    Returns:
-        RecordType 常量,或 None (不需要校验的类型)
-    """
-    normalized = record_type.lower().replace("_log", "").replace("_record", "")
-    
-    type_map = {
-        "claim": RecordType.CLAIM_LOG,
-        "session": RecordType.SESSION_RECORD,
-        "return": RecordType.RETURN_RECORD,
-        "audit_dispatch": RecordType.AUDIT_DISPATCH_RECORD,
-        "audit_verdict": RecordType.AUDIT_VERDICT_RECORD,
-        "closure": RecordType.CLOSURE_RECORD,
-    }
-    
-    return type_map.get(normalized)
-
-
+    declared_dir = (repo_root / dir_path) if dir_path else repo_root
+    path = declared_dir / filename
+    if not _resolved_within(declared_dir, path):
+        raise ValueError(f"Record path resolves outside declared records dir {declared_dir}: {path}")
+    return path
 
 
 def write_records_atomic(
@@ -1332,23 +1314,23 @@ def write_records_atomic(
         
         # 标准化record_type (支持字符串和RecordType常量)
         record_type_str = str(record_type).lower()
-        
-        # 声明驱动路径解析: 从 schema 读取记录配置
-        path = _resolve_record_path_from_schema(
-            transitions_schema, repo_root, record_type_str, record_id, task_id
-        )
-        
-        # 路径安全校验 (对RecordType枚举中的类型)
-        # AIPOS-F64-fix1: schema驱动下,跳过不符合标准路径的校验(允许schema自定义路径)
-        record_type_for_validation = _get_record_type_for_validation(record_type_str)
-        if record_type_for_validation is not None:
-            # 检查路径是否符合标准结构,不符合则跳过校验(schema自定义路径)
-            try:
-                ensure_safe_record_path(repo_root, path, record_type_for_validation, task_id)
-            except ValueError as e:
-                # 如果路径不在标准位置,说明是schema自定义路径,跳过校验但继续写入
-                # 这允许schema声明驱动的灵活性
-                pass
+        normalized_type = record_type_str.replace("_log", "").replace("_record", "")
+
+        # AIPOS-F79D 件④: 0 字节记录禁写(F73ER/F78CR 两案 sessions/ 下留空文件的病根之一是写侧对空内容照写)
+        if not str(markdown).strip():
+            raise ValueError(f"记录内容为空, 拒写 0 字节记录: {record_type_str} {record_id}")
+
+        if normalized_type == "session":
+            # AIPOS-F79D 件④(分叉点根治): session 记录唯一落点 = 声明位 records/sessions/<task_id>/,
+            # 与 MCP 两跳认领(board_adapter._mcp_claim_record_plan → claim_record_paths)同一函数 session_record_path。
+            # 病根: 旧法把 "session" 映射到 transitions N1 的 claim 记录位置 → 写进 records/claims/<ID>/session_*.md,
+            # 且 ensure_safe_record_path 的 ValueError 被 `except ValueError: pass` 吞掉 → 副本静默落错位。
+            path = session_record_path(repo_root, task_id, record_id)
+        else:
+            # 声明驱动路径解析: 从 schema 读取记录配置(路径包含校验在解析函数内, 不吞)
+            path = _resolve_record_path_from_schema(
+                transitions_schema, repo_root, record_type_str, record_id, task_id
+            )
         
         resolved.append((path, markdown))
     
