@@ -105,9 +105,9 @@
     "lane": {
       "type": "object",
       "required": false,
-      "description": "AIPOS-F78 件①: 车道(子项目即 lane, 不另建功能) {repo: 产品仓根(缺省 project.json code_repo), paths: [允许改动目录/文件前缀], roles: [允许角色类]}。publish 校验: lane 缺失且无法从 output_target 派生 = 拒(LANE_REQUIRED); 交回判据 CHANGES_OUT_OF_SCOPE 读 lane.paths; advisor 可对 claimed 卡受限 amend(restricted_amend)",
+      "description": "AIPOS-F78 件①: 车道(子项目即 lane, 不另建功能) {repo: 产品仓(AIPOS-F78C: 仓名或绝对路径, 须在 project.json repos 清单内; 缺省 repos.default/code_repo; 一卡一仓, 跨仓改动拆卡), paths: [允许改动目录/文件前缀], roles: [允许角色类]}。publish 校验: lane 缺失且无法从 output_target 派生 = 拒(LANE_REQUIRED); 交回判据 CHANGES_OUT_OF_SCOPE 读 lane.paths; advisor 可对 claimed 卡受限 amend(restricted_amend)",
       "shape": {
-        "repo": "string (absolute path or project.json code_repo)",
+        "repo": "string (AIPOS-F78C: 仓名(project.json repos.items 键)或绝对路径, 须解析到 repos 清单内一项; 无清单时 = code_repo/治理根。一卡一仓; 跨仓改动拆卡, 列表形留待有真实案例。唯一解析: workspace_config.resolve_card_repo)",
         "paths": "array of string (repo-relative dir/file prefixes)",
         "roles": "array of string (role classes allowed to work this lane)"
       }
@@ -858,7 +858,7 @@
     "lane": {
       "required_at_publish": true,
       "derive": {
-        "repo": "project.json code_repo (治理根声明); 缺声明 = 治理根自身",
+        "repo": "AIPOS-F78C: 有 repos 清单 → repos.default 仓名; 无清单 → project.json code_repo 路径; 缺声明 = 治理根自身(workspace_config.default_lane_repo)。卡面已写 lane.repo 则校验其解析到清单内一项(resolve_card_repo), 否则 LANE_REPO_UNDECLARED 拒发布; 清单自身不一致 REPOS_CONFLICT 拒",
         "paths": "output_target 解析出的路径片段(含 / 或 . 的 token; 与交回判据同一解析函数 machine_zone.parse_output_target_paths)",
         "roles": "assigned_to/agent_instance 经 roles 注册表解析出的角色类"
       },

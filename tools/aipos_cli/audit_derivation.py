@@ -31,30 +31,21 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _resolve_code_repo(repo_root: Path | None) -> str:
-    """AIPOS-A1 大项C: 从项目注册表读 code_repo 绝对路径(禁写死)。"""
+def _resolve_code_repo(repo_root: Path | None, source_metadata: dict[str, Any] | None = None) -> str:
+    """AIPOS-A1 大项C + F78C 件②: 审计卡取证锚点的产品仓 = 被审卡声明的仓(workspace_config.resolve_card_repo 唯一解析:
+    卡 lane.repo → project.json repos 清单 → code_repo 别名; 禁写死、禁第二读法)。repo_root 缺 = "<unresolved>";
+    解析失败 = 出声(stderr)并以 "<unresolved: CODE>" 入锚点, 不吞、不猜。"""
     if repo_root is None:
         return "<unresolved>"
-    project_json = repo_root / "project.json"
-    if project_json.is_file():
-        try:
-            data = json.loads(project_json.read_text(encoding="utf-8"))
-            code_repo = str(data.get("code_repo") or "").strip()
-            if code_repo:
-                return code_repo
-        except (json.JSONDecodeError, OSError):
-            pass
-    # 尝试从治理仓的 project.json 读(多项目场景)
-    for candidate in [repo_root / "2_projects" / "lybra" / "project.json"]:
-        if candidate.is_file():
-            try:
-                data = json.loads(candidate.read_text(encoding="utf-8"))
-                code_repo = str(data.get("code_repo") or "").strip()
-                if code_repo:
-                    return code_repo
-            except (json.JSONDecodeError, OSError):
-                pass
-    return "<unresolved>"
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved, resolve_card_repo
+
+    try:
+        return str(resolve_card_repo(repo_root, source_metadata or {}))
+    except CardRepoUnresolved as exc:
+        import sys
+
+        print(f"Warning: 审计卡取证锚点产品仓不可解析: {exc}", file=sys.stderr)
+        return f"<unresolved: {exc.code}>"
 
 
 def _resolve_governance_task_cards_path(repo_root: Path | None) -> str:
@@ -75,17 +66,19 @@ def _resolve_governance_task_cards_path(repo_root: Path | None) -> str:
 def build_forensic_anchor_section(
     source_task_id: str,
     repo_root: Path | None = None,
+    source_metadata: dict[str, Any] | None = None,
 ) -> str:
     """AIPOS-A1 大项C: 构建取证锚点段(注入审计卡 governance_refs)。
 
     路径值全部来自声明/注册表, 禁写死。内容基准=AIPOS-C1R2 实证有效的那段。
+    AIPOS-F78C: 产品仓按被审卡 source_metadata(lane.repo)解析。
     """
-    code_repo = _resolve_code_repo(repo_root)
+    code_repo = _resolve_code_repo(repo_root, source_metadata)
     task_cards_path = _resolve_governance_task_cards_path(repo_root)
 
     return (
         "\n## 取证锚点(AIPOS-A1 大项C: 默认注入, 路径来自注册表)\n\n"
-        f"- **产品仓绝对路径**: `{code_repo}` (读 project.json code_repo, 禁写死)\n"
+        f"- **产品仓绝对路径**: `{code_repo}` (被审卡 lane.repo → project.json repos/code_repo, 禁写死)\n"
         f"- **禁 checkout 卡分支**: 用 `git diff main...card/{source_task_id}` 取证(不切换工作区)\n"
         f"- **报告落点绝对路径**: `{task_cards_path}/{source_task_id}/` (治理仓 task_cards)\n"
         "- **不存在结论必须附**: `pwd` + 命令 + 输出(三条缺一即无效证据)\n"
@@ -405,8 +398,8 @@ def build_derived_audit_task(
         if key in source_metadata:
             audit_metadata[key] = source_metadata[key]
     
-    # AIPOS-A1 大项C: 注入取证锚点到 governance_refs(路径来自注册表)
-    code_repo = _resolve_code_repo(repo_root)
+    # AIPOS-A1 大项C + F78C: 注入取证锚点到 governance_refs(产品仓 = 被审卡声明的仓)
+    code_repo = _resolve_code_repo(repo_root, source_metadata)
     task_cards_path = _resolve_governance_task_cards_path(repo_root)
     forensic_anchors = [
         f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | 禁checkout卡分支(git diff main...card/{source_task_id}) | 报告落点={task_cards_path}/{source_task_id}/ | 不存在结论必附pwd+命令+输出",
@@ -438,7 +431,7 @@ Independent audit of task `{source_task_id}`.
 - **如实报红线**:结论三值 PASS / PASS_WITH_NOTES / FAIL(附 F-* 清单);失败如实报,禁止“应该没问题”。
 """
     # AIPOS-A1 大项C: 注入取证锚点段(路径来自注册表, 禁写死)
-    audit_body += build_forensic_anchor_section(source_task_id, repo_root)
+    audit_body += build_forensic_anchor_section(source_task_id, repo_root, source_metadata)
 
     # AIPOS-F12 大项D: 注入门领地纪律 + 精确提交配方(手动/自动共用, 值来自声明)
     audit_body += build_gate_territory_discipline_section(source_task_id, repo_root)

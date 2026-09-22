@@ -76,6 +76,8 @@ from tools.aipos_cli.workspace_config import (
     has_workspace_queue,
     load_workspace_config,
     read_project_json,
+    CardRepoUnresolved,
+    resolve_card_repo,
     resolve_active_project,
 )
 from tools.aipos_cli.validator import validate_single_task, validate_tasks
@@ -1825,8 +1827,8 @@ def _queue_mutation_preview(
         task_project = task_metadata.get("project", "")
         # AIPOS-R5A: worktree 信息从实际执行结果读取
         worktree_path = result.get("worktree_path")
-        # AIPOS-R6A F-002修复: code_repo 从 project.json 真解析，禁硬编码
-        product_code_repo = _resolve_product_code_repo(resolved_root)
+        # AIPOS-R6A F-002修复 + F78C: code_repo = 该卡声明的仓(resolve_card_repo), 禁硬编码
+        product_code_repo = _resolve_product_code_repo(resolved_root, task_metadata)
         response["context"] = {
             "project": task_project,
             "workspace_root": str(resolved_root),
@@ -2428,67 +2430,34 @@ def _validate_return_artifact_refs(
     return blocking_reasons
 
 
-class ProductRepoNotConfigured(ValueError):
-    """AIPOS-FND-5F1: raised when the governance workspace's project.json does not carry a
-    valid ``code_repo`` mapping. Callers must surface this as an actionable blocking reason,
-    never silently guess a path."""
+class ProductRepoNotConfigured(CardRepoUnresolved):
+    """AIPOS-FND-5F1 → F78C: raised when the card's product repo cannot be resolved from declaration
+    (project.json repos 清单 / code_repo 别名 / 卡 lane.repo). Callers must surface this as an actionable
+    blocking reason, never silently guess a path."""
 
 
-def _resolve_product_code_repo(governance_root: Path) -> Path:
-    """AIPOS-FND-5F1: Resolve the PRODUCT repo (where code actually lands) strictly from
-    config — ``governance_root/project.json`` -> ``code_repo`` (sole authority per ruling 6).
+def _resolve_product_code_repo(governance_root: Path, card_frontmatter: dict[str, Any] | None = None) -> Path:
+    """AIPOS-FND-5F1 → AIPOS-F78C 件②: 产品仓(代码真正落地处)只经 workspace_config.resolve_card_repo 一处解析——
+    卡 lane.repo(仓名/绝对路径)→ project.json repos 清单 → code_repo 兼容别名 → 治理根自身(仅未注册靶场根/治理根自身是 git 仓)。
 
-    Root cause this fixes: the governance workspace (e.g.
-    ``~/ai-project-os/2_projects/lybra``) is a SUBTREE of the governance monorepo and has NO
-    ``.git`` of its own. A naive ``git status`` run with that dir as ``cwd`` walks UPWARD and
-    lands on the governance monorepo's ``.git``, which is essentially always dirty (unrelated
-    task cards/records for other projects) — a completely different repo from where code卡
-    actually commits.
-
-    Owner ruling (2026-08-09): the product repo location MUST be resolved from config, with
-    ZERO machine-specific hardcoded fallback paths (no ``~/projects/lybra``, no
-    ``~/projects/<project>`` naming-convention guess — those are dev-machine layout
-    assumptions that do not belong baked into product logic). Missing/invalid config fails
-    LOUD with an actionable message, never silently degrades to a guessed path.
-
-    Resolution:
-      1. If ``governance_root`` itself directly owns a ``.git``, it IS the product repo (a
-         single-repo setup where governance and code share one root) — use it AS-IS. This
-         also covers every existing test fixture that ``git init``s its own tempdir directly:
-         their behavior is unaffected by this fix.
-      2. Otherwise, if ``governance_root/project.json`` does not exist AT ALL, this workspace
-         was never registered under the governance-home model in the first place (e.g. an
-         ad hoc/legacy tempdir used by unrelated tests) — fall back to ``governance_root``
-         unchanged (legacy passthrough, byte-identical to pre-FND-5F1 behavior: git will
-         simply skip the check if that root isn't a git repo either).
-      3. Otherwise (``project.json`` exists — this IS an established governance project),
-         read its ``code_repo``. If present AND the path exists on disk, use it.
-      4. Otherwise raise ``ProductRepoNotConfigured`` with a message pointing at
-         ``lybra project set-repo`` — an established project with a missing/stale code_repo
-         mapping is an actionable configuration error, never a silent path guess.
+    Owner ruling (2026-08-09) 不变: ZERO machine-specific hardcoded fallback paths; missing/invalid declaration fails
+    LOUD (ProductRepoNotConfigured, message carries the exit) — never a silent path guess. 2026-09-22 裁定: 一卡一仓,
+    仓由卡声明; card_frontmatter 缺(项目级调用/存量夹具 monkeypatch 单参形)= 项目缺省仓(repos.default / code_repo)。
     """
-    if (governance_root / ".git").exists():
-        return governance_root
-    project_json_file = governance_root / "project.json"
-    if not project_json_file.is_file():
-        return governance_root
     try:
-        project_json = read_project_json(governance_root)
-    except (OSError, ValueError):
-        project_json = {}
-    code_repo_raw = str(project_json.get("code_repo") or "").strip()
-    if code_repo_raw:
-        candidate = Path(code_repo_raw).expanduser()
-        if candidate.is_dir():
-            return candidate
-        raise ProductRepoNotConfigured(
-            f"project.json code_repo={code_repo_raw!r} does not exist on disk. "
-            "Run `lybra project set-repo <name> --code-repo <path>` to fix the mapping."
-        )
-    raise ProductRepoNotConfigured(
-        "project.json has no code_repo mapping for this governance workspace. "
-        "Run `lybra project set-repo <name> --code-repo <path>` to set it."
-    )
+        return resolve_card_repo(governance_root, card_frontmatter or {})
+    except ProductRepoNotConfigured:
+        raise
+    except CardRepoUnresolved as exc:
+        raise ProductRepoNotConfigured(exc.code, exc.reason) from exc
+
+
+def _card_product_repo(repo_root: Path, card_frontmatter: dict[str, Any] | None) -> Path:
+    """按卡取仓(交回判据/派审复审共用)。card_frontmatter 缺时保持单参调用形: 存量夹具以 `lambda x: repo` 替身
+    _resolve_product_code_repo(F49/F51/F74/F78), 该形不可破。"""
+    if card_frontmatter is None:
+        return _resolve_product_code_repo(repo_root)
+    return _resolve_product_code_repo(repo_root, card_frontmatter)
 
 
 # F-R4B2-6: _check_uncommitted_code 已退役，改用 scoped_commit_check.check_uncommitted_in_scope
@@ -2567,10 +2536,11 @@ def _check_return_self_checks(
     lane = task_metadata.get("lane") if isinstance(task_metadata.get("lane"), dict) else {}
     lane_paths = [str(p).strip() for p in (lane.get("paths") or []) if str(p).strip()] if isinstance(lane.get("paths"), list) else []
     
-    # ① 夹具入常驻
+    # ① 夹具入常驻(AIPOS-F78C: 判据读卡声明的仓 card_frontmatter=task_metadata)
     blocking_reasons.extend(_check_test_in_runall(
         task_id=task_id,
         repo_root=repo_root,
+        card_frontmatter=task_metadata,
     ))
     
     # ② 改动面在界内
@@ -2579,6 +2549,7 @@ def _check_return_self_checks(
         output_target=output_target,
         repo_root=repo_root,
         lane_paths=lane_paths,
+        card_frontmatter=task_metadata,
     ))
     
     # ③ 有测试
@@ -2586,6 +2557,7 @@ def _check_return_self_checks(
         blocking_reasons.extend(_check_has_tests(
             task_id=task_id,
             repo_root=repo_root,
+            card_frontmatter=task_metadata,
         ))
     
     # ④ RETURN 非骨架
@@ -2658,13 +2630,15 @@ def _check_test_in_runall(
     *,
     task_id: str,
     repo_root: Path,
+    card_frontmatter: dict[str, Any] | None = None,
 ) -> list[str]:
     """① 夹具入常驻: 本卡新增 test 文件必须在 run-all 清单中。
-    AIPOS-F78 前置零④: 改动集与 run-all.sh 都读卡分支(git diff 三点 / git show card/<ID>:path), 不读共用检出。"""
+    AIPOS-F78 前置零④: 改动集与 run-all.sh 都读卡分支(git diff 三点 / git show card/<ID>:path), 不读共用检出。
+    AIPOS-F78C: 仓 = 卡声明的仓(card_frontmatter.lane.repo)。"""
     blocking_reasons = []
     
     try:
-        product_repo_root = _resolve_product_code_repo(repo_root)
+        product_repo_root = _card_product_repo(repo_root, card_frontmatter)
     except ProductRepoNotConfigured:
         return blocking_reasons  # 无产品仓，跳过
     
@@ -2712,6 +2686,7 @@ def _check_changes_in_scope(
     output_target: str,
     repo_root: Path,
     lane_paths: list[str] | None = None,
+    card_frontmatter: dict[str, Any] | None = None,
 ) -> list[str]:
     """② 改动面在界内: 卡分支改动文件必须落在车道目录内。
     AIPOS-F78 前置零⑤: 范围 = lane.paths(声明); 无 lane 时由 output_target 解析(同一解析函数 machine_zone.parse_output_target_paths)。
@@ -2732,7 +2707,7 @@ def _check_changes_in_scope(
         return blocking_reasons  # 无法解析 output_target，跳过
     
     try:
-        product_repo_root = _resolve_product_code_repo(repo_root)
+        product_repo_root = _card_product_repo(repo_root, card_frontmatter)
     except ProductRepoNotConfigured:
         return blocking_reasons
     
@@ -2772,12 +2747,13 @@ def _check_has_tests(
     *,
     task_id: str,
     repo_root: Path,
+    card_frontmatter: dict[str, Any] | None = None,
 ) -> list[str]:
-    """③ 有测试: code 类卡必须有新增/修改的 test 文件。"""
+    """③ 有测试: code 类卡必须有新增/修改的 test 文件。AIPOS-F78C: 仓 = 卡声明的仓。"""
     blocking_reasons = []
     
     try:
-        product_repo_root = _resolve_product_code_repo(repo_root)
+        product_repo_root = _card_product_repo(repo_root, card_frontmatter)
     except ProductRepoNotConfigured:
         return blocking_reasons
     
@@ -2908,7 +2884,7 @@ def _check_branch_compliance(
     blocking_reasons = []
     
     try:
-        product_repo_root = _resolve_product_code_repo(repo_root)
+        product_repo_root = _card_product_repo(repo_root, task_metadata)  # AIPOS-F78C: 仓 = 卡声明的仓
     except ProductRepoNotConfigured:
         # 无产品仓配置,跳过分支检查
         return blocking_reasons
@@ -3154,7 +3130,7 @@ def _build_return_preview(
     if task_mode == "code" or artifact_policy == "formal_write":
         current_task_id = str(task.get("task_id") or "")
         try:
-            product_repo_root = _resolve_product_code_repo(repo_root)
+            product_repo_root = _resolve_product_code_repo(repo_root, source_metadata)  # AIPOS-F78C: 卡声明的仓
         except ProductRepoNotConfigured as exc:
             blocking_reasons.append(f"CODE_REPO_NOT_CONFIGURED: {exc}")
         else:
@@ -3697,7 +3673,7 @@ def _build_audit_dispatch_preview(
         if latest_verdict_value in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
             # AIPOS-F78 前置零⑦(F79 实撞): PASS 绑的是裁决自述 artifact_subject.commit_sha; 卡分支 tip 已变(解冲突/追加提交)
             # → 审过的产物已不是当前产物, 放行为「复审」派审(warn), 而非 AUDIT_ALREADY_PASSED 死锁只能承接卡重审
-            rereview = _pass_verdict_tip_changed(repo_root, source_task_id_for_verdict, latest_verdict)
+            rereview = _pass_verdict_tip_changed(repo_root, source_task_id_for_verdict, latest_verdict, card_frontmatter=source_metadata)
             if rereview:
                 warnings.append(f"REREVIEW_TIP_CHANGED: {rereview}")
             else:
@@ -3860,7 +3836,7 @@ def _build_audit_dispatch_preview(
         audit_metadata["dispatch_reason"] = dispatch_reason
     # AIPOS-A1 大项C: 手动派审也注入取证锚点到 governance_refs
     from tools.aipos_cli.audit_derivation import _resolve_code_repo, _resolve_governance_task_cards_path
-    _code_repo = _resolve_code_repo(repo_root)
+    _code_repo = _resolve_code_repo(repo_root, source_metadata)  # AIPOS-F78C: 被审卡声明的仓
     _tc_path = _resolve_governance_task_cards_path(repo_root)
     _src_tid = str(source_task.get("task_id") or "")
     _forensic_ref = f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={_code_repo} | 禁checkout卡分支(git diff main...card/{_src_tid}) | 报告落点={_tc_path}/{_src_tid}/ | 不存在结论必附pwd+命令+输出"
@@ -3876,7 +3852,7 @@ def _build_audit_dispatch_preview(
     )
     # AIPOS-A1 大项C: 手动派审也注入取证锚点段(路径来自注册表, 禁写死)
     from tools.aipos_cli.audit_derivation import build_forensic_anchor_section
-    audit_body += build_forensic_anchor_section(str(source_task.get("task_id") or ""), repo_root)
+    audit_body += build_forensic_anchor_section(str(source_task.get("task_id") or ""), repo_root, source_metadata)
     # AIPOS-F38 大项A(F17 原则覆盖全部 writer): 产前自检——派生审计卡必过同一 schema 必填校验,
     # 不合规即拒并出声(BLOCK + 人话拒因);审计身份由上方 resolve_instance_id/INDEPENDENCE 把关。
     from tools.schema_loader import get_required_card_fields
@@ -5933,8 +5909,10 @@ def converge_r_cards(
     }
 
 
-def _pass_verdict_tip_changed(repo_root: Path, task_id: str, verdict_record: dict[str, Any]) -> str | None:
-    """AIPOS-F78 前置零⑦: PASS 裁决自述的 artifact_subject.commit_sha 与卡分支当前 tip 不一致 → 返回说明(允许复审); 一致/无法判定 → None。"""
+def _pass_verdict_tip_changed(repo_root: Path, task_id: str, verdict_record: dict[str, Any],
+                              card_frontmatter: dict[str, Any] | None = None) -> str | None:
+    """AIPOS-F78 前置零⑦: PASS 裁决自述的 artifact_subject.commit_sha 与卡分支当前 tip 不一致 → 返回说明(允许复审); 一致/无法判定 → None。
+    AIPOS-F78C: 卡分支所在仓 = 卡声明的仓(card_frontmatter)。"""
     import subprocess
 
     subject = verdict_record.get("artifact_subject") if isinstance(verdict_record.get("artifact_subject"), dict) else None
@@ -5942,7 +5920,7 @@ def _pass_verdict_tip_changed(repo_root: Path, task_id: str, verdict_record: dic
     if not audited_sha:
         return None  # 存量 legacy 裁决无指纹, 维持终态语义
     try:
-        product_repo_root = _resolve_product_code_repo(repo_root)
+        product_repo_root = _card_product_repo(repo_root, card_frontmatter)
     except ProductRepoNotConfigured:
         return None
     try:

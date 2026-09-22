@@ -115,9 +115,31 @@
           "description": "Project identifier"
         },
         "code_repo": {
-          "type": "string",
-          "required": false,
-          "description": "Product repo root (sole authority, ruling 6)"
+         "type": "string",
+         "required": false,
+         "description": "产品仓根。AIPOS-F78C 件①: 降为兼容别名 = repos.items[repos.default] 的路径; 单仓项目不写 repos 段时仍是唯一权威(裁定六, 零感知); 写了 repos 段则 code_repo 须与 default 仓路径一致或缺省, 冲突 = 拒 REPOS_CONFLICT。唯一解析口: workspace_config.project_repos() / resolve_card_repo()"
+        },
+        "repos": {
+         "type": "object",
+         "required": false,
+         "description": "AIPOS-F78C 件①: 多仓项目的仓清单声明(Owner 2026-09-22 裁定「一卡一仓, 仓由卡声明」)。形: {\"default\": \"<仓名>\", \"items\": {\"<仓名>\": \"<绝对路径>\"}}。卡面 lane.repo 可写仓名或绝对路径, 发布校验必须解析到 items 内一项, 否则拒 LANE_REPO_UNDECLARED(禁自由文本路径); 缺 lane.repo 时派生 repos.default 仓名。无 repos 段 = 单仓项目: lane.repo 只允许等于 code_repo(或治理根自身)或缺省。一卡多仓不做(finalize 跨仓不原子), 跨仓改动拆卡。唯一解析口: workspace_config.project_repos()(清单) / resolve_card_repo()(卡→仓路径), 13 处隐式读 code_repo 全部收敛于此。",
+         "schema": {
+          "default": {
+           "type": "string",
+           "required": true,
+           "description": "缺省仓名, 必须是 items 的键; 卡缺 lane.repo 时派生此仓; code_repo 别名指向其路径"
+          },
+          "items": {
+           "type": "object",
+           "required": true,
+           "description": "仓名 → 绝对路径(非空; 相对路径 = 拒 REPOS_CONFLICT)"
+          }
+         },
+         "reject_codes": {
+          "REPOS_CONFLICT": "repos 段自身不一致(default 不在 items / items 非绝对路径 / code_repo ≠ default 路径)",
+          "LANE_REPO_UNDECLARED": "卡 lane.repo 解析不到清单内一项(或无清单时 ≠ code_repo), 或卡/项目均未声明仓且治理根不是 git 仓",
+          "INGEST_REPO_MISMATCH": "Return frontmatter 自述 repo 与卡 lane.repo 解析仓不符(transitions artifact_ingest.return.optional_frontmatter)"
+         }
         },
         "paths": {
           "type": "object",

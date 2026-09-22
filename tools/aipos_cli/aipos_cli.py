@@ -2364,6 +2364,7 @@ def main(argv: list[str] | None = None) -> int:
                 from tools.aipos_cli.board_adapter import _resolve_product_code_repo
                 
                 # AIPOS-F74-R2: 分离治理根与产品根 - schema 在产品仓
+                # AIPOS-F78C: 项目级调用(无卡)= 项目缺省仓(repos.default / code_repo 别名), 经同一解析函数
                 governance_root = repo_root
                 product_root = _resolve_product_code_repo(governance_root)
                 
@@ -3197,10 +3198,20 @@ def main(argv: list[str] | None = None) -> int:
                         dispatch_mode = get_dispatch_mode(project_root)
                     except Exception:
                         dispatch_mode = "auto"
+                    # AIPOS-F78C: 项目级看板列全部仓(repos 清单; 单仓项目只有 code_repo 别名)
+                    from tools.aipos_cli.workspace_config import CardRepoUnresolved as _RepoDeclError, project_repos as _project_repos
+                    try:
+                        _repos = _project_repos(project_root)
+                        repos_view = {name_: str(path_) for name_, path_ in _repos["items"].items()}
+                        repos_default = _repos["default"]
+                    except _RepoDeclError as exc:
+                        repos_view, repos_default = {"<invalid>": str(exc)}, None
                     result["projects"].append({
                         "name": name,
                         "project_root": str(project_root),
                         "code_repo": project_json.get("code_repo"),
+                        "repos": repos_view,
+                        "repos_default": repos_default,
                         "collaboration_profile": profile,
                         "has_explicit_profile": has_explicit_profile,
                         "inferred": not has_explicit_profile,
@@ -3215,6 +3226,8 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"{marker} {proj['name']}")
                         print(f"   Path: {proj['project_root']}")
                         print(f"   Code repo: {proj['code_repo'] or 'None'}")
+                        if proj.get("repos"):
+                            print(f"   Repos ({len(proj['repos'])}, default={proj.get('repos_default')}): " + ", ".join(f"{k}={v}" for k, v in proj["repos"].items()))
                         if proj["inferred"]:
                             print(f"   Profile: (inferred, not yet written to project.json)")
                         else:

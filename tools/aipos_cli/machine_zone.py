@@ -314,7 +314,7 @@ def derive_intent_declarations(
 
     返回 {"harness": str, "lane": {repo, paths, roles}, "derived": [已派生的键], "blocking_reasons": [...]}:
     - harness: 卡面值 ∈ allowed; 缺省 default_by_task_mode[task_mode]。
-    - lane.repo: 卡面 lane.repo → 治理根 project.json code_repo → 治理根自身。
+    - lane.repo: 卡面 lane.repo(校验在 project.json repos 清单内, AIPOS-F78C) → repos.default 仓名 → code_repo 路径 → 治理根自身(workspace_config.default_lane_repo)。
     - lane.paths: 卡面 lane.paths → parse_output_target_paths(output_target); 两者皆空 = LANE_REQUIRED。
     - lane.roles: 卡面 lane.roles → assigned_to/agent_instance 经 roles 注册表解析出的角色类(解析不到 = [])。
     """
@@ -336,18 +336,26 @@ def derive_intent_declarations(
     raw_lane = metadata.get("lane") if isinstance(metadata.get("lane"), dict) else {}
     lane: dict[str, Any] = {}
 
+    # AIPOS-F78C 件①: lane.repo 派生/校验只经 workspace_config 一处解析(仓清单 repos → 仓名; 无清单 → code_repo 路径; 缺 → 治理根)。
+    # 卡面已写 lane.repo(仓名/绝对路径)→ resolve_card_repo 校验其在清单内, 否则 LANE_REPO_UNDECLARED / REPOS_CONFLICT 拒发布。
     repo = str(raw_lane.get("repo") or "").strip()
-    if not repo and governance_root is not None:
-        from tools.aipos_cli.workspace_config import read_project_json
+    if governance_root is not None:
+        from tools.aipos_cli.workspace_config import CardRepoUnresolved, default_lane_repo, resolve_card_repo
 
         try:
-            repo = str(read_project_json(governance_root).get("code_repo") or "").strip()
+            if repo:
+                resolve_card_repo(governance_root, {**metadata, "lane": {**raw_lane, "repo": repo}})
+            else:
+                repo = default_lane_repo(governance_root)
+                derived.append("lane.repo")
+        except CardRepoUnresolved as exc:
+            blocking.append(f"{exc.code}: {exc.reason}")
         except (OSError, ValueError) as exc:
             import sys
 
             print(f"Warning: project.json unreadable at {governance_root}, lane.repo falls back to governance root: {exc}", file=sys.stderr)
-        if not repo:
-            repo = str(governance_root)
+            if not repo:
+                repo = str(governance_root)
     lane["repo"] = repo
 
     paths = raw_lane.get("paths") if isinstance(raw_lane.get("paths"), list) else []
