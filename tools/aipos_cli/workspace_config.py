@@ -774,12 +774,19 @@ def _match_repo_ref(ref: str, repos: dict[str, Any], governance_root: Path) -> P
     return allowed if _same_path(Path(ref), allowed) else None
 
 
-def resolve_card_repo(governance_root: str | Path, card_frontmatter: dict[str, Any] | None) -> Path:
+def resolve_card_repo(
+    governance_root: str | Path,
+    card_frontmatter: dict[str, Any] | None,
+    *,
+    allow_governance_root: bool = True,
+) -> Path:
     """AIPOS-F78C 件②: 按卡取仓的唯一解析函数(卡 frontmatter → 产品仓根 Path)。
 
     序: 卡 lane.repo(仓名/绝对路径)→ project.json repos 清单 → 路径;
         缺 lane.repo → repos.default → code_repo → 治理根自身(与 F78 lane 派生一致; 但 project.json 已建且无任何仓声明、
         治理根又不是 git 仓 = LANE_REPO_UNDECLARED, 不猜路径)。
+    allow_governance_root=False: 最后一级「治理根自身」也不接受(F73D 前置一②: finalize --workspace-root 必须是声明的产品仓,
+        禁把治理根当产品仓)= LANE_REPO_UNDECLARED。
     fail-closed: 解析不到清单内一项 = CardRepoUnresolved(LANE_REPO_UNDECLARED); 清单自身不一致 = REPOS_CONFLICT;
         解析到的路径不在盘上 = REPO_PATH_MISSING(出口 lybra project set-repo)。
     """
@@ -804,8 +811,14 @@ def resolve_card_repo(governance_root: str | Path, card_frontmatter: dict[str, A
         path = repos["items"][repos["default"]]
     elif repos["code_repo"] is not None:
         path = repos["code_repo"]
-    elif not repos["project_json_exists"] or (root / ".git").exists():
+    elif allow_governance_root and (not repos["project_json_exists"] or (root / ".git").exists()):
         path = root  # 未注册的靶场根 / 治理根自身即产品仓(单根)
+    elif not allow_governance_root:
+        raise CardRepoUnresolved(
+            "LANE_REPO_UNDECLARED",
+            f"卡 {task_id} 无 lane.repo 且 project.json 无 repos/code_repo 声明, 治理根 {root} 不作产品仓(禁把治理根当产品仓)。"
+            "出口: `lybra project set-repo <name> --code-repo <path>`(单仓)或在 project.json 声明 repos 清单(多仓)",
+        )
     else:
         raise CardRepoUnresolved(
             "LANE_REPO_UNDECLARED",

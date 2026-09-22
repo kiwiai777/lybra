@@ -309,6 +309,12 @@ def test_f78c_item2_resolve_card_repo_chain_and_fail_closed(tmp_path, monkeypatc
     with pytest.raises(CardRepoUnresolved) as e3:
         resolve_card_repo(reg, {"task_id": "T"})
     assert e3.value.code == "LANE_REPO_UNDECLARED" and "set-repo" in str(e3.value)
+    # finalize 派生口径(F73D 前置一②): 未注册根/治理根自身是 git 仓 也不作产品仓 → LANE_REPO_UNDECLARED 含 code_repo 出口
+    for root in (bare, self_repo):
+        with pytest.raises(CardRepoUnresolved) as e5:
+            resolve_card_repo(root, {"task_id": "T"}, allow_governance_root=False)
+        assert e5.value.code == "LANE_REPO_UNDECLARED" and "code_repo" in str(e5.value) and "治理根" in str(e5.value)
+    assert resolve_card_repo(gov, {"task_id": "T"}, allow_governance_root=False) == repos["a"]
     # 声明指向盘上不存在的路径 → REPO_PATH_MISSING
     _write(reg / "project.json", json.dumps({"project": "lybra", "code_repo": str(tmp_path / "nope"), "config_version": 1}))
     with pytest.raises(CardRepoUnresolved) as e4:

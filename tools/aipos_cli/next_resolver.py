@@ -76,16 +76,19 @@ def _transition_node(node_id: str) -> dict[str, Any]:
     return node
 
 
-def _card_repo_root(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None) -> Path:
+def _card_repo_root(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None,
+                    *, allow_governance_root: bool = True) -> Path:
     """AIPOS-F78C 件②: 卡所在产品仓 = workspace_config.resolve_card_repo(唯一解析: 卡 lane.repo → project.json repos 清单
-    → code_repo 别名 → 治理根)。card_frontmatter 缺则按 task_id 读卡。解析不到 = CardRepoUnresolved(调用方转不可派生/拒, fail-closed)。"""
+    → code_repo 别名 → 治理根)。card_frontmatter 缺则按 task_id 读卡。解析不到 = CardRepoUnresolved(调用方转不可派生/拒, fail-closed)。
+    allow_governance_root=False(finalize 派生): 无声明时不把治理根当产品仓(F73D 前置一②)。"""
     from tools.aipos_cli.workspace_config import resolve_card_repo
 
     fm = card_frontmatter
     if fm is None:
         task_path, _ = _find_task_in_queue(workspace_root, task_id)
         fm = _read_frontmatter(task_path) if task_path else {}
-    return resolve_card_repo(workspace_root, {**fm, "task_id": str(fm.get("task_id") or task_id)})
+    return resolve_card_repo(workspace_root, {**fm, "task_id": str(fm.get("task_id") or task_id)},
+                             allow_governance_root=allow_governance_root)
 
 
 def _resolve_worktree_root(workspace_root: Path, code_repo: Path) -> Path:
@@ -1276,7 +1279,7 @@ def derive_next_step(
                     from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
                     try:
-                        code_repo_root = _card_repo_root(workspace_root, task_id, fm)
+                        code_repo_root = _card_repo_root(workspace_root, task_id, fm, allow_governance_root=False)
                     except CardRepoUnresolved as exc:
                         return {
                             "task_id": task_id,
