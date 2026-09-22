@@ -775,6 +775,16 @@ else
   overall=1
 fi
 
+# AIPOS-F78B 件⑤c: F28 自定义角色凭据持久化夹具入常驻; 活工位用例(名含 real_gate, 只比指纹)按基线口径 -k 排除
+echo
+echo "── tests/test_aipos_f28_custom_role_credential_persistence.py (F28 自定义角色凭据持久化(件⑤c 活工位用例 -k 排除)) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f28_custom_role_credential_persistence.py" -v --tb=short -k "not real_gate"; then
+  echo "✓ tests/test_aipos_f28_custom_role_credential_persistence.py PASS"
+else
+  echo "✗ tests/test_aipos_f28_custom_role_credential_persistence.py FAIL"
+  overall=1
+fi
+
 echo
 echo "── tools/aipos_cli/tests/test_agent_watch_fs.py (agent watch 哨兵(F73D expect_ready 谓词零回归)) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_agent_watch_fs.py" -v --tb=short -k "not test_module_is_stdlib_only_zero_new_deps"; then
