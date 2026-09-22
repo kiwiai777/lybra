@@ -428,11 +428,16 @@ def export_project_structure(
                 description = stripped[:200]
                 break
 
-    # Code repos
+    # Code repos(AIPOS-F78C: 项目级读 repos 清单列全部仓, 缺省仓在首位; 单仓项目 = code_repo 别名一项)
+    from tools.aipos_cli.workspace_config import project_repos
+
+    repos = project_repos(root)  # 清单不一致 = CardRepoUnresolved(REPOS_CONFLICT) 出声, 不吞
     code_repos: list[str] = []
-    code_repo_val = project_data.get("code_repo")
-    if code_repo_val:
-        code_repos.append(str(code_repo_val))
+    if repos["declared"]:
+        code_repos.append(str(repos["items"][repos["default"]]))
+        code_repos.extend(str(path) for name, path in repos["items"].items() if name != repos["default"])
+    elif repos["code_repo"] is not None:
+        code_repos.append(str(repos["code_repo"]))
 
     # Governance file mappings (which canonical files exist)
     governance_files: dict[str, str] = {}

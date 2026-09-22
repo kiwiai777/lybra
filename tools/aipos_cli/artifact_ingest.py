@@ -327,11 +327,33 @@ def _git_out(repo: Path, *argv: str) -> str | None:
     return result.stdout.strip()
 
 
-def _code_repo_for(workspace_root: Path) -> Path:
-    """卡分支所在仓: 治理根 project.json code_repo(唯一权威); 无声明且治理根自身是 git 仓 → 治理根(靶场单根)。"""
-    from tools.aipos_cli.next_resolver import _resolve_code_repo_root
+def _code_repo_for(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any]) -> tuple[Path | None, dict[str, Any]]:
+    """AIPOS-F78C 件②③: 卡分支所在仓 = 该卡声明的仓(workspace_config.resolve_card_repo 唯一解析; 卡 lane.repo → project.json
+    repos 清单 → code_repo 别名 → 治理根)。返回 (仓路径, 拒因 out 片段); 解析不到/不是 git 仓根 = (None, {category, reasons})。
+    chris 实撞: 卡无 lane.repo、project.json 无 repos、code_repo 指治理根(非 git 仓)→ 这里停在 LANE_REPO_UNDECLARED(声明缺失, 非崩溃)。"""
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved, project_repos, resolve_card_repo
 
-    return _resolve_code_repo_root(workspace_root) or workspace_root
+    try:
+        repo = resolve_card_repo(workspace_root, {**card_frontmatter, "task_id": str(card_frontmatter.get("task_id") or task_id)})
+    except CardRepoUnresolved as exc:
+        return None, {"category": exc.code, "reasons": [exc.reason]}
+    if not (repo / ".git").exists():
+        lane = card_frontmatter.get("lane") if isinstance(card_frontmatter.get("lane"), dict) else {}
+        lane_repo = str(lane.get("repo") or "").strip() or "未声明"
+        try:
+            declared = "已声明" if project_repos(workspace_root)["declared"] else "未声明"
+        except CardRepoUnresolved as exc:
+            return None, {"category": exc.code, "reasons": [exc.reason]}
+        return None, {
+            "category": "LANE_REPO_UNDECLARED",
+            "reasons": [
+                f"卡 {task_id} 解析到的产品仓 {repo} 不是 git 仓根(无 .git): 卡 lane.repo={lane_repo}, project.json repos 清单{declared}, "
+                f"code_repo={project_repos(workspace_root)['code_repo'] or '未声明'}。"
+                "出口: 在 project.json 声明 repos {default, items: {仓名: 绝对路径}} 清单, 并在卡 frontmatter lane.repo 写产物所在仓名(一卡一仓); "
+                "单仓项目 `lybra project set-repo <name> --code-repo <真实产品仓>`"
+            ],
+        }
+    return repo, {}
 
 
 def _external_finalize_pending(workspace_root: Path, task_id: str) -> tuple[bool, dict[str, Any]]:
@@ -393,11 +415,11 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
     except (SchemaLoadError, KeyError) as exc:
         out["category"], out["reasons"] = "INGEST_DECLARATION_MISSING", [f"transitions.schema artifact_ingest.{kind}: {exc}"]
         return out
-    code_repo = _code_repo_for(workspace_root)
+    card_fm = _read_frontmatter(task_path)
 
     if kind == "finalization":
         # AIPOS-F78B 件②: 外部 FINALIZE 卡 Return(落点 return_root/<finalize_task_id>, 与执行体 Return 同一候选序)
-        fin_id = finalize_task_id_for(task_id, _read_frontmatter(task_path))
+        fin_id = finalize_task_id_for(task_id, card_fm)
         out["finalize_task_id"] = fin_id
         path = find_return_artifact(workspace_root, fin_id)
         if path is None:
@@ -418,6 +440,22 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
             out["reasons"] = [f"{path}: {p}(声明: transitions.schema artifact_ingest.finalization)" for p in problems]
             return out
         out["ok"], out["category"], out["exit_code"] = True, "OK", 0
+        return out
+
+    # AIPOS-F78C 件②: 核 tip/被审分支的仓 = 该卡(R 卡: 被审卡)声明的仓; 解析不到 = 声明缺失出口(非崩溃), 不进 git
+    if is_audit:
+        reviewed_for_repo = str(card_fm.get("reviewed_task_id") or task_id[:-1]).strip()
+        try:
+            reviewed_path, _rq = _find_task_in_queue(workspace_root, reviewed_for_repo)
+        except AmbiguousTaskCard as exc:
+            out["category"], out["reasons"] = "TASK_AMBIGUOUS", [str(exc)]
+            return out
+        repo_fm = _read_frontmatter(reviewed_path) if reviewed_path else {}
+        code_repo, repo_problem = _code_repo_for(workspace_root, reviewed_for_repo, repo_fm)
+    else:
+        code_repo, repo_problem = _code_repo_for(workspace_root, task_id, card_fm)
+    if code_repo is None:
+        out["category"], out["reasons"] = repo_problem["category"], repo_problem["reasons"]
         return out
 
     if not is_audit:
@@ -449,6 +487,24 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
         if not extract_return_summary_text(content):
             out["category"], out["reasons"] = "INGEST_SUMMARY_MISSING", [f"{path}: 「一句话结论」缺失或仍是骨架占位"]
             return out
+        # AIPOS-F78C 件③: Return 自述 repo(可选, 声明 artifact_ingest.return.optional_frontmatter)须与卡 lane.repo 解析仓一致
+        optional = [str(k) for k in (decl.get("optional_frontmatter") or [])]
+        self_repo = str(fm.get("repo") or "").strip() if "repo" in optional else ""
+        if self_repo:
+            from tools.aipos_cli.workspace_config import CardRepoUnresolved, resolve_card_repo
+
+            try:
+                self_repo_path = resolve_card_repo(workspace_root, {"task_id": task_id, "lane": {"repo": self_repo}})
+            except CardRepoUnresolved as exc:
+                self_repo_path = None
+                self_repo_reason = exc.reason
+            if self_repo_path is None or self_repo_path.resolve() != code_repo.resolve():
+                out["category"] = "INGEST_REPO_MISMATCH"
+                out["reasons"] = [
+                    f"{path}: Return 自述 repo={self_repo!r} → {self_repo_path or '不可解析: ' + self_repo_reason} ≠ 卡 {task_id} lane.repo 解析仓 {code_repo}。"
+                    "出口: 一卡一仓——执行体把产物提交到卡声明的仓, 或修正 Return frontmatter repo; 跨仓改动拆卡"
+                ]
+                return out
         branch = str(fm.get("branch")).strip()
         commit_sha = str(fm.get("commit_sha")).strip()
         tree_hash = str(fm.get("tree_hash")).strip()

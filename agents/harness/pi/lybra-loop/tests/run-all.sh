@@ -785,6 +785,16 @@ else
   overall=1
 fi
 
+# AIPOS-F78C: 多仓项目·卡声明仓贯通(project.json repos 清单 + 卡 lane.repo 发布校验 / 单一解析 resolve_card_repo / 双仓靶场全链 + 一卡一仓拒 + 单仓回归 + chris 形停点)
+echo
+echo "── tests/test_aipos_f78c_card_repo.py (F78C 多仓项目: repos 清单声明/resolve_card_repo 贯通/双仓全链/LANE_REPO_UNDECLARED+INGEST_REPO_MISMATCH) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f78c_card_repo.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f78c_card_repo.py PASS"
+else
+  echo "✗ tests/test_aipos_f78c_card_repo.py FAIL"
+  overall=1
+fi
+
 echo
 echo "── tools/aipos_cli/tests/test_agent_watch_fs.py (agent watch 哨兵(F73D expect_ready 谓词零回归)) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_agent_watch_fs.py" -v --tb=short -k "not test_module_is_stdlib_only_zero_new_deps"; then

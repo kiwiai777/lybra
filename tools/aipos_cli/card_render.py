@@ -24,7 +24,6 @@ from tools.aipos_cli.next_resolver import (
     REPO_ROOT,
     _find_task_in_queue,
     _read_frontmatter,
-    _resolve_code_repo_root,
     _resolve_worktree_root,
     _return_artifact_path,
     required_return_frontmatter,
@@ -88,7 +87,10 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
     if allowed and chosen not in allowed:
         raise ValueError(f"harness={chosen!r} 不在 card.schema intent_face.harness.allowed {allowed}")
 
-    code_repo = _resolve_code_repo_root(governance_root) or governance_root
+    # AIPOS-F78C 件②: 开工提示的仓路径/工作树落点 = 该卡声明的仓(resolve_card_repo 唯一解析; 解析不到 = ValueError fail-closed)
+    from tools.aipos_cli.workspace_config import resolve_card_repo
+
+    code_repo = resolve_card_repo(governance_root, {**fm, "task_id": task_id})
     worktree = _resolve_worktree_root(governance_root, code_repo) / task_id
     branch = str(get_branch_integration().get("branch_pattern") or "card/{task_id}").replace("{task_id}", task_id)
     return_path = _return_artifact_path(governance_root, task_id)

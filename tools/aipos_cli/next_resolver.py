@@ -76,21 +76,19 @@ def _transition_node(node_id: str) -> dict[str, Any]:
     return node
 
 
-def _resolve_code_repo_root(workspace_root: Path) -> Path | None:
-    """产品仓根: 治理根 project.json 的 code_repo 是唯一权威(裁定六)。缺声明 → None(调用方 fail-closed)。"""
-    from tools.aipos_cli.workspace_config import read_project_json
+def _card_repo_root(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None,
+                    *, allow_governance_root: bool = True) -> Path:
+    """AIPOS-F78C 件②: 卡所在产品仓 = workspace_config.resolve_card_repo(唯一解析: 卡 lane.repo → project.json repos 清单
+    → code_repo 别名 → 治理根)。card_frontmatter 缺则按 task_id 读卡。解析不到 = CardRepoUnresolved(调用方转不可派生/拒, fail-closed)。
+    allow_governance_root=False(finalize 派生): 无声明时不把治理根当产品仓(F73D 前置一②)。"""
+    from tools.aipos_cli.workspace_config import resolve_card_repo
 
-    try:
-        project = read_project_json(workspace_root)
-    except (OSError, ValueError) as exc:
-        import sys
-
-        print(f"Warning: project.json unreadable at {workspace_root}: {exc}", file=sys.stderr)
-        return None
-    raw = str(project.get("code_repo") or "").strip()
-    if not raw:
-        return None
-    return Path(raw).expanduser()
+    fm = card_frontmatter
+    if fm is None:
+        task_path, _ = _find_task_in_queue(workspace_root, task_id)
+        fm = _read_frontmatter(task_path) if task_path else {}
+    return resolve_card_repo(workspace_root, {**fm, "task_id": str(fm.get("task_id") or task_id)},
+                             allow_governance_root=allow_governance_root)
 
 
 def _resolve_worktree_root(workspace_root: Path, code_repo: Path) -> Path:
@@ -1063,10 +1061,26 @@ def derive_next_step(
         reviewed_task_path, _ = _find_task_in_queue(workspace_root, reviewed_task_id)
         reviewed_fm = _read_frontmatter(reviewed_task_path) if reviewed_task_path else {}
         reviewed_task_mode = reviewed_fm.get("task_mode", "code")
-        # AIPOS-F73D: 卡分支活在产品仓(project.json code_repo), 无声明时回退治理根(靶场单根兼容)
-        artifact_subject = _extract_artifact_subject_from_branch(
-            _resolve_code_repo_root(workspace_root) or workspace_root, reviewed_task_id, reviewed_task_mode
-        )
+        # AIPOS-F73D + F78C: 卡分支活在被审卡声明的产品仓(resolve_card_repo: lane.repo → repos 清单 → code_repo → 治理根)
+        from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+        try:
+            reviewed_repo = _card_repo_root(workspace_root, reviewed_task_id, reviewed_fm) if reviewed_task_mode == "code" else workspace_root
+        except CardRepoUnresolved as exc:
+            return {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": "audit_verdict",
+                "current_state": "claimed",
+                "triggered_by": "auditor",
+                "command": "",
+                "verb": "lybra_audit_verdict_dry_run",
+                "missing_records": [f"被审卡 {reviewed_task_id} 产品仓不可解析: {exc}"],
+                "suggested_action": exc.reason,
+                "notes": f"N4: 被审卡产品仓解析失败({exc.code}), 裁决 artifact_subject 无据(AIPOS-F78C)",
+                "action": {"type": "artifact_invalid", "card": reviewed_task_id, "path": ""},
+            }
+        artifact_subject = _extract_artifact_subject_from_branch(reviewed_repo, reviewed_task_id, reviewed_task_mode)
         # AIPOS-F78B 件③: 驱动方信封(覆盖被审卡, 与 loop 同一判据)在 → 一阶段 PreAuthorized; 否则 Supervised 形(执行时 exit 5)
         driver_policy = _driver_envelope_ref(workspace_root, reviewed_task_id, reviewed_fm, conn_arg)
         
@@ -1261,9 +1275,12 @@ def derive_next_step(
                     # AIPOS-F78B 件②: 产品仓不在本机(finalize_mode=external) → 不派生 lybra finalize, 等外部 FINALIZE 卡 Return 经 ingest 铸记录
                     if _finalize_mode(workspace_root) == "external":
                         return _derive_external_finalize(workspace_root, task_id, fm, claimer=claimer, verdict_result=verdict_result)
-                    # AIPOS-F73D 前置一②: finalize 模板必带 --actor, --workspace-root=产品仓根(project.json code_repo), --governance-root=治理根
-                    code_repo_root = _resolve_code_repo_root(workspace_root)
-                    if code_repo_root is None:
+                    # AIPOS-F73D 前置一② + F78C: finalize 模板必带 --actor, --workspace-root=该卡声明的产品仓(resolve_card_repo), --governance-root=治理根
+                    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+                    try:
+                        code_repo_root = _card_repo_root(workspace_root, task_id, fm, allow_governance_root=False)
+                    except CardRepoUnresolved as exc:
                         return {
                             "task_id": task_id,
                             "derivable": False,
@@ -1272,9 +1289,9 @@ def derive_next_step(
                             "triggered_by": "advisor",
                             "command": "",
                             "verb": "lybra_finalize",
-                            "missing_records": ["project.json code_repo(产品仓根声明, finalize --workspace-root 依据)"],
-                            "suggested_action": "在治理根 project.json 声明 code_repo(lybra project set-repo), 再推导 finalize",
-                            "notes": f"N4→N5: 裁决 {verdict_result}, 但产品仓根未声明, 不可派生 finalize 命令",
+                            "missing_records": [f"卡 {task_id} 产品仓声明(finalize --workspace-root 依据): {exc}"],
+                            "suggested_action": exc.reason,
+                            "notes": f"N4→N5: 裁决 {verdict_result}, 但产品仓不可解析({exc.code}), 不可派生 finalize 命令",
                         }
                     # AIPOS-F73E 件①(改写 F78 前置零②): finalize actor = 该卡 claim 记录的执行实例; 无 claim 记录不可推导
                     if not claimer:
@@ -1732,29 +1749,32 @@ def _check_branch_has_commits(workspace_root: Path, task_id: str) -> bool:
 def _ensure_worktree(workspace_root: Path, task_id: str) -> dict[str, Any]:
     """AIPOS-F73件② + F73D 前置三: 确保 worktree 存在(建/复用分支 card/<ID>)。
 
-    落点 = 产品仓根(project.json code_repo)下的声明位(config.schema worktree_root, 默认 `{code_repo}/.worktrees`),
-    禁在治理根下建工作树(F73B 原实现 `workspace_root/card/<ID>` 之误)。无 code_repo 声明且 workspace_root
-    自身不是 git 仓 → fail-closed。
+    落点 = 该卡产品仓根(AIPOS-F78C: workspace_config.resolve_card_repo, 卡 lane.repo → project.json repos 清单 → code_repo 别名)
+    下的声明位(config.schema worktree_root, 默认 `{code_repo}/.worktrees`), 禁在治理根下建工作树(F73B 原实现
+    `workspace_root/card/<ID>` 之误)。仓解析不到/不是 git 仓 → fail-closed。
     
     Args:
-        workspace_root: 治理根(推导核工作区); 若其 project.json 无 code_repo 且自身是 git 仓, 视为产品仓(靶场单根)
+        workspace_root: 治理根(推导核工作区); 若其 project.json 无仓声明且自身是 git 仓, 视为产品仓(靶场单根)
         task_id: 任务 ID
     
     Returns:
         {"ok": bool, "worktree_path": str, "message": str}
     """
     import subprocess
-    
-    code_repo = _resolve_code_repo_root(workspace_root)
-    if code_repo is None:
-        if (workspace_root / ".git").exists():
-            code_repo = workspace_root
-        else:
-            return {
-                "ok": False,
-                "worktree_path": "",
-                "message": f"project.json code_repo 未声明且 {workspace_root} 不是 git 仓, 无法定位产品仓建 worktree",
-            }
+
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+    # AIPOS-F78C 件②: 落点仓 = 该卡声明的仓(resolve_card_repo), 多仓项目两张卡各落各仓 .worktrees/<ID>
+    try:
+        code_repo = _card_repo_root(workspace_root, task_id)
+    except CardRepoUnresolved as exc:
+        return {"ok": False, "worktree_path": "", "message": f"无法定位卡 {task_id} 的产品仓建 worktree: {exc}"}
+    if not (code_repo / ".git").exists():
+        return {
+            "ok": False,
+            "worktree_path": "",
+            "message": f"卡 {task_id} 解析到的产品仓 {code_repo} 不是 git 仓根(无 .git), 无法建 worktree; 出口: project.json repos/code_repo 指向真实产品仓",
+        }
     try:
         worktree_path = _resolve_worktree_root(workspace_root, code_repo) / task_id
     except (OSError, ValueError) as exc:
@@ -2063,9 +2083,21 @@ def execute_derived_action(
             connection_json=connection_json,
         )
     
-    # AIPOS-F73件②: return 前先检查分支提交(卡分支活在产品仓 project.json code_repo; 无声明回退治理根)
+    # AIPOS-F73件② + F78C: return 前先检查分支提交(卡分支活在该卡声明的产品仓 resolve_card_repo)
     if action_type == "return":
-        has_commits = _check_branch_has_commits(_resolve_code_repo_root(workspace_root) or workspace_root, task_id)
+        from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+        try:
+            has_commits = _check_branch_has_commits(_card_repo_root(workspace_root, task_id), task_id)
+        except CardRepoUnresolved as exc:
+            return {
+                "ok": False,
+                "action_type": "return",
+                "message": f"return 阻塞: 卡产品仓不可解析({exc.code})",
+                "command": command,
+                "exit_code": 1,
+                "output": str(exc),
+            }
         if not has_commits:
             return {
                 "ok": False,

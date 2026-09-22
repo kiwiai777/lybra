@@ -883,8 +883,11 @@
       "return_file_candidates": ["RETURN.md", "return-*.md", "return_*.md", "*.md"],
       "candidate_rule": "按候选顺序取首个存在的; 通配候选取 mtime 最新; 骨架(一句话结论为占位)不算",
       "required_frontmatter": ["commit_sha", "tree_hash", "branch", "model"],
+      "optional_frontmatter": ["repo"],
+      "optional_frontmatter_rule": "AIPOS-F78C 件③: repo(可选) = 执行体自述产物所在仓(仓名或绝对路径, 与卡 lane.repo 同一解析 workspace_config.resolve_card_repo); 缺省 = 卡 lane.repo 解析仓",
       "checks": [
         "frontmatter 缺任一必填字段 = 拒(INGEST_FRONTMATTER_MISSING)并列出缺项与出口",
+        "卡 lane.repo 解析仓(resolve_card_repo)必须是 git 仓根, 否则拒(LANE_REPO_UNDECLARED, 出口: project.json 声明 repos 清单 + 卡 lane.repo 写仓名); frontmatter.repo(可选)解析结果 ≠ 卡 lane.repo 解析仓 = 拒(INGEST_REPO_MISMATCH)(AIPOS-F78C 件③)",
         "git rev-parse <branch> == commit_sha (分支 tip 精确等于自述 sha), 否则拒(INGEST_TIP_MISMATCH)",
         "git rev-parse <commit_sha>^{tree} == tree_hash, 否则拒(INGEST_TREE_MISMATCH)",
         "「一句话结论」非占位, 否则拒(INGEST_SUMMARY_MISSING)"

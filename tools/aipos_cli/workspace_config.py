@@ -667,6 +667,172 @@ def project_paths(governance_root: str | Path) -> dict[str, Any]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F78C 件①②: 仓清单声明(project.json repos 段)与「按卡取仓」的唯一解析函数。
+# 声明表在 config.schema.json configuration_sources.project_json.schema.repos 一处(形/拒因码);
+# code_repo 降为兼容别名(= repos.items[repos.default]); 卡面 lane.repo(card.schema lane)写仓名或绝对路径。
+# 凡「按卡取仓」(worktree 落点/ingest 核 tip/finalize --workspace-root/审计卡产品仓/交回判据/claim 上下文/渲染)
+# 一律 resolve_card_repo(); 「项目级」用途(注册/结构校验/看板列全部仓)读 project_repos()。禁第二读法。
+# ---------------------------------------------------------------------------
+
+REPOS_DECL_CODES = ("REPOS_CONFLICT", "LANE_REPO_UNDECLARED", "INGEST_REPO_MISMATCH")
+
+
+class CardRepoUnresolved(ValueError):
+    """按卡取仓解析失败(fail-closed)。code ∈ config.schema project_json.schema.repos.reject_codes(+ REPO_PATH_MISSING)。"""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.reason = message
+
+
+def _project_repos_declaration() -> dict[str, Any]:
+    """读 config.schema configuration_sources.project_json.schema.repos(声明缺 = SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (
+        load_schema("config")
+        .get("configuration_sources", {})
+        .get("project_json", {})
+        .get("schema", {})
+        .get("repos")
+    )
+    if not isinstance(decl, dict) or not isinstance(decl.get("schema"), dict) or not decl.get("reject_codes"):
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.repos 未声明")
+    return decl
+
+
+def _same_path(a: Path, b: Path) -> bool:
+    a, b = Path(a).expanduser(), Path(b).expanduser()
+    if a == b:
+        return True
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
+
+
+def project_repos(governance_root: str | Path) -> dict[str, Any]:
+    """AIPOS-F78C 件①: 解析项目仓清单(唯一读取口)。
+
+    返回 {declared: bool, default: str|None, items: {仓名: Path}, code_repo: Path|None, project_json_exists: bool}。
+    - repos 段缺 = declared False, items 为空; code_repo 单独给出(单仓项目零感知)。
+    - repos 段在: default 必在 items 内, items 值必须是非空绝对路径, code_repo(若写)必须 = items[default],
+      否则 CardRepoUnresolved(REPOS_CONFLICT)。project.json 读失败 = OSError/ValueError 原样抛(不吞)。
+    """
+    root = Path(governance_root)
+    _project_repos_declaration()  # 声明缺 = SchemaLoadError(fail-closed), 代码不写死第二份形
+    exists = project_json_path(root).is_file()
+    project = read_project_json(root)
+    code_repo_raw = str(project.get("code_repo") or "").strip()
+    code_repo = Path(code_repo_raw).expanduser() if code_repo_raw else None
+    raw = project.get("repos")
+    if raw in (None, {}):
+        return {"declared": False, "default": None, "items": {}, "code_repo": code_repo, "project_json_exists": exists}
+    where = f"{project_json_path(root)} repos"
+    if not isinstance(raw, dict) or not isinstance(raw.get("items"), dict) or not raw.get("items"):
+        raise CardRepoUnresolved("REPOS_CONFLICT", f"{where} 须为 {{default: <仓名>, items: {{<仓名>: <绝对路径>}}}}(config.schema project_json.repos)")
+    items: dict[str, Path] = {}
+    for name, value in raw["items"].items():
+        text = str(value or "").strip()
+        if not str(name).strip() or not text or not Path(text).expanduser().is_absolute():
+            raise CardRepoUnresolved("REPOS_CONFLICT", f"{where}.items[{name!r}]={value!r} 须为非空绝对路径")
+        items[str(name).strip()] = Path(text).expanduser()
+    default = str(raw.get("default") or "").strip()
+    if default not in items:
+        raise CardRepoUnresolved("REPOS_CONFLICT", f"{where}.default={default!r} 不在 items {sorted(items)} 内")
+    if code_repo is not None and not _same_path(code_repo, items[default]):
+        raise CardRepoUnresolved(
+            "REPOS_CONFLICT",
+            f"{where}: code_repo={code_repo} ≠ items[{default!r}]={items[default]}(code_repo 是 repos.default 的兼容别名, 须一致或缺省)",
+        )
+    return {"declared": True, "default": default, "items": items, "code_repo": code_repo, "project_json_exists": exists}
+
+
+def default_lane_repo(governance_root: str | Path) -> str:
+    """AIPOS-F78C: 卡缺 lane.repo 时的派生值(machine_zone 发布派生与 resolve_card_repo 同源):
+    有清单 → repos.default 仓名; 无清单 → code_repo 路径; 缺声明 → 治理根自身(F78 现行)。"""
+    repos = project_repos(governance_root)
+    if repos["declared"]:
+        return str(repos["default"])
+    if repos["code_repo"] is not None:
+        return str(repos["code_repo"])
+    return str(governance_root)
+
+
+def _match_repo_ref(ref: str, repos: dict[str, Any], governance_root: Path) -> Path | None:
+    """仓引用(仓名或绝对路径)→ 清单内路径; 无清单时只允许 code_repo(缺则治理根自身)。匹配不到 = None。"""
+    if repos["declared"]:
+        if ref in repos["items"]:
+            return repos["items"][ref]
+        for path in repos["items"].values():
+            if _same_path(Path(ref), path):
+                return path
+        return None
+    allowed = repos["code_repo"] if repos["code_repo"] is not None else governance_root
+    return allowed if _same_path(Path(ref), allowed) else None
+
+
+def resolve_card_repo(
+    governance_root: str | Path,
+    card_frontmatter: dict[str, Any] | None,
+    *,
+    allow_governance_root: bool = True,
+) -> Path:
+    """AIPOS-F78C 件②: 按卡取仓的唯一解析函数(卡 frontmatter → 产品仓根 Path)。
+
+    序: 卡 lane.repo(仓名/绝对路径)→ project.json repos 清单 → 路径;
+        缺 lane.repo → repos.default → code_repo → 治理根自身(与 F78 lane 派生一致; 但 project.json 已建且无任何仓声明、
+        治理根又不是 git 仓 = LANE_REPO_UNDECLARED, 不猜路径)。
+    allow_governance_root=False: 最后一级「治理根自身」也不接受(F73D 前置一②: finalize --workspace-root 必须是声明的产品仓,
+        禁把治理根当产品仓)= LANE_REPO_UNDECLARED。
+    fail-closed: 解析不到清单内一项 = CardRepoUnresolved(LANE_REPO_UNDECLARED); 清单自身不一致 = REPOS_CONFLICT;
+        解析到的路径不在盘上 = REPO_PATH_MISSING(出口 lybra project set-repo)。
+    """
+    root = Path(governance_root)
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
+    ref = str(lane.get("repo") or "").strip()
+    task_id = str(fm.get("task_id") or "<card>")
+    repos = project_repos(root)
+    if ref:
+        matched = _match_repo_ref(ref, repos, root)
+        if matched is None:
+            if repos["declared"]:
+                exit_text = f"出口: 卡 lane.repo 改为 repos.items 内仓名 {sorted(repos['items'])} 之一, 或在 project.json repos.items 声明该仓"
+            else:
+                allowed = repos["code_repo"] if repos["code_repo"] is not None else root
+                exit_text = (f"project.json 无 repos 清单时 lane.repo 只允许等于 code_repo({allowed})或缺省。"
+                             f"出口: 多仓项目在 project.json 声明 repos {{default, items}} 清单, 卡 lane.repo 写仓名(一卡一仓)")
+            raise CardRepoUnresolved("LANE_REPO_UNDECLARED", f"卡 {task_id} lane.repo={ref!r} 不在项目仓清单内。{exit_text}")
+        path = matched
+    elif repos["declared"]:
+        path = repos["items"][repos["default"]]
+    elif repos["code_repo"] is not None:
+        path = repos["code_repo"]
+    elif allow_governance_root and (not repos["project_json_exists"] or (root / ".git").exists()):
+        path = root  # 未注册的靶场根 / 治理根自身即产品仓(单根)
+    elif not allow_governance_root:
+        raise CardRepoUnresolved(
+            "LANE_REPO_UNDECLARED",
+            f"卡 {task_id} 无 lane.repo 且 project.json 无 repos/code_repo 声明, 治理根 {root} 不作产品仓(禁把治理根当产品仓)。"
+            "出口: `lybra project set-repo <name> --code-repo <path>`(单仓)或在 project.json 声明 repos 清单(多仓)",
+        )
+    else:
+        raise CardRepoUnresolved(
+            "LANE_REPO_UNDECLARED",
+            f"卡 {task_id} 无 lane.repo, project.json 无 repos/code_repo 声明, 治理根 {root} 亦不是 git 仓, 不猜路径。"
+            "出口: `lybra project set-repo <name> --code-repo <path>`(单仓)或在 project.json 声明 repos 清单(多仓)",
+        )
+    if not path.is_dir():
+        raise CardRepoUnresolved(
+            "REPO_PATH_MISSING",
+            f"卡 {task_id} 解析到的产品仓 {path} 不在盘上。出口: `lybra project set-repo <name> --code-repo <path>` 或修正 project.json repos.items",
+        )
+    return path
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
