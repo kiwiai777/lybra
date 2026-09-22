@@ -430,6 +430,32 @@ def test_f78b_item3_gate_driver_envelope_matcher_no_envelope_vs_envelope(tmp_pat
     assert pid is None and _error_code(err) == "ENVELOPE_DRIVER_ONLY"
 
 
+def test_f78b_item3_driver_side_envelope_covers_workstation_role_name(tmp_path, monkeypatch):
+    """chris 真实形: 工位 .lybra/role = {role: hbj-advisor, instance: …}, 信封 agent_or_role: hbj-advisor(角色名, 非实例/非类)
+    → 推导核派生 PreAuthorized 形, loop 找到信封; 身份集合 {实例, 角色名, 角色类} 与门侧同口径。"""
+    gov = _chris_gov(tmp_path, monkeypatch, git=False)
+    _write(gov / ".lybra" / "role", json.dumps({"role": "hbj-advisor", "instance": "hbj-advisor.chris-huibojin.mac"}))
+    _slug_card(gov, TASK, "claimed", SLUG_FILE)
+    _claim_record(gov, TASK, CHRIS_EXEC)
+    _n4_pass_records(gov, TASK, CHRIS_EXEC)
+    _write(gov / "5_tasks" / "records" / "finalizations" / TASK / "finalization_x.md",
+           _fm({"record_type": "finalization_record", "task_id": TASK, "finalized_at": "2026-09-21T04:00:00Z", "commit": SHA_M, "merge_commit": SHA_M}))
+    assert nr._driver_role_name(gov) == "hbj-advisor" and nr._driver_actor(gov) == "hbj-advisor.chris-huibojin.mac"
+    _chris_policy(gov, agent_or_role="hbj-advisor")
+    d = derive_next_step(TASK, gov)
+    assert d["verb"] == "lybra_queue_close_dry_run" and "--autonomy-mode PreAuthorized" in d["command"] and POLICY in d["command"], d
+    res = run_loop(TASK, gov, out=io.StringIO(), execute=_ExternalGate(gov), interval=0.02, max_wait=0.5, max_steps=3)  # 真 close_task(slug 文件名)
+    assert res.envelope == POLICY and res.outcome == "completed", res
+    # 信封写别的角色名 → 无覆盖 → Supervised 形 + loop exit 5
+    _chris_policy(gov, agent_or_role="hbj-someone-else")
+    for f in (gov / "5_tasks" / "records" / "closures").glob("*/*.md"):
+        f.unlink()
+    d2 = derive_next_step(TASK, gov)
+    assert "--autonomy-mode PreAuthorized" not in d2["command"], d2
+    res2 = run_loop(TASK, gov, out=io.StringIO(), execute=_ExternalGate(gov), interval=0.02, max_wait=0.5, max_steps=3)
+    assert res2.exit_code == exit_code_for(load_loop_contract(), "no_envelope"), res2
+
+
 def test_f78b_item3_gate_close_one_stage_lands_closure_without_owner_confirm_and_no_envelope_blocks(tmp_path, monkeypatch):
     from tools.mcp_server import tools as gate
 

@@ -321,7 +321,8 @@ def _driver_envelope_ref(workspace_root: Path, task_id: str, task_fm: dict[str, 
     driver_actor = _driver_actor(workspace_root, connection_json=connection_json)
     if not driver_actor:
         return None
-    policy, _reasons = find_envelope(workspace_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor)
+    policy, _reasons = find_envelope(workspace_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor,
+                                     driver_role=_driver_role_name(workspace_root, connection_json))
     return str(policy.get("policy_id")) if policy else None
 
 
@@ -378,6 +379,37 @@ def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connecti
 
 
 DRIVER_ACTOR_MISSING = "驱动方身份(治理根 .lybra/role 的 instance, 或 connection.json 驱动方 token 的 agent_instance)"
+
+
+def _driver_role_name(workspace_root: Path, connection_json: str | None = None) -> str:
+    """AIPOS-F78B 件③: 驱动方的角色名(自定义角色如 chris 的 hbj-advisor)——工位声明 .lybra/role 的 role, 其次 connection.json
+    驱动方 token(role_class==driver.role_class)的 role; 解析不到返回 ""(调用方回退角色类 advisor)。信封 agent_or_role 可写角色名。"""
+    import json
+
+    from tools.aipos_cli.two_phase_shell_factory import driver_role_class
+
+    role_file = workspace_root / ".lybra" / "role"
+    if role_file.is_file():
+        try:
+            role = str(json.loads(role_file.read_text(encoding="utf-8")).get("role") or "").strip()
+            if role:
+                return role
+        except (OSError, ValueError) as exc:
+            import sys
+
+            print(f"Warning: {role_file} unreadable, driver role unresolved from role file: {exc}", file=sys.stderr)
+    conn = connection_json or _find_connection_json(workspace_root)
+    if not conn or not Path(conn).is_file():
+        return ""
+    try:
+        tokens = json.loads(Path(conn).read_text(encoding="utf-8")).get("tokens") or []
+    except (OSError, ValueError):
+        return ""
+    wanted = driver_role_class()
+    for tok in tokens:
+        if isinstance(tok, dict) and str(tok.get("role_class") or tok.get("role") or "").strip() == wanted:
+            return str(tok.get("role") or "").strip()
+    return ""
 
 
 def _claimer_instance(records: dict[str, Any]) -> str:
@@ -1857,7 +1889,8 @@ def _execute_claim_with_role_token(
     from tools.aipos_cli.loop_driver import DRIVER_ROLE, find_envelope  # 延迟导入(loop_driver 依赖本模块)
 
     driver_actor = _driver_actor(workspace_root, fallback=DRIVER_ROLE, connection_json=connection_json)
-    policy, envelope_reasons = find_envelope(workspace_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor)
+    policy, envelope_reasons = find_envelope(workspace_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor,
+                                             driver_role=_driver_role_name(workspace_root, connection_json))
     if policy is not None:
         policy_ref = str(policy.get("policy_id"))
         mode_arg = "--autonomy-mode PreAuthorized"

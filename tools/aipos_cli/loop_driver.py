@@ -36,6 +36,7 @@ from tools.aipos_cli.next_resolver import (
     REPO_ROOT,
     _action_type_for_command,
     _driver_actor,
+    _driver_role_name,
     _find_task_in_queue,
     _read_frontmatter,
     _read_task_records,
@@ -163,16 +164,21 @@ def find_envelope(
     driver_actor: str,
     policy_id: str | None = None,
     now: datetime | None = None,
+    driver_role: str | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """在 5_tasks/policies/ 找覆盖本卡与驱动方身份的有效 PreAuthorized 信封。
 
     判据 = autonomy_policy.match_claim_envelope 严格 AND(有效/时间窗/agent_or_role 覆盖驱动方实例或
     advisor 角色/task_selector 覆盖本卡/额度未尽)。返回 (policy | None, 每个候选的未匹配原因)。
+    AIPOS-F78B 件③: 驱动方身份集合 = {实例, 工位角色名(如 chris 的 hbj-advisor), 角色类 advisor}——信封 agent_or_role 写其一即覆盖
+    (门侧 _match_driver_envelope 同口径)。
     """
     from tools.aipos_cli.autonomy_policy import count_preauthorized_claims, load_policy, match_claim_envelope
 
     now = now or datetime.now(timezone.utc)
     candidates = [policy_id] if policy_id else _policy_ids(governance_root)
+    roles = [r for r in (str(driver_role or "").strip(), DRIVER_ROLE) if r]
+    roles = list(dict.fromkeys(roles))
     reasons: list[str] = []
     if not candidates:
         reasons.append("5_tasks/policies/ 下没有任何信封")
@@ -182,19 +188,21 @@ def find_envelope(
             reasons.append(f"{pid}: 信封文件缺失或格式不合规(owner_autonomy_policy)")
             continue
         released = count_preauthorized_claims(governance_root, pid)
-        matched, reason, _code = match_claim_envelope(
-            policy=policy,
-            task_id=task_id,
-            task_mode=str(task_fm.get("task_mode") or ""),
-            project=str(task_fm.get("project") or ""),
-            agent_instance=driver_actor,
-            actor=driver_actor,
-            now=now,
-            released_count=released,
-            claiming_role=DRIVER_ROLE,
-        )
-        if matched:
-            return policy, []
+        reason = ""
+        for role in roles:
+            matched, reason, _code = match_claim_envelope(
+                policy=policy,
+                task_id=task_id,
+                task_mode=str(task_fm.get("task_mode") or ""),
+                project=str(task_fm.get("project") or ""),
+                agent_instance=driver_actor,
+                actor=driver_actor,
+                now=now,
+                released_count=released,
+                claiming_role=role,
+            )
+            if matched:
+                return policy, []
         reasons.append(f"{pid}: {reason}")
     return None, reasons
 
@@ -343,9 +351,10 @@ def run_loop(
         return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), msg,
                           missing_records=[DRIVER_ACTOR_MISSING])
 
-    # 件③ 信封(启动前校验; 无信封 exit 5 带申领出口, 禁裸跑)
+    # 件③ 信封(启动前校验; 无信封 exit 5 带申领出口, 禁裸跑); 身份集合含工位角色名(chris: hbj-advisor)
     policy, reasons = find_envelope(
-        governance_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, policy_id=policy_id, now=now
+        governance_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, policy_id=policy_id, now=now,
+        driver_role=_driver_role_name(governance_root, connection_json),
     )
     if policy is None:
         hint = mint_hint(task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, now=now)

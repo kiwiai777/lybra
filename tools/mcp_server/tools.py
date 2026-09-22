@@ -2141,9 +2141,11 @@ def _match_driver_envelope(
             f"this bearer's role is '{cap.get('role') or 'unknown'}'.",
             "Submit ledger verbs with the driver token, or use autonomy_mode Supervised.",
         )
+    from tools.schema_loader import SchemaLoadError
+
     try:
         allowed = _loop_envelope_allowed_verbs()
-    except Exception as exc:  # SchemaLoadError: 声明缺 = 出声拒, 不静默回落
+    except (SchemaLoadError, OSError, ValueError) as exc:  # 声明缺/坏 = 出声拒, 不静默回落
         return None, _teaching_error("ENVELOPE_DECLARATION_MISSING", str(exc), "Restore verbs.schema lybra_loop.envelope.allowed_verbs.")
     if verb not in allowed:
         return None, _teaching_error(
