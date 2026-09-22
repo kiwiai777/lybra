@@ -375,26 +375,17 @@ def _read_task_frontmatter(task_path: Path) -> dict[str, Any]:
 
 
 def _find_task_card(workspace_root: Path, task_id: str) -> Path | None:
-    """Find a task card by ID in the queue directories."""
-    for queue_dir in ["pending", "claimed", "blocked", "completed"]:
-        path = workspace_root / "5_tasks" / "queue" / queue_dir / f"{task_id.lower()}.md"
-        if path.is_file():
-            return path
-    return None
+    """Find a task card by ID (AIPOS-F78B 件①: 唯一查找 task_loader.find_task_card, frontmatter task_id 匹配)。"""
+    from tools.aipos_cli.task_loader import find_task_card
+
+    return find_task_card(workspace_root, task_id, states=("pending", "claimed", "blocked", "completed"))[0]
 
 
 def _infer_task_status(workspace_root: Path, task_id: str) -> str:
-    """Infer the current status of a task from queue location."""
-    for status, dir_name in [
-        ("pending", "pending"),
-        ("claimed", "claimed"),
-        ("blocked", "blocked"),
-        ("completed", "completed"),
-    ]:
-        path = workspace_root / "5_tasks" / "queue" / dir_name / f"{task_id.lower()}.md"
-        if path.is_file():
-            return status
-    return "unknown"
+    """Infer the current status of a task from queue location (同一查找, 状态=所在目录名)。"""
+    from tools.aipos_cli.task_loader import find_task_card
+
+    return find_task_card(workspace_root, task_id, states=("pending", "claimed", "blocked", "completed"))[1] or "unknown"
 
 
 def _has_return_record(workspace_root: Path, task_id: str) -> bool:

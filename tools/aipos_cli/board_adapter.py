@@ -66,6 +66,7 @@ from tools.aipos_cli.task_loader import (
     find_repo_context,
     find_repo_root,
     find_task_by_id,
+    find_task_card,
     load_all_tasks,
     load_task_by_path,
 )
@@ -6018,14 +6019,8 @@ def mark_concluded_task(
             )
         resolved_root = _resolve_repo_root(repo_root)
         # Find the task card
-        card_file = None
-        queue_state = None
-        for qs in ("claimed", "pending"):
-            candidate = resolved_root / "5_tasks" / "queue" / qs / f"{tid.lower()}.md"
-            if candidate.is_file():
-                card_file = candidate
-                queue_state = qs
-                break
+        # AIPOS-F78B 件①: 唯一查找 task_loader.find_task_card(frontmatter task_id 匹配; 多义 → AmbiguousTaskCard 由外层 _normalize_exception 出声)
+        card_file, queue_state = find_task_card(resolved_root, tid, states=("claimed", "pending"))
         if card_file is None:
             return blocked_response(
                 operation=operation,

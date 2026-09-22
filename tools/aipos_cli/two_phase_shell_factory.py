@@ -65,8 +65,8 @@ def resolve_role_from_connection(
                     role_class = role_def.get("class")
                     if role_name and role_class:
                         role_class_map[role_name] = role_class
-            except Exception:
-                pass  # 注册表读取失败, 降级为名字匹配
+            except (OSError, ValueError) as exc:  # 注册表读取失败: 出声后降级为名字匹配(AIPOS-F78B: 禁静默吞)
+                print(f"two_phase_shell_factory: roles registry unreadable at {roles_schema_path}: {exc}", file=sys.stderr)
     
     # 3. 匹配角色
     available_roles = []
@@ -122,6 +122,22 @@ def resolve_driver_role_from_connection(*, connection_json_path: str, repo_root:
         raise ValueError(
             f"账务动词须由驱动方 token 提交(roles.schema driver.role_class={wanted}), 但 connection.json 无该角色类 token: {exc}"
         ) from exc
+
+
+def _no_envelope_exit() -> int:
+    """无信封退出码: 唯一声明 verbs.schema lybra_loop.exit_codes.no_envelope(与 loop_driver.exit_code_for 同源)。"""
+    from tools.aipos_cli.loop_driver import exit_code_for, load_loop_contract
+
+    return exit_code_for(load_loop_contract(), "no_envelope")
+
+
+def _is_envelope_rejection(resp: dict[str, Any]) -> bool:
+    """门拒因是否为信封守卫(error_code/errors[].category 以 ENVELOPE_ 开头, transitions envelope_guards)。"""
+    codes = [str(resp.get("error_code") or "")]
+    for err in resp.get("errors") or []:
+        if isinstance(err, dict):
+            codes.append(str(err.get("category") or err.get("code") or ""))
+    return any(c.startswith("ENVELOPE_") for c in codes)
 
 
 def _fail(error: str) -> tuple[int, dict[str, Any]]:
@@ -197,13 +213,23 @@ def execute_two_phase_verb(
             print(render_json(dry_run_resp))
         else:
             print(f"{verb_base} BLOCKED: {reasons}", file=sys.stderr)
+        # AIPOS-F78B 件③: 一阶段被信封门拒(ENVELOPE_*)= 无覆盖驱动方的有效信封 → exit 5(verbs.schema lybra_loop.exit_codes.no_envelope)
+        if use_one_phase and _is_envelope_rejection(dry_run_resp):
+            return _no_envelope_exit(), dry_run_resp
         return 1, dry_run_resp
 
     # AIPOS-F73B件②: PreAuthorized 一阶段——以记录落地为判据
     if use_one_phase:
-        # 门的一阶段协议：dry_run 返回 WARN，记录已落地
-        # 验证记录落地（从 dry_run_resp 提取记录路径或任务 ID）
         task_id = args_dict.get("task_id") or args_dict.get("audit_task_id", "")
+        # AIPOS-F78B 件③(fail-closed): 门未放行(回落 Supervised 预览: 带 dry_run_token / preauthorized_release=false)≠ 落记录,
+        # 不得报 "completed"——exit 5 带 envelope_error 出口
+        if dry_run_resp.get("preauthorized_release") is False or dry_run_resp.get("dry_run_token"):
+            if json_output:
+                print(render_json(dry_run_resp))
+            else:
+                print(f"{verb_base} NOT released (PreAuthorized 信封未匹配, 门回落 Supervised 预览, 未落记录): "
+                      f"{dry_run_resp.get('envelope_error') or dry_run_resp.get('errors') or ''}", file=sys.stderr)
+            return _no_envelope_exit(), dry_run_resp
         
         # 输出结果
         if json_output:
@@ -216,6 +242,8 @@ def execute_two_phase_verb(
 
     # 否则走两阶段协议（Supervised）
     dry_run_token = dry_run_resp.get("dry_run_token")
+    if verb_base == "lybra_queue_close" and not dry_run_token:
+        dry_run_token = "replay_args"  # close 不发 token(verbs.schema stage_contract.dry_run_emits_token=false)
     if not dry_run_token:
         if json_output:
             print(render_json(dry_run_resp))
@@ -236,6 +264,9 @@ def execute_two_phase_verb(
     if verb_base == "lybra_audit_verdict":
         confirm_args["audit_task_id"] = args_dict.get("audit_task_id")
         confirm_args["reviewed_task_id"] = args_dict.get("reviewed_task_id")
+    if verb_base == "lybra_queue_close":
+        # verbs.schema lybra_queue_close_dry_run.confirm_via=replay_args: confirm 重放 task_id/actor/closure_evidence, 无 dry_run_token
+        confirm_args = {k: v for k, v in args_dict.items() if k in ("task_id", "actor", "closure_evidence")}
 
     try:
         confirm_resp = client.call_tool(confirm_verb, confirm_args)

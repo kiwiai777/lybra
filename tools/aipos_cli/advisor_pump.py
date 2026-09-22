@@ -781,9 +781,10 @@ class AdvisorPump:
         if not return_files:
             return False
         
-        # Check task status (should have left claimed)
-        claimed_path = self.workspace_root / "5_tasks" / "queue" / "claimed" / f"{task_id.lower()}.md"
-        if claimed_path.exists():
+        # Check task status (should have left claimed) — AIPOS-F78B 件①: 唯一查找 find_task_card
+        from tools.aipos_cli.task_loader import find_task_card
+
+        if find_task_card(self.workspace_root, task_id, states=("claimed",))[0] is not None:
             return False  # Still in claimed, not settled
         
         return True
@@ -801,9 +802,10 @@ class AdvisorPump:
         if not claim_files:
             return False
         
-        # Check task in claimed directory
-        claimed_path = self.workspace_root / "5_tasks" / "queue" / "claimed" / f"{task_id.lower()}.md"
-        return claimed_path.exists()
+        # Check task in claimed directory — AIPOS-F78B 件①: 唯一查找 find_task_card
+        from tools.aipos_cli.task_loader import find_task_card
+
+        return find_task_card(self.workspace_root, task_id, states=("claimed",))[0] is not None
     
     def _verify_audit_verdict_landed(self, task_id: str, expected_verdict: str | None = None) -> bool:
         """AIPOS-324 S3: Verify audit verdict record landed.
@@ -827,16 +829,16 @@ class AdvisorPump:
         if not verdict_files:
             return False
         
-        # If expected_verdict specified, check state transition requirements
+        # If expected_verdict specified, check state transition requirements (AIPOS-F78B 件①: 唯一查找 find_task_card)
         if expected_verdict:
+            from tools.aipos_cli.task_loader import find_task_card
+
             if expected_verdict == Verdict.PASS:
                 # PASS verdict: task should move to completed/
-                completed_path = self.workspace_root / "5_tasks" / "queue" / "completed" / f"{task_id.lower()}.md"
-                return completed_path.exists()
+                return find_task_card(self.workspace_root, task_id, states=("completed",))[0] is not None
             elif expected_verdict in (Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER):
                 # FAIL/BLOCK/WARN/NEEDS_OWNER: task should stay in claimed (正确行为)
-                claimed_path = self.workspace_root / "5_tasks" / "queue" / "claimed" / f"{task_id.lower()}.md"
-                return claimed_path.exists()
+                return find_task_card(self.workspace_root, task_id, states=("claimed",))[0] is not None
         
         # No expected verdict or unknown type: just check record exists
         return True
@@ -846,8 +848,9 @@ class AdvisorPump:
         
         Check: task moved to completed/ AND close record exists.
         """
-        completed_path = self.workspace_root / "5_tasks" / "queue" / "completed" / f"{task_id.lower()}.md"
-        if not completed_path.exists():
+        from tools.aipos_cli.task_loader import find_task_card
+
+        if find_task_card(self.workspace_root, task_id, states=("completed",))[0] is None:
             return False
         
         # Check close record if exists
@@ -1637,19 +1640,21 @@ def validate_and_dispatch(
     
     # 读取任务卡
     if workspace_root:
-        card_path = workspace_root / "5_tasks" / "queue" / "pending" / f"{card_id.lower()}.md"
-        if not card_path.exists():
-            # 尝试其他队列
-            for queue_dir in ["claimed", "blocked"]:
-                alt_path = workspace_root / "5_tasks" / "queue" / queue_dir / f"{card_id.lower()}.md"
-                if alt_path.exists():
-                    card_path = alt_path
-                    break
-        
-        if not card_path.exists():
+        # AIPOS-F78B 件①: 唯一查找 find_task_card(frontmatter task_id 匹配, pending → claimed → blocked)
+        from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+        try:
+            card_path, _queue_dir = find_task_card(workspace_root, card_id, states=("pending", "claimed", "blocked"))
+        except AmbiguousTaskCard as exc:
             result["ok"] = False
             result["verdict"] = Verdict.BLOCK
-            result["errors"].append(f"任务卡不存在: {card_path}")
+            result["errors"].append(str(exc))
+            return result
+        
+        if card_path is None:
+            result["ok"] = False
+            result["verdict"] = Verdict.BLOCK
+            result["errors"].append(f"任务卡不存在: {card_id}(在 {workspace_root}/5_tasks/queue/{{pending,claimed,blocked}} 按 frontmatter task_id 查找)")
             return result
         
         try:

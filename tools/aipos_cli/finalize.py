@@ -365,6 +365,33 @@ def _report_frontmatter_verdict_for_display(workspace_root: Path, task_id: str) 
         return {"report_path": None, "report_verdict": None}
 
 
+def _actor_is_claimer(governance_root: Path, task_id: str, actor: str) -> dict[str, Any]:
+    """AIPOS-F78B 件⑤b: finalize actor==claimer 判据(与 queue_mutation complete / close_task 同一函数 actor_matches_task_actor)。
+    卡不在 queue(历史卡/靶场无卡)或卡面无 claimed_by = 无据可判 → 放行并出声; 有 claimed_by 且不匹配 = 拒。"""
+    from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles
+    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+    try:
+        card_path, _state = find_task_card(governance_root, task_id)
+    except AmbiguousTaskCard as exc:
+        return {"ok": False, "reason": str(exc)}
+    if card_path is None:
+        return {"ok": True, "reason": f"task card {task_id} not in queue; claimer unknown (not judged)"}
+    try:
+        metadata, _body, _warnings = parse_markdown_frontmatter(card_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return {"ok": False, "reason": f"task card unreadable for claimer check: {card_path}: {exc}"}
+    claimed_by = str(metadata.get("claimed_by") or "").strip()
+    if not claimed_by:
+        return {"ok": True, "reason": f"task card {task_id} has no claimed_by; claimer unknown (not judged)"}
+    profiles = load_agent_profiles(governance_root)
+    matches = actor_matches_task_actor(actor, claimed_by, profiles) if profiles else claimed_by == actor
+    if not matches:
+        return {"ok": False, "reason": f"finalize actor {actor!r} is not the claimer {claimed_by!r} of {task_id} (actor must equal the claim instance, same rule as close/return/verdict)"}
+    return {"ok": True, "reason": "actor == claimer"}
+
+
 def check_task_can_finalize(task_id: str, governance_root: Path, commit_sha: str | None = None) -> dict[str, Any]:
     """AIPOS-C3 大项A + AIPOS-F70: 检查任务是否可以 finalize(基于门生 PASS 裁决 + 精确 SHA 核对)。
 
@@ -701,14 +728,16 @@ def _task_title_summary(governance_root: Path, task_id: str) -> str:
     失败返回空串 (摘要非归属关键, 归属由 branch 卡号 + verdict_id 裁决号保证)。
     """
     candidates: list[Path] = []
-    queue_dir = governance_root / "5_tasks" / "queue"
-    for state in ("claimed", "completed", "pending"):
-        state_dir = queue_dir / state
-        if not state_dir.is_dir():
-            continue
-        for card in state_dir.glob("*.md"):
-            if card.stem.lower() == task_id.lower():
-                candidates.append(card)
+    # AIPOS-F78B 件①: 唯一查找 task_loader.find_task_card(frontmatter task_id 匹配, 文件名不限); 多义 = 不取摘要(归属由分支/裁决号保证)
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+    try:
+        card_path, _state = find_task_card(governance_root, task_id, states=("claimed", "completed", "pending"))
+    except AmbiguousTaskCard as exc:
+        print(f"Warning: {exc}", file=sys.stderr)
+        card_path = None
+    if card_path is not None:
+        candidates.append(card_path)
     card_md = governance_root / "task_cards" / task_id / "CARD.md"
     if card_md.exists():
         candidates.append(card_md)
@@ -1108,6 +1137,30 @@ def finalize_task(
             }
     except Exception as exc:
         operations.append(f"Warning: Could not verify workspace/governance separation: {exc}")
+
+    # AIPOS-F78B 件⑤b: finalize 与 close/return/verdict 同口径——actor 须为该卡认领实例(卡面 claimed_by, validator.actor_matches_task_actor
+    # 同一判据); 驱动方/他人当 actor 即拒(transitions record_authenticity.submission_identity.actor_rule)
+    claimer_check = _actor_is_claimer(governance_root, task_id, actor)
+    if not claimer_check["ok"]:
+        operations.append(f"ACTOR_MISMATCH: {claimer_check['reason']}")
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "can_finalize": False,
+            "integrity_check": None,
+            "branch_check": None,
+            "committed": False,
+            "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
+            "commit_hash": None,
+            "category": "ACTOR_MISMATCH",
+            "message": f"BLOCKED: {claimer_check['reason']}",
+            "operations": operations,
+        }
 
     # AIPOS-FND-14: display-only — surface the task_cards AUDIT-REPORT frontmatter verdict
     # (if any) alongside the real gate verdict for operator visibility. Never judged.

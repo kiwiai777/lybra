@@ -592,14 +592,10 @@ def _find_continuation_task(task_id: str, governance_root: Path) -> str | None:
     """
     # 查找任务卡（可能在 completed/claimed/pending/withdrawn/blocked 等目录）
     # AIPOS-F78 前置零⑥: 世系扫描含 withdrawn(撤废卡带承接声明时其产物由续卡承接, F53 原只扫三目录 → 撤废卡不入世系不可结案)
-    queue_root = governance_root / "5_tasks" / "queue"
-    task_file = None
-    
-    for status_dir in ["completed", "claimed", "pending", "withdrawn", "blocked"]:
-        potential = queue_root / status_dir / f"{task_id.lower()}.md"
-        if potential.exists():
-            task_file = potential
-            break
+    # AIPOS-F78B 件①: 唯一查找 task_loader.find_task_card(frontmatter task_id 匹配)
+    from tools.aipos_cli.task_loader import find_task_card
+
+    task_file, _state = find_task_card(governance_root, task_id, states=("completed", "claimed", "pending", "withdrawn", "blocked"))
     
     if not task_file:
         return None

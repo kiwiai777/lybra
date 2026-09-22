@@ -410,8 +410,9 @@ def test_f73d_pre1_item3_unparseable_derived_command_exit4_never_executed(gov: P
 def test_f73d_pre1_item3_check_command_parses_uses_aipos_cli_argparse():
     ok, err = check_command_parses("lybra queue close --task-id X --actor a --closure-evidence '{\"verdict_ref\": \"v\"}'")
     assert ok and err == ""
-    ok, err = check_command_parses("lybra queue close --task-id X --actor a --closure-evidence '{}' --confirm")
-    assert not ok and "unrecognized arguments: --confirm" in err
+    # AIPOS-F78B 件③ 起 `queue close` 声明了 --confirm(经门一阶段); 未声明参数改用 --no-such-flag 当夹具
+    ok, err = check_command_parses("lybra queue close --task-id X --actor a --closure-evidence '{}' --no-such-flag")
+    assert not ok and "unrecognized arguments: --no-such-flag" in err
     ok, err = check_command_parses("git push")
     assert not ok and "lybra" in err
 
