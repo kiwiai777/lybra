@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-# AIPOS-R6M 大项B + AIPOS-A1 大项A③ + AIPOS-F29 大项C: 治理仓 pre-commit 钩子(文件面护栏)
-#   ① 代码文件禁止 (R6A 靶子⑨)
+# AIPOS-R6M 大项B + AIPOS-A1 大项A③ + AIPOS-F29 大项C + AIPOS-F79D 件①②: 治理仓 pre-commit 钩子(文件面护栏)
+#   ① 代码文件禁止 (R6A 靶子⑨; 声明 config.schema code_files_blacklist)
 #   ② 治理决策类 .md 无状态头 frontmatter → 拒并给模板 (格式规则从声明读)
 #   ③ decision_log/ append-only (只许新增禁修改)
 #   ④ 5_tasks/records/** 新增文件必须携机器出生标记 (record_type)
 #   ⑤ 治理仓 HEAD 必须是 main 分支 (F29: 执行体禁把卡分支开进治理仓)
 #
-# AIPOS-R6M FIX-1: 路径定义从 config.schema 治理目录树读(单一源),
-#   仓内相对前缀动态计算(治理仓 git 根 ≠ 治理工作区根时, 如 2_projects/lybra/,
-#   不再写死 ^governance/ 前缀)。
-#
-# AIPOS-A1 大项A③: 格式规则(必填 frontmatter 字段)从
-#   config.schema governance_structure.file_declarations 读取,
-#   产生侧(CLI)与出口侧(hook)共用同一份声明。改一处两侧跟随。
+# AIPOS-F79D 件①: 四检规则只有一份实现 —— tools/aipos_cli/governance_guardrails.py。
+#   本壳只做两件事: 取 staged 清单(统一读取层, core.quotepath=false + -z) 并调用该模块。
+#   `lybra governance-commit`(含 --dry-run)对同一「将提交清单」调同一模块, 拒因文案同源。
+# AIPOS-F79D 件②: 治理工作区根按 staged 文件各自归属判(模块内实现), 不再 os.walk 首命中。
+# AIPOS-F6: 读取层统一禁用 quotepath 转义; 自检失败 → hook 自身拒绝放行(护栏禁静默降级)。
 
 set -e
+set -o pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
@@ -25,114 +24,24 @@ if [ ! -f "$CONFIG_SCHEMA" ]; then
     echo "❌ BLOCKED: config.schema not found at $CONFIG_SCHEMA (single source unavailable; set LYBRA_SCHEMA_DIR)"
     exit 1
 fi
-
-# ---- 从 config.schema 解析治理目录树路径 + 文件声明 + 定位治理工作区根 + 输出给 bash ----
-eval "$(python3 - "$REPO_ROOT" "$CONFIG_SCHEMA" <<'PY'
-import json, os, sys
-
-repo_root, schema_path = sys.argv[1], sys.argv[2]
-d = json.load(open(schema_path))
-gs = d.get("governance_structure", {}) or {}
-paths = gs.get("paths", {}) or {}
-file_decls = gs.get("file_declarations", {}) or {}
-
-def rel(key, default):
-    return str((paths.get(key) or {}).get("path") or default).strip("/")
-
-gov_docs = rel("governance_docs", "governance")
-decision_log = rel("decision_log_dir", "governance/decision_log")
-tasks_root = rel("tasks_root", "5_tasks")
-records = rel("records", "records")
-records_full = f"{tasks_root}/{records}".strip("/")
-
-# AIPOS-A1: 从 file_declarations 读取各类文件的必填 frontmatter 字段
-def get_required_fm(decl_key):
-    decl = file_decls.get(decl_key, {}) or {}
-    fields = decl.get("required_frontmatter", []) or []
-    return "|".join(fields)
-
-gov_doc_fm = get_required_fm("governance_doc")
-record_fm = get_required_fm("record_file")
-
-# 治理工作区根 = repo_root 下同时含 gov_docs 首段 与 tasks_root 首段 的目录
-gov_seg = gov_docs.split("/")[0]
-tasks_seg = tasks_root.split("/")[0]
-ws_root = repo_root
-for dirpath, dirnames, filenames in os.walk(repo_root):
-    depth = dirpath[len(repo_root.rstrip('/')):].count(os.sep)
-    dirnames[:] = [x for x in dirnames if x not in (".git", "node_modules")]
-    if depth >= 4:
-        dirnames[:] = []
-        continue
-    if os.path.isdir(os.path.join(dirpath, gov_seg)) and os.path.isdir(os.path.join(dirpath, tasks_seg)):
-        ws_root = dirpath
-        break
-
-def sh(s):
-    return "'" + s.replace("'", "'\\''") + "'"
-
-print(f"GOV_WS_ROOT={sh(ws_root)}")
-print(f"GOV_DOCS_REL={sh(gov_docs)}")
-print(f"DECISION_LOG_REL={sh(decision_log)}")
-print(f"RECORDS_REL={sh(records_full)}")
-print(f"GOV_DOC_REQUIRED_FM={sh(gov_doc_fm)}")
-print(f"RECORD_REQUIRED_FM={sh(record_fm)}")
-PY
-)"
-
-# ---- 仓内相对前缀(动态计算, 不写死) ----
-if [ "$GOV_WS_ROOT" = "$REPO_ROOT" ]; then
-    PREFIX=""
-else
-    PREFIX="${GOV_WS_ROOT#"$REPO_ROOT"/}/"
+PRODUCT_ROOT="$(cd "$SCHEMA_DIR/.." && pwd)"
+GUARDRAILS_MODULE="$PRODUCT_ROOT/tools/aipos_cli/governance_guardrails.py"
+if [ ! -f "$GUARDRAILS_MODULE" ]; then
+    echo "❌ BLOCKED: guardrails module not found at $GUARDRAILS_MODULE (product repo beside schema dir required)"
+    exit 1
 fi
 
-GOV_DOCS_PREFIX="${PREFIX}${GOV_DOCS_REL}/"
-DECISION_LOG_PREFIX="${PREFIX}${DECISION_LOG_REL}/"
-RECORDS_PREFIX="${PREFIX}${RECORDS_REL}/"
-
-echo "🔍 AIPOS-R6M: governance guardrails (ws_prefix=${PREFIX:-<repo-root>/})"
-
-# 代码文件扩展名黑名单 (大项B①, 保留 R6A)
-CODE_EXTENSIONS=(py js ts tsx jsx java go rs c cpp sh bash rb php swift)
-
-blocked_files=()
-blocked_reasons=()
-
-# 文件是否以某仓内相对前缀开头(前缀动态, 非写死 ^governance/)
-under_prefix() {
-    case "$1" in
-        "$2"*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-# ---- 统一读取层 (AIPOS-F6): 所有 git 路径枚举必须经此函数, 强制 core.quotepath=false ----
-# git 默认 quotepath=true 会把非 ASCII 路径八进制转义+加引号, 导致 B①/B②/B③/B④ 前缀匹配
-# 全部失配(护栏被文件名语言击穿)。全 hook 只此一种做法: 读取层统一禁用转义。
-git_name_only() {
-    local filter="$1" dir="${2:-}"
-    if [ -n "$dir" ]; then
-        git -C "$dir" -c core.quotepath=false diff --cached --name-only --diff-filter="$filter"
-    else
-        git -c core.quotepath=false diff --cached --name-only --diff-filter="$filter"
-    fi
+# ---- 统一读取层 (AIPOS-F6): 所有 git 路径枚举必须经此函数, 强制 core.quotepath=false + -z ----
+git_staged_name_status() {
+    local dir="${1:-.}"
+    git -C "$dir" -c core.quotepath=false diff --cached --name-status --no-renames -z
 }
 
 # ---- 自检 (AIPOS-F6 靶②, C2: 护栏禁静默降级) ----
-# 内置非 ASCII 样例路径, 验证读取层+匹配层对非 ASCII 不降级。
-# 任一自测失败 → hook 自身报错拒绝放行(绝不静默失守)。成功则静默。
+# 用同一读取函数在临时仓枚举非 ASCII 文件, 必须原样输出(未被 quotepath 转义)。失败即拒绝放行。
 self_test_nonascii() {
     local sample="决策日志_非ASCII自检.md"
     local tmpd out
-
-    # ① 匹配层自测: 非 ASCII 样例必须命中 decision_log 前缀
-    if ! under_prefix "${DECISION_LOG_PREFIX}${sample}" "$DECISION_LOG_PREFIX"; then
-        echo "❌ BLOCKED: hook self-test FAILED — 非 ASCII 样例路径未命中护栏前缀(匹配层被击穿)。拒绝放行。"
-        return 1
-    fi
-
-    # ② 读取层自测: 用同一读取函数在临时仓枚举非 ASCII 文件, 必须原样输出(未被 quotepath 转义)
     tmpd="$(mktemp -d 2>/dev/null)"
     if [ -z "$tmpd" ] || [ ! -d "$tmpd" ]; then
         echo "❌ BLOCKED: hook self-test 无法创建临时目录(mktemp 失败)。拒绝放行。"
@@ -149,9 +58,8 @@ self_test_nonascii() {
         echo "❌ BLOCKED: hook self-test 无法暂存非 ASCII 样例(git add 失败)。拒绝放行。"
         return 1
     fi
-    out="$(git_name_only ACM "$tmpd" 2>/dev/null || true)"
+    out="$(git_staged_name_status "$tmpd" 2>/dev/null | tr '\0' '\n' || true)"
     rm -rf "$tmpd"
-
     if ! printf '%s\n' "$out" | grep -qF "$sample"; then
         echo "❌ BLOCKED: hook self-test FAILED — git 读取层对非 ASCII 路径输出了转义形式(core.quotepath 未禁用), 护栏被击穿。拒绝放行。"
         return 1
@@ -163,114 +71,10 @@ if ! self_test_nonascii; then
     exit 1
 fi
 
-staged_files="$(git_name_only ACM)"
-
-if [ -z "$staged_files" ]; then
-    echo "✅ No files to check."
-    exit 0
-fi
-
-# 大项B①: 代码文件禁止
-while IFS= read -r file; do
-    [ -z "$file" ] && continue
-    [ ! -f "$file" ] && continue
-    extension="${file##*.}"
-    for ext in "${CODE_EXTENSIONS[@]}"; do
-        if [ "$extension" = "$ext" ]; then
-            blocked_files+=("$file")
-            blocked_reasons+=("Code file forbidden in governance repo (B①)")
-            break
-        fi
-    done
-done <<< "$staged_files"
-
-# 大项B②: 治理决策类 .md 需 frontmatter (必填字段从 file_declarations 声明读取)
-# AIPOS-A1: 必填字段列表来自 GOV_DOC_REQUIRED_FM (config.schema governance_structure.file_declarations.governance_doc.required_frontmatter)
-IFS='|' read -ra GOV_DOC_FM_FIELDS <<< "$GOV_DOC_REQUIRED_FM"
-while IFS= read -r file; do
-    [ -z "$file" ] && continue
-    [ ! -f "$file" ] && continue
-    if under_prefix "$file" "$GOV_DOCS_PREFIX" && [[ "$file" == *.md ]]; then
-        if ! grep -q '^---$' "$file" 2>/dev/null; then
-            blocked_files+=("$file")
-            blocked_reasons+=("Missing frontmatter (B②, required: ${GOV_DOC_REQUIRED_FM})")
-            continue
-        fi
-        frontmatter=$(awk 'BEGIN{n=0} /^---$/{n++; next} {if(n==1) print}' "$file")
-        for fm_field in "${GOV_DOC_FM_FIELDS[@]}"; do
-            [ -z "$fm_field" ] && continue
-            if ! printf '%s\n' "$frontmatter" | grep -q "^${fm_field}:"; then
-                blocked_files+=("$file")
-                blocked_reasons+=("Missing '${fm_field}' field in frontmatter (B②, declared in config.schema file_declarations.governance_doc)")
-            fi
-        done
-    fi
-done <<< "$staged_files"
-
-# 大项B③: decision_log/ append-only (禁修改, 只许新增)
-while IFS= read -r file; do
-    [ -z "$file" ] && continue
-    if under_prefix "$file" "$DECISION_LOG_PREFIX"; then
-        blocked_files+=("$file")
-        blocked_reasons+=("decision_log/ is append-only, modifications forbidden (B③)")
-    fi
-done < <(git_name_only M)
-
-# 大项B④: records/** 新增文件必须携机器出生标记 (必填字段从 file_declarations 声明读取)
-# AIPOS-A1: 必填字段列表来自 RECORD_REQUIRED_FM (config.schema governance_structure.file_declarations.record_file.required_frontmatter)
-IFS='|' read -ra RECORD_FM_FIELDS <<< "$RECORD_REQUIRED_FM"
-while IFS= read -r file; do
-    [ -z "$file" ] && continue
-    [ ! -f "$file" ] && continue
-    if under_prefix "$file" "$RECORDS_PREFIX"; then
-        for fm_field in "${RECORD_FM_FIELDS[@]}"; do
-            [ -z "$fm_field" ] && continue
-            if ! grep -q "^${fm_field}:" "$file" 2>/dev/null; then
-                blocked_files+=("$file")
-                blocked_reasons+=("New record lacks required field '${fm_field}' (B④, declared in config.schema file_declarations.record_file)")
-            fi
-        done
-    fi
-done < <(git_name_only A)
-
-# 大项B⑤ (AIPOS-F29): 治理仓主分支闸 — HEAD 必须是 main 分支
-# 执行体两次把卡分支开进治理仓(F13/F28), 纪律文字管不住就机器管。
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [ "$CURRENT_BRANCH" != "main" ]; then
-    echo ""
-    echo "❌ BLOCKED: Governance repo commit must be on 'main' branch (AIPOS-F29 大项C)"
-    echo ""
-    echo "Current branch: $CURRENT_BRANCH"
-    echo ""
-    echo "治理仓永远停 main, 卡分支只开在产品仓。"
-    echo "下一步: 切回 main 分支后重试提交"
-    echo "  git checkout main"
-    echo ""
+# ---- 四检: staged 清单 → 单源模块(规则/文案在模块内; 非零即拒) ----
+if ! git_staged_name_status "$REPO_ROOT" \
+    | PYTHONPATH="$PRODUCT_ROOT" python3 -m tools.aipos_cli.governance_guardrails \
+        --repo-root "$REPO_ROOT" --schema-dir "$SCHEMA_DIR" --staged-stdin; then
     exit 1
 fi
-
-if [ ${#blocked_files[@]} -gt 0 ]; then
-    echo ""
-    echo "❌ BLOCKED: Governance repo commit violates AIPOS-R6M + F29 file-level guardrails"
-    echo ""
-    echo "Violations:"
-    for i in "${!blocked_files[@]}"; do
-        echo "  - ${blocked_files[$i]}: ${blocked_reasons[$i]}"
-    done
-    echo ""
-    echo "Guardrails (AIPOS-R6M 大项B + AIPOS-A1 声明驱动 + F29 大项C):"
-    echo "  ① Code files forbidden in governance repo"
-    echo "  ② Governance docs require frontmatter with declared fields:"
-    echo "     Required fields (from config.schema file_declarations.governance_doc): ${GOV_DOC_REQUIRED_FM}"
-    echo "     ---"
-    echo "     status: active"
-    echo "     ---"
-    echo "  ③ decision_log/ is append-only (modifications forbidden)"
-    echo "  ④ New records require declared fields (from config.schema file_declarations.record_file): ${RECORD_REQUIRED_FM}"
-    echo "  ⑤ Governance repo must be on 'main' branch (F29)"
-    echo ""
-    exit 1
-fi
-
-echo "✅ All governance guardrails passed. Commit allowed."
 exit 0

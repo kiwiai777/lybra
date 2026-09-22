@@ -158,7 +158,7 @@ def test_taskid_optional_governance_batch(governance_repo):
     # 添加一个治理批次更新（非卡相关）
     decision_dir = local / "governance" / "decision_log" / "2026-09"
     decision_dir.mkdir(parents=True)
-    (decision_dir / "2026-09-05-test-decision.md").write_text("# Test Decision\n")
+    (decision_dir / "2026-09-05-test-decision.md").write_text("---\nstatus: active\n---\n# Test Decision\n")  # AIPOS-F79D: B② 四检在 governance-commit 内跑
     
     # 不带 task_id 调用
     result = governance_commit(
