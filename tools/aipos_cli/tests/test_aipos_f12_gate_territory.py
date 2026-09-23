@@ -39,7 +39,7 @@ class TestGateTerritoryDisciplineSection(unittest.TestCase):
             self.assertIn(verb, section)
 
     def test_derived_audit_card_contains_section(self):
-        """build_derived_audit_task 的 body 含门领地纪律节。"""
+        """build_derived_audit_task 的 body: 零门项目不含门领地纪律/提交配方(AIPOS-F80), 含交付纪律节。"""
         source_metadata = {
             "title": "Test",
             "project": "lybra",
@@ -55,8 +55,11 @@ class TestGateTerritoryDisciplineSection(unittest.TestCase):
             artifact_refs=[],
             repo_root=None,
         )
-        self.assertIn("门领地纪律", result["body"])
-        self.assertIn("精确提交配方", result["body"])
+        # AIPOS-F80 件①: 审计体零门——非 manual_gate_mode 项目的派生审计卡以「交付纪律」节取代门领地纪律 + 提交配方;
+        # 门领地纪律节(本文件上两条)只在 manual_gate_mode 项目注入(回归见 test_aipos338_audit_derivation / F80 夹具)。
+        self.assertIn("交付纪律(AIPOS-F80 件①: 审计体零门)", result["body"])
+        self.assertNotIn("精确提交配方", result["body"])
+        self.assertNotIn("lybra_audit_verdict", result["body"])
 
 
 if __name__ == "__main__":

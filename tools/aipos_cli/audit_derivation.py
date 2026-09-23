@@ -171,6 +171,57 @@ def build_gate_territory_discipline_section(
     )
 
 
+def zero_gate_report_sentence(report_location: str) -> str:
+    """AIPOS-F80 件①: 零门审计卡的落点句(唯一措辞)。落点值只接 render_audit_report_location 的输出。"""
+    return f"报告写到 `{report_location}`, 写完即止, 认领与裁决提交由驱动方完成。"
+
+
+def build_zero_gate_delivery_section(
+    source_task_id: str,
+    repo_root: Path | None = None,
+    *,
+    audit_task_id: str | None = None,
+) -> str:
+    """AIPOS-F80 件①: 零门审计卡的交付纪律节(取代门领地纪律 + 提交配方节; 判据 = draft_writer.card_carries_gate_contract_section)。
+
+    审计体零门(Owner 09-06, 与执行卡 F73C 同口径): 只写报告, 不连门、不调门动词、不写队列/记录区;
+    落点句出自 render_audit_report_location(F66B 件③ 单源)。
+    """
+    report_location = render_audit_report_location(
+        repo_root, audit_task_id or derive_audit_task_id(source_task_id, repo_root=None)
+    )
+    return (
+        "\n## 交付纪律(AIPOS-F80 件①: 审计体零门)\n\n"
+        f"- {zero_gate_report_sentence(report_location)}\n"
+        "- 你不连门、不读凭据、不调任何门动词; 队列与记录区是门领地, 只读不写(裁决由驱动方经门落盘)。\n"
+    )
+
+
+_GATE_TERRITORY_SECTION_RE = r"\n?## 门领地纪律.*?(?=\n## |\Z)"
+_REPORT_LOCATION_LINE_RE = r"^- \*\*报告落位\*\*:.*$"
+
+
+def zero_gate_audit_body(body: str, governance_root: Path | None, audit_task_id: str) -> str:
+    """AIPOS-F80 件①: 存量派生审计卡正文零门收口(regen 入口用; 与新派生同一组函数)。
+
+    删「门领地纪律」节(门动词提交配方)、把「报告落位」行换成零门落点句、缺则补交付纪律节;
+    「认领与交回」节由调用方按同一判据删除。幂等。
+    """
+    import re
+
+    report_location = render_audit_report_location(governance_root, audit_task_id)
+    out = re.sub(_GATE_TERRITORY_SECTION_RE, "", body, flags=re.DOTALL)
+    out = re.sub(
+        _REPORT_LOCATION_LINE_RE,
+        lambda _m: f"- **报告落位**:{zero_gate_report_sentence(report_location)}",
+        out,
+        flags=re.MULTILINE,
+    )
+    if "## 交付纪律(AIPOS-F80" not in out:
+        out = out.rstrip() + "\n" + build_zero_gate_delivery_section(audit_task_id, governance_root, audit_task_id=audit_task_id)
+    return out
+
+
 def _find_selector_pairs(optional_params: list[str]) -> list[tuple[str, str, str]]:
     """AIPOS-F14 大项A: 从 optional_params 识别 _select_task_input 二选一参数对。
 
@@ -433,6 +484,15 @@ def build_derived_audit_task(
     existing_governance_refs = list(audit_metadata.get("governance_refs") or [])
     audit_metadata["governance_refs"] = existing_governance_refs + forensic_anchors
     
+    # AIPOS-F80 件①: 「带不带认领与交回节 / 门动词配方」唯一判据(与执行卡同口径, manual_gate_mode 项目例外)
+    from tools.aipos_cli.draft_writer import card_carries_gate_contract_section
+
+    gate_mode = card_carries_gate_contract_section(audit_metadata, repo_root)
+    if gate_mode:
+        report_line = f"- **报告落位**:`{report_location}`(审计报告归审计卡 ID 目录; 裁决记录由门落 records/, 不是你的落点)。"
+    else:
+        report_line = f"- **报告落位**:{zero_gate_report_sentence(report_location)}"
+
     # Build body (mechanical signpost) — AIPOS-338 S2: fixed audit instructions
     artifact_list = "\n".join(f"- `{ref}`" for ref in artifact_refs) if artifact_refs else "- (see return record)"
     
@@ -453,14 +513,18 @@ Independent audit of task `{source_task_id}`.
   1. **起得来**:产物能拉起/运行(代码能 import 或起服务;命令能跑通)。
   2. **产物可用**:产物满足原卡验收断言(不是"看起来对",是"断言过")。
   两条任一不过 → FAIL。
-- **报告落位**:`{report_location}`(审计报告归审计卡 ID 目录; 裁决记录由门落 records/, 不是你的落点)。
+{report_line}
 - **如实报红线**:结论三值 PASS / PASS_WITH_NOTES / FAIL(附 F-* 清单);失败如实报,禁止“应该没问题”。
 """
     # AIPOS-A1 大项C: 注入取证锚点段(路径来自注册表, 禁写死)
     audit_body += build_forensic_anchor_section(source_task_id, repo_root, source_metadata, audit_task_id=audit_task_id)
 
-    # AIPOS-F12 大项D: 注入门领地纪律 + 精确提交配方(手动/自动共用, 值来自声明)
-    audit_body += build_gate_territory_discipline_section(source_task_id, repo_root, audit_task_id=audit_task_id)
+    # AIPOS-F12 大项D: 注入门领地纪律 + 精确提交配方(值来自声明)——仅 manual_gate_mode 项目(F80 件①);
+    # 零门卡面 = 交付纪律节(报告写到落点即止, 认领与裁决提交由驱动方完成)。
+    if gate_mode:
+        audit_body += build_gate_territory_discipline_section(source_task_id, repo_root, audit_task_id=audit_task_id)
+    else:
+        audit_body += build_zero_gate_delivery_section(source_task_id, repo_root, audit_task_id=audit_task_id)
 
     if branch_id == "code_with_deploy":
         audit_body += (
@@ -470,12 +534,14 @@ Independent audit of task `{source_task_id}`.
         )
     
     # AIPOS-338 S2: append the auditor's card-bound contract section (single-source)
-    # AIPOS-340F2: ValueError (envelope resolution failure) must propagate; other errors swallowed.
-    if repo_root is not None:
+    # AIPOS-F80 件①: 仅 manual_gate_mode 项目(同一判据); 零门审计卡不带该节。
+    # 生成失败不再静默吞(禁 except Exception: pass): 信封/连接声明缺(ValueError/OSError)= 卡面出声 + stderr,
+    # 其余异常原样上抛。
+    if gate_mode and repo_root is not None:
+        from tools.aipos_cli.gate_contract_section import (
+            render_gate_contract_section, workspace_connection_info,
+        )
         try:
-            from tools.aipos_cli.gate_contract_section import (
-                render_gate_contract_section, workspace_connection_info,
-            )
             conn = workspace_connection_info(repo_root)
             section = render_gate_contract_section(
                 _resolve_profile(source_metadata, collaboration_profile, repo_root),
@@ -484,13 +550,17 @@ Independent audit of task `{source_task_id}`.
                 workspace_display=conn["workspace_display"], task_id=audit_task_id,
                 workspace_root=repo_root,
             )
-            audit_body = audit_body.rstrip() + "\n\n" + section + "\n"
-        except Exception:
-            # AIPOS-340F2: render_gate_contract_section no longer has hardcoded fallbacks.
-            # If envelope resolution fails, the section is omitted. Production workspaces
-            # always have active policies; this only triggers in broken/test environments.
-            pass
-    
+        except (ValueError, OSError) as exc:
+            import sys
+
+            print(f"Warning: 审计卡 {audit_task_id}「认领与交回」节生成失败: {exc}", file=sys.stderr)
+            section = (
+                "## 【认领与交回】\n\n"
+                f"> 生成失败(manual_gate_mode 项目): {exc}\n"
+                f"> 出口: 在 {repo_root}/5_tasks/policies/ 补 active 审计信封 / 修 .lybra/connection.json 后 regen 本卡。"
+            )
+        audit_body = audit_body.rstrip() + "\n\n" + section + "\n"
+
     audit_task_path = f"5_tasks/queue/pending/{_task_filename_for(audit_task_id)}"
     
     return {

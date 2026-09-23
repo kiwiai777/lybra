@@ -128,7 +128,8 @@ def _src_meta(task_id: str, project: str = "lybra") -> dict:
 # 件③ 审计卡「报告落点」文案单源
 # ===========================================================================
 
-_LOCATION_SENTENCES = ("报告落点绝对路径", "审计报告草稿只能落", "报告落位")
+# AIPOS-F80 件①: 零门审计卡以「交付纪律」节(报告写到 …)取代门领地纪律段(manual_gate_mode 项目仍为门领地纪律段)
+_LOCATION_SENTENCES = ("报告落点绝对路径", "审计报告草稿只能落", "报告落位", "报告写到")
 
 
 def _location_lines(text: str) -> list[str]:
@@ -154,7 +155,7 @@ def test_item3_derived_audit_card_all_location_sentences_from_one_renderer(tmp_p
     assert str(nr.audit_report_artifact_path(gov, audit_id)) == expected  # 读取口 = 渲染值同源
     body = spec["body"]
     lines = _location_lines(body)
-    assert len(lines) == 3, lines  # 正文三句落点(取证锚点/门领地纪律/审计指令)
+    assert len(lines) == 3, lines  # 正文三句落点(取证锚点/门领地纪律或交付纪律(F80 零门)/审计指令)
     for line in lines:
         assert expected in line, line
     anchors = [r for r in spec["metadata"]["governance_refs"] if "取证锚点" in str(r)]
@@ -569,7 +570,12 @@ def test_item1_push_engine_same_ownership_rule_and_rendered_charter(rig, monkeyp
     assert any(item.startswith("executor-charter (charter, rendered)") for item in result["distributed"])
     text = (rig["ws_l"] / "AGENTS.md").read_text()
     master = (REPO_ROOT / "agents" / "roles" / "executor" / "AGENTS.md").read_text()
-    assert text.startswith(master.rstrip("\n")) and "## 项目声明(声明渲染, AIPOS-F66B 件①)" in text
+    # AIPOS-F80 件②: 母本已占位化, 渲染物前缀 = 母本按本工位声明上下文替换后的正文(同一 _substitute 实现)
+    from tools.aipos_cli.charter_render import _substitute, charter_render_context, workstation_identity
+
+    ctx = charter_render_context(rig["gov_l"], identity=workstation_identity(rig["ws_l"]))
+    assert text.startswith(_substitute(master, ctx).rstrip("\n")) and "## 项目声明(声明渲染, AIPOS-F66B 件①)" in text
+    assert "{{" not in text
     assert result["declaration_gaps"] and result["declaration_gaps"][0]["distribution_id"] == "executor-charter"
     manifest = json.loads((rig["parent"] / "_distributed" / ".version-executor").read_text())
     charter = next(d for d in manifest["distributions"] if d["kind"] == "charter")

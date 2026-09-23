@@ -520,19 +520,21 @@ def _manual_gate_mode(repo_root: Path | None) -> bool:
     """AIPOS-F73C 件①: 人肉 gate 项目在治理工作区 project.json 声明 manual_gate_mode=true。
 
     声明为真时执行类卡面保留「认领与交回」节, 且 publish 不做 lybra_ 动词校验(两处同一判据)。
+    AIPOS-F80: 读取口收归 workspace_config.project_paths(paths 段优先, 兼容顶层 manual_gate_mode;
+    与 next_resolver/ingest 同一读法, 禁第二读法——此前本函数只读顶层, lybra 形 paths.manual_gate_mode 被漏读)。
     读取失败 = warning 非静默, 视为未声明。
     """
     if repo_root is None:
         return False
-    project_json = Path(repo_root) / "project.json"
-    if not project_json.exists():
-        return False
+    from tools.aipos_cli.workspace_config import project_paths
+    from tools.schema_loader import SchemaLoadError
+
     try:
-        return bool(json.loads(project_json.read_text(encoding="utf-8")).get("manual_gate_mode", False))
-    except (json.JSONDecodeError, OSError) as exc:
+        return bool(project_paths(Path(repo_root))["manual_gate_mode"])
+    except (SchemaLoadError, OSError, ValueError, KeyError) as exc:
         import sys
 
-        print(f"Warning: Failed to read project.json: {exc}", file=sys.stderr)
+        print(f"Warning: project.json manual_gate_mode unreadable ({repo_root}): {exc}", file=sys.stderr)
         return False
 
 
@@ -586,6 +588,21 @@ def _card_role_class(metadata: dict[str, Any], repo_root: Path | None) -> str | 
     return None
 
 
+def card_carries_gate_contract_section(metadata: dict[str, Any], repo_root: Path | None) -> bool:
+    """AIPOS-F80 件①: 「哪类卡带认领与交回节」的**唯一判据**(执行卡 / 派生审计卡 / 手动派审卡 / regen 同口径)。
+
+    - 角色类别经 roles 注册表解析(_card_role_class, 禁子串猜)为 executor / auditor 的卡 = 零门卡面:
+      不带「认领与交回」节、不带门动词提交配方(执行体/审计体只写产物, 认领与裁决提交由驱动方完成, Owner 09-06);
+    - 项目声明 manual_gate_mode=true(chris 形人肉 gate)= 两类卡都保留现行为;
+    - 其它角色(advisor/planner/…)或角色不可解析 = 保留(存量兼容方向)。
+    调用方: _append_gate_contract_section(发布追加)、publish 门动词校验、audit_derivation.build_derived_audit_task
+    (派生审计卡)、regen_machine_zone_for_pending(存量卡删节)。禁第二判据。
+    """
+    if _card_role_class(metadata, repo_root) not in ("executor", "auditor"):
+        return True
+    return _manual_gate_mode(repo_root)
+
+
 def _append_gate_contract_section(
     repo_root: Path, metadata: dict[str, Any], task_id: str, rendered_markdown: str
 ) -> str:
@@ -599,18 +616,14 @@ def _append_gate_contract_section(
     Old cards are not backfilled — only NEW publishes get it.
     
     AIPOS-F73件①: executor/auditor 卡面停止渲染门契约节 (代码保留仅供 manual 项目声明开启).
-    判据: assigned_to / agent_instance 包含 'exec' 或 'audit' → 跳过渲染.
+    判据 = card_carries_gate_contract_section(AIPOS-F80 唯一判据; roles 注册表解析角色类, 禁子串猜).
     """
     if "【认领与交回】" in rendered_markdown:
         return rendered_markdown  # idempotency: never double-append
     
-    # AIPOS-F73C件①: executor/auditor 角色停止渲染门契约节
-    # 角色判据:读 roles 注册表(name / naming.prefix / custom_roles), 禁子串猜。
-    # 顾问代修(Owner 2026-09-08 仲裁 C):两处判据共用 _card_role_class 一个实现。
-    is_executor_or_auditor = _card_role_class(metadata, repo_root) in ("executor", "auditor")
-
-    # executor/auditor 且项目未声明 manual gate → 零门卡面, 跳过渲染
-    if is_executor_or_auditor and not _manual_gate_mode(repo_root):
+    # AIPOS-F73C件① / F80 件①: executor/auditor 且项目未声明 manual gate → 零门卡面, 跳过渲染
+    # 判据唯一实现 card_carries_gate_contract_section(roles 注册表 + manual_gate_mode)。
+    if not card_carries_gate_contract_section(metadata, repo_root):
         return rendered_markdown
 
     from tools.aipos_cli.flow_description import resolve_collaboration_profile
@@ -881,9 +894,8 @@ def publish_draft(
         # load_roles_schema 且被 except/pass 吞掉, 判据从未生效)。
         # AIPOS-F78 前置零⑧(F79B 实撞: 裸正则 lybra_\w+ 扫整卡把 pol_lybra_dev_9 / governance_refs 里的动词键名当门动词拒):
         # 只匹配 verbs.schema 注册的 MCP 动词全名、整词、只扫意图面正文(body), 排除 frontmatter 的策略 id 与文档性引用。
-        is_executor_or_auditor = _card_role_class(publish_metadata, repo_root) in ("executor", "auditor")
-
-        if is_executor_or_auditor and not _manual_gate_mode(repo_root):
+        # AIPOS-F80 件①: 与渲染侧同一判据 card_carries_gate_contract_section(零门卡面 = 不得含门动词)。
+        if not card_carries_gate_contract_section(publish_metadata, repo_root):
             lybra_verbs = find_gate_verbs_in_intent_body(body)
             if lybra_verbs:
                 validation["blocking_reasons"].append(
@@ -1074,21 +1086,25 @@ def regen_machine_zone_for_pending(
             
             # 重新派生机器纪律段 (三口一函数: 唯一派生源)
             try:
-                # F76-R2: governance_root for path resolution, product_root for schema reading
-                new_discipline_section = derive_machine_zone_纪律段(
-                    card_task_id, metadata, governance_root=governance_root, product_root=product_root
-                )
-                
-                # AIPOS-F73C返工⑤: 删除存量卡的「认领与交回」节 (新卡不再生成)
+                # AIPOS-F73C返工⑤ / F80 件①: 存量卡零门收口(新卡不再生成)——判据唯一 card_carries_gate_contract_section
+                # (manual_gate_mode 项目保留现行为); 派生审计卡另收口门动词配方节与报告落位句(audit_derivation 单源)。
                 import re
-                if "【认领与交回】" in body:
-                    # 匹配从 "【认领与交回】" 到下一个 "##" 或文末
-                    gate_section_pattern = r"## 【认领与交回】.*?(?=\n## |\Z)"
-                    body_without_gate = re.sub(gate_section_pattern, "", body, flags=re.DOTALL)
+                if not card_carries_gate_contract_section(metadata, governance_root):
+                    from tools.aipos_cli.audit_derivation import zero_gate_audit_body
+
+                    body_without_gate = re.sub(r"## 【认领与交回】.*?(?=\n## |\Z)", "", body, flags=re.DOTALL)
+                    if str(metadata.get("task_mode") or "").strip().lower() == "audit":
+                        body_without_gate = zero_gate_audit_body(body_without_gate, governance_root, card_task_id)
                     if body_without_gate != body:
                         amendments["body"] = body_without_gate
                         body = body_without_gate
-                
+
+                # F76-R2: governance_root for path resolution, product_root for schema reading
+                # (AIPOS-F80: 派生移到零门收口之后——纪律段派生失败不再连带跳过存量卡删节)
+                new_discipline_section = derive_machine_zone_纪律段(
+                    card_task_id, metadata, governance_root=governance_root, product_root=product_root
+                )
+
                 # 查找 body 中是否有旧的纪律段
                 if "## 工作纪律" in body:
                     # 已有节: 替换

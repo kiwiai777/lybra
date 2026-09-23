@@ -61,7 +61,24 @@ class TestAuditInstructions(unittest.TestCase):
         # honest reporting red line
         self.assertIn("如实报红线", body)
 
-    def test_r_card_carries_auditor_contract_section_when_repo_root(self):
+    def test_r_card_zero_gate_no_contract_section_when_repo_root(self):
+        """AIPOS-F80 件①: 审计体零门——派生审计卡不带「认领与交回」节、无门动词, 落点句出自单源渲染函数。"""
+        result = build_derived_audit_task(
+            source_task_id="AIPOS-200", source_metadata=_src_meta(),
+            source_path="5_tasks/queue/claimed/aipos-200.md",
+            return_record_ref="return_x", artifact_refs=[],
+            collaboration_profile={"code_enabled": True, "deploy_gate_enabled": False, "default_audit_mode": "agent"},
+            repo_root=self.repo_root,
+        )
+        body = result["body"]
+        self.assertNotIn("【认领与交回】", body)
+        for verb in ("lybra_queue_claim", "lybra_audit_verdict", "lybra_task_progress", "records/audit_verdicts"):
+            self.assertNotIn(verb, body)
+        self.assertIn(f"报告写到 `{self.repo_root}/task_cards/AIPOS-200R/RETURN.md`, 写完即止, 认领与裁决提交由驱动方完成。", body)
+
+    def test_r_card_carries_auditor_contract_section_when_manual_gate_mode(self):
+        """AIPOS-F80 件①回归: manual_gate_mode 项目(chris 形)审计卡仍保留该节(同一判据)。"""
+        (self.repo_root / "project.json").write_text('{"project": "lybra", "manual_gate_mode": true}', encoding="utf-8")
         result = build_derived_audit_task(
             source_task_id="AIPOS-200", source_metadata=_src_meta(),
             source_path="5_tasks/queue/claimed/aipos-200.md",
