@@ -1304,8 +1304,11 @@ def build_parser() -> argparse.ArgumentParser:
     queue_subparsers = queue_parser.add_subparsers(dest="queue_command")
     queue_parser.add_argument("--json", action="store_true", help="Output JSON")
 
-    sync_parser = subparsers.add_parser("sync", help="AIPOS-C4B: worker-initiated distribution pull (lybra sync)")
-    sync_parser.add_argument("--harness-root", default=None, help="Harness root (REQUIRED: no cwd guessing; fallback env LYBRA_HARNESS_ROOT)")
+    sync_parser = subparsers.add_parser("sync", help="AIPOS-C4B: worker-initiated distribution pull (lybra sync); AIPOS-F66B: 按工位项目归属过滤 + 章程声明渲染 + --dry-run")
+    sync_parser.add_argument("--harness-root", default=None, help="Harness root: 工位根或工位父根(逐工位按项目归属过滤)(REQUIRED: no cwd guessing; fallback env LYBRA_HARNESS_ROOT)")
+    sync_parser.add_argument("--workspace-root", default=None, help="AIPOS-F66B: 治理根(project.json): 定 sync 项目范围 + 章程渲染声明; 多工位必给(或 --project)")
+    sync_parser.add_argument("--project", default=None, help="AIPOS-F66B: sync 项目范围(非本项目工位跳过并在 manifest 记 skipped)")
+    sync_parser.add_argument("--dry-run", action="store_true", help="AIPOS-F66B: 零写入, 列 would-fetch/would-render/would-prune/skipped")
     sync_parser.add_argument("--gate-url", default=None, help="Gate MCP URL (auto from .lybra if omitted)")
     sync_parser.add_argument("--token", default=None, help="Bearer token (auto from .lybra connection.json if omitted)")
     sync_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -4878,31 +4881,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "sync":
         # AIPOS-C4B 大项A③: lybra sync — 工位发起 pull, 对比清单并拉差异落盘
-        from tools.aipos_cli.distribution_sync import sync as run_sync
-        from pathlib import Path as _Path
-        try:
-            result = run_sync(
-                harness_root=_Path(args.harness_root) if args.harness_root else None,
-                gate_url=args.gate_url,
-                token=args.token,
-            )
-        except Exception as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            return 1
-        if args.json:
-            print(render_json(result))
-        else:
-            if result.get("ok"):
-                print(f"sync ok · role={result['role']} · product_commit={result['product_commit']}")
-                print(f"  harness: {result['harness_root']}")
-                print(f"  distributions checked: {result['distributions_checked']}, files fetched: {result['files_fetched']}")
-                for c in result.get("changes", []):
-                    print(f"  - {c['distribution_id']}: {c['files_written']} file(s) → {c['target_path']}")
-                print(f"  manifest: {result['manifest_path']}")
-                print("  下一步: /reload 让新扩展/技能生效")
-            else:
-                print(f"sync failed: {result.get('error')}")
-        return 0 if result.get("ok") else 1
+        # AIPOS-F66B 件①: 薄壳 — 工位项目归属过滤 / 章程声明渲染 / dry-run 全在 distribution_sync.run_sync_cli
+        from tools.aipos_cli.distribution_sync import run_sync_cli
+
+        return run_sync_cli(args)
 
     if args.command == "my-tasks":
         actor_report = _filter_my_tasks(report, args.actor, profiles)

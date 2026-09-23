@@ -362,6 +362,23 @@ def add_host_segment_alias(
 # S1: Canonical name generation
 # ---------------------------------------------------------------------------
 
+def parse_instance_name(name: str) -> dict[str, str] | None:
+    """AIPOS-F66B 件①: 实例名 → 段的**唯一解析**(与 generate/default_instance_name 同一注册表模板)。
+
+    模板读 roles.schema naming.template(`{prefix}.{project}.{host}`): 段名来自模板, 段数必须严格相等。
+    返回 {"prefix": ..., "project": ..., "host": ...}; 形不合(段数不对/空段)= None(调用方出声, 禁猜)。
+    工位项目归属(.lybra/role instance 的 project 段)、分发按项目过滤、validate_instance_name 的切分都经此。
+    """
+    from tools.schema_loader import get_role_naming_template
+
+    template = get_role_naming_template()
+    seg_names = [seg.strip("{}") for seg in template.split(".")]
+    parts = str(name or "").strip().split(".")
+    if len(parts) != len(seg_names) or any(not p.strip() for p in parts):
+        return None
+    return dict(zip(seg_names, parts))
+
+
 def generate_canonical_name(
     role: str,
     project_root: str | Path,
@@ -475,11 +492,11 @@ def validate_instance_name(
     if not name or not name.strip():
         return False, "Instance name cannot be empty"
 
-    parts = name.split(".")
-    if len(parts) != 3:
-        return False, f"Instance name must have 3 parts (<role>.<project>.<machine>), got {len(parts)}: {name}"
+    parsed = parse_instance_name(name)  # AIPOS-F66B: 切分与项目归属同一解析
+    if parsed is None:
+        return False, f"Instance name must have 3 parts (<role>.<project>.<machine>), got {len(name.split('.'))}: {name}"
 
-    role_part, project_part, machine_part = parts
+    role_part, project_part, machine_part = parsed["prefix"], parsed["project"], parsed["host"]
 
     # Resolve profile: workspace-aware or format-only default
     if project_root is not None:

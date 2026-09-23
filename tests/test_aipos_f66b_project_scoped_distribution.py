@@ -348,3 +348,250 @@ def test_item2_cli_write_boundary_json_and_check_exit_codes(tmp_path, monkeypatc
     rc = main(["roles", "--workspace-root", str(gov), "write-boundary", "--role", "auditor", "--markdown"])
     md = capsys.readouterr().out
     assert rc == 0 and md.startswith("## 🔴 写权限边界") and "no_retry_after_deny" in md
+
+
+# ===========================================================================
+# 件① 分发按工位项目归属过滤 + 章程 = 声明渲染物
+# ===========================================================================
+
+MASTER_V1 = "# 角色: executor 章程 v1\n\n- 治理根只读: {{governance_root}}\n- 产品仓: {{code_repo}}\n- 门: {{gate_url}}\n"
+MASTER_V2 = MASTER_V1 + "\n## 新增: 你不接触门\n"
+SKILL_MD = "# block-and-report\n"
+
+
+def _workstation(parent: Path, name: str, *, role: str, instance: str, gov: Path, project: str, charter_text: str) -> Path:
+    ws = parent / name
+    _write(ws / ".lybra" / "role", json.dumps({"role": role, "instance": instance, "owner_policy_ref": "pol_x"}))
+    _write(ws / ".lybra" / "connection.json", json.dumps({
+        "config_version": 1, "mcp": {"rpc_url": "http://127.0.0.1:7999/mcp"}, "governance_root": str(gov),
+        "workspace_root": str(gov), "tokens": [_synthetic_token(role, "executor", project) | {"agent_instance": instance}],
+    }))
+    _write(ws / "AGENTS.md", charter_text)
+    return ws
+
+
+class FakeGate:
+    """假门: 按 token 记调用; manifest 按角色给; fetch 按母本给。真门动词名沿用(工位发起 pull, 门被动)。"""
+    masters: dict[str, str] = {}
+    skills: dict[str, str] = {}
+    calls: list[tuple[str, str]] = []
+
+    def __init__(self, base_url: str, token: str, **_: object) -> None:
+        self.token = token
+
+    def initialize(self) -> None:
+        FakeGate.calls.append((self.token, "initialize"))
+
+    @classmethod
+    def _remote(cls, role: str) -> dict:
+        return {
+            "ok": True, "role": role, "product_commit": "abc123abc123", "harness": "pi",
+            "distributions": [
+                {"distribution_id": f"{role}-charter", "kind": "charter", "source_commit": "abc123abc123", "source_is_file": True,
+                 "target_base": "harness_root", "target_path": "AGENTS.md",
+                 "files": [{"path": "AGENTS.md", "sha256": _sha(cls.masters[role].encode()), "size": 1}]},
+                {"distribution_id": f"{role}-skills", "kind": "skills", "source_commit": "abc123abc123", "source_is_file": False,
+                 "target_base": "harness_parent", "target_path": "_distributed/skills",
+                 "files": [{"path": p, "sha256": _sha(c.encode()), "size": len(c)} for p, c in sorted(cls.skills.items())]},
+            ],
+        }
+
+    def call_tool(self, name: str, args: dict) -> dict:
+        FakeGate.calls.append((self.token, name))
+        role = "executor" if "executor" in self.token else "hbj-coder"
+        if name == "lybra_distribution_manifest":
+            return self._remote(role)
+        if name == "lybra_distribution_fetch":
+            files = []
+            for rel in args["paths"]:
+                content = self.masters[role] if args["distribution_id"].endswith("-charter") else self.skills[rel]
+                files.append({"path": rel, "content_b64": base64.b64encode(content.encode()).decode()})
+            return {"ok": True, "distribution_id": args["distribution_id"], "files": files}
+        raise AssertionError(f"unexpected verb {name}")
+
+
+@pytest.fixture
+def rig(tmp_path, monkeypatch):
+    """两治理根(lybra 形 + chris 形)+ 一个工位父根: lybra-executor(lybra) 与 hbj-coder(chris-huibojin)。"""
+    from tools.aipos_cli import confirm_client
+
+    gov_l = _make_gov(tmp_path, monkeypatch, shape="lybra", project="lybra")
+    gov_c = _make_gov(tmp_path, monkeypatch, shape="chris", project="chris-huibojin")
+    # 真实拓扑: 自定义角色 hbj-coder 登记在 lybra 门注册表(home 下 lybra 工作区 connection.json), chris 工作区无自家注册表
+    _seed_gate_registry(gov_l, [_synthetic_token("hbj-coder", "executor", "chris-huibojin")])
+    parent = tmp_path / "kiwiai-pi"
+    ws_l = _workstation(parent, "lybra-executor", role="executor", instance=EXEC, gov=gov_l, project="lybra", charter_text="# lybra 旧副本(seed_only 时代)\n")
+    ws_c = _workstation(parent, "hbj-coder", role="hbj-coder", instance=CHRIS_EXEC, gov=gov_c, project="chris-huibojin", charter_text="# chris 自家 coder 章程(禁被 lybra 覆盖)\n")
+    (parent / "_shared").mkdir()
+    FakeGate.masters = {"executor": MASTER_V1, "hbj-coder": "# hbj-coder 章程 {{project}}\n"}
+    FakeGate.skills = {"block-and-report/SKILL.md": SKILL_MD}
+    FakeGate.calls = []
+    monkeypatch.setattr(confirm_client, "GateClient", FakeGate)
+    monkeypatch.delenv("LYBRA_HARNESS_ROOT", raising=False)
+    return {"gov_l": gov_l, "gov_c": gov_c, "parent": parent, "ws_l": ws_l, "ws_c": ws_c}
+
+
+def _md5(path: Path) -> str:
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+
+def test_item1_multi_sync_skips_foreign_workstation_bytes_unchanged(rig):
+    """靶场: 工位父根下放一个他项目工位, 以 lybra 范围 sync → 他项目 AGENTS.md 字节不变、manifest 记 skipped、其 token 未连门;
+    本项目工位章程 = 母本渲染物(母本正文 + 项目声明尾节 + 写权限边界节), manifest 记三指纹 + 工位归属。"""
+    from tools.aipos_cli import distribution_sync as ds
+
+    foreign_before = _md5(rig["ws_c"] / "AGENTS.md")
+    run = ds.sync_many(rig["parent"], governance_root=rig["gov_l"])
+    assert run["ok"] and run["mode"] == "multi" and run["scope_project"] == "lybra"
+    by = {Path(e["harness_root"]).name: e for e in run["workstations"]}
+    assert by["hbj-coder"]["status"] == "skipped" and "非本项目工位" in by["hbj-coder"]["reason"]
+    assert by["lybra-executor"]["status"] == "synced"
+    assert _md5(rig["ws_c"] / "AGENTS.md") == foreign_before  # 他项目工位字节不变
+    assert not any("hbj-coder" in tok for tok, _ in FakeGate.calls)  # 跳过 = 未连门
+    # 运行清单记 skipped
+    run_manifest = json.loads((rig["parent"] / "_distributed" / ds.SYNC_RUN_MANIFEST).read_text())
+    assert [w["status"] for w in run_manifest["workstations"]] == ["skipped", "synced"] or sorted(w["status"] for w in run_manifest["workstations"]) == ["skipped", "synced"]
+    assert any(w["status"] == "skipped" and w["workstation"]["project"] == "chris-huibojin" for w in run_manifest["workstations"])
+    # 本项目工位: 渲染物
+    text = (rig["ws_l"] / "AGENTS.md").read_text()
+    assert text.startswith("# 角色: executor 章程 v1")
+    assert f"- 治理根只读: {rig['gov_l']}" in text and "{{" not in text
+    assert "## 项目声明(声明渲染, AIPOS-F66B 件①)" in text and "no_retry_after_deny" in text
+    assert f"`{rig['gov_l'] / 'task_cards'}/<卡ID>/`" in text
+    assert "<!-- lybra:charter-render master_sha256=" in text
+    assert "fixture-not-a-secret" not in text
+    manifest = json.loads((rig["parent"] / "_distributed" / ".version-executor").read_text())
+    charter = next(d for d in manifest["distributions"] if d["kind"] == "charter")
+    assert charter["rendered"] is True and charter["files"][0]["rendered_sha256"] == _sha(text.encode())
+    assert charter["files"][0]["sha256"] == _sha(MASTER_V1.encode()) and charter["files"][0]["render_context_sha256"]
+    assert manifest["workstation"] == {"instance": EXEC, "project": "lybra", "role": "executor", "harness_root": str(rig["ws_l"])}
+    assert (rig["parent"] / "_distributed" / "skills" / "block-and-report" / "SKILL.md").read_text() == SKILL_MD
+    res = by["lybra-executor"]["result"]
+    assert [g["reason"] for g in res["declaration_gaps"]] == ["unrendered(无渲染指纹: seed_only 时代副本或首次渲染)"]
+    assert "seed_only 时代" in res["declaration_gaps"][0]["diff"]
+    assert "fixture-not-a-secret" not in json.dumps(run, ensure_ascii=False)
+
+
+def test_item1_multi_sync_requires_explicit_scope(rig):
+    from tools.aipos_cli import distribution_sync as ds
+
+    with pytest.raises(ValueError, match="多工位 sync 必须显式项目范围"):
+        ds.sync_many(rig["parent"])
+    empty = rig["parent"].parent / "empty"
+    empty.mkdir()
+    with pytest.raises(ValueError, match="工位父根"):
+        ds.sync_many(empty)  # 既非工位也无子工位
+
+
+def test_item1_single_workstation_defaults_to_own_project_and_chris_declaration(rig):
+    """单工位 sync 缺省范围 = 工位自身项目(hbj-coder → chris-huibojin), 章程按 chris 形声明渲染; 显式 --project lybra 则跳过。"""
+    from tools.aipos_cli import distribution_sync as ds
+
+    run = ds.sync_many(rig["ws_c"])
+    assert run["ok"] and run["mode"] == "single" and run["scope_project"] == "chris-huibojin"
+    e = run["workstations"][0]
+    assert e["status"] == "synced" and e["result"]["governance_root"] == str(rig["gov_c"])
+    text = (rig["ws_c"] / "AGENTS.md").read_text()
+    assert text.startswith("# hbj-coder 章程 chris-huibojin\n")
+    assert f"`{rig['gov_c'] / '5_tasks' / 'records' / 'returns'}/<卡ID>/`" in text  # chris 形落点声明进章程
+    assert "角色 `hbj-coder`(类 `executor`)" in text
+    before = _md5(rig["ws_c"] / "AGENTS.md")
+    run2 = ds.sync_many(rig["ws_c"], project="lybra")
+    assert run2["workstations"][0]["status"] == "skipped" and _md5(rig["ws_c"] / "AGENTS.md") == before
+
+
+def test_item1_charter_rerenders_on_master_or_declaration_change_and_reports_local_edit(rig):
+    """更新语义: 同输入二次 sync 零拉取; 母本变 → 重渲染; 工位本地改动 → 声明缺口(报 diff + 覆盖); 声明变 → 重渲染。"""
+    from tools.aipos_cli import distribution_sync as ds
+
+    ws, gov = rig["ws_l"], rig["gov_l"]
+    first = ds.sync(harness_root=ws, governance_root=gov)
+    assert first["status"] == "synced" and first["files_fetched"] == 2
+    second = ds.sync(harness_root=ws, governance_root=gov)
+    assert second["files_fetched"] == 0 and second["plan"] == [] and second["declaration_gaps"] == []
+    manifest_after_second = json.loads((rig["parent"] / "_distributed" / ".version-executor").read_text())
+    assert next(d for d in manifest_after_second["distributions"] if d["kind"] == "charter")["files"][0]["rendered_sha256"]  # 指纹沿用不丢
+    # 母本变(F73C「你不接触门」到得了工位)
+    FakeGate.masters["executor"] = MASTER_V2
+    third = ds.sync(harness_root=ws, governance_root=gov)
+    assert [c["action"] for c in third["changes"]] == ["rendered"] and third["changes"][0]["reasons"] == {"AGENTS.md": "master_changed(母本变)"}
+    assert "## 新增: 你不接触门" in (ws / "AGENTS.md").read_text() and third["declaration_gaps"] == []
+    # 工位本地改动 = 声明缺口: 报 diff + 覆盖
+    local = (ws / "AGENTS.md").read_text() + "\n- 我私自加的一条\n"
+    (ws / "AGENTS.md").write_text(local)
+    fourth = ds.sync(harness_root=ws, governance_root=gov)
+    assert fourth["changes"][0]["reasons"] == {"AGENTS.md": "local_edit(工位本地改动 = 声明缺口, 将覆盖并报 diff)"}
+    assert len(fourth["declaration_gaps"]) == 1 and "+- 我私自加的一条" in fourth["declaration_gaps"][0]["diff"]
+    assert "我私自加的一条" not in (ws / "AGENTS.md").read_text()
+    # 声明变(project.json paths)→ 重渲染
+    decl = json.loads((gov / "project.json").read_text())
+    decl["paths"] = {"return_root": "5_tasks/records/returns"}
+    _write(gov / "project.json", json.dumps(decl))
+    fifth = ds.sync(harness_root=ws, governance_root=gov)
+    assert fifth["changes"][0]["reasons"] == {"AGENTS.md": "declaration_changed(项目/角色声明变)"}
+    assert f"`{gov / '5_tasks' / 'records' / 'returns'}/<卡ID>/`" in (ws / "AGENTS.md").read_text()
+
+
+def test_item1_dry_run_writes_nothing_and_lists_would_render(rig, capsys):
+    """--dry-run: 零写入, 列 would-render/would-fetch/skipped; 文本面与 JSON 面同源。"""
+    from tools.aipos_cli.aipos_cli import main
+    from tools.aipos_cli import distribution_sync as ds
+
+    snapshot = {p: _md5(p) for p in rig["parent"].rglob("*") if p.is_file()}
+    run = ds.sync_many(rig["parent"], governance_root=rig["gov_l"], dry_run=True)
+    assert run["ok"] and run["dry_run"] is True
+    by = {Path(e["harness_root"]).name: e for e in run["workstations"]}
+    assert by["hbj-coder"]["status"] == "skipped" and by["lybra-executor"]["status"] == "dry-run"
+    plan = {p["distribution_id"]: p for p in by["lybra-executor"]["result"]["plan"]}
+    assert plan["executor-charter"]["action"] == "would-render" and plan["executor-skills"]["action"] == "would-fetch"
+    assert {p: _md5(p) for p in rig["parent"].rglob("*") if p.is_file()} == snapshot  # 零写入
+    assert not (rig["parent"] / "_distributed" / ds.SYNC_RUN_MANIFEST).exists()
+    rc = main(["sync", "--harness-root", str(rig["parent"]), "--workspace-root", str(rig["gov_l"]), "--dry-run"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "hbj-coder: skipped" in out and "lybra-executor: dry-run" in out and "would-render: executor-charter" in out
+    assert "fixture-not-a-secret" not in out
+    assert {p: _md5(p) for p in rig["parent"].rglob("*") if p.is_file()} == snapshot
+
+
+def test_item1_push_engine_same_ownership_rule_and_rendered_charter(rig, monkeypatch):
+    """推送侧 distribute_tools 同规则: 他项目工位跳过零写入; 角色不符拒; 本项目工位章程渲染 + manifest 三指纹 + 工位归属。"""
+    import tools.distribute_tools as dt
+
+    foreign_before = _md5(rig["ws_c"] / "AGENTS.md")
+    skipped = dt.distribute_to_harness(rig["ws_c"], "hbj-coder", project="lybra")
+    assert skipped["ok"] and skipped["skipped_workstation"] and skipped["distributed"] == [] and _md5(rig["ws_c"] / "AGENTS.md") == foreign_before
+    with pytest.raises(ValueError, match="拒绝分发"):
+        dt.distribute_to_harness(rig["ws_c"], "executor")
+    with pytest.raises(dt.WorkstationIdentityError if hasattr(dt, "WorkstationIdentityError") else ValueError):
+        dt.distribute_to_harness(rig["parent"], "executor")  # 父根不是工位
+    result = dt.distribute_to_harness(rig["ws_l"], "executor", governance_root=rig["gov_l"])
+    assert result["ok"] and result["workstation"]["project"] == "lybra" and result["governance_root"] == str(rig["gov_l"])
+    assert any(item.startswith("executor-charter (charter, rendered)") for item in result["distributed"])
+    text = (rig["ws_l"] / "AGENTS.md").read_text()
+    master = (REPO_ROOT / "agents" / "roles" / "executor" / "AGENTS.md").read_text()
+    assert text.startswith(master.rstrip("\n")) and "## 项目声明(声明渲染, AIPOS-F66B 件①)" in text
+    assert result["declaration_gaps"] and result["declaration_gaps"][0]["distribution_id"] == "executor-charter"
+    manifest = json.loads((rig["parent"] / "_distributed" / ".version-executor").read_text())
+    charter = next(d for d in manifest["distributions"] if d["kind"] == "charter")
+    assert charter["rendered"] and charter["files"][0]["rendered_sha256"] == _sha(text.encode()) and manifest["workstation"]["instance"] == EXEC
+    again = dt.distribute_to_harness(rig["ws_l"], "executor", governance_root=rig["gov_l"], force=True)
+    assert any(item.startswith("executor-charter (charter, unchanged)") for item in again["distributed"]) and again["declaration_gaps"] == []
+
+
+def test_item1_single_implementation_and_declarations():
+    """单一实现: sync 与 distribute_tools 都经 charter_render.render_charter; 工位归属经 charter_render.workstation_identity;
+    distribution.schema charter 条目 = render_charter 且无 seed_only; distribution_sync 无吞异常。"""
+    sync_src = (REPO_ROOT / "tools/aipos_cli/distribution_sync.py").read_text(encoding="utf-8")
+    push_src = (REPO_ROOT / "tools/distribute_tools.py").read_text(encoding="utf-8")
+    for src in (sync_src, push_src):
+        assert "render_charter" in src and "workstation_identity" in src and "seed_only_skip" not in src
+    assert not re.search(r"except Exception:\s*\n\s*pass", sync_src) and "except Exception:" not in sync_src
+    schema = json.loads((REPO_ROOT / "schema/distribution.schema.json").read_text(encoding="utf-8"))
+    assert "seed_only_semantics" not in schema and "charter_render_semantics" in schema and "workstation_ownership_semantics" in schema
+    for dist in schema["distributions"]:
+        if dist["kind"] == "charter":
+            assert dist["operation"] == "render_charter" and "seed_only" not in dist
+    from tools.aipos_cli.naming_profile import parse_instance_name
+
+    assert parse_instance_name("hbj-coder.chris-huibojin.kiwiai-dev") == {"prefix": "hbj-coder", "project": "chris-huibojin", "host": "kiwiai-dev"}
+    assert parse_instance_name("bad") is None and parse_instance_name("a..b") is None
