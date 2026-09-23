@@ -1304,8 +1304,11 @@ def build_parser() -> argparse.ArgumentParser:
     queue_subparsers = queue_parser.add_subparsers(dest="queue_command")
     queue_parser.add_argument("--json", action="store_true", help="Output JSON")
 
-    sync_parser = subparsers.add_parser("sync", help="AIPOS-C4B: worker-initiated distribution pull (lybra sync)")
-    sync_parser.add_argument("--harness-root", default=None, help="Harness root (REQUIRED: no cwd guessing; fallback env LYBRA_HARNESS_ROOT)")
+    sync_parser = subparsers.add_parser("sync", help="AIPOS-C4B: worker-initiated distribution pull (lybra sync); AIPOS-F66B: 按工位项目归属过滤 + 章程声明渲染 + --dry-run")
+    sync_parser.add_argument("--harness-root", default=None, help="Harness root: 工位根或工位父根(逐工位按项目归属过滤)(REQUIRED: no cwd guessing; fallback env LYBRA_HARNESS_ROOT)")
+    sync_parser.add_argument("--workspace-root", default=None, help="AIPOS-F66B: 治理根(project.json): 定 sync 项目范围 + 章程渲染声明; 多工位必给(或 --project)")
+    sync_parser.add_argument("--project", default=None, help="AIPOS-F66B: sync 项目范围(非本项目工位跳过并在 manifest 记 skipped)")
+    sync_parser.add_argument("--dry-run", action="store_true", help="AIPOS-F66B: 零写入, 列 would-fetch/would-render/would-prune/skipped")
     sync_parser.add_argument("--gate-url", default=None, help="Gate MCP URL (auto from .lybra if omitted)")
     sync_parser.add_argument("--token", default=None, help="Bearer token (auto from .lybra connection.json if omitted)")
     sync_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1676,6 +1679,17 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_list_parser = roles_subparsers.add_parser("enroll-list", help="AIPOS-362: list enrollment codes")
     roles_enroll_list_parser.add_argument("--json", action="store_true", help="Output JSON")
     
+    # AIPOS-F66B 件②: 写权限边界可读面 + 读取口(护栏读声明; 单源 roles.schema write_boundary)
+    roles_wb_parser = roles_subparsers.add_parser("write-boundary", help="AIPOS-F66B: 写权限边界可读面(角色类 × 面 × read/append/mutate, 读 roles.schema write_boundary)与单次访问判定(--check)")
+    roles_wb_parser.add_argument("--role", help="只出该角色行(内建或门注册表自定义角色, 按类展开)")
+    roles_wb_parser.add_argument("--instance", help="按 enrollment 记录的实例反查角色")
+    roles_wb_parser.add_argument("--harness-root", help="工位根(解析 harness_root 面; 缺省不列)")
+    roles_wb_parser.add_argument("--check", metavar="PATH", help="判一次访问: 路径(绝对或相对治理根)")
+    roles_wb_parser.add_argument("--level", choices=["read", "append", "mutate"], default="read", help="--check 的请求级别(缺省 read)")
+    roles_wb_parser.add_argument("--task-id", help="--check 的卡 ID(per_task 面 / product_repo lane 判定需要)")
+    roles_wb_parser.add_argument("--markdown", action="store_true", help="输出章程渲染节(需 --role)")
+    roles_wb_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     # AIPOS-R2: enroll command (client-side enrollment: exchange code + write .lybra/ config)
     roles_enroll_parser = roles_subparsers.add_parser("enroll", help="AIPOS-R2/F23: enroll this workstation (exchange enrollment code + write .lybra/ config). Self-contained code carries gate URL; run from the workstation directory")
     roles_enroll_parser.add_argument("--code", required=True, help="Enrollment code (self-contained LYBRAENROLL1.* from owner/advisor, or legacy plain code)")
@@ -2518,6 +2532,11 @@ def main(argv: list[str] | None = None) -> int:
                 conn_override = getattr(args, "connection_json", None)
                 connection_target = Path(conn_override).expanduser() if conn_override else None
                 workspace_root = _resolve_workspace_for_command(args)
+            if args.roles_command == "write-boundary":
+                # AIPOS-F66B 件②: 薄壳, 全部逻辑在 write_boundary(唯一读取口)
+                from tools.aipos_cli.write_boundary import run_write_boundary_cli
+
+                return run_write_boundary_cli(args, Path(workspace_root))
             if args.roles_command == "list":
                 result = roles_list_report(workspace_root, connection_target=connection_target)
                 if getattr(args, "json", False):
@@ -4862,31 +4881,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "sync":
         # AIPOS-C4B 大项A③: lybra sync — 工位发起 pull, 对比清单并拉差异落盘
-        from tools.aipos_cli.distribution_sync import sync as run_sync
-        from pathlib import Path as _Path
-        try:
-            result = run_sync(
-                harness_root=_Path(args.harness_root) if args.harness_root else None,
-                gate_url=args.gate_url,
-                token=args.token,
-            )
-        except Exception as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            return 1
-        if args.json:
-            print(render_json(result))
-        else:
-            if result.get("ok"):
-                print(f"sync ok · role={result['role']} · product_commit={result['product_commit']}")
-                print(f"  harness: {result['harness_root']}")
-                print(f"  distributions checked: {result['distributions_checked']}, files fetched: {result['files_fetched']}")
-                for c in result.get("changes", []):
-                    print(f"  - {c['distribution_id']}: {c['files_written']} file(s) → {c['target_path']}")
-                print(f"  manifest: {result['manifest_path']}")
-                print("  下一步: /reload 让新扩展/技能生效")
-            else:
-                print(f"sync failed: {result.get('error')}")
-        return 0 if result.get("ok") else 1
+        # AIPOS-F66B 件①: 薄壳 — 工位项目归属过滤 / 章程声明渲染 / dry-run 全在 distribution_sync.run_sync_cli
+        from tools.aipos_cli.distribution_sync import run_sync_cli
+
+        return run_sync_cli(args)
 
     if args.command == "my-tasks":
         actor_report = _filter_my_tasks(report, args.actor, profiles)

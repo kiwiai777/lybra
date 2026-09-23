@@ -1,8 +1,8 @@
 """AIPOS-F27 回归夹具: 分发与落盘两案修真
 
 验收断言覆盖:
-- 大项A: charter 只播种不覆盖(seed_only) — 目标已存在→跳过+出声(含差异指纹);
-         不存在→播种;--force 也不覆盖 charter
+- 大项A(AIPOS-F66B 改写): charter = 声明渲染物 — 不存在→渲染写入; 已存在且≠渲染物→覆盖+声明缺口 diff;
+         渲染上下文缺→拒(seed_only 退役)
 - 大项B: enroll 从任意 cwd 执行:.lybra 落 cwd、部署树零新增;
          输出落点字符串与实际路径 assert 相等
 - 大项C: 两夹具入 run-all 常驻(本文件即为常驻夹具)
@@ -37,97 +37,80 @@ from tools.distribute_tools import (
 
 
 # ==============================================================================
-# 大项A: charter 只播种不覆盖 (seed_only)
+# 大项A: charter = 声明渲染物 (AIPOS-F66B, seed_only 退役)
 # ==============================================================================
 
-class TestCharterSeedOnly:
-    """验收断言①: charter 分发:目标已存在→跳过+出声(含双方内容指纹);不存在→播种"""
+class TestCharterRendered:
+    """AIPOS-F66B 件①(取代 F27 大项A seed_only): charter = 声明渲染物——目标不存在 → 渲染写入;
+    已存在且 ≠ 渲染物 → 覆盖 + 声明缺口 diff(--force 无关); 已存在 == 渲染物 → unchanged 零写; 渲染上下文缺 → 拒(不裸拷贝)。"""
 
-    def test_charter_seeds_when_target_absent(self, tmp_path):
-        """charter 目标不存在 → 正常播种"""
-        # 准备源文件
-        source_dir = tmp_path / "source"
-        source_dir.mkdir()
-        charter_src = source_dir / "AGENTS.md"
-        charter_src.write_text("# Executor Charter v1\nRole: executor\n", encoding="utf-8")
+    def _rig(self, tmp_path):
+        from tools.aipos_cli.charter_render import charter_render_context, workstation_identity
 
-        # 准备目标目录(harness root)
-        harness_root = tmp_path / "harness"
-        harness_root.mkdir()
+        gov = tmp_path / "gov"
+        (gov / "5_tasks" / "queue" / "pending").mkdir(parents=True)
+        (gov / "project.json").write_text(json.dumps({"project": "fx", "code_repo": str(tmp_path / "product")}), encoding="utf-8")
+        harness = tmp_path / "harness"
+        (harness / ".lybra").mkdir(parents=True)
+        (harness / ".lybra" / "role").write_text(json.dumps({"role": "executor", "instance": "exec.fx.test"}), encoding="utf-8")
+        identity = workstation_identity(harness)
+        return gov, harness, charter_render_context(gov, identity=identity, product_commit="deadbeef")
 
-        dist = {
+    def _dist(self, charter_src):
+        return {
             "distribution_id": "test-charter",
             "kind": "charter",
             "source": {"path": str(charter_src)},
             "target": {"harness": "pi", "relative_path": "AGENTS.md"},
             "applies_to_roles": ["executor"],
-            "operation": "copy_tree",
-            "seed_only": True,
+            "operation": "render_charter",
         }
 
-        # 直接测 _primitive_copy_tree + seed_only 逻辑
-        target_path = harness_root / "AGENTS.md"
-        assert not target_path.exists()
+    def test_charter_renders_when_target_absent(self, tmp_path):
+        """charter 目标不存在 → 渲染写入(母本正文 + 项目声明尾节 + 写权限边界节)"""
+        gov, harness, ctx = self._rig(tmp_path)
+        charter_src = tmp_path / "AGENTS.md"
+        charter_src.write_text("# Executor Charter v1\nRole: executor, repo {{code_repo}}\n", encoding="utf-8")
+        result = execute_distribution(self._dist(charter_src), harness, version="deadbeef", render_context=ctx)
+        assert result["ok"] is True and result["action"] == "render_charter" and result["written"] is True
+        text = (harness / "AGENTS.md").read_text(encoding="utf-8")
+        assert text.startswith("# Executor Charter v1\nRole: executor, repo " + str(tmp_path / "product"))
+        assert "## 项目声明(声明渲染, AIPOS-F66B 件①)" in text and "no_retry_after_deny" in text
+        assert set(result["fingerprints"]) == {"source_sha256", "render_context_sha256", "rendered_sha256"}
 
-        result = _primitive_copy_tree(charter_src, target_path)
-        assert result["ok"] is True
-        assert target_path.exists()
-        assert target_path.read_text() == "# Executor Charter v1\nRole: executor\n"
-
-    def test_charter_skips_when_target_exists(self, tmp_path):
-        """charter 目标已存在 → seed_only 跳过(即使 force=True)"""
-        source_dir = tmp_path / "source"
-        source_dir.mkdir()
-        charter_src = source_dir / "AGENTS.md"
+    def test_charter_overwrites_local_edit_with_declaration_gap(self, tmp_path):
+        """charter 目标已存在且被本地改过 → 覆盖为渲染物 + 报声明缺口 diff(seed_only 退役, --force 无关)"""
+        gov, harness, ctx = self._rig(tmp_path)
+        charter_src = tmp_path / "AGENTS.md"
         charter_src.write_text("# New Charter v2\n", encoding="utf-8")
+        target = harness / "AGENTS.md"
+        target.write_text("# Existing Charter (customized by advisor)\n", encoding="utf-8")
+        result = execute_distribution(self._dist(charter_src), harness, force=False, version="v", render_context=ctx)
+        assert result["ok"] and result["written"] is True
+        assert result["declaration_gap"] and "customized by advisor" in result["declaration_gap"]["diff"]
+        assert target.read_text(encoding="utf-8").startswith("# New Charter v2\n")
+        # 再渲染同输入 → unchanged 零写
+        again = execute_distribution(self._dist(charter_src), harness, force=True, version="v", render_context=ctx)
+        assert again["ok"] and again["written"] is False and again["declaration_gap"] is None
 
-        harness_root = tmp_path / "harness"
-        harness_root.mkdir()
-        target_path = harness_root / "AGENTS.md"
-        target_path.write_text("# Existing Charter (customized by advisor)\n", encoding="utf-8")
+    def test_charter_without_render_context_is_rejected(self, tmp_path):
+        """渲染上下文缺(治理根不可解析)→ 拒, 不落裸拷贝"""
+        harness = tmp_path / "harness"
+        harness.mkdir()
+        charter_src = tmp_path / "AGENTS.md"
+        charter_src.write_text("# Charter\n", encoding="utf-8")
+        result = execute_distribution(self._dist(charter_src), harness, version="v", render_context=None)
+        assert result["ok"] is False and "治理根" in result["error"]
+        assert not (harness / "AGENTS.md").exists()
 
-        # 用 execute_distribution 测完整 seed_only 逻辑
-        # 需要 mock REPO_ROOT 和 source path
-        dist = {
-            "distribution_id": "test-charter",
-            "kind": "charter",
-            "source": {"path": "test-source/AGENTS.md"},
-            "target": {"harness": "pi", "relative_path": "AGENTS.md"},
-            "applies_to_roles": ["executor"],
-            "operation": "copy_tree",
-            "seed_only": True,
-        }
-
-        # 直接测 seed_only 判定逻辑
-        assert target_path.exists()
-        # seed_only 判定: kind=charter + target exists → skip
-        seed_only = dist["kind"] == "charter" or dist.get("seed_only", False)
-        assert seed_only is True
-        assert target_path.exists()  # 跳过条件命中
-
-        # 验证目标文件未被覆盖
-        assert target_path.read_text() == "# Existing Charter (customized by advisor)\n"
-
-    def test_charter_force_does_not_overwrite(self, tmp_path):
-        """charter --force 也不覆盖(工位主权文件不可践踏)"""
-        harness_root = tmp_path / "harness"
-        harness_root.mkdir()
-        target_path = harness_root / "AGENTS.md"
-        target_path.write_text("# My custom charter\n", encoding="utf-8")
-
-        # 即使 force=True, charter kind 的 seed_only 也应跳过
-        # 这在 execute_distribution 中实现: seed_only 检查在 force 检查之前
-        dist = {
-            "distribution_id": "test-charter",
-            "kind": "charter",
-            "source": {"path": "test-source/AGENTS.md"},
-            "target": {"harness": "pi", "relative_path": "AGENTS.md"},
-            "operation": "copy_tree",
-        }
-
-        # kind=charter 自动 seed_only=True
-        seed_only = dist["kind"] == "charter" or dist.get("seed_only", False)
-        assert seed_only is True
+    def test_charter_unknown_placeholder_is_rejected(self, tmp_path):
+        """母本含未声明占位 → 拒(禁渲染半成品)"""
+        gov, harness, ctx = self._rig(tmp_path)
+        charter_src = tmp_path / "AGENTS.md"
+        charter_src.write_text("# Charter {{no_such_key}}\n", encoding="utf-8")
+        result = execute_distribution(self._dist(charter_src), harness, version="v", render_context=ctx)
+        assert result["ok"] is False and "no_such_key" in result["error"]
+        assert not (harness / "AGENTS.md").exists()
 
     def test_fingerprint_diff_identical(self, tmp_path):
         """差异指纹: 相同内容 → identical"""
@@ -161,18 +144,24 @@ class TestCharterSeedOnly:
         diff = _fingerprint_diff(src, tgt)
         assert "<missing>" in diff
 
-    def test_non_charter_kind_not_seed_only(self, tmp_path):
-        """非 charter kind 不受 seed_only 约束"""
+    def test_non_charter_kind_still_copy_tree(self, tmp_path):
+        """非 charter kind 仍走 copy_tree(目标存在且无 --force → 跳过出声)"""
+        src = tmp_path / "ext"
+        src.mkdir()
+        (src / "a.ts").write_text("a", encoding="utf-8")
+        harness = tmp_path / "ws" / "lybra-executor"
+        harness.mkdir(parents=True)
         dist = {
             "distribution_id": "test-extension",
             "kind": "extension",
-            "source": {"path": "test-source/ext"},
+            "source": {"path": str(src)},
             "target": {"harness": "pi", "relative_path": "_distributed/extensions/ext"},
             "operation": "copy_tree",
         }
-
-        seed_only = dist["kind"] == "charter" or dist.get("seed_only", False)
-        assert seed_only is False
+        first = execute_distribution(dist, harness, version="v")
+        assert first["ok"] and (harness.parent / "_distributed" / "extensions" / "ext" / "a.ts").is_file()
+        second = execute_distribution(dist, harness, version="v")
+        assert second["ok"] is False and "exists" in second["error"]
 
 
 # ==============================================================================
@@ -438,29 +427,23 @@ class TestFixturePermanent:
         assert fixture_path.exists()
         assert fixture_path.name == "test_aipos_f27_regression.py"
 
-    def test_schema_has_seed_only_semantics(self):
-        """distribution.schema.json 包含 seed_only 语义声明"""
+    def test_schema_has_charter_render_semantics(self):
+        """AIPOS-F66B: distribution.schema.json 以 charter_render_semantics + workstation_ownership_semantics 取代 seed_only_semantics"""
         schema_path = Path(__file__).parent.parent / "schema" / "distribution.schema.json"
-        if not schema_path.exists():
-            pytest.skip("Schema file not found")
-
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        assert "seed_only_semantics" in schema, (
-            "distribution.schema.json 缺 seed_only_semantics 声明"
-        )
+        assert "charter_render_semantics" in schema and "workstation_ownership_semantics" in schema
+        assert "seed_only_semantics" not in schema
+        assert any(op.get("name") == "render_charter" for op in schema["primitives"]["operations"])
 
-    def test_charter_entries_have_seed_only(self):
-        """所有 charter 条目声明 seed_only=true"""
+    def test_charter_entries_are_render_charter_without_seed_only(self):
+        """所有 charter 条目 operation=render_charter 且不再声明 seed_only"""
         schema_path = Path(__file__).parent.parent / "schema" / "distribution.schema.json"
-        if not schema_path.exists():
-            pytest.skip("Schema file not found")
-
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        for dist in schema.get("distributions", []):
-            if dist.get("kind") == "charter":
-                assert dist.get("seed_only") is True, (
-                    f"charter 条目 {dist['distribution_id']} 缺 seed_only=true"
-                )
+        charters = [d for d in schema.get("distributions", []) if d.get("kind") == "charter"]
+        assert charters
+        for dist in charters:
+            assert dist.get("operation") == "render_charter", dist["distribution_id"]
+            assert "seed_only" not in dist, dist["distribution_id"]
 
 
 # ==============================================================================

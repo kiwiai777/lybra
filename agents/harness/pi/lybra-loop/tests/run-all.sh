@@ -73,7 +73,9 @@ fi
 # 验证章程硬规矩分发与手册单一真相源一致(Δ=0,既有 Python 测试)
 echo
 echo "── tests/test_aipos_f41_hard_rules.py (分发一致性) ──────────────────────────────────────────"
-REPO_ROOT="$(cd "$(dirname "$0")/../../../../.." && pwd)"
+# AIPOS-F66B: 脚本开头已 cd 到 lybra-loop 目录, 相对路径调用时 $0 已失效(REPO_ROOT 为空 → 全部 Python 夹具 "file not found");
+# 从当前目录向上四级即产品仓根, 与调用方式无关。
+REPO_ROOT="$(cd ../../../.. && pwd)"
 if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f41_hard_rules.py"; then
   echo "✓ tests/test_aipos_f41_hard_rules.py PASS"
 else
@@ -802,6 +804,35 @@ if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f79d_c
   echo "✓ tests/test_aipos_f79d_commit_gate_guardrails.py PASS"
 else
   echo "✗ tests/test_aipos_f79d_commit_gate_guardrails.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F66B: 多项目接入固化(件① 分发按工位项目归属过滤+章程=声明渲染物(seed_only 退役)·件② 护栏读声明 write_boundary 三级+读取口·件③ 审计卡报告落点文案单源)
+echo
+echo "── tests/test_aipos_f66b_project_scoped_distribution.py (F66B 多项目接入固化: 工位项目过滤/章程渲染/write_boundary/审计报告落点单源) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f66b_project_scoped_distribution.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f66b_project_scoped_distribution.py PASS"
+else
+  echo "✗ tests/test_aipos_f66b_project_scoped_distribution.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F66B 随件改动的存量夹具入常驻(N3 判据① 改过的 test 文件须在清单): F27 章程分发语义改写为渲染物(seed_only 退役, 临时 home 自起门子进程, 不碰真实工位/真门); aipos338 审计卡指令落点断言改为审计卡 ID 目录
+echo
+echo "── tests/test_aipos_f27_regression.py (F27 分发与落盘两案·F66B 改写: charter=声明渲染物/enroll cwd 落盘/connection 三全/无人陪跑 E2E) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f27_regression.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f27_regression.py PASS"
+else
+  echo "✗ tests/test_aipos_f27_regression.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tools/aipos_cli/tests/test_aipos338_audit_derivation.py (AIPOS-338 审计派生指令·F66B 报告落点=审计卡 ID 目录) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos338_audit_derivation.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos338_audit_derivation.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos338_audit_derivation.py FAIL"
   overall=1
 fi
 

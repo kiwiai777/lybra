@@ -48,39 +48,60 @@ def _resolve_code_repo(repo_root: Path | None, source_metadata: dict[str, Any] |
         return f"<unresolved: {exc.code}>"
 
 
-def _resolve_governance_task_cards_path(repo_root: Path | None) -> str:
-    """AIPOS-A1 大项C: 报告落点绝对路径(治理仓 task_cards)。"""
-    if repo_root is None:
-        return "<unresolved>"
-    # 治理仓 = repo_root 本身(产品仓场景)或其上级(治理仓场景)
-    task_cards = repo_root / "task_cards"
-    if task_cards.is_dir():
-        return str(task_cards.resolve())
-    # 尝试在治理仓结构下找
-    for candidate in [repo_root / "2_projects" / "lybra" / "task_cards"]:
-        if candidate.is_dir():
-            return str(candidate.resolve())
-    return str((repo_root / "task_cards").resolve())
+def render_audit_report_location(governance_root: Path | None, audit_task_id: str) -> str:
+    """AIPOS-F66B 件③: 审计报告落点句子的**唯一渲染函数**。
+
+    落点 = 治理根 <paths.verdict_root>/<审计卡ID>/<首个候选文件>(lybra 形 = task_cards/<审计卡ID>/RETURN.md)。
+    声明两处既有: config.schema project_json.paths.verdict_root(落点根, 与 F78 artifact_ingest 的 return 落点声明同源)
+    + transitions.schema artifact_ingest.verdict.verdict_file_candidates(文件候选);
+    读取口 = next_resolver.audit_report_artifact_path(与 card render / ingest 同一函数)。
+    派生审计卡内**所有**落点句子(取证锚点段 / 门领地纪律段 / governance_refs 锚点 / 审计指令「报告落位」)
+    出自本函数; 禁写死 task_cards/{被审卡ID}/(2026-09-22 审计体因两处矛盾把 F79DR 报告写到产品仓根)。
+    governance_root 缺 = 渲染声明相对位 `<governance_root>/<verdict_root 声明缺省>/<审计卡ID>/<候选>`, 不猜绝对路径。
+    """
+    audit_task_id = str(audit_task_id or "").strip()
+    if not audit_task_id:
+        raise ValueError("render_audit_report_location: audit_task_id 为空(报告落点按审计卡 ID 目录, 禁用被审卡 ID)")
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration, audit_report_artifact_path
+
+    if governance_root is not None:
+        return str(audit_report_artifact_path(Path(governance_root), audit_task_id))
+    from tools.aipos_cli.workspace_config import _project_paths_declaration
+
+    default_root = str((_project_paths_declaration().get("verdict_root") or {}).get("default") or "").strip()
+    cands = list(_artifact_ingest_declaration()["verdict"].get("verdict_file_candidates") or [])
+    first = next((str(c) for c in cands if not any(ch in str(c) for ch in "*?[")), None)
+    if not default_root or first is None:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("审计报告落点声明缺: config.schema paths.verdict_root.default / transitions artifact_ingest.verdict.verdict_file_candidates")
+    return f"<governance_root>/{default_root}/{audit_task_id}/{first}"
 
 
 def build_forensic_anchor_section(
     source_task_id: str,
     repo_root: Path | None = None,
     source_metadata: dict[str, Any] | None = None,
+    *,
+    audit_task_id: str | None = None,
 ) -> str:
     """AIPOS-A1 大项C: 构建取证锚点段(注入审计卡 governance_refs)。
 
     路径值全部来自声明/注册表, 禁写死。内容基准=AIPOS-C1R2 实证有效的那段。
     AIPOS-F78C: 产品仓按被审卡 source_metadata(lane.repo)解析。
+    AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录(render_audit_report_location 唯一渲染); audit_task_id 缺省
+    = 本模块 derive_audit_task_id 首号(与 build_derived_audit_task 同一派生), 手动派审传显式审计卡 ID。
     """
     code_repo = _resolve_code_repo(repo_root, source_metadata)
-    task_cards_path = _resolve_governance_task_cards_path(repo_root)
+    report_location = render_audit_report_location(
+        repo_root, audit_task_id or derive_audit_task_id(source_task_id, repo_root=None)
+    )
 
     return (
         "\n## 取证锚点(AIPOS-A1 大项C: 默认注入, 路径来自注册表)\n\n"
         f"- **产品仓绝对路径**: `{code_repo}` (被审卡 lane.repo → project.json repos/code_repo, 禁写死)\n"
         f"- **禁 checkout 卡分支**: 用 `git diff main...card/{source_task_id}` 取证(不切换工作区)\n"
-        f"- **报告落点绝对路径**: `{task_cards_path}/{source_task_id}/` (治理仓 task_cards)\n"
+        f"- **报告落点绝对路径**: `{report_location}` (治理根 verdict_root/<审计卡ID>/, 声明渲染; 禁落被审卡目录、禁落产品仓)\n"
         "- **不存在结论必须附**: `pwd` + 命令 + 输出(三条缺一即无效证据)\n"
     )
 
@@ -88,6 +109,8 @@ def build_forensic_anchor_section(
 def build_gate_territory_discipline_section(
     source_task_id: str,
     repo_root: Path | None = None,
+    *,
+    audit_task_id: str | None = None,
 ) -> str:
     """AIPOS-F12 大项D + AIPOS-F14 大项A: 门领地纪律 + 精确提交配方(注入审计卡, 手动/自动共用)。
 
@@ -117,7 +140,9 @@ def build_gate_territory_discipline_section(
         selector_names.extend([pair_id, pair_path])
         selector_descriptions.append(f"`{pair_id}` / `{pair_path}` 二选一({usage})")
 
-    task_cards_path = _resolve_governance_task_cards_path(repo_root)
+    report_location = render_audit_report_location(
+        repo_root, audit_task_id or derive_audit_task_id(source_task_id, repo_root=None)
+    )
 
     dry_params_inline = "`, `".join(dry_required)
     confirm_params_inline = "`, `".join(confirm_params)
@@ -135,8 +160,8 @@ def build_gate_territory_discipline_section(
         "\n## 门领地纪律(AIPOS-F12 大项D + AIPOS-F14 大项A: 注入, 手动/自动共用)\n\n"
         "- **records/ = 门领地**:裁决记录由门落盘, 绝不手写进 `5_tasks/records/`。"
         "手写进 records 一经 sweep 发现即隔离(`governance/quarantine/`)并记违纪。\n"
-        f"- **审计报告草稿只能落**:`{task_cards_path}/{{audit_id}}/`"
-        "(治理仓 task_cards, 禁落 records/)。\n"
+        f"- **审计报告草稿只能落**:`{report_location}`"
+        "(治理根 verdict_root/<审计卡ID>/, 声明渲染; 禁落 records/、禁落被审卡目录、禁落产品仓)。\n"
         "- **精确提交配方(参数名派生自 gate 注册表 verb_contract, 禁写死)**\n"
         f"  1. 预览:`{dry_name}`, 必填 `{dry_params_inline}`"
         "(裁决三值 PASS / PASS_WITH_NOTES / FAIL)。\n"
@@ -399,10 +424,11 @@ def build_derived_audit_task(
             audit_metadata[key] = source_metadata[key]
     
     # AIPOS-A1 大项C + F78C: 注入取证锚点到 governance_refs(产品仓 = 被审卡声明的仓)
+    # AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录, 与正文两段同一渲染函数(禁写死被审卡目录)
     code_repo = _resolve_code_repo(repo_root, source_metadata)
-    task_cards_path = _resolve_governance_task_cards_path(repo_root)
+    report_location = render_audit_report_location(repo_root, audit_task_id)
     forensic_anchors = [
-        f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | 禁checkout卡分支(git diff main...card/{source_task_id}) | 报告落点={task_cards_path}/{source_task_id}/ | 不存在结论必附pwd+命令+输出",
+        f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | 禁checkout卡分支(git diff main...card/{source_task_id}) | 报告落点={report_location} | 不存在结论必附pwd+命令+输出",
     ]
     existing_governance_refs = list(audit_metadata.get("governance_refs") or [])
     audit_metadata["governance_refs"] = existing_governance_refs + forensic_anchors
@@ -427,14 +453,14 @@ Independent audit of task `{source_task_id}`.
   1. **起得来**:产物能拉起/运行(代码能 import 或起服务;命令能跑通)。
   2. **产物可用**:产物满足原卡验收断言(不是"看起来对",是"断言过")。
   两条任一不过 → FAIL。
-- **报告落位**:`<workspace>/5_tasks/records/audit_verdicts/{source_task_id}/verdict_*.md`(裁决归被审卡 ID 目录)。
+- **报告落位**:`{report_location}`(审计报告归审计卡 ID 目录; 裁决记录由门落 records/, 不是你的落点)。
 - **如实报红线**:结论三值 PASS / PASS_WITH_NOTES / FAIL(附 F-* 清单);失败如实报,禁止“应该没问题”。
 """
     # AIPOS-A1 大项C: 注入取证锚点段(路径来自注册表, 禁写死)
-    audit_body += build_forensic_anchor_section(source_task_id, repo_root, source_metadata)
+    audit_body += build_forensic_anchor_section(source_task_id, repo_root, source_metadata, audit_task_id=audit_task_id)
 
     # AIPOS-F12 大项D: 注入门领地纪律 + 精确提交配方(手动/自动共用, 值来自声明)
-    audit_body += build_gate_territory_discipline_section(source_task_id, repo_root)
+    audit_body += build_gate_territory_discipline_section(source_task_id, repo_root, audit_task_id=audit_task_id)
 
     if branch_id == "code_with_deploy":
         audit_body += (

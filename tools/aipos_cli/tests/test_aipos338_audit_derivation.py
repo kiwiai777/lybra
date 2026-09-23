@@ -55,8 +55,9 @@ class TestAuditInstructions(unittest.TestCase):
         self.assertIn("起得来", body)
         self.assertIn("产物可用", body)
         self.assertIn("AIPOS-314", body)
-        # report location (verdict under reviewed-card ID dir)
-        self.assertIn("audit_verdicts/AIPOS-200/verdict_*.md", body)
+        # AIPOS-F66B 件③: report location = 审计卡 ID 目录(声明渲染), 不再是被审卡目录 / records 裁决目录
+        self.assertIn("/AIPOS-200R/RETURN.md", body)
+        self.assertNotIn("audit_verdicts/AIPOS-200/verdict_*.md", body)
         # honest reporting red line
         self.assertIn("如实报红线", body)
 

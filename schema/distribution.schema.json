@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "description": "Lybra distribution specification - declarative rules for distributing tools/credentials/config/charters to harness workstations. Per DESIGN v2 §4: distribution WHAT = data (this schema), distribution HOW = fixed primitives (distribute_tools.py engine). New distribution entry = add data row, zero code change. Replaces hardcoded ROLE_TOOL_MAPPING.",
-  "last_updated": "2026-08-12",
+  "last_updated": "2026-09-23",
   "primitives": {
     "description": "Fixed distribution primitives (implemented in distribute_tools.py engine). These are the ONLY operations; plugins/custom code forbidden per §4 design decision (supply-chain + auditability).",
     "operations": [
@@ -39,6 +39,15 @@
           "target_path",
           "manifest_data"
         ]
+      },
+      {
+        "name": "render_charter",
+        "description": "AIPOS-F66B 件①: 章程 = 母本({{key}} 占位)+ 项目声明(project.json paths/repos, roles.schema write_boundary+hard_rules)→ 工位副本。唯一实现 tools/aipos_cli/charter_render.render_charter, sync(pull)与 distribute_tools(push)同用; 母本变/声明变即重渲染(manifest 记 source_sha256/render_context_sha256/rendered_sha256); 工位本地改动 = 声明缺口(覆盖前报 diff, 须回流母本或声明)。取代 charter 的 copy_tree+seed_only。",
+        "parameters": [
+          "master_path",
+          "target_path",
+          "render_context"
+        ]
       }
     ]
   },
@@ -63,7 +72,6 @@
       "version_strategy": "git_commit_hash",
       "notes": "AIPOS-F73B: Single master go.ts extension. Queries product for claimed task by agent_instance (read from .lybra/role .instance), switches worktree, outputs startup report. Replaces dual bash scripts."
     },
-
     {
       "distribution_id": "executor-skills",
       "kind": "skills",
@@ -92,7 +100,6 @@
       "version_strategy": "git_commit_hash",
       "notes": "Filtered skill set per role requirements from roles.schema.json"
     },
-
     {
       "distribution_id": "auditor-skills",
       "kind": "skills",
@@ -121,7 +128,6 @@
       "version_strategy": "git_commit_hash",
       "notes": "Auditor-specific skill set"
     },
-
     {
       "distribution_id": "advisor-skills",
       "kind": "skills",
@@ -168,11 +174,10 @@
       "applies_to_roles": [
         "executor"
       ],
-      "operation": "copy_tree",
+      "operation": "render_charter",
       "version_strategy": "git_commit_hash",
-      "seed_only": true,
       "gitignore": true,
-      "notes": "AIPOS-F27: seed_only=true — charter 只播种不覆盖(工位主权文件)。目标已存在即跳过+出声(含差异指纹)。Source of truth lives in lybra product repo."
+      "notes": "AIPOS-F66B 件①: seed_only 退役——章程 = 声明渲染物(母本 + 项目声明 → 工位副本), 母本变/声明变即重渲染, 工位本地改动 = 声明缺口(sync/distribute 报 diff 后覆盖, 须回流母本或声明)。目标工位按 .lybra/role 实例项目段过滤, 非本项目工位跳过。 Source of truth lives in lybra product repo (agents/roles/<class>/AGENTS.md)."
     },
     {
       "distribution_id": "auditor-charter",
@@ -189,11 +194,10 @@
       "applies_to_roles": [
         "auditor"
       ],
-      "operation": "copy_tree",
+      "operation": "render_charter",
       "version_strategy": "git_commit_hash",
-      "seed_only": true,
       "gitignore": true,
-      "notes": "AIPOS-F27: seed_only=true — charter 只播种不覆盖(工位主权文件)。目标已存在即跳过+出声(含差异指纹)。"
+      "notes": "AIPOS-F66B 件①: seed_only 退役——章程 = 声明渲染物(母本 + 项目声明 → 工位副本), 母本变/声明变即重渲染, 工位本地改动 = 声明缺口(sync/distribute 报 diff 后覆盖, 须回流母本或声明)。目标工位按 .lybra/role 实例项目段过滤, 非本项目工位跳过。 Source of truth lives in lybra product repo (agents/roles/<class>/AGENTS.md)."
     },
     {
       "distribution_id": "advisor-charter",
@@ -210,11 +214,10 @@
       "applies_to_roles": [
         "advisor"
       ],
-      "operation": "copy_tree",
+      "operation": "render_charter",
       "version_strategy": "git_commit_hash",
-      "seed_only": true,
       "gitignore": true,
-      "notes": "AIPOS-F27: seed_only=true — charter 只播种不覆盖(工位主权文件)。目标已存在即跳过+出声(含差异指纹)。AIPOS-R7A: advisor charter defines advisor role boundaries and workflow."
+      "notes": "AIPOS-F66B 件①: seed_only 退役——章程 = 声明渲染物(母本 + 项目声明 → 工位副本), 母本变/声明变即重渲染, 工位本地改动 = 声明缺口(sync/distribute 报 diff 后覆盖, 须回流母本或声明)。目标工位按 .lybra/role 实例项目段过滤, 非本项目工位跳过。 AIPOS-R7A: advisor charter defines advisor role boundaries and workflow. Source of truth lives in lybra product repo (agents/roles/<class>/AGENTS.md)."
     },
     {
       "distribution_id": "transitions-schema",
@@ -249,7 +252,7 @@
     }
   },
   "manifest_schema": {
-    "description": "Standard manifest written to target_root/.version-{role} after distribution",
+    "description": "Standard manifest written to target_root/.version-{role} after distribution. AIPOS-F66B: charter 条目 files[] 附三指纹(母本/声明/渲染物), 顶层 workstation 记工位归属(instance/project)。",
     "required_fields": [
       "version",
       "role",
@@ -269,7 +272,16 @@
         {
           "distribution_id": "executor-charter",
           "source_commit": "b0d056e",
-          "target_path": "AGENTS.md"
+          "target_path": "AGENTS.md",
+          "rendered": true,
+          "files": [
+            {
+              "path": "AGENTS.md",
+              "sha256": "<母本 sha256>",
+              "render_context_sha256": "<声明指纹>",
+              "rendered_sha256": "<渲染物 sha256>"
+            }
+          ]
         }
       ]
     }
@@ -292,11 +304,22 @@
     ],
     "forbidden": "Custom code / plugins in distribute_tools.py. New primitive = product repo task + audit. Per §4: 'distribution WHAT = data, HOW = fixed engine'."
   },
-  "seed_only_semantics": {
-    "description": "AIPOS-F27 大项A: seed_only 属性语义 — charter 类分发加 seed_only 属性:目标存在即跳过+出声提示差异指纹",
-    "rule": "kind=charter 的分发条目强制 seed_only=true(安全默认)。目标文件已存在时:跳过写入+输出双方内容指纹(sha256 截断);目标不存在时:正常播种。即使 --force 也不覆盖(charter=工位主权文件,分发器不可践踏)。",
-    "fingerprint_diff_format": "source=sha256:<16hex> target=sha256:<16hex> DIFFER 或 identical (sha256:<16hex>)",
-    "applies_to": "kind=charter 的所有条目(本引擎硬编码;schema 显式声明 seed_only=true 仅为可读性)"
+  "charter_render_semantics": {
+    "description": "AIPOS-F66B 件①: 章程渲染语义(取代 AIPOS-F27 seed_only_semantics; seed_only 属性退役, 残留声明不生效并出声)",
+    "rule": "kind=charter 的分发条目一律 operation=render_charter: 渲染物 = 母本正文({{project}}/{{governance_root}}/{{code_repo}}/{{return_root}}/{{verdict_root}}/{{queue_root}}/{{gate_url}}/{{harness_root}}/{{harness_parent}}/{{role}}/{{role_class}}/{{instance}} 占位按渲染上下文替换; 未声明占位 = 拒)+「项目声明」尾节 + 「写权限边界」节(roles.schema write_boundary 该角色行 + hard_rules)+ 渲染标记行(母本/声明指纹)。",
+    "update_semantics": "母本 sha256 变 或 渲染上下文指纹变 → 重渲染覆盖; 工位副本 sha256 ≠ manifest 记录的 rendered_sha256 = 工位本地改动 = 声明缺口: 覆盖前输出 unified diff(工位本地 vs 渲染物), 改动须回流母本(产品仓一张卡)或声明(project.json / roles.schema), 不保留第二份真相; --force 与 charter 无关。",
+    "manifest_fields": [
+      "sha256 (母本)",
+      "render_context_sha256",
+      "rendered_sha256"
+    ],
+    "single_implementation": "tools/aipos_cli/charter_render.py (render_charter / charter_render_context / workstation_identity); 消费方 tools/aipos_cli/distribution_sync.py (apply_charter_render) 与 tools/distribute_tools.py (_primitive_render_charter)",
+    "master_edit_note": "母本 agents/roles/<class>/AGENTS.md 中的项目专有字面(~/projects/lybra 等)改为占位属母本车道(agents/roles/), 本卡车道外, 登记待办; 渲染尾节已提供全部项目专有值, 母本无占位时渲染物 = 母本原文 + 尾节。"
+  },
+  "workstation_ownership_semantics": {
+    "description": "AIPOS-F66B 件① 硬前置: 任何分发条目的目标工位按其 .lybra/role 实例的项目段过滤(2026-09-05 chris hbj-coder 工位被写入 lybra 执行体章程的根治)",
+    "rule": "工位项目 = .lybra/role.instance 按 roles.schema naming.template 解析的 project 段(naming_profile.parse_instance_name 唯一解析)。sync 项目范围 = --project 显式 > --workspace-root 的 project.json project > 单工位缺省=工位自身项目; 多工位(--harness-root 给工位父根)必须显式范围, 禁猜。工位项目 ≠ 范围 → 跳过(零写入, 不连门)并在运行清单(<父根>/_distributed/.version-sync)与结果记 skipped; 推送侧 distribute_tools 同规则(另: .lybra/role.role ≠ 请求角色 = 拒)。",
+    "single_implementation": "tools/aipos_cli/charter_render.workstation_identity + distribution_sync.sync/sync_many + distribute_tools.distribute_to_harness"
   },
   "applies_to_roles_semantics": {
     "description": "AIPOS-F26 大项C: applies_to_roles 匹配语义 — 内建角色名直接匹配, 自定义角色按其注册表 class 展开匹配",

@@ -3838,11 +3838,12 @@ def _build_audit_dispatch_preview(
     if dispatch_reason:
         audit_metadata["dispatch_reason"] = dispatch_reason
     # AIPOS-A1 大项C: 手动派审也注入取证锚点到 governance_refs
-    from tools.aipos_cli.audit_derivation import _resolve_code_repo, _resolve_governance_task_cards_path
+    from tools.aipos_cli.audit_derivation import _resolve_code_repo, render_audit_report_location
     _code_repo = _resolve_code_repo(repo_root, source_metadata)  # AIPOS-F78C: 被审卡声明的仓
-    _tc_path = _resolve_governance_task_cards_path(repo_root)
     _src_tid = str(source_task.get("task_id") or "")
-    _forensic_ref = f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={_code_repo} | 禁checkout卡分支(git diff main...card/{_src_tid}) | 报告落点={_tc_path}/{_src_tid}/ | 不存在结论必附pwd+命令+输出"
+    # AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录, 与自动派生同一渲染函数(禁写死被审卡目录)
+    _report_location = render_audit_report_location(repo_root, task_id_text)
+    _forensic_ref = f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={_code_repo} | 禁checkout卡分支(git diff main...card/{_src_tid}) | 报告落点={_report_location} | 不存在结论必附pwd+命令+输出"
     _existing_refs = list(audit_metadata.get("governance_refs") or [])
     audit_metadata["governance_refs"] = _existing_refs + [_forensic_ref]
     audit_body = "\n".join(
@@ -3855,7 +3856,7 @@ def _build_audit_dispatch_preview(
     )
     # AIPOS-A1 大项C: 手动派审也注入取证锚点段(路径来自注册表, 禁写死)
     from tools.aipos_cli.audit_derivation import build_forensic_anchor_section
-    audit_body += build_forensic_anchor_section(str(source_task.get("task_id") or ""), repo_root, source_metadata)
+    audit_body += build_forensic_anchor_section(str(source_task.get("task_id") or ""), repo_root, source_metadata, audit_task_id=task_id_text)
     # AIPOS-F38 大项A(F17 原则覆盖全部 writer): 产前自检——派生审计卡必过同一 schema 必填校验,
     # 不合规即拒并出声(BLOCK + 人话拒因);审计身份由上方 resolve_instance_id/INDEPENDENCE 把关。
     from tools.schema_loader import get_required_card_fields
