@@ -817,6 +817,25 @@ else
   overall=1
 fi
 
+# AIPOS-F66B 随件改动的存量夹具入常驻(N3 判据① 改过的 test 文件须在清单): F27 章程分发语义改写为渲染物(seed_only 退役, 临时 home 自起门子进程, 不碰真实工位/真门); aipos338 审计卡指令落点断言改为审计卡 ID 目录
+echo
+echo "── tests/test_aipos_f27_regression.py (F27 分发与落盘两案·F66B 改写: charter=声明渲染物/enroll cwd 落盘/connection 三全/无人陪跑 E2E) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f27_regression.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f27_regression.py PASS"
+else
+  echo "✗ tests/test_aipos_f27_regression.py FAIL"
+  overall=1
+fi
+
+echo
+echo "── tools/aipos_cli/tests/test_aipos338_audit_derivation.py (AIPOS-338 审计派生指令·F66B 报告落点=审计卡 ID 目录) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos338_audit_derivation.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos338_audit_derivation.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos338_audit_derivation.py FAIL"
+  overall=1
+fi
+
 echo
 echo "── tools/aipos_cli/tests/test_agent_watch_fs.py (agent watch 哨兵(F73D expect_ready 谓词零回归)) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_agent_watch_fs.py" -v --tb=short -k "not test_module_is_stdlib_only_zero_new_deps"; then
