@@ -126,7 +126,10 @@ def charter_render_context(
     identity: dict[str, Any],
     product_commit: str = "unknown",
 ) -> dict[str, Any]:
-    """渲染上下文: 项目声明(project.json paths/repos)+ 门地址 + 工位/实例 + 角色类。token 永不入。"""
+    """渲染上下文: 项目声明(project.json paths/repos)+ 门地址 + 工位/实例(+ 机器段 / 兄弟角色实例名, F80)+ 角色类。token 永不入。
+
+    **本字典 = 章程母本 `{{key}}` 占位的唯一键表**(AIPOS-F80 件②): 母本只准用这里的标量键, 不够在此处加, 禁第二份键表。
+    """
     from tools.aipos_cli.custom_roles import resolve_role_to_class
     from tools.aipos_cli.workspace_config import project_paths, project_repos, read_project_json
     from tools.schema_loader import get_config_default_gate_url
@@ -143,6 +146,21 @@ def charter_render_context(
         )
     paths = project_paths(gov)
     repos = project_repos(gov)
+    # AIPOS-F80 件②: 母本占位化所需的机器段/兄弟实例名(本声明处是唯一键表)——机器段取工位实例名(注册表模板唯一解析),
+    # 兄弟角色实例名经注册表模板唯一实现 default_instance_name(前缀读 naming_profile prefix_mapping, 项目可覆写); 缺 = 拒。
+    from tools.aipos_cli.naming_profile import default_instance_name, get_naming_profile, parse_instance_name
+
+    parsed = parse_instance_name(str(identity["instance"])) or {}
+    machine = str(parsed.get("host") or "").strip()
+    if not machine:
+        raise ValueError(f"工位实例 {identity.get('instance')!r} 无机器段(roles.schema naming.template), 章程渲染拒")
+    prefixes = get_naming_profile(gov).get("prefix_mapping") or {}
+    sibling: dict[str, str] = {}
+    for role_key in ("executor", "auditor"):
+        prefix = str(prefixes.get(role_key) or "").strip()
+        if not prefix:
+            raise ValueError(f"naming_profile prefix_mapping 缺 {role_key}(roles.schema naming.prefix), 章程渲染拒")
+        sibling[f"{role_key}_instance"] = default_instance_name(prefix, project=str(parsed["project"]), host=machine)
     role = str(identity["role"])
     role_class = resolve_role_to_class(role, gov) or role
     code_repo = repos["items"].get(repos["default"]) if repos["declared"] else repos["code_repo"]
@@ -161,6 +179,9 @@ def charter_render_context(
         "role": role,
         "role_class": role_class,
         "instance": str(identity["instance"]),
+        "machine": machine,
+        "executor_instance": sibling["executor_instance"],
+        "auditor_instance": sibling["auditor_instance"],
         "product_commit": str(product_commit or "unknown"),
     }
     return ctx

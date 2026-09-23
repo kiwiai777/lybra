@@ -33,7 +33,11 @@ roles/
 ## 分发机制
 
 - **母本 = 产品仓单一源**:契约文件住此处,与 `schema/roles.schema.json` 联动。
-- **工位副本 = 分发落点**:各 harness 工位(如 `~/projects/kiwiai-pi/lybra-executor/`)的 `AGENTS.md` 由分发器写入,**不入 git**。
+- **工位副本 = 分发落点**:各 harness 工位(说明性示例, 非章程字面: 如 `<工位父根>/lybra-executor/`)的 `AGENTS.md` 由分发器写入,**不入 git**。
+- **母本项目无关(AIPOS-F80 件②)**:母本内凡项目/实例/机器/仓路径/落点一律写 `{{key}}` 占位, 键只用
+  `tools/aipos_cli/charter_render.py` `charter_render_context()` 声明的渲染上下文键(project / governance_root / code_repo /
+  return_root / verdict_root / queue_root / task_cards_root / gate_url / harness_root / harness_parent / role / role_class /
+  instance / machine / executor_instance / auditor_instance); 未声明占位 = 渲染拒(fail-closed)。母本禁写任何具体项目字面。
 - **版本追踪**:工位副本携带 `.version-{role}` manifest,记录源 commit + 内容哈希。
 - **修订流程**:修改契约 = 产品仓一张卡 → 审计通过 → 分发 → 各工位 sync 同步更新。
 
@@ -56,7 +60,7 @@ roles/
 工位副本是**派生物**,gitignore 不提交:入库 = 第二源 → 必然漂移;
 单一源 = 此处母本;工位副本 = 按需重生成,版本以 manifest 为准。
 
-## kaia-* 项目
+## 多项目
 
-**kaia-kb / kaia-agency 等非 lybra 项目的契约不在此处**,仍在各自项目维护。
-本分发机制仅管理 lybra 项目角色(executor/auditor/advisor)。
+母本对所有接入项目通用(executor/auditor/advisor 三类), 由 `lybra sync` 按工位项目声明渲染(AIPOS-F66B 件① / F80 件②)。
+项目自定义角色(project.json custom_roles)按其角色类取对应母本。
