@@ -1676,6 +1676,17 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_list_parser = roles_subparsers.add_parser("enroll-list", help="AIPOS-362: list enrollment codes")
     roles_enroll_list_parser.add_argument("--json", action="store_true", help="Output JSON")
     
+    # AIPOS-F66B 件②: 写权限边界可读面 + 读取口(护栏读声明; 单源 roles.schema write_boundary)
+    roles_wb_parser = roles_subparsers.add_parser("write-boundary", help="AIPOS-F66B: 写权限边界可读面(角色类 × 面 × read/append/mutate, 读 roles.schema write_boundary)与单次访问判定(--check)")
+    roles_wb_parser.add_argument("--role", help="只出该角色行(内建或门注册表自定义角色, 按类展开)")
+    roles_wb_parser.add_argument("--instance", help="按 enrollment 记录的实例反查角色")
+    roles_wb_parser.add_argument("--harness-root", help="工位根(解析 harness_root 面; 缺省不列)")
+    roles_wb_parser.add_argument("--check", metavar="PATH", help="判一次访问: 路径(绝对或相对治理根)")
+    roles_wb_parser.add_argument("--level", choices=["read", "append", "mutate"], default="read", help="--check 的请求级别(缺省 read)")
+    roles_wb_parser.add_argument("--task-id", help="--check 的卡 ID(per_task 面 / product_repo lane 判定需要)")
+    roles_wb_parser.add_argument("--markdown", action="store_true", help="输出章程渲染节(需 --role)")
+    roles_wb_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     # AIPOS-R2: enroll command (client-side enrollment: exchange code + write .lybra/ config)
     roles_enroll_parser = roles_subparsers.add_parser("enroll", help="AIPOS-R2/F23: enroll this workstation (exchange enrollment code + write .lybra/ config). Self-contained code carries gate URL; run from the workstation directory")
     roles_enroll_parser.add_argument("--code", required=True, help="Enrollment code (self-contained LYBRAENROLL1.* from owner/advisor, or legacy plain code)")
@@ -2518,6 +2529,11 @@ def main(argv: list[str] | None = None) -> int:
                 conn_override = getattr(args, "connection_json", None)
                 connection_target = Path(conn_override).expanduser() if conn_override else None
                 workspace_root = _resolve_workspace_for_command(args)
+            if args.roles_command == "write-boundary":
+                # AIPOS-F66B 件②: 薄壳, 全部逻辑在 write_boundary(唯一读取口)
+                from tools.aipos_cli.write_boundary import run_write_boundary_cli
+
+                return run_write_boundary_cli(args, Path(workspace_root))
             if args.roles_command == "list":
                 result = roles_list_report(workspace_root, connection_target=connection_target)
                 if getattr(args, "json", False):

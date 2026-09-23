@@ -218,3 +218,133 @@ def test_item3_card_render_pi_audit_card_location_is_declared_verdict_slot(tmp_p
     assert f"报告落点: {gov / return_rel / src / 'RETURN.md'}" in exec_pi
     for content in (pi, exec_pi):
         assert "lybra_" not in content and "token" not in content.lower()
+
+
+# ===========================================================================
+# 件② 护栏读声明: roles.schema write_boundary + 唯一读取口
+# ===========================================================================
+
+def _synthetic_token(name: str, cls: str, project: str) -> dict:
+    """夹具注册表条目(合成 token——真凭据永不入夹具)。"""
+    return {
+        "agent_instance": f"{name}.{project}.test", "fingerprint": f"sha256:fx{abs(hash(name)) % 10**10:010d}",
+        "projects": [project], "role": name, "role_class": cls, "scopes": [],
+        "token": f"fixture-not-a-secret-{name}", "token_ref": f"svc-{name}",
+    }
+
+
+def _seed_gate_registry(gov: Path, tokens: list[dict]) -> None:
+    _write(gov / ".lybra" / "connection.json", json.dumps({"config_version": 1, "mcp": {"rpc_url": "http://127.0.0.1:7999/mcp"}, "tokens": tokens}, indent=2) + "\n")
+
+
+def test_item2_declaration_single_source_and_fail_closed(monkeypatch):
+    from tools.aipos_cli import write_boundary as wb
+    from tools.schema_loader import SchemaLoadError
+
+    decl = wb.load_write_boundary_declaration()
+    assert decl["level_order"] == ["read", "append", "mutate"] and set(decl["levels"]) == {"read", "append", "mutate"}
+    for cls, row in decl["matrix"].items():
+        for surface, level in row.items():
+            assert surface in decl["surfaces"], (cls, surface)
+            assert level in decl["level_order"], (cls, surface, level)
+        assert row.get("governance_root") in decl["level_order"], f"{cls}: 只读治理永远合法须有 governance_root 行"
+    assert any(r.get("id") == "no_retry_after_deny" for r in decl["hard_rules"])
+    # 声明缺 = SchemaLoadError(禁静默缺省)
+    monkeypatch.setattr(wb, "load_schema", lambda kind, root=None: {"roles": []})
+    with pytest.raises(SchemaLoadError):
+        wb.load_write_boundary_declaration()
+
+
+def test_item2_readable_face_expands_custom_roles_by_gate_registry(tmp_path, monkeypatch):
+    """可读面: 内建角色行 + 门注册表自定义角色按类展开(hbj-coder→executor); 路径全部读声明(chris 形落点跟随)。"""
+    from tools.aipos_cli import write_boundary as wb
+
+    gov = _make_gov(tmp_path, monkeypatch, shape="chris", project="chris-huibojin")
+    _seed_gate_registry(gov, [_synthetic_token("hbj-coder", "executor", "chris-huibojin")])
+    face = wb.build_write_boundary(gov)
+    assert face["project"] == "chris-huibojin" and face["roles"]["hbj-coder"] == "executor"
+    by = {(r["role"], r["surface"]): r for r in face["rows"]}
+    assert by[("hbj-coder", "return_slot")]["level"] == "mutate"
+    assert by[("hbj-coder", "return_slot")]["path"] == str(gov / "5_tasks" / "records" / "returns" / "<task_id>")
+    assert by[("hbj-coder", "records")]["level"] == "read" and by[("hbj-coder", "records")]["path"] == str(gov / "5_tasks" / "records")
+    assert by[("auditor", "verdict_slot")]["path"] == str(gov / "5_tasks" / "records" / "audit_verdicts" / "<task_id>")
+    assert by[("advisor", "decision_log")]["level"] == "append" and by[("advisor", "decision_log")]["path"] == str(gov / "governance" / "decision_log")
+    assert by[("executor", "product_repo")]["path"] == json.loads((gov / "project.json").read_text())["code_repo"]
+    md = wb.render_write_boundary_markdown(face, role="hbj-coder")
+    assert "no_retry_after_deny" in md and "| return_slot | **mutate** |" in md and "hbj-auditor" not in md
+    with pytest.raises(wb.WriteBoundaryError):
+        wb.build_write_boundary(gov, role="nobody-role")
+
+
+def test_item2_check_access_three_levels_and_fail_closed(tmp_path, monkeypatch):
+    """读取口判定: 只读治理永远合法 / 级别不足拒 / append 面禁 mutate / 面外未声明拒 / per_task 面按本卡目录 /
+    product_repo mutate 受本卡工作树 + lane.paths 双限。"""
+    from tools.aipos_cli import write_boundary as wb
+
+    gov = _make_gov(tmp_path, monkeypatch, shape="lybra")
+    _seed_gate_registry(gov, [_synthetic_token("hbj-coder", "executor", "lybra")])
+    repo = Path(json.loads((gov / "project.json").read_text())["code_repo"])
+    task = "F66B-WB1"
+    _card(gov, task, "claimed", extra={"lane": {"repo": str(repo), "paths": ["tools/aipos_cli/", "tests/"], "roles": ["executor"]}})
+
+    def chk(role, path, level, **kw):
+        return wb.check_access(gov, role=role, path=path, level=level, **kw)
+
+    assert chk("executor", gov / "governance" / "DISCIPLINE.md", "read")["allowed"]  # 只读治理永远合法
+    assert chk("hbj-coder", gov / "governance" / "DISCIPLINE.md", "read")["allowed"]  # 自定义角色按类
+    r = chk("executor", gov / "governance" / "DISCIPLINE.md", "mutate")
+    assert not r["allowed"] and r["code"] == "LEVEL_EXCEEDED" and r["surface"] == "governance_root"
+    r = chk("executor", gov / "5_tasks" / "records" / "claims" / "x.md", "mutate")
+    assert not r["allowed"] and r["surface"] == "records"  # 门领地
+    assert chk("advisor", gov / "governance" / "decision_log" / "2026-09" / "d.md", "append")["allowed"]
+    r = chk("advisor", gov / "governance" / "decision_log" / "2026-09" / "d.md", "mutate")
+    assert not r["allowed"] and r["code"] == "LEVEL_EXCEEDED" and r["granted_level"] == "append"
+    r = chk("executor", tmp_path / "elsewhere" / "x.md", "read")
+    assert not r["allowed"] and r["code"] == "SURFACE_UNDECLARED"
+    # per_task 面
+    r = chk("executor", gov / "task_cards" / task / "RETURN.md", "mutate")
+    assert not r["allowed"] and r["code"] == "TASK_ID_REQUIRED"
+    assert chk("executor", gov / "task_cards" / task / "RETURN.md", "mutate", task_id=task)["allowed"]
+    r = chk("executor", gov / "task_cards" / "OTHER-1" / "RETURN.md", "mutate", task_id=task)
+    assert not r["allowed"] and r["code"] == "NOT_OWN_TASK_DIR"
+    assert chk("executor", gov / "task_cards" / "OTHER-1" / "RETURN.md", "read")["allowed"]
+    # lybra 形 return_root = verdict_root = task_cards 同根: auditor 走 verdict_slot(本审计卡目录 mutate), 台账根级文件只读
+    assert chk("auditor", gov / "task_cards" / task / "RETURN.md", "mutate", task_id=task)["surface"] == "verdict_slot"
+    r = chk("auditor", gov / "task_cards" / "OTHER-1" / "RETURN.md", "mutate", task_id=task)
+    assert not r["allowed"] and r["code"] == "NOT_OWN_TASK_DIR"
+    r = chk("auditor", gov / "task_cards" / "INDEX.md", "mutate", task_id=task)
+    assert not r["allowed"] and r["code"] == "NOT_OWN_TASK_DIR" and r["surface"] == "verdict_slot"
+    # product_repo: auditor 只读; executor mutate 限本卡工作树 + lane.paths
+    assert chk("auditor", repo / "tools" / "x.py", "read")["allowed"]
+    assert chk("auditor", repo / "tools" / "x.py", "mutate")["code"] == "LEVEL_EXCEEDED"
+    r = chk("executor", repo / "tools" / "aipos_cli" / "x.py", "mutate", task_id=task)
+    assert not r["allowed"] and r["code"] == "NOT_CARD_WORKTREE"  # 主检出拒
+    wt = repo / ".worktrees" / task
+    assert chk("executor", wt / "tools" / "aipos_cli" / "x.py", "mutate", task_id=task)["allowed"]
+    r = chk("executor", wt / "agents" / "roles" / "executor" / "AGENTS.md", "mutate", task_id=task)
+    assert not r["allowed"] and r["code"] == "LANE_OUT_OF_SCOPE"
+    with pytest.raises(wb.WriteBoundaryError):
+        chk("executor", gov / "x.md", "delete")
+    with pytest.raises(wb.WriteBoundaryError):
+        chk("ghost-role", gov / "x.md", "read")
+    for result in (r,):
+        assert any(h.get("id") == "no_retry_after_deny" for h in result["hard_rules"])
+
+
+def test_item2_cli_write_boundary_json_and_check_exit_codes(tmp_path, monkeypatch, capsys):
+    from tools.aipos_cli.aipos_cli import main
+
+    gov = _make_gov(tmp_path, monkeypatch, shape="lybra")
+    rc = main(["roles", "--workspace-root", str(gov), "write-boundary", "--role", "executor", "--json"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    data = json.loads(out)
+    assert data["roles"] == {"executor": "executor"} and all(r["role"] == "executor" for r in data["rows"])
+    assert "fixture-not-a-secret" not in out and '"token"' not in out  # 面不含任何凭据字段
+    rc = main(["roles", "--workspace-root", str(gov), "write-boundary", "--role", "executor", "--check", "governance/x.md", "--level", "mutate"])
+    assert rc == 3 and "DENY [LEVEL_EXCEEDED]" in capsys.readouterr().out
+    rc = main(["roles", "--workspace-root", str(gov), "write-boundary", "--role", "executor", "--check", "governance/x.md", "--level", "read"])
+    assert rc == 0 and "ALLOW [OK]" in capsys.readouterr().out
+    rc = main(["roles", "--workspace-root", str(gov), "write-boundary", "--role", "auditor", "--markdown"])
+    md = capsys.readouterr().out
+    assert rc == 0 and md.startswith("## 🔴 写权限边界") and "no_retry_after_deny" in md

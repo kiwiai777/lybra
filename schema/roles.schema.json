@@ -178,6 +178,143 @@
     ],
     "scope_resolution": "custom name → builtin class → this registry's role.scopes (call-time, AIPOS-347 link reuse)"
   },
+  "write_boundary": {
+    "description": "AIPOS-F66B 件②: 写权限边界声明——角色类 × 目标面(surface) × 三级(read/append/mutate)。护栏类工具(multizone-guard 等)只消费本面, 禁按路径一刀切(2026-09-06 kiwiaiops 经 ssh 只读 cat/head 治理被拦 + chris F12 误拦两案的声明化根治)。唯一读取口: tools/aipos_cli/write_boundary.py(build_write_boundary() 生成可读面 / check_access() 判一次访问 / CLI `lybra roles write-boundary`)。自定义角色按门注册表 class 展开(custom_roles), 实例归属按 enrollment 记录与工位 .lybra/role。声明缺 = SchemaLoadError(fail-closed); 面外路径 = 未声明 = 拒(带出口: 补声明, 不由角色自行突破)。",
+    "levels": {
+      "read": "只读(cat/head/ls/grep/git diff/跑测试)。只读治理永远合法: 所有角色对 governance_root 至少 read, 护栏不得按路径把只读也拦下",
+      "append": "只增不改: 新建文件允许, 修改/删除已有文件拒(decision_log 等 append-only 台账)",
+      "mutate": "新建/修改/删除"
+    },
+    "level_order": [
+      "read",
+      "append",
+      "mutate"
+    ],
+    "surfaces": {
+      "governance_root": {
+        "root": "governance_root",
+        "description": "治理根整体(兜底面; 只读永远合法)"
+      },
+      "governance_docs": {
+        "root": "governance_root",
+        "path_key": "governance_docs",
+        "description": "治理文档(顾问的笔; 路径读 config.schema governance_structure.paths.governance_docs)"
+      },
+      "decision_log": {
+        "root": "governance_root",
+        "path_key": "decision_log_dir",
+        "description": "决策日志(append-only; 路径读 config.schema governance_structure.paths.decision_log_dir)"
+      },
+      "drafts": {
+        "root": "governance_root",
+        "path_key": "drafts",
+        "description": "卡草稿(draft_submit 落点)"
+      },
+      "queue": {
+        "root": "governance_root",
+        "project_paths_key": "queue_root",
+        "description": "队列 = 门领地(账务动词经门, 直接写 = 越界)"
+      },
+      "records": {
+        "root": "governance_root",
+        "path_key": "records",
+        "description": "记录 = 门领地(裁决/认领/交回记录由门铸)"
+      },
+      "task_cards": {
+        "root": "governance_root",
+        "project_paths_key": "task_cards_root",
+        "description": "任务台账(归档 RETURN/AUDIT-REPORT/CLOSURE; 顾问收账)"
+      },
+      "return_slot": {
+        "root": "governance_root",
+        "project_paths_key": "return_root",
+        "per_task": true,
+        "description": "执行体 Return 落点 <return_root>/<本卡ID>/(只对本卡目录 mutate)"
+      },
+      "verdict_slot": {
+        "root": "governance_root",
+        "project_paths_key": "verdict_root",
+        "per_task": true,
+        "description": "审计报告落点 <verdict_root>/<本审计卡ID>/(只对本卡目录 mutate)"
+      },
+      "product_repo": {
+        "root": "project_repos",
+        "per_task_lane": true,
+        "description": "产品仓(project.json repos 清单全部仓)。mutate 只对本卡工作树 <worktree_root>/<卡ID>/ 内且在卡 lane.paths 内的路径; 主检出与车道外一律拒"
+      },
+      "harness_root": {
+        "root": "harness_root",
+        "description": "工位根(章程/扩展/技能由分发器写; 角色自身只读, 自改护栏 = 自我提权)"
+      }
+    },
+    "matrix": {
+      "executor": {
+        "governance_root": "read",
+        "queue": "read",
+        "records": "read",
+        "task_cards": "read",
+        "return_slot": "mutate",
+        "product_repo": "mutate",
+        "harness_root": "read"
+      },
+      "auditor": {
+        "governance_root": "read",
+        "queue": "read",
+        "records": "read",
+        "task_cards": "read",
+        "verdict_slot": "mutate",
+        "product_repo": "read",
+        "harness_root": "read"
+      },
+      "advisor": {
+        "governance_root": "read",
+        "governance_docs": "mutate",
+        "decision_log": "append",
+        "drafts": "mutate",
+        "queue": "read",
+        "records": "read",
+        "task_cards": "mutate",
+        "return_slot": "mutate",
+        "verdict_slot": "mutate",
+        "product_repo": "read",
+        "harness_root": "read"
+      },
+      "planner": {
+        "governance_root": "read",
+        "drafts": "mutate",
+        "queue": "read",
+        "records": "read",
+        "task_cards": "read",
+        "product_repo": "read",
+        "harness_root": "read"
+      },
+      "copilot": {
+        "governance_root": "read",
+        "product_repo": "read",
+        "harness_root": "read"
+      },
+      "owner": {
+        "governance_root": "mutate",
+        "product_repo": "mutate",
+        "harness_root": "mutate"
+      },
+      "owner-dispatch": {
+        "governance_root": "read",
+        "queue": "read",
+        "records": "read"
+      }
+    },
+    "matrix_note": "queue/records 对所有非 owner 角色只读: 账务动词经门铸记录(driver.role_class 的 token), 直接写 = 越界。advisor 的 governance_docs/task_cards 写是治理面(ROLES ⑩ 治理仓 push), 不含产品仓。executor 的 product_repo mutate 受本卡工作树 + lane.paths 双限(与 N3 交回判据②「改动面在界内」同一口径)。",
+    "hard_rules": [
+      {
+        "id": "no_retry_after_deny",
+        "applies_to": "all",
+        "text": "遇护栏拦截即说明并停; 禁换方式重试同一写入——禁换命令头(ssh/bash -c/sudo/别的 shell)、禁拆复合命令、禁换路径/别名/符号链接、禁换工具或包装。拒 = 声明缺口: 记入 RETURN/报告回流给卡或顾问, 由改声明放行, 不由角色自行突破。",
+        "evidence": "2026-09-06 chris HBJ-POC-005 停线: kiwiaiops 被 multizone-guard 拦后换 head/拆复合命令继续(违其章程「遇护栏拦截即说明并停」)"
+      }
+    ],
+    "charter_render": "章程渲染物(distribution.schema charter_render_semantics)附本面的该角色行 + hard_rules 为「写权限边界(声明渲染)」节, 所有角色章程同源下发"
+  },
   "drill_assertion": "Acceptance #1 (new-role drill): add a probe role entry here (with naming prefix + scopes + tool_package) → enroll/distribute/naming all work with ZERO code change → proving 'new role = add one data row'. Drill must be reverted before commit.",
   "driver": {
     "description": "AIPOS-F78 前置零①: 账务动词的驱动方声明——账务动词(claim/return/dispatch/verdict/close/mark_concluded)一律由驱动方 token 提交, actor/agent_instance=卡实例(执行体/审计体零门, 其 token 无账务 scope)。CLI 薄壳(queue claim/return --confirm, audit-verdict --confirm, artifact ingest)从 connection.json 选 role_class==driver.role_class 的 token; 门侧 PreAuthorized 信封识别驱动方身份(token 绑定实例或 role)而非卡实例。唯一声明, 代码只读。",
