@@ -73,7 +73,9 @@ fi
 # 验证章程硬规矩分发与手册单一真相源一致(Δ=0,既有 Python 测试)
 echo
 echo "── tests/test_aipos_f41_hard_rules.py (分发一致性) ──────────────────────────────────────────"
-REPO_ROOT="$(cd "$(dirname "$0")/../../../../.." && pwd)"
+# AIPOS-F66B: 脚本开头已 cd 到 lybra-loop 目录, 相对路径调用时 $0 已失效(REPO_ROOT 为空 → 全部 Python 夹具 "file not found");
+# 从当前目录向上四级即产品仓根, 与调用方式无关。
+REPO_ROOT="$(cd ../../../.. && pwd)"
 if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f41_hard_rules.py"; then
   echo "✓ tests/test_aipos_f41_hard_rules.py PASS"
 else
