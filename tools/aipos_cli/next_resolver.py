@@ -212,6 +212,23 @@ def _audit_report_candidates(workspace_root: Path, audit_task_id: str) -> list[P
     return out
 
 
+def audit_report_artifact_path(workspace_root: Path, audit_task_id: str) -> Path:
+    """AIPOS-F66B 件③: 审计报告落点的唯一读取口 = 已落盘的报告文件; 未落盘时返回声明位默认文件
+    (<paths.verdict_root>/<审计卡ID>/<首个非通配候选>)。与 _return_artifact_path 同构:
+    落点根读项目声明 verdict_root, 文件候选读 transitions artifact_ingest.verdict.verdict_file_candidates。
+    派生审计卡文案 / card render / ingest 全部经此, 禁写死 task_cards/<被审卡ID>/。"""
+    for path in _audit_report_candidates(workspace_root, audit_task_id):
+        if path.is_file():
+            return path
+    cands = list(_artifact_ingest_declaration()["verdict"].get("verdict_file_candidates") or [])
+    first = next((str(c) for c in cands if not any(ch in str(c) for ch in "*?[")), None)
+    if first is None:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.verdict_file_candidates 无非通配候选")
+    return verdict_artifact_dir(workspace_root, audit_task_id) / first
+
+
 def _finalize_mode(workspace_root: Path) -> str:
     """AIPOS-F78B 件②: finalize 场地声明(project.json paths.finalize_mode, config.schema 声明表; 缺省 internal)。"""
     return str(_project_paths(workspace_root).get("finalize_mode") or "internal")

@@ -805,6 +805,16 @@ else
   overall=1
 fi
 
+# AIPOS-F66B: 多项目接入固化(件① 分发按工位项目归属过滤+章程=声明渲染物(seed_only 退役)·件② 护栏读声明 write_boundary 三级+读取口·件③ 审计卡报告落点文案单源)
+echo
+echo "── tests/test_aipos_f66b_project_scoped_distribution.py (F66B 多项目接入固化: 工位项目过滤/章程渲染/write_boundary/审计报告落点单源) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f66b_project_scoped_distribution.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f66b_project_scoped_distribution.py PASS"
+else
+  echo "✗ tests/test_aipos_f66b_project_scoped_distribution.py FAIL"
+  overall=1
+fi
+
 echo
 echo "── tools/aipos_cli/tests/test_agent_watch_fs.py (agent watch 哨兵(F73D expect_ready 谓词零回归)) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_agent_watch_fs.py" -v --tb=short -k "not test_module_is_stdlib_only_zero_new_deps"; then

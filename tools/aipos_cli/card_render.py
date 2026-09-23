@@ -22,10 +22,12 @@ from typing import Any
 
 from tools.aipos_cli.next_resolver import (
     REPO_ROOT,
+    _artifact_ingest_declaration,
     _find_task_in_queue,
     _read_frontmatter,
     _resolve_worktree_root,
     _return_artifact_path,
+    audit_report_artifact_path,
     required_return_frontmatter,
 )
 
@@ -93,7 +95,18 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
     code_repo = resolve_card_repo(governance_root, {**fm, "task_id": task_id})
     worktree = _resolve_worktree_root(governance_root, code_repo) / task_id
     branch = str(get_branch_integration().get("branch_pattern") or "card/{task_id}").replace("{task_id}", task_id)
-    return_path = _return_artifact_path(governance_root, task_id)
+    # AIPOS-F66B 件③: 审计卡(task_mode=audit)的报告落点 = 声明位 verdict_root/<审计卡ID>/<候选>(与派生卡文案同一读取口),
+    # 执行卡 = return_root/<ID>/<候选>; 两者都读声明, 禁写死。
+    is_audit = str(fm.get("task_mode") or "").strip().lower() == "audit"
+    return_path = audit_report_artifact_path(governance_root, task_id) if is_audit else _return_artifact_path(governance_root, task_id)
+    if is_audit:
+        return_frontmatter = [str(k) for k in (_artifact_ingest_declaration()["verdict"].get("required_frontmatter") or [])]
+        if not return_frontmatter:
+            from tools.schema_loader import SchemaLoadError
+
+            raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.required_frontmatter 未声明")
+    else:
+        return_frontmatter = required_return_frontmatter()
 
     sections = _split_sections(str(body or ""))
     aliases = _section_aliases()
@@ -117,7 +130,8 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
         "worktree": str(worktree),
         "branch": branch,
         "return_path": str(return_path),
-        "return_frontmatter": required_return_frontmatter(),
+        "return_frontmatter": return_frontmatter,
+        "artifact_kind": "verdict" if is_audit else "return",
         "rework_rounds": [r for r in (fm.get("rework_rounds") or []) if isinstance(r, dict) and not r.get("cleared_at")],
     }
 
@@ -128,6 +142,8 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
 
 def _frontmatter_hint(model: dict[str, Any]) -> str:
     keys = ", ".join(model["return_frontmatter"])
+    if model.get("artifact_kind") == "verdict":
+        return f"审计报告 frontmatter 必填: {keys}(verdict=PASS/PASS_WITH_NOTES/FAIL/BLOCK, commit_sha=被审卡分支 tip; 报告归审计卡 ID 目录)"
     return f"Return 文件 frontmatter 必填: {keys}(branch={model['branch']}, commit_sha=分支 tip, tree_hash=该 commit 的 tree, model=实际模型自报)"
 
 
