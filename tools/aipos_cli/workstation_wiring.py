@@ -10,9 +10,9 @@ AIPOS-F82 件②(2026-09-24 重 enroll 实撞: pi 启动 Cannot find module + AG
   - 接线目标由 **distribution 声明**推导(tools.distribution_manifest.build_role_manifest, 与门/sync 同一构建器):
       扩展挂载 = 本角色 kind=extension 分发物(单文件 → 相对软链; 多文件 → 转发包装); claim.ts = 最小集声明项;
       **只写目标已存在的扩展挂载**(不存在 = 不写 + warnings 点名, 禁写悬空包装——悬空扩展令 pi 启动即崩);
-      skills/<name> = 本角色 kind=skills 分发物的技能目录(声明即下一次 sync 的落点, 首次 sync 前软链待落地, warnings 点名);
-      roles.schema tool_package 中未被 distribution 声明分发给本角色的扩展/技能(如已退役的旧门循环扩展 lybra-loop、
-      执行体零门后的 finalize-slice)= 不接 + warnings 点名。
+      skills/<name> = 本角色 kind=skills 分发物的技能目录(声明即下一次 sync 的落点, 首次 sync 前软链待落地, warnings 点名)。
+  - AIPOS-F83 件②: 工具包唯一来源 = distribution.schema(roles.schema tool_package 退役, 旧门循环扩展 lybra-loop 退役);
+    未声明 = 不接; 工位上残留的退役挂载(悬空链)由 sync 回收(distribution_sync.pi_mount_scan)。
   - AGENTS.md 种子 = charter_render.render_charter 渲染物(与 sync 同一渲染器、同一渲染上下文); 渲染不成立(无治理根/
     声明不全)= 不写 + warnings(fail-closed, 禁落未渲染母本); 已存在仍不覆盖(seed 语义保留, 覆盖归 sync)。
 
@@ -126,17 +126,6 @@ def declared_role_extensions(dists: list[dict[str, Any]]) -> dict[str, dict[str,
             entry = Path(target_path).name
             out[f"{entry}.ts"] = {"kind": "wrapper", "target": f"{MOUNT_TO_HARNESS_PARENT}{target_path}/{entry}.ts", "distribution_id": str(dist.get("distribution_id"))}
     return dict(sorted(out.items()))
-
-
-def tool_package_for_class(role_class: str) -> dict[str, list[str]]:
-    """roles.schema tool_package(按角色类): 仅用于点名「tool_package 列出但 distribution 未声明分发」的退役项(不作接线源)。"""
-    from tools.schema_loader import load_schema
-
-    for spec in load_schema("roles").get("roles", []):
-        if str(spec.get("role_class") or "") == role_class and spec.get("tool_package"):
-            pkg = spec["tool_package"] or {}
-            return {"extensions": list(pkg.get("extensions") or []), "skills": list(pkg.get("skills") or [])}
-    return {"extensions": [], "skills": []}
 
 
 # ---------------------------------------------------------------------------
@@ -366,18 +355,6 @@ def materialize_pi_wiring(
     if pending:
         warnings.append(
             f".pi/skills 待 sync 落地({len(pending)} 项, distribution 已声明分发给本角色): {', '.join(pending)}; 下一步 lybra sync"
-        )
-
-    # 退役/未声明项点名: roles.schema tool_package 列出但 distribution 未声明分发给本角色 = 不接
-    pkg = tool_package_for_class(role_class)
-    declared_ext_stems = {Path(n).stem for n in declared_ext}
-    retired_ext = [e for e in pkg["extensions"] if e not in declared_ext_stems]
-    retired_skills = [k for k in pkg["skills"] if k not in skills]
-    if retired_ext or retired_skills:
-        report["not_declared"] = {"extensions": retired_ext, "skills": retired_skills}
-        warnings.append(
-            "未接(roles.schema tool_package 列出, distribution 声明未分发给本角色 = 已退役): "
-            + ", ".join([f"extension:{e}" for e in retired_ext] + [f"skill:{k}" for k in retired_skills])
         )
 
     # AIPOS-F58: 把 .pi/ 接线路径登记进 .git/info/exclude(防 `git stash -u` 连坐抹掉)

@@ -277,7 +277,8 @@ def _shared(parent: Path, *names: str) -> None:
 
 def test_item2_fresh_enroll_rendered_charter_and_no_dangling_extension(tmp_path, monkeypatch):
     """空工位 enroll: AGENTS.md = charter_render 渲染物(无 {{占位}}, 与 sync 同渲染器同上下文逐字相等);
-    .pi/extensions 逐个 resolve 目标存在; lybra-loop 退役不接、finalize-slice 不接, warnings 点名。"""
+    .pi/extensions 逐个 resolve 目标存在; lybra-loop 退役不接、finalize-slice 不接
+    (AIPOS-F83 件②: tool_package 退役后不再按其点名退役项, warnings 不含 tool_package 字样)。"""
     from tools.aipos_cli.charter_render import charter_render_context, render_charter, workstation_identity
     from tools.distribution_manifest import get_product_commit
 
@@ -302,7 +303,7 @@ def test_item2_fresh_enroll_rendered_charter_and_no_dangling_extension(tmp_path,
     skills = sorted(p.name for p in (ws / ".pi" / "skills").iterdir())
     assert "finalize-slice" not in skills and skills
     print("warnings:", r["warnings"])
-    assert any("extension:lybra-loop" in w and "skill:finalize-slice" in w for w in r["warnings"])
+    assert not any("tool_package" in w for w in r["warnings"])
     assert r["minimum_bootable_set"]["ok"], r["minimum_bootable_set"]["missing"]
 
 

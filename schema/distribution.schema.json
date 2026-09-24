@@ -97,7 +97,7 @@
         ]
       },
       "version_strategy": "git_commit_hash",
-      "notes": "Filtered skill set per role requirements from roles.schema.json. AIPOS-F82 件①: finalize-slice 退出执行体分发(执行体零门, Owner 09-06: finalize 属产品, 执行体只写产物); 退役 = 从 include 删除, 共享落点 _distributed/skills/finalize-slice 由 sync prune 回收(无其他已 enroll 角色声明时)。"
+      "notes": "本条目 = 执行体技能集唯一声明(AIPOS-F83 件②: roles.schema tool_package 退役, 工具包只此一源)。AIPOS-F82 件①: finalize-slice 退出执行体分发(执行体零门, Owner 09-06: finalize 属产品, 执行体只写产物); AIPOS-F83 件①: finalize-slice 母本目录删除(任何角色无声明), 工位 .pi/skills/finalize-slice 悬空链由 sync 回收(pi_mount_prune_semantics); task-closure-loop/audit-card-template.md 退役(审计卡由产品 audit_derivation 派生, 执行体不自产)。分发给执行体/审计体的技能正文零门: 不教门动作(认领/派审/裁决/finalize/push/deploy 由驱动方经产品完成)、无产品仓/机器/他项目路径字面(落点 = 卡面声明), 夹具 tests/test_aipos_f83_skills_zero_gate.py 守。"
     },
     {
       "distribution_id": "auditor-skills",
@@ -125,7 +125,7 @@
         ]
       },
       "version_strategy": "git_commit_hash",
-      "notes": "Auditor-specific skill set"
+      "notes": "本条目 = 审计体技能集唯一声明(AIPOS-F83 件②)。技能正文零门同 executor-skills notes(AIPOS-F83 件①)。"
     },
     {
       "distribution_id": "advisor-skills",
@@ -156,7 +156,7 @@
         ]
       },
       "version_strategy": "git_commit_hash",
-      "notes": "Advisor-specific skill set (AIPOS-R6E ⑥: card-author = 顾问出卡检查表; AIPOS-R6M 大项C②: truth-navigator = 时间线导航)"
+      "notes": "本条目 = 顾问技能集唯一声明(AIPOS-F83 件②)。AIPOS-R6E ⑥: card-author = 顾问出卡检查表; AIPOS-R6M 大项C②: truth-navigator = 时间线导航。"
     },
     {
       "distribution_id": "executor-charter",
@@ -339,6 +339,12 @@
       "matches_for_custom": "hbj-coder (class=executor in project.json) → 构建器解析 class → 匹配 executor → 自动包含"
     }
   },
+  "tool_package_single_source": {
+    "description": "AIPOS-F83 件②: 角色工具包(技能/扩展/章程/schema)唯一来源 = 本 schema distributions[] 的 applies_to_roles + filter(F82 G2 双来源收一)",
+    "rule": "某角色(按角色类展开, 见 applies_to_roles_semantics)应得的全部件 = 本 schema 中 applies_to_roles 含其类的条目; 技能集 = kind=skills 条目 filter.include。roles.schema roles[].tool_package 已退役(不再列清单, 只留 tool_package_retired 指向本 schema); 旧门循环扩展 lybra-loop 退役(无条目 = 不分发、不接线)。",
+    "readers": "tools.distribution_manifest.build_role_manifest(唯一构建器) ← 门 lybra_distribution_manifest / tools.aipos_cli.distribution_sync(sync 与共享落点并集) / tools.aipos_cli.workstation_wiring.declared_role_distributions(enroll 接线); 读 roles.schema tool_package 的代码 = 0(tests/test_aipos_f83_skills_zero_gate.py 盘点守)。",
+    "retire": "退役某件 = 从对应条目 include/applies_to_roles 删除; 母本目录随之删除(无任何条目声明时); 工位残留由 sync prune 回收(shared_landing_prune_semantics + pi_mount_prune_semantics)。"
+  },
   "minimum_bootable_set": {
     "description": "AIPOS-F54: workstation minimum bootable set — every item enroll must land in one action so a fresh workstation can start pi and run /lybra on with ZERO manual editing. Single source for the missing-item check (each missing item named individually; never 'one missing key breaks everything with no name'). Seeded seed_only: existing files are never overwritten (user customization preserved). Declared here per card acceptance #15 ('config.schema 或分发清单择一').",
     "items": [
@@ -393,7 +399,7 @@
         "name": ".pi/skills/",
         "kind": "symlink_dir",
         "path": ".pi/skills",
-        "description": "Per-skill relative symlinks to ../../../_distributed/skills/<name>, allocated by role_class from this schema's kind=skills distributions (AIPOS-F82; roles.schema tool_package items not declared here = retired, not wired, named in enroll warnings)"
+        "description": "Per-skill relative symlinks to ../../../_distributed/skills/<name>, allocated by role_class from this schema's kind=skills distributions (AIPOS-F82; AIPOS-F83: this schema is the ONLY tool-package source, roles.schema tool_package retired; stale dangling links reclaimed by sync, see pi_mount_prune_semantics)"
       }
     ]
   }
