@@ -230,20 +230,14 @@ class TestSkillDistribution(unittest.TestCase):
         self.assertIn("lybra-onboarding", includes, "lybra-onboarding 未在 advisor 分发清单")
 
     def test_skill_in_advisor_role_schema(self):
-        """验收③:skill 在 advisor 角色 tool_package 里。"""
-        repo_root = Path(__file__).resolve().parents[3]
-        roles_schema = repo_root / "schema" / "roles.schema.json"
-        data = json.loads(roles_schema.read_text(encoding="utf-8"))
+        """验收③:skill 在 advisor 角色应得技能集里。
 
-        advisor_role = None
-        for role in data.get("roles", []):
-            if role.get("role") == "advisor":
-                advisor_role = role
-                break
+        AIPOS-F83 件②: roles.schema tool_package 退役, 工具包单源 = distribution.schema;
+        advisor 应得技能集改读分发声明(与门/sync/enroll 同一构建器)。"""
+        from tools.aipos_cli.workstation_wiring import declared_role_distributions, declared_role_skills
 
-        self.assertIsNotNone(advisor_role, "未找到 advisor 角色定义")
-        skills = advisor_role.get("tool_package", {}).get("skills", [])
-        self.assertIn("lybra-onboarding", skills, "lybra-onboarding 未在 advisor skills")
+        skills = declared_role_skills(declared_role_distributions("advisor", "advisor"))
+        self.assertIn("lybra-onboarding", skills, "lybra-onboarding 未在 advisor 应得技能集(distribution 声明)")
 
 
 class TestChrisGapsRegression(unittest.TestCase):

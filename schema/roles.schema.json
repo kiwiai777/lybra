@@ -1,8 +1,9 @@
 {
   "schema_version": "1.0.0",
-  "description": "Lybra Role Registry — single source of truth for role category definitions. DESIGN v2 §5-6 (角色注册表): each role category's complete definition lives here. enroll (scopes) / distribute (tool package) / instance naming derivation ALL read from this registry — new role = add one entry, zero code change. Read via the unique loader (tools/schema_loader).",
-  "last_updated": "2026-08-12",
+  "description": "Lybra Role Registry — single source of truth for role category definitions. DESIGN v2 §5-6 (角色注册表): each role category's complete definition lives here. enroll (scopes) / instance naming derivation read from this registry; the per-role tool package (skills/extensions/charter) is declared ONLY in schema/distribution.schema.json applies_to_roles+filter (AIPOS-F83) — new role = add one entry, zero code change. Read via the unique loader (tools/schema_loader).",
+  "last_updated": "2026-09-24",
   "source_of_truth_note": "This file is the ONLY place role categories are defined. AIPOS-R4B-1: replaces ROLE_TOOL_MAPPING (distribute_tools.py), _resolve_role_scopes (mcp_server/tools.py), 20 scattered instance-name literals, and the hardcoded DEFAULT_PREFIX_MAPPING (naming_profile.py). Per 一机制一实现 (§6), introducing a second role-definition source = audit FAIL.",
+  "tool_package_retired": "AIPOS-F83 件②: roles[].tool_package 退役——工具包(技能/扩展/章程)唯一真相 = schema/distribution.schema.json 的 applies_to_roles + filter, 按角色类展开由 tools.distribution_manifest.build_role_manifest 构建(门 lybra_distribution_manifest / sync / enroll 接线同一构建器)。本注册表不再列工具清单; 旧门循环扩展 lybra-loop 随之退役(零门后无用)。新角色要工具 = 在 distribution.schema 对应条目 applies_to_roles 加该内建类。",
   "naming": {
     "template": "{prefix}.{project}.{host}",
     "description": "Instance-name derivation template (a PRODUCT RULE, not configurable). The three-part dotted structure is fixed; segment VALUES come from elsewhere: prefix from role.naming.prefix (this registry); project from workspace project.json (naming_profile.project_segment or .project); host from workspace project.json (naming_profile.host_segment). Derived by exactly one implementation: naming_profile.generate_canonical_name().",
@@ -22,18 +23,6 @@
       ],
       "naming": {
         "prefix": "exec"
-      },
-      "tool_package": {
-        "extensions": [
-          "lybra-loop"
-        ],
-        "skills": [
-          "block-and-report",
-          "chunked-io",
-          "finalize-slice",
-          "task-closure-loop",
-          "write-return"
-        ]
       }
     },
     {
@@ -53,7 +42,7 @@
       "naming": {
         "prefix": "owner"
       },
-      "_note": "No tool_package: owner operates out-of-band, not a distributed harness role."
+      "_note": "Owner operates out-of-band, not a distributed harness role (distribution.schema 无条目)."
     },
     {
       "role": "owner-dispatch",
@@ -65,7 +54,7 @@
       "naming": {
         "prefix": "owner-dispatch"
       },
-      "_note": "No tool_package: dispatch-only credential."
+      "_note": "Dispatch-only credential (distribution.schema 无条目)."
     },
     {
       "role": "auditor",
@@ -76,18 +65,6 @@
       ],
       "naming": {
         "prefix": "audit"
-      },
-      "tool_package": {
-        "extensions": [
-          "lybra-loop"
-        ],
-        "skills": [
-          "audit-independent-evidence",
-          "block-and-report",
-          "chunked-io",
-          "task-closure-loop",
-          "write-return"
-        ]
       }
     },
     {
@@ -98,7 +75,7 @@
       "naming": {
         "prefix": "copilot"
       },
-      "_note": "Read-only credential; scopes [] verified-sufficient. No tool_package (planning-copilot, no harness loop)."
+      "_note": "Read-only credential; scopes [] verified-sufficient. Planning-copilot, no harness loop (distribution.schema 无条目)."
     },
     {
       "role": "planner",
@@ -116,7 +93,7 @@
       "naming": {
         "prefix": "planner"
       },
-      "_note": "AIPOS-F41 大项B2: planner scopes 增加 queue_withdraw(限本项目卡撤废卡)+queue_claim(claim自确认,沿用328路线)。顾问遇链条卡点时可自主推进,无需每步等Owner。BYO external planning advisor's credential. No tool_package."
+      "_note": "AIPOS-F41 大项B2: planner scopes 增加 queue_withdraw(限本项目卡撤废卡)+queue_claim(claim自确认,沿用328路线)。顾问遇链条卡点时可自主推进,无需每步等Owner。BYO external planning advisor's credential (distribution.schema 无条目)."
     },
     {
       "role": "advisor",
@@ -141,21 +118,6 @@
       ],
       "naming": {
         "prefix": "advisor"
-      },
-      "tool_package": {
-        "extensions": [
-          "lybra-loop"
-        ],
-        "skills": [
-          "advisor-commands",
-          "lybra-onboarding",
-          "block-and-report",
-          "card-author",
-          "task-closure-loop",
-          "truth-first-drafting",
-          "truth-navigator",
-          "write-return"
-        ]
       },
       "_note": "AIPOS-R7A FIX-2: advisor now mintable. Scopes cover advisor lane: draft/amend/withdraw/conclude/dispatch/decisions/envelopes. Explicitly EXCLUDES finalize (executor-only) and product-repo writes (advisor永不碰产品仓)."
     }
@@ -315,7 +277,7 @@
     ],
     "charter_render": "章程渲染物(distribution.schema charter_render_semantics)附本面的该角色行 + hard_rules 为「写权限边界(声明渲染)」节, 所有角色章程同源下发"
   },
-  "drill_assertion": "Acceptance #1 (new-role drill): add a probe role entry here (with naming prefix + scopes + tool_package) → enroll/distribute/naming all work with ZERO code change → proving 'new role = add one data row'. Drill must be reverted before commit.",
+  "drill_assertion": "Acceptance #1 (new-role drill): add a probe role entry here (with naming prefix + scopes; tools via distribution.schema applies_to_roles) → enroll/distribute/naming all work with ZERO code change → proving 'new role = add one data row'. Drill must be reverted before commit.",
   "driver": {
     "description": "AIPOS-F78 前置零①: 账务动词的驱动方声明——账务动词(claim/return/dispatch/verdict/close/mark_concluded)一律由驱动方 token 提交, actor/agent_instance=卡实例(执行体/审计体零门, 其 token 无账务 scope)。CLI 薄壳(queue claim/return --confirm, audit-verdict --confirm, artifact ingest)从 connection.json 选 role_class==driver.role_class 的 token; 门侧 PreAuthorized 信封识别驱动方身份(token 绑定实例或 role)而非卡实例。唯一声明, 代码只读。",
     "role_class": "advisor",

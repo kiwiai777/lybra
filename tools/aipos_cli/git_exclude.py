@@ -234,7 +234,7 @@ def collect_wiring_exclude_paths(workspace_root: Path) -> list[str]:
     逐文件精确登记:
       - .pi/settings.json
       - .pi/extensions/claim.ts
-      - .pi/extensions/lybra-loop.ts
+      - .pi/extensions/<声明的扩展挂载>(distribution.schema 声明; AIPOS-F83: lybra-loop 已退役)
       - .pi/skills/<name> (逐个)
 
     Returns:

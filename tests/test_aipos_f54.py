@@ -60,7 +60,6 @@ from tools.aipos_cli.workstation_wiring import (  # noqa: E402
     declared_role_skills,
     derive_effective_owner_policy_ref,
     minimum_bootable_set_items,
-    tool_package_for_class,
     verify_minimum_bootable_set,
 )
 
@@ -203,10 +202,11 @@ def test_2_green_full_wiring():
     ok("⑯ claim.ts 软链目标正确",
        "../../.." in Path(claim.readlink()).as_posix() and "_shared/extensions/claim.ts" in claim.readlink().as_posix(),
        claim.readlink().as_posix())
-    # AIPOS-F82 件②: 旧门循环扩展 lybra-loop 未被 distribution 声明 = 已退役 → 不接(不写悬空包装), warnings 点名
+    # AIPOS-F82 件②: 旧门循环扩展 lybra-loop 未被 distribution 声明 = 已退役 → 不接(不写悬空包装)
     ok("F82 lybra-loop.ts 不再写(退役, 无悬空包装)", not (ws / ".pi" / "extensions" / "lybra-loop.ts").exists()
        and not (ws / ".pi" / "extensions" / "lybra-loop.ts").is_symlink())
-    ok("F82 warnings 点名 lybra-loop 未接", any("extension:lybra-loop" in w for w in r.get("warnings") or []), str(r.get("warnings")))
+    # AIPOS-F83 件②: tool_package 退役(工具包单源 = distribution.schema), 不再有「tool_package 列出而未声明」的点名
+    ok("F83 warnings 不再按 tool_package 点名退役项", not any("tool_package" in w for w in r.get("warnings") or []), str(r.get("warnings")))
     ok("F82 .pi/extensions 逐个 resolve 目标存在",
        all(p.exists() for p in (ws / ".pi" / "extensions").iterdir()), str(sorted(p.name for p in (ws / ".pi" / "extensions").iterdir())))
     ok("F82 AGENTS.md = 渲染物(无 {{占位}})", "{{" not in (ws / "AGENTS.md").read_text()
@@ -405,7 +405,9 @@ def test_11_no_hardcoded_roles():
     skills = declared_role_skills(declared_role_distributions("executor", "executor"))
     ok("⑱ distribution 声明可查(F82: 执行体 4 技能, 零门无 finalize-slice)",
        len(skills) == 4 and "finalize-slice" not in skills, str(sorted(skills)))
-    ok("⑱ roles.schema tool_package 仅作退役项点名源", "finalize-slice" in tool_package_for_class("executor")["skills"])
+    roles = json.loads((REPO / "schema" / "roles.schema.json").read_text(encoding="utf-8"))
+    ok("⑱ F83 roles.schema 无 tool_package(工具包单源 = distribution.schema)",
+       not any("tool_package" in r for r in roles["roles"]) and "tool_package_retired" in roles)
 
 
 def test_12_derive_priority_instance_over_role():

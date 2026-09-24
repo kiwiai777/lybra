@@ -27,6 +27,13 @@ AIPOS-F82 件①(2026-09-24 执行/审计工位 sync 互删乒乓的根治):
   角色 = 工位父根下各工位 .lybra/role, 自定义角色经门注册表解析内建类; 应得件 = distribution_manifest.build_role_manifest
   按 distribution.schema applies_to_roles 构建, 与门同一构建器); 并集不可完整解析 = 共享落点 prune 暂停并出声(fail-closed,
   禁删别的角色可能要的件)。工位私有落点(.pi/extensions、AGENTS.md)行为不变。
+
+AIPOS-F83 件③(F82 G3: 工位 .pi/skills/finalize-slice 悬空软链, prune 不覆盖 .pi/):
+- 本项目工位 `.pi/skills/`、`.pi/extensions/` 下的挂载(符号链接 / 带分发标记的转发包装), 目标不存在(或本次 prune 后将不存在)者:
+  不在当前声明内 + 产品接线形态(相对工位父根 ../../../) = 回收(并入 would_prune / pruned, manifest 记 pruned);
+  声明内 = 不删, 列 pi_mount_warnings(待 sync 落地); 非产品接线形态 = 不碰, 列 pi_mount_warnings。
+  声明内挂载名 = workstation_wiring.declared_role_skills / declared_role_extensions + minimum_bootable_set 的 .pi/extensions 项
+  (与 enroll 接线同一推导, 禁第二实现)。非本项目工位照 F66B 跳过(零写入)。
 """
 from __future__ import annotations
 
@@ -34,12 +41,14 @@ import base64
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 SYNC_RUN_MANIFEST = ".version-sync"  # 多工位 sync 运行清单(含 skipped), `.version-` 前缀 = prune 不碰
 SHARED_LANDING = "_distributed"  # AIPOS-F82 件①: 工位父根下所有工位共享的分发落点(prune 按全角色声明并集)
+PI_MOUNT_DIRS = ("skills", "extensions")  # AIPOS-F83 件③: 工位私有挂载目录(.pi/<dir>/<挂载名>), 悬空挂载回收范围
 
 
 def _discover_harness_root_from(start: Path) -> Path | None:
@@ -249,6 +258,7 @@ def compute_diffs(
     render_context: dict[str, Any] | None = None,
     role: str | None = None,
     shared_guard: dict[str, Any] | None = None,
+    pi_mount_report: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     """对比本地与远端清单, 返回 [(dist, [path...])] 差异、应存在文件清单、应删除文件清单。
 
@@ -261,6 +271,8 @@ def compute_diffs(
     差异项带 reasons{path: 原因}; 未给 render_context = 旧的字节比对(纯函数夹具兼容)。
 
     AIPOS-F82 件①: 共享落点 prune 扣除全角色声明并集(shared_guard; 未给则现算 shared_landing_declaration, 结果写回该字典)。
+
+    AIPOS-F83 件③: 工位 .pi 悬空挂载(pi_mount_scan)并入 to_prune; 扫描报告写回 pi_mount_report(给了时)。
     """
     from tools.aipos_cli.charter_render import render_context_fingerprint
 
@@ -300,7 +312,15 @@ def compute_diffs(
     # AIPOS-F82 件①: 共享落点扣除全角色声明并集(禁互删)
     if shared_guard is None:
         shared_guard = shared_landing_declaration(harness_root)
-    to_prune = _find_files_to_prune(harness_root, declared_files, shared_guard=shared_guard)
+    dists = list(remote.get("distributions", []))
+    mounts = declared_pi_mounts(dists) if (harness_root / ".pi").is_dir() else None
+    to_prune = _find_files_to_prune(harness_root, declared_files, shared_guard=shared_guard, pi_mounts=mounts)
+
+    # AIPOS-F83 件③: 悬空挂载(目标缺 / 本次 prune 后缺)按声明回收
+    scan = pi_mount_scan(harness_root, dists, to_prune, mounts=mounts)
+    to_prune.extend(p for p in scan["prune"] if p not in to_prune)
+    if pi_mount_report is not None:
+        pi_mount_report.update(scan)
 
     return to_fetch, list(declared_files), to_prune
 
@@ -379,6 +399,7 @@ def write_local_manifest(
     *,
     charter_records: dict[str, dict[str, dict[str, str]]] | None = None,
     workstation: dict[str, Any] | None = None,
+    pruned: list[str] | None = None,
 ) -> Path:
     """写/更新 _distributed/.version-{role}(含文件哈希, 供连接器版本自答)。
 
@@ -386,6 +407,7 @@ def write_local_manifest(
     本函数每次从 remote(当前部署声明) 完全重建 manifest, 不读取/合并旧 manifest。
     AIPOS-F66B 件①: charter 文件附三指纹(charter_records[dist_id][rel] = {source_sha256, render_context_sha256, rendered_sha256});
     workstation = 工位归属(instance/project)。
+    AIPOS-F83 件③: pruned = 本次 sync 回收的文件/挂载(给了即记 manifest pruned, 与共享落点 prune 同一出口)。
     """
     role = remote.get("role", "unknown")
     manifest_dir = harness_root.parent / "_distributed"
@@ -424,6 +446,8 @@ def write_local_manifest(
     }
     if workstation:
         data["workstation"] = {k: workstation.get(k) for k in ("instance", "project", "role", "harness_root")}
+    if pruned is not None:
+        data["pruned"] = list(pruned)
     # 直接覆盖写入(不读取旧 manifest), 实现每次重生
     manifest_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest_path
@@ -517,6 +541,7 @@ def _find_files_to_prune(
     declared_files: set[str],
     *,
     shared_guard: dict[str, Any] | None = None,
+    pi_mounts: dict[str, set[str]] | None = None,
 ) -> list[str]:
     """AIPOS-F66C 件①-R3: 找出分发器曾铺过、但不在当前部署声明中的文件。
 
@@ -531,6 +556,9 @@ def _find_files_to_prune(
     AIPOS-F82 件①: 给了 shared_guard(shared_landing_declaration)时, _distributed/ 下的候选再扣除全角色声明并集
     (扣下的记 shared_guard["protected"]); 并集不完整(complete=False)= 共享落点候选全部暂停(记 shared_guard["suspended"])。
     工位私有落点(.pi/extensions、AGENTS.md)不受影响。
+
+    AIPOS-F83 件③: 给了 pi_mounts(declared_pi_mounts)时, .pi/extensions 下挂载名在当前声明内的包装不回收(声明内 = 保留;
+    目标暂缺由 pi_mount_scan 列 warnings)。悬空符号链接由 pi_mount_scan 判定, 本函数不重复。
 
     Returns:
         应删除的文件路径列表(绝对路径)
@@ -559,7 +587,10 @@ def _find_files_to_prune(
         # 读取本地manifest获取历史分发过的wrapper列表
         historical_wrappers = _get_historical_distributed_files(harness_root)
 
+        declared_ext = (pi_mounts or {}).get("extensions") or set()
         for p in wrapper_dir.rglob("*"):
+            if p.parent == wrapper_dir and p.name in declared_ext:
+                continue  # AIPOS-F83 件③: 声明内挂载不回收
             if p.is_file():
                 path_str = str(p)
                 if path_str not in declared_files:  # 不在当前声明
@@ -574,6 +605,99 @@ def _find_files_to_prune(
         to_prune.append(str(charter))
 
     return to_prune
+
+
+def declared_pi_mounts(dists: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """AIPOS-F83 件③: 本角色当前声明的 .pi 挂载名 —— 与 enroll 接线同一推导(禁第二实现):
+    skills = workstation_wiring.declared_role_skills; extensions = workstation_wiring.declared_role_extensions
+    + distribution.schema minimum_bootable_set 中 .pi/extensions/<名> 文件项(claim.ts)。"""
+    from tools.aipos_cli.workstation_wiring import (
+        declared_role_extensions,
+        declared_role_skills,
+        minimum_bootable_set_items,
+    )
+
+    ext = set(declared_role_extensions(dists))
+    for item in minimum_bootable_set_items():
+        path = str(item.get("path") or "")
+        if str(item.get("kind") or "file") == "file" and path.startswith(".pi/extensions/"):
+            ext.add(path.rsplit("/", 1)[1])
+    return {"skills": set(declared_role_skills(dists)), "extensions": ext}
+
+
+_WRAPPER_TARGET_RE = re.compile(r'from\s+"([^"]+)"')
+
+
+def _mount_target(mount: Path) -> tuple[str, Path] | None:
+    """挂载 → (原始目标文本, 按挂载点解析的目标路径)。符号链接读链接文本; 带分发标记的转发包装读 from "<目标>"。
+    其他(工位自有真实文件/目录)= None(不属挂载, 不判)。"""
+    if mount.is_symlink():
+        raw = os.readlink(mount)
+    elif mount.is_file() and _is_distributed_file(mount):
+        try:
+            m = _WRAPPER_TARGET_RE.search(mount.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise OSError(f"挂载包装 {mount} 不可读, 悬空判定不成立: {exc}") from exc
+        if not m:
+            return None
+        raw = m.group(1)
+    else:
+        return None
+    return raw, Path(os.path.normpath(mount.parent / raw))
+
+
+def _mount_target_alive(target: Path, pending: set[str]) -> bool:
+    """目标在(且本次 prune 后仍在)= True。目录目标 = 其下至少一个文件不在本次 prune 集; 空目录 / 缺 = False。"""
+    if target.is_dir():
+        return any(str(f.resolve()) not in pending for f in target.rglob("*") if f.is_file())
+    if target.is_file():
+        return str(target.resolve()) not in pending
+    return False
+
+
+def pi_mount_scan(
+    harness_root: Path,
+    dists: list[dict[str, Any]],
+    to_prune: list[str],
+    *,
+    mounts: dict[str, set[str]] | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F83 件③: 工位 .pi/skills、.pi/extensions 悬空挂载扫描(只判不删; 删走 _prune_files, 与共享落点 prune 同一出口)。
+
+    挂载目标不存在, 或目标文件全在本次 to_prune 内(prune 后即悬空)= 悬空:
+    - 不在当前声明内 且 原始目标为产品接线形态(workstation_wiring.MOUNT_TO_HARNESS_PARENT 相对前缀)= prune;
+    - 在当前声明内 = 不删, 列 declared_missing(目标待 sync 落地);
+    - 非产品接线形态(绝对路径/其他相对形态)= 不碰, 列 foreign(工位自有挂载, 须人工核)。
+    返回 {prune:[绝对路径], declared_missing:[说明], foreign:[说明]}。
+    """
+    from tools.aipos_cli.workstation_wiring import MOUNT_TO_HARNESS_PARENT
+
+    report: dict[str, Any] = {"prune": [], "declared_missing": [], "foreign": []}
+    pi = harness_root / ".pi"
+    if not pi.is_dir():
+        return report
+    if mounts is None:
+        mounts = declared_pi_mounts(dists)
+    pending = {str(Path(p).resolve()) for p in to_prune}
+    for sub in PI_MOUNT_DIRS:
+        base = pi / sub
+        if not base.is_dir():
+            continue
+        for mount in sorted(base.iterdir()):
+            found = _mount_target(mount)
+            if found is None:
+                continue
+            raw, target = found
+            if _mount_target_alive(target, pending):
+                continue
+            rel = f".pi/{sub}/{mount.name}"
+            if mount.name in mounts.get(sub, set()):
+                report["declared_missing"].append(f"{rel} → {raw}: 声明内但目标暂缺(不删; lybra sync 落地后恢复)")
+            elif not raw.startswith(MOUNT_TO_HARNESS_PARENT):
+                report["foreign"].append(f"{rel} → {raw}: 悬空但非产品接线形态(不碰; 工位自有挂载, 须人工核)")
+            else:
+                report["prune"].append(str(mount))
+    return report
 
 
 def _get_historical_distributed_files(harness_root: Path) -> set[str]:
@@ -653,6 +777,11 @@ def _prune_files(paths: list[str]) -> dict[str, Any]:
     for p_str in paths:
         p = Path(p_str)
         try:
+            if p.is_symlink():
+                # AIPOS-F83 件③: 挂载链接只删链接本身(不跟随、不清父目录——.pi/skills 为最小集声明目录)
+                p.unlink()
+                pruned.append(str(p))
+                continue
             if p.is_file():
                 p.unlink()
                 pruned.append(str(p))
@@ -772,8 +901,10 @@ def sync(
         render_ctx = charter_render_context(gov, identity=identity, product_commit=str(remote.get("product_commit") or "unknown"))
 
     shared_guard = shared_landing_declaration(ctx["harness_root"])
+    mount_report: dict[str, Any] = {}
     diffs, declared_files, to_prune = compute_diffs(
         ctx["harness_root"], remote, render_context=render_ctx, role=ctx["role"], shared_guard=shared_guard,
+        pi_mount_report=mount_report,
     )
 
     plan = []
@@ -803,6 +934,9 @@ def sync(
         "would_prune": list(to_prune),
         "declared_files": declared_files,
         "shared_prune_guard": public_shared_guard(shared_guard),
+        # AIPOS-F83 件③: .pi 悬空挂载 —— 回收项已并入 would_prune; 声明内暂缺 / 非接线形态只告警不删
+        "pi_mount_prune": list(mount_report.get("prune") or []),
+        "pi_mount_warnings": list(mount_report.get("declared_missing") or []) + list(mount_report.get("foreign") or []),
     }
     if dry_run:
         return {**base_result, "files_fetched": 0, "files_pruned": 0, "changes": [], "pruned_files": [], "prune_errors": [],
@@ -862,7 +996,11 @@ def sync(
             "target_path": dist.get("target_path"),
         })
 
-    manifest_path = write_local_manifest(ctx["harness_root"], remote, charter_records=charter_records or None, workstation=identity)
+    manifest_path = write_local_manifest(ctx["harness_root"], remote, charter_records=charter_records or None, workstation=identity,
+                                         pruned=prune_result["pruned_files"])
+
+    # AIPOS-F83 件③: 落地后复扫 .pi 挂载告警(声明内暂缺者本次 fetch 后应已恢复; 仍缺 = 如实告警)
+    post_scan = pi_mount_scan(ctx["harness_root"], list(remote.get("distributions", [])), [])
 
     # AIPOS-F54 ⑪: 信封更换后的产品更新路径 —— sync 时按生效信封校正 .lybra/role#owner_policy_ref,
     # 顾问无须手写文件(推导不出/路径不可读则非致命告警, 不阻断分发)。
@@ -877,6 +1015,7 @@ def sync(
         "manifest_path": str(manifest_path),
         "pruned_files": prune_result["pruned_files"],
         "prune_errors": prune_result["errors"],
+        "pi_mount_warnings": list(post_scan["declared_missing"]) + list(post_scan["foreign"]),
         "owner_policy_correction": policy_correction,
     }
 
@@ -1016,6 +1155,8 @@ def render_sync_text(run: dict[str, Any]) -> str:
                 lines.append(f"      would-prune (不在声明): {len(r['would_prune'])} file(s)")
                 for pf in r["would_prune"][:5]:
                     lines.append(f"          - {pf}")
+            for w in r.get("pi_mount_warnings") or []:
+                lines.append(f"      ⚠ .pi 挂载(AIPOS-F83): {w}")
             guard = r.get("shared_prune_guard") or {}
             if guard.get("protected"):
                 lines.append(f"      共享落点保留(他角色声明, AIPOS-F82): {len(guard['protected'])} file(s)")
