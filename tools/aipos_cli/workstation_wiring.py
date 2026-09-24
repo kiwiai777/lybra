@@ -1,18 +1,28 @@
 """AIPOS-F54 — 工位可启动最小集(bootstrap minimum)单源实现。
 
 enroll 一次性落齐"可启动最小集"(缺任何一项, 新工位起不来):
-  ① .pi/ 接线(settings.json + extensions/{claim.ts, lybra-loop.ts} + skills/<name>)
+  ① .pi/ 接线(settings.json + extensions/{claim.ts, 声明的扩展} + skills/<name>)
   ② .lybra/role#owner_policy_ref(从门侧生效 owner_autonomy_policy 信封推导)
   ③ .lybra/connection.json#lybra_bin(指向实际部署位)
-  ④ AGENTS.md 章程占位(正式内容由 /lybra sync 分发拉齐)
+  ④ AGENTS.md 章程种子(AIPOS-F82: charter_render 渲染物; 母本变/声明变由 /lybra sync 重渲染)
+
+AIPOS-F82 件②(2026-09-24 重 enroll 实撞: pi 启动 Cannot find module + AGENTS.md 显示 {{占位}}):
+  - 接线目标由 **distribution 声明**推导(tools.distribution_manifest.build_role_manifest, 与门/sync 同一构建器):
+      扩展挂载 = 本角色 kind=extension 分发物(单文件 → 相对软链; 多文件 → 转发包装); claim.ts = 最小集声明项;
+      **只写目标已存在的扩展挂载**(不存在 = 不写 + warnings 点名, 禁写悬空包装——悬空扩展令 pi 启动即崩);
+      skills/<name> = 本角色 kind=skills 分发物的技能目录(声明即下一次 sync 的落点, 首次 sync 前软链待落地, warnings 点名);
+      roles.schema tool_package 中未被 distribution 声明分发给本角色的扩展/技能(如已退役的旧门循环扩展 lybra-loop、
+      执行体零门后的 finalize-slice)= 不接 + warnings 点名。
+  - AGENTS.md 种子 = charter_render.render_charter 渲染物(与 sync 同一渲染器、同一渲染上下文); 渲染不成立(无治理根/
+    声明不全)= 不写 + warnings(fail-closed, 禁落未渲染母本); 已存在仍不覆盖(seed 语义保留, 覆盖归 sync)。
 
 单源纪律(卡面锚点):
-  - role→skills 映射 = schema/roles.schema.json tool_package(按 role_class 取, 禁代码硬编码角色名)
+  - role→skills/extensions 映射 = schema/distribution.schema.json applies_to_roles(AIPOS-F82; 按 role_class 展开, 禁代码硬编码角色名)
   - 最小集清单 = schema/distribution.schema.json minimum_bootable_set(缺项逐项点名)
   - 信封判定 = tools/aipos_cli/autonomy_policy.py normalize(复用, 禁第二份信封解析)
   - 接线规格 = 卡面 Owner 裁定(2026-08-28 项目顾问逆向+顾问实测复核):
       settings.json 最小配置禁写 defaultModel、禁用 extensions 数组当加载清单;
-      claim.ts = 相对软链;lybra-loop.ts = 真实转发文件(多文件扩展经 symlink 丢兄弟模块);
+      claim.ts = 相对软链;多文件扩展挂载 = 真实转发文件(多文件扩展经 symlink 丢兄弟模块);
       skills/<name> = 逐技能软链(按角色类分配子集)。
 
 seed_only 语义(F27):已存在则跳过并出声, 绝不覆盖用户定制。
@@ -37,27 +47,21 @@ SETTINGS_TEMPLATE: dict[str, Any] = {
     "skills": [],
 }
 
-#: lybra-loop.ts 必须是真实转发文件(多文件扩展经 symlink 挂载会丢兄弟模块)。
-LOOP_WRAPPER_TS = (
-    "// AIPOS-R3: 挂载包装指向分发落点(由 gate 分发器写入 _distributed/)\n"
+#: 多文件扩展的挂载包装必须是真实转发文件(多文件扩展经 symlink 挂载会丢兄弟模块)。
+#: 标记行「AIPOS-R3: 挂载包装」= 分发器铺的包装(sync prune 据此识别, 见 distribution_sync._is_distributed_file)。
+EXTENSION_WRAPPER_TEMPLATE = (
+    "// AIPOS-R3: 挂载包装指向分发落点(由 gate 分发器写入工位父根)\n"
     "// 真实文件非 symlink:pi 扩展加载器按 symlink 所在位置解析相对导入,\n"
     "// 多文件扩展经文件 symlink 挂载会丢兄弟模块。包装文件以自身真实路径转发,\n"
     "// 兄弟导入在分发落点真实目录内解析。\n"
-    'export { default } from "../../../_distributed/extensions/lybra-loop/lybra-loop.ts";\n'
+    'export {{ default }} from "{target}";\n'
 )
 
-#: claim.ts = 相对软链(工位/.pi/extensions/claim.ts → 仓库根/_shared/extensions/claim.ts)。
+#: 工位/.pi/<子目录>/<挂载名> → 工位父根的相对前缀(接线规格: 挂载点在工位根下两级)。
+MOUNT_TO_HARNESS_PARENT = "../../../"
+
+#: claim.ts = 相对软链(工位/.pi/extensions/claim.ts → 仓库根/_shared/extensions/claim.ts; 最小集声明项)。
 CLAIM_SYMLINK_TARGET = "../../../_shared/extensions/claim.ts"
-
-#: skills/<name> = 逐技能相对软链(工位/.pi/skills/<name> → 仓库根/_distributed/skills/<name>)。
-SKILL_SYMLINK_TEMPLATE = "../../../_distributed/skills/{name}"
-
-#: AGENTS.md 占位(正式章程走 /lybra sync 分发;此处仅保证文件存在可读)。
-AGENTS_PLACEHOLDER = (
-    "# (章程占位 — AIPOS-F54)\n\n"
-    "本文件由 enroll 落占位; 正式角色章程由 `/lybra sync` 从分发单源拉齐。\n"
-    "下一步: 在本工位运行 /lybra sync 然后 /reload。\n"
-)
 
 #: 无 harness 循环的角色类(不落 .pi 接线; owner/copilot 等不入循环)。
 LOOP_ROLE_CLASSES = ("executor", "auditor", "advisor")
@@ -78,21 +82,61 @@ def resolve_role_class(role: str, token_entry: dict[str, Any] | None = None) -> 
     return str((spec or {}).get("role_class") or role or "").strip()
 
 
-def load_role_skills(role_class: str) -> list[str] | None:
-    """按角色类取 skills 集合(单源 roles.schema tool_package; 无包角色返回 None)。
+def declared_role_distributions(role: str, role_class: str) -> list[dict[str, Any]]:
+    """AIPOS-F82 件②: 本角色(按 role_class 展开)的分发声明 —— 与门 lybra_distribution_manifest / sync 并集同一构建器
+    (tools.distribution_manifest.build_role_manifest, 本 CLI 所在产品树)。该角色无任何分发条目 = [](声明即零应得件);
+    声明不可读 / 源缺失 = 原样抛(fail-closed)。"""
+    from tools.distribution_manifest import REPO_ROOT, build_role_manifest
 
-    自定义角色按 role_class 取 builtin 类的集合 —— 与卡面⑰一致:
-    auditor 类无 finalize-slice、有 audit-independent-evidence。
+    try:
+        return list(build_role_manifest(REPO_ROOT, role, role_class=role_class)["distributions"])
+    except ValueError as exc:
+        if str(exc).startswith("No distributions found for role"):
+            return []
+        raise
+
+
+def declared_role_skills(dists: list[dict[str, Any]]) -> dict[str, str]:
+    """kind=skills 分发物 → {技能名: 挂载软链目标}(技能名 = 文件相对路径首段; 目标 = 工位父根/<target_path>/<名>)。"""
+    out: dict[str, str] = {}
+    for dist in dists:
+        if dist.get("kind") != "skills" or dist.get("target_base") != "harness_parent":
+            continue
+        base = str(dist.get("target_path") or "").strip("/")
+        for f in dist.get("files", []):
+            name = str(f["path"]).split("/", 1)[0]
+            out.setdefault(name, f"{MOUNT_TO_HARNESS_PARENT}{base}/{name}")
+    return dict(sorted(out.items()))
+
+
+def declared_role_extensions(dists: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """kind=extension 分发物 → {挂载文件名: {kind: symlink|wrapper, target}}。
+
+    单文件扩展(source_is_file / 落点即 .ts 文件)= 相对软链; 多文件扩展(目录落点)= 转发包装, 入口 = <目录>/<目录名>.ts。
     """
+    out: dict[str, dict[str, str]] = {}
+    for dist in dists:
+        if dist.get("kind") != "extension" or dist.get("target_base") != "harness_parent":
+            continue
+        target_path = str(dist.get("target_path") or "").strip("/")
+        if dist.get("source_is_file") or target_path.endswith(".ts"):
+            name = Path(target_path).name
+            out[name] = {"kind": "symlink", "target": f"{MOUNT_TO_HARNESS_PARENT}{target_path}", "distribution_id": str(dist.get("distribution_id"))}
+        else:
+            entry = Path(target_path).name
+            out[f"{entry}.ts"] = {"kind": "wrapper", "target": f"{MOUNT_TO_HARNESS_PARENT}{target_path}/{entry}.ts", "distribution_id": str(dist.get("distribution_id"))}
+    return dict(sorted(out.items()))
+
+
+def tool_package_for_class(role_class: str) -> dict[str, list[str]]:
+    """roles.schema tool_package(按角色类): 仅用于点名「tool_package 列出但 distribution 未声明分发」的退役项(不作接线源)。"""
     from tools.schema_loader import load_schema
 
-    roles_schema = load_schema("roles")
-    for spec in roles_schema.get("roles", []):
+    for spec in load_schema("roles").get("roles", []):
         if str(spec.get("role_class") or "") == role_class and spec.get("tool_package"):
-            skills = list((spec["tool_package"] or {}).get("skills") or [])
-            if skills:
-                return skills
-    return None
+            pkg = spec["tool_package"] or {}
+            return {"extensions": list(pkg.get("extensions") or []), "skills": list(pkg.get("skills") or [])}
+    return {"extensions": [], "skills": []}
 
 
 # ---------------------------------------------------------------------------
@@ -211,21 +255,70 @@ def _seed_symlink(path: Path, target: str) -> str:
         return "skipped(existing)"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.symlink_to(target)
-    return "created(dangling)" if not path.exists() else "created"
+    return "created(pending-sync)" if not path.exists() else "created"
 
 
-def _seed_charter(workspace_root: Path, role: str, role_class: str) -> tuple[str, str]:
-    """AGENTS.md 占位:优先从部署仓 agents/roles/<builtin>/AGENTS.md 取正式章程, 否则落占位文本。"""
+def _seed_charter(workspace_root: Path, dists: list[dict[str, Any]], warnings: list[str]) -> dict[str, Any]:
+    """AIPOS-F82 件②: AGENTS.md 种子 = charter_render 渲染物(与 sync 同一渲染器、同一上下文); 已存在不覆盖(seed 语义)。
+
+    母本 = 本角色 kind=charter 分发声明的源(本 CLI 所在产品树); 上下文 = charter_render_context(工位治理根, 工位身份)。
+    渲染不成立 = 不写 + warnings(fail-closed, 禁落未渲染母本/占位文本)。
+    """
+    from tools.aipos_cli.charter_render import (
+        WorkstationIdentityError,
+        charter_render_context,
+        render_charter,
+        resolve_workstation_governance_root,
+        workstation_identity,
+    )
+    from tools.distribution_manifest import REPO_ROOT, get_product_commit
+
     path = workspace_root / "AGENTS.md"
     if path.exists():
-        return "skipped(existing)", ""
-    repo_root = Path(__file__).resolve().parents[2]
-    source = repo_root / "agents" / "roles" / role_class / "AGENTS.md"
-    if source.is_file():
-        path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-        return "created(from-distribution)", str(source)
-    path.write_text(AGENTS_PLACEHOLDER, encoding="utf-8")
-    return "created(placeholder)", ""
+        return {"status": "skipped(existing)", "source": None}
+    charters = [d for d in dists if d.get("kind") == "charter"]
+    if not charters:
+        warnings.append("AGENTS.md 未写: 本角色无 kind=charter 分发声明(distribution.schema), 无母本可渲染")
+        return {"status": "not_written(no-charter-declaration)", "source": None}
+    dist = charters[0]
+    master = REPO_ROOT / str(dist["source_path"])
+    try:
+        identity = workstation_identity(workspace_root)
+        gov = resolve_workstation_governance_root(identity)
+        ctx = charter_render_context(gov, identity=identity, product_commit=get_product_commit(REPO_ROOT))
+        rendered = render_charter(master.read_text(encoding="utf-8"), ctx)
+    except (WorkstationIdentityError, FileNotFoundError, ValueError, OSError) as exc:
+        warnings.append(
+            f"AGENTS.md 未写: 章程渲染不成立({exc.__class__.__name__}: {exc}); 禁落未渲染母本。"
+            "出口: 补齐声明(connection.json#governance_root / project.json)后重跑 enroll, 或 lybra sync 渲染"
+        )
+        return {"status": "not_written(render-failed)", "source": str(master)}
+    path.write_text(rendered, encoding="utf-8")
+    return {"status": "created(rendered)", "source": str(master), "distribution_id": dist.get("distribution_id")}
+
+
+def _seed_extension(pi: Path, name: str, spec: dict[str, str], warnings: list[str], *, origin: str) -> dict[str, Any]:
+    """扩展挂载: 目标(相对挂载点解析)已存在才写; 不存在 = 不写 + warnings(禁写悬空——悬空扩展令 pi 启动即崩)。"""
+    mount = pi / "extensions" / name
+    info: dict[str, Any] = {"symlink": spec["kind"] == "symlink", "target": spec["target"], "origin": origin}
+    if mount.exists() or mount.is_symlink():
+        info.update(status="skipped(existing)", target_exists=mount.exists())
+        return info
+    target_abs = (mount.parent / spec["target"]).resolve()
+    if not target_abs.is_file():
+        info.update(status="not_written(target-missing)", target_exists=False)
+        warnings.append(
+            f".pi/extensions/{name} 未接: 目标 {target_abs} 不存在({origin}); 禁写悬空扩展。"
+            "出口: lybra sync 落地分发物后重跑 enroll(已存在项幂等跳过)补挂"
+        )
+        return info
+    mount.parent.mkdir(parents=True, exist_ok=True)
+    if spec["kind"] == "symlink":
+        mount.symlink_to(spec["target"])
+    else:
+        mount.write_text(EXTENSION_WRAPPER_TEMPLATE.format(target=spec["target"]), encoding="utf-8")
+    info.update(status="created", target_exists=mount.exists())
+    return info
 
 
 def materialize_pi_wiring(
@@ -234,16 +327,17 @@ def materialize_pi_wiring(
     role: str,
     role_class: str,
 ) -> dict[str, Any]:
-    """幂等落 .pi 接线 + AGENTS.md 占位(seed_only, 已存在跳过, 禁覆盖用户定制)。
+    """幂等落 .pi 接线 + AGENTS.md 渲染种子(seed_only, 已存在跳过, 禁覆盖用户定制)。
 
-    返回逐项落盘报告(created/skipped + 软链目标是否存在), 供验收①⑯⑰取证。
-    无 harness 循环的角色类不落接线(仅章程占位)。
+    AIPOS-F82 件②: 接线目标全部由 distribution 声明推导(见模块文档); 返回逐项落盘报告 + warnings(不写的项逐项点名)。
+    无 harness 循环的角色类不落接线(仅章程种子)。
     """
-    report: dict[str, Any] = {"role": role, "role_class": role_class, "items": {}}
+    report: dict[str, Any] = {"role": role, "role_class": role_class, "items": {}, "warnings": []}
     items = report["items"]
+    warnings: list[str] = report["warnings"]
 
-    charter_status, charter_source = _seed_charter(workspace_root, role, role_class)
-    items["AGENTS.md"] = {"status": charter_status, "source": charter_source or None}
+    dists = declared_role_distributions(role, role_class)
+    items["AGENTS.md"] = _seed_charter(workspace_root, dists, warnings)
 
     if role_class not in LOOP_ROLE_CLASSES:
         report["note"] = f"role_class={role_class} 无 harness 循环, 不落 .pi 接线"
@@ -251,26 +345,40 @@ def materialize_pi_wiring(
 
     pi = workspace_root / ".pi"
     items["settings.json"] = {"status": _seed_file(pi / "settings.json", json.dumps(SETTINGS_TEMPLATE, indent=2) + "\n")}
-    claim_status = _seed_symlink(pi / "extensions" / "claim.ts", CLAIM_SYMLINK_TARGET)
-    items["extensions/claim.ts"] = {
-        "status": claim_status,
-        "symlink": True,
-        "target": CLAIM_SYMLINK_TARGET,
-        "target_exists": (pi / "extensions" / "claim.ts").exists(),
-    }
-    items["extensions/lybra-loop.ts"] = {
-        "status": _seed_file(pi / "extensions" / "lybra-loop.ts", LOOP_WRAPPER_TS),
-        "symlink": False,
-        "target_exists": (pi / "extensions" / "lybra-loop.ts").exists(),
-    }
+    items["extensions/claim.ts"] = _seed_extension(
+        pi, "claim.ts", {"kind": "symlink", "target": CLAIM_SYMLINK_TARGET}, warnings,
+        origin="distribution.schema minimum_bootable_set .pi/extensions/claim.ts",
+    )
+    declared_ext = declared_role_extensions(dists)
+    for name, spec in declared_ext.items():
+        items[f"extensions/{name}"] = _seed_extension(pi, name, spec, warnings, origin=f"distribution {spec['distribution_id']}")
 
-    skills = load_role_skills(role_class) or []
+    skills = declared_role_skills(dists)
     skills_report: dict[str, Any] = {}
-    for name in skills:
+    pending: list[str] = []
+    for name, target in skills.items():
         link = pi / "skills" / name
-        status = _seed_symlink(link, SKILL_SYMLINK_TEMPLATE.format(name=name))
-        skills_report[name] = {"status": status, "target_exists": link.exists()}
+        status = _seed_symlink(link, target)
+        skills_report[name] = {"status": status, "target": target, "target_exists": link.exists()}
+        if not link.exists():
+            pending.append(name)
     items["skills"] = {"count": len(skills), "links": skills_report}
+    if pending:
+        warnings.append(
+            f".pi/skills 待 sync 落地({len(pending)} 项, distribution 已声明分发给本角色): {', '.join(pending)}; 下一步 lybra sync"
+        )
+
+    # 退役/未声明项点名: roles.schema tool_package 列出但 distribution 未声明分发给本角色 = 不接
+    pkg = tool_package_for_class(role_class)
+    declared_ext_stems = {Path(n).stem for n in declared_ext}
+    retired_ext = [e for e in pkg["extensions"] if e not in declared_ext_stems]
+    retired_skills = [k for k in pkg["skills"] if k not in skills]
+    if retired_ext or retired_skills:
+        report["not_declared"] = {"extensions": retired_ext, "skills": retired_skills}
+        warnings.append(
+            "未接(roles.schema tool_package 列出, distribution 声明未分发给本角色 = 已退役): "
+            + ", ".join([f"extension:{e}" for e in retired_ext] + [f"skill:{k}" for k in retired_skills])
+        )
 
     # AIPOS-F58: 把 .pi/ 接线路径登记进 .git/info/exclude(防 `git stash -u` 连坐抹掉)
     from tools.aipos_cli.git_exclude import collect_wiring_exclude_paths, register_git_exclude

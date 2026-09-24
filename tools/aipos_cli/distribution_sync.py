@@ -19,6 +19,14 @@ AIPOS-F66B 件①(2026-09-05 chris hbj-coder 被写入 lybra 执行体章程的�
   写工位副本; manifest 记 source_sha256 / render_context_sha256 / rendered_sha256; 母本变 / 声明变 = 重渲染;
   工位本地改动 = 声明缺口(覆盖前报 diff, 须回流母本或声明)。
 - `--dry-run`: 零写入, 列出 would-fetch / would-render / would-prune / skipped。
+
+AIPOS-F82 件①(2026-09-24 执行/审计工位 sync 互删乒乓的根治):
+- `_distributed/` 是工位父根下**所有工位共享**的分发落点; 各角色 manifest 只含本角色应得件, 旧 prune 只看本角色声明
+  → 执行工位 sync 删审计的 audit-independent-evidence、审计工位 sync 删执行的件, 互删无稳态。
+- 共享落点 prune 集 = 不在本角色声明的落点文件 − **共享落点下所有已 enroll 角色声明并集**(shared_landing_declaration:
+  角色 = 工位父根下各工位 .lybra/role, 自定义角色经门注册表解析内建类; 应得件 = distribution_manifest.build_role_manifest
+  按 distribution.schema applies_to_roles 构建, 与门同一构建器); 并集不可完整解析 = 共享落点 prune 暂停并出声(fail-closed,
+  禁删别的角色可能要的件)。工位私有落点(.pi/extensions、AGENTS.md)行为不变。
 """
 from __future__ import annotations
 
@@ -31,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 SYNC_RUN_MANIFEST = ".version-sync"  # 多工位 sync 运行清单(含 skipped), `.version-` 前缀 = prune 不碰
+SHARED_LANDING = "_distributed"  # AIPOS-F82 件①: 工位父根下所有工位共享的分发落点(prune 按全角色声明并集)
 
 
 def _discover_harness_root_from(start: Path) -> Path | None:
@@ -239,6 +248,7 @@ def compute_diffs(
     *,
     render_context: dict[str, Any] | None = None,
     role: str | None = None,
+    shared_guard: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     """对比本地与远端清单, 返回 [(dist, [path...])] 差异、应存在文件清单、应删除文件清单。
 
@@ -249,6 +259,8 @@ def compute_diffs(
 
     AIPOS-F66B 件①: 给了 render_context 时, charter 分发物按渲染态判(本地 manifest 三指纹: 母本 sha / 声明指纹 / 渲染物 sha),
     差异项带 reasons{path: 原因}; 未给 render_context = 旧的字节比对(纯函数夹具兼容)。
+
+    AIPOS-F82 件①: 共享落点 prune 扣除全角色声明并集(shared_guard; 未给则现算 shared_landing_declaration, 结果写回该字典)。
     """
     from tools.aipos_cli.charter_render import render_context_fingerprint
 
@@ -285,7 +297,10 @@ def compute_diffs(
             to_fetch.append({"dist": dist, "paths": need, "reasons": reasons})
 
     # AIPOS-F66C 件①: 找出本地存在但声明中不存在的文件(应删除)
-    to_prune = _find_files_to_prune(harness_root, declared_files)
+    # AIPOS-F82 件①: 共享落点扣除全角色声明并集(禁互删)
+    if shared_guard is None:
+        shared_guard = shared_landing_declaration(harness_root)
+    to_prune = _find_files_to_prune(harness_root, declared_files, shared_guard=shared_guard)
 
     return to_fetch, list(declared_files), to_prune
 
@@ -414,7 +429,95 @@ def write_local_manifest(
     return manifest_path
 
 
-def _find_files_to_prune(harness_root: Path, declared_files: set[str]) -> list[str]:
+def shared_landing_declaration(harness_root: Path) -> dict[str, Any]:
+    """AIPOS-F82 件①: 共享落点(工位父根/_distributed)下**所有已 enroll 角色**的声明并集 —— prune 的扣除集。
+
+    单源推导(禁硬编码角色名):
+    - 角色 = 工位父根下各工位 `.lybra/role`(charter_render.workstation_identity 唯一读取口);
+    - 类 = custom_roles.resolve_role_to_class(内建角色即自身; 自定义角色经门注册表解析, 注册表根取该工位 connection.json#governance_root);
+    - 应得件 = workstation_wiring.declared_role_distributions → tools.distribution_manifest.build_role_manifest(本 CLI 所在产品树,
+      角色, role_class) —— 与门的 lybra_distribution_manifest 同一构建器、同一 distribution.schema applies_to_roles 声明;
+      取落点基准为 harness_parent 的文件。
+
+    fail-closed: 任一工位身份 / 类 / 声明不可解析 → complete=False, problems 逐条点名; 调用方据此**暂停共享落点 prune**
+    (prune 是破坏性动作, 并集不全时删 = 可能删掉别的角色要的件), 禁猜。
+    返回 {landing, roles:[{role, role_class, workstations}], declared:set[str], complete, problems, protected:[], suspended:[]}。
+    """
+    from tools.aipos_cli.charter_render import WorkstationIdentityError, workstation_identity
+    from tools.aipos_cli.custom_roles import resolve_role_to_class
+    from tools.aipos_cli.workstation_wiring import declared_role_distributions
+
+    root = Path(harness_root).expanduser().resolve()
+    parent = root.parent
+    guard: dict[str, Any] = {
+        "landing": str(parent / SHARED_LANDING),
+        "roles": [],
+        "declared": set(),
+        "complete": True,
+        "problems": [],
+        "protected": [],
+        "suspended": [],
+    }
+    try:
+        stations = [ws for ws in discover_workstations(parent) if ws != parent]
+    except ValueError:
+        stations = []  # 父根下无已 enroll 工位(纯函数夹具): 无他角色声明可扣
+    pairs: dict[tuple[str, str], list[str]] = {}
+    for ws in stations:
+        try:
+            ident = workstation_identity(ws)
+        except WorkstationIdentityError as exc:
+            guard["problems"].append(f"{ws.name}: 工位身份不可解析 — {exc}")
+            continue
+        role = str(ident["role"])
+        role_class = resolve_role_to_class(role, ident.get("governance_root_declared"))
+        if not role_class:
+            guard["problems"].append(
+                f"{ws.name}: 角色 {role!r} 的内建类不可解析(门注册表无此自定义角色; 注册表根="
+                f"{ident.get('governance_root_declared') or '<connection.json 无 governance_root>'})"
+            )
+            continue
+        pairs.setdefault((role, role_class), []).append(ws.name)
+    for (role, role_class), names in sorted(pairs.items()):
+        try:
+            # 与 enroll 接线同一取声明入口(零应得件 = [], 声明不可读/源缺失 = 抛)
+            dists = declared_role_distributions(role, role_class)
+        except (FileNotFoundError, ValueError) as exc:
+            guard["problems"].append(f"角色 {role}(类 {role_class}) 声明不可解析: {exc.__class__.__name__}: {exc}")
+            continue
+        count = 0
+        for dist in dists:
+            if dist.get("target_base") != "harness_parent":
+                continue
+            for f in dist.get("files", []):
+                guard["declared"].add(str(_file_target_path(root, dist, f["path"])))
+                count += 1
+        guard["roles"].append({"role": role, "role_class": role_class, "workstations": names, "declared_files": count})
+    guard["complete"] = not guard["problems"]
+    return guard
+
+
+def public_shared_guard(guard: dict[str, Any] | None) -> dict[str, Any] | None:
+    """shared_landing_declaration 结果的可序列化视图(declared 集合只出计数)。"""
+    if guard is None:
+        return None
+    return {
+        "landing": guard.get("landing"),
+        "roles": list(guard.get("roles") or []),
+        "declared_count": len(guard.get("declared") or ()),
+        "complete": bool(guard.get("complete")),
+        "problems": list(guard.get("problems") or []),
+        "protected": sorted(guard.get("protected") or []),
+        "suspended": sorted(guard.get("suspended") or []),
+    }
+
+
+def _find_files_to_prune(
+    harness_root: Path,
+    declared_files: set[str],
+    *,
+    shared_guard: dict[str, Any] | None = None,
+) -> list[str]:
     """AIPOS-F66C 件①-R3: 找出分发器曾铺过、但不在当前部署声明中的文件。
 
     P0 修复: prune删除集合 = 分发器自己铺过的产物(判据:manifest历史/文件头标记),
@@ -425,17 +528,28 @@ def _find_files_to_prune(harness_root: Path, declared_files: set[str]) -> list[s
     - .pi/extensions/ (wrapper目录,需检查文件头标记)
     - AGENTS.md (charter,分发产物)
 
+    AIPOS-F82 件①: 给了 shared_guard(shared_landing_declaration)时, _distributed/ 下的候选再扣除全角色声明并集
+    (扣下的记 shared_guard["protected"]); 并集不完整(complete=False)= 共享落点候选全部暂停(记 shared_guard["suspended"])。
+    工位私有落点(.pi/extensions、AGENTS.md)不受影响。
+
     Returns:
         应删除的文件路径列表(绝对路径)
     """
     to_prune: list[str] = []
 
     # 1. _distributed/ 全部为分发产物,不在声明即prune
-    distributed_dir = harness_root.parent / "_distributed"
+    distributed_dir = harness_root.parent / SHARED_LANDING
     if distributed_dir.is_dir():
         for p in distributed_dir.rglob("*"):
             if p.is_file() and not p.name.startswith(".version-"):
                 if str(p) not in declared_files:
+                    if shared_guard is not None:
+                        if not shared_guard.get("complete"):
+                            shared_guard.setdefault("suspended", []).append(str(p))
+                            continue
+                        if str(p) in shared_guard.get("declared", ()):
+                            shared_guard.setdefault("protected", []).append(str(p))
+                            continue
                     to_prune.append(str(p))
 
     # 2. .pi/extensions/ 需区分分发wrapper vs 非分发文件(claim.ts等)
@@ -657,7 +771,10 @@ def sync(
         gov = resolve_workstation_governance_root(identity, explicit=governance_root)
         render_ctx = charter_render_context(gov, identity=identity, product_commit=str(remote.get("product_commit") or "unknown"))
 
-    diffs, declared_files, to_prune = compute_diffs(ctx["harness_root"], remote, render_context=render_ctx, role=ctx["role"])
+    shared_guard = shared_landing_declaration(ctx["harness_root"])
+    diffs, declared_files, to_prune = compute_diffs(
+        ctx["harness_root"], remote, render_context=render_ctx, role=ctx["role"], shared_guard=shared_guard,
+    )
 
     plan = []
     for item in diffs:
@@ -685,6 +802,7 @@ def sync(
         "plan": plan,
         "would_prune": list(to_prune),
         "declared_files": declared_files,
+        "shared_prune_guard": public_shared_guard(shared_guard),
     }
     if dry_run:
         return {**base_result, "files_fetched": 0, "files_pruned": 0, "changes": [], "pruned_files": [], "prune_errors": [],
@@ -898,6 +1016,13 @@ def render_sync_text(run: dict[str, Any]) -> str:
                 lines.append(f"      would-prune (不在声明): {len(r['would_prune'])} file(s)")
                 for pf in r["would_prune"][:5]:
                     lines.append(f"          - {pf}")
+            guard = r.get("shared_prune_guard") or {}
+            if guard.get("protected"):
+                lines.append(f"      共享落点保留(他角色声明, AIPOS-F82): {len(guard['protected'])} file(s)")
+            if guard and not guard.get("complete"):
+                lines.append(f"      ⚠ 共享落点 prune 暂停(角色声明并集不完整, fail-closed): {len(guard.get('suspended') or [])} file(s) 未删")
+                for prob in guard.get("problems") or []:
+                    lines.append(f"          {prob}")
             if e["status"] == "synced":
                 lines.append(f"      files fetched/rendered: {r.get('files_fetched')}, files pruned: {r.get('files_pruned')}, manifest: {r.get('manifest_path')}")
                 for gap in r.get("declaration_gaps") or []:

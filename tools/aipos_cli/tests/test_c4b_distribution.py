@@ -62,8 +62,9 @@ class TestManifestBuilder:
         au_skills = next(d for d in au["distributions"] if d["kind"] == "skills")
         ex_paths = {f["path"] for f in ex_skills["files"]}
         au_paths = {f["path"] for f in au_skills["files"]}
-        # 执行体有 finalize-slice, 审计体没有; 审计体有 audit-independent-evidence, 执行体没有
-        assert any(p.startswith("finalize-slice/") for p in ex_paths)
+        # AIPOS-F82 件①: 执行体零门 —— finalize-slice 退出执行体分发(审计体本就没有);
+        # 审计体有 audit-independent-evidence, 执行体没有
+        assert not any(p.startswith("finalize-slice/") for p in ex_paths)
         assert not any(p.startswith("finalize-slice/") for p in au_paths)
         assert any(p.startswith("audit-independent-evidence/") for p in au_paths)
         assert not any(p.startswith("audit-independent-evidence/") for p in ex_paths)

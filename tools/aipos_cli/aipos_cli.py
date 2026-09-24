@@ -2958,6 +2958,9 @@ def main(argv: list[str] | None = None) -> int:
                                 else:
                                     status = info.get('status') if isinstance(info, dict) else info
                                     print(f"    - {item}: {status}")
+                        # AIPOS-F82 件②: 未写的接线项/章程逐项点名(禁写悬空扩展、禁落未渲染母本)
+                        for warn in result.get('warnings') or []:
+                            print(f"    ⚠ {warn}")
                         # AIPOS-F54 ⑮: 可启动最小集逐项校验(缺项逐项点名)
                         mbs = result.get('minimum_bootable_set') or {}
                         if mbs:
