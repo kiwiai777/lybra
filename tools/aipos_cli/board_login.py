@@ -87,15 +87,20 @@ def load_role_token(
         except ValueError:
             continue
     
-    # Fallback: read connection.json and find any token
-    data = json.loads(path.read_text(encoding="utf-8"))
-    tokens = data.get("tokens") if isinstance(data, dict) else None
-    if isinstance(tokens, list):
-        for item in tokens:
-            if isinstance(item, dict) and (item.get("token") or "").strip():
-                return str(item["token"]).strip(), str(item.get("role"))
-    
-    raise ValueError(f"{path} 中没有任何带 token 的角色条目")
+    # Fallback: 任意角色的第一条可用条目 —— AIPOS-F81: 委托 token_resolver 单源(any_role, 排除 retired),
+    # 不再自带遍历(旧实现会取到 retired 旧 token)。无可用条目 = TokenResolutionError(ValueError), 带重签出口。
+    from tools.aipos_cli.token_resolver import (
+        TOKEN_ENTRY_FIELDS,
+        TokenNotFoundError,
+        load_connection_tokens,
+        select_token_entry,
+    )
+
+    try:
+        entry = select_token_entry(load_connection_tokens(path), any_role=True, source=str(path))
+    except TokenNotFoundError as exc:
+        raise ValueError(f"{path} 中没有任何带 token 的角色条目 ({exc})") from exc
+    return str(entry[TOKEN_ENTRY_FIELDS["token"]]).strip(), str(entry.get(TOKEN_ENTRY_FIELDS["role"]))
 
 
 def resolve_board_url(

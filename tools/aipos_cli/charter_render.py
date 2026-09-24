@@ -82,11 +82,18 @@ def workstation_identity(harness_root: str | Path) -> dict[str, Any]:
             identity["governance_root_declared"] = gov or None
             rpc = str(((conn.get("mcp") or {}).get("rpc_url")) or "").strip()
             identity["gate_url"] = (rpc[:-len("/mcp")] if rpc.endswith("/mcp") else rpc) or None
+            # AIPOS-F81: 条目挑选委托 token_resolver 单源(按实例, 排除 retired), 只取非秘密字段 projects。
+            # 无可用条目(无命中/全 retired)→ [](元数据缺省); 凭据的 fail-closed 在 token 解析处(带重签出口)。
+            from tools.aipos_cli.token_resolver import TOKEN_ENTRY_FIELDS, TokenResolutionError, select_token_entry
+
             projects: list[str] = []
-            for entry in conn.get("tokens") or []:
-                if isinstance(entry, dict) and entry.get("agent_instance") == instance:
-                    projects = [str(p) for p in (entry.get("projects") or [])]
-                    break
+            tokens = conn.get("tokens")
+            if isinstance(tokens, list):
+                try:
+                    entry = select_token_entry(tokens, agent_instance=instance, source=str(conn_file))
+                    projects = [str(p) for p in (entry.get(TOKEN_ENTRY_FIELDS["projects"]) or [])]
+                except TokenResolutionError:
+                    projects = []
             identity["token_projects"] = projects
     return identity
 

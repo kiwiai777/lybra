@@ -45,6 +45,7 @@ declare -a files=(
   "tests/f60-held-skeleton-dead-code.test.ts"
   "tests/f60-fix1-settle-skeleton.test.ts"
   "tests/f62-deadlock-root-cause.test.ts"
+  "tests/f81-token-single-source.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
@@ -862,6 +863,16 @@ if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/t
   echo "✓ tools/aipos_cli/tests/test_aipos_f12_gate_territory.py PASS"
 else
   echo "✗ tools/aipos_cli/tests/test_aipos_f12_gate_territory.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F81: token 解析单源(loop_context.ConnectionResolver 与 pi loop-context.ts 委托/同判据 token_resolver: instance→role·排除 retired·全 retired fail-closed 带重签出口; TS 夹具在上方 files 清单)
+echo
+echo "── tests/test_aipos_f81_token_single_source.py (F81 [retired,new] 三类客户端取新 token/全 retired fail-closed/Python↔TS 同判据同构) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f81_token_single_source.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f81_token_single_source.py PASS"
+else
+  echo "✗ tests/test_aipos_f81_token_single_source.py FAIL"
   overall=1
 fi
 

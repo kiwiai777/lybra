@@ -34,42 +34,50 @@ def token_fingerprint(token: str) -> str:
     return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
 
 
-def get_token_for_role_and_project(
-    connection_json: str | Path,
-    role: str,
-    project: str | None = None,
-    *,
-    allow_retired: bool = False,
-) -> str:
-    """AIPOS-F59: Unified token getter by (role, project_domain).
+# AIPOS-F81: connection.json tokens[] 条目字段名 —— 挑选判据的唯一声明(产品无 schema 声明这些字段, 故声明在此)。
+# TS 侧 agents/harness/pi/lybra-loop/loop-context.ts::TOKEN_ENTRY_FIELDS 注明来源于此, 同构夹具
+# tests/test_aipos_f81_token_single_source.py 逐键比对并跑同一组靶场, 两边不一致即红。
+TOKEN_ENTRY_FIELDS: dict[str, str] = {
+    "token": "token",
+    "role": "role",
+    "agent_instance": "agent_instance",
+    "projects": "projects",
+    "retired": "retired",
+}
 
-    This is the SINGLE implementation point for token retrieval. All callers in
-    confirm_client.py, advisor_pump.py, pump_orchestration.py, agent_supervise.py,
-    board_login.py must delegate here.
+# AIPOS-F81: 全 retired 时拒因携带的出口(重签)。TS 侧同名常量注明来源于此。
+TOKEN_REENROLL_EXIT = "lybra roles enroll --code <码> --workspace <工位根>"
 
-    Selection logic:
-    1. Filter by role
-    2. Filter by project domain (token.projects contains the requested project)
-    3. Exclude retired tokens (unless allow_retired=True)
-    4. Return the first match
+_F_TOKEN = TOKEN_ENTRY_FIELDS["token"]
+_F_ROLE = TOKEN_ENTRY_FIELDS["role"]
+_F_INSTANCE = TOKEN_ENTRY_FIELDS["agent_instance"]
+_F_PROJECTS = TOKEN_ENTRY_FIELDS["projects"]
+_F_RETIRED = TOKEN_ENTRY_FIELDS["retired"]
 
-    Args:
-        connection_json: Path to .lybra/connection.json
-        role: Role name (e.g., "owner", "executor", "planner")
-        project: Project domain (e.g., "lybra", "chris-huibojin"). If None, project
-                 domain filtering is skipped (back-compat for non-project-aware callers).
-        allow_retired: If True, include retired tokens in search (default False)
 
-    Returns:
-        The token string (raw, for in-process use only; callers must never print it)
+class TokenResolutionError(ValueError):
+    """AIPOS-F81: token 解析失败(ValueError 子类, 存量 ``except ValueError`` 调用方不变)。"""
 
-    Raises:
-        ValueError: If no matching token is found, or if the file is invalid
 
-    Examples:
-        >>> token = get_token_for_role_and_project(".lybra/connection.json", "planner", "lybra")
-        >>> # This will find planner tokens with projects:["lybra"], excluding retired ones
-    """
+class TokenNotFoundError(TokenResolutionError):
+    """没有任何条目命中选择器(instance/role)——调用方可按声明优先级落到下一层(如 env 兜底)。"""
+
+
+class TokenAllRetiredError(TokenResolutionError):
+    """命中选择器的条目全部 retired —— fail-closed, 禁落到下一层; 拒因带重签出口。"""
+
+
+def is_token_entry_active(entry: Any) -> bool:
+    """AIPOS-F81: 条目是否可用于取值(dict·非 retired·token 非空)。挑选判据的原子谓词, 唯一实现。"""
+    return (
+        isinstance(entry, dict)
+        and not entry.get(_F_RETIRED)
+        and bool(str(entry.get(_F_TOKEN) or "").strip())
+    )
+
+
+def load_connection_tokens(connection_json: str | Path) -> list[Any]:
+    """读 connection.json 的 tokens 列表(读失败/非对象/无 tokens 列表 = ValueError, fail-closed)。"""
     path = Path(connection_json).expanduser().resolve()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -82,57 +90,143 @@ def get_token_for_role_and_project(
     tokens = data.get("tokens")
     if not isinstance(tokens, list):
         raise ValueError(f"connection.json at {path} has no tokens list")
+    return tokens
 
-    # Filter candidates
-    candidates = []
-    for item in tokens:
-        if not isinstance(item, dict):
-            continue
 
-        # Filter by role
-        if item.get("role") != role:
-            continue
+def select_token_entry(
+    tokens: list[Any],
+    *,
+    role: str | None = None,
+    agent_instance: str | None = None,
+    project: str | None = None,
+    allow_retired: bool = False,
+    any_role: bool = False,
+    source: str = "connection.json",
+) -> dict[str, Any]:
+    """AIPOS-F81: 从 tokens[] 挑一条条目 —— 挑选逻辑的唯一实现(F59 单源的核心)。
 
-        # Filter by retired status
-        if not allow_retired and item.get("retired"):
-            continue
+    判据(与 config.schema#identity_resolution.keys.token 的「agent_instance 匹配 → role 匹配」同序):
+    1. 选择器分阶段: agent_instance 匹配(最具体) → role 匹配 → (any_role=True 时)任意条目;
+    2. 每阶段只取可用条目: 非 retired(allow_retired=True 除外)且 token 非空;
+    3. project 给定时按域过滤(无 projects 字段的旧条目仅在无显式域命中时入选);
+    4. 首个有候选的阶段返回其第一条。
+    都没有: 无命中 = TokenNotFoundError(可落下一层); 命中的全 retired = TokenAllRetiredError
+    (fail-closed, 带重签出口); 其余(域不符/token 空)= TokenResolutionError。拒因只带指纹, 永不带 token 值。
+    """
+    stages: list[tuple[str, Any]] = []
+    if agent_instance:
+        stages.append((f"agent_instance={agent_instance!r}", lambda e: e.get(_F_INSTANCE) == agent_instance))
+    if role:
+        stages.append((f"role={role!r}", lambda e: e.get(_F_ROLE) == role))
+    if any_role:
+        stages.append(("any role", lambda e: True))
+    selector = " → ".join(label for label, _ in stages) or "(no selector)"
+    if not stages:
+        raise TokenNotFoundError(f"No token selector (role/agent_instance) given for {source}")
 
-        # Filter by project domain (if specified)
-        if project is not None:
-            item_projects = item.get("projects")
-            if isinstance(item_projects, list):
-                if project not in item_projects:
-                    continue
-            # If the token has no projects field, it's a legacy token (pre-project-domain).
-            # For back-compat, we include it in candidates only if no better match exists.
-            # We'll deprioritize it by checking explicit-domain matches first below.
-
-        candidates.append(item)
-
-    # Prioritize tokens with explicit project domain match
-    if project is not None:
-        explicit_matches = [
-            c for c in candidates
-            if isinstance(c.get("projects"), list) and project in c["projects"]
+    matched: list[dict[str, Any]] = []
+    for _label, pred in stages:
+        hits = [e for e in tokens if isinstance(e, dict) and pred(e)]
+        for e in hits:
+            if not any(e is m for m in matched):
+                matched.append(e)
+        usable = [
+            e for e in hits
+            if (allow_retired or not e.get(_F_RETIRED)) and str(e.get(_F_TOKEN) or "").strip()
         ]
-        if explicit_matches:
-            candidates = explicit_matches
-
-    if not candidates:
         if project is not None:
-            raise ValueError(
-                f"No token found for role={role!r} with project domain={project!r} in {path}. "
-                f"Re-enroll or check that the token's projects field includes {project!r}."
-            )
-        else:
-            raise ValueError(f"No token found for role={role!r} in {path}")
+            usable = [
+                e for e in usable
+                if not isinstance(e.get(_F_PROJECTS), list) or project in e[_F_PROJECTS]
+            ]
+            explicit = [e for e in usable if isinstance(e.get(_F_PROJECTS), list)]
+            if explicit:
+                usable = explicit
+        if usable:
+            return usable[0]
 
-    # Return the first candidate
-    token = str(candidates[0].get("token") or "").strip()
-    if not token:
-        raise ValueError(f"Token entry for role={role!r} exists but has no token value")
+    if not matched:
+        raise TokenNotFoundError(f"No token found for {selector} in {source}")
+    if not allow_retired and all(e.get(_F_RETIRED) for e in matched):
+        fps = ", ".join(token_fingerprint(str(e.get(_F_TOKEN) or "")) for e in matched)
+        raise TokenAllRetiredError(
+            f"All {len(matched)} token entr{'y' if len(matched) == 1 else 'ies'} for {selector} in {source} "
+            f"are retired (fingerprints: {fps}) — no active credential. "
+            f"出口: 重签凭据 `{TOKEN_REENROLL_EXIT}` (Owner 签发新 enrollment 码)"
+        )
+    if project is not None:
+        raise TokenNotFoundError(
+            f"No token found for {selector} with project domain={project!r} in {source}. "
+            f"Re-enroll or check that the token's projects field includes {project!r}."
+        )
+    raise TokenResolutionError(f"Token entry for {selector} exists in {source} but has no token value")
 
-    return token
+
+def resolve_token_entry(
+    connection_json: str | Path,
+    role: str | None = None,
+    project: str | None = None,
+    *,
+    agent_instance: str | None = None,
+    allow_retired: bool = False,
+) -> dict[str, Any]:
+    """AIPOS-F81: 读 connection.json 并按唯一判据挑条目(需要条目元数据如 agent_instance/actor 的调用方用它)。"""
+    path = Path(connection_json).expanduser().resolve()
+    return select_token_entry(
+        load_connection_tokens(path),
+        role=role,
+        agent_instance=agent_instance,
+        project=project,
+        allow_retired=allow_retired,
+        source=str(path),
+    )
+
+
+def get_token_for_role_and_project(
+    connection_json: str | Path,
+    role: str | None,
+    project: str | None = None,
+    *,
+    agent_instance: str | None = None,
+    allow_retired: bool = False,
+) -> str:
+    """AIPOS-F59: Unified token getter by (role, project_domain).
+
+    This is the SINGLE implementation point for token retrieval. All callers in
+    confirm_client.py, advisor_pump.py, pump_orchestration.py, agent_supervise.py,
+    board_login.py — and since AIPOS-F81 tools/loop_context.py ConnectionResolver
+    (resolve_token / resolve_identity) — must delegate here (selection = select_token_entry).
+
+    Selection logic (select_token_entry):
+    1. agent_instance match first (AIPOS-F81, when given), then role match
+    2. Filter by project domain (token.projects contains the requested project)
+    3. Exclude retired tokens (unless allow_retired=True) and empty token values
+    4. Return the first match
+
+    Args:
+        connection_json: Path to .lybra/connection.json
+        role: Role name (e.g., "owner", "executor", "planner"); may be None when agent_instance given
+        project: Project domain (e.g., "lybra", "chris-huibojin"). If None, project
+                 domain filtering is skipped (back-compat for non-project-aware callers).
+        agent_instance: AIPOS-F81 — agent instance id, matched before role (most specific)
+        allow_retired: If True, include retired tokens in search (default False)
+
+    Returns:
+        The token string (raw, for in-process use only; callers must never print it)
+
+    Raises:
+        TokenNotFoundError: no entry matches the selectors (ValueError subclass)
+        TokenAllRetiredError: every matching entry is retired — fail-closed, message carries the re-enroll exit
+        ValueError: file unreadable/invalid, domain mismatch, or empty token value
+
+    Examples:
+        >>> token = get_token_for_role_and_project(".lybra/connection.json", "planner", "lybra")
+        >>> # This will find planner tokens with projects:["lybra"], excluding retired ones
+    """
+    entry = resolve_token_entry(
+        connection_json, role, project, agent_instance=agent_instance, allow_retired=allow_retired,
+    )
+    return str(entry.get(_F_TOKEN) or "").strip()
 
 
 def retire_token_entry(

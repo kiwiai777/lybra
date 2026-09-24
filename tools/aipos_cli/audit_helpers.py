@@ -115,13 +115,19 @@ def resolve_audit_context(
         if lybra_dir:
             connection_config = ConnectionResolver.load_connection_config(lybra_dir)
             
-            # Find token entry for this role
-            tokens = connection_config.get("tokens", [])
-            for token_entry in tokens:
-                if token_entry.get("role") == role:
-                    agent_instance = token_entry.get("agent_instance")
-                    actor = token_entry.get("actor") or agent_instance
-                    break
+            # AIPOS-F81: 身份元数据取自 token_resolver 单源挑中的同一条目(排除 retired), 与上面取的 token 同源
+            from tools.aipos_cli.token_resolver import TOKEN_ENTRY_FIELDS, TokenResolutionError, select_token_entry
+
+            tokens = connection_config.get("tokens")
+            token_entry = None
+            if isinstance(tokens, list):
+                try:
+                    token_entry = select_token_entry(tokens, role=role, source=str(lybra_dir / "connection.json"))
+                except TokenResolutionError:
+                    token_entry = None  # 无可用条目: 身份元数据留空, 由下游显式参数/自发现补(token 已在上面 fail-closed)
+            if token_entry is not None:
+                agent_instance = token_entry.get(TOKEN_ENTRY_FIELDS["agent_instance"])
+                actor = token_entry.get("actor") or agent_instance
             
             # AIPOS-R6C ⑩: policy_ref 自发现全序 (policy_resolver → env → 显式)
             from tools.aipos_cli.policy_resolver import find_active_policy

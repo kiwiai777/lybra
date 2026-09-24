@@ -59,7 +59,10 @@ class LoopContext:
 
 
 class ConnectionResolver:
-    """连接→token 解析器 (唯一一份逻辑)。
+    """连接→token 解析器。
+
+    AIPOS-F81: token 挑选不在此实现 —— resolve_token / resolve_identity 一律委托
+    tools/aipos_cli/token_resolver.py(F59 唯一实现: instance → role, 排除 retired)。
     
     Precedence: 自发现 (.lybra/) → env 覆盖 → 显式参数
     
@@ -163,30 +166,21 @@ class ConnectionResolver:
             return explicit_token
         
         # Auto-discovery from .lybra/connection.json (优先级高于env)
+        # AIPOS-F81: 挑选委托 token_resolver 单源(instance → role, 排除 retired); 本处不再自带挑选循环。
+        # 无命中(TokenNotFoundError)才落 env 兜底; 命中全 retired / 文件坏 = 抛出(fail-closed, 拒因带重签出口)。
+        workstation_miss = ".lybra/connection.json not found"
         if workspace_root:
             lybra_dir = ConnectionResolver.discover_lybra_dir(workspace_root)
-            if lybra_dir:
+            connection_file = lybra_dir / "connection.json" if lybra_dir else None
+            if connection_file is not None and connection_file.is_file():
+                from tools.aipos_cli.token_resolver import TokenNotFoundError, get_token_for_role_and_project
+
                 try:
-                    config = ConnectionResolver.load_connection_config(lybra_dir)
-                    tokens = config.get("tokens", [])
-                    if not isinstance(tokens, list):
-                        raise ValueError("tokens must be a list")
-                    
-                    # Match by agent_instance (most specific)
-                    if agent_instance:
-                        for token_entry in tokens:
-                            if token_entry.get("agent_instance") == agent_instance:
-                                return str(token_entry["token"])
-                    
-                    # Match by role
-                    if role:
-                        for token_entry in tokens:
-                            if token_entry.get("role") == role:
-                                return str(token_entry["token"])
-                    
-                except (FileNotFoundError, ValueError, KeyError) as exc:
-                    # Discovery failed, fall through to error
-                    pass
+                    return get_token_for_role_and_project(
+                        connection_file, role, None, agent_instance=agent_instance,
+                    )
+                except TokenNotFoundError as exc:
+                    workstation_miss = str(exc)  # 本层无命中: 按声明优先级落到 env 兜底; 其余错误原样抛出
         
         # Environment override (最低优先级)
         env_token = source_env.get("LYBRA_TOKEN", "").strip()
@@ -194,7 +188,7 @@ class ConnectionResolver:
             return env_token
         
         raise ValueError(
-            f"Cannot resolve token for role={role}, agent_instance={agent_instance}. "
+            f"Cannot resolve token for role={role}, agent_instance={agent_instance} ({workstation_miss}). "
             "Provide explicit token, set LYBRA_TOKEN env, or ensure .lybra/connection.json exists."
         )
     
@@ -368,28 +362,38 @@ class ConnectionResolver:
         else:
             gate_url.update(value=schema_gate_url, source="schema:urls.gate_local")
         
-        # --- token: 显式 → .lybra/connection.json.tokens (instance 匹配 → role 匹配) → env ---
+        # --- token: 显式 → .lybra/connection.json.tokens (instance 匹配 → role 匹配, 排除 retired) → env ---
         if ex.get("token"):
             token.update(value=ex["token"], source="explicit", env_downgraded=bool(env_token))
         else:
+            # AIPOS-F81: 挑选委托 token_resolver.select_token_entry 单源(instance → role, 排除 retired)。
+            # 无命中才落 env 兜底; 命中全 retired = value None + error(带重签出口), 禁 env 静默顶替(fail-closed)。
+            from tools.aipos_cli.token_resolver import (
+                TOKEN_ENTRY_FIELDS,
+                TokenNotFoundError,
+                TokenResolutionError,
+                select_token_entry,
+            )
+
             matched = None
-            if isinstance(conn, dict):
-                tokens = conn.get("tokens") or []
-                if isinstance(tokens, list):
-                    ai = agent_instance["value"]
-                    rl = role["value"]
-                    if ai:
-                        for t in tokens:
-                            if isinstance(t, dict) and t.get("agent_instance") == ai and t.get("token"):
-                                matched = t["token"]
-                                break
-                    if not matched and rl:
-                        for t in tokens:
-                            if isinstance(t, dict) and t.get("role") == rl and t.get("token"):
-                                matched = t["token"]
-                                break
+            token_error = None
+            tokens = conn.get("tokens") if isinstance(conn, dict) else None
+            if isinstance(tokens, list):
+                try:
+                    matched = select_token_entry(
+                        tokens,
+                        role=role["value"],
+                        agent_instance=agent_instance["value"],
+                        source=str(lybra_dir / "connection.json") if lybra_dir else ".lybra/connection.json",
+                    )[TOKEN_ENTRY_FIELDS["token"]]
+                except TokenNotFoundError:
+                    matched = None
+                except TokenResolutionError as exc:
+                    token_error = str(exc)
             if matched:
                 token.update(value=str(matched), source=".lybra/connection.json", env_downgraded=bool(env_token))
+            elif token_error:
+                token.update(error=token_error, env_downgraded=bool(env_token))
             elif env_token:
                 token.update(value=env_token, source="env:LYBRA_TOKEN", via_env=True)
         
