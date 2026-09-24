@@ -5,6 +5,8 @@ Root cause (AIPOS-F59 anchor): Token selection was "take first match by role" (i
 domains always got selected first, making chris's 5 re-enrollments ineffective.
 
 This module provides:
+0. AIPOS-F82: tokens[] 条目声明读 config.schema#identity_resolution.keys.token.entry; `is_token_entry_retired()`
+   退役判据唯一实现; `python3 -m tools.aipos_cli.token_resolver` 最小 CLI(bash 调用方取值入口)
 1. `get_token_for_role_and_project()` — unified token getter by (role, project_domain)
 2. `retire_token_entry()` — mark old entries as retired (leave trace, don't delete)
 3. `detect_wrong_domain_tokens()` — reconcile wrong-domain entries
@@ -34,29 +36,59 @@ def token_fingerprint(token: str) -> str:
     return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
 
 
-# AIPOS-F81: connection.json tokens[] 条目字段名 —— 挑选判据的唯一声明(产品无 schema 声明这些字段, 故声明在此)。
-# TS 侧 agents/harness/pi/lybra-loop/loop-context.ts::TOKEN_ENTRY_FIELDS 注明来源于此, 同构夹具
-# tests/test_aipos_f81_token_single_source.py 逐键比对并跑同一组靶场, 两边不一致即红。
-TOKEN_ENTRY_FIELDS: dict[str, str] = {
-    "token": "token",
-    "role": "role",
-    "agent_instance": "agent_instance",
-    "projects": "projects",
-    "retired": "retired",
-}
+def _load_token_entry_declaration() -> dict[str, Any]:
+    """AIPOS-F82 件③: tokens[] 条目声明读 config.schema#identity_resolution.keys.token.entry(一处声明, 禁代码内第二份)。
 
-# AIPOS-F81: 全 retired 时拒因携带的出口(重签)。TS 侧同名常量注明来源于此。
-TOKEN_REENROLL_EXIT = "lybra roles enroll --code <码> --workspace <工位根>"
+    声明缺失/不全 = TokenDeclarationError(fail-closed: 挑选判据无声明即不可信)。
+    """
+    from tools.schema_loader import code_repo_schema_root, load_schema
+
+    entry = (
+        ((load_schema("config", repo_root=code_repo_schema_root()).get("identity_resolution") or {}).get("keys") or {})
+        .get("token", {})
+        .get("entry")
+    )
+    if not isinstance(entry, dict):
+        raise TokenDeclarationError("config.schema#identity_resolution.keys.token.entry 缺失(tokens[] 条目声明), 拒绝解析 token")
+    fields = entry.get("fields")
+    retirement = entry.get("retirement_fields")
+    exit_cmd = str(entry.get("reenroll_exit") or "").strip()
+    need = ("token", "role", "agent_instance", "projects", "retired")
+    if not isinstance(fields, dict) or any(not str(fields.get(k) or "").strip() for k in need):
+        raise TokenDeclarationError(f"config.schema token.entry.fields 须声明 {list(need)}, 实得 {fields!r}")
+    if not isinstance(retirement, dict) or not {"retired", "retired_at", "retired_reason"} <= set(retirement):
+        raise TokenDeclarationError(f"config.schema token.entry.retirement_fields 须声明 retired/retired_at/retired_reason, 实得 {retirement!r}")
+    if not exit_cmd:
+        raise TokenDeclarationError("config.schema token.entry.reenroll_exit 缺失(全 retired 拒因须带重签出口)")
+    return {"fields": {k: str(fields[k]) for k in need}, "retirement": sorted(retirement), "exit": exit_cmd}
+
+
+class TokenResolutionError(ValueError):
+    """AIPOS-F81: token 解析失败(ValueError 子类, 存量 ``except ValueError`` 调用方不变)。"""
+
+
+class TokenDeclarationError(TokenResolutionError):
+    """AIPOS-F82: config.schema 的 tokens[] 条目声明缺失/不全(fail-closed)。"""
+
+
+_DECL = _load_token_entry_declaration()
+
+# AIPOS-F81 → F82: connection.json tokens[] 条目字段名 —— 声明在 config.schema#identity_resolution.keys.token.entry.fields,
+# 此处只是读出的只读视图。TS 侧 agents/harness/pi/lybra-loop/loop-context.ts::TOKEN_ENTRY_FIELDS 注明来源于此,
+# 同构夹具 tests/test_aipos_f81_token_single_source.py 逐键比对, 两边不一致即红。
+TOKEN_ENTRY_FIELDS: dict[str, str] = dict(_DECL["fields"])
+
+# AIPOS-F82: 退役字段名(retired / retired_at / retired_reason), 声明同上 retirement_fields。
+TOKEN_RETIREMENT_FIELDS: tuple[str, ...] = tuple(_DECL["retirement"])
+
+# AIPOS-F81: 全 retired 时拒因携带的出口(重签)。声明同上 reenroll_exit; TS 侧同名常量注明来源于此。
+TOKEN_REENROLL_EXIT = _DECL["exit"]
 
 _F_TOKEN = TOKEN_ENTRY_FIELDS["token"]
 _F_ROLE = TOKEN_ENTRY_FIELDS["role"]
 _F_INSTANCE = TOKEN_ENTRY_FIELDS["agent_instance"]
 _F_PROJECTS = TOKEN_ENTRY_FIELDS["projects"]
 _F_RETIRED = TOKEN_ENTRY_FIELDS["retired"]
-
-
-class TokenResolutionError(ValueError):
-    """AIPOS-F81: token 解析失败(ValueError 子类, 存量 ``except ValueError`` 调用方不变)。"""
 
 
 class TokenNotFoundError(TokenResolutionError):
@@ -67,11 +99,17 @@ class TokenAllRetiredError(TokenResolutionError):
     """命中选择器的条目全部 retired —— fail-closed, 禁落到下一层; 拒因带重签出口。"""
 
 
+def is_token_entry_retired(entry: Any) -> bool:
+    """AIPOS-F82: 条目是否已退役(config.schema token.entry.retirement_fields.retired)。退役判据的唯一实现——
+    取值(select_token_entry)与鉴权侧(看板登录按指纹命中)同用; 不读 token 值。"""
+    return isinstance(entry, dict) and bool(entry.get(_F_RETIRED))
+
+
 def is_token_entry_active(entry: Any) -> bool:
     """AIPOS-F81: 条目是否可用于取值(dict·非 retired·token 非空)。挑选判据的原子谓词, 唯一实现。"""
     return (
         isinstance(entry, dict)
-        and not entry.get(_F_RETIRED)
+        and not is_token_entry_retired(entry)
         and bool(str(entry.get(_F_TOKEN) or "").strip())
     )
 
@@ -132,7 +170,7 @@ def select_token_entry(
                 matched.append(e)
         usable = [
             e for e in hits
-            if (allow_retired or not e.get(_F_RETIRED)) and str(e.get(_F_TOKEN) or "").strip()
+            if (allow_retired or not is_token_entry_retired(e)) and str(e.get(_F_TOKEN) or "").strip()
         ]
         if project is not None:
             usable = [
@@ -147,7 +185,7 @@ def select_token_entry(
 
     if not matched:
         raise TokenNotFoundError(f"No token found for {selector} in {source}")
-    if not allow_retired and all(e.get(_F_RETIRED) for e in matched):
+    if not allow_retired and all(is_token_entry_retired(e) for e in matched):
         fps = ", ".join(token_fingerprint(str(e.get(_F_TOKEN) or "")) for e in matched)
         raise TokenAllRetiredError(
             f"All {len(matched)} token entr{'y' if len(matched) == 1 else 'ies'} for {selector} in {source} "
@@ -284,7 +322,7 @@ def retire_token_entry(
     for item in tokens:
         if not isinstance(item, dict):
             continue
-        if item.get("retired"):
+        if is_token_entry_retired(item):
             # Already retired, skip
             continue
 
@@ -301,7 +339,8 @@ def retire_token_entry(
                 match = False
 
         if match:
-            item["retired"] = True
+            # AIPOS-F82: 字段名 = config.schema token.entry.retirement_fields 声明
+            item[_F_RETIRED] = True
             item["retired_at"] = now
             item["retired_reason"] = reason
             retired_count += 1
@@ -384,6 +423,39 @@ def detect_wrong_domain_tokens(
     return wrong_domain
 
 
-# AIPOS-316: Guard against direct invocation
-from tools.aipos_cli._cli_entry_guard import check_direct_invocation
-check_direct_invocation(__name__)
+# ---------------------------------------------------------------------------
+# AIPOS-F82 件③: 最小 CLI 入口 —— 供 bash 调用方(tools/lybra-deploy)命令替换取值, 禁 bash 内嵌挑选逻辑。
+# 契约: 成功 = 只把 token 写到 stdout(无其他输出, 不写日志); --fingerprint = 只输出指纹(诊断/夹具, 不出 token);
+# 失败 = stderr 一行拒因(只带指纹 + 出口, 永不带 token 值), 退出码 1(全 retired = 3, 便于调用方区分重签)。
+# ---------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="python3 -m tools.aipos_cli.token_resolver",
+        description="AIPOS-F82: 按 config.schema token.entry 判据(instance→role·排除 retired)从 connection.json 取 token 到 stdout",
+    )
+    parser.add_argument("--connection-json", required=True, help="connection.json 路径")
+    parser.add_argument("--role", default=None, help="角色名(role 匹配)")
+    parser.add_argument("--agent-instance", default=None, help="实例名(先于 role 匹配)")
+    parser.add_argument("--project", default=None, help="项目域过滤(可选)")
+    parser.add_argument("--fingerprint", action="store_true", help="只输出所选条目的指纹(不输出 token)")
+    args = parser.parse_args(argv)
+    try:
+        token = get_token_for_role_and_project(
+            args.connection_json, args.role, args.project, agent_instance=args.agent_instance,
+        )
+    except TokenAllRetiredError as exc:
+        print(f"token_resolver: {exc.__class__.__name__}: {exc}", file=sys.stderr)
+        return 3
+    except ValueError as exc:  # TokenResolutionError 族 + 读失败(均为 ValueError, 拒因不含 token 值)
+        print(f"token_resolver: {exc.__class__.__name__}: {exc}", file=sys.stderr)
+        return 1
+    sys.stdout.write((token_fingerprint(token) if args.fingerprint else token) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

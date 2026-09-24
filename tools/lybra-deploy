@@ -66,6 +66,15 @@ resolve_governance_root() {
     fi
 }
 
+# AIPOS-F82 件③: 活门校验用的 executor token 走产品单源 token_resolver
+# (config.schema#identity_resolution.keys.token.entry: instance→role·排除 retired; 全 retired fail-closed 带重签出口)。
+# 禁在 bash 内嵌挑选逻辑(旧写法取第一条 executor 条目, 重签后拿到 retired 旧 token → 活门 401)。
+# 只把 token 输出到 stdout 供命令替换; 失败时 stderr 只带指纹 + 出口, 返回非 0。
+resolve_executor_token() {
+    local conn_json="$1"
+    (cd "$PRODUCT_REPO" && python3 -m tools.aipos_cli.token_resolver --connection-json "$conn_json" --role executor)
+}
+
 # ── rsync excludes ──────────────────────────────────────────────────────
 # Things that must NOT appear in the runtime snapshot.
 # Credentials (.lybra/, .env) are referenced by absolute path, never copied.
@@ -238,7 +247,10 @@ cmd_verify() {
     local conn_json mcp_port executor_token
     conn_json="/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json"
     mcp_port=$(python3 -c "import json; print(json.load(open('$conn_json'))['mcp']['port'])" 2>/dev/null || echo "7118")
-    executor_token=$(python3 -c "import json; tokens=[t for t in json.load(open('$conn_json'))['tokens'] if t.get('role')=='executor']; print(tokens[0]['token'] if tokens else '')" 2>/dev/null)
+    if ! executor_token=$(resolve_executor_token "$conn_json"); then
+        err "✗ Cannot resolve executor token for live gate check (token_resolver 拒因见上; 只列指纹)"
+        return 1
+    fi
 
     local live_response http_status
     live_response=$(mktemp)
@@ -614,7 +626,12 @@ except Exception:
     local mcp_port conn_json executor_token expected_commit
     conn_json="/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json"
     mcp_port=$(python3 -c "import json; print(json.load(open('$conn_json'))['mcp']['port'])" 2>/dev/null || echo "7118")
-    executor_token=$(python3 -c "import json; tokens=[t for t in json.load(open('$conn_json'))['tokens'] if t.get('role')=='executor']; print(tokens[0]['token'] if tokens else '')" 2>/dev/null)
+    if ! executor_token=$(resolve_executor_token "$conn_json"); then
+        err "✗ Cannot resolve executor token for live gate verification (token_resolver 拒因见上; 只列指纹)"
+        err "Deploy technically succeeded but live verification failed."
+        err "Manual inspection required."
+        exit 1
+    fi
     expected_commit=$(cd "$PRODUCT_REPO" && git rev-parse HEAD 2>/dev/null || echo "unknown")
 
     local live_commit live_response http_status
