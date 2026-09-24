@@ -876,6 +876,16 @@ else
   overall=1
 fi
 
+# AIPOS-F82: 工位接入收口三件(共享落点 prune 按全角色声明并集·finalize-slice 退出执行体分发/enroll 接线走声明·章程种子走 charter_render/车道外 token 取值归单源+config.schema 声明 retired)
+echo
+echo "── tests/test_aipos_f82_workstation_intake.py + tools/aipos_cli/tests/test_c4b_distribution.py + tools/test_aipos_r1_conformance.py (F82 A→B→A→B 稳态/enroll 无悬空·渲染种子/[retired,new] 三处取新·conformance retired 形态) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f82_workstation_intake.py" "$REPO_ROOT/tools/aipos_cli/tests/test_c4b_distribution.py" "$REPO_ROOT/tools/test_aipos_r1_conformance.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f82_workstation_intake.py PASS"
+else
+  echo "✗ tests/test_aipos_f82_workstation_intake.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

@@ -3440,7 +3440,12 @@ def verify_login_token(
     命中返回 {role, is_owner, scopes, token_ref};未命中返回 None。
     **只比较指纹,绝不读取/回显 connection.json 的原始 token 字段**;用 secrets.compare_digest
     做常量时间比较,避免基于时间的指纹探测。任何 IO/解析异常 → 视为不可信 → 不命中(fail-closed)。
+
+    AIPOS-F82 件③: 已退役条目(config.schema token.entry.retirement_fields.retired, 判据唯一实现
+    token_resolver.is_token_entry_retired)不参与比对 —— 重签后旧 token 仍留在 connection.json 里留痕, 不得再登录。
     """
+    from tools.aipos_cli.token_resolver import is_token_entry_retired
+
     if not token or not isinstance(token, str):
         return None
     submitted_fp = _token_fingerprint(token)
@@ -3454,7 +3459,7 @@ def verify_login_token(
         if not isinstance(tokens, list):
             continue
         for item in tokens:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or is_token_entry_retired(item):
                 continue
             stored_fp = str(item.get("fingerprint") or "")
             if not stored_fp:

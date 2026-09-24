@@ -149,13 +149,14 @@ def load_role_tokens(connection_json: Path) -> list[dict[str, Any]]:
 
 
 def executor_token(connection_json: Path) -> str:
-    for item in load_role_tokens(connection_json):
-        if str(item.get("role") or "") == "executor":
-            token = str(item.get("token") or "").strip()
-            if not token:
-                raise ConfinedWorkerError("executor role token is empty in connection.json")
-            return token
-    raise ConfinedWorkerError("no executor role token found in connection.json")
+    """AIPOS-F82 件③: 取值走 token_resolver 单源(instance→role·排除 retired; 全 retired fail-closed 带重签出口),
+    禁本地再遍历挑选(旧实现取第一条 executor 条目, 重 enroll 后会拿到 retired 旧 token)。拒因只带指纹。"""
+    from tools.aipos_cli.token_resolver import get_token_for_role_and_project
+
+    try:
+        return get_token_for_role_and_project(connection_json, "executor")
+    except ValueError as exc:  # TokenResolutionError 族 / 读失败 —— 拒因不含 token 值
+        raise ConfinedWorkerError(f"executor token unresolved from connection.json: {exc}") from exc
 
 
 def all_raw_secrets(connection_json: Path) -> list[str]:

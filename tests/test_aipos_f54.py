@@ -55,13 +55,17 @@ PREFIX = _load_prefix_module()
 from tools.aipos_cli import enroll_client as CURRENT  # noqa: E402
 from tools.aipos_cli.distribution_sync import _correct_owner_policy_ref  # noqa: E402
 from tools.aipos_cli.workstation_wiring import (  # noqa: E402
-    LOOP_WRAPPER_TS,
     SETTINGS_TEMPLATE,
+    declared_role_distributions,
+    declared_role_skills,
     derive_effective_owner_policy_ref,
-    load_role_skills,
     minimum_bootable_set_items,
+    tool_package_for_class,
     verify_minimum_bootable_set,
 )
+
+# AIPOS-F82 件②: 接线目标由 distribution 声明推导(executor 类 4 技能, finalize-slice 已退出执行体分发)
+EXEC_DECLARED_SKILLS = sorted(declared_role_skills(declared_role_distributions("executor", "executor")))
 
 
 def _stub_token_entry(role: str, instance: str, role_class: str | None = None) -> dict:
@@ -89,6 +93,11 @@ def _fake_governance(tmp: Path, policy_id: str = "pol_probe_exec_1", covers: str
     """造治理根: 5_tasks/policies 下一份生效 PreAuthorized 信封。"""
     gov = tmp / name
     (gov / "5_tasks" / "policies").mkdir(parents=True, exist_ok=True)
+    # AIPOS-F82 件②: enroll 章程种子走 charter_render(需项目声明); 项目段 = 夹具实例名 <prefix>.probe.<host>
+    (gov / "project.json").write_text(json.dumps({"project": "probe", "config_version": 1}), encoding="utf-8")
+    # 工位父根共享层(真实拓扑: 仓库根 _shared/extensions/claim.ts 由工位仓自带)——扩展挂载只接目标存在者
+    (tmp / "_shared" / "extensions").mkdir(parents=True, exist_ok=True)
+    (tmp / "_shared" / "extensions" / "claim.ts").write_text("export default function () {}\n", encoding="utf-8")
     (gov / "5_tasks" / "policies" / f"{policy_id}.md").write_text(
         "---\n"
         "record_type: owner_autonomy_policy\n"
@@ -194,9 +203,14 @@ def test_2_green_full_wiring():
     ok("⑯ claim.ts 软链目标正确",
        "../../.." in Path(claim.readlink()).as_posix() and "_shared/extensions/claim.ts" in claim.readlink().as_posix(),
        claim.readlink().as_posix())
-    loop = ws / ".pi" / "extensions" / "lybra-loop.ts"
-    ok("⑯ lybra-loop.ts 是真实文件(非软链)", loop.is_file() and not loop.is_symlink())
-    ok("⑯ lybra-loop.ts 为转发文件", "export { default }" in loop.read_text() and "_distributed/extensions/lybra-loop" in loop.read_text())
+    # AIPOS-F82 件②: 旧门循环扩展 lybra-loop 未被 distribution 声明 = 已退役 → 不接(不写悬空包装), warnings 点名
+    ok("F82 lybra-loop.ts 不再写(退役, 无悬空包装)", not (ws / ".pi" / "extensions" / "lybra-loop.ts").exists()
+       and not (ws / ".pi" / "extensions" / "lybra-loop.ts").is_symlink())
+    ok("F82 warnings 点名 lybra-loop 未接", any("extension:lybra-loop" in w for w in r.get("warnings") or []), str(r.get("warnings")))
+    ok("F82 .pi/extensions 逐个 resolve 目标存在",
+       all(p.exists() for p in (ws / ".pi" / "extensions").iterdir()), str(sorted(p.name for p in (ws / ".pi" / "extensions").iterdir())))
+    ok("F82 AGENTS.md = 渲染物(无 {{占位}})", "{{" not in (ws / "AGENTS.md").read_text()
+       and "<!-- lybra:charter-render" in (ws / "AGENTS.md").read_text())
     # ⑨ owner_policy_ref
     role = json.loads((ws / ".lybra" / "role").read_text())
     ok("⑨ role 含推导的 owner_policy_ref", role.get("owner_policy_ref") == "pol_probe_exec_1", str(role))
@@ -224,13 +238,14 @@ def test_3_skills_by_role_class():
     _enroll(CURRENT, ws_audit, gov, _stub_token_entry("auditor", "audit.probe"))
     exec_skills = sorted(p.name for p in (ws_exec / ".pi" / "skills").iterdir())
     audit_skills = sorted(p.name for p in (ws_audit / ".pi" / "skills").iterdir())
-    ok("⑰ executor 类 5 技能", exec_skills == sorted(
-        ["block-and-report", "chunked-io", "finalize-slice", "task-closure-loop", "write-return"]), str(exec_skills))
+    ok("⑰ executor 类技能 = distribution 声明集(F82: 无 finalize-slice)", exec_skills == EXEC_DECLARED_SKILLS
+       and "finalize-slice" not in exec_skills, str(exec_skills))
     ok("⑰ auditor 类含 audit-independent-evidence", "audit-independent-evidence" in audit_skills)
     ok("⑰ auditor 类无 finalize-slice", "finalize-slice" not in audit_skills)
     ok("⑰ skills 逐项软链", all((ws_exec / ".pi" / "skills" / s).is_symlink() for s in exec_skills))
-    ok("⑰ 声明源可查(roles.schema tool_package)",
-       load_role_skills("executor") is not None and load_role_skills("auditor") is not None)
+    ok("⑰ 声明源可查(distribution.schema applies_to_roles)",
+       bool(declared_role_skills(declared_role_distributions("executor", "executor")))
+       and bool(declared_role_skills(declared_role_distributions("auditor", "auditor"))))
 
 
 def test_4_custom_role_by_class():
@@ -240,9 +255,10 @@ def test_4_custom_role_by_class():
     ws = _fresh_ws(tmp)
     r = _enroll(CURRENT, ws, gov, _stub_token_entry("probe-xyz-coder", "xyz.probe.otherproj", role_class="executor"))
     ok("⑤ 自定义角色 enroll ok", r["ok"] is True)
-    ok("⑤ 接线按 role_class=executor 落齐", (ws / ".pi" / "extensions" / "lybra-loop.ts").is_file())
+    ok("⑤ 接线按 role_class=executor 落齐", (ws / ".pi" / "extensions" / "claim.ts").is_symlink()
+       and not (ws / ".pi" / "extensions" / "lybra-loop.ts").exists())
     skills = sorted(p.name for p in (ws / ".pi" / "skills").iterdir())
-    ok("⑤ skills=executor 集合", "finalize-slice" in skills and "audit-independent-evidence" not in skills)
+    ok("⑤ skills=executor 集合", skills == EXEC_DECLARED_SKILLS and "audit-independent-evidence" not in skills, str(skills))
     role = json.loads((ws / ".lybra" / "role").read_text())
     ok("⑤ 信封按角色名覆盖推导", role.get("owner_policy_ref") == "pol_probe_exec_1")
 
@@ -365,7 +381,7 @@ def test_10_dangling_bin_and_missing_named():
     tmp = Path(tempfile.mkdtemp(prefix="f54-mbs-"))
     gov = _fake_governance(tmp)
     ws = _fresh_ws(tmp)
-    _enroll(CURRENT, ws, gov, _stub_token_entry("executor", "exec.probe"))
+    _enroll(CURRENT, ws, gov, _stub_token_entry("executor", "exec.probe.kiwiai-dev"))  # F82: 合模板实例名 → 章程可渲染
     conn_p = ws / ".lybra" / "connection.json"
     conn = json.loads(conn_p.read_text())
     conn["lybra_bin"] = "/nonexistent/path/bin/lybra"
@@ -386,8 +402,10 @@ def test_11_no_hardcoded_roles():
     src = (REPO / "tools" / "aipos_cli" / "workstation_wiring.py").read_text(encoding="utf-8")
     for banned in ["hbj-coder", "hbj-auditor", "chris", "kiwiai-dev", "lybra-executor", "probe-xyz"]:
         ok(f"⑱ 代码无 {banned} 硬编码", banned not in src)
-    skills = load_role_skills("executor")
-    ok("⑱ roles.schema 声明可查", isinstance(skills, list) and len(skills) == 5)
+    skills = declared_role_skills(declared_role_distributions("executor", "executor"))
+    ok("⑱ distribution 声明可查(F82: 执行体 4 技能, 零门无 finalize-slice)",
+       len(skills) == 4 and "finalize-slice" not in skills, str(sorted(skills)))
+    ok("⑱ roles.schema tool_package 仅作退役项点名源", "finalize-slice" in tool_package_for_class("executor")["skills"])
 
 
 def test_12_derive_priority_instance_over_role():

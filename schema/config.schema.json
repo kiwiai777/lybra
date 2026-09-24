@@ -330,14 +330,32 @@
           {
             "layer": "workstation",
             "file": ".lybra/connection.json",
-            "field": "tokens[] (agent_instance 匹配 → role 匹配)"
+            "field": "tokens[] (agent_instance 匹配 → role 匹配, 排除 retired; 条目声明见本键 entry)"
           },
           {
             "layer": "env",
             "var": "LYBRA_TOKEN"
           }
         ],
-        "note": "token 进程内使用, 永不回显; 日志只出 fingerprint (sha256 前 12 位)。"
+        "note": "token 进程内使用, 永不回显; 日志只出 fingerprint (sha256 前 12 位)。",
+        "entry": {
+          "description": "AIPOS-F82 件③: connection.json tokens[] 条目声明(字段名 + 退役字段 + 解析语义, 一处声明)。消费方: tools/aipos_cli/token_resolver.py 读本节(TOKEN_ENTRY_FIELDS / TOKEN_RETIREMENT_FIELDS / TOKEN_REENROLL_EXIT), 其余客户端(sync/loop_context/confined_worker/lybra-deploy/看板登录)一律经 token_resolver 取值或判退役, 禁另写挑选逻辑。pi 侧 loop-context.ts TOKEN_ENTRY_FIELDS 与本节逐键同名同值(同构夹具锁定)。",
+          "fields": {
+            "token": "token",
+            "role": "role",
+            "agent_instance": "agent_instance",
+            "projects": "projects",
+            "retired": "retired"
+          },
+          "retirement_fields": {
+            "retired": "bool — true = 已退役(重 enroll / 轮换时旧条目标记, 留痕不删)",
+            "retired_at": "ISO-8601 UTC — 退役时刻",
+            "retired_reason": "string — 退役原因(如 superseded by re-enrollment)"
+          },
+          "resolution": "取值选择器分阶段 agent_instance 匹配 → role 匹配; 每阶段排除 retired 条目与空 token; 首个有可用条目的阶段取第一条。无命中 = 可落下一层(env); 命中的全部 retired = fail-closed(禁落 env 顶替), 拒因只带指纹并携带 reenroll_exit; 登录/鉴权侧按指纹命中 retired 条目 = 拒。",
+          "reenroll_exit": "lybra roles enroll --code <码> --workspace <工位根>",
+          "single_implementation": "tools/aipos_cli/token_resolver.py::select_token_entry(取值) / is_token_entry_retired(退役判据); bash 调用方经 python3 -m tools.aipos_cli.token_resolver 取值(只输出 token 到 stdout 供命令替换)"
+        }
       },
       "workspace_root": {
         "required": true,

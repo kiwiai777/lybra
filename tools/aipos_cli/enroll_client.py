@@ -812,7 +812,8 @@ def enroll(
             except (json.JSONDecodeError, OSError):
                 role = None
     
-    # AIPOS-F54 ①: .pi 接线 + AGENTS.md 占位(seed_only 幂等, 已存在跳过不覆盖)
+    # AIPOS-F54 ①: .pi 接线 + AGENTS.md 种子(seed_only 幂等, 已存在跳过不覆盖)
+    # AIPOS-F82 件②: 接线目标由 distribution 声明推导(只写目标存在的扩展挂载, 不写的项进 warnings); AGENTS.md = charter_render 渲染物
     if role:
         role_class = resolve_role_class(role, token_entry)
         wiring_report = materialize_pi_wiring(workspace_root, role=role, role_class=role_class)
@@ -874,6 +875,8 @@ def enroll(
         "created_workspace_dir": created_workspace_dir,
         "policy_derivation": policy_derivation,
         "wiring": wiring_report,
+        # AIPOS-F82 件②: 未写的接线项/章程逐项点名(禁写悬空、禁落未渲染母本)
+        "warnings": list((wiring_report or {}).get("warnings") or []),
         "minimum_bootable_set": bootable_check,
         "git_exclude": git_exclude_report,
         "next_step": ("上岗完成: 接着 /lybra sync 然后 /reload" if code is not None else None),
