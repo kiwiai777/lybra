@@ -140,7 +140,11 @@ def resolve_sync_context(
 
     resolved_token = token or identity["token"]["value"]
     if not resolved_token:
-        raise ValueError("cannot resolve token from .lybra connection.json")
+        # AIPOS-F81: 全 retired 等 fail-closed 拒因(带重签出口)原样带出, token 值永不上屏
+        detail = identity["token"].get("error")
+        raise ValueError(
+            "cannot resolve token from .lybra connection.json" + (f": {detail}" if detail else "")
+        )
 
     return {
         "harness_root": root,

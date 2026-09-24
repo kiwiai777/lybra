@@ -522,7 +522,7 @@ const RESOLUTION_LAYERS: Record<string, string> = {
   agent_instance: "显式参数 → 工位 .lybra/role(instance) → env:LYBRA_AGENT_INSTANCE",
   owner_policy_ref: "显式参数 → 工位 .lybra/role(owner_policy_ref) → .lybra/policy → env:LYBRA_OWNER_POLICY_REF",
   gate_url: "显式参数 → 工位 .lybra/connection.json(mcp.rpc_url) → env:LYBRA_GATE_URL → schema:urls.gate_local",
-  token: "显式参数 → 工位 .lybra/connection.json(tokens, instance/role 匹配) → env:LYBRA_TOKEN",
+  token: "显式参数 → 工位 .lybra/connection.json(tokens, instance/role 匹配, 排除 retired) → env:LYBRA_TOKEN",
 };
 
 /**
@@ -554,6 +554,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): LoopConfig {
     if (!r.value) {
       throw new ConfigError(
         `身份配置缺键 ${r.key}: ${RESOLUTION_LAYERS[r.key] ?? "显式参数/工位 .lybra/env"} 均未解析到 (来源=${r.source})。` +
+        // AIPOS-F81: 工位层 fail-closed 拒因 (如命中 token 全 retired, 带重签出口) 原样带出; 不含 token 值
+        (r.error ? `拒因: ${r.error}。` : "") +
         `禁止静默缺省。声明见 config.schema#identity_resolution.keys.${r.key}。`
       );
     }

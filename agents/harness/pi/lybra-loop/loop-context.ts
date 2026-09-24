@@ -11,6 +11,7 @@
 
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join, parse } from "node:path";
+import { createHash } from "node:crypto";
 
 export interface LoopContext {
   project: string;
@@ -40,7 +41,82 @@ export interface ConnectionConfig {
     scopes?: string[];
     fingerprint?: string;
     token_ref?: string;
+    projects?: string[];
+    retired?: boolean;
   }>;
+}
+
+/**
+ * AIPOS-F81: connection.json tokens[] 条目字段名。
+ * 来源: tools/aipos_cli/token_resolver.py::TOKEN_ENTRY_FIELDS (产品无 schema 声明这些字段, Python 侧为唯一声明;
+ * 本常量逐键同名同值, tests/test_aipos_f81_token_single_source.py 比对锁定, 禁在 TS 侧另改)。
+ */
+export const TOKEN_ENTRY_FIELDS = {
+  token: "token",
+  role: "role",
+  agent_instance: "agent_instance",
+  projects: "projects",
+  retired: "retired",
+} as const;
+
+/** AIPOS-F81: 全 retired 拒因出口。来源: tools/aipos_cli/token_resolver.py::TOKEN_REENROLL_EXIT (同构夹具锁定)。 */
+export const TOKEN_REENROLL_EXIT = "lybra roles enroll --code <码> --workspace <工位根>";
+
+/** AIPOS-F81: token 解析失败基类 (对应 Python token_resolver.TokenResolutionError)。 */
+export class TokenResolutionError extends Error {}
+/** 无条目命中选择器 —— 调用方可落下一层 (env 兜底)。对应 Python TokenNotFoundError。 */
+export class TokenNotFoundError extends TokenResolutionError {}
+/** 命中条目全部 retired —— fail-closed, 禁落下一层, 拒因带重签出口。对应 Python TokenAllRetiredError。 */
+export class TokenAllRetiredError extends TokenResolutionError {}
+
+function entryFingerprint(token: unknown): string {
+  const t = typeof token === "string" ? token : "";
+  if (!t) return "(none)";
+  return "sha256:" + createHash("sha256").update(t, "utf-8").digest("hex").slice(0, 12);
+}
+
+/**
+ * AIPOS-F81: 从 tokens[] 挑一条条目 —— 与 Python tools/aipos_cli/token_resolver.py::select_token_entry 同一判据
+ * (TS 侧只移植连接器用到的 instance/role 两阶段, 无 project/any_role 选择器):
+ *  1. agent_instance 匹配 (最具体) → role 匹配;
+ *  2. 每阶段只取可用条目: 非 retired 且 token 非空; 首个有候选的阶段返回第一条;
+ *  3. 都没有: 无命中 = TokenNotFoundError; 命中全 retired = TokenAllRetiredError (带重签出口);
+ *     其余 (token 空) = TokenResolutionError。拒因只带指纹, 永不带 token 值。
+ */
+export function selectTokenEntry(
+  tokens: unknown[],
+  opts: { role?: string | null; agentInstance?: string | null; source?: string },
+): Record<string, unknown> {
+  const F = TOKEN_ENTRY_FIELDS;
+  const source = opts.source ?? "connection.json";
+  const stages: Array<[string, (e: Record<string, unknown>) => boolean]> = [];
+  if (opts.agentInstance) stages.push([`agent_instance='${opts.agentInstance}'`, (e) => e[F.agent_instance] === opts.agentInstance]);
+  if (opts.role) stages.push([`role='${opts.role}'`, (e) => e[F.role] === opts.role]);
+  const selector = stages.map(([label]) => label).join(" → ") || "(no selector)";
+  if (stages.length === 0) {
+    throw new TokenNotFoundError(`No token selector (role/agent_instance) given for ${source}`);
+  }
+  const matched: Array<Record<string, unknown>> = [];
+  for (const [, pred] of stages) {
+    const hits = tokens.filter(
+      (e): e is Record<string, unknown> => typeof e === "object" && e !== null && !Array.isArray(e) && pred(e as Record<string, unknown>),
+    );
+    for (const e of hits) if (!matched.includes(e)) matched.push(e);
+    const usable = hits.filter((e) => !e[F.retired] && typeof e[F.token] === "string" && (e[F.token] as string).trim() !== "");
+    if (usable.length > 0) return usable[0];
+  }
+  if (matched.length === 0) {
+    throw new TokenNotFoundError(`No token found for ${selector} in ${source}`);
+  }
+  if (matched.every((e) => !!e[F.retired])) {
+    const fps = matched.map((e) => entryFingerprint(e[F.token])).join(", ");
+    throw new TokenAllRetiredError(
+      `All ${matched.length} token entr${matched.length === 1 ? "y" : "ies"} for ${selector} in ${source} ` +
+      `are retired (fingerprints: ${fps}) — no active credential. ` +
+      `出口: 重签凭据 \`${TOKEN_REENROLL_EXIT}\` (Owner 签发新 enrollment 码)`,
+    );
+  }
+  throw new TokenResolutionError(`Token entry for ${selector} exists in ${source} but has no token value`);
 }
 
 export interface TokenData {
@@ -61,6 +137,7 @@ export interface ResolvedKey {
   source: string;
   viaEnv: boolean;         // 值最终取自 env 兜底 (横幅标 ⚠)
   envDowngraded: boolean;  // env 有值但被更高层压过 (横幅标 ⚠)
+  error?: string;          // AIPOS-F81: 工位层 fail-closed 拒因 (如命中 token 全 retired, 带重签出口); 不含 token 值
 }
 
 export interface IdentityResolution {
@@ -214,40 +291,26 @@ export class ConnectionResolver {
     }
 
     // 自动发现 .lybra/connection.json (优先级高于env) - 从 cwd 向上查找
+    // AIPOS-F81: 挑选走 selectTokenEntry (与 Python token_resolver 同判据: instance → role, 排除 retired);
+    // 无命中 (TokenNotFoundError) 才落 env 兜底; 命中全 retired / 文件坏 = 抛出 (fail-closed, 拒因带重签出口)。
+    let workstationMiss = ".lybra/connection.json not found";
     const lybraDir = this.discoverLybraDir();
-    if (lybraDir) {
+    if (lybraDir && existsSync(join(lybraDir, "connection.json"))) {
+      const config = this.loadConnectionConfig(lybraDir);
+      const tokens = config.tokens;
+      if (!Array.isArray(tokens)) {
+        throw new TokenResolutionError(`connection.json at ${join(lybraDir, "connection.json")} has no tokens list`);
+      }
       try {
-        const config = this.loadConnectionConfig(lybraDir);
-        const tokens = config.tokens;
-        if (!Array.isArray(tokens)) {
-          throw new Error("tokens must be an array");
-        }
-
-        // 按 agent_instance 匹配 (最具体)
-        if (opts.agentInstance) {
-          for (const tokenEntry of tokens) {
-            if (tokenEntry.agent_instance === opts.agentInstance) {
-              const token = tokenEntry.token;
-              if (token) {
-                return token;
-              }
-            }
-          }
-        }
-
-        // 按 role 匹配
-        if (opts.role) {
-          for (const tokenEntry of tokens) {
-            if (tokenEntry.role === opts.role) {
-              const token = tokenEntry.token;
-              if (token) {
-                return token;
-              }
-            }
-          }
-        }
-      } catch {
-        // 自发现失败, 继续
+        const entry = selectTokenEntry(tokens, {
+          role: opts.role,
+          agentInstance: opts.agentInstance,
+          source: join(lybraDir, "connection.json"),
+        });
+        return String(entry[TOKEN_ENTRY_FIELDS.token]).trim();
+      } catch (e) {
+        if (!(e instanceof TokenNotFoundError)) throw e;
+        workstationMiss = e.message; // 本层无命中: 按声明优先级落到 env 兜底
       }
     }
 
@@ -258,7 +321,7 @@ export class ConnectionResolver {
     }
 
     throw new Error(
-      `Cannot resolve token for role=${opts.role}, agentInstance=${opts.agentInstance}. ` +
+      `Cannot resolve token for role=${opts.role}, agentInstance=${opts.agentInstance} (${workstationMiss}). ` +
       "Provide explicit token, set LYBRA_TOKEN env, or ensure .lybra/connection.json exists."
     );
   }
@@ -627,28 +690,33 @@ export class ConnectionResolver {
       gateUrl.value = schemaGateUrl; gateUrl.source = "schema:urls.gate_local";
     }
 
-    // --- token: 显式 → .lybra/connection.json.tokens (instance 匹配 → role 匹配) → env ---
+    // --- token: 显式 → .lybra/connection.json.tokens (instance 匹配 → role 匹配, 排除 retired) → env ---
     if (ex.token) {
       token.value = ex.token; token.source = "explicit"; token.envDowngraded = !!envToken;
     } else {
+      // AIPOS-F81: 挑选走 selectTokenEntry (与 Python token_resolver 同判据: instance → role, 排除 retired)。
+      // 无命中才落 env 兜底; 命中全 retired = value null + error (带重签出口), 禁 env 静默顶替 (fail-closed)。
       const tokens = conn?.tokens;
-      const ai = agentInstance.value;
-      const rl = role.value;
       let matched: string | null = null;
+      let tokenError: string | null = null;
       if (Array.isArray(tokens)) {
-        if (ai) {
-          for (const t of tokens) {
-            if (t.agent_instance === ai && t.token) { matched = t.token; break; }
-          }
-        }
-        if (!matched && rl) {
-          for (const t of tokens) {
-            if (t.role === rl && t.token) { matched = t.token; break; }
-          }
+        try {
+          const entry = selectTokenEntry(tokens, {
+            role: role.value,
+            agentInstance: agentInstance.value,
+            source: lybraDir ? join(lybraDir, "connection.json") : ".lybra/connection.json",
+          });
+          matched = String(entry[TOKEN_ENTRY_FIELDS.token]);
+        } catch (e) {
+          if (e instanceof TokenNotFoundError) matched = null;
+          else if (e instanceof TokenResolutionError) tokenError = e.message;
+          else throw e;
         }
       }
       if (matched) {
         token.value = matched; token.source = ".lybra/connection.json"; token.envDowngraded = !!envToken;
+      } else if (tokenError) {
+        token.error = tokenError; token.envDowngraded = !!envToken;
       } else if (envToken) {
         token.value = envToken; token.source = "env:LYBRA_TOKEN"; token.viaEnv = true;
       }
