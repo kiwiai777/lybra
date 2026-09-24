@@ -113,6 +113,7 @@ TOOL_PACKAGE_INVENTORY: dict[str, str] = {
     "tests/test_aipos_f54.py": "夹具: 断言 roles.schema 无 tool_package / warnings 无 tool_package",
     "tests/test_aipos_f82_workstation_intake.py": "夹具: 断言 warnings 无 tool_package",
     "tests/test_aipos_f83_skills_zero_gate.py": "夹具: 本盘点",
+    "agents/harness/pi/lybra-loop/tests/run-all.sh": "run-all F83 块标题文字(非读取)",
     "tools/aipos_cli/tests/test_aipos_f57_onboarding.py": "夹具文档: 改读 distribution 声明",
     "tools/schema_loader.py": "reader_code(车道外死代码: get_role_tool_package / get_roles_with_tool_package 零调用方, 登记缺口)",
     "agents/README.md": "车道外文档(过时: 仍称 tool_package 为装配单源, 登记缺口)",
