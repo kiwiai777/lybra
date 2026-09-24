@@ -886,6 +886,16 @@ else
   overall=1
 fi
 
+# AIPOS-F83: 技能母本零门三件(分发技能正文去门动作与项目字面·finalize-slice/audit-card-template 退役/工具包单源·tool_package 与 lybra-loop 退役/sync 回收工位 .pi 悬空挂载)
+echo
+echo "── tests/test_aipos_f83_skills_zero_gate.py (F83 分发技能 grep 零命中/tool_package 盘点归类/.pi 悬空链回收·声明内暂缺不删·非本项目跳过·再 sync 稳态) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f83_skills_zero_gate.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f83_skills_zero_gate.py PASS"
+else
+  echo "✗ tests/test_aipos_f83_skills_zero_gate.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

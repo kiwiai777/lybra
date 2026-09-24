@@ -251,7 +251,7 @@
     }
   },
   "manifest_schema": {
-    "description": "Standard manifest written to target_root/.version-{role} after distribution. AIPOS-F66B: charter 条目 files[] 附三指纹(母本/声明/渲染物), 顶层 workstation 记工位归属(instance/project)。",
+    "description": "Standard manifest written to target_root/.version-{role} after distribution. AIPOS-F66B: charter 条目 files[] 附三指纹(母本/声明/渲染物), 顶层 workstation 记工位归属(instance/project)。 AIPOS-F83 件③: 顶层 pruned 记本次 sync 回收的文件与悬空挂载(绝对路径)。",
     "required_fields": [
       "version",
       "role",
@@ -326,6 +326,14 @@
     "fail_closed": "任一工位身份/类/声明不可解析 = 并集不完整 → 共享落点 prune 暂停(不删, 逐条点名), 禁猜。",
     "steady_state": "任意顺序反复 sync 各工位后, 各工位 dry-run 的 plan 与 would_prune 皆空; 退役某角色的件 = 从该角色条目删除, 无其他角色声明时由 prune 回收。",
     "single_implementation": "tools/aipos_cli/distribution_sync.shared_landing_declaration + _find_files_to_prune"
+  },
+  "pi_mount_prune_semantics": {
+    "description": "AIPOS-F83 件③: 工位私有挂载(.pi/skills/<名>、.pi/extensions/<名>)悬空回收语义(F82 G3: lybra-executor / hbj-coder 的 .pi/skills/finalize-slice 悬空软链, 旧 prune 不覆盖 .pi/)",
+    "rule": "sync 对本项目工位的 .pi/skills、.pi/extensions 下挂载(符号链接, 或带分发标记「AIPOS-R3: 挂载包装」的转发包装)判目标: 目标不存在, 或目标文件全在本次 prune 集内(prune 后即悬空)= 悬空。悬空且不在当前声明内且原始目标为产品接线形态(相对工位父根 ../../../)→ 回收(并入 would_prune / pruned, 本地 manifest 记 pruned); 声明内 → 不删, 列 pi_mount_warnings(待 sync 落地); 非产品接线形态 → 不碰, 列 pi_mount_warnings(工位自有挂载须人工核)。目标仍在的挂载不在本语义内(不删)。",
+    "declared_mounts": "声明内挂载名 = 本角色 kind=skills 分发物的技能名 + kind=extension 分发物的挂载名 + minimum_bootable_set 的 .pi/extensions/<名> 文件项; 推导与 enroll 接线同一实现(workstation_wiring.declared_role_skills / declared_role_extensions)。",
+    "scope": "只作用于 sync 范围内的本项目工位; 非本项目工位照 workstation_ownership_semantics 跳过(零写入, 其悬空链由该项目自己 sync 时回收)。",
+    "steady_state": "回收后再 sync: plan、would_prune、pi_mount_warnings 皆空。",
+    "single_implementation": "tools/aipos_cli/distribution_sync.pi_mount_scan(判定) + _prune_files(删除, 与共享落点 prune 同一出口; 链接只删链接本身, 不跟随、不清 .pi/skills 目录)"
   },
   "applies_to_roles_semantics": {
     "description": "AIPOS-F26 大项C: applies_to_roles 匹配语义 — 内建角色名直接匹配, 自定义角色按其注册表 class 展开匹配",
