@@ -828,7 +828,7 @@ else
 fi
 
 echo
-echo "── tools/aipos_cli/tests/test_aipos338_audit_derivation.py (AIPOS-338 审计派生指令·F66B 报告落点=审计卡 ID 目录) ────────────────────────────────────────────────────"
+echo "── tools/aipos_cli/tests/test_aipos338_audit_derivation.py (AIPOS-338 审计派生指令·F66B 报告落点=审计卡 ID 目录·F80 零门/manual 保留) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos338_audit_derivation.py" -v --tb=short; then
   echo "✓ tools/aipos_cli/tests/test_aipos338_audit_derivation.py PASS"
 else
@@ -842,6 +842,26 @@ if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/t
   echo "✓ tools/aipos_cli/tests/test_agent_watch_fs.py PASS"
 else
   echo "✗ tools/aipos_cli/tests/test_agent_watch_fs.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F80: 章程与卡模板零门收口两件(件① 派生审计卡零门: 唯一判据 card_carries_gate_contract_section·manual_gate_mode 例外·regen 去节; 件② 三份章程母本占位化 + lybra/chris 双上下文渲染)
+echo
+echo "── tests/test_aipos_f80_zero_gate_charter.py (F80 审计卡零门/唯一判据/regen 去节/母本零项目字面/双上下文渲染) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f80_zero_gate_charter.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f80_zero_gate_charter.py PASS"
+else
+  echo "✗ tests/test_aipos_f80_zero_gate_charter.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F80 随件改动的存量夹具入常驻(改过的 test 文件须在清单): F12 派生审计卡断言改为零门交付纪律节(门领地纪律节仅 manual_gate_mode 项目)
+echo
+echo "── tools/aipos_cli/tests/test_aipos_f12_gate_territory.py (F12 门领地纪律节构造·F80 派生审计卡零门) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_aipos_f12_gate_territory.py" -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_aipos_f12_gate_territory.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_aipos_f12_gate_territory.py FAIL"
   overall=1
 fi
 
