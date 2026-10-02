@@ -159,9 +159,15 @@ def run_state_lint(
     else:
         task_ids = _list_all_task_ids(governance_root)
     
+    invalid_frontmatter: list[dict[str, Any]] = []
     for task_id in sorted(task_ids):
         queue_state, card_path = _get_queue_state(governance_root, task_id)
         fm_state = _get_frontmatter_state(card_path) if card_path else None
+        # AIPOS-F87 件②: 同一趟里顺带判卡面可解析(不另起一遍全量查找)
+        if card_path is not None:
+            invalid = _invalid_frontmatter_entry(governance_root, task_id, card_path)
+            if invalid is not None:
+                invalid_frontmatter.append(invalid)
         record_state = _derive_state_from_records(governance_root, task_id)
         
         # 检查: completed 卡必须有 closure 记录
@@ -229,7 +235,7 @@ def run_state_lint(
         })
 
     # AIPOS-F87 件②: 卡面 frontmatter 不可解析 → FRONTMATTER_INVALID(判据 = 产品唯一读取口出告警, 与 validator「Frontmatter parse issue」同源)
-    for invalid in find_invalid_frontmatter_cards(governance_root, task_ids):
+    for invalid in invalid_frontmatter:
         issues.append({
             "task_id": invalid["task_id"],
             "severity": "ERROR",
@@ -255,22 +261,16 @@ def card_frontmatter_warnings(text: str) -> list[str]:
     return [str(w) for w in warnings]
 
 
-def find_invalid_frontmatter_cards(governance_root: Path, task_ids: set[str] | list[str]) -> list[dict[str, Any]]:
-    """AIPOS-F87 件②: 列出 frontmatter 不可解析的卡(只读; 查找经 task_loader.find_task_card 唯一实现)。"""
-    found: list[dict[str, Any]] = []
-    root = Path(governance_root)
-    for task_id in sorted(task_ids):
-        _state, card_path = _get_queue_state(root, task_id)
-        if card_path is None:
-            continue
-        warnings = card_frontmatter_warnings(card_path.read_text(encoding="utf-8"))
-        if warnings:
-            found.append({
-                "task_id": task_id,
-                "path": card_path.resolve().relative_to(root.resolve()).as_posix(),
-                "warnings": warnings,
-            })
-    return found
+def _invalid_frontmatter_entry(governance_root: Path, task_id: str, card_path: Path) -> dict[str, Any] | None:
+    """AIPOS-F87 件②: 卡面不可解析 → {task_id, path, warnings}; 可解析 → None(只读)。"""
+    warnings = card_frontmatter_warnings(card_path.read_text(encoding="utf-8"))
+    if not warnings:
+        return None
+    return {
+        "task_id": task_id,
+        "path": card_path.resolve().relative_to(Path(governance_root).resolve()).as_posix(),
+        "warnings": warnings,
+    }
 
 
 _TOP_LEVEL_SCALAR_LINE = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_.-]*):[ \t]+(?P<value>\S.*?)[ \t]*$")
