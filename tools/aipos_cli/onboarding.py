@@ -5,8 +5,8 @@
   ② 信封铸造(执行/审计各一, 按项目域)
   ③ 三角色发码(executor/auditor/advisor)
   ④ 一条 enroll 配齐(F54/F54-fix1 已覆盖)
-  ⑤ 起 pi 三步
-  ⑥ 首卡开跑自检
+  ⑤ 起 pi 三步(sync 分发 → sync --dry-run 稳态 → 起 pi)
+  ⑥ 首卡开跑自检(onboarding check 工位自检 → pi 内 /go; 认领由驱动方完成, 工位零门动词)
 
 每步失败都报错带路且给出可执行出口。
 禁任何项目名/路径硬编码(项目无关性)。
@@ -15,6 +15,11 @@
   - 命令模板从本模块生成(禁 skill 硬编码)
   - 可启动最小集清单 = distribution.schema#minimum_bootable_set(单源)
   - 接线规格 = workstation_wiring.py(单源)
+
+AIPOS-F85 件①(F84 G1): 第 5、6 步改为零门后的真实接入路径(去掉非 CLI 子命令 `lybra on`、
+已随 lybra-loop 扩展退役的 `/lybra sync`、参数不符的 launch-check);
+不变量 = guide 产出的每条 `lybra ...` 命令占位换合法值后过 aipos_cli.build_parser(),
+pi 内斜杠命令只许 distribution 声明中扩展所注册者(夹具 tests/test_aipos_f85_onboarding_guide_generic.py 守)。
 """
 from __future__ import annotations
 
@@ -33,6 +38,19 @@ from typing import Any
 
 def _shell_quote(s: str) -> str:
     """Shell-quote a string for copy-paste commands."""
+    return shlex.quote(s)
+
+
+def _shell_path(s: str) -> str:
+    """Shell-quote a path but keep a leading ``~/`` unquoted so the shell still expands it.
+
+    AIPOS-F85: 缺省工位 ``~/<项目>-workstation`` 经 shlex.quote 会变成 ``'~/...'``(引号内 ``~`` 不展开 → cd 落到字面目录)。
+    """
+    if s == "~":
+        return s
+    if s.startswith("~/"):
+        rest = s[2:]
+        return "~/" + shlex.quote(rest) if rest else "~/"
     return shlex.quote(s)
 
 
@@ -117,7 +135,7 @@ def generate_onboarding_guide(
         "commands": [step2_exec_cmd, step2_audit_cmd],
         "command": step2_exec_cmd,  # primary
         "purpose": f"为 {project_name} 铸造 executor 和 auditor 的 PreAuthorized 自治信封, 允许三角色在信封内自动认领任务",
-        "check": "每条命令输出 JSON 含 ok=true; 验证: lybra envelope list(如有)应显示新信封",
+        "check": f"每条命令输出 JSON 含 ok=true; 验证: 信封文件落在 {project_root}/5_tasks/policies/",
         "on_fail": {
             "policy_id 冲突": "信封 ID 已存在; 换一个 policy_id(如加后缀 _v2)",
             "missing --owner-authorization-ref": "需要 owner 授权; 加 --actor owner 或提供 owner 授权引用",
@@ -159,10 +177,10 @@ def generate_onboarding_guide(
     _workspace = workspace_dir or f"~/{project_name}-workstation"
 
     step4_template = " ".join([
-        "cd", _shell_quote(_workspace), "&&",
+        "cd", _shell_path(_workspace), "&&",
         "lybra", "roles", "enroll",
         "--code", "<ENROLLMENT_CODE>",
-        "--workspace", _shell_quote(_workspace),
+        "--workspace", _shell_path(_workspace),
         "--verify",
     ])
 
@@ -184,53 +202,80 @@ def generate_onboarding_guide(
         "note": "三角色各跑一次(换不同 --code 和不同工位目录, 或同一目录切换角色)",
     })
 
-    # ── Step 5: 起 pi 三步 ────────────────────────────────────────
+    # ── Step 5: 起 pi 三步(零门: 工位只同步分发, 不敲门动词) ──────────
+    # AIPOS-F85: 工位件(技能/扩展/章程/schema)唯一来源 = distribution.schema(F83 件②), 由 lybra sync 落齐;
+    # --harness-root = 工位, --workspace-root = 本项目治理根(project.json 所在, 定 sync 项目范围与章程渲染)。
+    _ws = _shell_path(_workspace)
+    _gov = _shell_path(project_root)
+    sync_cmd = f"lybra sync --harness-root {_ws} --workspace-root {_gov}"
     step5_commands = [
-        f"cd {_shell_quote(_workspace)}",
-        "# 确认 .pi/ 接线完整(应看到 settings.json, extensions/, skills/)",
-        "ls -la .pi/",
-        "# 起 pi(Pi 编码代理)",
+        f"cd {_ws}",
+        "# 按分发声明落齐工位件(技能 / 扩展 / 章程 / schema), 只写工位",
+        sync_cmd,
+        "# 稳态复核: 零写入, plan 与 prune 皆空 = 稳态",
+        f"{sync_cmd} --dry-run",
+        "# 在工位目录起 pi(Pi 编码代理)",
         "pi",
-        "# 在 pi 内运行 sync 拉取最新分发",
-        "/lybra sync",
-        "# 进入接活模式",
-        "lybra on",
     ]
 
     steps.append({
         "step_number": 5,
-        "title": "起 pi 三步(进工位 → sync → lybra on)",
+        "title": "起 pi 三步(sync 分发 → --dry-run 稳态 → 起 pi)",
         "command": "\n".join(step5_commands),
-        "purpose": f"在工位 {_workspace} 启动 pi 编码代理, 同步分发, 进入接活模式",
-        "check": "pi 成功启动 + /lybra sync 无报错 + lybra on 显示可认领任务或'暂无可认领'",
+        "purpose": (
+            f"在工位 {_workspace} 按分发声明同步工位件并复核稳态, 然后在工位目录启动 pi; "
+            "工位不敲任何门动词(认领 / 交回 / 派审由驱动方经产品完成)"
+        ),
+        "check": (
+            "sync 输出工位行状态为 synced(无 error / skipped); --dry-run 输出工位行状态为 dry-run 且 "
+            "'up-to-date: 0 file(s) to fetch/render'、无 would-prune 行(plan 与 prune 皆空 = 稳态); pi 在工位目录启动成功"
+        ),
         "on_fail": {
             "pi 找不到": "确认 pi 已安装(npm i -g @earendil-works/pi-coding-agent)",
-            ".pi/ 为空": "Step 4 enroll 未落 .pi/ 接线; 重跑 Step 4 或检查 F54 接线逻辑",
-            "/lybra sync 失败": "检查 .lybra/connection.json 中 lybra_bin 指向的文件是否存在",
-            "lybra on 报 token 错": "确认 .lybra/connection.json 中 token 有效; 必要时重跑 Step 4",
+            "sync 找不到 .lybra/connection.json": "Step 4 enroll 未在该工位落齐; 重跑 Step 4 的 enroll --verify",
+            "sync 报 401 / token 无效": "工位凭据失效(勿把 token 贴出); 重跑 Step 3 发新码 + Step 4 enroll --verify",
+            "sync 把工位记为 skipped": f"--workspace-root 须为本项目治理根 {project_root}(project.json 所在), 不是工位目录",
+            "--dry-run 的 plan 或 prune 非空": "未达稳态: 再跑一次上面的 sync(不带 --dry-run)后复核; 仍非空 = 报 bug, 附 --dry-run --json 输出",
         },
-        "creates": "运行中的 pi 会话 + lybra 接活循环",
+        "creates": f"{_workspace}/.pi/(扩展 / 技能挂载)+ {_workspace}/AGENTS.md(章程渲染)+ 运行中的 pi 会话",
     })
 
-    # ── Step 6: 首卡开跑自检 ──────────────────────────────────────
-    step6_cmd = " ".join([
-        "lybra", "agent", "launch-check",
-        "--gate-url", _shell_quote(_gate_url),
-        "--workspace-root", _shell_quote(_workspace),
-    ])
+    # ── Step 6: 首卡开跑自检(零门: 自检只读, 开工用 /go) ─────────────
+    # AIPOS-F85: 原 `lybra agent launch-check --gate-url --workspace-root` 与该子命令参数不符(它是包裹 --spawn-cmd 的开工确认);
+    # 工位自检改走产品既有 onboarding check(缺项逐项点名), 开工 = pi 内无参 /go(go 扩展, distribution.schema go-extension 声明)。
+    step6_check_parts = [
+        "lybra", "onboarding", "check", _shell_quote(project_name),
+        "--step", "6",
+        "--home-root", _shell_path(_home_root),
+        "--workspace-dir", _ws,
+    ]
+    step6_commands = [
+        "# 工位自检(只读, 缺项逐项点名; 可在 pi 外任一终端跑)",
+        " ".join(step6_check_parts),
+        "# 在 Step 5 起的 pi 内开工: 无参 /go 只查询本实例已认领的卡并发开工提示",
+        "/go",
+    ]
 
     steps.append({
         "step_number": 6,
-        "title": "首卡开跑自检",
-        "command": step6_cmd,
-        "purpose": "验证工位可启动最小集完整(缺项逐项点名), 确认首卡可认领可执行",
-        "check": "自检全绿(ok=true); 如有缺项会逐项点名",
+        "title": "首卡开跑自检(工位自检 → pi 内 /go)",
+        "command": "\n".join(step6_commands),
+        "purpose": (
+            "验证工位可启动最小集完整(缺项逐项点名), 再在 pi 内用 /go 开工; "
+            "首卡由顾问发卡、驱动方经产品认领并建工作树, 工位不自领"
+        ),
+        "check": (
+            "onboarding check 输出 '✓ Step 6 prerequisites satisfied'; "
+            "/go 发出开工提示(工作树 + 报告落点), 或提示'无已认领卡'(驱动方尚未认领 = 正常, 认领后再 /go)"
+        ),
         "on_fail": {
-            "缺项报错": "按输出的缺项名逐项修复; 常见: lybra_bin 悬空→重新 enroll; owner_policy_ref 缺失→检查信封",
-            "token 无效": "重跑 Step 4 的 enroll --verify",
-            "gate 不通": "确认 lybra serve 运行中且 gate_url 正确",
+            "缺项报错": "按输出的缺项名逐项修复; 常见: lybra_bin 悬空→重跑 Step 4 enroll; owner_policy_ref 缺失→检查 Step 2 信封 status=active",
+            "/go 报 .lybra/role not found": "pi 须在工位目录启动; 回 Step 5 先 cd 到工位再起 pi",
+            "/go 不是已知命令": "go 扩展未落到工位; 回 Step 5 重跑 sync 并用 --dry-run 复核稳态",
+            "/go 报 Worktree not found": "认领与工作树由驱动方经产品完成(顾问侧), 工位不自领; 等驱动方完成认领后再 /go",
+            "gate 不通": "确认门运行中(lybra serve status)且 .lybra/connection.json 的门地址正确",
         },
-        "creates": "自检报告(全绿 = 从 0 到首卡开跑完成)",
+        "creates": "自检报告 + 首卡开工提示(全绿 = 从 0 到首卡开跑完成)",
     })
 
     return {

@@ -94,29 +94,34 @@ lybra roles enroll --code <注册码> --workspace <工位目录> --verify
 - `workspace_root` 写错 → F54-fix1 应校正,如仍有问题报 bug
 - `owner_policy_ref` 缺失 → Step 2 信封可能未生效,检查 `status=active`
 
-### Step 5: 起工位 harness(照 guide 输出)
+### Step 5: 起 pi 三步(sync 分发 → --dry-run 稳态 → 起 pi)
 
-在工位目录照 guide 输出的 Step 5 执行(进工位 → 确认 `.pi/` 接线完整 → 起 harness)。本 skill 不抄写该步命令文本。
-
-> ⚠ **已知产品缺口(AIPOS-F84 登记)**:guide 当前 Step 5 产出的 `lybra on` / `/lybra sync` 依赖 pi 连接器扩展的 `/lybra` 斜杠命令,
-> 该扩展已于 AIPOS-F83 退役(现执行体开工 = 工位无参 `/go`, 认领由驱动方经产品完成), `lybra on` 也不是 `lybra` CLI 子命令。
-> 撞到即按 block-and-report 上报, **不手改命令绕过**。
+在工位目录照 guide 输出的 Step 5 执行。工位件(技能/扩展/章程/schema)唯一来源 = distribution 声明, 由 `lybra sync` 落齐;
+`--harness-root` 给工位目录, `--workspace-root` 给本项目治理根(project.json 所在):
+```bash
+lybra sync --harness-root <工位目录> --workspace-root <项目根>
+lybra sync --harness-root <工位目录> --workspace-root <项目根> --dry-run
+```
+第二条零写入复核稳态: plan 与 prune 皆空(`up-to-date: 0 file(s) to fetch/render`、无 would-prune 行)。然后在工位目录起 `pi`。
+工位不敲任何门动词(认领/交回/派审由驱动方经产品完成)。
 
 **失败出口**:
 - `pi 找不到` → `npm i -g @earendil-works/pi-coding-agent`
-- 工位分发拉取失败 → 检查 `.lybra/connection.json` 中 `lybra_bin` 指向的文件存在
+- sync 把工位记为 skipped → `--workspace-root` 须为本项目治理根, 不是工位目录
+- `--dry-run` 的 plan/prune 非空 → 再跑一次 sync 后复核; 仍非空 = 报 bug(附 `--dry-run --json` 输出)
 
-### Step 6: 首卡开跑自检(照 guide 输出)
+### Step 6: 首卡开跑自检(工位自检 → pi 内 /go)
 
-照 guide 输出的 Step 6 执行。
-
-> ⚠ **已知产品缺口(AIPOS-F84 登记)**:guide 当前 Step 6 产出的 `lybra agent launch-check --gate-url … --workspace-root …`
-> 与该子命令参数不符(launch-check 是包裹 `--spawn-cmd` 的开工确认, 必填 `--spawn-cmd/--task-id/--executor-instance`), argparse 拒。
-> 撞到即按 block-and-report 上报, **不手改命令绕过**。
+照 guide 输出的 Step 6 执行: 先用产品自检(只读, 缺项逐项点名), 再在 pi 内用无参 `/go` 开工
+(`/go` 由分发声明中的 go 扩展注册, 只查询本实例已认领的卡并发开工提示; 首卡由顾问发卡、驱动方经产品认领, 工位不自领):
+```bash
+lybra onboarding check <项目名> --step 6 --home-root <治理根> --workspace-dir <工位目录>
+```
 
 **失败出口**:
 - 缺项报错 → 按输出的缺项名逐项修复
-- token 无效 → 重跑 Step 4 的 enroll --verify
+- `/go` 提示无已认领卡 → 驱动方尚未认领(正常), 认领后再 `/go`
+- `/go` 不是已知命令 → go 扩展未落到工位, 回 Step 5 重跑 sync 并复核稳态
 
 ## 诊断工具
 
