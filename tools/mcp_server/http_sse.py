@@ -543,7 +543,7 @@ class LybraMcpHttpSseServer(ThreadingHTTPServer):
 
             # 旧回退(启动源未记录): home_root 走唯一解析
             # AIPOS-F88 件③: home 根缺省统一到 workspace_config.resolve_home_root(LYBRA_HOME_ROOT → ~/.lybra/config.json
-            # home_root → 声明缺省 ~/.lybra/projects), 消除原写死 ~/ai-project-os/2_projects 与 resolve_home_root 缺省的矛盾
+            # home_root → 声明缺省 ~/.lybra/projects), 消除原写死的 kiwiai 机器 home 路径与 resolve_home_root 缺省的矛盾
             from tools.aipos_cli.workspace_config import resolve_home_root
 
             home_root = resolve_home_root()

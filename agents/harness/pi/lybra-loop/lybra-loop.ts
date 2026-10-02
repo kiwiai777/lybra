@@ -481,7 +481,7 @@ function flushVoiceBuffer(): void {
 
 // F-EXT001-6(FIX2): 默认日志路径迁移到 Lybra 产品仓任务卡目录(旧 contrib 路径已废弃)
 // AIPOS-F88 件③: 产品仓根 = 本模块所在仓(agents/harness/pi/lybra-loop/ 上溯四级; 与 Python product_repo_root() →
-// schema_loader.code_repo_schema_root 同语义「运行代码所在仓」), 原写死 $HOME/projects/lybra 退役; LYBRA_LOOP_LOG 仍可覆盖。
+// schema_loader.code_repo_schema_root 同语义「运行代码所在仓」), 原 HOME 下写死的产品仓路径退役; LYBRA_LOOP_LOG 仍可覆盖。
 const LOG_PATH_DEFAULT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "task_cards", "LYBRA-EXT-001", "loop.log");
 
 // AIPOS-R6R: 连接器依赖的 verb + 必填参数清单(单一声明, 启动时对 schema 校验)。
