@@ -229,6 +229,81 @@ def audit_report_artifact_path(workspace_root: Path, audit_task_id: str) -> Path
     return verdict_artifact_dir(workspace_root, audit_task_id) / first
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F86 件①: 工位开工面单源——卡工作树落点 / 报告落点的唯一推导(claim 建树、card render、写边界、my-tasks 同函数)
+# ---------------------------------------------------------------------------
+
+def card_worktree_location(workspace_root: Path, task_id: str,
+                           card_frontmatter: dict[str, Any] | None = None) -> tuple[Path, Path]:
+    """卡工作树落点的唯一推导 = (产品仓, 工作树路径)。
+
+    产品仓 = _card_repo_root(workspace_config.resolve_card_repo 唯一解析: 卡 lane.repo → project.json repos → code_repo 别名),
+    工作树 = _resolve_worktree_root(config.schema worktree_root 声明, 治理根 .lybra/config.json 可覆盖) / <task_id>。
+    claim 建树(_ensure_worktree)/ card render / write_boundary / my-tasks 开工面全部经此; 工位侧(go.ts)禁第二处拼接
+    (F73B 原 `<治理根>/card/<ID>` 之误)。解析不到 = CardRepoUnresolved / SchemaLoadError 向上抛, 调用方 fail-closed。
+    """
+    code_repo = _card_repo_root(workspace_root, task_id, card_frontmatter)
+    return code_repo, _resolve_worktree_root(workspace_root, code_repo) / task_id
+
+
+def card_report_path(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None) -> Path:
+    """卡报告落点的唯一读取口: 审计卡(task_mode=audit)= audit_report_artifact_path(F66B 件③, 与
+    audit_derivation.render_audit_report_location 同一读取口); 执行卡 = _return_artifact_path(project.json paths.return_root +
+    transitions artifact_ingest.return.return_file_candidates)。card render / my-tasks 同此函数, 禁写死 task_cards/<ID>/。"""
+    fm = card_frontmatter
+    if fm is None:
+        task_path, _ = _find_task_in_queue(workspace_root, task_id)
+        fm = _read_frontmatter(task_path) if task_path else {}
+    if str(fm.get("task_mode") or "").strip().lower() == "audit":
+        return audit_report_artifact_path(workspace_root, task_id)
+    return _return_artifact_path(workspace_root, task_id)
+
+
+def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any]:
+    """`lybra my-tasks --json` 每张 claimed 卡的开工面字段(工位 /go 只读这些字段, 不自行推导)。
+
+    - worktree_path: 推导出的工作树路径(不可推导 = None)
+    - worktree_exists: 该路径是否已在盘上(认领时由驱动方建)
+    - worktree_refusal: None | {code, reason} —— 不可推导(CardRepoUnresolved.code / WORKTREE_ROOT_UNDECLARED)
+      或尚未建立(WORKTREE_NOT_CREATED); 从不输出空串
+    - report_path / report_refusal: 同构(REPORT_LOCATION_UNDECLARED)
+    """
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+    from tools.schema_loader import SchemaLoadError
+
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    view: dict[str, Any] = {
+        "worktree_path": None,
+        "worktree_exists": False,
+        "worktree_refusal": None,
+        "report_path": None,
+        "report_refusal": None,
+    }
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        missing = {"code": "TASK_ID_MISSING", "reason": "卡 frontmatter 无 task_id, 工作树/报告落点按卡 ID 推导, 不可推导"}
+        return {**view, "worktree_refusal": missing, "report_refusal": missing}
+    try:
+        _code_repo, worktree = card_worktree_location(workspace_root, task_id, fm)
+    except CardRepoUnresolved as exc:
+        view["worktree_refusal"] = {"code": exc.code, "reason": exc.reason}
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        view["worktree_refusal"] = {"code": "WORKTREE_ROOT_UNDECLARED", "reason": f"工作树落点声明读取失败: {exc}"}
+    else:
+        view["worktree_path"] = str(worktree)
+        view["worktree_exists"] = worktree.is_dir()
+        if not view["worktree_exists"]:
+            view["worktree_refusal"] = {
+                "code": "WORKTREE_NOT_CREATED",
+                "reason": f"工作树 {worktree} 尚未建立: 认领由驱动方完成并建树, 工位等待驱动方完成认领; 持续存在按 block-and-report 上报",
+            }
+    try:
+        view["report_path"] = str(card_report_path(workspace_root, task_id, fm))
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        view["report_refusal"] = {"code": "REPORT_LOCATION_UNDECLARED", "reason": f"报告落点声明读取失败: {exc}"}
+    return view
+
+
 def _finalize_mode(workspace_root: Path) -> str:
     """AIPOS-F78B 件②: finalize 场地声明(project.json paths.finalize_mode, config.schema 声明表; 缺省 internal)。"""
     return str(_project_paths(workspace_root).get("finalize_mode") or "internal")
@@ -1782,20 +1857,19 @@ def _ensure_worktree(workspace_root: Path, task_id: str) -> dict[str, Any]:
     from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
     # AIPOS-F78C 件②: 落点仓 = 该卡声明的仓(resolve_card_repo), 多仓项目两张卡各落各仓 .worktrees/<ID>
+    # AIPOS-F86 件①: 落点经 card_worktree_location(与 my-tasks 开工面 / card render 同一函数)
     try:
-        code_repo = _card_repo_root(workspace_root, task_id)
+        code_repo, worktree_path = card_worktree_location(workspace_root, task_id)
     except CardRepoUnresolved as exc:
         return {"ok": False, "worktree_path": "", "message": f"无法定位卡 {task_id} 的产品仓建 worktree: {exc}"}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "worktree_path": "", "message": f"worktree 落点推导失败(声明读取/卡查找): {exc}"}
     if not (code_repo / ".git").exists():
         return {
             "ok": False,
             "worktree_path": "",
             "message": f"卡 {task_id} 解析到的产品仓 {code_repo} 不是 git 仓根(无 .git), 无法建 worktree; 出口: project.json repos/code_repo 指向真实产品仓",
         }
-    try:
-        worktree_path = _resolve_worktree_root(workspace_root, code_repo) / task_id
-    except (OSError, ValueError) as exc:
-        return {"ok": False, "worktree_path": "", "message": f"worktree 落点声明读取失败: {exc}"}
     workspace_root = code_repo  # 以下 git 操作全部在产品仓
     branch_name = f"card/{task_id}"
     
