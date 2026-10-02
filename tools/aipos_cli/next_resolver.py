@@ -1943,63 +1943,82 @@ def _check_branch_has_commits(workspace_root: Path, task_id: str) -> bool:
         return False
 
 
-def _ensure_worktree(workspace_root: Path, task_id: str) -> dict[str, Any]:
-    """AIPOS-F73件② + F73D 前置三: 确保 worktree 存在(建/复用分支 card/<ID>)。
+def card_branch_name(task_id: str) -> str:
+    """AIPOS-F88 件①: 卡分支名读声明(transitions.schema N5.branch_integration.branch_pattern, 与 finalize / card render 同一声明)。
+    声明缺 = SchemaLoadError(fail-closed, 不回落写死)。"""
+    from tools.schema_loader import SchemaLoadError, get_branch_integration
 
-    落点 = 该卡产品仓根(AIPOS-F78C: workspace_config.resolve_card_repo, 卡 lane.repo → project.json repos 清单 → code_repo 别名)
-    下的声明位(config.schema worktree_root, 默认 `{code_repo}/.worktrees`), 禁在治理根下建工作树(F73B 原实现
-    `workspace_root/card/<ID>` 之误)。仓解析不到/不是 git 仓 → fail-closed。
-    
+    pattern = str(get_branch_integration().get("branch_pattern") or "").strip()
+    if "{task_id}" not in pattern:
+        raise SchemaLoadError("transitions.schema.json N5.branch_integration.branch_pattern 未声明或缺 {task_id} 占位")
+    return pattern.replace("{task_id}", task_id)
+
+
+def _ensure_worktree(workspace_root: Path, task_id: str,
+                     card_frontmatter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F73件② + F73D 前置三 + F88 件①: 确保卡工作树存在(建/复用卡分支)——全产品唯一建树实现。
+
+    门认领(queue_mutation claim, 原 WorktreeManager 第二实现已退役为委托)与驱动方 next --run 认领后建树都经此函数。
+    落点 = card_worktree_location(该卡产品仓 = workspace_config.resolve_card_repo: 卡 lane.repo → project.json repos 清单 →
+    code_repo 别名; 工作树 = config.schema worktree_root 声明 / <task_id>), 禁在治理根下建工作树(F73B 原实现
+    `workspace_root/card/<ID>` 之误); 分支名 = card_branch_name(N5 branch_pattern 声明)。仓解析不到/不是 git 仓/声明缺 → fail-closed。
+
     Args:
         workspace_root: 治理根(推导核工作区); 若其 project.json 无仓声明且自身是 git 仓, 视为产品仓(靶场单根)
         task_id: 任务 ID
-    
+        card_frontmatter: 卡 frontmatter(门认领时已在手, 免二次查卡); 缺则按 task_id 读卡
+
     Returns:
-        {"ok": bool, "worktree_path": str, "message": str}
+        {"ok": bool, "worktree_path": str, "branch": str, "message": str}
     """
     import subprocess
 
     from tools.aipos_cli.workspace_config import CardRepoUnresolved
+    from tools.schema_loader import SchemaLoadError
 
     # AIPOS-F78C 件②: 落点仓 = 该卡声明的仓(resolve_card_repo), 多仓项目两张卡各落各仓 .worktrees/<ID>
     # AIPOS-F86 件①: 落点经 card_worktree_location(与 my-tasks 开工面 / card render 同一函数)
     try:
-        code_repo, worktree_path = card_worktree_location(workspace_root, task_id)
+        code_repo, worktree_path = card_worktree_location(workspace_root, task_id, card_frontmatter)
+        branch_name = card_branch_name(task_id)
     except CardRepoUnresolved as exc:
-        return {"ok": False, "worktree_path": "", "message": f"无法定位卡 {task_id} 的产品仓建 worktree: {exc}"}
+        return {"ok": False, "worktree_path": "", "branch": "", "message": f"无法定位卡 {task_id} 的产品仓建 worktree: {exc}"}
+    except SchemaLoadError as exc:
+        return {"ok": False, "worktree_path": "", "branch": "", "message": f"worktree 落点/分支声明读取失败: {exc}"}
     except (OSError, ValueError) as exc:
-        return {"ok": False, "worktree_path": "", "message": f"worktree 落点推导失败(声明读取/卡查找): {exc}"}
+        return {"ok": False, "worktree_path": "", "branch": "", "message": f"worktree 落点推导失败(声明读取/卡查找): {exc}"}
     if not (code_repo / ".git").exists():
         return {
             "ok": False,
             "worktree_path": "",
+            "branch": branch_name,
             "message": f"卡 {task_id} 解析到的产品仓 {code_repo} 不是 git 仓根(无 .git), 无法建 worktree; 出口: project.json repos/code_repo 指向真实产品仓",
         }
     workspace_root = code_repo  # 以下 git 操作全部在产品仓
-    branch_name = f"card/{task_id}"
-    
+
     # 检查 worktree 是否已存在
     if worktree_path.exists():
         return {
             "ok": True,
             "worktree_path": str(worktree_path),
+            "branch": branch_name,
             "message": f"Worktree already exists: {worktree_path}",
         }
-    
+
     # 创建 worktree 目录
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     try:
         # 检查分支是否已存在
         result = subprocess.run(
-            ["git", "rev-parse", "--verify", branch_name],
+            ["git", "rev-parse", "--verify", f"refs/heads/{branch_name}"],
             cwd=workspace_root,
             capture_output=True,
             text=True,
             timeout=5,
         )
         branch_exists = result.returncode == 0
-        
+
         if branch_exists:
             # 复用已有分支
             result = subprocess.run(
@@ -2018,23 +2037,26 @@ def _ensure_worktree(workspace_root: Path, task_id: str) -> dict[str, Any]:
                 text=True,
                 timeout=30,
             )
-        
+
         if result.returncode != 0:
             return {
                 "ok": False,
                 "worktree_path": "",
+                "branch": branch_name,
                 "message": f"Failed to create worktree: {result.stderr}",
             }
-        
+
         return {
             "ok": True,
             "worktree_path": str(worktree_path),
+            "branch": branch_name,
             "message": f"Worktree created: {worktree_path}",
         }
     except (OSError, subprocess.SubprocessError) as exc:
         return {
             "ok": False,
             "worktree_path": "",
+            "branch": branch_name,
             "message": f"Exception creating worktree: {exc}",
         }
 
