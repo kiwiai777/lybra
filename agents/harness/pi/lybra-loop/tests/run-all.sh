@@ -906,6 +906,16 @@ else
   overall=1
 fi
 
+# AIPOS-F85: 接入向导与顾问技能通用化三件(onboarding guide 第 5/6 步零门可跑·guide 命令 argparse 不变量/斜杠命令由分发声明推导·truth-navigator 去项目专有治理文件名·advisor-commands 过渡期段去重)
+echo
+echo "── tests/test_aipos_f85_onboarding_guide_generic.py (F85 guide 每条 lybra 命令 build_parser 解析·斜杠命令∈分发声明·退役命令零出现/truth-navigator grep 零命中·治理结构键已声明/过渡期段唯一且为当前事实) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f85_onboarding_guide_generic.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f85_onboarding_guide_generic.py PASS"
+else
+  echo "✗ tests/test_aipos_f85_onboarding_guide_generic.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
