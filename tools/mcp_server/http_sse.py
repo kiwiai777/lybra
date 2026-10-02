@@ -541,15 +541,12 @@ class LybraMcpHttpSseServer(ThreadingHTTPServer):
                 print(f"[HTTP/SSE] Token registry reloaded from home_root: {source}", file=sys.stderr)
                 return
 
-            # 旧回退(启动源未记录): 尝试从环境变量或默认路径获取 home_root
-            import os
+            # 旧回退(启动源未记录): home_root 走唯一解析
+            # AIPOS-F88 件③: home 根缺省统一到 workspace_config.resolve_home_root(LYBRA_HOME_ROOT → ~/.lybra/config.json
+            # home_root → 声明缺省 ~/.lybra/projects), 消除原写死 ~/ai-project-os/2_projects 与 resolve_home_root 缺省的矛盾
+            from tools.aipos_cli.workspace_config import resolve_home_root
 
-            home_root_str = os.environ.get('LYBRA_HOME_ROOT', '').strip()
-            if not home_root_str:
-                # 默认: ~/ai-project-os/2_projects (kiwiai 标准部署)
-                home_root_str = str(Path.home() / 'ai-project-os' / '2_projects')
-
-            home_root = Path(home_root_str).expanduser().resolve()
+            home_root = resolve_home_root()
 
             with debug_log.open("a") as f:
                 f.write(f"home_root: {home_root}\n")

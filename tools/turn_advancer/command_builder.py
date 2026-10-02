@@ -10,6 +10,19 @@ from typing import Any
 import os
 
 
+def _governance_root(workspace_root: Path) -> Path:
+    """AIPOS-F88 件③: 信封解析用的治理根 = env LYBRA_GOVERNANCE_ROOT 显式覆盖, 否则调用方传入的治理工作区根
+    (resolver.resolve_next_command 入参, read_task_state 同根读队列/记录)。原写死的 lybra 治理根回落退役。"""
+    return Path(os.getenv("LYBRA_GOVERNANCE_ROOT") or workspace_root)
+
+
+def _gate_call_helper() -> Path:
+    """AIPOS-F88 件③: manual 模式粘贴行引用的门调用助手路径 = 产品仓根(product_repo_root(), 运行代码所在仓)下, 禁写死 ~ 路径。"""
+    from tools.aipos_cli.workspace_config import product_repo_root
+
+    return product_repo_root() / "task_cards" / "AIPOS-340" / "_gate_call.py"
+
+
 def build_command(action: str, state: dict[str, Any], workspace_root: Path) -> dict[str, Any]:
     """构建下一步完整命令。
     
@@ -41,8 +54,7 @@ def build_command(action: str, state: dict[str, Any], workspace_root: Path) -> d
         from tools.aipos_cli.policy_resolver import find_active_policy
         
         # 尝试从环境变量或默认路径获取治理仓路径
-        governance_root = Path(os.getenv("LYBRA_GOVERNANCE_ROOT", 
-                                         "/home/kiwi/ai-project-os/2_projects/lybra"))
+        governance_root = _governance_root(workspace_root)
         owner_policy_ref = find_active_policy(governance_root, role="exec", policy_type="dev")
         
         if not owner_policy_ref:
@@ -63,7 +75,7 @@ def build_command(action: str, state: dict[str, Any], workspace_root: Path) -> d
         }
         
         import json
-        copyable = f"python3 ~/projects/lybra/task_cards/AIPOS-340/_gate_call.py call lybra_queue_claim_dry_run --args '{json.dumps(args)}'"
+        copyable = f"python3 {_gate_call_helper()} call lybra_queue_claim_dry_run --args '{json.dumps(args)}'"
         
         return {
             "command_type": "mcp_verb",
@@ -81,8 +93,7 @@ def build_command(action: str, state: dict[str, Any], workspace_root: Path) -> d
         
         # AIPOS-340F1 S6: 从工作区读活跃信封
         from tools.aipos_cli.policy_resolver import find_active_policy
-        governance_root = Path(os.getenv("LYBRA_GOVERNANCE_ROOT", 
-                                         "/home/kiwi/ai-project-os/2_projects/lybra"))
+        governance_root = _governance_root(workspace_root)
         owner_policy_ref = find_active_policy(governance_root, role="exec", policy_type="dev")
         
         if not owner_policy_ref:
@@ -108,7 +119,7 @@ def build_command(action: str, state: dict[str, Any], workspace_root: Path) -> d
         }
         
         import json
-        copyable = f"python3 ~/projects/lybra/task_cards/AIPOS-340/_gate_call.py call lybra_queue_return_dry_run --args '{json.dumps(args)}'"
+        copyable = f"python3 {_gate_call_helper()} call lybra_queue_return_dry_run --args '{json.dumps(args)}'"
         
         return {
             "command_type": "mcp_verb",
@@ -127,8 +138,7 @@ def build_command(action: str, state: dict[str, Any], workspace_root: Path) -> d
         audit_card_path = str(state.get("task_path") or "")
 
         from tools.aipos_cli.policy_resolver import find_active_policy
-        governance_root = Path(os.getenv("LYBRA_GOVERNANCE_ROOT",
-                                         "/home/kiwi/ai-project-os/2_projects/lybra"))
+        governance_root = _governance_root(workspace_root)
         envelope = find_active_policy(governance_root, role="audit", policy_type="audit")
         if not envelope:
             envelope = "pol_lybra_audit_1"
@@ -208,8 +218,7 @@ def build_command(action: str, state: dict[str, Any], workspace_root: Path) -> d
 
         # 信封:policy_resolver 实时解析
         from tools.aipos_cli.policy_resolver import find_active_policy
-        governance_root = Path(os.getenv("LYBRA_GOVERNANCE_ROOT",
-                                         "/home/kiwi/ai-project-os/2_projects/lybra"))
+        governance_root = _governance_root(workspace_root)
         envelope = find_active_policy(governance_root, role="exec", policy_type="dev")
 
         if not envelope:

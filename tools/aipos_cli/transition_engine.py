@@ -371,9 +371,19 @@ def resolve_next_step_from_schema(
             authorization = "Advisor dispatches to independent auditor"
     
     elif node_name == "finalize":
+        # AIPOS-F88 件③: finalize --workspace-root = 该卡声明的产品仓(product_repo_root(治理根, 卡面), 禁把治理根当产品仓),
+        # 原写死的机器路径缺省退役; 解析不到 = ValueError(带出口, 不猜路径)
+        from tools.aipos_cli.workspace_config import CardRepoUnresolved, product_repo_root
+
+        try:
+            finalize_repo = product_repo_root(
+                workspace_root, {**(task_card.get("metadata") or {}), "task_id": task_id}, allow_governance_root=False
+            )
+        except CardRepoUnresolved as exc:
+            raise ValueError(f"finalize 命令无法推导产品仓: {exc}") from exc
         command_parts = [
             f"lybra finalize --task-id {task_id}",
-            f"--actor executor --workspace-root ~/projects/lybra",
+            f"--actor executor --workspace-root {finalize_repo}",
             f"--push --deploy",
         ]
         parameters = {"task_id": task_id, "push": True, "deploy": True}

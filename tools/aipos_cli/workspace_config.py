@@ -846,6 +846,81 @@ def resolve_card_repo(
     return path
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F88 件③(承接 F65B): 根路径语义分域——两个命名函数各一处实现, 全仓「去哪找治理工作区 / 产品仓」只经此二者
+# (home 根 = resolve_home_root, 既有, 非第三个根概念)。禁写死任何机器路径, 禁按某项目目录布局回退。
+# ---------------------------------------------------------------------------
+
+
+def _declared_root_from_connection(start: Path | None) -> Path | None:
+    """自 start(缺省 cwd)向上首个 .lybra/connection.json 的治理根声明: governance_root, 缺则 workspace_root; 都缺 = None。
+    connection.json 不可读/非 JSON = ValueError(fail-closed, 声明坏了不猜)。"""
+    current = (start or Path.cwd()).expanduser().resolve()
+    if current.is_file():
+        current = current.parent
+    for candidate in [current, *current.parents]:
+        conn = candidate / ".lybra" / "connection.json"
+        if not conn.is_file():
+            continue
+        data = load_workspace_config(conn)
+        declared = str(data.get("governance_root") or data.get("workspace_root") or "").strip()
+        return Path(declared).expanduser() if declared else None
+    return None
+
+
+def governance_workspace_root(
+    explicit: str | Path | None = None,
+    *,
+    start: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> Path:
+    """AIPOS-F88 件③: 「治理工作区根」唯一命名入口(队列 / 卡 / 记录 / 信封 / project.json 所在根)。
+
+    序(每级都以唯一结构判据 has_workspace_queue 验证, 不看路径名; 禁按任何项目布局回退):
+      1. explicit: CLI --workspace-root / --governance-root / --repo-root, 或调用方转交的 env 值(向后兼容: 显式永远最高)
+      2. 声明: 自 start(缺省 cwd)向上首个 .lybra/connection.json 的 governance_root(缺则 workspace_root)
+      3. 结构识别: resolve_workspace_root(AIPOS-226 唯一优先级梯: AIPOS_WORKSPACE_ROOT / LYBRA_HOME_ROOT /
+         in-workspace config / 向上队列结构 / 全局 ~/.lybra/config.json home_root + active_project)
+    显式或声明指向非治理工作区 = FileNotFoundError(声明错了不猜); 全不可解析 = FileNotFoundError(带出口)。
+    """
+    if explicit:
+        root = Path(explicit).expanduser().resolve()
+        if not has_workspace_queue(root):
+            raise FileNotFoundError(f"显式治理根 {root} 不是治理工作区(无声明的队列根); 出口: 传入项目治理根(含 project.json 与队列)")
+        return root
+    declared = _declared_root_from_connection(start)
+    if declared is not None:
+        root = declared.resolve()
+        if not has_workspace_queue(root):
+            raise FileNotFoundError(f".lybra/connection.json 声明的治理根 {root} 不是治理工作区(无声明的队列根); 出口: 修正 connection.json#governance_root")
+        return root
+    try:
+        return resolve_workspace_root(start, env=env)
+    except (FileNotFoundError, ValueError) as exc:
+        raise FileNotFoundError(
+            f"治理工作区根不可解析(无显式参数 / 无 connection.json 声明 / 结构识别失败: {exc}); "
+            "出口: 传 --workspace-root <治理根>, 或在工位 .lybra/connection.json 声明 governance_root"
+        ) from exc
+
+
+def product_repo_root(
+    governance_root: str | Path | None = None,
+    card_frontmatter: dict[str, Any] | None = None,
+    *,
+    allow_governance_root: bool = True,
+) -> Path:
+    """AIPOS-F88 件③: 「产品仓根」唯一命名入口。两种来源按是否给治理根区分, 均为既有单源(禁第二实现):
+      - 给治理根 = 该项目(该卡)声明的产品仓: resolve_card_repo(卡 lane.repo → project.json repos → code_repo → 单根靶场);
+        git / 工作树 / 产物所在。解析不到 = CardRepoUnresolved(fail-closed)。
+      - 不给治理根 = 运行中 Lybra 代码所在仓: schema_loader.code_repo_schema_root()(schema/ 所在; 声明类读取用)。
+    禁写死任何机器路径(原写死的产品仓机器路径缺省全部退役)。"""
+    if governance_root is None:
+        from tools.schema_loader import code_repo_schema_root
+
+        return code_repo_schema_root()
+    return resolve_card_repo(governance_root, card_frontmatter or {}, allow_governance_root=allow_governance_root)
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 

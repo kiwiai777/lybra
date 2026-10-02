@@ -197,11 +197,8 @@ function findSchemaJson(fileName: string, schemaDir?: string): string {
       dir = parent;
     }
   }
-  const home = process.env.HOME || "";
-  if (home) {
-    const f = join(home, "projects", "lybra", "schema", fileName);
-    if (existsSync(f)) return f;
-  }
+  // AIPOS-F88 件③: 原「$HOME/projects/lybra/schema」写死回落退役——schema 只从显式参数 / LYBRA_SCHEMA_DIR /
+  // 本模块所在产品仓(上溯)/ cwd 上溯找到(与 Python product_repo_root() → code_repo_schema_root 同语义), 找不到 = 拒(带出口)。
   throw new ConfigError(`未找到 ${fileName}(设 LYBRA_SCHEMA_DIR 指向 schema 目录, 或从 lybra 产品仓运行)`);
 }
 

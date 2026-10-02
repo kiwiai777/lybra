@@ -616,7 +616,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--spawn-cmd", required=True, help="Command to spawn (must include timeout wrapper)")
     parser.add_argument("--workspace-root", required=True, type=Path, help="Lybra workspace root")
-    parser.add_argument("--product-repo", type=Path, help="Product repo root (default: ~/projects/lybra)")
+    parser.add_argument("--product-repo", type=Path, help="Product repo root (default: project.json 声明的产品仓, AIPOS-F88 product_repo_root)")
     parser.add_argument("--card-id", required=True, help="Task card ID (for ESCALATE file)")
     parser.add_argument("--health-interval", type=float, default=300, help="Health check interval seconds (default: 300)")
     parser.add_argument("--pid-file", help="PID file path (optional, for process monitoring)")
@@ -631,11 +631,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     
     workspace_root = args.workspace_root.expanduser().resolve()
-    product_repo = (args.product_repo or Path.home() / "projects" / "lybra").expanduser().resolve()
     
     if not workspace_root.is_dir():
         log(f"ERROR: workspace-root does not exist: {workspace_root}")
         return EXIT_ERROR
+    # AIPOS-F88 件③: 产品仓缺省 = product_repo_root(治理根)(项目声明的产品仓), 禁写死机器路径; 解析不到 = 拒(带出口)
+    if args.product_repo:
+        product_repo = args.product_repo.expanduser().resolve()
+    else:
+        from tools.aipos_cli.workspace_config import CardRepoUnresolved, product_repo_root
+
+        try:
+            product_repo = product_repo_root(workspace_root, allow_governance_root=False)
+        except CardRepoUnresolved as exc:
+            log(f"ERROR: product-repo 不可解析(传 --product-repo 或在 project.json 声明 code_repo/repos): {exc}")
+            return EXIT_ERROR
     if not product_repo.is_dir():
         log(f"ERROR: product-repo does not exist: {product_repo}")
         return EXIT_ERROR

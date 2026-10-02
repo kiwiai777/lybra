@@ -395,10 +395,10 @@ def _resolve_profile(
     if collaboration_profile is not None:
         return collaboration_profile
     if repo_root is not None:
-        project_json = repo_root / "project.json"
-        if not project_json.is_file():
-            project_json = repo_root / "2_projects" / "lybra" / "project.json"
-        return resolve_collaboration_profile(project_json)
+        # AIPOS-F88 件③: project.json 只在治理根自身(workspace_config.project_json_path), 原按 lybra 布局回退退役
+        from tools.aipos_cli.workspace_config import project_json_path
+
+        return resolve_collaboration_profile(project_json_path(repo_root))
     return {"code_enabled": True, "deploy_gate_enabled": False, "default_audit_mode": "agent"}
 
 

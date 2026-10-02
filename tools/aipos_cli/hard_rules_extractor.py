@@ -203,36 +203,17 @@ def extract_diagnostic_checklist_from_handbook(governance_root: Path, repo_root:
 
 
 def _resolve_governance_root() -> Path:
-    """解析治理仓根路径(与 C2 身份解析单源同处取值)。
+    """解析治理仓根路径 —— AIPOS-F88 件③: 委托唯一命名入口 workspace_config.governance_workspace_root。
 
-    解析链:LYBRA_WORKSPACE_ROOT 环境变量 → .lybra/connection.json workspace_root → 标准位置降级。
-    禁新建解析函数,复用 loop_context 既有 ConnectionResolver 取值逻辑。
+    序: LYBRA_WORKSPACE_ROOT 环境变量(作显式值)→ 自 cwd 向上 .lybra/connection.json 声明(governance_root/workspace_root)
+    → 结构识别(AIPOS-226 优先级梯)。原「按 lybra 布局标准位置降级」与吞异常的 connection.json 读取退役;
+    解析不到 = FileNotFoundError(fail-closed, 带出口)。
     """
     import os
-    import json
 
-    # ① 环境变量(与 C2 identity resolution 同源)
-    env_root = os.environ.get("LYBRA_WORKSPACE_ROOT", "").strip()
-    if env_root:
-        return Path(env_root)
+    from tools.aipos_cli.workspace_config import governance_workspace_root
 
-    # ② .lybra/connection.json(与 C2 同源)
-    cwd = Path.cwd()
-    for parent in [cwd, *cwd.parents]:
-        conn_file = parent / ".lybra" / "connection.json"
-        if conn_file.is_file():
-            try:
-                conn = json.loads(conn_file.read_text(encoding="utf-8"))
-                ws = conn.get("workspace_root", "").strip()
-                if ws:
-                    return Path(ws)
-            except Exception:
-                pass
-            # .lybra 找到了但无 workspace_root → 其父目录即治理仓
-            return parent
-
-    # ③ 降级:标准位置
-    return Path.home() / "ai-project-os" / "2_projects" / "lybra"
+    return governance_workspace_root(os.environ.get("LYBRA_WORKSPACE_ROOT", "").strip() or None)
 
 
 def render_hard_rules_for_charter() -> str:

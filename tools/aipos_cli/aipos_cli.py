@@ -1162,7 +1162,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _supervise_parser.add_argument("--spawn-cmd", required=True, help="Command to spawn (must include timeout wrapper)")
     _supervise_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root")
-    _supervise_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
+    _supervise_parser.add_argument("--product-repo", help="Product repo root (default: project.json 声明的产品仓, AIPOS-F88 product_repo_root)")
     _supervise_parser.add_argument("--card-id", required=True, help="Task card ID (for ESCALATE file)")
     _supervise_parser.add_argument("--health-interval", type=float, default=300, help="Health check interval seconds (default: 300)")
     _supervise_parser.add_argument("--pid-file", help="PID file path (optional, for process monitoring)")
@@ -1180,7 +1180,7 @@ def build_parser() -> argparse.ArgumentParser:
     _launch_check_parser.add_argument("--spawn-cmd", required=True, help="Command to spawn (must include timeout wrapper)")
     _launch_check_parser.add_argument("--task-id", required=True, help="Task card ID (e.g., AIPOS-295C)")
     _launch_check_parser.add_argument("--executor-instance", required=True, help="Executor agent instance name")
-    _launch_check_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
+    _launch_check_parser.add_argument("--product-repo", help="Product repo root (default: project.json 声明的产品仓, AIPOS-F88 product_repo_root)")
     _launch_check_parser.add_argument("--session-dirs", help="Comma-separated session directories to monitor")
     _launch_check_parser.add_argument("--worktree-path", help="Git worktree path (default: product-repo)")
     # AIPOS-332F4: CLI 兆底默认从 90→180(慢端点冷启动实测 ~60s 留裕量)
@@ -1468,6 +1468,14 @@ def build_parser() -> argparse.ArgumentParser:
     workspace_init_parser.add_argument("--actor", required=True, help="Actor requesting workspace init")
     workspace_init_parser.add_argument("--owner-confirmation-token", help="Owner confirmation token if required")
     workspace_init_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F88 件③: 根路径只读查询(两命名函数 + home 根的唯一出口; bash 调用方 lybra-deploy / governance-pre-commit 读此输出, 禁再写死)
+    workspace_roots_parser = workspace_subparsers.add_parser(
+        "roots", help="Show resolved governance workspace / product repo / home roots (read-only, AIPOS-F88)")
+    workspace_roots_parser.add_argument("--workspace-root", help="Explicit governance workspace root (default: connection.json 声明 → 结构识别)")
+    workspace_roots_parser.add_argument(
+        "--field", choices=["governance_root", "product_repo", "code_repo", "schema_dir", "home_root"],
+        help="Print only this field's value (plain text, for shell command substitution); unresolvable = exit 1")
+    workspace_roots_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     records_parser = subparsers.add_parser("records", help="Render records summary")
     records_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1522,7 +1530,7 @@ def build_parser() -> argparse.ArgumentParser:
     auditor_launch_parser.add_argument("--task-id", required=True, help="Audit task ID")
     auditor_launch_parser.add_argument("--reviewed-task-id", default="", help="Reviewed (audited) task ID")
     auditor_launch_parser.add_argument("--workspace-root", required=True, type=Path, help="Workspace root")
-    auditor_launch_parser.add_argument("--product-repo", type=Path, help="Product repo (default: ~/projects/lybra)")
+    auditor_launch_parser.add_argument("--product-repo", type=Path, help="Product repo (default: project.json 声明的产品仓, AIPOS-F88 product_repo_root)")
     auditor_launch_parser.add_argument("--envelope", default="pol_lybra_audit_1", help="PreAuthorized envelope ref")
     auditor_launch_parser.add_argument("--audit-cards-path", default="", help="Path to the audit card file")
     auditor_launch_parser.add_argument(
@@ -1592,7 +1600,7 @@ def build_parser() -> argparse.ArgumentParser:
     pump_run_parser.add_argument("--round-type", default="first", choices=["first", "fix", "resume"], help="Round type: first (default), fix (repair), or resume (continue)")
     pump_run_parser.add_argument("--delta", default="", help="Incremental information for this round (advisor provides only delta)")
     pump_run_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root (governance repo)")
-    pump_run_parser.add_argument("--product-repo", help="Product repo root (default: ~/projects/lybra)")
+    pump_run_parser.add_argument("--product-repo", help="Product repo root (default: project.json 声明的产品仓, AIPOS-F88 product_repo_root)")
     pump_run_parser.add_argument("--gate-url", default=None, help="Gate URL (default: http://127.0.0.1:7118)")
     pump_run_parser.add_argument("--connection-json", help="Path to connection.json (default: <workspace>/.lybra/connection.json)")
     pump_run_parser.add_argument("--envelope", help="Policy envelope ID (auto-detect from policies/ if not provided)")
@@ -2081,7 +2089,7 @@ def build_parser() -> argparse.ArgumentParser:
     governance_commit_parser.add_argument("--task-id", required=False, help="Task ID for governance closure (optional; omit for governance batch updates)")
     governance_commit_parser.add_argument("--actor", required=True, help="Actor performing governance commit")
     governance_commit_parser.add_argument("--governance-root", help="Governance workspace root; defaults to auto-discovery")
-    governance_commit_parser.add_argument("--workspace-root", help="Product repo root (for schema resolution); defaults to ~/projects/lybra")
+    governance_commit_parser.add_argument("--workspace-root", help="Product repo root (for schema resolution); defaults to the running Lybra code repo (AIPOS-F88 product_repo_root)")
     governance_commit_parser.add_argument("--no-push", action="store_true", help="Commit but do not push (default: push)")
     governance_commit_parser.add_argument("--message", help="Custom commit message")
     governance_commit_parser.add_argument("--dry-run", action="store_true", help="AIPOS-F79: validate and list the exact files that would be committed (read-only: no add/reset/stash)")
@@ -2193,6 +2201,56 @@ def _render_token_lifecycle_result(result: dict[str, Any]) -> None:
         print("  Dry-run only: nothing was written.")
     for line in result.get("next_steps") or []:
         print(line)
+
+
+def _workspace_roots_command(args: argparse.Namespace) -> int:
+    """AIPOS-F88 件③: `lybra workspace roots` —— 根路径语义分域的只读出口。
+    governance_root = workspace_config.governance_workspace_root; product_repo = product_repo_root(治理根)(项目声明的产品仓);
+    code_repo / schema_dir = product_repo_root()(运行中 Lybra 代码所在仓 / 其 schema/); home_root = resolve_home_root。
+    各字段按需惰性解析; 解析失败的字段带拒因原文(不猜路径)。--field 取单值, 解析不到 = 退出码 1。"""
+    from tools.aipos_cli.workspace_config import (
+        CardRepoUnresolved,
+        governance_workspace_root,
+        product_repo_root,
+        resolve_home_root,
+    )
+    from tools.schema_loader import SchemaLoadError
+
+    resolve_errors = (FileNotFoundError, ValueError, OSError, CardRepoUnresolved, SchemaLoadError)
+
+    def _gov() -> Path:
+        return governance_workspace_root(getattr(args, "workspace_root", None))
+
+    resolvers = {
+        "governance_root": _gov,
+        "product_repo": lambda: product_repo_root(_gov()),
+        "code_repo": lambda: product_repo_root(),
+        "schema_dir": lambda: product_repo_root() / "schema",
+        "home_root": lambda: resolve_home_root(),
+    }
+    field = getattr(args, "field", None)
+    if field:
+        try:
+            print(str(resolvers[field]()))
+            return 0
+        except resolve_errors as exc:
+            print(f"Error: {field} 不可解析: {exc}", file=sys.stderr)
+            return 1
+    report: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    for key, fn in resolvers.items():
+        try:
+            report[key] = str(fn())
+        except resolve_errors as exc:
+            report[key] = None
+            errors[key] = str(exc)
+    report["errors"] = errors
+    if getattr(args, "json", False):
+        print(render_json(report))
+    else:
+        for key in resolvers:
+            print(f"{key}: {report[key] if report[key] is not None else '✗ ' + errors[key]}")
+    return 1 if errors else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3022,6 +3080,8 @@ def main(argv: list[str] | None = None) -> int:
         if not getattr(args, "workspace_command", None):
             parser.print_help()
             return 2
+        if args.workspace_command == "roots":
+            return _workspace_roots_command(args)
         if args.workspace_command != "init":
             parser.print_help()
             return 2
@@ -3502,14 +3562,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.workspace_root:
             repo_root = Path(args.workspace_root).expanduser().resolve()
         else:
-            # 尝试从治理仓配置或环境变量发现产品仓位置
-            # 默认假设产品仓在 ~/projects/lybra (kiwiai-dev 标准位置)
-            default_repo_root = Path.home() / "projects" / "lybra"
-            if default_repo_root.is_dir():
-                repo_root = default_repo_root
-            else:
-                print(f"Error: Cannot locate product repo for schema resolution. Use --workspace-root to specify.", file=sys.stderr)
-                return 1
+            # AIPOS-F88 件③: schema 根 = 运行中 Lybra 代码所在仓(product_repo_root() → code_repo_schema_root), 禁写死机器路径
+            from tools.aipos_cli.workspace_config import product_repo_root
+
+            repo_root = product_repo_root()
         
         try:
             result = governance_commit(
@@ -3652,13 +3708,13 @@ def main(argv: list[str] | None = None) -> int:
         gov_cmd = getattr(args, "governance_command", None)
 
         if gov_cmd == "list-declarations":
-            repo_root = None
             if getattr(args, "workspace_root", None):
                 repo_root = Path(args.workspace_root).expanduser().resolve()
             else:
-                default_repo = Path.home() / "projects" / "lybra"
-                if default_repo.is_dir():
-                    repo_root = default_repo
+                # AIPOS-F88 件③: schema 根 = product_repo_root()(运行代码所在仓), 禁写死机器路径
+                from tools.aipos_cli.workspace_config import product_repo_root
+
+                repo_root = product_repo_root()
             result = list_declarations(repo_root)
             if getattr(args, "json", False):
                 print(render_json(result))
@@ -3684,13 +3740,13 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         governance_root = Path(args.governance_root).expanduser().resolve()
-        repo_root = None
         if getattr(args, "workspace_root", None):
             repo_root = Path(args.workspace_root).expanduser().resolve()
         else:
-            default_repo = Path.home() / "projects" / "lybra"
-            if default_repo.is_dir():
-                repo_root = default_repo
+            # AIPOS-F88 件③: schema 根 = product_repo_root()(运行代码所在仓), 禁写死机器路径
+            from tools.aipos_cli.workspace_config import product_repo_root
+
+            repo_root = product_repo_root()
 
         # Resolve body content
         body_content = getattr(args, "body", None) or ""
@@ -4975,8 +5031,18 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "auditor_command", None) == "launch":
             # AIPOS-358: auditor launch (execution出口, called by lybra next derived audit command)
             from tools.aipos_cli.auditor_runtime import launch_auditor_runtime
-            product_repo = (args.product_repo or Path.home() / "projects" / "lybra").expanduser().resolve()
             ws = args.workspace_root.expanduser().resolve()
+            # AIPOS-F88 件③: 产品仓缺省 = product_repo_root(治理根)(项目声明的产品仓), 禁写死机器路径; 解析不到 = 拒(带出口)
+            if args.product_repo:
+                product_repo = args.product_repo.expanduser().resolve()
+            else:
+                from tools.aipos_cli.workspace_config import CardRepoUnresolved, product_repo_root
+
+                try:
+                    product_repo = product_repo_root(ws, allow_governance_root=False)
+                except CardRepoUnresolved as exc:
+                    print(f"Error: 产品仓不可解析(传 --product-repo 或在 project.json 声明 code_repo/repos): {exc}", file=sys.stderr)
+                    return 1
             try:
                 result = launch_auditor_runtime(
                     runtime_cmd_template=args.runtime_cmd,
@@ -5293,7 +5359,17 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             workspace_root = Path(args.workspace_root).expanduser().resolve()
-            product_repo = Path(args.product_repo).expanduser().resolve() if args.product_repo else Path.home() / "projects" / "lybra"
+            # AIPOS-F88 件③: 产品仓缺省 = product_repo_root(治理根)(项目声明的产品仓), 禁写死机器路径; 解析不到 = 拒(带出口)
+            if args.product_repo:
+                product_repo = Path(args.product_repo).expanduser().resolve()
+            else:
+                from tools.aipos_cli.workspace_config import CardRepoUnresolved, product_repo_root
+
+                try:
+                    product_repo = product_repo_root(workspace_root, allow_governance_root=False)
+                except CardRepoUnresolved as exc:
+                    print(f"Error: 产品仓不可解析(传 --product-repo 或在 project.json 声明 code_repo/repos): {exc}", file=sys.stderr)
+                    return 1
             connection_json = Path(args.connection_json).expanduser().resolve() if getattr(args, "connection_json", None) else (workspace_root / ".lybra" / "connection.json")
 
             # S3: --check-unmanaged 只读列出非泵派出的在跑 agent,后退出(不阻止人工介入)

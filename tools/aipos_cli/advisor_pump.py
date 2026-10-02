@@ -1359,13 +1359,13 @@ def main(argv: list[str] | None = None) -> int:
         "--workspace-root",
         required=True,
         type=Path,
-        help="Lybra workspace root (governance repo, e.g., ~/ai-project-os/2_projects/lybra)"
+        help="Lybra governance workspace root (queue / records / project.json)"
     )
     parser.add_argument(
         "--product-repo",
         type=Path,
-        default=Path.home() / "projects" / "lybra",
-        help="Product repo root (default: ~/projects/lybra)"
+        default=None,
+        help="Product repo root (default: project.json 声明的产品仓, AIPOS-F88 product_repo_root)"
     )
     parser.add_argument(
         "--gate-url",
@@ -1403,7 +1403,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     
     workspace_root = args.workspace_root.expanduser().resolve()
-    product_repo = args.product_repo.expanduser().resolve()
+    # AIPOS-F88 件③: 产品仓缺省 = product_repo_root(治理根)(项目声明的产品仓), 禁写死机器路径; 解析不到 = 拒(带出口)
+    if args.product_repo:
+        product_repo = args.product_repo.expanduser().resolve()
+    else:
+        from tools.aipos_cli.workspace_config import CardRepoUnresolved, product_repo_root
+
+        try:
+            product_repo = product_repo_root(workspace_root, allow_governance_root=False)
+        except CardRepoUnresolved as exc:
+            log(f"ERROR: 产品仓不可解析(传 --product-repo 或在 project.json 声明 code_repo/repos): {exc}", "ERROR")
+            return 1
     connection_json = (args.connection_json or workspace_root / ".lybra" / "connection.json").expanduser().resolve()
     policies_dir = (args.policies_dir or workspace_root / "5_tasks" / "policies").expanduser().resolve()
     
