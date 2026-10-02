@@ -109,13 +109,13 @@ def infer_next_action(state: dict[str, Any]) -> dict[str, Any]:
         task_mode = state["task_frontmatter"].get("task_mode")
         audit_required = state["task_frontmatter"].get("audit") == "required"
         if task_mode == "code" or audit_required:
-            # 检查审计卡是否已生成（executor 自产审计卡）
+            # 检查审计卡是否已生成（审计卡由产品派生: audit_derivation, 执行体不自产）
             if not has_audit_card:
                 return {
                     "action": "wait_human",
-                    "rule": "已 return，审计卡未生成 → 等待 executor 自产审计卡（task-closure-loop）",
+                    "rule": "已 return，审计卡未生成 → 等待产品派生审计卡（audit_derivation）",
                     "requires_human_judgment": True,
-                    "human_judgment_reason": "审计卡内容由 executor 自产（按 audit-card-template 填变量），不代写",
+                    "human_judgment_reason": "审计卡由产品派生（audit_derivation, 派审时生成），执行体不自产、不代写",
                 }
             # 审计卡已生成，派审
             return {

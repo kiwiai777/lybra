@@ -115,19 +115,21 @@ TOOL_PACKAGE_INVENTORY: dict[str, str] = {
     "tests/test_aipos_f83_skills_zero_gate.py": "夹具: 本盘点",
     "agents/harness/pi/lybra-loop/tests/run-all.sh": "run-all F83 块标题文字(非读取)",
     "tools/aipos_cli/tests/test_aipos_f57_onboarding.py": "夹具文档: 改读 distribution 声明",
-    "tools/schema_loader.py": "reader_code(车道外死代码: get_role_tool_package / get_roles_with_tool_package 零调用方, 登记缺口)",
-    "agents/README.md": "车道外文档(过时: 仍称 tool_package 为装配单源, 登记缺口)",
-    "agents/roles/README.md": "车道外文档(过时: 仍称 tool_package 为装配单源, 登记缺口)",
+    "agents/README.md": "文档: 单源 = distribution.schema, tool_package 退役注记(AIPOS-F84 件③ 更正)",
+    "agents/roles/README.md": "文档: 单源 = distribution.schema, tool_package 退役注记(AIPOS-F84 件③ 更正)",
+    "tests/test_aipos_f84_advisor_skills_generic.py": "夹具: 断言 README 单源说法 / schema_loader 死函数已删(AIPOS-F84 件③)",
 }
 
 
 def test_item2_roles_schema_tool_package_retired_single_source():
-    from tools.schema_loader import get_roles_with_tool_package, load_schema
+    import tools.schema_loader as schema_loader
+    from tools.schema_loader import load_schema
 
     roles = load_schema("roles")
     assert not any("tool_package" in r for r in roles["roles"])
     assert "distribution.schema" in roles["tool_package_retired"]
-    assert get_roles_with_tool_package() == []  # 车道外存量读取方已读不到任何清单
+    # AIPOS-F84 件③: 车道外存量读取方(get_role_tool_package / get_roles_with_tool_package)已删除
+    assert not hasattr(schema_loader, "get_role_tool_package") and not hasattr(schema_loader, "get_roles_with_tool_package")
     decl = load_schema("distribution")
     assert "tool_package_single_source" in decl
     # lybra-loop 旧门循环扩展: 任何声明里都没有
@@ -147,7 +149,7 @@ def test_item2_tool_package_inventory_classified():
         print(f"  {f} ×{n} → {TOOL_PACKAGE_INVENTORY.get(f, '<未归类>')}")
     assert set(by_file) <= set(TOOL_PACKAGE_INVENTORY), sorted(set(by_file) - set(TOOL_PACKAGE_INVENTORY))
     readers = [f for f in by_file if TOOL_PACKAGE_INVENTORY[f].startswith("reader_code")]
-    assert readers == ["tools/schema_loader.py"]  # 车道内读取方 = 0
+    assert readers == []  # 读取方 = 0(AIPOS-F84 件③ 删除 schema_loader 存量死读取方)
     for f in ("tools/aipos_cli/workstation_wiring.py", "tools/aipos_cli/distribution_sync.py"):
         src = (REPO_ROOT / f).read_text(encoding="utf-8")
         assert 'get("tool_package")' not in src and '["tool_package"]' not in src and "tool_package_for_class" not in src

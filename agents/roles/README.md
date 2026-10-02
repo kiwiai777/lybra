@@ -19,20 +19,21 @@ roles/
     └── AGENTS.md       # advisor 契约母本
 ```
 
-## 装配清单(该角色装哪些 skill)= roles.schema.json 单一源
+## 装配清单(该角色装哪些 skill)= distribution.schema.json 单一源
 
-「该角色装哪些 skill 的装配清单」的**唯一真相**在
-[`schema/roles.schema.json`](../../schema/roles.schema.json) 的
-`roles[].tool_package.skills`(extensions 同理)。分发器
-`tools/distribute_tools.py` 经 `schema_loader.get_role_tool_package()` 读取它,
-按 (role, harness) 组装出工位分发物。
+「该角色装哪些 skill/扩展的装配清单」的**唯一真相**在
+[`schema/distribution.schema.json`](../../schema/distribution.schema.json) 的
+`distributions[]`(条目 `applies_to_roles` 定角色, skills 条目 `filter.include` 定技能集)。分发器
+`tools/distribute_tools.py` 与清单构建器 `tools/distribution_manifest.build_role_manifest` 只读它,
+按 (role, harness) 组装出工位分发物。roles.schema.json 的 `tool_package` 已退役(AIPOS-F83 件②,
+只留 `tool_package_retired` 指向说明), 其读取函数已删除(AIPOS-F84 件③)。
 
-> 红线(一机制一实现):装配清单**不**在本目录再复制一份——复制 = 第二源 = 漂移。
-> 改「某角色装哪些 skill」= 改 roles.schema.json 一条数据,分发器零代码改动。
+> 红线(一机制一实现):装配清单**不**在本目录或 roles.schema.json 再复制一份——复制 = 第二源 = 漂移。
+> 改「某角色装哪些 skill」= 改 distribution.schema.json 一条数据,分发器零代码改动。
 
 ## 分发机制
 
-- **母本 = 产品仓单一源**:契约文件住此处,与 `schema/roles.schema.json` 联动。
+- **母本 = 产品仓单一源**:契约文件住此处,分发声明在 `schema/distribution.schema.json`(kind=charter 条目)。
 - **工位副本 = 分发落点**:各 harness 工位(说明性示例, 非章程字面: 如 `<工位父根>/lybra-executor/`)的 `AGENTS.md` 由分发器写入,**不入 git**。
 - **母本项目无关(AIPOS-F80 件②)**:母本内凡项目/实例/机器/仓路径/落点一律写 `{{key}}` 占位, 键只用
   `tools/aipos_cli/charter_render.py` `charter_render_context()` 声明的渲染上下文键(project / governance_root / code_repo /
@@ -45,7 +46,6 @@ roles/
 
 `schema/roles.schema.json` 定义角色的:
 - `scopes`: 权限范围
-- `tool_package`: 分发的工具/技能(装配清单单一源)
 - `naming.prefix`: 实例命名前缀
 
 `roles/` 定义角色的:
