@@ -397,7 +397,7 @@ def test_item2_unresolvable_is_refused_without_write(tmp_path, monkeypatch, caps
         card.write_text(text, encoding="utf-8")
         rc, out = _cli(["state", "repair", "--task-id", task_id, "--workspace-root", str(gov)], capsys)
         _show(f"[件② unresolved {task_id}] rc={rc} {out.strip()[:200]}")
-        assert rc == 1 and "unresolved" in out
+        assert rc == 1 and "unresolved" in out and f"✗ 拒改 {task_id}" in out
         assert card.read_text(encoding="utf-8") == text
         assert not (gov / "5_tasks/records/events" / task_id).exists()
 

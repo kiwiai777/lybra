@@ -4873,7 +4873,9 @@ def main(argv: list[str] | None = None) -> int:
             if getattr(args, "json", False):
                 print(render_json(result))
             else:
-                if result.get("repaired"):
+                if result.get("unresolved"):
+                    print(f"✗ 拒改 {args.task_id}: {result['message']}")
+                elif result.get("repaired"):
                     print(f"✓ 已修复 {args.task_id}: {result['message']}")
                 elif result.get("dry_run"):
                     print(f"(dry-run) 会修复 {args.task_id}: {result['message']}")
