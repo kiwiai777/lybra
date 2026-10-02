@@ -4836,10 +4836,11 @@ def main(argv: list[str] | None = None) -> int:
                 governance_root=Path(ws_root),
                 task_id_filter=getattr(args, "task_id", None),
             )
+            # AIPOS-F87 顺手实撞: issues 原只在文本分支赋值, `state lint --json` 走到 return 即 UnboundLocalError
+            issues = result.get("issues", [])
             if getattr(args, "json", False):
                 print(render_json(result))
             else:
-                issues = result.get("issues", [])
                 if not issues:
                     print(f"✓ state lint OK: {result['scanned']} 张卡扫描, 无断层")
                 else:
@@ -4869,7 +4870,18 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"(dry-run) 会修复 {args.task_id}: {result['message']}")
                 else:
                     print(f"无需修复 {args.task_id}: {result['message']}")
-            return 0
+                # AIPOS-F87 件②: 卡面规整预览/结果逐行贴出(前后两行), unresolved 原样列出
+                fm_repair = result.get("frontmatter_repair") or {}
+                for item in fm_repair.get("repairs", []):
+                    print(f"  {fm_repair.get('card_path')} 第 {item['line']} 行 {item['key']}:")
+                    print(f"    - {item['before']}")
+                    print(f"    + {item['after']}")
+                for reason in fm_repair.get("unresolved", []):
+                    print(f"  ✗ unresolved: {reason}")
+                if fm_repair.get("repair_record"):
+                    print(f"  repair 记录: {fm_repair['repair_record']}")
+            # AIPOS-F87 件②: 卡面无法安全规整 = 拒改, 非零退出(fail-closed)
+            return 1 if result.get("unresolved") else 0
 
         if (
             state_cmd != "recovery"
