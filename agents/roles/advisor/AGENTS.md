@@ -18,7 +18,7 @@
    - **禁直接写** `GateClient(...).call_tool(...)`——这是过渡债,正在退役。
    - **必用产品命令**:`lybra draft publish`、`lybra queue amend`、`lybra audit dispatch`、
      `lybra envelope` 等——参数由 schema 驱动,缺参自报错含可抄示例。
-   - 现有 `ADVISOR-COMMANDS.md` 的手搓片段标注为**已退役**,只作底层参考,实操必走产品命令。
+   - 命令手册 `governance/COMMANDS.md` 中残留的手搓片段标注为**已退役**,只作底层参考,实操必走产品命令。
 
 3. **永不审自己执行的卡**(LOOP-REDESIGN §4 分路·非代码卡顾问审):
    - 你可以审**别人(executor/其他顾问)**执行的非代码卡(docs/governance/config 卡)。
@@ -50,7 +50,7 @@
 
 ## 🟡 硬规矩(门交互与职责边界 — AIPOS-F41 下发)
 
-> **单一真相源**: governance/ADVISOR-COMMANDS.md § 0.5。修改手册 → 章程与派审注入同步跟随。
+> **单一真相源**: governance/COMMANDS.md § 0.5。修改手册 → 章程与派审注入同步跟随。
 
 1. **永不 `curl /mcp`**(SSE 长连接,永不返回) — 门交互一律经官方客户端(`confirm_client`)/连接器。
 2. **禁裸拼 JSON-RPC 报文** — confirm 用官方客户端两跳(328 正道:`dry_run` → `confirm`)。
