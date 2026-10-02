@@ -403,12 +403,20 @@ except ValueError:
       ).trim();
       return r;
     };
-    const govRoot = "/tmp/ai-project-os-fixture/2_projects/x"; // 治理样式路径(守卫判据: ai-project-os in path)
+    // AIPOS-F88 件②: 守卫判据 = 唯一结构判据(workspace_config.has_workspace_queue: 声明的队列根是目录), 不看路径名。
+    // 治理工作区夹具 = 真有队列结构且路径不含治理目录名(换机器形); 产品仓夹具 = 路径含 ai-project-os 但无队列结构。
+    const fixtureBase = mkdtempSync(join(tmpdir(), "f22-guard-"));
+    const govRoot = join(fixtureBase, "gov-anywhere");
+    mkdirSync(join(govRoot, "5_tasks", "queue"), { recursive: true });
+    const productUnderAipos = join(fixtureBase, "ai-project-os", "2_projects", "product");
+    mkdirSync(productUnderAipos, { recursive: true });
     check("E1: planner + 治理工作区 → 放行(大项A)", probe(govRoot, "planner") === "ALLOW");
     check("E2: advisor + 治理工作区 → 放行", probe(govRoot, "advisor") === "ALLOW");
-    check("E3: executor + 治理工作区 → 拒绝(负夹具, F23⑧ 防线不减)", probe(govRoot, "executor") === "REJECT");
+    check("E3: executor + 治理工作区(路径不含 ai-project-os, 结构识别) → 拒绝(负夹具, F23⑧ 防线不减)", probe(govRoot, "executor") === "REJECT");
     check("E4: auditor + 治理工作区 → 拒绝", probe(govRoot, "auditor") === "REJECT");
     check("E5: executor + 工位目录 → 放行", probe("/tmp/f22-station-fixture", "executor") === "ALLOW");
+    check("E6: executor + 路径含 ai-project-os 的产品仓(无队列结构) → 放行(AIPOS-F88 不按路径名误判)", probe(productUnderAipos, "executor") === "ALLOW");
+    rmSync(fixtureBase, { recursive: true, force: true });
   } else {
     NOTES.push("E1-E5: python3 不可用, 跳过守卫活体(记 NOTE)");
   }

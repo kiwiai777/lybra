@@ -4505,7 +4505,7 @@ def _list_registered_projects(home_root: Path) -> list[str]:
     names: list[str] = []
     try:
         for child in sorted(home_root.iterdir()):
-            if child.is_dir() and has_workspace_queue(child) and (child / "project.json").is_file():
+            if child.is_dir() and has_workspace_queue(child, established=True):  # AIPOS-F88 件②: 唯一结构判据
                 names.append(child.name)
     except OSError:
         pass

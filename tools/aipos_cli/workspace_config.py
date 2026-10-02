@@ -35,8 +35,21 @@ GLOBAL_LYBRA_DIR = Path("~/.lybra")
 GLOBAL_CONFIG_REL = Path("config.json")
 
 
-def has_workspace_queue(path: Path) -> bool:
-    return (path / "5_tasks" / "queue").exists()
+def has_workspace_queue(path: Path, *, established: bool = False) -> bool:
+    """AIPOS-F88 件②: 治理工作区/项目根「结构识别」的唯一判据——结构签名, 不看路径名(换机器/目录名无关)。
+
+    签名 = 队列根是目录。队列根读声明(project_paths 单一读取口: project.json paths.queue_root, 缺省取
+    config.schema configuration_sources.project_json.schema.paths.queue_root.default), 代码不写死。
+    established=True: 另要求 project.json 存在(已建项目双标记, AIPOS-226 home 扫描 / 项目注册表 / resolve_project_root)。
+
+    委托方(禁第二实现): enroll_client.is_governance_workspace(②)、enroll_deliver.validate_workspace_root、
+    task_loader._has_queue_root、mcp_server 项目注册表扫描、home 候选扫描、governance_workspace_root 结构识别。
+    TS 镜像(同判据, 注明来源): agents/harness/pi/lybra-loop/loop-context.ts ConnectionResolver.isGovernanceWorkspace。
+    """
+    root = Path(path)
+    if established and not project_json_path(root).is_file():
+        return False
+    return Path(project_paths(root)["queue_root"]).is_dir()
 
 
 def _validate_workspace_root(path: Path, *, source: str) -> Path:
@@ -253,7 +266,7 @@ def _project_candidates(home_root: Path) -> list[str]:
     return sorted(
         child.name
         for child in home_root.iterdir()
-        if child.is_dir() and has_workspace_queue(child) and (child / "project.json").exists()
+        if child.is_dir() and has_workspace_queue(child, established=True)
     )
 
 
@@ -428,7 +441,7 @@ def resolve_project_root(home_root: str | Path, project: str) -> Path:
         raise ValueError("PROJECT_NOT_ESTABLISHED: empty project name")
     root = home / name
     # AIPOS-226: the establishment marker is BOTH 5_tasks/queue AND project.json.
-    if not has_workspace_queue(root) or not (root / "project.json").exists():
+    if not has_workspace_queue(root, established=True):
         raise FileNotFoundError(
             f"PROJECT_NOT_ESTABLISHED: project {name!r} is missing the 5_tasks/queue + "
             f"project.json marker under {home}; run `lybra project new {name}` (no lazy-create)."
