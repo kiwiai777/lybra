@@ -366,7 +366,7 @@ def _find_role_spec(role: str, repo_root: Path | None = None) -> dict[str, Any] 
 def get_role_spec(role: str, repo_root: Path | None = None) -> dict[str, Any] | None:
     """Get the full definition for a role category (single source).
 
-    Returns the role entry dict (role/token_ref/scopes/naming/tool_package) or
+    Returns the role entry dict (role/token_ref/scopes/naming) or
     None if the role is not a builtin registry role. Custom (workspace) roles
     are not listed here — they resolve to a builtin class via custom_roles.
     """
@@ -392,26 +392,6 @@ def get_role_scopes(
     return list(spec.get("scopes", []))
 
 
-def get_role_tool_package(role: str, repo_root: Path | None = None) -> dict[str, Any]:
-    """Get the distribute tool-package spec for a role (extensions + skills).
-
-    Replaces ROLE_TOOL_MAPPING in distribute_tools.py. Raises SchemaLoadError for
-    roles without a distributed tool package (owner/owner-dispatch/copilot/planner).
-    """
-    spec = _find_role_spec(role, repo_root)
-    if spec is None:
-        raise SchemaLoadError(
-            f"Unknown role: {role}. Builtin roles: {get_all_role_names(repo_root)}"
-        )
-    pkg = spec.get("tool_package")
-    if not pkg:
-        raise SchemaLoadError(
-            f"Role {role!r} has no distributed tool package. "
-            f"Roles with a tool package: {get_roles_with_tool_package(repo_root)}"
-        )
-    return dict(pkg)
-
-
 def get_role_naming_prefix(role: str, repo_root: Path | None = None) -> str | None:
     """Get the instance-name prefix for a role (e.g. 'exec' for 'executor').
 
@@ -430,16 +410,6 @@ def get_all_role_names(repo_root: Path | None = None) -> list[str]:
     """List all builtin role category names in the registry."""
     roles_schema = load_schema("roles", repo_root)
     return [spec.get("role") for spec in roles_schema.get("roles", []) if spec.get("role")]
-
-
-def get_roles_with_tool_package(repo_root: Path | None = None) -> list[str]:
-    """List builtin roles that carry a distributed tool package."""
-    roles_schema = load_schema("roles", repo_root)
-    return [
-        spec.get("role")
-        for spec in roles_schema.get("roles", [])
-        if spec.get("tool_package")
-    ]
 
 
 def get_role_naming_template(repo_root: Path | None = None) -> str:
@@ -792,10 +762,8 @@ __all__ = [
     "get_branch_integration",
     "get_role_spec",
     "get_role_scopes",
-    "get_role_tool_package",
     "get_role_naming_prefix",
     "get_all_role_names",
-    "get_roles_with_tool_package",
     "get_role_naming_template",
     "get_builtin_role_classes",
     "get_config_port",

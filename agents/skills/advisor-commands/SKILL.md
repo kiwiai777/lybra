@@ -9,6 +9,8 @@ role: advisor
 
 **角色**:advisor(顾问)专用。这是你的**命令快查表**,所有 lybra 产品命令的参数、示例、使用时机。
 
+> **示例中的尖括号为占位, 以本工位 .lybra/role 与 project.json 为准**:`<你的顾问实例>`/`<执行体实例>`/`<审计体实例>` 读 `.lybra/role` 的 instance 与项目声明的角色实例;`<项目名>`/`<治理根>`/`<代码仓>` 读 project.json;`<卡ID>` 写真实卡 ID。本 skill 项目无关, 任何项目的顾问照此替换即可执行(AIPOS-F84 件①: 技能不渲染, 原样分发)。
+
 ## 为什么(长期有效)
 
 **问题源**:历史顾问靠手搓 `GateClient(...).call_tool(...)` 片段直呼 gate 动词(ADVISOR-COMMANDS.md 9处),
@@ -27,20 +29,20 @@ role: advisor
 | 阶段 | 职责 | 主要命令 |
 |------|------|----------|
 | **N0 出卡** | 起草与发卡 | `lybra draft create/publish`, `lybra queue amend/withdraw` |
-| **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物, 永不唤醒 agent) | **`lybra loop --task-id <ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
-| **N1 认领** | 监督认领流程 | `lybra loop`(推进行); 单步查看 `lybra next --task-id <ID>`; `lybra my-tasks` 查询 |
-| **开工渲染** | 把卡意图面按 harness 渲染给执行引擎(pi/codex/claude-code), 派子 agent 只看渲染物 | **`lybra card render --task-id <ID> --harness <h>`**(AIPOS-F78 件②; 零门动词/零 token) |
+| **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物, 永不唤醒 agent) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
+| **N1 认领** | 监督认领流程 | `lybra loop`(推进行); 单步查看 `lybra next --task-id <卡ID>`; `lybra my-tasks` 查询 |
+| **开工渲染** | 把卡意图面按 harness 渲染给执行引擎(pi/codex/claude-code), 派子 agent 只看渲染物 | **`lybra card render --task-id <卡ID> --harness <harness>`**(AIPOS-F78 件②; 零门动词/零 token) |
 | **N2 执行** | 监督进度 | 无直接干预 (执行体在卡分支提交 + 把 Return 落到项目声明落点; `lybra loop` 经 agent watch 等它落盘) |
 | **N3 交回** | 监督交回流程 | `lybra loop`(推进行; 内部经 `lybra artifact ingest` 校验 Return frontmatter 与分支 tip 后铸记录, AIPOS-F78 件③) |
 | **N4 审计** | 审非代码卡 | `lybra audit-verdict` (顾问自审), `lybra audit dispatch` (派审; 代码卡由 `lybra loop` 自动派) |
 | **返工** | 追加返工节 | `lybra queue rework --confirm` (AIPOS-F75, F73C件⑤) |
 | **N5 finalize** | 监督交付上线 | `lybra loop`(推进行) |
-| **N6 收账** | 编年史+决策记录 | `lybra generate-backlog-entry`, `lybra owner-decision` |
+| **N6 收账** | 编年史+决策记录 | `generate_backlog_entry.py`(产品仓脚本), `lybra owner-decision` |
 
 **关键原则**:
-- **推进由产品执行** (`lybra loop --task-id <ID>`)，顾问不手搓门动词、不逐步代按。`lybra next --run` 单步入口保留为 loop 的内部执行体与排障单步, **顾问逐步手按 `next --run` 这条人工路径退役**(AIPOS-F73D, Δ=-1)。
+- **推进由产品执行** (`lybra loop --task-id <卡ID>`)，顾问不手搓门动词、不逐步代按。`lybra next --run` 单步入口保留为 loop 的内部执行体与排障单步, **顾问逐步手按 `next --run` 这条人工路径退役**(AIPOS-F73D, Δ=-1)。
 - **返工节只能通过 `lybra queue rework` 追加**，禁手写卡面 rework_rounds 字段。
-- **next-step 导航**：用 `lybra next --task-id <ID>` 查询当前状态与下一步动词(`next-step` 已退役转发)。
+- **next-step 导航**：用 `lybra next --task-id <卡ID>` 查询当前状态与下一步动词(`next-step` 已退役转发)。
 
 ---
 
@@ -51,27 +53,29 @@ role: advisor
 #### `lybra draft create`
 **何时用**:新建任务草稿。
 ```bash
-lybra draft create --task-id AIPOS-XXX --title "..." --project lybra
-# 生成 5_tasks/drafts/aipos-xxx.md
+lybra draft create --from-template basic --task-id <卡ID> --title "..." --project <项目名>
+# 生成 5_tasks/drafts/<卡ID小写>.md(--from-json <草稿JSON> 为另一入口, 二选一)
 ```
 
 #### `lybra draft publish`
 **何时用**:发布草稿到 pending 队列(N0)。
 ```bash
-lybra draft publish --task-id AIPOS-XXX --actor advisor.lybra.kiwiai-dev
+lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md --dry-run   # 先预演
+lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md
 ```
+发布者身份取驱动方凭据绑定的实例(本命令无 `--actor`)。
 **自动校验**:schema 校验(必填/拼错字段)、N0 容量 lint(交付大项>3 会 WARN)。
 
 #### `lybra queue amend`
 **何时用**:改卡(如 `needs_owner: true → false` 解放行阻塞)。
 ```bash
-lybra queue amend --task-id AIPOS-XXX --field needs_owner --value false \
-  --reason "PreAuthorized release" --actor advisor.lybra.kiwiai-dev
+lybra queue amend --task-id <卡ID> --amendments '{"needs_owner": false}' \
+  --amendment-reason "PreAuthorized release" --actor <你的顾问实例>
 ```
 **claimed 卡受限改车道(AIPOS-F78 前置零⑤, 治 output_target 三次漏列)**: 卡已认领后交回撞 `CHANGES_OUT_OF_SCOPE` → 顾问补车道目录, 不重发卡:
 ```bash
-lybra queue amend --restricted --task-id AIPOS-XXX --actor advisor.lybra.kiwiai-dev \
-  --amendments '{"lane": {"repo": "/home/kiwi/projects/lybra", "paths": ["tools/aipos_cli/", "tests/"], "roles": ["executor"]}}' \
+lybra queue amend --restricted --task-id <卡ID> --actor <你的顾问实例> \
+  --amendments '{"lane": {"repo": "<代码仓>", "paths": ["src/", "tests/"], "roles": ["executor"]}}' \
   --amendment-reason "补车道: 漏列 tests/"
 # 允许字段唯一声明 card.schema restricted_amend.claimed_card_fields = rework_rounds / output_target / lane
 ```
@@ -79,35 +83,36 @@ lybra queue amend --restricted --task-id AIPOS-XXX --actor advisor.lybra.kiwiai-
 #### `lybra card render`(AIPOS-F78 件②)
 **何时用**:派子 agent(Claude Code / Codex / pi)开工前, 把卡的意图面渲染成该引擎的开工物。同一源三输出, 渲染物 `grep lybra_` = 0。
 ```bash
-lybra card render --task-id AIPOS-XXX --harness pi --stdout            # 三行: 工作树 / 报告落点(含必填 frontmatter) / 卡路径
-lybra card render --task-id AIPOS-XXX --harness codex                  # Prompt.md + Plan.md 写入工作树根(.worktrees/<ID>)
-lybra card render --task-id AIPOS-XXX --harness claude-code --out-dir <dir>   # CLAUDE.md 片段
+lybra card render --task-id <卡ID> --harness pi --stdout            # 三行: 工作树 / 报告落点(含必填 frontmatter) / 卡路径
+lybra card render --task-id <卡ID> --harness codex                  # Prompt.md + Plan.md 写入工作树根(.worktrees/<卡ID>)
+lybra card render --task-id <卡ID> --harness claude-code --out-dir <输出目录>   # CLAUDE.md 片段
 ```
-**落点全读声明**: 工作树=config.schema worktree_root; Return 落点=project.json `paths.return_root`(lybra 缺省 task_cards; chris 形=5_tasks/records/returns); 分支=transitions N5.branch_integration。
+**落点全读声明**: 工作树=config.schema worktree_root; Return 落点=project.json `paths.return_root`(未声明缺省 task_cards; 另一常见形=5_tasks/records/returns); 分支=transitions N5.branch_integration。
 
 #### `lybra artifact ingest`(AIPOS-F78 件③, 由 loop/next --run 触发, 非人用)
 **何时用**:排障——执行体说"交回了"但 loop 没动, 看产物入口为何拒。
 ```bash
-lybra artifact ingest --task-id AIPOS-XXX --dry-run      # 只校验: 找 Return(声明落点)、必填 frontmatter(commit_sha/tree_hash/branch/model)、分支 tip==commit_sha
-lybra artifact ingest --task-id AIPOS-XXXR --dry-run     # R 卡: 找审计报告(verdict + commit_sha==被审分支 tip)
+lybra artifact ingest --task-id <卡ID> --dry-run      # 只校验: 找 Return(声明落点)、必填 frontmatter(commit_sha/tree_hash/branch/model)、分支 tip==commit_sha
+lybra artifact ingest --task-id <卡ID>R --dry-run     # R 卡: 找审计报告(verdict + commit_sha==被审分支 tip)
 ```
 拒因码: INGEST_RETURN_MISSING / INGEST_FRONTMATTER_MISSING / INGEST_TIP_MISMATCH / INGEST_TREE_MISMATCH / INGEST_SUMMARY_MISSING(exit 4)。通过则走既有 `queue return --confirm` / `audit-verdict --confirm` 薄壳(驱动方 token, actor=卡实例)。
 
 #### `lybra queue withdraw`
 **何时用**:撤卡(malformed/方向错误/重复发卡)。
 ```bash
-lybra queue withdraw --task-id AIPOS-XXX --reason "duplicate" \
-  --actor advisor.lybra.kiwiai-dev
+lybra queue withdraw --task-id <卡ID> --reason "duplicate" \
+  --actor <你的顾问实例>
 ```
 
 #### `lybra queue rework`
 **何时用**:追加返工节到卡面(FAIL 裁决后,点杀清单+验收标准)(顾问职责).
 ```bash
-lybra queue rework --task-id AIPOS-XXX --actor advisor.lybra.kiwiai-dev \
-  --verdict-ref "task_cards/AIPOS-XXX/audit_report.md" \
+lybra queue rework --task-id <卡ID> --actor <你的顾问实例> \
+  --verdict-ref "<裁决记录ID>" \
   --focus-items '["fix item 1", "fix item 2"]' \
   --acceptance-criteria '["criterion 1", "criterion 2"]' \
-  --connection-json ~/.lybra/connection.json --confirm
+  --confirm
+# 凭据自动发现(工位 .lybra/connection.json, 或 --connection-json <凭据文件>); token 永不上屏
 ```
 **约束**:
 - 只能由 advisor 调用(需 queue_rework scope);
@@ -121,30 +126,35 @@ lybra queue rework --task-id AIPOS-XXX --actor advisor.lybra.kiwiai-dev \
 #### `lybra loop`
 **何时用**:卡已认领(或已发布)后, 顾问用一条命令把它推到 completed(AIPOS-F73D)。前提: Owner 已签发覆盖本卡/本驱动方的 autonomy 信封(`lybra envelope mint`, 见下)。
 ```bash
-lybra loop --task-id AIPOS-XXX
-# 可选: --envelope <policy_id> --actor advisor.lybra.kiwiai-dev --max-steps 20 --max-wait 1800 --interval 15 --json
+lybra loop --task-id <卡ID>
+# 可选参数全写形:
+lybra loop --task-id <卡ID> --envelope <信封ID> --actor <你的顾问实例> --max-steps 20 --max-wait 1800 --interval 15 --json
 ```
-**每轮**:`next` 推导 → 账务命令(claim/return/dispatch/verdict/finalize/close)先过 argparse 解析再经 `next --run` 同一执行体执行并重推导;agent 步(执行体/审计体在干活)只调 `agent watch --expect` 有界等待产物(落点读项目声明 project.json `paths.return_root`/`paths.verdict_root`, lybra 缺省=`task_cards/<ID>/RETURN.md` 与 `task_cards/<ID>R/RETURN.md|audit_report.md`, 骨架不算);closure 记录存在即 exit 0。
+**每轮**:`next` 推导 → 账务命令(claim/return/dispatch/verdict/finalize/close)先过 argparse 解析再经 `next --run` 同一执行体执行并重推导;agent 步(执行体/审计体在干活)只调 `agent watch --expect` 有界等待产物(落点读项目声明 project.json `paths.return_root`/`paths.verdict_root`, 未声明缺省=`task_cards/<卡ID>/RETURN.md` 与 `task_cards/<卡ID>R/RETURN.md|audit_report.md`, 骨架不算);closure 记录存在即 exit 0。
 **AIPOS-F78 起**: 账务动词一律驱动方(advisor)token 提交、actor=卡实例(执行体/审计体 token 零账务 scope); claim 经 Owner 信封一阶段放行(信封 `agent_or_role` 须覆盖驱动方实例或 `advisor`); return/verdict 步经 `artifact ingest` 校验 Return/报告 frontmatter 与分支 tip; close 的三字段(finalize_commit_hash/finalize_return_ref/verdict_ref)从 finalization(`merge_commit`)/return/verdict 记录自填, 缺一即 exit 4 点名; 驱动方身份读工位 `.lybra/role` instance 或驱动方 token 绑定实例, 不再占位 `advisor`。
 **四出口(verbs.schema `lybra_loop.exit_codes` 唯一声明)**:0=completed;2=门拒(透传拒因原文, 不重试);3=等待产物超时/停滞或 --max-steps 用尽(输出等的是哪份产物);4=推导不可推导/派生命令解析失败(输出 missing_records);5=无有效信封(输出 `lybra envelope mint` 申领出口)。
 **红线**:永不唤醒 agent(开会话仍由 Owner/工位无参 `/go`);禁 sleep 自旋(等待一律经 watch);token 永不上屏;禁直调 board_adapter。
 
 #### `lybra mark-concluded` / `lybra queue close --conclusion-note`(AIPOS-F78 前置零⑨)
-**何时用**:已 PASS 但不走 finalize 的卡(如产物由续卡承接): `lybra mark-concluded --task-id AIPOS-XXX --actor advisor.lybra.kiwiai-dev --conclusion-note "工作在 card/AIPOS-XXX 完成, 由续卡 AIPOS-XXXB 承接交回"`——PASS 裁决 + 承接声明即放行登记承接世系(F53 lineage 读 `conclusion_note`/`continuation_task_id`); FAIL/BLOCK 仍拒(走 `queue rework`)。`queue close` 亦可带 `--conclusion-note`。
+**何时用**:已 PASS 但不走 finalize 的卡(如产物由续卡承接):
+```bash
+lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --conclusion-note "工作在 card/<卡ID> 完成, 由续卡 <续卡ID> 承接交回"
+```
+PASS 裁决 + 承接声明即放行登记承接世系(F53 lineage 读 `conclusion_note`/`continuation_task_id`); FAIL/BLOCK 仍拒(走 `queue rework`)。`queue close` 亦可带 `--conclusion-note`。
 
 #### `lybra audit dispatch`
 **何时用**:派审(手动指定审计者,或 FIX 打回后复审)。
 ```bash
-lybra audit dispatch --task-id AIPOS-XXX \
-  --auditor-instance auditor.lybra.kiwiai-dev \
-  --actor advisor.lybra.kiwiai-dev
+lybra audit dispatch --task-id <卡ID> --actor <你的顾问实例> \
+  --agent-instance <执行体实例> --owner-policy-ref <信封ID> \
+  --audit-task-id <卡ID>R --audit-agent-instance <审计体实例>
 ```
 **生成**:dispatch 记录 + 带 `reviewed_task_id` 的 R 卡。
 
-#### `lybra next-step`
-**何时用**:查询任务当前状态 → 下一步动词+完整参数(AIPOS-R7A 大项C)。
+#### `lybra next`(`next-step` 已退役转发, AIPOS-F71)
+**何时用**:查询任务当前状态 → 下一步动词+完整参数(AIPOS-R7A 大项C;AIPOS-F71 起唯一实现为 `lybra next`)。
 ```bash
-lybra next-step --task-id AIPOS-XXX
+lybra next --task-id <卡ID>
 ```
 **输出**:当前状态、下一步动词、完整命令、触发者、授权语义(由 transitions.schema 生成,禁口述)。
 
@@ -157,8 +167,10 @@ lybra next-step --task-id AIPOS-XXX
 #### `lybra audit-verdict`
 **何时用**:你审非代码卡(docs/governance/config)时提交裁决。
 ```bash
-lybra audit-verdict --task-id AIPOS-XXX --verdict PASS \
-  --actor advisor.lybra.kiwiai-dev --summary "..."
+lybra audit-verdict --reviewed-task-id <卡ID> --verdict PASS \
+  --actor <你的顾问实例> --findings-summary "..."            # 两阶段: 先预演
+lybra audit-verdict --reviewed-task-id <卡ID> --verdict PASS \
+  --actor <你的顾问实例> --findings-summary "..." --confirm  # 再确认落记录
 ```
 **禁止**:手写裁决文件(必经 gate MCP 落 `5_tasks/records/audit_verdicts/`,归因在案)。
 **禁止**:审自己执行的卡(升级 Owner 或独立审计)。
@@ -170,8 +182,8 @@ lybra audit-verdict --task-id AIPOS-XXX --verdict PASS \
 #### `lybra envelope mint`
 **何时用**:签发 PreAuthorized 信封(授权 executor 自认领额度)。
 ```bash
-lybra envelope mint --policy-id pol_lybra_dev_9 \
-  --agent-or-role exec.lybra.kiwiai-dev --max-tasks 60 \
+lybra envelope mint --policy-id <信封ID> \
+  --agent-or-role <执行体实例> --max-tasks 60 \
   --expires-at 2026-09-01T00:00:00Z \
   --decision-summary "Q3 envelope" --actor owner
 ```
@@ -179,14 +191,14 @@ lybra envelope mint --policy-id pol_lybra_dev_9 \
 #### `lybra envelope revoke`
 **何时用**:吊销信封(紧急情况/额度滥用)。
 ```bash
-lybra envelope revoke --policy-id pol_lybra_dev_9 \
+lybra envelope revoke --policy-id <信封ID> \
   --revocation-reason "Emergency stop" --actor owner
 ```
 
 #### `lybra envelope renew`
 **何时用**:续额/延期已有信封。
 ```bash
-lybra envelope renew --policy-id pol_lybra_dev_9 \
+lybra envelope renew --policy-id <信封ID> \
   --add-tasks 30 --new-expiry 2026-10-01T00:00:00Z \
   --decision-summary "Q3 extension" --actor owner
 ```
@@ -195,7 +207,7 @@ lybra envelope renew --policy-id pol_lybra_dev_9 \
 **何时用**:记录 Owner 仲裁/豁免/政策变更决策。
 ```bash
 lybra owner-decision --decision-id arb-2026-08-16-01 \
-  --decision-type arbitration --task-id AIPOS-XXX \
+  --decision-type arbitration --task-id <卡ID> \
   --decision-summary "Approve despite FAIL: emergency hotfix" \
   --actor owner
 ```
@@ -206,27 +218,28 @@ lybra owner-decision --decision-id arb-2026-08-16-01 \
 ### 📦 角色供给(enroll-deliver)
 
 #### `lybra roles enroll`
-**何时用**:为本机/当前角色初始化工位(凭据+配置+工具包)。
+**何时用**:在工位目录用注册码(`roles enroll-code` 产出)兑换凭据, 初始化工位(凭据+配置+工具包)。
 ```bash
-lybra roles enroll --role executor --project lybra --machine kiwiai-dev
+lybra roles enroll --code <注册码> --workspace <工位目录> --verify
 ```
 **生成**:`.lybra/` 配置(connection.json/role/policy)、工具包、skills。
 
 #### `lybra roles enroll-code`
 **何时用**:为跨机角色生成一次性注册码(未来:enroll-deliver 跨机形态)。
 ```bash
-lybra roles enroll-code --role auditor --project lybra --max-uses 1
+lybra roles enroll-code --role auditor --ttl 86400 --governance-root <治理根> \
+  --reason "Onboarding auditor" --json
 ```
+注册码一次性、有时效;不贴进聊天/文档(凭据不过手)。
 
 ---
 
 ### 📊 收账与治理(N6)
 
-#### `lybra generate-backlog-entry`
+#### `generate_backlog_entry.py`(Lybra 产品仓脚本, 非 `lybra` 子命令)
 **何时用**:生成卡编年史条目(每卡必落 FOUNDATION-BACKLOG.md)。
 ```bash
-cd /home/kiwi/projects/lybra
-./tools/generate_backlog_entry.py --task-id AIPOS-XXX
+python3 <Lybra产品仓>/tools/generate_backlog_entry.py <卡ID> --governance-root <治理根>
 ```
 **输出**:可追加到 FOUNDATION-BACKLOG.md 的 markdown 段。
 
@@ -241,19 +254,19 @@ cd /home/kiwi/projects/lybra
 **AIPOS-F79 铁律:先 `--dry-run` 看清单,再去掉 `--dry-run` 正式提交;他项目一律 `--paths`。**
 ```bash
 # ① 预演:只读列出将提交的具体文件(modified/added/deleted/untracked_selected),不 add/不 reset/不 stash
-lybra governance-commit --governance-root <治理根> --actor advisor.<project>.<host> \
+lybra governance-commit --governance-root <治理根> --actor <你的顾问实例> \
   --paths governance/ORCHESTRATOR-RESUME.md --paths governance/decision_log/INDEX.md \
   --dry-run --json
 # ② 正式提交(同一命令去掉 --dry-run):只 git add -- <paths>,提交后 git show --name-only HEAD 与清单逐条核对,再走 F69 fetch→rebase→push
-lybra governance-commit --governance-root <治理根> --actor advisor.<project>.<host> \
+lybra governance-commit --governance-root <治理根> --actor <你的顾问实例> \
   --paths governance/ORCHESTRATOR-RESUME.md --paths governance/decision_log/INDEX.md
 # 路径多时用清单文件(每行一路径,# 行忽略;与 --paths 二选一,同一实现)
-lybra governance-commit --governance-root <治理根> --actor advisor.<project>.<host> --paths-file /tmp/batch.txt
+lybra governance-commit --governance-root <治理根> --actor <你的顾问实例> --paths-file <清单文件>
 ```
 **规则**:
 - `--paths` 相对治理根(文件或目录,可重复);越出治理根/指向他项目/`.`(整根)一律拒(fail-closed,退出码 1,`rejected_paths` 列出)。
 - 预暂存文件:在 `--paths` 内 = 纳入清单;在 `--paths` 外 = 拒并列出(`pre_staged_outside`)。
-- **无 `--paths` 的整根提交(`git add -A -- .`)仅限 lybra 自身工作区;他项目(chris 等)一律 `--paths`**——无 `--paths` 的 `--dry-run` 会列出整根范围并 WARNING 标出未跟踪文件数。
+- **你的项目一律 `--paths`**;无 `--paths` 的整根提交(`git add -A -- .`)是产品为其自身治理工作区保留的形态(实现见 governance_commit)——无 `--paths` 的 `--dry-run` 会列出整根范围并 WARNING 标出未跟踪文件数。
 - AIPOS-R6M 文件级护栏(frontmatter/decision_log 只增/record_type)照旧对选定文件生效;禁用「清理/忽略/搬走历史材料」规避,不加 .gitignore。
 - 退出码:0=PASS(含无待收 no-op 与 dry-run);1=BLOCK/FAIL;2=参数用法错误。参数与退出码声明在 `schema/verbs.schema.json` `lybra_governance_commit`。
 
@@ -278,8 +291,8 @@ lybra governance-commit --governance-root <治理根> --actor advisor.<project>.
 | 手写 owner_decisions/*.md | `lybra owner-decision` | AIPOS-R7A |
 | 手写 audit_verdicts/*.md | `lybra audit-verdict` | 已上线 |
 | 手搓 dispatch 记录 | `lybra audit dispatch` | 已上线 |
-| 口述"下一步做 X" | `lybra next-step` | AIPOS-R7A |
-| 顾问逐步手按 `lybra next --run`(代按推进) | `lybra loop --task-id <ID>` | AIPOS-F73D |
+| 口述"下一步做 X" | `lybra next`(原 `next-step`, AIPOS-F71 并入) | AIPOS-R7A |
+| 顾问逐步手按 `lybra next --run`(代按推进) | `lybra loop --task-id <卡ID>` | AIPOS-F73D |
 
 **过渡期豁免**:在所有产品命令上线前,ADVISOR-COMMANDS.md 的手搓片段暂保留作底层参考;
 本卡(AIPOS-F73C)交付后,手搓片段全退役,只保留命令快查表(本 skill)。
@@ -293,9 +306,9 @@ lybra governance-commit --governance-root <治理根> --actor advisor.<project>.
 | 反模式 | 为什么禁 | 正确做法 |
 |--------|---------|---------|
 | 手搓 `GateClient` 片段 | 过渡债,参数易漂移 | 用 `lybra` 产品命令 |
-| 口述「下一步做 X」 | 记忆叙述 = 漏步 | `lybra next-step` 生成 |
+| 口述「下一步做 X」 | 记忆叙述 = 漏步 | `lybra next --task-id <卡ID>` 生成 |
 | 手写裁决文件 | 绕过 gate 归因 | `lybra audit-verdict` |
-| 贴稿写 `<task_id>` | 接收方冷启动不知道 | 写真实 ID `AIPOS-R7A` |
+| 对外消息/交接里留着占位 `<卡ID>` | 接收方冷启动不知道 | 写真实卡 ID(本 skill 的尖括号只是示例占位, 用前替换) |
 | 缺参数自己猜 | 猜错 = 撞墙 | 命令缺参自报,照抄 |
 
 ---
@@ -305,7 +318,8 @@ lybra governance-commit --governance-root <治理根> --actor advisor.<project>.
 - **目标读者**:advisor(顾问)快查命令用。
 - **同步触发**:产品命令新增/改参时,同步更新本 skill 对应章节。
 - **退役标注**:历史手搓片段不删除,标注为"已退役"+替代命令+退役日期(审计追溯)。
-- **分发**:由 tools/distribute_tools.py 按角色分发到顾问工位;executor/auditor 工位不装此 skill。
+- **分发**:按 distribution.schema `advisor-skills` 条目分发到顾问工位(copy_tree 原样, 不渲染);executor/auditor 工位不装此 skill。
+- **项目无关(AIPOS-F84 件①)**:正文禁写具体实例/项目/机器/绝对路径, 一律尖括号占位;命令示例占位替换为合法值后须能被 `lybra` argparse 解析(夹具 tests/test_aipos_f84_advisor_skills_generic.py 守)。
 
 ---
 
