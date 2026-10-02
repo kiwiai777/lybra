@@ -5,6 +5,8 @@ description: 顾问/planner 出卡铁律:出卡前必读治理真相文档,绝�
 
 # truth-first-drafting — 出卡先读真相(顾问铁律)
 
+> **示例中的尖括号为占位, 以本工位 .lybra/role 与 project.json 为准**(治理真相入口清单读本工位角色章程与 project.json 声明)。本 skill 项目无关。
+
 **为什么(Owner 2026-07-26 裁定)**:顾问 agent 的 memory 与会话记忆会随压缩失真;
 项目复杂度越高,凭记忆出卡的漂移越大,且顾问漂移会放大到整串卡。**记忆≠真相**
 (T5 的顾问版);治理文档才是真相(T6)。产品先例:copilot RF-5(每次起草前重读真相)。
@@ -12,7 +14,7 @@ description: 顾问/planner 出卡铁律:出卡前必读治理真相文档,绝�
 ## 规则
 
 1. **出卡前必读**本项目治理真相入口(各项目在角色 AGENTS.md/CLAUDE.md 声明清单;
-   lybra 项目 = direction_log 尾部近期条目 + roadmap 相关段 + 正典相关命题):
+   例如 direction_log 尾部近期条目 + roadmap 相关段 + 正典相关命题):
    与本卡相关的**约定、红线、既有裁定**必须以文档当前文本为准;
 2. **卡内引用出处**:卡的方向依据处写明所读文档与条目(为将来 gate 的
    governance_refs 字段奠基——引用可审计,漂移可归因);

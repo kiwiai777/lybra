@@ -156,7 +156,7 @@
         ]
       },
       "version_strategy": "git_commit_hash",
-      "notes": "本条目 = 顾问技能集唯一声明(AIPOS-F83 件②)。AIPOS-R6E ⑥: card-author = 顾问出卡检查表; AIPOS-R6M 大项C②: truth-navigator = 时间线导航。AIPOS-F84 件②: card-policy-author 母本退役(AIPOS-R8C 遗留, 从未有任何分发声明与调用方, 母本目录删除)。"
+      "notes": "本条目 = 顾问技能集唯一声明(AIPOS-F83 件②)。AIPOS-R6E ⑥: card-author = 顾问出卡检查表; AIPOS-R6M 大项C②: truth-navigator = 时间线导航。AIPOS-F84 件①: 顾问侧技能(本条目 include 减去 executor-skills/auditor-skills include)正文为项目无关通用示例——实例/项目/机器/路径一律尖括号占位(以本工位 .lybra/role 与 project.json 为准), 不教 /claim, 技能不渲染(copy_tree 原样分发); 命令示例占位替换为合法值后须能被 lybra argparse 解析, 夹具 tests/test_aipos_f84_advisor_skills_generic.py 守。AIPOS-F84 件②: card-policy-author 母本退役(AIPOS-R8C 遗留, 从未有任何分发声明与调用方, 母本目录删除)。"
     },
     {
       "distribution_id": "executor-charter",

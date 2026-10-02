@@ -896,6 +896,16 @@ else
   overall=1
 fi
 
+# AIPOS-F84: 技能与装配遗留清理三件(顾问侧技能项目无关通用示例·命令示例 argparse 可解析/card-policy-author 退役/schema_loader 死函数·README 单源·rules 审计卡文案)
+echo
+echo "── tests/test_aipos_f84_advisor_skills_generic.py (F84 顾问侧技能 grep 零命中·占位说明·示例 argparse 解析/card-policy-author 零引用/死函数零调用·README 单源=distribution.schema·审计卡产品派生文案) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f84_advisor_skills_generic.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f84_advisor_skills_generic.py PASS"
+else
+  echo "✗ tests/test_aipos_f84_advisor_skills_generic.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

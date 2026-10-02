@@ -6,6 +6,8 @@
 
 **适用角色**: advisor, executor, auditor
 
+> **示例中的尖括号为占位, 以本工位 .lybra/role 与 project.json 为准**(治理根与目录落点读 config.schema governance_structure 与 project.json 声明)。本 skill 项目无关。
+
 ---
 
 ## 核心算法（固化为分发 skill，同源引用设计段，禁复写第二份判据表）
