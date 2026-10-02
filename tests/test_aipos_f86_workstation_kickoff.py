@@ -57,8 +57,14 @@ def _task(data: dict, task_id: str) -> dict:
     return hits[0]
 
 
+def _show(msg: str) -> None:
+    """夹具证据输出走真 stdout(capsys 只截 my-tasks 那一次 CLI 输出, 不吞证据行)。"""
+    sys.__stdout__.write(msg + "\n")
+    sys.__stdout__.flush()
+
+
 def _print_view(label: str, task: dict) -> None:
-    print(f"[{label}] " + json.dumps({k: task.get(k) for k in ("task_id", *VIEW_KEYS)}, ensure_ascii=False))
+    _show(f"[{label}] " + json.dumps({k: task.get(k) for k in ("task_id", *VIEW_KEYS)}, ensure_ascii=False))
 
 
 def _no_empty_strings(task: dict) -> None:
@@ -106,7 +112,7 @@ def test_item1_lybra_single_repo_fields_equal_claim_built_tree(tmp_path, monkeyp
     data = _my_tasks(gov, EXEC, capsys)
     after = _task(data, task_id)
     _print_view("单仓·建树后", after)
-    print(f"[单仓] claim 实际建树路径: {built['worktree_path']}")
+    _show(f"[单仓] claim 实际建树路径: {built['worktree_path']}")
     assert after["worktree_path"] == built["worktree_path"] and Path(after["worktree_path"]).is_dir()
     assert after["worktree_exists"] is True and after["worktree_refusal"] is None
     assert after["report_path"] == str(_return_artifact_path(gov, task_id)) == str(gov / "task_cards" / task_id / "RETURN.md")
@@ -119,7 +125,7 @@ def test_item1_lybra_single_repo_fields_equal_claim_built_tree(tmp_path, monkeyp
     assert model["worktree"] == after["worktree_path"] and model["return_path"] == after["report_path"]
 
     plan = _plan_go(data, tmp_path)
-    print("[单仓] go planGo kickoff 原文:\n" + plan.get("kickoff", json.dumps(plan, ensure_ascii=False)))
+    _show("[单仓] go planGo kickoff 原文:\n" + plan.get("kickoff", json.dumps(plan, ensure_ascii=False)))
     assert plan["kind"] == "kickoff" and plan["taskId"] == task_id
     assert f"工作树路径: {after['worktree_path']}" in plan["kickoff"]
     assert f"报告落点: {after['report_path']}" in plan["kickoff"]
@@ -136,7 +142,7 @@ def test_item1_dual_repo_lane_repo_card_lands_on_declared_repo(tmp_path, monkeyp
     data = _my_tasks(gov, EXEC, capsys)
     view = _task(data, task_id)
     _print_view("双仓·lane.repo=b", view)
-    print(f"[双仓] claim 实际建树路径: {built['worktree_path']}")
+    _show(f"[双仓] claim 实际建树路径: {built['worktree_path']}")
     _no_empty_strings(view)
     assert view["worktree_path"] == built["worktree_path"] == str(repos["b"] / ".worktrees" / task_id)
     assert view["worktree_exists"] is True and view["worktree_refusal"] is None
@@ -157,7 +163,7 @@ def test_item1_audit_card_report_path_is_audit_location(tmp_path, monkeypatch, c
     data = _my_tasks(gov, AUDITOR, capsys)
     view = _task(data, audit_id)
     _print_view("审计卡", view)
-    print(f"[审计卡] claim 实际建树路径: {built['worktree_path']}")
+    _show(f"[审计卡] claim 实际建树路径: {built['worktree_path']}")
     _no_empty_strings(view)
     assert view["worktree_path"] == built["worktree_path"] == str(repo / ".worktrees" / audit_id)
     assert view["report_path"] == render_audit_report_location(gov, audit_id) == str(gov / "task_cards" / audit_id / "RETURN.md")
@@ -193,8 +199,8 @@ def test_item1_unresolvable_repo_gives_refusal_not_empty_string(tmp_path, monkey
     assert view["worktree_refusal"]["code"] == "LANE_REPO_UNDECLARED" and "zzz" in view["worktree_refusal"]["reason"]
     assert view["report_path"] == str(gov / "task_cards" / task_id / "RETURN.md")  # 报告落点与仓无关, 照常推导
     plan = _plan_go(data, tmp_path)
-    print("[不可推导] go planGo 原文: " + json.dumps(plan, ensure_ascii=False))
-    assert plan["kind"] == "refused" and "LANE_REPO_UNDECLARED" in plan["message"]
+    _show("[不可推导] go planGo 原文: " + json.dumps(plan, ensure_ascii=False))
+    assert plan["kind"] == "refused" and "LANE_REPO_UNDECLARED" in plan["message"] and "工作树不可推导" in plan["message"]
     assert not GATE_TEXT_RE.search(plan["message"].replace(str(tmp_path), "<tmp>"))
 
 
@@ -245,7 +251,7 @@ def test_item2_rendered_charters_have_no_residue(tmp_path, monkeypatch):
                                      product_commit="deadbeef")
         rendered = render_charter((REPO_ROOT / "agents" / "roles" / role / "AGENTS.md").read_text(encoding="utf-8"), ctx)
         hits = [ln for ln in rendered.splitlines() if "COMMANDS" in ln]
-        print(f"[{role} 渲染后 COMMANDS 行] " + " | ".join(hits))
+        _show(f"[{role} 渲染后 COMMANDS 行] " + " | ".join(hits))
         assert "ADVISOR-COMMANDS" not in rendered and "{{" not in rendered
         assert "governance/COMMANDS.md § 0.5" in rendered
 
@@ -265,12 +271,12 @@ def test_item3_minimum_bootable_set_describes_zero_gate_path():
         for pat in RETIRED_PATTERNS:
             assert not re.search(pat, text), (pat, text)
     desc = mbs["description"]
-    print("[minimum_bootable_set.description] " + desc)
+    _show("[minimum_bootable_set.description] " + desc)
     assert desc.index("lybra roles enroll") < desc.index("lybra sync") < desc.index("/go")
     # /go 由分发声明的扩展提供(斜杠命令 ∈ 分发声明)
     assert any(str(d.get("source", {}).get("path", "")).endswith("extensions/go.ts") for d in decl["distributions"])
     lybra_bin = next(i for i in mbs["items"] if i["name"] == "connection.json#lybra_bin")
-    print("[connection.json#lybra_bin.description] " + lybra_bin["description"])
+    _show("[connection.json#lybra_bin.description] " + lybra_bin["description"])
     assert "/go" in lybra_bin["description"] and "my-tasks" in lybra_bin["description"]
 
 

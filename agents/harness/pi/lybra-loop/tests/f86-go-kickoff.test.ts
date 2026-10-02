@@ -82,6 +82,7 @@ const unresolved = {
 };
 const planC4 = planGo({ tasks: [unresolved] });
 check("C4 工作树不可推导 → refused 且转述产品拒因 code", planC4.kind === "refused" && planC4.message.includes("LANE_REPO_UNDECLARED")
+  && planC4.message.includes("工作树不可推导")
   && !GATE_TEXT_RE.test(planC4.message), JSON.stringify(planC4));
 const noReport = { ...ready, report_path: null, report_refusal: { code: "REPORT_LOCATION_UNDECLARED", reason: "x" } };
 const planC5 = planGo({ tasks: [noReport] });

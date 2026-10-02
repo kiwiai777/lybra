@@ -55,11 +55,18 @@ export function planGo(myTasksData: unknown): GoPlan {
   const task = claimedTasks[0];
   const taskId = String(task.task_id || "");
 
-  if (task.worktree_exists !== true || typeof task.worktree_path !== "string" || !task.worktree_path) {
+  if (typeof task.worktree_path !== "string" || !task.worktree_path) {
+    // 产品推导不出工作树(仓声明缺/冲突等): 转述产品拒因, 不在本地补推
+    return {
+      kind: "refused",
+      taskId,
+      message: `${taskId} 工作树不可推导, 无法开工; 按 block-and-report 上报\n产品拒因: ${refusalText(task.worktree_refusal)}`,
+    };
+  }
+  if (task.worktree_exists !== true) {
     const notCreated = task.worktree_refusal && task.worktree_refusal.code === "WORKTREE_NOT_CREATED";
     const detail = notCreated ? "" : `\n产品拒因: ${refusalText(task.worktree_refusal)}`;
-    const where = typeof task.worktree_path === "string" && task.worktree_path ? `(${task.worktree_path})` : "";
-    return { kind: "refused", taskId, message: `${taskId} ${WORKTREE_PENDING_TEXT}${where}${detail}` };
+    return { kind: "refused", taskId, message: `${taskId} ${WORKTREE_PENDING_TEXT}(${task.worktree_path})${detail}` };
   }
   if (typeof task.report_path !== "string" || !task.report_path) {
     return {
