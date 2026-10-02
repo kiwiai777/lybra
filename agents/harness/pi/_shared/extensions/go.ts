@@ -6,8 +6,9 @@
  *
  * AIPOS-F86 件①: 工作树 / 报告落点 / 卡路径一律只读 `lybra my-tasks --json` 输出的
  *   worktree_path / report_path / card_path（产品侧唯一推导: next_resolver.card_workstation_view,
- *   与认领建树同一函数）；本扩展不做任何路径拼接。工作树不存在 / 不可推导时只转述产品给出的拒因，
- *   文案零门动词（认领由驱动方完成）。
+ *   与认领建树同一函数）；本扩展不做任何路径拼接。
+ * AIPOS-F87 件③: 开工哪张卡也由产品给出（my-tasks 的 next_card）; 无可开工卡时原样转述产品给的
+ *   next_card_excluded 原因列表, 文案零门动词（认领由驱动方完成）。
  *
  * 源码母本住产品仓 agents/harness/pi/_shared/extensions/，由 lybra sync 分发到工位。
  *
@@ -16,84 +17,74 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-/** 工作树尚未建立时的统一文案（零门动词: 不教工位认领或推进）。 */
-export const WORKTREE_PENDING_TEXT =
-  "工作树尚未建立:认领由驱动方完成, 请等待驱动方完成认领后再 /go;若持续存在按 block-and-report 上报";
-
 export type GoPlan =
   | { kind: "none"; message: string }
   | { kind: "refused"; taskId: string; message: string }
   | { kind: "kickoff"; taskId: string; worktreePath: string; reportPath: string; cardPath: string; kickoff: string };
 
-function refusalText(refusal: unknown): string {
-  if (refusal && typeof refusal === "object") {
-    const r = refusal as { code?: unknown; reason?: unknown };
+function excludedText(item: unknown): string {
+  if (item && typeof item === "object") {
+    const r = item as { task_id?: unknown; code?: unknown; reason?: unknown };
+    const taskId = typeof r.task_id === "string" ? r.task_id : "(未知卡)";
     const code = typeof r.code === "string" ? r.code : "UNKNOWN";
     const reason = typeof r.reason === "string" ? r.reason : "";
-    return reason ? `${code}: ${reason}` : code;
+    return reason ? `- ${taskId} ${code}: ${reason}` : `- ${taskId} ${code}`;
   }
-  return "产品未给出拒因字段";
+  return "- 产品未给出拒因字段";
 }
 
 /**
  * 纯函数: 由 `lybra my-tasks --json` 的输出决定 /go 的结果（无 I/O, 夹具可直接调用）。
- * 只读产品字段; 字段缺失 = 拒（fail-closed）, 不在本地补推。
+ *
+ * AIPOS-F87 件③: 开工哪张卡由产品给出（my-tasks 的 next_card, 判据唯一声明在产品 next_resolver.NEXT_CARD_RULE）;
+ * 本函数不挑卡、不排序、不在本地补推。next_card 为空时把产品给的 next_card_excluded 原样提示。
+ * 字段缺失 = 拒（fail-closed）。
  */
 export function planGo(myTasksData: unknown): GoPlan {
-  const tasks = (myTasksData && typeof myTasksData === "object" && Array.isArray((myTasksData as any).tasks))
-    ? ((myTasksData as any).tasks as any[])
-    : null;
-  if (tasks === null) {
+  const data = (myTasksData && typeof myTasksData === "object") ? (myTasksData as Record<string, unknown>) : null;
+  if (data === null || !Array.isArray(data.tasks)) {
     return { kind: "none", message: "my-tasks 输出缺 tasks 数组(产品输出形变), 无法开工; 按 block-and-report 上报" };
   }
-  const claimedTasks = tasks.filter((t: any) => t && t.queue_state === "claimed");
-  if (claimedTasks.length === 0) {
-    return { kind: "none", message: "无已认领卡，等待任务分配..." };
+  if (!("next_card" in data) || !Array.isArray(data.next_card_excluded)) {
+    return {
+      kind: "refused",
+      taskId: "",
+      message: "my-tasks 输出缺 next_card / next_card_excluded(产品输出形变或 CLI 未部署到位), 无法开工; 按 block-and-report 上报",
+    };
   }
-
-  // 取第一张（如果有多张，优先级逻辑由产品定）
-  const task = claimedTasks[0];
-  const taskId = String(task.task_id || "");
-
-  if (typeof task.worktree_path !== "string" || !task.worktree_path) {
-    // 产品推导不出工作树(仓声明缺/冲突等): 转述产品拒因, 不在本地补推
+  const card = data.next_card as Record<string, unknown> | null;
+  if (card === null) {
+    const excluded = data.next_card_excluded as unknown[];
+    if (excluded.length === 0) {
+      return { kind: "none", message: "无已认领卡，等待任务分配..." };
+    }
+    return {
+      kind: "refused",
+      taskId: "",
+      message: `无可开工卡(产品选卡结论), 各卡不入选原因:\n${excluded.map(excludedText).join("\n")}`,
+    };
+  }
+  const taskId = typeof card.task_id === "string" ? card.task_id : "";
+  const worktreePath = card.worktree_path;
+  const reportPath = card.report_path;
+  const cardPath = card.card_path;
+  if (!taskId || typeof worktreePath !== "string" || !worktreePath || typeof reportPath !== "string" || !reportPath
+    || typeof cardPath !== "string" || !cardPath) {
     return {
       kind: "refused",
       taskId,
-      message: `${taskId} 工作树不可推导, 无法开工; 按 block-and-report 上报\n产品拒因: ${refusalText(task.worktree_refusal)}`,
+      message: `${taskId || "(未知卡)"} next_card 字段不全(task_id/worktree_path/report_path/card_path), 无法开工; 按 block-and-report 上报`,
     };
-  }
-  if (task.worktree_exists !== true) {
-    const notCreated = task.worktree_refusal && task.worktree_refusal.code === "WORKTREE_NOT_CREATED";
-    const detail = notCreated ? "" : `\n产品拒因: ${refusalText(task.worktree_refusal)}`;
-    return { kind: "refused", taskId, message: `${taskId} ${WORKTREE_PENDING_TEXT}(${task.worktree_path})${detail}` };
-  }
-  if (typeof task.report_path !== "string" || !task.report_path) {
-    return {
-      kind: "refused",
-      taskId,
-      message: `${taskId} 报告落点不可推导, 无法开工; 按 block-and-report 上报\n产品拒因: ${refusalText(task.report_refusal)}`,
-    };
-  }
-  if (typeof task.card_path !== "string" || !task.card_path) {
-    return { kind: "refused", taskId, message: `${taskId} my-tasks 未给出 card_path, 无法开工; 按 block-and-report 上报` };
   }
 
   const kickoff = `已认领任务卡 ${taskId}。
 
-工作树路径: ${task.worktree_path}
-报告落点: ${task.report_path}
-任务卡路径: ${task.card_path}
+工作树路径: ${worktreePath}
+报告落点: ${reportPath}
+任务卡路径: ${cardPath}
 
 按你的 AGENTS.md 执行，完成后写报告到报告落点。`;
-  return {
-    kind: "kickoff",
-    taskId,
-    worktreePath: task.worktree_path,
-    reportPath: task.report_path,
-    cardPath: task.card_path,
-    kickoff,
-  };
+  return { kind: "kickoff", taskId, worktreePath, reportPath, cardPath, kickoff };
 }
 
 export default function (pi: ExtensionAPI) {

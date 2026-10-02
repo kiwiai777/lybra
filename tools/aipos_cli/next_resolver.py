@@ -304,6 +304,111 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
     return view
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F87 件③: 开工选卡由产品给出——选卡判据唯一声明(my-tasks 输出 next_card; 工位 go.ts 只读, 禁另判/禁取首张)
+# ---------------------------------------------------------------------------
+
+NEXT_CARD_RULE: dict[str, Any] = {
+    "source": "AIPOS-F87 件③(Owner 2026-10-02 裁定: 开工选卡由产品给出); 唯一实现 next_resolver.select_next_card",
+    "eligible": [
+        "queue_state == claimed",
+        "卡面 frontmatter 可解析(产品唯一读取口 parse_markdown_frontmatter 无告警)",
+        "worktree_exists == true(工作树由驱动方认领时建立)",
+        "report_path 可推导(开工提示必需的报告落点)",
+    ],
+    "order": "claimed_at 最近优先; claimed_at 缺失/不可解析者排最后; 同时刻按 task_id 升序",
+}
+
+
+def _claimed_at_sort_key(value: Any) -> float | None:
+    from datetime import datetime, timezone
+
+    if isinstance(value, datetime):
+        moment = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return moment.timestamp()
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
+    """按 NEXT_CARD_RULE 从 my-tasks 的卡视图中选出当前应开工的卡(纯函数)。
+
+    每项卡视图字段: task_id / queue_state / card_path / worktree_path / worktree_exists / worktree_refusal /
+    report_path / report_refusal / claimed_at / frontmatter_warnings(card_workstation_view + 卡面解析告警)。
+    返回 {next_card: None | {task_id, card_path, worktree_path, report_path, claimed_at},
+          next_card_excluded: [{task_id, code, reason}](每张未入选的 claimed 卡为何不入选), next_card_rule}。
+    拒因文案只陈述事实与上报出口, 零门动词(工位原样转述)。
+    """
+    eligible: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    for card in cards:
+        if card.get("queue_state") != "claimed":
+            continue
+        task_id = str(card.get("task_id") or "")
+        warnings = [str(w) for w in (card.get("frontmatter_warnings") or [])]
+        if warnings:
+            excluded.append({
+                "task_id": task_id,
+                "code": "FRONTMATTER_INVALID",
+                "reason": f"卡面 frontmatter 不可解析({warnings[0]}), 不能开工; 卡面由顾问经产品规整, 工位按 block-and-report 上报",
+            })
+            continue
+        refusal = card.get("worktree_refusal") if isinstance(card.get("worktree_refusal"), dict) else {}
+        if not card.get("worktree_path"):
+            excluded.append({
+                "task_id": task_id,
+                "code": str(refusal.get("code") or "WORKTREE_UNRESOLVED"),
+                "reason": f"工作树不可推导: {refusal.get('reason') or '产品未给出拒因'}; 按 block-and-report 上报",
+            })
+            continue
+        if card.get("worktree_exists") is not True:
+            excluded.append({
+                "task_id": task_id,
+                "code": str(refusal.get("code") or "WORKTREE_NOT_CREATED"),
+                "reason": str(refusal.get("reason") or f"工作树 {card.get('worktree_path')} 尚未建立"),
+            })
+            continue
+        if not card.get("report_path"):
+            report_refusal = card.get("report_refusal") if isinstance(card.get("report_refusal"), dict) else {}
+            excluded.append({
+                "task_id": task_id,
+                "code": str(report_refusal.get("code") or "REPORT_LOCATION_UNDECLARED"),
+                "reason": f"报告落点不可推导: {report_refusal.get('reason') or '产品未给出拒因'}; 按 block-and-report 上报",
+            })
+            continue
+        eligible.append(card)
+
+    def order_key(card: dict[str, Any]) -> tuple[int, float, str]:
+        ts = _claimed_at_sort_key(card.get("claimed_at"))
+        return (1 if ts is None else 0, -(ts or 0.0), str(card.get("task_id") or ""))
+
+    eligible.sort(key=order_key)
+    next_card = None
+    if eligible:
+        chosen = eligible[0]
+        claimed_at = chosen.get("claimed_at")
+        next_card = {
+            "task_id": str(chosen.get("task_id") or ""),
+            "card_path": chosen.get("card_path"),
+            "worktree_path": chosen.get("worktree_path"),
+            "report_path": chosen.get("report_path"),
+            "claimed_at": claimed_at.isoformat() if hasattr(claimed_at, "isoformat") else claimed_at,
+        }
+        for other in eligible[1:]:
+            excluded.append({
+                "task_id": str(other.get("task_id") or ""),
+                "code": "NOT_MOST_RECENT",
+                "reason": f"可开工, 但认领时间不是最近(排在 {next_card['task_id']} 之后)",
+            })
+    return {"next_card": next_card, "next_card_excluded": excluded, "next_card_rule": NEXT_CARD_RULE}
+
+
 def _finalize_mode(workspace_root: Path) -> str:
     """AIPOS-F78B 件②: finalize 场地声明(project.json paths.finalize_mode, config.schema 声明表; 缺省 internal)。"""
     return str(_project_paths(workspace_root).get("finalize_mode") or "internal")
