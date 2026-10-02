@@ -243,11 +243,10 @@ def _write_record(
     while path.exists():
         n += 1
         path = records_dir / filename.replace(".md", f"-{n}.md")
-    fm_lines = ["---"]
-    for key in sorted(frontmatter):
-        fm_lines.append(f"{key}: {frontmatter[key]}")
-    fm_lines.append("---")
-    text = "\n".join(fm_lines) + "\n\n" + "\n".join(body_lines) + "\n"
+    # AIPOS-F87 件①: frontmatter 经单源 record_writer.render_markdown(safe_dump + 写后回读校验), 原逐行拼接退役; 键序仍按字母序。
+    from tools.aipos_cli.record_writer import render_markdown
+
+    text = render_markdown(frontmatter, "\n" + "\n".join(body_lines), sorted(frontmatter))
     path.write_text(text, encoding="utf-8")
     return path
 

@@ -109,14 +109,11 @@ def render_record_markdown(frontmatter: dict[str, Any]) -> str:
         body += f"- **dev_override_reason**: {frontmatter['dev_override_reason']}\n"
     if frontmatter.get("runtime_directory"):
         body += f"- **runtime_directory**: {frontmatter['runtime_directory']}\n"
-    fm_lines = ["---"]
-    for k, v in frontmatter.items():
-        if isinstance(v, str):
-            fm_lines.append(f"{k}: {v}")
-        else:
-            fm_lines.append(f"{k}: {json.dumps(v)}")
-    fm_lines.append("---")
-    return "\n".join(fm_lines) + "\n\n" + body + "\n"
+    # AIPOS-F87 件①: frontmatter 经单源 record_writer.render_markdown(safe_dump + 写后回读校验), 原逐行 f"{k}: {v}" 拼接退役
+    # (值含 `**`/冒号/`#` 时曾可写出不可解析的记录)。字段序 = build_deployment_record 的插入序。
+    from tools.aipos_cli.record_writer import render_markdown
+
+    return render_markdown(frontmatter, "\n" + body, list(frontmatter))
 
 
 def write_deployment_record(

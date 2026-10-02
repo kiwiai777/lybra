@@ -6183,12 +6183,19 @@ def _auto_generate_decision_log_pointer(
             return False
         
         # 生成指针内容（固化命名·一句话+decided_by+指向记录路径）
-        content = f"""---
-status: active
-decided_at: {now.isoformat().replace('+00:00', 'Z')}
-decision_type: auto_pointer
-auto_generated: true
----
+        # AIPOS-F87 件①: frontmatter 经单源 record_writer.render_frontmatter_block(原 f-string 手拼退役)
+        from tools.aipos_cli.record_writer import render_frontmatter_block
+
+        pointer_fm = render_frontmatter_block(
+            {
+                "status": "active",
+                "decided_at": now.isoformat().replace('+00:00', 'Z'),
+                "decision_type": "auto_pointer",
+                "auto_generated": True,
+            },
+            ["status", "decided_at", "decision_type", "auto_generated"],
+        )
+        content = pointer_fm + f"""
 
 ## {decision_summary}
 
@@ -6267,14 +6274,13 @@ def _write_fix_closure_derivation_record(
         "record_type",
     ]
     # 声明的必填字段逐项落 frontmatter(缺值的必填字段以空串落盘并保留键, 缺口可见)
-    fm_lines = [f"{k}: {fields.get(k, '')}" for k in required]
-    fm_lines.extend(f"{k}: {v}" for k, v in fields.items() if k not in required)
-    fm_text = "\n".join(fm_lines)
+    # AIPOS-F87 件①: 经单源 record_writer.render_markdown(safe_dump + 写后回读校验), 原逐行 f"{k}: {v}" 拼接退役
+    from tools.aipos_cli.record_writer import render_markdown
 
-    body = f"""---
-{fm_text}
----
-# Fix Closure Derivation Record: {fix_task_id}
+    fm_fields: dict[str, Any] = {k: fields.get(k, "") for k in required}
+    fm_fields.update({k: v for k, v in fields.items() if k not in required})
+
+    body_text = f"""# Fix Closure Derivation Record: {fix_task_id}
 
 fix卡 close(PASS族)触发 `fix_card_closure` 级联: 为原卡派生复审卡(卡号模式见声明 revision_card_numbering)。
 
@@ -6286,6 +6292,7 @@ fix卡 close(PASS族)触发 `fix_card_closure` 级联: 为原卡派生复审卡(
 
 本记录为门生记录(append-only), 由 queue_close 级联自动写入;手写件会被 sweep 隔离。
 """
+    body = render_markdown(fm_fields, body_text, list(fm_fields))
     # AIPOS-F64: 统一写入器
     from tools.aipos_cli.record_writer import write_records_atomic
     write_result = write_records_atomic(
@@ -7257,15 +7264,16 @@ def amend_task(
         amendment_filename = f"amendment_{task.get('task_id')}_{amendment_timestamp.replace(':', '').replace('-', '')}_{_slug(actor_text)}.md"
         amendment_path = amendments_dir / amendment_filename
         
-        amendment_markdown = f"""---
-record_type: amendment_record
-amendment_id: {amendment_id}
-task_id: {task.get('task_id')}
-amended_by: {actor_text}
-amended_at: {amendment_timestamp}
-amendment_type: {str(amendment_type or 'general').strip()}
-reason: {str(amendment_reason).strip()}
----
+        # AIPOS-F87 件①: frontmatter 经单源 record_writer.render_frontmatter_block(原 f-string 手拼退役:
+        # 理由含 `**`/冒号/`#` 时曾写出不可解析的修订记录)。
+        from tools.aipos_cli.record_writer import render_frontmatter_block
+
+        amendment_fm_order = ["record_type", "amendment_id", "task_id", "amended_by", "amended_at", "amendment_type", "reason"]
+        amendment_fm = render_frontmatter_block(
+            {key: amendment_record[key] for key in amendment_fm_order},
+            amendment_fm_order,
+        )
+        amendment_markdown = amendment_fm + f"""
 
 # Amendment Record: {task.get('task_id')}
 

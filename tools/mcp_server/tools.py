@@ -3967,16 +3967,13 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
         if reason:
             metadata["reason"] = reason
         
-        # Build markdown
-        lines = ["---"]
-        for key in ["record_type", "event_type", "task_id", "actor", "timestamp", "model_self_reported", "stage", "summary", "reason"]:
-            if key in metadata and metadata[key]:
-                value = metadata[key]
-                if any(char in str(value) for char in [":", "#", "[", "]", "{", "}", "\n"]) or str(value) != str(value).strip():
-                    lines.append(f"{key}: '{str(value).replace("'", "''")}'") 
-                else:
-                    lines.append(f"{key}: {value}")
-        lines.append("---")
+        # Build markdown — AIPOS-F87 件①: frontmatter 经单源 record_writer.render_markdown(safe_dump + 写后回读校验);
+        # 原逐行拼接 + 内联手写引号化退役(值以 `**` 开头等仍会写出不可解析的记录)。
+        from tools.aipos_cli.record_writer import render_markdown
+
+        event_order = ["record_type", "event_type", "task_id", "actor", "timestamp", "model_self_reported", "stage", "summary", "reason"]
+        event_fm = {key: metadata[key] for key in event_order if key in metadata and metadata[key]}
+        lines = []
         lines.append(f"# Task Progress Event: {event_type}")
         lines.append("")
         lines.append(f"Agent `{actor}` reported {event_type} for task `{task_id}` at {timestamp}.")
@@ -3997,7 +3994,7 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
         lines.append("Gate records only; it does not maintain online/offline state or judge timeouts.")
         lines.append("")
         
-        event_file.write_text("\n".join(lines), encoding="utf-8")
+        event_file.write_text(render_markdown(event_fm, "\n".join(lines), event_order), encoding="utf-8")
         
         return _tool_result({
             "ok": True,

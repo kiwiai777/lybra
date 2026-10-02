@@ -58,19 +58,14 @@ def _slugify(text: str) -> str:
 
 
 def _render_frontmatter(fields: dict[str, Any]) -> str:
-    """渲染 YAML frontmatter。"""
-    lines = ["---"]
-    for key, value in fields.items():
-        if value is None:
-            lines.append(f"{key}: null")
-        elif isinstance(value, bool):
-            lines.append(f"{key}: {'true' if value else 'false'}")
-        elif isinstance(value, (int, float)):
-            lines.append(f"{key}: {value}")
-        else:
-            lines.append(f"{key}: {value}")
-    lines.append("---")
-    return "\n".join(lines)
+    """渲染 YAML frontmatter 块(``---``…``---``)。
+
+    AIPOS-F87 件①: 经单源 record_writer.render_frontmatter_block(safe_dump + 写后回读校验), 原逐行 f"{key}: {value}" 拼接退役
+    (标题/理由类值含冒号、`**`、`#` 时曾写出不可解析的头)。字段序 = 声明模板的插入序。
+    """
+    from tools.aipos_cli.record_writer import render_frontmatter_block
+
+    return render_frontmatter_block(fields, list(fields))
 
 
 def add_decision(

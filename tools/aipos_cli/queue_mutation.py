@@ -9,6 +9,7 @@ from tools.aipos_cli.agent_profiles import actor_matches_task_actor
 from tools.aipos_cli.draft_validator import find_case_insensitive_path_collision
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.record_writer import (
+    CARD_FRONTMATTER_ORDER,
 
 
 
@@ -44,50 +45,8 @@ ALLOWED_TRANSITIONS = {
 }
 # AIPOS-348: reopen source states (explicit allowlist for "*" transitions)
 REOPEN_SOURCE_STATES = ("blocked", "completed")
-FRONTMATTER_ORDER = [
-    "task_id",
-    "title",
-    "project",
-    "task_type",
-    "assigned_to",
-    "agent_instance",
-    "context_bundle",
-    "task_mode",
-    "task_class",
-    "complexity_note",
-    "model_tier",
-    "priority",
-    "status",
-    "created_by",
-    "needs_owner",
-    "output_target",
-    "artifact_policy",
-    "session_policy",
-    "context_isolation",
-    "artifact_scope",
-    "memory_scope",
-    "polling_mode",
-    "claim_policy",
-    "report_mode",
-    "recurrence",
-    "claim_id",
-    "claimed_by",
-    "claimed_at",
-    "active_session_id",
-    "last_session_id",
-    "blocked_by",
-    "blocked_at",
-    "block_reason",
-    "completed_by",
-    "completed_at",
-    "artifact_links",
-    "reopened_by",
-    "reopened_at",
-    "reopen_reason",
-    "withdrawn_by",
-    "withdrawn_at",
-    "withdrawal_reason",
-]
+# AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(本名保留为别名, 供既有调用方)。
+FRONTMATTER_ORDER = CARD_FRONTMATTER_ORDER
 
 
 def _utc_now() -> str:
@@ -98,22 +57,6 @@ def _slug(text: str) -> str:
     value = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return re.sub(r"-{2,}", "-", value) or "actor"
 
-
-def _yaml_scalar(value: Any) -> str:
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if value is None:
-        return ""
-    if isinstance(value, (int, float)):
-        return str(value)
-    text = str(value)
-    if text == "":
-        return ""
-    if any(char in text for char in [":", "#", "[", "]", "{", "}", "\n"]) or text != text.strip():
-        return "'" + text.replace("'", "''") + "'"
-    return text
 
 
 def _normalize_value(value: Any) -> Any:

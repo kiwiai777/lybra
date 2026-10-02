@@ -21,7 +21,11 @@ from tools.aipos_cli.draft_validator import (
     validate_draft_metadata,
 )
 from tools.aipos_cli.records import expected_publish_record_path
-from tools.aipos_cli.record_writer import render_markdown as _render_markdown_single_source
+from tools.aipos_cli.record_writer import (
+    CARD_FRONTMATTER_ORDER,
+    render_frontmatter_block,
+    render_markdown as _render_markdown_single_source,
+)
 from tools.aipos_cli.task_complexity import validate_task_complexity
 
 # AIPOS-R8C: card_policy placeholder fields for draft create
@@ -111,70 +115,18 @@ DEFAULT_TEMPLATE_VALUES = {
     "recurrence": "none",
 }
 
-FRONTMATTER_ORDER = [
-    "task_id",
-    "title",
-    "project",
-    "task_type",
-    "assigned_to",
-    "agent_instance",
-    "context_bundle",
-    "task_mode",
-    "task_class",
-    "complexity_note",
-    "model_tier",
-    "priority",
-    "status",
-    "created_by",
-    "needs_owner",
-    "output_target",
-    "artifact_policy",
-    "polling_mode",
-    "claim_policy",
-    "report_mode",
-    "recurrence",
-    "draft_id",
-    "draft_status",
-    "draft_created_by",
-    "draft_created_at",
-    "draft_updated_at",
-    "draft_publish_target",
-    "draft_validation_summary",
-]
+# AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(原本模块另有 28 键一份, 已退役)。
+FRONTMATTER_ORDER = CARD_FRONTMATTER_ORDER
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _yaml_scalar(value: Any) -> str:
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if value is None:
-        return ""
-    if isinstance(value, (int, float)):
-        return str(value)
-    text = str(value)
-    if text == "":
-        return ""
-    if any(char in text for char in [":", "#", "[", "]", "{", "}", "\n"]) or text != text.strip():
-        return "'" + text.replace("'", "''") + "'"
-    return text
-
 
 def _record_frontmatter(metadata: dict[str, Any], order: list[str]) -> str:
-    """AIPOS-F46: 收敛到 F22B 单源 (record_writer.render_markdown)."""
-    # render_markdown adds body, but _record_frontmatter only needs the frontmatter block
-    # We pass empty body and strip trailing content
-    result = _render_markdown_single_source(metadata, "", order)
-    # render_markdown returns "---\nyaml\n---\nbody\n"; we want just "---\nyaml\n---\n"
-    # Extract just the frontmatter block
-    parts = result.split("---\n", 2)
-    if len(parts) >= 3:
-        return f"---\n{parts[1]}---\n"
-    return result
+    """AIPOS-F46/F87: 收敛到单源 record_writer.render_frontmatter_block(原以 render_markdown 渲染后再 split 截取, 已退役)。"""
+    return render_frontmatter_block(metadata, order) + "\n"
 
 
 def render_markdown_task_card(metadata: dict[str, Any], body: str) -> str:

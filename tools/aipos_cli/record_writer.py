@@ -137,8 +137,10 @@ def _stdlib_yaml_scalar(value: Any) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     # 字符串: 使用 json.dumps 输出双引号 YAML 标量
+    # AIPOS-F87 件①: ensure_ascii=False —— 默认 \uXXXX 转义不被 zerodep 回退解析器还原(中文值会被写坏),
+    # 写后回读校验(_verify_frontmatter_roundtrip)对此 fail-closed; 原样输出非 ASCII 字符才可逐字还原。
     text = str(value)
-    return json.dumps(text)
+    return json.dumps(text, ensure_ascii=False)
 
 
 def _self_check_yaml(yaml_text: str, ordered_meta: dict[str, Any]) -> None:
@@ -178,24 +180,23 @@ def _self_check_yaml(yaml_text: str, ordered_meta: dict[str, Any]) -> None:
                 )
 
 
-def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None = None) -> str:
-    """Render markdown with YAML frontmatter.
+class FrontmatterRoundtripError(ValueError):
+    """AIPOS-F87 件①: 写后回读校验失败 —— 渲染出的文本经产品读取口回读后与待写值不逐字一致, 拒写(不落盘)。"""
 
-    AIPOS-F22B: frontmatter 一律经 YAML 序列化器 (safe_dump 或等价) 输出, 禁字符串拼接.
-    使用 yaml.safe_dump (PyYAML 可用时) 或 stdlib fallback.
 
-    AIPOS-F46: 末道自检——渲染后 safe_load 回读, 失败即报错拒写, 禁落坏卡.
-    """
+def _ordered_frontmatter(metadata: dict[str, Any], order: list[str] | None) -> dict[str, Any]:
     ordered_keys = [key for key in (order or []) if key in metadata]
     ordered_keys.extend(sorted(key for key in metadata if key not in ordered_keys))
-
     # 构建保持插入顺序的 dict (Python 3.7+ dict 有序)
-    ordered_meta: dict[str, Any] = {}
-    for key in ordered_keys:
-        ordered_meta[key] = _normalize_value(metadata[key])
+    return {key: _normalize_value(metadata[key]) for key in ordered_keys}
 
+
+def _dump_frontmatter_yaml(ordered_meta: dict[str, Any]) -> str:
+    """frontmatter YAML 文本(不含 --- 围栏)的唯一序列化实现(AIPOS-F22B/F46/F87 单源)。
+
+    主路径 yaml.safe_dump; PyYAML 缺席时走 stdlib 回退(zerodep 核心)。卡与记录的 frontmatter 一律经此, 禁逐行拼接写值。
+    """
     if yaml is not None:
-        # 主路径: 使用 yaml.safe_dump
         yaml_text = yaml.safe_dump(
             ordered_meta,
             sort_keys=False,
@@ -204,13 +205,10 @@ def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None
             width=1000000,  # 禁换行
         )
         # safe_dump 输出末尾有换行, 去除后再拼接
-        yaml_text = yaml_text.rstrip("\n")
-        # AIPOS-F46 末道自检
-        _self_check_yaml(yaml_text, ordered_meta)
-        return f"---\n{yaml_text}\n---\n{body.rstrip()}\n"
+        return yaml_text.rstrip("\n")
 
     # stdlib fallback: 逐行构建 (列表/嵌套映射复用原有逻辑, 标量使用 _stdlib_yaml_scalar)
-    lines = ["---"]
+    lines: list[str] = []
     for key, value in ordered_meta.items():
         if isinstance(value, list):
             if not value:
@@ -229,12 +227,123 @@ def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None
                 lines.append(f"  {sub_key}: {_stdlib_yaml_scalar(sub_val)}")
             continue
         lines.append(f"{key}: {_stdlib_yaml_scalar(value)}")
-    # AIPOS-F46 末道自检 (stdlib fallback path)
-    fallback_yaml_text = "\n".join(lines[1:-2])  # strip --- delimiters and body
-    _self_check_yaml(fallback_yaml_text, ordered_meta)
-    lines.extend(["---", body.rstrip(), ""])
     return "\n".join(lines)
 
+
+def _verify_frontmatter_roundtrip(rendered: str, ordered_meta: dict[str, Any]) -> None:
+    """AIPOS-F87 件① 写后回读校验: 把**即将落盘的完整文本**交给产品唯一读取口 parse_markdown_frontmatter 回读,
+    要求无解析告警、且全部字段值与待写值逐字一致(类型 + 值)。不一致 = FrontmatterRoundtripError, 调用方不落盘。
+
+    在写盘之前对同一字节串校验, 等价于「写后回读」且失败时不留坏文件(fail-closed, 不吞)。
+    """
+    parsed, _body, warnings = parse_markdown_frontmatter(rendered)
+    if warnings:
+        raise FrontmatterRoundtripError(
+            f"AIPOS-F87 写后回读校验失败: 产品读取口解析告警 {warnings}; 拒写(不落盘)"
+        )
+    if parsed != ordered_meta:
+        diffs = [
+            key
+            for key in sorted(set(parsed) | set(ordered_meta), key=str)
+            if parsed.get(key, object()) != ordered_meta.get(key, object())
+        ]
+        raise FrontmatterRoundtripError(
+            f"AIPOS-F87 写后回读校验失败: 字段 {diffs} 回读值与待写值不一致; 拒写(不落盘)"
+        )
+
+
+def render_frontmatter_block(metadata: dict[str, Any], order: list[str] | None = None) -> str:
+    """只渲染 frontmatter 块 ``---\\n<yaml>\\n---``(无正文、无末尾换行), 与 render_markdown 同一序列化与回读校验。
+
+    供「frontmatter 之后自行拼正文」的写入点使用(决策条目骨架 / RETURN 骨架 / 草稿记录头), 禁再逐行拼 key: value。
+    """
+    ordered_meta = _ordered_frontmatter(metadata, order)
+    yaml_text = _dump_frontmatter_yaml(ordered_meta)
+    _self_check_yaml(yaml_text, ordered_meta)
+    block = f"---\n{yaml_text}\n---"
+    _verify_frontmatter_roundtrip(block + "\n", ordered_meta)
+    return block
+
+
+def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None = None) -> str:
+    """Render markdown with YAML frontmatter.
+
+    AIPOS-F22B: frontmatter 一律经 YAML 序列化器 (safe_dump 或等价) 输出, 禁字符串拼接.
+    使用 yaml.safe_dump (PyYAML 可用时) 或 stdlib fallback.
+
+    AIPOS-F46: 末道自检——渲染后 safe_load 回读, 失败即报错拒写, 禁落坏卡.
+    AIPOS-F87 件①: 再以产品读取口回读完整文本, 全部字段逐字还原才放行(_verify_frontmatter_roundtrip)。
+    字段顺序: order 内的键按 order, 其余按字母序(既有格式, 避免全量重排)。
+    """
+    ordered_meta = _ordered_frontmatter(metadata, order)
+    yaml_text = _dump_frontmatter_yaml(ordered_meta)
+    # AIPOS-F46 末道自检(F87 前 stdlib 回退分支误截掉末两行再自检, 现两路同一文本)
+    _self_check_yaml(yaml_text, ordered_meta)
+    rendered = f"---\n{yaml_text}\n---\n{body.rstrip()}\n"
+    _verify_frontmatter_roundtrip(rendered, ordered_meta)
+    return rendered
+
+
+def render_frontmatter_line(key: str, value: Any) -> str:
+    """AIPOS-F87 件②: 单个顶层标量字段的规整行(``key: <安全标量>``), 与 render_markdown 同一序列化。
+
+    state repair 对坏卡做保值规整时只重写解析失败的那一行, 用本函数产出该行(禁手写引号化)。产出非单行 = ValueError。
+    """
+    block = render_frontmatter_block({key: value}, [key])
+    lines = block.split("\n")
+    if len(lines) != 3:
+        raise ValueError(f"字段 {key} 的安全序列化不是单行(值含换行等), 不能做单行规整")
+    return lines[1]
+
+# AIPOS-F87 件①(复查报告 M9): 卡 frontmatter 字段序的唯一定义。原 queue_mutation.FRONTMATTER_ORDER(42 键)与
+# draft_writer.FRONTMATTER_ORDER(28 键)两份, 收为此一份; 取 queue_mutation 那份 = 落盘实况(真实队列 889 张中 874 张
+# 即此序, 其余 15 张为存量旧格式), 避免全量重排。列外的键按字母序排在其后(render_markdown 既有规则)。
+# 键集以 card.schema.json fields 为准; 本表中 card.schema 未声明的键(recurrence / blocked_* / reopen* / withdrawn_* 等)
+# 是 schema 侧缺口, 见 F87 RETURN「产品缺口」(schema/ 不在本卡车道)。
+CARD_FRONTMATTER_ORDER = [
+    "task_id",
+    "title",
+    "project",
+    "task_type",
+    "assigned_to",
+    "agent_instance",
+    "context_bundle",
+    "task_mode",
+    "task_class",
+    "complexity_note",
+    "model_tier",
+    "priority",
+    "status",
+    "created_by",
+    "needs_owner",
+    "output_target",
+    "artifact_policy",
+    "session_policy",
+    "context_isolation",
+    "artifact_scope",
+    "memory_scope",
+    "polling_mode",
+    "claim_policy",
+    "report_mode",
+    "recurrence",
+    "claim_id",
+    "claimed_by",
+    "claimed_at",
+    "active_session_id",
+    "last_session_id",
+    "blocked_by",
+    "blocked_at",
+    "block_reason",
+    "completed_by",
+    "completed_at",
+    "artifact_links",
+    "reopened_by",
+    "reopened_at",
+    "reopen_reason",
+    "withdrawn_by",
+    "withdrawn_at",
+    "withdrawal_reason",
+]
 
 
 CLAIM_FRONTMATTER_ORDER = [
@@ -1389,9 +1498,8 @@ def build_return_skeleton_markdown(task_id: str) -> str:
     }
     frontmatter = ""
     if fm_keys:
-        import json as _json
-
-        frontmatter = "---\n" + "\n".join(f"{k}: {_json.dumps(hints.get(k, '(待填写)'), ensure_ascii=False)}" for k in fm_keys) + "\n---\n"
+        # AIPOS-F87 件①: 骨架 frontmatter 经单源 render_frontmatter_block(原逐行 json.dumps 拼接退役)
+        frontmatter = render_frontmatter_block({k: hints.get(k, "(待填写)") for k in fm_keys}, list(fm_keys)) + "\n"
     return frontmatter + f"""# RETURN — {task_id}
 
 ## 一句话结论
