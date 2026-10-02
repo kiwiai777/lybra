@@ -5660,7 +5660,12 @@ def execute_dry_run(
             dry_run=False,
             actor=_actor_payload(actor_text),
             data=result,
-            summary={"task_id": result.get("task_id"), "moved": result.get("moved", False)},
+            # AIPOS-F88 件①: 门认领建卡工作树结果进 summary(建树失败 = worktree_error 明确拒因, 不再吞成 warning)
+            summary={
+                "task_id": result.get("task_id"),
+                "moved": result.get("moved", False),
+                **{k: result[k] for k in ("worktree_created", "worktree_path", "worktree_branch", "worktree_error") if k in result},
+            },
             planned_writes=list(result.get("planned_writes", [])) + planned_record_writes,
             planned_moves=list(result.get("planned_moves", [])),
             performed_writes=(list(result.get("planned_writes", [])) if result.get("wrote") else []) + record_performed_writes,

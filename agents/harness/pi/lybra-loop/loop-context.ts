@@ -9,8 +9,8 @@
  * 与 tools/loop_context.py 同构, 以 schema/conformance/ 夹具锁定一致性。
  */
 
-import { readFileSync, existsSync, realpathSync } from "node:fs";
-import { join, parse } from "node:path";
+import { readFileSync, existsSync, realpathSync, statSync } from "node:fs";
+import { join, parse, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 
 export interface LoopContext {
@@ -420,7 +420,7 @@ export class ConnectionResolver {
    * 解析 gate workspace (治理工作区语义)
    * 用途: loop/gate/queue/records 操作 — 队列、任务卡、records 都在治理工作区
    * Precedence: 显式参数 → .lybra/connection.json (workspace_root) → env仅覆盖
-   * AIPOS-R6P 靶③: **允许治理仓** (ai-project-os),不做路径校验
+   * AIPOS-R6P 靶③: **允许治理仓**,不做治理仓校验
    * AIPOS-R6Q 靶②: 真实现(工位 .lybra/connection.json → 项目配置 → env覆盖)
    */
   static resolveGateWorkspace(opts: {
@@ -458,24 +458,70 @@ export class ConnectionResolver {
   }
 
   /**
+   * AIPOS-F88 件②: 治理工作区「结构识别」—— TS 镜像, 与 Python 唯一实现
+   * tools/aipos_cli/workspace_config.py::has_workspace_queue 同判据(结构签名, 不看路径名; 换机器/目录名无关):
+   *   队列根是目录; 队列根 = <path>/project.json paths.queue_root(声明), 缺省取 config.schema
+   *   configuration_sources.project_json.schema.paths.queue_root.default(调用方经 declaredQueueRootDefault 读出后传入, 本模块不写死)。
+   * project.json 不可读/非 JSON = 告警 + 按声明缺省(与 Python project_paths 同语义)。
+   */
+  static isGovernanceWorkspace(path: string, queueRootDefault: string): boolean {
+    if (!queueRootDefault || !queueRootDefault.trim()) {
+      throw new Error("isGovernanceWorkspace: queueRootDefault 未提供(读 config.schema project_json.paths.queue_root.default)");
+    }
+    let queueRoot = queueRootDefault.trim();
+    const projectJson = join(path, "project.json");
+    if (existsSync(projectJson)) {
+      try {
+        const data = JSON.parse(readFileSync(projectJson, "utf-8"));
+        const declared = data && typeof data === "object" && data.paths && typeof data.paths === "object"
+          ? String(data.paths.queue_root ?? "").trim()
+          : "";
+        if (declared) queueRoot = declared;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`Warning: project.json unreadable at ${path}, using declared default queue_root: ${msg}`);
+      }
+    }
+    const queueDir = isAbsolute(queueRoot) ? queueRoot : join(path, queueRoot);
+    try {
+      return statSync(queueDir).isDirectory();
+    } catch {
+      return false; // 不存在 = 无队列结构(结构判据的「否」, 非错误)
+    }
+  }
+
+  /**
+   * AIPOS-F88 件②: 从 config.schema(调用方经 gate-client loadConfigSchema 读入)取队列根声明缺省, 缺 = 抛错(fail-closed)。
+   */
+  static declaredQueueRootDefault(configSchema: unknown): string {
+    const value = (configSchema as any)?.configuration_sources?.project_json?.schema?.paths?.schema?.queue_root?.default;
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error("config.schema.json configuration_sources.project_json.schema.paths.schema.queue_root.default 未声明");
+    }
+    return value.trim();
+  }
+
+  /**
    * 解析 code repo (产品仓语义)
    * 用途: finalize/worktree/git 操作 — 需要产品仓路径,不能是治理仓
    * Precedence: 显式参数 → .lybra/connection.json → env仅覆盖
-   * AIPOS-R6H + R6P 靶③: **拒绝治理仓** (ai-project-os)
+   * AIPOS-R6H + R6P 靶③: **拒绝治理仓**; AIPOS-F88 件②: 治理仓识别改为结构判据 isGovernanceWorkspace(同 Python
+   * has_workspace_queue), 原路径子串判定退役(换机器失效, 且误判路径含治理目录名的产品仓)。
    * AIPOS-R6Q 靶②: 真实现(工位 .lybra/connection.json → 项目配置 → env覆盖)
    */
   static resolveCodeRepo(opts: {
     env?: Record<string, string | undefined>;
     explicitRoot?: string;
+    queueRootDefault: string;
   }): string | null {
     const env = opts.env ?? process.env;
+    const isGov = (p: string) => this.isGovernanceWorkspace(p, opts.queueRootDefault);
 
     // 显式参数
     if (opts.explicitRoot) {
-      // 校验不是治理仓
-      if (opts.explicitRoot.includes("ai-project-os")) {
+      if (isGov(opts.explicitRoot)) {
         throw new Error(
-          `code repo cannot be governance repo (ai-project-os): ${opts.explicitRoot}. ` +
+          `code repo cannot be governance workspace (结构识别: 含声明的队列根): ${opts.explicitRoot}. ` +
           "Use product repo path for finalize/worktree operations."
         );
       }
@@ -488,15 +534,10 @@ export class ConnectionResolver {
       try {
         const config = this.loadConnectionConfig(lybraDir);
         const workspaceRoot = config.workspace_root;
-        if (workspaceRoot) {
-          // 校验不是治理仓
-          if (workspaceRoot.includes("ai-project-os")) {
-            // 治理仓路径跳过,不抛错(因为可能是审计工位等合法治理仓工位)
-            // 继续尝试 env
-          } else {
-            return workspaceRoot;
-          }
+        if (workspaceRoot && !isGov(workspaceRoot)) {
+          return workspaceRoot;
         }
+        // 治理工作区跳过,不抛错(可能是审计工位等合法治理仓工位), 继续尝试 env
       } catch {
         // 自发现失败, 继续
       }
@@ -505,10 +546,9 @@ export class ConnectionResolver {
     // env 覆盖
     const envRoot = env.LYBRA_WORKSPACE_ROOT?.trim();
     if (envRoot) {
-      // AIPOS-R6H: 校验不是治理仓 (治理仓路径通常含 ai-project-os)
-      if (envRoot.includes("ai-project-os")) {
+      if (isGov(envRoot)) {
         throw new Error(
-          `code repo cannot be governance repo (ai-project-os): ${envRoot}. ` +
+          `code repo cannot be governance workspace (结构识别: 含声明的队列根): ${envRoot}. ` +
           "Use product repo path for finalize/worktree operations."
         );
       }

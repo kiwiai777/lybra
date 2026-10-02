@@ -20,7 +20,18 @@
 set -euo pipefail
 
 # ── paths ───────────────────────────────────────────────────────────────
-PRODUCT_REPO="/home/kiwi/projects/lybra"
+# AIPOS-F88 件③: 产品仓根不写死——= 本脚本所在 git 仓的主检出(git common dir 的上级; 从卡工作树调用也落主检出),
+# 与 Python product_repo_root() → schema_loader.code_repo_schema_root「运行代码所在仓」同语义。不在 git 仓内 = 拒。
+_resolve_product_repo() {
+    local script_dir common_dir
+    script_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+    if ! common_dir="$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+        echo "[lybra-deploy] ERROR: 本脚本不在 git 仓内($script_dir), 无法推导产品仓根; 出口: 从产品仓 tools/lybra-deploy 调用" >&2
+        exit 1
+    fi
+    dirname "$common_dir"
+}
+PRODUCT_REPO="$(_resolve_product_repo)"
 DEPLOY_DIR="$PRODUCT_REPO/.deploy"
 RELEASES_DIR="$DEPLOY_DIR/releases"
 CURRENT_LINK="$DEPLOY_DIR/current"
@@ -54,16 +65,25 @@ parse_authorization_args() {
 }
 
 resolve_governance_root() {
-    # 从 connection.json 的 workspace_root 派生治理工作区根(单一源)。
+    # AIPOS-F88 件③: 治理工作区根读产品 CLI 输出(`lybra workspace roots --field governance_root` = workspace_config.
+    # governance_workspace_root: 显式 --governance-root → .lybra/connection.json 声明 → 结构识别/全局 home_root+active_project),
+    # 原写死的 lybra 治理根 connection.json 机器路径退役。解析不到 = 拒(带出口)。
     if [[ -n "$GOVERNANCE_ROOT" ]]; then
         return 0
     fi
-    local conn_json="/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json"
-    GOVERNANCE_ROOT=$(python3 -c "import json; print(json.load(open('$conn_json')).get('workspace_root',''))" 2>/dev/null || echo "")
+    if ! GOVERNANCE_ROOT=$(cd "$PRODUCT_REPO" && python3 -m tools.aipos_cli.aipos_cli workspace roots --field governance_root); then
+        GOVERNANCE_ROOT=""
+    fi
     if [[ -z "$GOVERNANCE_ROOT" ]]; then
-        err "Cannot resolve governance root (pass --governance-root)"
+        err "Cannot resolve governance root (lybra workspace roots 拒因见上; pass --governance-root)"
         exit 1
     fi
+}
+
+# AIPOS-F88 件③: 门服务 connection.json = <治理工作区根>/.lybra/connection.json(随 resolve_governance_root, 禁写死)。
+# 先在当前 shell 调 resolve_governance_root(设全局 GOVERNANCE_ROOT), 再取本路径。
+gate_connection_json() {
+    echo "$GOVERNANCE_ROOT/.lybra/connection.json"
 }
 
 # AIPOS-F82 件③: 活门校验用的 executor token 走产品单源 token_resolver
@@ -245,7 +265,8 @@ cmd_verify() {
     # Check 2: Live gate HTTP endpoint
     log "Querying live gate via HTTP..."
     local conn_json mcp_port executor_token
-    conn_json="/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json"
+    resolve_governance_root
+    conn_json="$(gate_connection_json)"
     mcp_port=$(python3 -c "import json; print(json.load(open('$conn_json'))['mcp']['port'])" 2>/dev/null || echo "7118")
     if ! executor_token=$(resolve_executor_token "$conn_json"); then
         err "✗ Cannot resolve executor token for live gate check (token_resolver 拒因见上; 只列指纹)"
@@ -485,7 +506,9 @@ EOF
     log "Step 4/5: Graceful handoff (AIPOS-356 — zero-downtime deploy)..."
 
     local service_file="$HOME/.config/systemd/user/$GATE_SERVICE"
-    local conn_json="/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json"
+    resolve_governance_root
+    local conn_json
+    conn_json="$(gate_connection_json)"
     local env_file="$HOME/.config/lybra/pi-key.env"
 
     if [[ ! -f "$service_file" ]]; then
@@ -624,7 +647,8 @@ except Exception:
     # ── AIPOS-369 S2: Live gate endpoint verification ──────────────────
     log "  Verifying live gate is running the deployed commit..."
     local mcp_port conn_json executor_token expected_commit
-    conn_json="/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json"
+    resolve_governance_root
+    conn_json="$(gate_connection_json)"
     mcp_port=$(python3 -c "import json; print(json.load(open('$conn_json'))['mcp']['port'])" 2>/dev/null || echo "7118")
     if ! executor_token=$(resolve_executor_token "$conn_json"); then
         err "✗ Cannot resolve executor token for live gate verification (token_resolver 拒因见上; 只列指纹)"
@@ -799,6 +823,14 @@ _prune_releases() {
     fi
 }
 
+# ── roots (AIPOS-F88 件③: 只读, 不部署不重启, 供靶场与活体核对根路径解析) ──
+cmd_roots() {
+    resolve_governance_root
+    echo "product_repo:     $PRODUCT_REPO"
+    echo "governance_root:  $GOVERNANCE_ROOT"
+    echo "connection_json:  $(gate_connection_json)"
+}
+
 # ── main ────────────────────────────────────────────────────────────────
 main() {
     local cmd="${1:-deploy}"
@@ -812,6 +844,7 @@ main() {
         rollback)  cmd_rollback ;;
         validate)  cmd_validate "$@" ;;
         verify)    cmd_verify ;;
+        roots)     cmd_roots ;;
         -h|--help|help)
             echo "Usage: lybra-deploy [command] [authorization]"
             echo ""
@@ -821,13 +854,14 @@ main() {
             echo "  rollback   Revert to previous release"
             echo "  validate   Check if working tree can be imported (no deploy)"
             echo "  verify     Verify deployment integrity: current==HEAD + live gate HTTP check (AIPOS-369)"
+            echo "  roots      Show resolved product repo / governance root / gate connection.json (read-only, AIPOS-F88)"
             echo ""
             echo "Authorization (deploy only, REQUIRED — AIPOS-R6S 大项B② 缺授权即拒):"
             echo "  --verdict-ref <id>   Audited deploy: PASS audit verdict id (deployment_provenance=audited)"
             echo "  --dev-override       Unaudited dev deploy (deployment_provenance=dev_override)"
             echo "  --reason <text>      Required when using --dev-override"
             echo "  --actor <name>       Deploying actor (default: git user.name)"
-            echo "  --governance-root <p>  Governance workspace root (default: from connection.json)"
+            echo "  --governance-root <p>  Governance workspace root (default: lybra workspace roots --field governance_root)"
             echo ""
             echo "AIPOS-333: gate runtime isolation from working tree."
             echo "AIPOS-369: deployment integrity verification."
@@ -835,7 +869,7 @@ main() {
             ;;
         *)
             err "Unknown command: $cmd"
-            echo "Usage: lybra-deploy [deploy|status|rollback|validate|verify] [--verdict-ref|--dev-override ...]" >&2
+            echo "Usage: lybra-deploy [deploy|status|rollback|validate|verify|roots] [--verdict-ref|--dev-override ...]" >&2
             exit 2
             ;;
     esac

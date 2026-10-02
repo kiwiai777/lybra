@@ -440,11 +440,10 @@ def resolve_next_step(
     task_fields["task_id"] = task_id
 
     # Resolve collaboration profile
-    project_json = workspace_root / "project.json"
-    # Also check under 2_projects/lybra/ structure
-    if not project_json.is_file():
-        project_json = workspace_root / "2_projects" / "lybra" / "project.json"
-    collab_profile = resolve_collaboration_profile(project_json)
+    # AIPOS-F88 件③: project.json 只在治理根自身(workspace_config.project_json_path), 原按 lybra 布局回退退役
+    from tools.aipos_cli.workspace_config import project_json_path
+
+    collab_profile = resolve_collaboration_profile(project_json_path(workspace_root))
 
     # Resolve gate chain
     chain = resolve_gate_chain(collab_profile, task_fields)
@@ -603,10 +602,10 @@ def resolve_next_step_with_profile(
     if collaboration_profile_override is not None:
         collab_profile = collaboration_profile_override
     else:
-        project_json = workspace_root / "project.json"
-        if not project_json.is_file():
-            project_json = workspace_root / "2_projects" / "lybra" / "project.json"
-        collab_profile = resolve_collaboration_profile(project_json)
+        # AIPOS-F88 件③: project.json 只在治理根自身(workspace_config.project_json_path), 原按 lybra 布局回退退役
+        from tools.aipos_cli.workspace_config import project_json_path
+
+        collab_profile = resolve_collaboration_profile(project_json_path(workspace_root))
 
     chain = resolve_gate_chain(collab_profile, task_fields)
     status = _infer_task_status(workspace_root, task_id)

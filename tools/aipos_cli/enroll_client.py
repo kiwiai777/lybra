@@ -466,18 +466,20 @@ def is_governance_workspace(path: Path, governance_root: str | None = None) -> b
 
     判据(任一命中即治理工作区):
     ① 目标路径绝对化后 == 自包含码内嵌的 governance_root
-    ② 目标下存在 5_tasks/queue 目录(治理仓结构签名)
+    ② 治理仓结构签名(AIPOS-F88 件②: 委托 workspace_config.has_workspace_queue 唯一结构判据, 读声明的队列根, 不看路径名)
     工位目录(pi harness 目录)不含这些结构 —— 历史实录: 误写把治理仓 .lybra/role
     污染成 auditor 身份(第九坑)。
     """
+    from tools.aipos_cli.workspace_config import has_workspace_queue
+
     target = Path(path).resolve()
     if governance_root:
         try:
             if target == Path(governance_root).expanduser().resolve():
                 return True
-        except (OSError, RuntimeError):
-            pass
-    return (target / "5_tasks" / "queue").is_dir()
+        except (OSError, RuntimeError) as exc:
+            print(f"Warning: governance_root {governance_root!r} 不可解析, 仅按结构签名判定: {exc}", file=sys.stderr)
+    return has_workspace_queue(target)
 
 
 def _resolve_role_class_for_guard(role: str, workspace_root: Path) -> str:

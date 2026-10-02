@@ -11,7 +11,7 @@
  *   或放进 .pi/extensions/ 经项目信任后自动发现
  *
  * 配置(env,均有默认):
- *   LYBRA_WORKSPACE_ROOT  gate workspace 根(默认 ~/ai-project-os/2_projects/lybra)
+ *   LYBRA_WORKSPACE_ROOT  gate workspace 根(显式覆盖; 缺省 = 工位 .lybra/connection.json 声明, AIPOS-F88)
  *   LYBRA_AGENT_INSTANCE  本实例名(校验 claim 归属;默认 exec.lybra.kiwiai-dev)
  *   PI_CONNECTOR_DIR      binding + 写账目录(默认 ~/.pi/agent/connector)
  */
@@ -21,9 +21,15 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getActiveClaim } from "../claim-check.ts";
 import { appendWriteOp, type WriteOpEntry } from "../write-ledger.ts";
+import { ConnectionResolver } from "../../../agents/harness/pi/lybra-loop/loop-context.ts";
 
 const HOME = process.env.HOME || "/tmp";
-const WORKSPACE = process.env.LYBRA_WORKSPACE_ROOT || `${HOME}/ai-project-os/2_projects/lybra`;
+// AIPOS-F88 件③: 治理工作区根走既有 TS 单源 ConnectionResolver.resolveGateWorkspace(显式 env → 工位 .lybra/connection.json
+// workspace_root; 与 Python workspace_config.governance_workspace_root 前两级同序), 原写死的 lybra 治理根机器路径
+// 回落退役; 解析不到 = null → 检查点一律阻断写并给出口(fail-closed)。
+const WORKSPACE: string | null = ConnectionResolver.resolveGateWorkspace({ explicitRoot: process.env.LYBRA_WORKSPACE_ROOT?.trim() || undefined });
+const WORKSPACE_UNRESOLVED =
+  "治理工作区根不可解析(无 LYBRA_WORKSPACE_ROOT, 工位 .lybra/connection.json 亦无 workspace_root 声明); 出口: 在工位执行 lybra sync/enroll 写声明, 或显式设 LYBRA_WORKSPACE_ROOT";
 const AGENT = process.env.LYBRA_AGENT_INSTANCE || "exec.lybra.kiwiai-dev";
 const CONNECTOR_DIR = process.env.PI_CONNECTOR_DIR || `${HOME}/.pi/agent/connector`;
 const BINDINGS_DIR = join(CONNECTOR_DIR, "bindings");
@@ -71,6 +77,9 @@ function checkpoint(ctx: any): { allow: boolean; taskId?: string; reason: string
   if (!taskId) {
     return { allow: false, reason: `no active claim for pi session "${key}" — bind via /connector-bind <task_id> first` };
   }
+  if (!WORKSPACE) {
+    return { allow: false, taskId, reason: WORKSPACE_UNRESOLVED };
+  }
   const claim = getActiveClaim(WORKSPACE, taskId, AGENT);
   if (claim.active) {
     return { allow: true, taskId, reason: `active claim ${claim.claimId}`, claimPath: claim.sessionRecordPath };
@@ -117,6 +126,10 @@ export default function (pi: ExtensionAPI) {
       const taskId = (args || "").trim();
       if (!taskId) {
         ctx.ui.notify("用法:/connector-bind <task_id>", "warn");
+        return;
+      }
+      if (!WORKSPACE) {
+        ctx.ui.notify(`绑定失败:${WORKSPACE_UNRESOLVED}`, "error");
         return;
       }
       const claim = getActiveClaim(WORKSPACE, taskId, AGENT);

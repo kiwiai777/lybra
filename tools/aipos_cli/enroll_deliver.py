@@ -8,7 +8,7 @@
 2. 自动exchange换取token
 3. 落.lybra/配置(connection.json + role文件统一JSON形状)
 4. 调用distribute_tools分发工具/技能/契约
-5. 校验workspace_root不是治理仓(拒绝ai-project-os路径)
+5. 校验workspace_root不是治理仓(AIPOS-F88: 结构识别, 不看路径名)
 6. 支持同机直写/跨机SSH分发
 
 Usage:
@@ -138,7 +138,11 @@ def validate_workspace_root(workspace_root: str, role: str) -> None:
         ValueError: 工位角色类在治理仓时拒绝
     """
     role_class = _get_role_class(role, workspace_root)
-    is_governance = "ai-project-os" in workspace_root
+    # AIPOS-F88 件②: 治理仓识别 = 唯一结构判据(enroll_client.is_governance_workspace → workspace_config.has_workspace_queue),
+    # 不看路径名(原路径子串判定退役: 换机器目录名不同即失效, 且把路径里恰含治理目录名的产品仓误判为治理仓)
+    from tools.aipos_cli.enroll_client import is_governance_workspace
+
+    is_governance = is_governance_workspace(Path(workspace_root).expanduser())
     
     # 顾问角色类:允许治理仓,也允许工位(任何路径都通过)
     if role_class in ("planner", "advisor"):
@@ -147,7 +151,7 @@ def validate_workspace_root(workspace_root: str, role: str) -> None:
     # 工位角色类(executor/auditor)+其他角色:拒绝治理仓
     if is_governance:
         raise ValueError(
-            f"workspace_root cannot be governance repo (ai-project-os) for role class '{role_class}': {workspace_root}. "
+            f"workspace_root cannot be governance repo (结构识别: 含声明的队列根) for role class '{role_class}': {workspace_root}. "
             "Use product repo or agent workstation path. "
             "(Only planner/advisor roles may use governance workspace.)"
         )
@@ -471,7 +475,7 @@ def main() -> int:
     )
     parser.add_argument("--role", required=True, help="Role name (executor/auditor/advisor)")
     parser.add_argument("--instance", help="Agent instance (e.g., exec.lybra.mac1)")
-    parser.add_argument("--target-workspace", required=True, help="Target workspace root (cannot be ai-project-os)")
+    parser.add_argument("--target-workspace", required=True, help="Target workspace root (cannot be a governance workspace)")
     parser.add_argument("--target-harness", required=True, help="Target harness root (e.g., ~/kiwiai-pi/lybra-executor)")
     parser.add_argument("--gate-url", required=True, help="Gate MCP URL")
     parser.add_argument("--owner-policy-ref", required=True, help="Owner policy reference")

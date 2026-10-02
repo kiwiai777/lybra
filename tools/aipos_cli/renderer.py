@@ -56,6 +56,11 @@ def render_queue_mutation_text(result: dict[str, Any]) -> str:
     if result.get("blocking_reasons"):
         lines.append("Blocking Reasons:")
         lines.extend(f"- {reason}" for reason in result["blocking_reasons"])
+    # AIPOS-F88 件①: 认领建卡工作树结果单列(建树失败 = 明确拒因, 不混进 warnings)
+    if result.get("worktree_created"):
+        lines.append(f"Worktree: {result.get('worktree_path')} (branch {result.get('worktree_branch')})")
+    elif result.get("worktree_error"):
+        lines.append(f"✗ 卡工作树未建立(认领已落盘): {result.get('worktree_error')}")
     if result.get("warnings"):
         lines.append("Warnings:")
         lines.extend(f"- {warning}" for warning in result["warnings"])

@@ -802,33 +802,35 @@ def mutate_queue_task(
     result["wrote"] = True
     result["moved"] = True
     
-    # AIPOS-R5A: claim 时创建 worktree (仅 code 任务)
+    # AIPOS-R5A + F88 件①: claim 时建卡工作树(仅 code 任务)——委托全产品唯一建树实现 next_resolver._ensure_worktree
+    # (落点 = card_worktree_location, 分支 = N5 branch_pattern 声明; 与 next --run / my-tasks 开工面同一函数)。
+    # 原 WorktreeManager.from_workspace_config 第二实现(读治理根 .lybra/config.json、缺则把治理根当产品仓、路径小写、
+    # 分支写死、路径子串判治理仓)退役。建树失败 = 认领结果带 worktree_created=False + worktree_error 明确拒因
+    # (不再吞成 warning; 认领本身已落盘, 不回滚——与 next --run「claim 成功但 worktree 失败」同语义, my-tasks 据此排除该卡)。
     if action == RecordType.CLAIM:
         task_mode = updated_metadata.get("task_mode", "")
         if task_mode == "code":
-            try:
-                from tools.worktree_manager import WorktreeManager
-                wt_manager = WorktreeManager.from_workspace_config(repo_root)
-                task_id_val = str(updated_metadata.get("task_id", ""))
-                worktree_path, branch_name = wt_manager.create_worktree(task_id_val)
-                
+            from tools.aipos_cli.next_resolver import _ensure_worktree
+
+            task_id_val = str(updated_metadata.get("task_id", ""))
+            built = _ensure_worktree(repo_root, task_id_val, card_frontmatter=dict(updated_metadata))
+            if built.get("ok"):
                 # 更新卡片的 worktree 字段
-                updated_metadata["active_worktree_path"] = str(worktree_path)
-                updated_metadata["active_worktree_branch"] = branch_name
-                
+                updated_metadata["active_worktree_path"] = str(built["worktree_path"])
+                updated_metadata["active_worktree_branch"] = str(built["branch"])
+
                 # 重新渲染并写入
                 rendered_markdown = render_task_markdown(updated_metadata, source_body)
                 target_path.write_text(rendered_markdown, encoding="utf-8")
-                
+
                 result["updated_frontmatter"] = updated_metadata
                 result["worktree_created"] = True
-                result["worktree_path"] = str(worktree_path)
-                result["worktree_branch"] = branch_name
-            except Exception as exc:
-                # worktree 创建失败不阻塞 claim，记录警告
-                result["warnings"].append(f"Worktree creation failed: {exc}")
+                result["worktree_path"] = str(built["worktree_path"])
+                result["worktree_branch"] = str(built["branch"])
+            else:
                 result["worktree_created"] = False
-    
+                result["worktree_error"] = str(built.get("message") or "worktree 建立失败(无拒因原文)")
+
     return result
 
 

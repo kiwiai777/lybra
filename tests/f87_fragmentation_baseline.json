@@ -3,12 +3,12 @@
  "source_report": "governance/research/2026-10-02-fragmentation-audit.md(条目号 = 该报告总表 #)",
  "fixture": "tests/test_aipos_f87_fragmentation_ratchet.py",
  "fingerprint": "sha1(行文本 strip 后 utf-8)前 12 位",
- "baseline_commit_base": "main 2924041 + card/AIPOS-F87",
- "total": 119,
+ "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增)",
+ "total": 87,
  "invariants": {
   "a": {
    "rule": "产品代码不出现写死的实例名/机器名/home 路径/治理根路径/信封 id: \\.lybra\\.kiwiai-dev|kiwiai-dev|/home/kiwi|~/projects/lybra|2_projects/lybra|pol_lybra_",
-   "count": 82,
+   "count": 55,
    "entries": [
     {
      "file": "agents/harness/pi/lybra-loop/lybra-loop.ts",
@@ -88,60 +88,11 @@
      "text": "Owner ruling: no hardcoded envelope IDs (pol_lybra_dev_1 is stale)."
     },
     {
-     "file": "tools/aipos_cli/advisor_pump.py",
-     "line": 1362,
-     "fp": "de5d5c5945cc",
-     "item": "H4",
-     "text": "help=\"Lybra workspace root (governance repo, e.g., ~/ai-project-os/2_projects/lybra)\""
-    },
-    {
-     "file": "tools/aipos_cli/advisor_pump.py",
-     "line": 1368,
-     "fp": "3b15a34d082b",
-     "item": "H3",
-     "text": "help=\"Product repo root (default: ~/projects/lybra)\""
-    },
-    {
-     "file": "tools/aipos_cli/agent_launch_check.py",
-     "line": 893,
-     "fp": "152166213545",
-     "item": "H3",
-     "text": "parser.add_argument(\"--product-repo\", type=Path, help=\"Product repo root (default: ~/projects/lybra)\")"
-    },
-    {
-     "file": "tools/aipos_cli/agent_supervise.py",
-     "line": 619,
-     "fp": "152166213545",
-     "item": "H3",
-     "text": "parser.add_argument(\"--product-repo\", type=Path, help=\"Product repo root (default: ~/projects/lybra)\")"
-    },
-    {
      "file": "tools/aipos_cli/agent_supervise.py",
      "line": 629,
      "fp": "ec1049410d20",
      "item": "H5",
      "text": "parser.add_argument(\"--actor\", help=\"Agent instance name (for death reporting, e.g., exec.lybra.kiwiai-dev)\")"
-    },
-    {
-     "file": "tools/aipos_cli/aipos_cli.py",
-     "line": 1165,
-     "fp": "19a4ca0586a5",
-     "item": "H3",
-     "text": "_supervise_parser.add_argument(\"--product-repo\", help=\"Product repo root (default: ~/projects/lybra)\")"
-    },
-    {
-     "file": "tools/aipos_cli/aipos_cli.py",
-     "line": 1183,
-     "fp": "d0953b7ae049",
-     "item": "H3",
-     "text": "_launch_check_parser.add_argument(\"--product-repo\", help=\"Product repo root (default: ~/projects/lybra)\")"
-    },
-    {
-     "file": "tools/aipos_cli/aipos_cli.py",
-     "line": 1525,
-     "fp": "c366ee39b1c3",
-     "item": "H3",
-     "text": "auditor_launch_parser.add_argument(\"--product-repo\", type=Path, help=\"Product repo (default: ~/projects/lybra)\")"
     },
     {
      "file": "tools/aipos_cli/aipos_cli.py",
@@ -152,31 +103,10 @@
     },
     {
      "file": "tools/aipos_cli/aipos_cli.py",
-     "line": 1595,
-     "fp": "feaaf90327b6",
-     "item": "H3",
-     "text": "pump_run_parser.add_argument(\"--product-repo\", help=\"Product repo root (default: ~/projects/lybra)\")"
-    },
-    {
-     "file": "tools/aipos_cli/aipos_cli.py",
      "line": 1608,
      "fp": "cebb88c9a8da",
      "item": "H5",
      "text": "pump_run_parser.add_argument(\"--executor-instance\", default=None, help=\"[AIPOS-332] 执行体实例名(默认 <role>.lybra.kiwiai-dev)\")"
-    },
-    {
-     "file": "tools/aipos_cli/aipos_cli.py",
-     "line": 2084,
-     "fp": "09b6742bcb87",
-     "item": "H3",
-     "text": "governance_commit_parser.add_argument(\"--workspace-root\", help=\"Product repo root (for schema resolution); defaults to ~/projects/lybra\")"
-    },
-    {
-     "file": "tools/aipos_cli/aipos_cli.py",
-     "line": 3506,
-     "fp": "2c0e1e6deaa5",
-     "item": "L3",
-     "text": "# 默认假设产品仓在 ~/projects/lybra (kiwiai-dev 标准位置)"
     },
     {
      "file": "tools/aipos_cli/aipos_cli.py",
@@ -261,13 +191,6 @@
      "fp": "8831efefebdf",
      "item": "L3",
      "text": "# ~/ai-project-os/2_projects/lybra; they MUST NOT be conflated."
-    },
-    {
-     "file": "tools/aipos_cli/flow_description.py",
-     "line": 444,
-     "fp": "7efb203257e3",
-     "item": "L3",
-     "text": "# Also check under 2_projects/lybra/ structure"
     },
     {
      "file": "tools/aipos_cli/governance_guardrails.py",
@@ -389,13 +312,6 @@
      "text": "f\"--auditor-instance auditor.lybra.kiwiai-dev\","
     },
     {
-     "file": "tools/aipos_cli/transition_engine.py",
-     "line": 376,
-     "fp": "fb7cebac167a",
-     "item": "H3",
-     "text": "f\"--actor executor --workspace-root ~/projects/lybra\","
-    },
-    {
      "file": "tools/cleanup_governance_residue.py",
      "line": 4,
      "fp": "a82bcf664a0f",
@@ -404,24 +320,10 @@
     },
     {
      "file": "tools/connector/pi/write-guard.ts",
-     "line": 14,
-     "fp": "26f58f312ed5",
-     "item": "L3",
-     "text": "*   LYBRA_WORKSPACE_ROOT  gate workspace 根(默认 ~/ai-project-os/2_projects/lybra)"
-    },
-    {
-     "file": "tools/connector/pi/write-guard.ts",
      "line": 15,
      "fp": "4496d5c2d11d",
      "item": "L3",
      "text": "*   LYBRA_AGENT_INSTANCE  本实例名(校验 claim 归属;默认 exec.lybra.kiwiai-dev)"
-    },
-    {
-     "file": "tools/connector/pi/write-guard.ts",
-     "line": 26,
-     "fp": "fb53c00d874b",
-     "item": "H4",
-     "text": "const WORKSPACE = process.env.LYBRA_WORKSPACE_ROOT || `${HOME}/ai-project-os/2_projects/lybra`;"
     },
     {
      "file": "tools/connector/pi/write-guard.ts",
@@ -445,13 +347,6 @@
      "text": "#   若治理仓根不是 /home/kiwi/ai-project-os, 请显式传参。"
     },
     {
-     "file": "tools/inject_governance_status_headers.py",
-     "line": 75,
-     "fp": "ae18df540b6a",
-     "item": "H4",
-     "text": "parser.add_argument(\"--repo-root\", type=str, default=\"/home/kiwi/ai-project-os/2_projects/lybra\","
-    },
-    {
      "file": "tools/loop_context.py",
      "line": 38,
      "fp": "fa53ff6a0e3e",
@@ -464,41 +359,6 @@
      "fp": "a2c6e402349a",
      "item": "H5",
      "text": "agent_instance: Agent instance ID (e.g., \"exec.lybra.kiwiai-dev\")"
-    },
-    {
-     "file": "tools/lybra-deploy",
-     "line": 23,
-     "fp": "ab3475a95b77",
-     "item": "H3",
-     "text": "PRODUCT_REPO=\"/home/kiwi/projects/lybra\""
-    },
-    {
-     "file": "tools/lybra-deploy",
-     "line": 61,
-     "fp": "71f5155d289c",
-     "item": "H4",
-     "text": "local conn_json=\"/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json\""
-    },
-    {
-     "file": "tools/lybra-deploy",
-     "line": 248,
-     "fp": "f1efc38e313a",
-     "item": "H4",
-     "text": "conn_json=\"/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json\""
-    },
-    {
-     "file": "tools/lybra-deploy",
-     "line": 488,
-     "fp": "71f5155d289c",
-     "item": "H4",
-     "text": "local conn_json=\"/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json\""
-    },
-    {
-     "file": "tools/lybra-deploy",
-     "line": 627,
-     "fp": "f1efc38e313a",
-     "item": "H4",
-     "text": "conn_json=\"/home/kiwi/ai-project-os/2_projects/lybra/.lybra/connection.json\""
     },
     {
      "file": "tools/mcp_server/tools.py",
@@ -523,59 +383,10 @@
     },
     {
      "file": "tools/turn_advancer/command_builder.py",
-     "line": 45,
-     "fp": "2292661c9f3d",
-     "item": "H4",
-     "text": "\"/home/kiwi/ai-project-os/2_projects/lybra\"))"
-    },
-    {
-     "file": "tools/turn_advancer/command_builder.py",
-     "line": 66,
-     "fp": "4834d2ec248e",
-     "item": "H3",
-     "text": "copyable = f\"python3 ~/projects/lybra/task_cards/AIPOS-340/_gate_call.py call lybra_queue_claim_dry_run --args '{json.dumps(args)}'\""
-    },
-    {
-     "file": "tools/turn_advancer/command_builder.py",
-     "line": 85,
-     "fp": "2292661c9f3d",
-     "item": "H4",
-     "text": "\"/home/kiwi/ai-project-os/2_projects/lybra\"))"
-    },
-    {
-     "file": "tools/turn_advancer/command_builder.py",
-     "line": 111,
-     "fp": "2b7b63eab2a3",
-     "item": "H3",
-     "text": "copyable = f\"python3 ~/projects/lybra/task_cards/AIPOS-340/_gate_call.py call lybra_queue_return_dry_run --args '{json.dumps(args)}'\""
-    },
-    {
-     "file": "tools/turn_advancer/command_builder.py",
-     "line": 131,
-     "fp": "2292661c9f3d",
-     "item": "H4",
-     "text": "\"/home/kiwi/ai-project-os/2_projects/lybra\"))"
-    },
-    {
-     "file": "tools/turn_advancer/command_builder.py",
      "line": 134,
      "fp": "fba6b385f730",
      "item": "H5",
      "text": "envelope = \"pol_lybra_audit_1\""
-    },
-    {
-     "file": "tools/turn_advancer/command_builder.py",
-     "line": 212,
-     "fp": "2292661c9f3d",
-     "item": "H4",
-     "text": "\"/home/kiwi/ai-project-os/2_projects/lybra\"))"
-    },
-    {
-     "file": "tools/worktree_manager.py",
-     "line": 109,
-     "fp": "822d8a839c55",
-     "item": "H3",
-     "text": "f\"Worktrees must only be created in product repos (e.g., ~/projects/lybra). \""
     },
     {
      "file": "web/board/static/app.js",
@@ -711,44 +522,8 @@
   },
   "d": {
    "rule": "不得以路径子串判定治理仓或项目: [\"'](ai-project-os|2_projects)[\"']\\s+(not\\s+)?in\\b|\\.includes\\(\\s*[\"'](ai-project-os|2_projects)[\"']",
-   "count": 5,
-   "entries": [
-    {
-     "file": "agents/harness/pi/lybra-loop/loop-context.ts",
-     "line": 476,
-     "fp": "5ff29b4a0a94",
-     "item": "H2",
-     "text": "if (opts.explicitRoot.includes(\"ai-project-os\")) {"
-    },
-    {
-     "file": "agents/harness/pi/lybra-loop/loop-context.ts",
-     "line": 493,
-     "fp": "cbbfca451dbb",
-     "item": "H2",
-     "text": "if (workspaceRoot.includes(\"ai-project-os\")) {"
-    },
-    {
-     "file": "agents/harness/pi/lybra-loop/loop-context.ts",
-     "line": 509,
-     "fp": "ab1971dcfa96",
-     "item": "H2",
-     "text": "if (envRoot.includes(\"ai-project-os\")) {"
-    },
-    {
-     "file": "tools/aipos_cli/enroll_deliver.py",
-     "line": 141,
-     "fp": "eb5643e010de",
-     "item": "H2",
-     "text": "is_governance = \"ai-project-os\" in workspace_root"
-    },
-    {
-     "file": "tools/worktree_manager.py",
-     "line": 106,
-     "fp": "7d6aea1e4b09",
-     "item": "H2",
-     "text": "if 'ai-project-os' in repo_path_str:"
-    }
-   ]
+   "count": 0,
+   "entries": []
   },
   "e": {
    "rule": "卡/记录 frontmatter 只许经单源 record_writer.render_markdown / render_frontmatter_block 构造(车道内零容忍)",

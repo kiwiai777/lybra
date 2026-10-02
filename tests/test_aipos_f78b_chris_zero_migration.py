@@ -502,8 +502,18 @@ def test_f78b_item3_gate_claim_and_return_one_stage_land_records_via_driver_toke
     assert list((gov / "5_tasks" / "records" / "claims" / task_id).glob("claim_*.md"))
     assert derive_next_step(task_id, gov)["current_state"] == "claimed"
     # 执行体产物: 分支有提交 + Return 落盘(门的 return 判据: 分支存在/completion_report_ref/artifact_refs)
-    code_repo = Path(json.loads((gov / "project.json").read_text())["code_repo"])
-    sha, tree = _branch_with_commit(code_repo, task_id, rel="tests/test_f78b_x.py")  # code 卡门判据: 分支含测试改动
+    # AIPOS-F88 件①: 门认领即经唯一建树实现(card_worktree_location)建好卡工作树与分支 card/<ID>(原 WorktreeManager 第二实现
+    # 在此靶场静默失败吞成 warning, 本夹具才需自建分支); 执行体在该工作树提交(code 卡门判据: 分支含测试改动)
+    from test_aipos_f78_engine_agnostic import _git
+
+    code_repo, worktree = nr.card_worktree_location(gov, task_id)
+    assert code_repo == Path(json.loads((gov / "project.json").read_text())["code_repo"])
+    assert worktree.is_dir() and _git(worktree, "rev-parse", "--abbrev-ref", "HEAD") == f"card/{task_id}", claimed
+    assert not [w for w in claimed.get("warnings") or [] if "orktree" in str(w)], claimed  # 建树零 warning
+    _write(worktree / "tests" / "test_f78b_x.py", f"# {task_id}\n")
+    _git(worktree, "add", "tests/test_f78b_x.py")
+    _git(worktree, "commit", "-q", "-m", f"{task_id}: work")
+    sha, tree = _git(worktree, "rev-parse", "HEAD"), _git(worktree, "rev-parse", "HEAD^{tree}")
     _write(gov / "task_cards" / task_id / "RETURN.md", _return_text(task_id, sha, tree))
     monkeypatch.setattr(gate, "_capability_has_scope", lambda scope: False)  # return: 驱动方无 queue_return scope 亦放行(信封即授权)
     return_args = {

@@ -1,6 +1,8 @@
-"""AIPOS-R5A: Worktree 生命周期管理 — 一个模块一份实现。
+"""AIPOS-R5A: Worktree 生命周期管理(列表/删除/合并/孤儿盘点)。
 
 设计权威: DESIGN v2 §7 R5
+AIPOS-F88 件①: 建树(落点/分支/git worktree add)唯一实现在 tools/aipos_cli/next_resolver.py
+(card_worktree_location / card_branch_name / _ensure_worktree), 本模块建树入口仅委托。
 
 每张 code 卡独立 worktree 执行:
 - claim 时为该卡建/用专属 git worktree
@@ -19,9 +21,6 @@
 
 from __future__ import annotations
 
-import json
-import os
-import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,85 +83,43 @@ class WorktreeInfo:
 
 
 class WorktreeManager:
-    """Git worktree 生命周期管理 — 唯一实现。
-    
+    """Git worktree 生命周期管理(列表/删除/合并/孤儿盘点)。
+
+    AIPOS-F88 件①: 建树不再是本类的独立实现——落点/分支/建树全部委托 next_resolver 单源
+    (card_worktree_location = workspace_config.resolve_card_repo + _resolve_worktree_root;
+    card_branch_name = N5 branch_pattern 声明; _ensure_worktree = 唯一建树实现)。
+    原独立实现(读治理根 .lybra/config.json、缺则把治理根当产品仓、路径 task_id 小写、分支写死、
+    路径子串判治理仓)已退役; 门认领路径不再经本类建树。
     worktree 状态以 `git worktree list` 为唯一真相,禁第二份登记。
     """
-    
-    def __init__(self, code_repo: Path, worktree_root: Path | None = None):
+
+    def __init__(self, code_repo: Path, worktree_root: Path | None = None, *, workspace_root: Path | None = None):
         """Initialize worktree manager.
-        
+
         Args:
-            code_repo: Code repository root path
-            worktree_root: Root directory for worktrees (from config.schema)
-                          If None, defaults to {code_repo}/.worktrees
+            code_repo: 产品仓根(git 仓)
+            worktree_root: 工作树根; 缺省读声明(next_resolver._resolve_worktree_root: config.schema worktree_root,
+                           治理根 .lybra/config.json 可覆盖)
+            workspace_root: 治理根(卡/项目声明所在); 缺省 = code_repo(单根靶场)
         """
+        from tools.aipos_cli.next_resolver import _resolve_worktree_root
+
         self.code_repo = Path(code_repo).resolve()
-        
-        # AIPOS-R6A 靶子⑦: worktree供给bug根治 — 硬断言 code_repo ≠ 治理仓
-        # 全量实证：R5A起每张卡都被错建了治理仓树（已全拆）
-        # 治理仓特征：路径包含 ai-project-os（简单可靠的识别方法）
-        repo_path_str = str(self.code_repo)
-        if 'ai-project-os' in repo_path_str:
-            raise ValueError(
-                f"BLOCKED: WorktreeManager cannot operate on governance repo ({self.code_repo}). "
-                f"Worktrees must only be created in product repos (e.g., ~/projects/lybra). "
-                f"治理仓从此无代码可改，化石树已被铲除。 (AIPOS-R6A 靶子⑦)"
-            )
-        
+        self.workspace_root = Path(workspace_root).resolve() if workspace_root else self.code_repo
         if worktree_root:
             self.worktree_root = Path(worktree_root).resolve()
         else:
-            # Default from config.schema
-            self.worktree_root = self.code_repo / '.worktrees'
-        
-        # Ensure worktree root exists
-        self.worktree_root.mkdir(parents=True, exist_ok=True)
-    
+            self.worktree_root = _resolve_worktree_root(self.workspace_root, self.code_repo).resolve()
+
     @classmethod
     def from_workspace_config(cls, workspace_root: Path) -> WorktreeManager:
-        """Create from workspace config (读 config.schema)。
-        
-        Args:
-            workspace_root: Workspace root path
-            
-        Returns:
-            WorktreeManager instance
-            
-        Raises:
-            ValueError: If code_repo not configured
-        """
-        # 读取 .lybra/config.json (如果存在)
-        config_path = workspace_root / ".lybra" / "config.json"
-        if config_path.exists():
-            try:
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                code_repo = config.get('code_repo')
-                worktree_root = config.get('worktree_root')
-            except (json.JSONDecodeError, OSError):
-                config = {}
-                code_repo = None
-                worktree_root = None
-        else:
-            config = {}
-            code_repo = None
-            worktree_root = None
-        
-        # 默认 code_repo = workspace_root
-        if not code_repo:
-            code_repo = str(workspace_root)
-        
-        code_repo_path = Path(code_repo)
-        
-        if worktree_root:
-            worktree_root_path = Path(worktree_root)
-        else:
-            # Default from schema
-            worktree_root_path = code_repo_path / '.worktrees'
-        
-        return cls(code_repo_path, worktree_root_path)
-    
+        """按项目声明构造: 产品仓 = workspace_config.resolve_card_repo(项目级缺省仓: repos.default → code_repo → 单根靶场),
+        工作树根 = next_resolver._resolve_worktree_root(声明)。解析不到 = CardRepoUnresolved(fail-closed, 不猜路径)。"""
+        from tools.aipos_cli.workspace_config import resolve_card_repo
+
+        root = Path(workspace_root).resolve()
+        return cls(resolve_card_repo(root, {}), workspace_root=root)
+
     def list_worktrees(self) -> list[WorktreeInfo]:
         """List all worktrees (git worktree list --porcelain).
         
@@ -220,87 +177,45 @@ class WorktreeManager:
         return None
     
     def worktree_path_for_task(self, task_id: str) -> Path:
-        """Get worktree path for a task.
-        
-        Args:
-            task_id: Task identifier (e.g., "AIPOS-R5A")
-            
-        Returns:
-            Path to worktree directory
-        """
-        # Normalize task_id for filesystem (lowercase, safe chars)
-        safe_task_id = task_id.lower().replace('_', '-')
-        return self.worktree_root / safe_task_id
-    
+        """卡工作树路径 = next_resolver.card_worktree_location(唯一推导, 与门认领 / my-tasks 同一函数)。"""
+        from tools.aipos_cli.next_resolver import card_worktree_location
+
+        return card_worktree_location(self.workspace_root, task_id)[1].resolve()
+
     def branch_name_for_task(self, task_id: str) -> str:
-        """Get branch name for a task.
-        
-        Args:
-            task_id: Task identifier (e.g., "AIPOS-R5A")
-            
-        Returns:
-            Branch name (e.g., "card/AIPOS-R5A")
-        """
-        return f"card/{task_id}"
-    
+        """卡分支名 = next_resolver.card_branch_name(N5 branch_pattern 声明)。"""
+        from tools.aipos_cli.next_resolver import card_branch_name
+
+        return card_branch_name(task_id)
+
     def create_worktree(
         self,
         task_id: str,
         base_branch: str = 'main',
         force: bool = False
     ) -> tuple[Path, str]:
-        """Create worktree for a task.
-        
-        Args:
-            task_id: Task identifier
-            base_branch: Base branch to branch from (default: main)
-            force: Force creation even if worktree exists
-            
+        """建卡工作树——委托唯一建树实现 next_resolver._ensure_worktree(已存在即复用)。
+
+        base_branch/force 仅保留签名兼容: 唯一实现从 main 起分支、不强制; 传非缺省值 = ValueError(不静默忽略)。
+
         Returns:
             Tuple of (worktree_path, branch_name)
-            
+
         Raises:
-            RuntimeError: If git worktree add fails
+            RuntimeError: 建树失败(拒因原文)
         """
-        worktree_path = self.worktree_path_for_task(task_id)
-        branch_name = self.branch_name_for_task(task_id)
-        
-        # Check if worktree already exists
-        existing = self.get_worktree_for_branch(branch_name)
-        if existing and not force:
-            # Worktree already exists, return it
-            return existing.path, branch_name
-        
-        # Check if branch exists
-        branch_exists = self._branch_exists(branch_name)
-        
-        cmd = ['git', 'worktree', 'add']
-        
-        if branch_exists:
-            # Use existing branch
-            cmd.extend([str(worktree_path), branch_name])
-        else:
-            # Create new branch from base
-            cmd.extend(['-b', branch_name, str(worktree_path), base_branch])
-        
-        if force:
-            cmd.append('--force')
-        
-        try:
-            subprocess.run(
-                cmd,
-                cwd=self.code_repo,
-                capture_output=True,
-                text=True,
-                check=True
+        if base_branch != 'main' or force:
+            raise ValueError(
+                "WorktreeManager.create_worktree 已委托 next_resolver._ensure_worktree(从 main 起分支、不强制), "
+                f"不支持 base_branch={base_branch!r} / force={force!r}"
             )
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(
-                f"git worktree add failed: {exc.stderr}\nCommand: {' '.join(cmd)}"
-            ) from exc
-        
-        return worktree_path, branch_name
-    
+        from tools.aipos_cli.next_resolver import _ensure_worktree
+
+        built = _ensure_worktree(self.workspace_root, task_id)
+        if not built.get("ok"):
+            raise RuntimeError(str(built.get("message") or "worktree 建立失败"))
+        return Path(built["worktree_path"]).resolve(), str(built["branch"])
+
     def remove_worktree(
         self,
         task_id: str | None = None,

@@ -72,13 +72,25 @@ injected_by: AIPOS-R6M-auto-inject
 
 def main():
     parser = argparse.ArgumentParser(description="Inject status headers to governance docs")
-    parser.add_argument("--repo-root", type=str, default="/home/kiwi/ai-project-os/2_projects/lybra",
-                        help="Governance repository root path")
+    parser.add_argument("--repo-root", type=str, default=None,
+                        help="Governance workspace root (default: AIPOS-F88 governance_workspace_root — "
+                             ".lybra/connection.json 声明 → 结构识别)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Dry run mode (no files modified)")
     args = parser.parse_args()
     
-    repo_root = Path(args.repo_root)
+    # AIPOS-F88 件③: 治理根 = workspace_config.governance_workspace_root(显式 --repo-root → 声明 → 结构识别), 原写死缺省退役。
+    # 以脚本形式运行(python3 tools/inject_governance_status_headers.py)时 sys.path[0]=tools/, 补产品仓根(本文件上一级)以导入单源。
+    product_root = str(Path(__file__).resolve().parents[1])
+    if product_root not in sys.path:
+        sys.path.insert(0, product_root)
+    from tools.aipos_cli.workspace_config import governance_workspace_root
+
+    try:
+        repo_root = governance_workspace_root(args.repo_root)
+    except FileNotFoundError as exc:
+        print(f"❌ Governance workspace root not resolvable: {exc}", file=sys.stderr)
+        return 1
     governance_dir = repo_root / "governance"
     
     if not governance_dir.is_dir():

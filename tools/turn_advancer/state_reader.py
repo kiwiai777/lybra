@@ -131,12 +131,14 @@ def read_task_state(workspace_root: Path, task_id: str) -> dict[str, Any]:
             except Exception:
                 pass
     
-    # 6. 检查工作产物（task_cards/<ID>/RETURN.md, AUDIT-*.md）
-    # 产品仓 task_cards 是 git 忽略区，executor 工作产物在这里
-    product_repo = Path.home() / "projects" / "lybra"  # 硬编码产品仓位置（卡内默认）
-    task_work_dir = product_repo / "task_cards" / task_id
+    # 6. 检查工作产物(Return 文件, AUDIT-*.md)
+    # AIPOS-F88 件③: 落点读项目声明(next_resolver.return_artifact_dir / find_return_artifact: project.json paths.return_root
+    # + transitions artifact_ingest.return 候选), 原写死的产品仓机器路径 task_cards/<ID> 退役
+    from tools.aipos_cli.next_resolver import find_return_artifact, return_artifact_dir
+
+    task_work_dir = return_artifact_dir(workspace_root, task_id)
     if task_work_dir.is_dir():
-        state["has_return_artifact"] = (task_work_dir / "RETURN.md").is_file()
+        state["has_return_artifact"] = find_return_artifact(workspace_root, task_id) is not None
         state["has_audit_card"] = bool(list(task_work_dir.glob("AUDIT-*.md")))
     
     return state

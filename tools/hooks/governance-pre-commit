@@ -17,8 +17,21 @@ set -o pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-# ---- 单一源: config.schema (LYBRA_SCHEMA_DIR 可覆盖默认产品仓) ----
-SCHEMA_DIR="${LYBRA_SCHEMA_DIR:-$HOME/projects/lybra/schema}"
+# ---- 单一源: config.schema ----
+# AIPOS-F88 件③: schema 目录不写死——LYBRA_SCHEMA_DIR 显式覆盖, 否则读产品 CLI 输出
+# (`lybra workspace roots --field schema_dir` = product_repo_root()/schema, 运行中 Lybra 代码所在仓)。
+# 本钩子以拷贝形式装入治理仓 .git/hooks, 无法从自身位置推导产品仓; 两者皆不可得 = 拒绝放行(护栏禁静默降级)。
+SCHEMA_DIR="${LYBRA_SCHEMA_DIR:-}"
+if [ -z "$SCHEMA_DIR" ]; then
+    if ! command -v lybra >/dev/null 2>&1; then
+        echo "❌ BLOCKED: 无法定位 schema 目录(LYBRA_SCHEMA_DIR 未设, 且 PATH 上无 lybra CLI); 出口: 安装 lybra CLI 或设 LYBRA_SCHEMA_DIR"
+        exit 1
+    fi
+    if ! SCHEMA_DIR="$(lybra workspace roots --field schema_dir)"; then
+        echo "❌ BLOCKED: lybra workspace roots --field schema_dir 失败(拒因见上); 出口: 设 LYBRA_SCHEMA_DIR"
+        exit 1
+    fi
+fi
 CONFIG_SCHEMA="$SCHEMA_DIR/config.schema.json"
 if [ ! -f "$CONFIG_SCHEMA" ]; then
     echo "❌ BLOCKED: config.schema not found at $CONFIG_SCHEMA (single source unavailable; set LYBRA_SCHEMA_DIR)"
