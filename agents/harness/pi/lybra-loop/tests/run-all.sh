@@ -47,6 +47,7 @@ declare -a files=(
   "tests/f62-deadlock-root-cause.test.ts"
   "tests/f81-token-single-source.test.ts"
   "tests/f86-go-kickoff.test.ts"
+  "tests/f87-go-next-card.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
@@ -924,6 +925,16 @@ if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f86_wo
   echo "✓ tests/test_aipos_f86_workstation_kickoff.py PASS"
 else
   echo "✗ tests/test_aipos_f86_workstation_kickoff.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F87: 卡面 YAML 根治三件(写入侧单源安全序列化+写后回读·lint FRONTMATTER_INVALID 与 repair 保值规整·my-tasks next_card 产品选卡; TS 夹具 f87-go-next-card 在上方 files 清单)+件④ 防碎片化不变量棘轮(基线 tests/f87_fragmentation_baseline.json)
+echo
+echo "── tests/test_aipos_f87_card_yaml_root_fix.py + tests/test_aipos_f87_fragmentation_ratchet.py (F87 交回怪值逐字还原·记录侧手拼退役·写后回读拒写/lint 点名坏卡·repair 逐字节保值·unresolved 拒改/next_card 选卡与原因列表/棘轮只减不增) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f87_card_yaml_root_fix.py" "$REPO_ROOT/tests/test_aipos_f87_fragmentation_ratchet.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f87_card_yaml_root_fix.py PASS"
+else
+  echo "✗ tests/test_aipos_f87_card_yaml_root_fix.py FAIL"
   overall=1
 fi
 

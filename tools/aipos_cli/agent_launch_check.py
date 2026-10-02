@@ -89,15 +89,6 @@ def emit_event(event: dict[str, Any]) -> None:
 WORKSPACE_EVENTS_REL = Path("5_tasks") / "records" / "events"
 
 
-def _fm_yaml_scalar(value: Any) -> str:
-    """把值格式化为 YAML 安全标量(frontmatter 用)。"""
-    text = str(value or "").strip()
-    if text == "":
-        return '""'
-    if any(ch in text for ch in [":", "#", "[", "]", "{", "}", "\n", "'", '"']) or text != text.strip():
-        return "'" + text.replace("'", "''") + "'"
-    return text
-
 
 def _event_timestamp_slug(timestamp: str) -> str:
     """ISO8601 Z 时间戳 → 文件名安全 slug(与 AIPOS-323/daemon 同精度:秒)。"""
@@ -136,23 +127,23 @@ def write_event_to_workspace(
         event_file = events_dir / f"{kind}_{slug}_{n}.md"
         n += 1
 
-    fm_lines = [
-        "---",
-        "record_type: launch_check_event",
-        f"event_kind: {kind}",
-        f"task_id: {task_id}",
-        f"actor: {_fm_yaml_scalar(actor or 'launch-check')}",
-        f"timestamp: {timestamp}",
-    ]
+    # AIPOS-F87 件①: frontmatter 经单源 record_writer.render_markdown(safe_dump + 写后回读校验);
+    # 原逐行拼接 + 本地手写标量器 _fm_yaml_scalar 退役。
+    fm: dict[str, Any] = {
+        "record_type": "launch_check_event",
+        "event_kind": kind,
+        "task_id": task_id,
+        "actor": str(actor or "launch-check").strip(),
+        "timestamp": timestamp,
+    }
     reason = event.get("reason")
     if reason:
-        fm_lines.append(f"reason: {_fm_yaml_scalar(reason)}")
+        fm["reason"] = str(reason).strip()
     if event.get("exit_code") is not None:
-        fm_lines.append(f"exit_code: {event.get('exit_code')}")
+        fm["exit_code"] = event.get("exit_code")
     if event.get("attempt") is not None:
-        fm_lines.append(f"attempt: {event.get('attempt')}")
-    fm_lines.append("source: launch_check")
-    fm_lines.append("---")
+        fm["attempt"] = event.get("attempt")
+    fm["source"] = "launch_check"
 
     body_lines = [
         f"# Launch-check event: {kind}",
@@ -173,9 +164,9 @@ def write_event_to_workspace(
     )
     body_lines.append("")
 
-    event_file.write_text(
-        "\n".join(fm_lines) + "\n" + "\n".join(body_lines), encoding="utf-8"
-    )
+    from tools.aipos_cli.record_writer import render_markdown
+
+    event_file.write_text(render_markdown(fm, "\n".join(body_lines), list(fm)), encoding="utf-8")
     log(f"Workspace event written: {event_file}")
     return event_file
 

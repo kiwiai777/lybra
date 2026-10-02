@@ -149,14 +149,23 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
     推导只在产品侧一处: next_resolver.card_workstation_view(→ card_worktree_location / card_report_path, 与 claim 建树、
     card render 同一函数); 工位 /go 只读这些字段。不可推导 / 尚未建立 = 明确拒因字段, 不输出空串。
     """
-    from tools.aipos_cli.next_resolver import card_workstation_view
+    from tools.aipos_cli.next_resolver import card_workstation_view, select_next_card
 
     root = Path(repo_root).resolve()
+    candidates: list[dict[str, Any]] = []
     for summary, task in zip(output["tasks"], actor_report["tasks"]):
         if summary.get("queue_state") != "claimed":
             continue
         summary["card_path"] = str(root / str(task.get("path")))
         summary.update(card_workstation_view(root, str(task.get("task_id") or ""), task.get("metadata") or {}))
+        metadata = task.get("metadata") or {}
+        candidates.append({
+            **summary,
+            "claimed_at": metadata.get("claimed_at"),
+            "frontmatter_warnings": list(task.get("parse_errors") or []),
+        })
+    # AIPOS-F87 件③: 开工选卡由产品给出(判据唯一声明 next_resolver.NEXT_CARD_RULE), 工位 /go 只读 next_card
+    output.update(select_next_card(candidates))
     return output
 
 
@@ -4836,10 +4845,11 @@ def main(argv: list[str] | None = None) -> int:
                 governance_root=Path(ws_root),
                 task_id_filter=getattr(args, "task_id", None),
             )
+            # AIPOS-F87 顺手实撞: issues 原只在文本分支赋值, `state lint --json` 走到 return 即 UnboundLocalError
+            issues = result.get("issues", [])
             if getattr(args, "json", False):
                 print(render_json(result))
             else:
-                issues = result.get("issues", [])
                 if not issues:
                     print(f"✓ state lint OK: {result['scanned']} 张卡扫描, 无断层")
                 else:
@@ -4863,13 +4873,26 @@ def main(argv: list[str] | None = None) -> int:
             if getattr(args, "json", False):
                 print(render_json(result))
             else:
-                if result.get("repaired"):
+                if result.get("unresolved"):
+                    print(f"✗ 拒改 {args.task_id}: {result['message']}")
+                elif result.get("repaired"):
                     print(f"✓ 已修复 {args.task_id}: {result['message']}")
                 elif result.get("dry_run"):
                     print(f"(dry-run) 会修复 {args.task_id}: {result['message']}")
                 else:
                     print(f"无需修复 {args.task_id}: {result['message']}")
-            return 0
+                # AIPOS-F87 件②: 卡面规整预览/结果逐行贴出(前后两行), unresolved 原样列出
+                fm_repair = result.get("frontmatter_repair") or {}
+                for item in fm_repair.get("repairs", []):
+                    print(f"  {fm_repair.get('card_path')} 第 {item['line']} 行 {item['key']}:")
+                    print(f"    - {item['before']}")
+                    print(f"    + {item['after']}")
+                for reason in fm_repair.get("unresolved", []):
+                    print(f"  ✗ unresolved: {reason}")
+                if fm_repair.get("repair_record"):
+                    print(f"  repair 记录: {fm_repair['repair_record']}")
+            # AIPOS-F87 件②: 卡面无法安全规整 = 拒改, 非零退出(fail-closed)
+            return 1 if result.get("unresolved") else 0
 
         if (
             state_cmd != "recovery"

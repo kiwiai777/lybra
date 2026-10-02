@@ -12,9 +12,16 @@ AIPOS-F79D 件④: 记录文件面
   - lint: records/<kind>/<ID>/*.md 为 0 字节 → RECORD_EMPTY(ERROR, 带出口 state repair --task-id)
   - repair: sessions/<ID>/ 空文件 + claims/<ID>/ 下同名 session 正常份(或仅错位副本) → 按声明位重铸
     (内容移到 record_writer.session_record_path 声明位, 删空文件与错位副本, 写 repair 记录)
+
+AIPOS-F87 件②: 卡面 frontmatter 不可解析
+  - lint: 卡经产品唯一读取口 parse_markdown_frontmatter 出解析告警 → FRONTMATTER_INVALID(ERROR, 带出口 state repair --task-id)
+  - repair: 保值规整——只对解析失败所在的顶层单行标量做最小引号化(该行由单源 record_writer.render_frontmatter_line 产出),
+    规整后须可解析、除被规整行外逐字节不变、其余字段值与原文去掉被规整行后的解析结果相等、被规整字段值 = 原行文本;
+    任一不满足 = unresolved 拒改。写 records/events/<ID>/event_repair_*.md(前后差异摘要); dry-run 先行; 不改队列状态。
 """
 from __future__ import annotations
 
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +31,13 @@ from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.schema_constants import RecordType
 
 RECORD_EMPTY = "RECORD_EMPTY"
+FRONTMATTER_INVALID = "FRONTMATTER_INVALID"
+FRONTMATTER_REPAIR_ACTOR = "lybra state repair"
+
+try:  # 定位解析失败行需要 PyYAML 的错误标记; 缺席时规整一律 unresolved(不猜)
+    import yaml as _yaml  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    _yaml = None
 
 
 QUEUE_DIRS = {
@@ -145,9 +159,15 @@ def run_state_lint(
     else:
         task_ids = _list_all_task_ids(governance_root)
     
+    invalid_frontmatter: list[dict[str, Any]] = []
     for task_id in sorted(task_ids):
         queue_state, card_path = _get_queue_state(governance_root, task_id)
         fm_state = _get_frontmatter_state(card_path) if card_path else None
+        # AIPOS-F87 件②: 同一趟里顺带判卡面可解析(不另起一遍全量查找)
+        if card_path is not None:
+            invalid = _invalid_frontmatter_entry(governance_root, task_id, card_path)
+            if invalid is not None:
+                invalid_frontmatter.append(invalid)
         record_state = _derive_state_from_records(governance_root, task_id)
         
         # 检查: completed 卡必须有 closure 记录
@@ -214,10 +234,261 @@ def run_state_lint(
             "record_kind": empty["record_kind"],
         })
 
+    # AIPOS-F87 件②: 卡面 frontmatter 不可解析 → FRONTMATTER_INVALID(判据 = 产品唯一读取口出告警, 与 validator「Frontmatter parse issue」同源)
+    for invalid in invalid_frontmatter:
+        issues.append({
+            "task_id": invalid["task_id"],
+            "severity": "ERROR",
+            "code": FRONTMATTER_INVALID,
+            "message": (
+                f"{FRONTMATTER_INVALID}: 卡面 frontmatter 不可解析 {invalid['path']}: {invalid['warnings'][0]}; "
+                f"出口: lybra state repair --task-id {invalid['task_id']} --workspace-root {governance_root} --dry-run"
+                "(先预览保值规整, 无误后去掉 --dry-run 落盘)"
+            ),
+            "path": invalid["path"],
+            "warnings": invalid["warnings"],
+        })
+
     return {
         "scanned": len(task_ids),
         "issues": issues,
     }
+
+
+def card_frontmatter_warnings(text: str) -> list[str]:
+    """AIPOS-F87 件②: 卡文本经产品唯一读取口的解析告警(空 = 可解析)。FRONTMATTER_INVALID 与 my-tasks 选卡同此判据。"""
+    _meta, _body, warnings = parse_markdown_frontmatter(text)
+    return [str(w) for w in warnings]
+
+
+def _invalid_frontmatter_entry(governance_root: Path, task_id: str, card_path: Path) -> dict[str, Any] | None:
+    """AIPOS-F87 件②: 卡面不可解析 → {task_id, path, warnings}; 可解析 → None(只读)。"""
+    warnings = card_frontmatter_warnings(card_path.read_text(encoding="utf-8"))
+    if not warnings:
+        return None
+    return {
+        "task_id": task_id,
+        "path": card_path.resolve().relative_to(Path(governance_root).resolve()).as_posix(),
+        "warnings": warnings,
+    }
+
+
+_TOP_LEVEL_SCALAR_LINE = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_.-]*):[ \t]+(?P<value>\S.*?)[ \t]*$")
+# 值以这些字符开头 = 原作者可能意在引号串 / 流式集合 / 块标量: 引号化会改义, 不做(unresolved)
+_REQUOTE_REFUSED_LEADS = ("'", '"', "[", "{", "|", ">")
+
+
+def _split_frontmatter_lines(text: str) -> tuple[list[str], int] | None:
+    """与 parse_markdown_frontmatter 同一围栏规则: 首行以 --- 起, 第一条 strip()=='---' 的行收尾。返回 (按 \\n 切的行, 收尾行号)。"""
+    if not text.startswith("---"):
+        return None
+    lines = text.split("\n")
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return lines, index
+    return None
+
+
+def plan_frontmatter_requote(text: str) -> dict[str, Any]:
+    """AIPOS-F87 件②: 为不可解析的卡面 frontmatter 计划保值规整(纯函数, 不写盘)。
+
+    逐次让 PyYAML 指出解析失败行 → 该行须为顶层单行 `key: value`(下一非空行为顶层键或围栏, 即无续行), 值不以引号/流式/块标量起头 →
+    用单源 render_frontmatter_line(key, 原行值文本) 重写该行。直到可解析或无法安全规整。
+
+    放行条件(全满足, 否则 unresolved, repaired_text=None):
+      a) 规整后全文经产品读取口解析无告警;
+      b) 除被规整行外逐行(逐字节)不变, 正文不变;
+      c) 被规整字段解析值 == 原行值文本(逐字);
+      d) 原 frontmatter 去掉被规整行后的解析结果 == 规整后去掉被规整字段的解析结果(其余字段值语义不变)。
+    """
+    from tools.aipos_cli.record_writer import render_frontmatter_line
+
+    result: dict[str, Any] = {"repaired_text": None, "repairs": [], "unresolved": []}
+    if _yaml is None:
+        result["unresolved"].append("PyYAML 不可用, 无法定位解析失败行, 不做规整(不猜)")
+        return result
+    split = _split_frontmatter_lines(text)
+    if split is None:
+        result["unresolved"].append("frontmatter 围栏缺失(无起始 --- 或无收尾 ---), 不是单行标量问题, 不做规整")
+        return result
+    lines, end = split
+    original_lines = list(lines)
+    repaired_idx: dict[int, dict[str, Any]] = {}
+    for _attempt in range(end):
+        fm_text = "\n".join(lines[1:end])
+        try:
+            loaded = _yaml.safe_load(fm_text)
+        except _yaml.MarkedYAMLError as exc:
+            mark = exc.problem_mark or exc.context_mark
+            if mark is None:
+                result["unresolved"].append(f"YAML 解析失败但无行标记: {exc}")
+                return result
+            idx = mark.line + 1  # frontmatter 第 0 行 = 文件第 1 行(0 基)
+            if not 1 <= idx < end:
+                result["unresolved"].append(f"解析失败标记落在 frontmatter 外(第 {idx + 1} 行): {exc.problem}")
+                return result
+            if idx in repaired_idx:
+                result["unresolved"].append(f"第 {idx + 1} 行规整后仍解析失败: {exc.problem}")
+                return result
+            line = lines[idx]
+            match = _TOP_LEVEL_SCALAR_LINE.match(line)
+            if match is None:
+                result["unresolved"].append(
+                    f"第 {idx + 1} 行不是顶层单行 `key: value`(缩进/列表项/多行结构), 不做规整: {line[:80]!r}"
+                )
+                return result
+            key, value = match.group("key"), match.group("value")
+            if value.startswith(_REQUOTE_REFUSED_LEADS):
+                result["unresolved"].append(
+                    f"第 {idx + 1} 行 {key} 的值以 {value[0]!r} 起头(引号串/流式集合/块标量), 引号化可能改义, 不做规整"
+                )
+                return result
+            nxt = next((j for j in range(idx + 1, end) if lines[j].strip()), None)
+            if nxt is not None and (lines[nxt][:1] in (" ", "\t") or lines[nxt].startswith("- ")):
+                result["unresolved"].append(f"第 {idx + 1} 行 {key} 后跟续行/子结构, 不是单行标量, 不做规整")
+                return result
+            try:
+                new_line = render_frontmatter_line(key, value)
+            except ValueError as exc2:
+                result["unresolved"].append(f"第 {idx + 1} 行 {key} 无法单行安全序列化: {exc2}")
+                return result
+            repaired_idx[idx] = {"line": idx + 1, "key": key, "value": value, "before": line, "after": new_line}
+            lines[idx] = new_line
+            continue
+        except _yaml.YAMLError as exc:
+            result["unresolved"].append(f"YAML 解析失败且无法定位: {exc}")
+            return result
+        if not isinstance(loaded, dict):
+            result["unresolved"].append("frontmatter 解析结果不是映射, 不做规整")
+            return result
+        break
+    else:
+        result["unresolved"].append("规整轮次超过 frontmatter 行数仍不可解析, 不做规整")
+        return result
+
+    if not repaired_idx:
+        result["unresolved"].append("PyYAML 可解析但产品读取口仍告警(非单行标量问题), 不做规整")
+        return result
+
+    repaired_text = "\n".join(lines)
+    parsed, body_after, warnings = parse_markdown_frontmatter(repaired_text)
+    _orig_meta, body_before, _w = parse_markdown_frontmatter(text)
+    problems: list[str] = []
+    if warnings:
+        problems.append(f"规整后仍有解析告警: {warnings}")
+    if len(lines) != len(original_lines) or any(
+        lines[i] != original_lines[i] for i in range(len(lines)) if i not in repaired_idx
+    ):
+        problems.append("规整改动了被规整行以外的内容")
+    if body_after != body_before:
+        problems.append("规整改动了正文")
+    for item in repaired_idx.values():
+        if parsed.get(item["key"]) != item["value"]:
+            problems.append(f"字段 {item['key']} 规整后值 {parsed.get(item['key'])!r} ≠ 原行文本 {item['value']!r}")
+    rest_text = "\n".join(original_lines[i] for i in range(1, end) if i not in repaired_idx)
+    try:
+        rest_meta = _yaml.safe_load(rest_text) or {}
+    except _yaml.YAMLError as exc:
+        problems.append(f"原 frontmatter 去掉被规整行后仍不可解析, 无法证明其余字段语义不变: {exc}")
+        rest_meta = None
+    if rest_meta is not None:
+        repaired_keys = {item["key"] for item in repaired_idx.values()}
+        if rest_meta != {k: v for k, v in parsed.items() if k not in repaired_keys}:
+            problems.append("其余字段解析值与原文不一致(语义可能改变)")
+    if problems:
+        result["unresolved"].extend(problems)
+        return result
+    result["repaired_text"] = repaired_text
+    result["repairs"] = [repaired_idx[i] for i in sorted(repaired_idx)]
+    return result
+
+
+def repair_frontmatter_invalid(
+    governance_root: Path,
+    task_id: str,
+    dry_run: bool = False,
+    actor: str = FRONTMATTER_REPAIR_ACTOR,
+) -> dict[str, Any]:
+    """AIPOS-F87 件②: 对 FRONTMATTER_INVALID 卡做保值规整(卡留原队列目录原文件名, 不改队列状态)。
+
+    返回 applicable=False 表示卡面可解析(本修复不适用)。unresolved 非空 = 拒改(不写任何文件)。
+    非 dry-run: 写卡 → 回读核对(字节一致且可解析)→ 写 records/events/<ID>/event_repair_*.md; 记录写失败则还原卡原文并抛出。
+    """
+    import hashlib
+
+    from tools.aipos_cli.record_writer import render_markdown, write_records_atomic
+
+    task_id = task_id.upper()
+    root = Path(governance_root).resolve()
+    out: dict[str, Any] = {
+        "task_id": task_id,
+        "applicable": False,
+        "dry_run": dry_run,
+        "repaired": False,
+        "card_path": None,
+        "repairs": [],
+        "unresolved": [],
+        "actions": [],
+        "repair_record": None,
+    }
+    _state, card_path = _get_queue_state(root, task_id)
+    if card_path is None:
+        return out
+    original = card_path.read_text(encoding="utf-8")
+    warnings = card_frontmatter_warnings(original)
+    if not warnings:
+        return out
+    rel = card_path.resolve().relative_to(root).as_posix()
+    out.update({"applicable": True, "card_path": rel, "warnings": warnings})
+    plan = plan_frontmatter_requote(original)
+    out["repairs"] = [
+        {"line": r["line"], "key": r["key"], "before": r["before"], "after": r["after"]} for r in plan["repairs"]
+    ]
+    out["unresolved"] = list(plan["unresolved"])
+    if plan["repaired_text"] is None:
+        out["actions"].append(f"{FRONTMATTER_INVALID}: {rel} 无法安全规整, 拒改(unresolved)")
+        return out
+    for r in plan["repairs"]:
+        out["actions"].append(f"规整 {rel} 第 {r['line']} 行 {r['key']}: 仅加引号(值逐字不变)")
+    if dry_run:
+        return out
+
+    repaired_text = plan["repaired_text"]
+    card_path.write_text(repaired_text, encoding="utf-8")
+    readback = card_path.read_text(encoding="utf-8")
+    if readback != repaired_text or card_frontmatter_warnings(readback):
+        card_path.write_text(original, encoding="utf-8")
+        raise RuntimeError(f"{rel} 规整写入后回读不一致或仍不可解析, 已还原原文")
+
+    timestamp = _utc_now()
+    ts_slug = timestamp.replace("-", "").replace(":", "").replace("T", "_").replace("Z", "")
+    record_id = f"repair_{task_id}_{ts_slug}"  # write_records_atomic 从 record_id 第二段取 task_id → events/<ID>/event_repair_*.md
+    metadata = {
+        "record_type": RecordType.TASK_PROGRESS_EVENT,
+        "event_type": "frontmatter_repair",
+        "task_id": task_id,
+        "actor": actor,
+        "timestamp": timestamp,
+        "repair": f"AIPOS-F87 件②: {FRONTMATTER_INVALID} 保值规整(仅引号化, 值逐字不变, 队列状态不变)",
+        "card_path": rel,
+        "sha256_before": hashlib.sha256(original.encode("utf-8")).hexdigest(),
+        "sha256_after": hashlib.sha256(repaired_text.encode("utf-8")).hexdigest(),
+        "repaired_lines": [f"L{r['line']} {r['key']}" for r in plan["repairs"]],
+    }
+    body_lines = [f"# Frontmatter Repair: {task_id}", "", f"卡 `{rel}` 原解析告警: {warnings[0]}", ""]
+    for r in plan["repairs"]:
+        body_lines += [f"## 第 {r['line']} 行 `{r['key']}`", "", "```diff", f"- {r['before']}", f"+ {r['after']}", "```", ""]
+    body_lines.append("除上列行外卡文件逐字节不变; 由 `lybra state repair` 写入。")
+    markdown = render_markdown(metadata, "\n".join(body_lines), list(metadata))
+    try:
+        written = write_records_atomic(root, [("event", record_id, markdown)])
+    except Exception:
+        card_path.write_text(original, encoding="utf-8")
+        raise
+    out["repaired"] = True
+    out["repair_record"] = written["paths"][0]
+    out["actions"].append(f"写 repair 记录: {out['repair_record']}")
+    return out
 
 
 def _records_root(governance_root: Path) -> Path:
@@ -360,8 +631,29 @@ def repair_task_state(
     task_id: str,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """AIPOS-C3B 大项C③ + AIPOS-F79D 件④: 先重铸错位/空 session 记录, 再按 records 重建卡的一致状态。"""
+    """AIPOS-C3B 大项C③ + AIPOS-F79D 件④: 先重铸错位/空 session 记录, 再按 records 重建卡的一致状态。
+
+    AIPOS-F87 件②: 卡面 FRONTMATTER_INVALID 时本次只做卡面保值规整(不重铸记录、不动队列状态——坏卡上的字段读不准,
+    按其重建状态会写坏); 规整落盘后再跑一次 state repair 核状态。
+    """
     task_id = task_id.upper()
+    fm_repair = repair_frontmatter_invalid(governance_root, task_id, dry_run=dry_run)
+    if fm_repair["applicable"]:
+        if fm_repair["unresolved"]:
+            message = f"{FRONTMATTER_INVALID}: 卡面无法安全规整, 拒改({len(fm_repair['unresolved'])} 项 unresolved)"
+        elif dry_run:
+            message = f"(dry-run) {FRONTMATTER_INVALID}: 将规整 {len(fm_repair['repairs'])} 行(仅引号化); 本次不做记录重铸与队列状态修复"
+        else:
+            message = f"{FRONTMATTER_INVALID}: 已规整 {len(fm_repair['repairs'])} 行; 队列状态未动, 再跑 state repair 核对状态一致性"
+        return {
+            "task_id": task_id,
+            "repaired": fm_repair["repaired"],
+            "dry_run": dry_run,
+            "message": message,
+            "actions": list(fm_repair["actions"]),
+            "frontmatter_repair": fm_repair,
+            "unresolved": list(fm_repair["unresolved"]),
+        }
     record_repair = repair_empty_session_records(governance_root, task_id, dry_run=dry_run)
     state_repair = _repair_queue_state(governance_root, task_id, dry_run=dry_run)
     actions = list(record_repair["actions"]) + list(state_repair["actions"])

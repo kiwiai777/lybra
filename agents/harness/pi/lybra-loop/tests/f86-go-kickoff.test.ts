@@ -7,13 +7,16 @@
  *  C. 工作树尚未建立(WORKTREE_NOT_CREATED)→ 拒, 文案 = 「工作树尚未建立…等待驱动方完成认领…block-and-report」, 零门动词;
  *     不可推导(LANE_REPO_UNDECLARED 等)→ 拒并转述产品拒因; 报告落点不可推导 → 拒; 无 claimed → 等待; tasks 缺 → 拒。
  *
+ * AIPOS-F87 件③: 选卡改由产品给出(my-tasks 的 next_card / next_card_excluded), 本夹具 B/C 段的输入随之改为产品输出形;
+ *   go.ts 自带的「工作树尚未建立」文案常量退役, 改为原样转述产品拒因(断言随之改为产品原文)。
+ *
  * 跑法: `node tests/f86-go-kickoff.test.ts`
  */
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { planGo, WORKTREE_PENDING_TEXT } from "../../_shared/extensions/go.ts";
+import { planGo } from "../../_shared/extensions/go.ts";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -49,7 +52,8 @@ const ready = {
   report_refusal: null,
 };
 const pending = { task_id: "AIPOS-X0", queue_state: "pending", path: "5_tasks/queue/pending/aipos-x0.md" };
-const planB = planGo({ scope: "my_tasks", tasks: [pending, ready] });
+const nextOf = (t: typeof ready) => ({ task_id: t.task_id, card_path: t.card_path, worktree_path: t.worktree_path, report_path: t.report_path, claimed_at: "2026-10-02T00:00:00Z" });
+const planB = planGo({ scope: "my_tasks", tasks: [pending, ready], next_card: nextOf(ready), next_card_excluded: [] });
 check("B1 有 claimed 卡且工作树就绪 → kickoff", planB.kind === "kickoff", JSON.stringify(planB));
 if (planB.kind === "kickoff") {
   check("B2 kickoff 含产品给出的 worktree_path 原值", planB.kickoff.includes(`工作树路径: ${WT}`), planB.kickoff);
@@ -60,17 +64,18 @@ if (planB.kind === "kickoff") {
 }
 
 // ---------------- C. 拒因与等待 ----------------
+const NOT_CREATED_REASON = `工作树 ${WT} 尚未建立: 认领由驱动方完成并建树, 工位等待驱动方完成认领; 持续存在按 block-and-report 上报`;
 const notCreated = {
   ...ready,
   worktree_exists: false,
-  worktree_refusal: { code: "WORKTREE_NOT_CREATED", reason: `工作树 ${WT} 尚未建立` },
+  worktree_refusal: { code: "WORKTREE_NOT_CREATED", reason: NOT_CREATED_REASON },
 };
-const planC1 = planGo({ tasks: [notCreated] });
+const planC1 = planGo({ tasks: [notCreated], next_card: null,
+  next_card_excluded: [{ task_id: "AIPOS-X1", code: "WORKTREE_NOT_CREATED", reason: NOT_CREATED_REASON }] });
 check("C1 工作树尚未建立 → refused", planC1.kind === "refused", JSON.stringify(planC1));
 if (planC1.kind === "refused") {
-  check("C2 文案 = 卡面规定文案(等待驱动方完成认领 / block-and-report)", planC1.message.includes(WORKTREE_PENDING_TEXT)
-    && WORKTREE_PENDING_TEXT.includes("工作树尚未建立") && WORKTREE_PENDING_TEXT.includes("认领由驱动方完成")
-    && WORKTREE_PENDING_TEXT.includes("block-and-report"), planC1.message);
+  check("C2 文案 = 产品拒因原文(工作树尚未建立 / 认领由驱动方完成 / block-and-report)", planC1.message.includes(NOT_CREATED_REASON)
+    && planC1.message.includes("WORKTREE_NOT_CREATED"), planC1.message);
   check("C3 文案零门动词(无 lybra next / next --run / lybra_*)", !GATE_TEXT_RE.test(planC1.message), planC1.message);
   console.log("---- 工作树尚未建立 文案原文 ----\n" + planC1.message + "\n-------------------------------");
 }
@@ -80,18 +85,20 @@ const unresolved = {
   worktree_exists: false,
   worktree_refusal: { code: "LANE_REPO_UNDECLARED", reason: "卡 AIPOS-X1 lane.repo='c' 不在项目仓清单内" },
 };
-const planC4 = planGo({ tasks: [unresolved] });
+const planC4 = planGo({ tasks: [unresolved], next_card: null, next_card_excluded: [{ task_id: "AIPOS-X1", code: "LANE_REPO_UNDECLARED",
+  reason: "工作树不可推导: 卡 AIPOS-X1 lane.repo='c' 不在项目仓清单内; 按 block-and-report 上报" }] });
 check("C4 工作树不可推导 → refused 且转述产品拒因 code", planC4.kind === "refused" && planC4.message.includes("LANE_REPO_UNDECLARED")
   && planC4.message.includes("工作树不可推导")
   && !GATE_TEXT_RE.test(planC4.message), JSON.stringify(planC4));
 const noReport = { ...ready, report_path: null, report_refusal: { code: "REPORT_LOCATION_UNDECLARED", reason: "x" } };
-const planC5 = planGo({ tasks: [noReport] });
+const planC5 = planGo({ tasks: [noReport], next_card: null, next_card_excluded: [{ task_id: "AIPOS-X1", code: "REPORT_LOCATION_UNDECLARED",
+  reason: "报告落点不可推导: x; 按 block-and-report 上报" }] });
 check("C5 报告落点不可推导 → refused 且带产品拒因", planC5.kind === "refused" && planC5.message.includes("REPORT_LOCATION_UNDECLARED"),
   JSON.stringify(planC5));
 const legacy = { task_id: "AIPOS-X1", queue_state: "claimed", path: "5_tasks/queue/claimed/aipos-x1.md" };
 const planC6 = planGo({ tasks: [legacy] });
 check("C6 旧产品输出(无开工面字段)→ refused, 不在本地补推", planC6.kind === "refused", JSON.stringify(planC6));
-check("C7 无 claimed 卡 → none(等待分配)", planGo({ tasks: [pending] }).kind === "none");
+check("C7 无 claimed 卡 → none(等待分配)", planGo({ tasks: [pending], next_card: null, next_card_excluded: [] }).kind === "none");
 check("C8 tasks 缺 → none 且提示上报(不崩)", planGo({}).kind === "none" && planGo(null).kind === "none");
 
 console.log(failures === 0 ? "\n✓ AIPOS-F86 /go 只读产品输出夹具全部通过" : `\n✗ ${failures} 项失败`);
