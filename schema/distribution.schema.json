@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "description": "Lybra distribution specification - declarative rules for distributing tools/credentials/config/charters to harness workstations. Per DESIGN v2 §4: distribution WHAT = data (this schema), distribution HOW = fixed primitives (distribute_tools.py engine). New distribution entry = add data row, zero code change. Replaces hardcoded ROLE_TOOL_MAPPING.",
-  "last_updated": "2026-09-24",
+  "last_updated": "2026-10-02",
   "primitives": {
     "description": "Fixed distribution primitives (implemented in distribute_tools.py engine). These are the ONLY operations; plugins/custom code forbidden per §4 design decision (supply-chain + auditability).",
     "operations": [
@@ -156,7 +156,7 @@
         ]
       },
       "version_strategy": "git_commit_hash",
-      "notes": "本条目 = 顾问技能集唯一声明(AIPOS-F83 件②)。AIPOS-R6E ⑥: card-author = 顾问出卡检查表; AIPOS-R6M 大项C②: truth-navigator = 时间线导航。"
+      "notes": "本条目 = 顾问技能集唯一声明(AIPOS-F83 件②)。AIPOS-R6E ⑥: card-author = 顾问出卡检查表; AIPOS-R6M 大项C②: truth-navigator = 时间线导航。AIPOS-F84 件②: card-policy-author 母本退役(AIPOS-R8C 遗留, 从未有任何分发声明与调用方, 母本目录删除)。"
     },
     {
       "distribution_id": "executor-charter",
