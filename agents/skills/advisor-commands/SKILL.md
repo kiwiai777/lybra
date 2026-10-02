@@ -294,10 +294,8 @@ lybra governance-commit --governance-root <治理根> --actor <你的顾问实�
 | 口述"下一步做 X" | `lybra next`(原 `next-step`, AIPOS-F71 并入) | AIPOS-R7A |
 | 顾问逐步手按 `lybra next --run`(代按推进) | `lybra loop --task-id <卡ID>` | AIPOS-F73D |
 
-**过渡期豁免**:在所有产品命令上线前,ADVISOR-COMMANDS.md 的手搓片段暂保留作底层参考;
-本卡(AIPOS-F73C)交付后,手搓片段全退役,只保留命令快查表(本 skill)。
-**过渡期豁免**:在所有产品命令上线前,ADVISOR-COMMANDS.md 的手搓片段暂保留作底层参考;
-本卡(AIPOS-R7A)交付后,手搓片段全退役,只保留命令快查表(本 skill)。
+**过渡期已结束**:上表产品命令均已上线(AIPOS-R7A / AIPOS-F73C 交付),ADVISOR-COMMANDS.md 已不在治理仓,手搓片段全退役;
+门命令只以本 skill 命令快查表与 `lybra <子命令> --help` 为准。
 
 ---
 
@@ -328,4 +326,4 @@ lybra governance-commit --governance-root <治理根> --actor <你的顾问实�
 - **LOOP-REDESIGN v2 §4.5**:顾问侧固化点表 A1..A13(动词包+next-step 导航)。
 - **verbs.schema.json**:所有 gate 动词的参数定义(产品命令的单一源)。
 - **transitions.schema.json**:状态机转移表(next-step 的单一源)。
-- **ADVISOR-COMMANDS.md**:底层 gate 动词参考(过渡期保留,手搓片段已退役)。
+- **ADVISOR-COMMANDS.md**:已退役(过渡期结束, 不再保留);底层 gate 动词参数以 verbs.schema.json 为准。
