@@ -46,6 +46,7 @@ declare -a files=(
   "tests/f60-fix1-settle-skeleton.test.ts"
   "tests/f62-deadlock-root-cause.test.ts"
   "tests/f81-token-single-source.test.ts"
+  "tests/f86-go-kickoff.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
@@ -913,6 +914,16 @@ if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f85_on
   echo "✓ tests/test_aipos_f85_onboarding_guide_generic.py PASS"
 else
   echo "✗ tests/test_aipos_f85_onboarding_guide_generic.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F86: pi 工位开工面三件(my-tasks 输出工作树/报告落点·产品单源推导, go.ts 只读不推、报错零门·章程「单一真相源」指向 COMMANDS.md·分发声明与 f57 夹具残留更正; TS 夹具 f86-go-kickoff/f57 在上方 files 清单)
+echo
+echo "── tests/test_aipos_f86_workstation_kickoff.py (F86 三类卡 my-tasks 字段=claim 实际建树·拒因非空串·planGo kickoff 含产品字段/章程 grep ADVISOR-COMMANDS 零命中·渲染无残留/minimum_bootable_set 零门路径·f57 部署解析) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f86_workstation_kickoff.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f86_workstation_kickoff.py PASS"
+else
+  echo "✗ tests/test_aipos_f86_workstation_kickoff.py FAIL"
   overall=1
 fi
 

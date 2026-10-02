@@ -354,7 +354,7 @@
     "retire": "退役某件 = 从对应条目 include/applies_to_roles 删除; 母本目录随之删除(无任何条目声明时); 工位残留由 sync prune 回收(shared_landing_prune_semantics + pi_mount_prune_semantics)。"
   },
   "minimum_bootable_set": {
-    "description": "AIPOS-F54: workstation minimum bootable set — every item enroll must land in one action so a fresh workstation can start pi and run /lybra on with ZERO manual editing. Single source for the missing-item check (each missing item named individually; never 'one missing key breaks everything with no name'). Seeded seed_only: existing files are never overwritten (user customization preserved). Declared here per card acceptance #15 ('config.schema 或分发清单择一').",
+    "description": "AIPOS-F54: workstation minimum bootable set — every item enroll must land in one action so a fresh workstation boots with ZERO manual editing along the zero-gate path: `lybra roles enroll` → `lybra sync --harness-root <workstation> --workspace-root <governance root>` (re-run with --dry-run until plan/prune are empty) → start pi in the workstation → `/go` (claim + worktree are done by the driver via the product; the workstation never claims; AIPOS-F86). Single source for the missing-item check (each missing item named individually; never 'one missing key breaks everything with no name'). Seeded seed_only: existing files are never overwritten (user customization preserved). Declared here per card acceptance #15 ('config.schema 或分发清单择一').",
     "items": [
       {
         "name": ".lybra/connection.json",
@@ -375,7 +375,7 @@
         "key": "lybra_bin",
         "path": ".lybra/connection.json",
         "value_must_exist": true,
-        "description": "Points at the actual CLI deployment so /lybra sync works without probing (dangling path = missing; the TS resolver then probes and reports)"
+        "description": "Points at the actual CLI deployment that the /go extension invokes (`<lybra_bin> my-tasks --actor <instance> --json`, worktree/report location read from its output; absent key falls back to `lybra` on PATH); dangling path = missing (AIPOS-F86)"
       },
       {
         "name": "role#owner_policy_ref",

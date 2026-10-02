@@ -13,9 +13,32 @@
 import { strict as assert } from "node:assert";
 import { execSync } from "node:child_process";
 import { test } from "node:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { resolveLybraBin } from "../lybra-loop.ts";
+import { ConnectionResolver } from "../loop-context.ts";
 
-// 假设从 lybra 产品仓根目录调用
-const LYBRA_BIN = "./bin/lybra";
+// AIPOS-F86 件③: 原写死 "./bin/lybra"(相对 cwd, run-all 的 cwd 是 lybra-loop 目录 → not found, main 基线存量红)。
+// 改为与 run-all 其他 TS 夹具(f20)同口径的产品部署解析: ① 工位 .lybra/connection.json#lybra_bin(经 resolveLybraBin,
+// 含 project.json#code_repo → .deploy/current/bin/lybra 探测) ② PATH 上的 lybra。均不可得 = 夹具失败(fail-closed, 不跳过)。
+function resolveDeployedLybra(): { bin: string; source: string } {
+  const res = resolveLybraBin(fs, path, { lybraDir: ConnectionResolver.discoverLybraDir() });
+  if (res.bin) return { bin: res.bin, source: res.source };
+  for (const dir of String(process.env.PATH || "").split(path.delimiter).filter(Boolean)) {
+    const cand = path.join(dir, "lybra");
+    try {
+      fs.accessSync(cand, fs.constants.X_OK);
+      return { bin: cand, source: `PATH(${dir})` };
+    } catch {
+      // 该 PATH 项无可执行 lybra, 继续下一项
+    }
+  }
+  throw new Error(`lybra CLI 不可解析: connection.json#lybra_bin / 部署探测 / PATH 均无 (tried: ${res.tried.join(", ") || "-"})`);
+}
+
+const RESOLVED = resolveDeployedLybra();
+const LYBRA_BIN = JSON.stringify(RESOLVED.bin);
+console.log(`lybra bin: ${RESOLVED.bin} (来源: ${RESOLVED.source})`);
 
 test("AIPOS-F57 ① lybra onboarding guide 命令可调用", () => {
   // 跑 help 不应崩溃

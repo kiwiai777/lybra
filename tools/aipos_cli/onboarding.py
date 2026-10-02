@@ -272,10 +272,9 @@ def generate_onboarding_guide(
             "缺项报错": "按输出的缺项名逐项修复; 常见: lybra_bin 悬空→重跑 Step 4 enroll; owner_policy_ref 缺失→检查 Step 2 信封 status=active",
             "/go 报 .lybra/role not found": "pi 须在工位目录启动; 回 Step 5 先 cd 到工位再起 pi",
             "/go 不是已知命令": "go 扩展未落到工位; 回 Step 5 重跑 sync 并用 --dry-run 复核稳态",
-            "/go 报 Worktree not found": (
-                "认领与工作树由驱动方经产品完成(顾问侧), 工位不自领; 未认领 = 等驱动方完成后再 /go; "
-                "已认领仍报此错 = 产品缺口(go 扩展推导的工作树位置与产品工作树落点不一致, AIPOS-F85 登记), "
-                "按 block-and-report 上报, 不手建目录绕过"
+            "/go 报 工作树尚未建立": (
+                "工作树与报告落点由产品推导(go 扩展只读产品输出, AIPOS-F86), 认领与建树由驱动方完成, 工位不自领; "
+                "等驱动方完成认领后再 /go; 持续存在 = 按 block-and-report 上报(原样附 /go 报出的产品拒因), 不手建目录绕过"
             ),
             "gate 不通": "确认门运行中(lybra serve status)且 .lybra/connection.json 的门地址正确",
         },

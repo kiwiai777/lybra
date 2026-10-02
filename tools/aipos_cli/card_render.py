@@ -25,9 +25,8 @@ from tools.aipos_cli.next_resolver import (
     _artifact_ingest_declaration,
     _find_task_in_queue,
     _read_frontmatter,
-    _resolve_worktree_root,
-    _return_artifact_path,
-    audit_report_artifact_path,
+    card_report_path,
+    card_worktree_location,
     required_return_frontmatter,
 )
 
@@ -89,16 +88,14 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
     if allowed and chosen not in allowed:
         raise ValueError(f"harness={chosen!r} 不在 card.schema intent_face.harness.allowed {allowed}")
 
-    # AIPOS-F78C 件②: 开工提示的仓路径/工作树落点 = 该卡声明的仓(resolve_card_repo 唯一解析; 解析不到 = ValueError fail-closed)
-    from tools.aipos_cli.workspace_config import resolve_card_repo
-
-    code_repo = resolve_card_repo(governance_root, {**fm, "task_id": task_id})
-    worktree = _resolve_worktree_root(governance_root, code_repo) / task_id
+    # AIPOS-F78C 件② + F86 件①: 开工提示的仓路径/工作树落点 = card_worktree_location(该卡声明的仓经 resolve_card_repo 唯一解析;
+    # 与 claim 建树 / my-tasks 开工面同一函数; 解析不到 = ValueError fail-closed)
+    code_repo, worktree = card_worktree_location(governance_root, task_id, {**fm, "task_id": task_id})
     branch = str(get_branch_integration().get("branch_pattern") or "card/{task_id}").replace("{task_id}", task_id)
-    # AIPOS-F66B 件③: 审计卡(task_mode=audit)的报告落点 = 声明位 verdict_root/<审计卡ID>/<候选>(与派生卡文案同一读取口),
-    # 执行卡 = return_root/<ID>/<候选>; 两者都读声明, 禁写死。
+    # AIPOS-F66B 件③ + F86 件①: 报告落点 = card_report_path(审计卡 verdict_root/<审计卡ID>/<候选>, 执行卡 return_root/<ID>/<候选>;
+    # 与派生卡文案 / my-tasks 同一读取口, 禁写死)。
     is_audit = str(fm.get("task_mode") or "").strip().lower() == "audit"
-    return_path = audit_report_artifact_path(governance_root, task_id) if is_audit else _return_artifact_path(governance_root, task_id)
+    return_path = card_report_path(governance_root, task_id, fm)
     if is_audit:
         return_frontmatter = [str(k) for k in (_artifact_ingest_declaration()["verdict"].get("required_frontmatter") or [])]
         if not return_frontmatter:

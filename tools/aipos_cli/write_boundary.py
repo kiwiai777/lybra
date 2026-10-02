@@ -10,7 +10,7 @@
   - render_write_boundary_markdown(...): 章程渲染物用的「写权限边界(声明渲染)」节(含 hard_rules「拒后禁换方式重试」)。
 
 路径全部读声明: config.schema governance_structure.paths(path_key) / project.json paths(project_paths, F78 唯一读取口)
-/ project.json repos(project_repos, F78C 唯一读取口)/ worktree_root(next_resolver._resolve_worktree_root)。
+/ project.json repos(project_repos, F78C 唯一读取口)/ worktree_root(next_resolver.card_worktree_location, F86 开工面单源)。
 fail-closed: 声明缺 = SchemaLoadError; 违规 = 拒, 不吞。外部护栏(kiwiaiops guard-lib 等)的改造不在本模块(登记不代做)。
 """
 from __future__ import annotations
@@ -308,10 +308,10 @@ def check_access(
         if not task_id:
             return {**base, "allowed": False, "code": "TASK_ID_REQUIRED",
                     "reason": f"面 {surface} 的 {want} 受本卡工作树 + lane.paths 双限, 需给 task_id"}
-        from tools.aipos_cli.next_resolver import _resolve_worktree_root
+        from tools.aipos_cli.next_resolver import card_worktree_location
 
-        repo, lane_paths = _card_lane_paths(governance_root, task_id)
-        worktree = _resolve_worktree_root(governance_root, repo) / task_id
+        _repo, lane_paths = _card_lane_paths(governance_root, task_id)
+        _repo, worktree = card_worktree_location(governance_root, task_id)  # AIPOS-F86: 与 claim 建树 / my-tasks 同一推导
         worktree_r = worktree.resolve() if worktree.exists() else Path(str(worktree))
         if not _is_within(target, worktree_r):
             return {**base, "allowed": False, "code": "NOT_CARD_WORKTREE",

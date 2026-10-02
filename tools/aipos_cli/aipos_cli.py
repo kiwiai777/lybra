@@ -143,6 +143,23 @@ def _filter_my_tasks(report: dict[str, Any], actor: str, profiles: dict[str, Any
     return {**report, "scope": "my_tasks", "actor": actor, "tasks": filtered, **availability}
 
 
+def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    """AIPOS-F86 件①: my-tasks --json 的每张 claimed 卡附开工面字段(card_path / worktree_* / report_*)。
+
+    推导只在产品侧一处: next_resolver.card_workstation_view(→ card_worktree_location / card_report_path, 与 claim 建树、
+    card render 同一函数); 工位 /go 只读这些字段。不可推导 / 尚未建立 = 明确拒因字段, 不输出空串。
+    """
+    from tools.aipos_cli.next_resolver import card_workstation_view
+
+    root = Path(repo_root).resolve()
+    for summary, task in zip(output["tasks"], actor_report["tasks"]):
+        if summary.get("queue_state") != "claimed":
+            continue
+        summary["card_path"] = str(root / str(task.get("path")))
+        summary.update(card_workstation_view(root, str(task.get("task_id") or ""), task.get("metadata") or {}))
+    return output
+
+
 def _filter_needs_owner(report: dict[str, Any]) -> dict[str, Any]:
     filtered = [
         task
@@ -4892,7 +4909,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "my-tasks":
         actor_report = _filter_my_tasks(report, args.actor, profiles)
         if args.json:
-            print(render_json(_json_report(actor_report, records=records)))
+            print(render_json(_attach_workstation_view(_json_report(actor_report, records=records), actor_report, repo_root)))
         else:
             print(render_my_tasks_text(actor_report, args.actor))
         return 0
