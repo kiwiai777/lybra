@@ -938,6 +938,16 @@ else
   overall=1
 fi
 
+# AIPOS-F88: 族 A-1 工作树与根的识别定位单源三件(门认领建树委托 _ensure_worktree·失败=worktree_error 不吞 warning/治理仓识别唯一结构判据 has_workspace_queue·Python↔TS 同判/根路径语义分域 governance_workspace_root·product_repo_root·lybra workspace roots·deploy/pre-commit 读 CLI; f22 TS 夹具 E 段改结构判据已在上方 files 清单; F78B item3 随件① 改为门认领建树后在工作树提交, 已在上方 F78B 块)
+echo
+echo "── tests/test_aipos_f88_root_single_source.py (F88 门认领落点=my-tasks·零 warning·双仓 lane.repo·建树失败显式拒因·WorktreeManager 委托/结构判据不看路径名·TS 镜像同判·子串判定清零/两命名函数·禁布局回退·车道内写死根清零·F71 换机器任意 cwd·roots CLI·deploy 只读靶场·pre-commit 读 CLI·write-guard fail-closed) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f88_root_single_source.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f88_root_single_source.py PASS"
+else
+  echo "✗ tests/test_aipos_f88_root_single_source.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
