@@ -34,11 +34,10 @@ STRUCTURE_FILENAME = "lybra-project.yaml"
 MIGRATION_CHECKLIST_FILENAME = "migration-checklist.md"
 
 # Standard five-piece set (标准五件套) directories/files
+# AIPOS-F89 件① M8: 队列状态目录不在此写死——import 时按队列根声明(task_loader.queue_root_for; 新根无 project.json = 声明 default)
+# 由 _standard_five_piece_dirs() 派生。
+QUEUE_SKELETON_STATES = ("pending", "claimed", "completed", "blocked")
 STANDARD_FIVE_PIECE = [
-    "5_tasks/queue/pending",
-    "5_tasks/queue/claimed",
-    "5_tasks/queue/completed",
-    "5_tasks/queue/blocked",
     "5_tasks/records",
     "5_tasks/drafts",
     "5_tasks/orchestration",
@@ -475,8 +474,10 @@ def export_project_structure(
 
     # Queue state counts (summary)
     queue_summary: dict[str, int] = {}
+    from tools.aipos_cli.task_loader import queue_root_for  # AIPOS-F89 件① M8: 队列根唯一读取口(惰性导入, 见文件头)
+
     for state in ("pending", "claimed", "completed", "blocked"):
-        state_dir = root / "5_tasks" / "queue" / state
+        state_dir = queue_root_for(root) / state
         if state_dir.is_dir():
             count = sum(1 for f in state_dir.iterdir() if f.is_file() and f.suffix == ".md")
             queue_summary[state] = count
@@ -635,7 +636,9 @@ def import_project_structure(
     # Non-empty directory protection (red line: import never rm's)
     if output.exists() and output.is_dir() and not _dir_is_empty_or_absent(output):
         # Check if it's already a lybra workspace (idempotent re-run)
-        has_queue = (output / "5_tasks" / "queue").is_dir()
+        from tools.aipos_cli.task_loader import queue_root_for  # AIPOS-F89 件① M8
+
+        has_queue = queue_root_for(output).is_dir()
         if has_queue:
             # Idempotent: allow re-run but skip existing
             pass
@@ -655,9 +658,12 @@ def import_project_structure(
     planned_files: list[dict[str, str]] = []
     skipped: list[str] = []
 
-    # 1. Standard five-piece set directories
+    # 1. Standard five-piece set directories(队列状态目录读声明, AIPOS-F89 件① M8)
+    from tools.aipos_cli.task_loader import queue_state_ref
+
+    for state in QUEUE_SKELETON_STATES:
+        planned_dirs.append(queue_state_ref(output, state).rstrip("/"))
     for rel_dir in STANDARD_FIVE_PIECE:
-        target = output / rel_dir
         planned_dirs.append(rel_dir)
 
     # 2. .lybra/ directory with ignore rules

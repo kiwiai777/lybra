@@ -1832,7 +1832,8 @@ def lybra_task_preview(arguments: dict[str, Any] | None = None) -> dict[str, Any
 
 def lybra_return_content(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-320: read-only tool that returns the RETURN.md body for a task card.
-    Path is strictly confined to task_cards/<task_id>/RETURN.md within the gate workspace.
+    Path is strictly confined to the declared Return location <project.json paths.return_root>/<task_id>/ within the gate
+    workspace (AIPOS-F89 件① H9: 唯一推导 next_resolver._return_artifact_path, 禁写死 task_cards/<ID>/RETURN.md).
     Requires queue_claim scope (held by executor and auditor tokens)."""
     if not _queue_claim_scope_allowed():
         return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "lybra_return_content")
@@ -1847,11 +1848,17 @@ def lybra_return_content(arguments: dict[str, Any] | None = None) -> dict[str, A
             category="PATH_ESCAPE_BLOCKED",
         )
     repo_root = _repo_root()
-    return_body_rel = f"task_cards/{task_id}/RETURN.md"
-    return_body_path = repo_root / return_body_rel
+    from tools.aipos_cli.next_resolver import _return_artifact_path
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        return_body_path = _return_artifact_path(repo_root, task_id)
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        return _error_result(f"Return 落点声明读取失败(project.json paths.return_root): {exc}", category="RETURN_LOCATION_UNDECLARED")
+    return_body_rel = str(return_body_path)
     # Double-check path confinement after resolution
     try:
-        return_body_path.resolve().relative_to(repo_root.resolve())
+        return_body_rel = return_body_path.resolve().relative_to(repo_root.resolve()).as_posix()
     except ValueError:
         return _error_result(
             f"return_body path escapes workspace: {return_body_rel}",
@@ -5463,7 +5470,7 @@ READ_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "string", "description": "The task_id to read RETURN.md for. Path is strictly confined to task_cards/<task_id>/RETURN.md."},
+                "task_id": {"type": "string", "description": "The task_id to read RETURN.md for. Path is strictly confined to the declared Return location <project.json paths.return_root>/<task_id>/."},
             },
             "required": ["task_id"],
             "additionalProperties": False,
@@ -5790,7 +5797,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "executor_status": {"type": "string", "enum": ["completed"]},
                 "audit_readiness": {"type": "string", "enum": ["ready"]},
                 "return_reason": {"type": "string"},
-                "return_body": {"type": "string", "description": "AIPOS-320: optional RETURN.md body text. When provided, the gate writes it to task_cards/<ID>/RETURN.md on confirm. Path is strictly confined to task_cards/<ID>/RETURN.md (no path escape)."},
+                "return_body": {"type": "string", "description": "AIPOS-320: optional RETURN.md body text. When provided, the gate writes it to the declared Return location <project.json paths.return_root>/<ID>/RETURN.md on confirm (no path escape)."},
                 "actual_model": {"type": "string"},
                 "reported_tokens": {"type": "integer"},
                 "agent_runtime": {

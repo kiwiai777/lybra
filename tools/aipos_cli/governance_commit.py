@@ -301,8 +301,8 @@ def check_governance_completeness(
             "details": dict,       # 各项详情
         }
     """
-    from tools.schema_loader import resolve_governance_path
-    
+    from tools.schema_loader import SchemaLoadError, resolve_governance_path
+
     missing = []
     details = {}
     
@@ -316,11 +316,18 @@ def check_governance_completeness(
         details["stage_snapshots"] = {"applicable": True, "note": "Stage archive check still applies"}
         # 无卡时只检查 stage_archive (阶段粒度治理更新仍需快照)
     else:
-        # ① 本卡台账条目 (task_cards/<ID>/) + ④ 归档文件检查
-        # AIPOS-R7A2 FIX-2: task_cards 路径从 schema 解析,失败即 BLOCK
+        # ① 本卡台账条目 (<paths.task_cards_root>/<ID>/) + ④ 归档文件检查
+        # AIPOS-F89 件① H9: 台账根只读项目声明 project.json paths.task_cards_root(唯一读取口 workspace_config.project_paths);
+        # 原读 config.schema governance_structure.paths.task_cards(第二份声明, 已删)。解析失败即 BLOCK(R7A2 FIX-2 语义不变)。
+        from tools.aipos_cli.workspace_config import project_paths
+
         try:
-            task_cards_root = resolve_governance_path("task_cards", governance_root, repo_root)
+            task_cards_root = Path(project_paths(governance_root)["task_cards_root"])
             task_cards_dir = task_cards_root / task_id
+            try:
+                ledger_ref = task_cards_dir.relative_to(governance_root).as_posix()
+            except ValueError:
+                ledger_ref = str(task_cards_dir)
         
             if task_cards_dir.is_dir():
                 details["task_cards"] = {
@@ -336,19 +343,19 @@ def check_governance_completeness(
                 ]
                 
                 if not archive_files:
-                    missing.append(f"task_cards/{task_id}/ 缺少归档文件 (RETURN.md/AUDIT-REPORT.md/CLOSURE.md)")
+                    missing.append(f"{ledger_ref}/ 缺少归档文件 (RETURN.md/AUDIT-REPORT.md/CLOSURE.md)")
                 
                 details["archive_files"] = {
                     "exists": len(archive_files) > 0,
                     "files": archive_files,
                 }
             else:
-                missing.append(f"task_cards/{task_id}/ (台账条目不存在)")
+                missing.append(f"{ledger_ref}/ (台账条目不存在)")
                 details["task_cards"] = {"exists": False}
                 details["archive_files"] = {"exists": False, "files": []}
-        except Exception as exc:
+        except (SchemaLoadError, OSError, ValueError) as exc:
             # AIPOS-R7A2 FIX-2: 移除 fallback,解析失败显式报错
-            missing.append(f"task_cards/ (路径解析失败: {exc})")
+            missing.append(f"<paths.task_cards_root>/ (路径解析失败: {exc})")
             details["task_cards"] = {"exists": False, "error": str(exc)}
             details["archive_files"] = {"exists": False, "error": str(exc)}
         

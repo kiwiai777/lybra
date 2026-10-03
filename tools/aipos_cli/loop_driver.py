@@ -44,6 +44,7 @@ from tools.aipos_cli.next_resolver import (
     derive_next_step,
     driver_scope,
     execute_derived_action,
+    auditor_artifact_watch,
     executor_artifact_watch,
 )
 
@@ -257,26 +258,9 @@ def check_command_parses(command: str) -> tuple[bool, str]:
 # 等待产物(读 transitions N2.artifact / N4.audit_report 声明)
 # ---------------------------------------------------------------------------
 
-def executor_artifact_patterns(task_id: str, governance_root: Path | None = None) -> list[str]:
-    """AIPOS-F78 件④: 执行体产物等待 glob 读项目声明(project.json paths.return_root + artifact_ingest.return 候选);
-    无治理根(仅取模板)时回退 N2.artifact.location 默认声明。"""
-    if governance_root is not None:
-        return executor_artifact_watch(governance_root, task_id)[1]
-    template = str(_transition_node("N2").get("artifact", {}).get("location") or "").strip()
-    if not template:
-        from tools.schema_loader import SchemaLoadError
-
-        raise SchemaLoadError("transitions.schema.json N2.artifact.location 未声明")
-    return [template.replace("{task_id}", task_id)]
-
-
-def auditor_artifact_patterns(audit_task_id: str) -> list[str]:
-    cands = _transition_node("N4").get("audit_report", {}).get("location_candidates") or []
-    if not cands:
-        from tools.schema_loader import SchemaLoadError
-
-        raise SchemaLoadError("transitions.schema.json N4.audit_report.location_candidates 未声明")
-    return [str(c).replace("{audit_task_id}", audit_task_id) for c in cands]
+# AIPOS-F89 件① H9: 原 executor_artifact_patterns(无治理根时回退 N2.artifact.location)与 auditor_artifact_patterns
+# (读 N4.audit_report.location_candidates, 写死 task_cards/{audit_task_id}/…)两份第二声明删除; 等待落点一律经
+# next_resolver.executor_artifact_watch / auditor_artifact_watch(project.json paths.return_root / verdict_root + artifact_ingest 候选)。
 
 
 def _watch_args(governance_root: Path, patterns: list[str], *, max_wait: float, interval: float) -> SimpleNamespace:
@@ -444,7 +428,7 @@ def _drive(
                     derivation, target_card, action = audit_derivation, audit_card, audit_action
                 else:
                     target_card = ready_card = audit_card
-                    wait_patterns = auditor_artifact_patterns(audit_card)
+                    watch_root, wait_patterns = auditor_artifact_watch(governance_root, audit_card)
             node = derivation.get("current_node")
             state = derivation.get("current_state")
             if action.get("type") in HARD_STOP_ACTIONS:

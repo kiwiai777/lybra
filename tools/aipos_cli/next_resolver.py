@@ -55,9 +55,10 @@ def _scoped_driver() -> dict[str, str]:
 def _resolve_governance_path_with_relative(key: str, governance_root: Path) -> Path:
     """解析治理路径,处理 relative_to 链。
     
-    如 queue 相对于 tasks_root,需递归解析:
+    如 records 相对于 tasks_root,需递归解析:
     tasks_root → 5_tasks/
-    queue → tasks_root + queue/ = 5_tasks/queue/
+    records → tasks_root + records/ = 5_tasks/records/
+    (队列根不经此处: 只读 task_loader.queue_root_for, AIPOS-F89 件① M8)
     """
     from tools.schema_loader import get_governance_path, resolve_governance_path
     
@@ -191,20 +192,47 @@ def find_return_artifact(workspace_root: Path, task_id: str) -> Path | None:
     return _pick_candidate(return_artifact_dir(workspace_root, task_id), cands)
 
 
+def default_return_file(workspace_root: Path, task_id: str) -> Path:
+    """执行体 Return 的声明位默认文件 = <paths.return_root>/<task_id>/<首个非通配候选>(AIPOS-F89 件① H9 唯一推导:
+    认领骨架 / 门侧 return_body 落盘 / lybra_return_content 读取同此, 禁写死 task_cards/<ID>/RETURN.md)。候选缺 = SchemaLoadError。"""
+    cands = list(_artifact_ingest_declaration()["return"].get("return_file_candidates") or [])
+    first = next((str(c) for c in cands if not any(ch in str(c) for ch in "*?[")), None)
+    if first is None:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.return.return_file_candidates 无非通配候选")
+    return return_artifact_dir(workspace_root, task_id) / first
+
+
 def _return_artifact_path(workspace_root: Path, task_id: str) -> Path:
-    """执行体产物路径: 已落盘的 Return 文件; 未落盘时返回声明位默认文件(首个非通配候选)。"""
+    """执行体产物路径: 已落盘的 Return 文件; 未落盘时返回声明位默认文件(default_return_file)。"""
     found = find_return_artifact(workspace_root, task_id)
     if found is not None:
         return found
-    cands = list(_artifact_ingest_declaration()["return"].get("return_file_candidates") or [])
-    first = next((str(c) for c in cands if not any(ch in str(c) for ch in "*?[")), "RETURN.md")
-    return return_artifact_dir(workspace_root, task_id) / first
+    return default_return_file(workspace_root, task_id)
 
 
 def executor_artifact_watch(workspace_root: Path, task_id: str) -> tuple[Path, list[str]]:
     """AIPOS-F78: loop 等待执行体产物的 (watch 根, 相对 glob 列表)——落点读声明; 声明根在治理根外时以落点根为 watch 根。"""
     directory = return_artifact_dir(workspace_root, task_id)
     cands = [str(c) for c in (_artifact_ingest_declaration()["return"].get("return_file_candidates") or [])]
+    try:
+        rel = directory.resolve().relative_to(Path(workspace_root).resolve())
+        return Path(workspace_root), [str(rel / c) for c in cands]
+    except ValueError:
+        return directory.parent, [f"{directory.name}/{c}" for c in cands]
+
+
+def auditor_artifact_watch(workspace_root: Path, audit_task_id: str) -> tuple[Path, list[str]]:
+    """AIPOS-F89 件① H9: loop 等待审计报告的 (watch 根, 相对 glob 列表)——与 executor_artifact_watch 同构: 落点根读项目声明
+    paths.verdict_root(verdict_artifact_dir), 文件候选读 transitions artifact_ingest.verdict.verdict_file_candidates;
+    原读 transitions N4.audit_report.location_candidates(写死 task_cards/{audit_task_id}/…, 第二份声明)已删。"""
+    directory = verdict_artifact_dir(workspace_root, audit_task_id)
+    cands = [str(c) for c in (_artifact_ingest_declaration()["verdict"].get("verdict_file_candidates") or [])]
+    if not cands:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.verdict_file_candidates 未声明")
     try:
         rel = directory.resolve().relative_to(Path(workspace_root).resolve())
         return Path(workspace_root), [str(rel / c) for c in cands]
@@ -219,7 +247,7 @@ def verdict_artifact_dir(workspace_root: Path, audit_task_id: str) -> Path:
 
 def _audit_report_candidates(workspace_root: Path, audit_task_id: str) -> list[Path]:
     """审计体产物候选: 落点根读项目声明(verdict_root), 文件候选读 transitions artifact_ingest.verdict.verdict_file_candidates
-    (与 N4.audit_report.location_candidates 同序: RETURN.md 优先, 回退 audit_report.md)。"""
+    (RETURN.md 优先, 回退 audit_report.md; N4.audit_report.location_ref 指向同一声明)。"""
     directory = verdict_artifact_dir(workspace_root, audit_task_id)
     cands = list(_artifact_ingest_declaration()["verdict"].get("verdict_file_candidates") or [])
     out: list[Path] = []
@@ -1933,7 +1961,9 @@ def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
     按优先级排序:pending(先出) > claimed(有 return 产物) > claimed(无产物) > blocked。
     """
     workspace_root = Path(workspace_root)
-    queue_root = _resolve_governance_path_with_relative("queue", workspace_root)
+    from tools.aipos_cli.task_loader import queue_root_for
+
+    queue_root = queue_root_for(workspace_root)  # AIPOS-F89 件① M8: 队列根唯一读取口
     results: list[dict[str, Any]] = []
 
     # 扫描 pending + claimed(活跃任务)

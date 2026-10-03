@@ -272,31 +272,12 @@ _DEFAULT_CHAIN = _CODE_NO_DEPLOY_CHAIN
 def resolve_collaboration_profile(project_json_path: Path) -> dict[str, Any]:
     """Read collaboration_profile from project.json.
 
-    Returns the profile dict, or a default profile if not found.
+    AIPOS-F89 件① M14: 委托唯一读取口 workspace_config.get_collaboration_profile(缺省值唯一声明在 config.schema
+    project_json.schema.collaboration_profile.default); 本处原第二读取口 + 第二份缺省删除。保留函数名供既有调用方。
     """
-    default_profile = {
-        "code_enabled": True,
-        "deploy_gate_enabled": False,
-        "default_audit_mode": "agent",
-        "output_locations": ["product_repo_worktree", "workspace_records"],
-    }
+    from tools.aipos_cli.workspace_config import get_collaboration_profile
 
-    if not project_json_path.is_file():
-        return default_profile
-
-    try:
-        data = json.loads(project_json_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default_profile
-
-    profile = data.get("collaboration_profile")
-    if not isinstance(profile, dict):
-        return default_profile
-
-    # Merge with defaults for missing fields
-    result = dict(default_profile)
-    result.update(profile)
-    return result
+    return get_collaboration_profile(Path(project_json_path).parent)
 
 
 def resolve_gate_chain(

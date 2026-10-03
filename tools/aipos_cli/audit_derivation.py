@@ -18,7 +18,7 @@ from tools.aipos_cli.draft_writer import render_publish_record, stable_publish_i
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.queue_mutation import render_task_markdown
 from tools.aipos_cli.records import expected_publish_record_path
-from tools.aipos_cli.task_loader import find_task_by_id
+from tools.aipos_cli.task_loader import find_task_by_id, queue_root_for, queue_state_ref
 from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
 from tools.schema_constants import RecordType
 from tools.schema_loader import get_required_card_fields  # AIPOS-F17 大项A: schema 单源必填集
@@ -561,7 +561,7 @@ Independent audit of task `{source_task_id}`.
             )
         audit_body = audit_body.rstrip() + "\n\n" + section + "\n"
 
-    audit_task_path = f"5_tasks/queue/pending/{_task_filename_for(audit_task_id)}"
+    audit_task_path = f"{queue_state_ref(repo_root, 'pending')}{_task_filename_for(audit_task_id)}"  # AIPOS-F89 件① M8
     
     return {
         "metadata": audit_metadata,
@@ -812,9 +812,9 @@ def derive_repair_card_on_fail(
     # AIPOS-F44B-fix1-fix1: fix 序号递增——按已有 fix 链递增（而非文件数）
     # 检查已有多少轮修复卡（从 records 的 task_claims/task_returns 读取，单一数据源）
     existing_fix_rounds = set()
-    queue_dir = governance_root / "5_tasks" / "queue" / "pending"
-    claimed_dir = governance_root / "5_tasks" / "queue" / "claimed"
-    completed_dir = governance_root / "5_tasks" / "queue" / "completed"
+    queue_dir = queue_root_for(governance_root) / "pending"
+    claimed_dir = queue_root_for(governance_root) / "claimed"
+    completed_dir = queue_root_for(governance_root) / "completed"
     
     # 扫描所有队列目录，找到已有的 fix 序号
     for qdir in [queue_dir, claimed_dir, completed_dir]:
@@ -845,7 +845,7 @@ def derive_repair_card_on_fail(
 
     # 读取原任务卡获取元数据
     source_card = None
-    for qdir in [queue_dir, claimed_dir, governance_root / "5_tasks" / "queue" / "completed"]:
+    for qdir in [queue_dir, claimed_dir, queue_root_for(governance_root) / "completed"]:
         candidate = qdir / _task_filename_for(reviewed_task_id)
         if candidate.exists():
             source_card = candidate

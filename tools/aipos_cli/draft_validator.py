@@ -33,8 +33,7 @@ except ImportError:
 
 
 DRAFTS_DIR = Path("5_tasks/drafts")
-QUEUE_DIR = Path("5_tasks/queue")
-PENDING_QUEUE_DIR = QUEUE_DIR / "pending"
+# AIPOS-F89 件① M8: 队列目录常量(写死 5_tasks/queue)删除——pending 落点经 task_loader.queue_root_for(project.json paths.queue_root)
 
 DRAFT_REQUIRED_FIELDS = [
     "task_id",
@@ -107,8 +106,17 @@ def expected_draft_relative_path(task_id: str) -> str:
     return str(DRAFTS_DIR / f"{draft_slug(task_id)}.md")
 
 
-def expected_pending_relative_path(task_id: str) -> str:
-    return str(PENDING_QUEUE_DIR / f"{draft_slug(task_id)}.md")
+def pending_queue_dir(repo_root: Path) -> Path:
+    """pending 目录 = 队列根(唯一读取口 task_loader.queue_root_for)/ pending。"""
+    from tools.aipos_cli.task_loader import queue_root_for
+
+    return queue_root_for(repo_root) / "pending"
+
+
+def expected_pending_relative_path(task_id: str, repo_root: Path) -> str:
+    from tools.aipos_cli.task_loader import queue_state_ref
+
+    return f"{queue_state_ref(repo_root, 'pending')}{draft_slug(task_id)}.md"
 
 
 def _is_safe_task_id(task_id: Any) -> bool:
@@ -143,10 +151,10 @@ def resolve_draft_path(repo_root: Path, provided_path: str | Path) -> Path:
 
 
 def resolve_pending_target_path(repo_root: Path, task_id: str) -> Path:
-    pending_root = (repo_root / PENDING_QUEUE_DIR).resolve()
-    target_path = (repo_root / expected_pending_relative_path(task_id)).resolve()
+    pending_root = pending_queue_dir(repo_root).resolve()
+    target_path = (repo_root / expected_pending_relative_path(task_id, repo_root)).resolve()
     if not _resolved_within(pending_root, target_path):
-        raise ValueError(f"Pending target resolves outside 5_tasks/queue/pending/: {task_id}")
+        raise ValueError(f"Pending target resolves outside {pending_root}: {task_id}")
     if target_path.suffix.lower() != ".md":
         raise ValueError(f"Pending target is not a markdown file: {target_path}")
     return target_path
@@ -167,7 +175,9 @@ def iter_draft_paths(repo_root: Path) -> list[Path]:
 
 def _iter_collision_candidate_paths(repo_root: Path) -> list[Path]:
     paths = iter_draft_paths(repo_root)
-    queue_root = repo_root / QUEUE_DIR
+    from tools.aipos_cli.task_loader import queue_root_for
+
+    queue_root = queue_root_for(repo_root)
     for queue_state in QUEUE_STATES:
         state_dir = queue_root / queue_state
         if not state_dir.exists():

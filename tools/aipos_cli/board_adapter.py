@@ -61,6 +61,7 @@ from tools.aipos_cli.record_writer import (
     session_record_path,
 )
 from tools.aipos_cli.owner_truth_view import build_owner_truth_view
+from tools.schema_loader import SchemaLoadError
 from tools.aipos_cli.records import expected_closure_record_path, load_records
 from tools.aipos_cli.task_loader import (
     find_repo_context,
@@ -69,6 +70,7 @@ from tools.aipos_cli.task_loader import (
     find_task_card,
     load_all_tasks,
     load_task_by_path,
+    queue_root_for,
 )
 from tools.aipos_cli.workspace_config import (
     find_workspace_config,
@@ -478,7 +480,7 @@ def get_health(repo_root: str | Path | None = None) -> dict[str, Any]:
                 ],
             },
             "paths": {
-                "queue_root_found": (resolved_root / "5_tasks" / "queue").exists(),
+                "queue_root_found": queue_root_for(resolved_root).exists(),
                 "records_root_found": (resolved_root / "5_tasks" / "records").exists(),
                 "drafts_root_found": (resolved_root / "5_tasks" / "drafts").exists(),
             },
@@ -1988,8 +1990,7 @@ def _create_return_skeleton(repo_root: Path, task_id: str) -> dict[str, Any] | N
         RuntimeError: If path resolution fails (fail-closed semantic)
     """
     from tools.aipos_cli.record_writer import build_return_skeleton_markdown
-    from tools.schema_loader import resolve_governance_path
-    
+
     try:
         # AIPOS-F65A-fix2-R3 症③: schema以产品仓为根(与F71-R3/finalize同款),治理路径以治理仓为根
         # AIPOS-F78 件④: 骨架落点读项目声明(project.json paths.return_root, 缺省=task_cards), 禁写死
@@ -2017,7 +2018,7 @@ def _create_return_skeleton(repo_root: Path, task_id: str) -> dict[str, Any] | N
         # transitions.schema 已声明 fail_closed: "Path resolution failure blocks claim (skeleton creation is not optional)"
         raise RuntimeError(
             f"RETURN_SKELETON_PATH_RESOLUTION_FAILED: 无法创建 RETURN.md 骨架 - 路径解析失败: {exc}。"
-            f"出口: 检查 config.schema.json governance_structure.paths.task_cards 配置是否正确。"
+            f"出口: 检查治理根 project.json paths(return_root/verdict_root)声明是否正确。"
         ) from exc
 
 
@@ -2304,6 +2305,27 @@ def _unsafe_return_ref(value: str) -> bool:
     return raw.is_absolute() or ".." in raw.parts
 
 
+def _return_ref_prefix(repo_root: Path, task_id: str) -> str:
+    """交回材料引用前缀 = 治理根相对的 <paths.return_root>/<task_id>/(AIPOS-F89 件① H9: 唯一推导 next_resolver.return_artifact_dir)。
+    声明落点不在治理根内 = ValueError(交回材料引用一律治理根相对, fail-closed)。"""
+    from tools.aipos_cli.next_resolver import return_artifact_dir
+
+    directory = return_artifact_dir(Path(repo_root), task_id)
+    try:
+        rel = directory.resolve().relative_to(Path(repo_root).resolve())
+    except ValueError as exc:
+        raise ValueError(f"交回落点 {directory} 不在治理根 {repo_root} 内") from exc
+    return f"{rel.as_posix()}/"
+
+
+def _return_body_rel(repo_root: Path, task_id: str) -> str:
+    """门侧 return_body 落盘 / 读取的治理根相对路径 = next_resolver.default_return_file(AIPOS-F89 件① H9, 禁写死)。"""
+    from tools.aipos_cli.next_resolver import default_return_file
+
+    target = default_return_file(Path(repo_root), task_id)
+    return target.resolve().relative_to(Path(repo_root).resolve()).as_posix()
+
+
 def _validate_return_artifact_refs(
     artifact_refs: list[str],
     completion_report_ref: str | None,
@@ -2337,17 +2359,16 @@ def _validate_return_artifact_refs(
     import subprocess
     
     blocking_reasons: list[str] = []
-    # AIPOS-F65A 大项②: 落点声明化 - 从 schema 解析 task_cards 路径,禁硬编码
-    # AIPOS-F65A-fix2-R3 症③: schema以产品仓为根(与F71-R3/finalize同款),治理路径以治理仓为根
-    from tools.schema_loader import resolve_governance_path
+    # AIPOS-F89 件① H9: 交回材料落点只读项目声明(project.json paths.return_root, 唯一推导 next_resolver.return_artifact_dir);
+    # 原读 config.schema governance_structure.paths.task_cards(第二份声明, 已删)。
     try:
-        task_cards_root = resolve_governance_path("task_cards", repo_root, _code_repo_schema_root())
-        expected_prefix = f"{task_cards_root.relative_to(repo_root)}/{task_id}/"
-    except Exception as exc:
+        expected_prefix = _return_ref_prefix(repo_root, task_id)
+    except (SchemaLoadError, OSError, ValueError) as exc:
         # AIPOS-F65A: fail-closed - 路径解析失败即拒并出声
         blocking_reasons.append(
-            f"RETURN_ARTIFACT_PATH_RESOLUTION_FAILED: 无法解析 task_cards 声明路径: {exc}。"
-            "出口: 检查 config.schema.json governance_structure.paths.task_cards 配置是否正确。"
+            f"RETURN_ARTIFACT_PATH_RESOLUTION_FAILED: 无法解析交回落点声明: {exc}。"
+            "出口: 检查治理根 project.json paths.return_root(须在治理根内, 缺省见 config.schema "
+            "configuration_sources.project_json.schema.paths.return_root.default)。"
         )
         return blocking_reasons
     
@@ -2406,11 +2427,11 @@ def _validate_return_artifact_refs(
         
         else:
             # file_path类型(默认): 检查落点+存在性
-            # 检查落点: 必须在 task_cards/<task_id>/ 内
+            # 检查落点: 必须在 <paths.return_root>/<task_id>/ 内
             if not ref_stripped.startswith(expected_prefix):
                 blocking_reasons.append(
                     f"RETURN_ARTIFACT_WRONG_LOCATION: 报告材料 '{ref_stripped}' 不在正确落点。"
-                    f"必须在 {expected_prefix} 内 (治理工作区 task_cards/<task_id>/)。"
+                    f"必须在 {expected_prefix} 内 (治理工作区 <project.json paths.return_root>/<task_id>/)。"
                     f"示例正确路径: {expected_prefix}RETURN.md, {expected_prefix}artifacts/output.txt"
                 )
                 continue
@@ -3096,11 +3117,15 @@ def _build_return_preview(
     unsafe_refs = [ref for ref in [*artifact_refs, completion_report_ref or ""] if _unsafe_return_ref(ref)]
     if unsafe_refs:
         task_id_for_example = str(task.get("task_id") or "TASK-ID")
+        try:
+            example_prefix = _return_ref_prefix(repo_root, task_id_for_example)
+        except (SchemaLoadError, OSError, ValueError) as exc:
+            example_prefix = f"<project.json paths.return_root>/{task_id_for_example}/ (声明读取失败: {exc}) "
         blocking_reasons.append(
-            f"UNSAFE_RETURN_REF: return材料路径必须在治理工作区 task_cards/<task_id>/ 内，"
+            f"UNSAFE_RETURN_REF: return材料路径必须在治理工作区 <project.json paths.return_root>/<task_id>/ 内，"
             f"禁止 /tmp 与仓外路径。非法路径: {unsafe_refs}. "
-            f"正确落点示例: task_cards/{task_id_for_example}/RETURN.md, "
-            f"task_cards/{task_id_for_example}/artifacts/output.txt"
+            f"正确落点示例: {example_prefix}RETURN.md, "
+            f"{example_prefix}artifacts/output.txt"
         )
     
     # AIPOS-R6I 靶①: return材料存在性+落点双校验(杀报告漂移家族)
@@ -3377,10 +3402,10 @@ def _build_return_preview(
         data["return_record_path"] = record_plan.get("return_record_path")
         data["session_record_path"] = record_plan.get("session_record_path")
 
-    # AIPOS-320: RETURN.md planned write (gate-side落盘,路径严格限定 task_cards/<ID>/RETURN.md)
+    # AIPOS-320: RETURN.md planned write (gate-side落盘, 路径严格限定声明位 <paths.return_root>/<ID>/<默认候选>, AIPOS-F89 件① H9)
     return_body_planned_writes: list[dict[str, Any]] = []
     if return_body is not None and task_id_text:
-        return_body_rel = f"task_cards/{task_id_text}/RETURN.md"
+        return_body_rel = _return_body_rel(repo_root, task_id_text)
         return_body_planned_writes = [
             {"path": return_body_rel, "kind": "create", "type": "return_body"}
         ]
@@ -3540,12 +3565,12 @@ def return_task(
                 )
         target = resolved_root / str(data.get("target_path") or "")
         target.write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
-        # AIPOS-320: write RETURN.md when return_body was provided (路径严格限定 task_cards/<ID>/RETURN.md)
+        # AIPOS-320: write RETURN.md when return_body was provided (路径严格限定声明位, AIPOS-F89 件① H9: _return_body_rel)
         return_body_performed_writes: list[dict[str, Any]] = []
         if return_body is not None:
             task_id_for_return = str(data.get("task_id") or "")
             if task_id_for_return:
-                return_body_rel = f"task_cards/{task_id_for_return}/RETURN.md"
+                return_body_rel = _return_body_rel(resolved_root, task_id_for_return)
                 return_body_path = resolved_root / return_body_rel
                 # 路径逃逸防护:确保解析后路径仍在 resolved_root 下
                 try:
@@ -3759,7 +3784,9 @@ def _build_audit_dispatch_preview(
     task_id_text = str(audit_task_id or "").strip()
     if not task_id_text:
         blocking_reasons.append("INVALID_AUDIT_TASK_ID: audit_task_id is required")
-    audit_rel = f"5_tasks/queue/pending/{_task_filename_for(task_id_text)}.md"
+    from tools.aipos_cli.task_loader import queue_state_ref  # AIPOS-F89 件① M8: 队列根唯一读取口
+
+    audit_rel = f"{queue_state_ref(repo_root, 'pending')}{_task_filename_for(task_id_text)}.md"
     audit_path = repo_root / audit_rel
     # AIPOS-C1 大项C②: idempotent audit dispatch — if audit card already exists,
     # treat as warning (not block). The dispatch supplements the record instead of deadlocking.
@@ -4561,11 +4588,11 @@ def _auto_close_audit_card_on_verdict(
         return None
 
     # Only operate on cards still in claimed/
-    claimed_dir = repo_root / "5_tasks" / "queue" / "claimed"
+    claimed_dir = queue_root_for(repo_root) / "claimed"
     if not str(source_path.resolve()).startswith(str(claimed_dir.resolve())):
         return None  # already moved or in unexpected location
 
-    target_path = repo_root / "5_tasks" / "queue" / "completed" / source_path.name
+    target_path = queue_root_for(repo_root) / "completed" / source_path.name
 
     try:
         text = source_path.read_text(encoding="utf-8")
@@ -5876,7 +5903,7 @@ def converge_r_cards(
     errors: list[dict[str, Any]] = []
 
     for queue_state in ("claimed", "pending"):
-        queue_dir = resolved_root / "5_tasks" / "queue" / queue_state
+        queue_dir = queue_root_for(resolved_root) / queue_state
         if not queue_dir.is_dir():
             continue
         for card_file in sorted(queue_dir.glob("*.md")):
@@ -5951,7 +5978,7 @@ def converge_r_cards(
                 fm["closed_at"] = fm["completed_at"]  # 复用引擎生成的时间戳
                 fm["auto_closed_by"] = "AIPOS-354_batch_convergence"
                 rendered = render_task_markdown(fm, body)
-                target_path = resolved_root / "5_tasks" / "queue" / "completed" / card_file.name
+                target_path = queue_root_for(resolved_root) / "completed" / card_file.name
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 target_path.write_text(rendered, encoding="utf-8")
                 card_file.unlink()
@@ -6135,7 +6162,7 @@ def mark_concluded_task(
                     "task_id": tid,
                     "from_queue": queue_state,
                     "closure_ref": closure_ref,
-                    "target_path": str((resolved_root / "5_tasks" / "queue" / "completed" / card_file.name).relative_to(resolved_root)),
+                    "target_path": str((queue_root_for(resolved_root) / "completed" / card_file.name).relative_to(resolved_root)),
                 },
                 safety_notice="AIPOS-354 mark_concluded dry-run. No files written.",
             )
@@ -6157,7 +6184,7 @@ def mark_concluded_task(
         if continuation_id:
             fm["continuation_task_id"] = continuation_id  # AIPOS-F78 前置零⑨: 承接世系机器可读(F53 lineage 亦读 conclusion_note)
         rendered = render_task_markdown(fm, body)
-        target_path = resolved_root / "5_tasks" / "queue" / "completed" / card_file.name
+        target_path = queue_root_for(resolved_root) / "completed" / card_file.name
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_text(rendered, encoding="utf-8")
         card_file.unlink()
@@ -6852,7 +6879,7 @@ def close_task(
                                     f" ≠ 注册表审计实例 {_reaudit_audit_instance}(禁承继原卡)。"
                                     f" schema 单源 = {_required_fields}"
                                 )
-                            reaudit_task_path = resolved_root / "5_tasks" / "queue" / "pending" / f"{derived_audit_for_source_task.lower()}.md"
+                            reaudit_task_path = queue_root_for(resolved_root) / "pending" / f"{derived_audit_for_source_task.lower()}.md"
                             reaudit_task_path.parent.mkdir(parents=True, exist_ok=True)
                             reaudit_markdown = render_task_markdown(reaudit_metadata, reaudit_body)
                             reaudit_task_path.write_text(reaudit_markdown, encoding="utf-8")
@@ -6895,7 +6922,7 @@ def close_task(
                 if audit_task.get("queue_state") != "claimed":
                     continue
                 audit_source_path = resolved_root / str(audit_task["path"])
-                audit_target_path = resolved_root / "5_tasks" / "queue" / "completed" / audit_source_path.name
+                audit_target_path = queue_root_for(resolved_root) / "completed" / audit_source_path.name
                 # Update frontmatter status to completed before moving
                 audit_text = audit_source_path.read_text(encoding="utf-8")
                 audit_metadata, audit_body, _ = parse_markdown_frontmatter(audit_text)

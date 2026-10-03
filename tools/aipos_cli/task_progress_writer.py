@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.schema_constants import RecordType, Verdict
+from tools.aipos_cli.task_loader import queue_root_for
 
 # AIPOS-SMOKE-LOOP-1 FIX (task-progress session 真落盘):
 # 事件记录写到 records/events/<task_id>/ 后,还必须追加更新对应 session record
@@ -154,7 +155,7 @@ def write_task_progress_event(
         Result dict with ok, event_file, timestamp, etc.
     """
     # Validate workspace
-    queue_dir = repo_root / "5_tasks" / "queue"
+    queue_dir = queue_root_for(repo_root)
     if not queue_dir.is_dir():
         return {
             "ok": False,

@@ -114,7 +114,20 @@ EXIT_SIGNAL = 130
 # The two subtrees the advisor sentinel watches (relative to --workspace-root):
 # queue/** = task cards moving through states (pending→claimed→completed = moves);
 # records/** = session/claim/return records being written.
-_WATCH_SUBTREES = ("5_tasks/queue", "5_tasks/records")
+# AIPOS-F89 件① M8: 队列子树读项目声明(task_loader.queue_root_for = project.json paths.queue_root), 不写死;
+# records 子树仍为治理结构声明位(5_tasks/records)。
+_RECORDS_SUBTREE = "5_tasks/records"
+
+
+def _watch_subtrees(workspace_root: Path) -> tuple[str, ...]:
+    from tools.aipos_cli.task_loader import queue_root_for
+
+    queue = queue_root_for(Path(workspace_root))
+    try:
+        queue_rel = queue.relative_to(Path(workspace_root)).as_posix()
+    except ValueError:
+        queue_rel = str(queue)  # 声明在治理根外: 绝对路径(os.path.join 取其本身)
+    return (queue_rel, _RECORDS_SUBTREE)
 
 # AIPOS-284: default stall threshold (10 minutes = 600 seconds).
 DEFAULT_STALL_SECONDS = 600
@@ -249,7 +262,7 @@ def snapshot(workspace_root: Path) -> dict[str, tuple[int, int]]:
     (os.walk default followlinks=False); each regular file is stat'd exactly once."""
     result: dict[str, tuple[int, int]] = {}
     root_str = str(workspace_root)
-    for sub in _WATCH_SUBTREES:
+    for sub in _watch_subtrees(workspace_root):
         base = os.path.join(root_str, sub)
         if not os.path.isdir(base):
             continue

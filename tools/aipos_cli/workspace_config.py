@@ -486,37 +486,46 @@ _QUEUE_STATES = ("pending", "claimed", "completed", "blocked")
 # ---------------------------------------------------------------------------
 
 def default_collaboration_profile() -> dict[str, Any]:
-    """AIPOS-335: collaboration_profile 默认值（向后兼容现状）。
-    
-    按 AIPOS-304 D1 schema:
-    - code_enabled: 默认 True（现状所有项目都跑代码任务）
-    - deploy_gate_enabled: 默认 False（现状无部署门）
-    - default_audit_mode: "agent"（现状所有任务都走完整 agent 审计）
-    - output_locations: ["product_repo_worktree", "workspace_records"]（现状默认产出位置）
-    
-    这个默认值使老项目行为零改变。
+    """AIPOS-335: collaboration_profile 默认值(向后兼容现状, 老项目行为零改变)。
+
+    AIPOS-F89 件① M14: 缺省值唯一声明 = config.schema configuration_sources.project_json.schema.collaboration_profile.default
+    (原本函数与 flow_description 各写一份缺省, 已收一)。声明缺 = SchemaLoadError(fail-closed)。
     """
-    return {
-        "code_enabled": True,
-        "deploy_gate_enabled": False,
-        "default_audit_mode": "agent",
-        "output_locations": ["product_repo_worktree", "workspace_records"],
-    }
+    import copy
+
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (
+        load_schema("config")
+        .get("configuration_sources", {})
+        .get("project_json", {})
+        .get("schema", {})
+        .get("collaboration_profile", {})
+        .get("default")
+    )
+    if not isinstance(decl, dict) or not decl:
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.collaboration_profile.default 未声明")
+    return copy.deepcopy(decl)
 
 
 def get_collaboration_profile(project_root: str | Path) -> dict[str, Any]:
-    """AIPOS-335: 读取项目的 collaboration_profile，缺失时返回默认值。
+    """AIPOS-335: 读取项目的 collaboration_profile, 缺失时返回默认值(逐键补齐部分填写)。
 
-    向后兼容：老项目不存在该字段时，返回 default_collaboration_profile()，
-    不报错、不阻断任何操作。
+    AIPOS-F89 件① M14: 唯一读取口(flow_description.resolve_collaboration_profile 委托本函数)。
+    project.json 不可读 = 精确捕获 + warning + 视为未声明(与 project_paths 同语义, 不静默吞)。
     """
-    project_json = read_project_json(project_root)
+    try:
+        project_json = read_project_json(project_root)
+    except (OSError, ValueError) as exc:
+        import sys
+
+        print(f"Warning: project.json unreadable at {project_root}, using declared default collaboration_profile: {exc}",
+              file=sys.stderr)
+        project_json = {}
     profile = project_json.get("collaboration_profile")
-    if profile is None or not isinstance(profile, dict):
-        return default_collaboration_profile()
-    # 补齐缺失的字段（部分填写的场景）
     result = default_collaboration_profile()
-    result.update(profile)
+    if isinstance(profile, dict):
+        result.update(profile)
     return result
 
 
@@ -1042,8 +1051,10 @@ def scaffold_project(
     if root.exists() and any(root.iterdir()):
         raise FileExistsError(f"PROJECT_EXISTS: project root not empty: {root}")
 
+    # AIPOS-F89 件① M8: 队列根 = 项目声明 paths.queue_root(新项目尚无 project.json = 声明 default), 唯一读取口 project_paths
+    queue_root = Path(project_paths(root)["queue_root"])
     for state in _QUEUE_STATES:
-        (root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
+        (queue_root / state).mkdir(parents=True, exist_ok=True)
     for sub in ("records", "drafts", "orchestration"):
         (root / "5_tasks" / sub).mkdir(parents=True, exist_ok=True)
     (root / "governance").mkdir(parents=True, exist_ok=True)

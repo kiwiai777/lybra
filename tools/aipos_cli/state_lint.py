@@ -40,13 +40,15 @@ except ImportError:  # pragma: no cover - optional dependency
     _yaml = None
 
 
-QUEUE_DIRS = {
-    "pending": "5_tasks/queue/pending",
-    "claimed": "5_tasks/queue/claimed",
-    "completed": "5_tasks/queue/completed",
-    "blocked": "5_tasks/queue/blocked",
-    "withdrawn": "5_tasks/queue/withdrawn",
-}
+# AIPOS-F89 件① M8: 队列状态名 = 目录名(task_loader.QUEUE_STATES); 目录 = 队列根(唯一读取口 task_loader.queue_root_for)/<状态>。
+# 原写死 5_tasks/queue/<状态> 的映射表删除。
+from tools.aipos_cli.task_loader import QUEUE_STATES as QUEUE_DIRS  # noqa: E402  — 状态名元组(保留旧名, 调用方只用作状态集)
+
+
+def _queue_state_dir(governance_root: Path, state: str) -> Path:
+    from tools.aipos_cli.task_loader import queue_root_for
+
+    return queue_root_for(governance_root) / state
 
 RECORD_TYPE_TO_STATE = {
     "closure": "completed",
@@ -116,8 +118,8 @@ def _get_frontmatter_state(card_path: Path) -> str | None:
 def _list_all_task_ids(governance_root: Path) -> set[str]:
     """列出所有在队列目录中的 task_id。"""
     task_ids: set[str] = set()
-    for state, rel_dir in QUEUE_DIRS.items():
-        queue_dir = governance_root / rel_dir
+    for state in QUEUE_DIRS:
+        queue_dir = _queue_state_dir(governance_root, state)
         if not queue_dir.is_dir():
             continue
         for f in queue_dir.glob("*.md"):
@@ -723,11 +725,11 @@ def _repair_queue_state(
         }
     
     # 需要移动卡到正确的队列目录
-    target_dir_name = QUEUE_DIRS.get(record_state)
+    target_dir_name = record_state if record_state in QUEUE_DIRS else None
     if target_dir_name is None:
         # returned 状态 → 卡应留在 claimed/ 等审计
         if record_state == "returned":
-            target_dir_name = QUEUE_DIRS["claimed"]
+            target_dir_name = "claimed"
         else:
             return {
                 "task_id": task_id,
@@ -737,7 +739,7 @@ def _repair_queue_state(
                 "actions": [],
             }
     
-    target_dir = governance_root / target_dir_name
+    target_dir = _queue_state_dir(governance_root, target_dir_name)
     target_path = target_dir / card_path.name
     
     actions.append(f"移动卡: {card_path} → {target_path}")

@@ -23,11 +23,10 @@ from tools.aipos_cli.record_writer import (
     update_session_record_markdown,
     validate_safe_task_id,
 )
-from tools.aipos_cli.task_loader import QUEUE_STATES, find_task_by_id, load_task_file
+from tools.aipos_cli.task_loader import QUEUE_STATES, find_task_by_id, load_task_file, queue_root_for
 from tools.aipos_cli.validator import validate_single_task
 
-QUEUE_ROOT = Path("5_tasks/queue")
-QUEUE_STATE_DIRS = {state: QUEUE_ROOT / state for state in QUEUE_STATES}
+# AIPOS-F89 件① M8: 原队列根常量(写死 5_tasks/queue)删除——队列根只读 task_loader.queue_root_for(project.json paths.queue_root)
 MUTATION_SAFETY_NOTICE = (
     "AIPOS-31 queue mutation only moves validated task cards within 5_tasks/queue/. "
     "It does not write records, run agents, or mutate orchestration state."
@@ -91,7 +90,7 @@ def _resolved_within(base_dir: Path, candidate: Path) -> bool:
 def resolve_queue_path(repo_root: Path, provided_path: str | Path) -> Path:
     raw_path = Path(provided_path)
     path = raw_path.resolve() if raw_path.is_absolute() else (repo_root / raw_path).resolve()
-    queue_root = (repo_root / QUEUE_ROOT).resolve()
+    queue_root = queue_root_for(repo_root).resolve()
     if not _resolved_within(queue_root, path):
         raise ValueError(f"Task path is outside 5_tasks/queue: {provided_path}")
     if path.suffix.lower() != ".md":
@@ -573,7 +572,7 @@ def mutate_queue_task(
         else:
             from_state = actual_state
     
-    target_path = repo_root / QUEUE_STATE_DIRS[to_state] / source_path.name
+    target_path = queue_root_for(repo_root) / to_state / source_path.name
     source_metadata, source_body, _warnings = _read_task_markdown(source_path)
     result = _base_result(source_path, repo_root, source_task, action, dry_run, actor, to_state)
     result["target_path"] = str(target_path.relative_to(repo_root))

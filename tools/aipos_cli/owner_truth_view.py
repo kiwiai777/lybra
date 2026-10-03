@@ -25,7 +25,7 @@ from typing import Any
 import re
 
 from tools.aipos_cli.records import load_records
-from tools.aipos_cli.task_loader import load_all_tasks
+from tools.aipos_cli.task_loader import load_all_tasks, queue_root_for
 from tools.schema_constants import RecordType, Verdict
 
 
@@ -897,7 +897,7 @@ def build_owner_truth_view(repo_root: str | Any) -> dict[str, Any]:
     # FIX-2 F-261-4: archived-dossier root for the "already incorporated" closed
     # signal (5_tasks/queue/completed/<ID>/ dir). Only read for existence; never
     # written. None when no repo root (derive_true_stage treats falsy as absent).
-    completed_root = (resolved / "5_tasks" / "queue" / "completed") if resolved else None
+    completed_root = (queue_root_for(resolved) / "completed") if resolved else None
 
     # verdict filed per reviewed main card (newest first in records_report).
     verdict_by_task: dict[str, str] = {}

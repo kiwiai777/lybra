@@ -416,7 +416,7 @@
           },
           "return_body": {
             "type": "string",
-            "description": "RETURN.md body text (gate writes task_cards/<ID>/RETURN.md on confirm)"
+            "description": "RETURN.md body text (gate writes it to the declared Return location <project.json paths.return_root>/<ID>/ on confirm)"
           },
           "actual_model": {
             "type": "string"
@@ -843,7 +843,7 @@
           },
           "governance_root": {
             "type": "string",
-            "description": "Governance workspace root to embed in the code (F24A): bare registered project name or absolute path <home>/<project>; validated against the project registry (5_tasks/queue + project.json), unknown/unregistered roots are rejected fail-closed. Defaults to the issuing gate's serving workspace root (same root as exchange/land)."
+            "description": "Governance workspace root to embed in the code (F24A): bare registered project name or absolute path <home>/<project>; validated against the project registry (queue root per project.json paths.queue_root + project.json), unknown/unregistered roots are rejected fail-closed. Defaults to the issuing gate's serving workspace root (same root as exchange/land)."
           },
           "owner_authorization_ref": {
             "type": "string",
@@ -1626,12 +1626,12 @@
       },
       "await_artifacts": {
         "executor": {
-          "ref": "transitions.schema.json#/nodes/N2/artifact/location",
-          "meaning": "执行体产物 task_cards/{task_id}/RETURN.md (骨架不算, 判据=推导核)"
+          "ref": "transitions.schema.json#/artifact_ingest/return",
+          "meaning": "执行体产物 <paths.return_root>/{task_id}/<候选> (骨架不算, 判据=推导核; 等待经 next_resolver.executor_artifact_watch)"
         },
         "auditor": {
-          "ref": "transitions.schema.json#/nodes/N4/audit_report/location_candidates",
-          "meaning": "审计体产物 task_cards/{audit_task_id}/RETURN.md|audit_report.md 含 verdict frontmatter"
+          "ref": "transitions.schema.json#/artifact_ingest/verdict",
+          "meaning": "审计体产物 <paths.verdict_root>/{audit_task_id}/<候选> 完成判据见 artifact_ingest.verdict.readiness (等待经 next_resolver.auditor_artifact_watch)"
         }
       },
       "invariants": [

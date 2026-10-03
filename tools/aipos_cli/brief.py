@@ -252,36 +252,6 @@ def _get_governance_docs(governance_root: Path, repo_root: Path | None = None) -
     return active_docs
 
 
-def _resolve_nested_governance_path(key: str, governance_root: Path, repo_root: Path | None = None) -> Path:
-    """解析嵌套 relative_to 的治理路径 (e.g., queue relative_to tasks_root)。
-    
-    resolve_governance_path 只支持一层 relative_to governance_root，
-    对于 queue/records/drafts 等需要手动嵌套解析。
-    """
-    from tools.schema_loader import get_governance_structure
-    
-    gs = get_governance_structure(repo_root)
-    paths = gs.get("paths", {})
-    entry = paths.get(key, {})
-    
-    if not entry:
-        raise ValueError(f"Path key '{key}' not found in governance_structure.paths")
-    
-    relative_to = entry.get("relative_to", "governance_root")
-    path_str = str(entry.get("path", "")).strip().strip("/")
-    
-    if not path_str:
-        raise ValueError(f"Path key '{key}' has empty path")
-    
-    # 嵌套解析
-    if relative_to == "governance_root":
-        return governance_root / path_str
-    else:
-        # 递归解析父路径
-        parent_path = _resolve_nested_governance_path(relative_to, governance_root, repo_root)
-        return parent_path / path_str
-
-
 def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     """获取队列摘要 (转调 records.py 读取 queue 状态)。
     
@@ -306,7 +276,9 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> 
     
     # 统计队列状态 (通过扫描 queue 目录) - 使用嵌套路径解析
     try:
-        queue_dir = _resolve_nested_governance_path("queue", governance_root, repo_root)
+        from tools.aipos_cli.task_loader import queue_root_for  # AIPOS-F89 件① M8: 队列根唯一读取口
+
+        queue_dir = queue_root_for(governance_root)
     except Exception as e:
         # Fail-closed: 路径不存在 → 报错而非返回全零
         return {

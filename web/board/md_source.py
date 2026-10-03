@@ -17,11 +17,24 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.adapter_response import blocked_response, make_response
+from tools.aipos_cli.task_loader import queue_root_for
 
 OPERATION = "get_markdown_source"
 
 # 只允许这两个根下的文件(queue 卡片 + records 记录)。
-ALLOWED_ROOTS: tuple[str, ...] = ("5_tasks/queue", "5_tasks/records")
+# AIPOS-F89 件① M8: 队列根读项目声明(task_loader.queue_root_for), 不写死; records 仍为治理结构声明位。
+RECORDS_ROOT = "5_tasks/records"
+
+
+def allowed_roots(repo_root: Path) -> tuple[str, ...]:
+    root = Path(repo_root).resolve()
+    queue = queue_root_for(root).resolve()
+    try:
+        queue_rel = queue.relative_to(root).as_posix()
+    except ValueError:
+        # declared outside the workspace: this read-only route never leaves repo_root
+        queue_rel = ""
+    return tuple(r for r in (queue_rel, RECORDS_ROOT) if r)
 
 READ_SAFETY_NOTICE = "Local read-only web UI route. No files are written."
 
@@ -110,8 +123,8 @@ def validate_path(repo_root: Path, candidate: str) -> Path:
     except ValueError as exc:
         raise ValueError("path escapes workspace root") from exc
     rel_posix = rel.as_posix()
-    if not any(rel_posix == root_name or rel_posix.startswith(root_name + "/") for root_name in ALLOWED_ROOTS):
-        raise ValueError("path must be under 5_tasks/queue or 5_tasks/records")
+    if not any(rel_posix == root_name or rel_posix.startswith(root_name + "/") for root_name in allowed_roots(root)):
+        raise ValueError("path must be under the queue root or 5_tasks/records")
     if not target.is_file():
         raise FileNotFoundError(f"file not found: {rel_posix}")
     return target
@@ -312,7 +325,7 @@ def _iter_md(root: Path) -> list[Path]:
 
 def _resolve_by_task_id(repo_root: Path, task_id: str) -> str:
     """在 5_tasks/queue/** 下按 frontmatter task_id 定位卡片,返回 repo 相对路径。"""
-    root = repo_root / "5_tasks" / "queue"
+    root = queue_root_for(repo_root)
     matches: list[str] = []
     for p in _iter_md(root):
         try:
@@ -392,7 +405,7 @@ def get_markdown_source(
         fm_text, body = split_frontmatter(raw)
         rendered = render_markdown(body)
         rel_posix = absolute.relative_to(root).as_posix()
-        kind = "records" if rel_posix.startswith("5_tasks/records") else "queue"
+        kind = "records" if rel_posix.startswith(RECORDS_ROOT) else "queue"
         data = {
             "path": rel_posix,
             "kind": kind,
