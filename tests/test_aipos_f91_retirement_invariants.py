@@ -119,10 +119,11 @@ def test_distribution_area_derived_from_declaration():
     areas = distribution_area_dirs()
     print("产品分发区:", areas)
     assert SHARED_LANDING in areas
+    # AIPOS-F92 件②: 分发区只属 pi harness(distribution.schema harness_semantics; claude-code 件落会话目录, 不在工位父根)
     first_segments = {
         str(d["target"]["relative_path"]).split("/", 1)[0]
         for d in load_schema("distribution")["distributions"]
-        if d.get("kind") != "charter"
+        if d.get("kind") != "charter" and str(d["target"].get("harness") or "pi") == "pi"
     }
     assert first_segments <= set(areas) and "AGENTS.md" not in areas  # 章程落工位根, 不属父根分发区
 

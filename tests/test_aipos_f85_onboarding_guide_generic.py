@@ -31,7 +31,18 @@ from tools.aipos_cli.onboarding import format_guide_text, generate_onboarding_gu
 from tools.schema_loader import load_schema  # noqa: E402
 
 #: guide 里出现的占位 → 合法值(仅供解析; 新占位须在此登记, 否则红)
-PLACEHOLDER_VALUES = {"<ENROLLMENT_CODE>": "LYBRAENROLL1.fixture-not-a-code"}
+#: AIPOS-F92: 九步 guide 的占位 = 上一步输出(三个注册码)/ 顾问自填(仓、卡稿、草稿路径、卡号)/ Owner 工作区解析不到时的占位
+PLACEHOLDER_VALUES = {
+    "<ADVISOR_CODE>": "LYBRAENROLL1.fixture-not-a-code",
+    "<EXECUTOR_CODE>": "LYBRAENROLL1.fixture-not-a-code",
+    "<AUDITOR_CODE>": "LYBRAENROLL1.fixture-not-a-code",
+    "<OWNER_WORKSPACE>": "/tmp/f85-owner",
+    "<REPO_NAME>": "app",
+    "<REPO_ABS_PATH>": "/tmp/f85-code/app",
+    "<CARD_DRAFT_JSON>": "/tmp/f85-card.json",
+    "<DRAFT_PATH>": "5_tasks/drafts/f85-1.md",
+    "<TASK_ID>": "F85-1",
+}
 PLACEHOLDER_RE = re.compile(r"<[A-Za-z_一-鿿][^<>\s]*>")
 #: 非 lybra 的 shell 动词登记(guide 新增别的 shell 动词须在此登记并说明, 否则红)
 SHELL_VERBS = {
@@ -48,6 +59,9 @@ GUIDE_SHAPES = {
         code_repo="/tmp/f85-code/lybra",
         actor="advisor.proj.host",
         workspace_dir="/tmp/f85-ws/lybra-executor",
+        auditor_dir="/tmp/f85-ws/lybra-auditor",
+        advisor_dir="/tmp/f85-session/lybra",
+        owner_workspace="/tmp/f85-home/ops",
     ),
     "chris-shape": dict(
         project_name="chris-huibojin",
@@ -55,6 +69,11 @@ GUIDE_SHAPES = {
         gate_url="http://10.0.0.2:7118",
         actor="advisor.proj.host",
         workspace_dir="~/f85-ws/hbj coder",
+        auditor_dir="~/f85-ws/hbj auditor",
+        advisor_dir="~/chris session",
+        repos=["app=/tmp/f85 code/app", "lib=/tmp/f85 code/lib"],
+        default_repo="app",
+        owner_workspace="/tmp/f85 home/ops",
     ),
 }
 #: 已退役 / 不存在的命令形(词边界匹配; `lybra onboarding` 不算 `lybra on`)
@@ -125,7 +144,9 @@ def _parse_lybra(argv: list[str], raw: str) -> argparse.Namespace:
             args = build_parser().parse_args(argv)
     except SystemExit as exc:
         raise AssertionError(f"argparse 拒: {raw}\n  {err.getvalue().strip()}") from exc
-    assert args.command == argv[0], raw
+    # AIPOS-F92: 允许顶层全局选项 `--workspace-root <治理根>` 在子命令前(guide 第 9 步 draft create/publish 显式带治理根)
+    lead = argv[2:] if argv[:1] == ["--workspace-root"] else argv
+    assert args.command == lead[0], raw
     return args
 
 
@@ -161,7 +182,7 @@ def test_item1_every_guide_command_parses_and_slash_in_declaration():
     total_lybra = 0
     for shape in GUIDE_SHAPES:
         guide = _guide(shape)
-        assert guide["total_steps"] == 6
+        assert guide["total_steps"] == 9 and guide["owner_actions"] == [3, 4]  # AIPOS-F92: Owner 一次性动作 ≤2
         seen_slash: list[str] = []
         for step_no, line in _iter_command_lines(guide):
             if line.startswith("/"):
@@ -183,36 +204,53 @@ def test_item1_every_guide_command_parses_and_slash_in_declaration():
 
 
 def test_item1_steps5_6_are_zero_gate_real_path():
-    """第 5 步 = sync → sync --dry-run 稳态 → 起 pi; 第 6 步 = onboarding check 自检 → /go; 参数指向工位 / 治理根。"""
+    """AIPOS-F92 九步(原 F85 第 4–6 步的零门不变量平移到第 5/7/8 步):
+    第 5 步 = 顾问 enroll 到治理根(--harness claude-code --harness-dir 会话目录)+ sync --dry-run 稳态;
+    第 7 步 = 每个工位 enroll(--workspace 工位)→ sync → sync --dry-run, 参数指向工位 / 治理根;
+    第 8 步 = onboarding check 自检 → cd 工位 → pi → /go; 第 3/4 步 = Owner 动作(enroll-code --token-role owner / envelope mint --confirm)。"""
     for shape, kw in GUIDE_SHAPES.items():
         guide = _guide(shape)
         home = kw.get("home_root") or guide["home_root"]
         gov = f"{home}/{kw['project_name']}"
-        ws = kw.get("workspace_dir") or f"~/{kw['project_name']}-workstation"
-        step4, step5, step6 = guide["steps"][3], guide["steps"][4], guide["steps"][5]
+        ws = kw.get("workspace_dir") or f"~/{kw['project_name']}-executor"
+        aws = kw.get("auditor_dir") or f"~/{kw['project_name']}-auditor"
+        adv = kw.get("advisor_dir") or f"~/{kw['project_name']}"
+        steps = {st["step_number"]: st for st in guide["steps"]}
 
-        enroll = [seg for _, l in _iter_command_lines({"steps": [step4]}) for seg in _segments(l) if seg[0] == "lybra"]
-        assert len(enroll) == 1 and enroll[0][1:3] == ["roles", "enroll"]
-        assert _parse_lybra(enroll[0][1:], "step4").workspace == ws
+        def lybra_segs(step):
+            return [seg for _, l in _iter_command_lines({"steps": [step]}) for seg in _segments(l) if seg[0] == "lybra"]
 
-        syncs = [seg for _, l in _iter_command_lines({"steps": [step5]}) for seg in _segments(l) if seg[0] == "lybra"]
-        assert [s[1] for s in syncs] == ["sync", "sync"], syncs
-        a_run, a_dry = (_parse_lybra(s[1:], "step5") for s in syncs)
-        assert (a_run.dry_run, a_dry.dry_run) == (False, True)
-        for a in (a_run, a_dry):
-            assert a.harness_root == ws and a.workspace_root == gov, (shape, a)
+        owner3 = [_parse_lybra(seg[1:], "step3") for seg in lybra_segs(steps[3])]
+        assert len(owner3) == 1 and owner3[0].roles_command == "enroll-code" and owner3[0].token_role == "owner"
+        assert owner3[0].role == "advisor" and owner3[0].governance_root == kw["project_name"]
+        owner4 = [_parse_lybra(seg[1:], "step4") for seg in lybra_segs(steps[4])]
+        assert len(owner4) == 1 and owner4[0].envelope_command == "mint" and owner4[0].confirm is True
+        assert len(owner4[0].policy_id) == 3 == len(owner4[0].agent_or_role) and owner4[0].workspace_root == gov
+        assert steps[3]["owner_action"] == 1 and steps[4]["owner_action"] == 2
+        assert all(st["owner_action"] is None for n, st in steps.items() if n not in (3, 4))
+
+        adv_enroll, adv_sync = (_parse_lybra(seg[1:], "step5") for seg in lybra_segs(steps[5]))
+        assert (adv_enroll.roles_command, adv_enroll.workspace, adv_enroll.harness) == ("enroll", gov, "claude-code")
+        assert adv_enroll.harness_dir == adv and adv_sync.dry_run is True and adv_sync.harness_root == gov
+
+        segs7 = lybra_segs(steps[7])
+        enrolls = [_parse_lybra(seg[1:], "step7") for seg in segs7 if seg[1:3] == ["roles", "enroll"]]
+        assert [e.workspace for e in enrolls] == [ws, aws]
+        syncs = [_parse_lybra(seg[1:], "step7") for seg in segs7 if seg[1] == "sync"]
+        assert [(a.harness_root, a.dry_run) for a in syncs] == [(ws, False), (ws, True), (aws, False), (aws, True)]
+        for a in syncs:
+            assert a.workspace_root == gov, (shape, a)
             assert a.token is None  # token 永不上屏: guide 不带 --token, 由工位 connection.json 取
-        tail5 = [l for _, l in _iter_command_lines({"steps": [step5]})]
-        assert tail5[0] == f"cd {ws}" or shlex.split(tail5[0]) == ["cd", ws]
-        assert tail5[-1] == "pi"
 
-        lines6 = [l for _, l in _iter_command_lines({"steps": [step6]})]
-        assert lines6[-1] == "/go"
-        check = _parse_lybra(shlex.split(lines6[0])[1:], "step6")
-        assert (check.command, check.onboarding_command, check.step) == ("onboarding", "check", 6)
+        lines8 = [l for _, l in _iter_command_lines({"steps": [steps[8]]})]
+        assert lines8[-1] == "/go" and lines8[-2] == "pi"
+        assert lines8[-3] == f"cd {ws}" or shlex.split(lines8[-3]) == ["cd", ws]
+        check = _parse_lybra(shlex.split(lines8[0])[1:], "step8")
+        assert (check.command, check.onboarding_command, check.step) == ("onboarding", "check", 8)
         assert check.project_name == kw["project_name"] and check.home_root == home and check.workspace_dir == ws
 
-        assert "起 pi 三步" in step5["title"] and "首卡开跑自检" in step6["title"]
+        loop = [_parse_lybra(seg[1:], "step9") for seg in lybra_segs(steps[9]) if seg[1] == "loop"]
+        assert len(loop) == 1 and str(loop[0].workspace_root) == gov and loop[0].envelope == guide["policies"]["driver"]
 
 
 def test_item1_no_retired_commands_and_prose_subcommands_exist():
@@ -242,7 +280,7 @@ def test_item1_tilde_workspace_expands():
     """缺省工位 ~/<项目>-workstation: 引号不得包住 ~(否则 shell 不展开)。"""
     text = format_guide_text(_guide("default")) + format_guide_text(_guide("chris-shape"))
     assert "'~" not in text and '"~' not in text
-    assert "cd ~/probe-xyz-workstation" in text
+    assert "cd ~/probe-xyz-executor" in text
     assert "~/'f85-ws/hbj coder'" in text  # 空格路径: ~ 留在引号外, 其余整体引用
 
 

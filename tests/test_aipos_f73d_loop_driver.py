@@ -462,6 +462,9 @@ def test_f73d_pre1_item1_finalization_record_written_when_deploy_fails_after_pus
     product = tmp_path / "product"
     gov.mkdir()
     product.mkdir()
+    # AIPOS-F92 件③: 部署只对有部署机制的产品仓适用(deploy_gate.deploy_mechanism_present); 本用例测部署失败路径, 故给产品仓部署脚本位
+    (product / "tools").mkdir()
+    (product / "tools" / "lybra-deploy").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     sha = "b" * 40
     monkeypatch.setattr(fz, "_report_frontmatter_verdict_for_display", lambda *a, **k: {"report_path": None, "report_verdict": None})
     monkeypatch.setattr(fz, "_load_branch_integration", lambda root: {"branch_pattern": "card/{task_id}"})
