@@ -194,6 +194,11 @@ def charter_render_context(
         "auditor_instance": sibling["auditor_instance"],
         "product_commit": str(product_commit or "unknown"),
     }
+    # AIPOS-F93 件①: 章程报告节的报告必填字段 = 声明 transitions artifact_ingest 单源渲染(与落点句 / my-tasks / 认领模板同一函数)
+    from tools.aipos_cli.next_resolver import render_report_frontmatter_clause, report_frontmatter_contract
+
+    for kind in ("return", "verdict"):
+        ctx[f"{kind}_required_frontmatter"] = render_report_frontmatter_clause(report_frontmatter_contract(kind))
     return ctx
 
 

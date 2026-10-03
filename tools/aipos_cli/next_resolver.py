@@ -351,6 +351,8 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
     - worktree_refusal: None | {code, reason} —— 不可推导(CardRepoUnresolved.code / WORKTREE_ROOT_UNDECLARED)
       或尚未建立(WORKTREE_NOT_CREATED); 从不输出空串
     - report_path / report_refusal: 同构(REPORT_LOCATION_UNDECLARED)
+    - report_required_frontmatter: 报告必填字段 [{key, hint, value}](AIPOS-F93 件①, card_report_contract); 不可推导 =
+      report_refusal REPORT_CONTRACT_UNRESOLVED 且 report_path 置空
     """
     from tools.aipos_cli.workspace_config import CardRepoUnresolved
     from tools.schema_loader import SchemaLoadError
@@ -385,7 +387,47 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
         view["report_path"] = str(card_report_path(workspace_root, task_id, fm))
     except (SchemaLoadError, OSError, ValueError) as exc:
         view["report_refusal"] = {"code": "REPORT_LOCATION_UNDECLARED", "reason": f"报告落点声明读取失败: {exc}"}
+        return view
+    # AIPOS-F93 件①: 报告必填字段(声明单源 report_frontmatter_contract); 审计卡附被审 tip/tree 实值(取证工作树 HEAD)。
+    # 不可推导 = 报告契约拒因(report_path 置空, select_next_card 按报告不可推导排除), 不出无清单的开工提示。
+    try:
+        view["report_required_frontmatter"] = card_report_contract(
+            workspace_root, task_id, fm, worktree=Path(view["worktree_path"]) if view["worktree_exists"] else None)
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        view["report_path"] = None
+        view["report_refusal"] = {"code": "REPORT_CONTRACT_UNRESOLVED", "reason": f"报告必填字段不可推导: {exc}"}
     return view
+
+
+def card_report_contract(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None,
+                         *, worktree: Path | None = None, branch_pattern: str | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F93 件①: 一张卡的报告必填 frontmatter 契约(my-tasks 开工面 / 认领模板同读)。
+
+    执行卡 = return 契约(分支 = 本卡分支); 审计卡 = verdict 契约(分支 = 被审卡分支), 取证工作树已建时附被审 tip/tree 实值
+    (= 取证工作树 HEAD, 认领时由门建于被审分支 tip)。取证工作树在盘但读不出 HEAD = ValueError(fail-closed, 不给空值)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    reviewed = forensic_subject(fm)
+    if reviewed is None:
+        return report_frontmatter_contract("return", branch_task_id=task_id, branch_pattern=branch_pattern)
+    subject = forensic_worktree_subject(worktree) if worktree is not None else None
+    return report_frontmatter_contract("verdict", branch_task_id=reviewed or None, subject=subject, branch_pattern=branch_pattern)
+
+
+def forensic_worktree_subject(worktree: Path) -> dict[str, str]:
+    """取证工作树 HEAD 的 {commit_sha, tree_hash}(只读 git rev-parse)。读不出 = ValueError(含 git 原文)。"""
+    import subprocess
+
+    out: dict[str, str] = {}
+    for key, rev in (("commit_sha", "HEAD"), ("tree_hash", "HEAD^{tree}")):
+        try:
+            proc = subprocess.run(["git", "-C", str(worktree), "rev-parse", rev], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError(f"取证工作树 {worktree} git rev-parse {rev} 失败: {exc}") from exc
+        value = proc.stdout.strip()
+        if proc.returncode != 0 or not value:
+            raise ValueError(f"取证工作树 {worktree} git rev-parse {rev} 失败: {(proc.stderr or proc.stdout).strip()}")
+        out[key] = value
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +441,7 @@ NEXT_CARD_RULE: dict[str, Any] = {
         "卡面 frontmatter 可解析(产品唯一读取口 parse_markdown_frontmatter 无告警)",
         "worktree_exists == true(工作树由驱动方认领时建立; AIPOS-F89 件③a: 审计卡 = 被审分支 tip 的只读 detached 取证工作树)",
         "report_path 可推导(开工提示必需的报告落点)",
+        "report_required_frontmatter 可推导(AIPOS-F93 件①: 报告必填字段, 声明 transitions artifact_ingest 单源; 审计卡附被审 tip/tree)",
         "kickoff_refusal 为空(AIPOS-F90 件③: 本实例在办、未结案、产物未交——判据 next_resolver.kickoff_refusal)",
     ],
     "order": "claimed_at 最近优先; claimed_at 缺失/不可解析者排最后; 同时刻按 task_id 升序",
@@ -469,7 +512,7 @@ def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
 
     每项卡视图字段: task_id / queue_state / card_path / worktree_path / worktree_exists / worktree_refusal /
     report_path / report_refusal / claimed_at / frontmatter_warnings(card_workstation_view + 卡面解析告警)。
-    返回 {next_card: None | {task_id, card_path, worktree_path, report_path, claimed_at},
+    返回 {next_card: None | {task_id, card_path, worktree_path, report_path, report_required_frontmatter, claimed_at},
           next_card_excluded: [{task_id, code, reason}](每张未入选的 claimed 卡为何不入选), next_card_rule}。
     拒因文案只陈述事实与上报出口, 零门动词(工位原样转述)。
     """
@@ -515,6 +558,15 @@ def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
                 "reason": f"报告落点不可推导: {report_refusal.get('reason') or '产品未给出拒因'}; 按 block-and-report 上报",
             })
             continue
+        contract = card.get("report_required_frontmatter")
+        if not isinstance(contract, list) or not contract:
+            # AIPOS-F93 件①: 开工提示必须带报告必填字段(声明单源), 缺 = 不开工(fail-closed, 不出无清单的开工提示)
+            excluded.append({
+                "task_id": task_id,
+                "code": "REPORT_CONTRACT_UNRESOLVED",
+                "reason": "报告必填字段不可推导(产品未给出 report_required_frontmatter); 按 block-and-report 上报",
+            })
+            continue
         eligible.append(card)
 
     def order_key(card: dict[str, Any]) -> tuple[int, float, str]:
@@ -531,6 +583,9 @@ def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
             "card_path": chosen.get("card_path"),
             "worktree_path": chosen.get("worktree_path"),
             "report_path": chosen.get("report_path"),
+            # AIPOS-F93 件①: 报告必填字段(声明 artifact_ingest.<kind>.required_frontmatter 单源渲染; 审计卡带被审 tip/tree 实值),
+            # 工位 go.ts 开工提示只读本字段原样列出
+            "report_required_frontmatter": chosen.get("report_required_frontmatter"),
             "claimed_at": claimed_at.isoformat() if hasattr(claimed_at, "isoformat") else claimed_at,
         }
         for other in eligible[1:]:
@@ -1181,6 +1236,59 @@ def required_return_frontmatter() -> list[str]:
 def missing_return_frontmatter(frontmatter: dict[str, Any]) -> list[str]:
     """缺失的 Return 必填 frontmatter 键列表(空值/占位视为缺)。"""
     return [k for k in required_return_frontmatter() if _is_placeholder_value(frontmatter.get(k))]
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F93 件①: 报告必填字段单源告知——声明 transitions artifact_ingest.<return|verdict>.required_frontmatter(+ field_hints)
+# 的唯一渲染。派生审计卡落点句 / 执行卡落点句 / my-tasks next_card / 认领模板 / 章程报告节 全部经此二函数, 禁第二份清单/文案。
+# ---------------------------------------------------------------------------
+
+REPORT_KINDS = ("return", "verdict")
+
+
+def report_frontmatter_contract(kind: str, *, branch_task_id: str | None = None,
+                                subject: dict[str, str] | None = None,
+                                branch_pattern: str | None = None) -> list[dict[str, Any]]:
+    """报告必填 frontmatter 契约(唯一渲染源): [{key, hint, value}], 键序 = 声明 required_frontmatter。
+
+    - kind: return(执行卡 Return)/ verdict(审计报告)。
+    - branch_task_id: 报告对应的卡分支所属卡(执行卡 = 本卡, 审计卡 = 被审卡); 缺 = 提示里写「卡分支」/「被审卡分支」。
+    - subject: 产品已知的实值(审计卡 = 取证工作树 HEAD 的 {commit_sha, tree_hash}); 有值的键 value=实值, 提示带 tree, agent 照抄。
+    - branch_pattern: 调用方已读的分支声明(machine_zone 按 product_root 读 N5.branch_integration); 缺 = card_branch_name。
+    键缺说明(field_hints 未声明该键)= 通用提示「按声明填写实值」(仍列出, 不漏键)。声明缺 = SchemaLoadError(fail-closed)。
+    """
+    if kind not in REPORT_KINDS:
+        raise ValueError(f"report_frontmatter_contract: kind={kind!r} 不在 {REPORT_KINDS}")
+    keys = required_return_frontmatter() if kind == "return" else required_verdict_frontmatter()
+    hints = _artifact_ingest_declaration()[kind].get("field_hints") or {}
+    if not isinstance(hints, dict):
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"transitions.schema.json artifact_ingest.{kind}.field_hints 须为 {{键: 说明}}")
+    if branch_task_id:
+        branch = branch_pattern.replace("{task_id}", branch_task_id) if branch_pattern else card_branch_name(branch_task_id)
+    else:
+        branch = "被审卡分支" if kind == "verdict" else "卡分支"
+    verdict_values = " / ".join(str(v) for v in (_transition_node("N4").get("record", {}).get("allowed_verdict_values") or []))
+    values = subject if isinstance(subject, dict) else {}
+    entries: list[dict[str, Any]] = []
+    for key in keys:
+        template = str(hints.get(key) or "按声明填写实值")
+        hint = template.replace("{branch}", branch).replace("{allowed_verdict_values}", verdict_values or "裁决值")
+        value = str(values.get(key) or "").strip() or None
+        if value and key == "commit_sha" and values.get("tree_hash"):
+            hint = f"{hint}; 产品给出: {branch} tip = {value}, tree = {values['tree_hash']}(取证工作树 HEAD), 照抄"
+        entries.append({"key": key, "hint": hint, "value": value})
+    return entries
+
+
+def render_report_frontmatter_clause(entries: list[dict[str, Any]]) -> str:
+    """报告必填 frontmatter 的唯一一句话文案(落点句 / 章程 / card render 共用)。entries = report_frontmatter_contract 输出。"""
+    parts = []
+    for entry in entries:
+        value = entry.get("value")
+        parts.append(f"`{entry['key']}`({f'= {value}; ' if value else ''}{entry['hint']})")
+    return "报告 frontmatter 必填: " + "; ".join(parts) + "。缺任一项或仍为占位, 产品拒收该报告"
 
 
 def ingest_command(task_id: str, kind: str, workspace_root: Path, connection_json: str | None) -> str:

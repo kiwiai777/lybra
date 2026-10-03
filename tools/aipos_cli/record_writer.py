@@ -1461,8 +1461,10 @@ def write_records_atomic(
         for written_path_str in written_paths:
             try:
                 (repo_root / written_path_str).unlink(missing_ok=True)
-            except Exception:
-                pass
+            except OSError as cleanup_exc:  # AIPOS-F93: 回滚清理失败出声(原 except Exception: pass 静默吞)
+                import sys
+
+                print(f"Warning: 记录写入回滚未能删除 {written_path_str}: {cleanup_exc}", file=sys.stderr)
         raise RuntimeError(f"记录写入失败 (已回滚): {exc}") from exc
     
     return {
@@ -1471,6 +1473,12 @@ def write_records_atomic(
         "paths": written_paths,
         "record_count": len(written_paths),
     }
+
+
+def _skeleton_frontmatter(contract: list[dict[str, Any]]) -> str:
+    """AIPOS-F93 件①: 认领模板 frontmatter = 报告必填契约逐项占位(`(待填写: <说明>)`, 占位判据 next_resolver._is_placeholder_value)。"""
+    keys = [str(e["key"]) for e in contract]
+    return render_frontmatter_block({str(e["key"]): f"(待填写: {e['hint']})" for e in contract}, keys) + "\n"
 
 
 def build_return_skeleton_markdown(task_id: str) -> str:
@@ -1486,26 +1494,13 @@ def build_return_skeleton_markdown(task_id: str) -> str:
         RETURN.md skeleton markdown content
     """
     # AIPOS-F78 件③: 骨架带必填 frontmatter 占位(键名唯一声明 transitions artifact_ingest.return.required_frontmatter);
-    # 执行体填实值(分支 tip / tree / 分支名 / 实际模型), 产品 ingest 据此校验后铸交回记录。占位值不算已填。
-    try:
-        from tools.aipos_cli.next_resolver import required_return_frontmatter
+    # 执行体填实值(分支 tip / tree / 分支名), 产品 ingest 据此校验后铸交回记录。占位值不算已填。
+    # AIPOS-F93 件①: 键与逐键说明 = next_resolver.report_frontmatter_contract(与落点句 / my-tasks / 章程同源, 原本地 hints 表退役);
+    # 声明缺 = SchemaLoadError 向上抛(fail-closed: 原「出声后出无 frontmatter 骨架」退役——无键模板会让执行体照抄出被拒报告)。
+    from tools.aipos_cli.next_resolver import report_frontmatter_contract
 
-        fm_keys = required_return_frontmatter()
-    except Exception as exc:  # 声明缺失: 出声, 骨架不带 frontmatter(存量兼容方向)
-        import sys
-
-        print(f"Warning: artifact_ingest.return.required_frontmatter 声明读取失败, 骨架不带 frontmatter: {exc}", file=sys.stderr)
-        fm_keys = []
-    hints = {
-        "commit_sha": "(待填写: 卡分支 tip 的完整 40 位 sha)",
-        "tree_hash": "(待填写: git rev-parse <commit_sha>^{tree})",
-        "branch": f"(待填写: 卡分支名, 如 card/{task_id})",
-        "model": "(待填写: 实际模型自报, 如 claude-sonnet-5)",
-    }
-    frontmatter = ""
-    if fm_keys:
-        # AIPOS-F87 件①: 骨架 frontmatter 经单源 render_frontmatter_block(原逐行 json.dumps 拼接退役)
-        frontmatter = render_frontmatter_block({k: hints.get(k, "(待填写)") for k in fm_keys}, list(fm_keys)) + "\n"
+    contract = report_frontmatter_contract("return", branch_task_id=task_id)
+    frontmatter = _skeleton_frontmatter(contract)
     return frontmatter + f"""# RETURN — {task_id}
 
 ## 一句话结论
@@ -1540,17 +1535,11 @@ def build_verdict_skeleton_markdown(audit_task_id: str, reviewed_task_id: str | 
     报告完成判据(artifact_ingest.verdict.readiness = next_resolver.verdict_report_ready)只在这些键全部填实值后成立,
     故空模板「文件存在」不被 loop 等待 / artifact ingest / 开工核验当作完成。声明缺 = SchemaLoadError(fail-closed, 不出无键模板)。
     """
-    from tools.aipos_cli.next_resolver import _transition_node, card_branch_name, required_verdict_frontmatter
+    from tools.aipos_cli.next_resolver import report_frontmatter_contract
 
-    fm_keys = required_verdict_frontmatter()
-    verdict_values = " | ".join(str(v) for v in (_transition_node("N4").get("record", {}).get("allowed_verdict_values") or []))
     subject = reviewed_task_id or "<被审卡ID>"
-    branch = card_branch_name(reviewed_task_id) if reviewed_task_id else "被审卡分支"
-    hints = {
-        "verdict": f"(待填写: {verdict_values or '裁决值'})",
-        "commit_sha": f"(待填写: 被审分支 {branch} tip 的完整 40 位 sha)",
-    }
-    frontmatter = render_frontmatter_block({k: hints.get(k, "(待填写)") for k in fm_keys}, list(fm_keys)) + "\n"
+    # AIPOS-F93 件①: 键与逐键说明 = report_frontmatter_contract(声明单源, 分支 = 被审卡分支)
+    frontmatter = _skeleton_frontmatter(report_frontmatter_contract("verdict", branch_task_id=reviewed_task_id or None))
     return frontmatter + f"""# 审计报告 — {audit_task_id}(被审 {subject})
 
 ## 一句话结论
