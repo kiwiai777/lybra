@@ -78,6 +78,38 @@ def _cmd(*parts: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-F93 件②: 注册码交付文案唯一渲染(向导 Step 5/7、发码 paste_text 与门 enroll_code 动词说明 / next_step、CLI enroll-code
+# 打印同此; 原「会话斜杠 enroll 命令」随 lybra-loop 扩展退役, 禁再出现)。项目无关: 只拼产品命令形。
+# ---------------------------------------------------------------------------
+
+ENROLL_WORKSPACE_PLACEHOLDER = "<工位目录或治理根>"
+ENROLL_DELIVERY_INSTRUCTION = (
+    "把注册码交给接收方, 由其在任一 shell 执行下面这条(--workspace = 其工位目录; 顾问凭据落治理根; "
+    "完整接入步骤见 lybra onboarding guide):"
+)
+ENROLL_NEXT_STEP = (
+    "接收方执行 paste_text 那条 lybra roles enroll 命令(替换 --workspace 占位)→ 产品完成兑换/落盘/连通验证(--verify)"
+)
+
+
+def render_enroll_command(code: str, workspace: str = ENROLL_WORKSPACE_PLACEHOLDER, *extra: str) -> str:
+    """注册码兑换命令的唯一渲染: `lybra roles enroll --code <码> --workspace <工位或治理根> [extra…] --verify`。
+    workspace 由调用方按需 shell 引用(向导传已引用路径; 发码侧传占位, 由接收方替换)。"""
+    return _cmd("lybra", "roles", "enroll", "--code", code, "--workspace", workspace, *extra, "--verify")
+
+
+def enroll_delivery(code: str) -> dict[str, str]:
+    """发码后的交付文案(门 lybra_enroll_code_confirm / lybra_roles_enroll_code 与 CLI roles enroll-code 共用一份):
+    paste_text = 兑换命令(工位占位), paste_instruction = 说明 + 命令, next_step。"""
+    paste_text = render_enroll_command(code)
+    return {
+        "paste_text": paste_text,
+        "paste_instruction": f"{ENROLL_DELIVERY_INSTRUCTION}\n{paste_text}",
+        "next_step": ENROLL_NEXT_STEP,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 推导(全部经既有单源)
 # ---------------------------------------------------------------------------
 
@@ -282,8 +314,7 @@ def generate_onboarding_guide(
     sync_adv = _cmd("lybra", "sync", "--harness-root", gq, "--workspace-root", gq)
     step5 = [
         "# 顾问凭 Step 3 的码 enroll: 凭据落治理根 .lybra/(loop 按治理根取驱动方凭据), 顾问技能交付到会话目录 .claude/skills/",
-        _cmd("lybra", "roles", "enroll", "--code", ADVISOR_CODE, "--workspace", gq, "--harness", ADVISOR_HARNESS,
-             "--harness-dir", _shell_path(advisor_ws), "--verify"),
+        render_enroll_command(ADVISOR_CODE, gq, "--harness", ADVISOR_HARNESS, "--harness-dir", _shell_path(advisor_ws)),
         "# 稳态复核: plan 为空 = 技能已齐",
         f"{sync_adv} --dry-run",
     ]
@@ -338,7 +369,7 @@ def generate_onboarding_guide(
         sync_ws = f"lybra sync --harness-root {wq} --workspace-root {gq}"
         step7 += [
             f"# {label}工位: enroll(落 .lybra + .pi 接线) → 按分发声明落齐工位件 → 稳态复核",
-            _cmd("lybra", "roles", "enroll", "--code", code, "--workspace", wq, "--verify"),
+            render_enroll_command(code, wq),
             sync_ws,
             f"{sync_ws} --dry-run",
         ]

@@ -197,7 +197,8 @@ def issue_self_contained_code(
       - 既有 enrollment 记录(create_enrollment_code, 单次/TTL/撤销面沿用)
       - 运输通行凭证(零 scope, 注册进 gate connection.json)
       - 自包含码(encode_self_contained_code)
-      - 可转贴的会话指令文本: "/lybra enroll <自包含码>"
+      - 交付文案(AIPOS-F93 件②): paste_text = `lybra roles enroll --code <自包含码> --workspace <工位目录或治理根> --verify`
+        (onboarding.enroll_delivery 唯一渲染, 门与 CLI 共用)
 
     F24A: governance_root 显式参数优先(调用方=门动词, 已从项目注册表校验); 缺省回落
     workspace_root(记录/运输凭证所在根, 与交换/land 同根 —— 交换面不认识别的根)。
@@ -235,14 +236,18 @@ def issue_self_contained_code(
         code=enrollment["code"],
     )
 
-    # ④ 可转贴会话指令文本(Owner 唯一要做的事: 转贴这一条)
-    paste_text = f"/lybra enroll {self_contained}"
+    # ④ 交付文案(AIPOS-F93 件②: 产品命令形, 向导同一渲染源 onboarding.enroll_delivery; 门与 CLI 共用)
+    from tools.aipos_cli.onboarding import enroll_delivery
+
+    delivery = enroll_delivery(self_contained)
 
     return {
         "ok": True,
         "code_id": enrollment["code_id"],
         "self_contained_code": self_contained,
-        "paste_text": paste_text,
+        "paste_text": delivery["paste_text"],
+        "paste_instruction": delivery["paste_instruction"],
+        "next_step": delivery["next_step"],
         "role": role,
         "instance": instance,
         "ttl_seconds": effective_ttl,
