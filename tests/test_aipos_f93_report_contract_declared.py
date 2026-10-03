@@ -8,6 +8,8 @@
 ② 注册码交付文案 = onboarding.enroll_delivery / render_enroll_command 唯一渲染(向导、门 paste_text / 动词说明、CLI 共用), 无退役斜杠命令。
 ③ 交回检查 TEST_NOT_IN_RUNALL / NO_TESTS 读项目声明 project.json test_contract(workspace_config.project_test_contract): lybra 形
    (声明 runall_path/require_tests)行为不变; probe 形(未声明)加测试的卡不被拒, 判据跳过并 warning; 拒因只引用声明值。
+④ governance-commit 正式提交子进程带 LYBRA_SCHEMA_DIR(governance_guardrails.default_schema_dir, 调用方已设则尊重):
+   PATH 无 lybra 的最小环境(非登录 shell / ssh)经母本钩子通过(chris 顾问实撞)。
 """
 from __future__ import annotations
 
@@ -376,6 +378,41 @@ def test_item3_contract_malformed_fail_closed_and_per_repo_override(tmp_path, mo
         project_test_contract(gov, repo)
 
 
+# ===========================================================================
+# ④ governance-commit 正式提交子进程带 LYBRA_SCHEMA_DIR(PATH 无 lybra 的非登录 shell 也过钩子)
+# ===========================================================================
+
+from test_aipos_f79d_commit_gate_guardrails import head as _gov_head, rig, run as _gov_commit  # noqa: E402,F401  — 靶场唯一来源(rig 为 fixture)
+
+
+def test_item4_governance_commit_passes_hook_without_lybra_on_path(rig, monkeypatch):
+    import os
+    import shutil
+
+    repo, lybra = rig["repo"], rig["lybra"]
+    monkeypatch.delenv("LYBRA_SCHEMA_DIR", raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")  # 最小环境: 有 git/python3/bash, 无 lybra CLI(非登录 shell / ssh 调用形)
+    assert shutil.which("lybra", path=os.environ["PATH"]) is None
+    # 先红: 不带 LYBRA_SCHEMA_DIR 的裸 git commit 在同一环境被母本钩子 BLOCK(F93 件④ 实撞原文)
+    (lybra / "notes" / "a.md").write_text("# note a\nraw\n", encoding="utf-8")
+    subprocess.run(["git", "add", "--", str(lybra / "notes" / "a.md")], cwd=repo, check=True)
+    raw = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "raw"], cwd=repo,
+                         capture_output=True, text=True, env={k: v for k, v in os.environ.items() if k != "LYBRA_SCHEMA_DIR"})
+    _show(f"[④·裸 git commit 无 LYBRA_SCHEMA_DIR] rc={raw.returncode} {(raw.stdout + raw.stderr).strip().splitlines()[-1]}")
+    assert raw.returncode != 0 and "无法定位 schema 目录" in raw.stdout + raw.stderr
+    subprocess.run(["git", "reset", "-q", "--", str(lybra / "notes" / "a.md")], cwd=repo, check=True)
+    # 后绿: governance-commit 正式提交经真钩子通过(子进程 LYBRA_SCHEMA_DIR = default_schema_dir())
+    before = _gov_head(repo)
+    ok = _gov_commit(rig, lybra, dry_run=False, paths=["notes"])
+    _show(f"[④·governance-commit 最小环境] committed={ok['committed']} verdict={ok['verdict']} commit={ok.get('commit_hash')}")
+    assert ok["committed"] is True and _gov_head(repo) != before, ok["message"]
+    # 调用方显式设置则尊重(设坏值 → 钩子按该值拒, 暂存还原)
+    monkeypatch.setenv("LYBRA_SCHEMA_DIR", str(repo / "no-such-schema"))
+    (lybra / "notes" / "a.md").write_text("# note a\nagain\n", encoding="utf-8")
+    bad = _gov_commit(rig, lybra, dry_run=False, paths=["notes"])
+    assert bad["committed"] is False and "config.schema not found" in bad["message"] and bad.get("index_restored") is True
+
+
 def test_f93_fixtures_registered_in_runall_and_no_swallowed_exceptions():
     import re
 
@@ -383,7 +420,7 @@ def test_f93_fixtures_registered_in_runall_and_no_swallowed_exceptions():
     for name in ("tests/test_aipos_f93_report_contract_declared.py", "tests/ts/f93-go-report-fields.test.ts"):
         assert name in runall, name
     for rel in ("tools/aipos_cli/next_resolver.py", "tools/aipos_cli/record_writer.py", "tools/aipos_cli/workspace_config.py",
-                "tools/aipos_cli/onboarding.py"):
+                "tools/aipos_cli/onboarding.py", "tools/aipos_cli/governance_commit.py"):
         assert not re.search(r"except Exception:\s*\n\s*pass", (REPO_ROOT / rel).read_text(encoding="utf-8")), rel
 
 

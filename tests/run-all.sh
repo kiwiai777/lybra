@@ -947,10 +947,11 @@ fi
 
 # AIPOS-F93: 报告契约与交回约定声明化三件(① 报告必填字段由 transitions artifact_ingest 声明单源渲染进派生审计卡/执行卡落点句·
 # my-tasks next_card.report_required_frontmatter(go.ts 原样列出, 审计卡带被审 tip/tree)·认领模板·章程, return 必填去 model, F92R 原样报告仍拒
-# ② 注册码交付文案 onboarding.enroll_delivery 单源(门/CLI/向导) ③ 交回检查测试约定读 project.json test_contract, 未声明跳过+warning)
+# ② 注册码交付文案 onboarding.enroll_delivery 单源(门/CLI/向导) ③ 交回检查测试约定读 project.json test_contract, 未声明跳过+warning
+# ④ governance-commit 正式提交子进程带 LYBRA_SCHEMA_DIR, PATH 无 lybra 的最小环境经真钩子通过)
 # (随语义改动的 F49 判据①③ 用例已在上方 F49 块; F78/F78C/F87/F23 用例随各自块)
 echo
-echo "── tests/test_aipos_f93_report_contract_declared.py (F93 五处同源·F92R 原样仍拒·注册码文案单源·test_contract 声明化 lybra 形/probe 形) ────────────────────────────────────────────────────"
+echo "── tests/test_aipos_f93_report_contract_declared.py (F93 五处同源·F92R 原样仍拒·注册码文案单源·test_contract 声明化 lybra 形/probe 形·governance-commit 无 lybra PATH 过钩子) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f93_report_contract_declared.py" -v --tb=short; then
   echo "✓ tests/test_aipos_f93_report_contract_declared.py PASS"
 else
