@@ -3,111 +3,13 @@
  "source_report": "governance/research/2026-10-02-fragmentation-audit.md(条目号 = 该报告总表 #)",
  "fixture": "tests/test_aipos_f87_fragmentation_ratchet.py",
  "fingerprint": "sha1(行文本 strip 后 utf-8)前 12 位",
- "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增)",
- "total": 86,
+ "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增); AIPOS-F91 删除随老子系统退役而消失的条目(只减不增)",
+ "total": 63,
  "invariants": {
   "a": {
    "rule": "产品代码不出现写死的实例名/机器名/home 路径/治理根路径/信封 id: \\.lybra\\.kiwiai-dev|kiwiai-dev|/home/kiwi|~/projects/lybra|2_projects/lybra|pol_lybra_",
-   "count": 54,
+   "count": 33,
    "entries": [
-    {
-     "file": "agents/harness/pi/lybra-loop/lybra-loop.ts",
-     "line": 691,
-     "fp": "0dfd4a58821b",
-     "item": "L3",
-     "text": "// (chris 实撞: code_repo=\"~/projects/lybra\" 时拼 workspace/../../../lybra 成双叠)"
-    },
-    {
-     "file": "diagnose_preauth_match.py",
-     "line": 4,
-     "fp": "ee57fd3acc0c",
-     "item": "L4",
-     "text": "测试pol_lybra_dev_9匹配AIPOS-FND-16卡的完整流程"
-    },
-    {
-     "file": "diagnose_preauth_match.py",
-     "line": 20,
-     "fp": "9c24741e56f0",
-     "item": "L4",
-     "text": "repo_root = Path(\"/home/kiwi/ai-project-os/2_projects/lybra\")"
-    },
-    {
-     "file": "diagnose_preauth_match.py",
-     "line": 23,
-     "fp": "11fcccdebc2b",
-     "item": "L4",
-     "text": "owner_policy_ref = \"pol_lybra_dev_9\""
-    },
-    {
-     "file": "diagnose_preauth_match.py",
-     "line": 25,
-     "fp": "4f05d4d4ccc6",
-     "item": "L4",
-     "text": "canonical_agent_instance = \"exec.lybra.kiwiai-dev\""
-    },
-    {
-     "file": "diagnose_preauth_match.py",
-     "line": 26,
-     "fp": "84c6b358d4ab",
-     "item": "L4",
-     "text": "actor = \"exec.lybra.kiwiai-dev\""
-    },
-    {
-     "file": "diagnose_prerelease.py",
-     "line": 14,
-     "fp": "baf1421e2fa1",
-     "item": "L4",
-     "text": "gov_root = Path('/home/kiwi/ai-project-os/2_projects/lybra')"
-    },
-    {
-     "file": "diagnose_prerelease.py",
-     "line": 17,
-     "fp": "0219492091c5",
-     "item": "L4",
-     "text": "owner_policy_ref = 'pol_lybra_dev_9'"
-    },
-    {
-     "file": "diagnose_prerelease.py",
-     "line": 19,
-     "fp": "e23e1b3d21c1",
-     "item": "L4",
-     "text": "canonical_agent_instance = 'exec.lybra.kiwiai-dev'"
-    },
-    {
-     "file": "diagnose_prerelease.py",
-     "line": 20,
-     "fp": "b4ceda631826",
-     "item": "L4",
-     "text": "actor = 'exec.lybra.kiwiai-dev'"
-    },
-    {
-     "file": "tools/aipos_cli/advisor_pump.py",
-     "line": 70,
-     "fp": "7f8cbd7cdffa",
-     "item": "H5",
-     "text": "Owner ruling: no hardcoded envelope IDs (pol_lybra_dev_1 is stale)."
-    },
-    {
-     "file": "tools/aipos_cli/agent_supervise.py",
-     "line": 629,
-     "fp": "ec1049410d20",
-     "item": "H5",
-     "text": "parser.add_argument(\"--actor\", help=\"Agent instance name (for death reporting, e.g., exec.lybra.kiwiai-dev)\")"
-    },
-    {
-     "file": "tools/aipos_cli/aipos_cli.py",
-     "line": 1526,
-     "fp": "e22fbe479499",
-     "item": "H5",
-     "text": "auditor_launch_parser.add_argument(\"--envelope\", default=\"pol_lybra_audit_1\", help=\"PreAuthorized envelope ref\")"
-    },
-    {
-     "file": "tools/aipos_cli/aipos_cli.py",
-     "line": 1608,
-     "fp": "cebb88c9a8da",
-     "item": "H5",
-     "text": "pump_run_parser.add_argument(\"--executor-instance\", default=None, help=\"[AIPOS-332] 执行体实例名(默认 <role>.lybra.kiwiai-dev)\")"
-    },
     {
      "file": "tools/aipos_cli/audit_derivation.py",
      "line": 270,
@@ -194,13 +96,6 @@
     },
     {
      "file": "tools/aipos_cli/naming_profile.py",
-     "line": 75,
-     "fp": "3a4e55e9e8cf",
-     "item": "H5",
-     "text": "as 'exec.lybra.kiwiai-dev' / f\"{role}.lybra.kiwiai-dev\" (pump_orchestration,"
-    },
-    {
-     "file": "tools/aipos_cli/naming_profile.py",
      "line": 84,
      "fp": "74dffbf7c9fe",
      "item": "H5",
@@ -256,27 +151,6 @@
      "text": "策略 ID(如 pol_lybra_dev_7 或 pol_agency_1),或 None(无活跃策略)"
     },
     {
-     "file": "tools/aipos_cli/pump_orchestration.py",
-     "line": 423,
-     "fp": "9e99db87b262",
-     "item": "H5",
-     "text": "返回持有者实例名(如 ``exec.lybra.kiwiai-dev``);无记录或解析失败返回 None。"
-    },
-    {
-     "file": "tools/aipos_cli/pump_orchestration.py",
-     "line": 544,
-     "fp": "2272b82fa6b8",
-     "item": "H3",
-     "text": "例:``/home/kiwi/projects/lybra`` → ``--home-kiwi-projects-lybra--``"
-    },
-    {
-     "file": "tools/aipos_cli/pump_orchestration.py",
-     "line": 561,
-     "fp": "d471c92cb6d8",
-     "item": "H3",
-     "text": "AIPOS-332F5 根因:product_repo 是产品仓路径(如 ~/projects/lybra),"
-    },
-    {
      "file": "tools/aipos_cli/token_resolver.py",
      "line": 376,
      "fp": "b27b342b6e92",
@@ -310,20 +184,6 @@
      "fp": "a82bcf664a0f",
      "item": "H4",
      "text": "运行位置: 治理仓 ai-project-os/2_projects/lybra"
-    },
-    {
-     "file": "tools/connector/pi/write-guard.ts",
-     "line": 15,
-     "fp": "4496d5c2d11d",
-     "item": "L3",
-     "text": "*   LYBRA_AGENT_INSTANCE  本实例名(校验 claim 归属;默认 exec.lybra.kiwiai-dev)"
-    },
-    {
-     "file": "tools/connector/pi/write-guard.ts",
-     "line": 27,
-     "fp": "aaee5b9e66ce",
-     "item": "H5",
-     "text": "const AGENT = process.env.LYBRA_AGENT_INSTANCE || \"exec.lybra.kiwiai-dev\";"
     },
     {
      "file": "tools/generate_backlog_entry.py",
@@ -373,13 +233,6 @@
      "fp": "c27d77c2da4d",
      "item": "H5",
      "text": "\"owner_policy_ref\": \"pol_lybra_dev_9\","
-    },
-    {
-     "file": "tools/turn_advancer/command_builder.py",
-     "line": 134,
-     "fp": "fba6b385f730",
-     "item": "H5",
-     "text": "envelope = \"pol_lybra_audit_1\""
     },
     {
      "file": "web/board/static/app.js",
@@ -520,16 +373,8 @@
   },
   "e": {
    "rule": "卡/记录 frontmatter 只许经单源 record_writer.render_markdown / render_frontmatter_block 构造(车道内零容忍)",
-   "count": 4,
+   "count": 2,
    "entries": [
-    {
-     "file": "agents/harness/pi/lybra-loop/lybra-loop.ts",
-     "line": 1163,
-     "fp": "f62c8d80349b",
-     "item": "M19",
-     "lane_blocked": "F87 车道外(lane.paths 不含该文件), 未能改; 见 F87 RETURN 产品缺口",
-     "text": "fs.writeFileSync(readmePath, `---\\nstatus: active\\ndecided_at: '${new Date().toISOString()}'\\nsuperseded_by: null\\n---\\n# 手写残稿隔离区\\n\\n${line}\\n`, \"utf-8\");"
-    },
     {
      "file": "tools/inject_governance_status_headers.py",
      "line": 48,
@@ -545,14 +390,6 @@
      "item": "M11",
      "lane_blocked": "F87 车道外(lane.paths 不含该文件), 未能改; 见 F87 RETURN 产品缺口",
      "text": "lines = [\"---\"]"
-    },
-    {
-     "file": "tools/turn_advancer/auto_executor.py",
-     "line": 97,
-     "fp": "ad3a522e89d5",
-     "item": "M20",
-     "lane_blocked": "F87 车道外(lane.paths 不含该文件), 未能改; 见 F87 RETURN 产品缺口",
-     "text": "\"---\\n\""
     }
    ]
   }
