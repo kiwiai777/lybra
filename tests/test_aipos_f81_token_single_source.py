@@ -3,7 +3,7 @@
 依据: 2026-09-24 重 enroll 后 connection.json 形如 [retired 旧 token, 新 token], enroll --verify 通过但
 `lybra sync` 仍 401 —— loop_context.ConnectionResolver(第二套)与 pi loop-context.ts(第三套)按
 instance→role 取**第一条**不认 retired。本卡把挑选收到 tools/aipos_cli/token_resolver.py::select_token_entry
-一处(TS 同判据, 字段名来源 token_resolver.TOKEN_ENTRY_FIELDS)。
+一处。AIPOS-F91: pi loop-context.ts 随 lybra-loop 扩展退役删除, TS 同构夹具随删, 只剩 Python 单源约束。
 
 纪律: token 永不上屏 —— 夹具只比 sha256 指纹, 断言消息只带指纹, 不带 token 值。
 """
@@ -274,77 +274,19 @@ def test_loop_context_has_no_own_selection_loop():
     assert "select_token_entry" in src and "get_token_for_role_and_project" in src
 
 
-def test_ts_loop_context_has_no_own_selection_loop():
-    src = LOOP_CONTEXT_TS.read_text(encoding="utf-8")
-    assert not re.search(r"for\s*\(\s*const\s+\w+\s+of\s+tokens\s*\)", src), "loop-context.ts 不得再自带 tokens 挑选循环"
-    assert src.count("selectTokenEntry(tokens") == 2, "resolveToken / resolveIdentity 均须走 selectTokenEntry"
+def test_ts_side_parses_no_token_after_lybra_loop_retired():
+    """AIPOS-F91: pi loop-context.ts(第三套)随 lybra-loop 扩展退役删除, Python↔TS 同构锁解除 ——
+    TOKEN_ENTRY_FIELDS 只剩 Python 单源(token_resolver 读 config.schema identity_resolution.token.entry);
+    TS 侧(agents/ 下全部 .ts)不得再自解析 connection.json tokens[] 或镜像字段声明。"""
+    assert not LOOP_CONTEXT_TS.exists()
+    ts_files = sorted((REPO_ROOT / "agents").rglob("*.ts"))
+    print("agents/ 下 TS:", [p.relative_to(REPO_ROOT).as_posix() for p in ts_files])
+    for p in ts_files:
+        src = p.read_text(encoding="utf-8")
+        for needle in ("TOKEN_ENTRY_FIELDS", "selectTokenEntry", ".tokens", "TOKEN_REENROLL_EXIT"):
+            assert needle not in src, f"{p.relative_to(REPO_ROOT)}: TS 侧仍自解析 token({needle})"
+    from tools.schema_loader import load_schema
 
-
-def test_ts_field_names_declared_from_python_source():
-    src = LOOP_CONTEXT_TS.read_text(encoding="utf-8")
-    m = re.search(r"export const TOKEN_ENTRY_FIELDS = \{(.*?)\} as const;", src, re.S)
-    assert m, "loop-context.ts 缺 TOKEN_ENTRY_FIELDS"
-    ts_fields = dict(re.findall(r"(\w+):\s*\"([^\"]+)\"", m.group(1)))
-    assert ts_fields == TOKEN_ENTRY_FIELDS, f"TS 字段名 {ts_fields} ≠ Python 声明 {TOKEN_ENTRY_FIELDS}"
-    m2 = re.search(r'export const TOKEN_REENROLL_EXIT = "([^"]+)";', src)
-    assert m2 and m2.group(1) == TOKEN_REENROLL_EXIT
-    assert "来源: tools/aipos_cli/token_resolver.py::TOKEN_ENTRY_FIELDS" in src
-
-
-_CASES = [
-    ("rotated", [{"role": "executor", "agent_instance": INSTANCE, "token": "T0", "retired": True},
-                 {"role": "executor", "agent_instance": INSTANCE, "token": "T1"}], "executor", INSTANCE),
-    ("instance_first", [{"role": "executor", "agent_instance": "exec.lybra.other", "token": "T0"},
-                        {"role": "executor", "agent_instance": INSTANCE, "token": "T1", "retired": True},
-                        {"role": "executor", "agent_instance": INSTANCE, "token": "T2"}], "executor", INSTANCE),
-    ("fall_to_role", [{"role": "executor", "agent_instance": INSTANCE, "token": "T0", "retired": True},
-                      {"role": "executor", "agent_instance": "exec.lybra.x", "token": "T1"}], "executor", INSTANCE),
-    ("all_retired", [{"role": "executor", "agent_instance": INSTANCE, "token": "T0", "retired": True}], "executor", INSTANCE),
-    ("no_match", [{"role": "auditor", "agent_instance": "audit.lybra.y", "token": "T0"}], "executor", INSTANCE),
-    ("empty_value", [{"role": "executor", "agent_instance": INSTANCE, "token": ""}], "executor", None),
-]
-
-
-def _py_outcome(tokens, role, inst):
-    try:
-        return "pick:" + fp(select_token_entry(tokens, role=role, agent_instance=inst)["token"])
-    except TokenAllRetiredError:
-        return "TokenAllRetiredError"
-    except TokenNotFoundError:
-        return "TokenNotFoundError"
-    except TokenResolutionError:
-        return "TokenResolutionError"
-
-
-def test_python_and_ts_select_same_entry_on_shared_cases(tmp_path):
-    """同构: 同一组靶场喂 Python select_token_entry 与 TS selectTokenEntry, 结论(指纹/错误类)逐条相同。"""
-    node = shutil.which("node")
-    assert node, "node 不在 PATH(run-all 依赖 Node ≥ 22)"
-    tokens_by_case = {}
-    for name, toks, role, inst in _CASES:
-        real = [dict(t, token=(_tok(name) if t["token"] else "")) for t in toks]
-        tokens_by_case[name] = (real, role, inst)
-    payload = tmp_path / "cases.json"
-    payload.write_text(json.dumps({k: {"tokens": v[0], "role": v[1], "inst": v[2]} for k, v in tokens_by_case.items()}))
-    script = (
-        "import { selectTokenEntry, TokenAllRetiredError, TokenNotFoundError, TokenResolutionError } from "
-        f"{json.dumps(LOOP_CONTEXT_TS.as_uri())};\n"
-        "import { readFileSync } from 'node:fs'; import { createHash } from 'node:crypto';\n"
-        "const fp = (t) => 'sha256:' + createHash('sha256').update(t, 'utf-8').digest('hex').slice(0, 12);\n"
-        f"const cases = JSON.parse(readFileSync({json.dumps(str(payload))}, 'utf-8'));\n"
-        "const out = {};\n"
-        "for (const [k, c] of Object.entries(cases)) {\n"
-        "  try { out[k] = 'pick:' + fp(selectTokenEntry(c.tokens, { role: c.role, agentInstance: c.inst }).token); }\n"
-        "  catch (e) { out[k] = e instanceof TokenAllRetiredError ? 'TokenAllRetiredError' : e instanceof TokenNotFoundError ? "
-        "'TokenNotFoundError' : e instanceof TokenResolutionError ? 'TokenResolutionError' : 'OTHER:' + e.constructor.name; }\n"
-        "}\n"
-        "console.log(JSON.stringify(out));\n"
-    )
-    proc = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 0, f"node 失败: {proc.stderr[-800:]}"
-    ts_out = json.loads(proc.stdout.strip().splitlines()[-1])
-    for name, (real, role, inst) in tokens_by_case.items():
-        py = _py_outcome(real, role, inst)
-        print(f"{name:15s} py={py:32s} ts={ts_out[name]}")
-        assert py == ts_out[name], f"{name}: Python {py} ≠ TS {ts_out[name]}"
-    assert _py_outcome(*tokens_by_case["rotated"]) == "pick:" + fp(tokens_by_case["rotated"][0][1]["token"])
+    entry = load_schema("config")["identity_resolution"]["keys"]["token"]["entry"]
+    assert TOKEN_ENTRY_FIELDS == entry["fields"], "Python TOKEN_ENTRY_FIELDS 须逐键等于 config.schema 声明(单源)"
+    assert "loop-context.ts" not in entry["description"] or "退役" in entry["description"]

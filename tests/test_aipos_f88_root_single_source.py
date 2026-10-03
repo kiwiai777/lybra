@@ -6,8 +6,8 @@
     先红活证据(顾问 2026-10-02 真实门认领 F88 时 warning 原文, 认领结果仍 ok):
       Worktree creation failed: BLOCKED: WorktreeManager cannot operate on governance repo (/home/…/2_projects/lybra). …
 件② 治理仓/项目根识别一个结构判据: workspace_config.has_workspace_queue(声明的队列根是目录; established=True 另要求
-    project.json)为唯一实现, enroll_client / enroll_deliver / mcp 注册表 / home 扫描委托之; TS 镜像 loop-context.ts
-    ConnectionResolver.isGovernanceWorkspace 同判据; 路径子串判定清零(含 ai-project-os 的产品仓不误判, 不含的治理仓照认)。
+    project.json)为唯一实现, enroll_client / enroll_deliver / mcp 注册表 / home 扫描委托之(原 TS 镜像 loop-context.ts 随 lybra-loop 扩展
+    AIPOS-F91 退役删除); 路径子串判定清零(含 ai-project-os 的产品仓不误判, 不含的治理仓照认)。
 件③ 根路径语义分域(承接 F65B): workspace_config.governance_workspace_root / product_repo_root 两命名函数各一处实现;
     写死产品仓 / 治理根 / home 根全部改调二者或 resolve_home_root; bash 侧(lybra-deploy / governance-pre-commit)读产品 CLI
     `lybra workspace roots` 输出。F71 首打即炸场景(换机器: HOME 下无写死产品仓, 治理根不在 lybra 布局)先红后绿。
@@ -49,14 +49,12 @@ from tools.aipos_cli.workspace_config import (  # noqa: E402
 )
 from tools.schema_loader import SchemaLoadError, code_repo_schema_root, get_branch_integration, load_schema  # noqa: E402
 
-LOOP_CONTEXT_TS = REPO_ROOT / "agents" / "harness" / "pi" / "lybra-loop" / "loop-context.ts"
-WRITE_GUARD_TS = REPO_ROOT / "tools" / "connector" / "pi" / "write-guard.ts"
 LYBRA_DEPLOY = REPO_ROOT / "tools" / "lybra-deploy"
 PRE_COMMIT_HOOK = REPO_ROOT / "tools" / "hooks" / "governance-pre-commit"
 LANE_PREFIXES = (
-    "tools/aipos_cli/", "tools/worktree_manager.py", "tools/mcp_server/", "tools/turn_advancer/", "tools/schema_loader.py",
+    "tools/aipos_cli/", "tools/worktree_manager.py", "tools/mcp_server/", "tools/schema_loader.py",
     "tools/lybra-deploy", "tools/hooks/governance-pre-commit", "tools/inject_governance_status_headers.py",
-    "tools/connector/pi/write-guard.ts", "agents/harness/pi/",
+    "agents/harness/pi/",  # AIPOS-F91: tools/turn_advancer/ 与 tools/connector/ 随退役删除
 )
 # 写死根路径(产品仓 / 治理根 / home 根 / lybra 目录布局)式样: 复查报告 H3/H4 grep 的路径形(项目名字面另族)
 ROOT_LITERAL_RE = re.compile(
@@ -232,31 +230,7 @@ def test_item2_structural_predicate_ignores_path_names(tmp_path):
         validate_workspace_root(str(path), "advisor")
 
 
-def test_item2_ts_mirror_same_verdicts_as_python(tmp_path):
-    """TS 镜像(loop-context.ts isGovernanceWorkspace, 队列根缺省经 declaredQueueRootDefault 读 config.schema)与 Python 唯一实现逐例同判。"""
-    node = shutil.which("node")
-    assert node, "node 不在 PATH(TS 夹具需 Node ≥ 22)"
-    fixtures = _structure_fixtures(tmp_path)
-    paths = {name: str(path) for name, (path, _g, _e) in fixtures.items()}
-    script = (
-        f"import {{ ConnectionResolver }} from {json.dumps(LOOP_CONTEXT_TS.as_uri())};\n"
-        "import { readFileSync } from 'node:fs';\n"
-        f"const schema = JSON.parse(readFileSync({json.dumps(str(REPO_ROOT / 'schema' / 'config.schema.json'))}, 'utf-8'));\n"
-        "const dflt = ConnectionResolver.declaredQueueRootDefault(schema);\n"
-        f"const paths = {json.dumps(paths)};\n"
-        "const out = {}; for (const [k, p] of Object.entries(paths)) out[k] = ConnectionResolver.isGovernanceWorkspace(p, dflt);\n"
-        "let threw = false; try { ConnectionResolver.resolveCodeRepo({ explicitRoot: paths.gov_anywhere, queueRootDefault: dflt }); } catch { threw = true; }\n"
-        "out.__code_repo_rejects_gov = threw;\n"
-        "out.__code_repo_accepts_product = ConnectionResolver.resolveCodeRepo({ explicitRoot: paths.product_under_ai_project_os, queueRootDefault: dflt });\n"
-        "process.stdout.write(JSON.stringify(out));\n"
-    )
-    proc = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60)
-    assert proc.returncode == 0, proc.stderr
-    ts = json.loads(proc.stdout)
-    _show(f"[件②·TS] {json.dumps(ts, ensure_ascii=False)}")
-    for name, (path, is_gov, _e) in fixtures.items():
-        assert ts[name] is is_gov is has_workspace_queue(path), name
-    assert ts["__code_repo_rejects_gov"] is True and ts["__code_repo_accepts_product"] == paths["product_under_ai_project_os"]
+# test_item2_ts_mirror_same_verdicts_as_python(TS 镜像 loop-context.ts 同判)随 lybra-loop 扩展 AIPOS-F91 退役删除。
 
 
 def test_item2_path_substring_predicates_cleared_and_m22_delegated():
@@ -469,33 +443,4 @@ def test_item3_governance_pre_commit_reads_product_cli_for_schema(tmp_path):
     assert denied.returncode == 1 and "无法定位 schema 目录" in denied.stdout
 
 
-def test_item3_write_guard_root_from_declaration_or_fail_closed(tmp_path):
-    """write-guard.ts: 治理根走 TS 单源 resolveGateWorkspace; 无 env 无工位声明 = 写一律阻断并给出口(不再回落写死根)。"""
-    node = shutil.which("node")
-    assert node, "node 不在 PATH"
-    connector = tmp_path / "connector"
-    (connector / "bindings").mkdir(parents=True)
-    (connector / "bindings" / "ephemeral.json").write_text(json.dumps({"taskId": "AIPOS-F88W"}), encoding="utf-8")
-    script = (
-        f"const mod = await import({json.dumps(WRITE_GUARD_TS.as_uri())});\n"
-        "const handlers = {}; const pi = { on: (ev, fn) => { handlers[ev] = fn; }, registerCommand: () => {} };\n"
-        "mod.default(pi);\n"
-        "const r = await handlers.tool_call({ toolName: 'write', input: { path: 'x.txt' } }, {});\n"
-        "process.stdout.write(JSON.stringify(r ?? null));\n"
-    )
-
-    def run(extra: dict[str, str], cwd: Path) -> dict:
-        env = _isolated_env(tmp_path / "home", PI_CONNECTOR_DIR=str(connector), **extra)
-        proc = subprocess.run([node, "--input-type=module", "-e", script], cwd=str(cwd), env=env, capture_output=True, text=True, timeout=60)
-        assert proc.returncode == 0, proc.stderr
-        return json.loads(proc.stdout)
-
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    unresolved = run({}, outside)
-    _show(f"[件③·write-guard] 无声明: {json.dumps(unresolved, ensure_ascii=False)}")
-    assert unresolved["block"] is True and "治理工作区根不可解析" in unresolved["reason"]
-    gov = tmp_path / "gov"
-    (gov / "5_tasks" / "queue").mkdir(parents=True)
-    declared = run({"LYBRA_WORKSPACE_ROOT": str(gov)}, outside)
-    assert declared["block"] is True and "治理工作区根不可解析" not in declared["reason"] and "AIPOS-F88W" in declared["reason"]
+# test_item3_write_guard_root_from_declaration_or_fail_closed(tools/connector/pi/write-guard.ts)随 connector AIPOS-F91 退役删除。

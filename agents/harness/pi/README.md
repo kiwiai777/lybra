@@ -2,7 +2,7 @@
 
 **设计权威**: LOOP-REDESIGN v2 §4;AIPOS-C4B 大项C 目录重排。
 
-本目录存放 **pi 编码代理 harness 的适配物**——连接器 lybra-loop 归此。
+本目录存放 **pi 编码代理 harness 的适配物**(工位扩展母本)。
 与 `agents/skills/`(角色无关 skill 内容)与 `agents/roles/`(角色契约)分开:
 - skills 是角色无关内容;roles 是角色契约;**harness/pi 是引擎适配**。
 
@@ -10,21 +10,18 @@
 
 ```
 harness/pi/
-└── lybra-loop/          # Loop 连接器与引擎(pi 扩展本体)
-    ├── gate-client.ts   # Gate MCP 客户端
-    ├── loop-context.ts  # LoopContext 解析
-    ├── loop-decisions.ts# 决策逻辑
-    ├── loop-engine.ts   # 主引擎
-    ├── lybra-loop.ts    # Pi 扩展入口
-    └── tests/           # 单元测试
+└── _shared/
+    └── extensions/
+        └── go.ts        # 工位 /go: 只读 `lybra my-tasks` 输出开工(夹具在产品仓 tests/ts/)
 ```
+
+AIPOS-F91: 旧门循环扩展 `lybra-loop/`(gate-client/loop-context/loop-decisions/loop-engine/lybra-loop.ts)
+零门后无职责, 随退役整体删除; 其中仍在用的 TS 夹具与 run-all 迁至产品仓 `tests/ts/` 与 `tests/run-all.sh`。
 
 ## 分发
 
-分发器按 (role, harness) 组装:本目录的连接器 + `agents/roles/<role>/` 契约 +
-`agents/skills/`(按 roles.schema.json 装配清单)组装成工位 `_distributed/` 分发物。
-
-工位挂载点(kiwiai-pi 侧薄挂载,由分发器写入)指向 `_distributed/extensions/lybra-loop/`。
+分发清单唯一真相 = `schema/distribution.schema.json`(applies_to_roles + filter, 按角色类展开);
+`lybra sync` 把本目录扩展母本分发到工位, enroll 按同一声明接线 `.pi/extensions/`。
 
 ## 所有权
 

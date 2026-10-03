@@ -201,19 +201,7 @@ class TestDistributionClassExpansion:
         assert '"class:' not in schema_content or 'forbidden' in schema_content.lower()
 
 
-# ==============================================================================
-# 大项D/E: 复工投递（由 lybra-loop.ts 实现，此处仅占位）
-# ==============================================================================
-
-class TestResumptionDelivery:
-    """验收断言⑤: 复工投递 API 修真 + 失败禁报成功"""
-
-    def test_resumption_api_uses_send_user_message(self):
-        """复工投递使用正确的 sendUserMessage API"""
-        # 由 agents/harness/pi/lybra-loop/lybra-loop.ts 实现
-        # 成功: sendUserMessage → stopLoop("已复工...")
-        # 失败: catch → voice("复工投递失败") → stopLoop("复工投递失败...")
-        pytest.skip("TypeScript implementation, verified by code review")
+# 大项D/E 复工投递占位(TestResumptionDelivery, 仅 skip 指向 lybra-loop.ts)随 lybra-loop 扩展 AIPOS-F91 退役删除。
 
 
 # ==============================================================================

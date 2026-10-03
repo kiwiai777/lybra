@@ -17,7 +17,7 @@
  *  C. audit 侧: 注册表 hbj-auditor→auditor 时审计链信封可解析;
  *  D. 源级断言: policy_resolver 无自建角色→类映射(防碎片化红线)。
  *
- * 跑法: node tests/f32-custom-role-envelope.test.ts (依赖 python3 + bin/lybra)
+ * 跑法: node tests/ts/f32-custom-role-envelope.test.ts (依赖 python3 + bin/lybra)
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,7 +26,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(here, "..", "..", "..", "..", "..");
+const repoRoot = join(here, "..", "..");  // AIPOS-F91: 夹具迁至 tests/ts/(产品仓根 = 上两级)
 const binLybra = join(repoRoot, "bin", "lybra");
 
 const NOTES: string[] = [];

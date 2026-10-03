@@ -490,5 +490,6 @@ def test_piece4_single_session_position_implementation():
 # 件⑤: 本夹具入 run-all
 # ---------------------------------------------------------------------------
 def test_fixture_registered_in_run_all():
-    run_all = (REPO_ROOT / "agents" / "harness" / "pi" / "lybra-loop" / "tests" / "run-all.sh").read_text(encoding="utf-8")
+    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
+    run_all = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
     assert "tests/test_aipos_f79d_commit_gate_guardrails.py" in run_all

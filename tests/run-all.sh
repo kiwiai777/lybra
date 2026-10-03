@@ -1,53 +1,23 @@
 #!/usr/bin/env bash
-# run-all —— 跑 contrib/LYBRA-EXT-001 的全部 headless 测试。
+# run-all —— 产品仓常驻夹具总入口(Python 夹具 + 仍在用的 TS 夹具)。
+# AIPOS-F91: 自退役的 agents/harness/pi/lybra-loop/tests/ 迁出到 tests/run-all.sh(位置唯一声明 = tools/aipos_cli/board_adapter.py
+#   RUNALL_RELATIVE_PATH); 仍在用的 TS 夹具迁至 tests/ts/。lybra-loop 扩展本体及其专属夹具随退役删除。
 # 依赖:Node ≥ 22(类型剥离);无需 npm install(纯 node + node: 内置模块)。
 set -u
+# 本脚本在 <产品仓根>/tests/ 下: 先 cd 到产品仓根, 之后一切相对路径与 REPO_ROOT 都以此为准(与调用方 cwd、相对/绝对调用方式无关; 承 F66B)。
 cd "$(dirname "$0")/.."
+REPO_ROOT="$(pwd)"
 echo "========================================================"
-echo " LYBRA-EXT-001 headless 测试套件"
+echo " Lybra 产品仓 run-all 常驻夹具"
 echo "========================================================"
 declare -a files=(
-  "tests/loop-decisions.test.ts"
-  "tests/gate-client.test.ts"
-  "tests/c2-identity-resolution.test.ts"
-  "tests/loop-engine.test.ts"
-  "tests/lybra-loop.test.ts"
-  "tests/tick-mechanism.test.ts"
-  "tests/f8-running-flag.test.ts"
-  "tests/verbs-conformance.test.ts"
-  "tests/f11-runtime-reset.test.ts"
-  "tests/f12-gate-territory.test.ts"
-  "tests/f17-derivation-homology.test.ts"
-  "tests/f16-cooldown.test.ts"
-  "tests/f15b-voice-persistence.test.ts"
-  "tests/f18-version-stamp-voice.test.ts"
-  "tests/f19-watermark.test.ts"
-  "tests/f20-sync-command.test.ts"
-  "tests/f22b-yaml-serialization.test.ts"
-  "tests/f23-enroll-command.test.ts"
-  "tests/f24a-enroll-guardrails.test.ts"
-  "tests/f29b-hosted-return.test.ts"
-  "tests/f32-custom-role-envelope.test.ts"
-  "tests/f32b-gate-registry-source.test.ts"
-  "tests/f33-return-homology.test.ts"
-  "tests/f35a-audit-cold-start.test.ts"
-  "tests/f35b-audit-verdict-hosted.test.ts"
-  "tests/f35c-hyphenated-task-id.test.ts"
-  "tests/f36-first-tick-cold-start.test.ts"
-  "tests/f37a-held-resume-redgreen.test.ts"
-  "tests/f37b-credential-copy-redgreen.test.ts"
-  "tests/f37c-claim-idempotent-redgreen.test.ts"
-  "tests/f38a-derivation-validation.test.ts"
-  "tests/f38b-inflight-quota.test.ts"
-  "tests/f38c-claim-idempotent.test.ts"
-  "tests/f22-advisor-onboarding.test.ts"
-  "tests/f57-onboarding-guide.test.ts"
-  "tests/f60-held-skeleton-dead-code.test.ts"
-  "tests/f60-fix1-settle-skeleton.test.ts"
-  "tests/f62-deadlock-root-cause.test.ts"
-  "tests/f81-token-single-source.test.ts"
-  "tests/f86-go-kickoff.test.ts"
-  "tests/f87-go-next-card.test.ts"
+  "tests/ts/f32-custom-role-envelope.test.ts"
+  "tests/ts/f32b-gate-registry-source.test.ts"
+  "tests/ts/f37b-credential-copy-redgreen.test.ts"
+  "tests/ts/f38a-derivation-validation.test.ts"
+  "tests/ts/f22b-yaml-serialization.test.ts"
+  "tests/ts/f86-go-kickoff.test.ts"
+  "tests/ts/f87-go-next-card.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
@@ -61,24 +31,9 @@ for f in "${files[@]}"; do
   fi
 done
 
-# ── AIPOS-F41B: 分发一致性夹具(经 bin 入常驻) ──────────────────
-# AIPOS-F43-fix1: held卡号截断修复 + F43三大项
-echo
-echo "── tests/f43-fix1-comprehensive.test.ts ───────────────────────────────────────────────────"
-if node tests/f43-fix1-comprehensive.test.ts > /dev/null 2>&1; then
-  echo "✓ tests/f43-fix1-comprehensive.test.ts PASS"
-else
-  echo "✗ tests/f43-fix1-comprehensive.test.ts FAIL"
-  overall=1
-fi
-
-
 # 验证章程硬规矩分发与手册单一真相源一致(Δ=0,既有 Python 测试)
 echo
 echo "── tests/test_aipos_f41_hard_rules.py (分发一致性) ──────────────────────────────────────────"
-# AIPOS-F66B: 脚本开头已 cd 到 lybra-loop 目录, 相对路径调用时 $0 已失效(REPO_ROOT 为空 → 全部 Python 夹具 "file not found");
-# 从当前目录向上四级即产品仓根, 与调用方式无关。
-REPO_ROOT="$(cd ../../../.. && pwd)"
 if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f41_hard_rules.py"; then
   echo "✓ tests/test_aipos_f41_hard_rules.py PASS"
 else
@@ -134,33 +89,8 @@ else
   overall=1
 fi
 
-# AIPOS-F44C: 连接器六项(status文案+骨架验收+复工去重+输出分级+读报单文件+轮次判定)
-echo
-echo "── tests/test_aipos_f44c_status_wording.py (status文案说人话) ──────────────────────────────"
-if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f44c_status_wording.py" -v --tb=short; then
-  echo "✓ tests/test_aipos_f44c_status_wording.py PASS"
-else
-  echo "✗ tests/test_aipos_f44c_status_wording.py FAIL"
-  overall=1
-fi
 
-echo
-echo "── tests/test_aipos_f44c_skeleton_acceptance.py (骨架验收清单) ──────────────────────────────"
-if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f44c_skeleton_acceptance.py" -v --tb=short; then
-  echo "✓ tests/test_aipos_f44c_skeleton_acceptance.py PASS"
-else
-  echo "✗ tests/test_aipos_f44c_skeleton_acceptance.py FAIL"
-  overall=1
-fi
 
-echo
-echo "── tests/test_aipos_f44c_resume_dedup.py (复工提醒去重) ──────────────────────────────"
-if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f44c_resume_dedup.py" -v --tb=short; then
-  echo "✓ tests/test_aipos_f44c_resume_dedup.py PASS"
-else
-  echo "✗ tests/test_aipos_f44c_resume_dedup.py FAIL"
-  overall=1
-fi
 
 # AIPOS-F49: N3交回自检门四条判据(夹具入常驻/改动面在界内/有测试/RETURN非骨架)
 echo
@@ -364,15 +294,6 @@ else
   overall=1
 fi
 
-# AIPOS-F56: 空闲带路出一行可复制指令(Owner 唤醒行)
-echo
-echo "── tests/test_aipos_f56_wakeup_line.py (空闲唤醒行) ──────────────────────────────────────────"
-if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f56_wakeup_line.py"; then
-  echo "✓ tests/test_aipos_f56_wakeup_line.py PASS"
-else
-  echo "✗ tests/test_aipos_f56_wakeup_line.py FAIL"
-  overall=1
-fi
 
 # AIPOS-F65A: 报告链止血三件(claim建骨架+return校验落位+双目录消灭)
 echo
@@ -868,9 +789,9 @@ else
   overall=1
 fi
 
-# AIPOS-F81: token 解析单源(loop_context.ConnectionResolver 与 pi loop-context.ts 委托/同判据 token_resolver: instance→role·排除 retired·全 retired fail-closed 带重签出口; TS 夹具在上方 files 清单)
+# AIPOS-F81: token 解析单源(loop_context.ConnectionResolver 委托 token_resolver: instance→role·排除 retired·全 retired fail-closed 带重签出口; pi loop-context.ts 及其 TS 夹具随 lybra-loop 扩展 AIPOS-F91 退役删除, Python↔TS 同构锁解除)
 echo
-echo "── tests/test_aipos_f81_token_single_source.py (F81 [retired,new] 三类客户端取新 token/全 retired fail-closed/Python↔TS 同判据同构) ────────────────────────────────────────────────────"
+echo "── tests/test_aipos_f81_token_single_source.py (F81 [retired,new] 客户端取新 token/全 retired fail-closed/声明单源) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f81_token_single_source.py" -v --tb=short; then
   echo "✓ tests/test_aipos_f81_token_single_source.py PASS"
 else
@@ -918,9 +839,9 @@ else
   overall=1
 fi
 
-# AIPOS-F86: pi 工位开工面三件(my-tasks 输出工作树/报告落点·产品单源推导, go.ts 只读不推、报错零门·章程「单一真相源」指向 COMMANDS.md·分发声明与 f57 夹具残留更正; TS 夹具 f86-go-kickoff/f57 在上方 files 清单)
+# AIPOS-F86: pi 工位开工面三件(my-tasks 输出工作树/报告落点·产品单源推导, go.ts 只读不推、报错零门·章程「单一真相源」指向 COMMANDS.md·分发声明更正; TS 夹具 tests/ts/f86-go-kickoff 在上方 files 清单; f57 TS 夹具随 lybra-loop 扩展 AIPOS-F91 退役删除)
 echo
-echo "── tests/test_aipos_f86_workstation_kickoff.py (F86 三类卡 my-tasks 字段=claim 实际建树·拒因非空串·planGo kickoff 含产品字段/章程 grep ADVISOR-COMMANDS 零命中·渲染无残留/minimum_bootable_set 零门路径·f57 部署解析) ────────────────────────────────────────────────────"
+echo "── tests/test_aipos_f86_workstation_kickoff.py (F86 三类卡 my-tasks 字段=claim 实际建树·拒因非空串·planGo kickoff 含产品字段/章程 grep ADVISOR-COMMANDS 零命中·渲染无残留/minimum_bootable_set 零门路径·夹具入 run-all) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f86_workstation_kickoff.py" -v --tb=short; then
   echo "✓ tests/test_aipos_f86_workstation_kickoff.py PASS"
 else

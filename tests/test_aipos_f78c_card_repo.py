@@ -494,7 +494,8 @@ def test_f78c_item3_chris_shape_ingest_stops_at_declaration_missing_not_crash(tm
 
 
 def test_f78c_fixture_registered_in_runall_and_no_swallowed_exceptions():
-    runall = (REPO_ROOT / "agents" / "harness" / "pi" / "lybra-loop" / "tests" / "run-all.sh").read_text(encoding="utf-8")
+    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
+    runall = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
     assert "tests/test_aipos_f78c_card_repo.py" in runall
     for rel in ("tools/aipos_cli/workspace_config.py", "tools/aipos_cli/artifact_ingest.py", "tools/aipos_cli/machine_zone.py",
                 "tools/aipos_cli/card_render.py"):

@@ -15,7 +15,7 @@
  *     在位 + 分发与信封解析同模块来源(单源);
  *  D. 源级断言: policy_resolver 生产入口无注册表参数(参数仅测试注入)。
  *
- * 跑法: node tests/f32b-gate-registry-source.test.ts (依赖 python3 + bin/lybra)
+ * 跑法: node tests/ts/f32b-gate-registry-source.test.ts (依赖 python3 + bin/lybra)
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,7 +24,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(here, "..", "..", "..", "..", "..");
+const repoRoot = join(here, "..", "..");  // AIPOS-F91: 夹具迁至 tests/ts/(产品仓根 = 上两级)
 const binLybra = join(repoRoot, "bin", "lybra");
 
 const NOTES: string[] = [];

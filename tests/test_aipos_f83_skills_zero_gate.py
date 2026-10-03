@@ -113,7 +113,7 @@ TOOL_PACKAGE_INVENTORY: dict[str, str] = {
     "tests/test_aipos_f54.py": "夹具: 断言 roles.schema 无 tool_package / warnings 无 tool_package",
     "tests/test_aipos_f82_workstation_intake.py": "夹具: 断言 warnings 无 tool_package",
     "tests/test_aipos_f83_skills_zero_gate.py": "夹具: 本盘点",
-    "agents/harness/pi/lybra-loop/tests/run-all.sh": "run-all F83 块标题文字(非读取)",
+    "tests/run-all.sh": "run-all F83 块标题文字(非读取; AIPOS-F91 自 lybra-loop/tests 迁出)",
     "tools/aipos_cli/tests/test_aipos_f57_onboarding.py": "夹具文档: 改读 distribution 声明",
     "agents/README.md": "文档: 单源 = distribution.schema, tool_package 退役注记(AIPOS-F84 件③ 更正)",
     "agents/roles/README.md": "文档: 单源 = distribution.schema, tool_package 退役注记(AIPOS-F84 件③ 更正)",
@@ -321,5 +321,5 @@ def test_item3_declared_mounts_single_derivation():
     m = declared_pi_mounts(dists)
     print("executor 声明挂载:", {k: sorted(v) for k, v in m.items()})
     assert m["skills"] == set(declared_role_skills(dists)) and "finalize-slice" not in m["skills"]
-    assert m["extensions"] == set(declared_role_extensions(dists)) | {"claim.ts"}
+    assert m["extensions"] == set(declared_role_extensions(dists)) and "claim.ts" not in m["extensions"]  # AIPOS-F91: claim.ts 挂载项退役
     assert os.sep not in "".join(m["extensions"])

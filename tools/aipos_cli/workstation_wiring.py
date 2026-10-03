@@ -1,14 +1,14 @@
 """AIPOS-F54 — 工位可启动最小集(bootstrap minimum)单源实现。
 
 enroll 一次性落齐"可启动最小集"(缺任何一项, 新工位起不来):
-  ① .pi/ 接线(settings.json + extensions/{claim.ts, 声明的扩展} + skills/<name>)
+  ① .pi/ 接线(settings.json + extensions/{声明的扩展} + skills/<name>; AIPOS-F91: claim.ts 挂载项退役, 执行体零门不接认领扩展)
   ② .lybra/role#owner_policy_ref(从门侧生效 owner_autonomy_policy 信封推导)
   ③ .lybra/connection.json#lybra_bin(指向实际部署位)
   ④ AGENTS.md 章程种子(AIPOS-F82: charter_render 渲染物; 母本变/声明变由 /lybra sync 重渲染)
 
 AIPOS-F82 件②(2026-09-24 重 enroll 实撞: pi 启动 Cannot find module + AGENTS.md 显示 {{占位}}):
   - 接线目标由 **distribution 声明**推导(tools.distribution_manifest.build_role_manifest, 与门/sync 同一构建器):
-      扩展挂载 = 本角色 kind=extension 分发物(单文件 → 相对软链; 多文件 → 转发包装); claim.ts = 最小集声明项;
+      扩展挂载 = 本角色 kind=extension 分发物(单文件 → 相对软链; 多文件 → 转发包装);
       **只写目标已存在的扩展挂载**(不存在 = 不写 + warnings 点名, 禁写悬空包装——悬空扩展令 pi 启动即崩);
       skills/<name> = 本角色 kind=skills 分发物的技能目录(声明即下一次 sync 的落点, 首次 sync 前软链待落地, warnings 点名)。
   - AIPOS-F83 件②: 工具包唯一来源 = distribution.schema(roles.schema tool_package 退役, 旧门循环扩展 lybra-loop 退役);
@@ -22,7 +22,7 @@ AIPOS-F82 件②(2026-09-24 重 enroll 实撞: pi 启动 Cannot find module + AG
   - 信封判定 = tools/aipos_cli/autonomy_policy.py normalize(复用, 禁第二份信封解析)
   - 接线规格 = 卡面 Owner 裁定(2026-08-28 项目顾问逆向+顾问实测复核):
       settings.json 最小配置禁写 defaultModel、禁用 extensions 数组当加载清单;
-      claim.ts = 相对软链;多文件扩展挂载 = 真实转发文件(多文件扩展经 symlink 丢兄弟模块);
+      多文件扩展挂载 = 真实转发文件(多文件扩展经 symlink 丢兄弟模块);
       skills/<name> = 逐技能软链(按角色类分配子集)。
 
 seed_only 语义(F27):已存在则跳过并出声, 绝不覆盖用户定制。
@@ -59,9 +59,6 @@ EXTENSION_WRAPPER_TEMPLATE = (
 
 #: 工位/.pi/<子目录>/<挂载名> → 工位父根的相对前缀(接线规格: 挂载点在工位根下两级)。
 MOUNT_TO_HARNESS_PARENT = "../../../"
-
-#: claim.ts = 相对软链(工位/.pi/extensions/claim.ts → 仓库根/_shared/extensions/claim.ts; 最小集声明项)。
-CLAIM_SYMLINK_TARGET = "../../../_shared/extensions/claim.ts"
 
 #: 无 harness 循环的角色类(不落 .pi 接线; owner/copilot 等不入循环)。
 LOOP_ROLE_CLASSES = ("executor", "auditor", "advisor")
@@ -334,10 +331,6 @@ def materialize_pi_wiring(
 
     pi = workspace_root / ".pi"
     items["settings.json"] = {"status": _seed_file(pi / "settings.json", json.dumps(SETTINGS_TEMPLATE, indent=2) + "\n")}
-    items["extensions/claim.ts"] = _seed_extension(
-        pi, "claim.ts", {"kind": "symlink", "target": CLAIM_SYMLINK_TARGET}, warnings,
-        origin="distribution.schema minimum_bootable_set .pi/extensions/claim.ts",
-    )
     declared_ext = declared_role_extensions(dists)
     for name, spec in declared_ext.items():
         items[f"extensions/{name}"] = _seed_extension(pi, name, spec, warnings, origin=f"distribution {spec['distribution_id']}")

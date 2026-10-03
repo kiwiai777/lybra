@@ -23,9 +23,10 @@ def test_criterion_1_test_in_runall(tmp_path: Path):
     subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_root, check=True, capture_output=True)
     
     # 创建 run-all.sh（在 main 分支）
-    runall_dir = repo_root / "agents" / "harness" / "pi" / "lybra-loop" / "tests"
-    runall_dir.mkdir(parents=True)
-    runall_path = runall_dir / "run-all.sh"
+    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
+
+    runall_path = repo_root / RUNALL_RELATIVE_PATH
+    runall_path.parent.mkdir(parents=True, exist_ok=True)
     runall_path.write_text("""#!/bin/bash
 # Existing tests
 python3 tests/test_existing_feature.py

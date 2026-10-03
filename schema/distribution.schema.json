@@ -398,12 +398,6 @@
         "description": "Minimal pi settings (defaultProvider/enableSkillCommands/skills; NO defaultModel, NO extensions array)"
       },
       {
-        "name": ".pi/extensions/claim.ts",
-        "kind": "file",
-        "path": ".pi/extensions/claim.ts",
-        "description": "Claim extension mount — relative symlink to ../../../_shared/extensions/claim.ts (AIPOS-F82: written only when the target exists; otherwise not written + enroll warnings, never a dangling mount)"
-      },
-      {
         "name": ".pi/skills/",
         "kind": "symlink_dir",
         "path": ".pi/skills",

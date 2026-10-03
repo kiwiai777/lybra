@@ -298,7 +298,7 @@ def test_item2_fresh_enroll_rendered_charter_and_no_dangling_extension(tmp_path,
     assert text == expected  # 同一渲染器、同一上下文
     ext = sorted((ws / ".pi" / "extensions").iterdir())
     print("extensions:", [(p.name, p.is_symlink(), p.exists(), p.resolve().relative_to(parent).as_posix()) for p in ext])
-    assert [p.name for p in ext] == ["claim.ts", "go.ts"] and all(p.exists() for p in ext)
+    assert [p.name for p in ext] == ["go.ts"] and all(p.exists() for p in ext)  # AIPOS-F91: claim.ts 挂载项退役, 目标在也不接
     assert not (ws / ".pi" / "extensions" / "lybra-loop.ts").exists()
     skills = sorted(p.name for p in (ws / ".pi" / "skills").iterdir())
     assert "finalize-slice" not in skills and skills
@@ -316,9 +316,10 @@ def test_item2_missing_extension_target_not_written(tmp_path, monkeypatch):
     _shared(parent, "claim.ts")
     ws = parent / "lybra-auditor"
     r = _enroll(ws, gov, "auditor", AUDITOR)
-    ext = sorted((ws / ".pi" / "extensions").iterdir())
+    ext_dir = ws / ".pi" / "extensions"
+    ext = sorted(ext_dir.iterdir()) if ext_dir.is_dir() else []
     print("extensions:", [p.name for p in ext], "| go.ts item:", r["wiring"]["items"]["extensions/go.ts"]["status"])
-    assert [p.name for p in ext] == ["claim.ts"] and all(p.exists() for p in ext)
+    assert ext == []  # AIPOS-F91: claim.ts 挂载项退役; go.ts 目标缺 = 不写
     assert r["wiring"]["items"]["extensions/go.ts"]["status"] == "not_written(target-missing)"
     assert any(".pi/extensions/go.ts 未接" in w for w in r["warnings"])
 

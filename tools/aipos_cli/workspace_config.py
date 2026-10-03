@@ -44,7 +44,7 @@ def has_workspace_queue(path: Path, *, established: bool = False) -> bool:
 
     委托方(禁第二实现): enroll_client.is_governance_workspace(②)、enroll_deliver.validate_workspace_root、
     task_loader._has_queue_root、mcp_server 项目注册表扫描、home 候选扫描、governance_workspace_root 结构识别。
-    TS 镜像(同判据, 注明来源): agents/harness/pi/lybra-loop/loop-context.ts ConnectionResolver.isGovernanceWorkspace。
+    (原 TS 镜像 lybra-loop/loop-context.ts isGovernanceWorkspace 随 lybra-loop 扩展 AIPOS-F91 退役删除; 现仅此一处。)
     """
     root = Path(path)
     if established and not project_json_path(root).is_file():

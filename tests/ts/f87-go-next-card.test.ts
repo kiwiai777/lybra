@@ -5,13 +5,13 @@
  *  B. next_card 指向列表中非首张的卡 → kickoff 用 next_card(证明不取首张)。
  *  C. next_card=null + 原因列表 → refused, 原因逐条原样转述; 原因列表为空 → none(等待分配); 旧产品输出(无 next_card)→ refused。
  *
- * 跑法: `node tests/f87-go-next-card.test.ts`
+ * 跑法: `node tests/ts/f87-go-next-card.test.ts`
  */
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { planGo } from "../../_shared/extensions/go.ts";
+import { planGo } from "../../agents/harness/pi/_shared/extensions/go.ts";  // AIPOS-F91: 夹具迁至 tests/ts/
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -19,7 +19,7 @@ function check(name: string, ok: boolean, detail = "") {
   if (!ok) failures++;
 }
 
-const GO_TS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "_shared", "extensions", "go.ts");
+const GO_TS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "agents", "harness", "pi", "_shared", "extensions", "go.ts");
 const src = readFileSync(GO_TS, "utf-8");
 
 // ---------------- A. 静态断言 ----------------

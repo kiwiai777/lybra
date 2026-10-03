@@ -94,9 +94,11 @@ def _fake_governance(tmp: Path, policy_id: str = "pol_probe_exec_1", covers: str
     (gov / "5_tasks" / "policies").mkdir(parents=True, exist_ok=True)
     # AIPOS-F82 件②: enroll 章程种子走 charter_render(需项目声明); 项目段 = 夹具实例名 <prefix>.probe.<host>
     (gov / "project.json").write_text(json.dumps({"project": "probe", "config_version": 1}), encoding="utf-8")
-    # 工位父根共享层(真实拓扑: 仓库根 _shared/extensions/claim.ts 由工位仓自带)——扩展挂载只接目标存在者
+    # 工位父根共享层(真实拓扑: 仓库根 _shared/extensions/ 由工位仓自带)——扩展挂载只接声明内且目标存在者
+    # AIPOS-F91: claim.ts 挂载项退役 —— 共享层仍放一份 claim.ts, 证明目标在也不接; go.ts = 分发声明的扩展
     (tmp / "_shared" / "extensions").mkdir(parents=True, exist_ok=True)
     (tmp / "_shared" / "extensions" / "claim.ts").write_text("export default function () {}\n", encoding="utf-8")
+    (tmp / "_shared" / "extensions" / "go.ts").write_text("export default function () {}\n", encoding="utf-8")
     (gov / "5_tasks" / "policies" / f"{policy_id}.md").write_text(
         "---\n"
         "record_type: owner_autonomy_policy\n"
@@ -198,10 +200,8 @@ def test_2_green_full_wiring():
     ok("⑯ settings 禁 defaultModel", "defaultModel" not in settings)
     ok("⑯ settings 禁 extensions 数组", "extensions" not in settings)
     claim = ws / ".pi" / "extensions" / "claim.ts"
-    ok("⑯ claim.ts 是软链", claim.is_symlink())
-    ok("⑯ claim.ts 软链目标正确",
-       "../../.." in Path(claim.readlink()).as_posix() and "_shared/extensions/claim.ts" in claim.readlink().as_posix(),
-       claim.readlink().as_posix())
+    # AIPOS-F91(M23): 最小集 claim.ts 挂载项退役(执行体零门) —— 共享层目标在也不接
+    ok("F91 claim.ts 不再接(最小集挂载项退役)", not claim.exists() and not claim.is_symlink())
     # AIPOS-F82 件②: 旧门循环扩展 lybra-loop 未被 distribution 声明 = 已退役 → 不接(不写悬空包装)
     ok("F82 lybra-loop.ts 不再写(退役, 无悬空包装)", not (ws / ".pi" / "extensions" / "lybra-loop.ts").exists()
        and not (ws / ".pi" / "extensions" / "lybra-loop.ts").is_symlink())
@@ -255,7 +255,8 @@ def test_4_custom_role_by_class():
     ws = _fresh_ws(tmp)
     r = _enroll(CURRENT, ws, gov, _stub_token_entry("probe-xyz-coder", "xyz.probe.otherproj", role_class="executor"))
     ok("⑤ 自定义角色 enroll ok", r["ok"] is True)
-    ok("⑤ 接线按 role_class=executor 落齐", (ws / ".pi" / "extensions" / "claim.ts").is_symlink()
+    ok("⑤ 接线按 role_class=executor 落齐", (ws / ".pi" / "extensions" / "go.ts").is_symlink()  # AIPOS-F91: claim.ts 挂载项退役, 改验声明扩展 go.ts
+       and not (ws / ".pi" / "extensions" / "claim.ts").is_symlink()
        and not (ws / ".pi" / "extensions" / "lybra-loop.ts").exists())
     skills = sorted(p.name for p in (ws / ".pi" / "skills").iterdir())
     ok("⑤ skills=executor 集合", skills == EXEC_DECLARED_SKILLS and "audit-independent-evidence" not in skills, str(skills))

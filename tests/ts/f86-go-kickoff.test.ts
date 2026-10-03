@@ -10,13 +10,13 @@
  * AIPOS-F87 件③: 选卡改由产品给出(my-tasks 的 next_card / next_card_excluded), 本夹具 B/C 段的输入随之改为产品输出形;
  *   go.ts 自带的「工作树尚未建立」文案常量退役, 改为原样转述产品拒因(断言随之改为产品原文)。
  *
- * 跑法: `node tests/f86-go-kickoff.test.ts`
+ * 跑法: `node tests/ts/f86-go-kickoff.test.ts`
  */
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { planGo } from "../../_shared/extensions/go.ts";
+import { planGo } from "../../agents/harness/pi/_shared/extensions/go.ts";  // AIPOS-F91: 夹具迁至 tests/ts/
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -24,7 +24,7 @@ function check(name: string, ok: boolean, detail = "") {
   if (!ok) failures++;
 }
 
-const GO_TS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "_shared", "extensions", "go.ts");
+const GO_TS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "agents", "harness", "pi", "_shared", "extensions", "go.ts");
 const src = readFileSync(GO_TS, "utf-8");
 const GATE_TEXT_RE = /lybra next|next --run|lybra_\w+|queue claim|queue return|\bclaim\b(?! *由)/;
 

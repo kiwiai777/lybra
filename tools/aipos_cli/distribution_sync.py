@@ -546,7 +546,7 @@ def _find_files_to_prune(
     """AIPOS-F66C 件①-R3: 找出分发器曾铺过、但不在当前部署声明中的文件。
 
     P0 修复: prune删除集合 = 分发器自己铺过的产物(判据:manifest历史/文件头标记),
-    **绝不能是"目录里凡不在声明的文件"** — 非分发文件(claim.ts等)一律不碰。
+    **绝不能是"目录里凡不在声明的文件"** — 非分发文件(工位自有扩展等)一律不碰。
 
     作用域:
     - _distributed/ (共享分发落点,全部为分发产物)
@@ -580,7 +580,7 @@ def _find_files_to_prune(
                             continue
                     to_prune.append(str(p))
 
-    # 2. .pi/extensions/ 需区分分发wrapper vs 非分发文件(claim.ts等)
+    # 2. .pi/extensions/ 需区分分发wrapper vs 非分发文件(工位自有扩展等)
     # 判据: 读取本地manifest历史 + 文件头分发标记
     wrapper_dir = harness_root / ".pi" / "extensions"
     if wrapper_dir.is_dir():
@@ -597,7 +597,7 @@ def _find_files_to_prune(
                     # 检查是否为分发器曾铺过的文件
                     if path_str in historical_wrappers or _is_distributed_file(p):
                         to_prune.append(path_str)
-                    # 否则为非分发文件(claim.ts等),不碰
+                    # 否则为非分发文件(工位自有扩展等),不碰
 
     # 3. AGENTS.md (charter) 为分发产物
     charter = harness_root / "AGENTS.md"
@@ -610,7 +610,7 @@ def _find_files_to_prune(
 def declared_pi_mounts(dists: list[dict[str, Any]]) -> dict[str, set[str]]:
     """AIPOS-F83 件③: 本角色当前声明的 .pi 挂载名 —— 与 enroll 接线同一推导(禁第二实现):
     skills = workstation_wiring.declared_role_skills; extensions = workstation_wiring.declared_role_extensions
-    + distribution.schema minimum_bootable_set 中 .pi/extensions/<名> 文件项(claim.ts)。"""
+    + distribution.schema minimum_bootable_set 中 .pi/extensions/<名> 文件项(AIPOS-F91: claim.ts 项退役, 现无此类项)。"""
     from tools.aipos_cli.workstation_wiring import (
         declared_role_extensions,
         declared_role_skills,

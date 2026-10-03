@@ -14,7 +14,7 @@
  *  - w2s 同 writer 破坏 → close 不被坏卡阻断 + governance warning 出声 + 不落坏卡
  *  - w3  audit_dispatch 预览: 常规无 F38 拒因; 破坏 → blocking_reasons 出声(拒并出声)
  *
- * 跑法: node tests/f38a-derivation-validation.test.ts (或经 run-all.sh 常驻)
+ * 跑法: node tests/ts/f38a-derivation-validation.test.ts (或经 run-all.sh 常驻)
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
@@ -40,7 +40,7 @@ function legOf(legs: Leg[], name: string): Leg {
 }
 
 function runDriver(): Leg[] {
-  const driverPath = join(PROJECT_ROOT, "agents/harness/pi/lybra-loop/tests/.tmp-f38a-driver.py");
+  const driverPath = join(PROJECT_ROOT, "tests/ts/.tmp-f38a-driver.py");
   writeFileSync(driverPath, PY_DRIVER);
   try {
     const r = spawnSync("python3", [driverPath], {

@@ -192,7 +192,7 @@ def test_item2_card_policy_author_retired_zero_refs():
     assert set(refs) <= {
         "schema/distribution.schema.json",  # advisor-skills notes 退役注记
         "tests/test_aipos_f84_advisor_skills_generic.py",  # 本夹具
-        "agents/harness/pi/lybra-loop/tests/run-all.sh",  # run-all F84 块标题文字
+        "tests/run-all.sh",  # run-all F84 块标题文字(AIPOS-F91 自 lybra-loop/tests 迁出)
     }
     assert "card-policy-author 母本退役" in json_text("schema/distribution.schema.json")
 

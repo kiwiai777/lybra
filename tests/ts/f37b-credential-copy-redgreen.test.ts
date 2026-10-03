@@ -9,7 +9,7 @@
  * 真实执行(非源码 grep): python3 importlib 加载两版模块, 在一次性 tmp 工作区跑函数, JSON 回传。
  *
  * 锚点: C2 身份解析单源(.bak-token 旧副本 fp 误用实撞)
- * 跑法: node tests/f37b-credential-copy-redgreen.test.ts (或经 run-all.sh 常驻)
+ * 跑法: node tests/ts/f37b-credential-copy-redgreen.test.ts (或经 run-all.sh 常驻)
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";

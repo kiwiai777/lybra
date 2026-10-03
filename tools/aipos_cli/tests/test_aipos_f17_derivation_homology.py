@@ -2,8 +2,8 @@
 AIPOS-F17 派生与推导同源 —— 测试。
 
 大项A: fix 卡派生器从 schema 必填集写全 + 产前自检
-大项B: sweep 卡号从 frontmatter 读(不在本 Python 测试, 在 lybra-loop TS 测试)
-大项C: 候选无声(不在本 Python 测试, 在 lybra-loop TS 测试)
+大项B: sweep 卡号从 frontmatter 读(原在 lybra-loop TS 测试, 随扩展 AIPOS-F91 退役删除)
+大项C: 候选无声(原在 lybra-loop TS 测试, 随扩展 AIPOS-F91 退役删除)
 
 跑法: python3 -m pytest tools/aipos_cli/tests/test_aipos_f17_derivation_homology.py -v
 """
