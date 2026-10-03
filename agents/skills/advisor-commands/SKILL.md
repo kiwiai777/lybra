@@ -13,9 +13,9 @@ role: advisor
 
 ## 为什么(长期有效)
 
-**问题源**:历史顾问靠手搓 `GateClient(...).call_tool(...)` 片段直呼 gate 动词(ADVISOR-COMMANDS.md 9处),
-参数易漂移、缺参报错不友好、每次压缩后要翻文档重拼。产品命令(`lybra` CLI)参数由 schema 驱动,
-缺参自报错含可抄示例,但命令多了顾问记不全何时用哪个。
+**问题源**:历史顾问靠手写脚本直接调门接口(代按认领、手按 Owner 两跳确认、手提裁决),
+参数易漂移、缺参报错不友好、每次压缩后要翻文档重拼, 换一个顾问就推不动。产品命令(`lybra` CLI)参数由 schema 驱动,
+缺参自报错含可抄示例;AIPOS-F90 起一张卡从发布到结案只靠 `lybra loop` 推进, 顾问零手写门接口。
 
 **长期有效性**:产品命令集随 loop 演进持续增长;顾问作为第一交互面,需要稳定的命令索引;
 本 skill = 命令快查表 + 退役债标注,随产品命令上线同步更新。
@@ -30,11 +30,12 @@ role: advisor
 |------|------|----------|
 | **N0 出卡** | 起草与发卡 | `lybra draft create/publish`, `lybra queue amend/withdraw` |
 | **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物, 永不唤醒 agent) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
-| **N1 认领** | 监督认领流程 | `lybra loop`(推进行); 单步查看 `lybra next --task-id <卡ID>`; `lybra my-tasks` 查询 |
+| **N1 认领** | 监督认领流程 | `lybra loop`(推进行; 一段式: 驱动方信封 PreAuthorized, 门在同一步建卡工作树, **建树失败 = 门拒认领**, 队列不变); 单步查看 `lybra next --task-id <卡ID>`; `lybra my-tasks` 查询 |
+| **开工(工位)** | 执行/审计工位开工 | Owner 在工位敲 **`/go`**(产品选卡并核验: 非 claimed/非本实例/已结案/产物已交即拒并给原因); 顾问**不贴卡号/卡路径/开工稿**(AIPOS-F90 件③) |
 | **开工渲染** | 把卡意图面按 harness 渲染给执行引擎(pi/codex/claude-code), 派子 agent 只看渲染物 | **`lybra card render --task-id <卡ID> --harness <harness>`**(AIPOS-F78 件②; 零门动词/零 token) |
 | **N2 执行** | 监督进度 | 无直接干预 (执行体在卡分支提交 + 把 Return 落到项目声明落点; `lybra loop` 经 agent watch 等它落盘) |
-| **N3 交回** | 监督交回流程 | `lybra loop`(推进行; 内部经 `lybra artifact ingest` 校验 Return frontmatter 与分支 tip 后铸记录, AIPOS-F78 件③) |
-| **N4 审计** | 审非代码卡 | `lybra audit-verdict` (顾问自审), `lybra audit dispatch` (派审; 代码卡由 `lybra loop` 自动派) |
+| **N3 交回** | 监督交回流程 | `lybra loop`(推进行; 推导核派生 `lybra artifact ingest --kind return`: 校验 Return frontmatter 与分支 tip, **模型字段由产品从会话记录填写**, 自报只作对照) |
+| **N4 审计** | 代码卡审计入门 / 审非代码卡 | 代码卡: `lybra loop`(审计报告落盘后派生 `lybra artifact ingest --kind verdict`: 绑被审分支 tip、产品填模型字段、**门把报告全文快照进 records**, 顾问不手提裁决); 非代码卡顾问自审: `lybra audit-verdict`; 手动派审 `lybra audit dispatch` |
 | **返工** | 追加返工节 | `lybra queue rework --confirm` (AIPOS-F75, F73C件⑤) |
 | **N5 finalize** | 监督交付上线 | `lybra loop`(推进行) |
 | **N6 收账** | 编年史+决策记录 | `generate_backlog_entry.py`(产品仓脚本), `lybra owner-decision` |
@@ -89,13 +90,13 @@ lybra card render --task-id <卡ID> --harness claude-code --out-dir <输出目�
 ```
 **落点全读声明**: 工作树=config.schema worktree_root; Return 落点=project.json `paths.return_root`(未声明缺省 task_cards; 另一常见形=5_tasks/records/returns); 分支=transitions N5.branch_integration。
 
-#### `lybra artifact ingest`(AIPOS-F78 件③, 由 loop/next --run 触发, 非人用)
-**何时用**:排障——执行体说"交回了"但 loop 没动, 看产物入口为何拒。
+#### `lybra artifact ingest`(AIPOS-F78 件③ / F90 件②, 由 loop/next --run 触发, 非人用)
+**何时用**:排障——执行体/审计体说"写完了"但 loop 没动, 看产物入口为何拒。return/verdict 步的派生命令就是它(带 `--kind`)。
 ```bash
-lybra artifact ingest --task-id <卡ID> --dry-run      # 只校验: 找 Return(声明落点)、必填 frontmatter(commit_sha/tree_hash/branch/model)、分支 tip==commit_sha
-lybra artifact ingest --task-id <卡ID>R --dry-run     # R 卡: 找审计报告(verdict + commit_sha==被审分支 tip)
+lybra artifact ingest --task-id <卡ID> --kind return --dry-run      # 只校验: 找 Return(声明落点)、必填 frontmatter(commit_sha/tree_hash/branch/model)、分支 tip==commit_sha
+lybra artifact ingest --task-id <卡ID>R --kind verdict --dry-run    # R 卡: 找审计报告(verdict + commit_sha==被审分支 tip)
 ```
-拒因码: INGEST_RETURN_MISSING / INGEST_FRONTMATTER_MISSING / INGEST_TIP_MISMATCH / INGEST_TREE_MISMATCH / INGEST_SUMMARY_MISSING(exit 4)。通过则走既有 `queue return --confirm` / `audit-verdict --confirm` 薄壳(驱动方 token, actor=卡实例)。
+拒因码: INGEST_RETURN_MISSING / INGEST_FRONTMATTER_MISSING / INGEST_TIP_MISMATCH / INGEST_TREE_MISMATCH / INGEST_SUMMARY_MISSING / INGEST_KIND_MISMATCH(exit 4)。通过则走推导核同时给出的同一条 `queue return --confirm` / `audit-verdict --confirm` 薄壳(驱动方 token, actor=卡实例), 并补上产品填写的 `agent_runtime`(运行时模型取自卡面 harness 的会话记录, 取不到记「未声明会话记录」, 与自报不一致标 `model_mismatch`); 裁决入门时门把审计报告全文快照进 `records/audit_verdicts/<卡ID>/report_snapshots/`。
 
 #### `lybra queue withdraw`
 **何时用**:撤卡(malformed/方向错误/重复发卡)。
@@ -132,6 +133,7 @@ lybra loop --task-id <卡ID> --envelope <信封ID> --actor <你的顾问实例> 
 ```
 **每轮**:`next` 推导 → 账务命令(claim/return/dispatch/verdict/finalize/close)先过 argparse 解析再经 `next --run` 同一执行体执行并重推导;agent 步(执行体/审计体在干活)只调 `agent watch --expect` 有界等待产物(落点读项目声明 project.json `paths.return_root`/`paths.verdict_root`, 未声明缺省=`task_cards/<卡ID>/RETURN.md` 与 `task_cards/<卡ID>R/RETURN.md|audit_report.md`, 骨架不算);closure 记录存在即 exit 0。
 **AIPOS-F78 起**: 账务动词一律驱动方(advisor)token 提交、actor=卡实例(执行体/审计体 token 零账务 scope); claim 经 Owner 信封一阶段放行(信封 `agent_or_role` 须覆盖驱动方实例或 `advisor`); return/verdict 步经 `artifact ingest` 校验 Return/报告 frontmatter 与分支 tip; close 的三字段(finalize_commit_hash/finalize_return_ref/verdict_ref)从 finalization(`merge_commit`)/return/verdict 记录自填, 缺一即 exit 4 点名; 驱动方身份读工位 `.lybra/role` instance 或驱动方 token 绑定实例, 不再占位 `advisor`。
+**AIPOS-F90 起**: `--envelope`/`--actor` 贯穿推导与执行(派生的 claim/return/verdict/close 都带同一 `--owner-policy-ref`); 认领从 pending 一步走通(门内同步建工作树, 建树失败=拒认领); 等门应答超时不报假失败——薄壳按 verbs.schema 声明回读真相(已由本实例认领=成功), loop 遇执行端报失败先回读该步门生记录, 已落即继续、绝不重复执行同一步。
 **四出口(verbs.schema `lybra_loop.exit_codes` 唯一声明)**:0=completed;2=门拒(透传拒因原文, 不重试);3=等待产物超时/停滞或 --max-steps 用尽(输出等的是哪份产物);4=推导不可推导/派生命令解析失败(输出 missing_records);5=无有效信封(输出 `lybra envelope mint` 申领出口)。
 **红线**:永不唤醒 agent(开会话仍由 Owner/工位无参 `/go`);禁 sleep 自旋(等待一律经 watch);token 永不上屏;禁直调 board_adapter。
 
@@ -272,10 +274,10 @@ lybra governance-commit --governance-root <治理根> --actor <你的顾问实�
 
 ---
 
-## 已退役片段(ADVISOR-COMMANDS.md 手搓债)
+## 已退役路径(手写门接口债)
 
-**状态**:以下手搓 `GateClient` 片段标注为**已退役**(LOOP-REDESIGN §4.5 A12),
-只作底层参考,**实操必走产品命令**(上面列出的 `lybra` CLI)。
+**状态**:顾问手写脚本直接调门接口(代按认领、手按两跳确认、手提裁决)的路径**已退役**(LOOP-REDESIGN §4.5 A12, AIPOS-F90 件③),
+不再保留任何示范;**实操只走产品命令**(上面列出的 `lybra` CLI, 推进只用 `lybra loop`)。
 
 ### 退役原因
 1. **参数易漂移**:手拼 JSON 字典,卡头字段改名/枚举值变更时没编译期检查。
@@ -286,7 +288,10 @@ lybra governance-commit --governance-root <治理根> --actor <你的顾问实�
 
 | 原手搓操作 | 替代产品命令 | 退役日期 |
 |-----------|------------|---------|
-| 手搓 GateClient 片段 | `lybra draft publish/queue claim/return/amend` | AIPOS-F73C |
+| 手写门接口脚本(发卡/改卡) | `lybra draft publish`、`lybra queue amend` | AIPOS-F73C |
+| 手写门接口脚本代按认领(含 Owner 两跳确认) | `lybra loop --task-id <卡ID>`(信封一段式认领) | AIPOS-F90 |
+| 手提裁决 | `lybra loop`(审计报告落盘后派生 `artifact ingest --kind verdict`) | AIPOS-F90 |
+| 给工位贴卡号/卡路径冷启动 | 工位 `/go`(产品选卡并核验) | AIPOS-F90 |
 | 手写 owner_decisions/*.md | `lybra envelope mint/revoke/renew` | AIPOS-R7A |
 | 手写 owner_decisions/*.md | `lybra owner-decision` | AIPOS-R7A |
 | 手写 audit_verdicts/*.md | `lybra audit-verdict` | 已上线 |
@@ -303,7 +308,8 @@ lybra governance-commit --governance-root <治理根> --actor <你的顾问实�
 
 | 反模式 | 为什么禁 | 正确做法 |
 |--------|---------|---------|
-| 手搓 `GateClient` 片段 | 过渡债,参数易漂移 | 用 `lybra` 产品命令 |
+| 手写直调门接口的脚本 | 参数易漂移, 换顾问即推不动 | 推进只用 `lybra loop`, 其余用 `lybra` 产品命令 |
+| 给工位贴卡号/开工稿 | 绕过产品开工核验(已结案卡被重审覆盖报告) | Owner 在工位敲 `/go` |
 | 口述「下一步做 X」 | 记忆叙述 = 漏步 | `lybra next --task-id <卡ID>` 生成 |
 | 手写裁决文件 | 绕过 gate 归因 | `lybra audit-verdict` |
 | 对外消息/交接里留着占位 `<卡ID>` | 接收方冷启动不知道 | 写真实卡 ID(本 skill 的尖括号只是示例占位, 用前替换) |

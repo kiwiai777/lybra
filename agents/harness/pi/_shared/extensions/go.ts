@@ -9,6 +9,9 @@
  *   与认领建树同一函数）；本扩展不做任何路径拼接。
  * AIPOS-F87 件③: 开工哪张卡也由产品给出（my-tasks 的 next_card）; 无可开工卡时原样转述产品给的
  *   next_card_excluded 原因列表, 文案零门动词（认领由驱动方完成）。
+ * AIPOS-F90 件③: 开工只走 /go。`/go <卡号|卡路径>`(被贴卡号冷启动时)把指向原样交给产品核验
+ *   (`lybra my-tasks --task-id <指向>`): 非 claimed / 非本实例 / 已结案 / 产物已交 → 产品给拒因, 本扩展原样转述并拒开工;
+ *   核验判据唯一在产品 next_resolver.kickoff_refusal, 本扩展不判。
  *
  * 源码母本住产品仓 agents/harness/pi/_shared/extensions/，由 lybra sync 分发到工位。
  *
@@ -40,6 +43,16 @@ function excludedText(item: unknown): string {
  * 本函数不挑卡、不排序、不在本地补推。next_card 为空时把产品给的 next_card_excluded 原样提示。
  * 字段缺失 = 拒（fail-closed）。
  */
+/** AIPOS-F90 件③: /go 的 my-tasks 参数(纯函数, 夹具可直接调用): 有指向(卡号/卡路径)则交产品核验这一张。 */
+export function myTasksArgv(agentInstance: string, rawArgs: unknown): string[] {
+  const argv = ["my-tasks", "--actor", String(agentInstance), "--json"];
+  const ref = typeof rawArgs === "string" ? rawArgs.trim() : "";
+  if (ref) {
+    argv.push("--task-id", ref);
+  }
+  return argv;
+}
+
 export function planGo(myTasksData: unknown): GoPlan {
   const data = (myTasksData && typeof myTasksData === "object") ? (myTasksData as Record<string, unknown>) : null;
   if (data === null || !Array.isArray(data.tasks)) {
@@ -132,10 +145,10 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        // 4. 查询本实例已认领的卡（lybra my-tasks --actor; 工作树/落点由产品推导并随输出给出）
+        // 4. 查询本实例已认领的卡（lybra my-tasks --actor [--task-id <指向>]; 工作树/落点/开工核验由产品给出）
         let myTasksOutput: string;
         try {
-          const result = await execFileAsync(lybraBin, ["my-tasks", "--actor", String(agentInstance), "--json"], {
+          const result = await execFileAsync(lybraBin, myTasksArgv(String(agentInstance), args), {
             cwd: workspaceRoot,
             maxBuffer: 50 * 1024 * 1024,
           });
