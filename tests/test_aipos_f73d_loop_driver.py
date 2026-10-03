@@ -295,7 +295,8 @@ def test_f73d_item1_full_lifecycle_claimed_to_completed(gov: Path):
             time.sleep(0.02)
         time.sleep(0.15)
         _write(gov / "task_cards" / AUDIT / "audit_report.md",
-               _fm({"task_id": AUDIT, "reviewed_task_id": TASK, "verdict": "PASS", "actor": AUDITOR, "agent_instance": AUDITOR},
+               _fm({"task_id": AUDIT, "reviewed_task_id": TASK, "verdict": "PASS", "commit_sha": "a" * 40,  # AIPOS-F89 件③c 完成判据
+                    "actor": AUDITOR, "agent_instance": AUDITOR},
                    "# audit\n\n## 一句话结论\nPASS\n"))
 
     t = threading.Thread(target=agents, daemon=True)
@@ -597,7 +598,12 @@ def test_f73d_audit_report_candidates_from_n4_declaration(gov: Path):
     _claim_record(gov, AUDIT, AUDITOR)
     _write(gov / "task_cards" / AUDIT / "RETURN.md", build_return_skeleton_markdown(AUDIT))
     assert derive_next_step(AUDIT, gov)["derivable"] is False
+    # AIPOS-F89 件③c: 完成判据 = 声明必填(verdict/commit_sha)全填且非占位; 只填 verdict = 已交未完成 → artifact_invalid 硬停点名
     _write(gov / "task_cards" / AUDIT / "audit_report.md", _fm({"reviewed_task_id": TASK, "verdict": "PASS_WITH_NOTES", "actor": AUDITOR}, "# a\n"))
+    partial = derive_next_step(AUDIT, gov)
+    assert partial["derivable"] is False and partial["action"]["type"] == "artifact_invalid" and "commit_sha" in partial["missing_records"][0]
+    _write(gov / "task_cards" / AUDIT / "audit_report.md",
+           _fm({"reviewed_task_id": TASK, "verdict": "PASS_WITH_NOTES", "commit_sha": "c" * 40, "actor": AUDITOR}, "# a\n"))
     d = derive_next_step(AUDIT, gov)
     # AIPOS-F90 件②: 驱动方见产物入口命令(--kind verdict); 入口内部执行的薄壳命令在 shell_command
     assert d["derivable"] and "lybra artifact ingest" in d["command"] and "--kind verdict" in d["command"], d["command"]

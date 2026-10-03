@@ -13,6 +13,10 @@
  *   (`lybra my-tasks --task-id <指向>`): 非 claimed / 非本实例 / 已结案 / 产物已交 → 产品给拒因, 本扩展原样转述并拒开工;
  *   核验判据唯一在产品 next_resolver.kickoff_refusal, 本扩展不判。
  *
+ * AIPOS-F89 件③b(Owner 2026-10-03 裁定 A2): 本扩展不再读 `.lybra/role`, 也不读 connection.json 的 workspace_root —— 工位身份
+ *   (实例 / 治理根)由产品经 `lybra my-tasks --workstation <工位目录>` 解析(charter_render.workstation_identity 唯一实现);
+ *   本扩展只读 connection.json 的 `lybra_bin` 一个字段, 读不到即报错(无缺省 / 不退回 PATH)。
+ *
  * 源码母本住产品仓 agents/harness/pi/_shared/extensions/，由 lybra sync 分发到工位。
  *
  * 租约/心跳/调度一概不做。单次查询，无循环，无常驻。
@@ -43,14 +47,41 @@ function excludedText(item: unknown): string {
  * 本函数不挑卡、不排序、不在本地补推。next_card 为空时把产品给的 next_card_excluded 原样提示。
  * 字段缺失 = 拒（fail-closed）。
  */
-/** AIPOS-F90 件③: /go 的 my-tasks 参数(纯函数, 夹具可直接调用): 有指向(卡号/卡路径)则交产品核验这一张。 */
-export function myTasksArgv(agentInstance: string, rawArgs: unknown): string[] {
-  const argv = ["my-tasks", "--actor", String(agentInstance), "--json"];
+/**
+ * AIPOS-F90 件③ + F89 件③b: /go 的 my-tasks 参数(纯函数, 夹具可直接调用): 只传工位目录, 身份与治理根由产品解析;
+ * 有指向(卡号/卡路径)则交产品核验这一张。
+ */
+export function myTasksArgv(workstationRoot: string, rawArgs: unknown): string[] {
+  const argv = ["my-tasks", "--workstation", String(workstationRoot), "--json"];
   const ref = typeof rawArgs === "string" ? rawArgs.trim() : "";
   if (ref) {
     argv.push("--task-id", ref);
   }
   return argv;
+}
+
+/**
+ * AIPOS-F89 件③b: 读 connection.json 的 lybra_bin(唯一读取的工位字段)。文件缺 / 非 JSON / 字段缺或空 = 拒(无 "lybra" 缺省)。
+ * fs/path 由调用方注入(夹具可直接调用)。token 等其余字段一概不取。
+ */
+export function readLybraBin(
+  fs: { existsSync(p: string): boolean; readFileSync(p: string, enc: "utf-8"): string },
+  connectionPath: string,
+): { ok: true; bin: string } | { ok: false; message: string } {
+  if (!fs.existsSync(connectionPath)) {
+    return { ok: false, message: `${connectionPath} 不存在: 工位未 enroll, 无法定位产品 CLI; 按 block-and-report 上报` };
+  }
+  let data: unknown;
+  try {
+    data = JSON.parse(fs.readFileSync(connectionPath, "utf-8"));
+  } catch (error) {
+    return { ok: false, message: `${connectionPath} 不是合法 JSON(${error}); 按 block-and-report 上报` };
+  }
+  const bin = data && typeof data === "object" ? (data as Record<string, unknown>).lybra_bin : undefined;
+  if (typeof bin !== "string" || !bin.trim()) {
+    return { ok: false, message: `${connectionPath} 缺 lybra_bin(enroll 写入的产品 CLI 部署位), 无法调用产品; 按 block-and-report 上报` };
+  }
+  return { ok: true, bin: bin.trim() };
 }
 
 export function planGo(myTasksData: unknown): GoPlan {
@@ -105,51 +136,26 @@ export default function (pi: ExtensionAPI) {
     description: "查询本实例已认领的任务卡，并以产品给出的工作树/报告落点发送开工提示",
     handler: async (args, ctx) => {
       try {
-        // 1. 读取工位配置
+        // 1. 工位目录 = 会话 cwd(身份文件由产品读, 本扩展不读 .lybra/role)
         const fs = await import("node:fs");
         const path = await import("node:path");
         const { execFile } = await import("node:child_process");
         const { promisify } = await import("node:util");
         const execFileAsync = promisify(execFile);
-
-        // 2. 从 .lybra/role 读取 instance
         const workstationRoot = process.cwd();
 
-        const roleConfigPath = path.join(workstationRoot, ".lybra", "role");
-        if (!fs.existsSync(roleConfigPath)) {
-          ctx.ui.notify(".lybra/role not found. Run 'lybra enroll' first.", "error");
+        // 2. 只读 connection.json 的 lybra_bin 一个字段(token 不读、不显); 读不到即报错, 无缺省
+        const lybraBin = readLybraBin(fs, path.join(workstationRoot, ".lybra", "connection.json"));
+        if (!lybraBin.ok) {
+          ctx.ui.notify(lybraBin.message, "error");
           return;
         }
 
-        const roleConfig = JSON.parse(fs.readFileSync(roleConfigPath, "utf-8"));
-        const agentInstance = roleConfig.instance;
-
-        if (!agentInstance) {
-          ctx.ui.notify("Cannot determine agent instance from .lybra/role", "error");
-          return;
-        }
-
-        // 3. 从 .lybra/connection.json 读取 workspace_root 和 lybra_bin（token 不读、不显）
-        const connectionConfigPath = path.join(workstationRoot, ".lybra", "connection.json");
-        if (!fs.existsSync(connectionConfigPath)) {
-          ctx.ui.notify(".lybra/connection.json not found. Run 'lybra enroll' first.", "error");
-          return;
-        }
-
-        const connectionConfig = JSON.parse(fs.readFileSync(connectionConfigPath, "utf-8"));
-        const workspaceRoot = connectionConfig.workspace_root;
-        const lybraBin = connectionConfig.lybra_bin || "lybra";
-
-        if (!workspaceRoot) {
-          ctx.ui.notify("workspace_root not found in .lybra/connection.json", "error");
-          return;
-        }
-
-        // 4. 查询本实例已认领的卡（lybra my-tasks --actor [--task-id <指向>]; 工作树/落点/开工核验由产品给出）
+        // 3. 问产品: 本工位(实例/治理根由产品解析)该开工哪张卡(--task-id <指向> 时只核验这一张)
         let myTasksOutput: string;
         try {
-          const result = await execFileAsync(lybraBin, myTasksArgv(String(agentInstance), args), {
-            cwd: workspaceRoot,
+          const result = await execFileAsync(lybraBin.bin, myTasksArgv(workstationRoot, args), {
+            cwd: workstationRoot,
             maxBuffer: 50 * 1024 * 1024,
           });
           myTasksOutput = result.stdout;
@@ -166,7 +172,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        // 5. 只读产品字段决定开工与否（零拼接、零门动词）
+        // 4. 只读产品字段决定开工与否（零拼接、零门动词）
         const plan = planGo(myTasksData);
         if (plan.kind === "none") {
           ctx.ui.notify(plan.message, "info");

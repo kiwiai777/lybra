@@ -375,7 +375,7 @@
         "key": "lybra_bin",
         "path": ".lybra/connection.json",
         "value_must_exist": true,
-        "description": "Points at the actual CLI deployment that the /go extension invokes (`<lybra_bin> my-tasks --actor <instance> --json`, worktree/report location read from its output; absent key falls back to `lybra` on PATH); dangling path = missing (AIPOS-F86)"
+        "description": "Points at the actual CLI deployment that the /go extension invokes (`<lybra_bin> my-tasks --workstation <工位目录> --json`, worktree/report location read from its output; AIPOS-F89 件③b: the only workstation field go.ts reads, absent key = /go refuses, no PATH fallback); dangling path = missing (AIPOS-F86)"
       },
       {
         "name": "role#owner_policy_ref",

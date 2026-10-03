@@ -754,7 +754,11 @@ def mutate_queue_task(
     # (记录/骨架/卡面迁移)之前先经全产品唯一建树实现 next_resolver._ensure_worktree 建/复用卡工作树; 失败 = 认领 BLOCK,
     # 拒因带建树原文与出口, 队列与记录零变更(不留 claimed 无工作树的卡)。
     built_worktree: dict[str, Any] | None = None
-    if action == RecordType.CLAIM and str(updated_metadata.get("task_mode", "")) == "code":
+    # AIPOS-F89 件③a: 须建树判据唯一 next_resolver.card_needs_worktree(代码卡 = 卡分支工作树; 代码卡的审计卡 = 被审分支 tip
+    # 只读 detached 取证工作树, 同一建树入口 _ensure_worktree); 建树失败同样拒认领。
+    from tools.aipos_cli.next_resolver import card_needs_worktree
+
+    if action == RecordType.CLAIM and card_needs_worktree(repo_root, dict(updated_metadata)):
         from tools.aipos_cli.next_resolver import _ensure_worktree
 
         built_worktree = _ensure_worktree(repo_root, str(updated_metadata.get("task_id", "")), card_frontmatter=dict(updated_metadata))
@@ -804,7 +808,7 @@ def mutate_queue_task(
             task_id_for_skeleton = str(updated_metadata.get("task_id", "")).strip()
             if task_id_for_skeleton:
                 try:
-                    skeleton_result = _create_return_skeleton(repo_root, task_id_for_skeleton)
+                    skeleton_result = _create_return_skeleton(repo_root, task_id_for_skeleton, dict(updated_metadata))
                     if skeleton_result:
                         # Record the skeleton creation (informational, doesn't block)
                         result["skeleton_created"] = True
@@ -830,6 +834,11 @@ def mutate_queue_task(
         result["worktree_created"] = True
         result["worktree_path"] = str(built_worktree["worktree_path"])
         result["worktree_branch"] = str(built_worktree["branch"])
+        if built_worktree.get("detached"):
+            # AIPOS-F89 件③a: 审计卡取证工作树 = 被审分支 tip 的 detached 只读树
+            result["worktree_detached"] = True
+            result["worktree_commit"] = str(built_worktree.get("commit") or "")
+            result["forensic_reviewed_task_id"] = str(built_worktree.get("reviewed_task_id") or "")
 
     return result
 

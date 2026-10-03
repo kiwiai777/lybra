@@ -919,6 +919,16 @@ else
   overall=1
 fi
 
+# AIPOS-F89 件③: 审计卡开工面(a 认领审计卡建被审 tip 只读 detached 取证工作树·/go 选中审计卡 b my-tasks --workstation 产品解析身份·go.ts 只读 lybra_bin 无缺省 c 报告完成判据声明化·空模板不算产物 d 报告快照包记录头过护栏 B④) + 随语义改动的 F73D/F73E/F86/F90 用例
+echo
+echo "── tests/test_aipos_f89_audit_kickoff_surface.py (F89 件③ 取证工作树·--workstation·go.ts 只读 lybra_bin·完成判据三态·快照记录头过 B④) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f89_audit_kickoff_surface.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f89_audit_kickoff_surface.py PASS"
+else
+  echo "✗ tests/test_aipos_f89_audit_kickoff_surface.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

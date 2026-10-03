@@ -231,9 +231,11 @@ def _create_verdict_artifact(ws: Path, audit_task_id: str, reviewed_task_id: str
     task_work_dir = ws / "task_cards" / audit_task_id
     task_work_dir.mkdir(parents=True, exist_ok=True)
     verdict_file = task_work_dir / f"VERDICT-{audit_task_id}.md"
+    # AIPOS-F89 件③c: 完成判据 = 声明必填 frontmatter(verdict/commit_sha)全填且非占位
     content = f"""---
 reviewed_task_id: {reviewed_task_id}
 verdict: {verdict}
+commit_sha: {"c" * 40}
 actor: audit.lybra.kiwiai-dev
 agent_instance: audit.lybra.kiwiai-dev
 ---

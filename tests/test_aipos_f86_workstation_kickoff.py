@@ -157,9 +157,15 @@ def test_item1_audit_card_report_path_is_audit_location(tmp_path, monkeypatch, c
     report_path = render_audit_report_location(F66B 件③)= <verdict_root>/<审计卡ID>/RETURN.md, 不是被审卡目录。"""
     gov, repo = _single_gov(tmp_path, monkeypatch)
     audit_id = "AIPOS-F86AR"
+    # AIPOS-F89 件③a: 审计卡认领建的是被审分支 tip 的只读 detached 取证工作树 → 被审卡与其分支须在
+    _card(gov, "AIPOS-F86A", "claimed")
+    from test_aipos_f78_engine_agnostic import _branch_with_commit, _git
+
+    tip, _tree = _branch_with_commit(repo, "AIPOS-F86A")
     _card(gov, audit_id, "claimed", assigned=AUDITOR, task_mode="audit", extra={"reviewed_task_id": "AIPOS-F86A"})
     built = _ensure_worktree(gov, audit_id)
-    assert built["ok"], built
+    assert built["ok"] and built["detached"] is True and built["commit"] == tip, built
+    assert _git(Path(built["worktree_path"]), "rev-parse", "HEAD") == tip
     data = _my_tasks(gov, AUDITOR, capsys)
     view = _task(data, audit_id)
     _print_view("审计卡", view)

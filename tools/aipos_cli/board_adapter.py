@@ -1977,48 +1977,49 @@ def _mcp_claim_record_plan(
     }
 
 
-def _create_return_skeleton(repo_root: Path, task_id: str) -> dict[str, Any] | None:
-    """Create RETURN.md skeleton at declared path (AIPOS-F65A-fix2 单一实现点).
-    
-    Args:
-        repo_root: Repository root (governance workspace root)
-        task_id: Task ID (for RETURN.md skeleton creation)
-        
+def _create_return_skeleton(repo_root: Path, task_id: str,
+                            card_frontmatter: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """认领时在卡报告声明位创建空模板(AIPOS-F65A-fix2 单一实现点)。
+
+    AIPOS-F89 件③c: 落点 = next_resolver.card_report_path(执行卡 = <paths.return_root>/<ID>/<默认候选>; 审计卡 =
+    <paths.verdict_root>/<审计卡ID>/<默认候选>), 与真实报告同名同位; 审计卡用 record_writer.build_verdict_skeleton_markdown
+    (verdict/commit_sha 占位), 执行卡用 build_return_skeleton_markdown。完成判据读声明(占位不算), 空模板不被当产物。
+
     Returns:
         dict with path, record_type, wrote if skeleton was created; None if already exists
-        
+
     Raises:
         RuntimeError: If path resolution fails (fail-closed semantic)
     """
-    from tools.aipos_cli.record_writer import build_return_skeleton_markdown
+    from tools.aipos_cli.record_writer import build_return_skeleton_markdown, build_verdict_skeleton_markdown
 
     try:
-        # AIPOS-F65A-fix2-R3 症③: schema以产品仓为根(与F71-R3/finalize同款),治理路径以治理仓为根
-        # AIPOS-F78 件④: 骨架落点读项目声明(project.json paths.return_root, 缺省=task_cards), 禁写死
-        from tools.aipos_cli.next_resolver import _return_artifact_path
+        from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter, card_report_path, forensic_subject
 
-        return_skeleton_path = _return_artifact_path(Path(repo_root), task_id)
-        task_card_dir = return_skeleton_path.parent
-        
-        # Only create if doesn't exist (idempotent)
-        if not return_skeleton_path.exists():
-            task_card_dir.mkdir(parents=True, exist_ok=True)
-            skeleton_content = build_return_skeleton_markdown(task_id)
-            return_skeleton_path.write_text(skeleton_content, encoding="utf-8")
-            
-            # Record the skeleton creation
-            rel_path = str(return_skeleton_path.relative_to(repo_root))
-            return {
-                "path": rel_path,
-                "record_type": "return_skeleton",
-                "wrote": True
-            }
-        return None
+        fm = card_frontmatter
+        if fm is None:
+            found, _state = _find_task_in_queue(Path(repo_root), task_id)
+            fm = _read_frontmatter(found) if found else {}
+        skeleton_path = card_report_path(Path(repo_root), task_id, fm)
+        if skeleton_path.exists():
+            return None  # Only create if doesn't exist (idempotent)
+        reviewed = forensic_subject(fm)
+        if reviewed is not None:
+            content, record_type = build_verdict_skeleton_markdown(task_id, reviewed or None), "verdict_skeleton"
+        else:
+            content, record_type = build_return_skeleton_markdown(task_id), "return_skeleton"
+        skeleton_path.parent.mkdir(parents=True, exist_ok=True)
+        skeleton_path.write_text(content, encoding="utf-8")
+        try:
+            rel_path = str(skeleton_path.relative_to(repo_root))
+        except ValueError:
+            rel_path = str(skeleton_path)
+        return {"path": rel_path, "record_type": record_type, "wrote": True}
     except Exception as exc:
-        # AIPOS-F65A: fail-closed - 路径解析失败即阻断 claim 并出声给出口
+        # AIPOS-F65A: fail-closed - 路径解析失败即阻断 claim 并出声
         # transitions.schema 已声明 fail_closed: "Path resolution failure blocks claim (skeleton creation is not optional)"
         raise RuntimeError(
-            f"RETURN_SKELETON_PATH_RESOLUTION_FAILED: 无法创建 RETURN.md 骨架 - 路径解析失败: {exc}。"
+            f"RETURN_SKELETON_PATH_RESOLUTION_FAILED: 无法创建报告空模板 - 路径解析失败: {exc}。"
             f"出口: 检查治理根 project.json paths(return_root/verdict_root)声明是否正确。"
         ) from exc
 
@@ -4081,21 +4082,29 @@ def audit_dispatch_task(
         return _normalize_exception("audit_dispatch", exc, dry_run=dry_run, actor=_actor_payload(actor))
 
 
+REPORT_SNAPSHOT_HEADER_END = "\n---\n"
+
+
 def _audit_report_snapshot_plan(repo_root: Path, audit_task_id: str, reviewed_task_id: str, verdict_id: str) -> dict[str, Any] | None:
     """AIPOS-F90 件②: 审计报告快照计划(唯一实现)。报告 = 推导核唯一就绪判据 _check_verdict_artifact 命中的文件; 落点/record_type
-    读 transitions artifact_ingest.verdict.report_snapshot(缺 = SchemaLoadError)。无报告 = None(裁决照落, 不带快照字段)。"""
+    读 transitions artifact_ingest.verdict.report_snapshot(缺 = SchemaLoadError)。无报告 = None(裁决照落, 不带快照字段)。
+
+    AIPOS-F89 件③d(2026-10-03 F91 实撞: 原文直拷进 records 缺 record_type 被护栏 B④ 拒): 快照 = 记录头 + 报告原文逐字节。
+    记录头字段读声明 report_snapshot.header_fields, 经单源 record_writer.render_frontmatter_block 构造; sha256 = 报告原文字节的
+    sha256(= 裁决记录 report_snapshot_sha256); 复原 = unwrap_report_snapshot(去记录头 + 核 sha256)。"""
     import hashlib
 
     from tools.aipos_cli.next_resolver import _artifact_ingest_declaration, _check_verdict_artifact, _resolve_governance_path_with_relative
-    from tools.schema_loader import SchemaLoadError
+    from tools.aipos_cli.record_writer import render_frontmatter_block
 
     decl = (_artifact_ingest_declaration().get("verdict") or {}).get("report_snapshot")
-    if not isinstance(decl, dict) or not decl.get("location") or not decl.get("record_type"):
-        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.report_snapshot(location/record_type)未声明")
+    if not isinstance(decl, dict) or not decl.get("location") or not decl.get("record_type") or not decl.get("header_fields"):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.report_snapshot(location/record_type/header_fields)未声明")
     report = _check_verdict_artifact(repo_root, audit_task_id) if audit_task_id else None
     if report is None:
         return None
-    content = report.read_text(encoding="utf-8")
+    raw = report.read_bytes()
+    original = raw.decode("utf-8")
     root = repo_root.resolve()
     target = _resolve_governance_path_with_relative(str(decl.get("relative_to") or "records"), repo_root) / str(decl["location"]).format(
         reviewed_task_id=reviewed_task_id, verdict_id=verdict_id)
@@ -4103,13 +4112,47 @@ def _audit_report_snapshot_plan(repo_root: Path, audit_task_id: str, reviewed_ta
         source_ref = str(report.resolve().relative_to(root))
     except ValueError:
         source_ref = str(report.resolve())
+    sha256 = hashlib.sha256(raw).hexdigest()
+    values = {
+        "record_type": str(decl["record_type"]),
+        "verdict_id": verdict_id,
+        "reviewed_task_id": reviewed_task_id,
+        "audit_task_id": audit_task_id,
+        "report_source_ref": source_ref,
+        "report_sha256": sha256,
+        "report_bytes": len(raw),
+    }
+    fields = [str(f) for f in decl["header_fields"]]
+    unknown = [f for f in fields if f not in values]
+    if unknown:
+        raise SchemaLoadError(f"transitions.schema.json artifact_ingest.verdict.report_snapshot.header_fields 含未知字段 {unknown}")
+    header = render_frontmatter_block({f: values[f] for f in fields}, fields)
     return {
         "path": str(target.resolve().relative_to(root)),
         "record_type": str(decl["record_type"]),
-        "content": content,
-        "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "content": header + "\n" + original,
+        "sha256": sha256,
         "source_ref": source_ref,
     }
+
+
+def unwrap_report_snapshot(snapshot_text: str) -> str:
+    """AIPOS-F89 件③d: 快照复原 = 去掉记录头(首个 frontmatter 块)取报告原文, 并以记录头 report_sha256 核对逐字节一致。
+    形不对 / 校验不符 = ValueError(fail-closed)。"""
+    import hashlib
+
+    if not snapshot_text.startswith("---\n"):
+        raise ValueError("报告快照缺记录头(首行须为 ---)")
+    end = snapshot_text.find(REPORT_SNAPSHOT_HEADER_END, 4)
+    if end < 0:
+        raise ValueError("报告快照记录头未闭合")
+    header_meta, _body, _warnings = parse_markdown_frontmatter(snapshot_text[: end + len(REPORT_SNAPSHOT_HEADER_END)])
+    original = snapshot_text[end + len(REPORT_SNAPSHOT_HEADER_END):]
+    expected = str(header_meta.get("report_sha256") or "")
+    actual = hashlib.sha256(original.encode("utf-8")).hexdigest()
+    if not expected or actual != expected:
+        raise ValueError(f"报告快照原文 sha256 不符(记录头 {expected[:12] or '缺'} ≠ 原文 {actual[:12]})")
+    return original
 
 
 def _build_audit_verdict_preview(
@@ -4484,7 +4527,7 @@ def _build_audit_verdict_preview(
         "record_previews": [
             {"path": verdict_rel, "record_type": RecordType.AUDIT_VERDICT_RECORD, "rendered_markdown": verdict_markdown},
         ] + (
-            # AIPOS-F90 件②: 审计报告快照(逐字节原文)与裁决记录同批落盘
+            # AIPOS-F90 件②: 审计报告快照(AIPOS-F89 件③d: 记录头 + 原文逐字节)与裁决记录同批落盘
             [{"path": report_snapshot["path"], "record_type": report_snapshot["record_type"], "rendered_markdown": report_snapshot["content"]}]
             if report_snapshot else []
         ) + (

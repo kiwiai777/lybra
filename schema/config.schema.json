@@ -26,7 +26,7 @@
         "lybra_bin": {
           "type": "string",
           "required": false,
-          "description": "AIPOS-F20: absolute path to local lybra CLI bin (e.g. /path/to/lybra/.deploy/current/bin/lybra). Read by the /go workstation extension (go.ts) to invoke `my-tasks` (see distribution.schema minimum_bootable_set connection.json#lybra_bin); written at enroll from workstation_wiring.resolve_deployed_lybra_bin. AIPOS-F91: the /lybra sync thin shell and the connector probe were retired with the lybra-loop extension"
+          "description": "AIPOS-F20: absolute path to local lybra CLI bin (e.g. /path/to/lybra/.deploy/current/bin/lybra). Read by the /go workstation extension (go.ts) to invoke `my-tasks --workstation <工位目录>` (see distribution.schema minimum_bootable_set connection.json#lybra_bin); written at enroll from workstation_wiring.resolve_deployed_lybra_bin. AIPOS-F89 件③b: go.ts reads ONLY this field (no .lybra/role, no workspace_root; identity/governance root are resolved by the product via charter_render.workstation_identity); missing/empty = /go refuses (no `lybra` PATH fallback). AIPOS-F91: the /lybra sync thin shell and the connector probe were retired with the lybra-loop extension"
         }
       }
     },

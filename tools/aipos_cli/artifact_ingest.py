@@ -532,15 +532,18 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
     if path is None:
         out["category"] = "INGEST_VERDICT_MISSING"
         out["reasons"] = [
-            f"未在声明落点找到含 verdict 的审计报告(project.json paths.verdict_root / {task_id}; "
-            f"候选: {', '.join(map(str, decl.get('verdict_file_candidates') or []))})"
+            f"未在声明落点找到已完成的审计报告(project.json paths.verdict_root / {task_id}; "
+            f"候选: {', '.join(map(str, decl.get('verdict_file_candidates') or []))}; 完成判据 artifact_ingest.verdict.readiness: "
+            f"{'/'.join(map(str, decl.get('required_frontmatter') or []))} 已填且非占位, 认领时的空模板不算)"
         ]
         return out
     out["path"] = str(path)
     fm = _read_frontmatter(path)
     out["frontmatter"] = fm
-    required = [str(k) for k in (decl.get("required_frontmatter") or [])]
-    missing = [k for k in required if not str(fm.get(k) or "").strip()]
+    # AIPOS-F89 件③c: 报告完成判据唯一实现 next_resolver.missing_verdict_frontmatter(占位 = 未填, 空模板不算产物)
+    from tools.aipos_cli.next_resolver import missing_verdict_frontmatter
+
+    missing = missing_verdict_frontmatter(fm)
     if missing:
         out["category"] = "INGEST_FRONTMATTER_MISSING"
         out["reasons"] = [f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.verdict.required_frontmatter)"]

@@ -108,7 +108,8 @@ def test_f73e_item1_verdict_actor_is_audit_claim_instance_not_report_self_claim(
     _claim_record(gov, AUDIT, AUDITOR)
     # 报告自报 actor=驱动方(错的): 推导核不读它, 只读审计卡 claim 记录
     _write(gov / "task_cards" / AUDIT / "audit_report.md",
-           _fm({"task_id": AUDIT, "reviewed_task_id": TASK, "verdict": "PASS", "actor": DRIVER, "agent_instance": DRIVER},
+           _fm({"task_id": AUDIT, "reviewed_task_id": TASK, "verdict": "PASS", "commit_sha": "a" * 40,  # AIPOS-F89 件③c 完成判据
+                "actor": DRIVER, "agent_instance": DRIVER},
                "# audit\n\n## 一句话结论\nPASS\n"))
     d = derive_next_step(AUDIT, gov)
     assert d["derivable"] and d["verb"] == "lybra_audit_verdict_dry_run", d
@@ -143,7 +144,7 @@ def test_f73e_item1_no_claim_record_not_derivable_names_claim_record(gov: Path, 
                _fm({"record_type": "audit_dispatch", "dispatch_id": "d", "reviewed_task_id": TASK, "dispatched_at": "2026-09-21T02:00:00Z"}))
         _card(gov, AUDIT, "claimed", assigned=AUDITOR, task_mode="audit", extra={"reviewed_task_id": TASK})
         _write(gov / "task_cards" / AUDIT / "audit_report.md",
-               _fm({"task_id": AUDIT, "reviewed_task_id": TASK, "verdict": "PASS"}, "# audit\n\n## 一句话结论\nPASS\n"))
+               _fm({"task_id": AUDIT, "reviewed_task_id": TASK, "verdict": "PASS", "commit_sha": "a" * 40}, "# audit\n\n## 一句话结论\nPASS\n"))
     else:
         card = TASK
         _card(gov, TASK, "claimed", assigned=EXEC)
@@ -191,7 +192,8 @@ def test_f73e_item3_loop_chain_close_actor_exec_verdict_actor_auditor_driver_onl
         time.sleep(0.15)
         # 审计体报告自报 actor 写成驱动方(错): 派生 verdict 仍按审计卡 claim 记录(GateDouble claim 落 AUDITOR)
         _write(gov / "task_cards" / AUDIT / "audit_report.md",
-               _fm({"task_id": AUDIT, "reviewed_task_id": TASK, "verdict": "PASS", "actor": DRIVER, "agent_instance": DRIVER},
+               _fm({"task_id": AUDIT, "reviewed_task_id": TASK, "verdict": "PASS", "commit_sha": "a" * 40,  # AIPOS-F89 件③c 完成判据
+                "actor": DRIVER, "agent_instance": DRIVER},
                    "# audit\n\n## 一句话结论\nPASS\n"))
 
     t = threading.Thread(target=agents, daemon=True)
