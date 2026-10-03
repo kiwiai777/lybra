@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-all —— 产品仓常驻夹具总入口(Python 夹具 + 仍在用的 TS 夹具)。
-# AIPOS-F91: 自退役的 agents/harness/pi/lybra-loop/tests/ 迁出到 tests/run-all.sh(位置唯一声明 = tools/aipos_cli/board_adapter.py
-#   RUNALL_RELATIVE_PATH); 仍在用的 TS 夹具迁至 tests/ts/。lybra-loop 扩展本体及其专属夹具随退役删除。
+# AIPOS-F91: 自退役的 agents/harness/pi/lybra-loop/tests/ 迁出到 tests/run-all.sh(AIPOS-F93: 门交回检查读的位置声明 = lybra 治理根 project.json test_contract.runall_path,
+#   产品代码零写死); 仍在用的 TS 夹具迁至 tests/ts/。lybra-loop 扩展本体及其专属夹具随退役删除。
 # 依赖:Node ≥ 22(类型剥离);无需 npm install(纯 node + node: 内置模块)。
 set -u
 # 本脚本在 <产品仓根>/tests/ 下: 先 cd 到产品仓根, 之后一切相对路径与 REPO_ROOT 都以此为准(与调用方 cwd、相对/绝对调用方式无关; 承 F66B)。
@@ -18,6 +18,7 @@ declare -a files=(
   "tests/ts/f22b-yaml-serialization.test.ts"
   "tests/ts/f86-go-kickoff.test.ts"
   "tests/ts/f87-go-next-card.test.ts"
+  "tests/ts/f93-go-report-fields.test.ts"
 )
 overall=0
 for f in "${files[@]}"; do
@@ -941,6 +942,19 @@ if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f92_on
   echo "✓ tests/test_aipos_f92_onboarding_walkthrough.py PASS"
 else
   echo "✗ tests/test_aipos_f92_onboarding_walkthrough.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F93: 报告契约与交回约定声明化三件(① 报告必填字段由 transitions artifact_ingest 声明单源渲染进派生审计卡/执行卡落点句·
+# my-tasks next_card.report_required_frontmatter(go.ts 原样列出, 审计卡带被审 tip/tree)·认领模板·章程, return 必填去 model, F92R 原样报告仍拒
+# ② 注册码交付文案 onboarding.enroll_delivery 单源(门/CLI/向导) ③ 交回检查测试约定读 project.json test_contract, 未声明跳过+warning)
+# (随语义改动的 F49 判据①③ 用例已在上方 F49 块; F78/F78C/F87/F23 用例随各自块)
+echo
+echo "── tests/test_aipos_f93_report_contract_declared.py (F93 五处同源·F92R 原样仍拒·注册码文案单源·test_contract 声明化 lybra 形/probe 形) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f93_report_contract_declared.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f93_report_contract_declared.py PASS"
+else
+  echo "✗ tests/test_aipos_f93_report_contract_declared.py FAIL"
   overall=1
 fi
 

@@ -110,7 +110,8 @@ def test_item1_derived_audit_card_zero_gate_lybra_shape(tmp_path, monkeypatch):
     assert "【认领与交回】" not in body
     assert GATE_VERBS_RE.findall(body) == []
     assert "门领地纪律" not in body and "精确提交配方" not in body and "owner_confirmation_token" not in body
-    sentence = f"报告写到 `{expected}`, 写完即止, 认领与裁决提交由驱动方完成。"
+    sentence = ad.zero_gate_report_sentence(expected, "F80-S1")  # AIPOS-F93 件①: 句内带报告必填字段(声明单源)
+    assert sentence.startswith(f"报告写到 `{expected}`; 报告 frontmatter 必填: ") and sentence.endswith("写完即止, 认领与裁决提交由驱动方完成。")
     assert f"- **报告落位**:{sentence}" in body
     assert f"## 交付纪律(AIPOS-F80 件①: 审计体零门)\n\n- {sentence}" in body
     # frontmatter 取证锚点亦同一落点, 且整卡(含 frontmatter)零门动词
@@ -230,9 +231,9 @@ def test_item1_regen_strips_gate_sections_from_stored_audit_card(tmp_path, monke
     expected = str(gov / "task_cards" / "F80-R1R" / "RETURN.md")
     assert "【认领与交回】" not in new_body and "门领地纪律" not in new_body
     assert GATE_VERBS_RE.findall(new_body) == []
-    assert f"- **报告落位**:报告写到 `{expected}`, 写完即止, 认领与裁决提交由驱动方完成。" in new_body
+    assert f"- **报告落位**:{ad.zero_gate_report_sentence(expected, 'F80-R1')}" in new_body  # AIPOS-F93 件①: 带必填字段
     assert "交付纪律(AIPOS-F80 件①: 审计体零门)" in new_body
-    assert ad.zero_gate_audit_body(new_body, gov, "F80-R1R") == new_body  # 幂等
+    assert ad.zero_gate_audit_body(new_body, gov, "F80-R1R", "F80-R1") == new_body  # 幂等
     assert card_path.read_bytes() == before  # dry_run 零写入
     _meta, _b, _w = parse_markdown_frontmatter(before.decode("utf-8"))
     assert _meta["task_id"] == "F80-R1R"

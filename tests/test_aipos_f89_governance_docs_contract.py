@@ -175,7 +175,6 @@ def test_item2_new_project_charters_templates_skills_zero_lybra_doc_names(tmp_pa
 
 
 def test_item2_fixture_registered_in_runall():
-    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH
-
-    text = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
+    # AIPOS-F93 件③: run-all 是 lybra 产品仓自己的夹具清单(门侧位置声明 = 治理根 project.json test_contract.runall_path), 夹具自定位
+    text = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
     assert "tests/test_aipos_f89_governance_docs_contract.py" in text

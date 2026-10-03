@@ -189,7 +189,7 @@ def test_f78c_item1_declaration_single_source_config_card_transitions():
     assert "resolve_card_repo" in json.dumps(card["intent_face"]["lane"]["derive"], ensure_ascii=False)
     trans = json.loads((REPO_ROOT / "schema" / "transitions.schema.json").read_text(encoding="utf-8"))
     ret = trans["artifact_ingest"]["return"]
-    assert ret["optional_frontmatter"] == ["repo"] and any("INGEST_REPO_MISMATCH" in c for c in ret["checks"])
+    assert ret["optional_frontmatter"] == ["repo", "model"] and any("INGEST_REPO_MISMATCH" in c for c in ret["checks"])
     # 第二读法删除: 按卡取仓的模块不再各自 read_project_json().get("code_repo"); 唯一解析在 workspace_config
     per_card = ["machine_zone.py", "next_resolver.py", "artifact_ingest.py", "card_render.py", "audit_derivation.py",
                 "board_adapter.py", "record_writer.py", "scoped_commit_check.py"]
@@ -494,8 +494,8 @@ def test_f78c_item3_chris_shape_ingest_stops_at_declaration_missing_not_crash(tm
 
 
 def test_f78c_fixture_registered_in_runall_and_no_swallowed_exceptions():
-    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
-    runall = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
+    # AIPOS-F93 件③: lybra 产品仓自己的夹具清单, 夹具自定位(门侧位置声明 = 治理根 project.json test_contract.runall_path)
+    runall = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
     assert "tests/test_aipos_f78c_card_repo.py" in runall
     for rel in ("tools/aipos_cli/workspace_config.py", "tools/aipos_cli/artifact_ingest.py", "tools/aipos_cli/machine_zone.py",
                 "tools/aipos_cli/card_render.py"):

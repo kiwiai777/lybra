@@ -331,8 +331,8 @@ def test_f73e_item2_identity_split_declared_once_in_transitions_schema():
 
 
 def test_f73e_fixture_registered_in_runall_and_no_swallowed_exceptions():
-    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
-    runall = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
+    # AIPOS-F93 件③: lybra 产品仓自己的夹具清单, 夹具自定位(门侧位置声明 = 治理根 project.json test_contract.runall_path)
+    runall = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
     assert "tests/test_aipos_f73e_ledger_identity.py" in runall
     for rel in ("tools/aipos_cli/next_resolver.py", "tools/aipos_cli/loop_driver.py"):
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")

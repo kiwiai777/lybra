@@ -23,9 +23,12 @@ def test_criterion_1_test_in_runall(tmp_path: Path):
     subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_root, check=True, capture_output=True)
     
     # 创建 run-all.sh（在 main 分支）
-    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
+    # AIPOS-F93 件③: 测试清单位置读项目声明(治理根 project.json test_contract.runall_path; 本夹具治理根 = tmp_path)
+    import json
 
-    runall_path = repo_root / RUNALL_RELATIVE_PATH
+    (tmp_path / "project.json").write_text(json.dumps({"project": "lybra", "test_contract": {"runall_path": "tests/run-all.sh"}}),
+                                           encoding="utf-8")
+    runall_path = repo_root / "tests" / "run-all.sh"
     runall_path.parent.mkdir(parents=True, exist_ok=True)
     runall_path.write_text("""#!/bin/bash
 # Existing tests

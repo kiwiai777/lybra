@@ -2,7 +2,7 @@
 """AIPOS-F23 验收测试 —— 上岗一键化(自包含码/门动词两投影/交换落盘原子/旧坑清账)。
 
 覆盖任务卡验收:
-  ① 顾问经 MCP 两阶段发码成功(dry_run→confirm, confirm 输出含可转贴 /lybra enroll 指令文本)
+  ① 顾问经 MCP 两阶段发码成功(dry_run→confirm, confirm 输出 paste_text = `lybra roles enroll --code <码> --workspace <工位或治理根> --verify`, AIPOS-F93 件②)
   ③ 中断夹具: 落盘前中断 → grace 窗口内同码免费重试(不进"彻底消费"态), enroll-list 对照
   ④ 码单次/TTL/撤销面不回退(used/revoked/expired 各带原因与下一步)
   ⑤ ok=False 场景均带原因与下一步(F9 teaching error)
@@ -101,7 +101,10 @@ class TestIssueSelfContainedCode(unittest.TestCase):
             # ① 自包含码 + paste 文本
             self.assertTrue(result["ok"])
             self.assertTrue(result["self_contained_code"].startswith("LYBRAENROLL1."))
-            self.assertTrue(result["paste_text"].startswith("/lybra enroll LYBRAENROLL1."))
+            # AIPOS-F93 件②: 交付文案 = 现行产品命令(onboarding.enroll_delivery 唯一渲染), 退役斜杠命令零出现
+            self.assertTrue(result["paste_text"].startswith("lybra roles enroll --code LYBRAENROLL1."))
+            self.assertTrue(result["paste_text"].endswith("--workspace <工位目录或治理根> --verify"))
+            self.assertNotIn("/lybra enroll", json.dumps(result, ensure_ascii=False))
             # ② 既有单次/TTL/撤销面: enrollments.json 有 pending 记录带 TTL
             enrollments = json.loads((root / ".lybra" / "enrollments.json").read_text())
             self.assertEqual(len(enrollments), 1)
@@ -423,8 +426,9 @@ class TestMcpVerbs(unittest.TestCase):
                 payload = resp.get("structuredContent", resp)
                 self.assertTrue(payload["ok"])
                 self.assertTrue(payload["self_contained_code"].startswith("LYBRAENROLL1."))
-                self.assertTrue(payload["paste_text"].startswith("/lybra enroll LYBRAENROLL1."))
-                self.assertIn("/lybra enroll", payload["paste_instruction"])
+                self.assertTrue(payload["paste_text"].startswith("lybra roles enroll --code LYBRAENROLL1."))
+                self.assertIn(payload["paste_text"], payload["paste_instruction"])
+                self.assertNotIn("/lybra enroll", json.dumps(payload, ensure_ascii=False))
                 # dry_run_token 一次性: 重放 → STALE
                 resp = mcp.lybra_enroll_code_confirm({
                     "dry_run_token": token, "owner_confirmation_token": "OWNER_CONFIRMED",
@@ -485,7 +489,7 @@ class TestMcpVerbs(unittest.TestCase):
                 payload = resp.get("structuredContent", resp)
                 self.assertTrue(payload["ok"])
                 self.assertTrue(payload["self_contained_code"].startswith("LYBRAENROLL1."))
-                self.assertTrue(payload["paste_text"].startswith("/lybra enroll "))
+                self.assertTrue(payload["paste_text"].startswith("lybra roles enroll --code "))
 
 
 class TestVerbSchemaRegistration(unittest.TestCase):

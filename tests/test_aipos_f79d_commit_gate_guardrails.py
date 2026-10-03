@@ -490,6 +490,6 @@ def test_piece4_single_session_position_implementation():
 # 件⑤: 本夹具入 run-all
 # ---------------------------------------------------------------------------
 def test_fixture_registered_in_run_all():
-    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
-    run_all = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
+    # AIPOS-F93 件③: lybra 产品仓自己的夹具清单, 夹具自定位(门侧位置声明 = 治理根 project.json test_contract.runall_path)
+    run_all = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
     assert "tests/test_aipos_f79d_commit_gate_guardrails.py" in run_all
