@@ -12,7 +12,7 @@ This module provides:
 3. `detect_wrong_domain_tokens()` — reconcile wrong-domain entries
 
 All token retrieval MUST go through this module. The 5+ duplicate implementations across
-confirm_client.py, advisor_pump.py, pump_orchestration.py, agent_supervise.py, board_login.py
+confirm_client.py, board_login.py (advisor_pump / pump_orchestration / agent_supervise retired by AIPOS-F91)
 are consolidated here (AIPOS-F59 constraint: no new token retrieval implementations).
 """
 
@@ -231,8 +231,7 @@ def get_token_for_role_and_project(
     """AIPOS-F59: Unified token getter by (role, project_domain).
 
     This is the SINGLE implementation point for token retrieval. All callers in
-    confirm_client.py, advisor_pump.py, pump_orchestration.py, agent_supervise.py,
-    board_login.py — and since AIPOS-F81 tools/loop_context.py ConnectionResolver
+    confirm_client.py, board_login.py — and since AIPOS-F81 tools/loop_context.py ConnectionResolver
     (resolve_token / resolve_identity) — must delegate here (selection = select_token_entry).
 
     Selection logic (select_token_entry):

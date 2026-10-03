@@ -476,7 +476,7 @@ def get_config_port(name: str, repo_root: Path | None = None) -> int:
     """Get a service port default from config.schema (single source).
 
     Names: board_default (7117), gate_default (7118), mcp_server_default (7118),
-    auditor_loop_default (7119), tunnel_default (7120).
+    tunnel_default (7120).
     """
     config_schema = load_schema("config", repo_root)
     ports = config_schema.get("ports", {}) or {}

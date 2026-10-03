@@ -425,7 +425,6 @@
     "gate_default": 7118,
     "gate_range": "7100-7199",
     "mcp_server_default": 7118,
-    "auditor_loop_default": 7119,
     "tunnel_default": 7120
   },
   "timeouts": {

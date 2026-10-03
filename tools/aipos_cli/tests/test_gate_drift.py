@@ -19,7 +19,7 @@ def test_classify_changed_paths_gate_side():
     """Test classification of gate-side changes."""
     changed_paths = [
         "tools/mcp_server/tools.py",
-        "tools/turn_advancer/command_builder.py",
+        "tools/sandbox_runtime/confined_worker.py",
         "config/settings.yaml",
     ]
     
@@ -150,7 +150,7 @@ def test_check_gate_drift_with_gate_side_changes(
     ]
     mock_diff.return_value = [
         "tools/mcp_server/tools.py",
-        "tools/turn_advancer/command_builder.py",
+        "tools/sandbox_runtime/confined_worker.py",
     ]
     
     result = check_gate_drift(tmp_path)

@@ -524,10 +524,11 @@ def get_collaboration_profile(project_root: str | Path) -> dict[str, Any]:
 # AIPOS-338 S5: workspace-level dispatch_mode (auto | manual)
 #
 # Owner-only switch. Truth lives in project.json (NOT conversation). manual =
-# "turn OFF auto-dispatch" (the pump refuses); auto = manual /claim still works.
+# "turn OFF auto-dispatch" (gate guidance surfaces it; the pump that refused under
+# manual was retired by AIPOS-F91); auto = manual /claim still works.
 # Default auto; old workspaces without the field are treated as auto (zero error).
 # Switching is append-only logged (who / when / why). Judgment stays with the
-# Owner — product/advisor only PROPOSE a switch (e.g. on repeated pump failures).
+# Owner — product/advisor only PROPOSE a switch (e.g. on repeated dispatch failures).
 # ---------------------------------------------------------------------------
 
 DEFAULT_DISPATCH_MODE = "auto"

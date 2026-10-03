@@ -14,7 +14,6 @@ from typing import Any
 # Gate-side paths: changes here require deployment to take effect
 GATE_SIDE_PATHS = [
     "tools/mcp_server/",
-    "tools/turn_advancer/",
     "tools/sandbox_runtime/",
     "config/",
     "0_control_plane/",
