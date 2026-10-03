@@ -60,7 +60,8 @@ def render_queue_mutation_text(result: dict[str, Any]) -> str:
     if result.get("worktree_created"):
         lines.append(f"Worktree: {result.get('worktree_path')} (branch {result.get('worktree_branch')})")
     elif result.get("worktree_error"):
-        lines.append(f"✗ 卡工作树未建立(认领已落盘): {result.get('worktree_error')}")
+        # AIPOS-F90 件①: 建树失败 = 门拒认领(队列与记录未变更)
+        lines.append(f"✗ 卡工作树未建立(认领被拒, 队列与记录未变更): {result.get('worktree_error')}")
     if result.get("warnings"):
         lines.append("Warnings:")
         lines.extend(f"- {warning}" for warning in result["warnings"])

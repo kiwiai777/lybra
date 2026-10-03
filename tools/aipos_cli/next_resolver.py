@@ -21,14 +21,35 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from tools.schema_loader import resolve_governance_path
 
 # 产品仓根(schema 所在地)
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# AIPOS-F90 件①: `lybra loop` 启动时已校验的驱动方身份(--actor)与信封(--envelope)贯穿推导与执行——
+# 推导核派生账务命令(claim/return/verdict/close)的 owner_policy_ref 与执行体的信封预检同读此处, 禁 loop 收到 --envelope
+# 却派生不带 owner_policy_ref 的命令(2026-10-03 F90 活体实撞: 门拒 OWNER_POLICY_REF_REQUIRED)。无 scope 时按工位声明自发现。
+_DRIVER_SCOPE: ContextVar[dict[str, str] | None] = ContextVar("lybra_driver_scope", default=None)
+
+
+@contextmanager
+def driver_scope(*, actor: str | None, policy_id: str | None) -> Iterator[None]:
+    """推导/执行期间固定驱动方身份与信封(loop 已按 match_claim_envelope 校验过)。嵌套调用(ingest→推导核)同见。"""
+    token = _DRIVER_SCOPE.set({"actor": str(actor or "").strip(), "policy_id": str(policy_id or "").strip()})
+    try:
+        yield
+    finally:
+        _DRIVER_SCOPE.reset(token)
+
+
+def _scoped_driver() -> dict[str, str]:
+    return _DRIVER_SCOPE.get() or {}
 
 
 def _resolve_governance_path_with_relative(key: str, governance_root: Path) -> Path:
@@ -315,9 +336,53 @@ NEXT_CARD_RULE: dict[str, Any] = {
         "卡面 frontmatter 可解析(产品唯一读取口 parse_markdown_frontmatter 无告警)",
         "worktree_exists == true(工作树由驱动方认领时建立)",
         "report_path 可推导(开工提示必需的报告落点)",
+        "kickoff_refusal 为空(AIPOS-F90 件③: 本实例在办、未结案、产物未交——判据 next_resolver.kickoff_refusal)",
     ],
     "order": "claimed_at 最近优先; claimed_at 缺失/不可解析者排最后; 同时刻按 task_id 升序",
 }
+
+
+KICKOFF_REFUSAL_CODES: dict[str, str] = {
+    "NOT_FOUND": "队列中找不到该卡",
+    "NOT_CLAIMED": "卡不在 claimed(未认领/已阻塞/已撤销), 不能开工",
+    "CONCLUDED": "卡已结案(completed 或有 closure 记录), 不能再开工",
+    "NOT_MINE": "卡的认领实例不是本实例, 不能开工",
+    "NOT_YOUR_TURN": "卡当前不在本角色的工作节点(如已交回待派审/审计中), 不能开工",
+    "ARTIFACT_SUBMITTED": "本角色的产物已落盘待产品入门, 不再开工(防覆盖原报告)",
+}
+
+
+def kickoff_refusal(workspace_root: Path, task_id: str, actor: str, *, queue_state: str | None,
+                    card_frontmatter: dict[str, Any] | None = None) -> dict[str, str] | None:
+    """AIPOS-F90 件③: 开工核验唯一判据(/go 选卡与「以卡号/路径冷启动」同读)——本实例在办、未结案、产物未交才可开工。
+
+    事实只读: 队列位置 + 记录(claim 记录实例 / closure) + 推导核结论(triggered_by / derivable), 禁另判。
+    返回 None(可开工) 或 {code, reason}(code ∈ KICKOFF_REFUSAL_CODES; 文案零门动词, 工位原样转述)。
+    2026-10-02 事故: 审计会话被贴错卡号, 对已结案卡重审并覆盖原报告 → 已结案/产物已交一律拒。"""
+    task_id = str(task_id or "").strip()
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+
+    def refuse(code: str, detail: str) -> dict[str, str]:
+        return {"task_id": task_id, "code": code, "reason": f"{KICKOFF_REFUSAL_CODES[code]}: {detail}"}
+
+    if not queue_state:
+        return refuse("NOT_FOUND", f"{task_id} 不在任何队列目录")
+    records = _read_task_records(workspace_root, task_id)
+    if queue_state == "completed" or records.get("latest_closure"):
+        return refuse("CONCLUDED", f"{task_id} queue_state={queue_state}")
+    if queue_state != "claimed":
+        return refuse("NOT_CLAIMED", f"{task_id} queue_state={queue_state}")
+    claimer = _claimer_instance(records) or str(fm.get("claimed_by") or "").strip()
+    if claimer and actor and claimer != actor:
+        return refuse("NOT_MINE", f"{task_id} 认领实例={claimer}, 本实例={actor}")
+    derivation = derive_next_step(task_id, workspace_root)
+    role = "auditor" if str(fm.get("task_mode") or "").strip() == "audit" or task_id.upper().endswith("R") else "executor"
+    if derivation.get("triggered_by") != role:
+        return refuse("NOT_YOUR_TURN", f"{task_id} 推导核当前节点 {derivation.get('current_node')}/{derivation.get('current_state')}, "
+                                       f"该动的是 {derivation.get('triggered_by')}({derivation.get('suggested_action') or ''})")
+    if derivation.get("derivable") and derivation.get("verb") in ("lybra_queue_return_dry_run", "lybra_audit_verdict_dry_run"):
+        return refuse("ARTIFACT_SUBMITTED", f"{task_id} 的{'审计报告' if role == 'auditor' else ' Return'}已落盘, 产品将自动入门")
+    return None
 
 
 def _claimed_at_sort_key(value: Any) -> float | None:
@@ -351,6 +416,11 @@ def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
         if card.get("queue_state") != "claimed":
             continue
         task_id = str(card.get("task_id") or "")
+        kickoff = card.get("kickoff_refusal") if isinstance(card.get("kickoff_refusal"), dict) else None
+        if kickoff:
+            # AIPOS-F90 件③: 非本人在办 / 已结案 / 产物已交 → 不入选(拒因原样转述, 零门动词)
+            excluded.append({"task_id": task_id, "code": str(kickoff.get("code") or "NOT_YOUR_TURN"), "reason": str(kickoff.get("reason") or "")})
+            continue
         warnings = [str(w) for w in (card.get("frontmatter_warnings") or [])]
         if warnings:
             excluded.append({
@@ -516,8 +586,10 @@ def _driver_envelope_ref(workspace_root: Path, task_id: str, task_fm: dict[str, 
     driver_actor = _driver_actor(workspace_root, connection_json=connection_json)
     if not driver_actor:
         return None
+    # AIPOS-F90 件①: loop 显式 --envelope 在 scope 里 → 只认该信封(同一判据重核, 不另挑)
+    scoped_policy = _scoped_driver().get("policy_id") or None
     policy, _reasons = find_envelope(workspace_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor,
-                                     driver_role=_driver_role_name(workspace_root, connection_json))
+                                     policy_id=scoped_policy, driver_role=_driver_role_name(workspace_root, connection_json))
     return str(policy.get("policy_id")) if policy else None
 
 
@@ -550,12 +622,15 @@ def _driver_token_instance(workspace_root: Path, connection_json: str | None = N
 def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connection_json: str | None = None) -> str:
     """驱动方身份(AIPOS-F78 前置零②: 禁回退占位 advisor)。
 
-    顺序: ① 治理根 .lybra/role 的 instance(工位声明) → ② connection.json 驱动方 token 绑定的 agent_instance
-    → ③ 调用方显式 fallback(仅靶场/显式传入) → 解析不到返回 ""(调用方 fail-closed: 不可推导 + 点名缺项)。
-    读失败精确捕获 + warning。
+    顺序: ⓪ loop 显式 --actor(driver_scope, AIPOS-F90 件①) → ① 治理根 .lybra/role 的 instance(工位声明)
+    → ② connection.json 驱动方 token 绑定的 agent_instance → ③ 调用方显式 fallback(仅靶场/显式传入)
+    → 解析不到返回 ""(调用方 fail-closed: 不可推导 + 点名缺项)。读失败精确捕获 + warning。
     """
     import json
 
+    scoped_actor = _scoped_driver().get("actor")
+    if scoped_actor:
+        return scoped_actor
     role_file = workspace_root / ".lybra" / "role"
     if role_file.is_file():
         try:
@@ -642,6 +717,10 @@ def _action_type_for_command(command: str) -> str:
     """派生命令 → action_type(唯一映射, next --run 与 lybra loop 共用)。
     先匹配 "queue close" 再匹配 "finalize", 避免 close 命令被误判为 finalize。"""
     if "artifact ingest" in command:
+        # AIPOS-F90 件②: 产物入口按 --kind 声明所入的节点(return/verdict 账务步); 无 --kind = F78B 件② external finalize 步
+        kind = re.search(r"--kind\s+(\S+)", command)
+        if kind and kind.group(1) in ("return", "verdict"):
+            return kind.group(1)
         return "finalize"  # AIPOS-F78B 件②: finalize_mode=external 的 finalize 步 = 产物入口铸 finalization 记录
     if "queue claim" in command:
         return "claim"
@@ -1012,6 +1091,27 @@ def missing_return_frontmatter(frontmatter: dict[str, Any]) -> list[str]:
     return missing
 
 
+def ingest_command(task_id: str, kind: str, workspace_root: Path, connection_json: str | None) -> str:
+    """AIPOS-F90 件②: return/verdict 步对驱动方派生的命令 = 产物入口 `lybra artifact ingest --kind <kind>`(唯一形)。"""
+    parts = [f"lybra artifact ingest --task-id {task_id} --kind {kind} --workspace-root {workspace_root}"]
+    if connection_json:
+        parts.append(f"--connection-json {connection_json}")
+    return " ".join(parts)
+
+
+def with_runtime_model(shell_command: str, *, kind: str, agent_runtime: dict[str, Any]) -> str:
+    """AIPOS-F90 件②: 给入口内部的薄壳命令补产品填写的模型字段(唯一拼接口): return 补 --actual-model(=运行时模型) 与
+    --agent-runtime; verdict 补 --agent-runtime。值经 shlex 引用, 永不含 token。"""
+    import json as _json
+    import shlex as _shlex
+
+    parts = [shell_command]
+    if kind == "return":
+        parts.append(f"--actual-model {_shlex.quote(str(agent_runtime.get('model') or ''))}")
+    parts.append(f"--agent-runtime {_shlex.quote(_json.dumps(agent_runtime, ensure_ascii=False, sort_keys=True))}")
+    return " ".join(parts)
+
+
 def build_return_command_from_artifact(
     workspace_root: Path,
     task_id: str,
@@ -1026,7 +1126,8 @@ def build_return_command_from_artifact(
     """AIPOS-F78 件③: 由 Return 文件派生 `lybra queue return --confirm` 命令(推导核与 artifact ingest 共用, 禁第二路径)。
     AIPOS-F78B 件③: autonomy_mode=PreAuthorized + owner_policy_ref=驱动方信封 → 门一阶段落记录。
 
-    completion_report_ref = Return 相对治理根路径; artifact_refs = [<branch>@<commit_sha>]; actual_model = frontmatter.model。
+    completion_report_ref = artifact_refs[0] = Return 相对治理根路径(分支/sha 在 Return frontmatter, 入口核 tip)。
+    actual_model / agent_runtime 由产物入口补(AIPOS-F90 件②: 运行时模型取自会话记录, 自报只作对照)。
     """
     import json as _json
 
@@ -1037,13 +1138,12 @@ def build_return_command_from_artifact(
         report_ref = str(return_path)
     extra: dict[str, str] = {"result-summary": _json.dumps(result_summary, ensure_ascii=False)}
     extra["completion-report-ref"] = report_ref
-    branch = str(fm.get("branch") or "").strip()
-    commit_sha = str(fm.get("commit_sha") or "").strip()
-    if branch and commit_sha:
-        extra["artifact-refs"] = "'" + _json.dumps([f"{branch}@{commit_sha}"]) + "'"
-    model = str(fm.get("model") or "").strip()
-    if model:
-        extra["actual-model"] = _json.dumps(model, ensure_ascii=False)
+    # AIPOS-F90 件②: artifact_refs = [Return 相对治理根路径]——门的交回落点判据(board_adapter 报告材料: 文件须在
+    # task_cards/<ID>/ 或 records/ 下)只认治理面引用; 原 `<branch>@<sha>` 形被真门拒 RETURN_ARTIFACT_WRONG_LOCATION
+    # (loop 从未对真门交回成功的病根之一)。分支与 sha 由 Return frontmatter 携带, 产物入口已核 tip==commit_sha。
+    extra["artifact-refs"] = "'" + _json.dumps([report_ref], ensure_ascii=False) + "'"
+    # AIPOS-F90 件②: actual_model 不再采信 Return 自报(frontmatter.model 只作对照), 由产物入口按卡面 harness 的会话记录定位器
+    # 取运行时模型后补入(artifact_ingest.ingest_task_artifact → with_runtime_model)
     return _build_copyable_command(
         verb_base="return",
         task_id=task_id,
@@ -1089,6 +1189,8 @@ def _build_verdict_submit_command(
     verdict: str = "PASS",
     artifact_subject: dict[str, str] | None = None,
     autonomy_mode: str = "Supervised",
+    findings_summary: str | None = None,
+    evidence_refs: list[str] | None = None,
 ) -> str:
     """构建审计裁决提交命令。
     
@@ -1108,6 +1210,14 @@ def _build_verdict_submit_command(
     if owner_policy_ref:
         parts.append(f"--owner-policy-ref {owner_policy_ref}")
     parts.append(f"--verdict {verdict}")
+    # AIPOS-F90 件②: 裁决证据读审计报告(PASS 类裁决门要求非空证据 AIPOS-F63): findings_summary=报告「一句话结论」,
+    # evidence_refs=[报告相对治理根路径]; 原派生命令不带证据, 真门必拒 EMPTY_EVIDENCE
+    if findings_summary:
+        parts.append(f"--findings-summary {_shlex_quote(findings_summary)}")
+    if evidence_refs:
+        import json as _json
+
+        parts.append(f"--evidence-refs {_shlex_quote(_json.dumps(list(evidence_refs), ensure_ascii=False))}")
     
     # AIPOS-F73前置①: artifact_subject for code tasks
     if artifact_subject:
@@ -1122,6 +1232,12 @@ def _build_verdict_submit_command(
             parts.append(f"--artifact-subject-tree-hash {tree_hash}")
     
     return " ".join(parts)
+
+
+def _shlex_quote(value: str) -> str:
+    import shlex as _shlex
+
+    return _shlex.quote(str(value))
 
 
 def _build_finalize_command(
@@ -1281,6 +1397,18 @@ def derive_next_step(
         # AIPOS-F78B 件③: 驱动方信封(覆盖被审卡, 与 loop 同一判据)在 → 一阶段 PreAuthorized; 否则 Supervised 形(执行时 exit 5)
         driver_policy = _driver_envelope_ref(workspace_root, reviewed_task_id, reviewed_fm, conn_arg)
         
+        # AIPOS-F90 件②: 裁决证据 = 审计报告本身(「一句话结论」+ 报告相对路径), 产物入口读报告提交, 驱动方不手提
+        try:
+            report_text = verdict_artifact.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            import sys
+
+            print(f"Warning: 审计报告不可读 {verdict_artifact}: {exc}", file=sys.stderr)
+            report_text = ""
+        try:
+            report_ref = str(verdict_artifact.resolve().relative_to(Path(workspace_root).resolve()))
+        except ValueError:
+            report_ref = str(verdict_artifact)
         cmd = _build_verdict_submit_command(
             reviewed_task_id=reviewed_task_id,
             audit_task_id=task_id,
@@ -1291,6 +1419,8 @@ def derive_next_step(
             verdict=verdict,
             artifact_subject=artifact_subject,
             autonomy_mode="PreAuthorized" if driver_policy else "Supervised",
+            findings_summary=extract_return_summary_text(report_text) if report_text else None,
+            evidence_refs=[report_ref],
         )
         return {
             "task_id": task_id,
@@ -1298,7 +1428,10 @@ def derive_next_step(
             "current_node": "audit_verdict",
             "current_state": "claimed",
             "triggered_by": "auditor",
-            "command": cmd,
+            # AIPOS-F90 件②: 驱动方只见产物入口命令(读报告 frontmatter、绑被审分支 tip、产品填模型字段、门侧快照报告);
+            # shell_command = 入口内部执行的同一条薄壳命令(唯一构建 _build_verdict_submit_command)
+            "command": ingest_command(task_id, "verdict", workspace_root, conn_arg),
+            "shell_command": cmd,
             "verb": "lybra_audit_verdict_dry_run",
             "missing_records": [],
             "suggested_action": "提交审计裁决",
@@ -1326,16 +1459,32 @@ def derive_next_step(
 
     # --- pending → N1: claim ---
     if queue_dir == "pending":
-        actor = assigned_to or "<executor>"
-        agent_inst = assigned_to or "<executor-instance>"
-        policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
+        # AIPOS-F90 件①: 认领实例 = 卡面 agent_instance(具体实例, 门按 actor==canonical agent_instance 判), 缺省 assigned_to;
+        # 门派生的审计卡 assigned_to 是短名(audit_<project>), 用它认领会被裁决角色门拒(ROLE_VIOLATION)
+        claimant = str(fm.get("agent_instance") or fm.get("assigned_to") or "").strip()
+        if not claimant:
+            return {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": "publish",
+                "current_state": "pending",
+                "triggered_by": "advisor",
+                "command": "",
+                "verb": "lybra_queue_claim_dry_run",
+                "missing_records": ["卡面 agent_instance / assigned_to(认领实例)"],
+                "suggested_action": f"lybra queue amend --task-id {task_id} 补 assigned_to 后重推导",
+                "notes": "N0→N1: 卡无认领实例声明, 认领命令 actor 无据(fail-closed)",
+            }
+        # AIPOS-F90 件①: 认领一段式 = 驱动方 token + 覆盖驱动方与本卡的信封(与 return/verdict/close 同一判据 _driver_envelope_ref,
+        # loop --envelope 经 driver_scope 贯穿); 信封在 → PreAuthorized + owner_policy_ref; 不在 → Supervised 形(执行时 exit 5 带申领出口)
+        driver_policy = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)
         cmd = _build_copyable_command(
             verb_base="claim",
             task_id=task_id,
-            actor=actor,
-            agent_instance=agent_inst,
-            autonomy_mode="PreAuthorized",
-            owner_policy_ref=policy_ref,
+            actor=claimant,
+            agent_instance=claimant,
+            autonomy_mode="PreAuthorized" if driver_policy else "Supervised",
+            owner_policy_ref=driver_policy,
             connection_json=conn_arg,
         )
         return {
@@ -1661,7 +1810,9 @@ def derive_next_step(
                 "current_node": "claim",
                 "current_state": "claimed",
                 "triggered_by": "executor",
-                "command": cmd,
+                # AIPOS-F90 件②: 驱动方只见产物入口命令; shell_command = 入口内部执行的同一条薄壳命令
+                "command": ingest_command(task_id, "return", workspace_root, conn_arg),
+                "shell_command": cmd,
                 "verb": "lybra_queue_return_dry_run",
                 "missing_records": [],
                 "suggested_action": "交回工作(RETURN.md 已存在,执行 return)",
@@ -2061,169 +2212,100 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         }
 
 
-def _execute_claim_with_role_token(
-    *,
-    task_id: str,
-    workspace_root: Path,
-    connection_json: str | None,
-) -> dict[str, Any]:
-    """AIPOS-F73B件① + F73C件⑥返工: pending 卡按 advisor token 认领。
-    
-    账务动词由驱动方 token 执行、actor=该卡实例:
-    - token: advisor (从 connection.json 读取)
-    - actor: assigned_to/agent_instance (该卡声明的实例)
-    
-    认领后建 worktree、输出 spawn_worker action。
-    
-    Args:
-        task_id: 任务 ID
-        workspace_root: 产品仓根目录
-        connection_json: connection.json 路径（可选）
-    
-    Returns:
-        execute_derived_action 格式的响应
-    """
+def loop_step_timeout_seconds() -> float:
+    """AIPOS-F90 件①(缺陷③): 派生命令子进程的硬上限秒数——唯一声明 verbs.schema lybra_loop.step_timeout_seconds
+    (须覆盖薄壳内 initialize + 各阶段门请求超时 + 超时回读; 夹具核不变量)。缺声明 = SchemaLoadError, 禁回落写死。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    value = ((load_schema("verbs", REPO_ROOT).get("verbs") or {}).get("lybra_loop") or {}).get("step_timeout_seconds")
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_loop.step_timeout_seconds 未声明或非正数")
+    return float(value)
+
+
+def _run_product_command(command: str, action_type: str) -> dict[str, Any]:
+    """执行一条派生产品命令(`lybra ...`, 每步过门零旁路), 超时读声明。返回 execute_derived_action 响应形。"""
+    import shlex
     import subprocess
-    import json
-    
-    # 1. 读取任务卡获取 assigned_to
-    task_path, queue_dir = _find_task_in_queue(workspace_root, task_id)
-    if not task_path:
-        return {
-            "ok": False,
-            "action_type": "claim",
-            "message": f"Task {task_id} not found in queue",
-            "command": "",
-            "exit_code": 1,
-            "output": "",
-        }
-    
-    task_fm = _read_frontmatter(task_path)
-    if not task_fm:
-        return {
-            "ok": False,
-            "action_type": "claim",
-            "message": f"Cannot read task frontmatter: {task_path}",
-            "command": "",
-            "exit_code": 1,
-            "output": "",
-        }
-    
-    assigned_to = task_fm.get("assigned_to") or task_fm.get("agent_instance", "")
-    if not assigned_to:
-        return {
-            "ok": False,
-            "action_type": "claim",
-            "message": f"Task {task_id} has no assigned_to or agent_instance",
-            "command": "",
-            "exit_code": 1,
-            "output": "",
-        }
-    
-    # 2. AIPOS-F73C件⑥返工 + F78 前置零①: token=驱动方(roles.schema driver), actor/agent_instance=该卡实例。
-    #    claim 的 Supervised confirm 索 owner_confirm(驱动方 token 无此 scope) → 须由 Owner 信封
-    #    (owner_autonomy_policy, F73D 已接)一阶段放行: 找覆盖本卡与驱动方身份的信封, 带 PreAuthorized + policy id。
-    conn_arg = f"--connection-json {connection_json}" if connection_json else ""
-    from tools.aipos_cli.loop_driver import DRIVER_ROLE, find_envelope  # 延迟导入(loop_driver 依赖本模块)
 
-    driver_actor = _driver_actor(workspace_root, fallback=DRIVER_ROLE, connection_json=connection_json)
-    policy, envelope_reasons = find_envelope(workspace_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor,
-                                             driver_role=_driver_role_name(workspace_root, connection_json))
-    if policy is not None:
-        policy_ref = str(policy.get("policy_id"))
-        mode_arg = "--autonomy-mode PreAuthorized"
-    else:
-        # 无信封: 仍派生 Supervised 命令(门会索 owner_confirm 并拒), 拒因原文随 output 带出, 不静默
-        policy_ref = _resolve_active_policy(workspace_root, task_id, role="advisor")
-        mode_arg = ""
-    policy_arg = f"--owner-policy-ref {policy_ref}" if policy_ref else ""
-
-    command = f"lybra queue claim --task-id {task_id} --actor {assigned_to} --agent-instance {assigned_to} {mode_arg} {policy_arg} {conn_arg} --confirm"
-    command = " ".join(command.split())
-    if policy is None:
-        return {
-            "ok": False,
-            "action_type": "claim",
-            "message": "claim 阻塞: 无覆盖本卡与驱动方身份的 Owner 信封(驱动方 token 无 owner_confirm, Supervised 认领必撞)",
-            "command": command,
-            "exit_code": 5,
-            "output": "\n".join(f"  - {r}" for r in envelope_reasons) or "5_tasks/policies/ 下没有任何信封",
-        }
-    
-    # 4. 执行 claim
+    timeout = loop_step_timeout_seconds()
     try:
-        result = subprocess.run(
-            command.split(),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        
-        success = result.returncode == 0
-        output = result.stdout + result.stderr
-        
-        if not success:
-            return {
-                "ok": False,
-                "action_type": "claim",
-                "message": f"claim 失败: {result.returncode}",
-                "command": command,
-                "exit_code": result.returncode,
-                "output": output,
-            }
-        
-        # 5. claim 成功后建 worktree
-        worktree_result = _ensure_worktree(workspace_root, task_id)
-        worktree_path = worktree_result.get("worktree_path", "")
-        
-        if not worktree_result.get("ok"):
-            return {
-                "ok": False,
-                "action_type": "claim",
-                "message": f"claim 成功但 worktree 失败: {worktree_result.get('message')}",
-                "command": command,
-                "exit_code": 1,
-                "output": output + "\n" + worktree_result.get("message", ""),
-                "worktree_path": "",
-            }
-        
-        # 6. 构建 spawn_worker action
-        spawn_action = {
-            "type": "spawn_worker",
-            "card": task_id,
-            "worktree": worktree_path,
-            "instance": assigned_to,
-        }
-        
-        return {
-            "ok": True,
-            "action_type": "claim",
-            "message": "claim 成功 + worktree 已建立",
-            "command": command,
-            "exit_code": 0,
-            "output": output + f"\nWorktree: {worktree_path}",
-            "worktree_path": worktree_path,
-            "spawn_action": spawn_action,
-        }
-        
+        result = subprocess.run(shlex.split(command), capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {
             "ok": False,
-            "action_type": "claim",
-            "message": "claim 超时 (>120s)",
+            "action_type": action_type,
+            "message": f"{action_type} 子进程超时 (>{timeout:g}s, 声明 verbs.schema lybra_loop.step_timeout_seconds)",
             "command": command,
             "exit_code": 124,
-            "output": "Command timed out after 120 seconds",
+            "output": f"Command timed out after {timeout:g} seconds",
         }
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         return {
             "ok": False,
-            "action_type": "claim",
-            "message": f"claim 执行异常: {exc}",
+            "action_type": action_type,
+            "message": f"{action_type} 执行异常: {exc}",
             "command": command,
             "exit_code": 1,
             "output": str(exc),
         }
+    success = result.returncode == 0
+    return {
+        "ok": success,
+        "action_type": action_type,
+        "message": f"{action_type} {'成功' if success else '失败'}",
+        "command": command,
+        "exit_code": result.returncode,
+        "output": result.stdout + result.stderr,
+    }
+
+
+def _execute_claim_with_role_token(
+    *,
+    derivation: dict[str, Any],
+    workspace_root: Path,
+) -> dict[str, Any]:
+    """AIPOS-F73B件① + F73C件⑥ + F90 件①: 认领一段式——执行推导核派生的同一条 `lybra queue claim --confirm`
+    (驱动方 token, actor/agent_instance=卡面认领实例, PreAuthorized + owner_policy_ref=覆盖驱动方的信封; 禁本处另拼第二条命令)。
+
+    建树在门认领同一步完成(queue_mutation 认领前经 _ensure_worktree 唯一实现预建, 建树失败=门拒认领, 不留 claimed 无工作树的卡);
+    本处只读核验落点(card_workstation_view, 与 my-tasks 开工面同一函数), 禁第二建树实现。成功输出 spawn_worker action。
+    """
+    task_id = str(derivation.get("task_id") or "")
+    command = str(derivation.get("command") or "")
+    run = _run_product_command(command, "claim")
+    if not run.get("ok"):
+        run["message"] = f"claim 失败: {run.get('exit_code')}" if run.get("exit_code") not in (None, 124) else run["message"]
+        return run
+
+    task_path, _queue = _find_task_in_queue(workspace_root, task_id)
+    fm = _read_frontmatter(task_path) if task_path else {}
+    assigned_to = str(fm.get("assigned_to") or fm.get("agent_instance") or "")
+    worktree_path = ""
+    if str(fm.get("task_mode") or "code") == "code":
+        view = card_workstation_view(workspace_root, task_id, fm)
+        if not view.get("worktree_exists"):
+            refusal = view.get("worktree_refusal") or {}
+            return {
+                "ok": False,
+                "action_type": "claim",
+                "message": f"门报认领成功但卡工作树不在落点({refusal.get('code') or 'WORKTREE_UNRESOLVED'}): 门侧建树失败须拒认领, 此为门/部署不一致",
+                "command": command,
+                "exit_code": 1,
+                "output": run.get("output", "") + "\n" + str(refusal.get("reason") or ""),
+                "worktree_path": "",
+            }
+        worktree_path = str(view.get("worktree_path") or "")
+    return {
+        "ok": True,
+        "action_type": "claim",
+        "message": "claim 成功 + 工作树已在落点" if worktree_path else "claim 成功",
+        "command": command,
+        "exit_code": 0,
+        "output": str(run.get("output") or "") + (f"\nWorktree: {worktree_path}" if worktree_path else ""),
+        "worktree_path": worktree_path,
+        "spawn_action": {"type": "spawn_worker", "card": task_id, "worktree": worktree_path, "instance": assigned_to},
+    }
 
 def execute_derived_action(
     derivation: dict[str, Any],
@@ -2261,10 +2343,6 @@ def execute_derived_action(
             "spawn_action": dict | None,  # claim 时输出 spawn_worker action
         }
     """
-    import subprocess
-    import shlex
-    import json
-    
     if not derivation.get("derivable"):
         return {
             "ok": False,
@@ -2276,7 +2354,6 @@ def execute_derived_action(
         }
     
     task_id = derivation.get("task_id", "")
-    current_node = derivation.get("current_node", "")
     command = derivation.get("command", "").strip()
     
     # 如果推导出的命令是注释或空,说明需要人工介入
@@ -2292,15 +2369,25 @@ def execute_derived_action(
     
     # AIPOS-F73C前置零之一 + F73D: action_type 按命令真实动词, 唯一映射 _action_type_for_command(loop 共用)
     action_type = _action_type_for_command(command)
-    
-    # AIPOS-F73B件①: pending 卡特殊处理 — 按角色 token 认领
-    if action_type == "claim" and current_node == "pending":
-        return _execute_claim_with_role_token(
-            task_id=task_id,
-            workspace_root=workspace_root,
-            connection_json=connection_json,
-        )
-    
+
+    # AIPOS-F90 件②: return/verdict 步的派生命令 = `lybra artifact ingest --kind <return|verdict>`(产物入口);
+    # 进程内经 ingest_task_artifact(校验 → 产品填模型字段 → 同一薄壳命令经本函数执行), 禁第二 return/verdict 路径
+    if "artifact ingest" in command and action_type in ("return", "verdict"):
+        from tools.aipos_cli.artifact_ingest import ingest_task_artifact
+
+        ingested = ingest_task_artifact(task_id, Path(workspace_root), connection_json=connection_json, kind=action_type)
+        reasons = "\n".join(str(r) for r in (ingested.get("reasons") or []))
+        return {
+            "ok": bool(ingested.get("ok")),
+            "action_type": action_type,
+            "message": str(ingested.get("message") or ingested.get("category") or ""),
+            "command": command,
+            "exit_code": 0 if ingested.get("ok") else int(ingested.get("exit_code") or 1),
+            "output": "\n".join(x for x in (str(ingested.get("output") or ""), reasons) if x),
+            "shell_command": str(ingested.get("command") or ""),
+            "agent_runtime": ingested.get("agent_runtime"),
+        }
+
     # AIPOS-F73件② + F78C: return 前先检查分支提交(卡分支活在该卡声明的产品仓 resolve_card_repo)
     if action_type == "return":
         from tools.aipos_cli.workspace_config import CardRepoUnresolved
@@ -2342,9 +2429,9 @@ def execute_derived_action(
                 "output": "\n".join(check.get("reasons") or []),
             }
 
-    # AIPOS-F78B 件③: 账务动词(return/verdict/close)一律驱动方经信封一阶段放行; 派生命令无 PreAuthorized 形 = 无覆盖驱动方的信封
-    # → exit 5 带申领出口(与 claim 步 _execute_claim_with_role_token 同款), 禁裸撞 Supervised 索 owner_confirm
-    if action_type in ("return", "verdict", "close") and "--autonomy-mode PreAuthorized" not in command:
+    # AIPOS-F78B 件③ + F90 件①: 账务动词(claim/return/verdict/close)一律驱动方经信封一阶段放行; 派生命令无 PreAuthorized 形
+    # = 无覆盖驱动方的信封 → exit 5 带申领出口, 禁裸撞 Supervised 索 owner_confirm(驱动方 token 无此 scope)
+    if action_type in ("claim", "return", "verdict", "close") and "--autonomy-mode PreAuthorized" not in command:
         from tools.aipos_cli.loop_driver import DRIVER_ROLE, exit_code_for, load_loop_contract, mint_hint
 
         task_path_for_hint, _q = _find_task_in_queue(workspace_root, task_id)
@@ -2359,44 +2446,9 @@ def execute_derived_action(
             "output": f"申领出口(Owner 亲自敲):\n  {hint}",
         }
 
-    # AIPOS-F73件②③: 每步过门零旁路 — 执行产品 CLI
-    try:
-        result = subprocess.run(
-            shlex.split(command),
-            capture_output=True,
-            text=True,
-            timeout=120,  # 2分钟超时
-        )
-        
-        success = result.returncode == 0
-        output = result.stdout + result.stderr
-        
-        response = {
-            "ok": success,
-            "action_type": action_type,
-            "message": f"{action_type} {'成功' if success else '失败'}",
-            "command": command,
-            "exit_code": result.returncode,
-            "output": output,
-        }
-        
-        return response
-        
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "action_type": action_type,
-            "message": f"{action_type} 超时 (>120s)",
-            "command": command,
-            "exit_code": 124,
-            "output": "Command timed out after 120 seconds",
-        }
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        return {
-            "ok": False,
-            "action_type": action_type,
-            "message": f"{action_type} 执行异常: {exc}",
-            "command": command,
-            "exit_code": 1,
-            "output": str(exc),
-        }
+    # AIPOS-F73B件① + F90 件①: 认领 = 执行同一条派生命令 + 只读核验门已建的卡工作树(输出 spawn_worker)
+    if action_type == "claim":
+        return _execute_claim_with_role_token(derivation=derivation, workspace_root=Path(workspace_root))
+
+    # AIPOS-F73件②③: 每步过门零旁路 — 执行产品 CLI(超时读声明 verbs.schema lybra_loop.step_timeout_seconds)
+    return _run_product_command(command, action_type)

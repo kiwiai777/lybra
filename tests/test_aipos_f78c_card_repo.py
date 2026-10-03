@@ -145,7 +145,7 @@ class _RepoGate(GateDouble):
         self.seen: dict[tuple[str, str], object] = {}
 
     def __call__(self, derivation: dict, workspace_root: Path, connection_json=None) -> dict:
-        cmd = derivation["command"]
+        cmd = derivation.get("shell_command") or derivation["command"]  # AIPOS-F90 件②: 产物入口内部的薄壳命令
         action = nr._action_type_for_command(cmd)
         card = derivation["task_id"]
         argv = shlex.split(cmd)

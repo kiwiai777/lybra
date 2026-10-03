@@ -198,8 +198,10 @@ def test_f78b_item1_next_ingest_loop_all_find_slug_card(tmp_path, monkeypatch):
     # next(推导核)
     d = derive_next_step(TASK, gov)
     assert d["derivable"] and d["verb"] == "lybra_queue_return_dry_run" and d["current_state"] == "claimed", d
-    assert f"--actor {CHRIS_EXEC}" in d["command"] and "return-kiwiaiops-20260921T132500Z.md" in d["command"]
-    assert "--autonomy-mode PreAuthorized" in d["command"] and f"--owner-policy-ref {POLICY}" in d["command"]  # 件③ 驱动方信封在
+    # AIPOS-F90 件②: 派生命令 = 产物入口(--kind return); 薄壳命令在 shell_command
+    assert "--kind return" in d["command"], d["command"]
+    assert f"--actor {CHRIS_EXEC}" in d["shell_command"] and "return-kiwiaiops-20260921T132500Z.md" in d["shell_command"]
+    assert "--autonomy-mode PreAuthorized" in d["shell_command"] and f"--owner-policy-ref {POLICY}" in d["shell_command"]  # 件③ 驱动方信封在
     buf = io.StringIO()
     monkeypatch.setattr(sys, "stdout", buf)
     rc_next = main(["next", "--task-id", TASK, "--workspace-root", str(gov), "--json"])

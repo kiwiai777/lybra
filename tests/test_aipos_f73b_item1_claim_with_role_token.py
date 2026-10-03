@@ -70,7 +70,9 @@ task_mode: code
         
         derivation = derive_next_step(task_id, workspace)
         
-        # 推导成功（assigned_to 不是推导的必须字段）
-        # 执行时会失败（_execute_claim_with_role_token 会检查 assigned_to）
-        assert derivation["derivable"] is True
+        # AIPOS-F90 件①: 认领命令 actor/agent_instance = 卡面认领实例, 缺 = 推导核不可推导(fail-closed, 点名缺项),
+        # 不再派生带占位 actor 的命令留到执行时撞门
+        assert derivation["derivable"] is False
         assert derivation["current_node"] == "publish"  # N0 节点名
+        assert any("assigned_to" in m for m in derivation["missing_records"]), derivation["missing_records"]
+        assert derivation["command"] == ""

@@ -16,6 +16,16 @@ from tools.aipos_cli.board_adapter import (
 from tools.aipos_cli.controlled_execute import get_dry_run
 
 
+def _f90_single_root_product_repo(root: Path) -> None:
+    """AIPOS-F90 件①(Owner 2026-10-02 裁定「门认领建工作树失败 = 拒绝认领」): code 卡认领前门先经唯一实现建卡工作树;
+    靶场无产品仓声明时治理根兼作单根产品仓(推导核既有规则), 故靶场根须是带 main 提交的 git 仓。"""
+    import subprocess as _sp
+
+    _sp.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+    _sp.run(["git", "-C", str(root), "-c", "user.email=f90@test", "-c", "user.name=f90", "commit", "-q", "--allow-empty", "-m", "init"],
+            check=True)
+
+
 class ControlledExecuteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -279,6 +289,7 @@ class ControlledExecuteTests(unittest.TestCase):
         self.assertEqual(source.read_text(encoding="utf-8"), before)
 
     def test_execute_queue_claim_moves_pending_to_claimed(self) -> None:
+        _f90_single_root_product_repo(self.repo_root)
         self.write_task("AIPOS-38-CLAIM")
         dry = claim_task(task_id="AIPOS-38-CLAIM", actor="dev.codex.local", dry_run=True, repo_root=self.repo_root)
         executed = execute_dry_run(dry["dry_run_id"], "dev.codex.local", repo_root=self.repo_root)
@@ -296,6 +307,7 @@ class ControlledExecuteTests(unittest.TestCase):
         self.assertEqual(executed["errors"][0]["category"], "ACTOR_MISMATCH")
 
     def test_owner_confirmation_required_when_needs_owner(self) -> None:
+        _f90_single_root_product_repo(self.repo_root)
         self.write_task("AIPOS-38-OWNER", needs_owner=True)
         dry = claim_task(task_id="AIPOS-38-OWNER", actor="dev.codex.local", dry_run=True, repo_root=self.repo_root)
         blocked = execute_dry_run(dry["dry_run_id"], "dev.codex.local", repo_root=self.repo_root)

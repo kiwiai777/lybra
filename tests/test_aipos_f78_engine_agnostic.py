@@ -225,8 +225,11 @@ def test_f78_item4_next_resolver_return_judgement_reads_declaration_both_shapes(
         assert found == gov / rel.format(id=task_id), (shape, found)
         d = derive_next_step(task_id, gov)
         assert d["derivable"] and d["verb"] == "lybra_queue_return_dry_run", (shape, d)
-        assert f"--completion-report-ref {rel.format(id=task_id)}" in d["command"], d["command"]
-        assert f"card/{task_id}@{sha}" in d["command"] and "--actual-model" in d["command"]
+        # AIPOS-F90 件②: 派生命令 = 产物入口; 薄壳命令在 shell_command, actual_model 不再采信自报(入口按会话记录补)
+        assert d["command"].startswith(f"lybra artifact ingest --task-id {task_id} --kind return"), d["command"]
+        assert f"--completion-report-ref {rel.format(id=task_id)}" in d["shell_command"], d["shell_command"]
+        # artifact_refs = [Return 路径](AIPOS-F90 件②: 真门交回落点判据只认治理面引用; 分支/sha 在 Return frontmatter)
+        assert f'--artifact-refs \'["{rel.format(id=task_id)}"]\'' in d["shell_command"] and "--actual-model" not in d["shell_command"]
         root, patterns = nr.executor_artifact_watch(gov, task_id)
         assert root == gov and patterns[0] == str(Path(rel.format(id=task_id)).parent / "RETURN.md")
         assert all(not p.startswith("/") for p in patterns)
@@ -274,7 +277,10 @@ def test_f78_item3_ingest_two_project_shapes_mints_return_via_existing_shell(tmp
     assert res["ok"] and res["exit_code"] == 0 and res["kind"] == "return", res
     assert len(executed) == 1 and executed[0].startswith("lybra queue return --task-id " + task_id), executed
     assert f"--actor {EXEC}" in executed[0] and "--confirm" in executed[0]
-    assert f"card/{task_id}@{sha}" in executed[0]
+    # AIPOS-F90 件②: artifact_refs = [Return 相对治理根路径](真门交回落点判据); 产品填写的模型字段随薄壳命令提交(无会话记录 = 未声明会话记录)
+    rel_ret = str(ret.relative_to(gov))
+    assert f'--artifact-refs \'["{rel_ret}"]\'' in executed[0], executed[0]
+    assert "--agent-runtime" in executed[0] and "未声明会话记录" in executed[0] and res["agent_runtime"]["model_self_reported"] == "fixture-model"
     assert list((gov / "5_tasks" / "records" / "returns" / task_id).glob("return_*.md"))
     # 记录已落 → 推导核前进到派审
     assert derive_next_step(task_id, gov)["verb"] == "lybra_audit_dispatch_dry_run"
@@ -460,11 +466,15 @@ def test_f78_pre0_1_ledger_verbs_use_driver_token(tmp_path):
 def test_f78_pre0_1_claim_derives_preauthorized_with_driver_envelope(tmp_path, monkeypatch):
     gov = _make_gov(tmp_path, monkeypatch, shape="lybra")
     _card(gov, "F78-CLAIM", "pending")
-    # 无信封 → 不裸撞 Supervised(驱动方无 owner_confirm), exit 5 带原因
-    no_env = nr._execute_claim_with_role_token(task_id="F78-CLAIM", workspace_root=gov, connection_json=None)
+    # 无信封 → 推导核派生 Supervised 形(不带 owner_policy_ref); 执行体不裸撞 Supervised(驱动方无 owner_confirm), exit 5 带原因
+    d0 = derive_next_step("F78-CLAIM", gov)
+    assert "--autonomy-mode Supervised" in d0["command"] and "--owner-policy-ref" not in d0["command"], d0["command"]
+    no_env = nr.execute_derived_action(d0, gov, None)
     assert no_env["ok"] is False and no_env["exit_code"] == 5 and "信封" in no_env["message"], no_env
-    # 信封覆盖驱动方角色 advisor → PreAuthorized + policy id, actor/agent_instance=卡实例
+    # 信封覆盖驱动方角色 advisor → 推导核派生 PreAuthorized + policy id(AIPOS-F90 件①: 同一条命令即执行的命令), actor/agent_instance=卡实例
     _policy(gov, agent_or_role="advisor")
+    d = derive_next_step("F78-CLAIM", gov)
+    assert "--autonomy-mode PreAuthorized" in d["command"] and f"--owner-policy-ref {POLICY}" in d["command"], d["command"]
     seen: list[list[str]] = []
 
     class _Proc:
@@ -476,16 +486,17 @@ def test_f78_pre0_1_claim_derives_preauthorized_with_driver_envelope(tmp_path, m
         seen.append(list(argv))
         return _Proc()
 
-    monkeypatch.setattr(nr.subprocess, "run", fake_run) if hasattr(nr, "subprocess") else None
     import subprocess as _sp
 
     monkeypatch.setattr(_sp, "run", fake_run)
-    monkeypatch.setattr(nr, "_ensure_worktree", lambda ws, tid: {"ok": True, "worktree_path": "/wt", "message": "ok"})
-    res = nr._execute_claim_with_role_token(task_id="F78-CLAIM", workspace_root=gov, connection_json=None)
+    # 建树在门认领同一步完成(AIPOS-F90 件①), 执行体只读核验落点
+    monkeypatch.setattr(nr, "card_workstation_view", lambda ws, tid, fm: {"worktree_exists": True, "worktree_path": "/wt"})
+    res = nr.execute_derived_action(d, gov, None)
     assert res["ok"], res
     cmd = " ".join(seen[0])
+    assert cmd == d["command"], (cmd, d["command"])  # 执行的就是推导核派生的那一条(禁第二条认领命令)
     assert "--autonomy-mode PreAuthorized" in cmd and f"--owner-policy-ref {POLICY}" in cmd, cmd
-    assert f"--actor {EXEC} --agent-instance {EXEC}" in cmd and "--confirm" in cmd
+    assert f"--actor {EXEC}" in cmd and f"--agent-instance {EXEC}" in cmd and "--confirm" in cmd
 
 
 def test_f78_pre0_1_gate_envelope_identity_is_driver_not_card_instance(tmp_path, monkeypatch):

@@ -238,6 +238,24 @@ def count_preauthorized_claims(repo_root: Path, policy_id: str) -> int:
     return count
 
 
+def envelope_subject(repo_root: Path, *, task_id: str, task_mode: str, project: str, reviewed_task_id: str = "") -> tuple[str, str, str]:
+    """AIPOS-F90 件①: 信封 task_selector 的判定对象(驱动方 loop_driver.find_envelope 与门 _match_claim_envelope 同读此处)。
+
+    审计卡(task_mode=audit 且声明 reviewed_task_id)= 被审卡: 审计卡由派审从被审卡派生, 其认领是被审卡推进链的一步
+    (与裁决/close 按被审卡判信封同口径), 否则 task_selector_task_mode=code 的驱动信封永远认领不了审计卡, loop 停在审计认领。
+    被审卡找不到 = 仍按审计卡自身字段判(只窄不宽, fail-safe)。声明: verbs.schema lybra_loop.envelope.subject_rule。
+    返回 (task_id, task_mode, project)。"""
+    if str(task_mode or "").strip() == "audit" and str(reviewed_task_id or "").strip():
+        from tools.aipos_cli.task_loader import find_task_card
+
+        reviewed_path, _queue = find_task_card(Path(repo_root), str(reviewed_task_id).strip())
+        if reviewed_path is not None:
+            fm, _body, _warnings = parse_markdown_frontmatter(reviewed_path.read_text(encoding="utf-8"))
+            if isinstance(fm, dict):
+                return (str(reviewed_task_id).strip(), str(fm.get("task_mode") or ""), str(fm.get("project") or ""))
+    return str(task_id or ""), str(task_mode or ""), str(project or "")
+
+
 def match_claim_envelope(
     *,
     policy: dict[str, Any],

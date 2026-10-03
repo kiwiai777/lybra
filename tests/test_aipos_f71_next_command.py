@@ -287,8 +287,10 @@ class TestColdStartLifecycle:
         assert result["current_state"] == "claimed"
         assert result["current_node"] == "claim"
         assert result["triggered_by"] == "executor"
-        assert "lybra queue return" in result["command"]
-        assert "--task-id TEST-002" in result["command"]
+        # AIPOS-F90 件②: 驱动方见产物入口命令, 入口内部的薄壳命令在 shell_command
+        assert result["command"].startswith("lybra artifact ingest --task-id TEST-002 --kind return")
+        assert "lybra queue return" in result["shell_command"]
+        assert "--task-id TEST-002" in result["shell_command"]
         assert "lybra_queue_return_dry_run" in result["verb"]
 
     def test_returned_with_audit_card(self, cold_start_workspace: Path):
@@ -332,11 +334,13 @@ class TestColdStartLifecycle:
         assert result["current_state"] == "claimed"
         assert result["current_node"] == "audit_verdict"
         assert result["triggered_by"] == "auditor"
-        assert "lybra audit-verdict" in result["command"]
-        assert "--reviewed-task-id TEST-003" in result["command"]
-        assert "--audit-task-id TEST-003R" in result["command"]
-        assert "--verdict PASS" in result["command"]
-        assert "--confirm" in result["command"]
+        # AIPOS-F90 件②: 驱动方见产物入口命令, 入口内部的薄壳命令在 shell_command
+        assert result["command"].startswith("lybra artifact ingest --task-id TEST-003R --kind verdict")
+        assert "lybra audit-verdict" in result["shell_command"]
+        assert "--reviewed-task-id TEST-003" in result["shell_command"]
+        assert "--audit-task-id TEST-003R" in result["shell_command"]
+        assert "--verdict PASS" in result["shell_command"]
+        assert "--confirm" in result["shell_command"]
         assert "lybra_audit_verdict_dry_run" in result["verb"]
 
     def test_completed(self, cold_start_workspace: Path):
@@ -629,7 +633,8 @@ class TestCopyPasteableCommands:
 
         result = derive_next_step("TEST-014", ws)
 
-        cmd = result["command"]
+        assert "lybra artifact ingest" in result["command"] and "--kind return" in result["command"]  # AIPOS-F90 件②
+        cmd = result["shell_command"]
         assert "lybra queue return" in cmd
         assert "--task-id" in cmd
         assert "--actor" in cmd

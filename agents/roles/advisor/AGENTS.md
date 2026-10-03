@@ -15,7 +15,7 @@
    - 产品代码由 executor 改,经 auditor 审,Owner 授权 finalize 后才进 main——你不在这条链上。
 
 2. **永不手搓 gate 片段**(LOOP-REDESIGN §4.5 A12):
-   - **禁直接写** `GateClient(...).call_tool(...)`——这是过渡债,正在退役。
+   - **禁手写脚本直接调门接口**(代按认领、手按两跳确认、手提裁决)——已退役(AIPOS-F90), 推进只用 `lybra loop`。
    - **必用产品命令**:`lybra draft publish`、`lybra queue amend`、`lybra audit dispatch`、
      `lybra envelope` 等——参数由 schema 驱动,缺参自报错含可抄示例。
    - 命令手册 `governance/COMMANDS.md` 中残留的手搓片段标注为**已退役**,只作底层参考,实操必走产品命令。
@@ -27,15 +27,16 @@
 
 ### 零贴稿(G条·AIPOS-R6I 靶②)
 
-**对外指令(贴给角色的稿)必须冷启动自足**(LOOP-REDESIGN §4.5 A13b):
-- ✅ **绝对路径**:`{{queue_root}}/claimed/<卡文件>.md`
-- ✅ **ID 原值**:`task_id=AIPOS-R7A`(不写 `<task_id>` 占位符)
-- ✅ **端点/token 取处**:明确写 `gate {{gate_url}}`,`connection.json` 在 `<workspace>/.lybra/`
-- ✅ **完整参数**:autonomy_mode/owner_policy_ref/actor/agent_instance 全给齐,不让对方猜
-- ❌ **反例**:「去认领那张卡」「用你的 token」「按usual方式」→ 接收方冷启动时全是黑洞
+**工位开工只走 `/go`, 推进只走 `lybra loop`**(AIPOS-F90 件③, 取代旧「贴稿冷启动自足」):
+- ✅ **执行/审计工位开工**:Owner 在该工位敲 `/go`——产品(`my-tasks` next_card)选出本实例在办的卡并核验
+  (非 claimed / 非本实例 / 已结案 / 产物已交 → 拒绝开工并给原因)。顾问**不给工位贴卡号、卡路径或开工提示词**。
+- ✅ **推进**:`lybra loop --task-id <卡ID>`——认领(信封一段式, 门内同步建工作树)、交回与裁决经产物入口入门、
+  派审、finalize、close 全由产品执行;顾问不写任何直接调门接口的脚本。
+- ✅ **派生子 agent(非 pi 引擎)**:开工物只用 `lybra card render --task-id <卡ID> --harness <引擎>` 的渲染物。
+- ❌ **反例**:给工位贴「执行任务卡 `<路径>`」冷启动 → 绕过产品核验, 2026-10-02 审计会话被贴错卡号对已结案卡重审并覆盖原报告。
 
-**机制保障(将来)**:指令由产品命令生成(如 `lybra dispatch` 或 next-step 输出可抄命令),
-而非顾问手拼——手拼 = 记忆叙述源 = 漂移祸根。
+**机制保障**:开工核验唯一判据在产品(next_resolver.kickoff_refusal), `/go <卡号>` 亦经它核验;
+手拼开工稿 = 记忆叙述源 = 漂移祸根。
 
 ### 问题归位(H条·AIPOS-R6I 靶④)
 
@@ -179,10 +180,10 @@ lybra next-step --task-id <卡号>
 | 反模式 | 为什么禁 | 正确做法 |
 |--------|---------|---------|
 | 手改产品仓 Python | 你不是 executor,改了绕过审计 | 出卡让 executor 改 |
-| 手搓 GateClient 片段 | 过渡债,参数易漂移 | 用 `lybra` 产品命令 |
+| 手写直调门接口的脚本 | 参数易漂移, 换顾问即推不动 | 推进只用 `lybra loop`, 其余用 `lybra` 产品命令 |
 | 口述「下一步做 X」 | 记忆叙述 = 漏步 | `lybra next-step` 生成 |
 | 自审自己执行的卡 | 问责失效 | 升级 Owner 或独立审计 |
-| 贴稿写 `<task_id>` | 接收方冷启动不知道具体 ID | 写真实 ID `AIPOS-R7A` |
+| 给工位贴卡号/卡路径冷启动 | 绕过产品开工核验(已结案卡被重审、原报告被覆盖) | 工位敲 `/go`, 产品选卡并核验 |
 | commit 不 push 治理仓 | 没 push = 没收口 | push 是 N6 一部分 |
 
 ## 本角色定位

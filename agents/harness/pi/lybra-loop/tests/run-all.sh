@@ -948,6 +948,20 @@ else
   overall=1
 fi
 
+# AIPOS-F90: 推进流程收到产品命令三件(认领经 lybra loop 一段式·建树失败即拒认领·超时声明化+回读不报假失败/裁决经 artifact ingest 自动入门·模型字段取自会话记录·审计报告快照进 records/开工只走 /go·拒非本人在办/已结案/产物已交·顾问技能零手写门接口); 另跑本卡改过夹具的认领节点(门认领写入前建树: 靶场根改为带 main 提交的 git 仓)
+echo
+echo "── tests/test_aipos_f90_loop_one_stage.py (F90 靶场 pending→completed 只经 lybra loop·真门动词处理器经产品 CLI 薄壳·记录链完整/建树失败拒认领队列不变/缺陷①②③先红后绿/ingest 绑 tip·会话记录模型·自报不一致标出·快照复原/go 与卡号冷启动拒已结案·非本人·未认领·产物已交/技能 grep 零命中) + 认领节点 ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f90_loop_one_stage.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_controlled_execute.py::ControlledExecuteTests::test_execute_queue_claim_moves_pending_to_claimed" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_controlled_execute.py::ControlledExecuteTests::test_owner_confirmation_required_when_needs_owner" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_board_adapter_execute_integration.py::BoardAdapterExecuteIntegrationTests::test_queue_claim_flow_and_failures" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f90_loop_one_stage.py PASS"
+else
+  echo "✗ tests/test_aipos_f90_loop_one_stage.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

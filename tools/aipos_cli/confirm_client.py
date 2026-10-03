@@ -122,6 +122,28 @@ class GateError(RuntimeError):
     pass
 
 
+class GateTimeout(GateError):
+    """AIPOS-F90 件①(缺陷③): 等门应答超时——门侧可能已处理完毕(假失败), 调用方须回读真相判定, 不得直接报失败。"""
+
+
+def default_gate_timeout_seconds() -> float:
+    """AIPOS-F90 件①(缺陷③): 门请求缺省超时 = config.schema timeouts.gate_mcp_request_ms(「所有超时缺省的单一源」), 禁写死。
+    缺声明 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    value = (load_schema("config", code_repo_schema_root()).get("timeouts") or {}).get("gate_mcp_request_ms")
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        raise SchemaLoadError("config.schema.json timeouts.gate_mcp_request_ms 未声明或非正数")
+    return float(value) / 1000.0
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    reason = getattr(exc, "reason", None)
+    return isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(exc).lower()
+
+
 def _diagnose_connection_failure(base_url: str, error: Exception) -> str:
     """AIPOS-R6K件④: 连接失败双路诊断(loopback vs 配置URL)。
     
@@ -183,11 +205,12 @@ def _diagnose_connection_failure(base_url: str, error: Exception) -> str:
 class GateClient:
     """Streamable-HTTP MCP client for the Owner confirm workflow."""
 
-    def __init__(self, base_url: str, token: str, *, timeout: float = 10.0) -> None:
+    def __init__(self, base_url: str, token: str, *, timeout: float | None = None) -> None:
         self._base_url = base_url.rstrip("/")
         self._token = token  # raw token: never logged or returned
         self._session_id: str | None = None
-        self._timeout = timeout
+        # AIPOS-F90 件①(缺陷③): 缺省超时读声明(config.schema timeouts.gate_mcp_request_ms), 原写死 10s 致门认领建树期间假失败
+        self._timeout = float(timeout) if timeout is not None else default_gate_timeout_seconds()
         # AIPOS-R6K件②: Bypass any ambient HTTP proxy for gate calls (trust_env=False同义).
         # Gate流量永不经系统代理,对所有gate地址(不仅loopback)生效。
         self._opener = _request.build_opener(_request.ProxyHandler({}))
@@ -197,7 +220,7 @@ class GateClient:
     def token_fingerprint(self) -> str:
         return token_fingerprint(self._token)
 
-    def _rpc(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def _rpc(self, method: str, params: dict[str, Any] | None = None, *, timeout: float | None = None) -> dict[str, Any] | None:
         self._next_id += 1
         body = json.dumps({"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params or {}}).encode("utf-8")
         headers = {
@@ -211,7 +234,7 @@ class GateClient:
         
         # AIPOS-R6K件④: 连接失败时触发双路诊断
         try:
-            with self._opener.open(req, timeout=self._timeout) as response:
+            with self._opener.open(req, timeout=timeout if timeout is not None else self._timeout) as response:
                 issued = response.headers.get(SESSION_HEADER)
                 if issued:
                     self._session_id = issued
@@ -233,6 +256,9 @@ class GateClient:
                     # application/json 路径（原有逻辑）
                     payload = json.loads(raw)
         except (_request.URLError, OSError, ConnectionError, TimeoutError) as exc:
+            if _is_timeout(exc):
+                # AIPOS-F90 件①(缺陷③): 请求已发出、等应答超时 ≠ 门拒——门侧可能已落(调用方回读判定), 不做连接诊断
+                raise GateTimeout(f"gate did not answer within {timeout if timeout is not None else self._timeout:g}s ({method}): {exc}") from exc
             # 连接层失败: 启动双路诊断
             diagnosis = _diagnose_connection_failure(self._base_url, exc)
             raise GateError(f"Failed to connect to gate: {exc}{diagnosis}") from exc
@@ -245,8 +271,8 @@ class GateClient:
         result = self._rpc("initialize", {"protocolVersion": PROTOCOL_VERSION}) or {}
         return result
 
-    def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        result = self._rpc("tools/call", {"name": name, "arguments": arguments}) or {}
+    def call_tool(self, name: str, arguments: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        result = self._rpc("tools/call", {"name": name, "arguments": arguments}, timeout=timeout) or {}
         structured = result.get("structuredContent")
         if not isinstance(structured, dict):
             raise GateError(f"tool {name} returned no structuredContent")

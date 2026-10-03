@@ -112,8 +112,10 @@ def test_f73e_item1_verdict_actor_is_audit_claim_instance_not_report_self_claim(
                "# audit\n\n## 一句话结论\nPASS\n"))
     d = derive_next_step(AUDIT, gov)
     assert d["derivable"] and d["verb"] == "lybra_audit_verdict_dry_run", d
-    assert f"--actor {AUDITOR}" in d["command"] and f"--agent-instance {AUDITOR}" in d["command"], d["command"]
-    assert DRIVER not in d["command"], d["command"]
+    # AIPOS-F90 件②: 驱动方见产物入口命令; 身份断言看入口内部执行的薄壳命令 shell_command
+    assert "--kind verdict" in d["command"], d["command"]
+    assert f"--actor {AUDITOR}" in d["shell_command"] and f"--agent-instance {AUDITOR}" in d["shell_command"], d["shell_command"]
+    assert DRIVER not in d["shell_command"], d["shell_command"]
 
 
 def test_f73e_item1_return_actor_is_claim_instance(gov: Path):
@@ -122,7 +124,8 @@ def test_f73e_item1_return_actor_is_claim_instance(gov: Path):
     _write(gov / "task_cards" / TASK / "RETURN.md", _substantive_return(TASK))
     d = derive_next_step(TASK, gov)
     assert d["derivable"] and d["verb"] == "lybra_queue_return_dry_run", d
-    assert f"--actor {EXEC}" in d["command"] and f"--agent-instance {EXEC}" in d["command"], d["command"]
+    assert "--kind return" in d["command"], d["command"]  # AIPOS-F90 件②
+    assert f"--actor {EXEC}" in d["shell_command"] and f"--agent-instance {EXEC}" in d["shell_command"], d["shell_command"]
 
 
 @pytest.mark.parametrize("stage", ["close", "finalize", "return", "verdict"])
@@ -199,7 +202,8 @@ def test_f73e_item3_loop_chain_close_actor_exec_verdict_actor_auditor_driver_onl
     assert res.exit_code == 0 and res.outcome == "completed", text
     assert [c[0] for c in gate.calls] == ["return", "dispatch", "claim", "verdict", "finalize", "close"], gate.calls
     assert f"driver={DRIVER}" in text  # 驱动方身份只用于信封
-    by_action = {s.action_type: s.command for s in res.steps if s.kind == "execute" and s.command}
+    # AIPOS-F90 件②: return/verdict 步的 step.command 是产物入口命令, 入口内部执行的薄壳命令记在 step.shell_command
+    by_action = {s.action_type: (s.shell_command or s.command) for s in res.steps if s.kind == "execute" and s.command}
     assert f"--actor {EXEC} --confirm" in by_action["return"] and f"--agent-instance {EXEC}" in by_action["return"]
     assert f"--actor {AUDITOR}" in by_action["verdict"] and f"--agent-instance {AUDITOR}" in by_action["verdict"], by_action["verdict"]
     assert f"--actor {EXEC}" in by_action["finalize"], by_action["finalize"]

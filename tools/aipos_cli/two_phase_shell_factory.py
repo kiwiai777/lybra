@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tools.aipos_cli.confirm_client import GateClient, load_owner_token
+from tools.aipos_cli.confirm_client import GateClient, GateError, GateTimeout, load_owner_token
 from tools.aipos_cli.renderer import render_json
 
 
@@ -140,6 +140,74 @@ def _is_envelope_rejection(resp: dict[str, Any]) -> bool:
     return any(c.startswith("ENVELOPE_") for c in codes)
 
 
+def _stage_contract(verb_name: str) -> dict[str, Any]:
+    from tools.schema_loader import get_verb_contract
+
+    contract = get_verb_contract(verb_name) or {}
+    stage = contract.get("stage_contract") if isinstance(contract, dict) else None
+    return stage if isinstance(stage, dict) else {}
+
+
+def client_timeout_seconds(verb_name: str) -> float | None:
+    """AIPOS-F90 件①(缺陷③): 门动词的客户端等待上限——verbs.schema <verb>.stage_contract.client_timeout_ms 声明(须覆盖门处理时长,
+    如认领同步建工作树); 未声明 = None(GateClient 缺省 = config.schema timeouts.gate_mcp_request_ms)。禁写死秒数。"""
+    value = _stage_contract(verb_name).get("client_timeout_ms")
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"verbs.schema.json {verb_name}.stage_contract.client_timeout_ms 非正数")
+    return float(value) / 1000.0
+
+
+def readback_after_timeout(client: Any, verb_base: str, args_dict: dict[str, Any]) -> tuple[bool | None, str]:
+    """AIPOS-F90 件①(缺陷③): 等门应答超时后回读真相判定门侧是否已落(幂等: 已由本实例认领 = 成功)。
+
+    判据唯一声明 verbs.schema <verb_base>_dry_run.stage_contract.timeout_readback(read_verb + 落地条件), 读门的只读动词(不读文件)。
+    返回 (True=已落 / False=未落 / None=未声明判据或回读失败, 说明原文)。"""
+    decl = _stage_contract(f"{verb_base}_dry_run").get("timeout_readback")
+    if not isinstance(decl, dict):
+        return None, f"verbs.schema {verb_base}_dry_run 未声明 timeout_readback, 结果未知"
+    task_id = str(args_dict.get(str(decl.get("task_id_arg") or "task_id")) or "").strip()
+    expected = str(args_dict.get(str(decl.get("claimer_arg") or "agent_instance")) or "").strip()
+    try:
+        listing = client.call_tool(str(decl["read_verb"]), {})
+    except (GateError, KeyError) as exc:
+        return None, f"回读 {decl.get('read_verb')} 失败: {exc}"
+    data = listing.get("data") if isinstance(listing.get("data"), dict) else {}
+    for task in data.get("tasks") or []:
+        if not isinstance(task, dict) or str(task.get("task_id") or "") != task_id:
+            continue
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        state = str(task.get("queue_state") or "")
+        claimer = str(metadata.get(str(decl.get("claimer_field") or "claimed_by")) or "").strip()
+        landed = state == str(decl.get("landed_queue_state")) and bool(expected) and claimer == expected
+        return landed, f"{task_id}: queue_state={state} {decl.get('claimer_field')}={claimer or '(空)'} (期望 {decl.get('landed_queue_state')}/{expected})"
+    return False, f"{task_id}: 门的 {decl.get('read_verb')} 中查无此卡"
+
+
+def _call_with_readback(client: Any, verb: str, verb_base: str, args: dict[str, Any], replay_args: dict[str, Any],
+                        json_output: bool) -> tuple[dict[str, Any] | None, tuple[int, dict[str, Any]] | None]:
+    """调一个门动词; 等应答超时 → 回读判定(已落 = 成功返回, 不再执行第二次; 未落/未知 = 出声失败带出口)。"""
+    try:
+        return client.call_tool(verb, args, timeout=client_timeout_seconds(verb)), None
+    except GateTimeout as exc:
+        landed, detail = readback_after_timeout(client, verb_base, replay_args)
+        if landed:
+            resp = {"ok": True, "readback_landed": True, "readback": detail, "timeout": str(exc)}
+            if json_output:
+                print(render_json(resp))
+            else:
+                print(f"{verb_base.replace('lybra_', '').replace('_', ' ')} landed (等门应答超时后回读确认门侧已落, 不重复提交): {detail}")
+            return None, (0, resp)
+        task_id = replay_args.get("task_id") or replay_args.get("audit_task_id") or "<卡ID>"
+        state = "门侧未落" if landed is False else "结果未知"
+        return None, _fail(f"{verb} 等门应答超时({exc}); 回读: {state} — {detail}。出口: lybra next --task-id {task_id} 重推导核实后再推进, 禁直接重复提交")
+    except GateError as exc:
+        return None, _fail(f"{verb} failed: {exc}")
+
+
 def _fail(error: str) -> tuple[int, dict[str, Any]]:
     """错误路径必须出声(exit 1 + stderr): 静默失败 = 不可审计(F22-fix1 可观测性补齐)"""
     print(f"two_phase_shell_factory: {error}", file=sys.stderr)
@@ -198,12 +266,11 @@ def execute_two_phase_verb(
     autonomy_mode = args_dict.get("autonomy_mode", "Supervised")
     use_one_phase = (autonomy_mode == "PreAuthorized")
     
-    # 3. Step 1: dry_run（PreAuthorized 时门自动放行）
+    # 3. Step 1: dry_run（PreAuthorized 时门自动放行）; AIPOS-F90 件①: 等应答超时 → 回读判定, 不得直接报失败
     dry_run_verb = f"{verb_base}_dry_run"
-    try:
-        dry_run_resp = client.call_tool(dry_run_verb, args_dict)
-    except Exception as exc:
-        return _fail(f"{dry_run_verb} failed: {exc}")
+    dry_run_resp, early = _call_with_readback(client, dry_run_verb, verb_base, args_dict, args_dict, json_output)
+    if early is not None:
+        return early
 
     # 检查 BLOCK
     verdict = dry_run_resp.get("verdict", "")
@@ -268,10 +335,9 @@ def execute_two_phase_verb(
         # verbs.schema lybra_queue_close_dry_run.confirm_via=replay_args: confirm 重放 task_id/actor/closure_evidence, 无 dry_run_token
         confirm_args = {k: v for k, v in args_dict.items() if k in ("task_id", "actor", "closure_evidence")}
 
-    try:
-        confirm_resp = client.call_tool(confirm_verb, confirm_args)
-    except Exception as exc:
-        return _fail(f"{confirm_verb} failed: {exc}")
+    confirm_resp, early = _call_with_readback(client, confirm_verb, verb_base, confirm_args, args_dict, json_output)
+    if early is not None:
+        return early
 
     # 5. 输出结果
     if json_output:

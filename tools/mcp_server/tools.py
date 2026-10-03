@@ -967,6 +967,21 @@ def _map_controlled_execute_error(response: dict[str, Any], *, dry_run_tool: str
     )
 
 
+def _owner_policy_ref_required(error_fn: Any, operation: str, requested_mode: str) -> dict[str, Any]:
+    """AIPOS-F90 件①(缺陷②): OWNER_POLICY_REF_REQUIRED 的唯一文案——如实带出请求的 autonomy_mode(PreAuthorized 时
+    owner_policy_ref = 覆盖驱动方的信封 policy_id; Supervised 时 = Owner 批准/策略引用), 禁写死模式名误报。"""
+    mode = str(requested_mode or "").strip() or "(未给出)"
+    if mode == AUTONOMY_MODE_PREAUTHORIZED:
+        hint = "Pass owner_policy_ref = the policy_id of the Owner-signed envelope (5_tasks/policies/) covering the driver and this card; `lybra loop` derives it."
+    else:
+        hint = "Pass the Owner approval or policy reference authorizing this supervised action."
+    return error_fn(
+        "OWNER_POLICY_REF_REQUIRED",
+        f"owner_policy_ref is required for MCP {operation} (requested autonomy_mode={mode}).",
+        hint,
+    )
+
+
 def _queue_claim_error(error_code: str, message: str, suggested_next_action: str) -> dict[str, Any]:
     return _teaching_error(
         error_code,
@@ -1086,11 +1101,21 @@ def _agent_runtime_value(args: dict[str, Any]) -> dict[str, Any] | None:
         return None
     harness = str(raw.get("harness") or "").strip() or None
     model_self_reported = str(raw.get("model_self_reported") or "").strip() or None
+    # AIPOS-F90 件②: 产品(artifact ingest)按会话记录定位器填写的运行时模型/出处/自报不一致标记——原样记录
+    model = str(raw.get("model") or "").strip() or None
+    model_source = str(raw.get("model_source") or "").strip() or None
+    model_mismatch = raw.get("model_mismatch") if isinstance(raw.get("model_mismatch"), bool) else None
     tokens_in = _coerce_int_or_none(raw.get("tokens_in"))
     tokens_out = _coerce_int_or_none(raw.get("tokens_out"))
     bundle: dict[str, Any] = {}
     if harness:
         bundle["harness"] = harness
+    if model:
+        bundle["model"] = model
+    if model_source:
+        bundle["model_source"] = model_source
+    if model_mismatch is not None:
+        bundle["model_mismatch"] = model_mismatch
     if model_self_reported:
         bundle["model_self_reported"] = model_self_reported
     if tokens_in is not None:
@@ -2286,11 +2311,17 @@ def _match_claim_envelope(
     # AIPOS-363 S4: carry the calling role so an envelope may name an AIPOS-352 custom role
     # (e.g. agent_or_role: kaia-asst) and still match an agent claiming under that role.
     # The role is read from the Owner-minted capability token (authoritative, not self-reported).
+    # AIPOS-F90 件①: 信封 task_selector 判定对象(审计卡 = 被审卡), 与驱动方 loop 同一规则 autonomy_policy.envelope_subject
+    from tools.aipos_cli.autonomy_policy import envelope_subject
+
+    subject_id, subject_mode, subject_project = envelope_subject(
+        repo_root, task_id=str(snapshot.get("task_id") or task_id or ""), task_mode=str(snapshot.get("task_mode") or ""),
+        project=str(snapshot.get("project") or ""), reviewed_task_id=str(snapshot.get("reviewed_task_id") or ""))
     matched, inner_reason, error_code = match_claim_envelope(
         policy=policy,
-        task_id=str(snapshot.get("task_id") or task_id or ""),
-        task_mode=str(snapshot.get("task_mode") or ""),
-        project=str(snapshot.get("project") or ""),
+        task_id=subject_id,
+        task_mode=subject_mode,
+        project=subject_project,
         agent_instance=envelope_instance,
         actor=envelope_actor,
         now=datetime.now(timezone.utc),
@@ -2475,11 +2506,8 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         return _queue_claim_error("ACTOR_REQUIRED", "actor is required.", "Pass the visible claimant actor.")
     owner_policy_ref = str(args.get("owner_policy_ref") or "").strip()
     if not owner_policy_ref:
-        return _queue_claim_error(
-            "OWNER_POLICY_REF_REQUIRED",
-            "owner_policy_ref is required for Supervised MCP queue_claim.",
-            "Pass the Owner approval or policy reference authorizing this supervised session.",
-        )
+        # AIPOS-F90 件①(缺陷②): 拒因如实报请求的 autonomy_mode(原文案写死 Supervised, PreAuthorized 请求被误报成 Supervised 拒因)
+        return _owner_policy_ref_required(_queue_claim_error, "queue_claim", requested_mode)
     agent_instance = str(args.get("agent_instance") or "").strip()
     if not agent_instance:
         return _queue_claim_error(
@@ -2724,11 +2752,7 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
         return _queue_return_error("ACTOR_REQUIRED", "actor is required.", "Pass the visible returning actor.")
     owner_policy_ref = str(args.get("owner_policy_ref") or "").strip()
     if not owner_policy_ref:
-        return _queue_return_error(
-            "OWNER_POLICY_REF_REQUIRED",
-            "owner_policy_ref is required for Supervised MCP queue_return.",
-            "Pass the Owner approval or policy reference authorizing this supervised return.",
-        )
+        return _owner_policy_ref_required(_queue_return_error, "queue_return", str(args.get("autonomy_mode") or "").strip())
     agent_instance = str(args.get("agent_instance") or "").strip()
     if not agent_instance:
         return _queue_return_error(
@@ -2995,11 +3019,7 @@ def _validate_supervised_audit_args(args: dict[str, Any], *, operation: str) -> 
         return "", _audit_error("ACTOR_REQUIRED", "actor is required.", "Pass the visible audit actor.")
     owner_policy_ref = str(args.get("owner_policy_ref") or "").strip()
     if not owner_policy_ref:
-        return "", _audit_error(
-            "OWNER_POLICY_REF_REQUIRED",
-            f"owner_policy_ref is required for Supervised MCP {operation}.",
-            "Pass the Owner approval or policy reference authorizing this supervised action.",
-        )
+        return "", _owner_policy_ref_required(_audit_error, str(operation), mode)
     agent_instance = str(args.get("agent_instance") or "").strip()
     if not agent_instance:
         return "", _audit_error(
@@ -5779,6 +5799,9 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                     "properties": {
                         "harness": {"type": "string"},
                         "model_self_reported": {"type": "string"},
+                        "model": {"type": "string"},
+                        "model_source": {"type": "string"},
+                        "model_mismatch": {"type": "boolean"},
                         "tokens_in": {"type": "integer"},
                         "tokens_out": {"type": "integer"}
                     },
@@ -5899,6 +5922,9 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                     "properties": {
                         "harness": {"type": "string"},
                         "model_self_reported": {"type": "string"},
+                        "model": {"type": "string"},
+                        "model_source": {"type": "string"},
+                        "model_mismatch": {"type": "boolean"},
                         "tokens_in": {"type": "integer"},
                         "tokens_out": {"type": "integer"}
                     },

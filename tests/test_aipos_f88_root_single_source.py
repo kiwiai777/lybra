@@ -153,10 +153,14 @@ def test_item1_gate_claim_tree_failure_is_explicit_refusal_not_warning(tmp_path,
     _card(gov, task_id, "pending")
     result = _claim(gov, task_id)
     _show(f"[件①·建树失败] worktree_error={result.get('worktree_error')}")
-    assert result["wrote"] is True and result["worktree_created"] is False
+    # AIPOS-F90 件①(Owner 2026-10-02 裁定, 承接 F88 G4): 建树失败 = 门拒认领(BLOCK), 队列与记录零变更, 不再「已落盘 + worktree_error」
+    assert result["verdict"] == "BLOCK" and result.get("wrote") is not True and result["worktree_created"] is False
     assert "不是 git 仓根" in result["worktree_error"] and str(not_git) in result["worktree_error"]
+    assert any(r.startswith("WORKTREE_CREATE_FAILED") for r in result["blocking_reasons"]), result["blocking_reasons"]
     assert not [w for w in result["warnings"] if "orktree" in w], result["warnings"]
-    assert "✗ 卡工作树未建立(认领已落盘)" in render_queue_mutation_text(result)
+    assert "✗ 卡工作树未建立(认领被拒, 队列与记录未变更)" in render_queue_mutation_text(result)
+    assert (gov / "5_tasks" / "queue" / "pending" / f"{task_id.lower()}.md").is_file()
+    assert not list((gov / "5_tasks" / "records").rglob(f"*{task_id}*"))
 
 
 def test_item1_worktree_manager_build_path_retired_to_delegation(tmp_path, monkeypatch):
@@ -180,7 +184,7 @@ def test_item1_worktree_manager_build_path_retired_to_delegation(tmp_path, monke
     assert "ai-project-os" not in src
     qm = (REPO_ROOT / "tools" / "aipos_cli" / "queue_mutation.py").read_text(encoding="utf-8")
     assert "worktree_manager import" not in qm and "WorktreeManager(" not in qm and "WorktreeManager.from" not in qm.replace("原 WorktreeManager.from", "")
-    assert "_ensure_worktree(repo_root, task_id_val, card_frontmatter=" in qm
+    assert 'built_worktree = _ensure_worktree(repo_root, str(updated_metadata.get("task_id", "")), card_frontmatter=' in qm  # AIPOS-F90 件①: 写入前建树
 
 
 # ===========================================================================
