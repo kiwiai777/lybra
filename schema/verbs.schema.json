@@ -204,7 +204,17 @@
         ],
         "self_confirm_mechanism": "AIPOS-328: executor passes owner_confirmation_token='OWNER_CONFIRMED' literal (not a secret, not owner scope)",
         "owner_confirmation_required_in_response": false,
-        "client_hint_template": "AIPOS-328: executor自行confirm。使用 lybra_queue_claim_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。"
+        "client_hint_template": "AIPOS-328: executor自行confirm。使用 lybra_queue_claim_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。",
+        "client_timeout_ms": 180000,
+        "client_timeout_note": "AIPOS-F90 件①(缺陷③): 认领在门内同步建卡工作树(git worktree add)+ 落记录, 客户端等待上限须覆盖门处理时长(原 GateClient 写死 10s 致假失败); 未声明 client_timeout_ms 的动词用 config.schema timeouts.gate_mcp_request_ms。读取口 two_phase_shell_factory.client_timeout_seconds。",
+        "timeout_readback": {
+          "read_verb": "lybra_queue_list",
+          "task_id_arg": "task_id",
+          "landed_queue_state": "claimed",
+          "claimer_field": "claimed_by",
+          "claimer_arg": "agent_instance",
+          "rule": "AIPOS-F90 件①(缺陷③): 等门应答超时不得直接报失败——经门只读动词回读该卡: queue_state==landed_queue_state 且 metadata.<claimer_field>==请求的 <claimer_arg> = 门侧已落(幂等: 已由本实例认领 = 成功, 不重复提交); 否则未落/未知 = 出声失败带出口(lybra next 重推导核实)。dry_run 与 confirm 两阶段同读此判据(two_phase_shell_factory.readback_after_timeout 唯一实现)。"
+        }
       },
       "parameters": {
         "type": "object",
@@ -287,7 +297,8 @@
         "self_confirm_allowed": [
           "executor_with_owner_confirmed_literal"
         ],
-        "owner_confirmation_required_in_response": false
+        "owner_confirmation_required_in_response": false,
+        "client_timeout_ms": 180000
       },
       "parameters": {
         "type": "object",
@@ -339,7 +350,8 @@
         ],
         "self_confirm_mechanism": "AIPOS-328: executor passes owner_confirmation_token='OWNER_CONFIRMED' literal",
         "owner_confirmation_required_in_response": false,
-        "client_hint_template": "AIPOS-328: executor自行confirm。使用 lybra_queue_return_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。"
+        "client_hint_template": "AIPOS-328: executor自行confirm。使用 lybra_queue_return_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。",
+        "client_timeout_ms": 120000
       },
       "parameters": {
         "type": "object",
@@ -422,6 +434,18 @@
               "model_self_reported": {
                 "type": "string"
               },
+              "model": {
+                "type": "string",
+                "description": "AIPOS-F90 件②: 产品按卡面 harness 的会话记录定位器(card.schema intent_face.harness.session_record_locators)取的运行时模型; 取不到 = 定位器声明的 missing_value(「未声明会话记录」), 不采信自报"
+              },
+              "model_source": {
+                "type": "string",
+                "description": "AIPOS-F90 件②: 运行时模型出处(<harness>:<会话记录文件名>), 取不到 = missing_value"
+              },
+              "model_mismatch": {
+                "type": "boolean",
+                "description": "AIPOS-F90 件②: 自报(model_self_reported)与运行时模型不一致 = true(自报只作对照, 记录标出)"
+              },
               "tokens_in": {
                 "type": "integer"
               },
@@ -499,6 +523,7 @@
       ],
       "cli_command": "lybra queue close",
       "stage_contract": {
+        "client_timeout_ms": 120000,
         "two_stage": true,
         "dry_run_emits_token": false,
         "confirm_mechanism": "replay_args: confirm replays task_id + actor + closure_evidence (no dry_run_token)",
@@ -1273,7 +1298,8 @@
         ],
         "self_confirm_mechanism": "AIPOS-328: auditor passes owner_confirmation_token='OWNER_CONFIRMED' literal",
         "owner_confirmation_required_in_response": false,
-        "client_hint_template": "AIPOS-328: auditor自行confirm。使用 lybra_audit_verdict_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。"
+        "client_hint_template": "AIPOS-328: auditor自行confirm。使用 lybra_audit_verdict_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。Owner不需参与此步骤。",
+        "client_timeout_ms": 120000
       },
       "parameters": {
         "type": "object",
@@ -1339,6 +1365,18 @@
               },
               "model_self_reported": {
                 "type": "string"
+              },
+              "model": {
+                "type": "string",
+                "description": "AIPOS-F90 件②: 产品按卡面 harness 的会话记录定位器(card.schema intent_face.harness.session_record_locators)取的运行时模型; 取不到 = 定位器声明的 missing_value(「未声明会话记录」), 不采信自报"
+              },
+              "model_source": {
+                "type": "string",
+                "description": "AIPOS-F90 件②: 运行时模型出处(<harness>:<会话记录文件名>), 取不到 = missing_value"
+              },
+              "model_mismatch": {
+                "type": "boolean",
+                "description": "AIPOS-F90 件②: 自报(model_self_reported)与运行时模型不一致 = true(自报只作对照, 记录标出)"
               },
               "tokens_in": {
                 "type": "integer"
@@ -1489,6 +1527,8 @@
         "cli"
       ],
       "cli_command": "lybra loop",
+      "step_timeout_seconds": 600,
+      "step_timeout_note": "AIPOS-F90 件①(缺陷③): loop/next --run 执行派生命令子进程的硬上限(next_resolver.loop_step_timeout_seconds 唯一读取口, 原写死 120s); 不变量: ≥ 门 initialize(config.schema timeouts.gate_mcp_request_ms) + 两阶段最大 client_timeout_ms×2 + 超时回读一次, 夹具核。",
       "single_implementation": {
         "derivation_core": "tools/aipos_cli/next_resolver.derive_next_step (AIPOS-F71 唯一推导核, 禁第二推导核)",
         "step_executor": "tools/aipos_cli/next_resolver.execute_derived_action (AIPOS-F73 next --run 同一执行体)",
@@ -1580,6 +1620,7 @@
           "finalize",
           "close"
         ],
+        "subject_rule": "AIPOS-F90 件①: 信封 task_selector(task_mode/project/task_ids)的判定对象——审计卡(task_mode=audit 且声明 reviewed_task_id)= 被审卡, 其余 = 本卡; 驱动方(loop_driver.find_envelope)与门(_match_claim_envelope)同读唯一实现 autonomy_policy.envelope_subject。审计卡认领同样计入信封额度(count_bound)。",
         "allowed_verbs_note": "loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。AIPOS-F78B 件③: 门侧驱动方一阶段放行(queue return/audit-verdict/queue close 的 autonomy_mode=PreAuthorized)也读此集合判 verb 是否在信封授权内(claim 经 _match_claim_envelope, 其余经 _match_driver_envelope, 同一 matcher autonomy_policy.match_claim_envelope)。",
         "one_stage_release": "驱动方 token(roles.schema driver.role_class 或其 role_class 自定义角色) + autonomy_mode=PreAuthorized + owner_policy_ref 命名的信封(agent_or_role 覆盖驱动方实例/角色类, task_selector 覆盖本卡, 有效/时间窗/额度) → 门在 dry_run 一跳内落记录(preauthorized_release=true), 不索 owner_confirm; 不匹配 = BLOCK + envelope_guards 出口, CLI 薄壳 exit 5(无信封)。"
       },
@@ -1638,6 +1679,7 @@
           "workspace_root": {"type": "string", "description": "治理根; 缺省自发现"},
           "connection_json": {"type": "string", "description": "connection.json(驱动方 token, 永不上屏)"},
           "dry_run": {"type": "boolean", "description": "只校验与打印将执行的薄壳命令, 不提交"},
+          "kind": {"type": "string", "enum": ["return", "verdict", "finalization"], "description": "AIPOS-F90 件②: 推导核声明的入门节点; 给出时与入口自判种类不符即拒(INGEST_KIND_MISMATCH)。return/verdict 步的派生命令恒带此参数, loop 据此映射动作(next_resolver._action_type_for_command)"},
           "json": {"type": "boolean", "description": "JSON 输出"}
         },
         "required": ["task_id"],

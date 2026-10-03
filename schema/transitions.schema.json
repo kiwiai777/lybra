@@ -904,7 +904,20 @@
         "verdict ∈ N4.record.allowed_verdict_values",
         "commit_sha == 被审卡分支 tip(git rev-parse card/<reviewed_task_id>), 否则拒(INGEST_TIP_MISMATCH): 审的必须是当前产物"
       ],
-      "submits_via": "lybra audit-verdict --confirm(驱动方 token, artifact_subject 从被审分支 tip 取 commit_sha/tree_hash)"
+      "submits_via": "lybra audit-verdict --confirm(驱动方 token, artifact_subject 从被审分支 tip 取 commit_sha/tree_hash, agent_runtime=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②)",
+      "derived_command": "AIPOS-F90 件②: 推导核对 return/verdict 步给驱动方的命令 = `lybra artifact ingest --task-id <ID> --kind <return|verdict> --workspace-root <治理根>`; 入口内部执行推导核同时给出的 shell_command(唯一构建), 驱动方不再手提 audit-verdict / queue return",
+      "report_snapshot": {
+        "description": "AIPOS-F90 件②(2026-10-02 事故: 已结案卡被重审并覆盖原审计报告, task_cards 被 gitignore 不可恢复): 裁决入门时门把审计报告全文逐字节快照进 records, 与裁决记录同一批受控落盘; 报告事后被覆盖仍可从快照复原。",
+        "relative_to": "records",
+        "location": "audit_verdicts/{reviewed_task_id}/report_snapshots/{verdict_id}.md",
+        "location_note": "放在该卡裁决记录目录下的子目录: 记录目录直扫(glob *.md)只见裁决记录本身, 快照不被当作裁决/手写记录",
+        "record_type": "audit_report_snapshot",
+        "source": "审计报告 = 推导核唯一就绪判据 next_resolver._check_verdict_artifact(verdict_root 声明 + verdict_file_candidates)命中的文件",
+        "verdict_record_fields": ["report_snapshot_ref", "report_snapshot_sha256", "report_source_ref"],
+        "restore": "cp <治理根>/<report_snapshot_ref> <治理根>/<report_source_ref>; 以 report_snapshot_sha256 核对逐字节一致",
+        "writer": "tools/aipos_cli/board_adapter._audit_report_snapshot_plan → audit_verdict_task 受控写入(唯一实现)",
+        "missing_report": "未找到审计报告(如非代码卡顾问自审无报告文件)= 不写快照, 裁决记录不带 report_snapshot_* 字段, 裁决照落(不因无报告而拒)"
+      }
     },
     "finalization": {
       "description": "AIPOS-F78B 件②: finalize_mode=external 项目的 finalize 产物入口——被审卡裁决 PASS 后, 外部 FINALIZE 卡(merge/push/部署在产品仓所在机执行)交回的 Return 经 `lybra artifact ingest --task-id <被审卡ID>` 读取, 铸 finalization 记录; internal 项目不走此段。",

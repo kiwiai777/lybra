@@ -133,6 +133,22 @@ from tools.aipos_cli.project_structure import (
 )
 
 
+def _agent_runtime_arg(args: Any) -> dict[str, Any] | None:
+    """AIPOS-F90 件②: --agent-runtime JSON(产品填写的运行时模型 bundle)。缺 = {}; 不可解析/非对象 = 出声 + None(调用方 exit 1)。"""
+    raw = getattr(args, "agent_runtime", None)
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"Error: Invalid JSON in --agent-runtime: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(value, dict):
+        print("Error: --agent-runtime must be a JSON object", file=sys.stderr)
+        return None
+    return value
+
+
 def _filter_my_tasks(report: dict[str, Any], actor: str, profiles: dict[str, Any]) -> dict[str, Any]:
     filtered = [
         task
@@ -143,22 +159,42 @@ def _filter_my_tasks(report: dict[str, Any], actor: str, profiles: dict[str, Any
     return {**report, "scope": "my_tasks", "actor": actor, "tasks": filtered, **availability}
 
 
-def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+def _resolve_kickoff_ref(repo_root: Path, ref: str) -> str:
+    """AIPOS-F90 件③: 冷启动指向(卡号或卡文件路径) → 卡 task_id(路径读卡面 frontmatter, 唯一读取口); 解析不到原样返回(按卡号判)。"""
+    text = str(ref or "").strip()
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path(repo_root) / candidate
+    if (text.endswith(".md") or "/" in text) and candidate.is_file():
+        from tools.aipos_cli.next_resolver import _read_frontmatter
+
+        return str(_read_frontmatter(candidate).get("task_id") or candidate.stem).strip()
+    return text
+
+
+def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any], repo_root: Path, *, actor: str = "",
+                             requested: str | None = None) -> dict[str, Any]:
     """AIPOS-F86 件①: my-tasks --json 的每张 claimed 卡附开工面字段(card_path / worktree_* / report_*)。
 
     推导只在产品侧一处: next_resolver.card_workstation_view(→ card_worktree_location / card_report_path, 与 claim 建树、
     card render 同一函数); 工位 /go 只读这些字段。不可推导 / 尚未建立 = 明确拒因字段, 不输出空串。
     """
-    from tools.aipos_cli.next_resolver import card_workstation_view, select_next_card
+    from tools.aipos_cli.next_resolver import card_workstation_view, kickoff_refusal, select_next_card
 
     root = Path(repo_root).resolve()
+    requested_id = _resolve_kickoff_ref(root, requested) if requested else None
     candidates: list[dict[str, Any]] = []
     for summary, task in zip(output["tasks"], actor_report["tasks"]):
         if summary.get("queue_state") != "claimed":
             continue
+        if requested_id and str(task.get("task_id") or "") != requested_id:
+            continue
         summary["card_path"] = str(root / str(task.get("path")))
         summary.update(card_workstation_view(root, str(task.get("task_id") or ""), task.get("metadata") or {}))
         metadata = task.get("metadata") or {}
+        # AIPOS-F90 件③: 开工核验(本人在办/未结案/产物未交), 与「以卡号/路径冷启动」同一判据
+        summary["kickoff_refusal"] = kickoff_refusal(root, str(task.get("task_id") or ""), actor, queue_state="claimed",
+                                                     card_frontmatter=metadata)
         candidates.append({
             **summary,
             "claimed_at": metadata.get("claimed_at"),
@@ -166,6 +202,23 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
         })
     # AIPOS-F87 件③: 开工选卡由产品给出(判据唯一声明 next_resolver.NEXT_CARD_RULE), 工位 /go 只读 next_card
     output.update(select_next_card(candidates))
+    if requested_id and not candidates:
+        # AIPOS-F90 件③: 冷启动指向的卡不在本实例的 claimed 集 → 按队列真相给拒因(未认领/已结案/非本人/找不到)
+        from tools.aipos_cli.next_resolver import _read_frontmatter
+        from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+        try:
+            card_path, queue_state = find_task_card(root, requested_id)
+        except AmbiguousTaskCard as exc:
+            output["next_card_excluded"] = [{"task_id": requested_id, "code": "NOT_FOUND", "reason": str(exc)}]
+        else:
+            refusal = kickoff_refusal(root, requested_id, actor, queue_state=queue_state,
+                                      card_frontmatter=_read_frontmatter(card_path) if card_path else {})
+            if refusal is None:  # 队列里在办且判据放行, 但不在本实例 my-tasks 名下 = 非本人
+                refusal = {"task_id": requested_id, "code": "NOT_MINE", "reason": f"卡的认领实例不是本实例, 不能开工: {requested_id} 不在 {actor} 的已认领卡中"}
+            output["next_card_excluded"] = [refusal]
+    if requested_id:
+        output["kickoff_requested"] = requested_id
     return output
 
 
@@ -1404,6 +1457,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_return_parser.add_argument("--confirm", action="store_true", help="AIPOS-F33: Two-step gate return (dry_run + confirm via MCP, executor self-confirm). Thin shell over same gate verbs as /lybra return and tryAutoReturn.")
     queue_return_parser.add_argument("--connection-json", help="Path to connection.json (for --confirm gate access)")
     queue_return_parser.add_argument("--active-session-id", help="Active session ID (for --confirm)")
+    queue_return_parser.add_argument("--agent-runtime", default=None, help="AIPOS-F90 件②: 产品填写的运行时模型 bundle(JSON: harness/model/model_source/model_self_reported/model_mismatch), 由 artifact ingest 按会话记录定位器生成")
     queue_return_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-C1 大项A: queue close subcommand (derived from verbs.schema lybra_queue_close)
@@ -1432,6 +1486,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     my_tasks_parser = subparsers.add_parser("my-tasks", help="Render tasks for an actor")
     my_tasks_parser.add_argument("--actor", required=True, help="Role instance or agent instance")
+    my_tasks_parser.add_argument("--task-id", default=None, help="AIPOS-F90 件③: 冷启动指向的卡(卡号或卡文件路径)——只核验这一张: 非 claimed/非本实例/已结案/产物已交即拒并给原因(工位 /go <卡号> 用)")
     my_tasks_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     needs_owner_parser = subparsers.add_parser("needs-owner", help="Render owner review tasks")
@@ -1582,6 +1637,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verdict_parser.add_argument("--artifact-subject-repository", help="AIPOS-F73前置②: Repository identifier for artifact_subject (required for code tasks)")
     audit_verdict_parser.add_argument("--artifact-subject-commit-sha", help="AIPOS-F73前置②: Commit SHA for artifact_subject (required for code tasks)")
     audit_verdict_parser.add_argument("--artifact-subject-tree-hash", help="AIPOS-F73前置②: Tree hash for artifact_subject (required for code tasks)")
+    audit_verdict_parser.add_argument("--agent-runtime", default=None, help="AIPOS-F90 件②: 产品填写的运行时模型 bundle(JSON: harness/model/model_source/model_self_reported/model_mismatch), 由 artifact ingest 按会话记录定位器生成")
     audit_verdict_parser.add_argument("--confirm", action="store_true", help="AIPOS-F22: Two-phase gate verdict (dry_run + confirm via薄壳工厂, auditor self-confirm)")
     audit_verdict_parser.add_argument("--gate-url", default=None, help="Gate MCP server URL (default: http://127.0.0.1:7118)")
     audit_verdict_parser.add_argument("--connection-json", help="Path to connection.json (default: .lybra/connection.json in workspace)")
@@ -1996,6 +2052,9 @@ def build_parser() -> argparse.ArgumentParser:
     artifact_ingest_parser.add_argument("--workspace-root", type=Path, help="治理根; 缺省自发现")
     artifact_ingest_parser.add_argument("--connection-json", help="connection.json(驱动方 token, 永不上屏)")
     artifact_ingest_parser.add_argument("--dry-run", action="store_true", help="只校验与打印将执行的薄壳命令, 不提交")
+    artifact_ingest_parser.add_argument("--kind", choices=["return", "verdict", "finalization"], default=None,
+                                        help="AIPOS-F90 件②: 推导核声明的入门节点(return=执行体 Return / verdict=审计报告 / finalization=外部 FINALIZE Return); "
+                                             "给出时与产物入口自判的种类不符即拒(INGEST_KIND_MISMATCH)")
     artifact_ingest_parser.add_argument("--json", action="store_true", help="JSON 输出")
 
     # AIPOS-F71: 退役旧入口 — turn-advancer 与 next-step 保留为兼容转发(输出退役提示)
@@ -4229,14 +4288,24 @@ def main(argv: list[str] | None = None) -> int:
             print("Error: --confirm needs connection.json (use --connection-json or set LYBRA_CONNECTION_JSON)", file=sys.stderr)
             return 1
         
+        # AIPOS-F90 件①(缺陷①②): PreAuthorized 一段式必带覆盖驱动方的信封 policy_id——缺即本地拒(exit 5 无信封出口),
+        # 不发到门再被误报成 Supervised 拒因; 原缺省写死的信封 id 退役(换项目即错)
+        autonomy_mode = getattr(args, "autonomy_mode", None) or "Supervised"
+        owner_policy_ref = str(getattr(args, "owner_policy_ref", None) or "").strip()
+        if autonomy_mode == "PreAuthorized" and not owner_policy_ref:
+            from tools.aipos_cli.loop_driver import exit_code_for, load_loop_contract
+
+            print("Error: --autonomy-mode PreAuthorized 须带 --owner-policy-ref <覆盖驱动方与本卡的信封 policy_id>"
+                  "(5_tasks/policies/; 推进请用 `lybra loop --task-id <卡ID>`, 推导核自动带上)", file=sys.stderr)
+            return exit_code_for(load_loop_contract(), "no_envelope")
         # 构造动词参数（按 verbs.schema 的 lybra_queue_claim_dry_run）
         verb_args = {
             "task_id": getattr(args, "task_id", None),
             "task_path": getattr(args, "path", None),
             "actor": args.actor,
-            "agent_instance": getattr(args, "agent_instance", args.actor),
-            "autonomy_mode": getattr(args, "autonomy_mode", "Supervised"),
-            "owner_policy_ref": getattr(args, "owner_policy_ref", "pol_lybra_dev_9"),
+            "agent_instance": getattr(args, "agent_instance", None) or args.actor,
+            "autonomy_mode": autonomy_mode,
+            "owner_policy_ref": owner_policy_ref,
         }
         if getattr(args, "active_session_id", None):
             verb_args["active_session_id"] = args.active_session_id
@@ -4588,6 +4657,11 @@ def main(argv: list[str] | None = None) -> int:
                 verb_args["active_session_id"] = args.active_session_id
             if getattr(args, "actual_model", None):
                 verb_args["actual_model"] = args.actual_model
+            runtime_bundle = _agent_runtime_arg(args)
+            if runtime_bundle is None and getattr(args, "agent_runtime", None):
+                return 1
+            if runtime_bundle:
+                verb_args["agent_runtime"] = runtime_bundle
             
             # AIPOS-F78 前置零①: 账务动词一律驱动方 token(roles.schema driver), actor=卡实例(claimer)
             from tools.aipos_cli.two_phase_shell_factory import resolve_driver_role_from_connection
@@ -4988,7 +5062,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "my-tasks":
         actor_report = _filter_my_tasks(report, args.actor, profiles)
         if args.json:
-            print(render_json(_attach_workstation_view(_json_report(actor_report, records=records), actor_report, repo_root)))
+            print(render_json(_attach_workstation_view(_json_report(actor_report, records=records), actor_report, repo_root,
+                                                       actor=args.actor, requested=getattr(args, "task_id", None))))
         else:
             print(render_my_tasks_text(actor_report, args.actor))
         return 0
@@ -5167,6 +5242,11 @@ def main(argv: list[str] | None = None) -> int:
         }
         if artifact_subject:
             verb_args["artifact_subject"] = artifact_subject
+        runtime_bundle = _agent_runtime_arg(args)
+        if runtime_bundle is None and getattr(args, "agent_runtime", None):
+            return 1
+        if runtime_bundle:
+            verb_args["agent_runtime"] = runtime_bundle
         exit_code, _ = execute_two_phase_verb(
             verb_base="lybra_audit_verdict",
             args_dict=verb_args,

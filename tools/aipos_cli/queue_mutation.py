@@ -751,6 +751,24 @@ def mutate_queue_task(
     if result["verdict"] == Verdict.BLOCK:
         return result
 
+    # AIPOS-F90 件①(Owner 2026-10-02 裁定「门认领建工作树失败 = 直接拒绝认领」, 承接 F88 G4): code 卡认领在任何写入
+    # (记录/骨架/卡面迁移)之前先经全产品唯一建树实现 next_resolver._ensure_worktree 建/复用卡工作树; 失败 = 认领 BLOCK,
+    # 拒因带建树原文与出口, 队列与记录零变更(不留 claimed 无工作树的卡)。
+    built_worktree: dict[str, Any] | None = None
+    if action == RecordType.CLAIM and str(updated_metadata.get("task_mode", "")) == "code":
+        from tools.aipos_cli.next_resolver import _ensure_worktree
+
+        built_worktree = _ensure_worktree(repo_root, str(updated_metadata.get("task_id", "")), card_frontmatter=dict(updated_metadata))
+        if not built_worktree.get("ok"):
+            reason = str(built_worktree.get("message") or "worktree 建立失败(无拒因原文)")
+            result["verdict"] = Verdict.BLOCK
+            result["blocking_reasons"].append(f"WORKTREE_CREATE_FAILED: 卡工作树建立失败, 认领被拒(队列与记录未变更): {reason}")
+            result["worktree_created"] = False
+            result["worktree_error"] = reason
+            result["would_write"] = False
+            result["would_move"] = False
+            return result
+
     # AIPOS-F64-fix1: 迁移到统一 writer (write_records_atomic)
     if with_records:
         from tools.aipos_cli.record_writer import write_records_atomic
@@ -802,34 +820,17 @@ def mutate_queue_task(
     result["wrote"] = True
     result["moved"] = True
     
-    # AIPOS-R5A + F88 件①: claim 时建卡工作树(仅 code 任务)——委托全产品唯一建树实现 next_resolver._ensure_worktree
-    # (落点 = card_worktree_location, 分支 = N5 branch_pattern 声明; 与 next --run / my-tasks 开工面同一函数)。
-    # 原 WorktreeManager.from_workspace_config 第二实现(读治理根 .lybra/config.json、缺则把治理根当产品仓、路径小写、
-    # 分支写死、路径子串判治理仓)退役。建树失败 = 认领结果带 worktree_created=False + worktree_error 明确拒因
-    # (不再吞成 warning; 认领本身已落盘, 不回滚——与 next --run「claim 成功但 worktree 失败」同语义, my-tasks 据此排除该卡)。
-    if action == RecordType.CLAIM:
-        task_mode = updated_metadata.get("task_mode", "")
-        if task_mode == "code":
-            from tools.aipos_cli.next_resolver import _ensure_worktree
-
-            task_id_val = str(updated_metadata.get("task_id", ""))
-            built = _ensure_worktree(repo_root, task_id_val, card_frontmatter=dict(updated_metadata))
-            if built.get("ok"):
-                # 更新卡片的 worktree 字段
-                updated_metadata["active_worktree_path"] = str(built["worktree_path"])
-                updated_metadata["active_worktree_branch"] = str(built["branch"])
-
-                # 重新渲染并写入
-                rendered_markdown = render_task_markdown(updated_metadata, source_body)
-                target_path.write_text(rendered_markdown, encoding="utf-8")
-
-                result["updated_frontmatter"] = updated_metadata
-                result["worktree_created"] = True
-                result["worktree_path"] = str(built["worktree_path"])
-                result["worktree_branch"] = str(built["branch"])
-            else:
-                result["worktree_created"] = False
-                result["worktree_error"] = str(built.get("message") or "worktree 建立失败(无拒因原文)")
+    # AIPOS-R5A + F88 件① + F90 件①: 卡工作树已在写入前由唯一建树实现建好(见上, 失败已 BLOCK); 此处回写卡面落点字段
+    # (落点 = card_worktree_location, 分支 = N5 branch_pattern 声明; 与 next --run / my-tasks 开工面同一函数)
+    if built_worktree is not None:
+        updated_metadata["active_worktree_path"] = str(built_worktree["worktree_path"])
+        updated_metadata["active_worktree_branch"] = str(built_worktree["branch"])
+        rendered_markdown = render_task_markdown(updated_metadata, source_body)
+        target_path.write_text(rendered_markdown, encoding="utf-8")
+        result["updated_frontmatter"] = updated_metadata
+        result["worktree_created"] = True
+        result["worktree_path"] = str(built_worktree["worktree_path"])
+        result["worktree_branch"] = str(built_worktree["branch"])
 
     return result
 

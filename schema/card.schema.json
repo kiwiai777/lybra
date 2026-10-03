@@ -853,7 +853,32 @@
         "codex": "Prompt.md + Plan.md 写入工作树根(OpenAI 长任务形制)",
         "claude-code": "同一内容渲染为 CLAUDE.md 片段"
       },
-      "rendered_output_rule": "渲染物不含任何 lybra_ 门动词与 token(grep lybra_ = 0)"
+      "rendered_output_rule": "渲染物不含任何 lybra_ 门动词与 token(grep lybra_ = 0)",
+      "session_record_locators": {
+        "description": "AIPOS-F90 件②(Owner 2026-10-02 裁定「报告模型字段由产品自动填写」): 交回 Return 与审计报告的 model 字段由产品按写报告那张卡的 harness(卡面值, 缺省 default_by_task_mode)在此处声明的会话记录定位器取运行时模型; 自报(报告 frontmatter.model)只作对照, 不一致在记录 agent_runtime.model_mismatch 标出。唯一读取口 artifact_ingest.runtime_model_bundle。新 harness = 加一条定位器, 零代码改动; 换机器 = 改 session_globs。",
+        "missing_value": "未声明会话记录",
+        "match_rule": "在 session_globs 命中的会话记录(jsonl, 只取 mtime ≥ 该卡 claim 记录 claimed_at 者)中, 找写入工具(write_tool_names)的路径参数(write_path_keys)解析后 == 报告绝对路径的条目, 取同一条目 model_path 处的模型; 多个会话/模型去重后以 + 连接。找不到任何条目 = missing_value(不采信自报)",
+        "pi": {
+          "session_globs": ["~/.pi/agent/sessions/*/*.jsonl"],
+          "model_path": ["message", "model"],
+          "content_path": ["message", "content"],
+          "tool_call_type": "toolCall",
+          "tool_name_key": "name",
+          "tool_args_key": "arguments",
+          "write_tool_names": ["write", "edit"],
+          "write_path_keys": ["path"]
+        },
+        "claude-code": {
+          "session_globs": ["~/.claude/projects/*/*.jsonl", "~/.claude/projects/*/*/subagents/*.jsonl"],
+          "model_path": ["message", "model"],
+          "content_path": ["message", "content"],
+          "tool_call_type": "tool_use",
+          "tool_name_key": "name",
+          "tool_args_key": "input",
+          "write_tool_names": ["Write", "Edit", "MultiEdit"],
+          "write_path_keys": ["file_path"]
+        }
+      }
     },
     "lane": {
       "required_at_publish": true,

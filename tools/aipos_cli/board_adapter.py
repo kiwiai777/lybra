@@ -4051,6 +4051,37 @@ def audit_dispatch_task(
         return _normalize_exception("audit_dispatch", exc, dry_run=dry_run, actor=_actor_payload(actor))
 
 
+def _audit_report_snapshot_plan(repo_root: Path, audit_task_id: str, reviewed_task_id: str, verdict_id: str) -> dict[str, Any] | None:
+    """AIPOS-F90 件②: 审计报告快照计划(唯一实现)。报告 = 推导核唯一就绪判据 _check_verdict_artifact 命中的文件; 落点/record_type
+    读 transitions artifact_ingest.verdict.report_snapshot(缺 = SchemaLoadError)。无报告 = None(裁决照落, 不带快照字段)。"""
+    import hashlib
+
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration, _check_verdict_artifact, _resolve_governance_path_with_relative
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (_artifact_ingest_declaration().get("verdict") or {}).get("report_snapshot")
+    if not isinstance(decl, dict) or not decl.get("location") or not decl.get("record_type"):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.report_snapshot(location/record_type)未声明")
+    report = _check_verdict_artifact(repo_root, audit_task_id) if audit_task_id else None
+    if report is None:
+        return None
+    content = report.read_text(encoding="utf-8")
+    root = repo_root.resolve()
+    target = _resolve_governance_path_with_relative(str(decl.get("relative_to") or "records"), repo_root) / str(decl["location"]).format(
+        reviewed_task_id=reviewed_task_id, verdict_id=verdict_id)
+    try:
+        source_ref = str(report.resolve().relative_to(root))
+    except ValueError:
+        source_ref = str(report.resolve())
+    return {
+        "path": str(target.resolve().relative_to(root)),
+        "record_type": str(decl["record_type"]),
+        "content": content,
+        "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "source_ref": source_ref,
+    }
+
+
 def _build_audit_verdict_preview(
     *,
     audit_task_id: str | None,
@@ -4269,6 +4300,13 @@ def _build_audit_verdict_preview(
     verdict_path = audit_verdict_record_path(repo_root, str(reviewed_task.get("task_id") or ""), verdict_id)
     root = repo_root.resolve()  # AIPOS-240 (F-o3-19): record paths are .resolve()d; symlink-safe render
     verdict_rel = str(verdict_path.resolve().relative_to(root))
+    # AIPOS-F90 件②: 审计报告全文快照(与裁决记录同一批受控落盘; 声明 transitions artifact_ingest.verdict.report_snapshot)
+    try:
+        report_snapshot = _audit_report_snapshot_plan(repo_root, str(audit_task.get("task_id") or ""),
+                                                      str(reviewed_task.get("task_id") or ""), verdict_id)
+    except (OSError, UnicodeDecodeError) as exc:
+        report_snapshot = None
+        blocking_reasons.append(f"REPORT_SNAPSHOT_UNREADABLE: 审计报告不可读, 无法快照进 records(AIPOS-F90 件②): {exc}")
     
     # AIPOS-FND-7F1: 检查已有裁决,PASS 终态不可翻案,FAIL/REQUEST_CHANGES 允许 supersede
     # AIPOS-R6S 大项A③: round 序号 — reopen 后的新 round 允许新的终态裁决。
@@ -4366,6 +4404,7 @@ def _build_audit_verdict_preview(
         agent_runtime=agent_runtime,
         artifact_subject=artifact_subject,  # AIPOS-F70: 产物指纹
         submitted_by=submitted_by,  # AIPOS-F73E 件②
+        report_snapshot=report_snapshot,  # AIPOS-F90 件②
     )
     session_markdown = ""
     session_rel = str(session_path.resolve().relative_to(root)) if session_path else ""  # AIPOS-240: symlink-safe
@@ -4415,6 +4454,10 @@ def _build_audit_verdict_preview(
         "record_previews": [
             {"path": verdict_rel, "record_type": RecordType.AUDIT_VERDICT_RECORD, "rendered_markdown": verdict_markdown},
         ] + (
+            # AIPOS-F90 件②: 审计报告快照(逐字节原文)与裁决记录同批落盘
+            [{"path": report_snapshot["path"], "record_type": report_snapshot["record_type"], "rendered_markdown": report_snapshot["content"]}]
+            if report_snapshot else []
+        ) + (
             # AIPOS-F79D 件④: 只有 session 记录真在声明位(有内容可追加)才进 preview; 禁 0 字节 session 文件
             [{"path": session_rel, "record_type": RecordType.SESSION_RECORD, "rendered_markdown": session_markdown}]
             if session_markdown else []
@@ -4462,7 +4505,10 @@ def _build_audit_verdict_preview(
             {"path": audit_rel, "kind": "update", "type": "task_markdown"},
             {"path": verdict_rel, "kind": "create", "type": "record_markdown", "record_type": RecordType.AUDIT_VERDICT_RECORD},
             {"path": session_rel, "kind": "update", "type": "record_markdown", "record_type": RecordType.SESSION_RECORD},
-        ],
+        ] + (
+            [{"path": report_snapshot["path"], "kind": "create", "type": "record_markdown", "record_type": report_snapshot["record_type"]}]
+            if report_snapshot else []
+        ),
         planned_moves=[],
         warnings=warnings,
         blocking_reasons=blocking_reasons,
@@ -4672,7 +4718,7 @@ def audit_verdict_task(
                 raise RuntimeError(f"拒写 0 字节记录: {preview.get('path')} ({preview.get('record_type')})")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(rendered, encoding="utf-8")
-            kind = "create" if preview.get("record_type") == RecordType.AUDIT_VERDICT_RECORD else "update"
+            kind = "update" if preview.get("record_type") == RecordType.SESSION_RECORD else "create"
             performed.append({"path": str(preview.get("path")), "kind": kind, "type": "record_markdown", "record_type": preview.get("record_type")})
         response["dry_run"] = False
         response["data"]["wrote"] = True
@@ -5728,6 +5774,7 @@ def load_task_snapshot(
         "task_mode": task.get("task_mode") or metadata.get("task_mode"),
         "project": metadata.get("project"),
         "queue_state": task.get("queue_state"),
+        "reviewed_task_id": metadata.get("reviewed_task_id"),  # AIPOS-F90 件①: 审计卡信封判定对象 = 被审卡(autonomy_policy.envelope_subject)
     }
 
 

@@ -42,6 +42,7 @@ from tools.aipos_cli.next_resolver import (
     _read_task_records,
     _transition_node,
     derive_next_step,
+    driver_scope,
     execute_derived_action,
     executor_artifact_watch,
 )
@@ -101,6 +102,7 @@ class LoopStep:
     output: str = ""
     artifacts: list[str] = field(default_factory=list)
     message: str = ""
+    shell_command: str = ""  # AIPOS-F90 件②: return/verdict 步 = 产物入口内部执行的薄壳命令(含产品填写的模型字段)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,6 +113,7 @@ class LoopStep:
             "card": self.card,
             "action_type": self.action_type,
             "command": self.command,
+            "shell_command": self.shell_command,
             "ok": self.ok,
             "exit_code": self.exit_code,
             "output": self.output,
@@ -173,13 +176,17 @@ def find_envelope(
     AIPOS-F78B 件③: 驱动方身份集合 = {实例, 工位角色名(如 chris 的 hbj-advisor), 角色类 advisor}——信封 agent_or_role 写其一即覆盖
     (门侧 _match_driver_envelope 同口径)。
     """
-    from tools.aipos_cli.autonomy_policy import count_preauthorized_claims, load_policy, match_claim_envelope
+    from tools.aipos_cli.autonomy_policy import count_preauthorized_claims, envelope_subject, load_policy, match_claim_envelope
 
     now = now or datetime.now(timezone.utc)
     candidates = [policy_id] if policy_id else _policy_ids(governance_root)
     roles = [r for r in (str(driver_role or "").strip(), DRIVER_ROLE) if r]
     roles = list(dict.fromkeys(roles))
     reasons: list[str] = []
+    # AIPOS-F90 件①: 判定对象(审计卡 = 被审卡), 与门 _match_claim_envelope 同一规则
+    subject_id, subject_mode, subject_project = envelope_subject(
+        governance_root, task_id=task_id, task_mode=str(task_fm.get("task_mode") or ""), project=str(task_fm.get("project") or ""),
+        reviewed_task_id=str(task_fm.get("reviewed_task_id") or ""))
     if not candidates:
         reasons.append("5_tasks/policies/ 下没有任何信封")
     for pid in candidates:
@@ -192,9 +199,9 @@ def find_envelope(
         for role in roles:
             matched, reason, _code = match_claim_envelope(
                 policy=policy,
-                task_id=task_id,
-                task_mode=str(task_fm.get("task_mode") or ""),
-                project=str(task_fm.get("project") or ""),
+                task_id=subject_id,
+                task_mode=subject_mode,
+                project=subject_project,
                 agent_instance=driver_actor,
                 actor=driver_actor,
                 now=now,
@@ -365,6 +372,46 @@ def run_loop(
     say(f"lybra loop {task_id}: envelope={envelope_id} driver={driver_actor} max_steps={max_steps} max_wait={max_wait}s")
 
     result = LoopResult(task_id, "completed", exit_code_for(contract, "completed"), "", envelope=envelope_id)
+    # AIPOS-F90 件①: 已校验的驱动方身份与信封贯穿推导核与执行体(派生 claim/return/verdict/close 带同一 owner_policy_ref)
+    with driver_scope(actor=driver_actor, policy_id=envelope_id):
+        return _drive(task_id, governance_root, result, contract=contract, max_steps=max_steps, max_wait=max_wait,
+                      interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute, watch=watch,
+                      connection_json=connection_json)
+
+
+# AIPOS-F90 件①(缺陷③): 账务步「门侧是否已落」的回读判据——该步对应的门生记录(_read_task_records 唯一读取口)在执行前后是否换了一份。
+# verdict 记录挂被审卡(audit_verdicts/<被审卡>), 其余挂目标卡; finalize 不在此表(无回读 = 按门拒处理)。
+_LANDED_RECORD = {"claim": "latest_claim", "return": "latest_return", "dispatch": "latest_audit_dispatch",
+                  "verdict": "latest_verdict", "close": "latest_closure"}
+
+
+def _record_card(action_type: str, target_card: str) -> str:
+    return target_card[:-1] if action_type == "verdict" and target_card.upper().endswith("R") else target_card
+
+
+def _landed_record(governance_root: Path, action_type: str, target_card: str) -> dict[str, Any] | None:
+    key = _LANDED_RECORD.get(action_type)
+    if not key:
+        return None
+    return _read_task_records(governance_root, _record_card(action_type, target_card)).get(key)
+
+
+def _drive(
+    task_id: str,
+    governance_root: Path,
+    result: LoopResult,
+    *,
+    contract: dict[str, Any],
+    max_steps: int,
+    max_wait: float,
+    interval: float,
+    allowed_verbs: set[str],
+    say: Callable[[str], None],
+    derive: Callable[[str, Path], dict[str, Any]],
+    execute: Callable[..., dict[str, Any]],
+    watch: Callable[..., int],
+    connection_json: str | None,
+) -> LoopResult:
     steps = result.steps
 
     for index in range(1, max_steps + 1):
@@ -478,13 +525,24 @@ def run_loop(
             return result
 
         say(f"[{index}] run {action_type} @ {node}/{state} ({target_card}): {command}")
+        before = _landed_record(governance_root, action_type, target_card)
         exec_result = execute(derivation, governance_root, connection_json)
         step.ok = bool(exec_result.get("ok"))
         step.exit_code = int(exec_result.get("exit_code") or 0)
         step.output = str(exec_result.get("output") or "")
         step.message = str(exec_result.get("message") or "")
+        step.shell_command = str(exec_result.get("shell_command") or derivation.get("shell_command") or "")
         steps.append(step)
         if not step.ok:
+            # AIPOS-F90 件①(缺陷③): 执行报失败后先回读该步的门生记录——执行前后换了一份(门侧已落, 如薄壳等门超时的假失败)
+            # = 记为已落继续, 绝不重复执行同一步; 未落 = 真门拒, exit 2 透传原文(不重试)
+            landed = _landed_record(governance_root, action_type, target_card)
+            if landed and landed != before:
+                step.ok = True
+                step.message = (f"执行端报失败(exit {step.exit_code}), 但回读门生记录已新落 "
+                                f"({_LANDED_RECORD[action_type]}: {landed.get('claim_id') or landed.get('return_id') or landed.get('verdict_id') or landed.get('dispatch_id') or landed.get('closure_id') or '新记录'}) = 门侧已落, 不重复执行: {step.message}")
+                say(f"[{index}] landed(回读): {step.message}")
+                continue
             msg = f"门拒 @ {action_type} ({target_card}) exit {step.exit_code}: {step.message}\n{step.output}".rstrip()
             say(f"[{index}] exit 2 — {msg}")
             result.outcome, result.exit_code, result.message = "gate_rejected", exit_code_for(contract, "gate_rejected"), msg

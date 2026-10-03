@@ -563,6 +563,150 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
     return out
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F90 件②: 报告模型字段由产品从会话记录填写(Owner 2026-10-02 裁定; 审计体自报连续五次不实)
+# 定位器唯一声明 card.schema intent_face.harness.session_record_locators; 本节是唯一读取口
+# ---------------------------------------------------------------------------
+
+def _session_locators() -> dict[str, Any]:
+    from tools.aipos_cli.machine_zone import intent_face_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (intent_face_declaration().get("harness") or {}).get("session_record_locators")
+    if not isinstance(decl, dict) or not str(decl.get("missing_value") or "").strip():
+        raise SchemaLoadError("card.schema.json intent_face.harness.session_record_locators(含 missing_value)未声明")
+    return decl
+
+
+def _dig(obj: Any, path: list[Any]) -> Any:
+    for key in path or []:
+        if not isinstance(obj, dict):
+            return None
+        obj = obj.get(key)
+    return obj
+
+
+def _epoch(value: Any) -> float | None:
+    from datetime import datetime, timezone
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def _scan_session_records(locator: dict[str, Any], artifact: Path, since: float | None) -> tuple[list[str], list[str]]:
+    """按定位器扫会话记录: 返回(写入该报告的条目所在模型列表, 会话记录文件名列表)。只读, 不改任何文件。"""
+    import glob as _glob
+    import json as _json
+
+    target = artifact.resolve()
+    needles = {str(target), str(artifact), _json.dumps(str(target))[1:-1]}
+    write_names = {str(n) for n in locator.get("write_tool_names") or []}
+    path_keys = [str(k) for k in locator.get("write_path_keys") or []]
+    models: list[str] = []
+    sources: list[str] = []
+    for pattern in locator.get("session_globs") or []:
+        for name in sorted(_glob.glob(os.path.expanduser(str(pattern)))):
+            session = Path(name)
+            try:
+                if since is not None and session.stat().st_mtime < since:
+                    continue
+                text = session.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                import sys
+
+                print(f"Warning: 会话记录不可读, 跳过 {session}: {exc}", file=sys.stderr)
+                continue
+            if not any(n in text for n in needles):
+                continue
+            session_cwd = ""
+            for line in text.splitlines():
+                if not any(n in line for n in needles) and session_cwd:
+                    continue
+                try:
+                    entry = _json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if not session_cwd and entry.get("type") == "session":
+                    session_cwd = str(entry.get("cwd") or "")
+                content = _dig(entry, list(locator.get("content_path") or []))
+                if not isinstance(content, list):
+                    continue
+                hit = False
+                for item in content:
+                    if not isinstance(item, dict) or item.get("type") != locator.get("tool_call_type"):
+                        continue
+                    if str(item.get(str(locator.get("tool_name_key") or "name")) or "") not in write_names:
+                        continue
+                    tool_args = item.get(str(locator.get("tool_args_key") or "arguments"))
+                    tool_args = tool_args if isinstance(tool_args, dict) else {}
+                    for key in path_keys:
+                        raw = str(tool_args.get(key) or "").strip()
+                        if not raw:
+                            continue
+                        candidate = Path(raw).expanduser()
+                        if not candidate.is_absolute():
+                            base = str(entry.get("cwd") or session_cwd or "")
+                            if not base:
+                                continue
+                            candidate = Path(base) / candidate
+                        if candidate.resolve() == target:
+                            hit = True
+                model = str(_dig(entry, list(locator.get("model_path") or [])) or "").strip()
+                if hit and model:
+                    models.append(model)
+                    sources.append(session.name)
+    return models, sources
+
+
+def _same_model(self_reported: str, located: str) -> bool:
+    def norm(value: str) -> str:
+        return value.strip().lower()
+
+    reported = norm(self_reported)
+    for model in located.split("+"):
+        m = norm(model)
+        if reported == m or reported.endswith("/" + m) or m.endswith("/" + reported):
+            return True
+    return False
+
+
+def runtime_model_bundle(workspace_root: Path, *, writer_task_id: str, writer_fm: dict[str, Any], artifact_path: Path,
+                         self_reported: str) -> dict[str, Any]:
+    """AIPOS-F90 件②: 产品填写的模型字段(agent_runtime 形)。harness = 写报告那张卡的卡面 harness, 缺省 default_by_task_mode;
+    定位器缺/会话记录里找不到写该报告的条目 = missing_value(「未声明会话记录」), 绝不采信自报; 自报只作对照, 不一致标 model_mismatch。"""
+    from tools.aipos_cli.machine_zone import default_harness_for_task_mode
+    from tools.aipos_cli.next_resolver import _read_task_records
+
+    decl = _session_locators()
+    missing = str(decl["missing_value"]).strip()
+    harness = str(writer_fm.get("harness") or "").strip() or default_harness_for_task_mode(str(writer_fm.get("task_mode") or "code"))
+    claimed_at = _epoch((_read_task_records(Path(workspace_root), writer_task_id).get("latest_claim") or {}).get("claimed_at"))
+    locator = decl.get(harness)
+    models: list[str] = []
+    sources: list[str] = []
+    if isinstance(locator, dict):
+        models, sources = _scan_session_records(locator, Path(artifact_path), claimed_at - 60 if claimed_at else None)
+    located = "+".join(sorted(set(models)))
+    reported = str(self_reported or "").strip()
+    bundle: dict[str, Any] = {
+        "harness": harness,
+        "model": located or missing,
+        "model_source": f"{harness}:{','.join(sorted(set(sources)))}" if located else missing,
+        "model_mismatch": bool(located and reported and not _same_model(reported, located)),
+    }
+    if reported:
+        bundle["model_self_reported"] = reported
+    return bundle
+
+
 def ingest_task_artifact(
     task_id: str,
     workspace_root: Path,
@@ -570,19 +714,34 @@ def ingest_task_artifact(
     connection_json: str | None = None,
     dry_run: bool = False,
     execute: Any = None,
+    kind: str | None = None,
 ) -> dict[str, Any]:
-    """产物入口主函数: 校验 → 推导核派生同一条薄壳命令 → execute_derived_action(既有执行体)提交。
+    """产物入口主函数: 校验 → 推导核派生同一条薄壳命令 → 产品填模型字段 → execute_derived_action(既有执行体)提交。
 
-    返回 {ok, exit_code, category, reasons, command, path, output, message}。execute 可注入(靶场)。
+    AIPOS-F90 件②: 推导核对 return/verdict 步派生的命令就是本入口(`lybra artifact ingest --kind`); 本入口执行的是推导核同时
+    给出的 shell_command(唯一构建), 补上 runtime_model_bundle(运行时模型取自会话记录)后经 execute_derived_action 提交。
+    裁决入门时审计报告全文由门快照进 records(transitions artifact_ingest.verdict.report_snapshot)。
+    返回 {ok, exit_code, category, reasons, command, path, output, message, agent_runtime}。execute 可注入(靶场)。
     """
-    from tools.aipos_cli.next_resolver import derive_next_step, execute_derived_action
+    from tools.aipos_cli.next_resolver import (
+        _find_task_in_queue,
+        _read_frontmatter,
+        derive_next_step,
+        execute_derived_action,
+        with_runtime_model,
+    )
 
     check = validate_task_artifact(task_id, workspace_root)
     result: dict[str, Any] = {
         "task_id": task_id, "kind": check["kind"], "ok": False, "exit_code": check["exit_code"],
         "category": check["category"], "reasons": list(check["reasons"]), "command": "", "path": check["path"],
-        "output": "", "message": "",
+        "output": "", "message": "", "agent_runtime": None,
     }
+    if kind and kind != check["kind"]:
+        result.update({"exit_code": INGEST_EXIT_REJECTED, "category": "INGEST_KIND_MISMATCH",
+                       "reasons": [f"推导核声明入门节点 --kind {kind}, 但产物入口按卡与记录判定为 {check['kind']}: 卡态已变, 重推导后再入门"],
+                       "message": "artifact ingest 拒: 入门节点不符"})
+        return result
     if not check["ok"]:
         result["message"] = f"artifact ingest 拒: {check['category']}"
         return result
@@ -598,7 +757,16 @@ def ingest_task_artifact(
         ]
         result["message"] = "artifact ingest 拒: 卡不在可交回/可裁决节点"
         return result
-    result["command"] = str(derivation.get("command") or "")
+    shell_command = str(derivation.get("shell_command") or derivation.get("command") or "")
+    if check["kind"] in ("return", "verdict"):
+        writer_path, _q = _find_task_in_queue(Path(workspace_root), task_id)
+        bundle = runtime_model_bundle(
+            Path(workspace_root), writer_task_id=task_id, writer_fm=_read_frontmatter(writer_path) if writer_path else {},
+            artifact_path=Path(str(check["path"])), self_reported=str((check.get("frontmatter") or {}).get("model") or ""),
+        )
+        result["agent_runtime"] = bundle
+        shell_command = with_runtime_model(shell_command, kind=check["kind"], agent_runtime=bundle)
+    result["command"] = shell_command
     if dry_run:
         result.update({"ok": True, "exit_code": 0, "category": "DRY_RUN", "message": "校验通过(未提交)"})
         return result
@@ -636,7 +804,7 @@ def ingest_task_artifact(
         result["category"] = "OK" if result["ok"] else "RECORD_WRITE_FAILED"
         return result
     runner = execute or execute_derived_action
-    exec_result = runner(derivation, Path(workspace_root), connection_json)
+    exec_result = runner({**derivation, "command": shell_command}, Path(workspace_root), connection_json)
     result["ok"] = bool(exec_result.get("ok"))
     result["exit_code"] = 0 if result["ok"] else int(exec_result.get("exit_code") or 1)
     result["output"] = str(exec_result.get("output") or "")
@@ -662,6 +830,7 @@ def run_ingest_cli(args: Any) -> int:
     result = ingest_task_artifact(
         args.task_id, governance_root,
         connection_json=getattr(args, "connection_json", None), dry_run=bool(getattr(args, "dry_run", False)),
+        kind=getattr(args, "kind", None),
     )
     if getattr(args, "json", False):
         print(_json.dumps(result, indent=2, ensure_ascii=False))
