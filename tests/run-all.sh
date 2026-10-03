@@ -929,6 +929,21 @@ else
   overall=1
 fi
 
+# AIPOS-F92: 接入向导可走通三件(① envelope mint --confirm 经门 owner_decision_record envelope 路径真实落盘·Owner 凭据跨项目
+# ② 单门 home 根九步 guide·Owner 一次性动作 2 条·顾问 enroll 到治理根 + 技能交付到 Claude Code 会话目录·project set-repos
+# ③ project new 写首份阶段快照·首次 finalize 不被拦) + 隔离靶场(临时 HOME/home 根/两产品仓/自起临时门)按 guide 走到首卡结案
+# + 随语义改动的 F57/F73D/F84/F91 用例
+echo
+echo "── tests/test_aipos_f92_onboarding_walkthrough.py (F92 信封经门落盘·Owner 跨项目·九步 guide 靶场首卡结案·首份阶段快照·工作树根 exclude·部署适用性·审计卡终态 lint) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f92_onboarding_walkthrough.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_aipos_f57_onboarding.py" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f92_onboarding_walkthrough.py PASS"
+else
+  echo "✗ tests/test_aipos_f92_onboarding_walkthrough.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

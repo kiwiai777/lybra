@@ -56,6 +56,16 @@ PLACEHOLDER_VALUES = {
     "<清单文件>": "/tmp/f84-paths.txt",
     "<到期时间>": "2026-11-01T00:00:00Z",
     "<步骤号>": "1",
+    # AIPOS-F92: 九步接入流程(lybra-onboarding / advisor-commands)新增占位
+    "<home根>": "/tmp/f84-home",
+    "<会话目录>": "/tmp/f84-session",
+    "<审计工位目录>": "/tmp/f84-ws-audit",
+    "<仓名>": "app",
+    "<产品仓>": "/tmp/f84-code/app",
+    "<Owner工作区>": "/tmp/f84-home/ops",
+    "<Owner凭据>": "/tmp/f84-home/ops/.lybra/connection.json",
+    "<卡稿JSON>": "/tmp/f84-card.json",
+    "<草稿路径>": "5_tasks/drafts/proj-1.md",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)
@@ -153,7 +163,8 @@ def test_item1_command_examples_parse():
                     args = build_parser().parse_args(argv)
             except SystemExit as exc:
                 raise AssertionError(f"argparse 拒: {raw}\n  → {line}\n  {err.getvalue().strip()}") from exc
-            assert args.command == argv[0], raw
+            lead = argv[2:] if argv[:1] == ["--workspace-root"] else argv  # AIPOS-F92: 顶层 --workspace-root 在子命令前
+            assert args.command == lead[0], raw
             total += 1
             print(f"PARSE OK  {rel.split('/')[2]}: {line}")
     print("每技能示例数:", per_skill, "合计:", total)

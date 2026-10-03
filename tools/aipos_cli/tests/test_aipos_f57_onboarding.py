@@ -30,15 +30,21 @@ from tools.aipos_cli.onboarding import (
 )
 
 
+def _workstation_enroll_step(guide):
+    """AIPOS-F92: 工位 enroll 步(标题含「工位 enroll」; 原六步的 Step 4)。"""
+    return next(st for st in guide["steps"] if "工位 enroll" in st["title"])
+
+
 class TestOnboardingGuideGeneration(unittest.TestCase):
     """① 第三项目端到端:probe-xyz 式从 0 走完全流程(验收①④)。"""
 
     def test_guide_generation_probe_xyz(self):
-        """生成 probe-xyz 项目的完整六步指南(验收①:项目无关性)。"""
+        """生成 probe-xyz 项目的完整指南(验收①:项目无关性)。AIPOS-F92: 九步(单门 home 根约定, Owner 一次性动作 2 条)。"""
         guide = generate_onboarding_guide("probe-xyz")
         self.assertEqual(guide["project_name"], "probe-xyz")
-        self.assertEqual(guide["total_steps"], 6)
-        self.assertEqual(len(guide["steps"]), 6)
+        self.assertEqual(guide["total_steps"], 9)
+        self.assertEqual(len(guide["steps"]), 9)
+        self.assertEqual(guide["owner_actions"], [3, 4])
 
         # 验证每步都有必要字段
         for step in guide["steps"]:
@@ -64,15 +70,18 @@ class TestOnboardingGuideGeneration(unittest.TestCase):
         self.assertNotIn("probe-xyz", step1_cmd2)
 
     def test_guide_step_titles(self):
-        """六步标题完整性检查。"""
+        """步骤标题完整性检查(AIPOS-F92 九步)。"""
         guide = generate_onboarding_guide("test-proj")
         expected_titles = [
-            "项目注册",
-            "信封铸造",
-            "三角色发码",
-            "一条 enroll 配齐",
-            "起 pi 三步",
-            "首卡开跑自检",
+            "建项目",
+            "声明产品仓",
+            "签发顾问注册码",
+            "签三张信封",
+            "顾问 enroll 到治理根",
+            "为执行 / 审计工位发注册码",
+            "工位 enroll",
+            "工位自检",
+            "首卡",
         ]
         for i, exp in enumerate(expected_titles, 1):
             self.assertIn(exp, guide["steps"][i - 1]["title"])
@@ -96,7 +105,8 @@ class TestOnboardingGuideGeneration(unittest.TestCase):
         text = format_guide_text(guide)
         self.assertIn("probe-xyz", text)
         self.assertIn("Step 1:", text)
-        self.assertIn("Step 6:", text)
+        self.assertIn("Step 9:", text)
+        self.assertIn("Owner 一次性动作 2 条", text)
         self.assertIn("验证:", text)
         self.assertIn("失败出口:", text)
 
@@ -128,7 +138,7 @@ class TestStepPrerequisitesValidation(unittest.TestCase):
             ws = Path(tmp) / "workspace"
             ws.mkdir()
             result = validate_step_prerequisites(
-                4, project_name="probe-xyz", workspace_dir=str(ws)
+                8, project_name="probe-xyz", workspace_dir=str(ws)
             )
             self.assertFalse(result["ok"])
             self.assertIn("connection.json", result["missing"])
@@ -143,7 +153,7 @@ class TestStepPrerequisitesValidation(unittest.TestCase):
             conn.write_text(json.dumps({"workspace_root": str(ws)}), encoding="utf-8")
 
             result = validate_step_prerequisites(
-                4, project_name="probe-xyz", workspace_dir=str(ws)
+                8, project_name="probe-xyz", workspace_dir=str(ws)
             )
             self.assertFalse(result["ok"])
             self.assertIn("lybra_bin", result["missing"])
@@ -167,7 +177,7 @@ class TestStepPrerequisitesValidation(unittest.TestCase):
             )
 
             result = validate_step_prerequisites(
-                4, project_name="probe-xyz", workspace_dir=str(ws)
+                8, project_name="probe-xyz", workspace_dir=str(ws)
             )
             self.assertFalse(result["ok"])
             self.assertIn("workspace_root_mismatch", result["missing"])
@@ -182,7 +192,7 @@ class TestStepPrerequisitesValidation(unittest.TestCase):
             role_file.write_text(json.dumps({"role": "executor"}), encoding="utf-8")
 
             result = validate_step_prerequisites(
-                6, project_name="probe-xyz", workspace_dir=str(ws)
+                8, project_name="probe-xyz", workspace_dir=str(ws)
             )
             self.assertFalse(result["ok"])
             self.assertIn("owner_policy_ref", result["missing"])
@@ -234,9 +244,12 @@ class TestSkillDistribution(unittest.TestCase):
 
         AIPOS-F83 件②: roles.schema tool_package 退役, 工具包单源 = distribution.schema;
         advisor 应得技能集改读分发声明(与门/sync/enroll 同一构建器)。"""
-        from tools.aipos_cli.workstation_wiring import declared_role_distributions, declared_role_skills
+        from tools.aipos_cli.distribution_sync import harness_distributions
+        from tools.aipos_cli.workstation_wiring import declared_role_distributions
 
-        skills = declared_role_skills(declared_role_distributions("advisor", "advisor"))
+        # AIPOS-F92 件②: 顾问技能声明给 claude-code harness(会话目录 .claude/skills), 不再走 pi 挂载
+        dists = harness_distributions(declared_role_distributions("advisor", "advisor"), "claude-code")
+        skills = {str(f["path"]).split("/", 1)[0] for d in dists if d.get("kind") == "skills" for f in d.get("files", [])}
         self.assertIn("lybra-onboarding", skills, "lybra-onboarding 未在 advisor 应得技能集(distribution 声明)")
 
 
@@ -246,21 +259,21 @@ class TestChrisGapsRegression(unittest.TestCase):
     def test_gap1_workstation_dir_creation(self):
         """chris 缺口①:工位目录不存在 — enroll 应指导先创建或自动创建。"""
         guide = generate_onboarding_guide("probe-xyz")
-        step4 = guide["steps"][3]  # Step 4: enroll
+        step4 = _workstation_enroll_step(guide)  # AIPOS-F92: 工位 enroll = Step 7
         # 命令应包含 --workspace 参数(指定工位目录)
         self.assertIn("--workspace", step4["command"])
 
     def test_gap2_transport_credential_401(self):
         """chris 缺口②:运输凭证 401 — enroll 阶段应说明如何处理。"""
         guide = generate_onboarding_guide("probe-xyz")
-        step4 = guide["steps"][3]  # Step 4: enroll
+        step4 = _workstation_enroll_step(guide)  # AIPOS-F92: 工位 enroll = Step 7
         # 失败出口应说明 401 怎么办
         self.assertIn("401", str(step4["on_fail"]).lower())
 
     def test_gap3_pi_wiring_missing(self):
         """chris 缺口③:.pi 接线缺失 — F54 应自动落,失败出口说明报 bug。"""
         guide = generate_onboarding_guide("probe-xyz")
-        step4 = guide["steps"][3]  # Step 4: enroll
+        step4 = _workstation_enroll_step(guide)  # AIPOS-F92: 工位 enroll = Step 7
         # 失败出口应提及 .pi 接线
         on_fail_text = json.dumps(step4["on_fail"])
         self.assertIn(".pi", on_fail_text.lower())
@@ -268,21 +281,21 @@ class TestChrisGapsRegression(unittest.TestCase):
     def test_gap4_owner_policy_ref_missing(self):
         """chris 缺口④:role 缺 owner_policy_ref — Step 2 信封必须生效。"""
         guide = generate_onboarding_guide("probe-xyz")
-        step4 = guide["steps"][3]  # Step 4: enroll
+        step4 = _workstation_enroll_step(guide)  # AIPOS-F92: 工位 enroll = Step 7
         on_fail_text = json.dumps(step4["on_fail"])
         self.assertIn("owner_policy_ref", on_fail_text)
 
     def test_gap5_lybra_bin_missing(self):
         """chris 缺口⑤:connection.json 缺 lybra_bin — F54-fix1 应自动补。"""
         guide = generate_onboarding_guide("probe-xyz")
-        step4 = guide["steps"][3]  # Step 4: enroll
+        step4 = _workstation_enroll_step(guide)  # AIPOS-F92: 工位 enroll = Step 7
         # 验证说明应提及 lybra_bin
         self.assertIn("lybra_bin", step4["check"])
 
     def test_gap6_workspace_root_wrong(self):
         """chris 缺口⑥:workspace_root 写成 harness root — F54-fix1 应校正。"""
         guide = generate_onboarding_guide("probe-xyz")
-        step4 = guide["steps"][3]  # Step 4: enroll
+        step4 = _workstation_enroll_step(guide)  # AIPOS-F92: 工位 enroll = Step 7
         on_fail_text = json.dumps(step4["on_fail"])
         self.assertIn("workspace_root", on_fail_text)
 

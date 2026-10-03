@@ -175,6 +175,77 @@ def resolve_sync_context(
     }
 
 
+
+# ---------------------------------------------------------------------------
+# AIPOS-F92 件②: 工位 harness 维度(distribution.schema harness_semantics 唯一声明)
+# ---------------------------------------------------------------------------
+
+def _harness_semantics() -> dict[str, Any]:
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    sem = load_schema("distribution").get("harness_semantics")
+    if not isinstance(sem, dict) or not str(sem.get("default") or "").strip():
+        raise SchemaLoadError("distribution.schema.json harness_semantics(default)未声明")
+    return sem
+
+
+def default_harness_kind() -> str:
+    return str(_harness_semantics()["default"]).strip()
+
+
+def declared_harness_kinds() -> tuple[str, ...]:
+    """合法 harness kind = distributions[].target.harness 并集 ∪ 缺省(声明推导, 禁写死第二份)。"""
+    from tools.schema_loader import load_schema
+
+    kinds = {default_harness_kind()}
+    for dist in load_schema("distribution").get("distributions") or []:
+        kind = str(((dist.get("target") or {}).get("harness")) or "").strip()
+        if kind:
+            kinds.add(kind)
+    return tuple(sorted(kinds))
+
+
+def dist_harness_kind(dist: dict[str, Any]) -> str:
+    """分发条目(门清单形 target_harness / schema 形 target.harness)的 harness kind; 缺 = 缺省(pi)。"""
+    kind = str(dist.get("target_harness") or ((dist.get("target") or {}).get("harness")) or "").strip()
+    return kind or default_harness_kind()
+
+
+def harness_distributions(dists: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
+    """只取给该 harness kind 的条目(harness_semantics.rule)。"""
+    return [d for d in dists if dist_harness_kind(d) == kind]
+
+
+def workstation_harness(harness_root: Path) -> dict[str, Any]:
+    """工位 harness = .lybra/role 的 harness {kind, dir}; 缺 = {缺省 kind, dir=工位根}(既有 pi 工位零迁移)。
+
+    kind 不在声明内 / 非缺省 kind 缺绝对 dir = ValueError(fail-closed, 禁猜落点)。返回 {kind, dir: Path, default: bool}。"""
+    root = Path(harness_root).expanduser().resolve()
+    role_file = root / ".lybra" / "role"
+    data: dict[str, Any] = {}
+    if role_file.is_file():
+        try:
+            loaded = json.loads(role_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{role_file} 不可读/非 JSON, harness 不可判: {exc}") from exc
+        data = loaded if isinstance(loaded, dict) else {}
+    raw = data.get("harness")
+    default_kind = default_harness_kind()
+    if raw in (None, "", {}):
+        return {"kind": default_kind, "dir": root, "default": True}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{role_file} harness 须为 {{kind, dir}} 对象, 得到 {raw!r}")
+    kind = str(raw.get("kind") or "").strip() or default_kind
+    if kind not in declared_harness_kinds():
+        raise ValueError(f"{role_file} harness.kind={kind!r} 不在 distribution.schema 声明的 harness 内 {list(declared_harness_kinds())}")
+    dir_text = str(raw.get("dir") or "").strip()
+    if kind == default_kind and not dir_text:
+        return {"kind": kind, "dir": root, "default": False}
+    if not dir_text or not Path(dir_text).expanduser().is_absolute():
+        raise ValueError(f"{role_file} harness.dir={dir_text!r} 须为绝对路径(harness={kind} 的分发落点基准)")
+    return {"kind": kind, "dir": Path(dir_text).expanduser().resolve(), "default": False}
+
+
 def _target_base_root(harness_root: Path, dist: dict[str, Any]) -> Path:
     """分发物落点基准: charter → harness 根; 其余 → harness 父目录 _distributed/。"""
     base = dist.get("target_base") or "harness_parent"
@@ -198,8 +269,9 @@ def _file_target_path(harness_root: Path, dist: dict[str, Any], file_rel: str) -
 # AIPOS-F66B 件①: 本地 manifest 读取 + 章程渲染态判定
 # ---------------------------------------------------------------------------
 
-def _local_manifest_path(harness_root: Path, role: str) -> Path:
-    return harness_root.parent / "_distributed" / f".version-{role}"
+def _local_manifest_path(harness_root: Path, role: str, *, manifest_dir: Path | None = None) -> Path:
+    """本地清单: pi 工位 = 工位父根 _distributed/.version-<role>; 非 pi harness(AIPOS-F92)= 调用方给的 manifest_dir(<工位>/.lybra)。"""
+    return (manifest_dir if manifest_dir is not None else harness_root.parent / "_distributed") / f".version-{role}"
 
 
 def _load_local_manifest(harness_root: Path, role: str) -> dict[str, Any]:
@@ -261,8 +333,12 @@ def compute_diffs(
     role: str | None = None,
     shared_guard: dict[str, Any] | None = None,
     pi_mount_report: dict[str, Any] | None = None,
+    prune: bool = True,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     """对比本地与远端清单, 返回 [(dist, [path...])] 差异、应存在文件清单、应删除文件清单。
+
+    AIPOS-F92 件②: prune=False(非 pi harness 工位, distribution.schema harness_semantics)= 不做 pi 落点 prune / .pi 挂载扫描,
+    应删除清单恒空(harness 目录是用户的会话目录, 只增改声明件, 不删任何非声明文件)。
 
     本地状态 = 直接哈希目标落点上的文件(不依赖本地 manifest, 防陈旧)。
 
@@ -309,6 +385,9 @@ def compute_diffs(
                 reasons[rel] = f"unreadable({exc})"
         if need:
             to_fetch.append({"dist": dist, "paths": need, "reasons": reasons})
+
+    if not prune:
+        return to_fetch, list(declared_files), []
 
     # AIPOS-F66C 件①: 找出本地存在但声明中不存在的文件(应删除)
     # AIPOS-F82 件①: 共享落点扣除全角色声明并集(禁互删)
@@ -402,8 +481,9 @@ def write_local_manifest(
     charter_records: dict[str, dict[str, dict[str, str]]] | None = None,
     workstation: dict[str, Any] | None = None,
     pruned: list[str] | None = None,
+    manifest_dir: Path | None = None,
 ) -> Path:
-    """写/更新 _distributed/.version-{role}(含文件哈希, 供连接器版本自答)。
+    """写/更新 _distributed/.version-{role}(含文件哈希, 供连接器版本自答)。AIPOS-F92: manifest_dir 给了(非 pi harness)= 写该目录。
 
     AIPOS-F66C 件①: manifest 由部署声明每次重生, 禁累积, 禁从陈旧 manifest 复活已剔除条目。
     本函数每次从 remote(当前部署声明) 完全重建 manifest, 不读取/合并旧 manifest。
@@ -412,9 +492,8 @@ def write_local_manifest(
     AIPOS-F83 件③: pruned = 本次 sync 回收的文件/挂载(给了即记 manifest pruned, 与共享落点 prune 同一出口)。
     """
     role = remote.get("role", "unknown")
-    manifest_dir = harness_root.parent / "_distributed"
-    manifest_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = manifest_dir / f".version-{role}"
+    manifest_path = _local_manifest_path(harness_root, role, manifest_dir=manifest_dir)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
     # AIPOS-F66C 件①: manifest 每次从当前部署声明完全重生(禁累积旧条目)
     distributions = []
@@ -512,7 +591,7 @@ def shared_landing_declaration(harness_root: Path) -> dict[str, Any]:
             guard["problems"].append(f"角色 {role}(类 {role_class}) 声明不可解析: {exc.__class__.__name__}: {exc}")
             continue
         count = 0
-        for dist in dists:
+        for dist in harness_distributions(dists, default_harness_kind()):  # AIPOS-F92: 共享落点只属 pi harness
             if dist.get("target_base") != "harness_parent":
                 continue
             for f in dist.get("files", []):
@@ -665,7 +744,7 @@ def distribution_area_dirs() -> tuple[str, ...]:
     from tools.schema_loader import load_schema
 
     areas = {SHARED_LANDING}
-    for dist in load_schema("distribution").get("distributions") or []:
+    for dist in harness_distributions(load_schema("distribution").get("distributions") or [], default_harness_kind()):
         rel = str(((dist.get("target") or {}).get("relative_path")) or "").strip("/")
         if rel and target_base_for_kind(str(dist.get("kind") or "")) == "harness_parent":
             areas.add(rel.split("/", 1)[0])
@@ -916,6 +995,11 @@ def sync(
     remote = client.call_tool("lybra_distribution_manifest", {})
     if not remote.get("ok"):
         return {"ok": False, "error": f"gate manifest not ok: {remote}", "role": ctx["role"]}
+    # AIPOS-F92 件②: 只取给本工位 harness 的条目(distribution.schema harness_semantics); 非 pi harness 走 harness 目录落点
+    harness = workstation_harness(ctx["harness_root"])
+    remote = {**remote, "distributions": harness_distributions(list(remote.get("distributions") or []), harness["kind"])}
+    if harness["kind"] != default_harness_kind():
+        return _sync_harness_dir(client, ctx, remote, identity=identity, harness=harness, scope=scope, dry_run=dry_run)
 
     # AIPOS-F66B 件①: 章程渲染上下文(只在清单含 charter 时解析治理根; 解析不到 = fail-closed 出声)
     render_ctx: dict[str, Any] | None = None
@@ -1022,6 +1106,17 @@ def sync(
     manifest_path = write_local_manifest(ctx["harness_root"], remote, charter_records=charter_records or None, workstation=identity,
                                          pruned=prune_result["pruned_files"])
 
+    # AIPOS-F92 件②: 落地后补挂声明内但缺失的 .pi 挂载(同一接线实现 workstation_wiring.materialize_pi_wiring, seed_only 幂等:
+    # 已在的项跳过)。首个工位 enroll 时共享落点尚空, enroll 只能「不写悬空扩展」并留出口; 原出口「sync 后重跑 enroll」要新码,
+    # 靶场实撞: 首个执行工位 go.ts 永不挂 → /go 不可用。.pi 不存在(非 pi 接线工位)不补。
+    wiring_backfill: dict[str, Any] | None = None
+    if (ctx["harness_root"] / ".pi").is_dir():
+        from tools.aipos_cli.custom_roles import resolve_role_to_class
+        from tools.aipos_cli.workstation_wiring import materialize_pi_wiring
+
+        role_class = resolve_role_to_class(ctx["role"], identity.get("governance_root_declared")) or ctx["role"]
+        wiring_backfill = materialize_pi_wiring(ctx["harness_root"], role=ctx["role"], role_class=role_class)
+
     # AIPOS-F83 件③: 落地后复扫 .pi 挂载告警(声明内暂缺者本次 fetch 后应已恢复; 仍缺 = 如实告警)
     post_scan = pi_mount_scan(ctx["harness_root"], list(remote.get("distributions", [])), [])
 
@@ -1039,8 +1134,91 @@ def sync(
         "pruned_files": prune_result["pruned_files"],
         "prune_errors": prune_result["errors"],
         "pi_mount_warnings": list(post_scan["declared_missing"]) + list(post_scan["foreign"]),
+        "pi_wiring_backfill": _created_wiring_items(wiring_backfill),
         "owner_policy_correction": policy_correction,
     }
+
+
+
+def _created_wiring_items(report: dict[str, Any] | None) -> list[str]:
+    """materialize_pi_wiring 报告中本次新建的挂载项(已在 = 跳过不列)。"""
+    if not report:
+        return []
+    out: list[str] = []
+    for name, info in (report.get("items") or {}).items():
+        if name == "skills":
+            out += [f"skills/{k}" for k, v in ((info or {}).get("links") or {}).items() if str(v.get("status") or "").startswith("created")]
+        elif isinstance(info, dict) and str(info.get("status") or "").startswith("created"):
+            out.append(name)
+    return out
+
+
+def _sync_harness_dir(
+    client: Any,
+    ctx: dict[str, Any],
+    remote: dict[str, Any],
+    *,
+    identity: dict[str, Any],
+    harness: dict[str, Any],
+    scope: str | None,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """AIPOS-F92 件②: 非 pi harness 工位的分发(同一清单/差异/拉取/落盘引擎: compute_diffs + lybra_distribution_fetch + apply_fetch)。
+
+    落点基准 = harness.dir(harness_semantics.kinds.<kind>.target_base=harness_dir); 不做 pi 落点 prune(prune=False);
+    本地清单写 <工位>/.lybra/.version-<role>。"""
+    target_root = Path(harness["dir"])
+    dists = [{**d, "target_base": "harness_root"} for d in remote.get("distributions", [])]
+    remote_h = {**remote, "distributions": dists}
+    diffs, declared_files, _ = compute_diffs(target_root, remote_h, role=ctx["role"], prune=False)
+    plan = [{
+        "distribution_id": item["dist"]["distribution_id"],
+        "kind": item["dist"].get("kind"),
+        "action": "would-fetch",
+        "paths": list(item["paths"]),
+        "reasons": dict(item.get("reasons") or {}),
+        "target_path": str(target_root / str(item["dist"].get("target_path") or "")),
+    } for item in diffs]
+    manifest_dir = Path(ctx["harness_root"]) / ".lybra"
+    base_result: dict[str, Any] = {
+        "ok": True,
+        "status": "dry-run" if dry_run else "synced",
+        "role": ctx["role"],
+        "gate_url": ctx["gate_url"],
+        "product_commit": remote.get("product_commit"),
+        "harness_root": str(ctx["harness_root"]),
+        "harness": {"kind": harness["kind"], "dir": str(target_root)},
+        "workstation": _public_identity(identity),
+        "scope_project": scope,
+        "governance_root": None,
+        "distributions_checked": len(dists),
+        "dry_run": dry_run,
+        "plan": plan,
+        "would_prune": [],
+        "declared_files": declared_files,
+        "shared_prune_guard": None,
+        "pi_mount_prune": [],
+        "pi_mount_warnings": [],
+    }
+    if dry_run:
+        return {**base_result, "files_fetched": 0, "files_pruned": 0, "changes": [], "pruned_files": [], "prune_errors": [],
+                "declaration_gaps": [], "manifest_path": str(_local_manifest_path(target_root, ctx["role"], manifest_dir=manifest_dir)),
+                "owner_policy_correction": {"checked": False, "note": "dry-run 零写入"}}
+    fetched_total = 0
+    results = []
+    for item in diffs:
+        dist = item["dist"]
+        resp = client.call_tool("lybra_distribution_fetch", {"distribution_id": dist["distribution_id"], "paths": item["paths"]})
+        if not resp.get("ok"):
+            return {"ok": False, "error": f"fetch failed for {dist['distribution_id']}: {resp}", "role": ctx["role"]}
+        written = apply_fetch(target_root, dist, resp.get("files") or [])
+        fetched_total += written
+        results.append({"distribution_id": dist["distribution_id"], "action": "fetched", "files_written": written,
+                        "reasons": dict(item.get("reasons") or {}), "target_path": str(target_root / str(dist.get("target_path") or ""))})
+    manifest_path = write_local_manifest(target_root, remote_h, workstation=identity, pruned=[], manifest_dir=manifest_dir)
+    return {**base_result, "files_fetched": fetched_total, "files_pruned": 0, "changes": results, "declaration_gaps": [],
+            "manifest_path": str(manifest_path), "pruned_files": [], "prune_errors": [],
+            "owner_policy_correction": _correct_owner_policy_ref(Path(ctx["harness_root"]), ctx["role"])}
 
 
 def sync_many(
@@ -1189,6 +1367,8 @@ def render_sync_text(run: dict[str, Any]) -> str:
                     lines.append(f"          {prob}")
             if e["status"] == "synced":
                 lines.append(f"      files fetched/rendered: {r.get('files_fetched')}, files pruned: {r.get('files_pruned')}, manifest: {r.get('manifest_path')}")
+                if r.get("pi_wiring_backfill"):
+                    lines.append(f"      .pi 挂载补挂(AIPOS-F92): {', '.join(r['pi_wiring_backfill'])}")
                 for gap in r.get("declaration_gaps") or []:
                     lines.append(f"      ⚠ 声明缺口(工位本地改动已被渲染物覆盖, 须回流母本/声明): {gap['path']} [{gap['reason']}]")
                     for dl in str(gap.get("diff") or "").splitlines()[:40]:

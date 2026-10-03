@@ -113,6 +113,20 @@ def check_deployment_branch(repo_root: Path, *, required_branch: str = "main") -
         }
 
 
+def deploy_script_path(repo_root: Path) -> Path:
+    """部署脚本标准位置(唯一推导, invoke_lybra_deploy 与 deploy_mechanism_present 同读): <产品仓>/tools/lybra-deploy。"""
+    return Path(repo_root) / "tools" / "lybra-deploy"
+
+
+def deploy_mechanism_present(repo_root: Path) -> bool:
+    """AIPOS-F92 件③: 该产品仓是否有部署机制 = 部署脚本在标准位置, 或已有部署快照(.deploy/)。
+
+    两者皆无 = 部署不适用(新项目普通产品仓: finalize 合并即完成, finalization 记录 deploy_status=skipped, 不判部署失败);
+    有 .deploy/ 而无脚本 = 部署机制残缺, 仍走部署并如实失败(fail-closed, 不静默跳过)。"""
+    root = Path(repo_root)
+    return deploy_script_path(root).exists() or (root / ".deploy").exists()
+
+
 def invoke_lybra_deploy(
     repo_root: Path,
     *,
@@ -148,7 +162,7 @@ def invoke_lybra_deploy(
         }
     """
     # AIPOS-FINALIZE-FIX-1: 从产品仓根解析脚本路径,禁 cwd 猜
-    deploy_script = repo_root / "tools" / "lybra-deploy"
+    deploy_script = deploy_script_path(repo_root)
     
     if not deploy_script.exists():
         return {

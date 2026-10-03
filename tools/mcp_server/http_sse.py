@@ -175,6 +175,9 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
         if entry.get("projects"):
             capability["projects"] = [str(item) for item in entry.get("projects") or []]
             capability["projects_enforced"] = True
+        # AIPOS-F92 件②: 连接级路由缺省项目(不收窄, 只定无显式 project 时路由到哪个项目)
+        if str(entry.get("default_project") or "").strip():
+            capability["default_project"] = str(entry.get("default_project")).strip()
         # AIPOS-250B: carry `agent_instance` binding (PreAuthorized identity authority).
         # Present only when the token carries it (executor role with --executor-instance).
         # No binding -> PreAuthorized unavailable (backward-compatible: falls back Supervised).
@@ -677,6 +680,9 @@ def load_service_role_registry(connection_json: str | Path, *, error_stream: Tex
         # AIPOS-242: carry `projects` dimension.
         if isinstance(item.get("projects"), list) and item.get("projects"):
             registry[fp]["projects"] = [str(p) for p in item["projects"]]
+        # AIPOS-F92 件②: carry `default_project`(连接级路由缺省, tools._resolve_request_project 优先级 2; 原未入表 = 死字段)
+        if str(item.get("default_project") or "").strip():
+            registry[fp]["default_project"] = str(item["default_project"]).strip()
         # AIPOS-250B: carry `agent_instance` binding.
         if item.get("agent_instance"):
             registry[fp]["agent_instance"] = str(item["agent_instance"])
@@ -686,6 +692,16 @@ def load_service_role_registry(connection_json: str | Path, *, error_stream: Tex
     if not registry:
         raise ValueError(f"Service connection config contains no usable role tokens: {path}")
     return registry
+
+
+def _role_is_cross_project(entry: dict[str, Any]) -> bool:
+    """AIPOS-F92 件②: 凭据条目的角色(role_class 优先, 否则角色名)在 roles.schema 声明 project_scope=cross_project → True。
+    注册表不可读 = SchemaLoadError 上抛(fail-closed: 不猜, 整个 home 注册表载入失败出声)。"""
+    from tools.schema_loader import get_role_spec
+
+    role = str(entry.get("role_class") or entry.get("role") or "").strip()
+    spec = get_role_spec(role) if role else None
+    return bool(spec) and str(spec.get("project_scope") or "") == "cross_project"
 
 
 def load_unified_service_role_registry(home_root: str | Path, *, error_stream: TextIO = sys.stderr) -> dict[str, dict[str, Any]]:
@@ -746,8 +762,13 @@ def load_unified_service_role_registry(home_root: str | Path, *, error_stream: T
                     )
                     continue
                 # Project-level tokens without explicit projects default to [source_project]
+                # AIPOS-F92 件②: 声明为跨项目的角色(roles.schema project_scope=cross_project, 如 owner)不收窄;
+                # 来源项目只作连接级路由缺省(default_project), 无显式 project 的请求仍路由到其来源项目(行为同前)
                 if "projects" not in entry:
-                    entry["projects"] = [proj_name]
+                    if _role_is_cross_project(entry):
+                        entry.setdefault("default_project", proj_name)
+                    else:
+                        entry["projects"] = [proj_name]
                 unified[fp] = entry
                 seen_sources[fp] = f"project '{proj_name}'"
         except Exception as exc:

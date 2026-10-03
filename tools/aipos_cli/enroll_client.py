@@ -394,7 +394,17 @@ def upsert_token_entry(connection_data: dict[str, Any], token_entry: dict[str, A
     tokens = connection_data["tokens"]
     agent_instance = token_entry.get("agent_instance")
     role = token_entry.get("role")
-    
+
+    # AIPOS-F92 件②: 同一凭据(同指纹的未退场条目)已在册 = 幂等, 不退场不追加。顾问 enroll 到治理根时, 门(home 注册表模式)
+    # 兑换时已把同一 token 写进该治理根 connection.json, 客户端再 upsert 曾把它自己退场并追加一份 → 同指纹重复两条(一条 retired)。
+    fingerprint = str(token_entry.get("fingerprint") or "").strip()
+    if fingerprint and any(
+        isinstance(t, dict) and not t.get("retired") and str(t.get("fingerprint") or "").strip() == fingerprint
+        and t.get("token") == token_entry.get("token")
+        for t in tokens
+    ):
+        return False
+
     # 查找匹配的现有 token 并标记为 retired
     rotated = False
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -563,7 +573,8 @@ def land_enrollment_code(
     return True
 
 
-def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = None, owner_policy_ref: str | None = None) -> list[str]:
+def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = None, owner_policy_ref: str | None = None,
+                    *, harness: dict[str, str] | None = None) -> list[str]:
     """写入 .lybra/role 文件(统一JSON格式,AIPOS-R6H靶②)。
     
     AIPOS-F23 验收⑨: 合并保留既有键 —— 禁整文件覆盖。既有 owner_policy_ref 等键
@@ -590,6 +601,9 @@ def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = Non
         role_data["instance"] = agent_instance
     if owner_policy_ref:
         role_data["owner_policy_ref"] = owner_policy_ref
+    if harness:
+        # AIPOS-F92 件②: 工位 harness {kind, dir}(distribution.schema harness_semantics; 缺 = pi 工位)
+        role_data["harness"] = dict(harness)
     role_data["enrolled_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     role_file.write_text(json.dumps(role_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     role_file.chmod(0o644)
@@ -629,8 +643,14 @@ def enroll(
     policy: str | None = None,
     bootstrap_token: str | None = None,
     verify: bool = False,
+    harness_kind: str | None = None,
+    harness_dir: Path | None = None,
 ) -> dict[str, Any]:
     """执行完整的 enroll 流程。
+
+    AIPOS-F92 件②: harness_kind/harness_dir —— 工位 harness(distribution.schema harness_semantics; 缺省 pi = 既有行为)。
+    非 pi harness(如 claude-code 顾问会话): .lybra/role 记 harness {kind, dir}; 不落 .pi 接线; 落盘(+verify)后经同一分发引擎
+    (distribution_sync.sync)把声明给本角色该 harness 的件交付到 harness_dir(Claude Code: <会话目录>/.claude/skills/)。
     
     Args:
         code: Enrollment code(自包含码 LYBRAENROLL1.* 或旧裸码; 从 owner/advisor 获得)。None = 幂等补铸模式 (AIPOS-C2 大项B):
@@ -668,8 +688,24 @@ def enroll(
         码留在 grace 窗口内可免费重试(返回同一 token)。
     """
     from tools.aipos_cli.enrollment import decode_self_contained_code
+    from tools.aipos_cli.distribution_sync import declared_harness_kinds, default_harness_kind
 
     workspace_root = workspace_root.resolve()
+
+    # AIPOS-F92 件②: harness 参数校验(先于任何写盘/兑换, fail-closed)
+    harness_record: dict[str, str] | None = None
+    kind = str(harness_kind or "").strip() or default_harness_kind()
+    if kind not in declared_harness_kinds():
+        raise RuntimeError(f"--harness {kind!r} 不在 distribution.schema 声明的 harness 内 {list(declared_harness_kinds())}")
+    if kind != default_harness_kind():
+        if harness_dir is None:
+            raise RuntimeError(f"--harness {kind} 须给 --harness-dir <该 harness 的工作目录>(分发件落点基准, 如 Claude Code 会话目录)")
+        hdir = Path(harness_dir).expanduser()
+        if not hdir.is_absolute() or not hdir.is_dir():
+            raise RuntimeError(f"--harness-dir {harness_dir} 须为已存在的绝对目录(harness={kind} 的分发落点基准)")
+        harness_record = {"kind": kind, "dir": str(hdir.resolve())}
+    elif harness_dir is not None:
+        raise RuntimeError(f"--harness-dir 只用于非 {default_harness_kind()} harness(pi 工位的落点即工位根)")
 
     # F23: 自包含码解析(内嵌 gate 地址优先; 显式 gate_url 参数可覆盖)
     sc = decode_self_contained_code(code) if code is not None else None
@@ -789,7 +825,7 @@ def enroll(
         policy_derivation = {"policy_id": derived_policy, "reason": policy_reason}
         role_class = resolve_role_class(role, token_entry)
         if derived_policy:
-            write_role_file(lybra_dir, role, agent_instance, derived_policy)
+            write_role_file(lybra_dir, role, agent_instance, derived_policy, harness=harness_record)
             files_written.append("role(含 owner_policy_ref)")
         elif role_class in ("executor", "auditor"):
             # 卡面②: 推导不出 → 报错带路, 禁静默留空导致循环起不来(验收⑩)
@@ -801,7 +837,7 @@ def enroll(
             )
         else:
             # 非循环角色类(advisor/planner 等): 仅告警不阻断
-            write_role_file(lybra_dir, role, agent_instance, None)
+            write_role_file(lybra_dir, role, agent_instance, None, harness=harness_record)
             files_written.append("role(无 owner_policy_ref, 非循环角色类仅告警)")
             policy_derivation["warning"] = True
     elif code is None:
@@ -816,7 +852,7 @@ def enroll(
     
     # AIPOS-F54 ①: .pi 接线 + AGENTS.md 种子(seed_only 幂等, 已存在跳过不覆盖)
     # AIPOS-F82 件②: 接线目标由 distribution 声明推导(只写目标存在的扩展挂载, 不写的项进 warnings); AGENTS.md = charter_render 渲染物
-    if role:
+    if role and harness_record is None:
         role_class = resolve_role_class(role, token_entry)
         wiring_report = materialize_pi_wiring(workspace_root, role=role, role_class=role_class)
         files_written.append(".pi/接线")
@@ -858,8 +894,31 @@ def enroll(
     exclude_paths = collect_enroll_exclude_paths(workspace_root, files_written)
     git_exclude_report = register_git_exclude(workspace_root, exclude_paths)
 
+    # AIPOS-F92 件②: 非 pi harness —— 凭据落盘(+verify)后经同一分发引擎交付声明给本角色该 harness 的件到 harness_dir
+    harness_delivery: dict[str, Any] | None = None
+    if harness_record is not None and code is not None:
+        from tools.aipos_cli.distribution_sync import sync as _distribution_sync
+
+        try:
+            harness_delivery = _distribution_sync(harness_root=workspace_root)
+        except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
+            raise RuntimeError(
+                f"凭据已落盘({lybra_dir}), 但 {harness_record['kind']} 件交付失败: {exc.__class__.__name__}: {exc}\n"
+                f"出口: lybra sync --harness-root {workspace_root}(凭据保留, 重跑即可; 勿重跑 enroll)"
+            ) from exc
+        if not harness_delivery.get("ok"):
+            raise RuntimeError(
+                f"凭据已落盘({lybra_dir}), 但 {harness_record['kind']} 件交付失败: {harness_delivery.get('error')}\n"
+                f"出口: lybra sync --harness-root {workspace_root}"
+            )
+        files_written.append(f"{harness_record['kind']} 件 → {harness_record['dir']}({harness_delivery.get('files_fetched')} 个文件)")
+
     # AIPOS-F54 ⑮: 可启动最小集逐项校验(缺项逐项点名, 禁"少一个键整个起不来但不知道少哪个")
-    bootable_check = verify_minimum_bootable_set(workspace_root)
+    # AIPOS-F92: 最小集是 pi 工位清单(.pi 接线 / go 扩展), 非 pi harness 不适用
+    if harness_record is None:
+        bootable_check = verify_minimum_bootable_set(workspace_root)
+    else:
+        bootable_check = {"ok": True, "checks": [], "missing": [], "skipped": f"harness={harness_record['kind']}: 可启动最小集为 pi 工位清单, 不适用"}
     
     return {
         "ok": True,
@@ -880,8 +939,16 @@ def enroll(
         # AIPOS-F82 件②: 未写的接线项/章程逐项点名(禁写悬空、禁落未渲染母本)
         "warnings": list((wiring_report or {}).get("warnings") or []),
         "minimum_bootable_set": bootable_check,
+        "harness": harness_record,
+        "harness_delivery": ({k: harness_delivery.get(k) for k in ("status", "files_fetched", "manifest_path", "harness", "changes")}
+                             if harness_delivery else None),
         "git_exclude": git_exclude_report,
-        "next_step": ("上岗完成: 接着 /lybra sync 然后 /reload" if code is not None else None),
+        "next_step": (
+            None if code is None else
+            (f"上岗完成: {harness_record['kind']} 件已交付到 {harness_record['dir']}; 在该目录起(或重启)会话即加载"
+             if harness_record is not None else
+             f"上岗完成: 接着 lybra sync --harness-root {workspace_root} --workspace-root <治理根>, 然后在工位起 pi")
+        ),
     }
 
 

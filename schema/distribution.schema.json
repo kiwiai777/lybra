@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "description": "Lybra distribution specification - declarative rules for distributing tools/credentials/config/charters to harness workstations. Per DESIGN v2 §4: distribution WHAT = data (this schema), distribution HOW = fixed primitives (distribute_tools.py engine). New distribution entry = add data row, zero code change. Replaces hardcoded ROLE_TOOL_MAPPING.",
-  "last_updated": "2026-10-02",
+  "last_updated": "2026-10-03",
   "primitives": {
     "description": "Fixed distribution primitives (implemented in distribute_tools.py engine). These are the ONLY operations; plugins/custom code forbidden per §4 design decision (supply-chain + auditability).",
     "operations": [
@@ -136,8 +136,8 @@
         "path": "agents/skills"
       },
       "target": {
-        "harness": "pi",
-        "relative_path": "_distributed/skills"
+        "harness": "claude-code",
+        "relative_path": ".claude/skills"
       },
       "applies_to_roles": [
         "advisor"
@@ -156,7 +156,7 @@
         ]
       },
       "version_strategy": "git_commit_hash",
-      "notes": "本条目 = 顾问技能集唯一声明(AIPOS-F83 件②)。AIPOS-R6E ⑥: card-author = 顾问出卡检查表; AIPOS-R6M 大项C②: truth-navigator = 时间线导航。AIPOS-F84 件①: 顾问侧技能(本条目 include 减去 executor-skills/auditor-skills include)正文为项目无关通用示例——实例/项目/机器/路径一律尖括号占位(以本工位 .lybra/role 与 project.json 为准), 不教 /claim, 技能不渲染(copy_tree 原样分发); 命令示例占位替换为合法值后须能被 lybra argparse 解析, 夹具 tests/test_aipos_f84_advisor_skills_generic.py 守。AIPOS-F84 件②: card-policy-author 母本退役(AIPOS-R8C 遗留, 从未有任何分发声明与调用方, 母本目录删除)。"
+      "notes": "本条目 = 顾问技能集唯一声明(AIPOS-F83 件②)。AIPOS-R6E ⑥: card-author = 顾问出卡检查表; AIPOS-R6M 大项C②: truth-navigator = 时间线导航。AIPOS-F84 件①: 顾问侧技能(本条目 include 减去 executor-skills/auditor-skills include)正文为项目无关通用示例——实例/项目/机器/路径一律尖括号占位(以本工位 .lybra/role 与 project.json 为准), 不教 /claim, 技能不渲染(copy_tree 原样分发); 命令示例占位替换为合法值后须能被 lybra argparse 解析, 夹具 tests/test_aipos_f84_advisor_skills_generic.py 守。AIPOS-F84 件②: card-policy-author 母本退役(AIPOS-R8C 遗留, 从未有任何分发声明与调用方, 母本目录删除)。 AIPOS-F92 件②: 顾问会话是 Claude Code(Owner 2026-10-03 接入验收: 新顾问会话只装顾问技能) —— 目标 harness 改为 claude-code, 落点 = 顾问工位声明的 harness 目录(Claude Code 会话工作目录)下 .claude/skills/<技能名>/(Claude Code 项目级技能加载位); 由 enroll(--harness claude-code --harness-dir <会话目录>)与 lybra sync 经同一分发引擎落地, 见 harness_semantics。"
     },
     {
       "distribution_id": "executor-charter",
@@ -404,5 +404,21 @@
         "description": "Per-skill relative symlinks to ../../../_distributed/skills/<name>, allocated by role_class from this schema's kind=skills distributions (AIPOS-F82; AIPOS-F83: this schema is the ONLY tool-package source, roles.schema tool_package retired; stale dangling links reclaimed by sync, see pi_mount_prune_semantics)"
       }
     ]
+  },
+  "harness_semantics": {
+    "description": "AIPOS-F92 件②: 工位 harness 维度 —— 分发条目 target.harness 声明该件给哪种 harness(pi / claude-code); 工位的 harness 由 enroll 写入 .lybra/role 的 harness 字段({kind, dir}), 缺省 = pi(既有工位零迁移)。",
+    "default": "pi",
+    "kinds": {
+      "pi": {
+        "description": "Pi 编码代理工位(既有语义不变): .lybra 所在目录即 harness 根; charter 落 harness 根, 其余落 harness 父根(_distributed/ 等), .pi 接线由 enroll 落、悬空挂载由 sync 回收",
+        "target_base": "by_kind"
+      },
+      "claude-code": {
+        "description": "Claude Code 会话(顾问): 凭据与身份落治理根 .lybra/(loop 等产品命令按治理根取驱动方凭据), 分发件落 .lybra/role harness.dir(会话工作目录; Claude Code 只从会话目录及其上至仓根的 .claude/skills 加载项目级技能); 不落 .pi 接线, 不做 pi 落点 prune; 本地清单写 <工位>/.lybra/.version-<role>",
+        "target_base": "harness_dir"
+      }
+    },
+    "rule": "sync 只取 target.harness == 工位 harness kind 的条目(缺 target.harness = pi); enroll 的 .pi 接线、共享落点并集、.pi 挂载推导只认 pi 条目。harness kind 合法值 = 本 schema distributions[].target.harness 的并集(enroll --harness 取值由此推导, 禁代码写死第二份)。",
+    "single_implementation": "tools/aipos_cli/distribution_sync.workstation_harness / harness_distributions(判定与过滤) + enroll_client.enroll(落 harness 字段并交付) + workstation_wiring.declared_role_skills/declared_role_extensions(只认 pi)"
   }
 }

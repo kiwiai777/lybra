@@ -182,23 +182,27 @@ lybra audit-verdict --reviewed-task-id <卡ID> --verdict PASS \
 ### 🔐 信封与仲裁(Owner 决策)
 
 #### `lybra envelope mint`
-**何时用**:签发 PreAuthorized 信封(授权 executor 自认领额度)。
+**何时用**:签发 PreAuthorized 信封(驱动方 `lybra loop` 一阶段推进所需; 工位 enroll 推导 owner_policy_ref 所需)。
+**Owner 亲自敲**(签信封须 Owner 凭据的 owner_confirm; 顾问只给出命令, 不代敲)。AIPOS-F92: `--confirm` 经门 owner_decision_record
+envelope 路径真实落盘(输出以门生记录为准: policies/<信封ID>.md + owner_decisions 记录); `--dry-run` 同一 writer 本地预演。
+`--policy-id`/`--agent-or-role` 可重复、按顺序成对, 一条命令签一组(接入向导第 4 步即一条签三张):
 ```bash
-lybra envelope mint --policy-id <信封ID> \
-  --agent-or-role <执行体实例> --max-tasks 60 \
-  --expires-at 2026-09-01T00:00:00Z \
-  --decision-summary "Q3 envelope" --actor owner
+lybra envelope mint --confirm --workspace-root <项目根> --connection-json <Owner凭据> \
+  --policy-id <信封ID> --agent-or-role <你的顾问实例> --max-tasks 60 --task-mode code \
+  --expires-at <到期时间> --decision-summary "loop envelope" --actor owner
+lybra envelope mint --dry-run --workspace-root <项目根> --policy-id <信封ID> --agent-or-role <执行体实例> \
+  --max-tasks 60 --task-mode code --expires-at <到期时间> --decision-summary "preview" --actor owner
 ```
 
 #### `lybra envelope revoke`
-**何时用**:吊销信封(紧急情况/额度滥用)。
+**何时用**:吊销信封(紧急情况/额度滥用)。⚠ 尚未产品化: 现命令走非信封决策路径, 预演即被 writer 拒(缺 AIPOS-110 字段), 经门落盘未实现(AIPOS-F92 未做项); 紧急停用请报 Owner。
 ```bash
 lybra envelope revoke --policy-id <信封ID> \
   --revocation-reason "Emergency stop" --actor owner
 ```
 
 #### `lybra envelope renew`
-**何时用**:续额/延期已有信封。
+**何时用**:续额/延期已有信封。⚠ 尚未产品化(同 revoke, AIPOS-F92 未做项); 续额暂以新 `--policy-id` 再签一张(`lybra envelope mint --confirm`)。
 ```bash
 lybra envelope renew --policy-id <信封ID> \
   --add-tasks 30 --new-expiry 2026-10-01T00:00:00Z \
