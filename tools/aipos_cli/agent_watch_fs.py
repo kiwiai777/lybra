@@ -620,7 +620,7 @@ def run_fs_watch(
                         }
                         print(json.dumps(unhealthy_data, ensure_ascii=False), flush=True)
                         # Note: unhealthy event is emitted but watch continues
-                        # Respawn logic is handled by supervise command, not watch
+                        # watch only observes; no respawn (agent supervise retired by AIPOS-F91)
                         silent_cycles = 0  # Reset after reporting
                 else:
                     silent_cycles = 0  # Reset on any activity

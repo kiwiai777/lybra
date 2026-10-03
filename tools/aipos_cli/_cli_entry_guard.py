@@ -45,7 +45,7 @@ def check_direct_invocation(module_name: str) -> None:
             f"\n"
             f"Use the 'lybra' command instead. Examples:\n"
             f"  lybra agent watch --workspace-root <path>\n"
-            f"  lybra agent launch-check --actor <name>\n"
+            f"  lybra next\n"
             f"  lybra validate\n"
             f"\n"
             f"Run 'lybra --help' to see all available commands.",

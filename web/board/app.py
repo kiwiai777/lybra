@@ -18,9 +18,15 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+# 脚本直跑自举: 仅为让 `tools.*` 可导入而把产品仓根放进 sys.path(导入前无单源可调)。
+_IMPORT_BOOTSTRAP_ROOT = Path(__file__).resolve().parents[2]
+if str(_IMPORT_BOOTSTRAP_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMPORT_BOOTSTRAP_ROOT))
+
+from tools.schema_loader import code_repo_schema_root  # noqa: E402
+
+# AIPOS-F91(L5): 产品仓根读唯一实现 schema_loader.code_repo_schema_root, 不再自算
+REPO_ROOT = code_repo_schema_root()
 
 from tools.aipos_cli.adapter_response import blocked_response
 from tools.aipos_cli.ai_assisted_authoring import (

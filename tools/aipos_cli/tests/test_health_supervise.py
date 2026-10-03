@@ -1,4 +1,4 @@
-"""AIPOS-295 — Tests for health monitoring and supervise functionality.
+"""AIPOS-295 — Tests for `agent watch --health` monitoring (supervise 部分随 AIPOS-F91 退役删除).
 
 Test coverage (S5):
 - T1: Health event emission (proc_alive, cpu_delta, session_files, worktree_changes)
@@ -175,66 +175,7 @@ class TestHealthEvents(unittest.TestCase):
                 proc.wait(timeout=5)
 
 
-class TestSupervise(unittest.TestCase):
-    """Test supervise command functionality (AIPOS-295 S3)."""
-    
-    def test_supervise_cli_args(self):
-        """Test supervise CLI argument validation."""
-        # Missing required args should fail
-        result = subprocess.run(
-            [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "supervise"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        self.assertNotEqual(result.returncode, 0)
-    
-    def test_escalate_file_creation(self):
-        """T5: ESCALATE file is written on second failure."""
-        from tools.aipos_cli.agent_supervise import write_escalate_file
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            product_repo = Path(tmpdir)
-            card_id = "AIPOS-TEST"
-            spawn_cmd = "timeout 60 echo 'test'"
-            
-            failure_history = [
-                {
-                    "timestamp": "2026-08-02T00:00:00Z",
-                    "attempt": 1,
-                    "reason": "sustained_silence",
-                    "proc_alive": False,
-                    "cpu_delta": 0.0,
-                    "new_session_files": 0,
-                    "worktree_changes": 0,
-                },
-                {
-                    "timestamp": "2026-08-02T00:05:00Z",
-                    "attempt": 2,
-                    "reason": "sustained_silence",
-                    "proc_alive": False,
-                    "cpu_delta": 0.0,
-                    "new_session_files": 0,
-                    "worktree_changes": 0,
-                },
-            ]
-            
-            escalate_file = write_escalate_file(
-                product_repo, card_id, spawn_cmd, failure_history
-            )
-            
-            self.assertTrue(escalate_file.exists())
-            content = escalate_file.read_text()
-            
-            # Verify ESCALATE file structure
-            self.assertIn("ESCALATE", content)
-            self.assertIn(card_id, content)
-            self.assertIn(spawn_cmd, content)
-            self.assertIn("Failure History", content)
-            self.assertIn("Attempt 1", content)
-            self.assertIn("Attempt 2", content)
-            self.assertIn("sustained_silence", content)
-            self.assertIn("Required Action", content)
+# TestSupervise(agent supervise CLI + ESCALATE 文件)随 agent_supervise 模块 AIPOS-F91 退役删除。
 
 
 def run_tests():
@@ -245,7 +186,6 @@ def run_tests():
     # Add all test classes
     suite.addTests(loader.loadTestsFromTestCase(TestHealthMonitoring))
     suite.addTests(loader.loadTestsFromTestCase(TestHealthEvents))
-    suite.addTests(loader.loadTestsFromTestCase(TestSupervise))
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

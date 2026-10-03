@@ -113,7 +113,7 @@ TOOL_PACKAGE_INVENTORY: dict[str, str] = {
     "tests/test_aipos_f54.py": "夹具: 断言 roles.schema 无 tool_package / warnings 无 tool_package",
     "tests/test_aipos_f82_workstation_intake.py": "夹具: 断言 warnings 无 tool_package",
     "tests/test_aipos_f83_skills_zero_gate.py": "夹具: 本盘点",
-    "agents/harness/pi/lybra-loop/tests/run-all.sh": "run-all F83 块标题文字(非读取)",
+    "tests/run-all.sh": "run-all F83 块标题文字(非读取; AIPOS-F91 自 lybra-loop/tests 迁出)",
     "tools/aipos_cli/tests/test_aipos_f57_onboarding.py": "夹具文档: 改读 distribution 声明",
     "agents/README.md": "文档: 单源 = distribution.schema, tool_package 退役注记(AIPOS-F84 件③ 更正)",
     "agents/roles/README.md": "文档: 单源 = distribution.schema, tool_package 退役注记(AIPOS-F84 件③ 更正)",
@@ -234,14 +234,14 @@ def test_item3_dangling_skill_link_reclaimed_valid_kept_then_steady(rig):
 
 def test_item3_declared_missing_kept_foreign_untouched_extension_reclaimed(rig):
     """声明内暂缺 = 不删列 warnings(fetch 落地后消失); 非接线形态悬空 = 不碰列 warnings; 未声明悬空扩展挂载 = 回收;
-    目标仍在的未声明挂载 = 不在本语义内(不删); 本次 prune 后才悬空的链 = 同轮回收。"""
+    目标仍在的未声明挂载: 指向产品分发区 = 回收(AIPOS-F91 G3), 不指向分发区 = 不碰; 本次 prune 后才悬空的链 = 同轮回收。"""
     from tools.aipos_cli import distribution_sync as ds
 
     ws, gov, parent = rig["ws_e"], rig["gov"], rig["parent"]
     declared_missing = _link(ws, "skills", "chunked-io", "../../../_distributed/skills/chunked-io")  # 声明内, sync 前目标未落地
     foreign = _link(ws, "skills", "my-own", "/nonexistent-f83/skills/my-own")  # 非产品接线形态
     ext = _link(ws, "extensions", "lybra-loop.ts", "../../../_distributed/extensions/lybra-loop/lybra-loop.ts")  # 退役扩展悬空包装形
-    alive_extra = _link(ws, "skills", "extra-claim", "../../../_shared/extensions/claim.ts")  # 未声明但目标在
+    alive_extra = _link(ws, "skills", "extra-claim", "../../../_shared/extensions/claim.ts")  # 未声明但目标在(分发区内 → F91 G3 回收)
     stale = parent / "_distributed" / "skills" / "finalize-slice" / "SKILL.md"
     _write(stale, "# 旧件(无任何角色声明)\n")
     after_prune = _link(ws, "skills", "finalize-slice", "../../../_distributed/skills/finalize-slice")  # 目标在, 但本次 prune 后即悬空
@@ -251,7 +251,8 @@ def test_item3_declared_missing_kept_foreign_untouched_extension_reclaimed(rig):
     wp = _rel(dry, dry["would_prune"])
     assert "lybra-executor/.pi/extensions/lybra-loop.ts" in wp and "lybra-executor/.pi/skills/finalize-slice" in wp
     assert "_distributed/skills/finalize-slice/SKILL.md" in wp
-    assert not any(x.endswith(("chunked-io", "my-own", "extra-claim")) for x in wp)
+    assert "lybra-executor/.pi/skills/extra-claim" in wp  # AIPOS-F91 G3: 分发区内未声明, 目标在也回收
+    assert not any(x.endswith(("chunked-io", "my-own")) for x in wp)
     warns = dry["pi_mount_warnings"]
     assert any(w.startswith(".pi/skills/chunked-io") and "声明内" in w for w in warns)
     assert any(w.startswith(".pi/skills/my-own") and "非产品接线形态" in w for w in warns)
@@ -260,7 +261,8 @@ def test_item3_declared_missing_kept_foreign_untouched_extension_reclaimed(rig):
     print("sync:", _view(res))
     assert not ext.is_symlink() and not after_prune.is_symlink() and not stale.exists()
     assert declared_missing.exists()  # fetch 落地后恢复
-    assert foreign.is_symlink() and alive_extra.is_symlink()  # 不碰
+    assert foreign.is_symlink() and not alive_extra.is_symlink()  # 非接线形态不碰; 分发区内未声明已回收(F91 G3)
+    assert (parent / "_shared" / "extensions" / "claim.ts").is_file()  # 只删链接本身, 不跟随删目标
     assert res["pi_mount_warnings"] and all("my-own" in w for w in res["pi_mount_warnings"])  # 声明内暂缺已落地, 只剩非接线形态
 
     again = ds.sync(harness_root=ws, governance_root=gov, dry_run=True)
@@ -321,5 +323,5 @@ def test_item3_declared_mounts_single_derivation():
     m = declared_pi_mounts(dists)
     print("executor 声明挂载:", {k: sorted(v) for k, v in m.items()})
     assert m["skills"] == set(declared_role_skills(dists)) and "finalize-slice" not in m["skills"]
-    assert m["extensions"] == set(declared_role_extensions(dists)) | {"claim.ts"}
+    assert m["extensions"] == set(declared_role_extensions(dists)) and "claim.ts" not in m["extensions"]  # AIPOS-F91: claim.ts 挂载项退役
     assert os.sep not in "".join(m["extensions"])

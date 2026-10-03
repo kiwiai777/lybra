@@ -224,7 +224,7 @@ def test_f78b_item1_single_lookup_no_filename_concatenation_left():
     lookup_sites = [
         "tools/aipos_cli/next_resolver.py", "tools/aipos_cli/artifact_ingest.py", "tools/aipos_cli/loop_driver.py",
         "tools/aipos_cli/queue_mutation.py", "tools/aipos_cli/flow_description.py", "tools/aipos_cli/state_lint.py",
-        "tools/aipos_cli/deployment_authorization.py", "tools/aipos_cli/advisor_pump.py", "tools/turn_advancer/state_reader.py",
+        "tools/aipos_cli/deployment_authorization.py",  # advisor_pump / turn_advancer.state_reader 随 AIPOS-F91 退役删除
         "tools/aipos_cli/finalize.py", "tools/aipos_cli/card_render.py", "tools/aipos_cli/board_adapter.py",
     ]
     pattern = re.compile(r'f"\{(task_id|tid|card_id|audit_id)(\.lower\(\))?\}\.md"')
@@ -718,7 +718,8 @@ def test_f78b_item5d_missing_claim_record_exit_points_to_state_repair():
 
 
 def test_f78b_fixture_registered_in_runall_and_no_swallowed_exceptions():
-    runall = (REPO_ROOT / "agents" / "harness" / "pi" / "lybra-loop" / "tests" / "run-all.sh").read_text(encoding="utf-8")
+    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
+    runall = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
     assert "tests/test_aipos_f78b_chris_zero_migration.py" in runall
     for rel in ("tools/aipos_cli/task_loader.py", "tools/aipos_cli/next_resolver.py", "tools/aipos_cli/artifact_ingest.py",
                 "tools/aipos_cli/loop_driver.py", "tools/aipos_cli/two_phase_shell_factory.py", "tools/aipos_cli/finalization_record.py"):

@@ -6,7 +6,7 @@
     技能不渲染(copy_tree 原样分发), 不新增渲染机制。
 件② card-policy-author 退役: 母本目录删除; 任何分发声明不含; 全仓引用只剩退役注记与夹具。
 件③ 死代码与过时文案: schema_loader 两个零调用函数删除(含 __all__); 两份 README 装配清单单源 = distribution.schema;
-    turn_advancer/rules.py 审计卡文案不再引用已退役 audit-card-template, 改指产品派生。
+    (turn_advancer/rules.py 审计卡文案一项: 该模块随 AIPOS-F91 退役删除, 其夹具随删。)
 
 纯读产品树 + 解析器, 不连门、不写任何工位/治理根; token 不涉及。
 """
@@ -192,7 +192,7 @@ def test_item2_card_policy_author_retired_zero_refs():
     assert set(refs) <= {
         "schema/distribution.schema.json",  # advisor-skills notes 退役注记
         "tests/test_aipos_f84_advisor_skills_generic.py",  # 本夹具
-        "agents/harness/pi/lybra-loop/tests/run-all.sh",  # run-all F84 块标题文字
+        "tests/run-all.sh",  # run-all F84 块标题文字(AIPOS-F91 自 lybra-loop/tests 迁出)
     }
     assert "card-policy-author 母本退役" in json_text("schema/distribution.schema.json")
 
@@ -224,26 +224,3 @@ def test_item3_readmes_single_source_is_distribution_schema():
         assert "roles[].tool_package" not in text and "get_role_tool_package" not in text, rel
         assert "roles.schema.json 单一源" not in text and "roles.schema.json 一条数据" not in text, rel
     print("agents/roles/README.md 标题:", [l for l in json_text("agents/roles/README.md").splitlines() if l.startswith("## 装配清单")])
-
-
-def test_item3_rules_audit_card_text_points_to_product_derivation():
-    from tools.turn_advancer.rules import infer_next_action
-
-    state = {
-        "task_id": "PROJ-1",
-        "queue_status": "claimed",
-        "task_frontmatter": {"task_mode": "code", "audit": "required"},
-        "latest_claim": {"canonical_agent_instance": "exec.proj.host", "claim_id": "claim_x"},
-        "latest_return": {"executor_status": "completed"},
-        "latest_verdict": None,
-        "has_return_artifact": True,
-        "has_audit_card": False,
-        "events": [],
-    }
-    result = infer_next_action(state)
-    print("rule:", result["rule"], "| reason:", result["human_judgment_reason"])
-    assert result["action"] == "wait_human"
-    text = result["rule"] + result["human_judgment_reason"]
-    assert "audit-card-template" not in text and "task-closure-loop" not in text
-    assert "产品派生" in text and "audit_derivation" in text and "审计卡" in result["rule"]
-    assert "audit-card-template" not in json_text("tools/turn_advancer/rules.py")

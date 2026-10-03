@@ -152,21 +152,11 @@ class TestVerbValidation(unittest.TestCase):
 class TestKickoffGeneration(unittest.TestCase):
     """S2: Kickoff generation validates verb names."""
 
-    def test_advisor_pump_kickoff_validates_verbs(self):
-        """advisor_pump.generate_kickoff validates verbs (S2)."""
-        from tools.aipos_cli.advisor_pump import generate_kickoff
-
-        # Normal generation should succeed
-        kickoff = generate_kickoff("AIPOS-999", "executor", "first", "test delta")
-        self.assertIn("AIPOS-999", kickoff)
-        # Should reference lybra_gate_guidance (a real verb)
-        self.assertIn("lybra_gate_guidance", kickoff)
-
-    def test_auditor_loop_kickoff_validates_verbs(self):
-        """auditor_runtime kickoff text validates verbs (S2). AIPOS-358: migrated from auditor_loop."""
+    def test_kickoff_text_validates_verbs(self):
+        """Kickoff text validates verbs (S2). advisor_pump / auditor_runtime 随 AIPOS-F91 退役删除; 本条只测 verb_contract。"""
         from tools.aipos_cli.verb_contract import validate_kickoff_verbs
 
-        # Simulate the kickoff text from auditor_runtime (AIPOS-358 thin shell)
+        # Simulate a kickoff text naming a contract verb
         from tools.aipos_cli.verb_contract import get_verb_contract
         verdict_contract = get_verb_contract("lybra_audit_verdict_dry_run")
         self.assertIsNotNone(verdict_contract)

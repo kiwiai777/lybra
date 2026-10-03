@@ -210,8 +210,8 @@ class TestCollectWiringExcludePaths(unittest.TestCase):
             (pi_dir / "settings.json").write_text("{}")
             ext_dir = pi_dir / "extensions"
             ext_dir.mkdir()
-            (ext_dir / "claim.ts").write_text("")
-            (ext_dir / "lybra-loop.ts").write_text("")
+            (ext_dir / "go.ts").write_text("")
+            (ext_dir / "workstation-own.ts").write_text("")
             skills_dir = pi_dir / "skills"
             skills_dir.mkdir()
             (skills_dir / "block-and-report").mkdir()
@@ -219,8 +219,8 @@ class TestCollectWiringExcludePaths(unittest.TestCase):
             paths = collect_wiring_exclude_paths(root)
 
             self.assertIn(".pi/settings.json", paths)
-            self.assertIn(".pi/extensions/claim.ts", paths)
-            self.assertIn(".pi/extensions/lybra-loop.ts", paths)
+            self.assertIn(".pi/extensions/go.ts", paths)
+            self.assertIn(".pi/extensions/workstation-own.ts", paths)
             self.assertIn(".pi/skills/block-and-report", paths)
 
     def test_empty_when_no_pi_dir(self):

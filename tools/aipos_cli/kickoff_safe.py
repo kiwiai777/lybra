@@ -1,12 +1,9 @@
 """AIPOS-339 — Shared kickoff safe-transmission constants.
 
-Single source of truth for the shell-interpretation hazard list used by both
-agent_supervise.py and agent_launch_check.py when deciding whether a kickoff
-must be written to a temp file (``--append-system-prompt @<file>``) instead
-of passed inline.
-
-Consolidating here prevents the two consumers from drifting apart
-(F-327F2R-01: dual hazard-list divergence).
+Single source of truth for the shell-interpretation hazard list used when deciding
+whether a kickoff must be written to a temp file (``--append-system-prompt @<file>``)
+instead of passed inline (AIPOS-F91: the two former consumers agent_supervise.py /
+agent_launch_check.py were retired; agent_materialize's kickoff is checked against it).
 """
 from __future__ import annotations
 

@@ -585,7 +585,7 @@ def test_f78_pre0_4_return_criteria_read_card_branch_not_checkout(tmp_path, monk
     import tools.aipos_cli.board_adapter as adapter
 
     repo = _init_product_repo(tmp_path / "repo")
-    runall = "agents/harness/pi/lybra-loop/tests/run-all.sh"
+    runall = adapter.RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
     _write(repo / runall, "#!/bin/bash\npython3 tests/test_existing.py\n")
     _write(repo / "tools/a.py", "# a\n")
     _git(repo, "add", "-A")
@@ -792,7 +792,8 @@ def test_f78_pre0_9_close_accepts_conclusion_note_parser():
 # ---------------------------------------------------------------------------
 
 def test_f78_fixture_registered_in_runall_and_no_swallowed_exceptions():
-    runall = (REPO_ROOT / "agents" / "harness" / "pi" / "lybra-loop" / "tests" / "run-all.sh").read_text(encoding="utf-8")
+    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
+    runall = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
     assert "tests/test_aipos_f78_engine_agnostic.py" in runall
     for rel in ("tools/aipos_cli/card_render.py", "tools/aipos_cli/artifact_ingest.py", "tools/aipos_cli/loop_driver.py"):
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")

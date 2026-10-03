@@ -79,9 +79,8 @@ def task_material_dir(task_id: str, root: Path | None = None) -> Path:
 
 def render_materialized_kickoff(task_id: str, material_dir: Path, *, harness_hint: str = "") -> str:
     """The MATERIALIZED kickoff: zero gate verbs, points only at LOCAL files (card S3:
-    "agent 侧零 gate 知识"). Distinct from advisor_pump.generate_kickoff BY DESIGN — that one
-    tells a local-workspace agent to ask the gate; this one tells a cross-machine agent to read
-    a local file the connector already dropped. Shared concern (kickoff content), different lane.
+    "agent 侧零 gate 知识"). It tells a cross-machine agent to read a local file the connector
+    already dropped (the former local-workspace pump kickoff was retired by AIPOS-F91).
 
     The agent is told exactly two local paths (input card, output RETURN) and nothing else —
     where the material came from or how the return reaches the gate is the connector's job."""

@@ -334,7 +334,7 @@
             "description": "一句话结论(必填),托管提取为 findings_summary"
           }
         ],
-        "托管解析源": "lybra-loop.ts tryAutoReturn() 审计车道分支(1503-1650行)",
+        "托管解析源": "AIPOS-F91: 原 lybra-loop.ts tryAutoReturn() 审计车道分支随 lybra-loop 扩展退役删除; 现由产品 lybra artifact ingest --kind verdict 读报告入门(AIPOS-F90 件②)",
         "派审注入源": "F14 writer 派生审计卡时注入报告骨架(含 verdict: 行)",
         "single_source_policy": "报告契约只有一份声明(本段);托管解析/派审注入/审计体写作都读此声明,禁代码内写死第二份"
       },

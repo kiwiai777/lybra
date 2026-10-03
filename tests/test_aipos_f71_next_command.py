@@ -6,7 +6,7 @@
 3. 性能: 项目级扫描 ≤10s
 4. Token 不出现: 命令中无 token 值
 5. 项目无关: 推导全由声明 + 工作区推导,不写死项目名
-6. 退役入口: turn-advancer 与 next-step 转发到 next 并输出退役提示
+6. 退役入口: next-step 转发到 next 并输出退役提示(turn-advancer 入口 AIPOS-F91 删除)
 """
 from __future__ import annotations
 
@@ -492,28 +492,7 @@ class TestProjectAgnostic:
 
 
 class TestRetiredCommands:
-    """退役入口: turn-advancer 与 next-step 转发到 next 并输出退役提示。"""
-
-    def test_turn_advancer_retired(self, cold_start_workspace: Path):
-        """turn-advancer 应输出退役提示并仍工作。"""
-        ws = cold_start_workspace
-        queue_dir = ws / "5_tasks" / "queue"
-        _create_task_card(queue_dir, "TEST-010", "pending")
-
-        result = subprocess.run(
-            [sys.executable, "-m", "tools.aipos_cli.aipos_cli",
-             "turn-advancer", "next", "TEST-010",
-             "--workspace-root", str(ws)],
-            capture_output=True,
-            text=True,
-            cwd=str(REPO_ROOT),
-        )
-
-        assert "[RETIRED]" in result.stderr
-        assert "lybra next" in result.stderr
-        # 应仍输出推导结果
-        assert "TEST-010" in result.stdout
-        assert "lybra queue claim" in result.stdout
+    """退役入口: next-step 转发到 next 并输出退役提示(turn-advancer 入口随 AIPOS-F91 删除, 其夹具随删)。"""
 
     def test_next_step_retired(self, cold_start_workspace: Path):
         """next-step 应输出退役提示并仍工作。"""

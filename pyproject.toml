@@ -27,7 +27,7 @@ lybra = "tools.aipos_cli.aipos_cli:main"
 # Only include tools.* (CLI/MCP/TUI), exclude top-level directories (web, config, etc).
 # AIPOS-R4B-1 FIX-3: 添加顶层 "tools" 包，使 editable-install 包含顶层模块
 # (schema_loader/distribute_tools/loop_context)，解决 CLI 从项目外运行时的 ModuleNotFoundError。
-packages = ["tools", "tools.aipos_cli", "tools.mcp_server", "tools.lybra_tui", "tools.turn_advancer"]
+packages = ["tools", "tools.aipos_cli", "tools.mcp_server", "tools.lybra_tui"]  # AIPOS-F91: tools.turn_advancer 随退役删除
 
 [tool.lybra]
 distribution = "npm"  # bin/lybra (package.json) is the entry; pyproject is deps/extras only

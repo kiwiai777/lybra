@@ -12,7 +12,7 @@ This module provides:
 3. `detect_wrong_domain_tokens()` — reconcile wrong-domain entries
 
 All token retrieval MUST go through this module. The 5+ duplicate implementations across
-confirm_client.py, advisor_pump.py, pump_orchestration.py, agent_supervise.py, board_login.py
+confirm_client.py, board_login.py (advisor_pump / pump_orchestration / agent_supervise retired by AIPOS-F91)
 are consolidated here (AIPOS-F59 constraint: no new token retrieval implementations).
 """
 
@@ -74,8 +74,8 @@ class TokenDeclarationError(TokenResolutionError):
 _DECL = _load_token_entry_declaration()
 
 # AIPOS-F81 → F82: connection.json tokens[] 条目字段名 —— 声明在 config.schema#identity_resolution.keys.token.entry.fields,
-# 此处只是读出的只读视图。TS 侧 agents/harness/pi/lybra-loop/loop-context.ts::TOKEN_ENTRY_FIELDS 注明来源于此,
-# 同构夹具 tests/test_aipos_f81_token_single_source.py 逐键比对, 两边不一致即红。
+# 此处只是读出的只读视图。AIPOS-F91: 原 TS 镜像 lybra-loop/loop-context.ts 随 lybra-loop 扩展退役删除, 同构锁解除;
+# tests/test_aipos_f81_token_single_source.py 只约束 Python 单源(本视图 == config.schema 声明)且 TS 侧不再自解析 tokens[]。
 TOKEN_ENTRY_FIELDS: dict[str, str] = dict(_DECL["fields"])
 
 # AIPOS-F82: 退役字段名(retired / retired_at / retired_reason), 声明同上 retirement_fields。
@@ -231,8 +231,7 @@ def get_token_for_role_and_project(
     """AIPOS-F59: Unified token getter by (role, project_domain).
 
     This is the SINGLE implementation point for token retrieval. All callers in
-    confirm_client.py, advisor_pump.py, pump_orchestration.py, agent_supervise.py,
-    board_login.py — and since AIPOS-F81 tools/loop_context.py ConnectionResolver
+    confirm_client.py, board_login.py — and since AIPOS-F81 tools/loop_context.py ConnectionResolver
     (resolve_token / resolve_identity) — must delegate here (selection = select_token_entry).
 
     Selection logic (select_token_entry):

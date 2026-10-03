@@ -21,10 +21,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tools.schema_loader import load_schema, SchemaLoadError
+from tools.schema_loader import code_repo_schema_root, load_schema, SchemaLoadError
 
 # 产品仓根目录
-REPO_ROOT = Path(__file__).parent.parent
+REPO_ROOT = code_repo_schema_root()  # AIPOS-F91(L5): 产品仓根读唯一实现, 不再自算
 
 
 def get_product_repo_version() -> str:

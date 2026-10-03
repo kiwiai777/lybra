@@ -2583,7 +2583,9 @@ def _check_return_self_checks(
     return blocking_reasons
 
 
-RUNALL_RELATIVE_PATH = "agents/harness/pi/lybra-loop/tests/run-all.sh"
+#: run-all 常驻夹具总入口(产品仓相对路径)唯一声明。AIPOS-F91: 随 lybra-loop 扩展退役自 agents/harness/pi/lybra-loop/tests/ 迁出;
+#: 夹具/文档引用 run-all 位置一律读本常量, 禁另写路径。
+RUNALL_RELATIVE_PATH = "tests/run-all.sh"
 
 
 def _card_branch_changed_files(product_repo_root: Path, task_id: str) -> list[str] | None:

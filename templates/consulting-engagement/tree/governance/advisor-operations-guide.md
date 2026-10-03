@@ -6,7 +6,7 @@ This guide provides operational instructions for advisor agents working with Lyb
 
 1. [Agent Watch: Four Exit Codes and What They Mean](#agent-watch-four-exit-codes)
 2. [Choosing the Right Observation Surface](#choosing-observation-surface)
-3. [Launch Check: Pre-Flight Validation](#launch-check)
+3. [Driving a Card: Product Commands Only](#driving-a-card)
 4. [Common Pitfalls and How to Avoid Them](#common-pitfalls)
 
 ---
@@ -65,13 +65,13 @@ Different agent harnesses buffer output differently. Choose the observation surf
 **Watching pi (buffered output):**
 ```bash
 # Monitor git worktree changes (file writes)
-lybra agent watch --workspace-root ~/lybra \
-  --worktree-path ~/lybra/my_feature \
+lybra agent watch --workspace-root <workspace> \
+  --worktree-path <card-worktree> \
   --expect "deliverables/feature-*.md" \
   --stall-secs 600
 
 # Monitor process activity + session files
-lybra agent watch --workspace-root ~/lybra \
+lybra agent watch --workspace-root <workspace> \
   --proc-pattern "pi" \
   --session-dirs ".pi/sessions" \
   --health 300 --stream
@@ -79,7 +79,7 @@ lybra agent watch --workspace-root ~/lybra \
 
 **Watching unbuffered harness:**
 ```bash
-lybra agent watch --workspace-root ~/lybra \
+lybra agent watch --workspace-root <workspace> \
   --run-log /tmp/agent.log \
   --end-pattern "DONE|FAILED" \
   --expect "task_cards/*/RETURN.md" \
@@ -97,39 +97,30 @@ This is a **hint**, not an error. The watch behavior (timeout/stall thresholds) 
 
 ---
 
-## Launch Check: Pre-Flight Validation {#launch-check}
+## Driving a Card: Product Commands Only {#driving-a-card}
 
-Before launching an agent, run `launch-check` to validate the environment and gate connection:
+The advisor (driver) advances cards **only through product commands**. Never hand-write scripts that call
+gate interfaces directly (raw JSON-RPC / curl / ad-hoc gate clients). If a step cannot be done with a product
+command, that is a product gap: record it and open a card — do not work around it.
 
 ```bash
-lybra agent launch-check \
-  --actor advisor.{{ project_id }}.local \
-  --connection-json .lybra/connection.json \
-  --gate-url http://127.0.0.1:7118 \
-  [--fix]
+# Publish a card
+lybra draft create --from-json <draft.json>
+lybra draft publish --path 5_tasks/drafts/<id>.md
+
+# Advance one card end to end (claim -> return -> audit dispatch -> verdict -> finalize -> close)
+lybra loop --task-id <TASK-ID> --envelope <driver-envelope-id> --actor <advisor-instance>
 ```
 
-**What it checks:**
-- Gate reachable and responding
-- Token valid and scopes sufficient
-- Workspace structure valid
-- No stale leases blocking claim
-
-**Exit codes:**
-- **0**: All checks passed, safe to launch
-- **1**: Validation failed; see output for blocking reasons
-- **2**: Validation passed with warnings; `--fix` can auto-resolve some issues
-
-**When to use:**
-- Before spawning a new agent (especially after gate restart or token rotation)
-- After manual workspace changes
-- When debugging "why won't my agent claim tasks?"
-
-**With `--fix`:**
-Launch-check can auto-resolve bounded issues:
-- Clear stale leases (if lease expired)
-- Create missing directories
-- Does NOT write tokens or modify gate state beyond lease cleanup
+- **Claim**: `lybra loop` claims in one stage under the envelope; the gate builds the card worktree and
+  **refuses the claim if the worktree cannot be built**.
+- **Return / verdict**: once the executor/auditor has written its artifact, `lybra loop` ingests it
+  (`lybra artifact ingest`); the model field is filled by the product from the harness session record.
+- **Workstations** (executor / auditor) only type `/go`. The product picks the card (`lybra my-tasks`
+  next_card) and gives the worktree and report location. Workstations never claim, return, or submit verdicts.
+- **Waiting** for an artifact: `lybra agent watch --workspace-root <workspace> --expect <path>` (bounded,
+  foreground). Never write `until`/`sleep` polling loops.
+- **Check what comes next** (read-only): `lybra next --task-id <TASK-ID>`.
 
 ---
 
@@ -146,7 +137,7 @@ python3 -m tools.aipos_cli.agent_watch_fs  # Silent exit 0, zero output
 
 **DO:**
 ```bash
-lybra agent watch --workspace-root ~/lybra  # Correct CLI entry point
+lybra agent watch --workspace-root <workspace>  # Correct CLI entry point
 ```
 
 **SYMPTOM:** Exit 0 with no output. You may misinterpret this as "task completed successfully."
@@ -159,7 +150,7 @@ lybra agent watch --workspace-root ~/lybra  # Correct CLI entry point
 
 **DON'T:**
 ```bash
-lybra agent watch --workspace-root ~/lybra \
+lybra agent watch --workspace-root <workspace> \
   --run-log /tmp/pi.log \
   --stall-secs 600
 ```
@@ -169,8 +160,8 @@ lybra agent watch --workspace-root ~/lybra \
 **DO:**
 ```bash
 # Use worktree or process monitoring instead
-lybra agent watch --workspace-root ~/lybra \
-  --worktree-path ~/lybra/deliverables \
+lybra agent watch --workspace-root <workspace> \
+  --worktree-path <card-worktree> \
   --stall-secs 600
 ```
 
@@ -180,29 +171,24 @@ lybra agent watch --workspace-root ~/lybra \
 
 ---
 
-### Pitfall 3: Shell Pipelines and Agent Spawning
+### Pitfall 3: Hand-Rolled Polling Loops
 
 **DON'T:**
 ```bash
-echo "task prompt" | lybra agent spawn executor  # pi dies immediately
+until [ -f task_cards/<TASK-ID>/RETURN.md ]; do sleep 30; done  # unbounded, silent on failure
 ```
 
-**WHY IT FAILS:** Shell pipelines close stdin. If the spawned process expects interactive input or uses stdin for control flow, it may exit immediately.
+**WHY IT FAILS:** An unbounded shell loop never reports a stall, a premature end, or a timeout, and it
+keeps running after the session that started it is gone.
 
 **DO:**
 ```bash
-# Spawn with explicit input redirection
-lybra agent spawn executor --prompt-file /tmp/task.txt
-
-# Or use heredoc for non-interactive input
-lybra agent spawn executor <<EOF
-Task prompt here
-EOF
+lybra agent watch --workspace-root <workspace> --expect "task_cards/<TASK-ID>/RETURN.md" --timeout 1800
 ```
 
-**SYMPTOM:** Agent exits instantly (< 1 second). Run log shows "stdin closed" or process termination without error.
+**SYMPTOM:** Orphaned `sleep` processes; a "waiting" advisor that never notices the executor died.
 
-**FIX:** Avoid shell `|` with interactive processes. Use files or heredocs for input.
+**FIX:** Wait only with `lybra agent watch` (exit codes 0/2/3/4 above), or let `lybra loop` do the waiting.
 
 ---
 
@@ -216,7 +202,7 @@ lybra serve rotate  # Silently drops existing agent_instance bindings
 **WHY IT FAILS:** `serve rotate` regenerates ALL tokens. If you previously bound tokens to agent instances (`--executor-instance`, `--role-instance`), those bindings are lost. **PreAuthorized autonomy becomes unavailable** → all claims fall back to Supervised (requiring Owner confirm per task). This can break automation.
 
 **SYMPTOM (2026-08-03 incident):**
-- PreAuthorized envelopes (e.g., `pol_lybra_dev_6`) downgrade to Supervised
+- PreAuthorized envelopes (e.g., `pol_<project>_dev_1`) downgrade to Supervised
 - All task claims block waiting for Owner confirmation
 - Agent workflow stalls for 40+ minutes
 - Root cause is distant from symptom (token rotation happened hours earlier)
@@ -231,7 +217,7 @@ lybra serve rotate \
 
 **FIX:** As of AIPOS-316, `rotate` will **block** if it detects you're about to lose instance bindings:
 ```
-Error: serve rotate would lose existing instance bindings: executor=exec.lybra.local, auditor=audit.lybra.local.
+Error: serve rotate would lose existing instance bindings: executor=exec.{{ project_id }}.local, auditor=audit.{{ project_id }}.local.
 PreAuthorized autonomy would become unavailable for these roles.
 Specify --executor-instance and/or --role-instance to preserve bindings,
 or confirm this is intentional (e.g., rotating to unbind for testing).
@@ -241,35 +227,27 @@ To proceed intentionally (e.g., testing Supervised mode), you must explicitly om
 
 ---
 
-### Pitfall 5: Forgetting to Check Launch-Check Before Spawning
+### Pitfall 5: Pasting Cards or Claiming From the Workstation
 
 **DON'T:**
-```bash
-# Spawn immediately after gate restart
-lybra agent spawn executor "implement AIPOS-123"
+```text
+(paste the card body into the executor session and ask it to claim / return by itself)
 ```
 
-**WHY IT FAILS:** Gate may be up but not fully ready (state recovery in progress). Agent spawns, immediately tries to claim task, gets 503 Service Unavailable, exits.
+**WHY IT FAILS:** Workstations are zero-gate: they only produce artifacts. A workstation that claims or
+returns by itself bypasses the driver's envelope and the product's worktree / report-location derivation,
+so records and worktree drift apart.
 
 **DO:**
 ```bash
-# Pre-flight check
-lybra agent launch-check --actor advisor.{{ project_id }}.local \
-  --connection-json .lybra/connection.json \
-  --gate-url http://127.0.0.1:7118
-
-# Only spawn if launch-check exits 0
-if [ $? -eq 0 ]; then
-  lybra agent spawn executor "implement AIPOS-123"
-fi
+# Driver side
+lybra loop --task-id <TASK-ID> --envelope <driver-envelope-id> --actor <advisor-instance>
+# Workstation side: just type /go
 ```
 
-**SYMPTOM:** Agent spawns but immediately fails with connection/permission errors.
+**SYMPTOM:** Claims without a worktree, reports written to the wrong place, records that do not match the card.
 
-**FIX:** Always run `launch-check` before spawn, especially after:
-- `lybra serve start` (gate restart)
-- `lybra serve rotate` (token regeneration)
-- Manual changes to workspace or gate config
+**FIX:** Drive with `lybra loop`; workstations start with `/go` only.
 
 ---
 
@@ -288,11 +266,11 @@ fi
 │                                                                       │
 └───────────────────────────────────────────────────────────────────────┘
 
-┌─ About to spawn agent? ───────────────────────────────────────────────┐
+┌─ About to advance a card? ────────────────────────────────────────────┐
 │                                                                       │
-│  1. Run lybra agent launch-check --actor <name> [--fix]              │
-│  2. If exit 0 → spawn                                                 │
-│  3. If exit 1/2 → fix issues first                                    │
+│  1. Driver: lybra loop --task-id <ID> --envelope <id> --actor <name>  │
+│  2. Workstation: /go  (zero gate verbs)                               │
+│  3. Step fails → record the product gap; never hand-roll around it    │
 │                                                                       │
 └───────────────────────────────────────────────────────────────────────┘
 
@@ -319,6 +297,6 @@ fi
 
 ---
 
-**Document revision:** AIPOS-316 (顾问侧护栏: 误用即响 + 手册随 init 交付)
+**Document revision:** AIPOS-316 (顾问侧护栏: 误用即响 + 手册随 init 交付); AIPOS-F91 (已退役的预检/拉起命令改为现行 lybra loop + /go)
 
-**Last updated:** 2026-08-03
+**Last updated:** 2026-10-03

@@ -292,8 +292,9 @@ class HarnessAgnosticKickoffTests(unittest.TestCase):
 
     def test_materialized_kickoff_triggers_safe_file_transmission(self) -> None:
         """The materialized kickoff contains newlines (a kickoff_safe hazard), so a launcher MUST
-        transmit it via @file (not inline shell). This pins the safe-transmission contract shared
-        with advisor_pump (340/泵共用源 concern) — materialized kickoffs are multi-line by design."""
+        transmit it via @file (not inline shell). This pins the safe-transmission contract
+        (kickoff_safe single source; the pump consumer was retired by AIPOS-F91) — materialized
+        kickoffs are multi-line by design."""
         from tools.aipos_cli.kickoff_safe import KICKOFF_HAZARDS
         kickoff = self._kickoff()
         self.assertTrue(

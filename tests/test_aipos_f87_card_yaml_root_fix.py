@@ -4,7 +4,7 @@
 (`result_summary: **…**` 未转义, F42 claimed / F22·F22B completed)合成, 不读真实治理根。
 
 件① 写入侧: 交回路径(return_task 预览 = 确认阶段原样落盘的卡文本)怪值靶场逐字还原; 记录侧原手拼写入点(修订记录 / 部署记录 /
-     令牌轮换记录 / 治理条目头 / launch-check 事件 / 门进度事件 / RETURN 骨架)怪值可解析且逐字还原(main 上为红);
+     令牌轮换记录 / 治理条目头 / 门进度事件 / RETURN 骨架; launch-check 事件随模块 F91 退役)怪值可解析且逐字还原(main 上为红);
      写后回读校验: 序列化产出与待写值不一致 = 拒写且卡不落盘; 卡字段序只剩一份定义。
 件② lint FRONTMATTER_INVALID 点名坏卡; state repair dry-run 不落盘; 落盘后除被规整行外逐字节不变、全部字段值语义不变、
      队列目录/文件名不变、写 events/<ID>/event_repair_*.md; 无法安全规整 = unresolved 拒改且非零退出; queue repair 同一实现。
@@ -174,14 +174,7 @@ def test_item1_record_side_writers_poison_parseable(tmp_path, monkeypatch):
     meta, _b, w = _fm_of(block + "\n# x\n")
     assert w == [] and meta == {"status": "active", "title": value, "superseded_by": None}
 
-    from tools.aipos_cli.agent_launch_check import write_event_to_workspace
-
-    (tmp_path / "ws" / "5_tasks" / "queue").mkdir(parents=True)
-    ev = write_event_to_workspace(tmp_path / "ws", "AIPOS-F87E", {"kind": "launch_failed", "reason": value,
-                                                                   "timestamp": "2026-10-02T00:00:00Z", "attempt": 2},
-                                  actor="**actor**")
-    meta, _b, w = _fm_of(ev.read_text(encoding="utf-8"))
-    assert w == [] and meta["reason"] == value and meta["actor"] == "**actor**" and meta["attempt"] == 2
+    # launch-check 事件写入器随 agent_launch_check 模块 AIPOS-F91 退役删除, 本段随删
 
     from tools.mcp_server.tools import lybra_task_progress
 
@@ -200,7 +193,7 @@ def test_item1_record_side_writers_poison_parseable(tmp_path, monkeypatch):
 
     meta, _b, w = _fm_of(build_return_skeleton_markdown("AIPOS-F87S"))
     assert w == [] and meta["branch"] == "(待填写: 卡分支名, 如 card/AIPOS-F87S)"
-    _show("[件① 记录侧] 部署记录 / 令牌轮换记录 / 治理条目头 / launch-check 事件 / 门进度事件 / RETURN 骨架: 怪值均逐字还原")
+    _show("[件① 记录侧] 部署记录 / 令牌轮换记录 / 治理条目头 / 门进度事件 / RETURN 骨架: 怪值均逐字还原")
 
 
 def test_item1_write_after_readback_refuses_and_card_not_landed(tmp_path, monkeypatch):

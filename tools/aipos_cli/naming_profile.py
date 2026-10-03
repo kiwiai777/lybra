@@ -59,7 +59,7 @@ def _registry_prefix_mapping() -> dict[str, str]:
 
 # AIPOS-R4B-1: centralized dev defaults for the non-raising instance-name path.
 # Used by default_instance_name() when no workspace project.json is available
-# (CLI fallback paths: pump_orchestration, advisor_pump, agent_supervise).
+# (CLI fallback paths, e.g. audit_derivation; pump/supervise callers retired by AIPOS-F91).
 # Forward-compatible: override via env. The canonical, config-backed, validating
 # path remains generate_canonical_name() (which reads project.json).
 DEFAULT_INSTANCE_PROJECT = os.environ.get("LYBRA_PROJECT", "lybra")
@@ -71,9 +71,9 @@ def default_instance_name(
     """Non-raising instance-name derivation from the registry template (AIPOS-R4B-1).
 
     THE single implementation of the {prefix}.{project}.{host} pattern for the
-    non-validating/fallback paths. Replaces ~20 scattered inline literals such
-    as 'exec.lybra.kiwiai-dev' / f"{role}.lybra.kiwiai-dev" (pump_orchestration,
-    advisor_pump, agent_supervise, audit_derivation).
+    non-validating/fallback paths. Replaces ~20 scattered inline instance-name
+    literals of the {prefix}.{project}.{host} form (audit_derivation; the
+    pump/supervise callers were retired by AIPOS-F91).
 
     - prefix: the role's display prefix (e.g. 'exec', 'audit', 'advisor').
       Callers already hold this (from policy envelopes). The prefix<->role map

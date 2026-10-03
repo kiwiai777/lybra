@@ -27,10 +27,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from tools.schema_loader import resolve_governance_path
+from tools.schema_loader import code_repo_schema_root, resolve_governance_path
 
-# 产品仓根(schema 所在地)
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# 产品仓根(schema 所在地)。AIPOS-F91(L5): 不再自算, 读唯一实现 schema_loader.code_repo_schema_root
+REPO_ROOT = code_repo_schema_root()
 
 # AIPOS-F90 件①: `lybra loop` 启动时已校验的驱动方身份(--actor)与信封(--envelope)贯穿推导与执行——
 # 推导核派生账务命令(claim/return/verdict/close)的 owner_policy_ref 与执行体的信封预检同读此处, 禁 loop 收到 --envelope

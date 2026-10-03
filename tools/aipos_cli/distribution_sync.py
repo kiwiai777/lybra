@@ -34,6 +34,8 @@ AIPOS-F83 件③(F82 G3: 工位 .pi/skills/finalize-slice 悬空软链, prune �
   声明内 = 不删, 列 pi_mount_warnings(待 sync 落地); 非产品接线形态 = 不碰, 列 pi_mount_warnings。
   声明内挂载名 = workstation_wiring.declared_role_skills / declared_role_extensions + minimum_bootable_set 的 .pi/extensions 项
   (与 enroll 接线同一推导, 禁第二实现)。非本项目工位照 F66B 跳过(零写入)。
+AIPOS-F91 G3: 同一扫描再加一态 —— 原始目标指向**产品分发区**(工位父根下分发物落点顶层目录, 见 distribution_area_dirs)
+  且不在当前声明内的挂载, 目标仍在也回收(退役挂载如 claim.ts); 不指向分发区的挂载(用户自建)照旧不碰。
 """
 from __future__ import annotations
 
@@ -546,7 +548,7 @@ def _find_files_to_prune(
     """AIPOS-F66C 件①-R3: 找出分发器曾铺过、但不在当前部署声明中的文件。
 
     P0 修复: prune删除集合 = 分发器自己铺过的产物(判据:manifest历史/文件头标记),
-    **绝不能是"目录里凡不在声明的文件"** — 非分发文件(claim.ts等)一律不碰。
+    **绝不能是"目录里凡不在声明的文件"** — 非分发文件(工位自有扩展等)一律不碰。
 
     作用域:
     - _distributed/ (共享分发落点,全部为分发产物)
@@ -580,7 +582,7 @@ def _find_files_to_prune(
                             continue
                     to_prune.append(str(p))
 
-    # 2. .pi/extensions/ 需区分分发wrapper vs 非分发文件(claim.ts等)
+    # 2. .pi/extensions/ 需区分分发wrapper vs 非分发文件(工位自有扩展等)
     # 判据: 读取本地manifest历史 + 文件头分发标记
     wrapper_dir = harness_root / ".pi" / "extensions"
     if wrapper_dir.is_dir():
@@ -597,7 +599,7 @@ def _find_files_to_prune(
                     # 检查是否为分发器曾铺过的文件
                     if path_str in historical_wrappers or _is_distributed_file(p):
                         to_prune.append(path_str)
-                    # 否则为非分发文件(claim.ts等),不碰
+                    # 否则为非分发文件(工位自有扩展等),不碰
 
     # 3. AGENTS.md (charter) 为分发产物
     charter = harness_root / "AGENTS.md"
@@ -610,7 +612,7 @@ def _find_files_to_prune(
 def declared_pi_mounts(dists: list[dict[str, Any]]) -> dict[str, set[str]]:
     """AIPOS-F83 件③: 本角色当前声明的 .pi 挂载名 —— 与 enroll 接线同一推导(禁第二实现):
     skills = workstation_wiring.declared_role_skills; extensions = workstation_wiring.declared_role_extensions
-    + distribution.schema minimum_bootable_set 中 .pi/extensions/<名> 文件项(claim.ts)。"""
+    + distribution.schema minimum_bootable_set 中 .pi/extensions/<名> 文件项(AIPOS-F91: claim.ts 项退役, 现无此类项)。"""
     from tools.aipos_cli.workstation_wiring import (
         declared_role_extensions,
         declared_role_skills,
@@ -655,6 +657,21 @@ def _mount_target_alive(target: Path, pending: set[str]) -> bool:
     return False
 
 
+def distribution_area_dirs() -> tuple[str, ...]:
+    """AIPOS-F91 G3: 产品分发区 = 工位父根下分发物落点的顶层目录名(唯一推导, 禁写死第二份):
+    distribution.schema 中 target_base=harness_parent 的条目(distribution_manifest.target_base_for_kind)其
+    target.relative_path 首段, 并上共享落点 SHARED_LANDING。声明不可读 = SchemaLoadError 上抛(fail-closed, 禁猜)。"""
+    from tools.distribution_manifest import target_base_for_kind
+    from tools.schema_loader import load_schema
+
+    areas = {SHARED_LANDING}
+    for dist in load_schema("distribution").get("distributions") or []:
+        rel = str(((dist.get("target") or {}).get("relative_path")) or "").strip("/")
+        if rel and target_base_for_kind(str(dist.get("kind") or "")) == "harness_parent":
+            areas.add(rel.split("/", 1)[0])
+    return tuple(sorted(areas))
+
+
 def pi_mount_scan(
     harness_root: Path,
     dists: list[dict[str, Any]],
@@ -668,6 +685,8 @@ def pi_mount_scan(
     - 不在当前声明内 且 原始目标为产品接线形态(workstation_wiring.MOUNT_TO_HARNESS_PARENT 相对前缀)= prune;
     - 在当前声明内 = 不删, 列 declared_missing(目标待 sync 落地);
     - 非产品接线形态(绝对路径/其他相对形态)= 不碰, 列 foreign(工位自有挂载, 须人工核)。
+    AIPOS-F91 G3: 不在当前声明内 且 原始目标指向产品分发区(MOUNT_TO_HARNESS_PARENT + distribution_area_dirs 之一)
+    = prune, 目标仍在也回收(退役挂载, 如最小集退役的 claim.ts); 不指向分发区的挂载目标在时一律不碰。
     返回 {prune:[绝对路径], declared_missing:[说明], foreign:[说明]}。
     """
     from tools.aipos_cli.workstation_wiring import MOUNT_TO_HARNESS_PARENT
@@ -679,6 +698,7 @@ def pi_mount_scan(
     if mounts is None:
         mounts = declared_pi_mounts(dists)
     pending = {str(Path(p).resolve()) for p in to_prune}
+    area_prefixes = tuple(f"{MOUNT_TO_HARNESS_PARENT}{d}/" for d in distribution_area_dirs())
     for sub in PI_MOUNT_DIRS:
         base = pi / sub
         if not base.is_dir():
@@ -688,6 +708,9 @@ def pi_mount_scan(
             if found is None:
                 continue
             raw, target = found
+            if mount.name not in mounts.get(sub, set()) and raw.startswith(area_prefixes):
+                report["prune"].append(str(mount))  # AIPOS-F91 G3: 分发区内未声明 = 回收(目标在也回收)
+                continue
             if _mount_target_alive(target, pending):
                 continue
             rel = f".pi/{sub}/{mount.name}"

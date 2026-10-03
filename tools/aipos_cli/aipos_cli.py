@@ -106,24 +106,6 @@ from tools.aipos_cli.workspace_config import (
     write_workspace_config,
 )
 
-# AIPOS-R4B-1 FIX-2: 延迟初始化(避免模块级导入崩溃 CLI)。见 AUDIT-R4B-1 F-R4B1-1。
-_DEFAULT_GATE_URL: str | None = None
-
-def _get_default_gate_url() -> str:
-    """惰性读取 gate URL(避免模块级导入 schema_loader)。"""
-    global _DEFAULT_GATE_URL
-    if _DEFAULT_GATE_URL is None:
-        try:
-            from tools.schema_loader import get_config_default_gate_url
-            _DEFAULT_GATE_URL = get_config_default_gate_url()
-        except ImportError as e:
-            raise ImportError(
-                "Cannot load schema_loader.get_config_default_gate_url() for gate URL default. "
-                "This typically occurs when running lybra CLI from outside the project root "
-                "in an editable install. Run from the project directory or ensure PYTHONPATH "
-                "includes the project root."
-            ) from e
-    return _DEFAULT_GATE_URL
 from tools.aipos_cli.home_git import execute_home_git_init, plan_home_git_init
 from tools.aipos_cli.project_structure import (
     export_project_to_yaml,
@@ -1207,40 +1189,6 @@ def build_parser() -> argparse.ArgumentParser:
     _watch_parser.add_argument("--worktree-path", help="[AIPOS-295] Git worktree path to monitor for changes (default: parent of workspace-root)")
     _watch_parser.add_argument("--unhealthy-cycles", type=int, default=2, help="[AIPOS-295] Consecutive silent health cycles before emitting 'unhealthy' event (default: 2)")
     
-    # `agent supervise` (AIPOS-295): health monitoring with bounded auto-restart
-    _supervise_parser = agent_subparsers.add_parser(
-        "supervise",
-        help="[AIPOS-295] Health monitoring with bounded auto-restart. Spawns a command, monitors health, "
-        "and implements bounded self-healing (1 respawn, then ESCALATE). Exit 75 on escalation (RestartPreventExitStatus)."
-    )
-    _supervise_parser.add_argument("--spawn-cmd", required=True, help="Command to spawn (must include timeout wrapper)")
-    _supervise_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root")
-    _supervise_parser.add_argument("--product-repo", help="Product repo root (default: project.json 声明的产品仓, AIPOS-F88 product_repo_root)")
-    _supervise_parser.add_argument("--card-id", required=True, help="Task card ID (for ESCALATE file)")
-    _supervise_parser.add_argument("--health-interval", type=float, default=300, help="Health check interval seconds (default: 300)")
-    _supervise_parser.add_argument("--pid-file", help="PID file path (optional, for process monitoring)")
-    _supervise_parser.add_argument("--proc-pattern", help="Process name pattern (e.g., 'node' for pi)")
-    _supervise_parser.add_argument("--session-dirs", help="Comma-separated session directories")
-    _supervise_parser.add_argument("--worktree-path", help="Git worktree path (default: product-repo)")
-    _supervise_parser.add_argument("--run-log", help="Run log path (for stall detection)")
-    
-    # `agent launch-check` (AIPOS-295C): 开工确认 + 首刻失败自愈
-    _launch_check_parser = agent_subparsers.add_parser(
-        "launch-check",
-        help="[AIPOS-295C] 开工确认 + 首刻失败自愈. Verifies agent actually starts working (not just process exists). "
-        "Implements bounded retry (1 relaunch) and writes BLOCK on double failure. Exit 2 on BLOCK."
-    )
-    _launch_check_parser.add_argument("--spawn-cmd", required=True, help="Command to spawn (must include timeout wrapper)")
-    _launch_check_parser.add_argument("--task-id", required=True, help="Task card ID (e.g., AIPOS-295C)")
-    _launch_check_parser.add_argument("--executor-instance", required=True, help="Executor agent instance name")
-    _launch_check_parser.add_argument("--product-repo", help="Product repo root (default: project.json 声明的产品仓, AIPOS-F88 product_repo_root)")
-    _launch_check_parser.add_argument("--session-dirs", help="Comma-separated session directories to monitor")
-    _launch_check_parser.add_argument("--worktree-path", help="Git worktree path (default: product-repo)")
-    # AIPOS-332F4: CLI 兆底默认从 90→180(慢端点冷启动实测 ~60s 留裕量)
-    _launch_check_parser.add_argument("--launch-window", type=float, default=180, help="Launch verification window seconds (default: 180, AIPOS-332F4)")
-    _launch_check_parser.add_argument("--check-interval", type=float, default=5, help="Poll interval seconds (default: 5)")
-    _launch_check_parser.add_argument("--model-fallback-policy", help="JSON file with model substitution policy (optional)")
-
     # AIPOS-363 S1/S2: `agent materialize` / `agent pushback` — the cross-machine adaptation
     # layer. materialize = claim + pull body (319) + drop LOCAL material + print a zero-gate-verb
     # kickoff; pushback = read LOCAL RETURN + push via 320 + self-confirm (328). The agent only
@@ -1559,41 +1507,6 @@ def build_parser() -> argparse.ArgumentParser:
     agents_parser = subparsers.add_parser("agents", help="Render agent profiles")
     agents_parser.add_argument("--json", action="store_true", help="Output JSON")
 
-    # AIPOS-358: auditor thin shell (退役私有编排,定时器直驱 lybra next)
-    auditor_parser = subparsers.add_parser("auditor", help="AIPOS-358: Auditor daemon operations (thin shell)")
-    auditor_subparsers = auditor_parser.add_subparsers(dest="auditor_command")
-    auditor_loop_parser = auditor_subparsers.add_parser(
-        "loop",
-        help="AIPOS-358: Auditor thin shell daemon. Calls lybra next on a timer. Never exits due to business results."
-    )
-    auditor_loop_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root (治理仓)")
-    auditor_loop_parser.add_argument("--interval", type=float, default=20.0, help="Scan interval seconds (default: 20)")
-    # Retained args for backward compat (systemd unit may pass them); ignored by thin shell.
-    auditor_loop_parser.add_argument("--product-repo", help=argparse.SUPPRESS)
-    auditor_loop_parser.add_argument("--gate-url", help=argparse.SUPPRESS)
-    auditor_loop_parser.add_argument("--connection-json", help=argparse.SUPPRESS)
-    auditor_loop_parser.add_argument("--auditor-instance", help=argparse.SUPPRESS)
-    auditor_loop_parser.add_argument("--policy", "--envelope", dest="envelope", help=argparse.SUPPRESS)
-    auditor_loop_parser.add_argument("--runtime-cmd", help=argparse.SUPPRESS)
-    auditor_loop_parser.add_argument("--timeout", type=float, help=argparse.SUPPRESS)
-    auditor_loop_parser.add_argument("--claim-transient-tries", type=int, help=argparse.SUPPRESS)
-    # AIPOS-358: auditor launch (执行出口, 由 lybra next 推导的审计命令调用)
-    auditor_launch_parser = auditor_subparsers.add_parser(
-        "launch",
-        help="AIPOS-358: Launch auditor agent for a specific audit card (called by lybra next derived audit command)."
-    )
-    auditor_launch_parser.add_argument("--task-id", required=True, help="Audit task ID")
-    auditor_launch_parser.add_argument("--reviewed-task-id", default="", help="Reviewed (audited) task ID")
-    auditor_launch_parser.add_argument("--workspace-root", required=True, type=Path, help="Workspace root")
-    auditor_launch_parser.add_argument("--product-repo", type=Path, help="Product repo (default: project.json 声明的产品仓, AIPOS-F88 product_repo_root)")
-    auditor_launch_parser.add_argument("--envelope", default="pol_lybra_audit_1", help="PreAuthorized envelope ref")
-    auditor_launch_parser.add_argument("--audit-cards-path", default="", help="Path to the audit card file")
-    auditor_launch_parser.add_argument(
-        "--runtime-cmd",
-        default="pi --model anthropic/claude-3-5-sonnet-20241022 --prompt '{kickoff}'",
-        help="Auditor runtime command template"
-    )
-
     # AIPOS-FND-7: audit dispatch 顶级命令（派审自动建记录）
     audit_dispatch_parser = subparsers.add_parser("audit", help="Audit operations")
     audit_subparsers = audit_dispatch_parser.add_subparsers(dest="audit_command")
@@ -1643,36 +1556,6 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verdict_parser.add_argument("--connection-json", help="Path to connection.json (default: .lybra/connection.json in workspace)")
     audit_verdict_parser.add_argument("--token-role", default=None, help="Token role in connection.json (AIPOS-F78 前置零①: 缺省=roles.schema driver.role_class 的驱动方 token; 显式指定仅供靶场/人肉 gate)")
     audit_verdict_parser.add_argument("--json", action="store_true", help="Output JSON")
-
-    # AIPOS-325: pump 子命令 (kickoff 三层制约 + 产品 CLI 入口)
-    pump_parser = subparsers.add_parser("pump", help="AIPOS-325: Advisor pump operations with kickoff constraints")
-    pump_subparsers = pump_parser.add_subparsers(dest="pump_command")
-    pump_run_parser = pump_subparsers.add_parser(
-        "run",
-        help="Dispatch a task with kickoff three-layer constraints (generated kickoff + budget limit + repetition check)"
-    )
-    pump_run_parser.add_argument("--card", "--card-id", dest="card_id", required=True, help="Task card ID (e.g., AIPOS-325)")
-    pump_run_parser.add_argument("--role", required=True, choices=["executor", "auditor"], help="Target role (executor or auditor)")
-    pump_run_parser.add_argument("--round-type", default="first", choices=["first", "fix", "resume"], help="Round type: first (default), fix (repair), or resume (continue)")
-    pump_run_parser.add_argument("--delta", default="", help="Incremental information for this round (advisor provides only delta)")
-    pump_run_parser.add_argument("--workspace-root", required=True, help="Lybra workspace root (governance repo)")
-    pump_run_parser.add_argument("--product-repo", help="Product repo root (default: project.json 声明的产品仓, AIPOS-F88 product_repo_root)")
-    pump_run_parser.add_argument("--gate-url", default=None, help="Gate URL (default: http://127.0.0.1:7118)")
-    pump_run_parser.add_argument("--connection-json", help="Path to connection.json (default: <workspace>/.lybra/connection.json)")
-    pump_run_parser.add_argument("--envelope", help="Policy envelope ID (auto-detect from policies/ if not provided)")
-    pump_run_parser.add_argument("--budget-threshold", type=int, default=8000, help="Budget threshold in tokens (default: 8000)")
-    pump_run_parser.add_argument("--repetition-threshold", type=float, default=0.3, help="Repetition overlap threshold 0.0-1.0 (default: 0.3)")
-    pump_run_parser.add_argument("--dry-run", action="store_true", help="Validate kickoff constraints without actual dispatch")
-    pump_run_parser.add_argument("--json", action="store_true", help="Output JSON")
-    # AIPOS-332: 编排式全程派工的新参数(默认关,不改既有参数语义 S6④)
-    pump_run_parser.add_argument("--runtime", default=None, help="[AIPOS-332] 运行体类型档案(pi/cc/claude_code/generic_bash);决定观测面选择")
-    pump_run_parser.add_argument("--output-target", default=None, help="[AIPOS-332] 任务产出位置(tools/docs/config/remote/workspace_only);决定 worktree 判据是否适用")
-    pump_run_parser.add_argument("--runtime-cmd", default=None, help="[AIPOS-332] 拉起命令模板(含 {kickoff} 占位);非 dry-run 时必需,判断留人")
-    pump_run_parser.add_argument("--reviewed-task-id", default=None, help="[AIPOS-332] 审计裁决落该(被审卡)ID 目录;role=auditor 时用")
-    pump_run_parser.add_argument("--executor-instance", default=None, help="[AIPOS-332] 执行体实例名(默认 <role>.lybra.kiwiai-dev)")
-    pump_run_parser.add_argument("--workdir", default=None, help="[AIPOS-332F5] 运行体真实工作目录(用于会话目录编码);不配则会话判据不可用")
-    pump_run_parser.add_argument("--runtime-cmds-yaml", default=None, help="[AIPOS-332F5] runtime_cmds.yaml 路径(从中读 workdir 等配置)")
-    pump_run_parser.add_argument("--check-unmanaged", action="store_true", help="[AIPOS-332 S3] 只读列出非泵派出的在跑 agent,后退出")
 
     mcp_parser = subparsers.add_parser("mcp", help="Start MCP HTTP/SSE or run MCP setup diagnostics")
     mcp_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
@@ -2057,17 +1940,7 @@ def build_parser() -> argparse.ArgumentParser:
                                              "给出时与产物入口自判的种类不符即拒(INGEST_KIND_MISMATCH)")
     artifact_ingest_parser.add_argument("--json", action="store_true", help="JSON 输出")
 
-    # AIPOS-F71: 退役旧入口 — turn-advancer 与 next-step 保留为兼容转发(输出退役提示)
-    turn_parser = subparsers.add_parser("turn-advancer", help="[RETIRED by AIPOS-F71] Use 'lybra next' instead")
-    turn_subparsers = turn_parser.add_subparsers(dest="turn_command")
-    turn_next_parser = turn_subparsers.add_parser("next", help="[RETIRED] Use 'lybra next --task-id <ID>'")
-    turn_next_parser.add_argument("task_id", help="Task ID to resolve")
-    turn_next_parser.add_argument("--workspace-root", type=Path, help="Workspace root")
-    turn_next_parser.add_argument("--mode", choices=["manual", "auto"], default="manual", help="[RETIRED]")
-    turn_scan_parser = turn_subparsers.add_parser("scan", help="[RETIRED] Use 'lybra next'")
-    turn_scan_parser.add_argument("--workspace-root", type=Path, help="Workspace root")
-    turn_scan_parser.add_argument("--mode", choices=["manual", "auto"], default="manual", help="[RETIRED]")
-
+    # AIPOS-F71: 退役旧入口 next-step 保留为兼容转发(输出退役提示); turn-advancer 入口随 AIPOS-F91 删除
     next_step_parser = subparsers.add_parser("next-step", help="[RETIRED by AIPOS-F71] Use 'lybra next --task-id <ID>' instead")
     next_step_parser.add_argument("--task-id", required=True, help="Task ID to resolve")
     next_step_parser.add_argument("--workspace-root", type=Path, help="Workspace root")
@@ -2333,14 +2206,6 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "agent_command", None) == "watch" and getattr(args, "workspace_root", None):
             from tools.aipos_cli.agent_watch_fs import run_fs_watch_cli
             return run_fs_watch_cli(args)
-        # AIPOS-295: agent supervise
-        if getattr(args, "agent_command", None) == "supervise":
-            from tools.aipos_cli.agent_supervise import main as supervise_main
-            return supervise_main(sys.argv[3:])  # Pass remaining args after 'agent supervise'
-        # AIPOS-295C: agent launch-check
-        if getattr(args, "agent_command", None) == "launch-check":
-            from tools.aipos_cli.agent_launch_check import main as launch_check_main
-            return launch_check_main(sys.argv[3:])  # Pass remaining args after 'agent launch-check'
         # AIPOS-363 S1/S2: agent materialize / pushback (cross-machine adaptation layer)
         if getattr(args, "agent_command", None) == "materialize":
             from tools.aipos_cli.agent_materialize import run_materialize
@@ -5097,44 +4962,6 @@ def main(argv: list[str] | None = None) -> int:
             print(render_agents_text(profiles))
         return 0
 
-    if args.command == "auditor":
-        if getattr(args, "auditor_command", None) == "loop":
-            # AIPOS-358: thin shell — only workspace-root and interval matter
-            from tools.aipos_cli.auditor_loop import main as auditor_loop_main
-            argv = ["--workspace-root", args.workspace_root, "--interval", str(args.interval)]
-            return auditor_loop_main(argv)
-        if getattr(args, "auditor_command", None) == "launch":
-            # AIPOS-358: auditor launch (execution出口, called by lybra next derived audit command)
-            from tools.aipos_cli.auditor_runtime import launch_auditor_runtime
-            ws = args.workspace_root.expanduser().resolve()
-            # AIPOS-F88 件③: 产品仓缺省 = product_repo_root(治理根)(项目声明的产品仓), 禁写死机器路径; 解析不到 = 拒(带出口)
-            if args.product_repo:
-                product_repo = args.product_repo.expanduser().resolve()
-            else:
-                from tools.aipos_cli.workspace_config import CardRepoUnresolved, product_repo_root
-
-                try:
-                    product_repo = product_repo_root(ws, allow_governance_root=False)
-                except CardRepoUnresolved as exc:
-                    print(f"Error: 产品仓不可解析(传 --product-repo 或在 project.json 声明 code_repo/repos): {exc}", file=sys.stderr)
-                    return 1
-            try:
-                result = launch_auditor_runtime(
-                    runtime_cmd_template=args.runtime_cmd,
-                    audit_task_id=args.task_id,
-                    reviewed_task_id=args.reviewed_task_id or "",
-                    audit_card_path=args.audit_card_path or "",
-                    product_repo=product_repo,
-                    workspace_root=ws,
-                    envelope=args.envelope,
-                )
-                return int(result["exit_code"])
-            except Exception as exc:
-                print(f"ERROR: auditor launch failed: {exc}", file=sys.stderr)
-                return 1
-        parser.print_help()
-        return 2
-
     if args.command == "audit":
         if getattr(args, "audit_command", None) == "dispatch":
             from tools.aipos_cli.board_adapter import audit_dispatch_task
@@ -5431,127 +5258,6 @@ def main(argv: list[str] | None = None) -> int:
         
         return 0 if result.get("ok") else 1
 
-    if args.command == "pump":
-        if getattr(args, "pump_command", None) == "run":
-            from tools.aipos_cli.advisor_pump import validate_and_dispatch
-            from tools.aipos_cli.pump_orchestration import (
-                DispatchContext, run_pump_dispatch, render_dispatch_plan, list_unmanaged_agents,
-            )
-
-            workspace_root = Path(args.workspace_root).expanduser().resolve()
-            # AIPOS-F88 件③: 产品仓缺省 = product_repo_root(治理根)(项目声明的产品仓), 禁写死机器路径; 解析不到 = 拒(带出口)
-            if args.product_repo:
-                product_repo = Path(args.product_repo).expanduser().resolve()
-            else:
-                from tools.aipos_cli.workspace_config import CardRepoUnresolved, product_repo_root
-
-                try:
-                    product_repo = product_repo_root(workspace_root, allow_governance_root=False)
-                except CardRepoUnresolved as exc:
-                    print(f"Error: 产品仓不可解析(传 --product-repo 或在 project.json 声明 code_repo/repos): {exc}", file=sys.stderr)
-                    return 1
-            connection_json = Path(args.connection_json).expanduser().resolve() if getattr(args, "connection_json", None) else (workspace_root / ".lybra" / "connection.json")
-
-            # S3: --check-unmanaged 只读列出非泵派出的在跑 agent,后退出(不阻止人工介入)
-            if getattr(args, "check_unmanaged", False):
-                unmanaged = list_unmanaged_agents(product_repo, workspace_root, managed_task_ids=set())
-                if args.json:
-                    print(render_json({"unmanaged": unmanaged}))
-                else:
-                    print("[S3] 非泵派出的在跑 agent(只读告警,不阻止):")
-                    for u in unmanaged:
-                        print(f"  - {u['task_id']}  信号: {u['signal']}")
-                    if not unmanaged:
-                        print("  (无)")
-                return 0
-
-            # 保留现有三层制约(预算/复述)——零回归
-            result = validate_and_dispatch(
-                card_id=args.card_id, role=args.role, round_type=args.round_type,
-                delta=args.delta, workspace_root=workspace_root,
-                budget_threshold=args.budget_threshold, repetition_threshold=args.repetition_threshold,
-                dry_run=args.dry_run,
-            )
-            if not result["ok"]:
-                if args.json:
-                    print(render_json(result))
-                else:
-                    print("\u2717 Kickoff validation BLOCKED")
-                    for error in result.get("errors", []):
-                        print(f"  - {error}")
-                return 1
-
-            # 构建编排上下文(AIPOS-332)
-            try:
-                collab = get_collaboration_profile(str(product_repo))
-            except Exception:
-                collab = None
-            # AIPOS-332F5:解析 workdir(优先级:CLI --workdir > runtime_cmds.yaml > None)
-            workdir_path = None
-            if getattr(args, "workdir", None):
-                workdir_path = Path(args.workdir).expanduser().resolve()
-            else:
-                # 尝试从 runtime_cmds.yaml 读取
-                import yaml as _yaml
-                rc_yaml_path = getattr(args, "runtime_cmds_yaml", None)
-                if not rc_yaml_path:
-                    # 自动发现:产品仓 config/runtime_cmds.yaml
-                    candidate = product_repo / "config" / "runtime_cmds.yaml"
-                    if candidate.is_file():
-                        rc_yaml_path = str(candidate)
-                if rc_yaml_path:
-                    try:
-                        with open(rc_yaml_path) as _f:
-                            _rc_data = _yaml.safe_load(_f) or {}
-                        runtime_type = getattr(args, "runtime", None)
-                        if runtime_type and runtime_type in _rc_data:
-                            _wd = _rc_data[runtime_type].get("workdir")
-                            if _wd:
-                                workdir_path = Path(_wd).expanduser().resolve()
-                    except Exception:
-                        pass  # 配置读失败不阻塞派工,workdir 留 None 走降级
-            ctx = DispatchContext(
-                card_id=args.card_id, role=args.role, round_type=args.round_type, delta=args.delta,
-                workspace_root=workspace_root, product_repo=product_repo,
-                gate_url=getattr(args, "gate_url", None) or _get_default_gate_url(),
-                connection_json=connection_json, envelope=getattr(args, "envelope", "") or "",
-                executor_instance=getattr(args, "executor_instance", None) or "",
-                reviewed_task_id=getattr(args, "reviewed_task_id", None),
-                runtime_type=getattr(args, "runtime", None),
-                output_target=getattr(args, "output_target", None),
-                collaboration_profile=collab,
-                runtime_cmd_template=getattr(args, "runtime_cmd", None),
-                workdir=workdir_path,
-            )
-
-            dispatch = run_pump_dispatch(ctx, dry_run=args.dry_run)
-
-            if args.json:
-                # JSON 只增字段不删字段、不改字段语义(S6④)
-                out = dict(result)
-                out["dispatch"] = dispatch
-                print(render_json(out))
-            else:
-                if args.dry_run:
-                    print("\u2713 Kickoff validation PASSED")
-                    print(render_dispatch_plan(dispatch))
-                    metrics = result.get("metrics", {})
-                    if metrics:
-                        print(f"\nMetrics: tokens={metrics.get('total_tokens','N/A')} overlap={metrics.get('overlap_ratio',0.0):.1%}")
-                    print("\n[DRY RUN] 校验通过,未派工(--dry-run 保留现有语义)。")
-                else:
-                    print(render_dispatch_plan(dispatch))
-                    sv = (dispatch.get("watch") or {}).get("verify") or dispatch.get("sentinel_verify") or {}
-                    if sv.get("expect_status"):
-                        print("\n哨兵自证(expect 布防即检):")
-                        for e in sv["expect_status"]:
-                            tag = f" [{e.get('label')}]" if e.get("matched") else ""
-                            print(f"  - {e['pattern']}  命中={e['matched']}{tag}")
-            return 0 if dispatch["ok"] else 1
-        
-        parser.print_help()
-        return 2
-
     if args.command == "task":
         try:
             selected = _resolve_task_selection(args, tasks)
@@ -5643,24 +5349,6 @@ def main(argv: list[str] | None = None) -> int:
             import traceback
             traceback.print_exc(file=sys.stderr)
             return 1
-
-    # AIPOS-F71: 退役入口 — turn-advancer 与 next-step 转发到 next
-    if args.command == "turn-advancer":
-        print("[RETIRED] 'lybra turn-advancer' is retired by AIPOS-F71. Use 'lybra next' instead.", file=sys.stderr)
-        from tools.aipos_cli.next_resolver import derive_next_step, scan_project, format_output, format_scan_output
-        ws_root = getattr(args, "workspace_root", None) or _find_repo_root_for_args(args)
-        json_mode = getattr(args, "json", False)
-        if args.turn_command == "next":
-            result = derive_next_step(args.task_id, ws_root)
-            print(format_output(result, json_mode=json_mode))
-            return 0 if result.get("derivable") else 1
-        elif args.turn_command == "scan":
-            results = scan_project(ws_root)
-            print(format_scan_output(results, json_mode=json_mode))
-            return 0
-        else:
-            print("Usage: lybra next [--task-id <ID>]", file=sys.stderr)
-            return 2
 
     if args.command == "next-step":
         print("[RETIRED] 'lybra next-step' is retired by AIPOS-F71. Use 'lybra next --task-id <ID>' instead.", file=sys.stderr)

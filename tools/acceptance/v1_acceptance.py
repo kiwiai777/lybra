@@ -18,7 +18,9 @@ import sys
 from tools.schema_constants import RecordType
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from tools.schema_loader import code_repo_schema_root  # noqa: E402
+
+REPO_ROOT = code_repo_schema_root()  # AIPOS-F91(L5): 产品仓根读唯一实现, 不再自算
 
 # Acceptance anchors (承 the named slices). Each is an existing test module run with REAL
 # serve-rotate credentials (no hand-built registry) — not re-implemented here.
@@ -71,7 +73,8 @@ print("GATE_OK_NO_TEXTUAL")  # keep tag for existing check
 import tempfile, json
 from pathlib import Path
 
-REPO_ROOT = Path(".").resolve()  # probe is run with cwd=REPO_ROOT via subprocess
+from tools.schema_loader import code_repo_schema_root
+REPO_ROOT = code_repo_schema_root()  # AIPOS-F91(L5): 读唯一实现(probe 经 PYTHONPATH=REPO_ROOT 子进程运行)
 TEMPLATES_DIR = REPO_ROOT / "templates"
 
 # (a) A rendered return record round-trips losslessly (no PyYAML, no textual).
