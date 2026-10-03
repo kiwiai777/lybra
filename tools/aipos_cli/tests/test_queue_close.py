@@ -91,7 +91,9 @@ def repo(tmp_path: Path) -> Path:
     )
 
     # Create project.json so _resolve_active_project_for works
-    (root / "project.json").write_text('{"project": "lybra"}\n', encoding="utf-8")
+    # AIPOS-F89 件② M17: 「治理账齐全」= 项目声明了卡编年史(paths.foundation_backlog); 未声明的新项目形另有用例(跳过+warning)
+    (root / "project.json").write_text(
+        '{"project": "lybra", "paths": {"foundation_backlog": "governance/FOUNDATION-BACKLOG.md"}}\n', encoding="utf-8")
 
     return root
 

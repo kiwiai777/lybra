@@ -28,7 +28,7 @@
 - 这是"三个月后的人只读这一篇+其后的 decision_log 即可上手"的基线
 - 包含：阶段目标/交付清单/关键裁决指针/遗留账/下一阶段入口
 
-**如果阶段归档目录为空或不存在**：从卡粒度编年史（`governance_structure.paths.foundation_backlog`）和项目设计文档（`governance_structure.paths.governance_docs` 的 `files.design`）开始。
+**如果阶段归档目录为空或不存在**：从卡粒度编年史（project.json `paths.foundation_backlog`, 项目声明了才有）和项目设计文档（`governance_structure.paths.governance_docs` 目录下项目自定的设计文档, 如有）开始。
 
 #### ② 读该篇之后的 decision_log 全部条目 = 增量真相
 
@@ -102,7 +102,7 @@ superseded_by: <ref>   # 如果 superseded，指向新文档
 
 ### 场景 1: 冷启动会话，需要了解当前 loop 设计
 
-1. 读阶段归档目录（`<stage_archive>/`）找最新篇（如果为空，读项目设计文档 `files.design`）
+1. 读阶段归档目录（`<stage_archive>/`）找最新篇（如果为空，读项目自定的设计文档, 如有）
 2. 读该篇标注的日期之后的所有 `<decision_log_dir>/<YYYY-MM>/*.md`
 3. 如果看到设计文档文件头有 `status: active`，那就是当前权威
 4. 如果看到两份设计文档互相冲突，检查 decision_log 有无 superseding 记录
@@ -148,8 +148,8 @@ superseded_by: null
 
 ## 关联设计
 
-- **设计权威**: 本项目设计文档（`governance_structure.paths.governance_docs` 的 `files.design`）中的时间线宪法章节
-- **固化路径**: `config.schema.json` governance_structure（目录键 `stage_archive` / `decision_log_dir` / `foundation_backlog` / `governance_docs`；落点以本项目 project.json 声明为准）
+- **设计权威**: 本项目设计文档（`governance_structure.paths.governance_docs` 目录下项目自定, 如有）中的时间线宪法章节
+- **固化路径**: `config.schema.json` governance_structure（目录键 `stage_archive` / `decision_log_dir` / `governance_docs`）+ 本项目 project.json `paths`（卡编年史 `foundation_backlog` 为项目可选声明；落点以本项目 project.json 声明为准）
 - **执法**: `tools/hooks/governance-pre-commit` (大项 B)
 
 ---

@@ -217,43 +217,48 @@ def test_item1_go_ts_reads_only_product_fields():
 # 件② 章程指向更正
 # ===========================================================================
 
-def _commands_manual_ref() -> str:
-    from tools.schema_loader import get_governance_structure
-
-    docs = get_governance_structure()["paths"]["governance_docs"]
-    return f"{str(docs['path']).strip('/')}/{docs['files']['commands']}"
+HARD_RULES_LINE_SUFFIX = "。修改该来源 → 章程与派审注入同步跟随。"
 
 
 def test_item2_charters_point_at_declared_commands_manual():
-    """三份母本 grep ADVISOR-COMMANDS 零命中; 「单一真相源」行 = config.schema governance_docs 声明名 § 0.5 =
-    硬规矩提取器(hard_rules_extractor)生成的同一行。"""
-    manual = _commands_manual_ref()
-    assert manual == "governance/COMMANDS.md"
-    line = f"> **单一真相源**: {manual} § 0.5。修改手册 → 章程与派审注入同步跟随。"
+    """三份母本 grep ADVISOR-COMMANDS 零命中; 「单一真相源」行 = 占位 {{hard_rules_source}}(AIPOS-F89 件② M17: 硬规矩来源读项目
+    声明 project.json paths.hard_rules_source, 不再写死治理文档名) = 硬规矩提取器(hard_rules_extractor)生成的同一行形。"""
+    line = "> **单一真相源**: {{hard_rules_source}}" + HARD_RULES_LINE_SUFFIX
     extractor_src = (REPO_ROOT / "tools" / "aipos_cli" / "hard_rules_extractor.py").read_text(encoding="utf-8")
-    assert line in extractor_src
+    assert 'f"> **单一真相源**: {hard_rules_source_ref(gov_root)}' + HARD_RULES_LINE_SUFFIX + '"' in extractor_src
     for role in ROLES:
         text = (REPO_ROOT / "agents" / "roles" / role / "AGENTS.md").read_text(encoding="utf-8")
-        assert "ADVISOR-COMMANDS" not in text, role
+        assert "ADVISOR-COMMANDS" not in text and "COMMANDS.md" not in text, role
         assert text.count(line) == 1, role
     advisor = (REPO_ROOT / "agents" / "roles" / "advisor" / "AGENTS.md").read_text(encoding="utf-8")
-    assert f"`{manual}` 中残留的手搓片段标注为**已退役**" in advisor
+    assert "项目命令手册(如有, 治理文档名由项目自定)中残留的手搓片段标注为**已退役**" in advisor
 
 
 def test_item2_rendered_charters_have_no_residue(tmp_path, monkeypatch):
-    """charter_render 渲染三份(lybra 形上下文)后: 无 ADVISOR-COMMANDS, 含 COMMANDS.md § 0.5 指向。"""
+    """charter_render 渲染三份(lybra 形上下文)后: 无 ADVISOR-COMMANDS、无未替换占位; 「单一真相源」= 项目声明
+    paths.hard_rules_source § 0.5(声明了)/ 母本自带(未声明, AIPOS-F89 件② M17)。"""
+    from tools.aipos_cli.hard_rules_extractor import UNDECLARED_REF
+
     gov = _charter_gov(tmp_path, monkeypatch, shape="lybra")
     prefixes = {"executor": "exec", "auditor": "audit", "advisor": "advisor"}
-    for role in ROLES:
-        harness = tmp_path / "pi" / f"lybra-{role}"
-        harness.mkdir(parents=True)
-        ctx = charter_render_context(gov, identity=_identity(harness, role, f"{prefixes[role]}.lybra.hostl", "lybra"),
-                                     product_commit="deadbeef")
-        rendered = render_charter((REPO_ROOT / "agents" / "roles" / role / "AGENTS.md").read_text(encoding="utf-8"), ctx)
-        hits = [ln for ln in rendered.splitlines() if "COMMANDS" in ln]
-        _show(f"[{role} 渲染后 COMMANDS 行] " + " | ".join(hits))
-        assert "ADVISOR-COMMANDS" not in rendered and "{{" not in rendered
-        assert "governance/COMMANDS.md § 0.5" in rendered
+    decl = json.loads((gov / "project.json").read_text(encoding="utf-8"))
+    for declared in (False, True):
+        if declared:
+            decl["paths"]["hard_rules_source"] = "governance/COMMANDS.md"
+            (gov / "project.json").write_text(json.dumps(decl), encoding="utf-8")
+        for role in ROLES:
+            harness = tmp_path / "pi" / f"lybra-{role}-{int(declared)}"
+            harness.mkdir(parents=True)
+            ctx = charter_render_context(gov, identity=_identity(harness, role, f"{prefixes[role]}.lybra.hostl", "lybra"),
+                                         product_commit="deadbeef")
+            rendered = render_charter((REPO_ROOT / "agents" / "roles" / role / "AGENTS.md").read_text(encoding="utf-8"), ctx)
+            hits = [ln for ln in rendered.splitlines() if "单一真相源" in ln]
+            _show(f"[{role} 渲染后 单一真相源 行 declared={declared}] " + " | ".join(hits))
+            assert "ADVISOR-COMMANDS" not in rendered and "{{" not in rendered
+            expected = "governance/COMMANDS.md § 0.5" if declared else UNDECLARED_REF
+            assert f"> **单一真相源**: {expected}{HARD_RULES_LINE_SUFFIX}" in rendered
+            if not declared:
+                assert "COMMANDS.md" not in rendered
 
 
 # ===========================================================================

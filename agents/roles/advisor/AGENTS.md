@@ -18,7 +18,7 @@
    - **禁手写脚本直接调门接口**(代按认领、手按两跳确认、手提裁决)——已退役(AIPOS-F90), 推进只用 `lybra loop`。
    - **必用产品命令**:`lybra draft publish`、`lybra queue amend`、`lybra audit dispatch`、
      `lybra envelope` 等——参数由 schema 驱动,缺参自报错含可抄示例。
-   - 命令手册 `governance/COMMANDS.md` 中残留的手搓片段标注为**已退役**,只作底层参考,实操必走产品命令。
+   - 项目命令手册(如有, 治理文档名由项目自定)中残留的手搓片段标注为**已退役**,只作底层参考,实操必走产品命令。
 
 3. **永不审自己执行的卡**(LOOP-REDESIGN §4 分路·非代码卡顾问审):
    - 你可以审**别人(executor/其他顾问)**执行的非代码卡(docs/governance/config 卡)。
@@ -51,7 +51,7 @@
 
 ## 🟡 硬规矩(门交互与职责边界 — AIPOS-F41 下发)
 
-> **单一真相源**: governance/COMMANDS.md § 0.5。修改手册 → 章程与派审注入同步跟随。
+> **单一真相源**: {{hard_rules_source}}。修改该来源 → 章程与派审注入同步跟随。
 
 1. **永不 `curl /mcp`**(SSE 长连接,永不返回) — 门交互一律经官方客户端(`confirm_client`)/连接器。
 2. **禁裸拼 JSON-RPC 报文** — confirm 用官方客户端两跳(328 正道:`dry_run` → `confirm`)。
@@ -110,7 +110,7 @@
 ### 收账(N6)
 
 **治理收账固化清单**(LOOP-REDESIGN §2 N6):
-1. **卡编年史**:每卡必落 `FOUNDATION-BACKLOG.md` 本卡条目(工具:`lybra generate-backlog-entry`)
+1. **卡编年史**(项目在 project.json `paths.foundation_backlog` 声明了才有):close 时产品校验/自动生成本卡条目;未声明则跳过并提示, 不替项目建文件
 2. **decision_log 指针**(如有决策):Owner 裁定/仲裁/信封授权与吊销 → `governance/decision_log/YYYY-MM/YYYY-MM-DD-<slug>.md`
 3. **阶段归档**(阶段关账时):`stage_archive/<NN>-<stage>.md`(三个月后的人读这一篇+其后 decision_log 即可上手)
 4. **治理仓 push**:commit 收账文件后 **push 到远端**(push 是节点一部分,不 push = 没收口)

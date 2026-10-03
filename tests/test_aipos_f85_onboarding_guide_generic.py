@@ -280,9 +280,12 @@ def test_item2_truth_navigator_structure_keys_declared():
     keys = set(re.findall(r"governance_structure\.paths\.(\w+)", text))
     keys |= set(re.findall(r"`<(\w+)>", text)) & {"stage_archive", "decision_log_dir", "governance_docs"}
     print("引用的 governance_structure.paths 键:", sorted(keys))
-    assert {"stage_archive", "decision_log_dir", "foundation_backlog", "governance_docs"} <= keys
+    assert {"stage_archive", "decision_log_dir", "governance_docs"} <= keys
     assert keys <= set(gs), sorted(keys - set(gs))
-    assert "design" in gs["governance_docs"]["files"]  # 「项目设计文档 files.design」
+    # AIPOS-F89 件② M17: 卡编年史改为项目可选声明(project.json paths.foundation_backlog), 治理文档名不再是产品契约(无 files 表)
+    assert "project.json `paths.foundation_backlog`" in text
+    pj_paths = load_schema("config")["configuration_sources"]["project_json"]["schema"]["paths"]["schema"]
+    assert pj_paths["foundation_backlog"]["optional"] is True and "files" not in gs["governance_docs"]
     # 方法论保留: 四步导航 + 两目录分工判据
     for anchor in ("① 读 stage_archives 最新一篇", "② 读该篇之后的 decision_log", "③ 文档状态头裁", "④ 仍冲突以时间线后者为准", "两目录分工判据"):
         assert anchor in text, anchor

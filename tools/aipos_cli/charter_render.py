@@ -138,6 +138,7 @@ def charter_render_context(
     **本字典 = 章程母本 `{{key}}` 占位的唯一键表**(AIPOS-F80 件②): 母本只准用这里的标量键, 不够在此处加, 禁第二份键表。
     """
     from tools.aipos_cli.custom_roles import resolve_role_to_class
+    from tools.aipos_cli.hard_rules_extractor import hard_rules_source_ref
     from tools.aipos_cli.workspace_config import project_paths, project_repos, read_project_json
     from tools.schema_loader import get_config_default_gate_url
 
@@ -180,6 +181,8 @@ def charter_render_context(
         "verdict_root": str(paths["verdict_root"]),
         "queue_root": str(paths["queue_root"]),
         "task_cards_root": str(paths["task_cards_root"]),
+        # AIPOS-F89 件② M17: 硬规矩来源读项目声明(paths.hard_rules_source), 与提取器同一函数; 未声明 = 母本自带条文为准
+        "hard_rules_source": hard_rules_source_ref(gov),
         "gate_url": str(identity.get("gate_url") or get_config_default_gate_url()),
         "harness_root": str(identity["harness_root"]),
         "harness_parent": str(Path(identity["harness_root"]).parent),

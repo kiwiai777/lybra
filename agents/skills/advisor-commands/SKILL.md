@@ -239,14 +239,14 @@ lybra roles enroll-code --role auditor --ttl 86400 --governance-root <治理根>
 ### 📊 收账与治理(N6)
 
 #### `generate_backlog_entry.py`(Lybra 产品仓脚本, 非 `lybra` 子命令)
-**何时用**:生成卡编年史条目(每卡必落 FOUNDATION-BACKLOG.md)。
+**何时用**:生成卡编年史条目(项目在 project.json `paths.foundation_backlog` 声明了卡编年史时; close 也会自动生成)。
 ```bash
 python3 <Lybra产品仓>/tools/generate_backlog_entry.py <卡ID> --governance-root <治理根>
 ```
-**输出**:可追加到 FOUNDATION-BACKLOG.md 的 markdown 段。
+**输出**:可追加到项目卡编年史(`paths.foundation_backlog` 声明的文件)的 markdown 段。
 
 **N6 收账固化清单**(LOOP-REDESIGN §2 N6):
-1. FOUNDATION-BACKLOG.md 本卡条目(工具生成)
+1. 卡编年史本卡条目(项目声明了 `paths.foundation_backlog` 时; 未声明跳过)
 2. decision_log 指针(如有 Owner 裁定/仲裁/信封授权与吊销)
 3. stage_archive 快照(阶段关账时)
 4. 治理仓 push(push 是节点一部分,不 push = 没收口)—— 只经下面的 `lybra governance-commit`

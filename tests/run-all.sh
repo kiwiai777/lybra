@@ -907,6 +907,18 @@ else
   overall=1
 fi
 
+# AIPOS-F89 件②: 治理文档名不再是产品契约(M17: config.schema 去 governance_docs.files / paths.foundation_backlog·close 编年史与硬规矩来源读 project.json paths 可选声明, 未声明跳过+warning·新项目 close 不 BLOCK·章程「单一真相源」占位化) + 随语义改动的 F86/F85/F78/queue_close 用例
+echo
+echo "── tests/test_aipos_f89_governance_docs_contract.py (F89 件② 新项目无 lybra 文档 close 不 BLOCK·硬规矩来源缺省行为·新项目章程/模板/技能零 lybra 文档名) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f89_governance_docs_contract.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_queue_close.py" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f89_governance_docs_contract.py PASS"
+else
+  echo "✗ tests/test_aipos_f89_governance_docs_contract.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

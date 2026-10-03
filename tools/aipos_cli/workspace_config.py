@@ -621,7 +621,8 @@ def read_project_json(project_root: str | Path) -> dict[str, Any]:
 # 禁写死 task_cards/…/RETURN.md 或 5_tasks/records/returns。
 # ---------------------------------------------------------------------------
 
-PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode")
+PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode",
+                     "foundation_backlog", "hard_rules_source")
 # AIPOS-F78B 件②: 非路径键(值域读声明 enum), 与布尔 manual_gate_mode 一样不做路径解析
 PROJECT_ENUM_KEYS = ("finalize_mode",)
 
@@ -645,7 +646,11 @@ def _project_paths_declaration() -> dict[str, dict[str, Any]]:
 
 def project_paths(governance_root: str | Path) -> dict[str, Any]:
     """AIPOS-F78: 解析项目落点声明。返回 {return_root: Path, verdict_root: Path, queue_root: Path,
-    task_cards_root: Path, manual_gate_mode: bool, declared: {key: bool}}。
+    task_cards_root: Path, manual_gate_mode: bool, finalize_mode: str, foundation_backlog: Path | None,
+    hard_rules_source: Path | None, declared: {key: bool}}。
+
+    AIPOS-F89 件② M17: 项目治理文档位(foundation_backlog / hard_rules_source)为可选声明(声明表 optional=true, 无 default):
+    未声明 = None, 产品不假设任何治理文档名存在。
 
     - 相对路径相对治理根; 绝对路径原样(chris 形声明用绝对路径)。
     - manual_gate_mode: paths 段优先, 兼容顶层 project.json manual_gate_mode(F73C 件①)。
@@ -680,6 +685,11 @@ def project_paths(governance_root: str | Path) -> dict[str, Any]:
                 )
             result[key] = text
         else:
+            if value in (None, "") and spec.get("optional") is True:
+                # AIPOS-F89 件② M17: 可选落点(项目治理文档, 如卡编年史 / 硬规矩来源)未声明 = None, 消费方按声明的缺省行为处理
+                result[key] = None
+                result["declared"][key] = False
+                continue
             if value in (None, ""):
                 from tools.schema_loader import SchemaLoadError
 

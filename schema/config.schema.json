@@ -176,6 +176,16 @@
               "default": "internal",
               "enum": ["internal", "external"],
               "description": "AIPOS-F78B 件②: finalize 场地。internal=现行(推导核派生 lybra finalize 在本机 merge/push/部署); external=产品仓在别机(chris), PASS 后等外部 FINALIZE 卡的 Return, 经 artifact ingest 铸 finalization 记录再 close。流程与 FINALIZE 卡 ID 规则声明: transitions.schema N5.finalize_mode / artifact_ingest.finalization"
+            },
+            "foundation_backlog": {
+              "type": "string",
+              "optional": true,
+              "description": "AIPOS-F89 件② M17: 卡粒度编年史文件(相对治理根或绝对)。声明了 = close 时校验本卡条目存在, 缺条目自动生成(AIPOS-A1, 或 closure_evidence.excuse_ref 豁免); 未声明 = 跳过编年史校验并出 warning(不 BLOCK, 不替项目创建任何文件)。原 config.schema governance_structure.paths.foundation_backlog 与 board_adapter 写死的治理文档名删除。"
+            },
+            "hard_rules_source": {
+              "type": "string",
+              "optional": true,
+              "description": "AIPOS-F89 件② M17: 硬规矩来源手册(相对治理根或绝对; 内含「## 0.5. 硬规矩」节与可选「## 6.9 阻塞分诊与排查路径」节)。声明了 = hard_rules_extractor 从该文件提取, 章程「单一真相源」行指向它; 未声明 = 跳过提取并 warning, 章程以母本自带的硬规矩条文为准(模板自带)。原写死的命令手册文件名删除。"
             }
           }
         },
@@ -497,7 +507,7 @@
     "gate_tailscale_pattern": "http://{hostname}.{tailnet}:7118"
   },
   "governance_structure": {
-    "description": "Governance repository fixed directory structure - read from workspace config, NOT hardcoded。AIPOS-F89 件① H9/M8: 队列根与台账/交回/裁决落点不在本节声明(原 paths.queue / paths.task_cards 第二份声明已删), 只读项目 project.json paths(configuration_sources.project_json.schema.paths, 唯一读取口 workspace_config.project_paths / task_loader.queue_root_for)。",
+    "description": "Governance repository fixed directory structure - read from workspace config, NOT hardcoded。AIPOS-F89 件② M17: 本节不声明任何项目治理文档名(原 governance_docs.files 与 paths.foundation_backlog 删除), 卡编年史/硬规矩来源见 configuration_sources.project_json.schema.paths(项目可选声明)。AIPOS-F89 件① H9/M8: 队列根与台账/交回/裁决落点不在本节声明(原 paths.queue / paths.task_cards 第二份声明已删), 只读项目 project.json paths(configuration_sources.project_json.schema.paths, 唯一读取口 workspace_config.project_paths / task_loader.queue_root_for)。",
     "paths": {
       "governance_root": {
         "source": "workspace_config.governance_root",
@@ -506,16 +516,7 @@
       "governance_docs": {
         "relative_to": "governance_root",
         "path": "governance/",
-        "description": "Governance documents directory - contract layer (7 fixed docs per AIPOS-F67)",
-        "files": {
-          "readme": "README.md",
-          "discipline": "DISCIPLINE.md",
-          "roles": "ROLES.md",
-          "commands": "COMMANDS.md",
-          "design": "DESIGN.md",
-          "principles": "PRINCIPLES.md",
-          "ledger": "LEDGER.md"
-        }
+        "description": "治理文档目录(顾问的笔)。AIPOS-F89 件② M17: 文件名由项目自定, 产品不要求任何特定治理文档存在(原 files 固定 7 份文档名契约删除); 产品需要读的项目治理文档一律经 project.json paths 可选声明(foundation_backlog / hard_rules_source), 未声明有明确缺省行为(跳过 + warning)。"
       },
       "tasks_root": {
         "relative_to": "governance_root",
@@ -557,12 +558,6 @@
         "description": "Decision log directory (AIPOS-R6M 大项A②: decision粒度机器触发)",
         "structure": "YYYY-MM/YYYY-MM-DD-<slug>.md",
         "semantics": "决策粒度·事件驱动·当天落 - 只记改变未来行为规则的单点决定"
-      },
-      "foundation_backlog": {
-        "relative_to": "governance_root",
-        "path": "governance/FOUNDATION-BACKLOG.md",
-        "description": "Foundation backlog (AIPOS-R6M 大项A①: card粒度编年史)",
-        "semantics": "卡粒度编年史 - close时校验本卡条目存在(或excuse_ref豁免)"
       }
     },
     "file_declarations": {
@@ -630,7 +625,7 @@
           "status"
         ],
         "append_only": false,
-        "description": "契约层文档 (README/DISCIPLINE/ROLES/COMMANDS/DESIGN/PRINCIPLES/LEDGER) - 项目无关固化结构",
+        "description": "契约层文档(治理文档目录下项目自定的文档; 产品不规定文件名, AIPOS-F89 件② M17) - 必须有 status 字段",
         "template_frontmatter": {
           "status": "active"
         }
@@ -640,8 +635,8 @@
       "description": "AIPOS-R6M 大项A: 三粒度机器触发机制 (Owner 2026-08-15终裁: 名字、目录内命名、记与不记, 全是机器的事)",
       "card_level": {
         "trigger": "queue_close",
-        "check": "FOUNDATION-BACKLOG.md contains task_id entry OR closure_evidence.excuse_ref present",
-        "enforcement": "BLOCK if missing",
+        "check": "项目声明的卡编年史(project.json paths.foundation_backlog)含 task_id 条目 OR closure_evidence.excuse_ref present; 缺条目自动生成(AIPOS-A1 大项B)",
+        "enforcement": "声明了: 缺条目自动生成后通过(或 excuse_ref 豁免); 未声明: 跳过 + warning(AIPOS-F89 件② M17, 不 BLOCK)",
         "rationale": "原'decision_log每卡追加'语义废除(73次无人理WARN遗迹), 改为卡编年史校验"
       },
       "decision_level": {

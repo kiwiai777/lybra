@@ -1,10 +1,13 @@
-"""AIPOS-F41: 硬规矩提取器 — 从顾问手册单一真相源提取硬规矩内容。
+"""AIPOS-F41: 硬规矩提取器 — 从项目声明的硬规矩来源手册提取硬规矩内容。
 
 设计权威: AIPOS-F41 大项A(硬规矩下发工位,单源生成)。
 
-单一真相源: governance/COMMANDS.md (契约层固化名,AIPOS-F67) 的 "## 0.5. 硬规矩" 节。
+AIPOS-F89 件② M17: 来源 = 项目 project.json paths.hard_rules_source(唯一读取口 workspace_config.project_paths), 手册内
+"## 0.5. 硬规矩" 节(诊断清单另取 "## 6.9 阻塞分诊与排查路径" 节)。产品不再假设任何治理文档名(原写死命令手册文件名 +
+config.schema governance_docs.files 契约删除)。项目未声明 = 跳过提取并 warning(章程以母本自带的硬规矩条文为准, 模板自带),
+不 BLOCK。
 消费方:
-  - 章程分发(agents/roles/*/AGENTS.md 红线节追加)
+  - 章程分发(agents/roles/*/AGENTS.md 红线节「单一真相源」行 = hard_rules_source_ref, 经 charter_render 占位 {{hard_rules_source}})
   - 派审注入(audit task card 自带硬规矩提醒)
 
 红线: 手册是唯一源,禁在章程/注入处各写一份 → 修改手册一处,分发与注入同步跟随。
@@ -12,30 +15,42 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
+HARD_RULES_SECTION = "0.5"
+DIAGNOSTIC_SECTION = "6.9"
+UNDECLARED_REF = "本章程(项目未声明 project.json paths.hard_rules_source, 以本章程条文为准)"
 
-def _get_commands_handbook_path(governance_root: Path, repo_root: Path | None = None) -> Path:
-    """从 config.schema 契约文档声明获取 COMMANDS.md 路径 (AIPOS-F67 契约层固化)。
-    
-    优先使用声明名 'commands',回退到旧名 'COMMANDS' (兼容存量项目)。
-    """
-    try:
-        from tools.schema_loader import get_governance_structure, resolve_governance_path
-        
-        gs = get_governance_structure(repo_root)
-        gov_docs_entry = gs.get("paths", {}).get("governance_docs", {})
-        files = gov_docs_entry.get("files", {})
-        
-        # 优先使用声明名
-        commands_filename = files.get("commands", "COMMANDS.md")
-        
-        governance_docs_dir = resolve_governance_path("governance_docs", governance_root, repo_root)
-        return governance_docs_dir / commands_filename
-    except Exception:
-        # 回退到旧名 (兼容)
-        return governance_root / "governance" / "COMMANDS.md"
+
+def _hard_rules_handbook_path(governance_root: Path) -> Path | None:
+    """硬规矩来源手册 = project.json paths.hard_rules_source(AIPOS-F89 件② M17 唯一读取口 project_paths); 未声明 = None。"""
+    from tools.aipos_cli.workspace_config import project_paths
+
+    value = project_paths(Path(governance_root))["hard_rules_source"]
+    return Path(value) if value is not None else None
+
+
+def hard_rules_source_ref(governance_root: Path, section: str = HARD_RULES_SECTION) -> str:
+    """「单一真相源」行引用文本(章程渲染占位 {{hard_rules_source}} 与提取器渲染同读此函数): 已声明 = `<相对治理根路径> § <节>`;
+    未声明 = UNDECLARED_REF。"""
+    handbook = _hard_rules_handbook_path(governance_root)
+    if handbook is None:
+        return UNDECLARED_REF
+    root = Path(governance_root)
+    for base, cand in ((root, handbook), (root.resolve(), handbook.resolve())):
+        try:
+            return f"{cand.relative_to(base).as_posix()} § {section}"
+        except ValueError:
+            continue
+    return f"{handbook} § {section}"
+
+
+def _undeclared_result(extra_keys: dict[str, Any]) -> dict[str, Any]:
+    reason = "HARD_RULES_SOURCE_UNDECLARED: 项目未声明 project.json paths.hard_rules_source, 硬规矩提取跳过(章程以母本自带条文为准)"
+    print(f"Warning: {reason}", file=sys.stderr)
+    return {"ok": False, "section_found": False, "raw_content": "", "skipped": True, "error": reason, **extra_keys}
 
 
 def extract_hard_rules_from_handbook(governance_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
@@ -51,7 +66,9 @@ def extract_hard_rules_from_handbook(governance_root: Path, repo_root: Path | No
             "error": str | None,
         }
     """
-    handbook = _get_commands_handbook_path(governance_root, repo_root)
+    handbook = _hard_rules_handbook_path(governance_root)
+    if handbook is None:
+        return _undeclared_result({"rules_list": [], "background": ""})
     if not handbook.is_file():
         return {
             "ok": False,
@@ -64,7 +81,7 @@ def extract_hard_rules_from_handbook(governance_root: Path, repo_root: Path | No
 
     try:
         text = handbook.read_text(encoding="utf-8")
-    except Exception as e:
+    except (OSError, UnicodeDecodeError) as e:
         return {
             "ok": False,
             "section_found": False,
@@ -131,7 +148,9 @@ def extract_diagnostic_checklist_from_handbook(governance_root: Path, repo_root:
             "error": str | None,
         }
     """
-    handbook = _get_commands_handbook_path(governance_root, repo_root)
+    handbook = _hard_rules_handbook_path(governance_root)
+    if handbook is None:
+        return _undeclared_result({"三查步骤": "", "卡点对照表": "", "escalation路径": ""})
     if not handbook.is_file():
         return {
             "ok": False,
@@ -145,7 +164,7 @@ def extract_diagnostic_checklist_from_handbook(governance_root: Path, repo_root:
 
     try:
         text = handbook.read_text(encoding="utf-8")
-    except Exception as e:
+    except (OSError, UnicodeDecodeError) as e:
         return {
             "ok": False,
             "section_found": False,
@@ -231,7 +250,7 @@ def render_hard_rules_for_charter() -> str:
         "",
         "## 🟡 硬规矩(门交互与职责边界 — AIPOS-F41 下发)",
         "",
-        "> **单一真相源**: governance/COMMANDS.md § 0.5。修改手册 → 章程与派审注入同步跟随。",
+        f"> **单一真相源**: {hard_rules_source_ref(gov_root)}。修改该来源 → 章程与派审注入同步跟随。",
         "",
     ]
 
@@ -259,7 +278,7 @@ def render_diagnostic_checklist_for_advisor_skill() -> str:
     lines = [
         "## 阻塞分诊速查(AIPOS-F41 B1 — 30秒定位卡点)",
         "",
-        "> **单一真相源**: governance/COMMANDS.md § 6.9。修改手册 → 工位技能自动同步。",
+        f"> **单一真相源**: {hard_rules_source_ref(gov_root, DIAGNOSTIC_SECTION)}。修改该来源 → 工位技能自动同步。",
         "",
     ]
 
