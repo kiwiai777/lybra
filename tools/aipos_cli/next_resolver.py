@@ -1252,7 +1252,7 @@ def report_frontmatter_contract(kind: str, *, branch_task_id: str | None = None,
     """报告必填 frontmatter 契约(唯一渲染源): [{key, hint, value}], 键序 = 声明 required_frontmatter。
 
     - kind: return(执行卡 Return)/ verdict(审计报告)。
-    - branch_task_id: 报告对应的卡分支所属卡(执行卡 = 本卡, 审计卡 = 被审卡); 缺 = 提示里写「卡分支」/「被审卡分支」。
+    - branch_task_id: 报告对应的卡分支所属卡(执行卡 = 本卡, 审计卡 = 被审卡); 缺 = 分支声明套占位卡号(card/<卡ID>)。
     - subject: 产品已知的实值(审计卡 = 取证工作树 HEAD 的 {commit_sha, tree_hash}); 有值的键 value=实值, 提示带 tree, agent 照抄。
     - branch_pattern: 调用方已读的分支声明(machine_zone 按 product_root 读 N5.branch_integration); 缺 = card_branch_name。
     键缺说明(field_hints 未声明该键)= 通用提示「按声明填写实值」(仍列出, 不漏键)。声明缺 = SchemaLoadError(fail-closed)。
@@ -1265,10 +1265,9 @@ def report_frontmatter_contract(kind: str, *, branch_task_id: str | None = None,
         from tools.schema_loader import SchemaLoadError
 
         raise SchemaLoadError(f"transitions.schema.json artifact_ingest.{kind}.field_hints 须为 {{键: 说明}}")
-    if branch_task_id:
-        branch = branch_pattern.replace("{task_id}", branch_task_id) if branch_pattern else card_branch_name(branch_task_id)
-    else:
-        branch = "被审卡分支" if kind == "verdict" else "卡分支"
+    # 卡未定(章程等通用文案)= 分支声明套占位卡号(`card/<卡ID>` / `card/<被审卡ID>`), 仍读声明不写死
+    subject_id = branch_task_id or ("<被审卡ID>" if kind == "verdict" else "<卡ID>")
+    branch = branch_pattern.replace("{task_id}", subject_id) if branch_pattern else card_branch_name(subject_id)
     verdict_values = " / ".join(str(v) for v in (_transition_node("N4").get("record", {}).get("allowed_verdict_values") or []))
     values = subject if isinstance(subject, dict) else {}
     entries: list[dict[str, Any]] = []
