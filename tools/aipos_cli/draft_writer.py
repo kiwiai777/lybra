@@ -11,7 +11,7 @@ from tools.aipos_cli.draft_validator import (
 
 
     DRAFTS_DIR,
-    PENDING_QUEUE_DIR,
+    pending_queue_dir,
     draft_slug,
     expected_pending_relative_path,
     find_case_insensitive_path_collision,
@@ -269,7 +269,7 @@ def load_body_file(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
-def _normalized_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+def _normalized_metadata(metadata: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     normalized = dict(metadata)
     normalized.setdefault("status", "pending")
     normalized.setdefault("needs_owner", False)
@@ -290,7 +290,10 @@ def _normalized_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         normalized.setdefault("draft_created_by", created_by)
     normalized.setdefault("draft_created_at", timestamp)
     normalized.setdefault("draft_updated_at", timestamp)
-    normalized.setdefault("draft_publish_target", "5_tasks/queue/pending/")
+    # AIPOS-F89 件① M8: 发布落点读队列根声明(task_loader.queue_state_ref), 与 machine_zone 派生同一来源
+    from tools.aipos_cli.task_loader import queue_state_ref
+
+    normalized.setdefault("draft_publish_target", queue_state_ref(repo_root, "pending"))
     return normalized
 
 
@@ -342,7 +345,7 @@ def create_draft(
             if field_name not in metadata or metadata[field_name] in (None, ""):
                 metadata[field_name] = placeholder_value
 
-    normalized = _normalized_metadata(metadata)
+    normalized = _normalized_metadata(metadata, repo_root)
     
     # AIPOS-F78 件①: 意图面 harness/lane 缺则派生(create/publish/regen 三口一函数 derive_intent_declarations)
     _intent_warnings: list[str] = []
@@ -773,7 +776,7 @@ def publish_draft(
 
     task_id = validation["task_id"]
     if isinstance(task_id, str) and task_id:
-        target_path = expected_pending_relative_path(task_id)
+        target_path = expected_pending_relative_path(task_id, repo_root)
         target_file = resolve_pending_target_path(repo_root, task_id)
         publish_id = stable_publish_id(task_id)
         publish_record_path = expected_publish_record_path(repo_root, task_id, publish_id)
@@ -795,7 +798,7 @@ def publish_draft(
             }
         ]
 
-        pending_root = repo_root / PENDING_QUEUE_DIR
+        pending_root = pending_queue_dir(repo_root)
         case_collision = find_case_insensitive_path_collision(pending_root, target_file.name)
         if case_collision is not None:
             collision_rel = str(case_collision.resolve().relative_to(repo_root.resolve()))
@@ -880,7 +883,7 @@ def publish_draft(
         result["wrote"] = False
         return result
 
-    pending_root = repo_root / PENDING_QUEUE_DIR
+    pending_root = pending_queue_dir(repo_root)
     pending_root.mkdir(parents=True, exist_ok=True)
     target_file = repo_root / result["target_path"]
     target_file.write_text(rendered_markdown, encoding="utf-8")
@@ -964,7 +967,7 @@ def regen_machine_zone_for_pending(
     updated_cards = []
     amendments_detail = []
     
-    pending_dir = governance_root / "5_tasks" / "queue" / "pending"
+    pending_dir = pending_queue_dir(governance_root)
     if not pending_dir.exists():
         return {
             "verdict": "BLOCK",

@@ -23,11 +23,10 @@ from tools.aipos_cli.record_writer import (
     update_session_record_markdown,
     validate_safe_task_id,
 )
-from tools.aipos_cli.task_loader import QUEUE_STATES, find_task_by_id, load_task_file
+from tools.aipos_cli.task_loader import QUEUE_STATES, find_task_by_id, load_task_file, queue_root_for
 from tools.aipos_cli.validator import validate_single_task
 
-QUEUE_ROOT = Path("5_tasks/queue")
-QUEUE_STATE_DIRS = {state: QUEUE_ROOT / state for state in QUEUE_STATES}
+# AIPOS-F89 件① M8: 原队列根常量(写死 5_tasks/queue)删除——队列根只读 task_loader.queue_root_for(project.json paths.queue_root)
 MUTATION_SAFETY_NOTICE = (
     "AIPOS-31 queue mutation only moves validated task cards within 5_tasks/queue/. "
     "It does not write records, run agents, or mutate orchestration state."
@@ -91,7 +90,7 @@ def _resolved_within(base_dir: Path, candidate: Path) -> bool:
 def resolve_queue_path(repo_root: Path, provided_path: str | Path) -> Path:
     raw_path = Path(provided_path)
     path = raw_path.resolve() if raw_path.is_absolute() else (repo_root / raw_path).resolve()
-    queue_root = (repo_root / QUEUE_ROOT).resolve()
+    queue_root = queue_root_for(repo_root).resolve()
     if not _resolved_within(queue_root, path):
         raise ValueError(f"Task path is outside 5_tasks/queue: {provided_path}")
     if path.suffix.lower() != ".md":
@@ -573,7 +572,7 @@ def mutate_queue_task(
         else:
             from_state = actual_state
     
-    target_path = repo_root / QUEUE_STATE_DIRS[to_state] / source_path.name
+    target_path = queue_root_for(repo_root) / to_state / source_path.name
     source_metadata, source_body, _warnings = _read_task_markdown(source_path)
     result = _base_result(source_path, repo_root, source_task, action, dry_run, actor, to_state)
     result["target_path"] = str(target_path.relative_to(repo_root))
@@ -755,7 +754,11 @@ def mutate_queue_task(
     # (记录/骨架/卡面迁移)之前先经全产品唯一建树实现 next_resolver._ensure_worktree 建/复用卡工作树; 失败 = 认领 BLOCK,
     # 拒因带建树原文与出口, 队列与记录零变更(不留 claimed 无工作树的卡)。
     built_worktree: dict[str, Any] | None = None
-    if action == RecordType.CLAIM and str(updated_metadata.get("task_mode", "")) == "code":
+    # AIPOS-F89 件③a: 须建树判据唯一 next_resolver.card_needs_worktree(代码卡 = 卡分支工作树; 代码卡的审计卡 = 被审分支 tip
+    # 只读 detached 取证工作树, 同一建树入口 _ensure_worktree); 建树失败同样拒认领。
+    from tools.aipos_cli.next_resolver import card_needs_worktree
+
+    if action == RecordType.CLAIM and card_needs_worktree(repo_root, dict(updated_metadata)):
         from tools.aipos_cli.next_resolver import _ensure_worktree
 
         built_worktree = _ensure_worktree(repo_root, str(updated_metadata.get("task_id", "")), card_frontmatter=dict(updated_metadata))
@@ -805,7 +808,7 @@ def mutate_queue_task(
             task_id_for_skeleton = str(updated_metadata.get("task_id", "")).strip()
             if task_id_for_skeleton:
                 try:
-                    skeleton_result = _create_return_skeleton(repo_root, task_id_for_skeleton)
+                    skeleton_result = _create_return_skeleton(repo_root, task_id_for_skeleton, dict(updated_metadata))
                     if skeleton_result:
                         # Record the skeleton creation (informational, doesn't block)
                         result["skeleton_created"] = True
@@ -831,6 +834,11 @@ def mutate_queue_task(
         result["worktree_created"] = True
         result["worktree_path"] = str(built_worktree["worktree_path"])
         result["worktree_branch"] = str(built_worktree["branch"])
+        if built_worktree.get("detached"):
+            # AIPOS-F89 件③a: 审计卡取证工作树 = 被审分支 tip 的 detached 只读树
+            result["worktree_detached"] = True
+            result["worktree_commit"] = str(built_worktree.get("commit") or "")
+            result["forensic_reviewed_task_id"] = str(built_worktree.get("reviewed_task_id") or "")
 
     return result
 

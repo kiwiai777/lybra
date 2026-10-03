@@ -454,12 +454,17 @@ def test_item2_verdict_via_ingest_binds_tip_model_from_session_mismatch_flagged_
     report = rig.gov / vfm["report_source_ref"]
     snapshot = rig.gov / vfm["report_snapshot_ref"]
     original = report.read_bytes()
-    assert snapshot.is_file() and snapshot.read_bytes() == original
-    assert hashlib.sha256(original).hexdigest() == vfm["report_snapshot_sha256"]
+    # AIPOS-F89 件③d: 快照 = 记录头(record_type 等, 过护栏 B④)+ 原文逐字节; 复原经 unwrap_report_snapshot(去头 + 核 sha256)
+    from tools.aipos_cli.board_adapter import unwrap_report_snapshot
+
+    snap_fm = nr._read_frontmatter(snapshot)
+    assert snapshot.is_file() and snap_fm["record_type"] == "audit_report_snapshot" and snapshot.read_bytes().endswith(original)
+    assert unwrap_report_snapshot(snapshot.read_text(encoding="utf-8")).encode("utf-8") == original
+    assert hashlib.sha256(original).hexdigest() == vfm["report_snapshot_sha256"] == snap_fm["report_sha256"]
     assert "report_snapshots" in vfm["report_snapshot_ref"] and snapshot.parent.parent == verdict_files[0].parent
     # 事故复演: 报告被覆盖 → 从快照逐字节复原
     report.write_text("---\nverdict: FAIL\n---\n# 重审覆盖\n", encoding="utf-8")
-    report.write_bytes(snapshot.read_bytes())
+    report.write_text(unwrap_report_snapshot(snapshot.read_text(encoding="utf-8")), encoding="utf-8")
     assert hashlib.sha256(report.read_bytes()).hexdigest() == vfm["report_snapshot_sha256"]
     _show("[件②·快照] 覆盖后从快照复原, sha256 一致")
     # 快照不被当作裁决记录(记录目录直扫只见 verdict_*)
@@ -591,11 +596,12 @@ def test_item3_go_ts_passes_ref_to_product_and_relays_refusal(tmp_path):
     _show(f"[件③·go.ts] {proc.stdout.strip()} {proc.stderr.strip()[:200]}")
     assert proc.returncode == 0, proc.stderr
     data = json.loads(proc.stdout)
-    assert data["bare"] == ["my-tasks", "--actor", "exec.x", "--json"]
-    assert data["ref"] == ["my-tasks", "--actor", "exec.x", "--json", "--task-id", "PROBE-F90R"]
+    # AIPOS-F89 件③b: /go 只传工位目录(身份/治理根由产品 workstation_identity 解析), 不再传实例名
+    assert data["bare"] == ["my-tasks", "--workstation", "exec.x", "--json"]
+    assert data["ref"] == ["my-tasks", "--workstation", "exec.x", "--json", "--task-id", "PROBE-F90R"]
     assert data["refused"]["kind"] == "refused" and "PROBE-F90R CONCLUDED: 卡已结案" in data["refused"]["message"]
     src = go.read_text(encoding="utf-8")
-    assert "kickoff_refusal" in src and "myTasksArgv(String(agentInstance), args)" in src
+    assert "kickoff_refusal" in src and "myTasksArgv(workstationRoot, args)" in src
 
 
 def test_item3_advisor_skill_and_charters_zero_manual_gate_and_go_only():

@@ -141,6 +141,45 @@ def _filter_my_tasks(report: dict[str, Any], actor: str, profiles: dict[str, Any
     return {**report, "scope": "my_tasks", "actor": actor, "tasks": filtered, **availability}
 
 
+def _resolve_my_tasks_workstation(args: argparse.Namespace) -> int | None:
+    """AIPOS-F89 件③b(Owner 2026-10-03 裁定 A2): `my-tasks --workstation <工位目录>` = 产品解析工位身份——实例与治理根经
+    charter_render.workstation_identity / resolve_workstation_governance_root(唯一实现), 回填 args.actor / args.workspace_root。
+    无 --workstation 时须给 --actor; 两者都给且不一致 = 拒。返回 None = 继续; 整数 = 退出码(拒因已上 stderr, 不含 token)。"""
+    workstation = str(getattr(args, "workstation", None) or "").strip()
+    actor = str(getattr(args, "actor", None) or "").strip()
+    if not workstation:
+        if not actor:
+            print("Error: my-tasks 需 --actor <实例> 或 --workstation <工位目录>(工位 /go 传 --workstation)", file=sys.stderr)
+            return 2
+        return None
+    from tools.aipos_cli.charter_render import (
+        WorkstationIdentityError,
+        resolve_workstation_governance_root,
+        workstation_identity,
+    )
+
+    try:
+        identity = workstation_identity(workstation)
+    except WorkstationIdentityError as exc:
+        print(f"Error: WORKSTATION_IDENTITY_UNRESOLVED: {exc}", file=sys.stderr)
+        return 1
+    if actor and actor != identity["instance"]:
+        print(f"Error: --actor {actor} ≠ 工位 {identity['harness_root']} 的实例 {identity['instance']}(二者择一, 以工位身份为准)",
+              file=sys.stderr)
+        return 2
+    args.actor = identity["instance"]
+    explicit_root = getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None)
+    if not explicit_root:
+        try:
+            args.workspace_root = str(resolve_workstation_governance_root(identity))
+        except FileNotFoundError as exc:
+            print(f"Error: WORKSTATION_GOVERNANCE_ROOT_UNRESOLVED: {exc}", file=sys.stderr)
+            return 1
+    args.workstation_identity = {"harness_root": identity["harness_root"], "instance": identity["instance"],
+                                 "role": identity["role"], "project": identity["project"]}
+    return None
+
+
 def _resolve_kickoff_ref(repo_root: Path, ref: str) -> str:
     """AIPOS-F90 件③: 冷启动指向(卡号或卡文件路径) → 卡 task_id(路径读卡面 frontmatter, 唯一读取口); 解析不到原样返回(按卡号判)。"""
     text = str(ref or "").strip()
@@ -1433,7 +1472,12 @@ def build_parser() -> argparse.ArgumentParser:
     queue_rework_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     my_tasks_parser = subparsers.add_parser("my-tasks", help="Render tasks for an actor")
-    my_tasks_parser.add_argument("--actor", required=True, help="Role instance or agent instance")
+    my_tasks_parser.add_argument("--actor", default=None, help="Role instance or agent instance(与 --workstation 二选一)")
+    my_tasks_parser.add_argument(
+        "--workstation", default=None,
+        help="AIPOS-F89 件③b: 工位目录——产品经 charter_render.workstation_identity 解析本工位实例(.lybra/role)与治理根"
+             "(connection.json#governance_root 等, resolve_workstation_governance_root), 工位 /go 只传本参数, 不自读身份文件",
+    )
     my_tasks_parser.add_argument("--task-id", default=None, help="AIPOS-F90 件③: 冷启动指向的卡(卡号或卡文件路径)——只核验这一张: 非 claimed/非本实例/已结案/产物已交即拒并给原因(工位 /go <卡号> 用)")
     my_tasks_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -3850,6 +3894,11 @@ def main(argv: list[str] | None = None) -> int:
         
         return 0 if result.get("verdict") == Verdict.PASS else 1
 
+    if args.command == "my-tasks":
+        workstation_rc = _resolve_my_tasks_workstation(args)
+        if workstation_rc is not None:
+            return workstation_rc
+
     try:
         repo_root = _find_repo_root_for_args(args)
     except FileNotFoundError as exc:
@@ -4927,8 +4976,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "my-tasks":
         actor_report = _filter_my_tasks(report, args.actor, profiles)
         if args.json:
-            print(render_json(_attach_workstation_view(_json_report(actor_report, records=records), actor_report, repo_root,
-                                                       actor=args.actor, requested=getattr(args, "task_id", None))))
+            output = _attach_workstation_view(_json_report(actor_report, records=records), actor_report, repo_root,
+                                              actor=args.actor, requested=getattr(args, "task_id", None))
+            if getattr(args, "workstation_identity", None):
+                output["workstation"] = {**args.workstation_identity, "governance_root": str(repo_root)}
+            print(render_json(output))
         else:
             print(render_my_tasks_text(actor_report, args.actor))
         return 0

@@ -26,7 +26,7 @@
         "lybra_bin": {
           "type": "string",
           "required": false,
-          "description": "AIPOS-F20: absolute path to local lybra CLI bin (e.g. /path/to/lybra/.deploy/current/bin/lybra). Read by the /go workstation extension (go.ts) to invoke `my-tasks` (see distribution.schema minimum_bootable_set connection.json#lybra_bin); written at enroll from workstation_wiring.resolve_deployed_lybra_bin. AIPOS-F91: the /lybra sync thin shell and the connector probe were retired with the lybra-loop extension"
+          "description": "AIPOS-F20: absolute path to local lybra CLI bin (e.g. /path/to/lybra/.deploy/current/bin/lybra). Read by the /go workstation extension (go.ts) to invoke `my-tasks --workstation <工位目录>` (see distribution.schema minimum_bootable_set connection.json#lybra_bin); written at enroll from workstation_wiring.resolve_deployed_lybra_bin. AIPOS-F89 件③b: go.ts reads ONLY this field (no .lybra/role, no workspace_root; identity/governance root are resolved by the product via charter_render.workstation_identity); missing/empty = /go refuses (no `lybra` PATH fallback). AIPOS-F91: the /lybra sync thin shell and the connector probe were retired with the lybra-loop extension"
         }
       }
     },
@@ -106,7 +106,7 @@
       }
     },
     "project_json": {
-      "description": "AIPOS-F78 件④: 项目落点声明——每个治理根 project.json 的 paths 段。Lybra 读声明找 Return/裁决报告/队列/台账, 禁写死 task_cards/…/RETURN.md; 缺 paths 段 = 用 default(=现行路径, 0 迁移)。chris 形项目(returns 在 5_tasks/records/returns/<ID>/) 只改声明值不迁目录。唯一读取口: workspace_config.project_paths()。",
+      "description": "AIPOS-F78 件④ + AIPOS-F89 件① M14: project.json 键的唯一声明表——产品读取的每个 project.json 键都在下方 schema 声明(未声明 = 产品不读; 夹具 tests/test_aipos_f89_project_declaration_single_source.py 守护)。paths 段 = 项目落点声明: Lybra 读声明找 Return/裁决报告/队列/台账, 禁写死 task_cards/…/RETURN.md 或 5_tasks/queue; 缺 paths 段 = 用 default(=现行路径, 0 迁移)。chris 形项目(returns 在 5_tasks/records/returns/<ID>/) 只改声明值不迁目录。唯一读取口: workspace_config.project_paths()(队列根另经 task_loader.queue_root_for 转调, 同一读取口)。",
       "source_file": "project.json",
       "schema": {
         "project": {
@@ -176,8 +176,77 @@
               "default": "internal",
               "enum": ["internal", "external"],
               "description": "AIPOS-F78B 件②: finalize 场地。internal=现行(推导核派生 lybra finalize 在本机 merge/push/部署); external=产品仓在别机(chris), PASS 后等外部 FINALIZE 卡的 Return, 经 artifact ingest 铸 finalization 记录再 close。流程与 FINALIZE 卡 ID 规则声明: transitions.schema N5.finalize_mode / artifact_ingest.finalization"
+            },
+            "foundation_backlog": {
+              "type": "string",
+              "optional": true,
+              "description": "AIPOS-F89 件② M17: 卡粒度编年史文件(相对治理根或绝对)。声明了 = close 时校验本卡条目存在, 缺条目自动生成(AIPOS-A1, 或 closure_evidence.excuse_ref 豁免); 未声明 = 跳过编年史校验并出 warning(不 BLOCK, 不替项目创建任何文件)。原 config.schema governance_structure.paths.foundation_backlog 与 board_adapter 写死的治理文档名删除。"
+            },
+            "hard_rules_source": {
+              "type": "string",
+              "optional": true,
+              "description": "AIPOS-F89 件② M17: 硬规矩来源手册(相对治理根或绝对; 内含「## 0.5. 硬规矩」节与可选「## 6.9 阻塞分诊与排查路径」节)。声明了 = hard_rules_extractor 从该文件提取, 章程「单一真相源」行指向它; 未声明 = 跳过提取并 warning, 章程以母本自带的硬规矩条文为准(模板自带)。原写死的命令手册文件名删除。"
             }
           }
+        },
+        "config_version": {
+          "type": "integer",
+          "required": false,
+          "description": "AIPOS-F89 件① M14: project.json 格式版本(写入方 workspace_config.write_project_json 固定 1)。产品不按此分支。"
+        },
+        "registered_at": {
+          "type": "string",
+          "required": false,
+          "description": "AIPOS-F89 件① M14: 项目登记时刻(ISO8601, 出处 M3 非匿名建项目)。写入方 write_project_json(保值), 只作出处展示。"
+        },
+        "registered_by": {
+          "type": "string",
+          "required": false,
+          "description": "AIPOS-F89 件① M14: 项目登记者实例名(出处)。写入方 write_project_json, 只作出处展示。"
+        },
+        "collaboration_profile": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-335 协作能力配置({code_enabled, deploy_gate_enabled, default_audit_mode, output_locations})。AIPOS-F89 件① M14: 唯一读取口 workspace_config.get_collaboration_profile(缺段/缺键 = 本声明 default 逐键补齐; 原 flow_description.resolve_collaboration_profile 第二读取口与第二份缺省收一为委托)。",
+          "default": {
+            "code_enabled": true,
+            "deploy_gate_enabled": false,
+            "default_audit_mode": "agent",
+            "output_locations": ["product_repo_worktree", "workspace_records"]
+          }
+        },
+        "naming_profile": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-350 实例命名配置({prefix_mapping, project_segment, host_segment, project_segment_aliases, host_segment_aliases})。唯一读取口 naming_profile.get_naming_profile(写入方 lybra naming set-*, 留 append-only 轨迹); 缺 = 前缀读注册表、项目段回落 project 键、机器段不设(用到即拒)。"
+        },
+        "dispatch_mode": {
+          "type": "string",
+          "required": false,
+          "enum": ["auto", "manual"],
+          "default": "auto",
+          "description": "AIPOS-338 S5 工作区派工开关(Owner 专属)。唯一读取口 workspace_config.get_dispatch_mode, 写入方 set_dispatch_mode(留 append-only 轨迹); 缺/非法 = auto。"
+        },
+        "manual_gate_mode": {
+          "type": "boolean",
+          "required": false,
+          "description": "AIPOS-F73C 件① 顶层兼容键: 等价 paths.manual_gate_mode(paths 段声明优先)。唯一读取口 workspace_config.project_paths(读到即视为已声明); 新项目写 paths.manual_gate_mode。"
+        },
+        "name": {
+          "type": "string",
+          "required": false,
+          "description": "AIPOS-F89 件① M14: project 键的旧兼容别名(project 缺时回落), 新项目一律写 project。读取方: 门侧 enroll 凭据项目推导(tools/mcp_server/tools.py)、tools/project_resolution.py; 其余读取方只认 project。"
+        },
+        "custom_roles": {
+          "type": "object",
+          "required": false,
+          "retired": true,
+          "description": "已退役(roles.schema custom_roles: 角色→class 真相只在门注册表, AIPOS-F32B): 产品不读本键, 遗留值无任何效果, 可由顾问删除。"
+        },
+        "card_policy": {
+          "type": "file_convention",
+          "required": false,
+          "description": "AIPOS-F89 件① M14: 卡校验策略不是 project.json 键, 而是治理根下的声明文件(card_policy.json; 读取方 tools/card_policy_loader.get_project_card_policy_path 按治理根候选文件找)。multi_project_support.project_registry.structure.card_policy 只是门注册表结构说明, 不是项目键。"
         }
       }
     }
@@ -438,7 +507,7 @@
     "gate_tailscale_pattern": "http://{hostname}.{tailnet}:7118"
   },
   "governance_structure": {
-    "description": "Governance repository fixed directory structure - read from workspace config, NOT hardcoded",
+    "description": "Governance repository fixed directory structure - read from workspace config, NOT hardcoded。AIPOS-F89 件② M17: 本节不声明任何项目治理文档名(原 governance_docs.files 与 paths.foundation_backlog 删除), 卡编年史/硬规矩来源见 configuration_sources.project_json.schema.paths(项目可选声明)。AIPOS-F89 件① H9/M8: 队列根与台账/交回/裁决落点不在本节声明(原 paths.queue / paths.task_cards 第二份声明已删), 只读项目 project.json paths(configuration_sources.project_json.schema.paths, 唯一读取口 workspace_config.project_paths / task_loader.queue_root_for)。",
     "paths": {
       "governance_root": {
         "source": "workspace_config.governance_root",
@@ -447,34 +516,12 @@
       "governance_docs": {
         "relative_to": "governance_root",
         "path": "governance/",
-        "description": "Governance documents directory - contract layer (7 fixed docs per AIPOS-F67)",
-        "files": {
-          "readme": "README.md",
-          "discipline": "DISCIPLINE.md",
-          "roles": "ROLES.md",
-          "commands": "COMMANDS.md",
-          "design": "DESIGN.md",
-          "principles": "PRINCIPLES.md",
-          "ledger": "LEDGER.md"
-        }
+        "description": "治理文档目录(顾问的笔)。AIPOS-F89 件② M17: 文件名由项目自定, 产品不要求任何特定治理文档存在(原 files 固定 7 份文档名契约删除); 产品需要读的项目治理文档一律经 project.json paths 可选声明(foundation_backlog / hard_rules_source), 未声明有明确缺省行为(跳过 + warning)。"
       },
       "tasks_root": {
         "relative_to": "governance_root",
         "path": "5_tasks/",
         "description": "Tasks root directory"
-      },
-      "queue": {
-        "relative_to": "tasks_root",
-        "path": "queue/",
-        "description": "Task queue directory",
-        "subdirs": [
-          "pending/",
-          "claimed/",
-          "returned/",
-          "completed/",
-          "blocked/",
-          "withdrawn/"
-        ]
       },
       "drafts": {
         "relative_to": "tasks_root",
@@ -511,19 +558,6 @@
         "description": "Decision log directory (AIPOS-R6M 大项A②: decision粒度机器触发)",
         "structure": "YYYY-MM/YYYY-MM-DD-<slug>.md",
         "semantics": "决策粒度·事件驱动·当天落 - 只记改变未来行为规则的单点决定"
-      },
-      "task_cards": {
-        "relative_to": "governance_root",
-        "path": "task_cards/",
-        "description": "Task cards archive directory (AIPOS-R7A2 FIX-2: N6 收账清单第①件台账条目)",
-        "structure": "<TASK_ID>/<files>",
-        "semantics": "任务台账条目 - 每张卡完成后留存 RETURN.md/AUDIT-REPORT.md/CLOSURE.md 等归档文件"
-      },
-      "foundation_backlog": {
-        "relative_to": "governance_root",
-        "path": "governance/FOUNDATION-BACKLOG.md",
-        "description": "Foundation backlog (AIPOS-R6M 大项A①: card粒度编年史)",
-        "semantics": "卡粒度编年史 - close时校验本卡条目存在(或excuse_ref豁免)"
       }
     },
     "file_declarations": {
@@ -591,7 +625,7 @@
           "status"
         ],
         "append_only": false,
-        "description": "契约层文档 (README/DISCIPLINE/ROLES/COMMANDS/DESIGN/PRINCIPLES/LEDGER) - 项目无关固化结构",
+        "description": "契约层文档(治理文档目录下项目自定的文档; 产品不规定文件名, AIPOS-F89 件② M17) - 必须有 status 字段",
         "template_frontmatter": {
           "status": "active"
         }
@@ -601,8 +635,8 @@
       "description": "AIPOS-R6M 大项A: 三粒度机器触发机制 (Owner 2026-08-15终裁: 名字、目录内命名、记与不记, 全是机器的事)",
       "card_level": {
         "trigger": "queue_close",
-        "check": "FOUNDATION-BACKLOG.md contains task_id entry OR closure_evidence.excuse_ref present",
-        "enforcement": "BLOCK if missing",
+        "check": "项目声明的卡编年史(project.json paths.foundation_backlog)含 task_id 条目 OR closure_evidence.excuse_ref present; 缺条目自动生成(AIPOS-A1 大项B)",
+        "enforcement": "声明了: 缺条目自动生成后通过(或 excuse_ref 豁免); 未声明: 跳过 + warning(AIPOS-F89 件② M17, 不 BLOCK)",
         "rationale": "原'decision_log每卡追加'语义废除(73次无人理WARN遗迹), 改为卡编年史校验"
       },
       "decision_level": {
@@ -706,7 +740,7 @@
         "governance_root": "path",
         "code_repo": "path (optional)",
         "workspace_root": "path",
-        "card_policy": "path (optional, relative to governance_root) — AIPOS-R8C: points to a declaration file defining project-specific card validation rules. Product executor is semantics-blind; it only checks field existence + value domain per the declared rules. When absent, behavior is identical to pre-R8C (zero-invasion)."
+        "card_policy": "path (optional, relative to governance_root) — AIPOS-R8C: points to a declaration file defining project-specific card validation rules. Product executor is semantics-blind; it only checks field existence + value domain per the declared rules. When absent, behavior is identical to pre-R8C (zero-invasion). AIPOS-F89 件① M14: 项目侧声明位见 configuration_sources.project_json.schema.card_policy(文件约定, 非 project.json 键)。"
       }
     },
     "scope_isolation": {

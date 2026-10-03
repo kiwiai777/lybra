@@ -132,14 +132,35 @@ def load_task_file(path: Path, repo_root: Path) -> dict[str, Any]:
 
 
 def queue_root_for(repo_root: Path) -> Path:
-    """队列根: 项目声明 project.json paths.queue_root(config.schema 声明表, 缺省 5_tasks/queue)。
-    无 project.json 的根(靶场/裸治理根)直接取声明默认, 不出 warning。"""
-    root = Path(repo_root)
-    if (root / "project.json").is_file():
-        from tools.aipos_cli.workspace_config import project_paths
+    """队列根的唯一读取口(AIPOS-F89 件① M8): 项目声明 project.json paths.queue_root, 经 workspace_config.project_paths
+    (缺 project.json / 缺键 = config.schema configuration_sources.project_json.schema.paths.queue_root.default)。
+    代码禁写死队列目录字面, 禁第二份声明(config.schema governance_structure.paths.queue 与 queue_mutation.QUEUE_ROOT 已删)。"""
+    from tools.aipos_cli.workspace_config import project_paths
 
-        return Path(project_paths(root)["queue_root"])
-    return root / "5_tasks" / "queue"
+    return Path(project_paths(Path(repo_root))["queue_root"])
+
+
+def queue_state_ref(repo_root: Path | None, state: str) -> str:
+    """队列状态子目录的治理根相对引用(卡面 draft_publish_target / 计划写入展示, 形 `<queue_root>/<state>/`)。
+    队列根声明在治理根外(绝对路径) = 返回绝对路径。唯一来源 queue_root_for。
+    repo_root=None(调用方尚无治理根, 如离线派生预览)= 声明 default(config.schema project_json.paths.queue_root.default)。"""
+    if repo_root is None:
+        from tools.aipos_cli.workspace_config import _project_paths_declaration
+
+        default = str((_project_paths_declaration().get("queue_root") or {}).get("default") or "").strip().strip("/")
+        if not default:
+            from tools.schema_loader import SchemaLoadError
+
+            raise SchemaLoadError("config.schema.json project_json.paths.queue_root.default 未声明")
+        return f"{default}/{state}/" if state else f"{default}/"
+    root = Path(repo_root)
+    target = queue_root_for(root) / state
+    for base, cand in ((root, target), (root.resolve(), target.resolve())):
+        try:
+            return cand.relative_to(base).as_posix().rstrip("/") + "/"
+        except ValueError:
+            continue
+    return target.as_posix().rstrip("/") + "/"
 
 
 def iter_queue_task_paths(repo_root: Path, *, states: tuple[str, ...] | None = None) -> list[Path]:

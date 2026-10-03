@@ -14,13 +14,14 @@ from typing import Any
 from tools.schema_loader import (
     get_branch_integration,
     get_machine_zone_fields,
-    resolve_governance_path,
 )
 
 
 def derive_machine_zone_fields(
     metadata: dict[str, Any],
     repo_root: Path,
+    *,
+    governance_root: Path | None = None,
 ) -> dict[str, Any]:
     """Derive machine zone field values from schema declarations.
     
@@ -39,7 +40,7 @@ def derive_machine_zone_fields(
         - draft_created_by: from metadata.created_by
         - draft_created_at: current timestamp
         - draft_updated_at: current timestamp
-        - draft_publish_target: from config.schema governance_structure.paths.queue
+        - draft_publish_target: from project.json paths.queue_root (task_loader.queue_state_ref)
     """
     from datetime import datetime, timezone
     
@@ -66,18 +67,12 @@ def derive_machine_zone_fields(
         machine["draft_updated_at"] = timestamp
     
     if "draft_publish_target" in machine_fields:
-        # Read queue path from config.schema governance_structure.paths (single source)
-        # Fail-closed: schema declaration missing → raise with actionable exit
-        from tools.schema_loader import get_governance_path
-        queue_path_entry = get_governance_path("queue", repo_root)
-        queue_relative = queue_path_entry.get("path")
-        if not queue_relative:
-            raise ValueError(
-                "config.schema.json governance_structure.paths.queue.path 声明缺失。"
-                "可执行出口: 在 schema 中声明 queue.path (如 '5_tasks/queue/')"
-            )
-        # Append pending/ subdirectory
-        machine["draft_publish_target"] = queue_relative.rstrip("/") + "/pending/"
+        # AIPOS-F89 件① M8: 队列根只读项目声明(project.json paths.queue_root)——唯一读取口 task_loader.queue_root_for;
+        # governance_root 缺省 = repo_root(draft_writer 调用方传治理根)。原读 config.schema governance_structure.paths.queue
+        # (第二份声明)已删。
+        from tools.aipos_cli.task_loader import queue_state_ref
+
+        machine["draft_publish_target"] = queue_state_ref(governance_root or repo_root, "pending")
     
     return machine
 
@@ -93,7 +88,7 @@ def derive_machine_zone_纪律段(
     
     AIPOS-F68: 纪律段 content is derived from:
     - transitions.schema.json N5.branch_integration (branch pattern, merge strategy)
-    - config.schema.json governance_structure.paths (report path, records path)
+    - project.json paths(报告落点, 经 next_resolver.card_report_path)
     
     All values read through schema_loader, no hardcoded literals.
     
@@ -127,11 +122,13 @@ def derive_machine_zone_纪律段(
         lines.append(f"- **分支**: `{branch_name}` (读自 transitions.schema.json N5.branch_integration.branch_pattern)")
         lines.append("- **工作起点**: 从当前 main 拉取")
         
-        # Read report path from config.schema governance_structure.paths (single source)
-        # Fail-closed: path resolution fails → raise with actionable exit
-        task_cards_root = resolve_governance_path("task_cards", governance_root, product_root)
-        report_path = task_cards_root / task_id / "RETURN.md"
-        lines.append(f"- **报告落点**: `{report_path}` (读自 config.schema governance_structure.paths.task_cards)")
+        # AIPOS-F89 件① H9: 报告落点唯一读取口 next_resolver.card_report_path(执行卡 = project.json paths.return_root,
+        # 审计卡 = paths.verdict_root; 文件候选读 transitions artifact_ingest)。原读 config.schema
+        # governance_structure.paths.task_cards(第二份声明)已删。声明读取失败 = 向上抛(fail-closed)。
+        from tools.aipos_cli.next_resolver import card_report_path
+
+        report_path = card_report_path(governance_root, task_id, {**metadata, "task_id": task_id})
+        lines.append(f"- **报告落点**: `{report_path}` (读自项目 project.json paths 声明)")
         
         lines.append("- **治理仓**: 永远停在 main 分支，不 commit")
         lines.append("- **写完停手**: 等待托管/审计，不自行 push")

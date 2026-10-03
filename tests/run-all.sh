@@ -895,6 +895,40 @@ else
   overall=1
 fi
 
+# AIPOS-F89 件①: 落点与项目键只一份声明(H9 交回/裁决/台账落点只读 project.json paths·M8 队列根只读 task_loader.queue_root_for·M14 project.json 键全部声明、collaboration_profile 单读取口单缺省) + 随语义改动的 machine_zone 用例
+echo
+echo "── tests/test_aipos_f89_project_declaration_single_source.py (F89 件① probe 形四根全非缺省全程落声明位·门侧零写死·第二份声明已删·M14 键声明) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f89_project_declaration_single_source.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_machine_zone.py" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f89_project_declaration_single_source.py PASS"
+else
+  echo "✗ tests/test_aipos_f89_project_declaration_single_source.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F89 件②: 治理文档名不再是产品契约(M17: config.schema 去 governance_docs.files / paths.foundation_backlog·close 编年史与硬规矩来源读 project.json paths 可选声明, 未声明跳过+warning·新项目 close 不 BLOCK·章程「单一真相源」占位化) + 随语义改动的 F86/F85/F78/queue_close 用例
+echo
+echo "── tests/test_aipos_f89_governance_docs_contract.py (F89 件② 新项目无 lybra 文档 close 不 BLOCK·硬规矩来源缺省行为·新项目章程/模板/技能零 lybra 文档名) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f89_governance_docs_contract.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_queue_close.py" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f89_governance_docs_contract.py PASS"
+else
+  echo "✗ tests/test_aipos_f89_governance_docs_contract.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F89 件③: 审计卡开工面(a 认领审计卡建被审 tip 只读 detached 取证工作树·/go 选中审计卡 b my-tasks --workstation 产品解析身份·go.ts 只读 lybra_bin 无缺省 c 报告完成判据声明化·空模板不算产物 d 报告快照包记录头过护栏 B④) + 随语义改动的 F73D/F73E/F86/F90 用例
+echo
+echo "── tests/test_aipos_f89_audit_kickoff_surface.py (F89 件③ 取证工作树·--workstation·go.ts 只读 lybra_bin·完成判据三态·快照记录头过 B④) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f89_audit_kickoff_surface.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f89_audit_kickoff_surface.py PASS"
+else
+  echo "✗ tests/test_aipos_f89_audit_kickoff_surface.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

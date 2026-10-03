@@ -241,8 +241,10 @@ def build_orchestration_summary_preview(
         "artifact_links_ref": "",
     }
 
+    from tools.aipos_cli.task_loader import queue_state_ref  # AIPOS-F89 件① M8: 队列根读项目声明
+
     source_refs = [
-        "5_tasks/queue/",
+        queue_state_ref(repo_root, ""),
         "5_tasks/records/",
         iteration_rel.as_posix(),
         event_rel.as_posix(),

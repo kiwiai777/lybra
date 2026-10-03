@@ -1533,6 +1533,37 @@ def build_return_skeleton_markdown(task_id: str) -> str:
 """
 
 
+def build_verdict_skeleton_markdown(audit_task_id: str, reviewed_task_id: str | None = None) -> str:
+    """AIPOS-F89 件③c: 审计卡认领时的报告空模板(与真实报告同名同位: next_resolver.card_report_path)。
+
+    frontmatter 键 = transitions artifact_ingest.verdict.required_frontmatter(verdict / commit_sha), 值为 `(待填写` 占位;
+    报告完成判据(artifact_ingest.verdict.readiness = next_resolver.verdict_report_ready)只在这些键全部填实值后成立,
+    故空模板「文件存在」不被 loop 等待 / artifact ingest / 开工核验当作完成。声明缺 = SchemaLoadError(fail-closed, 不出无键模板)。
+    """
+    from tools.aipos_cli.next_resolver import _transition_node, card_branch_name, required_verdict_frontmatter
+
+    fm_keys = required_verdict_frontmatter()
+    verdict_values = " | ".join(str(v) for v in (_transition_node("N4").get("record", {}).get("allowed_verdict_values") or []))
+    subject = reviewed_task_id or "<被审卡ID>"
+    branch = card_branch_name(reviewed_task_id) if reviewed_task_id else "被审卡分支"
+    hints = {
+        "verdict": f"(待填写: {verdict_values or '裁决值'})",
+        "commit_sha": f"(待填写: 被审分支 {branch} tip 的完整 40 位 sha)",
+    }
+    frontmatter = render_frontmatter_block({k: hints.get(k, "(待填写)") for k in fm_keys}, list(fm_keys)) + "\n"
+    return frontmatter + f"""# 审计报告 — {audit_task_id}(被审 {subject})
+
+## 一句话结论
+(待填写: 结论三值之一 + 一句话理由)
+
+## Findings
+(待填写: F-* 清单, 无则写「无」)
+
+## 逐条验收核验
+(待填写: 对照原卡验收断言逐条给出命令与输出摘录)
+"""
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

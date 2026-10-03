@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tools.aipos_cli.task_loader import queue_state_ref
 from tools.aipos_cli.draft_writer import render_markdown_task_card
 from tools.aipos_cli.workspace_config import has_workspace_queue
 from tools.schema_constants import RecordType, Verdict
@@ -272,7 +273,7 @@ def build_external_intake_draft(
         "draft_created_by": actor or source_tag or "external_intake",
         "draft_created_at": _utc_now(),
         "draft_updated_at": _utc_now(),
-        "draft_publish_target": "5_tasks/queue/pending/",
+        "draft_publish_target": queue_state_ref(repo_root, "pending"),  # AIPOS-F89 件① M8: 队列根读项目声明
     }
     rendered_markdown = render_markdown_task_card(metadata, _render_body(normalized_payload, actor=actor))
     planned_writes = []

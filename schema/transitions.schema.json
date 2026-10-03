@@ -92,7 +92,7 @@
         ]
       },
       "automation": {
-        "queue_placement": "moves card to 5_tasks/queue/pending/",
+        "queue_placement": "moves card to <queue_root>/pending/ (queue_root = project.json paths.queue_root, 唯一读取口 task_loader.queue_root_for)",
         "frontmatter_update": "status: pending"
       }
     },
@@ -145,11 +145,11 @@
         ]
       },
       "automation": {
-        "queue_placement": "moves card to 5_tasks/queue/claimed/",
+        "queue_placement": "moves card to <queue_root>/claimed/",
         "frontmatter_update": "status: claimed, claimed_by: <agent_instance>, claimed_at: <timestamp>, claim_id: <claim_id>",
         "return_skeleton": {
           "description": "AIPOS-F65A 大项①: claim confirm 时门在声明位创建 RETURN.md 骨架",
-          "location": "task_cards/{task_id}/RETURN.md (resolved via config.schema governance_structure.paths.task_cards)",
+          "location": "卡报告声明位(AIPOS-F89 件① H9 + 件③c): 执行卡 = <paths.return_root>/{task_id}/<artifact_ingest.return 首个非通配候选>; 审计卡(task_mode=audit) = <paths.verdict_root>/{audit_task_id}/<artifact_ingest.verdict 首个非通配候选>, 与真实报告同名同位。唯一推导 next_resolver.card_report_path; 根读项目 project.json paths(config.schema configuration_sources.project_json.schema.paths)",
           "writer": "record_writer.build_return_skeleton_markdown",
           "sections": [
             "一句话结论",
@@ -204,8 +204,8 @@
       },
       "artifact": {
         "description": "AIPOS-F73D: 执行体产物落点与就绪判据的唯一声明——推导核(next_resolver._check_return_artifact)与顾问驱动器 lybra loop 的 await 都读这里, 禁散落。",
-        "location": "task_cards/{task_id}/RETURN.md",
-        "location_note": "与 N1.automation.return_skeleton.location 同一路径: 骨架由 claim 创建, 执行体只填不选址。AIPOS-F78 件④: 本 location 只是 lybra 形默认值; 推导核/loop/ingest 一律经 workspace_config.project_paths() 读项目 project.json paths.return_root(缺省=task_cards) + artifact_ingest.return_file_candidates 找 Return, 禁写死本路径",
+        "location_ref": "#/artifact_ingest/return (落点根 = project.json paths.return_root; 唯一推导 next_resolver.return_artifact_dir / default_return_file / executor_artifact_watch)",
+        "location_note": "与 N1.automation.return_skeleton.location 同一推导: 骨架由 claim 创建, 执行体只填不选址。AIPOS-F89 件① H9: 原 location 写死字面(第二份声明)删除; 推导核/loop/ingest 一律经 workspace_config.project_paths() 读项目 project.json paths.return_root + artifact_ingest.return_file_candidates 找 Return",
         "readiness": {
           "rule": "文件存在且非骨架: 「一句话结论」节首行非占位符(record_writer.build_return_skeleton_markdown 的 `(待填写` 前缀)",
           "not_ready_meaning": "骨架/占位 = 执行体尚未交回 → 推导核判 await_artifact, loop 继续经 agent watch 等待"
@@ -250,7 +250,7 @@
       },
       "automation": {
         "creates_audit_card": "生成 {task_id}R 审计任务卡",
-        "places_in_queue": "5_tasks/queue/pending/ (审计卡)"
+        "places_in_queue": "<queue_root>/pending/ (审计卡)"
       }
     },
     "N4": {
@@ -312,10 +312,7 @@
       },
       "audit_report": {
         "description": "AIPOS-F37 大项B: 审计报告落点与字段声明——托管解析与派审注入读同一份,禁散落",
-        "location_candidates": [
-          "task_cards/{audit_task_id}/RETURN.md",
-          "task_cards/{audit_task_id}/audit_report.md"
-        ],
+        "location_ref": "#/artifact_ingest/verdict (落点根 = project.json paths.verdict_root; 唯一推导 next_resolver.verdict_artifact_dir / audit_report_artifact_path / auditor_artifact_watch。AIPOS-F89 件① H9: 原 location_candidates 写死字面(第二份声明)删除)",
         "location_priority": "RETURN.md 优先,不存在则回退 audit_report.md",
         "required_fields": [
           {
@@ -581,7 +578,7 @@
         ]
       },
       "automation": {
-        "queue_placement": "moves card to 5_tasks/queue/completed/",
+        "queue_placement": "moves card to <queue_root>/completed/",
         "frontmatter_update": "status: completed, closed_at: <timestamp>"
       }
     },
@@ -673,7 +670,7 @@
           "description": "完整回 pending:移回 pending/ + 清空 claim 字段",
           "to_state": "pending",
           "automation": {
-            "queue_placement": "moves to 5_tasks/queue/pending/",
+            "queue_placement": "moves to <queue_root>/pending/",
             "frontmatter_update": "status: pending, 清空 claimed_by/claimed_at/claim_id"
           }
         },
@@ -681,7 +678,7 @@
           "description": "原地重开:保留 claim,状态回 claimed",
           "to_state": "claimed",
           "automation": {
-            "queue_placement": "moves to 5_tasks/queue/claimed/",
+            "queue_placement": "moves to <queue_root>/claimed/",
             "frontmatter_update": "status: claimed, 保留 claimed_by/claimed_at/claim_id"
           }
         }
@@ -838,7 +835,7 @@
   "state_consistency": {
     "description": "卡状态三方一致性 lint (大项C①)",
     "three_sources": [
-      "队列目录 (5_tasks/queue/{pending|claimed|completed}/)",
+      "队列目录 (<queue_root>/{pending|claimed|completed}/, queue_root = project.json paths.queue_root)",
       "frontmatter status 字段",
       "records 目录最新记录推导的状态"
     ],
@@ -898,7 +895,12 @@
       "root_key": "verdict_root",
       "location_pattern": "<verdict_root>/<audit_task_id>/<candidate>",
       "verdict_file_candidates": ["RETURN.md", "audit_report.md", "audit-*.md", "verdict-*.md", "*.md"],
-      "candidate_rule": "取首个 frontmatter 含 verdict 的候选(N4.audit_report.location_priority 同序)",
+      "candidate_rule": "取首个满足 readiness 的候选(N4.audit_report.location_priority 同序)",
+      "readiness": {
+        "rule": "AIPOS-F89 件③c: 报告完成 = required_frontmatter(verdict / commit_sha)全部已填且非占位(占位 = 空 / `(待填写` 前缀 / `<` 起首)。唯一实现 next_resolver.verdict_report_ready / missing_verdict_frontmatter; 推导核 _check_verdict_artifact、loop 等待就绪谓词、artifact ingest、开工核验 kickoff_refusal 同读",
+        "skeleton": "审计卡认领时门在 card_report_path(与真实报告同名同位)生成空模板 record_writer.build_verdict_skeleton_markdown: 同一组必填键全为占位, 故「文件存在」≠「审计完成」, 空模板不被当产物",
+        "not_ready_meaning": "空模板/占位 = 审计体尚未写完 → 推导核判 await_artifact, loop 继续经 agent watch 等待"
+      },
       "required_frontmatter": ["verdict", "commit_sha"],
       "checks": [
         "verdict ∈ N4.record.allowed_verdict_values",
@@ -907,14 +909,16 @@
       "submits_via": "lybra audit-verdict --confirm(驱动方 token, artifact_subject 从被审分支 tip 取 commit_sha/tree_hash, agent_runtime=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②)",
       "derived_command": "AIPOS-F90 件②: 推导核对 return/verdict 步给驱动方的命令 = `lybra artifact ingest --task-id <ID> --kind <return|verdict> --workspace-root <治理根>`; 入口内部执行推导核同时给出的 shell_command(唯一构建), 驱动方不再手提 audit-verdict / queue return",
       "report_snapshot": {
-        "description": "AIPOS-F90 件②(2026-10-02 事故: 已结案卡被重审并覆盖原审计报告, task_cards 被 gitignore 不可恢复): 裁决入门时门把审计报告全文逐字节快照进 records, 与裁决记录同一批受控落盘; 报告事后被覆盖仍可从快照复原。",
+        "description": "AIPOS-F90 件②(2026-10-02 事故: 已结案卡被重审并覆盖原审计报告, 报告落点被 gitignore 不可恢复): 裁决入门时门把审计报告全文逐字节(包记录头, AIPOS-F89 件③d)快照进 records, 与裁决记录同一批受控落盘; 报告事后被覆盖仍可从快照复原。",
         "relative_to": "records",
         "location": "audit_verdicts/{reviewed_task_id}/report_snapshots/{verdict_id}.md",
         "location_note": "放在该卡裁决记录目录下的子目录: 记录目录直扫(glob *.md)只见裁决记录本身, 快照不被当作裁决/手写记录",
         "record_type": "audit_report_snapshot",
+        "header_fields": ["record_type", "verdict_id", "reviewed_task_id", "audit_task_id", "report_source_ref", "report_sha256", "report_bytes"],
+        "format": "AIPOS-F89 件③d(2026-10-03 F91 快照被护栏 B④ 拒: New record lacks required field 'record_type'): 快照文件 = 记录头(header_fields, 经单源 record_writer.render_frontmatter_block)+ 换行 + 报告原文逐字节, 满足 config.schema file_declarations.record_file.required_frontmatter(record_type)",
         "source": "审计报告 = 推导核唯一就绪判据 next_resolver._check_verdict_artifact(verdict_root 声明 + verdict_file_candidates)命中的文件",
         "verdict_record_fields": ["report_snapshot_ref", "report_snapshot_sha256", "report_source_ref"],
-        "restore": "cp <治理根>/<report_snapshot_ref> <治理根>/<report_source_ref>; 以 report_snapshot_sha256 核对逐字节一致",
+        "restore": "board_adapter.unwrap_report_snapshot(<治理根>/<report_snapshot_ref> 全文) → 去记录头取原文并以记录头 report_sha256 核对; 写回 <治理根>/<report_source_ref>, 其 sha256 = 裁决记录 report_snapshot_sha256(= 报告原文字节 sha256)",
         "writer": "tools/aipos_cli/board_adapter._audit_report_snapshot_plan → audit_verdict_task 受控写入(唯一实现)",
         "missing_report": "未找到审计报告(如非代码卡顾问自审无报告文件)= 不写快照, 裁决记录不带 report_snapshot_* 字段, 裁决照落(不因无报告而拒)"
       }

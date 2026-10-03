@@ -30,7 +30,7 @@ from tools.aipos_cli.owner_truth_view import (
     derive_true_stage,
 )
 from tools.aipos_cli.records import find_records_for_task, load_records
-from tools.aipos_cli.task_loader import load_all_tasks
+from tools.aipos_cli.task_loader import load_all_tasks, queue_root_for
 
 READ_SAFETY_NOTICE = "Read-only local Board adapter call. No files are written."
 
@@ -231,7 +231,7 @@ def get_verify_bench(repo_root: str | Path | None = None) -> dict[str, Any]:
             return _empty(operation)
         tasks = load_all_tasks(resolved)
         records = load_records(resolved)
-        completed_root = resolved / "5_tasks" / "queue" / "completed"
+        completed_root = queue_root_for(resolved) / "completed"
 
         # verdict filed per reviewed main card (newest first in records).
         verdict_by_task: dict[str, str] = {}

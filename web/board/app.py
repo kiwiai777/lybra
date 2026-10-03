@@ -24,6 +24,7 @@ if str(_IMPORT_BOOTSTRAP_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_BOOTSTRAP_ROOT))
 
 from tools.schema_loader import code_repo_schema_root  # noqa: E402
+from tools.aipos_cli.task_loader import queue_root_for, queue_state_ref  # noqa: E402
 
 # AIPOS-F91(L5): 产品仓根读唯一实现 schema_loader.code_repo_schema_root, 不再自算
 REPO_ROOT = code_repo_schema_root()
@@ -1042,7 +1043,7 @@ def _get_runtime_status_route(params: dict[str, list[str]], *, repo_root: Path |
             "root": str(resolved_root),
             "config_path": defaults["config_path"],
             "discovery_note": "Board server repo_root / AIPOS_WORKSPACE_ROOT is authoritative for this process.",
-            "initialized": (resolved_root / "5_tasks" / "queue").exists(),
+            "initialized": queue_root_for(resolved_root).exists(),
         },
         "endpoints": {
             "board": {
@@ -1573,7 +1574,7 @@ def _get_planner_drafts_review_route(_params: dict[str, list[str]], *, repo_root
         audit_by = str(metadata.get("audit_by") or "").strip()
         owner_gate = draft_status == "needs_owner" or publish_status == "needs_owner" or _as_bool(metadata.get("needs_owner"))
         rejected_or_blocked = draft_status in {"rejected", "superseded", "blocked"} or publish_status in {"rejected", "superseded", "blocked"}
-        publish_target_ok = str(metadata.get("publish_target") or metadata.get("draft_publish_target") or "").strip() == "5_tasks/queue/pending/"
+        publish_target_ok = str(metadata.get("publish_target") or metadata.get("draft_publish_target") or "").strip() == queue_state_ref(resolved_root, "pending")
         publish_preview_blocked = str(publish_preview.get("verdict") or "") == "BLOCK"
         planner_separated = bool(planner_agent and reviewer and audit_by and planner_agent != reviewer and planner_agent != audit_by)
         ready = (
@@ -2109,10 +2110,12 @@ def _planner_draft_review_route(payload: dict[str, Any], *, repo_root: Path | No
         bool(planner_agent and audit_by and planner_agent != audit_by),
         "planner_agent must not audit its own planned work.",
     )
+    # AIPOS-F89 item1 M8: queue root read from the project declaration (task_loader.queue_state_ref)
+    pending_ref = queue_state_ref(resolved_root, "pending")
     add_check(
         "publish_target_pending_queue",
-        str(metadata.get("publish_target") or metadata.get("draft_publish_target") or "").strip() == "5_tasks/queue/pending/",
-        "publish target must be 5_tasks/queue/pending/.",
+        str(metadata.get("publish_target") or metadata.get("draft_publish_target") or "").strip() == pending_ref,
+        f"publish target must be {pending_ref}.",
     )
 
     publish_blocking = list(publish_preview.get("blocking_reasons", []))

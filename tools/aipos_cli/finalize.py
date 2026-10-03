@@ -341,27 +341,27 @@ def _ensure_finalization_record(
         operations.append(f"⚠️  Finalization record write failed: {e}")
 
 
-def _report_frontmatter_verdict_for_display(workspace_root: Path, task_id: str) -> dict[str, Any]:
-    """AIPOS-FND-14: best-effort, DISPLAY-ONLY lookup of the human-authored
-    task_cards/<task_id>/AUDIT-REPORT-*.md frontmatter ``verdict:`` field.
+def _report_frontmatter_verdict_for_display(governance_root: Path, task_id: str) -> dict[str, Any]:
+    """AIPOS-FND-14: best-effort, DISPLAY-ONLY lookup of the audit report frontmatter ``verdict:`` field.
 
-    This is NEVER judged for finalize eligibility (see ``check_task_can_finalize`` below —
-    that report has no reliable frontmatter and is a plain editable markdown file anyone could
-    hand-write a fake ``verdict: PASS`` into). It is surfaced purely so operators can see what
-    the (non-authoritative) report says alongside the real gate verdict. Any failure here is
-    swallowed — this must never block or alter the real finalize decision.
+    AIPOS-F89 件① H9: 报告落点只读项目声明——审计报告就绪判据唯一实现 next_resolver._check_verdict_artifact
+    (<paths.verdict_root>/<审计卡ID>/ + transitions artifact_ingest.verdict 候选), 治理根内; 原写死
+    `<workspace_root>/task_cards/<ID>/AUDIT-REPORT-*.md`(且落在产品仓)退役。
+
+    This is NEVER judged for finalize eligibility (see ``check_task_can_finalize`` below — the report is an editable
+    markdown file). It is surfaced purely so operators can see what the (non-authoritative) report says alongside the
+    real gate verdict. Read failures are reported on stderr and yield an empty display (never block/alter finalize).
     """
-    try:
-        task_dir = workspace_root / "task_cards" / task_id
-        audit_reports = sorted(task_dir.glob("AUDIT-REPORT-*.md"))
-        if not audit_reports:
-            return {"report_path": None, "report_verdict": None}
-        from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+    from tools.aipos_cli.next_resolver import _check_verdict_artifact, _read_frontmatter
+    from tools.schema_loader import SchemaLoadError
 
-        report_path = audit_reports[0]
-        metadata, _body, _warnings = parse_markdown_frontmatter(report_path.read_text(encoding="utf-8"))
-        return {"report_path": str(report_path), "report_verdict": metadata.get("verdict")}
-    except Exception:
+    try:
+        report_path = _check_verdict_artifact(Path(governance_root), f"{task_id}R")
+        if report_path is None:
+            return {"report_path": None, "report_verdict": None}
+        return {"report_path": str(report_path), "report_verdict": _read_frontmatter(report_path).get("verdict")}
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        print(f"Warning: audit report display lookup failed for {task_id}: {exc}", file=sys.stderr)
         return {"report_path": None, "report_verdict": None}
 
 
@@ -724,7 +724,7 @@ def _ensure_on_main_branch(
 def _task_title_summary(governance_root: Path, task_id: str) -> str:
     """Best-effort: 从治理仓任务卡 frontmatter title 提炼摘要 (剥离 task_id 前缀)。
 
-    查找顺序: 5_tasks/queue/{claimed,completed,pending}/<id>.md → task_cards/<ID>/CARD.md。
+    查找顺序: 队列(task_loader.find_task_card: claimed/completed/pending)→ <paths.task_cards_root>/<ID>/CARD.md(项目声明)。
     失败返回空串 (摘要非归属关键, 归属由 branch 卡号 + verdict_id 裁决号保证)。
     """
     candidates: list[Path] = []
@@ -738,7 +738,10 @@ def _task_title_summary(governance_root: Path, task_id: str) -> str:
         card_path = None
     if card_path is not None:
         candidates.append(card_path)
-    card_md = governance_root / "task_cards" / task_id / "CARD.md"
+    # AIPOS-F89 件① H9: 台账根读项目声明(project.json paths.task_cards_root, 唯一读取口 workspace_config.project_paths)
+    from tools.aipos_cli.workspace_config import project_paths
+
+    card_md = Path(project_paths(governance_root)["task_cards_root"]) / task_id / "CARD.md"
     if card_md.exists():
         candidates.append(card_md)
 
@@ -1162,12 +1165,12 @@ def finalize_task(
             "operations": operations,
         }
 
-    # AIPOS-FND-14: display-only — surface the task_cards AUDIT-REPORT frontmatter verdict
-    # (if any) alongside the real gate verdict for operator visibility. Never judged.
-    report_display = _report_frontmatter_verdict_for_display(workspace_root, task_id)
+    # AIPOS-FND-14: display-only — surface the audit report frontmatter verdict (declared verdict_root, governance
+    # root; AIPOS-F89 件① H9) alongside the real gate verdict for operator visibility. Never judged.
+    report_display = _report_frontmatter_verdict_for_display(governance_root, task_id)
     if report_display["report_path"]:
         operations.append(
-            f"(display only, not judged) task_cards AUDIT-REPORT frontmatter verdict: "
+            f"(display only, not judged) audit report frontmatter verdict: "
             f"{report_display['report_verdict']!r} at {report_display['report_path']}"
         )
 

@@ -55,9 +55,10 @@ def _scoped_driver() -> dict[str, str]:
 def _resolve_governance_path_with_relative(key: str, governance_root: Path) -> Path:
     """解析治理路径,处理 relative_to 链。
     
-    如 queue 相对于 tasks_root,需递归解析:
+    如 records 相对于 tasks_root,需递归解析:
     tasks_root → 5_tasks/
-    queue → tasks_root + queue/ = 5_tasks/queue/
+    records → tasks_root + records/ = 5_tasks/records/
+    (队列根不经此处: 只读 task_loader.queue_root_for, AIPOS-F89 件① M8)
     """
     from tools.schema_loader import get_governance_path, resolve_governance_path
     
@@ -191,20 +192,47 @@ def find_return_artifact(workspace_root: Path, task_id: str) -> Path | None:
     return _pick_candidate(return_artifact_dir(workspace_root, task_id), cands)
 
 
+def default_return_file(workspace_root: Path, task_id: str) -> Path:
+    """执行体 Return 的声明位默认文件 = <paths.return_root>/<task_id>/<首个非通配候选>(AIPOS-F89 件① H9 唯一推导:
+    认领骨架 / 门侧 return_body 落盘 / lybra_return_content 读取同此, 禁写死 task_cards/<ID>/RETURN.md)。候选缺 = SchemaLoadError。"""
+    cands = list(_artifact_ingest_declaration()["return"].get("return_file_candidates") or [])
+    first = next((str(c) for c in cands if not any(ch in str(c) for ch in "*?[")), None)
+    if first is None:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.return.return_file_candidates 无非通配候选")
+    return return_artifact_dir(workspace_root, task_id) / first
+
+
 def _return_artifact_path(workspace_root: Path, task_id: str) -> Path:
-    """执行体产物路径: 已落盘的 Return 文件; 未落盘时返回声明位默认文件(首个非通配候选)。"""
+    """执行体产物路径: 已落盘的 Return 文件; 未落盘时返回声明位默认文件(default_return_file)。"""
     found = find_return_artifact(workspace_root, task_id)
     if found is not None:
         return found
-    cands = list(_artifact_ingest_declaration()["return"].get("return_file_candidates") or [])
-    first = next((str(c) for c in cands if not any(ch in str(c) for ch in "*?[")), "RETURN.md")
-    return return_artifact_dir(workspace_root, task_id) / first
+    return default_return_file(workspace_root, task_id)
 
 
 def executor_artifact_watch(workspace_root: Path, task_id: str) -> tuple[Path, list[str]]:
     """AIPOS-F78: loop 等待执行体产物的 (watch 根, 相对 glob 列表)——落点读声明; 声明根在治理根外时以落点根为 watch 根。"""
     directory = return_artifact_dir(workspace_root, task_id)
     cands = [str(c) for c in (_artifact_ingest_declaration()["return"].get("return_file_candidates") or [])]
+    try:
+        rel = directory.resolve().relative_to(Path(workspace_root).resolve())
+        return Path(workspace_root), [str(rel / c) for c in cands]
+    except ValueError:
+        return directory.parent, [f"{directory.name}/{c}" for c in cands]
+
+
+def auditor_artifact_watch(workspace_root: Path, audit_task_id: str) -> tuple[Path, list[str]]:
+    """AIPOS-F89 件① H9: loop 等待审计报告的 (watch 根, 相对 glob 列表)——与 executor_artifact_watch 同构: 落点根读项目声明
+    paths.verdict_root(verdict_artifact_dir), 文件候选读 transitions artifact_ingest.verdict.verdict_file_candidates;
+    原读 transitions N4.audit_report.location_candidates(写死 task_cards/{audit_task_id}/…, 第二份声明)已删。"""
+    directory = verdict_artifact_dir(workspace_root, audit_task_id)
+    cands = [str(c) for c in (_artifact_ingest_declaration()["verdict"].get("verdict_file_candidates") or [])]
+    if not cands:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.verdict_file_candidates 未声明")
     try:
         rel = directory.resolve().relative_to(Path(workspace_root).resolve())
         return Path(workspace_root), [str(rel / c) for c in cands]
@@ -219,7 +247,7 @@ def verdict_artifact_dir(workspace_root: Path, audit_task_id: str) -> Path:
 
 def _audit_report_candidates(workspace_root: Path, audit_task_id: str) -> list[Path]:
     """审计体产物候选: 落点根读项目声明(verdict_root), 文件候选读 transitions artifact_ingest.verdict.verdict_file_candidates
-    (与 N4.audit_report.location_candidates 同序: RETURN.md 优先, 回退 audit_report.md)。"""
+    (RETURN.md 优先, 回退 audit_report.md; N4.audit_report.location_ref 指向同一声明)。"""
     directory = verdict_artifact_dir(workspace_root, audit_task_id)
     cands = list(_artifact_ingest_declaration()["verdict"].get("verdict_file_candidates") or [])
     out: list[Path] = []
@@ -254,16 +282,51 @@ def audit_report_artifact_path(workspace_root: Path, audit_task_id: str) -> Path
 # AIPOS-F86 件①: 工位开工面单源——卡工作树落点 / 报告落点的唯一推导(claim 建树、card render、写边界、my-tasks 同函数)
 # ---------------------------------------------------------------------------
 
+def forensic_subject(card_frontmatter: dict[str, Any] | None) -> str | None:
+    """AIPOS-F89 件③a: 审计卡(task_mode=audit)的被审卡 ID(卡面 reviewed_task_id → derived_from); 非审计卡 = None;
+    审计卡缺两字段 = ""(建取证树时 fail-closed)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    if str(fm.get("task_mode") or "").strip().lower() != "audit":
+        return None
+    return str(fm.get("reviewed_task_id") or fm.get("derived_from") or "").strip()
+
+
+def card_needs_worktree(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:
+    """认领是否须建卡工作树(唯一判据, 门认领 queue_mutation 与 loop 认领核验同读): 代码卡 = 卡分支工作树;
+    AIPOS-F89 件③a: 审计卡且被审卡为代码卡(或被审卡查不到 = fail-closed 按需建) = 被审分支 tip 的只读 detached 取证工作树。
+    其余(非代码卡及其审计卡)不建树(与 F90 前语义一致)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    mode = str(fm.get("task_mode") or "").strip().lower()
+    if mode == "code":
+        return True
+    reviewed = forensic_subject(fm)
+    if not reviewed:
+        return reviewed == ""  # 审计卡缺被审卡字段 → 需要(建树时给出拒因); 非审计卡 → 不需要
+    task_path, _ = _find_task_in_queue(workspace_root, reviewed)
+    if task_path is None:
+        return True
+    return str(_read_frontmatter(task_path).get("task_mode") or "code").strip().lower() == "code"
+
+
 def card_worktree_location(workspace_root: Path, task_id: str,
                            card_frontmatter: dict[str, Any] | None = None) -> tuple[Path, Path]:
     """卡工作树落点的唯一推导 = (产品仓, 工作树路径)。
 
     产品仓 = _card_repo_root(workspace_config.resolve_card_repo 唯一解析: 卡 lane.repo → project.json repos → code_repo 别名),
     工作树 = _resolve_worktree_root(config.schema worktree_root 声明, 治理根 .lybra/config.json 可覆盖) / <task_id>。
+    AIPOS-F89 件③a: 审计卡的产品仓 = 被审卡的仓(取证工作树建在被审分支所在仓), 路径仍按审计卡 ID(<worktree_root>/<审计卡ID>)。
     claim 建树(_ensure_worktree)/ card render / write_boundary / my-tasks 开工面全部经此; 工位侧(go.ts)禁第二处拼接
     (F73B 原 `<治理根>/card/<ID>` 之误)。解析不到 = CardRepoUnresolved / SchemaLoadError 向上抛, 调用方 fail-closed。
     """
-    code_repo = _card_repo_root(workspace_root, task_id, card_frontmatter)
+    fm = card_frontmatter
+    if fm is None:
+        task_path, _ = _find_task_in_queue(workspace_root, task_id)
+        fm = _read_frontmatter(task_path) if task_path else {}
+    reviewed = forensic_subject(fm)
+    if reviewed:
+        code_repo = _card_repo_root(workspace_root, reviewed)
+    else:
+        code_repo = _card_repo_root(workspace_root, task_id, fm)
     return code_repo, _resolve_worktree_root(workspace_root, code_repo) / task_id
 
 
@@ -334,7 +397,7 @@ NEXT_CARD_RULE: dict[str, Any] = {
     "eligible": [
         "queue_state == claimed",
         "卡面 frontmatter 可解析(产品唯一读取口 parse_markdown_frontmatter 无告警)",
-        "worktree_exists == true(工作树由驱动方认领时建立)",
+        "worktree_exists == true(工作树由驱动方认领时建立; AIPOS-F89 件③a: 审计卡 = 被审分支 tip 的只读 detached 取证工作树)",
         "report_path 可推导(开工提示必需的报告落点)",
         "kickoff_refusal 为空(AIPOS-F90 件③: 本实例在办、未结案、产物未交——判据 next_resolver.kickoff_refusal)",
     ],
@@ -846,8 +909,9 @@ def _check_return_artifact(workspace_root: Path, task_id: str) -> bool:
 
 def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
     """审计体产物就绪判据(唯一): 落点根读项目声明(verdict_root), 文件候选读 transitions artifact_ingest.verdict
-    (RETURN.md 优先, 回退 audit_report.md), 取首个 frontmatter 含 `verdict` 的文件;
-    兼容旧命名 VERDICT-<ID>R.md。骨架 RETURN.md(无 verdict)不算。返回路径或 None。"""
+    (RETURN.md 优先, 回退 audit_report.md), 取首个「已交」的文件(AIPOS-F89 件③c: verdict_report_submitted = 声明必填键
+    至少一个已填实值; 认领时生成的同名同位空模板全为占位 = 未交); 完成与否另由 verdict_report_ready 判(推导核对已交未完成
+    判 artifact_invalid)。兼容旧命名 VERDICT-<ID>R.md。返回路径或 None。"""
     if not task_id.upper().endswith("R"):
         return None
     task_work_dir = verdict_artifact_dir(workspace_root, task_id)
@@ -859,8 +923,7 @@ def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
         if cand in seen or not cand.is_file():
             continue
         seen.add(cand)
-        fm = _read_frontmatter(cand)
-        if str(fm.get("verdict") or "").strip():
+        if verdict_report_submitted(_read_frontmatter(cand)):
             return cand
     return None
 
@@ -1071,6 +1134,40 @@ def _build_copyable_command(
     return " ".join(parts)
 
 
+def _is_placeholder_value(value: Any) -> bool:
+    """报告 frontmatter 值是否未填: 空 / 骨架占位(`(待填写` 前缀, record_writer 骨架)/ 尖括号占位(`<…>`)。"""
+    text = str(value or "").strip()
+    return not text or text.startswith(_RETURN_PLACEHOLDER_PREFIX) or text.startswith("<")
+
+
+def required_verdict_frontmatter() -> list[str]:
+    """审计报告必填 frontmatter 键(唯一声明: transitions artifact_ingest.verdict.required_frontmatter)。"""
+    keys = list(_artifact_ingest_declaration()["verdict"].get("required_frontmatter") or [])
+    if not keys:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.required_frontmatter 未声明")
+    return [str(k) for k in keys]
+
+
+def missing_verdict_frontmatter(frontmatter: dict[str, Any]) -> list[str]:
+    """审计报告缺失的必填 frontmatter 键(空值/占位视为缺)。AIPOS-F89 件③c: 报告完成判据(artifact_ingest.verdict.readiness)
+    = 本函数返回空; 认领时生成的同名同位空模板(全占位)不算完成。"""
+    return [k for k in required_verdict_frontmatter() if _is_placeholder_value(frontmatter.get(k))]
+
+
+def verdict_report_submitted(frontmatter: dict[str, Any]) -> bool:
+    """AIPOS-F89 件③c: 审计报告「已动笔」= 至少一个声明必填键已填实值(认领时的空模板全为占位 = 未交, 继续等待)。
+    已交但未填全 → 推导核判 artifact_invalid(loop 硬停点名缺项), 不当完成也不空等。"""
+    return any(not _is_placeholder_value(frontmatter.get(k)) for k in required_verdict_frontmatter())
+
+
+def verdict_report_ready(frontmatter: dict[str, Any]) -> bool:
+    """AIPOS-F89 件③c: 审计报告「写完」的唯一判据(推导核 / loop 等待 / artifact ingest / 开工核验同读):
+    声明的必填 frontmatter(verdict / commit_sha)全部已填且非占位。文件存在 ≠ 完成。"""
+    return not missing_verdict_frontmatter(frontmatter)
+
+
 def required_return_frontmatter() -> list[str]:
     """Return 必填 frontmatter 键(唯一声明: transitions artifact_ingest.return.required_frontmatter)。"""
     keys = list(_artifact_ingest_declaration()["return"].get("required_frontmatter") or [])
@@ -1083,12 +1180,7 @@ def required_return_frontmatter() -> list[str]:
 
 def missing_return_frontmatter(frontmatter: dict[str, Any]) -> list[str]:
     """缺失的 Return 必填 frontmatter 键列表(空值/占位视为缺)。"""
-    missing = []
-    for key in required_return_frontmatter():
-        value = str(frontmatter.get(key) or "").strip()
-        if not value or value.startswith(_RETURN_PLACEHOLDER_PREFIX) or value.startswith("<"):
-            missing.append(key)
-    return missing
+    return [k for k in required_return_frontmatter() if _is_placeholder_value(frontmatter.get(k))]
 
 
 def ingest_command(task_id: str, kind: str, workspace_root: Path, connection_json: str | None) -> str:
@@ -1367,6 +1459,22 @@ def derive_next_step(
         if not actor:
             return _not_derivable_no_claim(task_id, node="audit_verdict", state="claimed", verb="lybra_audit_verdict_dry_run",
                                            triggered_by="auditor", notes="N4: 审计卡有 VERDICT 报告但无 claim 记录, 裁决 actor 无据(AIPOS-F73E 件①)")
+        # AIPOS-F89 件③c: 报告完成判据(artifact_ingest.verdict.readiness)不成立 = 已交未完成 → 硬停点名缺项(不空等, 不入门)
+        unfilled = missing_verdict_frontmatter(verdict_fm)
+        if unfilled:
+            return {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": "audit_verdict",
+                "current_state": "claimed",
+                "triggered_by": "auditor",
+                "command": "",
+                "verb": "lybra_audit_verdict_dry_run",
+                "missing_records": [f"审计报告 frontmatter 未填/仍为占位: {', '.join(unfilled)}"],
+                "suggested_action": f"审计体在 {verdict_artifact} 填实 {', '.join(unfilled)}(声明 transitions artifact_ingest.verdict.readiness)",
+                "notes": "N4: 审计报告已交但未完成(完成判据 = 必填 frontmatter 全部已填且非占位, AIPOS-F89 件③c)",
+                "action": {"type": "artifact_invalid", "card": task_id, "path": str(verdict_artifact)},
+            }
         agent_inst = actor
         policy_ref = _resolve_active_policy(workspace_root, task_id, role="audit")
         
@@ -1933,7 +2041,9 @@ def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
     按优先级排序:pending(先出) > claimed(有 return 产物) > claimed(无产物) > blocked。
     """
     workspace_root = Path(workspace_root)
-    queue_root = _resolve_governance_path_with_relative("queue", workspace_root)
+    from tools.aipos_cli.task_loader import queue_root_for
+
+    queue_root = queue_root_for(workspace_root)  # AIPOS-F89 件① M8: 队列根唯一读取口
     results: list[dict[str, Any]] = []
 
     # 扫描 pending + claimed(活跃任务)
@@ -2127,6 +2237,14 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
     from tools.aipos_cli.workspace_config import CardRepoUnresolved
     from tools.schema_loader import SchemaLoadError
 
+    # AIPOS-F89 件③a: 审计卡 = 被审分支 tip 的只读 detached 取证工作树(同一落点函数 card_worktree_location, 同一建树入口)
+    fm_for_mode = card_frontmatter
+    if fm_for_mode is None:
+        found_path, _ = _find_task_in_queue(workspace_root, task_id)
+        fm_for_mode = _read_frontmatter(found_path) if found_path else {}
+    if forensic_subject(fm_for_mode) is not None:
+        return _ensure_forensic_worktree(workspace_root, task_id, fm_for_mode)
+
     # AIPOS-F78C 件②: 落点仓 = 该卡声明的仓(resolve_card_repo), 多仓项目两张卡各落各仓 .worktrees/<ID>
     # AIPOS-F86 件①: 落点经 card_worktree_location(与 my-tasks 开工面 / card render 同一函数)
     try:
@@ -2212,6 +2330,68 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         }
 
 
+def _ensure_forensic_worktree(workspace_root: Path, audit_task_id: str, card_frontmatter: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F89 件③a(Owner 2026-10-03 裁定 A2): 审计卡认领时为被审分支 tip 建**只读 detached 取证工作树**。
+
+    落点 = card_worktree_location(审计卡: 被审卡所在产品仓的 <worktree_root>/<审计卡ID>); 被审分支名 = card_branch_name(被审卡 ID)。
+    只读 = detached HEAD(无分支可提交; 审计体对产品仓的写边界见 roles.schema write_boundary)。已存在: HEAD 已在 tip = 复用;
+    detached 且无本地改动 = 重指到当前 tip(复审场景); 其余 = 拒。被审分支不存在 / 卡缺被审卡字段 / 非 git 仓 = 拒(fail-closed)。
+    返回形同 _ensure_worktree, 另带 detached / commit / reviewed_task_id。"""
+    import subprocess
+
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+    from tools.schema_loader import SchemaLoadError
+
+    reviewed = forensic_subject(card_frontmatter) or ""
+    fail = {"ok": False, "worktree_path": "", "branch": "", "detached": True, "commit": "", "reviewed_task_id": reviewed}
+    if not reviewed:
+        return {**fail, "message": f"审计卡 {audit_task_id} 卡面缺 reviewed_task_id / derived_from, 无法确定被审分支建取证工作树"}
+    try:
+        code_repo, worktree_path = card_worktree_location(workspace_root, audit_task_id, card_frontmatter)
+        branch = card_branch_name(reviewed)
+    except CardRepoUnresolved as exc:
+        return {**fail, "message": f"无法定位被审卡 {reviewed} 的产品仓建取证工作树: {exc}"}
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        return {**fail, "message": f"取证工作树落点/分支声明读取失败: {exc}"}
+    fail["branch"] = branch
+    if not (code_repo / ".git").exists():
+        return {**fail, "message": f"被审卡 {reviewed} 解析到的产品仓 {code_repo} 不是 git 仓根(无 .git), 无法建取证工作树"}
+
+    def git(cwd: Path, *argv: str, timeout: int = 30) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *argv], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+
+    try:
+        tip_run = git(code_repo, "rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}", timeout=5)
+        if tip_run.returncode != 0:
+            return {**fail, "message": f"被审分支 {branch} 在 {code_repo} 不存在, 无法建取证工作树: {tip_run.stderr.strip()}"}
+        tip = tip_run.stdout.strip()
+        done = {"ok": True, "worktree_path": str(worktree_path), "branch": branch, "detached": True, "commit": tip,
+                "reviewed_task_id": reviewed}
+        if worktree_path.exists():
+            head = git(worktree_path, "rev-parse", "HEAD", timeout=5)
+            attached = git(worktree_path, "symbolic-ref", "-q", "HEAD", timeout=5)
+            if head.returncode != 0 or attached.returncode == 0:
+                return {**fail, "message": f"取证工作树落点 {worktree_path} 已被占用且不是 detached 工作树(HEAD={head.stdout.strip() or '?'}"
+                                           f"{', 在分支 ' + attached.stdout.strip() if attached.returncode == 0 else ''}), 拒绝复用"}
+            if head.stdout.strip() == tip:
+                return {**done, "message": f"Forensic worktree already at {branch} tip {tip[:12]}: {worktree_path}"}
+            dirty = git(worktree_path, "status", "--porcelain", timeout=10)
+            if dirty.returncode != 0 or dirty.stdout.strip():
+                return {**fail, "message": f"取证工作树 {worktree_path} 有本地改动, 不能重指到被审分支新 tip {tip[:12]}: "
+                                           f"{(dirty.stdout or dirty.stderr).strip()[:200]}"}
+            moved = git(worktree_path, "checkout", "-q", "--detach", tip)
+            if moved.returncode != 0:
+                return {**fail, "message": f"取证工作树重指 {tip[:12]} 失败: {moved.stderr.strip()}"}
+            return {**done, "message": f"Forensic worktree re-pointed to {branch} tip {tip[:12]}: {worktree_path}"}
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        added = git(code_repo, "worktree", "add", "--detach", str(worktree_path), tip)
+        if added.returncode != 0:
+            return {**fail, "message": f"Failed to create forensic worktree: {added.stderr.strip()}"}
+        return {**done, "message": f"Forensic worktree created (detached at {branch} tip {tip[:12]}): {worktree_path}"}
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {**fail, "message": f"Exception creating forensic worktree: {exc}"}
+
+
 def loop_step_timeout_seconds() -> float:
     """AIPOS-F90 件①(缺陷③): 派生命令子进程的硬上限秒数——唯一声明 verbs.schema lybra_loop.step_timeout_seconds
     (须覆盖薄壳内 initialize + 各阶段门请求超时 + 超时回读; 夹具核不变量)。缺声明 = SchemaLoadError, 禁回落写死。"""
@@ -2282,7 +2462,8 @@ def _execute_claim_with_role_token(
     fm = _read_frontmatter(task_path) if task_path else {}
     assigned_to = str(fm.get("assigned_to") or fm.get("agent_instance") or "")
     worktree_path = ""
-    if str(fm.get("task_mode") or "code") == "code":
+    # AIPOS-F89 件③a: 认领须建树的判据与门侧同一函数 card_needs_worktree(代码卡 + 代码卡的审计卡)
+    if card_needs_worktree(workspace_root, fm if fm else {"task_mode": "code"}):
         view = card_workstation_view(workspace_root, task_id, fm)
         if not view.get("worktree_exists"):
             refusal = view.get("worktree_refusal") or {}

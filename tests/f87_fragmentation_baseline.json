@@ -3,12 +3,12 @@
  "source_report": "governance/research/2026-10-02-fragmentation-audit.md(条目号 = 该报告总表 #)",
  "fixture": "tests/test_aipos_f87_fragmentation_ratchet.py",
  "fingerprint": "sha1(行文本 strip 后 utf-8)前 12 位",
- "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增); AIPOS-F91 删除随老子系统退役而消失的条目(只减不增)",
- "total": 63,
+ "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增); AIPOS-F91 删除随老子系统退役而消失的条目(只减不增); AIPOS-F89 删除随治理文档名去契约而修复的条目(只减不增)",
+ "total": 62,
  "invariants": {
   "a": {
    "rule": "产品代码不出现写死的实例名/机器名/home 路径/治理根路径/信封 id: \\.lybra\\.kiwiai-dev|kiwiai-dev|/home/kiwi|~/projects/lybra|2_projects/lybra|pol_lybra_",
-   "count": 33,
+   "count": 32,
    "entries": [
     {
      "file": "tools/aipos_cli/audit_derivation.py",
@@ -233,13 +233,6 @@
      "fp": "c27d77c2da4d",
      "item": "H5",
      "text": "\"owner_policy_ref\": \"pol_lybra_dev_9\","
-    },
-    {
-     "file": "web/board/static/app.js",
-     "line": 1036,
-     "fp": "4eeff97cc038",
-     "item": "L3",
-     "text": "card.textContent = \"No governance documents found for 2_projects/lybra/.\";"
     }
    ]
   },

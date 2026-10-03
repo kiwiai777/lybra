@@ -1033,7 +1033,7 @@ function renderGovernancePanel(data) {
   }
   const docs = Array.isArray(data?.data?.documents) ? data.data.documents : [];
   if (docs.length === 0) {
-    card.textContent = "No governance documents found for 2_projects/lybra/.";
+    card.textContent = "No governance documents found in this workspace.";
     return;
   }
   const meta = document.createElement("div");
