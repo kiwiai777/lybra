@@ -952,7 +952,11 @@ fi
 # (随语义改动的 F49 判据①③ 用例已在上方 F49 块; F78/F78C/F87/F23 用例随各自块)
 echo
 echo "── tests/test_aipos_f93_report_contract_declared.py (F93 五处同源·F92R 原样仍拒·注册码文案单源·test_contract 声明化 lybra 形/probe 形·governance-commit 无 lybra PATH 过钩子) ────────────────────────────────────────────────────"
-if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f93_report_contract_declared.py" -v --tb=short; then
+# F23 只登记本卡改动的用例节点(该文件另有 main 上即红的存量失败, 不整文件入清单; 承 F90 先例)
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f93_report_contract_declared.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_f23_enroll.py::TestMcpVerbs::test_two_phase_dry_run_confirm" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_f23_enroll.py::TestMcpVerbs::test_legacy_verb_delegates_to_same_implementation" \
+    -v --tb=short; then
   echo "✓ tests/test_aipos_f93_report_contract_declared.py PASS"
 else
   echo "✗ tests/test_aipos_f93_report_contract_declared.py FAIL"
