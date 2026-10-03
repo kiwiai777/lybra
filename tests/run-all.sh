@@ -883,6 +883,18 @@ else
   overall=1
 fi
 
+# AIPOS-F91: 退役老子系统不变量(templates 零退役子命令且项目无关/CLI 拒退役子命令/.pi 挂载回收三态: 声明内保留·分发区外不碰·分发区内未声明回收/run-all 位置单源) + 随语义改动的 F83 挂载回收用例
+echo
+echo "── tests/test_aipos_f91_retirement_invariants.py (F91 退役不变量 + G3 挂载回收三态) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f91_retirement_invariants.py" \
+    "$REPO_ROOT/tests/test_aipos_f83_skills_zero_gate.py::test_item3_declared_missing_kept_foreign_untouched_extension_reclaimed" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f91_retirement_invariants.py PASS"
+else
+  echo "✗ tests/test_aipos_f91_retirement_invariants.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
