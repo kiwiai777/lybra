@@ -22,9 +22,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from tools.schema_loader import load_schema, SchemaLoadError
+from tools.schema_loader import code_repo_schema_root, load_schema, SchemaLoadError
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = code_repo_schema_root()  # AIPOS-F91(L5): 产品仓根读唯一实现, 不再自算
 
 MANIFEST_VERSION = 1
 

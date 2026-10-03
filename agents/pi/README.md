@@ -1,6 +1,6 @@
 # agents/pi/ —— 已迁移(指路 README,不留双源)
 
-> AIPOS-C4B 大项C:本目录下的 skills/charters/lybra-loop 已迁入单一源新布局。
+> AIPOS-C4B 大项C:本目录下的 skills/charters 已迁入单一源新布局(旧 lybra-loop 扩展随 AIPOS-F91 退役删除)。
 > **此目录不再承载任何母本内容**,仅保留本指路文件。
 
 ## 旧路径 → 新路径
@@ -9,7 +9,7 @@
 |---|---|
 | `agents/pi/skills/<name>/` | [`agents/skills/<name>/`](../skills/) |
 | `agents/pi/charters/<role>/AGENTS.md` | [`agents/roles/<role>/AGENTS.md`](../roles/) |
-| `agents/pi/lybra-loop/` | [`agents/harness/pi/lybra-loop/`](../harness/pi/lybra-loop/) |
+| `agents/pi/lybra-loop/` | (已退役删除, AIPOS-F91; pi 工位扩展母本见 [`agents/harness/pi/`](../harness/pi/)) |
 
 ## 为什么迁移
 
@@ -21,5 +21,5 @@
 
 - skills 母本:[`agents/skills/`](../skills/)
 - 角色契约母本:[`agents/roles/`](../roles/)
-- pi 适配物(连接器 lybra-loop):[`agents/harness/pi/`](../harness/pi/)
+- pi 适配物(工位扩展 go.ts):[`agents/harness/pi/`](../harness/pi/)
 - 分发规格:[`schema/distribution.schema.json`](../../schema/distribution.schema.json)
