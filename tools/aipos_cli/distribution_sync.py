@@ -80,9 +80,14 @@ def _validate_enrolled(root: Path) -> None:
             f"  正确用法: lybra sync --harness-root <你的工位根>"
         )
     if not role_file.is_file():
+        # AIPOS-F93 件②: 兑换命令形 = onboarding.render_enroll_command(注册码交付文案唯一渲染; 原教不存在的 `lybra enroll --role`)
+        import shlex
+
+        from tools.aipos_cli.onboarding import render_enroll_command
+
         raise ValueError(
             f"harness root '{root}' 有 .lybra/ 但缺少 role 文件 — 未完成 enroll, 拒绝写入。\n"
-            f"  先执行: lybra enroll --role <role> --harness-root '{root}'"
+            f"  先执行: {render_enroll_command('<注册码>', shlex.quote(str(root)))}"
         )
 
 

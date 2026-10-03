@@ -52,7 +52,10 @@ const ready = {
   report_refusal: null,
 };
 const pending = { task_id: "AIPOS-X0", queue_state: "pending", path: "5_tasks/queue/pending/aipos-x0.md" };
-const nextOf = (t: typeof ready) => ({ task_id: t.task_id, card_path: t.card_path, worktree_path: t.worktree_path, report_path: t.report_path, claimed_at: "2026-10-02T00:00:00Z" });
+// AIPOS-F93 件①: next_card 带产品给出的报告必填字段(声明单源渲染), go.ts 原样列出
+const CONTRACT = [{ key: "commit_sha", hint: "卡分支 card/AIPOS-X1 tip 的完整 40 位 sha", value: null }];
+const nextOf = (t: typeof ready) => ({ task_id: t.task_id, card_path: t.card_path, worktree_path: t.worktree_path, report_path: t.report_path,
+  report_required_frontmatter: CONTRACT, claimed_at: "2026-10-02T00:00:00Z" });
 const planB = planGo({ scope: "my_tasks", tasks: [pending, ready], next_card: nextOf(ready), next_card_excluded: [] });
 check("B1 有 claimed 卡且工作树就绪 → kickoff", planB.kind === "kickoff", JSON.stringify(planB));
 if (planB.kind === "kickoff") {

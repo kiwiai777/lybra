@@ -125,10 +125,14 @@ def derive_machine_zone_纪律段(
         # AIPOS-F89 件① H9: 报告落点唯一读取口 next_resolver.card_report_path(执行卡 = project.json paths.return_root,
         # 审计卡 = paths.verdict_root; 文件候选读 transitions artifact_ingest)。原读 config.schema
         # governance_structure.paths.task_cards(第二份声明)已删。声明读取失败 = 向上抛(fail-closed)。
-        from tools.aipos_cli.next_resolver import card_report_path
+        from tools.aipos_cli.next_resolver import card_report_contract, card_report_path, render_report_frontmatter_clause
 
-        report_path = card_report_path(governance_root, task_id, {**metadata, "task_id": task_id})
+        card_fm = {**metadata, "task_id": task_id}
+        report_path = card_report_path(governance_root, task_id, card_fm)
         lines.append(f"- **报告落点**: `{report_path}` (读自项目 project.json paths 声明)")
+        # AIPOS-F93 件①: 报告必填字段(声明 transitions artifact_ingest 单源渲染, 与派生审计卡 / my-tasks / 认领模板 / 章程同源)
+        contract = card_report_contract(governance_root, task_id, card_fm, branch_pattern=branch_pattern)
+        lines.append(f"- **报告必填**: {render_report_frontmatter_clause(contract)}")
         
         lines.append("- **治理仓**: 永远停在 main 分支，不 commit")
         lines.append("- **写完停手**: 等待托管/审计，不自行 push")

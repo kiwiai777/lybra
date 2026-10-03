@@ -74,7 +74,11 @@ class TestAuditInstructions(unittest.TestCase):
         self.assertNotIn("【认领与交回】", body)
         for verb in ("lybra_queue_claim", "lybra_audit_verdict", "lybra_task_progress", "records/audit_verdicts"):
             self.assertNotIn(verb, body)
-        self.assertIn(f"报告写到 `{self.repo_root}/task_cards/AIPOS-200R/RETURN.md`, 写完即止, 认领与裁决提交由驱动方完成。", body)
+        # AIPOS-F93 件①: 落点句带报告必填字段(声明单源), 句子唯一出自 zero_gate_report_sentence
+        from tools.aipos_cli.audit_derivation import zero_gate_report_sentence
+
+        self.assertIn(zero_gate_report_sentence(f"{self.repo_root}/task_cards/AIPOS-200R/RETURN.md", "AIPOS-200"), body)
+        self.assertIn("`commit_sha`(被审分支 card/AIPOS-200 tip", body)
 
     def test_r_card_carries_auditor_contract_section_when_manual_gate_mode(self):
         """AIPOS-F80 件①回归: manual_gate_mode 项目(chris 形)审计卡仍保留该节(同一判据)。"""

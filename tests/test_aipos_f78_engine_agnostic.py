@@ -172,7 +172,9 @@ def _connection(tmp_path: Path, roles: list[str], *, bound: dict | None = None) 
 def test_f78_item4_declarations_exist_in_schema_single_source():
     transitions = json.loads((REPO_ROOT / "schema" / "transitions.schema.json").read_text(encoding="utf-8"))
     ingest = transitions["artifact_ingest"]
-    assert ingest["return"]["required_frontmatter"] == ["commit_sha", "tree_hash", "branch", "model"]
+    # AIPOS-F93 件①: model 移出必填(产品按会话记录填写, 自报可选只作对照)
+    assert ingest["return"]["required_frontmatter"] == ["commit_sha", "tree_hash", "branch"]
+    assert "model" in ingest["return"]["optional_frontmatter"]
     assert ingest["return"]["root_key"] == "return_root" and ingest["verdict"]["root_key"] == "verdict_root"
     assert "merge_commit" in transitions["nodes"]["N5"]["record"]
     config = json.loads((REPO_ROOT / "schema" / "config.schema.json").read_text(encoding="utf-8"))
@@ -370,7 +372,8 @@ def test_f78_item2_single_renderer_three_outputs_zero_gate_verbs(tmp_path, monke
     pi = outputs["pi"]["stdout"]
     assert len(pi.strip().splitlines()) == 3 and pi.startswith("工作树: ") and "报告落点: " in pi and "卡路径: " in pi
     assert "5_tasks/records/returns/F78-RND1" in pi  # 落点读 chris 形声明
-    assert "commit_sha, tree_hash, branch, model" in pi
+    # AIPOS-F93 件①: 必填清单 = 声明单源渲染(model 移出必填)
+    assert "`commit_sha`" in pi and "`tree_hash`" in pi and "`branch`" in pi and "`model`" not in pi
     assert set(outputs["codex"]) == {"Prompt.md", "Plan.md"} and "## 车道(lane)" in outputs["codex"]["Prompt.md"]
     assert "tools/aipos_cli/" in outputs["codex"]["Prompt.md"] and "card/F78-RND1" in outputs["codex"]["Plan.md"]
     assert set(outputs["claude-code"]) == {"CLAUDE.md"} and "## 里程碑" in outputs["claude-code"]["CLAUDE.md"]
@@ -587,7 +590,8 @@ def test_f78_pre0_4_return_criteria_read_card_branch_not_checkout(tmp_path, monk
     import tools.aipos_cli.board_adapter as adapter
 
     repo = _init_product_repo(tmp_path / "repo")
-    runall = adapter.RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
+    runall = "tests/run-all.sh"  # AIPOS-F93 件③: 测试清单位置读项目声明(本夹具治理根 tmp_path 的 project.json test_contract)
+    _write(tmp_path / "project.json", json.dumps({"project": "lybra", "test_contract": {"runall_path": runall}}))
     _write(repo / runall, "#!/bin/bash\npython3 tests/test_existing.py\n")
     _write(repo / "tools/a.py", "# a\n")
     _git(repo, "add", "-A")
@@ -794,8 +798,8 @@ def test_f78_pre0_9_close_accepts_conclusion_note_parser():
 # ---------------------------------------------------------------------------
 
 def test_f78_fixture_registered_in_runall_and_no_swallowed_exceptions():
-    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH  # AIPOS-F91: run-all 位置唯一声明
-    runall = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
+    # AIPOS-F93 件③: lybra 产品仓自己的夹具清单, 夹具自定位(门侧位置声明 = 治理根 project.json test_contract.runall_path)
+    runall = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
     assert "tests/test_aipos_f78_engine_agnostic.py" in runall
     for rel in ("tools/aipos_cli/card_render.py", "tools/aipos_cli/artifact_ingest.py", "tools/aipos_cli/loop_driver.py"):
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")

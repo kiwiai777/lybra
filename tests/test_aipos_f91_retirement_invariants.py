@@ -6,7 +6,7 @@
 ② CLI 解析器不再接受已退役子命令(产品代码层守门, 与 ① 文档层互补)。
 ③ G3 sync 的 .pi 挂载回收三态(与 F83 pi_mount_scan 同一函数):
    声明内保留 / 不指向产品分发区的挂载不碰 / 指向分发区且不在声明内的挂载回收(目标在也回收, 如退役的 claim.ts)。
-④ run-all 位置唯一声明(board_adapter.RUNALL_RELATIVE_PATH)且本夹具已登记。
+④ run-all 位置: 门侧读项目声明 test_contract.runall_path(AIPOS-F93 件③), 产品代码零写死; 本夹具已登记。
 
 纯读产品树 + 临时目录, 不连门、不写真实工位/治理根; token 不涉及。
 """
@@ -179,10 +179,13 @@ def test_minimum_bootable_set_no_longer_declares_claim_ts():
 
 
 def test_runall_location_single_declaration_and_registered():
-    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH
+    # AIPOS-F93 件③: 门交回检查的测试清单位置改读项目声明(project.json test_contract.runall_path), 产品代码不再写死 lybra 的 run-all;
+    # lybra 产品仓自己的夹具清单由夹具自定位。
+    import tools.aipos_cli.board_adapter as adapter
 
-    assert RUNALL_RELATIVE_PATH == "tests/run-all.sh"
-    runall = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
+    assert not hasattr(adapter, "RUNALL_RELATIVE_PATH")
+    assert "tests/run-all.sh" not in (REPO_ROOT / "tools" / "aipos_cli" / "board_adapter.py").read_text(encoding="utf-8")
+    runall = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
     assert "tests/test_aipos_f91_retirement_invariants.py" in runall
     assert not (REPO_ROOT / "agents" / "harness" / "pi" / "lybra-loop").exists()
     assert not (REPO_ROOT / "tools" / "connector").exists() and not (REPO_ROOT / "tools" / "turn_advancer").exists()

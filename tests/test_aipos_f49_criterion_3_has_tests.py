@@ -37,6 +37,10 @@ def test_criterion_3_has_tests(tmp_path: Path):
     subprocess.run(["git", "commit", "-m", "Modify code only"], cwd=repo_root, check=True, capture_output=True)
     
     # 测试: 调用 _check_has_tests（红测试 - 应该失败）
+    # AIPOS-F93 件③: 「须含测试」读项目声明(治理根 project.json test_contract.require_tests; 本夹具治理根 = tmp_path)
+    import json
+
+    (tmp_path / "project.json").write_text(json.dumps({"project": "lybra", "test_contract": {"require_tests": True}}), encoding="utf-8")
     from tools.aipos_cli.board_adapter import _check_has_tests
     
     # Mock _resolve_product_code_repo

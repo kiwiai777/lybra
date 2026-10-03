@@ -4713,7 +4713,7 @@ def lybra_enroll_code_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
             "transport credential (zero-scope, TTL 与码一致, 注册进 gate connection.json)",
             "self-contained code (LYBRAENROLL1.<base64>, 内嵌 gate_url/governance_root/运输凭证)",
         ],
-        "confirm_output": "/lybra enroll <自包含码> 可转贴会话指令文本",
+        "confirm_output": "paste_text = " + _enroll_command_shape(),
     }
     return _tool_result({
         "ok": True,
@@ -4723,17 +4723,24 @@ def lybra_enroll_code_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         "dry_run_expires_at": expires_at,
         "client_hint": (
             "AIPOS-328: 顾问自行confirm。使用 lybra_enroll_code_confirm 带上 dry_run_token 与 "
-            "owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。confirm 输出含可转贴的 "
-            "/lybra enroll 指令文本。"
+            "owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。confirm 输出 paste_text = 交给接收方执行的 "
+            + _enroll_command_shape() + "。"
         ),
     })
+
+
+def _enroll_command_shape(code: str = "<自包含码>") -> str:
+    """AIPOS-F93 件②: 门侧动词说明里的兑换命令形 = onboarding.render_enroll_command(与 paste_text 同一渲染源, 禁第二份文案)。"""
+    from tools.aipos_cli.onboarding import render_enroll_command
+
+    return render_enroll_command(code)
 
 
 def lybra_enroll_code_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-F23: confirm enrollment code issuance — mints the self-contained code.
 
-    Returns paste_text: a session instruction the Owner can paste into the new
-    workstation's pi session: /lybra enroll <code>
+    Returns paste_text (AIPOS-F93 件②): the product command the recipient runs —
+    onboarding.render_enroll_command (single render: onboarding.enroll_delivery, shared with CLI roles enroll-code)
     """
     args = arguments or {}
     unknown = sorted(set(args) - _ENROLL_CODE_CONFIRM_KNOWN_ARGS)
@@ -4811,10 +4818,7 @@ def lybra_enroll_code_confirm(arguments: dict[str, Any] | None = None) -> dict[s
         pass
 
     result["operation"] = "enroll_code_confirm"
-    result["paste_instruction"] = (
-        "把下面这条整体转贴到新工位的 pi 会话(Owner 唯一要做的事):\n" + result["paste_text"]
-    )
-    result["next_step"] = "转贴上面那条 /lybra enroll 指令到新工位 pi 会话 → 工位自动完成交换/落盘/连通验证"
+    # AIPOS-F93 件②: paste_text / paste_instruction / next_step 由 issue_self_contained_code 经 onboarding.enroll_delivery 给出(门与 CLI 同一份)
     result["security_notice"] = (
         "自包含码内嵌零 scope 运输凭证(仅够过 transport 层调兑换动词), 真正凭据是兑换出的角色 token; "
         "码单次 + TTL + 可撤销(lybra_roles_enroll_revoke)。"
@@ -4860,9 +4864,8 @@ def lybra_roles_enroll_code(arguments: dict[str, Any] | None = None) -> dict[str
         "code_id": result["code_id"],
         "self_contained_code": result["self_contained_code"],
         "paste_text": result["paste_text"],
-        "paste_instruction": (
-            "把下面这条整体转贴到新工位的 pi 会话(Owner 唯一要做的事):\n" + result["paste_text"]
-        ),
+        "paste_instruction": result["paste_instruction"],
+        "next_step": result["next_step"],
         "enrollment": {
             "code_id": result["code_id"],
             "fingerprint": result["fingerprint"],
@@ -4932,7 +4935,7 @@ def lybra_roles_enroll_exchange(arguments: dict[str, Any] | None = None) -> dict
             "CODE_NOT_FOUND",
             "Enrollment code not found (or it is a plain legacy code issued by another gate).",
             "Use the exact self-contained code from the advisor's confirm output "
-            "(/lybra enroll LYBRAENROLL1.<base64>). If it was issued for another gate/workspace, "
+            "(" + _enroll_command_shape("LYBRAENROLL1.<base64>") + "). If it was issued for another gate/workspace, "
             "ask the advisor to re-issue against this gate.",
         )
     if status == "revoked":
@@ -6352,7 +6355,8 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "AIPOS-F23: advisor-driven enrollment code issuance (preview). Issues a SELF-CONTAINED code "
             "(LYBRAENROLL1.<base64>) embedding gate_url/governance_root/zero-scope transport credential. "
             "Owner-gated: requires owner_authorization_ref. Same single issuance implementation as CLI "
-            "`lybra roles enroll-code`. confirm returns a paste-ready /lybra enroll instruction."
+            "`lybra roles enroll-code`. confirm returns paste_text = the product command the recipient runs: `"
+            + _enroll_command_shape("<code>") + "`."
         ),
         "inputSchema": {
             "type": "object",
@@ -6374,8 +6378,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "name": "lybra_enroll_code_confirm",
         "description": (
             "AIPOS-F23: confirm enrollment code issuance. Mints the self-contained code and returns "
-            "paste_text — a session instruction the Owner pastes into the new workstation's pi: "
-            "/lybra enroll <code>. Advisor self-confirm with owner_confirmation_token='OWNER_CONFIRMED' (AIPOS-328)."
+            "paste_text — the product command the recipient runs: `" + _enroll_command_shape("<code>") + "`. Advisor self-confirm with owner_confirmation_token='OWNER_CONFIRMED' (AIPOS-328)."
         ),
         "inputSchema": {
             "type": "object",
@@ -6428,7 +6431,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "AIPOS-362/F23: generate a one-time SELF-CONTAINED enrollment code (single-phase legacy surface; "
             "the two-phase advisor verb is lybra_enroll_code_dry_run/confirm). Owner-gated: requires "
             "owner_authorization_ref. Delegates to the SAME issuance implementation (发码只有一份实现). "
-            "Returns paste_text — the /lybra enroll instruction to paste into the new workstation's pi session."
+            "Returns paste_text — the `" + _enroll_command_shape("<code>") + "` command the recipient runs."
         ),
         "inputSchema": {
             "type": "object",

@@ -127,7 +127,11 @@ def test_rejection_text_has_actionable_exit():
                 f"越界拒收应含可执行出口, 实际: {reasons[0]}"
             print(f"  ✓ 越界拒收含出口: ...{reasons[0][-120:]}")
 
-            # 判据③: 无测试
+            # 判据③: 无测试(AIPOS-F93 件③: 读项目声明 test_contract.require_tests, 本夹具治理根 = tmpdir)
+            import json
+
+            (Path(tmpdir) / "project.json").write_text(json.dumps({"project": "lybra", "test_contract": {"require_tests": True}}),
+                                                     encoding="utf-8")
             from tools.aipos_cli.board_adapter import _check_has_tests
             reasons = _check_has_tests(
                 task_id="TEST-F51",

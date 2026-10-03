@@ -213,7 +213,8 @@ def test_item3_card_render_pi_audit_card_location_is_declared_verdict_slot(tmp_p
           extra={"reviewed_task_id": src, "derived_from": src, "audit": "none"})
     pi = render_card(audit, gov, harness="pi")["files"]["stdout"]
     assert f"报告落点: {gov / rel / audit / 'RETURN.md'}" in pi, pi
-    assert "verdict, commit_sha" in pi and f"/{src}/" not in pi
+    # AIPOS-F93 件①: 必填清单 = 声明单源渲染(next_resolver.render_report_frontmatter_clause)
+    assert "`verdict`" in pi and "`commit_sha`" in pi and f"/{src}/" not in pi
     exec_pi = render_card(src, gov, harness="pi")["files"]["stdout"]
     return_rel = "task_cards" if shape == "lybra" else "5_tasks/records/returns"
     assert f"报告落点: {gov / return_rel / src / 'RETURN.md'}" in exec_pi

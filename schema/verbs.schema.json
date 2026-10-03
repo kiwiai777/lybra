@@ -820,7 +820,7 @@
         ],
         "self_confirm_mechanism": "AIPOS-328: advisor self-confirm with owner_confirmation_token='OWNER_CONFIRMED' literal",
         "owner_confirmation_required_in_response": false,
-        "client_hint_template": "AIPOS-328: 顾问自行confirm。使用 lybra_enroll_code_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。confirm 输出含可转贴的 /lybra enroll 指令文本。"
+        "client_hint_template": "AIPOS-328: 顾问自行confirm。使用 lybra_enroll_code_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'(字面常量,非秘密)。confirm 输出 paste_text = 交给接收方执行的产品兑换命令(AIPOS-F93 件②: 唯一渲染 onboarding.render_enroll_command, 门与 CLI 共用)。"
       },
       "parameters": {
         "type": "object",
@@ -870,7 +870,7 @@
       }
     },
     "lybra_enroll_code_confirm": {
-      "description": "AIPOS-F23: confirm enrollment code issuance. Mints the self-contained code and returns a paste-ready session instruction: /lybra enroll <code>",
+      "description": "AIPOS-F23: confirm enrollment code issuance. Mints the self-contained code and returns paste_text = the product enroll command the recipient runs (AIPOS-F93: single render onboarding.render_enroll_command, shared by gate and CLI)",
       "phase": "confirm",
       "base_verb": "lybra_enroll_code",
       "dry_run_verb": "lybra_enroll_code_dry_run",

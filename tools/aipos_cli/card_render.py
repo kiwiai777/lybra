@@ -22,12 +22,12 @@ from typing import Any
 
 from tools.aipos_cli.next_resolver import (
     REPO_ROOT,
-    _artifact_ingest_declaration,
     _find_task_in_queue,
     _read_frontmatter,
+    card_report_contract,
     card_report_path,
     card_worktree_location,
-    required_return_frontmatter,
+    render_report_frontmatter_clause,
 )
 
 _GATE_VERB_RE = re.compile(r"lybra_\w*")  # 含裸 `lybra_` 前缀(卡面「grep lybra_=0」的验收口径)
@@ -96,14 +96,11 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
     # 与派生卡文案 / my-tasks 同一读取口, 禁写死)。
     is_audit = str(fm.get("task_mode") or "").strip().lower() == "audit"
     return_path = card_report_path(governance_root, task_id, fm)
-    if is_audit:
-        return_frontmatter = [str(k) for k in (_artifact_ingest_declaration()["verdict"].get("required_frontmatter") or [])]
-        if not return_frontmatter:
-            from tools.schema_loader import SchemaLoadError
-
-            raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.required_frontmatter 未声明")
-    else:
-        return_frontmatter = required_return_frontmatter()
+    # AIPOS-F93 件①: 报告必填字段 = 声明单源 card_report_contract(与 my-tasks 开工面 / 落点句 / 认领模板 / 章程同源);
+    # 审计卡取证工作树已建时带被审 tip/tree 实值。
+    report_contract = card_report_contract(governance_root, task_id, {**fm, "task_id": task_id},
+                                           worktree=worktree if Path(worktree).is_dir() else None)
+    return_frontmatter = [str(e["key"]) for e in report_contract]
 
     sections = _split_sections(str(body or ""))
     aliases = _section_aliases()
@@ -128,6 +125,7 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
         "branch": branch,
         "return_path": str(return_path),
         "return_frontmatter": return_frontmatter,
+        "report_contract": report_contract,
         "artifact_kind": "verdict" if is_audit else "return",
         "rework_rounds": [r for r in (fm.get("rework_rounds") or []) if isinstance(r, dict) and not r.get("cleared_at")],
     }
@@ -138,10 +136,8 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
 # ---------------------------------------------------------------------------
 
 def _frontmatter_hint(model: dict[str, Any]) -> str:
-    keys = ", ".join(model["return_frontmatter"])
-    if model.get("artifact_kind") == "verdict":
-        return f"审计报告 frontmatter 必填: {keys}(verdict=PASS/PASS_WITH_NOTES/FAIL/BLOCK, commit_sha=被审卡分支 tip; 报告归审计卡 ID 目录)"
-    return f"Return 文件 frontmatter 必填: {keys}(branch={model['branch']}, commit_sha=分支 tip, tree_hash=该 commit 的 tree, model=实际模型自报)"
+    # AIPOS-F93 件①: 文案唯一 next_resolver.render_report_frontmatter_clause(禁本模板另写字段说明)
+    return render_report_frontmatter_clause(model["report_contract"])
 
 
 def _common_sections(model: dict[str, Any]) -> list[str]:

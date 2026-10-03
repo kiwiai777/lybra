@@ -1049,7 +1049,9 @@ def regen_machine_zone_for_pending(
 
                     body_without_gate = re.sub(r"## 【认领与交回】.*?(?=\n## |\Z)", "", body, flags=re.DOTALL)
                     if str(metadata.get("task_mode") or "").strip().lower() == "audit":
-                        body_without_gate = zero_gate_audit_body(body_without_gate, governance_root, card_task_id)
+                        body_without_gate = zero_gate_audit_body(
+                            body_without_gate, governance_root, card_task_id,
+                            str(metadata.get("reviewed_task_id") or metadata.get("derived_from") or "").strip() or None)
                     if body_without_gate != body:
                         amendments["body"] = body_without_gate
                         body = body_without_gate

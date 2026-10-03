@@ -119,6 +119,19 @@
          "required": false,
          "description": "产品仓根。AIPOS-F78C 件①: 降为兼容别名 = repos.items[repos.default] 的路径; 单仓项目不写 repos 段时仍是唯一权威(裁定六, 零感知); 写了 repos 段则 code_repo 须与 default 仓路径一致或缺省, 冲突 = 拒 REPOS_CONFLICT。唯一解析口: workspace_config.project_repos() / resolve_card_repo()"
         },
+        "test_contract": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-F93 件③(F92 G4: 门交回检查把 lybra 产品仓自己的 run-all 登记约定强加给所有项目): 交回检查的测试约定 = 项目声明, 产品不假设任何项目的测试布局。形: {\"runall_path\": \"<相对产品仓根的测试清单文件>\", \"require_tests\": true|false, \"repos\": {\"<repos.items 仓名>\": {同形, 逐键覆盖顶层}}}。判据: TEST_NOT_IN_RUNALL 只在卡仓声明了 runall_path 时检查(本卡改动的测试文件须在该清单内; 声明的清单在卡分支上不存在 = 拒); NO_TESTS 只在 require_tests=true 时检查(code 类卡须含测试文件改动)。未声明 = 该判据跳过并 warning(不 BLOCK); 拒因文案只引用声明值。lybra 自身声明 {runall_path: tests/run-all.sh, require_tests: true}(一处, 在 lybra 治理根 project.json)。唯一读取口 workspace_config.project_test_contract",
+          "schema": {
+            "runall_path": {"type": "string", "optional": true, "description": "测试清单文件(相对产品仓根, 禁绝对路径); 交回检查读卡分支上的该文件"},
+            "require_tests": {"type": "boolean", "optional": true, "description": "true = code 类卡须含测试文件改动(NO_TESTS)"},
+            "repos": {"type": "object", "optional": true, "description": "按仓覆盖: 键 = project.json repos.items 仓名, 值同形(不得再嵌 repos); 卡仓(resolve_card_repo)有覆盖取覆盖, 否则取顶层"}
+          },
+          "reject_codes": {
+            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / repos 键不在 repos.items)"
+          }
+        },
         "repos": {
          "type": "object",
          "required": false,

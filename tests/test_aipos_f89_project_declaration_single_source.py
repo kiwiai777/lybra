@@ -290,7 +290,6 @@ def test_item1_m14_collaboration_profile_single_reader_single_default(tmp_path):
 
 
 def test_item1_fixture_registered_in_runall():
-    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH
-
-    text = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
+    # AIPOS-F93 件③: lybra 产品仓自己的夹具清单, 夹具自定位(门侧位置声明 = 治理根 project.json test_contract.runall_path)
+    text = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
     assert "tests/test_aipos_f89_project_declaration_single_source.py" in text

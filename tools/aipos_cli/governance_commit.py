@@ -429,6 +429,18 @@ _TMP_WORKTREE_PREFIX = "lybra-governance-commit-"
 PUSH_NOT_DONE_PREFIX = "PUSH NOT DONE: "
 
 
+def _commit_hook_env() -> dict[str, str]:
+    """AIPOS-F93 件④: 正式提交子进程的环境——补 LYBRA_SCHEMA_DIR, 治理仓 pre-commit 钩子据此定位 schema。
+
+    病根(chris 实撞): 钩子在 LYBRA_SCHEMA_DIR 未设时靠 PATH 上的 `lybra workspace roots --field schema_dir`; 非登录 shell
+    (ssh 调用 / PATH 无 lybra)以 CLI 绝对路径调 governance-commit 即被钩子 BLOCK「无法定位 schema 目录」。
+    值 = governance_guardrails.default_schema_dir()(与钩子同序的唯一实现: 调用方已设 LYBRA_SCHEMA_DIR 则原样尊重, 否则
+    schema_loader.code_repo_schema_root()/schema = 本进程运行的 Lybra 代码所在仓)。钩子行为不变; dry-run 判据路径不经此处。"""
+    from tools.aipos_cli.governance_guardrails import default_schema_dir
+
+    return {**os.environ, "LYBRA_SCHEMA_DIR": str(default_schema_dir())}
+
+
 def _git_run(args: list[str], cwd: Path, *, timeout: int = 60) -> subprocess.CompletedProcess:
     """写操作 git 调用(fetch/push/add/reset/worktree/cherry-pick); 失败抛 CalledProcessError, 禁静默。"""
     return subprocess.run(
@@ -1188,6 +1200,7 @@ def _governance_commit_impl(
                 check=True,
                 capture_output=True,
                 text=True,
+                env=_commit_hook_env(),
             )
         except subprocess.CalledProcessError as exc:
             hook_output = ((exc.stdout or "") + (exc.stderr or "")).strip()

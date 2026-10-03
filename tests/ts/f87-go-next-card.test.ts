@@ -44,6 +44,7 @@ const newer = {
 const planB = planGo({
   tasks: [older, newer],
   next_card: { task_id: "AIPOS-NEW", card_path: newer.card_path, worktree_path: newer.worktree_path, report_path: newer.report_path,
+    report_required_frontmatter: [{ key: "commit_sha", hint: "卡分支 card/AIPOS-NEW tip 的完整 40 位 sha", value: null }],  // AIPOS-F93 件①
     claimed_at: "2026-10-02T08:00:00Z" },
   next_card_excluded: [{ task_id: "AIPOS-OLD", code: "WORKTREE_NOT_CREATED", reason: older.worktree_refusal.reason }],
 });

@@ -192,7 +192,7 @@ def test_item1_record_side_writers_poison_parseable(tmp_path, monkeypatch):
     from tools.aipos_cli.record_writer import build_return_skeleton_markdown
 
     meta, _b, w = _fm_of(build_return_skeleton_markdown("AIPOS-F87S"))
-    assert w == [] and meta["branch"] == "(待填写: 卡分支名, 如 card/AIPOS-F87S)"
+    assert w == [] and meta["branch"] == "(待填写: 卡分支名 card/AIPOS-F87S)"  # AIPOS-F93 件①: 说明读声明 field_hints
     _show("[件① 记录侧] 部署记录 / 令牌轮换记录 / 治理条目头 / 门进度事件 / RETURN 骨架: 怪值均逐字还原")
 
 

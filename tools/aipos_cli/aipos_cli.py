@@ -3000,6 +3000,10 @@ def main(argv: list[str] | None = None) -> int:
                                    "此为产品侧/连接故障, 与你无关, 禁自行诊断修复门/服务/部署 —— 报告顾问即可。"
                                    "薄壳没有本地发码回退路径(本地发码=死运输凭证, 已废除)。"),
                     )
+                # AIPOS-F93 件②: 交付文案 = onboarding.enroll_delivery(门 paste_text / paste_instruction 同一渲染源, CLI 与门一份)
+                from tools.aipos_cli.onboarding import enroll_delivery
+
+                delivery = enroll_delivery(str(confirm.get("self_contained_code") or ""))
                 # FIX-2 兼容: --json 输出稳定含 self_contained_code/code_id/fingerprint 在顶层
                 result_out = {
                     "ok": True,
@@ -3007,7 +3011,8 @@ def main(argv: list[str] | None = None) -> int:
                     "issued_via": "gate_verb_thin_shell(F24A)",
                     "code_id": confirm.get("code_id"),
                     "self_contained_code": confirm.get("self_contained_code"),
-                    "paste_text": confirm.get("paste_text"),
+                    "paste_text": delivery["paste_text"],
+                    "paste_instruction": delivery["paste_instruction"],
                     "fingerprint": confirm.get("fingerprint"),
                     "role": confirm.get("role"),
                     "instance": confirm.get("instance"),
@@ -3028,9 +3033,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  Governance root: {confirm.get('governance_root')}")
                     if ttl:
                         print(f"  Expires at: {confirm.get('expires_at')}")
-                    # AIPOS-F92: 交付形 = 产品命令(/lybra 斜杠命令随 lybra-loop 扩展已退役, 门 paste_text 仍是旧形 → 见 RETURN 缺口)
-                    print(f"\n  把注册码交给接收方, 由其执行(--workspace = 其工位目录; 顾问为治理根, 见 lybra onboarding guide):")
-                    print(f"  lybra roles enroll --code {confirm.get('self_contained_code')} --workspace <目录> --verify")
+                    print("\n  " + delivery["paste_instruction"].replace("\n", "\n  "))
                     print(f"\n  ⚠ 码单次 + TTL + 可撤销; 内嵌零 scope 运输凭证(码即运输认证, 无需 bootstrap token)。")
                     print(f"  ⚠ This code is shown only once. Share it immediately.")
                 return 0

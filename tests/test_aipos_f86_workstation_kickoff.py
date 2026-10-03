@@ -293,9 +293,8 @@ def test_item3_minimum_bootable_set_describes_zero_gate_path():
 
 def test_item3_fixtures_registered_in_runall():
     """AIPOS-F91: f57 TS 夹具(测 lybra-loop/loop-context 引导)随 lybra-loop 扩展退役删除, 其 bin 解析断言随删;
-    仍在用的 go.ts 夹具迁至 tests/ts/, run-all 位置读唯一声明 RUNALL_RELATIVE_PATH。"""
-    from tools.aipos_cli.board_adapter import RUNALL_RELATIVE_PATH
-
-    run_all = (REPO_ROOT / RUNALL_RELATIVE_PATH).read_text(encoding="utf-8")
+    仍在用的 go.ts 夹具迁至 tests/ts/, run-all 由夹具自定位(AIPOS-F93: 门侧位置声明 = project.json test_contract.runall_path)。"""
+    # AIPOS-F93 件③: lybra 产品仓自己的夹具清单, 夹具自定位(门侧位置声明 = 治理根 project.json test_contract.runall_path)
+    run_all = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
     for name in ("tests/ts/f86-go-kickoff.test.ts", "tests/test_aipos_f86_workstation_kickoff.py"):
         assert name in run_all, name

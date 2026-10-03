@@ -793,6 +793,64 @@ def project_repos(governance_root: str | Path) -> dict[str, Any]:
     return {"declared": True, "default": default, "items": items, "code_repo": code_repo, "project_json_exists": exists}
 
 
+TEST_CONTRACT_KEYS = ("runall_path", "require_tests")
+
+
+def project_test_contract(governance_root: str | Path, repo_path: str | Path | None = None) -> dict[str, Any]:
+    """AIPOS-F93 件③: 交回检查测试约定的唯一读取口(声明 config.schema project_json.schema.test_contract)。
+
+    返回 {runall_path: str|None, require_tests: bool|None, source: str}: 顶层声明, 卡仓(repo_path, 调用方已按卡解析)
+    在 repos.items 内且 test_contract.repos 有该仓覆盖时逐键覆盖。键未声明 = None(调用方跳过该判据并 warning)。
+    形不合声明 = ValueError("TEST_CONTRACT_INVALID: …")(fail-closed, 调用方拒并给出口); project.json 读失败原样抛。
+    """
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    root = Path(governance_root)
+    decl = (
+        load_schema("config").get("configuration_sources", {}).get("project_json", {}).get("schema", {}).get("test_contract")
+    )
+    if not isinstance(decl, dict) or not isinstance(decl.get("schema"), dict):
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.test_contract 未声明")
+    where = f"{project_json_path(root)} test_contract"
+    raw = read_project_json(root).get("test_contract")
+    result: dict[str, Any] = {"runall_path": None, "require_tests": None, "source": f"{where}(未声明)"}
+    if raw in (None, {}):
+        return result
+    if not isinstance(raw, dict):
+        raise ValueError(f"TEST_CONTRACT_INVALID: {where} 须为对象(config.schema project_json.test_contract)")
+
+    def _apply(spec: dict[str, Any], label: str) -> None:
+        unknown = sorted(set(spec) - set(TEST_CONTRACT_KEYS) - ({"repos"} if label == where else set()))
+        if unknown:
+            raise ValueError(f"TEST_CONTRACT_INVALID: {label} 含未声明键 {unknown}(允许 {list(TEST_CONTRACT_KEYS)})")
+        if "runall_path" in spec:
+            text = str(spec.get("runall_path") or "").strip()
+            if not text or Path(text).is_absolute() or ".." in Path(text).parts:
+                raise ValueError(f"TEST_CONTRACT_INVALID: {label}.runall_path={spec.get('runall_path')!r} 须为相对产品仓根的非空路径")
+            result["runall_path"] = text
+        if "require_tests" in spec:
+            if not isinstance(spec.get("require_tests"), bool):
+                raise ValueError(f"TEST_CONTRACT_INVALID: {label}.require_tests={spec.get('require_tests')!r} 须为 true/false")
+            result["require_tests"] = spec["require_tests"]
+        result["source"] = label
+
+    _apply(raw, where)
+    overrides = raw.get("repos")
+    if overrides in (None, {}):
+        return result
+    if not isinstance(overrides, dict):
+        raise ValueError(f"TEST_CONTRACT_INVALID: {where}.repos 须为 {{仓名: {{…}}}}")
+    repos = project_repos(root)
+    for name, spec in overrides.items():
+        if name not in repos["items"]:
+            raise ValueError(f"TEST_CONTRACT_INVALID: {where}.repos 键 {name!r} 不在 project.json repos.items {sorted(repos['items'])} 内")
+        if not isinstance(spec, dict):
+            raise ValueError(f"TEST_CONTRACT_INVALID: {where}.repos[{name!r}] 须为对象")
+        if repo_path is not None and _same_path(Path(repo_path), repos["items"][name]):
+            _apply(spec, f"{where}.repos[{name!r}]")
+    return result
+
+
 def default_lane_repo(governance_root: str | Path) -> str:
     """AIPOS-F78C: 卡缺 lane.repo 时的派生值(machine_zone 发布派生与 resolve_card_repo 同源):
     有清单 → repos.default 仓名; 无清单 → code_repo 路径; 缺声明 → 治理根自身(F78 现行)。"""

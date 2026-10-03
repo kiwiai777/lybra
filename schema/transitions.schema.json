@@ -874,14 +874,20 @@
   "artifact_ingest": {
     "description": "AIPOS-F78 件③④: 产物入口唯一声明——执行引擎(pi/codex/claude-code)交回的是「分支 + Return 文件」, 产品 `lybra artifact ingest --task-id <ID>`(由 loop/next --run 触发, 非人用)按此声明找文件、校验必填 frontmatter 与分支 tip, 再走既有 queue return / audit-verdict 薄壳铸记录(禁第二 return/verdict 路径)。落点根读项目 project.json paths(config.schema configuration_sources.project_json.schema.paths), 本节只声明文件候选与必填字段。",
     "single_implementation": "tools/aipos_cli/artifact_ingest.ingest_task_artifact (CLI: lybra artifact ingest; next_resolver.execute_derived_action 的 return/verdict 步经此入口)",
+    "report_contract": "AIPOS-F93 件①(F92R 实撞: 产品要求的报告必填字段从未告知写报告的 agent, 审计报告缺 commit_sha 被 ingest 拒): <return|verdict>.required_frontmatter 是报告必填字段的唯一声明, field_hints 是逐键说明(占位 {branch} = 该报告对应的卡分支: 执行卡 = 本卡分支, 审计卡 = 被审卡分支; {allowed_verdict_values} = N4.record.allowed_verdict_values)。唯一渲染 next_resolver.report_frontmatter_contract / render_report_frontmatter_clause, 渲染进: (a) 派生审计卡报告落点句 audit_derivation.zero_gate_report_sentence, (b) 执行卡报告落点句 machine_zone.derive_machine_zone_纪律段, (c) my-tasks next_card.report_required_frontmatter(工位 go.ts 开工提示只读原样列出; 审计卡由产品给出被审 tip/tree 值 = 取证工作树 HEAD), (d) 认领时生成的报告模板 record_writer.build_<return|verdict>_skeleton_markdown, (e) 章程报告节 charter_render.charter_render_context; 禁第二份清单/第二份文案",
     "return": {
       "root_key": "return_root",
       "location_pattern": "<return_root>/<task_id>/<candidate>",
       "return_file_candidates": ["RETURN.md", "return-*.md", "return_*.md", "*.md"],
       "candidate_rule": "按候选顺序取首个存在的; 通配候选取 mtime 最新; 骨架(一句话结论为占位)不算",
-      "required_frontmatter": ["commit_sha", "tree_hash", "branch", "model"],
-      "optional_frontmatter": ["repo"],
-      "optional_frontmatter_rule": "AIPOS-F78C 件③: repo(可选) = 执行体自述产物所在仓(仓名或绝对路径, 与卡 lane.repo 同一解析 workspace_config.resolve_card_repo); 缺省 = 卡 lane.repo 解析仓",
+      "required_frontmatter": ["commit_sha", "tree_hash", "branch"],
+      "field_hints": {
+        "commit_sha": "卡分支 {branch} tip 的完整 40 位 sha(git rev-parse {branch})",
+        "tree_hash": "该 commit 的 tree(git rev-parse <commit_sha>^{tree})",
+        "branch": "卡分支名 {branch}"
+      },
+      "optional_frontmatter": ["repo", "model"],
+      "optional_frontmatter_rule": "AIPOS-F78C 件③: repo(可选) = 执行体自述产物所在仓(仓名或绝对路径, 与卡 lane.repo 同一解析 workspace_config.resolve_card_repo); 缺省 = 卡 lane.repo 解析仓。AIPOS-F93 件①(Owner 10-02 裁定: 模型字段由产品从会话记录填写, 自报只作对照): model(可选) = 自报模型, 只作对照(runtime_model_bundle model_mismatch), 不必填",
       "checks": [
         "frontmatter 缺任一必填字段 = 拒(INGEST_FRONTMATTER_MISSING)并列出缺项与出口",
         "卡 lane.repo 解析仓(resolve_card_repo)必须是 git 仓根, 否则拒(LANE_REPO_UNDECLARED, 出口: project.json 声明 repos 清单 + 卡 lane.repo 写仓名); frontmatter.repo(可选)解析结果 ≠ 卡 lane.repo 解析仓 = 拒(INGEST_REPO_MISMATCH)(AIPOS-F78C 件③)",
@@ -889,7 +895,7 @@
         "git rev-parse <commit_sha>^{tree} == tree_hash, 否则拒(INGEST_TREE_MISMATCH)",
         "「一句话结论」非占位, 否则拒(INGEST_SUMMARY_MISSING)"
       ],
-      "submits_via": "lybra queue return --confirm(驱动方 token, actor=claim 记录实例, completion_report_ref=Return 相对路径, artifact_refs=[<branch>@<commit_sha>], actual_model=model)"
+      "submits_via": "lybra queue return --confirm(驱动方 token, actor=claim 记录实例, completion_report_ref=Return 相对路径, artifact_refs=[Return 相对路径], actual_model=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②; frontmatter.model 只作对照)"
     },
     "verdict": {
       "root_key": "verdict_root",
@@ -902,6 +908,10 @@
         "not_ready_meaning": "空模板/占位 = 审计体尚未写完 → 推导核判 await_artifact, loop 继续经 agent watch 等待"
       },
       "required_frontmatter": ["verdict", "commit_sha"],
+      "field_hints": {
+        "verdict": "裁决值, {allowed_verdict_values} 之一",
+        "commit_sha": "被审分支 {branch} tip 的完整 40 位 sha(审的必须是当前产物)"
+      },
       "checks": [
         "verdict ∈ N4.record.allowed_verdict_values",
         "commit_sha == 被审卡分支 tip(git rev-parse card/<reviewed_task_id>), 否则拒(INGEST_TIP_MISMATCH): 审的必须是当前产物"

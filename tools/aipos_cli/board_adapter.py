@@ -2531,12 +2531,14 @@ def _check_return_self_checks(
     completion_report_ref: str | None,
     artifact_refs: list[str],
     claim_snapshot: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
 ) -> list[str]:
     """
     AIPOS-F49: N3 交回自检门——五条机器判据在交回时拒收不合格交付。
+    AIPOS-F93 件③: ①③ 读项目声明 test_contract; 未声明的判据跳过, warning 追加进 warnings(交回结果的 warnings)。
     
     五条判据:
-    ① 夹具入常驻: 本卡新增 test 文件必须在 run-all 清单中
+    ① 夹具入常驻: 本卡新增 test 文件必须在项目声明的测试清单中(AIPOS-F93: test_contract.runall_path)
     ② 改动面在界内: git diff 文件必须落在 output_target 范围内
     ③ 有测试: code 类卡必须有新增/修改的 test 文件
     ④ RETURN 非骨架: 不得含占位符，result_summary 非空
@@ -2567,6 +2569,7 @@ def _check_return_self_checks(
         task_id=task_id,
         repo_root=repo_root,
         card_frontmatter=task_metadata,
+        warnings=warnings,
     ))
     
     # ② 改动面在界内
@@ -2584,6 +2587,7 @@ def _check_return_self_checks(
             task_id=task_id,
             repo_root=repo_root,
             card_frontmatter=task_metadata,
+            warnings=warnings,
         ))
     
     # ④ RETURN 非骨架
@@ -2605,10 +2609,6 @@ def _check_return_self_checks(
     
     return blocking_reasons
 
-
-#: run-all 常驻夹具总入口(产品仓相对路径)唯一声明。AIPOS-F91: 随 lybra-loop 扩展退役自 agents/harness/pi/lybra-loop/tests/ 迁出;
-#: 夹具/文档引用 run-all 位置一律读本常量, 禁另写路径。
-RUNALL_RELATIVE_PATH = "tests/run-all.sh"
 
 
 def _card_branch_changed_files(product_repo_root: Path, task_id: str) -> list[str] | None:
@@ -2654,15 +2654,39 @@ def _git_show_on_branch(product_repo_root: Path, task_id: str, relative_path: st
     return result.stdout
 
 
+def _test_contract_for(repo_root: Path, product_repo_root: Path) -> tuple[dict[str, Any] | None, str | None]:
+    """AIPOS-F93 件③: 卡仓的测试约定(唯一读取口 workspace_config.project_test_contract)。
+    返回 (约定, None) 或 (None, TEST_CONTRACT_INVALID 拒因)——形不合声明 fail-closed 拒, 不当未声明跳过。"""
+    from tools.aipos_cli.workspace_config import project_test_contract
+
+    try:
+        return project_test_contract(repo_root, product_repo_root), None
+    except ValueError as exc:
+        return None, (f"{exc}。出口: 按 config.schema project_json.test_contract 声明形修正治理根 project.json 的 test_contract")
+
+
+def _contract_skip_warning(warnings: list[str] | None, text: str) -> None:
+    """AIPOS-F93 件③: 测试约定未声明 = 判据跳过并 warning(进交回结果 warnings; 无 warnings 通道时出声 stderr)。"""
+    if warnings is not None:
+        warnings.append(text)
+        return
+    import sys
+
+    print(f"Warning: {text}", file=sys.stderr)
+
+
 def _check_test_in_runall(
     *,
     task_id: str,
     repo_root: Path,
     card_frontmatter: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
 ) -> list[str]:
-    """① 夹具入常驻: 本卡新增 test 文件必须在 run-all 清单中。
-    AIPOS-F78 前置零④: 改动集与 run-all.sh 都读卡分支(git diff 三点 / git show card/<ID>:path), 不读共用检出。
-    AIPOS-F78C: 仓 = 卡声明的仓(card_frontmatter.lane.repo)。"""
+    """① 夹具入常驻: 本卡新增 test 文件必须在项目声明的测试清单中。
+    AIPOS-F78 前置零④: 改动集与清单都读卡分支(git diff 三点 / git show card/<ID>:path), 不读共用检出。
+    AIPOS-F78C: 仓 = 卡声明的仓(card_frontmatter.lane.repo)。
+    AIPOS-F93 件③: 清单位置 = 项目声明 test_contract.runall_path(workspace_config.project_test_contract), 未声明 = 跳过并
+    warning(原对所有项目套 lybra 自己的 run-all 约定); 声明了但卡分支上不存在 = 拒。拒因只引用声明值。"""
     blocking_reasons = []
     
     try:
@@ -2674,18 +2698,30 @@ def _check_test_in_runall(
     changed_files = _card_branch_changed_files(product_repo_root, task_id)
     if changed_files is None:
         return blocking_reasons  # git 失败，跳过检查(已 warning)
+    contract, invalid = _test_contract_for(repo_root, product_repo_root)
+    if invalid:
+        return [invalid]
+    runall_rel = contract.get("runall_path") if contract else None
     test_files = [
         f for f in changed_files 
-        if "test" in f.lower() and not f.endswith("run-all.sh")
+        if "test" in f.lower() and f != runall_rel
     ]
     if not test_files:
         return blocking_reasons  # 无 test 文件，跳过
+    if not runall_rel:
+        _contract_skip_warning(warnings, (
+            f"TEST_REGISTRY_UNDECLARED: {task_id} 改动了测试文件但项目未声明测试清单(project.json test_contract.runall_path), "
+            f"「测试须登记进清单」判据跳过(不 BLOCK); 来源 {contract.get('source') if contract else '-'}"
+        ))
+        return blocking_reasons
     
-    # 2. 读取卡分支上的 run-all.sh 清单(禁读共用检出文件系统)
-    runall_path = product_repo_root / RUNALL_RELATIVE_PATH
-    runall_content = _git_show_on_branch(product_repo_root, task_id, RUNALL_RELATIVE_PATH)
+    # 2. 读取卡分支上的声明清单(禁读共用检出文件系统)
+    runall_content = _git_show_on_branch(product_repo_root, task_id, runall_rel)
     if runall_content is None:
-        return blocking_reasons  # 卡分支上无 run-all.sh(非 lybra 形项目)，跳过
+        return [(
+            f"TEST_NOT_IN_RUNALL: 项目声明的测试清单 {runall_rel}(来源 {contract.get('source')})在卡分支 card/{task_id} 上不存在。"
+            f"出口: ①在卡分支提交该清单; ②声明有误请顾问修正 project.json test_contract.runall_path"
+        )]
     
     # 3. 检查每个 test 文件是否在清单中
     missing_tests = []
@@ -2697,12 +2733,11 @@ def _check_test_in_runall(
     
     if missing_tests:
         blocking_reasons.append(
-            f"TEST_NOT_IN_RUNALL: 本卡新增/修改的 test 文件未加入 run-all.sh 清单。"
-            f"缺失项: {', '.join(missing_tests)}。"
-            f"请在 {runall_path.relative_to(product_repo_root)} 中添加这些测试。"
-            f"出口: ①若属卡面漏列, 请顾问 amend output_target 后重试; "
-            f"②若确属越界, 请回退该文件; "
-            f"③若文件正确, 在 run-all.sh 的 files 数组中加入该测试路径。"
+            f"TEST_NOT_IN_RUNALL: 本卡新增/修改的 test 文件未登记进项目声明的测试清单 {runall_rel}"
+            f"(来源 {contract.get('source')})。缺失项: {', '.join(missing_tests)}。"
+            f"出口: ①在 {runall_rel} 中登记这些测试; "
+            f"②若属卡面漏列, 请顾问 amend 车道后重试; "
+            f"③若确属越界, 请回退该文件。"
         )
     
     return blocking_reasons
@@ -2776,8 +2811,10 @@ def _check_has_tests(
     task_id: str,
     repo_root: Path,
     card_frontmatter: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
 ) -> list[str]:
-    """③ 有测试: code 类卡必须有新增/修改的 test 文件。AIPOS-F78C: 仓 = 卡声明的仓。"""
+    """③ 有测试: code 类卡必须有新增/修改的 test 文件。AIPOS-F78C: 仓 = 卡声明的仓。
+    AIPOS-F93 件③: 只在项目声明 test_contract.require_tests=true 时检查; 未声明 = 跳过并 warning。拒因只引用声明值。"""
     blocking_reasons = []
     
     try:
@@ -2791,6 +2828,16 @@ def _check_has_tests(
         return blocking_reasons  # git 失败，跳过检查(已 warning)
     if not changed_files:
         return blocking_reasons  # 无改动，跳过
+    contract, invalid = _test_contract_for(repo_root, product_repo_root)
+    if invalid:
+        return [invalid]
+    if contract.get("require_tests") is not True:
+        if contract.get("require_tests") is None:
+            _contract_skip_warning(warnings, (
+                f"TEST_REQUIREMENT_UNDECLARED: 项目未声明 code 类卡是否必须含测试(project.json test_contract.require_tests), "
+                f"「须含测试」判据跳过(不 BLOCK); 来源 {contract.get('source')}"
+            ))
+        return blocking_reasons
     
     # 2. 检查是否有 test 文件
     has_test = any(
@@ -2799,10 +2846,11 @@ def _check_has_tests(
     )
     
     if not has_test:
+        registry = contract.get("runall_path")
         blocking_reasons.append(
-            f"NO_TESTS: code 类卡必须包含测试文件改动。"
+            f"NO_TESTS: 项目声明 code 类卡须含测试文件改动(来源 {contract.get('source')})。"
             f"当前改动文件: {', '.join(changed_files[:5])}{'...' if len(changed_files) > 5 else ''}。"
-            f"出口: ①添加测试文件(如 tests/test_<feature>.py)并加入 run-all.sh; "
+            f"出口: ①添加测试文件{f'并登记进项目声明的测试清单 {registry}' if registry else ''}; "
             f"②若本卡确无需测试(纯配置/纯文档), 请顾问 amend task_mode 为非 code。"
         )
     
@@ -3275,6 +3323,7 @@ def _build_return_preview(
         completion_report_ref=completion_report_ref,
         artifact_refs=artifact_refs,
         claim_snapshot=claim_snapshot,
+        warnings=warnings,
     )
     
     # AIPOS-F49-fix1: owner_confirmation_token 强制放行机制
