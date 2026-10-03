@@ -355,25 +355,35 @@ def resolve_home_root(
     upward/marker home inference moved out of the home model). This function never creates
     anything.
     """
+    return resolve_home_root_with_source(explicit_root=explicit_root, env=env)[0]
+
+
+def resolve_home_root_with_source(
+    *,
+    explicit_root: str | Path | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[Path, str]:
+    """AIPOS-F92 件②: resolve_home_root 的同一优先级梯(唯一实现), 另返回命中的来源说明(向导 / project new 打印给用户看,
+    home 根要改只能经此梯: --home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > 缺省 ~/.lybra/projects)。"""
     source_env = env if env is not None else os.environ
     if explicit_root:
-        return Path(explicit_root).expanduser().resolve()
+        return Path(explicit_root).expanduser().resolve(), "显式 --home-root"
 
     raw_home = str(source_env.get(HOME_ROOT_ENV) or "").strip()
     if raw_home:
-        return Path(raw_home).expanduser().resolve()
+        return Path(raw_home).expanduser().resolve(), f"环境变量 {HOME_ROOT_ENV}"
 
     configured = global_config_home_root(load_global_config(source_env))
     if configured is not None:
-        return configured.expanduser().resolve()
+        return configured.expanduser().resolve(), "全局配置 ~/.lybra/config.json home_root"
 
     # Default ~/.lybra/projects. Honor a patched HOME in `env` (consistent with
     # global_config_path) so callers/tests can isolate from the real home.
     if env is not None:
         home = str(env.get("HOME") or "").strip()
         if home:
-            return Path(home) / ".lybra" / "projects"
-    return DEFAULT_HOME_ROOT.expanduser()
+            return Path(home) / ".lybra" / "projects", "缺省 ~/.lybra/projects"
+    return DEFAULT_HOME_ROOT.expanduser(), "缺省 ~/.lybra/projects"
 
 
 def resolve_active_project(
@@ -1078,12 +1088,75 @@ def scaffold_project(
         decision_log.write_text(f"# {clean} Decision Log\n", encoding="utf-8")
 
     write_project_json(root, clean, code_repo=code_repo, registered_by=registered_by, collaboration_profile=collaboration_profile)
-    
+
+    # AIPOS-F92 件③: 首份阶段快照「项目创建」经既有单源 governance add stage(config.schema file_declarations.stage_archive_snapshot)
+    # 写入 —— 阶段门判据不变(有快照才可转换), 新项目建成即满足(否则首次 finalize 必 BLOCK「no stage snapshot」, F89 N2)。
+    write_project_created_snapshot(root, clean, registered_by=registered_by)
+
     # AIPOS-F24 大项D: connection.json 骨架(含 mcp.rpc_url)
     if gate_rpc_url:
         _write_connection_skeleton(root, gate_rpc_url)
-    
+
     return root
+
+
+#: AIPOS-F92 件③: 新项目首份阶段快照的阶段名(project new 建项目即写; 阶段门 finalize.check_stage_archive_gate 判据不变)
+PROJECT_CREATED_STAGE_NAME = "项目创建"
+
+
+def write_project_created_snapshot(project_root: str | Path, name: str, *, registered_by: str) -> Path:
+    """AIPOS-F92 件③: 经 governance_add.add_stage(唯一写入口, 声明驱动)写首份阶段快照「项目创建」。
+
+    失败 = 抛 RuntimeError(fail-closed: 无快照的新项目首次 finalize 必被阶段门拦, 不静默放过)。返回快照路径。
+    """
+    from tools.aipos_cli.governance_add import add_stage
+
+    root = Path(project_root)
+    body = "\n".join([
+        "## Summary",
+        "",
+        f"项目 `{name}` 由 `lybra project new` 创建(registered_by: {registered_by})。治理树(队列 / 记录 / 治理文档 / 阶段快照)已就位,",
+        "本篇是项目的第一份阶段快照, 标记「项目创建」阶段关账: 此后的卡可经 finalize 阶段门(有快照才可转换)。",
+        "",
+        "## Next Stage",
+        "",
+        "按 `lybra onboarding guide` 接入: 声明产品仓 → 顾问凭据 → 信封 → 工位 → 首卡。",
+    ])
+    result = add_stage(root, stage_name=PROJECT_CREATED_STAGE_NAME, body=body)
+    if not result.get("ok"):
+        raise RuntimeError(f"STAGE_SNAPSHOT_WRITE_FAILED: {result.get('error') or result.get('message')}")
+    return Path(result["target_path"])
+
+
+def set_project_repos(
+    home_root: str | Path,
+    name: str,
+    items: dict[str, str | Path],
+    *,
+    default: str,
+) -> dict[str, Any]:
+    """AIPOS-F92 件②: 声明项目产品仓 —— project.json `repos {default, items}` + `code_repo`(= items[default] 兼容别名)。
+
+    项目须已建(resolve_project_root, 无 lazy-create)。其余 project.json 键原样保留(只改 repos / code_repo)。
+    校验 = 唯一读取口 project_repos()(config.schema project_json.repos 声明: 绝对路径 / default ∈ items / code_repo 一致);
+    写后校验不过 = 原文件还原 + 抛 CardRepoUnresolved(REPOS_CONFLICT), 不留半成品。返回 project_repos() 结果 + project_json 路径。
+    """
+    root = resolve_project_root(home_root, name)
+    path = project_json_path(root)
+    original = path.read_text(encoding="utf-8")
+    data = json.loads(original)
+    if not isinstance(data, dict):
+        raise CardRepoUnresolved("REPOS_CONFLICT", f"{path} 不是 JSON 对象")
+    clean_items = {str(k).strip(): str(Path(str(v).strip()).expanduser()) for k, v in items.items()}
+    data["repos"] = {"default": str(default).strip(), "items": clean_items}
+    data["code_repo"] = clean_items.get(str(default).strip())
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        declared = project_repos(root)
+    except CardRepoUnresolved:
+        path.write_text(original, encoding="utf-8")
+        raise
+    return {**declared, "project_json": path}
 
 
 def set_project_repo(

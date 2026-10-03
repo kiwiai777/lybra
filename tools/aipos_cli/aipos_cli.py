@@ -48,7 +48,7 @@ from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, m
 from tools.aipos_cli.board_adapter import execute_dry_run as execute_controlled_dry_run
 from tools.aipos_cli.board_adapter import record_owner_decision
 from tools.aipos_cli.board_adapter import submit_external_intake
-from tools.aipos_cli.controlled_execute import register_dry_run, snapshot_hash, validate_owner_confirmation
+from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN, register_dry_run, snapshot_hash, validate_owner_confirmation
 from tools.aipos_cli.draft_validator import list_drafts, validate_draft_file
 from tools.aipos_cli.draft_writer import (
     build_template_payload,
@@ -99,7 +99,10 @@ from tools.aipos_cli.workspace_config import (
     load_workspace_config,
     project_json_path,
     read_project_json,
+    governance_paths,
+    governance_workspace_root,
     resolve_home_root,
+    resolve_home_root_with_source,
     resolve_workspace_root,
     scaffold_project,
     set_project_repo,
@@ -1146,6 +1149,121 @@ def _run_dispatch(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F92 件①: 信封签发产品化 —— `lybra envelope mint --confirm` 是门 owner_decision_record envelope 路径的薄壳
+# (签信封逻辑只在门侧 owner_decision_writer 一处; 本 CLI 只构 payload、读凭据、两阶段转发、以门生记录为准输出)
+# ---------------------------------------------------------------------------
+
+def _envelope_mint_payload(
+    *,
+    policy_id: str,
+    agent_or_role: str,
+    max_tasks: int,
+    task_mode: str | None,
+    expires_at: str,
+    decision_summary: str,
+    actor: str,
+) -> dict[str, Any]:
+    """信封 payload 唯一构造(--dry-run 本地预演与 --confirm 门路径同读): 门 envelope 路径只要 decision_id + autonomy_policy。"""
+    task_selector: dict[str, Any] = {}
+    if task_mode:
+        task_selector["task_mode"] = task_mode
+    return {
+        "decision_id": f"envelope-{policy_id}",
+        "actor": actor,
+        "decided_by_ref": actor,
+        "decision_summary": decision_summary,
+        "autonomy_policy": {
+            "policy_id": policy_id,
+            "agent_or_role": agent_or_role,
+            "active_from": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "expires_at": expires_at,
+            "max_tasks": max_tasks,
+            "task_selector": task_selector,
+        },
+    }
+
+
+def _envelope_mint_via_gate(
+    payloads: list[dict[str, Any]],
+    *,
+    governance_root: Path,
+    actor: str,
+    connection_json: str | None,
+    token_role: str,
+    json_output: bool,
+) -> int:
+    """逐张经门两阶段签信封: lybra_owner_decision_record_dry_run(workspace_root=目标治理根, 门按凭据 projects 校验项目范围)
+    → _confirm(owner_confirmation_token=OWNER_CONFIRMED; 门另要 owner_confirm scope)。凭据只从 connection.json 读, 只出指纹。
+    任一张门拒 = 停在该张(已落的照实列出), exit 1。输出以门生记录为准(performed_writes)。"""
+    from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token, token_fingerprint
+
+    conn_path = Path(connection_json).expanduser() if connection_json else governance_root / ".lybra" / "connection.json"
+    if not conn_path.is_file():
+        print(f"Error: 凭据文件不存在: {conn_path}(--connection-json 指向持 {token_role} 凭据的 connection.json, 如门的中央凭据库)", file=sys.stderr)
+        return 1
+    try:
+        conn = json.loads(conn_path.read_text(encoding="utf-8"))
+        token = load_owner_token(connection_json=conn_path, role=token_role)
+    except (OSError, ValueError) as exc:
+        print(f"Error: 读不到 {token_role} 凭据({conn_path}): {exc}", file=sys.stderr)
+        return 1
+    rpc_url = str(((conn.get("mcp") or {}).get("rpc_url")) or "").strip()
+    if not rpc_url:
+        print(f"Error: {conn_path} 无 mcp.rpc_url, 无法连门", file=sys.stderr)
+        return 1
+    base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
+    signed: list[dict[str, Any]] = []
+    report: dict[str, Any] = {"ok": False, "operation": "envelope_mint", "via": "gate owner_decision_record envelope path",
+                              "gate_url": base_url, "credential_role": token_role, "credential_fingerprint": token_fingerprint(token),
+                              "governance_root": str(governance_root), "signed": signed}
+
+    def _emit(rc: int, error: str | None = None) -> int:
+        if error:
+            report["error"] = error
+        if json_output:
+            print(render_json(report))
+        else:
+            print(f"envelope mint --confirm via {base_url} (credential {token_role} {report['credential_fingerprint']}) → {governance_root}")
+            for item in signed:
+                print(f"  signed {item['policy_id']} covers {item['agent_or_role']}: decision={item['decision_id']}")
+                for path in item["written"]:
+                    print(f"    wrote {path}")
+            if error:
+                print(f"Error: {error}", file=sys.stderr)
+        return rc
+
+    try:
+        client = GateClient(base_url, token)
+        client.initialize()
+        for payload in payloads:
+            policy = payload["autonomy_policy"]
+            dry = client.call_tool("lybra_owner_decision_record_dry_run", {**payload, "workspace_root": str(governance_root)})
+            if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok", False) or not dry.get("dry_run_token"):
+                reasons = dry.get("blocking_reasons") or dry.get("errors") or dry.get("message") or dry
+                return _emit(1, f"门拒 {policy['policy_id']} 预演: {json.dumps(reasons, ensure_ascii=False)[:800]}")
+            done = client.call_tool("lybra_owner_decision_record_confirm", {
+                "dry_run_token": dry["dry_run_token"],
+                "actor": actor,
+                "owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
+                "workspace_root": str(governance_root),
+            })
+            if not done.get("ok", False):
+                reasons = done.get("errors") or done.get("message") or done.get("error_code") or done
+                return _emit(1, f"门拒 {policy['policy_id']} 确认: {json.dumps(reasons, ensure_ascii=False)[:800]}")
+            writes = [str(w.get("path")) for w in (done.get("performed_writes") or []) if isinstance(w, dict) and w.get("path")]
+            written_files = [governance_root / w for w in writes]
+            missing = [str(f) for f in written_files if not f.is_file()]
+            if not writes or missing:
+                return _emit(1, f"门应答成功但记录未见落盘({policy['policy_id']}): writes={writes} missing={missing}")
+            signed.append({"policy_id": policy["policy_id"], "agent_or_role": policy["agent_or_role"],
+                           "decision_id": payload["decision_id"], "written": writes})
+    except GateError as exc:
+        return _emit(1, f"门调用失败: {exc}(已签 {len(signed)} 张, 以门生记录为准; 未签的重跑本命令, 已落的 policy_id 会被门拒「already exists」)")
+    report["ok"] = True
+    return _emit(0)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AI Project OS CLI")
     parser.add_argument("--workspace-root", dest="global_workspace_root", help="Workspace root; may also be provided on supported subcommands")
@@ -1715,6 +1833,8 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_parser.add_argument("--policy", help="Optional policy reference")
     roles_enroll_parser.add_argument("--bootstrap-token", help="Legacy plain codes only: bootstrap token for HTTP transport auth (self-contained codes need none)")
     roles_enroll_parser.add_argument("--verify", action="store_true", help="AIPOS-R6S 大项C②: enroll 后立刻用新 token 调一次 gate, 不通即报错并回滚")
+    roles_enroll_parser.add_argument("--harness", help="AIPOS-F92: workstation harness kind (declared in distribution.schema harness_semantics; default pi). claude-code = advisor Claude Code session: credentials land in --workspace, declared skills land in --harness-dir/.claude/skills")
+    roles_enroll_parser.add_argument("--harness-dir", help="AIPOS-F92: absolute working directory of a non-pi harness (e.g. the Claude Code session directory); delivery base for its declared distributions")
     roles_enroll_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
@@ -1829,11 +1949,20 @@ def build_parser() -> argparse.ArgumentParser:
     project_new_parser.add_argument("--code-repo", help="Optional absolute path to the project's code repo")
     project_new_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_new_parser.add_argument("--actor", default=default_actor, help="Provenance actor (registered_by); defaults to $USER or owner")
+    project_new_parser.add_argument("--owner-authorization-ref", help="Owner authorization ref — required only on the gate path (when ~/.lybra/connection.json exists); the local scaffold (AIPOS-226 ruling 2=a) needs none")
     project_setrepo_parser = project_subparsers.add_parser("set-repo", help="Set/update an established project's code_repo mapping")
     project_setrepo_parser.add_argument("name", help="Established project name")
     project_setrepo_parser.add_argument("--code-repo", required=True, help="Absolute path to the project's code repo")
     project_setrepo_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setrepo_parser.add_argument("--actor", default=default_actor, help="Provenance actor (registered_by); defaults to $USER or owner")
+    project_setrepo_parser.add_argument("--owner-authorization-ref", help="Owner authorization ref — required only on the gate path (when ~/.lybra/connection.json exists)")
+    # AIPOS-F92 件②: 多仓声明(project.json repos {default, items} + code_repo 别名), 经 config.schema project_json.repos 声明校验
+    project_setrepos_parser = project_subparsers.add_parser("set-repos", help="AIPOS-F92: declare the project's product repos (project.json repos {default, items} + code_repo alias), validated against config.schema project_json.repos")
+    project_setrepos_parser.add_argument("name", help="Established project name")
+    project_setrepos_parser.add_argument("--repo", action="append", required=True, metavar="NAME=ABS_PATH", help="Product repo entry (repeatable): <仓名>=<绝对路径>")
+    project_setrepos_parser.add_argument("--default", dest="default_repo", help="Default repo name (must be one of --repo names; required when more than one --repo)")
+    project_setrepos_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_setrepos_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-335 S4: list existing projects and their inferred collaboration_profile
     project_list_parser = project_subparsers.add_parser("list", help="AIPOS-335: List existing projects and their collaboration profiles")
     project_list_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
@@ -1866,15 +1995,21 @@ def build_parser() -> argparse.ArgumentParser:
     # AIPOS-370: envelope mint command (owner-gated)
     envelope_parser = subparsers.add_parser("envelope", help="Owner autonomy envelope operations")
     envelope_subparsers = envelope_parser.add_subparsers(dest="envelope_command")
-    envelope_mint_parser = envelope_subparsers.add_parser("mint", help="Mint a PreAuthorized autonomy envelope")
-    envelope_mint_parser.add_argument("--policy-id", required=True, help="Policy ID")
-    envelope_mint_parser.add_argument("--agent-or-role", required=True, help="Agent instance or role")
+    envelope_mint_parser = envelope_subparsers.add_parser("mint", help="Mint PreAuthorized autonomy envelope(s): --dry-run = local preview, --confirm = signed through the gate (owner_decision_record envelope path)")
+    # AIPOS-F92 件①: --policy-id / --agent-or-role 可重复且按出现顺序成对(一条命令签一组信封, 每张走同一门路径)
+    envelope_mint_parser.add_argument("--policy-id", action="append", required=True, help="Policy ID (repeatable; paired in order with --agent-or-role)")
+    envelope_mint_parser.add_argument("--agent-or-role", action="append", required=True, help="Agent instance or role covered (repeatable; paired in order with --policy-id)")
     envelope_mint_parser.add_argument("--max-tasks", type=int, required=True, help="Maximum tasks allowed")
     envelope_mint_parser.add_argument("--task-mode", help="Task mode selector (e.g., code)")
     envelope_mint_parser.add_argument("--expires-at", required=True, help="Expiration datetime (ISO8601)")
     envelope_mint_parser.add_argument("--decision-summary", required=True, help="Decision summary")
     envelope_mint_parser.add_argument("--actor", default="owner", help="Actor (default: owner)")
-    envelope_mint_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    envelope_mint_parser.add_argument("--workspace-root", help="AIPOS-F92: target project governance root (where the policy lands); default = resolved governance workspace")
+    envelope_mint_parser.add_argument("--connection-json", help="AIPOS-F92: connection.json holding the Owner credential (default <workspace-root>/.lybra/connection.json); token never printed (fingerprint only)")
+    envelope_mint_parser.add_argument("--token-role", default="owner", help="AIPOS-F92: credential role used for --confirm (default owner; arming an envelope needs owner_confirm)")
+    envelope_mint_mode = envelope_mint_parser.add_mutually_exclusive_group(required=True)
+    envelope_mint_mode.add_argument("--dry-run", action="store_true", help="Preview without writing (same writer and same criteria as --confirm)")
+    envelope_mint_mode.add_argument("--confirm", action="store_true", help="AIPOS-F92: sign through the gate (lybra_owner_decision_record_dry_run → _confirm with OWNER_CONFIRMED); output = gate-written records")
     envelope_mint_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     envelope_revoke_parser = envelope_subparsers.add_parser("revoke", help="Revoke (disable) an autonomy envelope")
@@ -1902,11 +2037,21 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_guide_parser.add_argument("--gate-url", help="Gate URL (defaults to LYBRA_GATE_URL env or http://127.0.0.1:7118)")
     onboarding_guide_parser.add_argument("--code-repo", help="Optional code repo path")
     onboarding_guide_parser.add_argument("--actor", help="Actor name (defaults to $USER or owner)")
-    onboarding_guide_parser.add_argument("--workspace-dir", help="Workstation directory path (defaults to ~/<project>-workstation)")
+    onboarding_guide_parser.add_argument("--workspace-dir", help="Executor workstation directory (defaults to ~/<project>-executor)")
+    # AIPOS-F92 件②: 单门 home 根约定下的完整接入参数(全部可缺省推导; guide 打印推导结果与来源)
+    onboarding_guide_parser.add_argument("--auditor-dir", help="Auditor workstation directory (defaults to ~/<project>-auditor)")
+    onboarding_guide_parser.add_argument("--advisor-dir", help="Advisor Claude Code session directory — advisor skills land in <dir>/.claude/skills (defaults to ~/<project>)")
+    onboarding_guide_parser.add_argument("--repo", action="append", dest="repos", metavar="NAME=ABS_PATH", help="Product repo (repeatable) for Step 2 project set-repos")
+    onboarding_guide_parser.add_argument("--default-repo", help="Default repo name when more than one --repo")
+    onboarding_guide_parser.add_argument("--host-segment", help="Host segment of instance names (defaults to short hostname)")
+    onboarding_guide_parser.add_argument("--owner-workspace", help="Gate workspace holding the Owner credential (central registry); defaults to <home>/<active project>")
+    onboarding_guide_parser.add_argument("--owner-connection-json", help="Owner credential connection.json (defaults to <owner-workspace>/.lybra/connection.json)")
+    onboarding_guide_parser.add_argument("--envelope-days", type=int, default=30, help="Envelope validity in days (default 30)")
+    onboarding_guide_parser.add_argument("--max-tasks", type=int, default=50, help="Envelope max auto-released claims (default 50)")
     onboarding_guide_parser.add_argument("--json", action="store_true", help="Output JSON")
     onboarding_check_parser = onboarding_subparsers.add_parser("check", help="Check prerequisites for a specific onboarding step")
     onboarding_check_parser.add_argument("project_name", help="Project name")
-    onboarding_check_parser.add_argument("--step", type=int, required=True, help="Step number to check (1-6)")
+    onboarding_check_parser.add_argument("--step", type=int, required=True, help="Guide step number to check prerequisites for (1-9, same numbering as onboarding guide)")
     onboarding_check_parser.add_argument("--home-root", help="Governance home root")
     onboarding_check_parser.add_argument("--workspace-dir", help="Workstation directory")
     onboarding_check_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -2883,8 +3028,9 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"  Governance root: {confirm.get('governance_root')}")
                     if ttl:
                         print(f"  Expires at: {confirm.get('expires_at')}")
-                    print(f"\n  把下面这条整体转贴到新工位的 pi 会话(Owner 唯一要做的事):")
-                    print(f"  {confirm.get('paste_text')}")
+                    # AIPOS-F92: 交付形 = 产品命令(/lybra 斜杠命令随 lybra-loop 扩展已退役, 门 paste_text 仍是旧形 → 见 RETURN 缺口)
+                    print(f"\n  把注册码交给接收方, 由其执行(--workspace = 其工位目录; 顾问为治理根, 见 lybra onboarding guide):")
+                    print(f"  lybra roles enroll --code {confirm.get('self_contained_code')} --workspace <目录> --verify")
                     print(f"\n  ⚠ 码单次 + TTL + 可撤销; 内嵌零 scope 运输凭证(码即运输认证, 无需 bootstrap token)。")
                     print(f"  ⚠ This code is shown only once. Share it immediately.")
                 return 0
@@ -2976,6 +3122,8 @@ def main(argv: list[str] | None = None) -> int:
                         policy=getattr(args, "policy", None),
                         bootstrap_token=getattr(args, "bootstrap_token", None),
                         verify=bool(getattr(args, "verify", False)),
+                        harness_kind=getattr(args, "harness", None),
+                        harness_dir=Path(args.harness_dir).expanduser() if getattr(args, "harness_dir", None) else None,
                     )
                     if getattr(args, "json", False):
                         print(render_json(result))
@@ -3016,10 +3164,17 @@ def main(argv: list[str] | None = None) -> int:
                         # AIPOS-F54 ⑮: 可启动最小集逐项校验(缺项逐项点名)
                         mbs = result.get('minimum_bootable_set') or {}
                         if mbs:
-                            if mbs.get('ok'):
+                            if mbs.get('skipped'):
+                                print(f"\n  · 可启动最小集: {mbs['skipped']}")
+                            elif mbs.get('ok'):
                                 print(f"\n  ✓ 可启动最小集全部就绪({len(mbs.get('checks') or [])} 项)")
                             else:
                                 print(f"\n  ⚠ 可启动最小集缺项: {', '.join(mbs.get('missing') or [])}")
+                        hd_ = result.get('harness_delivery')
+                        if hd_:
+                            print(f"\n  ✓ {(result.get('harness') or {}).get('kind')} 件已交付: {hd_.get('files_fetched')} 个文件 → {(result.get('harness') or {}).get('dir')}(清单 {hd_.get('manifest_path')})")
+                            for ch in hd_.get('changes') or []:
+                                print(f"    - {ch.get('distribution_id')}: {ch.get('files_written')} 个文件 → {ch.get('target_path')}")
                         pd_ = result.get('policy_derivation')
                         if pd_ and pd_.get('policy_id'):
                             print(f"\n  ✓ owner_policy_ref 已推导: {pd_['policy_id']}")
@@ -3097,37 +3252,43 @@ def main(argv: list[str] | None = None) -> int:
             if args.project_command in ("export", "import", "dispatch-mode"):
                 pass  # handled below
             else:
-                home = resolve_home_root(explicit_root=args.home_root)
+                home, home_source = resolve_home_root_with_source(explicit_root=args.home_root)
             if args.project_command == "new":
                 # AIPOS-F24 大项A: 薄壳模式 - 调用门动词 lybra_project_new
                 # 保留交互式询问(CLI 侧体验),但实际创建走门动词
                 from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token
-                
-                collaboration_profile = _ask_project_type_interactive()
-                
-                # 需要 owner_authorization_ref
-                owner_auth_ref = getattr(args, "owner_authorization_ref", None)
-                if not owner_auth_ref:
-                    print("Error: --owner-authorization-ref is required (owner-gated)", file=sys.stderr)
-                    print("Hint: project creation requires owner authorization.", file=sys.stderr)
-                    return 1
-                
+
+                # AIPOS-F92 件②: home 根只经 AIPOS-226 优先级梯解析, 打印结果与来源(门只扫描 home 根, 不登记 home 根外的治理根)
+                print(f"home 根: {home}(来源: {home_source}); 项目建在 {home / args.name}")
+                # AIPOS-F92: 非交互(stdin 非终端, 如 agent 会话)不弹询问, 用缺省协作配置(可后改)
+                collaboration_profile = _ask_project_type_interactive() if sys.stdin.isatty() else None
+
                 # 连接信息 (从 home 推导连接配置)
                 # 对于 project new,我们需要有一个已存在的门服务
                 # 暂时使用环境变量或默认连接
                 conn_path = Path("~/.lybra/connection.json").expanduser()
                 if not conn_path.exists():
-                    # 降级:直接调用本地函数(向后兼容)
+                    # AIPOS-226 裁定 2=a: 本地 Owner 脚手架(不铸凭据、不过门), 门按 home 根扫描发现新项目
                     root = scaffold_project(
                         home, args.name, code_repo=args.code_repo, registered_by=args.actor,
                         collaboration_profile=collaboration_profile
                     )
-                    print(f"Created project root: {root} (local fallback)")
+                    print(f"Created project root: {root} (local scaffold)")
                     print(f"project.json: {project_json_path(root)}")
+                    for snap in sorted((governance_paths(root)["stage_archive"]).glob("*.md")):
+                        if snap.name.lower() != "readme.md":
+                            print(f"stage snapshot: {snap}")
                     if collaboration_profile:
                         print(f"collaboration_profile: {collaboration_profile}")
-                    print(f"next: lybra serve with LYBRA_HOME_ROOT={home}")
+                    print(f"next: 门以 home 根 {home} 发现本项目(双标记 5_tasks/queue + project.json); 接入步骤见 lybra onboarding guide {args.name}")
                     return 0
+
+                # 门路径(~/.lybra/connection.json 存在): owner-gated
+                owner_auth_ref = getattr(args, "owner_authorization_ref", None)
+                if not owner_auth_ref:
+                    print("Error: --owner-authorization-ref is required on the gate path (owner-gated)", file=sys.stderr)
+                    print("Hint: project creation via the gate requires owner authorization.", file=sys.stderr)
+                    return 1
                 
                 conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
                 rpc_url = str(((conn_data.get("mcp") or {}).get("rpc_url")) or "").strip()
@@ -3187,16 +3348,47 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Error: gate call failed: {exc}", file=sys.stderr)
                     return 1
                 return 0
+            if args.project_command == "set-repos":
+                # AIPOS-F92 件②: 声明产品仓(唯一写入口 workspace_config.set_project_repos; 校验 = 唯一读取口 project_repos)
+                from tools.aipos_cli.workspace_config import CardRepoUnresolved, set_project_repos
+
+                items: dict[str, str] = {}
+                for raw in args.repo:
+                    name_part, sep, path_part = str(raw).partition("=")
+                    if not sep or not name_part.strip() or not path_part.strip():
+                        print(f"Error: --repo 须为 <仓名>=<绝对路径>, 得到 {raw!r}", file=sys.stderr)
+                        return 2
+                    if name_part.strip() in items:
+                        print(f"Error: --repo 仓名 {name_part.strip()!r} 重复", file=sys.stderr)
+                        return 2
+                    items[name_part.strip()] = path_part.strip()
+                default_repo = args.default_repo or (next(iter(items)) if len(items) == 1 else None)
+                if not default_repo:
+                    print("Error: 多于一个 --repo 时须给 --default <仓名>(卡缺 lane.repo 时派生此仓)", file=sys.stderr)
+                    return 2
+                try:
+                    declared = set_project_repos(home, args.name, items, default=default_repo)
+                except CardRepoUnresolved as exc:
+                    print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+                    return 1
+                out = {"ok": True, "project_json": str(declared["project_json"]), "default": declared["default"],
+                       "items": {k: str(v) for k, v in declared["items"].items()}, "code_repo": str(declared["code_repo"])}
+                if getattr(args, "json", False):
+                    print(render_json(out))
+                else:
+                    print(f"Declared repos in {out['project_json']}: default={out['default']} code_repo={out['code_repo']}")
+                    for k, v in out["items"].items():
+                        print(f"  {k} = {v}")
+                return 0
             if args.project_command == "set-repo":
                 # AIPOS-F24 大项A: 薄壳模式
                 from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token
-                
+
                 owner_auth_ref = getattr(args, "owner_authorization_ref", None)
-                if not owner_auth_ref:
-                    print("Error: --owner-authorization-ref is required (owner-gated)", file=sys.stderr)
-                    return 1
-                
                 conn_path = Path("~/.lybra/connection.json").expanduser()
+                if conn_path.exists() and not owner_auth_ref:
+                    print("Error: --owner-authorization-ref is required on the gate path (owner-gated)", file=sys.stderr)
+                    return 1
                 if not conn_path.exists():
                     # 降级
                     root = set_project_repo(
@@ -3899,53 +4091,111 @@ def main(argv: list[str] | None = None) -> int:
         if workstation_rc is not None:
             return workstation_rc
 
-    try:
-        repo_root = _find_repo_root_for_args(args)
-    except FileNotFoundError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+    # AIPOS-F92 件②: 接入向导在新项目建成前就要能跑(顾问会话目录不是治理工作区), 不解析工作区根
+    if args.command == "onboarding":
+        if not getattr(args, "onboarding_command", None):
+            parser.print_help()
+            return 2
+        from tools.aipos_cli.onboarding import (
+            generate_onboarding_guide,
+            format_guide_text,
+            validate_step_prerequisites,
+        )
+        if args.onboarding_command == "guide":
+            guide = generate_onboarding_guide(
+                args.project_name,
+                home_root=args.home_root,
+                gate_url=args.gate_url,
+                code_repo=args.code_repo,
+                actor=args.actor,
+                workspace_dir=args.workspace_dir,
+                repos=args.repos,
+                default_repo=args.default_repo,
+                advisor_dir=args.advisor_dir,
+                auditor_dir=args.auditor_dir,
+                host_segment=args.host_segment,
+                owner_workspace=args.owner_workspace,
+                owner_connection_json=args.owner_connection_json,
+                envelope_days=args.envelope_days,
+                max_tasks=args.max_tasks,
+            )
+            if args.json:
+                print(render_json(guide))
+            else:
+                print(format_guide_text(guide))
+            return 0
+        elif args.onboarding_command == "check":
+            result = validate_step_prerequisites(
+                args.step,
+                project_name=args.project_name,
+                home_root=args.home_root,
+                workspace_dir=args.workspace_dir,
+            )
+            if args.json:
+                print(render_json(result))
+            else:
+                if result["ok"]:
+                    print(f"✓ Step {args.step} prerequisites satisfied")
+                else:
+                    print(f"✗ Step {args.step} prerequisites not satisfied")
+                    print(f"Missing: {', '.join(result['missing'])}")
+                    if result["guidance"]:
+                        print("\nGuidance:")
+                        for g in result["guidance"]:
+                            print(f"  - {g}")
+            return 0 if result["ok"] else 1
+        parser.print_help()
+        return 2
 
+    # AIPOS-F92 件①: 信封命令先校验参数、自行解析目标治理根(mint 用 --workspace-root / governance_workspace_root), 不先过通用工作区解析
     if args.command == "envelope":
         if not getattr(args, "envelope_command", None):
             parser.print_help()
             return 2
         if args.envelope_command == "mint":
-            # Build autonomy_policy payload
-            task_selector = {}
-            if args.task_mode:
-                task_selector["task_mode"] = args.task_mode
-            autonomy_policy = {
-                "policy_id": args.policy_id,
-                "agent_or_role": args.agent_or_role,
-                "active_from": datetime.now(timezone.utc).isoformat(),
-                "expires_at": args.expires_at,
-                "max_tasks": args.max_tasks,
-                "task_selector": task_selector,
-            }
-            payload = {
-                "decision_id": f"envelope-{args.policy_id}",
-                "actor": args.actor,
-                "decided_by_ref": args.actor,
-                "decision_summary": args.decision_summary,
-                "autonomy_policy": autonomy_policy,
-            }
-            try:
-                result = record_owner_decision(
-                    payload,
-                    dry_run=args.dry_run,
-                    repo_root=repo_root,
-                    actor=args.actor,
+            # AIPOS-F92 件①: 预演(--dry-run, 本地同一 writer)与执行(--confirm, 经门 owner_decision_record envelope 路径)同一 payload 构造
+            policy_ids = list(args.policy_id or [])
+            agents = list(args.agent_or_role or [])
+            if len(policy_ids) != len(agents):
+                print(f"Error: --policy-id({len(policy_ids)} 个)与 --agent-or-role({len(agents)} 个)须按顺序成对", file=sys.stderr)
+                return 2
+            if len(set(policy_ids)) != len(policy_ids):
+                print(f"Error: --policy-id 重复: {policy_ids}", file=sys.stderr)
+                return 2
+            payloads = [
+                _envelope_mint_payload(
+                    policy_id=pid, agent_or_role=agent, max_tasks=args.max_tasks, task_mode=args.task_mode,
+                    expires_at=args.expires_at, decision_summary=args.decision_summary, actor=args.actor,
                 )
-            except (FileNotFoundError, OSError, ValueError) as exc:
+                for pid, agent in zip(policy_ids, agents)
+            ]
+            try:
+                envelope_root = governance_workspace_root(getattr(args, "workspace_root", None) or None)
+            except FileNotFoundError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 return 1
-            if args.json:
-                print(render_json(result))
-            else:
-                print(render_json(result))
-            return 1 if result.get("verdict") == Verdict.BLOCK else 0
+            if args.confirm:
+                return _envelope_mint_via_gate(
+                    payloads, governance_root=envelope_root, actor=args.actor,
+                    connection_json=getattr(args, "connection_json", None), token_role=args.token_role,
+                    json_output=bool(args.json),
+                )
+            results = []
+            for payload in payloads:
+                try:
+                    results.append(record_owner_decision(payload, dry_run=True, repo_root=envelope_root, actor=args.actor))
+                except (FileNotFoundError, OSError, ValueError) as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    return 1
+            print(render_json(results[0] if len(results) == 1 else {"ok": all(r.get("ok") for r in results), "dry_run": True, "results": results}))
+            return 1 if any(r.get("verdict") == Verdict.BLOCK for r in results) else 0
         
         elif args.envelope_command == "revoke":
+            try:
+                repo_root = _find_repo_root_for_args(args)
+            except FileNotFoundError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
             # Revoke envelope by creating superseding decision
             payload = {
                 "decision_id": f"revoke-{args.policy_id}",
@@ -3973,6 +4223,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1 if result.get("verdict") == Verdict.BLOCK else 0
         
         elif args.envelope_command == "renew":
+            try:
+                repo_root = _find_repo_root_for_args(args)
+            except FileNotFoundError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
             # Renew envelope by creating new policy with updated limits
             if not args.add_tasks and not args.new_expiry:
                 print("Error: Must specify --add-tasks or --new-expiry (or both)", file=sys.stderr)
@@ -4010,51 +4265,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
-    if args.command == "onboarding":
-        if not getattr(args, "onboarding_command", None):
-            parser.print_help()
-            return 2
-        from tools.aipos_cli.onboarding import (
-            generate_onboarding_guide,
-            format_guide_text,
-            validate_step_prerequisites,
-        )
-        if args.onboarding_command == "guide":
-            guide = generate_onboarding_guide(
-                args.project_name,
-                home_root=args.home_root,
-                gate_url=args.gate_url,
-                code_repo=args.code_repo,
-                actor=args.actor,
-                workspace_dir=args.workspace_dir,
-            )
-            if args.json:
-                print(render_json(guide))
-            else:
-                print(format_guide_text(guide))
-            return 0
-        elif args.onboarding_command == "check":
-            result = validate_step_prerequisites(
-                args.step,
-                project_name=args.project_name,
-                home_root=args.home_root,
-                workspace_dir=args.workspace_dir,
-            )
-            if args.json:
-                print(render_json(result))
-            else:
-                if result["ok"]:
-                    print(f"✓ Step {args.step} prerequisites satisfied")
-                else:
-                    print(f"✗ Step {args.step} prerequisites not satisfied")
-                    print(f"Missing: {', '.join(result['missing'])}")
-                    if result["guidance"]:
-                        print("\nGuidance:")
-                        for g in result["guidance"]:
-                            print(f"  - {g}")
-            return 0 if result["ok"] else 1
-        parser.print_help()
-        return 2
+    try:
+        repo_root = _find_repo_root_for_args(args)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     if args.command == "controlled-execute":
         if not getattr(args, "controlled_command", None):

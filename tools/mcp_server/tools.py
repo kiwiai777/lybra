@@ -5694,6 +5694,8 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 # reachable through a schema-validating MCP client (which would otherwise strip an
                 # undeclared autonomy_policy and force the evidence fields — the O3 defect).
                 "autonomy_policy": {"type": "object"},
+                # AIPOS-F78B 件④b / AIPOS-F92 件①: 目标项目治理根(按凭据 projects 校验; CLI envelope mint --confirm 必传)
+                "workspace_root": {"type": "string"},
             },
             "required": ["decision_id"],
             "additionalProperties": False,
@@ -5713,6 +5715,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "dry_run_token": {"type": "string"},
                 "actor": {"type": "string"},
                 "owner_confirmation_token": {"type": "string"},
+                "workspace_root": {"type": "string"},
             },
             "required": ["dry_run_token"],
             "additionalProperties": False,

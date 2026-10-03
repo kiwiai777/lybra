@@ -93,10 +93,17 @@ def declared_role_distributions(role: str, role_class: str) -> list[dict[str, An
         raise
 
 
+def _pi_distributions(dists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """AIPOS-F92 件②: .pi 接线 / 挂载推导只认给 pi harness 的条目(distribution.schema harness_semantics; 判定单源 distribution_sync)。"""
+    from tools.aipos_cli.distribution_sync import default_harness_kind, harness_distributions
+
+    return harness_distributions(dists, default_harness_kind())
+
+
 def declared_role_skills(dists: list[dict[str, Any]]) -> dict[str, str]:
     """kind=skills 分发物 → {技能名: 挂载软链目标}(技能名 = 文件相对路径首段; 目标 = 工位父根/<target_path>/<名>)。"""
     out: dict[str, str] = {}
-    for dist in dists:
+    for dist in _pi_distributions(dists):
         if dist.get("kind") != "skills" or dist.get("target_base") != "harness_parent":
             continue
         base = str(dist.get("target_path") or "").strip("/")
@@ -112,7 +119,7 @@ def declared_role_extensions(dists: list[dict[str, Any]]) -> dict[str, dict[str,
     单文件扩展(source_is_file / 落点即 .ts 文件)= 相对软链; 多文件扩展(目录落点)= 转发包装, 入口 = <目录>/<目录名>.ts。
     """
     out: dict[str, dict[str, str]] = {}
-    for dist in dists:
+    for dist in _pi_distributions(dists):
         if dist.get("kind") != "extension" or dist.get("target_base") != "harness_parent":
             continue
         target_path = str(dist.get("target_path") or "").strip("/")

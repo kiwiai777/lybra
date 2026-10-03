@@ -215,16 +215,19 @@ def find_envelope(
     return None, reasons
 
 
-def mint_hint(*, task_id: str, task_fm: dict[str, Any], driver_actor: str, now: datetime | None = None) -> str:
-    """申领出口: 既有 `lybra envelope mint` 命令(顾问 skill 行), 参数按本卡填好可照抄。"""
+def mint_hint(*, task_id: str, task_fm: dict[str, Any], driver_actor: str, now: datetime | None = None,
+              governance_root: Path | None = None) -> str:
+    """申领出口: 既有 `lybra envelope mint --confirm` 命令(AIPOS-F92 件①: 经门 owner_decision_record envelope 路径真实落盘;
+    Owner 亲自敲, --connection-json 指向持 Owner 凭据的 connection.json), 参数按本卡填好可照抄。"""
     now = now or datetime.now(timezone.utc)
     project = str(task_fm.get("project") or "project").strip() or "project"
     task_mode = str(task_fm.get("task_mode") or "code").strip() or "code"
     expires = (now + timedelta(days=7)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    where = f" --workspace-root {shlex.quote(str(governance_root))}" if governance_root else ""
     return (
-        f"lybra envelope mint --policy-id pol_{project}_loop_1 --agent-or-role {driver_actor} "
+        f"lybra envelope mint --confirm --policy-id pol_{project}_loop_1 --agent-or-role {driver_actor} "
         f"--max-tasks 20 --task-mode {task_mode} --expires-at {expires} "
-        f"--decision-summary \"loop envelope for {task_id}\" --actor owner"
+        f"--decision-summary \"loop envelope for {task_id}\" --actor owner{where} --connection-json <Owner 凭据 connection.json>"
     )
 
 
@@ -348,7 +351,7 @@ def run_loop(
         driver_role=_driver_role_name(governance_root, connection_json),
     )
     if policy is None:
-        hint = mint_hint(task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, now=now)
+        hint = mint_hint(task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, now=now, governance_root=governance_root)
         msg = "无有效 autonomy 信封, 拒绝裸跑。\n" + "\n".join(f"  - {r}" for r in reasons) + f"\n申领出口(Owner 亲自敲):\n  {hint}"
         say(f"lybra loop {task_id}: exit 5 — {msg}")
         return LoopResult(task_id, "no_envelope", exit_code_for(contract, "no_envelope"), msg, suggested_action=hint)

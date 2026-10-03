@@ -42,7 +42,8 @@
       "naming": {
         "prefix": "owner"
       },
-      "_note": "Owner operates out-of-band, not a distributed harness role (distribution.schema 无条目)."
+      "project_scope": "cross_project",
+      "_note": "Owner operates out-of-band, not a distributed harness role (distribution.schema 无条目). AIPOS-F92 件②: project_scope=cross_project —— Owner 凭据跨项目(签新项目信封/发码), 门 home 联合注册表载入时不按所在 connection.json 的项目缺省收窄(其余角色缺 projects 仍缺省为来源项目)。"
     },
     {
       "role": "owner-dispatch",
@@ -292,5 +293,13 @@
       "queue_rework"
     ],
     "envelope_identity": "PreAuthorized 一阶段放行时, 信封 agent_or_role 须覆盖驱动方(token 绑定的 agent_instance 或 role_class), 卡实例(actor)不参与身份判定"
+  },
+  "project_scope_semantics": {
+    "description": "AIPOS-F92 件②: 角色凭据的项目域缺省(门 home 联合注册表 load_unified_service_role_registry 载入时)。唯一读取口: tools/mcp_server/http_sse._role_is_cross_project(经 schema_loader.get_role_spec)。",
+    "default": "条目缺 projects 字段 = 缺省为其所在 connection.json 的来源项目(<home>/<项目>/.lybra/connection.json → [项目]; home 级 → [\"*\"])",
+    "cross_project": "roles[].project_scope=cross_project 的角色(按 role_class 或内建角色名判)缺 projects 字段时不收窄(门按「无 projects = 不按项目收窄」处理): Owner 是所有项目的所有者, 为新项目签信封 / 发码须跨项目; 显式写了 projects 的条目照写的收窄",
+    "values": [
+      "cross_project"
+    ]
   }
 }

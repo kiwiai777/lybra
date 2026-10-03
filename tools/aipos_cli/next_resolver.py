@@ -2263,6 +2263,9 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
             "branch": branch_name,
             "message": f"卡 {task_id} 解析到的产品仓 {code_repo} 不是 git 仓根(无 .git), 无法建 worktree; 出口: project.json repos/code_repo 指向真实产品仓",
         }
+    excluded = _exclude_worktree_root(code_repo, worktree_path)
+    if excluded is not None:
+        return {"ok": False, "worktree_path": "", "branch": branch_name, "message": excluded}
     workspace_root = code_repo  # 以下 git 操作全部在产品仓
 
     # 检查 worktree 是否已存在
@@ -2330,6 +2333,26 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         }
 
 
+def _exclude_worktree_root(code_repo: Path, worktree_path: Path) -> str | None:
+    """AIPOS-F92 件③: 工作树根(声明 worktree_root, 缺省 <产品仓>/.worktrees)在产品仓内时登记进该仓 .git/info/exclude
+    (既有唯一实现 git_exclude.register_git_exclude, 幂等)。否则新项目产品仓的工作树目录是未跟踪文件, finalize 合并前
+    「工作树不干净 ?? .worktrees/」必 BLOCK(靶场实撞; lybra 自身仓靠 .gitignore 掩盖)。工作树根在仓外 = 无需登记。
+    返回 None = 已登记/无需; 字符串 = 登记失败原因(调用方拒建树, fail-closed)。"""
+    from tools.aipos_cli.git_exclude import register_git_exclude
+
+    root = Path(worktree_path).parent
+    try:
+        rel = root.resolve().relative_to(Path(code_repo).resolve())
+    except ValueError:
+        return None
+    if not str(rel) or str(rel) == ".":
+        return f"工作树根 {root} 即产品仓根, 拒建(声明 worktree_root 须为仓内子目录或仓外目录)"
+    report = register_git_exclude(Path(code_repo), [f"/{rel.as_posix()}/"])
+    if not report.get("ok"):
+        return f"工作树根 {rel}/ 登记进 {code_repo} .git/info/exclude 失败: {report.get('error')}"
+    return None
+
+
 def _ensure_forensic_worktree(workspace_root: Path, audit_task_id: str, card_frontmatter: dict[str, Any]) -> dict[str, Any]:
     """AIPOS-F89 件③a(Owner 2026-10-03 裁定 A2): 审计卡认领时为被审分支 tip 建**只读 detached 取证工作树**。
 
@@ -2356,6 +2379,9 @@ def _ensure_forensic_worktree(workspace_root: Path, audit_task_id: str, card_fro
     fail["branch"] = branch
     if not (code_repo / ".git").exists():
         return {**fail, "message": f"被审卡 {reviewed} 解析到的产品仓 {code_repo} 不是 git 仓根(无 .git), 无法建取证工作树"}
+    excluded = _exclude_worktree_root(code_repo, worktree_path)
+    if excluded is not None:
+        return {**fail, "message": excluded}
 
     def git(cwd: Path, *argv: str, timeout: int = 30) -> subprocess.CompletedProcess:
         return subprocess.run(["git", *argv], cwd=cwd, capture_output=True, text=True, timeout=timeout)
@@ -2617,7 +2643,8 @@ def execute_derived_action(
 
         task_path_for_hint, _q = _find_task_in_queue(workspace_root, task_id)
         hint = mint_hint(task_id=task_id, task_fm=_read_frontmatter(task_path_for_hint) if task_path_for_hint else {},
-                         driver_actor=_driver_actor(workspace_root, fallback=DRIVER_ROLE, connection_json=connection_json))
+                         driver_actor=_driver_actor(workspace_root, fallback=DRIVER_ROLE, connection_json=connection_json),
+                         governance_root=workspace_root)
         return {
             "ok": False,
             "action_type": action_type,

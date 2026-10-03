@@ -534,7 +534,7 @@ _DEFAULT_BRANCH_INTEGRATION = {
 }
 
 
-def _load_branch_integration(repo_root: Path) -> dict[str, Any]:
+def _load_branch_integration(repo_root: Path | None) -> dict[str, Any]:
     """读 N5.branch_integration 声明 (单一真相); schema 缺失/损坏时回退默认。
 
     回退仅用于 schema 目录不存在的环境 (单元测试夹具), 且回退值与声明一致。
@@ -808,7 +808,7 @@ def _integrate_card_branch(
         {"branch_name", "action", "blocked", "message", "conflict_files"}
     """
     if branch_integration is None:
-        branch_integration = _load_branch_integration(workspace_root)
+        branch_integration = _load_branch_integration(None)  # AIPOS-F92: 声明读 Lybra 自身 schema, 不读项目产品仓
 
     branch_pattern = str(branch_integration.get("branch_pattern") or "card/{task_id}")
     merge_strategy = str(branch_integration.get("merge_strategy") or "no-ff")
@@ -1176,7 +1176,7 @@ def finalize_task(
 
     # AIPOS-F70-fix2: 比对对象 = 待整合的卡分支顶端 (裁决绑的正是它), 非 main HEAD
     # ① 先获取 branch_integration 声明
-    branch_integration = _load_branch_integration(workspace_root)
+    branch_integration = _load_branch_integration(None)  # AIPOS-F92: 声明读 Lybra 自身 schema, 不读项目产品仓
     branch_pattern = str(branch_integration.get("branch_pattern") or "card/{task_id}")
     branch_name = _branch_name_for_task(branch_pattern, task_id)
     
@@ -1252,7 +1252,9 @@ def finalize_task(
 
     # AIPOS-R6M 大项A③: 阶段粒度门票 — finalize(发布门) 前校验 stage_archive 快照存在。
     # 判据与路径从 config.schema 治理目录树读(代码零写死), 缺快照 → BLOCK。
-    stage_gate = check_stage_archive_gate(governance_root, repo_root=workspace_root)
+    # AIPOS-F92 件③: 阶段门判据读 Lybra 自身 schema(code_repo_schema_root, repo_root=None), 不读项目产品仓
+    # (原 repo_root=workspace_root: 新项目产品仓无 schema/ → 「Stage gate config load failed」首次 finalize 必 BLOCK, 靶场实撞)
+    stage_gate = check_stage_archive_gate(governance_root)
     operations.append(f"Stage gate: {stage_gate['message']}")
     if not stage_gate["passed"]:
         return {
@@ -1399,6 +1401,16 @@ def finalize_task(
     # 防止把上一张卡的 commit 误记为本卡的 finalization 证据(F58 假成功根因)
     _actual_merge_happened = integrate.get("action") == "merged"
 
+    # AIPOS-F92 件③: 部署是否适用 = 产品仓有部署机制(deploy_gate.deploy_mechanism_present: 标准位置部署脚本或 .deploy/)。
+    # 新项目普通产品仓两者皆无 → 部署不适用: 不强制部署、不判失败, finalization 记录 deploy_status=skipped(靶场实撞:
+    # 原逻辑对任何仓都强制调 <产品仓>/tools/lybra-deploy → 「script not found」→ finalize FAIL)。
+    from tools.aipos_cli.deploy_gate import deploy_mechanism_present
+
+    deploy_applicable = deploy_mechanism_present(workspace_root)
+    if not deploy_applicable:
+        operations.append(f"部署不适用: 产品仓 {workspace_root} 无部署机制(无 tools/lybra-deploy 与 .deploy/), 合并即完成(deploy_status=skipped)")
+        deploy = False
+
     # Check if there are changes to commit
     # AIPOS-R6A 靶子③: finalize push判据修正 — working tree clean ≠ already pushed
     # 需要检查 local vs origin 同步状态
@@ -1411,7 +1423,7 @@ def finalize_task(
         # 有 PASS 裁决 + 未部署 → 必须 deploy 或显式 FAIL
         deployed_info = _read_deploy_current(workspace_root)
         deployed_commit = deployed_info.get("current_commit")
-        needs_deploy = (deployed_commit != current_commit)
+        needs_deploy = deploy_applicable and (deployed_commit != current_commit)
         
         # Case 1: working tree clean + synced → 检查 deploy 状态
         if synced:

@@ -97,6 +97,34 @@ def _derive_state_from_records(governance_root: Path, task_id: str) -> str | Non
     return latest_state
 
 
+def _audit_card_verdict_landed(governance_root: Path, task_id: str, card_path: Path | None) -> bool:
+    """审计卡(next_resolver.forensic_subject 唯一判定)的终态 = 被审卡 records/audit_verdicts/<被审卡>/ 下有 audit_task_id=本卡
+    的裁决记录(门生, record_type=audit_verdict_record)。非审计卡 / 卡面不可读 / 无此裁决 = False。"""
+    if card_path is None:
+        return False
+    from tools.aipos_cli.next_resolver import forensic_subject
+
+    try:
+        fm, _body, _warnings = parse_markdown_frontmatter(card_path.read_text(encoding="utf-8"))
+    except OSError:
+        return False
+    reviewed = forensic_subject(fm if isinstance(fm, dict) else {})
+    if not reviewed:
+        return False
+    verdict_dir = governance_root / "5_tasks" / "records" / "audit_verdicts" / reviewed
+    if not verdict_dir.is_dir():
+        return False
+    for record in sorted(verdict_dir.glob("*.md")):  # 只看顶层裁决记录(report_snapshots/ 是报告快照, 不算)
+        try:
+            meta, _b, _w = parse_markdown_frontmatter(record.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if isinstance(meta, dict) and str(meta.get("record_type") or "") == "audit_verdict_record" \
+                and str(meta.get("audit_task_id") or "").strip().upper() == task_id.upper():
+            return True
+    return False
+
+
 def _get_queue_state(governance_root: Path, task_id: str) -> tuple[str | None, Path | None]:
     """获取任务在队列目录中的状态(AIPOS-F78B 件①: 唯一查找 task_loader.find_task_card; 状态名 = 目录名 = QUEUE_DIRS 键)。"""
     from tools.aipos_cli.task_loader import find_task_card
@@ -173,7 +201,10 @@ def run_state_lint(
         record_state = _derive_state_from_records(governance_root, task_id)
         
         # 检查: completed 卡必须有 closure 记录
-        if queue_state == "completed" and record_state != "completed":
+        # AIPOS-F92: 审计卡的终态记录是被审卡名下 audit_task_id=本卡的门生裁决(裁决入门即把审计卡移入 completed/,
+        # transitions N4; 审计卡无 closure)。原判据对每张已裁决审计卡报 ERROR(lybra 自身 F89R/F90R/F91R 同), 接入验收
+        # 判据「state lint 零 ERROR」因而永不成立 —— 改按审计卡自身生命周期判。
+        if queue_state == "completed" and record_state != "completed" and not _audit_card_verdict_landed(governance_root, task_id, card_path):
             issues.append({
                 "task_id": task_id,
                 "severity": "ERROR",
