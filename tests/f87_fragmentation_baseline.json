@@ -4,11 +4,11 @@
  "fixture": "tests/test_aipos_f87_fragmentation_ratchet.py",
  "fingerprint": "sha1(行文本 strip 后 utf-8)前 12 位",
  "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增)",
- "total": 87,
+ "total": 86,
  "invariants": {
   "a": {
    "rule": "产品代码不出现写死的实例名/机器名/home 路径/治理根路径/信封 id: \\.lybra\\.kiwiai-dev|kiwiai-dev|/home/kiwi|~/projects/lybra|2_projects/lybra|pol_lybra_",
-   "count": 55,
+   "count": 54,
    "entries": [
     {
      "file": "agents/harness/pi/lybra-loop/lybra-loop.ts",
@@ -107,13 +107,6 @@
      "fp": "cebb88c9a8da",
      "item": "H5",
      "text": "pump_run_parser.add_argument(\"--executor-instance\", default=None, help=\"[AIPOS-332] 执行体实例名(默认 <role>.lybra.kiwiai-dev)\")"
-    },
-    {
-     "file": "tools/aipos_cli/aipos_cli.py",
-     "line": 4183,
-     "fp": "4f11ad436b18",
-     "item": "H5",
-     "text": "\"owner_policy_ref\": getattr(args, \"owner_policy_ref\", \"pol_lybra_dev_9\"),"
     },
     {
      "file": "tools/aipos_cli/audit_derivation.py",

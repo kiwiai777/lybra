@@ -21,6 +21,16 @@ from tools.aipos_cli.draft_validator import validate_draft_file
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.queue_mutation import render_task_markdown
 
+
+def _f90_single_root_product_repo(root: Path) -> None:
+    """AIPOS-F90 件①(Owner 2026-10-02 裁定「门认领建工作树失败 = 拒绝认领」): code 卡认领前门先经唯一实现建卡工作树;
+    靶场无产品仓声明时治理根兼作单根产品仓(推导核既有规则), 故靶场根须是带 main 提交的 git 仓。"""
+    import subprocess as _sp
+
+    _sp.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+    _sp.run(["git", "-C", str(root), "-c", "user.email=f90@test", "-c", "user.name=f90", "commit", "-q", "--allow-empty", "-m", "init"],
+            check=True)
+
 FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures"
 
 
@@ -167,6 +177,7 @@ class BoardAdapterExecuteIntegrationTests(unittest.TestCase):
         self.assertFalse(traversal["ok"])
 
     def test_queue_claim_flow_and_failures(self) -> None:
+        _f90_single_root_product_repo(self.repo_root)
         self.copy_fixture("queue/pending_assigned_to_dev_codex.md", "5_tasks/queue/pending/pending_assigned_to_dev_codex.md")
         dry = claim_task(task_id="AIPOS-39-QUEUE-CODEX", actor="dev.codex.local", dry_run=True, repo_root=self.repo_root)
         self.assertIn("dry_run_id", dry)

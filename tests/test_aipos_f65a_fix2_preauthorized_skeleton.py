@@ -15,6 +15,16 @@ import tempfile
 from pathlib import Path
 
 
+
+def _f90_single_root_product_repo(root: Path) -> None:
+    """AIPOS-F90 件①(Owner 2026-10-02 裁定「门认领建工作树失败 = 拒绝认领」): code 卡认领前门先经唯一实现建卡工作树;
+    靶场无产品仓声明时治理根兼作单根产品仓(推导核既有规则), 故靶场根须是带 main 提交的 git 仓。"""
+    import subprocess as _sp
+
+    _sp.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+    _sp.run(["git", "-C", str(root), "-c", "user.email=f90@test", "-c", "user.name=f90", "commit", "-q", "--allow-empty", "-m", "init"],
+            check=True)
+
 def test_f65a_fix2_preauthorized_claim_creates_skeleton():
     """验收① 靶场PreAuthorized一段式认领 → 骨架在声明位且内容=统一模板"""
     from tools.aipos_cli.queue_mutation import mutate_queue_task
@@ -90,6 +100,7 @@ task_class: simple
         assert not skeleton_path.exists(), "骨架在claim前不应存在"
         
         # 执行 PreAuthorized 一段式认领 (with_records=True触发记录写入+骨架创建)
+        _f90_single_root_product_repo(workspace)  # AIPOS-F90 件①: code 卡认领前门先建卡工作树(失败=拒认领)
         result = mutate_queue_task(
             repo_root=workspace,
             action="claim",

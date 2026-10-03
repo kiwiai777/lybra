@@ -140,7 +140,7 @@ class GateDouble:
     def __call__(self, derivation: dict, workspace_root: Path, connection_json=None) -> dict:
         from tools.aipos_cli.next_resolver import _action_type_for_command
 
-        cmd = derivation["command"]
+        cmd = derivation["command"]  # AIPOS-F90 件②: return/verdict 步为产物入口命令(--kind 映射动作)
         action = _action_type_for_command(cmd)
         card = derivation["task_id"]
         self.calls.append((action, card))
@@ -586,7 +586,9 @@ def test_f73d_return_skeleton_is_not_a_return_artifact(gov: Path):
     assert d["derivable"] is False and "RETURN.md 工作产物" in d["missing_records"]
     _write(gov / "task_cards" / TASK / "RETURN.md", _substantive_return(TASK))
     d = derive_next_step(TASK, gov)
-    assert d["derivable"] and "queue return" in d["command"] and '--result-summary "完成"' in d["command"]
+    # AIPOS-F90 件②: 驱动方见产物入口命令(--kind return); 入口内部执行的薄壳命令在 shell_command
+    assert d["derivable"] and "lybra artifact ingest" in d["command"] and "--kind return" in d["command"], d["command"]
+    assert "queue return" in d["shell_command"] and '--result-summary "完成"' in d["shell_command"]
 
 
 def test_f73d_audit_report_candidates_from_n4_declaration(gov: Path):
@@ -597,8 +599,10 @@ def test_f73d_audit_report_candidates_from_n4_declaration(gov: Path):
     assert derive_next_step(AUDIT, gov)["derivable"] is False
     _write(gov / "task_cards" / AUDIT / "audit_report.md", _fm({"reviewed_task_id": TASK, "verdict": "PASS_WITH_NOTES", "actor": AUDITOR}, "# a\n"))
     d = derive_next_step(AUDIT, gov)
-    assert d["derivable"] and "lybra audit-verdict" in d["command"] and "--verdict PASS_WITH_NOTES" in d["command"]
-    assert check_command_parses(d["command"])[0]
+    # AIPOS-F90 件②: 驱动方见产物入口命令(--kind verdict); 入口内部执行的薄壳命令在 shell_command
+    assert d["derivable"] and "lybra artifact ingest" in d["command"] and "--kind verdict" in d["command"], d["command"]
+    assert "lybra audit-verdict" in d["shell_command"] and "--verdict PASS_WITH_NOTES" in d["shell_command"]
+    assert check_command_parses(d["command"])[0] and check_command_parses(d["shell_command"])[0]
 
 
 if __name__ == "__main__":

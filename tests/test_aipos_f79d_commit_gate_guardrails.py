@@ -117,6 +117,16 @@ def violations_block(text: str) -> str:
 # ---------------------------------------------------------------------------
 # 件①: dry-run 拒因 == 正式拒因(逐字), .py 案与 record_type 缺失案
 # ---------------------------------------------------------------------------
+
+def _f90_single_root_product_repo(root: Path) -> None:
+    """AIPOS-F90 件①(Owner 2026-10-02 裁定「门认领建工作树失败 = 拒绝认领」): code 卡认领前门先经唯一实现建卡工作树;
+    靶场无产品仓声明时治理根兼作单根产品仓(推导核既有规则), 故靶场根须是带 main 提交的 git 仓。"""
+    import subprocess as _sp
+
+    _sp.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+    _sp.run(["git", "-C", str(root), "-c", "user.email=f90@test", "-c", "user.name=f90", "commit", "-q", "--allow-empty", "-m", "init"],
+            check=True)
+
 def test_piece1_py_file_dry_run_and_formal_reject_with_identical_reason(rig):
     repo, lybra = rig["repo"], rig["lybra"]
     (lybra / "notes" / "tool.py").write_text("print('x')\n", encoding="utf-8")
@@ -327,6 +337,7 @@ def test_piece4_cli_claim_with_records_writes_session_only_at_declared_position(
 
     task_id = "TEST-F79D-001"
     ws = _workspace(tmp_path, task_id)
+    _f90_single_root_product_repo(ws)  # AIPOS-F90 件①: code 卡认领前门先建卡工作树(失败=拒认领)
     result = mutate_queue_task(repo_root=ws, action="claim", task_id=task_id, actor="test-agent", dry_run=False, with_records=True, profiles=[])
     assert result.get("wrote") is True, result
 
