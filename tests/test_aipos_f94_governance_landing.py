@@ -402,7 +402,12 @@ def test_discipline_no_swallowed_exceptions_and_registered_in_runall():
 
     funcs = [gc.card_own_paths, gc.task_scope_candidates, gc.resolve_task_scope, gc.governance_landing, gc.task_landing,
              gc._task_scope_selection, gc.governance_commit, next_resolver._derive_n6_landing, next_resolver._run_cli_in_process,
-             loop_driver._landing, loop_driver._drive, state_lint.governance_uncommitted_issues, onboarding.project_new_products]
+             loop_driver._landing, loop_driver._drive, state_lint.governance_uncommitted_issues, onboarding.project_new_products,
+             gc.n6_landing_declaration, gc.governance_commit_cli, gc.non_git_exit_command, state_lint.check_severity,
+             onboarding.governance_repo_status]
+    from tools.aipos_cli import enrollment, governance_add
+
+    funcs += [governance_add.governance_doc_frontmatter, enrollment._append_enrollment_trail]
     for fn in funcs:
         src = inspect.getsource(fn)
         assert "except Exception" not in src and "except:" not in src, fn.__name__
@@ -426,3 +431,120 @@ def test_item3_lookup_scope_same_answers_as_per_card_lookup(rig: dict):
         find_task_card(gov, OTHER)
     with pytest.raises(AmbiguousTaskCard):
         find_task_card(gov, OTHER)
+
+
+# ===========================================================================
+# 补完 N1/N2/N5/N6(顾问 2026-10-04: 不转债, 车道补入 schema/ 与 templates/)
+# ===========================================================================
+
+def test_n1_landing_step_declared_once_and_code_reads_it(monkeypatch: pytest.MonkeyPatch):
+    from tools.aipos_cli import loop_driver
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.aipos_cli.next_resolver import _action_type_for_command, _transition_node
+
+    decl = _transition_node("N6")["landing"]
+    _show(f"[N1·transitions nodes.N6.landing] action_type={decl['action_type']} verb={decl['verb']} "
+          f"command_template={decl['command_template']} envelope={decl['envelope'][:40]}…")
+    loop = load_loop_contract()
+    assert decl["action_type"] in loop["envelope"]["allowed_verbs"]  # 独立授权, 声明里写明
+    assert "governance_commit" in loop["envelope"]["allowed_verbs_note"]
+    assert "治理已落账" in loop["exit_codes"]["completed"]["meaning"] and "落账" in loop["exit_codes"]["gate_rejected"]["meaning"]
+    cmd = gc.governance_commit_command(TASK, DRIVER, "/tmp/g")
+    assert cmd == decl["command_template"].format(task_id=TASK, actor=DRIVER, governance_root="/tmp/g")
+    assert _action_type_for_command(cmd) == decl["action_type"]
+    src = inspect.getsource(loop_driver)
+    assert "_ENVELOPE_VERB_FOR_ACTION" not in src and '"governance_commit"' not in src  # 代码不再私定授权映射/动作名
+    # 改声明 → 渲染跟随(单源)
+    from tools.aipos_cli import next_resolver
+
+    real = next_resolver._transition_node
+    monkeypatch.setattr(next_resolver, "_transition_node",
+                        lambda nid: {**real(nid), "landing": {**decl, "command_template": decl["command_template"] + " --no-push"}} if nid == "N6" else real(nid))
+    assert gc.governance_commit_command(TASK, DRIVER, "/tmp/g").endswith(" --no-push")
+    monkeypatch.setattr(next_resolver, "_transition_node", lambda nid: {k: v for k, v in real(nid).items() if k != "landing"} if nid == "N6" else real(nid))
+    from tools.schema_loader import SchemaLoadError
+
+    with pytest.raises(SchemaLoadError):
+        gc.governance_commit_command(TASK, DRIVER, "/tmp/g")
+
+
+def test_n2_lint_severity_from_declaration(rig: dict, monkeypatch: pytest.MonkeyPatch):
+    from tools import schema_loader
+    from tools.aipos_cli import state_lint
+    from tools.schema_loader import SchemaLoadError
+
+    gov = rig["gov"]
+    _closed_card(gov)
+    assert not hasattr(state_lint, "GOVERNANCE_UNCOMMITTED_SEVERITY")
+    declared = schema_loader.load_schema("transitions")["state_consistency"]["check_severity"][GOVERNANCE_UNCOMMITTED]["severity"]
+    assert {i["severity"] for i in _gu(gov).values()} == {declared}
+    real = schema_loader.load_schema
+
+    def patched(name, *a, sev="ERROR", **kw):
+        data = real(name, *a, **kw)
+        if name == "transitions":
+            data = json.loads(json.dumps(data))
+            if sev is None:
+                data["state_consistency"].pop("check_severity")
+            else:
+                data["state_consistency"]["check_severity"][GOVERNANCE_UNCOMMITTED]["severity"] = sev
+        return data
+
+    monkeypatch.setattr(schema_loader, "load_schema", patched)
+    assert {i["severity"] for i in _gu(gov).values()} == {"ERROR"}  # 改声明 → 级别跟随
+    monkeypatch.setattr(schema_loader, "load_schema", lambda name, *a, **kw: patched(name, *a, sev=None, **kw))
+    with pytest.raises(SchemaLoadError):
+        run_state_lint(gov)  # 缺声明 = fail-closed
+
+
+def test_n5_guide_inits_governance_repo_when_home_not_git_and_non_git_rejects_carry_exit(tmp_path: Path):
+    from tools.aipos_cli.onboarding import generate_onboarding_guide
+
+    home = tmp_path / "plain home"
+    guide = generate_onboarding_guide("probe-n5", home_root=str(home), actor="advisor.probe-n5.h")
+    lines = [l for l in guide["steps"][0]["command"].splitlines() if l.strip() and not l.startswith("#")]
+    _show("[N5·非 git home 第 1 步]\n" + guide["steps"][0]["command"])
+    exit_cmd = gc.non_git_exit_command(home / "probe-n5")
+    assert guide["governance_repo"] == {"git": False, "repo_root": None}
+    assert lines[0] == exit_cmd and lines[0].startswith("lybra home git-init --home-root ")
+    assert all(check_command_parses(l) == (True, "") for l in lines if l.startswith("lybra"))
+    git_home = tmp_path / "git-home"
+    init_governance_repo(git_home)
+    g2 = generate_onboarding_guide("probe-n5", home_root=str(git_home), actor="advisor.probe-n5.h")
+    assert g2["governance_repo"]["git"] and "home git-init" not in g2["steps"][0]["command"]
+    # 非 git 治理根: 推导核 / 落账命令 / lint 拒因都带同一出口
+    nogit = tmp_path / "nogit" / "gov"
+    (nogit / "5_tasks" / "queue" / "completed").mkdir(parents=True)
+    _write(nogit / "project.json", json.dumps({"project": "gov", "config_version": 1}))
+    _closed_card(nogit)
+    want = gc.non_git_exit_command(nogit)
+    d = derive_next_step(TASK, nogit)
+    blocked = gc.governance_commit(nogit, TASK, DRIVER)
+    lint = _gu(nogit)[TASK]["message"]
+    _show(f"[N5·非 git 拒因] derive.suggested={d['suggested_action']}\n  commit={blocked['message'][:300]}\n  lint={lint[:300]}")
+    assert want in d["suggested_action"] and want in blocked["message"] and want in lint
+    assert blocked["verdict"] == "BLOCK" and blocked["committed"] is False
+
+
+def test_n6_gate_written_governance_docs_carry_declared_frontmatter_and_headless_is_identified(tmp_path: Path):
+    from tools.aipos_cli.enrollment import _append_enrollment_trail
+    from tools.aipos_cli.governance_add import governance_doc_frontmatter
+    from tools.aipos_cli.governance_guardrails import check_entries, load_guardrail_declarations
+
+    decls = load_guardrail_declarations(REPO_ROOT / "schema")
+    repo = tmp_path / "repo"
+    gov = repo / "proj"
+    (gov / "governance").mkdir(parents=True)
+    (gov / "5_tasks").mkdir()
+    trail = _append_enrollment_trail(gov, action="create", code_id="c1", role="executor", instance="e.p.h", by="pol", reason="t")
+    text = trail.read_text(encoding="utf-8")
+    _show(f"[N6·门写 enrollment_log 首建]\n{text}")
+    assert text.startswith(governance_doc_frontmatter() + "\n# Enrollment Codes Log")
+    rep = check_entries(repo, [("A", "proj/governance/enrollment_log.md")], decls, current_branch="main")
+    assert rep.ok, rep.violations
+    _append_enrollment_trail(gov, action="use", code_id="c1", role="executor", instance="e.p.h", by="x", reason="t")
+    assert trail.read_text(encoding="utf-8").count("---") == 2  # 追加不重复写头
+    # 存量无头文件(旧写侧形 / probe 现场形)被提交门 B② 识别(只读判据)
+    (gov / "governance" / "decision_log.md").write_text("# proj Decision Log\n", encoding="utf-8")
+    old = check_entries(repo, [("A", "proj/governance/decision_log.md")], decls, current_branch="main")
+    assert [v["check"] for v in old.violations] == ["B②"]

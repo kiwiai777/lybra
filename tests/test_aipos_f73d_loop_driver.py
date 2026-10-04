@@ -229,7 +229,7 @@ def test_f73d_item2_exit_codes_declared_in_verbs_schema_single_place():
     props = loop["parameters"]["properties"]
     assert props["max_steps"]["default"] == 20
     assert props["max_wait"]["default"] == 1800
-    assert set(loop["envelope"]["allowed_verbs"]) == {"claim", "return", "dispatch", "verdict", "finalize", "close"}
+    assert set(loop["envelope"]["allowed_verbs"]) == {"claim", "return", "dispatch", "verdict", "finalize", "close", "governance_commit"}  # AIPOS-F94: N6 落账步独立授权
     contract = load_loop_contract()
     assert {k: exit_code_for(contract, k) for k in codes} == codes
     # 代码里不写死退出码: loop_driver 只经 exit_code_for 取码
