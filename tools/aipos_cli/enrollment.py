@@ -325,7 +325,10 @@ def _append_enrollment_trail(
     line = f"- {ts}  {action}  code_id={code_id}  role={role}  {inst_str}  by={by}  reason={reason or '(none)'}\n"
     with trail.open("a", encoding="utf-8") as fh:
         if trail.stat().st_size == 0:
-            fh.write("# Enrollment Codes Log (append-only)\n\n")
+            # AIPOS-F94 N6: 治理文档首建带声明 frontmatter(governance_add.governance_doc_frontmatter 唯一渲染), 过治理仓提交门 B②
+            from tools.aipos_cli.governance_add import governance_doc_frontmatter
+
+            fh.write(governance_doc_frontmatter() + "\n# Enrollment Codes Log (append-only)\n\n")
         fh.write(line)
     return trail
 
