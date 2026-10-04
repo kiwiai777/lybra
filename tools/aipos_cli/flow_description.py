@@ -359,14 +359,14 @@ def _find_task_card(workspace_root: Path, task_id: str) -> Path | None:
     """Find a task card by ID (AIPOS-F78B 件①: 唯一查找 task_loader.find_task_card, frontmatter task_id 匹配)。"""
     from tools.aipos_cli.task_loader import find_task_card
 
-    return find_task_card(workspace_root, task_id, states=("pending", "claimed", "blocked", "completed"))[0]
+    return find_task_card(workspace_root, task_id)[0]  # AIPOS-F104 件②: 全部队列目录(task_loader.QUEUE_STATES 投影; 原手写 4 值漏 withdrawn)
 
 
 def _infer_task_status(workspace_root: Path, task_id: str) -> str:
     """Infer the current status of a task from queue location (同一查找, 状态=所在目录名)。"""
     from tools.aipos_cli.task_loader import find_task_card
 
-    return find_task_card(workspace_root, task_id, states=("pending", "claimed", "blocked", "completed"))[1] or "unknown"
+    return find_task_card(workspace_root, task_id)[1] or "unknown"  # AIPOS-F104 件②: 同上
 
 
 def _has_return_record(workspace_root: Path, task_id: str) -> bool:
