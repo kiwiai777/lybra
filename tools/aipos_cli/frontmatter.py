@@ -299,6 +299,7 @@ class _BlockParser:
         j: int | None = idx
         while j is not None:
             start = j
+            path = ""
             try:
                 line_indent, text = self._line(j)
                 if line_indent < indent:
@@ -324,8 +325,11 @@ class _BlockParser:
                 path = f"{parent_path}.{key}" if parent_path else str(key)
                 value, nxt = self._parse_value(rest, j, indent, path, in_mapping=True)
             except FrontmatterUnsupportedError as exc:
+                if not exc.key_path and path:
+                    # a line-level error (e.g. tab indentation) inside this entry's value: name the entry
+                    exc = FrontmatterUnsupportedError(exc.line_no, path, exc.reason, yaml_invalid=exc.yaml_invalid)
                 if not (top and self.salvage and exc.yaml_invalid):
-                    raise
+                    raise exc
                 # salvage: drop this top-level entry (absent, never None) and resume at the next top-level key
                 self.salvaged.append(exc)
                 j = self._resync(start + 1, indent)

@@ -488,7 +488,7 @@ REJECTION_CASES: list[tuple[str, str, str, int, bool, dict | None]] = [
      "result_summary", 2, True, {"task_id": "T", "status": "claimed"}),
     ("R13 mapping value inside plain scalar", "lane:\n  repo: a: b\nharness: pi", "lane.repo", 2, True, {"harness": "pi"}),
     ("R14 unexpected indentation (stray line drops the entry before it)", "a:\n    b: 1\n  c: 2\nd: 3", "a", 3, True, {"d": 3}),
-    ("R15 tab indentation", "lane:\n\trepo: x\nh: 1", "", 2, True, {"h": 1}),
+    ("R15 tab indentation", "lane:\n\trepo: x\nh: 1", "lane", 2, True, {"h": 1}),
     ("R16 unterminated quoted scalar", "a: 1\nb: 'open", "b", 2, True, {"a": 1}),
     ("R17 unknown double-quoted escape", 'a: "bad \\q"\nb: 1', "a", 1, True, {"b": 1}),
     ("R18 text after quoted scalar", "a: 'x' y\nb: 1", "a", 1, True, {"b": 1}),
