@@ -28,7 +28,6 @@ SUPPORTED_OPERATIONS = {
     "owner_decision_record",
     "owner_verification_record",
     "bench_audit_submit",
-    "workspace_init",
     "audit_dispatch",
     "audit_verdict",
 }
