@@ -5,6 +5,8 @@
 pump(seconds) 作为唯一哨兵 run_fs_watch 的 sleeper: select 事件驱动阻塞读输出至多 seconds 秒, 非 sleep 自旋。
 terminate_group: SIGTERM → 等声明秒数 → SIGKILL 整组(含孙进程)。无守护/调度/心跳/常驻: 进程只活在一次等待内。
 token/凭据永不上屏: 凭据字样所在行整行隐去, 长不透明串打码。
+AIPOS-F110: transport=remote(跨机工位)同一分层——本地进程 = ssh(声明 verbs.schema lybra_loop.launch.remote), 远端固定脚本在工位目录
+以新进程组起同一 harness 模板, kickoff 经 ssh stdin 原字节传入, 组号首行回传; 终止 = 经 ssh 对远端组 TERM→KILL 再清本地 ssh 组。
 """
 from __future__ import annotations
 
