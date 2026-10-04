@@ -7,7 +7,8 @@ yaml.safe_load for:
 - real records from the actual emitters (return w/ artifact_refs, audit-verdict
   w/ evidence_refs+bool, publish — the published card carries the two-level ``lane`` map);
 - a real task card (examples/sample_workspace/.../sample_task.md);
-- every real bundled templates/*/manifest.md (nested maps + scalar lists);
+- (the former templates/*/manifest.md corpus was deleted with templates/ in AIPOS-F105; its shapes —
+  indented scalar list S7 and depth-1 nested map with bools S9 — stay covered by the shape inventory below);
 - the AIPOS-F98 shape inventory (map-in-map, list-in-map, seq-of-maps, empty ``[]``/``{}``,
   quoted / multi-line quoted scalars, YAML 1.1 plain-scalar resolution, comments) and
   yaml.safe_dump / stdlib-emitter output of product-shaped metadata with hostile values.
@@ -37,7 +38,6 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-TEMPLATES_DIR = REPO_ROOT / "templates"
 SAMPLE_TASK = REPO_ROOT / "examples" / "sample_workspace" / "5_tasks" / "queue" / "pending" / "sample_task.md"
 
 # Capture yaml.safe_load BEFORE blocking it.
@@ -146,12 +146,6 @@ class FrontmatterZerodepParityTests(unittest.TestCase):
     def test_sample_task_card(self) -> None:
         self.assertTrue(SAMPLE_TASK.exists(), f"sample_task.md not found at {SAMPLE_TASK}")
         self._assert_parity("sample_task_card", SAMPLE_TASK.read_text(encoding="utf-8"))
-
-    def test_every_manifest(self) -> None:
-        manifests = list(TEMPLATES_DIR.rglob("manifest.md"))
-        self.assertGreater(len(manifests), 0, "No manifests found")
-        for path in sorted(manifests):
-            self._assert_parity(path.name, path.read_text(encoding="utf-8"))
 
     def test_return_record_with_artifact_refs(self) -> None:
         from tools.aipos_cli.record_writer import build_mcp_return_record_markdown

@@ -3,7 +3,7 @@ AIPOS-288 FIX-5: board_config label_en contract test.
 
 Verifies:
   a) Frontend renders workspace label with EN preference (label_en > label fallback)
-  b) Server-side init writes label_en when provided
+  b) Project import (the remaining board writer of board_config; server-side init was retired in AIPOS-F105) writes label_en when provided
   c) Backward compatibility: workspaces without label_en still render correctly
   d) All 4 render points use the same label logic (overview list, detail H1, portal, browser title)
 """
@@ -134,73 +134,72 @@ def test_detail_renders_uses_helper():
         )
 
 
-def test_server_init_accepts_label_en():
+def test_server_import_accepts_label_en():
     """
-    AIPOS-288 FIX-5b: _workspace_init_route must accept label_en and write to board_config.
+    AIPOS-288 FIX-5b (retargeted by AIPOS-F105): the board's server-side workspace init route was retired
+    (single project-creation entry = lybra onboarding guide + lybra project new); the remaining board writer
+    of board_config, _project_structure_import_route, must accept label_en and write it to the workspace entry.
     """
     if not APP_PY.exists():
         raise AssertionError("app.py not found")
-    
+
     content = APP_PY.read_text(encoding='utf-8')
-    
-    # Find _workspace_init_route function
+    assert "_workspace_init_route" not in content, "AIPOS-F105: board workspace init route must stay retired"
+
     match = re.search(
-        r'def\s+_workspace_init_route\s*\([^)]*\)\s*->.*?:\s*(.*?)(?=\ndef\s+)',
+        r'def\s+_project_structure_import_route\s*\([^)]*\)\s*->.*?:\s*(.*?)(?=\ndef\s+)',
         content,
         re.DOTALL
     )
     if not match:
-        raise AssertionError("AIPOS-288 FIX-5b: _workspace_init_route function not found")
-    
+        raise AssertionError("AIPOS-288 FIX-5b: _project_structure_import_route function not found")
+
     func_body = match.group(1)
-    
-    # Check label_en extraction from payload
+
     if not re.search(r'label_en\s*=.*payload\.get\(["\']label_en["\']', func_body):
         raise AssertionError(
-            "AIPOS-288 FIX-5b: _workspace_init_route must extract label_en from payload"
+            "AIPOS-288 FIX-5b: _project_structure_import_route must extract label_en from payload"
         )
-    
-    # Check label_en is written to workspace entry (either dict literal or subscript assignment)
+
     has_label_en_write = (
         re.search(r'["\']label_en["\']\s*:\s*label_en', func_body) or
         re.search(r'ws_entry\[["\']label_en["\']\]\s*=\s*label_en', func_body)
     )
     if not has_label_en_write:
         raise AssertionError(
-            "AIPOS-288 FIX-5b: _workspace_init_route must write label_en to workspace entry"
+            "AIPOS-288 FIX-5b: _project_structure_import_route must write label_en to workspace entry"
         )
 
 
 def test_frontend_wizard_sends_label_en():
     """
-    AIPOS-288 FIX-5b: overview.html serverSideInit must send label_en in payload.
+    AIPOS-288 FIX-5b (retargeted by AIPOS-F105): overview.html confirmImport must send label_en in payload
+    (serverSideInit was retired with the board init entry).
     """
     if not OVERVIEW_HTML.exists():
         raise AssertionError("overview.html not found")
-    
+
     content = OVERVIEW_HTML.read_text(encoding='utf-8')
-    
-    # Find serverSideInit function
+    assert "serverSideInit" not in content, "AIPOS-F105: board server-side init must stay retired"
+
     match = re.search(
-        r'async\s+function\s+serverSideInit\s*\([^)]*\)\s*\{(.*?)(?=\n\s{4}addProjectBtn\.addEventListener)',
+        r'async\s+function\s+confirmImport\s*\([^)]*\)\s*\{(.*?)(?=\n\s{4}previewImportBtn\.addEventListener)',
         content,
         re.DOTALL
     )
     if not match:
-        raise AssertionError("AIPOS-288 FIX-5b: serverSideInit function not found")
-    
+        raise AssertionError("AIPOS-288 FIX-5b: confirmImport function not found")
+
     func_body = match.group(1)
-    
-    # Check for label_en input extraction
+
     if "projectNameEnInput" not in func_body:
         raise AssertionError(
-            "AIPOS-288 FIX-5b: serverSideInit must read projectNameEnInput"
+            "AIPOS-288 FIX-5b: confirmImport must read projectNameEnInput"
         )
-    
-    # Check for label_en in payload
+
     if not re.search(r'payload\.label_en\s*=', func_body):
         raise AssertionError(
-            "AIPOS-288 FIX-5b: serverSideInit must include label_en in API payload"
+            "AIPOS-288 FIX-5b: confirmImport must include label_en in API payload"
         )
 
 
