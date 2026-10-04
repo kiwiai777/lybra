@@ -987,6 +987,15 @@ else
   echo "✗ tests/test_aipos_f95_harness_launch.py FAIL"
   overall=1
 fi
+# AIPOS-F95: 假 harness 辅助脚本(被上节夹具按 launch 模板拉起)须可编译
+echo
+echo "── tests/fake_harness.py (F95 假 harness 辅助脚本可编译) ────────────────────────────────────────────────────"
+if python3 -m py_compile "$REPO_ROOT/tests/fake_harness.py"; then
+  echo "✓ tests/fake_harness.py PASS"
+else
+  echo "✗ tests/fake_harness.py FAIL"
+  overall=1
+fi
 
 echo
 echo "========================================================"
