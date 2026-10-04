@@ -1050,7 +1050,8 @@ fi
 # 第二推导核死函数 git grep 零 ② 门工具名/scope/可见性全量声明在 verbs.schema(不变量 b 清零), 执法·可见性·verb_contract 读声明(改声明即改行为)
 # ③ artifact ingest / agent watch 退出码只在 verbs.schema 声明, 代码与 CLI help 读声明 ④ 自描述与门指南示例改占位;
 # 另登记本卡改动的既有夹具: tests/test_aipos_f30_envelope_error_info_init.py(patch 点随 scope 读取口改名) 与
-# tools/mcp_server/tests/test_scope_reachability.py 中按真实凭据走门执法的节点(其 scope 枚举改读声明; 同文件另 3 个节点在 main 上即红, 见 F101 RETURN 缺口, 不登记)
+# tools/mcp_server/tests/test_scope_reachability.py 中按真实凭据走门执法的节点(其 scope 枚举改读声明; 同文件另 3 个节点在 main 上即红, 见 F101 RETURN 缺口, 不登记)、
+# tools/mcp_server/tests/test_aipos330_verb_contract.py 的 TestS6Extensibility(未声明门工具 fail-closed、声明即入注册表)与 TestGateGuidanceTool
 echo
 echo "── tests/test_aipos_f101_derivation_verb_single_source.py + tests/test_aipos_f30_envelope_error_info_init.py + tools/mcp_server/tests/test_scope_reachability.py(节点) (F101 门指南=推导核·死函数零·门工具 scope 全声明且执法/可见性跟随声明·退出码只在声明·示例无 lybra 身份) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f101_derivation_verb_single_source.py" \
@@ -1064,6 +1065,8 @@ if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f101_d
     "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_set_maps_to_dry_run_tools" \
     "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_every_exempt_scope_reachable_via_path_b" \
     "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_scope_denied_without_capability" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_aipos330_verb_contract.py::TestS6Extensibility" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_aipos330_verb_contract.py::TestGateGuidanceTool" \
     -v --tb=short; then
   echo "✓ tests/test_aipos_f101_derivation_verb_single_source.py PASS"
 else
