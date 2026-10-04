@@ -5,7 +5,7 @@
 pump(seconds) 作为唯一哨兵 run_fs_watch 的 sleeper: select 事件驱动阻塞读输出至多 seconds 秒, 非 sleep 自旋。
 terminate_group: SIGTERM → 等声明秒数 → SIGKILL 整组(含孙进程)。无守护/调度/心跳/常驻: 进程只活在一次等待内。
 token/凭据永不上屏: 凭据字样所在行整行隐去, 长不透明串打码。
-AIPOS-F107 件①: loop 的中断信号 = SIGINT/SIGTERM/SIGHUP(LOOP_SIGNALS 唯一声明; ssh 断线 = SIGHUP, 与 SIGTERM 同语义: 先清进程组再按该信号退出);
+AIPOS-F107 件①: loop 的中断信号 = SIGINT/SIGTERM/SIGHUP(loop_signals() 唯一声明; ssh 断线 = SIGHUP, 与 SIGTERM 同语义: 先清进程组再按该信号退出);
 拉起等待与清理期 SIGPIPE 忽略。输出端断开(ssh 断线后终端 EIO / 管道读端关闭 BrokenPipeError)→ TolerantOutput 转为静默丢弃, 不打断清理。
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 
 class LoopInterrupted(Exception):
-    """拉起等待期间 loop 收到 LOOP_SIGNALS 之一(SIGINT/SIGTERM/SIGHUP): 进程组已终止, 调用方按该信号退出(不新增退出码)。"""
+    """拉起等待期间 loop 收到 loop_signals() 之一(SIGINT/SIGTERM/SIGHUP): 进程组已终止, 调用方按该信号退出(不新增退出码)。"""
 
     def __init__(self, signum: int) -> None:
         super().__init__(f"signal {signum}")
@@ -216,7 +216,7 @@ def loop_signals() -> tuple[int, ...]:
 
 @contextlib.contextmanager
 def _installed(handler: Any) -> Any:
-    """LOOP_SIGNALS 装 handler、SIGPIPE 置忽略(写断开转 OSError, 由 TolerantOutput 丢弃), 退出上下文恢复原处置。非主线程不装。"""
+    """loop_signals() 装 handler、SIGPIPE 置忽略(写断开转 OSError, 由 TolerantOutput 丢弃), 退出上下文恢复原处置。非主线程不装。"""
     import signal as _signal
     import threading
 
@@ -234,7 +234,7 @@ def _installed(handler: Any) -> Any:
 
 @contextlib.contextmanager
 def signals_raise_interrupt() -> Any:
-    """拉起等待期间: LOOP_SIGNALS → LoopInterrupted(调用方 finally 先清进程组)。非主线程不装(signal 只能主线程装)。"""
+    """拉起等待期间: loop_signals() → LoopInterrupted(调用方 finally 先清进程组)。非主线程不装(signal 只能主线程装)。"""
 
     def _handler(signum: int, _frame: Any) -> None:
         raise LoopInterrupted(signum)
@@ -245,7 +245,7 @@ def signals_raise_interrupt() -> Any:
 
 @contextlib.contextmanager
 def signals_deferred() -> Any:
-    """拉起/清进程组期间: LOOP_SIGNALS 只记下(不打断), 退出上下文后恢复原处置; 调用方据记录再抛 LoopInterrupted。"""
+    """拉起/清进程组期间: loop_signals() 只记下(不打断), 退出上下文后恢复原处置; 调用方据记录再抛 LoopInterrupted。"""
     received: list[int] = []
 
     def _record(signum: int, _frame: Any) -> None:
