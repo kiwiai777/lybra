@@ -10,10 +10,11 @@
  * 夹具层(活体经 bin, 工作树 bin/lybra):
  *  A. project.json 反向假注册表(hbj-coder→auditor)不生效——门注册表赢
  *     (bin 活体证明 project.json 变体已死);
- *  B. 门注册表改 hbj-coder class→匹配跟随(翻转 BLOCK/还原绿, 验完还原);
+ *  B(AIPOS-F103 件④ 改写): 门注册表改 hbj-coder class → 信封挑选不变(注册表 class 不是信封判据,
+ *     唯一判据 autonomy_policy.match_claim_envelope: 信封 agent_or_role 精确覆盖卡面实例);
  *  C. 源级断言: custom_roles.py 零 project.json 读取面 + 门注册表统一加载器
- *     在位 + 分发与信封解析同模块来源(单源);
- *  D. 源级断言: policy_resolver 生产入口无注册表参数(参数仅测试注入)。
+ *     在位 + 分发读 custom_roles(单源);
+ *  D(AIPOS-F103 件④ 改写): 源级断言: 信封挑选唯一实现 select_envelope 不读角色注册表。
  *
  * 跑法: node tests/ts/f32b-gate-registry-source.test.ts (依赖 python3 + bin/lybra)
  */
@@ -99,6 +100,7 @@ function makeGateHome(root: string): { ws: string; registry: string } {
           code_repo: `/tmp/nonexistent/${w === ws ? "chris-huibojin-fx" : "lybra-fx"}`,
           config_version: 1,
           project: w === ws ? "chris-huibojin-fx" : "lybra-fx",
+          ...(w === ws ? { manual_gate_mode: true } : {}), // AIPOS-F73C: 人肉 gate 项目卡面才保留「认领与交回」节(AIPOS-F103 补齐)
           registered_at: "2026-08-10T00:00:00Z",
           registered_by: "kiwi",
         },
@@ -197,23 +199,22 @@ function flipRegistryClass(registry: string, newClass: string) {
       check("A: project.json 假注册表(hbj-coder→auditor)不生效, 门注册表赢 → 非BLOCK", false, String(e));
     }
 
-    // --- B. 门注册表改 class → 匹配跟随(翻转 BLOCK / 还原绿, 验完还原) ---
+    // --- B(AIPOS-F103 件④): 门注册表改 class → 信封挑选不变(注册表 class 不是信封判据) ---
     try {
       const { ws, registry } = makeGateHome(fx);
       flipRegistryClass(registry, "auditor"); // 翻转: hbj-coder 改挂 auditor
       const flipped = runPublishDryRun(ws);
+      flipRegistryClass(registry, "executor"); // 还原
       const flippedBlocked = (flipped.blocking_reasons || []).some((b) =>
         String(b).includes("cannot resolve policy envelope"),
       );
-      flipRegistryClass(registry, "executor"); // 还原
-      const restored = runPublishDryRun(ws);
       check(
-        "B: 门注册表改 class → 匹配跟随(翻转BLOCK信封墙/还原绿, 验完还原)",
-        flipped.verdict === "BLOCK" && flippedBlocked && restored.verdict !== "BLOCK",
-        `flipped=${flipped.verdict} restored=${restored.verdict}`,
+        "B: 门注册表改 class → 信封挑选不变(按卡面实例精确覆盖 pol_chris_coder_1)",
+        flipped.verdict !== "BLOCK" && !flippedBlocked && (flipped.rendered_markdown || "").split("pol_chris_coder_1").length - 1 >= 2,
+        `flipped=${flipped.verdict}`,
       );
     } catch (e) {
-      check("B: 门注册表改 class → 匹配跟随(翻转BLOCK信封墙/还原绿, 验完还原)", false, String(e));
+      check("B: 门注册表改 class → 信封挑选不变(按卡面实例精确覆盖 pol_chris_coder_1)", false, String(e));
     }
   } finally {
     rmSync(fx, { recursive: true, force: true });
@@ -225,7 +226,7 @@ function flipRegistryClass(registry: string, newClass: string) {
 // ===========================================================================
 {
   const crSrc = readFileSync(join(repoRoot, "tools", "aipos_cli", "custom_roles.py"), "utf-8");
-  const prSrc = readFileSync(join(repoRoot, "tools", "aipos_cli", "policy_resolver.py"), "utf-8");
+  const apSrc = readFileSync(join(repoRoot, "tools", "aipos_cli", "autonomy_policy.py"), "utf-8");
   const dtSrc = readFileSync(join(repoRoot, "tools", "distribute_tools.py"), "utf-8");
 
   check(
@@ -238,14 +239,12 @@ function flipRegistryClass(registry: string, newClass: string) {
       crSrc.includes("connection.json"),
   );
   check(
-    "C: F26C 分发与本处读同一模块来源(distribute 与 policy_resolver 均 custom_roles)",
-    dtSrc.includes("from tools.aipos_cli.custom_roles import resolve_role_to_class") &&
-      prSrc.includes("from tools.aipos_cli.custom_roles import load_custom_roles"),
+    "C: F26C 分发读 custom_roles 单源(resolve_role_to_class)",
+    dtSrc.includes("from tools.aipos_cli.custom_roles import resolve_role_to_class"),
   );
   check(
-    "D: 信封解析生产入口(find_active_policy)无注册表参数(参数仅测试注入)",
-    /def find_active_policy\(\s*workspace_root[^)]*\)/.test(prSrc) &&
-      !/def find_active_policy\([^)]*custom_roles/.test(prSrc),
+    "D: 信封挑选唯一实现 select_envelope 不读角色注册表(注册表不是信封判据)",
+    /def select_envelope\(/.test(apSrc) && !apSrc.includes("load_custom_roles") && !apSrc.includes("resolve_role_to_class"),
   );
 }
 

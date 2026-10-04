@@ -202,10 +202,14 @@ class FrontmatterZerodepParityTests(unittest.TestCase):
         for state in ("pending", "claimed", "completed", "blocked"):
             (repo_root / "5_tasks" / "queue" / state).mkdir(parents=True)
         # AIPOS-343: active policies so contract section can resolve envelopes
+        # AIPOS-F103 件④: 唯一判据 match_claim_envelope——夹具信封须是真 owner_autonomy_policy 形, 覆盖卡面实例 + 本卡
         policies_dir = repo_root / "5_tasks" / "policies"
         policies_dir.mkdir(parents=True, exist_ok=True)
         (policies_dir / "pol_lybra_dev_7.md").write_text(
-            "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\n---\n# Dev\n",
+            "---\nrecord_type: owner_autonomy_policy\npolicy_id: pol_lybra_dev_7\nmode: PreAuthorized\nstatus: active\n"
+            "approved_by_owner: true\nowner_approval_ref: dec_pol_lybra_dev_7\nactive_from: '2020-01-01T00:00:00Z'\n"
+            "expires_at: '2099-01-01T00:00:00Z'\nagent_or_role: agent-01\ntask_selector_task_mode: code\n"
+            "task_selector_project: lybra\ntask_selector_task_ids: []\nmax_tasks: 50\n---\n# Dev\n",
             encoding="utf-8",
         )
         metadata = {

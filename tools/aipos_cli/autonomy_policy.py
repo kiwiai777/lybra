@@ -1,7 +1,7 @@
 """AIPOS-250 — owner_autonomy_policy artifact: render + gate reader + envelope matcher.
 
 The FIRST autonomy tier ("PreAuthorized envelope"). An Owner hand-confirms ONE bounded
-autonomy envelope (a policy artifact under 5_tasks/policies/); at runtime the gate does a
+autonomy envelope (a policy artifact under the project's declared policies_root, default 5_tasks/policies/); at runtime the gate does a
 STRUCTURAL match — it never re-decides. Matching is strict AND (task_selector ∧ agent/role
 ∧ time window ∧ released_count < max_tasks ∧ status==active); any doubt falls back to
 Supervised (fail-safe,偏窄). The envelope is bounded on TWO axes: time (expires_at) and
@@ -26,9 +26,6 @@ from tools.aipos_cli.record_writer import CLAIMS_ROOT, render_markdown
 from tools.schema_constants import RecordType
 
 
-
-
-POLICIES_DIR = Path("5_tasks/policies")
 AUTONOMY_MODE_SUPERVISED = "Supervised"
 AUTONOMY_MODE_PREAUTHORIZED = "PreAuthorized"
 POLICY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$")
@@ -244,16 +241,45 @@ def normalize_policy(metadata: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def policies_dir(governance_root: Path | str) -> Path:
+    """AIPOS-F103 件④: 信封目录唯一读取口 = 项目 project.json paths.policies_root(声明 config.schema
+    configuration_sources.project_json.schema.paths.policies_root, 缺省 5_tasks/policies; 相对治理根或绝对),
+    经 workspace_config.project_paths 解析(与 return_root/queue_root 等落点同一读取口)。禁写死目录。"""
+    from tools.aipos_cli.workspace_config import project_paths
+
+    return Path(project_paths(Path(governance_root))["policies_root"])
+
+
+def policy_relpath(governance_root: Path | str, policy_id: str) -> str:
+    """信封工件相对治理根的路径(门写入面 planned_writes / 决策记录 policy_ref 用)。声明落点在治理根外 = ValueError
+    (fail-closed: 门只在治理根内落信封)。"""
+    root = Path(governance_root).resolve()
+    path = (policies_dir(root) / f"{policy_id}.md").resolve()
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError as exc:
+        raise ValueError(f"policies_root 声明落在治理根外({path}), 门只在治理根内落信封(project.json paths.policies_root)") from exc
+
+
+def policy_ids(governance_root: Path | str) -> list[str]:
+    """声明信封目录下全部信封 id(文件名去 .md, 升序)。目录不存在 = []。"""
+    pdir = policies_dir(governance_root)
+    if not pdir.is_dir():
+        return []
+    return sorted(p.stem for p in pdir.glob("*.md") if p.is_file())
+
+
 def load_policy(repo_root: Path, policy_id: str) -> dict[str, Any] | None:
     """Read a single policy artifact by id. Returns None on a missing/malformed/forged ref —
     the caller falls back to Supervised (★A1 anti-forgery: a ref to a nonexistent policy grants
-    nothing)."""
+    nothing). AIPOS-F103 件④: 目录读项目声明 policies_root(policies_dir)。"""
     pid = str(policy_id or "").strip()
     if not pid or not POLICY_ID_PATTERN.fullmatch(pid):
         return None
-    path = (repo_root / POLICIES_DIR / f"{pid}.md").resolve()
+    pdir = policies_dir(repo_root).resolve()
+    path = (pdir / f"{pid}.md").resolve()
     try:
-        path.relative_to(repo_root.resolve())
+        path.relative_to(pdir)
     except ValueError:
         return None
     if not path.is_file():
@@ -443,6 +469,88 @@ def match_claim_envelope(
         "error_code": error_code,
     })
     return matched, reason, error_code
+
+
+def select_envelope(
+    governance_root: Path | str,
+    *,
+    identities: list[tuple[str | None, str | None, str | None]],
+    task: dict[str, Any] | None = None,
+    policy_id: str | None = None,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """AIPOS-F103 件④: 信封挑选唯一实现——判据只有 match_claim_envelope(禁第二套有效性/覆盖/选择器判定)。
+
+    - identities: 身份三元组 (agent_instance, actor, claiming_role) 列表, 按具体程度降序(实例/角色名 → 角色类);
+      每个三元组原样交 match_claim_envelope(其身份集合 = 三者去空)。
+    - task: 判定对象 {task_id, task_mode, project, reviewed_task_id?}; 经 envelope_subject(审计卡 = 被审卡, 门与 loop 同一规则)。
+      None = 任务无关(工位 .lybra/role 推导、凭据上下文自发现等无卡场景): 判定对象取该信封自身 task_selector
+      (= 「该信封覆盖某张卡」), 其余谓词(有效/时间窗/身份覆盖/选择器非空/额度)照常由 match_claim_envelope 判。
+    - policy_id: 给定 = 只核该信封(同一判据重核, 不另挑); 缺省 = 扫描声明目录 policies_dir 全部信封。
+    挑选次序(确定性): 身份三元组次序优先(更具体者先), 同级按信封 id 升序取首个匹配。
+    返回 (policy | None, 未匹配原因列表)。"""
+    root = Path(governance_root)
+    now = now or datetime.now(timezone.utc)
+    triples = [
+        (str(a or "").strip(), str(b or "").strip(), (str(c).strip() or None) if c else None)
+        for a, b, c in identities
+    ]
+    triples = [t for t in triples if t[0] or t[1] or t[2]]
+    if not triples:
+        return None, ["无可判定的身份(实例/执行者/角色均为空)"]
+    candidates = [str(policy_id).strip()] if policy_id else policy_ids(root)
+    if not candidates:
+        pdir = policies_dir(root)
+        try:
+            shown = f"{pdir.resolve().relative_to(root.resolve()).as_posix()}/"
+        except ValueError:
+            shown = f"{pdir}/"
+        return None, [f"{shown} 下没有任何信封"]
+    subject: tuple[str, str, str] | None = None
+    if task is not None:
+        subject = envelope_subject(
+            root,
+            task_id=str(task.get("task_id") or ""),
+            task_mode=str(task.get("task_mode") or ""),
+            project=str(task.get("project") or ""),
+            reviewed_task_id=str(task.get("reviewed_task_id") or ""),
+        )
+    loaded: list[tuple[str, dict[str, Any], int]] = []
+    reasons: list[str] = []
+    for pid in candidates:
+        policy = load_policy(root, pid)
+        if policy is None:
+            reasons.append(f"{pid}: 信封文件缺失或格式不合规(owner_autonomy_policy)")
+            continue
+        loaded.append((pid, policy, count_preauthorized_claims(root, pid)))
+    last_reason: dict[str, str] = {}
+    for agent_instance, actor, claiming_role in triples:
+        for pid, policy, released in loaded:
+            if subject is not None:
+                subject_id, subject_mode, subject_project = subject
+            else:
+                sel_ids = list(policy.get("task_selector_task_ids") or [])
+                subject_id = sel_ids[0] if sel_ids else ""
+                subject_mode = str(policy.get("task_selector_task_mode") or "")
+                subject_project = str(policy.get("task_selector_project") or "")
+            matched, reason, _code = match_claim_envelope(
+                policy=policy,
+                task_id=subject_id,
+                task_mode=subject_mode,
+                project=subject_project,
+                agent_instance=agent_instance,
+                actor=actor,
+                now=now,
+                released_count=released,
+                claiming_role=claiming_role,
+            )
+            if matched:
+                return policy, []
+            last_reason[pid] = reason
+    reasons.extend(f"{pid}: {last_reason[pid]}" for pid, _p, _r in loaded if pid in last_reason)
+    return None, reasons
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

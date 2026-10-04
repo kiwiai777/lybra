@@ -239,11 +239,13 @@ def test_item1_unresolvable_sibling_suspends_shared_prune_fail_closed(rig, capsy
 # ===========================================================================
 
 def _gov_with_policy(gov: Path, covers: str) -> Path:
+    # AIPOS-F103 件④: 工位推导走唯一判据 match_claim_envelope——空 task_selector 的信封在门上不授权任何卡, 不得被推导为生效信封;
+    # 夹具信封按 task_mode=code 圈定(真实信封形态)
     _write(gov / "5_tasks" / "policies" / f"pol_{covers}_1.md", (
         "---\nrecord_type: owner_autonomy_policy\n"
         f"policy_id: pol_{covers}_1\nmode: PreAuthorized\nstatus: active\napproved_by_owner: true\n"
         "owner_approval_ref: dec_probe\nactive_from: '2020-01-01T00:00:00Z'\nexpires_at: '2099-01-01T00:00:00Z'\n"
-        f"agent_or_role: {covers}\ntask_selector_task_mode: ''\ntask_selector_project: ''\ntask_selector_task_ids: []\n"
+        f"agent_or_role: {covers}\ntask_selector_task_mode: code\ntask_selector_project: ''\ntask_selector_task_ids: []\n"
         "max_tasks: 50\n---\n"))
     return gov
 

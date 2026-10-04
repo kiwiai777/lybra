@@ -632,7 +632,7 @@ def read_project_json(project_root: str | Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode",
-                     "foundation_backlog", "hard_rules_source")
+                     "foundation_backlog", "hard_rules_source", "policies_root")  # AIPOS-F103 件④: 信封目录
 # AIPOS-F78B 件②: 非路径键(值域读声明 enum), 与布尔 manual_gate_mode 一样不做路径解析
 PROJECT_ENUM_KEYS = ("finalize_mode",)
 
@@ -657,7 +657,7 @@ def _project_paths_declaration() -> dict[str, dict[str, Any]]:
 def project_paths(governance_root: str | Path) -> dict[str, Any]:
     """AIPOS-F78: 解析项目落点声明。返回 {return_root: Path, verdict_root: Path, queue_root: Path,
     task_cards_root: Path, manual_gate_mode: bool, finalize_mode: str, foundation_backlog: Path | None,
-    hard_rules_source: Path | None, declared: {key: bool}}。
+    hard_rules_source: Path | None, policies_root: Path, declared: {key: bool}}。
 
     AIPOS-F89 件② M17: 项目治理文档位(foundation_backlog / hard_rules_source)为可选声明(声明表 optional=true, 无 default):
     未声明 = None, 产品不假设任何治理文档名存在。

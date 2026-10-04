@@ -1034,6 +1034,18 @@ else
   overall=1
 fi
 
+# AIPOS-F103: 退役旧跨机连接器与执行体派工命令(碎片化 N-a: N2) + 信封挑选只留一个判据(M5)
+# (被删子命令 argparse 报不存在 / agent watch --workspace-root 照常 / 删除物零引用 / select_envelope 唯一挑选·判据 match_claim_envelope·
+#  信封目录读 project.json paths.policies_root / 文档棘轮基线减少且扫描面含仓根 skills/)
+echo
+echo "── tests/test_aipos_f103_retire_connector_single_envelope.py (F103 旧连接器与派工命令退役·删除物零引用·信封挑选单实现·policies_root 声明·文档棘轮基线减少) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f103_retire_connector_single_envelope.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f103_retire_connector_single_envelope.py PASS"
+else
+  echo "✗ tests/test_aipos_f103_retire_connector_single_envelope.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

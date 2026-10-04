@@ -3,12 +3,12 @@
  "source_report": "governance/research/2026-10-02-fragmentation-audit.md(条目号 = 该报告总表 #)",
  "fixture": "tests/test_aipos_f87_fragmentation_ratchet.py",
  "fingerprint": "sha1(行文本 strip 后 utf-8)前 12 位",
- "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增); AIPOS-F91 删除随老子系统退役而消失的条目(只减不增); AIPOS-F89 删除随治理文档名去契约而修复的条目(只减不增)",
- "total": 62,
+ "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增); AIPOS-F91 删除随老子系统退役而消失的条目(只减不增); AIPOS-F89 删除随治理文档名去契约而修复的条目(只减不增); AIPOS-F103 删除随信封旧解析模块删除而消失的条目 3 条(只减不增)",
+ "total": 59,
  "invariants": {
   "a": {
    "rule": "产品代码不出现写死的实例名/机器名/home 路径/治理根路径/信封 id: \\.lybra\\.kiwiai-dev|kiwiai-dev|/home/kiwi|~/projects/lybra|2_projects/lybra|pol_lybra_",
-   "count": 32,
+   "count": 29,
    "entries": [
     {
      "file": "tools/aipos_cli/audit_derivation.py",
@@ -128,27 +128,6 @@
      "fp": "00916dfb5b94",
      "item": "L3",
      "text": "# (e.g. exec.lybra.kiwiai-dev) stays on the event as `actor` for attribution; the"
-    },
-    {
-     "file": "tools/aipos_cli/policy_resolver.py",
-     "line": 76,
-     "fp": "8ddcd08f2148",
-     "item": "H5",
-     "text": "The agent_or_role field (e.g. \"exec.lybra.kiwiai-dev\") contains the role"
-    },
-    {
-     "file": "tools/aipos_cli/policy_resolver.py",
-     "line": 82,
-     "fp": "a02f96d1b173",
-     "item": "H5",
-     "text": "\"hbj-coder.chris-huibojin.kiwiai-dev\" 在注册表 {\"hbj-coder\": {\"class\":"
-    },
-    {
-     "file": "tools/aipos_cli/policy_resolver.py",
-     "line": 140,
-     "fp": "ffada8b9825f",
-     "item": "H5",
-     "text": "策略 ID(如 pol_lybra_dev_7 或 pol_agency_1),或 None(无活跃策略)"
     },
     {
      "file": "tools/aipos_cli/token_resolver.py",

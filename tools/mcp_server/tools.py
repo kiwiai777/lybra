@@ -972,7 +972,7 @@ def _owner_policy_ref_required(error_fn: Any, operation: str, requested_mode: st
     owner_policy_ref = 覆盖驱动方的信封 policy_id; Supervised 时 = Owner 批准/策略引用), 禁写死模式名误报。"""
     mode = str(requested_mode or "").strip() or "(未给出)"
     if mode == AUTONOMY_MODE_PREAUTHORIZED:
-        hint = "Pass owner_policy_ref = the policy_id of the Owner-signed envelope (5_tasks/policies/) covering the driver and this card; `lybra loop` derives it."
+        hint = "Pass owner_policy_ref = the policy_id of the Owner-signed envelope (project.json paths.policies_root, default 5_tasks/policies/) covering the driver and this card; `lybra loop` derives it."
     else:
         hint = "Pass the Owner approval or policy reference authorizing this supervised action."
     return error_fn(
@@ -2144,7 +2144,7 @@ def _envelope_rejection(error_code: str, reason: str, *, verb: str) -> dict[str,
     """信封未匹配 → BLOCK + transitions envelope_guards 出口(与 claim 路径同一声明源)。"""
     guard = _load_envelope_guard_declaration(error_code) or {}
     next_step = guard.get("next_step") or {}
-    action = str(next_step.get("action") or "请顾问核对信封(5_tasks/policies/)是否覆盖驱动方身份与本卡, 或 `lybra envelope mint` 申领")
+    action = str(next_step.get("action") or "请顾问核对信封(project.json paths.policies_root, 缺省 5_tasks/policies/)是否覆盖驱动方身份与本卡, 或 `lybra envelope mint` 申领")
     return _teaching_error(
         error_code,
         f"PreAuthorized one-stage {verb} not released: {str(guard.get('error_message') or reason)}",

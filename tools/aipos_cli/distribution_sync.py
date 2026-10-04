@@ -1293,7 +1293,7 @@ def sync_many(
 def _correct_owner_policy_ref(harness_root: Path, role: str) -> dict[str, Any]:
     """按当前生效信封校正 role#owner_policy_ref(信封更替后无须手写文件)。
 
-    单源: connection.json#governance_root → 5_tasks/policies 信封工件; 判定复用
+    单源: connection.json#governance_root → 信封目录(project.json paths.policies_root)信封工件; 判定复用
     workstation_wiring.derive_effective_owner_policy_ref。读不到治理根/推导不出 →
     非致命告警(sync 的本职是分发, 不因信封缺失阻断)。
     """

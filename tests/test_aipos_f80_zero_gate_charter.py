@@ -72,11 +72,21 @@ def _make_gov(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, shape: str) ->
                          "queue_root": "5_tasks/queue", "task_cards_root": "task_cards"}
     _write(root / "project.json", json.dumps(decl))
     tag = "lybra" if shape == "lybra" else "chris"
-    _write(root / "5_tasks" / "policies" / f"pol_{tag}_dev_1.md",
-           f"---\npolicy_id: pol_{tag}_dev_1\nstatus: active\nrole: exec\npolicy_type: dev\n---\n# Dev\n")
+    # AIPOS-F103 件④: 信封挑选唯一判据 match_claim_envelope(与门同一判据)——夹具信封须是真 owner_autonomy_policy 形
+    # (旧 role:/policy_type: 桩只被已删的按角色词解析模块接受); 执行信封覆盖卡面实例, 审计信封覆盖派生审计卡实例 + 被审 code 卡
+    _write(root / "5_tasks" / "policies" / f"pol_{tag}_dev_1.md", _envelope(f"pol_{tag}_dev_1", f"exec.{project}.host", project))
     _write(root / "5_tasks" / "policies" / f"pol_{tag}_audit_1.md",
-           f"---\npolicy_id: pol_{tag}_audit_1\nstatus: active\nrole: audit\npolicy_type: audit\n---\n# Audit\n")
+           _envelope(f"pol_{tag}_audit_1", ad._derive_audit_instance(project), project))
     return root
+
+
+def _envelope(policy_id: str, agent_or_role: str, project: str) -> str:
+    return (
+        f"---\nrecord_type: owner_autonomy_policy\npolicy_id: {policy_id}\nmode: PreAuthorized\nstatus: active\n"
+        f"approved_by_owner: true\nowner_approval_ref: dec_{policy_id}\nactive_from: '2020-01-01T00:00:00Z'\n"
+        f"expires_at: '2099-01-01T00:00:00Z'\nagent_or_role: {agent_or_role}\ntask_selector_task_mode: code\n"
+        f"task_selector_project: {project}\ntask_selector_task_ids: []\nmax_tasks: 50\n---\n# {policy_id}\n"
+    )
 
 
 def _src_meta(task_id: str, project: str) -> dict:
@@ -154,7 +164,10 @@ def test_item1_single_criterion_truth_table(tmp_path, monkeypatch):
     (gov_l / "project.json").write_text(json.dumps(decl))
     assert dw.card_carries_gate_contract_section(audit_card, gov_l) is True
     # 发布追加函数走同一判据: 零门 → 原样返回; manual → 追加
-    assert dw._append_gate_contract_section(gov_c, exec_card, "F80-X", "## Body\n").count("【认领与交回】") == 1
+    # AIPOS-F103 件④: 契约节信封按卡面实例 + 本卡(唯一判据 match_claim_envelope)解析——用 chris 形卡(实例/项目/类型与夹具信封一致)
+    chris_exec_card = {"assigned_to": "exec.chris-huibojin.host", "agent_instance": "exec.chris-huibojin.host",
+                       "project": "chris-huibojin", "task_mode": "code"}
+    assert dw._append_gate_contract_section(gov_c, chris_exec_card, "F80-X", "## Body\n").count("【认领与交回】") == 1
     decl["paths"]["manual_gate_mode"] = False
     (gov_l / "project.json").write_text(json.dumps(decl))
     assert dw._append_gate_contract_section(gov_l, exec_card, "F80-X", "## Body\n") == "## Body\n"
