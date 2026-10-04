@@ -1,9 +1,8 @@
 """AIPOS-F91: 退役老子系统后的不变量夹具(入 run-all)。
 
-① templates/ 下(`lybra init` 随新项目交付的全部文件)不出现已退役子命令:
-   pump / auditor 守护(auditor loop|launch) / agent supervise / launch-check / turn-advancer / lybra on(含 /lybra 斜杠);
-   模板项目无关: 不出现本项目实例名 / 机器名 / 本机路径 / 本项目信封字面。
-② CLI 解析器不再接受已退役子命令(产品代码层守门, 与 ① 文档层互补)。
+① (已随 AIPOS-F105 退役) 原 templates/ 模板树不变量: templates/ 与 init / workspace init 一并删除(建项目单入口 =
+   lybra onboarding guide + lybra project new), 不再有随新项目交付的模板文件; 删除不变量见 tests/test_aipos_f105_single_project_entry.py。
+② CLI 解析器不再接受已退役子命令(产品代码层守门)。
 ③ G3 sync 的 .pi 挂载回收三态(与 F83 pi_mount_scan 同一函数):
    声明内保留 / 不指向产品分发区的挂载不碰 / 指向分发区且不在声明内的挂载回收(目标在也回收, 如退役的 claim.ts)。
 ④ run-all 位置: 门侧读项目声明 test_contract.runall_path(AIPOS-F93 件③), 产品代码零写死; 本夹具已登记。
@@ -13,68 +12,11 @@
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TEMPLATES = REPO_ROOT / "templates"
-
-#: 已退役子命令(AIPOS-F91 件①, 及 F83 退役的 /lybra 斜杠命令族)
-RETIRED_PATTERNS = (
-    r"\blybra\s+pump\b",
-    r"\bpump\s+run\b",
-    r"\blybra\s+auditor\b",
-    r"\bauditor\s+(loop|launch)\b",
-    r"\bagent\s+supervise\b",
-    r"\blaunch-check\b",
-    r"\bturn-advancer\b",
-    r"\blybra\s+on\b",
-    r"(?<![\w.])/lybra\b",
-)
-#: 模板须项目无关(复查报告 H3/H5 式样 + 本项目实例/信封字面)
-PROJECT_LITERAL_RE = re.compile(
-    r"kiwiai-dev|/home/kiwi|~/projects/lybra|2_projects/lybra|pol_lybra_|\bexec\.lybra\b|\baudit\.lybra\b|~/lybra\b"
-)
-
-
-def _template_files() -> list[Path]:
-    files = sorted(p for p in TEMPLATES.rglob("*") if p.is_file())
-    assert files, "templates/ 为空(模板树缺失)"
-    return files
-
-
-def test_templates_teach_no_retired_subcommands():
-    hits: list[str] = []
-    for path in _template_files():
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for lineno, line in enumerate(text.splitlines(), 1):
-            for pat in RETIRED_PATTERNS:
-                if re.search(pat, line):
-                    hits.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {pat} :: {line.strip()[:120]}")
-    print("templates 退役命令命中:", hits)
-    assert hits == []
-
-
-def test_templates_project_agnostic_no_project_literals():
-    hits = []
-    for path in _template_files():
-        for lineno, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            if PROJECT_LITERAL_RE.search(line):
-                hits.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()[:120]}")
-    print("templates 项目字面命中:", hits)
-    assert hits == []
-
-
-def test_templates_teach_current_driving_path():
-    """现行推进路径: 驱动方 `lybra loop`, 工位 `/go`(两份运维手册三套模板逐份)。"""
-    for guide in ("advisor-operations-guide.md", "owner-manual-mode-runbook.md"):
-        copies = sorted(TEMPLATES.glob(f"*/tree/governance/{guide}"))
-        assert len(copies) == 3, copies
-        for path in copies:
-            text = path.read_text(encoding="utf-8")
-            assert "lybra loop --task-id" in text and "/go" in text, path
 
 
 def _subcommands(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:

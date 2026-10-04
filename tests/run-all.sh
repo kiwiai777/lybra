@@ -884,7 +884,7 @@ else
   overall=1
 fi
 
-# AIPOS-F91: 退役老子系统不变量(templates 零退役子命令且项目无关/CLI 拒退役子命令/.pi 挂载回收三态: 声明内保留·分发区外不碰·分发区内未声明回收/run-all 位置单源) + 随语义改动的 F83 挂载回收用例
+# AIPOS-F91: 退役老子系统不变量(templates 不变量已随 AIPOS-F105 删 templates/ 退役/CLI 拒退役子命令/.pi 挂载回收三态: 声明内保留·分发区外不碰·分发区内未声明回收/run-all 位置单源) + 随语义改动的 F83 挂载回收用例
 echo
 echo "── tests/test_aipos_f91_retirement_invariants.py (F91 退役不变量 + G3 挂载回收三态) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f91_retirement_invariants.py" \
@@ -1010,7 +1010,7 @@ else
 fi
 
 # AIPOS-F96: 文档与设计稿清理(碎片化 N3/N4/N5)件④——「产品文档不教退役做法」只减不增棘轮
-# (扫描 docs/、README.md、QUICKSTART.md、agents/**/*.md、templates/**; 式样声明在夹具常量, 基线 tests/f96_docs_retired_practice_baseline.json, docs/ 零容忍)
+# (扫描 docs/、README.md、QUICKSTART.md、agents/**/*.md、templates/**(已随 AIPOS-F105 删除, 扫描面保留防回流); 式样声明在夹具常量, 基线 tests/f96_docs_retired_practice_baseline.json, docs/ 零容忍)
 echo
 echo "── tests/test_aipos_f96_docs_retired_practice_ratchet.py (F96 文档退役做法棘轮·新增命中红/基线残留红·docs/ 零容忍·式样不误报现行做法) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f96_docs_retired_practice_ratchet.py" -v --tb=short; then
@@ -1043,6 +1043,25 @@ if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f99_au
   echo "✓ tests/test_aipos_f99_audit_runall_baseline.py PASS"
 else
   echo "✗ tests/test_aipos_f99_audit_runall_baseline.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F105: 建项目单一入口(碎片化 N-b:N1)——删 lybra init / workspace init、workspace 模板模块、templates/ 与看板 init 路由/按钮,
+# 只留 lybra onboarding guide + lybra project new; 被删命令 argparse 报不存在·project new 靶场照常·看板无 init 入口·删除物零引用·包清单/文档指路
+# + 随语义改动的 F91(templates 不变量退役)/F89(模板扫描改为目录不存在)/F96(基线删 24 条·templates/ 不再是允许位置)/F98 零依赖(删模板 manifest 语料)用例
+echo
+echo "── tests/test_aipos_f105_single_project_entry.py (F105 init/workspace init argparse 报不存在·project new 靶场·看板 POST workspace init 路由不存在·删除物零引用·package files 无 templates/·README/QUICKSTART 指向 onboarding guide + project new) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f105_single_project_entry.py" \
+    "$REPO_ROOT/tests/test_aipos_f91_retirement_invariants.py" \
+    "$REPO_ROOT/tests/test_aipos_f89_governance_docs_contract.py::test_item2_new_project_charters_templates_skills_zero_lybra_doc_names" \
+    "$REPO_ROOT/tests/test_aipos_f96_docs_retired_practice_ratchet.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_frontmatter_zerodep.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_cli_ergonomics.py" \
+    "$REPO_ROOT/web/board/tests/test_aipos288_fix5_label_en.py" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f105_single_project_entry.py PASS"
+else
+  echo "✗ tests/test_aipos_f105_single_project_entry.py FAIL"
   overall=1
 fi
 
