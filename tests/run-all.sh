@@ -1034,6 +1034,18 @@ else
   overall=1
 fi
 
+# AIPOS-F99: 审计章程「独立全量基线」(① 母本硬规矩: 被审 tip 与 main 各独立跑项目声明测试清单、同一 grep 式样计数附 diff、
+# 新增失败=FAIL、worktree --detach 建 main 副本、计数异常先串行重跑、未声明跳过并注明 ② charter_render 唯一键表新增 runall_path,
+# 读 workspace_config.project_test_contract, 未声明=明确文字、形坏 fail-closed ③ 审计技能引用章程 ④ 靶场 lybra 实值/未声明两种渲染无残留占位)
+echo
+echo "── tests/test_aipos_f99_audit_runall_baseline.py (F99 审计独立全量基线·清单位置读声明渲染·未声明明确文字·形坏拒渲染) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f99_audit_runall_baseline.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f99_audit_runall_baseline.py PASS"
+else
+  echo "✗ tests/test_aipos_f99_audit_runall_baseline.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F105: 建项目单一入口(碎片化 N-b:N1)——删 lybra init / workspace init、workspace 模板模块、templates/ 与看板 init 路由/按钮,
 # 只留 lybra onboarding guide + lybra project new; 被删命令 argparse 报不存在·project new 靶场照常·看板无 init 入口·删除物零引用·包清单/文档指路
 # + 随语义改动的 F91(templates 不变量退役)/F89(模板扫描改为目录不存在)/F96(基线删 24 条·templates/ 不再是允许位置)/F98 零依赖(删模板 manifest 语料)用例
