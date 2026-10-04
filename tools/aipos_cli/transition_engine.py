@@ -174,58 +174,8 @@ def apply_transition_metadata(
     return updated
 
 
-def validate_transition(
-    *,
-    current_state: str,
-    transition_name: str,
-    schema: dict[str, Any] | None = None,
-    repo_root: Path | None = None,
-) -> tuple[bool, str]:
-    """验证转移是否合法
-    
-    Returns:
-        (is_valid, message)
-    """
-    if schema is None:
-        # AIPOS-R4A F-1: 使用唯一 schema_loader.load_schema
-        try:
-            from tools.schema_loader import load_schema
-            schema = load_schema("transitions", repo_root=None)
-        except ImportError as e:
-            raise ImportError(
-                "Cannot load schema_loader.load_schema() for transitions schema. "
-                "This typically occurs when running lybra CLI from outside the project root "
-                "in an editable install. Run from the project directory or ensure PYTHONPATH "
-                "includes the project root."
-            ) from e
-    
-    # 根据转移名称查找 allowed transitions
-    # 简化版：从预定义映射查找
-    allowed_transitions = {
-        "claim": (["pending"], "claimed"),
-        "block": (["claimed"], "blocked"),
-        "complete": (["claimed"], "completed"),
-        "reopen": (["blocked", "completed"], "pending"),
-        "withdraw": (["pending", "claimed"], "withdrawn"),
-    }
-    
-    if transition_name not in allowed_transitions:
-        return False, f"Unknown transition: {transition_name}"
-    
-    from_states, to_state = allowed_transitions[transition_name]
-    
-    # reopen 和 withdraw 支持多源状态
-    if transition_name in ("reopen", "withdraw"):
-        if current_state not in from_states:
-            # 对于 malformed 卡（AIPOS-R4A 实撞③），reopen 允许宽松处理
-            if transition_name == "reopen":
-                return True, f"WARN: malformed card repair path (state={current_state})"
-            return False, f"Invalid source state for {transition_name}: expected {from_states}, got {current_state}"
-    else:
-        if current_state not in from_states:
-            return False, f"Invalid source state for {transition_name}: expected {from_states}, got {current_state}"
-    
-    return True, f"Valid transition: {current_state} → {to_state}"
+# AIPOS-F104 件①: validate_transition(本地简化转移表, 零调用方)删除——队列搬卡转移表唯一声明 = transitions.schema
+# queue_mutations, 唯一读取口 queue_mutation.queue_mutation_transitions。
 
 
 def resolve_next_step_from_schema(
