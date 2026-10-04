@@ -180,6 +180,7 @@ def test_f73e_item3_loop_chain_close_actor_exec_verdict_actor_auditor_driver_onl
     _claim_record(gov, TASK, EXEC)
     _policy(gov)
     _write(gov / "task_cards" / TASK / "RETURN.md", build_return_skeleton_markdown(TASK))
+    f73d.init_governance_repo(gov)  # AIPOS-F94: 结案后 N6 落账须有治理仓与上游
     gate = GateDouble(gov)
     out = io.StringIO()
 
@@ -202,8 +203,8 @@ def test_f73e_item3_loop_chain_close_actor_exec_verdict_actor_auditor_driver_onl
     t.join(timeout=10)
     text = out.getvalue()
     assert res.exit_code == 0 and res.outcome == "completed", text
-    assert [c[0] for c in gate.calls] == ["return", "dispatch", "claim", "verdict", "finalize", "close"], gate.calls
-    assert f"driver={DRIVER}" in text  # 驱动方身份只用于信封
+    assert [c[0] for c in gate.calls] == ["return", "dispatch", "claim", "verdict", "finalize", "close", "governance_commit"], gate.calls
+    assert f"driver={DRIVER}" in text  # 驱动方身份只用于信封(及 AIPOS-F94 N6 落账: 治理仓提交身份 = 驱动方, 非门账务动词)
     # AIPOS-F90 件②: return/verdict 步的 step.command 是产物入口命令, 入口内部执行的薄壳命令记在 step.shell_command
     by_action = {s.action_type: (s.shell_command or s.command) for s in res.steps if s.kind == "execute" and s.command}
     assert f"--actor {EXEC} --confirm" in by_action["return"] and f"--agent-instance {EXEC}" in by_action["return"]
@@ -212,6 +213,9 @@ def test_f73e_item3_loop_chain_close_actor_exec_verdict_actor_auditor_driver_onl
     assert f"lybra queue close --task-id {TASK} --actor {EXEC} " in by_action["close"], by_action["close"]
     assert "owner-dispatch" in by_action["dispatch"]  # 派审身份声明不改
     for action, cmd in by_action.items():
+        if action == "governance_commit":  # AIPOS-F94: 落账不是门账务动词, 提交身份 = 驱动方(卡面「--actor <驱动方>」)
+            assert f"--actor {DRIVER} " in cmd, cmd
+            continue
         assert f"--actor {DRIVER}" not in cmd, (action, cmd)  # 驱动方实例永不进账务命令 --actor
     assert "token" not in text.lower().replace("token 永不上屏", "")
 

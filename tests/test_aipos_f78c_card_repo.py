@@ -37,6 +37,7 @@ from test_aipos_f73d_loop_driver import (  # noqa: E402  — 靶场/替身唯一
     _policy,
     _ts,
     _write,
+    init_governance_repo,
 )
 from test_aipos_f78_engine_agnostic import _card, _git, _init_product_repo  # noqa: E402
 from tools.aipos_cli import finalize as fz  # noqa: E402
@@ -390,13 +391,14 @@ def test_f78c_item3_dual_repo_two_cards_full_chain_each_to_its_repo(tmp_path, mo
         assert chk["ok"] and chk["category"] == "OK", chk
         other = repos["b"] if repo == repos["a"] else repos["a"]
         assert nr._extract_artifact_subject_from_branch(other, task_id) is None  # 另一仓没有这条分支
-    # 全链 run_loop: 每张卡各自到 completed
+    # 全链 run_loop: 每张卡各自到 completed(AIPOS-F94: 结案后 N6 落账, 须有治理仓与上游)
+    init_governance_repo(gov)
     results = {}
     for task_id, (_ref, repo) in cards.items():
         gate = _RepoGate(gov)
         res = run_loop(task_id, gov, actor=DRIVER, out=io.StringIO(), execute=gate, interval=0.02, max_wait=8, max_steps=20)
         assert res.exit_code == 0 and res.outcome == "completed", (task_id, res)
-        assert [c[0] for c in gate.calls] == ["return", "dispatch", "claim", "verdict", "finalize", "close"], gate.calls
+        assert [c[0] for c in gate.calls] == ["return", "dispatch", "claim", "verdict", "finalize", "close", "governance_commit"], gate.calls
         results[task_id] = gate
         # 每步取对仓: 交回核的 sha = 该仓分支 tip; 裁决绑同一 sha; finalize 合入该仓; close 证据 = 该仓 main tip(merge_commit)
         assert gate.seen[("return", task_id)] == tips[task_id]
@@ -453,6 +455,7 @@ def test_f78c_item3_single_repo_regression_zero_migration(tmp_path, monkeypatch)
     _policy(gov)
     _card(gov, TASK_A, "claimed")  # 无 lane(存量卡形)
     _card(gov, TASK_B, "claimed", extra={"lane": {"repo": str(repo), "paths": ["tools/aipos_cli/", "tests/"], "roles": ["executor"]}})
+    init_governance_repo(gov)  # AIPOS-F94: 结案后 N6 落账须有治理仓与上游
     for task_id in (TASK_A, TASK_B):
         _claim_record(gov, task_id, EXEC)
         wt = _ensure_worktree(gov, task_id)

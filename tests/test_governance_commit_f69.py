@@ -261,6 +261,12 @@ def test_backward_compatibility_with_taskid(governance_repo):
 def test_no_changes_to_commit(governance_repo):
     """测试无变更场景 — 应返回 info 而非 BLOCK"""
     local = governance_repo["governance_root"]
+    # AIPOS-F94: --task-id 无 --paths = task 范围精确提交, 范围须可推导(台账已在仓且无变更 = 无待收); 卡号无任何路径 = BLOCK(另测)
+    (local / "task_cards" / "TEST-004").mkdir(parents=True)
+    (local / "task_cards" / "TEST-004" / "RETURN.md").write_text("# Return\n")
+    subprocess.run(["git", "add", "-A"], cwd=str(local), check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "TEST-004 ledger"], cwd=str(local), check=True, capture_output=True)
+    subprocess.run(["git", "push"], cwd=str(local), check=True, capture_output=True)
     
     # 不添加任何变更，直接调用
     result = governance_commit(
