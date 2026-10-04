@@ -144,14 +144,6 @@ heterogeneous mutual audit, and the LLM key — is catalogued honestly, with the
 discipline that holds it and the plan to address it, in:
 
 - **[`docs/v1_disclosure.md`](docs/v1_disclosure.md)** — the honest disclosure ledger.
-- **[`docs/v1_acceptance_runbook.md`](docs/v1_acceptance_runbook.md)** — the manual release
-  walkthrough (every mutating gate is Owner-out-of-band).
-
-Automated acceptance gate (no confirm needed):
-
-```bash
-python -m tools.acceptance.v1_acceptance   # expect: ACCEPTANCE: PASS
-```
 
 Lybra is **not** a "heterogeneous accountability loop" — heterogeneous dual-harness mutual audit is
 deferred (see the ledger).

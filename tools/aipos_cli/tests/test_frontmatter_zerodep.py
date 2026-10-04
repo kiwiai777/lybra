@@ -1,8 +1,7 @@
 """AIPOS-218 WS5 — bare-python round-trip parity test.
 
-With the ``yaml`` module blocked via a sys.meta_path finder (same pattern as
-v1_acceptance.py:34-41), asserts that the fallback parser produces the same
-result as yaml.safe_load for:
+With the ``yaml`` module blocked via a sys.meta_path finder, asserts that the
+fallback parser produces the same result as yaml.safe_load for:
 
 - real records from the actual emitters (return w/ artifact_refs, audit-verdict
   w/ evidence_refs+bool, publish);
