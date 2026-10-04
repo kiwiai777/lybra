@@ -43,6 +43,7 @@ from tools.aipos_cli.harness_launch import (  # AIPOS-F95: 拉起进程封装(�
     signals_deferred as _signals_deferred,
     signals_raise_interrupt as _signals_raise_interrupt,
 )
+from tools.aipos_cli.verb_contract import declared_exit_code  # AIPOS-F101 件③: 退出码唯一读取口
 from tools.aipos_cli.next_resolver import (
     DRIVER_ACTOR_MISSING,
     REPO_ROOT,
@@ -84,13 +85,10 @@ def load_loop_contract(repo_root: Path | None = None) -> dict[str, Any]:
 
 
 def exit_code_for(contract: dict[str, Any], outcome: str) -> int:
-    """按出口名取退出码(唯一来源=声明)。"""
-    entry = contract["exit_codes"].get(outcome)
-    if not isinstance(entry, dict) or "code" not in entry:
-        from tools.schema_loader import SchemaLoadError
+    """按出口名取退出码(唯一来源=声明; AIPOS-F101 件③ 委托唯一实现 verb_contract.exit_code_in)。"""
+    from tools.aipos_cli.verb_contract import exit_code_in
 
-        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.exit_codes.{outcome} 未声明")
-    return int(entry["code"])
+    return exit_code_in(contract, outcome, LOOP_VERB)
 
 
 def parameter_default(contract: dict[str, Any], name: str) -> Any:
@@ -549,7 +547,7 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
             with contextlib.redirect_stdout(watch_out):
                 rc = watch(watch_args, expect_ready=ready, stop_when=harness.exited, sleeper=harness.pump)
             step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
-            if rc == 0:
+            if rc == declared_exit_code("lybra_agent_watch", "change"):  # AIPOS-F101 件③: 哨兵退出码读声明
                 outcome = "artifact_ready"
                 harness.pump(float(decl["grace_seconds"]))  # 宽限期内自行退出即收尾(输出照常汇总)
                 detail = "宽限期内自行退出" if harness.exited() else f"宽限 {decl['grace_seconds']}s 后终止进程组"
@@ -804,7 +802,7 @@ def _drive(
             with contextlib.redirect_stdout(watch_out):
                 rc = watch(watch_args, expect_ready=_ready)
             step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
-            if rc != 0:
+            if rc != declared_exit_code("lybra_agent_watch", "change"):  # AIPOS-F101 件③: 哨兵退出码读声明
                 step.ok = False
                 step.message = f"等待产物超时/停滞(watch exit {rc}): 等的是 {wait_patterns}"
                 steps.append(step)
