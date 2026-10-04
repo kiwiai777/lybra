@@ -160,19 +160,22 @@ def test_ratchet_no_new_hits_and_no_stale_baseline_entries():
 
 
 def test_ratchet_detects_injected_hit_and_stale_entry_red():
-    """负夹具: 人造一条新增命中与一条已修条目, 比对必须双双报红(棘轮不是摆设)。"""
+    """负夹具: 人造一条新增命中与一条已修条目, 比对必须双双报红(棘轮不是摆设)。
+    以「不注入」的比对结果为参照计增量, 故在任何基线状态下都只验探测器本身。"""
     current = current_hits()
     entries = load_baseline()["entries"]
+    reference = ratchet_diff(current, entries)
     injected = list(current) + scan_text("docs/zz_injected.md", "执行体先 `lybra claim X-1` 再交回\n")
     assert len(injected) == len(current) + 1
-    dropped = list(injected)
-    if entries:  # 模拟已修一条: 去掉与基线首条同键的一个现存命中(多重集只去一个)
-        first = _key(entries[0])
-        dropped.pop(next(i for i, item in enumerate(dropped) if _key(item) == first))
-    diff = ratchet_diff(dropped, entries)
-    assert [str(item["file"]) for item in diff["new"]] == ["docs/zz_injected.md"]
-    if entries:
-        assert len(diff["stale"]) == 1
+    diff = ratchet_diff(injected, entries)
+    assert len(diff["new"]) == len(reference["new"]) + 1
+    assert "docs/zz_injected.md" in [str(item["file"]) for item in diff["new"]]
+    # 模拟已修一条: 去掉一个与基线同键的现存命中(多重集只去一个)
+    base_keys = {_key(entry) for entry in entries}
+    idx = next((i for i, item in enumerate(current) if _key(item) in base_keys), None)
+    if idx is not None:
+        dropped = current[:idx] + current[idx + 1 :]
+        assert len(ratchet_diff(dropped, entries)["stale"]) == len(reference["stale"]) + 1
 
 
 def test_patterns_hit_retired_forms_and_spare_current_forms():
