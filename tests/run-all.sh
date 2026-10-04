@@ -1034,6 +1034,18 @@ else
   overall=1
 fi
 
+# AIPOS-F99: 审计章程「独立全量基线」(① 母本硬规矩: 被审 tip 与 main 各独立跑项目声明测试清单、同一 grep 式样计数附 diff、
+# 新增失败=FAIL、worktree --detach 建 main 副本、计数异常先串行重跑、未声明跳过并注明 ② charter_render 唯一键表新增 runall_path,
+# 读 workspace_config.project_test_contract, 未声明=明确文字、形坏 fail-closed ③ 审计技能引用章程 ④ 靶场 lybra 实值/未声明两种渲染无残留占位)
+echo
+echo "── tests/test_aipos_f99_audit_runall_baseline.py (F99 审计独立全量基线·清单位置读声明渲染·未声明明确文字·形坏拒渲染) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f99_audit_runall_baseline.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f99_audit_runall_baseline.py PASS"
+else
+  echo "✗ tests/test_aipos_f99_audit_runall_baseline.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F102: 身份与角色类单源(族 B-b:H5/M4/M21)——派审 actor = 驱动方实例、审计卡认领实例 = 被审卡 audit_by(缺则项目推导)、
 # 修复卡执行实例承继/项目推导(非 lybra 项目靶场); 角色类解析唯一 custom_roles.resolve_role_to_class(统一拒) + 分组读 roles.schema class_groups;
 # default_instance_name 缺 project 即拒。整文件 + 本卡改动的既有节点(其余既有节点已在上方各自登记块内)
