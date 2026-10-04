@@ -55,44 +55,12 @@ REQUEST_CAPABILITY: ContextVar[dict[str, Any] | None] = ContextVar("lybra_mcp_re
 # AIPOS-F23: enroll-code 两阶段 dry-run token 存储(内存 + TTL 600s)。
 # 轻量专用存储: 发码不属于 controlled_execute 队列操作面, 不入其 plan/snapshot 机制。
 _ENROLL_CODE_DRY_RUNS: dict[str, dict[str, Any]] = {}
-INTAKE_SCOPE = "intake_submit"
-OWNER_DECISION_SCOPE = RecordType.OWNER_DECISION_RECORD
-DRAFT_PUBLISH_SCOPE = "draft_publish"
-# AIPOS-249 (planner slice): the planner's ONLY write scope — land a task-card DRAFT into
-# 5_tasks/drafts/ (a proposal zone, path-locked by DRAFTS_DIR + draft_slug). This is NOT
-# draft_publish: submitting a draft does NOT put it into truth (queue/pending). Landing it —
-# drafts -> queue/pending — is draft_publish, which additionally requires owner_confirm, so
-# the planner (which holds neither) can never publish. Draft submit confirm does NOT require
-# owner_confirm (a draft is a proposal, not truth); the Owner gate is at publish.
-DRAFT_SUBMIT_SCOPE = "draft_submit"
-QUEUE_CLAIM_SCOPE = "queue_claim"
-QUEUE_RETURN_SCOPE = "queue_return"
-AUDIT_DISPATCH_SCOPE = RecordType.AUDIT_DISPATCH
-AUDIT_VERDICT_SCOPE = RecordType.AUDIT_VERDICT
-# AIPOS-283: queue_close scope — executor/advisor(planner) can call.
-# This is NOT owner-gated: the close verb is the finalize settlement step
-# that the executor calls after work is returned. It requires closure_evidence
-# and a prior return record, but NOT owner_confirm.
-QUEUE_CLOSE_SCOPE = "queue_close"
-# AIPOS-315: withdraw and amend scopes for task lifecycle management.
-# withdraw: remove task from queue (pending or claimed) with reason, preserves all records.
-# amend: modify pending task frontmatter/body with amendment history (only pending allowed).
-QUEUE_WITHDRAW_SCOPE = "queue_withdraw"
-QUEUE_AMEND_SCOPE = "queue_amend"
-# AIPOS-323: task_progress scope — agent self-reports task facts (started/progress/completed/blocked)
-# to the gate, which records them (append-only events) without maintaining online/offline state.
-# This is the "agent opens mouth to gate" direction (取代顾问观察式); gate只记录不判活、不心跳、不推送。
-TASK_PROGRESS_SCOPE = "task_progress"
-# AIPOS-197 gate-hardening v0: an Owner-only scope required to CONFIRM consequential
-# truth mutations. dry-run keeps its operation scope; confirm additionally requires
-# this scope, which the executor token does not hold — so a confined agent cannot
-# self-confirm regardless of whether it knows the static OWNER_CONFIRMED literal.
-# v0 scope: claim + return confirm only (the F-candidate-1 surface proven in 191B).
-# Principle: every confirm tool that mutates Owner-gated truth should require an
-# Owner-held confirm scope; audit_dispatch/audit_verdict/intake/owner_decision/
-# workspace_init confirms keep their existing role gate until each one's legitimate
-# confirmer is decided per-tool (to preserve executor != auditor != owner).
-OWNER_CONFIRM_SCOPE = "owner_confirm"
+# AIPOS-F101 件②: 门工具的操作 scope(intake_submit / owner_decision_record / draft_publish / draft_submit / queue_claim /
+# queue_return / audit_dispatch / audit_verdict / queue_close / queue_withdraw / queue_amend / task_progress / queue_rework /
+# bench_audit_* / owner_confirm)唯一声明在 schema/verbs.schema.json verbs[<工具名>](required_scope / also_requires_scope /
+# conditional_scope / scope_waiver / visibility, 语义见该文件 scope_contract)。原此处 16 个 *_SCOPE 常量(第二来源)删除;
+# 执法 / 可见性 / verb_contract 一律经下方 _verb_scope* 读声明。owner_confirm 仍是 Owner-only 确认 scope(AIPOS-197): dry-run
+# 持操作 scope, confirm 另索 owner_confirm(also_requires_scope), 执行体 token 不持有 → 不能自确认。
 DISCIPLINE_DOC_REF = "AIPOS-109 MCP-native discipline"
 SUPERVISED_CLAIM_DOC_REF = "AIPOS-165 Supervised MCP Explicit Claim Protocol"
 OWNER_CONFIRMATION_TOKEN = "OWNER_CONFIRMED"
@@ -521,7 +489,7 @@ def _get_verb_param_shape(verb_name: str) -> dict[str, Any] | None:
                 "task_id": "TASK-123",
                 "amendments": {"title": "Updated title"},
                 "amendment_reason": "Clarify scope per owner feedback",
-                "actor": "advisor.lybra",
+                "actor": "<实例>",
             }
         },
         "lybra_owner_decision_record": {
@@ -539,9 +507,9 @@ def _get_verb_param_shape(verb_name: str) -> dict[str, Any] | None:
             "required": ["task_id", "actor", "agent_instance", "owner_policy_ref", "result_summary", "autonomy_mode"],
             "example": {
                 "task_id": "TASK-123",
-                "actor": "exec.lybra.kiwiai-dev",
-                "agent_instance": "exec.lybra.kiwiai-dev",
-                "owner_policy_ref": "pol_lybra_dev_9",
+                "actor": "<实例>",
+                "agent_instance": "<实例>",
+                "owner_policy_ref": "<信封>",
                 "result_summary": "Completed all deliverables",
                 "autonomy_mode": "Supervised",
             }
@@ -648,10 +616,6 @@ def _capability_has_scope(scope: str) -> bool:
     if not isinstance(operations, list) or scope not in operations:
         return False
     return True
-
-
-def _scope_denied_result() -> dict[str, Any]:
-    return _scope_denied_result_for(INTAKE_SCOPE, "intake submit tools")
 
 
 def _scope_denied_result_for(scope: str, label: str) -> dict[str, Any]:
@@ -849,32 +813,70 @@ def dispatch_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]
         }
 
 
-def _intake_scope_allowed() -> bool:
-    return _capability_has_scope(INTAKE_SCOPE)
+# ---------------------------------------------------------------------------
+# AIPOS-F101 件②: 门工具 scope 唯一读取口 —— schema/verbs.schema.json verbs[<工具名>](scope_contract 语义)
+# ---------------------------------------------------------------------------
+
+_VERB_SCOPE_KEYS = ("required_scope", "also_requires_scope", "conditional_scope")
 
 
-def _owner_decision_scope_allowed() -> bool:
-    return _capability_has_scope(OWNER_DECISION_SCOPE)
+def _verb_declaration(verb_name: str) -> dict[str, Any]:
+    """门工具的声明条目。未声明 / 缺 required_scope 或 visibility = SchemaLoadError(fail-closed, 禁回落代码里的猜测)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root
+
+    decl = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(verb_name)
+    if not isinstance(decl, dict) or "required_scope" not in decl or "visibility" not in decl:
+        raise SchemaLoadError(
+            f"verbs.schema.json verbs.{verb_name} 未声明 required_scope/visibility(门工具 scope 唯一来源, AIPOS-F101 件②)"
+        )
+    return decl
 
 
-def _queue_claim_scope_allowed() -> bool:
-    return _capability_has_scope(QUEUE_CLAIM_SCOPE)
+def _verb_scope(verb_name: str, scope_key: str = "required_scope") -> str | None:
+    """读声明的 scope: required_scope / also_requires_scope(字符串) / conditional_scope({scope, when})。null/缺 = 无。"""
+    if scope_key not in _VERB_SCOPE_KEYS:
+        raise ValueError(f"unknown scope key {scope_key!r}; expected one of {_VERB_SCOPE_KEYS}")
+    value = _verb_declaration(verb_name).get(scope_key)
+    if isinstance(value, dict):
+        value = value.get("scope")
+    return str(value) if value else None
 
 
-def _queue_return_scope_allowed() -> bool:
-    return _capability_has_scope(QUEUE_RETURN_SCOPE)
+def _verb_scope_waived(verb_name: str, args: dict[str, Any] | None) -> bool:
+    """scope_waiver 声明 {param, equals}: 入参 param 去空白后等于 equals 时不索 required_scope(驱动方一阶段)。"""
+    waiver = _verb_declaration(verb_name).get("scope_waiver")
+    if not isinstance(waiver, dict) or args is None:
+        return False
+    return str(args.get(str(waiver.get("param") or "")) or "").strip() == str(waiver.get("equals") or "")
 
 
-def _owner_confirm_scope_allowed() -> bool:
-    return _capability_has_scope(OWNER_CONFIRM_SCOPE)
+def _verb_scope_allowed(verb_name: str, scope_key: str = "required_scope", *, args: dict[str, Any] | None = None) -> bool:
+    """当前 token 是否满足该门工具声明的 scope(声明为 null = 无需 scope)。args 给出时按 scope_waiver 判豁免(仅 required_scope)。"""
+    scope = _verb_scope(verb_name, scope_key)
+    if scope is None:
+        return True
+    if scope_key == "required_scope" and _verb_scope_waived(verb_name, args):
+        return True
+    return _capability_has_scope(scope)
 
 
-def _draft_publish_scope_allowed() -> bool:
-    return _capability_has_scope(DRAFT_PUBLISH_SCOPE)
+def _verb_scope_denied(verb_name: str, label: str, scope_key: str = "required_scope") -> dict[str, Any]:
+    return _scope_denied_result_for(_verb_scope(verb_name, scope_key) or "", label)
 
 
-def _draft_submit_scope_allowed() -> bool:
-    return _capability_has_scope(DRAFT_SUBMIT_SCOPE)
+def _verb_visible(verb_name: str) -> bool:
+    """tools/list 可见性(声明 visibility): always / scope(持 required_scope) / hidden。"""
+    visibility = _verb_declaration(verb_name)["visibility"]
+    if visibility == "always":
+        return True
+    if visibility == "hidden":
+        return False
+    if visibility == "scope":
+        scope = _verb_scope(verb_name)
+        return scope is None or _capability_has_scope(scope)
+    from tools.schema_loader import SchemaLoadError
+
+    raise SchemaLoadError(f"verbs.schema.json verbs.{verb_name}.visibility 非法: {visibility!r}(always/scope/hidden)")
 
 
 def _confirmer_attribution() -> dict[str, Any]:
@@ -893,30 +895,6 @@ def _confirmer_attribution() -> dict[str, Any]:
         "confirmer_token_fingerprint": str(cap.get("fingerprint") or "") or None,
         "submitted_by": submitted_by or None,
     }
-
-
-def _audit_dispatch_scope_allowed() -> bool:
-    return _capability_has_scope(AUDIT_DISPATCH_SCOPE)
-
-
-def _audit_verdict_scope_allowed() -> bool:
-    return _capability_has_scope(AUDIT_VERDICT_SCOPE)
-
-
-def _queue_close_scope_allowed() -> bool:
-    return _capability_has_scope(QUEUE_CLOSE_SCOPE)
-
-
-def _queue_withdraw_scope_allowed() -> bool:
-    return _capability_has_scope(QUEUE_WITHDRAW_SCOPE)
-
-
-def _queue_amend_scope_allowed() -> bool:
-    return _capability_has_scope(QUEUE_AMEND_SCOPE)
-
-
-def _task_progress_scope_allowed() -> bool:
-    return _capability_has_scope(TASK_PROGRESS_SCOPE)
 
 
 def _check_actor_has_claim(task_id: str, actor: str, repo_root: Path) -> bool:
@@ -1789,8 +1767,8 @@ def lybra_task_preview(arguments: dict[str, Any] | None = None) -> dict[str, Any
     include_body = bool(args.get("include_body", False))
     if bool(str(task_id or "").strip()) == bool(str(path or "").strip()):
         return _error_result("Exactly one of task_id or path is required")
-    if include_body and not _queue_claim_scope_allowed():
-        return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "lybra_task_preview with include_body")
+    if include_body and not _verb_scope_allowed("lybra_task_preview", "conditional_scope"):
+        return _verb_scope_denied("lybra_task_preview", "lybra_task_preview with include_body", "conditional_scope")
     
     # AIPOS-366: claim-before-work gate — body requires a valid claim record
     if include_body:
@@ -1835,8 +1813,8 @@ def lybra_return_content(arguments: dict[str, Any] | None = None) -> dict[str, A
     Path is strictly confined to the declared Return location <project.json paths.return_root>/<task_id>/ within the gate
     workspace (AIPOS-F89 件① H9: 唯一推导 next_resolver._return_artifact_path, 禁写死 task_cards/<ID>/RETURN.md).
     Requires queue_claim scope (held by executor and auditor tokens)."""
-    if not _queue_claim_scope_allowed():
-        return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "lybra_return_content")
+    if not _verb_scope_allowed("lybra_return_content"):
+        return _verb_scope_denied("lybra_return_content", "lybra_return_content")
     args = arguments or {}
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
@@ -1902,8 +1880,8 @@ def lybra_context_pack_build(arguments: dict[str, Any] | None = None) -> dict[st
 
 
 def lybra_intake_submit_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _intake_scope_allowed():
-        return _scope_denied_result()
+    if not _verb_scope_allowed("lybra_intake_submit_dry_run"):
+        return _verb_scope_denied("lybra_intake_submit_dry_run", "intake submit tools")
     args = arguments or {}
     response = submit_external_intake(args, dry_run=True, repo_root=_repo_root(), actor=str(args.get("actor") or "mcp.client"))
     text = " ".join(str(item) for item in response.get("blocking_reasons", []))
@@ -1918,8 +1896,8 @@ def lybra_intake_submit_dry_run(arguments: dict[str, Any] | None = None) -> dict
 
 
 def lybra_intake_submit_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _intake_scope_allowed():
-        return _scope_denied_result()
+    if not _verb_scope_allowed("lybra_intake_submit_confirm"):
+        return _verb_scope_denied("lybra_intake_submit_confirm", "intake submit tools")
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -1940,8 +1918,8 @@ def lybra_intake_submit_confirm(arguments: dict[str, Any] | None = None) -> dict
 
 
 def lybra_owner_decision_record_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _owner_decision_scope_allowed():
-        return _scope_denied_result_for(OWNER_DECISION_SCOPE, "owner decision record tools")
+    if not _verb_scope_allowed("lybra_owner_decision_record_dry_run"):
+        return _verb_scope_denied("lybra_owner_decision_record_dry_run", "owner decision record tools")
     args = arguments or {}
     # AIPOS-F78B 件④b: 按入参 workspace_root 落盘(经 _resolve_queue_workspace 校验 token projects scope), 禁写进 token 默认工作区
     try:
@@ -1955,8 +1933,8 @@ def lybra_owner_decision_record_dry_run(arguments: dict[str, Any] | None = None)
 
 
 def lybra_owner_decision_record_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _owner_decision_scope_allowed():
-        return _scope_denied_result_for(OWNER_DECISION_SCOPE, "owner decision record tools")
+    if not _verb_scope_allowed("lybra_owner_decision_record_confirm"):
+        return _verb_scope_denied("lybra_owner_decision_record_confirm", "owner decision record tools")
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -1975,8 +1953,8 @@ def lybra_owner_decision_record_confirm(arguments: dict[str, Any] | None = None)
     plan_data = token.plan.get("data") if token is not None and isinstance(token.plan, dict) else None
     grants_policy = bool(plan_data.get("autonomy_policy_grant")) if isinstance(plan_data, dict) else False
     if grants_policy:
-        if not _owner_confirm_scope_allowed():
-            return _scope_denied_result_for(OWNER_CONFIRM_SCOPE, "owner decision record autonomy-policy grant (Owner-only)")
+        if not _verb_scope_allowed("lybra_owner_decision_record_confirm", "conditional_scope"):
+            return _verb_scope_denied("lybra_owner_decision_record_confirm", "owner decision record autonomy-policy grant (Owner-only)", "conditional_scope")
         if owner_confirmation_token != OWNER_CONFIRMATION_TOKEN:
             return _teaching_error(
                 "OWNER_CONFIRMATION_REQUIRED",
@@ -2009,8 +1987,8 @@ def lybra_draft_publish_dry_run(arguments: dict[str, Any] | None = None) -> dict
     # AIPOS-342 (甲案): owner_confirmation_required set to False — publishing a card is NOT
     # a gate (Owner裁定 DL 05-10). The card lands in pending and waits for an agent to claim;
     # the real gates (envelope, red lines, audit, owner_verify, deploy) are unchanged.
-    if not _draft_publish_scope_allowed():
-        return _scope_denied_result_for(DRAFT_PUBLISH_SCOPE, "gated draft publish tools")
+    if not _verb_scope_allowed("lybra_draft_publish_dry_run"):
+        return _verb_scope_denied("lybra_draft_publish_dry_run", "gated draft publish tools")
     args = arguments or {}
     path = str(args.get("path") or "").strip()
     if not path:
@@ -2031,8 +2009,8 @@ def lybra_draft_publish_dry_run(arguments: dict[str, Any] | None = None) -> dict
 
 
 def lybra_draft_publish_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _draft_publish_scope_allowed():
-        return _scope_denied_result_for(DRAFT_PUBLISH_SCOPE, "gated draft publish tools")
+    if not _verb_scope_allowed("lybra_draft_publish_confirm"):
+        return _verb_scope_denied("lybra_draft_publish_confirm", "gated draft publish tools")
     # AIPOS-342 (甲案): owner_confirm scope check REMOVED from draft_publish_confirm.
     # Owner裁定 (DL 05-10): publishing a card is NOT a gate — the card lands in pending
     # and waits for an agent to claim; the real gates (envelope, red lines, independent
@@ -2077,8 +2055,8 @@ def lybra_draft_submit_dry_run(arguments: dict[str, Any] | None = None) -> dict[
     # draft_submit scope (the planner). Reuses the existing draft_create controlled-execute op —
     # the target path is DRAFTS_DIR / draft_slug(task_id).md (constant dir + regex-locked slug,
     # draft_validator.py), so the caller passes NO path field and CANNOT write outside drafts/.
-    if not _draft_submit_scope_allowed():
-        return _scope_denied_result_for(DRAFT_SUBMIT_SCOPE, "planner draft submit tools")
+    if not _verb_scope_allowed("lybra_draft_submit_dry_run"):
+        return _verb_scope_denied("lybra_draft_submit_dry_run", "planner draft submit tools")
     args = arguments or {}
     response = create_draft(args, dry_run=True, repo_root=_repo_root(), actor=str(args.get("actor") or "mcp.client"))
     return _tool_result(response, is_error=not bool(response.get("ok", False)) or response.get("verdict") == Verdict.BLOCK)
@@ -2089,8 +2067,8 @@ def lybra_draft_submit_confirm(arguments: dict[str, Any] | None = None) -> dict[
     # The Owner gate is at PUBLISH (drafts -> queue/pending = lybra_draft_publish, which the planner
     # lacks AND which requires owner_confirm). So a planner can fill the drafts zone autonomously,
     # but landing into truth is structurally Owner-gated.
-    if not _draft_submit_scope_allowed():
-        return _scope_denied_result_for(DRAFT_SUBMIT_SCOPE, "planner draft submit tools")
+    if not _verb_scope_allowed("lybra_draft_submit_confirm"):
+        return _verb_scope_denied("lybra_draft_submit_confirm", "planner draft submit tools")
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -2491,8 +2469,8 @@ def _preauthorized_claim_autorelease(
 
 
 def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _queue_claim_scope_allowed():
-        return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "supervised queue claim tools")
+    if not _verb_scope_allowed("lybra_queue_claim_dry_run"):
+        return _verb_scope_denied("lybra_queue_claim_dry_run", "supervised queue claim tools")
     args = arguments or {}
     forbidden = _forbidden_queue_claim_fields(args)
     if forbidden:
@@ -2620,12 +2598,12 @@ def lybra_queue_claim_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
 
 
 def lybra_queue_claim_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _queue_claim_scope_allowed():
-        return _scope_denied_result_for(QUEUE_CLAIM_SCOPE, "supervised queue claim tools")
+    if not _verb_scope_allowed("lybra_queue_claim_confirm"):
+        return _verb_scope_denied("lybra_queue_claim_confirm", "supervised queue claim tools")
     # AIPOS-197: confirm additionally requires the Owner-only owner_confirm scope, so a
     # dry-run-capable (executor) token cannot self-confirm. Structural, not literal-secrecy.
-    if not _owner_confirm_scope_allowed():
-        return _scope_denied_result_for(OWNER_CONFIRM_SCOPE, "queue claim confirm (Owner-only)")
+    if not _verb_scope_allowed("lybra_queue_claim_confirm", "also_requires_scope"):
+        return _verb_scope_denied("lybra_queue_claim_confirm", "queue claim confirm (Owner-only)", "also_requires_scope")
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -2739,8 +2717,8 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
     # AIPOS-F78B 件③: 驱动方一阶段——autonomy_mode=PreAuthorized 时 Owner 签的信封即授权(不索 queue_return scope / owner_confirm);
     # 无信封匹配 = BLOCK(envelope_guards 出口), 永不静默回落 Supervised
     one_stage = str(args.get("autonomy_mode") or "").strip() == AUTONOMY_MODE_PREAUTHORIZED
-    if not one_stage and not _queue_return_scope_allowed():
-        return _scope_denied_result_for(QUEUE_RETURN_SCOPE, "supervised queue return tools")
+    if not _verb_scope_allowed("lybra_queue_return_dry_run", args=args):
+        return _verb_scope_denied("lybra_queue_return_dry_run", "supervised queue return tools")
     forbidden = _forbidden_queue_return_fields(args)
     if forbidden:
         return _queue_return_error(
@@ -2888,8 +2866,8 @@ def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[
 
 
 def lybra_queue_return_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _queue_return_scope_allowed():
-        return _scope_denied_result_for(QUEUE_RETURN_SCOPE, "supervised queue return tools")
+    if not _verb_scope_allowed("lybra_queue_return_confirm"):
+        return _verb_scope_denied("lybra_queue_return_confirm", "supervised queue return tools")
     # DL 03-02 / AIPOS-328: return is "I'm done, here's my output" — NOT an Owner gate.
     # The executor confirms its own return with its own queue_return scope (checked above).
     # The real gates are downstream: audit_verdict -> owner_verify -> close. Do NOT re-add an
@@ -3060,8 +3038,8 @@ def _validate_supervised_audit_args(args: dict[str, Any], *, operation: str) -> 
 
 
 def lybra_audit_dispatch_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _audit_dispatch_scope_allowed():
-        return _scope_denied_result_for(AUDIT_DISPATCH_SCOPE, "supervised audit dispatch tools")
+    if not _verb_scope_allowed("lybra_audit_dispatch_dry_run"):
+        return _verb_scope_denied("lybra_audit_dispatch_dry_run", "supervised audit dispatch tools")
     args = arguments or {}
     forbidden = _forbidden_audit_fields(args)
     if forbidden:
@@ -3092,8 +3070,8 @@ def lybra_audit_dispatch_dry_run(arguments: dict[str, Any] | None = None) -> dic
 
 
 def lybra_audit_dispatch_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _audit_dispatch_scope_allowed():
-        return _scope_denied_result_for(AUDIT_DISPATCH_SCOPE, "supervised audit dispatch tools")
+    if not _verb_scope_allowed("lybra_audit_dispatch_confirm"):
+        return _verb_scope_denied("lybra_audit_dispatch_confirm", "supervised audit dispatch tools")
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -3155,8 +3133,8 @@ def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict
     args = arguments or {}
     # AIPOS-F78B 件③: 驱动方一阶段(PreAuthorized + 信封覆盖驱动方与被审卡) 不索 audit_verdict scope / owner_confirm
     one_stage = str(args.get("autonomy_mode") or "").strip() == AUTONOMY_MODE_PREAUTHORIZED
-    if not one_stage and not _audit_verdict_scope_allowed():
-        return _scope_denied_result_for(AUDIT_VERDICT_SCOPE, "supervised audit verdict tools")
+    if not _verb_scope_allowed("lybra_audit_verdict_dry_run", args=args):
+        return _verb_scope_denied("lybra_audit_verdict_dry_run", "supervised audit verdict tools")
     policy_id: str | None = None
     if one_stage:
         policy_id, envelope_error = _match_driver_envelope(
@@ -3225,8 +3203,8 @@ def lybra_audit_verdict_dry_run(arguments: dict[str, Any] | None = None) -> dict
 
 
 def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not _audit_verdict_scope_allowed():
-        return _scope_denied_result_for(AUDIT_VERDICT_SCOPE, "supervised audit verdict tools")
+    if not _verb_scope_allowed("lybra_audit_verdict_confirm"):
+        return _verb_scope_denied("lybra_audit_verdict_confirm", "supervised audit verdict tools")
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -3288,13 +3266,6 @@ def lybra_audit_verdict_confirm(arguments: dict[str, Any] | None = None) -> dict
 # AIPOS-F75 件②: queue_rework (add rework round to claimed card)
 # ---------------------------------------------------------------------------
 
-QUEUE_REWORK_SCOPE = "queue_rework"
-
-
-def _queue_rework_scope_allowed() -> bool:
-    """Check if the current token holds queue_rework scope (advisor)."""
-    return _capability_has_scope(QUEUE_REWORK_SCOPE)
-
 
 def _queue_rework_error(error_code: str, message: str, suggested_next_action: str) -> dict[str, Any]:
     return _teaching_error(
@@ -3313,8 +3284,8 @@ def lybra_queue_rework_dry_run(arguments: dict[str, Any] | None = None) -> dict[
     
     Requires: queue_rework scope (advisor only).
     """
-    if not _queue_rework_scope_allowed():
-        return _scope_denied_result_for(QUEUE_REWORK_SCOPE, "queue_rework tools (advisor only)")
+    if not _verb_scope_allowed("lybra_queue_rework_dry_run"):
+        return _verb_scope_denied("lybra_queue_rework_dry_run", "queue_rework tools (advisor only)")
     args = arguments or {}
     task_id = str(args.get("task_id") or "").strip()
     verdict_ref = str(args.get("verdict_ref") or "").strip()
@@ -3359,8 +3330,8 @@ def lybra_queue_rework_confirm(arguments: dict[str, Any] | None = None) -> dict[
     
     Requires dry_run_token from lybra_queue_rework_dry_run.
     """
-    if not _queue_rework_scope_allowed():
-        return _scope_denied_result_for(QUEUE_REWORK_SCOPE, "queue_rework tools (advisor only)")
+    if not _verb_scope_allowed("lybra_queue_rework_confirm"):
+        return _verb_scope_denied("lybra_queue_rework_confirm", "queue_rework tools (advisor only)")
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -3403,28 +3374,9 @@ def lybra_queue_rework_confirm(arguments: dict[str, Any] | None = None) -> dict[
     return _tool_result(response, is_error=False)
 
 
-
 # ---------------------------------------------------------------------------
 # AIPOS-336: bench audit submit/confirm (non-code branch audit)
 # ---------------------------------------------------------------------------
-
-BENCH_AUDIT_SUBMIT_SCOPE = "bench_audit_submit"
-BENCH_AUDIT_CONFIRM_SCOPE = "bench_audit_confirm"
-
-
-def _bench_audit_scope_allowed() -> bool:
-    """Check if the current token holds bench_audit_submit scope (executor/advisor)."""
-    return _capability_has_scope(BENCH_AUDIT_SUBMIT_SCOPE)
-
-
-def _bench_audit_confirm_scope_allowed() -> bool:
-    """Check if the current token holds bench_audit_confirm scope (advisor/owner).
-    
-    AIPOS-336 S1 + acceptance #2: bench_audit_confirm is NOT held by executor.
-    The executor can dry_run (submit the evidence), but CANNOT self-confirm.
-    Confirmation is an advisor/owner gate (甲案家族: Owner 确认发生在验证台按键).
-    """
-    return _capability_has_scope(BENCH_AUDIT_CONFIRM_SCOPE)
 
 
 def _bench_audit_error(error_code: str, message: str, suggested_next_action: str) -> dict[str, Any]:
@@ -3454,8 +3406,8 @@ def lybra_bench_audit_submit_dry_run(arguments: dict[str, Any] | None = None) ->
     Returns: controlled_execute envelope with verdict, planned_writes, dry_run_token,
     checklist (ring2 auto-check results + ring3 human items), ring2_summary.
     """
-    if not _bench_audit_scope_allowed():
-        return _scope_denied_result_for(BENCH_AUDIT_SUBMIT_SCOPE, "bench audit submit tools")
+    if not _verb_scope_allowed("lybra_bench_audit_submit_dry_run"):
+        return _verb_scope_denied("lybra_bench_audit_submit_dry_run", "bench audit submit tools")
     args = arguments or {}
     task_id = str(args.get("task_id") or "").strip()
     actor = str(args.get("actor") or "").strip()
@@ -3500,8 +3452,8 @@ def lybra_bench_audit_confirm(arguments: dict[str, Any] | None = None) -> dict[s
     
     Returns: executed response with ok, performed_writes, checklist, ring2_summary.
     """
-    if not _bench_audit_confirm_scope_allowed():
-        return _scope_denied_result_for(BENCH_AUDIT_CONFIRM_SCOPE, "bench audit confirm tools")
+    if not _verb_scope_allowed("lybra_bench_audit_confirm"):
+        return _verb_scope_denied("lybra_bench_audit_confirm", "bench audit confirm tools")
     args = arguments or {}
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     if not dry_run_token:
@@ -3555,8 +3507,8 @@ def lybra_queue_close_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
     args = arguments or {}
     # AIPOS-F78B 件③: 驱动方一阶段(PreAuthorized + 信封) 不索 queue_close scope; 匹配即当场 close(confirm 本就是重放参数)
     one_stage = str(args.get("autonomy_mode") or "").strip() == AUTONOMY_MODE_PREAUTHORIZED
-    if not one_stage and not _queue_close_scope_allowed():
-        return _scope_denied_result_for(QUEUE_CLOSE_SCOPE, "queue close tools")
+    if not _verb_scope_allowed("lybra_queue_close_dry_run", args=args):
+        return _verb_scope_denied("lybra_queue_close_dry_run", "queue close tools")
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
         return _queue_close_error(
@@ -3614,8 +3566,8 @@ def lybra_queue_close_confirm(arguments: dict[str, Any] | None = None) -> dict[s
     Does NOT require owner_confirm (executor/advisor callable per S2).
     Re-validates all inputs before executing.
     """
-    if not _queue_close_scope_allowed():
-        return _scope_denied_result_for(QUEUE_CLOSE_SCOPE, "queue close tools")
+    if not _verb_scope_allowed("lybra_queue_close_confirm"):
+        return _verb_scope_denied("lybra_queue_close_confirm", "queue close tools")
     args = arguments or {}
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
@@ -3663,7 +3615,10 @@ def lybra_converge_r_cards(arguments: dict[str, Any] | None = None) -> dict[str,
     Never deletes records; only moves cards.
 
     Use dry_run=true first to preview, then dry_run=false to execute.
+    AIPOS-F101 件②: scope 读 verbs.schema 声明(required_scope=queue_close; 原只在可见性上索 queue_close, 调用时不验)。
     """
+    if not _verb_scope_allowed("lybra_converge_r_cards"):
+        return _verb_scope_denied("lybra_converge_r_cards", "R card convergence tools")
     args = arguments or {}
     actor = str(args.get("actor") or "system").strip()
     dry_run = bool(args.get("dry_run", True))
@@ -3684,7 +3639,10 @@ def lybra_mark_concluded(arguments: dict[str, Any] | None = None) -> dict[str, A
     without producing a断层 card.
 
     Requires: task_id, and at least one of report_path or conclusion_note.
+    AIPOS-F101 件②: scope 读 verbs.schema 声明(required_scope=queue_close; 原只在可见性上索 queue_close, 调用时不验)。
     """
+    if not _verb_scope_allowed("lybra_mark_concluded"):
+        return _verb_scope_denied("lybra_mark_concluded", "mark concluded tools")
     args = arguments or {}
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
@@ -3711,8 +3669,8 @@ def lybra_queue_withdraw_dry_run(arguments: dict[str, Any] | None = None) -> dic
     Supports: pending or claimed tasks.
     S3 in-transit protection: blocks if active session detected within last hour.
     """
-    if not _queue_withdraw_scope_allowed():
-        return _scope_denied_result_for(QUEUE_WITHDRAW_SCOPE, "queue withdraw tools")
+    if not _verb_scope_allowed("lybra_queue_withdraw_dry_run"):
+        return _verb_scope_denied("lybra_queue_withdraw_dry_run", "queue withdraw tools")
     args = arguments or {}
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
@@ -3756,8 +3714,8 @@ def lybra_queue_withdraw_confirm(arguments: dict[str, Any] | None = None) -> dic
     Does NOT require owner_confirm (advisor callable).
     Re-validates all inputs and in-transit checks before executing.
     """
-    if not _queue_withdraw_scope_allowed():
-        return _scope_denied_result_for(QUEUE_WITHDRAW_SCOPE, "queue withdraw tools")
+    if not _verb_scope_allowed("lybra_queue_withdraw_confirm"):
+        return _verb_scope_denied("lybra_queue_withdraw_confirm", "queue withdraw tools")
     args = arguments or {}
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
@@ -3802,8 +3760,8 @@ def lybra_queue_amend_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
     Only works on pending tasks (claimed tasks cannot be amended mid-execution).
     Writes amendment record preserving original content.
     """
-    if not _queue_amend_scope_allowed():
-        return _scope_denied_result_for(QUEUE_AMEND_SCOPE, "queue amend tools")
+    if not _verb_scope_allowed("lybra_queue_amend_dry_run"):
+        return _verb_scope_denied("lybra_queue_amend_dry_run", "queue amend tools")
     args = arguments or {}
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
@@ -3855,8 +3813,8 @@ def lybra_queue_amend_confirm(arguments: dict[str, Any] | None = None) -> dict[s
     Does NOT require owner_confirm (advisor callable for governance amendments).
     Re-validates all inputs and pending state before executing.
     """
-    if not _queue_amend_scope_allowed():
-        return _scope_denied_result_for(QUEUE_AMEND_SCOPE, "queue amend tools")
+    if not _verb_scope_allowed("lybra_queue_amend_confirm"):
+        return _verb_scope_denied("lybra_queue_amend_confirm", "queue amend tools")
     args = arguments or {}
     task_id = str(args.get("task_id") or "").strip()
     if not task_id:
@@ -3912,8 +3870,8 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
     This is the "agent opens mouth" direction (取代顾问观察式); gate只记录不判活、不心跳、不推送。
     跨机可用 (MCP HTTP, no gate filesystem access required).
     """
-    if not _task_progress_scope_allowed():
-        return _scope_denied_result_for(TASK_PROGRESS_SCOPE, "task progress tools")
+    if not _verb_scope_allowed("lybra_task_progress"):
+        return _verb_scope_denied("lybra_task_progress", "task progress tools")
     
     args = arguments or {}
     task_id = str(args.get("task_id") or "").strip()
@@ -4048,8 +4006,8 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
 def lybra_gate_guidance(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-330 S3: Read-only gate guidance — given card + role, answer what to do next.
 
-    Returns: the verb to call, required params, whether the role's scope is sufficient,
-    and who holds the scope if not. Data-driven (flow_description.py), not hardcoded.
+    AIPOS-F101 件①: 结论委托唯一推导核 next_resolver.derive_next_step(与 `lybra next` / loop 同一推导, 禁第二推导核);
+    本工具只在推导结论之上附「该谁动 / 所需 scope(读 verbs.schema 声明)/ 该角色是否持有 / 谁持有」, 不另推导。
 
     This is the "agent asks gate" direction: kickoff no longer needs to describe the flow,
     it just says "ask the gate".
@@ -4063,17 +4021,29 @@ def lybra_gate_guidance(arguments: dict[str, Any] | None = None) -> dict[str, An
     if not role:
         return _error_result("role is required")
 
-    from tools.aipos_cli.flow_description import resolve_next_step
+    from tools.aipos_cli.next_resolver import derive_next_step
+    from tools.aipos_cli.verb_contract import get_role_scope_map, who_holds_scope
+    from tools.schema_loader import SchemaLoadError
 
     try:
-        result = resolve_next_step(task_id, role, _repo_root())
-    except Exception as exc:
+        derivation = derive_next_step(task_id, Path(_repo_root()))
+        verb = str(derivation.get("verb") or "")
+        # 派生动词若是门工具(verbs.schema 声明), scope 读声明; 非门工具(如 lybra_finalize 本地命令)无门 scope
+        scope_needed = _verb_scope(verb) if verb in TOOL_HANDLERS else None
+    except (SchemaLoadError, OSError, ValueError) as exc:
         return _error_result(f"Failed to resolve guidance: {exc}")
 
+    role_scopes = get_role_scope_map().get(role, [])
     return _tool_result({
         "ok": True,
         "source": "gate",
-        "guidance": result,
+        "derivation_core": "tools/aipos_cli/next_resolver.derive_next_step",
+        "role": role,
+        "role_turn": str(derivation.get("triggered_by") or "") == role,
+        "scope_needed": scope_needed,
+        "scope_sufficient": (scope_needed in role_scopes) if scope_needed else True,
+        "scope_holders": who_holds_scope(scope_needed) if scope_needed else [],
+        "guidance": derivation,
     })
 
 
@@ -4578,7 +4548,7 @@ def _resolve_governance_root_arg(value: Any) -> tuple[str | None, dict[str, Any]
         "Pass a registered project name or its absolute path under the home root, then retry. "
         "Unknown/unregistered roots are rejected fail-closed (F24A 验收②: 未知根必报错, 不静默吞).",
         example_args={
-            "role": "executor", "instance": "exec.lybra.mac1", "ttl": 86400,
+            "role": "executor", "instance": "<实例>", "ttl": 86400,
             "owner_authorization_ref": "<owner-authorization-ref>",
             "governance_root": registered[0] if registered else "<home>/<registered-project>",
         },
@@ -4600,7 +4570,7 @@ def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], di
             "Retry with only the known parameters. Unknown parameters are rejected fail-closed "
             "(F24A: 未知参数必报错, 禁静默吞 —— 拼错参数名不会被当作已生效).",
             example_args={
-                "role": "executor", "instance": "exec.lybra.mac1", "ttl": 86400,
+                "role": "executor", "instance": "<实例>", "ttl": 86400,
                 "owner_authorization_ref": "<owner-authorization-ref>",
                 "governance_root": "<home>/<registered-project>",
             },
@@ -4623,9 +4593,9 @@ def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], di
             "Missing required parameter: role.",
             "Provide role (e.g. executor/auditor/advisor or a registered custom role). "
             "Example: lybra_enroll_code_dry_run with {\"role\": \"executor\", "
-            "\"instance\": \"exec.lybra.mac1\", \"ttl\": 86400, "
+            "\"instance\": \"<实例>\", \"ttl\": 86400, "
             "\"owner_authorization_ref\": \"<owner-authorization-ref>\"}",
-            example_args={"role": "executor", "instance": "exec.lybra.mac1", "ttl": 86400,
+            example_args={"role": "executor", "instance": "<实例>", "ttl": 86400,
                           "owner_authorization_ref": "<owner-authorization-ref>"},
         )
     if not owner_authorization_ref:
@@ -4635,7 +4605,7 @@ def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], di
             "Enrollment code generation is owner-gated (AIPOS-362 security model).",
             "Provide a reference to the Owner authorization decision (e.g. the decision_log id "
             "or task id authorizing this enrollment), then retry.",
-            example_args={"role": role, "instance": instance or "exec.lybra.mac1", "ttl": 86400,
+            example_args={"role": role, "instance": instance or "<实例>", "ttl": 86400,
                           "owner_authorization_ref": "<owner-authorization-ref>"},
         )
     ttl: int | None = None
@@ -5506,8 +5476,9 @@ READ_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "name": "lybra_gate_guidance",
         "description": (
             "AIPOS-330 S3: Read-only gate guidance. Given a task_id and role, the gate answers: "
-            "which verb to call next, what params are required, and whether the role's scope is sufficient. "
-            "Data-driven from the gate's flow description (collaboration_profile × task fields → gate chain). "
+            "which verb/command comes next, who should act, and whether the role's scope is sufficient. "
+            "AIPOS-F101: the answer is the single derivation core (next_resolver.derive_next_step, same as `lybra next`); "
+            "the scope is read from verbs.schema. "
             "This replaces hand-written kickoff instructions: kickoff says 'ask the gate', gate answers with facts. "
             "Gate provides facts only — it does not execute, does not decide whether the agent should act."
         ),
@@ -6363,7 +6334,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "role": {"type": "string", "description": "Role to bind (e.g., executor, auditor, or registered custom role)."},
-                "instance": {"type": "string", "description": "Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance."},
+                "instance": {"type": "string", "description": "Optional instance name to bind (<实例>, per the project naming profile); omit for any instance."},
                 "ttl": {"type": "integer", "description": "Code TTL seconds (default 86400 = 24h; also bounds the embedded transport credential)."},
                 "gate_url": {"type": "string", "description": "Externally reachable gate URL to embed; defaults to connection.json mcp.rpc_url (non-loopback) or http://127.0.0.1:7118."},
                 "owner_authorization_ref": {"type": "string", "description": "Reference to owner authorization for this enrollment (owner-gated)."},
@@ -6438,7 +6409,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "role": {"type": "string", "description": "Role to bind (e.g., executor, auditor, or registered custom role)."},
-                "instance": {"type": "string", "description": "Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance."},
+                "instance": {"type": "string", "description": "Optional instance name to bind (<实例>, per the project naming profile); omit for any instance."},
                 "ttl": {"type": "integer", "description": "Code TTL seconds (default 86400 = 24h; also bounds the embedded transport credential)."},
                 "gate_url": {"type": "string", "description": "Externally reachable gate URL to embed; defaults to connection.json mcp.rpc_url (non-loopback) or http://127.0.0.1:7118."},
                 "owner_authorization_ref": {"type": "string", "description": "Reference to owner authorization for this enrollment."},
@@ -6519,47 +6490,8 @@ def visible_tool_descriptors() -> list[dict[str, Any]]:
                 _active = None
         if _active is not None and _active not in [str(p) for p in _projects]:
             return []
-    descriptors = list(READ_TOOL_DESCRIPTORS)
-    if _intake_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_intake_submit"))
-    if _owner_decision_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_owner_decision_record"))
-    if _draft_publish_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_draft_publish"))
-    if _draft_submit_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_draft_submit"))
-    if _queue_claim_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_claim"))
-    if _queue_return_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_return"))
-    if _audit_dispatch_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_audit_dispatch"))
-    if _audit_verdict_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_audit_verdict"))
-    # AIPOS-336: bench_audit_submit visible to executor/advisor; bench_audit_confirm to advisor/owner
-    if _bench_audit_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_bench_audit_submit"))
-    if _bench_audit_confirm_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"] == "lybra_bench_audit_confirm")
-    if _queue_close_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_close"))
-        # AIPOS-354: converge_r_cards and mark_concluded share queue_close scope
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"] in ("lybra_converge_r_cards", "lybra_mark_concluded"))
-    if _queue_withdraw_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_withdraw"))
-    if _queue_amend_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_queue_amend"))
-    if _task_progress_scope_allowed():
-        descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_task_progress"))
-    # AIPOS-350: naming profile verbs are always visible (governance config, append-only logged)
-    descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_naming_profile"))
-    # AIPOS-352F1: custom role write verbs are always visible (owner-gated via owner_authorization_ref param)
-    descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_roles_register") or tool["name"].startswith("lybra_roles_remove"))
-    # AIPOS-362: enrollment verbs - enroll_code/revoke/list are owner-gated (always visible); enroll_exchange is PUBLIC (always visible)
-    descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"].startswith("lybra_roles_enroll"))
-    # AIPOS-F21: registry reload is owner-role-gated at call time; keep visible for discoverability
-    descriptors.extend(tool for tool in WRITE_TOOL_DESCRIPTORS if tool["name"] == "lybra_roles_reload")
-    return descriptors
+    # AIPOS-F101 件②: 可见性一律读 verbs.schema 声明(visibility: always / scope / hidden), 原按 scope 常量逐族拼接删除
+    return [tool for tool in READ_TOOL_DESCRIPTORS + WRITE_TOOL_DESCRIPTORS if _verb_visible(tool["name"])]
 
 
 # AIPOS-F87 件④(复查报告 H7): 此处原有第二个同名 def lybra_gate_guidance(AIPOS-R6E ⑧ verb_name/role 用法表),

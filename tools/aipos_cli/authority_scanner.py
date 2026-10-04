@@ -4,7 +4,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
 from tools.aipos_cli.records import check_task_record_refs
 from tools.schema_constants import RecordType
 
@@ -288,11 +288,23 @@ def _draft_findings(repo_root: Path | None) -> list[dict[str, Any]]:
         return []
     findings: list[dict[str, Any]] = []
     for path in sorted(drafts_root.rglob("*.md")):
-        try:
-            metadata, _body, _warnings = parse_markdown_frontmatter(path.read_text(encoding="utf-8"))
-        except Exception:
-            metadata = {}
         rel = str(path.relative_to(repo_root))
+        try:
+            metadata, _body = require_frontmatter(path)
+        except FrontmatterReadError as exc:
+            # AIPOS-F100 件②: 读不出不省略、不当空草稿——单列一条「读不出: <路径>: <原因>」
+            findings.append(
+                _finding(
+                    verdict="PRE_AUTHORITY_WARN",
+                    severity="needs_owner",
+                    subject_type="draft",
+                    subject_ref=rel,
+                    reason_code="DRAFT_FRONTMATTER_UNREADABLE",
+                    reason=str(exc),
+                    effective_truth=True,
+                )
+            )
+            continue
         findings.append(
             _finding(
                 verdict="PRE_AUTHORITY_WARN",

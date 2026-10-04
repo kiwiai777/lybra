@@ -7,10 +7,7 @@ from typing import Any
 
 
 
-try:
-    import yaml  # type: ignore
-except Exception:  # pragma: no cover
-    yaml = None
+from tools.aipos_cli.frontmatter import parse_yaml_mapping
 
 ALLOWED_AVAILABILITY_STATUSES = {"online", "offline", "busy", "maintenance", "unknown"}
 INSTANCE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
@@ -204,30 +201,39 @@ def _profile_copy(profile: dict[str, Any], source: str, source_path: str) -> dic
 
 
 def registry_available() -> bool:
-    """Return True iff the profile registry can actually be loaded (PyYAML is present).
+    """Return True iff the profile registry can actually be loaded.
 
     This is the canonical AIPOS-219 P5 signal used by tools.py and board_adapter.py
     to record ``identity_provenance.registry_available`` and make fail-closed independence
-    decisions.  All profile sources require PyYAML (sequences-of-mappings); without it
-    the registry degrades to empty, so this signal is simply ``yaml is not None``.
+    decisions.  AIPOS-F100: profile sources (sequences-of-mappings) are read through the product's single
+    reader (frontmatter.parse_yaml_mapping), whose zero-dependency path parses them exactly like yaml.safe_load —
+    so the registry is loadable with or without PyYAML. Parse failures still surface as registry_warnings
+    (the same degradation as with PyYAML present).
     """
-    return yaml is not None
+    return True
+
+
+def _parse_yaml_mapping(text: str) -> tuple[dict[str, Any] | None, list[str]]:
+    """AIPOS-F100: a YAML mapping document (registry file / ```yaml profile block) read through the product's single
+    reader (frontmatter.parse_yaml_mapping = parse_markdown_frontmatter's own implementation; no second YAML parser,
+    same result with or without PyYAML). Any warning = not readable (None)."""
+    data, warnings = parse_yaml_mapping(text)
+    if warnings:
+        return None, warnings
+    return data, []
 
 
 def _load_profiles_from_registry(repo_root: Path) -> tuple[list[dict[str, Any]], list[str]]:
     path = repo_root / CUSTOM_REGISTRY_RELATIVE_PATH
     if not path.exists():
         return [], []
-    if yaml is None:
-        return [], [
-            "WARN [AIPOS-218 WS3]: PyYAML unavailable — cannot parse custom agent registry "
-            f"at {CUSTOM_REGISTRY_RELATIVE_PATH}; profiles degraded to empty. "
-            "Install PyYAML to enable custom agent profiles."
-        ]
     try:
-        parsed = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception as exc:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
         return [], [f"Custom agent registry parse failed: {exc}"]
+    parsed, parse_warnings = _parse_yaml_mapping(text)
+    if parsed is None:
+        return [], [f"Custom agent registry parse failed: {'; '.join(parse_warnings)}"]
     if not isinstance(parsed, dict) or not isinstance(parsed.get("profiles"), list):
         return [], ["Custom agent registry must contain a profiles list"]
     profiles: list[dict[str, Any]] = []
@@ -250,27 +256,24 @@ def _extract_yaml_blocks(text: str) -> list[str]:
 def _load_profiles_from_docs(docs_root: Path, repo_root: Path) -> tuple[list[dict[str, Any]], list[str]]:
     if not docs_root.exists():
         return [], []
-    if yaml is None:
-        return [], [
-            "WARN [AIPOS-218 WS3]: PyYAML unavailable — cannot parse agent runtime profile docs "
-            f"at {docs_root}; profiles degraded to empty. "
-            "Install PyYAML to enable registry-verified agent identity."
-        ]
 
     profiles: list[dict[str, Any]] = []
+    warnings: list[str] = []
     for path in sorted(docs_root.glob("*_runtime_profiles.md")):
         try:
             text = path.read_text(encoding="utf-8")
-        except Exception:
+        except (OSError, UnicodeDecodeError) as exc:
+            warnings.append(f"Agent runtime profile doc unreadable: {path}: {exc}")
             continue
         for block in _extract_yaml_blocks(text):
-            try:
-                parsed = yaml.safe_load(block) or {}
-            except Exception:
+            parsed, parse_warnings = _parse_yaml_mapping(block)
+            if parsed is None:
+                # AIPOS-F100: 读不出不静默跳过——点名进 registry_warnings(与 registry 文件同一降级出声)
+                warnings.append(f"Agent runtime profile block unreadable in {path}: {'; '.join(parse_warnings)}")
                 continue
             if isinstance(parsed, dict) and parsed.get("agent_id"):
                 profiles.append(_profile_copy(parsed, source="docs", source_path=str(path.relative_to(repo_root))))
-    return profiles, []
+    return profiles, warnings
 
 
 def load_agent_profiles(repo_root: Path) -> dict[str, Any]:

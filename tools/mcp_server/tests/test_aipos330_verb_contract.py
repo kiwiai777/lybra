@@ -272,8 +272,26 @@ class TestS6Extensibility(unittest.TestCase):
             # Add a fictional verb
             TOOL_HANDLERS[new_verb_name] = lambda args: {}
 
-            # It should now appear in the registry
-            registry = get_verb_registry()
+            # AIPOS-F101 件②: 门工具 scope 唯一声明在 verbs.schema —— 未声明的门工具 fail-closed(不回落代码猜测)
+            from tools.mcp_server import tools as gate_tools
+            from tools.schema_loader import SchemaLoadError, load_schema as real_load_schema
+
+            with self.assertRaises(SchemaLoadError):
+                get_verb_registry()
+
+            # 声明后(只改声明, 零代码改动)即自动出现在注册表, scope 读声明
+            def _declared(kind, root=None):
+                data = real_load_schema(kind, root)
+                if kind != "verbs":
+                    return data
+                data = json.loads(json.dumps(data))
+                data["verbs"][new_verb_name] = {"required_scope": None, "visibility": "hidden", "surface": ["mcp"]}
+                return data
+
+            from unittest.mock import patch
+
+            with patch.object(gate_tools, "load_schema", _declared):
+                registry = get_verb_registry()
             registry_names = {entry["name"] for entry in registry}
             self.assertIn(new_verb_name, registry_names)
 

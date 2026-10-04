@@ -55,31 +55,31 @@ def generate_verb_help(verb_name: str, repo_root: Path | None = None) -> str:
 def _generate_example(verb_name: str, params: dict[str, Any]) -> str:
     """根据参数定义生成示例。"""
     
-    # 预定义的示例值
+    # 预定义的示例值(AIPOS-F101 件④: 身份/信封一律占位, 不写死任何项目的实例名或信封 id; 实值由调用方按项目声明填写)
     examples = {
         "lybra_queue_return": {
-            "task_id": "AIPOS-R6L",
-            "actor": "exec.lybra.kiwiai-dev",
-            "agent_instance": "exec.lybra.kiwiai-dev",
+            "task_id": "<卡ID>",
+            "actor": "<实例>",
+            "agent_instance": "<实例>",
             "autonomy_mode": "Supervised",
-            "owner_policy_ref": "pol_lybra_dev_9",
+            "owner_policy_ref": "<信封>",
             "result_summary": "任务完成描述",
-            "artifact_refs": '["task_cards/TASK-ID/RETURN.md"]',
-            "completion_report_ref": "task_cards/TASK-ID/RETURN.md",
+            "artifact_refs": '["task_cards/<卡ID>/RETURN.md"]',
+            "completion_report_ref": "task_cards/<卡ID>/RETURN.md",
         },
         "lybra_finalize": {
-            "task_id": "AIPOS-R6L",
-            "actor": "owner.lybra.kiwiai-dev",
+            "task_id": "<卡ID>",
+            "actor": "<实例>",
             "deployment_strategy": "push_and_deploy",
         },
         "lybra_queue_close": {
-            "task_id": "AIPOS-R6L",
-            "actor": "owner.lybra.kiwiai-dev",
+            "task_id": "<卡ID>",
+            "actor": "<实例>",
             "closure_evidence": "任务已完成并验证",
         },
         "lybra_mark_concluded": {
-            "task_id": "AIPOS-R6L",
-            "actor": "owner.lybra.kiwiai-dev",
+            "task_id": "<卡ID>",
+            "actor": "<实例>",
             "conclusion_reason": "任务结论描述",
         },
     }
