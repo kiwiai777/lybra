@@ -1034,6 +1034,21 @@ else
   overall=1
 fi
 
+# AIPOS-F102: 身份与角色类单源(族 B-b:H5/M4/M21)——派审 actor = 驱动方实例、审计卡认领实例 = 被审卡 audit_by(缺则项目推导)、
+# 修复卡执行实例承继/项目推导(非 lybra 项目靶场); 角色类解析唯一 custom_roles.resolve_role_to_class(统一拒) + 分组读 roles.schema class_groups;
+# default_instance_name 缺 project 即拒。整文件 + 本卡改动的既有节点(其余既有节点已在上方各自登记块内)
+echo
+echo "── tests/test_aipos_f102_identity_single_source.py (F102 非 lybra 项目派审/审计认领/修复卡身份靶场·角色类统一拒·分组读声明·项目段缺即拒·棘轮 a 删条目) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f102_identity_single_source.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_f23_enroll.py::TestRoleFileMergeAndGuards::test_enroll_custom_role_executor_class_refused" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_derived_audit_verdict.py::DerivedAuditVerdictTests::test_derived_verdict_blocks_when_publish_record_missing" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f102_identity_single_source.py PASS"
+else
+  echo "✗ tests/test_aipos_f102_identity_single_source.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
