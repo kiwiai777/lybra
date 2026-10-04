@@ -5,6 +5,8 @@
 pump(seconds) 作为唯一哨兵 run_fs_watch 的 sleeper: select 事件驱动阻塞读输出至多 seconds 秒, 非 sleep 自旋。
 terminate_group: SIGTERM → 等声明秒数 → SIGKILL 整组(含孙进程)。无守护/调度/心跳/常驻: 进程只活在一次等待内。
 token/凭据永不上屏: 凭据字样所在行整行隐去, 长不透明串打码。
+AIPOS-F107 件①: loop 的中断信号 = SIGINT/SIGTERM/SIGHUP(LOOP_SIGNALS 唯一声明; ssh 断线 = SIGHUP, 与 SIGTERM 同语义: 先清进程组再按该信号退出);
+拉起等待与清理期 SIGPIPE 忽略。输出端断开(ssh 断线后终端 EIO / 管道读端关闭 BrokenPipeError)→ TolerantOutput 转为静默丢弃, 不打断清理。
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ from typing import Any, Callable
 
 
 class LoopInterrupted(Exception):
-    """拉起等待期间 loop 收到 SIGINT/SIGTERM: 进程组已终止, 调用方按该信号退出(不新增退出码)。"""
+    """拉起等待期间 loop 收到 LOOP_SIGNALS 之一(SIGINT/SIGTERM/SIGHUP): 进程组已终止, 调用方按该信号退出(不新增退出码)。"""
 
     def __init__(self, signum: int) -> None:
         super().__init__(f"signal {signum}")
@@ -205,47 +207,81 @@ class LaunchedHarness:
                 f"非 JSON {self.counts['non_json']}, 原样 {self.counts['raw']}, 未知类型 {unknown or '无'}")
 
 
+def loop_signals() -> tuple[int, ...]:
+    """AIPOS-F107 件①: loop 拉起期按「中断」处置的信号唯一声明 = SIGTERM/SIGINT/SIGHUP(ssh 断线 → SIGHUP, 与 SIGTERM 同语义)。"""
+    import signal as _signal
+
+    return (_signal.SIGTERM, _signal.SIGINT, _signal.SIGHUP)
+
+
 @contextlib.contextmanager
-def signals_raise_interrupt() -> Any:
-    """拉起等待期间: SIGINT/SIGTERM → LoopInterrupted(调用方 finally 先清进程组)。非主线程不装(signal 只能主线程装)。"""
+def _installed(handler: Any) -> Any:
+    """LOOP_SIGNALS 装 handler、SIGPIPE 置忽略(写断开转 OSError, 由 TolerantOutput 丢弃), 退出上下文恢复原处置。非主线程不装。"""
     import signal as _signal
     import threading
 
     if threading.current_thread() is not threading.main_thread():
         yield
         return
+    previous = {sig: _signal.signal(sig, handler) for sig in loop_signals()}
+    previous[_signal.SIGPIPE] = _signal.signal(_signal.SIGPIPE, _signal.SIG_IGN)
+    try:
+        yield
+    finally:
+        for sig, old in previous.items():
+            _signal.signal(sig, old)
+
+
+@contextlib.contextmanager
+def signals_raise_interrupt() -> Any:
+    """拉起等待期间: LOOP_SIGNALS → LoopInterrupted(调用方 finally 先清进程组)。非主线程不装(signal 只能主线程装)。"""
 
     def _handler(signum: int, _frame: Any) -> None:
         raise LoopInterrupted(signum)
 
-    previous = {sig: _signal.signal(sig, _handler) for sig in (_signal.SIGTERM, _signal.SIGINT)}
-    try:
+    with _installed(_handler):
         yield
-    finally:
-        for sig, handler in previous.items():
-            _signal.signal(sig, handler)
 
 
 @contextlib.contextmanager
 def signals_deferred() -> Any:
-    """清进程组期间: SIGINT/SIGTERM 只记下(不打断清理), 退出上下文后恢复原处置; 调用方据记录再抛 LoopInterrupted。"""
-    import signal as _signal
-    import threading
-
+    """拉起/清进程组期间: LOOP_SIGNALS 只记下(不打断), 退出上下文后恢复原处置; 调用方据记录再抛 LoopInterrupted。"""
     received: list[int] = []
-    if threading.current_thread() is not threading.main_thread():
-        yield received
-        return
 
     def _record(signum: int, _frame: Any) -> None:
         received.append(signum)
 
-    previous = {sig: _signal.signal(sig, _record) for sig in (_signal.SIGTERM, _signal.SIGINT)}
-    try:
+    with _installed(_record):
         yield received
-    finally:
-        for sig, handler in previous.items():
-            _signal.signal(sig, handler)
+
+
+class TolerantOutput:
+    """AIPOS-F107 件①: loop 输出行的写出口。输出端断开(ssh 断线后终端写 EIO、管道读端关闭 BrokenPipeError, 均为 OSError)
+    → 记下原因、把该流底层 fd 改指 /dev/null(后续写与解释器退出时 flush 都不再失败), 此后静默丢弃输出, 调用方照常清理与留痕。"""
+
+    def __init__(self, stream: Any) -> None:
+        self.stream = stream
+        self.broken = ""
+
+    def __call__(self, line: str) -> None:
+        if self.broken:
+            return
+        try:
+            print(line, file=self.stream, flush=True)
+        except OSError as exc:
+            self.broken = f"{type(exc).__name__}: {exc}"
+            self._discard()
+
+    def _discard(self) -> None:
+        try:
+            fd = self.stream.fileno()
+        except (OSError, ValueError):
+            return  # 无底层 fd(内存流)或已关闭: 只靠 broken 标记丢弃后续输出
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, fd)
+        finally:
+            os.close(devnull)
 
 
 # AIPOS-316: Guard against direct invocation
