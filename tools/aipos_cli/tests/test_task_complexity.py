@@ -85,7 +85,7 @@ class TaskComplexityTests(unittest.TestCase):
         task = self.write_task(task_class="large")
         result = validate_single_task(task)
         self.assertEqual(result["verdict"], "BLOCK")
-        self.assertIn("task_class must be simple or complex", result["blocking_reasons"])
+        self.assertIn("task_class must be one of: simple, standard, complex (enums.schema task_class)", result["blocking_reasons"])  # AIPOS-F104 件④: 值域读 enums
 
     def test_complex_docs_task_requires_independent_roles(self) -> None:
         task = self.write_task(task_class="complex", planner_agent="planner.local", reviewer="review.local", audit_by="audit.local")

@@ -173,7 +173,9 @@ def write_task_progress_event(
         }
     
     # Validate event_type
-    if event_type not in ("started", "progress", "completed", "blocked"):
+    from tools.schema_loader import get_enum_values  # AIPOS-F104: 值域 = enums.schema progress_status(唯一声明)
+
+    if event_type not in get_enum_values("progress_status"):
         return {
             "ok": False,
             "verdict": Verdict.BLOCK,

@@ -307,7 +307,9 @@ def validate_task(
         _add(blocking_reasons, "Queue directory does not match frontmatter status")
         _add(needs_owner_reasons, "Directory/status mismatch")
 
-    if queue_state not in {"pending", "claimed", "completed", "blocked", "withdrawn"}:
+    from tools.aipos_cli.task_loader import QUEUE_STATES  # AIPOS-F104 件②: 队列目录值域唯一投影(惰性: task_loader 链)
+
+    if queue_state not in QUEUE_STATES:
         _add(blocking_reasons, f"Invalid queue state: {queue_state}")
 
     if _is_missing(metadata.get("project")):

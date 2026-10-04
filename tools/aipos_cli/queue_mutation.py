@@ -35,15 +35,45 @@ MUTATION_RECORDS_SAFETY_NOTICE = (
     "AIPOS-32 queue mutation with records enabled writes only within 5_tasks/queue/ and 5_tasks/records/. "
     "Records writing is opt-in and limited to 5_tasks/records/. It does not run agents or mutate orchestration state."
 )
-ALLOWED_TRANSITIONS = {
-    "claim": ("pending", "claimed"),
-    "block": ("claimed", "blocked"),
-    "complete": ("claimed", "completed"),
-    "reopen": ("*", "pending"),  # AIPOS-348: accept blocked or completed (correction path)
-    "withdraw": ("*", "withdrawn"),  # AIPOS-315: can withdraw from pending or claimed
-}
-# AIPOS-348: reopen source states (explicit allowlist for "*" transitions)
-REOPEN_SOURCE_STATES = ("blocked", "completed")
+
+
+def queue_mutation_transitions() -> dict[str, tuple[tuple[str, ...], str]]:
+    """AIPOS-F104 件①: 队列搬卡转移表唯一读取口——transitions.schema queue_mutations.transitions。
+
+    返回 {动作: (允许源目录元组, 目标目录)}; 条目带 node = 引用 nodes.<id> 的 from_states/to_state。
+    缺声明 / 源或目标不是队列目录(task_loader.QUEUE_STATES, enums queue_state queue_dir 投影)= SchemaLoadError fail-closed。
+    原手写 ALLOWED_TRANSITIONS(withdraw/reopen 源写 "*")与 transition_engine.validate_transition 本地简化表退役。
+    """
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    schema = load_schema("transitions")
+    declared = (schema.get("queue_mutations") or {}).get("transitions")
+    if not isinstance(declared, dict) or not declared:
+        raise SchemaLoadError("transitions.schema.json queue_mutations.transitions 未声明")
+    table: dict[str, tuple[tuple[str, ...], str]] = {}
+    for action, spec in declared.items():
+        source = spec
+        node_ref = spec.get("node") if isinstance(spec, dict) else None
+        if node_ref:
+            source = (schema.get("nodes") or {}).get(node_ref)
+        if not isinstance(source, dict):
+            raise SchemaLoadError(f"transitions.schema.json queue_mutations.transitions.{action} 声明无效: {spec!r}")
+        from_states = tuple(str(state) for state in (source.get("from_states") or ()))
+        to_state = str(source.get("to_state") or "")
+        bad = [state for state in (*from_states, to_state) if state not in QUEUE_STATES]
+        if not from_states or not to_state or bad:
+            raise SchemaLoadError(
+                f"transitions.schema.json queue_mutations.transitions.{action} 源/目标须为队列目录 {QUEUE_STATES}: "
+                f"from_states={from_states} to_state={to_state!r}"
+            )
+        table[str(action)] = (from_states, to_state)
+    return table
+
+
+# 模块级投影(只读声明, 非第二份表): {动作: (允许源目录元组, 目标目录)}
+ALLOWED_TRANSITIONS = queue_mutation_transitions()
+# AIPOS-348: reopen 允许源目录(= 声明 reopen.from_states)
+REOPEN_SOURCE_STATES = ALLOWED_TRANSITIONS["reopen"][0]
 # AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(本名保留为别名, 供既有调用方)。
 FRONTMATTER_ORDER = CARD_FRONTMATTER_ORDER
 
@@ -555,22 +585,14 @@ def mutate_queue_task(
 
     source_task = _select_task(repo_root, task_id=task_id, task_path=task_path)
     source_path = (repo_root / str(source_task["path"])).resolve()
-    from_state, to_state = ALLOWED_TRANSITIONS[action]
-    
-    # AIPOS-315: withdraw supports multiple source states
+    from_states, to_state = ALLOWED_TRANSITIONS[action]
+    from_state = " or ".join(from_states)
+
+    # AIPOS-315: withdraw supports multiple source states(值域 = 声明 withdraw.from_states)
     if action == "withdraw":
         actual_state = source_task.get("queue_state")
-        if actual_state not in ("pending", "claimed"):
-            raise ValueError(f"withdraw only supports pending or claimed tasks, found {actual_state}")
-        from_state = actual_state
-    # AIPOS-348: reopen supports blocked and completed source states
-    if action == "reopen":
-        actual_state = source_task.get("queue_state")
-        if actual_state not in REOPEN_SOURCE_STATES:
-            # Don't raise; let the blocking_reasons path handle it for a clean BLOCK verdict
-            from_state = actual_state  # will fail the transition check below
-        else:
-            from_state = actual_state
+        if actual_state not in from_states:
+            raise ValueError(f"withdraw only supports {from_state} tasks, found {actual_state}")
     
     target_path = queue_root_for(repo_root) / to_state / source_path.name
     source_metadata, source_body, _warnings = _read_task_markdown(source_path)
@@ -610,11 +632,11 @@ def mutate_queue_task(
 
     # AIPOS-315/348: withdraw and reopen have flexible from_state, skip this check
     if action not in ("withdraw", "reopen"):
-        if source_task.get("queue_state") != from_state:
+        if source_task.get("queue_state") not in from_states:
             result["blocking_reasons"].append(
                 f"Invalid transition for {action}: expected source state {from_state}, found {source_task.get('queue_state')}"
             )
-        if source_task.get("frontmatter_status") != from_state:
+        if source_task.get("frontmatter_status") not in from_states:
             result["blocking_reasons"].append(
                 f"Directory/status mismatch blocks {action}: expected frontmatter status {from_state}"
             )

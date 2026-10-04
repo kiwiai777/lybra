@@ -21,6 +21,21 @@ declare -a files=(
   "tests/ts/f93-go-report-fields.test.ts"
 )
 overall=0
+# AIPOS-F111 件②: 一行式 pytest 夹具登记。本文件在 .gitattributes 声明 merge=union(并行卡各自在汇总段前追加登记, 合并全保留);
+# union 会把两侧「相同的首尾行」只留一份——多行 if/else/fi 登记块的公共尾行(overall=1 / fi)被吃掉即语法坏(bash -n 兜底)。
+# 新登记一律用本函数: 一行注释 + 一行 `run_pytest <标签> <pytest 参数…>`, 每行含本卡夹具名、全文唯一, 并集合并安全。
+run_pytest() {
+  local label="$1"
+  shift
+  echo
+  echo "── $label ────────────────────────────────────────────────────"
+  if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$@" -v --tb=short; then
+    echo "✓ $label PASS"
+  else
+    echo "✗ $label FAIL"
+    overall=1
+  fi
+}
 for f in "${files[@]}"; do
   echo
   echo "── $f ──────────────────────────────────────────"
@@ -1065,15 +1080,21 @@ else
   overall=1
 fi
 
-# AIPOS-F100: 零依赖兑现——stdlib 写出器写全产品形状(形状表双向夹具在 test_frontmatter_zerodep.py, 已登记于上块)、
-# frontmatter「读不出即拒」(必须读出入口 require_frontmatter; 推导核硬停 frontmatter_unreadable; 读-改-写不重写; 展示面列「读不出」),
-# 屏蔽 PyYAML 的全链路(草稿→发布→认领→交回 ingest(门派审)→审计认领→裁决 ingest→finalization ingest→close)与有 PyYAML 时逐字段相同
+# AIPOS-F100: 零依赖兑现——frontmatter 读不出即拒(每个改动调用方一个坏卡/坏记录靶场)·屏蔽 PyYAML 全链路(草稿→发布→认领→交回 ingest→派审→裁决 ingest→finalization ingest→close)每步回读且与有 PyYAML 时逐字段相同(形状表双向夹具在 test_frontmatter_zerodep.py, 已登记于 F98 块)
+run_pytest "tests/test_aipos_f100_read_or_refuse.py" "$REPO_ROOT/tests/test_aipos_f100_read_or_refuse.py" "$REPO_ROOT/tests/test_aipos_f100_zerodep_full_chain.py"
+# AIPOS-F111: 并行审计——loop 拉起按卡号取开工提示(my-tasks --task-id)·同工位两张审计卡同时拉起各取各 kickoff·拒因原样转述·run-all.sh merge=union 并集合并靶场
+run_pytest "tests/test_aipos_f111_parallel_audit.py" "$REPO_ROOT/tests/test_aipos_f111_parallel_audit.py"
+# AIPOS-F104: 状态与枚举投影单源(族 C-b: M6/M7/M16/N6)——搬卡转移表读 transitions.schema queue_mutations(validate_transition 删)、
+# 队列状态集合 = enums queue_state 投影(task_loader.QUEUE_STATES / QUEUE_SKELETON_STATES)、role_category = roles.schema 投影(含 advisor)、
+# task_class 三值(standard 语义声明并实现)与 CLI choices 同读 enums; 不变量夹具「枚举声明值域 = 代码校验值域」+ 改动节点(task_class 非法值文案)
 echo
-echo "── tests/test_aipos_f100_read_or_refuse.py + tests/test_aipos_f100_zerodep_full_chain.py (F100 读不出即拒·每个改动调用方一个坏卡/坏记录靶场 / 屏蔽 yaml 全链路每步回读且与有 yaml 时逐字段相同) ────────────────────────────────────────────────────"
-if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f100_read_or_refuse.py" "$REPO_ROOT/tests/test_aipos_f100_zerodep_full_chain.py" -v --tb=short; then
-  echo "✓ tests/test_aipos_f100_read_or_refuse.py PASS"
+echo "── tests/test_aipos_f104_enum_projection_invariant.py (F104 转移表单源·QueueState 投影·role_category=roles.schema·task_class 三值·progress_status·手写值域副本扫描) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f104_enum_projection_invariant.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_task_complexity.py::TaskComplexityTests::test_invalid_task_class_blocks" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f104_enum_projection_invariant.py PASS"
 else
-  echo "✗ tests/test_aipos_f100_read_or_refuse.py FAIL"
+  echo "✗ tests/test_aipos_f104_enum_projection_invariant.py FAIL"
   overall=1
 fi
 

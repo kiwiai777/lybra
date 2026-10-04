@@ -10,7 +10,8 @@ AIPOS-F95: 唯一例外——Owner 信封 launch_harnesses 授权该卡 harness 
 - 执行: next_resolver.execute_derived_action(AIPOS-F73 `next --run` 同一执行体)
 - 等待: agent_watch_fs.run_fs_watch(AIPOS-268/284 唯一哨兵, `--expect` + 就绪谓词=推导核可推导)
 - 拉起: 本模块 plan_launch / LaunchedHarness(AIPOS-F95; 模板 enums.schema harness.launch, 授权 autonomy_policy.envelope_authorizes_launch,
-  工位位置 enrollment.workstation_location, 身份 charter_render.workstation_identity, kickoff = my-tasks next_card.kickoff)
+  工位位置 enrollment.workstation_location, 身份 charter_render.workstation_identity,
+  kickoff = 工位 my-tasks --task-id <等待目标卡> 的 next_card.kickoff(AIPOS-F111: 按卡号取, 同工位多卡可各自拉起))
 - 信封: autonomy_policy(owner_autonomy_policy 族, `lybra envelope mint` 申领)
 - 退出码/参数/允许动词集合/等待产物: schema/verbs.schema.json verbs.lybra_loop 一处声明, 本模块只读。
 
@@ -392,35 +393,39 @@ def _render_manual_hint(decl: dict[str, Any], *, harness: str, instance: str, lo
 
 
 def workstation_kickoff(governance_root: Path, workstation: str, card: str) -> tuple[str, str]:
-    """该工位 `my-tasks --workstation <dir> --json` 的 next_card.kickoff(与工位 /go 同一产品输出, 进程内同一 CLI 实现)。
+    """该工位 `my-tasks --workstation <dir> --task-id <等待目标卡> --json` 的 next_card.kickoff(与工位 `/go <卡号>` 同一产品输出,
+    进程内同一 CLI 实现)。
 
-    返回 (kickoff, refusal): next_card 缺 / task_id ≠ 等待目标卡 / kickoff 空 / 工位治理根 ≠ 本治理根 = refusal 非空。"""
+    AIPOS-F111 件①: 按卡号取开工提示——只核验等待目标卡这一张(判据 next_resolver.kickoff_refusal, 与 /go <卡号> 同一判据:
+    非 claimed/非本实例认领/已结案/产物已交 → 拒), 不再要求该卡是工位 next_card 选卡结果, 同一工位同时在办多张卡可各自拉起。
+    返回 (kickoff, refusal): 产品拒因(原样转述) / kickoff 空 / 工位治理根 ≠ 本治理根 / 产品输出与指向不一致 = refusal 非空。"""
     from tools.aipos_cli.aipos_cli import main as cli_main
 
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = cli_main(["my-tasks", "--workstation", workstation, "--json"])
+            rc = cli_main(["my-tasks", "--workstation", workstation, "--task-id", card, "--json"])
         except SystemExit as exc:
             rc = exc.code if isinstance(exc.code, int) else 2
     if rc != 0:
-        return "", f"工位 my-tasks 失败(exit {rc}): {err.getvalue().strip()[-300:]}"
+        return "", f"工位 my-tasks --task-id {card} 失败(exit {rc}): {err.getvalue().strip()[-300:]}"
     try:
         data = json.loads(out.getvalue())
     except ValueError as exc:
-        return "", f"工位 my-tasks 输出非 JSON: {exc}"
+        return "", f"工位 my-tasks --task-id {card} 输出非 JSON: {exc}"
     ws_root = str((data.get("workstation") or {}).get("governance_root") or "")
     if not ws_root or Path(ws_root).resolve() != Path(governance_root).resolve():
         return "", f"工位治理根 {ws_root or '(未解析)'} ≠ 本 loop 治理根 {governance_root}"
     next_card = data.get("next_card")
     if not isinstance(next_card, dict):
-        excluded = "; ".join(f"{e.get('task_id')} {e.get('code')}" for e in (data.get("next_card_excluded") or []) if isinstance(e, dict))
-        return "", f"工位 my-tasks 无 next_card(不入选: {excluded or '无'})"
-    if str(next_card.get("task_id") or "") != card:
-        return "", f"工位 my-tasks next_card={next_card.get('task_id')} ≠ 等待目标卡 {card}"
+        excluded = [e for e in (data.get("next_card_excluded") or []) if isinstance(e, dict)]
+        reasons = "; ".join(f"{e.get('task_id')} {e.get('code')}: {e.get('reason')}" for e in excluded)
+        return "", f"工位 my-tasks --task-id {card} 拒开工({reasons or '产品未给出拒因'})"
+    if str(next_card.get("task_id") or "") != card:  # --task-id 只核验这一张; 不等 = 产品输出与指向不一致(fail-closed)
+        return "", f"工位 my-tasks --task-id {card} 返回 next_card={next_card.get('task_id')}, 与指向不一致"
     kickoff = next_card.get("kickoff")
     if not isinstance(kickoff, str) or not kickoff.strip():
-        return "", "工位 my-tasks next_card 缺 kickoff"
+        return "", f"工位 my-tasks --task-id {card} next_card 缺 kickoff"
     return kickoff, ""
 
 
@@ -534,7 +539,7 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
         return True
     step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid}
     say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}(信封 {envelope_id} launch_harnesses 授权; "
-        f"kickoff = 工位 my-tasks next_card.kickoff)")
+        f"kickoff = 工位 my-tasks --task-id {plan.card} next_card.kickoff)")
     outcome = "error"
     try:
         failure = _session_event(governance_root, plan.card, actor, "harness_launch",
