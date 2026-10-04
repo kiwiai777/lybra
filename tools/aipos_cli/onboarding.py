@@ -677,16 +677,18 @@ def validate_step_prerequisites(
         if not (ws / ".pi" / "settings.json").is_file():
             missing.append(".pi/settings.json")
             guidance.append(".pi 接线缺失; Step 7 enroll 应自动落, 重跑 Step 7")
-        from tools.aipos_cli.charter_render import WorkstationIdentityError, is_enrolled_workstation, workstation_identity
+        from tools.aipos_cli.charter_render import is_enrolled_workstation
+        from tools.loop_context import ConnectionResolver
 
         if is_enrolled_workstation(ws):
-            try:
-                if not workstation_identity(ws).get("owner_policy_ref"):
-                    missing.append("owner_policy_ref")
-                    guidance.append("role 文件缺 owner_policy_ref; 核对 Step 4 信封是否覆盖本工位实例后重跑 lybra sync")
-            except WorkstationIdentityError:
+            # role 文件只经 ConnectionResolver.resolve_identity 读(唯一实现之一; env={} = 只认工位声明层 .lybra/role)
+            ident = ConnectionResolver.resolve_identity(workspace_root=ws, env={})
+            if ident["role"]["source"] != ".lybra/role":
                 missing.append("role_invalid")
                 guidance.append("role 文件格式错误; 重跑 Step 7")
+            elif ident["owner_policy_ref"]["source"] != ".lybra/role":
+                missing.append("owner_policy_ref")
+                guidance.append("role 文件缺 owner_policy_ref; 核对 Step 4 信封是否覆盖本工位实例后重跑 lybra sync")
 
     return {
         "ok": not missing,

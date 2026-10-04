@@ -816,16 +816,16 @@ def _get_historical_distributed_files(harness_root: Path) -> set[str]:
     manifest/role 不可读 = 出声 warning + 空集合(fail-safe, 不静默吞)。
     """
     historical: set[str] = set()
-    # AIPOS-F106 件④: role 只经 charter_render.workstation_identity 读(唯一实现)
-    from tools.aipos_cli.charter_render import WorkstationIdentityError, is_enrolled_workstation, workstation_identity
+    # AIPOS-F106 件④: role 只经 ConnectionResolver.resolve_role 读(.lybra/role 唯一实现之一; env={} = 只认工位声明层)
+    from tools.aipos_cli.charter_render import is_enrolled_workstation
+    from tools.loop_context import ConnectionResolver
 
     if not is_enrolled_workstation(harness_root):
         return historical
 
-    try:
-        role = workstation_identity(harness_root)["role"]
-    except WorkstationIdentityError as exc:
-        print(f"Warning: {harness_root} 工位身份不可读, prune 历史集合为空: {exc}", file=sys.stderr)
+    role = ConnectionResolver.resolve_role(workspace_root=Path(harness_root), env={})
+    if not role:
+        print(f"Warning: {harness_root} .lybra/role 不可读/无 role, prune 历史集合为空", file=sys.stderr)
         return historical
 
     manifest_path = harness_root.parent / "_distributed" / f".version-{role}"
@@ -1302,20 +1302,22 @@ def _correct_owner_policy_ref(harness_root: Path, role: str) -> dict[str, Any]:
     workstation_wiring.derive_effective_owner_policy_ref。读不到治理根/推导不出 →
     非致命告警(sync 的本职是分发, 不因信封缺失阻断)。
     """
-    # AIPOS-F106 件④: 工位身份(role 文件 + connection.json 非秘密字段)只经 charter_render.workstation_identity 读(唯一实现)
-    from tools.aipos_cli.charter_render import WorkstationIdentityError, workstation_identity, workstation_role_file
+    # AIPOS-F106 件④: .lybra 定位 / connection.json 读取经 ConnectionResolver 既有原语(discover_lybra_dir / load_connection_config);
+    # role 文件只经 ConnectionResolver.resolve_identity 读(唯一实现之一, 只取工位声明层 .lybra/role, env 不参与)
+    from tools.loop_context import ConnectionResolver
 
     out: dict[str, Any] = {"checked": True}
+    lybra_dir = ConnectionResolver.discover_lybra_dir(Path(harness_root))
+    if lybra_dir is None:
+        return {"checked": False, "note": "无 .lybra, 跳过信封校正"}
     try:
-        ident = workstation_identity(harness_root)
-    except WorkstationIdentityError as exc:
-        return {"checked": False, "note": f"工位身份不可读, 跳过信封校正: {exc}"}
-    lybra_dir = workstation_role_file(harness_root).parent  # workstation_identity 成功 = role 文件在 .lybra 内
-    if not (lybra_dir / "connection.json").is_file():
+        conn = ConnectionResolver.load_connection_config(lybra_dir)
+    except (FileNotFoundError, ValueError):
         return {"checked": False, "note": "connection.json 不可读, 跳过信封校正"}
-    gov_root = ident.get("governance_root_declared")
-    instance = ident.get("instance")
-    current = ident.get("owner_policy_ref")
+    gov_root = str(conn.get("governance_root") or "").strip() or None
+    ident = ConnectionResolver.resolve_identity(workspace_root=Path(harness_root), env={})
+    instance = ident["agent_instance"]["value"] if ident["agent_instance"]["source"] == ".lybra/role" else None
+    current = ident["owner_policy_ref"]["value"] if ident["owner_policy_ref"]["source"] == ".lybra/role" else None
 
     from tools.aipos_cli.workstation_wiring import derive_effective_owner_policy_ref
 
