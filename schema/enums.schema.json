@@ -4,31 +4,43 @@
   "last_updated": "2026-08-12",
   "enums": {
     "queue_state": {
-      "description": "Task queue states",
+      "description": "Task queue states(卡 frontmatter status 值域)。AIPOS-F104 件②: 每值带 queue_dir(是否为 <queue_root>/<值>/ 队列目录; returned = 记录推导态, 卡仍在 claimed/ 目录, 无独立目录)与 skeleton(新项目/脚手架预建的队列目录; withdrawn 目录按需建)。代码侧唯一投影 task_loader.QUEUE_STATES(queue_dir=true)/ task_loader.QUEUE_SKELETON_STATES(skeleton=true), 禁手写状态集合; 不变量夹具 tests/test_aipos_f104_enum_projection_invariant.py 锁声明 = 代码。",
       "values": [
         {
           "value": "pending",
-          "description": "Task published, awaiting claim"
+          "description": "Task published, awaiting claim",
+          "queue_dir": true,
+          "skeleton": true
         },
         {
           "value": "claimed",
-          "description": "Task claimed by an agent, work in progress"
+          "description": "Task claimed by an agent, work in progress",
+          "queue_dir": true,
+          "skeleton": true
         },
         {
           "value": "returned",
-          "description": "Task work returned, awaiting audit/closure"
+          "description": "Task work returned, awaiting audit/closure(记录推导态: 卡留在 claimed/ 目录, 由 return 记录推导)",
+          "queue_dir": false,
+          "skeleton": false
         },
         {
           "value": "completed",
-          "description": "Task completed and closed"
+          "description": "Task completed and closed",
+          "queue_dir": true,
+          "skeleton": true
         },
         {
           "value": "blocked",
-          "description": "Task blocked, cannot proceed"
+          "description": "Task blocked, cannot proceed",
+          "queue_dir": true,
+          "skeleton": true
         },
         {
           "value": "withdrawn",
-          "description": "Task withdrawn/cancelled"
+          "description": "Task withdrawn/cancelled",
+          "queue_dir": true,
+          "skeleton": false
         }
       ]
     },
@@ -171,7 +183,8 @@
       ]
     },
     "role_category": {
-      "description": "Agent role categories",
+      "description": "Agent role categories。AIPOS-F104 件③: 本枚举是 schema/roles.schema.json roles[].role 的投影(角色类唯一定义在 roles.schema; 供 $enum 引用, 如 config.schema role.json role), 值集必须与 roles.schema 一致——新角色先加 roles.schema 再补本列表, 不变量夹具 tests/test_aipos_f104_enum_projection_invariant.py 锁一致。",
+      "projection_of": "roles.schema.json roles[].role",
       "values": [
         {
           "value": "executor",
@@ -196,6 +209,10 @@
         {
           "value": "copilot",
           "description": "Copilot - assists in task execution"
+        },
+        {
+          "value": "advisor",
+          "description": "Advisor - drafts/publishes cards, drives the gate, reviews docs/governance tasks (roles.schema advisor)"
         }
       ]
     },
@@ -231,19 +248,38 @@
       ]
     },
     "task_class": {
-      "description": "Task complexity classification",
+      "description": "Task complexity classification。AIPOS-F104 件④: 值域与每级治理要求唯一声明于此, 代码只读(task_complexity.validate_task_complexity / suggest_workflow_roles, CLI draft create --task-class choices)。每值: required_fields = 卡面必须非空的字段; distinct_pairs = 两字段均非空时不得相同(职责分离); dependency_gate = depends_on 须带 dependency_condition 并按条件校验; orchestration_continuity = orchestration 活跃时须声明 continuity planner; code_mode_advisory = code 模式卡取此级时出复核提示; suggested_workflow = 角色数建议(仅提示, 永不自动套用)。",
+      "default": "simple",
       "values": [
         {
           "value": "simple",
-          "description": "Simple task - straightforward implementation"
+          "description": "Simple task - straightforward implementation",
+          "required_fields": [],
+          "distinct_pairs": [],
+          "dependency_gate": false,
+          "orchestration_continuity": false,
+          "code_mode_advisory": true,
+          "suggested_workflow": "1-role"
         },
         {
           "value": "standard",
-          "description": "Standard task - moderate complexity"
+          "description": "Standard task - moderate complexity: 须独立审计(audit_by 必填且不得等于 assigned_to), 不要求 planner_agent/reviewer 与依赖门(出卡常用的中等复杂度)",
+          "required_fields": ["audit_by"],
+          "distinct_pairs": [["assigned_to", "audit_by"]],
+          "dependency_gate": false,
+          "orchestration_continuity": false,
+          "code_mode_advisory": false,
+          "suggested_workflow": "2-role"
         },
         {
           "value": "complex",
-          "description": "Complex task - high complexity, multiple components"
+          "description": "Complex task - high complexity, multiple components: planner_agent/reviewer/audit_by 必填且职责分离, 依赖门与编排连续性校验",
+          "required_fields": ["planner_agent", "reviewer", "audit_by"],
+          "distinct_pairs": [["planner_agent", "reviewer"], ["planner_agent", "audit_by"], ["assigned_to", "reviewer"], ["assigned_to", "audit_by"]],
+          "dependency_gate": true,
+          "orchestration_continuity": true,
+          "code_mode_advisory": false,
+          "suggested_workflow": "2-role"
         }
       ]
     },

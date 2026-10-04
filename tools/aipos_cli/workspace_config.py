@@ -480,12 +480,13 @@ def governance_paths(project_root: str | Path) -> dict[str, Path]:
 #
 # `project new` / `project set-repo` are LOCAL OWNER scaffolds (ruling 2=a) — not gate
 # operations: they mint no token, perform no gate confirm, and the gate has no "create project"
-# op. Writing to disk here is intended (like `lybra init`). project.json is the SOLE authority
+# op. Writing to disk here is intended (the single project-creation entry, AIPOS-F105). project.json is the SOLE authority
 # for the project<->code-repo mapping (ruling 6) and carries provenance (M3: project creation
 # is non-anonymous). Stdlib only.
 # ---------------------------------------------------------------------------
 
-_QUEUE_STATES = ("pending", "claimed", "completed", "blocked")
+# AIPOS-F104 件②: 原 _QUEUE_STATES 手写副本删除——脚手架预建队列目录读 task_loader.QUEUE_SKELETON_STATES(enums queue_state skeleton 投影;
+# task_loader 模块级依赖本模块, 故在调用处惰性导入)
 
 
 # ---------------------------------------------------------------------------
@@ -1204,7 +1205,9 @@ def scaffold_project(
 
     # AIPOS-F89 件① M8: 队列根 = 项目声明 paths.queue_root(新项目尚无 project.json = 声明 default), 唯一读取口 project_paths
     queue_root = Path(project_paths(root)["queue_root"])
-    for state in _QUEUE_STATES:
+    from tools.aipos_cli.task_loader import QUEUE_SKELETON_STATES
+
+    for state in QUEUE_SKELETON_STATES:
         (queue_root / state).mkdir(parents=True, exist_ok=True)
     for sub in ("records", "drafts", "orchestration"):
         (root / "5_tasks" / sub).mkdir(parents=True, exist_ok=True)

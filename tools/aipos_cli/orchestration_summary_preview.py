@@ -14,7 +14,8 @@ except Exception:  # pragma: no cover - optional dependency
 
 ORCHESTRATION_ROOT = Path("5_tasks/orchestration")
 ORCHESTRATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-QUEUE_STATES = {"pending", "claimed", "completed", "blocked"}
+# AIPOS-F104 件②: 队列状态集合唯一投影 task_loader.QUEUE_STATES(原手写 4 值副本缺 withdrawn, 删除)
+from tools.aipos_cli.task_loader import QUEUE_STATES  # noqa: E402
 
 
 def _safe_text(value: Any) -> str:

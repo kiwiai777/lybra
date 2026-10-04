@@ -252,16 +252,19 @@ def _get_governance_docs(governance_root: Path, repo_root: Path | None = None) -
     return active_docs
 
 
+def _queue_dir_states() -> tuple[str, ...]:
+    """AIPOS-F104 件②: 队列目录名 = task_loader.QUEUE_STATES(enums queue_state queue_dir 投影; returned 为记录推导态, 无目录)。"""
+    from tools.aipos_cli.task_loader import QUEUE_STATES
+
+    return QUEUE_STATES
+
+
 def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     """获取队列摘要 (转调 records.py 读取 queue 状态)。
     
     Returns:
         {
-            "pending": int,
-            "claimed": int,
-            "returned": int,
-            "completed": int,
-            "blocked": int,
+            <task_loader.QUEUE_STATES 各目录名>: int,  # pending/claimed/completed/blocked/withdrawn
             "in_flight": list[dict],  # 在途卡详情
         }
     """
@@ -283,12 +286,7 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> 
         # Fail-closed: 路径不存在 → 报错而非返回全零
         return {
             "error": f"Queue directory resolution failed: {e}",
-            "pending": None,
-            "claimed": None,
-            "returned": None,
-            "completed": None,
-            "blocked": None,
-            "withdrawn": None,
+            **{state: None for state in _queue_dir_states()},
             "in_flight": [],
         }
     
@@ -296,17 +294,12 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> 
         # Fail-closed: 目录不存在 → 报错而非返回全零
         return {
             "error": f"Queue directory does not exist: {queue_dir}",
-            "pending": None,
-            "claimed": None,
-            "returned": None,
-            "completed": None,
-            "blocked": None,
-            "withdrawn": None,
+            **{state: None for state in _queue_dir_states()},
             "in_flight": [],
         }
     
     counts = {}
-    for subdir in ["pending", "claimed", "returned", "completed", "blocked", "withdrawn"]:
+    for subdir in _queue_dir_states():
         subdir_path = queue_dir / subdir
         if subdir_path.is_dir():
             cards = list(subdir_path.glob("*.md"))
@@ -526,11 +519,8 @@ def run_brief(
             
             # 3. 队列状态
             print("【3. 当前在跑什么】")
-            print(f"  pending:   {queue_summary.get('pending', 0)}")
-            print(f"  claimed:   {queue_summary.get('claimed', 0)}")
-            print(f"  returned:  {queue_summary.get('returned', 0)}")
-            print(f"  completed: {queue_summary.get('completed', 0)}")
-            print(f"  blocked:   {queue_summary.get('blocked', 0)}")
+            for state in _queue_dir_states():  # AIPOS-F104 件②: 队列目录唯一投影(原写死含恒为 0 的 returned 行、漏 withdrawn)
+                print(f"  {state + ':':<10} {queue_summary.get(state, 0)}")
             
             if queue_summary["in_flight"]:
                 print()
