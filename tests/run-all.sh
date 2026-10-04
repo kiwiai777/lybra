@@ -21,6 +21,21 @@ declare -a files=(
   "tests/ts/f93-go-report-fields.test.ts"
 )
 overall=0
+# AIPOS-F111 件②: 一行式 pytest 夹具登记。本文件在 .gitattributes 声明 merge=union(并行卡各自在汇总段前追加登记, 合并全保留);
+# union 会把两侧「相同的首尾行」只留一份——多行 if/else/fi 登记块的公共尾行(overall=1 / fi)被吃掉即语法坏(bash -n 兜底)。
+# 新登记一律用本函数: 一行注释 + 一行 `run_pytest <标签> <pytest 参数…>`, 每行含本卡夹具名、全文唯一, 并集合并安全。
+run_pytest() {
+  local label="$1"
+  shift
+  echo
+  echo "── $label ────────────────────────────────────────────────────"
+  if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$@" -v --tb=short; then
+    echo "✓ $label PASS"
+  else
+    echo "✗ $label FAIL"
+    overall=1
+  fi
+}
 for f in "${files[@]}"; do
   echo
   echo "── $f ──────────────────────────────────────────"
@@ -1065,21 +1080,23 @@ else
   overall=1
 fi
 
-# AIPOS-F108: 卡字段与分支声明单源(族 C-d: M9/M18/H6)——① card.schema 声明落盘键(frontmatter_order 投影字段序 / fields.default 投影缺省值,
-# 修复卡去写死实例名缺省) ② 分支名 / 基线读 transitions N5.branch_integration(branch_pattern / base_branch), 产品代码零写死, 改声明靶场跟随
-# ③ 草稿 project 缺省读治理根 project.json#project, 缺则拒; 随改动登记 finalize 分支整合 / 自动切回 / 卡号归属解析夹具
+# AIPOS-F111: 并行审计——loop 拉起按卡号取开工提示(my-tasks --task-id)·同工位两张审计卡同时拉起各取各 kickoff·拒因原样转述·run-all.sh merge=union 并集合并靶场
+run_pytest "tests/test_aipos_f111_parallel_audit.py" "$REPO_ROOT/tests/test_aipos_f111_parallel_audit.py"
+# AIPOS-F104: 状态与枚举投影单源(族 C-b: M6/M7/M16/N6)——搬卡转移表读 transitions.schema queue_mutations(validate_transition 删)、
+# 队列状态集合 = enums queue_state 投影(task_loader.QUEUE_STATES / QUEUE_SKELETON_STATES)、role_category = roles.schema 投影(含 advisor)、
+# task_class 三值(standard 语义声明并实现)与 CLI choices 同读 enums; 不变量夹具「枚举声明值域 = 代码校验值域」+ 改动节点(task_class 非法值文案)
 echo
-echo "── tests/test_aipos_f108_card_field_branch_single_source.py (F108 落盘键全声明·字段序缺省值读 schema·分支名基线零写死且改声明跟随·草稿项目读 project.json 缺则拒) ────────────────────────────────────────────────────"
-if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f108_card_field_branch_single_source.py" \
-    "$REPO_ROOT/tests/test_finalize_branch_integration.py" \
-    "$REPO_ROOT/tools/aipos_cli/tests/test_finalize_branch_auto_checkout.py" \
-    "$REPO_ROOT/tests/test_aipos_f5_task_id_pattern.py" \
+echo "── tests/test_aipos_f104_enum_projection_invariant.py (F104 转移表单源·QueueState 投影·role_category=roles.schema·task_class 三值·progress_status·手写值域副本扫描) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f104_enum_projection_invariant.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_task_complexity.py::TaskComplexityTests::test_invalid_task_class_blocks" \
     -v --tb=short; then
-  echo "✓ tests/test_aipos_f108_card_field_branch_single_source.py PASS"
+  echo "✓ tests/test_aipos_f104_enum_projection_invariant.py PASS"
 else
-  echo "✗ tests/test_aipos_f108_card_field_branch_single_source.py FAIL"
+  echo "✗ tests/test_aipos_f104_enum_projection_invariant.py FAIL"
   overall=1
 fi
+# AIPOS-F108: 卡字段与分支声明单源(族 C-d: M9/M18/H6)——card.schema 落盘键全声明·字段序与缺省值读 schema·分支名/基线读 N5.branch_integration 零写死且改声明跟随·草稿 project 读 project.json 缺则拒; 连同改动的 finalize 分支整合/自动切回/卡号归属解析夹具
+run_pytest "tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_finalize_branch_integration.py" "$REPO_ROOT/tools/aipos_cli/tests/test_finalize_branch_auto_checkout.py" "$REPO_ROOT/tests/test_aipos_f5_task_id_pattern.py"
 
 echo
 echo "========================================================"

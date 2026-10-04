@@ -586,7 +586,7 @@ def _find_continuation_task(task_id: str, governance_root: Path) -> str | None:
     # AIPOS-F78B 件①: 唯一查找 task_loader.find_task_card(frontmatter task_id 匹配)
     from tools.aipos_cli.task_loader import find_task_card
 
-    task_file, _state = find_task_card(governance_root, task_id, states=("completed", "claimed", "pending", "withdrawn", "blocked"))
+    task_file, _state = find_task_card(governance_root, task_id)  # AIPOS-F104 件②: 缺省 = 全部队列目录(task_loader.QUEUE_STATES 投影)
     
     if not task_file:
         return None

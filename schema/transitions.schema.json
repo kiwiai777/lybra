@@ -796,6 +796,16 @@
       }
     }
   },
+  "queue_mutations": {
+    "description": "AIPOS-F104 件①: 队列搬卡转移表唯一声明——queue_mutation.mutate_queue_task(门 claim/block/complete/reopen/withdraw 搬卡的唯一执行器)只读本表(读取口 queue_mutation.queue_mutation_transitions), 原 queue_mutation.ALLOWED_TRANSITIONS 手写表(withdraw/reopen 源写 \"*\")与 transition_engine.validate_transition 本地简化表退役。from_states = 允许的源队列目录, to_state = 目标队列目录, 均须为 enums.schema queue_state 中 queue_dir=true 的值(读取口校验, 不符 = SchemaLoadError fail-closed)。node = 引用 nodes.<id> 的 from_states/to_state(同一转移不写两遍)。reopen 此处 = AIPOS-348 修正路径(blocked/completed → pending), 与 nodes.reopen(owner 门节点, full_reset/resume_claim)是不同动作。",
+    "transitions": {
+      "claim": {"node": "N1"},
+      "block": {"from_states": ["claimed"], "to_state": "blocked"},
+      "complete": {"from_states": ["claimed"], "to_state": "completed"},
+      "reopen": {"from_states": ["blocked", "completed"], "to_state": "pending"},
+      "withdraw": {"from_states": ["pending", "claimed"], "to_state": "withdrawn"}
+    }
+  },
   "record_authenticity": {
     "description": "门生记录的机器特征,用于区分门生记录与手写文件",
     "gate_markers": {
