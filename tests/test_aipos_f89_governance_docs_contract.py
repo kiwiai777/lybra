@@ -151,7 +151,7 @@ def test_item2_hard_rules_source_undeclared_skips_with_warning_declared_reads_it
 
 
 def test_item2_new_project_charters_templates_skills_zero_lybra_doc_names(tmp_path, monkeypatch):
-    """新项目(未声明任何治理文档)渲染执行/审计章程零 lybra 治理文档名; init 模板与顾问/导航技能不再把 lybra 文档名当约定。"""
+    """新项目(未声明任何治理文档)渲染执行/审计章程零 lybra 治理文档名; 顾问/导航技能不再把 lybra 文档名当约定(init 模板已随 AIPOS-F105 删除)。"""
     from tools.aipos_cli.charter_render import charter_render_context, render_charter
 
     gov = _charter_gov(tmp_path, monkeypatch, shape="lybra")
@@ -166,9 +166,8 @@ def test_item2_new_project_charters_templates_skills_zero_lybra_doc_names(tmp_pa
         hits = [ln for ln in rendered.splitlines() if LYBRA_DOC_NAMES.search(ln)]
         _show(f"[②·probe {role} 章程] lybra 文档名命中: {hits or 0}")
         assert hits == []
-    template_hits = [str(p.relative_to(REPO_ROOT)) for p in (REPO_ROOT / "templates").rglob("*")
-                     if p.is_file() and LYBRA_DOC_NAMES.search(p.read_text(encoding="utf-8", errors="replace"))]
-    assert template_hits == [], template_hits
+    # AIPOS-F105: templates/(init 模板树)已随建项目单入口删除, 新项目只经 lybra project new 建治理根, 无模板文件可扫
+    assert not (REPO_ROOT / "templates").exists()
     for skill in ("advisor-commands", "truth-navigator"):
         text = (REPO_ROOT / "agents" / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
         assert "FOUNDATION-BACKLOG" not in text and "files.design" not in text, skill

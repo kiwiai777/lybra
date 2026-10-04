@@ -41,10 +41,8 @@ const translations = {
     'overview.new_project_modal.project_name_hint': '仅限小写字母、数字、短横线或下划线',
     'overview.new_project_modal.project_name_en': '英文名称（可选）',
     'overview.new_project_modal.project_name_en_hint': '用于英文界面显示，留空则使用项目名称',
-    'overview.new_project_modal.option_a': '复制命令（推荐）',
-    'overview.new_project_modal.option_a_desc': 'AIPOS-F24: 项目顾问自助全流程。Owner 先发 planner 码,项目顾问持码完成项目初始化与后续角色注册,无需 lybra 顾问参与:',
-    'overview.new_project_modal.option_b': '服务端初始化（兼容旧流程）',
-    'overview.new_project_modal.option_b_desc': '让服务器创建并注册工作区（需要文件写入权限）。新项目推荐走选项 A 的自助流程:',
+    'overview.new_project_modal.option_a': '新建项目：运行接入向导',
+    'overview.new_project_modal.option_a_desc': '在终端运行下面的命令。接入向导逐步列出谁执行哪条命令,第 1 步即 lybra project new(建治理根与 project.json):',
     // AIPOS-293 S4: Option C — Import existing project
     'overview.new_project_modal.option_c': '导入已有项目',
     'overview.new_project_modal.option_c_desc': '将现有项目接入 Lybra。先预览结构，确认后再导入——不会删除任何源文件。',
@@ -92,9 +90,6 @@ const translations = {
     'error.import.unexpected_error': '发生意外错误: {detail}。请检查输入后重试，若持续出现请报告给顾问',
     'overview.copy': '复制',
     'overview.copied': '已复制!',
-    'overview.init_now': '立即初始化',
-    'overview.initializing': '初始化工作区中...',
-    'overview.init_success': '工作区创建成功！刷新中...',
     
     // Workspace status
     'status.ok': '正常',
@@ -343,10 +338,8 @@ const translations = {
     'overview.new_project_modal.project_name_hint': 'Lowercase letters, numbers, dash, or underscore only',
     'overview.new_project_modal.project_name_en': 'English Name (optional)',
     'overview.new_project_modal.project_name_en_hint': 'Displayed in English UI; leave blank to use project name',
-    'overview.new_project_modal.option_a': 'Copy Command (Recommended)',
-    'overview.new_project_modal.option_a_desc': 'Run this command in your terminal to initialize the workspace:',
-    'overview.new_project_modal.option_b': 'Server-Side Init',
-    'overview.new_project_modal.option_b_desc': 'Let the server create and register the workspace (requires file write permissions):',
+    'overview.new_project_modal.option_a': 'New Project: Run the Onboarding Guide',
+    'overview.new_project_modal.option_a_desc': 'Run this command in your terminal. The onboarding guide lists who runs each command; step 1 is lybra project new (governance root + project.json):',
     // AIPOS-293 S4: Option C — Import existing project
     'overview.new_project_modal.option_c': 'Import Existing Project',
     'overview.new_project_modal.option_c_desc': 'Onboard an existing project into Lybra. Preview the structure first, then import — no source files are deleted.',
@@ -394,9 +387,6 @@ const translations = {
     'error.import.unexpected_error': 'Unexpected error: {detail}. Please check your input and try again; if it persists, report to advisor',
     'overview.copy': 'Copy',
     'overview.copied': 'Copied!',
-    'overview.init_now': 'Initialize Now',
-    'overview.initializing': 'Initializing workspace...',
-    'overview.init_success': 'Workspace created successfully! Refreshing...',
     
     // Workspace status
     'status.ok': 'OK',

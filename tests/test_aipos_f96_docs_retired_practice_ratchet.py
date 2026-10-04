@@ -5,14 +5,15 @@
 等待 = `lybra agent watch --workspace-root`。退役做法字面声明在下方 RETIRED_PRACTICES(新退役一项做法 = 加一行)。
 
 扫描面(DOC_SCOPE): git ls-files 中 docs/**、README.md、QUICKSTART.md、agents/**/*.md、templates/**(文本文件)。
+(templates/ 已随建项目单入口卡 AIPOS-F105 整目录删除, 扫描面保留以防回流; 删除不变量见 tests/test_aipos_f105_single_project_entry.py。)
 现存命中登记在 tests/f96_docs_retired_practice_baseline.json(测试数据文件): 每条 = 文件 + 式样 id + 行指纹
 (行文本 strip 后 sha1 前 12 位; 行号仅作定位参考, 不参与比对) + 复查条目号 + 留存理由。
 
 判定(多重集比对, 键 = (file, pattern, fp)):
   - 现有命中不在基线 = 新增 → 红
   - 基线条目在仓里已不存在(已修 / 行文本已改)= 基线残留 → 红(修好即从基线删该条, 只减不增)
-  - docs/ 零容忍: 基线不许有 docs/ 下条目; 其余条目只许在 README.md / QUICKSTART.md(待后续卡退役的命令段)、
-    templates/(随建项目单入口卡退役), 或标 lane_blocked 的车道外文件
+  - docs/ 零容忍: 基线不许有 docs/ 下条目; 其余条目只许在 README.md / QUICKSTART.md(待后续卡退役的命令段),
+    或标 lane_blocked 的车道外文件
 
 独立夹具而非并入 F87 棘轮(不变量 f)的理由: F87 的扫描面是产品代码(排除文档), 其基线 well-formed 断言写死不变量集合
 {a..e}; 文档扫描面、式样与留存理由都不同, 独立成文件不改动 F87 夹具与其基线(与在途卡并行时互不冲突)。
@@ -46,13 +47,12 @@ RETIRED_PRACTICES: dict[str, tuple[str, str]] = {
     "agent_watch_gate_url": (r"\bagent (?:watch|fetch)\b[^\n]*--gate-url", "agent watch/fetch --gate-url 门拉取; 现行 = agent watch --workspace-root"),
     "old_connector": (r"\bagent (?:fetch|materialize|pushback)\b", "旧跨机连接器(N2, 待后续卡退役)"),
     "lybra_dispatch": (r"\blybra dispatch\b", "lybra dispatch 执行体自认领(N2, 待后续卡退役)"),
-    "lybra_init": (r"\blybra init\b|\bworkspace init\b", "旧建项目入口 init / workspace init(N1, 待后续卡退役); 现行 = onboarding guide + project new"),
+    "lybra_init": (r"\blybra init\b|\bworkspace init\b", "旧建项目入口 init / workspace init(N1, AIPOS-F105 已退役, 命令已删); 现行 = onboarding guide + project new"),
 }
 COMPILED = {pid: re.compile(rx) for pid, (rx, _) in RETIRED_PRACTICES.items()}
 
-# 基线里允许出现(非 lane_blocked)的位置: 待后续卡退役的命令段 + 旧模板
+# 基线里允许出现(非 lane_blocked)的位置: 待后续卡退役的命令段(templates/ 已随 AIPOS-F105 删除, 不再是允许位置)
 ALLOWED_BASELINE_FILES = {"README.md", "QUICKSTART.md"}
-ALLOWED_BASELINE_PREFIXES = ("templates/",)
 
 
 def fingerprint(line: str) -> str:
@@ -141,8 +141,8 @@ def test_baseline_is_well_formed_and_only_in_allowed_places():
         assert entry.get("item") and entry.get("reason"), entry  # 每条带复查条目号与留存理由
         rel = str(entry["file"])
         assert not rel.startswith("docs/"), f"docs/ 零容忍, 基线不许登记: {entry}"
-        allowed = rel in ALLOWED_BASELINE_FILES or rel.startswith(ALLOWED_BASELINE_PREFIXES) or entry.get("lane_blocked")
-        assert allowed, f"基线条目只许在 README/QUICKSTART 待退役段、templates/ 或标 lane_blocked 的车道外文件: {entry}"
+        allowed = rel in ALLOWED_BASELINE_FILES or entry.get("lane_blocked")
+        assert allowed, f"基线条目只许在 README/QUICKSTART 待退役段或标 lane_blocked 的车道外文件: {entry}"
 
 
 def test_ratchet_no_new_hits_and_no_stale_baseline_entries():
