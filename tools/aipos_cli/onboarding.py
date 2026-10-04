@@ -131,6 +131,15 @@ def set_repos_products(governance_root: Path) -> list[str]:
     return [project_json_path(root).relative_to(root).as_posix()]
 
 
+def governance_repo_status(home_root: Path) -> dict[str, Any]:
+    """AIPOS-F94 N5: 治理根所在(home 根)是否已在 git 仓内——判据 = home_git.git_repo_ancestor(与 `lybra home git-init`
+    拒绝嵌套同一实现; 向导生成时治理根尚未建, 故自 home 根向上找)。不在 = 向导第 1 步先给初始化出口。"""
+    from tools.aipos_cli.home_git import git_repo_ancestor
+
+    repo = git_repo_ancestor(home_root)
+    return {"git": repo is not None, "repo_root": str(repo) if repo else None}
+
+
 def render_landing_command(governance_root: Path, actor: str, paths: list[str]) -> str:
     from tools.aipos_cli.governance_commit import governance_commit_paths_command
 
@@ -250,7 +259,16 @@ def generate_onboarding_guide(
     gq, hq = _shell_quote(gov_s), _shell_path(str(home))
 
     # ── Step 1: 建项目(顾问) ─────────────────────────────────────────
-    step1 = [
+    # AIPOS-F94 N5: 治理根所在不是 git 仓 = 落账无处可落(fail-closed), 第 1 步先初始化治理仓(出口 = transitions nodes.N6.landing.non_git_exit)
+    from tools.aipos_cli.governance_commit import non_git_exit_command
+
+    repo_status = governance_repo_status(home)
+    step1 = [] if repo_status["git"] else [
+        f"# 治理仓未就绪: home 根 {home} 不在任何 git 仓内, 本步落账与之后每张卡的落账都会 fail-closed。先一次性初始化"
+        "(本地 git init, 不配远端、不推送), Owner 按其输出配 origin 并首推:",
+        non_git_exit_command(gov),
+    ]
+    step1 += [
         _cmd("lybra", "project", "new", _shell_quote(project_name), "--home-root", hq, "--actor", _shell_quote(_actor)),
         "# 落账: 本步产物精确提交并推送治理仓(AIPOS-F94; 只提交下列路径, 不碰治理仓其他改动)",
         render_landing_command(gov, _actor, project_new_products(gov)),
@@ -274,7 +292,9 @@ def generate_onboarding_guide(
             "home 根不对": "home 根只经优先级梯解析(见目的); 换 --home-root 重跑本步",
             **LANDING_ON_FAIL,
         },
-        "creates": f"{gov_s}/(project.json, 5_tasks/, governance/, stage_archive/<日期>_项目创建.md)",
+        "creates": f"{gov_s}/(project.json, 5_tasks/, governance/, stage_archive/<日期>_项目创建.md)"
+                   + ("" if repo_status["git"] else f"; {home} 成为治理仓(git, 待 Owner 配 origin)"),
+        "governance_repo": repo_status,
     })
 
     # ── Step 2: 声明产品仓(顾问) ─────────────────────────────────────
@@ -506,6 +526,7 @@ def generate_onboarding_guide(
         "home_root": str(home),
         "home_root_source": home_source,
         "governance_root": gov_s,
+        "governance_repo": repo_status,
         "gate_url": gate,
         "gate_url_source": gate_source,
         "owner_workspace": owner_ws,
