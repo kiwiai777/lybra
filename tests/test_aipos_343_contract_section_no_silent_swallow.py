@@ -157,7 +157,8 @@ class TestContractSectionErrorPropagation(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             # No project.json, no policies — everything missing
-            metadata = _meta("AIPOS-343-DIAG")
+            # AIPOS-F102 件②: 角色类不可解析会在判零门时更早拒; 本例测契约节渲染诊断, 用可解析的非工位类角色实例
+            metadata = _meta("AIPOS-343-DIAG", assigned_to="advisor.lybra.test", agent_instance="advisor.lybra.test")
             with self.assertRaises(ContractSectionError) as ctx:
                 _append_gate_contract_section(root, metadata, "AIPOS-343-DIAG", "## Body\n\nTest.")
             error_msg = str(ctx.exception)

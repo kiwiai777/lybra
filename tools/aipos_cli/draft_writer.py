@@ -563,7 +563,7 @@ def card_carries_gate_contract_section(metadata: dict[str, Any], repo_root: Path
     try:
         role_class = _card_role_class(metadata, repo_root)
     except UnknownRoleClass as exc:
-        raise ContractSectionError(f"AIPOS-F102: 卡面零门判据无据(角色类不可解析), 拒: {exc}") from exc
+        raise ContractSectionError(f"AIPOS-F102: 卡面零门判据无据(角色类不可解析, 工作区 {repo_root}), 拒: {exc}") from exc
     return role_class not in role_classes_in_group("workstation")
 
 
