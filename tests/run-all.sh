@@ -21,6 +21,21 @@ declare -a files=(
   "tests/ts/f93-go-report-fields.test.ts"
 )
 overall=0
+# AIPOS-F111 件②: 一行式 pytest 夹具登记。本文件在 .gitattributes 声明 merge=union(并行卡各自在汇总段前追加登记, 合并全保留);
+# union 会把两侧「相同的首尾行」只留一份——多行 if/else/fi 登记块的公共尾行(overall=1 / fi)被吃掉即语法坏(bash -n 兜底)。
+# 新登记一律用本函数: 一行注释 + 一行 `run_pytest <标签> <pytest 参数…>`, 每行含本卡夹具名、全文唯一, 并集合并安全。
+run_pytest() {
+  local label="$1"
+  shift
+  echo
+  echo "── $label ────────────────────────────────────────────────────"
+  if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$@" -v --tb=short; then
+    echo "✓ $label PASS"
+  else
+    echo "✗ $label FAIL"
+    overall=1
+  fi
+}
 for f in "${files[@]}"; do
   echo
   echo "── $f ──────────────────────────────────────────"
@@ -884,7 +899,7 @@ else
   overall=1
 fi
 
-# AIPOS-F91: 退役老子系统不变量(templates 零退役子命令且项目无关/CLI 拒退役子命令/.pi 挂载回收三态: 声明内保留·分发区外不碰·分发区内未声明回收/run-all 位置单源) + 随语义改动的 F83 挂载回收用例
+# AIPOS-F91: 退役老子系统不变量(templates 不变量已随 AIPOS-F105 删 templates/ 退役/CLI 拒退役子命令/.pi 挂载回收三态: 声明内保留·分发区外不碰·分发区内未声明回收/run-all 位置单源) + 随语义改动的 F83 挂载回收用例
 echo
 echo "── tests/test_aipos_f91_retirement_invariants.py (F91 退役不变量 + G3 挂载回收三态) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f91_retirement_invariants.py" \
@@ -1010,7 +1025,7 @@ else
 fi
 
 # AIPOS-F96: 文档与设计稿清理(碎片化 N3/N4/N5)件④——「产品文档不教退役做法」只减不增棘轮
-# (扫描 docs/、README.md、QUICKSTART.md、agents/**/*.md、templates/**; 式样声明在夹具常量, 基线 tests/f96_docs_retired_practice_baseline.json, docs/ 零容忍)
+# (扫描 docs/、README.md、QUICKSTART.md、agents/**/*.md、templates/**(已随 AIPOS-F105 删除, 扫描面保留防回流); 式样声明在夹具常量, 基线 tests/f96_docs_retired_practice_baseline.json, docs/ 零容忍)
 echo
 echo "── tests/test_aipos_f96_docs_retired_practice_ratchet.py (F96 文档退役做法棘轮·新增命中红/基线残留红·docs/ 零容忍·式样不误报现行做法) ────────────────────────────────────────────────────"
 if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f96_docs_retired_practice_ratchet.py" -v --tb=short; then
@@ -1046,20 +1061,42 @@ else
   overall=1
 fi
 
-# AIPOS-F102: 身份与角色类单源(族 B-b:H5/M4/M21)——派审 actor = 驱动方实例、审计卡认领实例 = 被审卡 audit_by(缺则项目推导)、
-# 修复卡执行实例承继/项目推导(非 lybra 项目靶场); 角色类解析唯一 custom_roles.resolve_role_to_class(统一拒) + 分组读 roles.schema class_groups;
-# default_instance_name 缺 project 即拒。整文件 + 本卡改动的既有节点(其余既有节点已在上方各自登记块内)
+# AIPOS-F105: 建项目单一入口(碎片化 N-b:N1)——删 lybra init / workspace init、workspace 模板模块、templates/ 与看板 init 路由/按钮,
+# 只留 lybra onboarding guide + lybra project new; 被删命令 argparse 报不存在·project new 靶场照常·看板无 init 入口·删除物零引用·包清单/文档指路
+# + 随语义改动的 F91(templates 不变量退役)/F89(模板扫描改为目录不存在)/F96(基线删 24 条·templates/ 不再是允许位置)/F98 零依赖(删模板 manifest 语料)用例
 echo
-echo "── tests/test_aipos_f102_identity_single_source.py (F102 非 lybra 项目派审/审计认领/修复卡身份靶场·角色类统一拒·分组读声明·项目段缺即拒·棘轮 a 删条目) ────────────────────────────────────────────────────"
-if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f102_identity_single_source.py" \
-    "$REPO_ROOT/tools/aipos_cli/tests/test_f23_enroll.py::TestRoleFileMergeAndGuards::test_enroll_custom_role_executor_class_refused" \
-    "$REPO_ROOT/tools/aipos_cli/tests/test_derived_audit_verdict.py::DerivedAuditVerdictTests::test_derived_verdict_blocks_when_publish_record_missing" \
+echo "── tests/test_aipos_f105_single_project_entry.py (F105 init/workspace init argparse 报不存在·project new 靶场·看板 POST workspace init 路由不存在·删除物零引用·package files 无 templates/·README/QUICKSTART 指向 onboarding guide + project new) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f105_single_project_entry.py" \
+    "$REPO_ROOT/tests/test_aipos_f91_retirement_invariants.py" \
+    "$REPO_ROOT/tests/test_aipos_f89_governance_docs_contract.py::test_item2_new_project_charters_templates_skills_zero_lybra_doc_names" \
+    "$REPO_ROOT/tests/test_aipos_f96_docs_retired_practice_ratchet.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_frontmatter_zerodep.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_cli_ergonomics.py" \
+    "$REPO_ROOT/web/board/tests/test_aipos288_fix5_label_en.py" \
     -v --tb=short; then
-  echo "✓ tests/test_aipos_f102_identity_single_source.py PASS"
+  echo "✓ tests/test_aipos_f105_single_project_entry.py PASS"
 else
-  echo "✗ tests/test_aipos_f102_identity_single_source.py FAIL"
+  echo "✗ tests/test_aipos_f105_single_project_entry.py FAIL"
   overall=1
 fi
+
+# AIPOS-F111: 并行审计——loop 拉起按卡号取开工提示(my-tasks --task-id)·同工位两张审计卡同时拉起各取各 kickoff·拒因原样转述·run-all.sh merge=union 并集合并靶场
+run_pytest "tests/test_aipos_f111_parallel_audit.py" "$REPO_ROOT/tests/test_aipos_f111_parallel_audit.py"
+# AIPOS-F104: 状态与枚举投影单源(族 C-b: M6/M7/M16/N6)——搬卡转移表读 transitions.schema queue_mutations(validate_transition 删)、
+# 队列状态集合 = enums queue_state 投影(task_loader.QUEUE_STATES / QUEUE_SKELETON_STATES)、role_category = roles.schema 投影(含 advisor)、
+# task_class 三值(standard 语义声明并实现)与 CLI choices 同读 enums; 不变量夹具「枚举声明值域 = 代码校验值域」+ 改动节点(task_class 非法值文案)
+echo
+echo "── tests/test_aipos_f104_enum_projection_invariant.py (F104 转移表单源·QueueState 投影·role_category=roles.schema·task_class 三值·progress_status·手写值域副本扫描) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f104_enum_projection_invariant.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_task_complexity.py::TaskComplexityTests::test_invalid_task_class_blocks" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f104_enum_projection_invariant.py PASS"
+else
+  echo "✗ tests/test_aipos_f104_enum_projection_invariant.py FAIL"
+  overall=1
+fi
+# AIPOS-F102: 身份与角色类单源(族 B-b:H5/M4/M21)——非 lybra 项目派审 actor=驱动方/审计认领=audit_by/修复卡身份靶场·角色类统一拒·分组读 roles.schema class_groups·项目段缺即拒·棘轮 a 删条目(+本卡改动的 f23/derived_audit_verdict 节点)
+run_pytest "tests/test_aipos_f102_identity_single_source.py" "$REPO_ROOT/tests/test_aipos_f102_identity_single_source.py" "$REPO_ROOT/tools/aipos_cli/tests/test_f23_enroll.py::TestRoleFileMergeAndGuards::test_enroll_custom_role_executor_class_refused" "$REPO_ROOT/tools/aipos_cli/tests/test_derived_audit_verdict.py::DerivedAuditVerdictTests::test_derived_verdict_blocks_when_publish_record_missing"
 
 echo
 echo "========================================================"

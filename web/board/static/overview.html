@@ -64,7 +64,7 @@
           </div>
 
           <div class="setup-options">
-            <!-- Option A: Copy command -->
+            <!-- AIPOS-F105: 建项目单一入口 —— 看板只指路到 `lybra onboarding guide`(其第 1 步即 `lybra project new`), 不再提供 init 命令或服务端初始化 -->
             <div class="setup-option">
               <div class="option-header">
                 <span class="option-badge">A</span>
@@ -72,8 +72,8 @@
               </div>
               <p id="option-a-desc"></p>
               <div class="code-block">
-                <code id="init-command">lybra init --project-id my-project</code>
-                <button id="copy-init-btn" class="copy-btn" title="Copy command">
+                <code id="guide-command">lybra onboarding guide my-project</code>
+                <button id="copy-guide-btn" class="copy-btn" title="Copy command">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -83,26 +83,10 @@
               </div>
             </div>
 
-            <!-- Option B: Server-side init (if serve has file permissions) -->
-            <div class="setup-option">
-              <div class="option-header">
-                <span class="option-badge">B</span>
-                <h4 id="option-b-title"></h4>
-              </div>
-              <p id="option-b-desc"></p>
-              <button id="server-init-btn" class="action-btn" disabled>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 5v14M5 12l7 7 7-7"></path>
-                </svg>
-                <span id="server-init-text"></span>
-              </button>
-              <div id="server-init-result" class="result-message" hidden></div>
-            </div>
-
             <!-- AIPOS-293 S4 + FIX-1: Option C: Import existing project (dual mode) -->
             <div class="setup-option">
               <div class="option-header">
-                <span class="option-badge">C</span>
+                <span class="option-badge">B</span>
                 <h4 id="option-c-title"></h4>
               </div>
               <p id="option-c-desc"></p>
@@ -192,10 +176,7 @@
       document.getElementById('project-name-en-hint').textContent = i18n.t('overview.new_project_modal.project_name_en_hint');
       document.getElementById('option-a-title').textContent = i18n.t('overview.new_project_modal.option_a');
       document.getElementById('option-a-desc').textContent = i18n.t('overview.new_project_modal.option_a_desc');
-      document.getElementById('option-b-title').textContent = i18n.t('overview.new_project_modal.option_b');
-      document.getElementById('option-b-desc').textContent = i18n.t('overview.new_project_modal.option_b_desc');
       document.getElementById('copy-btn-text').textContent = i18n.t('overview.copy');
-      document.getElementById('server-init-text').textContent = i18n.t('overview.init_now');
       // AIPOS-293 S4 + FIX-1: Option C i18n (dual mode)
       document.getElementById('option-c-title').textContent = i18n.t('overview.new_project_modal.option_c');
       document.getElementById('option-c-desc').textContent = i18n.t('overview.new_project_modal.option_c_desc');
@@ -462,18 +443,15 @@
     const modalClose = document.getElementById('modal-close');
     const projectNameInput = document.getElementById('project-name-input');
     const projectNameEnInput = document.getElementById('project-name-en-input');
-    const initCommandEl = document.getElementById('init-command');
-    const copyInitBtn = document.getElementById('copy-init-btn');
-    const serverInitBtn = document.getElementById('server-init-btn');
-    const serverInitResult = document.getElementById('server-init-result');
+    const guideCommandEl = document.getElementById('guide-command');
+    const copyGuideBtn = document.getElementById('copy-guide-btn');
 
     function openAddProjectModal() {
       modal.hidden = false;
       projectNameInput.value = '';
       projectNameEnInput.value = '';
       projectNameInput.focus();
-      updateInitCommand();
-      serverInitResult.hidden = true;
+      updateGuideCommand();
       // AIPOS-293 S4: Reset Option C state
       importWorkspacePath.value = '';
       importPreviewResult.hidden = true;
@@ -486,72 +464,24 @@
       modal.hidden = true;
     }
 
-    function updateInitCommand() {
+    function updateGuideCommand() {
       const projectName = projectNameInput.value.trim() || 'my-project';
-      const defaultPath = `~/.lybra/workspaces/${projectName}/`;
-      initCommandEl.textContent = `lybra init ${defaultPath} --project-id ${projectName}`;
-      serverInitBtn.disabled = !projectName || projectName === 'my-project';
+      guideCommandEl.textContent = `lybra onboarding guide ${projectName}`;
     }
 
-    async function copyInitCommand() {
-      const command = initCommandEl.textContent;
+    async function copyGuideCommand() {
+      const command = guideCommandEl.textContent;
       try {
         await navigator.clipboard.writeText(command);
         const btnText = document.getElementById('copy-btn-text');
         btnText.textContent = i18n.t('overview.copied') || 'Copied!';
-        copyInitBtn.classList.add('copied');
+        copyGuideBtn.classList.add('copied');
         setTimeout(() => {
           btnText.textContent = i18n.t('overview.copy') || 'Copy';
-          copyInitBtn.classList.remove('copied');
+          copyGuideBtn.classList.remove('copied');
         }, 2000);
       } catch (err) {
         alert('Failed to copy: ' + err.message);
-      }
-    }
-
-    async function serverSideInit() {
-      const projectName = projectNameInput.value.trim();
-      const projectNameEn = projectNameEnInput.value.trim();
-      if (!projectName || !/^[a-z0-9_-]+$/.test(projectName)) {
-        serverInitResult.textContent = 'Invalid project name. Use lowercase letters, numbers, dash, or underscore only.';
-        serverInitResult.className = 'result-message error';
-        serverInitResult.hidden = false;
-        return;
-      }
-
-      serverInitBtn.disabled = true;
-      serverInitResult.textContent = i18n.t('overview.initializing') || 'Initializing workspace...';
-      serverInitResult.className = 'result-message info';
-      serverInitResult.hidden = false;
-
-      try {
-        // AIPOS-288 FIX-5: Include label_en if provided
-        const payload = { project_id: projectName };
-        if (projectNameEn) {
-          payload.label_en = projectNameEn;
-        }
-        const response = await fetch('/api/workspace/init', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await response.json();
-
-        if (data.ok) {
-          serverInitResult.textContent = i18n.t('overview.init_success') || 'Workspace created successfully! Refreshing...';
-          serverInitResult.className = 'result-message success';
-          setTimeout(() => {
-            window.location.reload();
-          }, 1500);
-        } else {
-          serverInitResult.textContent = `Error: ${data.message || data.error || 'Unknown error'}`;
-          serverInitResult.className = 'result-message error';
-          serverInitBtn.disabled = false;
-        }
-      } catch (err) {
-        serverInitResult.textContent = `Failed: ${err.message}`;
-        serverInitResult.className = 'result-message error';
-        serverInitBtn.disabled = false;
       }
     }
 
@@ -805,9 +735,8 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !modal.hidden) closeAddProjectModal();
     });
-    projectNameInput.addEventListener('input', updateInitCommand);
-    copyInitBtn.addEventListener('click', copyInitCommand);
-    serverInitBtn.addEventListener('click', serverSideInit);
+    projectNameInput.addEventListener('input', updateGuideCommand);
+    copyGuideBtn.addEventListener('click', copyGuideCommand);
 
     // Load on page ready
     renderPage();
