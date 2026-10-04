@@ -1034,6 +1034,31 @@ else
   overall=1
 fi
 
+# AIPOS-F101: 推导核与动词声明单源(碎片化族 C-a: H7/H8/M13/L2)——① lybra_gate_guidance 委托唯一推导核 derive_next_step(同输入同结论),
+# 第二推导核死函数 git grep 零 ② 门工具名/scope/可见性全量声明在 verbs.schema(不变量 b 清零), 执法·可见性·verb_contract 读声明(改声明即改行为)
+# ③ artifact ingest / agent watch 退出码只在 verbs.schema 声明, 代码与 CLI help 读声明 ④ 自描述与门指南示例改占位;
+# 另登记本卡改动的既有夹具: tests/test_aipos_f30_envelope_error_info_init.py(patch 点随 scope 读取口改名) 与
+# tools/mcp_server/tests/test_scope_reachability.py 中按真实凭据走门执法的节点(其 scope 枚举改读声明; 同文件另 3 个节点在 main 上即红, 见 F101 RETURN 缺口, 不登记)
+echo
+echo "── tests/test_aipos_f101_derivation_verb_single_source.py + tests/test_aipos_f30_envelope_error_info_init.py + tools/mcp_server/tests/test_scope_reachability.py(节点) (F101 门指南=推导核·死函数零·门工具 scope 全声明且执法/可见性跟随声明·退出码只在声明·示例无 lybra 身份) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f101_derivation_verb_single_source.py" \
+    "$REPO_ROOT/tests/test_aipos_f30_envelope_error_info_init.py" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_set_has_no_role_overlap" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_owner_draft_publish_reachable" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_owner_decision_record_reachable" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_owner_decision_record_denied_for_executor" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_executor_and_copilot_draft_publish_denied" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_copilot_role_scopes_empty" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_set_maps_to_dry_run_tools" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_every_exempt_scope_reachable_via_path_b" \
+    "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_scope_denied_without_capability" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f101_derivation_verb_single_source.py PASS"
+else
+  echo "✗ tests/test_aipos_f101_derivation_verb_single_source.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

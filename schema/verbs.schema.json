@@ -43,11 +43,22 @@
       "dry_run_token_emitted": "true if stage_contract.dry_run_emits_token is true"
     }
   },
+  "scope_contract": {
+    "description": "AIPOS-F101 件②: 门工具(tools/mcp_server/tools.py TOOL_HANDLERS 全集)的工具名与 scope 唯一声明处 = 本文件 verbs[<工具名>]。门工具执法(调用时)、可见性(tools/list)、verb_contract 注册表一律读此声明, 代码不另写 scope 常量/映射(禁第二来源); 未声明的门工具 = SchemaLoadError(fail-closed)。参数形状仍以 tools.py 描述符 inputSchema 为准(本次只收工具名/scope/可见性)。",
+    "fields": {
+      "required_scope": "调用时必须持有的操作 scope; null = 无操作 scope(只读, 或 Owner 门在参数 owner_authorization_ref / bearer 角色上)",
+      "also_requires_scope": "在 required_scope 之外另需的 scope(如 owner_confirm: 执行体 token 不可自确认)",
+      "conditional_scope": "{scope, when}: 仅当 when 所述条件成立时另需的 scope",
+      "scope_waiver": "{param, equals, reason}: 入参 param 去空白后等于 equals 时不索 required_scope(驱动方一阶段, 信封即授权)",
+      "visibility": "tools/list 可见性: always = 恒可见; scope = 持 required_scope 才可见; hidden = 不列出(只经产品 CLI 薄壳按名调用)"
+    }
+  },
   "verbs": {
     "lybra_queue_list": {
       "description": "Read the task queue (executor's only read surface).",
       "phase": "single",
       "required_scope": null,
+      "visibility": "always",
       "surface": [
         "cli",
         "mcp"
@@ -70,6 +81,7 @@
       "description": "AIPOS-C4B: Return the distribution manifest for the caller's role (file list + sha256 hashes + source commit per distributable). Worker-side lybra sync compares local _distributed against this and pulls only diffs. Passive, read-only, role-scoped.",
       "phase": "single",
       "required_scope": null,
+      "visibility": "always",
       "surface": [
         "mcp"
       ],
@@ -90,6 +102,7 @@
       "description": "AIPOS-C4B: Return base64 file content for requested distribution files (by distribution_id + paths). Paths validated against role manifest; traversal/out-of-manifest paths rejected. Worker-initiated pull, zero push.",
       "phase": "single",
       "required_scope": null,
+      "visibility": "always",
       "surface": [
         "mcp"
       ],
@@ -125,6 +138,8 @@
       "description": "Read-only task session preview by task_id or path. include_body=true returns the card body markdown (requires queue_claim scope).",
       "phase": "single",
       "required_scope": null,
+      "conditional_scope": {"scope": "queue_claim", "when": "include_body=true(读卡正文)"},
+      "visibility": "always",
       "surface": [
         "mcp"
       ],
@@ -161,7 +176,8 @@
     "lybra_return_content": {
       "description": "Read-only: return RETURN.md body for a returned task (auditor cross-machine evidence). Requires queue_claim scope.",
       "phase": "single",
-      "required_scope": null,
+      "required_scope": "queue_claim",
+      "visibility": "always",
       "surface": [
         "mcp"
       ],
@@ -188,6 +204,8 @@
     "lybra_queue_claim_dry_run": {
       "description": "Claim a pending task (preview; PreAuthorized may release in one phase).",
       "phase": "dry_run",
+      "required_scope": "queue_claim",
+      "visibility": "scope",
       "base_verb": "lybra_queue_claim",
       "confirm_verb": "lybra_queue_claim_confirm",
       "confirm_via": "dry_run_token",
@@ -285,6 +303,9 @@
     "lybra_queue_claim_confirm": {
       "description": "Confirm a claim dry-run (AIPOS-328: self-confirm via owner_confirmation_token literal).",
       "phase": "confirm",
+      "required_scope": "queue_claim",
+      "also_requires_scope": "owner_confirm",
+      "visibility": "scope",
       "base_verb": "lybra_queue_claim",
       "dry_run_verb": "lybra_queue_claim_dry_run",
       "confirm_via": "dry_run_token",
@@ -334,6 +355,9 @@
     "lybra_queue_return_dry_run": {
       "description": "Return completed work (preview).",
       "phase": "dry_run",
+      "required_scope": "queue_return",
+      "scope_waiver": {"param": "autonomy_mode", "equals": "PreAuthorized", "reason": "AIPOS-F78B 件③ 驱动方一阶段: Owner 签的信封即授权, 不索本 scope; 无信封匹配 = 门拒(envelope_guards), 永不静默回落 Supervised"},
+      "visibility": "scope",
       "base_verb": "lybra_queue_return",
       "confirm_verb": "lybra_queue_return_confirm",
       "confirm_via": "dry_run_token",
@@ -468,6 +492,8 @@
     "lybra_queue_return_confirm": {
       "description": "Confirm a return dry-run (AIPOS-328: executor self-confirm via owner_confirmation_token).",
       "phase": "confirm",
+      "required_scope": "queue_return",
+      "visibility": "scope",
       "base_verb": "lybra_queue_return",
       "dry_run_verb": "lybra_queue_return_dry_run",
       "confirm_via": "dry_run_token",
@@ -514,6 +540,9 @@
     "lybra_queue_close_dry_run": {
       "description": "Close a task (preview). closure_evidence is an OBJECT, not a flat string.",
       "phase": "dry_run",
+      "required_scope": "queue_close",
+      "scope_waiver": {"param": "autonomy_mode", "equals": "PreAuthorized", "reason": "AIPOS-F78B 件③ 驱动方一阶段: Owner 签的信封即授权, 不索本 scope; 无信封匹配 = 门拒(envelope_guards), 永不静默回落 Supervised"},
+      "visibility": "scope",
       "base_verb": "lybra_queue_close",
       "confirm_verb": "lybra_queue_close_confirm",
       "confirm_via": "replay_args",
@@ -580,6 +609,8 @@
     "lybra_queue_close_confirm": {
       "description": "Confirm close. Replays task_id + actor + closure_evidence (NO dry_run_token — close confirm takes the full args again).",
       "phase": "confirm",
+      "required_scope": "queue_close",
+      "visibility": "scope",
       "base_verb": "lybra_queue_close",
       "dry_run_verb": "lybra_queue_close_dry_run",
       "confirm_via": "replay_args",
@@ -644,6 +675,7 @@
       "description": "Report task progress (single-phase). NOTE: field is event_type, NOT status.",
       "phase": "single",
       "required_scope": "task_progress",
+      "visibility": "scope",
       "surface": [
         "cli",
         "mcp"
@@ -695,6 +727,8 @@
     "lybra_bench_audit_submit_dry_run": {
       "description": "Submit a bench-audit evidence bundle (dry_run).",
       "phase": "dry_run",
+      "required_scope": "bench_audit_submit",
+      "visibility": "scope",
       "base_verb": "lybra_bench_audit_submit",
       "confirm_via": "dry_run_token",
       "surface": [
@@ -749,6 +783,8 @@
     "lybra_mark_concluded": {
       "description": "Mark a task as concluded (bypass path for report-style audits). AIPOS-C1: precondition = target card must NOT have a formal verdict; if it does, refuse and point to lybra_queue_close.",
       "phase": "single",
+      "required_scope": "queue_close",
+      "visibility": "scope",
       "surface": [
         "cli",
         "mcp"
@@ -804,6 +840,8 @@
     "lybra_enroll_code_dry_run": {
       "description": "AIPOS-F23: advisor-driven enrollment code issuance (preview). Issues a SELF-CONTAINED code embedding gate_url/governance_root/transport credential (base64). Owner-gated via owner_authorization_ref. F24A: CLI `lybra roles enroll-code` is a THIN SHELL over this verb (in-server issuance is the single path; unknown parameters are rejected fail-closed).",
       "phase": "dry_run",
+      "required_scope": null,
+      "visibility": "hidden",
       "base_verb": "lybra_enroll_code",
       "confirm_verb": "lybra_enroll_code_confirm",
       "confirm_via": "dry_run_token",
@@ -872,6 +910,8 @@
     "lybra_enroll_code_confirm": {
       "description": "AIPOS-F23: confirm enrollment code issuance. Mints the self-contained code and returns paste_text = the product enroll command the recipient runs (AIPOS-F93: single render onboarding.render_enroll_command, shared by gate and CLI)",
       "phase": "confirm",
+      "required_scope": null,
+      "visibility": "hidden",
       "base_verb": "lybra_enroll_code",
       "dry_run_verb": "lybra_enroll_code_dry_run",
       "confirm_via": "dry_run_token",
@@ -914,6 +954,8 @@
     "lybra_roles_enroll_exchange": {
       "description": "AIPOS-362/F23: exchange an enrollment code (plain or self-contained) for a capability token. PUBLIC at operation level — the code itself is the authentication (transport auth = embedded transport credential for self-contained codes). Atomic landing (F23): first exchange opens a grace window (code retryable for the SAME token until landed or grace expiry); client calls lybra_roles_enroll_land after writing workstation config.",
       "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
       "surface": [
         "mcp"
       ],
@@ -940,6 +982,8 @@
     "lybra_roles_enroll_land": {
       "description": "AIPOS-F23: confirm the workstation landed its config (marks the enrollment landed; closes the grace window; after this the code is fully consumed). PUBLIC at operation level — called with the same code (code itself is the auth).",
       "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
       "surface": [
         "mcp"
       ],
@@ -970,6 +1014,8 @@
     "lybra_roles_enroll_revoke": {
       "description": "AIPOS-362: revoke an enrollment code. Idempotent. Owner-gated: requires owner_authorization_ref.",
       "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
       "surface": [
         "mcp"
       ],
@@ -1199,6 +1245,8 @@
     "lybra_audit_dispatch_dry_run": {
       "description": "Dispatch an audit (preview). AIPOS-C1: idempotent — if audit card already exists, supplements dispatch record instead of blocking.",
       "phase": "dry_run",
+      "required_scope": "audit_dispatch",
+      "visibility": "scope",
       "base_verb": "lybra_audit_dispatch",
       "confirm_verb": "lybra_audit_dispatch_confirm",
       "confirm_via": "dry_run_token",
@@ -1284,6 +1332,9 @@
     "lybra_audit_verdict_dry_run": {
       "description": "Submit audit verdict (preview). AIPOS-F35: auditor submits verdict after writing audit report.",
       "phase": "dry_run",
+      "required_scope": "audit_verdict",
+      "scope_waiver": {"param": "autonomy_mode", "equals": "PreAuthorized", "reason": "AIPOS-F78B 件③ 驱动方一阶段: Owner 签的信封即授权, 不索本 scope; 无信封匹配 = 门拒(envelope_guards), 永不静默回落 Supervised"},
+      "visibility": "scope",
       "base_verb": "lybra_audit_verdict",
       "confirm_verb": "lybra_audit_verdict_confirm",
       "confirm_via": "dry_run_token",
@@ -1431,6 +1482,8 @@
     "lybra_audit_verdict_confirm": {
       "description": "Confirm an audit verdict dry-run (AIPOS-328: auditor self-confirm via owner_confirmation_token).",
       "phase": "confirm",
+      "required_scope": "audit_verdict",
+      "visibility": "scope",
       "base_verb": "lybra_audit_verdict",
       "dry_run_verb": "lybra_audit_verdict_dry_run",
       "confirm_via": "dry_run_token",
@@ -1483,6 +1536,8 @@
     "lybra_roles_register": {
       "description": "AIPOS-352F1/F78B 件④a: register a custom role (name → builtin class) in the gate registry. Owner-gated via owner_authorization_ref. 单一实现(CLI `lybra roles register` 为其薄壳; 未挂入 TOOL_HANDLERS 的 dry_run/confirm 对已删)。落盘根按 workspace_root(token projects scope 校验)。",
       "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
       "surface": [
         "cli",
         "mcp"
@@ -1743,10 +1798,11 @@
         "additionalProperties": false
       },
       "exit_codes": {
-        "0": "记录已落",
-        "1": "薄壳/门拒(透传)",
-        "4": "声明缺/文件缺/frontmatter 缺/sha 不符(fail-closed)"
-      }
+        "recorded": {"code": 0, "meaning": "记录已落(既有薄壳 exit 0), 或 --dry-run 校验通过"},
+        "shell_rejected": {"code": 1, "meaning": "薄壳/门拒: 透传拒因原文; 薄壳自带非零退出码时透传该码(如无信封 = lybra_loop.exit_codes.no_envelope), 否则为本码; 记录写入失败亦为本码"},
+        "rejected": {"code": 4, "meaning": "声明缺/文件缺/frontmatter 缺/sha 不符/入门节点不符/卡不在可交回或可裁决节点/记录依据不齐/治理根解析失败(fail-closed, 输出缺项与出口)"}
+      },
+      "exit_codes_note": "AIPOS-F101 件③: artifact ingest 退出码唯一声明处(原 transitions.schema artifact_ingest.exit_codes 重复声明已删); 代码 tools/aipos_cli/artifact_ingest.py 经 verb_contract.declared_exit_code 读本声明, 不写死数字"
     },
     "lybra_governance_commit": {
       "description": "AIPOS-R7A2/F69/F79: governance-repo commit — the ONLY commit path for the truth layer (advisor-side). F79: explicit --paths whitelist (git add -- <paths>, never add -A when given; paths outside the governance root or pointing at another project are rejected fail-closed); --dry-run lists the exact files that would be committed without touching the scene (read-only git status --porcelain / git diff --name-status; no add/reset/stash); after a real commit, git show --name-only HEAD is verified against that manifest. Whole-root mode (no --paths) is reserved for lybra's own workspace; every other project MUST pass --paths. Pre-staged files: inside --paths = accepted into the manifest, outside --paths = rejected and listed. AIPOS-R6M file-level guardrails (pre-commit hook) still apply to the selected files. CLI-only (surface=cli); push reuses the F69 fetch -> rebase -> push -> remote-verify flow.",
@@ -1817,6 +1873,277 @@
         "0": "PASS — committed (and pushed unless no_push), or no-op (nothing to commit within the selection), or dry_run manifest emitted",
         "1": "BLOCK/FAIL — e.g. paths outside governance root (rejected_paths), pre-staged files outside --paths (pre_staged_outside), N6 completeness missing, staged set != manifest, pre-commit guardrail (AIPOS-R6M) rejection, post-commit git show != manifest, push/verification failure",
         "2": "usage error — argparse rejected the arguments (unknown flag / missing --actor)"
+      }
+    },
+    "lybra_project_status": {
+      "description": "门自身的只读项目视图: home_root、当前项目(或解析错误)、已建项目。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_gate_version": {
+      "description": "门运行时版本(部署核验)。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_validate": {
+      "description": "只读校验工作区(既有只读后端语义)。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_context_pack_build": {
+      "description": "只读构建上下文包(task_id / path / orchestration_id 三选一)。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_gate_guidance": {
+      "description": "只读门指南: 给卡+角色, 结论委托唯一推导核 next_resolver.derive_next_step(AIPOS-F101 件①), 附该谁动与所需 scope(读本声明)。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_naming_profile_get": {
+      "description": "只读命名档(别名层)。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_draft_publish_dry_run": {
+      "description": "草稿发布预览(drafts → queue/pending)。",
+      "phase": "dry_run",
+      "required_scope": "draft_publish",
+      "visibility": "scope",
+      "base_verb": "lybra_draft_publish",
+      "confirm_verb": "lybra_draft_publish_confirm",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_draft_publish_confirm": {
+      "description": "草稿发布确认。",
+      "phase": "confirm",
+      "required_scope": "draft_publish",
+      "visibility": "scope",
+      "base_verb": "lybra_draft_publish",
+      "dry_run_verb": "lybra_draft_publish_dry_run",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_draft_submit_dry_run": {
+      "description": "planner 草稿提交预览(落 5_tasks/drafts/, 非真相)。",
+      "phase": "dry_run",
+      "required_scope": "draft_submit",
+      "visibility": "scope",
+      "base_verb": "lybra_draft_submit",
+      "confirm_verb": "lybra_draft_submit_confirm",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_draft_submit_confirm": {
+      "description": "planner 草稿提交确认。",
+      "phase": "confirm",
+      "required_scope": "draft_submit",
+      "visibility": "scope",
+      "base_verb": "lybra_draft_submit",
+      "dry_run_verb": "lybra_draft_submit_dry_run",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_intake_submit_dry_run": {
+      "description": "外部需求受理提交预览(AIPOS-109 路径 B)。",
+      "phase": "dry_run",
+      "required_scope": "intake_submit",
+      "visibility": "scope",
+      "base_verb": "lybra_intake_submit",
+      "confirm_verb": "lybra_intake_submit_confirm",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_intake_submit_confirm": {
+      "description": "外部需求受理提交确认。",
+      "phase": "confirm",
+      "required_scope": "intake_submit",
+      "visibility": "scope",
+      "base_verb": "lybra_intake_submit",
+      "dry_run_verb": "lybra_intake_submit_dry_run",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_owner_decision_record_dry_run": {
+      "description": "Owner 决策记录预览。",
+      "phase": "dry_run",
+      "required_scope": "owner_decision_record",
+      "visibility": "scope",
+      "base_verb": "lybra_owner_decision_record",
+      "confirm_verb": "lybra_owner_decision_record_confirm",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_owner_decision_record_confirm": {
+      "description": "Owner 决策记录确认(授予信封时另需 owner_confirm)。",
+      "phase": "confirm",
+      "required_scope": "owner_decision_record",
+      "conditional_scope": {"scope": "owner_confirm", "when": "dry-run 计划含 autonomy_policy_grant(武装 PreAuthorized 信封, AIPOS-250)"},
+      "visibility": "scope",
+      "base_verb": "lybra_owner_decision_record",
+      "dry_run_verb": "lybra_owner_decision_record_dry_run",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_audit_dispatch_confirm": {
+      "description": "派审确认(建审计卡)。",
+      "phase": "confirm",
+      "required_scope": "audit_dispatch",
+      "visibility": "scope",
+      "base_verb": "lybra_audit_dispatch",
+      "dry_run_verb": "lybra_audit_dispatch_dry_run",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_queue_rework_dry_run": {
+      "description": "为已认领卡追加返工轮次预览(AIPOS-F75, 顾问)。",
+      "phase": "dry_run",
+      "required_scope": "queue_rework",
+      "visibility": "hidden",
+      "base_verb": "lybra_queue_rework",
+      "confirm_verb": "lybra_queue_rework_confirm",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_queue_rework_confirm": {
+      "description": "返工轮次确认。",
+      "phase": "confirm",
+      "required_scope": "queue_rework",
+      "visibility": "hidden",
+      "base_verb": "lybra_queue_rework",
+      "dry_run_verb": "lybra_queue_rework_dry_run",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_bench_audit_confirm": {
+      "description": "验证台审计确认(顾问/Owner; 执行体不可自确认)。",
+      "phase": "confirm",
+      "required_scope": "bench_audit_confirm",
+      "visibility": "scope",
+      "base_verb": "lybra_bench_audit",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_converge_r_cards": {
+      "description": "批量收敛已有裁决的审计卡(R 卡)到 completed(dry_run 参数先预览)。",
+      "phase": "single",
+      "required_scope": "queue_close",
+      "visibility": "scope",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_queue_withdraw_dry_run": {
+      "description": "撤卡预览(pending/claimed, 保留全部记录)。",
+      "phase": "dry_run",
+      "required_scope": "queue_withdraw",
+      "visibility": "scope",
+      "base_verb": "lybra_queue_withdraw",
+      "confirm_verb": "lybra_queue_withdraw_confirm",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_queue_withdraw_confirm": {
+      "description": "撤卡确认。",
+      "phase": "confirm",
+      "required_scope": "queue_withdraw",
+      "visibility": "scope",
+      "base_verb": "lybra_queue_withdraw",
+      "dry_run_verb": "lybra_queue_withdraw_dry_run",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_queue_amend_dry_run": {
+      "description": "改 pending 卡预览(带改动史)。",
+      "phase": "dry_run",
+      "required_scope": "queue_amend",
+      "visibility": "scope",
+      "base_verb": "lybra_queue_amend",
+      "confirm_verb": "lybra_queue_amend_confirm",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_queue_amend_confirm": {
+      "description": "改卡确认。",
+      "phase": "confirm",
+      "required_scope": "queue_amend",
+      "visibility": "scope",
+      "base_verb": "lybra_queue_amend",
+      "dry_run_verb": "lybra_queue_amend_dry_run",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_naming_profile_set": {
+      "description": "修改命名档(别名层, 追加留痕)。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_roles_remove": {
+      "description": "移除自定义角色(幂等, Owner 门: owner_authorization_ref)。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_roles_enroll_code": {
+      "description": "单相发码(Owner 门: owner_authorization_ref)。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_roles_enroll_list": {
+      "description": "只读列出接入码(不显示码值)。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_roles_reload": {
+      "description": "重载门令牌注册表(bearer 须 owner 角色 + owner_authorization_ref)。",
+      "phase": "single",
+      "required_scope": null,
+      "visibility": "always",
+      "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
+      "surface": ["mcp"]
+    },
+    "lybra_agent_watch": {
+      "description": "`lybra agent watch --workspace-root`: 纯客户端只读 mtime+path 哨兵(AIPOS-268/284/284C/295), 有界等待 5_tasks/queue/** + records/** 变化或 --expect 产物; loop 的唯一等待原语(禁 sleep 自旋)。本条目是哨兵退出码的唯一声明; 代码 tools/aipos_cli/agent_watch_fs.py 与 CLI help 只读不写死(AIPOS-F101 件③)。",
+      "phase": "single",
+      "surface": ["cli"],
+      "cli_command": "lybra agent watch",
+      "single_implementation": "tools/aipos_cli/agent_watch_fs.run_fs_watch(loop_driver 经此等待)",
+      "exit_codes": {
+        "change": {"code": 0, "meaning": "首个变化出现 / --expect 满足(打印一行 JSON 摘要)"},
+        "timeout": {"code": 2, "meaning": "--timeout 内无变化(默认静默)"},
+        "end_no_product": {"code": 3, "meaning": "见到 --end-pattern 但 --expect 未满足"},
+        "stall": {"code": 4, "meaning": "观测面静默超过 --stall-secs(静默停滞)"},
+        "usage": {"code": 5, "meaning": "用法错/布防拒绝(如 --expect 模式非法)"},
+        "signal": {"code": 130, "meaning": "SIGTERM/SIGINT 干净退出(无输出无 traceback)"}
       }
     }
   }

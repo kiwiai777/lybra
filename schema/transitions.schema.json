@@ -983,11 +983,7 @@
       },
       "derived_command": "lybra artifact ingest --task-id <被审卡ID> --workspace-root <治理根>(action_type=finalize, 信封 allowed_verbs 同 internal finalize)"
     },
-    "exit_codes": {
-      "0": "记录已落(既有薄壳 exit 0)",
-      "1": "薄壳/门拒(透传原文)",
-      "4": "声明缺/文件缺/frontmatter 缺/sha 不符(fail-closed, 输出缺项与出口)"
-    }
+    "exit_codes_ref": "verbs.schema.json verbs.lybra_artifact_ingest.exit_codes(退出码唯一声明处, AIPOS-F101 件③ 删本处重复声明)"
   },
   "envelope_guards": {
     "description": "AIPOS-F9 大项B: PreAuthorized 信封守卫声明——信封不匹配的每种原因都声明 next_step(找谁+做什么)。门响应原样带出,绝不手写散落文案。",
