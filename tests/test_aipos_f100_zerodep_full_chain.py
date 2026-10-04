@@ -52,12 +52,13 @@ VERDICT_TEXT = ("---\nverdict: PASS\ncommit_sha: {sha}\nreviewed_task_id: {task}
                 "# 审计报告 — {audit}\n\n## 一句话结论\nPASS: 零依赖链路可回读。\n")
 FINALIZE_TEXT = ("---\nmerge_commit: {sha}\nremote_ref: origin/main\ndeploy_status: deployed\n---\n"
                  "# RETURN — {task}-FINALIZE\n\n## 一句话结论\n已合并。\n")
-# 规整: 运行时刻 / 随机 dry_run id / 内容 sha256(含时刻)——先 dry_run id 再时间戳, 防时间戳式样吃进随机 id
+# 规整: 随机 dry_run id / 内容 sha256(含时刻; 两模式写出的文本风格不同, 其 sha256 本就不同) / 运行时刻——先 id 与 sha256
+# 再时间戳: 时间戳式样 \d{8}_?\d{6} 会吃进碰巧含 14 位连续数字的 sha256, 使后者不再被整体规整(两模式偶发不等)
 _NORMALIZE = [
     (re.compile(r"dryrun_[0-9a-f]{32}"), "dryrun_<ID>"),
+    (re.compile(r"\b[0-9a-f]{64}\b"), "<H64>"),
     (re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?"), "<TS>"),
     (re.compile(r"\d{8}T?_?\d{6}"), "<TSC>"),
-    (re.compile(r"\b[0-9a-f]{64}\b"), "<H64>"),
 ]
 
 
