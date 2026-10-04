@@ -372,6 +372,19 @@ def _external_finalize_pending(workspace_root: Path, task_id: str) -> tuple[bool
 
 
 def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
+    """校验一张卡的产物(见 _validate_task_artifact)。AIPOS-F100 件②: 卡/记录/产物 frontmatter 读不出 = 拒
+    INGEST_FRONTMATTER_UNREADABLE(原文点名文件与行号), 不取缺省继续校验。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+
+    try:
+        return _validate_task_artifact(task_id, workspace_root)
+    except FrontmatterReadError as exc:
+        return {"ok": False, "kind": "verdict" if task_id.upper().endswith("R") else "return",
+                "category": "INGEST_FRONTMATTER_UNREADABLE", "reasons": [f"{exc}。出口: 按拒因修正该文件 frontmatter 后重推导"],
+                "path": exc.path, "frontmatter": {}, "exit_code": INGEST_EXIT_REJECTED}
+
+
+def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
     """校验一张卡的产物(执行卡=Return; R 卡=裁决报告; external finalize 且裁决 PASS 的执行卡=FINALIZE 卡 Return)是否可铸记录。纯校验, 不提交。
 
     返回 {ok, kind: return|verdict|finalization, category, reasons[], path, frontmatter, exit_code}。
@@ -432,7 +445,7 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
             ]
             return out
         out["path"] = str(path)
-        fm = _read_frontmatter(path)
+        fm = _read_frontmatter(path, allow_missing_block=True)
         out["frontmatter"] = fm
         problems = invalid_finalization_frontmatter(fm)
         if problems:
@@ -469,7 +482,7 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
             ]
             return out
         out["path"] = str(path)
-        fm = _read_frontmatter(path)
+        fm = _read_frontmatter(path, allow_missing_block=True)
         out["frontmatter"] = fm
         missing = missing_return_frontmatter(fm)
         if missing:
@@ -538,7 +551,7 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
         ]
         return out
     out["path"] = str(path)
-    fm = _read_frontmatter(path)
+    fm = _read_frontmatter(path, allow_missing_block=True)
     out["frontmatter"] = fm
     # AIPOS-F89 件③c: 报告完成判据唯一实现 next_resolver.missing_verdict_frontmatter(占位 = 未填, 空模板不算产物)
     from tools.aipos_cli.next_resolver import missing_verdict_frontmatter

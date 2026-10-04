@@ -217,7 +217,13 @@ def _card_lane_paths(governance_root: Path, task_id: str) -> tuple[Path, list[st
     task_path, _queue = _find_task_in_queue(governance_root, task_id)
     if not task_path:
         raise WriteBoundaryError(f"卡 {task_id} 不在队列目录中(product_repo mutate 需按卡 lane.paths 判)")
-    fm = _read_frontmatter(task_path)
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+
+    try:
+        fm = _read_frontmatter(task_path)
+    except FrontmatterReadError as exc:
+        # AIPOS-F100 件②: 卡读不出 = 拒(不按空 lane 判, 原文点名文件)
+        raise WriteBoundaryError(f"卡 {task_id} frontmatter {exc}") from exc
     lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
     paths = [str(p).strip() for p in (lane.get("paths") or []) if str(p).strip()]
     repo = resolve_card_repo(governance_root, {**fm, "task_id": task_id})

@@ -192,6 +192,7 @@ def _resolve_kickoff_ref(repo_root: Path, ref: str) -> str:
     if (text.endswith(".md") or "/" in text) and candidate.is_file():
         from tools.aipos_cli.next_resolver import _read_frontmatter
 
+        # AIPOS-F100 件②: 读不出 = FrontmatterReadError 向上(调用方转 FRONTMATTER_UNREADABLE 拒因), 不按文件名猜卡号
         return str(_read_frontmatter(candidate).get("task_id") or candidate.stem).strip()
     return text
 
@@ -205,8 +206,19 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
     """
     from tools.aipos_cli.next_resolver import card_workstation_view, kickoff_refusal, select_next_card
 
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.next_resolver import KICKOFF_REFUSAL_CODES
+
     root = Path(repo_root).resolve()
-    requested_id = _resolve_kickoff_ref(root, requested) if requested else None
+    try:
+        requested_id = _resolve_kickoff_ref(root, requested) if requested else None
+    except FrontmatterReadError as exc:
+        # AIPOS-F100 件②: 冷启动指向的卡文件读不出 = 拒因原文(不选卡、不猜卡号)
+        output.update(select_next_card([]))
+        output["next_card_excluded"] = [{"task_id": str(requested), "code": "FRONTMATTER_UNREADABLE",
+                                         "reason": f"{KICKOFF_REFUSAL_CODES['FRONTMATTER_UNREADABLE']}: {exc}"}]
+        output["kickoff_requested"] = str(requested)
+        return output
     candidates: list[dict[str, Any]] = []
     for summary, task in zip(output["tasks"], actor_report["tasks"]):
         if summary.get("queue_state") != "claimed":
@@ -236,8 +248,13 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
         except AmbiguousTaskCard as exc:
             output["next_card_excluded"] = [{"task_id": requested_id, "code": "NOT_FOUND", "reason": str(exc)}]
         else:
-            refusal = kickoff_refusal(root, requested_id, actor, queue_state=queue_state,
-                                      card_frontmatter=_read_frontmatter(card_path) if card_path else {})
+            try:
+                card_fm = _read_frontmatter(card_path) if card_path else {}
+            except FrontmatterReadError as exc:
+                refusal = {"task_id": requested_id, "code": "FRONTMATTER_UNREADABLE",
+                           "reason": f"{KICKOFF_REFUSAL_CODES['FRONTMATTER_UNREADABLE']}: {exc}"}
+            else:
+                refusal = kickoff_refusal(root, requested_id, actor, queue_state=queue_state, card_frontmatter=card_fm)
             if refusal is None:  # 队列里在办且判据放行, 但不在本实例 my-tasks 名下 = 非本人
                 refusal = {"task_id": requested_id, "code": "NOT_MINE", "reason": f"卡的认领实例不是本实例, 不能开工: {requested_id} 不在 {actor} 的已认领卡中"}
             output["next_card_excluded"] = [refusal]

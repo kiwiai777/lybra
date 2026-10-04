@@ -57,12 +57,14 @@ from tools.aipos_cli.next_resolver import (
     execute_derived_action,
     auditor_artifact_watch,
     executor_artifact_watch,
+    frontmatter_unreadable_stop,
 )
+from tools.aipos_cli.frontmatter import FrontmatterReadError
 
 LOOP_VERB = "lybra_loop"
 DRIVER_ROLE = "advisor"
 # 推导核标出的硬停动作: 产物已落盘但不合规(F78 件③) / 账务记录缺(F73E 件①: 无 claim 记录)——都不是"agent 还在干活", 禁空等, exit 4 点名
-HARD_STOP_ACTIONS = frozenset({"artifact_invalid", "record_missing"})  # 驱动方角色(roles.schema advisor 持账务动词; 信封 agent_or_role 可写角色名或实例名)
+HARD_STOP_ACTIONS = frozenset({"artifact_invalid", "record_missing", "frontmatter_unreadable"})  # 驱动方角色(roles.schema advisor 持账务动词; 信封 agent_or_role 可写角色名或实例名)
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +439,12 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
     if not task_path:
         plan.refusal = plan.manual_hint = f"队列中找不到 {card}"
         return plan
-    fm = _read_frontmatter(task_path)
+    try:
+        fm = _read_frontmatter(task_path)
+    except FrontmatterReadError as exc:
+        # AIPOS-F100 件②: 卡读不出 = 不拉起(手工模式点名拒因), 不按空卡面猜 harness/实例
+        plan.refusal = plan.manual_hint = str(exc)
+        return plan
     try:
         plan.harness = card_harness(fm)
     except SchemaLoadError as exc:
@@ -631,7 +638,14 @@ def run_loop(
     if not task_path:
         return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"),
                           f"queue 目录中找不到任务卡 {task_id}", missing_records=[f"任务卡 {task_id}"])
-    task_fm = _read_frontmatter(task_path)
+    try:
+        task_fm = _read_frontmatter(task_path)
+    except FrontmatterReadError as exc:
+        # AIPOS-F100 件②: 卡读不出 = 硬停 exit 4 点名文件与出口(不据空卡面找信封/推导)
+        stop = frontmatter_unreadable_stop(task_id, exc)
+        say(f"lybra loop {task_id}: exit 4 — {exc}")
+        return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), str(exc),
+                          missing_records=stop["missing_records"], suggested_action=stop["suggested_action"])
     # AIPOS-F78 前置零②: 驱动方身份=显式 --actor → 工位声明(.lybra/role instance)→ connection.json 驱动方 token 实例; 禁占位 advisor
     driver_actor = actor or _driver_actor(governance_root, connection_json=connection_json)
     if not driver_actor:
@@ -656,9 +670,17 @@ def run_loop(
     result = LoopResult(task_id, "completed", exit_code_for(contract, "completed"), "", envelope=envelope_id)
     # AIPOS-F90 件①: 已校验的驱动方身份与信封贯穿推导核与执行体(派生 claim/return/verdict/close 带同一 owner_policy_ref)
     with driver_scope(actor=driver_actor, policy_id=envelope_id):
-        return _drive(task_id, governance_root, result, contract=contract, max_steps=max_steps, max_wait=max_wait,
-                      interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute, watch=watch,
-                      connection_json=connection_json, policy=policy, driver_actor=driver_actor, no_launch=no_launch)
+        try:
+            return _drive(task_id, governance_root, result, contract=contract, max_steps=max_steps, max_wait=max_wait,
+                          interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute, watch=watch,
+                          connection_json=connection_json, policy=policy, driver_actor=driver_actor, no_launch=no_launch)
+        except FrontmatterReadError as exc:
+            # AIPOS-F100 件②: 推导核之外的回读(落账回读 / 结案判据 / 等待实例)遇记录读不出 = 同一硬停 exit 4 点名文件
+            stop = frontmatter_unreadable_stop(task_id, exc)
+            say(f"lybra loop {task_id}: exit 4 — {exc}")
+            result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), str(exc)
+            result.missing_records, result.suggested_action = stop["missing_records"], stop["suggested_action"]
+            return result
 
 
 # AIPOS-F90 件①(缺陷③): 账务步「门侧是否已落」的回读判据——该步对应的门生记录(_read_task_records 唯一读取口)在执行前后是否换了一份。
@@ -745,7 +767,7 @@ def _drive(
             if action.get("type") in HARD_STOP_ACTIONS:
                 # AIPOS-F78 件③ / F73E 件①: 产物已落盘但不合规 / 账务记录缺 → 不空等, exit 4 点名缺项(补齐后重跑 loop)
                 missing = list(derivation.get("missing_records") or [])
-                what = "产物不合规" if action.get("type") == "artifact_invalid" else "记录缺失"
+                what = {"artifact_invalid": "产物不合规", "frontmatter_unreadable": "frontmatter 读不出"}.get(str(action.get("type")), "记录缺失")
                 where = f": {action.get('path')}" if action.get("path") else ""
                 msg = f"{what} @ {node}/{state} ({target_card}){where}: missing={missing}; suggested={derivation.get('suggested_action', '')}"
                 steps.append(LoopStep(index, "execute", node, state, target_card, ok=False, message=msg))

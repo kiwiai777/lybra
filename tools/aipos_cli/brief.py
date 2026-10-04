@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
 from tools.schema_loader import get_governance_structure, resolve_governance_path
 
 
@@ -40,7 +40,8 @@ def _parse_date(date_str: str | None) -> datetime | None:
     return None
 
 
-def _get_stage_snapshot_info(governance_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+def _get_stage_snapshot_info(governance_root: Path, repo_root: Path | None = None,
+                             unreadable: list[str] | None = None) -> dict[str, Any]:
     """获取最新阶段快照信息 (转调 finalize.py 的 stage gate 逻辑)。
     
     Returns:
@@ -87,11 +88,14 @@ def _get_stage_snapshot_info(governance_root: Path, repo_root: Path | None = Non
     latest = snapshots[-1]
     
     # 解析 frontmatter
+    # AIPOS-F100 件②: 读不出不省略——收进 unreadable(展示「读不出: <路径>: <原因>」)
     try:
-        fm, _, _ = parse_markdown_frontmatter(latest.read_text(encoding="utf-8"))
+        fm, _ = require_frontmatter(latest, allow_missing_block=True)
         snapshot_date = fm.get("snapshot_date")
         stage_name = fm.get("stage_name")
-    except Exception:
+    except FrontmatterReadError as exc:
+        if unreadable is not None:
+            unreadable.append(str(exc))
         snapshot_date = None
         stage_name = None
     
@@ -117,6 +121,7 @@ def _get_decision_log_entries(
     governance_root: Path,
     since_date: datetime | None = None,
     repo_root: Path | None = None,
+    unreadable: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """获取 decision_log 条目 (按 status 裁剪, 尊重 superseded_by)。
     
@@ -147,8 +152,7 @@ def _get_decision_log_entries(
         
         for md_file in sorted(month_dir.glob("*.md")):
             try:
-                content = md_file.read_text(encoding="utf-8")
-                fm, body, _ = parse_markdown_frontmatter(content)
+                fm, body = require_frontmatter(md_file, allow_missing_block=True)
                 
                 # 解析 decided_at
                 decided_at = fm.get("decided_at")
@@ -165,6 +169,10 @@ def _get_decision_log_entries(
                     "body": body,
                     "decided_at_dt": decided_dt,
                 })
+            except FrontmatterReadError as exc:
+                if unreadable is not None:
+                    unreadable.append(str(exc))
+                continue
             except Exception:
                 continue
     
@@ -191,7 +199,8 @@ def _get_decision_log_entries(
     return active_entries
 
 
-def _get_governance_docs(governance_root: Path, repo_root: Path | None = None) -> list[dict[str, Any]]:
+def _get_governance_docs(governance_root: Path, repo_root: Path | None = None,
+                         unreadable: list[str] | None = None) -> list[dict[str, Any]]:
     """获取治理文档清单 (按 status 筛选 active, 标出辖域冲突)。
     
     Returns:
@@ -214,8 +223,7 @@ def _get_governance_docs(governance_root: Path, repo_root: Path | None = None) -
             continue
         
         try:
-            content = md_file.read_text(encoding="utf-8")
-            fm, body, _ = parse_markdown_frontmatter(content)
+            fm, body = require_frontmatter(md_file, allow_missing_block=True)
             
             status = fm.get("status", "").lower()
             jurisdiction = fm.get("jurisdiction", "")
@@ -227,6 +235,10 @@ def _get_governance_docs(governance_root: Path, repo_root: Path | None = None) -
                 "jurisdiction": jurisdiction,
                 "frontmatter": fm,
             })
+        except FrontmatterReadError as exc:
+            if unreadable is not None:
+                unreadable.append(str(exc))
+            continue
         except Exception:
             continue
     
@@ -252,7 +264,8 @@ def _get_governance_docs(governance_root: Path, repo_root: Path | None = None) -
     return active_docs
 
 
-def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
+def _get_queue_summary(governance_root: Path, repo_root: Path | None = None,
+                       unreadable: list[str] | None = None) -> dict[str, Any]:
     """获取队列摘要 (转调 records.py 读取 queue 状态)。
     
     Returns:
@@ -321,8 +334,7 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> 
     if claimed_dir.is_dir():
         for card_file in sorted(claimed_dir.glob("*.md")):
             try:
-                content = card_file.read_text(encoding="utf-8")
-                fm, _, _ = parse_markdown_frontmatter(content)
+                fm, _ = require_frontmatter(card_file)
                 task_id = fm.get("task_id")
                 
                 if not task_id:
@@ -347,6 +359,10 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None) -> 
                         "missing": missing,
                         "status": fm.get("status"),
                     })
+            except FrontmatterReadError as exc:
+                if unreadable is not None:
+                    unreadable.append(str(exc))
+                continue
             except Exception:
                 continue
     
@@ -418,7 +434,8 @@ def run_brief(
     
     try:
         # 1. 阶段坐标
-        stage_info = _get_stage_snapshot_info(workspace_root, repo_root)
+        unreadable: list[str] = []  # AIPOS-F100 件②: 读不出的文件不省略, 末节逐条列出
+        stage_info = _get_stage_snapshot_info(workspace_root, repo_root, unreadable)
         
         # 2. 增量真相 (decision_log)
         snapshot_date = None
@@ -430,10 +447,10 @@ def run_brief(
         if snapshot_date and (not filter_date or snapshot_date > filter_date):
             filter_date = snapshot_date
         
-        decisions = _get_decision_log_entries(workspace_root, filter_date, repo_root)
+        decisions = _get_decision_log_entries(workspace_root, filter_date, repo_root, unreadable)
         
         # 3. 队列摘要
-        queue_summary = _get_queue_summary(workspace_root, repo_root)
+        queue_summary = _get_queue_summary(workspace_root, repo_root, unreadable)
         
         # Fail-closed: 检查 queue_summary 是否有错误
         if "error" in queue_summary:
@@ -444,7 +461,7 @@ def run_brief(
             return 1
         
         # 4. 治理文档清单
-        governance_docs = _get_governance_docs(workspace_root, repo_root)
+        governance_docs = _get_governance_docs(workspace_root, repo_root, unreadable)
         
         # 5. 新鲜度
         cards_since_snapshot = 0
@@ -484,6 +501,7 @@ def run_brief(
                     "cards_since_snapshot": cards_since_snapshot,
                     "days_since_snapshot": stage_info["days_since_snapshot"],
                 },
+                "unreadable": unreadable,
             }
             print(json.dumps(result, indent=2, ensure_ascii=False))
         else:
@@ -565,6 +583,12 @@ def run_brief(
             else:
                 print("  ⚠️  无快照基线, 无法评估新鲜度")
             print()
+
+            if unreadable:
+                print(f"【6. 读不出的文件】(共 {len(unreadable)} 份, 上文统计未计入)")
+                for line in unreadable:
+                    print(f"  - {line}")
+                print()
             
             print("=" * 80)
         
