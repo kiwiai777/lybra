@@ -20,7 +20,6 @@ AIPOS-350F1: project_segment and host_segment are NEVER hardcoded.
 from __future__ import annotations
 
 import json
-import os
 import socket
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,34 +56,52 @@ def _registry_prefix_mapping() -> dict[str, str]:
     return mapping
 
 
-# AIPOS-R4B-1: centralized dev defaults for the non-raising instance-name path.
-# Used by default_instance_name() when no workspace project.json is available
-# (CLI fallback paths, e.g. audit_derivation; pump/supervise callers retired by AIPOS-F91).
-# Forward-compatible: override via env. The canonical, config-backed, validating
-# path remains generate_canonical_name() (which reads project.json).
-DEFAULT_INSTANCE_PROJECT = os.environ.get("LYBRA_PROJECT", "lybra")
+class ProjectSegmentUnresolved(ValueError):
+    """AIPOS-F102 件③: 实例名项目段无据(调用方未传 project, 且治理根 project.json#project 缺/读不出)——拒, 禁缺省项目字面。"""
+
+
+def _project_segment_for(project: str | None, project_root: str | Path | None) -> str:
+    """AIPOS-F102 件③: 实例名项目段 = 调用方显式 project → 治理根 project.json#project → 拒(ProjectSegmentUnresolved)。
+
+    原 DEFAULT_INSTANCE_PROJECT(环境变量缺省 "lybra")退役: 换项目时缺 project 的调用会静默铸出 lybra 身份。
+    """
+    explicit = str(project or "").strip()
+    if explicit:
+        return explicit
+    if project_root is None:
+        raise ProjectSegmentUnresolved(
+            "实例名项目段无据: 调用方未传 project, 也未给治理根(project.json#project)。"
+            "出口: 传 project=<项目名>, 或传 project_root=<治理根>(其 project.json 声明 project)"
+        )
+    try:
+        declared = str(read_project_json(project_root).get("project") or "").strip()
+    except (OSError, ValueError) as exc:
+        raise ProjectSegmentUnresolved(
+            f"实例名项目段无据: 治理根 {project_root} 的 project.json 读不出({exc})。出口: 修复 project.json 或显式传 project"
+        ) from exc
+    if not declared:
+        raise ProjectSegmentUnresolved(
+            f"实例名项目段无据: 治理根 {project_root} 的 project.json 无 project 字段。"
+            "出口: 在 project.json 声明 project, 或显式传 project"
+        )
+    return declared
 
 
 def default_instance_name(
-    prefix: str, *, project: str | None = None, host: str | None = None
+    prefix: str, *, project: str | None = None, host: str | None = None,
+    project_root: str | Path | None = None,
 ) -> str:
-    """Non-raising instance-name derivation from the registry template (AIPOS-R4B-1).
+    """Instance-name derivation from the registry template (AIPOS-R4B-1).
 
     THE single implementation of the {prefix}.{project}.{host} pattern for the
-    non-validating/fallback paths. Replaces ~20 scattered inline instance-name
-    literals of the {prefix}.{project}.{host} form (audit_derivation; the
-    pump/supervise callers were retired by AIPOS-F91).
+    non-validating paths (audit/repair card identity, charter siblings, onboarding).
 
-    - prefix: the role's display prefix (e.g. 'exec', 'audit', 'advisor').
-      Callers already hold this (from policy envelopes). The prefix<->role map
-      is also single-sourced in the registry (role.naming.prefix) for the
-      canonical path (generate_canonical_name).
-    - project: from caller; else DEFAULT_INSTANCE_PROJECT (env-overridable).
-    - host: from caller; else socket.gethostname() short form (machine identity;
-      matches audit_derivation's prior behavior — no hardcoded 'kiwiai-dev').
+    - prefix: the role's display prefix (registry role.naming.prefix, e.g. 'exec', 'audit', 'advisor').
+    - project: from caller; else the governance root's project.json#project (project_root);
+      neither = ProjectSegmentUnresolved (AIPOS-F102 件③: no baked-in project default).
+    - host: from caller; else socket.gethostname() short form (machine identity).
 
-    NEVER raises. For the canonical (config-backed, validating) path use
-    generate_canonical_name() instead.
+    For the canonical (config-backed, validating) path use generate_canonical_name() instead.
     """
     # 惰性导入(避免模块级导入崩溃 CLI)
     try:
@@ -97,7 +114,7 @@ def default_instance_name(
             "in an editable install. Run from the project directory or ensure PYTHONPATH "
             "includes the project root."
         ) from e
-    proj = project or DEFAULT_INSTANCE_PROJECT
+    proj = _project_segment_for(project, project_root)
     h = host or socket.gethostname().split(".")[0]
     return template.format(prefix=prefix, project=proj, host=h)
 
@@ -179,11 +196,9 @@ def get_naming_profile(project_root: str | Path) -> dict[str, Any]:
             if isinstance(val, list):
                 result[key] = [str(v).strip() for v in val if str(v).strip()]
     # AIPOS-352: merge custom role prefixes (custom name → itself as prefix)
-    try:
-        from tools.aipos_cli.custom_roles import custom_roles_for_naming
-        result["prefix_mapping"].update(custom_roles_for_naming(project_root))
-    except Exception:
-        pass  # defensive: custom_roles module may not be available in all contexts
+    # AIPOS-F102: 原 except Exception: pass 退役(custom_roles 是产品内模块, 导入失败 = 产品损坏须出声; 注册表读取自身已处理缺失)
+    from tools.aipos_cli.custom_roles import custom_roles_for_naming
+    result["prefix_mapping"].update(custom_roles_for_naming(project_root))
 
     # project_segment fallback: derive from project.json's 'project' field
     if "project_segment" not in result:
