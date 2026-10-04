@@ -79,15 +79,16 @@ def _update_session_record(
     Returns a small dict describing the update (ok / reason). On any failure this
     raises so the caller can surface a loud error (never silently ok:True).
     """
-    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+    from tools.aipos_cli.frontmatter import require_frontmatter
     from tools.aipos_cli.record_writer import (
         MCP_SESSION_FRONTMATTER_ORDER,
         SESSION_FRONTMATTER_ORDER,
         render_markdown,
     )
 
-    text = session_path.read_text(encoding="utf-8")
-    metadata, body, _warnings = parse_markdown_frontmatter(text)
+    # AIPOS-F100 件②: 会话记录读-改-写前「必须读出」(读不出 = FrontmatterReadError 向上抛, 不重写)——原忽略解析告警,
+    # 记录被拒成 {} 时会把会话记录重写成只剩本次更新的字段
+    metadata, body = require_frontmatter(session_path)
     # pick the order that matches whichever writer created this record
     order = MCP_SESSION_FRONTMATTER_ORDER if metadata.get("surface") else SESSION_FRONTMATTER_ORDER
 

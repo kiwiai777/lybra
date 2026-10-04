@@ -17,6 +17,10 @@ Adversarial values: colon in value, ISO timestamp, ``#``, brackets/braces,
 embedded quote, leading/trailing whitespace, empty vs null, flat list w/ colon
 item, empty list, ``True-Name`` stays string, int, depth-1 nested map.
 
+AIPOS-F100: the subset also covers block scalars ``|``/``>`` (clip/strip/keep, explicit indentation), one-line
+flow sequences/mappings of scalars and multi-line plain scalars (hand-written governance history), and the
+record_writer stdlib emitter writes every inventory shape back as block YAML (shape table, both directions).
+
 AIPOS-F98 fail-closed: structures outside the supported subset raise
 FrontmatterUnsupportedError (key path + line) and parse_markdown_frontmatter returns an empty
 mapping plus a warning — never a key silently parsed to None; product readers surface it.
@@ -379,6 +383,22 @@ SHAPE_INVENTORY: list[tuple[str, str]] = [
      "  a: 1\n  b:\n  - c"),
     ("S17 empty frontmatter / comment-only",
      "# nothing here"),
+    # AIPOS-F100 件③: hand-written history files in a real governance root (block scalars, one-line flow
+    # collections of scalars, multi-line plain scalars) — same result as yaml.safe_load, no longer refused
+    ("S18 literal block scalar | (clip) / |- (strip) / |+ (keep), trailing comment header, more-indented and blank inner lines",
+     "a: |\n  line one\n    indented\n\n  # not a comment\nb: |-\n  stripped\n\nc: |+ # keep\n  kept\n\n\nd: end"),
+    ("S19 folded block scalar > / >- with paragraph breaks and more-indented lines; explicit indentation indicator |2",
+     "f: >\n  one\n  two\n\n  three\n    four\n  five\ng: >-\n  folded\n  strip\nh: |2\n    two extra\n  base\ni: end"),
+    ("S20 block scalars inside sequences and compact mappings (hand-written drafts: owner_verify_checklist / rework focus)",
+     "owner_verify_checklist: |\n  - 守护在跑\n  - 额度尽 BLOCK\nrework_rounds:\n- round: 1\n  acceptance_criteria: >\n    all\n    green\n  focus_items:\n  - |\n    item\n- round: 2\nz: 1"),
+    ("S21 block scalar at end of frontmatter (no final line break) and empty block scalar before the next key",
+     "empty: |\nnext: x\nlast: |\n  tail line"),
+    ("S22 one-line flow sequence of scalars (plain / quoted / resolved), trailing comma, comment",
+     "severities: [P2, P2, P2]\nmixed: [1, 2.5, true, null, ~, 2026-10-04, '', 'a, b', \"c\\td\", a:b, http://x, -x] # c\nspaced: [ x , y y ,]\nnested_in_seq:\n- [a, b]\n- c"),
+    ("S23 one-line flow mapping of scalars (hand-written reported_tokens), quoted keys, key without value",
+     "reported_tokens: {input: 75793, output: 15000, total: 90793}\nq: {'k': v, \"x y\": 2, solo}\nlane:\n  meta: {a: 1}"),
+    ("S24 multi-line plain scalars: map value, sequence items (hand-written governance_refs), value on its own line below the key, blank-line paragraph",
+     "title: first part\n  second part\ngovernance_refs:\n  - 蓝本=lybra-dev-auditor(行为契约:watch→领卡→\n    BLOCK 于额度尽)\n  - single\nbelow:\n  own line\n  continued\n\n  new paragraph\nz: 1"),
 ]
 
 # hostile string values a writer may be handed; each must survive safe_dump → fallback and stdlib emitter → fallback
@@ -458,6 +478,124 @@ class FrontmatterZerodepShapeInventoryTests(unittest.TestCase):
             rw.yaml = saved
 
 
+def _with_writer_yaml(enabled: bool, fn):
+    """record_writer + frontmatter both with (enabled) or without PyYAML (blocked: sys.meta_path finder + module attrs)."""
+    import tools.aipos_cli.record_writer as rw
+
+    if enabled:
+        return fn()
+    saved = rw.yaml
+    rw.yaml = None  # type: ignore[assignment]
+    try:
+        return _run_with_yaml_blocked(fn)
+    finally:
+        rw.yaml = saved
+
+
+class StdlibWriterShapeTableTests(unittest.TestCase):
+    """AIPOS-F100 件①: the record_writer stdlib emitter (PyYAML absent) writes every SHAPE_INVENTORY shape as block YAML
+    and the same table drives both directions:
+      read → write → read: shape text --fallback--> value --render_markdown(stdlib)--> text --fallback--> same value;
+      write → read: value --render_markdown(stdlib)--> text, read back by the fallback AND by yaml.safe_load (oracle) =
+      value; the safe_dump path's output reads back to the same value (render_markdown's own write-back check passes
+      on both paths, i.e. nothing is refused)."""
+
+    def setUp(self) -> None:
+        _require_oracle(self)
+
+    def _render(self, value: dict, *, with_yaml: bool) -> str:
+        import tools.aipos_cli.record_writer as rw
+
+        # explicit order = the value's own key order (render_markdown sorts unlisted keys; S15 mixes int/str keys)
+        return _with_writer_yaml(with_yaml, lambda: rw.render_markdown(value, "body", order=list(value)))
+
+    def test_every_inventory_shape_round_trips_through_both_writers(self) -> None:
+        import tools.aipos_cli.record_writer as rw
+
+        for shape_id, fm_text in SHAPE_INVENTORY:
+            with self.subTest(shape=shape_id):
+                read_back, warnings = _run_with_yaml_blocked(lambda: __import__(
+                    "tools.aipos_cli.frontmatter", fromlist=["_fallback_parse"])._fallback_parse(fm_text))
+                self.assertEqual(warnings, [])
+                expected = rw._normalize_value(read_back)  # writer contract: date/datetime are written as ISO strings
+                stdlib_md = self._render(read_back, with_yaml=False)
+                dump_md = self._render(read_back, with_yaml=True)
+                stdlib_fm = _extract_frontmatter_text(stdlib_md)
+                data, _body, w = _run_with_yaml_blocked(lambda: _parse_markdown(stdlib_md))
+                self.assertEqual(w, [], stdlib_md)
+                self.assertEqual(data, expected, f"{shape_id}\n{stdlib_md}")
+                self.assertEqual(_real_yaml.safe_load(stdlib_fm) or {}, expected, f"oracle on stdlib output\n{stdlib_md}")
+                data2, _b2, w2 = _run_with_yaml_blocked(lambda: _parse_markdown(dump_md))
+                self.assertEqual((data2, w2), (expected, []), f"fallback on safe_dump output\n{dump_md}")
+                if read_back:  # non-empty: the stdlib text is block YAML, never a stringified container
+                    self.assertNotIn("\"[", stdlib_fm)
+                    self.assertNotIn("\"{", stdlib_fm)
+
+    def test_product_shaped_hostile_values_never_refused_without_pyyaml(self) -> None:
+        """F98 gap #1: lane.paths / rework_rounds were stringified and refused by the write-back check."""
+        import tools.aipos_cli.record_writer as rw
+
+        for value in HOSTILE_STRINGS:
+            meta = {
+                "task_id": "AIPOS-X", "title": value, "governance_refs": [value, "plain"],
+                "lane": {"repo": value, "paths": [value, "tests/"], "roles": []},
+                "rework_rounds": [{"round": 1, "focus_items": [value], "acceptance_criteria": value, "nested": {"k": [value]}}],
+                "reported_tokens": {}, "needs_owner": False, "matrix": [[value, 1], []], "ratio": 1e16, "neg": -0.5,
+                value or "empty-key": value,
+            }
+            with self.subTest(value=value):
+                md = self._render(meta, with_yaml=False)
+                data, _body, warnings = _run_with_yaml_blocked(lambda: _parse_markdown(md))
+                self.assertEqual((data, warnings), (meta, []))
+                self.assertEqual(_real_yaml.safe_load(_extract_frontmatter_text(md)), meta)
+
+    def test_stdlib_writer_refuses_types_it_cannot_write(self) -> None:
+        import tools.aipos_cli.record_writer as rw
+
+        for bad in ((1, 2), {1, 2}, b"raw", object()):
+            with self.subTest(value=repr(bad)):
+                with self.assertRaises(ValueError):
+                    self._render({"k": bad}, with_yaml=False)
+        with self.assertRaises(ValueError):
+            _with_writer_yaml(False, lambda: rw._dump_frontmatter_yaml({("tuple", "key"): 1}))
+
+    def test_publish_without_pyyaml_lands_the_card(self) -> None:
+        """F98 gap #1 reproduction: create_draft + publish_draft with PyYAML blocked for reader and writer."""
+        import tempfile
+        from tools.aipos_cli.draft_writer import create_draft, publish_draft
+
+        cards = {}
+        for with_yaml in (False, True):
+            td = tempfile.TemporaryDirectory()
+            self.addCleanup(td.cleanup)
+            root = Path(td.name)
+            for state in ("pending", "claimed", "completed", "blocked"):
+                (root / "5_tasks" / "queue" / state).mkdir(parents=True)
+            (root / "5_tasks" / "policies").mkdir(parents=True)
+            (root / "5_tasks" / "policies" / "pol_lybra_dev_7.md").write_text(
+                "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\n---\n# Dev\n", encoding="utf-8")
+            meta = {"task_id": "AIPOS-F100-PUB", "title": "零依赖发布: 冒号 #号", "project": "lybra", "assigned_to": "dev_claude",
+                    "agent_instance": "agent-01", "context_bundle": "default", "task_mode": "code", "priority": "medium",
+                    "status": "pending", "created_by": "tester", "needs_owner": False, "artifact_policy": "formal_write",
+                    "model_tier": "L2", "output_target": "tools/", "governance_refs": ["★依据: x", "Fix: 'q'"]}
+
+            def _go(root=root, meta=meta):
+                draft = create_draft(root, meta, "零依赖发布正文。")
+                self.assertTrue(draft.get("wrote"), draft)
+                return publish_draft(root, root / draft["target_path"], actor="tester", dry_run=False)
+
+            result = _with_writer_yaml(with_yaml, _go)
+            self.assertNotEqual(result.get("verdict"), "BLOCK", result)
+            md = (root / result["target_path"]).read_text(encoding="utf-8")
+            data, _body, warnings = _run_with_yaml_blocked(lambda: _parse_markdown(md))
+            self.assertEqual(warnings, [])
+            cards[with_yaml] = {k: v for k, v in data.items() if not k.endswith(("_at", "_sha256"))}
+        self.assertEqual(cards[False]["lane"]["paths"], ["tools/"])
+        lane_false, lane_true = cards[False].pop("lane"), cards[True].pop("lane")
+        self.assertEqual({k: v for k, v in lane_false.items() if k != "repo"}, {k: v for k, v in lane_true.items() if k != "repo"})
+        self.assertEqual(cards[False], cards[True])
+
+
 # AIPOS-F98 件②: what the zero-dependency parser does not parse is never guessed and never a key silently None.
 #   - valid YAML outside the subset → FrontmatterUnsupportedError(yaml_invalid=False); parse_markdown_frontmatter
 #     returns {} + one warning (no fields at all: a partial mapping would silently diverge from the YAML);
@@ -467,15 +605,17 @@ class FrontmatterZerodepShapeInventoryTests(unittest.TestCase):
 #     and my-tasks still attribute the bad card.
 # Each entry: (case, frontmatter text, key path, frontmatter line, yaml_invalid, salvaged mapping or None = whole refusal).
 REJECTION_CASES: list[tuple[str, str, str, int, bool, dict | None]] = [
-    ("R1 non-empty flow sequence inside lane", "task_id: T\nlane:\n  repo: /tmp/x\n  paths: [tools/, tests/]\nharness: pi",
+    # AIPOS-F100: one-line flow collections of scalars and block scalars are supported now (S18–S23); R1–R4 / R7
+    # name the constructs that stay outside the subset
+    ("R1 nested flow collection inside lane", "task_id: T\nlane:\n  repo: /tmp/x\n  paths: [[tools/], tests/]\nharness: pi",
      "lane.paths", 4, False, None),
-    ("R2 non-empty flow mapping", "task_id: T\nlane: {repo: /tmp/x}", "lane", 2, False, None),
-    ("R3 literal block scalar", "title: x\nbody: |\n  text", "body", 2, False, None),
-    ("R4 folded block scalar inside seq-of-maps", "rework_rounds:\n- round: 1\n  acceptance_criteria: >\n    text",
-     "rework_rounds[0].acceptance_criteria", 3, False, None),
+    ("R2 flow mapping with a nested flow value", "task_id: T\nlane: {repo: [/tmp/x]}", "lane", 2, False, None),
+    ("R3 flow sequence continued on the next line", "title: x\nbody: [a,\n  b]", "body", 2, False, None),
+    ("R4 mapping pair inside a flow sequence (seq-of-maps)", "rework_rounds:\n- round: 1\n  focus_items: [a: b]",
+     "rework_rounds[0].focus_items", 3, False, None),
     ("R5 anchor", "a: &anc 1", "a", 1, False, None),
     ("R6 tag", "a: !!str 1", "a", 1, False, None),
-    ("R7 multi-line plain scalar", "governance_refs:\n- first part\n  continued\nx: 1", "governance_refs[0]", 3, False, None),
+    ("R7 block scalar indicator on its own line below the key", "body:\n  |\n  text", "body", 2, False, None),
     ("R8 merge key", "<<: {}", "", 1, False, None),
     ("R9 complex key", "? a\n: b", "", 1, False, None),
     ("R10 sequence document", "- a\n- b", "", 1, False, None),
@@ -570,7 +710,7 @@ class FrontmatterZerodepFailClosedTests(unittest.TestCase):
         repo_root = Path(td.name)
         card = repo_root / "5_tasks" / "queue" / "claimed" / "aipos-bad.md"
         card.parent.mkdir(parents=True)
-        card.write_text("---\ntask_id: AIPOS-BAD\nlane:\n  repo: /tmp/x\n  paths: [a, b]\n---\nbody\n", encoding="utf-8")
+        card.write_text("---\ntask_id: AIPOS-BAD\nlane:\n  repo: /tmp/x\n  paths: [[a], b]\n---\nbody\n", encoding="utf-8")
         task = _run_with_yaml_blocked(lambda: load_task_file(card, repo_root))
         self.assertTrue(task["parse_errors"], task)
         self.assertIn("lane.paths", task["parse_errors"][0])
@@ -578,7 +718,7 @@ class FrontmatterZerodepFailClosedTests(unittest.TestCase):
     def test_state_lint_frontmatter_invalid_criterion_fires(self) -> None:
         from tools.aipos_cli.state_lint import card_frontmatter_warnings
 
-        bad = "---\ntask_id: AIPOS-BAD\nlane:\n  repo: /tmp/x\n  paths: [a, b]\n---\nbody\n"
+        bad = "---\ntask_id: AIPOS-BAD\nlane:\n  repo: /tmp/x\n  paths: [[a], b]\n---\nbody\n"
         good = "---\ntask_id: AIPOS-OK\nlane:\n  repo: /tmp/x\n  paths:\n  - a\n  roles: []\n---\nbody\n"
         self.assertTrue(_run_with_yaml_blocked(lambda: card_frontmatter_warnings(bad)))
         self.assertEqual(_run_with_yaml_blocked(lambda: card_frontmatter_warnings(good)), [])
@@ -591,7 +731,7 @@ class FrontmatterZerodepFailClosedTests(unittest.TestCase):
         rw.yaml = None  # type: ignore[assignment]
         try:
             with self.assertRaises(ValueError):
-                _run_with_yaml_blocked(lambda: rw._self_check_yaml("a: [x, y]", {"a": ["x", "y"]}))
+                _run_with_yaml_blocked(lambda: rw._self_check_yaml("a: [[x], y]", {"a": [["x"], "y"]}))
         finally:
             rw.yaml = saved
 

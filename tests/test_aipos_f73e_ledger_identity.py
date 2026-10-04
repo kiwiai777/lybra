@@ -346,7 +346,10 @@ def test_f73e_fixture_registered_in_runall_and_no_swallowed_exceptions():
     # 单一实现: 推导核只有一处读 claim 记录当 actor; 账务命令模板不再读驱动方身份
     nr_src = (REPO_ROOT / "tools/aipos_cli/next_resolver.py").read_text(encoding="utf-8")
     assert nr_src.count("def _claimer_instance(") == 1
-    derive_src = inspect.getsource(derive_next_step)
+    # AIPOS-F100 后 derive_next_step 是读不出即拒的薄包装, 推导体在 _derive_next_step: 守卫查推导体(否则对包装恒真, 形同失效)
+    from tools.aipos_cli.next_resolver import _derive_next_step
+
+    derive_src = inspect.getsource(_derive_next_step)
     # AIPOS-F102 件①: 唯一例外 = N2→N3 派审 actor(驱动方实例, 不是认领实例动词), 只此一处; 认领实例动词仍禁读驱动方身份当 actor
     assert derive_src.count("_driver_actor(") == 1, "推导核账务命令禁读驱动方身份当 actor(派审一处除外)"
     assert "dispatch_actor = _driver_actor(workspace_root, connection_json=conn_arg)" in derive_src

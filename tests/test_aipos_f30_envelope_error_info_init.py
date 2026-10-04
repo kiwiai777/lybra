@@ -37,7 +37,7 @@ class TestEnvelopeErrorInfoInitialization:
         }
         
         # Mock必要的依赖函数(隔离单元测试)
-        with patch("tools.mcp_server.tools._queue_claim_scope_allowed", return_value=True):
+        with patch("tools.mcp_server.tools._verb_scope_allowed", return_value=True):
             with patch("tools.mcp_server.tools._repo_root", return_value=str(tmp_path)):
                 with patch("tools.mcp_server.tools._resolve_claim_instance") as mock_resolve:
                     mock_resolve.return_value = {
@@ -79,7 +79,7 @@ class TestEnvelopeErrorInfoInitialization:
             "owner_policy_ref": "pol_test_1",
         }
         
-        with patch("tools.mcp_server.tools._queue_claim_scope_allowed", return_value=True):
+        with patch("tools.mcp_server.tools._verb_scope_allowed", return_value=True):
             with patch("tools.mcp_server.tools._repo_root", return_value=str(tmp_path)):
                 with patch("tools.mcp_server.tools._resolve_claim_instance") as mock_resolve:
                     mock_resolve.return_value = {
