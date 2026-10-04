@@ -314,6 +314,64 @@ def enrollment_trail_path(workspace_root: Path) -> Path:
     return governance_paths(Path(workspace_root))["decision_log"].parent / "enrollment_log.md"
 
 
+def enrollment_owner_root(
+    workspace_root: str | Path,
+    *,
+    governance_root: str | None = None,
+    projects: Any = None,
+    instance: str | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F107 件②: 接入事件(create/use/land/revoke)所属项目治理根的唯一解析口(写侧 _append_enrollment_trail 与诊断
+    enrollment_whereabouts 共用)。workspace_root = 签发门工作区(码记录所在)。
+
+    次序(先命中者为准):
+      ① 码记录 governance_root(签发时经门项目注册表校验; 凭据 projects 亦由它推导)——须为已建项目(队列 + project.json)
+      ② 凭据 projects(兑换铸出的 token_entry.projects, 恰一个项目名)
+      ③ 实例名项目段(naming_profile.parse_instance_name 唯一切分)
+    ②③按项目名经 workspace_config.resolve_home_root / resolve_project_root 解析, 且只在签发门所在 home 内解析
+    (签发门工作区 = home 本身或其直接子项目; 不在则不跨 home 猜)。
+    返回 {root: Path | None, project, source, reason}; root=None = 无所属项目(reason 说明), 由调用方决定落点并出声。"""
+    from tools.aipos_cli.naming_profile import parse_instance_name
+    from tools.aipos_cli.workspace_config import has_workspace_queue, read_project_json, resolve_home_root, resolve_project_root
+
+    issuer = _workspace_root_path(workspace_root)
+    misses: list[str] = []
+
+    def hit(root: Path, source: str) -> dict[str, Any]:
+        project = str(read_project_json(root).get("project") or root.name).strip()
+        return {"root": root, "project": project, "source": source, "reason": ""}
+
+    explicit = str(governance_root or "").strip()
+    if explicit:
+        root = Path(explicit).expanduser().resolve()
+        if has_workspace_queue(root, established=True):
+            return hit(root, "码记录 governance_root")
+        misses.append(f"码记录 governance_root {root} 不是已建项目(缺队列或 project.json)")
+    names: list[tuple[str, str]] = []
+    if isinstance(projects, list):
+        named = [str(x).strip() for x in projects if str(x).strip() and str(x).strip() != "*"]
+        if len(named) == 1:
+            names.append((named[0], "凭据 projects"))
+        elif named:
+            misses.append(f"凭据 projects 含多个项目 {named}, 不猜")
+    parsed = parse_instance_name(instance or "") if instance else None
+    if parsed and parsed.get("project"):
+        names.append((parsed["project"], "实例名项目段"))
+    elif instance:
+        misses.append(f"实例名 {instance!r} 不合命名模板, 无项目段")
+    if names:
+        home = resolve_home_root()
+        if issuer != home and issuer.parent != home:
+            misses.append(f"签发门工作区 {issuer} 不在 home {home} 内, 不按项目名跨 home 解析")
+        else:
+            for name, source in names:
+                try:
+                    return hit(resolve_project_root(home, name), source)
+                except (FileNotFoundError, ValueError) as exc:
+                    misses.append(f"{source} {name!r}: {exc}")
+    return {"root": None, "project": None, "source": "", "reason": "; ".join(misses) or "码无 governance_root / 凭据 projects / 实例名"}
+
+
 # AIPOS-F95 件③b: land 事件 reason 字段的位置载荷(enroll_client 写 `host=<主机> workstation=<目录> files=[...]`)
 _LAND_LINE_RE = re.compile(r"^- (?P<ts>\S+)\s+land\s+.*?\binstance=(?P<instance>\S+)\s+.*?\breason=(?P<reason>.*)$")
 _LAND_HOST_RE = re.compile(r"(?:^|\s)host=(?P<host>\S+)")
@@ -328,6 +386,16 @@ def workstation_transport_declaration() -> dict[str, Any]:
     if not isinstance(decl, dict) or not isinstance(decl.get("values"), list) or not str(decl.get("missing_host") or "").strip():
         raise ValueError("enums.schema.json enums.workstation_transport(values / missing_host)未声明")
     return decl
+
+
+def _latest_land(trail: Path, instance: str) -> re.Match[str] | None:
+    """该日志中实例最新 land 事件(_LAND_LINE_RE 唯一解析; workstation_location 与诊断 enrollment_whereabouts 共用)。"""
+    latest: re.Match[str] | None = None
+    for line in trail.read_text(encoding="utf-8").splitlines():
+        match = _LAND_LINE_RE.match(line.strip())
+        if match and match.group("instance") == instance:
+            latest = match
+    return latest
 
 
 def workstation_location(workspace_root: str | Path, instance: str) -> dict[str, Any]:
@@ -348,11 +416,7 @@ def workstation_location(workspace_root: str | Path, instance: str) -> dict[str,
     if not trail.is_file():
         out["reason"] = f"{trail} 不存在(本项目无接入登记)"
         return out
-    latest: re.Match[str] | None = None
-    for line in trail.read_text(encoding="utf-8").splitlines():
-        match = _LAND_LINE_RE.match(line.strip())
-        if match and match.group("instance") == instance:
-            latest = match
+    latest = _latest_land(trail, instance)
     if latest is None:
         out["reason"] = f"{trail.name} 无实例 {instance} 的 land 事件(该实例未在本项目接入登记)"
         return out
@@ -375,6 +439,63 @@ def workstation_location(workspace_root: str | Path, instance: str) -> dict[str,
     return out
 
 
+_EVENT_LINE_RE = re.compile(r"^- (?P<ts>\S+)\s+(?P<action>\S+)\s+code_id=(?P<code_id>\S+)\s+.*?\binstance=(?P<instance>\S+)")
+
+
+def enrollment_whereabouts(workspace_root: str | Path, instance: str) -> dict[str, Any]:
+    """AIPOS-F107 件② 只读诊断(`lybra roles enroll-where --instance <实例>`): 该实例接入事件**实际所在** log 与**应在** log。
+
+    应在 = enrollment_owner_root(实例名项目段; 唯一解析口)的 enrollment_log; 实际 = 扫 home 下各已建项目 + 签发门工作区
+    的 enrollment_log 中该实例的事件。verdict:
+      in_place   应在 log 有该实例 land 事件(workstation_location 可定位)
+      misplaced  应在 log 无 land, 别的 log 有(存量写在签发方 log; 按结果重接入, 新事件落所属项目)
+      not_landed 各 log 均无该实例 land 事件
+      owner_unresolved 解析不到所属项目(reason 说明)
+    只读: 不写任何日志/记录。"""
+    from tools.aipos_cli.workspace_config import _project_candidates, resolve_home_root
+
+    issuer = _workspace_root_path(workspace_root)
+    owner = enrollment_owner_root(issuer, instance=instance)
+    home = resolve_home_root()
+    roots = [home / name for name in _project_candidates(home)]
+    if issuer not in roots:
+        roots.append(issuer)
+    found: list[dict[str, Any]] = []
+    for root in roots:
+        trail = enrollment_trail_path(root)
+        if not trail.is_file():
+            continue
+        actions: dict[str, int] = {}
+        code_ids: list[str] = []
+        for line in trail.read_text(encoding="utf-8").splitlines():
+            match = _EVENT_LINE_RE.match(line.strip())
+            if match and match.group("instance") == instance:
+                actions[match.group("action")] = actions.get(match.group("action"), 0) + 1
+                if match.group("code_id") not in code_ids:
+                    code_ids.append(match.group("code_id"))
+        if not actions:
+            continue
+        land = _latest_land(trail, instance)
+        dir_match = _LAND_DIR_RE.search(land.group("reason")) if land else None
+        found.append({"log": str(trail), "project_root": str(root), "actions": actions, "code_ids": code_ids,
+                      "latest_land_at": land.group("ts") if land else None,
+                      "latest_land_workstation": dir_match.group("dir").strip() if dir_match else None})
+    expected = str(enrollment_trail_path(owner["root"])) if owner["root"] else None
+    landed_logs = [f["log"] for f in found if f["latest_land_at"]]
+    if owner["root"] is None:
+        verdict = "owner_unresolved"
+    elif expected in landed_logs:
+        verdict = "in_place"
+    elif landed_logs:
+        verdict = "misplaced"
+    else:
+        verdict = "not_landed"
+    location = workstation_location(owner["root"], instance) if owner["root"] else None
+    return {"instance": instance, "issuer_workspace": str(issuer), "home": str(home),
+            "owner_project": owner["project"], "owner_source": owner["source"], "owner_reason": owner["reason"],
+            "expected_log": expected, "found": found, "verdict": verdict, "workstation_location": location}
+
+
 def _append_enrollment_trail(
     workspace_root: Path,
     *,
@@ -384,13 +505,22 @@ def _append_enrollment_trail(
     instance: str | None,
     by: str,
     reason: str,
+    governance_root: str | None = None,
+    projects: Any = None,
 ) -> Path:
-    """Append-only 审计日志。"""
-    trail = enrollment_trail_path(workspace_root)
+    """Append-only 审计日志。
+
+    AIPOS-F107 件②: 写入该码/凭据/实例**所属项目**治理根的 enrollment_log(enrollment_owner_root 唯一解析口), 不写签发方
+    治理根; 签发方不另记指针(签发留痕 = 签发门注册表 .lybra/enrollments.json 的码记录 + 所属项目 log 的 create 行 by=)。
+    无所属项目(未绑项目的门级凭据 / 实例名无可解析项目段)→ 落签发门工作区自身 log, 行内 project=(未归属) 出声。
+    每行带 project=<所属项目>。"""
+    owner = enrollment_owner_root(workspace_root, governance_root=governance_root, projects=projects, instance=instance)
+    trail = enrollment_trail_path(owner["root"] or _workspace_root_path(workspace_root))
     trail.parent.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     inst_str = f"instance={instance}" if instance else "instance=(any)"
-    line = f"- {ts}  {action}  code_id={code_id}  role={role}  {inst_str}  by={by}  reason={reason or '(none)'}\n"
+    project_str = f"project={owner['project']}" if owner["root"] else "project=(未归属)"
+    line = f"- {ts}  {action}  code_id={code_id}  role={role}  {inst_str}  {project_str}  by={by}  reason={reason or '(none)'}\n"
     with trail.open("a", encoding="utf-8") as fh:
         if trail.stat().st_size == 0:
             # AIPOS-F94 N6: 治理文档首建带声明 frontmatter(governance_add.governance_doc_frontmatter 唯一渲染), 过治理仓提交门 B②
@@ -469,6 +599,7 @@ def create_enrollment_code(
         instance=instance,
         by=by,
         reason=reason,
+        governance_root=record["governance_root"],
     )
     
     return {
@@ -573,6 +704,8 @@ def mark_enrollment_used(
                 f"enrollment code exchanged for token"
                 f" (landing grace until {record['grace_until']})"
             ),
+            governance_root=record.get("governance_root"),
+            projects=(record.get("minted_token_entry") or {}).get("projects"),
         )
         return {**record, "code_id": code_id}
 
@@ -649,6 +782,8 @@ def land_enrollment(
         instance=record.get("instance"),
         by="(agent-enroll)",
         reason=landed_detail or "workstation landed .lybra/ config",
+        governance_root=record.get("governance_root"),
+        projects=(record.get("minted_token_entry") or {}).get("projects"),
     )
     return {**record, "code_id": code_id}
 
@@ -688,6 +823,8 @@ def revoke_enrollment_code(
             instance=rec.get("instance"),
             by=by,
             reason=reason,
+            governance_root=rec.get("governance_root"),
+            projects=(rec.get("minted_token_entry") or {}).get("projects"),
         )
     
     return {**rec, "code_id": code_id}
