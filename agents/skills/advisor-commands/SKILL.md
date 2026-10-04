@@ -29,9 +29,9 @@ role: advisor
 | 阶段 | 职责 | 主要命令 |
 |------|------|----------|
 | **N0 出卡** | 起草与发卡 | `lybra draft create/publish`, `lybra queue amend/withdraw` |
-| **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物, 永不唤醒 agent) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
+| **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物; 信封 `launch_harnesses` 授权时 loop 在工位拉起 harness, 否则手工 `/go`, 见「两种开工模式」) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
 | **N1 认领** | 监督认领流程 | `lybra loop`(推进行; 一段式: 驱动方信封 PreAuthorized, 门在同一步建卡工作树, **建树失败 = 门拒认领**, 队列不变); 单步查看 `lybra next --task-id <卡ID>`; `lybra my-tasks` 查询 |
-| **开工(工位)** | 执行/审计工位开工 | Owner 在工位敲 **`/go`**(产品选卡并核验: 非 claimed/非本实例/已结案/产物已交即拒并给原因); 顾问**不贴卡号/卡路径/开工稿**(AIPOS-F90 件③) |
+| **开工(工位)** | 执行/审计工位开工 | **两种模式**(AIPOS-F95): ①授权拉起 = 信封带 `launch_harnesses`, `lybra loop` 等待前在工位拉起 harness(开工提示 = 产品 `my-tasks` 的 `next_card.kickoff`); ②手工 = Owner 在工位敲 **`/go`**(产品选卡并核验: 非 claimed/非本实例/已结案/产物已交即拒并给原因)。顾问**不贴卡号/卡路径/开工稿**(AIPOS-F90 件③) |
 | **开工渲染** | 把卡意图面按 harness 渲染给执行引擎(pi/codex/claude-code), 派子 agent 只看渲染物 | **`lybra card render --task-id <卡ID> --harness <harness>`**(AIPOS-F78 件②; 零门动词/零 token) |
 | **N2 执行** | 监督进度 | 无直接干预 (执行体在卡分支提交 + 把 Return 落到项目声明落点; `lybra loop` 经 agent watch 等它落盘) |
 | **N3 交回** | 监督交回流程 | `lybra loop`(推进行; 推导核派生 `lybra artifact ingest --kind return`: 校验 Return frontmatter 与分支 tip, **模型字段由产品从会话记录填写**, 自报只作对照) |
@@ -136,7 +136,18 @@ lybra loop --task-id <卡ID> --envelope <信封ID> --actor <你的顾问实例> 
 **AIPOS-F78 起**: 账务动词一律驱动方(advisor)token 提交、actor=卡实例(执行体/审计体 token 零账务 scope); claim 经 Owner 信封一阶段放行(信封 `agent_or_role` 须覆盖驱动方实例或 `advisor`); return/verdict 步经 `artifact ingest` 校验 Return/报告 frontmatter 与分支 tip; close 的三字段(finalize_commit_hash/finalize_return_ref/verdict_ref)从 finalization(`merge_commit`)/return/verdict 记录自填, 缺一即 exit 4 点名; 驱动方身份读工位 `.lybra/role` instance 或驱动方 token 绑定实例, 不再占位 `advisor`。
 **AIPOS-F90 起**: `--envelope`/`--actor` 贯穿推导与执行(派生的 claim/return/verdict/close 都带同一 `--owner-policy-ref`); 认领从 pending 一步走通(门内同步建工作树, 建树失败=拒认领); 等门应答超时不报假失败——薄壳按 verbs.schema 声明回读真相(已由本实例认领=成功), loop 遇执行端报失败先回读该步门生记录, 已落即继续、绝不重复执行同一步。
 **四出口(verbs.schema `lybra_loop.exit_codes` 唯一声明)**:0=completed;2=门拒(透传拒因原文, 不重试);3=等待产物超时/停滞或 --max-steps 用尽(输出等的是哪份产物);4=推导不可推导/派生命令解析失败(输出 missing_records);5=无有效信封(输出 `lybra envelope mint` 申领出口)。
-**红线**:永不唤醒 agent(开会话仍由 Owner/工位无参 `/go`);禁 sleep 自旋(等待一律经 watch);token 永不上屏;禁直调 board_adapter。
+**红线**:不自己唤醒 agent——拉起只由 `lybra loop` 在 Owner 信封 `launch_harnesses` 授权下按声明模板完成(见下「两种开工模式」), 否则开会话由 Owner 在工位敲 `/go`;禁 sleep 自旋(等待一律经 watch);token 永不上屏;禁直调 board_adapter。
+
+#### 两种开工模式(AIPOS-F95)
+| 模式 | 前提 | 谁做什么 |
+|------|------|----------|
+| **授权拉起** | Owner **同意**后, Owner 亲自敲 `lybra envelope mint ... --launch-harness pi ... --confirm` 铸信封(信封 `launch_harnesses` 含该卡 harness) | 顾问跑 `lybra loop --task-id <卡ID>`: 执行体/审计体等待前, loop 按 enums.schema `harness.launch` 模板在工位(本项目 enrollment_log land 事件的 `host`/`workstation`)拉起一次 harness, 过程汇总成 `[<harness> <卡ID> pid=…] 工具 …/助手 …/错误 …` 一行式进度显示在顾问界面; 产物就绪/超时/早退/中断即清整个进程组; 拉起与收尾记进该卡 session record Events |
+| **手工** | 信封无 `launch_harnesses`(缺省), 或给 `--no-launch`, 或条件不满足(harness 无模板 / 工位定位不到或身份不符 / 跨机工位) | loop 输出 `manual: 请在 <工位目录> 的 <harness> 会话敲 /go`(跨机: `请在 <host>:<dir> 的工位敲 /go`), Owner 在工位敲 `/go`, loop 照旧经 watch 等产物 |
+
+- **授权须经 Owner**: 顾问先向 Owner 说明「将由 loop 在 <工位目录> 拉起 <harness>」并取得同意, 铸信封命令由 Owner 亲自敲; 顾问永不代敲、永不自行拉起。
+- **loop 在后台跑时顾问只读其输出**(进度行与出口原文), **禁 `until`/`sleep` 轮询**; 等它结束再读结果。
+- 一次 loop 对一张卡至多拉起一次, 不自动重试; 早退(exit 3 附 stderr 末尾)/超时后重跑 `lybra loop` = 显式再拉起。
+- 跨机工位(land 事件 host ≠ 本机)本卡起只声明不支持: 自动退回手工, 提示 `<host>:<dir>`。
 
 #### `lybra mark-concluded` / `lybra queue close --conclusion-note`(AIPOS-F78 前置零⑨)
 **何时用**:已 PASS 但不走 finalize 的卡(如产物由续卡承接):
@@ -187,10 +198,15 @@ lybra audit-verdict --reviewed-task-id <卡ID> --verdict PASS \
 **Owner 亲自敲**(签信封须 Owner 凭据的 owner_confirm; 顾问只给出命令, 不代敲)。AIPOS-F92: `--confirm` 经门 owner_decision_record
 envelope 路径真实落盘(输出以门生记录为准: policies/<信封ID>.md + owner_decisions 记录); `--dry-run` 同一 writer 本地预演。
 `--policy-id`/`--agent-or-role` 可重复、按顺序成对, 一条命令签一组(接入向导第 4 步即一条签三张):
+`--launch-harness <harness>`(可选, 可重复, AIPOS-F95): 授权 `lybra loop` 拉起该 harness(须有 enums.schema `harness.launch` 模板, 现只 `pi`); 缺省 = 只手工 `/go`。信封正文 Boundary 按声明渲染(列出 loop 动词集合与拉起授权实值)。
 ```bash
 lybra envelope mint --confirm --workspace-root <项目根> --connection-json <Owner凭据> \
   --policy-id <信封ID> --agent-or-role <你的顾问实例> --max-tasks 60 --task-mode code \
   --expires-at <到期时间> --decision-summary "loop envelope" --actor owner
+# 授权拉起(Owner 同意后): 加 --launch-harness pi
+lybra envelope mint --confirm --workspace-root <项目根> --connection-json <Owner凭据> \
+  --policy-id <信封ID> --agent-or-role <你的顾问实例> --max-tasks 60 --task-mode code \
+  --expires-at <到期时间> --decision-summary "loop envelope (launch pi)" --actor owner --launch-harness pi
 lybra envelope mint --dry-run --workspace-root <项目根> --policy-id <信封ID> --agent-or-role <执行体实例> \
   --max-tasks 60 --task-mode code --expires-at <到期时间> --decision-summary "preview" --actor owner
 ```
