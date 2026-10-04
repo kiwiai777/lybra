@@ -545,8 +545,8 @@ def render_kickoff(next_card: dict[str, Any]) -> str:
         value = item.get("value")
         if value is not None and not isinstance(value, str):
             raise KickoffRenderError(f"report_required_frontmatter[{item['key']}].value 非串: {value!r}")
-        line_template = str(line_decl.get("with_value") if value else line_decl.get("without_value") or "")
-        if not line_template:
+        line_template = line_decl.get("with_value" if value else "without_value")
+        if not isinstance(line_template, str) or not line_template:
             raise KickoffRenderError("verbs.schema.json lybra_my_tasks.kickoff.report_field_line 缺 with_value/without_value")
         entry = {"key": item["key"], "hint": item["hint"], "value": value or ""}
         field_lines.append(_KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(entry, m.group(1)), line_template))
