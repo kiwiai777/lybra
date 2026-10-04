@@ -517,7 +517,7 @@ def _card_role_class(metadata: dict[str, Any], repo_root: Path | None) -> str:
             if not cand:
                 continue
             parsed = parse_instance_name(cand)
-            head = parsed["prefix"] if parsed else cand
+            head = parsed["prefix"] if parsed else cand.split(".")[0]  # 非三段式(存量 exec.test 等)取首段, 与 F73C 口径同
             for role_name in (cand, role_by_prefix.get(head, head)):
                 cls = resolve_role_to_class(role_name, repo_root)
                 if cls:
@@ -542,13 +542,13 @@ def card_carries_gate_contract_section(metadata: dict[str, Any], repo_root: Path
     """
     from tools.aipos_cli.custom_roles import UnknownRoleClass, role_classes_in_group
 
+    if _manual_gate_mode(repo_root):  # 人肉 gate 项目: 任何角色都带节, 判据与角色类无关(无需解析)
+        return True
     try:
         role_class = _card_role_class(metadata, repo_root)
     except UnknownRoleClass as exc:
         raise ContractSectionError(f"AIPOS-F102: 卡面零门判据无据(角色类不可解析), 拒: {exc}") from exc
-    if role_class not in role_classes_in_group("workstation"):
-        return True
-    return _manual_gate_mode(repo_root)
+    return role_class not in role_classes_in_group("workstation")
 
 
 def _append_gate_contract_section(

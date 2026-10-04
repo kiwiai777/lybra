@@ -212,8 +212,9 @@ class FrontmatterZerodepParityTests(unittest.TestCase):
             "task_id": "AIPOS-WS5-PUB",
             "title": "WS5 publish parity test",
             "project": "lybra",
-            "assigned_to": "dev_claude",
-            "agent_instance": "agent-01",
+            # AIPOS-F102 件②: 卡角色类不可解析 = 拒发布; 夹具用注册表角色的实例名(原 dev_claude/agent-01 无角色类)
+            "assigned_to": "exec.lybra.test",
+            "agent_instance": "exec.lybra.test",
             "context_bundle": "default",
             "task_mode": "code",
             "priority": "medium",
@@ -238,7 +239,8 @@ class FrontmatterZerodepParityTests(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertIsInstance(data.get("lane"), dict, data.get("lane"))
         self.assertEqual(data["lane"].get("paths"), ["tools/"])
-        self.assertEqual(data["lane"].get("roles"), [])
+        # AIPOS-F102 件②: 卡角色类可解析(exec 实例 → executor), lane.roles 派生为 [executor](空列表形状由逐形状夹具覆盖)
+        self.assertEqual(data["lane"].get("roles"), ["executor"])
 
 
 class FrontmatterZerodepAdversarialTests(unittest.TestCase):
