@@ -1096,6 +1096,9 @@ else
   overall=1
 fi
 
+# AIPOS-F110: 跨机拉起(remote transport 经 ssh 替身: 拉起·kickoff stdin 逐字节·就绪/超时/SIGHUP 清理·ssh 不可达退回手工·材料未声明拒·双向可达检查)
+run_pytest "tests/test_aipos_f110_remote_launch.py" "$REPO_ROOT/tests/test_aipos_f110_remote_launch.py"
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
