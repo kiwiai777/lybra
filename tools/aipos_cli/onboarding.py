@@ -2,15 +2,15 @@
 
 把"从项目注册到首卡结案"做成产品命令序列, 全程零手工编辑。AIPOS-F92 起按单门 home 根约定(AIPOS-226 §1.3)重排:
   ① 建项目(顾问): `lybra project new` 落在 resolve_home_root 解析出的 home 根下(打印结果与来源; 门只扫描 home 根),
-     同时写首份阶段快照「项目创建」(首次 finalize 不被阶段门拦)
-  ② 声明产品仓(顾问): `lybra project set-repos`(project.json repos/code_repo, 经声明校验)
+     同时写首份阶段快照「项目创建」(首次 finalize 不被阶段门拦); 之后 `lybra governance-commit --paths <本步产物>` 落账(AIPOS-F94)
+  ② 声明产品仓(顾问): `lybra project set-repos`(project.json repos/code_repo, 经声明校验); 之后同法落账 project.json
   ③ Owner 一次性动作 ①: 用中央凭据库的 Owner 凭据为新项目签发顾问注册码(项目范围 = 新项目)
   ④ Owner 一次性动作 ②: 一条 `lybra envelope mint --confirm` 签三张信封(驱动方 / 执行实例 / 审计实例)
   ⑤ 顾问凭码 enroll 到治理根(得 advisor 凭据), 产品经 distribution 声明把顾问技能交付到 Claude Code 会话目录 .claude/skills
   ⑥ 顾问为执行 / 审计工位发注册码(顾问凭据)
   ⑦ 工位 enroll + sync 分发 + 稳态复核
   ⑧ 工位自检 → 起 pi → /go(工位零门: 认领由驱动方经产品完成)
-  ⑨ 首卡: 发卡 → `lybra loop` 推进到结案
+  ⑨ 首卡: 发卡 → `lybra loop` 推进到结案(结案后 loop 自动 N6 落账: task 范围精确提交并推送)
 Owner 动作只有 ③④ 两条(每条在 guide 中以 owner_action 标出); 其余由新顾问执行。顾问会话目录可与治理根不同:
 所有命令显式带治理根(--workspace-root / --home-root / --governance-root), 不依赖 cwd。
 
@@ -107,6 +107,43 @@ def enroll_delivery(code: str) -> dict[str, str]:
         "paste_instruction": f"{ENROLL_DELIVERY_INSTRUCTION}\n{paste_text}",
         "next_step": ENROLL_NEXT_STEP,
     }
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F94 件②: 向导第 1 / 2 步之后的治理落账(产物路径由向导按单源推导, 命令唯一渲染 governance_commit_paths_command)
+# ---------------------------------------------------------------------------
+
+def project_new_products(governance_root: Path) -> list[str]:
+    """`lybra project new` 的治理产物(治理根相对): project.json + 治理文档(decision_log 桩) + 阶段快照目录。
+    单源: workspace_config.project_json_path / governance_paths(scaffold_project 同读); 空目录骨架(队列 / 记录)无文件, 不入。"""
+    from tools.aipos_cli.workspace_config import governance_paths, project_json_path
+
+    root = Path(governance_root)
+    paths = governance_paths(root)
+    return [Path(p).relative_to(root).as_posix() for p in (project_json_path(root), paths["decision_log"], paths["stage_archive"])]
+
+
+def set_repos_products(governance_root: Path) -> list[str]:
+    """`lybra project set-repos` 的治理产物: project.json(repos / code_repo 段, 唯一写入口 set_project_repos)。"""
+    from tools.aipos_cli.workspace_config import project_json_path
+
+    root = Path(governance_root)
+    return [project_json_path(root).relative_to(root).as_posix()]
+
+
+def render_landing_command(governance_root: Path, actor: str, paths: list[str]) -> str:
+    from tools.aipos_cli.governance_commit import governance_commit_paths_command
+
+    return governance_commit_paths_command(paths, actor, governance_root)
+
+
+LANDING_ON_FAIL = {
+    "Git status check failed / not a git repository": (
+        "治理根须在治理仓(git)内: lybra home git-init --home-root <home 根>(一次性, 不配远端), Owner 按其输出配 origin 并首推后重跑本条"
+    ),
+    "PUSH NOT DONE": "已提交未推送: 按输出原因处理(无 origin = Owner 配远端; 远端冲突按输出出口)后重跑同一条",
+    "BLOCK(staged 在 --paths 外)": "治理仓有他人已暂存的文件, 本命令不动; 请其所有者先提交或取消暂存后重跑",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -213,22 +250,29 @@ def generate_onboarding_guide(
     gq, hq = _shell_quote(gov_s), _shell_path(str(home))
 
     # ── Step 1: 建项目(顾问) ─────────────────────────────────────────
+    step1 = [
+        _cmd("lybra", "project", "new", _shell_quote(project_name), "--home-root", hq, "--actor", _shell_quote(_actor)),
+        "# 落账: 本步产物精确提交并推送治理仓(AIPOS-F94; 只提交下列路径, 不碰治理仓其他改动)",
+        render_landing_command(gov, _actor, project_new_products(gov)),
+    ]
     steps.append({
         "step_number": 1,
         "actor": "advisor",
         "owner_action": None,
-        "title": "建项目(home 根下的治理根 + project.json + 首份阶段快照)",
-        "command": _cmd("lybra", "project", "new", _shell_quote(project_name), "--home-root", hq, "--actor", _shell_quote(_actor)),
+        "title": "建项目(home 根下的治理根 + project.json + 首份阶段快照)并落账",
+        "command": "\n".join(step1),
         "purpose": (
             f"在 home 根 {home}(来源: {home_source})下建 {project_name} 的治理根 {gov_s}: 队列 / 记录 / 治理文档 / project.json, "
             "并经 governance add stage 写首份阶段快照「项目创建」。门只扫描 home 根发现项目; 要放别处只能改 home 根本身"
             "(--home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > 缺省 ~/.lybra/projects), 不登记 home 根外的治理根"
         ),
-        "check": "输出 'Created project root:' 与 'stage snapshot:' 行; 验证: lybra project list --home-root <home 根> 出现项目名",
+        "check": ("输出 'Created project root:' 与 'stage snapshot:' 行; 验证: lybra project list --home-root <home 根> 出现项目名; "
+                  "落账输出 Verdict: PASS 且 '✓ Pushed to remote'"),
         "on_fail": {
             "PROJECT_EXISTS": "项目根已存在且非空; lybra project list 确认后跳到 Step 2",
             "PROJECT_NAME_EMPTY": "项目名不能为空; 给一个非空项目名重跑本步",
             "home 根不对": "home 根只经优先级梯解析(见目的); 换 --home-root 重跑本步",
+            **LANDING_ON_FAIL,
         },
         "creates": f"{gov_s}/(project.json, 5_tasks/, governance/, stage_archive/<日期>_项目创建.md)",
     })
@@ -239,17 +283,24 @@ def generate_onboarding_guide(
         repo_parts += ["--repo", item if item.startswith("<") else _shell_quote(item)]
     if repo_default:
         repo_parts += ["--default", _shell_quote(repo_default)]
+    step2 = [
+        _cmd(*repo_parts),
+        "# 落账: 本步产物(project.json)精确提交并推送治理仓(AIPOS-F94)",
+        render_landing_command(gov, _actor, set_repos_products(gov)),
+    ]
     steps.append({
         "step_number": 2,
         "actor": "advisor",
         "owner_action": None,
-        "title": "声明产品仓(project.json repos / code_repo)",
-        "command": _cmd(*repo_parts),
-        "purpose": "把产品仓清单写进 project.json(repos {default, items} + code_repo 别名), 经 config.schema project_json.repos 声明校验; 卡 lane.repo 写仓名, 建工作树 / finalize 按此解析",
-        "check": "输出 'Declared repos in <project.json>' 与每个仓一行; 多于一个仓须 --default",
+        "title": "声明产品仓(project.json repos / code_repo)并落账",
+        "command": "\n".join(step2),
+        "purpose": ("把产品仓清单写进 project.json(repos {default, items} + code_repo 别名), 经 config.schema project_json.repos 声明校验; "
+                    "卡 lane.repo 写仓名, 建工作树 / finalize 按此解析。之后各卡由 lybra loop 结案后自动落账; 非卡改动一律 governance-commit --paths"),
+        "check": "输出 'Declared repos in <project.json>' 与每个仓一行; 多于一个仓须 --default; 落账输出 Verdict: PASS 且 '✓ Pushed to remote'",
         "on_fail": {
             "REPOS_CONFLICT": "路径须为绝对路径、default 须在仓名内; 改参数重跑(project.json 未改动)",
             "PROJECT_NOT_ESTABLISHED": "Step 1 未完成; 先跑 Step 1",
+            **LANDING_ON_FAIL,
         },
         "creates": f"{gov_s}/project.json#repos",
     })
@@ -439,13 +490,14 @@ def generate_onboarding_guide(
         "title": "首卡: 发卡 → lybra loop 推进到结案",
         "command": "\n".join(step9),
         "purpose": f"顾问只用产品命令推进: lybra loop 以信封 {policies['driver']} 驱动整张卡, 工位只在 /go 后写产物(RETURN / 审计报告)",
-        "check": "lybra loop 退出码 0 且输出 'done: <卡ID> 已结案(closure 记录存在)'",
+        "check": "lybra loop 退出码 0 且输出 'done: <卡ID> 已结案(closure 记录存在), 治理已落账'(结案后 loop 自动执行 N6 落账: lybra governance-commit --task-id)",
         "on_fail": {
             "exit 5(无信封)": "Step 4 未落或信封不覆盖驱动方 / 本卡; 按输出的申领出口请 Owner 签",
             "exit 3(等待超时)": "工位尚未交回产物; 工位 /go 开工后重跑同一条 lybra loop",
             "exit 2(门拒)": "照输出原文处理; loop 已回读门生记录, 不会重复执行已落步骤",
+            "exit 2(落账拒)": "N6 落账被拒(他人暂存 / 护栏 / 推送未完成): 照输出原文处理后重跑同一条 lybra loop(落账幂等)",
         },
-        "creates": "卡在 completed 队列 + claim/return/dispatch/verdict/finalization/closure 记录",
+        "creates": "卡在 completed 队列 + claim/return/dispatch/verdict/finalization/closure 记录, 且已提交并推送治理仓",
     })
 
     owner_steps = [s["step_number"] for s in steps if s.get("owner_action")]

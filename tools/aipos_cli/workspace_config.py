@@ -1143,7 +1143,15 @@ def scaffold_project(
 
     decision_log = paths["decision_log"]  # ruling 1=B: single file
     if not decision_log.exists():
-        decision_log.write_text(f"# {clean} Decision Log\n", encoding="utf-8")
+        # AIPOS-F94 件②: 治理文档经声明驱动的唯一写入口 governance add doc 写(带 file_declarations.governance_doc 必填
+        # frontmatter)——原裸写无 frontmatter 的桩被治理仓提交门 B② 拒, 向导第 1 步之后的落账(governance-commit --paths)必挡。
+        from tools.aipos_cli.governance_add import add_doc
+
+        written = add_doc(root, name=decision_log.stem, title=f"{clean} Decision Log",
+                          body="决策粒度条目见 decision_log 目录(lybra governance add decision)。")
+        if not written.get("ok") or Path(written["target_path"]) != decision_log:
+            raise RuntimeError(f"DECISION_LOG_WRITE_FAILED: {written.get('error') or written.get('message')} "
+                               f"(声明落点 {written.get('target_path')} ≠ {decision_log})")
 
     write_project_json(root, clean, code_repo=code_repo, registered_by=registered_by, collaboration_profile=collaboration_profile)
 
