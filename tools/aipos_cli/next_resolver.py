@@ -2040,15 +2040,47 @@ def derive_next_step(
             if not latest_audit_dispatch and (task_mode == "code" or audit_required):
                 audit_id = f"{task_id}R"
                 policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
-                # 第4轮②: 派审是 owner-dispatch 的动词,不是 exec
-                dispatch_actor = "owner-dispatch.lybra.kiwiai-dev"
-                dispatch_agent = "owner-dispatch.lybra.kiwiai-dev"
-                # 审计体实例: 卡面 audit_by 声明优先(card.schema), 缺省沿用存量实例名
-                audit_instance = str(fm.get("audit_by") or "").strip() or "audit.lybra.kiwiai-dev"
+                # AIPOS-F102 件①: 派审 actor = 驱动方实例(roles.schema driver.role_class 对应的驱动方, _driver_actor 唯一实现:
+                # loop --actor → 治理根 .lybra/role instance → connection.json 驱动方 token 绑定实例), 原写死 lybra 身份退役;
+                # 解析不到 = 不可推导(点名缺项), 禁回退任何项目字面
+                dispatch_actor = _driver_actor(workspace_root, connection_json=conn_arg)
+                if not dispatch_actor:
+                    return {
+                        "task_id": task_id,
+                        "derivable": False,
+                        "current_node": "return",
+                        "current_state": "claimed",
+                        "triggered_by": "advisor",
+                        "command": "",
+                        "verb": "lybra_audit_dispatch_dry_run",
+                        "missing_records": [DRIVER_ACTOR_MISSING],
+                        "suggested_action": "补驱动方身份(lybra loop --actor 或治理根 .lybra/role instance)后重推导",
+                        "notes": "N2→N3: 派审 actor 无据(驱动方身份解析不到, AIPOS-F102 件①)",
+                        "action": {"type": "record_missing", "card": task_id, "record": "driver_actor"},
+                    }
+                # AIPOS-F102 件①: 审计卡认领实例 = 被审卡 audit_by 声明, 缺则按项目推导(audit_derivation.resolve_audit_instance 唯一实现)
+                from tools.aipos_cli.audit_derivation import resolve_audit_instance
+
+                try:
+                    audit_instance = resolve_audit_instance(fm, workspace_root)
+                except ValueError as exc:
+                    return {
+                        "task_id": task_id,
+                        "derivable": False,
+                        "current_node": "return",
+                        "current_state": "claimed",
+                        "triggered_by": "advisor",
+                        "command": "",
+                        "verb": "lybra_audit_dispatch_dry_run",
+                        "missing_records": [f"卡 {task_id} 审计实例声明(audit_by)或项目声明(project): {exc}"],
+                        "suggested_action": f"lybra queue amend --task-id {task_id} 补 audit_by 后重推导",
+                        "notes": "N2→N3: 审计卡认领实例无据(AIPOS-F102 件①)",
+                        "action": {"type": "record_missing", "card": task_id, "record": "audit_by"},
+                    }
                 cmd = _build_audit_dispatch_command(
                     task_id=task_id,
                     actor=dispatch_actor,
-                    agent_instance=dispatch_agent,
+                    agent_instance=dispatch_actor,
                     owner_policy_ref=policy_ref,
                     connection_json=conn_arg,
                     audit_task_id=audit_id,

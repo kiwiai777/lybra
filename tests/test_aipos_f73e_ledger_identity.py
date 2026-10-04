@@ -211,9 +211,11 @@ def test_f73e_item3_loop_chain_close_actor_exec_verdict_actor_auditor_driver_onl
     assert f"--actor {AUDITOR}" in by_action["verdict"] and f"--agent-instance {AUDITOR}" in by_action["verdict"], by_action["verdict"]
     assert f"--actor {EXEC}" in by_action["finalize"], by_action["finalize"]
     assert f"lybra queue close --task-id {TASK} --actor {EXEC} " in by_action["close"], by_action["close"]
-    assert "owner-dispatch" in by_action["dispatch"]  # 派审身份声明不改
+    # AIPOS-F102 件①: 派审 actor = 驱动方实例(roles.schema driver.role_class; 原写死 lybra owner-dispatch 实例退役), 派审不是认领实例动词
+    assert f"--actor {DRIVER} --agent-instance {DRIVER} " in by_action["dispatch"], by_action["dispatch"]
+    assert "owner-dispatch" not in by_action["dispatch"]
     for action, cmd in by_action.items():
-        if action == "governance_commit":  # AIPOS-F94: 落账不是门账务动词, 提交身份 = 驱动方(卡面「--actor <驱动方>」)
+        if action in ("governance_commit", "dispatch"):  # AIPOS-F94 落账 / F102 派审: 提交身份 = 驱动方(非认领实例账务动词)
             assert f"--actor {DRIVER} " in cmd, cmd
             continue
         assert f"--actor {DRIVER}" not in cmd, (action, cmd)  # 驱动方实例永不进账务命令 --actor
@@ -345,4 +347,6 @@ def test_f73e_fixture_registered_in_runall_and_no_swallowed_exceptions():
     nr_src = (REPO_ROOT / "tools/aipos_cli/next_resolver.py").read_text(encoding="utf-8")
     assert nr_src.count("def _claimer_instance(") == 1
     derive_src = inspect.getsource(derive_next_step)
-    assert "_driver_actor(" not in derive_src, "推导核账务命令禁读驱动方身份当 actor"
+    # AIPOS-F102 件①: 唯一例外 = N2→N3 派审 actor(驱动方实例, 不是认领实例动词), 只此一处; 认领实例动词仍禁读驱动方身份当 actor
+    assert derive_src.count("_driver_actor(") == 1, "推导核账务命令禁读驱动方身份当 actor(派审一处除外)"
+    assert "dispatch_actor = _driver_actor(workspace_root, connection_json=conn_arg)" in derive_src
