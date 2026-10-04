@@ -88,8 +88,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-
-
+from tools.aipos_cli.verb_contract import declared_exit_code  # AIPOS-F101 件③: 退出码唯一读取口
 
 try:
     import psutil
@@ -100,16 +99,15 @@ except ImportError:
 DEFAULT_INTERVAL_SECONDS = 15.0
 DEFAULT_TIMEOUT_SECONDS = 1800.0
 
-# Exit codes (AIPOS-268 + AIPOS-284 + F-284B-1): 0 = change/expect satisfied; 2 = timeout (silent);
-# 3 = end-pattern seen but expect NOT satisfied; 4 = stall detected;
-# 5 = usage error (布防拒绝: invalid --expect pattern);
-# 130 = SIGTERM/SIGINT clean exit (no output, no traceback).
-EXIT_CHANGE = 0
-EXIT_TIMEOUT = 2
-EXIT_END_NO_PRODUCT = 3
-EXIT_STALL = 4
-EXIT_USAGE = 5
-EXIT_SIGNAL = 130
+# Exit codes (AIPOS-268 + AIPOS-284 + F-284B-1; AIPOS-F101 件③): 唯一声明 = verbs.schema verbs.lybra_agent_watch.exit_codes
+# (change / timeout(静默) / end_no_product / stall / usage(布防拒绝) / signal(SIGTERM/SIGINT 干净退出)); 本模块只读声明,
+# 模块名保留为读出的值(既有调用方/夹具按名引用), 声明缺 = 导入即 SchemaLoadError(fail-closed)。
+EXIT_CHANGE = declared_exit_code("lybra_agent_watch", "change")
+EXIT_TIMEOUT = declared_exit_code("lybra_agent_watch", "timeout")
+EXIT_END_NO_PRODUCT = declared_exit_code("lybra_agent_watch", "end_no_product")
+EXIT_STALL = declared_exit_code("lybra_agent_watch", "stall")
+EXIT_USAGE = declared_exit_code("lybra_agent_watch", "usage")
+EXIT_SIGNAL = declared_exit_code("lybra_agent_watch", "signal")
 
 # The two subtrees the advisor sentinel watches (relative to --workspace-root):
 # queue/** = task cards moving through states (pending→claimed→completed = moves);
