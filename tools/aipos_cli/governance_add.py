@@ -68,6 +68,19 @@ def _render_frontmatter(fields: dict[str, Any]) -> str:
     return render_frontmatter_block(fields, list(fields))
 
 
+def governance_doc_frontmatter(*, status: str = "active", repo_root: Path | None = None) -> str:
+    """治理文档(governance/*.md)frontmatter 的唯一渲染(AIPOS-F94 N6): 声明 file_declarations.governance_doc 的
+    template_frontmatter(status 可覆盖); 渲染结果缺 required_frontmatter 任一键 = ValueError(fail-closed)。
+    add_doc / project new 的 decision_log 桩 / 门写的 enrollment_log 首建同此, 与提交门 B② 同一声明。"""
+    decl = _get_file_declaration("governance_doc", repo_root)
+    fields = dict(decl.get("template_frontmatter", {}))
+    fields["status"] = status
+    missing = [k for k in decl.get("required_frontmatter", []) if k not in fields]
+    if missing:
+        raise ValueError(f"config.schema file_declarations.governance_doc.template_frontmatter 缺必填键 {missing}")
+    return _render_frontmatter(fields)
+
+
 def add_decision(
     governance_root: Path,
     *,
@@ -266,11 +279,8 @@ def add_doc(
     slug = _slugify(name) if name else "doc"
     filename = f"{slug}.md"
 
-    # 构建 frontmatter
-    template_fm = dict(decl.get("template_frontmatter", {}))
-    template_fm["status"] = status
-
-    frontmatter = _render_frontmatter(template_fm)
+    # 构建 frontmatter(AIPOS-F94 N6: 唯一渲染 governance_doc_frontmatter)
+    frontmatter = governance_doc_frontmatter(status=status, repo_root=repo_root)
 
     # 构建内容
     content_parts = [frontmatter, ""]

@@ -35,7 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_aipos_f73d_loop_driver import _fm, _write  # noqa: E402  — 靶场构件唯一来源
+from test_aipos_f73d_loop_driver import _fm, _write, init_governance_repo  # noqa: E402  — 靶场构件唯一来源
 
 CODE_RE = re.compile(r"LYBRAENROLL1\.[A-Za-z0-9_-]+")
 
@@ -273,6 +273,8 @@ def probe_range(tmp_path: Path):
         _git(repo, "init", "-q", "-b", "main")
         _git(repo, "add", "-A")
         _git(repo, "commit", "-q", "-m", f"init {name}")
+    # AIPOS-F94: home 根 = 治理仓(git, 带临时远端裸仓 origin)——向导第 1 / 2 步之后与首卡结案后的落账都提交并推送到这里
+    init_governance_repo(r.hroot)
     r.sh(f"lybra project new ops --home-root {r.hroot} --actor owner")
     r.mcp_port, r.board_port = _free_port(), _free_port()
     gate = subprocess.Popen(["lybra", "serve", "--workspace-root", str(r.hroot / "ops"), "start", "--mcp-port", str(r.mcp_port),
@@ -377,6 +379,14 @@ def test_walkthrough_guide_onboards_new_project_to_first_card_completed(probe_ra
     final = r.sh(loop_cmd)
     print(final)
     assert "finalize 成功" in final and "已结案(closure 记录存在)" in final
+    # AIPOS-F94: 结案后 loop 自动 N6 落账(task 范围精确提交并推送); 向导第 1 / 2 步之后各落账一次
+    assert "run governance_commit" in final and "治理已落账" in final
+    hlog = _git(r.hroot, "log", "--format=%s")
+    print("[F94·home 根治理仓 git log]\n" + hlog)
+    assert "chore(governance): N6 收账 PROBE-1" in hlog and hlog.count("治理批次更新") >= 2
+    assert _git(r.hroot, "rev-parse", "HEAD") == _git(r.hroot.parent / f"{r.hroot.name}-remote.git", "rev-parse", "main")
+    assert _git(r.hroot, "status", "--porcelain", "-uall", "--", "lybra-probe/5_tasks/queue", "lybra-probe/5_tasks/records/claims/PROBE-1",
+                "lybra-probe/project.json") == ""
 
     # 件③: 首次 finalize 通过(阶段门有快照; 无部署机制 = skipped), 产品仓 main 已合并, 主检出干净
     fin = next((gov / "5_tasks" / "records" / "finalizations" / "PROBE-1").glob("finalization_*.md")).read_text(encoding="utf-8")

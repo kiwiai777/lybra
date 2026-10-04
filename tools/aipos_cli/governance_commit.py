@@ -276,6 +276,261 @@ def _manifest_repo_paths(manifest: dict[str, Any]) -> list[str]:
     return sorted(f["repo_path"] for f in manifest["files"])
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F94 件①③: 卡范围落账——task 范围路径推导 + 落账判据(唯一实现)
+#
+# 病根(第一次接入验收第五节): 新项目三张卡全部结案, 治理根却整体未跟踪——loop 结案即停, 无治理落账步。
+# 本节 = 「一张卡的治理真相在哪些路径」与「这些路径是否已在治理仓提交且推送」的唯一推导;
+# governance-commit --task-id(无 --paths)、推导核 N6 落账步(next_resolver)、state lint GOVERNANCE_UNCOMMITTED 三方同读。
+# 路径全部由卡与声明推导(队列根 / 记录根 / 草稿目录 = 声明; 台账 / 交回 / 裁决落点 = project.json paths; 卡编年史 =
+# project.json paths.foundation_backlog), 禁整根; 新记录类型(records/<新类型>/<卡ID>/)自动纳入。
+# ---------------------------------------------------------------------------
+
+TASK_SCOPE_SOURCE = "task_scope"
+N6_LANDING_ACTOR_PLACEHOLDER = "<驱动方实例>"
+
+
+def n6_landing_declaration() -> dict[str, Any]:
+    """N6 落账步的唯一声明 transitions.schema nodes.N6.landing(动作类型 / 门外动词名 / 命令模板 / 非 git 出口)。
+    缺声明或缺键 = SchemaLoadError(fail-closed, 禁回落写死)。"""
+    from tools.aipos_cli.next_resolver import _transition_node
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _transition_node("N6").get("landing")
+    if not isinstance(decl, dict):
+        raise SchemaLoadError("transitions.schema.json nodes.N6.landing 未声明")
+    for key in ("action_type", "verb", "command_template"):
+        if not str(decl.get(key) or "").strip():
+            raise SchemaLoadError(f"transitions.schema.json nodes.N6.landing.{key} 未声明")
+    if not str((decl.get("non_git_exit") or {}).get("command_template") or "").strip():
+        raise SchemaLoadError("transitions.schema.json nodes.N6.landing.non_git_exit.command_template 未声明")
+    return decl
+
+
+def governance_commit_cli() -> str:
+    """治理提交命令名 = verbs.schema lybra_governance_commit.cli_command(唯一声明)。"""
+    from tools.aipos_cli.next_resolver import REPO_ROOT
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    cli = str(((load_schema("verbs", REPO_ROOT).get("verbs") or {}).get("lybra_governance_commit") or {}).get("cli_command") or "").strip()
+    if not cli:
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_governance_commit.cli_command 未声明")
+    return cli
+
+
+def _render_template(template: str, **values: Any) -> str:
+    import shlex
+
+    return template.format(**{k: shlex.quote(str(v)) for k, v in values.items()})
+
+
+def audit_card_id(task_id: str) -> str:
+    """审计卡 ID = 被审卡 ID + R(与推导核 N3 派审 audit_task_id、门派生审计卡同一约定)。"""
+    return f"{task_id}R"
+
+
+def governance_commit_command(task_id: str, actor: str, governance_root: Path | str) -> str:
+    """N6 落账命令(推导核 N6 落账步 / close next_step / state lint 出口同此): 渲染 nodes.N6.landing.command_template。"""
+    return _render_template(n6_landing_declaration()["command_template"], task_id=task_id, actor=actor,
+                            governance_root=governance_root)
+
+
+def non_git_exit_command(governance_root: Path | str) -> str:
+    """治理根不在 git 工作树内时的出口(nodes.N6.landing.non_git_exit; home 根 = 治理根所在目录, 单门 home 根约定)。"""
+    return _render_template(n6_landing_declaration()["non_git_exit"]["command_template"],
+                            home_root=Path(governance_root).expanduser().parent)
+
+
+def governance_commit_paths_command(paths: list[str], actor: str, governance_root: Path | str) -> str:
+    """非卡改动(声明 / 治理文档 / 信封与决策记录 / 接入向导各步产物)精确提交命令的唯一渲染: --paths 逐条(治理根相对)。"""
+    import shlex
+
+    if not paths:
+        raise ValueError("governance_commit_paths_command: paths 为空(禁整根提交)")
+    return (f"{governance_commit_cli()} --governance-root {shlex.quote(str(governance_root))} --actor {shlex.quote(str(actor))} "
+            + " ".join(f"--paths {shlex.quote(str(p))}" for p in paths))
+
+
+def _gov_rel(governance_root: Path, path: Path) -> str | None:
+    """治理根内的相对 posix 路径; 声明落在治理根外(chris 形绝对路径)= None(不属本治理根, 不入本根提交)。"""
+    try:
+        return Path(path).resolve().relative_to(Path(governance_root).resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def card_own_paths(governance_root: Path, task_id: str, *, card_path: Path | None = None) -> list[str]:
+    """一张卡自身的治理路径候选(治理根相对; 不判存在, 不判跟踪):
+
+    - 队列文件: <queue_root>/<每个队列状态>/<卡文件名>(卡在队列间搬动, 旧位的删除也属本卡);
+    - 草稿: <drafts>/<卡文件名>;
+    - 记录: <records>/<每个记录类型>/<卡ID | 卡文件名 stem>/(门按 task_id 或 draft_id 分目录; 新类型自动纳入);
+    - 台账 / 交回 / 裁决落点: project.json paths.{task_cards_root, return_root, verdict_root}/<卡ID>/。
+    卡文件名 = 队列中按 frontmatter task_id 查到的那份(task_loader.find_task_card 唯一查找), 另含 <卡ID 小写>.md 缺省名。
+    """
+    from tools.aipos_cli.next_resolver import _resolve_governance_path_with_relative
+    from tools.aipos_cli.task_loader import QUEUE_STATES, find_task_card, queue_root_for
+    from tools.aipos_cli.workspace_config import project_paths
+
+    root = Path(governance_root)
+    if card_path is None:
+        card_path, _state = find_task_card(root, task_id)
+    names = [f"{task_id.lower()}.md"]
+    if card_path is not None and card_path.name not in names:
+        names.insert(0, card_path.name)
+    record_keys = list(dict.fromkeys([task_id, task_id.lower()] + [Path(n).stem for n in names]))
+
+    out: list[str] = []
+
+    def add(path: Path) -> None:
+        rel = _gov_rel(root, path)
+        if rel and rel not in out:
+            out.append(rel)
+
+    queue_root = queue_root_for(root)
+    for state in QUEUE_STATES:
+        for name in names:
+            add(queue_root / state / name)
+    drafts = _resolve_governance_path_with_relative("drafts", root)
+    for name in names:
+        add(drafts / name)
+    records = _resolve_governance_path_with_relative("records", root)
+    if records.is_dir():
+        for kind_dir in sorted(p for p in records.iterdir() if p.is_dir()):
+            for key in record_keys:
+                add(kind_dir / key)
+    declared = project_paths(root)
+    for key in ("task_cards_root", "return_root", "verdict_root"):
+        add(Path(declared[key]) / task_id)
+    return out
+
+
+def task_scope_candidates(governance_root: Path, task_id: str) -> dict[str, Any]:
+    """一张卡的落账范围候选 = 本卡自身路径 + 其审计卡自身路径 + 卡编年史(项目声明了 paths.foundation_backlog 时;
+    close 自动生成本卡条目, 属本卡落账)。返回 {paths, own, audit, chronicle, card_found}。"""
+    from tools.aipos_cli.task_loader import find_task_card
+    from tools.aipos_cli.workspace_config import project_paths
+
+    root = Path(governance_root)
+    card_path, _state = find_task_card(root, task_id)
+    own = card_own_paths(root, task_id, card_path=card_path)
+    audit = card_own_paths(root, audit_card_id(task_id))
+    chronicle_path = project_paths(root).get("foundation_backlog")
+    chronicle = _gov_rel(root, Path(chronicle_path)) if chronicle_path else None
+    paths = list(dict.fromkeys(own + audit + ([chronicle] if chronicle else [])))
+    return {"paths": paths, "own": own, "audit": audit, "chronicle": chronicle, "card_found": card_path is not None}
+
+
+def _under(path: str, scope_path: str) -> bool:
+    return path == scope_path or path.startswith(scope_path.rstrip("/") + "/")
+
+
+def resolve_task_scope(governance_root: Path, task_id: str) -> dict[str, Any]:
+    """件① task 范围精确提交的路径白名单: 候选中「盘上存在或已被跟踪(含待暂存的删除)」且未被 .gitignore 排除者。
+
+    被忽略的候选(如项目把台账目录 task_cards/ 列入 .gitignore)原样报出 ignored, 不提交、不报错(仓的既定排除)。
+    git 只读调用失败直接抛 CalledProcessError(调用方 fail-closed)。返回 {paths, ignored, absent, candidates, card_found, chronicle}。
+    """
+    root = Path(governance_root)
+    scope = task_scope_candidates(root, task_id)
+    candidates = scope["paths"]
+    tracked_files = _split_nul(_git_readonly(["ls-files", "-z", "--"] + candidates, root)) if candidates else []
+    prefix = _git_ws_prefix(root)
+    tracked_rel = [f[len(prefix):] if prefix and f.startswith(prefix) else f for f in tracked_files]
+    present: list[str] = []
+    absent: list[str] = []
+    for cand in candidates:
+        if (root / cand).exists() or any(_under(t, cand) for t in tracked_rel):
+            present.append(cand)
+        else:
+            absent.append(cand)
+    ignored: list[str] = []
+    untracked_present = [p for p in present if not any(_under(t, p) for t in tracked_rel)]
+    if untracked_present:
+        proc = subprocess.run(_GIT_QUOTEPATH_OFF + ["check-ignore", "-z", "--stdin"], input="\0".join(untracked_present) + "\0",
+                              cwd=str(root), capture_output=True, text=True, timeout=30)
+        if proc.returncode not in (0, 1):  # 0 = 有被忽略者, 1 = 无; 其余 = git 失败(fail-closed)
+            raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
+        ignored_set = set(_split_nul(proc.stdout))
+        ignored = [p for p in untracked_present if p in ignored_set or p.rstrip("/") in ignored_set]
+    paths = [p for p in present if p not in ignored]
+    return {"paths": paths, "ignored": ignored, "absent": absent, "candidates": candidates,
+            "card_found": scope["card_found"], "chronicle": scope["chronicle"]}
+
+
+def governance_landing(governance_root: Path, scopes: dict[str, list[str]]) -> dict[str, dict[str, Any]]:
+    """件①③ 落账判据(唯一实现; 推导核 N6 落账步、loop 出口 0、state lint 同读): 每张卡的范围路径
+    ① 无未跟踪 / 未提交 / 已暂存未提交(`git status --porcelain -uall`, .gitignore 排除者不算) 且
+    ② 无未推送(`git log <上游>..HEAD` 触及范围路径; 上游 = 当前分支 @{u}, 读上次 fetch 结果, 只读不联网)。
+
+    scopes = {卡ID: [治理根相对路径, ...]}。只读: 两次 git 调用覆盖全部卡。治理根不在 git 工作树内 / 当前分支无上游 = 一律
+    landed=False 并给出原因(fail-closed: 无仓即无可追溯真相, 无上游即无从证明已推送)。
+    返回 {卡ID: {landed, git, upstream, uncommitted: [..], unpushed: [..], reason}}。
+    """
+    root = Path(governance_root)
+
+    def verdict(**kw: Any) -> dict[str, dict[str, Any]]:
+        return {tid: dict(kw) for tid in scopes}
+
+    try:
+        inside = _git_readonly(["rev-parse", "--is-inside-work-tree"], root).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, NotADirectoryError) as exc:
+        detail = (getattr(exc, "stderr", "") or str(exc)).strip().splitlines()
+        return verdict(landed=False, git=False, upstream=None, uncommitted=[], unpushed=[],
+                       reason=f"治理根 {root} 不在 git 工作树内({detail[-1] if detail else exc}): 卡与记录只在盘上, 未成为可追溯真相; "
+                              f"出口: {non_git_exit_command(root)}(Owner 按其输出配 origin 并首推)")
+    if inside != "true":
+        return verdict(landed=False, git=False, upstream=None, uncommitted=[], unpushed=[],
+                       reason=f"治理根 {root} 不在 git 工作树内(rev-parse --is-inside-work-tree = {inside}); 出口: {non_git_exit_command(root)}")
+    prefix = _git_ws_prefix(root)
+
+    def gov_rel(repo_path: str) -> str:
+        return repo_path[len(prefix):] if prefix and repo_path.startswith(prefix) else repo_path
+
+    dirty: list[str] = []
+    tokens = _split_nul(_git_readonly(["status", "--porcelain", "--untracked-files=all", "-z", "--", "."], root))
+    i = 0
+    while i < len(tokens):
+        entry = tokens[i]
+        i += 1
+        if entry[:1] in ("R", "C"):
+            i += 1  # 重命名/复制条目带源路径 token(本读取未关 rename 检测, 源路径随后作为独立 token)
+        dirty.append(gov_rel(entry[3:]))
+    upstream: str | None
+    try:
+        upstream = _git_readonly(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], root).strip() or None
+    except subprocess.CalledProcessError:
+        upstream = None
+    unpushed: list[str] = []
+    if upstream:
+        unpushed = [gov_rel(p) for p in _split_nul(_git_readonly(
+            ["log", "--format=", "--name-only", "--no-renames", "-z", f"{upstream}..HEAD", "--", "."], root)) if p.strip()]
+    out: dict[str, dict[str, Any]] = {}
+    for tid, paths in scopes.items():
+        unc = sorted({d for d in dirty if any(_under(d, p) for p in paths)})
+        unp = sorted({u.strip() for u in unpushed if any(_under(u.strip(), p) for p in paths)})
+        reasons: list[str] = []
+        if not paths:
+            reasons.append("卡范围推导为空(队列无卡文件、无记录、无台账)")
+        if unc:
+            reasons.append(f"未跟踪/未提交 {len(unc)} 个: " + ", ".join(unc[:5]) + (f" …(+{len(unc) - 5})" if len(unc) > 5 else ""))
+        if upstream is None:
+            reasons.append("当前分支无上游(@{u}), 无从证明已推送")
+        elif unp:
+            reasons.append(f"已提交未推送({upstream}..HEAD) {len(unp)} 个: " + ", ".join(unp[:5]) + (f" …(+{len(unp) - 5})" if len(unp) > 5 else ""))
+        out[tid] = {"landed": not reasons, "git": True, "upstream": upstream, "uncommitted": unc, "unpushed": unp,
+                    "reason": "; ".join(reasons)}
+    return out
+
+
+def task_landing(governance_root: Path, task_id: str) -> dict[str, Any]:
+    """单卡落账判据(推导核 N6 落账步与 loop 出口用): 范围 = task_scope_candidates(含审计卡与卡编年史)。"""
+    scope = task_scope_candidates(Path(governance_root), task_id)
+    status = governance_landing(Path(governance_root), {task_id: scope["paths"]})[task_id]
+    status["scope"] = scope["paths"]
+    return status
+
+
 def check_governance_completeness(
     governance_root: Path,
     task_id: str | None,
@@ -651,12 +906,74 @@ def governance_commit(
     paths: list[str] | None = None,
     paths_file: Path | str | None = None,
 ) -> dict[str, Any]:
-    """N6 收账提交:校验四件 → commit → push(唯一提交口; AIPOS-F79C 件③ 总闸在此封口)。"""
+    """N6 收账提交:校验四件 → commit → push(唯一提交口; AIPOS-F79C 件③ 总闸在此封口)。
+
+    AIPOS-F94 件①: 给 task_id 而不给 --paths/--paths-file = task 范围精确提交——白名单由 resolve_task_scope 按卡与声明推导
+    (本卡与其审计卡的队列文件 / 草稿 / 各类记录 / 台账落点 + 卡编年史), 之后与 --paths 走同一条实现(他人暂存在范围外 = 拒,
+    护栏 / 清单核对 / push 判据不变), 禁整根。范围已落账(task_landing: 已提交且已推送)= PASS no-op(幂等, 不碰 git 写)。
+    """
+    task_scope: dict[str, Any] | None = None
+    if task_id and not paths and paths_file is None:
+        early = _task_scope_selection(governance_root, task_id, actor, dry_run=dry_run, push=push)
+        if "result" in early:
+            return _seal_push_outcome(early["result"], push_requested=bool(push) and not dry_run)
+        task_scope = early["task_scope"]
+        paths = list(task_scope["paths"])
     result = _governance_commit_impl(
         governance_root, task_id, actor,
         repo_root=repo_root, dry_run=dry_run, push=push, message=message, paths=paths, paths_file=paths_file,
     )
+    if task_scope is not None:
+        result["task_scope"] = task_scope
+        ops = result.setdefault("operations", [])
+        ops.insert(0, _task_scope_operation(task_id, task_scope))
     return _seal_push_outcome(result, push_requested=bool(push) and not dry_run)
+
+
+def _task_scope_operation(task_id: str, task_scope: dict[str, Any]) -> str:
+    ignored = task_scope.get("ignored") or []
+    return (f"Task scope ({TASK_SCOPE_SOURCE}, AIPOS-F94): {len(task_scope['paths'])} path(s) derived for {task_id} "
+            f"(+{audit_card_id(task_id)}" + (f", chronicle {task_scope['chronicle']}" if task_scope.get("chronicle") else "")
+            + ")" + (f"; ignored by .gitignore (not committed): {', '.join(ignored)}" if ignored else ""))
+
+
+def _task_scope_selection(governance_root: Path, task_id: str, actor: str, *, dry_run: bool, push: bool) -> dict[str, Any]:
+    """件①: 推导 task 范围白名单。返回 {"task_scope": …}(继续走 --paths 同一实现)或 {"result": …}(范围不可推导 = BLOCK /
+    已落账 = PASS no-op)。不吞异常: git 只读失败与卡多义一律变成带拒因的 BLOCK。"""
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard
+
+    def stop(verdict: str, message: str, operations: list[str], **extra: Any) -> dict[str, Any]:
+        return {"result": {"verdict": verdict, "task_id": task_id, "actor": actor, "dry_run": dry_run,
+                           "completeness_check": None, "committed": False, "pushed": False, "commit_hash": None,
+                           "message": message, "operations": operations, "selected_paths": None, "commit_manifest": None,
+                           **extra}}
+
+    root = Path(governance_root)
+    if not root.is_dir():
+        return stop(Verdict.BLOCK, f"Governance root does not exist: {root}", [])
+    try:
+        scope = resolve_task_scope(root, task_id)
+    except AmbiguousTaskCard as exc:
+        return stop(Verdict.BLOCK, f"卡范围不可推导: {exc}(同一 task_id 只能有一份卡文件)", ["Blocked: task scope underivable"])
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        detail = (getattr(exc, "stderr", "") or str(exc)).strip()
+        return stop(Verdict.BLOCK,
+                    f"卡 {task_id} 落账范围推导失败(治理根须在 git 工作树内): {detail}\n"
+                    f"可执行出口: {non_git_exit_command(root)}(治理根不在 git 仓时; Owner 按其输出配 origin 并首推), 之后重跑同一命令",
+                    ["Blocked: task scope underivable (git read failed)"])
+    if not scope["paths"]:
+        return stop(Verdict.BLOCK,
+                    f"卡 {task_id} 落账范围为空: 队列中无此卡文件、无记录、无台账"
+                    + (f"(被 .gitignore 排除: {', '.join(scope['ignored'])})" if scope["ignored"] else "")
+                    + "。核对卡号; 非卡改动用 --paths 精确提交",
+                    ["Blocked: task scope empty"], task_scope=scope)
+    if push and not dry_run:
+        landing = governance_landing(root, {task_id: scope["candidates"]})[task_id]
+        if landing["landed"]:
+            return stop(Verdict.PASS, f"卡 {task_id} 已落账(范围内无未提交 / 未推送, 上游 {landing['upstream']}), 无待收内容",
+                        [_task_scope_operation(task_id, scope), "No changes to commit (task scope already committed and pushed)"],
+                        severity="info", task_scope=scope, landing=landing)
+    return {"task_scope": scope}
 
 
 def _run_guardrails_on_manifest(
@@ -862,7 +1179,8 @@ def _governance_commit_impl(
             "committed": False,
             "pushed": False,
             "commit_hash": None,
-            "message": f"Git status check failed: {e.stderr}",
+            "message": f"Git status check failed: {e.stderr}\n可执行出口(治理根不在 git 仓时): {non_git_exit_command(governance_root)}"
+                       f"(Owner 按其输出配 origin 并首推)后重跑同一命令",
             "operations": operations,
         }
     

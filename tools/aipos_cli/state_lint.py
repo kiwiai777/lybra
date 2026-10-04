@@ -32,6 +32,20 @@ from tools.schema_constants import RecordType
 
 RECORD_EMPTY = "RECORD_EMPTY"
 FRONTMATTER_INVALID = "FRONTMATTER_INVALID"
+GOVERNANCE_UNCOMMITTED = "GOVERNANCE_UNCOMMITTED"
+
+
+def check_severity(code: str) -> str:
+    """lint 检查码级别的唯一声明 transitions.schema state_consistency.check_severity.<code>.severity(AIPOS-F94 件③);
+    缺声明 / 值不在 {ERROR, WARN} = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.next_resolver import REPO_ROOT
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    entry = ((load_schema("transitions", REPO_ROOT).get("state_consistency") or {}).get("check_severity") or {}).get(code)
+    severity = str((entry or {}).get("severity") or "").strip() if isinstance(entry, dict) else ""
+    if severity not in ("ERROR", "WARN"):
+        raise SchemaLoadError(f"transitions.schema.json state_consistency.check_severity.{code}.severity 未声明或不在 ERROR/WARN")
+    return severity
 FRONTMATTER_REPAIR_ACTOR = "lybra state repair"
 
 try:  # 定位解析失败行需要 PyYAML 的错误标记; 缺席时规整一律 unresolved(不猜)
@@ -182,6 +196,14 @@ def run_state_lint(
             "issues": [{"task_id": str, "severity": str, "message": str, ...}],
         }
     """
+    # AIPOS-F94: 全量扫描期间逐卡查找共用一趟队列索引(判据不变, 只读), 否则大治理根(900+ 卡)每卡全量读队列跑不完
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
+
+    with task_card_lookup_scope(governance_root):
+        return _run_state_lint(governance_root, task_id_filter)
+
+
+def _run_state_lint(governance_root: Path, task_id_filter: str | None) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     
     if task_id_filter:
@@ -190,6 +212,7 @@ def run_state_lint(
         task_ids = _list_all_task_ids(governance_root)
     
     invalid_frontmatter: list[dict[str, Any]] = []
+    concluded: dict[str, Path | None] = {}  # AIPOS-F94 件③: 已结案卡 → 卡文件(落账判据批量读一次 git)
     for task_id in sorted(task_ids):
         queue_state, card_path = _get_queue_state(governance_root, task_id)
         fm_state = _get_frontmatter_state(card_path) if card_path else None
@@ -199,6 +222,8 @@ def run_state_lint(
             if invalid is not None:
                 invalid_frontmatter.append(invalid)
         record_state = _derive_state_from_records(governance_root, task_id)
+        if queue_state == "completed" or record_state == "completed":
+            concluded[task_id] = card_path
         
         # 检查: completed 卡必须有 closure 记录
         # AIPOS-F92: 审计卡的终态记录是被审卡名下 audit_task_id=本卡的门生裁决(裁决入门即把审计卡移入 completed/,
@@ -282,10 +307,52 @@ def run_state_lint(
             "warnings": invalid["warnings"],
         })
 
+    issues.extend(governance_uncommitted_issues(governance_root, concluded))
+
     return {
         "scanned": len(task_ids),
         "issues": issues,
     }
+
+
+def governance_uncommitted_issues(governance_root: Path, concluded: dict[str, Path | None]) -> list[dict[str, Any]]:
+    """AIPOS-F94 件③: 已结案卡(在 completed/ 或有 closure 记录)自身的治理真相——队列文件 / 草稿 / 各类记录 / 台账落点
+    (governance_commit.card_own_paths 唯一推导)——在治理仓未跟踪 / 未提交 / 未推送 → GOVERNANCE_UNCOMMITTED。
+    判据 = governance_commit.governance_landing(与 loop 出口 0 / 推导核 N6 落账步同一实现; 只读, 两次 git 调用覆盖全部卡;
+    .gitignore 排除者不算)。出口 = `lybra governance-commit --task-id <卡>`(审计卡的出口指向被审卡: 被审卡范围含审计卡)。
+    卡编年史是多卡共享文档, 不归属单卡, 不在本判据内(落账步照常提交)。"""
+    if not concluded:
+        return []
+    from tools.aipos_cli.governance_commit import N6_LANDING_ACTOR_PLACEHOLDER, card_own_paths, governance_commit_command, governance_landing
+    from tools.aipos_cli.next_resolver import forensic_subject
+
+    severity = check_severity(GOVERNANCE_UNCOMMITTED)
+    scopes = {tid: card_own_paths(governance_root, tid, card_path=path) for tid, path in concluded.items()}
+    landing = governance_landing(governance_root, scopes)
+    out: list[dict[str, Any]] = []
+    for tid in sorted(concluded):
+        status = landing[tid]
+        if status["landed"]:
+            continue
+        owner = tid
+        path = concluded[tid]
+        if path is not None:
+            meta, _b, _w = parse_markdown_frontmatter(path.read_text(encoding="utf-8"))
+            owner = forensic_subject(meta if isinstance(meta, dict) else {}) or tid
+        exit_cmd = governance_commit_command(owner, N6_LANDING_ACTOR_PLACEHOLDER, governance_root)
+        out.append({
+            "task_id": tid,
+            "severity": severity,
+            "code": GOVERNANCE_UNCOMMITTED,
+            "message": (f"{GOVERNANCE_UNCOMMITTED}: 已结案但治理真相未落账({status['reason']}); 出口: {exit_cmd}"
+                        + (f"(审计卡随被审卡 {owner} 落账)" if owner != tid else "")
+                        + ("(经 lybra loop 推进的卡结案后由 loop 自动落账)" if status["git"] else "")),
+            "uncommitted": status["uncommitted"],
+            "unpushed": status["unpushed"],
+            "upstream": status["upstream"],
+            "exit_task_id": owner,
+        })
+    return out
 
 
 def card_frontmatter_warnings(text: str) -> list[str]:

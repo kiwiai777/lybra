@@ -38,12 +38,13 @@ role: advisor
 | **N4 审计** | 代码卡审计入门 / 审非代码卡 | 代码卡: `lybra loop`(审计报告落盘后派生 `lybra artifact ingest --kind verdict`: 绑被审分支 tip、产品填模型字段、**门把报告全文快照进 records**, 顾问不手提裁决); 非代码卡顾问自审: `lybra audit-verdict`; 手动派审 `lybra audit dispatch` |
 | **返工** | 追加返工节 | `lybra queue rework --confirm` (AIPOS-F75, F73C件⑤) |
 | **N5 finalize** | 监督交付上线 | `lybra loop`(推进行) |
-| **N6 收账** | 编年史+决策记录 | `generate_backlog_entry.py`(产品仓脚本), `lybra owner-decision` |
+| **N6 收账/落账** | 治理真相进治理仓(提交+推送) | **每张卡由 `lybra loop` 结案后自动落账**(N6 落账步 = `lybra governance-commit --task-id <卡ID>`, task 范围精确提交, 幂等; AIPOS-F94);**非卡改动**(项目声明、治理文档、信封与决策记录)用 `lybra governance-commit --paths` 精确提交;查漏 `lybra state lint`(GOVERNANCE_UNCOMMITTED);编年史 `generate_backlog_entry.py`, 决策 `lybra owner-decision` |
 
 **关键原则**:
 - **推进由产品执行** (`lybra loop --task-id <卡ID>`)，顾问不手搓门动词、不逐步代按。`lybra next --run` 单步入口保留为 loop 的内部执行体与排障单步, **顾问逐步手按 `next --run` 这条人工路径退役**(AIPOS-F73D, Δ=-1)。
 - **返工节只能通过 `lybra queue rework` 追加**，禁手写卡面 rework_rounds 字段。
 - **next-step 导航**：用 `lybra next --task-id <卡ID>` 查询当前状态与下一步动词(`next-step` 已退役转发)。
+- **落账规则(AIPOS-F94)**:卡与记录只在盘上 = 未成为可追溯真相。每张卡结案后由 `lybra loop` 自动执行 N6 落账(该卡与其审计卡的队列文件、草稿、各类记录、台账落点 + 卡编年史, 路径由产品按卡与声明推导, 禁整根);非卡改动(`project.json` 声明、治理文档、信封与决策记录、接入向导各步产物)一律 `lybra governance-commit --paths <这些路径>`;永不手敲 `git add`/`git commit`。
 
 ---
 
@@ -131,7 +132,7 @@ lybra loop --task-id <卡ID>
 # 可选参数全写形:
 lybra loop --task-id <卡ID> --envelope <信封ID> --actor <你的顾问实例> --max-steps 20 --max-wait 1800 --interval 15 --json
 ```
-**每轮**:`next` 推导 → 账务命令(claim/return/dispatch/verdict/finalize/close)先过 argparse 解析再经 `next --run` 同一执行体执行并重推导;agent 步(执行体/审计体在干活)只调 `agent watch --expect` 有界等待产物(落点读项目声明 project.json `paths.return_root`/`paths.verdict_root`, 未声明缺省=`task_cards/<卡ID>/RETURN.md` 与 `task_cards/<卡ID>R/RETURN.md|audit_report.md`, 骨架不算);closure 记录存在即 exit 0。
+**每轮**:`next` 推导 → 账务命令(claim/return/dispatch/verdict/finalize/close)先过 argparse 解析再经 `next --run` 同一执行体执行并重推导;agent 步(执行体/审计体在干活)只调 `agent watch --expect` 有界等待产物(落点读项目声明 project.json `paths.return_root`/`paths.verdict_root`, 未声明缺省=`task_cards/<卡ID>/RETURN.md` 与 `task_cards/<卡ID>R/RETURN.md|audit_report.md`, 骨架不算);closure 记录存在且治理已落账(该卡范围已提交并推送)即 exit 0——未落账则先执行推导核派生的 N6 落账步 `lybra governance-commit --task-id <卡ID> --actor <驱动方> --governance-root <治理根>`(AIPOS-F94; 落账步声明在 transitions `nodes.N6.landing`, 信封独立授权 `governance_commit`(verbs.schema `lybra_loop.envelope.allowed_verbs`); 遇他人暂存 / 护栏拒 / 推送未完成 = exit 2 透传拒因, 不重试、不动他人暂存; 治理根不在 git 仓 = exit 4, 出口 `lybra home git-init --home-root <home根>`)。
 **AIPOS-F78 起**: 账务动词一律驱动方(advisor)token 提交、actor=卡实例(执行体/审计体 token 零账务 scope); claim 经 Owner 信封一阶段放行(信封 `agent_or_role` 须覆盖驱动方实例或 `advisor`); return/verdict 步经 `artifact ingest` 校验 Return/报告 frontmatter 与分支 tip; close 的三字段(finalize_commit_hash/finalize_return_ref/verdict_ref)从 finalization(`merge_commit`)/return/verdict 记录自填, 缺一即 exit 4 点名; 驱动方身份读工位 `.lybra/role` instance 或驱动方 token 绑定实例, 不再占位 `advisor`。
 **AIPOS-F90 起**: `--envelope`/`--actor` 贯穿推导与执行(派生的 claim/return/verdict/close 都带同一 `--owner-policy-ref`); 认领从 pending 一步走通(门内同步建工作树, 建树失败=拒认领); 等门应答超时不报假失败——薄壳按 verbs.schema 声明回读真相(已由本实例认领=成功), loop 遇执行端报失败先回读该步门生记录, 已落即继续、绝不重复执行同一步。
 **四出口(verbs.schema `lybra_loop.exit_codes` 唯一声明)**:0=completed;2=门拒(透传拒因原文, 不重试);3=等待产物超时/停滞或 --max-steps 用尽(输出等的是哪份产物);4=推导不可推导/派生命令解析失败(输出 missing_records);5=无有效信封(输出 `lybra envelope mint` 申领出口)。
@@ -257,6 +258,13 @@ python3 <Lybra产品仓>/tools/generate_backlog_entry.py <卡ID> --governance-ro
 
 #### `lybra governance-commit`(治理收尾唯一提交口)
 **何时用**:治理仓落库(N6 收账 / 台账追加 / 裁定入档)。真相层唯一提交口,永不手敲 `git add`/`git commit`。
+**卡的落账(AIPOS-F94)**:`--task-id` 不带 `--paths` = task 范围精确提交——产品按卡与声明推导路径(本卡与审计卡的队列文件 / 草稿 / `records/<类型>/<卡ID>/` / 台账落点 + 卡编年史; 被 .gitignore 排除者列出不提交), 禁整根; 已提交且已推送 = no-op(幂等)。`lybra loop` 结案后自动执行它, 顾问只在 loop 之外补账时手敲:
+```bash
+lybra governance-commit --task-id <卡ID> --actor <你的顾问实例> --governance-root <治理根> --dry-run   # 先看推导出的清单
+lybra governance-commit --task-id <卡ID> --actor <你的顾问实例> --governance-root <治理根>
+lybra state lint --workspace-root <治理根>   # GOVERNANCE_UNCOMMITTED 点名已结案未落账的卡并给上面这条出口
+```
+**非卡改动**(声明 / 治理文档 / 信封与决策记录)用下面的 `--paths` 形:
 **AIPOS-F79 铁律:先 `--dry-run` 看清单,再去掉 `--dry-run` 正式提交;他项目一律 `--paths`。**
 ```bash
 # ① 预演:只读列出将提交的具体文件(modified/added/deleted/untracked_selected),不 add/不 reset/不 stash

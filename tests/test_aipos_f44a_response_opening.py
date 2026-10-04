@@ -212,7 +212,7 @@ class TestItem6N6NextStep:
         close 成功应答包含 next_step:
         - audience: advisor
         - action: 待 N6 governance-commit
-        - command: git add governance/ 5_tasks/records/closures/<task_id>/ && git commit ...
+        - command: lybra governance-commit --task-id <task_id> ...(AIPOS-F94: 产品命令, task 范围精确提交; 原手写 git add/commit 退役)
         """
         from tools.aipos_cli.board_adapter import close_task
         
@@ -303,13 +303,11 @@ Test task for N6 next_step validation.
         assert next_step.get("audience") == "advisor"
         assert "N6" in next_step.get("action", "") or "governance-commit" in next_step.get("action", "")
         
-        # 验证: command 包含 git add governance/ 和 git commit
+        # 验证(AIPOS-F94): command = 产品命令 lybra governance-commit --task-id(task 范围精确提交), 不再教手写 git add/commit
         command = next_step.get("command", "")
-        assert "git add" in command
-        assert "governance/" in command
-        assert f"5_tasks/records/closures/{task_id}/" in command
-        assert "git commit" in command
-        assert task_id in command
+        assert command.startswith(f"lybra governance-commit --task-id {task_id} ")
+        assert "git add" not in command and "git commit" not in command
+        assert f"--governance-root {tmp_path}" in command
 
     def test_close_dry_run_with_n6_preview(self, tmp_path):
         """
@@ -361,7 +359,8 @@ Test task for N6 next_step validation.
         assert next_step_preview is not None, "close dry_run 应答必须包含 next_step_preview"
         assert next_step_preview.get("audience") == "advisor"
         assert "N6" in next_step_preview.get("action", "") or "governance-commit" in next_step_preview.get("action", "")
-        assert "git add" in next_step_preview.get("command", "")
+        assert next_step_preview.get("command", "").startswith("lybra governance-commit --task-id ")  # AIPOS-F94
+        assert "git add" not in next_step_preview.get("command", "")
 
 
 if __name__ == "__main__":

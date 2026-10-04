@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import test_aipos_f78_engine_agnostic as f78  # noqa: E402  — 靶场骨架唯一来源(禁第二份)
 from test_aipos_f78_engine_agnostic import AUDITOR, DRIVER, EXEC, _fm, _git, _write  # noqa: E402
+from test_aipos_f73d_loop_driver import init_governance_repo  # noqa: E402  — AIPOS-F94: 结案后 N6 落账须有治理仓与上游
 from tools.aipos_cli import next_resolver as nr  # noqa: E402
 from tools.aipos_cli.confirm_client import GateTimeout  # noqa: E402
 from tools.aipos_cli.loop_driver import exit_code_for, load_loop_contract, run_loop  # noqa: E402
@@ -244,6 +245,7 @@ def _cli_verbs(rig: SimpleNamespace) -> list[str]:
 
 def test_item1_loop_pending_to_completed_only_product_commands_record_chain(rig):
     _card(rig.gov, TASK, "pending")
+    init_governance_repo(rig.gov)
     out = io.StringIO()
     seen: list[str] = []
     res = run_loop(TASK, rig.gov, actor=DRIVER, policy_id=POLICY, out=out, watch=_agent_watch(rig, seen),
@@ -431,6 +433,7 @@ def test_item1_loop_readback_record_landed_despite_client_failure_continues_once
 
 def test_item2_verdict_via_ingest_binds_tip_model_from_session_mismatch_flagged_snapshot_restorable(rig):
     _card(rig.gov, TASK, "pending")
+    init_governance_repo(rig.gov)
     out = io.StringIO()
     res = run_loop(TASK, rig.gov, actor=DRIVER, policy_id=POLICY, out=out, watch=_agent_watch(rig, []), interval=0.05, max_wait=5,
                    max_steps=30)

@@ -1521,7 +1521,7 @@
       }
     },
     "lybra_loop": {
-      "description": "AIPOS-F73D 顾问侧驱动器 `lybra loop`: Owner 信封授权下, 有界循环推进一张卡到 completed。每轮 = `next` 推导 → 账务命令经 `next --run` 同一执行体(next_resolver.execute_derived_action)执行并重推导; agent 步(spawn_worker/await_artifact)只调既有 `agent watch --expect` 有界等待产物, 永不唤醒 agent(被连接红线); closure 记录存在即 exit 0。本条目是 loop 退出码/参数/信封动词集合的唯一声明; 代码(tools/aipos_cli/loop_driver.py)只读不写死。",
+      "description": "AIPOS-F73D 顾问侧驱动器 `lybra loop`: Owner 信封授权下, 有界循环推进一张卡到 completed。每轮 = `next` 推导 → 账务命令经 `next --run` 同一执行体(next_resolver.execute_derived_action)执行并重推导; agent 步(spawn_worker/await_artifact)只调既有 `agent watch --expect` 有界等待产物, 永不唤醒 agent(被连接红线); closure 记录存在且治理已落账(transitions nodes.N6.landing 判据)即 exit 0, 结案后未落账先执行 N6 落账步(lybra governance-commit --task-id, AIPOS-F94)。本条目是 loop 退出码/参数/信封动词集合的唯一声明; 代码(tools/aipos_cli/loop_driver.py)只读不写死。",
       "phase": "driver",
       "surface": [
         "cli"
@@ -1590,11 +1590,11 @@
       "exit_codes": {
         "completed": {
           "code": 0,
-          "meaning": "走到 completed(closure 记录存在)"
+          "meaning": "走到 completed: closure 记录存在且治理已落账(transitions nodes.N6.landing.criterion: 本卡落账范围已提交且已推送)"
         },
         "gate_rejected": {
           "code": 2,
-          "meaning": "门拒: 透传拒因原文+出口, 不重试"
+          "meaning": "门拒(或 N6 落账被拒: 他人暂存 / 提交门护栏 / 推送未完成): 透传拒因原文+出口, 不重试"
         },
         "wait_timeout": {
           "code": 3,
@@ -1602,7 +1602,7 @@
         },
         "not_derivable": {
           "code": 4,
-          "meaning": "推导不可推导(输出 missing_records), 或派生命令解析失败/需人工介入"
+          "meaning": "推导不可推导(输出 missing_records; 含治理根不在 git 仓 = N6 落账 fail-closed, 附 nodes.N6.landing.non_git_exit 出口), 或派生命令解析失败/需人工介入, 或落账步报成功但判据仍未落账"
         },
         "no_envelope": {
           "code": 5,
@@ -1618,10 +1618,11 @@
           "dispatch",
           "verdict",
           "finalize",
-          "close"
+          "close",
+          "governance_commit"
         ],
         "subject_rule": "AIPOS-F90 件①: 信封 task_selector(task_mode/project/task_ids)的判定对象——审计卡(task_mode=audit 且声明 reviewed_task_id)= 被审卡, 其余 = 本卡; 驱动方(loop_driver.find_envelope)与门(_match_claim_envelope)同读唯一实现 autonomy_policy.envelope_subject。审计卡认领同样计入信封额度(count_bound)。",
-        "allowed_verbs_note": "loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。AIPOS-F78B 件③: 门侧驱动方一阶段放行(queue return/audit-verdict/queue close 的 autonomy_mode=PreAuthorized)也读此集合判 verb 是否在信封授权内(claim 经 _match_claim_envelope, 其余经 _match_driver_envelope, 同一 matcher autonomy_policy.match_claim_envelope)。",
+        "allowed_verbs_note": "loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。AIPOS-F78B 件③: 门侧驱动方一阶段放行(queue return/audit-verdict/queue close 的 autonomy_mode=PreAuthorized)也读此集合判 verb 是否在信封授权内(claim 经 _match_claim_envelope, 其余经 _match_driver_envelope, 同一 matcher autonomy_policy.match_claim_envelope)。 AIPOS-F94: governance_commit = N6 落账步(transitions nodes.N6.landing), 独立列入本集合(非门动词, 门侧 _match_driver_envelope 不会收到它); 覆盖驱动方与本卡的有效信封即授权落账。",
         "one_stage_release": "驱动方 token(roles.schema driver.role_class 或其 role_class 自定义角色) + autonomy_mode=PreAuthorized + owner_policy_ref 命名的信封(agent_or_role 覆盖驱动方实例/角色类, task_selector 覆盖本卡, 有效/时间窗/额度) → 门在 dry_run 一跳内落记录(preauthorized_release=true), 不索 owner_confirm; 不匹配 = BLOCK + envelope_guards 出口, CLI 薄壳 exit 5(无信封)。"
       },
       "await_artifacts": {
@@ -1713,7 +1714,7 @@
           },
           "task_id": {
             "type": "string",
-            "description": "Task ID for N6 closure (optional; omit for governance batch updates)"
+            "description": "Task ID for N6 closure (optional; omit for governance batch updates). AIPOS-F94: without paths/paths_file = task-scoped precise commit — whitelist derived from the card and declarations (transitions nodes.N6.landing.scope), never whole-root; empty scope = BLOCK; already committed and pushed (nodes.N6.landing.criterion) = PASS no-op"
           },
           "governance_root": {
             "type": "string",

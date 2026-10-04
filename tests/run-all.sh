@@ -963,6 +963,19 @@ else
   overall=1
 fi
 
+# AIPOS-F94: 真相落账三件(① loop 结案后自动 N6 落账: 推导核派生 lybra governance-commit --task-id(task 范围精确提交, 幂等,
+# 他人暂存/护栏拒 = exit 2 不动他人暂存), close next_step 改产品命令 ② 接入向导第 1/2 步之后各 governance-commit --paths 本步产物,
+# 建项目 decision_log 桩带声明 frontmatter, 顾问技能写明落账规则 ③ state lint GOVERNANCE_UNCOMMITTED(未跟踪/未提交/未推送), 全量 lint 一趟索引)
+# (随语义改动的 F73D/F73E/F78B/F78C/F90/F92/F44A/F69 用例已在各自块: 走到结案的 loop 靶场治理根改为临时 git 仓 + 远端裸仓)
+echo
+echo "── tests/test_aipos_f94_governance_landing.py (F94 loop 结案自动落账·他人暂存拒·向导两步落账·lint 未落账三态·lookup 一趟索引) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f94_governance_landing.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f94_governance_landing.py PASS"
+else
+  echo "✗ tests/test_aipos_f94_governance_landing.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

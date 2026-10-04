@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_complexity import complexity_payload
@@ -205,11 +207,39 @@ class AmbiguousTaskCard(ValueError):
     """同一 task_id 在 queue 中命中多个文件(fail-closed: 拒, 由人裁定)。"""
 
 
+# AIPOS-F94: 只读全量扫描(state lint 对数百张卡逐卡查找 = 每卡全量读队列, lybra 治理根 900+ 卡 10 分钟跑不完)期间的一趟索引。
+# 判据与逐卡查找完全相同(iter_queue_task_paths 同序 + _frontmatter_task_id 精确匹配), 只是同一作用域内只扫一遍; 作用域内调用方
+# 不得改队列(只读专用)。作用域外 find_task_card 行为不变。
+_LOOKUP_INDEX: "ContextVar[dict[str, Any] | None]" = ContextVar("lybra_task_card_lookup_index", default=None)
+
+
+@contextmanager
+def task_card_lookup_scope(repo_root: Path) -> Iterator[None]:
+    """只读批量调用方用: 作用域内对同一治理根的 find_task_card / find_task_card_matches 共用一趟队列索引。"""
+    token = _LOOKUP_INDEX.set({"root": Path(repo_root).resolve(), "by_states": {}})
+    try:
+        yield
+    finally:
+        _LOOKUP_INDEX.reset(token)
+
+
 def find_task_card_matches(repo_root: Path, task_id: str, *, states: tuple[str, ...] | None = None) -> list[Path]:
     """AIPOS-F78B 件①: 扫 queue 各状态目录, 按 frontmatter task_id 精确匹配(文件名不限, chris 形带 slug 亦可)。"""
     wanted = str(task_id or "").strip()
     if not wanted:
         return []
+    scope = _LOOKUP_INDEX.get()
+    if scope is not None and Path(repo_root).resolve() == scope["root"]:
+        key = tuple(states or QUEUE_STATES)
+        index = scope["by_states"].get(key)
+        if index is None:
+            index = {}
+            for path in iter_queue_task_paths(Path(repo_root), states=states):
+                found = _frontmatter_task_id(path)
+                if found:
+                    index.setdefault(found, []).append(path)
+            scope["by_states"][key] = index
+        return list(index.get(wanted, []))
     return [p for p in iter_queue_task_paths(Path(repo_root), states=states) if _frontmatter_task_id(p) == wanted]
 
 

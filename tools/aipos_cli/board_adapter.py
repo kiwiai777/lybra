@@ -6476,6 +6476,21 @@ fix卡 close(PASS族)触发 `fix_card_closure` 级联: 为原卡派生复审卡(
     return write_result["paths"][0]
 
 
+def _n6_landing_next_step(task_id: str, governance_root: Path, submitted_by: str | None, *, preview: bool) -> dict[str, str]:
+    """AIPOS-F94 件①: close 应答的 N6 next_step = 产品命令 `lybra governance-commit --task-id`(task 范围精确提交 + push,
+    唯一渲染 governance_commit.governance_commit_command); 原手写 git add/commit 文案删除(违「只用产品命令」)。
+    actor = 提交身份(驱动方, submitted_by); 未知时占位。lybra loop 驱动时由推导核派生同一命令自动执行。"""
+    from tools.aipos_cli.governance_commit import N6_LANDING_ACTOR_PLACEHOLDER, governance_commit_command
+
+    actor = str(submitted_by or "").strip() or N6_LANDING_ACTOR_PLACEHOLDER
+    return {
+        "audience": "advisor",
+        "action": ("任务将 close; 完成后 N6 落账(" if preview else "任务已 close; 待 N6 落账(")
+        + "本卡与审计卡的队列文件、记录、卡编年史等 task 范围精确提交并推送治理仓)。lybra loop 驱动时自动执行; 手动推进时执行下面这条",
+        "command": governance_commit_command(task_id, actor, governance_root),
+    }
+
+
 def close_task(
     *,
     task_id: str | None = None,
@@ -6761,11 +6776,7 @@ def close_task(
                     "mutation_preview": mutation_result,
                     "governance_warnings": governance_warnings,
                     # AIPOS-F44A ⑥: N6 next_step preview in dry_run
-                    "next_step_preview": {
-                        "audience": "advisor",
-                        "action": "任务将 close，完成后待 N6 governance-commit。",
-                        "command": f"cd {resolved_root} && git add governance/ 5_tasks/records/closures/{resolved_task_id}/ && git commit -m 'N6: governance commit for {resolved_task_id}'",
-                    },
+                    "next_step_preview": _n6_landing_next_step(resolved_task_id, resolved_root, submitted_by, preview=True),
                 },
                 blocking_reasons=mutation_result.get("blocking_reasons", []),
                 warnings=combined_warnings,
@@ -7067,11 +7078,7 @@ def close_task(
             },
             "governance_warnings": governance_warnings,
             # AIPOS-F44A ⑥: N6 next_step - governance commit
-            "next_step": {
-                "audience": "advisor",
-                "action": "任务已 close，待 N6 governance-commit （将 closure 记录、卡编年史等治理档提交到治理仓）。",
-                "command": f"cd {resolved_root} && git add governance/ 5_tasks/records/closures/{resolved_task_id}/ && git commit -m 'N6: governance commit for {resolved_task_id}'",
-            },
+            "next_step": _n6_landing_next_step(resolved_task_id, resolved_root, submitted_by, preview=False),
         }
         return make_response(
             ok=True,

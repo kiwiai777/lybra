@@ -44,6 +44,7 @@ from test_aipos_f73d_loop_driver import (  # noqa: E402  — 靶场/替身唯一
     _policy,
     _ts,
     _write,
+    init_governance_repo,
 )
 from test_aipos_f73e_ledger_identity import _closable_root, _evidence  # noqa: E402
 from test_aipos_f78_engine_agnostic import (  # noqa: E402
@@ -356,6 +357,8 @@ class _ExternalGate:
                              repo_root=self.gov, submitted_by=DRIVER)
             return {"ok": bool(res.get("ok")) and res.get("verdict") != "BLOCK", "action_type": action, "message": str(res.get("verdict")),
                     "command": cmd, "exit_code": 0 if res.get("ok") else 1, "output": json.dumps(res.get("blocking_reasons") or [])}
+        if action == "governance_commit":  # AIPOS-F94: N6 落账 = 真产品命令(本进程 CLI 入口)落到靶场治理仓
+            return nr.execute_derived_action(derivation, workspace_root, connection_json)
         raise AssertionError(f"unexpected action {action}: {cmd}")
 
 
@@ -365,6 +368,10 @@ def test_f78b_item2_external_chain_loop_waits_finalize_return_then_completed(tmp
     _claim_record(gov, TASK, CHRIS_EXEC)
     _chris_policy(gov, agent_or_role=DRIVER)
     _n4_pass_records(gov, TASK, CHRIS_EXEC)
+    # AIPOS-F94: 结案后 N6 落账须有治理仓与上游(chris 治理仓在 dev, 同形); 落账完整性检查要台账条目 task_cards/<卡>/
+    # (本形 return_root=records/returns ≠ task_cards_root, 台账无产品写入口 = F94 产品缺口登记; 真实 chris 台账目录在, 同形)
+    _write(gov / "task_cards" / TASK / "RETURN.md", "# ledger\n")
+    init_governance_repo(gov)
     gate = _ExternalGate(gov)
     out = io.StringIO()
 
@@ -378,7 +385,7 @@ def test_f78b_item2_external_chain_loop_waits_finalize_return_then_completed(tmp
     t.join(timeout=10)
     text = out.getvalue()
     assert res.exit_code == 0 and res.outcome == "completed", text
-    assert [c[0] for c in gate.calls] == ["finalize", "close"], gate.calls
+    assert [c[0] for c in gate.calls] == ["finalize", "close", "governance_commit"], gate.calls
     waits = [s for s in res.steps if s.kind == "wait"]
     assert waits and waits[0].card == FIN and any(f"5_tasks/records/returns/{FIN}/return-*.md" == a for a in waits[0].artifacts), waits
     assert "lybra finalize " not in text
@@ -446,6 +453,8 @@ def test_f78b_item3_driver_side_envelope_covers_workstation_role_name(tmp_path, 
     _chris_policy(gov, agent_or_role="hbj-advisor")
     d = derive_next_step(TASK, gov)
     assert d["verb"] == "lybra_queue_close_dry_run" and "--autonomy-mode PreAuthorized" in d["command"] and POLICY in d["command"], d
+    _write(gov / "task_cards" / TASK / "RETURN.md", "# ledger\n")  # AIPOS-F94: 落账完整性检查的台账条目(同上一用例注)
+    init_governance_repo(gov)  # AIPOS-F94: 结案后 N6 落账须有治理仓与上游
     res = run_loop(TASK, gov, out=io.StringIO(), execute=_ExternalGate(gov), interval=0.02, max_wait=0.5, max_steps=3)  # 真 close_task(slug 文件名)
     assert res.envelope == POLICY and res.outcome == "completed", res
     # 信封写别的角色名 → 无覆盖 → Supervised 形 + loop exit 5

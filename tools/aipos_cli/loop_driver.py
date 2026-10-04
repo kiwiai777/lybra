@@ -12,7 +12,7 @@ agent 步只等产物、永不唤醒 agent; 四出口、有界、fail-closed。
 
 每轮: 推导 → 若账务命令: 先过 aipos_cli argparse 解析(失败=exit 4 禁执行) → 执行 → 重推导;
 若 agent 步(执行体在干活 / 已派审等审计体): 经 watch 有界等待产物(产物就绪判据=推导核), 落盘即回到推导;
-closure 记录存在 → exit 0。--max-steps 与 --max-wait 为硬上限; 任一出口非零带原文; token 永不上屏。
+closure 记录存在且治理已落账(AIPOS-F94 件①: 未落账先跑推导核派生的 N6 落账步 `lybra governance-commit --task-id`)→ exit 0。--max-steps 与 --max-wait 为硬上限; 任一出口非零带原文; token 永不上屏。
 
 身份(AIPOS-F73E 件①, F73C 定案): 驱动方身份(--actor / 工位声明)只用于信封与 claim token; 派生账务命令(return/verdict/
 finalize/close)的 --actor/--agent-instance 一律 = 该卡 claim 记录的认领实例(推导核 _claimer_instance 唯一实现), 无 claim
@@ -291,6 +291,18 @@ def _has_closure(governance_root: Path, task_id: str) -> bool:
     return bool(_read_task_records(governance_root, task_id).get("latest_closure"))
 
 
+def _landing(governance_root: Path, task_id: str) -> dict[str, Any] | None:
+    """落账判据(governance_commit.task_landing 唯一实现); 读失败 = None(交推导核按拒因出口, 不在此吞成已落账)。"""
+    import subprocess
+
+    from tools.aipos_cli.governance_commit import task_landing
+
+    try:
+        return task_landing(governance_root, task_id)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # 件① 主循环
 # ---------------------------------------------------------------------------
@@ -400,14 +412,20 @@ def _drive(
     connection_json: str | None,
 ) -> LoopResult:
     steps = result.steps
+    from tools.aipos_cli.governance_commit import n6_landing_declaration
+
+    landing_action = str(n6_landing_declaration()["action_type"])  # AIPOS-F94: N6 落账步(声明 transitions nodes.N6.landing)
 
     for index in range(1, max_steps + 1):
-        # 出口 0: closure 记录存在
+        # 出口 0: closure 记录存在且治理已落账(AIPOS-F94 件①: 本卡落账范围已提交且已推送); 未落账 → 推导核派生 N6 落账步
         if _has_closure(governance_root, task_id):
-            steps.append(LoopStep(index, "done", "close", "completed", task_id, message="closure 记录存在"))
-            result.message = f"{task_id} 已结案(closure 记录存在), 共 {index} 轮"
-            say(f"[{index}] done: {result.message}")
-            return result
+            landing = _landing(governance_root, task_id)
+            if landing is not None and landing.get("landed"):
+                steps.append(LoopStep(index, "done", "close", "completed", task_id, message="closure 记录存在, 治理已落账"))
+                result.message = (f"{task_id} 已结案(closure 记录存在), 治理已落账(已提交并推送到 {landing.get('upstream')}), "
+                                  f"共 {index} 轮")
+                say(f"[{index}] done: {result.message}")
+                return result
 
         derivation = derive(task_id, governance_root)
         target_card = task_id
@@ -530,11 +548,22 @@ def _drive(
                                 f"({_LANDED_RECORD[action_type]}: {landed.get('claim_id') or landed.get('return_id') or landed.get('verdict_id') or landed.get('dispatch_id') or landed.get('closure_id') or '新记录'}) = 门侧已落, 不重复执行: {step.message}")
                 say(f"[{index}] landed(回读): {step.message}")
                 continue
-            msg = f"门拒 @ {action_type} ({target_card}) exit {step.exit_code}: {step.message}\n{step.output}".rstrip()
+            what = "落账拒" if action_type == landing_action else "门拒"
+            msg = f"{what} @ {action_type} ({target_card}) exit {step.exit_code}: {step.message}\n{step.output}".rstrip()
             say(f"[{index}] exit 2 — {msg}")
             result.outcome, result.exit_code, result.message = "gate_rejected", exit_code_for(contract, "gate_rejected"), msg
             return result
         say(f"[{index}] ok: {step.message}")
+        if action_type == landing_action:
+            # AIPOS-F94 件①: 落账步报成功后以判据复核(已提交且已推送); 仍未落账 = 不重试, exit 4 点名缺什么
+            landing = _landing(governance_root, target_card)
+            if landing is None or not landing.get("landed"):
+                reason = (landing or {}).get("reason") or "落账判据读取失败"
+                msg = f"落账步报成功但判据仍未落账 ({target_card}): {reason}"
+                say(f"[{index}] exit 4 — {msg}")
+                result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
+                result.missing_records = [reason]
+                return result
 
     msg = f"--max-steps {max_steps} 用尽, 未走到 completed"
     say(f"exit 3 — {msg}")

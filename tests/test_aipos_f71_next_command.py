@@ -346,12 +346,16 @@ class TestColdStartLifecycle:
         assert "lybra_audit_verdict_dry_run" in result["verb"]
 
     def test_completed(self, cold_start_workspace: Path):
-        """N6: completed 卡 → 无下一步。"""
+        """N6: completed 卡且治理已落账 → 无下一步(AIPOS-F94: 未落账 = N6 落账步, 见 test_aipos_f94_governance_landing)。"""
         from tools.aipos_cli.next_resolver import derive_next_step
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from test_aipos_f73d_loop_driver import init_governance_repo
 
         ws = cold_start_workspace
         queue_dir = ws / "5_tasks" / "queue"
         _create_task_card(queue_dir, "TEST-004", "completed")
+        init_governance_repo(ws)  # 卡与记录已提交并推送(落账判据成立)
 
         result = derive_next_step("TEST-004", ws)
 

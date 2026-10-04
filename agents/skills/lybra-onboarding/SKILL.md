@@ -35,9 +35,12 @@ lybra onboarding guide <项目名> --home-root <home根> --advisor-dir <会话�
 
 ```bash
 lybra project new <项目名> --home-root <home根> --actor <你的顾问实例>
+lybra governance-commit --governance-root <项目根> --actor <你的顾问实例> --paths project.json --paths governance/decision_log.md --paths stage_archive
 lybra project set-repos <项目名> --home-root <home根> --repo <仓名>=<产品仓>
+lybra governance-commit --governance-root <项目根> --actor <你的顾问实例> --paths project.json
 ```
 `project new` 同时写首份阶段快照「项目创建」(首次 finalize 不被阶段门拦); `set-repos` 经 project.json repos 声明校验, 多仓须 `--default`。
+**每步之后落账**(AIPOS-F94): 照 guide 原样跑该步的 `lybra governance-commit --paths <本步产物>`, 只提交本步产物并推送治理仓——卡与声明只在盘上 = 未成为可追溯真相。治理根须在治理仓(git, 带 origin)内; 不在 = 先 `lybra home git-init --home-root <home根>`, 由 Owner 按其输出配远端并首推。
 
 ### Step 3–4(Owner): 顾问注册码 + 三张信封
 
@@ -85,7 +88,7 @@ lybra --workspace-root <项目根> draft create --from-json <卡稿JSON>
 lybra --workspace-root <项目根> draft publish --path <草稿路径>
 lybra loop --task-id <卡ID> --workspace-root <项目根> --envelope <信封ID>
 ```
-`lybra loop` 一段式认领(建工作树)→ 等交回 → 派审 → 等审计报告 → 裁决 → finalize → 结案; exit 3 = 工位尚未交产物, `/go` 后重跑同一条。
+`lybra loop` 一段式认领(建工作树)→ 等交回 → 派审 → 等审计报告 → 裁决 → finalize → 结案 → N6 落账(自动 `lybra governance-commit --task-id <卡ID>`, 本卡与审计卡的队列文件 / 记录等精确提交并推送); exit 3 = 工位尚未交产物, `/go` 后重跑同一条; exit 2 落账拒 = 按原文处理(如他人暂存)后重跑。查漏: `lybra state lint --workspace-root <项目根>` 的 GOVERNANCE_UNCOMMITTED。
 
 ## 诊断工具
 

@@ -2207,7 +2207,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # AIPOS-R7A2 靶②: governance-commit (顾问收口一条命令)
     governance_commit_parser = subparsers.add_parser("governance-commit", help="AIPOS-R7A2: N6 收账提交(校验四件→commit→push)")
-    governance_commit_parser.add_argument("--task-id", required=False, help="Task ID for governance closure (optional; omit for governance batch updates)")
+    governance_commit_parser.add_argument("--task-id", required=False, help="Task ID for governance closure (optional; omit for governance batch updates). AIPOS-F94: without --paths/--paths-file = task-scoped precise commit (paths derived from the card + declarations: this card and its audit card's queue files/drafts/records/ledger dirs + card chronicle; never whole-root); idempotent (already committed and pushed = no-op)")
     governance_commit_parser.add_argument("--actor", required=True, help="Actor performing governance commit")
     governance_commit_parser.add_argument("--governance-root", help="Governance workspace root; defaults to auto-discovery")
     governance_commit_parser.add_argument("--workspace-root", help="Product repo root (for schema resolution); defaults to the running Lybra code repo (AIPOS-F88 product_repo_root)")

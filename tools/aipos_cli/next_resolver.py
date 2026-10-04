@@ -834,6 +834,10 @@ def _not_derivable_no_claim(task_id: str, *, node: str, state: str, verb: str, t
 def _action_type_for_command(command: str) -> str:
     """派生命令 → action_type(唯一映射, next --run 与 lybra loop 共用)。
     先匹配 "queue close" 再匹配 "finalize", 避免 close 命令被误判为 finalize。"""
+    from tools.aipos_cli.governance_commit import governance_commit_cli, n6_landing_declaration
+
+    if command.startswith(governance_commit_cli() + " "):
+        return str(n6_landing_declaration()["action_type"])  # AIPOS-F94 件①: N6 落账步(声明 transitions nodes.N6.landing)
     if "artifact ingest" in command:
         # AIPOS-F90 件②: 产物入口按 --kind 声明所入的节点(return/verdict 账务步); 无 --kind = F78B 件② external finalize 步
         kind = re.search(r"--kind\s+(\S+)", command)
@@ -1482,6 +1486,56 @@ def _build_close_command(
     return " ".join(parts)
 
 
+def _derive_n6_landing(workspace_root: Path, task_id: str, state: str, connection_json: str | None) -> dict[str, Any] | None:
+    """AIPOS-F94 件①: N6 落账步。卡已结案(有 closure 记录)后, 判据 = 该卡落账范围(governance_commit.task_landing:
+    本卡与审计卡的队列文件 / 草稿 / 记录 / 台账落点 + 卡编年史)已在治理仓提交且已推送。
+
+    已落账 → None(调用方给「已结案」); 未落账 → 派生 `lybra governance-commit --task-id <卡> --actor <驱动方> --governance-root <根>`
+    (唯一渲染 governance_commit_command; task 范围精确提交, 幂等); 治理根不在 git 工作树内 / 驱动方身份解析不到 = 不可推导点名缺项。
+    """
+    import subprocess
+
+    from tools.aipos_cli.governance_commit import governance_commit_command, n6_landing_declaration, non_git_exit_command, task_landing
+
+    landing_verb = str(n6_landing_declaration()["verb"])
+    try:
+        landing = task_landing(workspace_root, task_id)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+        detail = (getattr(exc, "stderr", "") or str(exc)).strip()
+        return {"task_id": task_id, "derivable": False, "current_node": "close", "current_state": state, "triggered_by": "advisor",
+                "command": "", "verb": landing_verb, "missing_records": [f"落账判据不可读: {detail}"],
+                "suggested_action": "按拒因修复(卡多义 / git 只读失败)后重推导",
+                "notes": "N6 落账: 落账判据读取失败(fail-closed)",
+                "action": {"type": "record_missing", "card": task_id, "record": "governance_landing"}}
+    if landing["landed"]:
+        return None
+    base = {
+        "task_id": task_id,
+        "current_node": "close",
+        "current_state": state,
+        "triggered_by": "advisor",
+        "verb": landing_verb,
+        "landing": landing,
+    }
+    if not landing["git"]:
+        return {**base, "derivable": False, "command": "",
+                "missing_records": [f"治理仓(git): {landing['reason']}"],
+                "suggested_action": f"{non_git_exit_command(workspace_root)}(一次性本地 git init; Owner 按其输出配 origin 并首推)后重跑; 卡已结案, 只差落账",
+                "notes": "N6 落账: 已结案但治理根不在 git 仓, 无从落账(AIPOS-F94 fail-closed)",
+                "action": {"type": "record_missing", "card": task_id, "record": "governance_repo"}}
+    driver = _driver_actor(workspace_root, connection_json=connection_json)
+    if not driver:
+        return {**base, "derivable": False, "command": "", "missing_records": [DRIVER_ACTOR_MISSING],
+                "suggested_action": "补驱动方身份(lybra loop --actor 或治理根 .lybra/role instance)后重推导",
+                "notes": "N6 落账: 落账 actor 无据(驱动方身份解析不到)",
+                "action": {"type": "record_missing", "card": task_id, "record": "driver_actor"}}
+    return {**base, "derivable": True,
+            "command": governance_commit_command(task_id, driver, workspace_root),
+            "missing_records": [],
+            "suggested_action": "N6 落账: task 范围精确提交并推送治理仓",
+            "notes": f"N6 落账: 已结案但治理未落账({landing['reason']}); loop 自动执行, 幂等(已提交即 no-op)"}
+
+
 def derive_next_step(
     task_id: str,
     workspace_root: Path,
@@ -1814,8 +1868,11 @@ def derive_next_step(
                     "notes": "N5→N6: 已 finalize,需 close",
                 }
             
-            # N6: 有 closure → 已完成
+            # N6: 有 closure → 先看治理是否已落账(AIPOS-F94 件①), 未落账 = 派生 N6 落账步; 已落账 = 已完成
             if latest_closure:
+                landing_step = _derive_n6_landing(workspace_root, task_id, "claimed", conn_arg)
+                if landing_step is not None:
+                    return landing_step
                 return {
                     "task_id": task_id,
                     "derivable": False,
@@ -2097,8 +2154,11 @@ def derive_next_step(
             "notes": "claimed + 无 return 产物/记录,事实不足以推导下一步",
         }
 
-    # --- completed → done ---
+    # --- completed → N6 落账(AIPOS-F94 件①) 或 done ---
     if queue_dir == "completed":
+        landing_step = _derive_n6_landing(workspace_root, task_id, "completed", conn_arg)
+        if landing_step is not None:
+            return landing_step
         return {
             "task_id": task_id,
             "derivable": True,
@@ -2573,6 +2633,42 @@ def _run_product_command(command: str, action_type: str) -> dict[str, Any]:
     }
 
 
+def _run_cli_in_process(command: str, action_type: str) -> dict[str, Any]:
+    """AIPOS-F94 件①: 在本进程经 `lybra` CLI 入口(aipos_cli.main, argparse 与处理器同一份)执行派生命令并取 --json 结果。
+    返回 execute_derived_action 响应形; 结果 JSON 解析不出 = 失败(fail-closed, 原文透传)。"""
+    import contextlib
+    import io
+    import json
+    import shlex
+
+    from tools.aipos_cli.aipos_cli import main as cli_main
+
+    argv = shlex.split(command)[1:]
+    if "--json" not in argv:
+        argv.append("--json")
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            rc = cli_main(argv)
+        except SystemExit as exc:  # argparse 拒(loop 已先过 parser 夹具, 此处兜住 next --run 单步入口)
+            rc = exc.code if isinstance(exc.code, int) else 2
+    text = out.getvalue().strip()
+    try:
+        payload = json.loads(text) if text else {}
+    except ValueError:
+        payload = {}
+    message = str(payload.get("message") or "").strip() or (err.getvalue().strip().splitlines() or [f"{action_type} rc={rc}"])[-1]
+    return {
+        "ok": rc == 0 and bool(payload),
+        "action_type": action_type,
+        "message": message.split("\n", 1)[0] if rc == 0 else message,
+        "command": command,
+        "exit_code": int(rc) if rc else (0 if payload else 1),
+        "output": "\n".join(x for x in (text, err.getvalue().strip()) if x),
+        "result": payload,
+    }
+
+
 def _execute_claim_with_role_token(
     *,
     derivation: dict[str, Any],
@@ -2760,6 +2856,11 @@ def execute_derived_action(
             "exit_code": exit_code_for(load_loop_contract(), "no_envelope"),
             "output": f"申领出口(Owner 亲自敲):\n  {hint}",
         }
+
+    # AIPOS-F94 件①: N6 落账步 = 同一条产品命令在本进程经 CLI 入口(aipos_cli.main)执行——非门动词, 落账代码与驱动它的 loop 同版本
+    # (子进程按 PATH 找 lybra 可能落到另一份部署); 输出取 --json 结果原文, 拒因原样透传(他人暂存 / 护栏 / push 未完成)
+    if action_type == "governance_commit":
+        return _run_cli_in_process(command, action_type)
 
     # AIPOS-F73B件① + F90 件①: 认领 = 执行同一条派生命令 + 只读核验门已建的卡工作树(输出 spawn_worker)
     if action_type == "claim":

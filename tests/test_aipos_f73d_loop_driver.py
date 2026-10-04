@@ -129,6 +129,27 @@ def _substantive_return(task_id: str) -> str:
     return fm + f"# RETURN — {task_id}\n\n## 一句话结论\n完成。\n\n## 改动清单\n- x\n"
 
 
+def init_governance_repo(repo: Path, *, remote: Path | None = None) -> Path:
+    """AIPOS-F94: 靶场治理仓——repo = 仓根(git init -b main), 临时远端裸仓为 origin, 盘上现有文件作基线提交并推送。
+    返回裸仓路径。结案后 loop 先 N6 落账(已提交且已推送才 exit 0), 走到结案的 loop 夹具共用本函数(F73D/F73E/F78B/F78C/F90/F94)。"""
+    def _git(cwd: Path, *args: str) -> str:
+        return subprocess.run(["git", "-c", "core.quotepath=false", *args], cwd=str(cwd), check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    remote = remote or repo.parent / f"{repo.name}-remote.git"
+    remote.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "main"], cwd=str(remote), check=True)
+    repo.mkdir(parents=True, exist_ok=True)
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "remote", "add", "origin", str(remote))
+    if not any(p for p in repo.rglob("*") if p.is_file() and ".git" not in p.parts):
+        (repo / "README.md").write_text("# governance repo (fixture)\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.name=fixture", "-c", "user.email=fixture@lybra.local", "commit", "-q", "-m", "fixture baseline")
+    _git(repo, "push", "-q", "-u", "origin", "main")
+    return remote
+
+
 class GateDouble:
     """门侧效果替身: 只按推导核派生的动作落记录(与 transitions 声明同形), 不含任何推导/判断。"""
 
@@ -185,6 +206,11 @@ class GateDouble:
             src = q / "claimed" / f"{card.lower()}.md"
             (q / "completed" / f"{card.lower()}.md").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
             src.unlink()
+        elif action == "governance_commit":
+            # AIPOS-F94 件①: N6 落账步不是门动作——交产品执行体(真 governance-commit, 本进程 CLI 入口)落到靶场治理仓
+            from tools.aipos_cli.next_resolver import execute_derived_action
+
+            return execute_derived_action(derivation, workspace_root, connection_json)
         else:
             raise AssertionError(f"unexpected action {action}: {cmd}")
         return {"ok": True, "action_type": action, "message": f"{action} 成功", "command": cmd, "exit_code": 0, "output": "ok"}
@@ -203,7 +229,7 @@ def test_f73d_item2_exit_codes_declared_in_verbs_schema_single_place():
     props = loop["parameters"]["properties"]
     assert props["max_steps"]["default"] == 20
     assert props["max_wait"]["default"] == 1800
-    assert set(loop["envelope"]["allowed_verbs"]) == {"claim", "return", "dispatch", "verdict", "finalize", "close"}
+    assert set(loop["envelope"]["allowed_verbs"]) == {"claim", "return", "dispatch", "verdict", "finalize", "close", "governance_commit"}  # AIPOS-F94: N6 落账步独立授权
     contract = load_loop_contract()
     assert {k: exit_code_for(contract, k) for k in codes} == codes
     # 代码里不写死退出码: loop_driver 只经 exit_code_for 取码
@@ -282,6 +308,7 @@ def test_f73d_item1_full_lifecycle_claimed_to_completed(gov: Path):
     _policy(gov)
     # N1 骨架: claim 时门建的 RETURN.md 不算交回(推导核判 await)
     _write(gov / "task_cards" / TASK / "RETURN.md", build_return_skeleton_markdown(TASK))
+    init_governance_repo(gov)  # AIPOS-F94: 结案后 N6 落账须有治理仓与上游
     gate = GateDouble(gov)
     out = io.StringIO()
 
@@ -306,8 +333,8 @@ def test_f73d_item1_full_lifecycle_claimed_to_completed(gov: Path):
     text = out.getvalue()
     assert res.exit_code == 0, text
     assert res.outcome == "completed" and res.envelope == POLICY
-    # 步序: 等执行体 → return → dispatch → claim 审计卡 → 等审计体 → verdict → finalize → close → done
-    assert [c[0] for c in gate.calls] == ["return", "dispatch", "claim", "verdict", "finalize", "close"], gate.calls
+    # 步序: 等执行体 → return → dispatch → claim 审计卡 → 等审计体 → verdict → finalize → close → N6 落账(AIPOS-F94) → done
+    assert [c[0] for c in gate.calls] == ["return", "dispatch", "claim", "verdict", "finalize", "close", "governance_commit"], gate.calls
     kinds = [(s.kind, s.action_type or s.card) for s in res.steps]
     assert kinds[0] == ("wait", TASK) and kinds[-1] == ("done", "done") or kinds[-1][0] == "done"
     assert [s.kind for s in res.steps].count("wait") == 2
