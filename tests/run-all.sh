@@ -997,6 +997,18 @@ else
   overall=1
 fi
 
+# AIPOS-F97: 交回检查「测试文件」判据单源且读声明(① workspace_config.card_test_files 唯一判据, TEST_NOT_IN_RUNALL / NO_TESTS 共用,
+# 改动集带状态 git diff --name-status, 删除不计·重命名取新路径, 车道检查缺省形不变 ② config.schema test_contract.test_file_globs
+# 缺省在 schema、项目可覆盖 ③ 靶场: 删除/名含 test 的文档/辅助脚本不算, 新增/修改未登记仍拒, 只删不加 NO_TESTS, 覆盖生效, 缺省覆盖本仓现有测试)
+echo
+echo "── tests/test_aipos_f97_test_file_criterion.py (F97 测试文件判据单源·删除不计·式样读声明·缺省覆盖本仓实测) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f97_test_file_criterion.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f97_test_file_criterion.py PASS"
+else
+  echo "✗ tests/test_aipos_f97_test_file_criterion.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

@@ -793,14 +793,17 @@ def project_repos(governance_root: str | Path) -> dict[str, Any]:
     return {"declared": True, "default": default, "items": items, "code_repo": code_repo, "project_json_exists": exists}
 
 
-TEST_CONTRACT_KEYS = ("runall_path", "require_tests")
+TEST_CONTRACT_KEYS = ("runall_path", "require_tests", "test_file_globs")
 
 
 def project_test_contract(governance_root: str | Path, repo_path: str | Path | None = None) -> dict[str, Any]:
     """AIPOS-F93 件③: 交回检查测试约定的唯一读取口(声明 config.schema project_json.schema.test_contract)。
 
-    返回 {runall_path: str|None, require_tests: bool|None, source: str}: 顶层声明, 卡仓(repo_path, 调用方已按卡解析)
-    在 repos.items 内且 test_contract.repos 有该仓覆盖时逐键覆盖。键未声明 = None(调用方跳过该判据并 warning)。
+    返回 {runall_path: str|None, require_tests: bool|None, test_file_globs: list[str], test_file_globs_source: str, source: str}:
+    顶层声明, 卡仓(repo_path, 调用方已按卡解析)在 repos.items 内且 test_contract.repos 有该仓覆盖时逐键覆盖。
+    runall_path / require_tests 未声明 = None(调用方跳过该判据并 warning)。
+    AIPOS-F97 件②: test_file_globs 未声明 = schema 声明的缺省(test_contract.schema.test_file_globs.default; 缺/形坏 = SchemaLoadError,
+    代码不写死式样), 项目声明 = 整体替换。
     形不合声明 = ValueError("TEST_CONTRACT_INVALID: …")(fail-closed, 调用方拒并给出口); project.json 读失败原样抛。
     """
     from tools.schema_loader import SchemaLoadError, load_schema
@@ -811,9 +814,22 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
     )
     if not isinstance(decl, dict) or not isinstance(decl.get("schema"), dict):
         raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.test_contract 未声明")
+    globs_decl = decl["schema"].get("test_file_globs")
+    default_globs = globs_decl.get("default") if isinstance(globs_decl, dict) else None
+    if _glob_list_problem(default_globs) is not None:
+        raise SchemaLoadError(
+            "config.schema.json configuration_sources.project_json.schema.test_contract.schema.test_file_globs.default "
+            f"未声明或形坏({_glob_list_problem(default_globs)}); 「测试文件」式样无缺省不可判"
+        )
     where = f"{project_json_path(root)} test_contract"
     raw = read_project_json(root).get("test_contract")
-    result: dict[str, Any] = {"runall_path": None, "require_tests": None, "source": f"{where}(未声明)"}
+    result: dict[str, Any] = {
+        "runall_path": None,
+        "require_tests": None,
+        "test_file_globs": list(default_globs),
+        "test_file_globs_source": "config.schema test_contract.test_file_globs.default",
+        "source": f"{where}(未声明)",
+    }
     if raw in (None, {}):
         return result
     if not isinstance(raw, dict):
@@ -832,6 +848,12 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
             if not isinstance(spec.get("require_tests"), bool):
                 raise ValueError(f"TEST_CONTRACT_INVALID: {label}.require_tests={spec.get('require_tests')!r} 须为 true/false")
             result["require_tests"] = spec["require_tests"]
+        if "test_file_globs" in spec:
+            problem = _glob_list_problem(spec.get("test_file_globs"))
+            if problem is not None:
+                raise ValueError(f"TEST_CONTRACT_INVALID: {label}.test_file_globs={spec.get('test_file_globs')!r} {problem}")
+            result["test_file_globs"] = list(spec["test_file_globs"])
+            result["test_file_globs_source"] = f"{label}.test_file_globs"
         result["source"] = label
 
     _apply(raw, where)
@@ -848,6 +870,57 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
             raise ValueError(f"TEST_CONTRACT_INVALID: {where}.repos[{name!r}] 须为对象")
         if repo_path is not None and _same_path(Path(repo_path), repos["items"][name]):
             _apply(spec, f"{where}.repos[{name!r}]")
+    return result
+
+
+def _glob_list_problem(value: Any) -> str | None:
+    """test_file_globs 形校验(声明缺省与项目声明同一规则): 非空列表, 每项非空字符串且不含 /(按文件名匹配)。合规 = None。"""
+    if not isinstance(value, list) or not value:
+        return "须为非空列表(文件名 glob)"
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            return f"项 {item!r} 须为非空字符串"
+        if "/" in item:
+            return f"项 {item!r} 含 /(式样按文件名匹配, 不含目录)"
+    return None
+
+
+# git diff --name-status 状态字母: 改动后文件仍在卡分支上(A 新增 / M 修改 / R 重命名·取新路径 / C 复制·取新路径 / T 类型变更)
+# 与删除(D)。其余字母(U 未合并 / X 未知 / B 损坏配对)在提交间 diff 中不应出现 = 判不了, fail-closed。
+_CHANGE_EXISTS_STATUSES = frozenset("AMRCT")
+_CHANGE_DELETED_STATUSES = frozenset("D")
+
+
+def card_test_files(changes: list[tuple[str, str]], contract: dict[str, Any]) -> list[str]:
+    """AIPOS-F97 件①: 「本卡测试文件」唯一判据(交回检查 TEST_NOT_IN_RUNALL 与 NO_TESTS 共用, 禁第二实现)。
+
+    changes = 卡分支改动集 [(状态字母, 改动后路径)](board_adapter._card_branch_changed_files(with_status=True), 即
+    `git diff --name-status main...card/<ID>`; 重命名/复制已取新路径)。contract = project_test_contract 的返回。
+    规则: 删除项(D)排除——删除的文件无法登记, 也不是「本卡测试改动」; 仍存在的文件(A/M/R/C/T)按文件名(路径最后一段)
+    fnmatchcase 命中 contract["test_file_globs"] 任一式样, 且不是测试清单 runall_path 本身 = 测试文件。保持输入顺序。
+    未识别状态 / 式样缺 = ValueError("TEST_FILES_UNRESOLVED: …")(fail-closed, 调用方拒并给出口)。"""
+    import fnmatch
+
+    globs = contract.get("test_file_globs") if isinstance(contract, dict) else None
+    problem = _glob_list_problem(globs)
+    if problem is not None:
+        raise ValueError(f"TEST_FILES_UNRESOLVED: 测试约定缺 test_file_globs({problem}); 须经 workspace_config.project_test_contract 取约定")
+    runall_rel = contract.get("runall_path")
+    result: list[str] = []
+    for status, path in changes:
+        letter = str(status or "")[:1]
+        if letter in _CHANGE_DELETED_STATUSES:
+            continue
+        if letter not in _CHANGE_EXISTS_STATUSES:
+            raise ValueError(
+                f"TEST_FILES_UNRESOLVED: 改动集状态 {status!r}({path}) 不在可判集合 "
+                f"{sorted(_CHANGE_EXISTS_STATUSES | _CHANGE_DELETED_STATUSES)} 内"
+            )
+        if path == runall_rel:
+            continue
+        name = path.rsplit("/", 1)[-1]
+        if any(fnmatch.fnmatchcase(name, pattern) for pattern in globs):
+            result.append(path)
     return result
 
 
