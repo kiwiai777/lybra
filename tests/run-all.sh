@@ -1034,6 +1034,18 @@ else
   overall=1
 fi
 
+# AIPOS-F99: 审计章程「独立全量基线」(① 母本硬规矩: 被审 tip 与 main 各独立跑项目声明测试清单、同一 grep 式样计数附 diff、
+# 新增失败=FAIL、worktree --detach 建 main 副本、计数异常先串行重跑、未声明跳过并注明 ② charter_render 唯一键表新增 runall_path,
+# 读 workspace_config.project_test_contract, 未声明=明确文字、形坏 fail-closed ③ 审计技能引用章程 ④ 靶场 lybra 实值/未声明两种渲染无残留占位)
+echo
+echo "── tests/test_aipos_f99_audit_runall_baseline.py (F99 审计独立全量基线·清单位置读声明渲染·未声明明确文字·形坏拒渲染) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f99_audit_runall_baseline.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f99_audit_runall_baseline.py PASS"
+else
+  echo "✗ tests/test_aipos_f99_audit_runall_baseline.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F104: 状态与枚举投影单源(族 C-b: M6/M7/M16/N6)——搬卡转移表读 transitions.schema queue_mutations(validate_transition 删)、
 # 队列状态集合 = enums queue_state 投影(task_loader.QUEUE_STATES / QUEUE_SKELETON_STATES)、role_category = roles.schema 投影(含 advisor)、
 # task_class 三值(standard 语义声明并实现)与 CLI choices 同读 enums; 不变量夹具「枚举声明值域 = 代码校验值域」+ 改动节点(task_class 非法值文案)
