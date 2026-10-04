@@ -6,8 +6,7 @@
 验收(卡面 ★验收 ①–④; ⑤⑥ 见 RETURN):
   ① 被删命令 argparse 报不存在(agent 拉取/材料化/回推子命令、`agent watch` 门拉取模式、顶层派工命令),
     `agent watch --workspace-root` 照常(loop 唯一哨兵)。
-  ② git grep 删除物零引用(task_cards/ 除外; 豁免面逐条声明: 本夹具的断言清单、F96 文档棘轮的退役做法探测式样与其基线、
-    车道外 templates/(建项目单入口卡 N-b 退役, 已在 F96 基线登记))。
+  ② git grep 删除物零引用(task_cards/ 除外; 豁免面逐条声明: 本夹具的断言清单、F96 文档棘轮的退役做法探测式样)。
   ③ 信封挑选单实现: autonomy_policy.select_envelope 是唯一挑选, 判据只有 match_claim_envelope; 驱动方(loop_driver.find_envelope)、
     工位推导(workstation_wiring.derive_effective_owner_policy_ref)、契约节(gate_contract_section)、审计上下文自发现
     (audit_helpers.resolve_audit_context)、推导核派审(next_resolver)全部经它; 信封目录读 project.json paths.policies_root。
@@ -70,8 +69,6 @@ GREP_EXEMPT = [
     "task_cards/",
     THIS_FILE,
     "tests/test_aipos_f96_docs_retired_practice_ratchet.py",  # 退役做法探测式样(字面即探测器)
-    "tests/f96_docs_retired_practice_baseline.json",  # 车道外 templates/ 命中的登记(只减不增)
-    "templates/",  # 车道外(建项目单入口卡 N-b 退役), 命中已在 F96 基线登记
 ]
 
 
@@ -325,9 +322,9 @@ def test_next_resolver_dispatch_uses_driver_envelope():
 def test_docs_ratchet_baseline_shrunk_and_scope_covers_skills():
     baseline = json.loads((REPO_ROOT / "tests/f96_docs_retired_practice_baseline.json").read_text(encoding="utf-8"))
     files = {e["file"] for e in baseline["entries"]}
-    assert baseline["count"] == len(baseline["entries"]) <= 20  # F96 基线 27 条 → 本卡删 7 条
+    # F96 基线 27 条: AIPOS-F105 删 templates/ 与 lybra init 段 24 条后余 3 条(README 旧连接器 1 + agents/** 2), 本卡修掉这 3 条 → 0
+    assert baseline["count"] == len(baseline["entries"]) == 0, baseline["entries"]
     assert not files & {"README.md", "QUICKSTART.md", "agents/roles/advisor/AGENTS.md", "agents/harness/pi/README.md"}, files
-    assert all(f.startswith("templates/") for f in files), files
     sys.path.insert(0, str(REPO_ROOT / "tests"))
     try:
         import test_aipos_f96_docs_retired_practice_ratchet as f96

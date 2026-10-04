@@ -49,20 +49,6 @@ class CliErgonomicsTests(unittest.TestCase):
         )
         return workspace
 
-    def test_top_level_init_writes_workspace_config(self) -> None:
-        output = self.root / "new-workspace"
-        code, raw = self._run_cli(["init", str(output), "--project-id", "demo_project", "--json"])
-        result = json.loads(raw)
-
-        self.assertEqual(code, 0)
-        self.assertTrue(result["ok"])
-        self.assertTrue((output / "5_tasks" / "queue" / "pending").is_dir())
-        config = json.loads((output / ".lybra" / "config.json").read_text(encoding="utf-8"))
-        self.assertEqual(config["board"]["port"], 7117)
-        self.assertEqual(config["mcp"]["port"], 7118)
-        self.assertEqual(config["mcp"]["transport_token_env"], "LYBRA_MCP_TOKEN")
-        self.assertNotIn("secret-transport-token", json.dumps(config))
-
     def test_mcp_config_prints_env_refs_and_fingerprints_without_raw_tokens(self) -> None:
         workspace = self._make_workspace()
         env = {
