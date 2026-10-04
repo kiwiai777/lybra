@@ -257,8 +257,13 @@ def test_item1_card_field_order_single_definition():
 # 件② lint FRONTMATTER_INVALID + repair 保值规整
 # ===========================================================================
 
-def _bad_card_text(task_id: str, status: str, summary_line: str, tail: list[str] | None = None) -> str:
-    """真实三张坏卡同一模式: 门曾把 result_summary 以裸文本写进卡面(值以 ** 开头未转义)。其余行按单源格式。"""
+def _bad_card_text(
+    task_id: str, status: str, summary_line: str, tail: list[str] | None = None, lane_repo: str = "/srv/product"
+) -> str:
+    """真实三张坏卡同一模式: 门曾把 result_summary 以裸文本写进卡面(值以 ** 开头未转义)。其余行按单源格式。
+
+    AIPOS-F98: 坏卡其余字段(含两层 lane)按产品读取口正常读出(只缺坏键), 不再因兜底解析把 lane 丢成 None 而「碰巧」
+    落到 code_repo —— 需要建工作树的用例须传入靶场已声明的仓(lane_repo)。"""
     lines = [
         "---",
         f"task_id: {task_id}",
@@ -275,7 +280,7 @@ def _bad_card_text(task_id: str, status: str, summary_line: str, tail: list[str]
         "- '★依据: `**加粗**` 与 冒号: 值'",
         "- 第二条 plain",
         "lane:",
-        "  repo: /srv/product",
+        f"  repo: {lane_repo}",
         "  paths:",
         "  - tools/aipos_cli/",
         "  roles:",
@@ -469,10 +474,10 @@ def test_item3_multiple_ready_cards_most_recent_claim_wins(tmp_path, monkeypatch
 
 
 def test_item3_none_selectable_gives_reasons_and_go_relays_verbatim(tmp_path, monkeypatch, capsys):
-    gov, _repo = _single_gov(tmp_path, monkeypatch)
+    gov, repo = _single_gov(tmp_path, monkeypatch)
     _card(gov, "AIPOS-F87NT", "claimed", extra={"claimed_at": "2026-10-02T00:00:00Z"})
     bad = gov / "5_tasks/queue/claimed/aipos-f87bad.md"
-    bad.write_text(_bad_card_text("AIPOS-F87BAD", "claimed", BAD_F42_LINE), encoding="utf-8")
+    bad.write_text(_bad_card_text("AIPOS-F87BAD", "claimed", BAD_F42_LINE, lane_repo=str(repo)), encoding="utf-8")
     assert _ensure_worktree(gov, "AIPOS-F87BAD")["ok"]  # 坏卡即便工作树已建也不可选(卡面判据先于工作树)
     _card(gov, "AIPOS-F87PD", "pending")
     data = _my_tasks(gov, capsys)
