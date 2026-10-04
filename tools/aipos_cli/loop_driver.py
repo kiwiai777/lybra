@@ -1,12 +1,16 @@
 """AIPOS-F73D — `lybra loop`: 顾问侧驱动器(Owner 信封授权下, 有界循环推进一张卡到 completed)。
 
 一句话: 把顾问逐步敲 `next --run` 变成一条命令——产物落盘就自动推进, 直到 completed;
-agent 步只等产物、永不唤醒 agent; 四出口、有界、fail-closed。
+agent 步只等产物; 四出口、有界、fail-closed。
+AIPOS-F95: 唯一例外——Owner 信封 launch_harnesses 授权该卡 harness 且条件全满足时, 等待前按声明模板在本机工位拉起一次 harness
+进程(过程汇总为一行式进度, 产物就绪/超时/早退/中断即清进程组); 否则退回手工模式(工位敲 /go)。无守护/调度/心跳/常驻。
 
 单一实现(禁第二推导核/第二哨兵/第二 claim 路径, 禁直调 board_adapter):
 - 推导: next_resolver.derive_next_step(AIPOS-F71 唯一推导核)
 - 执行: next_resolver.execute_derived_action(AIPOS-F73 `next --run` 同一执行体)
 - 等待: agent_watch_fs.run_fs_watch(AIPOS-268/284 唯一哨兵, `--expect` + 就绪谓词=推导核可推导)
+- 拉起: 本模块 plan_launch / LaunchedHarness(AIPOS-F95; 模板 enums.schema harness.launch, 授权 autonomy_policy.envelope_authorizes_launch,
+  工位位置 enrollment.workstation_location, 身份 charter_render.workstation_identity, kickoff = my-tasks next_card.kickoff)
 - 信封: autonomy_policy(owner_autonomy_policy 族, `lybra envelope mint` 申领)
 - 退出码/参数/允许动词集合/等待产物: schema/verbs.schema.json verbs.lybra_loop 一处声明, 本模块只读。
 
@@ -23,6 +27,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import shlex
 import sys
 from dataclasses import dataclass, field
@@ -31,6 +36,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, TextIO
 
+from tools.aipos_cli.harness_launch import (  # AIPOS-F95: 拉起进程封装(无 sleep; 计时只用于 select 超时)
+    LaunchedHarness,
+    LoopInterrupted,
+    signals_deferred as _signals_deferred,
+    signals_raise_interrupt as _signals_raise_interrupt,
+)
 from tools.aipos_cli.next_resolver import (
     DRIVER_ACTOR_MISSING,
     REPO_ROOT,
@@ -104,6 +115,7 @@ class LoopStep:
     artifacts: list[str] = field(default_factory=list)
     message: str = ""
     shell_command: str = ""  # AIPOS-F90 件②: return/verdict 步 = 产物入口内部执行的薄壳命令(含产品填写的模型字段)
+    launch: dict[str, Any] | None = None  # AIPOS-F95 件③: 等待步的拉起判定/结果(None = 非 agent 等待步)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -120,6 +132,7 @@ class LoopStep:
             "output": self.output,
             "artifacts": list(self.artifacts),
             "message": self.message,
+            "launch": self.launch,
         }
 
 
@@ -304,6 +317,274 @@ def _landing(governance_root: Path, task_id: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-F95 件③ 拉起薄函数: 信封 launch_harnesses 授权 + 条件全满足 → 等待前在本机工位拉起一次 harness 进程;
+# 否则退回手工模式(工位敲 /go)。无守护/调度/心跳/常驻: 进程只活在本次等待内, 等待结束(就绪/超时/早退/中断)即清进程组。
+# 声明: verbs.schema lybra_loop.launch(宽限/终止/stderr 末尾/进度截断/手工提示)、enums.schema harness.launch(argv 模板)、
+# enums.schema workstation_transport(工位位置 transport); 授权判据 autonomy_policy.envelope_authorizes_launch(唯一实现)。
+# ---------------------------------------------------------------------------
+
+_LAUNCH_KEYS = ("grace_seconds", "terminate_wait_seconds", "stderr_tail_lines", "progress_max_chars", "manual_hint")
+
+
+def launch_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """verbs.schema lybra_loop.launch。缺键 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = contract.get("launch")
+    if not isinstance(decl, dict) or any(k not in decl for k in _LAUNCH_KEYS):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch 未声明齐 {list(_LAUNCH_KEYS)}")
+    return decl
+
+
+@dataclass
+class LaunchPlan:
+    """一次等待的拉起判定。refusal 非空 = 不拉起(退回手工, 等待提示 = manual_hint)。"""
+
+    card: str
+    harness: str = ""
+    instance: str = ""
+    location: dict[str, Any] = field(default_factory=dict)
+    manual_hint: str = ""
+    refusal: str = ""
+    argv: list[str] = field(default_factory=list)
+    cwd: str = ""
+    events: str = ""
+    kickoff: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"card": self.card, "harness": self.harness, "instance": self.instance, "launched": not self.refusal,
+                "refusal": self.refusal, "manual_hint": self.manual_hint if self.refusal else "",
+                "workstation": self.location.get("dir"), "host": self.location.get("host"),
+                "transport": self.location.get("transport")}
+
+
+def card_harness(task_fm: dict[str, Any]) -> str:
+    """卡的 harness: 卡面值, 缺省 card.schema intent_face.harness.default_by_task_mode(与 artifact_ingest 同一规则)。"""
+    from tools.aipos_cli.machine_zone import default_harness_for_task_mode
+
+    return str(task_fm.get("harness") or "").strip() or default_harness_for_task_mode(str(task_fm.get("task_mode") or "code"))
+
+
+def _wait_instance(governance_root: Path, card: str, task_fm: dict[str, Any]) -> str:
+    """等待目标卡该由哪个实例干活: 审计卡 = 其认领实例(claim 记录, 推导核 _claimer_instance 唯一实现); 执行卡 = assigned_to。"""
+    from tools.aipos_cli.next_resolver import _claimer_instance, forensic_subject
+
+    if forensic_subject(task_fm) is not None:
+        return _claimer_instance(_read_task_records(governance_root, card)) or str(task_fm.get("claimed_by") or "").strip()
+    return str(task_fm.get("assigned_to") or "").strip()
+
+
+def _render_manual_hint(decl: dict[str, Any], *, harness: str, instance: str, location: dict[str, Any]) -> str:
+    hints = decl["manual_hint"]
+    if location.get("found") and location.get("transport") == "local":
+        template = str(hints["local"])
+    elif location.get("found"):
+        template = str(hints["remote"])
+    else:
+        template = str(hints["unlocated"])
+    values = {"dir": str(location.get("dir") or ""), "host": str(location.get("host") or ""), "harness": harness or "(未知 harness)",
+              "instance": instance or "(未知实例)", "reason": str(location.get("reason") or "")}
+    for key, value in values.items():
+        template = template.replace("{" + key + "}", value)
+    return template
+
+
+def workstation_kickoff(governance_root: Path, workstation: str, card: str) -> tuple[str, str]:
+    """该工位 `my-tasks --workstation <dir> --json` 的 next_card.kickoff(与工位 /go 同一产品输出, 进程内同一 CLI 实现)。
+
+    返回 (kickoff, refusal): next_card 缺 / task_id ≠ 等待目标卡 / kickoff 空 / 工位治理根 ≠ 本治理根 = refusal 非空。"""
+    from tools.aipos_cli.aipos_cli import main as cli_main
+
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            rc = cli_main(["my-tasks", "--workstation", workstation, "--json"])
+        except SystemExit as exc:
+            rc = exc.code if isinstance(exc.code, int) else 2
+    if rc != 0:
+        return "", f"工位 my-tasks 失败(exit {rc}): {err.getvalue().strip()[-300:]}"
+    try:
+        data = json.loads(out.getvalue())
+    except ValueError as exc:
+        return "", f"工位 my-tasks 输出非 JSON: {exc}"
+    ws_root = str((data.get("workstation") or {}).get("governance_root") or "")
+    if not ws_root or Path(ws_root).resolve() != Path(governance_root).resolve():
+        return "", f"工位治理根 {ws_root or '(未解析)'} ≠ 本 loop 治理根 {governance_root}"
+    next_card = data.get("next_card")
+    if not isinstance(next_card, dict):
+        excluded = "; ".join(f"{e.get('task_id')} {e.get('code')}" for e in (data.get("next_card_excluded") or []) if isinstance(e, dict))
+        return "", f"工位 my-tasks 无 next_card(不入选: {excluded or '无'})"
+    if str(next_card.get("task_id") or "") != card:
+        return "", f"工位 my-tasks next_card={next_card.get('task_id')} ≠ 等待目标卡 {card}"
+    kickoff = next_card.get("kickoff")
+    if not isinstance(kickoff, str) or not kickoff.strip():
+        return "", "工位 my-tasks next_card 缺 kickoff"
+    return kickoff, ""
+
+
+def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | None, no_launch: bool,
+                decl: dict[str, Any], already_launched: set[str]) -> LaunchPlan:
+    """拉起判定(全部条件 AND, 任一不满足 = refusal + 手工提示)。只读, 不起进程。"""
+    import shutil
+
+    from tools.aipos_cli.autonomy_policy import envelope_authorizes_launch, launchable_harnesses
+    from tools.aipos_cli.charter_render import WorkstationIdentityError, workstation_identity
+    from tools.aipos_cli.enrollment import workstation_location
+    from tools.schema_loader import SchemaLoadError
+
+    plan = LaunchPlan(card=card)
+    task_path, _queue = _find_task_in_queue(governance_root, card)
+    if not task_path:
+        plan.refusal = plan.manual_hint = f"队列中找不到 {card}"
+        return plan
+    fm = _read_frontmatter(task_path)
+    try:
+        plan.harness = card_harness(fm)
+    except SchemaLoadError as exc:
+        plan.refusal = f"卡 harness 不可推导: {exc}"
+    plan.instance = _wait_instance(governance_root, card, fm)
+    try:
+        plan.location = workstation_location(governance_root, plan.instance) if plan.instance else {
+            "found": False, "reason": f"{card} 无 assigned_to/认领实例"}
+    except (ValueError, OSError, SchemaLoadError) as exc:
+        plan.location = {"found": False, "reason": f"工位位置读取失败: {exc}"}
+    plan.manual_hint = _render_manual_hint(decl, harness=plan.harness, instance=plan.instance, location=plan.location)
+
+    def refuse(reason: str) -> LaunchPlan:
+        plan.refusal = plan.refusal or reason
+        return plan
+
+    if plan.refusal:
+        return plan
+    if no_launch:
+        return refuse("--no-launch")
+    if card in already_launched:
+        return refuse(f"本次 loop 运行已拉起过 {card}, 不自动重试(重跑 loop = 显式再拉起)")
+    try:
+        template = launchable_harnesses().get(plan.harness)
+    except SchemaLoadError as exc:
+        return refuse(f"harness 声明读取失败: {exc}")
+    if not template or not isinstance(template.get("argv"), list) or not template["argv"]:
+        return refuse(f"harness {plan.harness} 无 launch 模板(enums.schema harness.launch=null, 只支持手工)")
+    authorized, why = envelope_authorizes_launch(policy, plan.harness)
+    if not authorized:
+        return refuse(why)
+    if not plan.location.get("found"):
+        return refuse(f"工位位置定位不到: {plan.location.get('reason')}")
+    if not plan.location.get("supported"):
+        return refuse(f"transport {plan.location.get('transport')} 已声明未支持(跨机拉起待跨机工位卡)")
+    workstation = str(plan.location["dir"])
+    try:
+        identity = workstation_identity(workstation)
+    except WorkstationIdentityError as exc:
+        return refuse(f"工位身份不可解析: {exc}")
+    if identity.get("instance") != plan.instance:
+        return refuse(f"工位 {workstation} 的实例 {identity.get('instance')} ≠ 卡实例 {plan.instance}")
+    argv_template = [str(a) for a in template["argv"]]
+    unknown = [a for a in argv_template if "{" in a and a != "{kickoff}"]
+    if unknown or "{kickoff}" not in argv_template:
+        return refuse(f"harness {plan.harness} launch.argv 占位非法(仅允许整参数 {{kickoff}}): {argv_template}")
+    if not shutil.which(argv_template[0]):
+        return refuse(f"harness 可执行 {argv_template[0]} 不在驱动方 PATH")
+    kickoff, why = workstation_kickoff(governance_root, workstation, card)
+    if why:
+        return refuse(why)
+    plan.kickoff = kickoff
+    plan.argv = [kickoff if a == "{kickoff}" else a for a in argv_template]
+    plan.cwd = workstation
+    plan.events = str(template.get("events") or "")
+    return plan
+
+
+def _session_event(governance_root: Path, card: str, actor: str, label: str, detail: str) -> str:
+    """拉起/收尾事件追加进该卡既有 session record 的 Events(task_progress_writer 同一 writer, 不新建记录类型)。返回失败原因或空串。"""
+    from tools.aipos_cli.task_progress_writer import append_session_event
+
+    try:
+        append_session_event(governance_root, card, actor=actor, event_label=label, detail=detail)
+    except (RuntimeError, OSError, ValueError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return ""
+
+
+def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root: Path, result: LoopResult, *,
+                   contract: dict[str, Any], decl: dict[str, Any], watch: Callable[..., int], watch_args: SimpleNamespace,
+                   ready: Callable[[list[str]], bool], say: Callable[[str], None], actor: str, envelope_id: str,
+                   wait_patterns: list[str]) -> bool:
+    """拉起一次 harness 并经唯一哨兵等待产物(进程退出也唤醒), 结束即清进程组。返回 True = loop 应以 result 出口返回。
+
+    产物就绪 → 宽限 grace_seconds 后终止进程组, 继续推导; 进程早退而产物未就绪 → exit 3 附 stderr 末尾;
+    等待超时 → 终止进程组, exit 3; 收到 SIGINT/SIGTERM → 终止进程组, 抛 LoopInterrupted; 拉起事件写不进 session record → 终止, exit 4。"""
+    wait_timeout = exit_code_for(contract, "wait_timeout")
+    terminate_wait = float(decl["terminate_wait_seconds"])
+    where = f"{plan.location.get('host') or '本机'}:{plan.cwd}"
+    try:
+        harness = LaunchedHarness(plan, decl, say)
+    except OSError as exc:
+        step.ok, step.message = False, f"拉起 {plan.harness} 失败({type(exc).__name__}: {exc}); 手工模式: {plan.manual_hint}"
+        say(f"[{index}] exit 3 — {step.message}")
+        result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
+        return True
+    step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid}
+    say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}(信封 {envelope_id} launch_harnesses 授权; "
+        f"kickoff = 工位 my-tasks next_card.kickoff)")
+    outcome = "error"
+    try:
+        failure = _session_event(governance_root, plan.card, actor, "harness_launch",
+                                 f"harness={plan.harness}; transport={plan.location.get('transport')}; host={plan.location.get('host') or '(本机, 存量缺 host)'}; "
+                                 f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; envelope={envelope_id}")
+        if failure:
+            outcome = "record_failed"
+            step.ok, step.message = False, f"拉起事件写不进 {plan.card} session record({failure}), 已终止进程组; 拉起须留痕(fail-closed)"
+            say(f"[{index}] exit 4 — {step.message}")
+            result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), step.message
+            return True
+        watch_out = io.StringIO()
+        with _signals_raise_interrupt():
+            with contextlib.redirect_stdout(watch_out):
+                rc = watch(watch_args, expect_ready=ready, stop_when=harness.exited, sleeper=harness.pump)
+            step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
+            if rc == 0:
+                outcome = "artifact_ready"
+                harness.pump(float(decl["grace_seconds"]))  # 宽限期内自行退出即收尾(输出照常汇总)
+                detail = "宽限期内自行退出" if harness.exited() else f"宽限 {decl['grace_seconds']}s 后终止进程组"
+                step.message = f"产物就绪(拉起的 {plan.harness} 进程: {detail})"
+                say(f"[{index}] ready: {step.output}")
+                return False
+            step.ok = False
+            if harness.exited():
+                outcome = "early_exit"
+                harness.pump(terminate_wait)  # 进程已退出: 读尽管道余量(EOF 即返回)再取 stderr 末尾
+                tail = "\n".join(f"    {line}" for line in harness.stderr_tail) or "    (stderr 无输出)"
+                step.message = (f"拉起的 {plan.harness} 进程已退出(exit {harness.proc.returncode})而产物未就绪: 等的是 {wait_patterns}\n"
+                                f"  stderr 末尾:\n{tail}")
+            else:
+                outcome = "timeout"
+                step.message = f"等待产物超时(watch exit {rc}), 已终止拉起的 {plan.harness} 进程组: 等的是 {wait_patterns}"
+            say(f"[{index}] exit 3 — {step.message}")
+            result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
+            return True
+    except LoopInterrupted as exc:
+        outcome = f"interrupted(signal {exc.signum})"
+        step.ok, step.message = False, f"loop 收到信号 {exc.signum}: 已终止拉起的 {plan.harness} 进程组"
+        say(f"[{index}] interrupted — {step.message}")
+        raise
+    finally:
+        with _signals_deferred() as pending:  # 清进程组期间不被信号打断; 期间到的信号清完再按 LoopInterrupted 抛
+            how = harness.terminate_group(terminate_wait)
+            harness.close()
+        say(harness.counts_line())
+        step.launch = {**(step.launch or {}), "outcome": outcome, "returncode": harness.proc.returncode, "termination": how}
+        failure = _session_event(governance_root, plan.card, actor, "harness_exit",
+                                 f"harness={plan.harness}; pid={harness.pid}; outcome={outcome}; returncode={harness.proc.returncode}; termination={how}")
+        if failure:
+            say(f"[{index}] warning — 收尾事件写不进 {plan.card} session record: {failure}")
+            step.launch["exit_event_error"] = failure
+        if pending:
+            raise LoopInterrupted(pending[0])
+
+
+# ---------------------------------------------------------------------------
 # 件① 主循环
 # ---------------------------------------------------------------------------
 
@@ -322,10 +603,12 @@ def run_loop(
     execute: Callable[..., dict[str, Any]] = execute_derived_action,
     watch: Callable[..., int] | None = None,
     now: datetime | None = None,
+    no_launch: bool = False,
 ) -> LoopResult:
     """有界推进一张卡。返回 LoopResult(exit_code 按 verbs.schema lybra_loop.exit_codes)。
 
     derive/execute/watch 可注入(靶场用), 缺省 = 产品唯一实现。
+    AIPOS-F95: no_launch=True = 不拉起 harness(手工模式); 拉起等待期间收到 SIGINT/SIGTERM → 清进程组后抛 LoopInterrupted。
     """
     out = out or sys.stdout
     governance_root = Path(governance_root)
@@ -375,7 +658,7 @@ def run_loop(
     with driver_scope(actor=driver_actor, policy_id=envelope_id):
         return _drive(task_id, governance_root, result, contract=contract, max_steps=max_steps, max_wait=max_wait,
                       interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute, watch=watch,
-                      connection_json=connection_json)
+                      connection_json=connection_json, policy=policy, driver_actor=driver_actor, no_launch=no_launch)
 
 
 # AIPOS-F90 件①(缺陷③): 账务步「门侧是否已落」的回读判据——该步对应的门生记录(_read_task_records 唯一读取口)在执行前后是否换了一份。
@@ -410,8 +693,13 @@ def _drive(
     execute: Callable[..., dict[str, Any]],
     watch: Callable[..., int],
     connection_json: str | None,
+    policy: dict[str, Any] | None = None,
+    driver_actor: str = "",
+    no_launch: bool = False,
 ) -> LoopResult:
     steps = result.steps
+    launch_decl = launch_declaration(contract)
+    launched: set[str] = set()  # AIPOS-F95 件③④: 一次 loop 运行对一张卡至多拉起一次
     from tools.aipos_cli.governance_commit import n6_landing_declaration
 
     landing_action = str(n6_landing_declaration()["action_type"])  # AIPOS-F94: N6 落账步(声明 transitions nodes.N6.landing)
@@ -432,6 +720,7 @@ def _drive(
         ready_card = task_id  # 就绪谓词重推导的卡(缺省=等待目标; external finalize 时=本卡)
         wait_patterns: list[str] = []
         watch_root = governance_root
+        launch_card: str | None = None  # AIPOS-F95: 执行体(N1)/审计体(N3)等待才可拉起; external finalize 等待不拉起
 
         if not derivation.get("derivable"):
             action = derivation.get("action") or {}
@@ -450,6 +739,7 @@ def _drive(
                 else:
                     target_card = ready_card = audit_card
                     watch_root, wait_patterns = auditor_artifact_watch(governance_root, audit_card)
+                    launch_card = audit_card
             node = derivation.get("current_node")
             state = derivation.get("current_state")
             if action.get("type") in HARD_STOP_ACTIONS:
@@ -468,6 +758,7 @@ def _drive(
             elif node == "claim" and state == "claimed":
                 # N1→N2: 执行体在干活 → 等 Return 落盘(落点读项目声明; 骨架不算, 判据=推导核)
                 watch_root, wait_patterns = executor_artifact_watch(governance_root, task_id)
+                launch_card = task_id
             else:
                 missing = list(derivation.get("missing_records") or [])
                 msg = f"不可推导 @ {node}/{state}: missing={missing}; suggested={derivation.get('suggested_action', '')}"
@@ -487,9 +778,26 @@ def _drive(
                 d = derive(_card, governance_root)
                 return bool(d.get("derivable")) or (d.get("action") or {}).get("type") in HARD_STOP_ACTIONS
 
+            plan: LaunchPlan | None = None
+            if launch_card is not None:
+                plan = plan_launch(governance_root, launch_card, policy=policy, no_launch=no_launch, decl=launch_decl,
+                                   already_launched=launched)
+                step.launch = plan.to_dict()
+                if plan.refusal:
+                    say(f"[{index}] manual: {plan.manual_hint}(未拉起: {plan.refusal})")
+            watch_args = _watch_args(watch_root, wait_patterns, max_wait=max_wait, interval=interval)
+            if plan is not None and not plan.refusal:
+                launched.add(launch_card)
+                return_now = _launched_wait(index, step, plan, governance_root, result, contract=contract, decl=launch_decl,
+                                            watch=watch, watch_args=watch_args, ready=_ready, say=say, actor=driver_actor,
+                                            envelope_id=str((policy or {}).get("policy_id") or ""), wait_patterns=wait_patterns)
+                steps.append(step)
+                if return_now:
+                    return result
+                continue
             watch_out = io.StringIO()
             with contextlib.redirect_stdout(watch_out):
-                rc = watch(_watch_args(watch_root, wait_patterns, max_wait=max_wait, interval=interval), expect_ready=_ready)
+                rc = watch(watch_args, expect_ready=_ready)
             step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
             if rc != 0:
                 step.ok = False
@@ -582,6 +890,21 @@ def run_loop_cli(args: Any) -> int:
         return exit_code_for(load_loop_contract(), "not_derivable")
     json_mode = bool(getattr(args, "json", False))
     sink = io.StringIO() if json_mode else sys.stdout
+    try:
+        return _run_loop_cli_body(args, governance_root, json_mode, sink)
+    except LoopInterrupted as exc:
+        # AIPOS-F95 件③: 拉起的进程组已终止; 按收到的信号退出(不新增退出码)
+        import signal as _signal
+
+        if json_mode:
+            print(sink.getvalue(), file=sys.stderr)
+        print(f"lybra loop {args.task_id}: 收到信号 {exc.signum}, 已终止拉起的 harness 进程组, 按该信号退出", file=sys.stderr, flush=True)
+        _signal.signal(exc.signum, _signal.SIG_DFL)
+        os.kill(os.getpid(), exc.signum)
+        return 128 + exc.signum  # 仅当信号被外部屏蔽时到达
+
+
+def _run_loop_cli_body(args: Any, governance_root: Path, json_mode: bool, sink: TextIO) -> int:
     result = run_loop(
         args.task_id,
         governance_root,
@@ -592,6 +915,7 @@ def run_loop_cli(args: Any) -> int:
         max_wait=getattr(args, "max_wait", None),
         interval=getattr(args, "interval", None),
         out=sink,
+        no_launch=bool(getattr(args, "no_launch", False)),
     )
     if json_mode:
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
