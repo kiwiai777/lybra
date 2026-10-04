@@ -44,7 +44,7 @@ from tools.aipos_cli.controlled_execute import get_dry_run
 from tools.aipos_cli.records import find_records_for_task, load_records
 from tools.aipos_cli.task_loader import find_repo_root
 from tools.aipos_cli.workspace_config import _project_candidates, has_workspace_queue, resolve_home_root
-from tools.schema_loader import get_role_scopes, load_schema
+from tools.schema_loader import get_enum_values, get_role_scopes, load_schema
 from tools.schema_constants import RecordType, Verdict
 
 
@@ -3925,10 +3925,11 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
         )
     
     event_type = str(args.get("event_type") or "").strip()
-    if event_type not in ("started", "progress", "completed", "blocked"):
+    progress_statuses = get_enum_values("progress_status")  # AIPOS-F104: 值域 = enums.schema progress_status(唯一声明)
+    if event_type not in progress_statuses:
         return _teaching_error(
             "INVALID_EVENT_TYPE",
-            f"event_type must be one of: started, progress, completed, blocked. Got: {event_type}",
+            f"event_type must be one of: {', '.join(progress_statuses)}. Got: {event_type}",
             "Pass a valid event_type.",
         )
     
@@ -6271,7 +6272,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "task_id": {"type": "string", "description": "Task ID being reported on."},
-                "event_type": {"type": "string", "enum": ["started", "progress", "completed", "blocked"], "description": "Event type."},
+                "event_type": {"type": "string", "enum": get_enum_values("progress_status"), "description": "Event type (enums.schema progress_status)."},
                 "actor": {"type": "string", "description": "Agent instance reporting this event."},
                 "summary": {"type": "string", "description": "Optional free-text summary of progress."},
                 "model_self_reported": {"type": "string", "description": "Optional self-reported model identifier."},

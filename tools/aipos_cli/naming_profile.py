@@ -415,9 +415,20 @@ def generate_canonical_name(
 # S3: Validator helpers — zero hardcoded prefix mapping
 # ---------------------------------------------------------------------------
 
-# The set of known role NAMES (not prefixes) — this is a product rule (the
-# three-part structure), not a hardcoded value map.
-ROLE_NAMES: set[str] = {"executor", "auditor", "owner", "copilot", "planner", "owner-dispatch"}
+# The set of known role NAMES (not prefixes) — AIPOS-F104 件③: projected from the role
+# registry (schema/roles.schema.json roles[].role via the unique loader), not a hand-written
+# set (the old copy missed "advisor", so `advisor.advisor.<host>` slipped the project-part check).
+# Lazy (R4B-1 FIX-2 policy of this module); `ROLE_NAMES` stays importable via module __getattr__.
+def _role_names() -> set[str]:
+    from tools.schema_loader import get_all_role_names
+
+    return set(get_all_role_names())
+
+
+def __getattr__(name: str) -> Any:
+    if name == "ROLE_NAMES":
+        return _role_names()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _accepted_project_segments(profile: dict[str, Any]) -> set[str]:
@@ -516,7 +527,7 @@ def validate_instance_name(
         return False, f"Role prefix mismatch: expected '{expected}' for role '{role}', got '{role_part}' in '{name}'"
 
     # Project part must not be a role name (common mistake: audit.auditor.xxx)
-    if project_part in ROLE_NAMES:
+    if project_part in _role_names():
         return False, f"Project part '{project_part}' is a role name, not a project name in '{name}'"
 
     # Project segment check — from alias layer (only when profile has project_segment)
