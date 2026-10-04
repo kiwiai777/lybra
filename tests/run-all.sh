@@ -1034,6 +1034,18 @@ else
   overall=1
 fi
 
+# AIPOS-F100: 零依赖兑现——stdlib 写出器写全产品形状(形状表双向夹具在 test_frontmatter_zerodep.py, 已登记于上块)、
+# frontmatter「读不出即拒」(必须读出入口 require_frontmatter; 推导核硬停 frontmatter_unreadable; 读-改-写不重写; 展示面列「读不出」),
+# 屏蔽 PyYAML 的全链路(草稿→发布→认领→交回 ingest(门派审)→审计认领→裁决 ingest→finalization ingest→close)与有 PyYAML 时逐字段相同
+echo
+echo "── tests/test_aipos_f100_read_or_refuse.py + tests/test_aipos_f100_zerodep_full_chain.py (F100 读不出即拒·每个改动调用方一个坏卡/坏记录靶场 / 屏蔽 yaml 全链路每步回读且与有 yaml 时逐字段相同) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f100_read_or_refuse.py" "$REPO_ROOT/tests/test_aipos_f100_zerodep_full_chain.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f100_read_or_refuse.py PASS"
+else
+  echo "✗ tests/test_aipos_f100_read_or_refuse.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
