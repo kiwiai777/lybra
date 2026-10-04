@@ -1046,6 +1046,22 @@ else
   overall=1
 fi
 
+# AIPOS-F108: 卡字段与分支声明单源(族 C-d: M9/M18/H6)——① card.schema 声明落盘键(frontmatter_order 投影字段序 / fields.default 投影缺省值,
+# 修复卡去写死实例名缺省) ② 分支名 / 基线读 transitions N5.branch_integration(branch_pattern / base_branch), 产品代码零写死, 改声明靶场跟随
+# ③ 草稿 project 缺省读治理根 project.json#project, 缺则拒; 随改动登记 finalize 分支整合 / 自动切回 / 卡号归属解析夹具
+echo
+echo "── tests/test_aipos_f108_card_field_branch_single_source.py (F108 落盘键全声明·字段序缺省值读 schema·分支名基线零写死且改声明跟随·草稿项目读 project.json 缺则拒) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f108_card_field_branch_single_source.py" \
+    "$REPO_ROOT/tests/test_finalize_branch_integration.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_finalize_branch_auto_checkout.py" \
+    "$REPO_ROOT/tests/test_aipos_f5_task_id_pattern.py" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f108_card_field_branch_single_source.py PASS"
+else
+  echo "✗ tests/test_aipos_f108_card_field_branch_single_source.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

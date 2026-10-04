@@ -494,7 +494,7 @@ def test_f73d_pre1_item1_finalization_record_written_when_deploy_fails_after_pus
     (product / "tools" / "lybra-deploy").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     sha = "b" * 40
     monkeypatch.setattr(fz, "_report_frontmatter_verdict_for_display", lambda *a, **k: {"report_path": None, "report_verdict": None})
-    monkeypatch.setattr(fz, "_load_branch_integration", lambda root: {"branch_pattern": "card/{task_id}"})
+    monkeypatch.setattr(fz, "_load_branch_integration", lambda: {"branch_pattern": "card/{task_id}", "base_branch": "main"})
     monkeypatch.setattr(fz, "_git_rev_parse_head", lambda root: sha)
     monkeypatch.setattr(fz, "_git_branch_exists", lambda root, b: False)
     monkeypatch.setattr(fz, "check_task_can_finalize", lambda *a, **k: {"can_finalize": True, "reason": "ok", "verdict_id": "verdict_x", "verdict": "PASS"})

@@ -1452,7 +1452,7 @@ def build_parser() -> argparse.ArgumentParser:
     create_source_group.add_argument("--from-template", help="Create from a built-in template")
     draft_create_parser.add_argument("--task-id", help="Draft task_id")
     draft_create_parser.add_argument("--title", help="Draft title")
-    draft_create_parser.add_argument("--project", help="Project", default="ai-project-os")
+    draft_create_parser.add_argument("--project", help="Project(缺省 = 治理根 project.json#project; 未声明 = 拒, AIPOS-F108)", default=None)
     draft_create_parser.add_argument("--assigned-to", help="assigned_to value")
     draft_create_parser.add_argument("--agent-instance", help="agent_instance value")
     draft_create_parser.add_argument("--context-bundle", help="context_bundle value")

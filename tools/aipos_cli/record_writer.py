@@ -295,55 +295,35 @@ def render_frontmatter_line(key: str, value: Any) -> str:
         raise ValueError(f"字段 {key} 的安全序列化不是单行(值含换行等), 不能做单行规整")
     return lines[1]
 
-# AIPOS-F87 件①(复查报告 M9): 卡 frontmatter 字段序的唯一定义。原 queue_mutation.FRONTMATTER_ORDER(42 键)与
-# draft_writer.FRONTMATTER_ORDER(28 键)两份, 收为此一份; 取 queue_mutation 那份 = 落盘实况(真实队列 889 张中 874 张
-# 即此序, 其余 15 张为存量旧格式), 避免全量重排。列外的键按字母序排在其后(render_markdown 既有规则)。
-# 键集以 card.schema.json fields 为准; 本表中 card.schema 未声明的键(recurrence / blocked_* / reopen* / withdrawn_* 等)
-# 是 schema 侧缺口, 见 F87 RETURN「产品缺口」(schema/ 不在本卡车道)。
-CARD_FRONTMATTER_ORDER = [
-    "task_id",
-    "title",
-    "project",
-    "task_type",
-    "assigned_to",
-    "agent_instance",
-    "context_bundle",
-    "task_mode",
-    "task_class",
-    "complexity_note",
-    "model_tier",
-    "priority",
-    "status",
-    "created_by",
-    "needs_owner",
-    "output_target",
-    "artifact_policy",
-    "session_policy",
-    "context_isolation",
-    "artifact_scope",
-    "memory_scope",
-    "polling_mode",
-    "claim_policy",
-    "report_mode",
-    "recurrence",
-    "claim_id",
-    "claimed_by",
-    "claimed_at",
-    "active_session_id",
-    "last_session_id",
-    "blocked_by",
-    "blocked_at",
-    "block_reason",
-    "completed_by",
-    "completed_at",
-    "artifact_links",
-    "reopened_by",
-    "reopened_at",
-    "reopen_reason",
-    "withdrawn_by",
-    "withdrawn_at",
-    "withdrawal_reason",
-]
+# AIPOS-F87 件①(复查报告 M9): 卡 frontmatter 字段序原有两份(queue_mutation 42 键 / draft_writer 28 键), F87 收为本模块一份。
+# AIPOS-F108 件①(M9, Owner 10-02 裁定 card.schema 字段序与落盘序一致): 字段序与字段缺省值的唯一声明在
+# schema/card.schema.json(frontmatter_order.keys / fields.<键>.default); 本模块只投影, 代码零清单。
+# 列外的键按字母序排在其后(render_markdown 既有规则)。声明缺/坏 = SchemaLoadError(fail-closed, 不回落写死)。
+
+
+def _card_schema_declaration() -> dict[str, Any]:
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("card")
+    fields = decl.get("fields")
+    order = (decl.get("frontmatter_order") or {}).get("keys")
+    if not isinstance(fields, dict) or not fields:
+        raise SchemaLoadError("card.schema.json fields 未声明")
+    if not isinstance(order, list) or not order or not all(isinstance(k, str) and k for k in order):
+        raise SchemaLoadError("card.schema.json frontmatter_order.keys 未声明或非字符串清单")
+    undeclared = [k for k in order if k not in fields]
+    if undeclared or len(set(order)) != len(order):
+        raise SchemaLoadError(f"card.schema.json frontmatter_order.keys 含未在 fields 声明或重复的键: {undeclared or order}")
+    return decl
+
+
+def card_field_defaults() -> dict[str, Any]:
+    """AIPOS-F108 件①: 卡字段缺省值 = card.schema fields.<键>.default 的投影(唯一来源; 草稿模板 / 派生卡补全都读这里)。"""
+    fields = _card_schema_declaration()["fields"]
+    return {key: spec["default"] for key, spec in fields.items() if isinstance(spec, dict) and "default" in spec}
+
+
+CARD_FRONTMATTER_ORDER = list(_card_schema_declaration()["frontmatter_order"]["keys"])
 
 
 CLAIM_FRONTMATTER_ORDER = [

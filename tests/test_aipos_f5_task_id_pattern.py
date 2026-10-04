@@ -143,7 +143,7 @@ def test_none_governance_root_raises():
 # ---------------------------------------------------------------------------
 
 def test_branch_pattern_regex_uses_declared_pattern():
-    regex = _branch_pattern_regex(REPO_ROOT, _TASK_ID_PATTERN)
+    regex = _branch_pattern_regex(_TASK_ID_PATTERN)
     assert regex is not None
     import re
     m = re.search(regex, "Merge card/AIPOS-C3C: summary (verdict_X)")

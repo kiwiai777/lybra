@@ -70,7 +70,7 @@ def _pick_section(sections: list[tuple[str, str]], aliases: list[str]) -> str:
 def build_intent_model(task_id: str, governance_root: Path, *, harness: str | None = None) -> dict[str, Any]:
     """从卡 + 声明构造意图模型(唯一)。卡不存在/声明缺 = ValueError/SchemaLoadError(fail-closed)。"""
     from tools.aipos_cli.machine_zone import derive_intent_declarations, intent_face_declaration
-    from tools.schema_loader import get_branch_integration
+    from tools.aipos_cli.next_resolver import card_branch_name
 
     governance_root = Path(governance_root)
     task_path, queue_dir = _find_task_in_queue(governance_root, task_id)
@@ -91,7 +91,7 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
     # AIPOS-F78C 件② + F86 件①: 开工提示的仓路径/工作树落点 = card_worktree_location(该卡声明的仓经 resolve_card_repo 唯一解析;
     # 与 claim 建树 / my-tasks 开工面同一函数; 解析不到 = ValueError fail-closed)
     code_repo, worktree = card_worktree_location(governance_root, task_id, {**fm, "task_id": task_id})
-    branch = str(get_branch_integration().get("branch_pattern") or "card/{task_id}").replace("{task_id}", task_id)
+    branch = card_branch_name(task_id)  # AIPOS-F108 件②: 唯一读取口(声明缺 = SchemaLoadError, 不回落写死)
     # AIPOS-F66B 件③ + F86 件①: 报告落点 = card_report_path(审计卡 verdict_root/<审计卡ID>/<候选>, 执行卡 return_root/<ID>/<候选>;
     # 与派生卡文案 / my-tasks 同一读取口, 禁写死)。
     is_audit = str(fm.get("task_mode") or "").strip().lower() == "audit"

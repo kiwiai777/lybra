@@ -22,6 +22,7 @@ from tools.aipos_cli.task_loader import find_task_by_id, queue_root_for, queue_s
 from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
 from tools.schema_constants import RecordType
 from tools.schema_loader import get_required_card_fields  # AIPOS-F17 大项A: schema 单源必填集
+from tools.aipos_cli.record_writer import card_field_defaults  # AIPOS-F108 件①: 卡字段缺省值读 card.schema 声明
 
 
 
@@ -92,6 +93,8 @@ def build_forensic_anchor_section(
     AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录(render_audit_report_location 唯一渲染); audit_task_id 缺省
     = 本模块 derive_audit_task_id 首号(与 build_derived_audit_task 同一派生), 手动派审传显式审计卡 ID。
     """
+    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name  # AIPOS-F108 件②: 分支 / 基线读声明
+
     code_repo = _resolve_code_repo(repo_root, source_metadata)
     report_location = render_audit_report_location(
         repo_root, audit_task_id or derive_audit_task_id(source_task_id, repo_root=None)
@@ -100,7 +103,7 @@ def build_forensic_anchor_section(
     return (
         "\n## 取证锚点(AIPOS-A1 大项C: 默认注入, 路径来自注册表)\n\n"
         f"- **产品仓绝对路径**: `{code_repo}` (被审卡 lane.repo → project.json repos/code_repo, 禁写死)\n"
-        f"- **禁 checkout 卡分支**: 用 `git diff main...card/{source_task_id}` 取证(不切换工作区)\n"
+        f"- **禁 checkout 卡分支**: 用 `git diff {card_base_branch()}...{card_branch_name(source_task_id)}` 取证(不切换工作区)\n"
         f"- **报告落点绝对路径**: `{report_location}` (治理根 verdict_root/<审计卡ID>/, 声明渲染; 禁落被审卡目录、禁落产品仓)\n"
         "- **不存在结论必须附**: `pwd` + 命令 + 输出(三条缺一即无效证据)\n"
     )
@@ -489,8 +492,10 @@ def build_derived_audit_task(
     # AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录, 与正文两段同一渲染函数(禁写死被审卡目录)
     code_repo = _resolve_code_repo(repo_root, source_metadata)
     report_location = render_audit_report_location(repo_root, audit_task_id)
+    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name  # AIPOS-F108 件②: 分支 / 基线读声明
+
     forensic_anchors = [
-        f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | 禁checkout卡分支(git diff main...card/{source_task_id}) | 报告落点={report_location} | 不存在结论必附pwd+命令+输出",
+        f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | 禁checkout卡分支(git diff {card_base_branch()}...{card_branch_name(source_task_id)}) | 报告落点={report_location} | 不存在结论必附pwd+命令+输出",
     ]
     existing_governance_refs = list(audit_metadata.get("governance_refs") or [])
     audit_metadata["governance_refs"] = existing_governance_refs + forensic_anchors
@@ -634,11 +639,7 @@ def derive_audit_task_on_return(
     # 缺则安全默认), 再产前自检——产物必过与 publish/修复卡 writer 同一的 schema 必填校验;
     # 审计身份必须是注册表审计实例(_derive_audit_instance 同一实现), 禁承继原卡执行实例。
     _required_fields = get_required_card_fields()
-    _inherit_defaults = {
-        "needs_owner": False,
-        "output_target": source_metadata.get("output_target", ""),
-        "artifact_policy": source_metadata.get("artifact_policy", "formal_write"),
-    }
+    _inherit_defaults = card_field_defaults()  # AIPOS-F108 件①: 安全默认值 = card.schema fields.<键>.default(单源)
     for _field in _required_fields:
         if _field not in audit_metadata or audit_metadata[_field] is None:
             if _field in source_metadata and source_metadata[_field] is not None:
@@ -869,8 +870,11 @@ def derive_repair_card_on_fail(
         try:
             text = source_card.read_text(encoding="utf-8")
             source_metadata, source_body, _ = parse_markdown_frontmatter(text)
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            # AIPOS-F108: 原 except Exception: pass 静默吞 → 精确捕获 + fail-closed 带出口
+            raise ValueError(
+                f"SOURCE_CARD_UNREADABLE: derive_repair_card 读原卡 {source_card} 失败({exc})。出口: 修复原卡后重试"
+            ) from exc
 
     # AIPOS-F66 F-002: 项目名取不到=raise 带出口(fail-closed),禁默认 lybra
     project = source_metadata.get("project")
@@ -886,11 +890,12 @@ def derive_repair_card_on_fail(
         "task_id": repair_task_id,
         "title": f"Fix: {source_metadata.get('title', reviewed_task_id)} (round {fix_round})",
         "project": project,
-        "assigned_to": source_metadata.get("assigned_to", "executor_lybra"),
-        "agent_instance": source_metadata.get("agent_instance", "executor.lybra.kiwiai-dev"),
+        # AIPOS-F108 件①(M9): assigned_to / agent_instance 只承继原卡, 禁写死实例名缺省(原卡缺必填 assigned_to = 下方产前自检拒;
+        # agent_instance 非必填, 原卡无则不写); task_class 缺省读 card.schema 声明。
+        "assigned_to": source_metadata.get("assigned_to"),
         "context_bundle": source_metadata.get("context_bundle", "default"),
         "task_mode": source_metadata.get("task_mode", "code"),
-        "task_class": source_metadata.get("task_class", "simple"),
+        "task_class": source_metadata.get("task_class") or card_field_defaults()["task_class"],
         "priority": source_metadata.get("priority", "high"),
         "status": "pending",
         "created_by": "gate_derivation",
@@ -903,14 +908,13 @@ def derive_repair_card_on_fail(
         "artifact_scope": source_metadata.get("artifact_scope", ""),
     }
 
+    if source_metadata.get("agent_instance"):
+        repair_metadata["agent_instance"] = source_metadata["agent_instance"]
+
     # AIPOS-F17 大项A: 从 schema 必填集补全——值承继原卡, 原卡无则用安全默认值。
     # 禁手写第二份字段清单; schema 改即自动跟随。
     _required_fields = get_required_card_fields()
-    _inherit_defaults = {
-        "needs_owner": False,
-        "output_target": source_metadata.get("output_target", ""),
-        "artifact_policy": source_metadata.get("artifact_policy", "formal_write"),
-    }
+    _inherit_defaults = card_field_defaults()  # AIPOS-F108 件①: 安全默认值 = card.schema fields.<键>.default(单源)
     for field in _required_fields:
         if field not in repair_metadata or repair_metadata[field] is None:
             if field in source_metadata and source_metadata[field] is not None:

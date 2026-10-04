@@ -541,7 +541,7 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
     fm = _read_frontmatter(path)
     out["frontmatter"] = fm
     # AIPOS-F89 件③c: 报告完成判据唯一实现 next_resolver.missing_verdict_frontmatter(占位 = 未填, 空模板不算产物)
-    from tools.aipos_cli.next_resolver import missing_verdict_frontmatter
+    from tools.aipos_cli.next_resolver import card_branch_name, missing_verdict_frontmatter
 
     missing = missing_verdict_frontmatter(fm)
     if missing:
@@ -549,10 +549,7 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
         out["reasons"] = [f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.verdict.required_frontmatter)"]
         return out
     reviewed = str(fm.get("reviewed_task_id") or task_id[:-1]).strip()
-    from tools.schema_loader import get_branch_integration
-
-    pattern = str(get_branch_integration().get("branch_pattern") or "card/{task_id}")
-    branch = pattern.replace("{task_id}", reviewed)
+    branch = card_branch_name(reviewed)  # AIPOS-F108 件②: 唯一读取口(声明缺 = SchemaLoadError, 不回落写死)
     tip = _git_out(code_repo, "rev-parse", "--verify", f"{branch}^{{commit}}")
     commit_sha = str(fm.get("commit_sha")).strip()
     if tip is None:

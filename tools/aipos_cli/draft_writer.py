@@ -23,6 +23,7 @@ from tools.aipos_cli.draft_validator import (
 from tools.aipos_cli.records import expected_publish_record_path
 from tools.aipos_cli.record_writer import (
     CARD_FRONTMATTER_ORDER,
+    card_field_defaults,
     render_frontmatter_block,
     render_markdown as _render_markdown_single_source,
 )
@@ -104,16 +105,9 @@ def _check_project_map_staleness(repo_root: Path, validation: dict[str, Any]) ->
 EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "agent-01"
 EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET = "workspace_artifacts/external_intake"
 
-DEFAULT_TEMPLATE_VALUES = {
-    "project": "ai-project-os",
-    "status": "pending",
-    "needs_owner": False,
-    "task_type": "one_shot",
-    "polling_mode": "agent_polling",
-    "claim_policy": "assigned_agent_only",
-    "report_mode": "forum_reply",
-    "recurrence": "none",
-}
+# AIPOS-F108 件①③: 草稿模板缺省值原写死在本模块 DEFAULT_TEMPLATE_VALUES(含不存在的项目 ID "ai-project-os"), 已退役:
+# 字段缺省读 card.schema fields.<键>.default(record_writer.card_field_defaults 投影); project 缺省读治理根
+# project.json#project(workspace_config.declared_project_id), 缺则拒(DRAFT_PROJECT_UNDECLARED)。
 
 # AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(原本模块另有 28 键一份, 已退役)。
 FRONTMATTER_ORDER = CARD_FRONTMATTER_ORDER
@@ -261,7 +255,7 @@ def load_create_payload_from_json(path: str | Path) -> tuple[dict[str, Any], str
 def build_template_payload(template_name: str, values: dict[str, Any], body: str | None = None) -> tuple[dict[str, Any], str]:
     if template_name != "basic":
         raise ValueError(f"Unsupported draft template: {template_name}")
-    metadata = {**DEFAULT_TEMPLATE_VALUES, **values}
+    metadata = {**card_field_defaults(), **values}
     return metadata, body if body is not None else default_draft_body()
 
 
@@ -269,12 +263,29 @@ def load_body_file(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
+def _fill_declared_project(metadata: dict[str, Any], repo_root: Path) -> list[str]:
+    """AIPOS-F108 件③(H6): 草稿未给 project = 读治理根 project.json#project(workspace_config.declared_project_id);
+    治理根未声明 = 不填并返回拒因(fail-closed, 禁回落任何写死项目 ID)。返回拒因列表(空 = 已有或已填)。"""
+    if metadata.get("project") not in (None, ""):
+        return []
+    from tools.aipos_cli.workspace_config import declared_project_id
+
+    try:
+        metadata["project"] = declared_project_id(repo_root)
+    except ValueError as exc:
+        metadata.pop("project", None)
+        return [str(exc)]
+    return []
+
+
 def _normalized_metadata(metadata: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     normalized = dict(metadata)
-    normalized.setdefault("status", "pending")
-    normalized.setdefault("needs_owner", False)
+    # AIPOS-F108 件①: 缺省值读 card.schema fields.<键>.default(单源), 不写死
+    _defaults = card_field_defaults()
+    normalized.setdefault("status", _defaults["status"])
+    normalized.setdefault("needs_owner", _defaults["needs_owner"])
     if normalized.get("task_class") in (None, ""):
-        normalized["task_class"] = "simple"
+        normalized["task_class"] = _defaults["task_class"]
     if normalized.get("complexity_note") in (None, ""):
         normalized.pop("complexity_note", None)
     
@@ -345,6 +356,7 @@ def create_draft(
             if field_name not in metadata or metadata[field_name] in (None, ""):
                 metadata[field_name] = placeholder_value
 
+    project_reasons = _fill_declared_project(metadata, repo_root)
     normalized = _normalized_metadata(metadata, repo_root)
     
     # AIPOS-F78 件①: 意图面 harness/lane 缺则派生(create/publish/regen 三口一函数 derive_intent_declarations)
@@ -385,6 +397,10 @@ def create_draft(
     
     rendered_markdown = render_markdown_task_card(normalized, task_body)
     validation = validate_draft_metadata(repo_root, normalized)
+    if project_reasons:
+        # AIPOS-F108 件③: 项目未声明 = 拒(与 schema 必填校验同一 BLOCK 出口, 拒因带出口)
+        validation["blocking_reasons"] = [*project_reasons, *validation["blocking_reasons"]]
+        validation["verdict"] = Verdict.BLOCK
     target_path = validation["target_path"]
     planned_writes = []
 
