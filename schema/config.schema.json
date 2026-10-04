@@ -84,7 +84,8 @@
         "role": {
           "type": "string",
           "required": true,
-          "description": "角色名(内建角色类或注册的自定义角色); identity_resolution.keys.role"
+          "$enum": "role_category",
+          "description": "角色名(内建角色类或注册的自定义角色, 自定义角色经门注册表解析到 role_category 内建类); identity_resolution.keys.role"
         },
         "instance": {
           "type": "string",

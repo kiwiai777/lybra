@@ -172,7 +172,9 @@ def get_overview(board_config_path: Path | None = None, repo_root: Path | None =
             queue_counts = {}
             if queue_data.get("ok") and "data" in queue_data:
                 summary = queue_data["data"].get("summary", {})
-                for state in ["pending", "claimed", "blocked", "completed"]:
+                from tools.aipos_cli.task_loader import QUEUE_STATES  # AIPOS-F104: queue dirs = enums queue_state projection
+
+                for state in QUEUE_STATES:
                     queue_counts[state] = summary.get(state, 0)
             
             # Extract needs-owner items (top 5)

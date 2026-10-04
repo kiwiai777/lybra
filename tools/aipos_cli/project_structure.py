@@ -36,7 +36,7 @@ MIGRATION_CHECKLIST_FILENAME = "migration-checklist.md"
 # Standard five-piece set (标准五件套) directories/files
 # AIPOS-F89 件① M8: 队列状态目录不在此写死——import 时按队列根声明(task_loader.queue_root_for; 新根无 project.json = 声明 default)
 # 由 _standard_five_piece_dirs() 派生。
-QUEUE_SKELETON_STATES = ("pending", "claimed", "completed", "blocked")
+# AIPOS-F104 件②: 预建队列目录 = task_loader.QUEUE_SKELETON_STATES(enums queue_state skeleton 投影), 原手写副本删除; 调用处惰性导入
 STANDARD_FIVE_PIECE = [
     "5_tasks/records",
     "5_tasks/drafts",
@@ -474,9 +474,9 @@ def export_project_structure(
 
     # Queue state counts (summary)
     queue_summary: dict[str, int] = {}
-    from tools.aipos_cli.task_loader import queue_root_for  # AIPOS-F89 件① M8: 队列根唯一读取口(惰性导入, 见文件头)
+    from tools.aipos_cli.task_loader import QUEUE_STATES, queue_root_for  # AIPOS-F89 件① M8 + AIPOS-F104 件②: 队列根/状态唯一读取口(惰性导入, 见文件头)
 
-    for state in ("pending", "claimed", "completed", "blocked"):
+    for state in QUEUE_STATES:
         state_dir = queue_root_for(root) / state
         if state_dir.is_dir():
             count = sum(1 for f in state_dir.iterdir() if f.is_file() and f.suffix == ".md")
@@ -659,7 +659,7 @@ def import_project_structure(
     skipped: list[str] = []
 
     # 1. Standard five-piece set directories(队列状态目录读声明, AIPOS-F89 件① M8)
-    from tools.aipos_cli.task_loader import queue_state_ref
+    from tools.aipos_cli.task_loader import QUEUE_SKELETON_STATES, queue_state_ref
 
     for state in QUEUE_SKELETON_STATES:
         planned_dirs.append(queue_state_ref(output, state).rstrip("/"))
