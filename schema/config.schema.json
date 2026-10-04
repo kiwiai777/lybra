@@ -122,14 +122,15 @@
         "test_contract": {
           "type": "object",
           "required": false,
-          "description": "AIPOS-F93 件③(F92 G4: 门交回检查把 lybra 产品仓自己的 run-all 登记约定强加给所有项目): 交回检查的测试约定 = 项目声明, 产品不假设任何项目的测试布局。形: {\"runall_path\": \"<相对产品仓根的测试清单文件>\", \"require_tests\": true|false, \"repos\": {\"<repos.items 仓名>\": {同形, 逐键覆盖顶层}}}。判据: TEST_NOT_IN_RUNALL 只在卡仓声明了 runall_path 时检查(本卡改动的测试文件须在该清单内; 声明的清单在卡分支上不存在 = 拒); NO_TESTS 只在 require_tests=true 时检查(code 类卡须含测试文件改动)。未声明 = 该判据跳过并 warning(不 BLOCK); 拒因文案只引用声明值。lybra 自身声明 {runall_path: tests/run-all.sh, require_tests: true}(一处, 在 lybra 治理根 project.json)。唯一读取口 workspace_config.project_test_contract",
+          "description": "AIPOS-F93 件③(F92 G4: 门交回检查把 lybra 产品仓自己的 run-all 登记约定强加给所有项目): 交回检查的测试约定 = 项目声明, 产品不假设任何项目的测试布局。形: {\"runall_path\": \"<相对产品仓根的测试清单文件>\", \"require_tests\": true|false, \"test_file_globs\": [\"<文件名 glob>\", …], \"repos\": {\"<repos.items 仓名>\": {同形, 逐键覆盖顶层}}}。判据: 「本卡测试文件」= workspace_config.card_test_files(卡分支新增/修改/重命名后仍存在的文件中文件名命中 test_file_globs 者, 删除不计; AIPOS-F97); TEST_NOT_IN_RUNALL 只在卡仓声明了 runall_path 时检查(本卡测试文件须在该清单内; 声明的清单在卡分支上不存在 = 拒); NO_TESTS 只在 require_tests=true 时检查(code 类卡须含测试文件改动)。未声明 = 该判据跳过并 warning(不 BLOCK); 拒因文案只引用声明值。lybra 自身声明 {runall_path: tests/run-all.sh, require_tests: true}(一处, 在 lybra 治理根 project.json)。唯一读取口 workspace_config.project_test_contract",
           "schema": {
             "runall_path": {"type": "string", "optional": true, "description": "测试清单文件(相对产品仓根, 禁绝对路径); 交回检查读卡分支上的该文件"},
             "require_tests": {"type": "boolean", "optional": true, "description": "true = code 类卡须含测试文件改动(NO_TESTS)"},
+            "test_file_globs": {"type": "array", "items": {"type": "string"}, "optional": true, "default": ["test_*.py", "*_test.py", "test_*.sh", "*.test.ts", "*.test.js", "*.spec.ts", "*.spec.js"], "description": "AIPOS-F97 件②: 「测试文件」的文件名式样(fnmatch glob, 按文件名即路径最后一段匹配, 区分大小写, 禁含 /)。缺省 = default(覆盖 lybra 产品仓现有全部自动化测试文件命名: Python test_*.py、shell test_*.sh、TS/JS *.test.ts / *.test.js、Playwright *.spec.js, 另含常见 *_test.py / *.spec.ts); 项目声明 = 整体替换缺省(非追加), 须为非空字符串的非空列表。判据唯一实现 workspace_config.card_test_files: 卡分支改动集(git diff --name-status main...card/<ID>)中删除项 D 排除、重命名/复制取新路径, 文件名命中任一式样且不是 runall_path 本身 = 本卡测试文件(TEST_NOT_IN_RUNALL / NO_TESTS 共用)。代码不写死式样; 新语言 = 加一条 glob"},
             "repos": {"type": "object", "optional": true, "description": "按仓覆盖: 键 = project.json repos.items 仓名, 值同形(不得再嵌 repos); 卡仓(resolve_card_repo)有覆盖取覆盖, 否则取顶层"}
           },
           "reject_codes": {
-            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / repos 键不在 repos.items)"
+            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items)"
           }
         },
         "repos": {

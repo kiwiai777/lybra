@@ -45,7 +45,11 @@ const planB = planGo({
   tasks: [older, newer],
   next_card: { task_id: "AIPOS-NEW", card_path: newer.card_path, worktree_path: newer.worktree_path, report_path: newer.report_path,
     report_required_frontmatter: [{ key: "commit_sha", hint: "卡分支 card/AIPOS-NEW tip 的完整 40 位 sha", value: null }],  // AIPOS-F93 件①
-    claimed_at: "2026-10-02T08:00:00Z" },
+    claimed_at: "2026-10-02T08:00:00Z",
+    // AIPOS-F95 件①: 开工提示全文由产品渲染(产品输出形样本)
+    kickoff: `已认领任务卡 AIPOS-NEW。\n\n工作树路径: ${newer.worktree_path}\n报告落点: ${newer.report_path}\n任务卡路径: ${newer.card_path}\n`
+      + "报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n- commit_sha: (卡分支 card/AIPOS-NEW tip 的完整 40 位 sha)\n\n"
+      + "按你的 AGENTS.md 执行，完成后写报告到报告落点。" },
   next_card_excluded: [{ task_id: "AIPOS-OLD", code: "WORKTREE_NOT_CREATED", reason: older.worktree_refusal.reason }],
 });
 check("B1 next_card=非首张卡 → kickoff 该卡", planB.kind === "kickoff" && planB.taskId === "AIPOS-NEW", JSON.stringify(planB));

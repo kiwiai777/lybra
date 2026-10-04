@@ -2611,17 +2611,22 @@ def _check_return_self_checks(
 
 
 
-def _card_branch_changed_files(product_repo_root: Path, task_id: str) -> list[str] | None:
+def _card_branch_changed_files(
+    product_repo_root: Path, task_id: str, *, with_status: bool = False
+) -> list[str] | list[tuple[str, str]] | None:
     """AIPOS-F78 前置零④: 卡分支相对其与 main 的合并基的改动文件(`git diff main...card/<ID>`, 三点=merge-base)。
 
     worktree 模型下 main 与卡分支并行前进, 两点 diff(main..branch)会把 main 上别人的改动反向算进本卡 → 判据必错;
-    三点 diff 只看卡分支自己的提交。git 失败返回 None(调用方跳过, 出 warning)。"""
+    三点 diff 只看卡分支自己的提交。git 失败返回 None(调用方跳过, 出 warning)。
+    AIPOS-F97: 一次 `--name-status` 取改动集。缺省(with_status=False)返回路径列表, 与原 `--name-only` 同形同序
+    (含删除项; 重命名/复制取新路径)——车道检查 CHANGES_OUT_OF_SCOPE 等调用方行为不变; with_status=True 返回
+    [(状态字母, 改动后路径)] 供「本卡测试文件」判据 workspace_config.card_test_files 排除删除。"""
     import subprocess
 
     branch_name = f"card/{task_id}"
     try:
         result = subprocess.run(
-            ["git", "diff", f"main...{branch_name}", "--name-only"],
+            ["git", "diff", f"main...{branch_name}", "--name-status"],
             cwd=product_repo_root, capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -2631,7 +2636,16 @@ def _card_branch_changed_files(product_repo_root: Path, task_id: str) -> list[st
         return None
     if result.returncode != 0:
         return None
-    return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+    entries: list[tuple[str, str]] = []
+    for line in result.stdout.split("\n"):
+        if not line.strip():
+            continue
+        fields = line.split("\t")
+        # 形: "<状态>\t<路径>"; 重命名/复制 "<R|C><相似度>\t<旧路径>\t<新路径>"(取新路径, 与 --name-only 一致)
+        entries.append((fields[0].strip(), fields[-1].strip()))
+    if with_status:
+        return entries
+    return [path for _status, path in entries]
 
 
 def _git_show_on_branch(product_repo_root: Path, task_id: str, relative_path: str) -> str | None:
@@ -2665,6 +2679,17 @@ def _test_contract_for(repo_root: Path, product_repo_root: Path) -> tuple[dict[s
         return None, (f"{exc}。出口: 按 config.schema project_json.test_contract 声明形修正治理根 project.json 的 test_contract")
 
 
+def _card_test_files_for(changes: list[tuple[str, str]], contract: dict[str, Any]) -> tuple[list[str], str | None]:
+    """AIPOS-F97 件①: 「本卡测试文件」(唯一判据 workspace_config.card_test_files)。返回 (测试文件, None) 或
+    ([], TEST_FILES_UNRESOLVED 拒因)——改动集判不了 fail-closed 拒, 不当无测试放过。"""
+    from tools.aipos_cli.workspace_config import card_test_files
+
+    try:
+        return card_test_files(changes, contract), None
+    except ValueError as exc:
+        return [], f"{exc}。出口: 核对卡分支提交(git diff --name-status main...<卡分支>)后重交; 仍判不了请顾问出卡修判据"
+
+
 def _contract_skip_warning(warnings: list[str] | None, text: str) -> None:
     """AIPOS-F93 件③: 测试约定未声明 = 判据跳过并 warning(进交回结果 warnings; 无 warnings 通道时出声 stderr)。"""
     if warnings is not None:
@@ -2694,18 +2719,17 @@ def _check_test_in_runall(
     except ProductRepoNotConfigured:
         return blocking_reasons  # 无产品仓，跳过
     
-    # 1. 卡分支改动文件中的 test 文件
-    changed_files = _card_branch_changed_files(product_repo_root, task_id)
-    if changed_files is None:
+    # 1. 卡分支改动集中的本卡测试文件(AIPOS-F97: 唯一判据 workspace_config.card_test_files, 删除不计, 式样读声明)
+    changes = _card_branch_changed_files(product_repo_root, task_id, with_status=True)
+    if changes is None:
         return blocking_reasons  # git 失败，跳过检查(已 warning)
     contract, invalid = _test_contract_for(repo_root, product_repo_root)
     if invalid:
         return [invalid]
-    runall_rel = contract.get("runall_path") if contract else None
-    test_files = [
-        f for f in changed_files 
-        if "test" in f.lower() and f != runall_rel
-    ]
+    runall_rel = contract.get("runall_path")
+    test_files, unresolved = _card_test_files_for(changes, contract)
+    if unresolved:
+        return [unresolved]
     if not test_files:
         return blocking_reasons  # 无 test 文件，跳过
     if not runall_rel:
@@ -2822,12 +2846,13 @@ def _check_has_tests(
     except ProductRepoNotConfigured:
         return blocking_reasons
     
-    # 1. 卡分支改动文件(AIPOS-F78 前置零④: 三点 diff, 只看卡分支自己的提交)
-    changed_files = _card_branch_changed_files(product_repo_root, task_id)
-    if changed_files is None:
+    # 1. 卡分支改动集(AIPOS-F78 前置零④: 三点 diff, 只看卡分支自己的提交; AIPOS-F97: 带状态, 供唯一判据排除删除)
+    changes = _card_branch_changed_files(product_repo_root, task_id, with_status=True)
+    if changes is None:
         return blocking_reasons  # git 失败，跳过检查(已 warning)
-    if not changed_files:
+    if not changes:
         return blocking_reasons  # 无改动，跳过
+    changed_files = [path for _status, path in changes]
     contract, invalid = _test_contract_for(repo_root, product_repo_root)
     if invalid:
         return [invalid]
@@ -2839,16 +2864,16 @@ def _check_has_tests(
             ))
         return blocking_reasons
     
-    # 2. 检查是否有 test 文件
-    has_test = any(
-        "test" in f.lower() or "/tests/" in f or f.startswith("tests/")
-        for f in changed_files
-    )
+    # 2. 检查是否有本卡测试文件(AIPOS-F97: 唯一判据 workspace_config.card_test_files; 只删测试 = 无测试改动)
+    test_files, unresolved = _card_test_files_for(changes, contract)
+    if unresolved:
+        return [unresolved]
     
-    if not has_test:
+    if not test_files:
         registry = contract.get("runall_path")
         blocking_reasons.append(
-            f"NO_TESTS: 项目声明 code 类卡须含测试文件改动(来源 {contract.get('source')})。"
+            f"NO_TESTS: 项目声明 code 类卡须含测试文件改动(来源 {contract.get('source')}; "
+            f"测试文件式样 {contract.get('test_file_globs')} 来源 {contract.get('test_file_globs_source')}, 删除不计)。"
             f"当前改动文件: {', '.join(changed_files[:5])}{'...' if len(changed_files) > 5 else ''}。"
             f"出口: ①添加测试文件{f'并登记进项目声明的测试清单 {registry}' if registry else ''}; "
             f"②若本卡确无需测试(纯配置/纯文档), 请顾问 amend task_mode 为非 code。"
