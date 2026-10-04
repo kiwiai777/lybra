@@ -21,6 +21,21 @@ declare -a files=(
   "tests/ts/f93-go-report-fields.test.ts"
 )
 overall=0
+# AIPOS-F111 件②: 一行式 pytest 夹具登记。本文件在 .gitattributes 声明 merge=union(并行卡各自在汇总段前追加登记, 合并全保留);
+# union 会把两侧「相同的首尾行」只留一份——多行 if/else/fi 登记块的公共尾行(overall=1 / fi)被吃掉即语法坏(bash -n 兜底)。
+# 新登记一律用本函数: 一行注释 + 一行 `run_pytest <标签> <pytest 参数…>`, 每行含本卡夹具名、全文唯一, 并集合并安全。
+run_pytest() {
+  local label="$1"
+  shift
+  echo
+  echo "── $label ────────────────────────────────────────────────────"
+  if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$@" -v --tb=short; then
+    echo "✓ $label PASS"
+  else
+    echo "✗ $label FAIL"
+    overall=1
+  fi
+}
 for f in "${files[@]}"; do
   echo
   echo "── $f ──────────────────────────────────────────"
@@ -1064,6 +1079,9 @@ else
   echo "✗ tests/test_aipos_f105_single_project_entry.py FAIL"
   overall=1
 fi
+
+# AIPOS-F111: 并行审计——loop 拉起按卡号取开工提示(my-tasks --task-id)·同工位两张审计卡同时拉起各取各 kickoff·拒因原样转述·run-all.sh merge=union 并集合并靶场
+run_pytest "tests/test_aipos_f111_parallel_audit.py" "$REPO_ROOT/tests/test_aipos_f111_parallel_audit.py"
 
 echo
 echo "========================================================"
