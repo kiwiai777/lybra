@@ -76,6 +76,7 @@ _DQ_ESCAPE_CODES = {"x": 2, "u": 4, "U": 8}
 # characters that cannot start a plain scalar in block context (``-`` ``?`` ``:`` only when followed by a space)
 _PLAIN_FORBIDDEN_LEADS = frozenset("[]{},#&*!|>'\"%@`")
 _LINE_BREAK_RE = re.compile("(\r\n|[\r\n\x85\u2028\u2029])")
+_BREAK_CHARS = frozenset("\r\n\x85\u2028\u2029")
 # PyYAML Reader.NON_PRINTABLE: such characters make yaml.safe_load fail, so the fallback refuses them too
 _NON_PRINTABLE_RE = re.compile("[^\x09\x0A\x0D\x20-\x7E\x85\xA0-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]")
 _INF = float("inf")
@@ -209,6 +210,9 @@ class _BlockParser:
         parts = _LINE_BREAK_RE.split(frontmatter)
         self.lines = parts[0::2]
         self.breaks = [("\n" if b in ("\r\n", "\r", "\n", "\x85") else b) for b in parts[1::2]] + ["\n"]
+        # AIPOS-F100: real breaks only (the last line has none — the frontmatter text carries no final break); block
+        # scalars chomp on them, so the sentinel above must not leak into a scalar's value
+        self.real_breaks = self.breaks[:-1]
         # compact ``- key: v`` items re-enter a line at a deeper column: idx -> (indent, text)
         self.virtual: dict[int, tuple[int, str]] = {}
         # tabs seen INSIDE quoted scalars, per line (values accumulate; keys are re-scanned, so assigned).
@@ -262,6 +266,13 @@ class _BlockParser:
         if first is None:
             return {}
         indent, text = self._line(first)
+        if text.startswith("{"):
+            # AIPOS-F100: a one-line flow mapping document (yaml.safe_dump of an empty mapping writes ``{}``)
+            value = self._parse_flow_collection(text, first, "")
+            rest = self._next_content(first + 1)
+            if rest is not None:
+                raise FrontmatterUnsupportedError(rest + 1, "", "unexpected content after a flow mapping document", yaml_invalid=True)
+            return value
         if self._mapping_entry(text, first, "") is None:
             # valid YAML that is not a mapping (sequence / scalar document) or a construct this parser does not read
             raise FrontmatterUnsupportedError(first + 1, "", "frontmatter is not a block mapping", yaml_invalid=False)
@@ -292,7 +303,10 @@ class _BlockParser:
         if text in ("[]", "{}") or text.startswith(("[] #", "{} #")):
             self._expect_dedent(j + 1, parent_indent, key_path)
             return ([] if text.startswith("[") else {}), j + 1
-        raise FrontmatterUnsupportedError(j + 1, key_path, "scalar on its own line below the key (multi-line plain scalar)", yaml_invalid=False)
+        if text[0] not in _PLAIN_FORBIDDEN_LEADS and not text.startswith(("? ", ": ")) and text not in ("?", ":"):
+            # AIPOS-F100 件③: a plain scalar on its own line below the key (possibly continued on further lines)
+            return self._parse_plain(text, j, parent_indent, key_path)
+        raise FrontmatterUnsupportedError(j + 1, key_path, "scalar on its own line below the key is not supported", yaml_invalid=False)
 
     def _parse_mapping(self, idx: int, indent: int, parent_path: str, top: bool = False) -> tuple[dict[str, Any], int]:
         result: dict[Any, Any] = {}
@@ -443,9 +457,15 @@ class _BlockParser:
             if inner == "" and ((lead == "[" and body.endswith("]")) or (lead == "{" and body.endswith("}"))):
                 self._expect_dedent(idx + 1, owner_indent, key_path)
                 return ([] if lead == "[" else {}), idx + 1
-            raise FrontmatterUnsupportedError(idx + 1, key_path, f"non-empty flow collection {body[:60]!r} is not supported", yaml_invalid=False)
+            # AIPOS-F100 件③: one-line flow sequence / mapping of scalars (hand-written ``[P2, P2]`` / ``{input: 1}``)
+            value = self._parse_flow_collection(rest, idx, key_path)
+            self._expect_dedent(idx + 1, owner_indent, key_path)
+            return value, idx + 1
         if lead in "|>":
-            raise FrontmatterUnsupportedError(idx + 1, key_path, "block scalar ('|' / '>') is not supported", yaml_invalid=False)
+            # AIPOS-F100 件③: literal / folded block scalar (hand-written drafts / records)
+            value, nxt = self._parse_block_scalar(rest, idx, owner_indent, key_path)
+            self._expect_dedent(nxt, owner_indent, key_path)
+            return value, nxt
         if lead in "&!":
             raise FrontmatterUnsupportedError(idx + 1, key_path, "anchors and tags are not supported", yaml_invalid=False)
         if lead == "*":
@@ -455,16 +475,273 @@ class _BlockParser:
             raise FrontmatterUnsupportedError(
                 idx + 1, key_path, f"value cannot start with {lead!r} as a plain scalar", yaml_invalid=lead != "?"
             )
+        return self._parse_plain(rest, idx, owner_indent, key_path)
+
+    def _parse_plain(self, rest: str, idx: int, owner_indent: int, key_path: str) -> tuple[Any, int]:
+        """Plain scalar starting with ``rest`` on line ``idx``; AIPOS-F100 件③: it may continue on following lines indented
+        deeper than its owner collection (PyYAML Scanner.scan_plain / scan_plain_spaces in block context: a single
+        line break folds to a space, n empty lines become n line breaks, a comment or a shallower line ends it)."""
         hash_pos = rest.find(" #")
         if hash_pos < 0:
             hash_pos = rest.find("\t#")
         plain = (rest[:hash_pos] if hash_pos >= 0 else rest).rstrip(" \t")
         if ": " in plain or ":\t" in plain or plain.endswith(":"):
             raise FrontmatterUnsupportedError(idx + 1, key_path, f"mapping value inside a plain scalar {plain[:60]!r}", yaml_invalid=True)
-        nxt = self._next_content(idx + 1)
-        if nxt is not None and self._line(nxt)[0] > owner_indent:
-            raise FrontmatterUnsupportedError(nxt + 1, key_path, "multi-line plain scalar (continuation line) is not supported", yaml_invalid=False)
-        return _resolve_plain(plain, idx + 1, key_path), idx + 1
+        chunks = [plain]
+        li = idx + 1
+        ended = hash_pos >= 0
+        threshold = owner_indent + 1
+        while not ended:
+            folds: list[str] = []
+            first_break = self.breaks[li - 1]
+            if li - 1 >= len(self.real_breaks):
+                break  # end of the frontmatter
+            k = li
+            while k < len(self.lines) and self.lines[k].strip(" ") == "" and k < len(self.real_breaks):
+                folds.append(self.breaks[k])
+                k += 1
+            if k >= len(self.lines):
+                li = k
+                break
+            raw = self.lines[k]
+            text = raw.lstrip(" ")
+            if not text.strip(" ") or len(raw) - len(text) < threshold or text[0] in "#\t":
+                li = k  # end of frontmatter / shallower line / comment / tab: the scalar ends before line k
+                break
+            cut = text.find(" #")
+            if cut >= 0:
+                ended = True
+                text = text[:cut]
+            text = text.rstrip(" ")
+            if ": " in text or ":\t" in text or text.endswith(":"):
+                raise FrontmatterUnsupportedError(k + 1, key_path, f"mapping value inside a multi-line plain scalar {text[:60]!r}", yaml_invalid=True)
+            if first_break != "\n":
+                chunks.append(first_break)
+            elif not folds:
+                chunks.append(" ")
+            chunks.extend(folds)
+            chunks.append(text)
+            li = k + 1
+        return _resolve_plain("".join(chunks), idx + 1, key_path), li
+
+    # ---- AIPOS-F100 件③: block scalars and one-line flow sequences of scalars ----------------------------------
+    def _parse_block_scalar(self, header: str, idx: int, owner_indent: int, key_path: str) -> tuple[str, int]:
+        """``|`` / ``>`` block scalar whose header (from the indicator on) is ``header`` on line ``idx``. A port of PyYAML
+        Scanner.scan_block_scalar (indicators, auto-detected or explicit indentation, folding, clip/strip/keep chomping)
+        over the raw lines; returns (value, index of the first line after the scalar)."""
+        folded = header[0] == ">"
+        pos = 1
+        chomping: bool | None = None
+        increment: int | None = None
+        ch = header[pos : pos + 1]
+        if ch in ("+", "-"):
+            chomping = ch == "+"
+            pos += 1
+            ch = header[pos : pos + 1]
+            if ch and ch in "0123456789":
+                increment = int(ch)
+                pos += 1
+        elif ch and ch in "0123456789":
+            increment = int(ch)
+            pos += 1
+            ch = header[pos : pos + 1]
+            if ch in ("+", "-"):
+                chomping = ch == "+"
+                pos += 1
+        if increment == 0:
+            raise FrontmatterUnsupportedError(idx + 1, key_path, "block scalar indentation indicator 0 (expected 1-9)", yaml_invalid=True)
+        tail = header[pos:]
+        if tail and tail[0] != " ":
+            raise FrontmatterUnsupportedError(idx + 1, key_path, f"bad block scalar header {header[:40]!r}", yaml_invalid=True)
+        tail = tail.lstrip(" ")
+        if tail and not tail.startswith("#"):
+            raise FrontmatterUnsupportedError(idx + 1, key_path, f"text after a block scalar header {header[:40]!r}", yaml_invalid=True)
+
+        lines, real_breaks = self.lines, self.real_breaks
+        li, col = idx + 1, 0
+
+        def peek() -> str:
+            if li >= len(lines):
+                return "\0"
+            line = lines[li]
+            if col < len(line):
+                return line[col]
+            return real_breaks[li][0] if li < len(real_breaks) else "\0"
+
+        def line_break() -> str:
+            nonlocal li, col
+            raw = real_breaks[li] if (li < len(lines) and col >= len(lines[li]) and li < len(real_breaks)) else ""
+            if not raw:
+                return ""
+            li, col = li + 1, 0
+            return "\n" if raw in ("\r\n", "\r", "\n", "\x85") else raw
+
+        def scan_breaks(indent: int) -> list[str]:
+            nonlocal col
+            chunks: list[str] = []
+            while col < indent and peek() == " ":
+                col += 1
+            while peek() in _BREAK_CHARS:
+                chunks.append(line_break())
+                while col < indent and peek() == " ":
+                    col += 1
+            return chunks
+
+        min_indent = max(owner_indent + 1, 1)
+        if increment is None:
+            breaks: list[str] = []
+            max_indent = 0
+            while True:
+                ch = peek()
+                if ch == " ":
+                    col += 1
+                    max_indent = max(max_indent, col)
+                elif ch in _BREAK_CHARS:
+                    breaks.append(line_break())
+                else:
+                    break
+            indent = max(min_indent, max_indent)
+        else:
+            indent = min_indent + increment - 1
+            breaks = scan_breaks(indent)
+        chunks: list[str] = []
+        last_break = ""
+        while col == indent and peek() != "\0":
+            chunks.extend(breaks)
+            leading_non_space = peek() not in " \t"
+            text = lines[li][col:]
+            self._count_quoted_tabs(li, text)
+            chunks.append(text)
+            col = len(lines[li])
+            last_break = line_break()
+            breaks = scan_breaks(indent)
+            if col == indent and peek() != "\0":
+                if folded and last_break == "\n" and leading_non_space and peek() not in " \t":
+                    if not breaks:
+                        chunks.append(" ")
+                else:
+                    chunks.append(last_break)
+            else:
+                break
+        if chomping is not False:
+            chunks.append(last_break)
+        if chomping is True:
+            chunks.extend(breaks)
+        # end of the frontmatter reached inside the scalar → nothing follows; otherwise resume at line li (only
+        # indentation spaces of it were consumed)
+        return "".join(chunks), (len(lines) if peek() == "\0" else li)
+
+    def _parse_flow_collection(self, text: str, idx: int, key_path: str) -> Any:
+        """AIPOS-F100 件③: a one-line flow sequence ``[a, 'b', "c"]`` or flow mapping ``{k: v, 'k2': 2}`` of scalars
+        (hand-written ``[P2, P2]`` / ``reported_tokens: {input: 1}``), with yaml.safe_load's result (PyYAML
+        flow-context plain-scalar rules). Nested flow collections, pairs inside a sequence, complex keys (``?``),
+        anchors / tags, and a collection that continues on the next line are valid YAML this parser does not read →
+        whole refusal; YAML errors are classified yaml_invalid like the block parser does."""
+        is_map = text[0] == "{"
+        closer = "}" if is_map else "]"
+        result: Any = {} if is_map else []
+        pos = 1
+        n = len(text)
+        need_item = True  # after the opener or a ','
+
+        def unsupported(reason: str) -> FrontmatterUnsupportedError:
+            return FrontmatterUnsupportedError(idx + 1, key_path, reason, yaml_invalid=False)
+
+        def invalid(reason: str) -> FrontmatterUnsupportedError:
+            return FrontmatterUnsupportedError(idx + 1, key_path, reason, yaml_invalid=True)
+
+        def skip_spaces(p: int) -> int:
+            while p < n and text[p] == " ":
+                p += 1
+            if p >= n or text[p] == "#":
+                raise unsupported(f"flow collection continued on the next line {text[:60]!r} is not supported")
+            return p
+
+        def is_value_indicator(p: int) -> bool:
+            return text[p] == ":" and text[p + 1 : p + 2] in ("", " ", "\t", ",", "[", "]", "{", "}")
+
+        def scalar(p: int, path: str) -> tuple[Any, int, bool]:
+            """(value, position after it, quoted) for the flow scalar starting at p."""
+            ch = text[p]
+            nxt = text[p + 1 : p + 2]
+            if ch in "[{":
+                raise unsupported(f"nested flow collection in {text[:60]!r} is not supported")
+            if ch in "&!":
+                raise unsupported("anchors and tags are not supported")
+            if ch == "*":
+                raise invalid("alias without an anchor ('*' cannot start a plain scalar)")
+            if ch in "?:":
+                raise unsupported(f"complex key / pair in flow collection {text[:60]!r} is not supported")
+            if ch == "-" and nxt in ("", " ", "\t"):
+                raise invalid(f"block sequence entry inside a flow collection {text[:60]!r}")
+            if ch in "'\"":
+                value, end = _scan_quoted_line(text, p)
+                if value is None:
+                    raise unsupported(f"quoted scalar in a flow collection must close on its line: {text[:60]!r}")
+                self._count_quoted_tabs(idx, text[p:end])
+                return value, end, True
+            if ch in "|>%@`\t,]}":
+                raise invalid(f"{ch!r} cannot start a plain scalar in a flow collection")
+            start = end = p
+            while True:
+                while end < n:
+                    c = text[end]
+                    if c in " \t" or c in ",?[]{}" or is_value_indicator(end):
+                        break
+                    end += 1
+                gap = end
+                while gap < n and text[gap] == " ":
+                    gap += 1
+                # spaces inside a plain scalar are kept when more scalar text follows on the line
+                if gap > end and gap < n and text[gap] not in "#\t,?[]{}" and not is_value_indicator(gap):
+                    end = gap
+                    continue
+                break
+            return _resolve_plain(text[start:end], idx + 1, path), end, False
+
+        while True:
+            pos = skip_spaces(pos)
+            ch = text[pos]
+            if ch == closer:
+                pos += 1
+                break
+            if not need_item:
+                if ch == ",":
+                    need_item = True
+                    pos += 1
+                    continue
+                if ch == ":" and not is_map:
+                    raise unsupported(f"mapping pair inside a flow sequence {text[:60]!r} is not supported")
+                raise invalid(f"expected ',' or {closer!r} in flow collection {text[:60]!r}")
+            if ch == ",":
+                raise invalid(f"empty entry in flow collection {text[:60]!r}")
+            if not is_map:
+                value, pos, _quoted = scalar(pos, f"{key_path}[{len(result)}]")
+                result.append(value)
+                need_item = False
+                continue
+            key, pos, quoted = scalar(pos, key_path)
+            pos = skip_spaces(pos)
+            # a ':' right after a quoted key is a value indicator (JSON-like key); after a plain key it needs a separator
+            if text[pos] == ":" and (quoted or is_value_indicator(pos)):
+                pos = skip_spaces(pos + 1)
+                if text[pos] in ("," , closer):
+                    value = None
+                else:
+                    value, pos, _quoted = scalar(pos, f"{key_path}.{key}")
+            elif text[pos] in (",", closer):
+                value = None  # ``{a}`` = {a: null}
+            else:
+                raise invalid(f"expected ':' after a flow mapping key in {text[:60]!r}")
+            try:
+                result[key] = value
+            except TypeError as exc:  # unhashable key cannot come from a scalar; kept fail-closed
+                raise unsupported(f"flow mapping key {key!r} is not hashable") from exc
+            need_item = False
+        tail = text[pos:].lstrip(" ")
+        if tail and not tail.startswith("#"):
+            raise invalid(f"unexpected text after a flow collection: {tail[:40]!r}")
+        return result
 
     def _expect_dedent(self, idx: int, owner_indent: int, key_path: str) -> None:
         nxt = self._next_content(idx)
@@ -638,13 +915,32 @@ def parse_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str, list[str
 
     frontmatter = "\n".join(lines[1:end_index])
     body = "\n".join(lines[end_index + 1 :]).lstrip("\n")
+    data, warnings = _parse_frontmatter_text(frontmatter)
+    return data, body, warnings
 
+
+def parse_yaml_mapping(text: str) -> tuple[dict[str, Any], list[str]]:
+    """AIPOS-F100: a standalone YAML mapping document (agent registry file / ```yaml profile block) through the SAME
+    implementation as a frontmatter block (_parse_frontmatter_text: yaml.safe_load when present, else the zero-dependency
+    parser; same result either way). Returns (mapping, warnings); any warning = not readable (callers fail closed).
+    The text is normalised exactly like a frontmatter block (splitlines + '\\n' join); a line that is only ``---``
+    (multi-document text) is refused instead of being cut."""
+    lines = text.splitlines()
+    if any(line.strip() == "---" for line in lines):
+        return {}, ["YAML document separator '---' is not supported in a mapping document"]
+    return _parse_frontmatter_text("\n".join(lines))
+
+
+def _parse_frontmatter_text(frontmatter: str) -> tuple[dict[str, Any], list[str]]:
+    """The frontmatter text (between the fences) → (mapping, warnings): the single implementation behind
+    parse_markdown_frontmatter and parse_yaml_mapping."""
+    warnings: list[str] = []
     if yaml is not None:
         try:
             data = yaml.safe_load(frontmatter) or {}
             if not isinstance(data, dict):
-                return {}, body, ["Frontmatter did not parse to a mapping"]
-            return data, body, warnings
+                return {}, ["Frontmatter did not parse to a mapping"]
+            return data, warnings
         except Exception as exc:
             warnings.append(f"PyYAML parse failed: {exc}")
 
@@ -660,9 +956,63 @@ def parse_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str, list[str
             f"Frontmatter unsupported by the zero-dependency parser (fail-closed, no fields returned): "
             f"file line {exc.line_no + 1}, key {exc.key_path or '<root>'}: {exc.reason}"
         )
-        return {}, body, warnings
+        return {}, warnings
     warnings.extend(fallback_warnings)
-    return data, body, warnings
+    return data, warnings
+
+
+class FrontmatterReadError(ValueError):
+    """AIPOS-F100 件②: 「必须读出」失败——文件读不了 / 无 frontmatter 块 / 产品唯一读取口 parse_markdown_frontmatter 给出
+    任何解析告警。带文件路径与(可定位时)文件行号; str() = 「读不出: <路径>: <原因>」(展示面原样显示, 门决策据此拒)。"""
+
+    def __init__(self, path: Any, reason: str, line_no: int | None = None) -> None:
+        self.path = str(path)
+        self.reason = reason
+        self.line_no = line_no
+        where = f"{self.path}:{line_no}" if line_no else self.path
+        super().__init__(f"读不出: {where}: {reason}")
+
+
+_WARNING_FILE_LINE_RE = re.compile(r"file line (\d+)")
+_PYYAML_LINE_RE = re.compile(r"line (\d+), column \d+")
+
+
+def _warning_file_line(warnings: list[str]) -> int | None:
+    """解析告警 → 文件行号(1 基, 含首行 ---): 兜底解析器告警自带「file line N」; PyYAML 告警的行号相对 frontmatter, +1。"""
+    for warning in warnings:
+        match = _WARNING_FILE_LINE_RE.search(warning)
+        if match:
+            return int(match.group(1))
+    for warning in warnings:
+        match = _PYYAML_LINE_RE.search(warning)
+        if match:
+            return int(match.group(1)) + 1
+    if any("without closing delimiter" in w for w in warnings):
+        return 1
+    return None
+
+
+def require_frontmatter(path: Any, text: str | None = None, *, allow_missing_block: bool = False) -> tuple[dict[str, Any], str]:
+    """AIPOS-F100 件②: frontmatter「必须读出」的唯一入口(parse_markdown_frontmatter 的薄封装, 不含第二解析)。
+
+    返回 (frontmatter, body)。以下一律抛 FrontmatterReadError(路径 + 行号 + 原因), 调用方禁再取 {}/缺省继续:
+      - 文件读不了(不存在 / 权限 / 非 UTF-8);
+      - 无 frontmatter 块(allow_missing_block=False 时; 「产物尚未填写」等无块即合法的读点显式传 True);
+      - parse_markdown_frontmatter 给出任何告警(含 PyYAML 失败后兜底丢键、零依赖解析器整份拒)。
+    ``text`` 已在手时传入(仍以 ``path`` 署名), 免二次读盘。"""
+    if text is None:
+        try:
+            text = open(path, encoding="utf-8").read()  # noqa: SIM115 — path may be str or Path
+        except (OSError, UnicodeDecodeError) as exc:
+            raise FrontmatterReadError(path, f"文件不可读: {exc}") from exc
+    data, body, warnings = parse_markdown_frontmatter(text)
+    if warnings:
+        raise FrontmatterReadError(path, "; ".join(warnings), _warning_file_line(warnings))
+    if not text.startswith("---") and not allow_missing_block:
+        raise FrontmatterReadError(path, "无 frontmatter 块(首行不是 ---)", 1)
+    return data, body
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

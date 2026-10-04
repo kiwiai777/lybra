@@ -188,6 +188,7 @@ def _resolve_kickoff_ref(repo_root: Path, ref: str) -> str:
     if (text.endswith(".md") or "/" in text) and candidate.is_file():
         from tools.aipos_cli.next_resolver import _read_frontmatter
 
+        # AIPOS-F100 件②: 读不出 = FrontmatterReadError 向上(调用方转 FRONTMATTER_UNREADABLE 拒因), 不按文件名猜卡号
         return str(_read_frontmatter(candidate).get("task_id") or candidate.stem).strip()
     return text
 
@@ -201,8 +202,19 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
     """
     from tools.aipos_cli.next_resolver import card_workstation_view, kickoff_refusal, select_next_card
 
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.next_resolver import KICKOFF_REFUSAL_CODES
+
     root = Path(repo_root).resolve()
-    requested_id = _resolve_kickoff_ref(root, requested) if requested else None
+    try:
+        requested_id = _resolve_kickoff_ref(root, requested) if requested else None
+    except FrontmatterReadError as exc:
+        # AIPOS-F100 件②: 冷启动指向的卡文件读不出 = 拒因原文(不选卡、不猜卡号)
+        output.update(select_next_card([]))
+        output["next_card_excluded"] = [{"task_id": str(requested), "code": "FRONTMATTER_UNREADABLE",
+                                         "reason": f"{KICKOFF_REFUSAL_CODES['FRONTMATTER_UNREADABLE']}: {exc}"}]
+        output["kickoff_requested"] = str(requested)
+        return output
     candidates: list[dict[str, Any]] = []
     for summary, task in zip(output["tasks"], actor_report["tasks"]):
         if summary.get("queue_state") != "claimed":
@@ -232,8 +244,13 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
         except AmbiguousTaskCard as exc:
             output["next_card_excluded"] = [{"task_id": requested_id, "code": "NOT_FOUND", "reason": str(exc)}]
         else:
-            refusal = kickoff_refusal(root, requested_id, actor, queue_state=queue_state,
-                                      card_frontmatter=_read_frontmatter(card_path) if card_path else {})
+            try:
+                card_fm = _read_frontmatter(card_path) if card_path else {}
+            except FrontmatterReadError as exc:
+                refusal = {"task_id": requested_id, "code": "FRONTMATTER_UNREADABLE",
+                           "reason": f"{KICKOFF_REFUSAL_CODES['FRONTMATTER_UNREADABLE']}: {exc}"}
+            else:
+                refusal = kickoff_refusal(root, requested_id, actor, queue_state=queue_state, card_frontmatter=card_fm)
             if refusal is None:  # 队列里在办且判据放行, 但不在本实例 my-tasks 名下 = 非本人
                 refusal = {"task_id": requested_id, "code": "NOT_MINE", "reason": f"卡的认领实例不是本实例, 不能开工: {requested_id} 不在 {actor} 的已认领卡中"}
             output["next_card_excluded"] = [refusal]
@@ -1183,6 +1200,7 @@ def _envelope_mint_via_gate(
 def build_parser() -> argparse.ArgumentParser:
     # AIPOS-F106 件②: 帮助文案里的门地址示例读 config.schema urls.gate_local(唯一读取口 schema_loader), 禁写端口字面
     from tools.schema_loader import get_config_default_gate_url
+    from tools.aipos_cli.verb_contract import declared_exit_codes  # AIPOS-F101 件③: help 中的退出码读声明
 
     _GATE_URL_DEFAULT = get_config_default_gate_url()
     parser = argparse.ArgumentParser(description="AI Project OS CLI")
@@ -1193,8 +1211,7 @@ def build_parser() -> argparse.ArgumentParser:
     # loop host is the AGENT-side process (never a Lybra daemon); role-agnostic client.
     # Distinct from `agents` below (recorded-profile rendering) — disclosed:
     # /agents = recorded snapshot, `agent watch` = client-side loop.
-    agent_parser = subparsers.add_parser(
-        "agent",
+    agent_parser = subparsers.add_parser("agent",
         help="Agent-side connector: fetch claimable tasks (gate pull) / bounded watch — "
         "two harness modes (候选⑤⑫合流): --workspace-root = filesystem pump (AIPOS-268, any bash agent); "
         "--gate-url = stateless gate pull (AIPOS-248)",
@@ -1215,19 +1232,22 @@ def build_parser() -> argparse.ArgumentParser:
     # (candidate ⑫, AIPOS-268) = the harness-agnostic filesystem pump (no gate/MCP/token,
     # any agent that can run bash); --gate-url (candidate ⑤, AIPOS-248) = the stateless
     # gate pull for claimable tasks. Both are foreground, bounded, client-side loops.
+    _watch_exit = declared_exit_codes("lybra_agent_watch")  # AIPOS-F101 件③: 本节 help 的退出码一律读声明
     _watch_parser = agent_subparsers.add_parser(
         "watch",
         help="Foreground BOUNDED client loop. Two modes (候选⑤⑫合流): "
         "--workspace-root = filesystem mtime pump (candidate ⑫, AIPOS-268+284+284C+284D; any bash agent, no gate); "
         "--gate-url = stateless gate pull for claimable tasks (candidate ⑤, AIPOS-248). "
-        "Exit codes: 0=change/expect satisfied, 2=timeout, 3=end-pattern but no product, 4=stall, 130=signal. "
-        "Stream mode (--stream): emits 'kind:end' event before timeout/signal exit.",
+        # AIPOS-F101 件③: 退出码从唯一声明 verbs.schema lybra_agent_watch.exit_codes 渲染, 禁写死
+        + "Exit codes (--workspace-root, verbs.schema lybra_agent_watch.exit_codes): "
+        + ", ".join(f"{code}={outcome}" for outcome, code in _watch_exit.items())
+        + ". Stream mode (--stream): emits 'kind:end' event before timeout/signal exit.",
     )
     _watch_mode = _watch_parser.add_mutually_exclusive_group(required=True)
     _watch_mode.add_argument(
         "--workspace-root",
         help="候选⑫ filesystem pump (AIPOS-268+284): poll 5_tasks/queue/** + 5_tasks/records/** mtime+path; "
-        "print a JSON change summary on the first change (exit 0); exit 2 silent on --timeout. No gate/token.",
+        "print a JSON change summary on the first change; silent on --timeout (exit codes: verbs.schema lybra_agent_watch.exit_codes). No gate/token.",
     )
     _watch_mode.add_argument("--gate-url", help=f"候选⑤ gate pull (AIPOS-248): Gate URL (e.g. {_GATE_URL_DEFAULT})")
     _watch_gate_src = _watch_parser.add_mutually_exclusive_group(required=False)
@@ -1239,12 +1259,12 @@ def build_parser() -> argparse.ArgumentParser:
     # argparse default is None and each mode resolves its own default in the dispatch.
     _watch_parser.add_argument("--interval", type=float, default=None, help="poll interval seconds. Filesystem pump default 15; gate pull default 60 (hard floor 15).")
     _watch_parser.add_argument("--max-wait", type=float, default=1800.0, help="[gate mode] bounded wait seconds before a clean exit (default 1800)")
-    _watch_parser.add_argument("--timeout", type=float, default=None, help="[filesystem pump] no-change timeout seconds -> silent exit 2 (default: 1800 for default mode, infinite for --stream mode; 0 = explicit infinite)")
+    _watch_parser.add_argument("--timeout", type=float, default=None, help=f"[filesystem pump] no-change timeout seconds -> silent exit {_watch_exit['timeout']} (default: 1800 for default mode, infinite for --stream mode; 0 = explicit infinite)")
     # AIPOS-284 v2: three "death silence" semantics
-    _watch_parser.add_argument("--expect", action="append", help="[filesystem pump v2] glob pattern for expected artifact; check immediately on startup and every poll (布防即检). Can be repeated. Exit 0 when any match.")
+    _watch_parser.add_argument("--expect", action="append", help=f"[filesystem pump v2] glob pattern for expected artifact; check immediately on startup and every poll (布防即检). Can be repeated. Exit {_watch_exit['change']} when any match.")
     _watch_parser.add_argument("--run-log", help="[filesystem pump v2] path to run log (for end-pattern and stall detection)")
-    _watch_parser.add_argument("--end-pattern", help="[filesystem pump v2] regex: if found in run-log but --expect NOT satisfied, exit 3 after one grace poll (结束无产物)")
-    _watch_parser.add_argument("--stall-secs", type=float, default=None, help="[filesystem pump v2] silence threshold seconds (default 600). If run-log (or observation surface) mtime unchanged for ≥N seconds, exit 4 (静默停滞)")
+    _watch_parser.add_argument("--end-pattern", help=f"[filesystem pump v2] regex: if found in run-log but --expect NOT satisfied, exit {_watch_exit['end_no_product']} after one grace poll (结束无产物)")
+    _watch_parser.add_argument("--stall-secs", type=float, default=None, help=f"[filesystem pump v2] silence threshold seconds (default 600). If run-log (or observation surface) mtime unchanged for ≥N seconds, exit {_watch_exit['stall']} (静默停滞)")
     # AIPOS-284C: --stream mode (persistent observer, event lines, no exit on change/stall/run_end)
     _watch_parser.add_argument("--stream", action="store_true", help="[filesystem pump v3/AIPOS-284C] persistent mode: emit JSON event lines (kind: expect|change|stall|run_end|end) and continue. Only timeout/signal exits (emits 'end' event). Event deduplication: expect files reported once (new only).")
     # AIPOS-284D: --events filter (F-284C-1 抑噪)

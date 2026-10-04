@@ -1080,6 +1080,8 @@ else
   overall=1
 fi
 
+# AIPOS-F100: 零依赖兑现——frontmatter 读不出即拒(每个改动调用方一个坏卡/坏记录靶场)·屏蔽 PyYAML 全链路(草稿→发布→认领→交回 ingest→派审→裁决 ingest→finalization ingest→close)每步回读且与有 PyYAML 时逐字段相同(形状表双向夹具在 test_frontmatter_zerodep.py, 已登记于 F98 块)
+run_pytest "tests/test_aipos_f100_read_or_refuse.py" "$REPO_ROOT/tests/test_aipos_f100_read_or_refuse.py" "$REPO_ROOT/tests/test_aipos_f100_zerodep_full_chain.py"
 # AIPOS-F111: 并行审计——loop 拉起按卡号取开工提示(my-tasks --task-id)·同工位两张审计卡同时拉起各取各 kickoff·拒因原样转述·run-all.sh merge=union 并集合并靶场
 run_pytest "tests/test_aipos_f111_parallel_audit.py" "$REPO_ROOT/tests/test_aipos_f111_parallel_audit.py"
 # AIPOS-F104: 状态与枚举投影单源(族 C-b: M6/M7/M16/N6)——搬卡转移表读 transitions.schema queue_mutations(validate_transition 删)、
@@ -1098,6 +1100,12 @@ fi
 
 # AIPOS-F106: 门地址/端口/连接声明单源(族 B-a: M1/M3/M15/M2)——剥 /mcp 零·角色偏好序单源·端口字面零·configuration_sources↔identity_resolution 无矛盾·env 声明=使用·LYBRA_WORKSPACE_ROOT 单名·.lybra/role 唯一读取
 run_pytest "tests/test_aipos_f106_gate_address_single_source.py" "$REPO_ROOT/tests/test_aipos_f106_gate_address_single_source.py"
+# AIPOS-F101: 推导核与动词声明单源(族 C-a)——gate_guidance=derive_next_step·死函数 git grep 零·门工具 scope/可见性全声明且执法跟随声明·退出码只在声明·示例无 lybra 身份; 含本卡改 patch 点的 f30 夹具
+run_pytest "tests/test_aipos_f101_derivation_verb_single_source.py" "$REPO_ROOT/tests/test_aipos_f101_derivation_verb_single_source.py" "$REPO_ROOT/tests/test_aipos_f30_envelope_error_info_init.py"
+# AIPOS-F101: test_scope_reachability 中按真实凭据走门执法的节点(scope 枚举改读 verbs.schema 声明; 同文件另 3 节点 main 上即红, 见 F101 RETURN 缺口 2, 不登记)
+run_pytest "F101 tools/mcp_server/tests/test_scope_reachability.py(节点)" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_set_has_no_role_overlap" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_owner_draft_publish_reachable" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_owner_decision_record_reachable" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_owner_decision_record_denied_for_executor" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_executor_and_copilot_draft_publish_denied" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_copilot_role_scopes_empty" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_set_maps_to_dry_run_tools" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_every_exempt_scope_reachable_via_path_b" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_scope_denied_without_capability"
+# AIPOS-F101: test_aipos330_verb_contract 的 TestS6Extensibility(未声明门工具 fail-closed、声明即入注册表)与 TestGateGuidanceTool(委托推导核)
+run_pytest "F101 tools/mcp_server/tests/test_aipos330_verb_contract.py(TestS6Extensibility+TestGateGuidanceTool)" "$REPO_ROOT/tools/mcp_server/tests/test_aipos330_verb_contract.py::TestS6Extensibility" "$REPO_ROOT/tools/mcp_server/tests/test_aipos330_verb_contract.py::TestGateGuidanceTool"
 
 echo
 echo "========================================================"

@@ -152,12 +152,14 @@ class QueueStateProjectionTest(unittest.TestCase):
             "tools/aipos_cli/orchestration_summary_preview.py": "from tools.aipos_cli.task_loader import QUEUE_STATES",
             "tools/aipos_cli/brief.py": "from tools.aipos_cli.task_loader import QUEUE_STATES",
             "web/board/app.py": "for state in QUEUE_STATES:",
-            "tools/aipos_cli/flow_description.py": "find_task_card(workspace_root, task_id)[1]",
+            # flow_description 的队列副本随 AIPOS-F101 件① 删除第二推导核(_infer_task_status 等)一并消失, 不再是副本站点
             "tools/aipos_cli/project_structure.py": "from tools.aipos_cli.task_loader import QUEUE_SKELETON_STATES, queue_state_ref",
             "tools/aipos_cli/validator.py": "if queue_state not in QUEUE_STATES:",
         }
         for rel, needle in expectations.items():
             self.assertIn(needle, (REPO_ROOT / rel).read_text(encoding="utf-8"), rel)
+        # AIPOS-F101: flow_description 不再查队列(无 find_task_card 调用, 也无手写状态集合)
+        self.assertNotIn("find_task_card", (REPO_ROOT / "tools/aipos_cli/flow_description.py").read_text(encoding="utf-8"))
 
 
 class TransitionTableSingleSourceTest(unittest.TestCase):

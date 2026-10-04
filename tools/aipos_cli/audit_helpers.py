@@ -396,9 +396,9 @@ def is_dispatch_chain_valid(
             try:
                 dispatch_file = repo_root / audit_ref
                 if dispatch_file.exists():
-                    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-                    disp_text = dispatch_file.read_text(encoding="utf-8")
-                    disp_meta, _, _ = parse_markdown_frontmatter(disp_text)
+                    from tools.aipos_cli.frontmatter import require_frontmatter
+                    # AIPOS-F100 件②: 派审记录「必须读出」; 读不出抛错 → 下方 fail-closed(原: 告警被忽略 → 空 → 「未派审, 不阻塞」)
+                    disp_meta, _ = require_frontmatter(dispatch_file)
                     audit_ref = str(disp_meta.get("audit_task_id") or "").strip()
             except Exception:
                 # Fail-closed: 不能确定审计卡 ID → 保守拒绝

@@ -224,7 +224,7 @@ def test_f78b_item1_single_lookup_no_filename_concatenation_left():
     """Δ=-1: `<id>.md` 文件名拼接这条隐式约定删除——查找口全部经 task_loader.find_task_card。"""
     lookup_sites = [
         "tools/aipos_cli/next_resolver.py", "tools/aipos_cli/artifact_ingest.py", "tools/aipos_cli/loop_driver.py",
-        "tools/aipos_cli/queue_mutation.py", "tools/aipos_cli/flow_description.py", "tools/aipos_cli/state_lint.py",
+        "tools/aipos_cli/queue_mutation.py", "tools/aipos_cli/state_lint.py",  # flow_description 卡查找随 AIPOS-F101 死推导核删除
         "tools/aipos_cli/deployment_authorization.py",  # advisor_pump / turn_advancer.state_reader 随 AIPOS-F91 退役删除
         "tools/aipos_cli/finalize.py", "tools/aipos_cli/card_render.py", "tools/aipos_cli/board_adapter.py",
     ]
@@ -644,8 +644,7 @@ def test_f78b_item4b_owner_decision_record_lands_in_workspace_root_not_token_def
     (other / "5_tasks" / "records").mkdir(parents=True)
     monkeypatch.setattr(gate, "_repo_root", lambda: other)
     monkeypatch.setattr(gate, "_capability_token", lambda: {"role": "owner", "token_ref": "t", "expires_at": "2999-01-01T00:00:00Z"})
-    monkeypatch.setattr(gate, "_owner_decision_scope_allowed", lambda: True)
-    monkeypatch.setattr(gate, "_owner_confirm_scope_allowed", lambda: True)
+    monkeypatch.setattr(gate, "_verb_scope_allowed", lambda *a, **k: True)  # AIPOS-F101: scope 门统一读声明的单一入口
     payload = {
         "workspace_root": str(gov), "actor": "owner",
         "decision_id": "DEC-F78B-1", "decision_type": "autonomy_policy_grant", "decision": "approved",
