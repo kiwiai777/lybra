@@ -1,6 +1,6 @@
 # agents/pi/ —— 已迁移(指路 README,不留双源)
 
-> AIPOS-C4B 大项C:本目录下的 skills/charters 已迁入单一源新布局(旧 lybra-loop 扩展随 AIPOS-F91 退役删除)。
+> AIPOS-C4B 大项C:本目录下的 skills/charters 已迁入单一源新布局(旧门循环扩展随 AIPOS-F91 退役删除, 推进改由顾问 `lybra loop`)。
 > **此目录不再承载任何母本内容**,仅保留本指路文件。
 
 ## 旧路径 → 新路径
@@ -9,7 +9,7 @@
 |---|---|
 | `agents/pi/skills/<name>/` | [`agents/skills/<name>/`](../skills/) |
 | `agents/pi/charters/<role>/AGENTS.md` | [`agents/roles/<role>/AGENTS.md`](../roles/) |
-| `agents/pi/lybra-loop/` | (已退役删除, AIPOS-F91; pi 工位扩展母本见 [`agents/harness/pi/`](../harness/pi/)) |
+| 旧门循环扩展目录 | (已退役删除, AIPOS-F91; pi 工位扩展母本见 [`agents/harness/pi/`](../harness/pi/), 工位只敲 `/go`) |
 
 ## 为什么迁移
 

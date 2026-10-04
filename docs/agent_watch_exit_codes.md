@@ -7,6 +7,12 @@
 three "death silence" detection semantics, giving advisors and harnesses precise signals
 about task execution outcomes.
 
+**Where it sits in the flow:** card advancement does not call this by hand. The advisor runs
+`lybra loop --task-id <card>`, which waits for each agent-side artifact through a bounded
+`agent watch --expect` on the declared report location and maps the outcome to its own exit codes
+(`lybra loop` exit 3 = waiting for an artifact timed out / stalled). Use `agent watch` directly when a
+harness or an operator wants a bounded wait or an event stream of its own.
+
 **AIPOS-284C --stream mode**: A persistent observer that emits JSON event lines (line-buffered,
 immediate flush) and continues running. Only `--timeout` or SIGTERM/SIGINT terminate the process.
 Event deduplication: each expect file is reported at most once (new appearance only).
@@ -16,13 +22,13 @@ Event deduplication: each expect file is reported at most once (new appearance o
 ### Default Mode (one-shot)
 Detect a single event and exit with a status code:
 ```bash
-lybra agent watch --workspace-root ~/projects/lybra --timeout 600
+lybra agent watch --workspace-root <governance-root> --timeout 600
 ```
 
 ### Stream Mode (persistent, AIPOS-284C)
 Emit JSON event lines and continue running:
 ```bash
-lybra agent watch --workspace-root ~/projects/lybra --stream --timeout 1800
+lybra agent watch --workspace-root <governance-root> --stream --timeout 1800
 ```
 
 ## Exit Codes
@@ -70,7 +76,7 @@ lybra agent watch --workspace-root ~/projects/lybra --stream --timeout 1800
 
 **Example:**
 ```bash
-lybra agent watch --workspace-root ~/projects/lybra \
+lybra agent watch --workspace-root <governance-root> \
   --expect "5_tasks/records/RETURN-*.md" \
   --expect "5_tasks/queue/completed/*.md" \
   --timeout 600
@@ -78,7 +84,7 @@ lybra agent watch --workspace-root ~/projects/lybra \
 
 **Stream mode example:**
 ```bash
-lybra agent watch --workspace-root ~/projects/lybra \
+lybra agent watch --workspace-root <governance-root> \
   --stream \
   --expect "task_cards/*/RETURN.md" \
   --timeout 1800
@@ -91,7 +97,7 @@ lybra agent watch --workspace-root ~/projects/lybra \
 
 **Example:**
 ```bash
-lybra agent watch --workspace-root ~/projects/lybra \
+lybra agent watch --workspace-root <governance-root> \
   --expect "5_tasks/records/RETURN.md" \
   --run-log /tmp/agent.log \
   --end-pattern "Session.*finished" \
@@ -107,7 +113,7 @@ lybra agent watch --workspace-root ~/projects/lybra \
 
 **Example:**
 ```bash
-lybra agent watch --workspace-root ~/projects/lybra \
+lybra agent watch --workspace-root <governance-root> \
   --run-log /tmp/agent.log \
   --stall-secs 300 \
   --timeout 1800
@@ -128,7 +134,7 @@ lybra agent watch --workspace-root ~/projects/lybra \
 
 **Example (owner-press monitoring harness):**
 ```bash
-lybra agent watch --workspace-root ~/projects/lybra \
+lybra agent watch --workspace-root <governance-root> \
   --stream \
   --expect "5_tasks/queue/pending/*.md" \
   --expect "5_tasks/records/RETURN-*.md" \
@@ -157,14 +163,14 @@ lybra agent watch --workspace-root ~/projects/lybra \
 ## Advisor Next-Step Decision Table
 
 ### Default Mode
-After `lybra agent watch` exits, the advisor should:
+After `lybra agent watch` exits (when you call it directly; inside `lybra loop` the loop does this):
 
 | Exit Code | Advisor Action |
 |-----------|----------------|
-| 0 | Parse JSON output. If `expect_satisfied`, proceed to next step (e.g., read RETURN.md, update board). If `changed`, inspect the change kind and decide. |
-| 2 | Timeout is a **normal bounded exit**. Log "no activity in N seconds" and either retry or escalate per governance policy. |
-| 3 | **Execution claimed completion but produced nothing.** Read `run_log_tail` from JSON. This is a task failure: the executor said "done" but violated the contract. File a BLOCK report or audit card. |
-| 4 | **Execution is stalled/frozen.** Read `silence_seconds` and `run_log_tail`. The executor is stuck (no output, no heartbeat). Kill the executor process (if known) and file a BLOCK report. |
+| 0 | Parse JSON output. If `expect_satisfied`, the artifact is on disk: re-run `lybra loop --task-id <card>` (it ingests the artifact and advances). If `changed`, inspect the change kind and decide. |
+| 2 | Timeout is a **normal bounded exit**. Log "no activity in N seconds" and either re-run the same wait or escalate per governance policy. |
+| 3 | **Execution claimed completion but produced nothing.** Read `run_log_tail` from JSON. The workstation said "done" without the declared artifact: report it to the Owner (the workstation is reopened with `/go`); never write the artifact on the executor's behalf. |
+| 4 | **Execution is stalled/frozen.** Read `silence_seconds` and `run_log_tail`. Report the stall to the Owner with this evidence; the Owner decides whether to restart the workstation (`/go`). |
 | 5 | **Usage error (布防拒绝).** The `--expect` pattern is invalid (absolute path or `..` escape). Read stderr for the exact error. Fix the pattern and re-invoke. This is a **caller bug**, not an execution failure. |
 | 130 | Signal exit (external interrupt). Clean shutdown, no action needed unless this was unexpected. |
 
@@ -175,8 +181,8 @@ Parse each JSON event line from stdout:
 |------------|----------------|
 | `expect` | Artifact detected. Parse `paths` array and proceed with next step (e.g., read RETURN.md, invoke auditor). |
 | `change` | Workspace activity detected. Parse `changed` array for new/modified/moved/deleted files. Decide whether to act or continue monitoring. |
-| `stall` | **Execution stalled.** Read `silence_seconds` and `run_log_tail`. The executor is stuck. Kill the executor process (if known) and file a BLOCK report. |
-| `run_end` | **Execution finished but produced nothing.** Read `run_log_tail`. This is a task failure: the executor said "done" but violated the contract. File a BLOCK report or audit card. |
+| `stall` | **Execution stalled.** Read `silence_seconds` and `run_log_tail`. Report the stall to the Owner with this evidence. |
+| `run_end` | **Execution finished but produced nothing.** Read `run_log_tail`. Report it to the Owner; never write the artifact on the executor's behalf. |
 
 Process exits (exit 2 timeout or exit 130 signal): terminate the monitoring loop.
 
@@ -192,5 +198,4 @@ Process exits (exit 2 timeout or exit 130 signal): terminate the monitoring loop
 - AIPOS-284: v2 three "death silence" semantics (exit 3/4)
 - **AIPOS-284C**: --stream persistent mode (one process, multiple events, deduplication)
 - **F-284B-1** (AIPOS-284BF1): 未来前缀合法化 + 布防拒绝独立退出码 5 (dogfood 2026-07-31)
-- 候选⑤⑫合流: `--workspace-root` (⑫) vs `--gate-url` (⑤) are mutually exclusive modes
 - Roadmap 候选⑫: Promoted to "发布前必须" (Owner 2026-07-30: "不然用不起来")

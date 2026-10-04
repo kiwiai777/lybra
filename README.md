@@ -18,135 +18,109 @@
 
 ## What is Lybra
 
-Lybra is **an accountable single-agent autonomy loop, plus an accountability gate that any MCP
-agent can reach via Form B.** It optimizes for **accountability**, not raw autonomy.
+Lybra keeps **one project truth in files** for long-running, multi-role AI projects — cards, records,
+verdicts and decisions live in a governance root, not in any agent's memory. Agents come and go; the
+truth and the gate stay. It optimizes for **accountability**, not raw autonomy.
 
 Three principles are welded in:
 
-- **Gate, not engine.** Clients (TUI / agents) connect to an Owner-started gate; the gate does not
-  run agents or stream model turns on its own.
+- **Gate, not engine.** Lybra does not run or wake agents. The Owner starts the gate; agents run in
+  their own harness (Claude Code, pi, Codex …) and only produce artifacts.
 - **Files are truth.** State lives in durable files, not in compressed conversation memory — it
   outlives the model.
-- **Drafter ≠ confirmer ≠ executor.** Planning is read-only; the Owner confirms through the gate; an
-  executor does the work. No party collapses into another.
+- **Drafter ≠ executor ≠ auditor.** The advisor drafts and drives; an executor does the work; an
+  independent auditor judges it. **Executors and auditors never touch the gate** — every gate action
+  (claim, return, dispatch, verdict, finalize, close) is done by the product.
 
 > The model isn't the bottleneck. The harness is.
 
-## Quick start
-
-Lybra's **gate core (init, task/record I/O, and claim/return/audit with canonical opaque
-`agent_instance` IDs) ships via npm and is zero Python runtime dependency and correct on bare
-python.** Legacy-alias resolution and custom-profile registries require PyYAML; without it the gate
-**fails closed (blocks) rather than mis-attributing identity or weakening auditor independence** —
-it never silently degrades an accountability decision. The TUI client adds
-[Textual](https://pypi.org/project/textual/) on top. **`lybra` itself is distributed via npm and is
-NOT on PyPI** — install the TUI's `textual` separately.
-
-**npm end users:**
+## Install
 
 ```bash
-npm install -g lybra                 # gate core (Node 18+ and Python 3 on PATH)
-pip install "textual>=4.0"          # enable the TUI (textual is on PyPI; lybra is npm-only)
-lybra init ./ws --project-id my_project
-lybra serve --workspace-root ./ws    # Owner starts the gate (rotates roles, incl. read-only copilot)
-lybra tui --gate-url http://127.0.0.1:7118 --workspace-root ./ws --project my_project \
-          --llm-base-url <openai-compatible-url> --llm-model <model> --llm-key-env LYBRA_PLANCHAT_LLM_KEY
+npm install -g lybra        # Node 18+ and Python 3 on PATH; the gate core has no Python dependencies
+lybra --help
 ```
 
-The LLM key is read from the `LYBRA_PLANCHAT_LLM_KEY` environment variable (never passed on the
-command line). Without an LLM config, `lybra tui` opens in read-only observe mode.
+## How a project runs
 
-**Hook up an agent (executor):** give this SKILL to your agent —
-`ln -s "$(pwd)/skills/lybra-executor" ~/.claude/skills/lybra-executor` (Claude Code) or
-`ln -s "$(pwd)/skills/lybra-executor" ~/.codex/skills/lybra-executor` (Codex). The agent then says
-**`lybra on`** (plain text, no leading slash — Claude Code's slash-command resolver only
-recognizes registered command names like `/lybra-executor`, not an arbitrary `/lybra`, so a typed
-`/lybra on` fails; the bare phrase triggers the skill's natural-language match instead) to start
-pulling for claimable tasks (`lybra agent watch` — a stateless, agent-side, bounded foreground
-loop; Lybra never pushes and never tracks agent presence) and **`lybra off`** to stop. See
-`skills/lybra-executor/SKILL.md` and `docs/mcp-agent-setup.md`.
+| Who | Does |
+|---|---|
+| **Owner** | Starts the gate (`lybra serve`), issues enrollment codes, signs autonomy envelopes (`lybra envelope mint`), and in each workstation presses **`/go`** — nothing else per card. |
+| **Advisor** (a Claude Code session with the advisor skills) | Onboards the project, drafts and publishes cards, and advances each card with **`lybra loop`**. |
+| **Executor / auditor workstations** | Opened with `/go`; commit on the card branch and write the report to the project's declared location. No gate verbs, no credentials pasted. |
 
-**Harness-agnostic change pump (AIPOS-268):** `agent watch` also runs WITHOUT a gate —
-`lybra agent watch --workspace-root <ws>` polls `5_tasks/queue/**` and `5_tasks/records/**`
-by mtime+path, prints a one-line JSON change summary (`{"changed":[{path,kind}]}`) on the
-first change (exit 0), and exits 2 silently on `--timeout`. Any agent that can run bash can
-use it (no MCP/token/gate); the gate records nothing. This is candidate ⑫ of the `agent watch`
-confluence — candidate ⑤ (`--gate-url`, the stateless pull for claimable tasks, AIPOS-248) is
-unchanged; the two modes are mutually exclusive.
-
-**Three SKILLs (the roles).** Lybra ships three agent-facing skills — symlink whichever you need
-into `~/.claude/skills/` (or `~/.codex/skills/`):
-- **`skills/owner-console/`** — the Owner's own advisor + confirm console (owner token): plan,
-  narrate queue/audit state in plain language, draft cards, and hand-approve confirm/publish via the
-  harness prompt. Self-sufficient — this one skill carries the full advisor role.
-- **`skills/lybra-planner/`** — a third-party BYO planning advisor (planner token): read-only truth
-  + draft-submit; it can never claim/return/confirm/publish (SCOPE_DENIED) — the Owner publishes.
-- **`skills/lybra-executor/`** — an executor that pulls for claimable work (`lybra on|off`).
-
-The confirm gate lives in the Owner's advisor conversation and runs through the harness's
-tool-approval prompt (the model cannot press it; `owner_confirm` is never on the auto-approve
-allowlist). This confirm surface is **verified on Claude Code only** — codex approval modes are
-unverified, so use codex for planner/executor roles, not confirm.
-
-**macOS TLS note:** bare macOS venv pythons ship empty default CA paths, so copilot HTTPS fails
-`CERTIFICATE_VERIFY_FAILED` (an environment property of macOS pythons, not a Lybra defect). Install
-`certifi` into the TUI's python (or set `SSL_CERT_FILE`) — Lybra picks certifi up automatically
-(an explicit `SSL_CERT_FILE`/`SSL_CERT_DIR` always wins) and **never disables verification**.
-
-The TUI chat box accepts non-Latin / CJK input (Chinese, Japanese, Korean, etc.) — **both typing via
-an IME and pasting work.** (Earlier builds could only paste CJK: Textual's kitty-keyboard-protocol
-`REPORT_ASSOCIATED_TEXT` parsing dropped IME-typed CJK to an empty character. Lybra now enables the
-kitty protocol with **DISAMBIGUATE only**, so direct CJK typing works **and** Shift+Enter is
-preserved.) The TUI runs with **mouse capture off** — so your terminal keeps native mouse
-(selection, scrollback, and Cmd/Ctrl+C copy of any text), exactly like Claude Code; the `/` menu is
-keyboard-navigable (↑/↓ + Enter). *Verified on Linux + macOS (incl. iTerm2 → SSH → WSL); Windows is
-out of scope.*
-
-**Source / dev (from a clone):**
+**1. Onboard a project** — the product prints every step for your project, in order, with failure exits:
 
 ```bash
-git clone https://github.com/kiwiai777/lybra && cd lybra
-pip install ".[tui]"                 # installs the textual extra
-python3 -m unittest discover -s tools -p "test_*.py"
+lybra onboarding guide my_project            # steps 1–9: who runs each command, how to verify it
+lybra project new my_project                 # step 1: governance root + project.json under the home root
+lybra project set-repos my_project --repo app=/abs/path/to/app   # step 2: declare product repos
 ```
 
-## Capabilities (v1.0)
+The guide's remaining steps cover the Owner's two one-time actions (an advisor enrollment code and
+one command that signs the envelopes), advisor and workstation enrollment (`lybra roles enroll`), and
+distribution (`lybra sync`). `lybra onboarding check my_project --step <n>` diagnoses any step.
 
-- **Chat-to-task first screen.** Launch the TUI, describe a task in one sentence, and the read-only
-  Planning Copilot drafts a **conformant** task card — its publishable structure is guaranteed by
-  code, not by LLM luck.
-- **Read-only Planning Copilot.** The copilot holds no write/confirm/publish scope (it connects with
-  a `scopes: []` role); every mutation it could attempt is structurally denied at the gate.
-- **Owner-gated publish.** The only path to truth is `draft → Owner proceed → gate confirm`; the
-  publish record attributes the confirming Owner (`confirmer_role=owner`).
-- **Supervised closed loop.** Every truth mutation passes an Owner confirm; an executor can never
-  self-confirm or audit its own work.
-- **Form A / Form B.** Form A is the supervised single-harness loop (Claude); Form B lets any MCP
-  agent reach the same accountability gate.
+**2. Run a card** — the advisor publishes a card and drives it to completion with one command:
 
-## How it works
-
-```
-draft (read-only)  →  Owner proceed  →  gate confirm (OWNER_CONFIRMED)  →  written to files
-                                            │
-                                            └─ executor claim → work → return → independent audit → L3 VALID
+```bash
+lybra draft create --from-json card.json
+lybra draft publish --path 5_tasks/drafts/<card>.md
+lybra loop --task-id <CARD-ID>
 ```
 
-The executor and the auditor are **different parties**; nothing is finalized without an audit pass.
-Workspace commands auto-discover the workspace from the current directory upward; explicit flags and
-`AIPOS_WORKSPACE_ROOT` override discovery.
+```
+publish → lybra loop: claim (gate builds the card worktree)
+            → executor workstation /go: commits on card/<ID> + writes RETURN
+            → return ingest → audit dispatch
+            → auditor workstation /go: writes the audit report
+            → verdict ingest → finalize → close → governance commit (N6)
+```
+
+`lybra loop` never wakes an agent: on an agent step it waits for the artifact and exits 3 if it is not
+there yet — press `/go` in the workstation and re-run the same command. Its exit codes are declared in
+`schema/verbs.schema.json` (`lybra_loop.exit_codes`).
+
+**3. Wait and inspect** — `lybra agent watch --workspace-root <governance-root>` is a pure-client,
+bounded filesystem sentinel any bash-capable agent can use (exit codes:
+[`docs/agent_watch_exit_codes.md`](docs/agent_watch_exit_codes.md)). `lybra next --task-id <ID>`
+shows the next step of a card, `lybra state lint` checks queue / frontmatter / records consistency
+(including truth not yet committed), and `lybra brief` gives a cold-start summary.
+
+Other surfaces: `lybra board` (local dashboard, default port 7117) and `lybra tui` (optional terminal
+client; install `textual>=4.0` from PyPI — `lybra` itself is npm-only). On macOS pythons with empty
+default CA paths, install `certifi` (or set `SSL_CERT_FILE`) for the TUI's HTTPS; Lybra never disables
+verification.
+
+## Legacy entry points (retirement pending)
+
+These still exist in the CLI but are **not** part of the flow above; follow-up cards remove them and
+this section together.
+
+- **Old workspace bootstrap** — superseded by `lybra onboarding guide` + `lybra project new`:
+
+  ```bash
+  lybra init ./ws --project-id my_project
+  ```
+
+- **Old agent-side pull connector (AIPOS-248)** — `skills/lybra-executor` had an agent say
+  **`lybra on`** / **`lybra off`** to poll the gate for claimable tasks. Executors no longer claim
+  work; claiming is done by the advisor's `lybra loop` and workstations open with `/go`.
+- **Earlier gate-console skills** — `skills/owner-console/` (Owner console with the owner token) and
+  `skills/lybra-planner/` (third-party planner: read-only truth + draft-submit) predate `lybra loop`;
+  the advisor skills now ship through `lybra sync` from `agents/skills/`.
 
 ## Scope & limits
 
-Lybra v1.0 is deliberately scoped. Every disclosed-deferred / discipline-held item — RF-3, gate
-signing (§9), CLI publish, scope exemptions, network egress, autonomy modes, the single-harness Wall,
-heterogeneous mutual audit, and the LLM key — is catalogued honestly, with the structure or
-discipline that holds it and the plan to address it, in:
+Every disclosed-deferred / discipline-held item is catalogued honestly, with the structure or
+discipline that holds it, in **[`docs/v1_disclosure.md`](docs/v1_disclosure.md)**.
 
-- **[`docs/v1_disclosure.md`](docs/v1_disclosure.md)** — the honest disclosure ledger.
+## Development
 
-Lybra is **not** a "heterogeneous accountability loop" — heterogeneous dual-harness mutual audit is
-deferred (see the ledger).
+```bash
+git clone https://github.com/kiwiai777/lybra && cd lybra
+bash tests/run-all.sh                # resident fixture suite
+```
 
 ## Contributing
 
