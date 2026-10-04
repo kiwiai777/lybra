@@ -1034,6 +1034,18 @@ else
   overall=1
 fi
 
+# AIPOS-F107: chris 接入运行时前置(#43/#44)——① loop 拉起期 SIGHUP 与 SIGTERM 同语义(先清进程组再按该信号退出), stdout 断开写失败
+# 转静默丢弃不打断清理; ② 接入事件(create/use/land/revoke)写码/凭据/实例所属项目 enrollment_log(enrollment_owner_root 唯一解析口),
+# 只读诊断 `lybra roles enroll-where --instance`
+echo
+echo "── tests/test_aipos_f107_sighup_enroll_owner.py (F107 SIGHUP 清进程组·stdout 断开无孤儿·A 签 B 实例码事件落 B log·enroll-where 只读诊断) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f107_sighup_enroll_owner.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f107_sighup_enroll_owner.py PASS"
+else
+  echo "✗ tests/test_aipos_f107_sighup_enroll_owner.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
