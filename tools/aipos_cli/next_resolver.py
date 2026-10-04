@@ -834,8 +834,10 @@ def _not_derivable_no_claim(task_id: str, *, node: str, state: str, verb: str, t
 def _action_type_for_command(command: str) -> str:
     """派生命令 → action_type(唯一映射, next --run 与 lybra loop 共用)。
     先匹配 "queue close" 再匹配 "finalize", 避免 close 命令被误判为 finalize。"""
-    if command.startswith("lybra governance-commit"):
-        return "governance_commit"  # AIPOS-F94 件①: N6 落账步(task 范围精确提交)
+    from tools.aipos_cli.governance_commit import governance_commit_cli, n6_landing_declaration
+
+    if command.startswith(governance_commit_cli() + " "):
+        return str(n6_landing_declaration()["action_type"])  # AIPOS-F94 件①: N6 落账步(声明 transitions nodes.N6.landing)
     if "artifact ingest" in command:
         # AIPOS-F90 件②: 产物入口按 --kind 声明所入的节点(return/verdict 账务步); 无 --kind = F78B 件② external finalize 步
         kind = re.search(r"--kind\s+(\S+)", command)
@@ -1484,9 +1486,6 @@ def _build_close_command(
     return " ".join(parts)
 
 
-N6_LANDING_VERB = "lybra_governance_commit"
-
-
 def _derive_n6_landing(workspace_root: Path, task_id: str, state: str, connection_json: str | None) -> dict[str, Any] | None:
     """AIPOS-F94 件①: N6 落账步。卡已结案(有 closure 记录)后, 判据 = 该卡落账范围(governance_commit.task_landing:
     本卡与审计卡的队列文件 / 草稿 / 记录 / 台账落点 + 卡编年史)已在治理仓提交且已推送。
@@ -1496,14 +1495,15 @@ def _derive_n6_landing(workspace_root: Path, task_id: str, state: str, connectio
     """
     import subprocess
 
-    from tools.aipos_cli.governance_commit import governance_commit_command, task_landing
+    from tools.aipos_cli.governance_commit import governance_commit_command, n6_landing_declaration, non_git_exit_command, task_landing
 
+    landing_verb = str(n6_landing_declaration()["verb"])
     try:
         landing = task_landing(workspace_root, task_id)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
         detail = (getattr(exc, "stderr", "") or str(exc)).strip()
         return {"task_id": task_id, "derivable": False, "current_node": "close", "current_state": state, "triggered_by": "advisor",
-                "command": "", "verb": N6_LANDING_VERB, "missing_records": [f"落账判据不可读: {detail}"],
+                "command": "", "verb": landing_verb, "missing_records": [f"落账判据不可读: {detail}"],
                 "suggested_action": "按拒因修复(卡多义 / git 只读失败)后重推导",
                 "notes": "N6 落账: 落账判据读取失败(fail-closed)",
                 "action": {"type": "record_missing", "card": task_id, "record": "governance_landing"}}
@@ -1514,13 +1514,13 @@ def _derive_n6_landing(workspace_root: Path, task_id: str, state: str, connectio
         "current_node": "close",
         "current_state": state,
         "triggered_by": "advisor",
-        "verb": N6_LANDING_VERB,
+        "verb": landing_verb,
         "landing": landing,
     }
     if not landing["git"]:
         return {**base, "derivable": False, "command": "",
                 "missing_records": [f"治理仓(git): {landing['reason']}"],
-                "suggested_action": f"把治理根 {workspace_root} 纳入治理仓(git 工作树, 带上游 origin)后重跑; 卡已结案, 只差落账",
+                "suggested_action": f"{non_git_exit_command(workspace_root)}(一次性本地 git init; Owner 按其输出配 origin 并首推)后重跑; 卡已结案, 只差落账",
                 "notes": "N6 落账: 已结案但治理根不在 git 仓, 无从落账(AIPOS-F94 fail-closed)",
                 "action": {"type": "record_missing", "card": task_id, "record": "governance_repo"}}
     driver = _driver_actor(workspace_root, connection_json=connection_json)

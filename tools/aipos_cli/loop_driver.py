@@ -291,11 +291,6 @@ def _has_closure(governance_root: Path, task_id: str) -> bool:
     return bool(_read_task_records(governance_root, task_id).get("latest_closure"))
 
 
-# AIPOS-F94 件①: N6 落账步(governance_commit)属 N6 close 节点的收尾(transitions N6: 结案时机含 governance-commit 完成),
-# 信封授权按 close 判——信封准 close 即准结案后落账; 其余动作按自身动词判(verbs.schema lybra_loop.envelope.allowed_verbs)。
-_ENVELOPE_VERB_FOR_ACTION = {"governance_commit": "close"}
-
-
 def _landing(governance_root: Path, task_id: str) -> dict[str, Any] | None:
     """落账判据(governance_commit.task_landing 唯一实现); 读失败 = None(交推导核按拒因出口, 不在此吞成已落账)。"""
     import subprocess
@@ -417,6 +412,9 @@ def _drive(
     connection_json: str | None,
 ) -> LoopResult:
     steps = result.steps
+    from tools.aipos_cli.governance_commit import n6_landing_declaration
+
+    landing_action = str(n6_landing_declaration()["action_type"])  # AIPOS-F94: N6 落账步(声明 transitions nodes.N6.landing)
 
     for index in range(1, max_steps + 1):
         # 出口 0: closure 记录存在且治理已落账(AIPOS-F94 件①: 本卡落账范围已提交且已推送); 未落账 → 推导核派生 N6 落账步
@@ -517,9 +515,8 @@ def _drive(
             result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), step.message
             result.suggested_action = str(derivation.get("suggested_action") or "")
             return result
-        envelope_verb = _ENVELOPE_VERB_FOR_ACTION.get(action_type, action_type)
-        if envelope_verb not in allowed_verbs:
-            step.ok, step.message = False, f"信封未授权动词 {envelope_verb}(动作 {action_type}; 允许: {sorted(allowed_verbs)})"
+        if action_type not in allowed_verbs:
+            step.ok, step.message = False, f"信封未授权动词 {action_type}(允许: {sorted(allowed_verbs)})"
             steps.append(step)
             say(f"[{index}] exit 5 — {step.message}")
             result.outcome, result.exit_code, result.message = "no_envelope", exit_code_for(contract, "no_envelope"), step.message
@@ -551,13 +548,13 @@ def _drive(
                                 f"({_LANDED_RECORD[action_type]}: {landed.get('claim_id') or landed.get('return_id') or landed.get('verdict_id') or landed.get('dispatch_id') or landed.get('closure_id') or '新记录'}) = 门侧已落, 不重复执行: {step.message}")
                 say(f"[{index}] landed(回读): {step.message}")
                 continue
-            what = "落账拒" if action_type == "governance_commit" else "门拒"
+            what = "落账拒" if action_type == landing_action else "门拒"
             msg = f"{what} @ {action_type} ({target_card}) exit {step.exit_code}: {step.message}\n{step.output}".rstrip()
             say(f"[{index}] exit 2 — {msg}")
             result.outcome, result.exit_code, result.message = "gate_rejected", exit_code_for(contract, "gate_rejected"), msg
             return result
         say(f"[{index}] ok: {step.message}")
-        if action_type == "governance_commit":
+        if action_type == landing_action:
             # AIPOS-F94 件①: 落账步报成功后以判据复核(已提交且已推送); 仍未落账 = 不重试, exit 4 点名缺什么
             landing = _landing(governance_root, target_card)
             if landing is None or not landing.get("landed"):

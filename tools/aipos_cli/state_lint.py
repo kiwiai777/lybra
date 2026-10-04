@@ -33,9 +33,19 @@ from tools.schema_constants import RecordType
 RECORD_EMPTY = "RECORD_EMPTY"
 FRONTMATTER_INVALID = "FRONTMATTER_INVALID"
 GOVERNANCE_UNCOMMITTED = "GOVERNANCE_UNCOMMITTED"
-#: AIPOS-F94 件③ 级别: 声明位(transitions.schema state_consistency)在本卡车道外, 暂为本常量(产品缺口登记, 待挪声明);
-#: WARN = 「结案后待落账」是有产品出口的待办, 不是三方断层(断层 = ERROR)
-GOVERNANCE_UNCOMMITTED_SEVERITY = "WARN"
+
+
+def check_severity(code: str) -> str:
+    """lint 检查码级别的唯一声明 transitions.schema state_consistency.check_severity.<code>.severity(AIPOS-F94 件③);
+    缺声明 / 值不在 {ERROR, WARN} = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.next_resolver import REPO_ROOT
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    entry = ((load_schema("transitions", REPO_ROOT).get("state_consistency") or {}).get("check_severity") or {}).get(code)
+    severity = str((entry or {}).get("severity") or "").strip() if isinstance(entry, dict) else ""
+    if severity not in ("ERROR", "WARN"):
+        raise SchemaLoadError(f"transitions.schema.json state_consistency.check_severity.{code}.severity 未声明或不在 ERROR/WARN")
+    return severity
 FRONTMATTER_REPAIR_ACTOR = "lybra state repair"
 
 try:  # 定位解析失败行需要 PyYAML 的错误标记; 缺席时规整一律 unresolved(不猜)
@@ -316,6 +326,7 @@ def governance_uncommitted_issues(governance_root: Path, concluded: dict[str, Pa
     from tools.aipos_cli.governance_commit import N6_LANDING_ACTOR_PLACEHOLDER, card_own_paths, governance_commit_command, governance_landing
     from tools.aipos_cli.next_resolver import forensic_subject
 
+    severity = check_severity(GOVERNANCE_UNCOMMITTED)
     scopes = {tid: card_own_paths(governance_root, tid, card_path=path) for tid, path in concluded.items()}
     landing = governance_landing(governance_root, scopes)
     out: list[dict[str, Any]] = []
@@ -331,7 +342,7 @@ def governance_uncommitted_issues(governance_root: Path, concluded: dict[str, Pa
         exit_cmd = governance_commit_command(owner, N6_LANDING_ACTOR_PLACEHOLDER, governance_root)
         out.append({
             "task_id": tid,
-            "severity": GOVERNANCE_UNCOMMITTED_SEVERITY,
+            "severity": severity,
             "code": GOVERNANCE_UNCOMMITTED,
             "message": (f"{GOVERNANCE_UNCOMMITTED}: 已结案但治理真相未落账({status['reason']}); 出口: {exit_cmd}"
                         + (f"(审计卡随被审卡 {owner} 落账)" if owner != tid else "")

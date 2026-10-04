@@ -287,8 +287,41 @@ def _manifest_repo_paths(manifest: dict[str, Any]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 TASK_SCOPE_SOURCE = "task_scope"
-GOVERNANCE_COMMIT_CLI = "lybra governance-commit"
 N6_LANDING_ACTOR_PLACEHOLDER = "<驱动方实例>"
+
+
+def n6_landing_declaration() -> dict[str, Any]:
+    """N6 落账步的唯一声明 transitions.schema nodes.N6.landing(动作类型 / 门外动词名 / 命令模板 / 非 git 出口)。
+    缺声明或缺键 = SchemaLoadError(fail-closed, 禁回落写死)。"""
+    from tools.aipos_cli.next_resolver import _transition_node
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _transition_node("N6").get("landing")
+    if not isinstance(decl, dict):
+        raise SchemaLoadError("transitions.schema.json nodes.N6.landing 未声明")
+    for key in ("action_type", "verb", "command_template"):
+        if not str(decl.get(key) or "").strip():
+            raise SchemaLoadError(f"transitions.schema.json nodes.N6.landing.{key} 未声明")
+    if not str((decl.get("non_git_exit") or {}).get("command_template") or "").strip():
+        raise SchemaLoadError("transitions.schema.json nodes.N6.landing.non_git_exit.command_template 未声明")
+    return decl
+
+
+def governance_commit_cli() -> str:
+    """治理提交命令名 = verbs.schema lybra_governance_commit.cli_command(唯一声明)。"""
+    from tools.aipos_cli.next_resolver import REPO_ROOT
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    cli = str(((load_schema("verbs", REPO_ROOT).get("verbs") or {}).get("lybra_governance_commit") or {}).get("cli_command") or "").strip()
+    if not cli:
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_governance_commit.cli_command 未声明")
+    return cli
+
+
+def _render_template(template: str, **values: Any) -> str:
+    import shlex
+
+    return template.format(**{k: shlex.quote(str(v)) for k, v in values.items()})
 
 
 def audit_card_id(task_id: str) -> str:
@@ -297,11 +330,15 @@ def audit_card_id(task_id: str) -> str:
 
 
 def governance_commit_command(task_id: str, actor: str, governance_root: Path | str) -> str:
-    """N6 落账命令的唯一渲染(推导核 N6 落账步 / close next_step / state lint 出口同此): task 范围精确提交 + push。"""
-    import shlex
+    """N6 落账命令(推导核 N6 落账步 / close next_step / state lint 出口同此): 渲染 nodes.N6.landing.command_template。"""
+    return _render_template(n6_landing_declaration()["command_template"], task_id=task_id, actor=actor,
+                            governance_root=governance_root)
 
-    return (f"{GOVERNANCE_COMMIT_CLI} --task-id {shlex.quote(str(task_id))} --actor {shlex.quote(str(actor))} "
-            f"--governance-root {shlex.quote(str(governance_root))}")
+
+def non_git_exit_command(governance_root: Path | str) -> str:
+    """治理根不在 git 工作树内时的出口(nodes.N6.landing.non_git_exit; home 根 = 治理根所在目录, 单门 home 根约定)。"""
+    return _render_template(n6_landing_declaration()["non_git_exit"]["command_template"],
+                            home_root=Path(governance_root).expanduser().parent)
 
 
 def governance_commit_paths_command(paths: list[str], actor: str, governance_root: Path | str) -> str:
@@ -310,7 +347,7 @@ def governance_commit_paths_command(paths: list[str], actor: str, governance_roo
 
     if not paths:
         raise ValueError("governance_commit_paths_command: paths 为空(禁整根提交)")
-    return (f"{GOVERNANCE_COMMIT_CLI} --governance-root {shlex.quote(str(governance_root))} --actor {shlex.quote(str(actor))} "
+    return (f"{governance_commit_cli()} --governance-root {shlex.quote(str(governance_root))} --actor {shlex.quote(str(actor))} "
             + " ".join(f"--paths {shlex.quote(str(p))}" for p in paths))
 
 
@@ -440,10 +477,11 @@ def governance_landing(governance_root: Path, scopes: dict[str, list[str]]) -> d
     except (subprocess.CalledProcessError, FileNotFoundError, NotADirectoryError) as exc:
         detail = (getattr(exc, "stderr", "") or str(exc)).strip().splitlines()
         return verdict(landed=False, git=False, upstream=None, uncommitted=[], unpushed=[],
-                       reason=f"治理根 {root} 不在 git 工作树内({detail[-1] if detail else exc}): 卡与记录只在盘上, 未成为可追溯真相")
+                       reason=f"治理根 {root} 不在 git 工作树内({detail[-1] if detail else exc}): 卡与记录只在盘上, 未成为可追溯真相; "
+                              f"出口: {non_git_exit_command(root)}(Owner 按其输出配 origin 并首推)")
     if inside != "true":
         return verdict(landed=False, git=False, upstream=None, uncommitted=[], unpushed=[],
-                       reason=f"治理根 {root} 不在 git 工作树内(rev-parse --is-inside-work-tree = {inside})")
+                       reason=f"治理根 {root} 不在 git 工作树内(rev-parse --is-inside-work-tree = {inside}); 出口: {non_git_exit_command(root)}")
     prefix = _git_ws_prefix(root)
 
     def gov_rel(repo_path: str) -> str:
@@ -921,7 +959,7 @@ def _task_scope_selection(governance_root: Path, task_id: str, actor: str, *, dr
         detail = (getattr(exc, "stderr", "") or str(exc)).strip()
         return stop(Verdict.BLOCK,
                     f"卡 {task_id} 落账范围推导失败(治理根须在 git 工作树内): {detail}\n"
-                    f"可执行出口: 确认 {root} 位于治理仓(git)内且该仓有上游(origin)后重跑同一命令",
+                    f"可执行出口: {non_git_exit_command(root)}(治理根不在 git 仓时; Owner 按其输出配 origin 并首推), 之后重跑同一命令",
                     ["Blocked: task scope underivable (git read failed)"])
     if not scope["paths"]:
         return stop(Verdict.BLOCK,
@@ -1141,7 +1179,8 @@ def _governance_commit_impl(
             "committed": False,
             "pushed": False,
             "commit_hash": None,
-            "message": f"Git status check failed: {e.stderr}",
+            "message": f"Git status check failed: {e.stderr}\n可执行出口(治理根不在 git 仓时): {non_git_exit_command(governance_root)}"
+                       f"(Owner 按其输出配 origin 并首推)后重跑同一命令",
             "operations": operations,
         }
     

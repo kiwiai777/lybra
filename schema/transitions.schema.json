@@ -580,6 +580,22 @@
       "automation": {
         "queue_placement": "moves card to <queue_root>/completed/",
         "frontmatter_update": "status: completed, closed_at: <timestamp>"
+      },
+      "landing": {
+        "description": "AIPOS-F94 件①: N6 落账步(唯一声明)——卡已结案(有 closure 记录)后, 本卡治理真相须进治理仓(已提交且已推送)才算 N6 完成。推导核 next_resolver._derive_n6_landing 据此派生, lybra loop 自动执行(未落账不 exit 0), close 应答 next_step 与 state lint GOVERNANCE_UNCOMMITTED 出口同一命令(渲染 governance_commit.governance_commit_command)。",
+        "action_type": "governance_commit",
+        "verb": "lybra_governance_commit",
+        "command_template": "lybra governance-commit --task-id {task_id} --actor {actor} --governance-root {governance_root}",
+        "actor": "驱动方(loop --actor → 治理根 .lybra/role instance → connection.json 驱动方 token 实例); 落账不是门账务动词, 提交身份 = 驱动方; 解析不到 = 不可推导",
+        "envelope": "独立授权: action_type governance_commit 列在 verbs.schema lybra_loop.envelope.allowed_verbs(覆盖驱动方与本卡的有效信封即可落账, 不另签、不借 close)",
+        "scope": "本卡与其审计卡(<task_id>R)各自的: 队列文件(<queue_root>/<各队列状态>/<卡文件名>, 搬动旧位的删除也属本卡) / 草稿(<drafts>/<卡文件名>) / 各类记录(<records>/<类型>/<卡ID 或 draft_id>/, 新记录类型自动纳入) / 台账·交回·裁决落点(project.json paths.{task_cards_root,return_root,verdict_root}/<卡ID>/) + 卡编年史(project.json paths.foundation_backlog, 声明了才有); .gitignore 排除者列出不提交; 禁整根。实现 governance_commit.task_scope_candidates / resolve_task_scope",
+        "criterion": "范围路径在治理仓无未跟踪 / 未提交 / 已暂存未提交(git status --porcelain -uall), 且 <上游>..HEAD 未触及范围路径(已推送, 上游 = 当前分支 @{u}, 读上次 fetch 结果); 治理根不在 git 工作树内或当前分支无上游 = 未落账。实现 governance_commit.governance_landing(只读)",
+        "idempotent": "已落账 = governance-commit PASS no-op(无新提交); loop 再跑一轮即 exit 0",
+        "on_reject": "他人暂存在范围外 / 提交门护栏拒 / 推送未完成 = loop exit 2 透传拒因原文(不重试, 不动他人暂存); 落账报成功但判据仍未落账 = exit 4",
+        "non_git_exit": {
+          "description": "治理根不在 git 工作树内 = fail-closed(推导核不可推导 / governance-commit BLOCK / lint 点名), 拒因附此出口; 一次性本地 git init(不配远端、不推送), Owner 按其输出配 origin 并首推",
+          "command_template": "lybra home git-init --home-root {home_root}"
+        }
       }
     },
     "fix_card_closure": {
@@ -842,8 +858,16 @@
     "lint_checks": [
       "completed 卡必须有 closure 记录,否则 = 断层",
       "claimed 卡必须有 claim 记录且 status=claimed,否则 = 断层",
-      "pending 卡 status 不应是 claimed/completed,否则 = 断层"
+      "pending 卡 status 不应是 claimed/completed,否则 = 断层",
+      "已结案卡(completed 或有 closure 记录)自身治理路径须已落账(nodes.N6.landing.criterion),否则 = GOVERNANCE_UNCOMMITTED"
     ],
+    "check_severity": {
+      "description": "AIPOS-F94 件③: state lint 各检查码的级别(唯一声明; state_lint 只读, 缺键 = 声明缺失 fail-closed)",
+      "GOVERNANCE_UNCOMMITTED": {
+        "severity": "WARN",
+        "rationale": "已结案但治理真相未落账: 有产品出口(nodes.N6.landing.command_template, 审计卡指向被审卡)的待办, 不是三方断层(断层 = ERROR); 判据 nodes.N6.landing.criterion 作用于卡自身路径(卡编年史为多卡共享文档, 不归单卡)"
+      }
+    },
     "repair_verb": {
       "name": "lybra state repair",
       "description": "大项C③:输入 task_id,门按 records 重建卡的一致状态",
