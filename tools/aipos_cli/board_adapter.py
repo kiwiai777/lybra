@@ -84,11 +84,6 @@ from tools.aipos_cli.workspace_config import (
     resolve_active_project,
 )
 from tools.aipos_cli.validator import validate_single_task, validate_tasks
-from tools.aipos_cli.workspace_templates import (
-    TEMPLATE_OPERATION,
-    build_workspace_init_plan,
-    execute_workspace_init,
-)
 from tools.schema_constants import RecordType, Verdict
 
 READ_SAFETY_NOTICE = "Read-only local Board adapter call. No files are written."
@@ -407,7 +402,6 @@ def _attach_controlled_execute_metadata(
         "owner_decision_record",
         "owner_verification_record",
         "bench_audit_submit",
-        TEMPLATE_OPERATION,
     }:
         response["execute_allowed"] = False
         response["execute_blocking_reasons"] = ["operation is not enabled for controlled execute"]
@@ -5068,7 +5062,6 @@ def execute_dry_run(
             "owner_decision_record",
             "owner_verification_record",
             "bench_audit_submit",
-            TEMPLATE_OPERATION,
         }:
             return blocked_response(
                 operation=operation,
@@ -5236,15 +5229,6 @@ def execute_dry_run(
                 submitted_by=payload.get("submitted_by"),
                 dry_run=True,
                 repo_root=resolved_root,
-            )
-        elif op == TEMPLATE_OPERATION:
-            payload = source_data.get("original_payload") or {}
-            current = build_workspace_init_plan(
-                template=str(payload.get("template") or ""),
-                output=str(payload.get("output") or ""),
-                variables=payload.get("variables") if isinstance(payload.get("variables"), dict) else {},
-                actor=actor_text,
-                dry_run=True,
             )
         else:
             claim_task_id = source_data.get("task_id")
@@ -5752,35 +5736,6 @@ def execute_dry_run(
                 performed_writes=list(result.get("performed_writes", [])),
                 planned_moves=[],
                 performed_moves=[],
-                warnings=list(result.get("warnings", [])),
-                blocking_reasons=list(result.get("blocking_reasons", [])),
-                safety_notice=CONTROLLED_EXECUTE_NOTICE,
-                errors=[],
-            )
-
-        if op == TEMPLATE_OPERATION:
-            payload = source_data.get("original_payload") or {}
-            variables = payload.get("variables") if isinstance(payload.get("variables"), dict) else {}
-            result = execute_workspace_init(
-                template=str(payload.get("template") or ""),
-                output=str(payload.get("output") or ""),
-                variables={str(key): str(value) for key, value in variables.items()},
-                actor=actor_text,
-            )
-            verdict = derive_verdict(
-                blocking_reasons=list(result.get("blocking_reasons", [])),
-                warnings=list(result.get("warnings", [])),
-            )
-            return make_response(
-                ok=bool(result.get("ok", False)),
-                verdict=verdict,
-                operation=op,
-                dry_run=False,
-                actor=_actor_payload(actor_text),
-                data=result.get("data"),
-                summary=result.get("summary"),
-                planned_writes=list(result.get("planned_writes", [])),
-                performed_writes=list(result.get("performed_writes", [])),
                 warnings=list(result.get("warnings", [])),
                 blocking_reasons=list(result.get("blocking_reasons", [])),
                 safety_notice=CONTROLLED_EXECUTE_NOTICE,

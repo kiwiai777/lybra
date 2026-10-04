@@ -480,7 +480,7 @@ def governance_paths(project_root: str | Path) -> dict[str, Path]:
 #
 # `project new` / `project set-repo` are LOCAL OWNER scaffolds (ruling 2=a) — not gate
 # operations: they mint no token, perform no gate confirm, and the gate has no "create project"
-# op. Writing to disk here is intended (like `lybra init`). project.json is the SOLE authority
+# op. Writing to disk here is intended (the single project-creation entry, AIPOS-F105). project.json is the SOLE authority
 # for the project<->code-repo mapping (ruling 6) and carries provenance (M3: project creation
 # is non-anonymous). Stdlib only.
 # ---------------------------------------------------------------------------
