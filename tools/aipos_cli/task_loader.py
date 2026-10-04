@@ -19,7 +19,28 @@ from tools.aipos_cli.workspace_config import (
     resolve_workspace_root,
 )
 
-QUEUE_STATES = ("pending", "claimed", "completed", "blocked", "withdrawn")  # AIPOS-315: withdrawn for revoked/cancelled tasks
+def _queue_state_projection(flag: str) -> tuple[str, ...]:
+    """AIPOS-F104 件②: 队列状态集合唯一投影——读 enums.schema queue_state 每值的布尔 flag(queue_dir / skeleton)。
+    缺 flag 或非布尔 = 声明缺失, SchemaLoadError fail-closed(禁回退手写集合)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    entries = ((load_schema("enums").get("enums") or {}).get("queue_state") or {}).get("values") or []
+    if not entries:
+        raise SchemaLoadError("enums.schema.json queue_state 未声明")
+    out: list[str] = []
+    for entry in entries:
+        marker = entry.get(flag) if isinstance(entry, dict) else None
+        if not isinstance(marker, bool):
+            raise SchemaLoadError(f"enums.schema.json queue_state 值 {entry!r} 缺布尔声明 {flag}")
+        if marker:
+            out.append(str(entry["value"]))
+    return tuple(out)
+
+
+# 队列状态目录名(<queue_root>/<状态>/)= enums queue_state 中 queue_dir=true 的值(returned 为记录推导态, 无目录)
+QUEUE_STATES = _queue_state_projection("queue_dir")
+# 新项目/脚手架预建的队列目录 = enums queue_state 中 skeleton=true 的值(withdrawn 按需建)
+QUEUE_SKELETON_STATES = _queue_state_projection("skeleton")
 
 
 def _serialize_dates(obj: Any) -> Any:
