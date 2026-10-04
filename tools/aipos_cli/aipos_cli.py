@@ -1163,6 +1163,7 @@ def _envelope_mint_payload(
     expires_at: str,
     decision_summary: str,
     actor: str,
+    launch_harnesses: list[str] | None = None,
 ) -> dict[str, Any]:
     """信封 payload 唯一构造(--dry-run 本地预演与 --confirm 门路径同读): 门 envelope 路径只要 decision_id + autonomy_policy。"""
     task_selector: dict[str, Any] = {}
@@ -1180,6 +1181,8 @@ def _envelope_mint_payload(
             "expires_at": expires_at,
             "max_tasks": max_tasks,
             "task_selector": task_selector,
+            # AIPOS-F95 件②(b): 拉起授权(缺省 [] = 只手工 /go); 门 owner_decision_writer 按 enums.schema harness.launch 校验
+            "launch_harnesses": list(launch_harnesses or []),
         },
     }
 
@@ -2004,6 +2007,10 @@ def build_parser() -> argparse.ArgumentParser:
     envelope_mint_parser.add_argument("--expires-at", required=True, help="Expiration datetime (ISO8601)")
     envelope_mint_parser.add_argument("--decision-summary", required=True, help="Decision summary")
     envelope_mint_parser.add_argument("--actor", default="owner", help="Actor (default: owner)")
+    envelope_mint_parser.add_argument(
+        "--launch-harness", action="append", default=None, dest="launch_harness",
+        help="AIPOS-F95: authorize `lybra loop` to launch this harness (repeatable; must have an enums.schema harness.launch template, "
+             "e.g. pi). Omitted = manual mode only (workstation types /go). Applies to every envelope in this mint.")
     envelope_mint_parser.add_argument("--workspace-root", help="AIPOS-F92: target project governance root (where the policy lands); default = resolved governance workspace")
     envelope_mint_parser.add_argument("--connection-json", help="AIPOS-F92: connection.json holding the Owner credential (default <workspace-root>/.lybra/connection.json); token never printed (fingerprint only)")
     envelope_mint_parser.add_argument("--token-role", default="owner", help="AIPOS-F92: credential role used for --confirm (default owner; arming an envelope needs owner_confirm)")
@@ -2086,7 +2093,9 @@ def build_parser() -> argparse.ArgumentParser:
     # 参数缺省与退出码只声明在 schema/verbs.schema.json verbs.lybra_loop 一处(argparse 缺省 None, 运行时读声明)。
     loop_parser = subparsers.add_parser(
         "loop",
-        help="AIPOS-F73D: 顾问侧驱动器 — Owner 信封授权下有界循环推进一张卡到 completed(复用 agent watch + next --run; 永不唤醒 agent)。"
+        help="AIPOS-F73D: 顾问侧驱动器 — Owner 信封授权下有界循环推进一张卡到 completed(复用 agent watch + next --run)。"
+        "AIPOS-F95: 信封 launch_harnesses 授权且工位条件全满足时, 等待前按 enums.schema harness.launch 模板在本机工位拉起一次 harness 进程"
+        "(过程汇总为一行式进度, 产物就绪/超时/早退/中断即清进程组); 否则手工模式(工位敲 /go)。"
         "退出码(verbs.schema lybra_loop.exit_codes): 0=completed, 2=门拒, 3=等待超时/停滞/步数用尽, 4=不可推导/命令不可解析, 5=无信封",
     )
     loop_parser.add_argument("--task-id", required=True, help="要推进的卡 ID")
@@ -2097,6 +2106,8 @@ def build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--max-steps", type=int, default=None, help="硬上限: 推导轮数(含等待轮); 缺省读 verbs.schema(20)")
     loop_parser.add_argument("--max-wait", type=float, default=None, help="硬上限: 每次等待产物秒数; 缺省读 verbs.schema(沿用 agent watch 1800)")
     loop_parser.add_argument("--interval", type=float, default=None, help="等待轮询间隔秒(经 agent watch, 禁 sleep 自旋); 缺省读 verbs.schema(15)")
+    loop_parser.add_argument("--no-launch", action="store_true", default=False,
+                             help="AIPOS-F95: 不拉起 harness 进程(即使信封授权), 手工模式: 等待提示「请在 <工位目录> 的 <harness> 会话敲 /go」")
     loop_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-F78 件②: lybra card render — 卡意图面单一渲染器(pi 三行 / codex Prompt.md+Plan.md / claude-code CLAUDE.md 片段)
@@ -4169,6 +4180,7 @@ def main(argv: list[str] | None = None) -> int:
                 _envelope_mint_payload(
                     policy_id=pid, agent_or_role=agent, max_tasks=args.max_tasks, task_mode=args.task_mode,
                     expires_at=args.expires_at, decision_summary=args.decision_summary, actor=args.actor,
+                    launch_harnesses=list(getattr(args, "launch_harness", None) or []),
                 )
                 for pid, agent in zip(policy_ids, agents)
             ]

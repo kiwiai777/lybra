@@ -494,19 +494,44 @@
       ]
     },
     "harness": {
-      "description": "AIPOS-F78 件①: 执行引擎(harness)声明值域。card.schema fields.harness $enum; 缺省由 task_mode 派生(card.schema intent_face.harness.default_by_task_mode)。新 harness = 加一值 + 一个渲染模板, 零代码改动",
+      "description": "AIPOS-F78 件①: 执行引擎(harness)声明值域。card.schema fields.harness $enum; 缺省由 task_mode 派生(card.schema intent_face.harness.default_by_task_mode)。新 harness = 加一值 + 一个渲染模板, 零代码改动。AIPOS-F95 件②(a): 每值带 launch = lybra loop 在 Owner 信封授权(launch_harnesses)下拉起该 harness 的声明模板——argv 为参数数组(无 shell), 占位仅 {kickoff}(= my-tasks next_card.kickoff 原文, 与工位 /go 发送文本逐字节相同), cwd = 工位目录(enrollment_log land 事件), 模型由工位自身配置定(模板不写模型); events = stdout 事件流格式(loop 按此汇总一行式进度, 未知格式只计数); launch=null = 只支持手工(工位敲 /go)。新 harness = 加一值 + 一模板, 零代码",
       "values": [
         {
           "value": "pi",
-          "description": "pi 工位(开工提示三行, /go 复用)"
+          "description": "pi 工位(开工提示三行, /go 复用)",
+          "launch": {
+            "argv": ["pi", "-p", "{kickoff}", "--mode", "json"],
+            "events": "pi-json",
+            "note": "pi 非交互 -p + JSON 事件流(--mode json, 事件格式见 pi 安装包 docs/json.md); 不加 --no-session(会话文件是 F85/F90 报告模型字段的来源)"
+          }
         },
         {
           "value": "codex",
-          "description": "OpenAI Codex(Prompt.md + Plan.md 写入工作树根)"
+          "description": "OpenAI Codex(Prompt.md + Plan.md 写入工作树根)",
+          "launch": null
         },
         {
           "value": "claude-code",
-          "description": "Claude Code(CLAUDE.md 片段)"
+          "description": "Claude Code(CLAUDE.md 片段)",
+          "launch": null
+        }
+      ]
+    },
+    "workstation_transport": {
+      "description": "AIPOS-F95 件③b(Owner 2026-10-04 裁定: 变量现在加, 跨机连接以后做): 工位位置 = {host, dir}, 来源 = 本项目 enrollment_log 中该实例最新的 land 事件(enroll 落地写 host=<主机> workstation=<目录>; 本机 enroll 写本机主机名, enroll_deliver --ssh 写 ssh 目标)。拉起分两层: 先按位置解析启动方式(transport), 再套 harness launch 模板。supported=false 的 transport = 已声明未支持 → loop 不拉起, 退回手工模式并提示 <host>:<dir> 与 /go。以后加远程 = 新增一种 transport 实现(改 supported), 不改分层。",
+      "missing_host": "local",
+      "missing_host_note": "缺 host 的存量 land 事件(F95 前写入)按本机处理; 唯一缺省声明在此, 代码不写死",
+      "local_rule": "host 等于驱动方本机主机名(socket.gethostname()) = local, 否则 = remote",
+      "values": [
+        {
+          "value": "local",
+          "supported": true,
+          "description": "本机: 直接起子进程(新进程组、无 shell、cwd=工位目录)"
+        },
+        {
+          "value": "remote",
+          "supported": false,
+          "description": "跨机(如 ssh 目标): 已声明未支持(待跨机工位卡补齐启动/工作树/报告回传/身份核验); loop 退回手工 /go 并提示 <host>:<dir>"
         }
       ]
     }

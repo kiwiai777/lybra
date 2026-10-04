@@ -50,6 +50,7 @@ lybra roles --workspace-root <Owner工作区> --connection-json <Owner凭据> en
 lybra envelope mint --confirm --workspace-root <项目根> --connection-json <Owner凭据> --policy-id <信封ID> --agent-or-role <你的顾问实例> --max-tasks 50 --task-mode code --expires-at <到期时间> --decision-summary "onboarding" --actor owner
 ```
 第 4 步实际是一条命令签三张(驱动方 / 执行实例 / 审计实例, `--policy-id`/`--agent-or-role` 成对重复)。输出以门生记录为准(`signed ... wrote 5_tasks/policies/...`)。
+**可选 `--launch-harness pi`**(AIPOS-F95): 授权 `lybra loop` 在工位自动拉起 pi(执行体/审计体等待前按声明模板拉起一次, 过程汇总到顾问界面); **缺省 = 手工模式**(Owner 在工位敲 `/go`)。要不要加由 Owner 决定——先问 Owner, 同意才在交给 Owner 的命令里带上这个参数(两种模式见 advisor-commands「两种开工模式」)。
 
 ### Step 5(你): 凭码 enroll 到治理根 + 技能交付
 
@@ -79,7 +80,7 @@ lybra sync --harness-root <工位目录> --workspace-root <项目根> --dry-run
 ```bash
 lybra onboarding check <项目名> --step 8 --home-root <home根> --workspace-dir <工位目录>
 ```
-然后在工位目录起 `pi`, pi 内无参 `/go`(go 扩展由分发声明注册, 只查本实例已认领的卡)。每张卡 Owner 只在工位敲 `/go`, 不贴卡号、不报裁决。
+然后在工位目录起 `pi`, pi 内无参 `/go`(go 扩展由分发声明注册, 只查本实例已认领的卡)。每张卡 Owner 只在工位敲 `/go`, 不贴卡号、不报裁决。 若 Step 4 信封带了 `--launch-harness pi`, 则 `lybra loop` 会在本工位自动拉起 pi(工位位置读 enroll 落地登记的 host/目录), Owner 无需敲 `/go`; 手工 `/go` 始终可用。
 
 ### Step 9(你): 首卡
 

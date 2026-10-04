@@ -1,6 +1,6 @@
 """AIPOS-248 — agent-side connector (the pull half): ``lybra agent fetch|watch``.
 
-Design (card: tools/mcp_server/AIPOS-248_agent_connector_micro_plan.md):
+Design (card AIPOS-248):
 
 - **Lybra is ALWAYS the connected party.** Every ask is a STATELESS pull over the
   existing read tool (``lybra_queue_list`` via the AIPOS-203 ``GateClient``). The gate

@@ -976,6 +976,50 @@ else
   overall=1
 fi
 
+# AIPOS-F95: 外部执行体/审计体自动拉起(① 授权信封下 loop 按声明模板在工位拉起假 harness, 执行体+审计体走到 completed, 一行式进度
+# ② 无授权/--no-launch/无模板/定位不到/身份不符 → 手工 /go ③ 挂起超时/早退/SIGTERM 杀进程组 ④ kickoff 与 /go 逐字节同 ⑤ 信封 Boundary
+# 由声明渲染 ⑥ session Events 拉起事件 ⑥b land 事件带 host, 跨机退回手工); TS 侧 f86/f87/f93 改为 go.ts 只原样发送 next_card.kickoff
+echo
+echo "── tests/test_aipos_f95_harness_launch.py (F95 loop 授权拉起 harness·进程组生命周期·开工提示单源·信封 Boundary·工位 host) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f95_harness_launch.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f95_harness_launch.py PASS"
+else
+  echo "✗ tests/test_aipos_f95_harness_launch.py FAIL"
+  overall=1
+fi
+# AIPOS-F95: 假 harness 辅助脚本(被上节夹具按 launch 模板拉起)须可编译
+echo
+echo "── tests/fake_harness.py (F95 假 harness 辅助脚本可编译) ────────────────────────────────────────────────────"
+if python3 -m py_compile "$REPO_ROOT/tests/fake_harness.py"; then
+  echo "✓ tests/fake_harness.py PASS"
+else
+  echo "✗ tests/fake_harness.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F97: 交回检查「测试文件」判据单源且读声明(① workspace_config.card_test_files 唯一判据, TEST_NOT_IN_RUNALL / NO_TESTS 共用,
+# 改动集带状态 git diff --name-status, 删除不计·重命名取新路径, 车道检查缺省形不变 ② config.schema test_contract.test_file_globs
+# 缺省在 schema、项目可覆盖 ③ 靶场: 删除/名含 test 的文档/辅助脚本不算, 新增/修改未登记仍拒, 只删不加 NO_TESTS, 覆盖生效, 缺省覆盖本仓现有测试)
+echo
+echo "── tests/test_aipos_f97_test_file_criterion.py (F97 测试文件判据单源·删除不计·式样读声明·缺省覆盖本仓实测) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f97_test_file_criterion.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f97_test_file_criterion.py PASS"
+else
+  echo "✗ tests/test_aipos_f97_test_file_criterion.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F96: 文档与设计稿清理(碎片化 N3/N4/N5)件④——「产品文档不教退役做法」只减不增棘轮
+# (扫描 docs/、README.md、QUICKSTART.md、agents/**/*.md、templates/**; 式样声明在夹具常量, 基线 tests/f96_docs_retired_practice_baseline.json, docs/ 零容忍)
+echo
+echo "── tests/test_aipos_f96_docs_retired_practice_ratchet.py (F96 文档退役做法棘轮·新增命中红/基线残留红·docs/ 零容忍·式样不误报现行做法) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f96_docs_retired_practice_ratchet.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f96_docs_retired_practice_ratchet.py PASS"
+else
+  echo "✗ tests/test_aipos_f96_docs_retired_practice_ratchet.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F98: 零依赖兜底解析器(无 PyYAML 时 frontmatter 唯一读取口的兜底路径)覆盖产品写出的全部形状且与 yaml.safe_load 逐形状相同
 # (两层 lane / seq-of-maps rework_rounds / 空 []{} / 引号与多行引号标量 / YAML 1.1 标量解析), 不支持结构 fail-closed(键路径+行号, 不再静默置 None);
 # 整文件登记 tools/aipos_cli/tests/test_frontmatter_zerodep.py(此前从未入 run-all) + 随语义改动的 F87 坏卡靶场用例(lane.repo 指向靶场已声明仓)

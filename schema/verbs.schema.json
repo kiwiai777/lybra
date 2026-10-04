@@ -1520,8 +1520,29 @@
         "additionalProperties": false
       }
     },
+    "lybra_my_tasks": {
+      "description": "AIPOS-F86/F87/F90/F93/F95 工位开工面 `lybra my-tasks --workstation <工位目录> --json`: 产品解析工位身份(charter_render.workstation_identity)、给出本实例 claimed 卡的开工面字段与选卡结论 next_card(判据 next_resolver.NEXT_CARD_RULE)。AIPOS-F95 件①: next_card.kickoff = 完整开工提示文本, 由产品按本条目 kickoff 声明渲染(next_resolver.render_kickoff 唯一实现); 工位 /go(go.ts)只原样发送 next_card.kickoff(缺/空 = 拒开工), lybra loop 自动拉起 harness 时用同一字段(逐字节相同)。",
+      "phase": "workstation",
+      "surface": ["cli"],
+      "cli_command": "lybra my-tasks",
+      "kickoff": {
+        "template": "已认领任务卡 {task_id}。\n\n工作树路径: {worktree_path}\n报告落点: {report_path}\n任务卡路径: {card_path}\n报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n{report_field_lines}\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。",
+        "report_field_line": {
+          "with_value": "- {key}: {value}({hint})",
+          "without_value": "- {key}: ({hint})"
+        },
+        "placeholders": {
+          "task_id": "next_card.task_id",
+          "worktree_path": "next_card.worktree_path(card_workstation_view, 与认领建树同一推导)",
+          "report_path": "next_card.report_path",
+          "card_path": "next_card.card_path",
+          "report_field_lines": "next_card.report_required_frontmatter 逐项按 report_field_line 成行(声明 transitions artifact_ingest 单源; 审计卡附被审 tip/tree 实值), 以换行连接"
+        },
+        "note": "与 F95 前 go.ts 字面量文案等义(开工提示只含工作树/报告落点/卡路径/报告必填字段, 零门动词)。任一占位缺值或报告必填字段形变 = 渲染失败, 该卡不入选 next_card(拒因 KICKOFF_UNRESOLVED, fail-closed)。"
+      }
+    },
     "lybra_loop": {
-      "description": "AIPOS-F73D 顾问侧驱动器 `lybra loop`: Owner 信封授权下, 有界循环推进一张卡到 completed。每轮 = `next` 推导 → 账务命令经 `next --run` 同一执行体(next_resolver.execute_derived_action)执行并重推导; agent 步(spawn_worker/await_artifact)只调既有 `agent watch --expect` 有界等待产物, 永不唤醒 agent(被连接红线); closure 记录存在且治理已落账(transitions nodes.N6.landing 判据)即 exit 0, 结案后未落账先执行 N6 落账步(lybra governance-commit --task-id, AIPOS-F94)。本条目是 loop 退出码/参数/信封动词集合的唯一声明; 代码(tools/aipos_cli/loop_driver.py)只读不写死。",
+      "description": "AIPOS-F73D 顾问侧驱动器 `lybra loop`: Owner 信封授权下, 有界循环推进一张卡到 completed。每轮 = `next` 推导 → 账务命令经 `next --run` 同一执行体(next_resolver.execute_derived_action)执行并重推导; agent 步(spawn_worker/await_artifact)只调既有 `agent watch --expect` 有界等待产物; 唯一例外 = AIPOS-F95: Owner 信封 launch_harnesses 授权该卡 harness 且条件全满足时, 进入等待前按 enums.schema harness.launch 模板在工位拉起一次 harness 进程(见本条目 launch), 否则退回手工模式(工位敲 /go, 行为同 F95 前); closure 记录存在且治理已落账(transitions nodes.N6.landing 判据)即 exit 0, 结案后未落账先执行 N6 落账步(lybra governance-commit --task-id, AIPOS-F94)。本条目是 loop 退出码/参数/信封动词集合的唯一声明; 代码(tools/aipos_cli/loop_driver.py)只读不写死。",
       "phase": "driver",
       "surface": [
         "cli"
@@ -1577,6 +1598,11 @@
             "minimum": 0.01,
             "description": "等待轮询间隔秒(沿用 agent watch --interval 默认 15); 等待一律经 watch, 禁 sleep 自旋"
           },
+          "no_launch": {
+            "type": "boolean",
+            "default": false,
+            "description": "AIPOS-F95 件③: 不拉起 harness 进程(即使信封 launch_harnesses 授权), 退回手工模式: 等待提示「请在 <工位目录> 的 <harness> 会话敲 /go」"
+          },
           "json": {
             "type": "boolean",
             "description": "JSON 输出"
@@ -1623,7 +1649,37 @@
         ],
         "subject_rule": "AIPOS-F90 件①: 信封 task_selector(task_mode/project/task_ids)的判定对象——审计卡(task_mode=audit 且声明 reviewed_task_id)= 被审卡, 其余 = 本卡; 驱动方(loop_driver.find_envelope)与门(_match_claim_envelope)同读唯一实现 autonomy_policy.envelope_subject。审计卡认领同样计入信封额度(count_bound)。",
         "allowed_verbs_note": "loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。AIPOS-F78B 件③: 门侧驱动方一阶段放行(queue return/audit-verdict/queue close 的 autonomy_mode=PreAuthorized)也读此集合判 verb 是否在信封授权内(claim 经 _match_claim_envelope, 其余经 _match_driver_envelope, 同一 matcher autonomy_policy.match_claim_envelope)。 AIPOS-F94: governance_commit = N6 落账步(transitions nodes.N6.landing), 独立列入本集合(非门动词, 门侧 _match_driver_envelope 不会收到它); 覆盖驱动方与本卡的有效信封即授权落账。",
-        "one_stage_release": "驱动方 token(roles.schema driver.role_class 或其 role_class 自定义角色) + autonomy_mode=PreAuthorized + owner_policy_ref 命名的信封(agent_or_role 覆盖驱动方实例/角色类, task_selector 覆盖本卡, 有效/时间窗/额度) → 门在 dry_run 一跳内落记录(preauthorized_release=true), 不索 owner_confirm; 不匹配 = BLOCK + envelope_guards 出口, CLI 薄壳 exit 5(无信封)。"
+        "one_stage_release": "驱动方 token(roles.schema driver.role_class 或其 role_class 自定义角色) + autonomy_mode=PreAuthorized + owner_policy_ref 命名的信封(agent_or_role 覆盖驱动方实例/角色类, task_selector 覆盖本卡, 有效/时间窗/额度) → 门在 dry_run 一跳内落记录(preauthorized_release=true), 不索 owner_confirm; 不匹配 = BLOCK + envelope_guards 出口, CLI 薄壳 exit 5(无信封)。",
+        "launch_harnesses": "AIPOS-F95 件②(b): 信封字段 launch_harnesses(harness 值列表, 取值 ⊆ enums.schema harness 中 launch 非 null 者; 缺省 [] = 不授权拉起, 只手工 /go)。`lybra envelope mint --launch-harness <harness>`(可重复)经 --confirm 由 Owner 签, 门 owner_decision_record 同一路径落盘。loop 判授权 = autonomy_policy.envelope_authorizes_launch(同一信封族唯一实现, 禁第二实现)。",
+        "boundary_template": "This artifact records a bounded, revocable Owner pre-authorization (PreAuthorized envelope). Within its time bound, count bound and task_selector it authorizes the covered driver (`lybra loop`, one-stage gate release) to run only these verbs: {allowed_verbs} (declared in verbs.schema lybra_loop.envelope.allowed_verbs). Harness launch authorized: {launch_harnesses} (the loop may start a declared enums.schema harness.launch template once per card at the enrolled local workstation; otherwise the workstation starts work by hand with /go). It does not authorize publish, credential access, or any verb outside this list. Reaching the time or count bound, or status revoked/expired, drops matching actions back to Supervised (per-task owner_confirm).",
+        "boundary_template_note": "AIPOS-F95 件②(c): 信封正文 Boundary 由本模板渲染(autonomy_policy.build_autonomy_policy_markdown 唯一渲染), {allowed_verbs} = 本条目 allowed_verbs 实值, {launch_harnesses} = 信封 launch_harnesses 实值(空 = none (manual /go only))。存量信封正文不改写(追加式), 新铸即正确。"
+      },
+      "launch": {
+        "description": "AIPOS-F95 件③: loop 内拉起薄函数(tools/aipos_cli/loop_driver.py, 无守护/调度/心跳/常驻): 在 N1 执行体等待与 N3 审计体等待进入 watch 之前, 条件全满足才拉起一次——①信封 launch_harnesses 覆盖该卡 harness(卡面值, 缺省 card.schema default_by_task_mode); ②该 harness 有 launch 模板(enums.schema harness.launch 非 null)且其可执行在驱动方 PATH; ③按本项目 enrollment_log 中该实例最新 land 事件定位工位位置 {host, dir}, transport(enums.schema workstation_transport)已支持(本卡只 local); ④charter_render.workstation_identity(dir) 的实例 = 卡 assigned_to(审计卡 = 其认领实例); ⑤未给 --no-launch; ⑥kickoff = 该工位 `my-tasks --workstation <dir> --json` 的 next_card.kickoff 且 next_card.task_id = 等待目标卡。任一不满足 → 退回手工模式(等待提示含工位目录与 /go; remote 工位提示 <host>:<dir>)。",
+        "grace_seconds": 30,
+        "grace_note": "产物就绪后给进程的宽限期(秒): 期内自行退出即收尾, 超期终止整个进程组",
+        "terminate_wait_seconds": 5,
+        "terminate_note": "终止进程组: 先 SIGTERM, 等本秒数仍未退出再 SIGKILL",
+        "stderr_tail_lines": 20,
+        "stderr_tail_note": "进程退出而产物未就绪(早退) → exit 3(wait_timeout), 附 stderr 末尾本行数",
+        "manual_hint": {
+          "local": "请在 {dir} 的 {harness} 会话敲 /go",
+          "remote": "跨机拉起未支持(待跨机工位卡), 请在 {host}:{dir} 的工位敲 /go",
+          "unlocated": "请在实例 {instance} 的工位({harness} 会话)敲 /go(工位位置定位不到: {reason})",
+          "note": "手工模式(未拉起)的等待提示唯一声明; 占位 {dir}/{host}/{harness}/{instance}/{reason} 由 loop 按工位位置(enrollment_log land 事件)填入"
+        },
+        "progress_max_chars": 160,
+        "progress_note": "stdout 事件流(enums.schema harness.launch.events)逐行汇总为一行式进度(工具调用名+首段参数 / 助手文本首行 / 错误), 每行截断到本字符数; 未知事件类型只计数不刷屏, 结束时一行计数; 凭据字样(token/secret/password/api key/credential/bearer)所在行整行隐去, 长凭据串打码",
+        "lifecycle": [
+          "新进程组(start_new_session)、无 shell、stdin=/dev/null、cwd=工位目录、环境继承驱动方",
+          "等待仍经唯一哨兵 agent_watch_fs.run_fs_watch(expect_ready = 推导核可推导); 进程退出也唤醒(stop_when)",
+          "产物就绪 → 宽限 grace_seconds 后终止进程组",
+          "进程退出而产物未就绪 → exit 3 附 stderr 末尾 stderr_tail_lines 行",
+          "等待超时 → 终止进程组后 exit 3",
+          "loop 收到 SIGINT/SIGTERM → 先终止进程组, 再按该信号退出(不新增退出码)",
+          "一次 loop 运行对一张卡至多拉起一次, 不自动重试(重跑 loop = 显式再拉起)",
+          "拉起与收尾事件追加进该卡既有 session record 的 Events(谁拉起/何时/harness/工位/pid), 不新建记录类型"
+        ]
       },
       "await_artifacts": {
         "executor": {
@@ -1636,7 +1692,7 @@
         }
       },
       "invariants": [
-        "永不唤醒 agent: agent 步只等产物, 开会话由 Owner/工位无参命令",
+        "默认不唤醒 agent: agent 步只等产物, 开会话由 Owner/工位无参命令 /go; 唯一例外 = Owner 信封 launch_harnesses 授权下按声明模板拉起一次(AIPOS-F95, 见 launch), 门仍被动, 认领仍由驱动方经门完成, 进程存活不作真相",
         "禁静默/禁无限循环: --max-steps 与 --max-wait 为硬上限, 任一出口非零带原文",
         "禁 sleep 自旋: 等待一律经 agent watch",
         "token 永不上屏",
