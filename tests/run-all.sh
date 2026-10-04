@@ -1065,6 +1065,18 @@ else
   overall=1
 fi
 
+# AIPOS-F106: 门地址、端口与连接声明单源(碎片化族 B-a: M1/M3/M15/M2)——门基址唯一推导口(委托 ConnectionResolver.resolve_gate_url)·
+# 凭据角色偏好序一处声明·端口字面只在 config.schema·configuration_sources 与 identity_resolution 无矛盾·env 名单声明=代码使用·
+# 工作区根 env 统一 LYBRA_WORKSPACE_ROOT(旧名单点兼容告警)·.lybra/role 只经唯一实现读
+echo
+echo "── tests/test_aipos_f106_gate_address_single_source.py (F106 剥 /mcp 零·角色偏好序单源·端口字面零·configuration_sources↔identity_resolution 无矛盾·env 声明=使用·.lybra/role 唯一读取) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f106_gate_address_single_source.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f106_gate_address_single_source.py PASS"
+else
+  echo "✗ tests/test_aipos_f106_gate_address_single_source.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
