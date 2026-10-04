@@ -976,6 +976,17 @@ else
   overall=1
 fi
 
+# AIPOS-F96: 文档与设计稿清理(碎片化 N3/N4/N5)件④——「产品文档不教退役做法」只减不增棘轮
+# (扫描 docs/、README.md、QUICKSTART.md、agents/**/*.md、templates/**; 式样声明在夹具常量, 基线 tests/f96_docs_retired_practice_baseline.json, docs/ 零容忍)
+echo
+echo "── tests/test_aipos_f96_docs_retired_practice_ratchet.py (F96 文档退役做法棘轮·新增命中红/基线残留红·docs/ 零容忍·式样不误报现行做法) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f96_docs_retired_practice_ratchet.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f96_docs_retired_practice_ratchet.py PASS"
+else
+  echo "✗ tests/test_aipos_f96_docs_retired_practice_ratchet.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
