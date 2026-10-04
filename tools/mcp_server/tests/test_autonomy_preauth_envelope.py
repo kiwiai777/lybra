@@ -687,7 +687,7 @@ class PreAuthEnvelopeGateTests(unittest.TestCase):
 
 class PreAuthEnvelopeRealRotateEndToEndTests(unittest.TestCase):
     """AIPOS-250 #4 — end-to-end via REAL serve-rotate creds (no hand-built registry) using the
-    EXACT minimal payload shape the owner-console SKILL tells the advisor to copy-paste. Proves the
+    EXACT minimal envelope payload shape (as `lybra envelope mint` sends it). Proves the
     Owner can actually get through: arm envelope (owner) -> in-envelope claim auto-release (executor).
     This is the integration guard the earlier lanes missed (mechanism green, path unreachable)."""
 
@@ -732,7 +732,7 @@ class PreAuthEnvelopeRealRotateEndToEndTests(unittest.TestCase):
         registry = load_service_role_registry(self.repo_root / ".lybra" / "connection.json")
         tokens = {t["role"]: t["token"] for t in config["tokens"]}
 
-        # EXACT minimal payload shape from the owner-console SKILL (decision_id + autonomy_policy only).
+        # EXACT minimal envelope payload shape (decision_id + autonomy_policy only).
         grant_payload = {
             "decision_id": "pol-decision-exec-mp-e2e",
             "actor": "owner",
@@ -820,7 +820,7 @@ class OwnerDecisionSchemaConformanceTests(unittest.TestCase):
 
     def test_skill_minimal_envelope_payload_passes_published_schema(self) -> None:
         schema = self._descriptor("lybra_owner_decision_record_dry_run")["inputSchema"]
-        # EXACT minimal shape the owner-console SKILL tells the advisor to send.
+        # Minimal envelope payload shape (decision_id + actor + autonomy_policy block; AIPOS-250).
         skill_payload = {
             "decision_id": "pol-decision-exec-mp-20260715",
             "actor": "owner",
@@ -839,63 +839,8 @@ class OwnerDecisionSchemaConformanceTests(unittest.TestCase):
         self.assertEqual(violations, [], f"SKILL envelope payload rejected by published schema: {violations}")
 
 
-class OwnerConsolePreAuthEnvelopeSkillTests(unittest.TestCase):
-    """AIPOS-250 SKILL delta: owner-console must teach how to ARM a PreAuthorized envelope, or the
-    O3 script step 1 dead-locks (the advisor still reads the stale 'zero autonomy' line and refuses).
-    """
-
-    _REPO = Path(__file__).resolve().parents[3]
-
-    def _skill(self, name: str) -> str:
-        path = self._REPO / "skills" / name / "SKILL.md"
-        self.assertTrue(path.is_file(), f"missing {path}")
-        return path.read_text(encoding="utf-8")
-
-    def test_owner_console_teaches_preauthorized_envelope(self) -> None:
-        text = self._skill("owner-console")
-        for needle in (
-            "预授权信封",
-            "owner_autonomy_policy",
-            "PreAuthorized",
-            "autonomy_policy",
-            "max_tasks",
-            "task_selector",
-            "lybra_owner_decision_record_confirm",
-            "revoked",
-            # AIPOS-250 #1: a COMPLETE copy-paste payload (decision_id + actor + policy block), not
-            # just field names — the advisor must be able to copy-change-run without guessing.
-            '"decision_id"',
-            '"autonomy_policy"',
-            '"policy_id"',
-            '"actor"',
-            # AIPOS-250 #2: the design rationale that the heavy owner_approval_evidence is NOT needed.
-            "harness_owner_confirm",
-            "带内",
-        ):
-            self.assertIn(needle, text, f"owner-console missing envelope teaching: {needle}")
-
-    def test_owner_console_drops_stale_zero_autonomy_claim(self) -> None:
-        text = self._skill("owner-console")
-        # the stale line that would make the advisor refuse to arm an envelope must be gone
-        self.assertNotIn("不实现任何免确认路径", text)
-
-    def test_owner_console_arms_confirm_is_in_ask_snippet(self) -> None:
-        """F-06: arming an envelope goes through owner_decision_record_confirm (owner_confirm-gated),
-        so it MUST be in the harness ask list or the Owner's one hand-press could be auto-approved."""
-        text = self._skill("owner-console")
-        self.assertIn("mcp__lybra__lybra_owner_decision_record_confirm", text)
-
-    def test_owner_console_holds_preauth_is_not_delegation_redline(self) -> None:
-        text = self._skill("owner-console")
-        self.assertIn("预授权 ≠ 委托", text)
-        # return/publish/audit stay per-task (claim-only tier)
-        self.assertIn("只放行 claim", text)
-
-    def test_executor_skill_teaches_envelope_and_no_confirm(self) -> None:
-        text = self._skill("lybra-executor")
-        self.assertIn("PreAuthorized", text)
-        self.assertIn("信封", text)
-        self.assertIn("SCOPE_DENIED", text)
+# AIPOS-F103 件②: 原 OwnerConsolePreAuthEnvelopeSkillTests(锁仓根旧技能 Owner 控制台 / 执行体接活 的字面)随旧技能删除;
+# 信封签发现行入口 = `lybra envelope mint --confirm`(门 owner_decision_record envelope 路径), 由上方门侧夹具与 F92 夹具覆盖。
 
 
 if __name__ == "__main__":

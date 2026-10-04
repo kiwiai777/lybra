@@ -42,10 +42,8 @@ The doctor command prints only redacted SHA-256 fingerprints. It never prints ra
 - `OWNER_CONFIRMATION_REQUIRED`: the operation is Owner-only (for example signing an envelope); the
   Owner runs it with the Owner credential.
 
-## Retired: the agent-side pull connector
+## Executors never pull work
 
-The executor pull skill `skills/lybra-executor` (AIPOS-248) and its gate-pull client are retired
-together with the old cross-machine connector (Owner ruling; the code is removed by a follow-up card):
-executors do not look for, claim or return work themselves. Workstations are opened with `/go` or launched by an authorized `lybra loop`; claiming is done by the advisor's `lybra loop` under an
-Owner-signed envelope. (Historical finding F-248-o3-3 from that connector: its slash-prefixed trigger
-was never a registered Claude Code command.)
+Executors do not look for, claim or return work themselves (the earlier agent-side pull connector was
+removed in AIPOS-F103). Workstations are opened with `/go` or launched by an authorized `lybra loop`;
+claiming is done by the advisor's `lybra loop` under an Owner-signed envelope.
