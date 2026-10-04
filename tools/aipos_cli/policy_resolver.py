@@ -6,7 +6,7 @@ AIPOS-343: 工作区无关 —— 不假设文件名前缀,通过 frontmatter �
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
-import yaml
+from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.schema_constants import RecordType
 
 
@@ -37,17 +37,16 @@ def _builtin_class_candidates(role: str) -> set[str]:
 
 
 def _parse_policy_frontmatter(content: str) -> dict[str, Any] | None:
-    """Parse YAML frontmatter from a policy markdown file. Returns None on failure."""
+    """Parse a policy markdown file's frontmatter via the product's single reader (parse_markdown_frontmatter).
+
+    AIPOS-F100: 原模块级 `import yaml` + 私自 split("---") 是第二读取实现, 且无 PyYAML 时整个模块 import 失败。
+    读不出(无块 / 任何解析告警 / 非映射)= None = 该文件不算有效信封(fail-closed, 与原 YAMLError → None 同义)。"""
     if not content.startswith("---"):
         return None
-    parts = content.split("---", 2)
-    if len(parts) < 3:
+    meta, _body, warnings = parse_markdown_frontmatter(content)
+    if warnings or not isinstance(meta, dict) or not meta:
         return None
-    try:
-        meta = yaml.safe_load(parts[1])
-        return meta if isinstance(meta, dict) else None
-    except yaml.YAMLError:
-        return None
+    return meta
 
 
 def _is_policy_active_and_valid(meta: dict[str, Any], now: datetime) -> bool:

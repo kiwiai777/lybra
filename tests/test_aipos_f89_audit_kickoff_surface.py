@@ -229,7 +229,9 @@ def test_item3_c_claim_template_same_place_not_counted_filled_report_recognized(
     assert nr.kickoff_refusal(gov, AUDIT, AUDITOR, queue_state="claimed", card_frontmatter=nr._read_frontmatter(
         queue_root_for(gov) / "claimed" / f"{AUDIT.lower()}.md")) is None
     # 已交未填全(只填 verdict): artifact_invalid 硬停点名 commit_sha, 不入门
-    _write(template, _fm({"verdict": "PASS", "commit_sha": "(待填写: tip)"}, "# r\n\n## 一句话结论\nPASS\n"))
+    # AIPOS-F100: 占位值按合法 YAML 写(单引号; 门写模板同形)——未加引号的 `(待填写: tip)` 是 YAML 错误, 读不出即硬停
+    # frontmatter_unreadable, 不再被兜底丢键后「碰巧」判成缺 commit_sha
+    _write(template, _fm({"verdict": "PASS", "commit_sha": "'(待填写: tip)'"}, "# r\n\n## 一句话结论\nPASS\n"))
     partial = nr.derive_next_step(AUDIT, gov)
     _show(f"[③c·未填全] action={partial.get('action')} missing={partial.get('missing_records')}")
     assert partial["action"]["type"] == "artifact_invalid" and "commit_sha" in partial["missing_records"][0]

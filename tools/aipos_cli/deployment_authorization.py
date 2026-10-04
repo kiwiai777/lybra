@@ -546,18 +546,16 @@ def _find_fix_chain_terminal(task_id: str, governance_root: Path) -> str | None:
             if not task_dir.is_dir():
                 continue
             for deriv_file in task_dir.glob("derivation_*.md"):
-                try:
-                    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-                    text = deriv_file.read_text(encoding="utf-8")
-                    metadata, _body, _warnings = parse_markdown_frontmatter(text)
-                    source = str(metadata.get("source_task_id") or "").strip()
-                    fix_task = str(metadata.get("fix_task_id") or "").strip()
-                    
-                    if source == current and fix_task:
-                        next_fix = fix_task
-                        break
-                except Exception:
-                    continue
+                # AIPOS-F100 件②: 修复链记录「必须读出」; 读不出 = FrontmatterReadError 向上(调用方点名拒), 禁静默跳过致链提前终止
+                from tools.aipos_cli.frontmatter import require_frontmatter
+
+                metadata, _body = require_frontmatter(deriv_file)
+                source = str(metadata.get("source_task_id") or "").strip()
+                fix_task = str(metadata.get("fix_task_id") or "").strip()
+
+                if source == current and fix_task:
+                    next_fix = fix_task
+                    break
             if next_fix:
                 break
         
@@ -591,31 +589,27 @@ def _find_continuation_task(task_id: str, governance_root: Path) -> str | None:
     if not task_file:
         return None
     
+    # AIPOS-F100 件②: 卡面「必须读出」; 读不出 = FrontmatterReadError 向上(调用方点名拒)——原 `except Exception: pass`
+    # 把读不出当「无承接」, 世系静默变短
+    from tools.aipos_cli.frontmatter import require_frontmatter
+
+    metadata, _body = require_frontmatter(task_file)
+    conclusion_note = str(metadata.get("conclusion_note") or "").strip()
+
+    if not conclusion_note:
+        return None
+
+    # 解析承接声明（匹配 "由续卡 TASK-ID 承接" 或 "由 TASK-ID 承接" 等模式）
+    # 使用项目声明的 task_id_pattern
     try:
-        from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-        text = task_file.read_text(encoding="utf-8")
-        metadata, _body, _warnings = parse_markdown_frontmatter(text)
-        conclusion_note = str(metadata.get("conclusion_note") or "").strip()
-        
-        if not conclusion_note:
-            return None
-        
-        # 解析承接声明（匹配 "由续卡 TASK-ID 承接" 或 "由 TASK-ID 承接" 等模式）
-        # 使用项目声明的 task_id_pattern
-        try:
-            task_id_pattern = _resolve_task_id_pattern(governance_root)
-            # 查找 "承接" 关键字附近的任务 ID
-            import re
-            # 匹配 "由...承接" 或 "承接" 附近的任务 ID
-            match = re.search(rf"(?:由.*?({task_id_pattern}).*?承接|承接.*?({task_id_pattern}))", conclusion_note)
-            if match:
-                continuation_id = match.group(1) or match.group(2)
-                return continuation_id
-        except SchemaLoadError:
-            pass
-    except Exception:
-        pass
-    
+        task_id_pattern = _resolve_task_id_pattern(governance_root)
+    except SchemaLoadError:
+        return None
+    import re
+    # 匹配 "由...承接" 或 "承接" 附近的任务 ID
+    match = re.search(rf"(?:由.*?({task_id_pattern}).*?承接|承接.*?({task_id_pattern}))", conclusion_note)
+    if match:
+        return match.group(1) or match.group(2)
     return None
 
 
@@ -792,7 +786,13 @@ def check_verdict_ref_authorization(
         elif task_id != reviewed_task_id:
             # AIPOS-F53: 修复轮承接判定 — 检查 commit 所属任务的世系是否包含 reviewed_task_id
             # 世系包括: fix 链 + 结案-承接关系
-            commit_lineage = _resolve_task_lineage(task_id, governance_root)
+            from tools.aipos_cli.frontmatter import FrontmatterReadError
+
+            try:
+                commit_lineage = _resolve_task_lineage(task_id, governance_root)
+            except FrontmatterReadError as exc:
+                uncovered.append(f"{commit_hash[:8]}: 属于 {task_id}, 世系记录读不出, 无法判承接: {exc}")
+                continue
             if reviewed_task_id not in commit_lineage:
                 uncovered.append(
                     f"{commit_hash[:8]}: 属于 {task_id}, 但裁决审的是 {reviewed_task_id} (跨卡挪用)"

@@ -48,10 +48,19 @@ def _check_project_map_staleness(repo_root: Path, validation: dict[str, Any]) ->
     if not map_path.is_file():
         return  # no map = no check
     
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+
+    def _note(warning: str) -> None:
+        if warning not in validation["warnings"]:
+            validation["warnings"].append(warning)
+
     try:
-        from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-        text = map_path.read_text(encoding="utf-8", errors="replace")
-        meta, _body, _warnings = parse_markdown_frontmatter(text)
+        # AIPOS-F100 件②: 地图与 return 记录「必须读出」; 读不出不再静默跳过检查, 而是出声点名(仍只告警, 不挡发布)
+        try:
+            meta, _body = require_frontmatter(map_path)
+        except FrontmatterReadError as exc:
+            _note(f"PROJECT_MAP_UNREADABLE (新鲜度未检查: {exc})")
+            return
         map_updated_str = str(meta.get("updated") or "").strip()
         if not map_updated_str:
             return  # no updated field = no check
@@ -67,23 +76,30 @@ def _check_project_map_staleness(repo_root: Path, validation: dict[str, Any]) ->
             return  # no returns = no check
         
         most_recent_return: datetime | None = None
+        unreadable: list[str] = []
         for task_dir in returns_root.iterdir():
             if not task_dir.is_dir():
                 continue
             for record_file in task_dir.glob("*.md"):
                 try:
-                    record_text = record_file.read_text(encoding="utf-8", errors="replace")
-                    record_meta, _record_body, _record_warnings = parse_markdown_frontmatter(record_text)
-                    returned_at_str = str(record_meta.get("returned_at") or record_meta.get("created_at") or "").strip()
-                    if not returned_at_str:
-                        continue
-                    returned_at = datetime.fromisoformat(returned_at_str.replace("Z", "+00:00"))
-                    if returned_at.tzinfo is None:
-                        returned_at = returned_at.replace(tzinfo=timezone.utc)
-                    if most_recent_return is None or returned_at > most_recent_return:
-                        most_recent_return = returned_at
-                except Exception:
+                    record_meta, _record_body = require_frontmatter(record_file)
+                except FrontmatterReadError as exc:
+                    unreadable.append(str(exc))
                     continue
+                returned_at_str = str(record_meta.get("returned_at") or record_meta.get("created_at") or "").strip()
+                if not returned_at_str:
+                    continue
+                try:
+                    returned_at = datetime.fromisoformat(returned_at_str.replace("Z", "+00:00"))
+                except ValueError:
+                    unreadable.append(f"{record_file}: returned_at 不是 ISO 时间 {returned_at_str!r}")
+                    continue
+                if returned_at.tzinfo is None:
+                    returned_at = returned_at.replace(tzinfo=timezone.utc)
+                if most_recent_return is None or returned_at > most_recent_return:
+                    most_recent_return = returned_at
+        if unreadable:
+            _note(f"PROJECT_MAP_STALENESS_PARTIAL ({len(unreadable)} 份 return 记录读不出, 新鲜度只按可读记录判; 首份: {unreadable[0]})")
         
         if most_recent_return is None:
             return  # no valid return records = no check

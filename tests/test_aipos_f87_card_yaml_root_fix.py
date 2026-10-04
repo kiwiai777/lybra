@@ -473,8 +473,13 @@ def test_item3_none_selectable_gives_reasons_and_go_relays_verbatim(tmp_path, mo
     gov, repo = _single_gov(tmp_path, monkeypatch)
     _card(gov, "AIPOS-F87NT", "claimed", extra={"claimed_at": "2026-10-02T00:00:00Z"})
     bad = gov / "5_tasks/queue/claimed/aipos-f87bad.md"
+    # 坏卡即便工作树已建也不可选(卡面判据先于工作树)。AIPOS-F100 件②: 读不出的卡不建树(fail-closed), 故先以可读卡面
+    # 建树, 再写坏卡面(模拟「认领建树后卡面被手改坏」)
+    bad.write_text(_bad_card_text("AIPOS-F87BAD", "claimed", "result_summary: ok", lane_repo=str(repo)), encoding="utf-8")
+    assert _ensure_worktree(gov, "AIPOS-F87BAD")["ok"]
     bad.write_text(_bad_card_text("AIPOS-F87BAD", "claimed", BAD_F42_LINE, lane_repo=str(repo)), encoding="utf-8")
-    assert _ensure_worktree(gov, "AIPOS-F87BAD")["ok"]  # 坏卡即便工作树已建也不可选(卡面判据先于工作树)
+    refused = _ensure_worktree(gov, "AIPOS-F87BAD")
+    assert refused["ok"] is False and "读不出" in refused["message"], refused
     _card(gov, "AIPOS-F87PD", "pending")
     data = _my_tasks(gov, capsys)
     _show("[件③ 全不可选] " + json.dumps({k: data[k] for k in ("next_card", "next_card_excluded")}, ensure_ascii=False))

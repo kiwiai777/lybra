@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.frontmatter import _resolve_plain, parse_markdown_frontmatter
 from tools.aipos_cli.records import expected_claim_log_path, expected_closure_record_path, expected_return_record_path, expected_session_record_path
 from tools.schema_loader import get_enum_values
 from tools.schema_constants import RecordType, Verdict
@@ -123,24 +123,103 @@ def ensure_safe_record_path(repo_root: Path, path: Path, record_type: str, task_
     return resolved
 
 
-def _stdlib_yaml_scalar(value: Any) -> str:
-    """stdlib YAML scalar emitter — 使用 json.dumps 转义字符串 (AIPOS-F22B).
+# AIPOS-F100 件①: 双引号标量里必须转义的字符 = YAML 不可打印字符(PyYAML Reader.NON_PRINTABLE, 读侧 frontmatter 同表)
+# + YAML 1.1 换行符(\x85 \u2028 \u2029, 原样写出会被读侧当换行折叠) + 引号/反斜杠。其余字符原样写出(含中文/emoji)。
+_DQ_MUST_ESCAPE_RE = re.compile('[^\x20-\x7E\xA0-\u2027\u202A-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]|["\\\\]')
+_DQ_SHORT_ESCAPES = {"\0": "\\0", "\x07": "\\a", "\b": "\\b", "\t": "\\t", "\n": "\\n", "\x0b": "\\v", "\x0c": "\\f",
+                     "\r": "\\r", "\x1b": "\\e", '"': '\\"', "\\": "\\\\", "\x85": "\\N", "\u2028": "\\L", "\u2029": "\\P"}
+# 明标量形式写出的键: 只含这些字符且读回仍是同一字符串(不被 YAML 1.1 解析成 bool/null/数/时间戳)时才不加引号
+_PLAIN_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
-    json.dumps 输出的双引号字符串是合法的 YAML 双引号标量, 且被 zerodep 回退解析器支持.
-    """
+
+def _dq_escape_char(match: "re.Match[str]") -> str:
+    ch = match.group()
+    if ch in _DQ_SHORT_ESCAPES:
+        return _DQ_SHORT_ESCAPES[ch]
+    code = ord(ch)
+    if code <= 0xFF:
+        return f"\\x{code:02x}"
+    if code <= 0xFFFF:
+        return f"\\u{code:04x}"
+    return f"\\U{code:08x}"
+
+
+def _stdlib_yaml_scalar(value: Any) -> str:
+    """stdlib YAML 标量写出(AIPOS-F22B → F100): 字符串一律双引号, 只转义 YAML 必须转义的字符(见 _DQ_MUST_ESCAPE_RE);
+    bool/null/int 用 YAML 1.1 明标量; float 与 yaml.safe_dump 同形(.inf/.nan, 指数形补 .0, 否则会被读成字符串)。
+    其他类型(tuple/set/bytes/对象等)不猜, ValueError 拒写——与 safe_dump 路径同样过不了写后回读校验。"""
     if value is True:
         return "true"
     if value is False:
         return "false"
     if value is None:
         return "null"
-    if isinstance(value, (int, float)):
-        return str(value)
-    # 字符串: 使用 json.dumps 输出双引号 YAML 标量
-    # AIPOS-F87 件①: ensure_ascii=False —— 默认 \uXXXX 转义不被 zerodep 回退解析器还原(中文值会被写坏),
-    # 写后回读校验(_verify_frontmatter_roundtrip)对此 fail-closed; 原样输出非 ASCII 字符才可逐字还原。
-    text = str(value)
-    return json.dumps(text, ensure_ascii=False)
+    if isinstance(value, int):
+        return str(int(value))
+    if isinstance(value, float):
+        if value != value:
+            return ".nan"
+        if value in (float("inf"), float("-inf")):
+            return ".inf" if value > 0 else "-.inf"
+        text = repr(value).lower()
+        if "." not in text and "e" in text:
+            text = text.replace("e", ".0e", 1)
+        return text
+    if isinstance(value, str):
+        return '"' + _DQ_MUST_ESCAPE_RE.sub(_dq_escape_char, value) + '"'
+    raise ValueError(f"stdlib YAML 写出器不支持的值类型 {type(value).__name__}: {value!r}; 拒写")
+
+
+def _stdlib_yaml_key(key: Any) -> str:
+    """映射键: 安全的字符串键写明标量(与 safe_dump 同形, 如 ``task_id``), 其余字符串键写双引号; 非字符串键写其标量形式。"""
+    if isinstance(key, str):
+        if _PLAIN_KEY_RE.match(key) and _resolve_plain(key, 0, key) == key:
+            return key
+        return _stdlib_yaml_scalar(key)
+    if isinstance(key, (bool, int, float)) or key is None:
+        return _stdlib_yaml_scalar(key)
+    raise ValueError(f"stdlib YAML 写出器不支持的映射键类型 {type(key).__name__}: {key!r}; 拒写")
+
+
+def _stdlib_emit_mapping(mapping: dict[Any, Any], indent: int, lines: list[str], first_prefix: str | None = None) -> None:
+    """块映射。first_prefix 非 None 时首个键写在该前缀之后(紧凑序列项 ``- key: v``), 其余键缩进到 indent。"""
+    pad = " " * indent
+    for n, (key, value) in enumerate(mapping.items()):
+        lead = (first_prefix if (n == 0 and first_prefix is not None) else pad) + _stdlib_yaml_key(key) + ":"
+        _stdlib_emit_value(value, indent, lead, lines, in_mapping=True)
+
+
+def _stdlib_emit_sequence(items: list[Any], indent: int, lines: list[str]) -> None:
+    """块序列, 每项 ``- `` 起于 indent 列(映射下的序列与 safe_dump 同为无缩进形, 由调用方传入键的列)。"""
+    pad = " " * indent
+    for item in items:
+        if isinstance(item, dict) and item:
+            _stdlib_emit_mapping(item, indent + 2, lines, first_prefix=pad + "- ")
+        elif isinstance(item, list) and item:
+            lines.append(pad + "-")
+            _stdlib_emit_sequence(item, indent + 2, lines)
+        else:
+            _stdlib_emit_value(item, indent, pad + "-", lines, in_mapping=False)
+
+
+def _stdlib_emit_value(value: Any, indent: int, lead: str, lines: list[str], *, in_mapping: bool) -> None:
+    """lead = ``<缩进>key:`` 或 ``<缩进>-``; 标量/空集合写在同一行, 非空集合另起块。"""
+    if isinstance(value, dict):
+        if not value:
+            lines.append(lead + " {}")
+            return
+        lines.append(lead)
+        _stdlib_emit_mapping(value, indent + 2, lines)
+        return
+    if isinstance(value, list):
+        if not value:
+            lines.append(lead + " []")
+            return
+        lines.append(lead)
+        # 映射下的序列: 无缩进(safe_dump 同形, ``- `` 与键同列); 序列下的序列由 _stdlib_emit_sequence 处理
+        _stdlib_emit_sequence(value, indent if in_mapping else indent + 2, lines)
+        return
+    lines.append(lead + " " + _stdlib_yaml_scalar(value))
 
 
 def _self_check_yaml(yaml_text: str, ordered_meta: dict[str, Any]) -> None:
@@ -207,26 +286,10 @@ def _dump_frontmatter_yaml(ordered_meta: dict[str, Any]) -> str:
         # safe_dump 输出末尾有换行, 去除后再拼接
         return yaml_text.rstrip("\n")
 
-    # stdlib fallback: 逐行构建 (列表/嵌套映射复用原有逻辑, 标量使用 _stdlib_yaml_scalar)
+    # stdlib 回退(zerodep 核心, AIPOS-F100 件①): 递归写块 YAML, 形状集 = 读侧 frontmatter 兜底解析器支持集
+    # (任意深度映射/序列、映射内无缩进序列、紧凑序列项 ``- key: v``、空 []/{}、双引号标量)。
     lines: list[str] = []
-    for key, value in ordered_meta.items():
-        if isinstance(value, list):
-            if not value:
-                lines.append(f"{key}: []")
-                continue
-            lines.append(f"{key}:")
-            for item in value:
-                lines.append(f"- {_stdlib_yaml_scalar(item)}")
-            continue
-        if isinstance(value, dict):
-            if not value:
-                lines.append(f"{key}: " + "{}")
-                continue
-            lines.append(f"{key}:")
-            for sub_key, sub_val in value.items():
-                lines.append(f"  {sub_key}: {_stdlib_yaml_scalar(sub_val)}")
-            continue
-        lines.append(f"{key}: {_stdlib_yaml_scalar(value)}")
+    _stdlib_emit_mapping(ordered_meta, 0, lines)
     return "\n".join(lines)
 
 

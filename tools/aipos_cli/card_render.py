@@ -23,7 +23,6 @@ from typing import Any
 from tools.aipos_cli.next_resolver import (
     REPO_ROOT,
     _find_task_in_queue,
-    _read_frontmatter,
     card_report_contract,
     card_report_path,
     card_worktree_location,
@@ -76,10 +75,10 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
     task_path, queue_dir = _find_task_in_queue(governance_root, task_id)
     if not task_path:
         raise ValueError(f"queue 目录中找不到任务卡 {task_id}")
-    fm = _read_frontmatter(task_path)
-    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+    from tools.aipos_cli.frontmatter import require_frontmatter
 
-    _meta, body, _warn = parse_markdown_frontmatter(task_path.read_text(encoding="utf-8"))
+    # AIPOS-F100 件②: 卡面与正文同一次「必须读出」(读不出 = FrontmatterReadError, ValueError 族, fail-closed)
+    fm, body = require_frontmatter(task_path)
     intent = derive_intent_declarations(fm, governance_root)
     if intent["blocking_reasons"]:
         raise ValueError("; ".join(intent["blocking_reasons"]))
