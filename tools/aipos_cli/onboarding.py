@@ -412,11 +412,14 @@ def generate_onboarding_guide(
 
     # ── Step 6: 顾问发工位注册码 ─────────────────────────────────────
     adv_roles = ["lybra", "roles", "--workspace-root", gq, "enroll-code"]
+    from tools.aipos_cli.custom_roles import role_classes_in_group
+
+    # AIPOS-F102 件②: 发工位注册码的角色 = 工位类(roles.schema class_groups.workstation, 注册表顺序), 原写死的工位类分组元组退役
     step6 = [
         _cmd(*adv_roles, "--role", role, "--instance", _shell_quote(inst[role]), "--governance-root", _shell_quote(project_name),
              "--gate-url", _shell_quote(gate), "--ttl", "86400", "--owner-authorization-ref", policies[role],
              "--reason", _shell_quote(f"Onboarding {project_name} {role}"))
-        for role in ("executor", "auditor")
+        for role in role_classes_in_group("workstation")
     ]
     steps.append({
         "step_number": 6,

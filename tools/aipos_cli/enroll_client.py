@@ -492,27 +492,6 @@ def is_governance_workspace(path: Path, governance_root: str | None = None) -> b
     return has_workspace_queue(target)
 
 
-def _resolve_role_class_for_guard(role: str, workspace_root: Path) -> str:
-    """AIPOS-F22D: 守卫内角色类解析(单源: roles 注册表 class, 禁自建名单)。
-
-    判据:
-    - 内建角色(executor/auditor/planner/advisor/owner/copilot/owner-dispatch) → 角色名即类名
-    - 自定义角色 → 从注册表查 role_class(如 hbj-coder → executor)
-    - 解析失败 → 回落为角色名自身(安全侧: 未知角色按工位类处理, 拒绝治理仓)
-
-    此函数仅用于守卫判定, 不在守卫内自建角色名单——真相来自注册表。
-    """
-    try:
-        from tools.aipos_cli.custom_roles import resolve_role_to_class
-        resolved = resolve_role_to_class(role, str(workspace_root))
-        if resolved:
-            return resolved
-    except Exception:
-        pass
-    # 降级: 内建角色名即类名; 未知角色回落自身(安全侧)
-    return role
-
-
 def land_enrollment_code(
     gate_url: str,
     code: str,
@@ -776,9 +755,15 @@ def enroll(
         
         # AIPOS-F22D: 治理工作区守卫——按角色类判定(F23⑧ 第九坑防护升级)
         # 工位角色类(executor/auditor)→拒绝; 顾问角色类(planner/advisor)→允许
+        # AIPOS-F102 件②: 角色类唯一解析 custom_roles.resolve_role_to_class(解析不到 = 拒, 原「回落角色名自身」退役); 分组读 roles.schema class_groups
         if _gov_workspace:
-            _role_class = _resolve_role_class_for_guard(role, workspace_root)
-            if _role_class not in ("planner", "advisor"):
+            from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class, role_classes_in_group
+
+            try:
+                _role_class = resolve_role_to_class(role, str(workspace_root), required=True)
+            except UnknownRoleClass as exc:
+                raise RuntimeError(f"enroll 目标是治理工作区({workspace_root}), {exc}") from exc
+            if _role_class not in role_classes_in_group("governance_seat"):
                 raise RuntimeError(
                     f"enroll 目标是治理工作区({workspace_root}), 角色 {role}(类={_role_class}) 拒绝落盘 —— "
                     f"工位角色类(executor/auditor)只落工位目录 .lybra/。\n"
@@ -798,6 +783,7 @@ def enroll(
     # AIPOS-F54-fix1 ③: lybra_bin —— 指向实际部署位(运行中 bin 优先, 否则探测 .deploy/current);
     # 推导不出则不写(留空会让 /lybra sync 探测, 探测失败时 sync 会带路, 禁静默写错路径)
     # 始终校正(已入册工位重跑 enroll 即补铸/校正, 禁"已有错值则保留")
+    from tools.aipos_cli.custom_roles import role_classes_in_group
     from tools.aipos_cli.workstation_wiring import (
         materialize_pi_wiring,
         resolve_deployed_lybra_bin,
@@ -837,11 +823,11 @@ def enroll(
             effective_gov_root, role=role, agent_instance=agent_instance,
         )
         policy_derivation = {"policy_id": derived_policy, "reason": policy_reason}
-        role_class = resolve_role_class(role, token_entry)
+        role_class = resolve_role_class(role, token_entry, project_root=workspace_root)
         if derived_policy:
             write_role_file(lybra_dir, role, agent_instance, derived_policy, harness=harness_record)
             files_written.append("role(含 owner_policy_ref)")
-        elif role_class in ("executor", "auditor"):
+        elif role_class in role_classes_in_group("workstation"):  # AIPOS-F102 件②: 工位类读 roles.schema class_groups
             # 卡面②: 推导不出 → 报错带路, 禁静默留空导致循环起不来(验收⑩)
             raise RuntimeError(
                 f"enroll 推导 owner_policy_ref 失败: {policy_reason}。\n"
@@ -867,7 +853,7 @@ def enroll(
     # AIPOS-F54 ①: .pi 接线 + AGENTS.md 种子(seed_only 幂等, 已存在跳过不覆盖)
     # AIPOS-F82 件②: 接线目标由 distribution 声明推导(只写目标存在的扩展挂载, 不写的项进 warnings); AGENTS.md = charter_render 渲染物
     if role and harness_record is None:
-        role_class = resolve_role_class(role, token_entry)
+        role_class = resolve_role_class(role, token_entry, project_root=workspace_root)
         wiring_report = materialize_pi_wiring(workspace_root, role=role, role_class=role_class)
         files_written.append(".pi/接线")
 

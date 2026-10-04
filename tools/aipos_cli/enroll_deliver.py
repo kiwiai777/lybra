@@ -104,24 +104,6 @@ def normalize_gate_url_for_same_host(gate_url: str) -> str:
     return f"http://127.0.0.1:{port}"
 
 
-def _get_role_class(role: str, workspace_root: str | None = None) -> str | None:
-    """获取角色类(AIPOS-F22 大项A: F23⑧守卫按角色类判定落点)
-    
-    Args:
-        role: 角色名(builtin或custom)
-        workspace_root: workspace路径(用于加载custom roles注册表)
-    
-    Returns:
-        角色类名(executor/auditor/planner/advisor等)或None
-    """
-    try:
-        from tools.aipos_cli.custom_roles import resolve_role_to_class
-        return resolve_role_to_class(role, workspace_root)
-    except Exception:
-        # 降级:无法解析时返回角色名自身(builtin roles映射到自己)
-        return role
-
-
 def validate_workspace_root(workspace_root: str, role: str) -> None:
     """校验workspace_root按角色类判定(AIPOS-F22 F23⑧)
     
@@ -135,17 +117,21 @@ def validate_workspace_root(workspace_root: str, role: str) -> None:
         role: 角色名
     
     Raises:
-        ValueError: 工位角色类在治理仓时拒绝
+        ValueError: 工位角色类在治理仓时拒绝; 角色类不可解析(custom_roles.UnknownRoleClass, ValueError 子类)
     """
-    role_class = _get_role_class(role, workspace_root)
+    # AIPOS-F102 件②: 角色类解析唯一实现 custom_roles.resolve_role_to_class(解析不到 = 拒, 原「异常回落角色名」退役),
+    # 分组读 roles.schema class_groups(原写死的顾问类分组元组退役)
+    from tools.aipos_cli.custom_roles import resolve_role_to_class, role_classes_in_group
+
+    role_class = resolve_role_to_class(role, workspace_root, required=True)
     # AIPOS-F88 件②: 治理仓识别 = 唯一结构判据(enroll_client.is_governance_workspace → workspace_config.has_workspace_queue),
     # 不看路径名(原路径子串判定退役: 换机器目录名不同即失效, 且把路径里恰含治理目录名的产品仓误判为治理仓)
     from tools.aipos_cli.enroll_client import is_governance_workspace
 
     is_governance = is_governance_workspace(Path(workspace_root).expanduser())
     
-    # 顾问角色类:允许治理仓,也允许工位(任何路径都通过)
-    if role_class in ("planner", "advisor"):
+    # 治理席位类(顾问/规划方, roles.schema class_groups.governance_seat):允许治理仓,也允许工位(任何路径都通过)
+    if role_class in role_classes_in_group("governance_seat"):
         return
     
     # 工位角色类(executor/auditor)+其他角色:拒绝治理仓

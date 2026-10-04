@@ -1119,7 +1119,8 @@ def sync(
         from tools.aipos_cli.custom_roles import resolve_role_to_class
         from tools.aipos_cli.workstation_wiring import materialize_pi_wiring
 
-        role_class = resolve_role_to_class(ctx["role"], identity.get("governance_root_declared")) or ctx["role"]
+        # AIPOS-F102 件②: 角色类唯一解析, 解析不到 = 拒(UnknownRoleClass), 原「回落角色名」退役
+        role_class = resolve_role_to_class(ctx["role"], identity.get("governance_root_declared"), required=True)
         wiring_backfill = materialize_pi_wiring(ctx["harness_root"], role=ctx["role"], role_class=role_class)
 
     # AIPOS-F83 件③: 落地后复扫 .pi 挂载告警(声明内暂缺者本次 fetch 后应已恢复; 仍缺 = 如实告警)

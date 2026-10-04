@@ -73,17 +73,13 @@ def _level_rank(decl: dict[str, Any], level: str) -> int:
 # ---------------------------------------------------------------------------
 
 def resolve_role_class_for(governance_root: Path, role: str) -> str:
-    """角色 → 类: 内建角色自映射; 自定义角色查门注册表(custom_roles, 与分发/信封同一加载); 未知 = 拒。"""
-    from tools.aipos_cli.custom_roles import resolve_role_to_class
+    """角色 → 类: 唯一实现 custom_roles.resolve_role_to_class(required=True, 内建自映射 / 门注册表自定义); 未知 = 拒(AIPOS-F102 件② 统一失败语义)。"""
+    from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class
 
-    clean = str(role or "").strip()
-    cls = resolve_role_to_class(clean, governance_root) if clean else None
-    if not cls:
-        raise WriteBoundaryError(
-            f"角色 {clean!r} 未知: 既非 roles.schema 内建角色, 也不在门注册表(connection.json tokens[].role_class)自定义角色内; "
-            f"出口: lybra roles register {clean or '<name>'} --class <builtin>"
-        )
-    return cls
+    try:
+        return str(resolve_role_to_class(role, governance_root, required=True))
+    except UnknownRoleClass as exc:
+        raise WriteBoundaryError(str(exc)) from exc
 
 
 def enrolled_instances(governance_root: Path) -> list[dict[str, Any]]:
