@@ -352,6 +352,7 @@ def _report_frontmatter_verdict_for_display(governance_root: Path, task_id: str)
     markdown file). It is surfaced purely so operators can see what the (non-authoritative) report says alongside the
     real gate verdict. Read failures are reported on stderr and yield an empty display (never block/alter finalize).
     """
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
     from tools.aipos_cli.next_resolver import _check_verdict_artifact, _read_frontmatter
     from tools.schema_loader import SchemaLoadError
 
@@ -359,7 +360,11 @@ def _report_frontmatter_verdict_for_display(governance_root: Path, task_id: str)
         report_path = _check_verdict_artifact(Path(governance_root), f"{task_id}R")
         if report_path is None:
             return {"report_path": None, "report_verdict": None}
-        return {"report_path": str(report_path), "report_verdict": _read_frontmatter(report_path).get("verdict")}
+        return {"report_path": str(report_path),
+                "report_verdict": _read_frontmatter(report_path, allow_missing_block=True).get("verdict")}
+    except FrontmatterReadError as exc:
+        # AIPOS-F100 件②: 展示面不省略——报告读不出时显示该文件与「读不出: <路径>: <原因>」(仍只展示, 不判 finalize)
+        return {"report_path": exc.path, "report_verdict": str(exc)}
     except (SchemaLoadError, OSError, ValueError) as exc:
         print(f"Warning: audit report display lookup failed for {task_id}: {exc}", file=sys.stderr)
         return {"report_path": None, "report_verdict": None}
@@ -369,7 +374,7 @@ def _actor_is_claimer(governance_root: Path, task_id: str, actor: str) -> dict[s
     """AIPOS-F78B 件⑤b: finalize actor==claimer 判据(与 queue_mutation complete / close_task 同一函数 actor_matches_task_actor)。
     卡不在 queue(历史卡/靶场无卡)或卡面无 claimed_by = 无据可判 → 放行并出声; 有 claimed_by 且不匹配 = 拒。"""
     from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles
-    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
     from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
 
     try:
@@ -379,9 +384,10 @@ def _actor_is_claimer(governance_root: Path, task_id: str, actor: str) -> dict[s
     if card_path is None:
         return {"ok": True, "reason": f"task card {task_id} not in queue; claimer unknown (not judged)"}
     try:
-        metadata, _body, _warnings = parse_markdown_frontmatter(card_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        return {"ok": False, "reason": f"task card unreadable for claimer check: {card_path}: {exc}"}
+        # AIPOS-F100 件②: 卡面「必须读出」; 读不出 = 拒(原「解析告警被忽略 → claimed_by 空 → not judged 放行」退役)
+        metadata, _body = require_frontmatter(card_path)
+    except FrontmatterReadError as exc:
+        return {"ok": False, "reason": f"task card unreadable for claimer check: {exc}"}
     claimed_by = str(metadata.get("claimed_by") or "").strip()
     if not claimed_by:
         return {"ok": True, "reason": f"task card {task_id} has no claimed_by; claimer unknown (not judged)"}

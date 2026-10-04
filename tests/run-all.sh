@@ -1080,6 +1080,8 @@ else
   overall=1
 fi
 
+# AIPOS-F100: 零依赖兑现——frontmatter 读不出即拒(每个改动调用方一个坏卡/坏记录靶场)·屏蔽 PyYAML 全链路(草稿→发布→认领→交回 ingest→派审→裁决 ingest→finalization ingest→close)每步回读且与有 PyYAML 时逐字段相同(形状表双向夹具在 test_frontmatter_zerodep.py, 已登记于 F98 块)
+run_pytest "tests/test_aipos_f100_read_or_refuse.py" "$REPO_ROOT/tests/test_aipos_f100_read_or_refuse.py" "$REPO_ROOT/tests/test_aipos_f100_zerodep_full_chain.py"
 # AIPOS-F111: 并行审计——loop 拉起按卡号取开工提示(my-tasks --task-id)·同工位两张审计卡同时拉起各取各 kickoff·拒因原样转述·run-all.sh merge=union 并集合并靶场
 run_pytest "tests/test_aipos_f111_parallel_audit.py" "$REPO_ROOT/tests/test_aipos_f111_parallel_audit.py"
 # AIPOS-F104: 状态与枚举投影单源(族 C-b: M6/M7/M16/N6)——搬卡转移表读 transitions.schema queue_mutations(validate_transition 删)、
