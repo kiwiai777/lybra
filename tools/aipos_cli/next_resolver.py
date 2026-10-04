@@ -443,6 +443,7 @@ NEXT_CARD_RULE: dict[str, Any] = {
         "report_path 可推导(开工提示必需的报告落点)",
         "report_required_frontmatter 可推导(AIPOS-F93 件①: 报告必填字段, 声明 transitions artifact_ingest 单源; 审计卡附被审 tip/tree)",
         "kickoff_refusal 为空(AIPOS-F90 件③: 本实例在办、未结案、产物未交——判据 next_resolver.kickoff_refusal)",
+        "kickoff 可渲染(AIPOS-F95 件①: 开工提示按 verbs.schema lybra_my_tasks.kickoff 声明渲染, next_resolver.render_kickoff)",
     ],
     "order": "claimed_at 最近优先; claimed_at 缺失/不可解析者排最后; 同时刻按 task_id 升序",
 }
@@ -505,6 +506,67 @@ def _claimed_at_sort_key(value: Any) -> float | None:
     except ValueError:
         return None
     return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).timestamp()
+
+
+class KickoffRenderError(ValueError):
+    """AIPOS-F95 件①: 开工提示渲染失败(声明缺 / 占位缺值 / 报告必填字段形变)。"""
+
+
+_KICKOFF_PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
+
+
+def kickoff_declaration() -> dict[str, Any]:
+    """verbs.schema lybra_my_tasks.kickoff(开工提示唯一声明)。缺 = KickoffRenderError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    try:
+        decl = ((load_schema("verbs", REPO_ROOT).get("verbs") or {}).get("lybra_my_tasks") or {}).get("kickoff")
+    except SchemaLoadError as exc:
+        raise KickoffRenderError(f"verbs.schema.json 读取失败: {exc}") from exc
+    if not isinstance(decl, dict) or not isinstance(decl.get("template"), str) or not isinstance(decl.get("report_field_line"), dict):
+        raise KickoffRenderError("verbs.schema.json verbs.lybra_my_tasks.kickoff(template / report_field_line)未声明")
+    return decl
+
+
+def render_kickoff(next_card: dict[str, Any]) -> str:
+    """AIPOS-F95 件①: 按声明把 next_card 渲染为完整开工提示(唯一实现; 工位 /go 原样发送, loop 拉起原样传入)。
+
+    报告必填字段每项须为 {key: 非空串, hint: 串, value: 串|None}; 列表空/项形变/占位缺值 = KickoffRenderError。
+    占位单遍替换(值内的花括号不再被解析)。"""
+    decl = kickoff_declaration()
+    line_decl = decl["report_field_line"]
+    contract = next_card.get("report_required_frontmatter")
+    if not isinstance(contract, list) or not contract:
+        raise KickoffRenderError("report_required_frontmatter 缺或为空")
+    field_lines: list[str] = []
+    for item in contract:
+        if not isinstance(item, dict) or not isinstance(item.get("key"), str) or not item.get("key") or not isinstance(item.get("hint"), str):
+            raise KickoffRenderError(f"report_required_frontmatter 项形变: {item!r}")
+        value = item.get("value")
+        if value is not None and not isinstance(value, str):
+            raise KickoffRenderError(f"report_required_frontmatter[{item['key']}].value 非串: {value!r}")
+        line_template = line_decl.get("with_value" if value else "without_value")
+        if not isinstance(line_template, str) or not line_template:
+            raise KickoffRenderError("verbs.schema.json lybra_my_tasks.kickoff.report_field_line 缺 with_value/without_value")
+        entry = {"key": item["key"], "hint": item["hint"], "value": value or ""}
+        field_lines.append(_KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(entry, m.group(1)), line_template))
+    values = {
+        "task_id": next_card.get("task_id"),
+        "worktree_path": next_card.get("worktree_path"),
+        "report_path": next_card.get("report_path"),
+        "card_path": next_card.get("card_path"),
+        "report_field_lines": "\n".join(field_lines),
+    }
+    return _KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(values, m.group(1)), decl["template"])
+
+
+def _kickoff_value(values: dict[str, Any], name: str) -> str:
+    if name not in values:
+        raise KickoffRenderError(f"开工提示模板占位 {{{name}}} 未知")
+    value = values[name]
+    if not isinstance(value, str) or (not value and name not in ("value", "hint")):
+        raise KickoffRenderError(f"开工提示占位 {{{name}}} 缺值")
+    return value
 
 
 def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
@@ -588,6 +650,14 @@ def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
             "report_required_frontmatter": chosen.get("report_required_frontmatter"),
             "claimed_at": claimed_at.isoformat() if hasattr(claimed_at, "isoformat") else claimed_at,
         }
+        # AIPOS-F95 件①: 完整开工提示由产品按声明渲染(工位 /go 与 loop 拉起同读本字段, 逐字节相同); 渲染不出 = 不开工(fail-closed)
+        try:
+            next_card["kickoff"] = render_kickoff(next_card)
+        except KickoffRenderError as exc:
+            excluded.append({"task_id": next_card["task_id"], "code": "KICKOFF_UNRESOLVED",
+                             "reason": f"开工提示不可渲染: {exc}; 按 block-and-report 上报"})
+            next_card = None
+    if next_card is not None:
         for other in eligible[1:]:
             excluded.append({
                 "task_id": str(other.get("task_id") or ""),

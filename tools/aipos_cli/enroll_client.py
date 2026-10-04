@@ -573,6 +573,16 @@ def land_enrollment_code(
     return True
 
 
+def _landed_host(explicit: str | None) -> str:
+    """AIPOS-F95 件③b: land 事件的 host 值——显式(enroll_deliver --ssh 目标)优先, 否则本机主机名。不含空白(日志按空白分字段)。"""
+    import socket
+
+    host = str(explicit or "").strip() or socket.gethostname()
+    if not host or any(ch.isspace() for ch in host):
+        raise RuntimeError(f"land 事件 host 值非法(空或含空白): {host!r}")
+    return host
+
+
 def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = None, owner_policy_ref: str | None = None,
                     *, harness: dict[str, str] | None = None) -> list[str]:
     """写入 .lybra/role 文件(统一JSON格式,AIPOS-R6H靶②)。
@@ -645,8 +655,12 @@ def enroll(
     verify: bool = False,
     harness_kind: str | None = None,
     harness_dir: Path | None = None,
+    landed_host: str | None = None,
 ) -> dict[str, Any]:
     """执行完整的 enroll 流程。
+
+    AIPOS-F95 件③b: land 事件带工位位置 host(本机 enroll = 本机主机名 socket.gethostname(); enroll_deliver --ssh 传 ssh 目标),
+    与 workstation=<目录> 一起写入 enrollment_log, 供 lybra loop 定位工位(enrollment.workstation_location)。
 
     AIPOS-F92 件②: harness_kind/harness_dir —— 工位 harness(distribution.schema harness_semantics; 缺省 pi = 既有行为)。
     非 pi harness(如 claude-code 顾问会话): .lybra/role 记 harness {kind, dir}; 不落 .pi 接线; 落盘(+verify)后经同一分发引擎
@@ -863,7 +877,7 @@ def enroll(
             effective_gate_url,
             code,
             transport_token=(sc["transport_token"] if sc is not None else None),
-            landed_detail=f"workstation={workspace_root} files={files_written}",
+            landed_detail=f"host={_landed_host(landed_host)} workstation={workspace_root} files={files_written}",
         )
     
     # Step 7 (AIPOS-R6S 大项C②): 可选 --verify — 新 token 调一次 gate, 不通即回滚
@@ -971,6 +985,7 @@ def main() -> int:
     parser.add_argument("--backfill", action="store_true", help="AIPOS-C2 大项B: 幂等补铸模式 —— 只按 config.schema 必填键铸全 connection.json (含 workspace_root), 不动 token")
     parser.add_argument("--quiet", action="store_true", help="Suppress non-error output")
     parser.add_argument("--json", action="store_true", help="Output JSON")
+    parser.add_argument("--landed-host", help="AIPOS-F95: host recorded in the land event (enroll_deliver --ssh passes the ssh target; default = this machine's hostname)")
     
     args = parser.parse_args()
     
@@ -1005,6 +1020,7 @@ def main() -> int:
             policy=args.policy,
             bootstrap_token=getattr(args, 'bootstrap_token', None),
             verify=bool(getattr(args, 'verify', False)),
+            landed_host=getattr(args, 'landed_host', None),
         )
     except RuntimeError as e:
         if args.json:
