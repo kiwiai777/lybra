@@ -1526,7 +1526,7 @@
       "surface": ["cli"],
       "cli_command": "lybra my-tasks",
       "kickoff": {
-        "template": "已认领任务卡 {task_id}。\n\n工作树路径: {worktree_path}\n报告落点: {report_path}\n任务卡路径: {card_path}\n报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n{report_field_lines}\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。",
+        "template": "已认领任务卡 {task_id}。\n\n工作树路径: {worktree_path}\n报告落点: {report_path}\n任务卡路径: {card_path}{remote_material}\n报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n{report_field_lines}\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。",
         "report_field_line": {
           "with_value": "- {key}: {value}({hint})",
           "without_value": "- {key}: ({hint})"
@@ -1536,8 +1536,11 @@
           "worktree_path": "next_card.worktree_path(card_workstation_view, 与认领建树同一推导)",
           "report_path": "next_card.report_path",
           "card_path": "next_card.card_path",
-          "report_field_lines": "next_card.report_required_frontmatter 逐项按 report_field_line 成行(声明 transitions artifact_ingest 单源; 审计卡附被审 tip/tree 实值), 以换行连接"
+          "report_field_lines": "next_card.report_required_frontmatter 逐项按 report_field_line 成行(声明 transitions artifact_ingest 单源; 审计卡附被审 tip/tree 实值), 以换行连接",
+          "remote_material": "AIPOS-F110 件②: 本机工位 = 空串(开工提示与 F110 前逐字节相同); 跨机工位 = 按 remote_material 模板渲染的门机材料段(`my-tasks --remote-workstation` 经 next_resolver.remote_kickoff_context 取上下文交 render_kickoff; lybra loop 拉起跨机工位时传该参数)"
         },
+        "remote_material": "\n以上工作树、报告落点、任务卡均在门机 {gate_host}(治理根 {governance_root}), 不在你的工位 {workstation_host} 本地; 门机在你的工位上的 ssh 别名: {gate_ssh_alias}; 材料访问方式(项目声明): {material_access}",
+        "remote_material_note": "AIPOS-F110 件②: 占位 gate_host = 门机(驱动方)主机名, governance_root = 门机治理根, workstation_host = land 事件 host, gate_ssh_alias / material_access = project.json workstations.<实例> 声明(远端视角)。占位缺值 = 渲染失败(fail-closed); 声明值含凭据字样在读声明时即拒。",
         "note": "与 F95 前 go.ts 字面量文案等义(开工提示只含工作树/报告落点/卡路径/报告必填字段, 零门动词)。任一占位缺值或报告必填字段形变 = 渲染失败, 该卡不入选 next_card(拒因 KICKOFF_UNRESOLVED, fail-closed)。"
       }
     },
@@ -1655,7 +1658,7 @@
         "boundary_template_note": "AIPOS-F95 件②(c): 信封正文 Boundary 由本模板渲染(autonomy_policy.build_autonomy_policy_markdown 唯一渲染), {allowed_verbs} = 本条目 allowed_verbs 实值, {launch_harnesses} = 信封 launch_harnesses 实值(空 = none (manual /go only))。存量信封正文不改写(追加式), 新铸即正确。"
       },
       "launch": {
-        "description": "AIPOS-F95 件③: loop 内拉起薄函数(tools/aipos_cli/loop_driver.py, 无守护/调度/心跳/常驻): 在 N1 执行体等待与 N3 审计体等待进入 watch 之前, 条件全满足才拉起一次——①信封 launch_harnesses 覆盖该卡 harness(卡面值, 缺省 card.schema default_by_task_mode); ②该 harness 有 launch 模板(enums.schema harness.launch 非 null)且其可执行在驱动方 PATH; ③按本项目 enrollment_log 中该实例最新 land 事件定位工位位置 {host, dir}, transport(enums.schema workstation_transport)已支持(本卡只 local); ④charter_render.workstation_identity(dir) 的实例 = 卡 assigned_to(审计卡 = 其认领实例); ⑤未给 --no-launch; ⑥kickoff = 该工位 `my-tasks --workstation <dir> --json` 的 next_card.kickoff 且 next_card.task_id = 等待目标卡。任一不满足 → 退回手工模式(等待提示含工位目录与 /go; remote 工位提示 <host>:<dir>)。",
+        "description": "AIPOS-F95 件③: loop 内拉起薄函数(tools/aipos_cli/loop_driver.py, 无守护/调度/心跳/常驻): 在 N1 执行体等待与 N3 审计体等待进入 watch 之前, 条件全满足才拉起一次——①信封 launch_harnesses 覆盖该卡 harness(卡面值, 缺省 card.schema default_by_task_mode); ②该 harness 有 launch 模板(enums.schema harness.launch 非 null)且其可执行在驱动方 PATH; ③按本项目 enrollment_log 中该实例最新 land 事件定位工位位置 {host, dir}, transport(enums.schema workstation_transport)已支持(local; AIPOS-F110 起 remote 经 ssh, 见本段 remote); ④charter_render.workstation_identity(dir) 的实例 = 卡 assigned_to(审计卡 = 其认领实例)(remote 工位: 门机读不到远端目录, 身份 = land 事件实例, 另须 project.json workstations.<实例> 材料声明 + ssh 探测可达); ⑤未给 --no-launch; ⑥kickoff = 该工位 `my-tasks --workstation <dir> --json` 的 next_card.kickoff 且 next_card.task_id = 等待目标卡(remote: `my-tasks --actor <实例> --task-id <卡> --remote-workstation`, 同一 render_kickoff 附门机材料段)。任一不满足 → 退回手工模式(等待提示含工位目录与 /go; remote 工位提示 <host>:<dir>)。",
         "grace_seconds": 30,
         "grace_note": "产物就绪后给进程的宽限期(秒): 期内自行退出即收尾, 超期终止整个进程组",
         "terminate_wait_seconds": 5,
@@ -1664,7 +1667,7 @@
         "stderr_tail_note": "进程退出而产物未就绪(早退) → exit 3(wait_timeout), 附 stderr 末尾本行数",
         "manual_hint": {
           "local": "请在 {dir} 的 {harness} 会话敲 /go",
-          "remote": "跨机拉起未支持(待跨机工位卡), 请在 {host}:{dir} 的工位敲 /go",
+          "remote": "请在 {host}:{dir} 的 {harness} 会话敲 /go(跨机工位)",
           "unlocated": "请在实例 {instance} 的工位({harness} 会话)敲 /go(工位位置定位不到: {reason})",
           "note": "手工模式(未拉起)的等待提示唯一声明; 占位 {dir}/{host}/{harness}/{instance}/{reason} 由 loop 按工位位置(enrollment_log land 事件)填入"
         },
@@ -1678,8 +1681,24 @@
           "等待超时 → 终止进程组后 exit 3",
           "loop 收到 SIGINT/SIGTERM → 先终止进程组, 再按该信号退出(不新增退出码)",
           "一次 loop 运行对一张卡至多拉起一次, 不自动重试(重跑 loop = 显式再拉起)",
-          "拉起与收尾事件追加进该卡既有 session record 的 Events(谁拉起/何时/harness/工位/pid), 不新建记录类型"
-        ]
+          "拉起与收尾事件追加进该卡既有 session record 的 Events(谁拉起/何时/harness/工位/pid), 不新建记录类型",
+          "AIPOS-F110 跨机(transport=remote): 本地只起 ssh 子进程(新进程组、无 shell、cwd 不设、stdin=管道写入 kickoff 后关闭); 远端按 remote 段声明起新进程组并回传组号; 终止 = 经 ssh 对远端组 TERM→等 terminate_wait_seconds→KILL, 再清本地 ssh 组"
+        ],
+        "remote": {
+          "description": "AIPOS-F110 件①: transport=remote(enums.schema workstation_transport)的拉起声明。ssh 目标 = 该实例最新 land 事件 host(enroll_deliver --ssh 写入的 ssh 目标), 不另设声明位。拉起 argv = ssh_argv + [<host>, <远端命令>]; 远端命令 = 固定 sh 脚本 + 逐个 shell 引号化的参数(工位目录 + harness.launch.argv 模板原样, 含 {kickoff} 占位)——kickoff 不进命令行, 经 ssh stdin 逐字节传入, 远端脚本按字节读尽 stdin 后整参数替换 {kickoff}(kickoff_safe 危险字符 ` $( ${ 换行 不经任何 shell 展开); 远端 set -m 作业 = 新进程组, 组号以 pgid_marker 行首行回传(stdout 其余行照常按 events 汇总)。实现唯一: tools/aipos_cli/harness_launch.py(remote_launch_command / probe_remote / LaunchedHarness / terminate_group)。",
+          "ssh_argv": ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"],
+          "ssh_argv_note": "-T 不分配终端; BatchMode=yes 不交互索要口令(凭据只走 ssh 自身配置/密钥, 永不经 Lybra); 探测/拉起/清理共用本前缀(可注入的 ssh 执行器 = PATH 上的 ssh, 夹具以替身走同一代码路径)",
+          "remote_shell": "bash",
+          "remote_shell_note": "远端脚本解释器: 须支持非交互 set -m 作业控制(后台作业 = 新进程组); dash 无终端时关作业控制故不用 sh。macOS / 常见 Linux 均自带 bash; 远端无此解释器 = 探测拒(exit 127)",
+          "pgid_marker": "lybra-remote-pgid=",
+          "pgid_timeout_seconds": 30,
+          "pgid_note": "拉起后至多等本秒数收远端组号行; 未收到(ssh 断开/远端脚本失败/超时)= 拉起失败(清本地 ssh 组, exit 3 附 stderr 末尾与手工提示)",
+          "probe_timeout_seconds": 20,
+          "probe_note": "拉起前探测: ssh 可达 + 远端工位目录存在 + harness 可执行在远端非交互 PATH(exit 255 = ssh 不可达; 3 = 目录不存在; 4 = 可执行不在 PATH)。任一不过 = 不拉起, 退回手工并提示原因",
+          "kill_timeout_seconds": 20,
+          "kill_note": "清理时每次经 ssh 发信号的超时; 远端发信号失败(ssh 不可达/超时)不吞: 记入收尾事件 termination=remote_kill_failed(...), 本地 ssh 组照清",
+          "material_declaration": "project.json workstations.<实例>(config.schema configuration_sources.project_json.schema.workstations): gate_ssh_alias(远端视角门机 ssh 别名)+ material_access(远端经何种方式读写门机材料)。remote 工位未声明 = 拒拉起, 提示 `lybra project set-workstation`; 含凭据字样 = 拒(提示里永不出现凭据)"
+        }
       },
       "await_artifacts": {
         "executor": {
