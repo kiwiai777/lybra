@@ -396,6 +396,7 @@ def enroll_deliver_ssh(
             "--workspace", workspace_root,
             "--policy", owner_policy_ref,
             "--bootstrap-token", owner_token,
+            "--landed-host", ssh_target,  # AIPOS-F95 件③b: land 事件 host = ssh 目标(跨机工位, loop 不拉起而提示 host:dir)
             "--json",
         ]
         

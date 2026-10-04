@@ -35,6 +35,7 @@ import base64
 import binascii
 import json
 import secrets
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -306,6 +307,74 @@ def _code_fingerprint(code: str) -> str:
     return "sha256:" + hashlib.sha256(code.encode()).hexdigest()[:12]
 
 
+def enrollment_trail_path(workspace_root: Path) -> Path:
+    """本项目 enrollment_log.md 位置(append-only 审计日志; 写入与 F95 工位位置读取同一口径)。"""
+    from tools.aipos_cli.workspace_config import governance_paths
+
+    return governance_paths(Path(workspace_root))["decision_log"].parent / "enrollment_log.md"
+
+
+# AIPOS-F95 件③b: land 事件 reason 字段的位置载荷(enroll_client 写 `host=<主机> workstation=<目录> files=[...]`)
+_LAND_LINE_RE = re.compile(r"^- (?P<ts>\S+)\s+land\s+.*?\binstance=(?P<instance>\S+)\s+.*?\breason=(?P<reason>.*)$")
+_LAND_HOST_RE = re.compile(r"(?:^|\s)host=(?P<host>\S+)")
+_LAND_DIR_RE = re.compile(r"(?:^|\s)workstation=(?P<dir>.+?)(?:\s+files=|$)")
+
+
+def workstation_transport_declaration() -> dict[str, Any]:
+    """enums.schema workstation_transport(工位位置 transport 值域 / 已支持与否 / 缺 host 缺省)唯一读取口。缺 = ValueError。"""
+    from tools.schema_loader import code_repo_schema_root, load_schema
+
+    decl = (load_schema("enums", code_repo_schema_root()).get("enums") or {}).get("workstation_transport")
+    if not isinstance(decl, dict) or not isinstance(decl.get("values"), list) or not str(decl.get("missing_host") or "").strip():
+        raise ValueError("enums.schema.json enums.workstation_transport(values / missing_host)未声明")
+    return decl
+
+
+def workstation_location(workspace_root: str | Path, instance: str) -> dict[str, Any]:
+    """AIPOS-F95 件③b: 实例工位位置 {host, dir} = 本项目 enrollment_log 中该实例最新 land 事件; 再按声明解析 transport。
+
+    返回 {found, instance, host, dir, transport, supported, reason, landed_at}:
+      - found=False: 日志缺 / 无该实例 land 事件 / 事件无 workstation 目录(reason 说明)
+      - host 缺(F95 前存量事件)→ host=None, transport = 声明 missing_host(本机)
+      - host == 本机主机名(socket.gethostname)→ local, 否则 remote; supported 读声明
+    只读, 不写日志。"""
+    import socket
+
+    decl = workstation_transport_declaration()
+    supported = {str(v.get("value")): bool(v.get("supported")) for v in decl["values"] if isinstance(v, dict)}
+    out: dict[str, Any] = {"found": False, "instance": instance, "host": None, "dir": None, "transport": None,
+                           "supported": False, "reason": "", "landed_at": None}
+    trail = enrollment_trail_path(_workspace_root_path(workspace_root))
+    if not trail.is_file():
+        out["reason"] = f"{trail} 不存在(本项目无接入登记)"
+        return out
+    latest: re.Match[str] | None = None
+    for line in trail.read_text(encoding="utf-8").splitlines():
+        match = _LAND_LINE_RE.match(line.strip())
+        if match and match.group("instance") == instance:
+            latest = match
+    if latest is None:
+        out["reason"] = f"{trail.name} 无实例 {instance} 的 land 事件(该实例未在本项目接入登记)"
+        return out
+    reason = latest.group("reason")
+    dir_match = _LAND_DIR_RE.search(reason)
+    if not dir_match or not dir_match.group("dir").strip():
+        out["reason"] = f"{trail.name} 中 {instance} 最新 land 事件无 workstation=<目录>: {reason[:120]}"
+        return out
+    host_match = _LAND_HOST_RE.search(reason)
+    host = host_match.group("host") if host_match else None
+    if host is None:
+        transport = str(decl["missing_host"])
+    else:
+        transport = "local" if host == socket.gethostname() else "remote"
+    if transport not in supported:
+        out["reason"] = f"transport {transport!r} 不在 enums.schema workstation_transport 值域 {sorted(supported)}"
+        return out
+    out.update(found=True, host=host, dir=dir_match.group("dir").strip(), transport=transport,
+               supported=supported[transport], landed_at=latest.group("ts"))
+    return out
+
+
 def _append_enrollment_trail(
     workspace_root: Path,
     *,
@@ -317,8 +386,7 @@ def _append_enrollment_trail(
     reason: str,
 ) -> Path:
     """Append-only 审计日志。"""
-    from tools.aipos_cli.workspace_config import governance_paths
-    trail = governance_paths(workspace_root)["decision_log"].parent / "enrollment_log.md"
+    trail = enrollment_trail_path(workspace_root)
     trail.parent.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     inst_str = f"instance={instance}" if instance else "instance=(any)"
