@@ -22,12 +22,12 @@
 ```bash
 # 启动监控（每300秒报告一次健康状态）
 lybra agent watch \
-  --workspace-root ~/ai-project-os \
+  --workspace-root <治理根> \
   --stream \
   --health 300 \
   --proc-pattern "node" \
   --session-dirs "/tmp/pi-sessions,~/.cache/pi" \
-  --worktree-path ~/projects/lybra \
+  --worktree-path <卡工作树> \
   --run-log /tmp/executor.log
 ```
 
@@ -109,9 +109,9 @@ lybra agent watch \
 --session-dirs "/tmp/pi-sessions,~/.cache/pi"
 ```
 
-✅ **工作树监控**：指向产品仓库（检测代码产出）
+✅ **工作树监控**：指向卡工作树（检测代码产出）
 ```bash
---worktree-path ~/projects/lybra
+--worktree-path <卡工作树>
 ```
 
 ### 2. 日志聚合
@@ -128,6 +128,5 @@ journalctl -u lybra-executor.service -o json
 
 ## 参考
 
-- 设计输入：`task_cards/AIPOS-284D/FINDING-CANDIDATE-proc-liveness.md`（进程活性观察面）
-- 实战判据：AIPOS-293三派死亡诊断（静默死=CPU不爬+零文件+零工作树）
-- 任务卡：`~/ai-project-os/2_projects/lybra/5_tasks/queue/claimed/aipos-295.md`
+- 来历：AIPOS-295(健康监护)、AIPOS-293 实战判据(静默死=CPU不爬+零文件+零工作树)
+- 推进一张卡的等待由顾问 `lybra loop` 内部经 `agent watch --expect` 完成; 本页的 `--health` 只是人工监督时的旁路观察面, 不替代 loop

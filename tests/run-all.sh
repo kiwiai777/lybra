@@ -1009,6 +1009,31 @@ else
   overall=1
 fi
 
+# AIPOS-F96: 文档与设计稿清理(碎片化 N3/N4/N5)件④——「产品文档不教退役做法」只减不增棘轮
+# (扫描 docs/、README.md、QUICKSTART.md、agents/**/*.md、templates/**; 式样声明在夹具常量, 基线 tests/f96_docs_retired_practice_baseline.json, docs/ 零容忍)
+echo
+echo "── tests/test_aipos_f96_docs_retired_practice_ratchet.py (F96 文档退役做法棘轮·新增命中红/基线残留红·docs/ 零容忍·式样不误报现行做法) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f96_docs_retired_practice_ratchet.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f96_docs_retired_practice_ratchet.py PASS"
+else
+  echo "✗ tests/test_aipos_f96_docs_retired_practice_ratchet.py FAIL"
+  overall=1
+fi
+
+# AIPOS-F98: 零依赖兜底解析器(无 PyYAML 时 frontmatter 唯一读取口的兜底路径)覆盖产品写出的全部形状且与 yaml.safe_load 逐形状相同
+# (两层 lane / seq-of-maps rework_rounds / 空 []{} / 引号与多行引号标量 / YAML 1.1 标量解析), 不支持结构 fail-closed(键路径+行号, 不再静默置 None);
+# 整文件登记 tools/aipos_cli/tests/test_frontmatter_zerodep.py(此前从未入 run-all) + 随语义改动的 F87 坏卡靶场用例(lane.repo 指向靶场已声明仓)
+echo
+echo "── tools/aipos_cli/tests/test_frontmatter_zerodep.py (F98 屏蔽 yaml 逐形状 = safe_load·发布卡两层 lane 不丢·safe_dump/stdlib 写出物回读·拒绝原文带键路径与行号·YAML 错误只丢坏键且有无 PyYAML 同果·读取口告警被 task_loader/lint 接住) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_frontmatter_zerodep.py" \
+    "$REPO_ROOT/tests/test_aipos_f87_card_yaml_root_fix.py::test_item3_none_selectable_gives_reasons_and_go_relays_verbatim" \
+    -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_frontmatter_zerodep.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_frontmatter_zerodep.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F99: 审计章程「独立全量基线」(① 母本硬规矩: 被审 tip 与 main 各独立跑项目声明测试清单、同一 grep 式样计数附 diff、
 # 新增失败=FAIL、worktree --detach 建 main 副本、计数异常先串行重跑、未声明跳过并注明 ② charter_render 唯一键表新增 runall_path,
 # 读 workspace_config.project_test_contract, 未声明=明确文字、形坏 fail-closed ③ 审计技能引用章程 ④ 靶场 lybra 实值/未声明两种渲染无残留占位)
