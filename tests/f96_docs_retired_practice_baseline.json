@@ -8,7 +8,7 @@
   "entries": [
     {
       "file": "QUICKSTART.md",
-      "line": 161,
+      "line": 166,
       "pattern": "lybra_init",
       "fp": "94ef2473b918",
       "text": "### 旧工作区初始化(`lybra init`)",
@@ -17,7 +17,7 @@
     },
     {
       "file": "QUICKSTART.md",
-      "line": 166,
+      "line": 171,
       "pattern": "lybra_init",
       "fp": "5c16341aaee7",
       "text": "lybra init --project-id my_project --template blank",
@@ -26,7 +26,7 @@
     },
     {
       "file": "QUICKSTART.md",
-      "line": 169,
+      "line": 174,
       "pattern": "lybra_init",
       "fp": "311845e7fab0",
       "text": "# lybra init ~/my-lybra-workspace --project-id my_project --template blank",
@@ -35,7 +35,7 @@
     },
     {
       "file": "README.md",
-      "line": 103,
+      "line": 114,
       "pattern": "lybra_init",
       "fp": "a87f5eebae82",
       "text": "lybra init ./ws --project-id my_project",
@@ -44,7 +44,7 @@
     },
     {
       "file": "README.md",
-      "line": 107,
+      "line": 118,
       "pattern": "lybra_on_off_sync",
       "fp": "a67dc2968a19",
       "text": "**`lybra on`** / **`lybra off`** to poll the gate for claimable tasks. Executors no longer claim",

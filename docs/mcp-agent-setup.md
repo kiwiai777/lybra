@@ -9,7 +9,7 @@ return work, launch a worker, dispatch audit, or finalize anything.
 |---|---|
 | **Owner** | Starts the gate (`lybra serve start`), signs envelopes (`lybra envelope mint --confirm`), issues enrollment codes. |
 | **Advisor** | Drives every card through product commands — `lybra loop --task-id <card>` derives and runs claim / return ingest / audit dispatch / verdict ingest / finalize / close with the advisor's own credential. The advisor never hand-writes gate calls. |
-| **Executor / auditor workstations** | **None.** A workstation is opened with `/go`, commits on the card branch and writes its report to the project's declared location; the advisor's `lybra loop` picks the artifact up. Workstations hold no claim / return / confirm scope. |
+| **Executor / auditor workstations** | **None.** A workstation is opened with `/go` (or launched by the advisor's `lybra loop` when the Owner's envelope authorizes it with `--launch-harness`), commits on the card branch and writes its report to the project's declared location; the advisor's `lybra loop` picks the artifact up. Workstations hold no claim / return / confirm scope. |
 
 Credentials are never typed or pasted: the advisor and each workstation redeem a one-time enrollment
 code (`lybra roles enroll --code …`), which writes a local `.lybra/connection.json` (`0600`). The
@@ -46,6 +46,6 @@ The doctor command prints only redacted SHA-256 fingerprints. It never prints ra
 
 The executor pull skill `skills/lybra-executor` (AIPOS-248) and its gate-pull client are retired
 together with the old cross-machine connector (Owner ruling; the code is removed by a follow-up card):
-executors do not look for, claim or return work themselves. Workstations open with `/go`; claiming is done by the advisor's `lybra loop` under an
+executors do not look for, claim or return work themselves. Workstations are opened with `/go` or launched by an authorized `lybra loop`; claiming is done by the advisor's `lybra loop` under an
 Owner-signed envelope. (Historical finding F-248-o3-3 from that connector: its slash-prefixed trigger
 was never a registered Claude Code command.)

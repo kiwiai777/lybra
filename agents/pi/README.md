@@ -9,7 +9,7 @@
 |---|---|
 | `agents/pi/skills/<name>/` | [`agents/skills/<name>/`](../skills/) |
 | `agents/pi/charters/<role>/AGENTS.md` | [`agents/roles/<role>/AGENTS.md`](../roles/) |
-| 旧门循环扩展目录 | (已退役删除, AIPOS-F91; pi 工位扩展母本见 [`agents/harness/pi/`](../harness/pi/), 工位只敲 `/go`) |
+| 旧门循环扩展目录 | (已退役删除, AIPOS-F91; pi 工位扩展母本见 [`agents/harness/pi/`](../harness/pi/), 工位开工 = 手工 `/go` 或经信封授权由 `lybra loop` 拉起) |
 
 ## 为什么迁移
 

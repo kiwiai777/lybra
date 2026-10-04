@@ -24,8 +24,10 @@ truth and the gate stay. It optimizes for **accountability**, not raw autonomy.
 
 Three principles are welded in:
 
-- **Gate, not engine.** Lybra does not run or wake agents. The Owner starts the gate; agents run in
-  their own harness (Claude Code, pi, Codex …) and only produce artifacts.
+- **Gate, not engine.** The gate does not run or wake agents. The Owner starts the gate; agents run in
+  their own harness (Claude Code, pi, Codex …) and only produce artifacts. A workstation harness is
+  started either by the Owner (`/go`) or — only when the Owner's envelope explicitly authorizes it — by
+  the advisor's `lybra loop`.
 - **Files are truth.** State lives in durable files, not in compressed conversation memory — it
   outlives the model.
 - **Drafter ≠ executor ≠ auditor.** The advisor drafts and drives; an executor does the work; an
@@ -45,9 +47,9 @@ lybra --help
 
 | Who | Does |
 |---|---|
-| **Owner** | Starts the gate (`lybra serve`), issues enrollment codes, signs autonomy envelopes (`lybra envelope mint`), and in each workstation presses **`/go`** — nothing else per card. |
+| **Owner** | Starts the gate (`lybra serve`), issues enrollment codes, signs autonomy envelopes (`lybra envelope mint`), and per card either presses **`/go`** in the workstation (manual mode, the default) or authorizes `lybra loop` to start the workstation harness (`lybra envelope mint … --launch-harness pi`). |
 | **Advisor** (a Claude Code session with the advisor skills) | Onboards the project, drafts and publishes cards, and advances each card with **`lybra loop`**. |
-| **Executor / auditor workstations** | Opened with `/go`; commit on the card branch and write the report to the project's declared location. No gate verbs, no credentials pasted. |
+| **Executor / auditor workstations** | Opened with `/go`, or launched by an authorized `lybra loop`; commit on the card branch and write the report to the project's declared location. No gate verbs, no credentials pasted. |
 
 **1. Onboard a project** — the product prints every step for your project, in order, with failure exits:
 
@@ -71,15 +73,24 @@ lybra loop --task-id <CARD-ID>
 
 ```
 publish → lybra loop: claim (gate builds the card worktree)
-            → executor workstation /go: commits on card/<ID> + writes RETURN
+            → executor workstation (/go, or launched by loop): commits on card/<ID> + writes RETURN
             → return ingest → audit dispatch
-            → auditor workstation /go: writes the audit report
+            → auditor workstation (/go, or launched by loop): writes the audit report
             → verdict ingest → finalize → close → governance commit (N6)
 ```
 
-`lybra loop` never wakes an agent: on an agent step it waits for the artifact and exits 3 if it is not
-there yet — press `/go` in the workstation and re-run the same command. Its exit codes are declared in
-`schema/verbs.schema.json` (`lybra_loop.exit_codes`).
+Two kickoff modes (AIPOS-F95):
+
+- **Manual (default).** On an agent step `lybra loop` prints which workstation to open, waits for the
+  artifact, and exits 3 if it is not there yet — press `/go` in that workstation and re-run the same
+  command.
+- **Authorized launch.** If the Owner agreed and minted the envelope with `--launch-harness pi`, the
+  loop starts the harness in the (local) workstation once per agent step from the declared launch
+  template, shows a one-line progress summary, and cleans up the whole process group when the artifact is
+  ready or on timeout / early exit / interrupt. `lybra loop --no-launch` forces manual mode; a
+  workstation on another machine always falls back to manual.
+
+Exit codes are declared in `schema/verbs.schema.json` (`lybra_loop.exit_codes`).
 
 **3. Wait and inspect** — `lybra agent watch --workspace-root <governance-root>` is a pure-client,
 bounded filesystem sentinel any bash-capable agent can use (exit codes:
@@ -105,7 +116,8 @@ this section together.
 
 - **Old agent-side pull connector (AIPOS-248)** — `skills/lybra-executor` had an agent say
   **`lybra on`** / **`lybra off`** to poll the gate for claimable tasks. Executors no longer claim
-  work; claiming is done by the advisor's `lybra loop` and workstations open with `/go`.
+  work; claiming is done by the advisor's `lybra loop`; workstations are opened with `/go` or launched by an
+  authorized `lybra loop`.
 - **Earlier gate-console skills** — `skills/owner-console/` (Owner console with the owner token) and
   `skills/lybra-planner/` (third-party planner: read-only truth + draft-submit) predate `lybra loop`;
   the advisor skills now ship through `lybra sync` from `agents/skills/`.

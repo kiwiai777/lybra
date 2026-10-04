@@ -169,8 +169,8 @@ After `lybra agent watch` exits (when you call it directly; inside `lybra loop` 
 |-----------|----------------|
 | 0 | Parse JSON output. If `expect_satisfied`, the artifact is on disk: re-run `lybra loop --task-id <card>` (it ingests the artifact and advances). If `changed`, inspect the change kind and decide. |
 | 2 | Timeout is a **normal bounded exit**. Log "no activity in N seconds" and either re-run the same wait or escalate per governance policy. |
-| 3 | **Execution claimed completion but produced nothing.** Read `run_log_tail` from JSON. The workstation said "done" without the declared artifact: report it to the Owner (the workstation is reopened with `/go`); never write the artifact on the executor's behalf. |
-| 4 | **Execution is stalled/frozen.** Read `silence_seconds` and `run_log_tail`. Report the stall to the Owner with this evidence; the Owner decides whether to restart the workstation (`/go`). |
+| 3 | **Execution claimed completion but produced nothing.** Read `run_log_tail` from JSON. The workstation said "done" without the declared artifact: report it to the Owner (the workstation is reopened with `/go`, or by re-running an authorized `lybra loop`); never write the artifact on the executor's behalf. |
+| 4 | **Execution is stalled/frozen.** Read `silence_seconds` and `run_log_tail`. Report the stall to the Owner with this evidence; the Owner decides whether to restart the workstation (`/go`, or re-run an authorized `lybra loop`). |
 | 5 | **Usage error (布防拒绝).** The `--expect` pattern is invalid (absolute path or `..` escape). Read stderr for the exact error. Fix the pattern and re-invoke. This is a **caller bug**, not an execution failure. |
 | 130 | Signal exit (external interrupt). Clean shutdown, no action needed unless this was unexpected. |
 
