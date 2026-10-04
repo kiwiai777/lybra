@@ -13,8 +13,9 @@
  *   (`lybra my-tasks --task-id <指向>`): 非 claimed / 非本实例 / 已结案 / 产物已交 → 产品给拒因, 本扩展原样转述并拒开工;
  *   核验判据唯一在产品 next_resolver.kickoff_refusal, 本扩展不判。
  *
- * AIPOS-F93 件①: 报告必填 frontmatter 只读 next_card.report_required_frontmatter(产品按声明 transitions artifact_ingest
- *   单源渲染, 审计卡附被审 tip/tree 实值)原样列进开工提示; 本扩展不自写字段清单, 字段缺/形变 = 拒开工(fail-closed)。
+ * AIPOS-F93 件①: 报告必填 frontmatter 由产品渲染进开工提示(F95 起随 next_card.kickoff 整体给出); 本扩展不自写字段清单。
+ * AIPOS-F95 件①: 开工提示全文收归产品单源——只原样发送 my-tasks next_card.kickoff(产品按 verbs.schema 的 my-tasks 条目 kickoff
+ *   声明渲染, next_resolver.render_kickoff); 本扩展零文案字面量, kickoff 缺/空 = 拒开工。lybra loop 自动拉起 harness 时传入同一字段(逐字节相同)。
  * AIPOS-F89 件③b(Owner 2026-10-03 裁定 A2): 本扩展不再读 `.lybra/role`, 也不读 connection.json 的 workspace_root —— 工位身份
  *   (实例 / 治理根)由产品经 `lybra my-tasks --workstation <工位目录>` 解析(charter_render.workstation_identity 唯一实现);
  *   本扩展只读 connection.json 的 `lybra_bin` 一个字段, 读不到即报错(无缺省 / 不退回 PATH)。
@@ -29,32 +30,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export type GoPlan =
   | { kind: "none"; message: string }
   | { kind: "refused"; taskId: string; message: string }
-  | { kind: "kickoff"; taskId: string; worktreePath: string; reportPath: string; cardPath: string; kickoff: string };
-
-/**
- * AIPOS-F93 件①: 产品给出的报告必填字段逐项原样成行(无 I/O)。每项须为 {key: 非空串, hint: 串, value: 串|null};
- * 列表空/任一项形变 = null(调用方拒开工)。
- */
-export function reportFieldLines(contract: unknown): string[] | null {
-  if (!Array.isArray(contract) || contract.length === 0) {
-    return null;
-  }
-  const lines: string[] = [];
-  for (const item of contract) {
-    if (!item || typeof item !== "object") {
-      return null;
-    }
-    const r = item as { key?: unknown; hint?: unknown; value?: unknown };
-    if (typeof r.key !== "string" || !r.key || typeof r.hint !== "string") {
-      return null;
-    }
-    if (r.value !== null && r.value !== undefined && typeof r.value !== "string") {
-      return null;
-    }
-    lines.push(typeof r.value === "string" && r.value ? `- ${r.key}: ${r.value}(${r.hint})` : `- ${r.key}: (${r.hint})`);
-  }
-  return lines;
-}
+  | { kind: "kickoff"; taskId: string; kickoff: string };
 
 function excludedText(item: unknown): string {
   if (item && typeof item === "object") {
@@ -136,41 +112,28 @@ export function planGo(myTasksData: unknown): GoPlan {
     };
   }
   const taskId = typeof card.task_id === "string" ? card.task_id : "";
-  const worktreePath = card.worktree_path;
-  const reportPath = card.report_path;
-  const cardPath = card.card_path;
-  if (!taskId || typeof worktreePath !== "string" || !worktreePath || typeof reportPath !== "string" || !reportPath
-    || typeof cardPath !== "string" || !cardPath) {
+  if (!taskId) {
     return {
       kind: "refused",
       taskId,
-      message: `${taskId || "(未知卡)"} next_card 字段不全(task_id/worktree_path/report_path/card_path), 无法开工; 按 block-and-report 上报`,
+      message: "(未知卡) next_card 缺 task_id(产品输出形变), 无法开工; 按 block-and-report 上报",
     };
   }
-  const fieldLines = reportFieldLines(card.report_required_frontmatter);
-  if (fieldLines === null) {
+  // AIPOS-F95 件①: 开工提示全文由产品按声明渲染(next_card.kickoff), 本扩展只原样发送; 缺/空/非串 = 拒开工(fail-closed)
+  const kickoff = card.kickoff;
+  if (typeof kickoff !== "string" || !kickoff.trim()) {
     return {
       kind: "refused",
       taskId,
-      message: `${taskId} next_card 缺报告必填字段(report_required_frontmatter, 产品输出形变或 CLI 未部署到位), 无法开工; 按 block-and-report 上报`,
+      message: `${taskId} next_card 缺开工提示(kickoff, 产品输出形变或 CLI 未部署到位), 无法开工; 按 block-and-report 上报`,
     };
   }
-
-  const kickoff = `已认领任务卡 ${taskId}。
-
-工作树路径: ${worktreePath}
-报告落点: ${reportPath}
-任务卡路径: ${cardPath}
-报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):
-${fieldLines.join("\n")}
-
-按你的 AGENTS.md 执行，完成后写报告到报告落点。`;
-  return { kind: "kickoff", taskId, worktreePath, reportPath, cardPath, kickoff };
+  return { kind: "kickoff", taskId, kickoff };
 }
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("go", {
-    description: "查询本实例已认领的任务卡，并以产品给出的工作树/报告落点发送开工提示",
+    description: "查询本实例已认领的任务卡，原样发送产品给出的开工提示(my-tasks next_card.kickoff)",
     handler: async (args, ctx) => {
       try {
         // 1. 工位目录 = 会话 cwd(身份文件由产品读, 本扩展不读 .lybra/role)

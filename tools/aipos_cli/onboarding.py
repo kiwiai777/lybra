@@ -370,7 +370,8 @@ def generate_onboarding_guide(
         "purpose": (
             f"一条命令经门 owner_decision_record envelope 路径签三张 PreAuthorized 信封并真实落盘到 {gov_s}/5_tasks/policies/: "
             f"{policies['driver']} 覆盖驱动方 {inst['advisor']}(lybra loop 一阶段认领 / 交回 / 派审 / 裁决 / 结案), "
-            f"{policies['executor']} 覆盖 {inst['executor']}, {policies['auditor']} 覆盖 {inst['auditor']}(审计卡按被审卡判定)"
+            f"{policies['executor']} 覆盖 {inst['executor']}, {policies['auditor']} 覆盖 {inst['auditor']}(审计卡按被审卡判定)。"
+            "可选 --launch-harness pi(AIPOS-F95): 授权 lybra loop 在工位自动拉起 pi(缺省不加 = 手工模式, 工位敲 /go); 由 Owner 决定是否加"
         ),
         "check": "输出三行 'signed <policy_id> covers <实例>' 与各自 'wrote 5_tasks/policies/<id>.md' / 'wrote 5_tasks/records/owner_decisions/...'(以门生记录为准)",
         "on_fail": {

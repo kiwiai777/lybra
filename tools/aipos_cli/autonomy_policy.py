@@ -85,7 +85,56 @@ POLICY_FRONTMATTER_ORDER = [
     "task_selector_project",
     "task_selector_task_ids",
     "max_tasks",
+    "launch_harnesses",
 ]
+
+
+def loop_envelope_declaration() -> dict[str, Any]:
+    """verbs.schema lybra_loop.envelope(allowed_verbs / boundary_template 唯一声明)。缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    envelope = ((load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get("lybra_loop") or {}).get("envelope")
+    if not isinstance(envelope, dict) or not isinstance(envelope.get("allowed_verbs"), list) \
+            or not isinstance(envelope.get("boundary_template"), str):
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_loop.envelope(allowed_verbs / boundary_template)未声明")
+    return envelope
+
+
+def launchable_harnesses() -> dict[str, dict[str, Any]]:
+    """AIPOS-F95 件②(a): enums.schema harness 中 launch 非 null 的值 → 其 launch 声明(唯一读取口)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    harness = (load_schema("enums", code_repo_schema_root()).get("enums") or {}).get("harness")
+    if not isinstance(harness, dict) or not isinstance(harness.get("values"), list):
+        raise SchemaLoadError("enums.schema.json enums.harness.values 未声明")
+    out: dict[str, dict[str, Any]] = {}
+    for item in harness["values"]:
+        if isinstance(item, dict) and isinstance(item.get("launch"), dict):
+            out[str(item.get("value"))] = dict(item["launch"])
+    return out
+
+
+def render_envelope_boundary(launch_harnesses: list[str] | None) -> str:
+    """AIPOS-F95 件②(c): 信封正文 Boundary 由声明渲染(allowed_verbs + launch_harnesses 实值), 唯一渲染。"""
+    envelope = loop_envelope_declaration()
+    verbs = ", ".join(str(v) for v in envelope["allowed_verbs"])
+    harnesses = ", ".join(launch_harnesses or []) or "none (manual /go only)"
+    return envelope["boundary_template"].replace("{allowed_verbs}", verbs).replace("{launch_harnesses}", harnesses)
+
+
+def envelope_authorizes_launch(policy: dict[str, Any] | None, harness: str) -> tuple[bool, str]:
+    """AIPOS-F95 件②(b): 信封是否授权 loop 拉起该 harness(同一信封族唯一实现; 信封本身的有效性由 match_claim_envelope 先判)。
+
+    判据: 信封 launch_harnesses 含该 harness(缺省 [] = 不授权)。返回 (授权与否, 原因)。"""
+    if not isinstance(policy, dict):
+        return False, "无已匹配信封"
+    granted = [str(h).strip() for h in (policy.get("launch_harnesses") or []) if str(h).strip()]
+    name = str(harness or "").strip()
+    if not granted:
+        return False, f"信封 {policy.get('policy_id')} 未授权拉起(launch_harnesses 为空 = 只手工 /go)"
+    if name not in granted:
+        return False, f"信封 {policy.get('policy_id')} launch_harnesses={granted} 不含卡 harness {name!r}"
+    return True, f"信封 {policy.get('policy_id')} launch_harnesses 含 {name}"
 
 
 def _parse_iso(value: Any) -> datetime | None:
@@ -113,6 +162,7 @@ def build_autonomy_policy_markdown(
     task_selector_task_ids: list[str] | None = None,
     status: str = POLICY_STATUS_ACTIVE,
     approved_by_owner: bool = True,
+    launch_harnesses: list[str] | None = None,
 ) -> str:
     """Render an owner_autonomy_policy artifact. Written only through the owner_confirm-gated
     owner_decision_record grant path — the presence of this on-disk artifact IS the Owner's
@@ -131,6 +181,7 @@ def build_autonomy_policy_markdown(
         "task_selector_project": str(task_selector_project or "") or "",
         "task_selector_task_ids": list(task_selector_task_ids or []),
         "max_tasks": int(max_tasks),
+        "launch_harnesses": [str(h) for h in (launch_harnesses or [])],
     }
     body = "\n".join(
         [
@@ -138,18 +189,17 @@ def build_autonomy_policy_markdown(
             "",
             "## Envelope",
             "",
-            f"- Mode: {AUTONOMY_MODE_PREAUTHORIZED} (claim auto-release for the matched envelope only).",
+            f"- Mode: {AUTONOMY_MODE_PREAUTHORIZED} (one-stage release for the matched envelope only).",
             f"- Covers: `{agent_or_role}`.",
             f"- Active from `{active_from}` until `{expires_at}` (time bound).",
             f"- Max auto-released claims: {max_tasks} (count bound).",
             f"- Owner approval: `{owner_approval_ref}`.",
+            f"- Harness launch: {', '.join(launch_harnesses or []) or 'none (manual /go only)'}.",
             "",
             "## Boundary",
             "",
-            "This artifact records a bounded, revocable Owner pre-authorization for CLAIM only. "
-            "It does not authorize return, publish, audit, finalize, credential access, or any "
-            "runtime agent-side confirmation. Reaching the time or count bound, or status "
-            "revoked/expired, drops matching claims back to Supervised (per-task owner_confirm).",
+            # AIPOS-F95 件②(c): 由声明渲染(verbs.schema lybra_loop.envelope.allowed_verbs + 本信封 launch_harnesses), 删陈旧「CLAIM only」
+            render_envelope_boundary(launch_harnesses),
             "",
         ]
     )
@@ -173,6 +223,9 @@ def normalize_policy(metadata: dict[str, Any]) -> dict[str, Any] | None:
         max_tasks = int(metadata.get("max_tasks"))
     except (TypeError, ValueError):
         max_tasks = 0
+    launch = metadata.get("launch_harnesses")
+    if not isinstance(launch, list):
+        launch = []
     return {
         "policy_id": policy_id,
         "mode": str(metadata.get("mode") or "").strip(),
@@ -186,6 +239,8 @@ def normalize_policy(metadata: dict[str, Any]) -> dict[str, Any] | None:
         "task_selector_project": str(metadata.get("task_selector_project") or "").strip(),
         "task_selector_task_ids": [str(item).strip() for item in task_ids if str(item).strip()],
         "max_tasks": max_tasks,
+        # AIPOS-F95 件②(b): 缺省 [] = 不授权拉起(存量信封无此键)
+        "launch_harnesses": [str(item).strip() for item in launch if str(item).strip()],
     }
 
 

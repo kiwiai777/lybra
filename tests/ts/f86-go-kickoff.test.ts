@@ -7,6 +7,8 @@
  *  C. 工作树尚未建立(WORKTREE_NOT_CREATED)→ 拒, 文案 = 「工作树尚未建立…等待驱动方完成认领…block-and-report」, 零门动词;
  *     不可推导(LANE_REPO_UNDECLARED 等)→ 拒并转述产品拒因; 报告落点不可推导 → 拒; 无 claimed → 等待; tasks 缺 → 拒。
  *
+ * AIPOS-F95 件①: 开工提示全文收归产品(next_card.kickoff), go.ts 只原样发送; B 段输入随之带产品渲染的 kickoff(含工作树/报告/卡路径原值),
+ *   断言 = 原样发送(逐字节) + kickoff 缺即拒。
  * AIPOS-F87 件③: 选卡改由产品给出(my-tasks 的 next_card / next_card_excluded), 本夹具 B/C 段的输入随之改为产品输出形;
  *   go.ts 自带的「工作树尚未建立」文案常量退役, 改为原样转述产品拒因(断言随之改为产品原文)。
  *
@@ -54,8 +56,11 @@ const ready = {
 const pending = { task_id: "AIPOS-X0", queue_state: "pending", path: "5_tasks/queue/pending/aipos-x0.md" };
 // AIPOS-F93 件①: next_card 带产品给出的报告必填字段(声明单源渲染), go.ts 原样列出
 const CONTRACT = [{ key: "commit_sha", hint: "卡分支 card/AIPOS-X1 tip 的完整 40 位 sha", value: null }];
+// AIPOS-F95 件①: kickoff = 产品按声明渲染的开工提示全文(此处为产品输出形的样本)
+const kickoffOf = (t: typeof ready) => `已认领任务卡 ${t.task_id}。\n\n工作树路径: ${t.worktree_path}\n报告落点: ${t.report_path}\n任务卡路径: ${t.card_path}\n`
+  + `报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n- commit_sha: (${CONTRACT[0].hint})\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。`;
 const nextOf = (t: typeof ready) => ({ task_id: t.task_id, card_path: t.card_path, worktree_path: t.worktree_path, report_path: t.report_path,
-  report_required_frontmatter: CONTRACT, claimed_at: "2026-10-02T00:00:00Z" });
+  report_required_frontmatter: CONTRACT, claimed_at: "2026-10-02T00:00:00Z", kickoff: kickoffOf(t) });
 const planB = planGo({ scope: "my_tasks", tasks: [pending, ready], next_card: nextOf(ready), next_card_excluded: [] });
 check("B1 有 claimed 卡且工作树就绪 → kickoff", planB.kind === "kickoff", JSON.stringify(planB));
 if (planB.kind === "kickoff") {
@@ -63,6 +68,7 @@ if (planB.kind === "kickoff") {
   check("B3 kickoff 含产品给出的 report_path 原值", planB.kickoff.includes(`报告落点: ${RP}`), planB.kickoff);
   check("B4 kickoff 含产品给出的 card_path 原值(不再自拼 workspace_root + path)", planB.kickoff.includes(`任务卡路径: ${CP}`), planB.kickoff);
   check("B5 kickoff 零门动词", !GATE_TEXT_RE.test(planB.kickoff), planB.kickoff);
+  check("B6 kickoff = 产品 next_card.kickoff 原样(逐字节)", planB.kickoff === kickoffOf(ready), planB.kickoff);
   console.log("---- kickoff 原文 ----\n" + planB.kickoff + "\n----------------------");
 }
 
@@ -103,6 +109,9 @@ const planC6 = planGo({ tasks: [legacy] });
 check("C6 旧产品输出(无开工面字段)→ refused, 不在本地补推", planC6.kind === "refused", JSON.stringify(planC6));
 check("C7 无 claimed 卡 → none(等待分配)", planGo({ tasks: [pending], next_card: null, next_card_excluded: [] }).kind === "none");
 check("C8 tasks 缺 → none 且提示上报(不崩)", planGo({}).kind === "none" && planGo(null).kind === "none");
+const { kickoff: _k, ...noKickoff } = nextOf(ready);
+check("C9 next_card 缺 kickoff → refused(AIPOS-F95 件①, 不在本地拼开工提示)",
+  planGo({ tasks: [ready], next_card: noKickoff, next_card_excluded: [] }).kind === "refused");
 
 console.log(failures === 0 ? "\n✓ AIPOS-F86 /go 只读产品输出夹具全部通过" : `\n✗ ${failures} 项失败`);
 process.exit(failures === 0 ? 0 : 1);

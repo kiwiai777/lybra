@@ -976,6 +976,27 @@ else
   overall=1
 fi
 
+# AIPOS-F95: 外部执行体/审计体自动拉起(① 授权信封下 loop 按声明模板在工位拉起假 harness, 执行体+审计体走到 completed, 一行式进度
+# ② 无授权/--no-launch/无模板/定位不到/身份不符 → 手工 /go ③ 挂起超时/早退/SIGTERM 杀进程组 ④ kickoff 与 /go 逐字节同 ⑤ 信封 Boundary
+# 由声明渲染 ⑥ session Events 拉起事件 ⑥b land 事件带 host, 跨机退回手工); TS 侧 f86/f87/f93 改为 go.ts 只原样发送 next_card.kickoff
+echo
+echo "── tests/test_aipos_f95_harness_launch.py (F95 loop 授权拉起 harness·进程组生命周期·开工提示单源·信封 Boundary·工位 host) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f95_harness_launch.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f95_harness_launch.py PASS"
+else
+  echo "✗ tests/test_aipos_f95_harness_launch.py FAIL"
+  overall=1
+fi
+# AIPOS-F95: 假 harness 辅助脚本(被上节夹具按 launch 模板拉起)须可编译
+echo
+echo "── tests/fake_harness.py (F95 假 harness 辅助脚本可编译) ────────────────────────────────────────────────────"
+if python3 -m py_compile "$REPO_ROOT/tests/fake_harness.py"; then
+  echo "✓ tests/fake_harness.py PASS"
+else
+  echo "✗ tests/fake_harness.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then

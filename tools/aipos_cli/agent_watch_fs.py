@@ -435,6 +435,7 @@ def run_fs_watch(
     sleeper: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     expect_ready: Callable[[list[str]], bool] | None = None,
+    stop_when: Callable[[], bool] | None = None,
 ) -> int:
     """Core bounded poll loop (testable: sleeper/clock injectable, no global signal
     state). Returns EXIT_CHANGE (0) on the first change OR expect satisfaction — a
@@ -453,6 +454,10 @@ def run_fs_watch(
     readiness predicate over the matched expect paths. A glob match that the predicate rejects
     (e.g. a RETURN.md that is still the claim-time skeleton) does NOT satisfy --expect; the
     loop keeps polling under the same --timeout/--interval bounds. The CLI surface is unchanged.
+    AIPOS-F95: ``stop_when`` (in-process callers only, e.g. ``lybra loop`` with a launched harness
+    process) — checked after the expect check of every poll; when it turns true (the launched
+    process exited) the watch does ONE final expect check (an artifact written right before exit
+    still counts) and otherwise returns EXIT_END_NO_PRODUCT (3) with ``{"end_no_product": ...}``.
     """
     interval = DEFAULT_INTERVAL_SECONDS if getattr(args, "interval", None) is None else float(args.interval)
     timeout_arg = getattr(args, "timeout", None)
@@ -659,6 +664,17 @@ def run_fs_watch(
                 else:
                     print(json.dumps({"expect_satisfied": matched}, ensure_ascii=False))
                     return EXIT_CHANGE
+
+        # AIPOS-F95: 拉起的进程已退出也唤醒(最后再核一次产物, 进程退出前刚写的产物仍算)
+        if stop_when is not None and stop_when():
+            matched = check_expect_patterns(ws, expect_patterns) if expect_patterns else []
+            if matched and expect_ready is not None and not expect_ready(matched):
+                matched = []
+            if matched:
+                print(json.dumps({"expect_satisfied": matched}, ensure_ascii=False))
+                return EXIT_CHANGE
+            print(json.dumps({"end_no_product": {"reason": "launched process exited"}}, ensure_ascii=False))
+            return EXIT_END_NO_PRODUCT
         
         # Regular diff change (AIPOS-284D S1: filtered by --events)
         if changed and events_filter in ("change", "all"):

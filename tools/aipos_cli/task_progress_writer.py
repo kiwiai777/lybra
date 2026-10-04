@@ -69,8 +69,12 @@ def _update_session_record(
     timestamp: str,
     summary: str | None = None,
     reason: str | None = None,
+    event_label: str | None = None,
 ) -> dict[str, Any]:
     """Append a progress event line to the session record and refresh its status.
+
+    AIPOS-F95: ``event_label`` overrides the ``task_progress:<event_type>`` label (e.g. ``harness_launch``
+    from ``lybra loop``); event types outside _SESSION_STATUS_FOR_EVENT leave session_status unchanged.
 
     Returns a small dict describing the update (ok / reason). On any failure this
     raises so the caller can surface a loud error (never silently ok:True).
@@ -97,7 +101,7 @@ def _update_session_record(
             metadata["current_state"] = "blocked"
     metadata["event_count"] = int(metadata.get("event_count") or 1) + 1
 
-    event_line = f"- {timestamp} task_progress:{event_type} by {actor}"
+    event_line = f"- {timestamp} {event_label or f'task_progress:{event_type}'} by {actor}"
     detail = summary or reason
     if detail:
         event_line += f"; {detail.strip()}"
@@ -290,3 +294,18 @@ def write_task_progress_event(
             f"task_progress event was written but session record update FAILED: {type(exc).__name__}: {exc}"
         ]
     return result
+
+
+def append_session_event(repo_root: Path, task_id: str, *, actor: str, event_label: str, detail: str) -> dict[str, Any]:
+    """AIPOS-F95 件③⑤: 往该卡既有 session record 的 Events 追加一行(不新建记录类型, 不写 events/ 记录, 不改 session_status)。
+
+    session 不可解析/写失败 = RuntimeError(响亮报错, 调用方决定出口; 禁吞错)。"""
+    session_path, _session_id, resolve_reason = _resolve_session_record_path(repo_root, task_id)
+    if session_path is None:
+        raise RuntimeError(f"session record of {task_id} not resolvable: {resolve_reason}")
+    timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    update = _update_session_record(session_path, repo_root=repo_root, task_id=task_id, actor=actor, event_type=event_label,
+                                    timestamp=timestamp, summary=detail, event_label=event_label)
+    if not update.get("ok"):
+        raise RuntimeError(f"session record of {task_id} append failed: {update}")
+    return update

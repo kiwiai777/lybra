@@ -361,6 +361,22 @@ def _normalize_autonomy_policy(
     if not (sel_mode or sel_project or sel_ids):
         _add(blocking_reasons, "autonomy_policy.task_selector must set at least one of task_mode/project/task_ids (no wildcard envelope)")
 
+    # AIPOS-F95 件②(b): 拉起授权(缺省 [] = 只手工 /go); 取值须为 enums.schema harness 中有 launch 模板者(声明唯一读取口)
+    launch_raw = value.get("launch_harnesses")
+    launch_harnesses: list[str] = []
+    if launch_raw not in (None, []):
+        if not isinstance(launch_raw, list) or not all(isinstance(item, str) and item.strip() for item in launch_raw):
+            _add(blocking_reasons, "autonomy_policy.launch_harnesses must be a list of harness names")
+        else:
+            from tools.aipos_cli.autonomy_policy import launchable_harnesses
+
+            launchable = launchable_harnesses()
+            launch_harnesses = list(dict.fromkeys(item.strip() for item in launch_raw))
+            for name in launch_harnesses:
+                if name not in launchable:
+                    _add(blocking_reasons, f"autonomy_policy.launch_harnesses: harness {name!r} has no launch template "
+                                           f"(enums.schema harness.launch; launchable: {sorted(launchable)}) — manual /go only")
+
     return {
         "policy_id": policy_id,
         "agent_or_role": agent_or_role,
@@ -370,6 +386,7 @@ def _normalize_autonomy_policy(
         "task_selector_task_mode": sel_mode,
         "task_selector_project": sel_project,
         "task_selector_task_ids": sel_ids,
+        "launch_harnesses": launch_harnesses,
         "owner_approval_ref": decision_id,
     }
 
@@ -564,6 +581,7 @@ def build_owner_decision_record(
             task_selector_task_mode=autonomy_policy["task_selector_task_mode"],
             task_selector_project=autonomy_policy["task_selector_project"],
             task_selector_task_ids=autonomy_policy["task_selector_task_ids"],
+            launch_harnesses=autonomy_policy["launch_harnesses"],
         )
         planned_writes.append(
             {
