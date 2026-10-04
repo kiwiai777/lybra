@@ -292,5 +292,22 @@ class PlannerRoleGateTests(unittest.TestCase):
 # (教执行会话自认领/交回/确认的旧做法, 无分发声明——顾问技能经 distribution.schema 从 agents/skills/ 分发)。
 
 
+class PlannerSkillRetiredTests(unittest.TestCase):
+    """AIPOS-F103 件②(替代被删的交付物钉): 仓根旧技能已删且无分发声明; 技能交付唯一来源 = distribution.schema 的 agents/skills。"""
+
+    _REPO = Path(__file__).resolve().parents[3]
+
+    def test_repo_root_legacy_skills_retired_and_skills_ship_from_agents_skills(self) -> None:
+        import json
+
+        for name in ("owner-console", "lybra-planner", "lybra-executor"):
+            self.assertFalse((self._REPO / "skills" / name).exists(), f"repo-root legacy skill must stay retired: {name}")
+        decl = json.loads((self._REPO / "schema" / "distribution.schema.json").read_text(encoding="utf-8"))
+        sources = {str((d.get("source") or {}).get("path") or "") for d in decl.get("distributions", []) if d.get("kind") == "skills"}
+        self.assertEqual(sources, {"agents/skills"}, sources)
+        package = json.loads((self._REPO / "package.json").read_text(encoding="utf-8"))
+        self.assertFalse(any(str(f).rstrip("/") == "skills" for f in package.get("files", [])))
+
+
 if __name__ == "__main__":
     unittest.main()

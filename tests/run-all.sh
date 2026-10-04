@@ -1097,6 +1097,12 @@ else
 fi
 # AIPOS-F103: 退役旧跨机连接器与执行体派工命令(N-a: N2)+信封挑选唯一实现 select_envelope(判据 match_claim_envelope, M5)·policies_root 声明·删除物零引用·文档棘轮基线减少
 run_pytest "tests/test_aipos_f103_retire_connector_single_envelope.py" "$REPO_ROOT/tests/test_aipos_f103_retire_connector_single_envelope.py"
+# AIPOS-F103 改动节点(343 契约节): 删旧解析模块类后, 契约节信封失败出声带诊断/幂等(余下 4 个用例 main 上即红, 不登记)
+run_pytest "tests/test_aipos_343_contract_section_no_silent_swallow.py (F103 改动节点)" "$REPO_ROOT/tests/test_aipos_343_contract_section_no_silent_swallow.py::TestContractSectionErrorPropagation::test_contract_section_error_contains_diagnostic_info" "$REPO_ROOT/tests/test_aipos_343_contract_section_no_silent_swallow.py::TestContractSectionErrorPropagation::test_idempotency_still_works"
+# AIPOS-F103 改动节点(信封签发 schema 一致性; 门侧 PreAuthEnvelope* 类依赖活体门 401, main 上即红, 不登记)
+run_pytest "tools/mcp_server/tests/test_autonomy_preauth_envelope.py (F103 改动节点)" "$REPO_ROOT/tools/mcp_server/tests/test_autonomy_preauth_envelope.py::OwnerDecisionSchemaConformanceTests"
+# AIPOS-F103 改动节点(仓根旧技能退役·技能只经 distribution 从 agents/skills 分发; PlannerRoleGateTests 依赖活体门 401, main 上即红, 不登记)
+run_pytest "tools/mcp_server/tests/test_planner_role.py (F103 改动节点)" "$REPO_ROOT/tools/mcp_server/tests/test_planner_role.py::PlannerSkillRetiredTests"
 
 echo
 echo "========================================================"
