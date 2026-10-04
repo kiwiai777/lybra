@@ -1058,97 +1058,6 @@ def _resolve_task_selection(args: argparse.Namespace, tasks: list[dict[str, Any]
     raise ValueError("Exactly one of --task-id or --path must be provided")
 
 
-def _run_dispatch(args: argparse.Namespace) -> dict[str, Any]:
-    """AIPOS-FND-12: Generate executor dispatch command (claim via connector, not file path).
-    
-    Output: a command string that invokes `lybra agent materialize` with all required params.
-    The executor runs this command, which forces claim→materialize flow (gate-recorded, no bypass).
-    """
-    from pathlib import Path
-    
-    task_id = args.task_id
-    executor = args.executor
-    
-    # Resolve workspace config to get gate URL and connection.json
-    try:
-        workspace_root = _resolve_workspace_for_command(args)
-    except Exception:
-        # If workspace resolution fails, use explicit args or defaults
-        workspace_root = Path(getattr(args, "workspace_root", None) or ".").expanduser()
-    
-    # Gate URL: explicit > workspace config > default
-    gate_url = args.gate_url
-    if not gate_url:
-        try:
-            config = load_workspace_config(workspace_root)
-            gate_url = config.get("mcp_url") or f"http://{config.get('mcp_host', DEFAULT_MCP_HOST)}:{config.get('mcp_port', DEFAULT_MCP_PORT)}"
-        except Exception:
-            gate_url = f"http://{DEFAULT_MCP_HOST}:{DEFAULT_MCP_PORT}"
-    
-    # Connection JSON: explicit > workspace default
-    connection_json = args.connection_json
-    if not connection_json:
-        connection_json = str(workspace_root / ".lybra" / "connection.json")
-    
-    # Owner policy ref: explicit or use task's declared policy
-    owner_policy_ref = args.owner_policy_ref
-    if not owner_policy_ref:
-        # AIPOS-R6C ⑩: 自发现全序 (.lybra/role → env → 显式)
-        # Try to load task and extract policy from frontmatter
-        try:
-            from tools.aipos_cli.task_loader import find_task_by_id, find_repo_root
-            from tools.aipos_cli.policy_resolver import find_active_policy
-            
-            repo_root = find_repo_root(workspace_root)
-            task, _ = find_task_by_id(task_id, repo_root)
-            if task:
-                metadata = task.get("metadata", {})
-                owner_policy_ref = metadata.get("owner_policy_ref")
-            
-            # Fallback to policy resolver autodiscovery
-            if not owner_policy_ref:
-                owner_policy_ref = find_active_policy(workspace_root, role="exec", policy_type="dev")
-            
-            if not owner_policy_ref:
-                print("Error: Could not resolve owner_policy_ref. Specify --owner-policy-ref or ensure active policy exists.", file=sys.stderr)
-                sys.exit(1)
-        except Exception as e:
-            print(f"Error resolving owner_policy_ref: {e}", file=sys.stderr)
-            sys.exit(1)
-    
-    # Material root: explicit > default
-    material_root = args.material_root or "~/.lybra/work"
-    
-    # Build the dispatch command
-    cmd_parts = [
-        "lybra agent materialize",
-        f"--task-id {task_id}",
-        f"--actor {executor}",
-        f"--owner-policy-ref {owner_policy_ref}",
-        f"--gate-url {gate_url}",
-        f"--connection-json {connection_json}",
-        f"--material-root {material_root}",
-    ]
-    
-    dispatch_command = " ".join(cmd_parts)
-    
-    return {
-        "ok": True,
-        "operation": "dispatch",
-        "task_id": task_id,
-        "executor": executor,
-        "dispatch_command": dispatch_command,
-        "gate_url": gate_url,
-        "connection_json": connection_json,
-        "owner_policy_ref": owner_policy_ref,
-        "material_root": material_root,
-        "usage_hint": (
-            "Give this command to the executor. They run it to claim and materialize the task. "
-            "DO NOT give file paths directly — this enforces claim via connector (gate-recorded)."
-        ),
-    }
-
-
 # ---------------------------------------------------------------------------
 # AIPOS-F92 件①: 信封签发产品化 —— `lybra envelope mint --confirm` 是门 owner_decision_record envelope 路径的薄壳
 # (签信封逻辑只在门侧 owner_decision_writer 一处; 本 CLI 只构 payload、读凭据、两阶段转发、以门生记录为准输出)
@@ -1281,56 +1190,28 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--dry-run", action="store_true", help="Preview planned writes without creating the workspace")
     init_parser.add_argument("--json", action="store_true", help="Output JSON")
 
-    # AIPOS-248: agent-side connector — a STATELESS pull over the gate read tool. The
-    # loop host is the AGENT-side process (never a Lybra daemon); role-agnostic client.
-    # Distinct from `agents` below (recorded-profile rendering) — disclosed:
-    # /agents = recorded snapshot, `agent watch` = client-side loop.
+    # `agent watch --workspace-root`(AIPOS-268 文件系统哨兵): loop 唯一等待原语, 纯客户端只读(无门/凭据)。
+    # AIPOS-F103 件①: 旧跨机连接器(AIPOS-248 门拉取 / AIPOS-363 材料化与回推)与执行体派工命令整体退役
+    # (Owner 10-04 裁定: 执行体自认领自确认违执行体零门); 子命令不再注册 = argparse 报不存在。
     agent_parser = subparsers.add_parser(
         "agent",
-        help="Agent-side connector: fetch claimable tasks (gate pull) / bounded watch — "
-        "two harness modes (候选⑤⑫合流): --workspace-root = filesystem pump (AIPOS-268, any bash agent); "
-        "--gate-url = stateless gate pull (AIPOS-248)",
+        help="Agent-side filesystem sentinel: `agent watch --workspace-root` (pure client, read-only, no gate/token)",
     )
     agent_subparsers = agent_parser.add_subparsers(dest="agent_command")
-    # `agent fetch` (candidate ⑤, AIPOS-248): one stateless gate pull — byte-identical to before.
-    _fetch_parser = agent_subparsers.add_parser(
-        "fetch", help="One stateless pull: tasks claimable by --actor (advisory list; the gate is the truth)"
-    )
-    _fetch_parser.add_argument("--gate-url", required=True, help="Gate URL (e.g. http://127.0.0.1:7118)")
-    _fetch_src = _fetch_parser.add_mutually_exclusive_group(required=True)
-    _fetch_src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
-    _fetch_src.add_argument("--token-env", help="env var holding the role bearer token")
-    _fetch_parser.add_argument("--role", default="executor", help="role token to read (role-agnostic client; default executor)")
-    _fetch_parser.add_argument("--actor", required=True, help="your agent/actor name (matched against assigned_to/agent_instance)")
-    _fetch_parser.add_argument("--json", action="store_true", help="Output JSON")
-    # `agent watch` (候选⑤⑫合流): two MUTUALLY EXCLUSIVE harness modes. --workspace-root
-    # (candidate ⑫, AIPOS-268) = the harness-agnostic filesystem pump (no gate/MCP/token,
-    # any agent that can run bash); --gate-url (candidate ⑤, AIPOS-248) = the stateless
-    # gate pull for claimable tasks. Both are foreground, bounded, client-side loops.
     _watch_parser = agent_subparsers.add_parser(
         "watch",
-        help="Foreground BOUNDED client loop. Two modes (候选⑤⑫合流): "
-        "--workspace-root = filesystem mtime pump (candidate ⑫, AIPOS-268+284+284C+284D; any bash agent, no gate); "
-        "--gate-url = stateless gate pull for claimable tasks (candidate ⑤, AIPOS-248). "
+        help="Foreground BOUNDED filesystem mtime sentinel over 5_tasks/queue/** + 5_tasks/records/** "
+        "(AIPOS-268+284+284C+284D; any bash agent, no gate). "
         "Exit codes: 0=change/expect satisfied, 2=timeout, 3=end-pattern but no product, 4=stall, 130=signal. "
         "Stream mode (--stream): emits 'kind:end' event before timeout/signal exit.",
     )
-    _watch_mode = _watch_parser.add_mutually_exclusive_group(required=True)
-    _watch_mode.add_argument(
+    _watch_parser.add_argument(
         "--workspace-root",
-        help="候选⑫ filesystem pump (AIPOS-268+284): poll 5_tasks/queue/** + 5_tasks/records/** mtime+path; "
+        required=True,
+        help="governance root to watch (AIPOS-268+284): poll 5_tasks/queue/** + 5_tasks/records/** mtime+path; "
         "print a JSON change summary on the first change (exit 0); exit 2 silent on --timeout. No gate/token.",
     )
-    _watch_mode.add_argument("--gate-url", help="候选⑤ gate pull (AIPOS-248): Gate URL (e.g. http://127.0.0.1:7118)")
-    _watch_gate_src = _watch_parser.add_mutually_exclusive_group(required=False)
-    _watch_gate_src.add_argument("--connection-json", help="[gate mode] path to connection.json (token read by --role; never on argv)")
-    _watch_gate_src.add_argument("--token-env", help="[gate mode] env var holding the role bearer token")
-    _watch_parser.add_argument("--role", default="executor", help="[gate mode] role token to read (role-agnostic client; default executor)")
-    _watch_parser.add_argument("--actor", help="[gate mode] your agent/actor name (matched against assigned_to/agent_instance)")
-    # --interval is shared by both modes with DIFFERENT defaults (pump 15 / gate 60); the
-    # argparse default is None and each mode resolves its own default in the dispatch.
-    _watch_parser.add_argument("--interval", type=float, default=None, help="poll interval seconds. Filesystem pump default 15; gate pull default 60 (hard floor 15).")
-    _watch_parser.add_argument("--max-wait", type=float, default=1800.0, help="[gate mode] bounded wait seconds before a clean exit (default 1800)")
+    _watch_parser.add_argument("--interval", type=float, default=None, help="poll interval seconds (default 15)")
     _watch_parser.add_argument("--timeout", type=float, default=None, help="[filesystem pump] no-change timeout seconds -> silent exit 2 (default: 1800 for default mode, infinite for --stream mode; 0 = explicit infinite)")
     # AIPOS-284 v2: three "death silence" semantics
     _watch_parser.add_argument("--expect", action="append", help="[filesystem pump v2] glob pattern for expected artifact; check immediately on startup and every poll (布防即检). Can be repeated. Exit 0 when any match.")
@@ -1348,39 +1229,6 @@ def build_parser() -> argparse.ArgumentParser:
     _watch_parser.add_argument("--session-dirs", help="[AIPOS-295] Comma-separated session storage directories to monitor for new files")
     _watch_parser.add_argument("--worktree-path", help="[AIPOS-295] Git worktree path to monitor for changes (default: parent of workspace-root)")
     _watch_parser.add_argument("--unhealthy-cycles", type=int, default=2, help="[AIPOS-295] Consecutive silent health cycles before emitting 'unhealthy' event (default: 2)")
-    
-    # AIPOS-363 S1/S2: `agent materialize` / `agent pushback` — the cross-machine adaptation
-    # layer. materialize = claim + pull body (319) + drop LOCAL material + print a zero-gate-verb
-    # kickoff; pushback = read LOCAL RETURN + push via 320 + self-confirm (328). The agent only
-    # reads/writes LOCAL files (card S3: harness-agnostic baseline). gate-url mode only.
-    def _add_material_common(p, *, require_actor: bool = True) -> None:
-        p.add_argument("--gate-url", required=True, help="Gate URL (e.g. http://127.0.0.1:7118, gate-url mode only)")
-        _src = p.add_mutually_exclusive_group(required=True)
-        _src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
-        _src.add_argument("--token-env", help="env var holding the role bearer token")
-        p.add_argument("--role", default="executor", help="role token to read (default executor)")
-        p.add_argument("--actor", required=require_actor, help="your agent/actor name (must match the claim token binding)")
-        p.add_argument("--task-id", required=True, help="task card id to materialize / push back")
-        p.add_argument("--owner-policy-ref", required=True, help="owner_policy_ref for claim/return (PreAuthorized envelope id)")
-        p.add_argument("--material-root", help="material area root (default ~/.lybra/work; env LYBRA_MATERIAL_ROOT)")
-        p.add_argument("--actual-model", default="", help="capability-ledger: self-reported model (recorded, never verified)")
-        p.add_argument("--json", action="store_true", help="Output JSON")
-
-    _materialize_parser = agent_subparsers.add_parser(
-        "materialize",
-        help="[AIPOS-363 S1] Cross-machine: claim + pull card body via gate + drop LOCAL material + "
-             "print a zero-gate-verb kickoff (any harness that reads a file). gate-url mode only.",
-    )
-    _add_material_common(_materialize_parser)
-    _materialize_parser.add_argument("--autonomy-mode", default="PreAuthorized", help="claim autonomy_mode (default PreAuthorized)")
-    _materialize_parser.add_argument("--gate-workspace", default="", help="gate workspace root (recorded in MANIFEST for traceability)")
-
-    _pushback_parser = agent_subparsers.add_parser(
-        "pushback",
-        help="[AIPOS-363 S2] Cross-machine: read LOCAL RETURN.md + push back via gate (320) + "
-             "self-confirm (328). On failure emits a blocked event (323) — never silent.",
-    )
-    _add_material_common(_pushback_parser)
 
     board_parser = subparsers.add_parser("board", help="Start the local Lybra Board")
     board_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
@@ -1432,16 +1280,6 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_config_parser.add_argument("--capability-token-env", help="Capability token env var; defaults to LYBRA_CAPABILITY_TOKEN")
     mcp_config_parser.add_argument("--json", action="store_true", help="Output JSON")
 
-    # AIPOS-FND-12: dispatch — 产出给执行体的是认领命令(经连接器),不是队列文件路径
-    dispatch_parser = subparsers.add_parser("dispatch", help="Generate executor dispatch command (claim via connector, not file path)")
-    dispatch_parser.add_argument("task_id", help="Task ID to dispatch")
-    dispatch_parser.add_argument("--to", dest="executor", required=True, help="Executor actor/instance name")
-    dispatch_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
-    dispatch_parser.add_argument("--gate-url", help="Gate URL; defaults to workspace config or http://127.0.0.1:7118")
-    dispatch_parser.add_argument("--owner-policy-ref", help="Owner policy reference (PreAuthorized envelope)")
-    dispatch_parser.add_argument("--connection-json", help="Path to connection.json (for token resolution)")
-    dispatch_parser.add_argument("--material-root", help="Material area root (default ~/.lybra/work)")
-    dispatch_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     draft_parser = subparsers.add_parser("draft", help="Safe task draft writer")
     draft_subparsers = draft_parser.add_subparsers(dest="draft_command")
@@ -2099,7 +1937,7 @@ def build_parser() -> argparse.ArgumentParser:
         "退出码(verbs.schema lybra_loop.exit_codes): 0=completed, 2=门拒, 3=等待超时/停滞/步数用尽, 4=不可推导/命令不可解析, 5=无信封",
     )
     loop_parser.add_argument("--task-id", required=True, help="要推进的卡 ID")
-    loop_parser.add_argument("--envelope", help="policy_id(5_tasks/policies/<id>.md); 缺省扫描 policies/ 取首个匹配本卡与驱动方身份的有效信封")
+    loop_parser.add_argument("--envelope", help="policy_id(<policies_root>/<id>.md, project.json paths.policies_root 缺省 5_tasks/policies); 缺省扫描信封目录取首个匹配本卡与驱动方身份的有效信封")
     loop_parser.add_argument("--actor", help="驱动方身份(顾问实例); 缺省=治理根 .lybra/role 的 instance, 再缺省 advisor")
     loop_parser.add_argument("--connection-json", help="透传给 next --run 的 connection.json 路径(token 永不上屏)")
     loop_parser.add_argument("--workspace-root", type=Path, help="治理根(队列/记录所在); 缺省自发现")
@@ -2400,43 +2238,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     if args.command == "agent":
-        # 候选⑤⑫合流 dispatch. `agent watch --workspace-root` (candidate ⑫, AIPOS-268)
-        # routes to the filesystem pump; everything else (`fetch`, and `watch --gate-url`)
-        # is the AIPOS-248 gate path in agent_connector.py — left byte-identical.
-        if getattr(args, "agent_command", None) == "watch" and getattr(args, "workspace_root", None):
+        # AIPOS-F103 件①: 只剩 `agent watch --workspace-root`(文件系统哨兵, loop 唯一等待); 旧跨机连接器子命令已退役
+        if getattr(args, "agent_command", None) == "watch":
             from tools.aipos_cli.agent_watch_fs import run_fs_watch_cli
             return run_fs_watch_cli(args)
-        # AIPOS-363 S1/S2: agent materialize / pushback (cross-machine adaptation layer)
-        if getattr(args, "agent_command", None) == "materialize":
-            from tools.aipos_cli.agent_materialize import run_materialize
-            return run_materialize(args)
-        if getattr(args, "agent_command", None) == "pushback":
-            from tools.aipos_cli.agent_materialize import run_pushback
-            return run_pushback(args)
-        # Gate mode (candidate ⑤): preserve the AIPOS-248 required-arg contract in code
-        # (--actor / a token source are required for the gate pull). argparse can no longer
-        # express 'required only when --gate-url is set' now that `watch` is polymorphic;
-        # validate here so run_agent_command / agent_connector.py stay byte-identical.
-        if getattr(args, "agent_command", None) == "watch":
-            missing = []
-            if not getattr(args, "actor", None):
-                missing.append("--actor")
-            if not getattr(args, "connection_json", None) and not getattr(args, "token_env", None):
-                missing.append("(--connection-json | --token-env)")
-            if missing:
-                print(
-                    "lybra agent watch --gate-url: missing required argument(s): "
-                    + ", ".join(missing),
-                    file=sys.stderr,
-                )
-                return 2
-            # Resolve the shared --interval default for gate mode (60s) here so
-            # agent_connector.run_watch — which does `float(args.interval)` — stays untouched.
-            from tools.aipos_cli.agent_connector import DEFAULT_INTERVAL_SECONDS
-            if getattr(args, "interval", None) is None:
-                args.interval = DEFAULT_INTERVAL_SECONDS
-        from tools.aipos_cli.agent_connector import run_agent_command
-        return run_agent_command(args)
+        print("usage: lybra agent watch --workspace-root <治理根> [...](lybra agent watch --help)", file=sys.stderr)
+        return 2
 
     if args.command == "tui":
         # Lazy import so the Textual dependency is required only when launching the TUI;
@@ -2485,19 +2292,6 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(_render_mcp_config_text(result))
-        return 0
-
-    if args.command == "dispatch":
-        # AIPOS-FND-12: 产出给执行体的是认领命令(经连接器 claim→材料化),不是队列文件路径
-        try:
-            result = _run_dispatch(args)
-        except (OSError, ValueError, FileNotFoundError) as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            return 1
-        if args.json:
-            print(render_json(result))
-        else:
-            print(result["dispatch_command"])
         return 0
 
     if args.command == "draft":
@@ -4440,7 +4234,7 @@ def main(argv: list[str] | None = None) -> int:
             from tools.aipos_cli.loop_driver import exit_code_for, load_loop_contract
 
             print("Error: --autonomy-mode PreAuthorized 须带 --owner-policy-ref <覆盖驱动方与本卡的信封 policy_id>"
-                  "(5_tasks/policies/; 推进请用 `lybra loop --task-id <卡ID>`, 推导核自动带上)", file=sys.stderr)
+                  "(信封目录 = project.json paths.policies_root; 推进请用 `lybra loop --task-id <卡ID>`, 推导核自动带上)", file=sys.stderr)
             return exit_code_for(load_loop_contract(), "no_envelope")
         # 构造动词参数（按 verbs.schema 的 lybra_queue_claim_dry_run）
         verb_args = {
