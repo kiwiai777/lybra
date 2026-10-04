@@ -1065,6 +1065,20 @@ else
   overall=1
 fi
 
+# AIPOS-F104: 状态与枚举投影单源(族 C-b: M6/M7/M16/N6)——搬卡转移表读 transitions.schema queue_mutations(validate_transition 删)、
+# 队列状态集合 = enums queue_state 投影(task_loader.QUEUE_STATES / QUEUE_SKELETON_STATES)、role_category = roles.schema 投影(含 advisor)、
+# task_class 三值(standard 语义声明并实现)与 CLI choices 同读 enums; 不变量夹具「枚举声明值域 = 代码校验值域」+ 改动节点(task_class 非法值文案)
+echo
+echo "── tests/test_aipos_f104_enum_projection_invariant.py (F104 转移表单源·QueueState 投影·role_category=roles.schema·task_class 三值·progress_status·手写值域副本扫描) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f104_enum_projection_invariant.py" \
+    "$REPO_ROOT/tools/aipos_cli/tests/test_task_complexity.py::TaskComplexityTests::test_invalid_task_class_blocks" \
+    -v --tb=short; then
+  echo "✓ tests/test_aipos_f104_enum_projection_invariant.py PASS"
+else
+  echo "✗ tests/test_aipos_f104_enum_projection_invariant.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
