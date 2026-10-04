@@ -1034,6 +1034,18 @@ else
   overall=1
 fi
 
+# AIPOS-F99: 审计章程「独立全量基线」(① 母本硬规矩: 被审 tip 与 main 各独立跑项目声明测试清单、同一 grep 式样计数附 diff、
+# 新增失败=FAIL、worktree --detach 建 main 副本、计数异常先串行重跑、未声明跳过并注明 ② charter_render 唯一键表新增 runall_path,
+# 读 workspace_config.project_test_contract, 未声明=明确文字、形坏 fail-closed ③ 审计技能引用章程 ④ 靶场 lybra 实值/未声明两种渲染无残留占位)
+echo
+echo "── tests/test_aipos_f99_audit_runall_baseline.py (F99 审计独立全量基线·清单位置读声明渲染·未声明明确文字·形坏拒渲染) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tests/test_aipos_f99_audit_runall_baseline.py" -v --tb=short; then
+  echo "✓ tests/test_aipos_f99_audit_runall_baseline.py PASS"
+else
+  echo "✗ tests/test_aipos_f99_audit_runall_baseline.py FAIL"
+  overall=1
+fi
+
 # AIPOS-F100: 零依赖兑现——stdlib 写出器写全产品形状(形状表双向夹具在 test_frontmatter_zerodep.py, 已登记于上块)、
 # frontmatter「读不出即拒」(必须读出入口 require_frontmatter; 推导核硬停 frontmatter_unreadable; 读-改-写不重写; 展示面列「读不出」),
 # 屏蔽 PyYAML 的全链路(草稿→发布→认领→交回 ingest(门派审)→审计认领→裁决 ingest→finalization ingest→close)与有 PyYAML 时逐字段相同

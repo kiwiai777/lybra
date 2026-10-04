@@ -199,6 +199,17 @@ def charter_render_context(
 
     for kind in ("return", "verdict"):
         ctx[f"{kind}_required_frontmatter"] = render_report_frontmatter_clause(report_frontmatter_contract(kind))
+    # AIPOS-F99 件②: 审计「独立全量基线」的测试清单位置 = 项目声明 test_contract.runall_path(唯一读取口
+    # workspace_config.project_test_contract, 卡仓取缺省产品仓; 形坏 = ValueError 原样抛, fail-closed); 未声明 = 明确文字, 不留空占位。
+    from tools.aipos_cli.workspace_config import project_test_contract
+
+    test_contract = project_test_contract(gov, code_repo)
+    runall = test_contract.get("runall_path")
+    ctx["runall_path"] = (
+        f"`{runall}`(相对产品仓根; 来源 {test_contract['source']}.runall_path)"
+        if runall
+        else "本项目未声明测试清单(project.json 无 test_contract.runall_path)——独立全量基线跳过, 报告注明「项目未声明 test_contract.runall_path」"
+    )
     return ctx
 
 
