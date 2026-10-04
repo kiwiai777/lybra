@@ -1020,6 +1020,20 @@ else
   overall=1
 fi
 
+# AIPOS-F98: 零依赖兜底解析器(无 PyYAML 时 frontmatter 唯一读取口的兜底路径)覆盖产品写出的全部形状且与 yaml.safe_load 逐形状相同
+# (两层 lane / seq-of-maps rework_rounds / 空 []{} / 引号与多行引号标量 / YAML 1.1 标量解析), 不支持结构 fail-closed(键路径+行号, 不再静默置 None);
+# 整文件登记 tools/aipos_cli/tests/test_frontmatter_zerodep.py(此前从未入 run-all) + 随语义改动的 F87 坏卡靶场用例(lane.repo 指向靶场已声明仓)
+echo
+echo "── tools/aipos_cli/tests/test_frontmatter_zerodep.py (F98 屏蔽 yaml 逐形状 = safe_load·发布卡两层 lane 不丢·safe_dump/stdlib 写出物回读·拒绝原文带键路径与行号·YAML 错误只丢坏键且有无 PyYAML 同果·读取口告警被 task_loader/lint 接住) ────────────────────────────────────────────────────"
+if PYTHONPATH="$REPO_ROOT" python3 -m pytest "$REPO_ROOT/tools/aipos_cli/tests/test_frontmatter_zerodep.py" \
+    "$REPO_ROOT/tests/test_aipos_f87_card_yaml_root_fix.py::test_item3_none_selectable_gives_reasons_and_go_relays_verbatim" \
+    -v --tb=short; then
+  echo "✓ tools/aipos_cli/tests/test_frontmatter_zerodep.py PASS"
+else
+  echo "✗ tools/aipos_cli/tests/test_frontmatter_zerodep.py FAIL"
+  overall=1
+fi
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
