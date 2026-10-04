@@ -16,14 +16,14 @@ Usage:
     lybra enroll-deliver --role executor --instance exec.lybra.mac1 \\
         --target-workspace ~/my-agent-workstation \\
         --target-harness ~/my-agent-workstation/lybra-executor \\
-        --gate-url http://host:7118 --owner-token <token>
+        --gate-url http://<host>:<port> --owner-token <token>
     
     # 跨机SSH
     lybra enroll-deliver --role executor --instance exec.lybra.mac1 \\
         --target-workspace ~/my-agent-workstation \\
         --target-harness ~/my-agent-workstation/lybra-executor \\
         --ssh user@remote-host \\
-        --gate-url http://host:7118 --owner-token <token>
+        --gate-url http://<host>:<port> --owner-token <token>
 
 Security:
   - enrollment code仅在本函数内存在,不落盘
@@ -34,74 +34,22 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 # Import enrollment and distribution modules
 try:
     from tools.aipos_cli.enrollment import create_enrollment_code
     from tools.aipos_cli.enroll_client import enroll, exchange_enrollment_code
+    # AIPOS-F106 件②: 同机判定 / loopback 规范化唯一实现在 enroll_client(原本模块逐字复制的两份删除; 名字仍可从本模块导入)
+    from tools.aipos_cli.enroll_client import is_same_host, normalize_gate_url_for_same_host  # noqa: F401
     from tools.distribute_tools import distribute_to_harness
-    from tools.aipos_cli.confirm_client import load_owner_token
+    from tools.aipos_cli.confirm_client import gate_rpc_url, load_owner_token
 except ImportError as e:
     print(f"Error: Failed to import required modules: {e}", file=sys.stderr)
     sys.exit(1)
-
-
-def is_same_host(gate_url: str) -> bool:
-    """判定 gate host 是否解析到本机 (AIPOS-R6K件①)。
-    
-    同机判定逻辑:
-    1. gate host 是 loopback 地址(127.0.0.1/localhost/::1)
-    2. gate host 解析的 IP 与本机 IP 有交集
-    
-    Returns:
-        True if gate is on same host, False otherwise
-    """
-    try:
-        parsed = urlparse(gate_url)
-        host = parsed.hostname or parsed.netloc.split(':')[0]
-        
-        # 直接是 loopback
-        if host in ('127.0.0.1', 'localhost', '::1'):
-            return True
-        
-        # 解析 gate host 的 IP
-        gate_ips = set(addr[4][0] for addr in socket.getaddrinfo(host, None))
-        
-        # 获取本机所有 IP
-        local_ips = {'127.0.0.1', '::1'}
-        hostname = socket.gethostname()
-        try:
-            local_ips.update(addr[4][0] for addr in socket.getaddrinfo(hostname, None))
-        except Exception:
-            pass
-        
-        # 判定交集
-        return bool(gate_ips & local_ips)
-    except Exception:
-        return False
-
-
-def normalize_gate_url_for_same_host(gate_url: str) -> str:
-    """同机时规范化为 loopback URL (AIPOS-R6K件①: 免疫代理劫持)。
-    
-    Args:
-        gate_url: 原始 gate URL
-    
-    Returns:
-        同机时返回 http://127.0.0.1:<port>,跨机返回原 URL
-    """
-    if not is_same_host(gate_url):
-        return gate_url
-    
-    parsed = urlparse(gate_url)
-    port = parsed.port or 7118
-    return f"http://127.0.0.1:{port}"
 
 
 def _get_role_class(role: str, workspace_root: str | None = None) -> str | None:
@@ -157,28 +105,6 @@ def validate_workspace_root(workspace_root: str, role: str) -> None:
         )
 
 
-def write_role_file_json(lybra_dir: Path, role: str, instance: str | None, owner_policy_ref: str | None) -> None:
-    """写入.lybra/role文件(统一JSON形状,AIPOS-R6H靶②)
-    
-    Args:
-        lybra_dir: .lybra目录路径
-        role: 角色名
-        instance: agent_instance(可选)
-        owner_policy_ref: owner策略引用(可选)
-    """
-    role_file = lybra_dir / "role"
-    role_data = {
-        "role": role,
-    }
-    if instance:
-        role_data["instance"] = instance
-    if owner_policy_ref:
-        role_data["owner_policy_ref"] = owner_policy_ref
-    
-    role_file.write_text(json.dumps(role_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    role_file.chmod(0o644)
-
-
 def enroll_deliver_local(
     *,
     role: str,
@@ -216,7 +142,9 @@ def enroll_deliver_local(
     # 注意: create_enrollment_code需要workspace_root指向gate所在的治理仓
     # 这里需要推断gate的workspace(通常是gate服务所在的workspace)
     # 简化实现: 假设gate workspace从env LYBRA_WORKSPACE_ROOT读取
-    gate_workspace = os.environ.get("LYBRA_WORKSPACE_ROOT", "")
+    from tools.aipos_cli.workspace_config import workspace_root_from_env  # AIPOS-F106 件③: 工作区根 env 唯一读取口
+
+    gate_workspace = workspace_root_from_env()[0] or ""
     if not gate_workspace:
         raise ValueError("LYBRA_WORKSPACE_ROOT env var required for gate workspace")
     
@@ -244,8 +172,9 @@ def enroll_deliver_local(
         
         # 4. 落.lybra/配置(统一JSON格式role文件)
         workspace_root.mkdir(parents=True, exist_ok=True)
-        lybra_dir = workspace_root / ".lybra"
-        lybra_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        from tools.aipos_cli.enroll_client import ensure_lybra_dir  # AIPOS-F106 件④: .lybra 建目录唯一实现
+
+        lybra_dir = ensure_lybra_dir(workspace_root)
         
         # 4a. connection.json (AIPOS-R6K件①: 同机写 loopback URL)
         # AIPOS-F27 大项D: 铸全 connection.json — workspace_root/mcp.rpc_url/tokens 三全
@@ -258,7 +187,7 @@ def enroll_deliver_local(
                 "config_version": 1,
                 "workspace_root": str(workspace_root),
                 "mcp": {
-                    "rpc_url": normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp",
+                    "rpc_url": gate_rpc_url(normalized_gate_url),
                 },
                 "tokens": [],
             }
@@ -269,7 +198,7 @@ def enroll_deliver_local(
         # 更新 mcp.rpc_url (幂等:如已存在也更新为规范化 URL)
         if "mcp" not in conn_data:
             conn_data["mcp"] = {}
-        conn_data["mcp"]["rpc_url"] = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
+        conn_data["mcp"]["rpc_url"] = gate_rpc_url(normalized_gate_url)  # AIPOS-F106 件①: 门基址↔MCP 端点换算唯一实现
         
         # Upsert token entry
         tokens = conn_data.get("tokens", [])
@@ -300,7 +229,10 @@ def enroll_deliver_local(
             os.chmod(connection_file, 0o600)
         
         # 4b. role文件(统一JSON形状)
-        write_role_file_json(lybra_dir, role, instance, owner_policy_ref)
+        # AIPOS-F106 件④: .lybra/role 写入唯一实现 enroll_client.write_role_file(合并保留既有键); 原本模块整文件覆盖的第二份写入器删除
+        from tools.aipos_cli.enroll_client import write_role_file
+
+        write_role_file(lybra_dir, role, instance, owner_policy_ref)
         
         # 5. 分发工具/技能/契约
         distribute_result = distribute_to_harness(harness_root, role, force=force)
@@ -370,7 +302,9 @@ def enroll_deliver_ssh(
         操作结果字典
     """
     # 1. Owner签发enrollment code
-    gate_workspace = os.environ.get("LYBRA_WORKSPACE_ROOT", "")
+    from tools.aipos_cli.workspace_config import workspace_root_from_env  # AIPOS-F106 件③: 工作区根 env 唯一读取口
+
+    gate_workspace = workspace_root_from_env()[0] or ""
     if not gate_workspace:
         raise ValueError("LYBRA_WORKSPACE_ROOT env var required for gate workspace")
     

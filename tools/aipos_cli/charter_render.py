@@ -37,12 +37,36 @@ def _sha256_text(text: str) -> str:
 # 工位身份 / 项目归属
 # ---------------------------------------------------------------------------
 
+# AIPOS-F106 件④(M2): 工位身份文件名(config.schema configuration_sources.role.source_file = .lybra/role)。
+# .lybra 目录一律经 loop_context.ConnectionResolver.discover_lybra_dir 定位; 本模块是 .lybra/role 的唯一读取实现
+# (另一读取口 ConnectionResolver.resolve_role / resolve_identity 只出身份键), 其余代码禁直接读该文件。
+WORKSTATION_ROLE_FILE = "role"
+
+
+def workstation_role_file(harness_root: str | Path) -> Path | None:
+    """AIPOS-F106 件④: 工位 .lybra/role 的唯一定位(不读内容)。无 .lybra 目录 = None。"""
+    from tools.loop_context import ConnectionResolver
+
+    lybra_dir = ConnectionResolver.discover_lybra_dir(Path(harness_root).expanduser())
+    return lybra_dir / WORKSTATION_ROLE_FILE if lybra_dir is not None else None
+
+
+def is_enrolled_workstation(harness_root: str | Path) -> bool:
+    """AIPOS-F106 件④: 已 enroll 工位判据 = 有 .lybra/role 文件(只看存在, 内容合法性由 workstation_identity fail-closed 判)。"""
+    role_file = workstation_role_file(harness_root)
+    return role_file is not None and role_file.is_file()
+
+
 def workstation_identity(harness_root: str | Path) -> dict[str, Any]:
-    """读工位 .lybra/role(+ connection.json 非秘密字段)→ {harness_root, role, instance, project, owner_policy_ref,
-    governance_root_declared, token_projects, gate_url}。token 值永不读入。"""
+    """读工位 .lybra/role(+ connection.json 非秘密字段)→ {harness_root, role, instance, project, owner_policy_ref, harness,
+    governance_root_declared, token_projects, gate_url}。token 值永不读入。
+
+    AIPOS-F106: .lybra 经 ConnectionResolver.discover_lybra_dir 定位; gate_url = 门基址, 经 confirm_client.resolve_gate_base_url
+    (唯一推导口, 委托 ConnectionResolver.resolve_gate_url) 读本工位 connection.json 的 mcp.rpc_url, 未声明 = None;
+    harness = role 文件的 harness 原值(工位 harness 声明, distribution_sync.workstation_harness 消费)。"""
     root = Path(harness_root).expanduser().resolve()
-    role_file = root / ".lybra" / "role"
-    if not role_file.is_file():
+    role_file = workstation_role_file(root)
+    if role_file is None or not role_file.is_file():
         raise WorkstationIdentityError(f"{root}: 无 .lybra/role — 不是已 enroll 工位, 拒绝分发/渲染")
     try:
         data = json.loads(role_file.read_text(encoding="utf-8"))
@@ -67,21 +91,24 @@ def workstation_identity(harness_root: str | Path) -> dict[str, Any]:
         "instance": instance,
         "project": parsed["project"],
         "owner_policy_ref": str(data.get("owner_policy_ref") or "") or None,
+        "harness": data.get("harness"),
         "governance_root_declared": None,
         "token_projects": [],
         "gate_url": None,
     }
-    conn_file = root / ".lybra" / "connection.json"
+    conn_file = role_file.parent / "connection.json"
     if conn_file.is_file():
         try:
             conn = json.loads(conn_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise WorkstationIdentityError(f"{conn_file} 不可读/非 JSON: {exc}") from exc
         if isinstance(conn, dict):
+            from tools.aipos_cli.confirm_client import declared_rpc_url, resolve_gate_base_url
+
             gov = str(conn.get("governance_root") or "").strip()
             identity["governance_root_declared"] = gov or None
-            rpc = str(((conn.get("mcp") or {}).get("rpc_url")) or "").strip()
-            identity["gate_url"] = (rpc[:-len("/mcp")] if rpc.endswith("/mcp") else rpc) or None
+            if declared_rpc_url(conn_file):
+                identity["gate_url"] = resolve_gate_base_url(connection_json=conn_file, require_declared=True)
             # AIPOS-F81: 条目挑选委托 token_resolver 单源(按实例, 排除 retired), 只取非秘密字段 projects。
             # 无可用条目(无命中/全 retired)→ [](元数据缺省); 凭据的 fail-closed 在 token 解析处(带重签出口)。
             from tools.aipos_cli.token_resolver import TOKEN_ENTRY_FIELDS, TokenResolutionError, select_token_entry

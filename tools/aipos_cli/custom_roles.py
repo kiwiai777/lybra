@@ -185,7 +185,9 @@ def is_custom_role(role_name: str, project_root: str | Path | None = None) -> bo
 
 def _workspace_registry_path(project_root: str | Path) -> Path:
     """The workspace's own file inside the gate's central credential library."""
-    return Path(project_root).expanduser().resolve() / ".lybra" / "connection.json"
+    from tools.aipos_cli.service_mode import connection_path  # AIPOS-F106 件④: connection.json 定位唯一实现
+
+    return connection_path(Path(project_root).expanduser().resolve())
 
 
 def _read_registry_file(path: Path) -> dict[str, Any]:

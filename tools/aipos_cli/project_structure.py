@@ -693,7 +693,7 @@ def import_project_structure(
     try:
         from tools.schema_loader import get_config_port
         board_port = get_config_port("board_default")
-        mcp_port = get_config_port("mcp_server_default")
+        mcp_port = get_config_port("gate_default")  # AIPOS-F106 件②: mcp_server_default 已并入 gate_default
     except ImportError as e:
         raise ImportError(
             "Cannot load schema_loader.get_config_port() for project structure template. "

@@ -45,12 +45,15 @@ def _has_queue_root(path: Path) -> bool:
 
 
 def _workspace_root_from_env() -> Path | None:
-    raw = os.environ.get("AIPOS_WORKSPACE_ROOT", "").strip()
+    # AIPOS-F106 件③: 工作区根环境变量经 workspace_config.workspace_root_from_env 唯一读取口(LYBRA_WORKSPACE_ROOT; 旧名废弃兼容)
+    from tools.aipos_cli.workspace_config import workspace_root_from_env
+
+    raw, env_name = workspace_root_from_env()
     if not raw:
         return None
     workspace_root = Path(raw).expanduser().resolve()
     if not _has_queue_root(workspace_root):
-        raise FileNotFoundError(f"AIPOS_WORKSPACE_ROOT does not contain 5_tasks/queue: {workspace_root}")
+        raise FileNotFoundError(f"{env_name} does not contain 5_tasks/queue: {workspace_root}")
     return workspace_root
 
 
@@ -81,9 +84,11 @@ def find_repo_context(start: Path | None = None) -> tuple[Path, Path | None]:
     # a found home_root config). The previous `env={}` dropped the entire home model, forcing a
     # legacy upward .lybra/config.json search that could misread the GLOBAL ~/.lybra/config.json
     # as a v1 workspace config and misresolve silently. We pass the REAL environment with only
-    # AIPOS_WORKSPACE_ROOT stripped, so the legacy explicit-start contract (AIPOS_WORKSPACE_ROOT
-    # ignored when a start is given) is preserved.
-    env = {k: v for k, v in os.environ.items() if k != "AIPOS_WORKSPACE_ROOT"}
+    # workspace-root env stripped (AIPOS-F106: 新名 LYBRA_WORKSPACE_ROOT 与废弃旧名两者), so the legacy explicit-start
+    # contract (workspace-root env ignored when a start is given) is preserved.
+    from tools.aipos_cli.workspace_config import LEGACY_WORKSPACE_ROOT_ENV, WORKSPACE_ROOT_ENV
+
+    env = {k: v for k, v in os.environ.items() if k not in (WORKSPACE_ROOT_ENV, LEGACY_WORKSPACE_ROOT_ENV)}
     return resolve_workspace_context(start, env=env)
 
 

@@ -55,9 +55,10 @@ def secret_fingerprint(raw: str) -> str:
 
 
 def _connection_path(workspace_root: Path, *, connection_target: Path | None = None) -> Path:
-    if connection_target is not None:
-        return Path(connection_target).expanduser().resolve()
-    return (Path(workspace_root).expanduser().resolve() / ".lybra" / "connection.json")
+    """AIPOS-F106 件④: 工作区 connection.json 定位委托 service_mode.connection_path(既有唯一定位: 覆盖优先, 否则 <root>/.lybra/connection.json)。"""
+    from tools.aipos_cli.service_mode import connection_path
+
+    return connection_path(Path(workspace_root).expanduser().resolve(), connection_target=connection_target).expanduser().resolve()
 
 
 def _records_dir(workspace_root: Path) -> Path:
@@ -152,16 +153,15 @@ def _cleanup_legacy_backups(lybra_dir: Path) -> list[str]:
     return cleaned
 
 
-def _gate_base_url(config: dict[str, Any]) -> str | None:
-    mcp = config.get("mcp")
-    if isinstance(mcp, dict):
-        url = str(mcp.get("rpc_url") or mcp.get("sse_url") or "").strip()
-        if url:
-            return url.rstrip("/").removesuffix("/mcp").removesuffix("/sse")
-    url = str(config.get("gate_url") or "").strip()
-    if url:
-        return url.rstrip("/").removesuffix("/mcp").removesuffix("/sse")
-    return None
+def _gate_base_url(conn_path: Path) -> str | None:
+    """AIPOS-F106 件①(M1): 门基址经 confirm_client.resolve_gate_base_url(唯一推导口, 显式凭据文件层, 委托
+    ConnectionResolver.resolve_gate_url)。在轮换前读(轮换只改 tokens, 不动 mcp 块)。凭据文件未声明 mcp.rpc_url = None
+    (调用方出重启指引); 原 sse_url / 顶层 gate_url 回退(config.schema configuration_sources.connection 未声明的键)删除。"""
+    from tools.aipos_cli.confirm_client import declared_rpc_url, resolve_gate_base_url
+
+    if declared_rpc_url(conn_path) is None:
+        return None
+    return resolve_gate_base_url(connection_json=conn_path, require_declared=True)
 
 
 def _owner_token_from(config: dict[str, Any]) -> str | None:
@@ -185,6 +185,7 @@ def _owner_token_from(config: dict[str, Any]) -> str | None:
 def _attempt_gate_reload(
     config_before: dict[str, Any],
     *,
+    base_url: str | None,
     owner_authorization_ref: str,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
@@ -193,7 +194,6 @@ def _attempt_gate_reload(
     Auth uses the PRE-rotation owner token (still valid until the reload
     lands). On any failure the caller falls back to restart guidance.
     """
-    base_url = _gate_base_url(config_before)
     owner_token = _owner_token_from(config_before)
     if not base_url or not owner_token:
         return {"ok": False, "reason": "no gate URL or no pre-rotation owner token in connection.json"}
@@ -211,8 +211,8 @@ def _attempt_gate_reload(
         return {"ok": False, "reason": str(exc)}
 
 
-def _restart_guidance(config: dict[str, Any]) -> list[str]:
-    base_url = _gate_base_url(config) or "(gate url unknown)"
+def _restart_guidance(gate_base: str | None) -> list[str]:
+    base_url = gate_base or "(gate url unknown)"
     return [
         f"Gate ({base_url}) did NOT hot-reload the new tokens. Restart the gate service so it "
         "re-reads connection.json:",
@@ -251,8 +251,8 @@ def _write_record(
     return path
 
 
-def _reenroll_guidance(entries: list[dict[str, Any]], config: dict[str, Any]) -> list[str]:
-    base_url = _gate_base_url(config) or "(gate url unknown)"
+def _reenroll_guidance(entries: list[dict[str, Any]], gate_base: str | None) -> list[str]:
+    base_url = gate_base or "(gate url unknown)"
     lines = [
         "All rotated tokens below are now INVALID. Every workstation holding an old token",
         "must re-enroll with a fresh enrollment code:",
@@ -304,6 +304,7 @@ def rotate_tokens_report(
     try:
         config = _load_config(conn_path)
         tokens = _token_list(config)
+        gate_base = _gate_base_url(conn_path)  # AIPOS-F106 件①: 轮换前经唯一推导口取门基址
     except (ValueError, json.JSONDecodeError, OSError) as exc:
         return {**base, "ok": False, "verdict": Verdict.BLOCK,
                 "blocking_reasons": [{"message": f"Cannot load connection config: {exc}"}]}
@@ -365,7 +366,7 @@ def rotate_tokens_report(
 
     reload_result: dict[str, Any] = {"ok": False, "reason": "skipped"}
     if reload_gate:
-        reload_result = _attempt_gate_reload(config, owner_authorization_ref=str(owner_authorization_ref))
+        reload_result = _attempt_gate_reload(config, base_url=gate_base, owner_authorization_ref=str(owner_authorization_ref))
     gate_reload = "hot_reload_ok" if reload_result.get("ok") else "restart_required"
 
     record_frontmatter = {
@@ -406,8 +407,8 @@ def rotate_tokens_report(
     if cleaned:
         result["legacy_backups_cleaned"] = cleaned
     if gate_reload != "hot_reload_ok":
-        result["restart_guidance"] = _restart_guidance(config)
-    result["next_steps"] = _reenroll_guidance(preview, config)
+        result["restart_guidance"] = _restart_guidance(gate_base)
+    result["next_steps"] = _reenroll_guidance(preview, gate_base)
     return result
 
 
@@ -444,6 +445,7 @@ def remove_instance_report(
     try:
         config = _load_config(conn_path)
         tokens = _token_list(config)
+        gate_base = _gate_base_url(conn_path)  # AIPOS-F106 件①: 轮换前经唯一推导口取门基址
     except (ValueError, json.JSONDecodeError, OSError) as exc:
         return {**base, "ok": False, "verdict": Verdict.BLOCK,
                 "blocking_reasons": [{"message": f"Cannot load connection config: {exc}"}]}
@@ -467,7 +469,7 @@ def remove_instance_report(
 
     reload_result: dict[str, Any] = {"ok": False, "reason": "skipped"}
     if reload_gate:
-        reload_result = _attempt_gate_reload(config, owner_authorization_ref=str(owner_authorization_ref))
+        reload_result = _attempt_gate_reload(config, base_url=gate_base, owner_authorization_ref=str(owner_authorization_ref))
     gate_reload = "hot_reload_ok" if reload_result.get("ok") else "restart_required"
 
     removed_view = [_safe_entry(t) for t in removed]
@@ -508,5 +510,5 @@ def remove_instance_report(
     if cleaned:
         result["legacy_backups_cleaned"] = cleaned
     if gate_reload != "hot_reload_ok":
-        result["restart_guidance"] = _restart_guidance(config)
+        result["restart_guidance"] = _restart_guidance(gate_base)
     return result

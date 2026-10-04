@@ -21,7 +21,7 @@ from tools.schema_loader import get_config_port  # AIPOS-R4B-1: gate port single
 from tools.schema_constants import Verdict
 
 DEFAULT_HTTP_HOST = "127.0.0.1"
-DEFAULT_HTTP_PORT = get_config_port("gate_default")  # AIPOS-R4B-1: from config.schema (was hardcoded 7118)
+DEFAULT_HTTP_PORT = get_config_port("gate_default")  # AIPOS-R4B-1: from config.schema ports.gate_default
 DEFAULT_KEEPALIVE_SECONDS = 30.0
 TOKEN_ENV_VAR = "LYBRA_MCP_TOKEN"
 MCP_RPC_PATH = "/mcp"
@@ -731,7 +731,9 @@ def load_unified_service_role_registry(home_root: str | Path, *, error_stream: T
     seen_sources: dict[str, str] = {}  # fingerprint -> source_label
 
     # 1. Load home-level registry (cross-project identities)
-    home_connection = home_path / ".lybra" / "connection.json"
+    from tools.aipos_cli.service_mode import connection_path  # AIPOS-F106 件④: connection.json 定位唯一实现
+
+    home_connection = connection_path(home_path)
     if home_connection.exists():
         try:
             home_registry = load_service_role_registry(home_connection, error_stream=error_stream)
@@ -747,7 +749,7 @@ def load_unified_service_role_registry(home_root: str | Path, *, error_stream: T
     # 2. Load each project's registry (AIPOS-F26: single project failure ≠ whole load crash)
     project_names = _project_candidates(home_path)
     for proj_name in project_names:
-        proj_connection = home_path / proj_name / ".lybra" / "connection.json"
+        proj_connection = connection_path(home_path / proj_name)
         if not proj_connection.exists():
             continue
         try:
