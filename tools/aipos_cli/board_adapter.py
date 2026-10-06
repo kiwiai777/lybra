@@ -2766,9 +2766,11 @@ def _check_test_in_runall(
     except ValueError as exc:
         return [f"{exc}(清单 {runall_rel}, 卡分支 {card_branch_name(task_id)})。出口: 修正声明行后重交"]
     if missing_tests and directives["discover"]:
+        # AIPOS-F119 件②: 拒因逐项附清单内 exclude 声明的理由(读 runall_directives 解析结果, 不另解析)
+        excluded = [f"{path}(声明理由: {directives['exclude'][path]})" for path in missing_tests]
         blocking_reasons.append(
             f"TEST_NOT_IN_RUNALL: 本卡测试文件被项目声明的测试清单 {runall_rel}(来源 {contract.get('source')})以 exclude 声明排除、"
-            f"不会执行: {', '.join(missing_tests)}。出口: ①删该 exclude 行让其随自动发现执行; ②确属不可在夹具环境执行, 请顾问裁定后再交"
+            f"不会执行: {', '.join(excluded)}。出口: ①删该 exclude 行让其随自动发现执行; ②确属不可在夹具环境执行, 请顾问裁定后再交"
         )
         return blocking_reasons
 
