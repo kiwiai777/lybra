@@ -1128,6 +1128,10 @@ run_pytest "tests/test_aipos_f113_enroll_deliver_ssh_secrets.py" "$REPO_ROOT/tes
 # AIPOS-F112: 裁决后卡分支 tip 变化的复审出口(verdict_stale → 重交回 → R2 → 裁决绑新 tip → finalize → close)靶场夹具
 run_pytest "tests/test_aipos_f112_verdict_stale_reaudit.py" "$REPO_ROOT/tests/test_aipos_f112_verdict_stale_reaudit.py"
 run_pytest "tests/test_aipos_f114_return_stale_reaudit.py" "$REPO_ROOT/tests/test_aipos_f114_return_stale_reaudit.py"
+# AIPOS-F117: 看板导入收敛到 project new(真看板临时端口靶场·CLI project import 同一实现·v1 config 写入方删·serve/看板同读 workspace_runtime_config)·BRANCH_WRONG_BASE 出口读 base_sync 声明·声明文案改正·builtin 类单源·withdrawn 终态读声明·模板协议文档删
+run_pytest "tests/test_aipos_f117_entry_text_cleanup.py" "$REPO_ROOT/tests/test_aipos_f117_entry_text_cleanup.py"
+# AIPOS-F117: 随 import 改走 project new 校正并登记的 project_structure / scaffold / workspace_root 单元夹具
+run_pytest "F117 tools/aipos_cli/tests/test_project_structure.py+test_project_scaffold.py+test_workspace_root.py" "$REPO_ROOT/tools/aipos_cli/tests/test_project_structure.py" "$REPO_ROOT/tools/aipos_cli/tests/test_project_scaffold.py" "$REPO_ROOT/tools/aipos_cli/tests/test_workspace_root.py"
 
 echo
 echo "========================================================"
