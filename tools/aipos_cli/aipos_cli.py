@@ -2845,8 +2845,9 @@ def main(argv: list[str] | None = None) -> int:
                     if not report["found"]:
                         print("  实际: home 下各项目与签发门工作区的 enrollment_log 均无该实例事件")
                     for item in report["found"]:
-                        acts = ", ".join(f"{k}×{v}" for k, v in sorted(item["actions"].items()))
-                        print(f"  实际所在 log: {item['log']}  事件 {acts}  最新 land {item['latest_land_at'] or '-'}"
+                        acts = ", ".join(f"{k}×{v}" for k, v in sorted(item["actions"].items())) or "(无未作废事件)"
+                        voided = f"  已作废 {item['voided_events']} 个(void 行 {item['void_lines']})" if item["voided_events"] else ""
+                        print(f"  实际所在 log: {item['log']}  事件 {acts}{voided}  最新 land {item['latest_land_at'] or '-'}"
                               f"  workstation={item['latest_land_workstation'] or '-'}")
                     loc = report["workstation_location"]
                     if loc is not None:
