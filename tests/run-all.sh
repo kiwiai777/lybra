@@ -1105,6 +1105,9 @@ run_pytest "F101 tools/mcp_server/tests/test_scope_reachability.py(节点)" "$RE
 # AIPOS-F101: test_aipos330_verb_contract 的 TestS6Extensibility(未声明门工具 fail-closed、声明即入注册表)与 TestGateGuidanceTool(委托推导核)
 run_pytest "F101 tools/mcp_server/tests/test_aipos330_verb_contract.py(TestS6Extensibility+TestGateGuidanceTool)" "$REPO_ROOT/tools/mcp_server/tests/test_aipos330_verb_contract.py::TestS6Extensibility" "$REPO_ROOT/tools/mcp_server/tests/test_aipos330_verb_contract.py::TestGateGuidanceTool"
 
+# AIPOS-F112: 裁决后卡分支 tip 变化的复审出口(verdict_stale → 重交回 → R2 → 裁决绑新 tip → finalize → close)靶场夹具
+run_pytest "tests/test_aipos_f112_verdict_stale_reaudit.py" "$REPO_ROOT/tests/test_aipos_f112_verdict_stale_reaudit.py"
+
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
