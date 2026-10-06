@@ -172,11 +172,21 @@
           "schema": {
             "runall_path": {"type": "string", "optional": true, "description": "测试清单文件(相对产品仓根, 禁绝对路径); 交回检查读卡分支上的该文件"},
             "require_tests": {"type": "boolean", "optional": true, "description": "true = code 类卡须含测试文件改动(NO_TESTS)"},
-            "test_file_globs": {"type": "array", "items": {"type": "string"}, "optional": true, "default": ["test_*.py", "*_test.py", "test_*.sh", "*.test.ts", "*.test.js", "*.spec.ts", "*.spec.js"], "description": "AIPOS-F97 件②: 「测试文件」的文件名式样(fnmatch glob, 按文件名即路径最后一段匹配, 区分大小写, 禁含 /)。缺省 = default(覆盖 lybra 产品仓现有全部自动化测试文件命名: Python test_*.py、shell test_*.sh、TS/JS *.test.ts / *.test.js、Playwright *.spec.js, 另含常见 *_test.py / *.spec.ts); 项目声明 = 整体替换缺省(非追加), 须为非空字符串的非空列表。判据唯一实现 workspace_config.card_test_files: 卡分支改动集(git diff --name-status main...card/<ID>)中删除项 D 排除、重命名/复制取新路径, 文件名命中任一式样且不是 runall_path 本身 = 本卡测试文件(TEST_NOT_IN_RUNALL / NO_TESTS 共用)。代码不写死式样; 新语言 = 加一条 glob"},
+            "test_file_globs": {"type": "array", "items": {"type": "string"}, "optional": true, "default": ["test_*.py", "*_test.py", "test_*.sh", "*.test.ts", "*.test.js", "*.spec.ts", "*.spec.js"], "description": "AIPOS-F109 件④: 同一式样亦是 run-all 自动发现的式样(runall_directives discover; 判定唯一实现 workspace_config.is_test_file)。AIPOS-F97 件②: 「测试文件」的文件名式样(fnmatch glob, 按文件名即路径最后一段匹配, 区分大小写, 禁含 /)。缺省 = default(覆盖 lybra 产品仓现有全部自动化测试文件命名: Python test_*.py、shell test_*.sh、TS/JS *.test.ts / *.test.js、Playwright *.spec.js, 另含常见 *_test.py / *.spec.ts); 项目声明 = 整体替换缺省(非追加), 须为非空字符串的非空列表。判据唯一实现 workspace_config.card_test_files: 卡分支改动集(git diff --name-status main...card/<ID>)中删除项 D 排除、重命名/复制取新路径, 文件名命中任一式样且不是 runall_path 本身 = 本卡测试文件(TEST_NOT_IN_RUNALL / NO_TESTS 共用)。代码不写死式样; 新语言 = 加一条 glob"},
             "repos": {"type": "object", "optional": true, "description": "按仓覆盖: 键 = project.json repos.items 仓名, 值同形(不得再嵌 repos); 卡仓(resolve_card_repo)有覆盖取覆盖, 否则取顶层"}
           },
           "reject_codes": {
-            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items)"
+            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items)",
+            "RUNALL_DIRECTIVE_INVALID": "测试清单文件内声明行形坏(未声明的指令词 / 缺目标 / exclude 缺理由 / 目标重复 / discover 带参数)"
+          },
+          "runall_directives": {
+            "description": "AIPOS-F109 件④(gap #40: 各卡往测试清单末尾追加登记块, 并行卡合并必冲突): 测试清单文件(runall_path)可在行首注释里声明自动发现——`# <prefix> discover` = 清单按本项目 test_file_globs 自动发现并执行产品仓内全部测试文件(workspace_config.discover_test_files, 与「本卡测试文件」判据 card_test_files 同一判定 is_test_file), 新测试文件无需逐个登记。门交回检查 TEST_NOT_IN_RUNALL 在 discover 模式下改判: 本卡测试文件命中声明式样即视为登记, 只有被 exclude 声明排除的文件才拒; 无 discover 行 = 原判据(测试文件路径/文件名须出现在清单文本中)。唯一解析 workspace_config.runall_directives(门与执行器 tools/aipos_cli/runall_discovery 共用)。存量失败处置(gap #59)= 声明化且只减不增: exclude 不执行(必须写理由, 执行器逐条打印, 不静默), known-failure 照常执行、失败被容忍、一旦转绿执行器即报红逼删条。",
+            "prefix": "lybra-runall:",
+            "directives": {
+              "discover": "本清单按 test_file_globs 自动发现(无参数)",
+              "exclude": "exclude <文件路径 | 文件::pytest 节点> <理由>: 不执行(真实治理根/活门/外部浏览器等不可在夹具环境执行者); 文件级排除的测试文件不算登记(门拒 TEST_NOT_IN_RUNALL)",
+              "known-failure": "known-failure <文件路径 | 文件::pytest 节点> [理由]: 执行, 已知存量失败被容忍; 该目标转绿(或节点已不存在)= 执行器报红, 须删此行(只减不增)"
+            }
           }
         },
         "repos": {
