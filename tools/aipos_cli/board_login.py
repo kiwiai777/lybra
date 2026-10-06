@@ -121,24 +121,21 @@ def resolve_board_url(
     if host or port:
         return f"http://{host or DEFAULT_BOARD_HOST}:{port or DEFAULT_BOARD_PORT}"
     
-    # F-271-1: 优先从 workspace config 读取(单工作区场景)
+    # F-271-1: 优先从 workspace config 读取(单工作区场景)。AIPOS-F117 件①(gap #52): 经 .lybra/config.json 唯一读取口
+    # workspace_runtime_config(与 serve/看板同读); 原就地解析 + 读坏静默 pass 删除——读坏改为 stderr 告警后回退 connection.json
     if workspace_root:
-        from tools.aipos_cli.workspace_config import CONFIG_RELATIVE_PATH  # AIPOS-F106 件④: .lybra/config.json 唯一相对路径声明
+        import sys
 
-        ws_config = Path(workspace_root).expanduser() / CONFIG_RELATIVE_PATH
-        if ws_config.is_file():
-            try:
-                data = json.loads(ws_config.read_text(encoding="utf-8"))
-                board = data.get("board") if isinstance(data, dict) else None
-                if isinstance(board, dict):
-                    if board.get("url"):
-                        return str(board["url"]).rstrip("/")
-                    bhost = board.get("host") or DEFAULT_BOARD_HOST
-                    bport = board.get("port") or DEFAULT_BOARD_PORT
-                    return f"http://{bhost}:{bport}"
-            except (OSError, json.JSONDecodeError):
-                pass
-    
+        from tools.aipos_cli.workspace_config import workspace_runtime_config
+
+        cfg = workspace_runtime_config(Path(workspace_root).expanduser(), strict=False)
+        if cfg["config_error"]:
+            print(f"Warning: {cfg['config_error']}; 看板地址改按 connection.json / 缺省解析", file=sys.stderr)
+        elif cfg["board_declared"]:
+            if cfg["board_url"]:
+                return str(cfg["board_url"]).rstrip("/")
+            return f"http://{cfg['board_host']}:{cfg['board_port']}"
+
     # 回退到 connection.json
     path = Path(connection_json or DEFAULT_CONNECTION_JSON).expanduser()
     if path.is_file():

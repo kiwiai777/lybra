@@ -4,9 +4,9 @@ Coverage:
 - Schema validation (required fields, credential detection)
 - YAML emit/parse roundtrip
 - Export on a mock workspace
-- Import creates standard five-piece set + migration checklist
-- Import idempotent re-run
-- Non-empty directory protection
+- Import = `lybra project new` 同一实现(workspace_config.scaffold_project)建项目 + migration checklist(AIPOS-F117 件①)
+- Re-import refused (PROJECT_EXISTS, same as project new)
+- Non-empty target protection
 - Zero credential values in exported structure
 - Export-import full roundtrip
 """
@@ -21,7 +21,6 @@ from tools.aipos_cli.project_structure import (
     CANONICAL_GOVERNANCE_FILES,
     MIGRATION_CHECKLIST_FILENAME,
     SCHEMA_VERSION,
-    STANDARD_FIVE_PIECE,
     _check_no_credentials,
     emit_yaml,
     export_project_structure,
@@ -30,6 +29,12 @@ from tools.aipos_cli.project_structure import (
     parse_yaml,
     validate_structure,
 )
+from tools.aipos_cli.workspace_config import governance_paths, project_paths
+
+
+def _imp(structure_file, output: Path, **kwargs):
+    """AIPOS-F117 件①: import 落点 = <home 根>/<项目名>; 测试以 output 的父目录为 home 根、目录名为项目名。"""
+    return import_project_structure(structure_file, Path(output).parent, name=Path(output).name, **kwargs)
 
 
 class SchemaValidationTests(unittest.TestCase):
@@ -205,7 +210,9 @@ class ExportTests(unittest.TestCase):
     def test_export_captures_governance_files(self) -> None:
         structure = export_project_structure(self.root)
         self.assertIn("decision_log", structure["governance_files"])
-        self.assertIn("project_status", structure["governance_files"])
+        # AIPOS-F89 件② M17 起产品不声明 project_status 等治理文档名: 只认 CANONICAL_GOVERNANCE_FILES 内的键(AIPOS-F117 随登记 run-all 校正)
+        self.assertNotIn("project_status", structure["governance_files"])
+        self.assertLessEqual(set(structure["governance_files"]), set(CANONICAL_GOVERNANCE_FILES) | {"decision_log_dir"})
 
     def test_export_captures_description(self) -> None:
         structure = export_project_structure(self.root)
@@ -260,41 +267,37 @@ class ImportTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def test_import_creates_standard_five_piece(self) -> None:
-        """S3: Import creates the standard five-piece set."""
+    def test_import_creates_project_via_project_new(self) -> None:
+        """AIPOS-F117 件①: 导入建项目 = project new 同一实现(队列骨架 / 治理树 / 阶段快照与 scaffold_project 一致)。"""
         structure_file = self._make_structure_file(self.tmpdir)
         output = self.tmpdir / "output"
-        result = import_project_structure(structure_file, output)
-        self.assertTrue(result["ok"])
-        # Check all standard directories exist
-        for rel_dir in STANDARD_FIVE_PIECE:
-            self.assertTrue((output / rel_dir).is_dir(), f"Missing: {rel_dir}")
+        result = _imp(structure_file, output)
+        self.assertTrue(result["ok"], result)
+        self.assertIn("scaffold_project", result["created_by"])
+        queue_root = Path(project_paths(output)["queue_root"])
+        for state in ("pending", "claimed", "completed", "blocked"):
+            self.assertTrue((queue_root / state).is_dir(), state)
+        paths = governance_paths(output)
+        self.assertTrue(paths["decision_log"].is_file())
+        self.assertTrue(any(p.name.lower() != "readme.md" for p in paths["stage_archive"].glob("*.md")))
+        # 原第二实现产物不再出现
+        self.assertFalse((output / ".lybra" / "config.json").exists())
+        self.assertFalse((output / "README.md").exists())
 
     def test_import_creates_project_json(self) -> None:
         structure_file = self._make_structure_file(self.tmpdir)
-        output = self.tmpdir / "output"
-        import_project_structure(structure_file, output)
-        pj = output / "project.json"
+        result = import_project_structure(structure_file, self.tmpdir)  # 项目名取结构文件 project_name
+        self.assertTrue(result["ok"], result)
+        pj = self.tmpdir / "test-import" / "project.json"
         self.assertTrue(pj.is_file())
         data = json.loads(pj.read_text())
         self.assertEqual(data["project"], "test-import")
-
-    def test_import_creates_lybra_ignore(self) -> None:
-        """S3: .lybra/ with ignore rules for leak prevention."""
-        structure_file = self._make_structure_file(self.tmpdir)
-        output = self.tmpdir / "output"
-        import_project_structure(structure_file, output)
-        gitignore = output / ".lybra" / ".gitignore"
-        self.assertTrue(gitignore.is_file())
-        content = gitignore.read_text()
-        self.assertIn("*.env", content)
-        self.assertIn("*.secret", content)
-        self.assertIn("connection.json", content)
+        self.assertEqual(data["code_repo"], "/code/test")
 
     def test_import_creates_migration_checklist(self) -> None:
         structure_file = self._make_structure_file(self.tmpdir)
         output = self.tmpdir / "output"
-        result = import_project_structure(structure_file, output)
+        result = _imp(structure_file, output)
         self.assertTrue(result["ok"])
         checklist = output / MIGRATION_CHECKLIST_FILENAME
         self.assertTrue(checklist.is_file())
@@ -302,47 +305,44 @@ class ImportTests(unittest.TestCase):
         self.assertIn("Migration Checklist", content)
         self.assertIn("NEVER deletes", content)
 
-    def test_import_idempotent_rerun(self) -> None:
-        """S3: Re-running import on the same output is safe (skips existing)."""
+    def test_import_rerun_refused_project_exists(self) -> None:
+        """AIPOS-F117 件①: 重复导入同名项目 = 拒(PROJECT_EXISTS, 与 project new 同一拒因; 不覆盖)。"""
         structure_file = self._make_structure_file(self.tmpdir)
         output = self.tmpdir / "output"
-        # First run
-        result1 = import_project_structure(structure_file, output)
-        self.assertTrue(result1["ok"])
-        self.assertEqual(len(result1["skipped_existing"]), 0)
-        # Second run (idempotent)
-        result2 = import_project_structure(structure_file, output)
-        self.assertTrue(result2["ok"])
-        self.assertGreater(len(result2["skipped_existing"]), 0)
+        self.assertTrue(_imp(structure_file, output)["ok"])
+        result2 = _imp(structure_file, output)
+        self.assertFalse(result2["ok"])
+        self.assertTrue(any("PROJECT_EXISTS" in r for r in result2["blocking_reasons"]))
 
     def test_import_non_empty_directory_protection(self) -> None:
-        """S3: Import refuses non-empty non-workspace directories."""
+        """S3: Import refuses non-empty targets."""
         structure_file = self._make_structure_file(self.tmpdir)
         output = self.tmpdir / "nonempty"
         output.mkdir()
         (output / "existing.txt").write_text("I exist")
-        result = import_project_structure(structure_file, output)
+        result = _imp(structure_file, output)
         self.assertFalse(result["ok"])
-        self.assertTrue(any("non-empty" in r for r in result["blocking_reasons"]))
+        self.assertTrue(any("PROJECT_EXISTS" in r for r in result["blocking_reasons"]))
+        self.assertEqual(sorted(p.name for p in output.iterdir()), ["existing.txt"])
 
     def test_import_dry_run_no_writes(self) -> None:
         """S3: Dry run doesn't create anything."""
         structure_file = self._make_structure_file(self.tmpdir)
         output = self.tmpdir / "dryrun"
-        result = import_project_structure(structure_file, output, dry_run=True)
+        result = _imp(structure_file, output, dry_run=True)
         self.assertTrue(result["ok"])
         self.assertTrue(result["dry_run"])
         self.assertFalse(output.exists())
 
     def test_import_missing_structure_file(self) -> None:
-        result = import_project_structure("/nonexistent/file.yaml", self.tmpdir / "out")
+        result = _imp("/nonexistent/file.yaml", self.tmpdir / "out")
         self.assertFalse(result["ok"])
         self.assertTrue(any("not found" in r for r in result["blocking_reasons"]))
 
     def test_import_invalid_structure_file(self) -> None:
         bad_file = self.tmpdir / "bad.yaml"
         bad_file.write_text("schema_version: 99\nproject_name: test\n", encoding="utf-8")
-        result = import_project_structure(bad_file, self.tmpdir / "out")
+        result = _imp(bad_file, self.tmpdir / "out")
         self.assertFalse(result["ok"])
         self.assertTrue(any("validation failed" in r for r in result["blocking_reasons"]))
 
@@ -356,7 +356,7 @@ class ImportTests(unittest.TestCase):
         yaml_text = emit_yaml(data)
         bad_file = self.tmpdir / "evil.yaml"
         bad_file.write_text(yaml_text, encoding="utf-8")
-        result = import_project_structure(bad_file, self.tmpdir / "out")
+        result = _imp(bad_file, self.tmpdir / "out")
         self.assertFalse(result["ok"])
         self.assertTrue(any("credential" in r.lower() or "Credential" in r for r in result["blocking_reasons"]))
 
@@ -406,8 +406,9 @@ class RoundtripTests(unittest.TestCase):
 
         # Import
         output = Path(self.temp_dir.name) / "imported"
-        import_result = import_project_structure(structure_file, output)
+        import_result = import_project_structure(structure_file, output.parent)  # 项目名取结构文件
         self.assertTrue(import_result["ok"])
+        output = Path(import_result["project_root"])
 
         # Verify project name
         pj = json.loads((output / "project.json").read_text())
@@ -418,7 +419,7 @@ class RoundtripTests(unittest.TestCase):
         export_result = export_project_to_yaml(self.source)
         structure_file = Path(export_result["output_path"])
         output = Path(self.temp_dir.name) / "imported"
-        import_project_structure(structure_file, output)
+        self.assertTrue(_imp(structure_file, output)["ok"])
 
         # Verify standard directories
         for state in ("pending", "claimed", "completed", "blocked"):
@@ -447,38 +448,26 @@ class NonRemovalTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_import_does_not_delete_existing_workspace_files(self) -> None:
-        """Red line verification: re-import on existing workspace doesn't delete files."""
-        # Create a structure file
+        """Red line verification: import onto an existing project is refused and deletes/overwrites nothing (AIPOS-F117)."""
         data = {
             "schema_version": 1,
             "project_name": "safe-test",
             "governance_files": {},
         }
-        yaml_text = emit_yaml(data)
         structure_file = self.tmpdir / "structure.yaml"
-        structure_file.write_text(yaml_text)
+        structure_file.write_text(emit_yaml(data))
 
-        # Create an existing workspace with user files
-        output = self.tmpdir / "workspace"
+        output = self.tmpdir / "safe-test"
         (output / "5_tasks" / "queue" / "pending").mkdir(parents=True)
-        (output / "5_tasks" / "queue" / "claimed").mkdir(parents=True)
-        (output / "5_tasks" / "queue" / "completed").mkdir(parents=True)
-        (output / "5_tasks" / "queue" / "blocked").mkdir(parents=True)
-        # Add project.json so it's recognized as an existing Lybra workspace
-        (output / "project.json").write_text(json.dumps({
-            "project": "safe-test",
-            "config_version": 1,
-        }))
+        (output / "project.json").write_text(json.dumps({"project": "safe-test", "config_version": 1}))
         user_file = output / "5_tasks" / "queue" / "pending" / "user-task.md"
         user_file.write_text("---\ntask_id: USER-1\n---\n# User's task\n")
 
-        # Import (re-run on existing workspace)
-        result = import_project_structure(structure_file, output)
-        self.assertTrue(result["ok"])
-
-        # User file must still exist
-        self.assertTrue(user_file.exists())
+        result = import_project_structure(structure_file, self.tmpdir)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("PROJECT_EXISTS" in r for r in result["blocking_reasons"]))
         self.assertEqual(user_file.read_text(), "---\ntask_id: USER-1\n---\n# User's task\n")
+        self.assertEqual(json.loads((output / "project.json").read_text()), {"project": "safe-test", "config_version": 1})
 
 
 if __name__ == "__main__":

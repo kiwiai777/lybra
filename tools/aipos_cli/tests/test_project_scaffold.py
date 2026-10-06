@@ -15,8 +15,13 @@ from tools.aipos_cli.workspace_config import (
     resolve_workspace_root,
     scaffold_project,
     set_project_repo,
-    write_workspace_config,
 )
+
+
+def _write_v1_config(ws: Path) -> None:
+    """手写 v1 工作区本地配置(AIPOS-F117 件①: 产品 v1 写入方零调用方已删; 该文件只作可选手写覆盖)。"""
+    (ws / ".lybra").mkdir(parents=True, exist_ok=True)
+    (ws / ".lybra" / "config.json").write_text(json.dumps({"config_version": 1, "workspace_root": "."}) + "\n", encoding="utf-8")
 
 
 class ProjectScaffoldTests(unittest.TestCase):
@@ -198,7 +203,7 @@ class ProjectScaffoldTests(unittest.TestCase):
         ws = self.root / "v1ws"
         for state in ("pending", "claimed", "completed", "blocked"):
             (ws / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
-        write_workspace_config(ws)  # writes config_version 1, workspace_root "."
+        _write_v1_config(ws)  # config_version 1, workspace_root "."
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(resolve_workspace_root(ws, env={}), ws.resolve())
 
@@ -239,13 +244,14 @@ class ProjectScaffoldTests(unittest.TestCase):
             "project": "rt",
             "assigned_to": "executor",
             "context_bundle": "none",
-            "task_mode": "single",
+            # AIPOS-F117 随登记 run-all 校正: 取值改为 card.schema 现行值域(原 single / P2 / ephemeral 已不在声明内)
+            "task_mode": "docs",
             "task_class": "simple",
             "model_tier": "standard",
-            "priority": "P2",
+            "priority": "medium",
             "created_by": "owner",
-            "output_target": "report",
-            "artifact_policy": "ephemeral",
+            "output_target": "docs/report.md",
+            "artifact_policy": "scratch_only",
         }
         created = create_draft(root, metadata, "# body\n")
         self.assertNotEqual(created.get("verdict"), "BLOCK", created.get("blocking_reasons"))

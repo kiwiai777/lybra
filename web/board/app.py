@@ -73,12 +73,8 @@ from tools.aipos_cli.draft_validator import validate_draft_file
 from tools.aipos_cli.draft_writer import publish_draft as backend_publish_draft
 from tools.aipos_cli.state_recovery import build_state_recovery_preview
 from tools.aipos_cli.workspace_config import (
-    CONFIG_RELATIVE_PATH,
     DEFAULT_BOARD_HOST,
     DEFAULT_BOARD_PORT,
-    DEFAULT_MCP_HOST,
-    DEFAULT_MCP_PORT,
-    load_workspace_config,
     has_workspace_queue,
 )
 from web.board.md_source import get_markdown_source
@@ -414,27 +410,15 @@ def _is_loopback_host(host: str) -> bool:
 
 
 def _runtime_config_defaults(repo_root: Path) -> dict[str, Any]:
-    config_path = repo_root / CONFIG_RELATIVE_PATH
-    config: dict[str, Any] = {}
-    config_error: str | None = None
-    if config_path.is_file():
-        try:
-            config = load_workspace_config(config_path)
-        except Exception as exc:  # read-only status surface should report config issues instead of raising
-            config_error = str(exc)
-            config = {}
-    board = config.get("board") if isinstance(config.get("board"), dict) else {}
-    mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
-    return {
-        "config_path": str(config_path.relative_to(repo_root)) if config_path.exists() else None,
-        "config_error": config_error,
-        "board_host": str(board.get("host") or DEFAULT_BOARD_HOST),
-        "board_port": int(board.get("port") or DEFAULT_BOARD_PORT),
-        "mcp_host": str(mcp.get("host") or DEFAULT_MCP_HOST),
-        "mcp_port": int(mcp.get("port") or DEFAULT_MCP_PORT),
-        "transport_token_env": str(mcp.get("transport_token_env") or "LYBRA_MCP_TOKEN"),
-        "capability_token_env": str(mcp.get("capability_token_env") or "LYBRA_CAPABILITY_TOKEN"),
-    }
+    """AIPOS-F117 件①(gap #52): 委托 .lybra/config.json 运行时字段唯一读取口 workspace_config.workspace_runtime_config
+    (strict=False: 只读状态面把配置错误放进 config_error 展示, 不抛); 原逐字段第二份读取 + 缺省与宽 except 删除。
+    config_path 在状态面按工作区相对路径展示。"""
+    from tools.aipos_cli.workspace_config import workspace_runtime_config
+
+    cfg = workspace_runtime_config(repo_root, strict=False)
+    if cfg["config_path"]:
+        cfg["config_path"] = str(Path(cfg["config_path"]).relative_to(repo_root))
+    return cfg
 
 
 def _load_connection_endpoints(repo_root: Path) -> dict[str, Any]:
@@ -2948,11 +2932,20 @@ def _project_structure_preview_route(payload: dict[str, Any], *, repo_root: Path
 def _project_structure_import_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
     """AIPOS-293 S4 + FIX-1: Import workspace from directory OR structure file.
 
+    AIPOS-F117 件①(Owner 10-04 裁定 gap #53): 看板「导入既有项目」收敛到 `lybra project new` 同一实现——
+    建项目 = project_structure.import_project_structure → workspace_config.scaffold_project(project new 唯一实现),
+    落点 = <home 根>/<project_id>, home 根经 project new 同一 AIPOS-226 优先级梯(resolve_home_root_with_source)解析;
+    看板不再自建 ~/.lybra/workspaces/<id>(原第二条建工作区路径删除)。看板只做: 入参校验、目录模式先导出结构文件(临时目录,
+    用完即删)、把建成的项目根登记进 .lybra/board_config.json 展示列表(登记文件读坏 = 拒, 不覆盖)。
+
     Supports two modes:
-    - mode="directory" (default): Export from directory then import (existing behavior)
-    - mode="file": Import directly from a YAML structure file (new in FIX-1)
+    - mode="directory" (default): Export from directory then import
+    - mode="file": Import directly from a YAML structure file (FIX-1)
     """
+    import tempfile as _tempfile
+
     from tools.aipos_cli.project_structure import export_project_to_yaml, import_project_structure
+    from tools.aipos_cli.workspace_config import project_root_for, resolve_home_root_with_source
 
     mode = str(payload.get("mode") or "directory").strip().lower()
     workspace_path = str(payload.get("workspace_path") or "").strip()
@@ -2960,149 +2953,97 @@ def _project_structure_import_route(payload: dict[str, Any], *, repo_root: Path 
     project_id = str(payload.get("project_id") or "").strip()
     label_en = str(payload.get("label_en") or "").strip()
 
+    def fail(key: str, detail: str, **extra: Any) -> dict[str, Any]:
+        return {**_humanized_error(key, detail), "operation": "project_structure_import", **extra}
+
     # --- Common validation ---
     if not project_id:
-        return {
-            **_humanized_error("project_id_required", "project_id is required"),
-            "operation": "project_structure_import",
-        }
+        return fail("project_id_required", "project_id is required")
     if not re.match(r"^[a-z0-9_-]+$", project_id):
-        return {
-            **_humanized_error("project_id_invalid", "project_id must use lowercase letters, numbers, dash, or underscore"),
-            "operation": "project_structure_import",
-        }
+        return fail("project_id_invalid", "project_id must use lowercase letters, numbers, dash, or underscore")
 
-    # Target workspace path
-    home = Path.home()
-    output_path = home / ".lybra" / "workspaces" / project_id
-
-    if output_path.exists() and any(output_path.iterdir()):
-        return {
-            **_humanized_error("workspace_not_empty", f"Target workspace already exists and is not empty: {output_path}"),
-            "operation": "project_structure_import",
-        }
+    # --- Mode-specific source validation(只读入参, 先于任何落点解析) ---
+    if mode == "file":
+        if not structure_file_path:
+            return fail("path_required", "Structure file path is required")
+        source = Path(structure_file_path).expanduser().resolve()
+        if not source.exists():
+            return fail("path_not_exists", str(source))
+        if not source.is_file():
+            return fail("path_not_file", str(source))
+        if source.suffix.lower() not in (".yaml", ".yml"):
+            return fail("path_not_yaml", str(source))
+    else:
+        if not workspace_path:
+            return fail("path_required", "Workspace path is required")
+        source = Path(workspace_path).expanduser().resolve()
+        if not source.exists():
+            return fail("path_not_exists", str(source))
+        if not source.is_dir():
+            if source.suffix.lower() in (".yaml", ".yml"):
+                return fail("path_not_directory", str(source), suggest_file_mode=True)
+            return fail("path_not_directory", str(source))
 
     try:
-        # --- Mode: file (AIPOS-293 FIX-1: direct structure file import) ---
-        if mode == "file":
-            if not structure_file_path:
-                return {
-                    **_humanized_error("path_required", "Structure file path is required"),
-                    "operation": "project_structure_import",
-                }
+        # 目标 = project new 同一落点(<home 根>/<project_id>, home 根同一优先级梯)
+        home, home_source = resolve_home_root_with_source()
+        target_root = project_root_for(home, project_id)
+        if target_root.exists() and any(target_root.iterdir()):
+            return fail("workspace_not_empty", f"Target project root already exists and is not empty: {target_root}")
 
-            fp = Path(structure_file_path).expanduser().resolve()
-            if not fp.exists():
-                return {
-                    **_humanized_error("path_not_exists", str(fp)),
-                    "operation": "project_structure_import",
-                }
-            if not fp.is_file():
-                return {
-                    **_humanized_error("path_not_file", str(fp)),
-                    "operation": "project_structure_import",
-                }
-            if fp.suffix.lower() not in (".yaml", ".yml"):
-                return {
-                    **_humanized_error("path_not_yaml", str(fp)),
-                    "operation": "project_structure_import",
-                }
-
-            # Import directly from the structure file
-            import_result = import_project_structure(fp, output_path, actor="board.import-wizard")
-            if not import_result.get("ok"):
-                blocking = import_result.get("blocking_reasons", "unknown")
-                if isinstance(blocking, list):
-                    blocking = "; ".join(blocking)
-                return {
-                    **_humanized_error("import_failed", str(blocking)),
-                    "operation": "project_structure_import",
-                }
-
-        # --- Mode: directory (default, existing behavior) ---
-        else:
-            if not workspace_path:
-                return {
-                    **_humanized_error("path_required", "Workspace path is required"),
-                    "operation": "project_structure_import",
-                }
-
-            ws = Path(workspace_path).expanduser().resolve()
-            if not ws.exists():
-                return {
-                    **_humanized_error("path_not_exists", str(ws)),
-                    "operation": "project_structure_import",
-                }
-            if not ws.is_dir():
-                if ws.suffix.lower() in (".yaml", ".yml"):
-                    return {
-                        **_humanized_error("path_not_directory", str(ws)),
-                        "operation": "project_structure_import",
-                        "suggest_file_mode": True,
-                    }
-                return {
-                    **_humanized_error("path_not_directory", str(ws)),
-                    "operation": "project_structure_import",
-                }
-
-            # Step 1: Export source workspace to a temp YAML file
-            import tempfile as _tempfile
-            tmp_yaml = Path(_tempfile.mkdtemp(prefix="aipos293_import_")) / "lybra-project.yaml"
-            export_result = export_project_to_yaml(ws, project_name=project_id, output_path=tmp_yaml)
-            if not export_result.get("ok"):
-                blocking = export_result.get("blocking_reasons", "unknown")
-                if isinstance(blocking, list):
-                    blocking = "; ".join(blocking)
-                return {
-                    **_humanized_error("export_failed", str(blocking)),
-                    "operation": "project_structure_import",
-                }
-
-            # Step 2: Import from structure file to target
-            import_result = import_project_structure(tmp_yaml, output_path, actor="board.import-wizard")
-            if not import_result.get("ok"):
-                blocking = import_result.get("blocking_reasons", "unknown")
-                if isinstance(blocking, list):
-                    blocking = "; ".join(blocking)
-                return {
-                    **_humanized_error("import_failed", str(blocking)),
-                    "operation": "project_structure_import",
-                }
-
-        # Step 3: Register in board_config.json (shared by both modes)
         board_config_path = (repo_root or REPO_ROOT) / ".lybra" / "board_config.json"
-        board_config_path.parent.mkdir(parents=True, exist_ok=True)
-        workspaces = []
+        workspaces: list[Any] = []
         if board_config_path.exists():
             try:
                 data = json.loads(board_config_path.read_text(encoding="utf-8"))
-                workspaces = data.get("workspaces", [])
-            except (json.JSONDecodeError, OSError):
-                pass
-        existing = any(ws_entry.get("root") == str(output_path) for ws_entry in workspaces)
+            except (json.JSONDecodeError, OSError) as exc:
+                # fail-closed: 登记文件读坏不得被覆盖成只剩新条目(原实现吞错后整文件重写 = 丢失既有登记)
+                return fail("unexpected_error", f"board_config.json unreadable, refusing to overwrite: {board_config_path}: {exc}")
+            workspaces = data.get("workspaces", []) if isinstance(data, dict) else None
+            if not isinstance(workspaces, list):
+                return fail("unexpected_error", f"board_config.json workspaces is not a list: {board_config_path}")
+
+        with _tempfile.TemporaryDirectory(prefix="aipos293_import_") as tmp_dir:
+            structure_file = source
+            if mode != "file":
+                # Step 1: 既有目录先导出结构文件(只读源目录; 结构文件落临时目录, 用完即删)
+                structure_file = Path(tmp_dir) / "lybra-project.yaml"
+                export_result = export_project_to_yaml(source, project_name=project_id, output_path=structure_file)
+                if not export_result.get("ok"):
+                    blocking = export_result.get("blocking_reasons", "unknown")
+                    return fail("export_failed", "; ".join(blocking) if isinstance(blocking, list) else str(blocking))
+
+            # Step 2: project new 同一实现建项目 + 迁移清单
+            import_result = import_project_structure(structure_file, home, name=project_id, actor="board.import-wizard")
+            if not import_result.get("ok"):
+                blocking = import_result.get("blocking_reasons", "unknown")
+                return fail("import_failed", "; ".join(blocking) if isinstance(blocking, list) else str(blocking))
+
+        # Step 3: 登记到看板展示列表(shared by both modes)
+        project_root = str(import_result["project_root"])
+        existing = any(isinstance(ws_entry, dict) and ws_entry.get("root") == project_root for ws_entry in workspaces)
         if not existing:
             ws_entry = {
                 "label": project_id.replace("-", " ").replace("_", " ").title(),
-                "root": str(output_path),
+                "root": project_root,
             }
             if label_en:
                 ws_entry["label_en"] = label_en
             workspaces.append(ws_entry)
+            board_config_path.parent.mkdir(parents=True, exist_ok=True)
             board_config_path.write_text(
                 json.dumps({"workspaces": workspaces}, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
 
         import_result["board_config_updated"] = not existing
-        import_result["workspace_path"] = str(output_path)
+        import_result["workspace_path"] = project_root
+        import_result["home_root_source"] = home_source
         import_result["mode"] = mode
         return import_result
 
     except Exception as exc:
-        return {
-            **_humanized_error("unexpected_error", str(exc)),
-            "operation": "project_structure_import",
-        }
+        return fail("unexpected_error", str(exc))
 
 
 def _execute_dry_run_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
