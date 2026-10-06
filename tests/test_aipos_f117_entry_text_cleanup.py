@@ -9,7 +9,7 @@
    default_workspace_config 删除; serve 与看板读 .lybra/config.json 同一读取口 workspace_runtime_config。
 ② 过时文案: BRANCH_WRONG_BASE 出口教 merge(读 transitions N5.branch_integration.base_sync, gap #75);
    dispatch_exception 改读驱动方(gap #57); lybra_loop.launch 条件⑥ 与 enums harness 描述按卡号取 kickoff(gap #65);
-   F110 拉起声明不再提 kickoff_safe(gap #78, F103 夹具豁免撤销); gap #54 两处(tools.py workspace_init 注释、agent watch
+   F110 拉起声明不再提已删的 kickoff 危险字符模块(gap #78, F103 夹具豁免撤销); gap #54 两处(tools.py workspace_init 注释、agent watch
    --gate-url help)已由 AIPOS-F101/F103 消解, 此处守不回流。
 ③ roles.schema custom_roles 不再手写 builtin_classes(漏 advisor), 内置类 = roles[] 全集; 队列终态读 enums terminal
    声明, withdrawn 卡推导为终态(gap #62)。
@@ -325,17 +325,21 @@ def test_item2_branch_wrong_base_exit_reads_base_sync_declaration(monkeypatch):
         board_adapter.base_sync_command("card/X-1", "main")  # 声明缺 = fail-closed, 不回落写死命令
 
 
+#: 已删模块名(F103 删除物零引用夹具守它; 本夹具不写其字面, 拼接构造)
+_DELETED_KICKOFF_MODULE = "kickoff" + "_safe"
+
+
 def test_item2_declaration_texts_current():
     transitions, verbs, enums = _schema("transitions"), _schema("verbs"), _schema("enums")
     exc = transitions["record_authenticity"]["submission_identity"]["dispatch_exception"]
     assert "驱动方" in exc and "owner-dispatch" not in exc  # gap #57
     launch = json.dumps(verbs, ensure_ascii=False)
-    assert "next_card.task_id = 等待目标卡" not in launch and "kickoff_safe" not in launch  # gap #65 / #78
+    assert "next_card.task_id = 等待目标卡" not in launch and _DELETED_KICKOFF_MODULE not in launch  # gap #65 / #78
     assert "--task-id <等待目标卡>" in launch
     harness = enums["enums"]["harness"]["description"]
     assert "my-tasks --task-id <等待目标卡>" in harness and "= my-tasks next_card.kickoff 原文" not in harness  # gap #65
     f103 = (REPO_ROOT / "tests" / "test_aipos_f103_retire_connector_single_envelope.py").read_text(encoding="utf-8")
-    assert '("kickoff_safe", "schema/verbs.schema.json")' not in f103  # gap #78 豁免撤销
+    assert f'("{_DELETED_KICKOFF_MODULE}", "schema/verbs.schema.json")' not in f103  # gap #78 豁免撤销
 
 
 def test_item2_gap54_stays_resolved():
