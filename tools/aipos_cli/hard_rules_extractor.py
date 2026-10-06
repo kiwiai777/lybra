@@ -228,11 +228,10 @@ def _resolve_governance_root() -> Path:
     → 结构识别(AIPOS-226 优先级梯)。原「按 lybra 布局标准位置降级」与吞异常的 connection.json 读取退役;
     解析不到 = FileNotFoundError(fail-closed, 带出口)。
     """
-    import os
+    from tools.aipos_cli.workspace_config import governance_workspace_root, workspace_root_from_env
 
-    from tools.aipos_cli.workspace_config import governance_workspace_root
-
-    return governance_workspace_root(os.environ.get("LYBRA_WORKSPACE_ROOT", "").strip() or None)
+    # AIPOS-F106 件③: 工作区根环境变量经唯一读取口(LYBRA_WORKSPACE_ROOT; 旧名废弃兼容)
+    return governance_workspace_root(workspace_root_from_env()[0])
 
 
 def render_hard_rules_for_charter() -> str:

@@ -4,24 +4,66 @@
   "last_updated": "2026-08-11",
   "configuration_sources": {
     "connection": {
-      "description": "Gate connection configuration",
+      "description": "AIPOS-F106 件③(M15): 工位/治理根 connection.json 的键形声明。每个身份/连接键的解析优先级与来源层只在 identity_resolution 声明(本节 resolution 只是指针, 不另立第二份优先级); 本节只声明文件里的键与必填性。必填键由 enroll_client.validate_connection_complete 逐键读本节 required 校验(铸全校验唯一判据, 禁代码内另写键表)。门地址读 mcp.rpc_url(identity_resolution.keys.gate_url), 文件里没有顶层 gate_url / project 键。",
       "source_file": ".lybra/connection.json",
+      "resolution": "identity_resolution",
       "schema": {
-        "gate_url": {
-          "type": "string",
+        "config_version": {
+          "type": "integer",
           "required": true,
-          "description": "Gate server URL",
-          "example": "http://127.0.0.1:7118"
-        },
-        "project": {
-          "type": "string",
-          "required": true,
-          "description": "Project identifier"
+          "description": "connection.json 形版本(service_mode SERVICE_MODE_VERSION)"
         },
         "workspace_root": {
           "type": "string",
+          "required": true,
+          "description": "门工作区(治理根)路径; 解析序见 identity_resolution.keys.workspace_root"
+        },
+        "mcp": {
+          "type": "object",
+          "required": true,
+          "description": "门 MCP 端点块(service_mode._mcp_block 铸)",
+          "schema": {
+            "rpc_url": {
+              "type": "string",
+              "required": true,
+              "description": "门 MCP 端点(含 MCP 路径); 门地址唯一来源键, 解析序见 identity_resolution.keys.gate_url; 门基址 = confirm_client.resolve_gate_base_url(唯一推导口, 委托 loop_context.ConnectionResolver.resolve_gate_url)"
+            },
+            "sse_url": {
+              "type": "string",
+              "required": false,
+              "description": "门 SSE 端点"
+            },
+            "host": {
+              "type": "string",
+              "required": false,
+              "description": "门绑定地址"
+            },
+            "port": {
+              "type": "integer",
+              "required": false,
+              "description": "门端口(缺省 = ports.gate_default)"
+            },
+            "advertise_host": {
+              "type": "string",
+              "required": false,
+              "description": "对外通告主机(与绑定地址不同才写)"
+            }
+          }
+        },
+        "tokens": {
+          "type": "array",
+          "required": true,
+          "description": "角色凭据条目; 条目形与挑选语义见 identity_resolution.keys.token.entry"
+        },
+        "governance_root": {
+          "type": "string",
           "required": false,
-          "description": "Workspace root path (can be inferred)"
+          "description": "工位声明的治理根(工位 connection.json 写; 门 connection.json 无)"
+        },
+        "board": {
+          "type": "object",
+          "required": false,
+          "description": "看板端点块(service_mode._board_block 铸; 缺省端口 = ports.board_default)"
         },
         "lybra_bin": {
           "type": "string",
@@ -31,45 +73,39 @@
       }
     },
     "role": {
-      "description": "Agent role configuration",
-      "source_file": ".lybra/role.json",
+      "description": "AIPOS-F106 件③④(M15/M2): 工位身份文件 .lybra/role(JSON 对象, enroll_client.write_role_file 合并写)。role/instance/owner_policy_ref 的解析优先级只在 identity_resolution 声明(本节 resolution 只是指针)。读取唯一实现: charter_render.workstation_identity(工位身份/项目归属, fail-closed) 与 loop_context.ConnectionResolver.resolve_role / resolve_identity(身份键带来源自曝); 其余代码禁直接读该文件。旧版纯文本 .lybra/actor / .lybra/policy 只作 identity_resolution 声明的兼容层读取, 无 .lybra/role.json / .lybra/policy.json。",
+      "source_file": ".lybra/role",
+      "resolution": "identity_resolution",
+      "legacy_plain_text_files": [
+        ".lybra/actor",
+        ".lybra/policy"
+      ],
       "schema": {
         "role": {
           "type": "string",
           "required": true,
-          "description": "Agent role category",
-          "$enum": "role_category"
+          "$enum": "role_category",
+          "description": "角色名(内建角色类或注册的自定义角色, 自定义角色经门注册表解析到 role_category 内建类); identity_resolution.keys.role"
         },
-        "agent_instance": {
+        "instance": {
           "type": "string",
           "required": true,
-          "description": "Agent instance identifier"
+          "description": "实例名(roles.schema naming.template); identity_resolution.keys.actor / agent_instance 同源于此"
         },
-        "credential_token": {
+        "owner_policy_ref": {
           "type": "string",
-          "required": true,
-          "description": "Role credential token (enrolled by gate)"
-        }
-      }
-    },
-    "policy": {
-      "description": "Autonomy policy configuration",
-      "source_file": ".lybra/policy.json",
-      "schema": {
-        "policy_id": {
-          "type": "string",
-          "required": true,
-          "description": "Policy identifier"
+          "required": false,
+          "description": "生效信封 id; identity_resolution.keys.owner_policy_ref"
         },
-        "autonomy_mode": {
-          "type": "string",
-          "$enum": "autonomy_mode",
-          "required": true,
-          "description": "Default autonomy mode"
-        },
-        "claim_limits": {
+        "harness": {
           "type": "object",
-          "description": "Claim limits for this policy"
+          "required": false,
+          "description": "AIPOS-F92 件②: 工位 harness {kind, dir}(distribution.schema harness_semantics; 缺 = 缺省 harness 工位)"
+        },
+        "enrolled_at": {
+          "type": "string",
+          "required": false,
+          "description": "最近一次写入时刻(ISO-8601 UTC)"
         }
       }
     },
@@ -421,6 +457,14 @@
           }
         ],
         "note": "token 进程内使用, 永不回显; 日志只出 fingerprint (sha256 前 12 位)。",
+        "gate_client_role_preference": {
+          "description": "AIPOS-F106 件①(M1): 本机门客户端薄壳(roles register / roles enroll-list / project new / project set-repo 等 owner-gated 动词)从 connection.json 取凭据时的角色偏好序——按序取第一个可用条目(每个角色的挑选仍委托 token_resolver.select_token_entry, 排除 retired)。一处声明, 唯一读取口 token_resolver.gate_client_role_preference(confirm_client.load_gate_client_token 消费), 禁代码内写死角色元组。",
+          "roles": [
+            "advisor",
+            "planner",
+            "owner"
+          ]
+        },
         "entry": {
           "description": "AIPOS-F82 件③: connection.json tokens[] 条目声明(字段名 + 退役字段 + 解析语义, 一处声明)。消费方: tools/aipos_cli/token_resolver.py 读本节(TOKEN_ENTRY_FIELDS / TOKEN_RETIREMENT_FIELDS / TOKEN_REENROLL_EXIT), 其余客户端(sync/loop_context/confined_worker/lybra-deploy/看板登录)一律经 token_resolver 取值或判退役, 禁另写挑选逻辑。AIPOS-F91: pi 侧 loop-context.ts 随 lybra-loop 扩展退役删除, Python↔TS 同构锁解除; TS 侧不再自解析 tokens[](夹具 test_aipos_f81 约束)。",
           "fields": {
@@ -482,32 +526,14 @@
           }
         ],
         "note": "唯一允许 schema 缺省的键 (urls.gate_local 单源在 config.schema); 其余身份键一律 no_default。"
-      },
-      "log_path": {
-        "required": false,
-        "sources": [
-          {
-            "layer": "explicit",
-            "param": "explicitLogPath"
-          },
-          {
-            "layer": "env",
-            "var": "LYBRA_LOOP_LOG"
-          },
-          {
-            "layer": "schema_default",
-            "ref": "path_conventions.task_cards/<TASK>/loop.log"
-          }
-        ]
       }
     }
   },
   "ports": {
-    "description": "Service port configuration — single source for all port defaults. AIPOS-R4B-1: code reads these via schema_loader.get_config_port(); the 35 hardcoded 7117/7118 references in tools/ (non-test) route through here. board_default added (was missing: board port 7117 had no single source).",
+    "description": "Service port configuration — single source for all port defaults. AIPOS-R4B-1: code reads these via schema_loader.get_config_port(); board_default added (was missing: board port had no single source). AIPOS-F106 件②(M3): 门端口与 MCP 端口是同一个事实(门进程就是 MCP 服务), 原 gate_default / mcp_server_default 两键合为 gate_default 一键; 看板端口只有 board_default 一键。产品代码(含 web/board、workspace_config 原镜像常量)一律经 get_config_port 读, 禁写端口字面(夹具 tests/test_aipos_f106_gate_address_single_source.py 守护)。",
     "board_default": 7117,
     "gate_default": 7118,
     "gate_range": "7100-7199",
-    "mcp_server_default": 7118,
     "tunnel_default": 7120
   },
   "timeouts": {
@@ -516,9 +542,8 @@
     "gate_mcp_request_description": "Gate MCP 单次请求超时(ms)。默认 30s 对齐 DESIGN 护栏常量审查;实测本机单次操作 <3s,30s 为多次串行累加留足容错预算。计时日志(fetch-timing/dryrun-timing/preview-timing/tick-total-timing)用于排查慢点。"
   },
   "urls": {
-    "description": "URL patterns and defaults",
-    "gate_local": "http://127.0.0.1:7118",
-    "gate_tailscale_pattern": "http://{hostname}.{tailnet}:7118"
+    "description": "URL patterns and defaults。gate_local = 本机门基址缺省(identity_resolution.keys.gate_url 的 schema_default 层, 唯一读取口 schema_loader.get_config_default_gate_url); 其端口段须等于 ports.gate_default(夹具锁定一致; 改为由 ports.gate_default 推导须改 tools/schema_loader.py, 不在 AIPOS-F106 车道, 记缺口)。AIPOS-F106: 无读取方的 gate_tailscale_pattern 删除。",
+    "gate_local": "http://127.0.0.1:7118"
   },
   "governance_structure": {
     "description": "Governance repository fixed directory structure - read from workspace config, NOT hardcoded。AIPOS-F89 件② M17: 本节不声明任何项目治理文档名(原 governance_docs.files 与 paths.foundation_backlog 删除), 卡编年史/硬规矩来源见 configuration_sources.project_json.schema.paths(项目可选声明)。AIPOS-F89 件① H9/M8: 队列根与台账/交回/裁决落点不在本节声明(原 paths.queue / paths.task_cards 第二份声明已删), 只读项目 project.json paths(configuration_sources.project_json.schema.paths, 唯一读取口 workspace_config.project_paths / task_loader.queue_root_for)。",
@@ -723,26 +748,106 @@
     "event_record": "5_tasks/records/events/{task_id}/{event_type}_{task_id}_{timestamp}.md"
   },
   "environment_variables": {
-    "description": "Environment variables that can override config file values",
+    "description": "AIPOS-F106 件③(M15): 产品代码读取的全部环境变量名的唯一声明表(LYBRA_* / AIPOS_* 前缀; 系统变量 HOME/USER/PATH/SSL_* 不在此列)。代码使用的名单 = 本表键集(夹具 tests/test_aipos_f106_gate_address_single_source.py 扫产品文件比对, 多一个少一个都红)。env 在所有身份/连接键上都是最低优先级兜底层(见 identity_resolution.precedence 与 lybra_dir_authority), 不是覆盖层。",
+    "precedence": "env 仅兜底, 优先级最低: 显式参数 > 工位 .lybra(role 文件 + connection.json) > env; 门地址另有 schema 缺省层 urls.gate_local(identity_resolution.keys.gate_url)。原「env 覆盖配置文件」的旧表述与 identity_resolution / lybra_dir_authority 矛盾, 已删。",
     "variables": {
       "AIPOS_WORKSPACE_ROOT": {
         "type": "string",
-        "description": "Override workspace root path"
+        "description": "废弃别名(AIPOS-F106): = LYBRA_WORKSPACE_ROOT。只在 workspace_config.workspace_root_from_env 一个兼容读取点识别并打废弃告警; 产品代码不再写此名。",
+        "deprecated_alias_of": "LYBRA_WORKSPACE_ROOT"
       },
-      "LYBRA_GATE_URL": {
+      "LYBRA_ACTIVE_PROJECT": {
         "type": "string",
-        "description": "Override gate server URL"
+        "description": "活动项目名钉住(home 根模型; 读取口 workspace_config.resolve_active_project / project_resolution)"
       },
-      "LYBRA_HOME_ROOT": {
+      "LYBRA_ACTOR": {
         "type": "string",
-        "description": "Home root for multi-workspace resolution"
+        "description": "身份兜底层(最低优先级): identity_resolution.keys.actor",
+        "identity_key": "actor"
+      },
+      "LYBRA_AGENT_INSTANCE": {
+        "type": "string",
+        "description": "身份兜底层(最低优先级): identity_resolution.keys.agent_instance",
+        "identity_key": "agent_instance"
+      },
+      "LYBRA_APPROVED_SCRATCH_ROOT": {
+        "type": "string",
+        "description": "沙箱/产物摄入批准的 scratch 根(artifact_ingest / sandbox_runtime)"
+      },
+      "LYBRA_BOOTSTRAP_TOKEN": {
+        "type": "string",
+        "description": "旧裸码 enroll 的运输凭证兜底(自包含码不需要; enroll_client)"
       },
       "LYBRA_CAPABILITY_TOKEN": {
         "type": "string",
-        "description": "Capability token for scoped operations"
+        "description": "门 MCP 进程的能力令牌(JSON, 决定可见的写工具; 变量名可经 .lybra/config.json mcp.capability_token_env 改)"
+      },
+      "LYBRA_CONNECTION_JSON": {
+        "type": "string",
+        "description": "CLI 两阶段 --confirm 缺 --connection-json 时的凭据文件路径兜底"
+      },
+      "LYBRA_GATE_URL": {
+        "type": "string",
+        "description": "门地址兜底层(最低优先级, 低于显式与工位 connection.json): identity_resolution.keys.gate_url",
+        "identity_key": "gate_url"
+      },
+      "LYBRA_HARNESS_ROOT": {
+        "type": "string",
+        "description": "lybra sync 未给 --harness-root 时的工位根兜底(distribution_sync)"
+      },
+      "LYBRA_HOME_ROOT": {
+        "type": "string",
+        "description": "home 根(多项目治理根所在; AIPOS-226 优先级梯, workspace_config.resolve_home_root)"
+      },
+      "LYBRA_MATERIAL_ROOT": {
+        "type": "string",
+        "description": "agent materialize 物料区根兜底(agent_materialize)"
+      },
+      "LYBRA_MCP_TOKEN": {
+        "type": "string",
+        "description": "门 MCP 进程的传输令牌缺省变量名(可经 .lybra/config.json mcp.transport_token_env 改; http_sse)"
+      },
+      "LYBRA_OWNER_POLICY_REF": {
+        "type": "string",
+        "description": "身份兜底层(最低优先级): identity_resolution.keys.owner_policy_ref",
+        "identity_key": "owner_policy_ref"
+      },
+      "LYBRA_PROJECT": {
+        "type": "string",
+        "description": "实例名项目段缺省(naming_profile.DEFAULT_INSTANCE_PROJECT)"
+      },
+      "LYBRA_PYTHON": {
+        "type": "string",
+        "description": "bin/lybra 启动器使用的 Python 解释器"
+      },
+      "LYBRA_ROLE": {
+        "type": "string",
+        "description": "身份兜底层(最低优先级): identity_resolution.keys.role",
+        "identity_key": "role"
+      },
+      "LYBRA_SCHEMA_DIR": {
+        "type": "string",
+        "description": "治理仓 pre-commit 钩子定位 schema 目录(governance_guardrails.default_schema_dir / governance_commit 子进程)"
+      },
+      "LYBRA_SCRATCH_HOST_DIR": {
+        "type": "string",
+        "description": "沙箱 confined_worker 的宿主 scratch 目录"
+      },
+      "LYBRA_TOKEN": {
+        "type": "string",
+        "description": "身份兜底层(最低优先级): identity_resolution.keys.token",
+        "identity_key": "token"
+      },
+      "LYBRA_TOKEN_STORE_DIR": {
+        "type": "string",
+        "description": "受控执行(controlled_execute)dry-run 令牌存储目录"
+      },
+      "LYBRA_WORKSPACE_ROOT": {
+        "type": "string",
+        "description": "治理工作区根(唯一名; 旧名 AIPOS_WORKSPACE_ROOT 废弃)。进程级工作区解析(workspace_config.resolve_workspace_context 第 2 级)与身份兜底层 identity_resolution.keys.workspace_root 同名同义; 唯一读取口 workspace_config.workspace_root_from_env(loop_context 身份解析另读同名)。serve 子进程 / board / mcp 进程内只写此名。",
+        "identity_key": "workspace_root"
       }
-    },
-    "precedence": "Environment variables override config files"
+    }
   },
   "multi_project_support": {
     "description": "Multi-project configuration - gate serves multiple projects",
