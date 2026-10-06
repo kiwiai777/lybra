@@ -870,7 +870,8 @@ def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connecti
     顺序: ⓪ loop 显式 --actor(driver_scope, AIPOS-F90 件①) → ① 治理根 .lybra/role 的 instance(工位声明)
     → ② connection.json 驱动方 token 绑定的 agent_instance → ③ 调用方显式 fallback(仅靶场/显式传入)
     → 解析不到返回 ""(调用方 fail-closed: 不可推导 + 点名缺项)。
-    AIPOS-F106 件④: ① 经 ConnectionResolver.resolve_identity(.lybra/role 唯一读取实现之一); role 文件不可读时该实现按「未声明」落下一层。
+    AIPOS-F106 件④: ① 经 ConnectionResolver.resolve_identity(.lybra/role 唯一读取实现之一)。
+    AIPOS-F115 件②: role 文件存在但不可读/格式坏 = WorkstationFileError 原样抛出(fail-closed, 拒因带出口), 不再按「未声明」落下一层。
     """
     scoped_actor = _scoped_driver().get("actor")
     if scoped_actor:

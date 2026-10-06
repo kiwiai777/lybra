@@ -1130,6 +1130,8 @@ run_pytest "tests/test_aipos_f113_enroll_deliver_ssh_secrets.py" "$REPO_ROOT/tes
 # AIPOS-F112: 裁决后卡分支 tip 变化的复审出口(verdict_stale → 重交回 → R2 → 裁决绑新 tip → finalize → close)靶场夹具
 run_pytest "tests/test_aipos_f112_verdict_stale_reaudit.py" "$REPO_ROOT/tests/test_aipos_f112_verdict_stale_reaudit.py"
 run_pytest "tests/test_aipos_f114_return_stale_reaudit.py" "$REPO_ROOT/tests/test_aipos_f114_return_stale_reaudit.py"
+# AIPOS-F115: 失败即拒清扫(存量 NameError 两处·loop_context 声明文件坏即拒·except-pass 车道内清零 + 不变量 f 棘轮·state_lint require_frontmatter·NEL 两路同写)靶场; 连带登记 F18 fix 卡级联(F112 缺口所指 main 即红用例)与 gate_drift(本卡改 VERSION 读取)
+run_pytest "tests/test_aipos_f115_fail_closed.py + F115 连带 test_f18_fix_card_closure/test_gate_drift" "$REPO_ROOT/tests/test_aipos_f115_fail_closed.py" "$REPO_ROOT/tools/aipos_cli/tests/test_f18_fix_card_closure.py" "$REPO_ROOT/tools/aipos_cli/tests/test_gate_drift.py"
 
 echo
 echo "========================================================"

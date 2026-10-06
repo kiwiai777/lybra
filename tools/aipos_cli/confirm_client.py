@@ -251,31 +251,34 @@ def _diagnose_connection_failure(base_url: str, error: Exception) -> str:
         port = parsed.port or get_config_port("gate_default")  # AIPOS-F106 件②: 端口单源 config.schema ports.gate_default
         
         # 探测配置URL的连通性
+        # AIPOS-F115 件③: 探测失败精确捕获 OSError(连接拒绝/超时/解析失败均属之)并把原因写进诊断(原 except Exception: pass 吞因)
         config_reachable = False
+        config_error = ""
         try:
             sock = socket.create_connection((host, port), timeout=2)
             sock.close()
             config_reachable = True
-        except Exception:
-            pass
+        except OSError as exc:
+            config_error = str(exc)
         
         # 探测loopback的连通性(如果配置URL不是loopback)
         loopback_reachable = False
+        loopback_error = ""
         if host not in ('127.0.0.1', 'localhost', '::1'):
             try:
                 sock = socket.create_connection(('127.0.0.1', port), timeout=2)
                 sock.close()
                 loopback_reachable = True
-            except Exception:
-                pass
+            except OSError as exc:
+                loopback_error = str(exc)
         
         # 诊断结论
         diagnosis = f"\n\n🔍 连接诊断 (AIPOS-R6K件④双路探测):\n"
         diagnosis += f"  配置URL: {base_url}\n"
-        diagnosis += f"  配置URL可达: {'✓' if config_reachable else '✗'}\n"
+        diagnosis += f"  配置URL可达: {'✓' if config_reachable else '✗'}{f' ({config_error})' if config_error else ''}\n"
         
         if host not in ('127.0.0.1', 'localhost', '::1'):
-            diagnosis += f"  Loopback可达: {'✓' if loopback_reachable else '✗'}\n"
+            diagnosis += f"  Loopback可达: {'✓' if loopback_reachable else '✗'}{f' ({loopback_error})' if loopback_error else ''}\n"
             
             if loopback_reachable and not config_reachable:
                 diagnosis += f"\n  ⚠️  结论: 代理劫持 — 域名被系统代理拦截,但loopback直达正常。\n"

@@ -407,9 +407,9 @@ def create_draft(
                 task_body = task_body.rstrip() + "\n\n" + discipline_section + "\n"
         except SchemaLoadError as e:
             # F76-R2: schema declaration missing → warn but don't block (存量兼容)
-            result.setdefault("warnings", []).append(
-                f"工作纪律节派生失败(存量兼容): {e}"
-            )
+            # AIPOS-F115 件①(gap #63): 原写 result.setdefault(...) 而 result 此处尚未定义 → NameError 掀翻整个 create_draft;
+            # 改入本函数既有告警汇集点 _intent_warnings(下方并入 result["warnings"], 应答可见)。
+            _intent_warnings.append(f"工作纪律节派生失败(存量兼容): {e}")
     
     rendered_markdown = render_markdown_task_card(normalized, task_body)
     validation = validate_draft_metadata(repo_root, normalized)

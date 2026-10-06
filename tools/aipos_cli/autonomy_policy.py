@@ -62,9 +62,11 @@ _ENVELOPE_LOGGER.propagate = False
 def trace_envelope(payload: dict[str, Any]) -> None:
     """Emit one structured envelope-decision trace line (JSON). Best-effort: never raises."""
     try:
-        _ENVELOPE_LOGGER.info("[ENVELOPE_TRACE] " + json.dumps(payload, default=str, sort_keys=True))
-    except Exception:
-        pass
+        line = json.dumps(payload, default=str, sort_keys=True)
+    except (TypeError, ValueError) as exc:  # AIPOS-F115 件③: 精确捕获序列化失败并出声(原 except Exception: pass 静默丢迹)
+        line = json.dumps({"trace_serialize_error": str(exc), "payload_repr": repr(payload)[:500]}, sort_keys=True)
+    # logging 自身的输出错误由 Handler.handleError 处理(不抛), 无需再包
+    _ENVELOPE_LOGGER.info("[ENVELOPE_TRACE] " + line)
 
 # FLAT bounded-map frontmatter (AIPOS-219 P5 idiom: depth-1, readable on bare python).
 # task_selector is flattened into three explicit fields; task_ids is a YAML list.

@@ -132,13 +132,16 @@ def _read_deployed_commit(workspace_root: Path) -> str | None:
     if not version_file.exists():
         return None
     
+    # AIPOS-F115 件③: VERSION 存在但不可读 ≠「无部署」(原 except Exception: pass 吞错后误报 No deployment found)。
     try:
-        for line in version_file.read_text(encoding="utf-8").splitlines():
-            if line.startswith("git_commit:"):
-                return line.split(":", 1)[1].strip()
-    except Exception:
-        pass
-    
+        text = version_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RuntimeError(
+            f"{version_file} 存在但不可读: {exc}; 出口: 检查 .deploy/current 权限/完整性, 或重跑 lybra-deploy"
+        ) from exc
+    for line in text.splitlines():
+        if line.startswith("git_commit:"):
+            return line.split(":", 1)[1].strip()
     return None
 
 

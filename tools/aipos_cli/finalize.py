@@ -1353,8 +1353,28 @@ def finalize_task(
             _ot = _task_meta.get("output_target")
             if _ot:
                 _output_target_for_branch = str(_ot).strip() if not isinstance(_ot, list) else ", ".join(str(x) for x in _ot)
-    except Exception:
-        pass  # 读卡失败不阻断, 降级为旧行为(跳过)
+    except (OSError, ValueError) as exc:
+        # AIPOS-F115 件③(F108R): 原 except Exception: pass 降级为「不知 task_mode」→ 代码任务缺分支的硬 BLOCK 被静默跳过(fail-open)。
+        # 读卡失败 = 无法判定是否代码任务, 拒 finalize(拒因带出口)。
+        reason = f"读卡失败, 无法判定 task_mode/output_target(代码任务缺分支须硬拒): {exc}; 出口: 修复卡文件后重跑 finalize"
+        operations.append(f"Card read: BLOCK — {reason}")
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "can_finalize": False,
+            "integrity_check": integrity,
+            "branch_check": branch_check,
+            "committed": False,
+            "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
+            "commit_hash": None,
+            "message": reason,
+            "operations": operations,
+        }
     integrate = _integrate_card_branch(
         task_id=task_id,
         verdict_id=finalize_check.get("verdict_id"),

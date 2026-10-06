@@ -823,9 +823,15 @@ def _get_historical_distributed_files(harness_root: Path) -> set[str]:
     if not is_enrolled_workstation(harness_root):
         return historical
 
-    role = ConnectionResolver.resolve_role(workspace_root=Path(harness_root), env={})
+    from tools.loop_context import WorkstationFileError
+
+    try:
+        role = ConnectionResolver.resolve_role(workspace_root=Path(harness_root), env={})
+    except WorkstationFileError as exc:  # AIPOS-F115 件②: 声明文件坏不再被吞成「无 role」, 拒因原样出声
+        print(f"Warning: {exc}; prune 历史集合为空", file=sys.stderr)
+        return historical
     if not role:
-        print(f"Warning: {harness_root} .lybra/role 不可读/无 role, prune 历史集合为空", file=sys.stderr)
+        print(f"Warning: {harness_root} .lybra/role 无 role, prune 历史集合为空", file=sys.stderr)
         return historical
 
     manifest_path = harness_root.parent / "_distributed" / f".version-{role}"
@@ -1316,7 +1322,12 @@ def _correct_owner_policy_ref(harness_root: Path, role: str) -> dict[str, Any]:
     except (FileNotFoundError, ValueError):
         return {"checked": False, "note": "connection.json 不可读, 跳过信封校正"}
     gov_root = str(conn.get("governance_root") or "").strip() or None
-    ident = ConnectionResolver.resolve_identity(workspace_root=Path(harness_root), env={})
+    from tools.loop_context import WorkstationFileError
+
+    try:
+        ident = ConnectionResolver.resolve_identity(workspace_root=Path(harness_root), env={})
+    except WorkstationFileError as exc:  # AIPOS-F115 件②: role/actor/policy 文件坏 = 出声跳过(非致命, 拒因带出口)
+        return {"checked": False, "note": f"{exc}; 跳过信封校正"}
     instance = ident["agent_instance"]["value"] if ident["agent_instance"]["source"] == ".lybra/role" else None
     current = ident["owner_policy_ref"]["value"] if ident["owner_policy_ref"]["source"] == ".lybra/role" else None
 

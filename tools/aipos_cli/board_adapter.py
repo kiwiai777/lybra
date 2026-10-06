@@ -3332,17 +3332,8 @@ def _build_return_preview(
         updated_metadata["return_reason"] = return_reason
 
     # AIPOS-F49: N3 交回自检门——六条机器判据
-    # 读取 claim 快照（用于判据⑤⑥）
+    # claim 快照(判据⑤⑥)尚无解析实现: 恒为 None。AIPOS-F115 件③: 原此处读 claim 记录到未使用变量并 except Exception: pass 吞读错(死代码), 删除。
     claim_snapshot = None
-    if task_id_text and claim_id:
-        claim_record_path = repo_root / "5_tasks" / "records" / "claims" / task_id_text / f"{claim_id}.md"
-        if claim_record_path.exists():
-            try:
-                claim_content = claim_record_path.read_text(encoding="utf-8")
-                # TODO: 解析 claim 记录中的快照数据
-                # claim_snapshot = parse_claim_snapshot(claim_content)
-            except Exception:
-                pass  # 读取失败，跳过快照检查
     
     self_check_reasons = _check_return_self_checks(
         task_id=task_id_text,
@@ -4380,8 +4371,11 @@ def _build_audit_verdict_preview(
                     return_record_fm, _, _ = parse_markdown_frontmatter(return_record_content)
                     return_record_fm = _normalize_return_value(return_record_fm)
                     reviewed_executor_instance = str(return_record_fm.get("canonical_agent_instance") or "").strip()
-            except Exception:
-                pass  # 失败就用 fallback
+            except (OSError, ValueError) as exc:
+                # AIPOS-F115 件③: 精确捕获 + 告警可见(原 except Exception: pass 静默落 fallback)
+                warnings.append(
+                    f"RETURN_RECORD_UNREADABLE: {return_record_ref} 读取/解析失败({exc}), 执行体实例改取 reviewed 卡 executor_completed_by"
+                )
     # Fallback: 从 reviewed_metadata 读取 executor_completed_by
     if not reviewed_executor_instance:
         reviewed_executor_instance = str(reviewed_metadata.get("executor_completed_by") or "").strip()
@@ -6443,11 +6437,18 @@ fix卡 close(PASS族)触发 `fix_card_closure` 级联: 为原卡派生复审卡(
 """
     body = render_markdown(fm_fields, body_text, list(fm_fields))
     # AIPOS-F64: 统一写入器
+    # AIPOS-F115 件①: 原写法 `("closure", closure_id, body)` 引用本函数未定义的 closure_id(NameError 被调用方吞成
+    # 「fix卡复审派生失败」), 且记录类型错写成 N6 closure。改为声明类型 fix_closure_derivation, record_id 取声明位置模板渲染出的文件名。
     from tools.aipos_cli.record_writer import write_records_atomic
+    record_id = Path(record_rel).stem
     write_result = write_records_atomic(
         repo_root=resolved_root,
-        records=[("closure", closure_id, body)],
+        records=[("fix_closure_derivation", record_id, body)],
     )
+    if write_result["paths"][0] != record_rel:
+        raise RuntimeError(
+            f"fix_closures 记录落点与声明模板不一致: 写入 {write_result['paths'][0]} ≠ 声明 {record_rel}"
+        )
     return write_result["paths"][0]
 
 
