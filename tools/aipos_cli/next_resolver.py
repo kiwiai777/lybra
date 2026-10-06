@@ -491,7 +491,9 @@ def kickoff_refusal(workspace_root: Path, task_id: str, actor: str, *, queue_sta
     derivation = derive_next_step(task_id, workspace_root)
     if (derivation.get("action") or {}).get("type") == "frontmatter_unreadable":
         return refuse("FRONTMATTER_UNREADABLE", "; ".join(derivation.get("missing_records") or []))
-    role = "auditor" if str(fm.get("task_mode") or "").strip() == "audit" or task_id.upper().endswith("R") else "executor"
+    from tools.aipos_cli.audit_derivation import is_audit_card
+
+    role = "auditor" if is_audit_card(task_id, fm) else "executor"  # AIPOS-F112: 审计卡判据唯一实现(认得 R2/R3…)
     if derivation.get("triggered_by") != role:
         return refuse("NOT_YOUR_TURN", f"{task_id} 推导核当前节点 {derivation.get('current_node')}/{derivation.get('current_state')}, "
                                        f"该动的是 {derivation.get('triggered_by')}({derivation.get('suggested_action') or ''})")
@@ -1030,7 +1032,12 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
 
     # audit_dispatches (AIPOS-F73 前置一: 门写在审计卡 ID 目录下,如 AIPOS-F75R)
     # 派审记录在 audit_dispatches/<audit_task_id>/ 而非 <task_id>/
-    audit_task_id = f"{task_id}R"
+    # AIPOS-F112: 审计卡 = 当前一轮(R → R2 → R3…, 声明 fix_card_closure.revision_card_numbering; 原写死 <ID>R, 复审轮永远读不到)
+    from tools.aipos_cli.audit_derivation import audit_round_ids, current_audit_task_id
+
+    audit_task_id = current_audit_task_id(task_id, workspace_root)
+    result["audit_task_id"] = audit_task_id
+    result["audit_round_ids"] = audit_round_ids(task_id, workspace_root)
     dispatches_dir = records_root / "audit_dispatches" / audit_task_id
     result["latest_audit_dispatch"] = _find_latest_record(dispatches_dir, "dispatch")
 
@@ -1064,12 +1071,15 @@ def _check_return_artifact(workspace_root: Path, task_id: str) -> bool:
     return _extract_return_summary(workspace_root, task_id) is not None
 
 
-def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
+def _check_verdict_artifact(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None) -> Path | None:
     """审计体产物就绪判据(唯一): 落点根读项目声明(verdict_root), 文件候选读 transitions artifact_ingest.verdict
     (RETURN.md 优先, 回退 audit_report.md), 取首个「已交」的文件(AIPOS-F89 件③c: verdict_report_submitted = 声明必填键
     至少一个已填实值; 认领时生成的同名同位空模板全为占位 = 未交); 完成与否另由 verdict_report_ready 判(推导核对已交未完成
-    判 artifact_invalid)。兼容旧命名 VERDICT-<ID>R.md。返回路径或 None。"""
-    if not task_id.upper().endswith("R"):
+    判 artifact_invalid)。兼容旧命名 VERDICT-<ID>R.md。返回路径或 None。
+    AIPOS-F112: 是否审计卡 = audit_derivation.is_audit_card 唯一判据(认得复审轮 R2/R3…; 原 endswith("R") 认不出)。"""
+    from tools.aipos_cli.audit_derivation import is_audit_card
+
+    if not is_audit_card(task_id, card_frontmatter):
         return None
     task_work_dir = verdict_artifact_dir(workspace_root, task_id)
     candidates = list(_audit_report_candidates(workspace_root, task_id))
@@ -1086,10 +1096,10 @@ def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
 
 
 def _check_audit_card(workspace_root: Path, task_id: str) -> bool:
-    """检查审计卡是否已生成(<ID>R 在 queue 中)。"""
-    from tools.aipos_cli.task_loader import find_task_card
+    """检查审计卡是否已生成(AIPOS-F112: 本卡审计轮 R/R2… 在 queue 中, 轮号读 audit_derivation.audit_round_ids)。"""
+    from tools.aipos_cli.audit_derivation import audit_round_ids
 
-    return find_task_card(workspace_root, f"{task_id}R", states=("pending", "claimed", "completed"))[0] is not None
+    return bool(audit_round_ids(task_id, workspace_root))
 
 
 # ---------------------------------------------------------------------------
@@ -1203,8 +1213,8 @@ def _extract_artifact_subject_from_branch(
     
     import subprocess
     
-    # 推导分支名（按 transitions.schema N5.branch_integration.branch_pattern）
-    branch_name = f"card/{reviewed_task_id}"
+    # 推导分支名(AIPOS-F112: 读声明 N5.branch_integration.branch_pattern 唯一口 card_branch_name, 原写死 card/<ID>)
+    branch_name = card_branch_name(reviewed_task_id)
     
     try:
         # 获取分支 tip commit SHA
@@ -1250,6 +1260,54 @@ def _extract_artifact_subject_from_branch(
 
         print(f"Warning: artifact_subject extraction failed for {branch_name}: {exc}", file=sys.stderr)
         return None
+
+
+def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any] | None:
+    """AIPOS-F112 件①: 「裁决已过期」判据唯一实现(推导核 audit_verdict 判定前 / 门侧交回自动派审 同读, 禁第二份)。
+
+    比较对象与 finalize 的 F70 核对同源, 推导核与 finalize 不会各说各话:
+      - 卡分支 tip: 分支名 = card_branch_name(声明), 读取口 = _extract_artifact_subject_from_branch(裁决提交绑 tip 的同一函数);
+      - 最新门生裁决: deployment_authorization.find_gate_pass_verdict_for_task(required_commit_sha=tip)(finalize 同一判定)。
+    过期 = 最新门生裁决属 PASS 族(N5.guards.has_pass_verdict 声明)且带 artifact_subject, 但其 commit_sha ≠ 卡分支 tip。
+    不过期(None): 非代码卡 / 产品仓不可解析 / 无卡分支 / 卡分支已并入 main(finalize 不再要求精确覆盖)/ legacy 裁决 / 非 PASS 族 / 已覆盖。
+    返回 {verdict_id, verdict, verdict_at, verdict_commit_sha, audit_task_id, branch, tip, tree_hash, reason}。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    if str(fm.get("task_mode") or "code").strip() != "code":
+        return None
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+    try:
+        code_repo = _card_repo_root(workspace_root, task_id, fm, allow_governance_root=False)
+    except CardRepoUnresolved:
+        return None  # 产品仓不可解析: 交给既有 finalize 派生点出声(不可推导点名), 本判据不另判
+    subject = _extract_artifact_subject_from_branch(code_repo, task_id, "code")
+    if not subject:
+        return None
+    branch = card_branch_name(task_id)
+    from tools.aipos_cli.deployment_authorization import find_gate_pass_verdict_for_task
+    from tools.aipos_cli.finalize import _git_branch_merged_into_main
+
+    if _git_branch_merged_into_main(code_repo, branch):
+        return None
+    check = find_gate_pass_verdict_for_task(task_id, Path(workspace_root), required_commit_sha=subject["commit_sha"])
+    allowed = [str(v) for v in (_transition_node("N5").get("guards", {}).get("has_pass_verdict", {}).get("allowed_verdict_values") or [])]
+    covered = check.get("artifact_subject") if isinstance(check.get("artifact_subject"), dict) else None
+    if check.get("found") or str(check.get("verdict") or "") not in allowed or covered is None:
+        return None
+    verdict_file = str(check.get("verdict_file") or "")
+    verdict_fm = _read_frontmatter(Path(verdict_file)) if verdict_file else {}
+    return {
+        "verdict_id": str(check.get("verdict_id") or ""),
+        "verdict": str(check.get("verdict") or ""),
+        "verdict_at": str(check.get("verdict_at") or ""),
+        "verdict_commit_sha": str(covered.get("commit_sha") or ""),
+        "audit_task_id": str(verdict_fm.get("audit_task_id") or ""),
+        "reviewed_return_record_ref": str(verdict_fm.get("reviewed_return_record_ref") or ""),
+        "branch": branch,
+        "tip": subject["commit_sha"],
+        "tree_hash": subject["tree_hash"],
+        "reason": str(check.get("reason") or ""),
+    }
 
 
 def _build_copyable_command(
@@ -1634,6 +1692,100 @@ def _derive_n6_landing(workspace_root: Path, task_id: str, state: str, connectio
             "notes": f"N6 落账: 已结案但治理未落账({landing['reason']}); loop 自动执行, 幂等(已提交即 no-op)"}
 
 
+def _return_submission_step(workspace_root: Path, task_id: str, fm: dict[str, Any], *, claimer: str, conn_arg: str | None,
+                            result_summary: str, return_path: Path, node: str, suggested_action: str, notes: str) -> dict[str, Any]:
+    """交回步(N1→N2 首交 / AIPOS-F112 verdict_stale 重交回)的唯一构建: 驱动方见产物入口命令 `lybra artifact ingest --kind return`,
+    shell_command = 入口内部执行的同一条薄壳命令(build_return_command_from_artifact 唯一构建), 禁第二条交回路径。"""
+    policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
+    driver_policy = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)  # AIPOS-F78B 件③
+    cmd = build_return_command_from_artifact(
+        workspace_root,
+        task_id,
+        claimer=claimer,
+        owner_policy_ref=driver_policy or policy_ref,
+        connection_json=conn_arg,
+        result_summary=result_summary,
+        return_path=return_path,
+        autonomy_mode="PreAuthorized" if driver_policy else "Supervised",
+    )
+    return {
+        "task_id": task_id,
+        "derivable": True,
+        "current_node": node,
+        "current_state": "claimed",
+        "triggered_by": "executor",
+        # AIPOS-F90 件②: 驱动方只见产物入口命令; shell_command = 入口内部执行的同一条薄壳命令
+        "command": ingest_command(task_id, "return", workspace_root, conn_arg),
+        "shell_command": cmd,
+        "verb": "lybra_queue_return_dry_run",
+        "missing_records": [],
+        "suggested_action": suggested_action,
+        "notes": notes,
+    }
+
+
+def verdict_stale_declaration() -> dict[str, Any]:
+    """AIPOS-F112: 裁决过期状态声明(transitions nodes.N4.verdict_stale; 状态名/出口/保护均读此)。缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _transition_node("N4").get("verdict_stale")
+    if not isinstance(decl, dict) or not str(decl.get("state") or "").strip():
+        raise SchemaLoadError("transitions.schema.json nodes.N4.verdict_stale(含 state)未声明")
+    return decl
+
+
+def _derive_verdict_stale(workspace_root: Path, task_id: str, fm: dict[str, Any], records: dict[str, Any],
+                          stale: dict[str, Any], *, claimer: str, conn_arg: str | None) -> dict[str, Any]:
+    """AIPOS-F112 件②③: 裁决已过期(卡分支 tip ≠ 最新 PASS 裁决覆盖的 commit)的出口——复用既有交回: 对执行体 Return 再走
+    `lybra artifact ingest --kind return`(门落新 return 记录, 门侧既有自动派审按卡号演进声明派生下一轮审计卡 R2/R3…)。
+    保护: Return 未随卡分支更新(commit_sha 仍是旧 tip 等)= 产物入口同一校验(artifact_ingest.validate_task_artifact)拒,
+    此处 artifact_invalid 点名原文(loop exit 4), 不派旧 Return 去审; 已重交回但门未派下一轮 = 不可推导(不重复交回)。"""
+    from tools.aipos_cli.artifact_ingest import validate_task_artifact
+
+    state = str(verdict_stale_declaration()["state"])
+    covered = str(stale.get("verdict_commit_sha") or "")
+    tip = str(stale.get("tip") or "")
+    head = (f"裁决 {stale.get('verdict_id')}({stale.get('verdict')}, 审计卡 {stale.get('audit_task_id') or '?'})覆盖 {covered[:12]}, "
+            f"卡分支 {stale.get('branch')} tip 已是 {tip[:12]}")
+    base = {"task_id": task_id, "current_node": state, "current_state": "claimed", "verb": "lybra_queue_return_dry_run",
+            "verdict_stale": stale}
+    latest_return = records.get("latest_return") or {}
+    # 已重交回 = 最新 return 记录不是过期裁决所审的那份(裁决记录 reviewed_return_record_ref; 存量缺该字段时退回比时间)
+    reviewed_ref = str(stale.get("reviewed_return_record_ref") or "")
+    latest_ref = str(latest_return.get("return_id") or "")
+    re_returned = (latest_ref != reviewed_ref) if (reviewed_ref and latest_ref) else (
+        str(latest_return.get("returned_at") or "") > str(stale.get("verdict_at") or ""))
+    if re_returned:
+        from tools.aipos_cli.audit_derivation import audit_round_suffixes
+
+        return {**base, "derivable": False, "triggered_by": "advisor", "command": "",
+                "missing_records": [f"重交回 {latest_return.get('return_id')} 已落(过期裁决审的是 {reviewed_ref or '更早一份'}), 但门未派生下一轮审计卡"
+                                    f"(审计轮 {records.get('audit_round_ids') or []}, 演进声明 {audit_round_suffixes()[:3]}…)"],
+                "suggested_action": "核门侧自动派审(transitions nodes.N4.verdict_stale.outlet; 门须为含 AIPOS-F112 的版本)后重推导; 不重复交回",
+                "notes": f"{state}: {head}; 已重交回仍无复审轮(AIPOS-F112 fail-closed)"}
+    check = validate_task_artifact(task_id, workspace_root)
+    if not check.get("ok"):
+        return {**base, "derivable": False, "triggered_by": "executor", "command": "",
+                "missing_records": [f"{check.get('category')}: {r}" for r in check.get("reasons") or []],
+                "suggested_action": (f"执行体把 Return frontmatter 更新为卡分支当前 tip(commit_sha={tip}, tree_hash={stale.get('tree_hash')}), "
+                                     "产品随后重交回并派复审"),
+                "notes": f"{state}: {head}; Return 未随卡分支更新, 不得用旧 Return 派审(AIPOS-F112 件③)",
+                "action": {"type": "artifact_invalid", "card": task_id, "path": str(check.get("path") or "")}}
+    if not claimer:
+        return _not_derivable_no_claim(task_id, node=state, state="claimed", verb="lybra_queue_return_dry_run",
+                                       triggered_by="executor", notes=f"{state}: {head}; 无 claim 记录, 重交回 actor 无据(AIPOS-F73E 件①)")
+    return_path = Path(str(check["path"]))
+    summary = extract_return_summary_text(return_path.read_text(encoding="utf-8")) or ""
+    step = _return_submission_step(
+        workspace_root, task_id, fm, claimer=claimer, conn_arg=conn_arg, result_summary=summary, return_path=return_path,
+        node=state,
+        suggested_action="重交回(Return 已是卡分支当前 tip): 门落新 return 记录并按卡号演进声明派下一轮审计",
+        notes=f"{state}: {head}; 产物已变化须复审 → 重交回派下一轮(AIPOS-F112, 声明 transitions nodes.N4.verdict_stale)",
+    )
+    step["verdict_stale"] = stale
+    return step
+
+
 def derive_next_step(
     task_id: str,
     workspace_root: Path,
@@ -1641,9 +1793,12 @@ def derive_next_step(
     """推导单卡下一步(见 _derive_next_step)。AIPOS-F100 件②: 推导途中任何卡/记录/产物 frontmatter 读不出
     (FrontmatterReadError)= 硬停 frontmatter_unreadable_stop, 不推导放行动作。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
 
     try:
-        return _derive_next_step(task_id, workspace_root)
+        # AIPOS-F112: 推导只读, 一次推导内的卡查找(本卡/审计轮 R…R2/被审卡)共用一趟队列索引(既有 task_card_lookup_scope)
+        with task_card_lookup_scope(Path(workspace_root)):
+            return _derive_next_step(task_id, workspace_root)
     except FrontmatterReadError as exc:
         return frontmatter_unreadable_stop(task_id, exc)
 
@@ -1706,13 +1861,14 @@ def _derive_next_step(
     records = _read_task_records(workspace_root, task_id)
     has_return_artifact = _check_return_artifact(workspace_root, task_id)
     has_audit_card = _check_audit_card(workspace_root, task_id)
-    verdict_artifact = _check_verdict_artifact(workspace_root, task_id)
+    verdict_artifact = _check_verdict_artifact(workspace_root, task_id, fm)
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card as _is_audit_card
 
     task_mode = fm.get("task_mode", "code")
     assigned_to = fm.get("assigned_to") or fm.get("agent_instance") or ""
     audit_required = fm.get("audit") == "required"
     owner_verify = fm.get("owner_verify") == "required"
-    is_audit_card = task_id.upper().endswith("R")
+    is_audit_card = _is_audit_card(task_id, fm)  # AIPOS-F112: 认得复审轮 R2/R3…(原 endswith("R"))
 
     connection_json = _find_connection_json(workspace_root)
 
@@ -1725,7 +1881,7 @@ def _derive_next_step(
     if is_audit_card and queue_dir == "claimed" and verdict_artifact:
         # 从 verdict 报告提取参数
         verdict_fm = _read_frontmatter(verdict_artifact, allow_missing_block=True)
-        reviewed_task_id = verdict_fm.get("reviewed_task_id") or task_id.rstrip("Rr")
+        reviewed_task_id = verdict_fm.get("reviewed_task_id") or audit_card_reviewed_id(task_id, fm)
         verdict = verdict_fm.get("verdict", "PASS")
         # AIPOS-F73E 件①: actor/agent_instance = 审计卡 claim 记录的审计实例(禁读报告自报/卡面/驱动方); 无 claim 记录不可推导
         actor = _claimer_instance(records)
@@ -1998,6 +2154,25 @@ def _derive_next_step(
                     "notes": "N6: 任务已有 closure 记录,无下一步",
                 }
             
+            # AIPOS-F112 件②: 复审轮(R2/R3…)已派生且该轮尚无裁决 → 等最新一轮审计卡(loop 认它等待/拉起), 不再拿上一轮裁决派 finalize
+            current_audit_id = str(records.get("audit_task_id") or f"{task_id}R")
+            audit_rounds = list(records.get("audit_round_ids") or [])
+            if (latest_verdict and not has_finalization and len(audit_rounds) >= 2
+                    and str(latest_verdict.get("audit_task_id") or "") != current_audit_id):
+                return {
+                    "task_id": task_id,
+                    "derivable": False,
+                    "current_node": "audit_dispatch",
+                    "current_state": "claimed",
+                    "triggered_by": "auditor",
+                    "command": "",
+                    "verb": "",
+                    "missing_records": [f"复审卡 {current_audit_id} 的审计报告与裁决"],
+                    "suggested_action": f"等待审计体完成复审 {current_audit_id}(上一轮 {latest_verdict.get('audit_task_id') or '?'} 的裁决已被取代)",
+                    "notes": f"N3: 复审轮 {current_audit_id} 在途(审计轮 {audit_rounds}), 等最新一轮裁决(AIPOS-F112)",
+                    "action": {"type": "await_artifact", "card": current_audit_id},
+                }
+
             # N4→N5: 有 verdict 但无 finalization → finalize
             if latest_verdict and not has_finalization:
                 verdict_result = latest_verdict.get("verdict", "")
@@ -2005,6 +2180,10 @@ def _derive_next_step(
                     # AIPOS-F78B 件②: 产品仓不在本机(finalize_mode=external) → 不派生 lybra finalize, 等外部 FINALIZE 卡 Return 经 ingest 铸记录
                     if _finalize_mode(workspace_root) == "external":
                         return _derive_external_finalize(workspace_root, task_id, fm, claimer=claimer, verdict_result=verdict_result)
+                    # AIPOS-F112 件①: 派 finalize 前核裁决是否仍覆盖卡分支 tip(与 finalize F70 同一判据); 过期 = verdict_stale, 不派 finalize
+                    stale = verdict_staleness(workspace_root, task_id, fm)
+                    if stale is not None:
+                        return _derive_verdict_stale(workspace_root, task_id, fm, records, stale, claimer=claimer, conn_arg=conn_arg)
                     # AIPOS-F73D 前置一② + F78C: finalize 模板必带 --actor, --workspace-root=该卡声明的产品仓(resolve_card_repo), --governance-root=治理根
                     from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
@@ -2062,7 +2241,7 @@ def _derive_next_step(
             
             # N3→N4: 已派审但无 verdict → 等待审计体产物
             if latest_audit_dispatch and not latest_verdict:
-                audit_id = f"{task_id}R"
+                audit_id = current_audit_id  # AIPOS-F112: 当前一轮(原写死 <ID>R)
                 return {
                     "task_id": task_id,
                     "derivable": False,
@@ -2208,32 +2387,12 @@ def _derive_next_step(
             if not claimer:
                 return _not_derivable_no_claim(task_id, node="claim", state="claimed", verb="lybra_queue_return_dry_run",
                                                triggered_by="executor", notes="N1→N2: Return 已落盘但无 claim 记录, return actor 无据(AIPOS-F73E 件①)")
-            policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
-            driver_policy = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)  # AIPOS-F78B 件③
-            cmd = build_return_command_from_artifact(
-                workspace_root,
-                task_id,
-                claimer=claimer,
-                owner_policy_ref=driver_policy or policy_ref,
-                connection_json=conn_arg,
-                result_summary=result_summary,
-                return_path=return_path,
-                autonomy_mode="PreAuthorized" if driver_policy else "Supervised",
+            return _return_submission_step(
+                workspace_root, task_id, fm, claimer=claimer, conn_arg=conn_arg, result_summary=result_summary,
+                return_path=return_path, node="claim",
+                suggested_action="交回工作(RETURN.md 已存在,执行 return)",
+                notes="N1→N2: RETURN.md 已生成,需执行 return 动词",
             )
-            return {
-                "task_id": task_id,
-                "derivable": True,
-                "current_node": "claim",
-                "current_state": "claimed",
-                "triggered_by": "executor",
-                # AIPOS-F90 件②: 驱动方只见产物入口命令; shell_command = 入口内部执行的同一条薄壳命令
-                "command": ingest_command(task_id, "return", workspace_root, conn_arg),
-                "shell_command": cmd,
-                "verb": "lybra_queue_return_dry_run",
-                "missing_records": [],
-                "suggested_action": "交回工作(RETURN.md 已存在,执行 return)",
-                "notes": "N1→N2: RETURN.md 已生成,需执行 return 动词",
-            }
 
         # 无 return 记录也无 RETURN.md → 检查是否有返工节 (AIPOS-F75 件③)
         rework_rounds = fm.get("rework_rounds", [])
@@ -2487,7 +2646,7 @@ def _check_branch_has_commits(workspace_root: Path, task_id: str) -> bool:
     """
     import subprocess
     
-    branch_name = f"card/{task_id}"
+    branch_name = card_branch_name(task_id)  # AIPOS-F112: 分支名唯一读取口(声明 N5.branch_integration.branch_pattern)
     
     try:
         # 检查分支是否存在

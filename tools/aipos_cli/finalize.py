@@ -353,11 +353,13 @@ def _report_frontmatter_verdict_for_display(governance_root: Path, task_id: str)
     real gate verdict. Read failures are reported on stderr and yield an empty display (never block/alter finalize).
     """
     from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.audit_derivation import current_audit_task_id
     from tools.aipos_cli.next_resolver import _check_verdict_artifact, _read_frontmatter
     from tools.schema_loader import SchemaLoadError
 
     try:
-        report_path = _check_verdict_artifact(Path(governance_root), f"{task_id}R")
+        # AIPOS-F112: 展示当前一轮审计卡(R2/R3…)的报告, 原写死 <ID>R
+        report_path = _check_verdict_artifact(Path(governance_root), current_audit_task_id(task_id, Path(governance_root)))
         if report_path is None:
             return {"report_path": None, "report_verdict": None}
         return {"report_path": str(report_path),

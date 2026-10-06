@@ -16,92 +16,45 @@ Usage:
     lybra enroll-deliver --role executor --instance exec.lybra.mac1 \\
         --target-workspace ~/my-agent-workstation \\
         --target-harness ~/my-agent-workstation/lybra-executor \\
-        --gate-url http://host:7118 --owner-token <token>
+        --gate-url http://host:7118 --connection-json <owner connection.json>
     
     # 跨机SSH
     lybra enroll-deliver --role executor --instance exec.lybra.mac1 \\
         --target-workspace ~/my-agent-workstation \\
         --target-harness ~/my-agent-workstation/lybra-executor \\
         --ssh user@remote-host \\
-        --gate-url http://host:7118 --owner-token <token>
+        --gate-url http://host:7118 --connection-json <owner connection.json>
 
 Security:
   - enrollment code仅在本函数内存在,不落盘
   - token通过exchange自动获取,0600权限
-  - owner_token从connection.json读取或env提供,永不回显
+  - owner_token从connection.json读取或经 --owner-token-stdin 自 stdin 读入, 永不进 argv、永不回显(AIPOS-F113)
+  - --ssh: 远端 enroll 不需要 Owner 凭据(自包含码即运输认证); 注册码经 ssh stdin 送达, 远端命令逐参数 shlex.quote
 """
 from __future__ import annotations
 
 import json
 import os
-import socket
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 # Import enrollment and distribution modules
 try:
     from tools.aipos_cli.enrollment import create_enrollment_code
     from tools.aipos_cli.enroll_client import enroll, exchange_enrollment_code
     from tools.distribute_tools import distribute_to_harness
-    from tools.aipos_cli.confirm_client import load_owner_token
+    from tools.aipos_cli.confirm_client import GateClient, load_owner_token
+    from tools.sandbox_runtime.confined_worker import redact_transcript
 except ImportError as e:
     print(f"Error: Failed to import required modules: {e}", file=sys.stderr)
     sys.exit(1)
 
 
-def is_same_host(gate_url: str) -> bool:
-    """判定 gate host 是否解析到本机 (AIPOS-R6K件①)。
-    
-    同机判定逻辑:
-    1. gate host 是 loopback 地址(127.0.0.1/localhost/::1)
-    2. gate host 解析的 IP 与本机 IP 有交集
-    
-    Returns:
-        True if gate is on same host, False otherwise
-    """
-    try:
-        parsed = urlparse(gate_url)
-        host = parsed.hostname or parsed.netloc.split(':')[0]
-        
-        # 直接是 loopback
-        if host in ('127.0.0.1', 'localhost', '::1'):
-            return True
-        
-        # 解析 gate host 的 IP
-        gate_ips = set(addr[4][0] for addr in socket.getaddrinfo(host, None))
-        
-        # 获取本机所有 IP
-        local_ips = {'127.0.0.1', '::1'}
-        hostname = socket.gethostname()
-        try:
-            local_ips.update(addr[4][0] for addr in socket.getaddrinfo(hostname, None))
-        except Exception:
-            pass
-        
-        # 判定交集
-        return bool(gate_ips & local_ips)
-    except Exception:
-        return False
-
-
-def normalize_gate_url_for_same_host(gate_url: str) -> str:
-    """同机时规范化为 loopback URL (AIPOS-R6K件①: 免疫代理劫持)。
-    
-    Args:
-        gate_url: 原始 gate URL
-    
-    Returns:
-        同机时返回 http://127.0.0.1:<port>,跨机返回原 URL
-    """
-    if not is_same_host(gate_url):
-        return gate_url
-    
-    parsed = urlparse(gate_url)
-    port = parsed.port or 7118
-    return f"http://127.0.0.1:{port}"
+# AIPOS-F113: 同机判定 / loopback 规范化复用 enroll_client 唯一实现(原本文件内逐字副本退役; 本模块仍导出同名供既有调用方)
+from tools.aipos_cli.enroll_client import is_same_host, normalize_gate_url_for_same_host  # noqa: E402,F401
 
 
 def validate_workspace_root(workspace_root: str, role: str) -> None:
@@ -196,9 +149,7 @@ def enroll_deliver_local(
     # 1. 校验workspace_root
     validate_workspace_root(str(workspace_root), role)
     
-    # 2. Owner签发enrollment code
-    from tools.aipos_cli.enrollment import create_enrollment_code
-    
+    # 2. Owner签发enrollment code(模块顶部已导入 create_enrollment_code)
     # 注意: create_enrollment_code需要workspace_root指向gate所在的治理仓
     # 这里需要推断gate的workspace(通常是gate服务所在的workspace)
     # 简化实现: 假设gate workspace从env LYBRA_WORKSPACE_ROOT读取
@@ -311,18 +262,78 @@ def enroll_deliver_local(
         }
     
     except Exception as e:
-        # 如果失败,尝试撤销enrollment code
+        # 失败 → 吊销注册码(AIPOS-F113 件③: 回滚 fail-closed —— 回滚失败明确报错并给出口, 禁吞)
         from tools.aipos_cli.enrollment import revoke_enrollment_code
+        secrets_ = [code, owner_token]
+        primary = _redact(f"{e.__class__.__name__}: {e}", secrets_)
+        code_id = enrollment_result["code_id"]
         try:
             revoke_enrollment_code(
                 gate_workspace,
-                enrollment_result["code_id"],
+                code_id,
                 by="owner (enroll-deliver rollback)",
-                reason=f"enroll-deliver failed: {e}",
+                reason=f"enroll-deliver failed: {primary}",
             )
-        except:
-            pass
-        raise
+        except Exception as rb_exc:
+            raise EnrollDeliverRollbackError(
+                f"enroll-deliver 失败: {primary}\n"
+                f"且回滚失败: 注册码 {code_id} 未能吊销({_redact(f'{rb_exc.__class__.__name__}: {rb_exc}', secrets_)})。\n"
+                f"出口: ① 手工吊销该码: lybra roles enroll-revoke {code_id} --owner-authorization-ref <owner授权引用> "
+                f"(门工作区 {gate_workspace}); ② 检查 {workspace_root}/.lybra/connection.json, "
+                f"若已写入 agent_instance={instance or '(无实例, role=' + role + ')'} 的 token 条目则删除该条目后重跑。"
+            ) from rb_exc
+        raise RuntimeError(f"enroll-deliver 失败: {primary}(已回滚: 注册码 {code_id} 已吊销)") from e
+
+
+class EnrollDeliverRollbackError(RuntimeError):
+    """AIPOS-F113 件③: 失败后回滚(吊销注册码)本身也失败 —— 非零退出, 消息含远端/门侧手工清理出口。"""
+
+
+def _redact(text: str, secrets_: list[str | None]) -> str:
+    """AIPOS-F113: 本机输出/日志/异常文本里的凭据与注册码明文 → «redacted:<指纹>»(复用 confined_worker.redact_transcript 唯一实现)。"""
+    needles = [str(x) for x in secrets_ if x]
+    clean, _hits = redact_transcript(str(text), needles)
+    return clean
+
+
+def _gate_base_url(gate_url: str) -> str:
+    """gate_url 去尾部 /mcp(GateClient 与 enroll_client 都自行拼 /mcp)。"""
+    url = str(gate_url or "").strip().rstrip("/")
+    return url[: -len("/mcp")] if url.endswith("/mcp") else url
+
+
+def remote_command(argv: list[str]) -> str:
+    """AIPOS-F113 件②: ssh 把远端命令交给远端登录 shell 解释 —— 每个参数逐个 shlex.quote(禁字符串直拼)。"""
+    return shlex.join([str(a) for a in argv])
+
+
+def ssh_argv(ssh_target: str, argv: list[str]) -> list[str]:
+    """本机 ssh 调用的 argv: `ssh -- <目标> <已转义远端命令>`。
+
+    `--` 终止 ssh 选项解析, 且拒绝以 '-' 开头的目标(防 `-oProxyCommand=…` 类选项注入, fail-closed)。
+    远端命令只含非秘密参数; 注册码经 stdin 送达(见 enroll_deliver_ssh)。
+    """
+    target = str(ssh_target or "").strip()
+    if not target or target.startswith("-") or any(ch.isspace() for ch in target):
+        raise ValueError(f"--ssh 目标非法(空 / 以 '-' 开头 / 含空白): {ssh_target!r}")
+    return ["ssh", "--", target, remote_command(argv)]
+
+
+def _run_remote(ssh_target: str, argv: list[str], *, stdin_text: str, stage: str, secrets_: list[str | None]) -> dict[str, Any]:
+    """经 ssh 执行一条远端命令(参数已转义, 秘密只走 stdin), 解析其 --json 输出; 非零/非 JSON/ok≠true 一律抛错(已脱敏)。"""
+    result = subprocess.run(ssh_argv(ssh_target, argv), input=stdin_text, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"远端 {stage} 失败(ssh 退出码 {result.returncode}): "
+            f"{_redact((result.stderr or '').strip() or (result.stdout or '').strip(), secrets_)[:800]}"
+        )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"远端 {stage} 输出不是 JSON({exc}): {_redact(result.stdout, secrets_)[:400]}") from exc
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        raise RuntimeError(f"远端 {stage} 返回 ok≠true: {_redact(json.dumps(payload, ensure_ascii=False), secrets_)[:800]}")
+    return payload
 
 
 def enroll_deliver_ssh(
@@ -337,119 +348,133 @@ def enroll_deliver_ssh(
     owner_token: str,
     ttl_seconds: int = 3600,
     force: bool = False,
+    owner_authorization_ref: str | None = None,
 ) -> dict[str, Any]:
-    """跨机SSH: 铸码+传输+远程执行
-    
+    """跨机SSH: 门内发自包含码 → 码经 ssh stdin 送远端兑换落盘 → 远端分发
+
+    AIPOS-F113(安全):
+      件① 远端 enroll 不需要 Owner 凭据 —— 自包含码(LYBRAENROLL1.*, F23)内嵌零 scope 运输凭证, 码即运输认证
+          (exchange_enrollment_code 对自包含码忽略 bootstrap token)。Owner 凭据只在本机进程内作 HTTP Authorization
+          调门动词 lybra_roles_enroll_code(发码唯一实现 issue_self_contained_code, 住门进程内, 运输凭证即时热生效)
+          与 lybra_roles_enroll_revoke(回滚), 永不出本机、永不进任何 argv。注册码经 ssh stdin 送远端
+          (`enroll_client --code-stdin`), 不进远端 argv / 不落盘 / 不进环境变量。
+      件② 远端命令逐参数 shlex.quote; ssh 目标前置 `--` 且拒 '-' 开头。
+      件③ 失败即经门吊销注册码; 吊销失败 → EnrollDeliverRollbackError(非零), 消息含手工清理出口。
+
     Args:
         role: 角色名
         instance: agent_instance
-        workspace_root: 远程目标workspace根目录(字符串,不展开~)
-        harness_root: 远程目标harness根目录
+        workspace_root: 远程目标workspace根目录(字符串, 原样逐字节送达; ~ 由远端 enroll_client expanduser 展开)
+        harness_root: 远程目标harness根目录(同上, distribute_tools expanduser)
         ssh_target: SSH目标(user@host)
-        gate_url: Gate MCP URL
+        gate_url: Gate MCP URL(远端可达地址; 码内嵌此地址, 本机发码调用同一门)
         owner_policy_ref: Owner策略引用
-        owner_token: Owner token
+        owner_token: Owner token(只在本机进程内调门)
         ttl_seconds: enrollment code有效期
         force: 强制覆盖
-    
+        owner_authorization_ref: 发码/吊销的 Owner 授权引用(门动词必填; 缺省 = owner_policy_ref)
+
     Returns:
-        操作结果字典
+        操作结果字典(凭据与注册码只出现指纹)
     """
-    # 1. Owner签发enrollment code
-    gate_workspace = os.environ.get("LYBRA_WORKSPACE_ROOT", "")
-    if not gate_workspace:
-        raise ValueError("LYBRA_WORKSPACE_ROOT env var required for gate workspace")
-    
-    enrollment_result = create_enrollment_code(
-        workspace_root=gate_workspace,
-        role=role,
-        instance=instance,
-        ttl_seconds=ttl_seconds,
-        by=f"owner (enroll-deliver SSH to {ssh_target})",
-        reason=f"enroll-deliver SSH for {instance or role}",
-    )
-    
-    code = enrollment_result["code"]
-    
+    base_url = _gate_base_url(gate_url)
+    auth_ref = str(owner_authorization_ref or "").strip() or str(owner_policy_ref or "").strip()
+    if not auth_ref:
+        raise ValueError("owner_authorization_ref(或 owner_policy_ref)必填: 门发码/吊销是 Owner 门动词")
+    # 先验 ssh 目标(fail-closed, 先于发码: 非法目标不白铸码)
+    ssh_argv(ssh_target, ["true"])
+    client = GateClient(normalize_gate_url_for_same_host(base_url), owner_token, timeout=30.0)
+    secrets_: list[str | None] = [owner_token]
+
+    # 1. 门内发自包含码(发码唯一实现; Owner 凭据只作本机 HTTP Authorization)
+    issued = client.call_tool("lybra_roles_enroll_code", {
+        "role": role,
+        **({"instance": instance} if instance else {}),
+        "ttl": int(ttl_seconds),
+        "gate_url": base_url,
+        "owner_authorization_ref": auth_ref,
+        "reason": f"enroll-deliver SSH to {ssh_target} for {instance or role}",
+    })
+    code = str(issued.get("self_contained_code") or "")
+    secrets_.append(code)
+    if not issued.get("ok") or not code:
+        raise RuntimeError(f"门发码失败(lybra_roles_enroll_code): {_redact(json.dumps(issued, ensure_ascii=False), secrets_)[:800]}")
+    code_id = str(issued.get("code_id") or "")
+    enrollment_info = issued.get("enrollment") if isinstance(issued.get("enrollment"), dict) else {}
+    code_fingerprint = enrollment_info.get("fingerprint")
+
+    enroll_argv = [
+        "python3", "-m", "tools.aipos_cli.enroll_client",
+        "--code-stdin",
+        "--gate-url", base_url,
+        "--workspace", workspace_root,
+        "--policy", owner_policy_ref,
+        "--landed-host", ssh_target,  # AIPOS-F95 件③b: land 事件 host = ssh 目标(跨机工位, loop 不拉起而提示 host:dir)
+        "--json",
+    ]
+    distribute_argv = ["python3", "-m", "tools.distribute_tools", harness_root, role, "--json"]
+    if force:
+        distribute_argv.append("--force")
+
+    stage = "enroll"
     try:
-        # 2. 构造远程命令
-        # 远程机需要有enroll_client.py可用
-        # 简化: 假设远程机有lybra工具链
-        enroll_cmd = [
-            "python3", "-m", "tools.aipos_cli.enroll_client",
-            "--code", code,
-            "--gate-url", gate_url,
-            "--workspace", workspace_root,
-            "--policy", owner_policy_ref,
-            "--bootstrap-token", owner_token,
-            "--landed-host", ssh_target,  # AIPOS-F95 件③b: land 事件 host = ssh 目标(跨机工位, loop 不拉起而提示 host:dir)
-            "--json",
-        ]
-        
-        # SSH执行enroll
-        ssh_enroll = ["ssh", ssh_target, " ".join(enroll_cmd)]
-        result = subprocess.run(ssh_enroll, capture_output=True, text=True, timeout=60)
-        
-        if result.returncode != 0:
-            raise RuntimeError(f"Remote enroll failed: {result.stderr}")
-        
-        enroll_result = json.loads(result.stdout)
-        if not enroll_result.get("ok"):
-            raise RuntimeError(f"Remote enroll returned ok=False: {enroll_result}")
-        
-        # 3. 远程分发工具
-        # 需要将distribute_tools.py传输到远程或假设远程已有
-        # 简化: 假设远程有lybra工具链
-        distribute_cmd = [
-            "python3", "-m", "tools.distribute_tools",
-            harness_root,
-            role,
-            "--json",
-        ]
-        if force:
-            distribute_cmd.append("--force")
-        
-        ssh_distribute = ["ssh", ssh_target, " ".join(distribute_cmd)]
-        result = subprocess.run(ssh_distribute, capture_output=True, text=True, timeout=60)
-        
-        if result.returncode != 0:
-            raise RuntimeError(f"Remote distribute failed: {result.stderr}")
-        
-        distribute_result = json.loads(result.stdout)
-        
-        return {
-            "ok": True,
-            "operation": "enroll-deliver",
-            "mode": "ssh",
-            "ssh_target": ssh_target,
-            "role": role,
-            "instance": instance,
-            "workspace_root": workspace_root,
-            "harness_root": harness_root,
-            "enrollment": {
-                "code_id": enrollment_result["code_id"],
-                "fingerprint": enrollment_result["fingerprint"],
-            },
-            "token": {
-                "fingerprint": enroll_result.get("fingerprint"),
-                "scopes": enroll_result.get("scopes", []),
-            },
-            "distribution": distribute_result,
-        }
-    
+        # 2. 远端兑换落盘: 码只走 stdin
+        enroll_result = _run_remote(ssh_target, enroll_argv, stdin_text=code + "\n", stage="enroll", secrets_=secrets_)
+        # 3. 远端分发工具(无秘密参数, stdin 空)
+        stage = "distribute"
+        distribute_result = _run_remote(ssh_target, distribute_argv, stdin_text="", stage="distribute", secrets_=secrets_)
     except Exception as e:
-        # 失败时撤销enrollment code
-        from tools.aipos_cli.enrollment import revoke_enrollment_code
+        primary = _redact(f"{e.__class__.__name__}: {e}", secrets_)
+        remote_state = (
+            f"远端 enroll 已成功(凭据已落 {workspace_root}/.lybra/connection.json), 失败在分发阶段: "
+            f"可直接重跑分发 `{shlex.join(ssh_argv(ssh_target, distribute_argv))}`; 若要撤回该工位, "
+            f"在远端删除该文件中 agent_instance={instance or '(无实例, role=' + role + ')'} 的 token 条目并在门侧吊销该 token"
+            if stage == "distribute" else
+            f"远端 enroll 未确认成功: 检查远端 {workspace_root}/.lybra/connection.json, "
+            f"若已写入 agent_instance={instance or '(无实例, role=' + role + ')'} 的 token 条目则删除该条目"
+        )
         try:
-            revoke_enrollment_code(
-                gate_workspace,
-                enrollment_result["code_id"],
-                by=f"owner (enroll-deliver SSH rollback)",
-                reason=f"enroll-deliver SSH failed: {e}",
-            )
-        except:
-            pass
-        raise
+            revoked = client.call_tool("lybra_roles_enroll_revoke", {
+                "code_id": code_id,
+                "owner_authorization_ref": auth_ref,
+                "reason": f"enroll-deliver SSH rollback ({stage} failed)",
+            })
+            if not revoked.get("ok"):
+                raise RuntimeError(f"门拒绝吊销: {_redact(json.dumps(revoked, ensure_ascii=False), secrets_)[:400]}")
+        except Exception as rb_exc:
+            raise EnrollDeliverRollbackError(
+                f"enroll-deliver SSH 失败({stage}): {primary}\n"
+                f"且回滚失败: 注册码 {code_id}(指纹 {code_fingerprint}) 未能吊销"
+                f"({_redact(f'{rb_exc.__class__.__name__}: {rb_exc}', secrets_)})。\n"
+                f"出口: ① 手工吊销该码: 门动词 lybra_roles_enroll_revoke {{code_id: {code_id}}}"
+                f"(或在门工作区 lybra roles enroll-revoke {code_id} --owner-authorization-ref <owner授权引用>); "
+                f"② 远端手工清理(ssh {ssh_target}): {remote_state}。"
+            ) from rb_exc
+        raise RuntimeError(
+            f"enroll-deliver SSH 失败({stage}): {primary}\n"
+            f"已回滚: 注册码 {code_id}(指纹 {code_fingerprint}) 已经门吊销。远端状态: {remote_state}。"
+        ) from e
+
+    return {
+        "ok": True,
+        "operation": "enroll-deliver",
+        "mode": "ssh",
+        "ssh_target": ssh_target,
+        "role": role,
+        "instance": instance,
+        "workspace_root": workspace_root,
+        "harness_root": harness_root,
+        "enrollment": {
+            "code_id": code_id,
+            "fingerprint": code_fingerprint,
+        },
+        "owner_token_fingerprint": client.token_fingerprint,
+        "token": {
+            "fingerprint": enroll_result.get("fingerprint"),
+            "scopes": enroll_result.get("scopes", []),
+        },
+        "distribution": distribute_result,
+    }
 
 
 def main() -> int:
@@ -466,8 +491,10 @@ def main() -> int:
     parser.add_argument("--target-harness", required=True, help="Target harness root (e.g., ~/kiwiai-pi/lybra-executor)")
     parser.add_argument("--gate-url", required=True, help="Gate MCP URL")
     parser.add_argument("--owner-policy-ref", required=True, help="Owner policy reference")
-    parser.add_argument("--owner-token", help="Owner token (or use --connection-json)")
+    # AIPOS-F113: Owner 凭据禁进 argv(原 --owner-token <明文> 退役) —— 从 connection.json 读, 或经本机 stdin 送入
+    parser.add_argument("--owner-token-stdin", action="store_true", help="Read the owner token from stdin (first line); never pass it on the command line")
     parser.add_argument("--connection-json", help="Path to connection.json (to read owner token)")
+    parser.add_argument("--owner-authorization-ref", help="Owner authorization ref for gate enroll-code/revoke verbs (--ssh; default = --owner-policy-ref)")
     parser.add_argument("--ssh", help="SSH target for remote delivery (user@host)")
     parser.add_argument("--ttl", type=int, default=3600, help="Enrollment code TTL in seconds (default: 3600)")
     parser.add_argument("--force", action="store_true", help="Force overwrite existing files")
@@ -476,8 +503,11 @@ def main() -> int:
     args = parser.parse_args()
     
     # Load owner token
-    if args.owner_token:
-        owner_token = args.owner_token
+    if args.owner_token_stdin:
+        owner_token = sys.stdin.readline().strip()
+        if not owner_token:
+            print("Error: --owner-token-stdin given but stdin carried no token", file=sys.stderr)
+            return 1
     elif args.connection_json:
         try:
             owner_token = load_owner_token(connection_json=args.connection_json, role="owner")
@@ -485,7 +515,7 @@ def main() -> int:
             print(f"Error loading owner token: {e}", file=sys.stderr)
             return 1
     else:
-        print("Error: provide --owner-token or --connection-json", file=sys.stderr)
+        print("Error: provide --connection-json or --owner-token-stdin (owner token never on the command line)", file=sys.stderr)
         return 1
     
     try:
@@ -502,6 +532,7 @@ def main() -> int:
                 owner_token=owner_token,
                 ttl_seconds=args.ttl,
                 force=args.force,
+                owner_authorization_ref=args.owner_authorization_ref,
             )
         else:
             # 同机直写
@@ -543,10 +574,12 @@ def main() -> int:
         return 0
     
     except Exception as e:
+        # AIPOS-F113: 出口文本再脱敏一次(Owner 凭据明文永不上终端)
+        message = _redact(str(e), [owner_token])
         if args.json:
-            print(json.dumps({"ok": False, "error": str(e)}, indent=2), file=sys.stderr)
+            print(json.dumps({"ok": False, "error": message}, indent=2, ensure_ascii=False), file=sys.stderr)
         else:
-            print(f"Error: {e}", file=sys.stderr)
+            print(f"Error: {message}", file=sys.stderr)
         return 1
 
 

@@ -963,6 +963,7 @@ def main() -> int:
         epilog=__doc__
     )
     parser.add_argument("--code", required=False, help="Enrollment code(from owner/advisor); 省略 + --backfill = 幂等补铸模式(不触 token)")
+    parser.add_argument("--code-stdin", action="store_true", help="AIPOS-F113: read the enrollment code from stdin (first line) instead of argv — enroll_deliver --ssh sends it this way so the code never appears in the remote command line")
     parser.add_argument("--gate-url", required=True, help="Gate MCP URL (e.g., http://host:<gate-port>)")
     parser.add_argument("--workspace", help="Workspace root(defaults to current directory)")
     parser.add_argument("--policy", help="Optional policy reference")
@@ -974,6 +975,16 @@ def main() -> int:
     parser.add_argument("--landed-host", help="AIPOS-F95: host recorded in the land event (enroll_deliver --ssh passes the ssh target; default = this machine's hostname)")
     
     args = parser.parse_args()
+
+    # AIPOS-F113: --code-stdin —— 注册码从 stdin 读(不进 argv / 不落盘 / 不进环境变量); 与 --code 互斥, 读不到即拒(fail-closed)
+    if args.code_stdin:
+        if args.code:
+            print("Error: --code and --code-stdin are mutually exclusive", file=sys.stderr)
+            return 2
+        args.code = sys.stdin.readline().strip()
+        if not args.code:
+            print("Error: --code-stdin given but stdin carried no enrollment code", file=sys.stderr)
+            return 2
     
     # AIPOS-F28 大项C: workspace_root 默认取码内治理根(工位场景正确路径)
     # 只有显式传 --workspace 时才覆盖(兼容性)
