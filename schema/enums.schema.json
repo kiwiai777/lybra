@@ -4,43 +4,49 @@
   "last_updated": "2026-08-12",
   "enums": {
     "queue_state": {
-      "description": "Task queue states(卡 frontmatter status 值域)。AIPOS-F104 件②: 每值带 queue_dir(是否为 <queue_root>/<值>/ 队列目录; returned = 记录推导态, 卡仍在 claimed/ 目录, 无独立目录)与 skeleton(新项目/脚手架预建的队列目录; withdrawn 目录按需建)。代码侧唯一投影 task_loader.QUEUE_STATES(queue_dir=true)/ task_loader.QUEUE_SKELETON_STATES(skeleton=true), 禁手写状态集合; 不变量夹具 tests/test_aipos_f104_enum_projection_invariant.py 锁声明 = 代码。",
+      "description": "Task queue states(卡 frontmatter status 值域)。AIPOS-F104 件②: 每值带 queue_dir(是否为 <queue_root>/<值>/ 队列目录; returned = 记录推导态, 卡仍在 claimed/ 目录, 无独立目录)与 skeleton(新项目/脚手架预建的队列目录; withdrawn 目录按需建)。AIPOS-F117 件③(gap #62): 每值另带 terminal(终态 = 卡生命周期已结束、推导核不再派生推进步: completed 结案、withdrawn 撤回)。代码侧唯一投影 task_loader.QUEUE_STATES(queue_dir=true)/ task_loader.QUEUE_SKELETON_STATES(skeleton=true)/ task_loader.QUEUE_TERMINAL_STATES(terminal=true), 禁手写状态集合; 不变量夹具 tests/test_aipos_f104_enum_projection_invariant.py 锁声明 = 代码。",
       "values": [
         {
           "value": "pending",
           "description": "Task published, awaiting claim",
           "queue_dir": true,
-          "skeleton": true
+          "skeleton": true,
+          "terminal": false
         },
         {
           "value": "claimed",
           "description": "Task claimed by an agent, work in progress",
           "queue_dir": true,
-          "skeleton": true
+          "skeleton": true,
+          "terminal": false
         },
         {
           "value": "returned",
           "description": "Task work returned, awaiting audit/closure(记录推导态: 卡留在 claimed/ 目录, 由 return 记录推导)",
           "queue_dir": false,
-          "skeleton": false
+          "skeleton": false,
+          "terminal": false
         },
         {
           "value": "completed",
           "description": "Task completed and closed",
           "queue_dir": true,
-          "skeleton": true
+          "skeleton": true,
+          "terminal": true
         },
         {
           "value": "blocked",
           "description": "Task blocked, cannot proceed",
           "queue_dir": true,
-          "skeleton": true
+          "skeleton": true,
+          "terminal": false
         },
         {
           "value": "withdrawn",
           "description": "Task withdrawn/cancelled",
           "queue_dir": true,
-          "skeleton": false
+          "skeleton": false,
+          "terminal": true
         }
       ]
     },
@@ -530,7 +536,7 @@
       ]
     },
     "harness": {
-      "description": "AIPOS-F78 件①: 执行引擎(harness)声明值域。card.schema fields.harness $enum; 缺省由 task_mode 派生(card.schema intent_face.harness.default_by_task_mode)。新 harness = 加一值 + 一个渲染模板, 零代码改动。AIPOS-F95 件②(a): 每值带 launch = lybra loop 在 Owner 信封授权(launch_harnesses)下拉起该 harness 的声明模板——argv 为参数数组(无 shell), 占位仅 {kickoff}(= my-tasks next_card.kickoff 原文, 与工位 /go 发送文本逐字节相同), cwd = 工位目录(enrollment_log land 事件), 模型由工位自身配置定(模板不写模型); events = stdout 事件流格式(loop 按此汇总一行式进度, 未知格式只计数); launch=null = 只支持手工(工位敲 /go)。新 harness = 加一值 + 一模板, 零代码",
+      "description": "AIPOS-F78 件①: 执行引擎(harness)声明值域。card.schema fields.harness $enum; 缺省由 task_mode 派生(card.schema intent_face.harness.default_by_task_mode)。新 harness = 加一值 + 一个渲染模板, 零代码改动。AIPOS-F95 件②(a): 每值带 launch = lybra loop 在 Owner 信封授权(launch_harnesses)下拉起该 harness 的声明模板——argv 为参数数组(无 shell), 占位仅 {kickoff}(= 工位 `my-tasks --task-id <等待目标卡>` 的 next_card.kickoff 原文, 与工位 `/go <卡号>` 发送文本逐字节相同; AIPOS-F111: 按卡号取, 不要求该卡是工位选卡结果), cwd = 工位目录(enrollment_log land 事件), 模型由工位自身配置定(模板不写模型); events = stdout 事件流格式(loop 按此汇总一行式进度, 未知格式只计数); launch=null = 只支持手工(工位敲 /go)。新 harness = 加一值 + 一模板, 零代码",
       "values": [
         {
           "value": "pi",

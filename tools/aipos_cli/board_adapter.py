@@ -2969,6 +2969,18 @@ def _check_return_not_skeleton(
     return blocking_reasons
 
 
+def base_sync_command(branch: str, base: str) -> str:
+    """AIPOS-F117 件②(gap #75): BRANCH_WRONG_BASE 出口命令的唯一渲染——读 transitions.schema N5.branch_integration.base_sync
+    (基线合入卡分支, 禁 rebase/stash)。声明缺 / command 非串 / 占位不全 = SchemaLoadError(fail-closed, 不回落写死命令)。"""
+    from tools.schema_loader import get_branch_integration
+
+    decl = get_branch_integration().get("base_sync")
+    template = decl.get("command") if isinstance(decl, dict) else None
+    if not isinstance(template, str) or "{branch}" not in template or "{base}" not in template:
+        raise SchemaLoadError("transitions.schema.json N5.branch_integration.base_sync.command 未声明(须含 {branch} 与 {base})")
+    return template.replace("{branch}", branch).replace("{base}", base)
+
+
 def _check_branch_compliance(
     *,
     task_id: str,
@@ -3099,8 +3111,8 @@ def _check_branch_compliance(
                     blocking_reasons.append(
                         f"BRANCH_WRONG_BASE: 分支 '{branch_name}' 的基座不是当前 {expected_base}。"
                         f"merge-base: {merge_base[:8]}, 当前 {expected_base}: {base_commit[:8]}。"
-                        f"出口: 在产品仓执行 'git checkout {branch_name} && git rebase {expected_base}' "
-                        f"将分支变基到最新 {expected_base},或重新从当前 {expected_base} 创建分支。"
+                        f"出口: 在产品仓执行 '{base_sync_command(branch_name, expected_base)}' "
+                        f"把最新 {expected_base} 合入本分支(禁 rebase/stash, 声明 transitions N5.branch_integration.base_sync)。"
                     )
             else:
                 blocking_reasons.append(

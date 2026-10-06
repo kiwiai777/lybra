@@ -333,7 +333,9 @@ def test_f73e_item2_identity_split_declared_once_in_transitions_schema():
     assert {"return", "audit_verdict", "closure"} <= set(decl["applies_to"])
     assert "actor" in decl["actor_rule"] and "claim" in decl["actor_rule"] and "驱动方" in decl["actor_rule"]
     assert "只记不判" in decl["submitted_by_rule"]
-    assert "owner-dispatch" in decl["dispatch_exception"]
+    # AIPOS-F117 件②(gap #57): 派审 actor 随 AIPOS-F102 件①改读驱动方(next_resolver._driver_actor), 声明同步; 旧「owner-dispatch 族」字样退役
+    assert "驱动方" in decl["dispatch_exception"] and "_driver_actor" in decl["dispatch_exception"]
+    assert "owner-dispatch" not in decl["dispatch_exception"]
 
 
 def test_f73e_fixture_registered_in_runall_and_no_swallowed_exceptions():

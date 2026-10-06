@@ -153,7 +153,8 @@ class QueueStateProjectionTest(unittest.TestCase):
             "tools/aipos_cli/brief.py": "from tools.aipos_cli.task_loader import QUEUE_STATES",
             "web/board/app.py": "for state in QUEUE_STATES:",
             # flow_description 的队列副本随 AIPOS-F101 件① 删除第二推导核(_infer_task_status 等)一并消失, 不再是副本站点
-            "tools/aipos_cli/project_structure.py": "from tools.aipos_cli.task_loader import QUEUE_SKELETON_STATES, queue_state_ref",
+            # AIPOS-F117 件①: project_structure 导入不再自建队列骨架(委托 scaffold_project, 上一行 workspace_config 站点); 只剩导出计数读投影
+            "tools/aipos_cli/project_structure.py": "from tools.aipos_cli.task_loader import QUEUE_STATES, queue_root_for",
             "tools/aipos_cli/validator.py": "if queue_state not in QUEUE_STATES:",
         }
         for rel, needle in expectations.items():

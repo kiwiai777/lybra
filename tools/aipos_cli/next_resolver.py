@@ -2719,6 +2719,23 @@ def _derive_next_step(
             "notes": "任务被阻塞,需人工裁定恢复策略",
         }
 
+    # --- 其余终态(AIPOS-F117 件③, gap #62: 终态集合读 enums queue_state terminal 声明; completed 已在上方走 N6 落账)→ 无下一步 ---
+    from tools.aipos_cli.task_loader import QUEUE_TERMINAL_STATES
+
+    if queue_dir in QUEUE_TERMINAL_STATES:
+        return {
+            "task_id": task_id,
+            "derivable": True,
+            "current_node": None,
+            "current_state": queue_dir,
+            "triggered_by": "none",
+            "command": f"# 任务已处于终态 {queue_dir},无下一步",
+            "verb": "",
+            "missing_records": [],
+            "suggested_action": "无(任务已结束)",
+            "notes": f"终态 {queue_dir}(enums.schema queue_state terminal=true), 推导核不派生推进步",
+        }
+
     # --- 未知 queue 位置 ---
     return {
         "task_id": task_id,

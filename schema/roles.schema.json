@@ -145,14 +145,7 @@
         "class": "<builtin_role_name>"
       }
     },
-    "builtin_classes": [
-      "executor",
-      "owner",
-      "owner-dispatch",
-      "auditor",
-      "copilot",
-      "planner"
-    ],
+    "builtin_classes_source": "AIPOS-F117 件③(gap #62): 内置类 = 本文件 roles[].role 全集(含 advisor), 不另列清单——原手写 builtin_classes 6 值清单漏 advisor(AIPOS-R7A FIX-2 增 advisor 角色时未同步), 且产品零读取(custom_roles._builtin_role_names 经 service_mode.ROLE_SPECS 投影 roles[] 判定, 一直含 advisor), 是与 roles[] 不一致的第二份声明, 已删。唯一判定口 tools/aipos_cli/custom_roles.py _builtin_role_names。",
     "scope_resolution": "custom name → builtin class → this registry's role.scopes (call-time, AIPOS-347 link reuse)"
   },
   "write_boundary": {
