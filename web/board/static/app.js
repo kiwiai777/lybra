@@ -1456,7 +1456,7 @@ function draftCreatePayload() {
   const frontmatter = {
     task_id: draftValue("draft-task-id"),
     title: draftValue("draft-title"),
-    project: "ai-project-os",
+    // AIPOS-F108 件③: 不带 project 缺省——服务端读治理根 project.json#project, 未声明 = 拒
     assigned_to: draftValue("draft-assigned-to"),
     agent_instance: draftValue("draft-agent-instance"),
     context_bundle: draftValue("draft-context-bundle"),

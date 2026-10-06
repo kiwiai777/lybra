@@ -105,7 +105,7 @@ def _branch_advances_after_return(r) -> tuple[str, str]:
     _git(r.code_repo, "add", f"docs/other_card_{n}.md")
     _git(r.code_repo, "commit", "-q", "-m", "OTHER-CARD: 先合入 main")
     _code, worktree = nr.card_worktree_location(r.gov, TASK)
-    merged = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "merge", "--no-edit", "main"], cwd=worktree,
+    merged = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "merge", "--no-edit", nr.card_base_branch()], cwd=worktree,
                             capture_output=True, text=True)
     assert merged.returncode == 0, merged.stdout + merged.stderr
     return _git(worktree, "rev-parse", "HEAD"), _git(worktree, "rev-parse", "HEAD^{tree}")
@@ -134,11 +134,11 @@ def test_item1_full_chain_return_branch_advances_return_stale_rereturn_r2_audit_
     old_tip = _phase1_returned_and_round_claimed(lrig)
     ret1 = _fm(_records(lrig.gov, "returns", TASK)[0])
     _show(f"[①] 门交回记录 {ret1['return_id']} 绑定 artifact_subject={ret1.get('artifact_subject')}")
-    assert ret1["artifact_subject"]["commit_sha"] == old_tip and ret1["artifact_subject"]["branch"] == f"card/{TASK}"
+    assert ret1["artifact_subject"]["commit_sha"] == old_tip and ret1["artifact_subject"]["branch"] == nr.card_branch_name(TASK)
 
     report = _old_round_report(lrig, old_tip)
     new_tip, new_tree = _branch_advances_after_return(lrig)
-    _show(f"[①] 卡分支 card/{TASK}: 交回绑 {old_tip[:12]} → 执行体合 main 后 tip {new_tip[:12]}; R 已有审旧 tip 的报告 {report.name}")
+    _show(f"[①] 卡分支 {nr.card_branch_name(TASK)}: 交回绑 {old_tip[:12]} → 执行体合 main 后 tip {new_tip[:12]}; R 已有审旧 tip 的报告 {report.name}")
     assert new_tip != old_tip
 
     # 对照: F114 前推导核在此派 R 的裁决入门, 入口必拒 INGEST_TIP_MISMATCH(F107 实况)——本卡起推导核先判交回过期
@@ -212,7 +212,7 @@ def test_item1_full_chain_return_branch_advances_return_stale_rereturn_r2_audit_
     assert not (lrig.log / f"{R1}.kickoff").exists()  # 旧轮从未拉起审计体
     _show(f"[①] 真 finalize: {[(c.get('verdict'), c.get('message')) for c in real.calls]}")
     assert [c.get("verdict") for c in real.calls] == ["PASS"]
-    assert _git(lrig.code_repo, "merge-base", "--is-ancestor", new_tip, "main") == ""
+    assert _git(lrig.code_repo, "merge-base", "--is-ancestor", new_tip, nr.card_base_branch()) == ""
     fin = _fm(_records(lrig.gov, "finalizations", TASK)[0])
     assert fin["authorization_ref"] == verdicts[0]["verdict_id"]
     assert _records(lrig.gov, "closures", TASK) and _queue_file(lrig.gov, "completed", TASK).is_file()

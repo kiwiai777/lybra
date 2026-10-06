@@ -522,44 +522,15 @@ def check_stage_archive_gate(governance_root: Path, repo_root: Path | None = Non
 # finalize 读声明执行, 归属解析器读同一份声明; 生成什么格式就解析什么格式。
 # ---------------------------------------------------------------------------
 
-_DEFAULT_BRANCH_INTEGRATION = {
-    "branch_pattern": "card/{task_id}",
-    "merge_strategy": "no-ff",
-    "merge_message_format": "Merge {branch}: {summary} ({verdict_id})",
-    "auto_checkout": True,
-    "auto_checkout_next_step": {
-        "dirty_tree": {
-            "audience": "self",
-            "action": "处理未提交改动(提交或还原)后重试 finalize; 或手动 checkout main 后重试",
-            "command": None,
-        },
-        "not_on_main": {
-            "audience": "self",
-            "action": "手动切回 main 分支后重试 finalize(auto_checkout 已关闭或切回失败)",
-            "command": "git checkout main",
-        },
-    },
-}
+def _load_branch_integration() -> dict[str, Any]:
+    """读 N5.branch_integration 声明 (单一真相; AIPOS-F92: 读 Lybra 自身 schema, 不读项目产品仓)。
 
-
-def _load_branch_integration(repo_root: Path | None) -> dict[str, Any]:
-    """读 N5.branch_integration 声明 (单一真相); schema 缺失/损坏时回退默认。
-
-    回退仅用于 schema 目录不存在的环境 (单元测试夹具), 且回退值与声明一致。
+    AIPOS-F108 件②(M18): 原「schema 缺失/损坏回退写死默认(_DEFAULT_BRANCH_INTEGRATION) + except Exception: pass」已退役——
+    声明缺 = SchemaLoadError(fail-closed); 分支名 / 基线经 next_resolver.card_branch_name / card_base_branch 唯一派生。
     """
-    try:
-        from tools.schema_loader import get_branch_integration
-        branch_integration = get_branch_integration(repo_root)
-        if isinstance(branch_integration, dict):
-            return branch_integration
-    except Exception:
-        pass
-    return dict(_DEFAULT_BRANCH_INTEGRATION)
+    from tools.schema_loader import get_branch_integration
 
-
-def _branch_name_for_task(branch_pattern: str, task_id: str) -> str:
-    """按声明 branch_pattern 派生分支名 ('card/{task_id}' → 'card/AIPOS-C3C')."""
-    return branch_pattern.replace("{task_id}", task_id)
+    return get_branch_integration()
 
 
 def _git_branch_exists(repo_root: Path, branch_name: str) -> bool:
@@ -575,15 +546,16 @@ def _git_branch_exists(repo_root: Path, branch_name: str) -> bool:
         return False
 
 
-def _git_branch_merged_into_main(repo_root: Path, branch_name: str) -> bool:
-    """AIPOS-C3C/F11: 分支 tip 是否为 main 祖先 (已合并进 main)。
+def _git_branch_merged_into_main(repo_root: Path, branch_name: str, main_branch: str) -> bool:
+    """AIPOS-C3C/F11: 分支 tip 是否为基线分支祖先 (已合并进基线分支)。
 
     F11 前 HEAD 恒为 main (交回前切回 main 纪律), 查 HEAD 等价查 main; auto_checkout 落地后
-    HEAD 可能停在卡分支, 必须显式查 main, 否则卡分支对自身恒"已合并"→ 误跳过整合。
+    HEAD 可能停在卡分支, 必须显式查基线分支, 否则卡分支对自身恒"已合并"→ 误跳过整合。
+    AIPOS-F108 件②: 基线分支由调用方按 N5.branch_integration.base_branch 声明传入(next_resolver.card_base_branch), 零写死。
     """
     try:
         result = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", branch_name, "main"],
+            ["git", "merge-base", "--is-ancestor", branch_name, main_branch],
             cwd=str(repo_root),
             capture_output=True,
             text=True,
@@ -677,7 +649,7 @@ def _ensure_on_main_branch(
     workspace_root: Path,
     branch_integration: dict[str, Any],
     operations: list[str],
-    main_branch: str = "main",
+    main_branch: str | None = None,
 ) -> dict[str, Any] | None:
     """AIPOS-F11 大项A: auto_checkout 声明驱动 — 确保工作树在 main 分支。
 
@@ -688,6 +660,10 @@ def _ensure_on_main_branch(
     Returns:
         None = 已在 main(可继续); 否则返回拒绝体 {"blocked", "action", "message"}。
     """
+    if main_branch is None:
+        from tools.aipos_cli.next_resolver import card_base_branch
+
+        main_branch = card_base_branch(branch_integration)  # AIPOS-F108 件②: 基线读声明
     auto_checkout = bool(branch_integration.get("auto_checkout", True))
     current_branch = _git_current_branch(workspace_root)
     if current_branch == main_branch:
@@ -722,7 +698,7 @@ def _ensure_on_main_branch(
     next_step = _render_next_step(branch_integration, "not_on_main")
     message = (
         f"声明 auto_checkout=false, 当前在 '{current_branch}' 未自动切回 {main_branch} "
-        f"— 需人工切回 main 后再 finalize"
+        f"— 需人工切回 {main_branch} 后再 finalize"
         + (f"\n  {next_step}" if next_step else "")
     )
     operations.append(f"  → BLOCKED: {message}")
@@ -815,18 +791,20 @@ def _integrate_card_branch(
     Returns:
         {"branch_name", "action", "blocked", "message", "conflict_files"}
     """
-    if branch_integration is None:
-        branch_integration = _load_branch_integration(None)  # AIPOS-F92: 声明读 Lybra 自身 schema, 不读项目产品仓
+    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name
 
-    branch_pattern = str(branch_integration.get("branch_pattern") or "card/{task_id}")
+    if branch_integration is None:
+        branch_integration = _load_branch_integration()  # AIPOS-F92: 声明读 Lybra 自身 schema, 不读项目产品仓
+
+    branch_pattern = branch_integration.get("branch_pattern")
     merge_strategy = str(branch_integration.get("merge_strategy") or "no-ff")
     message_format = str(
         branch_integration.get("merge_message_format")
         or "Merge {branch}: {summary} ({verdict_id})"
     )
-    main_branch = "main"
-
-    branch_name = _branch_name_for_task(branch_pattern, task_id)
+    # AIPOS-F108 件②(M18): 分支名 / 基线唯一派生(声明缺 = SchemaLoadError, 不回落写死)
+    main_branch = card_base_branch(branch_integration)
+    branch_name = card_branch_name(task_id, branch_integration)
     base = {"branch_name": branch_name, "blocked": False, "conflict_files": []}
 
     operations.append(
@@ -853,13 +831,13 @@ def _integrate_card_branch(
             )
             operations.append(f"  → {message}")
             return {**base, "action": "blocked_branch_not_found", "blocked": True, "message": message}
-        message = f"无卡分支 {branch_name} (直提 main 的历史卡/无代码卡), 跳过整合"
+        message = f"无卡分支 {branch_name} (直提 {main_branch} 的历史卡/无代码卡), 跳过整合"
         operations.append(f"  → {message}")
         return {**base, "action": "skipped_no_branch", "message": message}
 
     # 已合并进 main? (分支 tip 为 main 祖先)
-    if _git_branch_merged_into_main(workspace_root, branch_name):
-        message = f"分支 {branch_name} 已合并 (tip 为 main 祖先), 跳过整合"
+    if _git_branch_merged_into_main(workspace_root, branch_name, main_branch):
+        message = f"分支 {branch_name} 已合并 (tip 为 {main_branch} 祖先), 跳过整合"
         operations.append(f"  → {message}")
         return {**base, "action": "skipped_already_merged", "message": message}
 
@@ -1184,9 +1162,12 @@ def finalize_task(
 
     # AIPOS-F70-fix2: 比对对象 = 待整合的卡分支顶端 (裁决绑的正是它), 非 main HEAD
     # ① 先获取 branch_integration 声明
-    branch_integration = _load_branch_integration(None)  # AIPOS-F92: 声明读 Lybra 自身 schema, 不读项目产品仓
-    branch_pattern = str(branch_integration.get("branch_pattern") or "card/{task_id}")
-    branch_name = _branch_name_for_task(branch_pattern, task_id)
+    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name
+
+    branch_integration = _load_branch_integration()  # AIPOS-F92: 声明读 Lybra 自身 schema, 不读项目产品仓
+    # AIPOS-F108 件②(M18): 分支名 / 基线唯一派生(声明缺 = SchemaLoadError, 不回落写死)
+    branch_name = card_branch_name(task_id, branch_integration)
+    base_branch = card_base_branch(branch_integration)
     
     # ② 获取卡分支顶端 commit (如果分支存在且未合并)
     required_commit_sha: str | None = None
@@ -1206,7 +1187,7 @@ def finalize_task(
         except subprocess.CalledProcessError:
             branch_tip = None
         
-        if branch_tip and not _git_branch_merged_into_main(workspace_root, branch_name):
+        if branch_tip and not _git_branch_merged_into_main(workspace_root, branch_name, base_branch):
             # 分支存在且未合并 → 裁决核对对象 = 卡分支 tip
             required_commit_sha = branch_tip
             operations.append(
@@ -1310,7 +1291,7 @@ def finalize_task(
     # 必须在 check_deployment_branch 之前执行, 否则卡分支上直接判"非 main"拦下,
     # 永远到不了整合步骤的自动切回("交回前切回 main"纪律就此退役)。
     # (branch_integration 已在上方 F70-fix2 修复中加载, 此处不重复)
-    ensure_main = _ensure_on_main_branch(workspace_root, branch_integration, operations)
+    ensure_main = _ensure_on_main_branch(workspace_root, branch_integration, operations, base_branch)
     if ensure_main is not None:
         return {
             "verdict": Verdict.BLOCK,
@@ -1334,7 +1315,7 @@ def finalize_task(
     # AIPOS-R4B-2: 部署分支强制 — finalize/deploy 只允许从 main 分支
     from tools.aipos_cli.deploy_gate import check_deployment_branch
     
-    branch_check = check_deployment_branch(workspace_root, required_branch="main")
+    branch_check = check_deployment_branch(workspace_root, required_branch=base_branch)  # AIPOS-F108 件②: 部署分支 = 基线声明
     operations.append(f"Branch check: {branch_check['message']}")
     
     # 如果要 push 或 deploy，必须在 main 分支上

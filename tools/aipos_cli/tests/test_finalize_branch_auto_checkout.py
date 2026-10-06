@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 from tools.aipos_cli.finalize import (
-    _DEFAULT_BRANCH_INTEGRATION,
     _integrate_card_branch,
+    _load_branch_integration,
 )
 
 
@@ -43,8 +43,10 @@ def _make_card_branch(repo: Path, task_id: str) -> None:
 
 def _bi(**overrides) -> dict:
     """深拷贝默认声明(含 auto_checkout_next_step), 允许逐项覆盖。"""
-    bi = dict(_DEFAULT_BRANCH_INTEGRATION)
-    bi["auto_checkout_next_step"] = dict(_DEFAULT_BRANCH_INTEGRATION["auto_checkout_next_step"])
+    # AIPOS-F108 件②: 写死默认声明 _DEFAULT_BRANCH_INTEGRATION 已退役, 夹具以真实声明为底
+    declared = _load_branch_integration()
+    bi = dict(declared)
+    bi["auto_checkout_next_step"] = dict(declared["auto_checkout_next_step"])
     bi.update(overrides)
     return bi
 

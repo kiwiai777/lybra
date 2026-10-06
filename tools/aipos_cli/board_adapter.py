@@ -2612,7 +2612,8 @@ def _check_return_self_checks(
 def _card_branch_changed_files(
     product_repo_root: Path, task_id: str, *, with_status: bool = False
 ) -> list[str] | list[tuple[str, str]] | None:
-    """AIPOS-F78 前置零④: 卡分支相对其与 main 的合并基的改动文件(`git diff main...card/<ID>`, 三点=merge-base)。
+    """AIPOS-F78 前置零④: 卡分支相对其与基线分支的合并基的改动文件(`git diff <base>...<卡分支>`, 三点=merge-base)。
+    AIPOS-F108 件②: 分支名 / 基线读 N5.branch_integration 声明(next_resolver.card_branch_name / card_base_branch), 零写死。
 
     worktree 模型下 main 与卡分支并行前进, 两点 diff(main..branch)会把 main 上别人的改动反向算进本卡 → 判据必错;
     三点 diff 只看卡分支自己的提交。git 失败返回 None(调用方跳过, 出 warning)。
@@ -2621,16 +2622,19 @@ def _card_branch_changed_files(
     [(状态字母, 改动后路径)] 供「本卡测试文件」判据 workspace_config.card_test_files 排除删除。"""
     import subprocess
 
-    branch_name = f"card/{task_id}"
+    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name
+
+    branch_name = card_branch_name(task_id)
+    base_branch = card_base_branch()
     try:
         result = subprocess.run(
-            ["git", "diff", f"main...{branch_name}", "--name-status"],
+            ["git", "diff", f"{base_branch}...{branch_name}", "--name-status"],
             cwd=product_repo_root, capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         import sys
 
-        print(f"Warning: git diff main...{branch_name} failed: {exc}", file=sys.stderr)
+        print(f"Warning: git diff {base_branch}...{branch_name} failed: {exc}", file=sys.stderr)
         return None
     if result.returncode != 0:
         return None
@@ -2647,10 +2651,12 @@ def _card_branch_changed_files(
 
 
 def _git_show_on_branch(product_repo_root: Path, task_id: str, relative_path: str) -> str | None:
-    """AIPOS-F78 前置零④: 读卡分支上的文件内容(`git show card/<ID>:<path>`), 不读共用检出文件系统。"""
+    """AIPOS-F78 前置零④: 读卡分支上的文件内容(`git show <卡分支>:<path>`), 不读共用检出文件系统。"""
     import subprocess
 
-    branch_name = f"card/{task_id}"
+    from tools.aipos_cli.next_resolver import card_branch_name
+
+    branch_name = card_branch_name(task_id)  # AIPOS-F108 件②: 分支名读 N5 branch_pattern 声明
     try:
         result = subprocess.run(
             ["git", "show", f"{branch_name}:{relative_path}"],
@@ -2680,12 +2686,13 @@ def _test_contract_for(repo_root: Path, product_repo_root: Path) -> tuple[dict[s
 def _card_test_files_for(changes: list[tuple[str, str]], contract: dict[str, Any]) -> tuple[list[str], str | None]:
     """AIPOS-F97 件①: 「本卡测试文件」(唯一判据 workspace_config.card_test_files)。返回 (测试文件, None) 或
     ([], TEST_FILES_UNRESOLVED 拒因)——改动集判不了 fail-closed 拒, 不当无测试放过。"""
+    from tools.aipos_cli.next_resolver import card_base_branch
     from tools.aipos_cli.workspace_config import card_test_files
 
     try:
         return card_test_files(changes, contract), None
     except ValueError as exc:
-        return [], f"{exc}。出口: 核对卡分支提交(git diff --name-status main...<卡分支>)后重交; 仍判不了请顾问出卡修判据"
+        return [], f"{exc}。出口: 核对卡分支提交(git diff --name-status {card_base_branch()}...<卡分支>)后重交; 仍判不了请顾问出卡修判据"
 
 
 def _contract_skip_warning(warnings: list[str] | None, text: str) -> None:
@@ -2740,8 +2747,10 @@ def _check_test_in_runall(
     # 2. 读取卡分支上的声明清单(禁读共用检出文件系统)
     runall_content = _git_show_on_branch(product_repo_root, task_id, runall_rel)
     if runall_content is None:
+        from tools.aipos_cli.next_resolver import card_branch_name
+
         return [(
-            f"TEST_NOT_IN_RUNALL: 项目声明的测试清单 {runall_rel}(来源 {contract.get('source')})在卡分支 card/{task_id} 上不存在。"
+            f"TEST_NOT_IN_RUNALL: 项目声明的测试清单 {runall_rel}(来源 {contract.get('source')})在卡分支 {card_branch_name(task_id)} 上不存在。"
             f"出口: ①在卡分支提交该清单; ②声明有误请顾问修正 project.json test_contract.runall_path"
         )]
     
@@ -2990,15 +2999,12 @@ def _check_branch_compliance(
     
     import subprocess
     
-    # 从 N5.branch_integration 读取分支模式
-    try:
-        from tools.schema_loader import get_branch_integration
-        branch_integration = get_branch_integration(product_repo_root)
-        branch_pattern = str(branch_integration.get("branch_pattern") or "card/{task_id}")
-        branch_name = branch_pattern.replace("{task_id}", task_id)
-    except Exception:
-        # Schema 读取失败,使用默认模式
-        branch_name = f"card/{task_id}"
+    # AIPOS-F108 件②(M18): 分支名 / 基线读 N5.branch_integration 声明(唯一读取口, 读 Lybra 自身 schema 而非项目产品仓);
+    # 原实现读产品仓 schema(非 lybra 形项目无 schema/ → except Exception 静默回落写死 card/{task_id}), 已退役; 声明缺 = SchemaLoadError
+    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name
+
+    branch_name = card_branch_name(task_id)
+    base_branch = card_base_branch()
     
     # 子判据 1: 分支存在
     try:
@@ -3031,7 +3037,7 @@ def _check_branch_compliance(
     # 子判据 2: 分支包含本卡至少一笔提交
     try:
         result = subprocess.run(
-            ["git", "log", f"main..{branch_name}", "--oneline"],
+            ["git", "log", f"{base_branch}..{branch_name}", "--oneline"],
             cwd=product_repo_root,
             capture_output=True,
             text=True,
@@ -3041,16 +3047,16 @@ def _check_branch_compliance(
             commits = [line for line in result.stdout.strip().split("\n") if line.strip()]
             if not commits:
                 blocking_reasons.append(
-                    f"BRANCH_NO_COMMITS: 分支 '{branch_name}' 相对 main 没有新提交。"
+                    f"BRANCH_NO_COMMITS: 分支 '{branch_name}' 相对 {base_branch} 没有新提交。"
                     f"出口: 在产品仓 '{branch_name}' 分支提交代码:"
                     f"'git add <files> && git commit -m \"feat({task_id}): <message>\"',"
                     f"然后再交回。"
                 )
         else:
-            # git log 失败,可能是分支与 main 无共同祖先
+            # git log 失败,可能是分支与基线分支无共同祖先
             blocking_reasons.append(
-                f"BRANCH_DIVERGED: 分支 '{branch_name}' 与 main 无共同历史,无法对比提交。"
-                f"出口: 检查分支是否从正确的 main 创建。"
+                f"BRANCH_DIVERGED: 分支 '{branch_name}' 与 {base_branch} 无共同历史,无法对比提交。"
+                f"出口: 检查分支是否从正确的 {base_branch} 创建。"
             )
     except subprocess.TimeoutExpired:
         blocking_reasons.append(
@@ -3061,9 +3067,9 @@ def _check_branch_compliance(
             f"BRANCH_COMMIT_CHECK_FAILED: 无法验证分支 '{branch_name}' 的提交: {e}。"
         )
     
-    # 子判据 3: merge-base 为当前 main(或 fix 卡声明的合法基座)
+    # 子判据 3: merge-base 为当前基线分支(或 fix 卡声明的合法基座)
     # 读取 fix 卡的合法基座(如果有)
-    expected_base = "main"  # 默认基座
+    expected_base = base_branch  # 默认基座 = N5.branch_integration.base_branch 声明
     fix_base_branch = str(task_metadata.get("fix_base_branch") or "").strip()
     if fix_base_branch:
         expected_base = fix_base_branch
@@ -3946,7 +3952,9 @@ def _build_audit_dispatch_preview(
     _src_tid = str(source_task.get("task_id") or "")
     # AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录, 与自动派生同一渲染函数(禁写死被审卡目录)
     _report_location = render_audit_report_location(repo_root, task_id_text)
-    _forensic_ref = f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={_code_repo} | 禁checkout卡分支(git diff main...card/{_src_tid}) | 报告落点={_report_location} | 不存在结论必附pwd+命令+输出"
+    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name  # AIPOS-F108 件②: 分支 / 基线读声明
+
+    _forensic_ref = f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={_code_repo} | 禁checkout卡分支(git diff {card_base_branch()}...{card_branch_name(_src_tid)}) | 报告落点={_report_location} | 不存在结论必附pwd+命令+输出"
     _existing_refs = list(audit_metadata.get("governance_refs") or [])
     audit_metadata["governance_refs"] = _existing_refs + [_forensic_ref]
     audit_body = "\n".join(

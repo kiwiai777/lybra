@@ -1097,6 +1097,8 @@ else
   echo "✗ tests/test_aipos_f104_enum_projection_invariant.py FAIL"
   overall=1
 fi
+# AIPOS-F108: 卡字段与分支声明单源(族 C-d: M9/M18/H6)——card.schema 落盘键全声明·字段序与缺省值读 schema·分支名/基线读 N5.branch_integration 零写死且改声明跟随·草稿 project 读 project.json 缺则拒; 连同改动的 finalize 分支整合/自动切回/卡号归属解析夹具
+run_pytest "tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_finalize_branch_integration.py" "$REPO_ROOT/tools/aipos_cli/tests/test_finalize_branch_auto_checkout.py" "$REPO_ROOT/tests/test_aipos_f5_task_id_pattern.py"
 # AIPOS-F102: 身份与角色类单源(族 B-b:H5/M4/M21)——非 lybra 项目派审 actor=驱动方/审计认领=audit_by/修复卡身份靶场·角色类统一拒·分组读 roles.schema class_groups·项目段缺即拒·棘轮 a 删条目(+本卡改动的 f23/derived_audit_verdict 节点)
 run_pytest "tests/test_aipos_f102_identity_single_source.py" "$REPO_ROOT/tests/test_aipos_f102_identity_single_source.py" "$REPO_ROOT/tools/aipos_cli/tests/test_f23_enroll.py::TestRoleFileMergeAndGuards::test_enroll_custom_role_executor_class_refused" "$REPO_ROOT/tools/aipos_cli/tests/test_derived_audit_verdict.py::DerivedAuditVerdictTests::test_derived_verdict_blocks_when_publish_record_missing"
 # AIPOS-F102(再合并): 343 契约节诊断用例改用可解析的非工位类实例(统一拒后 agent-01 会更早拒)——只登记本卡改动的节点

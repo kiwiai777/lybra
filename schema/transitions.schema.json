@@ -533,7 +533,9 @@
       "branch_integration": {
         "description": "AIPOS-C3C: 卡分支整合声明——卡分支怎么回 main 由本声明说了算, finalize 照声明自动做, 代码零写死。声明先行: 合并规则只写在这一段; finalize 合并信息生成与归属解析器 (deployment_authorization._task_id_from_commit_subject) 读同一份声明, 生成什么格式就解析什么格式。",
         "branch_pattern": "card/{task_id}",
-        "branch_pattern_note": "{task_id} 为占位符, finalize 以实际 task_id 替换; 解析器将 {task_id} 转为任务 ID 捕获组, 与 feat/fix/chore(ID) 家族兼容",
+        "branch_pattern_note": "{task_id} 为占位符, finalize 以实际 task_id 替换; 解析器将 {task_id} 转为任务 ID 捕获组, 与 feat/fix/chore(ID) 家族兼容。AIPOS-F108 件②(M18): 唯一读取口 next_resolver.card_branch_name(task_id), 产品代码零 f\"card/{…}\" 写死",
+        "base_branch": "main",
+        "base_branch_note": "AIPOS-F108 件②(M18): 卡分支的基线分支(建卡工作树的起点 / 交回判据「含本卡提交」「基座合法」与车道改动集 `git diff <base>...<branch>` 的对照基 / finalize 整合目标与部署分支强制)。唯一读取口 next_resolver.card_base_branch(); 产品代码零 \"main\" 写死。fix 卡声明 fix_base_branch 时交回判据以其为基座(卡面声明优先)",
         "merge_strategy": "no-ff",
         "merge_strategy_note": "保留分支历史, 不 squash, 不 ff-only",
         "merge_message_format": "Merge {branch}: {summary} ({verdict_id})",

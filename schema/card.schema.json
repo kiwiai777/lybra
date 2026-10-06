@@ -43,12 +43,14 @@
     "task_class": {
       "type": "string",
       "required": false,
+      "default": "simple",
       "$enum": "task_class",
       "description": "Task complexity classification"
     },
     "task_type": {
       "type": "string",
       "required": false,
+      "default": "one_shot",
       "$enum": "task_type",
       "description": "Task execution type"
     },
@@ -66,6 +68,7 @@
     "status": {
       "type": "string",
       "required": true,
+      "default": "pending",
       "$enum": "queue_state",
       "description": "Current task queue state"
     },
@@ -83,6 +86,7 @@
     "needs_owner": {
       "type": "boolean",
       "required": true,
+      "default": false,
       "description": "Whether task requires owner approval"
     },
     "needs_owner_reasons": {
@@ -94,6 +98,7 @@
     "output_target": {
       "type": "string",
       "required": true,
+      "default": "",
       "description": "Target output location or scope (AIPOS-F78: 存量声明; 车道目录以 lane.paths 为准, output_target 仅作 lane.paths 的派生来源与存量兼容)"
     },
     "harness": {
@@ -115,6 +120,7 @@
     "artifact_policy": {
       "type": "string",
       "required": true,
+      "default": "formal_write",
       "$enum": "artifact_policy",
       "description": "Artifact handling policy"
     },
@@ -451,12 +457,14 @@
     "polling_mode": {
       "type": "string",
       "required": false,
+      "default": "agent_polling",
       "$enum": "polling_mode",
       "description": "Task polling mode"
     },
     "claim_policy": {
       "type": "string",
       "required": false,
+      "default": "assigned_agent_only",
       "$enum": "claim_policy",
       "description": "Claim policy for task"
     },
@@ -478,6 +486,7 @@
     "report_mode": {
       "type": "string",
       "required": false,
+      "default": "forum_reply",
       "$enum": "report_mode",
       "description": "Reporting mode for task results"
     },
@@ -543,6 +552,81 @@
       "required": false,
       "format": "iso8601",
       "description": "Reopen timestamp"
+    },
+    "recurrence": {
+      "type": "string",
+      "required": false,
+      "default": "none",
+      "written_by": "draft_writer.build_template_payload(缺省, 读本声明 default) / external_intake_writer",
+      "description": "AIPOS-F108 件①(M9): 重复执行声明; 缺省 none(原写死在 draft_writer.DEFAULT_TEMPLATE_VALUES)"
+    },
+    "blocked_by": {
+      "type": "string",
+      "required": false,
+      "written_by": "transition_engine.apply_transition_metadata(block)",
+      "description": "AIPOS-F108 件①(M9): 置 blocked 的行动者(runtime field; unblock 时移除)"
+    },
+    "blocked_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "written_by": "transition_engine.apply_transition_metadata(block)",
+      "description": "AIPOS-F108 件①(M9): 置 blocked 时间(runtime field; unblock 时移除)"
+    },
+    "block_reason": {
+      "type": "string",
+      "required": false,
+      "written_by": "transition_engine.apply_transition_metadata(block, 带 reason 时)",
+      "description": "AIPOS-F108 件①(M9): 置 blocked 理由(unblock 时移除)"
+    },
+    "reopened_by": {
+      "type": "string",
+      "required": false,
+      "written_by": "transition_engine.apply_transition_metadata(reopen)",
+      "description": "AIPOS-F108 件①(M9): 重开的行动者"
+    },
+    "reopen_reason": {
+      "type": "string",
+      "required": false,
+      "written_by": "transition_engine.apply_transition_metadata(reopen, 带 reason 时)",
+      "description": "AIPOS-F108 件①(M9): 重开理由"
+    },
+    "withdrawn_by": {
+      "type": "string",
+      "required": false,
+      "written_by": "transition_engine.apply_transition_metadata(withdraw)",
+      "description": "AIPOS-F108 件①(M9): 撤回的行动者"
+    },
+    "withdrawn_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "written_by": "transition_engine.apply_transition_metadata(withdraw)",
+      "description": "AIPOS-F108 件①(M9): 撤回时间"
+    },
+    "withdrawal_reason": {
+      "type": "string",
+      "required": false,
+      "written_by": "transition_engine.apply_transition_metadata(withdraw, 带 reason 时)",
+      "description": "AIPOS-F108 件①(M9): 撤回理由"
+    },
+    "finalize_task_id": {
+      "type": "string",
+      "required": false,
+      "written_by": "顾问(卡面声明); 读取方 = transitions.schema artifact_ingest.finalization.finalize_task_id(card_field 指向本键)",
+      "description": "AIPOS-F108 件①(M9): finalize_mode=external 项目的外部 FINALIZE 卡号; 缺省规则 = <被审卡ID> + suffix, 唯一声明在 transitions.schema artifact_ingest.finalization.finalize_task_id"
+    },
+    "conclusion_note": {
+      "type": "string",
+      "required": false,
+      "written_by": "board_adapter mark_concluded / close(conclusion_note 参数, verbs.schema 声明)",
+      "description": "AIPOS-F108 件①(M9): 结卡说明(含承接声明时登记承接世系 continuation_task_id)"
+    },
+    "draft_validation_summary": {
+      "type": "string",
+      "required": false,
+      "written_by": "无(存量键: F87 前仅列于 draft_writer 旧字段序, 产品不再写入)",
+      "description": "AIPOS-F108 件①(M9): 存量草稿校验摘要键; 声明以免存量卡被判未知字段, 新卡不写"
     },
     "autonomy_mode": {
       "type": "string",
@@ -747,6 +831,53 @@
       "required": false,
       "description": "AIPOS-F75 件②: 返工轮次记录 — 每轮包含轮次/依据裁决ref/点杀清单/验收标准/销账时间戳。只能通过 queue_rework 门动词追加,禁手写"
     }
+  },
+  "frontmatter_order": {
+    "description": "AIPOS-F108 件①(M9, Owner 10-02 裁定: card.schema 字段序与落盘序一致): 卡 frontmatter 落盘字段序的唯一声明。record_writer.CARD_FRONTMATTER_ORDER 由本声明投影(代码零字段序清单); 列外的键按字母序排在其后(record_writer.render_markdown 既有规则)。每个键必须在 fields 声明(夹具 tests/test_aipos_f108_card_field_branch_single_source.py 锁)。字段缺省值读 fields.<键>.default(record_writer.card_field_defaults 投影)。",
+    "keys": [
+      "task_id",
+      "title",
+      "project",
+      "task_type",
+      "assigned_to",
+      "agent_instance",
+      "context_bundle",
+      "task_mode",
+      "task_class",
+      "complexity_note",
+      "model_tier",
+      "priority",
+      "status",
+      "created_by",
+      "needs_owner",
+      "output_target",
+      "artifact_policy",
+      "session_policy",
+      "context_isolation",
+      "artifact_scope",
+      "memory_scope",
+      "polling_mode",
+      "claim_policy",
+      "report_mode",
+      "recurrence",
+      "claim_id",
+      "claimed_by",
+      "claimed_at",
+      "active_session_id",
+      "last_session_id",
+      "blocked_by",
+      "blocked_at",
+      "block_reason",
+      "completed_by",
+      "completed_at",
+      "artifact_links",
+      "reopened_by",
+      "reopened_at",
+      "reopen_reason",
+      "withdrawn_by",
+      "withdrawn_at",
+      "withdrawal_reason"
+    ]
   },
   "runtime_fields": [
     "claim_id",
