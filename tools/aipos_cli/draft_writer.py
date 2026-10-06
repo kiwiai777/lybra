@@ -613,8 +613,10 @@ def _append_gate_contract_section(
     project_json = repo_root / "project.json"
     profile = resolve_collaboration_profile(project_json)
 
+    # AIPOS-F103 件④: 契约节信封按卡面身份 + 本卡判定(autonomy_policy.select_envelope), 带上 project/实例/审计实例
     task_fields = {k: v for k, v in metadata.items() if k in (
-        "task_mode", "output_target", "deploy", "audit", "owner_verify", "task_class"
+        "task_mode", "output_target", "deploy", "audit", "owner_verify", "task_class",
+        "project", "assigned_to", "agent_instance", "audit_by",
     )}
 
     # AIPOS-343: each failure mode gets a specific diagnostic message
@@ -634,8 +636,8 @@ def _append_gate_contract_section(
             f"AIPOS-343: contract section generation failed for task {task_id}. "
             f"Policy envelope resolution error: {exc}\n"
             f"  workspace_root={repo_root}\n"
-            f"  Fix: ensure active, non-expired policies exist under "
-            f"<workspace>/5_tasks/policies/ with agent_or_role matching the executor role."
+            f"  Fix: ensure an active, non-expired envelope under the project's policies_root "
+            f"(project.json paths.policies_root, default 5_tasks/policies/) whose agent_or_role covers the card's agent_instance."
         ) from exc
     except Exception as exc:
         # Any other unexpected failure — still loud, with context

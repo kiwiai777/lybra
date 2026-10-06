@@ -1099,6 +1099,14 @@ else
 fi
 # AIPOS-F108: 卡字段与分支声明单源(族 C-d: M9/M18/H6)——card.schema 落盘键全声明·字段序与缺省值读 schema·分支名/基线读 N5.branch_integration 零写死且改声明跟随·草稿 project 读 project.json 缺则拒; 连同改动的 finalize 分支整合/自动切回/卡号归属解析夹具
 run_pytest "tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_finalize_branch_integration.py" "$REPO_ROOT/tools/aipos_cli/tests/test_finalize_branch_auto_checkout.py" "$REPO_ROOT/tests/test_aipos_f5_task_id_pattern.py"
+# AIPOS-F103: 退役旧跨机连接器与执行体派工命令(N-a: N2)+信封挑选唯一实现 select_envelope(判据 match_claim_envelope, M5)·policies_root 声明·删除物零引用·文档棘轮基线减少
+run_pytest "tests/test_aipos_f103_retire_connector_single_envelope.py" "$REPO_ROOT/tests/test_aipos_f103_retire_connector_single_envelope.py"
+# AIPOS-F103 改动节点(343 契约节): 删旧解析模块类后, 契约节信封失败出声带诊断/幂等(余下 4 个用例 main 上即红, 不登记)
+run_pytest "tests/test_aipos_343_contract_section_no_silent_swallow.py (F103 改动节点)" "$REPO_ROOT/tests/test_aipos_343_contract_section_no_silent_swallow.py::TestContractSectionErrorPropagation::test_contract_section_error_contains_diagnostic_info" "$REPO_ROOT/tests/test_aipos_343_contract_section_no_silent_swallow.py::TestContractSectionErrorPropagation::test_idempotency_still_works"
+# AIPOS-F103 改动节点(信封签发 schema 一致性; 门侧 PreAuthEnvelope* 类依赖活体门 401, main 上即红, 不登记)
+run_pytest "tools/mcp_server/tests/test_autonomy_preauth_envelope.py (F103 改动节点)" "$REPO_ROOT/tools/mcp_server/tests/test_autonomy_preauth_envelope.py::OwnerDecisionSchemaConformanceTests"
+# AIPOS-F103 改动节点(仓根旧技能退役·技能只经 distribution 从 agents/skills 分发; PlannerRoleGateTests 依赖活体门 401, main 上即红, 不登记)
+run_pytest "tools/mcp_server/tests/test_planner_role.py (F103 改动节点)" "$REPO_ROOT/tools/mcp_server/tests/test_planner_role.py::PlannerSkillRetiredTests"
 # AIPOS-F102: 身份与角色类单源(族 B-b:H5/M4/M21)——非 lybra 项目派审 actor=驱动方/审计认领=audit_by/修复卡身份靶场·角色类统一拒·分组读 roles.schema class_groups·项目段缺即拒·棘轮 a 删条目(+本卡改动的 f23/derived_audit_verdict 节点)
 run_pytest "tests/test_aipos_f102_identity_single_source.py" "$REPO_ROOT/tests/test_aipos_f102_identity_single_source.py" "$REPO_ROOT/tools/aipos_cli/tests/test_f23_enroll.py::TestRoleFileMergeAndGuards::test_enroll_custom_role_executor_class_refused" "$REPO_ROOT/tools/aipos_cli/tests/test_derived_audit_verdict.py::DerivedAuditVerdictTests::test_derived_verdict_blocks_when_publish_record_missing"
 # AIPOS-F102(再合并): 343 契约节诊断用例改用可解析的非工位类实例(统一拒后 agent-01 会更早拒)——只登记本卡改动的节点

@@ -129,17 +129,23 @@ def resolve_audit_context(
                 agent_instance = token_entry.get(TOKEN_ENTRY_FIELDS["agent_instance"])
                 actor = token_entry.get("actor") or agent_instance
             
-            # AIPOS-R6C ⑩: policy_ref 自发现全序 (policy_resolver → env → 显式)
-            from tools.aipos_cli.policy_resolver import find_active_policy
-            owner_policy_ref = find_active_policy(workspace_root, role=role, policy_type="dev")
-            
+            # AIPOS-R6C ⑩: policy_ref 自发现全序 (信封唯一挑选 → env → 显式)
+            # AIPOS-F103 件④: 挑选唯一实现 autonomy_policy.select_envelope(判据 match_claim_envelope); 身份 = 上面
+            # token_resolver 单源挑中的同一凭据条目(实例/执行者/角色), 任务无关(判定对象 = 信封自身 task_selector)
+            from tools.aipos_cli.autonomy_policy import select_envelope
+
+            policy, _reasons = select_envelope(workspace_root, identities=[(agent_instance, actor, role)], task=None)
+            owner_policy_ref = str(policy["policy_id"]) if policy else None
+
             # Env override if set
             if not owner_policy_ref:
                 import os
                 owner_policy_ref = os.environ.get("LYBRA_OWNER_POLICY_REF")
-    except Exception:
-        # Discovery failed, use fallback
-        pass
+    except (OSError, ValueError) as exc:
+        # AIPOS-F103: 自发现失败出声(禁静默吞), 身份元数据/信封留空由下游显式参数补
+        import sys
+
+        print(f"Warning: audit context auto-discovery incomplete: {exc}", file=sys.stderr)
     
     if token and gate_url:
         source = "explicit"

@@ -1,12 +1,8 @@
 """AIPOS-268 + AIPOS-284 + AIPOS-284C + AIPOS-295 — ``agent watch --workspace-root``: filesystem pump v2 + health monitoring.
 
-This is candidate ⑫ of the 候选⑤⑫合流 — the ``agent watch`` verb carries TWO
-mutually-exclusive harness modes (selected on the CLI):
-
-- candidate ⑫ (this module, AIPOS-268 + AIPOS-284 + AIPOS-284C + AIPOS-295): ``--workspace-root`` — a PURE CLIENT
-  read-only mtime+path sentinel. No gate, no MCP, no token.
-- candidate ⑤ (AIPOS-248, ``agent_connector.py``): ``--gate-url`` — a stateless
-  pull for claimable tasks over the gate read tool.
+This is the ONLY ``agent watch`` mode (``--workspace-root``): the loop's sole wait primitive.
+AIPOS-F103: the former gate-pull mode (candidate ⑤, AIPOS-248) was retired together with the
+old cross-machine connector (Owner ruling 10-04: executors never claim/return themselves).
 
 A PURE CLIENT, read-only mtime+path sentinel. It snapshots two subtrees of a Lybra
 workspace — ``5_tasks/queue/**`` and ``5_tasks/records/**`` — and block-polls until a

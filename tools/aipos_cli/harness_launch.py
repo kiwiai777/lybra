@@ -95,7 +95,7 @@ def summarize_event(line: str, fmt: str) -> tuple[str | None, str]:
 # ---------------------------------------------------------------------------
 # AIPOS-F110 件①: transport=remote(ssh)。声明 verbs.schema lybra_loop.launch.remote; 与 local 共用 LaunchedHarness / pump /
 # 事件汇总 / terminate_group(按 plan.remote 分支), 不另起第二拉起实现。远端脚本固定(不拼值), 值一律作位置参数逐个引号化;
-# kickoff 只走 ssh stdin(kickoff_safe.KICKOFF_HAZARDS: ` $( ${ 换行 均不进任何命令行)。
+# kickoff 只走 ssh stdin(shell 危险字符 ` $( ${ 换行 均不进任何命令行; 原 kickoff 危险字符常量模块已随 AIPOS-F103 删除)。
 # ---------------------------------------------------------------------------
 
 _REMOTE_KEYS = ("ssh_argv", "remote_shell", "pgid_marker", "pgid_timeout_seconds", "probe_timeout_seconds", "kill_timeout_seconds")

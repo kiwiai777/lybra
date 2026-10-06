@@ -1,6 +1,6 @@
 """AIPOS-F32/F32B 回归夹具: 信封解析认自定义角色——按门注册表 class 匹配。
 
-病根(顾问实撞): policy_resolver._policy_matches_role 只做 agent_or_role 点分量
+病根(顾问实撞): 旧信封解析模块的角色匹配只做 agent_or_role 点分量
 对固定词 exec/audit 的直配 → 自定义角色信封(hbj-coder.chris-huibojin.kiwiai-dev)
 永不匹配 → chris 发卡链 BLOCK "cannot resolve policy envelope"。
 
@@ -16,6 +16,11 @@
 - ③ 注册表内改某自定义角色的 class → 匹配跟随(验完还原);
 - ④ 单元级: 未注册分量不匹配 / 不越类 / legacy role 字段 / 空目录;
 - ⑥ 与 run-all TS 夹具(tests/f32-custom-role-envelope.test.ts)同源场景。
+
+AIPOS-F103 件④ 改写: 信封挑选只留一个判据 autonomy_policy.match_claim_envelope(唯一挑选 autonomy_policy.select_envelope,
+与门同一判据)——信封 agent_or_role 精确覆盖实例/角色名/角色类才算覆盖; 旧「点分量 + 注册表 class 猜覆盖」的解析模块删除。
+本文件锁的「自定义角色卡发卡链能解析出 chris 信封」照常成立(卡面实例 = 信封 agent_or_role); 依赖旧猜法的
+注册表翻转/点分量/legacy role 字段/活体解析用例随模块删除, 改为下方唯一判据断言。
 
 跑法: python3 -m pytest tests/test_aipos_f32_custom_role_envelope.py -v
 """
@@ -258,29 +263,45 @@ class TestAcceptance1CustomRoleChainViaBin:
             (ws / "5_tasks" / "queue" / "pending").iterdir()
         )
 
-    def test_audit_envelope_resolves_to_pol_chris_audit_1(self, tmp_path):
-        """审计侧信封(audit 类)同样按注册表 class 解析。"""
-        from tools.aipos_cli.policy_resolver import find_active_policy
+    def test_envelopes_resolve_by_card_instance_single_criterion(self, tmp_path):
+        """AIPOS-F103 件④: 唯一挑选按实例身份精确覆盖(任务无关 = 信封自身 task_selector 为判定对象)。"""
+        from tools.aipos_cli.autonomy_policy import select_envelope
 
         ws = make_fixture_workspace(tmp_path)
-        assert find_active_policy(ws, role="audit", policy_type="audit") == "pol_chris_audit_1"
-        assert find_active_policy(ws, role="exec", policy_type="dev") == "pol_chris_coder_1"
+        coder, _ = select_envelope(ws, identities=[("hbj-coder.chris-huibojin.kiwiai-dev",) * 2 + (None,)])
+        auditor, _ = select_envelope(ws, identities=[("hbj-auditor.chris-huibojin.kiwiai-dev",) * 2 + (None,)])
+        assert coder["policy_id"] == "pol_chris_coder_1"
+        assert auditor["policy_id"] == "pol_chris_audit_1"
+        # 未被任何信封 agent_or_role 覆盖的身份(注册表角色名/实例)= 不匹配(零授权), 原因可读
+        none, reasons = select_envelope(ws, identities=[("exec.fx.kiwiai-dev", "exec.fx.kiwiai-dev", "hbj-coder")])
+        assert none is None and reasons and all("not covered by policy.agent_or_role" in r for r in reasons), reasons
 
-    def test_audit_card_contract_section_carries_pol_chris_audit_1(self, tmp_path):
-        """审计 R 卡契约节(auditor 角色)带 pol_chris_audit_1 信封。"""
+    def test_audit_card_contract_section_follows_gate_subject_rule(self, tmp_path):
+        """审计 R 卡契约节(auditor)信封 = 覆盖审计实例且覆盖被审卡(门 envelope_subject 规则, AIPOS-F90)的信封。
+        chris 原样拷贝的审计信封 task_selector_task_mode=audit 不覆盖被审 code 卡 → 出声失败(不烤进门会拒的信封);
+        补一张覆盖被审卡的审计信封 → 契约节带它。"""
         from tools.aipos_cli.gate_contract_section import render_gate_contract_section
 
         ws = make_fixture_workspace(tmp_path)
-        section = render_gate_contract_section(
-            {}, {"task_mode": "code", "audit": "required"}, role="auditor",
-            gate_url="http://127.0.0.1:7999", connection_json_rel=".lybra/connection.json",
-            workspace_display=str(ws), task_id="HBJ-F32-FX-1R",
-            workspace_root=ws,
-        )
-        assert "pol_chris_audit_1" in section
+        reviewed = {
+            "task_id": "HBJ-F32-FX-1", "task_mode": "code", "audit": "required", "project": "chris-huibojin",
+            "assigned_to": "hbj-coder.chris-huibojin.kiwiai-dev", "agent_instance": "hbj-coder.chris-huibojin.kiwiai-dev",
+            "audit_by": "hbj-auditor.chris-huibojin.kiwiai-dev",
+        }
+        kwargs = dict(role="auditor", gate_url="http://127.0.0.1:7999", connection_json_rel=".lybra/connection.json",
+                      workspace_display=str(ws), task_id="HBJ-F32-FX-1R", workspace_root=ws)
+        with pytest.raises(ValueError) as exc:
+            render_gate_contract_section({}, reviewed, **kwargs)
+        assert "audit_envelope" in str(exc.value) and "task_mode does not match" in str(exc.value)
+
+        (ws / "5_tasks" / "policies" / "pol_chris_audit_2.md").write_text(
+            POLICY_AUDIT.replace("pol_chris_audit_1", "pol_chris_audit_2").replace("task_selector_task_mode: audit", "task_selector_task_mode: code"),
+            encoding="utf-8")
+        section = render_gate_contract_section({}, reviewed, **kwargs)
+        assert "pol_chris_audit_2" in section and "pol_chris_audit_1" not in section
 
 
-# ── 验收③: 门注册表改 class → 匹配跟随(验完还原) ──────────────────────────
+# ── 验收③(AIPOS-F103 改写): 门注册表 class 不再参与信封挑选 ───────────────────
 
 
 def _gate_registry_file(ws: Path) -> Path:
@@ -297,132 +318,36 @@ def _flip_registry_class(ws: Path, role: str, new_class: str) -> None:
     reg.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-class TestAcceptance3RegistryClassFlip:
-    def test_flip_hbj_auditor_class_and_back(self, tmp_path):
-        from tools.aipos_cli.policy_resolver import find_active_policy
+class TestAcceptance3RegistryClassNotACriterion:
+    def test_flip_registry_class_does_not_change_selection(self, tmp_path):
+        """唯一判据 = 信封精确覆盖身份; 注册表 class 翻转不改挑选结果(禁第二判据)。"""
+        from tools.aipos_cli.autonomy_policy import select_envelope
 
         ws = make_fixture_workspace(tmp_path)
-
-        # 基态: audit 类信封可解析
-        assert find_active_policy(ws, role="audit", policy_type="audit") == "pol_chris_audit_1"
-
-        # 翻转: hbj-auditor 改挂 executor → audit 类无信封可解析(匹配跟随门注册表)
-        _flip_registry_class(ws, "hbj-auditor", "executor")
-        assert find_active_policy(ws, role="audit", policy_type="audit") is None
-
-        # 还原 → 恢复
-        _flip_registry_class(ws, "hbj-auditor", "auditor")
-        assert find_active_policy(ws, role="audit", policy_type="audit") == "pol_chris_audit_1"
-
-    def test_flip_hbj_coder_class_and_back(self, tmp_path):
-        from tools.aipos_cli.policy_resolver import find_active_policy
-
-        ws = make_fixture_workspace(tmp_path)
-
-        assert find_active_policy(ws, role="exec", policy_type="dev") == "pol_chris_coder_1"
-
-        # 翻转: hbj-coder 改挂 auditor → exec 类无信封可解析
+        ident = [("hbj-coder.chris-huibojin.kiwiai-dev", "hbj-coder.chris-huibojin.kiwiai-dev", None)]
+        assert select_envelope(ws, identities=ident)[0]["policy_id"] == "pol_chris_coder_1"
         _flip_registry_class(ws, "hbj-coder", "auditor")
-        assert find_active_policy(ws, role="exec", policy_type="dev") is None
-
-        # 还原 → 恢复
-        _flip_registry_class(ws, "hbj-coder", "executor")
-        assert find_active_policy(ws, role="exec", policy_type="dev") == "pol_chris_coder_1"
+        assert select_envelope(ws, identities=ident)[0]["policy_id"] == "pol_chris_coder_1"
 
 
-# ── 验收②: 内建角色零回归 + 边界语义 ──────────────────────────────────────────
+# ── 验收②(AIPOS-F103 改写): 边界语义 ─────────────────────────────────────────
 
 
-class TestAcceptance2BuiltinZeroRegression:
-    def test_direct_component_match_preserved(self):
-        from tools.aipos_cli.policy_resolver import _policy_matches_role
+class TestAcceptance2Boundaries:
+    def test_no_policies_dir_returns_none_with_reason(self, tmp_path):
+        from tools.aipos_cli.autonomy_policy import select_envelope
 
-        # 既有直配语义: exec.lybra.kiwiai-dev ↔ exec(无注册表也匹配)
-        assert _policy_matches_role({"agent_or_role": "exec.lybra.kiwiai-dev"}, "exec") is True
-        assert _policy_matches_role({"agent_or_role": "audit.lybra.kiwiai-dev"}, "audit") is True
-        assert _policy_matches_role({"agent_or_role": "audit.lybra.kiwiai-dev"}, "exec") is False
+        policy, reasons = select_envelope(tmp_path, identities=[("exec.x", "exec.x", None)])
+        assert policy is None and reasons == ["5_tasks/policies/ 下没有任何信封"]
 
-    def test_legacy_role_field_fallback_preserved(self):
-        from tools.aipos_cli.policy_resolver import _policy_matches_role
+    def test_expired_policy_never_selected(self, tmp_path):
+        from tools.aipos_cli.autonomy_policy import select_envelope
 
-        assert _policy_matches_role({"role": "exec"}, "exec") is True
-        assert _policy_matches_role({"role": "exec"}, "audit") is False
-
-    def test_live_lybra_workspace_resolution_unchanged(self):
-        """活体回归锚: 真 lybra 工作区解析值与修复前一致(直配优先, 不受注册表影响)。"""
-        from tools.aipos_cli.policy_resolver import find_active_policy
-
-        governance_root = Path("/home/kiwi/ai-project-os/2_projects/lybra")
-        if not (governance_root / "5_tasks" / "policies").exists():
-            pytest.skip("真实 lybra 治理仓不存在, 跳过活体回归")
-        assert find_active_policy(governance_root, role="exec", policy_type="dev") == "pol_lybra_dev_9"
-        assert find_active_policy(governance_root, role="audit", policy_type="audit") == "pol_lybra_audit_6"
-
-    def test_no_policies_dir_returns_none(self, tmp_path):
-        from tools.aipos_cli.policy_resolver import find_active_policy
-
-        assert find_active_policy(tmp_path, role="exec") is None
-
-
-class TestCustomRoleMatchingBoundaries:
-    """单元级边界: 未注册分量不匹配 / 不越类 / 自定义角色名裸用也匹配。"""
-
-    REGISTRY = {
-        "hbj-coder": {"class": "executor"},
-        "hbj-auditor": {"class": "auditor"},
-    }
-
-    def test_unregistered_component_never_matches(self):
-        from tools.aipos_cli.policy_resolver import _policy_matches_role
-
-        # 实例名/项目名分量不在注册表 → 不匹配(防提权: 注册表外零授权)
-        assert _policy_matches_role(
-            {"agent_or_role": "chris-huibojin.kiwiai-dev"}, "exec", custom_roles=self.REGISTRY
-        ) is False
-        assert _policy_matches_role(
-            {"agent_or_role": "kiwiai-dev"}, "exec", custom_roles=self.REGISTRY
-        ) is False
-
-    def test_custom_role_matches_only_its_class(self):
-        from tools.aipos_cli.policy_resolver import _policy_matches_role
-
-        assert _policy_matches_role(
-            {"agent_or_role": "hbj-coder.chris-huibojin.kiwiai-dev"}, "exec", custom_roles=self.REGISTRY
-        ) is True
-        assert _policy_matches_role(
-            {"agent_or_role": "hbj-coder.chris-huibojin.kiwiai-dev"}, "audit", custom_roles=self.REGISTRY
-        ) is False
-        assert _policy_matches_role(
-            {"agent_or_role": "hbj-auditor.chris-huibojin.kiwiai-dev"}, "audit", custom_roles=self.REGISTRY
-        ) is True
-
-    def test_bare_custom_role_name_matches(self):
-        from tools.aipos_cli.policy_resolver import _policy_matches_role
-
-        # agent_or_role 裸用自定义角色名(无点分量)也按注册表类匹配
-        assert _policy_matches_role(
-            {"agent_or_role": "hbj-coder"}, "exec", custom_roles=self.REGISTRY
-        ) is True
-
-    def test_without_registry_behavior_is_legacy(self):
-        from tools.aipos_cli.policy_resolver import _policy_matches_role
-
-        # custom_roles=None / {} → 与旧版完全一致(不匹配自定义角色分量)
-        assert _policy_matches_role(
-            {"agent_or_role": "hbj-coder.chris-huibojin.kiwiai-dev"}, "exec"
-        ) is False
-        assert _policy_matches_role(
-            {"agent_or_role": "hbj-coder.chris-huibojin.kiwiai-dev"}, "exec", custom_roles={}
-        ) is False
-
-    def test_builtin_class_candidates_derived_from_registry(self):
-        """类候选来自 roles 注册表单源(schema), 非本文件写死。"""
-        from tools.aipos_cli.policy_resolver import _builtin_class_candidates
-
-        assert _builtin_class_candidates("exec") == {"executor"}
-        assert _builtin_class_candidates("audit") == {"auditor"}
-        assert _builtin_class_candidates("executor") == {"executor"}
-        assert _builtin_class_candidates("") == set()
+        ws = make_fixture_workspace(tmp_path)
+        (ws / "5_tasks" / "policies" / "pol_chris_coder_1.md").write_text(
+            POLICY_CODER.replace("2099-09-30T00:00:00Z", "2026-01-01T00:00:00Z"), encoding="utf-8")
+        policy, reasons = select_envelope(ws, identities=[("hbj-coder.chris-huibojin.kiwiai-dev",) * 2 + (None,)])
+        assert policy is None and any("expired" in r for r in reasons), reasons
 
 
 if __name__ == "__main__":

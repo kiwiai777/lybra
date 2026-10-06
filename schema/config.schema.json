@@ -216,6 +216,11 @@
               "default": "task_cards",
               "description": "任务台账根(归档 RETURN/AUDIT-REPORT/CLOSURE)"
             },
+            "policies_root": {
+              "type": "string",
+              "default": "5_tasks/policies",
+              "description": "AIPOS-F103 件④: owner_autonomy_policy 信封目录(<policies_root>/<policy_id>.md; 相对治理根或绝对, 门只在治理根内落信封)。唯一读取口 autonomy_policy.policies_dir(经 workspace_config.project_paths); 信封挑选唯一实现 autonomy_policy.select_envelope(判据 match_claim_envelope)。"
+            },
             "manual_gate_mode": {
               "type": "boolean",
               "default": false,
@@ -820,10 +825,6 @@
         "type": "string",
         "description": "home 根(多项目治理根所在; AIPOS-226 优先级梯, workspace_config.resolve_home_root)"
       },
-      "LYBRA_MATERIAL_ROOT": {
-        "type": "string",
-        "description": "agent materialize 物料区根兜底(agent_materialize)"
-      },
       "LYBRA_MCP_TOKEN": {
         "type": "string",
         "description": "门 MCP 进程的传输令牌缺省变量名(可经 .lybra/config.json mcp.transport_token_env 改; http_sse)"
@@ -832,10 +833,6 @@
         "type": "string",
         "description": "身份兜底层(最低优先级): identity_resolution.keys.owner_policy_ref",
         "identity_key": "owner_policy_ref"
-      },
-      "LYBRA_PROJECT": {
-        "type": "string",
-        "description": "实例名项目段缺省(naming_profile.DEFAULT_INSTANCE_PROJECT)"
       },
       "LYBRA_PYTHON": {
         "type": "string",

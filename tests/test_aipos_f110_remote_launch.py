@@ -45,7 +45,7 @@ FAKE_SSH = REPO_ROOT / "tests" / "fake_ssh.py"
 TASK, AUDIT = f90.TASK, f90.AUDIT
 REMOTE_HOST = "mac-fake"     # 远端工位 ssh 目标(land 事件 host; 替身声明可达)
 GATE_ALIAS = "gate-fake"     # 远端视角的门机别名(替身声明可达)
-# 材料访问说明故意含 kickoff_safe 危险字符(` $( ${), 证 kickoff 全程不经任何 shell 展开
+# 材料访问说明故意含 shell 危险字符(` $( ${), 证 kickoff 全程不经任何 shell 展开
 MATERIAL = "经 ssh gate-fake 读写门机材料; 代码提交到卡分支并推回门机产品仓; 字面 `whoami` $(id) ${HOME} 不得被展开"
 
 

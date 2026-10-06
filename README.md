@@ -103,19 +103,6 @@ client; install `textual>=4.0` from PyPI — `lybra` itself is npm-only). On mac
 default CA paths, install `certifi` (or set `SSL_CERT_FILE`) for the TUI's HTTPS; Lybra never disables
 verification.
 
-## Legacy entry points (retirement pending)
-
-These still exist in the CLI but are **not** part of the flow above; follow-up cards remove them and
-this section together.
-
-- **Old agent-side pull connector (AIPOS-248)** — `skills/lybra-executor` had an agent say
-  **`lybra on`** / **`lybra off`** to poll the gate for claimable tasks. Executors no longer claim
-  work; claiming is done by the advisor's `lybra loop`; workstations are opened with `/go` or launched by an
-  authorized `lybra loop`.
-- **Earlier gate-console skills** — `skills/owner-console/` (Owner console with the owner token) and
-  `skills/lybra-planner/` (third-party planner: read-only truth + draft-submit) predate `lybra loop`;
-  the advisor skills now ship through `lybra sync` from `agents/skills/`.
-
 ## Scope & limits
 
 Every disclosed-deferred / discipline-held item is catalogued honestly, with the structure or

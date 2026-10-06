@@ -166,15 +166,6 @@ class LoopResult:
 # 件③ 信封校验(复用 owner_autonomy_policy 族)
 # ---------------------------------------------------------------------------
 
-def _policy_ids(governance_root: Path) -> list[str]:
-    from tools.aipos_cli.autonomy_policy import POLICIES_DIR
-
-    policies_dir = governance_root / POLICIES_DIR
-    if not policies_dir.is_dir():
-        return []
-    return sorted(p.stem for p in policies_dir.glob("*.md") if p.is_file())
-
-
 def find_envelope(
     governance_root: Path,
     *,
@@ -185,49 +176,31 @@ def find_envelope(
     now: datetime | None = None,
     driver_role: str | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    """在 5_tasks/policies/ 找覆盖本卡与驱动方身份的有效 PreAuthorized 信封。
+    """在项目声明的信封目录(project.json paths.policies_root)找覆盖本卡与驱动方身份的有效 PreAuthorized 信封。
 
-    判据 = autonomy_policy.match_claim_envelope 严格 AND(有效/时间窗/agent_or_role 覆盖驱动方实例或
-    advisor 角色/task_selector 覆盖本卡/额度未尽)。返回 (policy | None, 每个候选的未匹配原因)。
+    AIPOS-F103 件④: 挑选唯一实现 = autonomy_policy.select_envelope(判据只有 match_claim_envelope 严格 AND: 有效/时间窗/
+    agent_or_role 覆盖驱动方实例或 advisor 角色/task_selector 覆盖本卡/额度未尽), 本函数只组驱动方身份与判定对象。
+    返回 (policy | None, 每个候选的未匹配原因)。
     AIPOS-F78B 件③: 驱动方身份集合 = {实例, 工位角色名(如 chris 的 hbj-advisor), 角色类 advisor}——信封 agent_or_role 写其一即覆盖
-    (门侧 _match_driver_envelope 同口径)。
+    (门侧 _match_driver_envelope 同口径)。AIPOS-F90 件①: 判定对象(审计卡 = 被审卡)经 envelope_subject, 与门同一规则。
     """
-    from tools.aipos_cli.autonomy_policy import count_preauthorized_claims, envelope_subject, load_policy, match_claim_envelope
+    from tools.aipos_cli.autonomy_policy import select_envelope
 
-    now = now or datetime.now(timezone.utc)
-    candidates = [policy_id] if policy_id else _policy_ids(governance_root)
     roles = [r for r in (str(driver_role or "").strip(), DRIVER_ROLE) if r]
     roles = list(dict.fromkeys(roles))
-    reasons: list[str] = []
-    # AIPOS-F90 件①: 判定对象(审计卡 = 被审卡), 与门 _match_claim_envelope 同一规则
-    subject_id, subject_mode, subject_project = envelope_subject(
-        governance_root, task_id=task_id, task_mode=str(task_fm.get("task_mode") or ""), project=str(task_fm.get("project") or ""),
-        reviewed_task_id=str(task_fm.get("reviewed_task_id") or ""))
-    if not candidates:
-        reasons.append("5_tasks/policies/ 下没有任何信封")
-    for pid in candidates:
-        policy = load_policy(governance_root, pid)
-        if policy is None:
-            reasons.append(f"{pid}: 信封文件缺失或格式不合规(owner_autonomy_policy)")
-            continue
-        released = count_preauthorized_claims(governance_root, pid)
-        reason = ""
-        for role in roles:
-            matched, reason, _code = match_claim_envelope(
-                policy=policy,
-                task_id=subject_id,
-                task_mode=subject_mode,
-                project=subject_project,
-                agent_instance=driver_actor,
-                actor=driver_actor,
-                now=now,
-                released_count=released,
-                claiming_role=role,
-            )
-            if matched:
-                return policy, []
-        reasons.append(f"{pid}: {reason}")
-    return None, reasons
+    task = {
+        "task_id": task_id,
+        "task_mode": str(task_fm.get("task_mode") or ""),
+        "project": str(task_fm.get("project") or ""),
+        "reviewed_task_id": str(task_fm.get("reviewed_task_id") or ""),
+    }
+    return select_envelope(
+        governance_root,
+        identities=[(driver_actor, driver_actor, role) for role in roles],
+        task=task,
+        policy_id=policy_id,
+        now=now,
+    )
 
 
 def mint_hint(*, task_id: str, task_fm: dict[str, Any], driver_actor: str, now: datetime | None = None,

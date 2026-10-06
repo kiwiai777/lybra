@@ -11,9 +11,7 @@ projects 归属同源)。自定义角色 = 注册表里带 ``role_class`` 的非
 AIPOS-F32B 已废止该来源——角色是**门级**概念不是项目级(chris 工作区
 project.json 为空 {}, hbj-* 实际登记在 lybra 工作区的门凭据库)。本模块
 的加载路径不再读 project.json(防碎片化铁律: 角色→class 真相只有门注册表
-一处; 禁 project.json / 自建映射表 / 调用方参数喂三种变体;
-``_policy_matches_role`` 的 custom_roles 参数仅限测试注入, 生产路径一律
-从注册表取)。
+一处; 禁 project.json / 自建映射表 / 调用方参数喂三种变体)。
 
 Scope resolution (AIPOS-347 link reuse, unchanged):
   custom name → builtin class → ROLE_SPECS → scopes.
@@ -22,8 +20,9 @@ Scope resolution (AIPOS-347 link reuse, unchanged):
   zero code changes. Built-in six roles are untouched.
 
 F26C 分发类展开(distribute_tools.get_distributions_for_role →
-resolve_role_to_class → load_custom_roles)与本模块同一加载函数——
-信封解析(policy_resolver)与分发读同一份注册表(单源)。
+resolve_role_to_class → load_custom_roles)读本模块同一加载函数(单源)。
+AIPOS-F103 件④: 信封挑选不再按注册表 class 猜覆盖(旧按角色词挑选的解析模块已删), 唯一判据 = autonomy_policy.match_claim_envelope
+(信封 agent_or_role 精确覆盖实例/角色名/角色类, 与门同一判据)。
 """
 from __future__ import annotations
 

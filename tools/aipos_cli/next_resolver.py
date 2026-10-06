@@ -1180,33 +1180,6 @@ def extract_return_summary_text(content: str) -> str | None:
     return None
 
 
-def _resolve_active_policy(workspace_root: Path, task_id: str, role: str = "exec") -> str | None:
-    """从 records/claims 最新记录读取当前有效信封。
-    
-    第4轮要求:推导必须只认记录,从 records/claims 最新成功认领取当前信封,禁用陈旧来源。
-    """
-    try:
-        records_root = _resolve_governance_path_with_relative("records", workspace_root)
-        claims_dir = records_root / "claims" / task_id
-        
-        if not claims_dir.is_dir():
-            return None
-        
-        # 找最新记录(按修改时间)
-        claim_files = sorted(claims_dir.glob("claim_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not claim_files:
-            return None
-        
-        # 读 frontmatter
-        latest_claim = _read_frontmatter(claim_files[0])
-        return latest_claim.get("owner_policy_ref")
-    except OSError as exc:
-        import sys
-
-        print(f"Warning: claims dir unreadable for {task_id}: {exc}", file=sys.stderr)
-        return None
-
-
 def _find_connection_json(workspace_root: Path) -> str | None:
     """查找 connection.json 路径。"""
     # 优先治理仓(AIPOS-F106 件④: .lybra 经 ConnectionResolver.discover_lybra_dir 既有原语定位)
@@ -1726,13 +1699,13 @@ def _return_submission_step(workspace_root: Path, task_id: str, fm: dict[str, An
                             result_summary: str, return_path: Path, node: str, suggested_action: str, notes: str) -> dict[str, Any]:
     """交回步(N1→N2 首交 / AIPOS-F112 verdict_stale 重交回)的唯一构建: 驱动方见产物入口命令 `lybra artifact ingest --kind return`,
     shell_command = 入口内部执行的同一条薄壳命令(build_return_command_from_artifact 唯一构建), 禁第二条交回路径。"""
-    policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
-    driver_policy = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)  # AIPOS-F78B 件③
+    # AIPOS-F78B 件③; AIPOS-F103 件④: 信封 = 覆盖驱动方与本卡的有效信封(唯一挑选 autonomy_policy.select_envelope), 不另从认领记录取
+    driver_policy = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)
     cmd = build_return_command_from_artifact(
         workspace_root,
         task_id,
         claimer=claimer,
-        owner_policy_ref=driver_policy or policy_ref,
+        owner_policy_ref=driver_policy,
         connection_json=conn_arg,
         result_summary=result_summary,
         return_path=return_path,
@@ -1935,7 +1908,6 @@ def _derive_next_step(
                 "action": {"type": "artifact_invalid", "card": task_id, "path": str(verdict_artifact)},
             }
         agent_inst = actor
-        policy_ref = _resolve_active_policy(workspace_root, task_id, role="audit")
         
         # AIPOS-F73前置①: 从被审卡分支提取 artifact_subject (code 卡必填)
         reviewed_task_path, _ = _find_task_in_queue(workspace_root, reviewed_task_id)
@@ -1981,7 +1953,7 @@ def _derive_next_step(
             audit_task_id=task_id,
             actor=actor,
             agent_instance=agent_inst,
-            owner_policy_ref=driver_policy or policy_ref,
+            owner_policy_ref=driver_policy,
             connection_json=conn_arg,
             verdict=verdict,
             artifact_subject=artifact_subject,
@@ -2290,7 +2262,8 @@ def _derive_next_step(
             # 执行体零门(F73C)后不再"自产审计卡"; 审计卡已存在时派审幂等(AIPOS-C1 大项C②)。
             if not latest_audit_dispatch and (task_mode == "code" or audit_required):
                 audit_id = f"{task_id}R"
-                policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
+                # AIPOS-F103 件④: 信封 = 覆盖驱动方与本卡的有效信封(唯一挑选 autonomy_policy.select_envelope, 经 _driver_envelope_ref)
+                policy_ref = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)
                 # AIPOS-F102 件①: 派审 actor = 驱动方实例(roles.schema driver.role_class 对应的驱动方, _driver_actor 唯一实现:
                 # loop --actor → 治理根 .lybra/role instance → connection.json 驱动方 token 绑定实例), 原写死 lybra 身份退役;
                 # 解析不到 = 不可推导(点名缺项), 禁回退任何项目字面

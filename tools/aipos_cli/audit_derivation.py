@@ -666,9 +666,10 @@ Independent audit of task `{source_task_id}`.
         )
         try:
             conn = workspace_connection_info(repo_root)
+            # AIPOS-F103 件④: 审计信封身份 = 本审计卡的认领实例(audit_metadata.agent_instance), 判定对象 = 被审卡(source_metadata)
             section = render_gate_contract_section(
                 _resolve_profile(source_metadata, collaboration_profile, repo_root),
-                source_metadata, role="auditor",
+                {**source_metadata, "audit_by": audit_metadata.get("agent_instance") or source_metadata.get("audit_by")}, role="auditor",
                 gate_url=conn["gate_url"], connection_json_rel=conn["connection_json_rel"],
                 workspace_display=conn["workspace_display"], task_id=audit_task_id,
                 workspace_root=repo_root,
@@ -680,7 +681,7 @@ Independent audit of task `{source_task_id}`.
             section = (
                 "## 【认领与交回】\n\n"
                 f"> 生成失败(manual_gate_mode 项目): {exc}\n"
-                f"> 出口: 在 {repo_root}/5_tasks/policies/ 补 active 审计信封 / 修 .lybra/connection.json 后 regen 本卡。"
+                f"> 出口: 在信封目录(project.json paths.policies_root)补覆盖审计实例与被审卡的 active 信封 / 修 .lybra/connection.json 后 regen 本卡。"
             )
         audit_body = audit_body.rstrip() + "\n\n" + section + "\n"
 

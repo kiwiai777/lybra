@@ -15,8 +15,8 @@ harness/pi/
         └── go.ts        # 工位 /go: 只读 `lybra my-tasks` 输出开工(夹具在产品仓 tests/ts/)
 ```
 
-AIPOS-F91: 旧门循环扩展 `lybra-loop/`(gate-client/loop-context/loop-decisions/loop-engine/lybra-loop.ts)
-零门后无职责, 随退役整体删除; 其中仍在用的 TS 夹具与 run-all 迁至产品仓 `tests/ts/` 与 `tests/run-all.sh`。
+工位只有 `/go` 一个扩展; 推进卡片由顾问 `lybra loop` 完成(AIPOS-F91 起工位侧不再有门循环扩展),
+TS 夹具在产品仓 `tests/ts/`, 经 `tests/run-all.sh` 常驻。
 
 ## 分发
 

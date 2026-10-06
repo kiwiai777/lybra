@@ -236,6 +236,14 @@ def generate_onboarding_guide(
     home, home_source = resolve_home_root_with_source(explicit_root=home_root)
     gov = home / project_name
     gov_s = str(gov)
+    # AIPOS-F103 件④: 信封落点读项目声明 policies_root(Step 1 新建项目未声明 = 缺省 5_tasks/policies)
+    from tools.aipos_cli.autonomy_policy import policies_dir
+
+    pol_dir = policies_dir(gov)
+    try:
+        pol_rel = pol_dir.relative_to(gov).as_posix()
+    except ValueError:
+        pol_rel = str(pol_dir)
     host = (host_segment or socket.gethostname().split(".")[0]).strip()
     inst = _instances(project_name, host)
     owner_ws = _owner_workspace(home, owner_workspace)
@@ -371,18 +379,18 @@ def generate_onboarding_guide(
         "title": "【Owner 动作 ②】签三张信封(驱动方 / 执行 / 审计)",
         "command": step4,
         "purpose": (
-            f"一条命令经门 owner_decision_record envelope 路径签三张 PreAuthorized 信封并真实落盘到 {gov_s}/5_tasks/policies/: "
+            f"一条命令经门 owner_decision_record envelope 路径签三张 PreAuthorized 信封并真实落盘到 {pol_dir}/: "
             f"{policies['driver']} 覆盖驱动方 {inst['advisor']}(lybra loop 一阶段认领 / 交回 / 派审 / 裁决 / 结案), "
             f"{policies['executor']} 覆盖 {inst['executor']}, {policies['auditor']} 覆盖 {inst['auditor']}(审计卡按被审卡判定)。"
             "可选 --launch-harness pi(AIPOS-F95): 授权 lybra loop 在工位自动拉起 pi(缺省不加 = 手工模式, 工位敲 /go); 由 Owner 决定是否加"
         ),
-        "check": "输出三行 'signed <policy_id> covers <实例>' 与各自 'wrote 5_tasks/policies/<id>.md' / 'wrote 5_tasks/records/owner_decisions/...'(以门生记录为准)",
+        "check": f"输出三行 'signed <policy_id> covers <实例>' 与各自 'wrote {pol_rel}/<id>.md' / 'wrote 5_tasks/records/owner_decisions/...'(以门生记录为准)",
         "on_fail": {
             "PROJECT_SCOPE_DENIED": "所用凭据的 projects 不含本项目; 用 Owner 凭据(roles.schema owner project_scope=cross_project)",
             "OWNER_CONFIRMATION_REQUIRED / scope denied": "签信封须 Owner 凭据(owner_confirm); --connection-json 指向中央凭据库",
             "already exists": "该 policy_id 已签过(看输出已签几张); 未签的换新 policy_id 重跑",
         },
-        "creates": f"{gov_s}/5_tasks/policies/{{{policies['driver']},{policies['executor']},{policies['auditor']}}}.md + 三份 owner_decisions 记录",
+        "creates": f"{pol_dir}/{{{policies['driver']},{policies['executor']},{policies['auditor']}}}.md + 三份 owner_decisions 记录",
     })
 
     # ── Step 5: 顾问 enroll(治理根)+ 技能交付 ────────────────────────
@@ -645,8 +653,10 @@ def validate_step_prerequisites(
             guidance.append(f"产品仓声明不合规: {exc}; 重跑 Step 2")
 
     if step_number >= 5:
-        policies_dir = project_root / "5_tasks" / "policies"
-        if not policies_dir.is_dir() or not list(policies_dir.glob("pol_*.md")):
+        # AIPOS-F103 件④: 信封目录读项目声明 policies_root(唯一读取口 autonomy_policy.policies_dir / policy_ids)
+        from tools.aipos_cli.autonomy_policy import policy_ids
+
+        if not policy_ids(project_root):
             missing.append("envelopes")
             guidance.append("Step 4 未完成: 无信封文件; Owner 跑 Step 4 的 lybra envelope mint --confirm")
 

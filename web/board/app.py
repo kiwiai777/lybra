@@ -831,7 +831,7 @@ Lybra 服务端位置（AIPOS-286）：
    注：以上为常见 harness 示意（非穷举），桌面版/命令行均可；不支持 MCP 的 agent 可直接文件系统操作。
 
 2. 🔧 安装 Lybra CLI（标准第二步，完整功能需要）
-   完整功能（含 agent watch 耳朵/claim 全链）需要安装 Lybra CLI：
+   完整功能（含 agent watch 哨兵与 lybra loop 推进）需要安装 Lybra CLI：
    
    方式 A — 从 npm 安装（推荐）：
    npm install -g lybra
@@ -845,11 +845,9 @@ Lybra 服务端位置（AIPOS-286）：
    pip install "textual>=4.0"
    lybra --version
    
-   安装后可用双式 watch：
-   - 跨机模式（无需本地 workspace，通过 gate 拉取）：
-     lybra agent watch --gate-url {gate_url} --token <ADVISOR_TOKEN> --timeout 30
-   - 同机模式（agent 与 workspace 在同一台机器）：
+   安装后等待队列/记录变化用文件哨兵（纯客户端只读, 无需凭据）：
      lybra agent watch --workspace-root {workspace_root} --timeout 30
+   推进卡片用 lybra loop --task-id <卡ID>（执行体工位只敲 /go）。
 
 3. 📖 阅读 charter 与示例
    - Charter: {charter_path}
@@ -935,7 +933,7 @@ Before connecting to the gate, you must complete these checks:
    Note: Above are common harness examples (non-exhaustive), desktop/CLI both work; agents without MCP support can use direct filesystem operations.
 
 2. 🔧 Install Lybra CLI (standard step 2, needed for full functionality)
-   Full functionality (including agent watch listener / claim full chain) requires Lybra CLI:
+   Full functionality (including the agent watch sentinel and lybra loop) requires Lybra CLI:
    
    Method A — Install from npm (recommended):
    npm install -g lybra
@@ -949,11 +947,9 @@ Before connecting to the gate, you must complete these checks:
    pip install "textual>=4.0"
    lybra --version
    
-   After installation, use dual-mode watch:
-   - Cross-machine mode (no local workspace, pull through gate):
-     lybra agent watch --gate-url {gate_url} --token <ADVISOR_TOKEN> --timeout 30
-   - Same-machine mode (agent and workspace on same machine):
+   After installation, wait for queue/record changes with the filesystem sentinel (pure client, read-only, no token):
      lybra agent watch --workspace-root {workspace_root} --timeout 30
+   Drive a card with lybra loop --task-id <card-id> (executor workstations only type /go).
 
 3. 📖 Read charter & examples
    - Charter: {charter_path}
