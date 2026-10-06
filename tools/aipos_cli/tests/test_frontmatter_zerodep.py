@@ -200,18 +200,23 @@ class FrontmatterZerodepParityTests(unittest.TestCase):
         for state in ("pending", "claimed", "completed", "blocked"):
             (repo_root / "5_tasks" / "queue" / state).mkdir(parents=True)
         # AIPOS-343: active policies so contract section can resolve envelopes
+        # AIPOS-F103 件④: 唯一判据 match_claim_envelope——夹具信封须是真 owner_autonomy_policy 形, 覆盖卡面实例 + 本卡
         policies_dir = repo_root / "5_tasks" / "policies"
         policies_dir.mkdir(parents=True, exist_ok=True)
         (policies_dir / "pol_lybra_dev_7.md").write_text(
-            "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\n---\n# Dev\n",
+            "---\nrecord_type: owner_autonomy_policy\npolicy_id: pol_lybra_dev_7\nmode: PreAuthorized\nstatus: active\n"
+            "approved_by_owner: true\nowner_approval_ref: dec_pol_lybra_dev_7\nactive_from: '2020-01-01T00:00:00Z'\n"
+            "expires_at: '2099-01-01T00:00:00Z'\nagent_or_role: agent-01\ntask_selector_task_mode: code\n"
+            "task_selector_project: lybra\ntask_selector_task_ids: []\nmax_tasks: 50\n---\n# Dev\n",
             encoding="utf-8",
         )
         metadata = {
             "task_id": "AIPOS-WS5-PUB",
             "title": "WS5 publish parity test",
             "project": "lybra",
-            "assigned_to": "dev_claude",
-            "agent_instance": "agent-01",
+            # AIPOS-F102 件②: 卡角色类不可解析 = 拒发布; 夹具用注册表角色的实例名(原 dev_claude/agent-01 无角色类)
+            "assigned_to": "exec.lybra.test",
+            "agent_instance": "exec.lybra.test",
             "context_bundle": "default",
             "task_mode": "code",
             "priority": "medium",
@@ -236,7 +241,8 @@ class FrontmatterZerodepParityTests(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertIsInstance(data.get("lane"), dict, data.get("lane"))
         self.assertEqual(data["lane"].get("paths"), ["tools/"])
-        self.assertEqual(data["lane"].get("roles"), [])
+        # AIPOS-F102 件②: 卡角色类可解析(exec 实例 → executor), lane.roles 派生为 [executor](空列表形状由逐形状夹具覆盖)
+        self.assertEqual(data["lane"].get("roles"), ["executor"])
 
 
 class FrontmatterZerodepAdversarialTests(unittest.TestCase):
@@ -570,10 +576,15 @@ class StdlibWriterShapeTableTests(unittest.TestCase):
             for state in ("pending", "claimed", "completed", "blocked"):
                 (root / "5_tasks" / "queue" / state).mkdir(parents=True)
             (root / "5_tasks" / "policies").mkdir(parents=True)
+            # AIPOS-F103 件④: 唯一判据 match_claim_envelope——夹具信封须是真 owner_autonomy_policy 形, 覆盖卡面实例 + 本卡
             (root / "5_tasks" / "policies" / "pol_lybra_dev_7.md").write_text(
-                "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\n---\n# Dev\n", encoding="utf-8")
-            meta = {"task_id": "AIPOS-F100-PUB", "title": "零依赖发布: 冒号 #号", "project": "lybra", "assigned_to": "dev_claude",
-                    "agent_instance": "agent-01", "context_bundle": "default", "task_mode": "code", "priority": "medium",
+                "---\nrecord_type: owner_autonomy_policy\npolicy_id: pol_lybra_dev_7\nmode: PreAuthorized\nstatus: active\n"
+                "approved_by_owner: true\nowner_approval_ref: dec_pol_lybra_dev_7\nactive_from: '2020-01-01T00:00:00Z'\n"
+                "expires_at: '2099-01-01T00:00:00Z'\nagent_or_role: exec.lybra.test\ntask_selector_task_mode: code\n"
+                "task_selector_project: lybra\ntask_selector_task_ids: []\nmax_tasks: 50\n---\n# Dev\n", encoding="utf-8")
+            # AIPOS-F102 件②: 卡角色类不可解析 = 拒发布, 夹具用注册表角色的实例名(原 dev_claude/agent-01 无角色类)
+            meta = {"task_id": "AIPOS-F100-PUB", "title": "零依赖发布: 冒号 #号", "project": "lybra", "assigned_to": "exec.lybra.test",
+                    "agent_instance": "exec.lybra.test", "context_bundle": "default", "task_mode": "code", "priority": "medium",
                     "status": "pending", "created_by": "tester", "needs_owner": False, "artifact_policy": "formal_write",
                     "model_tier": "L2", "output_target": "tools/", "governance_refs": ["★依据: x", "Fix: 'q'"]}
 

@@ -2,7 +2,8 @@
 
 一句话: 把顾问逐步敲 `next --run` 变成一条命令——产物落盘就自动推进, 直到 completed;
 agent 步只等产物; 四出口、有界、fail-closed。
-AIPOS-F95: 唯一例外——Owner 信封 launch_harnesses 授权该卡 harness 且条件全满足时, 等待前按声明模板在本机工位拉起一次 harness
+AIPOS-F95: 唯一例外——Owner 信封 launch_harnesses 授权该卡 harness 且条件全满足时, 等待前按声明模板在工位拉起一次 harness
+(AIPOS-F110: 跨机工位经 ssh 同一分层拉起/清理, harness_launch remote transport)
 进程(过程汇总为一行式进度, 产物就绪/超时/早退/中断即清进程组); 否则退回手工模式(工位敲 /go)。无守护/调度/心跳/常驻。
 
 单一实现(禁第二推导核/第二哨兵/第二 claim 路径, 禁直调 board_adapter):
@@ -166,15 +167,6 @@ class LoopResult:
 # 件③ 信封校验(复用 owner_autonomy_policy 族)
 # ---------------------------------------------------------------------------
 
-def _policy_ids(governance_root: Path) -> list[str]:
-    from tools.aipos_cli.autonomy_policy import POLICIES_DIR
-
-    policies_dir = governance_root / POLICIES_DIR
-    if not policies_dir.is_dir():
-        return []
-    return sorted(p.stem for p in policies_dir.glob("*.md") if p.is_file())
-
-
 def find_envelope(
     governance_root: Path,
     *,
@@ -185,49 +177,31 @@ def find_envelope(
     now: datetime | None = None,
     driver_role: str | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    """在 5_tasks/policies/ 找覆盖本卡与驱动方身份的有效 PreAuthorized 信封。
+    """在项目声明的信封目录(project.json paths.policies_root)找覆盖本卡与驱动方身份的有效 PreAuthorized 信封。
 
-    判据 = autonomy_policy.match_claim_envelope 严格 AND(有效/时间窗/agent_or_role 覆盖驱动方实例或
-    advisor 角色/task_selector 覆盖本卡/额度未尽)。返回 (policy | None, 每个候选的未匹配原因)。
+    AIPOS-F103 件④: 挑选唯一实现 = autonomy_policy.select_envelope(判据只有 match_claim_envelope 严格 AND: 有效/时间窗/
+    agent_or_role 覆盖驱动方实例或 advisor 角色/task_selector 覆盖本卡/额度未尽), 本函数只组驱动方身份与判定对象。
+    返回 (policy | None, 每个候选的未匹配原因)。
     AIPOS-F78B 件③: 驱动方身份集合 = {实例, 工位角色名(如 chris 的 hbj-advisor), 角色类 advisor}——信封 agent_or_role 写其一即覆盖
-    (门侧 _match_driver_envelope 同口径)。
+    (门侧 _match_driver_envelope 同口径)。AIPOS-F90 件①: 判定对象(审计卡 = 被审卡)经 envelope_subject, 与门同一规则。
     """
-    from tools.aipos_cli.autonomy_policy import count_preauthorized_claims, envelope_subject, load_policy, match_claim_envelope
+    from tools.aipos_cli.autonomy_policy import select_envelope
 
-    now = now or datetime.now(timezone.utc)
-    candidates = [policy_id] if policy_id else _policy_ids(governance_root)
     roles = [r for r in (str(driver_role or "").strip(), DRIVER_ROLE) if r]
     roles = list(dict.fromkeys(roles))
-    reasons: list[str] = []
-    # AIPOS-F90 件①: 判定对象(审计卡 = 被审卡), 与门 _match_claim_envelope 同一规则
-    subject_id, subject_mode, subject_project = envelope_subject(
-        governance_root, task_id=task_id, task_mode=str(task_fm.get("task_mode") or ""), project=str(task_fm.get("project") or ""),
-        reviewed_task_id=str(task_fm.get("reviewed_task_id") or ""))
-    if not candidates:
-        reasons.append("5_tasks/policies/ 下没有任何信封")
-    for pid in candidates:
-        policy = load_policy(governance_root, pid)
-        if policy is None:
-            reasons.append(f"{pid}: 信封文件缺失或格式不合规(owner_autonomy_policy)")
-            continue
-        released = count_preauthorized_claims(governance_root, pid)
-        reason = ""
-        for role in roles:
-            matched, reason, _code = match_claim_envelope(
-                policy=policy,
-                task_id=subject_id,
-                task_mode=subject_mode,
-                project=subject_project,
-                agent_instance=driver_actor,
-                actor=driver_actor,
-                now=now,
-                released_count=released,
-                claiming_role=role,
-            )
-            if matched:
-                return policy, []
-        reasons.append(f"{pid}: {reason}")
-    return None, reasons
+    task = {
+        "task_id": task_id,
+        "task_mode": str(task_fm.get("task_mode") or ""),
+        "project": str(task_fm.get("project") or ""),
+        "reviewed_task_id": str(task_fm.get("reviewed_task_id") or ""),
+    }
+    return select_envelope(
+        governance_root,
+        identities=[(driver_actor, driver_actor, role) for role in roles],
+        task=task,
+        policy_id=policy_id,
+        now=now,
+    )
 
 
 def mint_hint(*, task_id: str, task_fm: dict[str, Any], driver_actor: str, now: datetime | None = None,
@@ -352,6 +326,7 @@ class LaunchPlan:
     cwd: str = ""
     events: str = ""
     kickoff: str = ""
+    remote: dict[str, Any] = field(default_factory=dict)  # AIPOS-F110: transport=remote 时 {host, dir, identity_source}
 
     def to_dict(self) -> dict[str, Any]:
         return {"card": self.card, "harness": self.harness, "instance": self.instance, "launched": not self.refusal,
@@ -391,19 +366,29 @@ def _render_manual_hint(decl: dict[str, Any], *, harness: str, instance: str, lo
     return template
 
 
-def workstation_kickoff(governance_root: Path, workstation: str, card: str) -> tuple[str, str]:
+def workstation_kickoff(governance_root: Path, workstation: str, card: str, *,
+                        remote: bool = False, instance: str = "") -> tuple[str, str]:
     """该工位 `my-tasks --workstation <dir> --task-id <等待目标卡> --json` 的 next_card.kickoff(与工位 `/go <卡号>` 同一产品输出,
     进程内同一 CLI 实现)。
 
     AIPOS-F111 件①: 按卡号取开工提示——只核验等待目标卡这一张(判据 next_resolver.kickoff_refusal, 与 /go <卡号> 同一判据:
     非 claimed/非本实例认领/已结案/产物已交 → 拒), 不再要求该卡是工位 next_card 选卡结果, 同一工位同时在办多张卡可各自拉起。
-    返回 (kickoff, refusal): 产品拒因(原样转述) / kickoff 空 / 工位治理根 ≠ 本治理根 / 产品输出与指向不一致 = refusal 非空。"""
+    返回 (kickoff, refusal): 产品拒因(原样转述) / kickoff 空 / 工位治理根 ≠ 本治理根 / 产品输出与指向不一致 = refusal 非空。
+
+    AIPOS-F110 件②: remote=True = 跨机工位(门机读不到远端工位目录): 身份 = land 事件实例 → 同一 CLI
+    `--workspace-root <本治理根> my-tasks --actor <实例> --task-id <卡> --remote-workstation --json`(同一 kickoff_refusal /
+    选卡 / 开工提示渲染单源, 产品附门机材料段), 本函数不另渲染、不另判。"""
     from tools.aipos_cli.aipos_cli import main as cli_main
 
+    if remote:
+        argv = ["--workspace-root", str(governance_root), "my-tasks", "--actor", instance, "--task-id", card,
+                "--remote-workstation", "--json"]
+    else:
+        argv = ["my-tasks", "--workstation", workstation, "--task-id", card, "--json"]
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = cli_main(["my-tasks", "--workstation", workstation, "--task-id", card, "--json"])
+            rc = cli_main(argv)
         except SystemExit as exc:
             rc = exc.code if isinstance(exc.code, int) else 2
     if rc != 0:
@@ -412,9 +397,12 @@ def workstation_kickoff(governance_root: Path, workstation: str, card: str) -> t
         data = json.loads(out.getvalue())
     except ValueError as exc:
         return "", f"工位 my-tasks --task-id {card} 输出非 JSON: {exc}"
-    ws_root = str((data.get("workstation") or {}).get("governance_root") or "")
-    if not ws_root or Path(ws_root).resolve() != Path(governance_root).resolve():
-        return "", f"工位治理根 {ws_root or '(未解析)'} ≠ 本 loop 治理根 {governance_root}"
+    if not remote:
+        ws_root = str((data.get("workstation") or {}).get("governance_root") or "")
+        if not ws_root or Path(ws_root).resolve() != Path(governance_root).resolve():
+            return "", f"工位治理根 {ws_root or '(未解析)'} ≠ 本 loop 治理根 {governance_root}"
+    elif str(data.get("actor") or "") != instance:
+        return "", f"my-tasks --actor {instance} 输出 actor={data.get('actor')}, 与 land 事件实例不一致"
     next_card = data.get("next_card")
     if not isinstance(next_card, dict):
         excluded = [e for e in (data.get("next_card_excluded") or []) if isinstance(e, dict)]
@@ -483,18 +471,21 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
     if not plan.location.get("found"):
         return refuse(f"工位位置定位不到: {plan.location.get('reason')}")
     if not plan.location.get("supported"):
-        return refuse(f"transport {plan.location.get('transport')} 已声明未支持(跨机拉起待跨机工位卡)")
+        return refuse(f"transport {plan.location.get('transport')} 已声明未支持(enums.schema workstation_transport)")
     workstation = str(plan.location["dir"])
+    argv_template = [str(a) for a in template["argv"]]
+    unknown = [a for a in argv_template if "{" in a and a != "{kickoff}"]
+    if unknown or "{kickoff}" not in argv_template:
+        return refuse(f"harness {plan.harness} launch.argv 占位非法(仅允许整参数 {{kickoff}}): {argv_template}")
+    plan.events = str(template.get("events") or "")
+    if plan.location.get("transport") == "remote":
+        return _plan_remote_launch(governance_root, plan, decl, argv_template, refuse)
     try:
         identity = workstation_identity(workstation)
     except WorkstationIdentityError as exc:
         return refuse(f"工位身份不可解析: {exc}")
     if identity.get("instance") != plan.instance:
         return refuse(f"工位 {workstation} 的实例 {identity.get('instance')} ≠ 卡实例 {plan.instance}")
-    argv_template = [str(a) for a in template["argv"]]
-    unknown = [a for a in argv_template if "{" in a and a != "{kickoff}"]
-    if unknown or "{kickoff}" not in argv_template:
-        return refuse(f"harness {plan.harness} launch.argv 占位非法(仅允许整参数 {{kickoff}}): {argv_template}")
     if not shutil.which(argv_template[0]):
         return refuse(f"harness 可执行 {argv_template[0]} 不在驱动方 PATH")
     kickoff, why = workstation_kickoff(governance_root, workstation, card)
@@ -503,8 +494,121 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
     plan.kickoff = kickoff
     plan.argv = [kickoff if a == "{kickoff}" else a for a in argv_template]
     plan.cwd = workstation
-    plan.events = str(template.get("events") or "")
     return plan
+
+
+def _plan_remote_launch(governance_root: Path, plan: LaunchPlan, decl: dict[str, Any], argv_template: list[str],
+                        refuse: Callable[[str], LaunchPlan]) -> LaunchPlan:
+    """AIPOS-F110: transport=remote 的拉起判定(plan_launch 内分支, 同一 refusal → 手工提示出口)。
+
+    ①身份 = land 事件实例(门机读不到远端 .lybra/role; workstation_location 按实例取最新 land 事件, 实例即 plan.instance);
+    ②材料 = project.json workstations.<实例>(gate_ssh_alias / material_access), 未声明/含凭据 = 拒并提示补声明;
+    ③kickoff = 同一 my-tasks(--actor <实例> --task-id --remote-workstation: 同一 render_kickoff 附门机材料段);
+    ④ssh 探测可达 + 远端工位目录 + 远端 harness 可执行(不可达 = 不拉起, 退回手工并提示原因);
+    ⑤argv = ssh 前缀 + [host, 远端固定脚本 + 引号化参数], kickoff 只走 stdin。"""
+    import shutil
+
+    from tools.aipos_cli.harness_launch import probe_remote, remote_declaration, remote_launch_command
+    from tools.aipos_cli.workspace_config import WorkstationDeclarationError, project_workstation
+
+    host, workstation = str(plan.location.get("host") or ""), str(plan.location["dir"])
+    try:
+        remote_decl = remote_declaration(decl)
+        project_workstation(governance_root, plan.instance)  # 材料声明先核(my-tasks --remote-workstation 渲染时同一读取口)
+    except WorkstationDeclarationError as exc:
+        return refuse(f"跨机工位 {host}:{workstation} 开工材料未声明齐({exc}); 补声明: lybra project set-workstation <项目名> "
+                      f"--instance {plan.instance} --gate-ssh-alias <门机别名> --material-access <材料访问说明>")
+    except (ValueError, OSError) as exc:
+        return refuse(f"跨机拉起声明读取失败: {exc}")
+    ssh_exe = str(remote_decl["ssh_argv"][0])
+    if not shutil.which(ssh_exe):
+        return refuse(f"ssh 执行器 {ssh_exe} 不在驱动方 PATH")
+    kickoff, why = workstation_kickoff(governance_root, workstation, plan.card, remote=True, instance=plan.instance)
+    if why:
+        return refuse(why)
+    try:
+        argv = remote_launch_command(remote_decl, host, workstation, argv_template)
+    except ValueError as exc:
+        return refuse(f"跨机拉起命令不可构造: {exc}")
+    unreachable = probe_remote(remote_decl, host, workstation, argv_template[0])
+    if unreachable:
+        return refuse(unreachable)
+    plan.kickoff, plan.argv, plan.cwd = kickoff, argv, workstation
+    plan.remote = {"host": host, "dir": workstation, "identity_source": "land_event"}
+    return plan
+
+
+def check_workstation(project_root: Path, instance: str, harness: str) -> dict[str, Any]:
+    """AIPOS-F110 件③: `lybra project check-workstation` —— loop 拉起前置的逐项只读检查(与 plan_launch 同一读取口/同一 ssh 代码路径):
+    land 事件位置 → (local) 工位身份 + harness 可执行在本机 PATH; (remote) 材料声明 + 门机→工位 ssh 探测(目录 + harness 可执行)
+    + 工位→门机反向可达(远端经声明的 gate_ssh_alias 以同一 ssh 前缀 `test -d <门机治理根>`)。不起 harness、不写任何文件。"""
+    import shutil
+
+    from tools.aipos_cli.autonomy_policy import launchable_harnesses
+    from tools.aipos_cli.charter_render import WorkstationIdentityError, workstation_identity
+    from tools.aipos_cli.enrollment import workstation_location
+    from tools.aipos_cli.harness_launch import probe_remote, remote_check_reverse, remote_declaration
+    from tools.aipos_cli.workspace_config import WorkstationDeclarationError, project_workstation
+    from tools.schema_loader import SchemaLoadError
+
+    checks: list[dict[str, Any]] = []
+
+    def check(name: str, ok: bool, detail: str) -> bool:
+        checks.append({"check": name, "ok": bool(ok), "detail": detail})
+        return bool(ok)
+
+    def report() -> dict[str, Any]:
+        return {"ok": all(c["ok"] for c in checks), "instance": instance, "harness": harness, "checks": checks}
+
+    try:
+        loc = workstation_location(project_root, instance)
+    except (ValueError, OSError, SchemaLoadError) as exc:
+        check("land 事件位置", False, f"读取失败: {exc}")
+        return report()
+    if not check("land 事件位置", bool(loc.get("found")),
+                 f"{loc.get('host') or '(本机, 存量缺 host)'}:{loc.get('dir')} transport={loc.get('transport')}" if loc.get("found")
+                 else str(loc.get("reason"))):
+        return report()
+    check("transport 已支持", bool(loc.get("supported")), f"{loc.get('transport')}(enums.schema workstation_transport)")
+    try:
+        template = launchable_harnesses().get(harness)
+    except SchemaLoadError as exc:
+        check("harness launch 模板", False, f"声明读取失败: {exc}")
+        return report()
+    if not template or not isinstance(template.get("argv"), list) or not template["argv"]:
+        check("harness launch 模板", False, f"{harness}: launch=null 或缺 argv(只支持手工)")
+        return report()
+    check("harness launch 模板", True, f"{harness}: {template['argv']}")
+    exe = str(template["argv"][0])
+    workstation = str(loc["dir"])
+    if loc.get("transport") != "remote":
+        try:
+            identity = workstation_identity(workstation)
+            check("工位身份", identity.get("instance") == instance, f"{workstation}/.lybra/role instance={identity.get('instance')}")
+        except WorkstationIdentityError as exc:
+            check("工位身份", False, str(exc))
+        check("harness 可执行(本机 PATH)", bool(shutil.which(exe)), exe)
+        return report()
+    host = str(loc.get("host") or "")
+    try:
+        material = project_workstation(project_root, instance)
+        check("材料声明", True, f"gate_ssh_alias={material['gate_ssh_alias']}; material_access={material['material_access']}")
+    except WorkstationDeclarationError as exc:
+        material = None
+        check("材料声明", False, f"{exc}; 补声明: lybra project set-workstation")
+    try:
+        remote_decl = remote_declaration(launch_declaration(load_loop_contract()))
+    except (ValueError, SchemaLoadError) as exc:
+        check("remote 声明", False, str(exc))
+        return report()
+    forward = probe_remote(remote_decl, host, workstation, exe)
+    if not check(f"门机→工位 ssh {host}(目录 + {exe})", not forward, forward or "可达, 目录在, 可执行在远端 PATH"):
+        return report()
+    if material is not None:
+        gov = str(Path(project_root).resolve())
+        reverse = remote_check_reverse(remote_decl, host, str(material["gate_ssh_alias"]), gov)
+        check(f"工位→门机 ssh {material['gate_ssh_alias']}(治理根 {gov})", not reverse, reverse or "可达, 门机治理根在")
+    return report()
 
 
 def _session_event(governance_root: Path, card: str, actor: str, label: str, detail: str) -> str:
@@ -549,14 +653,15 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
                 say(f"[{index}] exit 3 — {step.message}")
                 result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
                 return True
-            step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid}
-            say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}(信封 {envelope_id} launch_harnesses 授权; "
+            step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid, "remote_pgid": harness.remote_pgid}
+            remote_part = f" remote_pgid={harness.remote_pgid}(经 ssh, kickoff 经 stdin)" if plan.remote else ""
+            say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}{remote_part}(信封 {envelope_id} launch_harnesses 授权; "
                 f"kickoff = 工位 my-tasks --task-id {plan.card} next_card.kickoff)")
             if early:
                 raise LoopInterrupted(early[0])
             failure = _session_event(governance_root, plan.card, actor, "harness_launch",
                                      f"harness={plan.harness}; transport={plan.location.get('transport')}; host={plan.location.get('host') or '(本机, 存量缺 host)'}; "
-                                     f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; envelope={envelope_id}")
+                                     f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; remote_pgid={harness.remote_pgid}; envelope={envelope_id}")
             if failure:
                 outcome = "record_failed"
                 step.ok, step.message = False, f"拉起事件写不进 {plan.card} session record({failure}), 已终止进程组; 拉起须留痕(fail-closed)"
@@ -706,15 +811,24 @@ _LANDED_RECORD = {"claim": "latest_claim", "return": "latest_return", "dispatch"
                   "verdict": "latest_verdict", "close": "latest_closure"}
 
 
-def _record_card(action_type: str, target_card: str) -> str:
-    return target_card[:-1] if action_type == "verdict" and target_card.upper().endswith("R") else target_card
+def _record_card(action_type: str, governance_root: Path, target_card: str) -> str:
+    """verdict 记录挂被审卡: 被审卡号 = 审计卡卡面 reviewed_task_id(AIPOS-F112: audit_derivation.audit_card_reviewed_id 唯一口,
+    认得复审轮 R2/R3…; 原按号尾去一位, 对 R2 取出 <ID>R)。"""
+    if action_type != "verdict":
+        return target_card
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
+    from tools.aipos_cli.task_loader import find_task_card
+
+    path, _state = find_task_card(governance_root, target_card)
+    fm = _read_frontmatter(path) if path else {}
+    return audit_card_reviewed_id(target_card, fm) if is_audit_card(target_card, fm) else target_card
 
 
 def _landed_record(governance_root: Path, action_type: str, target_card: str) -> dict[str, Any] | None:
     key = _LANDED_RECORD.get(action_type)
     if not key:
         return None
-    return _read_task_records(governance_root, _record_card(action_type, target_card)).get(key)
+    return _read_task_records(governance_root, _record_card(action_type, governance_root, target_card)).get(key)
 
 
 def _drive(
@@ -815,7 +929,9 @@ def _drive(
             def _ready(_matched: list[str], _card: str = ready_card) -> bool:
                 # 就绪 = 推导核可推导; 或硬停(产物不合规 F78 件③ / 记录缺 F73E 件①)——都该让 loop 醒来判定, 而非空等到超时
                 d = derive(_card, governance_root)
-                return bool(d.get("derivable")) or (d.get("action") or {}).get("type") in HARD_STOP_ACTIONS
+                # AIPOS-F114: 等待中本轮作废(所审交回过期 / 被下一轮取代)也醒来——重推导被审卡派生重交回, 不空等到超时
+                return (bool(d.get("derivable")) or (d.get("action") or {}).get("type") in HARD_STOP_ACTIONS
+                        or isinstance(d.get("return_stale"), dict) or isinstance(d.get("superseded_by"), dict))
 
             plan: LaunchPlan | None = None
             if launch_card is not None:

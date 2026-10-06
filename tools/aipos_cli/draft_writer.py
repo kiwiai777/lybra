@@ -23,6 +23,7 @@ from tools.aipos_cli.draft_validator import (
 from tools.aipos_cli.records import expected_publish_record_path
 from tools.aipos_cli.record_writer import (
     CARD_FRONTMATTER_ORDER,
+    card_field_defaults,
     render_frontmatter_block,
     render_markdown as _render_markdown_single_source,
 )
@@ -120,16 +121,9 @@ def _check_project_map_staleness(repo_root: Path, validation: dict[str, Any]) ->
 EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "agent-01"
 EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET = "workspace_artifacts/external_intake"
 
-DEFAULT_TEMPLATE_VALUES = {
-    "project": "ai-project-os",
-    "status": "pending",
-    "needs_owner": False,
-    "task_type": "one_shot",
-    "polling_mode": "agent_polling",
-    "claim_policy": "assigned_agent_only",
-    "report_mode": "forum_reply",
-    "recurrence": "none",
-}
+# AIPOS-F108 件①③: 草稿模板缺省值原写死在本模块 DEFAULT_TEMPLATE_VALUES(含不存在的项目 ID "ai-project-os"), 已退役:
+# 字段缺省读 card.schema fields.<键>.default(record_writer.card_field_defaults 投影); project 缺省读治理根
+# project.json#project(workspace_config.declared_project_id), 缺则拒(DRAFT_PROJECT_UNDECLARED)。
 
 # AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(原本模块另有 28 键一份, 已退役)。
 FRONTMATTER_ORDER = CARD_FRONTMATTER_ORDER
@@ -277,7 +271,7 @@ def load_create_payload_from_json(path: str | Path) -> tuple[dict[str, Any], str
 def build_template_payload(template_name: str, values: dict[str, Any], body: str | None = None) -> tuple[dict[str, Any], str]:
     if template_name != "basic":
         raise ValueError(f"Unsupported draft template: {template_name}")
-    metadata = {**DEFAULT_TEMPLATE_VALUES, **values}
+    metadata = {**card_field_defaults(), **values}
     return metadata, body if body is not None else default_draft_body()
 
 
@@ -285,12 +279,29 @@ def load_body_file(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
+def _fill_declared_project(metadata: dict[str, Any], repo_root: Path) -> list[str]:
+    """AIPOS-F108 件③(H6): 草稿未给 project = 读治理根 project.json#project(workspace_config.declared_project_id);
+    治理根未声明 = 不填并返回拒因(fail-closed, 禁回落任何写死项目 ID)。返回拒因列表(空 = 已有或已填)。"""
+    if metadata.get("project") not in (None, ""):
+        return []
+    from tools.aipos_cli.workspace_config import declared_project_id
+
+    try:
+        metadata["project"] = declared_project_id(repo_root)
+    except ValueError as exc:
+        metadata.pop("project", None)
+        return [str(exc)]
+    return []
+
+
 def _normalized_metadata(metadata: dict[str, Any], repo_root: Path) -> dict[str, Any]:
     normalized = dict(metadata)
-    normalized.setdefault("status", "pending")
-    normalized.setdefault("needs_owner", False)
+    # AIPOS-F108 件①: 缺省值读 card.schema fields.<键>.default(单源), 不写死
+    _defaults = card_field_defaults()
+    normalized.setdefault("status", _defaults["status"])
+    normalized.setdefault("needs_owner", _defaults["needs_owner"])
     if normalized.get("task_class") in (None, ""):
-        normalized["task_class"] = "simple"
+        normalized["task_class"] = _defaults["task_class"]
     if normalized.get("complexity_note") in (None, ""):
         normalized.pop("complexity_note", None)
     
@@ -361,6 +372,7 @@ def create_draft(
             if field_name not in metadata or metadata[field_name] in (None, ""):
                 metadata[field_name] = placeholder_value
 
+    project_reasons = _fill_declared_project(metadata, repo_root)
     normalized = _normalized_metadata(metadata, repo_root)
     
     # AIPOS-F78 件①: 意图面 harness/lane 缺则派生(create/publish/regen 三口一函数 derive_intent_declarations)
@@ -401,6 +413,10 @@ def create_draft(
     
     rendered_markdown = render_markdown_task_card(normalized, task_body)
     validation = validate_draft_metadata(repo_root, normalized)
+    if project_reasons:
+        # AIPOS-F108 件③: 项目未声明 = 拒(与 schema 必填校验同一 BLOCK 出口, 拒因带出口)
+        validation["blocking_reasons"] = [*project_reasons, *validation["blocking_reasons"]]
+        validation["verdict"] = Verdict.BLOCK
     target_path = validation["target_path"]
     planned_writes = []
 
@@ -509,69 +525,62 @@ def _manual_gate_mode(repo_root: Path | None) -> bool:
         return False
 
 
-def _card_role_class(metadata: dict[str, Any], repo_root: Path | None) -> str | None:
+def _card_role_class(metadata: dict[str, Any], repo_root: Path | None) -> str:
     """AIPOS-F73C 件①(顾问代修, Owner 2026-09-08 仲裁 C): 卡 assigned_to/agent_instance → 角色类别。
 
-    唯一判据来源 = roles 注册表(schema_loader.load_schema("roles")):
-      1. 首段与注册表 `role` 同名(executor/auditor/advisor…);
-      2. 首段与注册表 `naming.prefix` 同名(exec./audit./advisor. 实例名);
-      3. 自定义角色经 custom_roles.resolve_role_to_class(需项目根)。
-    禁子串猜(exec/audit in name)。读不到注册表 = 精确捕获 + warning + None(调用方按"非执行体"
-    处理 = 存量兼容方向, 不静默)。
+    AIPOS-F102 件②: 角色 → 类只经唯一实现 custom_roles.resolve_role_to_class; 本函数只做「实例名 → 角色名」:
+      1. 候选本身即角色名(executor/auditor/advisor… 或自定义角色名);
+      2. 实例名首段(roles.schema naming.template 唯一解析 parse_instance_name)按注册表 naming.prefix 反查角色名
+         (exec./audit./advisor.), 首段不是前缀则按角色名(自定义角色 hbj-coder.<项目>.<机器>);
+    禁子串猜(exec/audit in name)。全部候选解析不到 / 注册表读不到 = 拒(UnknownRoleClass, 统一失败语义),
+    不再返回 None 被调用方当「非执行体」放行。repo_root = 治理根(自定义角色在门注册表, 内建角色无需)。
     """
+    from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class
+    from tools.aipos_cli.naming_profile import _registry_prefix_mapping, parse_instance_name
+    from tools.schema_loader import SchemaLoadError
+
     candidates = [
         str(metadata.get("assigned_to") or "").strip(),
         str(metadata.get("agent_instance") or "").strip(),
     ]
     try:
-        from tools.schema_loader import SchemaLoadError, load_schema
-        from tools.aipos_cli.custom_roles import resolve_role_to_class
-    except ImportError as exc:  # 产品仓损坏才会到这里, 出声不吞
-        import sys
-
-        print(f"Warning: role registry loader unavailable: {exc}", file=sys.stderr)
-        return None
-    try:
-        # 靶场分根(F76-R2/F71-R3 同款):角色注册表是产品 schema, 从产品仓根解析(None=默认产品根);
-        # 传入的 repo_root 是治理根, 只用于自定义角色(custom_roles 在治理工作区)。
-        roles = load_schema("roles", None).get("roles", [])
-        by_name = {r.get("role"): r for r in roles if r.get("role")}
-        by_prefix = {
-            (r.get("naming") or {}).get("prefix"): r
-            for r in roles
-            if (r.get("naming") or {}).get("prefix")
-        }
+        role_by_prefix = {prefix: role for role, prefix in _registry_prefix_mapping().items()}
         for cand in candidates:
             if not cand:
                 continue
-            head = cand.split(".")[0]
-            spec = by_name.get(cand) or by_name.get(head) or by_prefix.get(head)
-            if spec:
-                return str(spec.get("role_class") or spec.get("role"))
-            cls = resolve_role_to_class(head, repo_root)
-            if cls:
-                return str(cls)
-    except (SchemaLoadError, FileNotFoundError, OSError, json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
-        # 靶场/存量工作区无注册表 = 声明缺失(F76-R2 同款精确捕获):出 warning, 按"角色未知"处理, 不静默。
-        import sys
-
-        print(f"Warning: role registry unreadable, card role class unknown: {exc}", file=sys.stderr)
-    return None
+            parsed = parse_instance_name(cand)
+            head = parsed["prefix"] if parsed else cand.split(".")[0]  # 非三段式(存量 exec.test 等)取首段, 与 F73C 口径同
+            for role_name in (cand, role_by_prefix.get(head, head)):
+                cls = resolve_role_to_class(role_name, repo_root)
+                if cls:
+                    return str(cls)
+    except (SchemaLoadError, FileNotFoundError, OSError, json.JSONDecodeError, KeyError) as exc:
+        raise UnknownRoleClass(f"角色注册表读不到, 卡角色类不可解析(assigned_to/agent_instance={candidates}): {exc}") from exc
+    raise UnknownRoleClass(
+        f"卡 assigned_to/agent_instance={candidates} 角色类不可解析(既非 roles.schema 内建角色/实例前缀, 也不在门注册表自定义角色内); "
+        "出口: 卡面 assigned_to/agent_instance 写注册表角色的实例名, 或 lybra roles register <name> --class <builtin>"
+    )
 
 
 def card_carries_gate_contract_section(metadata: dict[str, Any], repo_root: Path | None) -> bool:
     """AIPOS-F80 件①: 「哪类卡带认领与交回节」的**唯一判据**(执行卡 / 派生审计卡 / 手动派审卡 / regen 同口径)。
 
-    - 角色类别经 roles 注册表解析(_card_role_class, 禁子串猜)为 executor / auditor 的卡 = 零门卡面:
-      不带「认领与交回」节、不带门动词提交配方(执行体/审计体只写产物, 认领与裁决提交由驱动方完成, Owner 09-06);
+    - 角色类别经 roles 注册表解析(_card_role_class, 禁子串猜)属工位类(roles.schema class_groups.workstation, AIPOS-F102 件②
+      读声明)的卡 = 零门卡面: 不带「认领与交回」节、不带门动词提交配方(执行体/审计体只写产物, 认领与裁决提交由驱动方完成, Owner 09-06);
     - 项目声明 manual_gate_mode=true(chris 形人肉 gate)= 两类卡都保留现行为;
-    - 其它角色(advisor/planner/…)或角色不可解析 = 保留(存量兼容方向)。
+    - 其它角色(advisor/planner/…) = 保留; 角色不可解析 = 拒(ContractSectionError, AIPOS-F102 件②: 原「不可解析按保留放行」退役)。
     调用方: _append_gate_contract_section(发布追加)、publish 门动词校验、audit_derivation.build_derived_audit_task
     (派生审计卡)、regen_machine_zone_for_pending(存量卡删节)。禁第二判据。
     """
-    if _card_role_class(metadata, repo_root) not in ("executor", "auditor"):
+    from tools.aipos_cli.custom_roles import UnknownRoleClass, role_classes_in_group
+
+    if _manual_gate_mode(repo_root):  # 人肉 gate 项目: 任何角色都带节, 判据与角色类无关(无需解析)
         return True
-    return _manual_gate_mode(repo_root)
+    try:
+        role_class = _card_role_class(metadata, repo_root)
+    except UnknownRoleClass as exc:
+        raise ContractSectionError(f"AIPOS-F102: 卡面零门判据无据(角色类不可解析, 工作区 {repo_root}), 拒: {exc}") from exc
+    return role_class not in role_classes_in_group("workstation")
 
 
 def _append_gate_contract_section(
@@ -604,8 +613,10 @@ def _append_gate_contract_section(
     project_json = repo_root / "project.json"
     profile = resolve_collaboration_profile(project_json)
 
+    # AIPOS-F103 件④: 契约节信封按卡面身份 + 本卡判定(autonomy_policy.select_envelope), 带上 project/实例/审计实例
     task_fields = {k: v for k, v in metadata.items() if k in (
-        "task_mode", "output_target", "deploy", "audit", "owner_verify", "task_class"
+        "task_mode", "output_target", "deploy", "audit", "owner_verify", "task_class",
+        "project", "assigned_to", "agent_instance", "audit_by",
     )}
 
     # AIPOS-343: each failure mode gets a specific diagnostic message
@@ -625,8 +636,8 @@ def _append_gate_contract_section(
             f"AIPOS-343: contract section generation failed for task {task_id}. "
             f"Policy envelope resolution error: {exc}\n"
             f"  workspace_root={repo_root}\n"
-            f"  Fix: ensure active, non-expired policies exist under "
-            f"<workspace>/5_tasks/policies/ with agent_or_role matching the executor role."
+            f"  Fix: ensure an active, non-expired envelope under the project's policies_root "
+            f"(project.json paths.policies_root, default 5_tasks/policies/) whose agent_or_role covers the card's agent_instance."
         ) from exc
     except Exception as exc:
         # Any other unexpected failure — still loud, with context
@@ -866,7 +877,13 @@ def publish_draft(
         # AIPOS-F78 前置零⑧(F79B 实撞: 裸正则 lybra_\w+ 扫整卡把 pol_lybra_dev_9 / governance_refs 里的动词键名当门动词拒):
         # 只匹配 verbs.schema 注册的 MCP 动词全名、整词、只扫意图面正文(body), 排除 frontmatter 的策略 id 与文档性引用。
         # AIPOS-F80 件①: 与渲染侧同一判据 card_carries_gate_contract_section(零门卡面 = 不得含门动词)。
-        if not card_carries_gate_contract_section(publish_metadata, repo_root):
+        try:
+            _zero_gate_card = not card_carries_gate_contract_section(publish_metadata, repo_root)
+        except ContractSectionError as exc:  # AIPOS-F102 件②: 角色类不可解析 = 拒(发布阻塞带出口), 不按"非零门卡"放行
+            _zero_gate_card = False
+            if str(exc) not in validation["blocking_reasons"]:
+                validation["blocking_reasons"].append(str(exc))
+        if _zero_gate_card:
             lybra_verbs = find_gate_verbs_in_intent_body(body)
             if lybra_verbs:
                 validation["blocking_reasons"].append(

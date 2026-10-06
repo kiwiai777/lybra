@@ -381,10 +381,12 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
     INGEST_FRONTMATTER_UNREADABLE(原文点名文件与行号), 不取缺省继续校验。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError
 
+    from tools.aipos_cli.audit_derivation import is_audit_card
+
     try:
         return _validate_task_artifact(task_id, workspace_root)
     except FrontmatterReadError as exc:
-        return {"ok": False, "kind": "verdict" if task_id.upper().endswith("R") else "return",
+        return {"ok": False, "kind": "verdict" if is_audit_card(task_id) else "return",
                 "category": "INGEST_FRONTMATTER_UNREADABLE", "reasons": [f"{exc}。出口: 按拒因修正该文件 frontmatter 后重推导"],
                 "path": exc.path, "frontmatter": {}, "exit_code": INGEST_EXIT_REJECTED}
 
@@ -408,10 +410,11 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         missing_return_frontmatter,
         return_artifact_dir,
     )
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
     from tools.aipos_cli.task_loader import AmbiguousTaskCard
 
     workspace_root = Path(workspace_root)
-    is_audit = task_id.upper().endswith("R")
+    is_audit = is_audit_card(task_id)
     kind = "verdict" if is_audit else "return"
     out: dict[str, Any] = {"ok": False, "kind": kind, "category": "", "reasons": [], "path": None, "frontmatter": {},
                            "exit_code": INGEST_EXIT_REJECTED}
@@ -423,6 +426,9 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
     if not task_path:
         out["category"], out["reasons"] = "TASK_NOT_FOUND", [f"queue 目录中找不到任务卡 {task_id}(按 frontmatter task_id 查找, 文件名不限)"]
         return out
+    # AIPOS-F112: 审计卡判据唯一实现 audit_derivation.is_audit_card(卡面为准, 认得复审轮 R2/R3…; 原按号尾 R 判)
+    is_audit = is_audit_card(task_id, _read_frontmatter(task_path))
+    kind = out["kind"] = "verdict" if is_audit else "return"
     if not is_audit:
         pending, records = _external_finalize_pending(workspace_root, task_id)
         if pending:
@@ -462,7 +468,7 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
 
     # AIPOS-F78C 件②: 核 tip/被审分支的仓 = 该卡(R 卡: 被审卡)声明的仓; 解析不到 = 声明缺失出口(非崩溃), 不进 git
     if is_audit:
-        reviewed_for_repo = str(card_fm.get("reviewed_task_id") or task_id[:-1]).strip()
+        reviewed_for_repo = audit_card_reviewed_id(task_id, card_fm)
         try:
             reviewed_path, _rq = _find_task_in_queue(workspace_root, reviewed_for_repo)
         except AmbiguousTaskCard as exc:
@@ -559,18 +565,15 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
     fm = _read_frontmatter(path, allow_missing_block=True)
     out["frontmatter"] = fm
     # AIPOS-F89 件③c: 报告完成判据唯一实现 next_resolver.missing_verdict_frontmatter(占位 = 未填, 空模板不算产物)
-    from tools.aipos_cli.next_resolver import missing_verdict_frontmatter
+    from tools.aipos_cli.next_resolver import card_branch_name, missing_verdict_frontmatter
 
     missing = missing_verdict_frontmatter(fm)
     if missing:
         out["category"] = "INGEST_FRONTMATTER_MISSING"
         out["reasons"] = [f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.verdict.required_frontmatter)"]
         return out
-    reviewed = str(fm.get("reviewed_task_id") or task_id[:-1]).strip()
-    from tools.schema_loader import get_branch_integration
-
-    pattern = str(get_branch_integration().get("branch_pattern") or "card/{task_id}")
-    branch = pattern.replace("{task_id}", reviewed)
+    reviewed = str(fm.get("reviewed_task_id") or "").strip() or audit_card_reviewed_id(task_id, card_fm)
+    branch = card_branch_name(reviewed)  # AIPOS-F108 件②: 唯一读取口(声明缺 = SchemaLoadError, 不回落写死)
     tip = _git_out(code_repo, "rev-parse", "--verify", f"{branch}^{{commit}}")
     commit_sha = str(fm.get("commit_sha")).strip()
     if tip is None:
@@ -578,10 +581,32 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         return out
     if tip != commit_sha:
         out["category"] = "INGEST_TIP_MISMATCH"
-        out["reasons"] = [f"被审分支 {branch} tip={tip[:12]} ≠ 报告自述 commit_sha={commit_sha[:12]}: 审的不是当前产物"]
+        out["reasons"] = [f"被审分支 {branch} tip={tip[:12]} ≠ 报告自述 commit_sha={commit_sha[:12]}: 审的不是当前产物"
+                          + _stale_round_outlet(workspace_root, task_id, card_fm, reviewed)]
         return out
     out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
     return out
+
+
+def _stale_round_outlet(workspace_root: Path, audit_task_id: str, card_fm: dict[str, Any], reviewed: str) -> str:
+    """AIPOS-F114 件②: 裁决入口遇旧 tip 的拒因出口(推导核同一判据: audit_derivation.superseding_round / next_resolver.return_staleness)。
+    本轮已被取代 → 点名取代它的一轮; 所审交回已过期 → 驱动方重交回命令(产品随后派下一轮, 本轮作废); 其余 → 审计体按当前 tip 重审。"""
+    from tools.aipos_cli.audit_derivation import superseding_round
+    from tools.aipos_cli.next_resolver import (
+        _find_connection_json, _find_task_in_queue, _read_frontmatter, ingest_command, return_staleness,
+    )
+
+    successor = superseding_round(audit_task_id, workspace_root, card_fm)
+    if successor is not None:
+        return (f"。出口: 本轮 {audit_task_id} 已被 {successor['audit_task_id']} 取代(派审记录 {successor['dispatch_id']} supersedes), "
+                f"本报告不入门; 审计在 {successor['audit_task_id']} 对当前 tip 进行")
+    reviewed_path, _q = _find_task_in_queue(workspace_root, reviewed)
+    stale = return_staleness(workspace_root, reviewed, _read_frontmatter(reviewed_path)) if reviewed_path else None
+    if stale is not None and str(stale.get("audit_task_id") or "") == audit_task_id:
+        command = ingest_command(reviewed, "return", workspace_root, _find_connection_json(workspace_root))
+        return (f"。交回已过期({stale['reason']})。出口: 驱动方重交回被审卡 `{command}`"
+                f"(执行体 Return 须已是卡分支当前 tip), 产品随后按卡号演进派下一轮审计, 本轮 {audit_task_id} 作废")
+    return "。出口: 审计体对被审分支当前 tip 重审并更新报告 commit_sha"
 
 
 # ---------------------------------------------------------------------------

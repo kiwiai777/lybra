@@ -30,9 +30,6 @@ from tools.schema_loader import SchemaLoadError
 # conventional-commit 前缀家族 (2026-08-19 实锤: 只认 feat 前缀漏掉 fix/chore, A1 被迫两跳)
 _CONVENTIONAL_PREFIX_RE = re.compile(r"^(?:feat|fix|chore|docs|refactor|test|perf)\(([^)]+)\)")
 
-_DEFAULT_BRANCH_PATTERN = "card/{task_id}"
-
-
 def _resolve_task_id_pattern(governance_root: Path | None, repo_root: Path | None = None) -> str:
     """AIPOS-F5: 读项目声明的 task_id_pattern (单源, card_policy.json/R8C 同构)。
 
@@ -53,26 +50,20 @@ def _resolve_task_id_pattern(governance_root: Path | None, repo_root: Path | Non
     return pattern
 
 
-def _branch_pattern_regex(repo_root: Path | None = None, task_id_pattern: str | None = None) -> str | None:
+def _branch_pattern_regex(task_id_pattern: str | None) -> str | None:
     """从 N5.branch_integration.branch_pattern 声明派生任务 ID 捕获正则 (读同一份声明)。
 
     例如 'card/{task_id}' + task_id_pattern 'AIPOS-[A-Z0-9]+' → 'card/(AIPOS-[A-Z0-9]+)'。
-    声明缺失/损坏时回退到默认 'card/{task_id}' (单元测试夹具无 schema 目录)。
+    AIPOS-F108 件②(M18): 原「声明缺失/损坏回退写死 'card/{task_id}' + except Exception: pass」与按产品仓读 schema
+    (非 lybra 形项目无 schema/ → 恒回落写死)已退役: 声明经唯一读取口 next_resolver.card_branch_name 读 Lybra 自身 schema
+    (以占位符自身代入取回声明模式, 同一校验), 声明缺 = SchemaLoadError(fail-closed)。
 
     Returns:
-        正则字符串, 或 None (branch_pattern 不含 {task_id} 占位符 或 无 task_id_pattern)
+        正则字符串, 或 None (声明模式在占位符前无前缀 或 无 task_id_pattern)
     """
-    pattern = _DEFAULT_BRANCH_PATTERN
-    try:
-        from tools.schema_loader import get_branch_integration
-        bi = get_branch_integration(repo_root)
-        declared = str(bi.get("branch_pattern") or "").strip()
-        if declared and "{task_id}" in declared:
-            pattern = declared
-    except Exception:
-        pass
-    if "{task_id}" not in pattern:
-        return None
+    from tools.aipos_cli.next_resolver import card_branch_name
+
+    pattern = card_branch_name("{task_id}")
     prefix = pattern.split("{task_id}", 1)[0]
     if not prefix:
         return None
@@ -111,7 +102,7 @@ def _task_id_from_commit_subject(
     if m:
         return m.group(0)
     # 3. merge 信息 (branch_pattern 声明)
-    pattern_regex = _branch_pattern_regex(repo_root, task_id_pattern)
+    pattern_regex = _branch_pattern_regex(task_id_pattern)
     if pattern_regex:
         m = re.search(pattern_regex, subject)
         if m:

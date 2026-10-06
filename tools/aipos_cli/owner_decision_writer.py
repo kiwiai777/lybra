@@ -7,12 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.autonomy_policy import (
-
-
-
-    POLICIES_DIR,
     POLICY_ID_PATTERN,
     build_autonomy_policy_markdown,
+    policy_relpath,
 )
 from tools.aipos_cli.record_writer import render_markdown
 
@@ -396,6 +393,7 @@ def _synthesize_policy_grant_record(
     autonomy_policy: dict[str, Any] | None,
     decision_id: str,
     actor: str | None,
+    policy_ref_path: str,
 ) -> dict[str, Any]:
     """Build a complete, HONEST owner_decision_record for the envelope-arming path WITHOUT demanding
     the heavy AIPOS-110 out-of-band evidence. All values derive deterministically from the policy +
@@ -413,7 +411,7 @@ def _synthesize_policy_grant_record(
         or f"Arm PreAuthorized autonomy envelope {policy_id} covering {agent_or_role}."
     ).strip()
     external_ref = f"autonomy_policy:{policy_id}"
-    policy_ref_path = f"5_tasks/policies/{policy_id}.md"
+    # AIPOS-F103 件④: policy_ref_path 由调用方按项目声明 policies_root 解析(autonomy_policy.policy_relpath), 本处不写死目录
     # TRUTHFUL in-band evidence: the approval IS the live harness owner_confirm at confirm time —
     # not an out-of-band artifact. No fabricated evidence_hash; capture_method names the real gate.
     evidence = {
@@ -498,7 +496,14 @@ def build_owner_decision_record(
         # capability_scope: the record is synthesized from the policy + a TRUTHFUL in-band evidence
         # marker (capture_method=harness_owner_confirm). Advisor supplies only decision_id + the
         # autonomy_policy block. The non-grant owner_decision path is unchanged (full AIPOS-110 schema).
-        normalized_record = _synthesize_policy_grant_record(payload, autonomy_policy, decision_id, actor)
+        # AIPOS-F103 件④: 信封落点读项目声明 policies_root(autonomy_policy.policy_relpath); 声明在治理根外 = BLOCK(fail-closed)
+        grant_policy_id = str((autonomy_policy or {}).get("policy_id") or "").strip()
+        try:
+            policy_ref_path = policy_relpath(repo_root, grant_policy_id or "_")
+        except ValueError as exc:
+            _add(blocking_reasons, str(exc))
+            policy_ref_path = ""
+        normalized_record = _synthesize_policy_grant_record(payload, autonomy_policy, decision_id, actor, policy_ref_path)
     else:
         for field in REQUIRED_PAYLOAD_FIELDS:
             if _is_missing(payload.get(field)):
@@ -567,9 +572,13 @@ def build_owner_decision_record(
     policy_file = None
     policy_markdown = ""
     if autonomy_policy is not None and autonomy_policy.get("policy_id"):
-        policy_path = str(POLICIES_DIR / f"{autonomy_policy['policy_id']}.md")
-        policy_file = repo_root / policy_path
-        if policy_file.exists():
+        try:
+            policy_path = policy_relpath(repo_root, autonomy_policy["policy_id"])  # AIPOS-F103 件④: 读项目声明 policies_root
+        except ValueError as exc:
+            _add(blocking_reasons, str(exc))
+            policy_path = ""
+        policy_file = repo_root / policy_path if policy_path else None
+        if policy_file is not None and policy_file.exists():
             _add(blocking_reasons, f"Autonomy policy already exists: {policy_path}")
         policy_markdown = build_autonomy_policy_markdown(
             policy_id=autonomy_policy["policy_id"],

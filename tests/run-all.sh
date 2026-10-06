@@ -1099,13 +1099,37 @@ else
 fi
 # AIPOS-F107: chris 接入运行时前置(#43/#44)——loop 拉起期 SIGHUP 清进程组·stdout 断开无孤儿·接入事件落所属项目 log(enrollment_owner_root)·只读诊断 lybra roles enroll-where
 run_pytest "tests/test_aipos_f107_sighup_enroll_owner.py" "$REPO_ROOT/tests/test_aipos_f107_sighup_enroll_owner.py"
+# AIPOS-F108: 卡字段与分支声明单源(族 C-d: M9/M18/H6)——card.schema 落盘键全声明·字段序与缺省值读 schema·分支名/基线读 N5.branch_integration 零写死且改声明跟随·草稿 project 读 project.json 缺则拒; 连同改动的 finalize 分支整合/自动切回/卡号归属解析夹具
+run_pytest "tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_finalize_branch_integration.py" "$REPO_ROOT/tools/aipos_cli/tests/test_finalize_branch_auto_checkout.py" "$REPO_ROOT/tests/test_aipos_f5_task_id_pattern.py"
+# AIPOS-F103: 退役旧跨机连接器与执行体派工命令(N-a: N2)+信封挑选唯一实现 select_envelope(判据 match_claim_envelope, M5)·policies_root 声明·删除物零引用·文档棘轮基线减少
+run_pytest "tests/test_aipos_f103_retire_connector_single_envelope.py" "$REPO_ROOT/tests/test_aipos_f103_retire_connector_single_envelope.py"
+# AIPOS-F103 改动节点(343 契约节): 删旧解析模块类后, 契约节信封失败出声带诊断/幂等(余下 4 个用例 main 上即红, 不登记)
+run_pytest "tests/test_aipos_343_contract_section_no_silent_swallow.py (F103 改动节点)" "$REPO_ROOT/tests/test_aipos_343_contract_section_no_silent_swallow.py::TestContractSectionErrorPropagation::test_contract_section_error_contains_diagnostic_info" "$REPO_ROOT/tests/test_aipos_343_contract_section_no_silent_swallow.py::TestContractSectionErrorPropagation::test_idempotency_still_works"
+# AIPOS-F103 改动节点(信封签发 schema 一致性; 门侧 PreAuthEnvelope* 类依赖活体门 401, main 上即红, 不登记)
+run_pytest "tools/mcp_server/tests/test_autonomy_preauth_envelope.py (F103 改动节点)" "$REPO_ROOT/tools/mcp_server/tests/test_autonomy_preauth_envelope.py::OwnerDecisionSchemaConformanceTests"
+# AIPOS-F103 改动节点(仓根旧技能退役·技能只经 distribution 从 agents/skills 分发; PlannerRoleGateTests 依赖活体门 401, main 上即红, 不登记)
+run_pytest "tools/mcp_server/tests/test_planner_role.py (F103 改动节点)" "$REPO_ROOT/tools/mcp_server/tests/test_planner_role.py::PlannerSkillRetiredTests"
+# AIPOS-F102: 身份与角色类单源(族 B-b:H5/M4/M21)——非 lybra 项目派审 actor=驱动方/审计认领=audit_by/修复卡身份靶场·角色类统一拒·分组读 roles.schema class_groups·项目段缺即拒·棘轮 a 删条目(+本卡改动的 f23/derived_audit_verdict 节点)
+run_pytest "tests/test_aipos_f102_identity_single_source.py" "$REPO_ROOT/tests/test_aipos_f102_identity_single_source.py" "$REPO_ROOT/tools/aipos_cli/tests/test_f23_enroll.py::TestRoleFileMergeAndGuards::test_enroll_custom_role_executor_class_refused" "$REPO_ROOT/tools/aipos_cli/tests/test_derived_audit_verdict.py::DerivedAuditVerdictTests::test_derived_verdict_blocks_when_publish_record_missing"
+# AIPOS-F102(再合并): 343 契约节诊断用例改用可解析的非工位类实例(统一拒后 agent-01 会更早拒)——只登记本卡改动的节点
+run_pytest "tests/test_aipos_343_contract_section_no_silent_swallow.py(F102 改动节点)" "$REPO_ROOT/tests/test_aipos_343_contract_section_no_silent_swallow.py::TestContractSectionErrorPropagation::test_contract_section_error_contains_diagnostic_info"
 
+# AIPOS-F106: 门地址/端口/连接声明单源(族 B-a: M1/M3/M15/M2)——剥 /mcp 零·角色偏好序单源·端口字面零·configuration_sources↔identity_resolution 无矛盾·env 声明=使用·LYBRA_WORKSPACE_ROOT 单名·.lybra/role 唯一读取
+run_pytest "tests/test_aipos_f106_gate_address_single_source.py" "$REPO_ROOT/tests/test_aipos_f106_gate_address_single_source.py"
+# AIPOS-F110: 跨机拉起(remote transport 经 ssh 替身: 拉起·kickoff stdin 逐字节·就绪/超时/SIGHUP 清理·ssh 不可达退回手工·材料未声明拒·双向可达检查)
+run_pytest "tests/test_aipos_f110_remote_launch.py" "$REPO_ROOT/tests/test_aipos_f110_remote_launch.py"
 # AIPOS-F101: 推导核与动词声明单源(族 C-a)——gate_guidance=derive_next_step·死函数 git grep 零·门工具 scope/可见性全声明且执法跟随声明·退出码只在声明·示例无 lybra 身份; 含本卡改 patch 点的 f30 夹具
 run_pytest "tests/test_aipos_f101_derivation_verb_single_source.py" "$REPO_ROOT/tests/test_aipos_f101_derivation_verb_single_source.py" "$REPO_ROOT/tests/test_aipos_f30_envelope_error_info_init.py"
 # AIPOS-F101: test_scope_reachability 中按真实凭据走门执法的节点(scope 枚举改读 verbs.schema 声明; 同文件另 3 节点 main 上即红, 见 F101 RETURN 缺口 2, 不登记)
 run_pytest "F101 tools/mcp_server/tests/test_scope_reachability.py(节点)" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_set_has_no_role_overlap" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_owner_draft_publish_reachable" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_owner_decision_record_reachable" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_owner_decision_record_denied_for_executor" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_executor_and_copilot_draft_publish_denied" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_copilot_role_scopes_empty" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_set_maps_to_dry_run_tools" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_every_exempt_scope_reachable_via_path_b" "$REPO_ROOT/tools/mcp_server/tests/test_scope_reachability.py::ScopeReachabilityTests::test_exempt_scope_denied_without_capability"
 # AIPOS-F101: test_aipos330_verb_contract 的 TestS6Extensibility(未声明门工具 fail-closed、声明即入注册表)与 TestGateGuidanceTool(委托推导核)
 run_pytest "F101 tools/mcp_server/tests/test_aipos330_verb_contract.py(TestS6Extensibility+TestGateGuidanceTool)" "$REPO_ROOT/tools/mcp_server/tests/test_aipos330_verb_contract.py::TestS6Extensibility" "$REPO_ROOT/tools/mcp_server/tests/test_aipos330_verb_contract.py::TestGateGuidanceTool"
+
+# AIPOS-F113: 远程接入 enroll_deliver --ssh 不在远端命令行暴露注册码与 Owner 凭据(码走 ssh stdin, 发码/回滚走门动词)·远端命令逐参数 shlex.quote·回滚 fail-closed·本机输出只见指纹(假 ssh + 假远端 python3 靶场)
+run_pytest "tests/test_aipos_f113_enroll_deliver_ssh_secrets.py" "$REPO_ROOT/tests/test_aipos_f113_enroll_deliver_ssh_secrets.py"
+# AIPOS-F112: 裁决后卡分支 tip 变化的复审出口(verdict_stale → 重交回 → R2 → 裁决绑新 tip → finalize → close)靶场夹具
+run_pytest "tests/test_aipos_f112_verdict_stale_reaudit.py" "$REPO_ROOT/tests/test_aipos_f112_verdict_stale_reaudit.py"
+run_pytest "tests/test_aipos_f114_return_stale_reaudit.py" "$REPO_ROOT/tests/test_aipos_f114_return_stale_reaudit.py"
 
 echo
 echo "========================================================"

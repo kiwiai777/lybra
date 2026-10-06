@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,6 +21,7 @@ from tools.aipos_cli.task_loader import find_task_by_id, queue_root_for, queue_s
 from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
 from tools.schema_constants import RecordType
 from tools.schema_loader import get_required_card_fields  # AIPOS-F17 大项A: schema 单源必填集
+from tools.aipos_cli.record_writer import card_field_defaults  # AIPOS-F108 件①: 卡字段缺省值读 card.schema 声明
 
 
 
@@ -92,6 +92,8 @@ def build_forensic_anchor_section(
     AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录(render_audit_report_location 唯一渲染); audit_task_id 缺省
     = 本模块 derive_audit_task_id 首号(与 build_derived_audit_task 同一派生), 手动派审传显式审计卡 ID。
     """
+    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name  # AIPOS-F108 件②: 分支 / 基线读声明
+
     code_repo = _resolve_code_repo(repo_root, source_metadata)
     report_location = render_audit_report_location(
         repo_root, audit_task_id or derive_audit_task_id(source_task_id, repo_root=None)
@@ -100,7 +102,7 @@ def build_forensic_anchor_section(
     return (
         "\n## 取证锚点(AIPOS-A1 大项C: 默认注入, 路径来自注册表)\n\n"
         f"- **产品仓绝对路径**: `{code_repo}` (被审卡 lane.repo → project.json repos/code_repo, 禁写死)\n"
-        f"- **禁 checkout 卡分支**: 用 `git diff main...card/{source_task_id}` 取证(不切换工作区)\n"
+        f"- **禁 checkout 卡分支**: 用 `git diff {card_base_branch()}...{card_branch_name(source_task_id)}` 取证(不切换工作区)\n"
         f"- **报告落点绝对路径**: `{report_location}` (治理根 verdict_root/<审计卡ID>/, 声明渲染; 禁落被审卡目录、禁落产品仓)\n"
         "- **不存在结论必须附**: `pwd` + 命令 + 输出(三条缺一即无效证据)\n"
     )
@@ -273,15 +275,39 @@ def _task_filename_for(task_id: str) -> str:
     return (value or "task") + ".md"
 
 
-def _derive_audit_instance(project: str) -> str:
+def _registry_prefix(role: str) -> str:
+    """角色在注册表的实例名前缀(roles.schema role.naming.prefix 唯一来源); 缺 = ValueError(禁写死前缀)。"""
+    from tools.schema_loader import get_role_naming_prefix
+
+    prefix = str(get_role_naming_prefix(role) or "").strip()
+    if not prefix:
+        raise ValueError(f"roles.schema.json 角色 {role!r} 无 naming.prefix, 实例名无从推导")
+    return prefix
+
+
+def resolve_audit_instance(source_metadata: dict[str, Any], governance_root: str | Path | None = None) -> str:
+    """AIPOS-F102 件①: 审计卡认领实例的唯一解析(派审 / 交回派生审计卡 / 修复后复审 同口径)。
+
+    被审卡 audit_by 声明(card.schema)优先; 缺则按项目推导: naming_profile.default_instance_name(审计角色注册表前缀,
+    项目 = 被审卡 project, 再缺读治理根 project.json#project; 都缺 = 拒 ProjectSegmentUnresolved)。
+    原写死的 lybra 审计实例缺省与「不读 audit_by」退役(非 lybra 项目审计卡认领实例 = 其 audit_by)。
     """
-    Derive audit agent_instance via the single naming implementation (AIPOS-R4B-1):
-    audit.<project>.<hostname> from the registry template.
-    
-    Example: audit.lybra.kiwiai-dev
-    """
-    hostname = socket.gethostname().split(".")[0]  # short hostname
-    return default_instance_name("audit", project=project, host=hostname)
+    declared = str(source_metadata.get("audit_by") or "").strip()
+    if declared:
+        return declared
+    project = str(source_metadata.get("project") or "").strip() or None
+    return default_instance_name(_registry_prefix("auditor"), project=project, project_root=governance_root)
+
+
+def resolve_repair_executor_instance(source_metadata: dict[str, Any], governance_root: str | Path | None = None) -> str:
+    """AIPOS-F102 件①: 修复卡执行实例——承继被审卡 agent_instance / assigned_to 声明; 都缺按项目推导执行角色实例名
+    (default_instance_name, 项目缺 = 拒)。原写死的 lybra 执行实例 / 短名缺省退役。"""
+    for key in ("agent_instance", "assigned_to"):
+        declared = str(source_metadata.get(key) or "").strip()
+        if declared:
+            return declared
+    project = str(source_metadata.get("project") or "").strip() or None
+    return default_instance_name(_registry_prefix("executor"), project=project, project_root=governance_root)
 
 
 def _derive_audit_assigned_to(project: str) -> str:
@@ -336,18 +362,20 @@ def should_derive_audit(source_metadata: dict[str, Any], *, branch_id: str | Non
     return True
 
 
-def _declared_revision_suffixes() -> list[str] | None:
+def _declared_revision_suffixes(*, fresh: bool = True) -> list[str] | None:
     """AIPOS-F18-fix2 F-G-1: 从声明读卡号演进模式(transitions.schema fix_card_closure.revision_card_numbering.pattern)。
 
     pattern 形如 ``<原卡ID>R[迭代序号]``: ``<原卡ID>`` = 原卡占位, ``[迭代序号]`` = 序号槽。
     依声明生成后缀序列 ['R','R2','R3',…](第1轮序号槽为空, 其后为数字), 上限R100;
     声明不可读/不可解析 → 返回 None(调用方回退内置序列, 行为与旧版一致)。
     改声明模式即改行为(验收②"卡号演进模式改声明跟随"由此实现)。
+    AIPOS-F112: fresh=False = 只读审计轮号(推导核/loop/产物入口每步都读), 不清全局 schema 缓存; 派生写路径仍 fresh。
     """
     try:
         from tools.schema_loader import clear_cache, code_repo_schema_root, load_schema
 
-        clear_cache()  # 让模式声明的现场修改(改完还原)对运行中的门立即可见
+        if fresh:
+            clear_cache()  # 让模式声明的现场修改(改完还原)对运行中的门立即可见
         schema = load_schema("transitions", code_repo_schema_root())  # F-B-1同根: 代码所在仓根
         pattern = str(
             ((schema.get("nodes", {}) or {}).get("fix_card_closure", {}) or {})
@@ -366,6 +394,84 @@ def _declared_revision_suffixes() -> list[str] | None:
         return None
 
 
+def audit_round_suffixes(*, fresh: bool = False) -> list[str]:
+    """AIPOS-F112: 审计轮卡号后缀序列唯一实现(声明 fix_card_closure.revision_card_numbering; 不可读回退内置 R→R2→…→R100)。
+    derive_audit_task_id(派生写)与轮号读取(audit_round_ids / reviewed_task_id_of)同读此序列, 禁第二份。"""
+    declared = _declared_revision_suffixes(fresh=fresh)
+    return declared if declared else ["R"] + [f"R{i}" for i in range(2, 101)]
+
+
+def reviewed_task_id_of(audit_task_id: str) -> str | None:
+    """AIPOS-F112: 按审计轮号形(声明后缀序列, 最长后缀优先, 大小写不敏感)从审计卡号取被审卡号; 不是审计轮号形 = None。
+    只在拿不到卡面时用; 有卡面以卡面 reviewed_task_id 为准(audit_card_reviewed_id)。"""
+    tid = str(audit_task_id or "").strip()
+    upper = tid.upper()
+    for suffix in sorted(audit_round_suffixes(), key=len, reverse=True):
+        if suffix and len(tid) > len(suffix) and upper.endswith(suffix.upper()):
+            return tid[: -len(suffix)]
+    return None
+
+
+def is_audit_card(task_id: str, card_frontmatter: dict[str, Any] | None = None) -> bool:
+    """AIPOS-F112: 审计卡判据唯一实现(推导核 / 产物入口 / loop 回读 / 开工核验同读)。
+    卡面在: task_mode=audit 或首轮号形(<ID>R, 存量手发审计卡); 卡面不在: 审计轮号形(R/R2/R3…, 声明序列)。
+    原各处 `task_id.upper().endswith("R")` 认不出复审轮 R2(gap #69 的一环)。"""
+    tid = str(task_id or "").strip()
+    if isinstance(card_frontmatter, dict) and card_frontmatter:
+        if str(card_frontmatter.get("task_mode") or "").strip().lower() == "audit":
+            return True
+        first = audit_round_suffixes()[0]
+        return bool(first) and tid.upper().endswith(first.upper())
+    return reviewed_task_id_of(tid) is not None
+
+
+def audit_card_reviewed_id(task_id: str, card_frontmatter: dict[str, Any] | None = None) -> str:
+    """AIPOS-F112: 审计卡的被审卡号 = 卡面 reviewed_task_id → derived_from → 审计轮号形; 都无 = ""(调用方 fail-closed)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    declared = str(fm.get("reviewed_task_id") or fm.get("derived_from") or "").strip()
+    return declared or (reviewed_task_id_of(task_id) or "")
+
+
+def audit_round_ids(source_task_id: str, repo_root: Path) -> list[str]:
+    """AIPOS-F112: 被审卡已有的审计轮卡号(按声明序列从首轮起, 队列中存在者; 首个缺号即止——轮号由 derive_audit_task_id 连续派生)。"""
+    from tools.aipos_cli.task_loader import find_task_card_matches
+
+    out: list[str] = []
+    for suffix in audit_round_suffixes():
+        candidate = f"{source_task_id}{suffix}"
+        if not find_task_card_matches(Path(repo_root), candidate):
+            break
+        out.append(candidate)
+    return out
+
+
+def current_audit_task_id(source_task_id: str, repo_root: Path) -> str:
+    """AIPOS-F112: 当前一轮审计卡号 = 已有轮次中最新一张; 一张都没有 = 首轮号(派审将生成它)。
+    推导核等待/派审、loop 拉起、落账范围均认这一张(gap #69: 原写死 <ID>R, 复审 R2 永远等不到)。"""
+    rounds = audit_round_ids(source_task_id, repo_root)
+    return rounds[-1] if rounds else f"{source_task_id}{audit_round_suffixes()[0]}"
+
+
+def superseding_round(audit_task_id: str, repo_root: Path, card_frontmatter: dict[str, Any] | None = None) -> dict[str, str] | None:
+    """AIPOS-F114: 审计轮是否已被取代的唯一读取(推导核 / 开工核验 / 裁决入口同读, 禁第二份)。
+    取代关系唯一记在后一轮的门派审记录 supersedes 字段(AIPOS-F112 既有, F72 字段), 不改写旧轮卡面/记录。
+    返回 {audit_task_id: 取代它的那一轮, dispatch_id}; 未被取代 / 不是审计轮 = None。"""
+    from tools.aipos_cli.next_resolver import _find_latest_record, _resolve_governance_path_with_relative
+
+    reviewed = audit_card_reviewed_id(audit_task_id, card_frontmatter)
+    if not reviewed:
+        return None
+    rounds = audit_round_ids(reviewed, Path(repo_root))
+    if audit_task_id not in rounds:
+        return None
+    dispatch_root = _resolve_governance_path_with_relative("records", Path(repo_root)) / "audit_dispatches"
+    for later in rounds[rounds.index(audit_task_id) + 1:]:
+        dispatch = _find_latest_record(dispatch_root / later, "dispatch") or {}
+        if str(dispatch.get("supersedes") or "").strip() == audit_task_id:
+            return {"audit_task_id": later, "dispatch_id": str(dispatch.get("dispatch_id") or "")}
+    return None
+
+
 def derive_audit_task_id(source_task_id: str, repo_root: Path | None = None) -> str:
     """AIPOS-F18 大项B: Generate audit task ID with revision number evolution.
 
@@ -381,8 +487,7 @@ def derive_audit_task_id(source_task_id: str, repo_root: Path | None = None) -> 
 
     This eliminates orphan cards when fix cards are closed with PASS verdicts.
     """
-    declared = _declared_revision_suffixes()
-    suffixes = declared if declared else ["R"] + [f"R{i}" for i in range(2, 101)]
+    suffixes = audit_round_suffixes(fresh=True)
 
     if repo_root is None:
         # No repo_root provided, return first suffix (backward compatible)
@@ -432,9 +537,13 @@ def build_derived_audit_task(
     artifact_refs: list[str],
     collaboration_profile: dict[str, Any] | None = None,
     repo_root: Path | None = None,
+    reaudit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Build derived audit task frontmatter and body.
+
+    AIPOS-F112: reaudit = 裁决过期复审(nodes.N4.verdict_stale)的派生依据 {audit_task_id(演进后的下一轮号), superseded_audit_task_id,
+    stale(next_resolver.verdict_staleness 结果)}; 卡面注入取代说理。缺省 None = 首轮(行为不变)。
     
     AIPOS-338 S2: the audit body now carries the fixed audit instructions
     (criterion = original card full text, independent evidence, two bottom-line
@@ -448,6 +557,9 @@ def build_derived_audit_task(
     # derive_audit_task_id)。R1 把演进塞进共用路径破坏了 return 幂等(同卡二次 return
     # 会两派 R2), 由 test_derive_audit_task_on_return_idempotency_existing_task 钉住。
     audit_task_id = derive_audit_task_id(source_task_id, repo_root=None)
+    if reaudit:
+        # AIPOS-F112: 复审轮号由调用方按演进声明定(derive_audit_task_on_return 的 verdict_stale 分支, derive_audit_task_id 带 repo_root)
+        audit_task_id = str(reaudit["audit_task_id"])
     
     # AIPOS-F66 F-002: 项目名取不到=raise 带出口(fail-closed),禁默认 lybra
     project = source_metadata.get("project")
@@ -465,7 +577,7 @@ def build_derived_audit_task(
         "title": f"Audit {source_metadata.get('title', source_task_id)}",
         "project": project,
         "assigned_to": _derive_audit_assigned_to(project),
-        "agent_instance": _derive_audit_instance(project),
+        "agent_instance": resolve_audit_instance(source_metadata, repo_root),  # AIPOS-F102 件①: audit_by 优先
         "context_bundle": source_metadata.get("context_bundle", "default"),
         "task_mode": "audit",
         "task_class": "simple",
@@ -489,9 +601,27 @@ def build_derived_audit_task(
     # AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录, 与正文两段同一渲染函数(禁写死被审卡目录)
     code_repo = _resolve_code_repo(repo_root, source_metadata)
     report_location = render_audit_report_location(repo_root, audit_task_id)
+    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name  # AIPOS-F108 件②: 分支 / 基线读声明
+
     forensic_anchors = [
-        f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | 禁checkout卡分支(git diff main...card/{source_task_id}) | 报告落点={report_location} | 不存在结论必附pwd+命令+输出",
+        f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | 禁checkout卡分支(git diff {card_base_branch()}...{card_branch_name(source_task_id)}) | 报告落点={report_location} | 不存在结论必附pwd+命令+输出",
     ]
+    if reaudit and reaudit.get("kind") == "return_stale":
+        stale = reaudit.get("stale") or {}
+        superseded = str(reaudit.get("superseded_audit_task_id") or "")
+        forensic_anchors.append(
+            f"\u2605复审说理(AIPOS-F114 return_stale): 上一轮 {superseded} 在途未出裁决, 其所审交回 {stale.get('return_id')} 绑定 "
+            f"{str(stale.get('bound_commit_sha') or '')[:12]}, 卡分支 {stale.get('branch')} 交回后又前进到 {str(stale.get('tip') or '')[:12]} "
+            f"(交回已过期); 本轮准绳不变(原卡全文), 审的是新 tip 的整卡产物; 上一轮作废(本轮派审记录 supersedes), 其报告不入门"
+        )
+    elif reaudit:
+        stale = reaudit.get("stale") or {}
+        superseded = str(reaudit.get("superseded_audit_task_id") or "")
+        forensic_anchors.append(
+            f"\u2605复审说理(AIPOS-F112 verdict_stale): 上一轮 {superseded} 的裁决 {stale.get('verdict_id')} 覆盖 "
+            f"{str(stale.get('verdict_commit_sha') or '')[:12]}, 卡分支 {stale.get('branch')} 已前进到 {str(stale.get('tip') or '')[:12]} "
+            f"(产物已变化, finalize F70 拒); 本轮准绳不变(原卡全文), 审的是新 tip 的整卡产物; 上一轮已结案, 其裁决留作旧 commit 的历史事实"
+        )
     existing_governance_refs = list(audit_metadata.get("governance_refs") or [])
     audit_metadata["governance_refs"] = existing_governance_refs + forensic_anchors
     
@@ -508,9 +638,26 @@ def build_derived_audit_task(
     # Build body (mechanical signpost) — AIPOS-338 S2: fixed audit instructions
     artifact_list = "\n".join(f"- `{ref}`" for ref in artifact_refs) if artifact_refs else "- (see return record)"
     
+    reaudit_note = ""
+    if reaudit and reaudit.get("kind") == "return_stale":
+        stale = reaudit.get("stale") or {}
+        reaudit_note = (
+            f"\n## 复审说理(AIPOS-F114 return_stale)\n"
+            f"本卡取代在途的上一轮审计卡 `{reaudit.get('superseded_audit_task_id')}`: 它所审的交回 `{stale.get('return_id')}` 绑定 "
+            f"`{stale.get('bound_commit_sha')}`, 卡分支 `{stale.get('branch')}` 交回后又前进到 `{stale.get('tip')}`"
+            f"(多为执行体在卡工作树合 main), 上一轮审的不是当前产物, 已作废、其报告不入门。按原卡全文对新 tip 整卡审计。\n"
+        )
+    elif reaudit:
+        stale = reaudit.get("stale") or {}
+        reaudit_note = (
+            f"\n## 复审说理(AIPOS-F112 verdict_stale)\n"
+            f"本卡取代上一轮审计卡 `{reaudit.get('superseded_audit_task_id')}`: 其裁决 `{stale.get('verdict_id')}` 覆盖 "
+            f"`{stale.get('verdict_commit_sha')}`, 卡分支 `{stale.get('branch')}` 之后又前进到 `{stale.get('tip')}`"
+            f"(多为 finalize 合并冲突后在卡工作树合 main), 旧裁决不再覆盖当前产物。按原卡全文对新 tip 整卡重审。\n"
+        )
     audit_body = f"""## Audit Subject
 Independent audit of task `{source_task_id}`.
-
+{reaudit_note}
 ## References
 - Original task: `{source_path}`
 - Return record: `{return_record_ref}`
@@ -555,9 +702,10 @@ Independent audit of task `{source_task_id}`.
         )
         try:
             conn = workspace_connection_info(repo_root)
+            # AIPOS-F103 件④: 审计信封身份 = 本审计卡的认领实例(audit_metadata.agent_instance), 判定对象 = 被审卡(source_metadata)
             section = render_gate_contract_section(
                 _resolve_profile(source_metadata, collaboration_profile, repo_root),
-                source_metadata, role="auditor",
+                {**source_metadata, "audit_by": audit_metadata.get("agent_instance") or source_metadata.get("audit_by")}, role="auditor",
                 gate_url=conn["gate_url"], connection_json_rel=conn["connection_json_rel"],
                 workspace_display=conn["workspace_display"], task_id=audit_task_id,
                 workspace_root=repo_root,
@@ -569,7 +717,7 @@ Independent audit of task `{source_task_id}`.
             section = (
                 "## 【认领与交回】\n\n"
                 f"> 生成失败(manual_gate_mode 项目): {exc}\n"
-                f"> 出口: 在 {repo_root}/5_tasks/policies/ 补 active 审计信封 / 修 .lybra/connection.json 后 regen 本卡。"
+                f"> 出口: 在信封目录(project.json paths.policies_root)补覆盖审计实例与被审卡的 active 信封 / 修 .lybra/connection.json 后 regen 本卡。"
             )
         audit_body = audit_body.rstrip() + "\n\n" + section + "\n"
 
@@ -580,6 +728,41 @@ Independent audit of task `{source_task_id}`.
         "body": audit_body,
         "audit_task_id": audit_task_id,
         "audit_task_path": audit_task_path,
+    }
+
+
+def _reaudit_round(repo_root: Path, source_task_id: str, source_metadata: dict[str, Any], *, branch_id: str) -> dict[str, Any] | None:
+    """AIPOS-F112 件② + F114 件①: 交回时是否走「复审」派生。None = 不适用(无裁决且无在途过期轮 / 未过期 / 非代码 / 不派审, 走既有首轮派生判据);
+    {"skip": 原因} = 适用但当前一轮在途且未过期(幂等不演进); 否则 {kind(verdict_stale|return_stale), audit_task_id(下一轮,
+    derive_audit_task_id 演进), superseded_audit_task_id, stale}。
+    判据唯一实现: 裁决过期 next_resolver.verdict_staleness(当前一轮已裁); 交回过期 next_resolver.return_staleness(当前一轮在途,
+    其所审交回绑定的 tip ≠ 卡分支 tip——门已落的新交回不是该轮所审的那份)。"""
+    if str(source_metadata.get("audit", "")).strip().lower() == "none":
+        return None
+    if str(source_metadata.get("task_mode", "")).strip().lower() == "audit" or branch_id == "noncode_bench_audit":
+        return None
+    from tools.aipos_cli.next_resolver import return_staleness, verdict_staleness
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
+
+    with task_card_lookup_scope(Path(repo_root)):  # 只读判定: 轮号查找共用一趟队列索引
+        current = current_audit_task_id(source_task_id, repo_root)
+        stale = verdict_staleness(repo_root, source_task_id, source_metadata)
+        kind = "verdict_stale"
+        if stale is None or str(stale.get("audit_task_id") or "") != current:
+            # AIPOS-F114: 当前一轮在途(无本轮裁决)且其所审交回已过期 → 演进下一轮取代它(含 F112 复审轮 R2 在途时分支再前进)
+            in_flight = return_staleness(repo_root, source_task_id, source_metadata)
+            if in_flight is not None and str(in_flight.get("audit_task_id") or "") == current:
+                stale, kind = in_flight, "return_stale"
+            elif stale is None:
+                return None
+            else:
+                return {"skip": f"re-audit round {current} already derived and awaiting its verdict (idempotency, AIPOS-F112)"}
+        next_round = derive_audit_task_id(source_task_id, repo_root=repo_root)
+    return {
+        "kind": kind,
+        "audit_task_id": next_round,
+        "superseded_audit_task_id": current,
+        "stale": stale,
     }
 
 
@@ -605,8 +788,12 @@ def derive_audit_task_on_return(
     """
     # AIPOS-338 S6: resolve the branch; non-code branches do not derive an R card
     branch_id = _resolve_branch_id(source_metadata, collaboration_profile, repo_root)
-    # Check if should derive (AIPOS-F72: pass repo_root for chain validity check)
-    if not should_derive_audit(source_metadata, branch_id=branch_id, repo_root=repo_root):
+    # AIPOS-F112 件②: 已有裁决但按 nodes.N4.verdict_stale 判据过期(卡分支 tip ≠ 最新 PASS 裁决覆盖的 commit)的重交回 →
+    # 按卡号演进声明派下一轮(R2/R3…); 当前一轮尚无裁决(在途)= 幂等不演进。判据唯一实现 next_resolver.verdict_staleness。
+    reaudit = _reaudit_round(repo_root, source_task_id, source_metadata, branch_id=branch_id)
+    if reaudit is not None and reaudit.get("skip"):
+        return {"derived": False, "reason": str(reaudit["skip"])}
+    if reaudit is None and not should_derive_audit(source_metadata, branch_id=branch_id, repo_root=repo_root):
         audit_opt = str(source_metadata.get("audit", "")).strip().lower()
         if audit_opt == "none":
             return {"derived": False, "reason": "audit: none in source task frontmatter"}
@@ -623,6 +810,7 @@ def derive_audit_task_on_return(
         artifact_refs=artifact_refs,
         collaboration_profile=collaboration_profile,
         repo_root=repo_root,
+        reaudit=reaudit,
     )
     
     audit_task_id = audit_spec["audit_task_id"]
@@ -632,13 +820,9 @@ def derive_audit_task_on_return(
 
     # AIPOS-F38 大项A(F17 原则覆盖全部 writer): 必填字段从 schema 单源补全(值承继原卡,
     # 缺则安全默认), 再产前自检——产物必过与 publish/修复卡 writer 同一的 schema 必填校验;
-    # 审计身份必须是注册表审计实例(_derive_audit_instance 同一实现), 禁承继原卡执行实例。
+    # 审计身份 = resolve_audit_instance(被审卡 audit_by → 项目推导, AIPOS-F102 件①; 同一实现), 禁承继原卡执行实例。
     _required_fields = get_required_card_fields()
-    _inherit_defaults = {
-        "needs_owner": False,
-        "output_target": source_metadata.get("output_target", ""),
-        "artifact_policy": source_metadata.get("artifact_policy", "formal_write"),
-    }
+    _inherit_defaults = card_field_defaults()  # AIPOS-F108 件①: 安全默认值 = card.schema fields.<键>.default(单源)
     for _field in _required_fields:
         if _field not in audit_metadata or audit_metadata[_field] is None:
             if _field in source_metadata and source_metadata[_field] is not None:
@@ -658,7 +842,16 @@ def derive_audit_task_on_return(
             ),
         }
     
-    _expected_instance = _derive_audit_instance(str(source_project))
+    _expected_instance = resolve_audit_instance(source_metadata, repo_root)  # AIPOS-F102 件①: 同一解析(audit_by 优先)
+    _reviewed_executor = str(source_metadata.get("agent_instance") or source_metadata.get("claimed_by") or "").strip()
+    if _reviewed_executor and _expected_instance == _reviewed_executor:
+        return {
+            "derived": False,
+            "reason": (
+                f"AIPOS-F102 派生校验 FAIL: 审计卡 {audit_task_id} 审计实例 {_expected_instance} = 被审卡执行实例(独立性不成立); "
+                f"出口: 被审卡 audit_by 声明独立的审计实例"
+            ),
+        }
     if audit_metadata.get("agent_instance") != _expected_instance:
         return {
             "derived": False,
@@ -733,6 +926,8 @@ def derive_audit_task_on_return(
         dry_run_id=None,
         dry_run_snapshot_hash=None,
         confirmation_ref="auto_confirmed_gate_derivation",
+        # AIPOS-F112: 复审轮派审记录写 supersedes=<上一轮审计卡号>(F72 既有字段; 上一轮随其裁决结案, 取代说理在审计卡正文)
+        supersedes=str(reaudit["superseded_audit_task_id"]) if reaudit else None,
     )
     
     # AIPOS-F64: 统一写入器 - 原子写入publish和dispatch两条记录
@@ -750,6 +945,7 @@ def derive_audit_task_on_return(
         "derived": True,
         "audit_task_id": audit_task_id,
         "audit_task_path": audit_task_path,
+        "superseded_audit_task_id": str(reaudit["superseded_audit_task_id"]) if reaudit else None,
         "publish_record_path": write_result["paths"][0],
         "dispatch_record_path": write_result["paths"][1],
         "performed_writes": [
@@ -866,11 +1062,12 @@ def derive_repair_card_on_fail(
     source_metadata = {}
     source_body = ""
     if source_card:
+        # AIPOS-F102: 被审卡读不出 = 拒(原 except Exception: pass 静默当空卡, 修复卡身份/项目无据)
         try:
             text = source_card.read_text(encoding="utf-8")
-            source_metadata, source_body, _ = parse_markdown_frontmatter(text)
-        except Exception:
-            pass
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ValueError(f"derive_repair_card_on_fail: 被审卡 {source_card} 读不出: {exc}") from exc
+        source_metadata, source_body, _ = parse_markdown_frontmatter(text)
 
     # AIPOS-F66 F-002: 项目名取不到=raise 带出口(fail-closed),禁默认 lybra
     project = source_metadata.get("project")
@@ -882,15 +1079,18 @@ def derive_repair_card_on_fail(
     project = str(project)
 
     # AIPOS-F17 大项A: 构建修复卡 — 必填字段从 schema 单源派生, 值承继原卡, 禁手写第二份清单。
+    # AIPOS-F102 件①: 修复卡执行体承继被审卡声明, 都缺按项目推导(resolve_repair_executor_instance), 禁 lybra 身份字面
+    repair_executor = resolve_repair_executor_instance(source_metadata, governance_root)
     repair_metadata = {
         "task_id": repair_task_id,
         "title": f"Fix: {source_metadata.get('title', reviewed_task_id)} (round {fix_round})",
         "project": project,
-        "assigned_to": source_metadata.get("assigned_to", "executor_lybra"),
-        "agent_instance": source_metadata.get("agent_instance", "executor.lybra.kiwiai-dev"),
+        # AIPOS-F102 件① / F108 件①(M9) 同口径: 执行实例承继原卡声明 → 缺则按项目推导 → 项目也无则拒; 禁写死实例名缺省
+        "assigned_to": str(source_metadata.get("assigned_to") or "").strip() or repair_executor,
+        "agent_instance": str(source_metadata.get("agent_instance") or "").strip() or repair_executor,
         "context_bundle": source_metadata.get("context_bundle", "default"),
         "task_mode": source_metadata.get("task_mode", "code"),
-        "task_class": source_metadata.get("task_class", "simple"),
+        "task_class": source_metadata.get("task_class") or card_field_defaults()["task_class"],
         "priority": source_metadata.get("priority", "high"),
         "status": "pending",
         "created_by": "gate_derivation",
@@ -906,11 +1106,7 @@ def derive_repair_card_on_fail(
     # AIPOS-F17 大项A: 从 schema 必填集补全——值承继原卡, 原卡无则用安全默认值。
     # 禁手写第二份字段清单; schema 改即自动跟随。
     _required_fields = get_required_card_fields()
-    _inherit_defaults = {
-        "needs_owner": False,
-        "output_target": source_metadata.get("output_target", ""),
-        "artifact_policy": source_metadata.get("artifact_policy", "formal_write"),
-    }
+    _inherit_defaults = card_field_defaults()  # AIPOS-F108 件①: 安全默认值 = card.schema fields.<键>.default(单源)
     for field in _required_fields:
         if field not in repair_metadata or repair_metadata[field] is None:
             if field in source_metadata and source_metadata[field] is not None:

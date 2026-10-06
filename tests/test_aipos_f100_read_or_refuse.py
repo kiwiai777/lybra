@@ -373,17 +373,23 @@ def test_settlement_status_does_not_count_unreadable_closure(gov: Path):
 # 读取口统一(零依赖链路发现: 原各自 import yaml 的读点)
 # ---------------------------------------------------------------------------
 
-def test_policy_resolver_reads_through_single_reader(gov: Path):
-    from tools.aipos_cli import policy_resolver
+def test_envelope_reader_reads_through_single_reader(gov: Path):
+    """AIPOS-F103 件④ 合并改写: 信封读取唯一实现 = autonomy_policy.load_policy(经 parse_markdown_frontmatter; 旧按角色词挑选的
+    解析模块已删, F100 对其 import yaml 的修复随之落在唯一实现上)。读不出(任何解析告警)= None = 不算有效信封(fail-closed)。"""
+    from tools.aipos_cli import autonomy_policy
 
     import re
 
-    assert not re.search(r"^\s*(import yaml|from yaml)", Path(policy_resolver.__file__).read_text(encoding="utf-8"), re.M)
+    src = Path(autonomy_policy.__file__).read_text(encoding="utf-8")
+    assert not re.search(r"^\s*(import yaml|from yaml)", src, re.M)
+    assert "parse_markdown_frontmatter(" in src
     _write(gov / "5_tasks" / "policies" / "pol_bad.md",
-           f"---\npolicy_id: pol_bad\nstatus: active\nagent_or_role: exec\npolicy_type: dev\n{BAD_LINE}\n---\n")
-    assert policy_resolver._parse_policy_frontmatter((gov / "5_tasks" / "policies" / "pol_bad.md").read_text(encoding="utf-8")) is None
-    good = "---\npolicy_id: pol_ok\nstatus: active\n---\n"
-    assert policy_resolver._parse_policy_frontmatter(good) == {"policy_id": "pol_ok", "status": "active"}
+           f"---\nrecord_type: owner_autonomy_policy\npolicy_id: pol_bad\nstatus: active\nagent_or_role: exec\n{BAD_LINE}\n---\n")
+    assert autonomy_policy.load_policy(gov, "pol_bad") is None
+    _write(gov / "5_tasks" / "policies" / "pol_ok.md",
+           "---\nrecord_type: owner_autonomy_policy\npolicy_id: pol_ok\nstatus: active\nmode: PreAuthorized\nagent_or_role: exec\n---\n")
+    ok = autonomy_policy.load_policy(gov, "pol_ok")
+    assert ok is not None and ok["policy_id"] == "pol_ok" and ok["status"] == "active"
 
 
 def test_agent_profiles_name_unreadable_profile_block(gov: Path):

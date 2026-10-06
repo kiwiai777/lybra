@@ -181,8 +181,9 @@ def test_f78_item4_declarations_exist_in_schema_single_source():
     paths = config["configuration_sources"]["project_json"]["schema"]["paths"]["schema"]
     # AIPOS-F78B 件②: 声明表增 finalize_mode(internal|external, 默认 internal)
     # AIPOS-F89 件② M17: 另含两个项目治理文档可选声明位(未声明 = None, 缺省行为见声明)
+    # AIPOS-F103 件④: 另含信封目录 policies_root(缺省 5_tasks/policies)
     assert set(paths) == {"return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode",
-                          "foundation_backlog", "hard_rules_source"}
+                          "foundation_backlog", "hard_rules_source", "policies_root"}
     assert paths["finalize_mode"]["default"] == "internal" and paths["finalize_mode"]["enum"] == ["internal", "external"]
     assert paths["return_root"]["default"] == "task_cards"  # lybra 默认 = 现行路径, 0 迁移
     card = json.loads((REPO_ROOT / "schema" / "card.schema.json").read_text(encoding="utf-8"))
@@ -694,7 +695,7 @@ def test_f78_pre0_7_finalize_merges_parallel_json_keys_and_rereview_on_tip_chang
     _git(repo, "commit", "-q", "-m", "F78-K: add c")
     ops: list[str] = []
     res = fz._integrate_card_branch("F78-J", "verdict_x", repo, gov, False, ops,
-                                    branch_integration={"branch_pattern": "card/{task_id}", "merge_strategy": "no-ff",
+                                    branch_integration={"branch_pattern": "card/{task_id}", "base_branch": "main", "merge_strategy": "no-ff",
                                                         "merge_message_format": "Merge {branch}: {summary} ({verdict_id})"},
                                     task_mode="code", output_target="schema/")
     assert res["action"] == "merged" and res.get("json_key_merged") == ["schema/decl.json"], (res, ops)
@@ -711,7 +712,7 @@ def test_f78_pre0_7_finalize_merges_parallel_json_keys_and_rereview_on_tip_chang
     _write(decl, json.dumps({"verbs": {"a": 42, "b": 2, "c": 3}}, indent=2) + "\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "F78-Y: a=42")
-    res2 = fz._integrate_card_branch("F78-X", "v", repo, gov, False, [], branch_integration={"branch_pattern": "card/{task_id}"}, task_mode="code")
+    res2 = fz._integrate_card_branch("F78-X", "v", repo, gov, False, [], branch_integration={"branch_pattern": "card/{task_id}", "base_branch": "main"}, task_mode="code")
     assert res2["blocked"] and res2["action"] == "blocked_conflict" and _git(repo, "status", "--porcelain") == ""
     # ⑦ 后半: PASS 裁决绑旧 sha, tip 已变 → 复审放行(返回说明), tip 相同 → None(维持终态)
     monkeypatch.setattr(adapter, "_resolve_product_code_repo", lambda x: repo)

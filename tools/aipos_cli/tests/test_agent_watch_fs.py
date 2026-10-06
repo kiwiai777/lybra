@@ -15,7 +15,8 @@ Pins (card AIPOS-268 §1-3 + red lines + AIPOS-284 S1-S5):
   - exit 4: stall detected (静默停滞)
 - red lines: the module is stdlib-only (zero new deps), read-only (no write/remove
   syscalls in source), and GATE-FREE (no MCP/gate client imports — the pump never touches
-  the gate); agent_connector.py stays byte-identical (candidate ⑤ preserved).
+  the gate); AIPOS-F103: `--workspace-root` is the ONLY `agent watch` mode (the gate-pull
+  mode and the old cross-machine connector were retired; `--gate-url` is rejected by argparse).
 """
 
 from __future__ import annotations
@@ -382,9 +383,9 @@ class FsWatchCliIntegrationTests(unittest.TestCase):
         self.assertEqual(out, b"", "timeout must be silent")
         self.assertEqual(err, b"")
 
-    def test_gate_mode_is_still_routed_and_requires_gate_args(self) -> None:
-        """Zero-regression dispatch pin: `agent watch --gate-url` (candidate ⑤) still
-        routes to the gate path and enforces the AIPOS-248 required-arg contract."""
+    def test_retired_gate_mode_is_rejected_by_argparse(self) -> None:
+        """AIPOS-F103 件①: `agent watch` 的旧门拉取模式(`--gate-url` 参数)已退役 —— argparse 报
+        --workspace-root 必填 / --gate-url 不认识, exit 2, 不进任何门路径。"""
         proc = subprocess.Popen(
             [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "watch",
              "--gate-url", "http://127.0.0.1:1"],
@@ -394,7 +395,17 @@ class FsWatchCliIntegrationTests(unittest.TestCase):
         )
         out, err = proc.communicate(timeout=8)
         self.assertEqual(proc.returncode, 2, err)
-        self.assertIn(b"--actor", err)
+        self.assertIn(b"the following arguments are required: --workspace-root", err)
+        ws = _make_workspace()
+        proc = subprocess.run(
+            [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "watch",
+             "--workspace-root", ws, "--gate-url", "http://127.0.0.1:1", "--timeout", "1"],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            timeout=8,
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn(b"unrecognized arguments: --gate-url", proc.stderr)
 
 
 class FsWatchRedLineTests(unittest.TestCase):
@@ -458,26 +469,8 @@ class FsWatchRedLineTests(unittest.TestCase):
         for call in open_calls:
             self.assertIn('"r"', call, f"open() must be read-only: {call}")
 
-    def test_agent_connector_module_is_unchanged_zero_regression(self) -> None:
-        """Red line 'gate 零改动' + S3 zero-regression: the AIPOS-248 gate-path module
-        (candidate ⑤) is byte-identical to git HEAD — the filesystem pump added a new
-        module + CLI dispatch only, never edited the gate client."""
-        connector = _REPO_ROOT / "tools" / "aipos_cli" / "agent_connector.py"
-        head = subprocess.run(
-            ["git", "-C", str(_REPO_ROOT), "show", f"HEAD:{connector.relative_to(_REPO_ROOT)}"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        self.assertEqual(
-            connector.read_text(encoding="utf-8"),
-            head.stdout,
-            "agent_connector.py must be byte-identical to HEAD (candidate ⑤ untouched)",
-        )
-
-    def test_cli_watch_supports_both_modes(self) -> None:
-        """The 候选⑤⑫合流 surface: `agent watch` accepts both --workspace-root (⑫) and
-        --gate-url (⑤), mutually exclusive."""
+    def test_cli_watch_has_only_the_workspace_root_mode(self) -> None:
+        """AIPOS-F103 件①: `agent watch` 只剩 --workspace-root 一种模式(旧 --gate-url 门拉取已退役)。"""
         help_proc = subprocess.run(
             [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "agent", "watch", "--help"],
             cwd=str(_REPO_ROOT),
@@ -485,9 +478,11 @@ class FsWatchRedLineTests(unittest.TestCase):
             text=True,
         )
         text = help_proc.stdout + help_proc.stderr
+        self.assertEqual(help_proc.returncode, 0, text)
         self.assertIn("--workspace-root", text)
-        self.assertIn("--gate-url", text)
         self.assertIn("--timeout", text)
+        self.assertNotIn("--gate-url", text)
+        self.assertNotIn("--max-wait", text)
 
 
 class FsWatchV2ExpectTests(unittest.TestCase):

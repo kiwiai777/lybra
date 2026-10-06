@@ -6,18 +6,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# AIPOS-R4B-1: 端口默认值的权威来源是 schema/config.schema.json(board_default=7117,
-# mcp_server_default=7118),经 tools/schema_loader.py:get_config_port() 读取。
-# workspace_config 在 CLI 导入链早期被导入,为避免 editable-install 环境下 namespace
-# package 'tools' 无法解析顶层模块 'schema_loader' 导致 ModuleNotFoundError(见 AUDIT-R4B-1
-# F-R4B1-1),此处保留常量镜像,与 config.schema 值保持同步。
-# 调用方应优先直接调用 schema_loader.get_config_port() 读单一源;仅在 workspace_config
-# 场景(如 default_workspace_config 生成)使用此常量。loader 仍唯一,config.schema 仍是单一源。
+from tools.schema_loader import get_config_port
+
+# AIPOS-R4B-1 → AIPOS-F106 件②(M3): 端口缺省值唯一来源 = schema/config.schema.json ports(board_default / gate_default),
+# 经 tools/schema_loader.get_config_port() 读取。原「为规避 editable-install namespace package 而保留的常量镜像」已无必要
+# (AIPOS-R4B-1 FIX-2 已让 tools 成为普通 package, board_login / http_sse / confirm_client 均模块级读取), 镜像字面删除。
 CONFIG_RELATIVE_PATH = Path(".lybra") / "config.json"
 DEFAULT_BOARD_HOST = "127.0.0.1"
-DEFAULT_BOARD_PORT = 7117  # config.schema board_default (镜像,非权威)
+DEFAULT_BOARD_PORT = get_config_port("board_default")
 DEFAULT_MCP_HOST = "127.0.0.1"
-DEFAULT_MCP_PORT = 7118    # config.schema mcp_server_default (镜像,非权威)
+DEFAULT_MCP_PORT = get_config_port("gate_default")  # 门进程即 MCP 服务: 同一个端口事实(原 mcp_server_default 键已合并)
 
 # AIPOS-224 (governance home, Slice 0): home-root + active-project resolution.
 # This block is ADDITIVE and UNWIRED — no existing resolver/caller behaviour changes in this
@@ -26,7 +24,36 @@ DEFAULT_MCP_PORT = 7118    # config.schema mcp_server_default (镜像,非权威)
 DEFAULT_HOME_ROOT = Path("~/.lybra/projects")
 HOME_ROOT_ENV = "LYBRA_HOME_ROOT"
 ACTIVE_PROJECT_ENV = "LYBRA_ACTIVE_PROJECT"
+# AIPOS-F106 件③(M15): 治理工作区根的环境变量统一为 LYBRA_WORKSPACE_ROOT(与 config.schema identity_resolution.keys.workspace_root
+# 及其余 LYBRA_* 同名族)。旧名 AIPOS_WORKSPACE_ROOT 只在 workspace_root_from_env 这一个兼容读取点识别并打废弃告警;
+# 产品代码只写新名(serve 子进程 / board / mcp 进程内设置), 其余读取一律经本函数。两名均在 config.schema environment_variables 声明。
+WORKSPACE_ROOT_ENV = "LYBRA_WORKSPACE_ROOT"
 LEGACY_WORKSPACE_ROOT_ENV = "AIPOS_WORKSPACE_ROOT"
+_LEGACY_WORKSPACE_ROOT_WARNED: set[str] = set()
+
+
+def workspace_root_from_env(env: dict[str, str] | None = None) -> tuple[str | None, str | None]:
+    """AIPOS-F106 件③: 工作区根环境变量唯一读取口 → (原始值, 变量名); 都未设 = (None, None)。
+
+    新名 LYBRA_WORKSPACE_ROOT 优先; 只有旧名 AIPOS_WORKSPACE_ROOT 时照用并向 stderr 打一次废弃告警(每个值一次);
+    两名并存且不同 = 用新名并告警旧名被忽略。"""
+    import sys
+
+    source_env = env if env is not None else os.environ
+    new_value = str(source_env.get(WORKSPACE_ROOT_ENV) or "").strip()
+    legacy_value = str(source_env.get(LEGACY_WORKSPACE_ROOT_ENV) or "").strip()
+    if legacy_value and legacy_value != new_value and legacy_value not in _LEGACY_WORKSPACE_ROOT_WARNED:
+        _LEGACY_WORKSPACE_ROOT_WARNED.add(legacy_value)
+        action = f"已被 {WORKSPACE_ROOT_ENV} 覆盖, 忽略" if new_value else "仍按其值解析"
+        print(
+            f"Warning: 环境变量 {LEGACY_WORKSPACE_ROOT_ENV} 已废弃(AIPOS-F106), 请改用 {WORKSPACE_ROOT_ENV}; 本次{action}",
+            file=sys.stderr,
+        )
+    if new_value:
+        return new_value, WORKSPACE_ROOT_ENV
+    if legacy_value:
+        return legacy_value, LEGACY_WORKSPACE_ROOT_ENV
+    return None, None
 
 # AIPOS-226 (Slice 2): the global Lybra runtime root. Lybra's own runtime state (the
 # runtime config that points at the truth home + names the active project, and the role
@@ -128,9 +155,9 @@ def resolve_workspace_context(
     if explicit_root:
         return _validate_workspace_root(Path(explicit_root), source="--workspace-root"), None
 
-    raw_env_root = str(source_env.get("AIPOS_WORKSPACE_ROOT") or "").strip()
+    raw_env_root, env_name = workspace_root_from_env(source_env)
     if raw_env_root:
-        return _validate_workspace_root(Path(raw_env_root), source="AIPOS_WORKSPACE_ROOT"), None
+        return _validate_workspace_root(Path(raw_env_root), source=str(env_name)), None
 
     # ---------------------------------------------------------------------------------
     # AIPOS-226 resolution precedence (AIPOS-223 §1.4, highest first). The two-root home
@@ -139,7 +166,7 @@ def resolve_workspace_context(
     # subtree at/above the start) wins over the GLOBAL ~/.lybra/config.json home model.
     #
     #   1. --workspace-root / explicit_root           (handled above)
-    #   2. AIPOS_WORKSPACE_ROOT env                    (handled above)
+    #   2. LYBRA_WORKSPACE_ROOT env (旧名 AIPOS_WORKSPACE_ROOT 废弃兼容)  (handled above)
     #   3. LYBRA_HOME_ROOT env                         -> home model
     #   4. in-workspace .lybra/config.json (upward):   v2 (home_root) -> home model
     #                                                  v1 (workspace_root) -> that root
@@ -625,6 +652,25 @@ def read_project_json(project_root: str | Path) -> dict[str, Any]:
     return load_workspace_config(path)
 
 
+def declared_project_id(governance_root: str | Path) -> str:
+    """AIPOS-F108 件③(H6): 治理根 project.json#project(config.schema project_json.project, required)。
+    经唯一读取口 read_project_json; 缺文件/缺键/空值/读失败 = ValueError(DRAFT_PROJECT_UNDECLARED, 带出口), 禁回落写死项目 ID。"""
+    root = Path(governance_root)
+    try:
+        value = read_project_json(root).get("project")
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"DRAFT_PROJECT_UNDECLARED: 治理根 {root} 的 project.json 读取失败({exc})。出口: 修正 project.json 或显式给 project"
+        ) from exc
+    text = value.strip() if isinstance(value, str) else ""
+    if not text:
+        raise ValueError(
+            f"DRAFT_PROJECT_UNDECLARED: 治理根 {root} 的 project.json 未声明 project(config.schema project_json.project)。"
+            "出口: 在 project.json 写 \"project\": \"<项目ID>\", 或草稿显式给 project"
+        )
+    return text
+
+
 # ---------------------------------------------------------------------------
 # AIPOS-F78 件④: 项目落点声明(project.json paths 段)的唯一读取口。
 # 声明表(键名/默认值)在 config.schema.json configuration_sources.project_json.schema.paths 一处;
@@ -633,7 +679,7 @@ def read_project_json(project_root: str | Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode",
-                     "foundation_backlog", "hard_rules_source")
+                     "foundation_backlog", "hard_rules_source", "policies_root")  # AIPOS-F103 件④: 信封目录
 # AIPOS-F78B 件②: 非路径键(值域读声明 enum), 与布尔 manual_gate_mode 一样不做路径解析
 PROJECT_ENUM_KEYS = ("finalize_mode",)
 
@@ -658,7 +704,7 @@ def _project_paths_declaration() -> dict[str, dict[str, Any]]:
 def project_paths(governance_root: str | Path) -> dict[str, Any]:
     """AIPOS-F78: 解析项目落点声明。返回 {return_root: Path, verdict_root: Path, queue_root: Path,
     task_cards_root: Path, manual_gate_mode: bool, finalize_mode: str, foundation_backlog: Path | None,
-    hard_rules_source: Path | None, declared: {key: bool}}。
+    hard_rules_source: Path | None, policies_root: Path, declared: {key: bool}}。
 
     AIPOS-F89 件② M17: 项目治理文档位(foundation_backlog / hard_rules_source)为可选声明(声明表 optional=true, 无 default):
     未声明 = None, 产品不假设任何治理文档名存在。
@@ -1020,8 +1066,10 @@ def _declared_root_from_connection(start: Path | None) -> Path | None:
     current = (start or Path.cwd()).expanduser().resolve()
     if current.is_file():
         current = current.parent
+    from tools.aipos_cli.service_mode import connection_path  # AIPOS-F106 件④: connection.json 定位唯一实现(惰性导入防环)
+
     for candidate in [current, *current.parents]:
-        conn = candidate / ".lybra" / "connection.json"
+        conn = connection_path(candidate)
         if not conn.is_file():
             continue
         data = load_workspace_config(conn)
@@ -1041,7 +1089,7 @@ def governance_workspace_root(
     序(每级都以唯一结构判据 has_workspace_queue 验证, 不看路径名; 禁按任何项目布局回退):
       1. explicit: CLI --workspace-root / --governance-root / --repo-root, 或调用方转交的 env 值(向后兼容: 显式永远最高)
       2. 声明: 自 start(缺省 cwd)向上首个 .lybra/connection.json 的 governance_root(缺则 workspace_root)
-      3. 结构识别: resolve_workspace_root(AIPOS-226 唯一优先级梯: AIPOS_WORKSPACE_ROOT / LYBRA_HOME_ROOT /
+      3. 结构识别: resolve_workspace_root(AIPOS-226 唯一优先级梯: LYBRA_WORKSPACE_ROOT / LYBRA_HOME_ROOT /
          in-workspace config / 向上队列结构 / 全局 ~/.lybra/config.json home_root + active_project)
     显式或声明指向非治理工作区 = FileNotFoundError(声明错了不猜); 全不可解析 = FileNotFoundError(带出口)。
     """
@@ -1316,6 +1364,93 @@ def set_project_repo(
     root = resolve_project_root(home_root, name)
     write_project_json(root, name, code_repo=code_repo, registered_by=registered_by)
     return root
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F110 件②: 跨机工位开工材料声明(project.json workstations.<实例>; 声明表 config.schema
+# configuration_sources.project_json.schema.workstations)。唯一读取口 project_workstation / 唯一写入口 set_project_workstation。
+# ---------------------------------------------------------------------------
+
+class WorkstationDeclarationError(ValueError):
+    """跨机工位材料声明不可用(fail-closed)。code ∈ config.schema project_json.schema.workstations.reject_codes。"""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.reason = message
+
+
+def _workstations_declaration() -> dict[str, Any]:
+    """config.schema project_json.schema.workstations(键表 + 拒因码)。缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get("workstations")
+    if not isinstance(decl, dict) or not isinstance(decl.get("schema"), dict) or not isinstance(decl.get("reject_codes"), dict):
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.workstations(schema / reject_codes)未声明")
+    return decl
+
+
+def _validate_workstation_entry(instance: str, entry: Any, decl: dict[str, Any]) -> dict[str, str]:
+    from tools.aipos_cli.harness_launch import redact_progress
+
+    if not isinstance(entry, dict):
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"workstations.{instance} 须为 JSON 对象, 得到 {type(entry).__name__}")
+    out: dict[str, str] = {}
+    for key, spec in decl["schema"].items():
+        if not (isinstance(spec, dict) and spec.get("required")):
+            continue
+        value = entry.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise WorkstationDeclarationError("WORKSTATION_MATERIAL_UNDECLARED", f"workstations.{instance}.{key} 未声明")
+        if not isinstance(value, str) or "\n" in value or "\r" in value:
+            raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"workstations.{instance}.{key} 须为非空单行串")
+        if redact_progress(value) != value:  # 凭据判据与进度打码同一实现(凭据字样 / 长不透明串)
+            raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID",
+                                              f"workstations.{instance}.{key} 含凭据字样或长不透明串(开工提示禁含凭据)")
+        out[key] = value.strip()
+    return out
+
+
+def project_workstation(project_root: str | Path, instance: str) -> dict[str, str]:
+    """跨机工位 instance 的开工材料声明 {gate_ssh_alias, material_access}。未声明/形不合 = WorkstationDeclarationError;
+    project.json 不可读 = 原异常上抛(OSError / ValueError, 不吞成未声明)。只读。"""
+    decl = _workstations_declaration()
+    data = read_project_json(project_root)
+    workstations = data.get("workstations")
+    if workstations is None:
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_UNDECLARED",
+                                          f"{project_json_path(project_root)} 无 workstations 段(实例 {instance} 未声明)")
+    if not isinstance(workstations, dict):
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", "project.json workstations 须为 JSON 对象(键 = 实例名)")
+    if instance not in workstations:
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_UNDECLARED",
+                                          f"{project_json_path(project_root)} workstations 下无实例 {instance}")
+    return _validate_workstation_entry(instance, workstations[instance], decl)
+
+
+def set_project_workstation(project_root: str | Path, instance: str, *, gate_ssh_alias: str, material_access: str) -> dict[str, Any]:
+    """写 project.json workstations.<instance>(其余键原样保留); 写前按声明校验(不合 = 不写, 抛 WorkstationDeclarationError)。
+    返回 {project_json, instance, 声明值}。"""
+    decl = _workstations_declaration()
+    instance = str(instance or "").strip()
+    if not instance or any(c.isspace() for c in instance):
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"实例名须为非空且不含空白: {instance!r}")
+    entry = _validate_workstation_entry(instance, {"gate_ssh_alias": gate_ssh_alias, "material_access": material_access}, decl)
+    path = project_json_path(project_root)
+    if not path.is_file():
+        raise FileNotFoundError(f"{path} 不存在(项目未建)")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"{path} 不是 JSON 对象")
+    workstations = data.get("workstations") if data.get("workstations") is not None else {}
+    if not isinstance(workstations, dict):
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"{path} workstations 须为 JSON 对象")
+    workstations[instance] = entry
+    data["workstations"] = workstations
+    path.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {"project_json": str(path), "instance": instance, **entry}
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

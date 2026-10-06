@@ -142,6 +142,13 @@ def cold_start_workspace(tmp_path: Path) -> Path:
                 "role_class": "owner",
                 "token": "secret_owner_token_67890",
             },
+            # AIPOS-F102 件①: 派审 actor = 驱动方实例(roles.schema driver.role_class 的 token 绑定实例), 工作区须声明驱动方
+            {
+                "role": "advisor",
+                "role_class": "advisor",
+                "agent_instance": "advisor.lybra.test",
+                "token": "secret_advisor_token_24680",
+            },
         ],
     }
     (conn_dir / "connection.json").write_text(json.dumps(conn))
@@ -173,6 +180,8 @@ def _create_task_card(queue_dir: Path, task_id: str, status: str, **fm_extra) ->
         "agent_instance": "exec.lybra.kiwiai-dev",
         "task_mode": "code",
         "audit": "required",
+        # AIPOS-F102 件①: 审计卡认领实例 = 卡面 audit_by, 缺则按卡面 project 推导(无项目 = 不可推导, 禁缺省 lybra)
+        "audit_by": "audit.lybra.test",
     }
     fm.update(fm_extra)
     fm_lines = "\n".join(f"{k}: {v}" for k, v in fm.items())

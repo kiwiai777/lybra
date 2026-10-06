@@ -20,33 +20,20 @@ backfilled). Branch-aware per AIPOS-338 S6:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.flow_description import resolve_gate_chain
 from tools.aipos_cli.verb_contract import resolve_gate_verbs
-from tools.schema_loader import get_config_default_gate_url  # AIPOS-R4B-1: gate URL single-sourced
-
-
-_DEFAULT_GATE_URL = get_config_default_gate_url()  # AIPOS-R4B-1: from config.schema (was hardcoded http://127.0.0.1:7118)
 
 
 def workspace_gate_url(repo_root: str | Path) -> str:
-    """Read the gate base URL from <repo_root>/.lybra/connection.json (defensive)."""
-    conn = Path(repo_root) / ".lybra" / "connection.json"
-    if not conn.is_file():
-        return _DEFAULT_GATE_URL
-    try:
-        data = json.loads(conn.read_text(encoding="utf-8"))
-        mcp = data.get("mcp") if isinstance(data, dict) else None
-        if isinstance(mcp, dict):
-            rpc_url = str(mcp.get("rpc_url") or "").strip()
-            if rpc_url:
-                return rpc_url[:-4] if rpc_url.endswith("/mcp") else rpc_url
-    except Exception:
-        pass
-    return _DEFAULT_GATE_URL
+    """Gate base URL for a workspace. AIPOS-F106 件①: 经 confirm_client.resolve_gate_base_url(唯一推导口, 委托
+    loop_context.ConnectionResolver.resolve_gate_url: <repo_root>/.lybra/connection.json mcp.rpc_url → env 兜底 → config.schema
+    urls.gate_local); 原自读 connection.json + 自剥 MCP 路径 + `except Exception: pass` 吞错删除。"""
+    from tools.aipos_cli.confirm_client import resolve_gate_base_url
+
+    return resolve_gate_base_url(workspace_root=repo_root)
 
 
 def workspace_connection_info(repo_root: str | Path) -> dict[str, str]:
@@ -257,32 +244,51 @@ def render_gate_contract_section(
     # AIPOS-340F2: resolve envelopes from workspace policies; NO hardcoded fallback.
     # If an envelope is not explicitly passed and cannot be resolved → raise immediately.
     # Tests that need fixed envelopes MUST pass them explicitly (claim_envelope=..., etc.).
+    resolution_notes: list[str] = []
+    # AIPOS-F103 件④: 审计节只用审计信封(_auditor_section 不收 claim/return 信封), 执行节只用认领/交回信封——各按所需解析
+    needs_exec = role != "auditor"
     needs_resolution = (
-        claim_envelope is None
-        or return_envelope is None
+        (needs_exec and (claim_envelope is None or return_envelope is None))
         or (role == "auditor" and audit_envelope is None)
     )
     if needs_resolution:
-        from tools.aipos_cli.policy_resolver import find_active_policy
-
         if workspace_root is None:
             raise ValueError(
                 "render_gate_contract_section: workspace_root is required to resolve policy envelopes. "
                 "Production callers must pass workspace_root; tests must pass explicit envelope params."
             )
+        # AIPOS-F103 件④: 信封挑选唯一实现 autonomy_policy.select_envelope(判据 match_claim_envelope, 与门同一判据):
+        # 身份 = 卡面实例(执行体 agent_instance/assigned_to; 审计体 = 被审卡 audit_by), 判定对象 = 本卡
+        # (审计节的 task_fields 即被审卡 = envelope_subject 审计卡→被审卡规则)。禁按角色词猜实例(旧按角色词挑选已删)。
+        from tools.aipos_cli.autonomy_policy import select_envelope
 
-        if claim_envelope is None:
-            claim_envelope = find_active_policy(workspace_root, role="exec", policy_type="dev")
-        if return_envelope is None:
-            return_envelope = find_active_policy(workspace_root, role="exec", policy_type="dev")
+        subject = {
+            "task_id": str(task_fields.get("task_id") or task_id or ""),
+            "task_mode": str(task_fields.get("task_mode") or ""),
+            "project": str(task_fields.get("project") or ""),
+        }
+        executor_instance = str(task_fields.get("agent_instance") or task_fields.get("assigned_to") or "").strip()
+        if needs_exec and (claim_envelope is None or return_envelope is None):
+            exec_policy, _exec_reasons = select_envelope(
+                workspace_root, identities=[(executor_instance, executor_instance, None)], task=subject)
+            exec_ref = str(exec_policy["policy_id"]) if exec_policy else None
+            resolution_notes.extend(f"executor {executor_instance or '(卡面无实例)'}: {r}" for r in _exec_reasons[:3])
+            if claim_envelope is None:
+                claim_envelope = exec_ref
+            if return_envelope is None:
+                return_envelope = exec_ref
         if audit_envelope is None and role == "auditor":
-            audit_envelope = find_active_policy(workspace_root, role="audit", policy_type="audit")
+            auditor_instance = str(task_fields.get("audit_by") or "").strip()
+            audit_policy, _audit_reasons = select_envelope(
+                workspace_root, identities=[(auditor_instance, auditor_instance, None)], task=subject)
+            audit_envelope = str(audit_policy["policy_id"]) if audit_policy else None
+            resolution_notes.extend(f"auditor {auditor_instance or '(卡面无 audit_by)'}: {r}" for r in _audit_reasons[:3])
 
     # After resolution: any still-None envelope is an error (no silent baking).
     missing = []
-    if claim_envelope is None:
+    if needs_exec and claim_envelope is None:
         missing.append("claim_envelope (exec/dev)")
-    if return_envelope is None:
+    if needs_exec and return_envelope is None:
         missing.append("return_envelope (exec/dev)")
     if role == "auditor" and audit_envelope is None:
         missing.append("audit_envelope (audit/audit)")
@@ -290,8 +296,10 @@ def render_gate_contract_section(
         raise ValueError(
             f"render_gate_contract_section: cannot resolve policy envelope(s) from "
             f"workspace_root={workspace_root}: {', '.join(missing)}. "
-            f"Ensure active, non-expired policies exist under "
-            f"<workspace>/5_tasks/policies/, or pass explicit envelope params for tests."
+            f"Ensure an active, non-expired envelope covering the card instance and this card exists under "
+            f"the project's policies_root (project.json paths.policies_root, default 5_tasks/policies/), "
+            f"or pass explicit envelope params for tests."
+            + (f" 未匹配原因: {'; '.join(resolution_notes)}" if resolution_notes else "")
         )
     chain = resolve_gate_chain(collaboration_profile, task_fields)
     verbs = resolve_gate_verbs()

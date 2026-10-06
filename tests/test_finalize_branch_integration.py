@@ -21,10 +21,8 @@ from tools.aipos_cli.deployment_authorization import (
     _branch_pattern_regex,
     _task_id_from_commit_subject,
 )
-from tools.aipos_cli.finalize import (
-    _branch_name_for_task,
-    _integrate_card_branch,
-)
+from tools.aipos_cli.finalize import _integrate_card_branch
+from tools.aipos_cli.next_resolver import card_branch_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,6 +43,7 @@ def gov_root(tmp_path):
 
 _BRANCH_INTEGRATION = {
     "branch_pattern": "card/{task_id}",
+    "base_branch": "main",
     "merge_strategy": "no-ff",
     "merge_message_format": "Merge {branch}: {summary} ({verdict_id})",
 }
@@ -108,7 +107,7 @@ def test_task_id_from_commit_subject_no_id(gov_root):
 # ---------------------------------------------------------------------------
 
 def test_branch_pattern_regex_reads_declaration():
-    regex = _branch_pattern_regex(REPO_ROOT, _TASK_ID_PATTERN)
+    regex = _branch_pattern_regex(_TASK_ID_PATTERN)
     assert regex is not None
     import re
     m = re.search(regex, "Merge card/AIPOS-C3C: summary (verdict_X)")
@@ -116,8 +115,9 @@ def test_branch_pattern_regex_reads_declaration():
 
 
 def test_branch_name_for_task():
-    assert _branch_name_for_task("card/{task_id}", "AIPOS-C3C") == "card/AIPOS-C3C"
-    assert _branch_name_for_task("card2/{task_id}", "AIPOS-C3C") == "card2/AIPOS-C3C"
+    # AIPOS-F108 件②: 分支名唯一派生 next_resolver.card_branch_name(原 finalize._branch_name_for_task 第二实现已退役)
+    assert card_branch_name("AIPOS-C3C", {"branch_pattern": "card/{task_id}"}) == "card/AIPOS-C3C"
+    assert card_branch_name("AIPOS-C3C", {"branch_pattern": "card2/{task_id}"}) == "card2/AIPOS-C3C"
 
 
 # ---------------------------------------------------------------------------

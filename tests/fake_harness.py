@@ -2,7 +2,7 @@
 """AIPOS-F95 夹具: 假 harness(替身 `pi -p {kickoff} --mode json`; 禁起真实 pi 会话)。
 
 调用: `python3 tests/fake_harness.py <kickoff>`(cwd = 工位目录, 由 lybra loop 按测试声明的 launch 模板拉起)。
-行为由环境变量选择(按卡角色分开: 卡号以 R 结尾 = 审计卡):
+行为由环境变量选择(按卡角色分开: 卡号以 R / R<轮次> 结尾 = 审计卡, AIPOS-F112 复审轮 R2/R3… 同):
   FAKE_EXEC_MODE / FAKE_AUDIT_MODE ∈
     work    吐 pi-json 事件 → 按 kickoff 干活(执行卡: 工作树提交 + Return; 审计卡: 审计报告)→ 写 pi 会话记录 → 退出 0
     linger  同 work 但写完产物不退出(验产物就绪后宽限期满终止进程组)
@@ -59,15 +59,21 @@ def pi_session(report: Path, model: str) -> None:
         fh.write("\n".join(json.dumps(x) for x in lines) + "\n")
 
 
+def reviewed_of(task_id: str) -> str | None:
+    """审计轮卡号(<被审卡>R / <被审卡>R2 …, 默认声明序列)→ 被审卡号; 非审计卡 = None。"""
+    match = re.match(r"^(.+?)R(\d*)$", task_id, re.I)
+    return match.group(1) if match and match.group(2) != "1" else None
+
+
 def do_work(task_id: str, kickoff: str) -> None:
     report = Path(field(kickoff, "报告落点"))
-    if task_id.upper().endswith("R"):
+    if reviewed_of(task_id):
         tip = re.search(r"^- commit_sha: ([0-9a-f]{40})\(", kickoff, re.M)
         if not tip:
             raise SystemExit("fake_harness: 审计 kickoff 缺被审 tip 实值")
         emit({"type": "tool_execution_start", "toolCallId": "t2", "toolName": "read", "args": {"path": field(kickoff, "任务卡路径")}})
         report.parent.mkdir(parents=True, exist_ok=True)
-        report.write_text(frontmatter({"task_id": task_id, "reviewed_task_id": task_id[:-1], "verdict": "PASS",
+        report.write_text(frontmatter({"task_id": task_id, "reviewed_task_id": reviewed_of(task_id), "verdict": "PASS",
                                        "commit_sha": tip.group(1)},
                                       "# 审计报告\n\n## 一句话结论\n逐条复核通过(假 harness)。\n\n## 证据\n- 夹具绿\n"), encoding="utf-8")
         pi_session(report, "fake-audit-model")
@@ -100,7 +106,7 @@ def main() -> int:
         Path(log, f"{task_id}.kickoff").write_bytes(sys.argv[1].encode("utf-8"))
         Path(log, f"{task_id}.cwd").write_text(os.getcwd(), encoding="utf-8")
         Path(log, f"{task_id}.pgid").write_text(str(os.getpgid(0)), encoding="utf-8")
-    mode = os.environ.get("FAKE_AUDIT_MODE" if task_id.upper().endswith("R") else "FAKE_EXEC_MODE", "work")
+    mode = os.environ.get("FAKE_AUDIT_MODE" if reviewed_of(task_id) else "FAKE_EXEC_MODE", "work")
 
     emit({"type": "session", "version": 3, "id": "fake", "timestamp": "2026-10-04T00:00:00Z", "cwd": os.getcwd()})
     emit({"type": "agent_start"})

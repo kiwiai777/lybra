@@ -68,15 +68,21 @@ LOOP_ROLE_CLASSES = ("executor", "auditor", "advisor")
 # role_class 解析(单源: token_entry.role_class 优先, 否则 builtin 注册表)
 # ---------------------------------------------------------------------------
 
-def resolve_role_class(role: str, token_entry: dict[str, Any] | None = None) -> str:
-    """解析角色类:自定义角色按 token 携带的 role_class 取 builtin 类(与 F22D/F44D-A 同源)。"""
+def resolve_role_class(role: str, token_entry: dict[str, Any] | None = None, project_root: str | Path | None = None) -> str:
+    """解析角色类(AIPOS-F102 件②: 唯一实现 custom_roles.resolve_role_to_class, 解析不到 = 拒 UnknownRoleClass)。
+
+    token 自带 role_class(门兑换下发的注册表条目本身)优先, 但须是内建类(否则拒); 否则按角色名经唯一实现解析
+    (内建自映射; 自定义角色查门注册表, 注册表根 = project_root)。原「注册表无此角色则回落角色名自身」退役。
+    """
+    from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class, validate_builtin_class
+
     rc = str((token_entry or {}).get("role_class") or "").strip()
     if rc:
+        ok, err = validate_builtin_class(rc)
+        if not ok:
+            raise UnknownRoleClass(f"token 条目 role={role!r} 的 role_class 非内建类: {err}")
         return rc
-    from tools.schema_loader import get_role_spec
-
-    spec = get_role_spec(role)
-    return str((spec or {}).get("role_class") or role or "").strip()
+    return str(resolve_role_to_class(role, project_root, required=True))
 
 
 def declared_role_distributions(role: str, role_class: str) -> list[dict[str, Any]]:
@@ -133,7 +139,7 @@ def declared_role_extensions(dists: list[dict[str, Any]]) -> dict[str, dict[str,
 
 
 # ---------------------------------------------------------------------------
-# ② owner_policy_ref 推导(单源: 治理仓 5_tasks/policies 信封工件)
+# ② owner_policy_ref 推导(单源: 治理仓信封工件, 目录读项目声明 project.json paths.policies_root)
 # ---------------------------------------------------------------------------
 
 def derive_effective_owner_policy_ref(
@@ -145,65 +151,28 @@ def derive_effective_owner_policy_ref(
 ) -> tuple[str | None, str]:
     """推导当前生效的 owner_autonomy_policy 信封 ID(写入 .lybra/role#owner_policy_ref)。
 
-    判定复用 autonomy_policy.normalize_policy 字段语义(禁第二份信封解析):
-      mode=PreAuthorized + status=active + approved_by_owner + 时间窗内 +
-      agent_or_role 覆盖 {role, agent_instance} + max_tasks>0。
-    多信封命中时确定性择一:实例精确匹配 > 角色匹配, 同级取 active_from 最新。
-    推导不出返回 (None, 原因)——调用方按角色类决定报错带路或仅告警(禁静默留空)。
+    AIPOS-F103 件④: 挑选唯一实现 autonomy_policy.select_envelope(判据只有 match_claim_envelope, 禁本处第二套有效性/覆盖判定);
+    任务无关(工位推导无卡): 判定对象取信封自身 task_selector。身份次序: 实例精确({agent_instance}) > 角色({role}),
+    同级按信封 id 升序取首个。推导不出返回 (None, 原因)——调用方按角色类决定报错带路或仅告警(禁静默留空)。
     """
     if not governance_root:
         return None, "无 governance_root(自包含码未携带且 connection.json 未声明), 无法推导信封"
+    from tools.aipos_cli.autonomy_policy import policies_dir, select_envelope
+
     root = Path(governance_root).expanduser()
-    policies_dir = root / "5_tasks" / "policies"
-    if not policies_dir.is_dir():
-        return None, f"信封目录不存在: {policies_dir}"
-
-    from tools.aipos_cli.autonomy_policy import normalize_policy
-    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-
-    now = now or datetime.now(timezone.utc)
-    identity = {str(role or "").strip(), str(agent_instance or "").strip()}
-    identity.discard("")
-
-    candidates: list[tuple[int, str, str]] = []  # (优先级, active_from, policy_id)
-    reasons: list[str] = []
-    for path in sorted(policies_dir.glob("pol_*.md")):
-        try:
-            metadata, _body, _warn = parse_markdown_frontmatter(path.read_text(encoding="utf-8"))
-        except OSError as exc:
-            reasons.append(f"{path.name}: 读取失败 {exc}")
-            continue
-        policy = normalize_policy(metadata if isinstance(metadata, dict) else {})
-        if policy is None:
-            continue
-        covered = str(policy.get("agent_or_role") or "").strip()
-        if policy.get("mode") != "PreAuthorized":
-            continue
-        if policy.get("status") != "active" or not policy.get("approved_by_owner"):
-            reasons.append(f"{policy['policy_id']}: status={policy.get('status')} 非 active/未获 owner 批")
-            continue
-        try:
-            active_from = datetime.fromisoformat(str(policy.get("active_from")).replace("Z", "+00:00"))
-            expires_at = datetime.fromisoformat(str(policy.get("expires_at")).replace("Z", "+00:00"))
-        except ValueError:
-            reasons.append(f"{policy['policy_id']}: 时间窗不可解析")
-            continue
-        if not (active_from <= now < expires_at):
-            reasons.append(f"{policy['policy_id']}: 时间窗外({active_from.date()}~{expires_at.date()})")
-            continue
-        if not covered or covered not in identity:
-            continue
-        if int(policy.get("max_tasks") or 0) <= 0:
-            reasons.append(f"{policy['policy_id']}: max_tasks<=0")
-            continue
-        priority = 2 if covered == str(agent_instance or "").strip() and agent_instance else 1
-        candidates.append((priority, str(policy.get("active_from") or ""), policy["policy_id"]))
-
-    if not candidates:
+    pdir = policies_dir(root)
+    if not pdir.is_dir():
+        return None, f"信封目录不存在: {pdir}"
+    identities: list[tuple[str | None, str | None, str | None]] = []
+    if str(agent_instance or "").strip():
+        identities.append((agent_instance, agent_instance, None))
+    if str(role or "").strip():
+        identities.append((None, None, role))
+    policy, reasons = select_envelope(root, identities=identities, task=None, now=now)
+    if policy is None:
         detail = f"; {'; '.join(reasons[:3])}" if reasons else ""
         return None, f"无覆盖角色 {role}(实例 {agent_instance or '-'})的生效 PreAuthorized 信封{detail}"
-    candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
-    return candidates[0][2], "matched"
+    return str(policy["policy_id"]), "matched"
 
 
 # ---------------------------------------------------------------------------

@@ -28,9 +28,9 @@ pi 内斜杠命令只许 distribution 声明中扩展所注册者(夹具 tests/t
 from __future__ import annotations
 
 import json
-import os
 import shlex
 import socket
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -173,23 +173,24 @@ def _owner_workspace(home: Path, explicit: str | None) -> str:
 
 
 def _gate_url(explicit: str | None, owner_connection: str) -> tuple[str, str]:
-    """门地址: 显式 > LYBRA_GATE_URL > Owner 中央凭据库 connection.json 的 mcp.rpc_url(非秘密字段) > 声明缺省端口。"""
-    if explicit:
-        return explicit, "显式 --gate-url"
-    env = os.environ.get("LYBRA_GATE_URL", "").strip()
-    if env:
-        return env, "环境变量 LYBRA_GATE_URL"
-    if not owner_connection.startswith("<"):
-        try:
-            conn = json.loads(Path(owner_connection).read_text(encoding="utf-8"))
-            rpc = str(((conn.get("mcp") or {}).get("rpc_url")) or "").strip()
-            if rpc:
-                return (rpc[:-len("/mcp")] if rpc.endswith("/mcp") else rpc), f"{owner_connection} mcp.rpc_url"
-        except (OSError, json.JSONDecodeError):
-            pass
-    from tools.aipos_cli.workspace_config import DEFAULT_MCP_HOST, DEFAULT_MCP_PORT
+    """门地址(门基址) + 来源标注。AIPOS-F106 件①: 一律经 confirm_client.resolve_gate_base_url(唯一推导口, 委托
+    loop_context.ConnectionResolver.resolve_gate_url), 优先级按 config.schema identity_resolution.keys.gate_url 声明序:
+    显式 --gate-url > Owner 中央凭据库 connection.json 的 mcp.rpc_url(显式凭据文件层, 非秘密字段) > env LYBRA_GATE_URL(仅兜底)
+    > urls.gate_local。原「env 高于凭据文件」与声明序相反, 已改正。凭据文件坏 = 出声 warning 后按未声明处理(guide 照常生成)。"""
+    from tools.aipos_cli.confirm_client import GateAddressError, declared_rpc_url, resolve_gate_base_url
 
-    return f"http://{DEFAULT_MCP_HOST}:{DEFAULT_MCP_PORT}", "config.schema 缺省"
+    if explicit:
+        return resolve_gate_base_url(explicit_url=explicit), "显式 --gate-url"
+    if not owner_connection.startswith("<") and Path(owner_connection).is_file():
+        try:
+            if declared_rpc_url(owner_connection):
+                return resolve_gate_base_url(connection_json=owner_connection, require_declared=True), f"{owner_connection} mcp.rpc_url"
+        except GateAddressError as exc:
+            print(f"Warning: {exc}; 门地址按未声明处理", file=sys.stderr)
+    from tools.loop_context import ConnectionResolver
+
+    provenance = ConnectionResolver.resolve_identity()["gate_url"]  # 来源自曝(同一解析器): env 兜底 / schema 缺省
+    return resolve_gate_base_url(), ("环境变量 LYBRA_GATE_URL" if provenance["via_env"] else "config.schema 缺省")
 
 
 def _instances(project: str, host: str) -> dict[str, str]:
@@ -235,11 +236,21 @@ def generate_onboarding_guide(
     home, home_source = resolve_home_root_with_source(explicit_root=home_root)
     gov = home / project_name
     gov_s = str(gov)
+    # AIPOS-F103 件④: 信封落点读项目声明 policies_root(Step 1 新建项目未声明 = 缺省 5_tasks/policies)
+    from tools.aipos_cli.autonomy_policy import policies_dir
+
+    pol_dir = policies_dir(gov)
+    try:
+        pol_rel = pol_dir.relative_to(gov).as_posix()
+    except ValueError:
+        pol_rel = str(pol_dir)
     host = (host_segment or socket.gethostname().split(".")[0]).strip()
     inst = _instances(project_name, host)
     owner_ws = _owner_workspace(home, owner_workspace)
+    from tools.aipos_cli.service_mode import connection_path as _connection_path
+
     owner_conn = str(Path(owner_connection_json).expanduser()) if owner_connection_json else (
-        f"{owner_ws}/.lybra/connection.json" if not owner_ws.startswith("<") else "<OWNER_WORKSPACE>/.lybra/connection.json")
+        str(_connection_path(Path(owner_ws))) if not owner_ws.startswith("<") else str(_connection_path(Path("<OWNER_WORKSPACE>"))))
     gate, gate_source = _gate_url(gate_url, owner_conn)
     advisor_ws = advisor_dir or f"~/{project_name}"
     exec_ws = workspace_dir or f"~/{project_name}-executor"
@@ -368,18 +379,18 @@ def generate_onboarding_guide(
         "title": "【Owner 动作 ②】签三张信封(驱动方 / 执行 / 审计)",
         "command": step4,
         "purpose": (
-            f"一条命令经门 owner_decision_record envelope 路径签三张 PreAuthorized 信封并真实落盘到 {gov_s}/5_tasks/policies/: "
+            f"一条命令经门 owner_decision_record envelope 路径签三张 PreAuthorized 信封并真实落盘到 {pol_dir}/: "
             f"{policies['driver']} 覆盖驱动方 {inst['advisor']}(lybra loop 一阶段认领 / 交回 / 派审 / 裁决 / 结案), "
             f"{policies['executor']} 覆盖 {inst['executor']}, {policies['auditor']} 覆盖 {inst['auditor']}(审计卡按被审卡判定)。"
             "可选 --launch-harness pi(AIPOS-F95): 授权 lybra loop 在工位自动拉起 pi(缺省不加 = 手工模式, 工位敲 /go); 由 Owner 决定是否加"
         ),
-        "check": "输出三行 'signed <policy_id> covers <实例>' 与各自 'wrote 5_tasks/policies/<id>.md' / 'wrote 5_tasks/records/owner_decisions/...'(以门生记录为准)",
+        "check": f"输出三行 'signed <policy_id> covers <实例>' 与各自 'wrote {pol_rel}/<id>.md' / 'wrote 5_tasks/records/owner_decisions/...'(以门生记录为准)",
         "on_fail": {
             "PROJECT_SCOPE_DENIED": "所用凭据的 projects 不含本项目; 用 Owner 凭据(roles.schema owner project_scope=cross_project)",
             "OWNER_CONFIRMATION_REQUIRED / scope denied": "签信封须 Owner 凭据(owner_confirm); --connection-json 指向中央凭据库",
             "already exists": "该 policy_id 已签过(看输出已签几张); 未签的换新 policy_id 重跑",
         },
-        "creates": f"{gov_s}/5_tasks/policies/{{{policies['driver']},{policies['executor']},{policies['auditor']}}}.md + 三份 owner_decisions 记录",
+        "creates": f"{pol_dir}/{{{policies['driver']},{policies['executor']},{policies['auditor']}}}.md + 三份 owner_decisions 记录",
     })
 
     # ── Step 5: 顾问 enroll(治理根)+ 技能交付 ────────────────────────
@@ -412,11 +423,14 @@ def generate_onboarding_guide(
 
     # ── Step 6: 顾问发工位注册码 ─────────────────────────────────────
     adv_roles = ["lybra", "roles", "--workspace-root", gq, "enroll-code"]
+    from tools.aipos_cli.custom_roles import role_classes_in_group
+
+    # AIPOS-F102 件②: 发工位注册码的角色 = 工位类(roles.schema class_groups.workstation, 注册表顺序), 原写死的工位类分组元组退役
     step6 = [
         _cmd(*adv_roles, "--role", role, "--instance", _shell_quote(inst[role]), "--governance-root", _shell_quote(project_name),
              "--gate-url", _shell_quote(gate), "--ttl", "86400", "--owner-authorization-ref", policies[role],
              "--reason", _shell_quote(f"Onboarding {project_name} {role}"))
-        for role in ("executor", "auditor")
+        for role in role_classes_in_group("workstation")
     ]
     steps.append({
         "step_number": 6,
@@ -639,18 +653,23 @@ def validate_step_prerequisites(
             guidance.append(f"产品仓声明不合规: {exc}; 重跑 Step 2")
 
     if step_number >= 5:
-        policies_dir = project_root / "5_tasks" / "policies"
-        if not policies_dir.is_dir() or not list(policies_dir.glob("pol_*.md")):
+        # AIPOS-F103 件④: 信封目录读项目声明 policies_root(唯一读取口 autonomy_policy.policies_dir / policy_ids)
+        from tools.aipos_cli.autonomy_policy import policy_ids
+
+        if not policy_ids(project_root):
             missing.append("envelopes")
             guidance.append("Step 4 未完成: 无信封文件; Owner 跑 Step 4 的 lybra envelope mint --confirm")
 
+    # AIPOS-F106 件④: connection.json 定位经 service_mode.connection_path(既有唯一定位); role 只经 charter_render.workstation_identity 读
+    from tools.aipos_cli.service_mode import connection_path as _connection_path
+
     if step_number >= 6 and project_root.is_dir():
-        if not (project_root / ".lybra" / "connection.json").is_file():
+        if not _connection_path(project_root).is_file():
             missing.append("advisor_credential")
             guidance.append("Step 5 未完成: 治理根无 .lybra/connection.json(顾问凭据); 跑 Step 5 的 lybra roles enroll")
 
     if step_number >= 8:
-        conn_json = ws / ".lybra" / "connection.json"
+        conn_json = _connection_path(ws)
         if not conn_json.is_file():
             missing.append("connection.json")
             guidance.append(f"Step 7 未完成: {conn_json} 不存在; 跑 lybra roles enroll")
@@ -671,16 +690,18 @@ def validate_step_prerequisites(
         if not (ws / ".pi" / "settings.json").is_file():
             missing.append(".pi/settings.json")
             guidance.append(".pi 接线缺失; Step 7 enroll 应自动落, 重跑 Step 7")
-        role_file = ws / ".lybra" / "role"
-        if role_file.is_file():
-            try:
-                role_data = json.loads(role_file.read_text(encoding="utf-8"))
-                if not role_data.get("owner_policy_ref"):
-                    missing.append("owner_policy_ref")
-                    guidance.append("role 文件缺 owner_policy_ref; 核对 Step 4 信封是否覆盖本工位实例后重跑 lybra sync")
-            except (OSError, json.JSONDecodeError):
+        from tools.aipos_cli.charter_render import is_enrolled_workstation
+        from tools.loop_context import ConnectionResolver
+
+        if is_enrolled_workstation(ws):
+            # role 文件只经 ConnectionResolver.resolve_identity 读(唯一实现之一; env={} = 只认工位声明层 .lybra/role)
+            ident = ConnectionResolver.resolve_identity(workspace_root=ws, env={})
+            if ident["role"]["source"] != ".lybra/role":
                 missing.append("role_invalid")
                 guidance.append("role 文件格式错误; 重跑 Step 7")
+            elif ident["owner_policy_ref"]["source"] != ".lybra/role":
+                missing.append("owner_policy_ref")
+                guidance.append("role 文件缺 owner_policy_ref; 核对 Step 4 信封是否覆盖本工位实例后重跑 lybra sync")
 
     return {
         "ok": not missing,

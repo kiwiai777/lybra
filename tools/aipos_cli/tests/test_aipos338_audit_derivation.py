@@ -20,14 +20,19 @@ def _ensure_test_policies(repo_root: Path) -> None:
     """AIPOS-340F2: create minimal active policies so render_gate_contract_section can resolve."""
     policies_dir = repo_root / "5_tasks" / "policies"
     policies_dir.mkdir(parents=True, exist_ok=True)
-    (policies_dir / "pol_lybra_dev_7.md").write_text(
-        "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\n---\n# Dev\n",
-        encoding="utf-8",
-    )
-    (policies_dir / "pol_lybra_audit_2.md").write_text(
-        "---\npolicy_id: pol_lybra_audit_2\nstatus: active\nrole: audit\npolicy_type: audit\n---\n# Audit\n",
-        encoding="utf-8",
-    )
+    # AIPOS-F103 件④: 信封挑选唯一判据 match_claim_envelope(与门同一判据)——夹具信封须是真 owner_autonomy_policy 形;
+    # 审计信封覆盖派生审计卡的认领实例(resolve_audit_instance 唯一实现, AIPOS-F102) + 被审 code 卡(envelope_subject: 审计卡 = 被审卡)
+    from tools.aipos_cli.audit_derivation import resolve_audit_instance
+
+    for policy_id, agent_or_role in (("pol_lybra_dev_7", "exec.lybra.host"), ("pol_lybra_audit_2", resolve_audit_instance({"project": "lybra"}, repo_root))):
+        (policies_dir / f"{policy_id}.md").write_text(
+            "---\nrecord_type: owner_autonomy_policy\n"
+            f"policy_id: {policy_id}\nmode: PreAuthorized\nstatus: active\napproved_by_owner: true\n"
+            f"owner_approval_ref: dec_{policy_id}\nactive_from: '2020-01-01T00:00:00Z'\nexpires_at: '2099-01-01T00:00:00Z'\n"
+            f"agent_or_role: {agent_or_role}\ntask_selector_task_mode: code\ntask_selector_project: lybra\n"
+            "task_selector_task_ids: []\nmax_tasks: 50\n---\n# Policy\n",
+            encoding="utf-8",
+        )
 
 
 class TestAuditInstructions(unittest.TestCase):

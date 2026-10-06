@@ -111,7 +111,9 @@ def _fake_governance(tmp: Path, policy_id: str = "pol_probe_exec_1", covers: str
         "expires_at: '2099-01-01T00:00:00Z'\n"
         f"agent_or_role: {covers}\n"
         "task_selector_task_mode: ''\n"
-        "task_selector_project: ''\n"
+        # AIPOS-F103 件④: 推导走唯一判据 match_claim_envelope——空 task_selector 的信封在门上不授权任何卡(no wildcard),
+        # 不得被推导为生效信封; 夹具信封按项目 probe 圈定(真实信封形态)
+        "task_selector_project: probe\n"
         "task_selector_task_ids: []\n"
         "max_tasks: 50\n"
         "---\n"

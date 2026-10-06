@@ -3,37 +3,7 @@
   "source_report": "governance/research/2026-10-04-fragmentation-recheck.md(条目号 = 该复核 N1/N2/N3)",
   "fixture": "tests/test_aipos_f96_docs_retired_practice_ratchet.py",
   "fingerprint": "sha1(行文本 strip 后 utf-8)前 12 位",
-  "baseline_commit_base": "main 56b6d4a + card/AIPOS-F96; AIPOS-F105 删除随 init/workspace init 与 templates/ 退役而消失的 24 条(只减不增)",
-  "count": 3,
-  "entries": [
-    {
-      "file": "README.md",
-      "line": 118,
-      "pattern": "lybra_on_off_sync",
-      "fp": "a67dc2968a19",
-      "text": "**`lybra on`** / **`lybra off`** to poll the gate for claimable tasks. Executors no longer claim",
-      "item": "N2",
-      "reason": "README「Legacy entry points」节: 旧 agent 侧拉取连接器(AIPOS-248)接活短语, 由退役旧跨机连接器卡(N-a)同卡删除; tools/aipos_cli/tests/test_agent_connector.py 断言 README 含此字面, 随该卡删改"
-    },
-    {
-      "file": "agents/harness/pi/README.md",
-      "line": 18,
-      "pattern": "lybra_loop_extension",
-      "fp": "63a61678130b",
-      "text": "AIPOS-F91: 旧门循环扩展 `lybra-loop/`(gate-client/loop-context/loop-decisions/loop-engine/lybra-loop.ts)",
-      "item": "N3",
-      "lane_blocked": true,
-      "reason": "车道外(agents/harness/pi/ 不在本卡 lane.paths): 该行是旧扩展退役说明, 留待下张改该文件的卡改写"
-    },
-    {
-      "file": "agents/roles/advisor/AGENTS.md",
-      "line": 56,
-      "pattern": "confirm_client",
-      "fp": "4e6c0051d0e2",
-      "text": "1. **永不 `curl /mcp`**(SSE 长连接,永不返回) — 门交互一律经官方客户端(`confirm_client`)/连接器。",
-      "item": "N3",
-      "lane_blocked": true,
-      "reason": "车道外(agents/roles/ 不在本卡 lane.paths): 顾问章程仍写门交互经 confirm_client(现行=产品命令), 登记为缺口另卡改"
-    }
-  ]
+  "baseline_commit_base": "main 56b6d4a + card/AIPOS-F96; AIPOS-F105 删除随 init/workspace init 与 templates/ 退役而消失的 24 条(只减不增); AIPOS-F103 删除已修条目 3 条(README「Legacy entry points」节 1 条 + agents/** 2 条; 另 4 条 README/QUICKSTART lybra init 条目与 AIPOS-F105 重叠已由其删除, 只减不增)",
+  "count": 0,
+  "entries": []
 }

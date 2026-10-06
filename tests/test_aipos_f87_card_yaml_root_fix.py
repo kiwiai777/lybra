@@ -224,14 +224,9 @@ def test_item1_write_after_readback_refuses_and_card_not_landed(tmp_path, monkey
     assert not list((gov / "5_tasks" / "records" / "amendments").rglob("*.md"))
 
 
-CARD_ORDER_UNDECLARED_IN_CARD_SCHEMA = {
-    "recurrence", "blocked_by", "blocked_at", "block_reason", "reopened_by", "reopen_reason",
-    "withdrawn_by", "withdrawn_at", "withdrawal_reason",
-}
-
-
 def test_item1_card_field_order_single_definition():
-    """卡字段序两份定义收一份(record_writer.CARD_FRONTMATTER_ORDER); 其中 card.schema 未声明的键是登记的 schema 缺口。"""
+    """卡字段序两份定义收一份(record_writer.CARD_FRONTMATTER_ORDER)。
+    AIPOS-F108 件①: 字段序由 card.schema frontmatter_order.keys 投影(代码零清单), 原登记的 9 个 schema 缺口键已声明。"""
     from tools.aipos_cli import draft_writer, queue_mutation, record_writer
 
     assert draft_writer.FRONTMATTER_ORDER is record_writer.CARD_FRONTMATTER_ORDER
@@ -241,10 +236,11 @@ def test_item1_card_field_order_single_definition():
         for p in (REPO_ROOT / "tools").rglob("*.py")
         if "/tests/" not in str(p) and re.search(r'^(CARD_)?FRONTMATTER_ORDER = \[\n\s+"task_id"', p.read_text(encoding="utf-8"), re.M)
     ]
-    assert defs == ["tools/aipos_cli/record_writer.py"], defs
-    declared = set(json.loads((REPO_ROOT / "schema" / "card.schema.json").read_text(encoding="utf-8"))["fields"])
-    undeclared = {k for k in record_writer.CARD_FRONTMATTER_ORDER if k not in declared}
-    assert undeclared == CARD_ORDER_UNDECLARED_IN_CARD_SCHEMA, undeclared
+    assert defs == [], defs
+    card_schema = json.loads((REPO_ROOT / "schema" / "card.schema.json").read_text(encoding="utf-8"))
+    assert record_writer.CARD_FRONTMATTER_ORDER == card_schema["frontmatter_order"]["keys"]
+    undeclared = {k for k in record_writer.CARD_FRONTMATTER_ORDER if k not in card_schema["fields"]}
+    assert undeclared == set(), undeclared
     # 既有落盘序稳定: 以此序写过的卡再写一遍, 字节不变(无全量重排)
     meta = {k: f"v-{k}" for k in record_writer.CARD_FRONTMATTER_ORDER[:12]}
     meta.update({"anchor_refs": ["N1"], "lane": {"repo": "r", "paths": ["a/"]}})

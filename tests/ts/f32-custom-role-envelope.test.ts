@@ -1,7 +1,7 @@
 /**
  * AIPOS-F32/F32B 专项测试 —— 自定义角色发卡链信封解析(经 bin, 入 run-all)。
  *
- * 病根: policy_resolver._policy_matches_role 只做 agent_or_role 点分量对固定词
+ * 病根: 旧信封解析模块的角色匹配只做 agent_or_role 点分量对固定词
  * exec/audit 直配 → 自定义角色信封(hbj-coder.chris-huibojin.kiwiai-dev)永不匹配
  * → chris 发卡链 draft publish BLOCK "cannot resolve policy envelope"。
  *
@@ -15,7 +15,9 @@
  *  B. 因果负对照: 门注册表无 hbj 条目(真 chris 拓扑——自身凭据文件只有过期
  *     运输凭证) → BLOCK "cannot resolve policy envelope";
  *  C. audit 侧: 注册表 hbj-auditor→auditor 时审计链信封可解析;
- *  D. 源级断言: policy_resolver 无自建角色→类映射(防碎片化红线)。
+ *  D. 源级断言(AIPOS-F103 件④ 改写): 信封挑选唯一实现 autonomy_policy.select_envelope(判据 match_claim_envelope),
+ *     不读角色注册表; 旧按角色词 + 注册表 class 猜覆盖的解析模块已删。
+ *  B 翻转(AIPOS-F103 件④): 注册表 class 不是信封判据——无门注册表时仍按卡面实例精确覆盖解析(非 BLOCK)。
  *
  * 跑法: node tests/ts/f32-custom-role-envelope.test.ts (依赖 python3 + bin/lybra)
  */
@@ -124,6 +126,7 @@ function makeFixture(root: string, withRegistry: boolean): string {
         code_repo: "/tmp/nonexistent/chris-huibojin",
         config_version: 1,
         project: "chris-huibojin",
+        manual_gate_mode: true, // AIPOS-F73C: 人肉 gate 项目显式声明, 执行类卡面才保留「认领与交回」节(与 Python 夹具同形; AIPOS-F103 补齐)
         registered_at: "2026-08-10T00:00:00Z",
         registered_by: "kiwi",
       },
@@ -263,17 +266,19 @@ function runPublishDryRun(ws: string): PublishResult {
       check("A: 注册表在位 → publish --dry-run 非BLOCK且不撞信封墙", false, String(e));
     }
 
-    // --- B. 因果负对照: 门注册表无 hbj 条目(真 chris 现状拓扑) → 旧病复发 ---
+    // --- B(AIPOS-F103 件④ × AIPOS-F102 件②): 门注册表无 hbj 条目 → 拒因是「角色类不可解析」(F102: 卡面零门判据无据, 更早拒),
+    //     不是信封墙——注册表不是信封判据(信封挑选唯一判据 match_claim_envelope 精确覆盖卡面实例, 见 Python 夹具) ---
     try {
       const r = runPublishDryRun(makeFixture(fx, false));
-      const blocked = (r.blocking_reasons || []).some((b) => String(b).includes("cannot resolve policy envelope"));
+      const reasons = (r.blocking_reasons || []).map((b) => String(b));
       check(
-        "B: 无门注册表 → BLOCK cannot resolve policy envelope(负对照)",
-        r.verdict === "BLOCK" && blocked,
+        "B: 无门注册表 → BLOCK 于角色类不可解析(F102), 非信封墙(注册表不是信封判据)",
+        r.verdict === "BLOCK" && reasons.some((b) => b.includes("角色类不可解析")) &&
+          !reasons.some((b) => b.includes("cannot resolve policy envelope")),
         `verdict=${r.verdict} blocking=${JSON.stringify(r.blocking_reasons).slice(0, 200)}`,
       );
     } catch (e) {
-      check("B: 无门注册表 → BLOCK cannot resolve policy envelope(负对照)", false, String(e));
+      check("B: 无门注册表 → BLOCK 于角色类不可解析(F102), 非信封墙(注册表不是信封判据)", false, String(e));
     }
 
     // --- C. audit 侧信封: 注册表 hbj-auditor→auditor(契约节渲染内部会解析
@@ -291,23 +296,17 @@ function runPublishDryRun(ws: string): PublishResult {
 }
 
 // ===========================================================================
-// D. 源级断言 —— 防碎片化红线(禁在 policy_resolver 自建角色→类映射)
+// D. 源级断言 —— 信封挑选唯一实现(AIPOS-F103 件④)
 // ===========================================================================
 {
-  const resolverSrc = readFileSync(join(repoRoot, "tools", "aipos_cli", "policy_resolver.py"), "utf-8");
+  const apSrc = readFileSync(join(repoRoot, "tools", "aipos_cli", "autonomy_policy.py"), "utf-8");
   check(
-    "D: policy_resolver 读 roles 注册表单源(custom_roles), 无自建映射表",
-    resolverSrc.includes("from tools.aipos_cli.custom_roles import load_custom_roles") &&
-      !/"exec":\s*\[\s*"executor"\s*\]/.test(resolverSrc) &&
-      !/"audit":\s*\[\s*"auditor"\s*\]/.test(resolverSrc),
+    "D: 信封挑选唯一实现 select_envelope 只经 match_claim_envelope 判定",
+    /def select_envelope\(/.test(apSrc) && /match_claim_envelope\(\s*\n?\s*policy=policy/.test(apSrc),
   );
   check(
-    "D: 内建类候选派生自 roles 注册表单源(schema_loader)",
-    resolverSrc.includes("from tools.schema_loader import get_all_role_names"),
-  );
-  check(
-    "D: 既有直配语义保留(exec↔exec 直配表未动)",
-    resolverSrc.includes('"exec": ["exec"]') && resolverSrc.includes('"audit": ["audit"]'),
+    "D: 信封挑选不读角色注册表(无 load_custom_roles / resolve_role_to_class / get_all_role_names)",
+    !apSrc.includes("load_custom_roles") && !apSrc.includes("resolve_role_to_class") && !apSrc.includes("get_all_role_names"),
   );
 }
 

@@ -1,7 +1,7 @@
 """AIPOS-343 — 契约节静默吞错修复测试。
 
 验收断言:
-1. 跨工作区策略解析: agency 工作区能找到 pol_agency_1
+1. 跨工作区策略解析(AIPOS-F103 起由 autonomy_policy.select_envelope 夹具覆盖)
 2. 无有效信封时 publish BLOCK(不再产出哑卡)
 3. 选择器空值 = 不限类型(match_claim_envelope 已有正确语义)
 4. lybra-dev 侧零回归
@@ -10,7 +10,6 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tools.aipos_cli.policy_resolver import find_active_policy
 from tools.aipos_cli.draft_writer import (
     ContractSectionError,
     _append_gate_contract_section,
@@ -45,92 +44,8 @@ def _meta(task_id, **overrides):
     return base
 
 
-class TestCrossWorkspacePolicyResolution(unittest.TestCase):
-    """AIPOS-343 验收 #1 + #3: 非 lybra 工作区也能找到策略信封。"""
-
-    def test_agency_workspace_finds_pol_agency_1(self):
-        """agency 工作区的 exec 策略能被找到(文件名不匹配 pol_lybra_* 模式)。"""
-        agency_root = Path("/home/kiwi/ai-project-os/2_projects/kiwiaiagency")
-        if not agency_root.exists():
-            self.skipTest("agency 工作区不存在")
-        result = find_active_policy(agency_root, role="exec", policy_type="dev")
-        self.assertEqual(result, "pol_agency_1")
-
-    def test_lybra_workspace_still_finds_pol_lybra_dev(self):
-        """lybra 工作区零回归。"""
-        lybra_root = Path("/home/kiwi/ai-project-os/2_projects/lybra")
-        if not lybra_root.exists():
-            self.skipTest("lybra 工作区不存在")
-        result = find_active_policy(lybra_root, role="exec", policy_type="dev")
-        self.assertIsNotNone(result)
-        self.assertTrue(result.startswith("pol_lybra_dev_"))
-
-    def test_policy_resolver_matches_by_frontmatter_not_filename(self):
-        """策略解析基于 frontmatter 的 agent_or_role,不是文件名前缀。"""
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            policies_dir = root / "5_tasks" / "policies"
-            policies_dir.mkdir(parents=True)
-            # Non-standard filename, but correct frontmatter
-            (policies_dir / "my_custom_policy.md").write_text(
-                "---\n"
-                "record_type: owner_autonomy_policy\n"
-                "policy_id: my_custom_exec_policy\n"
-                "status: active\n"
-                "agent_or_role: exec.myproject.local\n"
-                "active_from: '2020-01-01T00:00:00Z'\n"
-                "expires_at: '2099-12-31T23:59:59Z'\n"
-                "max_tasks: 100\n"
-                "---\n"
-                "# Custom Policy\n",
-                encoding="utf-8",
-            )
-            result = find_active_policy(root, role="exec", policy_type="dev")
-            self.assertEqual(result, "my_custom_exec_policy")
-
-    def test_policy_resolver_skips_expired(self):
-        """过期的策略不应被返回。"""
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            policies_dir = root / "5_tasks" / "policies"
-            policies_dir.mkdir(parents=True)
-            (policies_dir / "expired_policy.md").write_text(
-                "---\n"
-                "record_type: owner_autonomy_policy\n"
-                "policy_id: expired_pol\n"
-                "status: active\n"
-                "agent_or_role: exec.test.local\n"
-                "expires_at: '2020-01-01T00:00:00Z'\n"
-                "---\n"
-                "# Expired\n",
-                encoding="utf-8",
-            )
-            result = find_active_policy(root, role="exec", policy_type="dev")
-            self.assertIsNone(result)
-
-    def test_policy_resolver_skips_wrong_role(self):
-        """角色不匹配的策略不应被返回。"""
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            policies_dir = root / "5_tasks" / "policies"
-            policies_dir.mkdir(parents=True)
-            (policies_dir / "audit_only.md").write_text(
-                "---\n"
-                "record_type: owner_autonomy_policy\n"
-                "policy_id: audit_only_pol\n"
-                "status: active\n"
-                "agent_or_role: audit.test.local\n"
-                "expires_at: '2099-12-31T23:59:59Z'\n"
-                "---\n"
-                "# Audit Only\n",
-                encoding="utf-8",
-            )
-            # Looking for exec, should NOT find audit-only policy
-            result = find_active_policy(root, role="exec", policy_type="dev")
-            self.assertIsNone(result)
-            # Looking for audit, should find it
-            result = find_active_policy(root, role="audit", policy_type="audit")
-            self.assertEqual(result, "audit_only_pol")
+# AIPOS-F103 件④: 原 TestCrossWorkspacePolicyResolution(锁按角色词挑选的旧解析模块, 读活体治理根)随该模块删除;
+# 信封挑选唯一实现 autonomy_policy.select_envelope 的夹具见 tests/test_aipos_f103_retire_connector_single_envelope.py。
 
 
 class TestContractSectionErrorPropagation(unittest.TestCase):
@@ -157,7 +72,8 @@ class TestContractSectionErrorPropagation(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             # No project.json, no policies — everything missing
-            metadata = _meta("AIPOS-343-DIAG")
+            # AIPOS-F102 件②: 角色类不可解析会在判零门时更早拒; 本例测契约节渲染诊断, 用可解析的非工位类角色实例
+            metadata = _meta("AIPOS-343-DIAG", assigned_to="advisor.lybra.test", agent_instance="advisor.lybra.test")
             with self.assertRaises(ContractSectionError) as ctx:
                 _append_gate_contract_section(root, metadata, "AIPOS-343-DIAG", "## Body\n\nTest.")
             error_msg = str(ctx.exception)
