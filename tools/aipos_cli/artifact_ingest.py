@@ -381,10 +381,12 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
     INGEST_FRONTMATTER_UNREADABLE(原文点名文件与行号), 不取缺省继续校验。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError
 
+    from tools.aipos_cli.audit_derivation import is_audit_card
+
     try:
         return _validate_task_artifact(task_id, workspace_root)
     except FrontmatterReadError as exc:
-        return {"ok": False, "kind": "verdict" if task_id.upper().endswith("R") else "return",
+        return {"ok": False, "kind": "verdict" if is_audit_card(task_id) else "return",
                 "category": "INGEST_FRONTMATTER_UNREADABLE", "reasons": [f"{exc}。出口: 按拒因修正该文件 frontmatter 后重推导"],
                 "path": exc.path, "frontmatter": {}, "exit_code": INGEST_EXIT_REJECTED}
 
@@ -408,10 +410,11 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         missing_return_frontmatter,
         return_artifact_dir,
     )
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
     from tools.aipos_cli.task_loader import AmbiguousTaskCard
 
     workspace_root = Path(workspace_root)
-    is_audit = task_id.upper().endswith("R")
+    is_audit = is_audit_card(task_id)
     kind = "verdict" if is_audit else "return"
     out: dict[str, Any] = {"ok": False, "kind": kind, "category": "", "reasons": [], "path": None, "frontmatter": {},
                            "exit_code": INGEST_EXIT_REJECTED}
@@ -423,6 +426,9 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
     if not task_path:
         out["category"], out["reasons"] = "TASK_NOT_FOUND", [f"queue 目录中找不到任务卡 {task_id}(按 frontmatter task_id 查找, 文件名不限)"]
         return out
+    # AIPOS-F112: 审计卡判据唯一实现 audit_derivation.is_audit_card(卡面为准, 认得复审轮 R2/R3…; 原按号尾 R 判)
+    is_audit = is_audit_card(task_id, _read_frontmatter(task_path))
+    kind = out["kind"] = "verdict" if is_audit else "return"
     if not is_audit:
         pending, records = _external_finalize_pending(workspace_root, task_id)
         if pending:
@@ -462,7 +468,7 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
 
     # AIPOS-F78C 件②: 核 tip/被审分支的仓 = 该卡(R 卡: 被审卡)声明的仓; 解析不到 = 声明缺失出口(非崩溃), 不进 git
     if is_audit:
-        reviewed_for_repo = str(card_fm.get("reviewed_task_id") or task_id[:-1]).strip()
+        reviewed_for_repo = audit_card_reviewed_id(task_id, card_fm)
         try:
             reviewed_path, _rq = _find_task_in_queue(workspace_root, reviewed_for_repo)
         except AmbiguousTaskCard as exc:
@@ -566,7 +572,7 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         out["category"] = "INGEST_FRONTMATTER_MISSING"
         out["reasons"] = [f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.verdict.required_frontmatter)"]
         return out
-    reviewed = str(fm.get("reviewed_task_id") or task_id[:-1]).strip()
+    reviewed = str(fm.get("reviewed_task_id") or "").strip() or audit_card_reviewed_id(task_id, card_fm)
     from tools.schema_loader import get_branch_integration
 
     pattern = str(get_branch_integration().get("branch_pattern") or "card/{task_id}")

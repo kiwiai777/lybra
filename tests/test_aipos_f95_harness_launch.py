@@ -427,13 +427,26 @@ def test_item6b_land_event_carries_host_and_remote_falls_back_to_manual(lrig, mo
 
     monkeypatch.setenv("LYBRA_WORKSPACE_ROOT", str(lrig.gov))
     sent: list[list[str]] = []
-    with patch.object(enroll_deliver.subprocess, "run", side_effect=lambda argv, **k: sent.append(argv) or
-                      subprocess.CompletedProcess(argv, 1, "", "stop here (fixture)")):
+
+    class _GateStub:  # AIPOS-F113: --ssh 发码/回滚走门动词(本机 Owner 凭据只作 HTTP Authorization); 夹具不连真实门
+        def __init__(self, *a, **k):
+            pass
+
+        def call_tool(self, name, arguments, **k):
+            if name == "lybra_roles_enroll_code":
+                return {"ok": True, "code_id": "enroll_f95fixture", "self_contained_code": "LYBRAENROLL1.fixture-not-a-secret",
+                        "enrollment": {"fingerprint": "sha256:fixture"}}
+            return {"ok": True}
+
+    with patch.object(enroll_deliver, "GateClient", _GateStub), \
+            patch.object(enroll_deliver.subprocess, "run", side_effect=lambda argv, **k: sent.append(argv) or
+                         subprocess.CompletedProcess(argv, 1, "", "stop here (fixture)")):
         with pytest.raises(RuntimeError):
             enroll_deliver.enroll_deliver_ssh(role="executor", instance=EXEC, workspace_root="/remote/ws", harness_root="/remote/ws",
                                               ssh_target="kiwi@far-mac", gate_url="http://127.0.0.1:1", owner_policy_ref="p",
                                               owner_token="fixture-owner-not-a-secret")
-    assert "--landed-host kiwi@far-mac" in sent[0][2], sent
+    # AIPOS-F113: ssh argv = ssh -- <目标> <逐参数 shlex.quote 的远端命令>(远端命令在末位)
+    assert "--landed-host kiwi@far-mac" in sent[0][-1], sent
     help_text = subprocess.run([sys.executable, "-m", "tools.aipos_cli.enroll_client", "--help"], capture_output=True, text=True,
                                cwd=str(REPO_ROOT)).stdout
     assert "--landed-host" in help_text
