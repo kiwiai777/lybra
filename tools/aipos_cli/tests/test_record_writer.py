@@ -103,10 +103,12 @@ class RecordWriterTests(unittest.TestCase):
 
     def test_claim_with_records_blocks_if_claim_log_target_exists(self) -> None:
         self.write_task("AIPOS-32-CLAIM-EXISTS")
-        result = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
-        self.write_file(result["claim_log_path"], "existing")
+        # AIPOS-F116: 认领日志 id 含秒级时间戳, 两次 claim 跨秒即目标不同(F116 分支基线实撞); 钉住同一时刻(同会话记录撞名用例)
+        with mock.patch("tools.aipos_cli.queue_mutation.iso_z", return_value="2026-10-06T00:00:00Z"):
+            result = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
+            self.write_file(result["claim_log_path"], "existing")
 
-        blocked = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
+            blocked = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
 
         self.assertEqual(blocked["verdict"], "BLOCK")
         self.assertTrue(any("Claim log already exists" in item for item in blocked["blocking_reasons"]))

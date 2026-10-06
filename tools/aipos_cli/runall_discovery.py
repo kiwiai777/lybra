@@ -16,7 +16,8 @@ AIPOS-F116 防护夹具(执行器内建, 每个测试文件前后各取一次, �
   真实治理根守卫(件①, gap #34/#70): 监视「执行器自身环境」(测试子进程隔离之前的真实 HOME / LYBRA_HOME_ROOT)按
     workspace_config.resolve_home_root_with_source 同一梯解析出的 home 根下各项目 governance/ 与 5_tasks/——git status 脏项
     (状态码 + 文件 size/mtime)与关键日志(governance/*_log.md)md5。只读: git 一律 --no-optional-locks(不刷新/不写 index)。
-    时间窗归因: 同时段门/顾问的正常写入(他卡认领/交回)也会被记到当时在跑的文件上——判红输出列出变动路径, 先串行重跑确认。
+    时间窗归因复核: 某文件期间出现变动 → 单独重跑该文件一次(结果不计)再快照; 复现 = 该文件所致 → 判红; 不复现 = 同时段
+    门/顾问的正常写入(他卡认领/交回、治理文档提交)→ 照列不判红。代价: 真污染的测试在复核时再写一次(已知污染源须 exclude)。
   孤儿进程守卫(件③, gap #12/#25/#55): 测试子进程环境带本轮唯一标记变量(不带 LYBRA_/AIPOS_ 前缀, 嵌套执行器不剥);
     文件结束后仍带标记的存活进程(含另起会话逃出进程组收尸的 web.board.app / serve 子进程)= 泄漏 → SIGKILL 并判红。
 
@@ -54,8 +55,8 @@ FILE_TIMEOUT_SECONDS = 900
 PYTEST_NO_TESTS_COLLECTED = 5
 _SUMMARY_RE = re.compile(r"^(FAILED|ERROR) (.+?)(?: - .*)?$")
 _RULE = "─" * 42
-#: 测试进程「已隔离」标记(值 = 隔离 HOME): conftest 会话层见标记 == HOME 即不再二次隔离。
-ISOLATED_HOME_ENV = "LYBRA_TEST_ISOLATED_HOME"
+#: 测试进程「已隔离」标记(值 = 隔离 HOME): conftest 会话层见标记 == HOME 即不再二次隔离(不用 LYBRA_ 前缀: 非产品环境变量, 不入 F106 声明集)。
+ISOLATED_HOME_ENV = "RUNALL_ISOLATED_HOME"
 #: 孤儿进程守卫标记变量名前缀(后接本轮随机串, 值 "1"); 故意不用 LYBRA_/AIPOS_ 前缀——嵌套执行器只剥这两类, 外层标记一路下传。
 LEAK_MARK_PREFIX = "RUNALL_LEAK_MARK_"
 #: 真实治理根守卫监视的项目子目录与关键日志式样(卡面: home 根下各项目 governance/ 与 5_tasks/; 关键日志 = 只追加的治理日志)。
@@ -361,6 +362,7 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
     leak_mark = LEAK_MARK_PREFIX + secrets.token_hex(8)
     snapshot = governance_snapshot(targets)
     guard_changes = 0
+    guard_concurrent = 0
     leaks_total = 0
     home = tempfile.mkdtemp(prefix="lybra-runall-home-")
     try:
@@ -375,25 +377,44 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
                 overall = 1
                 continue
             node_excludes = [t for t in plan["node_excluded"] if t.startswith(path + "::")]
-            rc, output = _run(_command(path, runner, node_excludes), repo_root, env)
+            cmd = _command(path, runner, node_excludes)
+            rc, output = _run(cmd, repo_root, env)
             if runner == "pytest" and rc == PYTEST_NO_TESTS_COLLECTED:
                 emit("[runall_discovery] pytest 未收集到用例 → 脚本式夹具, 以 python3 直跑")
                 runner = "script"
-                rc, output = _run([sys.executable, path], repo_root, env)
+                cmd = [sys.executable, path]
+                rc, output = _run(cmd, repo_root, env)
             emit(output.rstrip("\n"))
             ok, notes = judge(path, runner, rc, output, plan["known_failures"])
             leaked = reap_marked(leak_mark)
             if leaked:
                 ok = False
                 leaks_total += len(leaked)
-                notes += [f"孤儿进程守卫: 测试结束后仍存活(逃出进程组收尸), 已 SIGKILL: pid {pid} {cmd}" for pid, cmd in leaked]
+                notes += [f"孤儿进程守卫: 测试结束后仍存活(逃出进程组收尸), 已 SIGKILL: pid {pid} {line}" for pid, line in leaked]
             after = governance_snapshot(targets)
             changed = snapshot_changes(snapshot, after)
             snapshot = after
             if changed:
-                ok = False
-                guard_changes += len(changed)
-                notes += [f"真实治理根守卫: 本文件执行期间真实治理根变动(若同时段有门/顾问正常写入, 先串行重跑确认): {c}" for c in changed]
+                # 时间窗归因复核: 单独重跑本文件一次(测试结果不计, 只看守卫), 前后再快照。复现 = 本文件所致 → 红;
+                # 不复现 = 同时段他方(门/顾问)的正常写入 → 照列不判红。
+                _rc_again, _out_again = _run(cmd, repo_root, env)
+                leaked_again = reap_marked(leak_mark)
+                if leaked_again:
+                    ok = False
+                    leaks_total += len(leaked_again)
+                    notes += [f"孤儿进程守卫(复核重跑): 已 SIGKILL: pid {pid} {line}" for pid, line in leaked_again]
+                again = governance_snapshot(targets)
+                reproduced = snapshot_changes(snapshot, again)
+                snapshot = again
+                if reproduced:
+                    ok = False
+                    guard_changes += len(reproduced)
+                    notes += [f"真实治理根守卫: 本文件执行期间真实治理根变动: {c}" for c in changed]
+                    notes += [f"真实治理根守卫: 单独重跑本文件复现变动(判为本文件所致): {c}" for c in reproduced]
+                else:
+                    guard_concurrent += len(changed)
+                    notes += [f"真实治理根守卫: 本文件执行期间有变动, 单独重跑未复现 → 判为同时段他方写入(门/顾问), 不计本文件: {c}"
+                              for c in changed]
             for note in notes:
                 emit(f"[runall_discovery] {note}")
             if ok:
@@ -402,7 +423,9 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
                 emit(f"✗ {path} FAIL")
                 overall = 1
         emit()
-        emit(f"[runall_discovery] 真实治理根守卫汇总: 全程变动 {guard_changes} 处" + ("" if guard_changes else "(git status 脏项与关键日志 md5 前后一致)"))
+        emit(f"[runall_discovery] 真实治理根守卫汇总: 测试所致变动 {guard_changes} 处"
+             + ("" if guard_changes else "(无测试写入真实治理根)")
+             + f"; 同时段他方写入(重跑未复现, 不计) {guard_concurrent} 处")
         emit(f"[runall_discovery] 孤儿进程守卫汇总: 泄漏进程 {leaks_total} 个" + ("" if leaks_total else "(无带本轮标记的存活进程)"))
     finally:
         try:

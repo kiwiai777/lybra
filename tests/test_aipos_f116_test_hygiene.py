@@ -119,7 +119,30 @@ def test_item1_guard_catches_injected_pollution_and_stays_green_when_clean(tmp_p
     polluter_section = text.split("── tests/test_polluter.py", 1)[1]
     assert f"md5 {log.resolve()}" in polluter_section or f"md5 {log}" in polluter_section
     assert "injected.md" in polluter_section and "?? " in polluter_section and "enrollment_log.md: (无) →  M " in polluter_section
-    assert "真实治理根守卫汇总: 全程变动 3 处" in text  # 日志 md5 + 日志 status 新脏 + 新增未跟踪文件
+    assert "真实治理根守卫汇总: 测试所致变动 3 处" in text  # 复核重跑复现: 日志 md5 + 日志 status 指纹 + 未跟踪文件 mtime
+
+
+def test_item1_unreproduced_change_is_concurrent_writer_not_red(tmp_path):
+    """同时段他方写入(门/顾问)形: 变动只出现一次(复核重跑不复现)→ 照列, 不判红。"""
+    home, root = _fake_real_home(tmp_path)
+    sentinel = tmp_path / "already-wrote"
+    ledger = root / "beta" / "governance" / "LEDGER.md"
+    repo = _product_repo(tmp_path, {
+        "test_bystander.py": (
+            "from pathlib import Path\n\n"
+            "def test_bystander():\n"
+            f"    sentinel = Path({str(sentinel)!r})\n"
+            "    if not sentinel.exists():  # 只在首轮写一次 = 模拟同一时间窗里别的进程(门/顾问)的正常写入\n"
+            "        sentinel.write_text('1')\n"
+            f"        Path({str(ledger)!r}).write_text('advisor edit\\n', encoding='utf-8')\n"
+        ),
+    })
+    rc, text = _run_executor(repo, home)
+    _show("[①] 并发写入归因(执行器输出摘录):\n" + "\n".join(ln for ln in text.splitlines() if "守卫" in ln or ln.startswith(("✓", "✗"))))
+    assert rc == 0, text
+    assert _verdict(text, "tests/test_bystander.py") == "PASS"
+    assert "单独重跑未复现 → 判为同时段他方写入(门/顾问), 不计本文件" in text and "LEDGER.md" in text
+    assert "测试所致变动 0 处(无测试写入真实治理根); 同时段他方写入(重跑未复现, 不计) 1 处" in text
 
 
 def test_item1_guard_is_read_only_and_green_on_clean_suite(tmp_path):
@@ -130,7 +153,7 @@ def test_item1_guard_is_read_only_and_green_on_clean_suite(tmp_path):
     repo = _product_repo(tmp_path, {"test_clean.py": "def test_clean():\n    pass\n"})
     rc, text = _run_executor(repo, home)
     assert rc == 0, text
-    assert "真实治理根守卫汇总: 全程变动 0 处(git status 脏项与关键日志 md5 前后一致)" in text
+    assert "真实治理根守卫汇总: 测试所致变动 0 处(无测试写入真实治理根); 同时段他方写入(重跑未复现, 不计) 0 处" in text
     assert index.read_bytes() == index_before  # --no-optional-locks: 守卫不刷新/不写被监视仓 index
     assert _g(root, "status", "--porcelain") == status_before
 
@@ -163,7 +186,7 @@ def test_item2_this_session_is_isolated():
     home = os.environ["HOME"]
     assert os.environ.get(runall_discovery.ISOLATED_HOME_ENV) == home
     assert home != pwd.getpwuid(os.getuid()).pw_dir and str(Path.home()) == home
-    assert [k for k in os.environ if k.startswith(("LYBRA_", "AIPOS_"))] == [runall_discovery.ISOLATED_HOME_ENV]
+    assert not [k for k in os.environ if k.startswith(("LYBRA_", "AIPOS_"))]
 
 
 @pytest.mark.parametrize("conftest", CONFTESTS)
@@ -174,7 +197,7 @@ def test_item2_each_conftest_isolates_a_real_shaped_environment(conftest, tmp_pa
     env.update(HOME=str(real_home), LYBRA_HOME_ROOT=str(tmp_path / "real-root"), AIPOS_WORKSPACE_ROOT=str(tmp_path / "ws"))
     probe = ("import json, os, runpy, sys\n"
              f"runpy.run_path({str(REPO_ROOT / conftest)!r})\n"
-             "print(json.dumps({'home': os.environ['HOME'], 'mark': os.environ.get('LYBRA_TEST_ISOLATED_HOME'),"
+             "print(json.dumps({'home': os.environ['HOME'], 'mark': os.environ.get('RUNALL_ISOLATED_HOME'),"
              " 'lybra': sorted(k for k in os.environ if k.startswith(('LYBRA_HOME', 'AIPOS_')))}))\n")
     result = subprocess.run([sys.executable, "-c", probe], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
