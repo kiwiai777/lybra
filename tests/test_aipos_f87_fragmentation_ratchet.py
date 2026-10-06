@@ -15,6 +15,9 @@ tests/f87_fragmentation_baseline.json(测试数据文件, 非 schema), 每条 = 
   d) 不得以路径子串判定治理仓或项目(`"ai-project-os" in` / `.includes("ai-project-os")` 等)
   e) 卡/记录 frontmatter 写入只许经单源 record_writer(render_markdown / render_frontmatter_block), 禁手拼 `---` 头
      (F87 件①后车道内零容忍; 清单内仅有车道外未能改的条目, 均标 lane_blocked, 见 F87 RETURN「产品缺口」)
+  f) 产品 Python 代码不得出现宽捕获后只 pass 的静默吞错: `except Exception: pass` / `except BaseException: pass` / `except: pass`
+     (含元组里带 Exception/BaseException; 处理体只有 pass/... 即算)。AIPOS-F115 件③加入: 车道内清零, 清单仅有车道外条目(lane_blocked)。
+     判据走 AST(不靠行正则), 比对键 = (file, 所在函数, 指纹=except 行与处理体首行文本 sha1 前 12 位)。
 
 产品文件集 = `git ls-files` 中 .py/.ts/.js/.mjs/.cjs/.sh 及带 shebang 的无后缀脚本, 去掉 tests/test/fixtures/__tests__/playwright
 目录与 test_*/test-*/*.test.ts/*_test.py/conftest.py。
@@ -50,6 +53,8 @@ TOOL_NAME_RE = re.compile(r'"name":\s*"(lybra_[A-Za-z0-9_]+)"')
 # e) TS/JS 中以 `---\n<key>:` 起头的字面量
 TS_FRONTMATTER_RE = re.compile(r"""[`'"]---\\n[A-Za-z_][\w-]*:""")
 FM_KEY_RE = re.compile(r"^[A-Za-z_][\w-]*:")
+# f) 宽捕获名(AIPOS-F115 件③)
+BROAD_EXCEPT_NAMES = {"Exception", "BaseException"}
 
 
 def fingerprint(line: str) -> str:
@@ -164,7 +169,54 @@ def scan_e_handrolled_frontmatter(files: list[str]) -> list[dict[str, object]]:
     return hits
 
 
+def _is_broad_handler(handler: ast.ExceptHandler) -> bool:
+    if handler.type is None:
+        return True
+    names = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return any(isinstance(n, ast.Name) and n.id in BROAD_EXCEPT_NAMES for n in names)
+
+
+def _is_pass_only(body: list[ast.stmt]) -> bool:
+    return all(
+        isinstance(stmt, ast.Pass)
+        or (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis)
+        for stmt in body
+    )
+
+
+def _py_broad_except_pass(text: str) -> list[tuple[int, int, str]]:
+    """f) 返回 [(except 行号, 处理体首行号, 所在函数限定名)]——宽捕获(裸 except / Exception / BaseException)且处理体只有 pass/...。"""
+    hits: list[tuple[int, int, str]] = []
+
+    def visit(node: ast.AST, scope: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                visit(child, f"{scope}.{child.name}" if scope != "<module>" else child.name)
+                continue
+            if isinstance(child, ast.ExceptHandler) and _is_broad_handler(child) and _is_pass_only(child.body):
+                hits.append((child.lineno, child.body[0].lineno, scope))
+            visit(child, scope)
+
+    visit(ast.parse(text), "<module>")
+    return hits
+
+
+def scan_f_broad_except_pass(files: list[str]) -> list[dict[str, object]]:
+    hits: list[dict[str, object]] = []
+    for rel in files:
+        if not rel.endswith(".py"):
+            continue
+        text = _read(rel)
+        src_lines = text.splitlines()
+        for except_line, body_line, scope in _py_broad_except_pass(text):
+            joined = src_lines[except_line - 1].strip() + " | " + src_lines[body_line - 1].strip()
+            hits.append({"file": rel, "line": except_line, "function": scope, "fp": fingerprint(joined), "text": joined[:160]})
+    return hits
+
+
 def _key(inv: str, item: dict[str, object]) -> tuple[str, ...]:
+    if inv == "f":
+        return (str(item["file"]), str(item["function"]), str(item["fp"]))
     if inv == "b":
         return (str(item["tool"]),)
     if inv == "c":
@@ -180,6 +232,7 @@ def current_violations() -> dict[str, list[dict[str, object]]]:
         "c": scan_c_duplicate_defs(),
         "d": scan_d_path_substring(files),
         "e": scan_e_handrolled_frontmatter(files),
+        "f": scan_f_broad_except_pass(files),
     }
 
 
@@ -219,18 +272,22 @@ def test_product_file_set_is_nonempty_and_excludes_tests():
 def test_baseline_is_well_formed_and_counts_match():
     baseline = load_baseline()
     invariants = baseline["invariants"]
-    assert set(invariants) == {"a", "b", "c", "d", "e"}
+    assert set(invariants) == {"a", "b", "c", "d", "e", "f"}
     for inv, block in invariants.items():
         assert block["count"] == len(block["entries"]), (inv, block["count"], len(block["entries"]))
         for entry in block["entries"]:
             assert entry.get("item"), (inv, entry)  # 每条带复查报告条目号
-            if inv in ("a", "d", "e"):
+            if inv in ("a", "d", "e", "f"):
                 assert entry.get("file") and entry.get("fp") and isinstance(entry.get("line"), int), (inv, entry)
+            if inv == "f":
+                assert entry.get("function"), (inv, entry)
     assert baseline["total"] == sum(block["count"] for block in invariants.values())
     # c) 零容忍: 不入基线
     assert invariants["c"]["entries"] == []
     # e) 车道内零容忍: 清单只许有标注 lane_blocked 的车道外条目
     assert all(entry.get("lane_blocked") for entry in invariants["e"]["entries"]), invariants["e"]["entries"]
+    # f) AIPOS-F115 件③: 车道内清零, 清单只许有标注 lane_blocked 的车道外条目
+    assert all(entry.get("lane_blocked") for entry in invariants["f"]["entries"]), invariants["f"]["entries"]
 
 
 def test_ratchet_no_new_violations_and_no_stale_baseline_entries():
@@ -268,10 +325,12 @@ def test_ratchet_detects_new_violation_and_stale_entry_red():
     injected = {inv: list(items) for inv, items in current.items()}
     injected["a"].append({"file": "tools/aipos_cli/zz_new.py", "line": 1, "fp": fingerprint('X = "/home/kiwi/x"'), "text": "X"})
     injected["e"].append({"file": "tools/aipos_cli/zz_new.py", "line": 2, "fp": fingerprint('lines = ["---"]'), "text": "Y"})
+    injected["f"].append({"file": "tools/aipos_cli/zz_new.py", "line": 3, "function": "probe",
+                          "fp": fingerprint("except Exception: | pass"), "text": "Z"})
     if injected["d"]:
         injected["d"].pop()  # 模拟已修一条: 基线残留
     diff = ratchet_diff(injected, baseline)
-    assert len(diff["a"]["new"]) == 1 and len(diff["e"]["new"]) == 1
+    assert len(diff["a"]["new"]) == 1 and len(diff["e"]["new"]) == 1 and len(diff["f"]["new"]) == 1
     if current["d"]:
         assert len(diff["d"]["stale"]) == 1
     # 探测器本身: 手拼 frontmatter 三形 + 非 frontmatter 形不误报
@@ -285,3 +344,13 @@ def test_ratchet_detects_new_violation_and_stale_entry_red():
         'g = f"---\\n{fm_text}\\n---\\n"\n'
     )
     assert _py_frontmatter_construction_lines(sample) == [1, 2, 3, 4, 7]
+    # f) 探测器本身(AIPOS-F115 件③): 宽捕获 + 只 pass 才算; 精确捕获 / 有处理体不算
+    f_sample = (
+        "def a():\n    try:\n        x()\n    except Exception:\n        pass\n"            # 4 ✓
+        "def b():\n    try:\n        x()\n    except:\n        pass  # c\n"               # 9 ✓
+        "def c():\n    try:\n        x()\n    except (OSError, BaseException) as e:\n        ...\n"  # 14 ✓
+        "def d():\n    try:\n        x()\n    except OSError:\n        pass\n"              # 精确捕获: 不算
+        "def e():\n    try:\n        x()\n    except Exception as exc:\n        log(exc)\n"  # 有处理: 不算
+        "class K:\n    def m(self):\n        try:\n            x()\n        except Exception: pass\n"  # 30 ✓
+    )
+    assert _py_broad_except_pass(f_sample) == [(4, 5, "a"), (9, 10, "b"), (14, 15, "c"), (30, 30, "K.m")]

@@ -1,10 +1,10 @@
 {
- "description": "AIPOS-F87 件④ 防碎片化不变量棘轮基线: 现存违规清单, 只减不增。新增违规 = 红; 条目已修(仓内不存在)仍留清单 = 红, 修好即从本清单删除该条。比对键: a/d/e = (file, fp), b = tool, c = (file, function); line 仅作定位参考。",
+ "description": "AIPOS-F87 件④ 防碎片化不变量棘轮基线: 现存违规清单, 只减不增。新增违规 = 红; 条目已修(仓内不存在)仍留清单 = 红, 修好即从本清单删除该条。比对键: a/d/e = (file, fp), b = tool, c = (file, function), f = (file, function, fp); line 仅作定位参考。",
  "source_report": "governance/research/2026-10-02-fragmentation-audit.md(条目号 = 该报告总表 #)",
  "fixture": "tests/test_aipos_f87_fragmentation_ratchet.py",
  "fingerprint": "sha1(行文本 strip 后 utf-8)前 12 位",
- "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增); AIPOS-F91 删除随老子系统退役而消失的条目(只减不增); AIPOS-F89 删除随治理文档名去契约而修复的条目(只减不增); AIPOS-F101 删除已修条目(只减不增: 不变量 b 清零 —— 28 个门工具名补进 verbs.schema; a 删 L2 自描述示例 6 条、tools.py 门指南示例 3 条、transition_engine 已删的第二推导死函数内 3 条); AIPOS-F102 删除随身份读声明而修复的 H5 条目(派审/审计实例/修复卡执行实例/实例名项目段缺省, 只减不增); AIPOS-F103 删除随信封旧解析模块删除而消失的条目 3 条(只减不增)",
- "total": 12,
+ "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增); AIPOS-F91 删除随老子系统退役而消失的条目(只减不增); AIPOS-F89 删除随治理文档名去契约而修复的条目(只减不增); AIPOS-F101 删除已修条目(只减不增: 不变量 b 清零 —— 28 个门工具名补进 verbs.schema; a 删 L2 自描述示例 6 条、tools.py 门指南示例 3 条、transition_engine 已删的第二推导死函数内 3 条); AIPOS-F102 删除随身份读声明而修复的 H5 条目(派审/审计实例/修复卡执行实例/实例名项目段缺省, 只减不增); AIPOS-F103 删除随信封旧解析模块删除而消失的条目 3 条(只减不增); AIPOS-F115 新增不变量 f(宽捕获 except-pass 只减不增): 车道内 20 处清零, 登记车道外现存命中",
+ "total": 14,
  "invariants": {
   "a": {
    "rule": "产品代码不出现写死的实例名/机器名/home 路径/治理根路径/信封 id: \\.lybra\\.kiwiai-dev|kiwiai-dev|/home/kiwi|~/projects/lybra|2_projects/lybra|pol_lybra_",
@@ -116,6 +116,30 @@
      "item": "M11",
      "lane_blocked": "F87 车道外(lane.paths 不含该文件), 未能改; 见 F87 RETURN 产品缺口",
      "text": "lines = [\"---\"]"
+    }
+   ]
+  },
+  "f": {
+   "rule": "产品 Python 代码不得出现宽捕获只 pass 的静默吞错(except Exception/BaseException/裸 except 且处理体只有 pass/...; AST 判)。AIPOS-F115 件③: 车道内清零, 仅余车道外条目",
+   "count": 2,
+   "entries": [
+    {
+     "file": "tools/distribution_manifest.py",
+     "line": 56,
+     "function": "get_product_commit",
+     "fp": "02139c34a9f9",
+     "item": "AIPOS-F115 件③(gap #58/#61 同族)",
+     "lane_blocked": "F115 车道外(lane.paths 不含 tools/distribution_manifest.py), 未能改; 见 F115 RETURN 缺口",
+     "text": "except Exception: | pass"
+    },
+    {
+     "file": "web/board/app.py",
+     "line": 1160,
+     "function": "_generate_advisor_prompt_route",
+     "fp": "02139c34a9f9",
+     "item": "AIPOS-F115 件③(gap #58/#61 同族)",
+     "lane_blocked": "F115 车道外(lane.paths 不含 web/board/app.py), 未能改; 见 F115 RETURN 缺口",
+     "text": "except Exception: | pass"
     }
    ]
   }
