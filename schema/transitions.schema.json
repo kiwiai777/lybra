@@ -574,6 +574,14 @@
             "action": "手动切回 main 分支后重试 finalize(auto_checkout 已关闭或切回失败)",
             "command": "git checkout main"
           }
+        },
+        "base_sync": {
+          "description": "AIPOS-F117 件②(gap #75): 卡分支基座落后当前基线(交回检查拒因 BRANCH_WRONG_BASE)时的同步出口 = 把基线合入卡分支(merge), 不变基。说理: 多卡并行纪律禁 rebase/stash——变基改写已交回/已审的 commit, 裁决覆盖的 tip 随之失效; 合入后 merge-base = 当前基线, 子判据「基座合法」即过。拒因出口文案只经本声明渲染(唯一渲染 board_adapter.base_sync_command), 代码零写死 git 命令; 声明缺 = SchemaLoadError(fail-closed)。",
+          "command": "git checkout {branch} && git merge {base}",
+          "placeholders": {
+            "branch": "卡分支名(branch_pattern 派生, next_resolver.card_branch_name)",
+            "base": "期望基座(base_branch; fix 卡为卡面 fix_base_branch)"
+          }
         }
       }
     },
@@ -893,7 +901,7 @@
       },
       "field": "submitted_by",
       "applies_to": ["claim", "return", "audit_verdict", "closure"],
-      "dispatch_exception": "audit_dispatch 的 actor 保持派审身份声明(owner-dispatch 族), 不按 claimer 判"
+      "dispatch_exception": "audit_dispatch 的 actor = 驱动方实例(roles.schema driver.role_class 对应的驱动方; 唯一实现 next_resolver._driver_actor: loop --actor → 治理根 .lybra/role instance → connection.json 驱动方 token 绑定实例, 解析不到 = 不可推导点名缺项; AIPOS-F102 件①), 不按 claimer 判(派审时审计卡尚未认领)"
     }
   },
   "state_consistency": {

@@ -19,8 +19,8 @@ DEFAULT_MCP_PORT = get_config_port("gate_default")  # 门进程即 MCP 服务: �
 
 # AIPOS-224 (governance home, Slice 0): home-root + active-project resolution.
 # This block is ADDITIVE and UNWIRED — no existing resolver/caller behaviour changes in this
-# slice. `default_workspace_config()` intentionally still emits config_version 1 (M1: read v2
-# now, default-write v2 deferred to Slice 2). Pure functions, fail-closed, stdlib only.
+# slice. (AIPOS-F117: the v1 writer default_workspace_config()/write_workspace_config() had zero product
+# callers and was deleted; .lybra/config.json is an optional hand-written override read by workspace_runtime_config.) Pure functions, fail-closed, stdlib only.
 DEFAULT_HOME_ROOT = Path("~/.lybra/projects")
 HOME_ROOT_ENV = "LYBRA_HOME_ROOT"
 ACTIVE_PROJECT_ENV = "LYBRA_ACTIVE_PROJECT"
@@ -225,29 +225,49 @@ def resolve_workspace_context(
     raise FileNotFoundError("Could not locate Lybra workspace root containing .lybra/config.json or 5_tasks/queue")
 
 
-def default_workspace_config(workspace_root: Path) -> dict[str, Any]:
+#: AIPOS-F117 件①(gap #52): .lybra/config.json 未写 mcp.*_token_env 时的缺省环境变量名(config.schema environment_variables 声明同名)
+DEFAULT_TRANSPORT_TOKEN_ENV = "LYBRA_MCP_TOKEN"
+DEFAULT_CAPABILITY_TOKEN_ENV = "LYBRA_CAPABILITY_TOKEN"
+
+
+def workspace_runtime_config(workspace_root: Path, *, strict: bool = True) -> dict[str, Any]:
+    """AIPOS-F117 件①(gap #52): 治理根 `.lybra/config.json` 运行时字段(board / mcp 地址与令牌环境变量名)的唯一读取口——
+    serve / board / mcp 包装(aipos_cli._config_defaults)与看板运行时状态面(web/board _runtime_config_defaults)同读, 原两份
+    逐字段重复的读取 + 缺省删并为此一处。
+
+    该文件是可选的手写覆盖(config.schema configuration_sources.workspace_config 声明其键); 产品不再生成它——原写入方
+    write_workspace_config / default_workspace_config 产品零调用方(只剩测试), 随建项目收敛到 `lybra project new`
+    (不产此文件)删除。文件缺 = 全取缺省(端口 = config.schema ports 经 get_config_port, 令牌环境变量名 = 上方缺省)。
+    文件坏: strict=True(serve 等启动路径)= 原样抛 ValueError(fail-closed); strict=False(只读状态面)= 取缺省并把错误放进
+    config_error 供展示(不静默)。返回键: config_path(绝对路径串 / None)、config_error、board_declared(文件写了 board 段)、
+    board_url、board_host/port、mcp_host/port、transport_token_env、capability_token_env。
+    读取方: aipos_cli._config_defaults(serve/board/mcp 包装)、web/board _runtime_config_defaults(状态面)、
+    board_login.resolve_board_url(看板登录地址)。"""
+    config_path = Path(workspace_root) / CONFIG_RELATIVE_PATH
+    config: dict[str, Any] = {}
+    config_error: str | None = None
+    if config_path.is_file():
+        try:
+            config = load_workspace_config(config_path)
+        except (ValueError, OSError) as exc:
+            if strict:
+                raise
+            config_error = str(exc)
+            config = {}
+    board = config.get("board") if isinstance(config.get("board"), dict) else {}
+    mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
     return {
-        "config_version": 1,
-        "workspace_root": ".",
-        "board": {"host": DEFAULT_BOARD_HOST, "port": DEFAULT_BOARD_PORT},
-        "mcp": {
-            "host": DEFAULT_MCP_HOST,
-            "port": DEFAULT_MCP_PORT,
-            "transport_token_env": "LYBRA_MCP_TOKEN",
-            "capability_token_env": "LYBRA_CAPABILITY_TOKEN",
-        },
-        "notes": "Token values are referenced by environment variable only; do not store raw secrets in this file.",
+        "config_path": str(config_path) if config_path.is_file() else None,
+        "config_error": config_error,
+        "board_declared": isinstance(config.get("board"), dict),
+        "board_url": str(board.get("url") or "").strip() or None,
+        "board_host": str(board.get("host") or DEFAULT_BOARD_HOST),
+        "board_port": int(board.get("port") or DEFAULT_BOARD_PORT),
+        "mcp_host": str(mcp.get("host") or DEFAULT_MCP_HOST),
+        "mcp_port": int(mcp.get("port") or DEFAULT_MCP_PORT),
+        "transport_token_env": str(mcp.get("transport_token_env") or DEFAULT_TRANSPORT_TOKEN_ENV),
+        "capability_token_env": str(mcp.get("capability_token_env") or DEFAULT_CAPABILITY_TOKEN_ENV),
     }
-
-
-def write_workspace_config(workspace_root: Path, *, overwrite: bool = False) -> Path:
-    root = workspace_root.expanduser().resolve()
-    config_path = root / CONFIG_RELATIVE_PATH
-    if config_path.exists() and not overwrite:
-        return config_path
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(default_workspace_config(root), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return config_path
 
 
 # ---------------------------------------------------------------------------

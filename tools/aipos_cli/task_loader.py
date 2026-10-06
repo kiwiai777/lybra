@@ -20,7 +20,7 @@ from tools.aipos_cli.workspace_config import (
 )
 
 def _queue_state_projection(flag: str) -> tuple[str, ...]:
-    """AIPOS-F104 件②: 队列状态集合唯一投影——读 enums.schema queue_state 每值的布尔 flag(queue_dir / skeleton)。
+    """AIPOS-F104 件②: 队列状态集合唯一投影——读 enums.schema queue_state 每值的布尔 flag(queue_dir / skeleton / terminal)。
     缺 flag 或非布尔 = 声明缺失, SchemaLoadError fail-closed(禁回退手写集合)。"""
     from tools.schema_loader import SchemaLoadError, load_schema
 
@@ -41,6 +41,8 @@ def _queue_state_projection(flag: str) -> tuple[str, ...]:
 QUEUE_STATES = _queue_state_projection("queue_dir")
 # 新项目/脚手架预建的队列目录 = enums queue_state 中 skeleton=true 的值(withdrawn 按需建)
 QUEUE_SKELETON_STATES = _queue_state_projection("skeleton")
+# AIPOS-F117 件③(gap #62): 终态(卡生命周期已结束, 推导核不再派生推进步)= enums queue_state 中 terminal=true 的值(completed / withdrawn)
+QUEUE_TERMINAL_STATES = _queue_state_projection("terminal")
 
 
 def _serialize_dates(obj: Any) -> Any:

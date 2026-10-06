@@ -7,7 +7,7 @@
 Lybra 项目结构文件 (`lybra-project.yaml`) 是一个版本化的 YAML 文档，用于捕获一个工作区的完整结构元数据。它支持两个核心动词:
 
 - **export**: 从现有工作区生成结构文件
-- **import**: 按结构文件创建骨架工作区 + 迁移清单
+- **import**: 按结构文件经 `lybra project new` 同一实现建项目 + 迁移清单(AIPOS-F117)
 
 ## Schema (v1)
 
@@ -66,9 +66,11 @@ export_source: "/home/user/projects/my-project"  # export 自动生成
 ## 红线
 
 1. **零凭据**: 结构文件绝不包含任何凭据值 (token/secret/password/api_key 等)
-2. **import 不删文件**: import 只创建骨架和迁移清单，绝不删除用户文件
-3. **非空保护**: import 拒绝在非空且非 Lybra 工作区的目录中执行
-4. **幂等**: 重复 import 到同一目录是安全的 (跳过已存在文件)
+2. **建项目单一实现**(AIPOS-F117 件①, Owner 10-04 裁定): import 建项目 = `lybra project new` 同一实现
+   (`workspace_config.scaffold_project`), 另只写迁移清单; 落点 = `<home 根>/<项目名>`, home 根与 project new 同一优先级梯
+   (`--home-root` > `LYBRA_HOME_ROOT` > `~/.lybra/config.json` home_root > 缺省 `~/.lybra/projects`)。不再自建 `~/.lybra/workspaces/`
+3. **import 不删文件**: 源目录只读; 迁移清单只列不搬, 绝不删除用户文件
+4. **非空保护**: 目标项目根非空 = 拒(`PROJECT_EXISTS`, 与 project new 同一拒因), 重复导入同名项目不覆盖
 
 ## CLI 用法
 
@@ -77,7 +79,7 @@ export_source: "/home/user/projects/my-project"  # export 自动生成
 lybra project export [workspace_root] [--output FILE] [--project-name NAME]
 
 # 导入
-lybra project import <structure_file> <output_root> [--dry-run] [--actor NAME]
+lybra project import <structure_file> [--name NAME] [--home-root DIR] [--dry-run] [--actor NAME]
 
 # 向导
 # 在 Lybra Overview 面板 → 新建项目 → Option C: 导入已有项目
@@ -90,4 +92,4 @@ lybra project import <structure_file> <output_root> [--dry-run] [--actor NAME]
 3. 输入现有工作区路径 → 点击「预览结构」
 4. 查看项目名/文档数/治理文件等摘要
 5. 输入新项目名称 → 点击「确认导入」
-6. 系统自动创建骨架 + 迁移清单 + 注册到看板
+6. 系统经 `lybra project new` 同一实现在 home 根下建项目 + 写迁移清单 + 登记到看板展示列表

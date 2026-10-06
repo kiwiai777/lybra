@@ -422,13 +422,6 @@ def get_role_naming_template(repo_root: Path | None = None) -> str:
     return roles_schema.get("naming", {}).get("template", "{prefix}.{project}.{host}")
 
 
-def get_builtin_role_classes(repo_root: Path | None = None) -> list[str]:
-    """List builtin role classes that custom_roles may map to."""
-    roles_schema = load_schema("roles", repo_root)
-    custom = roles_schema.get("custom_roles", {}) or {}
-    return list(custom.get("builtin_classes") or get_all_role_names(repo_root))
-
-
 def get_machine_zone_fields(repo_root: Path | None = None) -> list[str]:
     """Get list of machine-zone fields from card.schema (AIPOS-F68 single source).
     
@@ -765,7 +758,6 @@ __all__ = [
     "get_role_naming_prefix",
     "get_all_role_names",
     "get_role_naming_template",
-    "get_builtin_role_classes",
     "get_config_port",
     "get_config_default_gate_url",
     "get_governance_structure",
