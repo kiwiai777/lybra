@@ -76,7 +76,7 @@ def _make_gov(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, shape: str) ->
     # (旧 role:/policy_type: 桩只被已删的按角色词解析模块接受); 执行信封覆盖卡面实例, 审计信封覆盖派生审计卡实例 + 被审 code 卡
     _write(root / "5_tasks" / "policies" / f"pol_{tag}_dev_1.md", _envelope(f"pol_{tag}_dev_1", f"exec.{project}.host", project))
     _write(root / "5_tasks" / "policies" / f"pol_{tag}_audit_1.md",
-           _envelope(f"pol_{tag}_audit_1", ad._derive_audit_instance(project), project))
+           _envelope(f"pol_{tag}_audit_1", ad.resolve_audit_instance({"project": project}, root), project))
     return root
 
 

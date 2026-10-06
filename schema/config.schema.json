@@ -834,10 +834,6 @@
         "description": "身份兜底层(最低优先级): identity_resolution.keys.owner_policy_ref",
         "identity_key": "owner_policy_ref"
       },
-      "LYBRA_PROJECT": {
-        "type": "string",
-        "description": "实例名项目段缺省(naming_profile.DEFAULT_INSTANCE_PROJECT)"
-      },
       "LYBRA_PYTHON": {
         "type": "string",
         "description": "bin/lybra 启动器使用的 Python 解释器"

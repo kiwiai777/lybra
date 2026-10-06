@@ -21,10 +21,10 @@ def _ensure_test_policies(repo_root: Path) -> None:
     policies_dir = repo_root / "5_tasks" / "policies"
     policies_dir.mkdir(parents=True, exist_ok=True)
     # AIPOS-F103 件④: 信封挑选唯一判据 match_claim_envelope(与门同一判据)——夹具信封须是真 owner_autonomy_policy 形;
-    # 审计信封覆盖派生审计卡的认领实例(_derive_audit_instance) + 被审 code 卡(envelope_subject: 审计卡 = 被审卡)
-    from tools.aipos_cli.audit_derivation import _derive_audit_instance
+    # 审计信封覆盖派生审计卡的认领实例(resolve_audit_instance 唯一实现, AIPOS-F102) + 被审 code 卡(envelope_subject: 审计卡 = 被审卡)
+    from tools.aipos_cli.audit_derivation import resolve_audit_instance
 
-    for policy_id, agent_or_role in (("pol_lybra_dev_7", "exec.lybra.host"), ("pol_lybra_audit_2", _derive_audit_instance("lybra"))):
+    for policy_id, agent_or_role in (("pol_lybra_dev_7", "exec.lybra.host"), ("pol_lybra_audit_2", resolve_audit_instance({"project": "lybra"}, repo_root))):
         (policies_dir / f"{policy_id}.md").write_text(
             "---\nrecord_type: owner_autonomy_policy\n"
             f"policy_id: {policy_id}\nmode: PreAuthorized\nstatus: active\napproved_by_owner: true\n"

@@ -266,19 +266,19 @@ function runPublishDryRun(ws: string): PublishResult {
       check("A: 注册表在位 → publish --dry-run 非BLOCK且不撞信封墙", false, String(e));
     }
 
-    // --- B(AIPOS-F103 件④ 翻转): 门注册表无 hbj 条目 → 仍按卡面实例精确覆盖解析(注册表不是信封判据) ---
+    // --- B(AIPOS-F103 件④ × AIPOS-F102 件②): 门注册表无 hbj 条目 → 拒因是「角色类不可解析」(F102: 卡面零门判据无据, 更早拒),
+    //     不是信封墙——注册表不是信封判据(信封挑选唯一判据 match_claim_envelope 精确覆盖卡面实例, 见 Python 夹具) ---
     try {
       const r = runPublishDryRun(makeFixture(fx, false));
-      // AIPOS-F102 件②: 无门注册表时自定义角色的角色类不可解析 = 更早拒(卡面零门判据无据), 不再走到信封墙; 同一病因两种拒因都算负对照成立
-      const blocked = (r.blocking_reasons || []).some((b) =>
-        String(b).includes("cannot resolve policy envelope") || String(b).includes("角色类不可解析"));
+      const reasons = (r.blocking_reasons || []).map((b) => String(b));
       check(
-        "B: 无门注册表 → 仍按卡面实例解析 pol_chris_coder_1(注册表不是信封判据)",
-        r.verdict !== "BLOCK" && !blocked && (r.rendered_markdown || "").includes("pol_chris_coder_1"),
+        "B: 无门注册表 → BLOCK 于角色类不可解析(F102), 非信封墙(注册表不是信封判据)",
+        r.verdict === "BLOCK" && reasons.some((b) => b.includes("角色类不可解析")) &&
+          !reasons.some((b) => b.includes("cannot resolve policy envelope")),
         `verdict=${r.verdict} blocking=${JSON.stringify(r.blocking_reasons).slice(0, 200)}`,
       );
     } catch (e) {
-      check("B: 无门注册表 → 仍按卡面实例解析 pol_chris_coder_1(注册表不是信封判据)", false, String(e));
+      check("B: 无门注册表 → BLOCK 于角色类不可解析(F102), 非信封墙(注册表不是信封判据)", false, String(e));
     }
 
     // --- C. audit 侧信封: 注册表 hbj-auditor→auditor(契约节渲染内部会解析

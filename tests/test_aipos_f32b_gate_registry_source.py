@@ -242,11 +242,13 @@ class TestAcceptance1RegistryNotAnEnvelopeCriterion:
     """AIPOS-F103 件④(原①负对照翻转): 门注册表无 hbj 条目时, 信封仍按卡面实例精确覆盖解析——
     注册表 class 不是信封判据(唯一判据 match_claim_envelope)。"""
 
-    def test_no_gate_registry_still_resolves_by_card_instance(self, tmp_path):
+    def test_no_gate_registry_refuses_on_role_class_not_on_envelope(self, tmp_path):
+        """AIPOS-F102 件②: 无门注册表时自定义角色的角色类不可解析 = 更早拒; 拒因不是信封墙(注册表不是信封判据)。"""
         ws = make_gate_home(tmp_path, registry_tokens=[])  # 注册表空(真 chris 拓扑: 无 hbj 登记)
         result = _bin_lybra("draft", "publish", "--path", "5_tasks/drafts/hbj-f32b-fx-1.md", "--dry-run", cwd=ws)
-        assert result.get("verdict") in ("PASS", "WARN"), result.get("blocking_reasons")
-        assert "pol_chris_coder_1" in str(result.get("rendered_markdown") or "")
+        reasons = [str(b) for b in result.get("blocking_reasons") or []]
+        assert result.get("verdict") == "BLOCK" and any("角色类不可解析" in b for b in reasons), reasons
+        assert not any("cannot resolve policy envelope" in b for b in reasons), reasons
         assert result.get("wrote") is False  # dry-run 零写入
 
     def test_registry_class_flip_does_not_change_selection(self, tmp_path):
