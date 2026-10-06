@@ -34,7 +34,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import test_aipos_f90_loop_one_stage as f90  # noqa: E402  — 靶场唯一来源(禁第二份)
-from test_aipos_f78_engine_agnostic import DRIVER, EXEC, _write  # noqa: E402
+from test_aipos_f78_engine_agnostic import AUDITOR, DRIVER, EXEC, _write  # noqa: E402
 from test_aipos_f73d_loop_driver import init_governance_repo  # noqa: E402
 from test_aipos_f90_loop_one_stage import rig  # noqa: E402,F401  — pytest fixture(进程内门 + 进程内 CLI)
 from tools.aipos_cli import loop_driver  # noqa: E402
@@ -45,9 +45,9 @@ FAKE = REPO_ROOT / "tests" / "fake_harness.py"
 TASK = f90.TASK
 AUDIT = f90.AUDIT
 POLICY_LAUNCH = "pol_probe_launch_1"
-# 审计卡的认领实例: 靶场里由交回时 audit_derivation 生成审计卡, 其 agent_instance 走产品存量缺省(不读被审卡 audit_by,
-# 见 RETURN 缺口; 本卡不修)。审计工位按该实例登记, 身份核验才对得上。
-AUDIT_CLAIMER = "audit.lybra.kiwiai-dev"
+# 审计卡的认领实例 = 被审卡 audit_by(AIPOS-F102 件①: audit_derivation/派审同一解析 resolve_audit_instance; F95 时期
+# 走写死缺省的变通退役)。审计工位按被审卡声明的审计实例登记, 身份核验对得上。
+AUDIT_CLAIMER = AUDITOR
 
 
 def _show(line: str) -> None:

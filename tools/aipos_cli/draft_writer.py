@@ -509,69 +509,62 @@ def _manual_gate_mode(repo_root: Path | None) -> bool:
         return False
 
 
-def _card_role_class(metadata: dict[str, Any], repo_root: Path | None) -> str | None:
+def _card_role_class(metadata: dict[str, Any], repo_root: Path | None) -> str:
     """AIPOS-F73C 件①(顾问代修, Owner 2026-09-08 仲裁 C): 卡 assigned_to/agent_instance → 角色类别。
 
-    唯一判据来源 = roles 注册表(schema_loader.load_schema("roles")):
-      1. 首段与注册表 `role` 同名(executor/auditor/advisor…);
-      2. 首段与注册表 `naming.prefix` 同名(exec./audit./advisor. 实例名);
-      3. 自定义角色经 custom_roles.resolve_role_to_class(需项目根)。
-    禁子串猜(exec/audit in name)。读不到注册表 = 精确捕获 + warning + None(调用方按"非执行体"
-    处理 = 存量兼容方向, 不静默)。
+    AIPOS-F102 件②: 角色 → 类只经唯一实现 custom_roles.resolve_role_to_class; 本函数只做「实例名 → 角色名」:
+      1. 候选本身即角色名(executor/auditor/advisor… 或自定义角色名);
+      2. 实例名首段(roles.schema naming.template 唯一解析 parse_instance_name)按注册表 naming.prefix 反查角色名
+         (exec./audit./advisor.), 首段不是前缀则按角色名(自定义角色 hbj-coder.<项目>.<机器>);
+    禁子串猜(exec/audit in name)。全部候选解析不到 / 注册表读不到 = 拒(UnknownRoleClass, 统一失败语义),
+    不再返回 None 被调用方当「非执行体」放行。repo_root = 治理根(自定义角色在门注册表, 内建角色无需)。
     """
+    from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class
+    from tools.aipos_cli.naming_profile import _registry_prefix_mapping, parse_instance_name
+    from tools.schema_loader import SchemaLoadError
+
     candidates = [
         str(metadata.get("assigned_to") or "").strip(),
         str(metadata.get("agent_instance") or "").strip(),
     ]
     try:
-        from tools.schema_loader import SchemaLoadError, load_schema
-        from tools.aipos_cli.custom_roles import resolve_role_to_class
-    except ImportError as exc:  # 产品仓损坏才会到这里, 出声不吞
-        import sys
-
-        print(f"Warning: role registry loader unavailable: {exc}", file=sys.stderr)
-        return None
-    try:
-        # 靶场分根(F76-R2/F71-R3 同款):角色注册表是产品 schema, 从产品仓根解析(None=默认产品根);
-        # 传入的 repo_root 是治理根, 只用于自定义角色(custom_roles 在治理工作区)。
-        roles = load_schema("roles", None).get("roles", [])
-        by_name = {r.get("role"): r for r in roles if r.get("role")}
-        by_prefix = {
-            (r.get("naming") or {}).get("prefix"): r
-            for r in roles
-            if (r.get("naming") or {}).get("prefix")
-        }
+        role_by_prefix = {prefix: role for role, prefix in _registry_prefix_mapping().items()}
         for cand in candidates:
             if not cand:
                 continue
-            head = cand.split(".")[0]
-            spec = by_name.get(cand) or by_name.get(head) or by_prefix.get(head)
-            if spec:
-                return str(spec.get("role_class") or spec.get("role"))
-            cls = resolve_role_to_class(head, repo_root)
-            if cls:
-                return str(cls)
-    except (SchemaLoadError, FileNotFoundError, OSError, json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
-        # 靶场/存量工作区无注册表 = 声明缺失(F76-R2 同款精确捕获):出 warning, 按"角色未知"处理, 不静默。
-        import sys
-
-        print(f"Warning: role registry unreadable, card role class unknown: {exc}", file=sys.stderr)
-    return None
+            parsed = parse_instance_name(cand)
+            head = parsed["prefix"] if parsed else cand.split(".")[0]  # 非三段式(存量 exec.test 等)取首段, 与 F73C 口径同
+            for role_name in (cand, role_by_prefix.get(head, head)):
+                cls = resolve_role_to_class(role_name, repo_root)
+                if cls:
+                    return str(cls)
+    except (SchemaLoadError, FileNotFoundError, OSError, json.JSONDecodeError, KeyError) as exc:
+        raise UnknownRoleClass(f"角色注册表读不到, 卡角色类不可解析(assigned_to/agent_instance={candidates}): {exc}") from exc
+    raise UnknownRoleClass(
+        f"卡 assigned_to/agent_instance={candidates} 角色类不可解析(既非 roles.schema 内建角色/实例前缀, 也不在门注册表自定义角色内); "
+        "出口: 卡面 assigned_to/agent_instance 写注册表角色的实例名, 或 lybra roles register <name> --class <builtin>"
+    )
 
 
 def card_carries_gate_contract_section(metadata: dict[str, Any], repo_root: Path | None) -> bool:
     """AIPOS-F80 件①: 「哪类卡带认领与交回节」的**唯一判据**(执行卡 / 派生审计卡 / 手动派审卡 / regen 同口径)。
 
-    - 角色类别经 roles 注册表解析(_card_role_class, 禁子串猜)为 executor / auditor 的卡 = 零门卡面:
-      不带「认领与交回」节、不带门动词提交配方(执行体/审计体只写产物, 认领与裁决提交由驱动方完成, Owner 09-06);
+    - 角色类别经 roles 注册表解析(_card_role_class, 禁子串猜)属工位类(roles.schema class_groups.workstation, AIPOS-F102 件②
+      读声明)的卡 = 零门卡面: 不带「认领与交回」节、不带门动词提交配方(执行体/审计体只写产物, 认领与裁决提交由驱动方完成, Owner 09-06);
     - 项目声明 manual_gate_mode=true(chris 形人肉 gate)= 两类卡都保留现行为;
-    - 其它角色(advisor/planner/…)或角色不可解析 = 保留(存量兼容方向)。
+    - 其它角色(advisor/planner/…) = 保留; 角色不可解析 = 拒(ContractSectionError, AIPOS-F102 件②: 原「不可解析按保留放行」退役)。
     调用方: _append_gate_contract_section(发布追加)、publish 门动词校验、audit_derivation.build_derived_audit_task
     (派生审计卡)、regen_machine_zone_for_pending(存量卡删节)。禁第二判据。
     """
-    if _card_role_class(metadata, repo_root) not in ("executor", "auditor"):
+    from tools.aipos_cli.custom_roles import UnknownRoleClass, role_classes_in_group
+
+    if _manual_gate_mode(repo_root):  # 人肉 gate 项目: 任何角色都带节, 判据与角色类无关(无需解析)
         return True
-    return _manual_gate_mode(repo_root)
+    try:
+        role_class = _card_role_class(metadata, repo_root)
+    except UnknownRoleClass as exc:
+        raise ContractSectionError(f"AIPOS-F102: 卡面零门判据无据(角色类不可解析, 工作区 {repo_root}), 拒: {exc}") from exc
+    return role_class not in role_classes_in_group("workstation")
 
 
 def _append_gate_contract_section(
@@ -866,7 +859,13 @@ def publish_draft(
         # AIPOS-F78 前置零⑧(F79B 实撞: 裸正则 lybra_\w+ 扫整卡把 pol_lybra_dev_9 / governance_refs 里的动词键名当门动词拒):
         # 只匹配 verbs.schema 注册的 MCP 动词全名、整词、只扫意图面正文(body), 排除 frontmatter 的策略 id 与文档性引用。
         # AIPOS-F80 件①: 与渲染侧同一判据 card_carries_gate_contract_section(零门卡面 = 不得含门动词)。
-        if not card_carries_gate_contract_section(publish_metadata, repo_root):
+        try:
+            _zero_gate_card = not card_carries_gate_contract_section(publish_metadata, repo_root)
+        except ContractSectionError as exc:  # AIPOS-F102 件②: 角色类不可解析 = 拒(发布阻塞带出口), 不按"非零门卡"放行
+            _zero_gate_card = False
+            if str(exc) not in validation["blocking_reasons"]:
+                validation["blocking_reasons"].append(str(exc))
+        if _zero_gate_card:
             lybra_verbs = find_gate_verbs_in_intent_body(body)
             if lybra_verbs:
                 validation["blocking_reasons"].append(

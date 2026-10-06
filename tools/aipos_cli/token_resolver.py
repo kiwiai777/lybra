@@ -392,7 +392,7 @@ def detect_wrong_domain_tokens(
         [
             {
                 "role": "planner",
-                "agent_instance": "advisor.lybra.kiwiai-dev",
+                "agent_instance": "advisor.lybra.<host>",
                 "projects": ["lybra"],  # Wrong! Should be ["chris-huibojin"]
                 "fingerprint": "sha256:3e44d7f190ce",
                 "retired": false,

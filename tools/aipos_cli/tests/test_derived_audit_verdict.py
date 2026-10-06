@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.aipos_cli.audit_derivation import _derive_audit_instance
+from tools.aipos_cli.audit_derivation import resolve_audit_instance
 from tools.aipos_cli.board_adapter import audit_verdict_task
 
 
@@ -32,7 +32,7 @@ class DerivedAuditVerdictTests(unittest.TestCase):
             "records/claims", "records/audit_dispatches", "records/audit_verdicts",
         ):
             (self.repo_root / "5_tasks" / d).mkdir(parents=True, exist_ok=True)
-        self.audit_instance = _derive_audit_instance("lybra")
+        self.audit_instance = resolve_audit_instance({"project": "lybra"})  # AIPOS-F102: 审计实例唯一解析(无 audit_by → 项目推导)
         self.reviewed_id = "AIPOS-MCP-RETURN"
         self.audit_id = "AIPOS-MCP-RETURNR"
         self.return_id = "return_AIPOS-MCP-RETURN_20260726_agent-01"

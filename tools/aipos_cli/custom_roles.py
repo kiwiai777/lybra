@@ -146,31 +146,79 @@ def load_custom_roles(project_root: str | Path) -> dict[str, dict[str, str]]:
     return result
 
 
+class UnknownRoleClass(ValueError):
+    """AIPOS-F102 件②: 角色 → 角色类解析不到(既非内建角色, 也不在门注册表自定义角色内)——统一失败语义 = 拒。"""
+
+
 def resolve_role_to_class(
     role_name: str,
     project_root: str | Path | None = None,
+    *,
+    required: bool = False,
 ) -> str | None:
-    """Resolve a role name to its built-in class.
+    """Resolve a role name to its built-in class — THE single role→class implementation (AIPOS-F102 件②).
 
     - Built-in role → returns itself.
     - Custom role (in gate registry) → returns the registered class.
-    - Unknown role → returns None.
+    - Unknown role → None; with ``required=True`` → raises UnknownRoleClass(带出口).
+      守卫/分组判定一律 required=True(统一失败语义 = 拒, 禁回落角色名自身或按"非工位"放行)。
 
     When project_root is None, only built-in roles are recognized.
     """
     clean = str(role_name or "").strip()
-    if not clean:
-        return None
-    # Built-in roles resolve to themselves
+    resolved: str | None = None
     if clean in _builtin_role_names():
-        return clean
-    # Custom roles: look up in the gate registry
-    if project_root is not None:
-        custom = load_custom_roles(project_root)
-        entry = custom.get(clean)
+        # Built-in roles resolve to themselves
+        resolved = clean
+    elif clean and project_root is not None:
+        # Custom roles: look up in the gate registry
+        entry = load_custom_roles(project_root).get(clean)
         if entry:
-            return entry["class"]
-    return None
+            resolved = entry["class"]
+    if resolved is None and required:
+        raise UnknownRoleClass(
+            f"角色 {clean!r} 的角色类不可解析: 既非 roles.schema 内建角色, 也不在门注册表"
+            f"(connection.json tokens[].role_class)自定义角色内"
+            f"{'' if project_root is not None else '(未给项目根, 只认内建角色)'}; "
+            f"出口: lybra roles register {clean or '<name>'} --class <builtin>"
+        )
+    return resolved
+
+
+def _declared_class_groups() -> dict[str, list[str]]:
+    """AIPOS-F102 件②: roles.schema 角色类分组声明 → {内建角色类: [分组]}(注册表顺序)。缺声明 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    schema = load_schema("roles")
+    known = set((schema.get("class_groups") or {}).get("values") or {})
+    if not known:
+        raise SchemaLoadError("roles.schema.json class_groups.values 未声明(AIPOS-F102 件②)")
+    out: dict[str, list[str]] = {}
+    for spec in schema.get("roles") or []:
+        cls = str(spec.get("role_class") or spec.get("role") or "").strip()
+        groups = spec.get("class_groups")
+        if not isinstance(groups, list):
+            raise SchemaLoadError(f"roles.schema.json roles[{cls}].class_groups 未声明(AIPOS-F102 件②: 缺键 = 声明缺失)")
+        unknown = [g for g in groups if g not in known]
+        if unknown:
+            raise SchemaLoadError(f"roles.schema.json roles[{cls}].class_groups 含未声明分组 {unknown}; 值域 {sorted(known)}")
+        out.setdefault(cls, [])
+        out[cls].extend(g for g in groups if g not in out[cls])
+    return out
+
+
+def role_classes_in_group(group: str) -> tuple[str, ...]:
+    """AIPOS-F102 件②: 某分组内的内建角色类(注册表顺序)。未声明的分组 = SchemaLoadError(禁静默空集)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    if group not in ((load_schema("roles").get("class_groups") or {}).get("values") or {}):
+        raise SchemaLoadError(f"角色类分组 {group!r} 未在 roles.schema.json class_groups.values 声明")
+    return tuple(cls for cls, groups in _declared_class_groups().items() if group in groups)
+
+
+def role_in_class_group(role_name: str, group: str, project_root: str | Path | None = None) -> bool:
+    """AIPOS-F102 件②: 角色(内建或自定义)是否属某分组——角色类经 resolve_role_to_class(required=True, 解析不到 = 拒), 分组读声明。"""
+    return resolve_role_to_class(role_name, project_root, required=True) in role_classes_in_group(group)
 
 
 def is_custom_role(role_name: str, project_root: str | Path | None = None) -> bool:
@@ -191,14 +239,17 @@ def _workspace_registry_path(project_root: str | Path) -> Path:
 
 
 def _read_registry_file(path: Path) -> dict[str, Any]:
-    """Read a connection.json (defensive). Returns {} skeleton on absence/malform."""
+    """Read a connection.json for a read-modify-write. Absent → empty skeleton; unreadable/malformed → ValueError
+    (AIPOS-F102: 原「坏文件静默当空骨架」会让随后的写回抹掉全部既有凭据, 改 fail-closed 带路径)。"""
+    if not path.exists():
+        return {"config_version": 1, "tokens": []}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        pass
-    return {"config_version": 1, "tokens": []}
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"门注册表 {path} 读不出, 拒绝改写(防覆盖既有凭据): {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"门注册表 {path} 顶层不是对象, 拒绝改写(防覆盖既有凭据)")
+    return data
 
 
 def _write_registry_file(path: Path, data: dict[str, Any]) -> None:
