@@ -21,6 +21,7 @@ import fnmatch
 import os
 import re
 import shutil
+import signal
 import site
 import subprocess
 import sys
@@ -112,13 +113,34 @@ def _command(path: str, runner: str, node_excludes: list[str]) -> list[str]:
     raise ValueError(f"未知执行器 {runner!r}")
 
 
-def _run(cmd: list[str], repo_root: Path, env: dict[str, str]) -> tuple[int | None, str]:
+def _reap_group(pgid: int) -> bool:
+    """测试子进程组收尾: 组内仍有存活进程(测试拉起的后台服务未收尾)= SIGKILL 整组并返回 True(调用方出声)。"""
     try:
-        proc = subprocess.run(cmd, cwd=repo_root, env=env, capture_output=True, text=True, timeout=FILE_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as exc:
-        partial = "".join(part if isinstance(part, str) else (part or b"").decode("utf-8", "replace") for part in (exc.stdout, exc.stderr))
-        return None, partial + f"\n[runall_discovery] 超时 {FILE_TIMEOUT_SECONDS}s, 判红\n"
-    return proc.returncode, proc.stdout + proc.stderr
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _run(cmd: list[str], repo_root: Path, env: dict[str, str]) -> tuple[int | None, str]:
+    """独立进程组执行一个测试文件; 结束(或超时)后清掉组内残留进程——夹具环境不留孤儿(测试泄漏的后台进程照实出声)。"""
+    proc = subprocess.Popen(cmd, cwd=repo_root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            start_new_session=True)
+    try:
+        stdout, stderr = proc.communicate(timeout=FILE_TIMEOUT_SECONDS)
+        rc: int | None = proc.returncode
+        tail = ""
+    except subprocess.TimeoutExpired:
+        _reap_group(proc.pid)
+        stdout, stderr = proc.communicate()
+        rc, tail = None, f"\n[runall_discovery] 超时 {FILE_TIMEOUT_SECONDS}s, 判红\n"
+    if _reap_group(proc.pid):
+        tail += "\n[runall_discovery] 测试结束后其进程组仍有存活进程(未收尾的后台服务), 已整组 SIGKILL 清理\n"
+    return rc, (stdout or "") + (stderr or "") + tail
 
 
 def judge(path: str, runner: str, rc: int | None, output: str, known: dict[str, str]) -> tuple[bool, list[str]]:
