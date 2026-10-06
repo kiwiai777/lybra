@@ -42,11 +42,14 @@ _LIST_PREVIEW = 8
 
 def resolve_policy(governance_root: Path, repo_root: Path) -> dict[str, Any]:
     """项目策略(runall_path + post_merge_regression)。形坏 = ValueError(TEST_CONTRACT_INVALID) / SchemaLoadError 原样抛(fail-closed)。"""
+    from tools.aipos_cli.next_resolver import loop_step_timeout_seconds
     from tools.aipos_cli.workspace_config import project_test_contract
 
     contract = project_test_contract(governance_root, repo_root)
     pmr = contract["post_merge_regression"]
     return {
+        # 合并前读入(AIPOS-F120: 合并改写代码源, 合并后不再读声明), 供 sync 时限 ≥ loop 步超时的提示用
+        "loop_step_timeout_seconds": loop_step_timeout_seconds(),
         "runall_path": contract["runall_path"],
         "mode": pmr["mode"],
         "execution": pmr["execution"],
@@ -291,8 +294,9 @@ def write_event_record(governance_root: Path, task_id: str, actor: str, result: 
 
 
 def _spawn_async(*, governance_root: Path, repo_root: Path, task_id: str, actor: str, merge_commit: str, policy: dict[str, Any]) -> dict[str, Any]:
-    """拉起独立会话后台子进程跑同一 execute_check(本模块 run-async 入口), 立即返回。包根 = 本模块所在发布目录的实路径
-    (不经 .deploy/current 符号链接: 部署切换后子进程仍用拉起时那一份代码, 不混用新旧)。"""
+    """拉起独立会话后台子进程跑同一 execute_check(本模块 run-async 入口), 立即返回。包根 = 本模块所在目录的实路径(不经
+    .deploy/current 符号链接)。子进程是新进程, 从包根一次性加载一份代码(editable 安装时即合并后的代码), 不与 finalize 进程
+    混用新旧(AIPOS-F120 导入闸管的是 finalize 本进程)。"""
     package_root = Path(__file__).resolve().parents[2]
     log_path = Path(tempfile.gettempdir()) / f"lybra-post-merge-regression-async-{merge_commit[:12]}-{os.getpid()}-{int(time.time())}.log"
     cmd = [sys.executable, "-m", "tools.aipos_cli.post_merge_regression", "run-async",
@@ -334,16 +338,14 @@ def check_after_merge(*, governance_root: Path, repo_root: Path, task_id: str, a
                                     runall_path=policy["runall_path"], timeout_seconds=policy["timeout_seconds"]))
         if result["status"] in ACTIONABLE_STATUSES:
             result["action"] = "blocked" if policy["mode"] == "block" else "warned"
-        _loop_timeout_note(result)
+        _loop_timeout_note(result, policy["loop_step_timeout_seconds"])
     result["summary"] = summary_line(result)
     return result
 
 
-def _loop_timeout_note(result: dict[str, Any]) -> None:
-    """sync 且声明总时限 ≥ loop 步超时(verbs.schema lybra_loop.step_timeout_seconds): loop 驱动下 finalize 会在合并后被杀, 附提示。"""
-    from tools.aipos_cli.next_resolver import loop_step_timeout_seconds
-
-    step_timeout = loop_step_timeout_seconds()
+def _loop_timeout_note(result: dict[str, Any], step_timeout: float) -> None:
+    """sync 且声明总时限 ≥ loop 步超时(verbs.schema lybra_loop.step_timeout_seconds, resolve_policy 合并前读入): loop 驱动下
+    finalize 会在合并后被杀, 附提示。"""
     if result["timeout_seconds"] >= step_timeout:
         result.setdefault("notes", []).append(
             f"声明 timeout_seconds={result['timeout_seconds']} ≥ loop 步超时 {step_timeout:g}s: loop 驱动 finalize 时可能在合并后、记录前被杀;"

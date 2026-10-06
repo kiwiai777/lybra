@@ -2272,9 +2272,11 @@ def _derive_next_step(
             latest_verdict = records.get("latest_verdict")
             latest_closure = records.get("latest_closure")
             
-            # 检查是否有 finalization 记录
-            finalizations_dir = record_dir(workspace_root, "finalizations", task_id)
-            has_finalization = finalizations_dir.is_dir() and any(finalizations_dir.glob("finalization_*.md"))
+            # 检查是否有 finalization 记录(AIPOS-F120: 唯一判据 finalization_record.existing_finalization_records, finalize 续跑共用)
+            from tools.aipos_cli.finalization_record import existing_finalization_records
+
+            finalization_files = existing_finalization_records(workspace_root, task_id)
+            has_finalization = bool(finalization_files)
             
             # N5→N6: 有 finalization 但无 closure → close
             if has_finalization and not latest_closure:
@@ -2283,13 +2285,11 @@ def _derive_next_step(
 
                 # 1. finalize_commit_hash: 从 finalization 记录读取 merge_commit(F78 声明字段), 兼容 commit/commit_hash
                 fin_fm: dict[str, Any] = {}
-                if finalizations_dir.is_dir():
-                    finalization_files = sorted(finalizations_dir.glob("finalization_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-                    if finalization_files:
-                        fin_fm = _read_frontmatter(finalization_files[0])
-                        merge_commit = str(fin_fm.get("merge_commit") or fin_fm.get("commit") or fin_fm.get("commit_hash") or "").strip()
-                        if merge_commit:
-                            closure_evidence["finalize_commit_hash"] = merge_commit
+                if finalization_files:
+                    fin_fm = _read_frontmatter(finalization_files[0])
+                    merge_commit = str(fin_fm.get("merge_commit") or fin_fm.get("commit") or fin_fm.get("commit_hash") or "").strip()
+                    if merge_commit:
+                        closure_evidence["finalize_commit_hash"] = merge_commit
 
                 # 2. finalize_return_ref: 从 returns 记录读取
                 returns_dir = record_dir(workspace_root, "returns", task_id)
@@ -3203,14 +3203,37 @@ def _run_product_command(command: str, action_type: str) -> dict[str, Any]:
             "output": str(exc),
         }
     success = result.returncode == 0
+    # AIPOS-F120 件③: stderr 与 stdout 分段进 output(原两段首尾直接粘连, 末行与 traceback 首行混成一行); 失败时 stderr 关键行
+    # (异常行 / Error: / ✗ / BLOCK, 无则末行)进 message——loop JSON 的 step.message / step.output 与 exit 2 原文都带上, 驱动方收尾不再丢
+    stdout, stderr = result.stdout or "", result.stderr or ""
+    key_lines = stderr_key_lines(stderr)
+    output = stdout.rstrip("\n")
+    if stderr.strip():
+        output = (output + "\n" if output else "") + "[stderr]\n" + stderr.rstrip("\n")
+    message = f"{action_type} {'成功' if success else '失败'}"
+    if not success and key_lines:
+        message += f": {key_lines[-1]}"
     return {
         "ok": success,
         "action_type": action_type,
-        "message": f"{action_type} {'成功' if success else '失败'}",
+        "message": message,
         "command": command,
         "exit_code": result.returncode,
-        "output": result.stdout + result.stderr,
+        "output": output,
+        "stderr_key_lines": key_lines,
     }
+
+
+_STDERR_KEY_LINE = re.compile(r"^\s*(?:[A-Za-z_][\w.]*(?:Error|Exception|Blocked)\b|Error:|✗|BLOCK)")
+
+
+def stderr_key_lines(stderr: str, limit: int = 5) -> list[str]:
+    """AIPOS-F120 件③: 子进程 stderr 的关键行(异常行 / Error: / ✗ / BLOCK 开头, 取末 limit 条; 一条都不命中取末行非空行)。"""
+    lines = [line.rstrip() for line in str(stderr or "").splitlines() if line.strip()]
+    keys = [line.strip() for line in lines if _STDERR_KEY_LINE.match(line)]
+    if not keys and lines:
+        keys = [lines[-1].strip()]
+    return keys[-limit:]
 
 
 def _run_cli_in_process(command: str, action_type: str) -> dict[str, Any]:

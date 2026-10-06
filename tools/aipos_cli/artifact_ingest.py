@@ -20,7 +20,6 @@ from tools.schema_constants import RecordType
 from tools.aipos_cli.verb_contract import declared_exit_code
 from pathlib import Path
 from typing import Any
-from tools.aipos_cli.record_writer import record_dir
 
 
 
@@ -372,8 +371,9 @@ def _external_finalize_pending(workspace_root: Path, task_id: str) -> tuple[bool
     records = _read_task_records(workspace_root, task_id)
     verdict = str((records.get("latest_verdict") or {}).get("verdict") or "").strip()
     allowed = [str(v) for v in (_transition_node("N5").get("guards", {}).get("has_pass_verdict", {}).get("allowed_verdict_values") or [])]
-    fin_dir = record_dir(workspace_root, "finalizations", task_id)
-    has_finalization = fin_dir.is_dir() and any(fin_dir.glob("finalization_*.md"))
+    from tools.aipos_cli.finalization_record import existing_finalization_records  # AIPOS-F120: 有无记录唯一判据
+
+    has_finalization = bool(existing_finalization_records(workspace_root, task_id))
     return (bool(verdict) and verdict in allowed and not has_finalization), records
 
 

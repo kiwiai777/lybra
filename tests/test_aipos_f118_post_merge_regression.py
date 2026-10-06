@@ -301,3 +301,14 @@ def test_recorded_baseline_lookup_ignores_legacy_and_voices_unreadable(tmp_path)
            "---\npost_merge_regression:\n  merge_commit: abc\n  merged_complete: true\n  merged_failures:\n  - tests/x.py\n---\n")
     got = pmr.lookup_recorded_baseline(gov, "abc")
     assert got["failures"] == ["tests/x.py"] and got["ref"].endswith("AIPOS-OK/finalization_AIPOS-OK_1.md")
+
+
+def test_post_merge_modules_in_f120_preload_closure():
+    """AIPOS-F120 导入闸: 合并后本进程禁从磁盘加载未预载的产品模块——合并后回归用到的模块须在预载闭包内(静态扫源码得出)。
+    上面各 finalize 靶场在闸已装的情况下走完合并后回归(含 block 撤销合并 / async 拉起 / 事件记录), 即闭合的运行证据。"""
+    from tools.aipos_cli.finalize import _post_merge_import_closure
+
+    closure = set(_post_merge_import_closure())
+    for name in ("tools.aipos_cli.post_merge_regression", "tools.aipos_cli.runall_discovery", "tools.aipos_cli.workspace_config",
+                 "tools.aipos_cli.record_writer", "tools.aipos_cli.frontmatter", "tools.aipos_cli.clock", "tools.schema_constants"):
+        assert name in closure, name
