@@ -1018,6 +1018,13 @@ def _drive(
             result.outcome, result.exit_code, result.message = "gate_rejected", exit_code_for(contract, "gate_rejected"), msg
             return result
         say(f"[{index}] ok: {step.message}")
+        if action_type == "finalize":
+            # AIPOS-F118 件②: finalize 步输出合并后回归检查结果一行(行首/取行唯一出处 post_merge_regression)
+            from tools.aipos_cli.post_merge_regression import result_line
+
+            regression_line = result_line(step.output)
+            if regression_line:
+                say(f"[{index}] {regression_line}")
         if action_type == landing_action:
             # AIPOS-F94 件①: 落账步报成功后以判据复核(已提交且已推送); 仍未落账 = 不重试, exit 4 点名缺什么
             landing = _landing(governance_root, target_card)

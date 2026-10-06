@@ -499,6 +499,22 @@
           "description": "AIPOS-F78 前置零③: finalization 记录必含 merge_commit(卡分支 merge --no-ff 后 main 的 HEAD; 直提/已合并场景=finalize 时 HEAD)与 finalize_ref(记录 id)。推导核 N5→N6 派生 close 时读 merge_commit 填 closure_evidence.finalize_commit_hash, 读 return 记录填 finalize_return_ref, 读裁决填 verdict_ref——三字段齐才派生 close, 缺一即不可推导并点名缺项。",
           "fields": ["merge_commit", "finalize_ref"],
           "writer": "finalization_record.build_finalization_record"
+        },
+        "post_merge_regression": {
+          "description": "AIPOS-F118 件①(gap #77): 合并后回归检查结果。finalize 在卡分支 merge --no-ff 之后、push/deploy 之前于合并结果上跑项目测试清单(策略 = 项目声明 config.schema test_contract.post_merge_regression), 与合并前 main(合并提交第一父)失败集合比对; 本次实际合并后写出的每条 finalization 记录都带此字段(含 status=off/skipped/async_started, 不静默缺省)。merged_failures + merged_complete=true 即下一次合并的「记录基线」(merge_commit = 下一次合并的第一父时直接取用, 免每次跑两遍)。block 撤销合并时不写 finalization 记录(合并已撤销, N5 未完成), 结果落回归事件记录; async 后台完成时同样落回归事件记录(records/events/<卡>/post_merge_regression_<ts>.md, 记录类 events, event_type=post_merge_regression)。本次 finalize 无实际合并(已合并/无卡分支/直提)= 不跑, 字段 status=skipped 注明原因。",
+          "field": "post_merge_regression",
+          "keys": {
+            "status": "pass | new_failures | timeout | error | off | skipped | async_started(值域声明 config.schema test_contract.schema.post_merge_regression.statuses)",
+            "action": "none | warned | blocked | recorded(async 后台结果)",
+            "mode": "warn | block | off", "execution": "sync | async", "timeout_seconds": "总时限(秒)", "policy_source": "策略来源(项目声明或 schema 缺省)",
+            "runall_path": "测试清单(相对产品仓根)", "merge_commit": "合并提交", "pre_merge_commit": "合并前 main(第一父)",
+            "baseline_source": "record:<记录相对路径> | run:<合并前提交>", "baseline_failures": "合并前失败集合", "merged_failures": "合并后失败集合",
+            "merged_complete": "合并后一跑是否完整(true 才可作下次基线)", "new_failures": "新增失败(合并后 − 合并前)", "fixed_failures": "转绿(合并前 − 合并后)",
+            "summary": "一行结果(行首「合并后回归:」, finalize/loop 输出同一行)", "notes": "提示(记录读不出 / 时限 ≥ loop 步超时 / 上次异步结果)"
+          },
+          "failure_set": "runall_discovery.failure_set(唯一解析; `✗` 行 + 失败文件段内 pytest FAILED/ERROR 节点)",
+          "writer": "finalize._ensure_finalization_record(regression=…) → finalization_record.build_finalization_record(post_merge_regression=…); 事件记录 post_merge_regression.write_event_record",
+          "executor": "post_merge_regression.check_after_merge(唯一实现; async 子进程同一 execute_check)"
         }
       },
       "finalize_mode": {

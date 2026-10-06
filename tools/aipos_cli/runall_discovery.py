@@ -334,6 +334,45 @@ def judge(path: str, runner: str, rc: int | None, output: str, known: dict[str, 
     return ok, notes
 
 
+_SECTION_RE = re.compile(r"^── (\S+)")
+_RESULT_RE = re.compile(r"^([✓✗]) (\S+) (PASS|FAIL)$")
+
+
+def failure_set(output: str, exit_code: int | None, runall_rel: str) -> list[str]:
+    """AIPOS-F118 件①: 测试清单一次运行的失败集合——唯一解析(finalize 合并后回归比对用; 口径与 run-all 基线 `grep "^✗"` 同一)。
+
+    条目: 每条 `✗ <文件> FAIL` 行 → <文件>; 其余 `✗` 行(声明行失效等)→ 该行去 `✗ ` 的原文; 失败文件段(`── <文件>` 起至其 ✗ 行)内
+    pytest 摘要 `FAILED|ERROR <节点>` → <节点>(同一文件已红时新增失败节点仍可见)。known-failure 被容忍的文件段以 ✓ 收尾, 其节点不计。
+    退出码非 0 却无任何 `✗` 行(非本格式的项目清单 / 中途崩溃)→ 一条「<清单> 退出码 N(未解析到 ✗ 行)」, 不当作通过(fail-closed)。
+    返回去重排序列表。"""
+    failures: set[str] = set()
+    section_nodes: list[str] = []
+    saw_cross = False
+    for raw in output.splitlines():
+        line = raw.rstrip()
+        if _SECTION_RE.match(line):
+            section_nodes = []
+            continue
+        summary = _SUMMARY_RE.match(line.strip())
+        if summary:
+            section_nodes.append(summary.group(2).strip())
+            continue
+        result = _RESULT_RE.match(line)
+        if result:
+            if result.group(1) == "✗":
+                saw_cross = True
+                failures.add(result.group(2))
+                failures.update(section_nodes)
+            section_nodes = []
+            continue
+        if line.startswith("✗"):
+            saw_cross = True
+            failures.add(line[1:].strip())
+    if exit_code != 0 and not saw_cross:
+        failures.add(f"{runall_rel} 退出码 {exit_code}(未解析到 ✗ 行)")
+    return sorted(failures)
+
+
 def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
         guard_env: Mapping[str, str] | None = None) -> int:
     """guard_env: 真实治理根守卫解析 home 根所用环境(缺省 = 执行器自身 os.environ, 即测试子进程隔离之前的真实环境)。"""
@@ -365,6 +404,14 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
     guard_concurrent = 0
     leaks_total = 0
     home = tempfile.mkdtemp(prefix="lybra-runall-home-")
+
+    def _on_sigterm(signum: int, _frame: Any) -> None:
+        # AIPOS-F118: 被上游终止(finalize 合并后回归超时先 SIGTERM 整组)时, 在跑的测试子进程在独立会话里、上游 killpg 够不着——
+        # 清理与文件结束后的孤儿收尸同一实现(reap_marked: 带本轮标记的存活进程一律 SIGKILL), 不另设进程组登记。
+        reap_marked(leak_mark)
+        raise SystemExit(128 + signum)
+
+    previous_handler = signal.signal(signal.SIGTERM, _on_sigterm)
     try:
         env = _child_env(home, leak_mark)
         for path in plan["to_run"]:
@@ -428,6 +475,7 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
              + f"; 同时段他方写入(重跑未复现, 不计) {guard_concurrent} 处")
         emit(f"[runall_discovery] 孤儿进程守卫汇总: 泄漏进程 {leaks_total} 个" + ("" if leaks_total else "(无带本轮标记的存活进程)"))
     finally:
+        signal.signal(signal.SIGTERM, previous_handler)
         try:
             shutil.rmtree(home)
         except OSError as exc:  # 清理失败出声, 不吞

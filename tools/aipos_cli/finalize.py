@@ -319,6 +319,7 @@ def _ensure_finalization_record(
     *,
     deployment_record_ref: str | None = None,
     dry_run: bool = False,
+    regression: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """AIPOS-C3B 大项B③: 写 finalization 记录(必落)。
 
@@ -345,6 +346,7 @@ def _ensure_finalization_record(
             deploy_status=deploy_status,
             merge_commit=commit_hash,  # AIPOS-F78 前置零③: merge 后 main HEAD(直提场景=finalize 时 HEAD; 续跑=识别出的本卡合并提交)
             dry_run=dry_run,
+            post_merge_regression=regression,  # AIPOS-F118 件①: 合并后回归结果(声明 transitions N5.record.post_merge_regression)
         )
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:
         print(f"Error: finalization record write failed for {task_id}: {type(e).__name__}: {e}", file=sys.stderr)
@@ -381,6 +383,7 @@ _POST_MERGE_ROOTS: tuple[str, ...] = (
     "tools.aipos_cli.deployment_record",
     "tools.aipos_cli.gate_drift",
     "tools.aipos_cli.next_resolver",
+    "tools.aipos_cli.post_merge_regression",  # AIPOS-F118: 合并后回归(check_after_merge / undo_merge / 事件记录; 闭包含 runall_discovery)
     "tools.aipos_cli.task_loader",
     "tools.aipos_cli.workspace_config",
 )
@@ -598,9 +601,17 @@ def _resume_finalization(
     deploy = _resume_deploy_status(workspace_root, governance_root, merge_commit,
                                    deploy_mechanism_present(workspace_root), operations)
     operations.append(f"AIPOS-F120 续跑部署判定: deploy_status={deploy['deploy_status']}({deploy['reason']}), 不重复合并、不重复部署")
+    # AIPOS-F118: 续跑无合并动作 → 合并后回归不重跑, 记 skipped 并注明(不静默缺字段)
+    from tools.aipos_cli.post_merge_regression import summary_line
+
+    regression = {"status": "skipped", "action": "none",
+                  "reason": f"续跑补记录: 本卡合并提交 {merge_commit[:8]} 已在先前 finalize 合入, 本次无合并动作, 不重跑合并后回归"}
+    regression["summary"] = summary_line(regression)
+    operations.append(regression["summary"])
     fin = _ensure_finalization_record(
         governance_root, task_id, actor, merge_commit, verdict_id, deploy["deployed"], operations,
         deploy_status=deploy["deploy_status"], deployment_record_ref=deploy["deployment_record_ref"], dry_run=dry_run,
+        regression=regression,
     )
     message = (f"{'DRY-RUN 续跑判定: 将补写' if dry_run else '续跑补记录: 已补写'} finalization 记录 "
                f"(merge_commit={merge_commit[:8]}, deploy_status={deploy['deploy_status']}); 未重复合并/部署")
@@ -1697,6 +1708,33 @@ def _finalize_task_impl(
             "message": reason,
             "operations": operations,
         }
+    # AIPOS-F118 件①②(gap #77): 合并后回归策略先于合并读取——声明形坏 = 合并前就拒(fail-closed, 不留半成品合并)。
+    from tools.aipos_cli import post_merge_regression as pmr
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        regression_policy = pmr.resolve_policy(governance_root, workspace_root)
+    except (ValueError, SchemaLoadError, OSError) as exc:
+        reason = (f"合并后回归策略读取失败(config.schema test_contract.post_merge_regression): {exc}; "
+                  "出口: 修正治理根 project.json test_contract 后重跑 finalize")
+        operations.append(f"{pmr.MARKER} BLOCK — {reason}")
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "can_finalize": True,
+            "integrity_check": integrity,
+            "branch_check": branch_check,
+            "committed": False,
+            "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
+            "commit_hash": None,
+            "message": reason,
+            "operations": operations,
+        }
     # AIPOS-F120 件①: 合并会改写代码源(editable 安装 = 产品仓工作树), 合并前预载合并后要用的产品模块并装导入闸
     if not dry_run:
         from tools.schema_loader import SchemaLoadError
@@ -1770,6 +1808,64 @@ def _finalize_task_impl(
     # 防止把上一张卡的 commit 误记为本卡的 finalization 证据(F58 假成功根因)
     _actual_merge_happened = integrate.get("action") == "merged"
 
+    # AIPOS-F118 件①: 合并后回归——merge --no-ff 之后、push/deploy 之前, 在合并结果上跑项目测试清单并与合并前 main 比对。
+    # 唯一实现 post_merge_regression.check_after_merge; 结果进 finalization 记录(regression)与一行输出(operations, loop 取此行)。
+    if _actual_merge_happened and dry_run:
+        operations.append(
+            f"DRY-RUN: {pmr.MARKER} 合并后将在合并结果上跑 {regression_policy['runall_path'] or '(未声明 runall_path, 跳过)'} "
+            f"(mode={regression_policy['mode']}, execution={regression_policy['execution']}, 来源 {regression_policy['policy_source']})"
+        )
+        regression = None
+    elif _actual_merge_happened:
+        merge_commit = _git_rev_parse_head(workspace_root)
+        regression = pmr.check_after_merge(governance_root=governance_root, repo_root=workspace_root, task_id=task_id,
+                                           actor=actor, merge_commit=merge_commit, policy=regression_policy)
+        operations.append(regression["summary"])
+        operations.extend(f"  ↳ 提示: {note}" for note in regression.get("notes") or [])
+        if regression["action"] == "blocked":
+            undone, undo_message = pmr.undo_merge(workspace_root, merge_commit, regression["pre_merge_commit"]) if regression.get("pre_merge_commit") else (False, "取不到合并前提交, 无法复位")
+            operations.append(f"  ↳ 撤销合并: {undo_message}")
+            regression["undo"] = undo_message
+            try:
+                event_path = pmr.write_event_record(governance_root, task_id, actor, regression)
+                operations.append(f"  ↳ 回归事件记录: {event_path}")
+            except (OSError, ValueError) as exc:
+                operations.append(f"  ↳ ⚠️ 回归事件记录写入失败: {exc}")
+            exit_hint = (
+                f"出口: 在卡分支 {branch_name} 上 git merge {base_branch} 复现组合失败并修复 → 重新交回、重审后再 finalize; "
+                "或 Owner 判定可接受时将项目 test_contract.post_merge_regression.mode 改为 warn 后重跑 finalize"
+                if regression["status"] == "new_failures" else
+                f"出口: 按日志 {regression.get('merged_log') or regression.get('baseline_log') or '(无)'} 核对检查为何未完成, "
+                "调整项目 test_contract.post_merge_regression.timeout_seconds 或修好测试清单后重跑 finalize; "
+                "或 Owner 判定可接受时将 mode 改为 warn 后重跑"
+            )
+            return {
+                "verdict": Verdict.BLOCK if undone else Verdict.FAIL,
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": False,
+                "can_finalize": True,
+                "integrity_check": integrity,
+                "branch_check": branch_check,
+                "committed": False,
+                "pushed": False,
+                "deployed": False,
+                "deployment_skipped": False,
+                "deployment_error": None,
+                "commit_hash": None if undone else merge_commit,
+                "post_merge_regression": regression,
+                "category": "POST_MERGE_REGRESSION",
+                "message": (f"{regression['summary']}; {undo_message}; {exit_hint}" if undone else
+                            f"{regression['summary']}; 撤销合并失败({undo_message}), main 停在未推送的合并提交 {merge_commit[:12]}, "
+                            f"未推送未部署; 出口: 人工核对后 git reset --keep {str(regression.get('pre_merge_commit') or '<合并前提交>')[:12]} 再按上述出口处理"),
+                "operations": operations,
+            }
+    else:
+        regression = {"status": "skipped", "action": "none", "mode": regression_policy["mode"],
+                      "reason": f"本次 finalize 无卡分支合并动作(整合 {integrate.get('action')})"}
+        regression["summary"] = pmr.summary_line(regression)
+        operations.append(regression["summary"])
+
     # AIPOS-F92 件③: 部署是否适用 = 产品仓有部署机制(deploy_gate.deploy_mechanism_present: 标准位置部署脚本或 .deploy/)。
     # 新项目普通产品仓两者皆无 → 部署不适用: 不强制部署、不判失败, finalization 记录 deploy_status=skipped(靶场实撞:
     # 原逻辑对任何仓都强制调 <产品仓>/tools/lybra-deploy → 「script not found」→ finalize FAIL)。
@@ -1811,7 +1907,7 @@ def _finalize_task_impl(
                     if verification["verified"]:
                         # AIPOS-F61: 只有实际合并才写 finalization 记录(禁把上一张卡的 commit 当证据)
                         if _actual_merge_happened:
-                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, regression=regression)
                         else:
                             operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                         return {
@@ -1835,7 +1931,7 @@ def _finalize_task_impl(
                         # Deploy 验证失败 → FAIL
                         # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
                         if _actual_merge_happened:
-                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
+                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, regression=regression, deploy_status="deploy_failed")
                         return {
                             "verdict": Verdict.FAIL,
                             "task_id": task_id,
@@ -1857,7 +1953,7 @@ def _finalize_task_impl(
                     # Deploy 失败 → FAIL
                     # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
                     if _actual_merge_happened:
-                        _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
+                        _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, regression=regression, deploy_status="deploy_failed")
                     return {
                         "verdict": Verdict.FAIL,
                         "task_id": task_id,
@@ -1879,7 +1975,7 @@ def _finalize_task_impl(
                 # 已部署 → 真正无事可做
                 # AIPOS-F61: 只有实际合并才写 finalization 记录
                 if _actual_merge_happened:
-                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, deploy_status="skipped")
+                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, regression=regression, deploy_status="skipped")
                 else:
                     operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                 return {
@@ -1969,7 +2065,7 @@ def _finalize_task_impl(
                     if verification["verified"]:
                         # AIPOS-F61: 只有实际合并才写 finalization 记录
                         if _actual_merge_happened:
-                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations)
+                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, regression=regression)
                         else:
                             operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                         return {
@@ -1992,7 +2088,7 @@ def _finalize_task_impl(
                     else:
                         # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
                         if _actual_merge_happened:
-                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
+                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, regression=regression, deploy_status="deploy_failed")
                         return {
                             "verdict": Verdict.FAIL,
                             "task_id": task_id,
@@ -2013,7 +2109,7 @@ def _finalize_task_impl(
                 else:
                     # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
                     if _actual_merge_happened:
-                        _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
+                        _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), False, operations, regression=regression, deploy_status="deploy_failed")
                     return {
                         "verdict": Verdict.FAIL,
                         "task_id": task_id,
@@ -2035,7 +2131,7 @@ def _finalize_task_impl(
                 # 已部署,只需 push
                 # AIPOS-F61: 只有实际合并才写 finalization 记录
                 if _actual_merge_happened:
-                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, deploy_status="skipped")
+                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, regression=regression, deploy_status="skipped")
                 else:
                     operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                 return {
@@ -2238,7 +2334,7 @@ def _finalize_task_impl(
                     operations.append(f"✗ Deployment verification FAILED: {verification['message']}")
                     # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
                     if pushed:
-                        _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
+                        _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), False, operations, regression=regression, deploy_status="deploy_failed")
                     return {
                         "verdict": Verdict.FAIL,
                         "task_id": task_id,
@@ -2262,7 +2358,7 @@ def _finalize_task_impl(
                 operations.append(f"✗ lybra-deploy FAILED: {deploy_result['stderr'][:200]}")
                 # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
                 if pushed:
-                    _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
+                    _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), False, operations, regression=regression, deploy_status="deploy_failed")
                 return {
                     "verdict": Verdict.FAIL,
                     "task_id": task_id,
@@ -2308,7 +2404,7 @@ def _finalize_task_impl(
                     operations.append(f"✗ Auto-deployment FAILED: {deploy_result['stderr'][:200]}")
                     # AIPOS-F73D 前置一①: push/merge 已成功, 部署失败也落 finalization 记录(deploy_status=deploy_failed)
                     if pushed:
-                        _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), False, operations, deploy_status="deploy_failed")
+                        _ensure_finalization_record(governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), False, operations, regression=regression, deploy_status="deploy_failed")
                     return {
                         "verdict": Verdict.FAIL,
                         "task_id": task_id,
@@ -2345,6 +2441,7 @@ def _finalize_task_impl(
             _ensure_finalization_record(
                 governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), deployed, operations,
                 deploy_status="deployed" if deployed else ("skipped" if deployment_skipped else "not_attempted"),
+                regression=regression,
             )
         
         return {
