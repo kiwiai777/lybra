@@ -90,6 +90,7 @@ def _rig(tmp_path: Path, policy: dict | None, *, runall: bool = True) -> dict:
     _write(gov / "project.json", json.dumps({"project_id": "t118", "test_contract": contract}))
     _write(gov / "card_policy.json", json.dumps({"schema_version": "1.0.0", "task_id_pattern": "AIPOS-[A-Z0-9-]+"}))
     _write(gov / "stage_archive" / "2026-10-06_stage.md", "# 靶场阶段快照\n")
+    (gov / "5_tasks" / "queue" / "pending").mkdir(parents=True)  # 治理根标记: 读卡解析到本靶场根(不借真实 ~/.lybra 解析到真实治理根)
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.name", "t118")

@@ -68,6 +68,13 @@ def merge_parent(repo_root: Path, merge_commit: str) -> str:
     return res.stdout.strip()
 
 
+def _popen_group(cmd: list[str], *, cwd: Path, env: dict[str, str] | None, stdout: Any) -> subprocess.Popen:
+    """本检查唯一的子进程拉起口(测试清单一跑 / async 后台检查): 独立会话(进程组号 = pid), 超时或收尾按组清理, stdin 关闭。
+    不是 harness 拉起层(agent 拉起唯一在 harness_launch)。"""
+    return subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=stdout, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                            text=True, start_new_session=True)
+
+
 #: 超时终止: 先 SIGTERM 整组(run-all 执行器据此清掉其独立会话里的测试子进程组, runall_discovery._on_sigterm), 宽限后 SIGKILL。
 _TERM_GRACE_SECONDS = 15
 
@@ -107,8 +114,7 @@ def run_suite(repo_root: Path, commit: str, runall_rel: str, timeout: float) -> 
         if not (worktree / runall_rel).is_file():
             result["error"] = f"测试清单 {runall_rel} 在 {commit[:12]} 上不存在"
             return result
-        proc = subprocess.Popen(["bash", runall_rel], cwd=str(worktree), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, text=True, start_new_session=True)
+        proc = _popen_group(["bash", runall_rel], cwd=worktree, env=None, stdout=subprocess.PIPE)
         try:
             output, _ = proc.communicate(timeout=timeout)
             result["status"], result["exit_code"] = "ran", proc.returncode
@@ -296,8 +302,7 @@ def _spawn_async(*, governance_root: Path, repo_root: Path, task_id: str, actor:
            "--policy-source", str(policy["policy_source"])]
     env = {**os.environ, "PYTHONPATH": str(package_root)}
     with open(log_path, "w", encoding="utf-8") as log:
-        proc = subprocess.Popen(cmd, cwd=str(package_root), env=env, stdout=log, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, start_new_session=True)
+        proc = _popen_group(cmd, cwd=package_root, env=env, stdout=log)
     ASYNC_CHILDREN.append(proc)
     return {"async_pid": proc.pid, "async_log": str(log_path)}
 
