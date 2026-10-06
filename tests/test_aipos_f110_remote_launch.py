@@ -371,12 +371,14 @@ def test_item5_skill_remote_steps_parse():
     assert len(blocks) == 3, blocks
     parsed: list[str] = []
     for block in blocks:
-        line = f84._substitute(block.replace("<项目根>", "/tmp/f84-gov/proj").replace("<ssh目标>", "kiwi@remote-host"))
+        line = f84._substitute(block.replace("<ssh目标>", "kiwi@remote-host"))
         argv = shlex.split(line)
-        if argv[0].startswith("LYBRA_WORKSPACE_ROOT="):
-            assert argv[1:4] == ["python3", "-m", "tools.aipos_cli.enroll_deliver"], argv
-            args = enroll_parser().parse_args(argv[4:])
-            assert args.ssh == "kiwi@remote-host" and args.connection_json and not args.owner_token  # 凭据走文件, 不上命令行
+        if argv[0] == "python3":
+            assert argv[1:3] == ["-m", "tools.aipos_cli.enroll_deliver"], argv
+            args = enroll_parser().parse_args(argv[3:])
+            # AIPOS-F113 新形: Owner 凭据从 connection.json 读(不上命令行), 无 --owner-token / --code 参数
+            assert args.ssh == "kiwi@remote-host" and args.connection_json and not hasattr(args, "owner_token")
+            assert "--owner-token " not in line and "--code" not in line
         else:
             args = build_parser().parse_args(argv[1:])
             assert args.command == "project" and args.project_command in ("set-workstation", "check-workstation"), argv

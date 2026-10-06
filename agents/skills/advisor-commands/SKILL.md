@@ -151,9 +151,9 @@ lybra loop --task-id <卡ID> --envelope <信封ID> --actor <你的顾问实例> 
 
 #### 跨机工位(AIPOS-F110: 执行体在别的机器, 门与治理根在本机)
 前提: loop 只在治理根所在机(门机)跑; 门机与工位机 ssh 双向可达——门机→工位(loop 拉起/清理), 工位→门机(执行体读写门机上的治理根/工作树/报告落点)。ssh 凭据只走两端各自的 ssh 配置与密钥(`BatchMode=yes` 不交互索要口令), 永不经 Lybra、不进开工提示。
-1. **接入**(Owner 亲自敲, 在门机产品仓根下; land 事件 host = `--ssh` 的 ssh 目标, loop 以它为拉起目标):
+1. **接入**(Owner 亲自敲, 在门机产品仓根下; land 事件 host = `--ssh` 的 ssh 目标, loop 以它为拉起目标; 注册码经 ssh stdin 送达、Owner 凭据只在本机读 connection.json 调门, 均不进远端命令行):
 ```bash
-LYBRA_WORKSPACE_ROOT=<项目根> python3 -m tools.aipos_cli.enroll_deliver --role executor --instance <执行体实例> \
+python3 -m tools.aipos_cli.enroll_deliver --role executor --instance <执行体实例> \
   --target-workspace <工位目录> --target-harness <工位目录> --ssh <ssh目标> \
   --gate-url <门地址> --owner-policy-ref <信封ID> --connection-json <Owner凭据>
 ```
