@@ -7,8 +7,9 @@
  ① 同一审计工位认领两张审计卡: 两张同时在办时 loop 各自拉起, 假 harness 收到的 kickoff 含各自卡号(逐字节 = 该卡
     `my-tasks --workstation <dir> --task-id <卡>` 的 next_card.kickoff); 两张同时拉起各自进程组、各自汇总前缀;
     已结案 / 非本实例认领 → 拒拉起退回手工, 拒因原样转述(判据 next_resolver.kickoff_refusal 唯一实现)
- ② 仓根 .gitattributes 为 tests/run-all.sh 声明 merge=union(F111 止血)。AIPOS-F109 件④ 起 run-all 自动发现、并行卡不再改清单,
-    union 追加登记靶场与 run_pytest 约定退役; 本节只留 .gitattributes 现状断言与 run-all 语法兜底
+ ② (已退役)仓根 .gitattributes 曾为 tests/run-all.sh 声明 merge=union(F111 止血)。AIPOS-F109 件④ 起 run-all 自动发现、
+    并行卡不再改清单; AIPOS-F116 件⑤(gap #83)撤 union 规则(它把旧登记块静默并回自动发现版 run-all.sh), 撤除与「不得再现
+    逐卡登记块」的防护夹具见 tests/test_aipos_f116_test_hygiene.py; 本节只留 run-all 语法兜底
 """
 from __future__ import annotations
 
@@ -223,17 +224,10 @@ def test_item2_superseded_by_f109_discovery_no_per_card_registration():
     assert "run_pytest" not in runall.split("# ---- 声明行", 1)[0].replace("run_pytest 约定退役", "")
 
 
-def test_runall_syntax_ok_union_guard():
-    """union 合并的兜底: 本仓 tests/run-all.sh 语法检查通过(合并出坏块即此处红)。"""
+def test_runall_syntax_ok():
+    """本仓 tests/run-all.sh 语法检查通过(合并出坏块即此处红)。union 合并规则已由 AIPOS-F116 件⑤ 撤除(防护见 F116 夹具)。"""
     syntax = subprocess.run(["bash", "-n", str(REPO_ROOT / "tests" / "run-all.sh")], capture_output=True, text=True)
     assert syntax.returncode == 0, syntax.stderr
-
-
-def test_item2_gitattributes_declares_only_runall_union_and_documents_limits():
-    text = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
-    rules = [ln.split() for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
-    assert rules == [["tests/run-all.sh", "merge=union"]], rules
-    assert "AIPOS-F111" in text and "重复行" in text and "F109" in text
 
 
 def test_f111_fixture_registered_in_runall():
