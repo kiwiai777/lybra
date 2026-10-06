@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from tools.schema_loader import code_repo_schema_root, resolve_governance_path
+from tools.aipos_cli.record_writer import record_dir
 
 # 产品仓根(schema 所在地)。AIPOS-F91(L5): 不再自算, 读唯一实现 schema_loader.code_repo_schema_root
 REPO_ROOT = code_repo_schema_root()
@@ -1047,7 +1048,6 @@ def _find_latest_record(records_dir: Path, prefix: str) -> dict[str, Any] | None
 
 def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     """读取任务的全部记录状态。纯读事实,不判活。"""
-    records_root = _resolve_governance_path_with_relative("records", workspace_root)
 
     result: dict[str, Any] = {
         "latest_claim": None,
@@ -1059,11 +1059,11 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     }
 
     # claims
-    claims_dir = records_root / "claims" / task_id
+    claims_dir = record_dir(workspace_root, "claims", task_id)
     result["latest_claim"] = _find_latest_record(claims_dir, "claim")
 
     # returns
-    returns_dir = records_root / "returns" / task_id
+    returns_dir = record_dir(workspace_root, "returns", task_id)
     result["latest_return"] = _find_latest_record(returns_dir, "return")
 
     # audit_dispatches (AIPOS-F73 前置一: 门写在审计卡 ID 目录下,如 AIPOS-F75R)
@@ -1074,21 +1074,21 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     audit_task_id = current_audit_task_id(task_id, workspace_root)
     result["audit_task_id"] = audit_task_id
     result["audit_round_ids"] = audit_round_ids(task_id, workspace_root)
-    dispatches_dir = records_root / "audit_dispatches" / audit_task_id
+    dispatches_dir = record_dir(workspace_root, "audit_dispatches", audit_task_id)
     result["latest_audit_dispatch"] = _find_latest_record(dispatches_dir, "dispatch")
 
     # audit_verdicts (keyed by reviewed_task_id)
-    verdicts_dir = records_root / "audit_verdicts" / task_id
+    verdicts_dir = record_dir(workspace_root, "audit_verdicts", task_id)
     result["latest_verdict"] = _find_latest_record(verdicts_dir, "verdict")
 
     # closures(AIPOS-F73E: 前缀与门写侧同源 record_writer.CLOSURE_ID_PREFIX——门落 close_*, 读 closure_* 即永远找不到 → loop 不得 exit 0)
     from tools.aipos_cli.record_writer import CLOSURE_ID_PREFIX
 
-    closures_dir = records_root / "closures" / task_id
+    closures_dir = record_dir(workspace_root, "closures", task_id)
     result["latest_closure"] = _find_latest_record(closures_dir, CLOSURE_ID_PREFIX)
 
     # events
-    events_dir = records_root / "events" / task_id
+    events_dir = record_dir(workspace_root, "events", task_id)
     if events_dir.is_dir():
         for ef in sorted(events_dir.glob("*.md"), key=lambda p: p.stat().st_mtime):
             fm = _read_frontmatter(ef)
@@ -1359,7 +1359,7 @@ def return_record_subject(workspace_root: Path, task_id: str, return_id: str) ->
     return_id = str(return_id or "").strip()
     if not return_id:
         return None
-    returns_dir = _resolve_governance_path_with_relative("records", workspace_root) / "returns" / task_id
+    returns_dir = record_dir(workspace_root, "returns", task_id)
     path = returns_dir / f"{return_id}.md"
     if not path.is_file():
         return None
@@ -2273,7 +2273,7 @@ def _derive_next_step(
             latest_closure = records.get("latest_closure")
             
             # 检查是否有 finalization 记录
-            finalizations_dir = _resolve_governance_path_with_relative("records", workspace_root) / "finalizations" / task_id
+            finalizations_dir = record_dir(workspace_root, "finalizations", task_id)
             has_finalization = finalizations_dir.is_dir() and any(finalizations_dir.glob("finalization_*.md"))
             
             # N5→N6: 有 finalization 但无 closure → close
@@ -2292,7 +2292,7 @@ def _derive_next_step(
                             closure_evidence["finalize_commit_hash"] = merge_commit
 
                 # 2. finalize_return_ref: 从 returns 记录读取
-                returns_dir = _resolve_governance_path_with_relative("records", workspace_root) / "returns" / task_id
+                returns_dir = record_dir(workspace_root, "returns", task_id)
                 if returns_dir.is_dir():
                     return_files = sorted(returns_dir.glob("return_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
                     if return_files:

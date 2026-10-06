@@ -18,11 +18,12 @@ import logging
 import re
 import sys
 from datetime import datetime, timezone
+from tools.aipos_cli.clock import utc_now
 from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-from tools.aipos_cli.record_writer import CLAIMS_ROOT, render_markdown
+from tools.aipos_cli.record_writer import record_root, render_markdown
 from tools.schema_constants import RecordType
 
 
@@ -301,7 +302,7 @@ def count_preauthorized_claims(repo_root: Path, policy_id: str) -> int:
     pid = str(policy_id or "").strip()
     if not pid:
         return 0
-    claims_root = (repo_root / CLAIMS_ROOT).resolve()
+    claims_root = (repo_root / record_root("claims")).resolve()
     if not claims_root.is_dir():
         return 0
     count = 0
@@ -492,7 +493,7 @@ def select_envelope(
     挑选次序(确定性): 身份三元组次序优先(更具体者先), 同级按信封 id 升序取首个匹配。
     返回 (policy | None, 未匹配原因列表)。"""
     root = Path(governance_root)
-    now = now or datetime.now(timezone.utc)
+    now = now or utc_now()
     triples = [
         (str(a or "").strip(), str(b or "").strip(), (str(c).strip() or None) if c else None)
         for a, b, c in identities

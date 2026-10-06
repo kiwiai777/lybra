@@ -4,13 +4,22 @@ AIPOS-R8B 大项B: N5 finalization 记录写入
 finalization 记录必落、按 <task_id> 分目录(与其它节点一致,finalize 不部署时也必须有)。
 deployment 记录可选、按 <commit> 分目录(部署跨卡,键不同是对的)。
 
-落点: <governance_root>/5_tasks/records/finalizations/<task_id>/finalization_<timestamp>.md
+落点: 声明 transitions.schema nodes.N5.record.location(record_locations.kinds.finalizations), 读取口 record_writer.record_dir;
+落盘名 = finalize_ref = record_writer.build_runtime_id("finalization", task_id, finalized_at, actor)(AIPOS-F109 件①:
+干跑预览与真写同一推导; 存量旧名 finalization_<compact>.md / finalization_<ID>_<ISO 带冒号>.md 照读, 读侧 glob finalization_*.md)。
 """
 import json
 import sys
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
 from pathlib import Path
 from typing import Any
+
+
+def _finalize_ref(task_id: str, finalized_at: str, actor: str) -> str:
+    """finalize_ref = 记录 id = 落盘名(AIPOS-F109 件①): record_writer.build_runtime_id("finalization", …)。"""
+    from tools.aipos_cli.record_writer import build_runtime_id
+
+    return build_runtime_id("finalization", task_id, finalized_at, actor)
 
 
 def build_finalization_record(
@@ -41,7 +50,7 @@ def build_finalization_record(
     if deploy_status is None:
         deploy_status = "deployed" if deployed else "not_attempted"
     if finalized_at is None:
-        finalized_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        finalized_at = iso_z()
     merge_commit = str(merge_commit or commit or "").strip()
     if not merge_commit:
         raise ValueError("finalization 记录缺 merge_commit/commit(AIPOS-F78 前置零③: 三字段齐才派生 close)")
@@ -55,7 +64,7 @@ def build_finalization_record(
         "commit": commit,
         "commit_short": commit[:8],
         "merge_commit": merge_commit,
-        "finalize_ref": f"finalization_{task_id}_{finalized_at}",
+        "finalize_ref": _finalize_ref(task_id, finalized_at, actor),
         "authorization_type": authorization_type,
         "authorization_ref": authorization_ref,
         "deployed": deployed,
@@ -72,11 +81,11 @@ def build_finalization_record(
     return record
 
 
-def record_path(governance_root: Path, task_id: str, timestamp: str) -> Path:
-    """计算 finalization 记录路径: 5_tasks/records/finalizations/<task_id>/finalization_<ts>.md"""
-    ts_compact = timestamp.replace(":", "").replace("-", "").replace("T", "_").replace("Z", "")
-    filename = f"finalization_{ts_compact}.md"
-    return governance_root / "5_tasks" / "records" / "finalizations" / task_id / filename
+def record_path(governance_root: Path, task_id: str, finalize_ref: str) -> Path:
+    """finalization 记录路径(AIPOS-F109 件①): 声明落点目录(record_dir) / <finalize_ref>.md——与 write_records_atomic 真写同一推导。"""
+    from tools.aipos_cli.record_writer import record_dir
+
+    return record_dir(governance_root, "finalizations", task_id) / f"{finalize_ref}.md"
 
 
 def render_record_markdown(frontmatter: dict[str, Any]) -> str:
@@ -142,18 +151,17 @@ def write_finalization_record(
         deploy_status=deploy_status,
         merge_commit=merge_commit,
     )
-    path = record_path(governance_root, task_id, frontmatter["finalized_at"])
+    path = record_path(governance_root, task_id, frontmatter["finalize_ref"])
     if dry_run:
         return {"ok": True, "path": str(path), "wrote": False, "frontmatter": frontmatter}
     
     # AIPOS-F64: 统一写入器
-    from tools.aipos_cli.record_writer import write_records_atomic, render_markdown
-    finalization_id = f"finalization_{task_id}_{frontmatter['finalized_at']}"
+    from tools.aipos_cli.record_writer import write_records_atomic
     finalization_markdown = render_record_markdown(frontmatter)
-    
+
     write_result = write_records_atomic(
         repo_root=governance_root,
-        records=[("finalization", finalization_id, finalization_markdown)],
+        records=[("finalization", frontmatter["finalize_ref"], finalization_markdown, task_id)],
     )
     
     return {"ok": True, "path": write_result["paths"][0], "wrote": True, "frontmatter": frontmatter}

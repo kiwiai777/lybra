@@ -7,6 +7,7 @@ import os
 import sys
 from tools.schema_constants import RecordType, Verdict
 from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z, utc_now
 from pathlib import Path
 from typing import Any
 
@@ -362,7 +363,7 @@ def build_mcp_doctor_report(env: dict[str, str] | None = None) -> dict[str, Any]
             parsed_expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
             if parsed_expires.tzinfo is None:
                 parsed_expires = parsed_expires.replace(tzinfo=timezone.utc)
-            expires_status = "valid" if parsed_expires > datetime.now(timezone.utc) else "expired"
+            expires_status = "valid" if parsed_expires > utc_now() else "expired"
         except ValueError:
             expires_status = "invalid"
 
@@ -845,7 +846,7 @@ def _is_expired_iso(value: Any) -> bool:
         return True
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) > expires_at
+    return utc_now() > expires_at
 
 
 def _execute_controlled_from_dry_run_envelope(
@@ -1012,7 +1013,7 @@ def _envelope_mint_payload(
         "autonomy_policy": {
             "policy_id": policy_id,
             "agent_or_role": agent_or_role,
-            "active_from": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "active_from": iso_z(),
             "expires_at": expires_at,
             "max_tasks": max_tasks,
             "task_selector": task_selector,

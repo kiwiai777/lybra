@@ -240,7 +240,8 @@ def validate_task_complexity(
                 from pathlib import Path as _Path
                 gov = _Path(governance_root)
                 for dep_tid in depends_on_list:
-                    verdict_dir = gov / "5_tasks" / "records" / "audit_verdicts" / dep_tid
+                    from tools.aipos_cli.record_writer import record_dir  # 延迟: record_writer→records→task_loader→本模块 循环
+                    verdict_dir = record_dir(gov, "audit_verdicts", dep_tid)
                     if verdict_dir.is_dir():
                         # AIPOS-F2: 依赖校验也走门生单源判定
                         from tools.aipos_cli.audit_helpers import is_gate_born_verdict_metadata

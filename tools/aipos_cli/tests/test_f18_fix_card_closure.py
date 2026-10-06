@@ -255,6 +255,7 @@ class TestNumberingFromDeclaration:
         schema_root = _copy_schema_root(tmp_path, _rx)
         monkeypatch.setattr(schema_loader, "code_repo_schema_root", lambda: schema_root)
         # 治理根夹具(空队列) → 首个后缀 RX
+        (tmp_path / "5_tasks" / "queue" / "pending").mkdir(parents=True)  # AIPOS-F109 件④: 夹具自建治理根队列(原缺队列 → 工作区解析退到真实 ~/.lybra 的真实治理根读卡; run-all 隔离 HOME 下即暴露)
         assert derive_audit_task_id("AIPOS-T", tmp_path) == "AIPOS-TRX"
 
         # 已占坑演进: 预置 TRX 卡 → 下一号 TRX2

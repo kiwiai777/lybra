@@ -445,9 +445,16 @@ class TestGateGuidanceTool(unittest.TestCase):
         """Gate guidance returns proper structure for valid input."""
         from tools.mcp_server.tools import lybra_gate_guidance
 
-        # This will resolve against the actual workspace, which may not have the task
-        # But it should still return a valid structure (possibly with unknown status)
-        result = lybra_gate_guidance({"task_id": "AIPOS-330", "role": "executor"})
+        # AIPOS-F109 件④: 原「解析真实工作区」(经真实 ~/.lybra 落到真实治理根) → 夹具自建临时工作区(LYBRA_WORKSPACE_ROOT),
+        # 不依赖、不触碰真实治理根; run-all 隔离 HOME 下亦可执行。卡不存在 → 仍应返回合法结构(未知状态)。
+        import os
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as ws:
+            (Path(ws) / "5_tasks" / "queue" / "pending").mkdir(parents=True)
+            with mock.patch.dict(os.environ, {"LYBRA_WORKSPACE_ROOT": ws}):
+                result = lybra_gate_guidance({"task_id": "AIPOS-330", "role": "executor"})
         content = result.get("content", [])
         if content:
             text = content[0].get("text", "")

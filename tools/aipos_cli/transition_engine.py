@@ -8,7 +8,7 @@ AIPOS-R4A F-1(P0)修复：schema 加载统一走 tools/schema_loader.py（唯一
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +58,7 @@ def apply_transition_metadata(
             ) from e
     
     if timestamp is None:
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        timestamp = iso_z()
     
     updated = dict(metadata)
     

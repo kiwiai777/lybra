@@ -237,7 +237,9 @@ def test_item2_path_substring_predicates_cleared_and_m22_delegated():
     """d 类路径子串判定全仓清零(棘轮 d 基线随之清空); M22 识别逐一委托唯一判据。"""
     hits = scan_d_path_substring(product_files())
     assert hits == [], hits
-    baseline = json.loads((REPO_ROOT / "tests" / "f87_fragmentation_baseline.json").read_text(encoding="utf-8"))
+    from test_aipos_f87_fragmentation_ratchet import load_baseline  # AIPOS-F109 件⑤: 基线改 jsonl, 计数运行时派生
+
+    baseline = load_baseline()
     assert baseline["invariants"]["d"]["entries"] == [] and baseline["invariants"]["d"]["count"] == 0
     wc = (REPO_ROOT / "tools" / "aipos_cli" / "workspace_config.py").read_text(encoding="utf-8")
     assert wc.count('(child / "project.json").exists()') == 0 and wc.count("has_workspace_queue(root, established=True)") == 1

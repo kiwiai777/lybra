@@ -9,6 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from tools.aipos_cli.clock import utc_now
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -151,7 +152,7 @@ def _service_role_capability(header_value: str | None, registry: dict[str, dict[
                 "Run `lybra serve rotate` to mint a fresh local role token registry.",
                 doc_ref="AIPOS-189 Service Mode v0 Protocol",
             )
-        if parsed_expires <= datetime.now(timezone.utc):
+        if parsed_expires <= utc_now():
             return None, _structured_error(
                 "EXPIRED_BEARER_TOKEN",
                 "Local service role token is expired.",

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 import shutil
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import file_slug, iso_z
 from pathlib import Path
 from typing import Any
 
@@ -72,18 +72,14 @@ RECORD_TYPE_TO_STATE = {
 }
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def _derive_state_from_records(governance_root: Path, task_id: str) -> str | None:
     """从 records 推导任务的真实状态(以最新记录为准)。
 
     AIPOS-F115 件④(gap #64): 记录 frontmatter 经「必须读出」唯一入口 require_frontmatter 读——读不了/有解析告警 =
     FrontmatterReadError 原样抛(原 parse_markdown_frontmatter 忽略告警 + except Exception: continue 静默跳过坏记录,
     推导出的状态可能是错的)。调用方: lint 转为 ERROR 条目, repair 拒修。"""
-    records_dir = governance_root / "5_tasks" / "records"
-    
+    from tools.aipos_cli.record_writer import record_dir
+
     # 按优先级检查各类记录(最新优先)
     # closure > return > claim > publish
     checks = [
@@ -97,7 +93,7 @@ def _derive_state_from_records(governance_root: Path, task_id: str) -> str | Non
     latest_ts = ""
     
     for record_type, state in checks:
-        type_dir = records_dir / record_type / task_id
+        type_dir = record_dir(governance_root, record_type, task_id)
         if not type_dir.is_dir():
             continue
         for f in sorted(type_dir.glob("*.md")):
@@ -125,7 +121,9 @@ def _audit_card_verdict_landed(governance_root: Path, task_id: str, card_path: P
     reviewed = forensic_subject(fm if isinstance(fm, dict) else {})
     if not reviewed:
         return False
-    verdict_dir = governance_root / "5_tasks" / "records" / "audit_verdicts" / reviewed
+    from tools.aipos_cli.record_writer import record_dir
+
+    verdict_dir = record_dir(governance_root, "audit_verdicts", reviewed)
     if not verdict_dir.is_dir():
         return False
     for record in sorted(verdict_dir.glob("*.md")):  # 只看顶层裁决记录(report_snapshots/ 是报告快照, 不算)
@@ -572,9 +570,9 @@ def repair_frontmatter_invalid(
         card_path.write_text(original, encoding="utf-8")
         raise RuntimeError(f"{rel} 规整写入后回读不一致或仍不可解析, 已还原原文")
 
-    timestamp = _utc_now()
-    ts_slug = timestamp.replace("-", "").replace(":", "").replace("T", "_").replace("Z", "")
-    record_id = f"repair_{task_id}_{ts_slug}"  # write_records_atomic 从 record_id 第二段取 task_id → events/<ID>/event_repair_*.md
+    timestamp = iso_z()
+    ts_slug = file_slug("compact", timestamp)
+    record_id = f"event_repair_{task_id}_{ts_slug}"  # AIPOS-F109 件①: 显式 key=task_id → events/<ID>/event_repair_*.md(落盘名不变)
     metadata = {
         "record_type": RecordType.TASK_PROGRESS_EVENT,
         "event_type": "frontmatter_repair",
@@ -593,7 +591,7 @@ def repair_frontmatter_invalid(
     body_lines.append("除上列行外卡文件逐字节不变; 由 `lybra state repair` 写入。")
     markdown = render_markdown(metadata, "\n".join(body_lines), list(metadata))
     try:
-        written = write_records_atomic(root, [("event", record_id, markdown)])
+        written = write_records_atomic(root, [("event", record_id, markdown, task_id)])
     except Exception:
         card_path.write_text(original, encoding="utf-8")
         raise
@@ -604,9 +602,9 @@ def repair_frontmatter_invalid(
 
 
 def _records_root(governance_root: Path) -> Path:
-    from tools.aipos_cli.record_writer import RECORDS_ROOT
+    from tools.aipos_cli.record_writer import records_root
 
-    return governance_root / RECORDS_ROOT
+    return governance_root / records_root()
 
 
 def find_empty_record_files(governance_root: Path, task_id_filter: str | None = None) -> list[dict[str, str]]:
@@ -647,8 +645,7 @@ def repair_empty_session_records(
     无副本可重铸的空文件 → unresolved。禁吞写失败(写失败即抛)。
     """
     from tools.aipos_cli.record_writer import (
-        CLAIMS_ROOT,
-        SESSIONS_ROOT,
+        record_dir,
         render_markdown,
         session_record_path,
         write_records_atomic,
@@ -656,8 +653,8 @@ def repair_empty_session_records(
 
     root = governance_root.resolve()
     task_id = task_id.upper()
-    sessions_dir = root / SESSIONS_ROOT / task_id
-    claims_dir = root / CLAIMS_ROOT / task_id
+    sessions_dir = record_dir(root, "sessions", task_id)
+    claims_dir = record_dir(root, "claims", task_id)
     actions: list[str] = []
     moved: list[dict[str, str]] = []
     unresolved: list[str] = []
@@ -688,7 +685,7 @@ def repair_empty_session_records(
             content = src.read_text(encoding="utf-8")
             if had_empty:
                 target.unlink()
-            write_records_atomic(root, [("session", src.stem, content)])
+            write_records_atomic(root, [("session", src.stem, content, task_id)])
             src.unlink()
         moved.append({"from": rel(src), "to": rel(target), "removed_empty": "true" if had_empty else "false"})
 
@@ -701,9 +698,9 @@ def repair_empty_session_records(
 
     repair_record: str | None = None
     if moved and not dry_run:
-        timestamp = _utc_now()
-        ts_slug = timestamp.replace("-", "").replace(":", "").replace("T", "_").replace("Z", "")
-        record_id = f"repair_{task_id}_{ts_slug}"  # write_records_atomic 从 record_id 第二段取 task_id
+        timestamp = iso_z()
+        ts_slug = file_slug("compact", timestamp)
+        record_id = f"event_repair_{task_id}_{ts_slug}"  # AIPOS-F109 件①: 显式 key=task_id(落盘名不变)
         metadata = {
             "record_type": RecordType.TASK_PROGRESS_EVENT,
             "event_type": "record_repair",
@@ -719,7 +716,7 @@ def repair_empty_session_records(
             + ["", "Declared position: record_writer.session_record_path (records/sessions/<task_id>/). Written by `lybra state repair`.", ""]
         )
         markdown = render_markdown(metadata, body, ["record_type", "event_type", "task_id", "actor", "timestamp", "repair", "moved"])
-        written = write_records_atomic(root, [("event", record_id, markdown)])
+        written = write_records_atomic(root, [("event", record_id, markdown, task_id)])
         repair_record = written["paths"][0]
         actions.append(f"写 repair 记录: {repair_record}")
 

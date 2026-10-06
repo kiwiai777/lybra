@@ -25,8 +25,9 @@ _RECORDS_CACHE_LOCK = threading.RLock()
 # key=(repo_root_str, group) → (fingerprint, parsed_records_list, hand_written_warnings)
 _RECORDS_GROUP_CACHE: dict[tuple[str, str], tuple[tuple, list[dict[str, Any]], list[str]]] = {}
 
-#: 分组名 → (子目录名, 记录构造方式)。standard 类直接用 kind 作为 record_type;
+#: 分组名 → (记录类, 记录构造方式)。standard 类直接用 kind 作为 record_type;
 #: owner_decisions 为平铺目录(无任务子目录), owner_verification/owner_decision 为专用构造器。
+#: AIPOS-F109 件①: 第一元 = transitions.schema record_locations.kinds 的记录类名, 目录经 record_writer.record_root 取声明(不写死子目录)。
 _GROUP_KINDS: dict[str, tuple[str, str]] = {
     "sessions": ("sessions", "session"),
     "publishes": ("publishes", RecordType.PUBLISH),
@@ -113,7 +114,7 @@ def _build_group_records(
 def _load_group_cached(repo_root: Path, group: str) -> tuple[list[dict[str, Any]], list[str]]:
     """带指纹缓存的分组加载(增量: 未变组复用, 变更组重扫+双指纹防半写)。"""
     subdir, kind = _GROUP_KINDS[group]
-    group_root = repo_root / "5_tasks" / "records" / subdir
+    group_root = _record_dir(repo_root, subdir)
     cache_key = (str(repo_root), group)
     records: list[dict[str, Any]] = []
     hand_written: list[str] = []
@@ -143,36 +144,44 @@ def clear_records_cache() -> None:
         _RECORDS_GROUP_CACHE.clear()
 
 
+def _record_dir(repo_root: Path, kind: str, key: str | None = None) -> Path:
+    """AIPOS-F109 件①: 记录落点唯一读取口 record_writer.record_dir(声明 = transitions.schema record_locations)。
+    延迟导入: record_writer 在模块级导入本模块(expected_* 路径), 反向只在调用时取。"""
+    from tools.aipos_cli.record_writer import record_dir
+
+    return record_dir(repo_root, kind, key)
+
+
 def expected_session_record_path(repo_root: Path, task_id: str, session_id: str) -> Path:
-    return repo_root / "5_tasks" / "records" / "sessions" / task_id / f"{session_id}.md"
+    return _record_dir(repo_root, "sessions", task_id) / f"{session_id}.md"
 
 
 def expected_claim_log_path(repo_root: Path, task_id: str, claim_id: str) -> Path:
-    return repo_root / "5_tasks" / "records" / "claims" / task_id / f"{claim_id}.md"
+    return _record_dir(repo_root, "claims", task_id) / f"{claim_id}.md"
 
 
 def expected_publish_record_path(repo_root: Path, task_id: str, publish_id: str) -> Path:
-    return repo_root / "5_tasks" / "records" / "publishes" / task_id / f"{publish_id}.md"
+    return _record_dir(repo_root, "publishes", task_id) / f"{publish_id}.md"
 
 
 def expected_return_record_path(repo_root: Path, task_id: str, return_id: str) -> Path:
-    return repo_root / "5_tasks" / "records" / "returns" / task_id / f"{return_id}.md"
+    return _record_dir(repo_root, "returns", task_id) / f"{return_id}.md"
 
 
 def expected_audit_dispatch_record_path(repo_root: Path, task_id: str, dispatch_id: str) -> Path:
-    return repo_root / "5_tasks" / "records" / "audit_dispatches" / task_id / f"{dispatch_id}.md"
+    return _record_dir(repo_root, "audit_dispatches", task_id) / f"{dispatch_id}.md"
 
 
 def expected_audit_verdict_record_path(repo_root: Path, task_id: str, verdict_id: str) -> Path:
-    return repo_root / "5_tasks" / "records" / "audit_verdicts" / task_id / f"{verdict_id}.md"
+    return _record_dir(repo_root, "audit_verdicts", task_id) / f"{verdict_id}.md"
 
 
 def expected_owner_verification_record_path(repo_root: Path, task_id: str, filename: str) -> Path:
-    return repo_root / "5_tasks" / "records" / "owner_verifications" / task_id / filename
+    return _record_dir(repo_root, "owner_verifications", task_id) / filename
 
 
 def expected_closure_record_path(repo_root: Path, task_id: str, closure_id: str) -> Path:
-    return repo_root / "5_tasks" / "records" / "closures" / task_id / f"{closure_id}.md"
+    return _record_dir(repo_root, "closures", task_id) / f"{closure_id}.md"
 
 
 def _record_sort_key(record: dict[str, Any]) -> tuple[str, str]:
@@ -467,16 +476,18 @@ def load_records(
       task_id: 只加载该任务名下子目录(标准分组按 <group>/<task_id>/ 取; 平铺的
                owner_decisions 不受此约束)。子集加载不走缓存(子集本身便宜)。
     """
-    records_root = repo_root / "5_tasks" / "records"
-    sessions_root = records_root / "sessions"
-    publishes_root = records_root / "publishes"
-    claims_root = records_root / "claims"
-    returns_root = records_root / "returns"
-    audit_dispatches_root = records_root / "audit_dispatches"
-    audit_verdicts_root = records_root / "audit_verdicts"
-    owner_decisions_root = records_root / "owner_decisions"
-    owner_verifications_root = records_root / "owner_verifications"
-    closures_root = records_root / "closures"
+    from tools.aipos_cli.record_writer import records_root
+
+    records_root_path = repo_root / records_root()
+    sessions_root = _record_dir(repo_root, "sessions")
+    publishes_root = _record_dir(repo_root, "publishes")
+    claims_root = _record_dir(repo_root, "claims")
+    returns_root = _record_dir(repo_root, "returns")
+    audit_dispatches_root = _record_dir(repo_root, "audit_dispatches")
+    audit_verdicts_root = _record_dir(repo_root, "audit_verdicts")
+    owner_decisions_root = _record_dir(repo_root, "owner_decisions")
+    owner_verifications_root = _record_dir(repo_root, "owner_verifications")
+    closures_root = _record_dir(repo_root, "closures")
 
     requested = list(groups) if groups is not None else None
     if requested is not None:
@@ -493,7 +504,7 @@ def load_records(
             return [], []
         if subset_mode:
             subdir, kind = _GROUP_KINDS[name]
-            group_root = records_root / subdir
+            group_root = _record_dir(repo_root, subdir)
             if task_id is not None and kind not in ("owner_decision",):
                 # 按需: 只迭代该任务子目录
                 if kind == "owner_verification":
@@ -675,8 +686,8 @@ def load_records(
     return {
         "scope": "records",
         "summary": summary,
-        "records_root": str(records_root.relative_to(repo_root)),
-        "records_root_exists": records_root.exists(),
+        "records_root": str(records_root_path.relative_to(repo_root)),
+        "records_root_exists": records_root_path.exists(),
         "sessions_root_exists": sessions_root.exists(),
         "publishes_root_exists": publishes_root.exists(),
         "claims_root_exists": claims_root.exists(),

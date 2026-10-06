@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
 from pathlib import Path
 from typing import Any
 
@@ -126,10 +126,6 @@ class PermissionIssue:
             "message": self.message,
             "fix_command": self.fix_command,
         }
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def secret_fingerprint(raw: str) -> str:
@@ -498,7 +494,7 @@ def build_connection_config(
     board_advertise_host: str | None = None,
     mcp_advertise_host: str | None = None,
 ) -> dict[str, Any]:
-    now = _utc_now()
+    now = iso_z()
     # AIPOS-228: a single --project selection scopes every minted role token to that project
     # (mint/echo only). No --project -> no `projects` field anywhere (byte-identical).
     projects = [project] if project and str(project).strip() else None
@@ -845,7 +841,7 @@ def rotate_report(
     )
     if previous_created:
         config["created_at"] = previous_created
-    config["rotated_at"] = _utc_now()
+    config["rotated_at"] = iso_z()
 
     # AIPOS-353: selective rotation — restore unselected roles' existing token entries
     # byte-for-byte. Only roles in `roles` get their freshly-minted tokens kept.
@@ -1135,7 +1131,7 @@ def _run_supervisor(
             )
 
     processes: list[subprocess.Popen[Any]] = []
-    started_at = _utc_now()
+    started_at = iso_z()
     # AIPOS-238 (F-o3-13 B): reap children on SIGTERM/SIGHUP too, not just Ctrl-C (SIGINT). Without
     # this, a plain `kill` / script exit / non-SIGINT trap orphans board+mcp (they keep the ports with
     # old tokens). We route the signals into the SAME KeyboardInterrupt cleanup path — pure shutdown
@@ -1399,7 +1395,7 @@ def _append_rotation_log(
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         entry = {
-            "rotated_at": _utc_now(),
+            "rotated_at": iso_z(),
             "actor": actor,
             "owner_authorization_ref": owner_authorization_ref,
             "workspace_root": str(workspace_root),

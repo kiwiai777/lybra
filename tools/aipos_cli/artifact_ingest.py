@@ -20,6 +20,7 @@ from tools.schema_constants import RecordType
 from tools.aipos_cli.verb_contract import declared_exit_code
 from pathlib import Path
 from typing import Any
+from tools.aipos_cli.record_writer import record_dir
 
 
 
@@ -364,14 +365,14 @@ def _code_repo_for(workspace_root: Path, task_id: str, card_frontmatter: dict[st
 def _external_finalize_pending(workspace_root: Path, task_id: str) -> tuple[bool, dict[str, Any]]:
     """AIPOS-F78B 件②: 本卡是否处在「finalize_mode=external 且裁决 PASS 且尚无 finalization 记录」——即产物入口应读 FINALIZE Return。
     返回 (pending, records)。判据读声明: N5.guards.has_pass_verdict.allowed_verdict_values。"""
-    from tools.aipos_cli.next_resolver import _finalize_mode, _read_task_records, _resolve_governance_path_with_relative, _transition_node
+    from tools.aipos_cli.next_resolver import _finalize_mode, _read_task_records, _transition_node
 
     if _finalize_mode(workspace_root) != "external":
         return False, {}
     records = _read_task_records(workspace_root, task_id)
     verdict = str((records.get("latest_verdict") or {}).get("verdict") or "").strip()
     allowed = [str(v) for v in (_transition_node("N5").get("guards", {}).get("has_pass_verdict", {}).get("allowed_verdict_values") or [])]
-    fin_dir = _resolve_governance_path_with_relative("records", workspace_root) / "finalizations" / task_id
+    fin_dir = record_dir(workspace_root, "finalizations", task_id)
     has_finalization = fin_dir.is_dir() and any(fin_dir.glob("finalization_*.md"))
     return (bool(verdict) and verdict in allowed and not has_finalization), records
 

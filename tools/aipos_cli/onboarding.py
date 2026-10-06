@@ -31,7 +31,8 @@ import json
 import shlex
 import socket
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
+from tools.aipos_cli.clock import utc_now
 from pathlib import Path
 from typing import Any
 
@@ -256,7 +257,7 @@ def generate_onboarding_guide(
     exec_ws = workspace_dir or f"~/{project_name}-executor"
     audit_ws = auditor_dir or f"~/{project_name}-auditor"
     _actor = actor or inst["advisor"]
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     expires = (now + timedelta(days=int(envelope_days))).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     policies = {
         "driver": f"pol_{project_name}_loop_1",

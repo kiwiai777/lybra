@@ -8,8 +8,9 @@
 skills/ 由 AIPOS-F103 件② 加入: 仓根旧技能已删, 此后仓根若再出技能同样不许教退役做法;
 0_control_plane/ 由 AIPOS-F117 件④(gap #51)加入: 它随 npm 包发布(package.json files), 是对外协议文档, 同样不许教退役做法)。
 (templates/ 已随建项目单入口卡 AIPOS-F105 整目录删除, 扫描面保留以防回流; 删除不变量见 tests/test_aipos_f105_single_project_entry.py。)
-现存命中登记在 tests/f96_docs_retired_practice_baseline.json(测试数据文件): 每条 = 文件 + 式样 id + 行指纹
-(行文本 strip 后 sha1 前 12 位; 行号仅作定位参考, 不参与比对) + 复查条目号 + 留存理由。
+现存命中登记在 tests/f96_docs_retired_practice_baseline.jsonl(测试数据文件; AIPOS-F109 件⑤: 只存条目、一行一条、稳定排序,
+读写口 tests/ratchet_baseline.py, 计数由本夹具运行时计算不入文件): 每条 = 文件 + 式样 id + 行指纹(行文本 strip 后 sha1 前 12 位)
++ 行文本(定位用) + 复查条目号 + 留存理由。
 
 判定(多重集比对, 键 = (file, pattern, fp)):
   - 现有命中不在基线 = 新增 → 红
@@ -31,7 +32,7 @@ from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BASELINE_PATH = Path(__file__).resolve().parent / "f96_docs_retired_practice_baseline.json"
+BASELINE_PATH = Path(__file__).resolve().parent / "f96_docs_retired_practice_baseline.jsonl"
 
 # 退役做法字面(id → (正则, 现行做法/说明))。新退役一项做法 = 在此加一行, 并把现存命中登记进基线。
 RETIRED_PRACTICES: dict[str, tuple[str, str]] = {
@@ -109,7 +110,16 @@ def _key(item: dict[str, object]) -> tuple[str, str, str]:
 
 
 def load_baseline() -> dict[str, object]:
-    return json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    """基线条目(jsonl)+ 运行时派生计数(AIPOS-F109 件⑤: count 不入基线文件)。"""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from ratchet_baseline import read_entries
+    finally:
+        sys.path.pop(0)
+    entries = read_entries(BASELINE_PATH)
+    return {"entries": entries, "count": len(entries)}
 
 
 def ratchet_diff(current: list[dict[str, object]], entries: list[dict[str, object]]) -> dict[str, list]:
@@ -160,9 +170,9 @@ def test_scan_scope_covers_published_control_plane_docs():
 def test_baseline_is_well_formed_and_only_in_allowed_places():
     baseline = load_baseline()
     entries = baseline["entries"]
-    assert baseline["count"] == len(entries), (baseline["count"], len(entries))
+    assert len(BASELINE_PATH.read_text(encoding="utf-8").splitlines()) == len(entries)  # 一行一条, 无派生量/叙述
     for entry in entries:
-        assert entry.get("file") and entry.get("fp") and isinstance(entry.get("line"), int), entry
+        assert entry.get("file") and entry.get("fp") and entry.get("text"), entry
         assert entry.get("pattern") in RETIRED_PRACTICES, entry
         assert entry.get("item") and entry.get("reason"), entry  # 每条带复查条目号与留存理由
         rel = str(entry["file"])

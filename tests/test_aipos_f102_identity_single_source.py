@@ -312,7 +312,9 @@ REMOVED_BASELINE = {
 
 
 def test_ratchet_invariant_a_entries_removed():
-    base = json.loads((REPO_ROOT / "tests" / "f87_fragmentation_baseline.json").read_text(encoding="utf-8"))
+    from test_aipos_f87_fragmentation_ratchet import load_baseline  # AIPOS-F109 件⑤: 基线改 jsonl, 计数运行时派生
+
+    base = load_baseline()
     entries = {(e["file"], e["fp"]) for e in base["invariants"]["a"]["entries"]}
     assert not (REMOVED_BASELINE & entries)
     assert base["invariants"]["a"]["count"] == len(base["invariants"]["a"]["entries"])

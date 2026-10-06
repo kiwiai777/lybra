@@ -202,7 +202,7 @@ def test_f78c_item1_declaration_single_source_config_card_transitions():
     assert 'project_json.get("code_repo")' not in mcp and 'project.get("code_repo")' not in mcp  # 只剩注册/set-repo 入参(项目级别名)
     # 仓清单形不写死第二份: 代码读 config.schema 声明(声明缺 = SchemaLoadError)
     wc = (REPO_ROOT / "tools" / "aipos_cli" / "workspace_config.py").read_text(encoding="utf-8")
-    assert "_project_repos_declaration" in wc and "except Exception" not in wc.split("def project_repos")[1].split("def _utc_now_iso")[0]
+    assert "_project_repos_declaration" in wc and "except Exception" not in wc.split("def project_repos")[1].split("def write_project_json")[0]  # AIPOS-F109 件②: _utc_now_iso 副本已删(改调 clock.iso_z), 窗口终点改为其后的 write_project_json
 
 
 def test_f78c_item1_project_repos_alias_and_conflicts(tmp_path, monkeypatch):
@@ -499,7 +499,9 @@ def test_f78c_item3_chris_shape_ingest_stops_at_declaration_missing_not_crash(tm
 def test_f78c_fixture_registered_in_runall_and_no_swallowed_exceptions():
     # AIPOS-F93 件③: lybra 产品仓自己的夹具清单, 夹具自定位(门侧位置声明 = 治理根 project.json test_contract.runall_path)
     runall = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
-    assert "tests/test_aipos_f78c_card_repo.py" in runall
+    from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现(清单 discover = 命中式样即登记)
+
+    assert runall_unregistered(["tests/test_aipos_f78c_card_repo.py"], runall)[0] == []
     for rel in ("tools/aipos_cli/workspace_config.py", "tools/aipos_cli/artifact_ingest.py", "tools/aipos_cli/machine_zone.py",
                 "tools/aipos_cli/card_render.py"):
         src = (REPO_ROOT / rel).read_text(encoding="utf-8")

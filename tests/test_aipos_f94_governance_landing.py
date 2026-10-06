@@ -412,7 +412,9 @@ def test_discipline_no_swallowed_exceptions_and_registered_in_runall():
         src = inspect.getsource(fn)
         assert "except Exception" not in src and "except:" not in src, fn.__name__
     runall = (REPO_ROOT / "tests" / "run-all.sh").read_text(encoding="utf-8")
-    assert "tests/test_aipos_f94_governance_landing.py" in runall
+    from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现(清单 discover = 命中式样即登记)
+
+    assert runall_unregistered(["tests/test_aipos_f94_governance_landing.py"], runall)[0] == []
 
 
 def test_item3_lookup_scope_same_answers_as_per_card_lookup(rig: dict):

@@ -6,7 +6,8 @@ import os
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from tools.aipos_cli.clock import iso_z, utc_now
 from pathlib import Path
 from typing import Any
 
@@ -136,7 +137,7 @@ def _load_token_from_disk(dry_run_id: str) -> DryRunToken | None:
 
 def _cleanup_expired_tokens() -> None:
     """Remove expired tokens from both memory and disk (AIPOS-351)."""
-    now = _utc_now()
+    now = utc_now()
     expired_ids = [
         dr_id for dr_id, token in _TOKEN_STORE.items()
         if datetime.fromisoformat(token.expires_at.replace("Z", "+00:00")) <= now
@@ -161,14 +162,6 @@ def _cleanup_expired_tokens() -> None:
                 token_file.unlink(missing_ok=True)
             except OSError:
                 pass
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _iso_z(dt: datetime) -> str:
-    return dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_actor(actor: str | None) -> str:
@@ -302,7 +295,7 @@ def register_dry_run(
         raise ValueError(f"Unsupported controlled execute operation: {operation}")
     actor_normalized = _normalize_actor(actor)
     ttl = max(1, min(int(ttl_seconds), MAX_TTL_SECONDS))
-    created_at_dt = _utc_now()
+    created_at_dt = utc_now()
     expires_at_dt = created_at_dt + timedelta(seconds=ttl)
 
     plan_copy = deepcopy(plan)
@@ -312,8 +305,8 @@ def register_dry_run(
         dry_run_id=dr_id,
         operation=operation,
         actor=actor_normalized,
-        created_at=_iso_z(created_at_dt),
-        expires_at=_iso_z(expires_at_dt),
+        created_at=iso_z(created_at_dt),
+        expires_at=iso_z(expires_at_dt),
         snapshot_hash=dr_hash,
         plan=plan_copy,
     )
@@ -346,7 +339,7 @@ def get_dry_run(dry_run_id: str) -> DryRunToken | None:
 
 def is_expired(token: DryRunToken) -> bool:
     expires_at = datetime.fromisoformat(token.expires_at.replace("Z", "+00:00"))
-    return _utc_now() > expires_at
+    return utc_now() > expires_at
 
 
 def validate_owner_confirmation(*, required: bool, owner_confirmation_token: str | None) -> tuple[bool, str | None]:

@@ -7,15 +7,14 @@
  ① 同一审计工位认领两张审计卡: 两张同时在办时 loop 各自拉起, 假 harness 收到的 kickoff 含各自卡号(逐字节 = 该卡
     `my-tasks --workstation <dir> --task-id <卡>` 的 next_card.kickoff); 两张同时拉起各自进程组、各自汇总前缀;
     已结案 / 非本实例认领 → 拒拉起退回手工, 拒因原样转述(判据 next_resolver.kickoff_refusal 唯一实现)
- ② 仓根 .gitattributes 为 tests/run-all.sh 声明 merge=union: 临时仓两分支各在末尾追加登记块 → git merge 无冲突,
-    合并后 bash -n 通过、两块均在; 对照组(无该声明)同一操作冲突
+ ② 仓根 .gitattributes 为 tests/run-all.sh 声明 merge=union(F111 止血)。AIPOS-F109 件④ 起 run-all 自动发现、并行卡不再改清单,
+    union 追加登记靶场与 run_pytest 约定退役; 本节只留 .gitattributes 现状断言与 run-all 语法兜底
 """
 from __future__ import annotations
 
 import contextlib
 import io
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -210,106 +209,24 @@ def test_item1_single_implementation_and_no_next_card_equality_restriction():
 
 
 # ===========================================================================
-# ② tests/run-all.sh merge=union: 两分支各追加登记块 → 合并无冲突, 两块均在, bash -n 通过
+# ② (AIPOS-F109 件④ 后) tests/run-all.sh 改自动发现: 并行卡新增测试不再改清单 → 合并零冲突(靶场演示见
+#    tests/test_aipos_f109_records_clock_runall.py 件④); 原「两分支各追加 run_pytest 登记块 + union 合并」靶场随 run_pytest 一行式
+#    约定退役删除(删除前 git grep: run_pytest / _merge_demo / _run_registered_tail 除本夹具与原 run-all.sh 外无调用方)。
 # ===========================================================================
 
-_FOOTER = '\necho\necho "========================================================"\nif [ "$overall" -eq 0 ]; then'
 
+def test_item2_superseded_by_f109_discovery_no_per_card_registration():
+    runall = (REPO_ROOT / "tests" / "run-all.sh").read_text(encoding="utf-8")
+    from tools.aipos_cli.workspace_config import runall_directives
 
-def _block(name: str, shape: str) -> str:
-    """登记块: one_line = 一行注释 + 一行 run_pytest(F111 起的登记式样); classic = F111 前多行 if/else/fi 块(展示 union 局限)。"""
-    if shape == "one_line":
-        return f"\n# {name}: 夹具登记\nrun_pytest \"tests/test_{name}.py\" \"$REPO_ROOT/tests/test_{name}.py\"\n"
-    return (f"\n# {name}: 夹具登记块\necho\necho \"── tests/test_{name}.py ──\"\n"
-            f"if PYTHONPATH=\"$REPO_ROOT\" python3 -m pytest \"$REPO_ROOT/tests/test_{name}.py\" -v --tb=short; then\n"
-            f"  echo \"✓ tests/test_{name}.py PASS\"\nelse\n  echo \"✗ tests/test_{name}.py FAIL\"\n  overall=1\nfi\n")
-
-
-def _g(repo: Path, *argv: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-c", "user.name=f111", "-c", "user.email=f111@fixture", *argv], cwd=repo,
-                          capture_output=True, text=True, check=check)
-
-
-def _merge_demo(tmp: Path, with_attributes: bool, shape: str = "one_line") -> tuple[subprocess.CompletedProcess, Path]:
-    repo = tmp / f"{'union' if with_attributes else 'control'}-{shape}"
-    (repo / "tests").mkdir(parents=True)
-    _g(repo, "init", "-q", "-b", "main")
-    shutil.copy(REPO_ROOT / "tests" / "run-all.sh", repo / "tests" / "run-all.sh")
-    if with_attributes:
-        shutil.copy(REPO_ROOT / ".gitattributes", repo / ".gitattributes")
-    _g(repo, "add", "-A")
-    _g(repo, "commit", "-q", "-m", "base")
-    runall = repo / "tests" / "run-all.sh"
-    base = runall.read_text(encoding="utf-8")
-    assert base.count(_FOOTER) == 1, "run-all.sh 尾部汇总段形状变了, 夹具插入点需同步"
-    for branch, name in (("card/X", "aipos_fx_alpha"), ("card/Y", "aipos_fy_beta")):
-        _g(repo, "checkout", "-q", "-b", branch, "main")
-        runall.write_text(base.replace(_FOOTER, _block(name, shape) + _FOOTER), encoding="utf-8")
-        _g(repo, "commit", "-q", "-am", f"{branch} 登记夹具")
-    _g(repo, "checkout", "-q", "main")
-    _g(repo, "merge", "-q", "--no-ff", "-m", "Merge card/X", "card/X")
-    return _g(repo, "merge", "--no-ff", "-m", "Merge card/Y", "card/Y", check=False), repo
-
-
-def test_item2_runall_union_merge_two_appended_blocks_no_conflict(tmp_path):
-    attr = _g(REPO_ROOT, "check-attr", "merge", "--", "tests/run-all.sh")
-    _show(f"[②] 本仓 git check-attr: {attr.stdout.strip()}")
-    assert attr.stdout.strip() == "tests/run-all.sh: merge: union"
-
-    merged, repo = _merge_demo(tmp_path, with_attributes=True)
-    text = (repo / "tests" / "run-all.sh").read_text(encoding="utf-8")
-    syntax = subprocess.run(["bash", "-n", str(repo / "tests" / "run-all.sh")], capture_output=True, text=True)
-    status = _g(repo, "status", "--porcelain").stdout.strip()
-    _show(f"[②] union 靶场 git merge card/Y: rc={merged.returncode}\n{merged.stdout.strip()}\n{merged.stderr.strip()}\n"
-          f"git status --porcelain={status!r}; bash -n rc={syntax.returncode} {syntax.stderr.strip()!r}")
-    _show("[②] 合并后尾部原文:\n" + text[text.index("# aipos_fx_alpha"):])
-    assert merged.returncode == 0 and status == "" and syntax.returncode == 0
-    assert "<<<<<<<" not in text and "=======\n" not in text
-    for name in ("aipos_fx_alpha", "aipos_fy_beta"):
-        assert text.count(f'run_pytest "tests/test_{name}.py" "$REPO_ROOT/tests/test_{name}.py"') == 1, name
-        assert text.count(f"# {name}: 夹具登记\n") == 1, name
-    assert text.index("aipos_fx_alpha") < text.index("aipos_fy_beta") < text.index(_FOOTER)
-    assert text.count(_FOOTER) == 1 and text.count("\nrun_pytest() {\n") == 1
-    # 合并结果真能跑: 以假 python3 替身执行合并后的登记段, 两块都被调用(各一次)、汇总照常
-    calls = _run_registered_tail(repo, tmp_path)
-    _show(f"[②] 合并后两块被 run_pytest 调用: {calls}")
-    assert calls == ["tests/test_aipos_fx_alpha.py", "tests/test_aipos_fy_beta.py"], calls
-
-    control, crepo = _merge_demo(tmp_path, with_attributes=False)
-    _show(f"[②] 对照组(无 .gitattributes) git merge card/Y: rc={control.returncode}\n{control.stdout.strip()}")
-    assert control.returncode != 0 and "CONFLICT" in control.stdout
-    _g(crepo, "merge", "--abort")
-
-
-def test_item2_limit_classic_multiline_blocks_union_eats_shared_tail_bash_n_catches(tmp_path):
-    """局限(写进 .gitattributes 与 run_pytest 注释): F111 前的多行 if/else/fi 块两侧尾行相同(overall=1 / fi),
-    union 只留一份 → 语法坏; 由 bash -n 兜底(本夹具 test_runall_syntax_ok 每次 run-all 都跑)。"""
-    merged, repo = _merge_demo(tmp_path, with_attributes=True, shape="classic")
-    syntax = subprocess.run(["bash", "-n", str(repo / "tests" / "run-all.sh")], capture_output=True, text=True)
-    _show(f"[②局限] 多行块 union 合并 rc={merged.returncode}; bash -n rc={syntax.returncode}: {syntax.stderr.strip()}")
-    assert merged.returncode == 0 and syntax.returncode != 0
+    assert runall_directives(runall)["discover"] is True
+    assert "run_pytest" not in runall.split("# ---- 声明行", 1)[0].replace("run_pytest 约定退役", "")
 
 
 def test_runall_syntax_ok_union_guard():
     """union 合并的兜底: 本仓 tests/run-all.sh 语法检查通过(合并出坏块即此处红)。"""
     syntax = subprocess.run(["bash", "-n", str(REPO_ROOT / "tests" / "run-all.sh")], capture_output=True, text=True)
     assert syntax.returncode == 0, syntax.stderr
-
-
-def _run_registered_tail(repo: Path, tmp: Path) -> list[str]:
-    """只执行合并后 run-all.sh 的 run_pytest 定义 + 两块登记 + 汇总段(python3 换成记录参数的替身), 返回被登记的标签序列。"""
-    text = (repo / "tests" / "run-all.sh").read_text(encoding="utf-8")
-    func = text[text.index("run_pytest() {"):text.index("\n}\n", text.index("run_pytest() {")) + 3]
-    tail = text[text.index("# aipos_fx_alpha: 夹具登记"):]
-    fake_bin = tmp / "fakebin"
-    fake_bin.mkdir(exist_ok=True)
-    (fake_bin / "python3").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-    (fake_bin / "python3").chmod(0o755)
-    script = tmp / "tail.sh"
-    script.write_text(f"set -u\nREPO_ROOT={repo}\noverall=0\n{func}{tail}", encoding="utf-8")
-    proc = subprocess.run(["bash", str(script)], capture_output=True, text=True, env={"PATH": f"{fake_bin}:/usr/bin:/bin"})
-    assert proc.returncode == 0 and "ALL TEST FILES PASS" in proc.stdout, proc.stdout + proc.stderr
-    return [ln[2:-5] for ln in proc.stdout.splitlines() if ln.startswith("✓ ") and ln.endswith(" PASS")]
 
 
 def test_item2_gitattributes_declares_only_runall_union_and_documents_limits():
@@ -321,4 +238,6 @@ def test_item2_gitattributes_declares_only_runall_union_and_documents_limits():
 
 def test_f111_fixture_registered_in_runall():
     runall = (REPO_ROOT / "tests" / "run-all.sh").read_text(encoding="utf-8")
-    assert 'run_pytest "tests/test_aipos_f111_parallel_audit.py" "$REPO_ROOT/tests/test_aipos_f111_parallel_audit.py"' in runall
+    from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现
+
+    assert runall_unregistered(["tests/test_aipos_f111_parallel_audit.py"], runall)[0] == []

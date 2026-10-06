@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z, utc_now
 from pathlib import Path
 from typing import Any
 
@@ -646,7 +646,7 @@ def set_dispatch_mode(
     # append-only trail
     trail = dispatch_mode_trail_path(root)
     trail.parent.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    ts = iso_z()
     line = f"- {ts}  `{previous}` -> `{clean}`  by={by}  reason={reason or '(none)'}\n"
     with trail.open("a", encoding="utf-8") as fh:
         if trail.stat().st_size == 0:
@@ -998,6 +998,30 @@ def is_test_file(path: str, contract: dict[str, Any]) -> bool:
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in globs)
 
 
+def discover_test_files(paths: list[str], contract: dict[str, Any]) -> list[str]:
+    """AIPOS-F109 件④: run-all 自动发现——产品仓文件清单(相对路径)中「是测试文件」者(is_test_file), 去重、按路径排序。
+    声明式样即登记: 命中 test_file_globs 的文件不需在清单里逐个登记(并行卡各加测试不再改同一文件 → 合并零冲突, gap #40)。"""
+    return sorted({path for path in paths if is_test_file(path, contract)})
+
+
+def default_test_contract() -> dict[str, Any]:
+    """AIPOS-F109 件④: 不依赖任何治理根的测试约定 = config.schema test_contract 缺省(test_file_globs.default)。
+    run-all 在产品仓内自运行(审计工作树/他机)时取此; 项目 project.json 覆盖式样时由调用方给出 project_test_contract。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (load_schema("config").get("configuration_sources", {}).get("project_json", {}).get("schema", {}).get("test_contract")) or {}
+    globs = ((decl.get("schema") or {}).get("test_file_globs") or {}).get("default")
+    if _glob_list_problem(globs) is not None:
+        raise SchemaLoadError("config.schema.json test_contract.schema.test_file_globs.default 未声明或形坏; 「测试文件」式样无缺省不可判")
+    return {
+        "runall_path": None,
+        "require_tests": None,
+        "test_file_globs": list(globs),
+        "test_file_globs_source": "config.schema test_contract.test_file_globs.default",
+        "source": "config.schema test_contract(缺省)",
+    }
+
+
 def runall_unregistered(test_files: list[str], runall_text: str) -> tuple[list[str], dict[str, Any]]:
     """AIPOS-F109 件④: 「测试文件已登记进测试清单」唯一判据(门交回检查 TEST_NOT_IN_RUNALL 与各夹具自检共用, 禁第二实现)。
 
@@ -1222,10 +1246,6 @@ def product_repo_root(
     return resolve_card_repo(governance_root, card_frontmatter or {}, allow_governance_root=allow_governance_root)
 
 
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def write_project_json(
     project_root: str | Path,
     name: str,
@@ -1264,7 +1284,7 @@ def write_project_json(
     payload = {
         "project": str(name).strip(),
         "code_repo": repo_value,
-        "registered_at": registered_at or _utc_now_iso(),
+        "registered_at": registered_at or iso_z(),
         "registered_by": registered_by,
         "config_version": 1,
     }
@@ -1301,7 +1321,7 @@ def _write_connection_skeleton(workspace_root: Path, rpc_url: str) -> None:
         "mode": "service_v0",
         "workspace_root": str(workspace_root),
         "local_only": True,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": utc_now().isoformat(),
         "mcp": {
             "rpc_url": rpc_url
         },

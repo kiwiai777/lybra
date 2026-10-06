@@ -33,7 +33,8 @@ import os
 import shlex
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from tools.aipos_cli.clock import utc_now
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, TextIO
@@ -208,7 +209,7 @@ def mint_hint(*, task_id: str, task_fm: dict[str, Any], driver_actor: str, now: 
               governance_root: Path | None = None) -> str:
     """申领出口: 既有 `lybra envelope mint --confirm` 命令(AIPOS-F92 件①: 经门 owner_decision_record envelope 路径真实落盘;
     Owner 亲自敲, --connection-json 指向持 Owner 凭据的 connection.json), 参数按本卡填好可照抄。"""
-    now = now or datetime.now(timezone.utc)
+    now = now or utc_now()
     project = str(task_fm.get("project") or "project").strip() or "project"
     task_mode = str(task_fm.get("task_mode") or "code").strip() or "code"
     expires = (now + timedelta(days=7)).replace(microsecond=0).isoformat().replace("+00:00", "Z")

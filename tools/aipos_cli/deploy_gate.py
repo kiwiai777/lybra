@@ -13,6 +13,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from typing import Any
+from tools.aipos_cli.record_writer import record_dir
 
 
 def check_deployment_branch(repo_root: Path, *, required_branch: str) -> dict[str, Any]:
@@ -241,7 +242,7 @@ def invoke_lybra_deploy(
         from tools.aipos_cli.deployment_authorization import check_verdict_record_authentic
         
         # 查找 verdict_ref 文件
-        verdicts_root = governance_root / "5_tasks" / "records" / "audit_verdicts"
+        verdicts_root = record_dir(governance_root, "audit_verdicts")
         verdict_file: Path | None = None
         for task_dir in sorted(verdicts_root.glob("*")):
             if not task_dir.is_dir():

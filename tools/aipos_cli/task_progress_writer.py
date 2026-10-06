@@ -9,7 +9,8 @@ Used by `lybra task-progress` CLI command for same-machine progress reporting.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import file_slug, iso_z
+from tools.aipos_cli.record_writer import record_dir
 from pathlib import Path
 from typing import Any
 
@@ -119,7 +120,8 @@ def _update_session_record(
     
     session_markdown = render_markdown(metadata, new_body, order)
     session_record_id = session_path.stem  # e.g., "session_TASK-1_20260902_120000"
-    records_to_write = [("session", session_record_id, session_markdown)]
+    # AIPOS-F109 件①: 显式 key = 现有 session 记录所在目录(原地更新同一文件; 不再从 record_id 第二段猜)
+    records_to_write = [("session", session_record_id, session_markdown, session_path.parent.name)]
     write_result = write_records_atomic(repo_root, records_to_write)
     
     return {
@@ -185,14 +187,14 @@ def write_task_progress_event(
             ],
         }
     
-    timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    timestamp = iso_z()
     
     # Build event record
-    events_dir = repo_root / "5_tasks" / "records" / "events" / task_id
+    events_dir = record_dir(repo_root, "events", task_id)
     events_dir.mkdir(parents=True, exist_ok=True)
     
     # Event filename: <event_type>_<timestamp>.md
-    timestamp_slug = timestamp.replace(":", "").replace("-", "").replace("T", "_").replace("Z", "")
+    timestamp_slug = file_slug("compact", timestamp)
     event_file = events_dir / f"{event_type}_{timestamp_slug}.md"
     
     # Build frontmatter
@@ -244,7 +246,7 @@ def write_task_progress_event(
     from tools.aipos_cli.record_writer import write_records_atomic
     
     event_record_id = event_file.stem  # e.g., "event_TASK-1_20260902_120000"
-    records_to_write = [("event", event_record_id, event_markdown)]
+    records_to_write = [("event", event_record_id, event_markdown, task_id)]  # AIPOS-F109 件①: 显式 key(原从 record_id 第二段猜 = 时间戳段, 落错目录)
     write_result = write_records_atomic(repo_root, records_to_write)
     
     # AIPOS-SMOKE-LOOP-1 FIX: 追加更新 session record (N2 真相载体)。session 找不到/不存在
@@ -306,7 +308,7 @@ def append_session_event(repo_root: Path, task_id: str, *, actor: str, event_lab
     session_path, _session_id, resolve_reason = _resolve_session_record_path(repo_root, task_id)
     if session_path is None:
         raise RuntimeError(f"session record of {task_id} not resolvable: {resolve_reason}")
-    timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    timestamp = iso_z()
     update = _update_session_record(session_path, repo_root=repo_root, task_id=task_id, actor=actor, event_type=event_label,
                                     timestamp=timestamp, summary=detail, event_label=event_label)
     if not update.get("ok"):

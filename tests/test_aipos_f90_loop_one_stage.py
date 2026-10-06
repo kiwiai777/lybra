@@ -625,7 +625,9 @@ def test_item3_advisor_skill_and_charters_zero_manual_gate_and_go_only():
 def test_f90_fixture_registered_in_runall_and_no_swallowed_exceptions():
     # AIPOS-F93 件③: lybra 产品仓自己的夹具清单, 夹具自定位(门侧位置声明 = 治理根 project.json test_contract.runall_path)
     runall = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
-    assert "tests/test_aipos_f90_loop_one_stage.py" in runall
+    from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现(清单 discover = 命中式样即登记)
+
+    assert runall_unregistered(["tests/test_aipos_f90_loop_one_stage.py"], runall)[0] == []
     for rel in ("tools/aipos_cli/loop_driver.py", "tools/aipos_cli/two_phase_shell_factory.py", "tools/aipos_cli/artifact_ingest.py"):
         src = (REPO_ROOT / rel).read_text(encoding="utf-8")
         assert not re.search(r"except Exception:\s*\n\s*pass", src), rel

@@ -25,7 +25,7 @@ import os
 import secrets
 import socket
 import sys
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -397,7 +397,6 @@ def upsert_token_entry(connection_data: dict[str, Any], token_entry: dict[str, A
     Returns:
         True if rotated (retired existing), False if new
     """
-    from datetime import datetime, timezone
     tokens = connection_data["tokens"]
     agent_instance = token_entry.get("agent_instance")
     role = token_entry.get("role")
@@ -414,7 +413,7 @@ def upsert_token_entry(connection_data: dict[str, Any], token_entry: dict[str, A
 
     # 查找匹配的现有 token 并标记为 retired
     rotated = False
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = iso_z()
     for existing in tokens:
         if not isinstance(existing, dict):
             continue
@@ -615,7 +614,7 @@ def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = Non
     if harness:
         # AIPOS-F92 件②: 工位 harness {kind, dir}(distribution.schema harness_semantics; 缺 = pi 工位)
         role_data["harness"] = dict(harness)
-    role_data["enrolled_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    role_data["enrolled_at"] = iso_z()
     role_file.write_text(json.dumps(role_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     role_file.chmod(0o644)
     return sorted(role_data.keys())

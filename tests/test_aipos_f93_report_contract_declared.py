@@ -417,8 +417,9 @@ def test_f93_fixtures_registered_in_runall_and_no_swallowed_exceptions():
     import re
 
     runall = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
-    for name in ("tests/test_aipos_f93_report_contract_declared.py", "tests/ts/f93-go-report-fields.test.ts"):
-        assert name in runall, name
+    from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现(清单 discover = 命中式样即登记)
+
+    assert runall_unregistered(["tests/test_aipos_f93_report_contract_declared.py", "tests/ts/f93-go-report-fields.test.ts"], runall)[0] == []
     for rel in ("tools/aipos_cli/next_resolver.py", "tools/aipos_cli/record_writer.py", "tools/aipos_cli/workspace_config.py",
                 "tools/aipos_cli/onboarding.py", "tools/aipos_cli/governance_commit.py"):
         assert not re.search(r"except Exception:\s*\n\s*pass", (REPO_ROOT / rel).read_text(encoding="utf-8")), rel

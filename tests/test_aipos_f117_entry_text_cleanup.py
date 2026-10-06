@@ -400,7 +400,9 @@ def test_item4_template_protocol_doc_removed():
 
 def test_fixture_registered_in_runall():
     runall = (REPO_ROOT / "tests" / "run-all.sh").read_text(encoding="utf-8")
-    assert "run_pytest \"tests/test_aipos_f117_entry_text_cleanup.py\"" in runall
+    from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现(清单 discover = 命中式样即登记)
+
+    assert runall_unregistered(["tests/test_aipos_f117_entry_text_cleanup.py"], runall)[0] == []
     assert subprocess.run(["bash", "-n", str(REPO_ROOT / "tests" / "run-all.sh")]).returncode == 0
 
 

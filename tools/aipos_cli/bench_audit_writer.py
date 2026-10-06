@@ -19,7 +19,7 @@ machinery; this writer is the deterministic builder both stages call.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import file_slug, iso_z
 from pathlib import Path
 from typing import Any
 
@@ -28,13 +28,8 @@ from tools.aipos_cli.record_writer import render_markdown
 from tools.schema_constants import RecordType, Verdict
 
 
-BENCH_AUDIT_DIR = Path("5_tasks/records/bench_audit")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$")
 ALLOWED_CONCLUSIONS = {"pass", "pass_with_notes", "fail", "needs_human"}
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_task_id(value: Any, blocking_reasons: list[str]) -> str:
@@ -201,7 +196,7 @@ def build_bench_audit_record(
     task_mode = str(payload.get("task_mode") or "").strip().lower() or None
     notes = _normalize_text(payload.get("notes"), "notes", blocking_reasons, max_length=4000)
     submitted_by = _normalize_text(actor or "executor", "submitted_by", blocking_reasons, max_length=160, required=True)
-    submitted_at = _utc_now()
+    submitted_at = iso_z()
     evidence_refs = _normalize_evidence_refs(payload.get("evidence_refs"), blocking_reasons)
 
     # Run the ring2 checklist (data-driven). If evidence type is unresolvable AND
@@ -233,9 +228,12 @@ def build_bench_audit_record(
     }
 
     # Path: 5_tasks/records/bench_audit/<task_id>/bench_<task_id>_<timestamp>.md
-    timestamp_slug = submitted_at.replace(":", "").replace("-", "").replace("Z", "")
+    timestamp_slug = file_slug("compact_t", submitted_at)
     filename = f"bench_{task_id}_{timestamp_slug}.md" if task_id else None
-    target_path = str(BENCH_AUDIT_DIR / task_id / filename) if task_id and filename else None
+    # AIPOS-F109 件①: 落点 = transitions.schema record_locations.kinds.bench_audit(record_root; 原模块常量写死退役)
+    from tools.aipos_cli.record_writer import record_root
+
+    target_path = str(record_root("bench_audit") / task_id / filename) if task_id and filename else None
     target_file = repo_root / target_path if target_path else None
 
     if target_file is not None and target_file.exists():

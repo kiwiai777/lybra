@@ -488,6 +488,7 @@ def test_f73d_pre1_item1_finalization_record_written_when_deploy_fails_after_pus
     gov = tmp_path / "gov"
     product = tmp_path / "product"
     gov.mkdir()
+    (gov / "5_tasks" / "queue" / "pending").mkdir(parents=True)  # AIPOS-F109 件④: 夹具自建治理根队列(原缺队列 → 工作区解析退到真实 ~/.lybra 的真实治理根读卡; run-all 隔离 HOME 下即暴露)
     product.mkdir()
     # AIPOS-F92 件③: 部署只对有部署机制的产品仓适用(deploy_gate.deploy_mechanism_present); 本用例测部署失败路径, 故给产品仓部署脚本位
     (product / "tools").mkdir()

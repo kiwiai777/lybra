@@ -47,6 +47,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from tools.aipos_cli.clock import utc_now
 
 SYNC_RUN_MANIFEST = ".version-sync"  # 多工位 sync 运行清单(含 skipped), `.version-` 前缀 = prune 不碰
 SHARED_LANDING = "_distributed"  # AIPOS-F82 件①: 工位父根下所有工位共享的分发落点(prune 按全角色声明并集)
@@ -529,7 +530,7 @@ def write_local_manifest(
         "version": remote.get("product_commit"),
         "role": role,
         "distributed_at": str(harness_root),
-        "synced_at": _now_iso(),
+        "synced_at": utc_now().isoformat(),
         "distributions": distributions,
     }
     if workstation:
@@ -916,11 +917,6 @@ def _prune_files(paths: list[str]) -> dict[str, Any]:
     }
 
 
-def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
-
-
 # ---------------------------------------------------------------------------
 # AIPOS-F66B 件①: 工位归属 + 单工位 sync(含 dry-run / 章程渲染)
 # ---------------------------------------------------------------------------
@@ -1288,7 +1284,7 @@ def sync_many(
         "dry_run": dry_run,
         "workstations": entries,
         "skipped": [e for e in entries if e["status"] == "skipped"],
-        "synced_at": _now_iso(),
+        "synced_at": utc_now().isoformat(),
     }
     if multi and not dry_run:
         manifest_dir = root / "_distributed"

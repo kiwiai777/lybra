@@ -18,7 +18,8 @@ from __future__ import annotations
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
+from tools.aipos_cli.clock import local_now, utc_now
 from pathlib import Path
 from typing import Any
 
@@ -104,7 +105,7 @@ def _get_stage_snapshot_info(governance_root: Path, repo_root: Path | None = Non
     if snapshot_date:
         dt = _parse_date(snapshot_date)
         if dt:
-            now = datetime.now(timezone.utc) if dt.tzinfo else datetime.now()
+            now = utc_now() if dt.tzinfo else local_now()
             delta = now - dt
             days_since = delta.days
     

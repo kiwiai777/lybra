@@ -284,7 +284,9 @@ def test_f100_item4_zero_dependency_full_chain_matches_pyyaml(tmp_path: Path) ->
                      "5_tasks/records/claims/F100Z-1/", "5_tasks/records/returns/F100Z-1/",
                      "5_tasks/records/audit_dispatches/F100Z-1R/", "5_tasks/records/audit_verdicts/F100Z-1/",
                      "5_tasks/records/finalizations/F100Z-1/", "5_tasks/records/closures/F100Z-1/",
-                     "5_tasks/records/sessions/F100Z-1/", "5_tasks/records/publishes/f100z-1/"):
+                     # AIPOS-F109 件①: publish 记录按声明落卡 ID 目录(写入器显式 key; 原落小写 slug 目录, 与
+                     # expected_publish_record_path 不一致)
+                     "5_tasks/records/sessions/F100Z-1/", "5_tasks/records/publishes/F100Z-1/"):
         assert any(path.startswith(expected) for path in blocked["records"]), f"缺 {expected}"
 
 

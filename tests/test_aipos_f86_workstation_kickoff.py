@@ -296,5 +296,6 @@ def test_item3_fixtures_registered_in_runall():
     仍在用的 go.ts 夹具迁至 tests/ts/, run-all 由夹具自定位(AIPOS-F93: 门侧位置声明 = project.json test_contract.runall_path)。"""
     # AIPOS-F93 件③: lybra 产品仓自己的夹具清单, 夹具自定位(门侧位置声明 = 治理根 project.json test_contract.runall_path)
     run_all = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
-    for name in ("tests/ts/f86-go-kickoff.test.ts", "tests/test_aipos_f86_workstation_kickoff.py"):
-        assert name in run_all, name
+    from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现(清单 discover = 命中式样即登记)
+
+    assert runall_unregistered(["tests/ts/f86-go-kickoff.test.ts", "tests/test_aipos_f86_workstation_kickoff.py"], run_all)[0] == []

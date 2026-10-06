@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tools.aipos_cli.clock import file_slug
 from tools.aipos_cli.frontmatter import _resolve_plain, parse_markdown_frontmatter
 from tools.aipos_cli.records import expected_claim_log_path, expected_closure_record_path, expected_return_record_path, expected_session_record_path
 from tools.schema_loader import get_enum_values
@@ -46,13 +47,101 @@ def _get_record_type(name: str) -> str:
 
 
 
-RECORDS_ROOT = Path("5_tasks/records")
-CLAIMS_ROOT = RECORDS_ROOT / "claims"
-SESSIONS_ROOT = RECORDS_ROOT / "sessions"
-RETURNS_ROOT = RECORDS_ROOT / "returns"
-AUDIT_DISPATCHES_ROOT = RECORDS_ROOT / "audit_dispatches"
-AUDIT_VERDICTS_ROOT = RECORDS_ROOT / "audit_verdicts"
-CLOSURES_ROOT = RECORDS_ROOT / "closures"
+# ---------------------------------------------------------------------------
+# AIPOS-F109 件①(H10): 记录落点唯一读取口——声明 = transitions.schema record_locations(节点记录经 node_ref 指节点
+# record.location, 非节点记录模板在本表)。产品代码零写死 records/<子目录>: 落点一律经 record_dir / record_root。
+# 原 RECORDS_ROOT/CLAIMS_ROOT/… 常量与 config.schema 两处零读取方的记录路径声明退役。
+# ---------------------------------------------------------------------------
+
+_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_]+\}")
+
+
+def _product_transitions() -> dict[str, Any]:
+    """产品 transitions.schema(代码仓 schema/, 经 schema_loader 缓存)。"""
+    from tools.schema_loader import code_repo_schema_root, load_schema
+
+    return load_schema("transitions", code_repo_schema_root())
+
+
+def _record_kinds() -> dict[str, dict[str, Any]]:
+    kinds = (_product_transitions().get("record_locations") or {}).get("kinds")
+    if not isinstance(kinds, dict) or not kinds:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("transitions.schema.json record_locations.kinds 未声明(记录落点唯一声明, AIPOS-F109 件①)")
+    return kinds
+
+
+def record_location(kind: str, transitions_schema: dict[str, Any] | None = None) -> str:
+    """记录类 kind 的落点模板(相对治理根)。节点记录读 transitions_schema(缺省 = 产品 schema)的节点 record.location
+    (node_ref / record_key), 非节点记录读 record_locations.kinds[kind].location。未声明 = ValueError(fail-closed)。"""
+    entry = _record_kinds().get(kind)
+    if not isinstance(entry, dict):
+        raise ValueError(f"记录类 {kind!r} 未在 transitions.schema record_locations.kinds 声明(已声明: {sorted(_record_kinds())})")
+    if entry.get("node_ref"):
+        schema = transitions_schema if transitions_schema is not None else _product_transitions()
+        node = (schema.get("nodes") or {}).get(str(entry["node_ref"])) or {}
+        decl = node.get(str(entry.get("record_key") or "record")) or {}
+        location = decl.get("location") if isinstance(decl, dict) else None
+    else:
+        location = entry.get("location")
+    if not isinstance(location, str) or not location.strip():
+        raise ValueError(f"记录类 {kind!r} 的 location 未声明(transitions.schema record_locations.kinds.{kind})")
+    return location
+
+
+def record_kind_for_type(record_type: str) -> str:
+    """写入器记录类型名(归一化: 小写、去 _log/_record 尾)→ 记录类(record_locations.kinds[*].record_types)。未声明 = ValueError。"""
+    normalized = str(record_type).lower().replace("_log", "").replace("_record", "")
+    for kind, entry in _record_kinds().items():
+        if normalized in (entry.get("record_types") or []):
+            return kind
+    raise ValueError(f"Unknown record_type for schema lookup: {record_type} (normalized: {normalized}; 声明 transitions.schema record_locations.kinds[*].record_types)")
+
+
+def _split_location(location: str) -> tuple[list[str], str]:
+    parts = location.split("/")
+    return parts[:-1], parts[-1]
+
+
+def record_root(kind: str, transitions_schema: dict[str, Any] | None = None) -> Path:
+    """记录类的根目录(相对治理根): 落点目录部分中第一个占位段之前的前缀, 如 5_tasks/records/claims。"""
+    dir_parts, _filename = _split_location(record_location(kind, transitions_schema))
+    static: list[str] = []
+    for part in dir_parts:
+        if _PLACEHOLDER_RE.search(part):
+            break
+        static.append(part)
+    if not static:
+        raise ValueError(f"记录类 {kind!r} 落点模板无静态目录前缀: {record_location(kind, transitions_schema)!r}")
+    return Path(*static)
+
+
+def record_dir(repo_root: Path, kind: str, key: str | None = None, transitions_schema: dict[str, Any] | None = None) -> Path:
+    """记录类 kind 的落点目录(绝对 = repo_root/…)。key = 目录占位值(卡 ID 等, 按 validate_safe_task_id 校验);
+    key=None = 该类根目录(record_root)。模板目录无占位而给了 key / 有占位而缺 key 由调用方决定: 无占位时 key 被拒(ValueError),
+    有占位且 key=None 返回根目录(扫描整类)。路径包含校验: 结果必须落在该类根目录内。"""
+    base = Path(repo_root)
+    root = base / record_root(kind, transitions_schema)
+    if key is None:
+        return root
+    dir_parts, _filename = _split_location(record_location(kind, transitions_schema))
+    placeholders = [part for part in dir_parts if _PLACEHOLDER_RE.search(part)]
+    if not placeholders:
+        raise ValueError(f"记录类 {kind!r} 落点目录无占位(平铺), 不接受 key={key!r}")
+    validate_safe_task_id(key)
+    filled = [_PLACEHOLDER_RE.sub(key, part) for part in dir_parts]
+    path = base / Path(*filled)
+    if not _resolved_within(root, path):
+        raise ValueError(f"Record path resolves outside declared records dir {root}: {path}")
+    return path
+
+
+# AIPOS-F109 件①: 记录根(治理目录树 records 键的落点)仅供「扫整个 records/」的读取方(state_lint 记录目录存在性);
+# 由声明推导(任一记录类根目录的父目录), 不写死。
+def records_root(transitions_schema: dict[str, Any] | None = None) -> Path:
+    return record_root("claims", transitions_schema).parent
+
 # AIPOS-F73E(顺手实撞): closure_id/文件名前缀——写(board_adapter.close_task)读(next_resolver._read_task_records)同源。
 # 门实际落盘 close_<task>_<ts>_<actor>.md(存量 F73C2/F78 记录皆如此); 读侧曾按 closure_ 找 → 真门 close 后 loop 永看不到闭环记录。
 CLOSURE_ID_PREFIX = "close"
@@ -88,7 +177,7 @@ def validate_safe_task_id(task_id: str) -> None:
 
 def build_runtime_id(prefix: str, task_id: str, timestamp: str, actor: str) -> str:
     validate_safe_task_id(task_id)
-    return f"{prefix}_{task_id}_{timestamp.replace('-', '').replace(':', '').replace('T', '_').replace('Z', '')}_{actor_slug(actor)}"
+    return f"{prefix}_{task_id}_{file_slug("compact", timestamp)}_{actor_slug(actor)}"
 
 
 def _resolved_within(base_dir: Path, candidate: Path) -> bool:
@@ -101,20 +190,17 @@ def _resolved_within(base_dir: Path, candidate: Path) -> bool:
 
 def ensure_safe_record_path(repo_root: Path, path: Path, record_type: str, task_id: str) -> Path:
     validate_safe_task_id(task_id)
-    if record_type == RecordType.CLAIM_LOG:
-        root = (repo_root / CLAIMS_ROOT / task_id).resolve()
-    elif record_type == RecordType.SESSION_RECORD:
-        root = (repo_root / SESSIONS_ROOT / task_id).resolve()
-    elif record_type == RecordType.RETURN_RECORD:
-        root = (repo_root / RETURNS_ROOT / task_id).resolve()
-    elif record_type == RecordType.AUDIT_DISPATCH_RECORD:
-        root = (repo_root / AUDIT_DISPATCHES_ROOT / task_id).resolve()
-    elif record_type == RecordType.AUDIT_VERDICT_RECORD:
-        root = (repo_root / AUDIT_VERDICTS_ROOT / task_id).resolve()
-    elif record_type == RecordType.CLOSURE_RECORD:
-        root = (repo_root / CLOSURES_ROOT / task_id).resolve()
-    else:
+    kind = {
+        RecordType.CLAIM_LOG: "claims",
+        RecordType.SESSION_RECORD: "sessions",
+        RecordType.RETURN_RECORD: "returns",
+        RecordType.AUDIT_DISPATCH_RECORD: "audit_dispatches",
+        RecordType.AUDIT_VERDICT_RECORD: "audit_verdicts",
+        RecordType.CLOSURE_RECORD: "closures",
+    }.get(record_type)
+    if kind is None:
         raise ValueError(f"Unsupported record_type: {record_type}")
+    root = record_dir(repo_root, kind, task_id).resolve()
     resolved = path.resolve()
     if not _resolved_within(root, resolved):
         raise ValueError(f"Record path resolves outside allowed records root: {path}")
@@ -1257,17 +1343,17 @@ def return_record_path(repo_root: Path, task_id: str, return_id: str) -> Path:
 
 
 def audit_dispatch_record_path(repo_root: Path, task_id: str, dispatch_id: str) -> Path:
-    path = repo_root / AUDIT_DISPATCHES_ROOT / task_id / f"{dispatch_id}.md"
+    path = record_dir(repo_root, "audit_dispatches", task_id) / f"{dispatch_id}.md"
     return ensure_safe_record_path(repo_root, path, RecordType.AUDIT_DISPATCH_RECORD, task_id)
 
 
 def audit_verdict_record_path(repo_root: Path, task_id: str, verdict_id: str) -> Path:
-    path = repo_root / AUDIT_VERDICTS_ROOT / task_id / f"{verdict_id}.md"
+    path = record_dir(repo_root, "audit_verdicts", task_id) / f"{verdict_id}.md"
     return ensure_safe_record_path(repo_root, path, RecordType.AUDIT_VERDICT_RECORD, task_id)
 
 
 def closure_record_path(repo_root: Path, task_id: str, closure_id: str) -> Path:
-    path = repo_root / CLOSURES_ROOT / task_id / f"{closure_id}.md"
+    path = record_dir(repo_root, "closures", task_id) / f"{closure_id}.md"
     return ensure_safe_record_path(repo_root, path, RecordType.CLOSURE_RECORD, task_id)
 
 
@@ -1348,103 +1434,26 @@ def _resolve_record_path_from_schema(
     repo_root: Path,
     record_type: str,
     record_id: str,
-    task_id: str,
+    task_id: str | None,
 ) -> Path:
-    """从 transitions.schema.json 声明中解析记录路径 (AIPOS-F64-fix1 声明驱动)。
-    
-    Args:
-        transitions_schema: 加载的 transitions.schema.json
-        repo_root: 工作区根目录
-        record_type: 记录类型 (claim, session, return, etc.)
-        record_id: 记录ID
-        task_id: 任务ID
-    
-    Returns:
-        记录文件路径
-    
-    Raises:
-        ValueError: 如果找不到对应的 schema 声明
+    """从 transitions.schema.json 声明中解析记录路径 (AIPOS-F64-fix1 声明驱动; AIPOS-F109 件①: 经唯一读取口 record_dir)。
+
+    记录类型 → 记录类 = record_locations.kinds[*].record_types(record_kind_for_type; 原代码内 type_to_node 映射与 event 特例退役);
+    落点目录 = 该类 location 模板的目录部分(节点记录读传入 transitions_schema 的节点 record.location——改声明即跟随),
+    占位值 = task_id(卡 ID; 平铺类如 deployments 传 None); 文件名 = record_id + ".md"。
+    Raises: ValueError(类型未声明 / 落点未声明 / 不安全 id / 越出声明目录)。
     """
-    # 标准化 record_type
-    normalized_type = record_type.lower().replace("_log", "").replace("_record", "")
-    
-    # 在 schema nodes 中查找对应的记录声明
-    nodes = transitions_schema.get("nodes", {})
-    
-    # 映射: record_type → schema node name
-    type_to_node = {
-        "claim": "N1",
-        "session": "N1",  # session 也在 N1 (claim 节点)
-        "return": "N2",
-        "audit_dispatch": "N3",
-        "audit_verdict": "N4",
-        "finalization": "N5",
-        "deployment": "N5",  # deployment 在 N5 (finalize 节点)
-        "closure": "N6",
-        "publish": "N0",
-        # AIPOS-F115 件①: fix卡级联门生记录(声明 nodes.fix_card_closure.record); 原调用方误用 "closure" 类型且引用未定义 closure_id
-        "fix_closure_derivation": "fix_card_closure",
-    }
-    
-    # 特殊处理: event 类型 (task_progress_writer)
-    if normalized_type == "event":
-        # event 记录路径: 5_tasks/records/events/{task_id}/event_{record_id}.md
-        return repo_root / "5_tasks" / "records" / "events" / task_id / f"event_{record_id}.md"
-    
-    node_key = type_to_node.get(normalized_type)
-    if not node_key:
-        raise ValueError(f"Unknown record_type for schema lookup: {record_type} (normalized: {normalized_type})")
-    
-    node = nodes.get(node_key, {})
-    
-    # 对于有多个 record 的节点 (如 N5 有 record 和 deployment_record)
-    record_config = None
-    if normalized_type == "deployment" and "deployment_record" in node:
-        record_config = node["deployment_record"]
-    elif "record" in node:
-        record_config = node["record"]
-    
-    if not record_config or "location" not in record_config:
-        raise ValueError(f"No record location found in schema for {record_type} (node {node_key})")
-    
-    # 解析路径模板
-    location_template = record_config["location"]
-    
-    # 从 record_id 提取各种字段
-    # record_id 格式通常为: <type>_<task_id>_<timestamp>_<actor/agent>
-    # 例: claim_TESTID_20260902_120000_agent
-    # 注意: record_id 已经包含完整的文件名,所以我们直接使用它
-    
-    # 简化策略: 直接使用 record_id 作为文件名
-    # schema 中的模板如: 5_tasks/records/claims/{task_id}/claim_{task_id}_{timestamp}_{agent_instance}.md
-    # 我们只需要替换 {task_id} 部分,文件名直接用 record_id
-    
-    # 提取目录部分 (到最后一个 / 之前)
-    last_slash = location_template.rfind("/")
-    if last_slash == -1:
-        # 没有目录,直接在根下
-        dir_template = ""
-        filename_template = location_template
-    else:
-        dir_template = location_template[:last_slash]
-        filename_template = location_template[last_slash+1:]
-    
+    kind = record_kind_for_type(record_type)
     # AIPOS-F79D 件④: 路径包含校验(fail-closed, 不再依赖事后 ensure_safe_record_path + 吞异常):
     # task_id/record_id 不得含路径分隔或 `..`, 解析结果必须落在声明目录内。
-    validate_safe_task_id(task_id)
     if "/" in record_id or "\\" in record_id or ".." in record_id or not record_id:
         raise ValueError(f"Unsafe record_id for records path: {record_id!r}")
-
-    # 替换目录中的 {task_id}
-    dir_path = dir_template.replace("{task_id}", task_id)
-    dir_path = dir_path.replace("{reviewed_task_id}", task_id)  # for audit_verdict
-    dir_path = dir_path.replace("{fix_task_id}", task_id)  # for fix_closure_derivation
-    
-    # 文件名直接使用 record_id
-    filename = f"{record_id}.md"
-    
-    declared_dir = (repo_root / dir_path) if dir_path else repo_root
-    path = declared_dir / filename
+    dir_parts, _filename = _split_location(record_location(kind, transitions_schema))
+    has_placeholder = any(_PLACEHOLDER_RE.search(part) for part in dir_parts)
+    if has_placeholder and task_id is None:
+        raise ValueError(f"记录类 {kind} 落点目录含占位, 缺 key(卡 ID): {record_id}")
+    declared_dir = record_dir(repo_root, kind, task_id if has_placeholder else None, transitions_schema)
+    path = declared_dir / f"{record_id}.md"
     if not _resolved_within(declared_dir, path):
         raise ValueError(f"Record path resolves outside declared records dir {declared_dir}: {path}")
     return path
@@ -1498,12 +1507,18 @@ def write_records_atomic(
     
     # 解析路径 (先全部解析,再统一写入)
     resolved: list[tuple[Path, str]] = []
-    for record_type, record_id, markdown in records:
-        # 从record_id提取task_id (格式: <type>_<task_id>_...)
-        parts = record_id.split("_")
-        if len(parts) < 2:
-            raise ValueError(f"Invalid record_id format: {record_id}")
-        task_id = parts[1]  # 提取task_id
+    for entry in records:
+        # AIPOS-F109 件①: 记录项可带第 4 元 key(落点目录占位值 = 卡 ID; 平铺类传 None)——写入器不再从 record_id 猜目录
+        # (原「record_id 第二段 = task_id」: 卡 ID 含 `_` 即落错目录、publish 落小写 slug 目录、deployment 拿时间戳当键)。
+        # 3 元项沿用旧推导(record_id 第二段), 存量调用方不变。
+        if len(entry) == 4:
+            record_type, record_id, markdown, task_id = entry
+        else:
+            record_type, record_id, markdown = entry
+            parts = record_id.split("_")
+            if len(parts) < 2:
+                raise ValueError(f"Invalid record_id format: {record_id}")
+            task_id = parts[1]  # 提取task_id
         
         # 标准化record_type (支持字符串和RecordType常量)
         record_type_str = str(record_type).lower()

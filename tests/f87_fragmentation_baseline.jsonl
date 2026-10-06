@@ -1,0 +1,14 @@
+{"file": "tools/aipos_cli/draft_writer.py", "fp": "08afb966b7a8", "inv": "a", "item": "L3", "text": "# AIPOS-F78 前置零⑧(F79B 实撞: 裸正则 lybra_\\w+ 扫整卡把 pol_lybra_dev_9 / governance_refs 里的动词键名当门动词拒):"}
+{"file": "tools/aipos_cli/finalize.py", "fp": "71c8c82bff49", "inv": "a", "item": "L3", "text": "# two-root setup, workspace_root=~/projects/lybra and governance_root="}
+{"file": "tools/aipos_cli/finalize.py", "fp": "8831efefebdf", "inv": "a", "item": "L3", "text": "# ~/ai-project-os/2_projects/lybra; they MUST NOT be conflated."}
+{"file": "tools/aipos_cli/governance_guardrails.py", "fp": "6080c52acfc2", "inv": "a", "item": "H4", "text": "2_projects/lybra, chris 提交时 B②/B③ 前缀指错。"}
+{"file": "tools/aipos_cli/owner_truth_view.py", "fp": "00916dfb5b94", "inv": "a", "item": "L3", "text": "# (e.g. exec.lybra.kiwiai-dev) stays on the event as `actor` for attribution; the"}
+{"file": "tools/cleanup_governance_residue.py", "fp": "a82bcf664a0f", "inv": "a", "item": "H4", "text": "运行位置: 治理仓 ai-project-os/2_projects/lybra"}
+{"file": "tools/distribution_manifest.py", "fp": "02139c34a9f9", "function": "get_product_commit", "inv": "f", "item": "AIPOS-F115 件③(gap #58/#61 同族)", "lane_blocked": "F115 车道外(lane.paths 不含 tools/distribution_manifest.py), 未能改; 见 F115 RETURN 缺口", "text": "except Exception: | pass"}
+{"file": "tools/generate_backlog_entry.py", "fp": "ad6ab42fb40a", "inv": "a", "item": "H4", "text": "%(prog)s AIPOS-R6S --governance-root ~/ai-project-os/2_projects/lybra"}
+{"file": "tools/hooks/install-governance-pre-commit.sh", "fp": "b1046a60bc85", "inv": "a", "item": "L3", "text": "#   若治理仓根不是 /home/kiwi/ai-project-os, 请显式传参。"}
+{"file": "tools/inject_governance_status_headers.py", "fp": "71b4bccad486", "inv": "e", "item": "M11(复查未列, F87 盘点补)", "lane_blocked": "F87 车道外(lane.paths 不含该文件), 未能改; 见 F87 RETURN 产品缺口", "text": "default_header = f\"\"\"---"}
+{"file": "tools/loop_context.py", "fp": "a2c6e402349a", "inv": "a", "item": "H5", "text": "agent_instance: Agent instance ID (e.g., \"exec.lybra.kiwiai-dev\")"}
+{"file": "tools/loop_context.py", "fp": "fa53ff6a0e3e", "inv": "a", "item": "H5", "text": "instance: str  # agent_instance (e.g., \"exec.lybra.kiwiai-dev\")"}
+{"file": "tools/lybra_tui/copilot.py", "fp": "2ab7be308542", "inv": "e", "item": "M11", "lane_blocked": "F87 车道外(lane.paths 不含该文件), 未能改; 见 F87 RETURN 产品缺口", "text": "lines = [\"---\"]"}
+{"file": "web/board/app.py", "fp": "02139c34a9f9", "function": "_generate_advisor_prompt_route", "inv": "f", "item": "AIPOS-F115 件③(gap #58/#61 同族)", "lane_blocked": "F115 车道外(lane.paths 不含 web/board/app.py), 未能改; 见 F115 RETURN 缺口", "text": "except Exception: | pass"}

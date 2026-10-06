@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import secrets
 from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z, utc_now
 from pathlib import Path
 from typing import Any
 
@@ -98,7 +99,7 @@ def _registry_entry_expired(entry: dict[str, Any], now: datetime | None = None) 
         return False
     if expires_dt.tzinfo is None:
         expires_dt = expires_dt.replace(tzinfo=timezone.utc)
-    return (now or datetime.now(timezone.utc)) > expires_dt
+    return (now or utc_now()) > expires_dt
 
 
 def load_custom_roles(project_root: str | Path) -> dict[str, dict[str, str]]:
@@ -137,7 +138,7 @@ def load_custom_roles(project_root: str | Path) -> dict[str, dict[str, str]]:
         return {}
 
     builtins = _builtin_role_names()
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     result: dict[str, dict[str, str]] = {}
     for entry in registry.values():
         if not isinstance(entry, dict):
@@ -385,7 +386,7 @@ def _append_custom_role_trail(
     """Append-only trail for custom role changes."""
     trail = governance_paths(project_root)["decision_log"].parent / "custom_roles_log.md"
     trail.parent.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    ts = iso_z()
     line = f"- {ts}  {change_type}  name={name}  class={builtin_class}  by={by}  reason={reason or '(none)'}\n"
     with trail.open("a", encoding="utf-8") as fh:
         if trail.stat().st_size == 0:

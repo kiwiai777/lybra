@@ -128,7 +128,9 @@ def test_runall_location_single_declaration_and_registered():
     assert not hasattr(adapter, "RUNALL_RELATIVE_PATH")
     assert "tests/run-all.sh" not in (REPO_ROOT / "tools" / "aipos_cli" / "board_adapter.py").read_text(encoding="utf-8")
     runall = (Path(__file__).resolve().parent / "run-all.sh").read_text(encoding="utf-8")
-    assert "tests/test_aipos_f91_retirement_invariants.py" in runall
+    from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现(清单 discover = 命中式样即登记)
+
+    assert runall_unregistered(["tests/test_aipos_f91_retirement_invariants.py"], runall)[0] == []
     assert not (REPO_ROOT / "agents" / "harness" / "pi" / "lybra-loop").exists()
     assert not (REPO_ROOT / "tools" / "connector").exists() and not (REPO_ROOT / "tools" / "turn_advancer").exists()
 
