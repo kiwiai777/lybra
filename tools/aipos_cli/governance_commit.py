@@ -324,9 +324,12 @@ def _render_template(template: str, **values: Any) -> str:
     return template.format(**{k: shlex.quote(str(v)) for k, v in values.items()})
 
 
-def audit_card_id(task_id: str) -> str:
-    """审计卡 ID = 被审卡 ID + R(与推导核 N3 派审 audit_task_id、门派生审计卡同一约定)。"""
-    return f"{task_id}R"
+def audit_card_ids(governance_root: Path, task_id: str) -> list[str]:
+    """本卡的全部审计轮卡号(AIPOS-F112: 首轮 <ID>R 及复审轮 R2/R3…, audit_derivation.audit_round_ids 唯一实现;
+    一张都没有 = [首轮号])。原 audit_card_id 写死 <ID>R, 复审轮的队列文件/记录/报告不入落账范围。"""
+    from tools.aipos_cli.audit_derivation import audit_round_ids, current_audit_task_id
+
+    return audit_round_ids(task_id, Path(governance_root)) or [current_audit_task_id(task_id, Path(governance_root))]
 
 
 def governance_commit_command(task_id: str, actor: str, governance_root: Path | str) -> str:
@@ -414,7 +417,7 @@ def task_scope_candidates(governance_root: Path, task_id: str) -> dict[str, Any]
     root = Path(governance_root)
     card_path, _state = find_task_card(root, task_id)
     own = card_own_paths(root, task_id, card_path=card_path)
-    audit = card_own_paths(root, audit_card_id(task_id))
+    audit = list(dict.fromkeys(p for audit_id in audit_card_ids(root, task_id) for p in card_own_paths(root, audit_id)))
     chronicle_path = project_paths(root).get("foundation_backlog")
     chronicle = _gov_rel(root, Path(chronicle_path)) if chronicle_path else None
     paths = list(dict.fromkeys(own + audit + ([chronicle] if chronicle else [])))
@@ -926,14 +929,14 @@ def governance_commit(
     if task_scope is not None:
         result["task_scope"] = task_scope
         ops = result.setdefault("operations", [])
-        ops.insert(0, _task_scope_operation(task_id, task_scope))
+        ops.insert(0, _task_scope_operation(Path(governance_root), task_id, task_scope))
     return _seal_push_outcome(result, push_requested=bool(push) and not dry_run)
 
 
-def _task_scope_operation(task_id: str, task_scope: dict[str, Any]) -> str:
+def _task_scope_operation(governance_root: Path, task_id: str, task_scope: dict[str, Any]) -> str:
     ignored = task_scope.get("ignored") or []
     return (f"Task scope ({TASK_SCOPE_SOURCE}, AIPOS-F94): {len(task_scope['paths'])} path(s) derived for {task_id} "
-            f"(+{audit_card_id(task_id)}" + (f", chronicle {task_scope['chronicle']}" if task_scope.get("chronicle") else "")
+            f"(+{'+'.join(audit_card_ids(governance_root, task_id))}" + (f", chronicle {task_scope['chronicle']}" if task_scope.get("chronicle") else "")
             + ")" + (f"; ignored by .gitignore (not committed): {', '.join(ignored)}" if ignored else ""))
 
 
@@ -971,7 +974,7 @@ def _task_scope_selection(governance_root: Path, task_id: str, actor: str, *, dr
         landing = governance_landing(root, {task_id: scope["candidates"]})[task_id]
         if landing["landed"]:
             return stop(Verdict.PASS, f"卡 {task_id} 已落账(范围内无未提交 / 未推送, 上游 {landing['upstream']}), 无待收内容",
-                        [_task_scope_operation(task_id, scope), "No changes to commit (task scope already committed and pushed)"],
+                        [_task_scope_operation(root, task_id, scope), "No changes to commit (task scope already committed and pushed)"],
                         severity="info", task_scope=scope, landing=landing)
     return {"task_scope": scope}
 

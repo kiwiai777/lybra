@@ -41,9 +41,9 @@ CONFIG = json.loads((REPO_ROOT / "schema" / "config.schema.json").read_text(enco
 WATCHED_SUBSET_THRESHOLD = {"queue_state": 3, "task_class": 2, "role_category": 3, "progress_status": 3}
 
 # 语义子集登记(file, enum, 排序后的值) → 理由。非值域副本: 偏好序 / 活跃态子集 / 角色子集。只减不增。
+# AIPOS-F112: 删 next_resolver「审计卡 <ID>R 已生成判定范围」(_check_audit_card 改读 audit_derivation.audit_round_ids, 不再手写状态子集)。
 SEMANTIC_SUBSETS: dict[tuple[str, str, tuple[str, ...]], str] = {
     ("tools/aipos_cli/finalize.py", "queue_state", ("claimed", "completed", "pending")): "取卡摘要的查找范围(语义子集)",
-    ("tools/aipos_cli/next_resolver.py", "queue_state", ("claimed", "completed", "pending")): "审计卡 <ID>R 已生成判定范围(语义子集)",
     ("tools/aipos_cli/next_resolver.py", "queue_state", ("blocked", "claimed", "pending")): "活跃卡扫描范围(语义子集)",
     ("tools/aipos_cli/board_login.py", "role_category", ("auditor", "executor", "owner", "owner-dispatch")): "看板登录角色偏好序",
     ("tools/aipos_cli/onboarding.py", "role_category", ("advisor", "auditor", "executor")): "接入向导生成的三工位实例",
