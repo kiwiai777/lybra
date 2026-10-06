@@ -48,7 +48,6 @@ exit "$overall"
 
 # ---- 声明行(只减不增; 一行一条, 按目标排序, 便于并行卡各删不同行时 git 行级合并) ----
 # lybra-runall: discover
-# lybra-runall: exclude test_f003_cli_return_block_atomicity.py 硬编码真实治理根 /home/kiwi/ai-project-os/2_projects/lybra, 夹具环境禁触
 # lybra-runall: exclude tests/playwright/board.visual.spec.js 需 Playwright 浏览器(npm run test:visual), 非常驻夹具环境
 # lybra-runall: exclude tests/test_aipos_f28b_live_credential_registry.sh 活门/真实工位凭据核查脚本(硬编码真实治理根与 connection.json)
 # lybra-runall: exclude tests/test_aipos_f42_fix1_project_enforcement.py 硬编码真实治理根(lybra/chris), 夹具环境禁触
@@ -366,7 +365,6 @@ exit "$overall"
 # lybra-runall: known-failure tools/mcp_server/tests/test_token_projects_gate_inert.py::TokenProjectsGateInertTests::test_flip_case_projects_mismatch_still_allows
 # lybra-runall: known-failure tools/mcp_server/tests/test_token_projects_gate_inert.py::TokenProjectsGateInertTests::test_scope_decision_identical_with_and_without_projects
 # lybra-runall: known-failure tools/test_aipos_c1_surface_consistency.py
-# lybra-runall: known-failure tools/test_aipos_r2_enroll.py::test_enroll_flow
 # lybra-runall: known-failure tools/test_schema_loader.py::test_load_schemas
 # lybra-runall: known-failure tools/test_schema_unify.py::test_all_enum_refs_resolve
 # lybra-runall: known-failure tools/test_schema_unify.py::test_no_residual_enum_literals
