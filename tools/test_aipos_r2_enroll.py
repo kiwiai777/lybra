@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import os
 import secrets
-import signal
 import socket
 import stat
 import subprocess
@@ -31,6 +30,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from tools.aipos_cli.autonomy_policy import policies_dir  # noqa: E402
 from tools.aipos_cli.confirm_client import token_fingerprint  # noqa: E402
 from tools.aipos_cli.enroll_client import enroll  # noqa: E402
 from tools.aipos_cli.enrollment import TRANSPORT_TOKEN_ROLE, enrollment_trail_path  # noqa: E402
@@ -56,8 +56,9 @@ def _seed_project(home: Path, gate_url: str) -> tuple[Path, str]:
         "project": "proj-r2", "code_repo": None, "registered_at": "2026-01-01T00:00:00Z",
         "registered_by": "r2-fixture", "config_version": 1}), encoding="utf-8")
     # executor 是工位类角色: enroll 须从项目生效 PreAuthorized 信封推导 owner_policy_ref(与 tests/test_aipos_f54.py 夹具同形)
-    (project / "5_tasks" / "policies").mkdir(parents=True)
-    (project / "5_tasks" / "policies" / "pol_r2_exec_1.md").write_text(
+    pdir = policies_dir(project)  # 信封目录唯一读取口(AIPOS-F103 件④, 禁写死)
+    pdir.mkdir(parents=True)
+    (pdir / "pol_r2_exec_1.md").write_text(
         "---\nrecord_type: owner_autonomy_policy\npolicy_id: pol_r2_exec_1\nmode: PreAuthorized\nstatus: active\n"
         "approved_by_owner: true\nowner_approval_ref: dec_r2_fixture\nactive_from: '2020-01-01T00:00:00Z'\n"
         "expires_at: '2099-01-01T00:00:00Z'\nagent_or_role: executor\ntask_selector_task_mode: ''\n"
@@ -82,11 +83,13 @@ def _seed_project(home: Path, gate_url: str) -> tuple[Path, str]:
 
 
 def _start_gate(home: Path, port: int, env: dict[str, str], log_path: Path) -> subprocess.Popen:
-    """本检出起临时门(--home-root 靶场 home)。就绪 = 门在 bind 之后打印的 listening 行(同步读, 不轮询)。"""
+    """本检出起临时门(--home-root 靶场 home)。就绪 = 门在 bind 之后打印的 listening 行(同步读, 不轮询)。
+    门是单进程(serve-http 不派生子进程), 不另起会话(进程组/会话的拉起层唯一在 harness_launch, AIPOS-F110 件④);
+    收尸 = 直接 terminate/kill 该子进程。"""
     gate = subprocess.Popen(
         [sys.executable, "-m", "tools.mcp_server", "serve-http", "--host", "127.0.0.1", "--port", str(port),
          "--home-root", str(home)],
-        cwd=str(REPO_ROOT), env=env, start_new_session=True,
+        cwd=str(REPO_ROOT), env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     seen: list[str] = []
@@ -111,14 +114,13 @@ def _start_gate(home: Path, port: int, env: dict[str, str], log_path: Path) -> s
 
 
 def _stop_gate(gate: subprocess.Popen) -> None:
-    try:
-        os.killpg(gate.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    if gate.poll() is not None:
         return
+    gate.terminate()
     try:
         gate.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        os.killpg(gate.pid, signal.SIGKILL)
+        gate.kill()
         gate.wait(timeout=10)
 
 
