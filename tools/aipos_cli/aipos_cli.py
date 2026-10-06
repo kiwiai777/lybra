@@ -194,7 +194,7 @@ def _resolve_kickoff_ref(repo_root: Path, ref: str) -> str:
 
 
 def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any], repo_root: Path, *, actor: str = "",
-                             requested: str | None = None) -> dict[str, Any]:
+                             requested: str | None = None, remote_workstation: bool = False) -> dict[str, Any]:
     """AIPOS-F86 件①: my-tasks --json 的每张 claimed 卡附开工面字段(card_path / worktree_* / report_*)。
 
     推导只在产品侧一处: next_resolver.card_workstation_view(→ card_worktree_location / card_report_path, 与 claim 建树、
@@ -232,8 +232,23 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
             "claimed_at": metadata.get("claimed_at"),
             "frontmatter_warnings": list(task.get("parse_errors") or []),
         })
+    # AIPOS-F110 件②: --remote-workstation = 本实例工位跨机(land 事件 transport=remote), 开工提示附门机材料段(同一 render_kickoff);
+    # 上下文不可得(非跨机 / 材料未声明 / 含凭据)= 不出开工提示(KICKOFF_UNRESOLVED, fail-closed)
+    remote_ctx: dict[str, Any] | None = None
+    remote_error = ""
+    if remote_workstation:
+        from tools.aipos_cli.next_resolver import remote_kickoff_context
+
+        try:
+            remote_ctx = remote_kickoff_context(root, actor)
+        except (ValueError, OSError) as exc:
+            remote_error = str(exc)
     # AIPOS-F87 件③: 开工选卡由产品给出(判据唯一声明 next_resolver.NEXT_CARD_RULE), 工位 /go 只读 next_card
-    output.update(select_next_card(candidates))
+    output.update(select_next_card(candidates, remote=remote_ctx))
+    if remote_error and isinstance(output.get("next_card"), dict):
+        output["next_card_excluded"] = [{"task_id": output["next_card"]["task_id"], "code": "KICKOFF_UNRESOLVED",
+                                         "reason": f"跨机开工提示不可渲染: {remote_error}"}, *output.get("next_card_excluded", [])]
+        output["next_card"] = None
     if requested_id and not candidates:
         # AIPOS-F90 件③: 冷启动指向的卡不在本实例的 claimed 集 → 按队列真相给拒因(未认领/已结案/非本人/找不到)
         from tools.aipos_cli.next_resolver import _read_frontmatter
@@ -1530,6 +1545,8 @@ def build_parser() -> argparse.ArgumentParser:
              "(connection.json#governance_root 等, resolve_workstation_governance_root), 工位 /go 只传本参数, 不自读身份文件",
     )
     my_tasks_parser.add_argument("--task-id", default=None, help="AIPOS-F90 件③: 冷启动指向的卡(卡号或卡文件路径)——只核验这一张: 非 claimed/非本实例/已结案/产物已交即拒并给原因(工位 /go <卡号> 用)")
+    my_tasks_parser.add_argument("--remote-workstation", action="store_true", default=False,
+                                 help="AIPOS-F110 件②: 本实例工位跨机(land 事件 host ≠ 门机): next_card.kickoff 附门机材料段(project.json workstations.<实例>; 未声明 = 不出开工提示); lybra loop 拉起跨机工位时传")
     my_tasks_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     needs_owner_parser = subparsers.add_parser("needs-owner", help="Render owner review tasks")
@@ -1885,6 +1902,20 @@ def build_parser() -> argparse.ArgumentParser:
     project_setrepos_parser.add_argument("--default", dest="default_repo", help="Default repo name (must be one of --repo names; required when more than one --repo)")
     project_setrepos_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setrepos_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F110 件②③: 跨机工位开工材料声明(project.json workstations.<实例>) + 双向可达检查(同一 ssh transport 代码路径)
+    project_setws_parser = project_subparsers.add_parser("set-workstation", help="AIPOS-F110: declare a cross-machine workstation's material access (project.json workstations.<instance>: gate_ssh_alias + material_access), validated against config.schema project_json.workstations")
+    project_setws_parser.add_argument("name", help="Established project name")
+    project_setws_parser.add_argument("--instance", required=True, help="Workstation instance (as in its land event)")
+    project_setws_parser.add_argument("--gate-ssh-alias", required=True, help="ssh alias of the gate machine as seen FROM the remote workstation")
+    project_setws_parser.add_argument("--material-access", required=True, help="One line: how the remote executor reads/writes gate-side materials (no credentials)")
+    project_setws_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_setws_parser.add_argument("--json", action="store_true", help="Output JSON")
+    project_checkws_parser = project_subparsers.add_parser("check-workstation", help="AIPOS-F110: check a workstation for loop launch: land-event location, material declaration (remote), gate→workstation ssh probe (dir + harness executable) and workstation→gate ssh reachability via the declared gate_ssh_alias")
+    project_checkws_parser.add_argument("name", help="Established project name")
+    project_checkws_parser.add_argument("--instance", required=True, help="Workstation instance (as in its land event)")
+    project_checkws_parser.add_argument("--harness", required=True, help="Harness whose launch template executable must be on the workstation PATH (enums.schema harness.launch)")
+    project_checkws_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_checkws_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-335 S4: list existing projects and their inferred collaboration_profile
     project_list_parser = project_subparsers.add_parser("list", help="AIPOS-335: List existing projects and their collaboration profiles")
     project_list_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
@@ -3254,6 +3285,34 @@ def main(argv: list[str] | None = None) -> int:
                     for k, v in out["items"].items():
                         print(f"  {k} = {v}")
                 return 0
+            if args.project_command == "set-workstation":
+                # AIPOS-F110 件②: 唯一写入口 workspace_config.set_project_workstation(校验 = config.schema project_json.workstations)
+                from tools.aipos_cli.workspace_config import WorkstationDeclarationError, resolve_project_root, set_project_workstation
+
+                try:
+                    declared = set_project_workstation(resolve_project_root(home, args.name), args.instance,
+                                                       gate_ssh_alias=args.gate_ssh_alias, material_access=args.material_access)
+                except WorkstationDeclarationError as exc:
+                    print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+                    return 1
+                if getattr(args, "json", False):
+                    print(render_json({"ok": True, **declared}))
+                else:
+                    print(f"Declared workstation {declared['instance']} in {declared['project_json']}: "
+                          f"gate_ssh_alias={declared['gate_ssh_alias']} material_access={declared['material_access']}")
+                return 0
+            if args.project_command == "check-workstation":
+                from tools.aipos_cli.loop_driver import check_workstation
+                from tools.aipos_cli.workspace_config import resolve_project_root
+
+                report = check_workstation(resolve_project_root(home, args.name), args.instance, args.harness)
+                if getattr(args, "json", False):
+                    print(render_json(report))
+                else:
+                    for item in report["checks"]:
+                        print(f"{'✓' if item['ok'] else '✗'} {item['check']}: {item['detail']}")
+                    print(f"check-workstation {args.instance}: {'OK' if report['ok'] else 'FAILED'}")
+                return 0 if report["ok"] else 1
             if args.project_command == "set-repo":
                 # AIPOS-F24 大项A: 薄壳模式
                 from tools.aipos_cli.confirm_client import (
@@ -5073,7 +5132,8 @@ def main(argv: list[str] | None = None) -> int:
         actor_report = _filter_my_tasks(report, args.actor, profiles)
         if args.json:
             output = _attach_workstation_view(_json_report(actor_report, records=records), actor_report, repo_root,
-                                              actor=args.actor, requested=getattr(args, "task_id", None))
+                                              actor=args.actor, requested=getattr(args, "task_id", None),
+                                              remote_workstation=bool(getattr(args, "remote_workstation", False)))
             if getattr(args, "workstation_identity", None):
                 output["workstation"] = {**args.workstation_identity, "governance_root": str(repo_root)}
             print(render_json(output))

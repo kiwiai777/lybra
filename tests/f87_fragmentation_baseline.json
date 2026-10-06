@@ -3,27 +3,13 @@
  "source_report": "governance/research/2026-10-02-fragmentation-audit.md(条目号 = 该报告总表 #)",
  "fixture": "tests/test_aipos_f87_fragmentation_ratchet.py",
  "fingerprint": "sha1(行文本 strip 后 utf-8)前 12 位",
- "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增); AIPOS-F91 删除随老子系统退役而消失的条目(只减不增); AIPOS-F89 删除随治理文档名去契约而修复的条目(只减不增); AIPOS-F101 删除已修条目(只减不增: 不变量 b 清零 —— 28 个门工具名补进 verbs.schema; a 删 L2 自描述示例 6 条、tools.py 门指南示例 3 条、transition_engine 已删的第二推导死函数内 3 条)",
- "total": 22,
+ "baseline_commit_base": "main 2924041 + card/AIPOS-F87; AIPOS-F88 删除已修条目(只减不增); AIPOS-F91 删除随老子系统退役而消失的条目(只减不增); AIPOS-F89 删除随治理文档名去契约而修复的条目(只减不增); AIPOS-F101 删除已修条目(只减不增: 不变量 b 清零 —— 28 个门工具名补进 verbs.schema; a 删 L2 自描述示例 6 条、tools.py 门指南示例 3 条、transition_engine 已删的第二推导死函数内 3 条); AIPOS-F102 删除随身份读声明而修复的 H5 条目(派审/审计实例/修复卡执行实例/实例名项目段缺省, 只减不增)",
+ "total": 15,
  "invariants": {
   "a": {
    "rule": "产品代码不出现写死的实例名/机器名/home 路径/治理根路径/信封 id: \\.lybra\\.kiwiai-dev|kiwiai-dev|/home/kiwi|~/projects/lybra|2_projects/lybra|pol_lybra_",
-   "count": 20,
+   "count": 13,
    "entries": [
-    {
-     "file": "tools/aipos_cli/audit_derivation.py",
-     "line": 270,
-     "fp": "cd3e26d6e2cc",
-     "item": "H5",
-     "text": "Example: audit.lybra.kiwiai-dev"
-    },
-    {
-     "file": "tools/aipos_cli/audit_derivation.py",
-     "line": 878,
-     "fp": "84cbc9e9ca6a",
-     "item": "H5",
-     "text": "\"agent_instance\": source_metadata.get(\"agent_instance\", \"executor.lybra.kiwiai-dev\"),"
-    },
     {
      "file": "tools/aipos_cli/draft_writer.py",
      "line": 847,
@@ -53,34 +39,6 @@
      "text": "2_projects/lybra, chris 提交时 B②/B③ 前缀指错。"
     },
     {
-     "file": "tools/aipos_cli/naming_profile.py",
-     "line": 84,
-     "fp": "74dffbf7c9fe",
-     "item": "H5",
-     "text": "matches audit_derivation's prior behavior — no hardcoded 'kiwiai-dev')."
-    },
-    {
-     "file": "tools/aipos_cli/next_resolver.py",
-     "line": 1553,
-     "fp": "768ac5d530a2",
-     "item": "H5",
-     "text": "dispatch_actor = \"owner-dispatch.lybra.kiwiai-dev\""
-    },
-    {
-     "file": "tools/aipos_cli/next_resolver.py",
-     "line": 1554,
-     "fp": "bd53db24304b",
-     "item": "H5",
-     "text": "dispatch_agent = \"owner-dispatch.lybra.kiwiai-dev\""
-    },
-    {
-     "file": "tools/aipos_cli/next_resolver.py",
-     "line": 1556,
-     "fp": "860e4b4dc176",
-     "item": "H5",
-     "text": "audit_instance = str(fm.get(\"audit_by\") or \"\").strip() or \"audit.lybra.kiwiai-dev\""
-    },
-    {
      "file": "tools/aipos_cli/owner_truth_view.py",
      "line": 82,
      "fp": "00916dfb5b94",
@@ -107,13 +65,6 @@
      "fp": "ffada8b9825f",
      "item": "H5",
      "text": "策略 ID(如 pol_lybra_dev_7 或 pol_agency_1),或 None(无活跃策略)"
-    },
-    {
-     "file": "tools/aipos_cli/token_resolver.py",
-     "line": 376,
-     "fp": "b27b342b6e92",
-     "item": "H5",
-     "text": "\"agent_instance\": \"advisor.lybra.kiwiai-dev\","
     },
     {
      "file": "tools/cleanup_governance_residue.py",

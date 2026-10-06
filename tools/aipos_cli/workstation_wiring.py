@@ -68,15 +68,21 @@ LOOP_ROLE_CLASSES = ("executor", "auditor", "advisor")
 # role_class 解析(单源: token_entry.role_class 优先, 否则 builtin 注册表)
 # ---------------------------------------------------------------------------
 
-def resolve_role_class(role: str, token_entry: dict[str, Any] | None = None) -> str:
-    """解析角色类:自定义角色按 token 携带的 role_class 取 builtin 类(与 F22D/F44D-A 同源)。"""
+def resolve_role_class(role: str, token_entry: dict[str, Any] | None = None, project_root: str | Path | None = None) -> str:
+    """解析角色类(AIPOS-F102 件②: 唯一实现 custom_roles.resolve_role_to_class, 解析不到 = 拒 UnknownRoleClass)。
+
+    token 自带 role_class(门兑换下发的注册表条目本身)优先, 但须是内建类(否则拒); 否则按角色名经唯一实现解析
+    (内建自映射; 自定义角色查门注册表, 注册表根 = project_root)。原「注册表无此角色则回落角色名自身」退役。
+    """
+    from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class, validate_builtin_class
+
     rc = str((token_entry or {}).get("role_class") or "").strip()
     if rc:
+        ok, err = validate_builtin_class(rc)
+        if not ok:
+            raise UnknownRoleClass(f"token 条目 role={role!r} 的 role_class 非内建类: {err}")
         return rc
-    from tools.schema_loader import get_role_spec
-
-    spec = get_role_spec(role)
-    return str((spec or {}).get("role_class") or role or "").strip()
+    return str(resolve_role_to_class(role, project_root, required=True))
 
 
 def declared_role_distributions(role: str, role_class: str) -> list[dict[str, Any]]:

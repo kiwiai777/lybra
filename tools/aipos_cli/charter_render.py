@@ -191,13 +191,16 @@ def charter_render_context(
         raise ValueError(f"工位实例 {identity.get('instance')!r} 无机器段(roles.schema naming.template), 章程渲染拒")
     prefixes = get_naming_profile(gov).get("prefix_mapping") or {}
     sibling: dict[str, str] = {}
-    for role_key in ("executor", "auditor"):
+    from tools.aipos_cli.custom_roles import role_classes_in_group
+
+    # AIPOS-F102 件②: 兄弟实例 = 工位类角色(roles.schema class_groups.workstation, 注册表顺序), 原写死的工位类分组元组退役
+    for role_key in role_classes_in_group("workstation"):
         prefix = str(prefixes.get(role_key) or "").strip()
         if not prefix:
             raise ValueError(f"naming_profile prefix_mapping 缺 {role_key}(roles.schema naming.prefix), 章程渲染拒")
         sibling[f"{role_key}_instance"] = default_instance_name(prefix, project=str(parsed["project"]), host=machine)
     role = str(identity["role"])
-    role_class = resolve_role_to_class(role, gov) or role
+    role_class = resolve_role_to_class(role, gov, required=True)  # AIPOS-F102 件②: 解析不到 = 拒(原「回落角色名」退役)
     code_repo = repos["items"].get(repos["default"]) if repos["declared"] else repos["code_repo"]
     ctx: dict[str, Any] = {
         "project": project,

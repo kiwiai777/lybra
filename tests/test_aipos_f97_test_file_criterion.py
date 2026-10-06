@@ -299,6 +299,7 @@ NON_TEST_UNDER_TESTS = {
     "f23_live_acceptance.sh": "人工起真门的活体验收脚本, 不在任何自动化 runner 中",
     "manual_test_aipos366.py": "人工对活体门的验证脚本(依赖 requests + 真门), 不在任何自动化 runner 中",
     "fake_harness.py": "F95 假 harness 辅助脚本(被夹具按 launch 模板拉起; run-all 只 py_compile, 非测试)",
+    "fake_ssh.py": "AIPOS-F110 ssh 执行器替身(被 F110 夹具以 `ssh` 之名放 PATH 首位调用, 非测试)",
 }
 CODE_SUFFIXES = (".py", ".sh", ".ts", ".js", ".cjs", ".mjs")
 

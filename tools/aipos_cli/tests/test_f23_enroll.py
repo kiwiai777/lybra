@@ -349,11 +349,11 @@ class TestRoleFileMergeAndGuards(unittest.TestCase):
 
     def test_enroll_custom_role_executor_class_refused(self):
         """AIPOS-F22D: 自定义角色按注册表 class 走对应分支(hbj-coder→executor类→被拒)。"""
-        from tools.aipos_cli.enroll_client import enroll, _resolve_role_class_for_guard
-        # 直接测试角色类解析: 未知自定义角色回落自身(安全侧=工位类)
-        role_class = _resolve_role_class_for_guard("hbj-coder", Path("/tmp"))
-        # hbj-coder 不在注册表, 回落自身, 不是 planner/advisor → 工位类
-        self.assertNotIn(role_class, ("planner", "advisor"))
+        # AIPOS-F102 件②: 守卫私有包装 _resolve_role_class_for_guard 退役, 角色类唯一解析 custom_roles.resolve_role_to_class;
+        # 未登记的自定义角色 = 拒(UnknownRoleClass), 不再「回落自身按工位类」
+        from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class
+        with self.assertRaises(UnknownRoleClass):
+            resolve_role_to_class("hbj-coder", Path("/tmp"), required=True)
 
     def test_enroll_planner_in_workstation_still_works(self):
         """AIPOS-F22D: 顾问角色类在工位目录也正常工作(不限制)。"""

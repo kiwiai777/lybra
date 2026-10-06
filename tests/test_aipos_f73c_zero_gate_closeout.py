@@ -40,23 +40,28 @@ def test_f73c_item1_role_class_from_registry(metadata, expected):
     assert _card_role_class(metadata, REPO_ROOT) == expected
 
 
-def test_f73c_item1_unknown_role_is_none_not_substring_guess():
+def test_f73c_item1_unknown_role_is_rejected_not_substring_guess():
     # "exec" 子串出现在名字里但既不是注册表 role 也不是 naming.prefix → 不得猜成 executor
-    assert _card_role_class({"assigned_to": "someexecutive.lybra.host"}, REPO_ROOT) is None
-    assert _card_role_class({"assigned_to": ""}, REPO_ROOT) is None
+    # AIPOS-F102 件②: 统一失败语义 = 拒(UnknownRoleClass), 不再返回 None 被当「非执行体」放行
+    from tools.aipos_cli.custom_roles import UnknownRoleClass
+
+    with pytest.raises(UnknownRoleClass):
+        _card_role_class({"assigned_to": "someexecutive.lybra.host"}, REPO_ROOT)
+    with pytest.raises(UnknownRoleClass):
+        _card_role_class({"assigned_to": ""}, REPO_ROOT)
 
 
-def test_f73c_item1_registry_unreadable_is_warning_not_silent(monkeypatch, capsys):
-    # 注册表读不到(SchemaLoadError)→ 返回 None 且 stderr 有 warning(禁静默 fail-open)
+def test_f73c_item1_registry_unreadable_is_rejected_not_silent(monkeypatch):
+    # 注册表读不到(SchemaLoadError)→ 拒(UnknownRoleClass, 原因带原文), 禁静默 fail-open(AIPOS-F102 件②)
     import tools.schema_loader as sl
+    from tools.aipos_cli.custom_roles import UnknownRoleClass
 
     def _boom(*_a, **_k):
         raise sl.SchemaLoadError("simulated: roles.schema.json missing")
 
-    monkeypatch.setattr(sl, "load_schema", _boom)
-    result = _card_role_class({"assigned_to": "exec.lybra.kiwiai-dev"}, None)
-    assert result is None
-    assert "role registry unreadable" in capsys.readouterr().err
+    monkeypatch.setattr(sl, "get_all_role_names", _boom)
+    with pytest.raises(UnknownRoleClass, match="simulated: roles.schema.json missing"):
+        _card_role_class({"assigned_to": "exec.lybra.kiwiai-dev"}, None)
 
 
 # ---------------------------------------------------------------------------
