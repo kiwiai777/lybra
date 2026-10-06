@@ -37,9 +37,9 @@ DELETED_SYMBOLS = (
     "_run_top_level_init",
 )
 #: 车道外(本卡 lane.paths 不含)且仍含删除物字面的文件: 只许出现在此, 由后续卡清理(见 F105 RETURN 缺口)。
-LANE_BLOCKED = {
-    "0_control_plane/templates/workspace_template_protocol.md",  # AIPOS-125 模板协议文档(车道外)
-}
+#: AIPOS-F117 件④(gap #51): 原唯一条目 0_control_plane/templates/workspace_template_protocol.md(AIPOS-125 模板协议, 整篇描述
+#: 已删模板与 workspace init)已删除, 豁免清空——再出现删除物字面即红。
+LANE_BLOCKED: set[str] = set()
 #: 历史与本夹具自身不计。
 EXEMPT_PREFIXES = ("task_cards/",)
 SELF = "tests/test_aipos_f105_single_project_entry.py"
