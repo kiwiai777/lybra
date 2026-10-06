@@ -137,7 +137,11 @@ describe("F37-C 凭据副本 — 先红后绿(真跑两版模块)", () => {
 
   it("单源纪律: 模块只从 .lybra/connection.json 读, 清理函数只此一份", () => {
     const src = readFileSync(join(PROJECT_ROOT, MOD_REL), "utf-8");
-    assert.ok(src.includes('".lybra" / "connection.json"'), "凭据路径=workspace/.lybra/connection.json(唯一读取源)");
+    // AIPOS-F106 件④: 凭据路径不再自拼, 委托 service_mode.connection_path(唯一定位 = workspace/.lybra/connection.json)
+    assert.ok(src.includes("from tools.aipos_cli.service_mode import connection_path"), "凭据路径经 service_mode.connection_path 唯一定位");
+    const sm = readFileSync(join(PROJECT_ROOT, "tools/aipos_cli/service_mode.py"), "utf-8");
+    assert.ok(sm.includes('LOCAL_DIR_REL = Path(".lybra")') && sm.includes('CONNECTION_REL = LOCAL_DIR_REL / "connection.json"'),
+      "唯一定位 = workspace/.lybra/connection.json(唯一读取源)");
     assert.strictEqual((src.match(/def _cleanup_legacy_backups/g) || []).length, 1, "清理函数只有一份实现");
     assert.strictEqual((src.match(/def _backup_config/g) || []).length, 1, "备份函数只有一份实现");
     assert.ok(!/\.bak-token/.test(src), "不新增 .bak- 前缀形态");

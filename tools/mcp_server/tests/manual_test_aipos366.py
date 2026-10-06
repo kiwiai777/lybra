@@ -42,7 +42,9 @@ def main():
     
     # Load connection
     conn = load_connection()
-    gate_url = conn["mcp"]["rpc_url"].replace("/mcp", "")
+    from tools.aipos_cli.confirm_client import gate_base_url  # AIPOS-F106 件①: 门基址换算唯一实现(原全串 replace 剥 /mcp)
+
+    gate_url = gate_base_url(conn["mcp"]["rpc_url"])
     
     # Find executor token
     exec_token = None

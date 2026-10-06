@@ -46,12 +46,12 @@ SEMANTIC_SUBSETS: dict[tuple[str, str, tuple[str, ...]], str] = {
     ("tools/aipos_cli/finalize.py", "queue_state", ("claimed", "completed", "pending")): "取卡摘要的查找范围(语义子集)",
     ("tools/aipos_cli/next_resolver.py", "queue_state", ("blocked", "claimed", "pending")): "活跃卡扫描范围(语义子集)",
     ("tools/aipos_cli/board_login.py", "role_category", ("auditor", "executor", "owner", "owner-dispatch")): "看板登录角色偏好序",
-    ("tools/aipos_cli/aipos_cli.py", "role_category", ("advisor", "owner", "planner")): "驱动方 token 角色偏好序(同块 4 处 = M1 碎片, 归族 B 卡)",
     ("tools/aipos_cli/onboarding.py", "role_category", ("advisor", "auditor", "executor")): "接入向导生成的三工位实例",
     ("tools/aipos_cli/workstation_wiring.py", "role_category", ("advisor", "auditor", "executor")): "有 harness 循环的角色类(LOOP_ROLE_CLASSES)",
 }
-# 同一 (file, enum, values) 允许出现的次数(缺省 1)
-SEMANTIC_SUBSET_COUNTS = {("tools/aipos_cli/aipos_cli.py", "role_category", ("advisor", "owner", "planner")): 4}
+# 同一 (file, enum, values) 允许出现的次数(缺省 1)。AIPOS-F106 件①: aipos_cli 4 处角色偏好序元组已收为
+# config.schema identity_resolution.keys.token.gate_client_role_preference 一处声明, 该登记条目与计数删除(只减不增)。
+SEMANTIC_SUBSET_COUNTS: dict[tuple[str, str, tuple[str, ...]], int] = {}
 
 EXCLUDED_DIR_PARTS = {"tests", "test", "fixtures", "__tests__", "playwright"}
 

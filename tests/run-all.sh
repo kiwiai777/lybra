@@ -1098,6 +1098,8 @@ else
   overall=1
 fi
 
+# AIPOS-F106: 门地址/端口/连接声明单源(族 B-a: M1/M3/M15/M2)——剥 /mcp 零·角色偏好序单源·端口字面零·configuration_sources↔identity_resolution 无矛盾·env 声明=使用·LYBRA_WORKSPACE_ROOT 单名·.lybra/role 唯一读取
+run_pytest "tests/test_aipos_f106_gate_address_single_source.py" "$REPO_ROOT/tests/test_aipos_f106_gate_address_single_source.py"
 # AIPOS-F101: 推导核与动词声明单源(族 C-a)——gate_guidance=derive_next_step·死函数 git grep 零·门工具 scope/可见性全声明且执法跟随声明·退出码只在声明·示例无 lybra 身份; 含本卡改 patch 点的 f30 夹具
 run_pytest "tests/test_aipos_f101_derivation_verb_single_source.py" "$REPO_ROOT/tests/test_aipos_f101_derivation_verb_single_source.py" "$REPO_ROOT/tests/test_aipos_f30_envelope_error_info_init.py"
 # AIPOS-F101: test_scope_reachability 中按真实凭据走门执法的节点(scope 枚举改读 verbs.schema 声明; 同文件另 3 节点 main 上即红, 见 F101 RETURN 缺口 2, 不登记)

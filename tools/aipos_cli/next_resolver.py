@@ -831,24 +831,18 @@ def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connecti
 
     顺序: ⓪ loop 显式 --actor(driver_scope, AIPOS-F90 件①) → ① 治理根 .lybra/role 的 instance(工位声明)
     → ② connection.json 驱动方 token 绑定的 agent_instance → ③ 调用方显式 fallback(仅靶场/显式传入)
-    → 解析不到返回 ""(调用方 fail-closed: 不可推导 + 点名缺项)。读失败精确捕获 + warning。
+    → 解析不到返回 ""(调用方 fail-closed: 不可推导 + 点名缺项)。
+    AIPOS-F106 件④: ① 经 ConnectionResolver.resolve_identity(.lybra/role 唯一读取实现之一); role 文件不可读时该实现按「未声明」落下一层。
     """
-    import json
-
     scoped_actor = _scoped_driver().get("actor")
     if scoped_actor:
         return scoped_actor
-    role_file = workspace_root / ".lybra" / "role"
-    if role_file.is_file():
-        try:
-            role_data = json.loads(role_file.read_text(encoding="utf-8"))
-            instance = str(role_data.get("instance") or "").strip()
-            if instance:
-                return instance
-        except (OSError, ValueError) as exc:
-            import sys
+    # AIPOS-F106 件④: 治理根 .lybra/role 只经 ConnectionResolver.resolve_identity 读(唯一实现; env 不参与 = 只认工位声明层)
+    from tools.loop_context import ConnectionResolver
 
-            print(f"Warning: {role_file} unreadable, driver actor unresolved from role file: {exc}", file=sys.stderr)
+    declared = ConnectionResolver.resolve_identity(workspace_root=workspace_root, env={})["agent_instance"]
+    if declared["source"] == ".lybra/role" and str(declared["value"] or "").strip():
+        return str(declared["value"]).strip()
     instance = _driver_token_instance(workspace_root, connection_json)
     if instance:
         return instance
@@ -864,17 +858,12 @@ def _driver_role_name(workspace_root: Path, connection_json: str | None = None) 
     import json
 
     from tools.aipos_cli.two_phase_shell_factory import driver_role_class
+    from tools.loop_context import ConnectionResolver
 
-    role_file = workspace_root / ".lybra" / "role"
-    if role_file.is_file():
-        try:
-            role = str(json.loads(role_file.read_text(encoding="utf-8")).get("role") or "").strip()
-            if role:
-                return role
-        except (OSError, ValueError) as exc:
-            import sys
-
-            print(f"Warning: {role_file} unreadable, driver role unresolved from role file: {exc}", file=sys.stderr)
+    # AIPOS-F106 件④: 治理根 .lybra/role 只经 ConnectionResolver.resolve_role 读(唯一实现; env={} = 只认工位声明层)
+    role = str(ConnectionResolver.resolve_role(workspace_root=workspace_root, env={}) or "").strip()
+    if role:
+        return role
     conn = connection_json or _find_connection_json(workspace_root)
     if not conn or not Path(conn).is_file():
         return ""
@@ -1190,9 +1179,12 @@ def _resolve_active_policy(workspace_root: Path, task_id: str, role: str = "exec
 
 def _find_connection_json(workspace_root: Path) -> str | None:
     """查找 connection.json 路径。"""
-    # 优先治理仓
-    gov_conn = workspace_root / ".lybra" / "connection.json"
-    if gov_conn.is_file():
+    # 优先治理仓(AIPOS-F106 件④: .lybra 经 ConnectionResolver.discover_lybra_dir 既有原语定位)
+    from tools.loop_context import ConnectionResolver
+
+    lybra_dir = ConnectionResolver.discover_lybra_dir(workspace_root)
+    gov_conn = lybra_dir / "connection.json" if lybra_dir is not None else None
+    if gov_conn is not None and gov_conn.is_file():
         return str(gov_conn)
     # 环境变量
     env_conn = os.environ.get("LYBRA_CONNECTION_JSON")

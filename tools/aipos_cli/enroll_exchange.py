@@ -45,7 +45,9 @@ def exchange_enrollment_code(gate_url: str, code: str) -> dict[str, Any]:
     Raises:
         RuntimeError: If the exchange fails
     """
-    url = f"{gate_url.rstrip('/')}/mcp"
+    from tools.aipos_cli.confirm_client import gate_rpc_url
+
+    url = gate_rpc_url(gate_url)  # AIPOS-F106 件①: 门基址→MCP 端点唯一换算
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
