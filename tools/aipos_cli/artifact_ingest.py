@@ -584,10 +584,32 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         return out
     if tip != commit_sha:
         out["category"] = "INGEST_TIP_MISMATCH"
-        out["reasons"] = [f"被审分支 {branch} tip={tip[:12]} ≠ 报告自述 commit_sha={commit_sha[:12]}: 审的不是当前产物"]
+        out["reasons"] = [f"被审分支 {branch} tip={tip[:12]} ≠ 报告自述 commit_sha={commit_sha[:12]}: 审的不是当前产物"
+                          + _stale_round_outlet(workspace_root, task_id, card_fm, reviewed)]
         return out
     out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
     return out
+
+
+def _stale_round_outlet(workspace_root: Path, audit_task_id: str, card_fm: dict[str, Any], reviewed: str) -> str:
+    """AIPOS-F114 件②: 裁决入口遇旧 tip 的拒因出口(推导核同一判据: audit_derivation.superseding_round / next_resolver.return_staleness)。
+    本轮已被取代 → 点名取代它的一轮; 所审交回已过期 → 驱动方重交回命令(产品随后派下一轮, 本轮作废); 其余 → 审计体按当前 tip 重审。"""
+    from tools.aipos_cli.audit_derivation import superseding_round
+    from tools.aipos_cli.next_resolver import (
+        _find_connection_json, _find_task_in_queue, _read_frontmatter, ingest_command, return_staleness,
+    )
+
+    successor = superseding_round(audit_task_id, workspace_root, card_fm)
+    if successor is not None:
+        return (f"。出口: 本轮 {audit_task_id} 已被 {successor['audit_task_id']} 取代(派审记录 {successor['dispatch_id']} supersedes), "
+                f"本报告不入门; 审计在 {successor['audit_task_id']} 对当前 tip 进行")
+    reviewed_path, _q = _find_task_in_queue(workspace_root, reviewed)
+    stale = return_staleness(workspace_root, reviewed, _read_frontmatter(reviewed_path)) if reviewed_path else None
+    if stale is not None and str(stale.get("audit_task_id") or "") == audit_task_id:
+        command = ingest_command(reviewed, "return", workspace_root, _find_connection_json(workspace_root))
+        return (f"。交回已过期({stale['reason']})。出口: 驱动方重交回被审卡 `{command}`"
+                f"(执行体 Return 须已是卡分支当前 tip), 产品随后按卡号演进派下一轮审计, 本轮 {audit_task_id} 作废")
+    return "。出口: 审计体对被审分支当前 tip 重审并更新报告 commit_sha"
 
 
 # ---------------------------------------------------------------------------
