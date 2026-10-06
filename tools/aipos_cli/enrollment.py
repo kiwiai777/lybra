@@ -386,13 +386,68 @@ def workstation_transport_declaration() -> dict[str, Any]:
 
 
 def _latest_land(trail: Path, instance: str) -> re.Match[str] | None:
-    """该日志中实例最新 land 事件(_LAND_LINE_RE 唯一解析; workstation_location 与诊断 enrollment_whereabouts 共用)。"""
+    """该日志中实例最新 land 事件(_LAND_LINE_RE 唯一解析; workstation_location 与诊断 enrollment_whereabouts 共用)。
+    AIPOS-F121 件②: 只看未作废事件(_instance_events 唯一判定), 已作废的 land 不再定位工位。"""
     latest: re.Match[str] | None = None
-    for line in trail.read_text(encoding="utf-8").splitlines():
-        match = _LAND_LINE_RE.match(line.strip())
-        if match and match.group("instance") == instance:
+    for _lineno, line in _instance_events(trail, instance)["live"]:
+        match = _LAND_LINE_RE.match(line)
+        if match:
             latest = match
     return latest
+
+
+# AIPOS-F121 件②: 作废事件(void)——日志只追加不删行; 作废 = 追加一行指向被作废的行号区间与 code_id, 读取口据此忽略。
+VOID_ACTION = "void"
+_VOID_LINE_RE = re.compile(
+    r"^- (?P<ts>\S+)\s+void\s+code_id=\S+\s+.*?\binstance=(?P<instance>\S+)\s+.*?\bvoids_lines=(?P<ranges>\S+)\s"
+)
+
+
+def _line_ranges(numbers: list[int]) -> str:
+    """行号集 → 区间串 `18-22,25,27-30`(升序合并连续段; 作废行与诊断共用唯一渲染)。"""
+    spans: list[list[int]] = []
+    for n in sorted(set(numbers)):
+        if spans and n == spans[-1][1] + 1:
+            spans[-1][1] = n
+        else:
+            spans.append([n, n])
+    return ",".join(f"{lo}-{hi}" if hi != lo else f"{lo}" for lo, hi in spans)
+
+
+def _parse_line_ranges(text: str, *, where: str) -> set[int]:
+    """区间串 → 行号集(_line_ranges 的逆)。形坏 = ValueError(fail-closed: 坏作废行不得被当作「未作废」静默放过)。"""
+    out: set[int] = set()
+    for part in text.split(","):
+        bounds = part.split("-")
+        if not part or len(bounds) > 2 or not all(b.isdigit() for b in bounds):
+            raise ValueError(f"{where}: voids_lines 区间形坏 {part!r}(应为 18-22,25 形)")
+        lo, hi = int(bounds[0]), int(bounds[-1])
+        if lo < 1 or hi < lo:
+            raise ValueError(f"{where}: voids_lines 区间非法 {part!r}")
+        out.update(range(lo, hi + 1))
+    return out
+
+
+def _instance_events(trail: Path, instance: str) -> dict[str, list[tuple[int, str]]]:
+    """该日志中实例的接入事件按作废状态分拣(读取口唯一判定; _latest_land / enrollment_whereabouts / void_instance_events 共用)。
+
+    返回 {live: 未作废事件, voided: 已作废事件, voids: 指向该实例的作废行}, 元素 = (物理行号 1 起, 行文本 strip 后)。
+    作废行的 voids_lines 区间内、且属该实例的事件 = 已作废; 区间外(含作废之后的重接入)仍为 live。"""
+    lines = [line.strip() for line in trail.read_text(encoding="utf-8").splitlines()]
+    voided_numbers: set[int] = set()
+    voids: list[tuple[int, str]] = []
+    for lineno, line in enumerate(lines, start=1):
+        match = _VOID_LINE_RE.match(line)
+        if match and match.group("instance") == instance:
+            voided_numbers |= _parse_line_ranges(match.group("ranges"), where=f"{trail}:{lineno}")
+            voids.append((lineno, line))
+    out: dict[str, list[tuple[int, str]]] = {"live": [], "voided": [], "voids": voids}
+    for lineno, line in enumerate(lines, start=1):
+        match = _EVENT_LINE_RE.match(line)
+        if not match or match.group("instance") != instance or match.group("action") == VOID_ACTION:
+            continue
+        out["voided" if lineno in voided_numbers else "live"].append((lineno, line))
+    return out
 
 
 def workstation_location(workspace_root: str | Path, instance: str) -> dict[str, Any]:
@@ -462,19 +517,22 @@ def enrollment_whereabouts(workspace_root: str | Path, instance: str) -> dict[st
         trail = enrollment_trail_path(root)
         if not trail.is_file():
             continue
+        # AIPOS-F121 件②: 事件按作废状态分拣(_instance_events 唯一判定); actions/code_ids 只计未作废事件, 作废另列
+        events = _instance_events(trail, instance)
         actions: dict[str, int] = {}
         code_ids: list[str] = []
-        for line in trail.read_text(encoding="utf-8").splitlines():
-            match = _EVENT_LINE_RE.match(line.strip())
-            if match and match.group("instance") == instance:
-                actions[match.group("action")] = actions.get(match.group("action"), 0) + 1
-                if match.group("code_id") not in code_ids:
-                    code_ids.append(match.group("code_id"))
-        if not actions:
+        for _lineno, line in events["live"]:
+            match = _EVENT_LINE_RE.match(line)
+            actions[match.group("action")] = actions.get(match.group("action"), 0) + 1
+            if match.group("code_id") not in code_ids:
+                code_ids.append(match.group("code_id"))
+        if not actions and not events["voided"]:
             continue
         land = _latest_land(trail, instance)
         dir_match = _LAND_DIR_RE.search(land.group("reason")) if land else None
         found.append({"log": str(trail), "project_root": str(root), "actions": actions, "code_ids": code_ids,
+                      "live_lines": _line_ranges([n for n, _ in events["live"]]),
+                      "voided_events": len(events["voided"]), "void_lines": [n for n, _ in events["voids"]],
                       "latest_land_at": land.group("ts") if land else None,
                       "latest_land_workstation": dir_match.group("dir").strip() if dir_match else None})
     expected = str(enrollment_trail_path(owner["root"])) if owner["root"] else None
@@ -513,11 +571,26 @@ def _append_enrollment_trail(
     每行带 project=<所属项目>。"""
     owner = enrollment_owner_root(workspace_root, governance_root=governance_root, projects=projects, instance=instance)
     trail = enrollment_trail_path(owner["root"] or _workspace_root_path(workspace_root))
-    trail.parent.mkdir(parents=True, exist_ok=True)
-    ts = iso_z()
+    line = _trail_line(action=action, code_id=code_id, role=role, instance=instance,
+                       project=owner["project"] if owner["root"] else None, by=by, reason=reason)
+    _write_trail_line(trail, line)
+    return trail
+
+
+def _trail_line(*, action: str, code_id: str, role: str, instance: str | None, project: str | None, by: str,
+                reason: str, extra: str = "", ts: str | None = None) -> str:
+    """接入日志一行的唯一渲染(create/use/land/revoke/void 共用)。extra = 动作专属结构字段(void 的 voids_lines/voids_code_ids),
+    置于 project 与 by 之间(reason 是行尾自由文本, 结构字段不得在其后)。"""
     inst_str = f"instance={instance}" if instance else "instance=(any)"
-    project_str = f"project={owner['project']}" if owner["root"] else "project=(未归属)"
-    line = f"- {ts}  {action}  code_id={code_id}  role={role}  {inst_str}  {project_str}  by={by}  reason={reason or '(none)'}\n"
+    project_str = f"project={project}" if project else "project=(未归属)"
+    extra_str = f"  {extra}" if extra else ""
+    return (f"- {ts or iso_z()}  {action}  code_id={code_id}  role={role}  {inst_str}  {project_str}{extra_str}  "
+            f"by={by}  reason={reason or '(none)'}\n")
+
+
+def _write_trail_line(trail: Path, line: str) -> None:
+    """接入日志唯一写口: 只追加(open "a"); 首建带声明 frontmatter。"""
+    trail.parent.mkdir(parents=True, exist_ok=True)
     with trail.open("a", encoding="utf-8") as fh:
         if trail.stat().st_size == 0:
             # AIPOS-F94 N6: 治理文档首建带声明 frontmatter(governance_add.governance_doc_frontmatter 唯一渲染), 过治理仓提交门 B②
@@ -525,7 +598,61 @@ def _append_enrollment_trail(
 
             fh.write(governance_doc_frontmatter() + "\n# Enrollment Codes Log (append-only)\n\n")
         fh.write(line)
-    return trail
+
+
+def void_instance_events(
+    workspace_root: str | Path,
+    instance: str,
+    *,
+    by: str,
+    reason: str,
+    dry_run: bool,
+) -> dict[str, Any]:
+    """AIPOS-F121 件②(`lybra roles enroll-void`): 作废某实例的接入事件——向事件所在 enrollment_log 追加 void 行, 不删不改任何行。
+
+    定位 = enrollment_whereabouts 同一扫描(home 下各已建项目 + 签发门工作区; 事件写在哪个项目的 log 就在哪个 log 作废,
+    存量写在签发方 log 的事件亦然)。每个含未作废事件的 log 追加一行:
+      `- <ts>  void  code_id=-  role=<被作废事件角色>  instance=<实例>  project=<该 log 项目>  voids_lines=<行号区间>
+       voids_code_ids=<code_id,...>  by=<操作者>  reason=<理由>`
+    读取口(_instance_events: workstation_location / enroll-where)忽略 voids_lines 区间内该实例的事件; 作废之后的重接入不受影响。
+    拒(ValueError, 不写): 实例/操作者/理由缺或形坏; 未知实例(各 log 均无该实例事件); 该实例事件已全部作废。
+    dry_run=True: 只返回将追加的行, 零写入。"""
+    from tools.aipos_cli.workspace_config import read_project_json
+
+    instance = str(instance or "").strip()
+    by = str(by or "").strip()
+    reason = str(reason or "").strip()
+    if not instance or any(ch.isspace() for ch in instance):
+        raise ValueError(f"--instance 缺或含空白: {instance!r}")
+    if not by or any(ch.isspace() for ch in by):
+        raise ValueError(f"--actor 缺或含空白(作废行须带操作者): {by!r}")
+    if not reason or "\n" in reason or "\r" in reason:
+        raise ValueError("--reason 缺或含换行(作废行须带单行理由)")
+    report = enrollment_whereabouts(workspace_root, instance)
+    if not report["found"]:
+        raise ValueError(f"未知实例 {instance}: home {report['home']} 下各项目与签发门工作区的 enrollment_log 均无该实例事件, 拒绝作废")
+    planned: list[dict[str, Any]] = []
+    for item in report["found"]:
+        trail = Path(item["log"])
+        live = _instance_events(trail, instance)["live"]
+        if not live:
+            continue
+        matches = [_EVENT_LINE_RE.match(line) for _n, line in live]
+        code_ids = list(dict.fromkeys(m.group("code_id") for m in matches))
+        roles = sorted({line.split("role=", 1)[1].split()[0] for _n, line in live if "role=" in line})
+        ranges = _line_ranges([n for n, _ in live])
+        project = str(read_project_json(Path(item["project_root"])).get("project") or Path(item["project_root"]).name).strip()
+        line = _trail_line(action=VOID_ACTION, code_id="-", role=",".join(roles) or "-", instance=instance, project=project,
+                           by=by, reason=reason, extra=f"voids_lines={ranges}  voids_code_ids={','.join(code_ids)}")
+        planned.append({"log": str(trail), "line": line.rstrip("\n"), "voids_lines": ranges, "event_count": len(live),
+                        "code_id_count": len(code_ids), "code_ids": code_ids})
+    if not planned:
+        raise ValueError(f"实例 {instance} 的接入事件已全部作废(无未作废事件), 拒绝重复作废")
+    if not dry_run:
+        for item in planned:
+            _write_trail_line(Path(item["log"]), item["line"] + "\n")
+    return {"ok": True, "operation": "roles_enroll_void", "dry_run": dry_run, "written": not dry_run, "instance": instance,
+            "entries": planned}
 
 
 def create_enrollment_code(

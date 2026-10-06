@@ -50,9 +50,7 @@ exit "$overall"
 
 # ---- 声明行(只减不增; 一行一条, 按目标排序, 便于并行卡各删不同行时 git 行级合并) ----
 # lybra-runall: discover
-# lybra-runall: exclude test_f003_cli_return_block_atomicity.py 硬编码真实治理根 /home/kiwi/ai-project-os/2_projects/lybra, 夹具环境禁触
 # lybra-runall: exclude tests/playwright/board.visual.spec.js 需 Playwright 浏览器(npm run test:visual), 非常驻夹具环境
-# lybra-runall: exclude tools/test_aipos_r2_enroll.py 写死真实治理根+生产门 7118 发码/换证, 每跑一次往真实 enrollment_log 写 test.enroll.aipos-r2 行(gap #34/#70 污染源); 车道外(tools/)待改临时靶场或退役(AIPOS-F116 由 known-failure 转此)
 # ---- 已知存量失败(gap #59; AIPOS-F109 盘点: main bf7623c 隔离 HOME 下同败; 只许删——转绿即红, 删行) ----
 # lybra-runall: known-failure task_cards/AIPOS-276/test_aipos276.py::test_s2_stale_map_publish_warn
 # lybra-runall: known-failure task_cards/AIPOS-276/test_fix1.py::test_f276_1_warnings_in_publish_record

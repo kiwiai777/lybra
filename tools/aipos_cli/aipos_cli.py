@@ -1583,6 +1583,13 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_where_parser = roles_subparsers.add_parser("enroll-where", help="AIPOS-F107: 只读诊断某实例接入事件(create/use/land)实际所在 enrollment_log 与应在(所属项目)log, 供重接入判断")
     roles_enroll_where_parser.add_argument("--instance", required=True, help="实例名(<prefix>.<project>.<host>)")
     roles_enroll_where_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F121 件②: 接入日志作废(只追加 void 事件行, 不删行; 读取口忽略被作废事件)
+    roles_enroll_void_parser = roles_subparsers.add_parser("enroll-void", help="AIPOS-F121: 作废某实例的接入事件——向事件所在 enrollment_log 追加 void 行(指向被作废行号区间/code_id, 带操作者与理由), 不删行; workstation_location/enroll-where 忽略被作废事件。先 --dry-run 看将追加的行")
+    roles_enroll_void_parser.add_argument("--instance", required=True, help="要作废其接入事件的实例名(未知实例拒)")
+    roles_enroll_void_parser.add_argument("--reason", required=True, help="作废理由(单行, 写入 void 行)")
+    roles_enroll_void_parser.add_argument("--actor", required=True, help="操作者(写入 void 行 by=; 不含空白)")
+    roles_enroll_void_parser.add_argument("--dry-run", action="store_true", help="只打印将追加的 void 行, 零写入")
+    roles_enroll_void_parser.add_argument("--json", action="store_true", help="Output JSON")
     
     # AIPOS-F66B 件②: 写权限边界可读面 + 读取口(护栏读声明; 单源 roles.schema write_boundary)
     roles_wb_parser = roles_subparsers.add_parser("write-boundary", help="AIPOS-F66B: 写权限边界可读面(角色类 × 面 × read/append/mutate, 读 roles.schema write_boundary)与单次访问判定(--check)")
@@ -2838,14 +2845,31 @@ def main(argv: list[str] | None = None) -> int:
                     if not report["found"]:
                         print("  实际: home 下各项目与签发门工作区的 enrollment_log 均无该实例事件")
                     for item in report["found"]:
-                        acts = ", ".join(f"{k}×{v}" for k, v in sorted(item["actions"].items()))
-                        print(f"  实际所在 log: {item['log']}  事件 {acts}  最新 land {item['latest_land_at'] or '-'}"
+                        acts = ", ".join(f"{k}×{v}" for k, v in sorted(item["actions"].items())) or "(无未作废事件)"
+                        voided = f"  已作废 {item['voided_events']} 个(void 行 {item['void_lines']})" if item["voided_events"] else ""
+                        print(f"  实际所在 log: {item['log']}  事件 {acts}{voided}  最新 land {item['latest_land_at'] or '-'}"
                               f"  workstation={item['latest_land_workstation'] or '-'}")
                     loc = report["workstation_location"]
                     if loc is not None:
                         print(f"  loop 工位定位(workstation_location@所属项目): found={loc['found']} dir={loc['dir']} {loc['reason']}".rstrip())
                     if report["verdict"] == "misplaced":
                         print("  处置: 存量事件在签发方 log, loop 定位不到; 在所属项目重签码重接入(新事件落所属项目 log), 不手改日志")
+                return 0
+            elif args.roles_command == "enroll-void":
+                # AIPOS-F121 件②: 薄壳, 逻辑在 enrollment.void_instance_events(定位与 enroll-where 同一扫描; 写口 _write_trail_line 只追加)
+                from tools.aipos_cli.enrollment import void_instance_events
+
+                result = void_instance_events(workspace_root, args.instance, by=args.actor, reason=args.reason,
+                                              dry_run=bool(args.dry_run))
+                if getattr(args, "json", False):
+                    print(render_json(result))
+                else:
+                    head = "dry-run(零写入), 将追加" if result["dry_run"] else "已追加"
+                    print(f"实例 {result['instance']}: {head} {len(result['entries'])} 行 void 事件")
+                    for item in result["entries"]:
+                        print(f"  log: {item['log']}")
+                        print(f"    作废 {item['event_count']} 个事件(code_id {item['code_id_count']} 个), 行号区间 {item['voids_lines']}")
+                        print(f"    {'将追加' if result['dry_run'] else '已追加'}: {item['line']}")
                 return 0
             elif args.roles_command == "enroll":
                 # AIPOS-R2/F23: client-side enrollment (exchange code + write .lybra/ config)
