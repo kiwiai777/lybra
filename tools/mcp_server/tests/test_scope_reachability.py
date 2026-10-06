@@ -45,47 +45,33 @@ EXEMPT_DRY_RUN_TOOL = {
 }
 
 
+def _declared_verb_scopes() -> dict[str, set[str]]:
+    """AIPOS-F101 件②: 门工具 → 其声明的全部 scope(verbs.schema required_scope / also_requires_scope / conditional_scope)。
+
+    原从 tools.py 的 *_SCOPE 常量枚举(第二来源, 已删); 现读唯一声明, 与门执法同一读取口(tools._verb_scope)。"""
+    out: dict[str, set[str]] = {}
+    for name in gate_tools.TOOL_HANDLERS:
+        scopes = {gate_tools._verb_scope(name, key) for key in gate_tools._VERB_SCOPE_KEYS}
+        out[name] = {s for s in scopes if s}
+    return out
+
+
 def _tools_py_scopes() -> set[str]:
-    """Every scope tools.py references — enumerated from its *_SCOPE constants (single source)."""
-    return {
-        value
-        for name, value in vars(gate_tools).items()
-        if name.endswith("_SCOPE") and isinstance(value, str) and value
-    }
+    """Every scope the gate tools require — enumerated from the verbs.schema declaration (single source)."""
+    return set().union(*_declared_verb_scopes().values())
 
 
 def _scope_to_tool_prefix_map() -> dict[str, str]:
-    """Map each scope to its corresponding tool name prefix.
-    
-    Extracted from the gate_tools.list_tools() logic: each scope gates a family of tools
-    (typically dry_run + confirm). This returns the prefix used in tool name filtering.
-    
-    Example: QUEUE_AMEND_SCOPE="queue_amend" -> prefix="lybra_queue_amend"
+    """Map each operation scope to the gate tools that declare it as required_scope (from the declaration).
+
+    owner_confirm is a second gate on confirm operations (also_requires_scope / conditional_scope), not a tool family.
     """
-    # Build from the pattern in list_tools(): if _X_scope_allowed() gates tools starting with "lybra_X"
-    mapping = {}
-    for name, value in vars(gate_tools).items():
-        if name.endswith("_SCOPE") and isinstance(value, str) and value:
-            # Convert QUEUE_AMEND_SCOPE -> queue_amend -> lybra_queue_amend
-            scope_name = value
-            # Most scopes follow the pattern: scope "queue_amend" -> prefix "lybra_queue_amend"
-            # Special cases handled based on actual tool naming:
-            if scope_name == "intake_submit":
-                prefix = "lybra_intake_submit"
-            elif scope_name == "owner_decision_record":
-                prefix = "lybra_owner_decision_record"
-            elif scope_name == "draft_publish":
-                prefix = "lybra_draft_publish"
-            elif scope_name == "draft_submit":
-                prefix = "lybra_draft_submit"
-            elif scope_name == "owner_confirm":
-                # owner_confirm is special: it's a second gate on other operations, not its own tool family
-                continue
-            else:
-                # Default pattern: scope -> lybra_{scope}
-                prefix = f"lybra_{scope_name}"
-            mapping[scope_name] = prefix
-    return mapping
+    mapping: dict[str, list[str]] = {}
+    for name in gate_tools.TOOL_HANDLERS:
+        scope = gate_tools._verb_scope(name)
+        if scope:
+            mapping.setdefault(scope, []).append(name)
+    return {scope: ",".join(sorted(names)) for scope, names in mapping.items()}
 
 
 def _capability_env_token(scope: str) -> str:
@@ -243,7 +229,7 @@ class ScopeReachabilityTests(unittest.TestCase):
         # Build the union of all scopes granted by ROLE_SPECS
         role_scopes_union = {s for spec in ROLE_SPECS for s in spec["scopes"]}
         
-        # Get all scopes referenced in tools.py (via *_SCOPE constants)
+        # Get all scopes the gate tools declare (verbs.schema, AIPOS-F101 single source)
         all_scopes = _tools_py_scopes()
         
         # Build scope -> tool prefix mapping to understand which tools need which scope
@@ -263,8 +249,8 @@ class ScopeReachabilityTests(unittest.TestCase):
             is_exempt = scope in CAPABILITY_TOKEN_EXEMPT
             
             if not is_granted and not is_exempt:
-                tool_prefix = scope_to_prefix.get(scope, f"lybra_{scope}")
-                unreachable.append(f"{scope} (tools: {tool_prefix}_*)")
+                tools_for_scope = scope_to_prefix.get(scope, f"lybra_{scope}_*")
+                unreachable.append(f"{scope} (tools: {tools_for_scope})")
         
         self.assertEqual(
             unreachable, [],

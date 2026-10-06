@@ -7364,9 +7364,22 @@ def amend_task(
                     safety_notice="AIPOS-F75: restricted amend must not touch fields outside restricted_fields."
                 )
         
-        # Read current task content
-        task_text = task_path_obj.read_text(encoding="utf-8")
-        metadata, body, _warnings = parse_markdown_frontmatter(task_text)
+        # Read current task content(AIPOS-F100 件②: 读-改-写前「必须读出」; 读不出 = 拒——原忽略解析告警, 卡被拒成 {}
+        # 时会把卡重写成只剩被 amend 的字段)
+        from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+
+        try:
+            metadata, body = require_frontmatter(task_path_obj)
+        except FrontmatterReadError as exc:
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="VALIDATION_ERROR",
+                message=f"FRONTMATTER_UNREADABLE: task card frontmatter unreadable, amend refused (no rewrite): {exc}",
+                actor=_actor_payload(actor_text),
+                data={"task_id": task.get("task_id"), "recommended_action": "Repair the card frontmatter first (lybra state repair --task-id)."},
+                safety_notice="AIPOS-F100: read-modify-write requires a fully readable card; never rewrite from a partial read.",
+            )
         
         # Preserve original for amendment record
         original_metadata = dict(metadata)
@@ -7571,37 +7584,26 @@ def read_settlement_status(
     except (ValueError, FileNotFoundError, OSError):
         result["missing"].append("queue_position")
 
-    # ② closure 记录
-    try:
-        closure_dir = resolved_root / "5_tasks" / "records" / "closures" / task_id
-        if closure_dir.is_dir():
-            for closure_file in sorted(closure_dir.glob("close_*.md")):
-                try:
-                    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-                    fm, _, _ = parse_markdown_frontmatter(closure_file.read_text(encoding="utf-8"))
-                    fm["_path"] = str(closure_file.relative_to(resolved_root))
-                    result["closure_records"].append(fm)
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    # ②③ closure / finalization 记录(AIPOS-F100 件②: 「必须读出」; 读不出的不计入记录——原 `except Exception: pass` 与
+    # 忽略解析告警会把读不出的 closure 当成一条 {} 记录、算作已结算——而是列进 unreadable「读不出: <路径>: <原因>」)
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+
+    result["unreadable"] = []
+    for key, sub, prefix in (("closure_records", "closures", "close_"), ("finalization_records", "finalizations", "finalization_")):
+        record_dir = resolved_root / "5_tasks" / "records" / sub / task_id
+        if not record_dir.is_dir():
+            continue
+        for record_file in sorted(record_dir.glob(f"{prefix}*.md")):
+            try:
+                fm, _body = require_frontmatter(record_file)
+            except FrontmatterReadError as exc:
+                result["unreadable"].append(str(exc))
+                continue
+            fm["_path"] = str(record_file.relative_to(resolved_root))
+            result[key].append(fm)
     if not result["closure_records"]:
         result["missing"].append("closure_record")
 
-    # ③ finalization 记录
-    try:
-        fin_dir = resolved_root / "5_tasks" / "records" / "finalizations" / task_id
-        if fin_dir.is_dir():
-            for fin_file in sorted(fin_dir.glob("finalization_*.md")):
-                try:
-                    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-                    fm, _, _ = parse_markdown_frontmatter(fin_file.read_text(encoding="utf-8"))
-                    fm["_path"] = str(fin_file.relative_to(resolved_root))
-                    result["finalization_records"].append(fm)
-                except Exception:
-                    pass
-    except Exception:
-        pass
     if not result["finalization_records"]:
         result["missing"].append("finalization_record")
 

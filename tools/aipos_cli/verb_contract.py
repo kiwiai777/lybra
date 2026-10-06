@@ -1,8 +1,9 @@
 """AIPOS-330 S1 — Verb contract registry.
 
 The single source of truth for gate verb names, required/optional parameters,
-and required scopes. Derived mechanically from the gate's own TOOL_HANDLERS
-registry and WRITE_TOOL_DESCRIPTORS — never hand-written, never a parallel doc.
+and required scopes. Names/params derived mechanically from the gate's own TOOL_HANDLERS
+registry and WRITE_TOOL_DESCRIPTORS; required scopes read from the verbs.schema declaration
+(AIPOS-F101 件②, same reader as gate enforcement) — never hand-written, never a parallel doc.
 
 Design principles (S6):
 - ① Contract source is singular and auto-follows: verb add/rename/param-change
@@ -59,7 +60,7 @@ def get_verb_registry() -> list[dict[str, Any]]:
         required_params = sorted(k for k in properties if k in required)
         optional_params = sorted(k for k in properties if k not in required)
 
-        # Determine required scope from the tool name pattern
+        # AIPOS-F101 件②: required scope 读 verbs.schema 声明(与门执法同源)
         required_scope = _scope_for_verb(tool_name)
 
         # Determine confirm pairing
@@ -291,56 +292,51 @@ def _find_close_matches(target: str, candidates: set[str], max_results: int = 3)
 
 
 # ---------------------------------------------------------------------------
-# Scope-to-verb mapping (derived from tools.py scope checks)
+# Scope-to-verb mapping —— AIPOS-F101 件②: 读 verbs.schema 声明(门工具 scope 唯一来源), 原按工具名前缀的第二份映射删除
 # ---------------------------------------------------------------------------
 
 def _scope_for_verb(verb_name: str) -> str | None:
-    """Determine the required scope for a verb name.
+    """门工具声明的 required_scope(schema/verbs.schema.json verbs[<工具名>]); null = 无操作 scope。
 
-    Derived from the scope check pattern in tools.py:
-    - Read-only tools (lybra_queue_list, lybra_validate, etc.) → None
-    - Write tools check specific scope constants
+    与门执法同一读取口(tools/mcp_server/tools.py _verb_scope), 未声明 = SchemaLoadError(fail-closed)。
     """
-    # Read-only tools: no scope required
-    read_only_prefixes = [
-        "lybra_queue_list",
-        "lybra_project_status",
-        "lybra_task_preview",
-        "lybra_validate",
-        "lybra_context_pack_build",
-    ]
-    for prefix in read_only_prefixes:
-        if verb_name == prefix:
-            return None
+    from tools.mcp_server.tools import _verb_scope
 
-    # New gate guidance tool (AIPOS-330 S3): read-only
-    if verb_name == "lybra_gate_guidance":
-        return None
+    return _verb_scope(verb_name)
 
-    # Map verb name patterns to scopes
-    scope_map = {
-        "lybra_intake_submit": "intake_submit",
-        "lybra_owner_decision_record": "owner_decision_record",
-        "lybra_draft_publish_dry_run": "draft_publish",
-        "lybra_draft_publish_confirm": "draft_publish",  # + owner_confirm additionally
-        "lybra_draft_submit": "draft_submit",
-        "lybra_queue_claim": "queue_claim",
-        "lybra_queue_return": "queue_return",
-        "lybra_audit_dispatch": "audit_dispatch",
-        "lybra_audit_verdict": "audit_verdict",
-        "lybra_bench_audit_submit": "bench_audit_submit",
-        "lybra_bench_audit_confirm": "bench_audit_confirm",
-        "lybra_queue_close": "queue_close",
-        "lybra_queue_withdraw": "queue_withdraw",
-        "lybra_queue_amend": "queue_amend",
-        "lybra_task_progress": "task_progress",
-    }
 
-    for prefix, scope in scope_map.items():
-        if verb_name.startswith(prefix):
-            return scope
+# ---------------------------------------------------------------------------
+# AIPOS-F101 件③: 退出码唯一读取口 —— verbs.schema verbs[<动词>].exit_codes({出口名: {code, meaning}})
+# ---------------------------------------------------------------------------
 
-    return None
+def exit_code_in(contract: dict[str, Any], outcome: str, verb_name: str) -> int:
+    """按出口名从动词声明取退出码(唯一实现; loop_driver.exit_code_for 委托本函数)。缺声明 = SchemaLoadError(fail-closed)。"""
+    entry = (contract.get("exit_codes") or {}).get(outcome) if isinstance(contract, dict) else None
+    if not isinstance(entry, dict) or not isinstance(entry.get("code"), int) or isinstance(entry.get("code"), bool):
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"verbs.schema.json verbs.{verb_name}.exit_codes.{outcome} 未声明(须为 {{code: int, meaning}})")
+    return int(entry["code"])
+
+
+def declared_exit_code(verb_name: str, outcome: str) -> int:
+    """读产品仓 verbs.schema 中 verb_name 的 exit_codes[outcome].code(artifact ingest / agent watch / loop 同一读取口)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    contract = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(verb_name)
+    if not isinstance(contract, dict):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{verb_name} 未声明")
+    return exit_code_in(contract, outcome, verb_name)
+
+
+def declared_exit_codes(verb_name: str) -> dict[str, int]:
+    """该动词全部声明出口 {出口名: 退出码}(CLI help / 夹具渲染用, 同一读取口)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    contract = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(verb_name)
+    if not isinstance(contract, dict) or not isinstance(contract.get("exit_codes"), dict) or not contract["exit_codes"]:
+        raise SchemaLoadError(f"verbs.schema.json verbs.{verb_name}.exit_codes 未声明")
+    return {outcome: exit_code_in(contract, outcome, verb_name) for outcome in contract["exit_codes"]}
 
 
 # ---------------------------------------------------------------------------

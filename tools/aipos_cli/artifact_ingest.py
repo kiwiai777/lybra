@@ -17,6 +17,7 @@ import hashlib
 import os
 import stat as stat_module
 from tools.schema_constants import RecordType
+from tools.aipos_cli.verb_contract import declared_exit_code
 from pathlib import Path
 from typing import Any
 
@@ -309,7 +310,11 @@ def _read_nofollow(path: Path) -> bytes:
 # 上面的 scratch ingestion(AIPOS-196a)是另一件事(confined worker 草稿区拷贝), 两者不互调。
 # ===========================================================================
 
-INGEST_EXIT_REJECTED = 4
+# AIPOS-F101 件③: 退出码唯一声明 = verbs.schema verbs.lybra_artifact_ingest.exit_codes(原写死 4 与 transitions 重复声明删除);
+# 模块名保留为读声明的值(既有调用方/夹具按名引用), 声明缺 = 导入即 SchemaLoadError(fail-closed)
+INGEST_EXIT_RECORDED = declared_exit_code("lybra_artifact_ingest", "recorded")
+INGEST_EXIT_SHELL_REJECTED = declared_exit_code("lybra_artifact_ingest", "shell_rejected")
+INGEST_EXIT_REJECTED = declared_exit_code("lybra_artifact_ingest", "rejected")
 
 
 def _git_out(repo: Path, *argv: str) -> str | None:
@@ -372,6 +377,19 @@ def _external_finalize_pending(workspace_root: Path, task_id: str) -> tuple[bool
 
 
 def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
+    """校验一张卡的产物(见 _validate_task_artifact)。AIPOS-F100 件②: 卡/记录/产物 frontmatter 读不出 = 拒
+    INGEST_FRONTMATTER_UNREADABLE(原文点名文件与行号), 不取缺省继续校验。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+
+    try:
+        return _validate_task_artifact(task_id, workspace_root)
+    except FrontmatterReadError as exc:
+        return {"ok": False, "kind": "verdict" if task_id.upper().endswith("R") else "return",
+                "category": "INGEST_FRONTMATTER_UNREADABLE", "reasons": [f"{exc}。出口: 按拒因修正该文件 frontmatter 后重推导"],
+                "path": exc.path, "frontmatter": {}, "exit_code": INGEST_EXIT_REJECTED}
+
+
+def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
     """校验一张卡的产物(执行卡=Return; R 卡=裁决报告; external finalize 且裁决 PASS 的执行卡=FINALIZE 卡 Return)是否可铸记录。纯校验, 不提交。
 
     返回 {ok, kind: return|verdict|finalization, category, reasons[], path, frontmatter, exit_code}。
@@ -432,14 +450,14 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
             ]
             return out
         out["path"] = str(path)
-        fm = _read_frontmatter(path)
+        fm = _read_frontmatter(path, allow_missing_block=True)
         out["frontmatter"] = fm
         problems = invalid_finalization_frontmatter(fm)
         if problems:
             out["category"] = "INGEST_FRONTMATTER_MISSING" if any("缺" in p for p in problems) else "INGEST_DEPLOY_STATUS_INVALID"
             out["reasons"] = [f"{path}: {p}(声明: transitions.schema artifact_ingest.finalization)" for p in problems]
             return out
-        out["ok"], out["category"], out["exit_code"] = True, "OK", 0
+        out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
         return out
 
     # AIPOS-F78C 件②: 核 tip/被审分支的仓 = 该卡(R 卡: 被审卡)声明的仓; 解析不到 = 声明缺失出口(非崩溃), 不进 git
@@ -469,7 +487,7 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
             ]
             return out
         out["path"] = str(path)
-        fm = _read_frontmatter(path)
+        fm = _read_frontmatter(path, allow_missing_block=True)
         out["frontmatter"] = fm
         missing = missing_return_frontmatter(fm)
         if missing:
@@ -524,7 +542,7 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
             out["category"] = "INGEST_TREE_MISMATCH"
             out["reasons"] = [f"{commit_sha[:12]} tree={str(tree)[:12]} ≠ Return 自述 tree_hash={tree_hash[:12]}"]
             return out
-        out["ok"], out["category"], out["exit_code"] = True, "OK", 0
+        out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
         return out
 
     # R 卡: 裁决报告
@@ -538,7 +556,7 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
         ]
         return out
     out["path"] = str(path)
-    fm = _read_frontmatter(path)
+    fm = _read_frontmatter(path, allow_missing_block=True)
     out["frontmatter"] = fm
     # AIPOS-F89 件③c: 报告完成判据唯一实现 next_resolver.missing_verdict_frontmatter(占位 = 未填, 空模板不算产物)
     from tools.aipos_cli.next_resolver import missing_verdict_frontmatter
@@ -562,7 +580,7 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
         out["category"] = "INGEST_TIP_MISMATCH"
         out["reasons"] = [f"被审分支 {branch} tip={tip[:12]} ≠ 报告自述 commit_sha={commit_sha[:12]}: 审的不是当前产物"]
         return out
-    out["ok"], out["category"], out["exit_code"] = True, "OK", 0
+    out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
     return out
 
 
@@ -759,6 +777,7 @@ def ingest_task_artifact(
             f"missing={derivation.get('missing_records')}; suggested={derivation.get('suggested_action')}"
         ]
         result["message"] = "artifact ingest 拒: 卡不在可交回/可裁决节点"
+        result["exit_code"] = INGEST_EXIT_REJECTED  # AIPOS-F101 件③: 原沿用校验通过的 0 = 拒却 exit 0(与声明不符)
         return result
     shell_command = str(derivation.get("shell_command") or derivation.get("command") or "")
     if check["kind"] in ("return", "verdict"):
@@ -771,7 +790,7 @@ def ingest_task_artifact(
         shell_command = with_runtime_model(shell_command, kind=check["kind"], agent_runtime=bundle)
     result["command"] = shell_command
     if dry_run:
-        result.update({"ok": True, "exit_code": 0, "category": "DRY_RUN", "message": "校验通过(未提交)"})
+        result.update({"ok": True, "exit_code": INGEST_EXIT_RECORDED, "category": "DRY_RUN", "message": "校验通过(未提交)"})
         return result
     if check["kind"] == "finalization":
         # AIPOS-F78B 件②: 同一 writer(finalization_record.write_finalization_record)铸记录; actor=被审卡 claim 记录实例,
@@ -801,7 +820,7 @@ def ingest_task_artifact(
             deploy_status=deploy_status, remote_ref=str(fm.get("remote_ref") or "").strip(), finalize_return_ref=rel,
         )
         result["ok"] = bool(written.get("ok"))
-        result["exit_code"] = 0 if result["ok"] else 1
+        result["exit_code"] = INGEST_EXIT_RECORDED if result["ok"] else INGEST_EXIT_SHELL_REJECTED
         result["output"] = str(written.get("path") or "")
         result["message"] = "finalization 记录已落(external finalize, 来自 FINALIZE Return)" if result["ok"] else "finalization 记录写入失败"
         result["category"] = "OK" if result["ok"] else "RECORD_WRITE_FAILED"
@@ -809,7 +828,7 @@ def ingest_task_artifact(
     runner = execute or execute_derived_action
     exec_result = runner({**derivation, "command": shell_command}, Path(workspace_root), connection_json)
     result["ok"] = bool(exec_result.get("ok"))
-    result["exit_code"] = 0 if result["ok"] else int(exec_result.get("exit_code") or 1)
+    result["exit_code"] = INGEST_EXIT_RECORDED if result["ok"] else int(exec_result.get("exit_code") or INGEST_EXIT_SHELL_REJECTED)
     result["output"] = str(exec_result.get("output") or "")
     result["message"] = str(exec_result.get("message") or "")
     result["category"] = "OK" if result["ok"] else "SHELL_REJECTED"

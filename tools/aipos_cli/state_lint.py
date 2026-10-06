@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.frontmatter import FrontmatterReadError, parse_markdown_frontmatter, require_frontmatter
 from tools.schema_constants import RecordType
 
 RECORD_EMPTY = "RECORD_EMPTY"
@@ -842,14 +842,14 @@ def _repair_queue_state(
     
     actions.append(f"移动卡: {card_path} → {target_path}")
     
-    # 修正 frontmatter status
+    # 修正 frontmatter status(AIPOS-F100 件②: 读-改-写前「必须读出」; 读不出 = 不修——原忽略解析告警, 卡被拒成 {}
+    # 时会把整卡重写成只剩 status)
     try:
-        text = card_path.read_text(encoding="utf-8")
-        fm, body, _ = parse_markdown_frontmatter(text)
+        fm, body = require_frontmatter(card_path)
         if fm.get("status") != record_state:
             fm["status"] = record_state
             actions.append(f"修正 frontmatter status: {fm.get('status')} → {record_state}")
-    except Exception as e:
+    except FrontmatterReadError as e:
         return {
             "task_id": task_id,
             "repaired": False,

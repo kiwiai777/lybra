@@ -456,6 +456,7 @@ KICKOFF_REFUSAL_CODES: dict[str, str] = {
     "NOT_MINE": "卡的认领实例不是本实例, 不能开工",
     "NOT_YOUR_TURN": "卡当前不在本角色的工作节点(如已交回待派审/审计中), 不能开工",
     "ARTIFACT_SUBMITTED": "本角色的产物已落盘待产品入门, 不再开工(防覆盖原报告)",
+    "FRONTMATTER_UNREADABLE": "卡或其记录的 frontmatter 读不出, 不能开工(AIPOS-F100: 读不出即拒)",
 }
 
 
@@ -474,7 +475,12 @@ def kickoff_refusal(workspace_root: Path, task_id: str, actor: str, *, queue_sta
 
     if not queue_state:
         return refuse("NOT_FOUND", f"{task_id} 不在任何队列目录")
-    records = _read_task_records(workspace_root, task_id)
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+
+    try:
+        records = _read_task_records(workspace_root, task_id)
+    except FrontmatterReadError as exc:
+        return refuse("FRONTMATTER_UNREADABLE", str(exc))
     if queue_state == "completed" or records.get("latest_closure"):
         return refuse("CONCLUDED", f"{task_id} queue_state={queue_state}")
     if queue_state != "claimed":
@@ -483,6 +489,8 @@ def kickoff_refusal(workspace_root: Path, task_id: str, actor: str, *, queue_sta
     if claimer and actor and claimer != actor:
         return refuse("NOT_MINE", f"{task_id} 认领实例={claimer}, 本实例={actor}")
     derivation = derive_next_step(task_id, workspace_root)
+    if (derivation.get("action") or {}).get("type") == "frontmatter_unreadable":
+        return refuse("FRONTMATTER_UNREADABLE", "; ".join(derivation.get("missing_records") or []))
     role = "auditor" if str(fm.get("task_mode") or "").strip() == "audit" or task_id.upper().endswith("R") else "executor"
     if derivation.get("triggered_by") != role:
         return refuse("NOT_YOUR_TURN", f"{task_id} 推导核当前节点 {derivation.get('current_node')}/{derivation.get('current_state')}, "
@@ -585,17 +593,18 @@ def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         task_id = str(card.get("task_id") or "")
         kickoff = card.get("kickoff_refusal") if isinstance(card.get("kickoff_refusal"), dict) else None
-        if kickoff:
-            # AIPOS-F90 件③: 非本人在办 / 已结案 / 产物已交 → 不入选(拒因原样转述, 零门动词)
-            excluded.append({"task_id": task_id, "code": str(kickoff.get("code") or "NOT_YOUR_TURN"), "reason": str(kickoff.get("reason") or "")})
-            continue
         warnings = [str(w) for w in (card.get("frontmatter_warnings") or [])]
         if warnings:
+            # 卡面读不出是根因, 先于开工核验(AIPOS-F100 件②: 开工核验对读不出的卡面另给 FRONTMATTER_UNREADABLE, 同一事实)
             excluded.append({
                 "task_id": task_id,
                 "code": "FRONTMATTER_INVALID",
                 "reason": f"卡面 frontmatter 不可解析({warnings[0]}), 不能开工; 卡面由顾问经产品规整, 工位按 block-and-report 上报",
             })
+            continue
+        if kickoff:
+            # AIPOS-F90 件③: 非本人在办 / 已结案 / 产物已交 → 不入选(拒因原样转述, 零门动词)
+            excluded.append({"task_id": task_id, "code": str(kickoff.get("code") or "NOT_YOUR_TURN"), "reason": str(kickoff.get("reason") or "")})
             continue
         refusal = card.get("worktree_refusal") if isinstance(card.get("worktree_refusal"), dict) else {}
         if not card.get("worktree_path"):
@@ -741,7 +750,7 @@ def _derive_external_finalize(
             "notes": f"N4→N5(external): 裁决 {verdict_result}, finalize_mode=external, 等 FINALIZE Return(声明: transitions N5.finalize_mode)",
             "action": {"type": "await_artifact", "card": fin_id, "kind": "finalize_return"},
         }
-    problems = invalid_finalization_frontmatter(_read_frontmatter(ret))
+    problems = invalid_finalization_frontmatter(_read_frontmatter(ret, allow_missing_block=True))
     if problems:
         return {
             **base,
@@ -947,18 +956,37 @@ def _action_type_for_command(command: str) -> str:
 # queue 目录位置 = 事实;records = 事实;frontmatter = 声明(辅助)
 
 
-def _read_frontmatter(task_path: Path) -> dict[str, Any]:
-    """读取卡 frontmatter(YAML)。读失败精确捕获 + warning, 返回空 dict(不静默)。"""
-    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+def _read_frontmatter(task_path: Path, *, allow_missing_block: bool = False) -> dict[str, Any]:
+    """推导核读卡/记录/产物 frontmatter = frontmatter.require_frontmatter(「必须读出」唯一入口)的调用名。
 
-    try:
-        fm, _, _ = parse_markdown_frontmatter(task_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        import sys
+    AIPOS-F100 件②: 读不出(文件不可读 / 无 frontmatter 块 / 任何解析告警)抛 FrontmatterReadError(路径 + 行号 + 原因),
+    derive_next_step 统一转硬停(action=frontmatter_unreadable, 点名文件与出口); 原「返回 {} + stderr 告警」退役——
+    下游曾据空 dict 取缺省(task_mode→code、缺省仓)继续推导。allow_missing_block=True 只给「产物尚未写 frontmatter
+    = 未交/缺项」有既有判据的读点(RETURN / 审计报告 / FINALIZE Return)。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
 
-        print(f"Warning: frontmatter unreadable: {task_path}: {exc}", file=sys.stderr)
-        return {}
-    return fm if isinstance(fm, dict) else {}
+    return require_frontmatter(task_path, allow_missing_block=allow_missing_block)[0]
+
+
+def frontmatter_unreadable_stop(task_id: str, exc: Any) -> dict[str, Any]:
+    """AIPOS-F100 件②: 推导核遇 frontmatter 读不出 = 硬停(loop exit 4 点名文件与出口), 不推导任何放行动作。"""
+    path = str(getattr(exc, "path", "") or "")
+    queue_card = "/5_tasks/queue/" in path.replace("\\", "/")
+    exit_hint = (f"卡面: `lybra state repair --task-id {task_id}`(规整单行标量, 规整不了的按拒因手工修正)后重推导"
+                 if queue_card else f"按拒因修正 {path} 的 frontmatter 后重推导(记录/产物由写它的一方重写, 禁手工猜值)")
+    return {
+        "task_id": task_id,
+        "derivable": False,
+        "current_node": None,
+        "current_state": "frontmatter_unreadable",
+        "triggered_by": "advisor",
+        "command": "",
+        "verb": "",
+        "missing_records": [str(exc)],
+        "suggested_action": exit_hint,
+        "notes": "AIPOS-F100 件②: frontmatter 读不出即硬停(fail-closed), 不取缺省继续推导",
+        "action": {"type": "frontmatter_unreadable", "card": task_id, "path": path},
+    }
 
 
 def _find_task_in_queue(workspace_root: Path, task_id: str) -> tuple[Path | None, str | None]:
@@ -1052,7 +1080,7 @@ def _check_verdict_artifact(workspace_root: Path, task_id: str) -> Path | None:
         if cand in seen or not cand.is_file():
             continue
         seen.add(cand)
-        if verdict_report_submitted(_read_frontmatter(cand)):
+        if verdict_report_submitted(_read_frontmatter(cand, allow_missing_block=True)):
             return cand
     return None
 
@@ -1404,7 +1432,7 @@ def build_return_command_from_artifact(
     """
     import json as _json
 
-    fm = _read_frontmatter(return_path)
+    fm = _read_frontmatter(return_path, allow_missing_block=True)
     try:
         report_ref = str(Path(return_path).resolve().relative_to(Path(workspace_root).resolve()))
     except ValueError:
@@ -1610,6 +1638,20 @@ def derive_next_step(
     task_id: str,
     workspace_root: Path,
 ) -> dict[str, Any]:
+    """推导单卡下一步(见 _derive_next_step)。AIPOS-F100 件②: 推导途中任何卡/记录/产物 frontmatter 读不出
+    (FrontmatterReadError)= 硬停 frontmatter_unreadable_stop, 不推导放行动作。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+
+    try:
+        return _derive_next_step(task_id, workspace_root)
+    except FrontmatterReadError as exc:
+        return frontmatter_unreadable_stop(task_id, exc)
+
+
+def _derive_next_step(
+    task_id: str,
+    workspace_root: Path,
+) -> dict[str, Any]:
     """推导单卡下一步。
 
     返回:
@@ -1682,7 +1724,7 @@ def derive_next_step(
     # -----------------------------------------------------------------------
     if is_audit_card and queue_dir == "claimed" and verdict_artifact:
         # 从 verdict 报告提取参数
-        verdict_fm = _read_frontmatter(verdict_artifact)
+        verdict_fm = _read_frontmatter(verdict_artifact, allow_missing_block=True)
         reviewed_task_id = verdict_fm.get("reviewed_task_id") or task_id.rstrip("Rr")
         verdict = verdict_fm.get("verdict", "PASS")
         # AIPOS-F73E 件①: actor/agent_instance = 审计卡 claim 记录的审计实例(禁读报告自报/卡面/驱动方); 无 claim 记录不可推导
@@ -2115,7 +2157,7 @@ def derive_next_step(
             # AIPOS-F78 件③: Return 必填 frontmatter(transitions artifact_ingest.return.required_frontmatter)缺 = 不可推导
             # (action=artifact_invalid, loop 据此 exit 4 而非空等), 齐则派生与 ingest 同一条 return 命令
             return_path = _return_artifact_path(workspace_root, task_id)
-            missing_fm = missing_return_frontmatter(_read_frontmatter(return_path))
+            missing_fm = missing_return_frontmatter(_read_frontmatter(return_path, allow_missing_block=True))
             if missing_fm:
                 return {
                     "task_id": task_id,
@@ -2278,6 +2320,7 @@ def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
     按优先级排序:pending(先出) > claimed(有 return 产物) > claimed(无产物) > blocked。
     """
     workspace_root = Path(workspace_root)
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
     from tools.aipos_cli.task_loader import queue_root_for
 
     queue_root = queue_root_for(workspace_root)  # AIPOS-F89 件① M8: 队列根唯一读取口
@@ -2292,7 +2335,12 @@ def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
             # 从文件名提取 task_id
             raw_id = task_file.stem
             # 尝试从 frontmatter 取真实 task_id
-            fm = _read_frontmatter(task_file)
+            try:
+                fm = _read_frontmatter(task_file)
+            except FrontmatterReadError as exc:
+                # AIPOS-F100 件②: 读不出的卡不按文件名猜 task_id 去推导; 原样列为硬停项(点名文件与出口)
+                results.append({**frontmatter_unreadable_stop(raw_id.upper(), exc), "current_state": status_dir})
+                continue
             task_id = fm.get("task_id", raw_id.upper()) if fm else raw_id.upper()
             # 跳过审计卡(以 R 结尾的)—— 审计卡单独处理
             # 但在扫描中仍显示
@@ -2475,10 +2523,16 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
     from tools.schema_loader import SchemaLoadError
 
     # AIPOS-F89 件③a: 审计卡 = 被审分支 tip 的只读 detached 取证工作树(同一落点函数 card_worktree_location, 同一建树入口)
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+
     fm_for_mode = card_frontmatter
     if fm_for_mode is None:
         found_path, _ = _find_task_in_queue(workspace_root, task_id)
-        fm_for_mode = _read_frontmatter(found_path) if found_path else {}
+        try:
+            fm_for_mode = _read_frontmatter(found_path) if found_path else {}
+        except FrontmatterReadError as exc:
+            # AIPOS-F100 件②: 卡读不出 = 不建树(不按空卡面猜仓/模式)
+            return {"ok": False, "worktree_path": "", "branch": "", "message": f"卡 {task_id} 不建 worktree: {exc}"}
     if forensic_subject(fm_for_mode) is not None:
         return _ensure_forensic_worktree(workspace_root, task_id, fm_for_mode)
 
@@ -2788,6 +2842,30 @@ def _execute_claim_with_role_token(
     }
 
 def execute_derived_action(
+    derivation: dict[str, Any],
+    workspace_root: Path,
+    connection_json: str | None = None,
+) -> dict[str, Any]:
+    """执行推导出的下一步动作(见 _execute_derived_action)。AIPOS-F100 件②: 执行途中卡/记录 frontmatter 读不出 = 失败
+    (exit 4 同不可推导, 原文点名文件), 不取缺省继续。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+
+    try:
+        return _execute_derived_action(derivation, workspace_root, connection_json)
+    except FrontmatterReadError as exc:
+        from tools.aipos_cli.loop_driver import exit_code_for, load_loop_contract
+
+        return {
+            "ok": False,
+            "action_type": "none",
+            "message": f"frontmatter 读不出, 拒绝执行: {exc}",
+            "command": str(derivation.get("command") or ""),
+            "exit_code": exit_code_for(load_loop_contract(), "not_derivable"),
+            "output": str(exc),
+        }
+
+
+def _execute_derived_action(
     derivation: dict[str, Any],
     workspace_root: Path,
     connection_json: str | None = None,

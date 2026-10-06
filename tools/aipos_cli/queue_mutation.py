@@ -910,10 +910,13 @@ def build_rework_round(
             "data": {},
         }
     
-    # 2. 读取卡内容
+    # 2. 读取卡内容(AIPOS-F100 件②: 「必须读出」唯一入口; 读不出 = BLOCK——原「解析告警只入 warnings, rework_rounds 缺省 []」
+    #    会把返工轮次计数归零、上限失效)
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+
     try:
-        metadata, body, warnings = _read_task_markdown(task_path)
-    except (json.JSONDecodeError, OSError) as e:
+        raw_metadata, body = require_frontmatter(task_path)
+    except FrontmatterReadError as e:
         return {
             "verdict": Verdict.BLOCK,
             "task_id": task_id,
@@ -923,11 +926,23 @@ def build_rework_round(
             "warnings": [],
             "data": {},
         }
-    
-    # 3. 检查轮次上限
+    metadata = _normalize_value(raw_metadata)
+    warnings: list[str] = []
+
+    # 3. 检查轮次上限(rework_rounds 不是列表 = 卡面已坏, 拒; 禁当 [] 重新计数)
     rework_rounds = metadata.get("rework_rounds", [])
-    if not isinstance(rework_rounds, list):
+    if rework_rounds is None:
         rework_rounds = []
+    if not isinstance(rework_rounds, list):
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": True,
+            "blocking_reasons": [f"读取任务卡失败: {task_path}: rework_rounds 不是列表({type(rework_rounds).__name__}), 轮次无法计数"],
+            "warnings": [],
+            "data": {},
+        }
     
     # 读取上限声明 (默认 2)
     max_rounds = 2
