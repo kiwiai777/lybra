@@ -6092,8 +6092,10 @@ def converge_r_cards(
 def _pass_verdict_tip_changed(repo_root: Path, task_id: str, verdict_record: dict[str, Any],
                               card_frontmatter: dict[str, Any] | None = None) -> str | None:
     """AIPOS-F78 前置零⑦: PASS 裁决自述的 artifact_subject.commit_sha 与卡分支当前 tip 不一致 → 返回说明(允许复审); 一致/无法判定 → None。
-    AIPOS-F78C: 卡分支所在仓 = 卡声明的仓(card_frontmatter)。"""
-    import subprocess
+    AIPOS-F78C: 卡分支所在仓 = 卡声明的仓(card_frontmatter)。
+    AIPOS-F112: 卡分支 tip 读取口与推导核裁决过期判据(next_resolver.verdict_staleness)、裁决提交绑 tip 同一函数
+    (next_resolver._extract_artifact_subject_from_branch, 分支名读声明 card_branch_name); 原本处自拼分支名 + git rev-parse(第二份读取)删除。"""
+    from tools.aipos_cli.next_resolver import _extract_artifact_subject_from_branch, card_branch_name
 
     subject = verdict_record.get("artifact_subject") if isinstance(verdict_record.get("artifact_subject"), dict) else None
     audited_sha = str((subject or {}).get("commit_sha") or "").strip()
@@ -6103,31 +6105,12 @@ def _pass_verdict_tip_changed(repo_root: Path, task_id: str, verdict_record: dic
         product_repo_root = _card_product_repo(repo_root, card_frontmatter)
     except ProductRepoNotConfigured:
         return None
-    from tools.aipos_cli.next_resolver import card_branch_name
-    from tools.schema_loader import SchemaLoadError
-
-    try:
-        branch_name = card_branch_name(task_id)  # AIPOS-F108 件②: 唯一读取口, 不回落写死
-    except SchemaLoadError as exc:  # 声明读取失败: 出声, 维持终态
-        import sys
-
-        print(f"Warning: branch_integration 声明读取失败, 复审判定跳过: {exc}", file=sys.stderr)
-        return None
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--verify", f"{branch_name}^{{commit}}"],
-            cwd=product_repo_root, capture_output=True, text=True, timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        import sys
-
-        print(f"Warning: git rev-parse {branch_name} failed: {exc}", file=sys.stderr)
-        return None
-    tip = result.stdout.strip() if result.returncode == 0 else ""
+    current = _extract_artifact_subject_from_branch(Path(product_repo_root), task_id, "code")
+    tip = str((current or {}).get("commit_sha") or "")
     if not tip or tip == audited_sha:
         return None
     return (
-        f"PASS 裁决 {verdict_record.get('verdict_id') or ''} 绑定 {audited_sha[:12]}, 卡分支 {branch_name} tip 已变为 {tip[:12]}; "
+        f"PASS 裁决 {verdict_record.get('verdict_id') or ''} 绑定 {audited_sha[:12]}, 卡分支 {card_branch_name(task_id)} tip 已变为 {tip[:12]}; "
         f"派审类型=复审(re-review), 审计体须对新 tip 重新裁决"
     )
 
