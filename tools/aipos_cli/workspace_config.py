@@ -652,6 +652,25 @@ def read_project_json(project_root: str | Path) -> dict[str, Any]:
     return load_workspace_config(path)
 
 
+def declared_project_id(governance_root: str | Path) -> str:
+    """AIPOS-F108 件③(H6): 治理根 project.json#project(config.schema project_json.project, required)。
+    经唯一读取口 read_project_json; 缺文件/缺键/空值/读失败 = ValueError(DRAFT_PROJECT_UNDECLARED, 带出口), 禁回落写死项目 ID。"""
+    root = Path(governance_root)
+    try:
+        value = read_project_json(root).get("project")
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"DRAFT_PROJECT_UNDECLARED: 治理根 {root} 的 project.json 读取失败({exc})。出口: 修正 project.json 或显式给 project"
+        ) from exc
+    text = value.strip() if isinstance(value, str) else ""
+    if not text:
+        raise ValueError(
+            f"DRAFT_PROJECT_UNDECLARED: 治理根 {root} 的 project.json 未声明 project(config.schema project_json.project)。"
+            "出口: 在 project.json 写 \"project\": \"<项目ID>\", 或草稿显式给 project"
+        )
+    return text
+
+
 # ---------------------------------------------------------------------------
 # AIPOS-F78 件④: 项目落点声明(project.json paths 段)的唯一读取口。
 # 声明表(键名/默认值)在 config.schema.json configuration_sources.project_json.schema.paths 一处;

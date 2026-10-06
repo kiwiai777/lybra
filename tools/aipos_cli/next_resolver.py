@@ -1317,7 +1317,7 @@ def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict
     from tools.aipos_cli.deployment_authorization import find_gate_pass_verdict_for_task
     from tools.aipos_cli.finalize import _git_branch_merged_into_main
 
-    if _git_branch_merged_into_main(code_repo, branch):
+    if _git_branch_merged_into_main(code_repo, branch, card_base_branch()):  # AIPOS-F108 件②: 基线读声明(唯一读取口)
         return None
     check = find_gate_pass_verdict_for_task(task_id, Path(workspace_root), required_commit_sha=subject["commit_sha"])
     allowed = [str(v) for v in (_transition_node("N5").get("guards", {}).get("has_pass_verdict", {}).get("allowed_verdict_values") or [])]
@@ -2676,7 +2676,8 @@ def _check_branch_has_commits(workspace_root: Path, task_id: str) -> bool:
     """
     import subprocess
     
-    branch_name = card_branch_name(task_id)  # AIPOS-F112: 分支名唯一读取口(声明 N5.branch_integration.branch_pattern)
+    branch_name = card_branch_name(task_id)  # AIPOS-F108 件② / F112: 分支名 / 基线读 N5.branch_integration 声明(唯一读取口)
+    base_branch = card_base_branch()
     
     try:
         # 检查分支是否存在
@@ -2690,9 +2691,9 @@ def _check_branch_has_commits(workspace_root: Path, task_id: str) -> bool:
         if result.returncode != 0:
             return False
         
-        # 检查是否有相对 main 的提交
+        # 检查是否有相对基线分支的提交
         result = subprocess.run(
-            ["git", "rev-list", "--count", f"main..{branch_name}"],
+            ["git", "rev-list", "--count", f"{base_branch}..{branch_name}"],
             cwd=workspace_root,
             capture_output=True,
             text=True,
@@ -2710,15 +2711,31 @@ def _check_branch_has_commits(workspace_root: Path, task_id: str) -> bool:
         return False
 
 
-def card_branch_name(task_id: str) -> str:
+def card_branch_name(task_id: str, branch_integration: dict[str, Any] | None = None) -> str:
     """AIPOS-F88 件①: 卡分支名读声明(transitions.schema N5.branch_integration.branch_pattern, 与 finalize / card render 同一声明)。
-    声明缺 = SchemaLoadError(fail-closed, 不回落写死)。"""
+    声明缺 = SchemaLoadError(fail-closed, 不回落写死)。
+    AIPOS-F108 件②: 全产品唯一的分支名派生(原 finalize._branch_name_for_task 第二实现已退役); 调用方已读声明时传入
+    branch_integration(finalize 读一次声明贯穿整合), 缺省 = 读 Lybra 自身 schema。"""
     from tools.schema_loader import SchemaLoadError, get_branch_integration
 
-    pattern = str(get_branch_integration().get("branch_pattern") or "").strip()
+    decl = get_branch_integration() if branch_integration is None else branch_integration
+    pattern = str(decl.get("branch_pattern") or "").strip()
     if "{task_id}" not in pattern:
         raise SchemaLoadError("transitions.schema.json N5.branch_integration.branch_pattern 未声明或缺 {task_id} 占位")
     return pattern.replace("{task_id}", task_id)
+
+
+def card_base_branch(branch_integration: dict[str, Any] | None = None) -> str:
+    """AIPOS-F108 件②(M18): 卡分支的基线分支读声明(transitions.schema N5.branch_integration.base_branch)——建树起点 /
+    交回判据对照基 / 车道改动集三点 diff 基 / finalize 整合目标与部署分支强制同一声明。全产品唯一读取口;
+    branch_integration 同 card_branch_name。声明缺 = SchemaLoadError(fail-closed, 不回落写死)。"""
+    from tools.schema_loader import SchemaLoadError, get_branch_integration
+
+    decl = get_branch_integration() if branch_integration is None else branch_integration
+    base = decl.get("base_branch")
+    if not isinstance(base, str) or not base.strip():
+        raise SchemaLoadError("transitions.schema.json N5.branch_integration.base_branch 未声明")
+    return base.strip()
 
 
 def _ensure_worktree(workspace_root: Path, task_id: str,
@@ -2762,6 +2779,7 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
     try:
         code_repo, worktree_path = card_worktree_location(workspace_root, task_id, card_frontmatter)
         branch_name = card_branch_name(task_id)
+        base_branch = card_base_branch()  # AIPOS-F108 件②: 新卡分支起点读 N5.branch_integration.base_branch 声明
     except CardRepoUnresolved as exc:
         return {"ok": False, "worktree_path": "", "branch": "", "message": f"无法定位卡 {task_id} 的产品仓建 worktree: {exc}"}
     except SchemaLoadError as exc:
@@ -2815,7 +2833,7 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         else:
             # 创建新分支
             result = subprocess.run(
-                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "main"],
+                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_branch],
                 cwd=workspace_root,
                 capture_output=True,
                 text=True,
@@ -3189,7 +3207,7 @@ def _execute_derived_action(
                 "message": "return 阻塞: 分支无提交",
                 "command": command,
                 "exit_code": 1,
-                "output": f"Branch card/{task_id} has no commits relative to main. Cannot return without commits.",
+                "output": f"Branch {card_branch_name(task_id)} has no commits relative to {card_base_branch()}. Cannot return without commits.",
             }
 
     # AIPOS-F78 件③: return/verdict 步经产物入口(artifact_ingest.ingest_task_artifact): 读项目声明落点找 Return/裁决报告,

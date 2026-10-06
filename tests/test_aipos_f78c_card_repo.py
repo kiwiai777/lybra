@@ -159,7 +159,7 @@ class _RepoGate(GateDouble):
         elif action == "finalize":
             ws = Path(argv[argv.index("--workspace-root") + 1])
             res = fz._integrate_card_branch(card, "verdict_x", ws, self.gov, False, [],
-                                            branch_integration={"branch_pattern": "card/{task_id}"}, task_mode="code")
+                                            branch_integration={"branch_pattern": "card/{task_id}", "base_branch": "main"}, task_mode="code")
             assert not res["blocked"] and res["action"] == "merged", res
             merge = _git(ws, "rev-parse", "main")
             _write(self.gov / "5_tasks" / "records" / "finalizations" / card / f"finalization_{_ts()}.md",

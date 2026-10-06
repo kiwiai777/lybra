@@ -159,7 +159,7 @@ class TestFinalizeBranchBlock:
         """代码任务缺分支 → _integrate_card_branch 返回 blocked。"""
         from tools.aipos_cli.finalize import _integrate_card_branch, _load_branch_integration
 
-        branch_integration = _load_branch_integration(product_repo)
+        branch_integration = _load_branch_integration()
         operations: list[str] = []
 
         result = _integrate_card_branch(
@@ -182,7 +182,7 @@ class TestFinalizeBranchBlock:
         """非代码任务缺分支 → 跳过(不 BLOCK)。"""
         from tools.aipos_cli.finalize import _integrate_card_branch, _load_branch_integration
 
-        branch_integration = _load_branch_integration(product_repo)
+        branch_integration = _load_branch_integration()
         operations: list[str] = []
 
         result = _integrate_card_branch(
@@ -214,7 +214,7 @@ class TestFinalizeBranchBlock:
             cwd=str(product_repo), capture_output=True, check=True,
         )
 
-        branch_integration = _load_branch_integration(product_repo)
+        branch_integration = _load_branch_integration()
         operations: list[str] = []
 
         result = _integrate_card_branch(

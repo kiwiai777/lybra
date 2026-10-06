@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 
-def check_deployment_branch(repo_root: Path, *, required_branch: str = "main") -> dict[str, Any]:
+def check_deployment_branch(repo_root: Path, *, required_branch: str) -> dict[str, Any]:
     """AIPOS-R4B-2 部署分支强制：检查当前 commit 是否在部署分支上。
     
     DESIGN v2 §6 分支集成卫生②：只从单一部署分支部署（lybra-deploy
@@ -23,7 +23,7 @@ def check_deployment_branch(repo_root: Path, *, required_branch: str = "main") -
     
     Args:
         repo_root: 产品仓根路径
-        required_branch: 要求的部署分支名（默认 "main"）
+        required_branch: 要求的部署分支名(AIPOS-F108 件②: 无写死缺省, 调用方传 N5.branch_integration.base_branch 声明值)
     
     Returns:
         {
