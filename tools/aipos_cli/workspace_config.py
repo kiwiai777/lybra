@@ -1345,6 +1345,93 @@ def set_project_repo(
     root = resolve_project_root(home_root, name)
     write_project_json(root, name, code_repo=code_repo, registered_by=registered_by)
     return root
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F110 件②: 跨机工位开工材料声明(project.json workstations.<实例>; 声明表 config.schema
+# configuration_sources.project_json.schema.workstations)。唯一读取口 project_workstation / 唯一写入口 set_project_workstation。
+# ---------------------------------------------------------------------------
+
+class WorkstationDeclarationError(ValueError):
+    """跨机工位材料声明不可用(fail-closed)。code ∈ config.schema project_json.schema.workstations.reject_codes。"""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.reason = message
+
+
+def _workstations_declaration() -> dict[str, Any]:
+    """config.schema project_json.schema.workstations(键表 + 拒因码)。缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get("workstations")
+    if not isinstance(decl, dict) or not isinstance(decl.get("schema"), dict) or not isinstance(decl.get("reject_codes"), dict):
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.workstations(schema / reject_codes)未声明")
+    return decl
+
+
+def _validate_workstation_entry(instance: str, entry: Any, decl: dict[str, Any]) -> dict[str, str]:
+    from tools.aipos_cli.harness_launch import redact_progress
+
+    if not isinstance(entry, dict):
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"workstations.{instance} 须为 JSON 对象, 得到 {type(entry).__name__}")
+    out: dict[str, str] = {}
+    for key, spec in decl["schema"].items():
+        if not (isinstance(spec, dict) and spec.get("required")):
+            continue
+        value = entry.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise WorkstationDeclarationError("WORKSTATION_MATERIAL_UNDECLARED", f"workstations.{instance}.{key} 未声明")
+        if not isinstance(value, str) or "\n" in value or "\r" in value:
+            raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"workstations.{instance}.{key} 须为非空单行串")
+        if redact_progress(value) != value:  # 凭据判据与进度打码同一实现(凭据字样 / 长不透明串)
+            raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID",
+                                              f"workstations.{instance}.{key} 含凭据字样或长不透明串(开工提示禁含凭据)")
+        out[key] = value.strip()
+    return out
+
+
+def project_workstation(project_root: str | Path, instance: str) -> dict[str, str]:
+    """跨机工位 instance 的开工材料声明 {gate_ssh_alias, material_access}。未声明/形不合 = WorkstationDeclarationError;
+    project.json 不可读 = 原异常上抛(OSError / ValueError, 不吞成未声明)。只读。"""
+    decl = _workstations_declaration()
+    data = read_project_json(project_root)
+    workstations = data.get("workstations")
+    if workstations is None:
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_UNDECLARED",
+                                          f"{project_json_path(project_root)} 无 workstations 段(实例 {instance} 未声明)")
+    if not isinstance(workstations, dict):
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", "project.json workstations 须为 JSON 对象(键 = 实例名)")
+    if instance not in workstations:
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_UNDECLARED",
+                                          f"{project_json_path(project_root)} workstations 下无实例 {instance}")
+    return _validate_workstation_entry(instance, workstations[instance], decl)
+
+
+def set_project_workstation(project_root: str | Path, instance: str, *, gate_ssh_alias: str, material_access: str) -> dict[str, Any]:
+    """写 project.json workstations.<instance>(其余键原样保留); 写前按声明校验(不合 = 不写, 抛 WorkstationDeclarationError)。
+    返回 {project_json, instance, 声明值}。"""
+    decl = _workstations_declaration()
+    instance = str(instance or "").strip()
+    if not instance or any(c.isspace() for c in instance):
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"实例名须为非空且不含空白: {instance!r}")
+    entry = _validate_workstation_entry(instance, {"gate_ssh_alias": gate_ssh_alias, "material_access": material_access}, decl)
+    path = project_json_path(project_root)
+    if not path.is_file():
+        raise FileNotFoundError(f"{path} 不存在(项目未建)")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"{path} 不是 JSON 对象")
+    workstations = data.get("workstations") if data.get("workstations") is not None else {}
+    if not isinstance(workstations, dict):
+        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"{path} workstations 须为 JSON 对象")
+    workstations[instance] = entry
+    data["workstations"] = workstations
+    path.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {"project_json": str(path), "instance": instance, **entry}
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

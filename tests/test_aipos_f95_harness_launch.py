@@ -451,10 +451,10 @@ def test_item6b_land_event_carries_host_and_remote_falls_back_to_manual(lrig, mo
                                cwd=str(REPO_ROOT)).stdout
     assert "--landed-host" in help_text
 
-    # 读侧: 远端 host → transport=remote(已声明未支持) → loop 不拉起, 提示 host:dir 与 /go
+    # 读侧: 远端 host → transport=remote(AIPOS-F110 起已支持; 本靶场未声明跨机材料)→ loop 不拉起, 提示 host:dir 与 /go
     _land(lrig.gov, EXEC, "executor", lrig.ws_exec, host="kiwi@far-mac")
     loc = workstation_location(lrig.gov, EXEC)
-    assert loc["found"] and loc["transport"] == "remote" and loc["supported"] is False and loc["host"] == "kiwi@far-mac"
+    assert loc["found"] and loc["transport"] == "remote" and loc["supported"] is True and loc["host"] == "kiwi@far-mac"
     f90._card(lrig.gov, TASK, "pending", harness="pi")
     calls: list[dict] = []
     out = io.StringIO()
@@ -463,7 +463,8 @@ def test_item6b_land_event_carries_host_and_remote_falls_back_to_manual(lrig, mo
     text = out.getvalue()
     _show("---- ⑥b 远端工位 输出原文 ----\n" + text)
     assert calls == [{}] and not lrig.log.exists()
-    assert f"manual: 跨机拉起未支持(待跨机工位卡), 请在 kiwi@far-mac:{lrig.ws_exec} 的工位敲 /go" in text, text
+    assert f"manual: 请在 kiwi@far-mac:{lrig.ws_exec} 的 pi 会话敲 /go(跨机工位)" in text, text
+    assert "WORKSTATION_MATERIAL_UNDECLARED" in text and "lybra project set-workstation" in text, text  # AIPOS-F110: 材料未声明 = 拒拉起
     # 存量无 host = 本机(缺省声明在 enums.schema workstation_transport.missing_host)
     _land(lrig.gov, EXEC, "executor", lrig.ws_exec, host=None)
     stock = workstation_location(lrig.gov, EXEC)
@@ -531,7 +532,7 @@ def test_discipline_single_source_no_spin_no_daemon_registered():
     launch = {v["value"]: v.get("launch") for v in enums["harness"]["values"]}
     assert launch["pi"]["argv"] == ["pi", "-p", "{kickoff}", "--mode", "json"] and "--no-session" not in launch["pi"]["argv"]
     assert launch["codex"] is None and launch["claude-code"] is None
-    assert {v["value"]: v["supported"] for v in enums["workstation_transport"]["values"]} == {"local": True, "remote": False}
+    assert {v["value"]: v["supported"] for v in enums["workstation_transport"]["values"]} == {"local": True, "remote": True}  # AIPOS-F110
     runall = (REPO_ROOT / "tests" / "run-all.sh").read_text(encoding="utf-8")
     assert "tests/test_aipos_f95_harness_launch.py" in runall
     skill = (REPO_ROOT / "agents" / "skills" / "advisor-commands" / "SKILL.md").read_text(encoding="utf-8")

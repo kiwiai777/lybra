@@ -297,6 +297,27 @@
           "type": "file_convention",
           "required": false,
           "description": "AIPOS-F89 件① M14: 卡校验策略不是 project.json 键, 而是治理根下的声明文件(card_policy.json; 读取方 tools/card_policy_loader.get_project_card_policy_path 按治理根候选文件找)。multi_project_support.project_registry.structure.card_policy 只是门注册表结构说明, 不是项目键。"
+        },
+        "workstations": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-F110 件②: 跨机工位(land 事件 host ≠ 门机 = transport remote)的开工材料声明, 键 = 实例名, 值 = {gate_ssh_alias, material_access}(远端视角)。loop 拉起 remote 工位前必读: 未声明 / 缺键 / 空值 / 含凭据字样 = 拒拉起(WORKSTATION_MATERIAL_UNDECLARED / WORKSTATION_MATERIAL_INVALID), 提示补声明。本机工位不读。说理: loop 在门机运行读不到远端工位目录, 远端执行体经何种通道读写门机上的治理根/工作树/报告落点只有项目知道(chris: 执行 pi 在 Mac 经 ssh 读写 dev), 故由项目声明、开工提示原样转述; ssh 目标本身仍取 land 事件 host(enroll_deliver --ssh 写入), 不另设映射位。唯一读取口 workspace_config.project_workstation; 唯一写入口 workspace_config.set_project_workstation(`lybra project set-workstation`)。",
+          "schema": {
+            "gate_ssh_alias": {
+              "type": "string",
+              "required": true,
+              "description": "远端工位上指向门机的 ssh 别名(如远端 ~/.ssh/config 的 Host 名); 开工提示原样给出, `lybra project check-workstation` 以它做远端→门机反向可达检查"
+            },
+            "material_access": {
+              "type": "string",
+              "required": true,
+              "description": "远端执行体读写门机材料的方式(一句话, 如「经 ssh <别名> 读写; 代码改动提交到卡分支并推回门机产品仓」); 开工提示原样给出; 禁含凭据"
+            }
+          },
+          "reject_codes": {
+            "WORKSTATION_MATERIAL_UNDECLARED": "remote 工位的实例在 project.json workstations 下未声明(或缺 gate_ssh_alias / material_access)",
+            "WORKSTATION_MATERIAL_INVALID": "声明形不合(非对象 / 值非非空单行串 / 含凭据字样)"
+          }
         }
       }
     }

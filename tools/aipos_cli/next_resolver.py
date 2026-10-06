@@ -538,11 +538,14 @@ def kickoff_declaration() -> dict[str, Any]:
     return decl
 
 
-def render_kickoff(next_card: dict[str, Any]) -> str:
+def render_kickoff(next_card: dict[str, Any], *, remote: dict[str, Any] | None = None) -> str:
     """AIPOS-F95 件①: 按声明把 next_card 渲染为完整开工提示(唯一实现; 工位 /go 原样发送, loop 拉起原样传入)。
 
     报告必填字段每项须为 {key: 非空串, hint: 串, value: 串|None}; 列表空/项形变/占位缺值 = KickoffRenderError。
-    占位单遍替换(值内的花括号不再被解析)。"""
+    占位单遍替换(值内的花括号不再被解析)。
+    AIPOS-F110 件②: remote = 跨机工位上下文 {gate_host, governance_root, workstation_host, gate_ssh_alias, material_access}
+    (loop 按 land 事件 + project.json workstations 声明给出) → 按声明 remote_material 渲染门机材料段插入模板 {remote_material};
+    remote=None(本机工位 / 工位 /go)= 空串, 与 F110 前逐字节相同。"""
     decl = kickoff_declaration()
     line_decl = decl["report_field_line"]
     contract = next_card.get("report_required_frontmatter")
@@ -566,20 +569,54 @@ def render_kickoff(next_card: dict[str, Any]) -> str:
         "report_path": next_card.get("report_path"),
         "card_path": next_card.get("card_path"),
         "report_field_lines": "\n".join(field_lines),
+        "remote_material": "",
     }
+    if remote is not None:
+        material_template = decl.get("remote_material")
+        if not isinstance(material_template, str) or not material_template:
+            raise KickoffRenderError("verbs.schema.json verbs.lybra_my_tasks.kickoff.remote_material 未声明")
+        if not isinstance(remote, dict):
+            raise KickoffRenderError(f"remote 上下文须为对象: {remote!r}")
+        values["remote_material"] = _KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(remote, m.group(1)), material_template)
     return _KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(values, m.group(1)), decl["template"])
+
+
+def remote_kickoff_context(workspace_root: Path, instance: str) -> dict[str, str]:
+    """AIPOS-F110 件②: 跨机工位开工提示的门机材料上下文(render_kickoff remote=)。门机读不到远端工位目录, 身份 = land 事件实例:
+    位置 = enrollment.workstation_location(该实例最新 land 事件, 须 transport=remote), 材料 = workspace_config.project_workstation
+    (project.json workstations.<实例>)。不可得 = ValueError(含 WORKSTATION_MATERIAL_* 拒因码 / 位置拒因; fail-closed)。"""
+    import socket
+
+    from tools.aipos_cli.enrollment import workstation_location
+    from tools.aipos_cli.workspace_config import project_workstation
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        loc = workstation_location(workspace_root, instance)
+    except SchemaLoadError as exc:
+        raise ValueError(f"工位位置声明读取失败: {exc}") from exc
+    if not loc.get("found"):
+        raise ValueError(f"实例 {instance} 工位位置定位不到: {loc.get('reason')}")
+    if loc.get("transport") != "remote":
+        raise ValueError(f"实例 {instance} 工位 transport={loc.get('transport')}(非跨机), 不附门机材料段")
+    try:
+        material = project_workstation(workspace_root, instance)
+    except SchemaLoadError as exc:
+        raise ValueError(f"跨机工位材料声明读取失败: {exc}") from exc
+    return {"gate_host": socket.gethostname(), "governance_root": str(Path(workspace_root).resolve()),
+            "workstation_host": str(loc.get("host") or ""), **material}
 
 
 def _kickoff_value(values: dict[str, Any], name: str) -> str:
     if name not in values:
         raise KickoffRenderError(f"开工提示模板占位 {{{name}}} 未知")
     value = values[name]
-    if not isinstance(value, str) or (not value and name not in ("value", "hint")):
+    if not isinstance(value, str) or (not value and name not in ("value", "hint", "remote_material")):
         raise KickoffRenderError(f"开工提示占位 {{{name}}} 缺值")
     return value
 
 
-def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
+def select_next_card(cards: list[dict[str, Any]], *, remote: dict[str, Any] | None = None) -> dict[str, Any]:
     """按 NEXT_CARD_RULE 从 my-tasks 的卡视图中选出当前应开工的卡(纯函数)。
 
     每项卡视图字段: task_id / queue_state / card_path / worktree_path / worktree_exists / worktree_refusal /
@@ -587,6 +624,7 @@ def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
     返回 {next_card: None | {task_id, card_path, worktree_path, report_path, report_required_frontmatter, claimed_at},
           next_card_excluded: [{task_id, code, reason}](每张未入选的 claimed 卡为何不入选), next_card_rule}。
     拒因文案只陈述事实与上报出口, 零门动词(工位原样转述)。
+    AIPOS-F110: remote = 跨机工位门机材料上下文(remote_kickoff_context), 原样交 render_kickoff(本机 = None, 提示逐字节不变)。
     """
     eligible: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
@@ -663,7 +701,7 @@ def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
         }
         # AIPOS-F95 件①: 完整开工提示由产品按声明渲染(工位 /go 与 loop 拉起同读本字段, 逐字节相同); 渲染不出 = 不开工(fail-closed)
         try:
-            next_card["kickoff"] = render_kickoff(next_card)
+            next_card["kickoff"] = render_kickoff(next_card, remote=remote)
         except KickoffRenderError as exc:
             excluded.append({"task_id": next_card["task_id"], "code": "KICKOFF_UNRESOLVED",
                              "reason": f"开工提示不可渲染: {exc}; 按 block-and-report 上报"})

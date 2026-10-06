@@ -455,10 +455,10 @@ def enroll_deliver_ssh(
     }
 
 
-def main() -> int:
-    """CLI entry point"""
+def build_parser() -> "argparse.ArgumentParser":
+    """CLI 参数解析器(AIPOS-F110: 提出为函数, 供技能步骤命令过 argparse 夹具; main 同用此解析器)。"""
     import argparse
-    
+
     parser = argparse.ArgumentParser(
         description="AIPOS-R6H: enroll-deliver — 一条命令完成铸码+落位+分发",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -477,8 +477,12 @@ def main() -> int:
     parser.add_argument("--ttl", type=int, default=3600, help="Enrollment code TTL in seconds (default: 3600)")
     parser.add_argument("--force", action="store_true", help="Force overwrite existing files")
     parser.add_argument("--json", action="store_true", help="Output JSON")
-    
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    """CLI entry point"""
+    args = build_parser().parse_args()
     
     # Load owner token
     if args.owner_token_stdin:
