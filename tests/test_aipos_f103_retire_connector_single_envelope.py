@@ -327,7 +327,12 @@ def test_next_resolver_dispatch_uses_driver_envelope():
 
 
 def test_docs_ratchet_baseline_shrunk_and_scope_covers_skills():
-    baseline = json.loads((REPO_ROOT / "tests/f96_docs_retired_practice_baseline.json").read_text(encoding="utf-8"))
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    try:
+        from test_aipos_f96_docs_retired_practice_ratchet import load_baseline  # AIPOS-F109 件⑤: 基线改 jsonl, 计数运行时派生
+    finally:
+        sys.path.pop(0)
+    baseline = load_baseline()
     files = {e["file"] for e in baseline["entries"]}
     # F96 基线 27 条: AIPOS-F105 删 templates/ 与 lybra init 段 24 条后余 3 条(README 旧连接器 1 + agents/** 2), 本卡修掉这 3 条 → 0
     assert baseline["count"] == len(baseline["entries"]) == 0, baseline["entries"]

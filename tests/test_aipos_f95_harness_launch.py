@@ -534,7 +534,9 @@ def test_discipline_single_source_no_spin_no_daemon_registered():
     assert launch["codex"] is None and launch["claude-code"] is None
     assert {v["value"]: v["supported"] for v in enums["workstation_transport"]["values"]} == {"local": True, "remote": True}  # AIPOS-F110
     runall = (REPO_ROOT / "tests" / "run-all.sh").read_text(encoding="utf-8")
-    assert "tests/test_aipos_f95_harness_launch.py" in runall
+    from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现(清单 discover = 命中式样即登记)
+
+    assert runall_unregistered(["tests/test_aipos_f95_harness_launch.py"], runall)[0] == []
     skill = (REPO_ROOT / "agents" / "skills" / "advisor-commands" / "SKILL.md").read_text(encoding="utf-8")
     assert "--launch-harness pi" in skill and "两种开工模式" in skill and "禁 `until`/`sleep` 轮询" in skill
     onboarding = (REPO_ROOT / "agents" / "skills" / "lybra-onboarding" / "SKILL.md").read_text(encoding="utf-8")

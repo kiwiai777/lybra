@@ -317,5 +317,6 @@ def test_item3_verdict_stale_declared_and_no_swallowed_exceptions():
 
 def test_f112_fixture_registered_in_runall():
     runall = (REPO_ROOT / "tests" / "run-all.sh").read_text(encoding="utf-8")
-    assert ('run_pytest "tests/test_aipos_f112_verdict_stale_reaudit.py" '
-            '"$REPO_ROOT/tests/test_aipos_f112_verdict_stale_reaudit.py"') in runall
+    from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现(清单 discover = 命中式样即登记)
+
+    assert runall_unregistered(["tests/test_aipos_f112_verdict_stale_reaudit.py"], runall)[0] == []

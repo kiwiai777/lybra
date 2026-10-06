@@ -1,8 +1,9 @@
 """AIPOS-F87 件④: 防碎片化不变量「只减不增」棘轮夹具。
 
 依据: governance/research/2026-10-02-fragmentation-audit.md(附录 grep 式样)。现存违规登记在基线清单
-tests/f87_fragmentation_baseline.json(测试数据文件, 非 schema), 每条 = 文件 + 行指纹(行文本 sha1 前 12 位; 行号仅作定位参考,
-不参与比对) + 复查报告条目号。
+tests/f87_fragmentation_baseline.jsonl(测试数据文件, 非 schema; AIPOS-F109 件⑤: 只存条目、一行一条、稳定排序, 读写口
+tests/ratchet_baseline.py; 每类计数与合计由本夹具运行时计算, 不入文件——两卡各删不同条目 git 行级合并无冲突), 每条 = inv(不变量类)
++ 文件 + 行指纹(行文本 sha1 前 12 位) + text(行文本, 定位用) + 复查报告条目号。
 
 判定(每类不变量各自比对多重集):
   - 现有违规不在清单 = 新增违规 → 红
@@ -30,7 +31,8 @@ from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BASELINE_PATH = Path(__file__).resolve().parent / "f87_fragmentation_baseline.json"
+BASELINE_PATH = Path(__file__).resolve().parent / "f87_fragmentation_baseline.jsonl"
+INVARIANTS = ("a", "b", "c", "d", "e")
 TOOLS_PY = "tools/mcp_server/tools.py"
 VERBS_SCHEMA = "schema/verbs.schema.json"
 # e) 唯一允许构造 frontmatter 文本的文件(单源本身)
@@ -184,7 +186,23 @@ def current_violations() -> dict[str, list[dict[str, object]]]:
 
 
 def load_baseline() -> dict[str, object]:
-    return json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    """基线条目(jsonl)→ 按不变量分组的视图; count/total 为运行时派生量(AIPOS-F109 件⑤: 不入基线文件)。"""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        from ratchet_baseline import read_entries
+    finally:
+        sys.path.pop(0)
+    entries = read_entries(BASELINE_PATH)
+    unknown = sorted({str(e.get("inv")) for e in entries} - set(INVARIANTS))
+    if unknown:
+        raise ValueError(f"{BASELINE_PATH.name} 含未知不变量类 {unknown}(允许 {INVARIANTS})")
+    invariants: dict[str, dict[str, object]] = {}
+    for inv in INVARIANTS:
+        block = [{k: v for k, v in e.items() if k != "inv"} for e in entries if e.get("inv") == inv]
+        invariants[inv] = {"entries": block, "count": len(block)}
+    return {"invariants": invariants, "total": len(entries)}
 
 
 def ratchet_diff(current: dict[str, list[dict[str, object]]], baseline: dict[str, object]) -> dict[str, dict[str, list]]:
@@ -221,12 +239,14 @@ def test_baseline_is_well_formed_and_counts_match():
     invariants = baseline["invariants"]
     assert set(invariants) == {"a", "b", "c", "d", "e"}
     for inv, block in invariants.items():
-        assert block["count"] == len(block["entries"]), (inv, block["count"], len(block["entries"]))
         for entry in block["entries"]:
             assert entry.get("item"), (inv, entry)  # 每条带复查报告条目号
             if inv in ("a", "d", "e"):
-                assert entry.get("file") and entry.get("fp") and isinstance(entry.get("line"), int), (inv, entry)
-    assert baseline["total"] == sum(block["count"] for block in invariants.values())
+                assert entry.get("file") and entry.get("fp") and entry.get("text"), (inv, entry)
+    # AIPOS-F109 件⑤: 基线文件只存条目——无派生量/叙述键, 每行恰一个条目
+    raw_lines = BASELINE_PATH.read_text(encoding="utf-8").splitlines()
+    assert len(raw_lines) == baseline["total"]
+    assert not any(key in line for line in raw_lines for key in ('"total"', '"count"', '"baseline_commit_base"', '"invariants"'))
     # c) 零容忍: 不入基线
     assert invariants["c"]["entries"] == []
     # e) 车道内零容忍: 清单只许有标注 lane_blocked 的车道外条目
