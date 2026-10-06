@@ -108,7 +108,9 @@ class TestBranchComplianceCheck(unittest.TestCase):
             
             self.assertTrue(len(reasons) > 0)
             self.assertIn("BRANCH_WRONG_BASE", reasons[0])
-            self.assertIn("git rebase", reasons[0])
+            # AIPOS-F117 件②(gap #75): 出口改教基线合入(读 transitions N5.branch_integration.base_sync), 禁教 rebase
+            self.assertIn("git merge main", reasons[0])
+            self.assertNotIn("git rebase", reasons[0])
 
     def test_valid_branch_passes(self):
         """验收②: 正常分支交回零回归。"""
@@ -171,7 +173,9 @@ class TestBranchComplianceCheck(unittest.TestCase):
             # 应拒：merge-base 不是 main 当前 HEAD（是 main 的老 commit）
             self.assertTrue(len(reasons) > 0)
             self.assertIn("BRANCH_WRONG_BASE", reasons[0])
-            self.assertIn("git rebase", reasons[0])
+            # AIPOS-F117 件②(gap #75): 出口改教基线合入(读 transitions N5.branch_integration.base_sync), 禁教 rebase
+            self.assertIn("git merge main", reasons[0])
+            self.assertNotIn("git rebase", reasons[0])
 
 
 class TestDeployEmptyIntervalVacuousAuth(unittest.TestCase):

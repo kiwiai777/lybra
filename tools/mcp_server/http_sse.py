@@ -705,6 +705,12 @@ def _role_is_cross_project(entry: dict[str, Any]) -> bool:
     return bool(spec) and str(spec.get("project_scope") or "") == "cross_project"
 
 
+class NoServiceRoleTokens(ValueError):
+    """AIPOS-F115 件③: home_root 下没有任何可用服务角色 token(注册表「空/缺席」)。与「读不出」区分:
+    custom_roles.load_custom_roles 把它当空注册表(无自定义角色), 其余 OSError/ValueError 才是读错(fail-closed)。
+    ValueError 子类: 门 serve/reload 既有 `except ValueError` 行为不变。"""
+
+
 def load_unified_service_role_registry(home_root: str | Path, *, error_stream: TextIO = sys.stderr) -> dict[str, dict[str, Any]]:
     """AIPOS-294C + AIPOS-F26: Load and unify all service role registries under home_root.
 
@@ -779,7 +785,7 @@ def load_unified_service_role_registry(home_root: str | Path, *, error_stream: T
             print(f"Warning: failed to load project registry {proj_connection}: {exc}", file=error_stream)
 
     if not unified:
-        raise ValueError(f"No usable service role tokens found under home_root: {home_path}")
+        raise NoServiceRoleTokens(f"No usable service role tokens found under home_root: {home_path}")
 
     return unified
 

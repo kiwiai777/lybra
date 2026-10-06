@@ -73,7 +73,11 @@ RECORD_TYPE_TO_STATE = {
 
 
 def _derive_state_from_records(governance_root: Path, task_id: str) -> str | None:
-    """从 records 推导任务的真实状态(以最新记录为准)。"""
+    """从 records 推导任务的真实状态(以最新记录为准)。
+
+    AIPOS-F115 件④(gap #64): 记录 frontmatter 经「必须读出」唯一入口 require_frontmatter 读——读不了/有解析告警 =
+    FrontmatterReadError 原样抛(原 parse_markdown_frontmatter 忽略告警 + except Exception: continue 静默跳过坏记录,
+    推导出的状态可能是错的)。调用方: lint 转为 ERROR 条目, repair 拒修。"""
     from tools.aipos_cli.record_writer import record_dir
 
     # 按优先级检查各类记录(最新优先)
@@ -92,17 +96,13 @@ def _derive_state_from_records(governance_root: Path, task_id: str) -> str | Non
         type_dir = record_dir(governance_root, record_type, task_id)
         if not type_dir.is_dir():
             continue
-        for f in type_dir.glob("*.md"):
-            try:
-                text = f.read_text(encoding="utf-8")
-                fm, _, _ = parse_markdown_frontmatter(text)
-                # 取时间戳最大的记录
-                ts = str(fm.get("closed_at") or fm.get("returned_at") or fm.get("claimed_at") or fm.get("published_at") or fm.get("timestamp") or "")
-                if ts > latest_ts:
-                    latest_ts = ts
-                    latest_state = state
-            except Exception:
-                continue
+        for f in sorted(type_dir.glob("*.md")):
+            fm, _body = require_frontmatter(f)
+            # 取时间戳最大的记录
+            ts = str(fm.get("closed_at") or fm.get("returned_at") or fm.get("claimed_at") or fm.get("published_at") or fm.get("timestamp") or "")
+            if ts > latest_ts:
+                latest_ts = ts
+                latest_state = state
     
     return latest_state
 
@@ -219,7 +219,19 @@ def _run_state_lint(governance_root: Path, task_id_filter: str | None) -> dict[s
             invalid = _invalid_frontmatter_entry(governance_root, task_id, card_path)
             if invalid is not None:
                 invalid_frontmatter.append(invalid)
-        record_state = _derive_state_from_records(governance_root, task_id)
+        try:
+            record_state = _derive_state_from_records(governance_root, task_id)
+        except FrontmatterReadError as exc:
+            # AIPOS-F115 件④: 记录读不出 = 本卡状态不可推导, 报 ERROR(带出口)且不做依赖记录的判定(不拿残缺真相下结论)
+            issues.append({
+                "task_id": task_id,
+                "severity": "ERROR",
+                "message": f"记录 frontmatter 不可读, 状态不可推导: {exc}; 出口: 修复该记录(门生记录勿手改, 先查来源)后重跑 state lint",
+                "queue_state": queue_state,
+                "fm_state": fm_state,
+                "record_state": None,
+            })
+            continue
         if queue_state == "completed" or record_state == "completed":
             concluded[task_id] = card_path
         
@@ -787,7 +799,16 @@ def _repair_queue_state(
         }
     """
     task_id = task_id.upper()
-    record_state = _derive_state_from_records(governance_root, task_id)
+    try:
+        record_state = _derive_state_from_records(governance_root, task_id)
+    except FrontmatterReadError as exc:  # AIPOS-F115 件④: 记录读不出 = 拒修(不按残缺记录重建状态)
+        return {
+            "task_id": task_id,
+            "repaired": False,
+            "dry_run": dry_run,
+            "message": f"记录 frontmatter 不可读, 拒修: {exc}",
+            "actions": [],
+        }
     queue_state, card_path = _get_queue_state(governance_root, task_id)
     
     actions: list[str] = []

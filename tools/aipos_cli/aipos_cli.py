@@ -86,15 +86,12 @@ from tools.aipos_cli.validator import (
     validate_tasks,
 )
 from tools.aipos_cli.workspace_config import (
-    CONFIG_RELATIVE_PATH,
     WORKSPACE_ROOT_ENV,
     DEFAULT_BOARD_HOST,
     DEFAULT_BOARD_PORT,
-    DEFAULT_MCP_HOST,
     DEFAULT_MCP_PORT,
     _project_candidates,
     get_collaboration_profile,
-    load_workspace_config,
     project_json_path,
     read_project_json,
     governance_paths,
@@ -451,21 +448,11 @@ def render_mcp_doctor_text(report: dict[str, Any]) -> str:
 
 
 def _config_defaults(workspace_root: Path) -> dict[str, Any]:
-    config_path = workspace_root / CONFIG_RELATIVE_PATH  # AIPOS-F106 件④: .lybra/config.json 相对路径唯一声明(workspace_config)
-    config: dict[str, Any] = {}
-    if config_path.is_file():
-        config = load_workspace_config(config_path)
-    board = config.get("board") if isinstance(config.get("board"), dict) else {}
-    mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
-    return {
-        "config_path": str(config_path) if config_path.is_file() else None,
-        "board_host": str(board.get("host") or DEFAULT_BOARD_HOST),
-        "board_port": int(board.get("port") or DEFAULT_BOARD_PORT),
-        "mcp_host": str(mcp.get("host") or DEFAULT_MCP_HOST),
-        "mcp_port": int(mcp.get("port") or DEFAULT_MCP_PORT),
-        "transport_token_env": str(mcp.get("transport_token_env") or "LYBRA_MCP_TOKEN"),
-        "capability_token_env": str(mcp.get("capability_token_env") or "LYBRA_CAPABILITY_TOKEN"),
-    }
+    """AIPOS-F117 件①(gap #52): 委托 .lybra/config.json 运行时字段唯一读取口 workspace_config.workspace_runtime_config
+    (strict: 文件坏 = 抛, 启动路径 fail-closed); 原逐字段第二份读取 + 缺省删除。"""
+    from tools.aipos_cli.workspace_config import workspace_runtime_config
+
+    return workspace_runtime_config(workspace_root, strict=True)
 
 
 def _normalize_mcp_host_for_config(host: str) -> str:
@@ -1592,6 +1579,10 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_revoke_parser.add_argument("--json", action="store_true", help="Output JSON")
     roles_enroll_list_parser = roles_subparsers.add_parser("enroll-list", help="AIPOS-362: list enrollment codes")
     roles_enroll_list_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F107 件②: 只读诊断——实例接入事件实际所在 log 与应在(所属项目)log
+    roles_enroll_where_parser = roles_subparsers.add_parser("enroll-where", help="AIPOS-F107: 只读诊断某实例接入事件(create/use/land)实际所在 enrollment_log 与应在(所属项目)log, 供重接入判断")
+    roles_enroll_where_parser.add_argument("--instance", required=True, help="实例名(<prefix>.<project>.<host>)")
+    roles_enroll_where_parser.add_argument("--json", action="store_true", help="Output JSON")
     
     # AIPOS-F66B 件②: 写权限边界可读面 + 读取口(护栏读声明; 单源 roles.schema write_boundary)
     roles_wb_parser = roles_subparsers.add_parser("write-boundary", help="AIPOS-F66B: 写权限边界可读面(角色类 × 面 × read/append/mutate, 读 roles.schema write_boundary)与单次访问判定(--check)")
@@ -1778,10 +1769,13 @@ def build_parser() -> argparse.ArgumentParser:
     project_export_parser.add_argument("--output", "-o", help="Output file path (default: <workspace>/lybra-project.yaml)")
     project_export_parser.add_argument("--project-name", help="Override project name in the structure file")
     project_export_parser.add_argument("--json", action="store_true", help="Output JSON")
-    project_import_parser = project_subparsers.add_parser("import", help="AIPOS-293: Import project from a structure file")
+    # AIPOS-F117 件①(Owner 10-04 裁定): 导入建项目 = project new 唯一实现(workspace_config.scaffold_project)+ 迁移清单;
+    # 落点 = <home 根>/<项目名>(home 根同 project new 的 AIPOS-226 优先级梯), 原「任意目标目录自建骨架」第二实现退役
+    project_import_parser = project_subparsers.add_parser("import", help="AIPOS-293/F117: Import a project from a structure file (created by the same implementation as `lybra project new` under the home root, plus a migration checklist)")
     project_import_parser.add_argument("structure_file", help="Path to lybra-project.yaml structure file")
-    project_import_parser.add_argument("output_root", help="Target directory for the imported project")
-    project_import_parser.add_argument("--dry-run", action="store_true", help="Preview planned writes without creating")
+    project_import_parser.add_argument("--name", help="Project name (default: structure file project_name)")
+    project_import_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default), same as project new")
+    project_import_parser.add_argument("--dry-run", action="store_true", help="Preview without creating (zero writes)")
     project_import_parser.add_argument("--actor", default=default_actor, help="Actor for provenance (registered_by)")
     project_import_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -2830,6 +2824,29 @@ def main(argv: list[str] | None = None) -> int:
                         inst = code.get('instance') or '(any)'
                         expires = code.get('expires_at') or '(never)'
                         print(f"{code['code_id']:<24} {code['role']:<16} {inst:<32} {code['status']:<10} {expires}")
+            elif args.roles_command == "enroll-where":
+                # AIPOS-F107 件②: 薄壳, 逻辑在 enrollment.enrollment_whereabouts(只读; 所属项目经 enrollment_owner_root 唯一解析口)
+                from tools.aipos_cli.enrollment import enrollment_whereabouts
+
+                report = enrollment_whereabouts(workspace_root, args.instance)
+                if getattr(args, "json", False):
+                    print(render_json(report))
+                else:
+                    print(f"实例 {report['instance']}: verdict={report['verdict']}")
+                    print(f"  应在 log: {report['expected_log'] or '(无所属项目)'}"
+                          f"(所属项目 {report['owner_project'] or '-'}, 依据 {report['owner_source'] or report['owner_reason']})")
+                    if not report["found"]:
+                        print("  实际: home 下各项目与签发门工作区的 enrollment_log 均无该实例事件")
+                    for item in report["found"]:
+                        acts = ", ".join(f"{k}×{v}" for k, v in sorted(item["actions"].items()))
+                        print(f"  实际所在 log: {item['log']}  事件 {acts}  最新 land {item['latest_land_at'] or '-'}"
+                              f"  workstation={item['latest_land_workstation'] or '-'}")
+                    loc = report["workstation_location"]
+                    if loc is not None:
+                        print(f"  loop 工位定位(workstation_location@所属项目): found={loc['found']} dir={loc['dir']} {loc['reason']}".rstrip())
+                    if report["verdict"] == "misplaced":
+                        print("  处置: 存量事件在签发方 log, loop 定位不到; 在所属项目重签码重接入(新事件落所属项目 log), 不手改日志")
+                return 0
             elif args.roles_command == "enroll":
                 # AIPOS-R2/F23: client-side enrollment (exchange code + write .lybra/ config)
                 from tools.aipos_cli.enroll_client import enroll
@@ -2943,8 +2960,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.print_help()
             return 2
         try:
-            # AIPOS-293: export/import don't need home_root; dispatch-mode uses --project-root
-            if args.project_command in ("export", "import", "dispatch-mode"):
+            # AIPOS-293: export doesn't need home_root; dispatch-mode uses --project-root(AIPOS-F117: import 与 project new 同读 home 根)
+            if args.project_command in ("export", "dispatch-mode"):
                 pass  # handled below
             else:
                 home, home_source = resolve_home_root_with_source(explicit_root=args.home_root)
@@ -3305,9 +3322,11 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"Export failed: {result.get('blocking_reasons')}", file=sys.stderr)
                 return 0 if result.get("ok") else 1
             if args.project_command == "import":
+                print(f"home 根: {home}(来源: {home_source})", file=sys.stderr)
                 result = import_project_structure(
                     args.structure_file,
-                    args.output_root,
+                    home,
+                    name=args.name,
                     dry_run=args.dry_run,
                     actor=args.actor,
                 )
@@ -3316,16 +3335,13 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     if result.get("ok"):
                         if args.dry_run:
-                            print(f"Dry-run: would create project '{result['project_name']}' at {result['output_root']}")
-                            print(f"  Directories: {len(result['planned_dirs'])}")
-                            print(f"  Files: {len(result['planned_files'])}")
+                            print(f"Dry-run: would create project '{result['project_name']}' at {result['project_root']} (lybra project new 同一实现)")
+                            print(f"  code_repo: {result['code_repo']}")
                             print(f"  Migration items: {result['migration_item_count']}")
                         else:
-                            print(f"Imported project '{result['project_name']}' to {result['output_root']}")
-                            print(f"  Directories created: {len(result['planned_dirs'])}")
-                            print(f"  Files written: {len(result['planned_files'])}")
-                            print(f"  Skipped (existing): {len(result['skipped_existing'])}")
-                            print(f"  Migration checklist: {result['migration_checklist']}")
+                            print(f"Imported project '{result['project_name']}' to {result['project_root']} (lybra project new 同一实现)")
+                            print(f"  project.json: {result['project_json']}")
+                            print(f"  Migration checklist: {result['migration_checklist']} ({result['migration_item_count']} items)")
                     else:
                         print(f"Import failed: {result.get('blocking_reasons')}", file=sys.stderr)
                 return 0 if result.get("ok") else 1

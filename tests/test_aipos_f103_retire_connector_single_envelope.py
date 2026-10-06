@@ -124,9 +124,9 @@ def test_deleted_files_are_gone():
     assert not (REPO_ROOT / "skills").exists() or not any((REPO_ROOT / "skills").rglob("*")), "仓根旧技能已删"
 
 
-# 车道外逐字面豁免(F103 车道不含 schema/verbs.schema.json): F110 拉起声明文案「kickoff_safe 危险字符」只是文字指称(无 import),
-# 登记为缺口由改该声明的卡改写; 只豁免这一字面在这一文件
-LANE_BLOCKED_LITERAL_EXEMPT = {("kickoff_safe", "schema/verbs.schema.json")}
+# 车道外逐字面豁免: 原 verbs.schema F110 拉起声明文案「kickoff_safe 危险字符」已由 AIPOS-F117 件②(gap #78)改写, 豁免撤销(空集;
+# 再出现即红)
+LANE_BLOCKED_LITERAL_EXEMPT: set[tuple[str, str]] = set()
 
 
 def test_git_grep_deleted_items_zero_references():
@@ -334,8 +334,11 @@ def test_docs_ratchet_baseline_shrunk_and_scope_covers_skills():
         sys.path.pop(0)
     baseline = load_baseline()
     files = {e["file"] for e in baseline["entries"]}
-    # F96 基线 27 条: AIPOS-F105 删 templates/ 与 lybra init 段 24 条后余 3 条(README 旧连接器 1 + agents/** 2), 本卡修掉这 3 条 → 0
-    assert baseline["count"] == len(baseline["entries"]) == 0, baseline["entries"]
+    # F96 基线 27 条: AIPOS-F105 删 templates/ 与 lybra init 段 24 条后余 3 条(README 旧连接器 1 + agents/** 2), 本卡修掉这 3 条 → 0。
+    # AIPOS-F117 件④ 扩扫描面到 0_control_plane/ 后登记的协议文档存量(标 protocol_surface)不属本卡原扫描面: 原扫描面仍须 0 条
+    assert baseline["count"] == len(baseline["entries"]), baseline["count"]
+    original_scope = [e for e in baseline["entries"] if not str(e["file"]).startswith("0_control_plane/")]
+    assert original_scope == [], original_scope
     assert not files & {"README.md", "QUICKSTART.md", "agents/roles/advisor/AGENTS.md", "agents/harness/pi/README.md"}, files
     sys.path.insert(0, str(REPO_ROOT / "tests"))
     try:

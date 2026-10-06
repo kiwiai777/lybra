@@ -13,7 +13,6 @@ from tools.aipos_cli.workspace_config import (
     HOME_ROOT_ENV,
     LEGACY_WORKSPACE_ROOT_ENV,
     active_project_from_config,
-    default_workspace_config,
     governance_paths,
     home_root_from_config,
     resolve_active_project,
@@ -22,8 +21,13 @@ from tools.aipos_cli.workspace_config import (
     resolve_workspace_context,
     resolve_workspace_root,
     set_active_project,
-    write_workspace_config,
 )
+
+
+def _write_v1_config(ws: Path) -> None:
+    """手写 v1 工作区本地配置(AIPOS-F117 件①: 产品 v1 写入方零调用方已删; 该文件只作可选手写覆盖)。"""
+    (ws / ".lybra").mkdir(parents=True, exist_ok=True)
+    (ws / ".lybra" / "config.json").write_text(json.dumps({"config_version": 1, "workspace_root": "."}) + "\n", encoding="utf-8")
 
 
 class WorkspaceRootTests(unittest.TestCase):
@@ -67,7 +71,7 @@ class WorkspaceRootTests(unittest.TestCase):
             self.assertEqual(find_repo_root(nested), self.workspace_root.resolve())
 
     def test_find_repo_root_uses_lybra_config_from_nested_cwd(self) -> None:
-        write_workspace_config(self.workspace_root)
+        _write_v1_config(self.workspace_root)
         nested = self.workspace_root / "2_projects" / "demo"
         nested.mkdir(parents=True, exist_ok=True)
         with patch.dict(os.environ, {}, clear=True), patch.object(Path, "cwd", return_value=nested):
@@ -220,8 +224,8 @@ class ResolutionCoreTests(unittest.TestCase):
         project_root = self.home / self.project
         paths = governance_paths(project_root)
         self.assertEqual(paths["decision_log"], project_root / "governance" / "decision_log.md")
-        self.assertEqual(paths["project_status"], project_root / "governance" / "project_status.md")
-        self.assertEqual(paths["roadmap"], project_root / "governance" / "roadmap.md")
+        # AIPOS-F89 件② M17: 产品不再声明 project_status / roadmap 等治理文档名(AIPOS-F117 随登记 run-all 校正)
+        self.assertEqual(set(paths), {"decision_log", "stage_archive", "workspace_artifacts"})
         self.assertEqual(paths["stage_archive"], project_root / "stage_archive")
         self.assertEqual(paths["workspace_artifacts"], project_root / "workspace_artifacts")
         # ruling 1=B: decision_log is a single .md file, not a directory
@@ -241,13 +245,12 @@ class ResolutionCoreTests(unittest.TestCase):
         self.assertEqual(home_root_from_config({"home_root": str(self.home)}), self.home)
         self.assertEqual(active_project_from_config({"active_project": "lybra"}), "lybra")
 
-    def test_default_workspace_config_still_v1(self) -> None:
-        # M1: Slice 0 adds v2 READ capability only; default init keeps writing v1.
-        cfg = default_workspace_config(self.home)
-        self.assertEqual(cfg["config_version"], 1)
-        self.assertNotIn("home_root", cfg)
-        self.assertNotIn("active_project", cfg)
-        self.assertNotIn("projects", cfg)  # M2: no home-config projects{} table
+    def test_v1_writer_retired(self) -> None:
+        # AIPOS-F117 件①(gap #52): v1 写入方(default_/write_ workspace_config)产品零调用方, 已删(建项目 = project new)
+        from tools.aipos_cli import workspace_config
+
+        self.assertFalse(hasattr(workspace_config, "write_workspace_config"))
+        self.assertFalse(hasattr(workspace_config, "default_workspace_config"))
 
 
 class WorkspaceContextTests(unittest.TestCase):

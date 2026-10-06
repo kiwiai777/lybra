@@ -27,6 +27,42 @@ from typing import Any
 from tools.schema_loader import get_config_default_gate_url  # AIPOS-R4B-1: gate URL single source
 
 
+class WorkstationFileError(ValueError):
+    """AIPOS-F115 件②(gap #67): 工位声明文件(.lybra/role / actor / policy / connection.json)存在但不可读或格式坏。
+
+    fail-closed: 「已声明但坏」≠「未声明」, 禁静默降级到 env / schema 缺省(原实现 except 吞错后落下一层)。
+    拒因带出口(修复该文件或重跑 lybra enroll 重写工位声明)。ValueError 子类: 既有 `except ValueError` 的调用方照常接住。
+    """
+
+    def __init__(self, path: Path, exc: BaseException | str) -> None:
+        self.path = path
+        super().__init__(
+            f"工位声明文件 {path} 不可读/格式坏: {exc} —— 出口: 修复该文件, 或重跑 lybra enroll 重写本工位声明"
+            "(已声明但坏不按未声明处理, 不落 env/缺省)"
+        )
+
+
+def _read_declared_text(path: Path) -> str | None:
+    """AIPOS-F115 件②: 工位声明文本文件读取——不存在 = None(未声明); 存在但读失败 = WorkstationFileError(fail-closed)。"""
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise WorkstationFileError(path, exc) from exc
+
+
+def _load_declared_connection(lybra_dir: Path) -> dict[str, Any] | None:
+    """AIPOS-F115 件②: 工位 connection.json——不存在 = None(未声明); 存在但坏 = WorkstationFileError(禁静默降级)。"""
+    connection_file = lybra_dir / "connection.json"
+    if not connection_file.is_file():
+        return None
+    try:
+        return ConnectionResolver.load_connection_config(lybra_dir)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise WorkstationFileError(connection_file, exc) from exc
+
+
 @dataclass(frozen=True)
 class LoopContext:
     """Loop execution context — immutable per session.
@@ -112,18 +148,16 @@ class ConnectionResolver:
             return explicit_url
         
         # Auto-discovery from .lybra/ (优先级高于env)
+        # AIPOS-F115 件②(gap #67): connection.json 不存在 = 未声明, 落下一层; 存在但坏 = WorkstationFileError(原 except 吞错静默降级到 env/缺省)
         if workspace_root:
             lybra_dir = ConnectionResolver.discover_lybra_dir(workspace_root)
             if lybra_dir:
-                try:
-                    config = ConnectionResolver.load_connection_config(lybra_dir)
-                    mcp_config = config.get("mcp", {})
-                    if isinstance(mcp_config, dict):
-                        rpc_url = mcp_config.get("rpc_url")
-                        if rpc_url:
-                            return str(rpc_url)
-                except (FileNotFoundError, ValueError, KeyError):
-                    pass
+                config = _load_declared_connection(lybra_dir)
+                mcp_config = config.get("mcp", {}) if config is not None else {}
+                if isinstance(mcp_config, dict):
+                    rpc_url = mcp_config.get("rpc_url")
+                    if rpc_url:
+                        return str(rpc_url)
         
         # Environment override (最低优先级)
         env_url = source_env.get("LYBRA_GATE_URL", "").strip()
@@ -238,7 +272,10 @@ class ConnectionResolver:
         if schema_gate_url is None:
             # AIPOS-R4B-1: gate URL 单源在 config.schema (urls.gate_local)
             schema_gate_url = get_config_default_gate_url()
-        schema_gate_url = schema_gate_url.rstrip("/mcp").rstrip("/")
+        # AIPOS-F115 件②(gap #67): 原 rstrip("/mcp") 按字符集剥(会削掉以 m/c/p 结尾的主机名), 改走门基址换算唯一实现
+        from tools.aipos_cli.confirm_client import gate_base_url
+
+        schema_gate_url = gate_base_url(schema_gate_url)
         
         def mk(key: str) -> dict[str, Any]:
             return {"key": key, "value": None, "source": "unresolved", "via_env": False, "env_downgraded": False}
@@ -260,34 +297,25 @@ class ConnectionResolver:
         actor_text: str | None = None
         policy_text: str | None = None
         if lybra_dir:
+            # AIPOS-F115 件②(gap #67): 文件不存在 = 未声明(落下一层); 存在但不可读/格式坏 = WorkstationFileError
+            # (原四处 except Exception 吞错后按「未声明」静默降级到 env/缺省)。
             role_file = lybra_dir / "role"
-            if role_file.is_file():
-                try:
-                    content = role_file.read_text(encoding="utf-8").strip()
-                    if content.startswith("{"):
+            role_text = _read_declared_text(role_file)
+            if role_text is not None:
+                content = role_text.strip()
+                if content.startswith("{"):
+                    try:
                         parsed = json.loads(content)
-                        if isinstance(parsed, dict):
-                            role_data = parsed
-                    else:
-                        role_data = {"role": content}
-                except Exception:
-                    role_data = {}
-            try:
-                conn = ConnectionResolver.load_connection_config(lybra_dir)
-            except Exception:
-                conn = None
-            actor_file = lybra_dir / "actor"
-            if actor_file.is_file():
-                try:
-                    actor_text = actor_file.read_text(encoding="utf-8").strip() or None
-                except Exception:
-                    actor_text = None
-            policy_file = lybra_dir / "policy"
-            if policy_file.is_file():
-                try:
-                    policy_text = policy_file.read_text(encoding="utf-8").strip() or None
-                except Exception:
-                    policy_text = None
+                    except json.JSONDecodeError as exc:
+                        raise WorkstationFileError(role_file, exc) from exc
+                    if not isinstance(parsed, dict):
+                        raise WorkstationFileError(role_file, "须为 JSON 对象(role/instance)")
+                    role_data = parsed
+                elif content:
+                    role_data = {"role": content}
+            conn = _load_declared_connection(lybra_dir)
+            actor_text = (_read_declared_text(lybra_dir / "actor") or "").strip() or None
+            policy_text = (_read_declared_text(lybra_dir / "policy") or "").strip() or None
         
         env_role = (source_env.get("LYBRA_ROLE") or "").strip()
         env_actor = (source_env.get("LYBRA_ACTOR") or "").strip()

@@ -356,14 +356,41 @@ def _ordered_frontmatter(metadata: dict[str, Any], order: list[str] | None) -> d
     return {key: _normalize_value(metadata[key]) for key in ordered_keys}
 
 
+# AIPOS-F115 件④(gap #64): YAML 1.1 换行符 NEL/LS/PS。PyYAML safe_dump 默认把含它们的串写成单引号/明标量并原样输出该字符,
+# 读侧按换行折叠 → 写后回读不一致 → 拒写; 而 stdlib 回退路径按双引号转义(\N \L \P)写出, 回读逐字一致 → 能写。两路不对称。
+# 统一判据 = 两路同写: 这些值在 YAML 双引号标量里可无损表示(规范转义, 读侧 PyYAML 与零依赖解析器均还原), 拒写只会丢合法数据;
+# 故 PyYAML 路径对含这些字符的串强制双引号风格(PyYAML 双引号写出对其按 \N \L \P 转义), 与 stdlib 路径(_DQ_SHORT_ESCAPES)同形。
+_YAML_LINE_BREAK_CHARS = ("\x85", "\u2028", "\u2029")
+_FRONTMATTER_DUMPER: Any = None
+
+
+def _frontmatter_safe_dumper() -> Any:
+    """SafeDumper 子类(只改 str 表示: 含 NEL/LS/PS 时强制双引号), 其余行为与 yaml.safe_dump 完全一致。"""
+    global _FRONTMATTER_DUMPER
+    if _FRONTMATTER_DUMPER is None:
+
+        class _FrontmatterDumper(yaml.SafeDumper):  # type: ignore[name-defined,misc]
+            pass
+
+        def _represent_str(dumper: Any, data: str) -> Any:
+            if any(ch in data for ch in _YAML_LINE_BREAK_CHARS):
+                return dumper.represent_scalar("tag:yaml.org,2002:str", data, style='"')
+            return yaml.SafeDumper.represent_str(dumper, data)  # type: ignore[union-attr]
+
+        _FrontmatterDumper.add_representer(str, _represent_str)
+        _FRONTMATTER_DUMPER = _FrontmatterDumper
+    return _FRONTMATTER_DUMPER
+
+
 def _dump_frontmatter_yaml(ordered_meta: dict[str, Any]) -> str:
     """frontmatter YAML 文本(不含 --- 围栏)的唯一序列化实现(AIPOS-F22B/F46/F87 单源)。
 
     主路径 yaml.safe_dump; PyYAML 缺席时走 stdlib 回退(zerodep 核心)。卡与记录的 frontmatter 一律经此, 禁逐行拼接写值。
     """
     if yaml is not None:
-        yaml_text = yaml.safe_dump(
+        yaml_text = yaml.dump(
             ordered_meta,
+            Dumper=_frontmatter_safe_dumper(),
             sort_keys=False,
             allow_unicode=True,
             default_flow_style=False,

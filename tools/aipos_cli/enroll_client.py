@@ -65,12 +65,15 @@ def is_same_host(gate_url: str) -> bool:
         hostname = socket.gethostname()
         try:
             local_ips.update(addr[4][0] for addr in socket.getaddrinfo(hostname, None))
-        except Exception:
-            pass
+        except OSError as exc:
+            # AIPOS-F115 件③(gap #58 残留): 本机名解析失败 → 只按 loopback 判, 出声(原 except Exception: pass)
+            print(f"Warning: 本机名 {hostname!r} 解析失败({exc}), 同机判定只认 loopback", file=sys.stderr)
         
         # 判定交集
         return bool(gate_ips & local_ips)
-    except Exception:
+    except (OSError, ValueError) as exc:
+        # AIPOS-F115 件③: 门地址解析失败 = 判「非同机」(按原 URL 连接, 不改写为 loopback), 出声; 原 except Exception 裸吞
+        print(f"Warning: 门地址 {gate_url!r} 无法解析({exc}), 按非同机处理", file=sys.stderr)
         return False
 
 

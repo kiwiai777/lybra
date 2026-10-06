@@ -357,18 +357,18 @@ def get_scope_role_map(workspace_root: str | None = None) -> dict[str, list[str]
         for scope in spec.get("scopes", []):
             scope_to_roles.setdefault(scope, []).append(role)
     # AIPOS-352: add custom roles (they inherit their class's scopes)
+    # AIPOS-F115 件③(gap #61): 原 try/except Exception: pass 把注册表读错吞成「无自定义角色」; 现注册表读错原样抛
+    # (custom_roles.RoleRegistryReadError, 拒因带出口), 不再静默少算持有者。
     if workspace_root is not None:
-        try:
-            from tools.aipos_cli.custom_roles import load_custom_roles
-            custom = load_custom_roles(workspace_root)
-            for name, entry in custom.items():
-                builtin_class = entry["class"]
-                class_spec = next((s for s in ROLE_SPECS if s["role"] == builtin_class), None)
-                if class_spec:
-                    for scope in class_spec.get("scopes", []):
-                        scope_to_roles.setdefault(scope, []).append(name)
-        except Exception:
-            pass
+        from tools.aipos_cli.custom_roles import load_custom_roles
+
+        custom = load_custom_roles(workspace_root)
+        for name, entry in custom.items():
+            builtin_class = entry["class"]
+            class_spec = next((s for s in ROLE_SPECS if s["role"] == builtin_class), None)
+            if class_spec:
+                for scope in class_spec.get("scopes", []):
+                    scope_to_roles.setdefault(scope, []).append(name)
     return scope_to_roles
 
 

@@ -110,9 +110,19 @@
       }
     },
     "workspace_config": {
-      "description": "Workspace-level configuration",
+      "description": "Workspace-level configuration(治理根 .lybra/config.json, 可选的手写覆盖)。AIPOS-F117 件①(gap #52): 产品不再生成本文件——原写入方 workspace_config.write_workspace_config / default_workspace_config 产品零调用方删除(建项目 = lybra project new, 不产本文件)。读取口: board / mcp 运行时字段唯一读取口 workspace_config.workspace_runtime_config(serve/board/mcp 包装 aipos_cli._config_defaults 与看板运行时状态面 _runtime_config_defaults 同读; 文件缺 = 全缺省, 文件坏 = 启动路径拒 / 状态面报 config_error); worktree_root 经 next_resolver._resolve_worktree_root; workspace_root(v1)/ home_root + active_project(v2)经 workspace_config.resolve_workspace_context 优先级梯。",
       "source_file": ".lybra/config.json",
       "schema": {
+        "board": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-F117: {host, port, url?} 看板地址覆盖; 缺 = DEFAULT_BOARD_HOST / config.schema ports.board_default。读取口 workspace_runtime_config(board_login.board_base_url 另读 url)"
+        },
+        "mcp": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-F117: {host, port, transport_token_env, capability_token_env} 门/MCP 地址与令牌环境变量名覆盖; 缺 = DEFAULT_MCP_HOST / ports.gate_default / LYBRA_MCP_TOKEN / LYBRA_CAPABILITY_TOKEN。读取口 workspace_runtime_config"
+        },
         "workspace_root": {
           "type": "string",
           "required": true,

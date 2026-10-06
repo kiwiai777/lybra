@@ -871,7 +871,8 @@ def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connecti
     顺序: ⓪ loop 显式 --actor(driver_scope, AIPOS-F90 件①) → ① 治理根 .lybra/role 的 instance(工位声明)
     → ② connection.json 驱动方 token 绑定的 agent_instance → ③ 调用方显式 fallback(仅靶场/显式传入)
     → 解析不到返回 ""(调用方 fail-closed: 不可推导 + 点名缺项)。
-    AIPOS-F106 件④: ① 经 ConnectionResolver.resolve_identity(.lybra/role 唯一读取实现之一); role 文件不可读时该实现按「未声明」落下一层。
+    AIPOS-F106 件④: ① 经 ConnectionResolver.resolve_identity(.lybra/role 唯一读取实现之一)。
+    AIPOS-F115 件②: role 文件存在但不可读/格式坏 = WorkstationFileError 原样抛出(fail-closed, 拒因带出口), 不再按「未声明」落下一层。
     """
     scoped_actor = _scoped_driver().get("actor")
     if scoped_actor:
@@ -2717,6 +2718,23 @@ def _derive_next_step(
             "missing_records": ["blocked 恢复策略需人工裁定"],
             "suggested_action": "检查阻塞原因,决定 reopen 或释放",
             "notes": "任务被阻塞,需人工裁定恢复策略",
+        }
+
+    # --- 其余终态(AIPOS-F117 件③, gap #62: 终态集合读 enums queue_state terminal 声明; completed 已在上方走 N6 落账)→ 无下一步 ---
+    from tools.aipos_cli.task_loader import QUEUE_TERMINAL_STATES
+
+    if queue_dir in QUEUE_TERMINAL_STATES:
+        return {
+            "task_id": task_id,
+            "derivable": True,
+            "current_node": None,
+            "current_state": queue_dir,
+            "triggered_by": "none",
+            "command": f"# 任务已处于终态 {queue_dir},无下一步",
+            "verb": "",
+            "missing_records": [],
+            "suggested_action": "无(任务已结束)",
+            "notes": f"终态 {queue_dir}(enums.schema queue_state terminal=true), 推导核不派生推进步",
         }
 
     # --- 未知 queue 位置 ---

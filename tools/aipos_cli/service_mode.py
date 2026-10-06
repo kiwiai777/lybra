@@ -768,11 +768,15 @@ def rotate_report(
     bindings_preserved: list[str] = []
     
     if conn_path.exists():
+        # AIPOS-F115 件③: 既有凭据库读不出 = 拒轮换(原 except Exception: pass 当作「无既有绑定」继续, 会静默丢掉既有实例绑定)
         try:
             existing_config = load_connection_config(workspace_root, connection_target=connection_target)
-            existing_bindings = _collect_existing_bindings(existing_config)
-        except Exception:
-            pass  # Best effort
+        except (OSError, ValueError) as exc:
+            blocking.append(
+                f"serve rotate: 既有凭据库 {conn_path} 不可读/格式坏({exc}), 无法保留既有实例绑定; 出口: 修复该文件后重试"
+            )
+            return _blocked("serve_rotate", workspace_root, blocking, warnings, connection_target=connection_target)
+        existing_bindings = _collect_existing_bindings(existing_config)
     
     # AIPOS-346 S1: resolve bindings — omit params = preserve existing (no BLOCK)
     merged_bindings, binding_changes = _resolve_rotation_bindings(
@@ -848,12 +852,14 @@ def rotate_report(
         # Validate that requested roles exist in ROLE_SPECS or custom_roles registry
         known_roles = {spec["role"] for spec in _ensure_role_specs()}
         # AIPOS-352: include custom roles from workspace registry
+        # AIPOS-F115 件③: 注册表读错 = 拒(原 except Exception: pass 吞成「无自定义角色」→ 误报 unknown role)
+        from tools.aipos_cli.custom_roles import RoleRegistryReadError, load_custom_roles
+
         try:
-            from tools.aipos_cli.custom_roles import load_custom_roles
-            custom = load_custom_roles(workspace_root)
-            known_roles.update(custom.keys())
-        except Exception:
-            pass
+            known_roles.update(load_custom_roles(workspace_root).keys())
+        except RoleRegistryReadError as exc:
+            blocking.append(f"serve rotate --roles: {exc}")
+            return _blocked("serve_rotate", workspace_root, blocking, warnings, connection_target=connection_target)
         unknown = [r for r in roles_normalized if r not in known_roles]
         if unknown:
             blocking.append(
@@ -890,8 +896,8 @@ def rotate_report(
 
     write_connection_config(workspace_root, config, connection_target=connection_target)
     
-    # AIPOS-346 S2: append rotation log
-    _append_rotation_log(
+    # AIPOS-346 S2: append rotation log(AIPOS-F115 件③: 写日志失败不阻断轮换, 但进 warnings 可见)
+    rotation_log_error = _append_rotation_log(
         actor=actor or "(unknown)",
         owner_authorization_ref=owner_authorization_ref,
         bindings_before=existing_bindings,
@@ -899,6 +905,8 @@ def rotate_report(
         binding_changes=binding_changes,
         workspace_root=workspace_root,
     )
+    if rotation_log_error:
+        warnings.append(rotation_log_error)
     
     # AIPOS-346 S3: config_update_locations — where configs need updating on remote machines
     # AIPOS-353: only include affected (rotated) roles
@@ -1381,10 +1389,10 @@ def _append_rotation_log(
     bindings_after: dict[str, str],
     binding_changes: list[dict[str, str]],
     workspace_root: Path,
-) -> None:
-    """Append a rotation event to the log. Best-effort (never blocks rotation)."""
+) -> str | None:
+    """Append a rotation event to the log. Never blocks rotation; failure returns a warning string (AIPOS-F115 件③)."""
+    log_path = _rotation_log_path()
     try:
-        log_path = _rotation_log_path()
         log_path.parent.mkdir(parents=True, exist_ok=True)
         entry = {
             "rotated_at": iso_z(),
@@ -1397,8 +1405,10 @@ def _append_rotation_log(
         }
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, sort_keys=True) + "\n")
-    except Exception:
-        pass  # Best-effort: never block rotation for log failures
+    except (OSError, TypeError, ValueError) as exc:
+        # AIPOS-F115 件③: 原 except Exception: pass 静默丢轮换日志; 现精确捕获并把拒因交调用方进 warnings
+        return f"ROTATION_LOG_WRITE_FAILED: 轮换日志未写入 {log_path}: {exc}"
+    return None
 
 
 # AIPOS-350F2: compliance validation single-sourced from naming_profile.
@@ -1518,14 +1528,12 @@ def roles_reconcile_report(
     actual_roles = {t.get("role"): t for t in config.get("tokens", []) if isinstance(t, dict)}
     expected_roles = {spec["role"]: spec for spec in ROLE_SPECS}
     # AIPOS-352: custom roles from the workspace registry are also expected
-    try:
-        from tools.aipos_cli.custom_roles import load_custom_roles
-        custom = load_custom_roles(workspace_root)
-        for name in custom:
-            if name not in expected_roles:
-                expected_roles[name] = {"role": name, "custom": True}
-    except Exception:
-        pass
+    # AIPOS-F115 件③: 注册表读错原样抛(RoleRegistryReadError, 带出口); 原 except Exception: pass 会把自定义角色 token 误报为 extra
+    from tools.aipos_cli.custom_roles import load_custom_roles
+
+    for name in load_custom_roles(workspace_root):
+        if name not in expected_roles:
+            expected_roles[name] = {"role": name, "custom": True}
     
     missing = [r for r in expected_roles if r not in actual_roles]
     extra = [r for r in actual_roles if r not in expected_roles]

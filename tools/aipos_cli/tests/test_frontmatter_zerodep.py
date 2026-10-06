@@ -458,7 +458,7 @@ class FrontmatterZerodepShapeInventoryTests(unittest.TestCase):
             with self.subTest(value=value):
                 data, warnings = self._fallback(fm_text)
                 # oracle = safe_load (PyYAML itself folds a raw NEL \x85 into a space; the writer's
-                # read-back check refuses such values — parity with the oracle is what is asserted here)
+                # writer forces double-quoted \\N/\\L/\\P for such values since AIPOS-F115 — parity with the oracle is what is asserted here)
                 self.assertEqual(data, _real_yaml.safe_load(fm_text))
                 self.assertEqual(warnings, [])
 
@@ -475,7 +475,7 @@ class FrontmatterZerodepShapeInventoryTests(unittest.TestCase):
                 with self.subTest(value=value):
                     data, warnings = self._fallback(fm_text)
                     # oracle = safe_load (PyYAML itself folds a raw NEL \x85 into a space; the writer's
-                    # read-back check refuses such values — parity with the oracle is what is asserted here)
+                    # writer forces double-quoted \\N/\\L/\\P for such values since AIPOS-F115 — parity with the oracle is what is asserted here)
                     self.assertEqual(data, _real_yaml.safe_load(fm_text))
                     self.assertEqual(warnings, [])
         finally:

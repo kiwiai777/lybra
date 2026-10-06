@@ -765,8 +765,8 @@ def run_fs_watch_cli(args: Any) -> int:
         if stream_mode:
             try:
                 print(json.dumps({"kind": "end", "reason": "signal"}, ensure_ascii=False), flush=True)
-            except Exception:
-                pass  # Best effort: don't crash if stdout is broken
+            except (OSError, ValueError) as exc:  # AIPOS-F115 件③: stdout 已断(BrokenPipe/已关闭)——精确捕获并出声到 stderr, 不吞
+                print(f"Warning: stream end 事件未能写出(stdout 不可写): {exc}", file=sys.stderr)
         raise _SignalExit(EXIT_SIGNAL)
 
     prev_term = signal.signal(signal.SIGTERM, _handler)

@@ -696,13 +696,21 @@ def validate_step_prerequisites(
 
         if is_enrolled_workstation(ws):
             # role 文件只经 ConnectionResolver.resolve_identity 读(唯一实现之一; env={} = 只认工位声明层 .lybra/role)
-            ident = ConnectionResolver.resolve_identity(workspace_root=ws, env={})
-            if ident["role"]["source"] != ".lybra/role":
+            # AIPOS-F115 件②: 工位声明文件坏 = WorkstationFileError(原被吞成「未声明」), 此处转为缺项 + 带出口的指引
+            from tools.loop_context import WorkstationFileError
+
+            try:
+                ident = ConnectionResolver.resolve_identity(workspace_root=ws, env={})
+            except WorkstationFileError as exc:
                 missing.append("role_invalid")
-                guidance.append("role 文件格式错误; 重跑 Step 7")
-            elif ident["owner_policy_ref"]["source"] != ".lybra/role":
-                missing.append("owner_policy_ref")
-                guidance.append("role 文件缺 owner_policy_ref; 核对 Step 4 信封是否覆盖本工位实例后重跑 lybra sync")
+                guidance.append(f"{exc}; 重跑 Step 7")
+            else:
+                if ident["role"]["source"] != ".lybra/role":
+                    missing.append("role_invalid")
+                    guidance.append("role 文件格式错误; 重跑 Step 7")
+                elif ident["owner_policy_ref"]["source"] != ".lybra/role":
+                    missing.append("owner_policy_ref")
+                    guidance.append("role 文件缺 owner_policy_ref; 核对 Step 4 信封是否覆盖本工位实例后重跑 lybra sync")
 
     return {
         "ok": not missing,

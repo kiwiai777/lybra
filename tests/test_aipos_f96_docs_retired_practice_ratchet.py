@@ -4,8 +4,9 @@
 现行做法: 推进 = 顾问 `lybra loop`; 工位只敲 /go; 接入 = `lybra onboarding guide` + `lybra project new`;
 等待 = `lybra agent watch --workspace-root`。退役做法字面声明在下方 RETIRED_PRACTICES(新退役一项做法 = 加一行)。
 
-扫描面(DOC_SCOPE): git ls-files 中 docs/**、README.md、QUICKSTART.md、agents/**/*.md、templates/**、skills/**(文本文件;
-skills/ 由 AIPOS-F103 件② 加入: 仓根旧技能已删, 此后仓根若再出技能同样不许教退役做法)。
+扫描面(DOC_SCOPE): git ls-files 中 docs/**、README.md、QUICKSTART.md、agents/**/*.md、templates/**、skills/**、0_control_plane/**(文本文件;
+skills/ 由 AIPOS-F103 件② 加入: 仓根旧技能已删, 此后仓根若再出技能同样不许教退役做法;
+0_control_plane/ 由 AIPOS-F117 件④(gap #51)加入: 它随 npm 包发布(package.json files), 是对外协议文档, 同样不许教退役做法)。
 (templates/ 已随建项目单入口卡 AIPOS-F105 整目录删除, 扫描面保留以防回流; 删除不变量见 tests/test_aipos_f105_single_project_entry.py。)
 现存命中登记在 tests/f96_docs_retired_practice_baseline.jsonl(测试数据文件; AIPOS-F109 件⑤: 只存条目、一行一条、稳定排序,
 读写口 tests/ratchet_baseline.py, 计数由本夹具运行时计算不入文件): 每条 = 文件 + 式样 id + 行指纹(行文本 strip 后 sha1 前 12 位)
@@ -14,7 +15,8 @@ skills/ 由 AIPOS-F103 件② 加入: 仓根旧技能已删, 此后仓根若再�
 判定(多重集比对, 键 = (file, pattern, fp)):
   - 现有命中不在基线 = 新增 → 红
   - 基线条目在仓里已不存在(已修 / 行文本已改)= 基线残留 → 红(修好即从基线删该条, 只减不增)
-  - docs/ 零容忍: 基线不许有 docs/ 下条目; 其余条目只许是标 lane_blocked 的车道外文件
+  - docs/ 零容忍: 基线不许有 docs/ 下条目; 其余条目只许是标 lane_blocked 的车道外文件, 或标 protocol_surface 的
+    0_control_plane/ 协议文档存量(AIPOS-F117 件④ 扩面时登记: 记述门仍实现的动词/确认令牌契约, 改写须随该契约退役, 只减不增)
     (AIPOS-F105 删 templates/; AIPOS-F103 删 README/QUICKSTART 的「待退役」段——两处都不再是允许位置)
 
 独立夹具而非并入 F87 棘轮(不变量 f)的理由: F87 的扫描面是产品代码(排除文档), 其基线 well-formed 断言写死不变量集合
@@ -55,6 +57,8 @@ COMPILED = {pid: re.compile(rx) for pid, (rx, _) in RETIRED_PRACTICES.items()}
 
 # 基线里允许出现(非 lane_blocked)的位置: 无(templates/ 已随 AIPOS-F105 删除; README/QUICKSTART 待退役段已随 AIPOS-F103 删除)
 ALLOWED_BASELINE_FILES: set[str] = set()
+# AIPOS-F117 件④: 协议文档存量只许在此前缀下、且条目标 protocol_surface(扩面时一次登记, 之后只减不增)
+PROTOCOL_SURFACE_PREFIX = "0_control_plane/"
 
 
 def fingerprint(line: str) -> str:
@@ -64,7 +68,7 @@ def fingerprint(line: str) -> str:
 def in_doc_scope(rel: str) -> bool:
     if rel in ("README.md", "QUICKSTART.md"):
         return True
-    if rel.startswith(("docs/", "templates/", "skills/")):
+    if rel.startswith(("docs/", "templates/", "skills/", PROTOCOL_SURFACE_PREFIX)):
         return True
     return rel.startswith("agents/") and rel.endswith(".md")
 
@@ -150,6 +154,19 @@ def test_scan_scope_covers_repo_root_skills():
     assert ratchet_diff(current_hits() + hits, load_baseline()["entries"])["new"][-len(hits):] == hits
 
 
+def test_scan_scope_covers_published_control_plane_docs():
+    """AIPOS-F117 件④(gap #51): 随 npm 包发布的 0_control_plane/ 协议文档纳入扫描面; 已删的模板协议文档不在仓内。"""
+    files = doc_files()
+    published = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))["files"]
+    assert PROTOCOL_SURFACE_PREFIX in published, published
+    assert any(f.startswith(PROTOCOL_SURFACE_PREFIX) for f in files)
+    assert "0_control_plane/templates/workspace_template_protocol.md" not in files
+    assert not (REPO_ROOT / "0_control_plane" / "templates" / "workspace_template_protocol.md").exists()
+    hits = scan_text("0_control_plane/x/new_protocol.md", "operator runs `lybra workspace init --template blank`\n")
+    assert [str(h["pattern"]) for h in hits] == ["lybra_init"], hits
+    assert ratchet_diff(current_hits() + hits, load_baseline()["entries"])["new"][-1] == hits[0]
+
+
 def test_baseline_is_well_formed_and_only_in_allowed_places():
     baseline = load_baseline()
     entries = baseline["entries"]
@@ -160,8 +177,9 @@ def test_baseline_is_well_formed_and_only_in_allowed_places():
         assert entry.get("item") and entry.get("reason"), entry  # 每条带复查条目号与留存理由
         rel = str(entry["file"])
         assert not rel.startswith("docs/"), f"docs/ 零容忍, 基线不许登记: {entry}"
-        allowed = rel in ALLOWED_BASELINE_FILES or entry.get("lane_blocked")
-        assert allowed, f"基线条目只许是标 lane_blocked 的车道外文件: {entry}"
+        protocol_surface = bool(entry.get("protocol_surface")) and rel.startswith(PROTOCOL_SURFACE_PREFIX)
+        allowed = rel in ALLOWED_BASELINE_FILES or entry.get("lane_blocked") or protocol_surface
+        assert allowed, f"基线条目只许是标 lane_blocked 的车道外文件或标 protocol_surface 的 0_control_plane/ 协议文档: {entry}"
 
 
 def test_ratchet_no_new_hits_and_no_stale_baseline_entries():

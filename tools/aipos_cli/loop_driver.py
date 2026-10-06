@@ -42,6 +42,7 @@ from typing import Any, Callable, TextIO
 from tools.aipos_cli.harness_launch import (  # AIPOS-F95: 拉起进程封装(无 sleep; 计时只用于 select 超时)
     LaunchedHarness,
     LoopInterrupted,
+    TolerantOutput,
     signals_deferred as _signals_deferred,
     signals_raise_interrupt as _signals_raise_interrupt,
 )
@@ -629,34 +630,46 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
     """拉起一次 harness 并经唯一哨兵等待产物(进程退出也唤醒), 结束即清进程组。返回 True = loop 应以 result 出口返回。
 
     产物就绪 → 宽限 grace_seconds 后终止进程组, 继续推导; 进程早退而产物未就绪 → exit 3 附 stderr 末尾;
-    等待超时 → 终止进程组, exit 3; 收到 SIGINT/SIGTERM → 终止进程组, 抛 LoopInterrupted; 拉起事件写不进 session record → 终止, exit 4。"""
+    等待超时 → 终止进程组, exit 3; 收到 SIGINT/SIGTERM/SIGHUP(harness_launch.loop_signals)→ 终止进程组, 抛 LoopInterrupted;
+    拉起事件写不进 session record → 终止, exit 4。
+    AIPOS-F107 件①: 信号处置覆盖拉起全程——Popen 期间到的信号先记下(拉起后按中断处理), 拉起起至清组+收尾留痕止
+    中断处置不撤(清理与留痕期间到的信号记下, 清完再抛), 不留「默认处置直接终止 loop、进程组成孤儿」的窗口。"""
     wait_timeout = exit_code_for(contract, "wait_timeout")
     terminate_wait = float(decl["terminate_wait_seconds"])
     where = f"{plan.location.get('host') or '本机'}:{plan.cwd}"
-    try:
-        harness = LaunchedHarness(plan, decl, say)
-    except OSError as exc:
-        step.ok, step.message = False, f"拉起 {plan.harness} 失败({type(exc).__name__}: {exc}); 手工模式: {plan.manual_hint}"
-        say(f"[{index}] exit 3 — {step.message}")
-        result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
-        return True
-    step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid, "remote_pgid": harness.remote_pgid}
-    remote_part = f" remote_pgid={harness.remote_pgid}(经 ssh, kickoff 经 stdin)" if plan.remote else ""
-    say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}{remote_part}(信封 {envelope_id} launch_harnesses 授权; "
-        f"kickoff = 工位 my-tasks --task-id {plan.card} next_card.kickoff)")
+    harness: LaunchedHarness | None = None
+    launch_error: OSError | None = None
     outcome = "error"
-    try:
-        failure = _session_event(governance_root, plan.card, actor, "harness_launch",
-                                 f"harness={plan.harness}; transport={plan.location.get('transport')}; host={plan.location.get('host') or '(本机, 存量缺 host)'}; "
-                                 f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; remote_pgid={harness.remote_pgid}; envelope={envelope_id}")
-        if failure:
-            outcome = "record_failed"
-            step.ok, step.message = False, f"拉起事件写不进 {plan.card} session record({failure}), 已终止进程组; 拉起须留痕(fail-closed)"
-            say(f"[{index}] exit 4 — {step.message}")
-            result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), step.message
-            return True
-        watch_out = io.StringIO()
-        with _signals_raise_interrupt():
+    with _signals_raise_interrupt():
+        try:
+            with _signals_deferred() as early:  # Popen 期间不被打断(打断 = 子进程已起而无人持有 → 孤儿)
+                try:
+                    harness = LaunchedHarness(plan, decl, say)
+                except OSError as exc:
+                    launch_error = exc
+            if harness is None:
+                if early:
+                    raise LoopInterrupted(early[0])
+                step.ok, step.message = False, f"拉起 {plan.harness} 失败({type(launch_error).__name__}: {launch_error}); 手工模式: {plan.manual_hint}"
+                say(f"[{index}] exit 3 — {step.message}")
+                result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
+                return True
+            step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid, "remote_pgid": harness.remote_pgid}
+            remote_part = f" remote_pgid={harness.remote_pgid}(经 ssh, kickoff 经 stdin)" if plan.remote else ""
+            say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}{remote_part}(信封 {envelope_id} launch_harnesses 授权; "
+                f"kickoff = 工位 my-tasks --task-id {plan.card} next_card.kickoff)")
+            if early:
+                raise LoopInterrupted(early[0])
+            failure = _session_event(governance_root, plan.card, actor, "harness_launch",
+                                     f"harness={plan.harness}; transport={plan.location.get('transport')}; host={plan.location.get('host') or '(本机, 存量缺 host)'}; "
+                                     f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; remote_pgid={harness.remote_pgid}; envelope={envelope_id}")
+            if failure:
+                outcome = "record_failed"
+                step.ok, step.message = False, f"拉起事件写不进 {plan.card} session record({failure}), 已终止进程组; 拉起须留痕(fail-closed)"
+                say(f"[{index}] exit 4 — {step.message}")
+                result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), step.message
+                return True
+            watch_out = io.StringIO()
             with contextlib.redirect_stdout(watch_out):
                 rc = watch(watch_args, expect_ready=ready, stop_when=harness.exited, sleeper=harness.pump)
             step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
@@ -680,24 +693,26 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
             say(f"[{index}] exit 3 — {step.message}")
             result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
             return True
-    except LoopInterrupted as exc:
-        outcome = f"interrupted(signal {exc.signum})"
-        step.ok, step.message = False, f"loop 收到信号 {exc.signum}: 已终止拉起的 {plan.harness} 进程组"
-        say(f"[{index}] interrupted — {step.message}")
-        raise
-    finally:
-        with _signals_deferred() as pending:  # 清进程组期间不被信号打断; 期间到的信号清完再按 LoopInterrupted 抛
-            how = harness.terminate_group(terminate_wait)
-            harness.close()
-        say(harness.counts_line())
-        step.launch = {**(step.launch or {}), "outcome": outcome, "returncode": harness.proc.returncode, "termination": how}
-        failure = _session_event(governance_root, plan.card, actor, "harness_exit",
-                                 f"harness={plan.harness}; pid={harness.pid}; outcome={outcome}; returncode={harness.proc.returncode}; termination={how}")
-        if failure:
-            say(f"[{index}] warning — 收尾事件写不进 {plan.card} session record: {failure}")
-            step.launch["exit_event_error"] = failure
-        if pending:
-            raise LoopInterrupted(pending[0])
+        except LoopInterrupted as exc:
+            if harness is not None:
+                outcome = f"interrupted(signal {exc.signum})"
+                step.ok, step.message = False, f"loop 收到信号 {exc.signum}: 已终止拉起的 {plan.harness} 进程组"
+                say(f"[{index}] interrupted — {step.message}")
+            raise
+        finally:
+            if harness is not None:
+                with _signals_deferred() as pending:  # 清进程组与收尾留痕期间不被信号打断; 期间到的信号清完再按 LoopInterrupted 抛
+                    how = harness.terminate_group(terminate_wait)
+                    harness.close()
+                    say(harness.counts_line())
+                    step.launch = {**(step.launch or {}), "outcome": outcome, "returncode": harness.proc.returncode, "termination": how}
+                    failure = _session_event(governance_root, plan.card, actor, "harness_exit",
+                                             f"harness={plan.harness}; pid={harness.pid}; outcome={outcome}; returncode={harness.proc.returncode}; termination={how}")
+                    if failure:
+                        say(f"[{index}] warning — 收尾事件写不进 {plan.card} session record: {failure}")
+                        step.launch["exit_event_error"] = failure
+                if pending:
+                    raise LoopInterrupted(pending[0])
 
 
 # ---------------------------------------------------------------------------
@@ -724,7 +739,7 @@ def run_loop(
     """有界推进一张卡。返回 LoopResult(exit_code 按 verbs.schema lybra_loop.exit_codes)。
 
     derive/execute/watch 可注入(靶场用), 缺省 = 产品唯一实现。
-    AIPOS-F95: no_launch=True = 不拉起 harness(手工模式); 拉起等待期间收到 SIGINT/SIGTERM → 清进程组后抛 LoopInterrupted。
+    AIPOS-F95: no_launch=True = 不拉起 harness(手工模式); 拉起等待期间收到 SIGINT/SIGTERM/SIGHUP → 清进程组后抛 LoopInterrupted。
     """
     out = out or sys.stdout
     governance_root = Path(governance_root)
@@ -739,8 +754,7 @@ def run_loop(
     if watch is None:
         from tools.aipos_cli.agent_watch_fs import run_fs_watch as watch  # noqa: F811 — 唯一哨兵
 
-    def say(line: str) -> None:
-        print(line, file=out, flush=True)
+    say = TolerantOutput(out)  # AIPOS-F107 件①: 输出端断开(ssh 断线/管道关闭)→ 静默丢弃, 不打断拉起期清理
 
     # 卡存在性
     task_path, _queue_dir = _find_task_in_queue(governance_root, task_id)
@@ -1038,9 +1052,10 @@ def run_loop_cli(args: Any) -> int:
         # AIPOS-F95 件③: 拉起的进程组已终止; 按收到的信号退出(不新增退出码)
         import signal as _signal
 
+        err = TolerantOutput(sys.stderr)  # AIPOS-F107: ssh 断线后 stderr 也已断开, 写失败不改按信号退出
         if json_mode:
-            print(sink.getvalue(), file=sys.stderr)
-        print(f"lybra loop {args.task_id}: 收到信号 {exc.signum}, 已终止拉起的 harness 进程组, 按该信号退出", file=sys.stderr, flush=True)
+            err(sink.getvalue())
+        err(f"lybra loop {args.task_id}: 收到信号 {exc.signum}, 已终止拉起的 harness 进程组, 按该信号退出")
         _signal.signal(exc.signum, _signal.SIG_DFL)
         os.kill(os.getpid(), exc.signum)
         return 128 + exc.signum  # 仅当信号被外部屏蔽时到达
@@ -1060,10 +1075,10 @@ def _run_loop_cli_body(args: Any, governance_root: Path, json_mode: bool, sink: 
         no_launch=bool(getattr(args, "no_launch", False)),
     )
     if json_mode:
-        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        TolerantOutput(sys.stdout)(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
     elif result.exit_code != 0:
-        print(f"lybra loop {result.task_id}: {result.outcome} (exit {result.exit_code})", file=sys.stderr)
-    return result.exit_code
+        TolerantOutput(sys.stderr)(f"lybra loop {result.task_id}: {result.outcome} (exit {result.exit_code})")
+    return result.exit_code  # AIPOS-F107: 输出端断开不改声明退出码
 
 
 # AIPOS-316: Guard against direct invocation

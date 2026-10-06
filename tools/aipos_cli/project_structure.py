@@ -5,10 +5,11 @@ Schema (lybra-project.yaml): versioned YAML capturing project name, description
 and existing document source manifest (path->target mapping).
 
 Red lines:
-- import NEVER removes user files (only creates skeleton + migration checklist)
+- import NEVER removes user files (project created by `lybra project new`'s single implementation
+  workspace_config.scaffold_project + a migration checklist; AIPOS-F117 件①)
 - structure file contains ZERO credential values
 - read-before-write discipline
-- idempotent + non-empty directory protection on import
+- non-empty target protection on import (PROJECT_EXISTS, same refusal as project new)
 """
 from __future__ import annotations
 
@@ -33,36 +34,15 @@ SCHEMA_VERSION = 1
 STRUCTURE_FILENAME = "lybra-project.yaml"
 MIGRATION_CHECKLIST_FILENAME = "migration-checklist.md"
 
-# Standard five-piece set (标准五件套) directories/files
-# AIPOS-F89 件① M8: 队列状态目录不在此写死——import 时按队列根声明(task_loader.queue_root_for; 新根无 project.json = 声明 default)
-# 由 _standard_five_piece_dirs() 派生。
-# AIPOS-F104 件②: 预建队列目录 = task_loader.QUEUE_SKELETON_STATES(enums queue_state skeleton 投影), 原手写副本删除; 调用处惰性导入
-STANDARD_FIVE_PIECE = [
-    "5_tasks/records",
-    "5_tasks/drafts",
-    "5_tasks/orchestration",
-    "governance",
-    "stage_archive",
-    "workspace_artifacts",
-]
+# AIPOS-F117 件①(Owner 10-04 裁定 gap #53): 原 import 自建项目骨架的常量(STANDARD_FIVE_PIECE 标准五件套目录、
+# LYBRA_IGNORE_PATTERNS .lybra/.gitignore 内容)随第二实现删除——导入建项目一律经 workspace_config.scaffold_project
+# (`lybra project new` 唯一实现), 目录形状只在 governance_paths / 队列 skeleton 声明一处。
 
 # Canonical governance files mapping
 CANONICAL_GOVERNANCE_FILES = {
     "decision_log": "governance/decision_log.md",
     "project_map": "governance/project-map.md",
 }
-
-# .lybra ignore patterns (prevent leaks)
-LYBRA_IGNORE_PATTERNS = [
-    "*.env",
-    "*.secret",
-    "*.key",
-    "*.pem",
-    "connection.json",
-    "auth-log.jsonl",
-    "service_state.json",
-    "serve.pids",
-]
 
 # Credential-detection patterns (red line: never include in structure file)
 _CREDENTIAL_PATTERNS = re.compile(
@@ -554,17 +534,8 @@ def export_project_to_yaml(
 
 
 # ---------------------------------------------------------------------------
-# Import: create skeleton from structure file + migration checklist
+# Import: project new (scaffold_project) + migration checklist (AIPOS-F117 件①)
 # ---------------------------------------------------------------------------
-
-def _dir_is_empty_or_absent(path: Path) -> bool:
-    """Check if a directory is absent or empty (non-empty protection)."""
-    if not path.exists():
-        return True
-    if not path.is_dir():
-        return False
-    return next(path.iterdir(), None) is None
-
 
 def _load_structure_from_yaml(yaml_text: str) -> dict[str, Any]:
     """Load and validate structure from YAML text."""
@@ -577,221 +548,82 @@ def _load_structure_from_yaml(yaml_text: str) -> dict[str, Any]:
 
 def import_project_structure(
     structure_file: str | Path,
-    output_root: str | Path,
+    home_root: str | Path,
     *,
+    name: str | None = None,
     dry_run: bool = False,
     actor: str | None = None,
 ) -> dict[str, Any]:
-    """Import a project from a structure file.
+    """从结构文件导入既有项目 = `lybra project new` 同一实现建项目 + 迁移清单(AIPOS-F117 件①, Owner 10-04 裁定 gap #53)。
 
-    Creates:
-    - Standard five-piece set (queue dirs, records, drafts, governance, etc.)
-    - .lybra/ with ignore rules (leak prevention)
-    - Governance stubs for declared canonical files
-    - Migration checklist (docs that need manual migration)
+    建项目只有一个实现: workspace_config.scaffold_project(`lybra project new` 本地脚手架与门动词 lybra_project_new 同调)。
+    本函数只做导入特有的两件事: ① 读结构文件(schema 校验 + 零凭据红线)取项目名与代码仓; ② 建成后在项目根写迁移清单
+    (结构文件 doc_manifest 中待人工迁移的文档, 只列不搬, 源文件永不删除)。原自写 project.json / .lybra/config.json /
+    队列骨架 / 治理桩 / README 的第二实现已删。
 
-    Red lines:
-    - NEVER removes existing user files
-    - Non-empty directory protection (refuses if output_root is non-empty)
-    - Idempotent: re-running on same output is safe (skips existing)
+    落点 = <home_root>/<项目名>(project_root_for, 与 project new 同一推导); home_root 由调用方经 AIPOS-226 优先级梯
+    (workspace_config.resolve_home_root: --home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > 缺省 ~/.lybra/projects)
+    解析——看板不再自建 ~/.lybra/workspaces/。项目名 = name(显式)或结构文件 project_name。目标非空 = 拒(PROJECT_EXISTS,
+    与 project new 同一拒因, 不再「幂等跳过」)。dry_run = 只读预览, 零写入。
     """
+    from tools.aipos_cli.workspace_config import project_json_path, project_root_for, scaffold_project
+
+    def blocked(reason: str) -> dict[str, Any]:
+        return {"ok": False, "operation": "project_import", "blocking_reasons": [reason], "dry_run": dry_run}
+
     structure_path = Path(structure_file).expanduser().resolve()
     if not structure_path.is_file():
-        return {
-            "ok": False,
-            "operation": "project_import",
-            "blocking_reasons": [f"Structure file not found: {structure_path}"],
-            "dry_run": dry_run,
-        }
+        return blocked(f"Structure file not found: {structure_path}")
 
-    # Read and parse structure file
-    yaml_text = structure_path.read_text(encoding="utf-8")
     try:
-        structure = _load_structure_from_yaml(yaml_text)
+        structure = _load_structure_from_yaml(structure_path.read_text(encoding="utf-8"))
     except ValueError as exc:
-        return {
-            "ok": False,
-            "operation": "project_import",
-            "blocking_reasons": [str(exc)],
-            "dry_run": dry_run,
-        }
+        return blocked(str(exc))
 
     # Final credential check (red line)
     cred_findings = _check_no_credentials(structure)
     if cred_findings:
-        return {
-            "ok": False,
-            "operation": "project_import",
-            "blocking_reasons": [f"Credential values detected in structure file: {cred_findings}"],
-            "dry_run": dry_run,
-        }
+        return blocked(f"Credential values detected in structure file: {cred_findings}")
 
-    output = Path(output_root).expanduser().resolve()
-    project_name = str(structure.get("project_name") or "imported-project")
+    project_name = str(name or structure.get("project_name") or "").strip()
+    if not project_name:
+        return blocked("PROJECT_NAME_EMPTY: 结构文件无 project_name 且未显式给项目名")
+    home = Path(home_root).expanduser().resolve()
+    project_root = project_root_for(home, project_name)
+    if project_root.exists() and (not project_root.is_dir() or next(project_root.iterdir(), None) is not None):
+        return blocked(f"PROJECT_EXISTS: project root not empty: {project_root}(导入不覆盖、不删除既有文件; 换项目名)")
 
-    # Non-empty directory protection (red line: import never rm's)
-    if output.exists() and output.is_dir() and not _dir_is_empty_or_absent(output):
-        # Check if it's already a lybra workspace (idempotent re-run)
-        from tools.aipos_cli.task_loader import queue_root_for  # AIPOS-F89 件① M8
-
-        has_queue = queue_root_for(output).is_dir()
-        if has_queue:
-            # Idempotent: allow re-run but skip existing
-            pass
-        else:
-            return {
-                "ok": False,
-                "operation": "project_import",
-                "blocking_reasons": [
-                    f"Output directory is non-empty and not an existing Lybra workspace: {output}. "
-                    "Import will NOT remove existing files. Choose an empty directory or an existing workspace."
-                ],
-                "dry_run": dry_run,
-            }
-
-    # Plan the writes
-    planned_dirs: list[str] = []
-    planned_files: list[dict[str, str]] = []
-    skipped: list[str] = []
-
-    # 1. Standard five-piece set directories(队列状态目录读声明, AIPOS-F89 件① M8)
-    from tools.aipos_cli.task_loader import QUEUE_SKELETON_STATES, queue_state_ref
-
-    for state in QUEUE_SKELETON_STATES:
-        planned_dirs.append(queue_state_ref(output, state).rstrip("/"))
-    for rel_dir in STANDARD_FIVE_PIECE:
-        planned_dirs.append(rel_dir)
-
-    # 2. .lybra/ directory with ignore rules
-    planned_dirs.append(".lybra")
-
-    # 3. project.json
-    project_json_data = {
-        "project": project_name,
-        "code_repo": structure.get("code_repos", [None])[0] if structure.get("code_repos") else None,
-        "registered_at": structure.get("registered_at") or iso_z(),
-        "registered_by": structure.get("registered_by") or actor or "import",
-        "config_version": 1,
-    }
-    planned_files.append({
-        "path": "project.json",
-        "content": json.dumps(project_json_data, indent=2, sort_keys=True) + "\n",
-    })
-
-    # 4. .lybra/.gitignore (leak prevention)
-    ignore_content = "\n".join(LYBRA_IGNORE_PATTERNS) + "\n"
-    planned_files.append({
-        "path": ".lybra/.gitignore",
-        "content": ignore_content,
-    })
-
-    # 惰性导入(避免模块级导入崩溃 CLI)
-    try:
-        from tools.schema_loader import get_config_port
-        board_port = get_config_port("board_default")
-        mcp_port = get_config_port("gate_default")  # AIPOS-F106 件②: mcp_server_default 已并入 gate_default
-    except ImportError as e:
-        raise ImportError(
-            "Cannot load schema_loader.get_config_port() for project structure template. "
-            "This typically occurs when running lybra CLI from outside the project root "
-            "in an editable install. Run from the project directory or ensure PYTHONPATH "
-            "includes the project root."
-        ) from e
-
-    # 5. .lybra/config.json
-    config_data = {
-        "config_version": 1,
-        "workspace_root": ".",
-        "board": {"host": "127.0.0.1", "port": board_port},
-        "mcp": {
-            "host": "127.0.0.1",
-            "port": mcp_port,
-            "transport_token_env": "LYBRA_MCP_TOKEN",
-            "capability_token_env": "LYBRA_CAPABILITY_TOKEN",
-        },
-        "notes": "Token values are referenced by environment variable only; do not store raw secrets in this file.",
-    }
-    planned_files.append({
-        "path": ".lybra/config.json",
-        "content": json.dumps(config_data, indent=2, sort_keys=True) + "\n",
-    })
-
-    # 6. Governance stubs for declared canonical files
-    governance_files = structure.get("governance_files", {})
-    for key, rel_path in governance_files.items():
-        target_file = output / rel_path
-        if rel_path.endswith("/"):
-            planned_dirs.append(rel_path.rstrip("/"))
-        else:
-            # Create stub if it doesn't declare content we should preserve
-            stub_content = f"# {project_name} — {key.replace('_', ' ').title()}\n\n(Imported from structure file; content to be populated by advisor.)\n"
-            planned_files.append({
-                "path": rel_path,
-                "content": stub_content,
-            })
-
-    # 7. Ensure governance/decision_log.md exists (ruling 1=B)
-    if "decision_log" not in governance_files:
-        planned_files.append({
-            "path": "governance/decision_log.md",
-            "content": f"# {project_name} Decision Log\n",
-        })
-
-    # 8. Migration checklist (documents that need manual migration)
+    code_repos = structure.get("code_repos") or []
+    code_repo = str(code_repos[0]) if code_repos else None
     doc_manifest = structure.get("doc_manifest", [])
     migration_items = [item for item in doc_manifest if item.get("kind") in ("governance", "general")]
-    migration_checklist = _build_migration_checklist(project_name, migration_items, structure)
-    planned_files.append({
-        "path": MIGRATION_CHECKLIST_FILENAME,
-        "content": migration_checklist,
-    })
-
-    # 9. README.md stub
-    readme_content = f"# {project_name}\n\nImported from Lybra project structure file.\n\n"
-    if structure.get("description"):
-        readme_content += f"{structure['description']}\n\n"
-    readme_content += "## Getting Started\n\nSee migration-checklist.md for documents to review and migrate.\n"
-    planned_files.append({
-        "path": "README.md",
-        "content": readme_content,
-    })
-
-    # Filter out already-existing items (idempotent)
-    for f in list(planned_files):
-        target = output / f["path"]
-        if target.exists():
-            planned_files.remove(f)
-            skipped.append(f["path"])
 
     result: dict[str, Any] = {
         "ok": True,
         "operation": "project_import",
         "dry_run": dry_run,
         "project_name": project_name,
-        "output_root": str(output),
-        "planned_dirs": planned_dirs,
-        "planned_files": [f["path"] for f in planned_files],
-        "skipped_existing": skipped,
+        "home_root": str(home),
+        "project_root": str(project_root),
+        "output_root": str(project_root),
+        "project_json": str(project_json_path(project_root)),
+        "code_repo": code_repo,
+        "created_by": "workspace_config.scaffold_project(lybra project new 唯一实现)",
         "migration_checklist": MIGRATION_CHECKLIST_FILENAME,
         "migration_item_count": len(migration_items),
         "actor": actor,
         "structure_file": str(structure_path),
     }
-
     if dry_run:
-        result["verdict"] = Verdict.PASS if not result.get("blocking_reasons") else Verdict.BLOCK
+        result["verdict"] = Verdict.PASS
         return result
 
-    # Execute: create directories and write files
-    for rel_dir in planned_dirs:
-        target = output / rel_dir
-        target.mkdir(parents=True, exist_ok=True)
-
-    for f in planned_files:
-        target = output / f["path"]
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(f["content"], encoding="utf-8")
-
+    try:
+        root = scaffold_project(home, project_name, code_repo=code_repo, registered_by=actor or "import")
+    except (FileExistsError, ValueError, RuntimeError, OSError) as exc:
+        return blocked(f"project new 脚手架拒绝: {exc}")
+    checklist = root / MIGRATION_CHECKLIST_FILENAME
+    checklist.write_text(_build_migration_checklist(project_name, migration_items, structure), encoding="utf-8")
     result["wrote"] = True
     return result
 
@@ -843,20 +675,6 @@ def _build_migration_checklist(
     return "\n".join(lines) + "\n"
 
 
-def import_project_from_yaml(
-    structure_file: str | Path,
-    output_root: str | Path,
-    *,
-    dry_run: bool = False,
-    actor: str | None = None,
-) -> dict[str, Any]:
-    """Convenience wrapper: import from a YAML structure file path."""
-    return import_project_structure(
-        structure_file,
-        output_root,
-        dry_run=dry_run,
-        actor=actor,
-    )
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 from tools.schema_constants import Verdict

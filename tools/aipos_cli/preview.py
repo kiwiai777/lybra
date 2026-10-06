@@ -48,8 +48,9 @@ def build_preview(
             card_file = repo_root / task_path
             try:
                 rendered_card_markdown = card_file.read_text(encoding="utf-8")
-            except Exception:
-                pass  # If read fails, leave as None; connector will handle missing card
+            except (OSError, UnicodeDecodeError) as exc:
+                # AIPOS-F115 件③: 卡已定位却读不出 = 拒(原 except Exception: pass 置 None 交下游猜)
+                raise ValueError(f"卡文件 {card_file} 不可读: {exc}; 出口: 修复该卡文件后重试") from exc
 
     # AIPOS-363F2: read referenced governance files for cross-machine materialization
     referenced_files_content: list[dict[str, str]] = []
