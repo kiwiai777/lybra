@@ -126,10 +126,29 @@ def _reap_group(pgid: int) -> bool:
     return True
 
 
+#: 正在执行的测试子进程组(独立会话, 上游 killpg 够不着)——收到 SIGTERM 时由 _on_sigterm 整组清掉(AIPOS-F118: 合并后回归超时
+#: 先 SIGTERM 本执行器, 不留孤儿测试进程)。
+_RUNNING_GROUPS: set[int] = set()
+
+
+def _on_sigterm(signum: int, _frame: Any) -> None:
+    for pgid in sorted(_RUNNING_GROUPS):
+        _reap_group(pgid)
+    raise SystemExit(128 + signum)
+
+
 def _run(cmd: list[str], repo_root: Path, env: dict[str, str]) -> tuple[int | None, str]:
     """独立进程组执行一个测试文件; 结束(或超时)后清掉组内残留进程——夹具环境不留孤儿(测试泄漏的后台进程照实出声)。"""
     proc = subprocess.Popen(cmd, cwd=repo_root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             start_new_session=True)
+    _RUNNING_GROUPS.add(proc.pid)
+    try:
+        return _collect(proc)
+    finally:
+        _RUNNING_GROUPS.discard(proc.pid)
+
+
+def _collect(proc: subprocess.Popen) -> tuple[int | None, str]:
     try:
         stdout, stderr = proc.communicate(timeout=FILE_TIMEOUT_SECONDS)
         rc: int | None = proc.returncode
@@ -177,6 +196,45 @@ def judge(path: str, runner: str, rc: int | None, output: str, known: dict[str, 
     return ok, notes
 
 
+_SECTION_RE = re.compile(r"^── (\S+)")
+_RESULT_RE = re.compile(r"^([✓✗]) (\S+) (PASS|FAIL)$")
+
+
+def failure_set(output: str, exit_code: int | None, runall_rel: str) -> list[str]:
+    """AIPOS-F118 件①: 测试清单一次运行的失败集合——唯一解析(finalize 合并后回归比对用; 口径与 run-all 基线 `grep "^✗"` 同一)。
+
+    条目: 每条 `✗ <文件> FAIL` 行 → <文件>; 其余 `✗` 行(声明行失效等)→ 该行去 `✗ ` 的原文; 失败文件段(`── <文件>` 起至其 ✗ 行)内
+    pytest 摘要 `FAILED|ERROR <节点>` → <节点>(同一文件已红时新增失败节点仍可见)。known-failure 被容忍的文件段以 ✓ 收尾, 其节点不计。
+    退出码非 0 却无任何 `✗` 行(非本格式的项目清单 / 中途崩溃)→ 一条「<清单> 退出码 N(未解析到 ✗ 行)」, 不当作通过(fail-closed)。
+    返回去重排序列表。"""
+    failures: set[str] = set()
+    section_nodes: list[str] = []
+    saw_cross = False
+    for raw in output.splitlines():
+        line = raw.rstrip()
+        if _SECTION_RE.match(line):
+            section_nodes = []
+            continue
+        summary = _SUMMARY_RE.match(line.strip())
+        if summary:
+            section_nodes.append(summary.group(2).strip())
+            continue
+        result = _RESULT_RE.match(line)
+        if result:
+            if result.group(1) == "✗":
+                saw_cross = True
+                failures.add(result.group(2))
+                failures.update(section_nodes)
+            section_nodes = []
+            continue
+        if line.startswith("✗"):
+            saw_cross = True
+            failures.add(line[1:].strip())
+    if exit_code != 0 and not saw_cross:
+        failures.add(f"{runall_rel} 退出码 {exit_code}(未解析到 ✗ 行)")
+    return sorted(failures)
+
+
 def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None) -> int:
     out = out or sys.stdout
     plan = build_plan(repo_root, runall_rel, contract)
@@ -197,6 +255,7 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None)
     for target, reason in sorted({**plan["file_excluded"], **plan["node_excluded"]}.items()):
         emit(f"⊘ 未执行(声明 exclude): {target} —— {reason}")
     home = tempfile.mkdtemp(prefix="lybra-runall-home-")
+    previous_handler = signal.signal(signal.SIGTERM, _on_sigterm)
     try:
         env = _child_env(home)
         for path in plan["to_run"]:
@@ -224,6 +283,7 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None)
                 emit(f"✗ {path} FAIL")
                 overall = 1
     finally:
+        signal.signal(signal.SIGTERM, previous_handler)
         try:
             shutil.rmtree(home)
         except OSError as exc:  # 清理失败出声, 不吞

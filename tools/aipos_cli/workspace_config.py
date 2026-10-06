@@ -860,7 +860,52 @@ def project_repos(governance_root: str | Path) -> dict[str, Any]:
     return {"declared": True, "default": default, "items": items, "code_repo": code_repo, "project_json_exists": exists}
 
 
-TEST_CONTRACT_KEYS = ("runall_path", "require_tests", "test_file_globs")
+TEST_CONTRACT_KEYS = ("runall_path", "require_tests", "test_file_globs", "post_merge_regression")
+
+
+def _post_merge_regression_decl(test_contract_decl: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F118 件②: config.schema test_contract.schema.post_merge_regression 声明(键值域 + 缺省)。声明缺/形坏 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (test_contract_decl.get("schema") or {}).get("post_merge_regression")
+    keys = (decl or {}).get("schema") if isinstance(decl, dict) else None
+    if not isinstance(keys, dict) or set(keys) != {"mode", "execution", "timeout_seconds"}:
+        raise SchemaLoadError("config.schema.json test_contract.schema.post_merge_regression.schema 未声明或键不为 mode/execution/timeout_seconds")
+    for key in ("mode", "execution"):
+        values = keys[key].get("values")
+        if not isinstance(values, list) or keys[key].get("default") not in values:
+            raise SchemaLoadError(f"config.schema.json post_merge_regression.{key} 的 values/default 未声明或 default 不在 values 内")
+    default_timeout = keys["timeout_seconds"].get("default")
+    if not isinstance(default_timeout, int) or isinstance(default_timeout, bool) or default_timeout < 1:
+        raise SchemaLoadError("config.schema.json post_merge_regression.timeout_seconds.default 未声明或非正整数")
+    return keys
+
+
+def _apply_post_merge_regression(current: dict[str, Any], keys: dict[str, Any], raw: Any, label: str) -> dict[str, Any]:
+    """AIPOS-F118 件②: 项目声明逐键覆盖 current(缺省或上层已解析值)。形不合声明 = ValueError(TEST_CONTRACT_INVALID)。"""
+    if not isinstance(raw, dict):
+        raise ValueError(f"TEST_CONTRACT_INVALID: {label}.post_merge_regression 须为对象(config.schema test_contract.post_merge_regression)")
+    unknown = sorted(set(raw) - set(keys))
+    if unknown:
+        raise ValueError(f"TEST_CONTRACT_INVALID: {label}.post_merge_regression 含未声明键 {unknown}(允许 {sorted(keys)})")
+    resolved = dict(current)
+    for key in ("mode", "execution"):
+        if key in raw:
+            if raw[key] not in keys[key]["values"]:
+                raise ValueError(f"TEST_CONTRACT_INVALID: {label}.post_merge_regression.{key}={raw[key]!r} 不在声明值域 {keys[key]['values']}")
+            resolved[key] = raw[key]
+    if "timeout_seconds" in raw:
+        value = raw["timeout_seconds"]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(f"TEST_CONTRACT_INVALID: {label}.post_merge_regression.timeout_seconds={value!r} 须为正整数(秒)")
+        resolved["timeout_seconds"] = value
+    if resolved["mode"] == "block" and resolved["execution"] == "async":
+        raise ValueError(
+            f"TEST_CONTRACT_INVALID: {label}.post_merge_regression mode=block 不可配 execution=async"
+            "(异步结果出来时部署已发生, 无从撤销合并); block 须 sync, 或改 mode=warn"
+        )
+    resolved["source"] = f"{label}.post_merge_regression"
+    return resolved
 
 
 def project_test_contract(governance_root: str | Path, repo_path: str | Path | None = None) -> dict[str, Any]:
@@ -871,6 +916,8 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
     runall_path / require_tests 未声明 = None(调用方跳过该判据并 warning)。
     AIPOS-F97 件②: test_file_globs 未声明 = schema 声明的缺省(test_contract.schema.test_file_globs.default; 缺/形坏 = SchemaLoadError,
     代码不写死式样), 项目声明 = 整体替换。
+    AIPOS-F118 件②: post_merge_regression = {mode, execution, timeout_seconds, source}(finalize 合并后回归策略; 未声明键取
+    config.schema 各键 default, 顶层与 repos 覆盖逐键覆盖)。
     形不合声明 = ValueError("TEST_CONTRACT_INVALID: …")(fail-closed, 调用方拒并给出口); project.json 读失败原样抛。
     """
     from tools.schema_loader import SchemaLoadError, load_schema
@@ -890,11 +937,16 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
         )
     where = f"{project_json_path(root)} test_contract"
     raw = read_project_json(root).get("test_contract")
+    pmr_keys = _post_merge_regression_decl(decl)
     result: dict[str, Any] = {
         "runall_path": None,
         "require_tests": None,
         "test_file_globs": list(default_globs),
         "test_file_globs_source": "config.schema test_contract.test_file_globs.default",
+        "post_merge_regression": {
+            **{key: pmr_keys[key]["default"] for key in ("mode", "execution", "timeout_seconds")},
+            "source": "config.schema test_contract.post_merge_regression 缺省",
+        },
         "source": f"{where}(未声明)",
     }
     if raw in (None, {}):
@@ -921,6 +973,10 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
                 raise ValueError(f"TEST_CONTRACT_INVALID: {label}.test_file_globs={spec.get('test_file_globs')!r} {problem}")
             result["test_file_globs"] = list(spec["test_file_globs"])
             result["test_file_globs_source"] = f"{label}.test_file_globs"
+        if "post_merge_regression" in spec:
+            result["post_merge_regression"] = _apply_post_merge_regression(
+                result["post_merge_regression"], pmr_keys, spec["post_merge_regression"], label
+            )
         result["source"] = label
 
     _apply(raw, where)

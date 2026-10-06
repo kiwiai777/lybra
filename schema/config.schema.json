@@ -173,10 +173,21 @@
             "runall_path": {"type": "string", "optional": true, "description": "测试清单文件(相对产品仓根, 禁绝对路径); 交回检查读卡分支上的该文件"},
             "require_tests": {"type": "boolean", "optional": true, "description": "true = code 类卡须含测试文件改动(NO_TESTS)"},
             "test_file_globs": {"type": "array", "items": {"type": "string"}, "optional": true, "default": ["test_*.py", "*_test.py", "test_*.sh", "*.test.ts", "*.test.js", "*.spec.ts", "*.spec.js"], "description": "AIPOS-F109 件④: 同一式样亦是 run-all 自动发现的式样(runall_directives discover; 判定唯一实现 workspace_config.is_test_file)。AIPOS-F97 件②: 「测试文件」的文件名式样(fnmatch glob, 按文件名即路径最后一段匹配, 区分大小写, 禁含 /)。缺省 = default(覆盖 lybra 产品仓现有全部自动化测试文件命名: Python test_*.py、shell test_*.sh、TS/JS *.test.ts / *.test.js、Playwright *.spec.js, 另含常见 *_test.py / *.spec.ts); 项目声明 = 整体替换缺省(非追加), 须为非空字符串的非空列表。判据唯一实现 workspace_config.card_test_files: 卡分支改动集(git diff --name-status main...card/<ID>)中删除项 D 排除、重命名/复制取新路径, 文件名命中任一式样且不是 runall_path 本身 = 本卡测试文件(TEST_NOT_IN_RUNALL / NO_TESTS 共用)。代码不写死式样; 新语言 = 加一条 glob"},
-            "repos": {"type": "object", "optional": true, "description": "按仓覆盖: 键 = project.json repos.items 仓名, 值同形(不得再嵌 repos); 卡仓(resolve_card_repo)有覆盖取覆盖, 否则取顶层"}
+            "repos": {"type": "object", "optional": true, "description": "按仓覆盖: 键 = project.json repos.items 仓名, 值同形(不得再嵌 repos); 卡仓(resolve_card_repo)有覆盖取覆盖, 否则取顶层"},
+            "post_merge_regression": {
+              "type": "object",
+              "optional": true,
+              "description": "AIPOS-F118 件①②(gap #77: F102 与 F106 各自审计 PASS, 合入后 main 新增一红——单卡审计只比对单卡与当时 main, 看不到合并组合失败): finalize 合并后回归检查的项目策略。finalize 在卡分支 merge --no-ff 之后、push/deploy 之前, 于合并结果上跑本项目 runall_path 测试清单(未声明 runall_path = 跳过并注明), 与合并前 main(合并提交第一父)的失败集合比对; 合并前集合优先取「上次合并时记录的基线」(finalization 记录 / 异步回归事件记录中 merge_commit = 合并前 main 的那份合并后失败集合, 免每次跑两遍), 无记录才另跑一次。失败集合口径 = 测试清单输出的 `✗` 行(run-all 基线 grep 同一口径)+ 失败文件段内 pytest FAILED/ERROR 节点(唯一解析 runall_discovery.failure_set)。形: {\"mode\": \"warn|block|off\", \"execution\": \"sync|async\", \"timeout_seconds\": <正整数>}, 缺键取各键 default; repos 覆盖逐键覆盖。唯一读取口 workspace_config.project_test_contract(结果键 post_merge_regression); 唯一执行 tools/aipos_cli/post_merge_regression.check_after_merge; 结果记 finalization 记录字段 post_merge_regression(声明 transitions N5.record.post_merge_regression)。",
+              "schema": {
+                "mode": {"type": "string", "values": ["warn", "block", "off"], "default": "warn", "description": "新增失败的处置。warn = 记入 finalization 记录与 loop/finalize 输出一行, 合并照常 push/deploy; block = 撤销本次合并(main 复位到合并前提交, 卡分支保留)、不 push 不部署, finalize BLOCK 并给出口, 结果落回归事件记录; off = 不跑, 但 finalize/loop 仍输出一行「已关闭」并在记录写 status=off(不静默)。缺省 warn 说理: 回归检查是组合层面的新判据, 存量项目测试稳定度未知(flaky、环境依赖), 首日即 block 会把单卡已 PASS 的合并整批卡死; 先 warn 让每次合并都留可追溯的组合失败证据, 项目确认清单可信后再声明 block。另: 检查本身失败(超时/跑不起来)与新增失败同等处置(warn 出声 / block 拒), 不当作通过。"},
+                "execution": {"type": "string", "values": ["sync", "async"], "default": "sync", "description": "sync = finalize 进程内同步跑完再决定 push/deploy; async = finalize 拉起独立后台进程跑检查后立即继续(只许 mode=warn: 异步结果出来时部署已发生, block 无从撤销 → block+async = TEST_CONTRACT_INVALID), finalization 记录写 status=async_started + 进程号 + 日志路径, 结果落回归事件记录(records/events/<卡>/post_merge_regression_*.md), 下一次 finalize 取它作基线时把上次结果再输出一行。全量清单耗时长(lybra 产品仓 run-all 约 8.7 分钟)的项目声明 async 或 off。"},
+                "timeout_seconds": {"type": "integer", "minimum": 1, "default": 420, "description": "整个检查(合并后一跑 + 必要时合并前一跑)的总时限, 超时整组进程 SIGKILL, status=timeout 按 mode 处置。缺省 420 说理: loop 驱动 finalize 的步超时为 verbs.schema lybra_loop.step_timeout_seconds(600s), 同步检查须给 merge/push/deploy 留余量(≈180s), 否则 loop 在合并后、记录前杀掉 finalize(F120 同型断链); sync 且声明值 ≥ 步超时时检查结果附提示行。"}
+              },
+              "statuses": ["pass", "new_failures", "timeout", "error", "off", "skipped", "async_started"]
+            }
           },
           "reject_codes": {
-            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items)",
+            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items / post_merge_regression 非对象、含未声明键、mode/execution 不在 values、timeout_seconds 非正整数、block 配 async)",
             "RUNALL_DIRECTIVE_INVALID": "测试清单文件内声明行形坏(未声明的指令词 / 缺目标 / exclude 缺理由 / 目标重复 / discover 带参数)"
           },
           "runall_directives": {

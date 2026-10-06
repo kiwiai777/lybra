@@ -36,8 +36,12 @@ def build_finalization_record(
     merge_commit: str | None = None,
     remote_ref: str | None = None,
     finalize_return_ref: str | None = None,
+    post_merge_regression: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构造 finalization 记录 frontmatter。
+
+    AIPOS-F118 件①: post_merge_regression = 合并后回归检查结果(声明 transitions N5.record.post_merge_regression;
+    post_merge_regression.check_after_merge 产出), 给了就原样入记录——下一次合并取 merged_failures 作合并前基线。
 
     AIPOS-F78B 件②: finalize_mode=external 时同一 writer 由 artifact ingest 调用, 追加 remote_ref(外部 FINALIZE Return 自述的远端 ref)
     与 finalize_return_ref(FINALIZE Return 相对治理根路径); 声明 transitions artifact_ingest.finalization.record.extra_fields。
@@ -77,7 +81,9 @@ def build_finalization_record(
         record["remote_ref"] = str(remote_ref).strip()
     if finalize_return_ref:
         record["finalize_return_ref"] = str(finalize_return_ref).strip()
-    
+    if post_merge_regression is not None:
+        record["post_merge_regression"] = post_merge_regression
+
     return record
 
 
@@ -115,6 +121,8 @@ def render_record_markdown(frontmatter: dict[str, Any]) -> str:
     for extra in ("remote_ref", "finalize_return_ref"):
         if frontmatter.get(extra):
             body += f"- **{extra}**: {frontmatter[extra]}\n"
+    if isinstance(frontmatter.get("post_merge_regression"), dict):
+        body += f"- **post_merge_regression**: {frontmatter['post_merge_regression'].get('summary')}\n"
 
     return _render_markdown_single_source(frontmatter, body)
 
@@ -135,9 +143,11 @@ def write_finalization_record(
     merge_commit: str | None = None,
     remote_ref: str | None = None,
     finalize_return_ref: str | None = None,
+    post_merge_regression: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """写 finalization_record 到治理工作区 records。返回 {ok, path, wrote}。"""
     frontmatter = build_finalization_record(
+        post_merge_regression=post_merge_regression,
         task_id=task_id,
         actor=actor,
         commit=commit,
