@@ -1591,6 +1591,10 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_revoke_parser.add_argument("--json", action="store_true", help="Output JSON")
     roles_enroll_list_parser = roles_subparsers.add_parser("enroll-list", help="AIPOS-362: list enrollment codes")
     roles_enroll_list_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F107 件②: 只读诊断——实例接入事件实际所在 log 与应在(所属项目)log
+    roles_enroll_where_parser = roles_subparsers.add_parser("enroll-where", help="AIPOS-F107: 只读诊断某实例接入事件(create/use/land)实际所在 enrollment_log 与应在(所属项目)log, 供重接入判断")
+    roles_enroll_where_parser.add_argument("--instance", required=True, help="实例名(<prefix>.<project>.<host>)")
+    roles_enroll_where_parser.add_argument("--json", action="store_true", help="Output JSON")
     
     # AIPOS-F66B 件②: 写权限边界可读面 + 读取口(护栏读声明; 单源 roles.schema write_boundary)
     roles_wb_parser = roles_subparsers.add_parser("write-boundary", help="AIPOS-F66B: 写权限边界可读面(角色类 × 面 × read/append/mutate, 读 roles.schema write_boundary)与单次访问判定(--check)")
@@ -2829,6 +2833,29 @@ def main(argv: list[str] | None = None) -> int:
                         inst = code.get('instance') or '(any)'
                         expires = code.get('expires_at') or '(never)'
                         print(f"{code['code_id']:<24} {code['role']:<16} {inst:<32} {code['status']:<10} {expires}")
+            elif args.roles_command == "enroll-where":
+                # AIPOS-F107 件②: 薄壳, 逻辑在 enrollment.enrollment_whereabouts(只读; 所属项目经 enrollment_owner_root 唯一解析口)
+                from tools.aipos_cli.enrollment import enrollment_whereabouts
+
+                report = enrollment_whereabouts(workspace_root, args.instance)
+                if getattr(args, "json", False):
+                    print(render_json(report))
+                else:
+                    print(f"实例 {report['instance']}: verdict={report['verdict']}")
+                    print(f"  应在 log: {report['expected_log'] or '(无所属项目)'}"
+                          f"(所属项目 {report['owner_project'] or '-'}, 依据 {report['owner_source'] or report['owner_reason']})")
+                    if not report["found"]:
+                        print("  实际: home 下各项目与签发门工作区的 enrollment_log 均无该实例事件")
+                    for item in report["found"]:
+                        acts = ", ".join(f"{k}×{v}" for k, v in sorted(item["actions"].items()))
+                        print(f"  实际所在 log: {item['log']}  事件 {acts}  最新 land {item['latest_land_at'] or '-'}"
+                              f"  workstation={item['latest_land_workstation'] or '-'}")
+                    loc = report["workstation_location"]
+                    if loc is not None:
+                        print(f"  loop 工位定位(workstation_location@所属项目): found={loc['found']} dir={loc['dir']} {loc['reason']}".rstrip())
+                    if report["verdict"] == "misplaced":
+                        print("  处置: 存量事件在签发方 log, loop 定位不到; 在所属项目重签码重接入(新事件落所属项目 log), 不手改日志")
+                return 0
             elif args.roles_command == "enroll":
                 # AIPOS-R2/F23: client-side enrollment (exchange code + write .lybra/ config)
                 from tools.aipos_cli.enroll_client import enroll

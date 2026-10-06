@@ -1097,6 +1097,8 @@ else
   echo "✗ tests/test_aipos_f104_enum_projection_invariant.py FAIL"
   overall=1
 fi
+# AIPOS-F107: chris 接入运行时前置(#43/#44)——loop 拉起期 SIGHUP 清进程组·stdout 断开无孤儿·接入事件落所属项目 log(enrollment_owner_root)·只读诊断 lybra roles enroll-where
+run_pytest "tests/test_aipos_f107_sighup_enroll_owner.py" "$REPO_ROOT/tests/test_aipos_f107_sighup_enroll_owner.py"
 # AIPOS-F108: 卡字段与分支声明单源(族 C-d: M9/M18/H6)——card.schema 落盘键全声明·字段序与缺省值读 schema·分支名/基线读 N5.branch_integration 零写死且改声明跟随·草稿 project 读 project.json 缺则拒; 连同改动的 finalize 分支整合/自动切回/卡号归属解析夹具
 run_pytest "tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_finalize_branch_integration.py" "$REPO_ROOT/tools/aipos_cli/tests/test_finalize_branch_auto_checkout.py" "$REPO_ROOT/tests/test_aipos_f5_task_id_pattern.py"
 # AIPOS-F103: 退役旧跨机连接器与执行体派工命令(N-a: N2)+信封挑选唯一实现 select_envelope(判据 match_claim_envelope, M5)·policies_root 声明·删除物零引用·文档棘轮基线减少
