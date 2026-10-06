@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tools.aipos_cli.queue_mutation import mutate_queue_task
@@ -102,20 +103,25 @@ class RecordWriterTests(unittest.TestCase):
 
     def test_claim_with_records_blocks_if_claim_log_target_exists(self) -> None:
         self.write_task("AIPOS-32-CLAIM-EXISTS")
-        result = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
-        self.write_file(result["claim_log_path"], "existing")
+        # AIPOS-F116: 认领日志 id 含秒级时间戳, 两次 claim 跨秒即目标不同(F116 分支基线实撞); 钉住同一时刻(同会话记录撞名用例)
+        with mock.patch("tools.aipos_cli.queue_mutation.iso_z", return_value="2026-10-06T00:00:00Z"):
+            result = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
+            self.write_file(result["claim_log_path"], "existing")
 
-        blocked = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
+            blocked = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
 
         self.assertEqual(blocked["verdict"], "BLOCK")
         self.assertTrue(any("Claim log already exists" in item for item in blocked["blocking_reasons"]))
 
     def test_claim_with_records_blocks_if_session_record_target_exists(self) -> None:
         self.write_task("AIPOS-32-SESSION-EXISTS")
-        result = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-SESSION-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
-        self.write_file(result["session_record_path"], "existing")
+        # AIPOS-F116: 会话记录 id 含秒级时间戳——两次 claim 跨秒边界时目标路径不同而误绿/误红(F116 main 基线实撞 'PASS' != 'BLOCK');
+        # 钉住同一时刻, 使「第二次 claim 撞上已存在的同一会话记录」确定成立。
+        with mock.patch("tools.aipos_cli.queue_mutation.iso_z", return_value="2026-10-06T00:00:00Z"):
+            result = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-SESSION-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
+            self.write_file(result["session_record_path"], "existing")
 
-        blocked = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-SESSION-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
+            blocked = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-SESSION-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
 
         self.assertEqual(blocked["verdict"], "BLOCK")
         self.assertTrue(any("Session record already exists" in item for item in blocked["blocking_reasons"]))

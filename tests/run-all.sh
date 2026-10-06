@@ -11,6 +11,8 @@
 #   目标 = 相对产品仓根的文件路径, 或 pytest 节点 <文件>::<节点>。存量失败(gap #59)只减不增: 这两类行只许删, 新增行审计必查。
 # 夹具隔离: 执行器给每个测试子进程临时 HOME(PYTHONUSERBASE 钉回原用户 site)并清 LYBRA_*/AIPOS_* 环境变量,
 #   测试不得借真实 ~/.lybra 解析到真实治理根/工位/门凭据。
+# AIPOS-F116 防护夹具(执行器内建, 每文件前后各查一次, 变/漏则该文件判红): 真实治理根守卫(home 根下各项目 governance/ 与 5_tasks/
+#   git status + 关键日志 md5, 只读) + 孤儿进程守卫(测试结束后仍存活的测试后代进程 SIGKILL); 各测试目录 conftest.py 会话层同款 HOME 隔离。
 # 依赖: Python 3 + pytest; Node ≥ 22(TS 夹具类型剥离, 纯 node 内置模块, 无需 npm install)。
 # 输出: 每文件「── <文件> ──」段 + `✓ <文件> PASS` / `✗ <文件> FAIL` 行(与原清单同式样, 基线 grep 不变)。
 set -u
@@ -49,13 +51,7 @@ exit "$overall"
 # ---- 声明行(只减不增; 一行一条, 按目标排序, 便于并行卡各删不同行时 git 行级合并) ----
 # lybra-runall: discover
 # lybra-runall: exclude tests/playwright/board.visual.spec.js 需 Playwright 浏览器(npm run test:visual), 非常驻夹具环境
-# lybra-runall: exclude tests/test_aipos_f28b_live_credential_registry.sh 活门/真实工位凭据核查脚本(硬编码真实治理根与 connection.json)
-# lybra-runall: exclude tests/test_aipos_f42_fix1_project_enforcement.py 硬编码真实治理根(lybra/chris), 夹具环境禁触
-# lybra-runall: exclude tests/test_aipos_f42_fix1_workspace_enforcement.sh 硬编码真实治理根(lybra/chris), 夹具环境禁触
-# lybra-runall: exclude tests/test_aipos_f50_e2e_manual.py 手工 e2e 脚本, 读写真实 chris 治理根
-# lybra-runall: exclude tests/test_f52_trace_enroll.py chdir 到真实部署目录 .deploy/current 追踪 enroll
-# lybra-runall: exclude tools/aipos_cli/test_enrollment_integration.py 硬编码真实治理根与产品仓, 跑真实 CLI
-# lybra-runall: exclude tools/aipos_cli/tests/test_aipos_r8c_card_policy.py 硬编码真实治理根 /home/kiwi/ai-project-os/2_projects/lybra
+# lybra-runall: exclude tools/test_aipos_r2_enroll.py 写死真实治理根+生产门 7118 发码/换证, 每跑一次往真实 enrollment_log 写 test.enroll.aipos-r2 行(gap #34/#70 污染源); 车道外(tools/)待改临时靶场或退役(AIPOS-F116 由 known-failure 转此)
 # ---- 已知存量失败(gap #59; AIPOS-F109 盘点: main bf7623c 隔离 HOME 下同败; 只许删——转绿即红, 删行) ----
 # lybra-runall: known-failure task_cards/AIPOS-276/test_aipos276.py::test_s2_stale_map_publish_warn
 # lybra-runall: known-failure task_cards/AIPOS-276/test_fix1.py::test_f276_1_warnings_in_publish_record
@@ -78,10 +74,7 @@ exit "$overall"
 # lybra-runall: known-failure tests/test_finalize.py::test_finalize_task_dry_run
 # lybra-runall: known-failure tests/test_finalize.py::test_finalize_task_no_gate_verdict_blocked
 # lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_no_changes_to_commit
-# lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_workflow_blocks_handwritten_markdown
-# lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_workflow_blocks_no_gate_verdict
 # lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_workflow_dry_run
-# lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_workflow_fail_task
 # lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_workflow_pass_task
 # lybra-runall: known-failure tools/aipos_cli/tests/test_agent_watch_fs.py::FsWatchRedLineTests::test_module_is_stdlib_only_zero_new_deps
 # lybra-runall: known-failure tools/aipos_cli/tests/test_ai_assisted_authoring.py::AiAssistedAuthoringTests::test_cli_draft_and_confirm
