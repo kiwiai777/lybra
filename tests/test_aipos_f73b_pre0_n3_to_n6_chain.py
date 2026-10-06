@@ -51,6 +51,7 @@ task_id: {task_id}
 task_mode: {task_mode}
 audit_required: {audit_required}
 assigned_to: exec.lybra.test
+audit_by: audit.lybra.test
 ---
 
 # {task_id}

@@ -17,6 +17,7 @@
     {
       "role": "executor",
       "role_class": "executor",
+      "class_groups": ["workstation"],
       "token_ref": "svc-executor",
       "scopes": [
         "task_progress"
@@ -28,6 +29,7 @@
     {
       "role": "owner",
       "role_class": "owner",
+      "class_groups": [],
       "token_ref": "svc-owner",
       "scopes": [
         "queue_claim",
@@ -48,6 +50,7 @@
     {
       "role": "owner-dispatch",
       "role_class": "owner-dispatch",
+      "class_groups": [],
       "token_ref": "svc-owner-dispatch",
       "scopes": [
         "audit_dispatch"
@@ -60,6 +63,7 @@
     {
       "role": "auditor",
       "role_class": "auditor",
+      "class_groups": ["workstation"],
       "token_ref": "svc-auditor",
       "scopes": [
         "task_progress"
@@ -71,6 +75,7 @@
     {
       "role": "copilot",
       "role_class": "copilot",
+      "class_groups": [],
       "token_ref": "svc-copilot",
       "scopes": [],
       "naming": {
@@ -81,6 +86,7 @@
     {
       "role": "planner",
       "role_class": "planner",
+      "class_groups": ["governance_seat"],
       "token_ref": "svc-planner",
       "scopes": [
         "draft_submit",
@@ -99,6 +105,7 @@
     {
       "role": "advisor",
       "role_class": "advisor",
+      "class_groups": ["governance_seat"],
       "token_ref": "svc-advisor",
       "scopes": [
         "draft_submit",
@@ -123,6 +130,13 @@
       "_note": "AIPOS-R7A FIX-2: advisor now mintable. Scopes cover advisor lane: draft/amend/withdraw/conclude/dispatch/decisions/envelopes. Explicitly EXCLUDES finalize (executor-only) and product-repo writes (advisor永不碰产品仓)."
     }
   ],
+  "class_groups": {
+    "description": "AIPOS-F102 件②: 角色类分组——唯一声明处。各内建角色类所属分组 = roles[].class_groups(缺键 = 声明缺失, 读取方 fail-closed); 自定义角色经 custom_roles.resolve_role_to_class 解析到内建类后按其类归组。唯一读取口 tools/aipos_cli/custom_roles.role_classes_in_group / role_in_class_group, 代码禁写死 (\"executor\", \"auditor\") / (\"planner\", \"advisor\") 之类分组元组。",
+    "values": {
+      "workstation": "工位类: 有自己的 harness 工位目录, 只写产物(执行体/审计体零门)。enroll 只落工位目录不落治理工作区; 卡面为零门卡面(不带认领与交回节); 入册须推导出生效信封(owner_policy_ref); 章程渲染兄弟实例名; 接入向导为其发工位注册码。注册表顺序即渲染/发码顺序。",
+      "governance_seat": "治理席位类(顾问/规划方): 允许落治理工作区(.lybra/ 在治理根)。"
+    }
+  },
   "custom_roles": {
     "description": "Extension point: gate-registered custom roles. Lives in the GATE role registry (connection.json tokens — same source as credentials/projects attribution; AIPOS-F32B; formerly project.json:custom_roles, that source is RETIRED). A custom role = a registry token entry with a non-builtin role and a role_class naming a builtin class; scopes are derived from the builtin class at call time. Registry carries ZERO scope fields of its own (anti-privilege-escalation: a custom role can never grant scopes its builtin class does not hold). Adding a custom role = one registry entry (roles register / enrollment), zero code change. Resolved by tools/aipos_cli/custom_roles.py.",
     "source": "gate registry: <workspace>/.lybra/connection.json tokens[].role_class",

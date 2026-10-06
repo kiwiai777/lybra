@@ -538,11 +538,14 @@ def kickoff_declaration() -> dict[str, Any]:
     return decl
 
 
-def render_kickoff(next_card: dict[str, Any]) -> str:
+def render_kickoff(next_card: dict[str, Any], *, remote: dict[str, Any] | None = None) -> str:
     """AIPOS-F95 件①: 按声明把 next_card 渲染为完整开工提示(唯一实现; 工位 /go 原样发送, loop 拉起原样传入)。
 
     报告必填字段每项须为 {key: 非空串, hint: 串, value: 串|None}; 列表空/项形变/占位缺值 = KickoffRenderError。
-    占位单遍替换(值内的花括号不再被解析)。"""
+    占位单遍替换(值内的花括号不再被解析)。
+    AIPOS-F110 件②: remote = 跨机工位上下文 {gate_host, governance_root, workstation_host, gate_ssh_alias, material_access}
+    (loop 按 land 事件 + project.json workstations 声明给出) → 按声明 remote_material 渲染门机材料段插入模板 {remote_material};
+    remote=None(本机工位 / 工位 /go)= 空串, 与 F110 前逐字节相同。"""
     decl = kickoff_declaration()
     line_decl = decl["report_field_line"]
     contract = next_card.get("report_required_frontmatter")
@@ -566,20 +569,54 @@ def render_kickoff(next_card: dict[str, Any]) -> str:
         "report_path": next_card.get("report_path"),
         "card_path": next_card.get("card_path"),
         "report_field_lines": "\n".join(field_lines),
+        "remote_material": "",
     }
+    if remote is not None:
+        material_template = decl.get("remote_material")
+        if not isinstance(material_template, str) or not material_template:
+            raise KickoffRenderError("verbs.schema.json verbs.lybra_my_tasks.kickoff.remote_material 未声明")
+        if not isinstance(remote, dict):
+            raise KickoffRenderError(f"remote 上下文须为对象: {remote!r}")
+        values["remote_material"] = _KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(remote, m.group(1)), material_template)
     return _KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(values, m.group(1)), decl["template"])
+
+
+def remote_kickoff_context(workspace_root: Path, instance: str) -> dict[str, str]:
+    """AIPOS-F110 件②: 跨机工位开工提示的门机材料上下文(render_kickoff remote=)。门机读不到远端工位目录, 身份 = land 事件实例:
+    位置 = enrollment.workstation_location(该实例最新 land 事件, 须 transport=remote), 材料 = workspace_config.project_workstation
+    (project.json workstations.<实例>)。不可得 = ValueError(含 WORKSTATION_MATERIAL_* 拒因码 / 位置拒因; fail-closed)。"""
+    import socket
+
+    from tools.aipos_cli.enrollment import workstation_location
+    from tools.aipos_cli.workspace_config import project_workstation
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        loc = workstation_location(workspace_root, instance)
+    except SchemaLoadError as exc:
+        raise ValueError(f"工位位置声明读取失败: {exc}") from exc
+    if not loc.get("found"):
+        raise ValueError(f"实例 {instance} 工位位置定位不到: {loc.get('reason')}")
+    if loc.get("transport") != "remote":
+        raise ValueError(f"实例 {instance} 工位 transport={loc.get('transport')}(非跨机), 不附门机材料段")
+    try:
+        material = project_workstation(workspace_root, instance)
+    except SchemaLoadError as exc:
+        raise ValueError(f"跨机工位材料声明读取失败: {exc}") from exc
+    return {"gate_host": socket.gethostname(), "governance_root": str(Path(workspace_root).resolve()),
+            "workstation_host": str(loc.get("host") or ""), **material}
 
 
 def _kickoff_value(values: dict[str, Any], name: str) -> str:
     if name not in values:
         raise KickoffRenderError(f"开工提示模板占位 {{{name}}} 未知")
     value = values[name]
-    if not isinstance(value, str) or (not value and name not in ("value", "hint")):
+    if not isinstance(value, str) or (not value and name not in ("value", "hint", "remote_material")):
         raise KickoffRenderError(f"开工提示占位 {{{name}}} 缺值")
     return value
 
 
-def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
+def select_next_card(cards: list[dict[str, Any]], *, remote: dict[str, Any] | None = None) -> dict[str, Any]:
     """按 NEXT_CARD_RULE 从 my-tasks 的卡视图中选出当前应开工的卡(纯函数)。
 
     每项卡视图字段: task_id / queue_state / card_path / worktree_path / worktree_exists / worktree_refusal /
@@ -587,6 +624,7 @@ def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
     返回 {next_card: None | {task_id, card_path, worktree_path, report_path, report_required_frontmatter, claimed_at},
           next_card_excluded: [{task_id, code, reason}](每张未入选的 claimed 卡为何不入选), next_card_rule}。
     拒因文案只陈述事实与上报出口, 零门动词(工位原样转述)。
+    AIPOS-F110: remote = 跨机工位门机材料上下文(remote_kickoff_context), 原样交 render_kickoff(本机 = None, 提示逐字节不变)。
     """
     eligible: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
@@ -663,7 +701,7 @@ def select_next_card(cards: list[dict[str, Any]]) -> dict[str, Any]:
         }
         # AIPOS-F95 件①: 完整开工提示由产品按声明渲染(工位 /go 与 loop 拉起同读本字段, 逐字节相同); 渲染不出 = 不开工(fail-closed)
         try:
-            next_card["kickoff"] = render_kickoff(next_card)
+            next_card["kickoff"] = render_kickoff(next_card, remote=remote)
         except KickoffRenderError as exc:
             excluded.append({"task_id": next_card["task_id"], "code": "KICKOFF_UNRESOLVED",
                              "reason": f"开工提示不可渲染: {exc}; 按 block-and-report 上报"})
@@ -823,24 +861,18 @@ def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connecti
 
     顺序: ⓪ loop 显式 --actor(driver_scope, AIPOS-F90 件①) → ① 治理根 .lybra/role 的 instance(工位声明)
     → ② connection.json 驱动方 token 绑定的 agent_instance → ③ 调用方显式 fallback(仅靶场/显式传入)
-    → 解析不到返回 ""(调用方 fail-closed: 不可推导 + 点名缺项)。读失败精确捕获 + warning。
+    → 解析不到返回 ""(调用方 fail-closed: 不可推导 + 点名缺项)。
+    AIPOS-F106 件④: ① 经 ConnectionResolver.resolve_identity(.lybra/role 唯一读取实现之一); role 文件不可读时该实现按「未声明」落下一层。
     """
-    import json
-
     scoped_actor = _scoped_driver().get("actor")
     if scoped_actor:
         return scoped_actor
-    role_file = workspace_root / ".lybra" / "role"
-    if role_file.is_file():
-        try:
-            role_data = json.loads(role_file.read_text(encoding="utf-8"))
-            instance = str(role_data.get("instance") or "").strip()
-            if instance:
-                return instance
-        except (OSError, ValueError) as exc:
-            import sys
+    # AIPOS-F106 件④: 治理根 .lybra/role 只经 ConnectionResolver.resolve_identity 读(唯一实现; env 不参与 = 只认工位声明层)
+    from tools.loop_context import ConnectionResolver
 
-            print(f"Warning: {role_file} unreadable, driver actor unresolved from role file: {exc}", file=sys.stderr)
+    declared = ConnectionResolver.resolve_identity(workspace_root=workspace_root, env={})["agent_instance"]
+    if declared["source"] == ".lybra/role" and str(declared["value"] or "").strip():
+        return str(declared["value"]).strip()
     instance = _driver_token_instance(workspace_root, connection_json)
     if instance:
         return instance
@@ -856,17 +888,12 @@ def _driver_role_name(workspace_root: Path, connection_json: str | None = None) 
     import json
 
     from tools.aipos_cli.two_phase_shell_factory import driver_role_class
+    from tools.loop_context import ConnectionResolver
 
-    role_file = workspace_root / ".lybra" / "role"
-    if role_file.is_file():
-        try:
-            role = str(json.loads(role_file.read_text(encoding="utf-8")).get("role") or "").strip()
-            if role:
-                return role
-        except (OSError, ValueError) as exc:
-            import sys
-
-            print(f"Warning: {role_file} unreadable, driver role unresolved from role file: {exc}", file=sys.stderr)
+    # AIPOS-F106 件④: 治理根 .lybra/role 只经 ConnectionResolver.resolve_role 读(唯一实现; env={} = 只认工位声明层)
+    role = str(ConnectionResolver.resolve_role(workspace_root=workspace_root, env={}) or "").strip()
+    if role:
+        return role
     conn = connection_json or _find_connection_json(workspace_root)
     if not conn or not Path(conn).is_file():
         return ""
@@ -1182,9 +1209,12 @@ def _resolve_active_policy(workspace_root: Path, task_id: str, role: str = "exec
 
 def _find_connection_json(workspace_root: Path) -> str | None:
     """查找 connection.json 路径。"""
-    # 优先治理仓
-    gov_conn = workspace_root / ".lybra" / "connection.json"
-    if gov_conn.is_file():
+    # 优先治理仓(AIPOS-F106 件④: .lybra 经 ConnectionResolver.discover_lybra_dir 既有原语定位)
+    from tools.loop_context import ConnectionResolver
+
+    lybra_dir = ConnectionResolver.discover_lybra_dir(workspace_root)
+    gov_conn = lybra_dir / "connection.json" if lybra_dir is not None else None
+    if gov_conn is not None and gov_conn.is_file():
         return str(gov_conn)
     # 环境变量
     env_conn = os.environ.get("LYBRA_CONNECTION_JSON")
@@ -2261,15 +2291,47 @@ def _derive_next_step(
             if not latest_audit_dispatch and (task_mode == "code" or audit_required):
                 audit_id = f"{task_id}R"
                 policy_ref = _resolve_active_policy(workspace_root, task_id, role="exec")
-                # 第4轮②: 派审是 owner-dispatch 的动词,不是 exec
-                dispatch_actor = "owner-dispatch.lybra.kiwiai-dev"
-                dispatch_agent = "owner-dispatch.lybra.kiwiai-dev"
-                # 审计体实例: 卡面 audit_by 声明优先(card.schema), 缺省沿用存量实例名
-                audit_instance = str(fm.get("audit_by") or "").strip() or "audit.lybra.kiwiai-dev"
+                # AIPOS-F102 件①: 派审 actor = 驱动方实例(roles.schema driver.role_class 对应的驱动方, _driver_actor 唯一实现:
+                # loop --actor → 治理根 .lybra/role instance → connection.json 驱动方 token 绑定实例), 原写死 lybra 身份退役;
+                # 解析不到 = 不可推导(点名缺项), 禁回退任何项目字面
+                dispatch_actor = _driver_actor(workspace_root, connection_json=conn_arg)
+                if not dispatch_actor:
+                    return {
+                        "task_id": task_id,
+                        "derivable": False,
+                        "current_node": "return",
+                        "current_state": "claimed",
+                        "triggered_by": "advisor",
+                        "command": "",
+                        "verb": "lybra_audit_dispatch_dry_run",
+                        "missing_records": [DRIVER_ACTOR_MISSING],
+                        "suggested_action": "补驱动方身份(lybra loop --actor 或治理根 .lybra/role instance)后重推导",
+                        "notes": "N2→N3: 派审 actor 无据(驱动方身份解析不到, AIPOS-F102 件①)",
+                        "action": {"type": "record_missing", "card": task_id, "record": "driver_actor"},
+                    }
+                # AIPOS-F102 件①: 审计卡认领实例 = 被审卡 audit_by 声明, 缺则按项目推导(audit_derivation.resolve_audit_instance 唯一实现)
+                from tools.aipos_cli.audit_derivation import resolve_audit_instance
+
+                try:
+                    audit_instance = resolve_audit_instance(fm, workspace_root)
+                except ValueError as exc:
+                    return {
+                        "task_id": task_id,
+                        "derivable": False,
+                        "current_node": "return",
+                        "current_state": "claimed",
+                        "triggered_by": "advisor",
+                        "command": "",
+                        "verb": "lybra_audit_dispatch_dry_run",
+                        "missing_records": [f"卡 {task_id} 审计实例声明(audit_by)或项目声明(project): {exc}"],
+                        "suggested_action": f"lybra queue amend --task-id {task_id} 补 audit_by 后重推导",
+                        "notes": "N2→N3: 审计卡认领实例无据(AIPOS-F102 件①)",
+                        "action": {"type": "record_missing", "card": task_id, "record": "audit_by"},
+                    }
                 cmd = _build_audit_dispatch_command(
                     task_id=task_id,
                     actor=dispatch_actor,
-                    agent_instance=dispatch_agent,
+                    agent_instance=dispatch_actor,
                     owner_policy_ref=policy_ref,
                     connection_json=conn_arg,
                     audit_task_id=audit_id,

@@ -210,8 +210,9 @@ class FrontmatterZerodepParityTests(unittest.TestCase):
             "task_id": "AIPOS-WS5-PUB",
             "title": "WS5 publish parity test",
             "project": "lybra",
-            "assigned_to": "dev_claude",
-            "agent_instance": "agent-01",
+            # AIPOS-F102 件②: 卡角色类不可解析 = 拒发布; 夹具用注册表角色的实例名(原 dev_claude/agent-01 无角色类)
+            "assigned_to": "exec.lybra.test",
+            "agent_instance": "exec.lybra.test",
             "context_bundle": "default",
             "task_mode": "code",
             "priority": "medium",
@@ -236,7 +237,8 @@ class FrontmatterZerodepParityTests(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertIsInstance(data.get("lane"), dict, data.get("lane"))
         self.assertEqual(data["lane"].get("paths"), ["tools/"])
-        self.assertEqual(data["lane"].get("roles"), [])
+        # AIPOS-F102 件②: 卡角色类可解析(exec 实例 → executor), lane.roles 派生为 [executor](空列表形状由逐形状夹具覆盖)
+        self.assertEqual(data["lane"].get("roles"), ["executor"])
 
 
 class FrontmatterZerodepAdversarialTests(unittest.TestCase):
@@ -572,8 +574,9 @@ class StdlibWriterShapeTableTests(unittest.TestCase):
             (root / "5_tasks" / "policies").mkdir(parents=True)
             (root / "5_tasks" / "policies" / "pol_lybra_dev_7.md").write_text(
                 "---\npolicy_id: pol_lybra_dev_7\nstatus: active\nrole: exec\npolicy_type: dev\n---\n# Dev\n", encoding="utf-8")
-            meta = {"task_id": "AIPOS-F100-PUB", "title": "零依赖发布: 冒号 #号", "project": "lybra", "assigned_to": "dev_claude",
-                    "agent_instance": "agent-01", "context_bundle": "default", "task_mode": "code", "priority": "medium",
+            # AIPOS-F102 件②: 卡角色类不可解析 = 拒发布, 夹具用注册表角色的实例名(原 dev_claude/agent-01 无角色类)
+            meta = {"task_id": "AIPOS-F100-PUB", "title": "零依赖发布: 冒号 #号", "project": "lybra", "assigned_to": "exec.lybra.test",
+                    "agent_instance": "exec.lybra.test", "context_bundle": "default", "task_mode": "code", "priority": "medium",
                     "status": "pending", "created_by": "tester", "needs_owner": False, "artifact_policy": "formal_write",
                     "model_tier": "L2", "output_target": "tools/", "governance_refs": ["★依据: x", "Fix: 'q'"]}
 

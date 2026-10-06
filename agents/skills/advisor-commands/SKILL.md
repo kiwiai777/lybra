@@ -142,12 +142,31 @@ lybra loop --task-id <卡ID> --envelope <信封ID> --actor <你的顾问实例> 
 | 模式 | 前提 | 谁做什么 |
 |------|------|----------|
 | **授权拉起** | Owner **同意**后, Owner 亲自敲 `lybra envelope mint ... --launch-harness pi ... --confirm` 铸信封(信封 `launch_harnesses` 含该卡 harness) | 顾问跑 `lybra loop --task-id <卡ID>`: 执行体/审计体等待前, loop 按 enums.schema `harness.launch` 模板在工位(本项目 enrollment_log land 事件的 `host`/`workstation`)拉起一次 harness, 过程汇总成 `[<harness> <卡ID> pid=…] 工具 …/助手 …/错误 …` 一行式进度显示在顾问界面; 产物就绪/超时/早退/中断即清整个进程组; 拉起与收尾记进该卡 session record Events |
-| **手工** | 信封无 `launch_harnesses`(缺省), 或给 `--no-launch`, 或条件不满足(harness 无模板 / 工位定位不到或身份不符 / 跨机工位) | loop 输出 `manual: 请在 <工位目录> 的 <harness> 会话敲 /go`(跨机: `请在 <host>:<dir> 的工位敲 /go`), Owner 在工位敲 `/go`, loop 照旧经 watch 等产物 |
+| **手工** | 信封无 `launch_harnesses`(缺省), 或给 `--no-launch`, 或条件不满足(harness 无模板 / 工位定位不到或身份不符 / 跨机工位材料未声明或 ssh 不可达) | loop 输出 `manual: 请在 <工位目录> 的 <harness> 会话敲 /go`(跨机: `请在 <host>:<dir> 的 <harness> 会话敲 /go(跨机工位)`), Owner 在工位敲 `/go`, loop 照旧经 watch 等产物 |
 
 - **授权须经 Owner**: 顾问先向 Owner 说明「将由 loop 在 <工位目录> 拉起 <harness>」并取得同意, 铸信封命令由 Owner 亲自敲; 顾问永不代敲、永不自行拉起。
 - **loop 在后台跑时顾问只读其输出**(进度行与出口原文), **禁 `until`/`sleep` 轮询**; 等它结束再读结果。
 - 一次 loop 对一张卡至多拉起一次, 不自动重试; 早退(exit 3 附 stderr 末尾)/超时后重跑 `lybra loop` = 显式再拉起。
-- 跨机工位(land 事件 host ≠ 本机)本卡起只声明不支持: 自动退回手工, 提示 `<host>:<dir>`。
+- 跨机工位(land 事件 host ≠ 本机)经 ssh 拉起, 接入步骤见下「跨机工位」; 材料未声明或 ssh 不可达 = 自动退回手工并给原因。
+
+#### 跨机工位(AIPOS-F110: 执行体在别的机器, 门与治理根在本机)
+前提: loop 只在治理根所在机(门机)跑; 门机与工位机 ssh 双向可达——门机→工位(loop 拉起/清理), 工位→门机(执行体读写门机上的治理根/工作树/报告落点)。ssh 凭据只走两端各自的 ssh 配置与密钥(`BatchMode=yes` 不交互索要口令), 永不经 Lybra、不进开工提示。
+1. **接入**(Owner 亲自敲, 在门机产品仓根下; land 事件 host = `--ssh` 的 ssh 目标, loop 以它为拉起目标; 注册码经 ssh stdin 送达、Owner 凭据只在本机读 connection.json 调门, 均不进远端命令行):
+```bash
+python3 -m tools.aipos_cli.enroll_deliver --role executor --instance <执行体实例> \
+  --target-workspace <工位目录> --target-harness <工位目录> --ssh <ssh目标> \
+  --gate-url <门地址> --owner-policy-ref <信封ID> --connection-json <Owner凭据>
+```
+2. **声明开工材料**(远端视角: 工位上指向门机的 ssh 别名 + 一句话材料访问方式, 如「经 ssh <别名> 读写; 代码提交到卡分支并推回门机产品仓」; 禁含凭据; 未声明 = loop 拒拉起并提示本命令):
+```bash
+lybra project set-workstation <项目名> --home-root <home根> --instance <执行体实例> \
+  --gate-ssh-alias <门机别名> --material-access "<材料访问说明>"
+```
+3. **双向可达检查**(只读, 与 loop 同一 ssh 代码路径; 门机→工位: 工位目录在、harness 可执行在远端非交互 PATH; 工位→门机: 经别名 `test -d <治理根>`; 任一 ✗ 先修 ssh 配置再推进):
+```bash
+lybra project check-workstation <项目名> --home-root <home根> --instance <执行体实例> --harness pi
+```
+4. **推进**照常 `lybra loop --task-id <卡ID>`: 执行体等待前 loop 经 `ssh -T <ssh目标>` 在工位目录以新进程组起 harness, 开工提示经 ssh stdin 逐字节传入(不进命令行、不经远端 shell 展开), 提示末段写明工作树/报告落点/任务卡在门机及材料访问方式(产品 `render_kickoff` 单源); 产物就绪/超时/早退/中断(含 ssh 断线 SIGHUP)即经 ssh 清远端进程组, 本地 ssh 子进程同清。执行体交付不变: 报告写门机报告落点(经材料通道), 代码提交卡分支并推回门机产品仓(卡面 lane.repo), loop 仍在门机看产物。
 
 #### `lybra mark-concluded` / `lybra queue close --conclusion-note`(AIPOS-F78 前置零⑨)
 **何时用**:已 PASS 但不走 finalize 的卡(如产物由续卡承接):

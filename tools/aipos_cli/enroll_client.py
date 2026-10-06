@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from tools.aipos_cli.confirm_client import gate_rpc_url  # AIPOS-F106 件①: 门基址↔MCP 端点换算唯一实现
+
 try:
     import urllib.request
     import urllib.error
@@ -87,7 +89,9 @@ def normalize_gate_url_for_same_host(gate_url: str) -> str:
         return gate_url
     
     parsed = urlparse(gate_url)
-    port = parsed.port or 7118
+    from tools.schema_loader import get_config_port
+
+    port = parsed.port or get_config_port("gate_default")  # AIPOS-F106 件②: 端口单源 config.schema ports.gate_default
     return f"http://127.0.0.1:{port}"
 
 
@@ -96,7 +100,7 @@ def verify_token_against_gate(gate_url: str, token: str, *, timeout: int = 15) -
 
     调一个只读工具 (lybra_gate_version), 成功 → (True, detail); 失败(401/拒)→ (False, detail)。
     """
-    url = f"{gate_url.rstrip('/')}/mcp"
+    url = gate_rpc_url(gate_url)  # AIPOS-F106 件①: 门基址→MCP 端点唯一换算
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -192,7 +196,7 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
             "Example: lybra roles enroll --code LYBRAENROLL1.<base64> --workspace ~/my-workstation"
         )
     
-    url = f"{gate_url.rstrip('/')}/mcp"
+    url = gate_rpc_url(gate_url)  # AIPOS-F106 件①: 门基址→MCP 端点唯一换算
     # AIPOS-F52: 发送完整自包含码(不是 sc["code"] 内层短码)
     payload = {
         "jsonrpc": "2.0",
@@ -350,13 +354,13 @@ def load_or_create_connection_json(lybra_dir: Path, gate_url: str, workspace_roo
     if gate_url:
         normalized_gate_url = normalize_gate_url_for_same_host(gate_url)
         if "mcp" not in data:
-            mcp_url = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
+            mcp_url = gate_rpc_url(normalized_gate_url)  # AIPOS-F106 件①: 门基址↔MCP 端点换算唯一实现
             data["mcp"] = {
                 "rpc_url": mcp_url,
             }
         else:
             # 更新现有 mcp.rpc_url (幂等:如已存在也更新为规范化 URL)
-            mcp_url = normalized_gate_url if normalized_gate_url.endswith("/mcp") else f"{normalized_gate_url}/mcp"
+            mcp_url = gate_rpc_url(normalized_gate_url)  # AIPOS-F106 件①: 门基址↔MCP 端点换算唯一实现
             data["mcp"]["rpc_url"] = mcp_url
     
     # AIPOS-F54-fix1: workspace_root 单源 = governance_root(码内治理根, 禁 harness root 混入)。
@@ -455,20 +459,35 @@ def write_connection_json(lybra_dir: Path, connection_data: dict[str, Any]) -> N
 
 def validate_connection_complete(connection_data: dict[str, Any]) -> list[str]:
     """AIPOS-C2 大项B: 铸全校验 —— connection.json 按 config.schema 必填键逐键检查。
-    
+
+    AIPOS-F106 件③: 必填键只读 config.schema configuration_sources.connection.schema 的 required(唯一声明; 原代码内手写的键表删除)。
+    嵌套对象(如 mcp)报其必填子键的点路径(mcp.rpc_url)。缺/空/类型不符 = 缺; 声明缺失 = SchemaLoadError(fail-closed)。
     返回缺失键列表 (空 = 完整)。缺键 = enroll 失败出声, 不落半成品。
     """
-    missing: list[str] = []
-    if not connection_data.get("workspace_root"):
-        missing.append("workspace_root")
-    mcp = connection_data.get("mcp")
-    if not isinstance(mcp, dict) or not mcp.get("rpc_url"):
-        missing.append("mcp.rpc_url")
-    if not isinstance(connection_data.get("tokens"), list):
-        missing.append("tokens")
-    if "config_version" not in connection_data:
-        missing.append("config_version")
-    return missing
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    decl = ((load_schema("config", code_repo_schema_root()).get("configuration_sources") or {}).get("connection") or {}).get("schema")
+    if not isinstance(decl, dict) or not decl:
+        raise SchemaLoadError("config.schema.json configuration_sources.connection.schema 未声明")
+    kinds = {"string": str, "integer": int, "array": list, "object": dict}
+
+    def _walk(schema: dict[str, Any], data: Any, prefix: str) -> list[str]:
+        out: list[str] = []
+        for key, spec in schema.items():
+            if not isinstance(spec, dict) or not spec.get("required"):
+                continue
+            name = f"{prefix}{key}"
+            value = data.get(key) if isinstance(data, dict) else None
+            sub = spec.get("schema")
+            if isinstance(sub, dict) and any(isinstance(s, dict) and s.get("required") for s in sub.values()):
+                out.extend(_walk(sub, value, f"{name}."))
+                continue
+            expected = kinds.get(str(spec.get("type") or ""))
+            if value is None or value == "" or (expected is not None and not isinstance(value, expected)):
+                out.append(name)
+        return out
+
+    return _walk(decl, connection_data, "")
 
 
 def is_governance_workspace(path: Path, governance_root: str | None = None) -> bool:
@@ -492,27 +511,6 @@ def is_governance_workspace(path: Path, governance_root: str | None = None) -> b
     return has_workspace_queue(target)
 
 
-def _resolve_role_class_for_guard(role: str, workspace_root: Path) -> str:
-    """AIPOS-F22D: 守卫内角色类解析(单源: roles 注册表 class, 禁自建名单)。
-
-    判据:
-    - 内建角色(executor/auditor/planner/advisor/owner/copilot/owner-dispatch) → 角色名即类名
-    - 自定义角色 → 从注册表查 role_class(如 hbj-coder → executor)
-    - 解析失败 → 回落为角色名自身(安全侧: 未知角色按工位类处理, 拒绝治理仓)
-
-    此函数仅用于守卫判定, 不在守卫内自建角色名单——真相来自注册表。
-    """
-    try:
-        from tools.aipos_cli.custom_roles import resolve_role_to_class
-        resolved = resolve_role_to_class(role, str(workspace_root))
-        if resolved:
-            return resolved
-    except Exception:
-        pass
-    # 降级: 内建角色名即类名; 未知角色回落自身(安全侧)
-    return role
-
-
 def land_enrollment_code(
     gate_url: str,
     code: str,
@@ -531,7 +529,7 @@ def land_enrollment_code(
     bearer = transport_token or (sc["transport_token"] if sc is not None else "")
     if not bearer:
         bearer = os.environ.get("LYBRA_BOOTSTRAP_TOKEN", "").strip()
-    url = f"{gate_url.rstrip('/')}/mcp"
+    url = gate_rpc_url(gate_url)  # AIPOS-F106 件①: 门基址→MCP 端点唯一换算
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -776,9 +774,15 @@ def enroll(
         
         # AIPOS-F22D: 治理工作区守卫——按角色类判定(F23⑧ 第九坑防护升级)
         # 工位角色类(executor/auditor)→拒绝; 顾问角色类(planner/advisor)→允许
+        # AIPOS-F102 件②: 角色类唯一解析 custom_roles.resolve_role_to_class(解析不到 = 拒, 原「回落角色名自身」退役); 分组读 roles.schema class_groups
         if _gov_workspace:
-            _role_class = _resolve_role_class_for_guard(role, workspace_root)
-            if _role_class not in ("planner", "advisor"):
+            from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class, role_classes_in_group
+
+            try:
+                _role_class = resolve_role_to_class(role, str(workspace_root), required=True)
+            except UnknownRoleClass as exc:
+                raise RuntimeError(f"enroll 目标是治理工作区({workspace_root}), {exc}") from exc
+            if _role_class not in role_classes_in_group("governance_seat"):
                 raise RuntimeError(
                     f"enroll 目标是治理工作区({workspace_root}), 角色 {role}(类={_role_class}) 拒绝落盘 —— "
                     f"工位角色类(executor/auditor)只落工位目录 .lybra/。\n"
@@ -798,6 +802,7 @@ def enroll(
     # AIPOS-F54-fix1 ③: lybra_bin —— 指向实际部署位(运行中 bin 优先, 否则探测 .deploy/current);
     # 推导不出则不写(留空会让 /lybra sync 探测, 探测失败时 sync 会带路, 禁静默写错路径)
     # 始终校正(已入册工位重跑 enroll 即补铸/校正, 禁"已有错值则保留")
+    from tools.aipos_cli.custom_roles import role_classes_in_group
     from tools.aipos_cli.workstation_wiring import (
         materialize_pi_wiring,
         resolve_deployed_lybra_bin,
@@ -837,11 +842,11 @@ def enroll(
             effective_gov_root, role=role, agent_instance=agent_instance,
         )
         policy_derivation = {"policy_id": derived_policy, "reason": policy_reason}
-        role_class = resolve_role_class(role, token_entry)
+        role_class = resolve_role_class(role, token_entry, project_root=workspace_root)
         if derived_policy:
             write_role_file(lybra_dir, role, agent_instance, derived_policy, harness=harness_record)
             files_written.append("role(含 owner_policy_ref)")
-        elif role_class in ("executor", "auditor"):
+        elif role_class in role_classes_in_group("workstation"):  # AIPOS-F102 件②: 工位类读 roles.schema class_groups
             # 卡面②: 推导不出 → 报错带路, 禁静默留空导致循环起不来(验收⑩)
             raise RuntimeError(
                 f"enroll 推导 owner_policy_ref 失败: {policy_reason}。\n"
@@ -856,18 +861,15 @@ def enroll(
             policy_derivation["warning"] = True
     elif code is None:
         # backfill 模式: 从既有 .lybra/role 读角色, 补齐接线(修复既有残缺工位)
-        role_file = lybra_dir / "role"
-        if role_file.is_file():
-            try:
-                _rd = json.loads(role_file.read_text(encoding="utf-8"))
-                role = str(_rd.get("role") or "") or None
-            except (json.JSONDecodeError, OSError):
-                role = None
+        # AIPOS-F106 件④: role 只经 ConnectionResolver.resolve_role 读(.lybra/role 唯一读取实现之一; env={} = 只认工位声明层)
+        from tools.loop_context import ConnectionResolver
+
+        role = ConnectionResolver.resolve_role(workspace_root=lybra_dir.parent, env={}) or None
     
     # AIPOS-F54 ①: .pi 接线 + AGENTS.md 种子(seed_only 幂等, 已存在跳过不覆盖)
     # AIPOS-F82 件②: 接线目标由 distribution 声明推导(只写目标存在的扩展挂载, 不写的项进 warnings); AGENTS.md = charter_render 渲染物
     if role and harness_record is None:
-        role_class = resolve_role_class(role, token_entry)
+        role_class = resolve_role_class(role, token_entry, project_root=workspace_root)
         wiring_report = materialize_pi_wiring(workspace_root, role=role, role_class=role_class)
         files_written.append(".pi/接线")
 

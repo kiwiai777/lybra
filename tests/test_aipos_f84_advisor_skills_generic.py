@@ -66,6 +66,9 @@ PLACEHOLDER_VALUES = {
     "<Owner凭据>": "/tmp/f84-home/ops/.lybra/connection.json",
     "<卡稿JSON>": "/tmp/f84-card.json",
     "<草稿路径>": "5_tasks/drafts/proj-1.md",
+    # AIPOS-F110: 跨机工位接入步骤占位
+    "<门机别名>": "gate-host",
+    "<材料访问说明>": "经 ssh gate-host 读写",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

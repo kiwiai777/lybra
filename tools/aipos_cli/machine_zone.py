@@ -375,15 +375,14 @@ def derive_intent_declarations(
     roles = raw_lane.get("roles") if isinstance(raw_lane.get("roles"), list) else []
     roles = [str(r).strip() for r in roles if str(r).strip()]
     if not roles:
+        from tools.aipos_cli.custom_roles import UnknownRoleClass
+        from tools.aipos_cli.draft_writer import _card_role_class
+
         try:
-            from tools.aipos_cli.draft_writer import _card_role_class
-
             role_class = _card_role_class(metadata, governance_root)
-        except ImportError as exc:  # 产品仓损坏才会到这里, 出声不吞
-            import sys
-
-            print(f"Warning: role class resolver unavailable: {exc}", file=sys.stderr)
+        except UnknownRoleClass as exc:  # AIPOS-F102 件②: 角色类不可解析 = 拒(派生不出 lane.roles 点名出口), 不静默留空
             role_class = None
+            blocking.append(f"LANE_ROLES_UNRESOLVED: 卡面无 lane.roles 且角色类不可解析: {exc}")
         roles = [role_class] if role_class else []
         if roles:
             derived.append("lane.roles")

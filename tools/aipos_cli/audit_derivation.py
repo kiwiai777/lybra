@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -276,15 +275,39 @@ def _task_filename_for(task_id: str) -> str:
     return (value or "task") + ".md"
 
 
-def _derive_audit_instance(project: str) -> str:
+def _registry_prefix(role: str) -> str:
+    """角色在注册表的实例名前缀(roles.schema role.naming.prefix 唯一来源); 缺 = ValueError(禁写死前缀)。"""
+    from tools.schema_loader import get_role_naming_prefix
+
+    prefix = str(get_role_naming_prefix(role) or "").strip()
+    if not prefix:
+        raise ValueError(f"roles.schema.json 角色 {role!r} 无 naming.prefix, 实例名无从推导")
+    return prefix
+
+
+def resolve_audit_instance(source_metadata: dict[str, Any], governance_root: str | Path | None = None) -> str:
+    """AIPOS-F102 件①: 审计卡认领实例的唯一解析(派审 / 交回派生审计卡 / 修复后复审 同口径)。
+
+    被审卡 audit_by 声明(card.schema)优先; 缺则按项目推导: naming_profile.default_instance_name(审计角色注册表前缀,
+    项目 = 被审卡 project, 再缺读治理根 project.json#project; 都缺 = 拒 ProjectSegmentUnresolved)。
+    原写死的 lybra 审计实例缺省与「不读 audit_by」退役(非 lybra 项目审计卡认领实例 = 其 audit_by)。
     """
-    Derive audit agent_instance via the single naming implementation (AIPOS-R4B-1):
-    audit.<project>.<hostname> from the registry template.
-    
-    Example: audit.lybra.kiwiai-dev
-    """
-    hostname = socket.gethostname().split(".")[0]  # short hostname
-    return default_instance_name("audit", project=project, host=hostname)
+    declared = str(source_metadata.get("audit_by") or "").strip()
+    if declared:
+        return declared
+    project = str(source_metadata.get("project") or "").strip() or None
+    return default_instance_name(_registry_prefix("auditor"), project=project, project_root=governance_root)
+
+
+def resolve_repair_executor_instance(source_metadata: dict[str, Any], governance_root: str | Path | None = None) -> str:
+    """AIPOS-F102 件①: 修复卡执行实例——承继被审卡 agent_instance / assigned_to 声明; 都缺按项目推导执行角色实例名
+    (default_instance_name, 项目缺 = 拒)。原写死的 lybra 执行实例 / 短名缺省退役。"""
+    for key in ("agent_instance", "assigned_to"):
+        declared = str(source_metadata.get(key) or "").strip()
+        if declared:
+            return declared
+    project = str(source_metadata.get("project") or "").strip() or None
+    return default_instance_name(_registry_prefix("executor"), project=project, project_root=governance_root)
 
 
 def _derive_audit_assigned_to(project: str) -> str:
@@ -534,7 +557,7 @@ def build_derived_audit_task(
         "title": f"Audit {source_metadata.get('title', source_task_id)}",
         "project": project,
         "assigned_to": _derive_audit_assigned_to(project),
-        "agent_instance": _derive_audit_instance(project),
+        "agent_instance": resolve_audit_instance(source_metadata, repo_root),  # AIPOS-F102 件①: audit_by 优先
         "context_bundle": source_metadata.get("context_bundle", "default"),
         "task_mode": "audit",
         "task_class": "simple",
@@ -750,7 +773,7 @@ def derive_audit_task_on_return(
 
     # AIPOS-F38 大项A(F17 原则覆盖全部 writer): 必填字段从 schema 单源补全(值承继原卡,
     # 缺则安全默认), 再产前自检——产物必过与 publish/修复卡 writer 同一的 schema 必填校验;
-    # 审计身份必须是注册表审计实例(_derive_audit_instance 同一实现), 禁承继原卡执行实例。
+    # 审计身份 = resolve_audit_instance(被审卡 audit_by → 项目推导, AIPOS-F102 件①; 同一实现), 禁承继原卡执行实例。
     _required_fields = get_required_card_fields()
     _inherit_defaults = card_field_defaults()  # AIPOS-F108 件①: 安全默认值 = card.schema fields.<键>.default(单源)
     for _field in _required_fields:
@@ -772,7 +795,16 @@ def derive_audit_task_on_return(
             ),
         }
     
-    _expected_instance = _derive_audit_instance(str(source_project))
+    _expected_instance = resolve_audit_instance(source_metadata, repo_root)  # AIPOS-F102 件①: 同一解析(audit_by 优先)
+    _reviewed_executor = str(source_metadata.get("agent_instance") or source_metadata.get("claimed_by") or "").strip()
+    if _reviewed_executor and _expected_instance == _reviewed_executor:
+        return {
+            "derived": False,
+            "reason": (
+                f"AIPOS-F102 派生校验 FAIL: 审计卡 {audit_task_id} 审计实例 {_expected_instance} = 被审卡执行实例(独立性不成立); "
+                f"出口: 被审卡 audit_by 声明独立的审计实例"
+            ),
+        }
     if audit_metadata.get("agent_instance") != _expected_instance:
         return {
             "derived": False,
@@ -983,14 +1015,12 @@ def derive_repair_card_on_fail(
     source_metadata = {}
     source_body = ""
     if source_card:
+        # AIPOS-F102: 被审卡读不出 = 拒(原 except Exception: pass 静默当空卡, 修复卡身份/项目无据)
         try:
             text = source_card.read_text(encoding="utf-8")
-            source_metadata, source_body, _ = parse_markdown_frontmatter(text)
-        except (OSError, ValueError) as exc:
-            # AIPOS-F108: 原 except Exception: pass 静默吞 → 精确捕获 + fail-closed 带出口
-            raise ValueError(
-                f"SOURCE_CARD_UNREADABLE: derive_repair_card 读原卡 {source_card} 失败({exc})。出口: 修复原卡后重试"
-            ) from exc
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ValueError(f"derive_repair_card_on_fail: 被审卡 {source_card} 读不出: {exc}") from exc
+        source_metadata, source_body, _ = parse_markdown_frontmatter(text)
 
     # AIPOS-F66 F-002: 项目名取不到=raise 带出口(fail-closed),禁默认 lybra
     project = source_metadata.get("project")
@@ -1002,13 +1032,15 @@ def derive_repair_card_on_fail(
     project = str(project)
 
     # AIPOS-F17 大项A: 构建修复卡 — 必填字段从 schema 单源派生, 值承继原卡, 禁手写第二份清单。
+    # AIPOS-F102 件①: 修复卡执行体承继被审卡声明, 都缺按项目推导(resolve_repair_executor_instance), 禁 lybra 身份字面
+    repair_executor = resolve_repair_executor_instance(source_metadata, governance_root)
     repair_metadata = {
         "task_id": repair_task_id,
         "title": f"Fix: {source_metadata.get('title', reviewed_task_id)} (round {fix_round})",
         "project": project,
-        # AIPOS-F108 件①(M9): assigned_to / agent_instance 只承继原卡, 禁写死实例名缺省(原卡缺必填 assigned_to = 下方产前自检拒;
-        # agent_instance 非必填, 原卡无则不写); task_class 缺省读 card.schema 声明。
-        "assigned_to": source_metadata.get("assigned_to"),
+        # AIPOS-F102 件① / F108 件①(M9) 同口径: 执行实例承继原卡声明 → 缺则按项目推导 → 项目也无则拒; 禁写死实例名缺省
+        "assigned_to": str(source_metadata.get("assigned_to") or "").strip() or repair_executor,
+        "agent_instance": str(source_metadata.get("agent_instance") or "").strip() or repair_executor,
         "context_bundle": source_metadata.get("context_bundle", "default"),
         "task_mode": source_metadata.get("task_mode", "code"),
         "task_class": source_metadata.get("task_class") or card_field_defaults()["task_class"],
@@ -1023,9 +1055,6 @@ def derive_repair_card_on_fail(
         "anchor_refs": source_metadata.get("anchor_refs", ["g1_owner_gate"]),
         "artifact_scope": source_metadata.get("artifact_scope", ""),
     }
-
-    if source_metadata.get("agent_instance"):
-        repair_metadata["agent_instance"] = source_metadata["agent_instance"]
 
     # AIPOS-F17 大项A: 从 schema 必填集补全——值承继原卡, 原卡无则用安全默认值。
     # 禁手写第二份字段清单; schema 改即自动跟随。

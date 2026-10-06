@@ -58,11 +58,13 @@ def _discover_harness_root_from(start: Path) -> Path | None:
 
     仅供显式起点使用; 不再以 cwd 为默认起点(防裸跑猜错工位)。
     """
+    from tools.loop_context import ConnectionResolver  # AIPOS-F106 件④: .lybra 判定经既有原语 discover_lybra_dir
+
     cur = start.resolve()
     if cur.is_file():
         cur = cur.parent
     for _ in range(10):
-        if (cur / ".lybra").is_dir():
+        if ConnectionResolver.discover_lybra_dir(cur) is not None:
             return cur
         if cur.parent == cur:
             break
@@ -71,15 +73,16 @@ def _discover_harness_root_from(start: Path) -> Path | None:
 
 
 def _validate_enrolled(root: Path) -> None:
-    """校验目标为已 enroll 工位(有 .lybra/role); 否则拒绝, 零写入。"""
-    lybra_dir = root / ".lybra"
-    role_file = lybra_dir / "role"
-    if not lybra_dir.is_dir():
+    """校验目标为已 enroll 工位(有 .lybra/role); 否则拒绝, 零写入。
+    AIPOS-F106 件④: .lybra / role 文件定位经 charter_render.workstation_role_file(→ ConnectionResolver.discover_lybra_dir)。"""
+    from tools.aipos_cli.charter_render import is_enrolled_workstation, workstation_role_file
+
+    if workstation_role_file(root) is None:
         raise ValueError(
             f"harness root '{root}' 没有 .lybra/ 目录 — 不是已注册工位, 拒绝写入。\n"
             f"  正确用法: lybra sync --harness-root <你的工位根>"
         )
-    if not role_file.is_file():
+    if not is_enrolled_workstation(root):
         # AIPOS-F93 件②: 兑换命令形 = onboarding.render_enroll_command(注册码交付文案唯一渲染; 原教不存在的 `lybra enroll --role`)
         import shlex
 
@@ -151,7 +154,7 @@ def resolve_sync_context(
     # 落盘前校验: 目标必须为已 enroll 工位(有 .lybra/role); 校验失败零写入
     _validate_enrolled(root)
 
-    lybra_dir = root / ".lybra"
+    lybra_dir = ConnectionResolver.discover_lybra_dir(root)  # AIPOS-F106 件④: 既有原语(_validate_enrolled 已保证存在)
 
     identity = ConnectionResolver.resolve_identity(workspace_root=root)
     role = identity["role"]["value"]
@@ -161,7 +164,10 @@ def resolve_sync_context(
     resolved_gate = gate_url or identity["gate_url"]["value"]
     if not resolved_gate:
         raise ValueError("cannot resolve gate_url from .lybra")
-    resolved_gate = str(resolved_gate).rstrip("/mcp").rstrip("/")
+    # AIPOS-F106 件①: 门基址换算唯一实现(原 rstrip 按字符集剥, 会误削以 m/c/p 结尾的主机名)
+    from tools.aipos_cli.confirm_client import gate_base_url
+
+    resolved_gate = gate_base_url(str(resolved_gate))
 
     resolved_token = token or identity["token"]["value"]
     if not resolved_token:
@@ -225,16 +231,12 @@ def workstation_harness(harness_root: Path) -> dict[str, Any]:
     """工位 harness = .lybra/role 的 harness {kind, dir}; 缺 = {缺省 kind, dir=工位根}(既有 pi 工位零迁移)。
 
     kind 不在声明内 / 非缺省 kind 缺绝对 dir = ValueError(fail-closed, 禁猜落点)。返回 {kind, dir: Path, default: bool}。"""
+    # AIPOS-F106 件④: role 文件只经 charter_render.workstation_identity 读(唯一实现; 坏文件 = WorkstationIdentityError, ValueError 子类)
+    from tools.aipos_cli.charter_render import is_enrolled_workstation, workstation_identity, workstation_role_file
+
     root = Path(harness_root).expanduser().resolve()
-    role_file = root / ".lybra" / "role"
-    data: dict[str, Any] = {}
-    if role_file.is_file():
-        try:
-            loaded = json.loads(role_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"{role_file} 不可读/非 JSON, harness 不可判: {exc}") from exc
-        data = loaded if isinstance(loaded, dict) else {}
-    raw = data.get("harness")
+    role_file = workstation_role_file(root) or root
+    raw = workstation_identity(root).get("harness") if is_enrolled_workstation(root) else None
     default_kind = default_harness_kind()
     if raw in (None, "", {}):
         return {"kind": default_kind, "dir": root, "default": True}
@@ -814,15 +816,16 @@ def _get_historical_distributed_files(harness_root: Path) -> set[str]:
     manifest/role 不可读 = 出声 warning + 空集合(fail-safe, 不静默吞)。
     """
     historical: set[str] = set()
-    role_file = harness_root / ".lybra" / "role"
-    if not role_file.exists():
+    # AIPOS-F106 件④: role 只经 ConnectionResolver.resolve_role 读(.lybra/role 唯一实现之一; env={} = 只认工位声明层)
+    from tools.aipos_cli.charter_render import is_enrolled_workstation
+    from tools.loop_context import ConnectionResolver
+
+    if not is_enrolled_workstation(harness_root):
         return historical
 
-    try:
-        role_data = json.loads(role_file.read_text())
-        role = role_data.get("role", "unknown")
-    except (OSError, json.JSONDecodeError, AttributeError) as exc:
-        print(f"Warning: {role_file} 不可读, prune 历史集合为空: {exc}", file=sys.stderr)
+    role = ConnectionResolver.resolve_role(workspace_root=Path(harness_root), env={})
+    if not role:
+        print(f"Warning: {harness_root} .lybra/role 不可读/无 role, prune 历史集合为空", file=sys.stderr)
         return historical
 
     manifest_path = harness_root.parent / "_distributed" / f".version-{role}"
@@ -922,10 +925,12 @@ def _public_identity(identity: dict[str, Any]) -> dict[str, Any]:
 
 def discover_workstations(root: Path) -> list[Path]:
     """`root` 本身是工位(有 .lybra/role)→ [root]; 否则取其直接子目录中已 enroll 的工位(排序)。都不是 = ValueError。"""
+    from tools.aipos_cli.charter_render import is_enrolled_workstation  # AIPOS-F106 件④: 已 enroll 判据唯一实现
+
     root = Path(root).expanduser().resolve()
-    if (root / ".lybra" / "role").is_file():
+    if is_enrolled_workstation(root):
         return [root]
-    found = sorted(p for p in root.iterdir() if p.is_dir() and (p / ".lybra" / "role").is_file()) if root.is_dir() else []
+    found = sorted(p for p in root.iterdir() if p.is_dir() and is_enrolled_workstation(p)) if root.is_dir() else []
     if not found:
         raise ValueError(
             f"--harness-root {root}: 既不是已 enroll 工位(无 .lybra/role), 其直接子目录也无已 enroll 工位。"
@@ -1119,7 +1124,8 @@ def sync(
         from tools.aipos_cli.custom_roles import resolve_role_to_class
         from tools.aipos_cli.workstation_wiring import materialize_pi_wiring
 
-        role_class = resolve_role_to_class(ctx["role"], identity.get("governance_root_declared")) or ctx["role"]
+        # AIPOS-F102 件②: 角色类唯一解析, 解析不到 = 拒(UnknownRoleClass), 原「回落角色名」退役
+        role_class = resolve_role_to_class(ctx["role"], identity.get("governance_root_declared"), required=True)
         wiring_backfill = materialize_pi_wiring(ctx["harness_root"], role=ctx["role"], role_class=role_class)
 
     # AIPOS-F83 件③: 落地后复扫 .pi 挂载告警(声明内暂缺者本次 fetch 后应已恢复; 仍缺 = 如实告警)
@@ -1184,7 +1190,7 @@ def _sync_harness_dir(
         "reasons": dict(item.get("reasons") or {}),
         "target_path": str(target_root / str(item["dist"].get("target_path") or "")),
     } for item in diffs]
-    manifest_dir = Path(ctx["harness_root"]) / ".lybra"
+    manifest_dir = ctx["lybra_dir"]  # AIPOS-F106 件④: 工位 .lybra 已由 resolve_sync_context 经 discover_lybra_dir 定位
     base_result: dict[str, Any] = {
         "ok": True,
         "status": "dry-run" if dry_run else "synced",
@@ -1297,23 +1303,22 @@ def _correct_owner_policy_ref(harness_root: Path, role: str) -> dict[str, Any]:
     workstation_wiring.derive_effective_owner_policy_ref。读不到治理根/推导不出 →
     非致命告警(sync 的本职是分发, 不因信封缺失阻断)。
     """
-    import json as _json
+    # AIPOS-F106 件④: .lybra 定位 / connection.json 读取经 ConnectionResolver 既有原语(discover_lybra_dir / load_connection_config);
+    # role 文件只经 ConnectionResolver.resolve_identity 读(唯一实现之一, 只取工位声明层 .lybra/role, env 不参与)
+    from tools.loop_context import ConnectionResolver
 
-    lybra_dir = harness_root / ".lybra"
     out: dict[str, Any] = {"checked": True}
+    lybra_dir = ConnectionResolver.discover_lybra_dir(Path(harness_root))
+    if lybra_dir is None:
+        return {"checked": False, "note": "无 .lybra, 跳过信封校正"}
     try:
-        conn = _json.loads((lybra_dir / "connection.json").read_text(encoding="utf-8"))
-    except (OSError, _json.JSONDecodeError):
+        conn = ConnectionResolver.load_connection_config(lybra_dir)
+    except (FileNotFoundError, ValueError):
         return {"checked": False, "note": "connection.json 不可读, 跳过信封校正"}
     gov_root = str(conn.get("governance_root") or "").strip() or None
-    instance = None
-    role_file = lybra_dir / "role"
-    try:
-        rd = _json.loads(role_file.read_text(encoding="utf-8"))
-        instance = str(rd.get("instance") or "") or None
-        current = str(rd.get("owner_policy_ref") or "") or None
-    except (OSError, _json.JSONDecodeError):
-        current = None
+    ident = ConnectionResolver.resolve_identity(workspace_root=Path(harness_root), env={})
+    instance = ident["agent_instance"]["value"] if ident["agent_instance"]["source"] == ".lybra/role" else None
+    current = ident["owner_policy_ref"]["value"] if ident["owner_policy_ref"]["source"] == ".lybra/role" else None
 
     from tools.aipos_cli.workstation_wiring import derive_effective_owner_policy_ref
 

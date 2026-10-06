@@ -67,6 +67,7 @@ from tools.aipos_cli.preview import build_preview
 from tools.aipos_cli.queue_mutation import mutate_queue_task
 from tools.aipos_cli.records import load_records, expected_session_record_path
 from tools.aipos_cli.service_mode import (
+    connection_path as workspace_connection_path,
     render_connection_table,
     roles_list_report,
     roles_reconcile_report,
@@ -84,6 +85,8 @@ from tools.aipos_cli.validator import (
     validate_tasks,
 )
 from tools.aipos_cli.workspace_config import (
+    CONFIG_RELATIVE_PATH,
+    WORKSPACE_ROOT_ENV,
     DEFAULT_BOARD_HOST,
     DEFAULT_BOARD_PORT,
     DEFAULT_MCP_HOST,
@@ -191,7 +194,7 @@ def _resolve_kickoff_ref(repo_root: Path, ref: str) -> str:
 
 
 def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any], repo_root: Path, *, actor: str = "",
-                             requested: str | None = None) -> dict[str, Any]:
+                             requested: str | None = None, remote_workstation: bool = False) -> dict[str, Any]:
     """AIPOS-F86 件①: my-tasks --json 的每张 claimed 卡附开工面字段(card_path / worktree_* / report_*)。
 
     推导只在产品侧一处: next_resolver.card_workstation_view(→ card_worktree_location / card_report_path, 与 claim 建树、
@@ -229,8 +232,23 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
             "claimed_at": metadata.get("claimed_at"),
             "frontmatter_warnings": list(task.get("parse_errors") or []),
         })
+    # AIPOS-F110 件②: --remote-workstation = 本实例工位跨机(land 事件 transport=remote), 开工提示附门机材料段(同一 render_kickoff);
+    # 上下文不可得(非跨机 / 材料未声明 / 含凭据)= 不出开工提示(KICKOFF_UNRESOLVED, fail-closed)
+    remote_ctx: dict[str, Any] | None = None
+    remote_error = ""
+    if remote_workstation:
+        from tools.aipos_cli.next_resolver import remote_kickoff_context
+
+        try:
+            remote_ctx = remote_kickoff_context(root, actor)
+        except (ValueError, OSError) as exc:
+            remote_error = str(exc)
     # AIPOS-F87 件③: 开工选卡由产品给出(判据唯一声明 next_resolver.NEXT_CARD_RULE), 工位 /go 只读 next_card
-    output.update(select_next_card(candidates))
+    output.update(select_next_card(candidates, remote=remote_ctx))
+    if remote_error and isinstance(output.get("next_card"), dict):
+        output["next_card_excluded"] = [{"task_id": output["next_card"]["task_id"], "code": "KICKOFF_UNRESOLVED",
+                                         "reason": f"跨机开工提示不可渲染: {remote_error}"}, *output.get("next_card_excluded", [])]
+        output["next_card"] = None
     if requested_id and not candidates:
         # AIPOS-F90 件③: 冷启动指向的卡不在本实例的 claimed 集 → 按队列真相给拒因(未认领/已结案/非本人/找不到)
         from tools.aipos_cli.next_resolver import _read_frontmatter
@@ -432,7 +450,7 @@ def render_mcp_doctor_text(report: dict[str, Any]) -> str:
 
 
 def _config_defaults(workspace_root: Path) -> dict[str, Any]:
-    config_path = workspace_root / ".lybra" / "config.json"
+    config_path = workspace_root / CONFIG_RELATIVE_PATH  # AIPOS-F106 件④: .lybra/config.json 相对路径唯一声明(workspace_config)
     config: dict[str, Any] = {}
     if config_path.is_file():
         config = load_workspace_config(config_path)
@@ -481,15 +499,15 @@ def _run_board_command(args: argparse.Namespace) -> int:
     port = int(getattr(args, "port", None) or defaults["board_port"])
     print(f"Lybra Board: http://{host}:{port}")
     print(f"Workspace: {workspace_root}")
-    previous_root = os.environ.get("AIPOS_WORKSPACE_ROOT")
-    os.environ["AIPOS_WORKSPACE_ROOT"] = str(workspace_root)
+    previous_root = os.environ.get(WORKSPACE_ROOT_ENV)  # AIPOS-F106 件③: 只写新名
+    os.environ[WORKSPACE_ROOT_ENV] = str(workspace_root)
     try:
         run_server(host=host, port=port, repo_root=workspace_root)
     finally:
         if previous_root is None:
-            os.environ.pop("AIPOS_WORKSPACE_ROOT", None)
+            os.environ.pop(WORKSPACE_ROOT_ENV, None)
         else:
-            os.environ["AIPOS_WORKSPACE_ROOT"] = previous_root
+            os.environ[WORKSPACE_ROOT_ENV] = previous_root
     return 0
 
 
@@ -613,15 +631,15 @@ def _run_mcp_command(args: argparse.Namespace) -> int:
     keepalive = float(getattr(args, "keepalive_seconds", None) or DEFAULT_KEEPALIVE_SECONDS)
     print(f"Lybra MCP HTTP/SSE: http://{host}:{port}")
     print(f"Workspace: {workspace_root}")
-    previous_root = os.environ.get("AIPOS_WORKSPACE_ROOT")
-    os.environ["AIPOS_WORKSPACE_ROOT"] = str(workspace_root)
+    previous_root = os.environ.get(WORKSPACE_ROOT_ENV)  # AIPOS-F106 件③: 只写新名
+    os.environ[WORKSPACE_ROOT_ENV] = str(workspace_root)
     try:
         return run_http_server(config_from_env(host, port, keepalive))
     finally:
         if previous_root is None:
-            os.environ.pop("AIPOS_WORKSPACE_ROOT", None)
+            os.environ.pop(WORKSPACE_ROOT_ENV, None)
         else:
-            os.environ["AIPOS_WORKSPACE_ROOT"] = previous_root
+            os.environ[WORKSPACE_ROOT_ENV] = previous_root
 
 
 def build_mcp_config_report(args: argparse.Namespace, env: dict[str, str] | None = None) -> dict[str, Any]:
@@ -643,7 +661,7 @@ def build_mcp_config_report(args: argparse.Namespace, env: dict[str, str] | None
         "sse_endpoint": f"http://{normalized_host}:{port}/sse",
         "server_command": f"lybra mcp --workspace-root {workspace_root}",
         "server_env": {
-            "AIPOS_WORKSPACE_ROOT": str(workspace_root),
+            WORKSPACE_ROOT_ENV: str(workspace_root),
             token_env: f"${{{token_env}}}",
             capability_env: f"${{{capability_env}}}",
         },
@@ -1009,7 +1027,7 @@ def _run_dispatch(args: argparse.Namespace) -> dict[str, Any]:
     # Connection JSON: explicit > workspace default
     connection_json = args.connection_json
     if not connection_json:
-        connection_json = str(workspace_root / ".lybra" / "connection.json")
+        connection_json = str(workspace_connection_path(workspace_root))
     
     # Owner policy ref: explicit or use task's declared policy
     owner_policy_ref = args.owner_policy_ref
@@ -1120,23 +1138,29 @@ def _envelope_mint_via_gate(
     """逐张经门两阶段签信封: lybra_owner_decision_record_dry_run(workspace_root=目标治理根, 门按凭据 projects 校验项目范围)
     → _confirm(owner_confirmation_token=OWNER_CONFIRMED; 门另要 owner_confirm scope)。凭据只从 connection.json 读, 只出指纹。
     任一张门拒 = 停在该张(已落的照实列出), exit 1。输出以门生记录为准(performed_writes)。"""
-    from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token, token_fingerprint
-
-    conn_path = Path(connection_json).expanduser() if connection_json else governance_root / ".lybra" / "connection.json"
+    from tools.aipos_cli.confirm_client import (
+        GateAddressError,
+        GateClient,
+        GateError,
+        load_owner_token,
+        resolve_gate_base_url,
+        token_fingerprint,
+    )
+    conn_path = workspace_connection_path(governance_root, connection_target=Path(connection_json) if connection_json else None)
     if not conn_path.is_file():
         print(f"Error: 凭据文件不存在: {conn_path}(--connection-json 指向持 {token_role} 凭据的 connection.json, 如门的中央凭据库)", file=sys.stderr)
         return 1
     try:
-        conn = json.loads(conn_path.read_text(encoding="utf-8"))
         token = load_owner_token(connection_json=conn_path, role=token_role)
     except (OSError, ValueError) as exc:
         print(f"Error: 读不到 {token_role} 凭据({conn_path}): {exc}", file=sys.stderr)
         return 1
-    rpc_url = str(((conn.get("mcp") or {}).get("rpc_url")) or "").strip()
-    if not rpc_url:
-        print(f"Error: {conn_path} 无 mcp.rpc_url, 无法连门", file=sys.stderr)
+    try:
+        # AIPOS-F106 件①: 门基址唯一推导口(委托 ConnectionResolver.resolve_gate_url), 凭据文件须声明 mcp.rpc_url
+        base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
+    except GateAddressError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return 1
-    base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
     signed: list[dict[str, Any]] = []
     report: dict[str, Any] = {"ok": False, "operation": "envelope_mint", "via": "gate owner_decision_record envelope path",
                               "gate_url": base_url, "credential_role": token_role, "credential_fingerprint": token_fingerprint(token),
@@ -1189,8 +1213,11 @@ def _envelope_mint_via_gate(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # AIPOS-F106 件②: 帮助文案里的门地址示例读 config.schema urls.gate_local(唯一读取口 schema_loader), 禁写端口字面
+    from tools.schema_loader import get_config_default_gate_url
     from tools.aipos_cli.verb_contract import declared_exit_codes  # AIPOS-F101 件③: help 中的退出码读声明
 
+    _GATE_URL_DEFAULT = get_config_default_gate_url()
     parser = argparse.ArgumentParser(description="AI Project OS CLI")
     parser.add_argument("--workspace-root", dest="global_workspace_root", help="Workspace root; may also be provided on supported subcommands")
     subparsers = parser.add_subparsers(dest="command")
@@ -1209,7 +1236,7 @@ def build_parser() -> argparse.ArgumentParser:
     _fetch_parser = agent_subparsers.add_parser(
         "fetch", help="One stateless pull: tasks claimable by --actor (advisory list; the gate is the truth)"
     )
-    _fetch_parser.add_argument("--gate-url", required=True, help="Gate URL (e.g. http://127.0.0.1:7118)")
+    _fetch_parser.add_argument("--gate-url", required=True, help=f"Gate URL (e.g. {_GATE_URL_DEFAULT})")
     _fetch_src = _fetch_parser.add_mutually_exclusive_group(required=True)
     _fetch_src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
     _fetch_src.add_argument("--token-env", help="env var holding the role bearer token")
@@ -1237,7 +1264,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="候选⑫ filesystem pump (AIPOS-268+284): poll 5_tasks/queue/** + 5_tasks/records/** mtime+path; "
         "print a JSON change summary on the first change; silent on --timeout (exit codes: verbs.schema lybra_agent_watch.exit_codes). No gate/token.",
     )
-    _watch_mode.add_argument("--gate-url", help="候选⑤ gate pull (AIPOS-248): Gate URL (e.g. http://127.0.0.1:7118)")
+    _watch_mode.add_argument("--gate-url", help=f"候选⑤ gate pull (AIPOS-248): Gate URL (e.g. {_GATE_URL_DEFAULT})")
     _watch_gate_src = _watch_parser.add_mutually_exclusive_group(required=False)
     _watch_gate_src.add_argument("--connection-json", help="[gate mode] path to connection.json (token read by --role; never on argv)")
     _watch_gate_src.add_argument("--token-env", help="[gate mode] env var holding the role bearer token")
@@ -1270,7 +1297,7 @@ def build_parser() -> argparse.ArgumentParser:
     # kickoff; pushback = read LOCAL RETURN + push via 320 + self-confirm (328). The agent only
     # reads/writes LOCAL files (card S3: harness-agnostic baseline). gate-url mode only.
     def _add_material_common(p, *, require_actor: bool = True) -> None:
-        p.add_argument("--gate-url", required=True, help="Gate URL (e.g. http://127.0.0.1:7118, gate-url mode only)")
+        p.add_argument("--gate-url", required=True, help=f"Gate URL (e.g. {_GATE_URL_DEFAULT}, gate-url mode only)")
         _src = p.add_mutually_exclusive_group(required=True)
         _src.add_argument("--connection-json", help="path to connection.json (token read by --role; never on argv)")
         _src.add_argument("--token-env", help="env var holding the role bearer token")
@@ -1329,7 +1356,7 @@ def build_parser() -> argparse.ArgumentParser:
     # AIPOS-205: TUI client over an Owner-started gate. The Textual dependency lives only
     # in tools/lybra_tui (the tui extra); this CLI stays stdlib/zero-dep and lazy-imports it.
     tui_parser = subparsers.add_parser("tui", help="Launch the Lybra TUI client (requires the TUI extra: pip install textual)")
-    tui_parser.add_argument("--gate-url", required=True, help="Owner-started gate URL (e.g. http://127.0.0.1:7118)")
+    tui_parser.add_argument("--gate-url", required=True, help=f"Owner-started gate URL (e.g. {_GATE_URL_DEFAULT})")
     tui_parser.add_argument("--connection-json", help="Path to .lybra/connection.json (token read by role)")
     tui_parser.add_argument("--token-env", help="Env var holding the owner bearer token")
     tui_parser.add_argument("--role", default="owner", help="Role to read from connection.json; defaults to owner")
@@ -1353,7 +1380,7 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch_parser.add_argument("task_id", help="Task ID to dispatch")
     dispatch_parser.add_argument("--to", dest="executor", required=True, help="Executor actor/instance name")
     dispatch_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
-    dispatch_parser.add_argument("--gate-url", help="Gate URL; defaults to workspace config or http://127.0.0.1:7118")
+    dispatch_parser.add_argument("--gate-url", help=f"Gate URL; defaults to workspace config or {_GATE_URL_DEFAULT}")
     dispatch_parser.add_argument("--owner-policy-ref", help="Owner policy reference (PreAuthorized envelope)")
     dispatch_parser.add_argument("--connection-json", help="Path to connection.json (for token resolution)")
     dispatch_parser.add_argument("--material-root", help="Material area root (default ~/.lybra/work)")
@@ -1518,6 +1545,8 @@ def build_parser() -> argparse.ArgumentParser:
              "(connection.json#governance_root 等, resolve_workstation_governance_root), 工位 /go 只传本参数, 不自读身份文件",
     )
     my_tasks_parser.add_argument("--task-id", default=None, help="AIPOS-F90 件③: 冷启动指向的卡(卡号或卡文件路径)——只核验这一张: 非 claimed/非本实例/已结案/产物已交即拒并给原因(工位 /go <卡号> 用)")
+    my_tasks_parser.add_argument("--remote-workstation", action="store_true", default=False,
+                                 help="AIPOS-F110 件②: 本实例工位跨机(land 事件 host ≠ 门机): next_card.kickoff 附门机材料段(project.json workstations.<实例>; 未声明 = 不出开工提示); lybra loop 拉起跨机工位时传")
     my_tasks_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     needs_owner_parser = subparsers.add_parser("needs-owner", help="Render owner review tasks")
@@ -1624,7 +1653,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verdict_parser.add_argument("--artifact-subject-tree-hash", help="AIPOS-F73前置②: Tree hash for artifact_subject (required for code tasks)")
     audit_verdict_parser.add_argument("--agent-runtime", default=None, help="AIPOS-F90 件②: 产品填写的运行时模型 bundle(JSON: harness/model/model_source/model_self_reported/model_mismatch), 由 artifact ingest 按会话记录定位器生成")
     audit_verdict_parser.add_argument("--confirm", action="store_true", help="AIPOS-F22: Two-phase gate verdict (dry_run + confirm via薄壳工厂, auditor self-confirm)")
-    audit_verdict_parser.add_argument("--gate-url", default=None, help="Gate MCP server URL (default: http://127.0.0.1:7118)")
+    audit_verdict_parser.add_argument("--gate-url", default=None, help=f"Gate MCP server URL (default: workspace connection.json mcp.rpc_url, else {_GATE_URL_DEFAULT})")
     audit_verdict_parser.add_argument("--connection-json", help="Path to connection.json (default: .lybra/connection.json in workspace)")
     audit_verdict_parser.add_argument("--token-role", default=None, help="Token role in connection.json (AIPOS-F78 前置零①: 缺省=roles.schema driver.role_class 的驱动方 token; 显式指定仅供靶场/人肉 gate)")
     audit_verdict_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1710,7 +1739,7 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_code_parser.add_argument("--role", required=True, help="Role to bind (e.g., executor, auditor, or custom role)")
     roles_enroll_code_parser.add_argument("--instance", help="Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance")
     roles_enroll_code_parser.add_argument("--ttl", type=int, help="Time-to-live in seconds (default 86400 = 24h; also bounds the embedded transport credential)")
-    roles_enroll_code_parser.add_argument("--gate-url", help="Externally reachable gate URL to embed (default: connection.json mcp.rpc_url if non-loopback, else http://127.0.0.1:7118)")
+    roles_enroll_code_parser.add_argument("--gate-url", help=f"Externally reachable gate URL to embed (default: connection.json mcp.rpc_url if non-loopback, else {_GATE_URL_DEFAULT})")
     roles_enroll_code_parser.add_argument("--governance-root", help="Governance workspace root to embed (F24A): bare registered project name or absolute path; validated against the project registry on the gate. Default: workspace_root of the local connection.json")
     roles_enroll_code_parser.add_argument("--token-role", default="advisor", help="Role of the local token used to call the gate verb (default: advisor; falls back to owner if advisor is absent)")
     roles_enroll_code_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this enrollment")
@@ -1873,6 +1902,20 @@ def build_parser() -> argparse.ArgumentParser:
     project_setrepos_parser.add_argument("--default", dest="default_repo", help="Default repo name (must be one of --repo names; required when more than one --repo)")
     project_setrepos_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setrepos_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F110 件②③: 跨机工位开工材料声明(project.json workstations.<实例>) + 双向可达检查(同一 ssh transport 代码路径)
+    project_setws_parser = project_subparsers.add_parser("set-workstation", help="AIPOS-F110: declare a cross-machine workstation's material access (project.json workstations.<instance>: gate_ssh_alias + material_access), validated against config.schema project_json.workstations")
+    project_setws_parser.add_argument("name", help="Established project name")
+    project_setws_parser.add_argument("--instance", required=True, help="Workstation instance (as in its land event)")
+    project_setws_parser.add_argument("--gate-ssh-alias", required=True, help="ssh alias of the gate machine as seen FROM the remote workstation")
+    project_setws_parser.add_argument("--material-access", required=True, help="One line: how the remote executor reads/writes gate-side materials (no credentials)")
+    project_setws_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_setws_parser.add_argument("--json", action="store_true", help="Output JSON")
+    project_checkws_parser = project_subparsers.add_parser("check-workstation", help="AIPOS-F110: check a workstation for loop launch: land-event location, material declaration (remote), gate→workstation ssh probe (dir + harness executable) and workstation→gate ssh reachability via the declared gate_ssh_alias")
+    project_checkws_parser.add_argument("name", help="Established project name")
+    project_checkws_parser.add_argument("--instance", required=True, help="Workstation instance (as in its land event)")
+    project_checkws_parser.add_argument("--harness", required=True, help="Harness whose launch template executable must be on the workstation PATH (enums.schema harness.launch)")
+    project_checkws_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_checkws_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-335 S4: list existing projects and their inferred collaboration_profile
     project_list_parser = project_subparsers.add_parser("list", help="AIPOS-335: List existing projects and their collaboration profiles")
     project_list_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
@@ -1948,7 +1991,7 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_guide_parser = onboarding_subparsers.add_parser("guide", help="Generate step-by-step onboarding guide for a new project")
     onboarding_guide_parser.add_argument("project_name", help="Project name (the project you're onboarding)")
     onboarding_guide_parser.add_argument("--home-root", help="Governance home root (defaults to LYBRA_HOME_ROOT env or ~/.lybra/projects)")
-    onboarding_guide_parser.add_argument("--gate-url", help="Gate URL (defaults to LYBRA_GATE_URL env or http://127.0.0.1:7118)")
+    onboarding_guide_parser.add_argument("--gate-url", help=f"Gate URL (default order per config.schema identity_resolution.keys.gate_url: Owner connection.json mcp.rpc_url > LYBRA_GATE_URL env > {_GATE_URL_DEFAULT})")
     onboarding_guide_parser.add_argument("--code-repo", help="Optional code repo path")
     onboarding_guide_parser.add_argument("--actor", help="Actor name (defaults to $USER or owner)")
     onboarding_guide_parser.add_argument("--workspace-dir", help="Executor workstation directory (defaults to ~/<project>-executor)")
@@ -2677,7 +2720,7 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"Unbound roles: {', '.join(result['unbound'])}")
             elif args.roles_command == "register":
                 # AIPOS-F24 大项A: 薄壳模式 - 调用门动词 lybra_roles_register
-                from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token
+                from tools.aipos_cli.confirm_client import GateClient, GateError, load_gate_client_token, resolve_gate_base_url
                 owner_auth_ref = str(getattr(args, "owner_authorization_ref", "") or "").strip() or None
                 reason = str(getattr(args, "reason", "") or "").strip()
                 
@@ -2687,29 +2730,18 @@ def main(argv: list[str] | None = None) -> int:
                 
                 # 连接信息
                 conn_override = getattr(args, "connection_json", None)
-                connection_target = Path(conn_override).expanduser() if conn_override else None
-                conn_path = Path(connection_target or (workspace_root / ".lybra" / "connection.json")).expanduser()
+                conn_path = workspace_connection_path(workspace_root, connection_target=Path(conn_override) if conn_override else None)
                 if not conn_path.exists():
                     print(f"Error: connection.json not found: {conn_path}", file=sys.stderr)
                     print("Hint: 在治理工作区运行或 --connection-json 指定", file=sys.stderr)
                     return 1
                 
-                conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
-                rpc_url = str(((conn_data.get("mcp") or {}).get("rpc_url")) or "").strip()
-                if not rpc_url:
-                    print(f"Error: connection.json has no mcp.rpc_url: {conn_path}", file=sys.stderr)
-                    return 1
-                
-                base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
-                token = None
-                for role in ("advisor", "planner", "owner"):
-                    try:
-                        token = load_owner_token(connection_json=conn_path, role=role)
-                        break
-                    except ValueError:
-                        continue
-                if not token:
-                    print(f"Error: no usable token in {conn_path}", file=sys.stderr)
+                # AIPOS-F106 件①: 门基址唯一推导口 + 凭据角色偏好序唯一声明(config.schema identity_resolution)
+                try:
+                    base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
+                    _token_role, token = load_gate_client_token(conn_path)
+                except ValueError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
                     return 1
                 
                 try:
@@ -2816,7 +2848,7 @@ def main(argv: list[str] | None = None) -> int:
                 # 门内存注册表同进程, 死凭证类缺陷根除)。本 CLI 只调 lybra_enroll_code_dry_run/
                 # confirm 两阶段动词, 本地发码路径已删除(grep 证明单实现); gate 不可达=如实报错,
                 # 绝不回退到本地发码(本地发码=死运输凭证)。
-                from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token
+                from tools.aipos_cli.confirm_client import GateAddressError, GateClient, GateError, load_owner_token, resolve_gate_base_url
 
                 def _enroll_code_fail(message: str, *, next_step: str = "") -> int:
                     print(f"Error: {message}", file=sys.stderr)
@@ -2843,7 +2875,7 @@ def main(argv: list[str] | None = None) -> int:
                         "可抄示例: lybra roles enroll-code --role executor --owner-authorization-ref <owner-authorization-ref>"
                     )
                 # ① 连接源: <workspace>/.lybra/connection.json(或 --connection-json 覆盖)
-                conn_path = Path(connection_target or (workspace_root / ".lybra" / "connection.json")).expanduser()
+                conn_path = workspace_connection_path(workspace_root, connection_target=connection_target)
                 if not conn_path.exists():
                     return _enroll_code_fail(
                         f"local connection.json not found: {conn_path}",
@@ -2851,13 +2883,11 @@ def main(argv: list[str] | None = None) -> int:
                                    "薄壳只调门动词, 没有(也不许有)本地发码路径。"),
                     )
                 conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
-                rpc_url = str(((conn_data.get("mcp") or {}).get("rpc_url")) or "").strip()
-                if not rpc_url:
-                    return _enroll_code_fail(
-                        f"connection.json has no mcp.rpc_url: {conn_path}",
-                        next_step="先 lybra serve start 或修正 connection.json。",
-                    )
-                base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
+                # AIPOS-F106 件①: 门基址唯一推导口(委托 ConnectionResolver.resolve_gate_url), 凭据文件须声明 mcp.rpc_url
+                try:
+                    base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
+                except GateAddressError as exc:
+                    return _enroll_code_fail(str(exc), next_step="先 lybra serve start 或修正 connection.json。")
                 # ② 治理根(F24A): 显式参数优先, 缺省=本机 connection.json 的 workspace_root ——
                 #    显式化传入, 码内治理根不再依赖门进程环境解析(被吞缺陷根除)
                 governance_root = governance_root_arg or str(conn_data.get("workspace_root") or "").strip() or None
@@ -2975,28 +3005,19 @@ def main(argv: list[str] | None = None) -> int:
             elif args.roles_command == "enroll-list":
                 # AIPOS-362/F78B 件④c: 注册码只住在发码门的注册表(发码/兑换同根), 本地文件不是真相 → 薄壳调门动词
                 # lybra_roles_enroll_list(governance_root=本工作区: 只列签给该治理根工位的码), 与门口径唯一
-                from tools.aipos_cli.confirm_client import GateClient, load_owner_token
+                from tools.aipos_cli.confirm_client import GateClient, load_gate_client_token, resolve_gate_base_url
                 conn_override = getattr(args, "connection_json", None)
-                conn_path = Path(conn_override or (workspace_root / ".lybra" / "connection.json")).expanduser()
+                conn_path = workspace_connection_path(workspace_root, connection_target=Path(conn_override) if conn_override else None)
                 if not conn_path.exists():
                     print(f"Error: connection.json not found: {conn_path}", file=sys.stderr)
                     print("Hint: enroll-list 读门注册表(发码所在), 需 --connection-json 或在治理工作区运行", file=sys.stderr)
                     return 1
-                conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
-                rpc_url = str(((conn_data.get("mcp") or {}).get("rpc_url")) or "").strip()
-                if not rpc_url:
-                    print(f"Error: connection.json has no mcp.rpc_url: {conn_path}", file=sys.stderr)
-                    return 1
-                base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
-                token = None
-                for role in ("advisor", "planner", "owner"):
-                    try:
-                        token = load_owner_token(connection_json=conn_path, role=role)
-                        break
-                    except ValueError:
-                        continue
-                if not token:
-                    print(f"Error: no usable token in {conn_path}", file=sys.stderr)
+                # AIPOS-F106 件①: 门基址唯一推导口 + 凭据角色偏好序唯一声明(config.schema identity_resolution)
+                try:
+                    base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
+                    _token_role, token = load_gate_client_token(conn_path)
+                except ValueError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
                     return 1
                 client = GateClient(base_url, token, timeout=30.0)
                 result = client.call_tool("lybra_roles_enroll_list", {"governance_root": str(workspace_root)})
@@ -3027,7 +3048,7 @@ def main(argv: list[str] | None = None) -> int:
                         "roles enroll requires --gate-url for legacy plain codes "
                         "(自包含码 LYBRAENROLL1.* 内嵌 gate 地址, 无需此参数)。\n"
                         "可抄示例: lybra roles enroll --code LYBRAENROLL1.<base64> --workspace ~/workstations/my-agent\n"
-                        "旧码示例:   lybra roles enroll --code <裸码> --gate-url http://<host>:7118 --workspace ~/workstations/my-agent"
+                        "旧码示例:   lybra roles enroll --code <裸码> --gate-url http://<host>:<port> --workspace ~/workstations/my-agent"
                     )
                 try:
                     result = enroll(
@@ -3134,7 +3155,14 @@ def main(argv: list[str] | None = None) -> int:
             if args.project_command == "new":
                 # AIPOS-F24 大项A: 薄壳模式 - 调用门动词 lybra_project_new
                 # 保留交互式询问(CLI 侧体验),但实际创建走门动词
-                from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token
+                from tools.aipos_cli.confirm_client import (
+                    GateAddressError,
+                    GateClient,
+                    GateError,
+                    declared_rpc_url,
+                    load_gate_client_token,
+                    resolve_gate_base_url,
+                )
 
                 # AIPOS-F92 件②: home 根只经 AIPOS-226 优先级梯解析, 打印结果与来源(门只扫描 home 根, 不登记 home 根外的治理根)
                 print(f"home 根: {home}(来源: {home_source}); 项目建在 {home / args.name}")
@@ -3144,7 +3172,7 @@ def main(argv: list[str] | None = None) -> int:
                 # 连接信息 (从 home 推导连接配置)
                 # 对于 project new,我们需要有一个已存在的门服务
                 # 暂时使用环境变量或默认连接
-                conn_path = Path("~/.lybra/connection.json").expanduser()
+                conn_path = workspace_connection_path(Path.home())
                 if not conn_path.exists():
                     # AIPOS-226 裁定 2=a: 本地 Owner 脚手架(不铸凭据、不过门), 门按 home 根扫描发现新项目
                     root = scaffold_project(
@@ -3168,9 +3196,13 @@ def main(argv: list[str] | None = None) -> int:
                     print("Hint: project creation via the gate requires owner authorization.", file=sys.stderr)
                     return 1
                 
-                conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
-                rpc_url = str(((conn_data.get("mcp") or {}).get("rpc_url")) or "").strip()
-                if not rpc_url:
+                # AIPOS-F106 件①: 凭据文件坏 = 拒(fail-closed); 未声明 mcp.rpc_url = 降级本地; 门基址/凭据角色序走唯一推导口
+                try:
+                    declared = declared_rpc_url(conn_path)
+                except GateAddressError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    return 1
+                if declared is None:
                     # 降级:本地调用
                     root = scaffold_project(
                         home, args.name, code_repo=args.code_repo, registered_by=args.actor,
@@ -3179,16 +3211,11 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Created project root: {root} (local fallback)")
                     return 0
                 
-                base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
-                token = None
-                for role in ("advisor", "planner", "owner"):
-                    try:
-                        token = load_owner_token(connection_json=conn_path, role=role)
-                        break
-                    except ValueError:
-                        continue
-                if not token:
-                    print(f"Error: no usable token in {conn_path}", file=sys.stderr)
+                try:
+                    base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
+                    _token_role, token = load_gate_client_token(conn_path)
+                except ValueError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
                     return 1
                 
                 try:
@@ -3258,12 +3285,47 @@ def main(argv: list[str] | None = None) -> int:
                     for k, v in out["items"].items():
                         print(f"  {k} = {v}")
                 return 0
+            if args.project_command == "set-workstation":
+                # AIPOS-F110 件②: 唯一写入口 workspace_config.set_project_workstation(校验 = config.schema project_json.workstations)
+                from tools.aipos_cli.workspace_config import WorkstationDeclarationError, resolve_project_root, set_project_workstation
+
+                try:
+                    declared = set_project_workstation(resolve_project_root(home, args.name), args.instance,
+                                                       gate_ssh_alias=args.gate_ssh_alias, material_access=args.material_access)
+                except WorkstationDeclarationError as exc:
+                    print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+                    return 1
+                if getattr(args, "json", False):
+                    print(render_json({"ok": True, **declared}))
+                else:
+                    print(f"Declared workstation {declared['instance']} in {declared['project_json']}: "
+                          f"gate_ssh_alias={declared['gate_ssh_alias']} material_access={declared['material_access']}")
+                return 0
+            if args.project_command == "check-workstation":
+                from tools.aipos_cli.loop_driver import check_workstation
+                from tools.aipos_cli.workspace_config import resolve_project_root
+
+                report = check_workstation(resolve_project_root(home, args.name), args.instance, args.harness)
+                if getattr(args, "json", False):
+                    print(render_json(report))
+                else:
+                    for item in report["checks"]:
+                        print(f"{'✓' if item['ok'] else '✗'} {item['check']}: {item['detail']}")
+                    print(f"check-workstation {args.instance}: {'OK' if report['ok'] else 'FAILED'}")
+                return 0 if report["ok"] else 1
             if args.project_command == "set-repo":
                 # AIPOS-F24 大项A: 薄壳模式
-                from tools.aipos_cli.confirm_client import GateClient, GateError, load_owner_token
+                from tools.aipos_cli.confirm_client import (
+                    GateAddressError,
+                    GateClient,
+                    GateError,
+                    declared_rpc_url,
+                    load_gate_client_token,
+                    resolve_gate_base_url,
+                )
 
                 owner_auth_ref = getattr(args, "owner_authorization_ref", None)
-                conn_path = Path("~/.lybra/connection.json").expanduser()
+                conn_path = workspace_connection_path(Path.home())
                 if conn_path.exists() and not owner_auth_ref:
                     print("Error: --owner-authorization-ref is required on the gate path (owner-gated)", file=sys.stderr)
                     return 1
@@ -3275,9 +3337,13 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()} (local fallback)")
                     return 0
                 
-                conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
-                rpc_url = str(((conn_data.get("mcp") or {}).get("rpc_url")) or "").strip()
-                if not rpc_url:
+                # AIPOS-F106 件①: 凭据文件坏 = 拒(fail-closed); 未声明 mcp.rpc_url = 降级本地; 门基址/凭据角色序走唯一推导口
+                try:
+                    declared = declared_rpc_url(conn_path)
+                except GateAddressError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    return 1
+                if declared is None:
                     # 降级
                     root = set_project_repo(
                         home, args.name, args.code_repo, registered_by=args.actor
@@ -3285,16 +3351,11 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()} (local fallback)")
                     return 0
                 
-                base_url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
-                token = None
-                for role in ("advisor", "planner", "owner"):
-                    try:
-                        token = load_owner_token(connection_json=conn_path, role=role)
-                        break
-                    except ValueError:
-                        continue
-                if not token:
-                    print(f"Error: no usable token", file=sys.stderr)
+                try:
+                    base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
+                    _token_role, token = load_gate_client_token(conn_path)
+                except ValueError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
                     return 1
                 
                 try:
@@ -3875,7 +3936,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_root = Path(args.global_workspace_root).expanduser().resolve()
         else:
             # AIPOS-CONN-LOOP-1 §6: Auto-discover via workspace resolution ladder
-            # (precedence: AIPOS_WORKSPACE_ROOT env → .lybra/config.json → 5_tasks/queue marker)
+            # (precedence: LYBRA_WORKSPACE_ROOT env → .lybra/config.json → 5_tasks/queue marker)
             # This replaces the dangerous Path.cwd() fallback that caused 08-12 incident
             try:
                 repo_root = resolve_workspace_root()
@@ -4287,7 +4348,7 @@ def main(argv: list[str] | None = None) -> int:
         # 解析 connection.json 路径
         conn_json_path = getattr(args, "connection_json", None)
         if not conn_json_path:
-            default_conn = Path(repo_root) / ".lybra" / "connection.json"
+            default_conn = workspace_connection_path(Path(repo_root))
             if default_conn.exists():
                 conn_json_path = str(default_conn)
             else:
@@ -4639,7 +4700,7 @@ def main(argv: list[str] | None = None) -> int:
             # 解析 connection.json 路径
             conn_json_path = getattr(args, "connection_json", None)
             if not conn_json_path:
-                default_conn = Path(repo_root) / ".lybra" / "connection.json"
+                default_conn = workspace_connection_path(Path(repo_root))
                 if default_conn.exists():
                     conn_json_path = str(default_conn)
                 else:
@@ -4728,7 +4789,7 @@ def main(argv: list[str] | None = None) -> int:
 
             conn_json_path = getattr(args, "connection_json", None)
             if not conn_json_path:
-                default_conn = Path(repo_root) / ".lybra" / "connection.json"
+                default_conn = workspace_connection_path(Path(repo_root))
                 conn_json_path = str(default_conn) if default_conn.exists() else os.environ.get("LYBRA_CONNECTION_JSON")
             if not conn_json_path:
                 print("Error: --confirm needs connection.json (use --connection-json or set LYBRA_CONNECTION_JSON)", file=sys.stderr)
@@ -4805,7 +4866,7 @@ def main(argv: list[str] | None = None) -> int:
         # 解析 connection.json 路径
         conn_json_path = getattr(args, "connection_json", None)
         if not conn_json_path:
-            default_conn = Path(repo_root) / ".lybra" / "connection.json"
+            default_conn = workspace_connection_path(Path(repo_root))
             if default_conn.exists():
                 conn_json_path = str(default_conn)
             else:
@@ -5071,7 +5132,8 @@ def main(argv: list[str] | None = None) -> int:
         actor_report = _filter_my_tasks(report, args.actor, profiles)
         if args.json:
             output = _attach_workstation_view(_json_report(actor_report, records=records), actor_report, repo_root,
-                                              actor=args.actor, requested=getattr(args, "task_id", None))
+                                              actor=args.actor, requested=getattr(args, "task_id", None),
+                                              remote_workstation=bool(getattr(args, "remote_workstation", False)))
             if getattr(args, "workstation_identity", None):
                 output["workstation"] = {**args.workstation_identity, "governance_root": str(repo_root)}
             print(render_json(output))
@@ -5145,11 +5207,11 @@ def main(argv: list[str] | None = None) -> int:
         conn_json_path = getattr(args, "connection_json", None)
         if not conn_json_path:
             workspace_candidate = Path(repo_root).parent if repo_root else Path.cwd()
-            default_conn = workspace_candidate / ".lybra" / "connection.json"
+            default_conn = workspace_connection_path(workspace_candidate)
             if default_conn.exists():
                 conn_json_path = str(default_conn)
             else:
-                default_conn = Path(repo_root or Path.cwd()) / ".lybra" / "connection.json"
+                default_conn = workspace_connection_path(Path(repo_root or Path.cwd()))
                 if default_conn.exists():
                     conn_json_path = str(default_conn)
         if not conn_json_path:
@@ -5287,14 +5349,13 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # 显式参数模式（向后兼容）
             from tools.aipos_cli.confirm_client import load_owner_token
-            from tools.loop_context import ConnectionResolver
             
             connection_json_path = args.connection_json
             if not connection_json_path:
                 workspace_candidate = Path(repo_root).parent if repo_root else Path.cwd()
-                connection_json_path = workspace_candidate / ".lybra" / "connection.json"
+                connection_json_path = workspace_connection_path(workspace_candidate)
                 if not connection_json_path.exists():
-                    connection_json_path = Path(repo_root or Path.cwd()) / ".lybra" / "connection.json"
+                    connection_json_path = workspace_connection_path(Path(repo_root or Path.cwd()))
             
             try:
                 token = load_owner_token(
@@ -5306,10 +5367,10 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             
             # AIPOS-F73前置②: gate_url 默认值解析 (修复 args.gate_url=None 时 AttributeError)
-            resolved_gate_url = ConnectionResolver.resolve_gate_url(
-                workspace_root=workspace_root,
-                explicit_url=args.gate_url,
-            )
+            # AIPOS-F106 件①: 门基址唯一推导口(委托 ConnectionResolver.resolve_gate_url; GateClient 自拼 MCP 路径)
+            from tools.aipos_cli.confirm_client import resolve_gate_base_url
+
+            resolved_gate_url = resolve_gate_base_url(workspace_root=workspace_root, explicit_url=args.gate_url)
             
             context = {
                 "gate_url": resolved_gate_url,
@@ -5512,7 +5573,7 @@ def main(argv: list[str] | None = None) -> int:
         # 解析 connection.json 路径
         conn_json_path = getattr(args, "connection_json", None)
         if not conn_json_path:
-            default_conn = Path(repo_root) / ".lybra" / "connection.json"
+            default_conn = workspace_connection_path(Path(repo_root))
             if default_conn.exists():
                 conn_json_path = str(default_conn)
             else:

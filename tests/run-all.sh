@@ -1099,7 +1099,15 @@ else
 fi
 # AIPOS-F108: 卡字段与分支声明单源(族 C-d: M9/M18/H6)——card.schema 落盘键全声明·字段序与缺省值读 schema·分支名/基线读 N5.branch_integration 零写死且改声明跟随·草稿 project 读 project.json 缺则拒; 连同改动的 finalize 分支整合/自动切回/卡号归属解析夹具
 run_pytest "tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_aipos_f108_card_field_branch_single_source.py" "$REPO_ROOT/tests/test_finalize_branch_integration.py" "$REPO_ROOT/tools/aipos_cli/tests/test_finalize_branch_auto_checkout.py" "$REPO_ROOT/tests/test_aipos_f5_task_id_pattern.py"
+# AIPOS-F102: 身份与角色类单源(族 B-b:H5/M4/M21)——非 lybra 项目派审 actor=驱动方/审计认领=audit_by/修复卡身份靶场·角色类统一拒·分组读 roles.schema class_groups·项目段缺即拒·棘轮 a 删条目(+本卡改动的 f23/derived_audit_verdict 节点)
+run_pytest "tests/test_aipos_f102_identity_single_source.py" "$REPO_ROOT/tests/test_aipos_f102_identity_single_source.py" "$REPO_ROOT/tools/aipos_cli/tests/test_f23_enroll.py::TestRoleFileMergeAndGuards::test_enroll_custom_role_executor_class_refused" "$REPO_ROOT/tools/aipos_cli/tests/test_derived_audit_verdict.py::DerivedAuditVerdictTests::test_derived_verdict_blocks_when_publish_record_missing"
+# AIPOS-F102(再合并): 343 契约节诊断用例改用可解析的非工位类实例(统一拒后 agent-01 会更早拒)——只登记本卡改动的节点
+run_pytest "tests/test_aipos_343_contract_section_no_silent_swallow.py(F102 改动节点)" "$REPO_ROOT/tests/test_aipos_343_contract_section_no_silent_swallow.py::TestContractSectionErrorPropagation::test_contract_section_error_contains_diagnostic_info"
 
+# AIPOS-F106: 门地址/端口/连接声明单源(族 B-a: M1/M3/M15/M2)——剥 /mcp 零·角色偏好序单源·端口字面零·configuration_sources↔identity_resolution 无矛盾·env 声明=使用·LYBRA_WORKSPACE_ROOT 单名·.lybra/role 唯一读取
+run_pytest "tests/test_aipos_f106_gate_address_single_source.py" "$REPO_ROOT/tests/test_aipos_f106_gate_address_single_source.py"
+# AIPOS-F110: 跨机拉起(remote transport 经 ssh 替身: 拉起·kickoff stdin 逐字节·就绪/超时/SIGHUP 清理·ssh 不可达退回手工·材料未声明拒·双向可达检查)
+run_pytest "tests/test_aipos_f110_remote_launch.py" "$REPO_ROOT/tests/test_aipos_f110_remote_launch.py"
 # AIPOS-F101: 推导核与动词声明单源(族 C-a)——gate_guidance=derive_next_step·死函数 git grep 零·门工具 scope/可见性全声明且执法跟随声明·退出码只在声明·示例无 lybra 身份; 含本卡改 patch 点的 f30 夹具
 run_pytest "tests/test_aipos_f101_derivation_verb_single_source.py" "$REPO_ROOT/tests/test_aipos_f101_derivation_verb_single_source.py" "$REPO_ROOT/tests/test_aipos_f30_envelope_error_info_init.py"
 # AIPOS-F101: test_scope_reachability 中按真实凭据走门执法的节点(scope 枚举改读 verbs.schema 声明; 同文件另 3 节点 main 上即红, 见 F101 RETURN 缺口 2, 不登记)

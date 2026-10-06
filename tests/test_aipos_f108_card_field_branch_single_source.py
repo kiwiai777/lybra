@@ -135,7 +135,8 @@ def _source_fm(**extra) -> dict:
 
 
 def test_item1_repair_card_inherits_identity_without_hardcoded_fallback(tmp_path):
-    """靶场: 修复卡承继原卡 assigned_to / agent_instance; 原卡无 agent_instance = 不写; 原卡缺必填 assigned_to = 产前自检拒。"""
+    """靶场(与 AIPOS-F102 件① 同口径): 修复卡执行实例承继原卡声明 → 缺则按项目推导(resolve_repair_executor_instance)
+    → 都无则拒; 任一路径都不出现写死的 lybra 实例名缺省。"""
     from tools.aipos_cli.audit_derivation import derive_repair_card_on_fail
     from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 
@@ -149,11 +150,18 @@ def test_item1_repair_card_inherits_identity_without_hardcoded_fallback(tmp_path
     meta = derive(_gov_with_card(tmp_path / "a", _source_fm(assigned_to="hbj-coder", agent_instance="hbj-coder.probe-x.m1")))
     assert meta.get("assigned_to") == "hbj-coder" and meta.get("agent_instance") == "hbj-coder.probe-x.m1", meta
 
+    # 原卡只声明 assigned_to: 执行实例承继该声明
     meta2 = derive(_gov_with_card(tmp_path / "b", _source_fm(assigned_to="hbj-coder")))
-    assert meta2.get("assigned_to") == "hbj-coder" and "agent_instance" not in meta2, meta2
+    assert meta2.get("assigned_to") == "hbj-coder" and meta2.get("agent_instance") == "hbj-coder", meta2
 
-    with pytest.raises(ValueError, match="assigned_to"):
-        derive(_gov_with_card(tmp_path / "c", _source_fm()))
+    # 原卡都缺: 按项目推导(实例名项目段 = 原卡 project), 非写死 lybra 实例
+    meta3 = derive(_gov_with_card(tmp_path / "c", _source_fm()))
+    assert ".probe-x." in str(meta3.get("agent_instance")) and meta3.get("assigned_to") == meta3.get("agent_instance"), meta3
+    assert ".lybra." not in str(meta3.get("agent_instance")), meta3
+
+    # 原卡缺 project = 拒(无据推导)
+    with pytest.raises(ValueError):
+        derive(_gov_with_card(tmp_path / "d", {k: v for k, v in _source_fm().items() if k != "project"}))
 
 
 # ===========================================================================

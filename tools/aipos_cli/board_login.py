@@ -34,7 +34,7 @@ from tools.schema_loader import get_config_port  # stdlib-only leaf; preserves z
 
 DEFAULT_CONNECTION_JSON = "~/.lybra/agent_credentials.json"
 DEFAULT_BOARD_HOST = "127.0.0.1"
-DEFAULT_BOARD_PORT = get_config_port("board_default")  # AIPOS-R4B-1: from config.schema (was hardcoded 7117)
+DEFAULT_BOARD_PORT = get_config_port("board_default")  # AIPOS-R4B-1: from config.schema ports.board_default
 _HTTP_TIMEOUT = 8  # loopback,失败要快
 
 
@@ -123,7 +123,9 @@ def resolve_board_url(
     
     # F-271-1: 优先从 workspace config 读取(单工作区场景)
     if workspace_root:
-        ws_config = Path(workspace_root).expanduser() / ".lybra" / "config.json"
+        from tools.aipos_cli.workspace_config import CONFIG_RELATIVE_PATH  # AIPOS-F106 件④: .lybra/config.json 唯一相对路径声明
+
+        ws_config = Path(workspace_root).expanduser() / CONFIG_RELATIVE_PATH
         if ws_config.is_file():
             try:
                 data = json.loads(ws_config.read_text(encoding="utf-8"))

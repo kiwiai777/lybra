@@ -103,7 +103,7 @@ if acard.exists():
     am, _, _ = parse_markdown_frontmatter(acard.read_text())
     emit(case="w1_happy", derived=r.get("derived"), audit_task_id=r.get("audit_task_id"),
          missing=[f for f in REQUIRED if am.get(f) is None or (isinstance(am.get(f), str) and not am.get(f).strip())], agent_instance=am.get("agent_instance"),
-         assigned_to=am.get("assigned_to"), expected_instance=AD._derive_audit_instance("lybra"),
+         assigned_to=am.get("assigned_to"), expected_instance=AD.resolve_audit_instance({"project": "lybra"}),
          task_mode=am.get("task_mode"), status=am.get("status"))
 else:
     emit(case="w1_happy", derived=r.get("derived"), reason=str(r.get("reason"))[:200], no_card=True)
@@ -170,7 +170,7 @@ if reaudit.exists():
     rm, _, _ = parse_markdown_frontmatter(reaudit.read_text())
     emit(case="w2_happy", ok=rc.get("ok"), audit_task_id=rm.get("task_id"),
          missing=[f for f in REQUIRED if rm.get(f) is None or (isinstance(rm.get(f), str) and not rm.get(f).strip())], agent_instance=rm.get("agent_instance"),
-         assigned_to=rm.get("assigned_to"), expected_instance=AD._derive_audit_instance("lybra"),
+         assigned_to=rm.get("assigned_to"), expected_instance=AD.resolve_audit_instance({"project": "lybra"}),
          task_mode=rm.get("task_mode"), status=rm.get("status"),
          inherited_exec_identity=(rm.get("agent_instance") == "exec.lybra.kiwiai-dev"))
 else:
