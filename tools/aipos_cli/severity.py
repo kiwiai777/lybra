@@ -34,22 +34,7 @@ def severity_to_level(severity: str | None) -> str:
     return SEVERITY_LEVELS.get(severity, DEFAULT_LEVEL)
 
 
-def load_severity_semantics(repo_root: Any = None) -> dict[str, Any]:
-    """从 transitions.schema.json 读 severity_semantics(单一真相), 失败回退内置表。
-
-    渲染层可选调用以校验映射与声明一致; 主路径用 severity_to_level 即可。
-    """
-    try:
-        from tools.schema_loader import load_schema
-
-        schema = load_schema("transitions", repo_root=repo_root)
-        semantics = schema.get("severity_semantics") or {}
-        mapping = semantics.get("mapping") or {}
-        if mapping:
-            return dict(mapping)
-    except Exception:
-        pass
-    return dict(SEVERITY_LEVELS)
+# AIPOS-F115 件③: 原 load_severity_semantics(读声明失败 except Exception: pass 回退内置表)无调用方(git grep 证), 删除。
 
 
 # AIPOS-316: 防直接调用护栏

@@ -112,10 +112,11 @@ FORBIDDEN_AUDIT_FIELDS = {
 REQUEST_PROJECT: ContextVar[str | None] = ContextVar("lybra_mcp_request_project", default=None)
 
 
-def _reload_token_registry() -> None:
+def _reload_token_registry() -> str | None:
     """FIX-2: 热重载 token registry(从 connection.json 重新加载)。
     
     调用 http_sse 模块的全局 server 实例来重载凭据源。
+    AIPOS-F115 件③: 失败返回拒因字符串(成功/无在跑门 = None), 调用方据此进 warnings(原调用方 except Exception: pass 吞)。
     """
     import sys
     from pathlib import Path
@@ -153,6 +154,8 @@ def _reload_token_registry() -> None:
             f.flush()
         logging.warning(f"_reload_token_registry failed: {exc}")
         print(f"[tools.py] _reload_token_registry exception: {exc}", file=sys.stderr)
+        return f"TOKEN_REGISTRY_RELOAD_FAILED: 凭据热重载失败({exc}); 出口: lybra serve reload 或重启门后新凭据才生效"
+    return None
 
 
 def _repo_root() -> Path:
@@ -2389,9 +2392,21 @@ def _preauthorized_claim_autorelease(
                     ],
                 }
                 return _tool_result(error_response, is_error=True)
-    except Exception:
-        # 任务加载失败，继续正常流程（会在后续 claim_task 中被捕获）
-        pass
+    except (OSError, ValueError) as exc:
+        # AIPOS-F115 件③: 任务加载失败 = 无法核 needs_owner → PreAuthorized 不放行(fail-closed)。
+        # 原 except Exception: pass 吞错后继续自动放行, needs_owner 闸被静默绕过。
+        return _tool_result({
+            "ok": False,
+            "verdict": Verdict.BLOCK,
+            "operation": "lybra_queue_claim_dry_run",
+            "error_code": "TASK_LOAD_FAILED",
+            "error_message": (
+                f"Task {task_id or task_path} could not be loaded ({exc}); needs_owner cannot be verified, "
+                "so PreAuthorized auto-release is refused."
+            ),
+            "next_step": "修复卡文件(或核对 task_id/task_path)后重试; 或改走 Supervised 逐卡 Owner 确认。",
+            "blocking_reasons": [f"TASK_LOAD_FAILED: {exc}"],
+        }, is_error=True)
     
     confirmer = {
         # The runtime "confirmer" is the Owner-signed policy, not any live token — honest
@@ -4356,11 +4371,13 @@ def lybra_project_new_confirm(arguments: dict[str, Any] | None = None) -> dict[s
     
     # 获取门的 rpc_url 用于 connection.json 骨架
     gate_rpc_url = None
+    scaffold_warnings: list[str] = []
     try:
         conn_cfg = _load_gate_connection_config()
         gate_rpc_url = conn_cfg.get("mcp", {}).get("rpc_url")
-    except Exception:
-        pass  # 降级:不写 connection.json 骨架
+    except (OSError, ValueError) as exc:
+        # AIPOS-F115 件③: 降级不写 connection.json 骨架, 但拒因进应答(原 except Exception: pass 静默)
+        scaffold_warnings.append(f"门自身 connection.json 不可读({exc}), 未写新项目 connection.json 骨架; 出口: 修复后 lybra roles register/enroll 补")
     
     try:
         root = scaffold_project(
@@ -4380,6 +4397,7 @@ def lybra_project_new_confirm(arguments: dict[str, Any] | None = None) -> dict[s
         "project_root": str(root),
         "name": validated["name"],
         "connection_json_written": gate_rpc_url is not None,
+        **({"warnings": scaffold_warnings} if scaffold_warnings else {}),
         "next_steps": [
             "项目已创建",
             "发 planner 码给项目顾问: lybra_enroll_code (role=planner)",
@@ -4783,10 +4801,10 @@ def lybra_enroll_code_confirm(arguments: dict[str, Any] | None = None) -> dict[s
         return _error_result(f"Enrollment code issuance failed: {exc}")
 
     # 热重载: 运输凭证即刻生效(码发出去马上就能用)
-    try:
-        _reload_token_registry()
-    except Exception:
-        pass
+    # AIPOS-F115 件③: 重载失败进 warnings(原 except Exception: pass 吞, 应答仍宣称「码即刻可用」)
+    reload_error = _reload_token_registry()
+    if reload_error:
+        result.setdefault("warnings", []).append(reload_error)
 
     result["operation"] = "enroll_code_confirm"
     # AIPOS-F93 件②: paste_text / paste_instruction / next_step 由 issue_self_contained_code 经 onboarding.enroll_delivery 给出(门与 CLI 同一份)
@@ -4825,11 +4843,9 @@ def lybra_roles_enroll_code(arguments: dict[str, Any] | None = None) -> dict[str
         )
     except ValueError as exc:
         return _error_result(f"Enrollment code creation failed: {exc}")
-    try:
-        _reload_token_registry()
-    except Exception:
-        pass
+    reload_error = _reload_token_registry()  # AIPOS-F115 件③: 失败进 warnings(原 except Exception: pass)
     return _tool_result({
+        **({"warnings": [reload_error]} if reload_error else {}),
         "ok": True,
         "operation": "roles_enroll_code",
         "code_id": result["code_id"],

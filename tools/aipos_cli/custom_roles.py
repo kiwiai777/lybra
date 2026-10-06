@@ -116,15 +116,23 @@ def load_custom_roles(project_root: str | Path) -> dict[str, dict[str, str]]:
     first, then sorted project dirs — the loader's own order).
 
     Returns dict: {custom_name: {"class": builtin_class}}.
-    Empty dict if the registry is absent/unreadable (defensive; callers fall
-    back to legacy direct-match semantics). project.json is NOT a source.
+    Empty dict if the registry is absent. project.json is NOT a source.
+    AIPOS-F115 件③(gap #58): registry UNREADABLE = RoleRegistryReadError (fail-closed). The old
+    ``except Exception: return {}`` turned a read error into "role not in registry" (misleading refusal).
     """
+    from tools.mcp_server.http_sse import NoServiceRoleTokens
+
+    home_root = Path(project_root).expanduser().resolve().parent
+    loader = _gate_registry_loader()
     try:
-        home_root = Path(project_root).expanduser().resolve().parent
-        loader = _gate_registry_loader()
         registry = loader(home_root)
-    except Exception:
-        return {}
+    except NoServiceRoleTokens:
+        return {}  # 注册表缺席/无可用 token = 无自定义角色(合法空, 非读错)
+    except (OSError, ValueError) as exc:
+        raise RoleRegistryReadError(
+            f"门注册表读取失败({home_root} 下 .lybra/connection.json): {exc} —— 这不是「角色不在注册表」; "
+            "出口: 修复该凭据库文件可读性/格式后重试"
+        ) from exc
     if not registry:
         return {}
 
@@ -143,6 +151,11 @@ def load_custom_roles(project_root: str | Path) -> dict[str, dict[str, str]]:
         if role not in result:  # first-seen wins (deterministic loader order)
             result[role] = {"class": cls}
     return result
+
+
+class RoleRegistryReadError(RuntimeError):
+    """AIPOS-F115 件③(gap #58): 门注册表读不出(≠ 角色不在注册表)。fail-closed, 拒因带出口; 不是 ValueError 子类,
+    以免被「未知角色」类的 except ValueError 分支吞成误报。"""
 
 
 class UnknownRoleClass(ValueError):
