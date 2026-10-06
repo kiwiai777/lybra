@@ -302,6 +302,11 @@ def _dev_override_base_authorized(repo_root: Path, governance_root: Path | None,
         return False, f"世系核对声明缺失: {exc}"
 
 
+class FinalizationRecordError(RuntimeError):
+    """AIPOS-F120 件①: 合并(及部署)之后 finalization 记录写失败——finalize 整体 FAIL(原「告警 + 照报 PASS」= 记录缺失却报成功, fail-open)。
+    出口 = 修复原因后重跑 finalize: 分支已合并且记录缺失 → 续跑补记录(件②), 不重复合并/部署。"""
+
+
 def _ensure_finalization_record(
     governance_root: Path,
     task_id: str,
@@ -311,16 +316,20 @@ def _ensure_finalization_record(
     deployed: bool,
     operations: list[str],
     deploy_status: str | None = None,
-) -> None:
+    *,
+    deployment_record_ref: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
     """AIPOS-C3B 大项B③: 写 finalization 记录(必落)。
-    
+
     所有 finalize PASS 路径(含 working-tree-clean 早退)都必须调用此函数,
     确保 finalizations/ 目录有记录。三次 finalize 成功但 finalizations/ 全空
     的实撞必须不再发生。
 
     AIPOS-F73D 前置一①: merge/push 成功即落记录, 部署失败也落(deploy_status=deploy_failed),
     值域声明在 transitions.schema N5.record.deploy_status 一处; 推导核 N5→N6 只认此记录。
-    写失败精确捕获 + 出声(operations), 不吞。
+    AIPOS-F120 件①: 写失败 = 抛 FinalizationRecordError(finalize_task 收成 FAIL + 续跑出口), 不再告警后照报 PASS。
+    AIPOS-F120 件②: 续跑补记录同走本函数(唯一写口); dry_run=True 只算出将写的记录(路径 + frontmatter), 不落盘。
     """
     try:
         from tools.aipos_cli.finalization_record import write_finalization_record
@@ -332,14 +341,274 @@ def _ensure_finalization_record(
             authorization_type="verdict_ref",
             authorization_ref=verdict_id or "unknown",
             deployed=deployed,
-            deployment_record_ref=None,
+            deployment_record_ref=deployment_record_ref,
             deploy_status=deploy_status,
-            merge_commit=commit_hash,  # AIPOS-F78 前置零③: merge 后 main HEAD(直提场景=finalize 时 HEAD)
+            merge_commit=commit_hash,  # AIPOS-F78 前置零③: merge 后 main HEAD(直提场景=finalize 时 HEAD; 续跑=识别出的本卡合并提交)
+            dry_run=dry_run,
         )
-        operations.append(f"Finalization record written: {fin_result['path']} (deploy_status={fin_result['frontmatter'].get('deploy_status')})")
-    except (OSError, ValueError, KeyError, TypeError) as e:
-        print(f"Warning: finalization record write failed for {task_id}: {e}", file=sys.stderr)
-        operations.append(f"⚠️  Finalization record write failed: {e}")
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:
+        print(f"Error: finalization record write failed for {task_id}: {type(e).__name__}: {e}", file=sys.stderr)
+        operations.append(f"✗ Finalization record write failed: {type(e).__name__}: {e}")
+        raise FinalizationRecordError(f"{type(e).__name__}: {e}") from e
+    verb = "would be written (dry-run)" if dry_run else "written"
+    operations.append(f"Finalization record {verb}: {fin_result['path']} (deploy_status={fin_result['frontmatter'].get('deploy_status')})")
+    return fin_result
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F120 件①: 合并之后同一进程不得混用新旧代码
+# 定因(靶场复现 F109): `lybra` 为 editable 安装, 代码源 = 产品仓工作树; finalize 的 merge --no-ff 在本进程运行中把代码源
+# 换成了卡分支的新代码。之后首次懒加载的模块(finalization_record)读到新版, 它再向已加载的旧版 record_writer 要新符号
+# (record_dir) → ImportError, 合并与部署都已完成而记录未落。修法: 合并前把合并后要用的产品模块全部预载(同一版本一次装齐),
+# 合并后装导入闸——本进程再从磁盘加载任何未预载的产品模块即拒(_PostMergeImportBlocked, finalize 收成 FAIL + 续跑出口),
+# 绝不静默混用。不另起子进程: 合并后的剩余步骤(推送/部署/记录)全由合并前已装齐的同一版本代码完成。
+# ---------------------------------------------------------------------------
+
+_PRODUCT_PACKAGE = __name__.split(".", 1)[0]
+
+# 合并之后(推送 / 部署 / 部署核验 / 漂移检查 / 记录写入 / 续跑判定)直接用到的产品模块 = 预载根。预载集 = 根模块源码里全部产品包导入
+# (含函数体内懒导入)的传递闭包(_post_merge_import_closure)——新增懒导入自动纳入, 不靠手抄清单; 闸门测试
+# (tests/test_aipos_f120_finalize_resumable.py)在全新进程跑合并全链(代码源 = 产品仓, 合并改写代码源)证明闭合。
+_POST_MERGE_ROOTS: tuple[str, ...] = (
+    "tools.schema_loader",
+    "tools.schema_constants",
+    "tools.aipos_cli.clock",
+    "tools.aipos_cli.frontmatter",
+    "tools.aipos_cli.record_writer",
+    "tools.aipos_cli.finalization_record",
+    "tools.aipos_cli.deploy_gate",
+    "tools.aipos_cli.deployment_authorization",
+    "tools.aipos_cli.deployment_record",
+    "tools.aipos_cli.gate_drift",
+    "tools.aipos_cli.next_resolver",
+    "tools.aipos_cli.task_loader",
+    "tools.aipos_cli.workspace_config",
+)
+# next_resolver 合并后只用 card_branch_name / card_base_branch(纯函数), 不展开其懒导入(展开 = 整个 CLI, 且合并前已加载)
+_POST_MERGE_NO_DESCEND = frozenset({"tools.aipos_cli.next_resolver"})
+
+
+def _is_product_module(name: str) -> bool:
+    return name == _PRODUCT_PACKAGE or name.startswith(_PRODUCT_PACKAGE + ".")
+
+
+def _post_merge_import_closure() -> list[str]:
+    """预载集: 从 _POST_MERGE_ROOTS 出发, 静态扫源码(ast)里的产品包导入(模块级 + 函数体内), 取传递闭包。合并前调用(读的是旧版源码)。"""
+    import ast
+    import importlib.util
+
+    seen: set[str] = set()
+    stack = list(_POST_MERGE_ROOTS)
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        if name in _POST_MERGE_NO_DESCEND:
+            continue
+        spec = importlib.util.find_spec(name)
+        origin = getattr(spec, "origin", None)
+        if not origin or not str(origin).endswith(".py"):
+            continue
+        tree = ast.parse(Path(origin).read_text(encoding="utf-8"), filename=str(origin))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                stack.extend(alias.name for alias in node.names if _is_product_module(alias.name))
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module and _is_product_module(node.module):
+                stack.append(node.module)
+                parent = importlib.util.find_spec(node.module)
+                for location in (getattr(parent, "submodule_search_locations", None) or []):
+                    for alias in node.names:  # `from 包 import 子模块` 形
+                        if (Path(location) / f"{alias.name}.py").is_file() or (Path(location) / alias.name / "__init__.py").is_file():
+                            stack.append(f"{node.module}.{alias.name}")
+    return sorted(seen)
+
+
+class _PostMergeImportBlocked(ImportError):
+    """合并后本进程试图从磁盘加载未预载的产品模块(会读到合并进来的新代码)。"""
+
+
+class _PostMergeImportGuard:
+    """meta path 闸: 只拦本产品包内、尚未加载的模块(已加载模块走 sys.modules 缓存, 不经 finder)。"""
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> None:
+        if fullname == _PRODUCT_PACKAGE or fullname.startswith(_PRODUCT_PACKAGE + "."):
+            raise _PostMergeImportBlocked(
+                f"AIPOS-F120: finalize 合并后禁止从磁盘加载未预载的产品模块 {fullname}"
+                "(合并已改写代码源, 同进程会混用新旧代码); 出口: 把它的导入写进合并后路径模块源码(纳入预载闭包)或加入 finalize._POST_MERGE_ROOTS"
+            )
+        return None
+
+
+def _preload_post_merge(governance_root: Path, task_id: str, operations: list[str]) -> None:
+    """合并前预载合并后要用的产品模块与其声明缓存(record_dir 读 transitions.schema 经 load_schema 缓存), 然后装导入闸。"""
+    import importlib
+
+    modules = _post_merge_import_closure()
+    for name in modules:
+        importlib.import_module(name)
+    record_dir(Path(governance_root), "finalizations", task_id)  # 记录落点声明在合并前读入缓存(合并后不再读新 schema)
+    record_dir(Path(governance_root), "deployments")
+    if not any(isinstance(finder, _PostMergeImportGuard) for finder in sys.meta_path):
+        sys.meta_path.insert(0, _PostMergeImportGuard())
+    operations.append(f"AIPOS-F120: 合并前已预载 {len(modules)} 个产品模块(合并后路径的导入闭包), 合并后禁止再从磁盘加载产品模块(同进程不混用新旧代码)")
+
+
+def _remove_post_merge_guard() -> None:
+    sys.meta_path[:] = [finder for finder in sys.meta_path if not isinstance(finder, _PostMergeImportGuard)]
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F120 件②: 续跑补记录——分支已合并、记录缺失时识别本卡合并提交, 补写 finalization 记录(不重复合并、不重复部署)
+# ---------------------------------------------------------------------------
+
+def _git_out(repo_root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=str(repo_root), capture_output=True, text=True)
+
+
+def find_card_merge_commit(
+    workspace_root: Path,
+    branch_name: str,
+    base_branch: str,
+    verdict_id: str | None,
+    bound_commit: str | None,
+) -> dict[str, Any]:
+    """在基线分支第一父链上、卡分支 tip 之后的合并提交里找本卡那一个(唯一识别)。
+
+    绑定判据(任一即候选): ① 第二父(被合并方) = 裁决 artifact_subject.commit_sha(裁决绑定的卡分支 tip);
+    ② 合并信息含裁决号 verdict_id(N5 merge_message_format 写入)。候选恰好 1 个 = 找到; 0 个或多个 = 拒(F61: 禁写错误 commit 证据)。
+    返回 {found, merge_commit, candidates, reason}。git 失败 = 拒(原文)。
+    """
+    tip = _git_out(workspace_root, "rev-parse", "--verify", f"refs/heads/{branch_name}^{{commit}}")
+    if tip.returncode != 0:
+        return {"found": False, "merge_commit": None, "candidates": [],
+                "reason": f"卡分支 {branch_name} 不可解析: {tip.stderr.strip()}"}
+    if not verdict_id and not bound_commit:
+        return {"found": False, "merge_commit": None, "candidates": [],
+                "reason": "裁决既无 verdict_id 也无 artifact_subject.commit_sha, 无绑定可识别合并提交"}
+    log = _git_out(workspace_root, "log", "--first-parent", "--merges", "--format=%H%x1f%P%x1f%B%x1e",
+                   base_branch, f"^{tip.stdout.strip()}")
+    if log.returncode != 0:
+        return {"found": False, "merge_commit": None, "candidates": [],
+                "reason": f"git log {base_branch} 失败: {log.stderr.strip()}"}
+    candidates: list[dict[str, Any]] = []
+    for entry in log.stdout.split("\x1e"):
+        entry = entry.strip("\n")
+        if not entry.strip():
+            continue
+        sha, parents, body = (entry.split("\x1f") + ["", ""])[:3]
+        by = []
+        if bound_commit and bound_commit in parents.split()[1:]:
+            by.append(f"第二父=裁决绑定 commit {bound_commit[:8]}")
+        if verdict_id and verdict_id in body:
+            by.append(f"合并信息含裁决号 {verdict_id}")
+        if by:
+            candidates.append({"commit": sha.strip(), "subject": body.strip().splitlines()[0] if body.strip() else "", "bound_by": by})
+    if len(candidates) == 1:
+        c = candidates[0]
+        return {"found": True, "merge_commit": c["commit"], "candidates": candidates,
+                "reason": f"唯一识别本卡合并提交 {c['commit'][:8]}({'; '.join(c['bound_by'])}): {c['subject']}"}
+    if not candidates:
+        reason = (f"{base_branch} 第一父链上 {branch_name} tip 之后无绑定本卡的合并提交"
+                  f"(判据: 第二父 = {bound_commit[:8] if bound_commit else '(裁决无 artifact_subject)'} 或合并信息含 {verdict_id or '(无裁决号)'})")
+    else:
+        reason = f"绑定本卡的合并提交不唯一({len(candidates)} 个: {', '.join(c['commit'][:8] for c in candidates)})"
+    return {"found": False, "merge_commit": None, "candidates": candidates, "reason": reason}
+
+
+def _resume_deploy_status(
+    workspace_root: Path,
+    governance_root: Path,
+    merge_commit: str,
+    deploy_applicable: bool,
+    operations: list[str],
+) -> dict[str, Any]:
+    """续跑的 deploy_status 判定(只读, 不部署): ① 门生部署记录(record_locations.kinds.deployments)commit = 合并提交 → deployed;
+    ② 当前部署(.deploy/current/VERSION git_commit)= 合并提交或其后代 → deployed; ③ 无部署机制 → skipped; ④ 否则 not_attempted。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+
+    deployments_dir = record_dir(Path(governance_root), "deployments")
+    short = merge_commit[:8]
+    if deployments_dir.is_dir():
+        # 只读文件名/目录绑定该提交的部署记录(现名 deployment_<时间>_<commit8>.md; 存量 <commit8>/deployment_*.md), 再以 frontmatter commit 全等确认
+        named = [r for r in sorted(deployments_dir.rglob("deployment_*.md")) if r.stem.endswith(f"_{short}") or r.parent.name == short]
+        for record in named:
+            try:
+                metadata, _body = require_frontmatter(record)
+            except FrontmatterReadError as exc:
+                operations.append(f"⚠️  部署记录读不出, 不计入续跑判定: {exc}")
+                continue
+            if str(metadata.get("commit") or "").strip() == merge_commit:
+                return {"deploy_status": "deployed", "deployed": True, "deployment_record_ref": record.stem,
+                        "reason": f"部署记录 {record.name} commit = 合并提交 {merge_commit[:8]}"}
+    current = _read_deploy_current(workspace_root).get("current_commit")
+    if current:
+        if current == merge_commit:
+            return {"deploy_status": "deployed", "deployed": True, "deployment_record_ref": None,
+                    "reason": f"当前部署 .deploy/current = 合并提交 {merge_commit[:8]}(无对应部署记录)"}
+        if _git_out(workspace_root, "merge-base", "--is-ancestor", merge_commit, current).returncode == 0:
+            return {"deploy_status": "deployed", "deployed": True, "deployment_record_ref": None,
+                    "reason": f"当前部署 {current[:8]} 含合并提交 {merge_commit[:8]}(其后代)"}
+    if not deploy_applicable:
+        return {"deploy_status": "skipped", "deployed": False, "deployment_record_ref": None,
+                "reason": "产品仓无部署机制, 部署不适用"}
+    return {"deploy_status": "not_attempted", "deployed": False, "deployment_record_ref": None,
+            "reason": f"无部署记录且当前部署({current[:8] if current else '无'})不含合并提交 {merge_commit[:8]}; 续跑不部署"}
+
+
+def _resume_finalization(
+    *,
+    task_id: str,
+    actor: str,
+    workspace_root: Path,
+    governance_root: Path,
+    dry_run: bool,
+    finalize_check: dict[str, Any],
+    branch_name: str,
+    base_branch: str,
+    integrity: dict[str, Any],
+    branch_check: dict[str, Any],
+    operations: list[str],
+) -> dict[str, Any]:
+    """AIPOS-F120 件②: 分支已合并 + finalization 记录缺失 → 识别本卡合并提交并补写记录(merge_commit = 该提交)。
+    不合并、不推送、不部署; 找不到唯一合并提交 = BLOCK 带出口(F61 禁写错误 commit 证据)。"""
+    from tools.aipos_cli.deploy_gate import deploy_mechanism_present
+
+    verdict_id = finalize_check.get("verdict_id")
+    subject = finalize_check.get("artifact_subject") or {}
+    bound_commit = str(subject.get("commit_sha") or "").strip() or None
+    found = find_card_merge_commit(workspace_root, branch_name, base_branch, verdict_id, bound_commit)
+    operations.append(f"AIPOS-F120 续跑判定: {found['reason']}")
+    base = {
+        "task_id": task_id, "actor": actor, "dry_run": dry_run, "can_finalize": True,
+        "integrity_check": integrity, "branch_check": branch_check,
+        "committed": False, "pushed": False, "resumed": True,
+    }
+    if not found["found"]:
+        message = (
+            f"BLOCKED: 分支 {branch_name} 已合并但 finalization 记录缺失, 且{found['reason']}——不补写记录(AIPOS-F61: 禁写错误 commit 证据)。"
+            f"出口: 核对 `git log --first-parent --merges {base_branch}` 中本卡的合并提交(须第二父 = 裁决绑定 commit 或合并信息含裁决号);"
+            " 无法唯一识别时交顾问/Owner 裁定, 禁手写 finalization 记录。"
+        )
+        operations.append(f"  → {message}")
+        return {**base, "verdict": Verdict.BLOCK, "deployed": False, "deployment_skipped": False,
+                "deployment_error": None, "commit_hash": None, "merge_candidates": found["candidates"],
+                "message": message, "operations": operations}
+    merge_commit = str(found["merge_commit"])
+    deploy = _resume_deploy_status(workspace_root, governance_root, merge_commit,
+                                   deploy_mechanism_present(workspace_root), operations)
+    operations.append(f"AIPOS-F120 续跑部署判定: deploy_status={deploy['deploy_status']}({deploy['reason']}), 不重复合并、不重复部署")
+    fin = _ensure_finalization_record(
+        governance_root, task_id, actor, merge_commit, verdict_id, deploy["deployed"], operations,
+        deploy_status=deploy["deploy_status"], deployment_record_ref=deploy["deployment_record_ref"], dry_run=dry_run,
+    )
+    message = (f"{'DRY-RUN 续跑判定: 将补写' if dry_run else '续跑补记录: 已补写'} finalization 记录 "
+               f"(merge_commit={merge_commit[:8]}, deploy_status={deploy['deploy_status']}); 未重复合并/部署")
+    return {**base, "verdict": Verdict.PASS, "deployed": deploy["deployed"],
+            "deployment_skipped": deploy["deploy_status"] == "skipped", "deployment_error": None,
+            "commit_hash": merge_commit, "merge_commit": merge_commit,
+            "finalization_record": {"path": fin["path"], "wrote": fin["wrote"], "frontmatter": fin["frontmatter"]},
+            "message": message, "operations": operations}
 
 
 def _report_frontmatter_verdict_for_display(governance_root: Path, task_id: str) -> dict[str, Any]:
@@ -444,6 +713,7 @@ def check_task_can_finalize(task_id: str, governance_root: Path, commit_sha: str
         "verdict_record_path": verdict_check["verdict_file"],
         "verdict_id": verdict_check["verdict_id"],
         "is_legacy_verdict": verdict_check.get("is_legacy_verdict", False),  # AIPOS-F70
+        "artifact_subject": verdict_check.get("artifact_subject"),  # AIPOS-F120 件②: 续跑按裁决绑定 commit 识别本卡合并提交
         "reason": verdict_check["reason"],
     }
 
@@ -1023,6 +1293,57 @@ def finalize_task(
     push: bool = False,
     deploy: bool = False,
 ) -> dict[str, Any]:
+    """Finalize a PASS task (主体见 _finalize_task_impl)。
+
+    AIPOS-F120 件①: 外壳只做两件事——① 合并后中途失败(finalization 记录写失败 / 合并后试图加载未预载的产品模块)收成
+    verdict=FAIL + 续跑出口(不再以 traceback 退出、不再告警后照报 PASS); ② 无论从哪个出口返回, 都拆掉合并后导入闸。
+    """
+    operations: list[str] = []
+    try:
+        return _finalize_task_impl(
+            task_id, actor, workspace_root, governance_root=governance_root,
+            dry_run=dry_run, push=push, deploy=deploy, operations=operations,
+        )
+    except (FinalizationRecordError, _PostMergeImportBlocked) as exc:
+        head = _git_rev_parse_head(workspace_root)
+        message = (
+            f"finalize 合并后中途失败: {type(exc).__name__}: {exc}。合并/推送/部署可能已完成而 finalization 记录未落"
+            f"(当前 HEAD {head[:8] if head else 'unknown'})。出口: 修复原因后重跑同一条 finalize——分支已合并且记录缺失时"
+            "续跑识别本卡合并提交并补写记录(AIPOS-F120 件②), 不重复合并、不重复部署"
+        )
+        operations.append(f"✗ {message}")
+        print(f"Error: {message}", file=sys.stderr)
+        return {
+            "verdict": Verdict.FAIL,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "can_finalize": True,
+            "committed": False,
+            "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
+            "commit_hash": head or None,
+            "category": "FINALIZE_INTERRUPTED_AFTER_MERGE",
+            "message": message,
+            "operations": operations,
+        }
+    finally:
+        _remove_post_merge_guard()
+
+
+def _finalize_task_impl(
+    task_id: str,
+    actor: str,
+    workspace_root: Path,
+    *,
+    governance_root: Path | None = None,
+    dry_run: bool = False,
+    push: bool = False,
+    deploy: bool = False,
+    operations: list[str],
+) -> dict[str, Any]:
     """Finalize a PASS task by committing changes to git.
 
     AIPOS-FINALIZE-FIX-1: finalize 只操作产品仓 git,绝不 commit/push 治理仓。
@@ -1064,7 +1385,7 @@ def finalize_task(
             "operations": list[str]
         }
     """
-    operations = []
+    # AIPOS-F120: operations 由外壳 finalize_task 传入(中途失败时外壳仍能带出已执行的步骤)
 
     # AIPOS-FND-14: resolve governance root (where 5_tasks/records/ lives) separately from
     # workspace_root (the product code repo, where git commit/push runs). In the standard
@@ -1376,6 +1697,32 @@ def finalize_task(
             "message": reason,
             "operations": operations,
         }
+    # AIPOS-F120 件①: 合并会改写代码源(editable 安装 = 产品仓工作树), 合并前预载合并后要用的产品模块并装导入闸
+    if not dry_run:
+        from tools.schema_loader import SchemaLoadError
+
+        try:
+            _preload_post_merge(governance_root, task_id, operations)
+        except (ImportError, SchemaLoadError, ValueError, OSError, SyntaxError) as exc:
+            reason = f"合并前预载合并后所需产品模块失败, 未合并: {type(exc).__name__}: {exc}"
+            operations.append(f"BLOCK — {reason}")
+            return {
+                "verdict": Verdict.BLOCK,
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": dry_run,
+                "can_finalize": True,
+                "integrity_check": integrity,
+                "branch_check": branch_check,
+                "committed": False,
+                "pushed": False,
+                "deployed": False,
+                "deployment_skipped": False,
+                "deployment_error": None,
+                "commit_hash": None,
+                "message": reason,
+                "operations": operations,
+            }
     integrate = _integrate_card_branch(
         task_id=task_id,
         verdict_id=finalize_check.get("verdict_id"),
@@ -1407,6 +1754,18 @@ def finalize_task(
             "operations": operations,
         }
     
+    # AIPOS-F120 件②: 分支已合并而本卡 finalization 记录缺失(上次 finalize 合并/部署后中途失败)→ 续跑补记录;
+    # 已有记录 = 维持原行为(下方 F61 守卫)
+    if integrate.get("action") == "skipped_already_merged":
+        from tools.aipos_cli.finalization_record import existing_finalization_records
+
+        if not existing_finalization_records(governance_root, task_id):
+            return _resume_finalization(
+                task_id=task_id, actor=actor, workspace_root=workspace_root, governance_root=governance_root,
+                dry_run=dry_run, finalize_check=finalize_check, branch_name=branch_name, base_branch=base_branch,
+                integrity=integrity, branch_check=branch_check, operations=operations,
+            )
+
     # AIPOS-F61: 跟踪是否有实际合并动作作——clean-tree 路径只有在实际合并时才写 finalization 记录
     # 防止把上一张卡的 commit 误记为本卡的 finalization 证据(F58 假成功根因)
     _actual_merge_happened = integrate.get("action") == "merged"
