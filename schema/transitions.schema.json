@@ -260,6 +260,22 @@
         "audit_dispatched"
       ],
       "to_state": "verdict_issued",
+      "verdict_stale": {
+        "description": "AIPOS-F112(gap #69): 裁决已过期——卡审计 PASS 后卡分支 tip 又变化(典型: finalize 合并冲突, 执行体在卡工作树合 main 解冲突), 最新门生裁决覆盖的 commit ≠ 卡分支 tip。finalize 照 F70 正确 BLOCK「产物已变化,须复审」; 本声明给出复审出口, loop 自动走完, 不再反复撞同一 BLOCK。",
+        "state": "verdict_stale",
+        "criterion": "最新门生裁决 ∈ N5.guards.has_pass_verdict.allowed_verdict_values 且带 artifact_subject, 其 commit_sha ≠ 卡分支 tip(分支名 = N5.branch_integration.branch_pattern; 分支已并入 main / 无卡分支 / 非代码卡 / legacy 裁决不算过期)。比较与 finalize F70 核对同源: 实现 next_resolver.verdict_staleness(tip 读取口 _extract_artifact_subject_from_branch, 判定 deployment_authorization.find_gate_pass_verdict_for_task); 推导核在派 finalize 前判, 过期不得派生 finalize",
+        "outlet": {
+          "description": "复审出口 = 复用既有动词, 不新增动词: 重交回 → 门侧既有交回自动派审按卡号演进派下一轮审计卡 → 既有认领/审计/裁决/finalize/close",
+          "re_return": "推导核派生 `lybra artifact ingest --kind return`(产物入口, 内部同一条 `lybra queue return` 薄壳; 构建唯一 next_resolver._return_submission_step); 门落新 return 记录(源卡 return_record_ref 指向它), 绑新 tip/tree 由产物入口核 Return frontmatter 与分支 tip 一致",
+          "legal_re_return_premise": "已有裁决的卡再交回的合法前提 = 本状态成立(裁决过期); 门侧 queue_return 本不拒同卡再交回, 产物入口按推导核节点放行(推导核只在本状态派生重交回)",
+          "re_audit_derivation": "门侧 queue_return 后自动派审(audit_derivation.derive_audit_task_on_return): 源卡已有裁决但按本判据过期 → 按 nodes.fix_card_closure.revision_card_numbering 演进(R 已存在 → R2, R2 已存在 → R3…, derive_audit_task_id 唯一实现); 当前一轮审计卡尚无裁决(在途)= 幂等不再演进",
+          "audit_card_claim": "下一轮审计卡认领即在被审卡分支当前 tip 建只读取证工作树(既有 _ensure_forensic_worktree), 审计报告 commit_sha = 该 tip, 裁决绑新 tip",
+          "loop_wait_and_launch": "推导核等待/拉起认当前一轮审计卡(audit_derivation.current_audit_task_id: 已有轮次中最新一张), 不写死 <ID>R",
+          "superseded_round": "上一轮审计卡已随其裁决结案(其裁决仍是对旧 commit 的历史事实, 不改写); 新一轮派审记录写 supersedes=<上一轮审计卡号>, 审计卡正文与 governance_refs 写明取代说理(旧裁决 id / 旧 commit / 新 tip)"
+        },
+        "return_not_updated_guard": "执行体 Return frontmatter commit_sha/tree_hash 未随卡分支更新(仍是旧 tip)= 产物入口既有判据拒(artifact_ingest.validate_task_artifact: INGEST_TIP_MISMATCH 点名 commit_sha), 推导核 artifact_invalid(loop exit 4)点名同一拒因, 不得用旧 Return 派审",
+        "re_returned_without_round": "已重交回(最新 return 记录 ≠ 过期裁决的 reviewed_return_record_ref; 存量缺该字段时比时间)但门未派下一轮审计卡 = 不可推导点名(不重复交回), 多为门版本未含本声明"
+      },
       "guards": {
         "auditor_role": {
           "description": "必须是 auditor 角色",
@@ -630,7 +646,7 @@
         ]
       },
       "revision_card_numbering": {
-        "description": "AIPOS-F18大项B: 复审卡号演进模式——派生writer遇R已存在→按声明模式演进R2/R3…",
+        "description": "AIPOS-F18大项B: 复审卡号演进模式——派生writer遇R已存在→按声明模式演进R2/R3…; AIPOS-F112: 裁决过期复审出口(nodes.N4.verdict_stale)与审计轮号读取(audit_derivation.audit_round_suffixes / current_audit_task_id / is_audit_card)同读本声明",
         "pattern": "<原卡ID>R[迭代序号]",
         "sequence_rule": "首次派生用R,已存在R则用R2,已存在R2则用R3,依此类推",
         "example": "F8→F8R(首轮)→F8R2(复审)→F8R3(再复审)",
