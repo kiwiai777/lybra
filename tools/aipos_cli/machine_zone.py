@@ -15,6 +15,7 @@ from tools.schema_loader import (
     get_branch_integration,
     get_machine_zone_fields,
 )
+from tools.aipos_cli.clock import iso_z
 
 
 def derive_machine_zone_fields(
@@ -42,7 +43,6 @@ def derive_machine_zone_fields(
         - draft_updated_at: current timestamp
         - draft_publish_target: from project.json paths.queue_root (task_loader.queue_state_ref)
     """
-    from datetime import datetime, timezone
     
     machine = {}
     
@@ -58,7 +58,7 @@ def derive_machine_zone_fields(
         if created_by not in (None, ""):
             machine["draft_created_by"] = created_by
     
-    timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    timestamp = iso_z()
     
     if "draft_created_at" in machine_fields:
         machine["draft_created_at"] = timestamp

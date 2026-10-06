@@ -162,11 +162,21 @@
           "schema": {
             "runall_path": {"type": "string", "optional": true, "description": "测试清单文件(相对产品仓根, 禁绝对路径); 交回检查读卡分支上的该文件"},
             "require_tests": {"type": "boolean", "optional": true, "description": "true = code 类卡须含测试文件改动(NO_TESTS)"},
-            "test_file_globs": {"type": "array", "items": {"type": "string"}, "optional": true, "default": ["test_*.py", "*_test.py", "test_*.sh", "*.test.ts", "*.test.js", "*.spec.ts", "*.spec.js"], "description": "AIPOS-F97 件②: 「测试文件」的文件名式样(fnmatch glob, 按文件名即路径最后一段匹配, 区分大小写, 禁含 /)。缺省 = default(覆盖 lybra 产品仓现有全部自动化测试文件命名: Python test_*.py、shell test_*.sh、TS/JS *.test.ts / *.test.js、Playwright *.spec.js, 另含常见 *_test.py / *.spec.ts); 项目声明 = 整体替换缺省(非追加), 须为非空字符串的非空列表。判据唯一实现 workspace_config.card_test_files: 卡分支改动集(git diff --name-status main...card/<ID>)中删除项 D 排除、重命名/复制取新路径, 文件名命中任一式样且不是 runall_path 本身 = 本卡测试文件(TEST_NOT_IN_RUNALL / NO_TESTS 共用)。代码不写死式样; 新语言 = 加一条 glob"},
+            "test_file_globs": {"type": "array", "items": {"type": "string"}, "optional": true, "default": ["test_*.py", "*_test.py", "test_*.sh", "*.test.ts", "*.test.js", "*.spec.ts", "*.spec.js"], "description": "AIPOS-F109 件④: 同一式样亦是 run-all 自动发现的式样(runall_directives discover; 判定唯一实现 workspace_config.is_test_file)。AIPOS-F97 件②: 「测试文件」的文件名式样(fnmatch glob, 按文件名即路径最后一段匹配, 区分大小写, 禁含 /)。缺省 = default(覆盖 lybra 产品仓现有全部自动化测试文件命名: Python test_*.py、shell test_*.sh、TS/JS *.test.ts / *.test.js、Playwright *.spec.js, 另含常见 *_test.py / *.spec.ts); 项目声明 = 整体替换缺省(非追加), 须为非空字符串的非空列表。判据唯一实现 workspace_config.card_test_files: 卡分支改动集(git diff --name-status main...card/<ID>)中删除项 D 排除、重命名/复制取新路径, 文件名命中任一式样且不是 runall_path 本身 = 本卡测试文件(TEST_NOT_IN_RUNALL / NO_TESTS 共用)。代码不写死式样; 新语言 = 加一条 glob"},
             "repos": {"type": "object", "optional": true, "description": "按仓覆盖: 键 = project.json repos.items 仓名, 值同形(不得再嵌 repos); 卡仓(resolve_card_repo)有覆盖取覆盖, 否则取顶层"}
           },
           "reject_codes": {
-            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items)"
+            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items)",
+            "RUNALL_DIRECTIVE_INVALID": "测试清单文件内声明行形坏(未声明的指令词 / 缺目标 / exclude 缺理由 / 目标重复 / discover 带参数)"
+          },
+          "runall_directives": {
+            "description": "AIPOS-F109 件④(gap #40: 各卡往测试清单末尾追加登记块, 并行卡合并必冲突): 测试清单文件(runall_path)可在行首注释里声明自动发现——`# <prefix> discover` = 清单按本项目 test_file_globs 自动发现并执行产品仓内全部测试文件(workspace_config.discover_test_files, 与「本卡测试文件」判据 card_test_files 同一判定 is_test_file), 新测试文件无需逐个登记。门交回检查 TEST_NOT_IN_RUNALL 在 discover 模式下改判: 本卡测试文件命中声明式样即视为登记, 只有被 exclude 声明排除的文件才拒; 无 discover 行 = 原判据(测试文件路径/文件名须出现在清单文本中)。唯一解析 workspace_config.runall_directives(门与执行器 tools/aipos_cli/runall_discovery 共用)。存量失败处置(gap #59)= 声明化且只减不增: exclude 不执行(必须写理由, 执行器逐条打印, 不静默), known-failure 照常执行、失败被容忍、一旦转绿执行器即报红逼删条。",
+            "prefix": "lybra-runall:",
+            "directives": {
+              "discover": "本清单按 test_file_globs 自动发现(无参数)",
+              "exclude": "exclude <文件路径 | 文件::pytest 节点> <理由>: 不执行(真实治理根/活门/外部浏览器等不可在夹具环境执行者); 文件级排除的测试文件不算登记(门拒 TEST_NOT_IN_RUNALL)",
+              "known-failure": "known-failure <文件路径 | 文件::pytest 节点> [理由]: 执行, 已知存量失败被容忍; 该目标转绿(或节点已不存在)= 执行器报红, 须删此行(只减不增)"
+            }
           }
         },
         "repos": {
@@ -596,24 +606,12 @@
       "records": {
         "relative_to": "tasks_root",
         "path": "records/",
-        "description": "Task records root",
-        "subdirs": [
-          "claims/",
-          "returns/",
-          "closures/",
-          "audit_dispatches/",
-          "audit_verdicts/",
-          "owner_decisions/",
-          "owner_verifications/",
-          "publishes/",
-          "events/",
-          "sessions/"
-        ]
+        "description": "Task records root(AIPOS-F109 件①: 各记录类子目录与落盘名的唯一声明 = transitions.schema record_locations, 读取口 record_writer.record_dir; 原 subdirs 列表零读取方且缺 finalizations/deployments/amendments/fix_closures/token_rotations, 已删)"
       },
       "stage_archive": {
         "relative_to": "governance_root",
         "path": "stage_archive/",
-        "description": "Stage completion archive directory (AIPOS-R6M 大项A③: stage粒度门票机制 — 单一源, 与 n6_closure_checklist/governance_worktree whitelist 同用此键)",
+        "description": "Stage completion archive directory (AIPOS-R6M 大项A③: stage粒度门票机制 — 单一源, 与 governance_worktree whitelist 同用此键)",
         "structure": "<date>_<stage-name>.md (历史快照, 最新一篇=当前坐标)",
         "semantics": "阶段粒度·低频·阶段关账才写 - 三个月后的人只读最新一篇+其后decision_log即可上手"
       },
@@ -735,43 +733,6 @@
         "exemption_rule": "sweep 隔离候选集只扫 queue/claimed 活动卡对应的裁决目录(与收账同源 C3B); 全量 records/ 追溯扫描退役。活动卡目录内的无标记文件才视为手写嫌疑; 非活动卡目录不扫只出声。"
       }
     }
-  },
-  "n6_closure_checklist": {
-    "description": "N6 closure node governance updates checklist - what files to update on task completion",
-    "updates": [
-      {
-        "file": "governance/decision_log.md",
-        "action": "append",
-        "description": "Append task completion decision to decision log"
-      },
-      {
-        "file": "5_tasks/queue/completed/{task_id}.md",
-        "action": "move",
-        "description": "Move task card to completed queue"
-      },
-      {
-        "file": "stage_archive/{stage_id}/",
-        "action": "create_or_append",
-        "description": "Archive stage completion documentation (on stage boundary)",
-        "condition": "stage_completion"
-      }
-    ],
-    "final_action": {
-      "operation": "git_push",
-      "repository": "governance_repo",
-      "description": "Push all governance updates to remote (push is part of N6 node)"
-    }
-  },
-  "path_conventions": {
-    "description": "Path conventions used throughout the system",
-    "task_card_filename": "{task_id_slug}.md",
-    "claim_record": "5_tasks/records/claims/{task_id}/claim_{task_id}_{timestamp}_{agent}.md",
-    "return_record": "5_tasks/records/returns/{task_id}/return_{task_id}_{timestamp}_{agent}.md",
-    "closure_record": "5_tasks/records/closures/{task_id}/closure_{task_id}_{timestamp}.md",
-    "audit_dispatch_record": "5_tasks/records/audit_dispatches/{task_id}/dispatch_{task_id}_{timestamp}.md",
-    "audit_verdict_record": "5_tasks/records/audit_verdicts/{task_id}/verdict_{task_id}_{timestamp}_{auditor}.md",
-    "session_record": "5_tasks/records/sessions/{task_id}/session_{session_id}.md",
-    "event_record": "5_tasks/records/events/{task_id}/{event_type}_{task_id}_{timestamp}.md"
   },
   "environment_variables": {
     "description": "AIPOS-F106 件③(M15): 产品代码读取的全部环境变量名的唯一声明表(LYBRA_* / AIPOS_* 前缀; 系统变量 HOME/USER/PATH/SSL_* 不在此列)。代码使用的名单 = 本表键集(夹具 tests/test_aipos_f106_gate_address_single_source.py 扫产品文件比对, 多一个少一个都红)。env 在所有身份/连接键上都是最低优先级兜底层(见 identity_resolution.precedence 与 lybra_dir_authority), 不是覆盖层。",
@@ -901,10 +862,8 @@
         "merge_policy": "frequent convergence to main (不过夜)"
       },
       "card_prefix": {
-        "pattern": "card/<task_id>",
         "semantic": "ephemeral_task_branch",
-        "description": "临时任务分支 — 分叉活不过一张卡, finalize 时 merge + 删分支 + 删 worktree",
-        "lifecycle": "created on claim, deleted on finalize"
+        "description": "AIPOS-F109 件③(L1): 卡分支名式样与保留策略的唯一声明 = transitions.schema nodes.N5.branch_integration(branch_pattern / branch_retention, 读取口 next_resolver.card_branch_name); 本处不再写第二份(原分支式样与生命周期叙述与 branch_retention 矛盾, 已删)。"
       }
     },
     "path_constraints": {

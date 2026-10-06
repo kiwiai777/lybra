@@ -12,7 +12,7 @@ Record structure mirrors existing record types (returns/verdicts) — frontmatte
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import file_slug, iso_z
 from pathlib import Path
 from typing import Any
 
@@ -22,15 +22,9 @@ from tools.schema_constants import RecordType, Verdict
 
 
 
-OWNER_VERIFICATIONS_DIR = Path("5_tasks/records/owner_verifications")
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$")
 ALLOWED_DECISIONS = {"approve", "reject"}
 ALLOWED_DECIDED_VIA = {"web_session", "cli", "mcp", "external"}
-
-
-def _utc_now() -> str:
-    """Returns current UTC timestamp in ISO format with Z suffix."""
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_task_id(value: Any, blocking_reasons: list[str]) -> str:
@@ -167,7 +161,7 @@ def build_owner_verification_record(
     decided_via = _normalize_decided_via(payload.get("decided_via"), blocking_reasons)
     reason = _normalize_text(payload.get("reason"), "reason", blocking_reasons, max_length=2000, required=False)
     decided_by = _normalize_text(actor or "owner", "decided_by", blocking_reasons, max_length=160, required=True)
-    decided_at = _utc_now()
+    decided_at = iso_z()
     
     # reject decision requires reason
     if decision == "reject" and not reason:
@@ -185,9 +179,12 @@ def build_owner_verification_record(
     
     # Generate target path with timestamp for uniqueness (append-only)
     # Format: 5_tasks/records/owner_verifications/<task_id>/verify_<task_id>_<timestamp>.md
-    timestamp_slug = decided_at.replace(":", "").replace("-", "").replace("Z", "")
+    timestamp_slug = file_slug("compact_t", decided_at)
     filename = f"verify_{task_id}_{timestamp_slug}.md"
-    target_path = str(OWNER_VERIFICATIONS_DIR / task_id / filename) if task_id else None
+    # AIPOS-F109 件①: 落点 = transitions.schema record_locations.kinds.owner_verifications(record_root; 原模块常量写死退役)
+    from tools.aipos_cli.record_writer import record_root
+
+    target_path = str(record_root("owner_verifications") / task_id / filename) if task_id else None
     target_file = repo_root / target_path if target_path else None
     
     # Check if file already exists (should be rare due to timestamp)

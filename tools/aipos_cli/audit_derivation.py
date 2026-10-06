@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
 from pathlib import Path
 from typing import Any
 
@@ -21,14 +21,10 @@ from tools.aipos_cli.task_loader import find_task_by_id, queue_root_for, queue_s
 from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1: single naming impl
 from tools.schema_constants import RecordType
 from tools.schema_loader import get_required_card_fields  # AIPOS-F17 大项A: schema 单源必填集
-from tools.aipos_cli.record_writer import card_field_defaults  # AIPOS-F108 件①: 卡字段缺省值读 card.schema 声明
+from tools.aipos_cli.record_writer import card_field_defaults, record_dir  # AIPOS-F108 件①: 卡字段缺省值读 card.schema 声明; AIPOS-F109 件①: 记录落点读声明
 
 
 
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _resolve_code_repo(repo_root: Path | None, source_metadata: dict[str, Any] | None = None) -> str:
@@ -456,7 +452,7 @@ def superseding_round(audit_task_id: str, repo_root: Path, card_frontmatter: dic
     """AIPOS-F114: 审计轮是否已被取代的唯一读取(推导核 / 开工核验 / 裁决入口同读, 禁第二份)。
     取代关系唯一记在后一轮的门派审记录 supersedes 字段(AIPOS-F112 既有, F72 字段), 不改写旧轮卡面/记录。
     返回 {audit_task_id: 取代它的那一轮, dispatch_id}; 未被取代 / 不是审计轮 = None。"""
-    from tools.aipos_cli.next_resolver import _find_latest_record, _resolve_governance_path_with_relative
+    from tools.aipos_cli.next_resolver import _find_latest_record
 
     reviewed = audit_card_reviewed_id(audit_task_id, card_frontmatter)
     if not reviewed:
@@ -464,7 +460,7 @@ def superseding_round(audit_task_id: str, repo_root: Path, card_frontmatter: dic
     rounds = audit_round_ids(reviewed, Path(repo_root))
     if audit_task_id not in rounds:
         return None
-    dispatch_root = _resolve_governance_path_with_relative("records", Path(repo_root)) / "audit_dispatches"
+    dispatch_root = record_dir(Path(repo_root), "audit_dispatches")
     for later in rounds[rounds.index(audit_task_id) + 1:]:
         dispatch = _find_latest_record(dispatch_root / later, "dispatch") or {}
         if str(dispatch.get("supersedes") or "").strip() == audit_task_id:
@@ -884,7 +880,7 @@ def derive_audit_task_on_return(
     
     # Write publish record for authority_scanner VALID
     publish_id = stable_publish_id(audit_task_id)
-    published_at = _utc_now()
+    published_at = iso_z()
     
     # Calculate checksums
     source_sha256 = hashlib.sha256(b"").hexdigest()  # No source draft for mechanical derivation
@@ -906,9 +902,11 @@ def derive_audit_task_on_return(
     
     # AIPOS-R8B F-N4: 补写 dispatch_record (与 lybra_audit_dispatch 共用同一 writer)
     # 自动派生审计卡时也必须落 dispatch 记录,否则裁决提交时会被 MISSING_AUDIT_DISPATCH_RECORD 拒绝
-    from tools.aipos_cli.record_writer import build_mcp_audit_dispatch_record_markdown, write_records_atomic
-    
-    dispatch_id = f"dispatch_{audit_task_id}_{published_at.replace(':', '').replace('-', '').replace('Z', '')}_gate-derivation"
+    from tools.aipos_cli.record_writer import build_mcp_audit_dispatch_record_markdown, build_runtime_id, write_records_atomic
+
+    # AIPOS-F109 件①: 派审记录 id = 落盘名, 与声明 N3 record.location 同式样(build_runtime_id, compact 时间; 原手写 compact_t 压缩法退役,
+    # 存量旧名照读——读侧按目录扫描)
+    dispatch_id = build_runtime_id("dispatch", audit_task_id, published_at, "gate-derivation")
     dispatch_record_markdown = build_mcp_audit_dispatch_record_markdown(
         dispatch_id=dispatch_id,
         reviewed_task_id=source_task_id,
@@ -934,8 +932,8 @@ def derive_audit_task_on_return(
     write_result = write_records_atomic(
         repo_root=repo_root,
         records=[
-            ("publish", publish_id, publish_record_markdown),
-            ("audit_dispatch", dispatch_id, dispatch_record_markdown),
+            ("publish", publish_id, publish_record_markdown, audit_task_id),
+            ("audit_dispatch", dispatch_id, dispatch_record_markdown, audit_task_id),
         ],
     )
     
@@ -1094,7 +1092,7 @@ def derive_repair_card_on_fail(
         "priority": source_metadata.get("priority", "high"),
         "status": "pending",
         "created_by": "gate_derivation",
-        "created_at": _utc_now(),
+        "created_at": iso_z(),
         "derived_from_verdict_id": verdict_id,
         "derived_from_audit_task_id": audit_task_id,
         "fix_round": fix_round,

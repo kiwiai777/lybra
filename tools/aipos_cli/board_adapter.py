@@ -5,6 +5,8 @@ import json
 import subprocess
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from tools.aipos_cli.clock import file_slug, iso_z, utc_now
+from tools.aipos_cli.record_writer import record_dir, record_root, records_root
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +43,7 @@ from tools.aipos_cli.planner_iteration_writer import append_planner_iteration as
 from tools.aipos_cli.planner_loop_mvp import build_planner_loop_mvp_preview
 from tools.aipos_cli.preview import build_preview
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
-from tools.aipos_cli.queue_mutation import mutate_queue_task, render_task_markdown, _slug
+from tools.aipos_cli.queue_mutation import mutate_queue_task, render_task_markdown
 from tools.aipos_cli.record_writer import (
     append_mcp_audit_verdict_session_event,
     append_mcp_return_session_event,
@@ -476,7 +478,7 @@ def get_health(repo_root: str | Path | None = None) -> dict[str, Any]:
             },
             "paths": {
                 "queue_root_found": queue_root_for(resolved_root).exists(),
-                "records_root_found": (resolved_root / "5_tasks" / "records").exists(),
+                "records_root_found": (resolved_root / records_root()).exists(),
                 "drafts_root_found": (resolved_root / "5_tasks" / "drafts").exists(),
             },
         }
@@ -998,7 +1000,7 @@ def get_owner_decision_records(repo_root: str | Path | None = None) -> dict[str,
         report = load_records(resolved_root)
         records = list(report.get("owner_decisions", []))
         data = {
-            "records_dir": "5_tasks/records/owner_decisions",
+            "records_dir": record_root("owner_decisions").as_posix(),
             "records_dir_exists": bool(report.get("owner_decisions_root_exists")),
             "records": records,
             "writes_enabled": False,
@@ -2754,14 +2756,22 @@ def _check_test_in_runall(
             f"出口: ①在卡分支提交该清单; ②声明有误请顾问修正 project.json test_contract.runall_path"
         )]
     
-    # 3. 检查每个 test 文件是否在清单中
-    missing_tests = []
-    for test_file in test_files:
-        # 检查完整路径或 basename
-        basename = test_file.split("/")[-1]
-        if test_file not in runall_content and basename not in runall_content:
-            missing_tests.append(test_file)
-    
+    # 3. 本卡测试文件是否已登记(AIPOS-F109 件④: 唯一判据 workspace_config.runall_unregistered——清单声明 discover = 命中声明式样
+    #    即登记、只有文件级 exclude 的算未登记; 无 discover 行 = 原判据, 路径或文件名须出现在清单文本中)
+    from tools.aipos_cli.next_resolver import card_branch_name
+    from tools.aipos_cli.workspace_config import runall_unregistered
+
+    try:
+        missing_tests, directives = runall_unregistered(test_files, runall_content)
+    except ValueError as exc:
+        return [f"{exc}(清单 {runall_rel}, 卡分支 {card_branch_name(task_id)})。出口: 修正声明行后重交"]
+    if missing_tests and directives["discover"]:
+        blocking_reasons.append(
+            f"TEST_NOT_IN_RUNALL: 本卡测试文件被项目声明的测试清单 {runall_rel}(来源 {contract.get('source')})以 exclude 声明排除、"
+            f"不会执行: {', '.join(missing_tests)}。出口: ①删该 exclude 行让其随自动发现执行; ②确属不可在夹具环境执行, 请顾问裁定后再交"
+        )
+        return blocking_reasons
+
     if missing_tests:
         blocking_reasons.append(
             f"TEST_NOT_IN_RUNALL: 本卡新增/修改的 test 文件未登记进项目声明的测试清单 {runall_rel}"
@@ -3276,7 +3286,7 @@ def _build_return_preview(
     else:
         # No provenance recorded — treat as registry-verified (legacy/direct path, PyYAML present).
         updated_metadata["executor_registry_verified"] = True
-    returned_at = planned_returned_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    returned_at = planned_returned_at or iso_z()
     updated_metadata["executor_completed_at"] = returned_at
     updated_metadata["audit_readiness"] = "ready"
     updated_metadata["audit_status"] = str(updated_metadata.get("audit_status") or "pending")
@@ -3335,7 +3345,7 @@ def _build_return_preview(
     # 读取 claim 快照（用于判据⑤⑥）
     claim_snapshot = None
     if task_id_text and claim_id:
-        claim_record_path = repo_root / "5_tasks" / "records" / "claims" / task_id_text / f"{claim_id}.md"
+        claim_record_path = record_dir(repo_root, "claims", task_id_text) / f"{claim_id}.md"
         if claim_record_path.exists():
             try:
                 claim_content = claim_record_path.read_text(encoding="utf-8")
@@ -3796,7 +3806,7 @@ def _build_audit_dispatch_preview(
     # AIPOS-F2 ③立墙带路: 检测手写文件在场时附加提示
     from tools.aipos_cli.audit_helpers import detect_hand_written_verdicts, HAND_WRITTEN_VERDICT_NOTICE, is_dispatch_chain_valid
     _hw_dispatch = detect_hand_written_verdicts(
-        repo_root / "5_tasks" / "records" / "audit_verdicts" / source_task_id_for_verdict
+        record_dir(repo_root, "audit_verdicts", source_task_id_for_verdict)
     )
     if _hw_dispatch:
         warnings.append(HAND_WRITTEN_VERDICT_NOTICE)
@@ -3880,7 +3890,7 @@ def _build_audit_dispatch_preview(
             audit_task_already_exists = True
             # Was: blocking_reasons.append(f"AUDIT_TASK_ID_EXISTS: {task_id_text}")
 
-    timestamp = planned_dispatched_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    timestamp = planned_dispatched_at or iso_z()
     dispatch_id = planned_dispatch_id or build_runtime_id("dispatch", str(source_task.get("task_id") or ""), timestamp, canonical_agent_instance or actor)
     dispatch_path = audit_dispatch_record_path(repo_root, str(source_task.get("task_id") or ""), dispatch_id)
     dispatch_rel = str(dispatch_path.resolve().relative_to(repo_root.resolve()))  # AIPOS-240: symlink-safe
@@ -4374,7 +4384,7 @@ def _build_audit_verdict_preview(
         if return_record_ref:
             try:
                 # return record 路径: 5_tasks/records/returns/<TASK_ID>/<return_id>.md
-                return_record_path = repo_root / "5_tasks" / "records" / "returns" / reviewed_task_id / f"{return_record_ref}.md"
+                return_record_path = record_dir(repo_root, "returns", reviewed_task_id) / f"{return_record_ref}.md"
                 if return_record_path.exists():
                     return_record_content = return_record_path.read_text(encoding="utf-8")
                     return_record_fm, _, _ = parse_markdown_frontmatter(return_record_content)
@@ -4448,7 +4458,7 @@ def _build_audit_verdict_preview(
         evidence_check = check_evidence_refs_non_empty(evidence_refs, findings_summary)
         blocking_reasons.extend(evidence_check)
 
-    timestamp = planned_verdict_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    timestamp = planned_verdict_at or iso_z()
     verdict_id = planned_verdict_id or build_runtime_id("verdict", str(reviewed_task.get("task_id") or ""), timestamp, canonical_agent_instance or actor)
     verdict_path = audit_verdict_record_path(repo_root, str(reviewed_task.get("task_id") or ""), verdict_id)
     root = repo_root.resolve()  # AIPOS-240 (F-o3-19): record paths are .resolve()d; symlink-safe render
@@ -4491,7 +4501,7 @@ def _build_audit_verdict_preview(
     # AIPOS-F2 ③立墙带路: 检测手写文件在场时附加提示
     from tools.aipos_cli.audit_helpers import detect_hand_written_verdicts, HAND_WRITTEN_VERDICT_NOTICE
     _hw_verdicts = detect_hand_written_verdicts(
-        repo_root / "5_tasks" / "records" / "audit_verdicts" / reviewed_task_id_for_verdict
+        record_dir(repo_root, "audit_verdicts", reviewed_task_id_for_verdict)
     )
     if _hw_verdicts:
         warnings.append(HAND_WRITTEN_VERDICT_NOTICE)
@@ -6013,7 +6023,7 @@ def converge_r_cards(
                         skipped.append({"task_id": task_id, "reason": "no reviewed_task_id"})
                         continue
                 # Check if verdict exists for the reviewed task
-                verdicts_dir = resolved_root / "5_tasks" / "records" / "audit_verdicts" / reviewed_task_id
+                verdicts_dir = record_dir(resolved_root, "audit_verdicts", reviewed_task_id)
                 if not verdicts_dir.is_dir():
                     skipped.append({"task_id": task_id, "reason": f"no verdicts dir for {reviewed_task_id}"})
                     continue
@@ -6309,19 +6319,18 @@ def _auto_generate_decision_log_pointer(
         True if pointer was written, False if skipped (already exists or error)
     """
     try:
-        from datetime import datetime, timezone
         
         governance_dir = repo_root / "governance"
         decision_log_dir = governance_dir / "decision_log"
         
         # 生成 YYYY-MM 目录
-        now = datetime.now(timezone.utc)
-        year_month = now.strftime("%Y-%m")
+        now = utc_now()
+        year_month = file_slug("month", now)
         month_dir = decision_log_dir / year_month
         month_dir.mkdir(parents=True, exist_ok=True)
         
         # 生成文件名: YYYY-MM-DD-<slug>.md
-        date_str = now.strftime("%Y-%m-%d")
+        date_str = file_slug("date", now)
         # 从 decision_id 提取 slug (移除时间戳部分)
         slug = decision_id.split("_")[0] if "_" in decision_id else decision_id
         filename = f"{date_str}-{slug}-auto-pointer.md"
@@ -6391,17 +6400,12 @@ def _write_fix_closure_derivation_record(
     改声明即跟随;声明缺字段时按声明原字面默认兜底。返回工作区相对路径。
     """
     record_decl = dict(fix_card_closure_node.get("record") or {})
-    location_tpl = str(
-        record_decl.get("location")
-        or "5_tasks/records/fix_closures/{fix_task_id}/derivation_{fix_task_id}_{timestamp}.md"
-    )
-    ts_compact = (
-        str(derived_at or "")
-        .replace("-", "")
-        .replace(":", "")
-        .replace("T", "_")
-        .replace("Z", "")
-    )
+    # AIPOS-F109 件①: 落点只读声明(record_locations.kinds.fix_closures → fix_card_closure.record.location), 缺 = 拒;
+    # 原「声明缺时按写死字面兜底」第二份落点退役(fail-closed)。
+    from tools.aipos_cli.record_writer import record_location
+
+    location_tpl = record_location("fix_closures", {"nodes": {"fix_card_closure": {"record": record_decl}}})
+    ts_compact = file_slug("compact", str(derived_at or ""))
     record_rel = location_tpl.format(fix_task_id=fix_task_id, timestamp=ts_compact)
 
     fields = {
@@ -6581,7 +6585,7 @@ def close_task(
             )
 
         # Build closure ID
-        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        timestamp = iso_z()
         from tools.aipos_cli.record_writer import CLOSURE_ID_PREFIX
 
         closure_id = build_runtime_id(CLOSURE_ID_PREFIX, resolved_task_id, timestamp, actor_text)
@@ -6659,7 +6663,7 @@ def close_task(
                 # 生成条目(带机器标记)
                 entry_text = _gen_backlog_entry(resolved_task_id, description=description)
                 # 追加机器标记: 标识这是自动生成的
-                machine_marker = f"<!-- auto-generated by close_task (AIPOS-A1 大项B) at {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')} -->\n"
+                machine_marker = f"<!-- auto-generated by close_task (AIPOS-A1 大项B) at {iso_z()} -->\n"
                 entry_with_marker = machine_marker + entry_text
                 
                 # 追加到项目声明的卡编年史
@@ -7120,8 +7124,8 @@ def withdraw_task(
             if not has_return:
                 # 无 return 记录,检查会话是否活跃(近期有动静)
                 sessions = records.get("sessions", [])
-                from datetime import datetime, timedelta, timezone
-                now = datetime.now(timezone.utc)
+                from datetime import timedelta
+                now = utc_now()
                 
                 for session in sessions:
                     if session.get("session_id") == active_session_id:
@@ -7418,7 +7422,7 @@ def amend_task(
             )
         
         # Build amendment record
-        amendment_timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        amendment_timestamp = iso_z()
         amendment_id = build_runtime_id("amendment", task.get("task_id"), amendment_timestamp, actor_text)
         
         amendment_record = {
@@ -7437,9 +7441,10 @@ def amend_task(
         }
         
         # Build amendment record markdown
-        amendments_dir = resolved_root / "5_tasks" / "records" / "amendments" / task.get("task_id")
-        amendment_filename = f"amendment_{task.get('task_id')}_{amendment_timestamp.replace(':', '').replace('-', '')}_{_slug(actor_text)}.md"
-        amendment_path = amendments_dir / amendment_filename
+        # AIPOS-F109 件①: 落点 = 声明 queue_rework.record.location(record_locations.kinds.amendments) 经 record_dir; 落盘名 = amendment_id
+        # (原文件名手写 `T…Z` 压缩法、与 amendment_id 不同式样; 存量旧名照读)
+        amendments_dir = record_dir(resolved_root, "amendments", str(task.get("task_id")))
+        amendment_path = amendments_dir / f"{amendment_id}.md"
         
         # AIPOS-F87 件①: frontmatter 经单源 record_writer.render_frontmatter_block(原 f-string 手拼退役:
         # 理由含 `**`/冒号/`#` 时曾写出不可解析的修订记录)。
@@ -7587,10 +7592,10 @@ def read_settlement_status(
 
     result["unreadable"] = []
     for key, sub, prefix in (("closure_records", "closures", "close_"), ("finalization_records", "finalizations", "finalization_")):
-        record_dir = resolved_root / "5_tasks" / "records" / sub / task_id
-        if not record_dir.is_dir():
+        kind_dir = record_dir(resolved_root, sub, task_id)
+        if not kind_dir.is_dir():
             continue
-        for record_file in sorted(record_dir.glob(f"{prefix}*.md")):
+        for record_file in sorted(kind_dir.glob(f"{prefix}*.md")):
             try:
                 fm, _body = require_frontmatter(record_file)
             except FrontmatterReadError as exc:

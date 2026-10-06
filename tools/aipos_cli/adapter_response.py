@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
 from typing import Any
 
 from tools.schema_constants import Verdict
@@ -56,10 +56,6 @@ ERROR_CATEGORIES = {
     "ADAPTER_INVOCATION_ERROR",
     "BACKEND_CONTRACT_MISMATCH",
 }
-
-
-def utc_timestamp() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def error_entry(
@@ -134,7 +130,7 @@ def make_response(
         "dry_run": dry_run,
         "actor": actor,
         "actor_match": actor_match,
-        "timestamp": utc_timestamp(),
+        "timestamp": iso_z(),
         "data": data,
         "summary": summary,
         "planned_writes": list(planned_writes or []),

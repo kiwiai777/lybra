@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timezone
+from tools.aipos_cli.clock import iso_z
+from tools.aipos_cli.record_writer import record_dir
 from pathlib import Path
 from typing import Any
 
@@ -76,10 +78,6 @@ ALLOWED_TRANSITIONS = queue_mutation_transitions()
 REOPEN_SOURCE_STATES = ALLOWED_TRANSITIONS["reopen"][0]
 # AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(本名保留为别名, 供既有调用方)。
 FRONTMATTER_ORDER = CARD_FRONTMATTER_ORDER
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _slug(text: str) -> str:
@@ -307,7 +305,7 @@ def _mutation_metadata(
     claim_id_override: str | None = None,
     session_id_override: str | None = None,
 ) -> dict[str, Any]:
-    timestamp = _utc_now()
+    timestamp = iso_z()
     if action == RecordType.CLAIM:
         return _prepare_claim(
             metadata,
@@ -513,7 +511,7 @@ def _check_for_pass_audit_verdict(repo_root: Path, task_id: str) -> bool:
     """
     if not task_id:
         return False
-    verdicts_dir = repo_root / "5_tasks" / "records" / "audit_verdicts" / task_id
+    verdicts_dir = record_dir(repo_root, "audit_verdicts", task_id)
     if not verdicts_dir.is_dir():
         return False
     
@@ -878,7 +876,6 @@ def build_rework_round(
     
     磁盘操作由 amend_task 完成，本函数只负责校验与构造 round 对象。
     """
-    from datetime import datetime, timezone
     import json
     
     # 1. 找到任务卡(AIPOS-F78B 件①: 唯一查找 find_task_card, 只在 claimed/)
@@ -970,7 +967,7 @@ def build_rework_round(
         }
     
     # 4. 构建新返工轮次
-    now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now_iso = iso_z()
     new_round = {
         "round": next_round,
         "verdict_ref": verdict_ref,

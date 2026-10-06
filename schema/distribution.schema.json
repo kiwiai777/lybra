@@ -383,7 +383,7 @@
         "container": ".lybra/role",
         "key": "owner_policy_ref",
         "path": ".lybra/role",
-        "description": "Effective owner_autonomy_policy id — without it the loop cannot start (identity resolution fails)"
+        "description": "Effective owner_autonomy_policy id(AIPOS-F109 件③ L1: 原叙述指已退役的 lybra-loop 扩展, 已改; 现行读取方 = 认领信封挑选 autonomy_policy.select_envelope 与身份解析 config.schema identity_resolution, 缺失时按该处声明的出口拒)"
       },
       {
         "name": "AGENTS.md",

@@ -79,7 +79,8 @@
       },
       "record": {
         "type": "publish",
-        "location": "5_tasks/records/publishes/{task_id}/publish_{task_id}_{timestamp}_{actor}.md",
+        "location": "5_tasks/records/publishes/{task_id}/publish_{task_slug}.md",
+        "location_note": "AIPOS-F109 件①: 落盘名 = draft_writer.stable_publish_id(publish_<卡 ID 小写 slug>), 一卡一条; 目录 = 卡 ID(写入器显式传 key; 存量 publishes/<小写 slug>/ 目录照读——读侧按组目录扫描)。",
         "required_fields": [
           "task_id",
           "actor",
@@ -235,6 +236,7 @@
       "record": {
         "type": "audit_dispatch",
         "location": "5_tasks/records/audit_dispatches/{task_id}/dispatch_{task_id}_{timestamp}_{actor}.md",
+        "location_note": "AIPOS-F109 件①: {timestamp} = clock.file_slug(\"compact\")(record_writer.build_runtime_id); 推导核派审 actor = gate-derivation。存量旧名 dispatch_<compact_t>.md / dispatch_<ID>_<compact_t>_gate-derivation.md 照读(读侧按目录扫描, 见 record_locations.kinds.audit_dispatches.legacy_filenames)。",
         "required_fields": [
           "dispatch_id",
           "reviewed_task_id",
@@ -472,6 +474,7 @@
       "record": {
         "type": "finalization",
         "location": "5_tasks/records/finalizations/{task_id}/finalization_{task_id}_{timestamp}_{actor}.md",
+        "location_note": "AIPOS-F109 件①: 落盘名 = finalize_ref = record_writer.build_runtime_id(\"finalization\", task_id, finalized_at, actor)(干跑预览 finalization_record.record_path 与真写同一推导)。存量旧名 finalization_<compact>.md、finalization_<ID>_<ISO 带冒号>.md 照读(读侧 glob finalization_*.md)。",
         "required_fields": [
           "task_id",
           "actor",
@@ -507,6 +510,7 @@
       "deployment_record": {
         "type": "deployment",
         "location": "5_tasks/records/deployments/deployment_{timestamp}_{commit_short}.md",
+        "location_note": "AIPOS-F109 件①: {timestamp} = clock.file_slug(\"compact\"), 平铺(部署跨卡, 无卡目录); 干跑预览 deployment_record.record_path 与真写同一推导。存量旧名 deployments/<commit8>/deployment_<compact>.md、deployments/deployment_<ISO 带冒号>_<commit8>.md 保留不迁(无读取方)。",
         "required_fields": [
           "commit",
           "actor",
@@ -811,7 +815,8 @@
       },
       "record": {
         "type": "rework_amendment",
-        "location": "5_tasks/records/amendments/{task_id}/rework_{task_id}_{round}_{timestamp}_{actor}.md",
+        "location": "5_tasks/records/amendments/{task_id}/amendment_{task_id}_{timestamp}_{actor}.md",
+        "location_note": "AIPOS-F109 件①: 返工轮与普通 amend 同一写侧(board_adapter 卡 amend / queue_rework_task 受限 amend), 记录 amendment_type 区分; 落盘名 = amendment_id = record_writer.build_runtime_id(\"amendment\", …)。原声明 rework_{task_id}_{round}_… 从未有写侧; 存量旧名 amendment_<ID>_<compact_t>Z_<actor>.md 照读。",
         "required_fields": [
           "task_id",
           "actor",
@@ -830,6 +835,28 @@
         "frontmatter_update": "追加或更新 rework_rounds 数组,留 amendment 记录",
         "restricted_amend": "只允许修改 rework_rounds 字段,禁触 machine_zone 与 advisor_zone 其他字段"
       }
+    }
+  },
+  "record_locations": {
+    "description": "AIPOS-F109 件①(H10): 记录落点唯一声明(全系统只此一处; 原 config.schema 的两处记录路径声明(路径约定表与治理目录树 records 子目录表)零读取方且互相矛盾, 已删)。每类记录一条 location 模板(相对治理根): 节点记录的模板就在节点 record.location(node_ref 指过去, 不写第二份), 非节点记录模板在本表 location。目录部分 = 落点, 唯一读取口 record_writer.record_dir / record_root(产品代码零写死 records/<子目录>); 文件名部分 = 新写入的命名式样, {timestamp} 按 timestamp_style 取 clock.SLUG_FORMATS。legacy_filenames = 存量旧名(只读兼容: 读侧一律按目录扫描/前缀 glob, 不按新式样匹配, 存量不迁移)。record_types = 写入器 write_records_atomic 收的记录类型名(归一化后)→ 本类。",
+    "kinds": {
+      "publishes": {"node_ref": "N0", "record_types": ["publish"], "timestamp_style": null, "legacy_filenames": ["publishes/<卡 ID 小写 slug>/publish_<slug>.md(F64 统一写入器起至 F109 前, 目录取自 record_id 第二段)"]},
+      "claims": {"node_ref": "N1", "record_types": ["claim"], "timestamp_style": "compact", "legacy_filenames": []},
+      "sessions": {"location": "5_tasks/records/sessions/{task_id}/session_{task_id}_{timestamp}_{agent_instance}.md", "record_types": ["session"], "timestamp_style": "compact", "legacy_filenames": []},
+      "returns": {"node_ref": "N2", "record_types": ["return"], "timestamp_style": "compact", "legacy_filenames": ["return_<ID>_<date>_<actor>.md", "RETURN.md"]},
+      "audit_dispatches": {"node_ref": "N3", "record_types": ["audit_dispatch"], "timestamp_style": "compact", "legacy_filenames": ["dispatch_<compact_t>.md", "dispatch_<ID>_<compact_t>_gate-derivation.md"]},
+      "audit_verdicts": {"node_ref": "N4", "record_types": ["audit_verdict"], "timestamp_style": "compact", "legacy_filenames": ["verdict_<ID>_<date>_<actor>.md", "verdict_<ID>_<date>.md"]},
+      "finalizations": {"node_ref": "N5", "record_types": ["finalization"], "timestamp_style": "compact", "legacy_filenames": ["finalization_<compact>.md", "finalization_<ID>_<ISO 带冒号>.md"]},
+      "deployments": {"node_ref": "N5", "record_key": "deployment_record", "record_types": ["deployment"], "timestamp_style": "compact", "legacy_filenames": ["<commit8>/deployment_<compact>.md", "deployment_<ISO 带冒号>_<commit8>.md"]},
+      "closures": {"node_ref": "N6", "record_types": ["closure"], "timestamp_style": "compact", "legacy_filenames": []},
+      "fix_closures": {"node_ref": "fix_card_closure", "record_types": ["fix_closure_derivation"], "timestamp_style": "compact", "legacy_filenames": []},
+      "amendments": {"node_ref": "queue_rework", "record_types": ["amendment", "rework_amendment"], "timestamp_style": "compact", "legacy_filenames": ["amendment_<ID>_<compact_t>Z_<actor>.md"]},
+      "events": {"location": "5_tasks/records/events/{task_id}/{event_type}_{timestamp}.md", "record_types": ["event"], "timestamp_style": "compact", "legacy_filenames": [], "note": "进度事件(task_progress_writer / 门 task_progress)与修复事件(state repair: event_repair_*)同目录; 节点 reopen 的记录也落此目录。"},
+      "owner_decisions": {"location": "5_tasks/records/owner_decisions/{decision_id}.md", "record_types": ["owner_decision"], "timestamp_style": null, "legacy_filenames": []},
+      "owner_verifications": {"location": "5_tasks/records/owner_verifications/{task_id}/verify_{task_id}_{timestamp}.md", "record_types": ["owner_verification"], "timestamp_style": "compact_t", "legacy_filenames": []},
+      "token_rotations": {"location": "5_tasks/records/token_rotations/{action}_{timestamp}.md", "record_types": ["token_rotation"], "timestamp_style": "millis", "legacy_filenames": []},
+      "bench_audit": {"location": "5_tasks/records/bench_audit/{task_id}/bench_{task_id}_{timestamp}.md", "record_types": ["bench_audit"], "timestamp_style": "compact_t", "legacy_filenames": []},
+      "authoring_provenance": {"location": "5_tasks/records/authoring_provenance/{attempt_id}.md", "record_types": ["authoring_provenance"], "timestamp_style": null, "legacy_filenames": []}
     }
   },
   "queue_mutations": {
@@ -986,7 +1013,7 @@
       },
       "checks": [
         "verdict ∈ N4.record.allowed_verdict_values",
-        "commit_sha == 被审卡分支 tip(git rev-parse card/<reviewed_task_id>), 否则拒(INGEST_TIP_MISMATCH): 审的必须是当前产物"
+        "commit_sha == 被审卡分支 tip(git rev-parse <被审卡分支>; 分支名唯一声明 nodes.N5.branch_integration.branch_pattern, 读取口 next_resolver.card_branch_name), 否则拒(INGEST_TIP_MISMATCH): 审的必须是当前产物"
       ],
       "submits_via": "lybra audit-verdict --confirm(驱动方 token, artifact_subject 从被审分支 tip 取 commit_sha/tree_hash, agent_runtime=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②)",
       "derived_command": "AIPOS-F90 件②: 推导核对 return/verdict 步给驱动方的命令 = `lybra artifact ingest --task-id <ID> --kind <return|verdict> --workspace-root <治理根>`; 入口内部执行推导核同时给出的 shell_command(唯一构建), 驱动方不再手提 audit-verdict / queue return",

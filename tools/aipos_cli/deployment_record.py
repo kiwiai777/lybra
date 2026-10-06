@@ -3,8 +3,9 @@
 设计权威: LEDGER 2026-08-16 (deploy 是当前唯一无 records 的固化点, 已两次"未审先
 deploy") + 迁移门第⑤条(固化点全通 = 每点至少一条真实机器产物)。
 
-record_type=deployment_record (enums.schema 唯一值域源), 落点
-<governance_root>/5_tasks/records/deployments/<commit_short>/deployment_<timestamp>.md。
+record_type=deployment_record (enums.schema 唯一值域源), 落点 = 声明 transitions.schema nodes.N5.deployment_record.location
+(record_locations.kinds.deployments, 平铺): deployments/deployment_<compact 时间>_<commit8>.md(AIPOS-F109 件①: 干跑预览与真写同一推导;
+存量旧名 deployments/<commit8>/deployment_<compact>.md、deployments/deployment_<ISO 带冒号>_<commit8>.md 保留不迁, 无读取方)。
 
 authorization 二选一(缺授权即拒, 见 lybra-deploy 与 deploy_gate):
   - verdict_ref : audited —— finalize 传本卡 PASS 裁决 id (deployment_provenance=audited)
@@ -17,17 +18,13 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import file_slug, iso_z
 from pathlib import Path
 from typing import Any
 
 PROVENANCE_AUDITED = "audited"
 PROVENANCE_DEV_OVERRIDE = "dev_override"
 VALID_PROVENANCE = (PROVENANCE_AUDITED, PROVENANCE_DEV_OVERRIDE)
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def resolve_authorization(
@@ -68,7 +65,7 @@ def build_deployment_record(
     if not commit:
         raise ValueError("commit is required")
     provenance = PROVENANCE_AUDITED if authorization_type == "verdict_ref" else PROVENANCE_DEV_OVERRIDE
-    deployed_at = deployed_at or _utc_now()
+    deployed_at = deployed_at or iso_z()
     frontmatter: dict[str, Any] = {
         "record_type": "deployment_record",
         "operation": "deploy",
@@ -87,12 +84,16 @@ def build_deployment_record(
     return frontmatter
 
 
+def deployment_id(commit: str, deployed_at: str) -> str:
+    """部署记录 id = 落盘名(无扩展名): deployment_<compact 时间>_<commit8>(声明 N5.deployment_record.location)。"""
+    return f"deployment_{file_slug('compact', deployed_at)}_{commit[:8]}"
+
+
 def record_path(governance_root: Path, commit: str, deployed_at: str) -> Path:
-    """落点: <governance_root>/5_tasks/records/deployments/<commit_short>/deployment_<ts>.md"""
-    ts = deployed_at.replace(":", "").replace("-", "").replace("T", "_").replace("Z", "")[:15]
-    return (
-        governance_root / "5_tasks" / "records" / "deployments" / commit[:8] / f"deployment_{ts}.md"
-    )
+    """部署记录路径(AIPOS-F109 件①): 声明落点目录(record_dir, 平铺) / <deployment_id>.md——与 write_records_atomic 真写同一推导。"""
+    from tools.aipos_cli.record_writer import record_dir  # 延迟导入: 本模块供 lybra-deploy 以 python3 -m 轻量调用
+
+    return record_dir(governance_root, "deployments") / f"{deployment_id(commit, deployed_at)}.md"
 
 
 def render_record_markdown(frontmatter: dict[str, Any]) -> str:
@@ -142,12 +143,11 @@ def write_deployment_record(
     
     # AIPOS-F64: 统一写入器
     from tools.aipos_cli.record_writer import write_records_atomic
-    deployment_id = f"deployment_{frontmatter['deployed_at']}_{commit[:8]}"
     deployment_markdown = render_record_markdown(frontmatter)
-    
+
     write_result = write_records_atomic(
         repo_root=governance_root,
-        records=[("deployment", deployment_id, deployment_markdown)],
+        records=[("deployment", deployment_id(commit, frontmatter["deployed_at"]), deployment_markdown, None)],
     )
     
     return {"ok": True, "path": write_result["paths"][0], "wrote": True, "frontmatter": frontmatter}

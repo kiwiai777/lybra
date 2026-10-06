@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
 from pathlib import Path
 from typing import Any
 
@@ -73,10 +73,6 @@ _CREDENTIAL_PATTERNS = re.compile(
 # Safe YAML subset parser (zero-dep: we parse our own generated YAML)
 _YAML_LINE_RE = re.compile(r"^(\s*)(- )?([^:]+?)\s*:\s*(.*)$")
 _YAML_LIST_ITEM_RE = re.compile(r"^\s*-\s+(.*)$")
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +150,7 @@ def _yaml_emit_dict(d: dict[str, Any], indent: int = 0) -> list[str]:
 
 def emit_yaml(data: dict[str, Any]) -> str:
     """Emit a complete YAML document from a dict."""
-    lines = ["# Lybra project structure file", f"# Schema version: {SCHEMA_VERSION}", f"# Generated: {_utc_now_iso()}", ""]
+    lines = ["# Lybra project structure file", f"# Schema version: {SCHEMA_VERSION}", f"# Generated: {iso_z()}", ""]
     lines.extend(_yaml_emit_dict(data))
     return "\n".join(lines) + "\n"
 
@@ -494,7 +490,7 @@ def export_project_structure(
         "roles": roles,
         "doc_manifest": doc_manifest,
         "queue_summary": queue_summary,
-        "exported_at": _utc_now_iso(),
+        "exported_at": iso_z(),
         "export_source": str(root),
     }
 
@@ -673,7 +669,7 @@ def import_project_structure(
     project_json_data = {
         "project": project_name,
         "code_repo": structure.get("code_repos", [None])[0] if structure.get("code_repos") else None,
-        "registered_at": structure.get("registered_at") or _utc_now_iso(),
+        "registered_at": structure.get("registered_at") or iso_z(),
         "registered_by": structure.get("registered_by") or actor or "import",
         "config_version": 1,
     }
@@ -812,7 +808,7 @@ def _build_migration_checklist(
         "This checklist was auto-generated from the project structure file.",
         "An advisor should review each item and execute the migration.",
         "",
-        f"**Generated:** {_utc_now_iso()}",
+        f"**Generated:** {iso_z()}",
         f"**Source:** {structure.get('export_source', 'unknown')}",
         "",
     ]

@@ -6,6 +6,7 @@ import re
 import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from tools.aipos_cli.clock import iso_z, utc_now
 from pathlib import Path
 from typing import Any
 
@@ -58,10 +59,6 @@ def _actor_payload(actor: str | None) -> dict[str, str] | None:
     return {"actor": value} if value else None
 
 
-def _iso_z(value: datetime) -> str:
-    return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def _is_expired(value: Any) -> bool:
     if not isinstance(value, str) or not value.strip():
         return True
@@ -71,7 +68,7 @@ def _is_expired(value: Any) -> bool:
         return True
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) > parsed
+    return utc_now() > parsed
 
 
 def _registry_file_state(path: Path) -> dict[str, Any]:
@@ -416,13 +413,13 @@ def build_profile_draft(repo_root: Path, payload: dict[str, Any], *, actor: str)
     result = build_profile_write_plan(repo_root, payload, actor=actor, dry_run=True)
     if result.get("blocking_reasons"):
         return result
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     result.update(
         {
             "dry_run_id": f"dryrun_{uuid.uuid4().hex}",
             "dry_run_snapshot_hash": snapshot_hash(PROFILE_OPERATION, actor, result),
-            "dry_run_created_at": _iso_z(now),
-            "dry_run_expires_at": _iso_z(now + timedelta(minutes=10)),
+            "dry_run_created_at": iso_z(now),
+            "dry_run_expires_at": iso_z(now + timedelta(minutes=10)),
         }
     )
     result["dry_run_token"] = result["dry_run_id"]

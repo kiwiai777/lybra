@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import socket
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
 from pathlib import Path
 from typing import Any
 
@@ -251,7 +251,7 @@ def _append_naming_trail(
     """Append-only trail for naming profile changes."""
     trail = governance_paths(project_root)["decision_log"].parent / "naming_profile_log.md"
     trail.parent.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    ts = iso_z()
     # Summarize the change compactly
     prefix_summary = ",".join(f"{r}={p}" for r, p in sorted(profile.get("prefix_mapping", {}).items()))
     summary = (

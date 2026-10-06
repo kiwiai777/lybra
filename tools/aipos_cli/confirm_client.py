@@ -26,6 +26,7 @@ import os
 import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from tools.aipos_cli.clock import utc_now
 from pathlib import Path
 from typing import Any
 from urllib import request as _request
@@ -196,7 +197,7 @@ class Preview:
     def ttl_remaining_seconds(self, *, now: datetime | None = None) -> float | None:
         if not self.expires_at:
             return None
-        now = now or datetime.now(timezone.utc)
+        now = now or utc_now()
         try:
             expires = datetime.fromisoformat(str(self.expires_at).replace("Z", "+00:00"))
         except ValueError:

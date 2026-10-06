@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
+from tools.aipos_cli.clock import utc_now
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,6 @@ from tools.aipos_cli.autonomy_policy import (
 )
 from tools.aipos_cli.record_writer import render_markdown
 
-OWNER_DECISION_RECORDS_DIR = Path("5_tasks/records/owner_decisions")
 DECISION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$")
 TAG_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 ALLOWED_DECISION_STATUSES = {"approved", "rejected", "needs_revision", "superseded", "expired"}
@@ -214,7 +214,7 @@ def _normalize_capability_scope(value: Any, *, project: str | None, blocking_rea
     expires_at = _parse_iso_datetime(data.get("expires_at"), "capability_scope.expires_at", blocking_reasons)
     if expires_at:
         expires_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        if expires_dt <= datetime.now(timezone.utc):
+        if expires_dt <= utc_now():
             _add(blocking_reasons, "capability_scope.expires_at must be in the future")
 
     return {
@@ -548,7 +548,10 @@ def build_owner_decision_record(
     if autonomy_policy is not None and payload.get("autonomy_policy") is not None:
         normalized_record["autonomy_policy"] = payload.get("autonomy_policy")
 
-    target_path = str(OWNER_DECISION_RECORDS_DIR / f"{decision_id}.md") if decision_id else None
+    # AIPOS-F109 件①: 落点 = transitions.schema record_locations.kinds.owner_decisions(record_root; 原模块常量写死退役)
+    from tools.aipos_cli.record_writer import record_root
+
+    target_path = str(record_root("owner_decisions") / f"{decision_id}.md") if decision_id else None
     target_file = repo_root / target_path if target_path else None
     if target_file is not None and target_file.exists():
         _add(blocking_reasons, f"Owner decision record already exists: {target_path}")

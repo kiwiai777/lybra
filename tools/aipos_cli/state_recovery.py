@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +18,6 @@ SAFETY_NOTICE = (
     "and contradiction markers from durable files; it does not write records, repair state, "
     "activate leases, dispatch audit, finalize, or move queue tasks."
 )
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _resolve_task(repo_root: Path, *, task_id: str | None = None, path: str | None = None) -> tuple[dict[str, Any], list[str]]:
@@ -457,7 +453,7 @@ def build_state_recovery_preview(
         "needs_owner_reasons": needs_owner,
         "source_refs": source_refs,
         "recommended_next_action": _recommended_action(verdict, completeness, metadata, effective_truth),
-        "derived_at": _utc_now(),
+        "derived_at": iso_z(),
         "writes_enabled": False,
         "execute_allowed": False,
         "safety_notice": SAFETY_NOTICE,

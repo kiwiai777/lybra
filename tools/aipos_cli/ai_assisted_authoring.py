@@ -7,6 +7,7 @@ import re
 import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from tools.aipos_cli.clock import iso_z, utc_now
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -22,7 +23,6 @@ from tools.schema_constants import RecordType, Verdict
 
 
 AUTHORING_OPERATION = "ai_assisted_fixture_authoring"
-PROVENANCE_ROOT = Path("5_tasks/records/authoring_provenance")
 PROMPT_TEMPLATE_REF = "0_control_plane/tasks/prompt_templates/ai_assisted_task_authoring_v1.md"
 PROMPT_TEMPLATE_VERSION = "1"
 LIVE_OPERATION = "ai_assisted_live_authoring"
@@ -55,14 +55,6 @@ def fixtures_root() -> Path:
     return Path(__file__).resolve().parent / "fixtures" / "ai_authoring"
 
 
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _iso_z(value: datetime) -> str:
-    return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def _actor_payload(actor: str | None) -> dict[str, str] | None:
     value = str(actor or "").strip()
     return {"actor": value} if value else None
@@ -84,7 +76,7 @@ def _is_expired(value: Any) -> bool:
         return True
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return _utc_now() > parsed
+    return utc_now() > parsed
 
 
 def _file_state(path: Path) -> dict[str, Any]:
@@ -150,7 +142,10 @@ def _attempt_signature(
 
 
 def _provenance_path(attempt_id: str) -> Path:
-    return PROVENANCE_ROOT / f"{_safe_id(attempt_id, 'attempt_id')}.md"
+    # AIPOS-F109 件①: 落点 = transitions.schema record_locations.kinds.authoring_provenance(record_root; 原模块常量写死退役)
+    from tools.aipos_cli.record_writer import record_root
+
+    return record_root("authoring_provenance") / f"{_safe_id(attempt_id, 'attempt_id')}.md"
 
 
 def _proposal_policy_blocks(fixture: dict[str, Any], frontmatter: dict[str, Any]) -> list[str]:
@@ -325,7 +320,7 @@ def _fixture_attempt(intent: dict[str, Any], fixture: dict[str, Any], fixture_id
         "endpoint_ref": str(fixture.get("endpoint_ref") or f"fixture://{fixture_id}"),
         "model_ref": str(fixture.get("model_ref") or "fixture-model"),
         "request_config_ref": str(fixture.get("request_config_ref") or "fixture-default"),
-        "attempt_timestamp": str(intent.get("submitted_at") or _iso_z(_utc_now())),
+        "attempt_timestamp": str(intent.get("submitted_at") or iso_z(utc_now())),
         "attempt_status": str(fixture.get("status") or "failed"),
         "retry_of": retry_of,
         "source_intent_ref": f"intent:{intent_id}",
@@ -529,7 +524,7 @@ def build_live_authoring_draft(
         "request_config_ref": str(request_config_ref or DEFAULT_LIVE_REQUEST_CONFIG_REF).strip(),
         "request_timeout_seconds": int(request_timeout_seconds),
         "max_output_tokens": int(max_output_tokens),
-        "attempt_timestamp": str(intent.get("submitted_at") or _iso_z(_utc_now())),
+        "attempt_timestamp": str(intent.get("submitted_at") or iso_z(utc_now())),
         "attempt_status": "drafted",
         "retry_of": str(intent.get("retry_of") or "").strip() or None,
         "source_intent_ref": f"intent:{_safe_id(intent.get('intent_id'), 'intent_id')}",
@@ -769,13 +764,13 @@ def confirm_live_authoring_draft(
 
 
 def _attach_dry_run_metadata(result: dict[str, Any], operation: str, actor: str) -> dict[str, Any]:
-    now = _utc_now()
+    now = utc_now()
     result.update(
         {
             "dry_run_id": f"dryrun_{uuid.uuid4().hex}",
             "dry_run_snapshot_hash": snapshot_hash(operation, actor, result),
-            "dry_run_created_at": _iso_z(now),
-            "dry_run_expires_at": _iso_z(now + timedelta(minutes=10)),
+            "dry_run_created_at": iso_z(now),
+            "dry_run_expires_at": iso_z(now + timedelta(minutes=10)),
         }
     )
     result["dry_run_token"] = result["dry_run_id"]

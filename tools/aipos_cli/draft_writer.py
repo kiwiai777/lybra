@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import hashlib
 from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
+from tools.aipos_cli.record_writer import record_dir
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +73,7 @@ def _check_project_map_staleness(repo_root: Path, validation: dict[str, Any]) ->
             map_updated = map_updated.replace(tzinfo=timezone.utc)
         
         # Find most recent return record (收编 = finalized delivery)
-        returns_root = repo_root / "5_tasks" / "records" / "returns"
+        returns_root = record_dir(repo_root, "returns")
         if not returns_root.exists():
             return  # no returns = no check
         
@@ -127,11 +129,6 @@ EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET = "workspace_artifacts/external_intake"
 
 # AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(原本模块另有 28 键一份, 已退役)。
 FRONTMATTER_ORDER = CARD_FRONTMATTER_ORDER
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
 
 
 def _record_frontmatter(metadata: dict[str, Any], order: list[str]) -> str:
@@ -309,7 +306,7 @@ def _normalized_metadata(metadata: dict[str, Any], repo_root: Path) -> dict[str,
     # Legacy fields below are kept for backward compatibility during transition
     task_id = normalized.get("task_id")
     created_by = normalized.get("created_by")
-    timestamp = _utc_now()
+    timestamp = iso_z()
     if isinstance(task_id, str) and task_id:
         normalized.setdefault("draft_id", f"draft_{draft_slug(task_id)}")
     normalized.setdefault("draft_status", "draft")
@@ -924,7 +921,7 @@ def publish_draft(
     publish_record_path = expected_publish_record_path(repo_root, str(task_id), publish_id)
     source_sha256 = hashlib.sha256(source_markdown.encode("utf-8")).hexdigest()
     published_sha256 = hashlib.sha256(rendered_markdown.encode("utf-8")).hexdigest()
-    published_at = _utc_now()
+    published_at = iso_z()
     publish_markdown = render_publish_record(
         task_id=str(task_id),
         publish_id=publish_id,
@@ -942,7 +939,7 @@ def publish_draft(
     from tools.aipos_cli.record_writer import write_records_atomic
     write_result = write_records_atomic(
         repo_root=repo_root,
-        records=[("publish", publish_id, publish_markdown)],
+        records=[("publish", publish_id, publish_markdown, str(task_id))],  # AIPOS-F109 件①: 显式 key = 卡 ID(与 expected_publish_record_path 同位)
     )
     
     result["wrote"] = True

@@ -5,6 +5,8 @@ import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
+from tools.aipos_cli.clock import file_slug, iso_z, utc_now
+from tools.aipos_cli.record_writer import record_dir
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -598,7 +600,7 @@ def _capability_has_scope(scope: str) -> bool:
         return False
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at <= datetime.now(timezone.utc):
+    if expires_at <= utc_now():
         return False
     # --- AIPOS-347: scope from the roles registry at call time ---
     role = str(token.get("role") or "").strip()
@@ -2185,7 +2187,7 @@ def _match_driver_envelope(
         project=str(snapshot.get("project") or ""),
         agent_instance=bound or driver_identity,
         actor=driver_identity,
-        now=datetime.now(timezone.utc),
+        now=utc_now(),
         released_count=released,
         claiming_role=role_name or driver_identity,
     )
@@ -2309,7 +2311,7 @@ def _match_claim_envelope(
         project=subject_project,
         agent_instance=envelope_instance,
         actor=envelope_actor,
-        now=datetime.now(timezone.utc),
+        now=utc_now(),
         released_count=released,
         claiming_role=(claiming_role or driver_identity) or None,
     )
@@ -3926,14 +3928,14 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
                 "workspace (the directory that contains 5_tasks/queue), or invoke the "
                 "gate from a location that resolves upward to such a workspace.",
             )
-        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        timestamp = iso_z()
         
         # Build event record
-        events_dir = repo_root / "5_tasks" / "records" / "events" / task_id
+        events_dir = record_dir(repo_root, "events", task_id)
         events_dir.mkdir(parents=True, exist_ok=True)
         
         # Event filename: <event_type>_<timestamp>.md
-        timestamp_slug = timestamp.replace(":", "").replace("-", "").replace("T", "_").replace("Z", "")
+        timestamp_slug = file_slug("compact", timestamp)
         event_file = events_dir / f"{event_type}_{timestamp_slug}.md"
         
         # Build frontmatter
@@ -4278,7 +4280,7 @@ def lybra_project_new_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
             return _error_result(f"Cannot resolve home_root: {exc}")
     
     # 生成 dry_run_token
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     token = f"projnewdr_{os.urandom(16).hex()}"
     expires_at = (now + timedelta(seconds=600)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     
@@ -4411,7 +4413,7 @@ def lybra_project_set_repo_dry_run(arguments: dict[str, Any] | None = None) -> d
         except Exception as exc:
             return _error_result(f"Cannot resolve home_root: {exc}")
     
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     token = f"setrepodr_{os.urandom(16).hex()}"
     expires_at = (now + timedelta(seconds=600)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     
@@ -4469,7 +4471,7 @@ def lybra_project_set_repo_confirm(arguments: dict[str, Any] | None = None) -> d
 
 def _enroll_code_dry_run_store_prune(now: datetime | None = None) -> None:
     """F23: 清理过期的 enroll-code dry-run token。"""
-    now = now or datetime.now(timezone.utc)
+    now = now or utc_now()
     expired = []
     for token, rec in _ENROLL_CODE_DRY_RUNS.items():
         try:
@@ -4657,7 +4659,7 @@ def lybra_enroll_code_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
 
     from tools.aipos_cli.enrollment import ENROLL_DEFAULT_TTL_SECONDS
     actor = str(args.get("actor") or "mcp.client").strip()
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     token = f"enrolldr_{os.urandom(16).hex()}"
     expires_at = now.replace(microsecond=0)
     from datetime import timedelta
@@ -4749,7 +4751,7 @@ def lybra_enroll_code_confirm(arguments: dict[str, Any] | None = None) -> dict[s
         exp = datetime.fromisoformat(str(record.get("expires_at")).replace("Z", "+00:00"))
         if exp.tzinfo is None:
             exp = exp.replace(tzinfo=timezone.utc)
-        if exp <= datetime.now(timezone.utc):
+        if exp <= utc_now():
             _ENROLL_CODE_DRY_RUNS.pop(dry_run_token, None)
             return _teaching_error(
                 "TOKEN_EXPIRED",
@@ -5291,8 +5293,7 @@ def lybra_roles_reload(arguments: dict[str, Any] | None = None) -> dict[str, Any
             doc_ref="AIPOS-F21 roles rotate two-phase rotation",
         )
     _reload_token_registry()
-    from datetime import datetime as _dt, timezone as _tz
-    reloaded_at = _dt.now(_tz.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    reloaded_at = iso_z()
     from tools.mcp_server import http_sse
     entries: list[dict[str, Any]] = []
     server = http_sse._CURRENT_SERVER

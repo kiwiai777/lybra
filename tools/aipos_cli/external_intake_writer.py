@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z, utc_now
 from pathlib import Path
 from typing import Any
 
@@ -35,10 +36,6 @@ def load_intake_payload_from_json(path: str | Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("External intake payload JSON must be an object")
     return data
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _add(items: list[str], message: str) -> None:
@@ -115,7 +112,7 @@ def _normalize_scope(value: Any, *, client_tag: str, blocking_reasons: list[str]
     if expires_at is not None:
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at <= datetime.now(timezone.utc):
+        if expires_at <= utc_now():
             _add(blocking_reasons, "capability_scope.expires_at must be in the future")
 
     return {
@@ -271,8 +268,8 @@ def build_external_intake_draft(
         "draft_id": f"external_intake_{safe_id}" if safe_id else None,
         "draft_status": "draft",
         "draft_created_by": actor or source_tag or "external_intake",
-        "draft_created_at": _utc_now(),
-        "draft_updated_at": _utc_now(),
+        "draft_created_at": iso_z(),
+        "draft_updated_at": iso_z(),
         "draft_publish_target": queue_state_ref(repo_root, "pending"),  # AIPOS-F89 件① M8: 队列根读项目声明
     }
     rendered_markdown = render_markdown_task_card(metadata, _render_body(normalized_payload, actor=actor))

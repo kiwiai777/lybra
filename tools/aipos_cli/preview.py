@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import file_slug, utc_now
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +35,8 @@ def build_preview(
     metadata = task["metadata"]
     selected_actor = actor or metadata.get("assigned_to") or metadata.get("agent_instance") or "unknown_actor"
     actor_slug = actor_to_slug(str(selected_actor))
-    created_at = datetime.now(timezone.utc)
-    stamp = created_at.strftime("%Y%m%d_%H%M%S")
+    created_at = utc_now()
+    stamp = file_slug("compact", created_at)
     task_id = task.get("task_id") or "UNKNOWN_TASK"
     repo_root = Path(task.get("repo_root", "."))
 

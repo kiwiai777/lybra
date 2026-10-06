@@ -17,19 +17,15 @@ from __future__ import annotations
 import json
 import re
 import sys
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import file_slug, iso_z, local_now
 from pathlib import Path
 from typing import Any
 
 from tools.schema_loader import load_schema, resolve_governance_path, get_governance_structure
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 def _today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    return file_slug("date", local_now())
 
 
 def _get_file_declaration(declaration_key: str, repo_root: Path | None = None) -> dict[str, Any]:
@@ -107,7 +103,7 @@ def add_decision(
     # 构建 frontmatter
     template_fm = dict(decl.get("template_frontmatter", {}))
     template_fm["status"] = status
-    template_fm["decided_at"] = decided_at or _utc_now()
+    template_fm["decided_at"] = decided_at or iso_z()
     if "superseded_by" not in template_fm:
         template_fm["superseded_by"] = None
 
@@ -349,7 +345,7 @@ def add_record(
     target_dir = _resolve_target_dir(decl["path_key"], governance_root, repo_root)
 
     # 命名: <record_type>_<task_id>_<timestamp>_<agent>.md
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    timestamp = file_slug("digits", local_now())
     slug_rt = _slugify(record_type) if record_type else "record"
     slug_tid = _slugify(task_id) if task_id else "unknown"
     filename = f"{slug_rt}_{slug_tid}_{timestamp}.md"

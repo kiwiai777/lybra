@@ -36,7 +36,8 @@ import binascii
 import json
 import secrets
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from tools.aipos_cli.clock import iso_z, utc_now
 from pathlib import Path
 from typing import Any, Literal
 
@@ -137,7 +138,7 @@ def mint_transport_token_entry(
 
     root = _workspace_root_path(workspace_root)
     token = secrets.token_urlsafe(32)
-    now = datetime.now(timezone.utc).replace(microsecond=0)
+    now = utc_now().replace(microsecond=0)
     ttl = int(ttl_seconds) if ttl_seconds and int(ttl_seconds) > 0 else ENROLL_DEFAULT_TTL_SECONDS
     expires_at = (now + timedelta(seconds=ttl)).isoformat().replace("+00:00", "Z")
     entry = {
@@ -384,7 +385,7 @@ def _append_enrollment_trail(
     """Append-only 审计日志。"""
     trail = enrollment_trail_path(workspace_root)
     trail.parent.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    ts = iso_z()
     inst_str = f"instance={instance}" if instance else "instance=(any)"
     line = f"- {ts}  {action}  code_id={code_id}  role={role}  {inst_str}  by={by}  reason={reason or '(none)'}\n"
     with trail.open("a", encoding="utf-8") as fh:
@@ -434,7 +435,7 @@ def create_enrollment_code(
     root = _workspace_root_path(workspace_root)
     code = _generate_enrollment_code()
     code_id = f"enroll_{secrets.token_hex(8)}"
-    now = datetime.now(timezone.utc).replace(microsecond=0)
+    now = utc_now().replace(microsecond=0)
     expires_at = (now + timedelta(seconds=ttl_seconds)) if ttl_seconds else None
     
     record = {
@@ -490,7 +491,7 @@ def get_enrollment_status(workspace_root: str | Path, code: str) -> tuple[Enroll
         - record: 完整记录(含 code_id),如果找不到则为 None
     """
     enrollments = _load_enrollments(workspace_root)
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     
     for code_id, rec in enrollments.items():
         if rec.get("code") == code:
@@ -534,7 +535,7 @@ def mark_enrollment_used(
     """
     root = _workspace_root_path(workspace_root)
     enrollments = _load_enrollments(root)
-    now = datetime.now(timezone.utc).replace(microsecond=0)
+    now = utc_now().replace(microsecond=0)
 
     # 找到对应记录(按明文 code 匹配)
     code_id = None
@@ -612,7 +613,7 @@ def land_enrollment(
     """
     root = _workspace_root_path(workspace_root)
     enrollments = _load_enrollments(root)
-    now = datetime.now(timezone.utc).replace(microsecond=0)
+    now = utc_now().replace(microsecond=0)
 
     code_id = None
     record = None
@@ -671,7 +672,7 @@ def revoke_enrollment_code(
     
     rec = enrollments[code_id]
     if rec.get("status") != "revoked":
-        now = datetime.now(timezone.utc).replace(microsecond=0)
+        now = utc_now().replace(microsecond=0)
         rec["status"] = "revoked"
         rec["revoked_at"] = now.isoformat().replace("+00:00", "Z")
         _save_enrollments(root, enrollments)
@@ -700,7 +701,7 @@ def list_enrollment_codes(workspace_root: str | Path, *, include_code: bool = Fa
         注册码列表,每项含 code_id 和状态
     """
     enrollments = _load_enrollments(workspace_root)
-    now = datetime.now(timezone.utc)
+    now = utc_now()
     result = []
     
     for code_id, rec in enrollments.items():

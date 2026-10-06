@@ -22,6 +22,7 @@ from typing import Any
 
 from tools.schema_constants import Verdict
 from tools.schema_loader import SchemaLoadError
+from tools.aipos_cli.record_writer import record_dir
 
 
 # AIPOS-F5: "什么长得像本项目的卡号"是项目属性 —— 声明一处 (card_policy.json 的
@@ -257,7 +258,7 @@ def find_gate_pass_verdict_for_task(
             "reason": str,
         }
     """
-    verdicts_dir = governance_root / "5_tasks" / "records" / "audit_verdicts" / task_id
+    verdicts_dir = record_dir(governance_root, "audit_verdicts", task_id)
     
     if not verdicts_dir.is_dir():
         return {
@@ -527,7 +528,7 @@ def _find_fix_chain_terminal(task_id: str, governance_root: Path) -> str | None:
     Returns:
         链末端的任务 ID，如果没有 fix 链则返回 None
     """
-    fix_closures_root = governance_root / "5_tasks" / "records" / "fix_closures"
+    fix_closures_root = record_dir(governance_root, "fix_closures")
     if not fix_closures_root.exists():
         return None
     
@@ -684,7 +685,7 @@ def check_verdict_ref_authorization(
         }
     """
     # 1. 查找 verdict_ref 文件
-    verdicts_root = governance_root / "5_tasks" / "records" / "audit_verdicts"
+    verdicts_root = record_dir(governance_root, "audit_verdicts")
     verdict_file: Path | None = None
     
     # verdict_ref 可能是完整 ID (verdict_TASK-ID_...) 或简写 (TASK-ID)

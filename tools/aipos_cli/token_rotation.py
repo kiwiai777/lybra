@@ -30,7 +30,8 @@ import json
 import os
 import secrets
 import shutil
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import file_slug, iso_z
+from tools.aipos_cli.record_writer import record_dir
 from pathlib import Path
 from typing import Any
 
@@ -38,16 +39,6 @@ from tools.schema_constants import Verdict
 
 REQUIRED_CONNECTION_MODE = 0o600
 RELOAD_VERB = "lybra_roles_reload"
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _stamp_now() -> str:
-    # millisecond precision: same-second record/backup writes must never collide
-    # (F21 live finding: two removals in one second overwrote the first record)
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")[:-3]
 
 
 def secret_fingerprint(raw: str) -> str:
@@ -62,7 +53,7 @@ def _connection_path(workspace_root: Path, *, connection_target: Path | None = N
 
 
 def _records_dir(workspace_root: Path) -> Path:
-    return Path(workspace_root).expanduser().resolve() / "5_tasks" / "records" / "token_rotations"
+    return record_dir(Path(workspace_root).expanduser().resolve(), "token_rotations")
 
 
 def _load_config(path: Path) -> dict[str, Any]:
@@ -115,7 +106,7 @@ def _backup_config(path: Path) -> Path:
     (禁 .bak- 前缀防误读; .disabled 后缀明确不可用; connection 明确内容)。
     """
     # AIPOS-F37: 新格式 .backup-connection-{timestamp}.json.disabled
-    stamp = _stamp_now()
+    stamp = file_slug("millis")
     backup = path.parent / f".backup-connection-{stamp}.json.disabled"
     n = 1
     while backup.exists():
@@ -333,7 +324,7 @@ def rotate_tokens_report(
         }
 
     # ---- execution path ----
-    now = _utc_now()
+    now = iso_z()
     mapping: list[dict[str, Any]] = []
     for idx in selected:
         entry = dict(tokens[idx])
@@ -389,7 +380,7 @@ def rotate_tokens_report(
              "- security notice: token plaintext lives only in connection.json / its backup."]
     record_path = _write_record(
         workspace_root, record_type="token_rotation",
-        filename=f"rotation_{_stamp_now()}.md",
+        filename=f"rotation_{file_slug("millis")}.md",
         frontmatter=record_frontmatter, body_lines=body,
     )
 
@@ -456,7 +447,7 @@ def remove_instance_report(
         return {**base, "ok": False, "verdict": Verdict.BLOCK, "blocking_reasons": [{
             "message": f"No token entry bound to instance {instance!r} in {conn_path}."}]}
 
-    now = _utc_now()
+    now = iso_z()
     config["tokens"] = kept
     try:
         backup_path = _backup_config(conn_path)
@@ -476,7 +467,7 @@ def remove_instance_report(
     record_path = _write_record(
         workspace_root,
         record_type="token_removal",
-        filename=f"removal_{_stamp_now()}.md",
+        filename=f"removal_{file_slug("millis")}.md",
         frontmatter={
             "record_type": "token_removal",
             "operation": operation,

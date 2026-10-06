@@ -1,9 +1,0 @@
-{
-  "description": "AIPOS-F96 件④ 「产品文档不教退役做法」棘轮基线: 现存命中清单, 只减不增。新增命中 = 红; 条目已修(仓内不存在)仍留清单 = 红, 修好即从本清单删除该条。比对键 = (file, pattern, fp); line 仅作定位参考。docs/ 零容忍(不许入基线)。",
-  "source_report": "governance/research/2026-10-04-fragmentation-recheck.md(条目号 = 该复核 N1/N2/N3)",
-  "fixture": "tests/test_aipos_f96_docs_retired_practice_ratchet.py",
-  "fingerprint": "sha1(行文本 strip 后 utf-8)前 12 位",
-  "baseline_commit_base": "main 56b6d4a + card/AIPOS-F96; AIPOS-F105 删除随 init/workspace init 与 templates/ 退役而消失的 24 条(只减不增); AIPOS-F103 删除已修条目 3 条(README「Legacy entry points」节 1 条 + agents/** 2 条; 另 4 条 README/QUICKSTART lybra init 条目与 AIPOS-F105 重叠已由其删除, 只减不增)",
-  "count": 0,
-  "entries": []
-}

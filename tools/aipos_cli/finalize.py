@@ -25,6 +25,7 @@ from typing import Any
 
 from tools.schema_loader import get_enum_values
 from tools.schema_constants import RecordType, Verdict
+from tools.aipos_cli.record_writer import record_dir
 
 # FND-47: record_type 从 enums.schema 读取（单一源）
 _RECORD_TYPE_ENUM_CACHE: list[str] | None = None
@@ -261,7 +262,7 @@ def _dev_override_base_authorized(repo_root: Path, governance_root: Path | None,
     if governance_root is None:
         return False, "无 governance_root, 无法核对 Owner 授权记录或世系"
     short = current_commit[:8]
-    decisions_dir = Path(governance_root) / "5_tasks" / "records" / "owner_decisions"
+    decisions_dir = record_dir(Path(governance_root), "owner_decisions")
     if decisions_dir.is_dir():
         from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 

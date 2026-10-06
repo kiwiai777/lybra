@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from tools.aipos_cli.clock import iso_z
 from pathlib import Path
 from typing import Any
 
@@ -336,7 +336,7 @@ def retire_token_entry(
         raise ValueError(f"connection.json at {path} has no tokens list")
 
     retired_count = 0
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = iso_z()
 
     for item in tokens:
         if not isinstance(item, dict):
