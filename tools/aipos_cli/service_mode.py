@@ -15,7 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.aipos_cli.workspace_config import DEFAULT_BOARD_HOST, DEFAULT_BOARD_PORT, DEFAULT_MCP_HOST, DEFAULT_MCP_PORT
+from tools.aipos_cli.workspace_config import (
+    DEFAULT_BOARD_HOST,
+    DEFAULT_BOARD_PORT,
+    DEFAULT_MCP_HOST,
+    DEFAULT_MCP_PORT,
+    LEGACY_WORKSPACE_ROOT_ENV,
+    WORKSPACE_ROOT_ENV,
+)
 
 
 
@@ -1079,7 +1086,9 @@ def _run_supervisor(
     mcp = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
     child_workspace_root = Path(str(config.get("workspace_root") or workspace_root)).expanduser().resolve()
     env = os.environ.copy()
-    env["AIPOS_WORKSPACE_ROOT"] = str(child_workspace_root)
+    # AIPOS-F106 件③: 子进程只带新名 LYBRA_WORKSPACE_ROOT; 继承来的废弃旧名剔除(免子进程重复告警/歧义)
+    env.pop(LEGACY_WORKSPACE_ROOT_ENV, None)
+    env[WORKSPACE_ROOT_ENV] = str(child_workspace_root)
     board_cmd, mcp_cmd = _build_child_commands(
         config,
         child_workspace_root=child_workspace_root,

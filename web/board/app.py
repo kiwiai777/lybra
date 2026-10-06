@@ -443,7 +443,9 @@ def _load_connection_endpoints(repo_root: Path) -> dict[str, Any]:
     Returns dict with mcp_rpc_url, mcp_sse_url, board_url (or None if not found).
     Graceful degradation: missing file or parse error => all None + notice.
     """
-    connection_path = repo_root / ".lybra" / "connection.json"
+    from tools.aipos_cli.service_mode import connection_path as _connection_path  # AIPOS-F106 件④: 定位唯一实现
+
+    connection_path = _connection_path(repo_root)
     if not connection_path.exists():
         return {
             "mcp_rpc_url": None,
@@ -1039,7 +1041,7 @@ def _get_runtime_status_route(params: dict[str, list[str]], *, repo_root: Path |
         "workspace": {
             "root": str(resolved_root),
             "config_path": defaults["config_path"],
-            "discovery_note": "Board server repo_root / AIPOS_WORKSPACE_ROOT is authoritative for this process.",
+            "discovery_note": "Board server repo_root / LYBRA_WORKSPACE_ROOT is authoritative for this process.",
             "initialized": queue_root_for(resolved_root).exists(),
         },
         "endpoints": {
@@ -1158,13 +1160,11 @@ def _generate_advisor_prompt_route(params: dict[str, list[str]], *, repo_root: P
         except Exception:
             pass
     
-    # Load connection endpoints
-    connection_endpoints = _load_connection_endpoints(resolved_root)
-    defaults = _runtime_config_defaults(resolved_root)
-    gate_url = connection_endpoints["mcp_rpc_url"] or f"http://{defaults['mcp_host']}:{defaults['mcp_port']}/mcp"
-    # Strip /mcp suffix if present to get base gate URL
-    if gate_url.endswith("/mcp"):
-        gate_url = gate_url[:-4]
+    # AIPOS-F106 件①: 门基址唯一推导口(confirm_client.resolve_gate_base_url → ConnectionResolver.resolve_gate_url, 声明序
+    # config.schema identity_resolution.keys.gate_url: 工作区 connection.json mcp.rpc_url → env 兜底 → urls.gate_local); 原本地剥 MCP 路径删除
+    from tools.aipos_cli.confirm_client import resolve_gate_base_url
+
+    gate_url = resolve_gate_base_url(workspace_root=resolved_root)
     
     # Get server location
     server_location = _get_server_location_info()
@@ -3331,7 +3331,9 @@ def _discover_connection_paths(repo_root: Path | None = None, board_config_path:
     candidates: list[Path] = []
     # 首选:board 启动时明确声明的工作区
     if repo_root is not None:
-        candidates.append(repo_root / ".lybra" / "connection.json")
+        from tools.aipos_cli.service_mode import connection_path as _connection_path  # AIPOS-F106 件④: 定位唯一实现
+
+        candidates.append(_connection_path(repo_root))
     # 次选:远端 agent 侧凭据(改名后,与工作区配置一眼可分)
     candidates.append(Path("~/.lybra/agent_credentials.json").expanduser())
     seen: set[str] = set()
@@ -4053,7 +4055,7 @@ def make_handler(
     return BoardHandler
 
 
-def run_server(host: str = "127.0.0.1", port: int = 7117, repo_root: Path | None = None, board_config_path: Path | None = None) -> None:
+def run_server(host: str = DEFAULT_BOARD_HOST, port: int = DEFAULT_BOARD_PORT, repo_root: Path | None = None, board_config_path: Path | None = None) -> None:
     handler = make_handler(repo_root=repo_root, board_config_path=board_config_path)
     with ThreadingHTTPServer((host, port), handler) as httpd:
         print(f"AIPOS board local UI listening on http://{host}:{port}")
@@ -4062,8 +4064,8 @@ def run_server(host: str = "127.0.0.1", port: int = 7117, repo_root: Path | None
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local read-only board UI server")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=7117)
+    parser.add_argument("--host", default=DEFAULT_BOARD_HOST)
+    parser.add_argument("--port", type=int, default=DEFAULT_BOARD_PORT)  # AIPOS-F106 件②: config.schema ports.board_default
     parser.add_argument("--repo-root", default=None)
     parser.add_argument("--board-config", default=None, help="Path to board_config.json (AIPOS-272 FIX-3)")
     return parser.parse_args()
@@ -4071,7 +4073,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    repo_root_arg = args.repo_root or os.environ.get("AIPOS_WORKSPACE_ROOT")
+    from tools.aipos_cli.workspace_config import workspace_root_from_env  # AIPOS-F106 件③: 工作区根 env 唯一读取口
+
+    repo_root_arg = args.repo_root or workspace_root_from_env()[0]
     repo_root = Path(repo_root_arg).expanduser().resolve() if repo_root_arg else None
     board_config_arg = args.board_config
     board_config_path = Path(board_config_arg).expanduser().resolve() if board_config_arg else None

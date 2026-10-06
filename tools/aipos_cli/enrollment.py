@@ -161,24 +161,20 @@ def mint_transport_token_entry(
 def resolve_gate_url_default(workspace_root: str | Path) -> str:
     """F23: 自包含码内嵌 gate_url 的缺省推导。
 
-    优先 connection.json#mcp.rpc_url(非 loopback 才用 —— 对外可达);
-    否则 http://127.0.0.1:7118(config.schema 缺省口)。
+    AIPOS-F106 件①②: 门基址经 confirm_client.resolve_gate_base_url(唯一推导口, 委托 ConnectionResolver.resolve_gate_url;
+    env 不参与——码内嵌地址只认工作区声明 connection.json#mcp.rpc_url), 非 loopback 才用(对外可达);
+    否则 config.schema urls.gate_local(缺省口, 端口 = ports.gate_default; 原写死的地址字面删除)。
     """
-    from tools.aipos_cli.enroll_client import ensure_lybra_dir, load_or_create_connection_json
+    from urllib.parse import urlparse
+
+    from tools.aipos_cli.confirm_client import resolve_gate_base_url
+    from tools.schema_loader import get_config_default_gate_url
 
     root = _workspace_root_path(workspace_root)
-    try:
-        lybra_dir = ensure_lybra_dir(root)
-        data = load_or_create_connection_json(lybra_dir, gate_url=None)
-        rpc_url = str(((data.get("mcp") or {}).get("rpc_url")) or "")
-    except Exception:
-        rpc_url = ""
-    if rpc_url:
-        url = rpc_url[:-len("/mcp")] if rpc_url.endswith("/mcp") else rpc_url
-        host_part = url.split("//", 1)[-1].split(":", 1)[0]
-        if host_part not in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
-            return url
-    return "http://127.0.0.1:7118"
+    url = resolve_gate_base_url(workspace_root=root, env={})
+    if (urlparse(url).hostname or "") not in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+        return url
+    return get_config_default_gate_url()
 
 
 def issue_self_contained_code(

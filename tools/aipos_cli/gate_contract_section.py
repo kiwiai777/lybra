@@ -20,33 +20,20 @@ backfilled). Branch-aware per AIPOS-338 S6:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.flow_description import resolve_gate_chain
 from tools.aipos_cli.verb_contract import resolve_gate_verbs
-from tools.schema_loader import get_config_default_gate_url  # AIPOS-R4B-1: gate URL single-sourced
-
-
-_DEFAULT_GATE_URL = get_config_default_gate_url()  # AIPOS-R4B-1: from config.schema (was hardcoded http://127.0.0.1:7118)
 
 
 def workspace_gate_url(repo_root: str | Path) -> str:
-    """Read the gate base URL from <repo_root>/.lybra/connection.json (defensive)."""
-    conn = Path(repo_root) / ".lybra" / "connection.json"
-    if not conn.is_file():
-        return _DEFAULT_GATE_URL
-    try:
-        data = json.loads(conn.read_text(encoding="utf-8"))
-        mcp = data.get("mcp") if isinstance(data, dict) else None
-        if isinstance(mcp, dict):
-            rpc_url = str(mcp.get("rpc_url") or "").strip()
-            if rpc_url:
-                return rpc_url[:-4] if rpc_url.endswith("/mcp") else rpc_url
-    except Exception:
-        pass
-    return _DEFAULT_GATE_URL
+    """Gate base URL for a workspace. AIPOS-F106 件①: 经 confirm_client.resolve_gate_base_url(唯一推导口, 委托
+    loop_context.ConnectionResolver.resolve_gate_url: <repo_root>/.lybra/connection.json mcp.rpc_url → env 兜底 → config.schema
+    urls.gate_local); 原自读 connection.json + 自剥 MCP 路径 + `except Exception: pass` 吞错删除。"""
+    from tools.aipos_cli.confirm_client import resolve_gate_base_url
+
+    return resolve_gate_base_url(workspace_root=repo_root)
 
 
 def workspace_connection_info(repo_root: str | Path) -> dict[str, str]:

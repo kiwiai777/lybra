@@ -32,6 +32,7 @@ from urllib import request as _request
 from urllib.parse import urlparse
 
 from tools.schema_constants import RecordType
+from tools.schema_loader import get_config_port
 
 ACCEPT_STREAMABLE = "application/json, text/event-stream"
 SESSION_HEADER = "Mcp-Session-Id"
@@ -88,6 +89,97 @@ def load_owner_token(*, connection_json: str | Path | None = None, role: str = "
     # AIPOS-F59: Delegate to the single token resolution implementation
     from tools.aipos_cli.token_resolver import get_token_for_role_and_project
     return get_token_for_role_and_project(connection_json, role, project)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F106 件①(M1): 门地址与门客户端凭据的唯一推导口
+# ---------------------------------------------------------------------------
+
+# 门 MCP 端点路径(GateClient 在门基址后拼此路径; connection.json mcp.rpc_url = 门基址 + 此路径)。
+GATE_MCP_PATH = "/mcp"
+
+
+class GateAddressError(ValueError):
+    """AIPOS-F106 件①: 门地址不可推导(显式凭据文件不可读/非对象/缺 mcp.rpc_url)。fail-closed, 禁静默落下一层。"""
+
+
+def gate_base_url(rpc_url: str) -> str:
+    """AIPOS-F106 件①: 门 MCP 端点 → 门基址的唯一换算(只剥末尾一次 GATE_MCP_PATH, 非全串替换)。
+    原 aipos_cli 六处逐字相同的剥离块与 charter_render / enrollment / gate_contract_section / onboarding /
+    token_rotation / two_phase_shell_factory / distribution_sync / web 看板各自的剥离一律改调本函数(或 resolve_gate_base_url)。"""
+    url = str(rpc_url or "").strip().rstrip("/")
+    return url[: -len(GATE_MCP_PATH)] if url.endswith(GATE_MCP_PATH) else url
+
+
+def gate_rpc_url(gate_url: str) -> str:
+    """AIPOS-F106 件①: 门基址(或已带 MCP 路径的端点)→ 门 MCP 端点的唯一换算(gate_base_url 的逆; 幂等)。"""
+    return f"{gate_base_url(gate_url)}{GATE_MCP_PATH}"
+
+
+def declared_rpc_url(connection_json: str | Path) -> str | None:
+    """显式凭据文件(--connection-json 等)声明的门 MCP 端点(config.schema configuration_sources.connection.schema.mcp.rpc_url);
+    文件不可读/非 JSON 对象 = GateAddressError(fail-closed); 未声明 = None(由调用方按声明优先级决定)。"""
+    path = Path(connection_json).expanduser()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GateAddressError(f"connection 文件不可读/非 JSON: {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise GateAddressError(f"connection 文件须为 JSON 对象: {path}")
+    mcp = data.get("mcp")
+    rpc_url = str(mcp.get("rpc_url") or "").strip() if isinstance(mcp, dict) else ""
+    return rpc_url or None
+
+
+def resolve_gate_base_url(
+    *,
+    workspace_root: str | Path | None = None,
+    connection_json: str | Path | None = None,
+    explicit_url: str | None = None,
+    env: dict[str, str] | None = None,
+    require_declared: bool = False,
+) -> str:
+    """AIPOS-F106 件①(M1): 门基址唯一推导口。门地址一律经 loop_context.ConnectionResolver.resolve_gate_url
+    (声明序 config.schema identity_resolution.keys.gate_url: 显式 → 工位 .lybra/connection.json mcp.rpc_url →
+    env LYBRA_GATE_URL → urls.gate_local), 本函数只把结果经 gate_base_url 换算为门基址(GateClient 自拼 GATE_MCP_PATH)。
+
+    - explicit_url: 显式门地址(--gate-url 等), 最高优先级。
+    - connection_json: 调用方显式指定的凭据文件(--connection-json / Owner 中央凭据库)。它属于「显式」层:
+      声明了 mcp.rpc_url 即作显式地址交解析器; 文件坏 = GateAddressError。
+    - require_declared=True: 门地址必须来自显式参数或凭据文件声明(owner-gated 薄壳: 未声明即拒或由调用方降级本地),
+      未声明 = GateAddressError, 禁落 env / schema 缺省。
+    """
+    from tools.loop_context import ConnectionResolver
+
+    explicit = str(explicit_url or "").strip() or None
+    if explicit is None and connection_json is not None:
+        explicit = declared_rpc_url(connection_json)
+        if explicit is None and require_declared:
+            raise GateAddressError(f"{Path(connection_json).expanduser()} 无 mcp.rpc_url, 无法连门")
+    if explicit is None and require_declared:
+        raise GateAddressError("门地址未声明(无显式 --gate-url, 也无 connection.json mcp.rpc_url)")
+    resolved = ConnectionResolver.resolve_gate_url(
+        workspace_root=Path(workspace_root).expanduser() if workspace_root is not None else None,
+        env=env,
+        explicit_url=explicit,
+    )
+    return gate_base_url(resolved)
+
+
+def load_gate_client_token(connection_json: str | Path) -> tuple[str, str]:
+    """AIPOS-F106 件①(M1): 本机门客户端薄壳的凭据——按 config.schema identity_resolution.keys.token.gate_client_role_preference
+    (唯一声明, token_resolver.gate_client_role_preference 读)逐角色经 load_owner_token(→ token_resolver 单源挑选)取第一个可用条目。
+    返回 (role, token); token 只在进程内用, 永不回显。全部角色无可用条目 = ValueError(带各角色拒因)。
+    文件不可读/非对象等非「无命中」错误原样抛出(fail-closed, 不换下一个角色掩盖)。"""
+    from tools.aipos_cli.token_resolver import TokenResolutionError, gate_client_role_preference
+
+    reasons: list[str] = []
+    for role in gate_client_role_preference():
+        try:
+            return role, load_owner_token(connection_json=connection_json, role=role)
+        except TokenResolutionError as exc:
+            reasons.append(f"{role}: {exc}")
+    raise ValueError(f"no usable token in {connection_json} ({'; '.join(reasons)})")
 
 
 @dataclass
@@ -156,7 +248,7 @@ def _diagnose_connection_failure(base_url: str, error: Exception) -> str:
     try:
         parsed = urlparse(base_url)
         host = parsed.hostname or parsed.netloc.split(':')[0]
-        port = parsed.port or 7118
+        port = parsed.port or get_config_port("gate_default")  # AIPOS-F106 件②: 端口单源 config.schema ports.gate_default
         
         # 探测配置URL的连通性
         config_reachable = False
@@ -230,7 +322,7 @@ class GateClient:
         }
         if self._session_id:
             headers[SESSION_HEADER] = self._session_id
-        req = _request.Request(f"{self._base_url}/mcp", data=body, headers=headers, method="POST")
+        req = _request.Request(f"{self._base_url}{GATE_MCP_PATH}", data=body, headers=headers, method="POST")
         
         # AIPOS-R6K件④: 连接失败时触发双路诊断
         try:

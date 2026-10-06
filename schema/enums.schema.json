@@ -554,7 +554,7 @@
       ]
     },
     "workstation_transport": {
-      "description": "AIPOS-F95 件③b(Owner 2026-10-04 裁定: 变量现在加, 跨机连接以后做): 工位位置 = {host, dir}, 来源 = 本项目 enrollment_log 中该实例最新的 land 事件(enroll 落地写 host=<主机> workstation=<目录>; 本机 enroll 写本机主机名, enroll_deliver --ssh 写 ssh 目标)。拉起分两层: 先按位置解析启动方式(transport), 再套 harness launch 模板。supported=false 的 transport = 已声明未支持 → loop 不拉起, 退回手工模式并提示 <host>:<dir> 与 /go。以后加远程 = 新增一种 transport 实现(改 supported), 不改分层。",
+      "description": "AIPOS-F95 件③b(Owner 2026-10-04 裁定: 变量现在加, 跨机连接以后做): 工位位置 = {host, dir}, 来源 = 本项目 enrollment_log 中该实例最新的 land 事件(enroll 落地写 host=<主机> workstation=<目录>; 本机 enroll 写本机主机名, enroll_deliver --ssh 写 ssh 目标)。拉起分两层: 先按位置解析启动方式(transport), 再套 harness launch 模板。supported=false 的 transport = 已声明未支持 → loop 不拉起, 退回手工模式并提示 <host>:<dir> 与 /go。以后加远程 = 新增一种 transport 实现(改 supported), 不改分层。AIPOS-F110: remote 已按此补齐(supported=true), 分层不变。",
       "missing_host": "local",
       "missing_host_note": "缺 host 的存量 land 事件(F95 前写入)按本机处理; 唯一缺省声明在此, 代码不写死",
       "local_rule": "host 等于驱动方本机主机名(socket.gethostname()) = local, 否则 = remote",
@@ -566,8 +566,8 @@
         },
         {
           "value": "remote",
-          "supported": false,
-          "description": "跨机(如 ssh 目标): 已声明未支持(待跨机工位卡补齐启动/工作树/报告回传/身份核验); loop 退回手工 /go 并提示 <host>:<dir>"
+          "supported": true,
+          "description": "AIPOS-F110 件①: 跨机(host = land 事件的 ssh 目标)。拉起 = verbs.schema lybra_loop.launch.remote.ssh_argv + [<host>, <远端命令>](ssh -T, 无本地 shell): 远端命令在工位目录以新进程组(set -m 作业)起 harness(同一 harness.launch 模板), kickoff 经 ssh stdin 逐字节传入(不进远端命令行、不经远端 shell 展开), 远端进程组号首行回传; 清理(就绪宽限/超时/早退/SIGINT/SIGTERM/SIGHUP)= 经 ssh 对远端进程组 TERM→KILL, 本地 ssh 子进程组同清。拉起前置: project.json workstations.<实例> 材料访问声明齐(未声明 = 拒拉起并提示补声明)+ ssh 探测可达(不可达 = 不拉起, 退回手工并提示原因)。工位身份 = land 事件实例(门机读不到远端 .lybra/role), 开工提示 = 同一 render_kickoff 附门机材料段。唯一实现 harness_launch(remote_launch_command / probe_remote / LaunchedHarness)"
         }
       ]
     }

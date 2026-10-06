@@ -16,7 +16,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tools.aipos_cli.confirm_client import GateClient, GateError, GateTimeout, load_owner_token
+from tools.aipos_cli.confirm_client import (
+    GateAddressError,
+    GateClient,
+    GateError,
+    GateTimeout,
+    load_owner_token,
+    resolve_gate_base_url,
+)
 from tools.aipos_cli.renderer import render_json
 
 
@@ -245,15 +252,12 @@ def execute_two_phase_verb(
     except ValueError as exc:
         return _fail(f"cannot load {role} token: {exc}")
 
+    # AIPOS-F106 件①: 门基址唯一推导口(显式凭据文件层, 委托 ConnectionResolver.resolve_gate_url; 原 .replace 全串替换
+    # 与未声明的 mcp.url 回退删除); 文件坏/未声明 mcp.rpc_url = 拒(fail-closed)
     try:
-        conn_data = json.loads(Path(connection_json_path).read_text(encoding="utf-8"))
-        gate_url = conn_data.get("mcp", {}).get("rpc_url", "").replace("/mcp", "")
-        if not gate_url:
-            gate_url = conn_data.get("mcp", {}).get("url", "")
-        if not gate_url:
-            return _fail("cannot determine gate URL from connection.json")
-    except (json.JSONDecodeError, OSError) as exc:
-        return _fail(f"cannot read connection.json: {exc}")
+        gate_url = resolve_gate_base_url(connection_json=connection_json_path, require_declared=True)
+    except GateAddressError as exc:
+        return _fail(f"cannot determine gate URL from connection.json: {exc}")
 
     # 2. 初始化 gate 客户端
     try:
@@ -377,15 +381,12 @@ def execute_single_phase_via_gate(
     except ValueError as exc:
         return _fail(f"cannot load {role} token: {exc}")
 
+    # AIPOS-F106 件①: 门基址唯一推导口(显式凭据文件层, 委托 ConnectionResolver.resolve_gate_url; 原 .replace 全串替换
+    # 与未声明的 mcp.url 回退删除); 文件坏/未声明 mcp.rpc_url = 拒(fail-closed)
     try:
-        conn_data = json.loads(Path(connection_json_path).read_text(encoding="utf-8"))
-        gate_url = conn_data.get("mcp", {}).get("rpc_url", "").replace("/mcp", "")
-        if not gate_url:
-            gate_url = conn_data.get("mcp", {}).get("url", "")
-        if not gate_url:
-            return _fail("cannot determine gate URL from connection.json")
-    except (json.JSONDecodeError, OSError) as exc:
-        return _fail(f"cannot read connection.json: {exc}")
+        gate_url = resolve_gate_base_url(connection_json=connection_json_path, require_declared=True)
+    except GateAddressError as exc:
+        return _fail(f"cannot determine gate URL from connection.json: {exc}")
 
     # 2. 初始化 gate 客户端并调用
     try:

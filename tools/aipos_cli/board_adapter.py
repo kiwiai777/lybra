@@ -6871,7 +6871,8 @@ def close_task(
                             # AIPOS-F38 大项A: 审计身份取 roles 注册表审计实例(audit_derivation 同一实现),
                             # 禁承继原卡执行实例(承继会让审计卡落到执行工位名下, 零 amend 不成立)
                             # AIPOS-F66: 去除 "lybra" 字面量回落,改用统一解析器
-                            from tools.aipos_cli.audit_derivation import _derive_audit_assigned_to, _derive_audit_instance
+                            # AIPOS-F102 件①: 复审卡认领实例 = 被审卡 audit_by, 缺则按项目推导(resolve_audit_instance 唯一实现)
+                            from tools.aipos_cli.audit_derivation import _derive_audit_assigned_to, resolve_audit_instance
                             _reaudit_project = source_task_metadata_for_reaudit.get("project")
                             if not _reaudit_project:
                                 try:
@@ -6882,7 +6883,8 @@ def close_task(
                                         "PROJECT_UNRESOLVED: reaudit project could not be resolved from source task metadata or workspace"
                                     )
                                     _reaudit_project = "UNRESOLVED"  # 占位,让后续逻辑可以继续但会BLOCK
-                            _reaudit_audit_instance = _derive_audit_instance(_reaudit_project)
+                            _reaudit_audit_instance = resolve_audit_instance(
+                                {**source_task_metadata_for_reaudit, "project": _reaudit_project}, resolved_root)
                             _reaudit_assigned_to = _derive_audit_assigned_to(_reaudit_project)
                             
                             # 构建复审卡metadata

@@ -91,11 +91,11 @@ def resolve_audit_context(
             # Fallback to current directory
             workspace_root = Path.cwd()
     
-    # Resolve gate_url
-    resolved_gate_url = ConnectionResolver.resolve_gate_url(
-        workspace_root=workspace_root,
-        explicit_url=gate_url,
-    )
+    # Resolve gate_url — AIPOS-F106 件①: 门基址唯一推导口(委托 ConnectionResolver.resolve_gate_url, 换算为 GateClient 用的门基址;
+    # 原直接把 MCP 端点交 GateClient 会重复拼 MCP 路径)
+    from tools.aipos_cli.confirm_client import resolve_gate_base_url
+
+    resolved_gate_url = resolve_gate_base_url(workspace_root=workspace_root, explicit_url=gate_url)
     
     # Resolve token
     resolved_token = ConnectionResolver.resolve_token(

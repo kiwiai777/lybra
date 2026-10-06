@@ -84,6 +84,26 @@ TOKEN_RETIREMENT_FIELDS: tuple[str, ...] = tuple(_DECL["retirement"])
 # AIPOS-F81: 全 retired 时拒因携带的出口(重签)。声明同上 reenroll_exit; TS 侧同名常量注明来源于此。
 TOKEN_REENROLL_EXIT = _DECL["exit"]
 
+
+def gate_client_role_preference() -> tuple[str, ...]:
+    """AIPOS-F106 件①(M1): 本机门客户端薄壳取凭据的角色偏好序——读 config.schema
+    #identity_resolution.keys.token.gate_client_role_preference.roles(一处声明, 原 aipos_cli 四处写死的角色元组退役)。
+    声明缺/空/含空名 = TokenDeclarationError(fail-closed)。消费方: confirm_client.load_gate_client_token。"""
+    from tools.schema_loader import code_repo_schema_root, load_schema
+
+    decl = (
+        ((load_schema("config", repo_root=code_repo_schema_root()).get("identity_resolution") or {}).get("keys") or {})
+        .get("token", {})
+        .get("gate_client_role_preference")
+    )
+    roles = decl.get("roles") if isinstance(decl, dict) else None
+    if not isinstance(roles, list) or not roles or any(not isinstance(r, str) or not r.strip() for r in roles):
+        raise TokenDeclarationError(
+            "config.schema#identity_resolution.keys.token.gate_client_role_preference.roles 缺失或非非空角色名列表, 拒绝取门客户端凭据"
+        )
+    return tuple(r.strip() for r in roles)
+
+
 _F_TOKEN = TOKEN_ENTRY_FIELDS["token"]
 _F_ROLE = TOKEN_ENTRY_FIELDS["role"]
 _F_INSTANCE = TOKEN_ENTRY_FIELDS["agent_instance"]
@@ -372,7 +392,7 @@ def detect_wrong_domain_tokens(
         [
             {
                 "role": "planner",
-                "agent_instance": "advisor.lybra.kiwiai-dev",
+                "agent_instance": "advisor.lybra.<host>",
                 "projects": ["lybra"],  # Wrong! Should be ["chris-huibojin"]
                 "fingerprint": "sha256:3e44d7f190ce",
                 "retired": false,

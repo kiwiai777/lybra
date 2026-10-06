@@ -269,7 +269,9 @@ function runPublishDryRun(ws: string): PublishResult {
     // --- B(AIPOS-F103 件④ 翻转): 门注册表无 hbj 条目 → 仍按卡面实例精确覆盖解析(注册表不是信封判据) ---
     try {
       const r = runPublishDryRun(makeFixture(fx, false));
-      const blocked = (r.blocking_reasons || []).some((b) => String(b).includes("cannot resolve policy envelope"));
+      // AIPOS-F102 件②: 无门注册表时自定义角色的角色类不可解析 = 更早拒(卡面零门判据无据), 不再走到信封墙; 同一病因两种拒因都算负对照成立
+      const blocked = (r.blocking_reasons || []).some((b) =>
+        String(b).includes("cannot resolve policy envelope") || String(b).includes("角色类不可解析"));
       check(
         "B: 无门注册表 → 仍按卡面实例解析 pol_chris_coder_1(注册表不是信封判据)",
         r.verdict !== "BLOCK" && !blocked && (r.rendered_markdown || "").includes("pol_chris_coder_1"),

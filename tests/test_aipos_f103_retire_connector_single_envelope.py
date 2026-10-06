@@ -124,14 +124,20 @@ def test_deleted_files_are_gone():
     assert not (REPO_ROOT / "skills").exists() or not any((REPO_ROOT / "skills").rglob("*")), "仓根旧技能已删"
 
 
+# 车道外逐字面豁免(F103 车道不含 schema/verbs.schema.json): F110 拉起声明文案「kickoff_safe 危险字符」只是文字指称(无 import),
+# 登记为缺口由改该声明的卡改写; 只豁免这一字面在这一文件
+LANE_BLOCKED_LITERAL_EXEMPT = {("kickoff_safe", "schema/verbs.schema.json")}
+
+
 def test_git_grep_deleted_items_zero_references():
     hits: list[str] = []
     for literal in DELETED_LITERALS:
         proc = subprocess.run(["git", "grep", "-n", "-F", literal], cwd=REPO_ROOT, capture_output=True, text=True)
         assert proc.returncode in (0, 1), proc.stderr  # 1 = 无命中
         for line in proc.stdout.splitlines():
-            if not line.startswith(tuple(GREP_EXEMPT)):
-                hits.append(f"{literal!r}: {line[:200]}")
+            if line.startswith(tuple(GREP_EXEMPT)) or (literal, line.split(":", 1)[0]) in LANE_BLOCKED_LITERAL_EXEMPT:
+                continue
+            hits.append(f"{literal!r}: {line[:200]}")
     assert not hits, "\n".join(hits)
 
 

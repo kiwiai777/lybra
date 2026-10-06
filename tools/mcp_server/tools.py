@@ -168,7 +168,7 @@ def _repo_root() -> Path:
         from tools.aipos_cli.workspace_config import resolve_home_root, resolve_project_root
         home = resolve_home_root()
         return resolve_project_root(home, project)
-    # Legacy: process-level workspace resolution (AIPOS_WORKSPACE_ROOT or upward search)
+    # Legacy: process-level workspace resolution (LYBRA_WORKSPACE_ROOT or upward search)
     return find_repo_root()
 
 
@@ -3920,9 +3920,9 @@ def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, An
                 f"(a root containing 5_tasks/queue), but the resolved root is not a "
                 f"workspace: {repo_root}. This looks like the product repo or a "
                 f"non-workspace root; an event written here would be invisible to the "
-                f"board (S10 misdirect). Likely the gate's AIPOS_WORKSPACE_ROOT is "
+                f"board (S10 misdirect). Likely the gate's LYBRA_WORKSPACE_ROOT is "
                 f"misconfigured or the gate is running from the product repo.",
-                "Run the gate with AIPOS_WORKSPACE_ROOT pointing at the governance "
+                "Run the gate with LYBRA_WORKSPACE_ROOT pointing at the governance "
                 "workspace (the directory that contains 5_tasks/queue), or invoke the "
                 "gate from a location that resolves upward to such a workspace.",
             )
@@ -4677,7 +4677,7 @@ def lybra_enroll_code_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
         "ttl_seconds": effective_ttl,
         "owner_authorization_ref": validated["owner_authorization_ref"],
         "reason": validated["reason"] or "(none)",
-        "gate_url": validated["gate_url"] or "(缺省推导: connection.json mcp.rpc_url 非 loopback, 否则 http://127.0.0.1:7118)",
+        "gate_url": validated["gate_url"] or "(缺省推导: connection.json mcp.rpc_url 非 loopback, 否则 config.schema urls.gate_local)",
         "governance_root": validated["governance_root"] or "(缺省回落: 发码门服务的工作区根, 与交换/land 同根)",
         "will_mint": [
             "enrollment record (single-use + TTL + revocable, AIPOS-362 面不动)",
@@ -6336,7 +6336,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "role": {"type": "string", "description": "Role to bind (e.g., executor, auditor, or registered custom role)."},
                 "instance": {"type": "string", "description": "Optional instance name to bind (<实例>, per the project naming profile); omit for any instance."},
                 "ttl": {"type": "integer", "description": "Code TTL seconds (default 86400 = 24h; also bounds the embedded transport credential)."},
-                "gate_url": {"type": "string", "description": "Externally reachable gate URL to embed; defaults to connection.json mcp.rpc_url (non-loopback) or http://127.0.0.1:7118."},
+                "gate_url": {"type": "string", "description": "Externally reachable gate URL to embed; defaults to connection.json mcp.rpc_url (non-loopback) or config.schema urls.gate_local."},
                 "owner_authorization_ref": {"type": "string", "description": "Reference to owner authorization for this enrollment (owner-gated)."},
                 "reason": {"type": "string", "description": "Reason for generating this enrollment code."},
                 "actor": {"type": "string", "description": "Issuing actor."},
@@ -6411,7 +6411,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "role": {"type": "string", "description": "Role to bind (e.g., executor, auditor, or registered custom role)."},
                 "instance": {"type": "string", "description": "Optional instance name to bind (<实例>, per the project naming profile); omit for any instance."},
                 "ttl": {"type": "integer", "description": "Code TTL seconds (default 86400 = 24h; also bounds the embedded transport credential)."},
-                "gate_url": {"type": "string", "description": "Externally reachable gate URL to embed; defaults to connection.json mcp.rpc_url (non-loopback) or http://127.0.0.1:7118."},
+                "gate_url": {"type": "string", "description": "Externally reachable gate URL to embed; defaults to connection.json mcp.rpc_url (non-loopback) or config.schema urls.gate_local."},
                 "owner_authorization_ref": {"type": "string", "description": "Reference to owner authorization for this enrollment."},
                 "reason": {"type": "string", "description": "Reason for generating this enrollment code."},
             },
