@@ -135,8 +135,6 @@ exit "$overall"
 # lybra-runall: known-failure tools/aipos_cli/tests/test_draft_writer.py::DraftWriterTests::test_publish_writes_pending_file_and_publish_record_under_temp_repo
 # lybra-runall: known-failure tools/aipos_cli/tests/test_external_intake_writer.py::ExternalIntakeWriterTests::test_intake_submit_dry_run_and_confirm_writes_external_intake_draft_only
 # lybra-runall: known-failure tools/aipos_cli/tests/test_external_intake_writer.py::ExternalIntakeWriterTests::test_list_drafts_includes_nested_external_intake_draft
-# lybra-runall: known-failure tools/aipos_cli/tests/test_f18_fix_card_closure.py::TestFixCardCloseCascade::test_pass_family_close_derives_reaudit_and_writes_record
-# lybra-runall: known-failure tools/aipos_cli/tests/test_f18_fix_card_closure.py::TestNumberingFromDeclaration::test_pattern_change_follows_declaration
 # lybra-runall: known-failure tools/aipos_cli/tests/test_f23_enroll.py::TestIssueSelfContainedCode::test_issue_end_to_end
 # lybra-runall: known-failure tools/aipos_cli/tests/test_f23_enroll.py::TestRoleFileMergeAndGuards::test_enroll_auditor_refused_in_governance_workspace
 # lybra-runall: known-failure tools/aipos_cli/tests/test_f23_enroll.py::TestRoleFileMergeAndGuards::test_enroll_refuses_governance_target
@@ -151,8 +149,6 @@ exit "$overall"
 # lybra-runall: known-failure tools/aipos_cli/tests/test_fnd1_cli_commands.py::TestNewCLICommands::test_owner_verify_parsing
 # lybra-runall: known-failure tools/aipos_cli/tests/test_fnd1_cli_commands.py::TestNewCLICommands::test_task_progress_parsing
 # lybra-runall: known-failure tools/aipos_cli/tests/test_planner_loop_mvp.py::PlannerLoopMvpTests::test_loop_preview_recommends_controlled_publish_without_writing
-# lybra-runall: known-failure tools/aipos_cli/tests/test_project_scaffold.py::ProjectScaffoldTests::test_draft_round_trip_under_scaffolded_project
-# lybra-runall: known-failure tools/aipos_cli/tests/test_project_structure.py::ExportTests::test_export_captures_governance_files
 # lybra-runall: known-failure tools/aipos_cli/tests/test_queue_mutation.py::QueueMutationTests::test_block_claimed_to_blocked_writes_required_fields
 # lybra-runall: known-failure tools/aipos_cli/tests/test_queue_mutation.py::QueueMutationTests::test_claim_pending_to_claimed_writes_runtime_fields
 # lybra-runall: known-failure tools/aipos_cli/tests/test_queue_mutation.py::QueueMutationTests::test_complete_claimed_to_completed_writes_required_fields
@@ -170,7 +166,6 @@ exit "$overall"
 # lybra-runall: known-failure tools/aipos_cli/tests/test_task_complexity.py::TaskComplexityTests::test_complex_dependent_audit_task_can_publish_when_audit_ready
 # lybra-runall: known-failure tools/aipos_cli/tests/test_task_complexity.py::TaskComplexityTests::test_complex_dependent_draft_can_exist_but_cannot_publish_before_audit_pass
 # lybra-runall: known-failure tools/aipos_cli/tests/test_token_rotation.py::TestRotateExecute::test_full_rotation_backup_record_no_plaintext
-# lybra-runall: known-failure tools/aipos_cli/tests/test_workspace_root.py::ResolutionCoreTests::test_governance_paths_single_file_decision_log_and_artifacts
 # lybra-runall: known-failure tools/aipos_cli/tests/test_writer_flat_contract.py::WriterFlatContractTests::test_publish_record_is_flat
 # lybra-runall: known-failure tools/lybra_tui/tests/test_ai_authoring.py::AiAuthoringTests::test_card_conformant_and_publishable
 # lybra-runall: known-failure tools/lybra_tui/tests/test_copilot.py::CopilotTests::test_chat_auto_compacts_l3_but_l0_truth_byte_identical

@@ -168,6 +168,7 @@ def test_finalize_task_auto_checkout_before_branch_check(tmp_path):
     _make_card_branch(repo, "AIPOS-F11")  # 停在卡分支, 树干净
     gov_root = tmp_path / "gov"  # 治理仓与产品仓分离(避开 R6A 单根硬拒)
     gov_root.mkdir()
+    (gov_root / "5_tasks" / "queue" / "pending").mkdir(parents=True)  # AIPOS-F109 件④: 夹具自建治理根队列(原缺队列 → 工作区解析退到真实 ~/.lybra 的真实治理根读卡; run-all 隔离 HOME 下即暴露)
 
     with patch.object(F, "check_task_can_finalize", return_value={
         "can_finalize": True, "task_id": "AIPOS-F11", "verdict": "PASS",

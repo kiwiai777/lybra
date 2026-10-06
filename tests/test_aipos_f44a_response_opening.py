@@ -93,7 +93,8 @@ class TestItem1EnvelopeQuotaNotification:
         - envelope_quota.warning_message: 低水位提示
         """
         from tools.mcp_server.tools import _preauthorized_claim_autorelease
-        
+
+        (tmp_path / "5_tasks" / "queue" / "pending").mkdir(parents=True)  # AIPOS-F109 件④: 夹具自建治理根队列(原缺队列 → 工作区解析退到真实 ~/.lybra 的真实治理根读卡; run-all 隔离 HOME 下即暴露)
         # 构造低水位 quota_info (remaining <= 10%)
         quota_info = {
             "released": 19,
