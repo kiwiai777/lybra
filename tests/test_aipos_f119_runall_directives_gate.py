@@ -82,22 +82,29 @@ def test_range_a_legacy_per_file_registry_unchanged(tmp_path, monkeypatch):
 
 
 def test_range_a_criterion_equals_legacy_substring_rule():
-    """无 discover 行时 runall_unregistered 与原内联判据(路径或文件名子串)逐例一致——含当前产品仓真实 run-all.sh 全文。"""
+    """无 discover 行时 runall_unregistered 与原内联判据(路径或文件名子串)逐例一致(当前 main 逐文件登记格式的各种写法)。"""
     def legacy(files: list[str], text: str) -> list[str]:  # 原 _check_test_in_runall 第 3 步内联判据(对照用, 非实现)
         return [f for f in files if f not in text and f.split("/")[-1] not in text]
 
-    real_runall = (REPO_ROOT / RUNALL).read_text(encoding="utf-8")
-    files = ["tests/test_aipos_f119_runall_directives_gate.py", "tests/test_aipos_f97_test_file_criterion.py",
-             "tools/aipos_cli/tests/test_gate_drift.py", "tests/test_never_registered_zz.py", "a/b/test_old.py"]
-    cases = [(files, real_runall), (files, "python3 -m pytest test_old.py\n"), (files, ""), ([], real_runall)]
+    per_file = (
+        '#!/usr/bin/env bash\n'
+        'declare -a files=(\n  "tests/ts/f32-custom-role-envelope.test.ts"\n)\n'
+        '# AIPOS-F97: 交回检查「测试文件」判据单源\n'
+        'run_pytest "tests/test_aipos_f97_test_file_criterion.py" "$REPO_ROOT/tests/test_aipos_f97_test_file_criterion.py"\n'
+        'run_pytest "F117 units" "$REPO_ROOT/tools/aipos_cli/tests/test_gate_drift.py"\n'
+        'if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/tests/test_aipos_f41_hard_rules.py"; then echo ok; fi\n'
+        '# 只以文件名提到: test_by_name_only.py\n'
+    )
+    files = ["tests/test_aipos_f97_test_file_criterion.py", "tools/aipos_cli/tests/test_gate_drift.py",
+             "tests/test_aipos_f41_hard_rules.py", "tests/ts/f32-custom-role-envelope.test.ts",
+             "other/dir/test_by_name_only.py", "tests/test_never_registered_zz.py", "a/b/test_old.py"]
+    cases = [(files, per_file), (files, "python3 -m pytest test_old.py\n"), (files, ""), ([], per_file)]
     for test_files, text in cases:
         missing, directives = runall_unregistered(test_files, text)
         _show(f"[A·判据对照] 清单长={len(text)} missing={missing} discover={directives['discover']}")
         assert directives == {"discover": False, "exclude": {}, "known_failures": {}}
         assert missing == legacy(test_files, text)
-    missing_real = runall_unregistered(files, real_runall)[0]
-    assert "tests/test_never_registered_zz.py" in missing_real
-    assert "tests/test_aipos_f119_runall_directives_gate.py" not in missing_real  # 本卡夹具按当前逐文件格式已登记
+    assert runall_unregistered(files, per_file)[0] == ["tests/test_never_registered_zz.py", "a/b/test_old.py"]
 
 
 # ===========================================================================
