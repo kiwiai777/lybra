@@ -665,15 +665,24 @@ _LANDED_RECORD = {"claim": "latest_claim", "return": "latest_return", "dispatch"
                   "verdict": "latest_verdict", "close": "latest_closure"}
 
 
-def _record_card(action_type: str, target_card: str) -> str:
-    return target_card[:-1] if action_type == "verdict" and target_card.upper().endswith("R") else target_card
+def _record_card(action_type: str, governance_root: Path, target_card: str) -> str:
+    """verdict 记录挂被审卡: 被审卡号 = 审计卡卡面 reviewed_task_id(AIPOS-F112: audit_derivation.audit_card_reviewed_id 唯一口,
+    认得复审轮 R2/R3…; 原按号尾去一位, 对 R2 取出 <ID>R)。"""
+    if action_type != "verdict":
+        return target_card
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
+    from tools.aipos_cli.task_loader import find_task_card
+
+    path, _state = find_task_card(governance_root, target_card)
+    fm = _read_frontmatter(path) if path else {}
+    return audit_card_reviewed_id(target_card, fm) if is_audit_card(target_card, fm) else target_card
 
 
 def _landed_record(governance_root: Path, action_type: str, target_card: str) -> dict[str, Any] | None:
     key = _LANDED_RECORD.get(action_type)
     if not key:
         return None
-    return _read_task_records(governance_root, _record_card(action_type, target_card)).get(key)
+    return _read_task_records(governance_root, _record_card(action_type, governance_root, target_card)).get(key)
 
 
 def _drive(

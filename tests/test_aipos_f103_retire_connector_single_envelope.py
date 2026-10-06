@@ -54,7 +54,8 @@ DELETED_LITERALS = [
     "run_materialize",
     "run_pushback",
     "test_dispatch_integration",
-    "skills/lybra-executor",
+    # 仓根旧技能按 SKILL.md 路径判(工位分发物名 skills/lybra-executor 是工位侧技能目录名, 如 F113 夹具的假分发输出, 不是仓根旧技能)
+    "skills/lybra-executor/SKILL.md",
     "skills/owner-console",
     "skills/lybra-planner",
     "agent fetch",
