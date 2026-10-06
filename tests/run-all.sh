@@ -1137,6 +1137,8 @@ run_pytest "tests/test_aipos_f117_entry_text_cleanup.py" "$REPO_ROOT/tests/test_
 # AIPOS-F117: 随 import 改走 project new 校正并登记的 project_structure / scaffold / workspace_root 单元夹具
 run_pytest "F117 tools/aipos_cli/tests/test_project_structure.py+test_project_scaffold.py+test_workspace_root.py" "$REPO_ROOT/tools/aipos_cli/tests/test_project_structure.py" "$REPO_ROOT/tools/aipos_cli/tests/test_project_scaffold.py" "$REPO_ROOT/tools/aipos_cli/tests/test_workspace_root.py"
 
+# AIPOS-F119: 门侧测试登记判据先行(唯一判据 runall_unregistered 认 `# lybra-runall: discover/exclude` 声明行; 旧式逐文件清单行为不变·discover 命中式样即登记·exclude 拒附理由·形坏拒)三靶场
+run_pytest "tests/test_aipos_f119_runall_directives_gate.py" "$REPO_ROOT/tests/test_aipos_f119_runall_directives_gate.py"
 echo
 echo "========================================================"
 if [ "$overall" -eq 0 ]; then
