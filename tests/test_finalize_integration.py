@@ -7,17 +7,32 @@
 4. git commit 实际执行
 5. lybra CLI 活体断言（--workspace-root + --governance-root 分别指定两仓）
 
-AIPOS-FND-14: integration_workspace 同时充当产品仓（workspace_root，git 操作）与治理仓
-（governance_root，5_tasks/records/audit_verdicts/ 落在此处）。lybra CLI 传
---governance-root=<same path> 使测试 workspace 同时承担两个角色。
+AIPOS-FND-14: integration_workspace = 产品仓（workspace_root，git 操作）；治理根 = 其同级临时目录
+_gov(integration_workspace)（governance_root，5_tasks/records/audit_verdicts/ 落在此处）。
+AIPOS-F116(F109R F-1): 原同一目录兼两角——产品已拒「workspace_root 在 governance_root 内」, 各用例在入口即 BLOCK,
+「拦手写 markdown」用例因此为错误理由通过(又因 CLI 取 PATH 上的 lybra 随环境抖动)。改为两根分立 + 测本检出 CLI。
 """
 
 import json
+import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+#: 被测 CLI = 本检出(bin/lybra 同款入口 python -m tools.aipos_cli.aipos_cli), 不取 PATH 上的 `lybra`。
+#: AIPOS-F116(F109R F-1): 原写死 "lybra" 走 PATH —— PATH 缺 ~/.local/bin 时 FileNotFoundError 全红, 有则跑部署树旧版
+#: (结果随环境与部署版本抖动, known-failure 严格检查器转绿即红)。改为确定地测本检出代码。
+LYBRA_CLI = [sys.executable, "-m", "tools.aipos_cli.aipos_cli"]
+
+
+def _cli_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(REPO_ROOT), env.get("PYTHONPATH", "")) if p)
+    return env
 
 
 def _write_gate_verdict(
@@ -51,6 +66,11 @@ def _write_gate_verdict(
     return path
 
 
+def _gov(workspace: Path) -> Path:
+    """治理根: 产品仓同级的临时目录(不在产品仓内, 也不含产品仓)。"""
+    return workspace.parent / "governance"
+
+
 @pytest.fixture
 def integration_workspace():
     """Create a complete workspace for integration testing.
@@ -62,6 +82,7 @@ def integration_workspace():
     with tempfile.TemporaryDirectory() as tmpdir:
         workspace = Path(tmpdir) / "workspace"
         workspace.mkdir()
+        _gov(workspace).mkdir()
 
         # Initialize git repo
         subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
@@ -100,7 +121,7 @@ def test_finalize_workflow_pass_task(integration_workspace):
     task_id = "AIPOS-INT-1"
 
     # Create gate audit_verdict_record (authoritative, in governance 5_tasks/records/)
-    _write_gate_verdict(integration_workspace, task_id, "PASS")
+    _write_gate_verdict(_gov(integration_workspace), task_id, "PASS")
 
     # Also create a product-side task_cards dir and implementation change
     (integration_workspace / "task_cards" / task_id).mkdir()
@@ -110,15 +131,16 @@ def test_finalize_workflow_pass_task(integration_workspace):
     # workspace since the fixture is single-repo; this also exercises the CLI wiring)
     result = subprocess.run(
         [
-            "lybra",
+            *LYBRA_CLI,
             "finalize",
             "--task-id", task_id,
             "--actor", "test_actor",
             "--workspace-root", str(integration_workspace),
-            "--governance-root", str(integration_workspace),
+            "--governance-root", str(_gov(integration_workspace)),
             "--json",
         ],
         cwd=integration_workspace,
+        env=_cli_env(),
         capture_output=True,
         text=True,
     )
@@ -153,15 +175,16 @@ def test_finalize_workflow_blocks_no_gate_verdict(integration_workspace):
 
     result = subprocess.run(
         [
-            "lybra",
+            *LYBRA_CLI,
             "finalize",
             "--task-id", task_id,
             "--actor", "test_actor",
             "--workspace-root", str(integration_workspace),
-            "--governance-root", str(integration_workspace),
+            "--governance-root", str(_gov(integration_workspace)),
             "--json",
         ],
         cwd=integration_workspace,
+        env=_cli_env(),
         capture_output=True,
         text=True,
     )
@@ -169,29 +192,31 @@ def test_finalize_workflow_blocks_no_gate_verdict(integration_workspace):
     assert result.returncode == 1, "Finalize should fail when no gate verdict exists"
     payload = json.loads(result.stdout)
     assert payload["verdict"] == "BLOCK"
-    assert "gate audit verdict record" in payload["message"].lower()
+    # 产品文案已中文化(「无门生裁决记录」); 判据仍是理由直指缺门生裁决记录(不是 task_cards AUDIT-REPORT)
+    assert "无门生裁决记录" in payload["message"], payload["message"]
 
 
 def test_finalize_workflow_blocks_handwritten_markdown(integration_workspace):
     """AIPOS-FND-14: a hand-written markdown with verdict: PASS but no
     record_type: audit_verdict_record must NOT be accepted as finalize evidence."""
     task_id = "AIPOS-INT-FAKE"
-    verdicts_dir = integration_workspace / "5_tasks" / "records" / "audit_verdicts" / task_id
+    verdicts_dir = _gov(integration_workspace) / "5_tasks" / "records" / "audit_verdicts" / task_id
     verdicts_dir.mkdir(parents=True)
     # Hand-written: no record_type field
     (verdicts_dir / "handwritten.md").write_text("---\nverdict: PASS\n---\n# Fake\n")
 
     result = subprocess.run(
         [
-            "lybra",
+            *LYBRA_CLI,
             "finalize",
             "--task-id", task_id,
             "--actor", "test_actor",
             "--workspace-root", str(integration_workspace),
-            "--governance-root", str(integration_workspace),
+            "--governance-root", str(_gov(integration_workspace)),
             "--json",
         ],
         cwd=integration_workspace,
+        env=_cli_env(),
         capture_output=True,
         text=True,
     )
@@ -199,24 +224,27 @@ def test_finalize_workflow_blocks_handwritten_markdown(integration_workspace):
     assert result.returncode == 1, "Finalize should reject hand-written markdown"
     payload = json.loads(result.stdout)
     assert payload["verdict"] == "BLOCK"
+    # 拦的理由须是「手写件缺门生标记被拒」, 不是入口别的 BLOCK(F116: 原两根同目录时即为入口 BLOCK 而误绿)
+    assert "handwritten.md" in payload["message"] and "record_type" in payload["message"], payload["message"]
 
 
 def test_finalize_workflow_fail_task(integration_workspace):
     """Finalize correctly blocks when gate audit verdict is FAIL."""
     task_id = "AIPOS-INT-2"
-    _write_gate_verdict(integration_workspace, task_id, "FAIL")
+    _write_gate_verdict(_gov(integration_workspace), task_id, "FAIL")
 
     result = subprocess.run(
         [
-            "lybra",
+            *LYBRA_CLI,
             "finalize",
             "--task-id", task_id,
             "--actor", "test_actor",
             "--workspace-root", str(integration_workspace),
-            "--governance-root", str(integration_workspace),
+            "--governance-root", str(_gov(integration_workspace)),
             "--json",
         ],
         cwd=integration_workspace,
+        env=_cli_env(),
         capture_output=True,
         text=True,
     )
@@ -229,23 +257,24 @@ def test_finalize_workflow_fail_task(integration_workspace):
 def test_finalize_workflow_dry_run(integration_workspace):
     """Test finalize dry-run mode."""
     task_id = "AIPOS-INT-3"
-    _write_gate_verdict(integration_workspace, task_id, "PASS")
+    _write_gate_verdict(_gov(integration_workspace), task_id, "PASS")
 
     # Add a change (uncommitted)
     (integration_workspace / "tools" / "dryrun_test.py").write_text("# Dry run test\n")
 
     result = subprocess.run(
         [
-            "lybra",
+            *LYBRA_CLI,
             "finalize",
             "--task-id", task_id,
             "--actor", "test_actor",
             "--workspace-root", str(integration_workspace),
-            "--governance-root", str(integration_workspace),
+            "--governance-root", str(_gov(integration_workspace)),
             "--dry-run",
             "--json",
         ],
         cwd=integration_workspace,
+        env=_cli_env(),
         capture_output=True,
         text=True,
     )
@@ -266,7 +295,7 @@ def test_finalize_workflow_dry_run(integration_workspace):
 def test_finalize_no_changes_to_commit(integration_workspace):
     """Test finalize with clean working tree (no changes to commit) -> PASS, not committed."""
     task_id = "AIPOS-INT-4"
-    _write_gate_verdict(integration_workspace, task_id, "PASS")
+    _write_gate_verdict(_gov(integration_workspace), task_id, "PASS")
 
     # Commit the gate record so tree is clean
     subprocess.run(
@@ -284,15 +313,16 @@ def test_finalize_no_changes_to_commit(integration_workspace):
 
     result = subprocess.run(
         [
-            "lybra",
+            *LYBRA_CLI,
             "finalize",
             "--task-id", task_id,
             "--actor", "test_actor",
             "--workspace-root", str(integration_workspace),
-            "--governance-root", str(integration_workspace),
+            "--governance-root", str(_gov(integration_workspace)),
             "--json",
         ],
         cwd=integration_workspace,
+        env=_cli_env(),
         capture_output=True,
         text=True,
     )

@@ -74,8 +74,15 @@ def other_project_fingerprint(repo: Path) -> str:
     return h.hexdigest()
 
 
+#: 进程级系统临时目录(rig 改钉前取); 只用于 F116 诱饵用例证明残留判据不再扫这里。
+SYSTEM_TMP = tempfile.gettempdir()
+
+
 def leftover_tmp_worktrees() -> list[str]:
-    return sorted(p for p in os.listdir(tempfile.gettempdir()) if p.startswith(TMP_PREFIX))
+    """本用例私有临时目录(rig 已把 tempfile.tempdir 钉到 tmp_path/tmp)里的产品临时 worktree 残留。"""
+    tmp = Path(tempfile.gettempdir())
+    assert tmp.name == "tmp" and tmp.parent.name.startswith("test_"), f"临时目录未隔离到本用例: {tmp}"
+    return sorted(p for p in os.listdir(tmp) if p.startswith(TMP_PREFIX))
 
 
 def worktree_count(repo: Path) -> int:
@@ -84,6 +91,11 @@ def worktree_count(repo: Path) -> int:
 
 @pytest.fixture
 def rig(tmp_path, monkeypatch):
+    # AIPOS-F116 件④(gap #76): 产品临时 worktree(governance_commit 的 tempfile.mkdtemp)落本用例私有临时目录,
+    # 残留判据只看这里——不扫全局 /tmp(并行时他卡/他测试的同前缀临时目录会被误计为残留或掩盖真残留)。
+    private_tmp = tmp_path / "tmp"
+    private_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(private_tmp))
     remote = tmp_path / "remote.git"
     remote.mkdir()
     subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(remote)], check=True)
@@ -447,3 +459,16 @@ def test_piece3_cli_json_success_last_operation_is_push_result(rig, monkeypatch)
     proc3 = _cli(rig, "--no-push", "--paths", "governance/LEDGER.md")
     assert proc3.returncode == 0, proc3.stdout + proc3.stderr
     assert PUSH_NOT_DONE not in proc3.stdout and "已 commit,但未 push" in proc3.stdout
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F116 件④(gap #76): 残留判据只看本用例私有临时目录——全局 /tmp 里他卡/并行测试的同前缀目录不得被计入
+# ---------------------------------------------------------------------------
+def test_f116_leftover_scan_ignores_same_prefix_dirs_in_global_tmp(rig):
+    decoy = Path(tempfile.mkdtemp(prefix=TMP_PREFIX, dir=SYSTEM_TMP))  # 模拟并行的他卡临时 worktree
+    try:
+        assert Path(tempfile.gettempdir()) == rig["schema_root"] / "tmp"
+        assert decoy.name not in leftover_tmp_worktrees()
+        assert leftover_tmp_worktrees() == []
+    finally:
+        decoy.rmdir()

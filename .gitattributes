@@ -1,7 +1,0 @@
-# AIPOS-F111 件②: tests/run-all.sh 用 git 内建 union 合并驱动——并行的卡各自在汇总段前追加夹具登记,
-# 合并(finalize merge --no-ff / 卡工作树 git merge main)时两侧追加的登记全保留, 不再冲突(gap #40)。
-# 前提: 新登记用 run-all.sh 的一行式 run_pytest(一行注释 + 一行调用, 每行唯一)。
-# 局限: union 不判语义——两侧相同的首尾行只留一份(多行 if/else/fi 块的公共尾行被吃 → 语法坏), 两分支改同一既有行时
-# 可能留下两侧版本(重复行/冗余登记); 由 run-all 语法检查(bash -n, F111 夹具)与审计兜底。
-# F109 run-all 自动发现落地后(无需逐卡登记)本条可撤。只声明这一个文件, 其余文件照常三方合并。
-tests/run-all.sh merge=union
