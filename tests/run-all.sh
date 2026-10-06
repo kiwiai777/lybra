@@ -79,10 +79,7 @@ exit "$overall"
 # lybra-runall: known-failure tests/test_finalize.py::test_finalize_task_dry_run
 # lybra-runall: known-failure tests/test_finalize.py::test_finalize_task_no_gate_verdict_blocked
 # lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_no_changes_to_commit
-# lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_workflow_blocks_handwritten_markdown
-# lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_workflow_blocks_no_gate_verdict
 # lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_workflow_dry_run
-# lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_workflow_fail_task
 # lybra-runall: known-failure tests/test_finalize_integration.py::test_finalize_workflow_pass_task
 # lybra-runall: known-failure tools/aipos_cli/tests/test_agent_watch_fs.py::FsWatchRedLineTests::test_module_is_stdlib_only_zero_new_deps
 # lybra-runall: known-failure tools/aipos_cli/tests/test_ai_assisted_authoring.py::AiAssistedAuthoringTests::test_cli_draft_and_confirm
