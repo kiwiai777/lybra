@@ -10,6 +10,16 @@
 
 夹具隔离: 子进程 HOME = 每次执行新建的临时目录(PYTHONUSERBASE 钉回原用户 site, 已装工具照用), 清掉 LYBRA_*/AIPOS_* 环境变量——
 自动发现会纳入未经逐个审看的存量测试, 不得借真实 ~/.lybra 解析到真实治理根/工位/门凭据(执行体禁写真实治理根)。
+环境构造唯一实现 isolated_test_env; 各测试目录 conftest.py 经 isolate_test_session 复用(直接跑 pytest 同样隔离, AIPOS-F116 件②)。
+
+AIPOS-F116 防护夹具(执行器内建, 每个测试文件前后各取一次, 变则该文件判红并出声):
+  真实治理根守卫(件①, gap #34/#70): 监视「执行器自身环境」(测试子进程隔离之前的真实 HOME / LYBRA_HOME_ROOT)按
+    workspace_config.resolve_home_root_with_source 同一梯解析出的 home 根下各项目 governance/ 与 5_tasks/——git status 脏项
+    (状态码 + 文件 size/mtime)与关键日志(governance/*_log.md)md5。只读: git 一律 --no-optional-locks(不刷新/不写 index)。
+    时间窗归因复核: 某文件期间出现变动 → 单独重跑该文件一次(结果不计)再快照; 复现 = 该文件所致 → 判红; 不复现 = 同时段
+    门/顾问的正常写入(他卡认领/交回、治理文档提交)→ 照列不判红。代价: 真污染的测试在复核时再写一次(已知污染源须 exclude)。
+  孤儿进程守卫(件③, gap #12/#25/#55): 测试子进程环境带本轮唯一标记变量(不带 LYBRA_/AIPOS_ 前缀, 嵌套执行器不剥);
+    文件结束后仍带标记的存活进程(含另起会话逃出进程组收尸的 web.board.app / serve 子进程)= 泄漏 → SIGKILL 并判红。
 
 用法(由 tests/run-all.sh 调用, cwd = 产品仓根):
   python3 -m tools.aipos_cli.runall_discovery --runall tests/run-all.sh [--governance-root <治理根>] [--list]
@@ -17,9 +27,12 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import fnmatch
+import hashlib
 import os
 import re
+import secrets
 import shutil
 import signal
 import site
@@ -27,7 +40,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 #: 执行器表(文件名式样 → 执行方式)。命中 test_file_globs 却无执行器的文件 = 红(须补执行器或 exclude 并写理由), 不静默跳过。
 RUNNERS: tuple[tuple[str, str], ...] = (
@@ -42,6 +55,13 @@ FILE_TIMEOUT_SECONDS = 900
 PYTEST_NO_TESTS_COLLECTED = 5
 _SUMMARY_RE = re.compile(r"^(FAILED|ERROR) (.+?)(?: - .*)?$")
 _RULE = "─" * 42
+#: 测试进程「已隔离」标记(值 = 隔离 HOME): conftest 会话层见标记 == HOME 即不再二次隔离(不用 LYBRA_ 前缀: 非产品环境变量, 不入 F106 声明集)。
+ISOLATED_HOME_ENV = "RUNALL_ISOLATED_HOME"
+#: 孤儿进程守卫标记变量名前缀(后接本轮随机串, 值 "1"); 故意不用 LYBRA_/AIPOS_ 前缀——嵌套执行器只剥这两类, 外层标记一路下传。
+LEAK_MARK_PREFIX = "RUNALL_LEAK_MARK_"
+#: 真实治理根守卫监视的项目子目录与关键日志式样(卡面: home 根下各项目 governance/ 与 5_tasks/; 关键日志 = 只追加的治理日志)。
+GUARD_SUBDIRS = ("governance", "5_tasks")
+GUARD_KEY_LOG_GLOB = "*_log.md"
 
 
 def runner_for(path: str) -> str | None:
@@ -93,11 +113,148 @@ def build_plan(repo_root: Path, runall_rel: str, contract: dict[str, Any]) -> di
     }
 
 
-def _child_env(home: str) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not (k.startswith("LYBRA_") or k.startswith("AIPOS_"))}
-    env["PYTHONUSERBASE"] = os.environ.get("PYTHONUSERBASE") or site.getuserbase()
+def isolated_test_env(home: str, base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """测试进程环境的唯一构造(run-all 子进程与 conftest 会话层共用): 清 LYBRA_*/AIPOS_*(含 LYBRA_HOME_ROOT), HOME = 给定临时目录,
+    PYTHONUSERBASE 钉回原用户 site(已装工具照用), 打已隔离标记。"""
+    source = os.environ if base is None else base
+    env = {k: v for k, v in source.items() if not (k.startswith("LYBRA_") or k.startswith("AIPOS_"))}
+    env["PYTHONUSERBASE"] = source.get("PYTHONUSERBASE") or site.getuserbase()
     env["HOME"] = home
+    env[ISOLATED_HOME_ENV] = home
     return env
+
+
+def isolate_test_session() -> str | None:
+    """AIPOS-F116 件②(gap #56): pytest 会话层 HOME 隔离, 由各测试目录 conftest.py 在导入时调用(早于测试模块导入——
+    模块级 Path.home() 也拿到临时 HOME)。已由 run-all 执行器隔离(标记 == HOME)→ 不动, 返回 None; 否则新建临时 HOME 原地改写
+    os.environ(isolated_test_env 同一构造), 进程退出时删除, 返回该目录。直接跑 pytest 也不借真实 ~/.lybra 解析到真实治理根。"""
+    marked = os.environ.get(ISOLATED_HOME_ENV)
+    if marked and marked == os.environ.get("HOME"):
+        return None
+    home = tempfile.mkdtemp(prefix="lybra-test-home-")
+    env = isolated_test_env(home)
+    os.environ.clear()
+    os.environ.update(env)
+    atexit.register(shutil.rmtree, home)
+    return home
+
+
+def _child_env(home: str, leak_mark: str) -> dict[str, str]:
+    env = isolated_test_env(home)
+    env[leak_mark] = "1"
+    return env
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F116 件①: 真实治理根守卫(只读)
+# ---------------------------------------------------------------------------
+def _git_readonly(cwd: Path, *args: str) -> str:
+    """只读 git: --no-optional-locks(status 不刷新/不写 index)。失败 = 抛(fail-closed)。"""
+    return subprocess.run(["git", "--no-optional-locks", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
+
+
+def governance_guard_targets(env: Mapping[str, str]) -> dict[str, Any]:
+    """监视对象: env(= 执行器自身环境, 测试子进程隔离之前)按 workspace_config.resolve_home_root_with_source 同一梯解析 home 根,
+    其下各项目的 governance/ 与 5_tasks/; 按所在 git 仓分组(非 git 目录单列, 退回逐文件 size/mtime)。"""
+    from tools.aipos_cli.workspace_config import resolve_home_root_with_source
+
+    home_root, source = resolve_home_root_with_source(env=dict(env))
+    dirs = []
+    if home_root.is_dir():
+        for child in sorted(home_root.iterdir()):
+            if child.is_dir():
+                dirs += [child / sub for sub in GUARD_SUBDIRS if (child / sub).is_dir()]
+    repos: dict[Path, list[str]] = {}
+    plain: list[Path] = []
+    for d in dirs:
+        inside = subprocess.run(["git", "--no-optional-locks", "rev-parse", "--is-inside-work-tree"], cwd=d,
+                                capture_output=True, text=True)
+        if inside.returncode == 0 and inside.stdout.strip() == "true":
+            top = Path(_git_readonly(d, "rev-parse", "--show-toplevel").strip())
+            repos.setdefault(top, []).append(d.relative_to(top).as_posix())
+        else:
+            plain.append(d)
+    key_logs = sorted(p for d in dirs if d.name == "governance" for p in d.glob(GUARD_KEY_LOG_GLOB) if p.is_file())
+    return {"home_root": home_root, "source": source, "dirs": dirs, "repos": repos, "plain": plain, "key_logs": key_logs}
+
+
+def _stat_fp(path: Path) -> str:
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return "<missing>"
+    return f"{st.st_size}:{st.st_mtime_ns}"
+
+
+def governance_snapshot(targets: dict[str, Any]) -> dict[str, str]:
+    """只读快照 {键: 指纹}: git 仓内 status 脏项(状态码 + size/mtime); 非 git 目录逐文件 size/mtime; 关键日志 md5。"""
+    snap: dict[str, str] = {}
+    for top, rels in targets["repos"].items():
+        raw = _git_readonly(top, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", *rels)
+        entries = raw.split("\0")
+        i = 0
+        while i < len(entries):
+            entry = entries[i]
+            i += 1
+            if not entry:
+                continue
+            code, rel = entry[:2], entry[3:]
+            if "R" in code or "C" in code:  # -z 格式: 重命名/复制后跟原路径一项
+                i += 1
+            path = top / rel
+            snap[f"status {path}"] = f"{code} {_stat_fp(path)}"
+    for d in targets["plain"]:
+        for path in sorted(p for p in d.rglob("*") if p.is_file()):
+            snap[f"file {path}"] = _stat_fp(path)
+    for log in targets["key_logs"]:
+        snap[f"md5 {log}"] = hashlib.md5(log.read_bytes()).hexdigest() if log.is_file() else "<missing>"
+    return snap
+
+
+def snapshot_changes(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    """两次快照之差(任一键出现/消失/指纹变 = 一处变动), 按键排序。"""
+    return [f"{key}: {before.get(key, '(无)')} → {after.get(key, '(无)')}"
+            for key in sorted(set(before) | set(after)) if before.get(key) != after.get(key)]
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F116 件③: 孤儿进程守卫
+# ---------------------------------------------------------------------------
+def marked_processes(leak_mark: str) -> list[tuple[int, str]]:
+    """环境里带标记变量的存活进程 [(pid, 命令行)]。Linux 读 /proc/<pid>/environ; 无 /proc 退回 `ps eww`(BSD/macOS)。"""
+    needle = f"{leak_mark}=1"
+    found: list[tuple[int, str]] = []
+    me = os.getpid()
+    proc = Path("/proc")
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if not entry.name.isdigit() or int(entry.name) == me:
+                continue
+            try:
+                environ = (entry / "environ").read_bytes().split(b"\0")
+                cmdline = (entry / "cmdline").read_bytes()
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue  # 已退出 / 他用户进程(不可能带本轮标记)
+            if needle.encode() in environ:
+                found.append((int(entry.name), cmdline.replace(b"\0", b" ").decode("utf-8", "replace").strip()))
+        return sorted(found)
+    listing = subprocess.run(["ps", "-axeww", "-o", "pid=,command="], capture_output=True, text=True, check=True).stdout
+    for line in listing.splitlines():
+        pid_text, _sep, rest = line.strip().partition(" ")
+        if pid_text.isdigit() and int(pid_text) != me and needle in rest.split():
+            found.append((int(pid_text), rest.split(f" {needle}", 1)[0]))
+    return sorted(found)
+
+
+def reap_marked(leak_mark: str) -> list[tuple[int, str]]:
+    """SIGKILL 所有带标记的存活进程, 返回被清的 [(pid, 命令行)](调用方出声并判红)。"""
+    leaked = marked_processes(leak_mark)
+    for pid, _cmd in leaked:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue  # 取快照与清理之间自行退出
+    return leaked
 
 
 def _command(path: str, runner: str, node_excludes: list[str]) -> list[str]:
@@ -126,29 +283,10 @@ def _reap_group(pgid: int) -> bool:
     return True
 
 
-#: 正在执行的测试子进程组(独立会话, 上游 killpg 够不着)——收到 SIGTERM 时由 _on_sigterm 整组清掉(AIPOS-F118: 合并后回归超时
-#: 先 SIGTERM 本执行器, 不留孤儿测试进程)。
-_RUNNING_GROUPS: set[int] = set()
-
-
-def _on_sigterm(signum: int, _frame: Any) -> None:
-    for pgid in sorted(_RUNNING_GROUPS):
-        _reap_group(pgid)
-    raise SystemExit(128 + signum)
-
-
 def _run(cmd: list[str], repo_root: Path, env: dict[str, str]) -> tuple[int | None, str]:
     """独立进程组执行一个测试文件; 结束(或超时)后清掉组内残留进程——夹具环境不留孤儿(测试泄漏的后台进程照实出声)。"""
     proc = subprocess.Popen(cmd, cwd=repo_root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                             start_new_session=True)
-    _RUNNING_GROUPS.add(proc.pid)
-    try:
-        return _collect(proc)
-    finally:
-        _RUNNING_GROUPS.discard(proc.pid)
-
-
-def _collect(proc: subprocess.Popen) -> tuple[int | None, str]:
     try:
         stdout, stderr = proc.communicate(timeout=FILE_TIMEOUT_SECONDS)
         rc: int | None = proc.returncode
@@ -235,7 +373,9 @@ def failure_set(output: str, exit_code: int | None, runall_rel: str) -> list[str
     return sorted(failures)
 
 
-def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None) -> int:
+def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
+        guard_env: Mapping[str, str] | None = None) -> int:
+    """guard_env: 真实治理根守卫解析 home 根所用环境(缺省 = 执行器自身 os.environ, 即测试子进程隔离之前的真实环境)。"""
     out = out or sys.stdout
     plan = build_plan(repo_root, runall_rel, contract)
 
@@ -254,10 +394,26 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None)
         overall = 1
     for target, reason in sorted({**plan["file_excluded"], **plan["node_excluded"]}.items()):
         emit(f"⊘ 未执行(声明 exclude): {target} —— {reason}")
+    targets = governance_guard_targets(os.environ if guard_env is None else guard_env)
+    emit(f"[runall_discovery] 真实治理根守卫: home 根 {targets['home_root']}(来源 {targets['source']}); 监视 {len(targets['dirs'])} 个目录"
+         f"(各项目 {'/'.join(GUARD_SUBDIRS)}/; git 仓 {len(targets['repos'])} 个, 非 git 目录 {len(targets['plain'])} 个), "
+         f"关键日志 {len(targets['key_logs'])} 个(md5); 只读")
+    leak_mark = LEAK_MARK_PREFIX + secrets.token_hex(8)
+    snapshot = governance_snapshot(targets)
+    guard_changes = 0
+    guard_concurrent = 0
+    leaks_total = 0
     home = tempfile.mkdtemp(prefix="lybra-runall-home-")
+
+    def _on_sigterm(signum: int, _frame: Any) -> None:
+        # AIPOS-F118: 被上游终止(finalize 合并后回归超时先 SIGTERM 整组)时, 在跑的测试子进程在独立会话里、上游 killpg 够不着——
+        # 清理与文件结束后的孤儿收尸同一实现(reap_marked: 带本轮标记的存活进程一律 SIGKILL), 不另设进程组登记。
+        reap_marked(leak_mark)
+        raise SystemExit(128 + signum)
+
     previous_handler = signal.signal(signal.SIGTERM, _on_sigterm)
     try:
-        env = _child_env(home)
+        env = _child_env(home, leak_mark)
         for path in plan["to_run"]:
             emit()
             emit(f"── {path} {_RULE}")
@@ -268,13 +424,44 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None)
                 overall = 1
                 continue
             node_excludes = [t for t in plan["node_excluded"] if t.startswith(path + "::")]
-            rc, output = _run(_command(path, runner, node_excludes), repo_root, env)
+            cmd = _command(path, runner, node_excludes)
+            rc, output = _run(cmd, repo_root, env)
             if runner == "pytest" and rc == PYTEST_NO_TESTS_COLLECTED:
                 emit("[runall_discovery] pytest 未收集到用例 → 脚本式夹具, 以 python3 直跑")
                 runner = "script"
-                rc, output = _run([sys.executable, path], repo_root, env)
+                cmd = [sys.executable, path]
+                rc, output = _run(cmd, repo_root, env)
             emit(output.rstrip("\n"))
             ok, notes = judge(path, runner, rc, output, plan["known_failures"])
+            leaked = reap_marked(leak_mark)
+            if leaked:
+                ok = False
+                leaks_total += len(leaked)
+                notes += [f"孤儿进程守卫: 测试结束后仍存活(逃出进程组收尸), 已 SIGKILL: pid {pid} {line}" for pid, line in leaked]
+            after = governance_snapshot(targets)
+            changed = snapshot_changes(snapshot, after)
+            snapshot = after
+            if changed:
+                # 时间窗归因复核: 单独重跑本文件一次(测试结果不计, 只看守卫), 前后再快照。复现 = 本文件所致 → 红;
+                # 不复现 = 同时段他方(门/顾问)的正常写入 → 照列不判红。
+                _rc_again, _out_again = _run(cmd, repo_root, env)
+                leaked_again = reap_marked(leak_mark)
+                if leaked_again:
+                    ok = False
+                    leaks_total += len(leaked_again)
+                    notes += [f"孤儿进程守卫(复核重跑): 已 SIGKILL: pid {pid} {line}" for pid, line in leaked_again]
+                again = governance_snapshot(targets)
+                reproduced = snapshot_changes(snapshot, again)
+                snapshot = again
+                if reproduced:
+                    ok = False
+                    guard_changes += len(reproduced)
+                    notes += [f"真实治理根守卫: 本文件执行期间真实治理根变动: {c}" for c in changed]
+                    notes += [f"真实治理根守卫: 单独重跑本文件复现变动(判为本文件所致): {c}" for c in reproduced]
+                else:
+                    guard_concurrent += len(changed)
+                    notes += [f"真实治理根守卫: 本文件执行期间有变动, 单独重跑未复现 → 判为同时段他方写入(门/顾问), 不计本文件: {c}"
+                              for c in changed]
             for note in notes:
                 emit(f"[runall_discovery] {note}")
             if ok:
@@ -282,6 +469,11 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None)
             else:
                 emit(f"✗ {path} FAIL")
                 overall = 1
+        emit()
+        emit(f"[runall_discovery] 真实治理根守卫汇总: 测试所致变动 {guard_changes} 处"
+             + ("" if guard_changes else "(无测试写入真实治理根)")
+             + f"; 同时段他方写入(重跑未复现, 不计) {guard_concurrent} 处")
+        emit(f"[runall_discovery] 孤儿进程守卫汇总: 泄漏进程 {leaks_total} 个" + ("" if leaks_total else "(无带本轮标记的存活进程)"))
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
         try:

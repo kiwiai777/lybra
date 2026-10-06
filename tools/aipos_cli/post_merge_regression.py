@@ -78,7 +78,7 @@ def _popen_group(cmd: list[str], *, cwd: Path, env: dict[str, str] | None, stdou
                             text=True, start_new_session=True)
 
 
-#: 超时终止: 先 SIGTERM 整组(run-all 执行器据此清掉其独立会话里的测试子进程组, runall_discovery._on_sigterm), 宽限后 SIGKILL。
+#: 超时终止: 先 SIGTERM 整组(run-all 执行器据此按本轮标记清掉其独立会话里的测试进程, runall_discovery.run 的 SIGTERM 处理 → reap_marked), 宽限后 SIGKILL。
 _TERM_GRACE_SECONDS = 15
 
 
