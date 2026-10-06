@@ -2754,14 +2754,24 @@ def _check_test_in_runall(
             f"出口: ①在卡分支提交该清单; ②声明有误请顾问修正 project.json test_contract.runall_path"
         )]
     
-    # 3. 检查每个 test 文件是否在清单中
-    missing_tests = []
-    for test_file in test_files:
-        # 检查完整路径或 basename
-        basename = test_file.split("/")[-1]
-        if test_file not in runall_content and basename not in runall_content:
-            missing_tests.append(test_file)
-    
+    # 3. 本卡测试文件是否已登记(AIPOS-F109 件④: 唯一判据 workspace_config.runall_unregistered——清单声明 discover = 命中声明式样
+    #    即登记、只有文件级 exclude 的算未登记; 无 discover 行 = 原判据, 路径或文件名须出现在清单文本中)
+    from tools.aipos_cli.next_resolver import card_branch_name
+    from tools.aipos_cli.workspace_config import runall_unregistered
+
+    try:
+        missing_tests, directives = runall_unregistered(test_files, runall_content)
+    except ValueError as exc:
+        return [f"{exc}(清单 {runall_rel}, 卡分支 {card_branch_name(task_id)})。出口: 修正声明行后重交"]
+    if missing_tests and directives["discover"]:
+        # AIPOS-F119 件②: 拒因逐项附清单内 exclude 声明的理由(读 runall_directives 解析结果, 不另解析)
+        excluded = [f"{path}(声明理由: {directives['exclude'][path]})" for path in missing_tests]
+        blocking_reasons.append(
+            f"TEST_NOT_IN_RUNALL: 本卡测试文件被项目声明的测试清单 {runall_rel}(来源 {contract.get('source')})以 exclude 声明排除、"
+            f"不会执行: {', '.join(excluded)}。出口: ①删该 exclude 行让其随自动发现执行; ②确属不可在夹具环境执行, 请顾问裁定后再交"
+        )
+        return blocking_reasons
+
     if missing_tests:
         blocking_reasons.append(
             f"TEST_NOT_IN_RUNALL: 本卡新增/修改的 test 文件未登记进项目声明的测试清单 {runall_rel}"

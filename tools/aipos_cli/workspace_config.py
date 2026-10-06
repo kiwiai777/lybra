@@ -963,16 +963,10 @@ def card_test_files(changes: list[tuple[str, str]], contract: dict[str, Any]) ->
 
     changes = 卡分支改动集 [(状态字母, 改动后路径)](board_adapter._card_branch_changed_files(with_status=True), 即
     `git diff --name-status main...card/<ID>`; 重命名/复制已取新路径)。contract = project_test_contract 的返回。
-    规则: 删除项(D)排除——删除的文件无法登记, 也不是「本卡测试改动」; 仍存在的文件(A/M/R/C/T)按文件名(路径最后一段)
-    fnmatchcase 命中 contract["test_file_globs"] 任一式样, 且不是测试清单 runall_path 本身 = 测试文件。保持输入顺序。
+    规则: 删除项(D)排除——删除的文件无法登记, 也不是「本卡测试改动」; 仍存在的文件(A/M/R/C/T)经 is_test_file(文件名
+    fnmatchcase 命中 contract["test_file_globs"] 任一式样, 且不是测试清单 runall_path 本身)= 测试文件。保持输入顺序。
     未识别状态 / 式样缺 = ValueError("TEST_FILES_UNRESOLVED: …")(fail-closed, 调用方拒并给出口)。"""
-    import fnmatch
-
-    globs = contract.get("test_file_globs") if isinstance(contract, dict) else None
-    problem = _glob_list_problem(globs)
-    if problem is not None:
-        raise ValueError(f"TEST_FILES_UNRESOLVED: 测试约定缺 test_file_globs({problem}); 须经 workspace_config.project_test_contract 取约定")
-    runall_rel = contract.get("runall_path")
+    is_test_file("", contract)  # 式样缺/形坏先拒(空改动集也不放过形坏约定)
     result: list[str] = []
     for status, path in changes:
         letter = str(status or "")[:1]
@@ -983,12 +977,89 @@ def card_test_files(changes: list[tuple[str, str]], contract: dict[str, Any]) ->
                 f"TEST_FILES_UNRESOLVED: 改动集状态 {status!r}({path}) 不在可判集合 "
                 f"{sorted(_CHANGE_EXISTS_STATUSES | _CHANGE_DELETED_STATUSES)} 内"
             )
-        if path == runall_rel:
-            continue
-        name = path.rsplit("/", 1)[-1]
-        if any(fnmatch.fnmatchcase(name, pattern) for pattern in globs):
+        if is_test_file(path, contract):
             result.append(path)
     return result
+
+
+def is_test_file(path: str, contract: dict[str, Any]) -> bool:
+    """AIPOS-F109 件④: 「是测试文件」唯一判定(card_test_files 与 run-all 自动发现 discover_test_files 共用, 同一声明
+    test_contract.test_file_globs): 文件名(路径最后一段) fnmatchcase 命中任一式样, 且不是测试清单 runall_path 本身。
+    式样缺/形坏 = ValueError("TEST_FILES_UNRESOLVED: …")。"""
+    import fnmatch
+
+    globs = contract.get("test_file_globs") if isinstance(contract, dict) else None
+    problem = _glob_list_problem(globs)
+    if problem is not None:
+        raise ValueError(f"TEST_FILES_UNRESOLVED: 测试约定缺 test_file_globs({problem}); 须经 workspace_config.project_test_contract 取约定")
+    if path == contract.get("runall_path"):
+        return False
+    name = path.rsplit("/", 1)[-1]
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in globs)
+
+
+def runall_unregistered(test_files: list[str], runall_text: str) -> tuple[list[str], dict[str, Any]]:
+    """AIPOS-F109 件④: 「测试文件已登记进测试清单」唯一判据(门交回检查 TEST_NOT_IN_RUNALL 与各夹具自检共用, 禁第二实现)。
+
+    test_files = 已按 is_test_file 判定的测试文件(相对产品仓根)。清单声明 discover(runall_directives)= 命中声明式样即登记,
+    只有文件级 exclude 的算未登记; 无 discover = 原判据(完整路径或文件名出现在清单文本中)。
+    返回 (未登记的测试文件, 声明行解析结果)。声明行形坏 = ValueError(RUNALL_DIRECTIVE_INVALID)。"""
+    directives = runall_directives(runall_text)
+    if directives["discover"]:
+        return [path for path in test_files if path in directives["exclude"]], directives
+    return [path for path in test_files if path not in runall_text and path.rsplit("/", 1)[-1] not in runall_text], directives
+
+
+def _runall_directive_declaration() -> dict[str, Any]:
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (
+        load_schema("config").get("configuration_sources", {}).get("project_json", {}).get("schema", {}).get("test_contract", {})
+    ).get("runall_directives")
+    if not isinstance(decl, dict) or not str(decl.get("prefix") or "").strip() or not isinstance(decl.get("directives"), dict):
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.test_contract.runall_directives 未声明或形坏")
+    return decl
+
+
+def runall_directives(text: str) -> dict[str, Any]:
+    """AIPOS-F109 件④: 测试清单文件(test_contract.runall_path)内声明行的唯一解析(门交回检查与 run-all 执行器共用, 禁第二实现)。
+
+    声明 = config.schema test_contract.runall_directives(行首注释 + 前缀 + 指令词)。返回:
+      {discover: bool, exclude: {目标: 理由}, known_failures: {目标: 理由}}
+    目标 = 相对产品仓根的文件路径, 或 pytest 节点 `<文件>::<节点>`。
+    形坏(未声明的指令词 / 缺目标 / exclude 缺理由 / 重复目标 / discover 带参数)= ValueError("RUNALL_DIRECTIVE_INVALID: …")(fail-closed)。"""
+    import re
+
+    decl = _runall_directive_declaration()
+    prefix = str(decl["prefix"]).strip()
+    allowed = set(decl["directives"])
+    line_re = re.compile(r"^\s*#\s*" + re.escape(prefix) + r"\s*(.*)$")
+    out: dict[str, Any] = {"discover": False, "exclude": {}, "known_failures": {}}
+    for lineno, line in enumerate(str(text).splitlines(), start=1):
+        m = line_re.match(line)
+        if not m:
+            continue
+        parts = m.group(1).strip().split(None, 2)
+        word = parts[0] if parts else ""
+        where = f"第 {lineno} 行 {line.strip()!r}"
+        if word not in allowed:
+            raise ValueError(f"RUNALL_DIRECTIVE_INVALID: {where} 指令词 {word!r} 未声明(允许 {sorted(allowed)}; config.schema test_contract.runall_directives)")
+        if word == "discover":
+            if len(parts) > 1:
+                raise ValueError(f"RUNALL_DIRECTIVE_INVALID: {where} discover 不带参数")
+            out["discover"] = True
+            continue
+        if len(parts) < 2:
+            raise ValueError(f"RUNALL_DIRECTIVE_INVALID: {where} 缺目标(文件路径或 <文件>::<节点>)")
+        target = parts[1]
+        reason = parts[2].strip() if len(parts) > 2 else ""
+        bucket = "exclude" if word == "exclude" else "known_failures"
+        if word == "exclude" and not reason:
+            raise ValueError(f"RUNALL_DIRECTIVE_INVALID: {where} exclude 须写理由(不执行的测试必须说明为何不执行)")
+        if target in out["exclude"] or target in out["known_failures"]:
+            raise ValueError(f"RUNALL_DIRECTIVE_INVALID: {where} 目标 {target!r} 重复声明")
+        out[bucket][target] = reason
+    return out
 
 
 def default_lane_repo(governance_root: str | Path) -> str:
