@@ -2105,7 +2105,11 @@ def _mcp_return_record_plan(
         if existing_metadata.get("claim_id") not in (None, claim_id):
             blocking.append("Session record claim_id does not match queue task")
     confirmation_ref = f"owner_policy:{owner_policy_ref}"
+    # AIPOS-F114 件①: 交回记录绑定卡分支此刻 tip(与裁决绑 tip 同一读取口), 推导核据此判交回是否已过期(nodes.N3.return_stale)
+    from tools.aipos_cli.next_resolver import return_binding_subject
+
     return_markdown = build_mcp_return_record_markdown(
+        artifact_subject=return_binding_subject(repo_root, task_id, source_metadata),
         task_id=task_id,
         task_path=task_path,
         actor=actor,

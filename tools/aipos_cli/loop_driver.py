@@ -915,7 +915,9 @@ def _drive(
             def _ready(_matched: list[str], _card: str = ready_card) -> bool:
                 # 就绪 = 推导核可推导; 或硬停(产物不合规 F78 件③ / 记录缺 F73E 件①)——都该让 loop 醒来判定, 而非空等到超时
                 d = derive(_card, governance_root)
-                return bool(d.get("derivable")) or (d.get("action") or {}).get("type") in HARD_STOP_ACTIONS
+                # AIPOS-F114: 等待中本轮作废(所审交回过期 / 被下一轮取代)也醒来——重推导被审卡派生重交回, 不空等到超时
+                return (bool(d.get("derivable")) or (d.get("action") or {}).get("type") in HARD_STOP_ACTIONS
+                        or isinstance(d.get("return_stale"), dict) or isinstance(d.get("superseded_by"), dict))
 
             plan: LaunchPlan | None = None
             if launch_card is not None:

@@ -1127,6 +1127,7 @@ run_pytest "F101 tools/mcp_server/tests/test_aipos330_verb_contract.py(TestS6Ext
 run_pytest "tests/test_aipos_f113_enroll_deliver_ssh_secrets.py" "$REPO_ROOT/tests/test_aipos_f113_enroll_deliver_ssh_secrets.py"
 # AIPOS-F112: 裁决后卡分支 tip 变化的复审出口(verdict_stale → 重交回 → R2 → 裁决绑新 tip → finalize → close)靶场夹具
 run_pytest "tests/test_aipos_f112_verdict_stale_reaudit.py" "$REPO_ROOT/tests/test_aipos_f112_verdict_stale_reaudit.py"
+run_pytest "tests/test_aipos_f114_return_stale_reaudit.py" "$REPO_ROOT/tests/test_aipos_f114_return_stale_reaudit.py"
 
 echo
 echo "========================================================"

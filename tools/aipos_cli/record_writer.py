@@ -501,6 +501,7 @@ MCP_RETURN_FRONTMATTER_ORDER = [
     "result_summary_present",
     "artifact_refs",
     "completion_report_ref",
+    "artifact_subject",
     "dry_run_id",
     "dry_run_snapshot_hash",
     "confirmation_ref",
@@ -826,6 +827,7 @@ def build_mcp_return_record_markdown(
     confirmer: dict[str, Any] | None = None,
     self_check_waived: bool = False,
     self_check_waiver_reason: str | None = None,
+    artifact_subject: dict[str, Any] | None = None,
 ) -> str:
     metadata = {
         "record_type": RecordType.RETURN_RECORD,
@@ -878,6 +880,10 @@ def build_mcp_return_record_markdown(
     # key — the popup reads absent-key as 未记录.
     if isinstance(agent_runtime, dict) and agent_runtime:
         metadata["agent_runtime"] = dict(agent_runtime)
+    # AIPOS-F114 件①: 门交回记录绑定被交回产物(卡分支此刻 tip; next_resolver.return_binding_subject), 交回过期判据读它;
+    # 非代码卡/不可解析时不带(与存量记录同形)
+    if isinstance(artifact_subject, dict) and str(artifact_subject.get("commit_sha") or "").strip():
+        metadata["artifact_subject"] = dict(artifact_subject)
     
     # AIPOS-F49-fix1: self_check_waived 标记（Owner 强制放行）
     if self_check_waived:

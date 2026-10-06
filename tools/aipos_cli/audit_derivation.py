@@ -452,6 +452,26 @@ def current_audit_task_id(source_task_id: str, repo_root: Path) -> str:
     return rounds[-1] if rounds else f"{source_task_id}{audit_round_suffixes()[0]}"
 
 
+def superseding_round(audit_task_id: str, repo_root: Path, card_frontmatter: dict[str, Any] | None = None) -> dict[str, str] | None:
+    """AIPOS-F114: 审计轮是否已被取代的唯一读取(推导核 / 开工核验 / 裁决入口同读, 禁第二份)。
+    取代关系唯一记在后一轮的门派审记录 supersedes 字段(AIPOS-F112 既有, F72 字段), 不改写旧轮卡面/记录。
+    返回 {audit_task_id: 取代它的那一轮, dispatch_id}; 未被取代 / 不是审计轮 = None。"""
+    from tools.aipos_cli.next_resolver import _find_latest_record, _resolve_governance_path_with_relative
+
+    reviewed = audit_card_reviewed_id(audit_task_id, card_frontmatter)
+    if not reviewed:
+        return None
+    rounds = audit_round_ids(reviewed, Path(repo_root))
+    if audit_task_id not in rounds:
+        return None
+    dispatch_root = _resolve_governance_path_with_relative("records", Path(repo_root)) / "audit_dispatches"
+    for later in rounds[rounds.index(audit_task_id) + 1:]:
+        dispatch = _find_latest_record(dispatch_root / later, "dispatch") or {}
+        if str(dispatch.get("supersedes") or "").strip() == audit_task_id:
+            return {"audit_task_id": later, "dispatch_id": str(dispatch.get("dispatch_id") or "")}
+    return None
+
+
 def derive_audit_task_id(source_task_id: str, repo_root: Path | None = None) -> str:
     """AIPOS-F18 大项B: Generate audit task ID with revision number evolution.
 
@@ -586,7 +606,15 @@ def build_derived_audit_task(
     forensic_anchors = [
         f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | 禁checkout卡分支(git diff {card_base_branch()}...{card_branch_name(source_task_id)}) | 报告落点={report_location} | 不存在结论必附pwd+命令+输出",
     ]
-    if reaudit:
+    if reaudit and reaudit.get("kind") == "return_stale":
+        stale = reaudit.get("stale") or {}
+        superseded = str(reaudit.get("superseded_audit_task_id") or "")
+        forensic_anchors.append(
+            f"\u2605复审说理(AIPOS-F114 return_stale): 上一轮 {superseded} 在途未出裁决, 其所审交回 {stale.get('return_id')} 绑定 "
+            f"{str(stale.get('bound_commit_sha') or '')[:12]}, 卡分支 {stale.get('branch')} 交回后又前进到 {str(stale.get('tip') or '')[:12]} "
+            f"(交回已过期); 本轮准绳不变(原卡全文), 审的是新 tip 的整卡产物; 上一轮作废(本轮派审记录 supersedes), 其报告不入门"
+        )
+    elif reaudit:
         stale = reaudit.get("stale") or {}
         superseded = str(reaudit.get("superseded_audit_task_id") or "")
         forensic_anchors.append(
@@ -611,7 +639,15 @@ def build_derived_audit_task(
     artifact_list = "\n".join(f"- `{ref}`" for ref in artifact_refs) if artifact_refs else "- (see return record)"
     
     reaudit_note = ""
-    if reaudit:
+    if reaudit and reaudit.get("kind") == "return_stale":
+        stale = reaudit.get("stale") or {}
+        reaudit_note = (
+            f"\n## 复审说理(AIPOS-F114 return_stale)\n"
+            f"本卡取代在途的上一轮审计卡 `{reaudit.get('superseded_audit_task_id')}`: 它所审的交回 `{stale.get('return_id')}` 绑定 "
+            f"`{stale.get('bound_commit_sha')}`, 卡分支 `{stale.get('branch')}` 交回后又前进到 `{stale.get('tip')}`"
+            f"(多为执行体在卡工作树合 main), 上一轮审的不是当前产物, 已作废、其报告不入门。按原卡全文对新 tip 整卡审计。\n"
+        )
+    elif reaudit:
         stale = reaudit.get("stale") or {}
         reaudit_note = (
             f"\n## 复审说理(AIPOS-F112 verdict_stale)\n"
@@ -696,24 +732,34 @@ Independent audit of task `{source_task_id}`.
 
 
 def _reaudit_round(repo_root: Path, source_task_id: str, source_metadata: dict[str, Any], *, branch_id: str) -> dict[str, Any] | None:
-    """AIPOS-F112 件②: 交回时是否走「裁决过期复审」派生。None = 不适用(无裁决 / 未过期 / 非代码 / 不派审, 走既有首轮派生判据);
-    {"skip": 原因} = 适用但当前一轮在途(幂等不演进); 否则 {audit_task_id(下一轮, derive_audit_task_id 演进), superseded_audit_task_id, stale}。"""
+    """AIPOS-F112 件② + F114 件①: 交回时是否走「复审」派生。None = 不适用(无裁决且无在途过期轮 / 未过期 / 非代码 / 不派审, 走既有首轮派生判据);
+    {"skip": 原因} = 适用但当前一轮在途且未过期(幂等不演进); 否则 {kind(verdict_stale|return_stale), audit_task_id(下一轮,
+    derive_audit_task_id 演进), superseded_audit_task_id, stale}。
+    判据唯一实现: 裁决过期 next_resolver.verdict_staleness(当前一轮已裁); 交回过期 next_resolver.return_staleness(当前一轮在途,
+    其所审交回绑定的 tip ≠ 卡分支 tip——门已落的新交回不是该轮所审的那份)。"""
     if str(source_metadata.get("audit", "")).strip().lower() == "none":
         return None
     if str(source_metadata.get("task_mode", "")).strip().lower() == "audit" or branch_id == "noncode_bench_audit":
         return None
-    from tools.aipos_cli.next_resolver import verdict_staleness
+    from tools.aipos_cli.next_resolver import return_staleness, verdict_staleness
     from tools.aipos_cli.task_loader import task_card_lookup_scope
 
-    stale = verdict_staleness(repo_root, source_task_id, source_metadata)
-    if stale is None:
-        return None
     with task_card_lookup_scope(Path(repo_root)):  # 只读判定: 轮号查找共用一趟队列索引
         current = current_audit_task_id(source_task_id, repo_root)
-        if str(stale.get("audit_task_id") or "") != current:
-            return {"skip": f"re-audit round {current} already derived and awaiting its verdict (idempotency, AIPOS-F112)"}
+        stale = verdict_staleness(repo_root, source_task_id, source_metadata)
+        kind = "verdict_stale"
+        if stale is None or str(stale.get("audit_task_id") or "") != current:
+            # AIPOS-F114: 当前一轮在途(无本轮裁决)且其所审交回已过期 → 演进下一轮取代它(含 F112 复审轮 R2 在途时分支再前进)
+            in_flight = return_staleness(repo_root, source_task_id, source_metadata)
+            if in_flight is not None and str(in_flight.get("audit_task_id") or "") == current:
+                stale, kind = in_flight, "return_stale"
+            elif stale is None:
+                return None
+            else:
+                return {"skip": f"re-audit round {current} already derived and awaiting its verdict (idempotency, AIPOS-F112)"}
         next_round = derive_audit_task_id(source_task_id, repo_root=repo_root)
     return {
+        "kind": kind,
         "audit_task_id": next_round,
         "superseded_audit_task_id": current,
         "stale": stale,
