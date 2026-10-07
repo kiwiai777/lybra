@@ -35,6 +35,11 @@ BACKENDS = ("bwrap", "landlock")
 #: 测试子进程环境里的沙箱标记(值 = 后端名; 不用 LYBRA_/AIPOS_ 前缀, 嵌套执行器不剥): 嵌套执行器据此在头部说明外层沙箱。
 SANDBOX_ENV = "RUNALL_SANDBOX"
 PROBE_TIMEOUT_SECONDS = 30
+#: 网络隔离下 git 无法经 DNS 推断主机全名, 未配 user.email 的仓提交即「Author identity unknown」(AIPOS-F126 全量实测 8 例)。
+#: git 身份回退链: GIT_*_EMAIL 变量 > 仓/全局 user.email > EMAIL 变量 > 自动推断(user@主机全名)——补 EMAIL 只顶替最后一级
+#: (仓内 / 全局配置与 GIT_* 变量照旧优先); 环境已有 EMAIL 则不动。
+NETNS_GIT_EMAIL_ENV = "EMAIL"
+NETNS_GIT_EMAIL = "runall-sandbox@localhost.invalid"
 
 # Landlock(include/uapi/linux/landlock.h); 系统调用号自 Linux 5.13 起各架构统一。
 _SYS_LANDLOCK_CREATE_RULESET = 444
@@ -126,6 +131,8 @@ class Isolation:
         out = dict(env)
         if self.backend is not None:
             out[SANDBOX_ENV] = self.backend
+        if self.network_isolated and not out.get(NETNS_GIT_EMAIL_ENV):
+            out[NETNS_GIT_EMAIL_ENV] = NETNS_GIT_EMAIL
         return out
 
     def header(self) -> str:
@@ -136,7 +143,8 @@ class Isolation:
         outer_note = f"; 本执行器自身已在外层 run-all 沙箱({outer})内" if outer else ""
         if self.backend is not None:
             if self.network_isolated:
-                net = "独立网络命名空间, 仅 loopback(宿主生产门与外网不可达)"
+                net = (f"独立网络命名空间, 仅 loopback(宿主生产门与外网不可达; git 无 DNS 推断提交邮箱 → 环境未设 {NETNS_GIT_EMAIL_ENV} 时补 "
+                       f"{NETNS_GIT_EMAIL_ENV}={NETNS_GIT_EMAIL}, 仓/全局配置照旧优先)")
             elif self.declared.get("network") == "isolated":
                 net = f"未隔离({self.backend} 不能隔离网络)"
             else:

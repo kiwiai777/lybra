@@ -401,3 +401,35 @@ def test_item1_product_repo_inside_protected_root_stays_writable(tmp_path):
     assert rc == 0, text
     assert (inner / "build.out").read_text(encoding="utf-8") == "ok"
     assert log.read_text(encoding="utf-8") == "# enrollment log\n"
+
+
+# ===========================================================================
+# --unshare-net 评估所得: 新网络命名空间里 git 无 DNS 推断提交邮箱 → 补 EMAIL(最低一级回退)
+# ===========================================================================
+def test_unshare_net_git_identity_fallback_is_lowest_precedence_email(tmp_path):
+    decl = {"mode": "auto", "network": "isolated", "source": "t"}
+    netns = runall_isolation.Isolation(declared=decl, backend="bwrap", network_isolated=True)
+    assert netns.env({"PATH": "/bin"}) == {"PATH": "/bin", "RUNALL_SANDBOX": "bwrap", "EMAIL": runall_isolation.NETNS_GIT_EMAIL}
+    assert netns.env({"EMAIL": "someone@example.invalid"})["EMAIL"] == "someone@example.invalid", "环境已有 EMAIL 不动"
+    assert "EMAIL" not in runall_isolation.Isolation(declared=decl, backend="landlock").env({}), "未隔离网络不补"
+    home, _root = _fake_real_home(tmp_path)
+    repo = _product_repo(tmp_path, {
+        "test_commit_without_identity.py": (
+            "import subprocess\n\n"
+            "def test_commit(tmp_path):\n"
+            "    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)\n"
+            "    (tmp_path / 'f').write_text('x')\n"
+            "    subprocess.run(['git', '-C', str(tmp_path), 'add', 'f'], check=True)\n"
+            "    subprocess.run(['git', '-C', str(tmp_path), 'commit', '-q', '-m', 'm'], check=True)\n"
+            "    subprocess.run(['git', '-C', str(tmp_path), 'config', 'user.email', 'repo@example.invalid'], check=True)\n"
+            "    subprocess.run(['git', '-C', str(tmp_path), 'commit', '-q', '--allow-empty', '-m', 'm2'], check=True)\n"
+            "    log = subprocess.run(['git', '-C', str(tmp_path), 'log', '--format=%ae'], capture_output=True, text=True, check=True)\n"
+            "    first, second = log.stdout.split()[1], log.stdout.split()[0]\n"
+            "    print('author emails:', first, second)\n"
+            "    assert second == 'repo@example.invalid', '仓内配置优先于 EMAIL'\n"
+        ),
+    })
+    rc, text = _run_executor(repo, home)
+    _show("[--unshare-net git 身份] 执行器输出摘录:\n" + _excerpt(text))
+    assert rc == 0, text
+    assert _verdict(text, "tests/test_commit_without_identity.py") == "PASS"
