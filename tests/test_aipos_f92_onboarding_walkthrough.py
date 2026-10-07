@@ -189,7 +189,7 @@ def test_item2_set_repos_validates_and_restores(iso_home: Path, tmp_path: Path):
                    "--repo", f"lib={tmp_path}/lib")
     assert rc == 2 and "--default" in out
     rc, out = _cli("project", "set-repos", "probe-x", "--home-root", str(home_root), "--repo", f"app={tmp_path}/app",
-                   "--repo", f"lib={tmp_path}/lib", "--default", "lib")
+                   "--repo", f"lib={tmp_path}/lib", "--default", "lib", "--confirm")  # AIPOS-F125: 缺省预演, --confirm 才写
     print(out)
     data = json.loads((home_root / "probe-x" / "project.json").read_text(encoding="utf-8"))
     assert rc == 0 and data["repos"] == {"default": "lib", "items": {"app": f"{tmp_path}/app", "lib": f"{tmp_path}/lib"}}

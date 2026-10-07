@@ -321,7 +321,10 @@ def generate_onboarding_guide(
     if repo_default:
         repo_parts += ["--default", _shell_quote(repo_default)]
     step2 = [
-        _cmd(*repo_parts),
+        # AIPOS-F125: 写 project.json 的命令同一两阶段(verbs.schema two_phase_protocol.project_json_writers): 缺省预演, --confirm 才写
+        "# 先预演(打印将写的 project.json diff 与校验结果, 零写入)给 Owner 看, 再 --confirm 写入",
+        _cmd(*repo_parts, "--dry-run"),
+        _cmd(*repo_parts, "--confirm"),
         "# 落账: 本步产物(project.json)精确提交并推送治理仓(AIPOS-F94)",
         render_landing_command(gov, _actor, set_repos_products(gov)),
     ]
@@ -333,9 +336,10 @@ def generate_onboarding_guide(
         "command": "\n".join(step2),
         "purpose": ("把产品仓清单写进 project.json(repos {default, items} + code_repo 别名), 经 config.schema project_json.repos 声明校验; "
                     "卡 lane.repo 写仓名, 建工作树 / finalize 按此解析。之后各卡由 lybra loop 结案后自动落账; 非卡改动一律 governance-commit --paths"),
-        "check": "输出 'Declared repos in <project.json>' 与每个仓一行; 多于一个仓须 --default; 落账输出 Verdict: PASS 且 '✓ Pushed to remote'",
+        "check": ("--dry-run 输出 'project set-repos <项目>: 预览(未写; 加 --confirm 写入)' + 每个仓一行 + project.json diff(零写入); "
+                  "--confirm 输出 '已写入'; 多于一个仓须 --default; 落账输出 Verdict: PASS 且 '✓ Pushed to remote'"),
         "on_fail": {
-            "REPOS_CONFLICT": "路径须为绝对路径、default 须在仓名内; 改参数重跑(project.json 未改动)",
+            "REPOS_CONFLICT": "路径须为绝对路径、default 须在仓名内; 改参数重跑(预演即报错, project.json 未改动)",
             "PROJECT_NOT_ESTABLISHED": "Step 1 未完成; 先跑 Step 1",
             **LANDING_ON_FAIL,
         },

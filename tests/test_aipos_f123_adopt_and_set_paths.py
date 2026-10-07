@@ -404,8 +404,9 @@ def test_item2_single_project_json_writer_with_lock_and_restore(rig, monkeypatch
     pj = rig.gov / "project.json"
     original = pj.read_text(encoding="utf-8")
 
-    def _boom(_root):
-        raise ValueError("verify failed")
+    def _boom(_root, project=None):
+        if project is None:  # AIPOS-F125: verify 写前以 project=<将写入内容> 预检; 本例只让写后复核失败, 测还原原文
+            raise ValueError("verify failed")
 
     with pytest.raises(ValueError, match="verify failed"):
         wc.update_project_json(rig.gov, lambda d: d.update({"paths": {"queue_root": "zzz"}}), verify=_boom)

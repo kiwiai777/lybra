@@ -721,7 +721,7 @@ def _project_paths_declaration() -> dict[str, dict[str, Any]]:
     return decl
 
 
-def project_paths(governance_root: str | Path) -> dict[str, Any]:
+def project_paths(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-F78: 解析项目落点声明。返回 {return_root: Path, verdict_root: Path, queue_root: Path,
     task_cards_root: Path, manual_gate_mode: bool, finalize_mode: str, foundation_backlog: Path | None,
     hard_rules_source: Path | None, policies_root: Path, declared: {key: bool}}。
@@ -732,16 +732,18 @@ def project_paths(governance_root: str | Path) -> dict[str, Any]:
     - 相对路径相对治理根; 绝对路径原样(chris 形声明用绝对路径)。
     - manual_gate_mode: paths 段优先, 兼容顶层 project.json manual_gate_mode(F73C 件①)。
     - project.json 读失败 = 精确捕获 + warning + 视为未声明(不静默吞)。
+    - AIPOS-F125: project 给出 = 校验/解析这份(将写入的)内容而非盘上文件(update_project_json 写前预检, 同一读取口)。
     """
     root = Path(governance_root)
     decl = _project_paths_declaration()
-    try:
-        project = read_project_json(root)
-    except (OSError, ValueError) as exc:
-        import sys
+    if project is None:
+        try:
+            project = read_project_json(root)
+        except (OSError, ValueError) as exc:
+            import sys
 
-        print(f"Warning: project.json unreadable at {root}, using declared default paths: {exc}", file=sys.stderr)
-        project = {}
+            print(f"Warning: project.json unreadable at {root}, using declared default paths: {exc}", file=sys.stderr)
+            project = {}
     raw_paths = project.get("paths") if isinstance(project.get("paths"), dict) else {}
     result: dict[str, Any] = {"declared": {}}
     for key in PROJECT_PATH_KEYS:
@@ -823,18 +825,20 @@ def _same_path(a: Path, b: Path) -> bool:
         return False
 
 
-def project_repos(governance_root: str | Path) -> dict[str, Any]:
+def project_repos(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-F78C 件①: 解析项目仓清单(唯一读取口)。
 
     返回 {declared: bool, default: str|None, items: {仓名: Path}, code_repo: Path|None, project_json_exists: bool}。
     - repos 段缺 = declared False, items 为空; code_repo 单独给出(单仓项目零感知)。
     - repos 段在: default 必在 items 内, items 值必须是非空绝对路径, code_repo(若写)必须 = items[default],
       否则 CardRepoUnresolved(REPOS_CONFLICT)。project.json 读失败 = OSError/ValueError 原样抛(不吞)。
+    - AIPOS-F125: project 给出 = 校验这份(将写入的)内容而非盘上文件(update_project_json 写前预检, 同一读取口)。
     """
     root = Path(governance_root)
     _project_repos_declaration()  # 声明缺 = SchemaLoadError(fail-closed), 代码不写死第二份形
     exists = project_json_path(root).is_file()
-    project = read_project_json(root)
+    if project is None:
+        project = read_project_json(root)
     code_repo_raw = str(project.get("code_repo") or "").strip()
     code_repo = Path(code_repo_raw).expanduser() if code_repo_raw else None
     raw = project.get("repos")
@@ -1486,9 +1490,11 @@ def write_project_created_snapshot(project_root: str | Path, name: str, *, regis
 
 
 # ---------------------------------------------------------------------------
-# AIPOS-F123 件②: project.json 唯一写路径(set-repos / set-workstation / set-paths 共用; 禁第二份写实现)。
+# AIPOS-F123 件②: project.json 唯一写路径(set-repo / set-repos / set-workstation / set-paths 共用; 禁第二份写实现)。
 # 排他锁 = fcntl.flock 加在 project.json 自身(inode 不变: 原位改写, 不用 rename, 并发写方排队而非各写各的);
 # 写后可选复核(读取口)不过 = 还原原文并原样上抛; dry_run = 只算 diff 零写入。
+# AIPOS-F125: 两阶段(缺省预演 / --confirm 才写)对四个写命令同一语义(声明 verbs.schema two_phase_protocol.project_json_writers);
+# 预演 = 本函数 dry_run(diff + 写前预检: 同一读取口校验将写入的内容, 不合 = 原样上抛, 预演即报错)。
 # ---------------------------------------------------------------------------
 
 def update_project_json(
@@ -1499,9 +1505,10 @@ def update_project_json(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """读-改-写 project.json 的唯一实现。mutate(data) 原地修改 JSON 对象(可抛声明错误 = 不写);
-    verify(project_root) 在写后以产品读取口复核(抛 = 还原原文后上抛)。
+    verify = 产品读取口(签名 verify(project_root, *, project=None)): 写前以 project=<将写入的内容> 预检(预演与写入同走,
+    抛 = 零写入原样上抛), 写后以盘上文件复核(抛 = 还原原文后上抛)。
 
-    返回 {project_json, changed, written, diff(unified diff 文本, 无改动为空串)}。
+    返回 {project_json, dry_run, changed, written, diff(unified diff 文本, 无改动为空串)}。
     项目未建(无 project.json)= FileNotFoundError; 文件不是 JSON 对象 = ValueError。"""
     import difflib
     import fcntl
@@ -1521,7 +1528,10 @@ def update_project_json(
             diff = "".join(difflib.unified_diff(
                 original.splitlines(keepends=True), rendered.splitlines(keepends=True),
                 fromfile=f"{path} (当前)", tofile=f"{path} (写入后)"))
-            result = {"project_json": str(path), "changed": rendered != original, "written": False, "diff": diff}
+            result = {"project_json": str(path), "dry_run": dry_run, "changed": rendered != original, "written": False,
+                      "diff": diff}
+            if verify is not None:
+                verify(Path(project_root), project=json.loads(rendered))  # AIPOS-F125: 写前预检(预演即报错, 零写入)
             if dry_run or rendered == original:
                 return result
 
@@ -1649,23 +1659,58 @@ def set_project_repos(
     items: dict[str, str | Path],
     *,
     default: str,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """AIPOS-F92 件②: 声明项目产品仓 —— project.json `repos {default, items}` + `code_repo`(= items[default] 兼容别名)。
 
     项目须已建(resolve_project_root, 无 lazy-create)。其余 project.json 键原样保留(只改 repos / code_repo)。
     校验 = 唯一读取口 project_repos()(config.schema project_json.repos 声明: 绝对路径 / default ∈ items / code_repo 一致);
-    写后校验不过 = 原文件还原 + 抛 CardRepoUnresolved(REPOS_CONFLICT), 不留半成品。返回 project_repos() 结果 + project_json 路径。
+    写前预检不过 = 零写入抛 CardRepoUnresolved(REPOS_CONFLICT); 写后复核不过 = 原文件还原后上抛, 不留半成品。
+    AIPOS-F125: dry_run = 只预演(diff + 校验, 零写入; CLI 缺省)。返回 project_repos(将写入的内容) + project_json 路径
+    + update_project_json 结果(dry_run / changed / written / diff)。
     """
     root = resolve_project_root(home_root, name)
     clean_items = {str(k).strip(): str(Path(str(v).strip()).expanduser()) for k, v in items.items()}
+    staged: dict[str, Any] = {}
 
     def _mutate(data: dict[str, Any]) -> None:
         data["repos"] = {"default": str(default).strip(), "items": clean_items}
         data["code_repo"] = clean_items.get(str(default).strip())
+        staged["project"] = data
 
-    # AIPOS-F123 件②: 写入经 project.json 唯一写路径(锁 + 写后经读取口 project_repos 复核, 不合 = 还原原文件)
-    update_project_json(root, _mutate, verify=project_repos)
-    return {**project_repos(root), "project_json": project_json_path(root)}
+    # AIPOS-F123 件②: 写入经 project.json 唯一写路径(锁 + 写前预检/写后复核经读取口 project_repos, 不合 = 不写/还原原文件)
+    outcome = update_project_json(root, _mutate, verify=project_repos, dry_run=dry_run)
+    return {**project_repos(root, project=staged["project"]), **outcome, "project_json": project_json_path(root)}
+
+
+def update_project_repo(
+    home_root: str | Path,
+    name: str,
+    code_repo: str | Path,
+    *,
+    registered_by: str = "owner",
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """`lybra project set-repo` 的唯一实现: 改已建项目的 code_repo(单仓别名), registered_at 原样保留, registered_by = 本次写方。
+
+    项目须已建(resolve_project_root 的 PROJECT_NOT_ESTABLISHED 原样上抛, 无 lazy-create — ruling 2=a)。
+    AIPOS-F125: 经 project.json 唯一写路径 update_project_json(锁 + 读取口 project_repos 写前预检/写后复核), 其余键原样保留
+    (原 write_project_json 整文件重写会丢 repos / paths / workstations 等段); 已声明 repos 而 code_repo ≠ items[default]
+    = REPOS_CONFLICT 零写入(多仓改用 set-repos)。dry_run = 只预演(diff + 校验, 零写入; CLI 缺省)。
+    返回 {project_root, code_repo} + update_project_json 结果(dry_run / changed / written / diff)。"""
+    root = resolve_project_root(home_root, name)
+    repo_value = str(Path(code_repo).expanduser()) if code_repo else None
+
+    def _mutate(data: dict[str, Any]) -> None:
+        data["project"] = str(name).strip()
+        data["code_repo"] = repo_value
+        if not str(data.get("registered_at") or "").strip():
+            data["registered_at"] = iso_z()
+        data["registered_by"] = registered_by
+        data["config_version"] = 1
+
+    outcome = update_project_json(root, _mutate, verify=project_repos, dry_run=dry_run)
+    return {"project_root": root, "code_repo": repo_value, **outcome}
 
 
 def set_project_repo(
@@ -1675,14 +1720,9 @@ def set_project_repo(
     *,
     registered_by: str = "owner",
 ) -> Path:
-    """Update an established project's code_repo mapping, preserving registered_at.
-
-    The project must already exist; otherwise resolve_project_root's PROJECT_NOT_ESTABLISHED
-    propagates (no lazy-create — ruling 2=a).
-    """
-    root = resolve_project_root(home_root, name)
-    write_project_json(root, name, code_repo=code_repo, registered_by=registered_by)
-    return root
+    """Update an established project's code_repo mapping, preserving registered_at (写入; 门动词
+    lybra_project_set_repo_confirm 的调用口)。实现 = update_project_repo(唯一实现), 本函数只保留返回治理根的旧签名。"""
+    return update_project_repo(home_root, name, code_repo, registered_by=registered_by)["project_root"]
 
 
 # ---------------------------------------------------------------------------
@@ -1747,9 +1787,11 @@ def project_workstation(project_root: str | Path, instance: str) -> dict[str, st
     return _validate_workstation_entry(instance, workstations[instance], decl)
 
 
-def set_project_workstation(project_root: str | Path, instance: str, *, gate_ssh_alias: str, material_access: str) -> dict[str, Any]:
+def set_project_workstation(project_root: str | Path, instance: str, *, gate_ssh_alias: str, material_access: str,
+                            dry_run: bool = False) -> dict[str, Any]:
     """写 project.json workstations.<instance>(其余键原样保留); 写前按声明校验(不合 = 不写, 抛 WorkstationDeclarationError)。
-    返回 {project_json, instance, 声明值}。"""
+    AIPOS-F125: dry_run = 只预演(diff + 校验, 零写入; CLI 缺省)。
+    返回 {project_json, instance, 声明值} + update_project_json 结果(dry_run / changed / written / diff)。"""
     decl = _workstations_declaration()
     instance = str(instance or "").strip()
     if not instance or any(c.isspace() for c in instance):
@@ -1765,8 +1807,8 @@ def set_project_workstation(project_root: str | Path, instance: str, *, gate_ssh
         data["workstations"] = workstations
 
     # AIPOS-F123 件②: 写入经 project.json 唯一写路径(与 set-repos / set-paths 同一把锁)
-    update_project_json(project_root, _mutate)
-    return {"project_json": str(path), "instance": instance, **entry}
+    outcome = update_project_json(project_root, _mutate, dry_run=dry_run)
+    return {**outcome, "project_json": str(path), "instance": instance, **entry}
 
 
 # ---------------------------------------------------------------------------
