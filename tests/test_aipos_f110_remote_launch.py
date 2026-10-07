@@ -417,7 +417,7 @@ def test_item5_check_workstation_bidirectional_and_set_workstation_cli(tmp_path,
     _show(f"[⑤] check-workstation(未声明材料) exit {rc}:\n{out}{err}")
     assert rc == 1 and any(c["check"] == "材料声明" and not c["ok"] for c in json.loads(out)["checks"])
     rc, out, err = cli("project", "set-workstation", "probe", "--home-root", str(home), "--instance", "exec.probe.mac",
-                       "--gate-ssh-alias", GATE_ALIAS, "--material-access", "经 ssh gate-fake 读写", "--json")
+                       "--gate-ssh-alias", GATE_ALIAS, "--material-access", "经 ssh gate-fake 读写", "--json", "--confirm")
     _show(f"[⑤] set-workstation exit {rc}: {out.strip()}")
     assert rc == 0 and json.loads((proj / "project.json").read_text())["workstations"]["exec.probe.mac"] == {
         "gate_ssh_alias": GATE_ALIAS, "material_access": "经 ssh gate-fake 读写"}

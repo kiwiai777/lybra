@@ -11,7 +11,7 @@
 
 | 阶段 | 谁 | 命令 |
 |---|---|---|
-| 接入新项目 | 顾问(Owner 只敲向导标出的两步) | `lybra onboarding guide <项目名>` 打印该项目专属的全部步骤与失败出口;其中建项目 = `lybra project new`, 声明产品仓 = `lybra project set-repos`;逐步自检 `lybra onboarding check` |
+| 接入新项目 | 顾问(Owner 只敲向导标出的两步) | `lybra onboarding guide <项目名>` 打印该项目专属的全部步骤与失败出口;其中建项目 = `lybra project new`, 声明产品仓 = `lybra project set-repos`(写 project.json 的 `set-repo` / `set-repos` / `set-paths` / `set-workstation` 同一两阶段:缺省预演, 打印将写的 project.json diff 与校验结果、零写入;`--confirm` 才写);逐步自检 `lybra onboarding check` |
 | 出卡 / 改卡 | 顾问 | `lybra draft create` → `lybra draft publish`;`lybra queue amend` / `withdraw` / `rework` |
 | 推进一张卡 | 顾问 | `lybra loop --task-id <卡ID>`:Owner 信封授权下认领(门内建卡工作树)→ 等交回 → 派审 → 等审计报告 → 裁决 → finalize → 结案 → 治理落账;单步查看 `lybra next --task-id <卡ID>` |
 | 开工 | 执行 / 审计工位 | 两种模式:手工(缺省)= Owner 在工位敲 `/go`;授权拉起 = Owner 签带 `--launch-harness` 的信封后由 `lybra loop` 在本机工位拉起 harness(`--no-launch` 强制手工)。工位只在卡分支提交并把报告写到项目声明的落点, 不调用任何门动词 |
@@ -24,7 +24,7 @@
 
 命令行为由声明驱动, 改行为先改声明:
 
-- `schema/verbs.schema.json` —— 门动词、`lybra loop` 出口码与信封授权动词
+- `schema/verbs.schema.json` —— 门动词、`lybra loop` 出口码与信封授权动词、写 project.json 命令的两阶段语义(`two_phase_protocol.project_json_writers`)
 - `schema/transitions.schema.json` —— 节点、下一步推导、分支约定
 - `schema/config.schema.json` —— 工作树根、项目声明(project.json)结构
 - `schema/distribution.schema.json` —— 各角色工位分发物
