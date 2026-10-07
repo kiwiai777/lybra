@@ -656,6 +656,7 @@ def enroll(
     harness_kind: str | None = None,
     harness_dir: Path | None = None,
     landed_host: str | None = None,
+    harness_host: str | None = None,
 ) -> dict[str, Any]:
     """执行完整的 enroll 流程。
 
@@ -665,7 +666,9 @@ def enroll(
     AIPOS-F92 件②: harness_kind/harness_dir —— 工位 harness(distribution.schema harness_semantics; 缺省 pi = 既有行为)。
     非 pi harness(如 claude-code 顾问会话): .lybra/role 记 harness {kind, dir}; 不落 .pi 接线; 落盘(+verify)后经同一分发引擎
     (distribution_sync.sync)把声明给本角色该 harness 的件交付到 harness_dir(Claude Code: <会话目录>/.claude/skills/)。
-    
+    AIPOS-F129 件②: harness_host —— 会话所在机(codex 顾问可在他机; 声明 harness_host=optional 的 kind 才许给);
+    codex 记 {kind, dir: <可空>, host: <可空>}, 他机目录如实记不校验本机存在; 声明给 codex 的件 = 0 时交付零写入。
+
     Args:
         code: Enrollment code(自包含码 LYBRAENROLL1.* 或旧裸码; 从 owner/advisor 获得)。None = 幂等补铸模式 (AIPOS-C2 大项B):
               只按 config.schema 必填键铸全 connection.json (含 workspace_root), 不动 token。
@@ -702,24 +705,16 @@ def enroll(
         码留在 grace 窗口内可免费重试(返回同一 token)。
     """
     from tools.aipos_cli.enrollment import decode_self_contained_code
-    from tools.aipos_cli.distribution_sync import declared_harness_kinds, default_harness_kind
+    from tools.aipos_cli.distribution_sync import harness_role_record
 
     workspace_root = workspace_root.resolve()
 
-    # AIPOS-F92 件②: harness 参数校验(先于任何写盘/兑换, fail-closed)
-    harness_record: dict[str, str] | None = None
-    kind = str(harness_kind or "").strip() or default_harness_kind()
-    if kind not in declared_harness_kinds():
-        raise RuntimeError(f"--harness {kind!r} 不在 distribution.schema 声明的 harness 内 {list(declared_harness_kinds())}")
-    if kind != default_harness_kind():
-        if harness_dir is None:
-            raise RuntimeError(f"--harness {kind} 须给 --harness-dir <该 harness 的工作目录>(分发件落点基准, 如 Claude Code 会话目录)")
-        hdir = Path(harness_dir).expanduser()
-        if not hdir.is_absolute() or not hdir.is_dir():
-            raise RuntimeError(f"--harness-dir {harness_dir} 须为已存在的绝对目录(harness={kind} 的分发落点基准)")
-        harness_record = {"kind": kind, "dir": str(hdir.resolve())}
-    elif harness_dir is not None:
-        raise RuntimeError(f"--harness-dir 只用于非 {default_harness_kind()} harness(pi 工位的落点即工位根)")
+    # AIPOS-F92 件② / AIPOS-F129 件②: harness 参数校验(先于任何写盘/兑换, fail-closed); 取舍读 distribution.schema
+    # harness_semantics.kinds(唯一判定 harness_role_record: 未知 kind 拒并列出合法值; codex 记 {kind, dir, host})
+    try:
+        harness_record = harness_role_record(harness_kind, harness_dir, harness_host)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
 
     # F23: 自包含码解析(内嵌 gate 地址优先; 显式 gate_url 参数可覆盖)
     sc = decode_self_contained_code(code) if code is not None else None
@@ -929,7 +924,9 @@ def enroll(
                 f"凭据已落盘({lybra_dir}), 但 {harness_record['kind']} 件交付失败: {harness_delivery.get('error')}\n"
                 f"出口: lybra sync --harness-root {workspace_root}"
             )
-        files_written.append(f"{harness_record['kind']} 件 → {harness_record['dir']}({harness_delivery.get('files_fetched')} 个文件)")
+        # AIPOS-F129: 非本机可落 harness(codex 无 dir / 他机 host)交付零写入, 原因由 sync 点名(note)
+        _where = harness_record.get("dir") or f"host={harness_record.get('host')}"
+        files_written.append(f"{harness_record['kind']} 件 → {_where}({harness_delivery.get('files_fetched')} 个文件)")
 
     # AIPOS-F54 ⑮: 可启动最小集逐项校验(缺项逐项点名, 禁"少一个键整个起不来但不知道少哪个")
     # AIPOS-F92: 最小集是 pi 工位清单(.pi 接线 / go 扩展), 非 pi harness 不适用
@@ -958,12 +955,14 @@ def enroll(
         "warnings": list((wiring_report or {}).get("warnings") or []),
         "minimum_bootable_set": bootable_check,
         "harness": harness_record,
-        "harness_delivery": ({k: harness_delivery.get(k) for k in ("status", "files_fetched", "manifest_path", "harness", "changes")}
+        "harness_delivery": ({k: harness_delivery.get(k) for k in ("status", "files_fetched", "manifest_path", "harness", "changes", "note")}
                              if harness_delivery else None),
         "git_exclude": git_exclude_report,
         "next_step": (
             None if code is None else
             (f"上岗完成: {harness_record['kind']} 件已交付到 {harness_record['dir']}; 在该目录起(或重启)会话即加载"
+             if harness_record is not None and not (harness_delivery or {}).get("note") else
+             f"上岗完成: harness={harness_record['kind']} 的凭据与身份已落 {lybra_dir}; {(harness_delivery or {}).get('note')}"
              if harness_record is not None else
              f"上岗完成: 接着 lybra sync --harness-root {workspace_root} --workspace-root <治理根>, 然后在工位起 pi")
         ),

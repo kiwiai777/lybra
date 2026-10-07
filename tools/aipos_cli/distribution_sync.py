@@ -206,15 +206,90 @@ def default_harness_kind() -> str:
 
 
 def declared_harness_kinds() -> tuple[str, ...]:
-    """合法 harness kind = distributions[].target.harness 并集 ∪ 缺省(声明推导, 禁写死第二份)。"""
-    from tools.schema_loader import load_schema
+    """合法 harness kind = harness_semantics.kinds 的键(声明推导, 禁写死第二份)。
 
-    kinds = {default_harness_kind()}
-    for dist in load_schema("distribution").get("distributions") or []:
-        kind = str(((dist.get("target") or {}).get("harness")) or "").strip()
-        if kind:
-            kinds.add(kind)
+    AIPOS-F129 件①: 原「distributions[].target.harness 并集 ∪ 缺省」推不出无分发件的 kind(codex 顾问本卡无技能分发);
+    kinds 是每个 kind 语义的唯一声明, 改由其键推导; 缺省与各分发条目 target.harness 须 ∈ kinds, 否则 = 声明错误(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    sem = _harness_semantics()
+    kinds_decl = sem.get("kinds")
+    if not isinstance(kinds_decl, dict) or not kinds_decl:
+        raise SchemaLoadError("distribution.schema.json harness_semantics.kinds 未声明")
+    kinds = {str(k).strip() for k in kinds_decl}
+    default = default_harness_kind()
+    if default not in kinds:
+        raise SchemaLoadError(f"distribution.schema.json harness_semantics.default={default!r} 不在 kinds {sorted(kinds)}")
+    undeclared = sorted({
+        f"{dist.get('distribution_id')}→{kind}"
+        for dist in load_schema("distribution").get("distributions") or []
+        for kind in [str(((dist.get("target") or {}).get("harness")) or "").strip()]
+        if kind and kind not in kinds
+    })
+    if undeclared:
+        raise SchemaLoadError(
+            f"distribution.schema.json 分发条目 target.harness 不在 harness_semantics.kinds {sorted(kinds)}: {undeclared}"
+            "(先在 kinds 声明该 harness 的语义, 禁靠分发条目隐式扩充合法值)")
     return tuple(sorted(kinds))
+
+
+#: harness_semantics.kind_fields 的取值(声明见同节; 取值不在此 = 声明错误)
+_KIND_FIELD_VALUES = {"harness_dir": ("forbidden", "required", "optional"), "harness_host": ("forbidden", "optional")}
+
+
+def harness_kind_declaration(kind: str) -> dict[str, Any]:
+    """AIPOS-F129 件①: 某 harness kind 的声明(harness_semantics.kinds.<kind>; 唯一读取口)。
+    kind 不在声明 = ValueError(列出合法值); harness_dir / harness_host / advisor_session 缺或取值非法 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    kinds = declared_harness_kinds()
+    if kind not in kinds:
+        raise ValueError(f"harness {kind!r} 不在 distribution.schema harness_semantics.kinds 声明内; 合法值 {list(kinds)}")
+    decl = dict(_harness_semantics()["kinds"][kind])
+    for field, allowed in _KIND_FIELD_VALUES.items():
+        if decl.get(field) not in allowed:
+            raise SchemaLoadError(f"distribution.schema.json harness_semantics.kinds.{kind}.{field}={decl.get(field)!r} 不在 {list(allowed)}")
+    if not isinstance(decl.get("advisor_session"), bool):
+        raise SchemaLoadError(f"distribution.schema.json harness_semantics.kinds.{kind}.advisor_session 须为 true/false")
+    return decl
+
+
+def advisor_harness_kinds() -> tuple[str, ...]:
+    """可作顾问会话的 harness(kinds.<kind>.advisor_session = true; onboarding guide --advisor-harness 取值由此推导)。"""
+    return tuple(k for k in declared_harness_kinds() if harness_kind_declaration(k)["advisor_session"])
+
+
+def harness_role_record(kind: str | None, harness_dir: str | Path | None, harness_host: str | None) -> dict[str, Any] | None:
+    """AIPOS-F129 件①: enroll 的 harness 参数 → .lybra/role harness 字段(唯一判定; 取舍读 harness_kind_declaration)。
+
+    缺省 kind(pi)= None(不写 harness 字段, 既有工位形态); claude-code = {kind, dir}(dir 须已存在的本机绝对目录);
+    codex = {kind, dir: <可空>, host: <可空>} —— 有 host(他机会话)时 dir 如实记、不校验本机存在。违反 = ValueError(fail-closed)。"""
+    kind = str(kind or "").strip() or default_harness_kind()
+    decl = harness_kind_declaration(kind)
+    dir_text = str(harness_dir or "").strip()
+    host = str(harness_host or "").strip()
+    if host and decl["harness_host"] == "forbidden":
+        raise ValueError(f"--harness-host 不适用于 harness={kind}(声明 harness_host=forbidden; 会话须与本命令同机)")
+    if host and any(ch.isspace() for ch in host):
+        raise ValueError(f"--harness-host {host!r} 含空白(主机名不得含空白)")
+    if dir_text and decl["harness_dir"] == "forbidden":
+        raise ValueError(f"--harness-dir 不适用于 harness={kind}(声明 harness_dir=forbidden; 该 harness 的落点即工位根)")
+    if not dir_text and decl["harness_dir"] == "required":
+        raise ValueError(f"--harness {kind} 须给 --harness-dir <该 harness 的工作目录>(分发件落点基准, 如 Claude Code 会话目录)")
+    if dir_text:
+        path = Path(dir_text).expanduser()
+        if not path.is_absolute():
+            raise ValueError(f"--harness-dir {dir_text} 须为绝对路径(harness={kind} 的会话目录)")
+        if not host:
+            if not path.is_dir():
+                raise ValueError(f"--harness-dir {dir_text} 须为已存在的绝对目录(harness={kind} 的分发落点基准; 会话在他机时加 --harness-host)")
+            dir_text = str(path.resolve())
+    if kind == default_harness_kind():
+        return None
+    record: dict[str, Any] = {"kind": kind, "dir": dir_text or None}
+    if decl["harness_host"] != "forbidden":
+        record["host"] = host or None
+    return record
 
 
 def dist_harness_kind(dist: dict[str, Any]) -> str:
@@ -229,9 +304,11 @@ def harness_distributions(dists: list[dict[str, Any]], kind: str) -> list[dict[s
 
 
 def workstation_harness(harness_root: Path) -> dict[str, Any]:
-    """工位 harness = .lybra/role 的 harness {kind, dir}; 缺 = {缺省 kind, dir=工位根}(既有 pi 工位零迁移)。
+    """工位 harness = .lybra/role 的 harness {kind, dir[, host]}; 缺 = {缺省 kind, dir=工位根}(既有 pi 工位零迁移)。
 
-    kind 不在声明内 / 非缺省 kind 缺绝对 dir = ValueError(fail-closed, 禁猜落点)。返回 {kind, dir: Path, default: bool}。"""
+    kind 不在声明内 / dir 取舍违反声明(harness_kind_declaration)= ValueError(fail-closed, 禁猜落点)。
+    返回 {kind, dir: Path | None, host: str | None, local: bool, default: bool}; local = 分发件可落本机 dir
+    (AIPOS-F129: codex 无 dir 或有 host(他机会话)= False, dir 按记录原样, 不在本机解析)。"""
     # AIPOS-F106 件④: role 文件只经 charter_render.workstation_identity 读(唯一实现; 坏文件 = WorkstationIdentityError, ValueError 子类)
     from tools.aipos_cli.charter_render import is_enrolled_workstation, workstation_identity, workstation_role_file
 
@@ -240,18 +317,26 @@ def workstation_harness(harness_root: Path) -> dict[str, Any]:
     raw = workstation_identity(root).get("harness") if is_enrolled_workstation(root) else None
     default_kind = default_harness_kind()
     if raw in (None, "", {}):
-        return {"kind": default_kind, "dir": root, "default": True}
+        return {"kind": default_kind, "dir": root, "host": None, "local": True, "default": True}
     if not isinstance(raw, dict):
         raise ValueError(f"{role_file} harness 须为 {{kind, dir}} 对象, 得到 {raw!r}")
     kind = str(raw.get("kind") or "").strip() or default_kind
     if kind not in declared_harness_kinds():
         raise ValueError(f"{role_file} harness.kind={kind!r} 不在 distribution.schema 声明的 harness 内 {list(declared_harness_kinds())}")
+    decl = harness_kind_declaration(kind)
     dir_text = str(raw.get("dir") or "").strip()
+    host = str(raw.get("host") or "").strip() or None
+    if host and decl["harness_host"] == "forbidden":
+        raise ValueError(f"{role_file} harness.host={host!r} 不适用于 harness={kind}(声明 harness_host=forbidden)")
     if kind == default_kind and not dir_text:
-        return {"kind": kind, "dir": root, "default": False}
+        return {"kind": kind, "dir": root, "host": None, "local": True, "default": False}
+    if not dir_text and decl["harness_dir"] == "optional":
+        return {"kind": kind, "dir": None, "host": host, "local": False, "default": False}
     if not dir_text or not Path(dir_text).expanduser().is_absolute():
         raise ValueError(f"{role_file} harness.dir={dir_text!r} 须为绝对路径(harness={kind} 的分发落点基准)")
-    return {"kind": kind, "dir": Path(dir_text).expanduser().resolve(), "default": False}
+    if host:  # 他机会话目录: 原样记录, 不在本机解析
+        return {"kind": kind, "dir": Path(dir_text), "host": host, "local": False, "default": False}
+    return {"kind": kind, "dir": Path(dir_text).expanduser().resolve(), "host": None, "local": True, "default": False}
 
 
 def _target_base_root(harness_root: Path, dist: dict[str, Any]) -> Path:
@@ -1179,7 +1264,30 @@ def _sync_harness_dir(
     """AIPOS-F92 件②: 非 pi harness 工位的分发(同一清单/差异/拉取/落盘引擎: compute_diffs + lybra_distribution_fetch + apply_fetch)。
 
     落点基准 = harness.dir(harness_semantics.kinds.<kind>.target_base=harness_dir); 不做 pi 落点 prune(prune=False);
-    本地清单写 <工位>/.lybra/.version-<role>。"""
+    本地清单写 <工位>/.lybra/.version-<role>。
+
+    AIPOS-F129 件①: 会话不在本机可落处(harness.local=False: codex 无 dir / 他机 host)—— 声明给本角色该 harness 的件为 0 = 无事可做
+    (零写入, 结果点名原因); 非 0 = 拒并点名(禁猜本机落点; 他机交付属扩展位)。"""
+    if not harness.get("local", True):
+        dists_here = list(remote.get("distributions") or [])
+        where = f"host={harness.get('host')} dir={harness.get('dir')}"
+        if dists_here:
+            return {"ok": False, "role": ctx["role"],
+                    "error": (f"harness={harness['kind']} 会话不在本机可落处({where}), 但声明给本角色该 harness 的件有 "
+                              f"{[d.get('distribution_id') for d in dists_here]}: 本机无落点, 拒(他机交付未实现, 禁猜落点)")}
+        note = f"harness={harness['kind']}({where}): 声明给本角色该 harness 的件 = 0, 无可交付(凭据与身份在本工位 .lybra/)"
+        return {
+            "ok": True, "status": "dry-run" if dry_run else "synced", "role": ctx["role"], "gate_url": ctx["gate_url"],
+            "product_commit": remote.get("product_commit"), "harness_root": str(ctx["harness_root"]),
+            "harness": {"kind": harness["kind"], "dir": None if harness.get("dir") is None else str(harness["dir"]),
+                        "host": harness.get("host")},
+            "workstation": _public_identity(identity), "scope_project": scope, "governance_root": None,
+            "distributions_checked": 0, "dry_run": dry_run, "plan": [], "would_prune": [], "declared_files": [],
+            "shared_prune_guard": None, "pi_mount_prune": [], "pi_mount_warnings": [], "files_fetched": 0, "files_pruned": 0,
+            "changes": [], "pruned_files": [], "prune_errors": [], "declaration_gaps": [], "manifest_path": None, "note": note,
+            "owner_policy_correction": ({"checked": False, "note": "dry-run 零写入"} if dry_run
+                                        else _correct_owner_policy_ref(Path(ctx["harness_root"]), ctx["role"])),
+        }
     target_root = Path(harness["dir"])
     dists = [{**d, "target_base": "harness_root"} for d in remote.get("distributions", [])]
     remote_h = {**remote, "distributions": dists}
@@ -1369,6 +1477,8 @@ def render_sync_text(run: dict[str, Any]) -> str:
                     lines.append(f"          {rel}: {why}")
             if not r.get("plan"):
                 lines.append("      up-to-date: 0 file(s) to fetch/render")
+            if r.get("note"):  # AIPOS-F129: 非本机可落 harness(codex 他机会话)的无事可做原因
+                lines.append(f"      {r['note']}")
             if r.get("would_prune"):
                 lines.append(f"      would-prune (不在声明): {len(r['would_prune'])} file(s)")
                 for pf in r["would_prune"][:5]:
