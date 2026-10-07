@@ -18,6 +18,10 @@ AIPOS-F116 防护夹具(执行器内建, 每个测试文件前后各取一次, �
     (状态码 + 文件 size/mtime)与关键日志(governance/*_log.md)md5。只读: git 一律 --no-optional-locks(不刷新/不写 index)。
     时间窗归因复核: 某文件期间出现变动 → 单独重跑该文件一次(结果不计)再快照; 复现 = 该文件所致 → 判红; 不复现 = 同时段
     门/顾问的正常写入(他卡认领/交回、治理文档提交)→ 照列不判红。代价: 真污染的测试在复核时再写一次(已知污染源须 exclude)。
+    AIPOS-F124 件④(F121/F122 合并后异步回归 f107 持续红的真因): 「复现」须落在首轮变动的同一落点(同一检查类 + 同一父目录,
+    attribute_rerun)——测试的污染位置是确定的(同一文件, 或同一目录下新时间戳文件); 复核窗口里落在别处的变动(F122 实例: 首轮
+    governance/FOUNDATION-BACKLOG.md, 重跑窗口 queue/claimed→completed 移卡 + closures/ 结案记录 = loop 在合并后异步回归运行期间
+    继续推进的结案写入)= 同时段他方写入, 照列不判红。已知局限: 他方恰在重跑窗口写入首轮同一目录 → 仍判红(偏保守, 不放过污染)。
   孤儿进程守卫(件③, gap #12/#25/#55): 测试子进程环境带本轮唯一标记变量(不带 LYBRA_/AIPOS_ 前缀, 嵌套执行器不剥);
     文件结束后仍带标记的存活进程(含另起会话逃出进程组收尸的 web.board.app / serve 子进程)= 泄漏 → SIGKILL 并判红。
 
@@ -211,10 +215,28 @@ def governance_snapshot(targets: dict[str, Any]) -> dict[str, str]:
     return snap
 
 
+def changed_keys(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    """两次快照之差的键(任一键出现/消失/指纹变 = 一处变动), 按键排序。"""
+    return [key for key in sorted(set(before) | set(after)) if before.get(key) != after.get(key)]
+
+
 def snapshot_changes(before: dict[str, str], after: dict[str, str]) -> list[str]:
     """两次快照之差(任一键出现/消失/指纹变 = 一处变动), 按键排序。"""
-    return [f"{key}: {before.get(key, '(无)')} → {after.get(key, '(无)')}"
-            for key in sorted(set(before) | set(after)) if before.get(key) != after.get(key)]
+    return [f"{key}: {before.get(key, '(无)')} → {after.get(key, '(无)')}" for key in changed_keys(before, after)]
+
+
+def _change_site(key: str) -> tuple[str, str]:
+    """快照键(`<检查类> <绝对路径>`)→ 落点 (检查类, 父目录)。"""
+    kind, _sep, path = key.partition(" ")
+    return kind, str(Path(path).parent)
+
+
+def attribute_rerun(first_keys: list[str], rerun_keys: list[str]) -> tuple[list[str], list[str]]:
+    """AIPOS-F124 件④: 时间窗归因复核的判定(唯一实现)。first_keys = 本文件首轮期间的变动键, rerun_keys = 单独重跑期间的变动键。
+    重跑变动落在首轮任一变动的同一落点(同检查类 + 同父目录)= 复现 → 归本文件; 落在别处 = 同时段他方写入。返回 (归本文件, 他方)。"""
+    sites = {_change_site(k) for k in first_keys}
+    mine = [k for k in rerun_keys if _change_site(k) in sites]
+    return mine, [k for k in rerun_keys if _change_site(k) not in sites]
 
 
 # ---------------------------------------------------------------------------
@@ -439,11 +461,12 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
                 leaks_total += len(leaked)
                 notes += [f"孤儿进程守卫: 测试结束后仍存活(逃出进程组收尸), 已 SIGKILL: pid {pid} {line}" for pid, line in leaked]
             after = governance_snapshot(targets)
+            before_file = snapshot
             changed = snapshot_changes(snapshot, after)
             snapshot = after
             if changed:
-                # 时间窗归因复核: 单独重跑本文件一次(测试结果不计, 只看守卫), 前后再快照。复现 = 本文件所致 → 红;
-                # 不复现 = 同时段他方(门/顾问)的正常写入 → 照列不判红。
+                # 时间窗归因复核: 单独重跑本文件一次(测试结果不计, 只看守卫), 前后再快照。在首轮同一落点复现 = 本文件所致 → 红;
+                # 不复现 / 只在他处变动 = 同时段他方(门/顾问)的正常写入 → 照列不判红(判定 attribute_rerun, AIPOS-F124 件④)。
                 _rc_again, _out_again = _run(cmd, repo_root, env)
                 leaked_again = reap_marked(leak_mark)
                 if leaked_again:
@@ -451,13 +474,24 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
                     leaks_total += len(leaked_again)
                     notes += [f"孤儿进程守卫(复核重跑): 已 SIGKILL: pid {pid} {line}" for pid, line in leaked_again]
                 again = governance_snapshot(targets)
-                reproduced = snapshot_changes(snapshot, again)
+                rerun_keys = changed_keys(snapshot, again)
+                rerun_line = dict(zip(rerun_keys, snapshot_changes(snapshot, again)))
+                mine, elsewhere = attribute_rerun(changed_keys(before_file, after), rerun_keys)
                 snapshot = again
-                if reproduced:
+                if mine:
                     ok = False
-                    guard_changes += len(reproduced)
+                    guard_changes += len(mine)
                     notes += [f"真实治理根守卫: 本文件执行期间真实治理根变动: {c}" for c in changed]
-                    notes += [f"真实治理根守卫: 单独重跑本文件复现变动(判为本文件所致): {c}" for c in reproduced]
+                    notes += [f"真实治理根守卫: 单独重跑本文件复现变动(判为本文件所致): {rerun_line[k]}" for k in mine]
+                    guard_concurrent += len(elsewhere)
+                    notes += [f"真实治理根守卫: 单独重跑期间他处变动(落点与本文件首轮变动不重合) → 判为同时段他方写入, 不计本文件: "
+                              f"{rerun_line[k]}" for k in elsewhere]
+                elif elsewhere:
+                    guard_concurrent += len(changed) + len(elsewhere)
+                    notes += [f"真实治理根守卫: 本文件执行期间有变动, 单独重跑未在同一落点复现 → 判为同时段他方写入(门/顾问), 不计本文件: {c}"
+                              for c in changed]
+                    notes += [f"真实治理根守卫: 单独重跑期间他处变动(落点与本文件首轮变动不重合) → 判为同时段他方写入, 不计本文件: "
+                              f"{rerun_line[k]}" for k in elsewhere]
                 else:
                     guard_concurrent += len(changed)
                     notes += [f"真实治理根守卫: 本文件执行期间有变动, 单独重跑未复现 → 判为同时段他方写入(门/顾问), 不计本文件: {c}"
