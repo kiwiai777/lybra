@@ -78,7 +78,7 @@ def _derive_state_from_records(governance_root: Path, task_id: str) -> str | Non
     AIPOS-F115 件④(gap #64): 记录 frontmatter 经「必须读出」唯一入口 require_frontmatter 读——读不了/有解析告警 =
     FrontmatterReadError 原样抛(原 parse_markdown_frontmatter 忽略告警 + except Exception: continue 静默跳过坏记录,
     推导出的状态可能是错的)。调用方: lint 转为 ERROR 条目, repair 拒修。"""
-    from tools.aipos_cli.record_writer import record_dir
+    from tools.aipos_cli.record_writer import gate_record_files, record_dir
 
     # 按优先级检查各类记录(最新优先)
     # closure > return > claim > publish
@@ -94,9 +94,9 @@ def _derive_state_from_records(governance_root: Path, task_id: str) -> str | Non
     
     for record_type, state in checks:
         type_dir = record_dir(governance_root, record_type, task_id)
-        if not type_dir.is_dir():
-            continue
-        for f in sorted(type_dir.glob("*.md")):
+        # AIPOS-F122 件④: 只读门生记录文件(判据 = record_writer.gate_record_files, 与推导核 _read_task_records 同一实现);
+        # 原读目录下任何 *.md —— 项目 return_root 与门记录目录同址时, 人手写 RETURN 被当门记录(无 frontmatter 即误报 ERROR)
+        for f in gate_record_files(type_dir, record_type):
             fm, _body = require_frontmatter(f)
             # 取时间戳最大的记录
             ts = str(fm.get("closed_at") or fm.get("returned_at") or fm.get("claimed_at") or fm.get("published_at") or fm.get("timestamp") or "")
@@ -155,31 +155,34 @@ def _get_frontmatter_state(card_path: Path) -> str | None:
         return None
 
 
-def _list_all_task_ids(governance_root: Path) -> set[str]:
-    """列出所有在队列目录中的 task_id。"""
-    task_ids: set[str] = set()
-    for state in QUEUE_DIRS:
+def queue_task_index(governance_root: Path, states: tuple[str, ...] | None = None) -> dict[str, list[tuple[str, Path]]]:
+    """队列目录里的全部卡: {task_id: [(queue 状态, 卡文件)]}(task_id 取卡面 frontmatter, 读不出 / 缺键回落文件名大写)。
+    state lint 全量扫描与 freeze-legacy 选卡(AIPOS-F122 件②)同一份列举。"""
+    index: dict[str, list[tuple[str, Path]]] = {}
+    for state in states or QUEUE_DIRS:
         queue_dir = _queue_state_dir(governance_root, state)
         if not queue_dir.is_dir():
             continue
-        for f in queue_dir.glob("*.md"):
+        for f in sorted(queue_dir.glob("*.md")):
             try:
-                text = f.read_text(encoding="utf-8")
-                fm, _, _ = parse_markdown_frontmatter(text)
-                tid = str(fm.get("task_id") or "").strip()
-                if tid:
-                    task_ids.add(tid)
-                else:
-                    # fallback: 从文件名提取
-                    task_ids.add(f.stem.upper())
-            except Exception:
-                task_ids.add(f.stem.upper())
-    return task_ids
+                fm, _, _ = parse_markdown_frontmatter(f.read_text(encoding="utf-8"))
+                tid = str((fm if isinstance(fm, dict) else {}).get("task_id") or "").strip()
+            except (OSError, UnicodeDecodeError):
+                tid = ""
+            index.setdefault(tid or f.stem.upper(), []).append((state, f))  # fallback: 从文件名提取
+    return index
+
+
+def _list_all_task_ids(governance_root: Path) -> set[str]:
+    """列出所有在队列目录中的 task_id。"""
+    return set(queue_task_index(governance_root))
 
 
 def run_state_lint(
     governance_root: Path,
     task_id_filter: str | None = None,
+    *,
+    apply_legacy_baseline: bool = True,
 ) -> dict[str, Any]:
     """AIPOS-C3B 大项C①: 卡状态三方一致 lint。
     
@@ -198,7 +201,39 @@ def run_state_lint(
     from tools.aipos_cli.task_loader import task_card_lookup_scope
 
     with task_card_lookup_scope(governance_root):
-        return _run_state_lint(governance_root, task_id_filter)
+        result = _run_state_lint(governance_root, task_id_filter)
+    if apply_legacy_baseline:
+        _apply_legacy_baseline(governance_root, task_id_filter, result)
+    return result
+
+
+def _apply_legacy_baseline(governance_root: Path, task_id_filter: str | None, result: dict[str, Any]) -> None:
+    """AIPOS-F122 件③: 存量冻结(判定唯一实现 legacy_baseline.frozen_tasks)作用于 lint 结果。
+    全项目扫描: 冻结卡及其 records/*/<ID>/ 的检查码一律不报, 汇总 frozen N; --task-id 单卡: 照实报, 每条标注 frozen。
+    清单读不出 = LEGACY_BASELINE_INVALID(ERROR), 不隐藏任何卡(fail-closed)。"""
+    from tools.aipos_cli.legacy_baseline import LEGACY_BASELINE_INVALID, LegacyBaselineError, frozen_tasks
+
+    try:
+        frozen = frozen_tasks(governance_root)
+    except LegacyBaselineError as exc:
+        result["issues"].append({"task_id": "(legacy_baseline)", "severity": "ERROR", "code": LEGACY_BASELINE_INVALID,
+                                 "message": f"{exc}; 冻结不生效(不隐藏任何卡), 出口: 修正清单条目 / project.json legacy_baseline 后重跑"})
+        result["frozen"] = 0
+        result["frozen_task_ids"] = []
+        return
+    if task_id_filter:
+        info = frozen.get(task_id_filter.upper())
+        result["frozen"] = 1 if info else 0
+        result["frozen_task_ids"] = [task_id_filter.upper()] if info else []
+        if info:
+            result["frozen_batch"] = info
+            for issue in result["issues"]:
+                issue["frozen"] = True
+        return
+    kept = [i for i in result["issues"] if str(i.get("task_id") or "").upper() not in frozen]
+    result["issues"] = kept
+    result["frozen"] = len(frozen)
+    result["frozen_task_ids"] = sorted(frozen)
 
 
 def _run_state_lint(governance_root: Path, task_id_filter: str | None) -> dict[str, Any]:

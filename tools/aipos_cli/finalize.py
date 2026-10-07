@@ -1462,6 +1462,35 @@ def _finalize_task_impl(
 
     # AIPOS-F78B 件⑤b: finalize 与 close/return/verdict 同口径——actor 须为该卡认领实例(卡面 claimed_by, validator.actor_matches_task_actor
     # 同一判据); 驱动方/他人当 actor 即拒(transitions record_authenticity.submission_identity.actor_rule)
+    # AIPOS-F122 件③: 存量冻结卡拒 finalize(判定唯一实现 legacy_baseline.frozen_rejection; 清单读不出 = 拒, fail-closed)
+    from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_rejection
+
+    try:
+        rejection = frozen_rejection(Path(governance_root), [task_id], action="finalize")
+    except LegacyBaselineError as exc:
+        rejection = {"code": exc.code, "message": f"{exc}; 存量冻结清单读不出, 拒 finalize", "unfreeze_command": None}
+    if rejection is not None:
+        operations.append(rejection["message"])
+        return {
+            "verdict": Verdict.BLOCK,
+            "task_id": task_id,
+            "actor": actor,
+            "dry_run": dry_run,
+            "can_finalize": False,
+            "integrity_check": None,
+            "branch_check": None,
+            "committed": False,
+            "pushed": False,
+            "deployed": False,
+            "deployment_skipped": False,
+            "deployment_error": None,
+            "commit_hash": None,
+            "category": rejection["code"],
+            "unfreeze_command": rejection["unfreeze_command"],
+            "message": rejection["message"],
+            "operations": operations,
+        }
+
     claimer_check = _actor_is_claimer(governance_root, task_id, actor)
     if not claimer_check["ok"]:
         operations.append(f"ACTOR_MISMATCH: {claimer_check['reason']}")

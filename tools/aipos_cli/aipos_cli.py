@@ -699,6 +699,50 @@ def _render_mcp_config_text(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _project_freeze_legacy(args: argparse.Namespace) -> int:
+    """AIPOS-F122 件②: `lybra project freeze-legacy` 薄壳——选卡干跑在 legacy_freeze、落条目在 legacy_baseline(唯一实现), 本处只解析参数与输出。
+    缺省 = 干跑(零写入); --confirm 追加清单条目。未知卡号 / 清单不合 = 拒(exit 1, 零写入)。"""
+    from tools.aipos_cli.legacy_baseline import LegacyBaselineError, write_freeze_entry
+    from tools.aipos_cli.legacy_freeze import plan_freeze_legacy
+    from tools.aipos_cli.workspace_config import resolve_workspace_root
+
+    root = Path(args.workspace_root) if args.workspace_root is not None else Path(resolve_workspace_root())
+    queues = [q.strip() for q in str(args.queue).split(",") if q.strip()] if args.queue else None
+    if args.exclude and not queues:
+        print("Error: --exclude 只与 --queue 合用", file=sys.stderr)
+        return 2
+    try:
+        plan = plan_freeze_legacy(root, task_ids=args.task_ids, queues=queues, exclude=args.exclude, unfreeze=args.unfreeze)
+        written = (write_freeze_entry(root, plan, reason=args.reason, actor=args.actor, owner_policy_ref=args.owner_policy_ref)
+                   if args.confirm else None)
+    except LegacyBaselineError as exc:
+        print(f"Error: {exc}(freeze-legacy 零写入)", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        print(render_json({"ok": True, "confirm": bool(args.confirm), "plan": plan, "written": written}))
+        return 0
+    verb = "冻结" if plan["action"] == "freeze" else "解冻"
+    mode = "confirm" if args.confirm else "dry-run"
+    print(f"freeze-legacy ({mode}) {verb} {len(plan['selected'])} 张卡; 治理根 {plan['governance_root']}; "
+          f"清单落点 {plan['manifest_dir']}{'' if plan['manifest_declared'] else '(project.json 未声明, confirm 时写入)'}")
+    for item in plan["selected"]:
+        print(f"  {item['task_id']}  queue={item['queue_state']}  status={item['card_status']}  lint_issues={item['lint_issues']}")
+    print(f"  合计当前 lint 问题 {plan['lint_issues_total']} 条")
+    if plan["already"]:
+        state = "已冻结" if plan["action"] == "freeze" else "未冻结"
+        print(f"  {state}(幂等, 不重复写): {', '.join(plan['already'])}")
+    if plan["excluded"]:
+        print(f"  排除: {', '.join(plan['excluded'])}")
+    if written is None:
+        print("  (dry-run 零写入; 确认后加 --confirm 追加清单条目)")
+    elif written["written"]:
+        print(f"✓ 已追加清单条目 {written['entry']}" + ("; 并在 project.json 声明 legacy_baseline 落点" if written["project_json_declared"] else ""))
+        print("  卡文件与记录未被移动或改写; 清单条目属治理真相, 按项目惯例经 governance-commit 落账")
+    else:
+        print(f"  本批无需{verb}的卡(幂等), 未写清单")
+    return 0
+
+
 def _ask_project_type_interactive() -> dict[str, Any] | None:
     """AIPOS-335 S2: 交互式询问项目类型，生成 collaboration_profile。
     
@@ -1754,6 +1798,21 @@ def build_parser() -> argparse.ArgumentParser:
     project_checkws_parser.add_argument("--harness", required=True, help="Harness whose launch template executable must be on the workstation PATH (enums.schema harness.launch)")
     project_checkws_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_checkws_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F122 件②: 存量冻结(迁移基线)——人肉期卡一次声明为历史(只追加清单; 声明 config.schema project_json.legacy_baseline)
+    project_freeze_parser = project_subparsers.add_parser("freeze-legacy", help="AIPOS-F122: freeze legacy (pre-gate) cards as history via an append-only manifest (project.json legacy_baseline): state lint stops reporting them, next scan skips them, gate writes and loop refuse them (LEGACY_FROZEN). --unfreeze appends an unfreeze entry. Never moves or rewrites cards/records.")
+    freeze_select = project_freeze_parser.add_mutually_exclusive_group(required=True)
+    freeze_select.add_argument("--task-ids", nargs="+", metavar="ID", help="Freeze exactly these cards (unknown ID = whole command refused)")
+    freeze_select.add_argument("--queue", help="Freeze every card in these queue dirs (comma-separated, e.g. claimed,completed,blocked)")
+    freeze_select.add_argument("--unfreeze", nargs="+", metavar="ID", help="Append an unfreeze entry for these cards")
+    project_freeze_parser.add_argument("--exclude", nargs="+", metavar="ID", default=None, help="With --queue: cards to leave unfrozen")
+    project_freeze_parser.add_argument("--reason", required=True, help="Why (recorded in the manifest entry)")
+    project_freeze_parser.add_argument("--actor", required=True, help="Instance freezing/unfreezing (recorded as frozen_by/unfrozen_by)")
+    project_freeze_parser.add_argument("--owner-policy-ref", default=None, help="Optional Owner policy/decision ref recorded in the entry")
+    freeze_mode = project_freeze_parser.add_mutually_exclusive_group()
+    freeze_mode.add_argument("--dry-run", action="store_true", help="Preview only (default): list cards and their current lint issue counts, zero writes")
+    freeze_mode.add_argument("--confirm", action="store_true", help="Append the manifest entry (and declare project.json legacy_baseline if absent)")
+    project_freeze_parser.add_argument("--workspace-root", type=Path, default=None, help="Governance root (default: auto-detect)")
+    project_freeze_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-335 S4: list existing projects and their inferred collaboration_profile
     project_list_parser = project_subparsers.add_parser("list", help="AIPOS-335: List existing projects and their collaboration profiles")
     project_list_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
@@ -2985,8 +3044,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             # AIPOS-293: export doesn't need home_root; dispatch-mode uses --project-root(AIPOS-F117: import 与 project new 同读 home 根)
-            if args.project_command in ("export", "dispatch-mode"):
-                pass  # handled below
+            if args.project_command in ("export", "dispatch-mode", "freeze-legacy"):
+                pass  # handled below(AIPOS-F122: freeze-legacy 按 --workspace-root 定位治理根)
             else:
                 home, home_source = resolve_home_root_with_source(explicit_root=args.home_root)
             if args.project_command == "new":
@@ -3090,6 +3149,8 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Error: gate call failed: {exc}", file=sys.stderr)
                     return 1
                 return 0
+            if args.project_command == "freeze-legacy":
+                return _project_freeze_legacy(args)
             if args.project_command == "set-repos":
                 # AIPOS-F92 件②: 声明产品仓(唯一写入口 workspace_config.set_project_repos; 校验 = 唯一读取口 project_repos)
                 from tools.aipos_cli.workspace_config import CardRepoUnresolved, set_project_repos
@@ -4890,7 +4951,15 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     print(f"✗ state lint: {len(issues)} 断层(扫描 {result['scanned']} 张卡)")
                     for issue in issues:
-                        print(f"  - [{issue['severity']}] {issue['task_id']}: {issue['message']}")
+                        frozen_tag = " (frozen)" if issue.get("frozen") else ""
+                        print(f"  - [{issue['severity']}] {issue['task_id']}{frozen_tag}: {issue['message']}")
+                # AIPOS-F122 件③: 存量冻结汇总一行(全项目扫描不报冻结卡; 单卡 lint 照实报并标注)
+                if result.get("frozen"):
+                    if getattr(args, "task_id", None):
+                        batch = result.get("frozen_batch") or {}
+                        print(f"  frozen: {args.task_id} 在存量冻结清单内(批次 {batch.get('batch_id')}; 全项目扫描不报)")
+                    else:
+                        print(f"  frozen {result['frozen']}(存量冻结卡, 历史, 不报断层; 清单见 project.json legacy_baseline)")
             return 1 if issues else 0
 
         # AIPOS-C3B 大项C③: state repair
@@ -5386,6 +5455,15 @@ def main(argv: list[str] | None = None) -> int:
                 # 项目级扫描
                 results = scan_project(ws_root)
                 print(format_scan_output(results, json_mode=json_mode))
+                if not json_mode:  # AIPOS-F122 件③: 存量冻结卡不列, 汇总一行(判定唯一实现 legacy_baseline.frozen_tasks)
+                    from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_tasks
+
+                    try:
+                        frozen_count = len(frozen_tasks(Path(ws_root)))
+                    except LegacyBaselineError:
+                        frozen_count = 0  # 清单读不出已在扫描首行列硬停项
+                    if frozen_count:
+                        print(f"frozen {frozen_count}(存量冻结卡, 历史, 不列为待推进)")
                 return 0
         except Exception as exc:
             print(f"Error in lybra next: {exc}", file=sys.stderr)

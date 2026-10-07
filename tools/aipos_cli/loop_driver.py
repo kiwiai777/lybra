@@ -756,6 +756,17 @@ def run_loop(
 
     say = TolerantOutput(out)  # AIPOS-F107 件①: 输出端断开(ssh 断线/管道关闭)→ 静默丢弃, 不打断拉起期清理
 
+    # AIPOS-F122 件③: 存量冻结卡拒推进(判定唯一实现 legacy_baseline.frozen_tasks, 经推导核同一硬停项 legacy_frozen_stop;
+    # 先于找卡与信封校验——冻结卡不该得到「无信封 exit 5」之类误导出口)
+    from tools.aipos_cli.next_resolver import legacy_frozen_stop
+
+    frozen_stop = legacy_frozen_stop(governance_root, task_id)
+    if frozen_stop is not None:
+        msg = "; ".join(frozen_stop["missing_records"])
+        say(f"lybra loop {task_id}: exit {exit_code_for(contract, 'not_derivable')} — {msg}")
+        return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), msg,
+                          missing_records=frozen_stop["missing_records"], suggested_action=frozen_stop["suggested_action"])
+
     # 卡存在性
     task_path, _queue_dir = _find_task_in_queue(governance_root, task_id)
     if not task_path:

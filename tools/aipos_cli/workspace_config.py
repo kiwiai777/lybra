@@ -1618,6 +1618,61 @@ def set_project_workstation(project_root: str | Path, instance: str, *, gate_ssh
     return {"project_json": str(path), "instance": instance, **entry}
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F122 件①: 存量冻结清单落点声明(project.json legacy_baseline; 声明表 config.schema
+# configuration_sources.project_json.schema.legacy_baseline)。唯一读取口 project_legacy_baseline / 唯一写入口 set_project_legacy_baseline。
+# ---------------------------------------------------------------------------
+
+def project_legacy_baseline(governance_root: str | Path) -> dict[str, Path] | None:
+    """project.json legacy_baseline 段 → {manifest_dir: 绝对 Path}; 缺段 = None(无冻结, 行为不变)。
+    形不合(非对象 / manifest_dir 空或非串 / 解析后不在治理根内)或 project.json 读不出 = LegacyBaselineError(LEGACY_BASELINE_INVALID;
+    读不出不吞成「未声明」——冻结判定不可得即 fail-closed)。只读。"""
+    from tools.aipos_cli.legacy_baseline import LEGACY_BASELINE_INVALID, LegacyBaselineError, declaration
+
+    declaration()  # 声明缺 = SchemaLoadError(fail-closed)
+    root = Path(governance_root)
+    try:
+        project = read_project_json(root)
+    except (OSError, ValueError) as exc:
+        raise LegacyBaselineError(LEGACY_BASELINE_INVALID, f"{project_json_path(root)} 读不出, 冻结判定不可得: {exc}") from exc
+    raw = project.get("legacy_baseline") if isinstance(project, dict) else None
+    if raw is None:
+        return None
+    where = f"{project_json_path(root)} legacy_baseline"
+    if not isinstance(raw, dict):
+        raise LegacyBaselineError(LEGACY_BASELINE_INVALID, f"{where} 须为 JSON 对象 {{manifest_dir: <相对治理根路径>}}")
+    value = raw.get("manifest_dir")
+    if not isinstance(value, str) or not value.strip():
+        raise LegacyBaselineError(LEGACY_BASELINE_INVALID, f"{where}.manifest_dir 须为非空串")
+    path = Path(value.strip()).expanduser()
+    path = path if path.is_absolute() else root / path
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise LegacyBaselineError(LEGACY_BASELINE_INVALID, f"{where}.manifest_dir={value!r} 不在治理根 {root} 内") from exc
+    return {"manifest_dir": path}
+
+
+def set_project_legacy_baseline(governance_root: str | Path, manifest_dir: str) -> dict[str, Any]:
+    """写 project.json legacy_baseline.manifest_dir(其余键原样保留); 写后经 project_legacy_baseline 校验, 不合 = 还原原文并抛。"""
+    root = Path(governance_root)
+    path = project_json_path(root)
+    if not path.is_file():
+        raise FileNotFoundError(f"{path} 不存在(项目未建)")
+    original = path.read_text(encoding="utf-8")
+    data = json.loads(original)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} 不是 JSON 对象")
+    data["legacy_baseline"] = {"manifest_dir": str(manifest_dir)}
+    path.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    try:
+        declared = project_legacy_baseline(root)
+    except ValueError:
+        path.write_text(original, encoding="utf-8")
+        raise
+    return {"project_json": str(path), "manifest_dir": str(declared["manifest_dir"]) if declared else None}
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

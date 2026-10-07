@@ -2522,6 +2522,46 @@ def _select_task(
     return load_task_by_path(selected_path, repo_root)
 
 
+def _legacy_frozen_block(
+    operation: str,
+    repo_root: Path,
+    selectors: list[tuple[str | None, str | Path | None]],
+    *,
+    dry_run: bool,
+    actor: Any,
+) -> dict[str, Any] | None:
+    """AIPOS-F122 件③: 门写动作对存量冻结卡拒(LEGACY_FROZEN, 附解冻命令)。是否冻结 = legacy_baseline.frozen_rejection
+    (唯一判定 frozen_tasks, 与 state lint / next / loop 共用); 清单读不出 = 拒(LEGACY_BASELINE_INVALID, fail-closed)。
+    selectors = [(task_id, path)]: 只给 path 时按卡面取 task_id; 卡解析不到的选择子留给动词原有的找卡判据报错。None = 放行。"""
+    from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_rejection
+
+    task_ids: list[str] = []
+    for selector_id, selector_path in selectors:
+        if selector_id and str(selector_id).strip():
+            task_ids.append(str(selector_id).strip())
+        elif selector_path:
+            try:
+                task_ids.append(str(_select_task(repo_root, task_id=None, path=selector_path).get("task_id") or ""))
+            except (FileNotFoundError, ValueError, OSError):
+                continue
+    try:
+        rejection = frozen_rejection(repo_root, task_ids, action=operation)
+    except LegacyBaselineError as exc:
+        response = blocked_response(operation=operation, dry_run=dry_run, category="VALIDATION_ERROR",
+                                    message=f"{exc}; 存量冻结清单读不出, 拒写(出口: 修正清单条目 / project.json legacy_baseline)",
+                                    actor=_actor_payload(str(actor or "").strip()), safety_notice=CONTROLLED_EXECUTE_NOTICE)
+        response["error_code"] = exc.code
+        return response
+    if rejection is None:
+        return None
+    response = blocked_response(operation=operation, dry_run=dry_run, category="STATUS_MISMATCH", message=rejection["message"],
+                                actor=_actor_payload(str(actor or "").strip()), safety_notice=CONTROLLED_EXECUTE_NOTICE)
+    response["error_code"] = rejection["code"]
+    response["unfreeze_command"] = rejection["unfreeze_command"]
+    response["next_step"] = rejection["unfreeze_command"]
+    return response
+
+
 def _check_return_self_checks(
     *,
     task_id: str,
@@ -3604,6 +3644,9 @@ def return_task(
         # AIPOS-227: resolve the project truth root AND the truth home in one shot, so the 196a
         # ingestion home-guard uses the SAME resolution that produced repo_root (no drift).
         resolved_root, home_root = _resolve_repo_and_home(repo_root)
+        frozen_block = _legacy_frozen_block("queue_return", resolved_root, [(task_id, path)], dry_run=dry_run, actor=actor_text)
+        if frozen_block is not None:
+            return frozen_block
         response = _build_return_preview(
             task_id=task_id,
             path=path,
@@ -4127,6 +4170,10 @@ def audit_dispatch_task(
         if not audit_instance:
             raise ValueError("audit_agent_instance is required")
         resolved_root = _resolve_repo_root(repo_root)
+        frozen_block = _legacy_frozen_block("audit_dispatch", resolved_root, [(source_task_id, source_path), (audit_id, None)],
+                                            dry_run=dry_run, actor=actor_text)
+        if frozen_block is not None:
+            return frozen_block
         response = _build_audit_dispatch_preview(
             source_task_id=source_task_id,
             source_path=source_path,
@@ -4841,6 +4888,10 @@ def audit_verdict_task(
             }
         
         resolved_root = _resolve_repo_root(repo_root)
+        frozen_block = _legacy_frozen_block("audit_verdict", resolved_root, [(reviewed_id, None), (audit_task_id, audit_task_path)],
+                                            dry_run=dry_run, actor=actor_text)
+        if frozen_block is not None:
+            return frozen_block
         response = _build_audit_verdict_preview(
             audit_task_id=audit_task_id,
             audit_task_path=audit_task_path,
