@@ -864,7 +864,7 @@ def project_repos(governance_root: str | Path, *, project: dict[str, Any] | None
     return {"declared": True, "default": default, "items": items, "code_repo": code_repo, "project_json_exists": exists}
 
 
-TEST_CONTRACT_KEYS = ("runall_path", "require_tests", "test_file_globs", "post_merge_regression")
+TEST_CONTRACT_KEYS = ("runall_path", "require_tests", "test_file_globs", "post_merge_regression", "isolation")
 
 
 def _post_merge_regression_decl(test_contract_decl: dict[str, Any]) -> dict[str, Any]:
@@ -883,6 +883,52 @@ def _post_merge_regression_decl(test_contract_decl: dict[str, Any]) -> dict[str,
     if not isinstance(default_timeout, int) or isinstance(default_timeout, bool) or default_timeout < 1:
         raise SchemaLoadError("config.schema.json post_merge_regression.timeout_seconds.default 未声明或非正整数")
     return keys
+
+
+def _isolation_decl(test_contract_decl: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F126 件②: config.schema test_contract.schema.isolation 声明(mode / network 值域 + 缺省)。声明缺/形坏 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (test_contract_decl.get("schema") or {}).get("isolation")
+    keys = (decl or {}).get("schema") if isinstance(decl, dict) else None
+    if not isinstance(keys, dict) or set(keys) != {"mode", "network"}:
+        raise SchemaLoadError("config.schema.json test_contract.schema.isolation.schema 未声明或键不为 mode/network")
+    for key in ("mode", "network"):
+        values = keys[key].get("values") if isinstance(keys[key], dict) else None
+        if not isinstance(values, list) or keys[key].get("default") not in values:
+            raise SchemaLoadError(f"config.schema.json test_contract.isolation.{key} 的 values/default 未声明或 default 不在 values 内")
+    return keys
+
+
+def isolation_defaults(test_contract_decl: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F126 件②: 隔离声明缺省 {mode, network, source}(各键取 config.schema default)。"""
+    keys = _isolation_decl(test_contract_decl)
+    return {"mode": keys["mode"]["default"], "network": keys["network"]["default"], "source": "config.schema test_contract.isolation 缺省"}
+
+
+def apply_isolation_override(current: dict[str, Any], raw: Any, label: str) -> dict[str, Any]:
+    """AIPOS-F126 件②: 单次覆盖(run-all 执行器 --isolation)走同一校验; 来源记「<label> 单次覆盖」。值不在声明值域 = ValueError(TEST_CONTRACT_INVALID)。"""
+    from tools.schema_loader import load_schema
+
+    decl = load_schema("config").get("configuration_sources", {}).get("project_json", {}).get("schema", {}).get("test_contract") or {}
+    return {**_apply_isolation(current, _isolation_decl(decl), raw, label), "source": f"{label} 单次覆盖"}
+
+
+def _apply_isolation(current: dict[str, Any], keys: dict[str, Any], raw: Any, label: str) -> dict[str, Any]:
+    """AIPOS-F126 件②: 项目声明逐键覆盖 current。形不合声明 = ValueError(TEST_CONTRACT_INVALID)。"""
+    if not isinstance(raw, dict):
+        raise ValueError(f"TEST_CONTRACT_INVALID: {label}.isolation 须为对象(config.schema test_contract.isolation)")
+    unknown = sorted(set(raw) - set(keys))
+    if unknown:
+        raise ValueError(f"TEST_CONTRACT_INVALID: {label}.isolation 含未声明键 {unknown}(允许 {sorted(keys)})")
+    resolved = dict(current)
+    for key in ("mode", "network"):
+        if key in raw:
+            if raw[key] not in keys[key]["values"]:
+                raise ValueError(f"TEST_CONTRACT_INVALID: {label}.isolation.{key}={raw[key]!r} 不在声明值域 {keys[key]['values']}")
+            resolved[key] = raw[key]
+    resolved["source"] = f"{label}.isolation"
+    return resolved
 
 
 def _apply_post_merge_regression(current: dict[str, Any], keys: dict[str, Any], raw: Any, label: str) -> dict[str, Any]:
@@ -922,6 +968,7 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
     代码不写死式样), 项目声明 = 整体替换。
     AIPOS-F118 件②: post_merge_regression = {mode, execution, timeout_seconds, source}(finalize 合并后回归策略; 未声明键取
     config.schema 各键 default, 顶层与 repos 覆盖逐键覆盖)。
+    AIPOS-F126 件②: isolation = {mode, network, source}(run-all 执行器事前隔离声明; 同上逐键覆盖)。
     形不合声明 = ValueError("TEST_CONTRACT_INVALID: …")(fail-closed, 调用方拒并给出口); project.json 读失败原样抛。
     """
     from tools.schema_loader import SchemaLoadError, load_schema
@@ -942,6 +989,7 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
     where = f"{project_json_path(root)} test_contract"
     raw = read_project_json(root).get("test_contract")
     pmr_keys = _post_merge_regression_decl(decl)
+    isolation_keys = _isolation_decl(decl)
     result: dict[str, Any] = {
         "runall_path": None,
         "require_tests": None,
@@ -951,6 +999,7 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
             **{key: pmr_keys[key]["default"] for key in ("mode", "execution", "timeout_seconds")},
             "source": "config.schema test_contract.post_merge_regression 缺省",
         },
+        "isolation": isolation_defaults(decl),
         "source": f"{where}(未声明)",
     }
     if raw in (None, {}):
@@ -981,6 +1030,8 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
             result["post_merge_regression"] = _apply_post_merge_regression(
                 result["post_merge_regression"], pmr_keys, spec["post_merge_regression"], label
             )
+        if "isolation" in spec:
+            result["isolation"] = _apply_isolation(result["isolation"], isolation_keys, spec["isolation"], label)
         result["source"] = label
 
     _apply(raw, where)
@@ -1078,6 +1129,7 @@ def default_test_contract() -> dict[str, Any]:
         "require_tests": None,
         "test_file_globs": list(globs),
         "test_file_globs_source": "config.schema test_contract.test_file_globs.default",
+        "isolation": isolation_defaults(decl),
         "source": "config.schema test_contract(缺省)",
     }
 

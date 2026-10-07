@@ -22,11 +22,15 @@ AIPOS-F116 防护夹具(执行器内建, 每个测试文件前后各取一次, �
     attribute_rerun)——测试的污染位置是确定的(同一文件, 或同一目录下新时间戳文件); 复核窗口里落在别处的变动(F122 实例: 首轮
     governance/FOUNDATION-BACKLOG.md, 重跑窗口 queue/claimed→completed 移卡 + closures/ 结案记录 = loop 在合并后异步回归运行期间
     继续推进的结案写入)= 同时段他方写入, 照列不判红。已知局限: 他方恰在重跑窗口写入首轮同一目录 → 仍判红(偏保守, 不放过污染)。
+  AIPOS-F126(gap #90/#102: 快照只看得到「变了」看不到「谁写的」, 他方持续写入时重跑归因仍误判): 事前隔离为主机制——每个测试文件在
+    操作系统级沙箱里启动(tools/aipos_cli/runall_isolation: bwrap 只读绑定 + 独立网络命名空间 / Landlock), 守卫解析出的 home 根与被守卫
+    git 仓根只读, 测试直接写入当场失败、归本文件。沙箱生效时上面的快照只作信息输出(列同时段他方写入, 永不判红, 不重跑); 沙箱未生效
+    (声明 none / 无可用后端)时保持上述判定, 输出头部明示「隔离:无, 降级为快照守卫」。隔离声明 config.schema test_contract.isolation。
   孤儿进程守卫(件③, gap #12/#25/#55): 测试子进程环境带本轮唯一标记变量(不带 LYBRA_/AIPOS_ 前缀, 嵌套执行器不剥);
     文件结束后仍带标记的存活进程(含另起会话逃出进程组收尸的 web.board.app / serve 子进程)= 泄漏 → SIGKILL 并判红。
 
 用法(由 tests/run-all.sh 调用, cwd = 产品仓根):
-  python3 -m tools.aipos_cli.runall_discovery --runall tests/run-all.sh [--governance-root <治理根>] [--list]
+  python3 -m tools.aipos_cli.runall_discovery --runall tests/run-all.sh [--governance-root <治理根>] [--list] [--isolation <mode>]
 """
 from __future__ import annotations
 
@@ -66,6 +70,8 @@ LEAK_MARK_PREFIX = "RUNALL_LEAK_MARK_"
 #: 真实治理根守卫监视的项目子目录与关键日志式样(卡面: home 根下各项目 governance/ 与 5_tasks/; 关键日志 = 只追加的治理日志)。
 GUARD_SUBDIRS = ("governance", "5_tasks")
 GUARD_KEY_LOG_GLOB = "*_log.md"
+#: AIPOS-F126: 沙箱拒写的错误文本(bwrap 只读绑定 = EROFS; Landlock = EACCES); 失败输出同时含只读路径与其一 → 出声提示写真实根被拦。
+WRITE_DENIED_ERRORS = ("Read-only file system", "Permission denied")
 
 
 def runner_for(path: str) -> str | None:
@@ -155,6 +161,11 @@ def _child_env(home: str, leak_mark: str) -> dict[str, str]:
 def _git_readonly(cwd: Path, *args: str) -> str:
     """只读 git: --no-optional-locks(status 不刷新/不写 index)。失败 = 抛(fail-closed)。"""
     return subprocess.run(["git", "--no-optional-locks", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
+
+
+def _git_common_dir(repo_root: Path) -> Path:
+    """产品仓的 git 公共目录(工作树的 .git 可能是指向主仓 .git/worktrees/<名> 的文件); 隔离放行可写用。失败 = 抛(fail-closed)。"""
+    return Path(_git_readonly(repo_root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
 
 
 def governance_guard_targets(env: Mapping[str, str]) -> dict[str, Any]:
@@ -305,10 +316,14 @@ def _reap_group(pgid: int) -> bool:
     return True
 
 
-def _run(cmd: list[str], repo_root: Path, env: dict[str, str]) -> tuple[int | None, str]:
-    """独立进程组执行一个测试文件; 结束(或超时)后清掉组内残留进程——夹具环境不留孤儿(测试泄漏的后台进程照实出声)。"""
+def _run(cmd: list[str], repo_root: Path, env: dict[str, str], isolation: Any = None) -> tuple[int | None, str]:
+    """独立进程组执行一个测试文件; 结束(或超时)后清掉组内残留进程——夹具环境不留孤儿(测试泄漏的后台进程照实出声)。
+    AIPOS-F126: isolation(runall_isolation.Isolation)生效时测试命令在沙箱里启动(真实 home 根只读); 沙箱进程与测试同在本进程组。"""
+    extra: dict[str, Any] = {}
+    if isolation is not None:
+        cmd, env, extra = isolation.command(cmd), isolation.env(env), isolation.popen_kwargs()
     proc = subprocess.Popen(cmd, cwd=repo_root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            start_new_session=True)
+                            start_new_session=True, **extra)
     try:
         stdout, stderr = proc.communicate(timeout=FILE_TIMEOUT_SECONDS)
         rc: int | None = proc.returncode
@@ -397,7 +412,12 @@ def failure_set(output: str, exit_code: int | None, runall_rel: str) -> list[str
 
 def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
         guard_env: Mapping[str, str] | None = None) -> int:
-    """guard_env: 真实治理根守卫解析 home 根所用环境(缺省 = 执行器自身 os.environ, 即测试子进程隔离之前的真实环境)。"""
+    """guard_env: 真实治理根守卫解析 home 根所用环境(缺省 = 执行器自身 os.environ, 即测试子进程隔离之前的真实环境)。
+    AIPOS-F126: 隔离声明取 contract["isolation"](workspace_config.project_test_contract / default_test_contract 的结果键;
+    缺 = config.schema 缺省)。只读路径 = 守卫同一梯解析的 home 根 + 被守卫 git 仓根(runall_isolation.protected_paths)。"""
+    from tools.aipos_cli import runall_isolation
+    from tools.aipos_cli.workspace_config import default_test_contract
+
     out = out or sys.stdout
     plan = build_plan(repo_root, runall_rel, contract)
 
@@ -421,11 +441,29 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
          f"(各项目 {'/'.join(GUARD_SUBDIRS)}/; git 仓 {len(targets['repos'])} 个, 非 git 目录 {len(targets['plain'])} 个), "
          f"关键日志 {len(targets['key_logs'])} 个(md5); 只读")
     leak_mark = LEAK_MARK_PREFIX + secrets.token_hex(8)
+    home = tempfile.mkdtemp(prefix="lybra-runall-home-")
+    protected = runall_isolation.protected_paths(targets)
+    try:
+        isolation = runall_isolation.resolve(
+            contract.get("isolation") or default_test_contract()["isolation"], protected,
+            runall_isolation.writable_holes(protected, [repo_root, _git_common_dir(repo_root), Path(tempfile.gettempdir()), Path(home)]),
+        )
+    except BaseException:
+        shutil.rmtree(home)
+        raise
+    emit(f"[runall_discovery] {isolation.header()}")
+    if isolation.required_unavailable:
+        isolation.close()
+        shutil.rmtree(home)
+        emit(f"✗ 隔离声明 mode={isolation.declared.get('mode')} 不可用, 不跑测试(改声明 auto / none 或补齐该后端) FAIL")
+        return 1
+    if isolation.active:
+        emit(f"[runall_discovery] 真实治理根守卫: 沙箱({isolation.backend})生效 → 快照只作信息输出(列同时段他方写入, 永不判红, 不重跑归因); "
+             "测试直接写只读路径在沙箱内当场失败, 归本文件")
     snapshot = governance_snapshot(targets)
     guard_changes = 0
     guard_concurrent = 0
     leaks_total = 0
-    home = tempfile.mkdtemp(prefix="lybra-runall-home-")
 
     def _on_sigterm(signum: int, _frame: Any) -> None:
         # AIPOS-F118: 被上游终止(finalize 合并后回归超时先 SIGTERM 整组)时, 在跑的测试子进程在独立会话里、上游 killpg 够不着——
@@ -447,14 +485,19 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
                 continue
             node_excludes = [t for t in plan["node_excluded"] if t.startswith(path + "::")]
             cmd = _command(path, runner, node_excludes)
-            rc, output = _run(cmd, repo_root, env)
+            rc, output = _run(cmd, repo_root, env, isolation)
             if runner == "pytest" and rc == PYTEST_NO_TESTS_COLLECTED:
                 emit("[runall_discovery] pytest 未收集到用例 → 脚本式夹具, 以 python3 直跑")
                 runner = "script"
                 cmd = [sys.executable, path]
-                rc, output = _run(cmd, repo_root, env)
+                rc, output = _run(cmd, repo_root, env, isolation)
             emit(output.rstrip("\n"))
             ok, notes = judge(path, runner, rc, output, plan["known_failures"])
+            if isolation.active and rc != 0:
+                hits = [str(p) for p in isolation.protected if str(p) in output]
+                denied = [err for err in WRITE_DENIED_ERRORS if err in output]
+                if hits and denied:
+                    notes.append(f"隔离: 本文件失败输出含只读路径 {hits} 与写拒错误 {denied}(沙箱当场拦下写真实根, 归本文件)")
             leaked = reap_marked(leak_mark)
             if leaked:
                 ok = False
@@ -464,10 +507,15 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
             before_file = snapshot
             changed = snapshot_changes(snapshot, after)
             snapshot = after
-            if changed:
+            if changed and isolation.active:
+                # AIPOS-F126 件③: 沙箱内测试写不进只读路径 → 期间变动只可能来自沙箱外的他方(门/顾问/别的项目), 只列不判红, 不重跑。
+                guard_concurrent += len(changed)
+                notes += [f"真实治理根守卫(信息): 沙箱({isolation.backend})生效, 本文件执行期间的变动来自沙箱外他方写入, 不判红: {c}"
+                          for c in changed]
+            elif changed:
                 # 时间窗归因复核: 单独重跑本文件一次(测试结果不计, 只看守卫), 前后再快照。在首轮同一落点复现 = 本文件所致 → 红;
                 # 不复现 / 只在他处变动 = 同时段他方(门/顾问)的正常写入 → 照列不判红(判定 attribute_rerun, AIPOS-F124 件④)。
-                _rc_again, _out_again = _run(cmd, repo_root, env)
+                _rc_again, _out_again = _run(cmd, repo_root, env, isolation)
                 leaked_again = reap_marked(leak_mark)
                 if leaked_again:
                     ok = False
@@ -504,12 +552,17 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
                 emit(f"✗ {path} FAIL")
                 overall = 1
         emit()
-        emit(f"[runall_discovery] 真实治理根守卫汇总: 测试所致变动 {guard_changes} 处"
-             + ("" if guard_changes else "(无测试写入真实治理根)")
-             + f"; 同时段他方写入(重跑未复现, 不计) {guard_concurrent} 处")
+        if isolation.active:
+            emit(f"[runall_discovery] 真实治理根守卫汇总(沙箱 {isolation.backend} 生效, 仅信息): 同时段他方写入 {guard_concurrent} 处(不判红); "
+                 "测试直接写只读路径已在沙箱内当场失败并归各文件")
+        else:
+            emit(f"[runall_discovery] 真实治理根守卫汇总: 测试所致变动 {guard_changes} 处"
+                 + ("" if guard_changes else "(无测试写入真实治理根)")
+                 + f"; 同时段他方写入(重跑未复现, 不计) {guard_concurrent} 处")
         emit(f"[runall_discovery] 孤儿进程守卫汇总: 泄漏进程 {leaks_total} 个" + ("" if leaks_total else "(无带本轮标记的存活进程)"))
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
+        isolation.close()
         try:
             shutil.rmtree(home)
         except OSError as exc:  # 清理失败出声, 不吞
@@ -523,11 +576,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", default=".", help="产品仓根(缺省 cwd)")
     parser.add_argument("--governance-root", help="治理根: 给了按项目 project.json test_contract 取式样, 否则取 config.schema 缺省")
     parser.add_argument("--list", action="store_true", help="只打印执行计划(发现集/排除/已知失败), 不执行")
+    parser.add_argument("--isolation", help="AIPOS-F126: 本次指定隔离 mode(值域 = config.schema test_contract.isolation.mode), 覆盖声明")
     args = parser.parse_args(argv)
-    from tools.aipos_cli.workspace_config import default_test_contract, project_test_contract
+    from tools.aipos_cli.workspace_config import apply_isolation_override, default_test_contract, project_test_contract
 
     repo_root = Path(args.repo_root).resolve()
     contract = project_test_contract(args.governance_root, repo_root) if args.governance_root else default_test_contract()
+    if args.isolation is not None:
+        contract = {**contract, "isolation": apply_isolation_override(contract["isolation"], {"mode": args.isolation}, "命令行")}
     if args.list:
         plan = build_plan(repo_root, args.runall, contract)
         for path in plan["to_run"]:
