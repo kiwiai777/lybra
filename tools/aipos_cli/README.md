@@ -37,3 +37,8 @@
 ## 测试
 
 常驻夹具总入口 `tests/run-all.sh`;模块单测在 `tools/aipos_cli/tests/`。
+
+run-all 执行器(`runall_discovery`)每个测试文件在沙箱里启动(AIPOS-F126, `runall_isolation`):真实 home 根与被守卫治理仓只读,
+测试写入当场失败;Linux 上按 bwrap(含独立网络命名空间)→ Landlock 探测,接入方机器不需 root;都不可用(如 macOS)时输出头部
+「隔离:无, 降级为快照守卫」。声明 `project.json` `test_contract.isolation {mode: auto|bwrap|landlock|none, network: isolated|host}`,
+单次可用 `--isolation <mode>`。
