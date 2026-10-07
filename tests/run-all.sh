@@ -64,7 +64,6 @@ exit "$overall"
 # lybra-runall: known-failure tests/test_aipos_343_contract_section_no_silent_swallow.py::TestLybraRegression::test_lybra_publish_still_appends_section
 # lybra-runall: known-failure tests/test_aipos_343_contract_section_no_silent_swallow.py::TestSelectorEmptySemantics::test_empty_task_mode_matches_any_task_type
 # lybra-runall: known-failure tests/test_aipos_f44d_a_role_resolution_redgreen.py::test_red_hardcoded_executor
-# lybra-runall: known-failure tests/test_finalize.py::test_check_deployment_integrity_drift
 # lybra-runall: known-failure tests/test_finalize.py::test_check_task_can_finalize_fail_verdict
 # lybra-runall: known-failure tests/test_finalize.py::test_check_task_can_finalize_no_verdict_files
 # lybra-runall: known-failure tests/test_finalize.py::test_check_task_can_finalize_no_verdicts_dir

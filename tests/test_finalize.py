@@ -143,7 +143,7 @@ def test_git_status_clean(temp_repo):
 
 def test_check_deployment_integrity_no_deployment(temp_repo):
     """Test deployment integrity check when no deployment exists."""
-    result = _check_deployment_integrity(temp_repo)
+    result = _check_deployment_integrity(temp_repo, temp_repo)  # AIPOS-F130 件①: 治理根必传(单仓夹具兼任)
     assert result["integrity_ok"] is True
     assert result["current_commit"] is None
     assert "No .deploy/current" in result["message"]
@@ -164,7 +164,7 @@ def test_check_deployment_integrity_matching(temp_repo):
     version_file = current_dir / "VERSION"
     version_file.write_text(f"git_commit: {head_commit}\n")
 
-    result = _check_deployment_integrity(temp_repo)
+    result = _check_deployment_integrity(temp_repo, temp_repo)  # AIPOS-F130 件①: 治理根必传(单仓夹具兼任)
     assert result["integrity_ok"] is True
     assert result["current_commit"] == head_commit
     assert result["head_commit"] == head_commit
@@ -184,7 +184,7 @@ def test_check_deployment_integrity_drift(temp_repo):
     version_file = current_dir / "VERSION"
     version_file.write_text(f"git_commit: {old_commit}\n")
 
-    result = _check_deployment_integrity(temp_repo)
+    result = _check_deployment_integrity(temp_repo, temp_repo)  # AIPOS-F130 件①: 治理根必传(单仓夹具兼任)
     assert result["integrity_ok"] is False
     assert "DRIFT" in result["message"]
 
