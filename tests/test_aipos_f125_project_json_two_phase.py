@@ -27,6 +27,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 COMMANDS = ("set-paths", "set-repo", "set-repos", "set-workstation")
+# AIPOS-F127 件③: set-meta 登记于同一声明(两阶段旗标 / 输出包装同一份); 其写入正反例见 test_aipos_f127_project_write_target.py
+# (键须 config.schema project_json 已声明, 本文件的逐命令写入参数化只覆盖上面四个)
+DECLARED_COMMANDS = COMMANDS + ("set-meta",)
 SECRET = "lybra_tok_F125SECRETabcdefghijklmnopqrstuvwxyz0123456789"
 PREVIEW = "预览(未写; 加 --confirm 写入)"
 
@@ -145,7 +148,7 @@ def test_item1_single_declaration_and_shared_implementation():
     decl = load_schema("verbs")["two_phase_protocol"]["project_json_writers"]
     _show(f"[件①·声明] verbs.schema two_phase_protocol.project_json_writers.commands={decl['commands']} "
           f"default_phase={decl['default_phase']} flags={decl['flags']}")
-    assert sorted(decl["commands"]) == sorted(COMMANDS) and decl["default_phase"] == "dry_run"
+    assert sorted(decl["commands"]) == sorted(DECLARED_COMMANDS) and decl["default_phase"] == "dry_run"
     parser = build_parser()
     for command in COMMANDS:
         args = parser.parse_args(["project", command, "probe"] + {
@@ -160,22 +163,22 @@ def test_item1_single_declaration_and_shared_implementation():
     # CLI: 两阶段旗标只在唯一包装里注册; 四个处理段都走同一输出包装; 状态文案只出自声明(代码无散落字面量)
     src = (REPO_ROOT / "tools/aipos_cli/aipos_cli.py").read_text(encoding="utf-8")
     assert src.count('"--confirm", action="store_true", help="Write project.json"') == 0, "set-paths 原本地旗标注册已收归"
-    for command in COMMANDS:
+    for command in DECLARED_COMMANDS:
         assert f'_project_json_two_phase_flags(project_set' in src and f'"{command}"' in src
     tree = ast.parse(src)
     emit_calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                   and n.func.id == "_project_json_two_phase_emit"]
     emitted = {n.args[0].value for n in emit_calls if n.args and isinstance(n.args[0], ast.Constant)}
-    assert emitted == set(COMMANDS), emitted
+    assert emitted == set(DECLARED_COMMANDS), emitted
     flag_calls = {n.args[1].value for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                   and n.func.id == "_project_json_two_phase_flags"}
-    assert flag_calls == set(COMMANDS), flag_calls
+    assert flag_calls == set(DECLARED_COMMANDS), flag_calls
     assert "预览(未写" not in src and "已写入\"" not in src, "状态文案只出自 verbs.schema outcome_labels"
 
     # 写实现: 四个命令的库函数都经 update_project_json(唯一写路径); 无第二处 write_text
     wc_src = (REPO_ROOT / "tools/aipos_cli/workspace_config.py").read_text(encoding="utf-8")
     wc_tree = ast.parse(wc_src)
-    for name in ("update_project_repo", "set_project_repos", "set_project_workstation", "set_project_paths"):
+    for name in ("update_project_repo", "set_project_repos", "set_project_workstation", "set_project_paths", "set_project_meta"):
         fn = next(n for n in wc_tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
         calls = {c.func.id for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
         assert "update_project_json" in calls and "write_text" not in ast.unparse(fn), name

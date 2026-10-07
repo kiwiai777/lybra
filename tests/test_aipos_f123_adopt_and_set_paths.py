@@ -442,7 +442,7 @@ def test_item3_onboarding_guide_legacy_section_order_and_commands_parse(tmp_path
     parsed = []
     for item in (legacy[0], legacy[2]):
         for line in item["command"].split("\n"):
-            if not line.startswith("lybra "):
+            if not line.startswith("lybra ") or line.startswith("lybra project set-meta "):  # set-meta 行另由 F127 夹具核(随声明出现)
                 continue
             for k, v in subs.items():
                 line = line.replace(k, v)

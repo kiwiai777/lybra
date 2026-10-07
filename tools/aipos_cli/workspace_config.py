@@ -1864,6 +1864,185 @@ def set_project_workstation(project_root: str | Path, instance: str, *, gate_ssh
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-F127 件①: project 族写命令目标项目解析的唯一实现(声明 verbs.schema two_phase_protocol.project_json_writers
+# .target_resolution)。序: 显式项目名 > --workspace-root / 当前目录所在治理根声明的 project.json#project > 拒;
+# 禁回落 home 级活动项目(resolve_active_project 梯只给读路径用)。
+# ---------------------------------------------------------------------------
+
+class ProjectTargetError(ValueError):
+    """写命令目标项目解析不出 / 冲突(fail-closed, project.json 不动)。code ∈ target_resolution.reject_codes。"""
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(f"{code}: {detail}")
+        self.code = code
+        self.detail = detail
+
+
+def _target_resolution_declaration() -> dict[str, Any]:
+    """verbs.schema two_phase_protocol.project_json_writers.target_resolution(来源标注 + 拒因)。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("verbs").get("two_phase_protocol") or {}).get("project_json_writers") or {}).get("target_resolution")
+    sources = decl.get("sources") if isinstance(decl, dict) else None
+    codes = decl.get("reject_codes") if isinstance(decl, dict) else None
+    if (not isinstance(sources, dict) or not all(isinstance(sources.get(k), str) and sources[k]
+                                                 for k in ("explicit", "explicit_matches_root", "workspace_root", "cwd_root"))
+            or not isinstance(codes, dict)
+            or not all(isinstance(codes.get(k), str) and codes[k] for k in ("PROJECT_TARGET_UNRESOLVED", "PROJECT_TARGET_CONFLICT"))):
+        raise SchemaLoadError("verbs.schema.json two_phase_protocol.project_json_writers.target_resolution(sources {explicit, "
+                              "explicit_matches_root, workspace_root, cwd_root} / reject_codes {PROJECT_TARGET_UNRESOLVED, "
+                              "PROJECT_TARGET_CONFLICT})未声明齐")
+    return decl
+
+
+def enclosing_governance_root(start: str | Path | None = None) -> Path | None:
+    """自 start(缺省 cwd)向上首个已建治理根(结构判据 has_workspace_queue(established=True): project.json + 声明的队列根)。
+    无 = None。只看结构, 不读 env / 全局配置 / 活动项目。某级 project.json 坏 = 原异常上抛(声明坏了不猜)。"""
+    current = Path(start if start is not None else Path.cwd()).expanduser().resolve()
+    if current.is_file():
+        current = current.parent
+    for candidate in [current, *current.parents]:
+        if has_workspace_queue(candidate, established=True):
+            return candidate
+    return None
+
+
+def resolve_project_write_target(
+    home_root: str | Path | None,
+    name: str | None = None,
+    *,
+    workspace_root: str | Path | None = None,
+    start: str | Path | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F127 件①: project 族写命令的目标项目(唯一实现)。返回 {project, project_root, project_json, source}。
+
+    所在治理根 = workspace_root(显式, 须是已建治理根)或 start(缺省 cwd)向上首个已建治理根; 其声明 = project.json#project。
+      - 给 name: 目标 = <home>/<name>(resolve_project_root, 未建 = PROJECT_NOT_ESTABLISHED 原样上抛);
+        有所在治理根而其声明 ≠ name, 或 <home>/<name> 不是该根 = PROJECT_TARGET_CONFLICT(列出两者)。
+      - 不给 name: 目标 = 所在治理根, 项目 = 其声明; 无所在治理根 / 未声明 project = PROJECT_TARGET_UNRESOLVED。
+    从不读 home 级活动项目(LYBRA_ACTIVE_PROJECT / 全局 active_project / 单项目回落)。"""
+    decl = _target_resolution_declaration()
+    sources, codes = decl["sources"], decl["reject_codes"]
+    clean = str(name).strip() if name is not None else ""
+    if workspace_root is not None and str(workspace_root).strip():
+        located = Path(workspace_root).expanduser().resolve()
+        located_source = sources["workspace_root"]
+        if not has_workspace_queue(located, established=True):
+            raise ProjectTargetError("PROJECT_TARGET_UNRESOLVED",
+                                     f"{located_source} {located} 不是已建治理根(无 project.json 或声明的队列根)。"
+                                     f"{codes['PROJECT_TARGET_UNRESOLVED']}")
+    else:
+        located = enclosing_governance_root(start)
+        located_source = sources["cwd_root"]
+    declared: str | None = None
+    if located is not None:
+        try:
+            declared = declared_project_id(located)
+        except ValueError as exc:
+            if not clean:
+                raise ProjectTargetError("PROJECT_TARGET_UNRESOLVED", f"{exc}。{codes['PROJECT_TARGET_UNRESOLVED']}") from exc
+            raise ProjectTargetError("PROJECT_TARGET_CONFLICT",
+                                     f"显式项目名 {clean!r}; {located_source} {located} 的声明不可读({exc})。"
+                                     f"{codes['PROJECT_TARGET_CONFLICT']}") from exc
+    if clean:
+        if home_root is None:
+            raise ProjectTargetError("PROJECT_TARGET_UNRESOLVED", f"显式项目名 {clean!r} 需要 home 根定位 <home>/{clean}")
+        intended = project_root_for(home_root, clean)
+        if located is not None and (declared != clean or intended != located):
+            raise ProjectTargetError(
+                "PROJECT_TARGET_CONFLICT",
+                f"显式项目名 {clean!r}(→ {intended}) ≠ {located_source} {located}(project.json#project={declared!r})。"
+                f"{codes['PROJECT_TARGET_CONFLICT']}")
+        root = resolve_project_root(home_root, clean)
+        source = sources["explicit_matches_root"] if located is not None else sources["explicit"]
+        return {"project": clean, "project_root": root, "project_json": project_json_path(root), "source": source}
+    if located is None:
+        here = Path(start if start is not None else Path.cwd()).expanduser().resolve()
+        raise ProjectTargetError("PROJECT_TARGET_UNRESOLVED", f"当前目录 {here} 向上无已建治理根。{codes['PROJECT_TARGET_UNRESOLVED']}")
+    return {"project": declared, "project_root": located, "project_json": project_json_path(located),
+            "source": f"{located_source} {located}"}
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F127 件③: project.json 顶层说明键(phase / note)写入口 `lybra project set-meta`。
+# 旗标 → 键登记在 verbs.schema project_json_writers.meta.keys; 键的形只在 config.schema project_json.schema 声明(未声明 = 拒)。
+# ---------------------------------------------------------------------------
+
+class ProjectMetaError(ValueError):
+    """set-meta 的键/值不合声明(fail-closed, project.json 不动)。code ∈ verbs.schema project_json_writers.meta.reject_codes。"""
+
+    def __init__(self, code: str, problems: list[str]):
+        super().__init__(f"{code}: " + "; ".join(problems))
+        self.code = code
+        self.problems = list(problems)
+
+
+def project_meta_declaration() -> dict[str, Any]:
+    """verbs.schema two_phase_protocol.project_json_writers.meta(keys {project.json 键: CLI 旗标} + reject_codes)。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("verbs").get("two_phase_protocol") or {}).get("project_json_writers") or {}).get("meta")
+    keys = decl.get("keys") if isinstance(decl, dict) else None
+    codes = decl.get("reject_codes") if isinstance(decl, dict) else None
+    if (not isinstance(keys, dict) or not keys or not all(isinstance(k, str) and isinstance(v, str) and v.startswith("--")
+                                                         for k, v in keys.items())
+            or not isinstance(codes, dict)
+            or not all(isinstance(codes.get(k), str) and codes[k]
+                       for k in ("META_KEY_UNDECLARED", "META_VALUE_INVALID", "META_NOTHING_TO_SET"))):
+        raise SchemaLoadError("verbs.schema.json two_phase_protocol.project_json_writers.meta(keys {键: --旗标} / reject_codes "
+                              "{META_KEY_UNDECLARED, META_VALUE_INVALID, META_NOTHING_TO_SET})未声明齐")
+    return decl
+
+
+def declared_meta_keys() -> dict[str, dict[str, Any]]:
+    """set-meta 当前可写的键 = meta.keys 登记 ∩ config.schema project_json.schema 已声明(未退役)的键 → 其声明。
+    唯一判定(set_project_meta 校验与接入向导是否给出 set-meta 命令同读此处)。"""
+    from tools.schema_loader import load_schema
+
+    declared = ((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}
+    return {key: declared[key] for key in project_meta_declaration()["keys"]
+            if isinstance(declared.get(key), dict) and not declared[key].get("retired")}
+
+
+def set_project_meta(project_root: str | Path, values: dict[str, str | None], *, dry_run: bool = True) -> dict[str, Any]:
+    """AIPOS-F127 件③: `lybra project set-meta` 的唯一实现——写 project.json 顶层说明键(只改给出的键, 其余原样保留)。
+
+    values = {project.json 键: 值}(值 None = 本次不改该键)。键须在 meta.keys 登记且在 config.schema project_json.schema 声明
+    (未声明 / 已退役 = META_KEY_UNDECLARED); 值按声明经 _coerce_paths_value 同一转值规则(非空单行串, enum 在值域)。问题一次列全,
+    任一不合 = 整批不写。写入经 update_project_json(锁 + diff; dry_run 缺省 = 预演零写入)。
+    返回 {project_json, dry_run, changed, written, changes:[{key, before, after}], diff}。"""
+    codes = project_meta_declaration()["reject_codes"]
+    given = {str(k): v for k, v in values.items() if v is not None}
+    if not given:
+        raise ProjectMetaError("META_NOTHING_TO_SET", [codes["META_NOTHING_TO_SET"]])
+    declared = declared_meta_keys()
+    undeclared = [key for key in given if key not in declared]
+    if undeclared:
+        raise ProjectMetaError("META_KEY_UNDECLARED", [f"{key}: {codes['META_KEY_UNDECLARED']}" for key in undeclared])
+    problems: list[str] = []
+    clean: dict[str, Any] = {}
+    for key, raw in given.items():
+        value, problem = _coerce_paths_value(key, str(raw), declared[key])
+        if problem:
+            problems.append(f"{problem}({codes['META_VALUE_INVALID']})")
+        else:
+            clean[key] = value
+    if problems:
+        raise ProjectMetaError("META_VALUE_INVALID", problems)
+    path = project_json_path(project_root)
+    changes: list[dict[str, Any]] = []
+
+    def _mutate(data: dict[str, Any]) -> None:
+        for key, value in clean.items():
+            changes.append({"key": key, "before": data.get(key), "after": value})
+            data[key] = value
+
+    outcome = update_project_json(project_root, _mutate, dry_run=dry_run)
+    return {"project_json": str(path), "dry_run": dry_run, "written": outcome["written"], "changed": outcome["changed"],
+            "changes": changes, "diff": outcome["diff"]}
+
+
+# ---------------------------------------------------------------------------
 # AIPOS-F122 件①: 存量冻结清单落点声明(project.json legacy_baseline; 声明表 config.schema
 # configuration_sources.project_json.schema.legacy_baseline)。唯一读取口 project_legacy_baseline / 唯一写入口 set_project_legacy_baseline。
 # ---------------------------------------------------------------------------

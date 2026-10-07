@@ -703,9 +703,12 @@ def _project_freeze_legacy(args: argparse.Namespace) -> int:
     缺省 = 干跑(零写入); --confirm 追加清单条目。未知卡号 / 清单不合 = 拒(exit 1, 零写入)。"""
     from tools.aipos_cli.legacy_baseline import LegacyBaselineError, write_freeze_entry
     from tools.aipos_cli.legacy_freeze import plan_freeze_legacy
-    from tools.aipos_cli.workspace_config import resolve_workspace_root
 
-    root = Path(args.workspace_root) if args.workspace_root is not None else Path(resolve_workspace_root())
+    # AIPOS-F127 件①: 目标治理根 = --workspace-root / 所在治理根(写命令同一解析), 禁回落 home 级活动项目
+    target = _project_write_target(args, None, None)
+    if target is None:
+        return 1
+    root = Path(target["project_root"])
     queues = [q.strip() for q in str(args.queue).split(",") if q.strip()] if args.queue else None
     if args.exclude and not queues:
         print("Error: --exclude 只与 --queue 合用", file=sys.stderr)
@@ -1204,9 +1207,11 @@ def _project_json_writers_declaration() -> dict[str, Any]:
     if (not isinstance(decl, dict) or not isinstance(decl.get("commands"), list) or not decl["commands"]
             or decl.get("default_phase") != "dry_run"
             or not all(isinstance((decl.get(k) or {}).get(p), str) and (decl.get(k) or {}).get(p) for k in ("flags", "flag_help") for p in phases)
-            or not all(isinstance((decl.get("outcome_labels") or {}).get(k), str) for k in ("written", "unchanged", "preview"))):
+            or not all(isinstance((decl.get("outcome_labels") or {}).get(k), str) for k in ("written", "unchanged", "preview"))
+            or not all(f"{{{k}}}" in str(decl.get("target_line") or "") for k in ("project", "source", "project_json"))):
         raise SchemaLoadError("verbs.schema.json two_phase_protocol.project_json_writers(commands / default_phase=dry_run / "
-                              "flags / flag_help {dry_run, confirm} / outcome_labels {written, unchanged, preview})未声明齐")
+                              "flags / flag_help {dry_run, confirm} / outcome_labels {written, unchanged, preview} / "
+                              "target_line 含 {project} {source} {project_json})未声明齐")
     return decl
 
 
@@ -1222,16 +1227,38 @@ def _project_json_two_phase_flags(parser: argparse.ArgumentParser, command: str)
     group.add_argument(decl["flags"]["confirm"], dest="confirm", action="store_true", help=decl["flag_help"]["confirm"])
 
 
-def _project_json_two_phase_emit(command: str, project_name: str, outcome: dict[str, Any], *, json_out: bool,
+def _project_write_target(args: argparse.Namespace, home: Path | None, name: str | None, *,
+                          workspace_root: str | Path | None = None) -> dict[str, Any] | None:
+    """AIPOS-F127 件①: project 族写命令目标项目解析的 CLI 薄壳——实现 = workspace_config.resolve_project_write_target(唯一);
+    显式治理根 = workspace_root(命令自有旗标, 如 dispatch-mode --project-root) > 子命令 --workspace-root > 全局 --workspace-root。
+    解析不出 / 冲突 / 显式项目未建(PROJECT_NOT_ESTABLISHED)= 打印拒因(含出口)返回 None(调用方 exit 1, 零写入)。"""
+    from tools.aipos_cli.workspace_config import ProjectTargetError, resolve_project_write_target
+
+    if workspace_root is None:
+        workspace_root = getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None)
+    try:
+        return resolve_project_write_target(home, name, workspace_root=workspace_root)
+    except (ProjectTargetError, FileNotFoundError) as exc:
+        print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+        return None
+
+
+def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: dict[str, Any], *, json_out: bool,
                                  details: list[str] | tuple[str, ...] = (), extra: dict[str, Any] | None = None,
                                  via: str = "") -> None:
-    """四个写命令同一输出: 状态行(已写入 / 无改动 / 预览)+ 命令自述的改动行 + project.json unified diff。
-    只涉 project.json(update_project_json 的结果), 不读不印 connection.json / 凭据。--json = 同一内容的 JSON。"""
-    labels = _project_json_writers_declaration()["outcome_labels"]
+    """写 project.json 的命令同一输出: 首行 = 目标项目名 + 来源 + project.json 绝对路径(AIPOS-F127 件②, 文案读声明 target_line),
+    次行状态(已写入 / 无改动 / 预览)+ 命令自述的改动行 + project.json unified diff。target = workspace_config.resolve_project_write_target
+    的结果(各命令目标解析同一实现)。只涉 project.json(update_project_json 的结果), 不读不印 connection.json / 凭据。--json = 同一内容的 JSON。"""
+    decl = _project_json_writers_declaration()
+    labels = decl["outcome_labels"]
+    project_name = target["project"]
     if json_out:
-        payload = {"ok": True, "command": command, "project": project_name, **(extra or {}), **outcome}
+        payload = {"ok": True, "command": command, "project": project_name, "target_source": target["source"],
+                   **(extra or {}), **outcome}
         print(render_json({k: (str(v) if isinstance(v, Path) else v) for k, v in payload.items()}))
         return
+    print(decl["target_line"].format(project=project_name, source=target["source"],
+                                     project_json=Path(outcome["project_json"]).resolve()))
     mode = labels["written"] if outcome["written"] else (labels["unchanged"] if not outcome["changed"] else labels["preview"])
     print(f"project {command} {project_name}: {mode}{via} {outcome['project_json']}")
     for line in details:
@@ -1888,12 +1915,25 @@ def build_parser() -> argparse.ArgumentParser:
     _project_json_two_phase_flags(project_setrepos_parser, "set-repos")  # AIPOS-F125: 缺省预演 / --confirm 才写
     # AIPOS-F123 件②: project.json paths 落点声明写入口(键/值按 config.schema project_json.paths 校验; 与 set-repos 同一写路径与锁)
     project_setpaths_parser = project_subparsers.add_parser("set-paths", help="AIPOS-F123: declare project.json paths.<key> (repeatable --key/--value pairs), validated against config.schema project_json.paths; --dry-run (default) shows the diff, --confirm writes")
-    project_setpaths_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: active project resolution)")
+    project_setpaths_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory; never the home-level active project — AIPOS-F127)")
     project_setpaths_parser.add_argument("--key", action="append", dest="path_keys", required=True, metavar="KEY", help="paths key (repeatable, paired in order with --value)")
     project_setpaths_parser.add_argument("--value", action="append", dest="path_values", required=True, metavar="VALUE", help="value for the --key at the same position")
     _project_json_two_phase_flags(project_setpaths_parser, "set-paths")  # AIPOS-F125: 两阶段旗标同一声明(原 F123 本地注册收归)
     project_setpaths_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_setpaths_parser.add_argument("--workspace-root", help="AIPOS-F127: target governance root when the project name is omitted (default: the one containing the current directory)")
     project_setpaths_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F127 件③: project.json 顶层说明键(phase / note)写入口; 旗标 → 键登记读 verbs.schema project_json_writers.meta.keys
+    from tools.aipos_cli.workspace_config import project_meta_declaration
+
+    project_setmeta_parser = project_subparsers.add_parser("set-meta", help="AIPOS-F127: set project.json top-level description keys (phase / note; each must be declared in config.schema project_json); --dry-run (default) shows the diff, --confirm writes")
+    project_setmeta_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory; never the home-level active project)")
+    for _meta_key, _meta_flag in project_meta_declaration()["keys"].items():
+        project_setmeta_parser.add_argument(_meta_flag, dest=f"meta_{_meta_key}", default=None, metavar="TEXT",
+                                            help=f"project.json {_meta_key} (single line)")
+    project_setmeta_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_setmeta_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
+    project_setmeta_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(project_setmeta_parser, "set-meta")  # 缺省预演 / --confirm 才写(与四个写命令同一包装)
     # AIPOS-F110 件②③: 跨机工位开工材料声明(project.json workstations.<实例>) + 双向可达检查(同一 ssh transport 代码路径)
     project_setws_parser = project_subparsers.add_parser("set-workstation", help="AIPOS-F110: declare a cross-machine workstation's material access (project.json workstations.<instance>: gate_ssh_alias + material_access), validated against config.schema project_json.workstations; --dry-run (default) shows the diff, --confirm writes")
     project_setws_parser.add_argument("name", help="Established project name")
@@ -3266,6 +3306,9 @@ def main(argv: list[str] | None = None) -> int:
                 # AIPOS-F92 件②: 声明产品仓(唯一写入口 workspace_config.set_project_repos; 校验 = 唯一读取口 project_repos)
                 from tools.aipos_cli.workspace_config import CardRepoUnresolved, set_project_repos
 
+                target = _project_write_target(args, home, args.name)
+                if target is None:
+                    return 1
                 items: dict[str, str] = {}
                 for raw in args.repo:
                     name_part, sep, path_part = str(raw).partition("=")
@@ -3289,41 +3332,58 @@ def main(argv: list[str] | None = None) -> int:
                 repos_view = {"default": declared["default"], "items": {k: str(v) for k, v in declared["items"].items()},
                               "code_repo": str(declared["code_repo"])}
                 _project_json_two_phase_emit(
-                    "set-repos", args.name, {k: declared[k] for k in ("dry_run", "changed", "written", "diff")}
+                    "set-repos", target, {k: declared[k] for k in ("dry_run", "changed", "written", "diff")}
                     | {"project_json": str(declared["project_json"])}, json_out=getattr(args, "json", False), extra=repos_view,
                     details=[f"repos.default = {repos_view['default']}  code_repo = {repos_view['code_repo']}"]
                     + [f"repos.items.{k} = {v}" for k, v in repos_view["items"].items()])
                 return 0
             if args.project_command == "set-paths":
                 # AIPOS-F123 件②: 唯一实现 workspace_config.set_project_paths(声明校验 + update_project_json 唯一写路径)
-                from tools.aipos_cli.workspace_config import (
-                    PathsDeclarationError,
-                    resolve_active_project,
-                    resolve_project_root,
-                    set_project_paths,
-                )
+                from tools.aipos_cli.workspace_config import PathsDeclarationError, set_project_paths
 
                 keys, values = list(args.path_keys or []), list(args.path_values or [])
                 if len(keys) != len(values):
                     print(f"Error: --key 与 --value 须成对按序给出(得到 {len(keys)} 个 --key, {len(values)} 个 --value)", file=sys.stderr)
                     return 2
-                project_name = args.name or resolve_active_project(home)
+                # AIPOS-F127 件①: 目标 = 显式项目名 > --workspace-root / 所在治理根声明 > 拒(原缺省走 home 级活动项目, 已删)
+                target = _project_write_target(args, home, args.name)
+                if target is None:
+                    return 1
                 try:
-                    outcome = set_project_paths(resolve_project_root(home, project_name), list(zip(keys, values)),
-                                                dry_run=not args.confirm)
+                    outcome = set_project_paths(target["project_root"], list(zip(keys, values)), dry_run=not args.confirm)
                 except PathsDeclarationError as exc:
                     print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
                     return 1
                 _project_json_two_phase_emit(
-                    "set-paths", project_name, outcome, json_out=getattr(args, "json", False),
+                    "set-paths", target, outcome, json_out=getattr(args, "json", False),
                     details=[f"paths.{change['key']}: {change['before']!r} → {change['after']!r}" for change in outcome["changes"]])
+                return 0
+            if args.project_command == "set-meta":
+                # AIPOS-F127 件③: 唯一实现 workspace_config.set_project_meta(键须 config.schema project_json 已声明; update_project_json 唯一写路径)
+                from tools.aipos_cli.workspace_config import ProjectMetaError, project_meta_declaration, set_project_meta
+
+                target = _project_write_target(args, home, args.name)
+                if target is None:
+                    return 1
+                meta_values = {key: getattr(args, f"meta_{key}", None) for key in project_meta_declaration()["keys"]}
+                try:
+                    outcome = set_project_meta(target["project_root"], meta_values, dry_run=not args.confirm)
+                except ProjectMetaError as exc:
+                    print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+                    return 1
+                _project_json_two_phase_emit(
+                    "set-meta", target, outcome, json_out=getattr(args, "json", False),
+                    details=[f"{change['key']}: {change['before']!r} → {change['after']!r}" for change in outcome["changes"]])
                 return 0
             if args.project_command == "set-workstation":
                 # AIPOS-F110 件②: 唯一写入口 workspace_config.set_project_workstation(校验 = config.schema project_json.workstations)
-                from tools.aipos_cli.workspace_config import WorkstationDeclarationError, resolve_project_root, set_project_workstation
+                from tools.aipos_cli.workspace_config import WorkstationDeclarationError, set_project_workstation
 
+                target = _project_write_target(args, home, args.name)
+                if target is None:
+                    return 1
                 try:
-                    declared = set_project_workstation(resolve_project_root(home, args.name), args.instance,
+                    declared = set_project_workstation(target["project_root"], args.instance,
                                                        gate_ssh_alias=args.gate_ssh_alias, material_access=args.material_access,
                                                        dry_run=not args.confirm)
                 except WorkstationDeclarationError as exc:
@@ -3331,7 +3391,7 @@ def main(argv: list[str] | None = None) -> int:
                     return 1
                 # AIPOS-F125: 缺省预演(diff + 校验, 零写入), --confirm 才写; 输出同一包装
                 _project_json_two_phase_emit(
-                    "set-workstation", args.name, {k: declared[k] for k in ("project_json", "dry_run", "changed", "written", "diff")},
+                    "set-workstation", target, {k: declared[k] for k in ("project_json", "dry_run", "changed", "written", "diff")},
                     json_out=getattr(args, "json", False),
                     extra={k: declared[k] for k in ("instance", "gate_ssh_alias", "material_access")},
                     details=[f"workstations.{declared['instance']}: gate_ssh_alias={declared['gate_ssh_alias']} "
@@ -3366,6 +3426,9 @@ def main(argv: list[str] | None = None) -> int:
                 if conn_path.exists() and not owner_auth_ref:
                     print("Error: --owner-authorization-ref is required on the gate path (owner-gated)", file=sys.stderr)
                     return 1
+                target = _project_write_target(args, home, args.name)  # AIPOS-F127 件①: 与所在治理根冲突 = 拒(预演前)
+                if target is None:
+                    return 1
                 # AIPOS-F125: 缺省预演 = 本机经唯一实现算 project.json diff + 校验(零写入; 门路径亦不取凭据、不调门动词);
                 # --confirm 才写(本地降级直写 / 门路径经 dry_run → confirm 门动词)。
                 try:
@@ -3377,7 +3440,7 @@ def main(argv: list[str] | None = None) -> int:
 
                 def _emit_set_repo(outcome: dict[str, Any], via: str = "") -> int:
                     _project_json_two_phase_emit(
-                        "set-repo", args.name, {k: outcome[k] for k in ("project_json", "dry_run", "changed", "written", "diff")},
+                        "set-repo", target, {k: outcome[k] for k in ("project_json", "dry_run", "changed", "written", "diff")},
                         json_out=False, details=details, via=via)
                     return 0
 
@@ -3504,14 +3567,20 @@ def main(argv: list[str] | None = None) -> int:
                     get_dispatch_mode, set_dispatch_mode, dispatch_mode_trail_path,
                 )
                 proj_root = args.project_root
-                if not proj_root:
+                sub = getattr(args, "dispatch_mode_command", None)
+                if sub == "set":
+                    # AIPOS-F127 件①: 写 project.json 的目标 = --project-root / 所在治理根(同一解析), 禁回落 home 级活动项目
+                    target = _project_write_target(args, None, None, workspace_root=proj_root)
+                    if target is None:
+                        return 1
+                    proj_root = str(target["project_root"])
+                elif not proj_root:
                     try:
                         proj_root = str(resolve_workspace_root())
                     except (FileNotFoundError, OSError) as exc:
                         print(f"Error: {exc}", file=sys.stderr)
                         print("Hint: provide --project-root or run from within a project.", file=sys.stderr)
                         return 1
-                sub = getattr(args, "dispatch_mode_command", None)
                 if sub == "show":
                     mode = get_dispatch_mode(proj_root)
                     if args.json:
@@ -3536,12 +3605,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.project_command == "export":
                 ws_root = args.workspace_root
                 if not ws_root:
-                    try:
-                        ws_root = str(resolve_workspace_root())
-                    except (FileNotFoundError, OSError) as exc:
-                        print(f"Error: {exc}", file=sys.stderr)
-                        print("Hint: provide workspace_root or run from within a workspace.", file=sys.stderr)
+                    # AIPOS-F127 件①: 缺省输出写进目标治理根 → 隐式目标同写命令解析(所在治理根, 禁回落 home 级活动项目)
+                    target = _project_write_target(args, None, None)
+                    if target is None:
                         return 1
+                    ws_root = str(target["project_root"])
                 result = export_project_to_yaml(
                     ws_root,
                     project_name=args.project_name,
