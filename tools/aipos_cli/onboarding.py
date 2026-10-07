@@ -49,6 +49,7 @@ TASK_ID_PLACEHOLDER = "<TASK_ID>"
 LEGACY_BRANCH_PLACEHOLDER = "<LEGACY_BRANCH>"
 PATHS_KEY_PLACEHOLDER = "<PATHS_KEY>"
 PATHS_VALUE_PLACEHOLDER = "<PATHS_VALUE>"
+META_TEXT_PLACEHOLDER = "<META_TEXT>"  # AIPOS-F127 件④: set-meta 的说明文本(phase / note)
 FREEZE_REASON_PLACEHOLDER = "<FREEZE_REASON>"
 #: Claude Code harness kind(distribution.schema harness_semantics.kinds 的键; 顾问会话)
 ADVISOR_HARNESS = "claude-code"
@@ -581,10 +582,21 @@ def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_roo
     落点写报告骨架, 落点须先对; ② 存量冻结为历史(AIPOS-F122 迁移基线: lint/next 不再当待推进, 门拒对冻结卡写)——收编认冻结,
     先冻结才能把在途卡用 --exclude 留出、其余一次声明为历史; ③ 仍在途的卡逐张经门收编(AIPOS-F123: 补铸 claim 记录、绑定既有分支、
     建卡工作树), 之后与新卡一样只用 lybra loop 推进(收编前落点未声明 = 拒 ADOPT_PATHS_UNDECLARED, 冻结卡 = 拒 ADOPT_LEGACY_FROZEN)。
-    命令全部显式带治理根/项目, 禁写死项目 ID/路径/卡号前缀。"""
+    命令全部显式带治理根/项目, 禁写死项目 ID/路径/卡号前缀。
+    AIPOS-F127 件④: 第 1 步同时给出 project.json 说明键(phase / note)写入口 set-meta(人肉期旧文不再手改); 可写键 = 唯一判定
+    workspace_config.declared_meta_keys(config.schema project_json 未声明 = 只给一行说明, 不给会被拒的命令)。"""
+    from tools.aipos_cli.workspace_config import declared_meta_keys, project_meta_declaration
+
     gq = _shell_quote(governance_root)
     pq = _shell_quote(project_name)
     hq = _shell_path(home_root)
+    meta_flags = [project_meta_declaration()["keys"][key] for key in declared_meta_keys()]
+    if meta_flags:
+        meta_lines = ["# project.json 说明键(" + " / ".join(f.lstrip("-") for f in meta_flags) + ")同样经产品写入口更新(人肉期旧文免手改), 先预演再 --confirm"]
+        meta_args = [part for flag in meta_flags for part in (flag, META_TEXT_PLACEHOLDER)]
+        meta_lines += [_cmd("lybra", "project", "set-meta", pq, "--home-root", hq, *meta_args, phase) for phase in ("--dry-run", "--confirm")]
+    else:
+        meta_lines = ["# project.json 说明键写入口 lybra project set-meta: 待 config.schema project_json 声明这些键后可用(未声明 = 拒 META_KEY_UNDECLARED)"]
     return [
         {
             "order": 1,
@@ -596,11 +608,14 @@ def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_roo
                      PATHS_VALUE_PLACEHOLDER, "--dry-run"),
                 _cmd("lybra", "project", "set-paths", pq, "--home-root", hq, "--key", PATHS_KEY_PLACEHOLDER, "--value",
                      PATHS_VALUE_PLACEHOLDER, "--confirm"),
+                *meta_lines,
             ]),
             "purpose": ("为什么先做: 后两步都按声明落点工作——冻结按 queue_root 找卡, 收编按 return_root 写报告骨架、loop 按声明找产物; "
                         "落点未声明时取缺省值, 人肉期项目的真实落点未必是缺省, 骨架会落错位置。"
                         "人肉期项目的 Return/裁决/队列/信封落点逐项声明(可多对 --key/--value; 与缺省相同也显式声明: "
-                        "收编要求 config.schema project_json.paths.adoption.required_declared_keys 已显式声明, 否则拒 ADOPT_PATHS_UNDECLARED)"),
+                        "收编要求 config.schema project_json.paths.adoption.required_declared_keys 已显式声明, 否则拒 ADOPT_PATHS_UNDECLARED)。"
+                        "预演首行标明目标项目与 project.json 绝对路径, 核对无误再 --confirm; 在目标项目治理根下运行可省项目名"
+                        "(目标 = 该根 project.json#project, 解析不出即拒, 绝不回落 home 级活动项目; 显式项目名与所在治理根不一致 = 拒)"),
         },
         {
             "order": 2,

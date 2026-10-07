@@ -347,6 +347,16 @@
           "required": false,
           "description": "AIPOS-F89 件① M14: project 键的旧兼容别名(project 缺时回落), 新项目一律写 project。读取方: 门侧 enroll 凭据项目推导(tools/mcp_server/tools.py)、tools/project_resolution.py; 其余读取方只认 project。"
         },
+        "phase": {
+          "type": "string",
+          "required": false,
+          "description": "AIPOS-F127 件③: 项目阶段说明(人读文本, 产品不按此分支)。唯一写入口 `lybra project set-meta [项目] --phase <文本>`(workspace_config.set_project_meta, update_project_json 唯一写路径; 旗标登记 verbs.schema two_phase_protocol.project_json_writers.meta.keys); 缺 = 不展示, 行为不变。"
+        },
+        "note": {
+          "type": "string",
+          "required": false,
+          "description": "AIPOS-F127 件③: 项目备注(人读文本, 产品不按此分支)。唯一写入口 `lybra project set-meta [项目] --note <文本>`; 缺 = 不展示, 行为不变。"
+        },
         "custom_roles": {
           "type": "object",
           "required": false,

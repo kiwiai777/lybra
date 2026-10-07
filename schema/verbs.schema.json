@@ -30,7 +30,8 @@
         "set-paths",
         "set-repo",
         "set-repos",
-        "set-workstation"
+        "set-workstation",
+        "set-meta"
       ],
       "default_phase": "dry_run",
       "flags": {
@@ -46,7 +47,33 @@
         "unchanged": "无改动",
         "preview": "预览(未写; 加 --confirm 写入)"
       },
-      "output_scope": "只涉 project.json(路径 + diff + 校验结果); 禁打印凭据或 connection.json 内容。set-repo 门路径(connection.json 声明 mcp.rpc_url)的预演亦在本机经同一实现算 diff, 不取凭据、不调门动词; --confirm 才经门动词 lybra_project_set_repo_dry_run → _confirm 写入。"
+      "output_scope": "只涉 project.json(路径 + diff + 校验结果); 禁打印凭据或 connection.json 内容。set-repo 门路径(connection.json 声明 mcp.rpc_url)的预演亦在本机经同一实现算 diff, 不取凭据、不调门动词; --confirm 才经门动词 lybra_project_set_repo_dry_run → _confirm 写入。",
+      "target_line": "目标项目 {project}(来源: {source}) · project.json {project_json}",
+      "target_resolution": {
+        "description": "AIPOS-F127 件①(chris 第 2 步预演发现: set-paths 不写项目名时落到 home 级活动项目 lybra): project 族写命令(commands 全部 + freeze-legacy + dispatch-mode set)目标项目解析的唯一实现 = workspace_config.resolve_project_write_target。序: 显式项目名 > --workspace-root(dispatch-mode 为 --project-root)/当前目录向上首个已建治理根(project.json + 声明的队列根)声明的 project.json#project > 拒。禁回落 home 级活动项目(LYBRA_ACTIVE_PROJECT / ~/.lybra/config.json active_project / 单项目回落)。显式项目名与所在治理根声明不一致(或 home 根下同名项目不是所在治理根)= 拒并列出两者。预演/写入输出首行 = target_line(四个两阶段命令与 set-meta 同一包装 aipos_cli._project_json_two_phase_emit)。",
+        "sources": {
+          "explicit": "显式项目名",
+          "explicit_matches_root": "显式项目名(与所在治理根声明一致)",
+          "workspace_root": "--workspace-root 指定治理根",
+          "cwd_root": "当前目录所在治理根"
+        },
+        "reject_codes": {
+          "PROJECT_TARGET_UNRESOLVED": "未给项目名, 且 --workspace-root 未给 / 当前目录不在任何已建治理根内(向上无 project.json + 队列根), 或该治理根未声明 project.json#project; 不回落 home 级活动项目。出口: 写项目名, 或在目标项目治理根下运行, 或传 --workspace-root <治理根>",
+          "PROJECT_TARGET_CONFLICT": "显式项目名与所在治理根声明的项目不一致(两者已列出)。出口: 改写正确的项目名, 或到目标项目治理根下运行(可省项目名)"
+        }
+      },
+      "meta": {
+        "description": "AIPOS-F127 件③: `lybra project set-meta [项目] [--phase <文本>] [--note <文本>] [--dry-run|--confirm]` 写 project.json 顶层说明键(接入方此前只能手改或留旧文)。唯一实现 workspace_config.set_project_meta: 经 update_project_json 唯一写路径(锁 + 预演 diff + 写后复核); 每个键须在 config.schema configuration_sources.project_json.schema 已声明(未声明 = 拒 META_KEY_UNDECLARED, 零写入; 本表只登记 CLI 旗标 → project.json 键, 不声明键的形), 值按该声明 type/enum 校验(非空单行串)。其余键原样保留。",
+        "keys": {
+          "phase": "--phase",
+          "note": "--note"
+        },
+        "reject_codes": {
+          "META_KEY_UNDECLARED": "该键未在 config.schema configuration_sources.project_json.schema 声明(产品不写未声明的 project.json 键)。出口: 先在该处声明此键(type string, required false, 缺省 = 不写即行为不变)",
+          "META_VALUE_INVALID": "值不合声明(须为非空单行串; enum 键须在值域)",
+          "META_NOTHING_TO_SET": "至少给一个 --phase / --note"
+        }
+      }
     }
   },
   "warn_behavior": {
