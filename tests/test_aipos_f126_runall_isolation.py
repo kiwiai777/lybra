@@ -173,7 +173,7 @@ def test_item4a_canary_write_to_real_root_fails_in_sandbox_root_untouched(tmp_pa
     errno_text = "Read-only file system" if backend == "bwrap" else "Permission denied"
     assert errno_text in canary, canary
     assert canary.count("FAILED tests/test_canary.py::") == 3, "三种写法(追加日志 / 新建卡 / git 提交)都在沙箱内当场失败"
-    assert f"隔离: 本文件失败输出提及只读路径 ['{root}']" in canary
+    assert f"隔离: 本文件失败输出含只读路径 ['{root}'] 与写拒错误 ['{errno_text}']" in canary
     assert _tree_fingerprint(root) == before, "假真实根(含 .git)零变动"
     assert counter.read_text(encoding="utf-8") == "run\n", "沙箱生效时不重跑归因: 金丝雀文件只执行一次"
     assert "真实治理根守卫汇总(沙箱" in text and "同时段他方写入 0 处(不判红)" in text

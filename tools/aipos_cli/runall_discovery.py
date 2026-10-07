@@ -70,6 +70,8 @@ LEAK_MARK_PREFIX = "RUNALL_LEAK_MARK_"
 #: 真实治理根守卫监视的项目子目录与关键日志式样(卡面: home 根下各项目 governance/ 与 5_tasks/; 关键日志 = 只追加的治理日志)。
 GUARD_SUBDIRS = ("governance", "5_tasks")
 GUARD_KEY_LOG_GLOB = "*_log.md"
+#: AIPOS-F126: 沙箱拒写的错误文本(bwrap 只读绑定 = EROFS; Landlock = EACCES); 失败输出同时含只读路径与其一 → 出声提示写真实根被拦。
+WRITE_DENIED_ERRORS = ("Read-only file system", "Permission denied")
 
 
 def runner_for(path: str) -> str | None:
@@ -493,8 +495,9 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
             ok, notes = judge(path, runner, rc, output, plan["known_failures"])
             if isolation.active and rc != 0:
                 hits = [str(p) for p in isolation.protected if str(p) in output]
-                if hits:
-                    notes.append(f"隔离: 本文件失败输出提及只读路径 {hits}(沙箱拒写真实根即在此失败, 归本文件)")
+                denied = [err for err in WRITE_DENIED_ERRORS if err in output]
+                if hits and denied:
+                    notes.append(f"隔离: 本文件失败输出含只读路径 {hits} 与写拒错误 {denied}(沙箱当场拦下写真实根, 归本文件)")
             leaked = reap_marked(leak_mark)
             if leaked:
                 ok = False
