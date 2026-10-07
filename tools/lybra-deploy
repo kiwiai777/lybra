@@ -50,6 +50,7 @@ GOVERNANCE_ROOT=""
 DEPLOY_AUTH_TYPE=""
 DEPLOY_AUTH_REF=""
 DEPLOY_PROVENANCE=""
+DEPLOY_COVERAGE_BASE=""
 
 parse_authorization_args() {
     while [[ $# -gt 0 ]]; do
@@ -139,6 +140,14 @@ get_current_release_dir() {
         readlink -f "$CURRENT_LINK"
     else
         echo ""
+    fi
+}
+
+# AIPOS-F130 件③: 部署前的 current commit(.deploy/current/VERSION git_commit; 无部署 = 空)——verdict_ref 区间覆盖的起点
+get_current_deployed_commit() {
+    local version="$CURRENT_LINK/VERSION"
+    if [[ -f "$version" ]]; then
+        sed -n 's/^git_commit:[[:space:]]*//p' "$version" | head -1
     fi
 }
 
@@ -381,6 +390,23 @@ cmd_deploy() {
         DEPLOY_ACTOR=$(cd "$PRODUCT_REPO" && git config user.name 2>/dev/null || whoami 2>/dev/null || echo "(unknown)")
     fi
     log "✓ Authorization check: ${DEPLOY_AUTH_TYPE}=${DEPLOY_AUTH_REF} (provenance=${DEPLOY_PROVENANCE})"
+
+    # ── AIPOS-F130 件③: verdict_ref 区间覆盖 —— 与 finalize 完整性同一实现(deployment_authorization.check_commits_coverage):
+    #    部署前 current..HEAD 每个 commit 属某张有门生 PASS 覆盖的卡(多卡并集), verdict_ref 须在并集内; 不过 = 拒(不动发布目录/门)
+    if [[ "$DEPLOY_AUTH_TYPE" == "verdict_ref" ]]; then
+        DEPLOY_COVERAGE_BASE="$(get_current_deployed_commit)"
+        local coverage_out
+        if ! coverage_out=$(cd "$PRODUCT_REPO" && python3 -m tools.aipos_cli.deployment_record \
+                --governance-root "$GOVERNANCE_ROOT" --repo-root "$PRODUCT_REPO" \
+                --commit "$(git rev-parse HEAD)" --verdict-ref "$DEPLOY_AUTH_REF" \
+                --coverage-base "$DEPLOY_COVERAGE_BASE" --check-only 2>&1); then
+            err "DEPLOY BLOCKED: verdict_ref 区间覆盖授权未过(区间 ${DEPLOY_COVERAGE_BASE:-<无部署>}..HEAD):"
+            err "$coverage_out"
+            exit 1
+        fi
+        log "✓ Coverage check (current ${DEPLOY_COVERAGE_BASE:-<无部署>}..HEAD):"
+        log "$coverage_out"
+    fi
 
     # Gather version info
     local git_hash git_timestamp
@@ -752,7 +778,8 @@ except Exception:
         --runtime-directory "$release_dir"
     )
     if [[ "$DEPLOY_AUTH_TYPE" == "verdict_ref" ]]; then
-        rec_cmd+=(--verdict-ref "$DEPLOY_AUTH_REF")
+        # AIPOS-F130 件③: 部署记录列出覆盖区间与区间的全部裁决(同一覆盖实现)
+        rec_cmd+=(--verdict-ref "$DEPLOY_AUTH_REF" --coverage-base "$DEPLOY_COVERAGE_BASE" --repo-root "$PRODUCT_REPO")
     else
         rec_cmd+=(--dev-override --reason "$DEPLOY_AUTH_REF")
     fi

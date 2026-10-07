@@ -57,8 +57,12 @@ def build_deployment_record(
     authorization_ref: str,
     deployed_at: str | None = None,
     runtime_directory: str | None = None,
+    coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """构建 deployment_record 字典(frontmatter + 摘要)。"""
+    """构建 deployment_record 字典(frontmatter + 摘要)。
+
+    AIPOS-F130 件③: coverage = deployment_authorization.verdict_ref_deploy_coverage 结果(verdict_ref 部署时由 lybra-deploy 传
+    --coverage-base 算出)→ 记录列出覆盖区间(coverage_interval)与覆盖区间的全部裁决(covering_verdicts, 多卡并集)。"""
     if authorization_type not in VALID_PROVENANCE and authorization_type not in ("verdict_ref", "dev_override"):
         raise ValueError(f"unknown authorization_type: {authorization_type}")
     commit = (commit or "").strip()
@@ -81,6 +85,9 @@ def build_deployment_record(
         frontmatter["dev_override_reason"] = authorization_ref
     if runtime_directory:
         frontmatter["runtime_directory"] = runtime_directory
+    if coverage is not None:
+        frontmatter["coverage_interval"] = coverage["interval"]
+        frontmatter["covering_verdicts"] = list(coverage.get("covering_verdicts") or [])
     return frontmatter
 
 
@@ -110,6 +117,9 @@ def render_record_markdown(frontmatter: dict[str, Any]) -> str:
         body += f"- **dev_override_reason**: {frontmatter['dev_override_reason']}\n"
     if frontmatter.get("runtime_directory"):
         body += f"- **runtime_directory**: {frontmatter['runtime_directory']}\n"
+    if "coverage_interval" in frontmatter:
+        body += f"- **coverage_interval**: {frontmatter['coverage_interval']}\n"
+        body += f"- **covering_verdicts**: {', '.join(frontmatter['covering_verdicts']) or '(空区间)'}\n"
     # AIPOS-F87 件①: frontmatter 经单源 record_writer.render_markdown(safe_dump + 写后回读校验), 原逐行 f"{k}: {v}" 拼接退役
     # (值含 `**`/冒号/`#` 时曾可写出不可解析的记录)。字段序 = build_deployment_record 的插入序。
     from tools.aipos_cli.record_writer import render_markdown
@@ -127,6 +137,7 @@ def write_deployment_record(
     deployed_at: str | None = None,
     runtime_directory: str | None = None,
     dry_run: bool = False,
+    coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """写 deployment_record 到治理工作区 records。返回 {ok, path, wrote}。"""
     frontmatter = build_deployment_record(
@@ -136,6 +147,7 @@ def write_deployment_record(
         authorization_ref=authorization_ref,
         deployed_at=deployed_at,
         runtime_directory=runtime_directory,
+        coverage=coverage,
     )
     path = record_path(governance_root, commit, frontmatter["deployed_at"])
     if dry_run:
@@ -169,6 +181,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reason", help="Reason (required for dev-override)")
     parser.add_argument("--runtime-directory", help="Deployment runtime directory")
     parser.add_argument("--dry-run", action="store_true", help="Preview only")
+    # AIPOS-F130 件③: verdict_ref 部署的区间覆盖(与 finalize 完整性同一实现); lybra-deploy 传部署前的 current commit(无部署 = 空串)
+    parser.add_argument("--coverage-base", default=None,
+                        help="verdict_ref deploys: commit deployed before this deploy (empty = first deploy); computes interval coverage")
+    parser.add_argument("--repo-root", default=None, help="Product repo root for --coverage-base (default: cwd)")
+    parser.add_argument("--check-only", action="store_true",
+                        help="With --verdict-ref/--coverage-base: only run the coverage authorization check (exit 2 if refused), write nothing")
     args = parser.parse_args(argv)
 
     authorization_type, authorization_ref = resolve_authorization(
@@ -183,6 +201,30 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    coverage: dict[str, Any] | None = None
+    if args.check_only and (authorization_type != "verdict_ref" or args.coverage_base is None):
+        print("ERROR: --check-only requires --verdict-ref and --coverage-base", file=sys.stderr)
+        return 2
+    if authorization_type == "verdict_ref" and args.coverage_base is not None:
+        from tools.aipos_cli.deployment_authorization import verdict_ref_deploy_coverage
+
+        coverage = verdict_ref_deploy_coverage(
+            Path(args.repo_root) if args.repo_root else Path.cwd(),
+            Path(args.governance_root),
+            authorization_ref,
+            args.coverage_base.strip() or None,
+            args.commit,
+        )
+        if not coverage["authorized"]:
+            uncovered = "".join(f"\n  {u}" for u in coverage.get("uncovered_commits") or [])
+            print(f"ERROR: verdict_ref 区间覆盖授权未过 ({coverage['interval']}): {coverage['message']}{uncovered}", file=sys.stderr)
+            return 2
+        if args.check_only:
+            print(json.dumps({"authorized": True, "interval": coverage["interval"],
+                              "covering_verdicts": coverage["covering_verdicts"], "message": coverage["message"]},
+                             ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+
     result = write_deployment_record(
         governance_root=Path(args.governance_root),
         commit=args.commit,
@@ -191,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         authorization_ref=authorization_ref,
         runtime_directory=args.runtime_directory,
         dry_run=args.dry_run,
+        coverage=coverage,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["ok"] else 1
