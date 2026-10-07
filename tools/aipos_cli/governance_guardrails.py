@@ -11,6 +11,10 @@
   B② 治理文档须带声明 frontmatter (声明: governance_structure.file_declarations.governance_doc.required_frontmatter)
   B③ decision_log/ append-only  (声明: file_declarations.decision_log_entry.append_only + paths.decision_log_dir)
   B④ records/** 新增须携 record_type (声明: file_declarations.record_file.required_frontmatter + paths.tasks_root/records)
+     AIPOS-F128 豁免(声明: file_declarations.record_file.required_frontmatter_exemptions; 缺省 = 无豁免):
+       产物槽 —— project.json paths.{return_root,verdict_root}/<ID>/** (落点唯一读取口 workspace_config.project_paths);
+       冻结卡 —— <records>/<类型>/<ID>/** 且 ID 被存量冻结(唯一判定 legacy_baseline.frozen_tasks, 解冻后恢复要求)。
+       只免 B④ 必填字段, B①②③ 照旧; 豁免逐文件记入报告并按依据计数出声(不静默)。
   B⑤ 治理仓 HEAD 必须是 main    (AIPOS-F29 大项C, 沿用)
 
 工作区根按文件归属(件②): 每个 staged 文件自其所在目录向上找最近的同时含 <governance 首段>/ 与
@@ -53,6 +57,9 @@ CHECK_B3 = "B③"
 CHECK_B4 = "B④"
 CHECK_B5 = "B⑤"
 
+EXEMPT_ARTIFACT_SLOT = "artifact_slot"
+EXEMPT_LEGACY_FROZEN = "legacy_frozen"
+
 
 @dataclass(frozen=True)
 class GuardrailDeclarations:
@@ -66,6 +73,11 @@ class GuardrailDeclarations:
     code_blacklist_patterns: tuple[str, ...]
     code_extensions: tuple[str, ...]
     decision_log_append_only: bool
+    # AIPOS-F128: B④ 豁免声明(config.schema file_declarations.record_file.required_frontmatter_exemptions; 缺省 = 无豁免)
+    slot_path_keys: tuple[str, ...] = ()
+    slot_label: str = ""
+    legacy_frozen_exempt: bool = False
+    frozen_label: str = ""
 
     @property
     def gov_segment(self) -> str:
@@ -84,6 +96,14 @@ class GuardrailReport:
     warnings: list[str] = field(default_factory=list)
     branch: str | None = None
     branch_ok: bool = True
+    # AIPOS-F128 件③: B④ 豁免逐文件记录 {file, kind: artifact_slot|legacy_frozen, basis, ...}(不静默)
+    exemptions: list[dict[str, str]] = field(default_factory=list)
+
+    def exemption_counts(self) -> dict[str, int]:
+        counts = {EXEMPT_ARTIFACT_SLOT: 0, EXEMPT_LEGACY_FROZEN: 0}
+        for item in self.exemptions:
+            counts[item["kind"]] += 1
+        return counts
 
     @property
     def ok(self) -> bool:
@@ -99,6 +119,7 @@ class GuardrailReport:
             "branch": self.branch,
             "branch_ok": self.branch_ok,
             "rejected_files": sorted({v["file"] for v in self.violations}),
+            "b4_exemptions": {**self.exemption_counts(), "files": list(self.exemptions)},
         }
 
 
@@ -179,6 +200,8 @@ def load_guardrail_declarations(schema_dir: Path | None = None) -> GuardrailDecl
             f"config.schema code_files_blacklist declares no `**/*.<ext>` patterns at {schema_path}"
         )
 
+    slot_keys, slot_label, frozen_exempt, frozen_label = _load_b4_exemptions(file_decls, schema_path)
+
     return GuardrailDeclarations(
         schema_path=schema_path,
         gov_docs_rel=gov_docs,
@@ -190,7 +213,45 @@ def load_guardrail_declarations(schema_dir: Path | None = None) -> GuardrailDecl
         code_blacklist_patterns=blacklist,
         code_extensions=extensions,
         decision_log_append_only=decision_append_only,
+        slot_path_keys=slot_keys,
+        slot_label=slot_label,
+        legacy_frozen_exempt=frozen_exempt,
+        frozen_label=frozen_label,
     )
+
+
+def _load_b4_exemptions(file_decls: dict[str, Any], schema_path: Path) -> tuple[tuple[str, ...], str, bool, str]:
+    """AIPOS-F128: 读 record_file.required_frontmatter_exemptions。段缺 = 无豁免(行为不变); 段在而形不合 = fail-closed。"""
+    where = f"config.schema file_declarations.record_file.required_frontmatter_exemptions at {schema_path}"
+    decl = (file_decls.get("record_file") or {}).get("required_frontmatter_exemptions")
+    if decl is None:
+        return (), "", False, ""
+    if not isinstance(decl, dict):
+        raise GuardrailDeclarationError(f"{where} must be an object")
+    slot_keys: tuple[str, ...] = ()
+    slot_label = ""
+    slot = decl.get("artifact_slot")
+    if slot is not None:
+        keys = slot.get("project_paths_keys") if isinstance(slot, dict) else None
+        label = slot.get("label") if isinstance(slot, dict) else None
+        from tools.aipos_cli.workspace_config import PROJECT_ENUM_KEYS, PROJECT_PATH_KEYS
+
+        path_keys = [k for k in PROJECT_PATH_KEYS if k not in PROJECT_ENUM_KEYS and k != "manual_gate_mode"]
+        if (not isinstance(keys, list) or not keys or not all(isinstance(k, str) and k in path_keys for k in keys)
+                or not isinstance(label, str) or not label.strip()):
+            raise GuardrailDeclarationError(
+                f"{where}: artifact_slot needs label + project_paths_keys ⊆ project.json path keys {path_keys}"
+            )
+        slot_keys, slot_label = tuple(keys), label.strip()
+    frozen_exempt = False
+    frozen_label = ""
+    frozen = decl.get("legacy_frozen")
+    if frozen is not None:
+        label = frozen.get("label") if isinstance(frozen, dict) else None
+        if not isinstance(label, str) or not label.strip():
+            raise GuardrailDeclarationError(f"{where}: legacy_frozen needs label")
+        frozen_exempt, frozen_label = True, label.strip()
+    return slot_keys, slot_label, frozen_exempt, frozen_label
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +279,79 @@ def workspace_prefix_for(repo_root: Path, repo_rel_path: str, decls: GuardrailDe
         if found:
             return (f"{candidate_rel}/" if candidate_rel else "", True)
     return ("", False)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F128: B④ 豁免判据(产物槽 / 冻结卡)。按工作区根懒加载, 只在「records 新增且缺必填字段」时才读项目声明。
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _ExemptionContext:
+    slots: tuple[tuple[str, str, str], ...]   # (声明键, 仓根相对槽根 无尾斜杠, 依据文案)
+    frozen: dict[str, dict[str, Any]]          # legacy_baseline.frozen_tasks 原样
+    gov_root: Path
+
+
+def _repo_rel(repo_root: Path, path: Path) -> str | None:
+    try:
+        return Path(path).resolve().relative_to(Path(repo_root).resolve()).as_posix().strip("/")
+    except ValueError:
+        return None  # 落点在本仓之外: 不可能与本仓 staged 文件重叠
+
+
+def _exemption_context(repo_root: Path, prefix: str, decls: GuardrailDeclarations) -> _ExemptionContext:
+    """读工作区根 <repo_root>/<prefix> 的项目声明。读不出 = GuardrailDeclarationError(fail-closed, 调用方拒绝放行)。"""
+    gov_root = repo_root / prefix if prefix else repo_root
+    slots: list[tuple[str, str, str]] = []
+    frozen: dict[str, dict[str, Any]] = {}
+    from tools.schema_loader import SchemaLoadError
+
+    if decls.slot_path_keys:
+        from tools.aipos_cli.workspace_config import project_paths
+
+        try:
+            declared = project_paths(gov_root)
+        except (SchemaLoadError, ValueError, OSError) as exc:
+            raise GuardrailDeclarationError(
+                f"B④ 产物槽豁免读不出 {gov_root} 的 project.json paths 声明(fail-closed): {exc}"
+            ) from exc
+        for key in decls.slot_path_keys:
+            rel = _repo_rel(repo_root, Path(declared[key]))
+            if not rel:
+                continue
+            origin = "declared" if declared["declared"].get(key) else "config.schema default"
+            slots.append((key, rel, f"project.json paths.{key} → {rel}/<ID>/ ({origin})"))
+    if decls.legacy_frozen_exempt:
+        from tools.aipos_cli.legacy_baseline import frozen_tasks
+
+        try:
+            frozen = frozen_tasks(gov_root)
+        except (SchemaLoadError, ValueError, OSError) as exc:
+            raise GuardrailDeclarationError(
+                f"B④ 冻结卡豁免读不出 {gov_root} 的存量冻结清单(fail-closed): {exc}"
+            ) from exc
+    return _ExemptionContext(slots=tuple(slots), frozen=frozen, gov_root=gov_root)
+
+
+def _b4_exemption(file: str, records_prefix: str, ctx: _ExemptionContext,
+                  decls: GuardrailDeclarations) -> dict[str, str] | None:
+    """返回豁免条目或 None(不豁免 = 照旧拒)。产物槽先判; 槽根下须至少一级 <ID>/ 子目录。"""
+    for key, slot_rel, basis in ctx.slots:
+        head = f"{slot_rel}/"
+        if file.startswith(head) and len(file[len(head):].split("/")) >= 2:
+            return {"file": file, "kind": EXEMPT_ARTIFACT_SLOT, "label": decls.slot_label, "basis": basis,
+                    "declared_key": key, "task_id": file[len(head):].split("/")[0]}
+    if ctx.frozen:
+        parts = file[len(records_prefix):].split("/")
+        if len(parts) >= 3:
+            task_id = parts[1].strip().upper()
+            hit = ctx.frozen.get(task_id)
+            if hit is not None:
+                entry = _repo_rel(ctx.gov_root, Path(hit["manifest_entry"])) or str(hit["manifest_entry"])
+                return {"file": file, "kind": EXEMPT_LEGACY_FROZEN, "label": decls.frozen_label,
+                        "basis": f"legacy_baseline 清单 {entry} (batch {hit['batch_id']})",
+                        "task_id": task_id, "batch_id": str(hit["batch_id"])}
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +409,7 @@ def check_entries(
     normalized = normalize_entries(entries)
     report = GuardrailReport(checked=len(normalized))
     cache: dict[str, tuple[str, bool]] = {}
+    exemption_cache: dict[str, _ExemptionContext] = {}
 
     def add(file: str, check: str, reason: str) -> None:
         report.violations.append({"file": file, "check": check, "reason": reason})
@@ -322,8 +457,17 @@ def check_entries(
         # B④: records/** 新增文件必须携机器出生标记
         if status == STATUS_ADDED and on_disk and file.startswith(records_prefix):
             text = abs_path.read_text(encoding="utf-8", errors="replace")
-            for field_name in decls.record_required_fm:
-                if not _has_field(text, field_name):
+            missing = [f for f in decls.record_required_fm if not _has_field(text, f)]
+            exemption = None
+            # AIPOS-F128: 缺字段时才看豁免(产物槽 / 冻结卡); 找不到工作区根 = 无项目声明可读 = 不豁免
+            if missing and found and (decls.slot_path_keys or decls.legacy_frozen_exempt):
+                if prefix not in exemption_cache:
+                    exemption_cache[prefix] = _exemption_context(repo_root, prefix, decls)
+                exemption = _b4_exemption(file, records_prefix, exemption_cache[prefix], decls)
+            if exemption is not None:
+                report.exemptions.append(exemption)
+            else:
+                for field_name in missing:
                     add(
                         file,
                         CHECK_B4,
@@ -389,6 +533,26 @@ def manifest_entries(manifest: dict[str, Any]) -> list[tuple[str, str]]:
 # 文案(hook 与 governance-commit 同源)
 # ---------------------------------------------------------------------------
 
+def format_exemptions(report: GuardrailReport, decls: GuardrailDeclarations) -> list[str]:
+    """AIPOS-F128 件③: 「B④ 豁免: 产物槽 N、冻结卡 M」+ 按依据分组计数(hook / 预演 / 正式提交同源文案)。
+    豁免声明缺省(无豁免规则)时不出声 —— 行为与文案均不变。"""
+    if not (decls.slot_path_keys or decls.legacy_frozen_exempt):
+        return []
+    counts = report.exemption_counts()
+    lines = [
+        f"B④ 豁免: {decls.slot_label or EXEMPT_ARTIFACT_SLOT} {counts[EXEMPT_ARTIFACT_SLOT]}、"
+        f"{decls.frozen_label or EXEMPT_LEGACY_FROZEN} {counts[EXEMPT_LEGACY_FROZEN]}"
+        " (config.schema file_declarations.record_file.required_frontmatter_exemptions; 只免 B④ 必填字段)"
+    ]
+    grouped: dict[tuple[str, str], int] = {}
+    for item in report.exemptions:
+        key = (item["label"], item["basis"])
+        grouped[key] = grouped.get(key, 0) + 1
+    for (label, basis), n in sorted(grouped.items()):
+        lines.append(f"  {label} 依据 {basis}: {n} file(s)")
+    return lines
+
+
 def format_report(report: GuardrailReport, decls: GuardrailDeclarations) -> str:
     lines: list[str] = []
     lines.append(f"🔍 AIPOS-R6M/F79D: governance guardrails (declarations: {decls.schema_path}; ws_prefix per file)")
@@ -396,6 +560,7 @@ def format_report(report: GuardrailReport, decls: GuardrailDeclarations) -> str:
         lines.append(f"  ws_prefix: {file} → {report.ws_prefixes[file] or '<repo-root>/'}")
     for warning in report.warnings:
         lines.append(f"  {warning}")
+    lines.extend(f"  {line}" for line in format_exemptions(report, decls))
     if not report.branch_ok:
         lines.extend([
             "",
