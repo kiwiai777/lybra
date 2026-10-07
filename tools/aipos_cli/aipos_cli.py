@@ -100,7 +100,6 @@ from tools.aipos_cli.workspace_config import (
     resolve_home_root_with_source,
     resolve_workspace_root,
     scaffold_project,
-    set_project_repo,
 )
 
 from tools.aipos_cli.home_git import execute_home_git_init, plan_home_git_init
@@ -1190,6 +1189,57 @@ def _envelope_mint_via_gate(
     return _emit(0)
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F125: 写 project.json 的 CLI 命令(set-paths / set-repo / set-repos / set-workstation)同一两阶段——
+# 声明 verbs.schema two_phase_protocol.project_json_writers 一处; 旗标注册与输出渲染只此一份包装(预演/diff 本体 =
+# workspace_config.update_project_json dry_run)。缺省预演(diff + 校验, 零写入), --confirm 才写。
+# ---------------------------------------------------------------------------
+
+def _project_json_writers_declaration() -> dict[str, Any]:
+    """verbs.schema two_phase_protocol.project_json_writers。缺键 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (load_schema("verbs").get("two_phase_protocol") or {}).get("project_json_writers")
+    phases = ("dry_run", "confirm")
+    if (not isinstance(decl, dict) or not isinstance(decl.get("commands"), list) or not decl["commands"]
+            or decl.get("default_phase") != "dry_run"
+            or not all(isinstance((decl.get(k) or {}).get(p), str) and (decl.get(k) or {}).get(p) for k in ("flags", "flag_help") for p in phases)
+            or not all(isinstance((decl.get("outcome_labels") or {}).get(k), str) for k in ("written", "unchanged", "preview"))):
+        raise SchemaLoadError("verbs.schema.json two_phase_protocol.project_json_writers(commands / default_phase=dry_run / "
+                              "flags / flag_help {dry_run, confirm} / outcome_labels {written, unchanged, preview})未声明齐")
+    return decl
+
+
+def _project_json_two_phase_flags(parser: argparse.ArgumentParser, command: str) -> None:
+    """给写 project.json 的子命令注册互斥的 --dry-run(缺省)/ --confirm(旗标名与帮助读声明; 未登记的命令 = SchemaLoadError)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _project_json_writers_declaration()
+    if command not in decl["commands"]:
+        raise SchemaLoadError(f"verbs.schema.json two_phase_protocol.project_json_writers.commands 未登记 {command}")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(decl["flags"]["dry_run"], dest="dry_run", action="store_true", help=decl["flag_help"]["dry_run"])
+    group.add_argument(decl["flags"]["confirm"], dest="confirm", action="store_true", help=decl["flag_help"]["confirm"])
+
+
+def _project_json_two_phase_emit(command: str, project_name: str, outcome: dict[str, Any], *, json_out: bool,
+                                 details: list[str] | tuple[str, ...] = (), extra: dict[str, Any] | None = None,
+                                 via: str = "") -> None:
+    """四个写命令同一输出: 状态行(已写入 / 无改动 / 预览)+ 命令自述的改动行 + project.json unified diff。
+    只涉 project.json(update_project_json 的结果), 不读不印 connection.json / 凭据。--json = 同一内容的 JSON。"""
+    labels = _project_json_writers_declaration()["outcome_labels"]
+    if json_out:
+        payload = {"ok": True, "command": command, "project": project_name, **(extra or {}), **outcome}
+        print(render_json({k: (str(v) if isinstance(v, Path) else v) for k, v in payload.items()}))
+        return
+    mode = labels["written"] if outcome["written"] else (labels["unchanged"] if not outcome["changed"] else labels["preview"])
+    print(f"project {command} {project_name}: {mode}{via} {outcome['project_json']}")
+    for line in details:
+        print(f"  {line}")
+    if outcome["diff"]:
+        print(outcome["diff"].rstrip("\n"))
+
+
 def build_parser() -> argparse.ArgumentParser:
     # AIPOS-F106 件②: 帮助文案里的门地址示例读 config.schema urls.gate_local(唯一读取口 schema_loader), 禁写端口字面
     from tools.schema_loader import get_config_default_gate_url
@@ -1821,37 +1871,38 @@ def build_parser() -> argparse.ArgumentParser:
     project_new_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_new_parser.add_argument("--actor", default=default_actor, help="Provenance actor (registered_by); defaults to $USER or owner")
     project_new_parser.add_argument("--owner-authorization-ref", help="Owner authorization ref — required only on the gate path (when ~/.lybra/connection.json exists); the local scaffold (AIPOS-226 ruling 2=a) needs none")
-    project_setrepo_parser = project_subparsers.add_parser("set-repo", help="Set/update an established project's code_repo mapping")
+    project_setrepo_parser = project_subparsers.add_parser("set-repo", help="Set/update an established project's code_repo mapping; --dry-run (default) shows the project.json diff, --confirm writes")
     project_setrepo_parser.add_argument("name", help="Established project name")
     project_setrepo_parser.add_argument("--code-repo", required=True, help="Absolute path to the project's code repo")
     project_setrepo_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setrepo_parser.add_argument("--actor", default=default_actor, help="Provenance actor (registered_by); defaults to $USER or owner")
     project_setrepo_parser.add_argument("--owner-authorization-ref", help="Owner authorization ref — required only on the gate path (when ~/.lybra/connection.json exists)")
+    _project_json_two_phase_flags(project_setrepo_parser, "set-repo")  # AIPOS-F125: 缺省预演 / --confirm 才写
     # AIPOS-F92 件②: 多仓声明(project.json repos {default, items} + code_repo 别名), 经 config.schema project_json.repos 声明校验
-    project_setrepos_parser = project_subparsers.add_parser("set-repos", help="AIPOS-F92: declare the project's product repos (project.json repos {default, items} + code_repo alias), validated against config.schema project_json.repos")
+    project_setrepos_parser = project_subparsers.add_parser("set-repos", help="AIPOS-F92: declare the project's product repos (project.json repos {default, items} + code_repo alias), validated against config.schema project_json.repos; --dry-run (default) shows the diff, --confirm writes")
     project_setrepos_parser.add_argument("name", help="Established project name")
     project_setrepos_parser.add_argument("--repo", action="append", required=True, metavar="NAME=ABS_PATH", help="Product repo entry (repeatable): <仓名>=<绝对路径>")
     project_setrepos_parser.add_argument("--default", dest="default_repo", help="Default repo name (must be one of --repo names; required when more than one --repo)")
     project_setrepos_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setrepos_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(project_setrepos_parser, "set-repos")  # AIPOS-F125: 缺省预演 / --confirm 才写
     # AIPOS-F123 件②: project.json paths 落点声明写入口(键/值按 config.schema project_json.paths 校验; 与 set-repos 同一写路径与锁)
     project_setpaths_parser = project_subparsers.add_parser("set-paths", help="AIPOS-F123: declare project.json paths.<key> (repeatable --key/--value pairs), validated against config.schema project_json.paths; --dry-run (default) shows the diff, --confirm writes")
     project_setpaths_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: active project resolution)")
     project_setpaths_parser.add_argument("--key", action="append", dest="path_keys", required=True, metavar="KEY", help="paths key (repeatable, paired in order with --value)")
     project_setpaths_parser.add_argument("--value", action="append", dest="path_values", required=True, metavar="VALUE", help="value for the --key at the same position")
-    project_setpaths_mode = project_setpaths_parser.add_mutually_exclusive_group()
-    project_setpaths_mode.add_argument("--dry-run", action="store_true", help="Preview the project.json diff without writing (default)")
-    project_setpaths_mode.add_argument("--confirm", action="store_true", help="Write project.json")
+    _project_json_two_phase_flags(project_setpaths_parser, "set-paths")  # AIPOS-F125: 两阶段旗标同一声明(原 F123 本地注册收归)
     project_setpaths_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setpaths_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-F110 件②③: 跨机工位开工材料声明(project.json workstations.<实例>) + 双向可达检查(同一 ssh transport 代码路径)
-    project_setws_parser = project_subparsers.add_parser("set-workstation", help="AIPOS-F110: declare a cross-machine workstation's material access (project.json workstations.<instance>: gate_ssh_alias + material_access), validated against config.schema project_json.workstations")
+    project_setws_parser = project_subparsers.add_parser("set-workstation", help="AIPOS-F110: declare a cross-machine workstation's material access (project.json workstations.<instance>: gate_ssh_alias + material_access), validated against config.schema project_json.workstations; --dry-run (default) shows the diff, --confirm writes")
     project_setws_parser.add_argument("name", help="Established project name")
     project_setws_parser.add_argument("--instance", required=True, help="Workstation instance (as in its land event)")
     project_setws_parser.add_argument("--gate-ssh-alias", required=True, help="ssh alias of the gate machine as seen FROM the remote workstation")
     project_setws_parser.add_argument("--material-access", required=True, help="One line: how the remote executor reads/writes gate-side materials (no credentials)")
     project_setws_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setws_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(project_setws_parser, "set-workstation")  # AIPOS-F125: 缺省预演 / --confirm 才写
     project_checkws_parser = project_subparsers.add_parser("check-workstation", help="AIPOS-F110: check a workstation for loop launch: land-event location, material declaration (remote), gate→workstation ssh probe (dir + harness executable) and workstation→gate ssh reachability via the declared gate_ssh_alias")
     project_checkws_parser.add_argument("name", help="Established project name")
     project_checkws_parser.add_argument("--instance", required=True, help="Workstation instance (as in its land event)")
@@ -3230,18 +3281,18 @@ def main(argv: list[str] | None = None) -> int:
                     print("Error: 多于一个 --repo 时须给 --default <仓名>(卡缺 lane.repo 时派生此仓)", file=sys.stderr)
                     return 2
                 try:
-                    declared = set_project_repos(home, args.name, items, default=default_repo)
+                    declared = set_project_repos(home, args.name, items, default=default_repo, dry_run=not args.confirm)
                 except CardRepoUnresolved as exc:
                     print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
                     return 1
-                out = {"ok": True, "project_json": str(declared["project_json"]), "default": declared["default"],
-                       "items": {k: str(v) for k, v in declared["items"].items()}, "code_repo": str(declared["code_repo"])}
-                if getattr(args, "json", False):
-                    print(render_json(out))
-                else:
-                    print(f"Declared repos in {out['project_json']}: default={out['default']} code_repo={out['code_repo']}")
-                    for k, v in out["items"].items():
-                        print(f"  {k} = {v}")
+                # AIPOS-F125: 缺省预演(diff + 校验, 零写入), --confirm 才写; 输出同一包装
+                repos_view = {"default": declared["default"], "items": {k: str(v) for k, v in declared["items"].items()},
+                              "code_repo": str(declared["code_repo"])}
+                _project_json_two_phase_emit(
+                    "set-repos", args.name, {k: declared[k] for k in ("dry_run", "changed", "written", "diff")}
+                    | {"project_json": str(declared["project_json"])}, json_out=getattr(args, "json", False), extra=repos_view,
+                    details=[f"repos.default = {repos_view['default']}  code_repo = {repos_view['code_repo']}"]
+                    + [f"repos.items.{k} = {v}" for k, v in repos_view["items"].items()])
                 return 0
             if args.project_command == "set-paths":
                 # AIPOS-F123 件②: 唯一实现 workspace_config.set_project_paths(声明校验 + update_project_json 唯一写路径)
@@ -3263,15 +3314,9 @@ def main(argv: list[str] | None = None) -> int:
                 except PathsDeclarationError as exc:
                     print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
                     return 1
-                if getattr(args, "json", False):
-                    print(render_json({"ok": True, "project": project_name, **outcome}))
-                else:
-                    mode = "已写入" if outcome["written"] else ("无改动" if not outcome["changed"] else "预览(未写; 加 --confirm 写入)")
-                    print(f"project set-paths {project_name}: {mode} {outcome['project_json']}")
-                    for change in outcome["changes"]:
-                        print(f"  paths.{change['key']}: {change['before']!r} → {change['after']!r}")
-                    if outcome["diff"]:
-                        print(outcome["diff"].rstrip("\n"))
+                _project_json_two_phase_emit(
+                    "set-paths", project_name, outcome, json_out=getattr(args, "json", False),
+                    details=[f"paths.{change['key']}: {change['before']!r} → {change['after']!r}" for change in outcome["changes"]])
                 return 0
             if args.project_command == "set-workstation":
                 # AIPOS-F110 件②: 唯一写入口 workspace_config.set_project_workstation(校验 = config.schema project_json.workstations)
@@ -3279,15 +3324,18 @@ def main(argv: list[str] | None = None) -> int:
 
                 try:
                     declared = set_project_workstation(resolve_project_root(home, args.name), args.instance,
-                                                       gate_ssh_alias=args.gate_ssh_alias, material_access=args.material_access)
+                                                       gate_ssh_alias=args.gate_ssh_alias, material_access=args.material_access,
+                                                       dry_run=not args.confirm)
                 except WorkstationDeclarationError as exc:
                     print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
                     return 1
-                if getattr(args, "json", False):
-                    print(render_json({"ok": True, **declared}))
-                else:
-                    print(f"Declared workstation {declared['instance']} in {declared['project_json']}: "
-                          f"gate_ssh_alias={declared['gate_ssh_alias']} material_access={declared['material_access']}")
+                # AIPOS-F125: 缺省预演(diff + 校验, 零写入), --confirm 才写; 输出同一包装
+                _project_json_two_phase_emit(
+                    "set-workstation", args.name, {k: declared[k] for k in ("project_json", "dry_run", "changed", "written", "diff")},
+                    json_out=getattr(args, "json", False),
+                    extra={k: declared[k] for k in ("instance", "gate_ssh_alias", "material_access")},
+                    details=[f"workstations.{declared['instance']}: gate_ssh_alias={declared['gate_ssh_alias']} "
+                             f"material_access={declared['material_access']}"])
                 return 0
             if args.project_command == "check-workstation":
                 from tools.aipos_cli.loop_driver import check_workstation
@@ -3311,20 +3359,41 @@ def main(argv: list[str] | None = None) -> int:
                     load_gate_client_token,
                     resolve_gate_base_url,
                 )
+                from tools.aipos_cli.workspace_config import CardRepoUnresolved, update_project_repo
 
                 owner_auth_ref = getattr(args, "owner_authorization_ref", None)
                 conn_path = workspace_connection_path(Path.home())
                 if conn_path.exists() and not owner_auth_ref:
                     print("Error: --owner-authorization-ref is required on the gate path (owner-gated)", file=sys.stderr)
                     return 1
-                if not conn_path.exists():
-                    # 降级
-                    root = set_project_repo(
-                        home, args.name, args.code_repo, registered_by=args.actor
-                    )
-                    print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()} (local fallback)")
+                # AIPOS-F125: 缺省预演 = 本机经唯一实现算 project.json diff + 校验(零写入; 门路径亦不取凭据、不调门动词);
+                # --confirm 才写(本地降级直写 / 门路径经 dry_run → confirm 门动词)。
+                try:
+                    preview = update_project_repo(home, args.name, args.code_repo, registered_by=args.actor, dry_run=True)
+                except (CardRepoUnresolved, FileNotFoundError) as exc:
+                    print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+                    return 1
+                details = [f"code_repo = {preview['code_repo']}"]
+
+                def _emit_set_repo(outcome: dict[str, Any], via: str = "") -> int:
+                    _project_json_two_phase_emit(
+                        "set-repo", args.name, {k: outcome[k] for k in ("project_json", "dry_run", "changed", "written", "diff")},
+                        json_out=False, details=details, via=via)
                     return 0
-                
+
+                def _local_write() -> int:
+                    try:
+                        written = update_project_repo(home, args.name, args.code_repo, registered_by=args.actor)
+                    except (CardRepoUnresolved, FileNotFoundError) as exc:
+                        print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+                        return 1
+                    return _emit_set_repo(written, " (local fallback)")
+
+                if not args.confirm:
+                    return _emit_set_repo(preview)
+                if not conn_path.exists():
+                    return _local_write()  # 降级
+
                 # AIPOS-F106 件①: 凭据文件坏 = 拒(fail-closed); 未声明 mcp.rpc_url = 降级本地; 门基址/凭据角色序走唯一推导口
                 try:
                     declared = declared_rpc_url(conn_path)
@@ -3332,20 +3401,15 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Error: {exc}", file=sys.stderr)
                     return 1
                 if declared is None:
-                    # 降级
-                    root = set_project_repo(
-                        home, args.name, args.code_repo, registered_by=args.actor
-                    )
-                    print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()} (local fallback)")
-                    return 0
-                
+                    return _local_write()  # 降级
+
                 try:
                     base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
                     _token_role, token = load_gate_client_token(conn_path)
                 except ValueError as exc:
                     print(f"Error: {exc}", file=sys.stderr)
                     return 1
-                
+
                 try:
                     client = GateClient(base_url, token, timeout=30.0)
                     dry = client.call_tool("lybra_project_set_repo_dry_run", {
@@ -3358,7 +3422,7 @@ def main(argv: list[str] | None = None) -> int:
                     if not dry.get("ok"):
                         print(f"Error: {json.dumps(dry, ensure_ascii=False)[:800]}", file=sys.stderr)
                         return 1
-                    
+
                     confirm = client.call_tool("lybra_project_set_repo_confirm", {
                         "dry_run_token": dry.get("dry_run_token"),
                         "owner_confirmation_token": "OWNER_CONFIRMED",
@@ -3367,13 +3431,11 @@ def main(argv: list[str] | None = None) -> int:
                     if not confirm.get("ok"):
                         print(f"Error: {json.dumps(confirm, ensure_ascii=False)[:800]}", file=sys.stderr)
                         return 1
-                    
-                    root = Path(confirm.get("project_root"))
-                    print(f"Updated {project_json_path(root)}: code_repo={Path(args.code_repo).expanduser()} (via gate verb)")
                 except GateError as exc:
                     print(f"Error: {exc}", file=sys.stderr)
                     return 1
-                return 0
+                # 门侧经同一实现写入; 本机所示 diff = 写前预演(门与本机同读 home 根下该 project.json)
+                return _emit_set_repo({**preview, "dry_run": False, "written": preview["changed"]}, " (via gate verb)")
             if args.project_command == "list":
                 # AIPOS-335 S4: 存量项目盘点
                 candidates = _project_candidates(home)

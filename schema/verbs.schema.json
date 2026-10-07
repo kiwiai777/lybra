@@ -23,6 +23,30 @@
         "purpose": "Execute the operation",
         "requires": "claim/return: valid dry_run_token from the dry_run phase. close: replays task_id + actor + closure_evidence (no dry_run_token)."
       }
+    },
+    "project_json_writers": {
+      "description": "AIPOS-F125: 写 project.json 的本地 CLI 命令(`lybra project <命令>`)同一两阶段语义的唯一声明(AIPOS-F123 set-paths 首用, 本卡推广到 set-repo / set-repos / set-workstation)。缺省 = 预演: 打印将写的 project.json unified diff 与声明校验结果, 零写入(校验不过 = 预演即报错, 非零退出); --confirm 才写。预演/写入同一实现 = workspace_config.update_project_json(dry_run; 写前以读取口预检将写入的内容), CLI 旗标注册与输出渲染同一包装 aipos_cli._project_json_two_phase_*(四命令共用, 禁各写一份)。经 ssh 远程调用同语义(预演零写入)。日后新增写 project.json 的命令登记于 commands 即得同一两阶段。",
+      "commands": [
+        "set-paths",
+        "set-repo",
+        "set-repos",
+        "set-workstation"
+      ],
+      "default_phase": "dry_run",
+      "flags": {
+        "dry_run": "--dry-run",
+        "confirm": "--confirm"
+      },
+      "flag_help": {
+        "dry_run": "Preview the project.json diff and validation without writing (default)",
+        "confirm": "Write project.json"
+      },
+      "outcome_labels": {
+        "written": "已写入",
+        "unchanged": "无改动",
+        "preview": "预览(未写; 加 --confirm 写入)"
+      },
+      "output_scope": "只涉 project.json(路径 + diff + 校验结果); 禁打印凭据或 connection.json 内容。set-repo 门路径(connection.json 声明 mcp.rpc_url)的预演亦在本机经同一实现算 diff, 不取凭据、不调门动词; --confirm 才经门动词 lybra_project_set_repo_dry_run → _confirm 写入。"
     }
   },
   "warn_behavior": {
