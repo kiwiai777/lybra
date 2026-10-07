@@ -11,7 +11,7 @@
 
 | 阶段 | 谁 | 命令 |
 |---|---|---|
-| 接入新项目 | 顾问(Owner 只敲向导标出的两步) | `lybra onboarding guide <项目名>` 打印该项目专属的全部步骤与失败出口;其中建项目 = `lybra project new`, 声明产品仓 = `lybra project set-repos`(写 project.json 的 `set-repo` / `set-repos` / `set-paths` / `set-workstation` 同一两阶段:缺省预演, 打印将写的 project.json diff 与校验结果、零写入;`--confirm` 才写);逐步自检 `lybra onboarding check` |
+| 接入新项目 | 顾问(Owner 只敲向导标出的两步) | `lybra onboarding guide <项目名>` 打印该项目专属的全部步骤与失败出口;其中建项目 = `lybra project new`, 声明产品仓 = `lybra project set-repos`(写 project.json 的 `set-repo` / `set-repos` / `set-paths` / `set-workstation` / `set-meta` 同一两阶段:缺省预演, 打印将写的 project.json diff 与校验结果、零写入;`--confirm` 才写;输出首行写明目标项目、来源与 project.json 绝对路径。目标项目 = 显式项目名 > `--workspace-root` / 当前目录所在治理根的 project.json#project > 拒, 绝不回落 home 级活动项目;显式项目名与所在治理根不一致 = 拒并列出两者;`freeze-legacy`、`dispatch-mode set` 同一解析。`set-meta --phase/--note` 写 project.json 说明键, 键须先在 config.schema project_json 声明);逐步自检 `lybra onboarding check` |
 | 出卡 / 改卡 | 顾问 | `lybra draft create` → `lybra draft publish`;`lybra queue amend` / `withdraw` / `rework` |
 | 推进一张卡 | 顾问 | `lybra loop --task-id <卡ID>`:Owner 信封授权下认领(门内建卡工作树)→ 等交回 → 派审 → 等审计报告 → 裁决 → finalize → 结案 → 治理落账;单步查看 `lybra next --task-id <卡ID>` |
 | 开工 | 执行 / 审计工位 | 两种模式:手工(缺省)= Owner 在工位敲 `/go`;授权拉起 = Owner 签带 `--launch-harness` 的信封后由 `lybra loop` 在本机工位拉起 harness(`--no-launch` 强制手工)。工位只在卡分支提交并把报告写到项目声明的落点, 不调用任何门动词 |
