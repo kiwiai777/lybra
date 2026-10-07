@@ -59,7 +59,7 @@
         },
         "reject_codes": {
           "PROJECT_TARGET_UNRESOLVED": "未给项目名, 且 --workspace-root 未给 / 当前目录不在任何已建治理根内(向上无 project.json + 队列根), 或该治理根未声明 project.json#project; 不回落 home 级活动项目。出口: 写项目名, 或在目标项目治理根下运行, 或传 --workspace-root <治理根>",
-          "PROJECT_TARGET_CONFLICT": "显式项目名与所在治理根声明的项目不一致; 两者已列出, project.json 未改动。出口: 改写正确的项目名, 或到目标项目治理根下运行(可省项目名)"
+          "PROJECT_TARGET_CONFLICT": "显式项目名与所在治理根声明的项目不一致(两者已列出)。出口: 改写正确的项目名, 或到目标项目治理根下运行(可省项目名)"
         }
       },
       "meta": {
