@@ -907,10 +907,35 @@ def adoption_refusal(code: str, detail: str, decl: dict[str, Any] | None = None)
     return f"{code}: {guard['error_message']}: {detail}。出口: {guard.get('next_step') or '(未声明)'}"
 
 
-def legacy_frozen_refusal(repo_root: Path, task_id: str) -> str | None:
-    """AIPOS-F123 × AIPOS-F122 接口点: 卡是否已冻结为历史(迁移基线)。冻结 = 返回事实说明串(调用方以 ADOPT_LEGACY_FROZEN 拒),
-    否则 None。判定唯一实现归 AIPOS-F122(冻结清单「是否冻结」判定函数); F122 合入前产品无冻结清单 = 无冻结卡, 恒 None。"""
-    return None
+def legacy_frozen_refusal(repo_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F123 × AIPOS-F122 接口点(AIPOS-F124 件①接通): 卡是否已冻结为历史(迁移基线)。None = 未冻结, 放行。
+    判定唯一实现 = legacy_baseline.frozen_rejection(与 claim / 交回 / 派审 / 裁决 / finalize / loop 共用, 禁第二实现):
+    冻结 = 其拒因 {code: LEGACY_FROZEN, message(含解冻命令), unfreeze_command}(调用方以 ADOPT_LEGACY_FROZEN 拒);
+    清单读不出 = {code: LEGACY_BASELINE_INVALID, message}(fail-closed: 拒收编, 不当未冻结放行)。"""
+    from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_rejection
+
+    try:
+        return frozen_rejection(repo_root, [task_id], action="adopt")
+    except LegacyBaselineError as exc:
+        return {"code": exc.code, "message": f"{exc}; 存量冻结清单读不出, 拒 adopt(出口: 修正清单条目 / project.json legacy_baseline)"}
+
+
+def adoption_paths_refusal(repo_root: Path) -> str | None:
+    """AIPOS-F124 件②: 收编按 project.json 落点写报告骨架 / 推导核按落点找产物——收编所依赖的落点键未在 project.json 显式声明
+    (缺省值对人肉期项目未必对)= 拒并提示先 set-paths(fail-closed)。键表与拒因文案读声明 config.schema project_json.paths.adoption
+    (required_declared_keys / guards); 「是否显式声明」读唯一读取口 workspace_config.project_paths()['declared']。None = 放行。"""
+    from tools.aipos_cli.workspace_config import adoption_paths_declaration, project_paths
+
+    decl = adoption_paths_declaration()
+    declared = project_paths(repo_root).get("declared") or {}
+    missing = [key for key in decl["required_declared_keys"] if not declared.get(key)]
+    if not missing:
+        return None
+    return adoption_refusal(
+        "ADOPT_PATHS_UNDECLARED",
+        f"{repo_root}/project.json paths 未声明 {', '.join(missing)}",
+        {"guards": decl["guards"]},
+    )
 
 
 def _gate_claim_records(repo_root: Path, task_id: str) -> tuple[list[str], list[str]]:
@@ -994,8 +1019,19 @@ def adopt_queue_task(
     if gate_claims:
         blocking.append(adoption_refusal("ADOPT_CLAIM_EXISTS", ", ".join(gate_claims), decl))
     frozen = legacy_frozen_refusal(repo_root, resolved_id)
-    if frozen:
-        blocking.append(adoption_refusal("ADOPT_LEGACY_FROZEN", frozen, decl))
+    if frozen is not None:
+        from tools.aipos_cli.legacy_baseline import LEGACY_FROZEN
+
+        if frozen["code"] == LEGACY_FROZEN:
+            blocking.append(adoption_refusal("ADOPT_LEGACY_FROZEN", frozen["message"], decl))
+            result["error_code"] = LEGACY_FROZEN
+            result["unfreeze_command"] = frozen.get("unfreeze_command")
+        else:
+            blocking.append(frozen["message"])
+            result["error_code"] = frozen["code"]
+    paths_refusal = adoption_paths_refusal(repo_root)
+    if paths_refusal:
+        blocking.append(paths_refusal)
     missing = [field for field in REQUIRED_FIELDS if metadata.get(field) in (None, "")]
     if missing:
         blocking.append(adoption_refusal("ADOPT_CARD_INTENT_INCOMPLETE", f"缺 {len(missing)} 项: {', '.join(missing)}", decl))

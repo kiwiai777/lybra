@@ -6,6 +6,7 @@ next 项目扫描把它们当待推进。本模块给产品一个只追加的冻
   声明  config.schema configuration_sources.project_json.schema.legacy_baseline(落点 manifest_dir + 条目形 + 拒因码)。
         project.json 缺段 = 无冻结, 行为不变。落点唯一读取口 workspace_config.project_legacy_baseline。
   清单  manifest_dir 下每批一条带 record_type 的记录文件(render_markdown 单源渲染, 排他创建 = 只追加)。
+        record_type 值单源 = enums.schema record_type 枚举值 legacy_baseline(AIPOS-F124 件③, 读取口 record_type())。
         解冻 = 追加 action=unfreeze 条目, 不删不改既有条目。
   判定  frozen_tasks(唯一「是否冻结」实现)——state lint 全项目扫描 / next scan_project / 门写动作(claim/return/dispatch/
         verdict/finalize)/ lybra loop --task-id 共用; 门与 loop 的拒因经 frozen_rejection(LEGACY_FROZEN + 解冻命令)。
@@ -48,7 +49,6 @@ def declaration() -> dict[str, Any]:
         and all(code in decl["reject_codes"] for code in (LEGACY_FROZEN, LEGACY_UNKNOWN_TASK, LEGACY_BASELINE_INVALID))
         and isinstance(decl.get("unfreeze_command_template"), str)
         and isinstance(entry, dict)
-        and isinstance(entry.get("record_type"), str)
         and isinstance(entry.get("actions"), dict)
         and all(isinstance((entry["actions"].get(a) or {}).get("at_field"), str) for a in (ACTION_FREEZE, ACTION_UNFREEZE))
         and isinstance(entry.get("required_fields"), list)
@@ -57,10 +57,22 @@ def declaration() -> dict[str, Any]:
     if not ok:
         raise SchemaLoadError(
             "config.schema.json configuration_sources.project_json.schema.legacy_baseline"
-            "(schema / entry{record_type, actions.freeze|unfreeze.at_field, required_fields, filename_template} / "
+            "(schema / entry{actions.freeze|unfreeze.at_field, required_fields, filename_template} / "
             "reject_codes{LEGACY_FROZEN, LEGACY_UNKNOWN_TASK, LEGACY_BASELINE_INVALID} / unfreeze_command_template)未声明"
         )
     return decl
+
+
+def record_type() -> str:
+    """AIPOS-F124 件③: 清单条目 record_type 值的唯一读取口 = enums.schema record_type 枚举(经 schema_constants.RecordType,
+    与其余记录类型同一常量命名空间); config.schema 不再另声明一份。枚举缺该值 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_constants import RecordType
+    from tools.schema_loader import SchemaLoadError
+
+    value = getattr(RecordType, "LEGACY_BASELINE", None)
+    if not isinstance(value, str) or not value:
+        raise SchemaLoadError("enums.schema.json enums.record_type 未声明 legacy_baseline(存量冻结清单条目记录类型)")
+    return value
 
 
 def unfreeze_command(governance_root: Path, task_ids: list[str]) -> str:
@@ -77,9 +89,10 @@ def _read_entry(path: Path, decl: dict[str, Any]) -> dict[str, Any]:
         meta, _body = require_frontmatter(path)
     except FrontmatterReadError as exc:
         raise LegacyBaselineError(LEGACY_BASELINE_INVALID, f"清单条目读不出: {exc}") from exc
-    if str(meta.get("record_type") or "") != entry_decl["record_type"]:
+    expected_type = record_type()
+    if str(meta.get("record_type") or "") != expected_type:
         raise LegacyBaselineError(LEGACY_BASELINE_INVALID,
-                                  f"{path}: record_type={meta.get('record_type')!r} ≠ 声明 {entry_decl['record_type']!r}")
+                                  f"{path}: record_type={meta.get('record_type')!r} ≠ 声明 {expected_type!r}(enums.schema record_type)")
     action = str(meta.get("action") or "")
     action_decl = entry_decl["actions"].get(action)
     if not isinstance(action_decl, dict):
@@ -212,7 +225,7 @@ def write_freeze_entry(
     batch_id = name[:-3] if name.endswith(".md") else name
     task_ids = [item["task_id"] for item in plan["selected"]]
     metadata: dict[str, Any] = {
-        "record_type": entry_decl["record_type"],
+        "record_type": record_type(),
         "action": action,
         "batch_id": batch_id,
         action_decl["at_field"]: timestamp,

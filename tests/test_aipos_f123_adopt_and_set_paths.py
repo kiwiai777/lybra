@@ -52,8 +52,16 @@ def _cli(argv: list[str]) -> tuple[int, str, str]:
     return int(rc or 0), out.getvalue(), err.getvalue()
 
 
+def _declare_paths(rig) -> None:
+    """AIPOS-F124 件②: 接入顺序 set-paths → freeze-legacy → adopt —— 收编前经产品写入口显式声明落点(值 = 本靶场真实落点 task_cards)。"""
+    from tools.aipos_cli.workspace_config import set_project_paths
+
+    set_project_paths(rig.gov, [("return_root", "task_cards")], dry_run=False)
+
+
 def _legacy_card(rig, task_id: str = TASK, *, queue: str = "claimed", drop: tuple[str, ...] = (), **extra) -> Path:
-    """人肉期在途卡: 在 claimed 目录, 卡面带人肉期运行时字段(格式不合门生 id), 无任何门生记录。"""
+    """人肉期在途卡: 在 claimed 目录, 卡面带人肉期运行时字段(格式不合门生 id), 无任何门生记录(落点已先声明, AIPOS-F124 件②)。"""
+    _declare_paths(rig)
     path = _card(rig.gov, task_id, queue, **{**LEGACY_RUNTIME, **extra})
     if drop:
         lines = [ln for ln in path.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -412,7 +420,7 @@ def test_item2_single_project_json_writer_with_lock_and_restore(rig, monkeypatch
 
 
 # ===========================================================================
-# 件③ 接入向导「接入既有人肉项目」一节: 顺序 冻结 → 收编 → 落点声明; 本卡命令占位换值后过 build_parser
+# 件③ 接入向导「接入既有人肉项目」一节: 顺序(AIPOS-F124 件②纠正)落点声明 → 冻结 → 收编; 本卡命令占位换值后过 build_parser
 # ===========================================================================
 
 def test_item3_onboarding_guide_legacy_section_order_and_commands_parse(tmp_path):
@@ -427,11 +435,11 @@ def test_item3_onboarding_guide_legacy_section_order_and_commands_parse(tmp_path
     _show("[件③·接入向导节]\n" + text[text.index("═══ 附: 接入既有人肉项目"):])
     assert [item["order"] for item in legacy] == [1, 2, 3]
     assert [w for item in legacy for w in ("freeze-legacy", "queue adopt", "set-paths") if w in item["command"]] == \
-        ["freeze-legacy", "queue adopt", "set-paths"], "顺序 = 冻结 → 收编 → 落点声明"
+        ["set-paths", "freeze-legacy", "queue adopt"], "顺序 = 落点声明 → 冻结 → 收编(AIPOS-F124 件②)"
     subs = {"<TASK_ID>": "PROJ-7", "<LEGACY_BRANCH>": "feature/x", "<PATHS_KEY>": "finalize_mode", "<PATHS_VALUE>": "external",
             "<FREEZE_REASON>": "migration"}
     parsed = []
-    for item in legacy[1:]:
+    for item in (legacy[0], legacy[2]):
         for line in item["command"].split("\n"):
             if not line.startswith("lybra "):
                 continue
@@ -439,6 +447,6 @@ def test_item3_onboarding_guide_legacy_section_order_and_commands_parse(tmp_path
                 line = line.replace(k, v)
             parsed.append(build_parser().parse_args(shlex.split(line)[1:]))
     assert [(a.command, getattr(a, "queue_command", None) or getattr(a, "project_command", None)) for a in parsed] == [
-        ("queue", "adopt"), ("queue", "adopt"), ("loop", None), ("project", "set-paths"), ("project", "set-paths")]
-    assert parsed[1].confirm and not parsed[0].confirm and parsed[4].confirm
+        ("project", "set-paths"), ("project", "set-paths"), ("queue", "adopt"), ("queue", "adopt"), ("loop", None)]
+    assert parsed[1].confirm and not parsed[0].confirm and parsed[3].confirm and not parsed[2].confirm
     assert "probe_proj" not in json.dumps([k for k in guide if k != "project_name"])  # 无写死项目键

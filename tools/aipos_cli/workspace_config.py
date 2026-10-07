@@ -1565,6 +1565,23 @@ def _paths_reject_codes() -> dict[str, str]:
     return codes
 
 
+def adoption_paths_declaration() -> dict[str, Any]:
+    """AIPOS-F124 件②: config.schema project_json.paths.adoption(收编前须显式声明的落点键 + 拒因 ADOPT_PATHS_UNDECLARED 文案)。
+    键须是 paths.schema 声明的键; 缺 / 形不合 = SchemaLoadError(fail-closed)。读取方 queue_mutation.adoption_paths_refusal。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {})
+            .get("paths") or {}).get("adoption")
+    keys = decl.get("required_declared_keys") if isinstance(decl, dict) else None
+    guard = ((decl.get("guards") or {}).get("ADOPT_PATHS_UNDECLARED") if isinstance(decl, dict) else None)
+    known = _project_paths_declaration()
+    if (not isinstance(keys, list) or not keys or not all(isinstance(k, str) and k in known for k in keys)
+            or not isinstance(guard, dict) or not guard.get("error_message") or not guard.get("next_step")):
+        raise SchemaLoadError("config.schema.json project_json.paths.adoption(required_declared_keys ⊆ paths.schema / "
+                              "guards.ADOPT_PATHS_UNDECLARED{error_message, next_step})未声明")
+    return decl
+
+
 def _coerce_paths_value(key: str, raw: str, spec: dict[str, Any]) -> tuple[Any, str | None]:
     """按声明把 CLI 串值转为 project.json 值: boolean 只认 true/false; enum 须在值域; 其余为非空单行串。返回 (值, 问题|None)。"""
     text = str(raw if raw is not None else "")

@@ -139,6 +139,10 @@
           "description": "Ingested artifact record"
         },
         {
+          "value": "legacy_baseline",
+          "description": "AIPOS-F122 存量冻结(迁移基线)清单条目(project.json legacy_baseline.manifest_dir 下每批一条, 只追加; 形声明 config.schema project_json.legacy_baseline.entry)。AIPOS-F124 件③: 本枚举为该记录类型唯一声明处"
+        },
+        {
           "value": "owner_autonomy_policy",
           "description": "Owner autonomy policy record"
         },
