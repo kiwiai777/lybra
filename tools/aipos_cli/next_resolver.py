@@ -945,7 +945,7 @@ def _not_derivable_no_claim(task_id: str, *, node: str, state: str, verb: str, t
         "suggested_action": (f"lybra state repair --task-id {task_id} --workspace-root <治理根>(按 records 重建卡态; 手写记录不算 record_authenticity)。"
                              f"仍无 claim 记录 = 人肉期在途卡, 经门收编(AIPOS-F123, transitions nodes.N1.adoption): "
                              f"lybra queue adopt --task-id {task_id} --branch <lane.repo 内既有分支> --actor <驱动方实例> "
-                             f"--owner-policy-ref <信封> --dry-run 预览, 无拒因后改 --confirm, 再重推导"),
+                             f"--owner-policy-ref <信封> --dry-run 预览, 无拒因后改 --confirm, 再重推导(审计卡不收编: 收编被审卡后由 loop 重新派审)"),
         "notes": notes,
         # loop 据此硬停 exit 4(与 artifact_invalid 同款), 不把「缺 claim 记录」误当「执行体/审计体还在干活」空等
         "action": {"type": "record_missing", "card": task_id, "record": "claim"},
