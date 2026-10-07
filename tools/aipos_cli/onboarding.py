@@ -243,7 +243,10 @@ def resolve_advisor_harness(advisor_harness: str | None, advisor_host: str | Non
                          "顾问实例名 host 段不默认成治理根所在机")
     else:
         instance_host = socket.gethostname().split(".")[0].strip()
-    deliveries = harness_distributions(declared_role_distributions("advisor", "advisor"), kind)
+    from tools.aipos_cli.custom_roles import resolve_role_to_class
+
+    role = "advisor"  # 向导第 5 步兑换的角色(第 3 步 enroll-code --role advisor); 类经唯一 role→class 实现解析
+    deliveries = harness_distributions(declared_role_distributions(role, resolve_role_to_class(role, required=True)), kind)
     return {"kind": kind, "host": host, "instance_host": instance_host, "deliveries": deliveries, "declaration": decl}
 
 
