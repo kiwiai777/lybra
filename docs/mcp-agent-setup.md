@@ -15,6 +15,15 @@ Credentials are never typed or pasted: the advisor and each workstation redeem a
 code (`lybra roles enroll --code …`), which writes a local `.lybra/connection.json` (`0600`). The
 per-project steps are printed by `lybra onboarding guide <project>`.
 
+The advisor session may be Claude Code (default) or Codex. `lybra onboarding guide <project> --advisor-harness codex
+--advisor-host <session host>` prints the advisor's enrollment as `lybra roles enroll … --harness codex [--harness-dir <dir>]
+[--harness-host <host>]`: the advisor credential lands in the governance root's `.lybra/` (run on the governance-root machine;
+a Codex session on another machine runs it over ssh), `.lybra/role` records `harness: {kind: codex, dir, host}` as given (a
+directory on another host is not checked locally), and no `.pi` wiring or `.claude/skills` delivery happens. Legal `--harness`
+values are the keys of `schema/distribution.schema.json` `harness_semantics.kinds`; an unknown value is refused with that
+list before the code is redeemed. Registering a Codex advisor does not extend the Owner-confirm surface (see
+`docs/v1_disclosure.md` row 14).
+
 ## Start the gate
 
 ```bash
