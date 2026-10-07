@@ -863,6 +863,223 @@ def mutate_queue_task(
     return result
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F123 件①: 人肉期在途卡收编(claim 动词族, 声明 transitions nodes.N1.adoption + queue_mutations.transitions.adopt)。
+# 判据 + 卡面 + 建树的唯一实现; 记录计划/落盘在 board_adapter.adopt_task(复用 claim 记录 writer), 信封判定在门工具。
+# ---------------------------------------------------------------------------
+
+#: 收编前卡面运行时字段原值快照(写入 claim 记录 legacy_card_runtime, 审计追溯)
+ADOPTION_RUNTIME_FIELDS = ("claimed_by", "claimed_at", "claim_id", "active_session_id", "active_worktree_branch", "active_worktree_path")
+
+
+def adoption_declaration() -> dict[str, Any]:
+    """transitions.schema nodes.N1.adoption(收编声明唯一读取口)。缺 adopted_from / verb_family / guards = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    node = ((load_schema("transitions").get("nodes") or {}).get("N1") or {})
+    decl = node.get("adoption")
+    if (not isinstance(decl, dict) or not isinstance(decl.get("guards"), dict)
+            or not str(decl.get("adopted_from") or "").strip() or not str(decl.get("verb_family") or "").strip()):
+        raise SchemaLoadError("transitions.schema.json nodes.N1.adoption(adopted_from / verb_family / guards)未声明")
+    return decl
+
+
+def adoption_refusal(code: str, detail: str, decl: dict[str, Any] | None = None) -> str:
+    """收编拒因唯一文案: `<code>: <声明 error_message>: <事实>。出口: <声明 next_step>`(code 未声明 = SchemaLoadError)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    guard = (decl or adoption_declaration())["guards"].get(code)
+    if not isinstance(guard, dict) or not guard.get("error_message"):
+        raise SchemaLoadError(f"transitions.schema.json nodes.N1.adoption.guards.{code} 未声明")
+    return f"{code}: {guard['error_message']}: {detail}。出口: {guard.get('next_step') or '(未声明)'}"
+
+
+def legacy_frozen_refusal(repo_root: Path, task_id: str) -> str | None:
+    """AIPOS-F123 × AIPOS-F122 接口点: 卡是否已冻结为历史(迁移基线)。冻结 = 返回事实说明串(调用方以 ADOPT_LEGACY_FROZEN 拒),
+    否则 None。判定唯一实现归 AIPOS-F122(冻结清单「是否冻结」判定函数); F122 合入前产品无冻结清单 = 无冻结卡, 恒 None。"""
+    return None
+
+
+def _gate_claim_records(repo_root: Path, task_id: str) -> tuple[list[str], list[str]]:
+    """claims/<ID>/ 下的 claim_*.md 分两类: 门生(frontmatter 带 claim_id + claimed_at, 声明 N1.record.gate_written_markers)
+    与非门生(手写/读不出, 只告警不算)。返回 (门生相对路径, 告警)。"""
+    gate_born: list[str] = []
+    warnings: list[str] = []
+    claims_dir = record_dir(repo_root, "claims", task_id)
+    if not claims_dir.is_dir():
+        return gate_born, warnings
+    root = repo_root.resolve()
+    for path in sorted(claims_dir.glob("claim_*.md")):
+        rel = str(path.resolve().relative_to(root))
+        try:
+            metadata, _body, parse_warnings = parse_markdown_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            warnings.append(f"claim 文件读不出, 不计门生记录: {rel}({exc})")
+            continue
+        if parse_warnings or not isinstance(metadata, dict):
+            warnings.append(f"claim 文件 frontmatter 读不出, 不计门生记录: {rel}")
+            continue
+        if str(metadata.get("claim_id") or "").strip() and str(metadata.get("claimed_at") or "").strip():
+            gate_born.append(rel)
+        else:
+            warnings.append(f"手写 claim 文件(缺门生标记 claim_id/claimed_at), 不计门生记录: {rel}")
+    return gate_born, warnings
+
+
+def adopt_queue_task(
+    repo_root: Path,
+    *,
+    task_id: str,
+    branch: str,
+    adopted_by: str,
+    dry_run: bool = True,
+    profiles: dict[str, Any] | None = None,
+    claim_id_override: str | None = None,
+    session_id_override: str | None = None,
+) -> dict[str, Any]:
+    """收编一张人肉期在途卡(claimed 目录、无门生 claim 记录、未冻结): 判据全过才给卡面运行时字段(transition_engine claim 同一盖字段,
+    claimed_by = 卡面 agent_instance/assigned_to)并按 card_worktree_location 为既有分支建卡工作树(_ensure_worktree start_point)。
+
+    拒因一次列全(声明 nodes.N1.adoption.guards)。dry_run=True 零写入; dry_run=False 先建树(失败 = BLOCK, 卡面零变更)再原位写卡面。
+    claim / session 记录不在此写(board_adapter.adopt_task 复用 claim 记录 writer)。"""
+    from tools.aipos_cli.next_resolver import (
+        _ensure_worktree,
+        card_branch_name,
+        card_worktree_location,
+        existing_branch_tip,
+        forensic_subject,
+    )
+    from tools.aipos_cli.validator import REQUIRED_FIELDS
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+    decl = adoption_declaration()
+    if "adopt" not in ALLOWED_TRANSITIONS:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("transitions.schema.json queue_mutations.transitions.adopt 未声明")
+    from_states, to_state = ALLOWED_TRANSITIONS["adopt"]
+    for label, value in (("task_id", task_id), ("branch", branch), ("adopted_by", adopted_by)):
+        if not str(value or "").strip():
+            raise ValueError(f"adopt: {label} is required")
+    branch = str(branch).strip()
+    source_task = _select_task(repo_root, task_id=str(task_id).strip())
+    source_path = (repo_root / str(source_task["path"])).resolve()
+    metadata, body, _warnings = _read_task_markdown(source_path)
+    result = _base_result(source_path, repo_root, source_task, "adopt", dry_run, adopted_by, to_state)
+    result["target_path"] = result["source_path"]
+    resolved_id = str(metadata.get("task_id") or task_id)
+    blocking: list[str] = result["blocking_reasons"]
+
+    queue_state = source_task.get("queue_state")
+    status = source_task.get("frontmatter_status")
+    if queue_state not in from_states or status not in from_states:
+        blocking.append(adoption_refusal("ADOPT_NOT_CLAIMED", f"{resolved_id} 队列目录={queue_state}, 卡面 status={status}", decl))
+    if forensic_subject(metadata) is not None:
+        blocking.append(adoption_refusal("ADOPT_AUDIT_CARD", f"{resolved_id} task_mode=audit", decl))
+    gate_claims, claim_warnings = _gate_claim_records(repo_root, resolved_id)
+    result["warnings"].extend(claim_warnings)
+    if gate_claims:
+        blocking.append(adoption_refusal("ADOPT_CLAIM_EXISTS", ", ".join(gate_claims), decl))
+    frozen = legacy_frozen_refusal(repo_root, resolved_id)
+    if frozen:
+        blocking.append(adoption_refusal("ADOPT_LEGACY_FROZEN", frozen, decl))
+    missing = [field for field in REQUIRED_FIELDS if metadata.get(field) in (None, "")]
+    if missing:
+        blocking.append(adoption_refusal("ADOPT_CARD_INTENT_INCOMPLETE", f"缺 {len(missing)} 项: {', '.join(missing)}", decl))
+
+    card_branch = card_branch_name(resolved_id)
+    code_repo: Path | None = None
+    worktree_path: Path | None = None
+    tip: str | None = None
+    try:
+        code_repo, worktree_path = card_worktree_location(repo_root, resolved_id, metadata)
+    except CardRepoUnresolved as exc:
+        blocking.append(adoption_refusal("ADOPT_BRANCH_NOT_FOUND", f"卡 lane.repo 解析不到产品仓({exc})", decl))
+    if code_repo is not None:
+        tip = existing_branch_tip(code_repo, branch)
+        if tip is None:
+            blocking.append(adoption_refusal("ADOPT_BRANCH_NOT_FOUND", f"分支 {branch} 不在 {code_repo}", decl))
+        elif card_branch != branch:
+            card_tip = existing_branch_tip(code_repo, card_branch)
+            if card_tip is not None and card_tip != tip:
+                blocking.append(adoption_refusal(
+                    "ADOPT_CARD_BRANCH_DIVERGED", f"{card_branch}@{card_tip} ≠ {branch}@{tip}({code_repo})", decl))
+
+    claimer = str(metadata.get("agent_instance") or metadata.get("assigned_to") or "").strip()
+    result["claimer"] = claimer
+    result["legacy_card_runtime"] = {key: metadata.get(key) for key in ADOPTION_RUNTIME_FIELDS if metadata.get(key) not in (None, "")}
+    result["adoption"] = {
+        "adopted_from": str(decl["adopted_from"]),
+        "adopted_by": str(adopted_by).strip(),
+        "adopted_branch": branch,
+        "adopted_branch_tip": tip or "",
+        "card_branch": card_branch,
+        "code_repo": str(code_repo) if code_repo else "",
+    }
+    result["worktree_path"] = str(worktree_path) if worktree_path else None
+    if blocking:
+        result["verdict"] = Verdict.BLOCK
+        return result
+
+    updated = _prepare_claim(metadata, claimer, iso_z(), claim_id_override=claim_id_override,
+                             session_id_override=session_id_override)
+    updated["active_worktree_branch"] = card_branch
+    updated["active_worktree_path"] = str(worktree_path)
+    preview_task = load_task_file(source_path, repo_root)
+    preview_task["metadata"] = updated
+    preview_task["frontmatter_status"] = updated.get("status")
+    preview_task["queue_state"] = to_state
+    for key in ("assigned_to", "agent_instance", "claimed_by", "needs_owner"):
+        preview_task[key] = updated.get(key)
+    validation = validate_single_task(preview_task, current_actor=claimer, profiles=profiles)
+    for reason_text in validation["blocking_reasons"]:
+        if reason_text not in blocking:
+            blocking.append(reason_text)
+    for warning_text in validation["warnings"]:
+        if warning_text not in result["warnings"]:
+            result["warnings"].append(warning_text)
+    result["classification_warnings"].extend(validation.get("classification_warnings", []))
+    needs_owner_reasons = list(validation.get("needs_owner_reasons", []))
+    result["needs_owner_reasons"] = needs_owner_reasons
+    rendered = render_task_markdown(updated, body)
+    result["updated_frontmatter"] = updated
+    result["planned_writes"] = [{"path": result["target_path"], "kind": "update", "type": "task_markdown"}]
+    if blocking:
+        result["verdict"] = Verdict.BLOCK
+    elif needs_owner_reasons:
+        result["verdict"] = Verdict.NEEDS_OWNER
+    elif [w for w in result["warnings"] if w not in result["classification_warnings"]]:
+        result["verdict"] = Verdict.WARN
+    else:
+        result["verdict"] = Verdict.PASS
+    result["would_write"] = result["verdict"] != Verdict.BLOCK
+    if dry_run:
+        result["rendered_markdown"] = rendered
+        return result
+    if result["verdict"] == Verdict.BLOCK:
+        return result
+
+    # 建树先于任何写入(F90 件①同纪律): 失败 = BLOCK, 卡面与记录零变更
+    built = _ensure_worktree(repo_root, resolved_id, card_frontmatter=dict(updated), start_point=tip)
+    if not built.get("ok"):
+        reason = str(built.get("message") or "worktree 建立失败(无拒因原文)")
+        result["verdict"] = Verdict.BLOCK
+        blocking.append(adoption_refusal("ADOPT_WORKTREE_FAILED", reason, decl))
+        result["worktree_created"] = False
+        result["worktree_error"] = reason
+        result["would_write"] = False
+        return result
+    updated["active_worktree_path"] = str(built["worktree_path"])
+    updated["active_worktree_branch"] = str(built["branch"])
+    source_path.write_text(render_task_markdown(updated, body), encoding="utf-8")
+    result["updated_frontmatter"] = updated
+    result["wrote"] = True
+    result["worktree_created"] = True
+    result["worktree_path"] = str(built["worktree_path"])
+    result["worktree_branch"] = str(built["branch"])
+    return result
+
+
 def build_rework_round(
     *,
     repo_root: Path,

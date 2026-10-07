@@ -1911,6 +1911,7 @@ def _mcp_claim_record_plan(
     dry_run_id: str | None = None,
     dry_run_snapshot_hash: str | None = None,
     confirmer: dict[str, Any] | None = None,
+    adoption: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     claim_id = str(updated_metadata.get("claim_id") or "")
     session_id = str(updated_metadata.get("active_session_id") or "")
@@ -1944,6 +1945,7 @@ def _mcp_claim_record_plan(
         dry_run_snapshot_hash=dry_run_snapshot_hash,
         confirmation_ref=confirmation_ref,
         confirmer=confirmer,
+        adoption=adoption,
     )
     session_markdown = build_mcp_claim_session_record_markdown(
         task_id=task_id,
@@ -5855,6 +5857,112 @@ def execute_dry_run(
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=False, actor=_actor_payload(actor_text))
+
+
+def adopt_task(
+    *,
+    task_id: str,
+    branch: str,
+    adopted_by: str,
+    owner_policy_ref: str,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+    autonomy_mode: str = "PreAuthorized",
+    confirmer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F123 件①: 收编人肉期在途卡的门侧后端(声明 transitions nodes.N1.adoption)。
+
+    判据/卡面/建树 = queue_mutation.adopt_queue_task; claim + session 记录 = 认领同一 writer(_mcp_claim_record_plan /
+    _write_mcp_claim_records, 记录带 adoption 字段, 报告骨架同一实现 _create_return_skeleton: 已有手写 Return 不覆盖)。
+    dry_run=True: 判据 + 记录预览零写入; dry_run=False: 先以预览复核(含记录已存在), 再建树写卡面, 最后落记录。
+    信封判定不在此(门工具 lybra_queue_adopt_dry_run 判, 与 claim 同一 matcher)。"""
+    operation = "queue_adopt"
+    try:
+        from tools.aipos_cli.agent_profiles import resolve_instance_id
+        from tools.aipos_cli.queue_mutation import adopt_queue_task
+
+        resolved_root = _resolve_repo_root(repo_root)
+        profiles = load_agent_profiles(resolved_root)
+        preview = adopt_queue_task(resolved_root, task_id=task_id, branch=branch, adopted_by=adopted_by, dry_run=True,
+                                   profiles=profiles)
+        claimer = str(preview.get("claimer") or "")
+        resolution = resolve_instance_id(claimer, profiles) if claimer else {}
+        if resolution.get("resolution") == "ambiguous":
+            preview["blocking_reasons"].append(f"INSTANCE_AMBIGUOUS: 卡面认领实例 {claimer} 解析不唯一, 收编前须在卡面写具体实例")
+            preview["verdict"] = Verdict.BLOCK
+        canonical = str(resolution.get("canonical_instance_id") or claimer)
+        adoption = {**dict(preview.get("adoption") or {}), "legacy_card_runtime": dict(preview.get("legacy_card_runtime") or {})}
+        record_plan: dict[str, Any] | None = None
+        if preview.get("verdict") != Verdict.BLOCK:
+            updated = dict(preview.get("updated_frontmatter") or {})
+            record_plan = _mcp_claim_record_plan(
+                repo_root=resolved_root, task_id=str(preview.get("task_id") or task_id), task_path=str(preview.get("target_path") or ""),
+                actor=canonical, canonical_agent_instance=canonical, owner_policy_ref=owner_policy_ref, updated_metadata=updated,
+                autonomy_mode=autonomy_mode, confirmer=confirmer, adoption=adoption)
+            for reason_text in record_plan.get("record_blocking_reasons", []):
+                preview["blocking_reasons"].append(reason_text)
+                preview["verdict"] = Verdict.BLOCK
+
+        def _respond(result: dict[str, Any], plan: dict[str, Any] | None, *, performed: list[dict[str, Any]], is_dry: bool) -> dict[str, Any]:
+            verdict = str(result.get("verdict") or Verdict.BLOCK)
+            data = {
+                "task_id": result.get("task_id"),
+                "card_path": result.get("target_path"),
+                "from_state": result.get("from_state"),
+                "to_state": result.get("to_state"),
+                "claimer": canonical,
+                "adoption": adoption,
+                "worktree_path": result.get("worktree_path"),
+                "worktree_created": result.get("worktree_created", False),
+                "updated_frontmatter": result.get("updated_frontmatter"),
+                "claim_record_path": (plan or {}).get("claim_record_path"),
+                "session_record_path": (plan or {}).get("session_record_path"),
+                "record_previews": (plan or {}).get("record_previews", []) if is_dry else [],
+                "wrote": bool(result.get("wrote")),
+            }
+            if result.get("worktree_error"):
+                data["worktree_error"] = result["worktree_error"]
+            return make_response(
+                ok=verdict != Verdict.BLOCK,
+                verdict=verdict,
+                operation=operation,
+                dry_run=is_dry,
+                actor=_actor_payload(adopted_by),
+                data=data,
+                summary={"task_id": result.get("task_id"), "adopted": bool(result.get("wrote")), "worktree_path": result.get("worktree_path")},
+                planned_writes=list(result.get("planned_writes", [])) + [
+                    {"path": item.get("path"), "kind": "create", "type": "record_markdown", "record_type": item.get("record_type")}
+                    for item in (plan or {}).get("record_writes", [])],
+                performed_writes=performed,
+                warnings=list(result.get("warnings", [])),
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                needs_owner_reasons=list(result.get("needs_owner_reasons", [])),
+                safety_notice=MUTATION_DRY_RUN_NOTICE if is_dry else CONTROLLED_EXECUTE_NOTICE,
+                errors=[],
+            )
+
+        if dry_run or preview.get("verdict") == Verdict.BLOCK:
+            return _respond(preview, record_plan, performed=[], is_dry=True)
+        updated = dict(preview.get("updated_frontmatter") or {})
+        executed = adopt_queue_task(resolved_root, task_id=task_id, branch=branch, adopted_by=adopted_by, dry_run=False,
+                                    profiles=profiles, claim_id_override=str(updated.get("claim_id") or "") or None,
+                                    session_id_override=str(updated.get("active_session_id") or "") or None)
+        if not executed.get("wrote"):
+            return _respond(executed, record_plan, performed=[], is_dry=False)
+        final_plan = _mcp_claim_record_plan(
+            repo_root=resolved_root, task_id=str(executed.get("task_id") or task_id), task_path=str(executed.get("target_path") or ""),
+            actor=canonical, canonical_agent_instance=canonical, owner_policy_ref=owner_policy_ref,
+            updated_metadata=dict(executed.get("updated_frontmatter") or {}), autonomy_mode=autonomy_mode, confirmer=confirmer,
+            adoption=adoption)
+        if final_plan.get("record_blocking_reasons"):
+            executed["blocking_reasons"].extend(final_plan["record_blocking_reasons"])
+            executed["verdict"] = Verdict.BLOCK
+            return _respond(executed, final_plan, performed=[{"path": executed.get("target_path"), "kind": "update"}], is_dry=False)
+        performed = [{"path": executed.get("target_path"), "kind": "update", "type": "task_markdown"}]
+        performed += _write_mcp_claim_records(resolved_root, final_plan, task_id=str(executed.get("task_id") or task_id))
+        return _respond(executed, final_plan, performed=performed, is_dry=False)
+    except (FileNotFoundError, OSError, ValueError, RuntimeError) as exc:
+        return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(adopted_by))
 
 
 def claim_task(

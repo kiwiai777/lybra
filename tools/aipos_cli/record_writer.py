@@ -546,6 +546,13 @@ MCP_CLAIM_FRONTMATTER_ORDER = [
     "claimed_at",
     "from_state",
     "to_state",
+    # AIPOS-F123 件①: 收编字段(nodes.N1.adoption.record_fields; 仅收编铸出的 claim 记录带)
+    "adopted_from",
+    "adopted_by",
+    "adopted_branch",
+    "adopted_branch_tip",
+    "card_branch",
+    "legacy_card_runtime",
     "claim_policy",
     "claim_match_basis",
     "claim_requirements_hash",
@@ -818,7 +825,10 @@ def build_mcp_claim_record_markdown(
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
     confirmer: dict[str, Any] | None = None,
+    adoption: dict[str, Any] | None = None,
 ) -> str:
+    """adoption(AIPOS-F123 件①): 收编铸记录时给 {adopted_from, adopted_by, adopted_branch, adopted_branch_tip, card_branch,
+    legacy_card_runtime}(声明 transitions nodes.N1.adoption.record_fields); event_type/operation 标 queue_adopt, from_state=claimed。"""
     metadata = {
         "record_type": RecordType.CLAIM_RECORD,
         "event_type": "mcp_queue_claim",
@@ -852,6 +862,19 @@ def build_mcp_claim_record_markdown(
         "lease_path": "claim_only",
         "active_lease_written": False,
     }
+    adoption_lines: list[str] = []
+    if adoption:
+        metadata["event_type"] = "mcp_queue_adopt"
+        metadata["operation"] = "queue_adopt"
+        metadata["from_state"] = "claimed"
+        for key in ("adopted_from", "adopted_by", "adopted_branch", "adopted_branch_tip", "card_branch"):
+            metadata[key] = str(adoption.get(key) or "")
+        legacy = adoption.get("legacy_card_runtime")
+        metadata["legacy_card_runtime"] = {str(k): str(v) for k, v in legacy.items()} if isinstance(legacy, dict) else {}
+        adoption_lines = [
+            f"- Adopted from `{metadata['adopted_from']}` by `{metadata['adopted_by']}`: existing branch "
+            f"`{metadata['adopted_branch']}` @ `{metadata['adopted_branch_tip']}` bound as card branch `{metadata['card_branch']}`.",
+        ]
     body = "\n".join(
         [
             f"# MCP Claim Record: {claim_id}",
@@ -860,6 +883,7 @@ def build_mcp_claim_record_markdown(
             "",
             f"- Task `{task_id}` was claimed by `{canonical_agent_instance}` through the {metadata['autonomy_mode']} MCP claim surface.",
             f"- Owner policy: `{owner_policy_ref}`.",
+            *adoption_lines,
             "",
             "## Boundary",
             "",

@@ -942,7 +942,10 @@ def _not_derivable_no_claim(task_id: str, *, node: str, state: str, verb: str, t
         "command": "",
         "verb": verb,
         "missing_records": [_claim_record_missing(task_id)],
-        "suggested_action": f"lybra state repair --task-id {task_id} --workspace-root <治理根>(按 records 重建卡态; 仍无 claim 记录则经门认领 lybra queue claim --confirm 铸记录后重推导; 手写记录不算 record_authenticity)",
+        "suggested_action": (f"lybra state repair --task-id {task_id} --workspace-root <治理根>(按 records 重建卡态; 手写记录不算 record_authenticity)。"
+                             f"仍无 claim 记录 = 人肉期在途卡, 经门收编(AIPOS-F123, transitions nodes.N1.adoption): "
+                             f"lybra queue adopt --task-id {task_id} --branch <lane.repo 内既有分支> --actor <驱动方实例> "
+                             f"--owner-policy-ref <信封> --dry-run 预览, 无拒因后改 --confirm, 再重推导"),
         "notes": notes,
         # loop 据此硬停 exit 4(与 artifact_invalid 同款), 不把「缺 claim 记录」误当「执行体/审计体还在干活」空等
         "action": {"type": "record_missing", "card": task_id, "record": "claim"},
@@ -2600,6 +2603,9 @@ def _derive_next_step(
             return_path = _return_artifact_path(workspace_root, task_id)
             missing_fm = missing_return_frontmatter(_read_frontmatter(return_path, allow_missing_block=True))
             if missing_fm:
+                # AIPOS-F123 件①: 拒因原文带补法(逐键说明 = 报告必填契约单源 report_frontmatter_contract, 分支 = 本卡分支)——
+                # 收编的人肉期手写 Return 常缺这三项, 出口须能照做
+                how = {e["key"]: e["hint"] for e in report_frontmatter_contract("return", branch_task_id=task_id)}
                 return {
                     "task_id": task_id,
                     "derivable": False,
@@ -2609,7 +2615,9 @@ def _derive_next_step(
                     "command": "",
                     "verb": "lybra_queue_return_dry_run",
                     "missing_records": [f"Return frontmatter 缺 {k}" for k in missing_fm],
-                    "suggested_action": f"执行体在 {return_path} 的 frontmatter 补齐 {', '.join(missing_fm)}(声明: transitions.schema artifact_ingest.return.required_frontmatter)",
+                    "suggested_action": (f"执行体在 {return_path} 的 frontmatter 补齐 {', '.join(missing_fm)}"
+                                         f"(声明: transitions.schema artifact_ingest.return.required_frontmatter)。补法: "
+                                         + "; ".join(f"{k} = {how.get(k, '按声明填写实值')}" for k in missing_fm)),
                     "notes": "Return 已落盘但必填 frontmatter 不齐, 产品无法铸交回记录(AIPOS-F78 件③ fail-closed)",
                     "action": {"type": "artifact_invalid", "card": task_id, "path": str(return_path)},
                 }
@@ -2955,8 +2963,25 @@ def card_base_branch(branch_integration: dict[str, Any] | None = None) -> str:
     return base.strip()
 
 
+def existing_branch_tip(code_repo: Path, branch: str) -> str | None:
+    """AIPOS-F123 件①: 产品仓 code_repo 内既有分支 branch 的 tip 完整 sha(本地 refs/heads/<branch> 优先, 其次远端跟踪
+    refs/remotes/<branch>); 不存在 = None。只读 git rev-parse; git 不可执行 = OSError 上抛(调用方 fail-closed)。"""
+    import subprocess
+
+    name = str(branch or "").strip()
+    if not name or name.startswith("-"):
+        return None
+    for ref in (f"refs/heads/{name}", f"refs/remotes/{name}"):
+        proc = subprocess.run(["git", "-C", str(code_repo), "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                              capture_output=True, text=True, timeout=10)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    return None
+
+
 def _ensure_worktree(workspace_root: Path, task_id: str,
-                     card_frontmatter: dict[str, Any] | None = None) -> dict[str, Any]:
+                     card_frontmatter: dict[str, Any] | None = None,
+                     *, start_point: str | None = None) -> dict[str, Any]:
     """AIPOS-F73件② + F73D 前置三 + F88 件①: 确保卡工作树存在(建/复用卡分支)——全产品唯一建树实现。
 
     门认领(queue_mutation claim, 原 WorktreeManager 第二实现已退役为委托)与驱动方 next --run 认领后建树都经此函数。
@@ -2968,6 +2993,9 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         workspace_root: 治理根(推导核工作区); 若其 project.json 无仓声明且自身是 git 仓, 视为产品仓(靶场单根)
         task_id: 任务 ID
         card_frontmatter: 卡 frontmatter(门认领时已在手, 免二次查卡); 缺则按 task_id 读卡
+        start_point: AIPOS-F123 件①(收编): 卡分支须落在的既有提交(既有分支 tip 完整 sha)。卡分支不存在 = 建在该提交上;
+            已存在 = 其 tip 须正好等于该提交, 否则拒(绑定不唯一); 工作树已在落点 = 须检出卡分支且 HEAD = 该提交, 否则拒。
+            缺省 None = 原认领语义(新卡分支起于 base_branch 声明)。
 
     Returns:
         {"ok": bool, "worktree_path": str, "branch": str, "message": str}
@@ -3017,6 +3045,20 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
 
     # 检查 worktree 是否已存在
     if worktree_path.exists():
+        if start_point:
+            # AIPOS-F123 件①: 收编复用既有工作树须正好是卡分支且 HEAD = 绑定提交(否则绑定不唯一, 拒)
+            head = subprocess.run(["git", "-C", str(worktree_path), "rev-parse", "--abbrev-ref", "HEAD"],
+                                  capture_output=True, text=True, timeout=10)
+            sha = subprocess.run(["git", "-C", str(worktree_path), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10)
+            if head.returncode != 0 or head.stdout.strip() != branch_name or sha.stdout.strip() != start_point:
+                return {
+                    "ok": False,
+                    "worktree_path": "",
+                    "branch": branch_name,
+                    "message": (f"工作树落点 {worktree_path} 已存在但不是卡分支 {branch_name}@{start_point}"
+                                f"(当前 {head.stdout.strip() or head.stderr.strip()}@{sha.stdout.strip() or sha.stderr.strip()}); "
+                                "出口: 核对该目录是否在途产物, 移走或切到卡分支后重试"),
+                }
         return {
             "ok": True,
             "worktree_path": str(worktree_path),
@@ -3038,6 +3080,14 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         )
         branch_exists = result.returncode == 0
 
+        if branch_exists and start_point and result.stdout.strip() != start_point:
+            # AIPOS-F123 件①: 卡分支已存在且 tip ≠ 绑定提交 = 绑定不唯一(不移动既有分支, 不覆盖产物)
+            return {
+                "ok": False,
+                "worktree_path": "",
+                "branch": branch_name,
+                "message": f"卡分支 {branch_name} 已存在于 {workspace_root}, tip {result.stdout.strip()} ≠ 绑定提交 {start_point}",
+            }
         if branch_exists:
             # 复用已有分支
             result = subprocess.run(
@@ -3050,7 +3100,7 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         else:
             # 创建新分支
             result = subprocess.run(
-                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_branch],
+                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), start_point or base_branch],
                 cwd=workspace_root,
                 capture_output=True,
                 text=True,

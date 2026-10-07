@@ -162,6 +162,36 @@
           "idempotent": true,
           "fail_closed": "Path resolution failure blocks claim (skeleton creation is not optional)"
         }
+      },
+      "adoption": {
+        "description": "AIPOS-F123 件①: 人肉期在途卡收编(claim 动词族)。人肉期卡在 <queue_root>/claimed/ 却无门生 claim 记录, 推导核对其硬停(_not_derivable_no_claim / artifact_invalid), 产品原无路径把它收进门。收编 = 门在同一认领写路径上为该卡补铸 claim 记录(标 adopted_from)、写卡面运行时字段(status/claimed_by/claimed_at/claim_id/active_session_id/active_worktree_*, 经 transition_engine claim 同一盖字段)、把卡分支(N5.branch_integration.branch_pattern)绑定到 lane.repo 内既有分支的 tip 并按 card_worktree_location 建卡工作树(唯一建树实现 next_resolver._ensure_worktree, start_point = 既有分支 tip)。收编后推导核按 claimed 卡照常推导(有手写 Return 则按 artifact_ingest.return 既有判据要求补齐必填 frontmatter)。",
+        "verb": "lybra_queue_adopt_dry_run",
+        "cli_command": "lybra queue adopt",
+        "verb_family": "claim",
+        "verb_family_note": "信封授权按 claim 判(verbs.schema lybra_loop.envelope.allowed_verbs 的 claim 覆盖收编; 门侧 _match_driver_envelope 同一 matcher autonomy_policy.match_claim_envelope); 收编铸出的 claim 记录 autonomy_mode=PreAuthorized + owner_policy_ref=信封, 计入信封额度(count_bound)",
+        "queue_transition": "queue_mutations.transitions.adopt(claimed → claimed, 卡不搬目录, 原位写卡面)",
+        "single_implementation": "tools/aipos_cli/queue_mutation.adopt_queue_task(判据 + 卡面 + 建树) → board_adapter.adopt_task(记录计划/落盘, 复用 _mcp_claim_record_plan / _write_mcp_claim_records) → 门工具 tools/mcp_server/tools.lybra_queue_adopt_dry_run(信封判定)",
+        "adopted_from": "legacy_manual",
+        "claimer_rule": "收编 claim 记录的 actor/canonical_agent_instance = 卡面 agent_instance(缺则 assigned_to)——账务动词 actor 依据(record_authenticity.submission_identity), 与 loop 认领同口径; 提交收编的驱动方实例记 adopted_by, token 身份记 submitted_by",
+        "record_fields": {
+          "adopted_from": "固定值 = 本声明 adopted_from(legacy_manual)",
+          "adopted_by": "提交收编的驱动方实例(CLI --actor)",
+          "adopted_branch": "收编时绑定的既有分支名(CLI --branch, lane.repo 内的本地或远端跟踪分支)",
+          "adopted_branch_tip": "收编时该既有分支 tip 的完整 sha",
+          "card_branch": "卡分支名(branch_pattern 派生); 与既有分支同名 = 直接复用, 异名 = 卡分支建在既有分支 tip(已存在且 tip 不同 = 拒)",
+          "legacy_card_runtime": "收编前卡面运行时字段原值快照(claimed_by/claimed_at/claim_id/active_session_id/active_worktree_branch/active_worktree_path; 无则空), 供审计追溯"
+        },
+        "guards": {
+          "ADOPT_NOT_CLAIMED": {"error_message": "只收编 claimed 目录中的卡(卡面 status 须为 claimed)", "next_step": "pending 卡走 lybra loop 正常认领; 其他目录的卡不属在途卡"},
+          "ADOPT_AUDIT_CARD": {"error_message": "审计卡不收编", "next_step": "收编被审卡, 由 lybra loop 重新派审"},
+          "ADOPT_CLAIM_EXISTS": {"error_message": "该卡已有门生 claim 记录(claims/<ID>/ 下带 claim_id + claimed_at 的 claim_*.md), 不属人肉期在途卡", "next_step": "lybra loop --task-id <ID> 照常推进"},
+          "ADOPT_LEGACY_FROZEN": {"error_message": "该卡已冻结为历史(迁移基线), 冻结卡不收编", "next_step": "确属在途: 先解冻(冻结清单追加 unfreeze 条目)后重试收编"},
+          "ADOPT_CARD_INTENT_INCOMPLETE": {"error_message": "卡面意图必填字段缺失(validator.REQUIRED_FIELDS), 收编不代填", "next_step": "顾问按拒因所列缺项一次补齐卡面意图字段后重试(收编不代填, 也不按缺省猜值)"},
+          "ADOPT_BRANCH_NOT_FOUND": {"error_message": "--branch 不在卡 lane.repo 解析仓(workspace_config.resolve_card_repo)中", "next_step": "在该仓 git branch -a 核对分支名; 分支在别的仓 = 卡 lane.repo 写错, 先修卡面"},
+          "ADOPT_CARD_BRANCH_DIVERGED": {"error_message": "卡分支已存在且 tip 与 --branch tip 不同, 绑定不唯一", "next_step": "确认哪条是在途产物: 以卡分支为准则 --branch 传卡分支名; 否则由 Owner 处置多余分支后重试"},
+          "ADOPT_WORKTREE_FAILED": {"error_message": "卡工作树建立失败, 收编被拒(卡面与记录未变更)", "next_step": "按 git 原文处置(常见: 分支已在别处检出 → 在该处切走分支或移除该工作树)后重试"},
+          "ADOPT_ENVELOPE_REQUIRED": {"error_message": "收编只走一段式信封放行(autonomy_mode=PreAuthorized, 驱动方 token, owner_policy_ref=覆盖驱动方与本卡的信封)", "next_step": "无信封 = lybra envelope mint 申领; 先用 --dry-run 预览"}
+        }
       }
     },
     "N2": {
@@ -890,7 +920,8 @@
       "block": {"from_states": ["claimed"], "to_state": "blocked"},
       "complete": {"from_states": ["claimed"], "to_state": "completed"},
       "reopen": {"from_states": ["blocked", "completed"], "to_state": "pending"},
-      "withdraw": {"from_states": ["pending", "claimed"], "to_state": "withdrawn"}
+      "withdraw": {"from_states": ["pending", "claimed"], "to_state": "withdrawn"},
+      "adopt": {"from_states": ["claimed"], "to_state": "claimed", "declaration": "nodes.N1.adoption"}
     }
   },
   "record_authenticity": {

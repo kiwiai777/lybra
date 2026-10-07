@@ -828,6 +828,43 @@ def _queue_mutation_arguments(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--json", action="store_true", help="Output JSON")
 
 
+def _queue_gate_connection_json(args: argparse.Namespace, repo_root: Any) -> str | None:
+    """queue claim --confirm / queue adopt 的凭据文件解析(唯一): --connection-json → 治理根 .lybra/connection.json → LYBRA_CONNECTION_JSON。"""
+    explicit = getattr(args, "connection_json", None)
+    if explicit:
+        return str(explicit)
+    default_conn = workspace_connection_path(Path(repo_root))
+    if default_conn.exists():
+        return str(default_conn)
+    return os.environ.get("LYBRA_CONNECTION_JSON") or None
+
+
+def render_adopt_summary(resp: dict[str, Any]) -> str:
+    """AIPOS-F123 件①: `lybra queue adopt` 的人读摘要(门应答原样字段, 不另判)。"""
+    data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+    adoption = data.get("adoption") if isinstance(data.get("adoption"), dict) else {}
+    mode = "预览(零写入; 加 --confirm 收编)" if resp.get("preview_only") else ("已收编" if resp.get("preauthorized_release") else "未收编")
+    lines = [f"queue adopt {data.get('task_id') or ''}: {mode} verdict={resp.get('verdict')}"]
+    if adoption:
+        lines.append(f"  绑定: {adoption.get('adopted_branch')}@{adoption.get('adopted_branch_tip')} → 卡分支 {adoption.get('card_branch')}"
+                     f"(adopted_from={adoption.get('adopted_from')}, adopted_by={adoption.get('adopted_by')})")
+    if data.get("claimer"):
+        lines.append(f"  认领实例(claim 记录 actor): {data.get('claimer')}")
+    for key, label in (("claim_record_path", "claim 记录"), ("session_record_path", "session 记录"), ("worktree_path", "卡工作树落点")):
+        if data.get(key):
+            lines.append(f"  {label}: {data.get(key)}")
+    envelope = resp.get("envelope") if isinstance(resp.get("envelope"), dict) else None
+    if envelope is not None:
+        lines.append(f"  信封: {'覆盖' if envelope.get('matched') else '不覆盖'} {envelope.get('policy_id') or ''}".rstrip())
+    if resp.get("error_code"):
+        lines.append(f"  ✗ {resp.get('error_code')}: {resp.get('message') or ''}; 出口: {resp.get('suggested_next_action') or ''}")
+    for reason in resp.get("blocking_reasons") or []:
+        lines.append(f"  ✗ {reason}")
+    for warning in resp.get("warnings") or []:
+        lines.append(f"  ! {warning}")
+    return "\n".join(lines)
+
+
 def _load_json_object(path: str) -> dict[str, Any]:
     from pathlib import Path
 
@@ -1280,6 +1317,19 @@ def build_parser() -> argparse.ArgumentParser:
     queue_claim_parser.add_argument("--owner-policy-ref", help="Owner policy ref (for --confirm)")
     queue_claim_parser.add_argument("--autonomy-mode", default="Supervised", help="Autonomy mode (for --confirm)")
     queue_claim_parser.add_argument("--active-session-id", help="Active session ID (for --confirm)")
+
+    # AIPOS-F123 件①: 人肉期在途卡收编(claim 动词族, 经门 lybra_queue_adopt_dry_run; 声明 transitions nodes.N1.adoption)
+    queue_adopt_parser = queue_subparsers.add_parser("adopt", help="AIPOS-F123: adopt an in-flight legacy card (in claimed/, no gate-born claim record) — the gate mints its claim record bound to an existing branch and builds the card worktree; --dry-run (default) previews, --confirm writes (one-stage envelope)")
+    queue_adopt_parser.add_argument("--task-id", required=True, help="Card task_id")
+    queue_adopt_parser.add_argument("--branch", required=True, help="Existing branch in the card's lane.repo holding the in-flight work")
+    queue_adopt_parser.add_argument("--actor", required=True, help="Driver instance submitting the adoption (recorded as adopted_by)")
+    queue_adopt_parser.add_argument("--owner-policy-ref", required=True, help="Envelope policy_id covering the driver and this card (project.json paths.policies_root)")
+    queue_adopt_mode = queue_adopt_parser.add_mutually_exclusive_group()
+    queue_adopt_mode.add_argument("--dry-run", action="store_true", help="Preview through the gate with zero writes (default)")
+    queue_adopt_mode.add_argument("--confirm", action="store_true", help="Adopt (one-stage PreAuthorized release under the envelope)")
+    queue_adopt_parser.add_argument("--connection-json", help="Path to connection.json (driver token)")
+    queue_adopt_parser.add_argument("--workspace-root", help="Governance root holding the card (passed to the gate; default = token project scope)")
+    queue_adopt_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     queue_block_parser = queue_subparsers.add_parser("block", help="Move a task from claimed to blocked")
     _queue_mutation_arguments(queue_block_parser)
@@ -4217,18 +4267,52 @@ def main(argv: list[str] | None = None) -> int:
         print(render_json(result))
         return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
 
+    # AIPOS-F123 件①: queue adopt —— 经门收编(预览 = preview_only 单跳零写入; --confirm = 一段式信封放行, 与 claim 同一薄壳工厂)
+    if args.command == "queue" and getattr(args, "queue_command", None) == "adopt":
+        from tools.aipos_cli.two_phase_shell_factory import (
+            execute_single_phase_via_gate,
+            execute_two_phase_verb,
+            resolve_driver_role_from_connection,
+        )
+
+        conn_json_path = _queue_gate_connection_json(args, repo_root)
+        if not conn_json_path:
+            print("Error: queue adopt needs connection.json with the driver token (use --connection-json or set LYBRA_CONNECTION_JSON)", file=sys.stderr)
+            return 1
+        verb_args = {
+            "task_id": args.task_id,
+            "branch": args.branch,
+            "actor": args.actor,
+            "owner_policy_ref": args.owner_policy_ref,
+            "autonomy_mode": "PreAuthorized",
+        }
+        if getattr(args, "workspace_root", None):
+            verb_args["workspace_root"] = str(Path(args.workspace_root).expanduser().resolve())
+        try:
+            role = resolve_driver_role_from_connection(connection_json_path=conn_json_path, repo_root=repo_root)
+        except ValueError as exc:
+            print(f"Error resolving role: {exc}", file=sys.stderr)
+            return 1
+        json_out = bool(getattr(args, "json", False))
+        if getattr(args, "confirm", False):
+            exit_code, resp = execute_two_phase_verb(verb_base="lybra_queue_adopt", args_dict=verb_args,
+                                                     connection_json_path=conn_json_path, role=role, json_output=json_out)
+        else:
+            exit_code, resp = execute_single_phase_via_gate(verb_name="lybra_queue_adopt_dry_run",
+                                                            args_dict={**verb_args, "preview_only": True},
+                                                            connection_json_path=conn_json_path, role=role, json_output=json_out)
+        if not json_out and isinstance(resp, dict):
+            print(render_adopt_summary(resp))
+        if exit_code == 0 and isinstance(resp, dict) and resp.get("verdict") == Verdict.BLOCK:
+            return 1  # 预览即见拒因: 与 --confirm 同一非零出口(门应答原样, 不另判)
+        return exit_code
+
     # AIPOS-F22 大项B: queue claim --confirm（薄壳工厂模式）
     if args.command == "queue" and getattr(args, "queue_command", None) == "claim" and getattr(args, "confirm", False):
         from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb
 
         # 解析 connection.json 路径
-        conn_json_path = getattr(args, "connection_json", None)
-        if not conn_json_path:
-            default_conn = workspace_connection_path(Path(repo_root))
-            if default_conn.exists():
-                conn_json_path = str(default_conn)
-            else:
-                conn_json_path = os.environ.get("LYBRA_CONNECTION_JSON")
+        conn_json_path = _queue_gate_connection_json(args, repo_root)
         if not conn_json_path:
             print("Error: --confirm needs connection.json (use --connection-json or set LYBRA_CONNECTION_JSON)", file=sys.stderr)
             return 1
