@@ -142,6 +142,30 @@ def record_dir(repo_root: Path, kind: str, key: str | None = None, transitions_s
 def records_root(transitions_schema: dict[str, Any] | None = None) -> Path:
     return record_root("claims", transitions_schema).parent
 
+
+def record_file_prefix(kind: str, transitions_schema: dict[str, Any] | None = None) -> str:
+    """AIPOS-F122 件④: 门生记录文件名前缀(transitions record_locations.gate_record_file_criterion)——该类落点模板文件名部分
+    第一个占位之前的静态文本去尾部 `_`(returns → return, closures → close)。无静态前缀 = ValueError(fail-closed, 不猜)。"""
+    _dir_parts, filename = _split_location(record_location(kind, transitions_schema))
+    match = _PLACEHOLDER_RE.search(filename)
+    prefix = (filename[: match.start()] if match else filename).rstrip("_")
+    if not prefix or "." in prefix:
+        raise ValueError(f"记录类 {kind!r} 落点模板文件名无静态前缀: {filename!r}(门生记录判据要求前缀)")
+    return prefix
+
+
+def record_files_with_prefix(directory: Path, prefix: str) -> list[Path]:
+    """目录下 `<prefix>_*.md` 文件(按名排序; 目录不在 = 空)。门生记录文件的唯一 glob 实现(推导核与 state lint 共用)。"""
+    directory = Path(directory)
+    if not directory.is_dir():
+        return []
+    return sorted(directory.glob(f"{prefix}_*.md"))
+
+
+def gate_record_files(directory: Path, kind: str) -> list[Path]:
+    """AIPOS-F122 件④: 记录类 kind 在 directory 下的门生记录文件(判据 = record_file_prefix; 人手写 RETURN.md 等不算)。"""
+    return record_files_with_prefix(directory, record_file_prefix(kind))
+
 # AIPOS-F73E(顺手实撞): closure_id/文件名前缀——写(board_adapter.close_task)读(next_resolver._read_task_records)同源。
 # 门实际落盘 close_<task>_<ts>_<actor>.md(存量 F73C2/F78 记录皆如此); 读侧曾按 closure_ 找 → 真门 close 后 loop 永看不到闭环记录。
 CLOSURE_ID_PREFIX = "close"

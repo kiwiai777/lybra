@@ -1038,9 +1038,9 @@ def _find_task_in_queue(workspace_root: Path, task_id: str) -> tuple[Path | None
 
 def _find_latest_record(records_dir: Path, prefix: str) -> dict[str, Any] | None:
     """在 records 子目录中找最新记录(按修改时间)。返回 frontmatter dict 或 None。"""
-    if not records_dir.is_dir():
-        return None
-    files = sorted(records_dir.glob(f"{prefix}_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    from tools.aipos_cli.record_writer import record_files_with_prefix
+
+    files = sorted(record_files_with_prefix(records_dir, prefix), key=lambda p: p.stat().st_mtime, reverse=True)
     if not files:
         return None
     return _read_frontmatter(files[0]) or None
@@ -1058,13 +1058,17 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
         "events": [],
     }
 
+    # AIPOS-F122 件④: 门生记录文件判据 = record_writer.record_file_prefix(声明 record_locations.gate_record_file_criterion),
+    # 与 state lint 推导同一实现(原各处写死前缀字面量)
+    from tools.aipos_cli.record_writer import record_file_prefix
+
     # claims
     claims_dir = record_dir(workspace_root, "claims", task_id)
-    result["latest_claim"] = _find_latest_record(claims_dir, "claim")
+    result["latest_claim"] = _find_latest_record(claims_dir, record_file_prefix("claims"))
 
     # returns
     returns_dir = record_dir(workspace_root, "returns", task_id)
-    result["latest_return"] = _find_latest_record(returns_dir, "return")
+    result["latest_return"] = _find_latest_record(returns_dir, record_file_prefix("returns"))
 
     # audit_dispatches (AIPOS-F73 前置一: 门写在审计卡 ID 目录下,如 AIPOS-F75R)
     # 派审记录在 audit_dispatches/<audit_task_id>/ 而非 <task_id>/
@@ -1075,17 +1079,16 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     result["audit_task_id"] = audit_task_id
     result["audit_round_ids"] = audit_round_ids(task_id, workspace_root)
     dispatches_dir = record_dir(workspace_root, "audit_dispatches", audit_task_id)
-    result["latest_audit_dispatch"] = _find_latest_record(dispatches_dir, "dispatch")
+    result["latest_audit_dispatch"] = _find_latest_record(dispatches_dir, record_file_prefix("audit_dispatches"))
 
     # audit_verdicts (keyed by reviewed_task_id)
     verdicts_dir = record_dir(workspace_root, "audit_verdicts", task_id)
-    result["latest_verdict"] = _find_latest_record(verdicts_dir, "verdict")
+    result["latest_verdict"] = _find_latest_record(verdicts_dir, record_file_prefix("audit_verdicts"))
 
-    # closures(AIPOS-F73E: 前缀与门写侧同源 record_writer.CLOSURE_ID_PREFIX——门落 close_*, 读 closure_* 即永远找不到 → loop 不得 exit 0)
-    from tools.aipos_cli.record_writer import CLOSURE_ID_PREFIX
-
+    # closures(AIPOS-F73E: 门落 close_*, 读 closure_* 即永远找不到 → loop 不得 exit 0; AIPOS-F122 件④: 前缀读声明 N6.record.location,
+    # 与写侧 record_writer.CLOSURE_ID_PREFIX 相等由夹具钉住)
     closures_dir = record_dir(workspace_root, "closures", task_id)
-    result["latest_closure"] = _find_latest_record(closures_dir, CLOSURE_ID_PREFIX)
+    result["latest_closure"] = _find_latest_record(closures_dir, record_file_prefix("closures"))
 
     # events
     events_dir = record_dir(workspace_root, "events", task_id)
@@ -2039,6 +2042,12 @@ def _derive_next_step(
     """
     workspace_root = Path(workspace_root)
 
+    # AIPOS-F122 件③: 存量冻结卡(判定唯一实现 legacy_baseline.frozen_tasks)= 历史, 不推导任何推进步
+    # (先于找卡/读卡面: 冻结卡卡面可能读不出, 清单按文件名回落记卡号)
+    frozen_stop = legacy_frozen_stop(workspace_root, task_id, None)
+    if frozen_stop is not None:
+        return frozen_stop
+
     # 1. 找任务卡(AIPOS-F78B 件①: frontmatter task_id 精确匹配; 多义 = 不可推导点名两份文件)
     from tools.aipos_cli.task_loader import AmbiguousTaskCard
 
@@ -2752,17 +2761,52 @@ def _derive_next_step(
     }
 
 
+def legacy_frozen_stop(workspace_root: Path, task_id: str, queue_dir: str | None = None) -> dict[str, Any] | None:
+    """AIPOS-F122 件③: 冻结卡 / 清单读不出 → 不可推导硬停项(带解冻 / 修清单出口); 未冻结 → None。"""
+    from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_rejection
+
+    try:
+        rejection = frozen_rejection(Path(workspace_root), [task_id], action="推进(next/loop)")
+    except LegacyBaselineError as exc:
+        return {
+            "task_id": task_id, "derivable": False, "current_node": None, "current_state": "legacy_baseline_invalid",
+            "triggered_by": "advisor", "command": "", "verb": "", "missing_records": [str(exc)],
+            "suggested_action": "修正存量冻结清单条目 / project.json legacy_baseline 后重推导(清单读不出 = 不放行)",
+            "notes": "AIPOS-F122: 存量冻结清单 fail-closed", "action": {"type": "legacy_baseline_invalid", "card": task_id},
+        }
+    if rejection is None:
+        return None
+    return {
+        "task_id": task_id, "derivable": False, "current_node": None, "current_state": "legacy_frozen",
+        "queue_state": queue_dir, "triggered_by": "none", "command": "", "verb": "",
+        "missing_records": [rejection["message"]], "suggested_action": rejection["unfreeze_command"],
+        "notes": "AIPOS-F122: 存量冻结卡 = 历史, 推导核不派生推进步",
+        "action": {"type": "legacy_frozen", "card": task_id, "unfreeze_command": rejection["unfreeze_command"]},
+    }
+
+
 def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
     """项目级扫描:返回所有活跃任务的最小待办清单。
 
     按优先级排序:pending(先出) > claimed(有 return 产物) > claimed(无产物) > blocked。
+    AIPOS-F122 件③: 存量冻结卡(legacy_baseline.frozen_tasks 唯一判定)不列; 清单读不出 = 首行列硬停项且不隐藏任何卡。
     """
     workspace_root = Path(workspace_root)
     from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_tasks
     from tools.aipos_cli.task_loader import queue_root_for
 
     queue_root = queue_root_for(workspace_root)  # AIPOS-F89 件① M8: 队列根唯一读取口
     results: list[dict[str, Any]] = []
+    try:
+        frozen = frozen_tasks(workspace_root)
+    except LegacyBaselineError as exc:
+        frozen = {}
+        results.append({
+            "task_id": "(legacy_baseline)", "derivable": False, "current_node": None, "current_state": "legacy_baseline_invalid",
+            "triggered_by": "advisor", "command": "", "verb": "", "missing_records": [str(exc)],
+            "suggested_action": "修正存量冻结清单条目 / project.json legacy_baseline(冻结不生效, 不隐藏任何卡)", "notes": "",
+        })
 
     # 扫描 pending + claimed(活跃任务)
     for status_dir in ["pending", "claimed", "blocked"]:
@@ -2776,10 +2820,14 @@ def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
             try:
                 fm = _read_frontmatter(task_file)
             except FrontmatterReadError as exc:
+                if raw_id.upper() in frozen:
+                    continue  # AIPOS-F122: 卡面读不出的冻结卡(清单按文件名回落记卡号, state_lint.queue_task_index 同一列举)
                 # AIPOS-F100 件②: 读不出的卡不按文件名猜 task_id 去推导; 原样列为硬停项(点名文件与出口)
                 results.append({**frontmatter_unreadable_stop(raw_id.upper(), exc), "current_state": status_dir})
                 continue
             task_id = fm.get("task_id", raw_id.upper()) if fm else raw_id.upper()
+            if str(task_id).strip().upper() in frozen:
+                continue  # AIPOS-F122 件③: 存量冻结卡 = 历史, 不列为待推进
             # 跳过审计卡(以 R 结尾的)—— 审计卡单独处理
             # 但在扫描中仍显示
             try:
@@ -2800,7 +2848,7 @@ def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
                 })
 
     # 排序:pending 优先,然后 claimed 中可推导的优先
-    priority = {"pending": 0, "claimed": 1, "blocked": 2, "completed": 3}
+    priority = {"legacy_baseline_invalid": -1, "pending": 0, "claimed": 1, "blocked": 2, "completed": 3}
     results.sort(key=lambda r: (
         priority.get(r.get("current_state", ""), 9),
         0 if r.get("derivable") else 1,

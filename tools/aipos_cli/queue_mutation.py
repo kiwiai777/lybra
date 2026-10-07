@@ -628,6 +628,19 @@ def mutate_queue_task(
     result["classification_warnings"].extend(validation.get("classification_warnings", []))
     needs_owner_reasons: list[str] = []
 
+    # AIPOS-F122 件③: 存量冻结卡拒认领(判定唯一实现 legacy_baseline.frozen_rejection; 本函数是门 claim / 信封自动放行 / CLI 预览
+    # 共同的唯一搬卡执行器, 拒因进 blocking_reasons 带解冻命令); 清单读不出 = 拒(fail-closed)
+    if action == "claim":
+        from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_rejection
+
+        try:
+            rejection = frozen_rejection(repo_root, [str(source_task.get("task_id") or "")], action="claim")
+        except LegacyBaselineError as exc:
+            rejection = {"code": exc.code, "message": f"{exc}; 存量冻结清单读不出, 拒 claim"}
+        if rejection is not None:
+            result["blocking_reasons"].append(rejection["message"])
+            result["error_code"] = rejection["code"]
+
     # AIPOS-315/348: withdraw and reopen have flexible from_state, skip this check
     if action not in ("withdraw", "reopen"):
         if source_task.get("queue_state") not in from_states:

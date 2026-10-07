@@ -334,6 +334,39 @@
           "required": false,
           "description": "AIPOS-F89 件① M14: 卡校验策略不是 project.json 键, 而是治理根下的声明文件(card_policy.json; 读取方 tools/card_policy_loader.get_project_card_policy_path 按治理根候选文件找)。multi_project_support.project_registry.structure.card_policy 只是门注册表结构说明, 不是项目键。"
         },
+        "legacy_baseline": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-F122 件①: 接入既有项目的存量冻结(迁移基线)声明——人肉 gate 时期留下的卡(无门记录)一次声明为历史: 全项目 state lint 不报断层(汇总 frozen N)、next 项目扫描不列、门写动作(claim/return/dispatch/verdict/finalize)与 lybra loop --task-id 拒(LEGACY_FROZEN, 附解冻命令)。缺段 = 无冻结, 行为不变(0 迁移)。任何从人肉期接入的项目同一组命令与声明, 产品不写死项目 ID/路径/卡号前缀。唯一读取口 workspace_config.project_legacy_baseline(落点)+ legacy_baseline.frozen_tasks / frozen_rejection(是否冻结, lint/next/门/loop 共用); 唯一写入口 `lybra project freeze-legacy`(--confirm 时本段未声明则写入 manifest_dir 缺省值)。不移动、不改写任何卡文件与记录。",
+          "schema": {
+            "manifest_dir": {
+              "type": "string",
+              "required": true,
+              "default": "5_tasks/records/legacy_baseline",
+              "description": "冻结清单目录(相对治理根; 绝对路径须落在治理根内, 否则 LEGACY_BASELINE_INVALID)。默认落在 records/ 下 = 清单文件经既有入库护栏 governance_guardrails B④(新增记录须携 record_type)。"
+            }
+          },
+          "entry": {
+            "description": "清单条目 = 带 record_type 的治理记录, 每批一条文件, 只追加: 冻结 = 追加 action=freeze 条目, 解冻 = 追加 action=unfreeze 条目, 既有条目不删不改(写侧排他创建, 同名即拒)。是否冻结 = 按条目时间(at_field)与文件名顺序重放全部条目的结果; 任一条目读不出 / record_type 或 action 不符 / 缺必填字段 = LEGACY_BASELINE_INVALID(fail-closed: lint 报 ERROR 且不隐藏任何卡, next 列硬停项, 门与 loop 拒写)。",
+            "record_type": "legacy_baseline",
+            "filename_template": "legacy_{action}_{timestamp}_{actor}.md",
+            "timestamp_style": "compact",
+            "actions": {
+              "freeze": {"at_field": "frozen_at", "by_field": "frozen_by"},
+              "unfreeze": {"at_field": "unfrozen_at", "by_field": "unfrozen_by"}
+            },
+            "required_fields": ["record_type", "action", "batch_id", "reason", "task_ids", "tasks"],
+            "optional_fields": ["owner_policy_ref"],
+            "task_snapshot_fields": ["task_id", "queue_state", "card_status"],
+            "task_snapshot_note": "tasks = 本批每张卡在写条目时的 queue 目录(queue_state)与卡面 status(card_status, 卡面读不出 = null)快照"
+          },
+          "unfreeze_command_template": "lybra project freeze-legacy --workspace-root {governance_root} --unfreeze {task_ids} --reason <理由> --actor <实例> --confirm",
+          "reject_codes": {
+            "LEGACY_FROZEN": "卡在存量冻结清单内(历史): 门写动作 / lybra loop --task-id 拒; 出口 = unfreeze_command_template",
+            "LEGACY_UNKNOWN_TASK": "freeze-legacy 指定的卡号不在任何 queue 目录(或同号多文件多义): 整条命令拒, 零写入",
+            "LEGACY_BASELINE_INVALID": "清单落点声明形不合 / 清单条目读不出或形不合(fail-closed)"
+          }
+        },
         "workstations": {
           "type": "object",
           "required": false,

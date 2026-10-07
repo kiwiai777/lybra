@@ -863,6 +863,7 @@
   },
   "record_locations": {
     "description": "AIPOS-F109 件①(H10): 记录落点唯一声明(全系统只此一处; 原 config.schema 的两处记录路径声明(路径约定表与治理目录树 records 子目录表)零读取方且互相矛盾, 已删)。每类记录一条 location 模板(相对治理根): 节点记录的模板就在节点 record.location(node_ref 指过去, 不写第二份), 非节点记录模板在本表 location。目录部分 = 落点, 唯一读取口 record_writer.record_dir / record_root(产品代码零写死 records/<子目录>); 文件名部分 = 新写入的命名式样, {timestamp} 按 timestamp_style 取 clock.SLUG_FORMATS。legacy_filenames = 存量旧名(只读兼容: 读侧一律按目录扫描/前缀 glob, 不按新式样匹配, 存量不迁移)。record_types = 写入器 write_records_atomic 收的记录类型名(归一化后)→ 本类。",
+    "gate_record_file_criterion": "AIPOS-F122 件④: 「门生记录文件」唯一判据 = 该类落点模板文件名部分第一个占位之前的静态前缀(去尾部分隔 `_`)+ `_*.md`(如 returns → return_*.md, claims → claim_*.md, closures → close_*.md, publishes → publish_*.md)。唯一实现 record_writer.record_file_prefix / gate_record_files; 推导核(next_resolver._read_task_records)与 state lint(state_lint._derive_state_from_records)共用——人手写 RETURN.md 等非前缀文件(项目 return_root 与门记录目录同址时与门记录同目录)不当门记录。",
     "kinds": {
       "publishes": {"node_ref": "N0", "record_types": ["publish"], "timestamp_style": null, "legacy_filenames": ["publishes/<卡 ID 小写 slug>/publish_<slug>.md(F64 统一写入器起至 F109 前, 目录取自 record_id 第二段)"]},
       "claims": {"node_ref": "N1", "record_types": ["claim"], "timestamp_style": "compact", "legacy_filenames": []},
@@ -960,6 +961,8 @@
       "pending 卡 status 不应是 claimed/completed,否则 = 断层",
       "已结案卡(completed 或有 closure 记录)自身治理路径须已落账(nodes.N6.landing.criterion),否则 = GOVERNANCE_UNCOMMITTED"
     ],
+    "record_derivation": "records 推导状态只读门生记录文件(record_locations.gate_record_file_criterion), 与推导核同一判据",
+    "legacy_baseline": "AIPOS-F122 件③: 项目声明了存量冻结(config.schema project_json.legacy_baseline)时, 全项目扫描对冻结卡及其 records/*/<ID>/ 不报任何检查码, 汇总一行 frozen N; --task-id 单卡 lint 对冻结卡照实报并标注 frozen。清单读不出 = LEGACY_BASELINE_INVALID(ERROR), 不隐藏任何卡。是否冻结唯一判定 legacy_baseline.frozen_tasks(与 next 项目扫描、门写动作、loop 共用)。",
     "check_severity": {
       "description": "AIPOS-F94 件③: state lint 各检查码的级别(唯一声明; state_lint 只读, 缺键 = 声明缺失 fail-closed)",
       "GOVERNANCE_UNCOMMITTED": {

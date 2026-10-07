@@ -298,8 +298,9 @@ def test_item4_derive_state_refuses_unreadable_record(tmp_path):
     (rec / "claims" / task).mkdir(parents=True)
     (rec / "claims" / task / "claim_ok.md").write_text("---\nrecord_type: claim\nclaimed_at: '2026-10-06T01:00:00Z'\n---\n", encoding="utf-8")
     (rec / "closures" / task).mkdir(parents=True)
-    (rec / "closures" / task / "closure_bad.md").write_text("---\nclosed_at: [unclosed\n  - : :\n---\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="closure_bad.md"):
+    # AIPOS-F122 件④: lint 只读门生记录文件(声明前缀 close_*, 与推导核同判据) —— 坏记录须取门生名才在判据内
+    (rec / "closures" / task / "close_bad.md").write_text("---\nclosed_at: [unclosed\n  - : :\n---\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="close_bad.md"):
         state_lint._derive_state_from_records(tmp_path, task)
     repaired = state_lint._repair_queue_state(tmp_path, task, dry_run=True)
     assert repaired["repaired"] is False and "记录 frontmatter 不可读, 拒修" in repaired["message"], repaired
