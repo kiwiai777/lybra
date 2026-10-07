@@ -81,9 +81,12 @@ def _product_repo(tmp_path: Path, tests: dict[str, str]) -> Path:
 
 
 def _run_executor(repo: Path, guard_home: Path) -> tuple[int, str]:
+    """AIPOS-F126: 本文件验证的是沙箱未生效时的快照守卫判定(降级路径), 故钉隔离声明 mode=none; 沙箱路径见
+    tests/test_aipos_f126_runall_isolation.py。"""
     out = io.StringIO()
-    rc = runall_discovery.run(repo, RUNALL, {**default_test_contract(), "runall_path": RUNALL}, out=out,
-                              guard_env={"HOME": str(guard_home)})
+    contract = {**default_test_contract(), "runall_path": RUNALL}
+    contract["isolation"] = {**contract["isolation"], "mode": "none", "source": "夹具钉 none(验证快照守卫判定)"}
+    rc = runall_discovery.run(repo, RUNALL, contract, out=out, guard_env={"HOME": str(guard_home)})
     return rc, out.getvalue()
 
 
