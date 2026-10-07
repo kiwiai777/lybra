@@ -766,6 +766,20 @@
         "description": "记录文件(5_tasks/records/**) — 必须携机器出生标记 record_type",
         "template_frontmatter": {
           "record_type": "<record_type>"
+        },
+        "required_frontmatter_exemptions": {
+          "description": "AIPOS-F128: 入库护栏 B④(records 新增须携 required_frontmatter)按项目声明豁免的两类文件; 本段缺省 = 无豁免(行为不变)。只豁免 B④ 的必填字段要求, B①(代码文件禁止)/B②/B③ 照旧生效。豁免不静默: governance-commit 预演/正式提交与 pre-commit hook 同一判据(唯一实现 governance_guardrails.check_entries), 输出列明「B④ 豁免: 产物槽 N、冻结卡 M」及各自依据, --json 同步(guardrail_report.b4_exemptions)。",
+          "artifact_slot": {
+            "label": "产物槽",
+            "project_paths_keys": ["return_root", "verdict_root"],
+            "scope": "<project_paths[key]>/<ID>/**",
+            "description": "执行体 Return 与审计报告落点(roles.schema write_boundary return_slot/verdict_slot; 由 ingest 校验其必填 frontmatter 后快照进门记录, 本身不是门记录)。落点只读 project.json paths 声明(唯一读取口 workspace_config.project_paths), 禁写死; 仅当落点在 records 之下(如人肉期接入项目把 returns 放在 5_tasks/records/returns)时有意义。依据 = 声明键与其值。"
+          },
+          "legacy_frozen": {
+            "label": "冻结卡",
+            "scope": "<records>/<record_kind>/<ID>/**",
+            "description": "存量冻结(AIPOS-F122)卡名下的人肉期记录: 无门出生标记, 补字段 = 伪造门记录。是否冻结只读唯一判定 legacy_baseline.frozen_tasks(清单重放, 解冻后恢复要求); 清单读不出 = 拒(fail-closed)。依据 = 冻结它的清单条目与批次。"
+          }
         }
       },
       "contract_doc": {

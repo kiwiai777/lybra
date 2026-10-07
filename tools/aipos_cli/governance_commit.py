@@ -922,10 +922,15 @@ def governance_commit(
             return _seal_push_outcome(early["result"], push_requested=bool(push) and not dry_run)
         task_scope = early["task_scope"]
         paths = list(task_scope["paths"])
+    guardrail_sink: dict[str, Any] = {}
     result = _governance_commit_impl(
         governance_root, task_id, actor,
         repo_root=repo_root, dry_run=dry_run, push=push, message=message, paths=paths, paths_file=paths_file,
+        guardrail_sink=guardrail_sink,
     )
+    # AIPOS-F128 件③: 四检放行时 --json 同步带报告(含 b4_exemptions 计数与逐文件依据); 拒时 BLOCK 结果已带
+    if guardrail_sink.get("report") is not None:
+        result.setdefault("guardrail_report", guardrail_sink["report"])
     if task_scope is not None:
         result["task_scope"] = task_scope
         ops = result.setdefault("operations", [])
@@ -984,6 +989,7 @@ def _run_guardrails_on_manifest(
     manifest: dict[str, Any],
     repo_root: Path | None,
     operations: list[str],
+    sink: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """AIPOS-F79D 件①: 对清单跑 governance_guardrails(B①–B⑤), 与 pre-commit hook 同模块同文案。
 
@@ -992,6 +998,7 @@ def _run_guardrails_on_manifest(
     """
     from tools.aipos_cli.governance_guardrails import (
         GuardrailDeclarationError,
+        format_exemptions,
         git_current_branch,
         git_toplevel,
         manifest_entries,
@@ -1001,7 +1008,7 @@ def _run_guardrails_on_manifest(
 
     try:
         git_root = git_toplevel(governance_root)
-        report, _decls, text = run_guardrails(
+        report, decls, text = run_guardrails(
             git_root,
             manifest_entries(manifest),
             schema_dir=resolve_schema_dir(repo_root),
@@ -1015,10 +1022,14 @@ def _run_guardrails_on_manifest(
             "operations": operations,
             "guardrail_report": None,
         }
+    if sink is not None:
+        sink["report"] = report.to_dict()
     if report.ok:
         operations.append(
             f"Guardrails (governance_guardrails, same module as pre-commit hook): PASS — {report.checked} file(s) checked"
         )
+        # AIPOS-F128 件③: B④ 豁免计数与依据出声(与 hook 同一 format_exemptions 文案)
+        operations.extend(format_exemptions(report, decls))
         return None
     operations.append(
         f"Guardrails (governance_guardrails, same module as pre-commit hook): BLOCK — "
@@ -1044,6 +1055,7 @@ def _governance_commit_impl(
     message: str | None = None,
     paths: list[str] | None = None,
     paths_file: Path | str | None = None,
+    guardrail_sink: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """N6 收账提交:校验四件 → commit → push。
 
@@ -1333,7 +1345,7 @@ def _governance_commit_impl(
     
     # AIPOS-F79D 件①: dry-run 与正式提交前对同一「将提交清单」跑同一四检模块(hook 也调它), 拒因文案同源。
     # 病根: 2026-09-22 chris dry-run PASS 而正式提交被 hook exit 1 —— 预演从不跑 B①–B④。
-    guardrail_outcome = _run_guardrails_on_manifest(governance_root, manifest, repo_root, operations)
+    guardrail_outcome = _run_guardrails_on_manifest(governance_root, manifest, repo_root, operations, guardrail_sink)
     if guardrail_outcome is not None:
         guardrail_outcome.update({
             "task_id": task_id,
