@@ -231,6 +231,16 @@
             "PATHS_KEY_UNKNOWN": "--key 不在本段 schema 声明的键内",
             "PATHS_VALUE_INVALID": "--value 不合该键声明(enum 外 / 非 true|false / 空或多行 / 同键重复给出)"
           },
+          "adoption": {
+            "description": "AIPOS-F124 件②: 在途卡收编(`lybra queue adopt`)前须在 project.json paths 显式声明的落点键。收编按 return_root 落报告骨架(已有手写 Return 不覆盖)、收编后推导核按同一声明找交回产物; 未声明 = 取 default, 而人肉期项目的真实落点未必是缺省(chris 形 returns 在 5_tasks/records/returns/<ID>/), 骨架会落错位置、手写 Return 找不到 → 收编拒 ADOPT_PATHS_UNDECLARED(fail-closed, 零写入), 提示先 set-paths。接入顺序 = set-paths → freeze-legacy → adopt(接入向导唯一出处 onboarding.legacy_onboarding_steps)。「是否显式声明」读唯一读取口 workspace_config.project_paths()['declared']; 本段唯一读取口 workspace_config.adoption_paths_declaration; 判定 queue_mutation.adoption_paths_refusal; 拒因文案格式与 transitions nodes.N1.adoption.guards 同一实现 queue_mutation.adoption_refusal。",
+            "required_declared_keys": ["return_root"],
+            "guards": {
+              "ADOPT_PATHS_UNDECLARED": {
+                "error_message": "收编依赖的落点未在 project.json paths 显式声明(缺省值对人肉期项目未必对, 报告骨架会落错位置)",
+                "next_step": "先 `lybra project set-paths <项目> --key <键> --value <该项目真实落点> --confirm`(值与缺省相同也须显式声明), 再 freeze-legacy, 再重试收编"
+              }
+            }
+          },
           "schema": {
             "return_root": {
               "type": "string",
@@ -352,8 +362,7 @@
             }
           },
           "entry": {
-            "description": "清单条目 = 带 record_type 的治理记录, 每批一条文件, 只追加: 冻结 = 追加 action=freeze 条目, 解冻 = 追加 action=unfreeze 条目, 既有条目不删不改(写侧排他创建, 同名即拒)。是否冻结 = 按条目时间(at_field)与文件名顺序重放全部条目的结果; 任一条目读不出 / record_type 或 action 不符 / 缺必填字段 = LEGACY_BASELINE_INVALID(fail-closed: lint 报 ERROR 且不隐藏任何卡, next 列硬停项, 门与 loop 拒写)。",
-            "record_type": "legacy_baseline",
+            "description": "清单条目 = 带 record_type 的治理记录, 每批一条文件, 只追加: 冻结 = 追加 action=freeze 条目, 解冻 = 追加 action=unfreeze 条目, 既有条目不删不改(写侧排他创建, 同名即拒)。是否冻结 = 按条目时间(at_field)与文件名顺序重放全部条目的结果; 任一条目读不出 / record_type 或 action 不符 / 缺必填字段 = LEGACY_BASELINE_INVALID(fail-closed: lint 报 ERROR 且不隐藏任何卡, next 列硬停项, 门与 loop 拒写)。AIPOS-F124 件③: record_type 值不在本段声明, 单源 = enums.schema record_type 枚举值 legacy_baseline(读取口 tools.schema_constants.RecordType.LEGACY_BASELINE, 写侧 / 读侧(state lint · next · 门 · loop 经 frozen_tasks)同一常量, 禁第二份枚举)。",
             "filename_template": "legacy_{action}_{timestamp}_{actor}.md",
             "timestamp_style": "compact",
             "actions": {
