@@ -75,7 +75,11 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _declare_meta_keys(monkeypatch: pytest.MonkeyPatch, keys: tuple[str, ...] = ("phase", "note")) -> None:
-    """模拟 config.schema configuration_sources.project_json.schema 声明了 keys(真实声明文件不在本卡车道; 见 RETURN)。"""
+    """把 config.schema configuration_sources.project_json.schema 里 set-meta 登记键的声明状态钉为「恰好声明 keys」
+    (其余登记键移除), 用于未声明分支的反例; 真实声明下的正例见 test_item3_set_meta_real_declaration_*。"""
+    from tools.aipos_cli.workspace_config import project_meta_declaration
+
+    registered = tuple(project_meta_declaration()["keys"])
     import tools.schema_loader as sl
 
     original = sl.load_schema
@@ -86,8 +90,11 @@ def _declare_meta_keys(monkeypatch: pytest.MonkeyPatch, keys: tuple[str, ...] = 
             return data
         data = copy.deepcopy(data)
         decl = data["configuration_sources"]["project_json"]["schema"]
+        for key in registered:
+            if key not in keys:
+                decl.pop(key, None)
         for key in keys:
-            decl[key] = {"type": "string", "required": False, "description": f"(夹具模拟声明) {key}"}
+            decl.setdefault(key, {"type": "string", "required": False, "description": f"(夹具模拟声明) {key}"})
         return data
 
     monkeypatch.setattr(sl, "load_schema", patched)
@@ -336,3 +343,44 @@ def test_item4_onboarding_guide_set_meta_lines_follow_declaration(tmp_path, monk
     parsed = [build_parser().parse_args(shlex.split(line.replace("<META_TEXT>", "x"))[1:]) for line in lines]
     assert [a.project_command for a in parsed] == ["set-meta", "set-meta"] and not parsed[0].confirm and parsed[1].confirm
     assert parsed[1].meta_phase == "x" and parsed[1].meta_note == "x" and parsed[1].name == "probe_proj"
+
+
+# ===========================================================================
+# 续做(lane 补入 schema/config.schema.json): 真实声明下 set-meta 对 phase/note 预演 / --confirm 可用(不 monkeypatch 声明)
+# ===========================================================================
+
+def test_item3_set_meta_real_declaration_phase_note_preview_and_confirm(rig, monkeypatch):
+    from tools.aipos_cli.workspace_config import declared_meta_keys
+    from tools.schema_loader import load_schema
+
+    declared = load_schema("config")["configuration_sources"]["project_json"]["schema"]
+    _show("[续做·真实声明] config.schema project_json.schema phase=" + json.dumps(declared["phase"], ensure_ascii=False)
+          + " note=" + json.dumps(declared["note"], ensure_ascii=False))
+    assert declared["phase"]["type"] == "string" and declared["note"]["type"] == "string"
+    assert declared["phase"]["required"] is False and declared["note"]["required"] is False
+    assert sorted(declared_meta_keys()) == ["note", "phase"]
+    monkeypatch.chdir(rig["beta"])
+    pj = rig["beta"] / "project.json"
+    a_before, before = _md5(rig["alpha"] / "project.json"), _md5(pj)
+    argv = ("project", "set-meta", "--home-root", str(rig["home"]), "--phase", "接入试运行", "--note", "已接执行体")
+    rc, out, err = _cli(*argv)
+    _show(f"[续做·set-meta 预演(真实声明)] rc={rc} md5 前={before} 后={_md5(pj)}\n{out}{err}")
+    assert rc == 0 and f"project set-meta beta: {PREVIEW}" in out and _md5(pj) == before
+    rc, out, err = _cli(*argv, "--confirm")
+    _show(f"[续做·set-meta --confirm(真实声明)] rc={rc}\n{out}{err}")
+    assert rc == 0 and "project set-meta beta: 已写入" in out
+    data = json.loads(pj.read_text(encoding="utf-8"))
+    assert data["phase"] == "接入试运行" and data["note"] == "已接执行体" and data["registered_by"] == "owner.beta"
+    assert _md5(rig["alpha"] / "project.json") == a_before
+    rc, out, _err = _cli(*argv, "--confirm")
+    assert rc == 0 and "project set-meta beta: 无改动" in out
+
+
+def test_item4_onboarding_guide_real_declaration_gives_set_meta(tmp_path):
+    from tools.aipos_cli.onboarding import generate_onboarding_guide
+
+    guide = generate_onboarding_guide("probe_proj", home_root=str(tmp_path), code_repo=str(tmp_path / "repo"), host_segment="h")
+    lines = [line for line in guide["legacy_onboarding"][0]["command"].split("\n") if line.startswith("lybra project set-meta ")]
+    _show("[续做·向导第 1 步 set-meta 行(真实声明)]\n" + "\n".join(lines))
+    assert len(lines) == 2 and lines[0].endswith("--dry-run") and lines[1].endswith("--confirm")
+    assert "--phase <META_TEXT>" in lines[0] and "--note <META_TEXT>" in lines[0]
